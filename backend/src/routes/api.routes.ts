@@ -8,13 +8,17 @@
 
 import { Router } from 'express';
 import { handleKommoWebhook } from '../controllers/webhook.controller.js';
+import { handleSalesbotWebhook } from '../controllers/salesbot.controller.js';
 import { listTraces, getTrace, getStats } from '../controllers/traces.controller.js';
 import { getConfig, putConfig } from '../controllers/config.controller.js';
 
 export const apiRouter = Router();
 
-// Webhook do Kommo — entrada principal.
+// Webhook genérico do Kommo (eventos de CRM) — ACK rápido, agente async.
 apiRouter.post('/webhooks/kommo', handleKommoWebhook);
+
+// Webhook do Salesbot (chat conversacional) — SÍNCRONO, devolve reply no body.
+apiRouter.post('/webhooks/salesbot', handleSalesbotWebhook);
 
 // API consumida pelo dashboard React.
 apiRouter.get('/traces', listTraces);
