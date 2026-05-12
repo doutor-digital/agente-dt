@@ -120,54 +120,22 @@ enum StepKind {
 }
 
 // ---------------------------------------------------------------------------
-// Tabelas do PostgresSaver (LangGraph)
+// Tabelas do PostgresSaver (LangGraph) — NÃO declaradas aqui de propósito.
 // ---------------------------------------------------------------------------
-// Declaradas aqui apenas para visibilidade no Prisma Studio e queries
-// auxiliares. O `checkpointer.setup()` no boot do app é quem realmente
-// cria/migra essas tabelas. NÃO incluir em `prisma migrate dev`.
+// O `checkpointer.setup()` no boot do app cria e migra `checkpoints`,
+// `checkpoint_writes`, `checkpoint_blobs` e `checkpoint_migrations` com o
+// schema CORRETO (campos JSONB onde o LangGraph precisa).
 //
-// Se quiser que o Prisma ignore essas tabelas em migrations, basta deixar
-// o `setup()` rodar primeiro e usar `prisma db pull` ao invés de migrate.
+// Antes (regressão de migration): declarávamos esses models aqui pra
+// "visibilidade" no Prisma Studio, mas o Prisma gerava BYTEA pros campos
+// que o LangGraph espera JSONB — quebrando o checkpointer em runtime
+// com "operator does not exist: bytea -> unknown".
+//
+// Lição: persistência do framework é do framework. Se um dia quiser ler
+// essas tabelas via Prisma, use `prisma db pull` DEPOIS que o setup()
+// já rodou — pra que o Prisma INTROSPECTE o schema real em vez de
+// inventar um.
 // ---------------------------------------------------------------------------
-model Checkpoint {
-  threadId          String  @map("thread_id")
-  checkpointNs      String  @default("") @map("checkpoint_ns")
-  checkpointId      String  @map("checkpoint_id")
-  parentCheckpointId String? @map("parent_checkpoint_id")
-  type              String?
-  checkpoint        Bytes
-  metadata          Bytes
-
-  @@id([threadId, checkpointNs, checkpointId])
-  @@map("checkpoints")
-}
-
-model CheckpointWrite {
-  threadId     String @map("thread_id")
-  checkpointNs String @default("") @map("checkpoint_ns")
-  checkpointId String @map("checkpoint_id")
-  taskId       String @map("task_id")
-  idx          Int
-  channel      String
-  type         String?
-  value        Bytes?
-  taskPath     String @default("") @map("task_path")
-
-  @@id([threadId, checkpointNs, checkpointId, taskId, idx])
-  @@map("checkpoint_writes")
-}
-
-model CheckpointBlob {
-  threadId     String @map("thread_id")
-  checkpointNs String @default("") @map("checkpoint_ns")
-  channel      String
-  version      String
-  type         String
-  blob         Bytes?
-
-  @@id([threadId, checkpointNs, channel, version])
-  @@map("checkpoint_blobs")
-}
 
 // ---------------------------------------------------------------------------
 // AgentConfig
