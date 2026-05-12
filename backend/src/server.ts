@@ -32,9 +32,17 @@ const DOCS_DIR = path.resolve(__dirname, '../../docs');
 async function main(): Promise<void> {
   const app = express();
 
+  // CORS — env.FRONTEND_ORIGIN é uma lista (string[]). O cors package
+  // aceita array e libera só o que bater. Requests sem header Origin
+  // (curl, server-to-server) são permitidas — útil pro webhook do Kommo
+  // e pro health check.
   app.use(
     cors({
-      origin: env.FRONTEND_ORIGIN,
+      origin: (origin, cb) => {
+        if (!origin) return cb(null, true);
+        const allowed = env.FRONTEND_ORIGIN.includes(origin);
+        return cb(null, allowed);
+      },
       credentials: false,
     }),
   );

@@ -29,7 +29,19 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().min(10),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 
-  FRONTEND_ORIGIN: z.string().url().default('http://localhost:5173'),
+  // Aceita lista separada por vírgula pra suportar múltiplas origens
+  // (ex: domínio do Vercel + domínio customizado). Strip trailing slash
+  // de cada uma — CORS exige match byte-a-byte e o navegador nunca manda
+  // a barra final no header Origin.
+  FRONTEND_ORIGIN: z
+    .string()
+    .default('http://localhost:5173')
+    .transform((s) =>
+      s
+        .split(',')
+        .map((o) => o.trim().replace(/\/$/, ''))
+        .filter(Boolean),
+    ),
 });
 
 const parsed = schema.safeParse(process.env);
