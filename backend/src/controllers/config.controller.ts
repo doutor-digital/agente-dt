@@ -1,13 +1,11 @@
 // ============================================================================
-// config.controller.ts — CRUD do AgentConfig.
+// config.controller.ts — CRUD do AgentConfig (multi-tenant).
 //
 // LÓGICA DE ENGENHARIA
 // --------------------
-// Endpoints simples, sem auth (mesma fronteira que /api/traces — projeto
-// é interno e rodado atrás de VPN; auth está no roadmap).
-//
-// Validação via Zod no boundary HTTP. Internamente trabalhamos com tipos
-// canônicos definidos em agent/config.ts.
+// Cada Unit pode ter seu próprio AgentConfig (1:N, mas só um ativo por
+// Unit). Os endpoints aceitam `unitId` na query/body. Sem unitId, opera
+// no AgentConfig "global" (sem Unit) — mantém compatibilidade.
 // ============================================================================
 
 import type { Request, Response } from 'express';
@@ -15,8 +13,6 @@ import { z } from 'zod';
 import { getActiveConfig, saveConfig, DEFAULTS } from '../agent/config.js';
 import { logger } from '../lib/logger.js';
 
-// Lista de tools "conhecidas" pelo código. O front usa pra mostrar quais
-// tools existem mesmo que o config no banco esteja vazio.
 const KNOWN_TOOLS = ['aplicar_tag', 'mover_etapa'];
 
 const toolSchema = z.object({
@@ -32,6 +28,7 @@ const workflowRuleSchema = z.object({
 });
 
 const saveSchema = z.object({
+  unitId: z.string().nullable().optional(),
   systemPrompt: z.string().min(10).max(20000),
   tools: z.array(toolSchema).max(20),
   workflow: z.array(workflowRuleSchema).max(50),
@@ -40,11 +37,10 @@ const saveSchema = z.object({
   maxTokens: z.number().int().min(1).max(8192).optional(),
 });
 
-export async function getConfig(_req: Request, res: Response): Promise<void> {
-  const config = await getActiveConfig();
+export async function getConfig(req: Request, res: Response): Promise<void> {
+  const unitId = (req.query.unitId as string | undefined) ?? null;
+  const config = await getActiveConfig(unitId);
 
-  // Anexa lista de tools "registradas no código" — o front merge com o que
-  // está salvo no banco pra garantir que tools novas apareçam pro usuário.
   res.json({
     config,
     knownTools: KNOWN_TOOLS,
@@ -62,11 +58,11 @@ export async function putConfig(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  // Sanitiza tools: só aceita nomes que o código conhece.
   const tools = parsed.data.tools.filter((t) => KNOWN_TOOLS.includes(t.name));
 
   try {
     const saved = await saveConfig({
+      unitId: parsed.data.unitId ?? null,
       systemPrompt: parsed.data.systemPrompt,
       tools,
       workflow: parsed.data.workflow,
@@ -74,7 +70,7 @@ export async function putConfig(req: Request, res: Response): Promise<void> {
       temperature: parsed.data.temperature,
       maxTokens: parsed.data.maxTokens,
     });
-    logger.info({ id: saved.id }, 'AgentConfig salvo');
+    logger.info({ id: saved.id, unitId: saved.unitId }, 'AgentConfig salvo');
     res.json({ config: saved });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

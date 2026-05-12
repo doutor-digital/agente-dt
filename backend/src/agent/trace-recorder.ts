@@ -8,13 +8,12 @@
 // passando o que aconteceu, e este módulo persiste no banco no formato
 // que o dashboard React consome.
 //
-// Mantemos um contador `sequence` interno para garantir ordenação estável
-// no feed mesmo quando dois steps são gravados no mesmo milissegundo
-// (improvável, mas o timestamp não é suficiente como chave de ordenação).
+// Mantemos um contador `sequence` interno para ordenação estável no feed
+// mesmo quando dois steps são gravados no mesmo milissegundo.
 //
-// Async sem await: na assinatura `step()` retornamos a Promise mas NÃO
-// bloqueamos o grafo. Se uma escrita de log falhar, logamos e seguimos —
-// observabilidade nunca deve derrubar a execução principal.
+// Async sem await no caller: na assinatura `step()` retornamos a Promise
+// mas observabilidade nunca deve derrubar a execução principal — try/catch
+// interno, log e segue.
 // ============================================================================
 
 import { prisma } from '../lib/prisma.js';
@@ -24,7 +23,7 @@ import type { StepKind } from '@prisma/client';
 export class TraceRecorder {
   private sequence = 0;
 
-  constructor(public readonly traceId: string) {}
+  constructor(public readonly traceId: string, public readonly unitId: string | null = null) {}
 
   async step(args: {
     kind: StepKind;
@@ -45,7 +44,6 @@ export class TraceRecorder {
         },
       });
     } catch (err) {
-      // Observabilidade não pode quebrar o agente. Logamos e seguimos.
       logger.error({ err, traceId: this.traceId, seq }, 'falha ao gravar step');
     }
   }
@@ -69,5 +67,17 @@ export class TraceRecorder {
     } catch (err) {
       logger.error({ err, traceId: this.traceId }, 'falha ao finalizar trace');
     }
+  }
+}
+
+/** Ressincroniza o contador interno após reconstrução do recorder. */
+export async function syncRecorderSequence(recorder: TraceRecorder, traceId: string): Promise<void> {
+  const last = await prisma.executionStep.findFirst({
+    where: { traceId },
+    orderBy: { sequence: 'desc' },
+    select: { sequence: true },
+  });
+  if (last) {
+    (recorder as unknown as { sequence: number }).sequence = last.sequence;
   }
 }

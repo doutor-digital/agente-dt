@@ -1,5 +1,5 @@
 // ============================================================================
-// graph.ts — Grafo de decisão do agente (LangGraph).
+// graph.ts — Grafo de decisão do agente (LangGraph, multi-tenant).
 //
 // LÓGICA DE ENGENHARIA — O FLUXO DO STATE
 // ---------------------------------------
@@ -11,64 +11,52 @@
 //                             │  leadId, messages=[HumanMessage], traceId)
 //                             ▼
 //                    ┌────────────────┐
-//                    │   agent (LLM)  │  ← chama Claude com tools bound
+//                    │   agent (LLM)  │  ← chama OpenAI da Unit corrente
 //                    └────────┬───────┘
 //                             │ (LLM responde com:
 //                             │   • tool_calls → vai pra tools
 //                             │   • texto puro → vai pro END)
 //                             ▼
 //                    ┌────────────────┐
-//                    │ shouldContinue?│  (router edge condicional)
+//                    │ shouldContinue?│
 //                    └───┬────────┬───┘
 //                  tools │        │ end
 //                        ▼        ▼
 //                   ┌─────────┐  END
-//                   │  tools  │  ← executa tool, devolve ToolMessage
+//                   │  tools  │  ← executa tool no Kommo da Unit
 //                   └────┬────┘
-//                        │ (volta pro agent — loop ReAct)
-//                        └────────► agent
+//                        └────────► agent (loop ReAct)
 //
-// Como o STATE TRANSITA:
-//   1. Cliente invoca graph.invoke({leadId, messages:[HumanMessage(...)]},
-//      {configurable:{thread_id}}).
-//   2. PostgresSaver carrega checkpoint anterior (se houver) e mescla
-//      com o input. Nosso `messagesStateReducer` faz concat.
-//   3. Node "agent" chama o modelo. O retorno (AIMessage) é adicionado
-//      ao State pelo reducer.
-//   4. A edge condicional `shouldContinue` inspeciona a última mensagem:
-//      - Tem `tool_calls`? → route="tools"
-//      - Senão              → route="end"
-//   5. Node "tools" (ToolNode) executa as tools chamadas, devolve
-//      ToolMessages, que também são concatenadas no State.
-//   6. Retorna pro "agent" — esse é o loop ReAct clássico.
-//   7. A cada transição, PostgresSaver grava um checkpoint binário.
+// MULTI-TENANT
+// ------------
+// `buildAgentGraph(recorder, unit)` recebe a Unit. Toda chamada de LLM e
+// tool usa as credenciais da Unit. O `traceId` da execução fica no recorder
+// pra que `invokeChatModel` consiga associar cada LlmCall ao trace correto.
 //
 // CHECKPOINTING / MEMÓRIA DE CONVERSA
 // -----------------------------------
-// O `thread_id` é a chave da conversa. Para o nosso MVP usamos
-// `thread_id = "lead-{leadId}"`. Isso significa que se o MESMO lead
-// disparar webhooks múltiplos (ex: novo comentário, nova mensagem), o
-// agente RETOMA a conversa anterior — não começa do zero. Toda a história
-// de mensagens é reidratada do banco.
+// `thread_id = "unit-{slug}-lead-{leadId}"` — separa histórico por Unit, pra
+// que duas unidades nunca compartilhem memória de lead acidentalmente.
 // ============================================================================
 
-import { ChatOpenAI } from '@langchain/openai';
-import { AIMessage, type BaseMessage } from '@langchain/core/messages';
+import { type AIMessage, type BaseMessage, SystemMessage } from '@langchain/core/messages';
 import { END, START, StateGraph } from '@langchain/langgraph';
 import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
+import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { AgentState, type AgentStateType } from './state.js';
 import { buildTools } from './tools.js';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig, renderWorkflowGuidance } from './config.js';
+import { createKommoClient } from '../services/kommo.service.js';
+import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 
 // ---------------------------------------------------------------------------
 // Checkpointer (singleton).
 // O PostgresSaver mantém um pool TCP próprio. Criamos UMA instância e
-// reusamos. `setup()` cria as tabelas se ainda não existirem — chamamos
-// uma única vez no boot do servidor.
+// reusamos. `setup()` cria as tabelas se ainda não existirem.
 // ---------------------------------------------------------------------------
 
 let checkpointerInstance: PostgresSaver | null = null;
@@ -83,74 +71,105 @@ export async function getCheckpointer(): Promise<PostgresSaver> {
 }
 
 // ---------------------------------------------------------------------------
+// Constrói o thread_id estável da Unit/Lead.
+// Inclui slug pra evitar colisão entre unidades.
+// ---------------------------------------------------------------------------
+export function buildThreadId(unitSlug: string, leadId: string | number): string {
+  return `unit-${unitSlug}-lead-${leadId}`;
+}
+
+// ---------------------------------------------------------------------------
 // Construção do grafo.
-// Recebe um `recorder` porque as tools precisam dele. Como o recorder é
-// específico de cada execução, retornamos uma função-factory que monta o
-// grafo "pronto pra invocar".
 //
-// O system prompt, as tools habilitadas e as sequências de workflow vêm
-// do AgentConfig (banco) — é a configuração editada pelo dashboard.
-// Se o config ainda não foi semeado, getActiveConfig() cria o default.
+// Recebe a `Unit` (credenciais + assistant_id + system prompt) e o
+// `recorder` (vinculado ao ExecutionTrace). Retorna o grafo compilado
+// pronto pra `invoke`.
 // ---------------------------------------------------------------------------
 
-export async function buildAgentGraph(recorder: TraceRecorder) {
-  const config = await getActiveConfig();
+export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
+  const config = await getActiveConfig(unit.id);
 
-  // Constrói as tools com as descriptions vindas do AgentConfig (descrições
-  // editadas pelo usuário no dashboard).
+  // 1) Tools com descriptions editadas pelo dashboard, instanciadas com o
+  //    KommoClient da Unit.
   const toolConfigByName = new Map(config.tools.map((t) => [t.name, t]));
   const descriptionOverrides: Record<string, string> = {};
   for (const [name, cfg] of toolConfigByName) {
     if (cfg.description) descriptionOverrides[name] = cfg.description;
   }
-  const allTools = buildTools(recorder, descriptionOverrides);
 
-  // Filtra pelas habilitadas. Tool sem entry no config sai habilitada.
+  // Só monta o KommoClient se a Unit tiver credenciais. Se não tiver,
+  // ainda dá pra rodar o agente em modo "só conversa" (sem tools Kommo).
+  let kommoClient: ReturnType<typeof createKommoClient> | null = null;
+  try {
+    kommoClient = createKommoClient(unit);
+  } catch (err) {
+    logger.warn({ err, unit: unit.slug }, 'Unit sem credenciais Kommo — tools desabilitadas');
+  }
+
+  const allTools = kommoClient
+    ? buildTools({ recorder, kommo: kommoClient, descriptionOverrides })
+    : [];
+
+  // Filtra tools desabilitadas no AgentConfig.
   const tools = allTools.filter((t) => {
     const cfg = toolConfigByName.get(t.name);
     return cfg ? cfg.enabled : true;
   });
 
-  // System prompt + bloco de sequências (se houver).
-  const systemPrompt = config.systemPrompt + renderWorkflowGuidance(config.workflow);
+  // 2) System prompt — preferência: AgentConfig.systemPrompt → Unit.systemPrompt → DEFAULT.
+  const baseSystemPrompt = config.systemPrompt || unit.systemPrompt || '';
+  const systemPrompt = baseSystemPrompt + renderWorkflowGuidance(config.workflow);
 
-  // Modelo OpenAI. `bindTools` informa ao SDK quais ferramentas estão
-  // disponíveis — isso vira o array `tools` da Chat Completions API.
-  const model = new ChatOpenAI({
-    apiKey: env.OPENAI_API_KEY,
-    model: config.model || env.OPENAI_MODEL,
+  // 3) Modelo OpenAI da Unit.
+  const modelName = config.model || unit.openaiModel || env.OPENAI_MODEL;
+  const baseModel = createChatOpenAI(unit, {
+    model: modelName,
     temperature: config.temperature,
     maxTokens: config.maxTokens,
-  }).bindTools(tools);
+  });
+  // bindTools retorna um Runnable, não ChatOpenAI — passamos via interface
+  // mínima `InvokableModel` que `invokeChatModel` aceita.
+  // Cast pra interface mínima — `bindTools` devolve um Runnable que não
+  // bate com o tipo estrito do ChatOpenAI, mas a forma de `.invoke(messages, opts)`
+  // é a mesma e é o que `invokeChatModel` precisa.
+  const model = (tools.length > 0 ? baseModel.bindTools(tools) : baseModel) as unknown as Parameters<
+    typeof invokeChatModel
+  >[0]['model'];
 
   // -------------------------------------------------------------------------
   // NODE: agent
-  // Chama a LLM com o histórico atual de mensagens.
-  // Antes da chamada, registra um step "THINKING" para o dashboard.
   // -------------------------------------------------------------------------
   const agentNode = async (state: AgentStateType) => {
-    const t0 = performance.now();
     await recorder.step({
       kind: 'THINKING',
       title: 'IA analisando intenção',
-      payload: { model: config.model || env.OPENAI_MODEL, msgCount: state.messages.length },
+      payload: { model: modelName, msgCount: state.messages.length, unit: unit.slug },
     });
 
-    // Injeta o system na primeira chamada (a partir daí ele vive no
-    // checkpoint e não precisa ser reenviado).
+    // Injeta o system na primeira chamada (depois vive no checkpoint).
+    // Usamos SystemMessage proper porque o instrumentador de LlmCall mapeia
+    // mensagens via m.getType() e um object literal quebraria.
     const messages: BaseMessage[] = state.messages;
     const hasSystem = messages.some((m) => m.getType() === 'system');
-    const finalMessages = hasSystem
+    const finalMessages: BaseMessage[] = hasSystem
       ? messages
-      : ([{ role: 'system', content: systemPrompt } as unknown as BaseMessage, ...messages]);
+      : [new SystemMessage(systemPrompt), ...messages];
 
-    const response = (await model.invoke(finalMessages)) as AIMessage;
+    const t0 = performance.now();
+    const response = (await invokeChatModel({
+      model,
+      messages: finalMessages,
+      unitId: unit.id,
+      traceId: recorder.traceId,
+      modelName,
+      tools,
+    })) as AIMessage;
     const latency = Math.round(performance.now() - t0);
 
     const toolCalls = response.tool_calls ?? [];
     if (toolCalls.length === 0) {
-      // Resposta final (texto puro). Salvamos a decisão textual no state.
-      const text = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+      const text =
+        typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
       await recorder.step({
         kind: 'THINKING',
         title: 'IA respondeu (sem tool call)',
@@ -164,16 +183,12 @@ export async function buildAgentGraph(recorder: TraceRecorder) {
   };
 
   // -------------------------------------------------------------------------
-  // NODE: tools
-  // ToolNode é um helper do LangGraph que pega a última AIMessage do State,
-  // lê os `tool_calls`, executa as tools correspondentes (em paralelo se
-  // houver várias), e devolve um array de ToolMessages.
+  // NODE: tools (ToolNode do LangGraph)
   // -------------------------------------------------------------------------
   const toolNode = new ToolNode(tools);
 
   // -------------------------------------------------------------------------
   // EDGE condicional: shouldContinue
-  // Decide se voltamos pras tools ou encerramos.
   // -------------------------------------------------------------------------
   const shouldContinue = (state: AgentStateType): 'tools' | typeof END => {
     const last = state.messages[state.messages.length - 1] as AIMessage | undefined;
@@ -194,9 +209,6 @@ export async function buildAgentGraph(recorder: TraceRecorder) {
       tools: 'tools',
       [END]: END,
     })
-    // Depois de executar tools, volta pro agente decidir o próximo passo.
-    // Esse é o loop ReAct — pode iterar várias vezes se a LLM encadear
-    // tool_calls. O recursionLimit do invoke é a trava de segurança.
     .addEdge('tools', 'agent');
 
   const checkpointer = await getCheckpointer();

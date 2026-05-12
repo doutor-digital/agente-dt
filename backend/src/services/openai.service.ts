@@ -1,0 +1,270 @@
+// ============================================================================
+// openai.service.ts — Cliente OpenAI instrumentado.
+//
+// LÓGICA DE ENGENHARIA
+// --------------------
+// Todo acesso à OpenAI nesta plataforma passa por aqui — incluindo o que o
+// LangGraph faz dentro do node `agent`. Por quê?
+//
+//  1. CADA UNIDADE TEM SUA PRÓPRIA API KEY (e seu próprio assistant_id).
+//     A `ChatOpenAI` do LangChain é uma instância — então criamos UM cliente
+//     POR UNIDADE/INVOCAÇÃO, em vez de um global.
+//
+//  2. OBSERVABILIDADE TOTAL.
+//     Toda chamada gera um registro em `LlmCall` com tokens, custo e
+//     payload (request/response). É a base do painel "Chamadas IA".
+//
+//  3. PREÇOS ATUALIZADOS.
+//     Mantemos uma tabela de preços ($/MTok) por modelo. O custo é calculado
+//     em runtime com base no `usage` que a OpenAI devolve em cada response.
+//     Atualizar preço = mudar essa tabela.
+//
+// Suportamos dois modos:
+//   - Chat Completions (`chat.completions`) — modelo + system prompt + tools.
+//     É o caminho do LangGraph + ChatOpenAI.bindTools.
+//   - Assistants API (`assistants`) — cada Unit tem um assistant_id pré-criado
+//     na plataforma da OpenAI. Útil quando a unidade quer ferramentas,
+//     vector stores e conhecimento próprio gerenciados pelo painel da OpenAI
+//     em vez de pelo nosso AgentConfig.
+// ============================================================================
+
+import { ChatOpenAI, type ChatOpenAICallOptions } from '@langchain/openai';
+import { Prisma } from '@prisma/client';
+import type { Unit } from '@prisma/client';
+import type { BaseMessage } from '@langchain/core/messages';
+import type { StructuredToolInterface } from '@langchain/core/tools';
+import { prisma } from '../lib/prisma.js';
+import { logger } from '../lib/logger.js';
+import { env } from '../lib/env.js';
+
+// ---------------------------------------------------------------------------
+// TABELA DE PREÇOS ($/1M tokens) — atualize conforme OpenAI mudar.
+// Fonte: openai.com/pricing (snapshot 2026).
+// Modelos não listados caem no preço 0 — o registro ainda é criado, só sem
+// custo. Use o nome canônico (sem ":free", sem prefixos custom).
+// ---------------------------------------------------------------------------
+
+interface ModelPrice {
+  inputPer1M: number;
+  outputPer1M: number;
+}
+
+const MODEL_PRICES: Record<string, ModelPrice> = {
+  // GPT-4 family
+  'gpt-4o-mini': { inputPer1M: 0.15, outputPer1M: 0.6 },
+  'gpt-4o': { inputPer1M: 2.5, outputPer1M: 10 },
+  'gpt-4o-2024-11-20': { inputPer1M: 2.5, outputPer1M: 10 },
+  'gpt-4-turbo': { inputPer1M: 10, outputPer1M: 30 },
+  'gpt-4': { inputPer1M: 30, outputPer1M: 60 },
+  // GPT-5 (assumido similar ao 4o até divulgação oficial)
+  'gpt-5-mini': { inputPer1M: 0.25, outputPer1M: 1.25 },
+  'gpt-5': { inputPer1M: 5, outputPer1M: 15 },
+  // O-series
+  'o1-mini': { inputPer1M: 3, outputPer1M: 12 },
+  'o1': { inputPer1M: 15, outputPer1M: 60 },
+};
+
+export function calculateCost(
+  model: string,
+  promptTokens: number,
+  completionTokens: number,
+): number {
+  const price = MODEL_PRICES[model];
+  if (!price) return 0;
+  const inputCost = (promptTokens / 1_000_000) * price.inputPer1M;
+  const outputCost = (completionTokens / 1_000_000) * price.outputPer1M;
+  // 6 casas decimais para não perder centavos em chamadas baratas.
+  return Math.round((inputCost + outputCost) * 1_000_000) / 1_000_000;
+}
+
+// ---------------------------------------------------------------------------
+// Resolve a API key efetiva.
+// Cada Unit pode ter sua própria openai_api_key. Se a Unit não tem uma
+// (ex: unidade interna usando a key da plataforma), caímos pra env.
+// ---------------------------------------------------------------------------
+
+export function resolveOpenAIApiKey(unit: Pick<Unit, 'openaiApiKey'> | null): string {
+  return unit?.openaiApiKey || env.OPENAI_API_KEY;
+}
+
+// ---------------------------------------------------------------------------
+// Factory: ChatOpenAI por Unit.
+// Devolve a instância ChatOpenAI configurada com a key/modelo da Unit.
+// Esta é a entrada do LangGraph — tools são ligadas pelo caller via
+// `.bindTools()`.
+// ---------------------------------------------------------------------------
+
+export interface ChatOpenAIOverrides {
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+export function createChatOpenAI(
+  unit: Pick<Unit, 'openaiApiKey' | 'openaiModel' | 'openaiTemperature' | 'openaiMaxTokens'> | null,
+  overrides: ChatOpenAIOverrides = {},
+): ChatOpenAI<ChatOpenAICallOptions> {
+  return new ChatOpenAI({
+    apiKey: resolveOpenAIApiKey(unit),
+    model: overrides.model ?? unit?.openaiModel ?? env.OPENAI_MODEL,
+    temperature: overrides.temperature ?? unit?.openaiTemperature ?? 0,
+    maxTokens: overrides.maxTokens ?? unit?.openaiMaxTokens ?? 1024,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// LlmCall recorder — instrumentação fora do LangChain.
+//
+// Estratégia: o LangChain expõe callbacks (`callbacks: [...]`) com hooks
+// `handleLLMEnd` e `handleLLMError`. Usamos isso pra capturar a resposta
+// da OpenAI sem patchar o ChatOpenAI. O callback recebe o `LLMResult` com
+// `llmOutput.tokenUsage` que a OpenAI devolve.
+//
+// Cada invocação cria UM LlmCall. Se a chamada quebrar, gravamos com
+// status="error" pra o painel mostrar a falha.
+// ---------------------------------------------------------------------------
+
+export interface RecordLlmCallParams {
+  unitId: string | null;
+  traceId: string | null;
+  provider?: string;
+  model: string;
+  endpoint?: 'chat.completions' | 'assistants';
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  latencyMs: number;
+  status?: 'success' | 'error';
+  errorMessage?: string;
+  requestBody?: unknown;
+  responseBody?: unknown;
+}
+
+export async function recordLlmCall(p: RecordLlmCallParams): Promise<void> {
+  const promptTokens = p.promptTokens ?? 0;
+  const completionTokens = p.completionTokens ?? 0;
+  const totalTokens = p.totalTokens ?? promptTokens + completionTokens;
+  const costUsd = calculateCost(p.model, promptTokens, completionTokens);
+
+  try {
+    await prisma.llmCall.create({
+      data: {
+        unitId: p.unitId,
+        traceId: p.traceId,
+        provider: p.provider ?? 'openai',
+        model: p.model,
+        endpoint: p.endpoint ?? 'chat.completions',
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        costUsd: new Prisma.Decimal(costUsd),
+        latencyMs: p.latencyMs,
+        status: p.status ?? 'success',
+        errorMessage: p.errorMessage,
+        requestBody: p.requestBody === undefined ? undefined : (p.requestBody as object),
+        responseBody: p.responseBody === undefined ? undefined : (p.responseBody as object),
+      },
+    });
+  } catch (err) {
+    // Observabilidade não pode quebrar o agente.
+    logger.error({ err }, 'falha ao gravar LlmCall');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// invokeChatModel — wrapper que chama o ChatOpenAI e grava LlmCall.
+//
+// Usado pelo agent/graph dentro do node `agent`. A captura do `usage` é
+// feita via callbacks do LangChain — `handleLLMEnd` recebe o LLMResult
+// completo, com `llmOutput.tokenUsage`.
+//
+// Aceita o ChatOpenAI cru OU o Runnable retornado por `.bindTools(...)` —
+// ambos expõem `.invoke(messages, opts)`.
+// ---------------------------------------------------------------------------
+
+interface InvokableModel {
+  invoke: (
+    messages: BaseMessage[],
+    options?: { callbacks?: unknown[] },
+  ) => Promise<unknown>;
+}
+
+interface TokenUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
+export interface InvokeChatModelArgs {
+  model: InvokableModel;
+  messages: BaseMessage[];
+  unitId: string | null;
+  traceId: string | null;
+  modelName: string;
+  // Para registrar o request body. Stringificar a lista de mensagens é caro
+  // se a conversa é longa — passamos só os essenciais (role + content + tools).
+  tools?: Pick<StructuredToolInterface, 'name'>[];
+}
+
+export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknown> {
+  const t0 = performance.now();
+  let usage: TokenUsage | null = null;
+  let rawResponse: unknown = null;
+
+  try {
+    const response = await args.model.invoke(args.messages, {
+      callbacks: [
+        {
+          handleLLMEnd: (output: { llmOutput?: { tokenUsage?: TokenUsage } }) => {
+            usage = output.llmOutput?.tokenUsage ?? null;
+            rawResponse = output;
+          },
+        },
+      ],
+    });
+    const latencyMs = Math.round(performance.now() - t0);
+
+    const finalUsage: TokenUsage = usage ?? {};
+    void recordLlmCall({
+      unitId: args.unitId,
+      traceId: args.traceId,
+      model: args.modelName,
+      endpoint: 'chat.completions',
+      promptTokens: finalUsage.promptTokens,
+      completionTokens: finalUsage.completionTokens,
+      totalTokens: finalUsage.totalTokens,
+      latencyMs,
+      status: 'success',
+      requestBody: {
+        model: args.modelName,
+        toolNames: args.tools?.map((t) => t.name) ?? [],
+        messages: args.messages.map((m) => ({
+          role: m.getType(),
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        })),
+      },
+      responseBody: rawResponse,
+    });
+
+    return response;
+  } catch (err) {
+    const latencyMs = Math.round(performance.now() - t0);
+    const msg = err instanceof Error ? err.message : String(err);
+    void recordLlmCall({
+      unitId: args.unitId,
+      traceId: args.traceId,
+      model: args.modelName,
+      endpoint: 'chat.completions',
+      latencyMs,
+      status: 'error',
+      errorMessage: msg,
+      requestBody: {
+        model: args.modelName,
+        toolNames: args.tools?.map((t) => t.name) ?? [],
+      },
+    });
+    throw err;
+  }
+}
+
+export type { ChatOpenAI };

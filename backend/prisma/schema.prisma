@@ -1,34 +1,34 @@
 // ============================================================================
-// schema.prisma — Modelo de dados do Agente DT.
+// schema.prisma — Modelo de dados do Agente DT (multi-tenant).
 //
 // LÓGICA DE ENGENHARIA
 // --------------------
-// Mantemos DUAS responsabilidades distintas nesta camada de persistência:
+// O sistema é uma plataforma de IA para CRM Kommo + Meta WhatsApp Cloud,
+// projetada para múltiplas consultorias ("unidades"). Cada Unit tem suas
+// próprias credenciais (Kommo, OpenAI, Meta) e seu próprio Assistant da
+// OpenAI. O painel é pensado pra mostrar a observabilidade do que cada
+// unidade consome (chamadas LLM, tokens, custo, conversas).
 //
-//  1. CHECKPOINTING do LangGraph (tabelas `checkpoints`, `checkpoint_writes`,
-//     `checkpoint_blobs`, `checkpoint_migrations`).
-//     Essas tabelas são gerenciadas pelo PostgresSaver
-//     (@langchain/langgraph-checkpoint-postgres). Quem cria/migra é a
-//     própria biblioteca via `await checkpointer.setup()` na inicialização.
-//     Aqui nós apenas DECLARAMOS o schema para que o Prisma Client conheça
-//     a forma das tabelas (permitindo introspecção e queries de leitura
-//     se necessário). Não geramos migrations Prisma para elas — o setup do
-//     LangGraph é a fonte da verdade.
+// CAMADAS DE PERSISTÊNCIA
+// -----------------------
+//  1. UNIT — tenant raiz. Todo dado de execução é filho de uma Unit.
+//  2. AGENTCONFIG — prompt e tools editáveis pelo painel, agora por Unit.
+//  3. CONVERSATION/MESSAGE — histórico cronológico por lead (visão "chat").
+//  4. EXECUTIONTRACE/EXECUTIONSTEP — feed do raciocínio (visão "console").
+//  5. LLMCALL — toda chamada à LLM com tokens, custo e payloads — base do
+//     painel "ByteGPT" (transparência do consumo).
+//  6. CHECKPOINT (LangGraph) — gerenciado pelo PostgresSaver, NÃO declarado
+//     aqui (a lib é dona). O `thread_id` continua sendo `unit-{slug}-lead-{id}`.
 //
-//  2. OBSERVABILIDADE (`ExecutionTrace`, `ExecutionStep`).
-//     Aqui sim somos donos. Cada webhook recebido vira um ExecutionTrace.
-//     Cada nó/tool que o grafo executa vira um ExecutionStep filho.
-//     O dashboard React consome essa árvore para renderizar o feed estilo
-//     "AgentGPT Terminal".
+// Por que separar Conversation de ExecutionTrace?
+//  - Trace = uma execução pontual do agente (uma resposta gerada).
+//  - Conversation = continuidade do diálogo com o lead (várias execuções).
+//  - O dashboard mostra ambos: chat por lead + execuções soltas.
 //
-// Por que separar Trace de Step?
-// - O Trace é o "envelope" da execução (lead_id, latência total, status).
-// - Os Steps são o "raciocínio" — cada passo do grafo (input, thinking,
-//   tool call, tool result, output). Renderizamos um por linha no console.
-//
-// Por que não usar somente o checkpoint do LangGraph?
-// - O checkpoint é otimizado para *retomada* de execução (binário/serializado).
-//   Não é navegável nem human-readable. Para UI usamos a tabela própria.
+// Por que LlmCall separado?
+//  - Um trace pode disparar várias chamadas à LLM (loop ReAct).
+//  - Custo/tokens são por chamada — agregamos por trace, conversa, dia, unit.
+//  - Permite re-render de payload completo sem inflar o ExecutionTrace.
 // ============================================================================
 
 generator client {
@@ -40,55 +40,101 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Unit — tenant raiz.
+// ===========================================================================
+// Cada consultoria é uma Unit. Identificada por `slug` (URL-safe), usada
+// nos webhooks: /api/webhooks/{slug}/kommo etc.
+//
+// Credenciais ficam aqui em texto puro por simplicidade do MVP — em produção
+// criptografar com KMS. Marcar como `secret` os campos sensíveis no front
+// pra mascarar.
+//
+// `openaiAssistantId` é opcional. Se setado, o agente usa Assistants API;
+// senão, cai pra Chat Completions com `systemPrompt` da Unit.
+// ===========================================================================
+model Unit {
+  id   String @id @default(cuid())
+  slug String @unique // ex: "instituto-trauma", usado em URLs
+  name String
+
+  isActive Boolean @default(true) @map("is_active")
+
+  // Kommo
+  kommoSubdomain   String? @map("kommo_subdomain")
+  kommoAccessToken String? @map("kommo_access_token")
+  kommoSalesbotId  Int?    @map("kommo_salesbot_id")
+  kommoReplyFieldId Int?   @map("kommo_reply_field_id")
+
+  // OpenAI — credenciais por unidade (cada uma com sua API key e assistant)
+  openaiApiKey      String? @map("openai_api_key")
+  openaiModel       String  @default("gpt-4o-mini") @map("openai_model")
+  openaiAssistantId String? @map("openai_assistant_id")
+  openaiTemperature Float   @default(0) @map("openai_temperature")
+  openaiMaxTokens   Int     @default(1024) @map("openai_max_tokens")
+
+  // Meta WhatsApp Cloud API
+  metaPhoneNumberId String? @map("meta_phone_number_id")
+  metaAccessToken   String? @map("meta_access_token")
+  metaVerifyToken   String? @map("meta_verify_token")
+  metaAppSecret     String? @map("meta_app_secret")
+
+  // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
+  systemPrompt String @default("") @map("system_prompt")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  agentConfigs   AgentConfig[]
+  traces         ExecutionTrace[]
+  llmCalls       LlmCall[]
+  conversations  Conversation[]
+
+  @@map("units")
+}
+
+// ===========================================================================
 // ExecutionTrace
-// ---------------------------------------------------------------------------
-// Um registro por webhook recebido. É a "execução de alto nível" do agente.
-// `threadId` é o mesmo identificador usado no PostgresSaver — permite cruzar
-// nossa tabela com o checkpoint do LangGraph quando precisamos depurar
-// estado de conversa.
-// ---------------------------------------------------------------------------
+// ===========================================================================
 model ExecutionTrace {
-  id           String          @id @default(cuid())
-  threadId     String          @map("thread_id")
-  leadId       String          @map("lead_id")
+  id           String      @id @default(cuid())
+  unitId       String?     @map("unit_id")
+  threadId     String      @map("thread_id")
+  leadId       String      @map("lead_id")
+  channel      String      @default("kommo") // kommo | salesbot | meta | manual
   input        Json
-  iaDecision   Json?           @map("ia_decision")
-  latencyMs    Int?            @map("latency_ms")
-  status       TraceStatus     @default(RUNNING)
-  errorMessage String?         @map("error_message")
-  createdAt    DateTime        @default(now()) @map("created_at")
-  updatedAt    DateTime        @updatedAt @map("updated_at")
+  iaDecision   Json?       @map("ia_decision")
+  latencyMs    Int?        @map("latency_ms")
+  status       TraceStatus @default(RUNNING)
+  errorMessage String?     @map("error_message")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
 
-  steps        ExecutionStep[]
+  steps    ExecutionStep[]
+  llmCalls LlmCall[]
+  unit     Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
 
+  @@index([unitId])
   @@index([threadId])
   @@index([leadId])
   @@index([createdAt(sort: Desc)])
   @@map("execution_traces")
 }
 
-// ---------------------------------------------------------------------------
-// ExecutionStep
-// ---------------------------------------------------------------------------
-// Cada "linha" do feed visual do dashboard. Tipamos o `kind` para que o
-// frontend possa escolher ícone/cor sem parsear texto.
-//
-// `latencyMs` aqui é a duração do STEP isolado (não do trace inteiro).
-// `sequence` garante ordenação estável mesmo se dois steps escreverem no
-// mesmo milissegundo.
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// ExecutionStep — feed visual do dashboard (uma linha por nó/tool/ação).
+// ===========================================================================
 model ExecutionStep {
-  id         String         @id @default(cuid())
-  traceId    String         @map("trace_id")
-  sequence   Int
-  kind       StepKind
-  title      String
-  payload    Json?
-  latencyMs  Int?           @map("latency_ms")
-  createdAt  DateTime       @default(now()) @map("created_at")
+  id        String   @id @default(cuid())
+  traceId   String   @map("trace_id")
+  sequence  Int
+  kind      StepKind
+  title     String
+  payload   Json?
+  latencyMs Int?     @map("latency_ms")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  trace      ExecutionTrace @relation(fields: [traceId], references: [id], onDelete: Cascade)
+  trace ExecutionTrace @relation(fields: [traceId], references: [id], onDelete: Cascade)
 
   @@unique([traceId, sequence])
   @@index([traceId])
@@ -107,6 +153,7 @@ enum TraceStatus {
 //  TOOL_CALL        — agente decidiu chamar uma tool
 //  TOOL_RESULT      — tool respondeu
 //  KOMMO_ACTION     — ação efetivada no Kommo (addTag/moveStage)
+//  META_ACTION      — mensagem enviada via Meta WhatsApp Cloud
 //  COMPLETED        — encerramento
 //  ERROR            — falha em algum nó
 enum StepKind {
@@ -115,70 +162,128 @@ enum StepKind {
   TOOL_CALL
   TOOL_RESULT
   KOMMO_ACTION
+  META_ACTION
   COMPLETED
   ERROR
 }
 
-// ---------------------------------------------------------------------------
-// Tabelas do PostgresSaver (LangGraph) — NÃO declaradas aqui de propósito.
-// ---------------------------------------------------------------------------
-// O `checkpointer.setup()` no boot do app cria e migra `checkpoints`,
-// `checkpoint_writes`, `checkpoint_blobs` e `checkpoint_migrations` com o
-// schema CORRETO (campos JSONB onde o LangGraph precisa).
+// ===========================================================================
+// Conversation / Message — visão "chat" agrupada por lead.
+// ===========================================================================
+// O ExecutionTrace é por execução; aqui temos um registro contínuo das
+// trocas de mensagens com cada paciente. Cada Message guarda o `traceId`
+// se foi gerada por execução do agente (resposta de IA), permitindo
+// "drill-down" pro console de raciocínio.
 //
-// Antes (regressão de migration): declarávamos esses models aqui pra
-// "visibilidade" no Prisma Studio, mas o Prisma gerava BYTEA pros campos
-// que o LangGraph espera JSONB — quebrando o checkpointer em runtime
-// com "operator does not exist: bytea -> unknown".
-//
-// Lição: persistência do framework é do framework. Se um dia quiser ler
-// essas tabelas via Prisma, use `prisma db pull` DEPOIS que o setup()
-// já rodou — pra que o Prisma INTROSPECTE o schema real em vez de
-// inventar um.
-// ---------------------------------------------------------------------------
+// `channel` distingue origem: kommo (chat nativo Kommo), meta (WhatsApp
+// Cloud direto), manual (quando um operador respondeu pelo painel).
+// ===========================================================================
+model Conversation {
+  id          String   @id @default(cuid())
+  unitId      String   @map("unit_id")
+  leadId      String   @map("lead_id")
+  contactName String?  @map("contact_name")
+  phone       String?
+  channel     String   @default("kommo")
+  lastMessageAt DateTime @default(now()) @map("last_message_at")
+  createdAt   DateTime @default(now()) @map("created_at")
 
-// ---------------------------------------------------------------------------
-// AgentConfig
-// ---------------------------------------------------------------------------
-// Configuração runtime do agente — editável pelo dashboard.
+  unit     Unit      @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([unitId, leadId])
+  @@index([unitId])
+  @@index([lastMessageAt(sort: Desc)])
+  @@map("conversations")
+}
+
+// role: "user" (paciente) | "assistant" (IA) | "system" (nota interna)
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  traceId        String?  @map("trace_id")
+  role           String
+  content        String   @db.Text
+  meta           Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt(sort: Desc)])
+  @@map("messages")
+}
+
+// ===========================================================================
+// LlmCall — toda chamada à LLM (OpenAI/ByteGPT) é registrada aqui.
+// ===========================================================================
+// Esta tabela alimenta o painel "ByteGPT/IA": custo por unidade, tokens
+// gastos, latência, payloads completos pra debug. Independente do trace
+// (um trace pode ter N llmCalls), e independente de tool calls.
 //
-// Mantemos UM registro ativo por vez (`isActive = true`). O graph.ts lê o
-// ativo no boot/invocação em vez de usar o SYSTEM_PROMPT hardcoded.
+// `requestBody` e `responseBody` são JSON cru — útil em debug, custoso em
+// storage. Considere TTL (ex: 90 dias) ou particionamento em produção.
 //
-// Campos JSON:
-//
-//  - tools: array de configuração de cada tool registrada.
-//      [{ name: "aplicar_tag", enabled: true, description: "..." }, ...]
-//    O graph.ts FILTRA tools desabilitadas antes do bindTools, e SUBSTITUI
-//    a descrição da tool pela versão editada pelo usuário (a descrição é
-//    o "gatilho" — o que o LLM lê pra decidir quando chamar).
-//
-//  - workflow: array de regras declarativas que o agente recebe como
-//    contexto adicional no system prompt. Formato:
-//      [{ id, when: "string descrevendo gatilho",
-//         then: "string descrevendo ação esperada" }]
-//    Não SUBSTITUI o ReAct loop — funciona como guia.
-// ---------------------------------------------------------------------------
+// `costUsd` é calculado em runtime via tabela de preços (services/openai.service.ts).
+// ===========================================================================
+model LlmCall {
+  id               String   @id @default(cuid())
+  unitId           String?  @map("unit_id")
+  traceId          String?  @map("trace_id")
+  provider         String   @default("openai") // openai | bytegpt | ...
+  model            String
+  endpoint         String   @default("chat.completions") // chat.completions | assistants
+  promptTokens     Int      @default(0) @map("prompt_tokens")
+  completionTokens Int      @default(0) @map("completion_tokens")
+  totalTokens      Int      @default(0) @map("total_tokens")
+  costUsd          Decimal  @default(0) @map("cost_usd") @db.Decimal(12, 6)
+  latencyMs        Int      @default(0) @map("latency_ms")
+  status           String   @default("success") // success | error
+  errorMessage     String?  @map("error_message")
+  requestBody      Json?    @map("request_body")
+  responseBody     Json?    @map("response_body")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  unit  Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  trace ExecutionTrace? @relation(fields: [traceId], references: [id], onDelete: SetNull)
+
+  @@index([unitId])
+  @@index([traceId])
+  @@index([createdAt(sort: Desc)])
+  @@map("llm_calls")
+}
+
+// ===========================================================================
+// AgentConfig — prompt + tools + workflow editáveis pelo dashboard.
+// ===========================================================================
+// Continua existindo, mas agora opcional por Unit. Se a Unit tiver um
+// AgentConfig ativo, ele tem prioridade sobre os defaults da Unit.
+// Se não tiver, usamos os campos `systemPrompt`/`openaiModel`/etc da própria
+// Unit.
+// ===========================================================================
 model AgentConfig {
   id           String   @id @default(cuid())
+  unitId       String?  @map("unit_id")
   name         String   @default("default")
   isActive     Boolean  @default(false) @map("is_active")
-
   systemPrompt String   @map("system_prompt")
-
-  // [{ name, enabled, description }]
   tools        Json     @default("[]")
-
-  // [{ id, when, then }]
   workflow     Json     @default("[]")
-
   model        String   @default("gpt-4o-mini")
   temperature  Float    @default(0)
   maxTokens    Int      @default(1024) @map("max_tokens")
-
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
+  unit Unit? @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
   @@index([isActive])
+  @@index([unitId])
   @@map("agent_configs")
 }
+
+// ---------------------------------------------------------------------------
+// Tabelas do PostgresSaver (LangGraph) — NÃO declaradas aqui.
+// O `checkpointer.setup()` no boot cria/migra `checkpoints`, `checkpoint_writes`,
+// `checkpoint_blobs`, `checkpoint_migrations` com schema correto (JSONB).
+// ---------------------------------------------------------------------------

@@ -1,54 +1,31 @@
 // ============================================================================
-// salesbot.controller.ts — Webhook do Kommo Salesbot (chat conversacional).
+// salesbot.controller.ts — Webhook do Kommo Salesbot (multi-tenant).
 //
 // LÓGICA DE ENGENHARIA
 // --------------------
-// O webhook genérico do Kommo (handleKommoWebhook) só carrega eventos de CRM
-// (lead criado/alterado) — não inclui texto de mensagem WhatsApp. Para chat
-// real, o Kommo usa o Salesbot, que tem comportamento DIFERENTE:
+// Diferente do webhook genérico do Kommo (handleKommoWebhook), o Salesbot
+// é SÍNCRONO: ele aguarda a resposta HTTP (timeout ~60s) e o que estiver
+// no campo `reply` é enviado ao paciente como mensagem.
 //
-//   1. Salesbot envia POST com o texto da mensagem incluído no payload.
-//   2. Salesbot AGUARDA a resposta HTTP (timeout ~60s).
-//   3. A resposta HTTP é parseada pelo Salesbot — o que estiver em
-//      `reply` (ou outro campo configurável) é enviado de volta ao paciente.
-//
-// Por isso este controller é SÍNCRONO (não fire-and-forget como o de CRM):
-// o Salesbot fica esperando o JSON com a resposta da Sofia. Se demorar
-// demais, o bot timeouta e a conversa quebra.
-//
-// CONTRATO DO PAYLOAD
-// -------------------
-// O Salesbot do Kommo deixa VOCÊ MONTAR o JSON do webhook. A gente define
-// um schema permissivo que aceita variações comuns. Os campos esperados:
-//
-//   {
-//     "message":     "texto que o paciente mandou",      // OBRIGATÓRIO
-//     "lead_id":     "12345",                            // OBRIGATÓRIO (string ou num)
-//     "contact_id":  "67890",                            // opcional
-//     "contact_name":"João",                             // opcional
-//     "phone":       "5563999999999",                    // opcional
-//     "current_time":"2026-05-12T14:00:00Z"              // opcional (pro [HORA:] da Sofia)
-//   }
-//
-// RESPOSTA
-// --------
-//   { "ok": true, "reply": "texto que a Sofia respondeu", "traceId": "..." }
-//
-// No Salesbot, configurar a próxima ação como "Enviar mensagem" usando a
-// variável `{{webhook.reply}}` (ou o nome que o Salesbot der ao campo).
+// MULTI-TENANT
+// ------------
+// A rota é /api/webhooks/:unitSlug/salesbot. Caímos pra default unit se
+// nenhum slug — retrocompat com /api/webhooks/salesbot.
 // ============================================================================
 
 import type { Request, Response } from 'express';
 import { HumanMessage } from '@langchain/core/messages';
+import type { Unit } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { buildAgentGraph } from '../agent/graph.js';
+import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder } from '../agent/trace-recorder.js';
+import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
+import { addMessage, upsertConversation } from '../services/conversations.service.js';
 
 // ---------------------------------------------------------------------------
-// Schema permissivo — aceita string ou número para IDs, e variantes de campo
-// (alguns Salesbots usam "text" em vez de "message", etc.).
+// Schema permissivo — aceita string ou número para IDs.
 // ---------------------------------------------------------------------------
 
 const payloadSchema = z
@@ -68,23 +45,11 @@ const payloadSchema = z
 
 type Payload = z.infer<typeof payloadSchema>;
 
-function extractMessage(p: Payload): string | null {
-  return (p.message || p.text || '').trim() || null;
-}
+const extractMessage = (p: Payload) => (p.message || p.text || '').trim() || null;
+const extractLeadId = (p: Payload) => p.lead_id || p.leadId || null;
+const extractContactName = (p: Payload) => p.contact_name || p.contactName || null;
 
-function extractLeadId(p: Payload): string | null {
-  return p.lead_id || p.leadId || null;
-}
-
-function extractContactName(p: Payload): string | null {
-  return p.contact_name || p.contactName || null;
-}
-
-// ---------------------------------------------------------------------------
-// Hora atual no fuso de Araguaína (UTC-3, sem horário de verão) para a tag
-// [HORA:] que a Sofia espera no prompt (saudação por turno).
-// ---------------------------------------------------------------------------
-
+// Hora atual no fuso de Araguaína (UTC-3, sem horário de verão).
 function currentTimeTag(): string {
   const utc = new Date();
   const araguaina = new Date(utc.getTime() - 3 * 60 * 60 * 1000);
@@ -93,12 +58,24 @@ function currentTimeTag(): string {
   return `[HORA: ${h}:${m}]`;
 }
 
+async function resolveUnit(req: Request): Promise<Unit | null> {
+  const slug = req.params.unitSlug ? String(req.params.unitSlug) : '';
+  if (slug) return findUnitBySlug(slug);
+  return ensureDefaultUnit();
+}
+
 // ---------------------------------------------------------------------------
-// Handler principal — SÍNCRONO (Salesbot espera).
+// Handler principal — POST /api/webhooks/[:unitSlug/]salesbot — SÍNCRONO.
 // ---------------------------------------------------------------------------
 
 export async function handleSalesbotWebhook(req: Request, res: Response): Promise<void> {
   const requestStart = performance.now();
+
+  const unit = await resolveUnit(req);
+  if (!unit) {
+    res.status(404).json({ ok: false, error: 'unit_not_found', reply: 'Erro técnico, tente em instantes.' });
+    return;
+  }
 
   const parsed = payloadSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -110,6 +87,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
   const message = extractMessage(parsed.data);
   const leadId = extractLeadId(parsed.data);
   const contactName = extractContactName(parsed.data);
+  const phone = parsed.data.phone ?? null;
 
   if (!message || !leadId) {
     logger.warn({ body: req.body }, 'salesbot sem message/leadId');
@@ -122,33 +100,44 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     return;
   }
 
-  // Cria o trace ANTES de chamar a Sofia — assim o dashboard vê a execução
-  // mesmo se a Sofia demorar.
   const trace = await prisma.executionTrace.create({
     data: {
-      threadId: `lead-${leadId}`,
+      unitId: unit.id,
+      threadId: buildThreadId(unit.slug, leadId),
       leadId,
+      channel: 'salesbot',
       input: req.body as object,
       status: 'RUNNING',
     },
   });
 
-  const recorder = new TraceRecorder(trace.id);
+  const recorder = new TraceRecorder(trace.id, unit.id);
   await recorder.step({
     kind: 'WEBHOOK_RECEIVED',
-    title: contactName
-      ? `Mensagem de ${contactName} (Lead ${leadId})`
-      : `Mensagem do Lead ${leadId}`,
+    title: contactName ? `Mensagem de ${contactName} (Lead ${leadId})` : `Mensagem do Lead ${leadId}`,
     payload: req.body as object,
   });
 
-  // Mensagem final entregue à Sofia: prefixo [HORA: HH:MM] que o prompt dela
-  // espera pra escolher a saudação, depois o texto do paciente.
+  // Registra turno do paciente na conversa.
+  const conv = await upsertConversation({
+    unitId: unit.id,
+    leadId,
+    contactName,
+    phone,
+    channel: 'salesbot',
+  });
+  await addMessage({
+    conversationId: conv.id,
+    traceId: trace.id,
+    role: 'user',
+    content: message,
+  });
+
   const humanMessage = `${currentTimeTag()} ${message}`;
 
   try {
-    const graph = await buildAgentGraph(recorder);
-    const threadId = `lead-${leadId}`;
+    const graph = await buildAgentGraph(recorder, unit);
+    const threadId = buildThreadId(unit.slug, leadId);
 
     const result = await graph.invoke(
       {
@@ -158,11 +147,13 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       },
       {
         configurable: { thread_id: threadId },
-        recursionLimit: 6, // chat — não esperamos loop longo de tools
+        recursionLimit: 6,
       },
     );
 
-    const reply = (result.decision ?? '').trim() || 'Recebi sua mensagem, tô só verificando com a equipe um instante 🙏';
+    const reply =
+      (result.decision ?? '').trim() ||
+      'Recebi sua mensagem, tô só verificando com a equipe um instante 🙏';
     const totalLatency = Math.round(performance.now() - requestStart);
 
     await recorder.step({
@@ -177,8 +168,17 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       iaDecision: reply,
     });
 
-    res.json({ ok: true, reply, traceId: trace.id });
-    logger.info({ traceId: trace.id, leadId, ms: totalLatency }, 'salesbot concluído');
+    // Turno do assistente na conversa.
+    await addMessage({
+      conversationId: conv.id,
+      traceId: trace.id,
+      role: 'assistant',
+      content: reply,
+      meta: { via: 'salesbot' },
+    });
+
+    res.json({ ok: true, reply, traceId: trace.id, unit: unit.slug });
+    logger.info({ traceId: trace.id, leadId, ms: totalLatency, unit: unit.slug }, 'salesbot concluído');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const totalLatency = Math.round(performance.now() - requestStart);
@@ -193,10 +193,8 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       latencyMs: totalLatency,
       errorMessage: msg,
     });
-    logger.error({ err, traceId: trace.id, leadId }, 'salesbot falhou');
+    logger.error({ err, traceId: trace.id, leadId, unit: unit.slug }, 'salesbot falhou');
 
-    // Mesmo em erro, devolvemos um `reply` pro Salesbot mandar algo simpático
-    // ao paciente — não dá pra deixar ele no vácuo.
     res.status(200).json({
       ok: false,
       reply: 'Recebi sua mensagem 💚 Vou pedir pra Maria Eduarda te atender de manhã, tá?',

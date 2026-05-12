@@ -1,33 +1,30 @@
 // ============================================================================
-// kommo.service.ts — Cliente HTTP do Kommo CRM.
+// kommo.service.ts — Cliente HTTP do Kommo CRM (multi-tenant).
 //
 // LÓGICA DE ENGENHARIA
 // --------------------
-// Esta camada faz UMA coisa: traduzir chamadas tipadas (addTag, moveStage,
-// getLead) em requisições HTTP para a API v4 do Kommo. Ela é DELIBERADAMENTE
-// burra:
+// Antes era um SINGLETON com credenciais do .env. Agora cada Unit tem seu
+// próprio Kommo (subdomínio + token) — então criamos UMA INSTÂNCIA por
+// Unit. A API pública continua igual: addTag, moveStage, getLead, ...
 //
+// Mantemos `KommoService` como singleton fallback (lê .env) para retrocompat
+// com webhooks legados sem slug. O caminho novo é `createKommoService(unit)`.
+//
+// CAMADA DELIBERADAMENTE BURRA
+// ----------------------------
 //  - Não conhece LangGraph.
 //  - Não conhece Prisma.
-//  - Não conhece logger de aplicação além do necessário para diagnóstico.
-//  - Não decide o que fazer com erros de negócio — propaga.
-//
-// Por que essa pureza importa?
-// Porque amanhã o Kommo pode mudar de versão de API, ou podemos trocar
-// `axios` por `undici`, ou precisar mockar tudo em testes. Nada disso pode
-// vazar para a camada de agente. A interface pública aqui é o contrato.
-//
-// Concorrência: usamos UMA instância de axios com timeout e baseURL. Os
-// interceptors centralizam retry simples (idempotente apenas para GET) e
-// log de latência por chamada.
+//  - Não decide o que fazer com erros de negócio — propaga (KommoApiError).
+// Isso permite trocar Kommo por HubSpot amanhã reescrevendo só este arquivo.
 // ============================================================================
 
 import axios, { AxiosError, type AxiosInstance } from 'axios';
+import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
-// Tipos públicos — o que outras camadas enxergam.
+// Tipos públicos
 // ---------------------------------------------------------------------------
 
 export interface KommoLead {
@@ -49,24 +46,18 @@ export interface AddTagParams {
 
 export interface MoveStageParams {
   leadId: number;
-  /** ID do status (etapa) no pipeline destino. */
   statusId: number;
-  /** Opcional: ID do pipeline destino (caso queira mover entre funis). */
   pipelineId?: number;
 }
 
 export interface SendChatReplyParams {
   leadId: number;
   text: string;
-  /** UUID do chat do paciente (vem em message.add[].chat_id do webhook). */
   chatId: string | null;
-  /** ID numérico da conversa em andamento (vem em message.add[].talk_id). */
   talkId: string | null;
-  /** ID do contato (vem em message.add[].contact_id). */
   contactId: string | null;
 }
 
-/** Indica POR ONDE a resposta foi entregue ao Kommo. */
 export type SendChatReplyVia = 'salesbot' | 'chat_message' | 'lead_note';
 
 export interface SendChatReplyResult {
@@ -75,7 +66,7 @@ export interface SendChatReplyResult {
 }
 
 // ---------------------------------------------------------------------------
-// Erro de domínio — não vazamos AxiosError para cima.
+// Erro de domínio — nunca vazamos AxiosError pra cima.
 // ---------------------------------------------------------------------------
 
 export class KommoApiError extends Error {
@@ -90,156 +81,146 @@ export class KommoApiError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Cliente axios pré-configurado.
-//
-// baseURL: https://{subdomain}.kommo.com/api/v4
-// Auth: Bearer token (Long-Lived Access Token gerado no painel do Kommo).
-// timeout: 15s — webhooks do Kommo expiram em 30s, então temos margem.
+// Config interna do cliente — derivada de uma Unit ou do env legado.
 // ---------------------------------------------------------------------------
-const http: AxiosInstance = axios.create({
-  baseURL: `https://${env.KOMMO_SUBDOMAIN}.kommo.com/api/v4`,
-  timeout: 15_000,
-  headers: {
-    Authorization: `Bearer ${env.KOMMO_ACCESS_TOKEN}`,
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  },
-});
 
-http.interceptors.request.use((config) => {
-  (config as { metadata?: { start: number } }).metadata = { start: performance.now() };
-  return config;
-});
+interface KommoCreds {
+  subdomain: string;
+  accessToken: string;
+  salesbotId: number | null;
+  replyFieldId: number | null;
+}
 
-http.interceptors.response.use(
-  (response) => {
-    const meta = (response.config as { metadata?: { start: number } }).metadata;
-    if (meta) {
-      logger.debug(
-        { method: response.config.method, url: response.config.url, ms: Math.round(performance.now() - meta.start) },
-        'kommo http ok',
+function credsFromUnit(unit: Pick<Unit, 'kommoSubdomain' | 'kommoAccessToken' | 'kommoSalesbotId' | 'kommoReplyFieldId'>): KommoCreds {
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    throw new Error('Unit sem credenciais Kommo configuradas');
+  }
+  return {
+    subdomain: unit.kommoSubdomain,
+    accessToken: unit.kommoAccessToken,
+    salesbotId: unit.kommoSalesbotId,
+    replyFieldId: unit.kommoReplyFieldId,
+  };
+}
+
+function credsFromEnv(): KommoCreds {
+  return {
+    subdomain: env.KOMMO_SUBDOMAIN,
+    accessToken: env.KOMMO_ACCESS_TOKEN,
+    salesbotId: env.KOMMO_SALESBOT_ID ?? null,
+    replyFieldId: env.KOMMO_REPLY_FIELD_ID ?? null,
+  };
+}
+
+function buildHttp(creds: KommoCreds): AxiosInstance {
+  const http = axios.create({
+    baseURL: `https://${creds.subdomain}.kommo.com/api/v4`,
+    timeout: 15_000,
+    headers: {
+      Authorization: `Bearer ${creds.accessToken}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+  });
+
+  http.interceptors.request.use((config) => {
+    (config as { metadata?: { start: number } }).metadata = { start: performance.now() };
+    return config;
+  });
+  http.interceptors.response.use(
+    (response) => {
+      const meta = (response.config as { metadata?: { start: number } }).metadata;
+      if (meta) {
+        logger.debug(
+          { method: response.config.method, url: response.config.url, ms: Math.round(performance.now() - meta.start) },
+          'kommo http ok',
+        );
+      }
+      return response;
+    },
+    (error: AxiosError) => {
+      logger.warn(
+        {
+          method: error.config?.method,
+          url: error.config?.url,
+          status: error.response?.status,
+          body: error.response?.data,
+        },
+        'kommo http error',
       );
-    }
-    return response;
-  },
-  (error: AxiosError) => {
-    logger.warn(
-      {
-        method: error.config?.method,
-        url: error.config?.url,
-        status: error.response?.status,
-        body: error.response?.data,
-      },
-      'kommo http error',
-    );
-    return Promise.reject(error);
-  },
-);
-
-// ---------------------------------------------------------------------------
-// Helpers internos
-// ---------------------------------------------------------------------------
+      return Promise.reject(error);
+    },
+  );
+  return http;
+}
 
 function wrapAxiosError(err: unknown, context: string): never {
   if (axios.isAxiosError(err)) {
-    throw new KommoApiError(
-      `${context}: ${err.message}`,
-      err.response?.status,
-      err.response?.data,
-    );
+    throw new KommoApiError(`${context}: ${err.message}`, err.response?.status, err.response?.data);
   }
   throw err;
 }
 
 // ---------------------------------------------------------------------------
-// API pública do service.
+// Classe instanciável — uma por Unit.
+// Métodos espelham o que era o objeto KommoService original.
 // ---------------------------------------------------------------------------
 
-export const KommoService = {
-  /**
-   * Recupera um lead com tags e contatos embedados.
-   * Útil para o agente conhecer o estado atual antes de decidir.
-   */
+export class KommoClient {
+  constructor(private readonly creds: KommoCreds, private readonly http: AxiosInstance) {}
+
+  get subdomain(): string {
+    return this.creds.subdomain;
+  }
+
   async getLead(leadId: number): Promise<KommoLead> {
     try {
-      const { data } = await http.get<KommoLead>(`/leads/${leadId}`, {
+      const { data } = await this.http.get<KommoLead>(`/leads/${leadId}`, {
         params: { with: 'contacts' },
       });
       return data;
     } catch (err) {
       wrapAxiosError(err, `getLead(${leadId})`);
     }
-  },
+  }
 
-  /**
-   * Lista todos os custom fields de leads. Útil pra descobrir IDs sem
-   * precisar caçar na UI do Kommo. Consumido pelo endpoint /admin/kommo-fields.
-   */
   async listLeadCustomFields(): Promise<unknown> {
     try {
-      const { data } = await http.get('/leads/custom_fields', {
-        params: { limit: 250 },
-      });
+      const { data } = await this.http.get('/leads/custom_fields', { params: { limit: 250 } });
       return data;
     } catch (err) {
       wrapAxiosError(err, 'listLeadCustomFields');
     }
-  },
+  }
 
-  /**
-   * Lista todos os Salesbots. Útil pra descobrir o salesbot_id pela API.
-   */
   async listSalesbots(): Promise<unknown> {
     try {
-      const { data } = await http.get('/salesbot');
+      const { data } = await this.http.get('/salesbot');
       return data;
     } catch (err) {
       wrapAxiosError(err, 'listSalesbots');
     }
-  },
+  }
 
-  /**
-   * Adiciona uma tag a um lead.
-   *
-   * A API do Kommo trata tags como recurso embedado: a única forma de
-   * "adicionar" é PATCH no lead com `_embedded.tags` contendo a nova tag.
-   * Sem ID conhecido a Kommo cria/reusa pelo nome (idempotente do lado deles).
-   */
   async addTag({ leadId, tag }: AddTagParams): Promise<void> {
     try {
-      await http.patch(`/leads/${leadId}`, {
-        _embedded: {
-          tags: [{ name: tag }],
-        },
-      });
+      await this.http.patch(`/leads/${leadId}`, { _embedded: { tags: [{ name: tag }] } });
     } catch (err) {
       wrapAxiosError(err, `addTag(${leadId}, ${tag})`);
     }
-  },
+  }
 
-  /**
-   * Move um lead para outra etapa do pipeline.
-   * `status_id` é obrigatório; `pipeline_id` é opcional (mesmo funil por padrão).
-   */
   async moveStage({ leadId, statusId, pipelineId }: MoveStageParams): Promise<void> {
     try {
-      await http.patch(`/leads/${leadId}`, {
+      await this.http.patch(`/leads/${leadId}`, {
         status_id: statusId,
         ...(pipelineId ? { pipeline_id: pipelineId } : {}),
       });
     } catch (err) {
       wrapAxiosError(err, `moveStage(${leadId}, status=${statusId})`);
     }
-  },
+  }
 
-  /**
-   * Dispara um Salesbot manualmente via API. Útil pra "emular" envio de
-   * mensagem ao paciente em contas com WABA nativo: o backend grava o texto
-   * num custom field do lead e o Salesbot lê esse campo + envia.
-   *
-   * O Salesbot precisa estar configurado no Kommo com UM bloco "Enviar
-   * mensagem" cujo conteúdo é a variável `{{lead.cf.<replyFieldId>}}`.
-   */
   async runSalesbot({
     leadId,
     salesbotId,
@@ -251,61 +232,29 @@ export const KommoService = {
     replyFieldId: number;
     text: string;
   }): Promise<unknown> {
-    // Passo 1: grava o texto da resposta no custom field do lead.
     try {
-      await http.patch(`/leads/${leadId}`, {
-        custom_fields_values: [
-          {
-            field_id: replyFieldId,
-            values: [{ value: text }],
-          },
-        ],
+      await this.http.patch(`/leads/${leadId}`, {
+        custom_fields_values: [{ field_id: replyFieldId, values: [{ value: text }] }],
       });
     } catch (err) {
       wrapAxiosError(err, `runSalesbot:setField(${leadId}, field=${replyFieldId})`);
     }
 
-    // Passo 2: dispara o Salesbot pra esse lead.
-    // entity_type=2 → lead (1=contact, 2=lead, 3=company na Kommo).
     try {
-      const { data } = await http.post(`/salesbot/${salesbotId}/run`, [
-        {
-          bot_id: salesbotId,
-          entity_type: 2,
-          entity_id: leadId,
-        },
+      const { data } = await this.http.post(`/salesbot/${salesbotId}/run`, [
+        { bot_id: salesbotId, entity_type: 2, entity_id: leadId },
       ]);
       return data;
     } catch (err) {
       wrapAxiosError(err, `runSalesbot:run(${leadId}, bot=${salesbotId})`);
     }
-  },
+  }
 
   /**
-   * Envia a resposta da IA de volta ao paciente.
-   *
-   * IMPORTANTE — limitação do canal nativo de WhatsApp (WABA) integrado pelo
-   * próprio Kommo: a API v4 NÃO expõe endpoint público confiável pra enviar
-   * mensagem outbound num chat WABA gerenciado por eles. O caminho oficial é
-   * via Salesbot OU via canal customizado registrado na Chats API
-   * (amojo.kommo.com), que requer channel_secret próprio.
-   *
-   * Estratégia adotada aqui (defensiva, em camadas):
-   *
-   *   1. SE KOMMO_SALESBOT_ID + KOMMO_REPLY_FIELD_ID estão setadas, dispara
-   *      o Salesbot via API — caminho oficial pra entregar a mensagem ao
-   *      paciente em contas com WABA nativo. **É o que provavelmente vai
-   *      funcionar.**
-   *
-   *   2. TENTA `POST /api/v4/chats/{chat_id}/messages` — endpoint não
-   *      documentado, raro funcionar com WABA. Mantido por compatibilidade
-   *      com contas em canais customizados.
-   *
-   *   3. CAI PRA criar uma nota comum no lead. Sempre funciona, mas a nota
-   *      fica visível só no painel pro operador (não dispara WhatsApp).
-   *
-   * Retorna `via` indicando qual caminho funcionou, pra o trace do dashboard
-   * mostrar se a mensagem chegou ao paciente ou só foi registrada internamente.
+   * Envia a resposta da IA de volta ao paciente. Estratégia em camadas:
+   *  1. Salesbot (se Unit tem salesbotId + replyFieldId).
+   *  2. POST /chats/{chatId}/messages (raro funcionar com WABA nativo).
+   *  3. Cria nota comum no lead (sempre funciona, mas só visível ao operador).
    */
   async sendChatReply({
     leadId,
@@ -314,16 +263,15 @@ export const KommoService = {
     talkId,
     contactId,
   }: SendChatReplyParams): Promise<SendChatReplyResult> {
-    // Tentativa 1: Salesbot (se env configurada).
-    if (env.KOMMO_SALESBOT_ID && env.KOMMO_REPLY_FIELD_ID) {
+    if (this.creds.salesbotId && this.creds.replyFieldId) {
       try {
         const data = await this.runSalesbot({
           leadId,
-          salesbotId: env.KOMMO_SALESBOT_ID,
-          replyFieldId: env.KOMMO_REPLY_FIELD_ID,
+          salesbotId: this.creds.salesbotId,
+          replyFieldId: this.creds.replyFieldId,
           text,
         });
-        logger.info({ leadId, salesbotId: env.KOMMO_SALESBOT_ID }, 'kommo salesbot disparado');
+        logger.info({ leadId, salesbotId: this.creds.salesbotId }, 'kommo salesbot disparado');
         return { via: 'salesbot', detail: data };
       } catch (err) {
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
@@ -331,10 +279,9 @@ export const KommoService = {
       }
     }
 
-    // Tentativa 2: enviar como mensagem de chat (só se temos chat_id).
     if (chatId) {
       try {
-        const { data } = await http.post(`/chats/${chatId}/messages`, {
+        const { data } = await this.http.post(`/chats/${chatId}/messages`, {
           text,
           ...(talkId ? { talk_id: talkId } : {}),
           ...(contactId ? { contact_id: contactId } : {}),
@@ -343,27 +290,62 @@ export const KommoService = {
         return { via: 'chat_message', detail: data };
       } catch (err) {
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
-        logger.debug(
-          { err, leadId, chatId, status },
-          'chats/{id}/messages falhou, caindo pra nota',
-        );
+        logger.debug({ err, leadId, chatId, status }, 'chats/{id}/messages falhou, caindo pra nota');
       }
     }
 
-    // Tentativa 3 (fallback): cria uma nota no lead com a resposta da IA.
     try {
-      const { data } = await http.post(`/leads/${leadId}/notes`, [
-        {
-          note_type: 'common',
-          params: { text: `🤖 Sofia (IA): ${text}` },
-        },
+      const { data } = await this.http.post(`/leads/${leadId}/notes`, [
+        { note_type: 'common', params: { text: `🤖 IA: ${text}` } },
       ]);
       logger.info({ leadId }, 'kommo nota criada com resposta da IA');
       return { via: 'lead_note', detail: data };
     } catch (err) {
       wrapAxiosError(err, `sendChatReply(${leadId})`);
     }
-  },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Factory: cliente por Unit.
+// ---------------------------------------------------------------------------
+
+export function createKommoClient(
+  unit: Pick<Unit, 'kommoSubdomain' | 'kommoAccessToken' | 'kommoSalesbotId' | 'kommoReplyFieldId'>,
+): KommoClient {
+  const creds = credsFromUnit(unit);
+  return new KommoClient(creds, buildHttp(creds));
+}
+
+// ---------------------------------------------------------------------------
+// SINGLETON LEGADO — usa env, mantido pra retrocompat dos endpoints
+// `/admin/kommo-fields` e `/admin/kommo-salesbots` que ainda não recebem unit.
+// ---------------------------------------------------------------------------
+
+let envClient: KommoClient | null = null;
+
+export function getEnvKommoClient(): KommoClient {
+  if (!envClient) {
+    const creds = credsFromEnv();
+    envClient = new KommoClient(creds, buildHttp(creds));
+  }
+  return envClient;
+}
+
+/** Compat: objeto-chamada idêntico ao antigo `KommoService.X(...)`. */
+export const KommoService = {
+  getLead: (leadId: number) => getEnvKommoClient().getLead(leadId),
+  listLeadCustomFields: () => getEnvKommoClient().listLeadCustomFields(),
+  listSalesbots: () => getEnvKommoClient().listSalesbots(),
+  addTag: (p: AddTagParams) => getEnvKommoClient().addTag(p),
+  moveStage: (p: MoveStageParams) => getEnvKommoClient().moveStage(p),
+  sendChatReply: (p: SendChatReplyParams) => getEnvKommoClient().sendChatReply(p),
+  runSalesbot: (p: {
+    leadId: number;
+    salesbotId: number;
+    replyFieldId: number;
+    text: string;
+  }) => getEnvKommoClient().runSalesbot(p),
 };
 
 export type KommoServiceType = typeof KommoService;

@@ -1,36 +1,32 @@
 // ============================================================================
-// tools.ts — Tools do agente (Zod + DynamicStructuredTool).
+// tools.ts — Tools do agente (Zod + DynamicStructuredTool, multi-tenant).
 //
 // LÓGICA DE ENGENHARIA
 // --------------------
 // As Tools são a interface entre a LLM e o mundo real. Cada Tool tem:
-//   1. Um SCHEMA Zod, que o LangChain converte automaticamente para o
-//      formato de tool-calling esperado pela Anthropic. A LLM "vê" apenas
-//      o schema — ela nunca lê o código de execução.
-//   2. Uma DESCRIÇÃO em linguagem natural. ESSA descrição é o que
-//      determina QUANDO a LLM decide chamar a tool. Vale ouro: descreva
-//      o caso de uso, não a implementação.
-//   3. Uma FUNÇÃO de execução, que aqui delega para `KommoService`.
+//   1. SCHEMA Zod — convertido pela LangChain pro formato de tool-calling
+//      esperado pela OpenAI.
+//   2. DESCRIÇÃO em linguagem natural — o que faz o LLM decidir QUANDO
+//      chamar a tool. É o gatilho.
+//   3. FUNÇÃO de execução — delega pro `KommoClient` da Unit corrente.
 //
-// Por que NÃO colocamos chamadas axios direto aqui?
-// Porque o LangGraph fica acoplado ao Kommo. Mantendo o `KommoService`
-// como a camada HTTP pura, podemos trocar Kommo por HubSpot amanhã
-// reescrevendo só o service. As tools continuam idênticas (do ponto de
-// vista da LLM) — só mudamos o que está atrás delas.
+// Por que NÃO chamadas axios diretas aqui?
+//   - O LangGraph fica acoplado ao Kommo. Mantendo o `KommoClient` como
+//     camada HTTP pura, a tool fica imutável quando trocarmos de CRM.
 //
-// Por que usamos `DynamicStructuredTool` e não a função `tool(...)` nova?
-// Ambos funcionam; usamos a versão `DynamicStructuredTool` porque ela
-// expõe um construtor explícito que combina melhor com TypeScript estrito.
+// MULTI-TENANT
+// ------------
+// Cada execução tem sua Unit. As tools precisam do `KommoClient` instanciado
+// com as credenciais da Unit — por isso passamos pelo factory `buildTools`.
 // ============================================================================
 
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { KommoService } from '../services/kommo.service.js';
+import type { KommoClient } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 
 // ---------------------------------------------------------------------------
-// Descrições default das tools — também é a fonte de verdade pro seed do
-// AgentConfig. Mantemos no MESMO arquivo da tool pra evitar drift.
+// Descrições default — fonte de verdade pro seed do AgentConfig.
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
@@ -45,31 +41,28 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Factory: as tools precisam de acesso ao `TraceRecorder` da execução
-// corrente para gravar steps. Como não dá pra "injetar" facilmente em
-// tools registradas globalmente, criamos uma factory que retorna um array
-// novo de tools por invocação.
-//
+// Factory.
+// `kommo` é o cliente já instanciado pra Unit corrente.
 // `descriptionOverrides` permite que o AgentConfig (editado pelo dashboard)
-// substitua o texto-gatilho da tool sem mudar o código. A description é o
-// que o LLM lê pra decidir QUANDO chamar — então editá-la muda comportamento.
+// substitua o texto-gatilho da tool.
 // ---------------------------------------------------------------------------
 
-export function buildTools(
-  recorder: TraceRecorder,
-  descriptionOverrides: Record<string, string> = {},
-) {
-  const desc = (name: string) =>
-    descriptionOverrides[name] || DEFAULT_TOOL_DESCRIPTIONS[name];
+export interface BuildToolsArgs {
+  recorder: TraceRecorder;
+  kommo: KommoClient;
+  descriptionOverrides?: Record<string, string>;
+}
+
+export function buildTools({ recorder, kommo, descriptionOverrides = {} }: BuildToolsArgs) {
+  const desc = (name: string) => descriptionOverrides[name] || DEFAULT_TOOL_DESCRIPTIONS[name];
+
   const aplicarTagSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
     tag: z
       .string()
       .min(1)
       .max(50)
-      .describe(
-        'Nome da tag a aplicar. Use exemplos como "Quente", "Frio", "Pronto para Fechar".',
-      ),
+      .describe('Nome da tag a aplicar. Use exemplos como "Quente", "Frio", "Pronto para Fechar".'),
   });
 
   const moverEtapaSchema = z.object({
@@ -100,7 +93,7 @@ export function buildTools(
       });
 
       try {
-        await KommoService.addTag({ leadId, tag });
+        await kommo.addTag({ leadId, tag });
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
           kind: 'KOMMO_ACTION',
@@ -118,8 +111,7 @@ export function buildTools(
           payload: { leadId, tag, error: msg },
           latencyMs: latency,
         });
-        // Devolvemos a falha como string pra LLM poder reagir (ex: tentar
-        // outra tool). NÃO lançamos — isso quebraria o loop ReAct.
+        // Devolvemos a falha como string pra LLM poder reagir. NÃO lançamos.
         return `ERRO ao aplicar tag: ${msg}`;
       }
     },
@@ -138,7 +130,7 @@ export function buildTools(
       });
 
       try {
-        await KommoService.moveStage({ leadId, statusId, pipelineId });
+        await kommo.moveStage({ leadId, statusId, pipelineId });
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
           kind: 'KOMMO_ACTION',

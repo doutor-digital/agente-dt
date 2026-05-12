@@ -1,28 +1,24 @@
 // ============================================================================
 // config.ts — AgentConfig: prompt + tools habilitadas + workflow declarativo.
 //
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Antes deste módulo, o SYSTEM_PROMPT vivia hardcoded em graph.ts. Isso
-// significa que qualquer ajuste de comportamento exigia deploy. Aqui movemos
-// a configuração para o banco (model AgentConfig do Prisma) e expomos:
+// LÓGICA DE ENGENHARIA — MULTI-TENANT
+// -----------------------------------
+// Cada Unit tem seu próprio AgentConfig (1:N). Quando uma execução começa
+// para uma Unit, buscamos o AgentConfig ATIVO daquela Unit. Se não existir
+// nenhum, criamos com os defaults (system prompt da Unit + tools default).
 //
-//   - getActiveConfig()   → lê o registro ativo. Se não existir, cria com
-//                           os defaults canônicos. Idempotente.
-//   - saveConfig(input)   → upsert do "default" e marca como ativo.
-//   - DEFAULTS            → fonte de verdade do prompt/tools/workflow base.
+// Compatibilidade com a versão mono-tenant:
+//   - getActiveConfig(unitId?) — sem unitId, retorna o primeiro config sem
+//     unitId associado (ou cria um). Mantém o comportamento antigo.
 //
 // FORMATO DOS CAMPOS JSON
 // -----------------------
-// `tools`: array de { name, enabled, description }.
-//   - O graph filtra tools cujo `enabled === false` antes do `bindTools`.
-//   - O graph SUBSTITUI a description original da tool pela versão editada
-//     (a description é o "gatilho" — é o que o LLM lê pra decidir chamar).
+// `tools`: { name, enabled, description }[]
+//   - O graph filtra `enabled === false` antes do `bindTools`.
+//   - O graph SUBSTITUI a description original pela versão editada.
 //
-// `workflow`: array de regras declarativas { id, when, then }.
-//   - NÃO é um sub-grafo; é texto que o agent recebe como parte do system
-//     prompt. Funciona como "policy" pra guiar o ReAct loop.
-//   - Mantemos texto livre pra dar flexibilidade — o LLM é quem interpreta.
+// `workflow`: { id, when, then }[]
+//   - Concatenado ao system prompt. Não é um sub-grafo.
 // ============================================================================
 
 import { prisma } from '../lib/prisma.js';
@@ -42,6 +38,7 @@ export type WorkflowRule = {
 
 export type AgentConfigShape = {
   id: string;
+  unitId: string | null;
   name: string;
   isActive: boolean;
   systemPrompt: string;
@@ -55,8 +52,6 @@ export type AgentConfigShape = {
 
 // ---------------------------------------------------------------------------
 // DEFAULTS — bootstrap quando o banco está vazio.
-// O system prompt aqui é o MESMO que estava hardcoded no graph.ts (mantemos
-// compatibilidade do MVP) — o usuário edita pelo dashboard a partir daqui.
 // ---------------------------------------------------------------------------
 
 const DEFAULT_SYSTEM_PROMPT = `Você é um agente de qualificação de leads do CRM Kommo.
@@ -101,12 +96,12 @@ export const DEFAULTS = {
 };
 
 // ---------------------------------------------------------------------------
-// Helpers de serialização — Prisma Json type é "any", então isolamos a
-// conversão num lugar só pra não espalhar `as unknown as ...` pelo código.
+// Helpers de serialização — Prisma Json type é "any".
 // ---------------------------------------------------------------------------
 
 function toShape(row: {
   id: string;
+  unitId: string | null;
   name: string;
   isActive: boolean;
   systemPrompt: string;
@@ -119,6 +114,7 @@ function toShape(row: {
 }): AgentConfigShape {
   return {
     id: row.id,
+    unitId: row.unitId,
     name: row.name,
     isActive: row.isActive,
     systemPrompt: row.systemPrompt,
@@ -132,21 +128,21 @@ function toShape(row: {
 }
 
 // ---------------------------------------------------------------------------
-// getActiveConfig — lê o ativo. Se não existir nenhum, faz seed do default
-// e marca como ativo. Operação idempotente (segura contra race no boot).
+// getActiveConfig — busca o AgentConfig ativo da Unit (ou global, se nulo).
+// Cria um default se não existir.
 // ---------------------------------------------------------------------------
 
-export async function getActiveConfig(): Promise<AgentConfigShape> {
+export async function getActiveConfig(unitId: string | null = null): Promise<AgentConfigShape> {
   const active = await prisma.agentConfig.findFirst({
-    where: { isActive: true },
+    where: { isActive: true, unitId },
     orderBy: { updatedAt: 'desc' },
   });
   if (active) return toShape(active);
 
-  // Sem ativo — semeamos um.
-  logger.info('AgentConfig: nenhum ativo encontrado, semeando default');
+  logger.info({ unitId }, 'AgentConfig: nenhum ativo encontrado, semeando default');
   const seeded = await prisma.agentConfig.create({
     data: {
+      unitId,
       name: 'default',
       isActive: true,
       systemPrompt: DEFAULTS.systemPrompt,
@@ -161,12 +157,11 @@ export async function getActiveConfig(): Promise<AgentConfigShape> {
 }
 
 // ---------------------------------------------------------------------------
-// saveConfig — upsert do "default" e garante que ele é o único ativo.
-// O dashboard chama isso quando o usuário salva. Usamos transação para que
-// não fique mais de um registro ativo simultaneamente.
+// saveConfig — upsert do "default" e garante único ativo por Unit.
 // ---------------------------------------------------------------------------
 
 export type SaveConfigInput = {
+  unitId?: string | null;
   systemPrompt: string;
   tools: ToolConfig[];
   workflow: WorkflowRule[];
@@ -176,6 +171,7 @@ export type SaveConfigInput = {
 };
 
 export async function saveConfig(input: SaveConfigInput): Promise<AgentConfigShape> {
+  const unitId = input.unitId ?? null;
   const data = {
     systemPrompt: input.systemPrompt,
     tools: input.tools,
@@ -186,10 +182,15 @@ export async function saveConfig(input: SaveConfigInput): Promise<AgentConfigSha
   };
 
   const saved = await prisma.$transaction(async (tx) => {
-    // Garante que só o "default" fica ativo.
-    await tx.agentConfig.updateMany({ where: { isActive: true }, data: { isActive: false } });
+    // Garante único ativo por Unit (ou global).
+    await tx.agentConfig.updateMany({
+      where: { isActive: true, unitId },
+      data: { isActive: false },
+    });
 
-    const existing = await tx.agentConfig.findFirst({ where: { name: 'default' } });
+    const existing = await tx.agentConfig.findFirst({
+      where: { name: 'default', unitId },
+    });
     if (existing) {
       return tx.agentConfig.update({
         where: { id: existing.id },
@@ -197,7 +198,7 @@ export async function saveConfig(input: SaveConfigInput): Promise<AgentConfigSha
       });
     }
     return tx.agentConfig.create({
-      data: { name: 'default', isActive: true, ...data },
+      data: { unitId, name: 'default', isActive: true, ...data },
     });
   });
 
@@ -205,9 +206,8 @@ export async function saveConfig(input: SaveConfigInput): Promise<AgentConfigSha
 }
 
 // ---------------------------------------------------------------------------
-// renderWorkflowGuidance — converte as regras declarativas num bloco de
-// texto que vai ANEXADO ao system prompt em runtime. Mantemos formato
-// numerado pra LLM seguir a ordem.
+// renderWorkflowGuidance — converte regras declarativas num bloco de texto
+// anexado ao system prompt.
 // ---------------------------------------------------------------------------
 
 export function renderWorkflowGuidance(rules: WorkflowRule[]): string {

@@ -1,58 +1,32 @@
 // ============================================================================
-// webhook.controller.ts — Recebe webhooks do Kommo.
+// webhook.controller.ts — Recebe webhooks do Kommo (multi-tenant).
 //
 // LÓGICA DE ENGENHARIA
 // --------------------
-// A Kommo timeoutsa webhooks em 30 segundos. Se demorarmos mais que isso,
-// ela considera falha e RETENTA — gerando duplicação. Nossa LLM pode
-// tranquilamente levar 5-15s para responder, então NÃO podemos processar
-// síncronamente dentro do handler HTTP.
-//
-// Padrão adotado: "ACK rápido + processamento em background".
-//
-//   1. Recebe POST → valida payload mínimo.
-//   2. Cria ExecutionTrace no banco (estado RUNNING).
+// O Kommo timeoutsa webhooks em 30 segundos. LLM pode levar 5-15s. Padrão:
+//   1. Recebe POST → valida payload mínimo + resolve Unit (do slug ou default).
+//   2. Cria ExecutionTrace + abre Conversation se aplicável.
 //   3. Retorna HTTP 200 IMEDIATAMENTE.
-//   4. Em background (fire-and-forget), invoca o grafo do LangGraph.
-//   5. Quando o grafo termina, atualiza o trace com status + latência.
+//   4. Em background, invoca o grafo. Atualiza trace ao final.
 //
-// Por que `performance.now()` e não `Date.now()`?
-//   - `Date.now()` tem resolução de ms mas é sujeito a ajustes de NTP.
-//   - `performance.now()` é monotônico — ideal para medir DURAÇÃO.
-//   Para timestamp de criação usamos `new Date()` (precisa ser cronológico).
-//
-// Idempotência: a Kommo pode reentregar o mesmo webhook. Para o MVP,
-// confiamos no thread_id do LangGraph: se vier a mesma mensagem duas vezes,
-// o checkpoint reencaminha o State e a LLM provavelmente respondeu igual.
-// Em produção, seria interessante deduplicar via header `X-Webhook-Id`.
+// IDEMPOTÊNCIA / DEDUP: confiamos no thread_id do LangGraph para o MVP.
+// Em produção, usar `X-Webhook-Id` pra deduplicar.
 // ============================================================================
 
 import type { Request, Response } from 'express';
 import { HumanMessage } from '@langchain/core/messages';
+import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { buildAgentGraph } from '../agent/graph.js';
-import { TraceRecorder } from '../agent/trace-recorder.js';
-import { KommoService } from '../services/kommo.service.js';
+import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
+import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
+import { createKommoClient } from '../services/kommo.service.js';
+import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
+import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
-// Schema de validação do payload.
-// O Kommo manda o webhook em formato `application/x-www-form-urlencoded`
-// com chaves aninhadas (ex: `leads[status][0][id]=123` ou
-// `message[add][0][text]=oi`). O Express expande com `extended: true`.
-//
-// Dois formatos relevantes:
-//
-//   1. CRM events — `leads.{add|update|status}[]`: só vem metadado do lead,
-//      sem texto. Usado por mudanças no funil/etapa.
-//
-//   2. Chat events — `message.add[]`: TRAZ O TEXTO da mensagem do paciente
-//      junto com chat_id, talk_id, contact_id e origem (waba/telegram/...).
-//      É esse o caminho real de conversação.
-//
-// O fallback `{ leadId, message }` continua aqui só pra facilitar testes
-// locais com curl.
+// Schema do payload do Kommo (CRM events + chat events).
 // ---------------------------------------------------------------------------
 
 const messageAddSchema = z.object({
@@ -89,8 +63,7 @@ const webhookSchema = z.object({
       add: z.array(messageAddSchema).optional(),
     })
     .optional(),
-  // Fallback para testes locais: { leadId, message } — `message` como string
-  // pra não conflitar com `message.add[]`.
+  // Fallback de teste: { leadId, text }
   leadId: z.coerce.number().optional(),
   text: z.string().optional(),
 });
@@ -100,8 +73,6 @@ type MessageEvent = z.infer<typeof messageAddSchema>;
 
 function getIncomingMessage(parsed: ParsedWebhook): MessageEvent | null {
   const messages = parsed.message?.add ?? [];
-  // Só reagimos a mensagens "incoming" — outgoing seriam respostas que
-  // nós mesmos (ou um operador) acabamos de mandar; reagir a elas geraria loop.
   const incoming = messages.find((m) => (m.type ?? 'incoming') === 'incoming' && m.text);
   return incoming ?? null;
 }
@@ -140,10 +111,8 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
       isChatMessage: true,
     };
   }
-  // Fallback de teste local OU evento de CRM puro (sem texto).
   return {
-    humanMessage:
-      parsed.text ?? `Webhook recebido para lead ${leadId}. Analise e tome a melhor ação.`,
+    humanMessage: parsed.text ?? `Webhook recebido para lead ${leadId}. Analise e tome a melhor ação.`,
     chatId: null,
     talkId: null,
     contactId: null,
@@ -153,13 +122,28 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
 }
 
 // ---------------------------------------------------------------------------
-// Handler principal
+// Resolve a Unit pelo slug da rota ou cai pra default (retrocompat).
+// ---------------------------------------------------------------------------
+
+async function resolveUnit(req: Request): Promise<Unit | null> {
+  const slug = req.params.unitSlug ? String(req.params.unitSlug) : '';
+  if (slug) return findUnitBySlug(slug);
+  return ensureDefaultUnit();
+}
+
+// ---------------------------------------------------------------------------
+// Handler principal — POST /api/webhooks/[:unitSlug/]kommo
 // ---------------------------------------------------------------------------
 
 export async function handleKommoWebhook(req: Request, res: Response): Promise<void> {
   const requestStart = performance.now();
 
-  // 1. Valida payload.
+  const unit = await resolveUnit(req);
+  if (!unit) {
+    res.status(404).json({ ok: false, error: 'unit_not_found' });
+    return;
+  }
+
   const parsed = webhookSchema.safeParse(req.body);
   if (!parsed.success) {
     logger.warn({ errors: parsed.error.flatten() }, 'webhook inválido');
@@ -176,18 +160,18 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
 
   const ctx = extractContext(parsed.data, leadId);
 
-  // 2. Cria o trace ANTES do ACK pra garantir que o dashboard veja a
-  //    execução mesmo se o processamento async demorar.
   const trace = await prisma.executionTrace.create({
     data: {
-      threadId: `lead-${leadId}`,
+      unitId: unit.id,
+      threadId: buildThreadId(unit.slug, leadId),
       leadId: String(leadId),
+      channel: ctx.isChatMessage ? 'kommo_chat' : 'kommo',
       input: req.body as object,
       status: 'RUNNING',
     },
   });
 
-  const recorder = new TraceRecorder(trace.id);
+  const recorder = new TraceRecorder(trace.id, unit.id);
   await recorder.step({
     kind: 'WEBHOOK_RECEIVED',
     title: ctx.isChatMessage
@@ -196,12 +180,27 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     payload: req.body as object,
   });
 
-  // 3. ACK imediato — fundamental pra Kommo não retentar.
-  res.status(200).json({ ok: true, traceId: trace.id });
+  // Conversa: se for mensagem de chat, registra o "user" turn.
+  if (ctx.isChatMessage) {
+    const conv = await upsertConversation({
+      unitId: unit.id,
+      leadId: String(leadId),
+      contactName: ctx.contactName,
+      channel: 'kommo_chat',
+    });
+    await addMessage({
+      conversationId: conv.id,
+      traceId: trace.id,
+      role: 'user',
+      content: ctx.humanMessage,
+      meta: { chatId: ctx.chatId, talkId: ctx.talkId, contactId: ctx.contactId },
+    });
+  }
 
-  // 4. Processamento em background. Note o `.catch` — se algo aqui
-  //    explodir e ninguém capturar, o Node 24 dispara unhandledRejection.
+  res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
+
   void processAgent({
+    unit,
     leadId,
     traceId: trace.id,
     humanMessage: ctx.humanMessage,
@@ -216,10 +215,11 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
 }
 
 // ---------------------------------------------------------------------------
-// Processamento async do agente.
+// Processamento assíncrono.
 // ---------------------------------------------------------------------------
 
 async function processAgent(args: {
+  unit: Unit;
   leadId: number;
   traceId: string;
   humanMessage: string;
@@ -229,20 +229,13 @@ async function processAgent(args: {
   isChatMessage: boolean;
   requestStart: number;
 }): Promise<void> {
-  const { leadId, traceId, humanMessage, chatId, talkId, contactId, isChatMessage, requestStart } =
-    args;
-  const recorder = new TraceRecorder(traceId);
-  // Restaura sequence: como criamos um novo recorder, ele começa em 0.
-  // O step WEBHOOK_RECEIVED já foi gravado pelo handler com seq=1, então
-  // o próximo step que esse recorder gravar será seq=1 também — colidindo
-  // com o unique [traceId, sequence]. Resolvemos puxando a contagem atual.
+  const { unit, leadId, traceId, humanMessage, chatId, talkId, contactId, isChatMessage, requestStart } = args;
+  const recorder = new TraceRecorder(traceId, unit.id);
   await syncRecorderSequence(recorder, traceId);
 
   try {
-    const graph = await buildAgentGraph(recorder);
-
-    // thread_id estável por lead → memória de conversa contínua.
-    const threadId = `lead-${leadId}`;
+    const graph = await buildAgentGraph(recorder, unit);
+    const threadId = buildThreadId(unit.slug, leadId);
 
     const result = await graph.invoke(
       {
@@ -252,19 +245,17 @@ async function processAgent(args: {
       },
       {
         configurable: { thread_id: threadId },
-        // Trava de segurança: evita loop infinito de tool_calls.
         recursionLimit: 10,
       },
     );
 
     const reply = (result.decision ?? '').toString().trim();
 
-    // Se foi mensagem de chat real e a IA gerou resposta, entregamos ao
-    // paciente via API do Kommo. Para eventos de CRM (sem chat), só logamos.
     if (isChatMessage && reply) {
       const sendStart = performance.now();
       try {
-        const sendResult = await KommoService.sendChatReply({
+        const kommo = createKommoClient(unit);
+        const sendResult = await kommo.sendChatReply({
           leadId,
           chatId,
           talkId,
@@ -276,6 +267,19 @@ async function processAgent(args: {
           title: `Resposta entregue ao paciente via ${sendResult.via}`,
           payload: { reply, via: sendResult.via, detail: sendResult.detail },
           latencyMs: Math.round(performance.now() - sendStart),
+        });
+        // Registra turno do assistente na conversa.
+        const conv = await upsertConversation({
+          unitId: unit.id,
+          leadId: String(leadId),
+          channel: 'kommo_chat',
+        });
+        await addMessage({
+          conversationId: conv.id,
+          traceId,
+          role: 'assistant',
+          content: reply,
+          meta: { via: sendResult.via },
         });
       } catch (sendErr) {
         const msg = sendErr instanceof Error ? sendErr.message : String(sendErr);
@@ -303,7 +307,7 @@ async function processAgent(args: {
       iaDecision: result.decision ?? null,
     });
 
-    logger.info({ traceId, leadId, ms: totalLatency }, 'agente concluído');
+    logger.info({ traceId, leadId, ms: totalLatency, unit: unit.slug }, 'agente concluído');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const totalLatency = Math.round(performance.now() - requestStart);
@@ -318,22 +322,6 @@ async function processAgent(args: {
       latencyMs: totalLatency,
       errorMessage: msg,
     });
-    logger.error({ err, traceId, leadId }, 'agente falhou');
-  }
-}
-
-// Helper: alinha o contador interno do recorder com o que já existe no banco.
-async function syncRecorderSequence(recorder: TraceRecorder, traceId: string): Promise<void> {
-  const last = await prisma.executionStep.findFirst({
-    where: { traceId },
-    orderBy: { sequence: 'desc' },
-    select: { sequence: true },
-  });
-  if (last) {
-    // Pequeno truque: setamos o contador interno via atribuição direta.
-    // `TraceRecorder` expõe a propriedade como private mas TS aceita via
-    // cast porque é o mesmo arquivo de runtime — em produção valeria a
-    // pena expor um setter explícito.
-    (recorder as unknown as { sequence: number }).sequence = last.sequence;
+    logger.error({ err, traceId, leadId, unit: unit.slug }, 'agente falhou');
   }
 }

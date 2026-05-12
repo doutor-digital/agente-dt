@@ -1,31 +1,50 @@
-import { useEffect, useState } from 'react';
-import { BookOpen, Settings, Terminal } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { BookOpen, Building2, Cpu, MessageCircle, Settings, Terminal } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ExecutionTrace } from './components/ExecutionTrace';
 import { StatsHeader } from './components/StatsHeader';
 import { AgentConfigPanel } from './components/AgentConfigPanel';
+import { ConversationsPanel } from './components/ConversationsPanel';
+import { LlmCallsPanel } from './components/LlmCallsPanel';
+import { UnitsPanel } from './components/UnitsPanel';
+import { UnitSelector } from './components/UnitSelector';
+import { UnitProvider, useUnit } from './context/UnitContext';
 import { usePolling } from './hooks/usePolling';
 import { api } from './lib/api';
 import type { TraceDetail } from './types/api';
 
 /**
- * App root.
+ * App root — multi-tenant.
  *
- * Duas views principais alternadas por tabs:
+ * Tabs:
  *  - "traces": dashboard de execuções (sidebar + console + stats)
- *  - "config": editor do AgentConfig (prompt, tools, sequências)
+ *  - "conversations": chat por lead
+ *  - "llm": chamadas IA com tokens/custo (painel "ByteGPT")
+ *  - "config": editor do AgentConfig (por unidade)
+ *  - "units": CRUD de unidades + credenciais
  *
- * Doc estática (docs/index.html servida pelo backend) abre em nova aba.
+ * O dropdown UnitSelector no topo filtra todas as views por unidade.
  */
-type Tab = 'traces' | 'config';
+type Tab = 'traces' | 'conversations' | 'llm' | 'config' | 'units';
 
 export function App() {
-  const [tab, setTab] = useState<Tab>('traces');
+  return (
+    <UnitProvider>
+      <Shell />
+    </UnitProvider>
+  );
+}
 
+function Shell() {
+  const [tab, setTab] = useState<Tab>('traces');
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-zinc-950 text-zinc-100">
       <TopNav tab={tab} onChange={setTab} />
-      {tab === 'traces' ? <TracesView /> : <AgentConfigPanel />}
+      {tab === 'traces' && <TracesView />}
+      {tab === 'conversations' && <ConversationsPanel />}
+      {tab === 'llm' && <LlmCallsPanel />}
+      {tab === 'config' && <AgentConfigPanel />}
+      {tab === 'units' && <UnitsPanel />}
     </div>
   );
 }
@@ -33,7 +52,10 @@ export function App() {
 function TopNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   const tabs: { id: Tab; label: string; icon: typeof Terminal }[] = [
     { id: 'traces', label: 'Execuções', icon: Terminal },
+    { id: 'conversations', label: 'Conversas', icon: MessageCircle },
+    { id: 'llm', label: 'Chamadas IA', icon: Cpu },
     { id: 'config', label: 'Configuração', icon: Settings },
+    { id: 'units', label: 'Unidades', icon: Building2 },
   ];
 
   return (
@@ -41,8 +63,12 @@ function TopNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
       <div className="flex items-center gap-2 pr-3 mr-2 border-r border-zinc-800/60">
         <div className="w-2 h-2 rounded-full bg-brand-400" />
         <span className="text-sm font-semibold text-zinc-100">Agente DT</span>
-        <span className="text-[10px] uppercase tracking-widest text-zinc-500">MVP</span>
+        <span className="text-[10px] uppercase tracking-widest text-zinc-500">v0.2</span>
       </div>
+
+      <UnitSelector />
+
+      <div className="ml-2 mr-1 h-5 w-px bg-zinc-800/80" />
 
       {tabs.map(({ id, label, icon: Icon }) => (
         <button
@@ -73,10 +99,20 @@ function TopNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
 }
 
 function TracesView() {
-  const { data: traces, loading } = usePolling(api.listTraces, 3000);
-  const { data: stats } = usePolling(api.getStats, 5000);
+  const { selectedUnitId } = useUnit();
+  const tracesFetcher = useMemo(() => () => api.listTraces(selectedUnitId), [selectedUnitId]);
+  const statsFetcher = useMemo(() => () => api.getStats(selectedUnitId), [selectedUnitId]);
+
+  const { data: traces, loading } = usePolling(tracesFetcher, 3000, [selectedUnitId]);
+  const { data: stats } = usePolling(statsFetcher, 5000, [selectedUnitId]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TraceDetail | null>(null);
+
+  // Reset quando troca de unidade.
+  useEffect(() => {
+    setSelectedId(null);
+    setDetail(null);
+  }, [selectedUnitId]);
 
   useEffect(() => {
     if (!selectedId && traces && traces.length > 0) {
@@ -85,11 +121,11 @@ function TracesView() {
   }, [traces, selectedId]);
 
   const detailInterval = detail?.status === 'RUNNING' ? 1000 : 4000;
-  const { data: fetchedDetail } = usePolling(
-    async () => (selectedId ? api.getTrace(selectedId) : null),
-    detailInterval,
+  const detailFetcher = useMemo(
+    () => async () => (selectedId ? api.getTrace(selectedId) : null),
     [selectedId],
   );
+  const { data: fetchedDetail } = usePolling(detailFetcher, detailInterval, [selectedId]);
 
   useEffect(() => {
     if (fetchedDetail) setDetail(fetchedDetail);

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import type { AgentConfigInput, AgentConfigResponse, ToolConfig, WorkflowRule } from '../types/api';
+import { useUnit } from '../context/UnitContext';
 
 /**
  * Painel de configuração do agente.
@@ -34,6 +35,7 @@ import type { AgentConfigInput, AgentConfigResponse, ToolConfig, WorkflowRule } 
  *  - Flag `dirty` indica mudanças não salvas.
  */
 export function AgentConfigPanel() {
+  const { selectedUnitId } = useUnit();
   const [loaded, setLoaded] = useState<AgentConfigResponse | null>(null);
   const [draft, setDraft] = useState<AgentConfigInput | null>(null);
   const [saving, setSaving] = useState(false);
@@ -42,7 +44,9 @@ export function AgentConfigPanel() {
 
   useEffect(() => {
     let alive = true;
-    api.getConfig().then((r) => {
+    setLoaded(null);
+    setDraft(null);
+    api.getConfig(selectedUnitId).then((r) => {
       if (!alive) return;
       setLoaded(r);
       // Merge das tools conhecidas com as salvas — garante que tools
@@ -60,6 +64,7 @@ export function AgentConfigPanel() {
         );
       });
       setDraft({
+        unitId: selectedUnitId,
         systemPrompt: r.config.systemPrompt,
         tools: merged,
         workflow: r.config.workflow,
@@ -71,7 +76,7 @@ export function AgentConfigPanel() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [selectedUnitId]);
 
   if (!loaded || !draft) {
     return (
@@ -91,7 +96,7 @@ export function AgentConfigPanel() {
     setSaving(true);
     setSaveMsg(null);
     try {
-      const saved = await api.saveConfig(draft);
+      const saved = await api.saveConfig({ ...draft, unitId: selectedUnitId });
       setLoaded({ ...loaded, config: saved });
       setSaveMsg({ kind: 'ok', text: 'Configuração salva. O agente já vai usar na próxima execução.' });
     } catch (err) {

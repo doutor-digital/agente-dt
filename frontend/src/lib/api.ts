@@ -3,24 +3,38 @@ import type {
   AgentConfig,
   AgentConfigInput,
   AgentConfigResponse,
+  ConversationDetail,
+  ConversationSummary,
+  LlmCallDetail,
+  LlmCallSummary,
   Stats,
   TraceDetail,
   TraceSummary,
+  Unit,
+  UnitInput,
+  UnitStats,
 } from '../types/api';
 
-// Em dev, o Vite proxia /api → backend (mesma origem). Em produção com front
-// e back em domínios separados (ex: app.dt.com.br × api.dt.com.br), defina
-// VITE_API_URL no .env do front. Sem VITE_API_URL caímos no path relativo
-// — funciona quando back e front compartilham o domínio.
+// Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
+// defina VITE_API_URL no .env do front.
 const apiBase = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
   : '/api';
 
-const http = axios.create({ baseURL: apiBase, timeout: 10_000 });
+const http = axios.create({ baseURL: apiBase, timeout: 15_000 });
+
+function withUnit(params: Record<string, unknown> | undefined, unitId: string | null) {
+  return unitId ? { ...(params ?? {}), unitId } : params;
+}
 
 export const api = {
-  async listTraces(): Promise<TraceSummary[]> {
-    const { data } = await http.get<{ traces: TraceSummary[] }>('/traces');
+  // -------------------------------------------------------------------------
+  // Traces
+  // -------------------------------------------------------------------------
+  async listTraces(unitId: string | null = null): Promise<TraceSummary[]> {
+    const { data } = await http.get<{ traces: TraceSummary[] }>('/traces', {
+      params: withUnit(undefined, unitId),
+    });
     return data.traces;
   },
 
@@ -29,18 +43,78 @@ export const api = {
     return data.trace;
   },
 
-  async getStats(): Promise<Stats> {
-    const { data } = await http.get<Stats>('/stats');
+  async getStats(unitId: string | null = null): Promise<Stats> {
+    const { data } = await http.get<Stats>('/stats', { params: withUnit(undefined, unitId) });
     return data;
   },
 
-  async getConfig(): Promise<AgentConfigResponse> {
-    const { data } = await http.get<AgentConfigResponse>('/config');
+  // -------------------------------------------------------------------------
+  // AgentConfig
+  // -------------------------------------------------------------------------
+  async getConfig(unitId: string | null = null): Promise<AgentConfigResponse> {
+    const { data } = await http.get<AgentConfigResponse>('/config', {
+      params: withUnit(undefined, unitId),
+    });
     return data;
   },
 
   async saveConfig(input: AgentConfigInput): Promise<AgentConfig> {
     const { data } = await http.put<{ config: AgentConfig }>('/config', input);
     return data.config;
+  },
+
+  // -------------------------------------------------------------------------
+  // Units
+  // -------------------------------------------------------------------------
+  async listUnits(): Promise<Unit[]> {
+    const { data } = await http.get<{ units: Unit[] }>('/units');
+    return data.units;
+  },
+  async getUnit(id: string): Promise<Unit> {
+    const { data } = await http.get<{ unit: Unit }>(`/units/${id}`);
+    return data.unit;
+  },
+  async createUnit(input: UnitInput): Promise<Unit> {
+    const { data } = await http.post<{ unit: Unit }>('/units', input);
+    return data.unit;
+  },
+  async updateUnit(id: string, input: Partial<UnitInput>): Promise<Unit> {
+    const { data } = await http.patch<{ unit: Unit }>(`/units/${id}`, input);
+    return data.unit;
+  },
+  async deleteUnit(id: string): Promise<void> {
+    await http.delete(`/units/${id}`);
+  },
+  async unitStats(id: string, days = 30): Promise<UnitStats> {
+    const { data } = await http.get<UnitStats>(`/units/${id}/stats`, { params: { days } });
+    return data;
+  },
+
+  // -------------------------------------------------------------------------
+  // LlmCalls
+  // -------------------------------------------------------------------------
+  async listLlmCalls(unitId: string | null = null, limit = 100): Promise<LlmCallSummary[]> {
+    const params: Record<string, unknown> = { limit };
+    if (unitId) params.unitId = unitId;
+    const { data } = await http.get<{ calls: LlmCallSummary[] }>('/llm-calls', { params });
+    return data.calls;
+  },
+  async getLlmCall(id: string): Promise<LlmCallDetail> {
+    const { data } = await http.get<{ call: LlmCallDetail }>(`/llm-calls/${id}`);
+    return data.call;
+  },
+
+  // -------------------------------------------------------------------------
+  // Conversations
+  // -------------------------------------------------------------------------
+  async listConversations(unitId: string | null = null): Promise<ConversationSummary[]> {
+    const { data } = await http.get<{ conversations: ConversationSummary[] }>('/conversations', {
+      params: withUnit(undefined, unitId),
+    });
+    return data.conversations;
+  },
+  async getConversation(id: string): Promise<ConversationDetail> {
+    const { data } = await http.get<{ conversation: ConversationDetail }>(`/conversations/${id}`);
+    return data.conversation;
   },
 };

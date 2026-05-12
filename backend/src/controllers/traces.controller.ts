@@ -1,21 +1,15 @@
 // ============================================================================
 // traces.controller.ts — API REST consumida pelo dashboard React.
 //
-// LÓGICA DE ENGENHARIA
-// --------------------
-// O frontend tem dois modos de visualização:
+// LÓGICA DE ENGENHARIA — MULTI-TENANT
+// -----------------------------------
+// Todo endpoint aceita `unitId` opcional na query. Sem `unitId`, retorna
+// dados de TODAS as unidades (visão admin). Com `unitId`, filtra.
 //
-//  1. Sidebar (lista de webhooks): /api/traces
-//     Retorna array paginado com metadados resumidos (sem steps).
-//
-//  2. Console de raciocínio: /api/traces/:id
-//     Retorna o trace + todos os steps ordenados — o feed completo.
-//
-//  3. Stats agregadas (header do dashboard): /api/stats
-//     Retorna totais, taxa de sucesso, latência média.
-//
-// Mantemos os endpoints "burros" — sem regras de negócio. Cada um é um
-// SELECT direto. Em produção valeria cache (Redis) para o /stats.
+// Endpoints:
+//   GET /api/traces?unitId=...&limit=...
+//   GET /api/traces/:id
+//   GET /api/stats?unitId=...
 // ============================================================================
 
 import type { Request, Response } from 'express';
@@ -23,13 +17,18 @@ import { prisma } from '../lib/prisma.js';
 
 export async function listTraces(req: Request, res: Response): Promise<void> {
   const take = Math.min(Number(req.query.limit ?? 50), 200);
+  const unitId = (req.query.unitId as string | undefined) ?? undefined;
+
   const traces = await prisma.executionTrace.findMany({
+    where: unitId ? { unitId } : undefined,
     orderBy: { createdAt: 'desc' },
     take,
     select: {
       id: true,
       threadId: true,
       leadId: true,
+      unitId: true,
+      channel: true,
       status: true,
       latencyMs: true,
       createdAt: true,
@@ -45,25 +44,53 @@ export async function getTrace(req: Request, res: Response): Promise<void> {
     where: { id },
     include: {
       steps: { orderBy: { sequence: 'asc' } },
+      llmCalls: {
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          model: true,
+          endpoint: true,
+          promptTokens: true,
+          completionTokens: true,
+          totalTokens: true,
+          costUsd: true,
+          latencyMs: true,
+          status: true,
+          createdAt: true,
+        },
+      },
+      unit: { select: { id: true, slug: true, name: true } },
     },
   });
   if (!trace) {
     res.status(404).json({ error: 'trace not found' });
     return;
   }
-  res.json({ trace });
+  res.json({
+    trace: {
+      ...trace,
+      llmCalls: trace.llmCalls.map((c) => ({ ...c, costUsd: Number(c.costUsd) })),
+    },
+  });
 }
 
-export async function getStats(_req: Request, res: Response): Promise<void> {
-  // Agregações em paralelo para minimizar latência total.
-  const [total, success, failed, running, avg] = await Promise.all([
-    prisma.executionTrace.count(),
-    prisma.executionTrace.count({ where: { status: 'SUCCESS' } }),
-    prisma.executionTrace.count({ where: { status: 'FAILED' } }),
-    prisma.executionTrace.count({ where: { status: 'RUNNING' } }),
+export async function getStats(req: Request, res: Response): Promise<void> {
+  const unitId = (req.query.unitId as string | undefined) ?? undefined;
+  const where = unitId ? { unitId } : {};
+
+  const [total, success, failed, running, avg, llmAgg] = await Promise.all([
+    prisma.executionTrace.count({ where }),
+    prisma.executionTrace.count({ where: { ...where, status: 'SUCCESS' } }),
+    prisma.executionTrace.count({ where: { ...where, status: 'FAILED' } }),
+    prisma.executionTrace.count({ where: { ...where, status: 'RUNNING' } }),
     prisma.executionTrace.aggregate({
-      where: { latencyMs: { not: null }, status: 'SUCCESS' },
+      where: { ...where, latencyMs: { not: null }, status: 'SUCCESS' },
       _avg: { latencyMs: true },
+    }),
+    prisma.llmCall.aggregate({
+      where: unitId ? { unitId } : {},
+      _sum: { totalTokens: true, costUsd: true },
+      _count: { _all: true },
     }),
   ]);
 
@@ -76,5 +103,10 @@ export async function getStats(_req: Request, res: Response): Promise<void> {
     running,
     successRate,
     avgLatencyMs: avg._avg.latencyMs ? Math.round(avg._avg.latencyMs) : 0,
+    llm: {
+      calls: llmAgg._count._all,
+      totalTokens: llmAgg._sum.totalTokens ?? 0,
+      costUsd: Number(llmAgg._sum.costUsd ?? 0),
+    },
   });
 }

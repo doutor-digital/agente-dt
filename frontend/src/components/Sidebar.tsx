@@ -52,7 +52,7 @@ export function Sidebar({ traces, selectedId, onSelect, loading }: Props) {
             Nenhuma execução ainda.
             <br />
             Dispare um webhook em<br />
-            <code className="text-brand-400">/api/webhooks/kommo</code>
+            <code className="text-brand-400">/api/webhooks/{'{slug}'}/kommo</code>
           </div>
         )}
 
@@ -80,13 +80,20 @@ export function Sidebar({ traces, selectedId, onSelect, loading }: Props) {
                       {timeAgo(t.createdAt)}
                     </span>
                   </div>
-                  <div className="text-[11px] text-zinc-500 truncate">
-                    {t.latencyMs ? `${t.latencyMs}ms · ` : ''}
-                    {t.status === 'RUNNING' ? 'Executando…' : (
-                      typeof t.iaDecision === 'string'
-                        ? t.iaDecision
-                        : t.status === 'SUCCESS' ? 'Concluído' : 'Falha'
+                  <div className="text-[11px] text-zinc-500 truncate flex items-center gap-1.5">
+                    {t.channel && (
+                      <span className="px-1 py-0.5 rounded bg-zinc-800/60 text-[9px] text-zinc-400 uppercase">
+                        {t.channel}
+                      </span>
                     )}
+                    <span className="truncate">
+                      {t.latencyMs ? `${t.latencyMs}ms · ` : ''}
+                      {t.status === 'RUNNING' ? 'Executando…' : (
+                        typeof t.iaDecision === 'string'
+                          ? t.iaDecision
+                          : t.status === 'SUCCESS' ? 'Concluído' : 'Falha'
+                      )}
+                    </span>
                   </div>
                 </button>
               </li>
