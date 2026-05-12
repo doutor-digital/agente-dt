@@ -55,6 +55,25 @@ export interface MoveStageParams {
   pipelineId?: number;
 }
 
+export interface SendChatReplyParams {
+  leadId: number;
+  text: string;
+  /** UUID do chat do paciente (vem em message.add[].chat_id do webhook). */
+  chatId: string | null;
+  /** ID numérico da conversa em andamento (vem em message.add[].talk_id). */
+  talkId: string | null;
+  /** ID do contato (vem em message.add[].contact_id). */
+  contactId: string | null;
+}
+
+/** Indica POR ONDE a resposta foi entregue ao Kommo. */
+export type SendChatReplyVia = 'chat_message' | 'lead_note';
+
+export interface SendChatReplyResult {
+  via: SendChatReplyVia;
+  detail?: unknown;
+}
+
 // ---------------------------------------------------------------------------
 // Erro de domínio — não vazamos AxiosError para cima.
 // ---------------------------------------------------------------------------
@@ -183,6 +202,73 @@ export const KommoService = {
       });
     } catch (err) {
       wrapAxiosError(err, `moveStage(${leadId}, status=${statusId})`);
+    }
+  },
+
+  /**
+   * Envia a resposta da IA de volta ao paciente.
+   *
+   * IMPORTANTE — limitação do canal nativo de WhatsApp (WABA) integrado pelo
+   * próprio Kommo: a API v4 NÃO expõe endpoint público confiável pra enviar
+   * mensagem outbound num chat WABA gerenciado por eles. O caminho oficial é
+   * via Salesbot OU via canal customizado registrado na Chats API
+   * (amojo.kommo.com), que requer channel_secret próprio.
+   *
+   * Estratégia adotada aqui (defensiva, em camadas):
+   *
+   *   1. TENTA `POST /api/v4/chats/{chat_id}/messages` — endpoint não
+   *      documentado mas que algumas contas Kommo aceitam pra chats
+   *      gerenciados. Se passar, a mensagem vai direto ao paciente.
+   *
+   *   2. CAI PRA criar uma nota comum no lead com o texto da resposta —
+   *      sempre funciona, mas a nota fica visível só no painel pro operador
+   *      (não dispara WhatsApp). Serve como fallback pra não perder a
+   *      resposta da IA.
+   *
+   * Retorna `via` indicando qual caminho funcionou, pra o trace do dashboard
+   * mostrar se a mensagem chegou ao paciente ou só foi registrada internamente.
+   */
+  async sendChatReply({
+    leadId,
+    text,
+    chatId,
+    talkId,
+    contactId,
+  }: SendChatReplyParams): Promise<SendChatReplyResult> {
+    // Tentativa 1: enviar como mensagem de chat (só se temos chat_id).
+    if (chatId) {
+      try {
+        const { data } = await http.post(`/chats/${chatId}/messages`, {
+          text,
+          ...(talkId ? { talk_id: talkId } : {}),
+          ...(contactId ? { contact_id: contactId } : {}),
+        });
+        logger.info({ leadId, chatId, talkId }, 'kommo chat message enviada');
+        return { via: 'chat_message', detail: data };
+      } catch (err) {
+        // 404/405 indicam que o endpoint não existe nessa conta — esperado em
+        // contas com WABA nativo. Log em debug pra não poluir.
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        logger.debug(
+          { err, leadId, chatId, status },
+          'chats/{id}/messages falhou, caindo pra nota',
+        );
+      }
+    }
+
+    // Tentativa 2 (fallback): cria uma nota no lead com a resposta da IA.
+    // O `params.text` aparece no feed do lead no painel Kommo.
+    try {
+      const { data } = await http.post(`/leads/${leadId}/notes`, [
+        {
+          note_type: 'common',
+          params: { text: `🤖 Sofia (IA): ${text}` },
+        },
+      ]);
+      logger.info({ leadId }, 'kommo nota criada com resposta da IA');
+      return { via: 'lead_note', detail: data };
+    } catch (err) {
+      wrapAxiosError(err, `sendChatReply(${leadId})`);
     }
   },
 };
