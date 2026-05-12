@@ -67,7 +67,7 @@ export interface SendChatReplyParams {
 }
 
 /** Indica POR ONDE a resposta foi entregue ao Kommo. */
-export type SendChatReplyVia = 'chat_message' | 'lead_note';
+export type SendChatReplyVia = 'salesbot' | 'chat_message' | 'lead_note';
 
 export interface SendChatReplyResult {
   via: SendChatReplyVia;
@@ -172,6 +172,33 @@ export const KommoService = {
   },
 
   /**
+   * Lista todos os custom fields de leads. Útil pra descobrir IDs sem
+   * precisar caçar na UI do Kommo. Consumido pelo endpoint /admin/kommo-fields.
+   */
+  async listLeadCustomFields(): Promise<unknown> {
+    try {
+      const { data } = await http.get('/leads/custom_fields', {
+        params: { limit: 250 },
+      });
+      return data;
+    } catch (err) {
+      wrapAxiosError(err, 'listLeadCustomFields');
+    }
+  },
+
+  /**
+   * Lista todos os Salesbots. Útil pra descobrir o salesbot_id pela API.
+   */
+  async listSalesbots(): Promise<unknown> {
+    try {
+      const { data } = await http.get('/salesbot');
+      return data;
+    } catch (err) {
+      wrapAxiosError(err, 'listSalesbots');
+    }
+  },
+
+  /**
    * Adiciona uma tag a um lead.
    *
    * A API do Kommo trata tags como recurso embedado: a única forma de
@@ -206,6 +233,55 @@ export const KommoService = {
   },
 
   /**
+   * Dispara um Salesbot manualmente via API. Útil pra "emular" envio de
+   * mensagem ao paciente em contas com WABA nativo: o backend grava o texto
+   * num custom field do lead e o Salesbot lê esse campo + envia.
+   *
+   * O Salesbot precisa estar configurado no Kommo com UM bloco "Enviar
+   * mensagem" cujo conteúdo é a variável `{{lead.cf.<replyFieldId>}}`.
+   */
+  async runSalesbot({
+    leadId,
+    salesbotId,
+    replyFieldId,
+    text,
+  }: {
+    leadId: number;
+    salesbotId: number;
+    replyFieldId: number;
+    text: string;
+  }): Promise<unknown> {
+    // Passo 1: grava o texto da resposta no custom field do lead.
+    try {
+      await http.patch(`/leads/${leadId}`, {
+        custom_fields_values: [
+          {
+            field_id: replyFieldId,
+            values: [{ value: text }],
+          },
+        ],
+      });
+    } catch (err) {
+      wrapAxiosError(err, `runSalesbot:setField(${leadId}, field=${replyFieldId})`);
+    }
+
+    // Passo 2: dispara o Salesbot pra esse lead.
+    // entity_type=2 → lead (1=contact, 2=lead, 3=company na Kommo).
+    try {
+      const { data } = await http.post(`/salesbot/${salesbotId}/run`, [
+        {
+          bot_id: salesbotId,
+          entity_type: 2,
+          entity_id: leadId,
+        },
+      ]);
+      return data;
+    } catch (err) {
+      wrapAxiosError(err, `runSalesbot:run(${leadId}, bot=${salesbotId})`);
+    }
+  },
+
+  /**
    * Envia a resposta da IA de volta ao paciente.
    *
    * IMPORTANTE — limitação do canal nativo de WhatsApp (WABA) integrado pelo
@@ -216,14 +292,17 @@ export const KommoService = {
    *
    * Estratégia adotada aqui (defensiva, em camadas):
    *
-   *   1. TENTA `POST /api/v4/chats/{chat_id}/messages` — endpoint não
-   *      documentado mas que algumas contas Kommo aceitam pra chats
-   *      gerenciados. Se passar, a mensagem vai direto ao paciente.
+   *   1. SE KOMMO_SALESBOT_ID + KOMMO_REPLY_FIELD_ID estão setadas, dispara
+   *      o Salesbot via API — caminho oficial pra entregar a mensagem ao
+   *      paciente em contas com WABA nativo. **É o que provavelmente vai
+   *      funcionar.**
    *
-   *   2. CAI PRA criar uma nota comum no lead com o texto da resposta —
-   *      sempre funciona, mas a nota fica visível só no painel pro operador
-   *      (não dispara WhatsApp). Serve como fallback pra não perder a
-   *      resposta da IA.
+   *   2. TENTA `POST /api/v4/chats/{chat_id}/messages` — endpoint não
+   *      documentado, raro funcionar com WABA. Mantido por compatibilidade
+   *      com contas em canais customizados.
+   *
+   *   3. CAI PRA criar uma nota comum no lead. Sempre funciona, mas a nota
+   *      fica visível só no painel pro operador (não dispara WhatsApp).
    *
    * Retorna `via` indicando qual caminho funcionou, pra o trace do dashboard
    * mostrar se a mensagem chegou ao paciente ou só foi registrada internamente.
@@ -235,7 +314,24 @@ export const KommoService = {
     talkId,
     contactId,
   }: SendChatReplyParams): Promise<SendChatReplyResult> {
-    // Tentativa 1: enviar como mensagem de chat (só se temos chat_id).
+    // Tentativa 1: Salesbot (se env configurada).
+    if (env.KOMMO_SALESBOT_ID && env.KOMMO_REPLY_FIELD_ID) {
+      try {
+        const data = await this.runSalesbot({
+          leadId,
+          salesbotId: env.KOMMO_SALESBOT_ID,
+          replyFieldId: env.KOMMO_REPLY_FIELD_ID,
+          text,
+        });
+        logger.info({ leadId, salesbotId: env.KOMMO_SALESBOT_ID }, 'kommo salesbot disparado');
+        return { via: 'salesbot', detail: data };
+      } catch (err) {
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        logger.warn({ err, leadId, status }, 'salesbot falhou, tentando outros caminhos');
+      }
+    }
+
+    // Tentativa 2: enviar como mensagem de chat (só se temos chat_id).
     if (chatId) {
       try {
         const { data } = await http.post(`/chats/${chatId}/messages`, {
@@ -246,8 +342,6 @@ export const KommoService = {
         logger.info({ leadId, chatId, talkId }, 'kommo chat message enviada');
         return { via: 'chat_message', detail: data };
       } catch (err) {
-        // 404/405 indicam que o endpoint não existe nessa conta — esperado em
-        // contas com WABA nativo. Log em debug pra não poluir.
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
         logger.debug(
           { err, leadId, chatId, status },
@@ -256,8 +350,7 @@ export const KommoService = {
       }
     }
 
-    // Tentativa 2 (fallback): cria uma nota no lead com a resposta da IA.
-    // O `params.text` aparece no feed do lead no painel Kommo.
+    // Tentativa 3 (fallback): cria uma nota no lead com a resposta da IA.
     try {
       const { data } = await http.post(`/leads/${leadId}/notes`, [
         {

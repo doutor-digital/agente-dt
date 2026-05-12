@@ -26,6 +26,18 @@ const schema = z.object({
   KOMMO_SUBDOMAIN: z.string().min(1),
   KOMMO_ACCESS_TOKEN: z.string().min(10),
 
+  // Opcionais — quando ambos setados, sendChatReply usa o Salesbot pra
+  // entregar a resposta da IA ao paciente via WhatsApp (caminho que
+  // contorna a limitação da API v4 com canais WABA nativos).
+  //
+  // KOMMO_SALESBOT_ID: ID numérico do Salesbot minimalista (1 bloco "Enviar
+  // mensagem" com conteúdo {{lead.cf.<id>}}).
+  //
+  // KOMMO_REPLY_FIELD_ID: ID numérico do custom field "Resposta IA" no lead.
+  // O backend escreve a resposta da IA nesse campo antes de disparar o bot.
+  KOMMO_SALESBOT_ID: z.coerce.number().int().positive().optional(),
+  KOMMO_REPLY_FIELD_ID: z.coerce.number().int().positive().optional(),
+
   OPENAI_API_KEY: z.string().min(10),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 
