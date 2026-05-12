@@ -8,8 +8,15 @@ import type {
   TraceSummary,
 } from '../types/api';
 
-// O Vite dev server proxia /api → backend, então usamos path relativo.
-const http = axios.create({ baseURL: '/api', timeout: 10_000 });
+// Em dev, o Vite proxia /api → backend (mesma origem). Em produção com front
+// e back em domínios separados (ex: app.dt.com.br × api.dt.com.br), defina
+// VITE_API_URL no .env do front. Sem VITE_API_URL caímos no path relativo
+// — funciona quando back e front compartilham o domínio.
+const apiBase = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
+  : '/api';
+
+const http = axios.create({ baseURL: apiBase, timeout: 10_000 });
 
 export const api = {
   async listTraces(): Promise<TraceSummary[]> {
