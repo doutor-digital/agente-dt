@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+/* ===========================================================================
+ * Tema "AgentGPT Terminal" — paleta escura com toques de violeta neon.
+ * Tailwind v4 lê o `@theme` inline e gera utilitários automaticamente.
+ * =========================================================================== */
+@theme {
+  --color-brand-50:  #f3f1ff;
+  --color-brand-100: #e9e5ff;
+  --color-brand-200: #d5ccff;
+  --color-brand-300: #b6a4ff;
+  --color-brand-400: #9374ff;
+  --color-brand-500: #7c4dff;
+  --color-brand-600: #6c2eff;
+  --color-brand-700: #5a1de0;
+  --color-brand-800: #4818b0;
+  --color-brand-900: #2e0f73;
+
+  --color-ink-950: #08080c;
+  --color-ink-900: #0c0c12;
+  --color-ink-850: #11111a;
+  --color-ink-800: #161622;
+  --color-ink-700: #1f1f2e;
+  --color-ink-600: #2a2a3d;
+
+  --font-display: "Inter", "system-ui", sans-serif;
+  --font-mono: "JetBrains Mono", "ui-monospace", "SFMono-Regular", monospace;
+}
+
+/* Scrollbar discreta. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-ink-700);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--color-ink-600); }
+
+/* Animação de "pulse" para o cursor de digitação. */
+@keyframes blink {
+  50% { opacity: 0; }
+}
+.caret::after {
+  content: "▍";
+  margin-left: 2px;
+  animation: blink 1s steps(1) infinite;
+  color: var(--color-brand-400);
+}
+
+/* Linha tracejada vertical do timeline. */
+.timeline-line {
+  background-image: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--color-brand-500) 60%, transparent) 0,
+    color-mix(in oklab, var(--color-brand-500) 60%, transparent) 50%,
+    transparent 50%
+  );
+  background-size: 2px 8px;
+  background-repeat: repeat-y;
+}
+
+/* Glow sutil em cards ativos. */
+.glow-brand {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--color-brand-500) 40%, transparent),
+    0 0 24px -4px color-mix(in oklab, var(--color-brand-500) 30%, transparent);
+}

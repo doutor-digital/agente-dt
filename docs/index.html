@@ -1,0 +1,1770 @@
+<!doctype html>
+<html lang="pt-BR" class="dark scroll-smooth">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agente DT — Documentação</title>
+<meta name="description" content="Documentação completa do MVP de automação Kommo com LangGraph, Prisma e React." />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+          mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        },
+        colors: {
+          brand: {
+            50:'#f3f1ff',100:'#e9e5ff',200:'#d5ccff',300:'#b6a4ff',
+            400:'#9374ff',500:'#7c4dff',600:'#6c2eff',700:'#5a1de0',
+            800:'#4818b0',900:'#2e0f73',
+          },
+          ink: {
+            950:'#08080c',900:'#0c0c12',850:'#11111a',800:'#161622',
+            700:'#1f1f2e',600:'#2a2a3d',
+          },
+        },
+      },
+    },
+  };
+</script>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+<style>
+  :root { color-scheme: dark; }
+  body { background: #08080c; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #1f1f2e; border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2a2a3d; }
+
+  /* Prism overrides */
+  pre[class*="language-"] {
+    background: #0c0c12 !important;
+    border: 1px solid #1f1f2e;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 0;
+  }
+  :not(pre) > code[class*="language-"], code.inline {
+    background: rgba(124,77,255,0.12);
+    color: #b6a4ff;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.875em;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  code { font-family: 'JetBrains Mono', monospace; }
+
+  /* Method badges */
+  .badge-method {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    display: inline-block;
+  }
+  .badge-get  { background: rgba(56,189,248,.15); color: #38bdf8; }
+  .badge-post { background: rgba(52,211,153,.15); color: #34d399; }
+
+  .anchor-target { scroll-margin-top: 80px; }
+
+  /* TOC active link */
+  .toc-link[aria-current="true"] {
+    color: #b6a4ff;
+    background: rgba(124,77,255,0.10);
+    border-left-color: #7c4dff;
+  }
+
+  /* timeline */
+  .step-dot {
+    position: absolute; left: -29px; top: 4px;
+    width: 22px; height: 22px; border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    background: #11111a; border: 2px solid #7c4dff;
+    color: #b6a4ff; font-size: 11px; font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .step-line {
+    position: absolute; left: -19px; top: 24px; bottom: -8px;
+    width: 2px; background: linear-gradient(to bottom, #7c4dff55, transparent);
+  }
+
+  /* Glow header */
+  .hero-glow {
+    background:
+      radial-gradient(800px 400px at 10% 0%, rgba(124,77,255,0.20), transparent 60%),
+      radial-gradient(600px 300px at 90% 100%, rgba(56,189,248,0.10), transparent 60%);
+  }
+
+  /* Copy button */
+  .copy-btn {
+    position: absolute; top: 8px; right: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: #a1a1aa; padding: 4px 8px;
+    border-radius: 6px; font-size: 11px;
+    cursor: pointer; transition: all .15s;
+  }
+  .copy-btn:hover { background: rgba(124,77,255,0.15); color: #b6a4ff; border-color: rgba(124,77,255,0.4); }
+  .copy-btn.copied { color: #34d399; border-color: rgba(52,211,153,0.4); }
+
+  /* Card hover */
+  .arch-card { transition: all .2s; }
+  .arch-card:hover { border-color: rgba(124,77,255,0.5); transform: translateY(-2px); }
+
+  /* prose tweaks */
+  .prose-tight p { margin: 0.5rem 0; }
+  .prose-tight h3 { margin-top: 2rem; }
+  .prose-tight ul { margin: 0.5rem 0; padding-left: 1.5rem; list-style: disc; }
+  .prose-tight ul li { margin: 0.25rem 0; }
+</style>
+</head>
+<body class="font-sans text-zinc-300 antialiased">
+
+<!-- ============================================================
+     TOP BAR
+============================================================ -->
+<header class="sticky top-0 z-30 backdrop-blur-md bg-ink-950/80 border-b border-zinc-800/80">
+  <div class="max-w-screen-2xl mx-auto px-6 h-14 flex items-center gap-4">
+    <div class="flex items-center gap-2.5">
+      <div class="w-7 h-7 rounded-md bg-brand-600/20 ring-1 ring-brand-500/40 flex items-center justify-center">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#b6a4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/>
+        </svg>
+      </div>
+      <div class="leading-tight">
+        <div class="text-sm font-semibold text-zinc-100">Agente DT</div>
+        <div class="text-[10px] text-zinc-500">Kommo Automation · Docs</div>
+      </div>
+    </div>
+    <nav class="hidden md:flex items-center gap-1 ml-6 text-sm">
+      <a href="#overview"     class="px-3 py-1.5 rounded-md text-zinc-400 hover:text-brand-300 hover:bg-zinc-800/50">Visão geral</a>
+      <a href="#quickstart"   class="px-3 py-1.5 rounded-md text-zinc-400 hover:text-brand-300 hover:bg-zinc-800/50">Quickstart</a>
+      <a href="#api"          class="px-3 py-1.5 rounded-md text-zinc-400 hover:text-brand-300 hover:bg-zinc-800/50">API</a>
+      <a href="#architecture" class="px-3 py-1.5 rounded-md text-zinc-400 hover:text-brand-300 hover:bg-zinc-800/50">Arquitetura</a>
+    </nav>
+    <div class="flex-1"></div>
+    <span class="hidden md:inline-flex items-center gap-1.5 text-[11px] font-mono px-2 py-1 rounded-md bg-zinc-800/60 ring-1 ring-zinc-700/80 text-zinc-400">
+      <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+      v0.1.0
+    </span>
+  </div>
+</header>
+
+<div class="max-w-screen-2xl mx-auto px-6 grid grid-cols-12 gap-8">
+
+  <!-- ============================================================
+       SIDEBAR NAV
+  ============================================================ -->
+  <aside class="hidden lg:block col-span-3 xl:col-span-2 sticky top-14 self-start h-[calc(100vh-3.5rem)] overflow-y-auto py-8">
+    <nav class="text-sm space-y-6">
+
+      <div>
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 mb-2 px-3">Começando</div>
+        <ul class="space-y-0.5">
+          <li><a href="#overview"   class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Visão geral</a></li>
+          <li><a href="#quickstart" class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Quickstart</a></li>
+          <li><a href="#stack"      class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Stack & versões</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 mb-2 px-3">Arquitetura</div>
+        <ul class="space-y-0.5">
+          <li><a href="#architecture"  class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Visão geral</a></li>
+          <li><a href="#layers"        class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Camadas</a></li>
+          <li><a href="#flow"          class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Fluxo end-to-end</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 mb-2 px-3">Backend</div>
+        <ul class="space-y-0.5">
+          <li><a href="#webhook-controller" class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Webhook Controller</a></li>
+          <li><a href="#langgraph"          class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">LangGraph</a></li>
+          <li><a href="#tools"              class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Tools</a></li>
+          <li><a href="#kommo-service"      class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Kommo Service</a></li>
+          <li><a href="#persistence"        class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Persistência</a></li>
+          <li><a href="#observability"      class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Observabilidade</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 mb-2 px-3">Frontend</div>
+        <ul class="space-y-0.5">
+          <li><a href="#frontend"       class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Dashboard</a></li>
+          <li><a href="#components"     class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Componentes</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 mb-2 px-3">Referência</div>
+        <ul class="space-y-0.5">
+          <li><a href="#api"     class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">API Endpoints</a></li>
+          <li><a href="#models"  class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Modelos</a></li>
+          <li><a href="#enums"   class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Enums</a></li>
+          <li><a href="#env"     class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Variáveis de ambiente</a></li>
+          <li><a href="#cli"     class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Comandos pnpm</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 mb-2 px-3">LangGraph</div>
+        <ul class="space-y-0.5">
+          <li><a href="#lg-overview"     class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Visão geral</a></li>
+          <li><a href="#lg-state"        class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">State & Annotation</a></li>
+          <li><a href="#lg-nodes-edges"  class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Nodes & Edges</a></li>
+          <li><a href="#lg-tools"        class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Tools & ToolNode</a></li>
+          <li><a href="#lg-persistence"  class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Persistência</a></li>
+          <li><a href="#lg-streaming"    class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Streaming</a></li>
+          <li><a href="#lg-cheatsheet"   class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Cheat-sheet</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 mb-2 px-3">Operação</div>
+        <ul class="space-y-0.5">
+          <li><a href="#troubleshooting" class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Troubleshooting</a></li>
+          <li><a href="#roadmap"         class="toc-link block px-3 py-1.5 border-l-2 border-transparent text-zinc-400 hover:text-zinc-100">Roadmap</a></li>
+        </ul>
+      </div>
+
+    </nav>
+  </aside>
+
+  <!-- ============================================================
+       MAIN CONTENT
+  ============================================================ -->
+  <main class="col-span-12 lg:col-span-9 xl:col-span-10 py-10 max-w-4xl">
+
+  <!-- ============================================================
+       HERO
+  ============================================================ -->
+  <section id="overview" class="anchor-target hero-glow rounded-2xl border border-zinc-800/80 p-8 mb-12">
+    <span class="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest font-semibold text-brand-300 bg-brand-500/10 ring-1 ring-brand-500/30 px-2 py-1 rounded">
+      <span class="w-1.5 h-1.5 rounded-full bg-brand-400"></span> MVP · 2026
+    </span>
+    <h1 class="text-4xl md:text-5xl font-bold text-zinc-50 mt-4 tracking-tight">
+      Agente DT
+    </h1>
+    <p class="text-lg text-zinc-400 mt-3 max-w-2xl leading-relaxed">
+      Automação inteligente para o CRM <strong class="text-zinc-200">Kommo</strong> usando
+      <strong class="text-zinc-200">LangGraph.js + Claude</strong>, persistência em
+      <strong class="text-zinc-200">PostgreSQL</strong> via Prisma e dashboard
+      <strong class="text-zinc-200">React</strong> estilo AgentGPT Terminal.
+    </p>
+
+    <div class="mt-6 flex flex-wrap gap-2">
+      <span class="text-xs font-mono px-2 py-1 rounded bg-zinc-900/80 ring-1 ring-zinc-800 text-zinc-300">Node 22+</span>
+      <span class="text-xs font-mono px-2 py-1 rounded bg-zinc-900/80 ring-1 ring-zinc-800 text-zinc-300">TypeScript 5.9</span>
+      <span class="text-xs font-mono px-2 py-1 rounded bg-zinc-900/80 ring-1 ring-zinc-800 text-zinc-300">LangGraph 1.x</span>
+      <span class="text-xs font-mono px-2 py-1 rounded bg-zinc-900/80 ring-1 ring-zinc-800 text-zinc-300">Prisma 6</span>
+      <span class="text-xs font-mono px-2 py-1 rounded bg-zinc-900/80 ring-1 ring-zinc-800 text-zinc-300">React 19</span>
+      <span class="text-xs font-mono px-2 py-1 rounded bg-zinc-900/80 ring-1 ring-zinc-800 text-zinc-300">Tailwind v4</span>
+      <span class="text-xs font-mono px-2 py-1 rounded bg-zinc-900/80 ring-1 ring-zinc-800 text-zinc-300">pnpm workspace</span>
+    </div>
+
+    <div class="mt-8 grid sm:grid-cols-3 gap-3">
+      <a href="#quickstart" class="arch-card group rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 block hover:bg-zinc-900/70">
+        <div class="text-brand-400 mb-2">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        </div>
+        <div class="text-sm font-semibold text-zinc-100">Quickstart</div>
+        <div class="text-xs text-zinc-500 mt-1">Subir em 5 minutos com Docker + pnpm.</div>
+      </a>
+      <a href="#architecture" class="arch-card group rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 block hover:bg-zinc-900/70">
+        <div class="text-brand-400 mb-2">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        </div>
+        <div class="text-sm font-semibold text-zinc-100">Arquitetura</div>
+        <div class="text-xs text-zinc-500 mt-1">Separação de camadas e fluxo do State.</div>
+      </a>
+      <a href="#api" class="arch-card group rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 block hover:bg-zinc-900/70">
+        <div class="text-brand-400 mb-2">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
+        </div>
+        <div class="text-sm font-semibold text-zinc-100">API Reference</div>
+        <div class="text-xs text-zinc-500 mt-1">Endpoints, payloads e exemplos curl.</div>
+      </a>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       QUICKSTART
+  ============================================================ -->
+  <section id="quickstart" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Quickstart</h2>
+    <p class="text-zinc-400 mb-6">Do zero ao webhook funcionando em ~5 minutos.</p>
+
+    <ol class="relative pl-8 space-y-8">
+
+      <li class="relative">
+        <span class="step-dot">1</span><span class="step-line"></span>
+        <h3 class="text-base font-semibold text-zinc-100 mb-2">Pré-requisitos</h3>
+        <ul class="text-sm text-zinc-400 list-disc pl-5 space-y-1">
+          <li><strong class="text-zinc-200">Node.js ≥ 22</strong> (testado em 24)</li>
+          <li><strong class="text-zinc-200">pnpm ≥ 9</strong> — <code class="inline">corepack enable</code> ou <code class="inline">npm i -g pnpm</code></li>
+          <li><strong class="text-zinc-200">PostgreSQL ≥ 15</strong> — local ou Docker</li>
+          <li><strong class="text-zinc-200">Kommo Long-Lived Access Token</strong></li>
+          <li><strong class="text-zinc-200">Anthropic API Key</strong></li>
+        </ul>
+      </li>
+
+      <li class="relative">
+        <span class="step-dot">2</span><span class="step-line"></span>
+        <h3 class="text-base font-semibold text-zinc-100 mb-2">Banco de dados</h3>
+        <p class="text-sm text-zinc-400 mb-2">Suba um Postgres local via Docker:</p>
+        <div class="relative">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-bash">docker run --name agente-dt-pg \
+  -e POSTGRES_PASSWORD=postgres \
+  -p 5432:5432 -d postgres:16
+
+docker exec -it agente-dt-pg \
+  psql -U postgres -c "CREATE DATABASE agente_dt;"</code></pre>
+        </div>
+      </li>
+
+      <li class="relative">
+        <span class="step-dot">3</span><span class="step-line"></span>
+        <h3 class="text-base font-semibold text-zinc-100 mb-2">Instalar e configurar</h3>
+        <p class="text-sm text-zinc-400 mb-2">Uma única instalação cobre backend e frontend (workspace pnpm):</p>
+        <div class="relative">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-bash">pnpm install                       # instala tudo
+cp backend/.env.example backend/.env  # preencha KOMMO_* e ANTHROPIC_API_KEY
+pnpm prisma:migrate                # cria tabelas no banco</code></pre>
+        </div>
+        <div class="mt-3 text-xs text-zinc-500 border-l-2 border-brand-500/40 pl-3 py-1 bg-brand-500/5 rounded-r">
+          ℹ️ O <code class="inline">postinstall</code> do backend roda <code class="inline">prisma generate</code> automaticamente.
+        </div>
+      </li>
+
+      <li class="relative">
+        <span class="step-dot">4</span><span class="step-line"></span>
+        <h3 class="text-base font-semibold text-zinc-100 mb-2">Subir em dev</h3>
+        <div class="relative">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-bash">pnpm dev   # roda backend (3001) + frontend (5173) em paralelo</code></pre>
+        </div>
+        <p class="text-sm text-zinc-400 mt-3">Abra <a href="http://localhost:5173" class="text-brand-400 hover:underline">localhost:5173</a> para o dashboard.</p>
+      </li>
+
+      <li class="relative">
+        <span class="step-dot">5</span>
+        <h3 class="text-base font-semibold text-zinc-100 mb-2">Testar webhook</h3>
+        <p class="text-sm text-zinc-400 mb-2">Dispare um payload de teste sem precisar de Kommo configurado:</p>
+        <div class="relative">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-bash">curl -X POST http://localhost:3001/api/webhooks/kommo \
+  -H "Content-Type: application/json" \
+  -d '{"leadId": 12345, "message": "Tem orçamento aprovado, quer fechar."}'</code></pre>
+        </div>
+        <p class="text-sm text-zinc-400 mt-3">
+          A execução aparece na sidebar do dashboard e o console renderiza cada passo em tempo real.
+        </p>
+      </li>
+
+    </ol>
+  </section>
+
+  <!-- ============================================================
+       STACK
+  ============================================================ -->
+  <section id="stack" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Stack &amp; versões</h2>
+    <p class="text-zinc-400 mb-6">Pinado em versões compatíveis verificadas no registry.</p>
+
+    <div class="overflow-x-auto rounded-lg border border-zinc-800">
+      <table class="w-full text-sm">
+        <thead class="bg-zinc-900/50 text-zinc-400 text-xs uppercase tracking-wider">
+          <tr>
+            <th class="text-left px-4 py-2 font-medium">Camada</th>
+            <th class="text-left px-4 py-2 font-medium">Pacote</th>
+            <th class="text-left px-4 py-2 font-medium">Versão</th>
+            <th class="text-left px-4 py-2 font-medium">Por quê</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/80">
+          <tr><td class="px-4 py-2 text-zinc-500">Runtime</td>            <td class="px-4 py-2 font-mono text-zinc-200">node</td>                           <td class="px-4 py-2 font-mono text-brand-300">≥ 22</td>     <td class="px-4 py-2 text-zinc-400">ESM nativo, performance.now() global</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Backend</td>            <td class="px-4 py-2 font-mono text-zinc-200">express</td>                        <td class="px-4 py-2 font-mono text-brand-300">^5.2.1</td> <td class="px-4 py-2 text-zinc-400">v5 estável (async handlers nativos)</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Agente</td>             <td class="px-4 py-2 font-mono text-zinc-200">@langchain/langgraph</td>          <td class="px-4 py-2 font-mono text-brand-300">^1.3.0</td> <td class="px-4 py-2 text-zinc-400">StateGraph, checkpointer</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Agente</td>             <td class="px-4 py-2 font-mono text-zinc-200">@langchain/anthropic</td>          <td class="px-4 py-2 font-mono text-brand-300">^1.3.29</td><td class="px-4 py-2 text-zinc-400">Cliente Claude</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Checkpointer</td>       <td class="px-4 py-2 font-mono text-zinc-200">…checkpoint-postgres</td>          <td class="px-4 py-2 font-mono text-brand-300">^1.0.1</td> <td class="px-4 py-2 text-zinc-400">Memória de conversa no Postgres</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">ORM</td>                <td class="px-4 py-2 font-mono text-zinc-200">prisma</td>                         <td class="px-4 py-2 font-mono text-brand-300">^6.19.3</td><td class="px-4 py-2 text-zinc-400">Pino em 6.x (7 quebrou config)</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Validação</td>          <td class="px-4 py-2 font-mono text-zinc-200">zod</td>                            <td class="px-4 py-2 font-mono text-brand-300">^3.25.76</td><td class="px-4 py-2 text-zinc-400">Schema de tools + env</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Logs</td>               <td class="px-4 py-2 font-mono text-zinc-200">pino</td>                           <td class="px-4 py-2 font-mono text-brand-300">^10.3.1</td><td class="px-4 py-2 text-zinc-400">JSON estruturado + pretty em dev</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Frontend</td>           <td class="px-4 py-2 font-mono text-zinc-200">react</td>                          <td class="px-4 py-2 font-mono text-brand-300">^19.2.6</td><td class="px-4 py-2 text-zinc-400">Server actions desnecessárias aqui</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Build</td>              <td class="px-4 py-2 font-mono text-zinc-200">vite</td>                           <td class="px-4 py-2 font-mono text-brand-300">^7.3.0</td> <td class="px-4 py-2 text-zinc-400">Dev server com proxy /api</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">UI</td>                 <td class="px-4 py-2 font-mono text-zinc-200">tailwindcss</td>                    <td class="px-4 py-2 font-mono text-brand-300">^4.3.0</td> <td class="px-4 py-2 text-zinc-400">v4 com @theme inline</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Animação</td>           <td class="px-4 py-2 font-mono text-zinc-200">framer-motion</td>                  <td class="px-4 py-2 font-mono text-brand-300">^12.38.0</td><td class="px-4 py-2 text-zinc-400">Slide+fade dos steps</td></tr>
+          <tr><td class="px-4 py-2 text-zinc-500">Ícones</td>             <td class="px-4 py-2 font-mono text-zinc-200">lucide-react</td>                   <td class="px-4 py-2 font-mono text-brand-300">^0.547.0</td><td class="px-4 py-2 text-zinc-400">Brain, Wrench, Zap…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       ARCHITECTURE
+  ============================================================ -->
+  <section id="architecture" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Arquitetura</h2>
+    <p class="text-zinc-400 mb-6">Camadas isoladas — cada uma tem UMA responsabilidade.</p>
+
+    <div id="layers" class="anchor-target grid md:grid-cols-2 gap-4 mb-8">
+
+      <div class="arch-card rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded-md bg-sky-500/15 ring-1 ring-sky-500/40 flex items-center justify-center text-sky-300">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          </div>
+          <h3 class="font-semibold text-zinc-100">Controllers</h3>
+        </div>
+        <p class="text-sm text-zinc-400">Recebe HTTP, valida, despacha. <strong class="text-zinc-300">Não conhece</strong> Prisma direto nem prompt.</p>
+        <code class="inline text-xs mt-2 inline-block">src/controllers/*</code>
+      </div>
+
+      <div class="arch-card rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded-md bg-brand-500/15 ring-1 ring-brand-500/40 flex items-center justify-center text-brand-300">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.5 2A2.5 2.5 0 0 0 7 4.5v15A2.5 2.5 0 0 0 9.5 22h0a2.5 2.5 0 0 0 2.5-2.5v-15A2.5 2.5 0 0 0 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 1 17 4.5v15a2.5 2.5 0 0 1-2.5 2.5h0a2.5 2.5 0 0 1-2.5-2.5v-15A2.5 2.5 0 0 1 14.5 2z"/></svg>
+          </div>
+          <h3 class="font-semibold text-zinc-100">Agent (LangGraph)</h3>
+        </div>
+        <p class="text-sm text-zinc-400">Decisão da IA + tools + grafo. <strong class="text-zinc-300">Não conhece</strong> Express nem Kommo HTTP direto.</p>
+        <code class="inline text-xs mt-2 inline-block">src/agent/*</code>
+      </div>
+
+      <div class="arch-card rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded-md bg-amber-500/15 ring-1 ring-amber-500/40 flex items-center justify-center text-amber-300">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
+          <h3 class="font-semibold text-zinc-100">Services (Kommo)</h3>
+        </div>
+        <p class="text-sm text-zinc-400">HTTP puro com axios. <strong class="text-zinc-300">Não conhece</strong> IA nem banco. Trocável por outro CRM.</p>
+        <code class="inline text-xs mt-2 inline-block">src/services/kommo.service.ts</code>
+      </div>
+
+      <div class="arch-card rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <div class="w-8 h-8 rounded-md bg-emerald-500/15 ring-1 ring-emerald-500/40 flex items-center justify-center text-emerald-300">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          </div>
+          <h3 class="font-semibold text-zinc-100">Persistence (Prisma)</h3>
+        </div>
+        <p class="text-sm text-zinc-400">Modelo de dados. <strong class="text-zinc-300">Não tem</strong> regra de negócio. SELECT puro.</p>
+        <code class="inline text-xs mt-2 inline-block">prisma/schema.prisma</code>
+      </div>
+
+    </div>
+
+    <!-- FLOW -->
+    <div id="flow" class="anchor-target">
+      <h3 class="text-lg font-semibold text-zinc-100 mb-3 mt-10">Fluxo end-to-end</h3>
+      <div class="rounded-lg border border-zinc-800 bg-ink-900 p-6 overflow-x-auto">
+<pre class="text-[12px] leading-relaxed text-zinc-300 font-mono"><span class="text-sky-400">┌──────────┐</span>  webhook   <span class="text-brand-400">┌──────────────┐</span>  invoke   <span class="text-amber-300">┌──────────────┐</span>  HTTP   <span class="text-violet-300">┌─────────┐</span>
+<span class="text-sky-400">│  Kommo   │</span>───────────▶<span class="text-brand-400">│  Express API │</span>──────────▶<span class="text-amber-300">│  LangGraph   │</span>────────▶<span class="text-violet-300">│  Kommo  │</span>
+<span class="text-sky-400">└──────────┘</span>  (ACK 200) <span class="text-brand-400">└──────┬───────┘</span>  thread   <span class="text-amber-300">│  ReAct loop  │</span>  tools  <span class="text-violet-300">│   API   │</span>
+                               │                   <span class="text-amber-300">└──────┬───────┘</span>         <span class="text-violet-300">└─────────┘</span>
+                  trace + steps│                          │ checkpoint
+                               ▼                          ▼
+                        <span class="text-emerald-300">┌──────────────────────────────────────┐</span>
+                        <span class="text-emerald-300">│  Postgres  (Prisma + PostgresSaver)  │</span>
+                        <span class="text-emerald-300">└──────────────┬───────────────────────┘</span>
+                                       │  REST /api/traces
+                                       ▼
+                              <span class="text-zinc-100">┌─────────────────┐</span>
+                              <span class="text-zinc-100">│  React Dashboard│</span>  "AgentGPT Terminal"
+                              <span class="text-zinc-100">└─────────────────┘</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       BACKEND: WEBHOOK CONTROLLER
+  ============================================================ -->
+  <section id="webhook-controller" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Webhook Controller</h2>
+    <p class="text-zinc-400 mb-6"><code class="inline">src/controllers/webhook.controller.ts</code> — borda HTTP do sistema.</p>
+
+    <div class="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 mb-6">
+      <div class="flex items-start gap-2">
+        <svg class="text-amber-400 shrink-0 mt-0.5" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <div class="text-sm">
+          <strong class="text-amber-300">Regra crítica:</strong> a Kommo timeoutsa em 30 s. <strong class="text-zinc-100">Nunca</strong> processe o agente sincronamente no handler.
+        </div>
+      </div>
+    </div>
+
+    <p class="text-zinc-400 mb-3">Padrão: <strong class="text-zinc-200">ACK rápido + processamento em background</strong>.</p>
+
+    <ol class="relative pl-8 space-y-4 text-sm mb-6">
+      <li class="relative">
+        <span class="step-dot">1</span>
+        <strong class="text-zinc-200">Valida payload</strong> com Zod. Aceita formato Kommo (<code class="inline">leads[add][].id</code>) e formato de teste (<code class="inline">leadId</code>).
+      </li>
+      <li class="relative">
+        <span class="step-dot">2</span>
+        <strong class="text-zinc-200">Cria ExecutionTrace</strong> com status <code class="inline">RUNNING</code> e grava o primeiro step (<code class="inline">WEBHOOK_RECEIVED</code>).
+      </li>
+      <li class="relative">
+        <span class="step-dot">3</span>
+        <strong class="text-zinc-200">Responde 200</strong> com <code class="inline">{traceId}</code> em &lt; 100 ms.
+      </li>
+      <li class="relative">
+        <span class="step-dot">4</span>
+        <strong class="text-zinc-200">Dispara agente</strong> em background via <code class="inline">void processAgent(...).catch(...)</code>.
+      </li>
+    </ol>
+
+    <div class="relative">
+      <button class="copy-btn" data-copy>Copiar</button>
+      <pre><code class="language-typescript">// Resumo da lógica (webhook.controller.ts)
+export async function handleKommoWebhook(req, res) {
+  const requestStart = performance.now(); // monotônico — ideal pra medir duração
+
+  const parsed = webhookSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ ok: false });
+
+  const leadId = extractLeadId(parsed.data);
+  const trace  = await prisma.executionTrace.create({
+    data: { threadId: `lead-${leadId}`, leadId: String(leadId),
+            input: req.body, status: 'RUNNING' },
+  });
+
+  res.status(200).json({ ok: true, traceId: trace.id }); // ACK imediato
+
+  // background — não bloqueia o response
+  void processAgent({ leadId, traceId: trace.id, requestStart, /*...*/ })
+    .catch(err => logger.error({ err }, 'erro fatal no agente'));
+}</code></pre>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       LANGGRAPH
+  ============================================================ -->
+  <section id="langgraph" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">LangGraph — Grafo de decisão</h2>
+    <p class="text-zinc-400 mb-6"><code class="inline">src/agent/graph.ts</code> — coração da IA. Loop ReAct clássico.</p>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">Como o State transita</h3>
+
+    <div class="rounded-lg border border-zinc-800 bg-ink-900 p-6 mb-6 overflow-x-auto">
+<pre class="text-[12px] leading-relaxed text-zinc-300 font-mono">                    <span class="text-zinc-500">┌────────────────┐</span>
+                    <span class="text-zinc-500">│     START      │</span>
+                    <span class="text-zinc-500">└────────┬───────┘</span>
+                             │  State inicial:
+                             │  { leadId, messages:[HumanMessage], traceId }
+                             ▼
+                    <span class="text-brand-400">┌────────────────┐</span>
+                    <span class="text-brand-400">│  agent (LLM)   │</span>  ← Claude com tools bound
+                    <span class="text-brand-400">└────────┬───────┘</span>
+                             │
+                             ▼
+                    <span class="text-amber-300">┌────────────────┐</span>
+                    <span class="text-amber-300">│ shouldContinue?│</span>  ← edge condicional
+                    <span class="text-amber-300">└───┬────────┬───┘</span>
+                  tools │        │ end
+                        ▼        ▼
+                   <span class="text-violet-300">┌─────────┐</span>  <span class="text-zinc-500">END</span>
+                   <span class="text-violet-300">│  tools  │</span>  ← ToolNode executa tools chamadas
+                   <span class="text-violet-300">└────┬────┘</span>
+                        │
+                        └────────► agent  (loop ReAct)</pre>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">State (Annotation)</h3>
+
+    <div class="relative mb-6">
+      <button class="copy-btn" data-copy>Copiar</button>
+      <pre><code class="language-typescript">export const AgentState = Annotation.Root({
+  messages: Annotation&lt;BaseMessage[]&gt;({
+    reducer: messagesStateReducer,    // concat + upsert por ID
+    default: () =&gt; [],
+  }),
+  leadId:       Annotation&lt;number&gt;({ reducer: (_, next) =&gt; next, default: () =&gt; 0 }),
+  leadSnapshot: Annotation&lt;Record&lt;string, unknown&gt; | null&gt;({ /* ... */ }),
+  decision:     Annotation&lt;string | null&gt;({ /* resumo textual */ }),
+  traceId:      Annotation&lt;string&gt;({ /* ID do ExecutionTrace */ }),
+});</code></pre>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-8">
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-1">thread_id</div>
+        <div class="text-sm text-zinc-300">Chave da <strong class="text-zinc-100">conversa contínua</strong>. Usamos <code class="inline">lead-{leadId}</code> — mesmo lead, mesma thread, agente lembra do contexto anterior.</div>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-1">trace_id</div>
+        <div class="text-sm text-zinc-300">Chave da <strong class="text-zinc-100">execução pontual</strong> (uma invocação do grafo). É o que aparece no dashboard.</div>
+      </div>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">Checkpointer</h3>
+    <p class="text-zinc-400 text-sm mb-3">
+      A cada transição de nó, o <code class="inline">PostgresSaver</code> serializa o State inteiro e grava nas tabelas
+      <code class="inline">checkpoints</code>, <code class="inline">checkpoint_writes</code> e <code class="inline">checkpoint_blobs</code>.
+      Essas tabelas são <strong class="text-zinc-200">criadas pela própria lib</strong> no boot via <code class="inline">checkpointer.setup()</code> —
+      não passe migrate do Prisma nelas.
+    </p>
+
+    <div class="relative">
+      <button class="copy-btn" data-copy>Copiar</button>
+      <pre><code class="language-typescript">// Singleton no boot do servidor
+const checkpointer = PostgresSaver.fromConnString(env.DATABASE_URL);
+await checkpointer.setup();   // cria tabelas se não existirem
+
+const compiled = workflow.compile({ checkpointer });
+
+// Invocação com thread_id = memória contínua
+await compiled.invoke(
+  { leadId, traceId, messages: [new HumanMessage("...")] },
+  {
+    configurable: { thread_id: `lead-${leadId}` },
+    recursionLimit: 10,   // trava contra loop infinito de tool_calls
+  },
+);</code></pre>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       TOOLS
+  ============================================================ -->
+  <section id="tools" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Tools</h2>
+    <p class="text-zinc-400 mb-6"><code class="inline">src/agent/tools.ts</code> — interface entre a LLM e o mundo real.</p>
+
+    <p class="text-zinc-400 text-sm mb-4">
+      Cada tool tem três componentes que viram contrato com o Claude:
+    </p>
+    <ul class="text-sm text-zinc-400 list-disc pl-5 space-y-1 mb-6">
+      <li><strong class="text-zinc-200">Schema Zod</strong> — vira o JSON Schema enviado à Messages API.</li>
+      <li><strong class="text-zinc-200">Descrição</strong> — texto que a LLM lê pra decidir <em>quando</em> chamar.</li>
+      <li><strong class="text-zinc-200">Função</strong> — executa e devolve string pra próxima iteração do ReAct.</li>
+    </ul>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-8">
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-amber-300 text-lg">🛠️</span>
+          <code class="text-sm font-semibold text-zinc-100">aplicar_tag</code>
+        </div>
+        <p class="text-xs text-zinc-500 mb-3">Adiciona uma tag ao lead. Idempotente do lado do Kommo.</p>
+        <table class="text-xs w-full">
+          <tr class="border-b border-zinc-800"><td class="py-1.5 text-zinc-500 font-mono">leadId</td><td class="text-right text-brand-300 font-mono">number</td></tr>
+          <tr><td class="py-1.5 text-zinc-500 font-mono">tag</td><td class="text-right text-brand-300 font-mono">string</td></tr>
+        </table>
+      </div>
+
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-violet-300 text-lg">⚡</span>
+          <code class="text-sm font-semibold text-zinc-100">mover_etapa</code>
+        </div>
+        <p class="text-xs text-zinc-500 mb-3">Move o lead para outra etapa do pipeline.</p>
+        <table class="text-xs w-full">
+          <tr class="border-b border-zinc-800"><td class="py-1.5 text-zinc-500 font-mono">leadId</td><td class="text-right text-brand-300 font-mono">number</td></tr>
+          <tr class="border-b border-zinc-800"><td class="py-1.5 text-zinc-500 font-mono">statusId</td><td class="text-right text-brand-300 font-mono">number</td></tr>
+          <tr><td class="py-1.5 text-zinc-500 font-mono">pipelineId?</td><td class="text-right text-brand-300 font-mono">number</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="relative">
+      <button class="copy-btn" data-copy>Copiar</button>
+      <pre><code class="language-typescript">const aplicar_tag = new DynamicStructuredTool({
+  name: 'aplicar_tag',
+  description: 'Adiciona uma tag ao lead no Kommo. Use quando a análise...',
+  schema: z.object({
+    leadId: z.number().int().positive(),
+    tag:    z.string().min(1).max(50),
+  }),
+  func: async ({ leadId, tag }) =&gt; {
+    await recorder.step({ kind: 'TOOL_CALL', title: `Aplicar tag "${tag}"`, /*...*/ });
+    try {
+      await KommoService.addTag({ leadId, tag });     // ← service puro
+      await recorder.step({ kind: 'KOMMO_ACTION', /*...*/ });
+      return `OK — tag "${tag}" aplicada.`;
+    } catch (err) {
+      await recorder.step({ kind: 'ERROR', /*...*/ });
+      return `ERRO: ${err.message}`;  // não throw — deixa a LLM reagir
+    }
+  },
+});</code></pre>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       KOMMO SERVICE
+  ============================================================ -->
+  <section id="kommo-service" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Kommo Service</h2>
+    <p class="text-zinc-400 mb-6"><code class="inline">src/services/kommo.service.ts</code> — camada HTTP pura.</p>
+
+    <p class="text-zinc-400 text-sm mb-6">
+      Essa camada é <strong class="text-zinc-200">deliberadamente burra</strong>: traduz chamadas tipadas em requisições HTTP. Nada mais.
+      Não conhece LangGraph, não conhece Prisma, não conhece logger de aplicação além do necessário pra diagnóstico.
+      Se amanhã trocarmos Kommo por HubSpot, só esse arquivo muda.
+    </p>
+
+    <div class="overflow-x-auto rounded-lg border border-zinc-800 mb-6">
+      <table class="w-full text-sm">
+        <thead class="bg-zinc-900/50 text-xs uppercase tracking-wider text-zinc-400">
+          <tr>
+            <th class="text-left px-4 py-2 font-medium">Função</th>
+            <th class="text-left px-4 py-2 font-medium">Método HTTP</th>
+            <th class="text-left px-4 py-2 font-medium">Endpoint Kommo</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/80">
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">getLead(leadId)</td>      <td class="px-4 py-2 font-mono text-sky-400">GET</td>   <td class="px-4 py-2 font-mono text-zinc-500">/api/v4/leads/{id}</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">addTag({leadId, tag})</td><td class="px-4 py-2 font-mono text-amber-300">PATCH</td><td class="px-4 py-2 font-mono text-zinc-500">/api/v4/leads/{id}</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">moveStage({...})</td>     <td class="px-4 py-2 font-mono text-amber-300">PATCH</td><td class="px-4 py-2 font-mono text-zinc-500">/api/v4/leads/{id}</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="relative">
+      <button class="copy-btn" data-copy>Copiar</button>
+      <pre><code class="language-typescript">// Instância única de axios — baseURL e auth centralizados
+const http = axios.create({
+  baseURL: `https://${env.KOMMO_SUBDOMAIN}.kommo.com/api/v4`,
+  timeout: 15_000,        // &lt; 30s do webhook
+  headers: { Authorization: `Bearer ${env.KOMMO_ACCESS_TOKEN}` },
+});
+
+export const KommoService = {
+  async addTag({ leadId, tag }) {
+    // Kommo trata tags como _embedded — sem ID, ele cria/reusa pelo nome
+    await http.patch(`/leads/${leadId}`, {
+      _embedded: { tags: [{ name: tag }] },
+    });
+  },
+  // ...
+};</code></pre>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       PERSISTENCE
+  ============================================================ -->
+  <section id="persistence" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Persistência</h2>
+    <p class="text-zinc-400 mb-6"><code class="inline">prisma/schema.prisma</code> — duas responsabilidades distintas no mesmo banco.</p>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-8">
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Owner: nós</div>
+        <h3 class="font-semibold text-zinc-100 mb-2">ExecutionTrace + ExecutionStep</h3>
+        <p class="text-sm text-zinc-400">
+          Tabelas de observabilidade. Cada webhook vira um <code class="inline">Trace</code>, cada passo do grafo vira um <code class="inline">Step</code>.
+          Gerenciadas via <code class="inline">prisma migrate</code>.
+        </p>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Owner: LangGraph</div>
+        <h3 class="font-semibold text-zinc-100 mb-2">checkpoints, checkpoint_writes, checkpoint_blobs</h3>
+        <p class="text-sm text-zinc-400">
+          Memória binária do agente. Criadas pelo <code class="inline">PostgresSaver.setup()</code> no boot.
+          <strong class="text-zinc-200">Não</strong> rodar migrate nelas.
+        </p>
+      </div>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">Por que separar Trace de Step?</h3>
+    <ul class="text-sm text-zinc-400 list-disc pl-5 space-y-1 mb-6">
+      <li><strong class="text-zinc-200">Trace</strong> é o envelope da execução: <code class="inline">leadId</code>, <code class="inline">latency_ms</code>, <code class="inline">status</code>.</li>
+      <li><strong class="text-zinc-200">Step</strong> é o raciocínio: cada chamada à LLM, cada tool call, cada ação no Kommo.</li>
+      <li>O dashboard renderiza um <code class="inline">Step</code> por linha do feed vertical.</li>
+    </ul>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">Por que não só o checkpoint do LangGraph?</h3>
+    <p class="text-sm text-zinc-400 mb-4">
+      O checkpoint é otimizado para <em>retomada de execução</em> — serializado binário, não navegável.
+      Para UI/observabilidade humana, tabela própria. Os dois coexistem.
+    </p>
+  </section>
+
+  <!-- ============================================================
+       OBSERVABILITY
+  ============================================================ -->
+  <section id="observability" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Observabilidade</h2>
+    <p class="text-zinc-400 mb-6"><code class="inline">src/agent/trace-recorder.ts</code> — ponte entre o grafo e o banco.</p>
+
+    <p class="text-zinc-400 text-sm mb-6">
+      O LangGraph não conhece nosso domínio de observabilidade — nem deve. O <code class="inline">TraceRecorder</code> é o adapter que cada nó/tool chama
+      pra gravar um <code class="inline">ExecutionStep</code>. Falhas de gravação <strong class="text-zinc-200">nunca</strong> derrubam o agente — logam e seguem.
+    </p>
+
+    <div class="relative mb-6">
+      <button class="copy-btn" data-copy>Copiar</button>
+      <pre><code class="language-typescript">await recorder.step({
+  kind: 'TOOL_CALL',
+  title: `Decisão: aplicar tag "${tag}" no lead ${leadId}`,
+  payload: { leadId, tag },
+  latencyMs: 312,   // duração desse passo específico
+});
+
+// Ao final da execução
+await recorder.finalize({
+  status: 'SUCCESS',
+  latencyMs: totalLatency,
+  iaDecision: result.decision,
+});</code></pre>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">Logs estruturados</h3>
+    <p class="text-sm text-zinc-400 mb-4">
+      Em produção, <code class="inline">pino</code> escreve JSON com <code class="inline">threadId</code>, <code class="inline">leadId</code> e <code class="inline">traceId</code>
+      em todo log — basta um filtro no Loki/Datadog pra puxar uma execução inteira.
+    </p>
+  </section>
+
+  <!-- ============================================================
+       FRONTEND
+  ============================================================ -->
+  <section id="frontend" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Frontend — Dashboard</h2>
+    <p class="text-zinc-400 mb-6">React 19 + Vite 7 + Tailwind v4. Visual estilo <strong class="text-zinc-200">AgentGPT Terminal</strong>.</p>
+
+    <h3 id="components" class="anchor-target text-lg font-semibold text-zinc-100 mb-3">Componentes</h3>
+
+    <div class="space-y-3 mb-8">
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 flex gap-4">
+        <div class="w-10 h-10 rounded-md bg-brand-500/15 ring-1 ring-brand-500/40 flex items-center justify-center text-brand-300 shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="6" height="18"/><rect x="13" y="3" width="8" height="11"/></svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <code class="text-sm text-zinc-100 font-semibold">Sidebar</code>
+            <span class="text-[10px] text-zinc-500 font-mono">components/Sidebar.tsx</span>
+          </div>
+          <p class="text-sm text-zinc-400 mt-1">Histórico de webhooks. Item ativo destacado com borda esquerda brand + glow.</p>
+        </div>
+      </div>
+
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 flex gap-4">
+        <div class="w-10 h-10 rounded-md bg-emerald-500/15 ring-1 ring-emerald-500/40 flex items-center justify-center text-emerald-300 shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <code class="text-sm text-zinc-100 font-semibold">StatsHeader</code>
+            <span class="text-[10px] text-zinc-500 font-mono">components/StatsHeader.tsx</span>
+          </div>
+          <p class="text-sm text-zinc-400 mt-1">4 KPIs: total, taxa de sucesso, latência média, falhas.</p>
+        </div>
+      </div>
+
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 flex gap-4">
+        <div class="w-10 h-10 rounded-md bg-amber-500/15 ring-1 ring-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="8 6 2 12 8 18"/><polyline points="16 6 22 12 16 18"/></svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <code class="text-sm text-zinc-100 font-semibold">ExecutionTrace</code>
+            <span class="text-[10px] text-zinc-500 font-mono">components/ExecutionTrace.tsx</span>
+          </div>
+          <p class="text-sm text-zinc-400 mt-1">Console principal. Feed vertical animado com Framer Motion. Caret piscando quando RUNNING.</p>
+        </div>
+      </div>
+
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 flex gap-4">
+        <div class="w-10 h-10 rounded-md bg-violet-500/15 ring-1 ring-violet-500/40 flex items-center justify-center text-violet-300 shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6m11-11h-6m-10 0H1"/></svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <code class="text-sm text-zinc-100 font-semibold">TraceStep</code>
+            <span class="text-[10px] text-zinc-500 font-mono">components/TraceStep.tsx</span>
+          </div>
+          <p class="text-sm text-zinc-400 mt-1">Cada step do feed. Ícone Lucide por <code class="inline">kind</code>, latência colorida (verde/âmbar/vermelho), payload expansível em JSON.</p>
+        </div>
+      </div>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">Atualização em tempo real</h3>
+    <p class="text-sm text-zinc-400 mb-3">
+      O hook <code class="inline">usePolling</code> faz polling com pausa automática quando a aba está em background (<code class="inline">visibilitychange</code>).
+      Frequência adaptativa: <strong class="text-zinc-200">1 s</strong> para traces <code class="inline">RUNNING</code>, <strong class="text-zinc-200">3-5 s</strong> para o resto.
+    </p>
+
+    <div class="rounded-lg border border-brand-500/30 bg-brand-500/5 p-4 text-sm">
+      <strong class="text-brand-300">Por que polling e não SSE?</strong>
+      <p class="text-zinc-400 mt-1">Dashboard interno, baixo tráfego, simplicidade. SSE/WebSockets ficam no roadmap pós-MVP.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       API REFERENCE
+  ============================================================ -->
+  <section id="api" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">API Reference</h2>
+    <p class="text-zinc-400 mb-6">Base URL: <code class="inline">http://localhost:3001/api</code> · Auth: nenhuma (MVP).</p>
+
+    <!-- POST webhook -->
+    <div class="rounded-lg border border-zinc-800 bg-zinc-900/30 mb-8 overflow-hidden">
+      <div class="px-5 py-3 border-b border-zinc-800/80 flex items-center gap-3 bg-zinc-900/50">
+        <span class="badge-method badge-post">POST</span>
+        <code class="text-sm text-zinc-100 font-mono">/webhooks/kommo</code>
+      </div>
+      <div class="p-5">
+        <p class="text-sm text-zinc-400 mb-4">Recebe evento do Kommo. <strong class="text-zinc-200">Sempre responde 200</strong> imediatamente (&lt; 100ms).</p>
+
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Request body</div>
+        <div class="relative mb-4">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-json">{
+  "leadId": 12345,
+  "message": "Tem orçamento aprovado, quer fechar essa semana"
+}</code></pre>
+        </div>
+
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Response 200</div>
+        <div class="relative mb-4">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-json">{ "ok": true, "traceId": "clx9k2a3b0001abcd" }</code></pre>
+        </div>
+
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Exemplo</div>
+        <div class="relative">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-bash">curl -X POST http://localhost:3001/api/webhooks/kommo \
+  -H "Content-Type: application/json" \
+  -d '{"leadId": 12345, "message": "..."}'</code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- GET traces -->
+    <div class="rounded-lg border border-zinc-800 bg-zinc-900/30 mb-8 overflow-hidden">
+      <div class="px-5 py-3 border-b border-zinc-800/80 flex items-center gap-3 bg-zinc-900/50">
+        <span class="badge-method badge-get">GET</span>
+        <code class="text-sm text-zinc-100 font-mono">/traces</code>
+        <span class="ml-auto text-xs text-zinc-500">Sidebar do dashboard</span>
+      </div>
+      <div class="p-5">
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Query params</div>
+        <table class="w-full text-sm mb-4">
+          <tr class="border-b border-zinc-800"><td class="py-1.5 font-mono text-zinc-300">limit</td><td class="text-right text-zinc-500"><code class="inline">number</code> · default 50, max 200</td></tr>
+        </table>
+
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Response 200</div>
+        <div class="relative">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-json">{
+  "traces": [
+    {
+      "id": "clx9k2a3b0001abcd",
+      "threadId": "lead-12345",
+      "leadId": "12345",
+      "status": "SUCCESS",
+      "latencyMs": 2143,
+      "createdAt": "2026-05-12T14:32:01.123Z",
+      "iaDecision": "Apliquei tag Quente."
+    }
+  ]
+}</code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- GET trace by id -->
+    <div class="rounded-lg border border-zinc-800 bg-zinc-900/30 mb-8 overflow-hidden">
+      <div class="px-5 py-3 border-b border-zinc-800/80 flex items-center gap-3 bg-zinc-900/50">
+        <span class="badge-method badge-get">GET</span>
+        <code class="text-sm text-zinc-100 font-mono">/traces/{id}</code>
+        <span class="ml-auto text-xs text-zinc-500">Console de raciocínio</span>
+      </div>
+      <div class="p-5">
+        <p class="text-sm text-zinc-400 mb-4">Trace completo + todos os steps ordenados por <code class="inline">sequence</code>.</p>
+
+        <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Response 200 (resumido)</div>
+        <div class="relative">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-json">{
+  "trace": {
+    "id": "clx9k2a3b0001abcd",
+    "status": "SUCCESS",
+    "latencyMs": 2143,
+    "input": { "leadId": 12345 },
+    "iaDecision": "Apliquei tag Quente.",
+    "steps": [
+      { "sequence": 1, "kind": "WEBHOOK_RECEIVED", "title": "Payload recebido..." },
+      { "sequence": 2, "kind": "THINKING",         "title": "IA analisando...", "latencyMs": 1820 },
+      { "sequence": 3, "kind": "TOOL_CALL",        "title": "Aplicar tag Quente" },
+      { "sequence": 4, "kind": "KOMMO_ACTION",     "title": "Tag aplicada",      "latencyMs": 312 },
+      { "sequence": 5, "kind": "COMPLETED",        "title": "Concluído em 2143ms" }
+    ]
+  }
+}</code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- GET stats -->
+    <div class="rounded-lg border border-zinc-800 bg-zinc-900/30 mb-8 overflow-hidden">
+      <div class="px-5 py-3 border-b border-zinc-800/80 flex items-center gap-3 bg-zinc-900/50">
+        <span class="badge-method badge-get">GET</span>
+        <code class="text-sm text-zinc-100 font-mono">/stats</code>
+        <span class="ml-auto text-xs text-zinc-500">KPIs agregados</span>
+      </div>
+      <div class="p-5">
+        <div class="relative">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-json">{
+  "total": 184,
+  "success": 171,
+  "failed": 9,
+  "running": 4,
+  "successRate": 0.929,
+  "avgLatencyMs": 1987
+}</code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- GET health -->
+    <div class="rounded-lg border border-zinc-800 bg-zinc-900/30 overflow-hidden">
+      <div class="px-5 py-3 border-b border-zinc-800/80 flex items-center gap-3 bg-zinc-900/50">
+        <span class="badge-method badge-get">GET</span>
+        <code class="text-sm text-zinc-100 font-mono">/health</code>
+        <span class="ml-auto text-xs text-zinc-500">Liveness probe</span>
+      </div>
+      <div class="p-5">
+        <div class="relative">
+          <button class="copy-btn" data-copy>Copiar</button>
+          <pre><code class="language-json">{ "ok": true, "ts": "2026-05-12T14:32:00.000Z" }</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       MODELS
+  ============================================================ -->
+  <section id="models" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Modelos</h2>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">ExecutionTrace</h3>
+    <div class="overflow-x-auto rounded-lg border border-zinc-800 mb-8">
+      <table class="w-full text-sm">
+        <thead class="bg-zinc-900/50 text-xs uppercase tracking-wider text-zinc-400">
+          <tr>
+            <th class="text-left px-4 py-2 font-medium">Campo</th>
+            <th class="text-left px-4 py-2 font-medium">Tipo</th>
+            <th class="text-left px-4 py-2 font-medium">Descrição</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/80">
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">id</td>           <td class="px-4 py-2 font-mono text-brand-300">string (cuid)</td><td class="px-4 py-2 text-zinc-400">PK.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">threadId</td>     <td class="px-4 py-2 font-mono text-brand-300">string</td>        <td class="px-4 py-2 text-zinc-400"><code class="inline">lead-{leadId}</code>. Chave da memória do LangGraph.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">leadId</td>       <td class="px-4 py-2 font-mono text-brand-300">string</td>        <td class="px-4 py-2 text-zinc-400">ID do lead Kommo.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">status</td>       <td class="px-4 py-2 font-mono text-brand-300">TraceStatus</td>   <td class="px-4 py-2 text-zinc-400">Estado atual.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">latencyMs</td>    <td class="px-4 py-2 font-mono text-brand-300">number?</td>       <td class="px-4 py-2 text-zinc-400">Duração total. <code class="inline">null</code> enquanto RUNNING.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">input</td>        <td class="px-4 py-2 font-mono text-brand-300">Json</td>          <td class="px-4 py-2 text-zinc-400">Payload original do webhook.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">iaDecision</td>   <td class="px-4 py-2 font-mono text-brand-300">Json?</td>         <td class="px-4 py-2 text-zinc-400">Resposta textual final do agente.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">errorMessage</td> <td class="px-4 py-2 font-mono text-brand-300">string?</td>      <td class="px-4 py-2 text-zinc-400">Preenchido se FAILED.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">createdAt</td>    <td class="px-4 py-2 font-mono text-brand-300">DateTime</td>     <td class="px-4 py-2 text-zinc-400"></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">ExecutionStep</h3>
+    <div class="overflow-x-auto rounded-lg border border-zinc-800 mb-4">
+      <table class="w-full text-sm">
+        <thead class="bg-zinc-900/50 text-xs uppercase tracking-wider text-zinc-400">
+          <tr>
+            <th class="text-left px-4 py-2 font-medium">Campo</th>
+            <th class="text-left px-4 py-2 font-medium">Tipo</th>
+            <th class="text-left px-4 py-2 font-medium">Descrição</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/80">
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">id</td>          <td class="px-4 py-2 font-mono text-brand-300">string (cuid)</td><td class="px-4 py-2 text-zinc-400">PK.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">traceId</td>     <td class="px-4 py-2 font-mono text-brand-300">string</td>        <td class="px-4 py-2 text-zinc-400">FK → ExecutionTrace.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">sequence</td>    <td class="px-4 py-2 font-mono text-brand-300">number</td>        <td class="px-4 py-2 text-zinc-400">Ordem estável (1, 2, 3…).</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">kind</td>        <td class="px-4 py-2 font-mono text-brand-300">StepKind</td>      <td class="px-4 py-2 text-zinc-400">Tipo do passo.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">title</td>       <td class="px-4 py-2 font-mono text-brand-300">string</td>        <td class="px-4 py-2 text-zinc-400">Texto exibido no feed.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">payload</td>     <td class="px-4 py-2 font-mono text-brand-300">Json?</td>         <td class="px-4 py-2 text-zinc-400">Detalhe expansível.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">latencyMs</td>   <td class="px-4 py-2 font-mono text-brand-300">number?</td>       <td class="px-4 py-2 text-zinc-400">Duração desse passo.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       ENUMS
+  ============================================================ -->
+  <section id="enums" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Enums</h2>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">TraceStatus</h3>
+    <div class="grid sm:grid-cols-3 gap-3 mb-8">
+      <div class="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+        <div class="font-mono text-amber-300 font-semibold">RUNNING</div>
+        <div class="text-xs text-zinc-400 mt-1">Agente processando.</div>
+      </div>
+      <div class="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4">
+        <div class="font-mono text-emerald-300 font-semibold">SUCCESS</div>
+        <div class="text-xs text-zinc-400 mt-1">Concluído sem exceção.</div>
+      </div>
+      <div class="rounded-lg border border-rose-500/30 bg-rose-500/5 p-4">
+        <div class="font-mono text-rose-300 font-semibold">FAILED</div>
+        <div class="text-xs text-zinc-400 mt-1">Erro não-tratado.</div>
+      </div>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-3">StepKind</h3>
+    <div class="overflow-x-auto rounded-lg border border-zinc-800">
+      <table class="w-full text-sm">
+        <thead class="bg-zinc-900/50 text-xs uppercase tracking-wider text-zinc-400">
+          <tr>
+            <th class="text-left px-4 py-2 font-medium">Kind</th>
+            <th class="text-left px-4 py-2 font-medium w-16">Ícone</th>
+            <th class="text-left px-4 py-2 font-medium">Significado</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/80">
+          <tr><td class="px-4 py-2 font-mono text-sky-300">WEBHOOK_RECEIVED</td><td class="px-4 py-2 text-xl">📥</td><td class="px-4 py-2 text-zinc-400">Payload chegou. Primeiro step de todo trace.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">THINKING</td>     <td class="px-4 py-2 text-xl">🧠</td><td class="px-4 py-2 text-zinc-400">LLM raciocinando (chamada ao modelo).</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-amber-300">TOOL_CALL</td>    <td class="px-4 py-2 text-xl">🛠️</td><td class="px-4 py-2 text-zinc-400">LLM decidiu chamar uma tool.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-400">TOOL_RESULT</td>   <td class="px-4 py-2 text-xl">↩️</td><td class="px-4 py-2 text-zinc-400">Tool respondeu (reservado).</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-violet-300">KOMMO_ACTION</td><td class="px-4 py-2 text-xl">⚡</td><td class="px-4 py-2 text-zinc-400">Ação efetivada no Kommo (addTag / moveStage).</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-emerald-300">COMPLETED</td>  <td class="px-4 py-2 text-xl">✅</td><td class="px-4 py-2 text-zinc-400">Encerramento OK.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-rose-300">ERROR</td>         <td class="px-4 py-2 text-xl">❌</td><td class="px-4 py-2 text-zinc-400">Falha em algum nó.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       ENV
+  ============================================================ -->
+  <section id="env" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Variáveis de ambiente</h2>
+    <p class="text-zinc-400 mb-6">Validadas no boot com Zod (<code class="inline">src/lib/env.ts</code>). Faltando uma obrigatória → o processo morre na inicialização.</p>
+
+    <div class="overflow-x-auto rounded-lg border border-zinc-800">
+      <table class="w-full text-sm">
+        <thead class="bg-zinc-900/50 text-xs uppercase tracking-wider text-zinc-400">
+          <tr>
+            <th class="text-left px-4 py-2 font-medium">Variável</th>
+            <th class="text-left px-4 py-2 font-medium">Obrig.</th>
+            <th class="text-left px-4 py-2 font-medium">Default</th>
+            <th class="text-left px-4 py-2 font-medium">Descrição</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800/80">
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">DATABASE_URL</td>      <td class="px-4 py-2 text-emerald-400">sim</td><td class="px-4 py-2 text-zinc-600">—</td><td class="px-4 py-2 text-zinc-400">URL Postgres.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">KOMMO_SUBDOMAIN</td>   <td class="px-4 py-2 text-emerald-400">sim</td><td class="px-4 py-2 text-zinc-600">—</td><td class="px-4 py-2 text-zinc-400">Ex: <code class="inline">meuespaco</code>.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">KOMMO_ACCESS_TOKEN</td><td class="px-4 py-2 text-emerald-400">sim</td><td class="px-4 py-2 text-zinc-600">—</td><td class="px-4 py-2 text-zinc-400">Long-Lived Access Token.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">ANTHROPIC_API_KEY</td> <td class="px-4 py-2 text-emerald-400">sim</td><td class="px-4 py-2 text-zinc-600">—</td><td class="px-4 py-2 text-zinc-400">Chave Anthropic.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">ANTHROPIC_MODEL</td>   <td class="px-4 py-2 text-zinc-600">não</td><td class="px-4 py-2 font-mono text-zinc-500">claude-opus-4-7</td><td class="px-4 py-2 text-zinc-400">Modelo Claude.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">PORT</td>              <td class="px-4 py-2 text-zinc-600">não</td><td class="px-4 py-2 font-mono text-zinc-500">3001</td><td class="px-4 py-2 text-zinc-400">Porta HTTP.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">LOG_LEVEL</td>         <td class="px-4 py-2 text-zinc-600">não</td><td class="px-4 py-2 font-mono text-zinc-500">info</td><td class="px-4 py-2 text-zinc-400"><code class="inline">fatal</code>…<code class="inline">trace</code>.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">FRONTEND_ORIGIN</td>   <td class="px-4 py-2 text-zinc-600">não</td><td class="px-4 py-2 font-mono text-zinc-500">localhost:5173</td><td class="px-4 py-2 text-zinc-400">Origem CORS.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-zinc-200">NODE_ENV</td>          <td class="px-4 py-2 text-zinc-600">não</td><td class="px-4 py-2 font-mono text-zinc-500">development</td><td class="px-4 py-2 text-zinc-400"></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       CLI
+  ============================================================ -->
+  <section id="cli" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Comandos pnpm</h2>
+    <p class="text-zinc-400 mb-6">Todos rodados na raiz do monorepo.</p>
+
+    <div class="overflow-x-auto rounded-lg border border-zinc-800">
+      <table class="w-full text-sm">
+        <tbody class="divide-y divide-zinc-800/80">
+          <tr><td class="px-4 py-2 font-mono text-brand-300 w-72">pnpm install</td>            <td class="px-4 py-2 text-zinc-400">Instala backend + frontend.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">pnpm dev</td>                     <td class="px-4 py-2 text-zinc-400">Backend (3001) + frontend (5173) em paralelo.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">pnpm dev:backend</td>             <td class="px-4 py-2 text-zinc-400">Só backend.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">pnpm dev:frontend</td>            <td class="px-4 py-2 text-zinc-400">Só frontend.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">pnpm prisma:migrate</td>          <td class="px-4 py-2 text-zinc-400">Cria/atualiza tabelas do banco.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">pnpm prisma:studio</td>           <td class="px-4 py-2 text-zinc-400">UI do Prisma para inspecionar dados.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">pnpm lint</td>                    <td class="px-4 py-2 text-zinc-400">Type-check em todos os pacotes.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">pnpm build</td>                   <td class="px-4 py-2 text-zinc-400">Build de produção.</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300 whitespace-nowrap">pnpm --filter agente-dt-backend add &lt;pkg&gt;</td> <td class="px-4 py-2 text-zinc-400">Adiciona dep só no backend.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       TROUBLESHOOTING
+  ============================================================ -->
+  <section id="troubleshooting" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Troubleshooting</h2>
+
+    <div class="space-y-3">
+
+      <details class="group rounded-lg border border-zinc-800 bg-zinc-900/30">
+        <summary class="cursor-pointer px-4 py-3 flex items-center justify-between text-sm font-medium text-zinc-200 select-none">
+          <span><code class="inline">ERR_PNPM_NO_MATCHING_VERSION</code> no install</span>
+          <svg class="text-zinc-500 transition group-open:rotate-180" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div class="px-4 pb-4 text-sm text-zinc-400 border-t border-zinc-800/80 pt-3">
+          Alguma versão pinada no <code class="inline">package.json</code> não existe no registry. Rode <code class="inline">pnpm view &lt;pkg&gt; version</code> pra ver a latest e ajuste.
+        </div>
+      </details>
+
+      <details class="group rounded-lg border border-zinc-800 bg-zinc-900/30">
+        <summary class="cursor-pointer px-4 py-3 flex items-center justify-between text-sm font-medium text-zinc-200 select-none">
+          <span>Prisma reclama <code class="inline">datasource property url is no longer supported</code></span>
+          <svg class="text-zinc-500 transition group-open:rotate-180" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div class="px-4 pb-4 text-sm text-zinc-400 border-t border-zinc-800/80 pt-3">
+          Você instalou Prisma 7 — esse MVP usa Prisma 6. Volte para <code class="inline">^6.19.3</code> ou migre o schema pra <code class="inline">prisma.config.ts</code> + adapter.
+        </div>
+      </details>
+
+      <details class="group rounded-lg border border-zinc-800 bg-zinc-900/30">
+        <summary class="cursor-pointer px-4 py-3 flex items-center justify-between text-sm font-medium text-zinc-200 select-none">
+          <span>Webhook responde 200 mas nada aparece no dashboard</span>
+          <svg class="text-zinc-500 transition group-open:rotate-180" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div class="px-4 pb-4 text-sm text-zinc-400 border-t border-zinc-800/80 pt-3">
+          Cheque os logs do backend (<code class="inline">LOG_LEVEL=debug</code>). Causa comum: <code class="inline">ANTHROPIC_API_KEY</code> inválida — o agente falha mas o trace foi criado como FAILED.
+          Olhe na tabela <code class="inline">execution_traces.errorMessage</code>.
+        </div>
+      </details>
+
+      <details class="group rounded-lg border border-zinc-800 bg-zinc-900/30">
+        <summary class="cursor-pointer px-4 py-3 flex items-center justify-between text-sm font-medium text-zinc-200 select-none">
+          <span>Kommo retenta o mesmo webhook várias vezes</span>
+          <svg class="text-zinc-500 transition group-open:rotate-180" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div class="px-4 pb-4 text-sm text-zinc-400 border-t border-zinc-800/80 pt-3">
+          Significa que você respondeu em &gt; 30s ou com status != 200. Verifique o handler <code class="inline">webhook.controller.ts</code> — o <code class="inline">res.status(200)</code> tem que vir <strong class="text-zinc-200">antes</strong> de qualquer chamada ao agente.
+        </div>
+      </details>
+
+      <details class="group rounded-lg border border-zinc-800 bg-zinc-900/30">
+        <summary class="cursor-pointer px-4 py-3 flex items-center justify-between text-sm font-medium text-zinc-200 select-none">
+          <span>Como ver o State serializado de uma execução?</span>
+          <svg class="text-zinc-500 transition group-open:rotate-180" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div class="px-4 pb-4 text-sm text-zinc-400 border-t border-zinc-800/80 pt-3">
+          Use <code class="inline">pnpm prisma:studio</code> e abra a tabela <code class="inline">checkpoints</code> filtrando por <code class="inline">thread_id = lead-{leadId}</code>. O conteúdo está em bytes (msgpack) — pode usar a lib pra deserializar se precisar inspecionar a fundo.
+        </div>
+      </details>
+
+    </div>
+  </section>
+
+  <!-- ============================================================
+       LANGGRAPH REFERENCE
+       Referência condensada do LangGraph.js — extraída da doc oficial
+       (docs.langchain.com/oss/javascript/langgraph) em 2026-05.
+       Foco: o que é usado neste projeto + o suficiente pra estender.
+  ============================================================ -->
+  <section id="lg-overview" class="anchor-target mb-16">
+    <div class="flex items-center gap-3 mb-3">
+      <span class="badge-method badge-post" style="background: rgba(124,77,255,.15); color: #b6a4ff;">LANGGRAPH</span>
+      <h2 class="text-2xl font-bold text-zinc-50">Referência LangGraph.js</h2>
+    </div>
+    <p class="text-zinc-400 mb-6 max-w-3xl">
+      LangGraph é o framework de orquestração de agentes que dirige o agente deste projeto.
+      Esta seção é uma referência condensada da doc oficial em
+      <code class="inline">docs.langchain.com/oss/javascript/langgraph</code> — com foco no
+      que é usado em <code class="inline">backend/src/agent/*</code>.
+    </p>
+
+    <div class="rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-5 mb-6">
+      <h3 class="text-zinc-100 font-semibold mb-2">O que é</h3>
+      <p class="text-sm text-zinc-300 mb-3">
+        Framework de baixo nível para construir e executar agentes <em>stateful</em>, com persistência
+        em checkpoints, retomada após falha e human-in-the-loop. Diferente de wrappers de alto nível,
+        o LangGraph é puro grafo de estados — você define <strong>nodes</strong> (funções) e
+        <strong>edges</strong> (transições, fixas ou condicionais).
+      </p>
+      <ul class="text-sm text-zinc-400 list-disc pl-5 space-y-1">
+        <li><strong>Durable Execution</strong> — checkpoints automáticos a cada passo.</li>
+        <li><strong>Human-in-the-Loop</strong> — inspecionar e modificar o State em qualquer ponto.</li>
+        <li><strong>Memória</strong> — curta (mensagens) + longa (Store).</li>
+        <li><strong>LangSmith</strong> — observabilidade integrada.</li>
+      </ul>
+    </div>
+
+    <div class="rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-5">
+      <h3 class="text-zinc-100 font-semibold mb-2">Instalação</h3>
+      <div class="relative">
+        <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-bash">pnpm add @langchain/langgraph @langchain/core
+pnpm add @langchain/anthropic                        # provider Claude
+pnpm add @langchain/langgraph-checkpoint-postgres    # persistência</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATE & ANNOTATION -->
+  <section id="lg-state" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">State & Annotation</h2>
+    <p class="text-zinc-400 mb-6 max-w-3xl">
+      O <strong>State</strong> é o objeto que <em>transita</em> entre os nós do grafo. Cada nó recebe
+      o State atual e retorna um <em>delta</em> (atualização parcial). O LangGraph aplica os
+      <strong>reducers</strong> definidos em cada campo do <code class="inline">Annotation.Root</code>
+      para mesclar o delta no State.
+    </p>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Definição com <code class="inline">Annotation.Root</code></h3>
+    <div class="relative mb-6">
+      <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-typescript">import { Annotation, messagesStateReducer } from '@langchain/langgraph';
+import type { BaseMessage } from '@langchain/core/messages';
+
+export const AgentState = Annotation.Root({
+  // Reducer canônico para mensagens — faz concat respeitando IDs (upsert
+  // pra streaming) e mantém ordem cronológica.
+  messages: Annotation&lt;BaseMessage[]&gt;({
+    reducer: messagesStateReducer,
+    default: () =&gt; [],
+  }),
+
+  // "Last value wins": cada update sobrescreve.
+  leadId: Annotation&lt;number&gt;({
+    reducer: (_prev, next) =&gt; next,
+    default: () =&gt; 0,
+  }),
+
+  // Reducer customizado — acumula em array.
+  steps: Annotation&lt;string[]&gt;({
+    reducer: (prev, next) =&gt; [...prev, ...next],
+    default: () =&gt; [],
+  }),
+});
+
+export type AgentStateType = typeof AgentState.State;</code></pre>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Reducers — semântica</h3>
+    <div class="grid md:grid-cols-2 gap-3 text-sm mb-6">
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1">Default (sem reducer)</div>
+        <p class="text-zinc-400">Último valor vence — cada update sobrescreve o anterior.</p>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1"><code class="inline">messagesStateReducer</code></div>
+        <p class="text-zinc-400">Concat com upsert por <code class="inline">id</code>. Use para histórico de chat — é o canal do loop ReAct.</p>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1">Custom <code class="inline">(prev, next) =&gt; ...</code></div>
+        <p class="text-zinc-400">Você decide. Útil para listas append-only, somas, ou merge profundo.</p>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1"><code class="inline">MessagesAnnotation</code></div>
+        <p class="text-zinc-400">Atalho pronto para grafos cujo único campo é <code class="inline">messages</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- NODES & EDGES -->
+  <section id="lg-nodes-edges" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Nodes & Edges</h2>
+    <p class="text-zinc-400 mb-6 max-w-3xl">
+      <strong>Nodes</strong> são funções (sync ou async) que recebem o State e devolvem um delta.
+      <strong>Edges</strong> conectam nodes — podem ser fixas (<code class="inline">addEdge</code>) ou
+      condicionais (<code class="inline">addConditionalEdges</code>). Os marcadores
+      <code class="inline">START</code> e <code class="inline">END</code> são pseudo-nós para entrada e saída.
+    </p>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Construção do grafo</h3>
+    <div class="relative mb-6">
+      <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-typescript">import { END, START, StateGraph } from '@langchain/langgraph';
+
+const agentNode = async (state: AgentStateType) =&gt; {
+  const response = await model.invoke(state.messages);
+  return { messages: [response] };           // delta — o reducer concatena
+};
+
+const toolNode = new ToolNode(tools);        // helper do prebuilt
+
+// Edge condicional: inspeciona última mensagem pra decidir a rota.
+const shouldContinue = (state: AgentStateType): 'tools' | typeof END =&gt; {
+  const last = state.messages.at(-1) as AIMessage | undefined;
+  return last?.tool_calls?.length ? 'tools' : END;
+};
+
+const workflow = new StateGraph(AgentState)
+  .addNode('agent', agentNode)
+  .addNode('tools', toolNode)
+  .addEdge(START, 'agent')
+  .addConditionalEdges('agent', shouldContinue, {
+    tools: 'tools',
+    [END]: END,
+  })
+  .addEdge('tools', 'agent');                // loop ReAct
+
+const compiled = workflow.compile({ checkpointer });</code></pre>
+    </div>
+
+    <div class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-100/90">
+      <strong>Loop ReAct.</strong> A aresta <code class="inline">tools → agent</code> fecha o loop
+      clássico: o LLM pede tool → tool executa → resultado vira <code class="inline">ToolMessage</code> →
+      LLM decide o próximo passo. A trava é <code class="inline">recursionLimit</code> no
+      <code class="inline">invoke</code> (default 25).
+    </div>
+  </section>
+
+  <!-- TOOLS -->
+  <section id="lg-tools" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Tools & ToolNode</h2>
+    <p class="text-zinc-400 mb-6 max-w-3xl">
+      Tools são a interface entre o LLM e o mundo real. Cada tool tem um <strong>schema Zod</strong>
+      (que vira o formato de tool-calling da Anthropic) e uma <strong>descrição em linguagem
+      natural</strong> — é a descrição que faz o LLM decidir <em>quando</em> chamar a tool.
+      <code class="inline">ToolNode</code> é o nó pronto que executa as tools chamadas pela última
+      <code class="inline">AIMessage</code> e devolve <code class="inline">ToolMessage</code>s.
+    </p>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Definir uma tool com Zod</h3>
+    <div class="relative mb-6">
+      <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-typescript">import { DynamicStructuredTool } from '@langchain/core/tools';
+import { z } from 'zod';
+
+const aplicar_tag = new DynamicStructuredTool({
+  name: 'aplicar_tag',
+  // ESSA descrição é o "gatilho" — o LLM lê isso pra decidir quando chamar.
+  description:
+    'Adiciona uma tag ao lead no Kommo. Use quando a análise indicar uma ' +
+    'classificação (ex: "Quente", "Frio"). Idempotente.',
+  schema: z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead.'),
+    tag: z.string().min(1).max(50).describe('Nome da tag, ex: "Quente".'),
+  }),
+  func: async ({ leadId, tag }) =&gt; {
+    await KommoService.addTag({ leadId, tag });
+    return `OK — tag "${tag}" aplicada no lead ${leadId}.`;
+  },
+});</code></pre>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Bind no modelo + ToolNode</h3>
+    <div class="relative mb-6">
+      <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-typescript">import { ChatAnthropic } from '@langchain/anthropic';
+import { ToolNode } from '@langchain/langgraph/prebuilt';
+
+const tools = [aplicar_tag, mover_etapa];
+
+// bindTools informa ao provider quais tools existem — vira o array `tools`
+// da Messages API da Anthropic.
+const model = new ChatAnthropic({
+  model: 'claude-opus-4-7',
+  temperature: 0,
+}).bindTools(tools);
+
+const toolNode = new ToolNode(tools);</code></pre>
+    </div>
+
+    <div class="rounded-xl border border-brand-500/30 bg-brand-500/5 p-4 text-sm text-brand-200/90 mb-6">
+      <strong>Regra de ouro.</strong> A <em>descrição</em> da tool é o seu prompt indireto.
+      Descreva o <strong>caso de uso</strong> ("use quando..."), não a implementação ("isso chama um endpoint REST"). O LLM nunca vê seu código.
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Erros que NÃO quebram o loop</h3>
+    <p class="text-zinc-400 text-sm mb-3">
+      Dentro de <code class="inline">func</code>, capture exceções e <strong>retorne uma string</strong>
+      descrevendo a falha. Lançar quebra o loop ReAct; retornar deixa o LLM reagir (ex: tentar outra tool).
+    </p>
+  </section>
+
+  <!-- PERSISTENCE -->
+  <section id="lg-persistence" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Persistência (Checkpointer)</h2>
+    <p class="text-zinc-400 mb-6 max-w-3xl">
+      Ao compilar um grafo com <code class="inline">checkpointer</code>, o LangGraph grava um snapshot
+      do State <strong>a cada super-step</strong>. Snapshots são agrupados por <code class="inline">thread_id</code> —
+      a chave da conversa. Próximas invocações com o mesmo thread_id <em>rehidratam</em> o State
+      e o agente "lembra" do contexto anterior.
+    </p>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Implementações</h3>
+    <div class="grid md:grid-cols-3 gap-3 text-sm mb-6">
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1">MemorySaver</div>
+        <p class="text-zinc-400">In-memory. Dev/teste. Some no reboot.</p>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1">SqliteSaver</div>
+        <p class="text-zinc-400">SQLite em disco. Ótimo pra experimentação local.</p>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1">PostgresSaver</div>
+        <p class="text-zinc-400">Produção. <em>Este projeto usa este.</em></p>
+      </div>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Setup do PostgresSaver</h3>
+    <div class="relative mb-6">
+      <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-typescript">import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
+
+const cp = PostgresSaver.fromConnString(process.env.DATABASE_URL!);
+await cp.setup();           // cria as tabelas checkpoints/checkpoint_writes/blobs
+const graph = workflow.compile({ checkpointer: cp });
+
+// Cada invocação precisa de thread_id.
+await graph.invoke(
+  { messages: [{ role: 'user', content: 'Cliente fechou!' }] },
+  { configurable: { thread_id: 'lead-12345' } },
+);</code></pre>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Inspecionar State / histórico</h3>
+    <div class="relative mb-6">
+      <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-typescript">const config = { configurable: { thread_id: 'lead-12345' } };
+
+// Snapshot mais recente
+const snap = await graph.getState(config);
+//  → { values, next, config, metadata, createdAt, parentConfig }
+
+// Todo o histórico (iterator)
+for await (const s of graph.getStateHistory(config)) {
+  console.log(s.metadata.step, s.values);
+}
+
+// Retomar a partir de um checkpoint específico
+await graph.invoke(null, {
+  configurable: {
+    thread_id: 'lead-12345',
+    checkpoint_id: '1ef663ba-28fe-6528-8002-5a559208592c',
+  },
+});</code></pre>
+    </div>
+  </section>
+
+  <!-- STREAMING -->
+  <section id="lg-streaming" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Streaming</h2>
+    <p class="text-zinc-400 mb-6 max-w-3xl">
+      Para feedback em tempo real (como o feed do dashboard deste projeto), use
+      <code class="inline">graph.stream()</code>. Há vários <strong>stream modes</strong> — cada um
+      emite um tipo de evento. Você pode passar um array pra combinar modos.
+    </p>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Modos disponíveis</h3>
+    <div class="overflow-x-auto rounded-lg border border-zinc-800 mb-6">
+      <table class="w-full text-sm">
+        <thead class="bg-zinc-900/60 text-zinc-300">
+          <tr>
+            <th class="text-left px-4 py-2 font-medium">Mode</th>
+            <th class="text-left px-4 py-2 font-medium">Emite</th>
+            <th class="text-left px-4 py-2 font-medium">Quando usar</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800 text-zinc-400">
+          <tr><td class="px-4 py-2 font-mono text-brand-300">values</td><td class="px-4 py-2">State completo após cada step</td><td class="px-4 py-2">Snapshots por passo</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">updates</td><td class="px-4 py-2">Só o delta de cada node</td><td class="px-4 py-2">Logs leves, audit trail</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">messages</td><td class="px-4 py-2">Tokens do LLM <code class="inline">[chunk, metadata]</code></td><td class="px-4 py-2">Typewriter no front</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">tools</td><td class="px-4 py-2">Ciclo de vida das tools</td><td class="px-4 py-2">Progresso de tool calls</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">custom</td><td class="px-4 py-2">Dados emitidos via <code class="inline">config.writer()</code></td><td class="px-4 py-2">Eventos do seu negócio</td></tr>
+          <tr><td class="px-4 py-2 font-mono text-brand-300">debug</td><td class="px-4 py-2">Tudo (verboso)</td><td class="px-4 py-2">Debug local</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Streamando tokens do LLM</h3>
+    <div class="relative mb-6">
+      <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-typescript">for await (const [chunk, metadata] of await graph.stream(
+  { messages: [{ role: 'user', content: 'Olá' }] },
+  { streamMode: 'messages', configurable: { thread_id: 'lead-1' } },
+)) {
+  // Filtra por nó se quiser só os tokens do node "agent"
+  if (metadata.langgraph_node === 'agent' &amp;&amp; chunk.content) {
+    process.stdout.write(chunk.content);
+  }
+}</code></pre>
+    </div>
+
+    <h3 class="text-lg font-semibold text-zinc-100 mb-2">Combinando modos</h3>
+    <div class="relative mb-6">
+      <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-typescript">for await (const [mode, chunk] of await graph.stream(input, {
+  streamMode: ['updates', 'tools'],
+})) {
+  if (mode === 'updates') console.log('node updated:', chunk);
+  if (mode === 'tools' &amp;&amp; chunk.event === 'on_tool_end') {
+    console.log('tool done:', chunk.name, chunk.output);
+  }
+}</code></pre>
+    </div>
+
+    <div class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-100/90">
+      <strong>Roadmap deste projeto.</strong> Hoje o dashboard usa <em>polling</em> de
+      <code class="inline">/api/traces/:id</code>. O próximo passo é substituir por
+      <strong>SSE</strong> emitindo eventos derivados de <code class="inline">graph.stream({streamMode:['updates','tools']})</code>
+      — pra eliminar a latência de 1s do polling.
+    </div>
+  </section>
+
+  <!-- CHEAT-SHEET -->
+  <section id="lg-cheatsheet" class="anchor-target mb-16">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Cheat-sheet</h2>
+    <p class="text-zinc-400 mb-6 max-w-3xl">Imports e snippets que você vai colar muito.</p>
+
+    <div class="relative mb-6">
+      <button data-copy class="copy-btn">Copiar</button>
+<pre><code class="language-typescript">// Imports canônicos
+import { END, START, StateGraph, Annotation, messagesStateReducer }
+  from '@langchain/langgraph';
+import { ToolNode } from '@langchain/langgraph/prebuilt';
+import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
+import { ChatAnthropic } from '@langchain/anthropic';
+import { DynamicStructuredTool } from '@langchain/core/tools';
+import {
+  AIMessage, HumanMessage, SystemMessage, ToolMessage,
+  type BaseMessage,
+} from '@langchain/core/messages';
+import { z } from 'zod';
+
+// Invocação típica
+const result = await graph.invoke(
+  { messages: [new HumanMessage('Cliente fechou orçamento.')] },
+  {
+    configurable: { thread_id: `lead-${leadId}` },
+    recursionLimit: 25,   // trava do loop ReAct
+  },
+);</code></pre>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-3 text-sm">
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1">📚 Doc oficial</div>
+        <a href="https://docs.langchain.com/oss/javascript/langgraph/overview" target="_blank" rel="noopener" class="text-brand-300 hover:underline">docs.langchain.com/oss/javascript/langgraph</a>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1">🔎 API Reference</div>
+        <a href="https://reference.langchain.com/javascript/langchain-langgraph/" target="_blank" rel="noopener" class="text-brand-300 hover:underline">reference.langchain.com/javascript/langchain-langgraph</a>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1">💾 PostgresSaver</div>
+        <code class="inline">@langchain/langgraph-checkpoint-postgres</code>
+      </div>
+      <div class="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
+        <div class="text-zinc-200 font-medium mb-1">🤖 Provider Claude</div>
+        <code class="inline">@langchain/anthropic</code>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       ROADMAP
+  ============================================================ -->
+  <section id="roadmap" class="anchor-target mb-20">
+    <h2 class="text-2xl font-bold text-zinc-50 mb-2">Roadmap pós-MVP</h2>
+    <p class="text-zinc-400 mb-6">Próximos passos planejados.</p>
+
+    <ul class="space-y-2 text-sm">
+      <li class="flex items-start gap-3 p-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30">
+        <span class="w-1.5 h-1.5 rounded-full bg-brand-400 mt-2 shrink-0"></span>
+        <div><strong class="text-zinc-200">SSE / WebSocket</strong> para o detalhe do trace — eliminar polling.</div>
+      </li>
+      <li class="flex items-start gap-3 p-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30">
+        <span class="w-1.5 h-1.5 rounded-full bg-brand-400 mt-2 shrink-0"></span>
+        <div><strong class="text-zinc-200">Deduplicação</strong> por <code class="inline">X-Webhook-Id</code>.</div>
+      </li>
+      <li class="flex items-start gap-3 p-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30">
+        <span class="w-1.5 h-1.5 rounded-full bg-brand-400 mt-2 shrink-0"></span>
+        <div>Tool <strong class="text-zinc-200"><code class="inline">consultar_lead</code></strong> que enriquece o contexto antes da decisão.</div>
+      </li>
+      <li class="flex items-start gap-3 p-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30">
+        <span class="w-1.5 h-1.5 rounded-full bg-brand-400 mt-2 shrink-0"></span>
+        <div><strong class="text-zinc-200">Rate limit</strong> por IP no endpoint público.</div>
+      </li>
+      <li class="flex items-start gap-3 p-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30">
+        <span class="w-1.5 h-1.5 rounded-full bg-brand-400 mt-2 shrink-0"></span>
+        <div><strong class="text-zinc-200">Auth</strong> do dashboard (hoje é público — rode atrás de VPN).</div>
+      </li>
+      <li class="flex items-start gap-3 p-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30">
+        <span class="w-1.5 h-1.5 rounded-full bg-brand-400 mt-2 shrink-0"></span>
+        <div><strong class="text-zinc-200">Replay</strong> de trace — re-executar a partir de um checkpoint.</div>
+      </li>
+      <li class="flex items-start gap-3 p-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30">
+        <span class="w-1.5 h-1.5 rounded-full bg-brand-400 mt-2 shrink-0"></span>
+        <div>Métricas <strong class="text-zinc-200">Prometheus</strong> em <code class="inline">/metrics</code>.</div>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ============================================================
+       FOOTER
+  ============================================================ -->
+  <footer class="border-t border-zinc-800/80 pt-6 mt-16 mb-10 flex items-center justify-between text-xs text-zinc-600">
+    <span>Agente DT · v0.1.0 · MVP</span>
+    <span>Docs renderizadas localmente. Sem telemetria.</span>
+  </footer>
+
+  </main>
+</div>
+
+<!-- Prism.js -->
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-typescript.min.js"></script>
+
+<script>
+  // Copy-to-clipboard
+  document.querySelectorAll('[data-copy]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const pre = btn.parentElement.querySelector('pre code');
+      if (!pre) return;
+      navigator.clipboard.writeText(pre.innerText).then(() => {
+        const original = btn.innerText;
+        btn.classList.add('copied');
+        btn.innerText = 'Copiado!';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.innerText = original;
+        }, 1500);
+      });
+    });
+  });
+
+  // Active TOC link via IntersectionObserver
+  const tocLinks = document.querySelectorAll('.toc-link');
+  const sections = Array.from(document.querySelectorAll('section[id], h3[id]'));
+  const linkById = new Map();
+  tocLinks.forEach(l => {
+    const id = l.getAttribute('href').slice(1);
+    linkById.set(id, l);
+  });
+  const setActive = (id) => {
+    tocLinks.forEach(l => l.removeAttribute('aria-current'));
+    const link = linkById.get(id);
+    if (link) link.setAttribute('aria-current', 'true');
+  };
+  const observer = new IntersectionObserver((entries) => {
+    const visible = entries.filter(e => e.isIntersecting)
+      .sort((a, b) => a.target.getBoundingClientRect().top - b.target.getBoundingClientRect().top);
+    if (visible[0]) setActive(visible[0].target.id);
+  }, { rootMargin: '-80px 0px -60% 0px', threshold: 0 });
+  sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>

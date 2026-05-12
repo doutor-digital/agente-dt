@@ -1,0 +1,216 @@
+// ============================================================================
+// schema.prisma — Modelo de dados do Agente DT.
+//
+// LÓGICA DE ENGENHARIA
+// --------------------
+// Mantemos DUAS responsabilidades distintas nesta camada de persistência:
+//
+//  1. CHECKPOINTING do LangGraph (tabelas `checkpoints`, `checkpoint_writes`,
+//     `checkpoint_blobs`, `checkpoint_migrations`).
+//     Essas tabelas são gerenciadas pelo PostgresSaver
+//     (@langchain/langgraph-checkpoint-postgres). Quem cria/migra é a
+//     própria biblioteca via `await checkpointer.setup()` na inicialização.
+//     Aqui nós apenas DECLARAMOS o schema para que o Prisma Client conheça
+//     a forma das tabelas (permitindo introspecção e queries de leitura
+//     se necessário). Não geramos migrations Prisma para elas — o setup do
+//     LangGraph é a fonte da verdade.
+//
+//  2. OBSERVABILIDADE (`ExecutionTrace`, `ExecutionStep`).
+//     Aqui sim somos donos. Cada webhook recebido vira um ExecutionTrace.
+//     Cada nó/tool que o grafo executa vira um ExecutionStep filho.
+//     O dashboard React consome essa árvore para renderizar o feed estilo
+//     "AgentGPT Terminal".
+//
+// Por que separar Trace de Step?
+// - O Trace é o "envelope" da execução (lead_id, latência total, status).
+// - Os Steps são o "raciocínio" — cada passo do grafo (input, thinking,
+//   tool call, tool result, output). Renderizamos um por linha no console.
+//
+// Por que não usar somente o checkpoint do LangGraph?
+// - O checkpoint é otimizado para *retomada* de execução (binário/serializado).
+//   Não é navegável nem human-readable. Para UI usamos a tabela própria.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ExecutionTrace
+// ---------------------------------------------------------------------------
+// Um registro por webhook recebido. É a "execução de alto nível" do agente.
+// `threadId` é o mesmo identificador usado no PostgresSaver — permite cruzar
+// nossa tabela com o checkpoint do LangGraph quando precisamos depurar
+// estado de conversa.
+// ---------------------------------------------------------------------------
+model ExecutionTrace {
+  id           String          @id @default(cuid())
+  threadId     String          @map("thread_id")
+  leadId       String          @map("lead_id")
+  input        Json
+  iaDecision   Json?           @map("ia_decision")
+  latencyMs    Int?            @map("latency_ms")
+  status       TraceStatus     @default(RUNNING)
+  errorMessage String?         @map("error_message")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+
+  steps        ExecutionStep[]
+
+  @@index([threadId])
+  @@index([leadId])
+  @@index([createdAt(sort: Desc)])
+  @@map("execution_traces")
+}
+
+// ---------------------------------------------------------------------------
+// ExecutionStep
+// ---------------------------------------------------------------------------
+// Cada "linha" do feed visual do dashboard. Tipamos o `kind` para que o
+// frontend possa escolher ícone/cor sem parsear texto.
+//
+// `latencyMs` aqui é a duração do STEP isolado (não do trace inteiro).
+// `sequence` garante ordenação estável mesmo se dois steps escreverem no
+// mesmo milissegundo.
+// ---------------------------------------------------------------------------
+model ExecutionStep {
+  id         String         @id @default(cuid())
+  traceId    String         @map("trace_id")
+  sequence   Int
+  kind       StepKind
+  title      String
+  payload    Json?
+  latencyMs  Int?           @map("latency_ms")
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  trace      ExecutionTrace @relation(fields: [traceId], references: [id], onDelete: Cascade)
+
+  @@unique([traceId, sequence])
+  @@index([traceId])
+  @@map("execution_steps")
+}
+
+enum TraceStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+// Tipos de step renderizados no console "AgentGPT":
+//  WEBHOOK_RECEIVED — payload chegou
+//  THINKING         — LLM raciocinando (chamada ao modelo)
+//  TOOL_CALL        — agente decidiu chamar uma tool
+//  TOOL_RESULT      — tool respondeu
+//  KOMMO_ACTION     — ação efetivada no Kommo (addTag/moveStage)
+//  COMPLETED        — encerramento
+//  ERROR            — falha em algum nó
+enum StepKind {
+  WEBHOOK_RECEIVED
+  THINKING
+  TOOL_CALL
+  TOOL_RESULT
+  KOMMO_ACTION
+  COMPLETED
+  ERROR
+}
+
+// ---------------------------------------------------------------------------
+// Tabelas do PostgresSaver (LangGraph)
+// ---------------------------------------------------------------------------
+// Declaradas aqui apenas para visibilidade no Prisma Studio e queries
+// auxiliares. O `checkpointer.setup()` no boot do app é quem realmente
+// cria/migra essas tabelas. NÃO incluir em `prisma migrate dev`.
+//
+// Se quiser que o Prisma ignore essas tabelas em migrations, basta deixar
+// o `setup()` rodar primeiro e usar `prisma db pull` ao invés de migrate.
+// ---------------------------------------------------------------------------
+model Checkpoint {
+  threadId          String  @map("thread_id")
+  checkpointNs      String  @default("") @map("checkpoint_ns")
+  checkpointId      String  @map("checkpoint_id")
+  parentCheckpointId String? @map("parent_checkpoint_id")
+  type              String?
+  checkpoint        Bytes
+  metadata          Bytes
+
+  @@id([threadId, checkpointNs, checkpointId])
+  @@map("checkpoints")
+}
+
+model CheckpointWrite {
+  threadId     String @map("thread_id")
+  checkpointNs String @default("") @map("checkpoint_ns")
+  checkpointId String @map("checkpoint_id")
+  taskId       String @map("task_id")
+  idx          Int
+  channel      String
+  type         String?
+  value        Bytes?
+  taskPath     String @default("") @map("task_path")
+
+  @@id([threadId, checkpointNs, checkpointId, taskId, idx])
+  @@map("checkpoint_writes")
+}
+
+model CheckpointBlob {
+  threadId     String @map("thread_id")
+  checkpointNs String @default("") @map("checkpoint_ns")
+  channel      String
+  version      String
+  type         String
+  blob         Bytes?
+
+  @@id([threadId, checkpointNs, channel, version])
+  @@map("checkpoint_blobs")
+}
+
+// ---------------------------------------------------------------------------
+// AgentConfig
+// ---------------------------------------------------------------------------
+// Configuração runtime do agente — editável pelo dashboard.
+//
+// Mantemos UM registro ativo por vez (`isActive = true`). O graph.ts lê o
+// ativo no boot/invocação em vez de usar o SYSTEM_PROMPT hardcoded.
+//
+// Campos JSON:
+//
+//  - tools: array de configuração de cada tool registrada.
+//      [{ name: "aplicar_tag", enabled: true, description: "..." }, ...]
+//    O graph.ts FILTRA tools desabilitadas antes do bindTools, e SUBSTITUI
+//    a descrição da tool pela versão editada pelo usuário (a descrição é
+//    o "gatilho" — o que o LLM lê pra decidir quando chamar).
+//
+//  - workflow: array de regras declarativas que o agente recebe como
+//    contexto adicional no system prompt. Formato:
+//      [{ id, when: "string descrevendo gatilho",
+//         then: "string descrevendo ação esperada" }]
+//    Não SUBSTITUI o ReAct loop — funciona como guia.
+// ---------------------------------------------------------------------------
+model AgentConfig {
+  id           String   @id @default(cuid())
+  name         String   @default("default")
+  isActive     Boolean  @default(false) @map("is_active")
+
+  systemPrompt String   @map("system_prompt")
+
+  // [{ name, enabled, description }]
+  tools        Json     @default("[]")
+
+  // [{ id, when, then }]
+  workflow     Json     @default("[]")
+
+  model        String   @default("gpt-4o-mini")
+  temperature  Float    @default(0)
+  maxTokens    Int      @default(1024) @map("max_tokens")
+
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([isActive])
+  @@map("agent_configs")
+}
