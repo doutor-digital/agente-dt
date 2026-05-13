@@ -293,10 +293,13 @@ async function buildOpenAICard(unit: Unit, sinceDays: number): Promise<OpenAICar
   const spentUsd = monthSpentPlatform ?? monthSpentMeasured;
   const spentSource: 'platform' | 'measured' = monthSpentPlatform !== null ? 'platform' : 'measured';
 
-  const monthlyUsd = Number(unit.openaiMonthlyBudgetUsd);
-  const pctUsed = monthlyUsd > 0 ? (spentUsd / monthlyUsd) * 100 : 0;
-  const remainingUsd = Math.max(0, monthlyUsd - spentUsd);
-  const projectedMonthUsd = (spentUsd / daysIntoMonth) * 30;
+  // Number(Decimal) pode dar NaN se o Decimal vier estranho — fallback pra 0.
+  const monthlyUsdRaw = Number(unit.openaiMonthlyBudgetUsd);
+  const monthlyUsd = Number.isFinite(monthlyUsdRaw) ? monthlyUsdRaw : 0;
+  const safeSpentUsd = Number.isFinite(spentUsd) ? spentUsd : 0;
+  const pctUsed = monthlyUsd > 0 ? (safeSpentUsd / monthlyUsd) * 100 : 0;
+  const remainingUsd = Math.max(0, monthlyUsd - safeSpentUsd);
+  const projectedMonthUsd = daysIntoMonth > 0 ? (safeSpentUsd / daysIntoMonth) * 30 : 0;
 
   let budgetAlert: 'ok' | 'warning' | 'danger' | 'over' = 'ok';
   if (pctUsed >= 100) budgetAlert = 'over';
@@ -350,7 +353,7 @@ async function buildOpenAICard(unit: Unit, sinceDays: number): Promise<OpenAICar
     agentShare,
     budget: {
       monthlyUsd,
-      spentUsd,
+      spentUsd: safeSpentUsd,
       spentSource,
       pctUsed,
       remainingUsd,

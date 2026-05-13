@@ -49,14 +49,25 @@ import type {
   OpenAIIntegrationCard,
 } from '../types/api';
 
-const fmtUsd = (n: number): string => {
+// Coerção defensiva — Prisma Decimal vira string em alguns paths, e a OpenAI
+// API às vezes devolve campos numéricos faltando. `safeNum` normaliza tudo.
+const safeNum = (n: unknown, fallback = 0): number => {
+  if (n === null || n === undefined) return fallback;
+  const v = typeof n === 'number' ? n : Number(n);
+  return Number.isFinite(v) ? v : fallback;
+};
+
+const fmtUsd = (raw: unknown): string => {
+  const n = safeNum(raw);
   if (n === 0) return '$0,00';
   if (n < 0.01) return `$${n.toFixed(4)}`;
   if (n < 1) return `$${n.toFixed(3)}`;
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 };
 
-const fmtN = (n: number): string => n.toLocaleString('pt-BR');
+const fmtN = (raw: unknown): string => safeNum(raw).toLocaleString('pt-BR');
+
+const fmtPct = (raw: unknown, decimals = 1): string => `${safeNum(raw).toFixed(decimals)}%`;
 
 const statusColor = (s: CardStatus): { ring: string; text: string; bg: string; chip: string; label: string } => {
   switch (s) {
@@ -256,11 +267,11 @@ function OpenAICardView({ card }: { card: OpenAIIntegrationCard }) {
           subtitle={card.platform ? 'Dados reportados pela própria OpenAI' : 'Cadastre uma Admin Key pra ver os números reais'}
           icon={Wallet}
           tone={card.platform ? 'platform' : 'idle'}
-          spend={card.platform?.totalCostUsd ?? 0}
-          today={card.platform?.todayCostUsd ?? 0}
-          last7={card.platform?.last7DaysCostUsd ?? 0}
-          tokens={card.platform?.totalTokens ?? 0}
-          requests={card.platform?.numRequests ?? 0}
+          spend={safeNum(card.platform?.totalCostUsd)}
+          today={safeNum(card.platform?.todayCostUsd)}
+          last7={safeNum(card.platform?.last7DaysCostUsd)}
+          tokens={safeNum(card.platform?.totalTokens)}
+          requests={safeNum(card.platform?.numRequests)}
           available={!!card.platform}
         />
         <CostPanel
@@ -268,11 +279,11 @@ function OpenAICardView({ card }: { card: OpenAIIntegrationCard }) {
           subtitle="Tudo que passou pela nossa plataforma — sempre disponível"
           icon={Cpu}
           tone="measured"
-          spend={card.measured.totalCostUsd}
-          today={card.measured.todayCostUsd}
-          last7={card.measured.last7DaysCostUsd}
-          tokens={card.measured.totalTokens}
-          requests={card.measured.numCalls}
+          spend={safeNum(card.measured.totalCostUsd)}
+          today={safeNum(card.measured.todayCostUsd)}
+          last7={safeNum(card.measured.last7DaysCostUsd)}
+          tokens={safeNum(card.measured.totalTokens)}
+          requests={safeNum(card.measured.numCalls)}
           available
         />
       </div>
@@ -281,8 +292,8 @@ function OpenAICardView({ card }: { card: OpenAIIntegrationCard }) {
         <div className="px-5 py-3 bg-zinc-950/40 border-t border-zinc-800/60 text-[11px] text-zinc-400 flex items-center gap-3">
           <TrendingUp size={12} className="text-brand-400" />
           <span>
-            <span className="font-semibold text-zinc-200">{card.agentShare.percentOfCost.toFixed(1)}%</span> do gasto da sua conta
-            ChatGPT vem deste agente. ({card.agentShare.percentOfRequests.toFixed(1)}% das requisições.)
+            <span className="font-semibold text-zinc-200">{fmtPct(card.agentShare.percentOfCost)}</span> do gasto da sua conta
+            ChatGPT vem deste agente. ({fmtPct(card.agentShare.percentOfRequests)} das requisições.)
           </span>
         </div>
       )}
@@ -388,7 +399,12 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 function BudgetBlock({ card }: { card: OpenAIIntegrationCard }) {
   const b = card.budget;
-  const pct = Math.min(100, b.pctUsed);
+  const pctUsed = safeNum(b.pctUsed);
+  const monthlyUsd = safeNum(b.monthlyUsd);
+  const spentUsd = safeNum(b.spentUsd);
+  const remainingUsd = safeNum(b.remainingUsd);
+  const projectedMonthUsd = safeNum(b.projectedMonthUsd);
+  const pct = Math.min(100, pctUsed);
   const fillColor =
     b.alert === 'over' || b.alert === 'danger' ? 'bg-rose-500'
     : b.alert === 'warning' ? 'bg-amber-500'
@@ -413,7 +429,7 @@ function BudgetBlock({ card }: { card: OpenAIIntegrationCard }) {
             : 'bg-emerald-500/15 text-emerald-300',
           )}
         >
-          {b.pctUsed.toFixed(1)}%
+          {fmtPct(pctUsed)}
         </span>
       </div>
       <div className="relative h-3 rounded-full bg-zinc-800/60 overflow-hidden ring-1 ring-zinc-800">
@@ -426,10 +442,10 @@ function BudgetBlock({ card }: { card: OpenAIIntegrationCard }) {
         <div className="absolute top-0 left-[90%] w-px h-full bg-rose-500/40" />
       </div>
       <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
-        <Stat label="Gasto no mês" value={fmtUsd(b.spentUsd)} />
-        <Stat label="Limite" value={fmtUsd(b.monthlyUsd)} />
-        <Stat label="Restante" value={fmtUsd(b.remainingUsd)} />
-        <Stat label="Projeção fim do mês" value={fmtUsd(b.projectedMonthUsd)} />
+        <Stat label="Gasto no mês" value={fmtUsd(spentUsd)} />
+        <Stat label="Limite" value={fmtUsd(monthlyUsd)} />
+        <Stat label="Restante" value={fmtUsd(remainingUsd)} />
+        <Stat label="Projeção fim do mês" value={fmtUsd(projectedMonthUsd)} />
       </div>
       {b.alert === 'over' && (
         <div className="mt-2 text-xs text-rose-300 flex items-center gap-1.5">
@@ -462,15 +478,15 @@ function ModelBreakdown({ card }: { card: OpenAIIntegrationCard }) {
   const rows = useReal
     ? platformRows.map((p) => ({
         model: p.model,
-        tokens: p.inputTokens + p.outputTokens,
-        requests: p.numRequests,
-        costUsd: measuredRows.find((m) => m.model === p.model)?.costUsd ?? 0,
+        tokens: safeNum(p.inputTokens) + safeNum(p.outputTokens),
+        requests: safeNum(p.numRequests),
+        costUsd: safeNum(measuredRows.find((m) => m.model === p.model)?.costUsd),
       }))
     : measuredRows.map((m) => ({
         model: m.model,
-        tokens: m.totalTokens,
-        requests: m.calls,
-        costUsd: m.costUsd,
+        tokens: safeNum(m.totalTokens),
+        requests: safeNum(m.calls),
+        costUsd: safeNum(m.costUsd),
       }));
 
   if (rows.length === 0) {
@@ -522,8 +538,8 @@ function Timeline({ card }: { card: OpenAIIntegrationCard }) {
   if (dates.length === 0) return null;
 
   const points = dates.map((date) => {
-    const p = platformTl.find((x) => x.date === date)?.costUsd ?? 0;
-    const m = measuredTl.find((x) => x.date === date)?.costUsd ?? 0;
+    const p = safeNum(platformTl.find((x) => x.date === date)?.costUsd);
+    const m = safeNum(measuredTl.find((x) => x.date === date)?.costUsd);
     return { date, platform: p, measured: m };
   });
   const max = Math.max(0.001, ...points.map((p) => Math.max(p.platform, p.measured)));

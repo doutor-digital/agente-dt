@@ -68,7 +68,7 @@ export function NotificationsBadge() {
         {total > 0 && (
           <span
             className={clsx(
-              'absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] rounded-full text-[9px] font-bold flex items-center justify-center px-1',
+              'absolute -top-0.5 -right-0.5 min-w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center px-1',
               danger > 0 ? 'bg-rose-500 text-white' : 'bg-amber-500 text-black',
             )}
           >
@@ -78,7 +78,7 @@ export function NotificationsBadge() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-1 z-30 w-96 max-h-[500px] overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950/95 backdrop-blur shadow-2xl">
+        <div className="absolute right-0 mt-1 z-30 w-96 max-h-125 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950/95 backdrop-blur shadow-2xl">
           <div className="px-3 py-2 border-b border-zinc-800/80 text-[11px] uppercase tracking-wider text-zinc-500 flex items-center justify-between">
             <span>Notificações</span>
             <span>
