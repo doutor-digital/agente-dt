@@ -5,6 +5,8 @@ import type {
   AgentConfigResponse,
   ConversationDetail,
   ConversationSummary,
+  GlobalAlert,
+  IntegrationsResponse,
   LlmCallDetail,
   LlmCallSummary,
   Stats,
@@ -88,6 +90,23 @@ export const api = {
   async unitStats(id: string, days = 30): Promise<UnitStats> {
     const { data } = await http.get<UnitStats>(`/units/${id}/stats`, { params: { days } });
     return data;
+  },
+
+  // -------------------------------------------------------------------------
+  // Integrations + Alerts (Central de Integrações)
+  // -------------------------------------------------------------------------
+  async getIntegrations(unitId: string, days = 30): Promise<IntegrationsResponse> {
+    const { data } = await http.get<IntegrationsResponse>(`/units/${unitId}/integrations`, {
+      params: { days },
+      timeout: 30_000, // chama OpenAI Platform e Kommo, pode levar
+    });
+    return data;
+  },
+  async getAlerts(): Promise<GlobalAlert[]> {
+    const { data } = await http.get<{ alerts: GlobalAlert[] }>('/alerts', {
+      timeout: 30_000,
+    });
+    return data.alerts;
   },
 
   // -------------------------------------------------------------------------

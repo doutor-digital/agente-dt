@@ -35,6 +35,7 @@ import {
   listConversationsHandler,
   getConversationHandler,
 } from '../controllers/conversations.controller.js';
+import { getAlerts, getIntegrations } from '../controllers/integrations.controller.js';
 import { KommoService } from '../services/kommo.service.js';
 
 export const apiRouter = Router();
@@ -77,6 +78,12 @@ apiRouter.get('/units/:id', getUnitHandler);
 apiRouter.patch('/units/:id', updateUnitHandler);
 apiRouter.delete('/units/:id', deleteUnitHandler);
 apiRouter.get('/units/:id/stats', unitStatsHandler);
+apiRouter.get('/units/:id/integrations', getIntegrations);
+
+// ---------------------------------------------------------------------------
+// Alertas globais (todas as Units) — usado pelo badge no header.
+// ---------------------------------------------------------------------------
+apiRouter.get('/alerts', getAlerts);
 
 // ---------------------------------------------------------------------------
 // Health + endpoints de debug.

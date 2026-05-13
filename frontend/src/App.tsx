@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Building2, Cpu, MessageCircle, Settings, Terminal } from 'lucide-react';
+import { BookOpen, Building2, Cable, Cpu, MessageCircle, Settings, Terminal } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ExecutionTrace } from './components/ExecutionTrace';
 import { StatsHeader } from './components/StatsHeader';
@@ -8,6 +8,8 @@ import { ConversationsPanel } from './components/ConversationsPanel';
 import { LlmCallsPanel } from './components/LlmCallsPanel';
 import { UnitsPanel } from './components/UnitsPanel';
 import { UnitSelector } from './components/UnitSelector';
+import { IntegrationsPanel } from './components/IntegrationsPanel';
+import { NotificationsBadge } from './components/NotificationsBadge';
 import { UnitProvider, useUnit } from './context/UnitContext';
 import { usePolling } from './hooks/usePolling';
 import { api } from './lib/api';
@@ -25,7 +27,7 @@ import type { TraceDetail } from './types/api';
  *
  * O dropdown UnitSelector no topo filtra todas as views por unidade.
  */
-type Tab = 'traces' | 'conversations' | 'llm' | 'config' | 'units';
+type Tab = 'traces' | 'conversations' | 'llm' | 'integrations' | 'config' | 'units';
 
 export function App() {
   return (
@@ -43,6 +45,7 @@ function Shell() {
       {tab === 'traces' && <TracesView />}
       {tab === 'conversations' && <ConversationsPanel />}
       {tab === 'llm' && <LlmCallsPanel />}
+      {tab === 'integrations' && <IntegrationsPanel />}
       {tab === 'config' && <AgentConfigPanel />}
       {tab === 'units' && <UnitsPanel />}
     </div>
@@ -54,6 +57,7 @@ function TopNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
     { id: 'traces', label: 'Execuções', icon: Terminal },
     { id: 'conversations', label: 'Conversas', icon: MessageCircle },
     { id: 'llm', label: 'Chamadas IA', icon: Cpu },
+    { id: 'integrations', label: 'Integrações', icon: Cable },
     { id: 'config', label: 'Configuração', icon: Settings },
     { id: 'units', label: 'Unidades', icon: Building2 },
   ];
@@ -85,15 +89,18 @@ function TopNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
         </button>
       ))}
 
-      <a
-        href="/docs"
-        target="_blank"
-        rel="noopener"
-        className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60 ml-auto"
-      >
-        <BookOpen size={14} />
-        Documentação
-      </a>
+      <div className="ml-auto flex items-center gap-1">
+        <NotificationsBadge />
+        <a
+          href="/docs"
+          target="_blank"
+          rel="noopener"
+          className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60"
+        >
+          <BookOpen size={14} />
+          Documentação
+        </a>
+      </div>
     </div>
   );
 }

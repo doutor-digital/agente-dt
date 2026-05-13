@@ -97,10 +97,12 @@ export interface Unit {
   kommoSalesbotId: number | null;
   kommoReplyFieldId: number | null;
   openaiApiKey: string | null;
+  openaiAdminKey: string | null;
   openaiModel: string;
   openaiAssistantId: string | null;
   openaiTemperature: number;
   openaiMaxTokens: number;
+  openaiMonthlyBudgetUsd: number | string;
   metaPhoneNumberId: string | null;
   metaAccessToken: string | null;
   metaVerifyToken: string | null;
@@ -115,6 +117,101 @@ export type UnitInput = Partial<Omit<Unit, 'id' | 'createdAt' | 'updatedAt' | '_
   slug: string;
   name: string;
 };
+
+// ---------------------------------------------------------------------------
+// Integrations / Alerts
+// ---------------------------------------------------------------------------
+
+export type CardStatus = 'ok' | 'warning' | 'danger' | 'idle';
+
+export interface OpenAIIntegrationCard {
+  configured: boolean;
+  status: CardStatus;
+  apiKey: {
+    configured: boolean;
+    reachable: boolean | null;
+    modelCount: number | null;
+    sampleModels: string[];
+    error?: string;
+  };
+  adminKey: { configured: boolean; usable: boolean | null; error?: string };
+  assistantId: string | null;
+  model: string;
+  platform: null | {
+    sinceDays: number;
+    totalCostUsd: number;
+    todayCostUsd: number;
+    last7DaysCostUsd: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    numRequests: number;
+    byModel: Array<{ model: string; inputTokens: number; outputTokens: number; numRequests: number }>;
+    timeline: Array<{ date: string; costUsd: number; tokens: number; requests: number }>;
+    projects?: Array<{ id: string; name: string; status: string }>;
+  };
+  measured: {
+    sinceDays: number;
+    totalCostUsd: number;
+    last7DaysCostUsd: number;
+    todayCostUsd: number;
+    totalTokens: number;
+    numCalls: number;
+    byModel: Array<{ model: string; calls: number; totalTokens: number; costUsd: number }>;
+    timeline: Array<{ date: string; costUsd: number; tokens: number; calls: number }>;
+  };
+  agentShare: null | { percentOfRequests: number; percentOfCost: number };
+  budget: {
+    monthlyUsd: number;
+    spentUsd: number;
+    spentSource: 'platform' | 'measured';
+    pctUsed: number;
+    remainingUsd: number;
+    daysIntoMonth: number;
+    projectedMonthUsd: number;
+    alert: 'ok' | 'warning' | 'danger' | 'over';
+  };
+  alerts: string[];
+}
+
+export interface KommoIntegrationCard {
+  configured: boolean;
+  status: CardStatus;
+  subdomain: string | null;
+  reachable: boolean | null;
+  account: null | { id?: number; name?: string; subdomain?: string };
+  error?: string;
+  alerts: string[];
+}
+
+export interface MetaIntegrationCard {
+  configured: boolean;
+  status: CardStatus;
+  phoneNumberId: string | null;
+  hasAccessToken: boolean;
+  hasVerifyToken: boolean;
+  hasAppSecret: boolean;
+  webhookUrl: string;
+  alerts: string[];
+}
+
+export interface IntegrationsResponse {
+  unit: { id: string; slug: string; name: string };
+  generatedAt: string;
+  openai: OpenAIIntegrationCard;
+  kommo: KommoIntegrationCard;
+  meta: MetaIntegrationCard;
+  alerts: Array<{ severity: 'info' | 'warning' | 'danger'; integration: string; message: string }>;
+}
+
+export interface GlobalAlert {
+  unitId: string;
+  unitSlug: string;
+  unitName: string;
+  severity: 'warning' | 'danger';
+  integration: string;
+  message: string;
+}
 
 export interface UnitStats {
   sinceDays: number;

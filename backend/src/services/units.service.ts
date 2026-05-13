@@ -78,10 +78,12 @@ export interface UnitInput {
   kommoReplyFieldId?: number | null;
 
   openaiApiKey?: string | null;
+  openaiAdminKey?: string | null;
   openaiModel?: string;
   openaiAssistantId?: string | null;
   openaiTemperature?: number;
   openaiMaxTokens?: number;
+  openaiMonthlyBudgetUsd?: number;
 
   metaPhoneNumberId?: string | null;
   metaAccessToken?: string | null;
@@ -106,10 +108,12 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       kommoSalesbotId: input.kommoSalesbotId ?? null,
       kommoReplyFieldId: input.kommoReplyFieldId ?? null,
       openaiApiKey: input.openaiApiKey ?? null,
+      openaiAdminKey: input.openaiAdminKey ?? null,
       openaiModel: input.openaiModel ?? 'gpt-4o-mini',
       openaiAssistantId: input.openaiAssistantId ?? null,
       openaiTemperature: input.openaiTemperature ?? 0,
       openaiMaxTokens: input.openaiMaxTokens ?? 1024,
+      openaiMonthlyBudgetUsd: input.openaiMonthlyBudgetUsd ?? 50,
       metaPhoneNumberId: input.metaPhoneNumberId ?? null,
       metaAccessToken: input.metaAccessToken ?? null,
       metaVerifyToken: input.metaVerifyToken ?? null,
@@ -131,10 +135,12 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.kommoSalesbotId !== undefined && { kommoSalesbotId: input.kommoSalesbotId }),
       ...(input.kommoReplyFieldId !== undefined && { kommoReplyFieldId: input.kommoReplyFieldId }),
       ...(input.openaiApiKey !== undefined && { openaiApiKey: input.openaiApiKey }),
+      ...(input.openaiAdminKey !== undefined && { openaiAdminKey: input.openaiAdminKey }),
       ...(input.openaiModel !== undefined && { openaiModel: input.openaiModel }),
       ...(input.openaiAssistantId !== undefined && { openaiAssistantId: input.openaiAssistantId }),
       ...(input.openaiTemperature !== undefined && { openaiTemperature: input.openaiTemperature }),
       ...(input.openaiMaxTokens !== undefined && { openaiMaxTokens: input.openaiMaxTokens }),
+      ...(input.openaiMonthlyBudgetUsd !== undefined && { openaiMonthlyBudgetUsd: input.openaiMonthlyBudgetUsd }),
       ...(input.metaPhoneNumberId !== undefined && { metaPhoneNumberId: input.metaPhoneNumberId }),
       ...(input.metaAccessToken !== undefined && { metaAccessToken: input.metaAccessToken }),
       ...(input.metaVerifyToken !== undefined && { metaVerifyToken: input.metaVerifyToken }),
@@ -159,12 +165,14 @@ export function maskUnitSecrets<T extends Unit>(unit: T): T & { _hasSecrets: Rec
     ...unit,
     kommoAccessToken: mask(unit.kommoAccessToken),
     openaiApiKey: mask(unit.openaiApiKey),
+    openaiAdminKey: mask(unit.openaiAdminKey),
     metaAccessToken: mask(unit.metaAccessToken),
     metaAppSecret: mask(unit.metaAppSecret),
     metaVerifyToken: mask(unit.metaVerifyToken),
     _hasSecrets: {
       kommoAccessToken: !!unit.kommoAccessToken,
       openaiApiKey: !!unit.openaiApiKey,
+      openaiAdminKey: !!unit.openaiAdminKey,
       metaAccessToken: !!unit.metaAccessToken,
       metaAppSecret: !!unit.metaAppSecret,
       metaVerifyToken: !!unit.metaVerifyToken,

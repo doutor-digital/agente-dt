@@ -68,10 +68,16 @@ model Unit {
 
   // OpenAI — credenciais por unidade (cada uma com sua API key e assistant)
   openaiApiKey      String? @map("openai_api_key")
+  // Admin key (sk-admin-...) — usada pelos endpoints /v1/organization/*
+  // (costs, usage, projects). Opcional. Sem ela, o painel de Integrações
+  // mostra só os números MEDIDOS por nós (LlmCall) e o ping com /v1/models.
+  openaiAdminKey    String? @map("openai_admin_key")
   openaiModel       String  @default("gpt-4o-mini") @map("openai_model")
   openaiAssistantId String? @map("openai_assistant_id")
   openaiTemperature Float   @default(0) @map("openai_temperature")
   openaiMaxTokens   Int     @default(1024) @map("openai_max_tokens")
+  // Limite mensal em USD pra disparar alertas no painel.
+  openaiMonthlyBudgetUsd Decimal @default(50) @map("openai_monthly_budget_usd") @db.Decimal(10, 2)
 
   // Meta WhatsApp Cloud API
   metaPhoneNumberId String? @map("meta_phone_number_id")

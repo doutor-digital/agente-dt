@@ -25,10 +25,12 @@ const blankInput: UnitInput = {
   kommoSalesbotId: null,
   kommoReplyFieldId: null,
   openaiApiKey: '',
+  openaiAdminKey: '',
   openaiModel: 'gpt-4o-mini',
   openaiAssistantId: '',
   openaiTemperature: 0,
   openaiMaxTokens: 1024,
+  openaiMonthlyBudgetUsd: 50,
   metaPhoneNumberId: '',
   metaAccessToken: '',
   metaVerifyToken: '',
@@ -46,10 +48,12 @@ function unitToInput(u: Unit): UnitInput {
     kommoSalesbotId: u.kommoSalesbotId,
     kommoReplyFieldId: u.kommoReplyFieldId,
     openaiApiKey: u.openaiApiKey ?? '',
+    openaiAdminKey: u.openaiAdminKey ?? '',
     openaiModel: u.openaiModel,
     openaiAssistantId: u.openaiAssistantId ?? '',
     openaiTemperature: u.openaiTemperature,
     openaiMaxTokens: u.openaiMaxTokens,
+    openaiMonthlyBudgetUsd: Number(u.openaiMonthlyBudgetUsd ?? 50),
     metaPhoneNumberId: u.metaPhoneNumberId ?? '',
     metaAccessToken: u.metaAccessToken ?? '',
     metaVerifyToken: u.metaVerifyToken ?? '',
@@ -241,12 +245,20 @@ export function UnitsPanel() {
                 />
               </Section>
 
-              <Section title="OpenAI" subtitle="Cada unidade tem sua API key e Assistant.">
+              <Section title="OpenAI" subtitle="Cada unidade tem sua API key, Assistant e orçamento.">
                 <Field
-                  label="API Key"
+                  label="API Key (sk-proj-...)"
                   value={draft.openaiApiKey ?? ''}
                   onChange={(v) => setDraft({ ...draft, openaiApiKey: v })}
                   type="password"
+                  hint="Chave de projeto, usada nas chamadas de inferência."
+                />
+                <Field
+                  label="Admin Key (sk-admin-...) — opcional"
+                  value={draft.openaiAdminKey ?? ''}
+                  onChange={(v) => setDraft({ ...draft, openaiAdminKey: v })}
+                  type="password"
+                  hint="Habilita gastos REAIS da OpenAI no painel de Integrações (custos, projetos, usage)."
                 />
                 <Field
                   label="Modelo"
@@ -259,7 +271,7 @@ export function UnitsPanel() {
                   onChange={(v) => setDraft({ ...draft, openaiAssistantId: v })}
                   hint="Se preenchido, usa Assistants API ao invés de Chat Completions."
                 />
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <NumberField
                     label="Temperature"
                     value={draft.openaiTemperature ?? 0}
@@ -270,6 +282,13 @@ export function UnitsPanel() {
                     label="Max tokens"
                     value={draft.openaiMaxTokens ?? 1024}
                     onChange={(v) => setDraft({ ...draft, openaiMaxTokens: v })}
+                  />
+                  <NumberField
+                    label="Orçamento $USD/mês"
+                    value={Number(draft.openaiMonthlyBudgetUsd ?? 50)}
+                    onChange={(v) => setDraft({ ...draft, openaiMonthlyBudgetUsd: v })}
+                    step={1}
+                    allowZero
                   />
                 </div>
               </Section>
