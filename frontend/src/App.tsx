@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Building2, Cable, Cpu, MessageCircle, Settings, Terminal } from 'lucide-react';
+import { BookOpen, Building2, Cable, Cpu, MessageCircle, Settings, Sparkles, Terminal } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ExecutionTrace } from './components/ExecutionTrace';
 import { StatsHeader } from './components/StatsHeader';
 import { AgentConfigPanel } from './components/AgentConfigPanel';
 import { ConversationsPanel } from './components/ConversationsPanel';
 import { LlmCallsPanel } from './components/LlmCallsPanel';
+import { PromptsPanel } from './components/PromptsPanel';
 import { UnitsPanel } from './components/UnitsPanel';
 import { UnitSelector } from './components/UnitSelector';
 import { IntegrationsPanel } from './components/IntegrationsPanel';
@@ -27,7 +28,7 @@ import type { TraceDetail } from './types/api';
  *
  * O dropdown UnitSelector no topo filtra todas as views por unidade.
  */
-type Tab = 'traces' | 'conversations' | 'llm' | 'integrations' | 'config' | 'units';
+type Tab = 'traces' | 'conversations' | 'llm' | 'prompts' | 'integrations' | 'config' | 'units';
 
 export function App() {
   return (
@@ -45,6 +46,7 @@ function Shell() {
       {tab === 'traces' && <TracesView />}
       {tab === 'conversations' && <ConversationsPanel />}
       {tab === 'llm' && <LlmCallsPanel />}
+      {tab === 'prompts' && <PromptsPanel />}
       {tab === 'integrations' && <IntegrationsPanel />}
       {tab === 'config' && <AgentConfigPanel />}
       {tab === 'units' && <UnitsPanel />}
@@ -57,6 +59,7 @@ function TopNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
     { id: 'traces', label: 'Execuções', icon: Terminal },
     { id: 'conversations', label: 'Conversas', icon: MessageCircle },
     { id: 'llm', label: 'Chamadas IA', icon: Cpu },
+    { id: 'prompts', label: 'Prompts', icon: Sparkles },
     { id: 'integrations', label: 'Integrações', icon: Cable },
     { id: 'config', label: 'Configuração', icon: Settings },
     { id: 'units', label: 'Unidades', icon: Building2 },

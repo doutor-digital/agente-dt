@@ -96,6 +96,7 @@ export interface Unit {
   kommoAccessToken: string | null;
   kommoSalesbotId: number | null;
   kommoReplyFieldId: number | null;
+  kommoWonStatusIds: number[];
   openaiApiKey: string | null;
   openaiAdminKey: string | null;
   openaiModel: string;
@@ -309,6 +310,87 @@ export interface AgentConfigResponse {
   defaults: {
     systemPrompt: string;
     tools: ToolConfig[];
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Prompt performance / LLM-as-judge
+// ---------------------------------------------------------------------------
+
+export interface JudgeScores {
+  clareza: number;
+  empatia: number;
+  objecoes: number;
+  cta: number;
+  tom: number;
+}
+
+export interface JudgeCriterion {
+  key: keyof JudgeScores;
+  label: string;
+  desc: string;
+}
+
+export interface PromptPerformanceItem {
+  promptHash: string;
+  promptSnapshot: string;
+  conversions: number;
+  evaluations: number;
+  avgScores: JudgeScores;
+  avgOverall: number;
+  totalCostUsd: number;
+  firstSeen: string;
+  lastSeen: string;
+  topEvaluations: Array<{
+    conversationId: string;
+    leadId: string;
+    contactName: string | null;
+    convertedAt: string | null;
+    overallScore: number;
+    scores: JudgeScores;
+    verdict: string;
+  }>;
+}
+
+export interface PromptPerformanceResponse {
+  sinceDays: number;
+  totals: {
+    conversations: number;
+    converted: number;
+    evaluated: number;
+    pendingJudge: number;
+    conversionRate: number;
+  };
+  criteria: JudgeCriterion[];
+  prompts: PromptPerformanceItem[];
+}
+
+export interface ConversationEvaluationResponse {
+  evaluation: {
+    id: string;
+    conversationId: string;
+    unitId: string;
+    promptHash: string;
+    promptSnapshot: string;
+    model: string;
+    scores: JudgeScores;
+    overallScore: number;
+    verdict: string;
+    costUsd: number;
+    latencyMs: number;
+    createdAt: string;
+  };
+  criteria: JudgeCriterion[];
+}
+
+export interface OpenAIDebugResponse {
+  adminKey: { configured: boolean; preview?: string };
+  message?: string;
+  diagnosis?: { conclusion: string; severity: 'ok' | 'warning' | 'danger' };
+  calls?: {
+    costs: { path: string; ok: boolean; status: number | null; body: unknown; error?: string };
+    usage: { path: string; ok: boolean; status: number | null; body: unknown; error?: string };
+    projects: { path: string; ok: boolean; status: number | null; body: unknown; error?: string };
   };
 }
 

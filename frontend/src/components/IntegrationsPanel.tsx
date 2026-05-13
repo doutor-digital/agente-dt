@@ -167,7 +167,7 @@ export function IntegrationsPanel() {
             {data.alerts.length > 0 && <AlertsBanner alerts={data.alerts} />}
 
             {/* OpenAI — o card mais importante */}
-            <OpenAICardView card={data.openai} />
+            <OpenAICardView card={data.openai} unitId={data.unit.id} />
 
             {/* Linha com Kommo + Meta */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -234,7 +234,7 @@ function AlertLine({
 // CARD: OpenAI
 // ---------------------------------------------------------------------------
 
-function OpenAICardView({ card }: { card: OpenAIIntegrationCard }) {
+function OpenAICardView({ card, unitId }: { card: OpenAIIntegrationCard; unitId: string }) {
   const sc = statusColor(card.status);
 
   return (
@@ -306,7 +306,115 @@ function OpenAICardView({ card }: { card: OpenAIIntegrationCard }) {
 
       {/* Linha do tempo (sparkline simples) */}
       <Timeline card={card} />
+
+      {/* Diagnóstico da Admin Key — útil quando "platform" está vazio. */}
+      {card.adminKey.configured && (!card.platform || !card.adminKey.usable) && (
+        <AdminKeyDebug unitId={unitId} />
+      )}
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Diagnóstico cru do Admin Key.
+// Aparece quando a key está cadastrada mas não traz dados. Chama o
+// endpoint /openai-debug que devolve status HTTP + corpo bruto da OpenAI.
+// ---------------------------------------------------------------------------
+
+function AdminKeyDebug({ unitId }: { unitId: string }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<Awaited<ReturnType<typeof api.openaiDebug>> | null>(null);
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    setRunning(true);
+    setErr(null);
+    try {
+      const r = await api.openaiDebug(unitId);
+      setData(r);
+      setOpen(true);
+    } catch (e) {
+      const m = (e as { message?: string })?.message ?? 'erro';
+      setErr(m);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const sevColor =
+    data?.diagnosis?.severity === 'danger'
+      ? 'bg-rose-500/10 ring-rose-500/30 text-rose-200'
+      : data?.diagnosis?.severity === 'warning'
+        ? 'bg-amber-500/10 ring-amber-500/30 text-amber-200'
+        : 'bg-emerald-500/10 ring-emerald-500/30 text-emerald-200';
+
+  return (
+    <div className="px-5 py-4 border-t border-zinc-800/60 bg-zinc-950/30 space-y-3">
+      <div className="flex items-center gap-2">
+        <ShieldAlert size={14} className="text-amber-400" />
+        <span className="text-xs text-zinc-200 font-semibold">Diagnosticar Admin Key</span>
+        <span className="text-[10px] text-zinc-500">
+          A Admin Key está cadastrada mas a OpenAI não está devolvendo dados — rode pra descobrir o motivo.
+        </span>
+        <button
+          type="button"
+          onClick={run}
+          disabled={running}
+          className="ml-auto text-xs px-2 py-1 rounded ring-1 ring-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20 inline-flex items-center gap-1 disabled:opacity-50"
+        >
+          {running ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+          Rodar diagnóstico
+        </button>
+      </div>
+
+      {err && (
+        <div className="rounded ring-1 ring-rose-500/30 bg-rose-500/10 text-rose-200 text-xs px-3 py-2">
+          Falha no debug: {err}
+        </div>
+      )}
+
+      {open && data && (
+        <div className="space-y-3">
+          {data.diagnosis && (
+            <div className={clsx('rounded-md ring-1 px-3 py-2 text-xs', sevColor)}>
+              <div className="font-semibold uppercase tracking-wider text-[10px] mb-1">
+                {data.diagnosis.severity === 'danger' ? 'Problema detectado' : data.diagnosis.severity === 'warning' ? 'Atenção' : 'OK'}
+              </div>
+              {data.diagnosis.conclusion}
+            </div>
+          )}
+          {data.message && (
+            <div className="rounded-md ring-1 ring-zinc-700 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-300">
+              {data.message}
+            </div>
+          )}
+          {data.calls && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {(['costs', 'usage', 'projects'] as const).map((k) => {
+                const c = data.calls![k];
+                const okTone =
+                  c.status === null
+                    ? 'ring-zinc-700 text-zinc-400'
+                    : c.status >= 200 && c.status < 300
+                      ? 'ring-emerald-500/30 text-emerald-300'
+                      : 'ring-rose-500/30 text-rose-300';
+                return (
+                  <details key={k} className={clsx('rounded ring-1 bg-zinc-950/60', okTone)}>
+                    <summary className="cursor-pointer text-[11px] px-3 py-2 font-mono">
+                      {c.path} → {c.status ?? 'erro'}
+                    </summary>
+                    <pre className="text-[10px] text-zinc-400 px-3 pb-3 whitespace-pre-wrap max-h-72 overflow-auto">
+                      {c.error ? `error: ${c.error}` : JSON.stringify(c.body, null, 2)}
+                    </pre>
+                  </details>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

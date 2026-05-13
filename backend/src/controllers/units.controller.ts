@@ -40,6 +40,7 @@ const unitInputBase = {
   kommoAccessToken: z.string().nullable().optional(),
   kommoSalesbotId: z.coerce.number().int().nullable().optional(),
   kommoReplyFieldId: z.coerce.number().int().nullable().optional(),
+  kommoWonStatusIds: z.array(z.coerce.number().int()).optional(),
   openaiApiKey: z.string().nullable().optional(),
   openaiAdminKey: z.string().nullable().optional(),
   openaiModel: z.string().min(1).optional(),

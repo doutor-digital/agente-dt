@@ -65,6 +65,10 @@ model Unit {
   kommoAccessToken String? @map("kommo_access_token")
   kommoSalesbotId  Int?    @map("kommo_salesbot_id")
   kommoReplyFieldId Int?   @map("kommo_reply_field_id")
+  // Etapas do funil consideradas "Ganho/Convertido". Quando o webhook
+  // recebe leads.status com um id desta lista, marcamos a Conversation
+  // como convertida e disparamos o juiz LLM.
+  kommoWonStatusIds Int[]   @default([]) @map("kommo_won_status_ids")
 
   // OpenAI — credenciais por unidade (cada uma com sua API key e assistant)
   openaiApiKey      String? @map("openai_api_key")
@@ -194,12 +198,20 @@ model Conversation {
   lastMessageAt DateTime @default(now()) @map("last_message_at")
   createdAt   DateTime @default(now()) @map("created_at")
 
-  unit     Unit      @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  messages Message[]
+  // Marca de conversão. `convertedAt` é NULL enquanto o lead não entrou
+  // numa etapa de "Ganho". `convertedStatusId` é o status_id do Kommo
+  // no momento da conversão (1 lead pode ter mais de uma etapa "ganho").
+  convertedAt       DateTime? @map("converted_at")
+  convertedStatusId Int?      @map("converted_status_id")
+
+  unit         Unit                     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  messages     Message[]
+  evaluations  ConversationEvaluation[]
 
   @@unique([unitId, leadId])
   @@index([unitId])
   @@index([lastMessageAt(sort: Desc)])
+  @@index([convertedAt(sort: Desc)])
   @@map("conversations")
 }
 
@@ -257,6 +269,43 @@ model LlmCall {
   @@index([traceId])
   @@index([createdAt(sort: Desc)])
   @@map("llm_calls")
+}
+
+// ===========================================================================
+// ConversationEvaluation — LLM-as-judge sobre conversas convertidas.
+// ===========================================================================
+// Cada conversa convertida vira UMA avaliação (cacheamos — re-rodar custa
+// dinheiro). `promptHash` é sha256 do `Unit.systemPrompt` exato usado no
+// momento da conversão; é a CHAVE de agrupamento do painel "Prompts" —
+// mostra qual versão do prompt gerou quais conversões com que qualidade.
+//
+// `scores` é um JSON com critérios pontuados 0-10. Hoje:
+//   { clareza, empatia, objecoes, cta, tom, overall }
+// `verdict` é o resumo qualitativo curto (1-3 parágrafos).
+// `promptSnapshot` guarda o conteúdo do prompt no momento — assim mesmo
+// que o Unit.systemPrompt mude depois, conseguimos reconstruir a versão.
+// ===========================================================================
+model ConversationEvaluation {
+  id              String   @id @default(cuid())
+  conversationId  String   @map("conversation_id")
+  unitId          String   @map("unit_id")
+  promptHash      String   @map("prompt_hash")
+  promptSnapshot  String   @map("prompt_snapshot") @db.Text
+  model           String
+  scores          Json
+  overallScore    Float    @default(0) @map("overall_score")
+  verdict         String   @db.Text
+  costUsd         Decimal  @default(0) @map("cost_usd") @db.Decimal(12, 6)
+  latencyMs       Int      @default(0) @map("latency_ms")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId])
+  @@index([unitId])
+  @@index([promptHash])
+  @@index([createdAt(sort: Desc)])
+  @@map("conversation_evaluations")
 }
 
 // ===========================================================================

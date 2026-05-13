@@ -24,6 +24,7 @@ const blankInput: UnitInput = {
   kommoAccessToken: '',
   kommoSalesbotId: null,
   kommoReplyFieldId: null,
+  kommoWonStatusIds: [],
   openaiApiKey: '',
   openaiAdminKey: '',
   openaiModel: 'gpt-4o-mini',
@@ -47,6 +48,7 @@ function unitToInput(u: Unit): UnitInput {
     kommoAccessToken: u.kommoAccessToken ?? '',
     kommoSalesbotId: u.kommoSalesbotId,
     kommoReplyFieldId: u.kommoReplyFieldId,
+    kommoWonStatusIds: u.kommoWonStatusIds ?? [],
     openaiApiKey: u.openaiApiKey ?? '',
     openaiAdminKey: u.openaiAdminKey ?? '',
     openaiModel: u.openaiModel,
@@ -320,6 +322,20 @@ export function UnitsPanel() {
                     allowZero
                   />
                 </div>
+                <Field
+                  label="Status IDs de Conversão (Ganho)"
+                  value={(draft.kommoWonStatusIds ?? []).join(', ')}
+                  onChange={(v) =>
+                    setDraft({
+                      ...draft,
+                      kommoWonStatusIds: v
+                        .split(',')
+                        .map((s) => Number(s.trim()))
+                        .filter((n) => Number.isFinite(n) && n > 0),
+                    })
+                  }
+                  hint='IDs das etapas "Ganho/Convertido" do funil, separados por vírgula. Quando o lead entra numa dessas etapas, a conversa é marcada como convertida e o juiz LLM avalia o desempenho do prompt.'
+                />
               </Section>
 
               <Section title="Meta WhatsApp Cloud" subtitle="Opcional — habilita o canal Meta direto.">

@@ -4,11 +4,14 @@ import type {
   AgentConfigInput,
   AgentConfigResponse,
   ConversationDetail,
+  ConversationEvaluationResponse,
   ConversationSummary,
   GlobalAlert,
   IntegrationsResponse,
   LlmCallDetail,
   LlmCallSummary,
+  OpenAIDebugResponse,
+  PromptPerformanceResponse,
   Stats,
   TraceDetail,
   TraceSummary,
@@ -135,5 +138,36 @@ export const api = {
   async getConversation(id: string): Promise<ConversationDetail> {
     const { data } = await http.get<{ conversation: ConversationDetail }>(`/conversations/${id}`);
     return data.conversation;
+  },
+
+  // -------------------------------------------------------------------------
+  // Prompt performance / LLM-as-judge
+  // -------------------------------------------------------------------------
+  async getPromptPerformance(unitId: string, days = 90): Promise<PromptPerformanceResponse> {
+    const { data } = await http.get<PromptPerformanceResponse>(
+      `/units/${unitId}/prompt-performance`,
+      { params: { days }, timeout: 30_000 },
+    );
+    return data;
+  },
+  async getConversationEvaluation(conversationId: string): Promise<ConversationEvaluationResponse> {
+    const { data } = await http.get<ConversationEvaluationResponse>(
+      `/conversations/${conversationId}/evaluation`,
+    );
+    return data;
+  },
+  async reEvaluateConversation(conversationId: string): Promise<void> {
+    await http.post(`/conversations/${conversationId}/evaluate`, {}, { timeout: 60_000 });
+  },
+
+  // -------------------------------------------------------------------------
+  // Debug do Admin Key da OpenAI
+  // -------------------------------------------------------------------------
+  async openaiDebug(unitId: string): Promise<OpenAIDebugResponse> {
+    const { data } = await http.get<OpenAIDebugResponse>(
+      `/units/${unitId}/openai-debug`,
+      { timeout: 30_000 },
+    );
+    return data;
   },
 };

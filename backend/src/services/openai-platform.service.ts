@@ -384,3 +384,25 @@ export const OpenAIPlatform = {
   listProjects: (adminKey: string | null) =>
     cached(`projects:${adminKey ?? 'none'}`, () => listProjects(adminKey)),
 };
+
+// ---------------------------------------------------------------------------
+// rawAdminCall — variante de diagnóstico. Devolve status HTTP + corpo bruto
+// (não envelopado), pra rota de debug poder mostrar a resposta da OpenAI sem
+// transformação. Bypassa o cache.
+// ---------------------------------------------------------------------------
+
+export async function rawAdminCall(
+  adminKey: string | null,
+  path: string,
+  params: Record<string, unknown> = {},
+): Promise<{ ok: boolean; status: number | null; body: unknown; error?: string }> {
+  if (!adminKey) return { ok: false, status: null, body: null, error: 'sem admin key' };
+  try {
+    const http = buildClient(adminKey);
+    const res = await http.get(path, { params });
+    return { ok: res.status >= 200 && res.status < 300, status: res.status, body: res.data };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, status: null, body: null, error: msg };
+  }
+}

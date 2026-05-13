@@ -36,6 +36,12 @@ import {
   getConversationHandler,
 } from '../controllers/conversations.controller.js';
 import { getAlerts, getIntegrations } from '../controllers/integrations.controller.js';
+import {
+  getPromptPerformanceHandler,
+  getConversationEvaluationHandler,
+  reEvaluateConversationHandler,
+  openaiDebugHandler,
+} from '../controllers/prompts.controller.js';
 import { KommoService } from '../services/kommo.service.js';
 
 export const apiRouter = Router();
@@ -79,6 +85,12 @@ apiRouter.patch('/units/:id', updateUnitHandler);
 apiRouter.delete('/units/:id', deleteUnitHandler);
 apiRouter.get('/units/:id/stats', unitStatsHandler);
 apiRouter.get('/units/:id/integrations', getIntegrations);
+apiRouter.get('/units/:id/openai-debug', openaiDebugHandler);
+apiRouter.get('/units/:id/prompt-performance', getPromptPerformanceHandler);
+
+// Avaliação de uma conversa (LLM-as-judge).
+apiRouter.get('/conversations/:id/evaluation', getConversationEvaluationHandler);
+apiRouter.post('/conversations/:id/evaluate', reEvaluateConversationHandler);
 
 // ---------------------------------------------------------------------------
 // Alertas globais (todas as Units) — usado pelo badge no header.
