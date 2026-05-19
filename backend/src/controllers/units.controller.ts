@@ -382,13 +382,25 @@ export async function kommoValidateHandler(req: Request, res: Response): Promise
   }
 
   // 2) Salesbot.
+  // Algumas contas Kommo não expõem GET /salesbot/{id} via REST (mesma quirk
+  // da listagem). Tratamos 404 como "API indisponível, não bloqueante" — o
+  // disparo via POST /salesbot/{id}/run continua funcionando.
   if (unit.kommoSalesbotId) {
     try {
       const bot = await client.getSalesbot(unit.kommoSalesbotId);
       checks.push({ name: 'salesbot', ok: true, detail: `"${bot.name}" (#${bot.id})` });
     } catch (err) {
+      const status = err instanceof KommoApiError ? err.status : undefined;
       const msg = err instanceof KommoApiError ? `${err.status ?? '?'}: ${err.message}` : (err as Error).message;
-      checks.push({ name: 'salesbot', ok: false, detail: msg });
+      if (status === 404) {
+        checks.push({
+          name: 'salesbot',
+          ok: true,
+          detail: `ID #${unit.kommoSalesbotId} salvo. API de leitura indisponível nessa conta — verificação adiada pro disparo em runtime.`,
+        });
+      } else {
+        checks.push({ name: 'salesbot', ok: false, detail: msg });
+      }
     }
   } else {
     checks.push({ name: 'salesbot', ok: false, detail: 'kommoSalesbotId não configurado' });
