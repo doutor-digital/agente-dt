@@ -151,14 +151,14 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       payload: { model: modelName, msgCount: state.messages.length, unit: unit.slug },
     });
 
-    // Injeta o system na primeira chamada (depois vive no checkpoint).
-    // Usamos SystemMessage proper porque o instrumentador de LlmCall mapeia
-    // mensagens via m.getType() e um object literal quebraria.
-    const messages: BaseMessage[] = state.messages;
-    const hasSystem = messages.some((m) => m.getType() === 'system');
-    const finalMessages: BaseMessage[] = hasSystem
-      ? messages
-      : [new SystemMessage(systemPrompt), ...messages];
+    // SEMPRE usa o systemPrompt atual da Unit, NUNCA o que está no checkpoint.
+    // Se o usuário edita o prompt no painel, queremos que a próxima execução
+    // dessa Conversa já use a nova versão. Por isso filtramos qualquer
+    // SystemMessage antiga que o PostgresSaver tenha persistido e prependamos
+    // a atual. Sem isso, conversas existentes ficam presas no prompt antigo
+    // pra sempre.
+    const nonSystemMessages = state.messages.filter((m) => m.getType() !== 'system');
+    const finalMessages: BaseMessage[] = [new SystemMessage(systemPrompt), ...nonSystemMessages];
 
     const t0 = performance.now();
     const response = (await invokeChatModel({
