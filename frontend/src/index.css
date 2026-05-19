@@ -23,8 +23,28 @@
   --color-ink-700: #1f1f2e;
   --color-ink-600: #2a2a3d;
 
-  --font-display: "Inter", "system-ui", sans-serif;
-  --font-mono: "JetBrains Mono", "ui-monospace", "SFMono-Regular", monospace;
+  /* Tipografia:
+   *  - display  → Poppins, pra títulos e elementos de hierarquia visual
+   *  - body     → Open Sans, pra texto corrido (mais legível em parágrafos)
+   *  - mono     → JetBrains Mono, pra IDs, código, logs
+   *  font-sans é alias de body (Tailwind usa por padrão). */
+  --font-display: "Poppins", "Inter", "system-ui", sans-serif;
+  --font-body:    "Open Sans", "Inter", "system-ui", sans-serif;
+  --font-sans:    "Open Sans", "Inter", "system-ui", sans-serif;
+  --font-mono:    "JetBrains Mono", "ui-monospace", "SFMono-Regular", monospace;
+}
+
+/* Tipografia base — corpo em Open Sans, títulos em Poppins.
+ * Componentes individuais podem sobrescrever via classes Tailwind. */
+html, body {
+  font-family: var(--font-body);
+  font-feature-settings: "cv11", "ss01", "ss03"; /* Open Sans ligatures */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
 }
 
 /* Scrollbar discreta. */

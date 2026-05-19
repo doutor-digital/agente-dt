@@ -71,9 +71,9 @@ function TopNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   return (
     <div className="border-b border-zinc-800/80 bg-zinc-950/95 backdrop-blur flex items-center px-4 py-2 gap-1 shrink-0">
       <div className="flex items-center gap-2 pr-3 mr-2 border-r border-zinc-800/60">
-        <div className="w-2 h-2 rounded-full bg-brand-400" />
-        <span className="text-sm font-semibold text-zinc-100">Agente DT</span>
-        <span className="text-[10px] uppercase tracking-widest text-zinc-500">v0.2</span>
+        <div className="w-2 h-2 rounded-full bg-brand-400 shadow-[0_0_8px_rgba(124,77,255,0.6)]" />
+        <span className="text-sm font-display font-semibold text-zinc-100 tracking-tight">Agente DT</span>
+        <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-display font-medium">v0.2</span>
       </div>
 
       <UnitSelector />
