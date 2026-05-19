@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Building2, Cable, Cpu, MessageCircle, Settings, Sparkles, Terminal, Wand2 } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ExecutionTrace } from './components/ExecutionTrace';
 import { StatsHeader } from './components/StatsHeader';
@@ -8,10 +7,9 @@ import { ConversationsPanel } from './components/ConversationsPanel';
 import { LlmCallsPanel } from './components/LlmCallsPanel';
 import { PromptsPanel } from './components/PromptsPanel';
 import { UnitsPanel } from './components/UnitsPanel';
-import { UnitSelector } from './components/UnitSelector';
 import { IntegrationsPanel } from './components/IntegrationsPanel';
-import { NotificationsBadge } from './components/NotificationsBadge';
 import { WizardPanel } from './components/WizardPanel';
+import { AppSidebar, type AppTab } from './components/AppSidebar';
 import { UnitProvider, useUnit } from './context/UnitContext';
 import { usePolling } from './hooks/usePolling';
 import { api } from './lib/api';
@@ -29,8 +27,6 @@ import type { TraceDetail } from './types/api';
  *
  * O dropdown UnitSelector no topo filtra todas as views por unidade.
  */
-type Tab = 'traces' | 'conversations' | 'llm' | 'prompts' | 'integrations' | 'wizard' | 'config' | 'units';
-
 export function App() {
   return (
     <UnitProvider>
@@ -40,72 +36,35 @@ export function App() {
 }
 
 function Shell() {
-  const [tab, setTab] = useState<Tab>('traces');
+  const [tab, setTab] = useState<AppTab>('dashboard');
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-zinc-950 text-zinc-100">
-      <TopNav tab={tab} onChange={setTab} />
-      {tab === 'traces' && <TracesView />}
-      {tab === 'conversations' && <ConversationsPanel />}
-      {tab === 'llm' && <LlmCallsPanel />}
-      {tab === 'prompts' && <PromptsPanel />}
-      {tab === 'integrations' && <IntegrationsPanel />}
-      {tab === 'wizard' && <WizardPanel />}
-      {tab === 'config' && <AgentConfigPanel />}
-      {tab === 'units' && <UnitsPanel />}
+    <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
+      <AppSidebar tab={tab} onChange={setTab} />
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {tab === 'dashboard' && <DashboardPlaceholder />}
+        {tab === 'traces' && <TracesView />}
+        {tab === 'conversations' && <ConversationsPanel />}
+        {tab === 'llm' && <LlmCallsPanel />}
+        {tab === 'prompts' && <PromptsPanel />}
+        {tab === 'integrations' && <IntegrationsPanel />}
+        {tab === 'wizard' && <WizardPanel />}
+        {tab === 'config' && <AgentConfigPanel />}
+        {tab === 'units' && <UnitsPanel />}
+      </main>
     </div>
   );
 }
 
-function TopNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
-  const tabs: { id: Tab; label: string; icon: typeof Terminal }[] = [
-    { id: 'traces', label: 'Execuções', icon: Terminal },
-    { id: 'conversations', label: 'Conversas', icon: MessageCircle },
-    { id: 'llm', label: 'Chamadas IA', icon: Cpu },
-    { id: 'prompts', label: 'Prompts', icon: Sparkles },
-    { id: 'integrations', label: 'Integrações', icon: Cable },
-    { id: 'wizard', label: 'Configurar IA', icon: Wand2 },
-    { id: 'config', label: 'Avançado', icon: Settings },
-    { id: 'units', label: 'Unidades', icon: Building2 },
-  ];
-
+// Placeholder enquanto o Dashboard real (G+I) não é construído.
+// Em commit posterior será substituído pelo DashboardPanel.
+function DashboardPlaceholder() {
   return (
-    <div className="border-b border-zinc-800/80 bg-zinc-950/95 backdrop-blur flex items-center px-4 py-2 gap-1 shrink-0">
-      <div className="flex items-center gap-2 pr-3 mr-2 border-r border-zinc-800/60">
-        <div className="w-2 h-2 rounded-full bg-brand-400 shadow-[0_0_8px_rgba(124,77,255,0.6)]" />
-        <span className="text-sm font-display font-semibold text-zinc-100 tracking-tight">Agente DT</span>
-        <span className="text-[10px] uppercase tracking-widest text-zinc-500 font-display font-medium">v0.2</span>
-      </div>
-
-      <UnitSelector />
-
-      <div className="ml-2 mr-1 h-5 w-px bg-zinc-800/80" />
-
-      {tabs.map(({ id, label, icon: Icon }) => (
-        <button
-          key={id}
-          onClick={() => onChange(id)}
-          className={`inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-md transition-colors ${
-            tab === id
-              ? 'bg-brand-500/15 text-brand-200 ring-1 ring-brand-500/30'
-              : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60'
-          }`}
-        >
-          <Icon size={14} />
-          {label}
-        </button>
-      ))}
-
-      <div className="ml-auto flex items-center gap-1">
-        <NotificationsBadge />
-        <a
-          href="/docs"
-          target="_blank"
-          rel="noopener"
-          className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60"
-        >
-          <BookOpen size={14} />
-          Documentação
-        </a>
+    <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm p-8 text-center">
+      <div>
+        <div className="text-xs uppercase tracking-widest text-zinc-700 mb-2">Dashboard</div>
+        <div className="text-zinc-500">
+          KPIs executivos + funil — em construção. Por enquanto, navegue pelas seções da sidebar.
+        </div>
       </div>
     </div>
   );

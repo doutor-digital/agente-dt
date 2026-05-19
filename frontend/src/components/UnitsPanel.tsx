@@ -15,6 +15,7 @@ import clsx from 'clsx';
 import { api } from '../lib/api';
 import type { Unit, UnitInput } from '../types/api';
 import { useUnit } from '../context/UnitContext';
+import { useToast } from '../context/ToastContext';
 import { KommoExplorer } from './KommoExplorer';
 
 const blankInput: UnitInput = {
@@ -69,11 +70,11 @@ function unitToInput(u: Unit): UnitInput {
 
 export function UnitsPanel() {
   const { units, refresh, loading: ctxLoading } = useUnit();
+  const toast = useToast();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<UnitInput>(blankInput);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   useEffect(() => {
     if (!selectedId && units.length > 0) {
@@ -91,23 +92,22 @@ export function UnitsPanel() {
 
   async function handleSave() {
     setSaving(true);
-    setMsg(null);
     try {
       if (creating) {
         const created = await api.createUnit(draft);
         await refresh();
         setSelectedId(created.id);
-        setMsg({ kind: 'ok', text: 'Unidade criada' });
+        toast.success('Unidade criada');
       } else if (selectedId) {
         await api.updateUnit(selectedId, draft);
         await refresh();
-        setMsg({ kind: 'ok', text: 'Salvo' });
+        toast.success('Salvo');
       }
     } catch (err) {
       const e = err as { response?: { data?: { error?: string; issues?: unknown } }; message?: string };
       const code = e?.response?.data?.error;
-      setMsg({ kind: 'err', text: code ?? e?.message ?? 'erro' });
-      throw err; // re-lança pra callers (ex: botão dedicado dentro do KommoExplorer) saberem do erro
+      toast.error(code ?? e?.message ?? 'erro ao salvar');
+      throw err; // re-lança pra callers (ex: botão dedicado dentro do KommoExplorer)
     } finally {
       setSaving(false);
     }
@@ -121,10 +121,10 @@ export function UnitsPanel() {
       setSelectedId(null);
       setDraft(blankInput);
       await refresh();
-      setMsg({ kind: 'ok', text: 'Unidade apagada' });
+      toast.success('Unidade apagada');
     } catch (err) {
       const e = err as { message?: string };
-      setMsg({ kind: 'err', text: e?.message ?? 'erro' });
+      toast.error(e?.message ?? 'erro ao apagar');
     }
   }
 
@@ -198,16 +198,6 @@ export function UnitsPanel() {
               {creating ? 'Nova unidade' : selectedId ? draft.name || 'Sem nome' : 'Selecione uma unidade'}
             </h2>
             <div className="flex items-center gap-2">
-              {msg && (
-                <span
-                  className={clsx(
-                    'text-xs px-2 py-1 rounded',
-                    msg.kind === 'ok' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300',
-                  )}
-                >
-                  {msg.text}
-                </span>
-              )}
               {!creating && selectedId && (
                 <button
                   type="button"

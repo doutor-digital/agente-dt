@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertCircle,
-  Check,
   ChevronDown,
   ChevronRight,
   GitBranch,
@@ -28,6 +26,7 @@ import type {
   WorkflowRule,
 } from '../types/api';
 import { useUnit } from '../context/UnitContext';
+import { useToast } from '../context/ToastContext';
 
 /**
  * Painel de configuração do agente.
@@ -50,8 +49,8 @@ export function AgentConfigPanel() {
   const [loaded, setLoaded] = useState<AgentConfigResponse | null>(null);
   const [draft, setDraft] = useState<AgentConfigInput | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [openTools, setOpenTools] = useState<Record<string, boolean>>({});
+  const toast = useToast();
 
   // Tags + pipelines do Kommo da Unit corrente — popula os dropdowns das regras.
   // Buscados em paralelo no primeiro mount. Erro é silencioso (a regra cai pro
@@ -143,18 +142,15 @@ export function AgentConfigPanel() {
 
   const handleSave = async () => {
     setSaving(true);
-    setSaveMsg(null);
     try {
       const saved = await api.saveConfig({ ...draft, unitId: selectedUnitId });
       setLoaded({ ...loaded, config: saved });
-      setSaveMsg({ kind: 'ok', text: 'Configuração salva. O agente já vai usar na próxima execução.' });
+      toast.success('Configuração salva. O agente já vai usar na próxima execução.');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setSaveMsg({ kind: 'err', text: `Falha ao salvar: ${msg}` });
+      toast.error(`Falha ao salvar: ${msg}`);
     } finally {
       setSaving(false);
-      // Mensagem some sozinha depois de 4s.
-      setTimeout(() => setSaveMsg(null), 4000);
     }
   };
 
@@ -209,16 +205,6 @@ export function AgentConfigPanel() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {saveMsg && (
-              <div
-                className={`text-xs flex items-center gap-1.5 ${
-                  saveMsg.kind === 'ok' ? 'text-emerald-400' : 'text-rose-400'
-                }`}
-              >
-                {saveMsg.kind === 'ok' ? <Check size={14} /> : <AlertCircle size={14} />}
-                {saveMsg.text}
-              </div>
-            )}
             <button
               onClick={handleSave}
               disabled={!dirty || saving}

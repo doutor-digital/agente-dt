@@ -23,8 +23,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertCircle,
-  Check,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -44,6 +42,7 @@ import {
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
+import { useToast } from '../context/ToastContext';
 import type { KommoPipelinesResponse, Unit, UnitInput } from '../types/api';
 
 type WizardDraft = Pick<
@@ -119,11 +118,11 @@ function unitToDraft(u: Unit): WizardDraft {
 
 export function WizardPanel() {
   const { selectedUnitId } = useUnit();
+  const toast = useToast();
   const [unit, setUnit] = useState<Unit | null>(null);
   const [draft, setDraft] = useState<WizardDraft | null>(null);
   const [pipelines, setPipelines] = useState<KommoPipelinesResponse | null>(null);
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   useEffect(() => {
     if (!selectedUnitId) {
@@ -179,18 +178,16 @@ export function WizardPanel() {
 
   async function handleSave() {
     setSaving(true);
-    setMsg(null);
     try {
       const updated = await api.updateUnit(selectedUnitId!, draft as Partial<UnitInput>);
       setUnit(updated);
       setDraft(unitToDraft(updated));
-      setMsg({ kind: 'ok', text: 'Configuração salva. A IA já vai usar na próxima mensagem.' });
+      toast.success('Configuração salva. A IA já vai usar na próxima mensagem.');
     } catch (err) {
       const e = err as { message?: string };
-      setMsg({ kind: 'err', text: `Falha ao salvar: ${e?.message ?? 'erro'}` });
+      toast.error(`Falha ao salvar: ${e?.message ?? 'erro'}`);
     } finally {
       setSaving(false);
-      setTimeout(() => setMsg(null), 4000);
     }
   }
 
@@ -211,27 +208,14 @@ export function WizardPanel() {
               configurações na próxima mensagem.
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            {msg && (
-              <div
-                className={clsx(
-                  'text-xs flex items-center gap-1.5',
-                  msg.kind === 'ok' ? 'text-emerald-400' : 'text-rose-400',
-                )}
-              >
-                {msg.kind === 'ok' ? <Check size={14} /> : <AlertCircle size={14} />}
-                {msg.text}
-              </div>
-            )}
-            <button
-              onClick={handleSave}
-              disabled={!dirty || saving}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-500 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
-            >
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-              {saving ? 'Salvando…' : dirty ? 'Salvar alterações' : 'Salvo'}
-            </button>
-          </div>
+          <button
+            onClick={handleSave}
+            disabled={!dirty || saving}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-500 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors shadow-lg shadow-brand-500/20"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            {saving ? 'Salvando…' : dirty ? 'Salvar alterações' : 'Salvo'}
+          </button>
         </div>
 
         {/* 1. PERSONA */}
