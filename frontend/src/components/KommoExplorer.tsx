@@ -383,26 +383,29 @@ function QuickFillPanel(props: {
 
       <div className="grid grid-cols-2 gap-3">
         <QuickInput
-          label="Reply Field ID"
+          label='ID do campo "Resposta IA"'
           placeholder="ex: 1577998"
           value={props.replyFieldId}
           onChange={props.onReplyFieldChange}
+          hint="Campo de texto onde a IA escreve a resposta. O Salesbot lê e envia."
         />
         <QuickInput
-          label="Paused Field ID"
+          label='ID do campo "IA Pausada"'
           placeholder="ex: 1578230"
           value={props.pausedFieldId}
           onChange={props.onPausedFieldChange}
+          hint="Checkbox que, marcado, pausa a IA naquele lead."
         />
         <QuickInput
-          label="Salesbot ID"
+          label="ID do Salesbot"
           placeholder="ex: 44604"
           value={props.salesbotId}
           onChange={props.onSalesbotChange}
+          hint="Número do bot do Kommo que dispara a mensagem (via POST /salesbot/{id}/run)."
         />
         <div>
           <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">
-            Won Status IDs
+            IDs das etapas "Ganho"
           </label>
           <input
             type="text"
@@ -417,6 +420,9 @@ function QuickFillPanel(props: {
             placeholder="ex: 142 (separe por vírgula)"
             className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
           />
+          <div className="text-[10px] text-zinc-600 mt-1">
+            Etapas que contam como "lead convertido". Separe por vírgula se for mais de uma.
+          </div>
         </div>
       </div>
 
@@ -458,11 +464,13 @@ function QuickInput({
   value,
   onChange,
   placeholder,
+  hint,
 }: {
   label: string;
   value: number | null;
   onChange: (id: number | null) => void;
   placeholder?: string;
+  hint?: string;
 }) {
   return (
     <div>
@@ -478,6 +486,7 @@ function QuickInput({
         }}
         className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
       />
+      {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
     </div>
   );
 }
