@@ -11,6 +11,8 @@ import { IntegrationsPanel } from './components/IntegrationsPanel';
 import { WizardPanel } from './components/WizardPanel';
 import { AppSidebar, type AppTab } from './components/AppSidebar';
 import { DashboardPanel } from './components/DashboardPanel';
+import { OnboardingModal } from './components/OnboardingModal';
+import { Splash } from './components/Splash';
 import { UnitProvider, useUnit } from './context/UnitContext';
 import { usePolling } from './hooks/usePolling';
 import { api } from './lib/api';
@@ -37,7 +39,10 @@ export function App() {
 }
 
 function Shell() {
+  const { loading } = useUnit();
   const [tab, setTab] = useState<AppTab>('dashboard');
+  // Splash centralizada com a logo enquanto units carregam pela primeira vez.
+  if (loading) return <Splash />;
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
       <AppSidebar tab={tab} onChange={setTab} />
@@ -52,6 +57,7 @@ function Shell() {
         {tab === 'config' && <AgentConfigPanel />}
         {tab === 'units' && <UnitsPanel />}
       </main>
+      <OnboardingModal />
     </div>
   );
 }

@@ -73,10 +73,14 @@ export function AppSidebar({
 
   return (
     <aside className="w-60 shrink-0 border-r border-zinc-800/80 bg-ink-950 flex flex-col h-full">
-      {/* Brand */}
-      <div className="px-4 py-4 border-b border-zinc-800/60 flex items-center gap-2">
-        <div className="w-2.5 h-2.5 rounded-full bg-brand-400 shadow-[0_0_10px_rgba(124,77,255,0.7)]" />
-        <div className="flex-1">
+      {/* Brand com logo */}
+      <div className="px-4 py-4 border-b border-zinc-800/60 flex items-center gap-3">
+        <img
+          src="https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png"
+          alt="Agente DT"
+          className="w-10 h-10 object-contain shrink-0 drop-shadow-[0_0_8px_rgba(124,77,255,0.4)]"
+        />
+        <div className="flex-1 min-w-0">
           <div className="text-sm font-display font-bold text-zinc-100 tracking-tight leading-none">
             Agente DT
           </div>
