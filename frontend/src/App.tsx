@@ -12,7 +12,6 @@ import { WizardPanel } from './components/WizardPanel';
 import { AppSidebar, type AppTab } from './components/AppSidebar';
 import { DashboardPanel } from './components/DashboardPanel';
 import { OnboardingModal } from './components/OnboardingModal';
-import { Splash } from './components/Splash';
 import { UnitProvider, useUnit } from './context/UnitContext';
 import { usePolling } from './hooks/usePolling';
 import { api } from './lib/api';
@@ -39,10 +38,10 @@ export function App() {
 }
 
 function Shell() {
-  const { loading } = useUnit();
   const [tab, setTab] = useState<AppTab>('dashboard');
-  // Splash centralizada com a logo enquanto units carregam pela primeira vez.
-  if (loading) return <Splash />;
+  // App renderiza imediatamente — cada panel cuida do próprio loading state.
+  // (A Splash com logo continua disponível em ./components/Splash, mas não
+  // bloqueia mais o boot.)
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
       <AppSidebar tab={tab} onChange={setTab} />
