@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Building2, Cable, Cpu, MessageCircle, Settings, Sparkles, Terminal } from 'lucide-react';
+import { BookOpen, Building2, Cable, Cpu, MessageCircle, Settings, Sparkles, Terminal, Wand2 } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ExecutionTrace } from './components/ExecutionTrace';
 import { StatsHeader } from './components/StatsHeader';
@@ -11,6 +11,7 @@ import { UnitsPanel } from './components/UnitsPanel';
 import { UnitSelector } from './components/UnitSelector';
 import { IntegrationsPanel } from './components/IntegrationsPanel';
 import { NotificationsBadge } from './components/NotificationsBadge';
+import { WizardPanel } from './components/WizardPanel';
 import { UnitProvider, useUnit } from './context/UnitContext';
 import { usePolling } from './hooks/usePolling';
 import { api } from './lib/api';
@@ -28,7 +29,7 @@ import type { TraceDetail } from './types/api';
  *
  * O dropdown UnitSelector no topo filtra todas as views por unidade.
  */
-type Tab = 'traces' | 'conversations' | 'llm' | 'prompts' | 'integrations' | 'config' | 'units';
+type Tab = 'traces' | 'conversations' | 'llm' | 'prompts' | 'integrations' | 'wizard' | 'config' | 'units';
 
 export function App() {
   return (
@@ -48,6 +49,7 @@ function Shell() {
       {tab === 'llm' && <LlmCallsPanel />}
       {tab === 'prompts' && <PromptsPanel />}
       {tab === 'integrations' && <IntegrationsPanel />}
+      {tab === 'wizard' && <WizardPanel />}
       {tab === 'config' && <AgentConfigPanel />}
       {tab === 'units' && <UnitsPanel />}
     </div>
@@ -61,7 +63,8 @@ function TopNav({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
     { id: 'llm', label: 'Chamadas IA', icon: Cpu },
     { id: 'prompts', label: 'Prompts', icon: Sparkles },
     { id: 'integrations', label: 'Integrações', icon: Cable },
-    { id: 'config', label: 'Configuração', icon: Settings },
+    { id: 'wizard', label: 'Configurar IA', icon: Wand2 },
+    { id: 'config', label: 'Avançado', icon: Settings },
     { id: 'units', label: 'Unidades', icon: Building2 },
   ];
 

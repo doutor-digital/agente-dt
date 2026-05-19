@@ -93,6 +93,37 @@ export interface UnitInput {
   metaAppSecret?: string | null;
 
   systemPrompt?: string;
+
+  // Wizard fields
+  personaCompanyName?: string | null;
+  personaTone?: string | null;
+  personaGreeting?: string | null;
+
+  qualificationEnabled?: boolean;
+  qualificationHotTag?: string;
+  qualificationColdTag?: string;
+
+  handoffEnabled?: boolean;
+  handoffKeywords?: string[];
+
+  pipelineIntents?: Record<string, number> | null;
+
+  contactCollectionEnabled?: boolean;
+  contactCollectionAfterTurns?: number;
+
+  welcomeCouponEnabled?: boolean;
+  welcomeCouponMessage?: string | null;
+
+  businessHoursEnabled?: boolean;
+  businessHoursStart?: number;
+  businessHoursEnd?: number;
+  businessHoursDays?: string[];
+  businessHoursTimezone?: string;
+  outOfHoursMessage?: string | null;
+
+  followUpEnabled?: boolean;
+  followUpAfterHours?: number;
+  followUpMessage?: string | null;
 }
 
 export async function listUnits(): Promise<Unit[]> {
@@ -123,6 +154,29 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       metaVerifyToken: input.metaVerifyToken ?? null,
       metaAppSecret: input.metaAppSecret ?? null,
       systemPrompt: input.systemPrompt ?? '',
+      // Wizard
+      personaCompanyName: input.personaCompanyName ?? null,
+      personaTone: input.personaTone ?? null,
+      personaGreeting: input.personaGreeting ?? null,
+      qualificationEnabled: input.qualificationEnabled ?? false,
+      qualificationHotTag: input.qualificationHotTag ?? 'Quente',
+      qualificationColdTag: input.qualificationColdTag ?? 'Frio',
+      handoffEnabled: input.handoffEnabled ?? false,
+      handoffKeywords: input.handoffKeywords ?? [],
+      pipelineIntents: input.pipelineIntents ?? undefined,
+      contactCollectionEnabled: input.contactCollectionEnabled ?? false,
+      contactCollectionAfterTurns: input.contactCollectionAfterTurns ?? 3,
+      welcomeCouponEnabled: input.welcomeCouponEnabled ?? false,
+      welcomeCouponMessage: input.welcomeCouponMessage ?? null,
+      businessHoursEnabled: input.businessHoursEnabled ?? false,
+      businessHoursStart: input.businessHoursStart ?? 9,
+      businessHoursEnd: input.businessHoursEnd ?? 18,
+      businessHoursDays: input.businessHoursDays ?? ['mon', 'tue', 'wed', 'thu', 'fri'],
+      businessHoursTimezone: input.businessHoursTimezone ?? 'America/Sao_Paulo',
+      outOfHoursMessage: input.outOfHoursMessage ?? null,
+      followUpEnabled: input.followUpEnabled ?? false,
+      followUpAfterHours: input.followUpAfterHours ?? 24,
+      followUpMessage: input.followUpMessage ?? null,
     },
   });
 }
@@ -152,6 +206,28 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.metaVerifyToken !== undefined && { metaVerifyToken: input.metaVerifyToken }),
       ...(input.metaAppSecret !== undefined && { metaAppSecret: input.metaAppSecret }),
       ...(input.systemPrompt !== undefined && { systemPrompt: input.systemPrompt }),
+      ...(input.personaCompanyName !== undefined && { personaCompanyName: input.personaCompanyName }),
+      ...(input.personaTone !== undefined && { personaTone: input.personaTone }),
+      ...(input.personaGreeting !== undefined && { personaGreeting: input.personaGreeting }),
+      ...(input.qualificationEnabled !== undefined && { qualificationEnabled: input.qualificationEnabled }),
+      ...(input.qualificationHotTag !== undefined && { qualificationHotTag: input.qualificationHotTag }),
+      ...(input.qualificationColdTag !== undefined && { qualificationColdTag: input.qualificationColdTag }),
+      ...(input.handoffEnabled !== undefined && { handoffEnabled: input.handoffEnabled }),
+      ...(input.handoffKeywords !== undefined && { handoffKeywords: input.handoffKeywords }),
+      ...(input.pipelineIntents !== undefined && { pipelineIntents: input.pipelineIntents ?? undefined }),
+      ...(input.contactCollectionEnabled !== undefined && { contactCollectionEnabled: input.contactCollectionEnabled }),
+      ...(input.contactCollectionAfterTurns !== undefined && { contactCollectionAfterTurns: input.contactCollectionAfterTurns }),
+      ...(input.welcomeCouponEnabled !== undefined && { welcomeCouponEnabled: input.welcomeCouponEnabled }),
+      ...(input.welcomeCouponMessage !== undefined && { welcomeCouponMessage: input.welcomeCouponMessage }),
+      ...(input.businessHoursEnabled !== undefined && { businessHoursEnabled: input.businessHoursEnabled }),
+      ...(input.businessHoursStart !== undefined && { businessHoursStart: input.businessHoursStart }),
+      ...(input.businessHoursEnd !== undefined && { businessHoursEnd: input.businessHoursEnd }),
+      ...(input.businessHoursDays !== undefined && { businessHoursDays: input.businessHoursDays }),
+      ...(input.businessHoursTimezone !== undefined && { businessHoursTimezone: input.businessHoursTimezone }),
+      ...(input.outOfHoursMessage !== undefined && { outOfHoursMessage: input.outOfHoursMessage }),
+      ...(input.followUpEnabled !== undefined && { followUpEnabled: input.followUpEnabled }),
+      ...(input.followUpAfterHours !== undefined && { followUpAfterHours: input.followUpAfterHours }),
+      ...(input.followUpMessage !== undefined && { followUpMessage: input.followUpMessage }),
     },
   });
 }

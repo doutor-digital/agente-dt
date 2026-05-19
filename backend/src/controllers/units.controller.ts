@@ -55,6 +55,30 @@ const unitInputBase = {
   metaVerifyToken: z.string().nullable().optional(),
   metaAppSecret: z.string().nullable().optional(),
   systemPrompt: z.string().max(20_000).optional(),
+
+  // Wizard
+  personaCompanyName: z.string().max(200).nullable().optional(),
+  personaTone: z.enum(['casual', 'formal', 'friendly']).nullable().optional(),
+  personaGreeting: z.string().max(500).nullable().optional(),
+  qualificationEnabled: z.boolean().optional(),
+  qualificationHotTag: z.string().max(50).optional(),
+  qualificationColdTag: z.string().max(50).optional(),
+  handoffEnabled: z.boolean().optional(),
+  handoffKeywords: z.array(z.string().min(1).max(50)).max(50).optional(),
+  pipelineIntents: z.record(z.string(), z.coerce.number().int().positive()).nullable().optional(),
+  contactCollectionEnabled: z.boolean().optional(),
+  contactCollectionAfterTurns: z.coerce.number().int().min(1).max(20).optional(),
+  welcomeCouponEnabled: z.boolean().optional(),
+  welcomeCouponMessage: z.string().max(500).nullable().optional(),
+  businessHoursEnabled: z.boolean().optional(),
+  businessHoursStart: z.coerce.number().int().min(0).max(23).optional(),
+  businessHoursEnd: z.coerce.number().int().min(0).max(23).optional(),
+  businessHoursDays: z.array(z.enum(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'])).optional(),
+  businessHoursTimezone: z.string().max(64).optional(),
+  outOfHoursMessage: z.string().max(1000).nullable().optional(),
+  followUpEnabled: z.boolean().optional(),
+  followUpAfterHours: z.coerce.number().int().min(1).max(720).optional(),
+  followUpMessage: z.string().max(500).nullable().optional(),
 };
 
 const createSchema = z.object(unitInputBase);

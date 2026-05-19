@@ -21,6 +21,7 @@ import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
+import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
@@ -361,6 +362,38 @@ async function processAgent(args: {
   const { unit, leadId, traceId, humanMessage, chatId, talkId, contactId, isChatMessage, requestStart } = args;
   const recorder = new TraceRecorder(traceId, unit.id);
   await syncRecorderSequence(recorder, traceId);
+
+  // Guard: horário comercial. Se a Unit está fora do horário configurado,
+  // pulamos a LLM e mandamos a mensagem padrão de "fora do expediente" via
+  // Salesbot (mesma técnica de PATCH no campo Resposta IA).
+  const hours = checkBusinessHours(unit);
+  if (hours.enabled && !hours.isOpen && hours.outOfHoursMessage) {
+    try {
+      if (unit.kommoSalesbotId && unit.kommoReplyFieldId) {
+        const kommo = createKommoClient(unit);
+        await kommo.runSalesbot({
+          leadId,
+          salesbotId: unit.kommoSalesbotId,
+          replyFieldId: unit.kommoReplyFieldId,
+          text: hours.outOfHoursMessage,
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, leadId, unit: unit.slug }, 'erro ao enviar mensagem fora-horário');
+    }
+    await recorder.step({
+      kind: 'COMPLETED',
+      title: 'Fora do horário comercial — mensagem padrão enviada',
+      payload: { leadId, message: hours.outOfHoursMessage },
+    });
+    await recorder.finalize({
+      status: 'SUCCESS',
+      latencyMs: Math.round(performance.now() - requestStart),
+      iaDecision: '__out_of_hours__',
+    });
+    logger.info({ traceId, leadId, unit: unit.slug }, 'agente pulado (fora do horário comercial)');
+    return;
+  }
 
   // Guard: se operador humano marcou "IA Pausada", não invocamos o agente.
   // Verificação síncrona porque é 1 GET barato comparado ao custo da LLM.

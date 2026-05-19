@@ -1,0 +1,820 @@
+// ============================================================================
+// WizardPanel — Configuração "guiada" da IA pra leigos.
+//
+// LÓGICA DE ENGENHARIA
+// --------------------
+// Cada feature do agente (qualificação automática, handoff humano, horário
+// comercial, etc) tem um card aqui. Toggle pra ativar + inputs estruturados
+// pra config. Saved no Unit via PATCH. O backend (prompt-composer) lê os
+// campos e gera o systemPrompt automaticamente — usuário leigo não precisa
+// nem ver o prompt.
+//
+// 8 features:
+//   1. Persona (nome, tom, saudação)
+//   2. Auto-qualificação Quente/Frio
+//   3. Handoff humano por palavras-chave
+//   4. Pipeline por intenção
+//   5. Coleta de contato proativa
+//   6. Cupom de boas-vindas
+//   7. Horário comercial
+//   8. Follow-up
+// + 1 placeholder pra A/B (em construção)
+// ============================================================================
+
+import { useEffect, useMemo, useState } from 'react';
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Coffee,
+  Flame,
+  Gift,
+  Loader2,
+  MessageSquarePlus,
+  PhoneCall,
+  Repeat,
+  Save,
+  Sparkles,
+  TestTube,
+  UserCog,
+  Workflow as WorkflowIcon,
+} from 'lucide-react';
+import clsx from 'clsx';
+import { api } from '../lib/api';
+import { useUnit } from '../context/UnitContext';
+import type { KommoPipelinesResponse, Unit, UnitInput } from '../types/api';
+
+type WizardDraft = Pick<
+  Unit,
+  | 'personaCompanyName'
+  | 'personaTone'
+  | 'personaGreeting'
+  | 'qualificationEnabled'
+  | 'qualificationHotTag'
+  | 'qualificationColdTag'
+  | 'handoffEnabled'
+  | 'handoffKeywords'
+  | 'pipelineIntents'
+  | 'contactCollectionEnabled'
+  | 'contactCollectionAfterTurns'
+  | 'welcomeCouponEnabled'
+  | 'welcomeCouponMessage'
+  | 'businessHoursEnabled'
+  | 'businessHoursStart'
+  | 'businessHoursEnd'
+  | 'businessHoursDays'
+  | 'businessHoursTimezone'
+  | 'outOfHoursMessage'
+  | 'followUpEnabled'
+  | 'followUpAfterHours'
+  | 'followUpMessage'
+>;
+
+const DAYS: Array<{ id: string; label: string }> = [
+  { id: 'sun', label: 'Dom' },
+  { id: 'mon', label: 'Seg' },
+  { id: 'tue', label: 'Ter' },
+  { id: 'wed', label: 'Qua' },
+  { id: 'thu', label: 'Qui' },
+  { id: 'fri', label: 'Sex' },
+  { id: 'sat', label: 'Sáb' },
+];
+
+const INTENTS: Array<{ key: string; label: string }> = [
+  { key: 'asked_quote', label: 'Cliente pediu orçamento/preço' },
+  { key: 'confirmed_order', label: 'Cliente confirmou que vai comprar' },
+  { key: 'scheduled_meeting', label: 'Cliente agendou reunião/consulta' },
+  { key: 'paid', label: 'Cliente confirmou pagamento' },
+  { key: 'refused', label: 'Cliente recusou explicitamente' },
+];
+
+function unitToDraft(u: Unit): WizardDraft {
+  return {
+    personaCompanyName: u.personaCompanyName,
+    personaTone: u.personaTone,
+    personaGreeting: u.personaGreeting,
+    qualificationEnabled: u.qualificationEnabled,
+    qualificationHotTag: u.qualificationHotTag,
+    qualificationColdTag: u.qualificationColdTag,
+    handoffEnabled: u.handoffEnabled,
+    handoffKeywords: u.handoffKeywords,
+    pipelineIntents: u.pipelineIntents,
+    contactCollectionEnabled: u.contactCollectionEnabled,
+    contactCollectionAfterTurns: u.contactCollectionAfterTurns,
+    welcomeCouponEnabled: u.welcomeCouponEnabled,
+    welcomeCouponMessage: u.welcomeCouponMessage,
+    businessHoursEnabled: u.businessHoursEnabled,
+    businessHoursStart: u.businessHoursStart,
+    businessHoursEnd: u.businessHoursEnd,
+    businessHoursDays: u.businessHoursDays,
+    businessHoursTimezone: u.businessHoursTimezone,
+    outOfHoursMessage: u.outOfHoursMessage,
+    followUpEnabled: u.followUpEnabled,
+    followUpAfterHours: u.followUpAfterHours,
+    followUpMessage: u.followUpMessage,
+  };
+}
+
+export function WizardPanel() {
+  const { selectedUnitId } = useUnit();
+  const [unit, setUnit] = useState<Unit | null>(null);
+  const [draft, setDraft] = useState<WizardDraft | null>(null);
+  const [pipelines, setPipelines] = useState<KommoPipelinesResponse | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!selectedUnitId) {
+      setUnit(null);
+      setDraft(null);
+      setPipelines(null);
+      return;
+    }
+    let alive = true;
+    setUnit(null);
+    setDraft(null);
+    Promise.all([
+      api.getUnit(selectedUnitId),
+      api.kommoPipelines(selectedUnitId).catch(() => null),
+    ]).then(([u, p]) => {
+      if (!alive) return;
+      setUnit(u);
+      setDraft(unitToDraft(u));
+      setPipelines(p);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [selectedUnitId]);
+
+  const stages = useMemo(() => {
+    const out: Array<{ id: number; label: string }> = [];
+    for (const p of pipelines?.pipelines ?? []) {
+      if (p.isArchive) continue;
+      for (const s of p.statuses) out.push({ id: s.id, label: `${p.name} → ${s.name}` });
+    }
+    return out;
+  }, [pipelines]);
+
+  if (!selectedUnitId) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm">
+        Selecione uma unidade pra configurar a IA.
+      </div>
+    );
+  }
+
+  if (!unit || !draft) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-zinc-500">
+        <Loader2 className="animate-spin mr-2" size={18} />
+        Carregando…
+      </div>
+    );
+  }
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(unitToDraft(unit));
+
+  async function handleSave() {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const updated = await api.updateUnit(selectedUnitId!, draft as Partial<UnitInput>);
+      setUnit(updated);
+      setDraft(unitToDraft(updated));
+      setMsg({ kind: 'ok', text: 'Configuração salva. A IA já vai usar na próxima mensagem.' });
+    } catch (err) {
+      const e = err as { message?: string };
+      setMsg({ kind: 'err', text: `Falha ao salvar: ${e?.message ?? 'erro'}` });
+    } finally {
+      setSaving(false);
+      setTimeout(() => setMsg(null), 4000);
+    }
+  }
+
+  const update = (patch: Partial<WizardDraft>) => setDraft({ ...draft, ...patch });
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-4xl mx-auto p-6 space-y-4">
+        {/* Header sticky */}
+        <div className="flex items-center justify-between sticky top-0 bg-zinc-950/95 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
+          <div>
+            <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
+              <Sparkles size={18} className="text-brand-300" />
+              Configurar a IA
+            </h1>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Modo guiado: ative só o que quer, preencha os campos, e salve. A IA usa as novas
+              configurações na próxima mensagem.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {msg && (
+              <div
+                className={clsx(
+                  'text-xs flex items-center gap-1.5',
+                  msg.kind === 'ok' ? 'text-emerald-400' : 'text-rose-400',
+                )}
+              >
+                {msg.kind === 'ok' ? <Check size={14} /> : <AlertCircle size={14} />}
+                {msg.text}
+              </div>
+            )}
+            <button
+              onClick={handleSave}
+              disabled={!dirty || saving}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-500 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              {saving ? 'Salvando…' : dirty ? 'Salvar alterações' : 'Salvo'}
+            </button>
+          </div>
+        </div>
+
+        {/* 1. PERSONA */}
+        <FeatureCard
+          icon={<UserCog size={16} className="text-brand-300" />}
+          title="Persona da IA"
+          subtitle="Quem é o agente, como ele fala."
+          enabled
+          alwaysOn
+        >
+          <div className="grid md:grid-cols-2 gap-3">
+            <TextField
+              label="Nome da empresa"
+              value={draft.personaCompanyName ?? ''}
+              onChange={(v) => update({ personaCompanyName: v || null })}
+              placeholder="ex: HM Tecnologia"
+            />
+            <SelectField
+              label="Tom de voz"
+              value={draft.personaTone ?? ''}
+              onChange={(v) => update({ personaTone: (v || null) as WizardDraft['personaTone'] })}
+              options={[
+                { value: '', label: 'Equilibrado (padrão)' },
+                { value: 'friendly', label: '😊 Amigável e caloroso' },
+                { value: 'casual', label: '🤙 Descontraído' },
+                { value: 'formal', label: '🎩 Formal e profissional' },
+              ]}
+            />
+          </div>
+          <TextField
+            label="Saudação preferida (opcional)"
+            value={draft.personaGreeting ?? ''}
+            onChange={(v) => update({ personaGreeting: v || null })}
+            placeholder='ex: "Olá, tudo bem? Sou o assistente virtual da HM Tecnologia, em que posso te ajudar?"'
+          />
+        </FeatureCard>
+
+        {/* 2. AUTO-QUALIFICAÇÃO */}
+        <FeatureCard
+          icon={<Flame size={16} className="text-orange-400" />}
+          title="Auto-qualificação Quente/Frio"
+          subtitle="A IA aplica tags automaticamente conforme o interesse do cliente."
+          enabled={draft.qualificationEnabled}
+          onToggle={(v) => update({ qualificationEnabled: v })}
+        >
+          <p className="text-[11px] text-zinc-400 mb-2">
+            Quente: cliente demonstrou compra/urgência. Frio: cliente sem interesse ou pediu pra não
+            ser contatado.
+          </p>
+          <div className="grid md:grid-cols-2 gap-3">
+            <TextField
+              label="Tag pra leads quentes"
+              value={draft.qualificationHotTag}
+              onChange={(v) => update({ qualificationHotTag: v })}
+              placeholder="Quente"
+            />
+            <TextField
+              label="Tag pra leads frios"
+              value={draft.qualificationColdTag}
+              onChange={(v) => update({ qualificationColdTag: v })}
+              placeholder="Frio"
+            />
+          </div>
+        </FeatureCard>
+
+        {/* 3. HANDOFF HUMANO */}
+        <FeatureCard
+          icon={<PhoneCall size={16} className="text-rose-400" />}
+          title="Handoff humano automático"
+          subtitle="Quando o cliente usa certas palavras, a IA pausa e chama um humano."
+          enabled={draft.handoffEnabled}
+          onToggle={(v) => update({ handoffEnabled: v })}
+        >
+          <p className="text-[11px] text-zinc-400 mb-2">
+            Lista de palavras/frases. Se o cliente usar qualquer uma, a IA pausa imediatamente e
+            envia: "Vou chamar alguém da equipe pra te atender. Um instante 🙏".
+          </p>
+          <KeywordList
+            keywords={draft.handoffKeywords}
+            onChange={(kws) => update({ handoffKeywords: kws })}
+            placeholder="ex: humano, atendente, falar com pessoa"
+          />
+        </FeatureCard>
+
+        {/* 4. PIPELINE INTENTS */}
+        <FeatureCard
+          icon={<WorkflowIcon size={16} className="text-sky-400" />}
+          title="Pipeline automático por intenção"
+          subtitle="A IA move o lead de etapa baseado no que o cliente diz."
+          enabled={!!draft.pipelineIntents && Object.keys(draft.pipelineIntents).length > 0}
+          onToggle={(v) =>
+            update({ pipelineIntents: v ? draft.pipelineIntents ?? {} : null })
+          }
+        >
+          <p className="text-[11px] text-zinc-400 mb-3">
+            Pra cada intenção, escolha pra qual etapa do funil o lead deve ir.
+          </p>
+          {stages.length === 0 && (
+            <div className="text-[11px] text-amber-300 mb-2">
+              ⚠ Etapas não carregaram. Confira o token do Kommo na aba Unidades.
+            </div>
+          )}
+          <div className="space-y-2">
+            {INTENTS.map((intent) => {
+              const current = (draft.pipelineIntents ?? {})[intent.key] ?? null;
+              return (
+                <div key={intent.key} className="flex items-center gap-2">
+                  <span className="text-xs text-zinc-300 flex-1">{intent.label}</span>
+                  <select
+                    value={current ?? ''}
+                    onChange={(e) => {
+                      const id = e.target.value ? Number(e.target.value) : null;
+                      const next = { ...(draft.pipelineIntents ?? {}) };
+                      if (id) next[intent.key] = id;
+                      else delete next[intent.key];
+                      update({ pipelineIntents: Object.keys(next).length ? next : null });
+                    }}
+                    className="w-72 px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500"
+                  >
+                    <option value="">— não mover —</option>
+                    {stages.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+        </FeatureCard>
+
+        {/* 5. COLETA DE CONTATO */}
+        <FeatureCard
+          icon={<MessageSquarePlus size={16} className="text-emerald-400" />}
+          title="Coleta proativa de contato"
+          subtitle="Depois de N turnos, a IA pede email/telefone com naturalidade."
+          enabled={draft.contactCollectionEnabled}
+          onToggle={(v) => update({ contactCollectionEnabled: v })}
+        >
+          <div className="grid md:grid-cols-2 gap-3">
+            <NumberField
+              label="Pedir contato após quantos turnos?"
+              value={draft.contactCollectionAfterTurns}
+              onChange={(v) => update({ contactCollectionAfterTurns: Math.max(1, v) })}
+              min={1}
+              max={20}
+            />
+          </div>
+          <p className="text-[11px] text-zinc-500 mt-2">
+            Em ${draft.contactCollectionAfterTurns} turnos, a IA pergunta o email/WhatsApp uma vez,
+            só se ainda não tiver coletado.
+          </p>
+        </FeatureCard>
+
+        {/* 6. CUPOM */}
+        <FeatureCard
+          icon={<Gift size={16} className="text-pink-400" />}
+          title="Cupom de boas-vindas"
+          subtitle="Primeiro contato? A IA oferece um cupom."
+          enabled={draft.welcomeCouponEnabled}
+          onToggle={(v) => update({ welcomeCouponEnabled: v })}
+        >
+          <TextareaField
+            label="Mensagem do cupom"
+            value={draft.welcomeCouponMessage ?? ''}
+            onChange={(v) => update({ welcomeCouponMessage: v || null })}
+            placeholder='ex: "Como é seu primeiro contato, tem 10% de desconto no primeiro pedido — código BEMVINDO10"'
+            rows={2}
+          />
+        </FeatureCard>
+
+        {/* 7. HORÁRIO COMERCIAL */}
+        <FeatureCard
+          icon={<Clock size={16} className="text-amber-400" />}
+          title="Horário comercial"
+          subtitle="Fora desse intervalo, a IA não responde — manda uma mensagem padrão."
+          enabled={draft.businessHoursEnabled}
+          onToggle={(v) => update({ businessHoursEnabled: v })}
+        >
+          <div className="grid md:grid-cols-3 gap-3">
+            <NumberField
+              label="Início (0-23)"
+              value={draft.businessHoursStart}
+              onChange={(v) => update({ businessHoursStart: Math.min(23, Math.max(0, v)) })}
+              min={0}
+              max={23}
+            />
+            <NumberField
+              label="Fim (0-23)"
+              value={draft.businessHoursEnd}
+              onChange={(v) => update({ businessHoursEnd: Math.min(23, Math.max(0, v)) })}
+              min={0}
+              max={23}
+            />
+            <TextField
+              label="Fuso"
+              value={draft.businessHoursTimezone}
+              onChange={(v) => update({ businessHoursTimezone: v })}
+              placeholder="America/Sao_Paulo"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+              Dias da semana
+            </label>
+            <div className="flex flex-wrap gap-1">
+              {DAYS.map((d) => {
+                const checked = draft.businessHoursDays.includes(d.id);
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => {
+                      const next = checked
+                        ? draft.businessHoursDays.filter((x) => x !== d.id)
+                        : [...draft.businessHoursDays, d.id];
+                      update({ businessHoursDays: next });
+                    }}
+                    className={clsx(
+                      'px-2.5 py-1 rounded-md text-xs transition',
+                      checked
+                        ? 'bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/40'
+                        : 'bg-zinc-900 text-zinc-500 ring-1 ring-zinc-800 hover:text-zinc-300',
+                    )}
+                  >
+                    {d.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <TextareaField
+            label="Mensagem fora do horário"
+            value={draft.outOfHoursMessage ?? ''}
+            onChange={(v) => update({ outOfHoursMessage: v || null })}
+            placeholder='ex: "Oi! Estamos atendendo de segunda a sexta, das 9h às 18h. Te respondemos amanhã cedo 🙏"'
+            rows={2}
+          />
+        </FeatureCard>
+
+        {/* 8. FOLLOW-UP */}
+        <FeatureCard
+          icon={<Repeat size={16} className="text-violet-400" />}
+          title="Follow-up educado"
+          subtitle="A IA termina conversas inacabadas com um follow-up cordial."
+          enabled={draft.followUpEnabled}
+          onToggle={(v) => update({ followUpEnabled: v })}
+        >
+          <p className="text-[11px] text-amber-300/80 mb-2">
+            ⚠ Versão atual: a IA só MENCIONA follow-up no fim da conversa (ex: "Te chamo amanhã").
+            O envio agendado automático ainda está em construção.
+          </p>
+          <div className="grid md:grid-cols-2 gap-3">
+            <NumberField
+              label="Voltar a falar após quantas horas?"
+              value={draft.followUpAfterHours}
+              onChange={(v) => update({ followUpAfterHours: Math.max(1, v) })}
+              min={1}
+              max={168}
+            />
+          </div>
+          <TextareaField
+            label="Mensagem de follow-up"
+            value={draft.followUpMessage ?? ''}
+            onChange={(v) => update({ followUpMessage: v || null })}
+            placeholder='ex: "Sem pressão! Te chamo amanhã pra ver se posso ajudar em algo, tá bom?"'
+            rows={2}
+          />
+        </FeatureCard>
+
+        {/* 9. A/B PROMPTS (placeholder) */}
+        <FeatureCard
+          icon={<TestTube size={16} className="text-zinc-500" />}
+          title="A/B test de prompts"
+          subtitle="Compare versões do prompt e veja qual converte mais."
+          enabled={false}
+          disabled
+          comingSoonNote="Em construção. O juiz LLM já existe (veja a aba Prompts) — falta linkar versões a conversas."
+        >
+          <div className="text-[11px] text-zinc-500">
+            Quando ativada, esta feature vai permitir manter 2+ versões do prompt em paralelo,
+            distribuir tráfego entre elas, e usar o juiz LLM existente pra comparar performance.
+          </div>
+        </FeatureCard>
+
+        {/* Café no fim */}
+        <div className="text-center text-zinc-700 text-xs py-4 flex items-center justify-center gap-2">
+          <Coffee size={12} />
+          Configurado tudo? Clica em "Salvar alterações" no topo.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Subcomponentes
+// ---------------------------------------------------------------------------
+
+function FeatureCard({
+  icon,
+  title,
+  subtitle,
+  enabled,
+  onToggle,
+  alwaysOn,
+  disabled,
+  comingSoonNote,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  enabled: boolean;
+  onToggle?: (v: boolean) => void;
+  alwaysOn?: boolean;
+  disabled?: boolean;
+  comingSoonNote?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(enabled || !!alwaysOn);
+  useEffect(() => {
+    if (enabled || alwaysOn) setOpen(true);
+  }, [enabled, alwaysOn]);
+
+  return (
+    <section
+      className={clsx(
+        'rounded-xl border transition-colors',
+        disabled
+          ? 'border-zinc-800/60 bg-zinc-950/30 opacity-70'
+          : enabled || alwaysOn
+            ? 'border-brand-500/30 bg-brand-500/5'
+            : 'border-zinc-800 bg-zinc-900/40',
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-3 p-4 text-left"
+        disabled={disabled}
+      >
+        <div className="shrink-0">{icon}</div>
+        <div className="flex-1">
+          <div className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+            {title}
+            {comingSoonNote && (
+              <span className="text-[9px] uppercase tracking-wider bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded">
+                em breve
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-0.5">{subtitle}</div>
+        </div>
+        {!alwaysOn && !disabled && onToggle && (
+          <div onClick={(e) => e.stopPropagation()}>
+            <Toggle value={enabled} onChange={onToggle} />
+          </div>
+        )}
+        {(open || alwaysOn) ? (
+          <ChevronDown size={14} className="text-zinc-600" />
+        ) : (
+          <ChevronRight size={14} className="text-zinc-600" />
+        )}
+      </button>
+      {(open || alwaysOn) && (enabled || alwaysOn || disabled) && (
+        <div className="px-4 pb-4 pt-1 space-y-3 border-t border-zinc-800/40">
+          {comingSoonNote && (
+            <div className="text-[11px] text-zinc-500 italic">{comingSoonNote}</div>
+          )}
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!value)}
+      className={clsx(
+        'relative inline-flex h-5 w-9 items-center rounded-full transition',
+        value ? 'bg-brand-500' : 'bg-zinc-700',
+      )}
+    >
+      <span
+        className={clsx(
+          'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition',
+          value ? 'translate-x-5' : 'translate-x-1',
+        )}
+      />
+    </button>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+        {label}
+      </label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500"
+      />
+    </div>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+}) {
+  return (
+    <div>
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+        {label}
+      </label>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 font-mono focus:outline-none focus:border-brand-500"
+      />
+    </div>
+  );
+}
+
+function TextareaField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  rows = 3,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  rows?: number;
+}) {
+  return (
+    <div>
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+        {label}
+      </label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={rows}
+        className="w-full px-3 py-2 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500 resize-vertical"
+      />
+    </div>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <div>
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+        {label}
+      </label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function KeywordList({
+  keywords,
+  onChange,
+  placeholder,
+}: {
+  keywords: string[];
+  onChange: (kws: string[]) => void;
+  placeholder?: string;
+}) {
+  const [input, setInput] = useState('');
+
+  function commit() {
+    const v = input.trim();
+    if (!v) return;
+    if (keywords.includes(v)) {
+      setInput('');
+      return;
+    }
+    onChange([...keywords, v]);
+    setInput('');
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {keywords.length === 0 && (
+          <span className="text-[11px] text-zinc-600 italic">Nenhuma palavra cadastrada ainda.</span>
+        )}
+        {keywords.map((kw) => (
+          <span
+            key={kw}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-200 text-xs ring-1 ring-rose-500/30"
+          >
+            {kw}
+            <button
+              type="button"
+              onClick={() => onChange(keywords.filter((x) => x !== kw))}
+              className="text-rose-300 hover:text-rose-100"
+              title="Remover"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commit();
+            }
+          }}
+          placeholder={placeholder}
+          className="flex-1 px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500"
+        />
+        <button
+          type="button"
+          onClick={commit}
+          disabled={!input.trim()}
+          className="px-3 py-1.5 rounded-md bg-zinc-800 text-xs text-zinc-200 hover:bg-zinc-700 disabled:opacity-50"
+        >
+          Adicionar
+        </button>
+      </div>
+    </div>
+  );
+}

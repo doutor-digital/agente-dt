@@ -110,6 +110,31 @@ export interface Unit {
   metaVerifyToken: string | null;
   metaAppSecret: string | null;
   systemPrompt: string;
+
+  // Wizard fields
+  personaCompanyName: string | null;
+  personaTone: 'casual' | 'formal' | 'friendly' | null;
+  personaGreeting: string | null;
+  qualificationEnabled: boolean;
+  qualificationHotTag: string;
+  qualificationColdTag: string;
+  handoffEnabled: boolean;
+  handoffKeywords: string[];
+  pipelineIntents: Record<string, number> | null;
+  contactCollectionEnabled: boolean;
+  contactCollectionAfterTurns: number;
+  welcomeCouponEnabled: boolean;
+  welcomeCouponMessage: string | null;
+  businessHoursEnabled: boolean;
+  businessHoursStart: number;
+  businessHoursEnd: number;
+  businessHoursDays: string[];
+  businessHoursTimezone: string;
+  outOfHoursMessage: string | null;
+  followUpEnabled: boolean;
+  followUpAfterHours: number;
+  followUpMessage: string | null;
+
   createdAt: string;
   updatedAt: string;
   _hasSecrets?: Record<string, boolean>;

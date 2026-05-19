@@ -94,7 +94,53 @@ model Unit {
   metaAppSecret     String? @map("meta_app_secret")
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
+  // É o "base prompt" do leigo — concatenamos com os blocos das features
+  // (qualificação, handoff, etc) na hora de gerar o prompt efetivo.
   systemPrompt String @default("") @map("system_prompt")
+
+  // -------------------------------------------------------------------------
+  // Wizard de configuração (features para leigos editarem sem mexer no prompt).
+  // O `prompt-composer` lê esses campos e gera o systemPrompt final em runtime.
+  // -------------------------------------------------------------------------
+
+  // PERSONA — quem a IA está representando.
+  personaCompanyName String? @map("persona_company_name")
+  personaTone        String? @map("persona_tone")          // "casual" | "formal" | "friendly"
+  personaGreeting    String? @map("persona_greeting")
+
+  // AUTO-QUALIFICAÇÃO (Quente/Frio).
+  qualificationEnabled  Boolean @default(false) @map("qualification_enabled")
+  qualificationHotTag   String  @default("Quente") @map("qualification_hot_tag")
+  qualificationColdTag  String  @default("Frio") @map("qualification_cold_tag")
+
+  // HANDOFF — palavras que disparam pausar_ia automaticamente.
+  handoffEnabled  Boolean  @default(false) @map("handoff_enabled")
+  handoffKeywords String[] @default([]) @map("handoff_keywords")
+
+  // PIPELINE INTENTS — mapa intent -> statusId.
+  // Formato JSON: { "asked_quote": 105414495, "confirmed_order": 105414499, ... }
+  pipelineIntents Json? @map("pipeline_intents")
+
+  // COLETA DE CONTATO — quando perguntar contato proativamente.
+  contactCollectionEnabled    Boolean @default(false) @map("contact_collection_enabled")
+  contactCollectionAfterTurns Int     @default(3) @map("contact_collection_after_turns")
+
+  // CUPOM DE BOAS-VINDAS — primeira mensagem do lead recebe cupom.
+  welcomeCouponEnabled Boolean @default(false) @map("welcome_coupon_enabled")
+  welcomeCouponMessage String? @map("welcome_coupon_message")
+
+  // HORÁRIO COMERCIAL — fora desse intervalo, IA responde mensagem padrão.
+  businessHoursEnabled  Boolean  @default(false) @map("business_hours_enabled")
+  businessHoursStart    Int      @default(9) @map("business_hours_start")   // 0-23
+  businessHoursEnd      Int      @default(18) @map("business_hours_end")    // 0-23
+  businessHoursDays     String[] @default(["mon","tue","wed","thu","fri"]) @map("business_hours_days")
+  businessHoursTimezone String   @default("America/Sao_Paulo") @map("business_hours_timezone")
+  outOfHoursMessage     String?  @map("out_of_hours_message")
+
+  // FOLLOW-UP — instruções pra IA mencionar follow-up (real scheduling fica pra depois).
+  followUpEnabled    Boolean @default(false) @map("follow_up_enabled")
+  followUpAfterHours Int     @default(24) @map("follow_up_after_hours")
+  followUpMessage    String? @map("follow_up_message")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

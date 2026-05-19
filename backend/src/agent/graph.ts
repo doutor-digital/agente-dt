@@ -50,6 +50,7 @@ import { AgentState, type AgentStateType } from './state.js';
 import { buildTools } from './tools.js';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig, renderWorkflowGuidance } from './config.js';
+import { composeSystemPrompt } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 
@@ -121,9 +122,16 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     return cfg ? cfg.enabled : true;
   });
 
-  // 2) System prompt — preferência: AgentConfig.systemPrompt → Unit.systemPrompt → DEFAULT.
-  const baseSystemPrompt = config.systemPrompt || unit.systemPrompt || '';
-  const systemPrompt = baseSystemPrompt + renderWorkflowGuidance(config.workflow);
+  // 2) System prompt — agora usa o composer, que mescla:
+  //    - Persona/base text (AgentConfig.systemPrompt > Unit.systemPrompt > auto)
+  //    - Blocos das features ativadas no wizard da Unit (qualificação, handoff,
+  //      pipeline-by-intent, coleta de contato, cupom, horário, follow-up)
+  //    - Regras estruturadas (renderWorkflowGuidance)
+  const systemPrompt = composeSystemPrompt({
+    unit,
+    agentConfigPrompt: config.systemPrompt,
+    workflowText: renderWorkflowGuidance(config.workflow),
+  });
 
   // 3) Modelo OpenAI da Unit.
   const modelName = config.model || unit.openaiModel || env.OPENAI_MODEL;
