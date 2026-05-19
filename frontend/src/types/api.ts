@@ -96,6 +96,7 @@ export interface Unit {
   kommoAccessToken: string | null;
   kommoSalesbotId: number | null;
   kommoReplyFieldId: number | null;
+  kommoPausedFieldId: number | null;
   kommoWonStatusIds: number[];
   openaiApiKey: string | null;
   openaiAdminKey: string | null;
@@ -118,6 +119,39 @@ export type UnitInput = Partial<Omit<Unit, 'id' | 'createdAt' | 'updatedAt' | '_
   slug: string;
   name: string;
 };
+
+// ---------------------------------------------------------------------------
+// Kommo Explorer — dados ao vivo do CRM Kommo (campos, salesbots, pipelines)
+// ---------------------------------------------------------------------------
+
+export interface KommoFieldsResponse {
+  ok: boolean;
+  fields?: Array<{ id: number; name: string; type: string; code: string | null }>;
+  error?: string;
+}
+
+export interface KommoSalesbotsResponse {
+  ok: boolean;
+  bots?: Array<{ id: number; name: string }>;
+  error?: string;
+}
+
+export interface KommoPipelinesResponse {
+  pipelines?: Array<{
+    id: number;
+    name: string;
+    isMain: boolean;
+    isArchive: boolean;
+    statuses: Array<{ id: number; name: string; color: string | null }>;
+  }>;
+  error?: string;
+  message?: string;
+}
+
+export interface KommoValidateResponse {
+  ok: boolean;
+  checks: Array<{ name: string; ok: boolean; detail?: string }>;
+}
 
 // ---------------------------------------------------------------------------
 // Integrations / Alerts

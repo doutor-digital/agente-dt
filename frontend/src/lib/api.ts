@@ -8,6 +8,10 @@ import type {
   ConversationSummary,
   GlobalAlert,
   IntegrationsResponse,
+  KommoFieldsResponse,
+  KommoPipelinesResponse,
+  KommoSalesbotsResponse,
+  KommoValidateResponse,
   LlmCallDetail,
   LlmCallSummary,
   OpenAIDebugResponse,
@@ -158,6 +162,39 @@ export const api = {
   },
   async reEvaluateConversation(conversationId: string): Promise<void> {
     await http.post(`/conversations/${conversationId}/evaluate`, {}, { timeout: 60_000 });
+  },
+
+  // -------------------------------------------------------------------------
+  // Kommo Explorer — listas ao vivo do CRM por Unit
+  // -------------------------------------------------------------------------
+  async kommoFields(unitId: string): Promise<KommoFieldsResponse> {
+    const { data } = await http.get<KommoFieldsResponse>(
+      `/units/${unitId}/kommo-fields`,
+      { timeout: 30_000 },
+    );
+    return data;
+  },
+  async kommoSalesbots(unitId: string): Promise<KommoSalesbotsResponse> {
+    const { data } = await http.get<KommoSalesbotsResponse>(
+      `/units/${unitId}/kommo-salesbots`,
+      { timeout: 30_000 },
+    );
+    return data;
+  },
+  async kommoPipelines(unitId: string): Promise<KommoPipelinesResponse> {
+    const { data } = await http.get<KommoPipelinesResponse>(
+      `/units/${unitId}/kommo-pipelines`,
+      { timeout: 30_000 },
+    );
+    return data;
+  },
+  async kommoValidate(unitId: string): Promise<KommoValidateResponse> {
+    const { data } = await http.post<KommoValidateResponse>(
+      `/units/${unitId}/kommo-validate`,
+      {},
+      { timeout: 30_000 },
+    );
+    return data;
   },
 
   // -------------------------------------------------------------------------

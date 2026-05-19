@@ -15,6 +15,7 @@ import clsx from 'clsx';
 import { api } from '../lib/api';
 import type { Unit, UnitInput } from '../types/api';
 import { useUnit } from '../context/UnitContext';
+import { KommoExplorer } from './KommoExplorer';
 
 const blankInput: UnitInput = {
   slug: '',
@@ -24,6 +25,7 @@ const blankInput: UnitInput = {
   kommoAccessToken: '',
   kommoSalesbotId: null,
   kommoReplyFieldId: null,
+  kommoPausedFieldId: null,
   kommoWonStatusIds: [],
   openaiApiKey: '',
   openaiAdminKey: '',
@@ -48,6 +50,7 @@ function unitToInput(u: Unit): UnitInput {
     kommoAccessToken: u.kommoAccessToken ?? '',
     kommoSalesbotId: u.kommoSalesbotId,
     kommoReplyFieldId: u.kommoReplyFieldId,
+    kommoPausedFieldId: u.kommoPausedFieldId ?? null,
     kommoWonStatusIds: u.kommoWonStatusIds ?? [],
     openaiApiKey: u.openaiApiKey ?? '',
     openaiAdminKey: u.openaiAdminKey ?? '',
@@ -308,33 +311,16 @@ export function UnitsPanel() {
                   onChange={(v) => setDraft({ ...draft, kommoAccessToken: v })}
                   type="password"
                 />
-                <div className="grid grid-cols-2 gap-3">
-                  <NumberField
-                    label="Salesbot ID"
-                    value={draft.kommoSalesbotId ?? 0}
-                    onChange={(v) => setDraft({ ...draft, kommoSalesbotId: v || null })}
-                    allowZero
-                  />
-                  <NumberField
-                    label="Reply Field ID"
-                    value={draft.kommoReplyFieldId ?? 0}
-                    onChange={(v) => setDraft({ ...draft, kommoReplyFieldId: v || null })}
-                    allowZero
-                  />
-                </div>
-                <Field
-                  label="Status IDs de Conversão (Ganho)"
-                  value={(draft.kommoWonStatusIds ?? []).join(', ')}
-                  onChange={(v) =>
-                    setDraft({
-                      ...draft,
-                      kommoWonStatusIds: v
-                        .split(',')
-                        .map((s) => Number(s.trim()))
-                        .filter((n) => Number.isFinite(n) && n > 0),
-                    })
-                  }
-                  hint='IDs das etapas "Ganho/Convertido" do funil, separados por vírgula. Quando o lead entra numa dessas etapas, a conversa é marcada como convertida e o juiz LLM avalia o desempenho do prompt.'
+                <KommoExplorer
+                  unitId={selectedId}
+                  salesbotId={draft.kommoSalesbotId ?? null}
+                  replyFieldId={draft.kommoReplyFieldId ?? null}
+                  pausedFieldId={draft.kommoPausedFieldId ?? null}
+                  wonStatusIds={draft.kommoWonStatusIds ?? []}
+                  onSalesbotChange={(id) => setDraft({ ...draft, kommoSalesbotId: id })}
+                  onReplyFieldChange={(id) => setDraft({ ...draft, kommoReplyFieldId: id })}
+                  onPausedFieldChange={(id) => setDraft({ ...draft, kommoPausedFieldId: id })}
+                  onWonStatusIdsChange={(ids) => setDraft({ ...draft, kommoWonStatusIds: ids })}
                 />
               </Section>
 
