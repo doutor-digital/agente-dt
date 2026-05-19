@@ -10,6 +10,7 @@ import { UnitsPanel } from './components/UnitsPanel';
 import { IntegrationsPanel } from './components/IntegrationsPanel';
 import { WizardPanel } from './components/WizardPanel';
 import { AppSidebar, type AppTab } from './components/AppSidebar';
+import { DashboardPanel } from './components/DashboardPanel';
 import { UnitProvider, useUnit } from './context/UnitContext';
 import { usePolling } from './hooks/usePolling';
 import { api } from './lib/api';
@@ -41,7 +42,7 @@ function Shell() {
     <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
       <AppSidebar tab={tab} onChange={setTab} />
       <main className="flex-1 flex flex-col overflow-hidden">
-        {tab === 'dashboard' && <DashboardPlaceholder />}
+        {tab === 'dashboard' && <DashboardPanel />}
         {tab === 'traces' && <TracesView />}
         {tab === 'conversations' && <ConversationsPanel />}
         {tab === 'llm' && <LlmCallsPanel />}
@@ -55,20 +56,6 @@ function Shell() {
   );
 }
 
-// Placeholder enquanto o Dashboard real (G+I) não é construído.
-// Em commit posterior será substituído pelo DashboardPanel.
-function DashboardPlaceholder() {
-  return (
-    <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm p-8 text-center">
-      <div>
-        <div className="text-xs uppercase tracking-widest text-zinc-700 mb-2">Dashboard</div>
-        <div className="text-zinc-500">
-          KPIs executivos + funil — em construção. Por enquanto, navegue pelas seções da sidebar.
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function TracesView() {
   const { selectedUnitId } = useUnit();

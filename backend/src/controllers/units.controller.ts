@@ -291,6 +291,111 @@ export async function kommoFieldsHandler(req: Request, res: Response): Promise<v
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Dashboard executivo — KPIs grandes + funil do pipeline.
+// ---------------------------------------------------------------------------
+
+export async function dashboardHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const last30Start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  // KPIs nossos — derivados das tabelas locais.
+  const [
+    convosToday,
+    convos30d,
+    convertedConvos30d,
+    llm30d,
+    convsByHour,
+    avgRespLatency,
+  ] = await Promise.all([
+    prisma.conversation.count({
+      where: { unitId: id, lastMessageAt: { gte: todayStart } },
+    }),
+    prisma.conversation.count({
+      where: { unitId: id, createdAt: { gte: last30Start } },
+    }),
+    prisma.conversation.count({
+      where: { unitId: id, createdAt: { gte: last30Start }, convertedAt: { not: null } },
+    }),
+    prisma.llmCall.aggregate({
+      where: { unitId: id, createdAt: { gte: last30Start } },
+      _sum: { costUsd: true, totalTokens: true },
+      _count: { _all: true },
+    }),
+    // Mensagens dos pacientes por hora — pra calcular hora de pico.
+    prisma.$queryRaw<Array<{ hour: number; count: bigint }>>`
+      SELECT EXTRACT(HOUR FROM m."created_at")::int AS hour, COUNT(*)::bigint AS count
+      FROM messages m
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.unit_id = ${id}
+        AND m.role = 'user'
+        AND m.created_at >= ${last30Start}
+      GROUP BY 1
+      ORDER BY 2 DESC
+      LIMIT 1
+    `,
+    prisma.executionTrace.aggregate({
+      where: { unitId: id, status: 'SUCCESS', latencyMs: { not: null }, createdAt: { gte: last30Start } },
+      _avg: { latencyMs: true },
+    }),
+  ]);
+
+  const totalCost = Number(llm30d._sum.costUsd ?? 0);
+  const convosForAvg = Math.max(convos30d, 1);
+  const peakHour = convsByHour[0]?.hour ?? null;
+
+  // Funil: lista leads do Kommo (até 1000 leads) e agrupa por status_id.
+  // Se Kommo não estiver configurado ou der erro, devolvemos funil vazio.
+  let funnel: Array<{ pipelineId: number; pipelineName: string; statuses: Array<{ statusId: number; statusName: string; count: number; color: string | null }> }> = [];
+  if (unit.kommoSubdomain && unit.kommoAccessToken) {
+    try {
+      const client = createKommoClient(unit);
+      const [pipelines, leads] = await Promise.all([client.listPipelines(), client.listLeads(4)]);
+      const countByStatus = new Map<number, number>();
+      for (const lead of leads) {
+        if (lead.status_id) countByStatus.set(lead.status_id, (countByStatus.get(lead.status_id) ?? 0) + 1);
+      }
+      funnel = pipelines
+        .filter((p) => !p.is_archive)
+        .map((p) => ({
+          pipelineId: p.id,
+          pipelineName: p.name,
+          statuses: p.statuses.map((s) => ({
+            statusId: s.id,
+            statusName: s.name,
+            count: countByStatus.get(s.id) ?? 0,
+            color: s.color ?? null,
+          })),
+        }));
+    } catch (err) {
+      logger.warn({ err, unitId: id }, 'dashboard: funnel fetch falhou (kommo)');
+    }
+  }
+
+  res.json({
+    kpis: {
+      conversationsToday: convosToday,
+      conversationsLast30d: convos30d,
+      conversionRate30d: convos30d > 0 ? convertedConvos30d / convos30d : 0,
+      convertedLast30d: convertedConvos30d,
+      llmCostUsd30d: totalCost,
+      llmCallsLast30d: llm30d._count._all,
+      avgCostPerLead: totalCost / convosForAvg,
+      avgResponseLatencyMs: avgRespLatency._avg.latencyMs ? Math.round(avgRespLatency._avg.latencyMs) : 0,
+      peakHour,
+    },
+    funnel,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Preview do system prompt composto — usado pelo WizardPanel pra mostrar ao
 // vivo o que a IA vai ler. Aceita um body parcial (`overrides`) que sobrescreve
 // campos da Unit corrente sem precisar salvar — assim o leigo vê o efeito das

@@ -6,6 +6,7 @@ import type {
   ConversationDetail,
   ConversationEvaluationResponse,
   ConversationSummary,
+  DashboardResponse,
   GlobalAlert,
   IntegrationsResponse,
   FlaggedMessage,
@@ -99,6 +100,10 @@ export const api = {
   },
   async unitStats(id: string, days = 30): Promise<UnitStats> {
     const { data } = await http.get<UnitStats>(`/units/${id}/stats`, { params: { days } });
+    return data;
+  },
+  async unitDashboard(id: string): Promise<DashboardResponse> {
+    const { data } = await http.get<DashboardResponse>(`/units/${id}/dashboard`, { timeout: 30_000 });
     return data;
   },
 

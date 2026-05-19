@@ -282,6 +282,30 @@ export class KommoClient {
   }
 
   /**
+   * Lista TODOS os leads paginando até `maxPages` (default 4 = 1000 leads).
+   * Usado pelo dashboard pra contar leads por etapa do funil. NÃO traz custom
+   * fields nem tags pra ficar leve.
+   */
+  async listLeads(maxPages: number = 4): Promise<KommoLead[]> {
+    const all: KommoLead[] = [];
+    for (let page = 1; page <= maxPages; page++) {
+      try {
+        const { data } = await this.http.get<{
+          _embedded?: { leads?: KommoLead[] };
+          _links?: { next?: { href: string } };
+        }>('/leads', { params: { page, limit: 250 } });
+        const leads = data?._embedded?.leads ?? [];
+        all.push(...leads);
+        if (!data?._links?.next || leads.length === 0) break;
+      } catch (err) {
+        if (page === 1) wrapAxiosError(err, 'listLeads');
+        break;
+      }
+    }
+    return all;
+  }
+
+  /**
    * Lista pipelines do CRM com suas etapas (statuses) embedadas.
    * Usado pelo painel pra mostrar quais IDs colocar no prompt e em
    * `kommoWonStatusIds`.

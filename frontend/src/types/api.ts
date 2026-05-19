@@ -186,6 +186,30 @@ export interface KommoValidateResponse {
   checks: Array<{ name: string; ok: boolean; detail?: string }>;
 }
 
+export interface DashboardResponse {
+  kpis: {
+    conversationsToday: number;
+    conversationsLast30d: number;
+    conversionRate30d: number;
+    convertedLast30d: number;
+    llmCostUsd30d: number;
+    llmCallsLast30d: number;
+    avgCostPerLead: number;
+    avgResponseLatencyMs: number;
+    peakHour: number | null;
+  };
+  funnel: Array<{
+    pipelineId: number;
+    pipelineName: string;
+    statuses: Array<{
+      statusId: number;
+      statusName: string;
+      count: number;
+      color: string | null;
+    }>;
+  }>;
+}
+
 // ---------------------------------------------------------------------------
 // Integrations / Alerts
 // ---------------------------------------------------------------------------
