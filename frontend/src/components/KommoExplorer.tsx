@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Loader2, RefreshCw, Save, XCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, RefreshCw, Save, Wand2, XCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type {
@@ -123,6 +123,21 @@ export function KommoExplorer(props: Props) {
           </button>
         </div>
       </div>
+
+      {/* Quick Fill por ID — atalho direto sem depender dos dropdowns/listagem */}
+      <QuickFillPanel
+        replyFieldId={props.replyFieldId}
+        pausedFieldId={props.pausedFieldId}
+        salesbotId={props.salesbotId}
+        wonStatusIds={props.wonStatusIds}
+        onReplyFieldChange={props.onReplyFieldChange}
+        onPausedFieldChange={props.onPausedFieldChange}
+        onSalesbotChange={props.onSalesbotChange}
+        onWonStatusIdsChange={props.onWonStatusIdsChange}
+        onSave={props.onSave}
+        saving={!!props.saving}
+        disabled={!unitId}
+      />
 
       {/* Reply Field (textarea/text) */}
       <KommoSelect
@@ -330,6 +345,139 @@ function KommoSelect({
         <div className="text-[10px] text-zinc-600 mt-1 italic">{emptyHint}</div>
       )}
       {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
+    </div>
+  );
+}
+
+function QuickFillPanel(props: {
+  replyFieldId: number | null;
+  pausedFieldId: number | null;
+  salesbotId: number | null;
+  wonStatusIds: number[];
+  onReplyFieldChange: (id: number | null) => void;
+  onPausedFieldChange: (id: number | null) => void;
+  onSalesbotChange: (id: number | null) => void;
+  onWonStatusIdsChange: (ids: number[]) => void;
+  onSave: () => Promise<void>;
+  saving: boolean;
+  disabled: boolean;
+}) {
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  const wonStr = props.wonStatusIds.join(', ');
+
+  return (
+    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+      <div className="flex items-start gap-3 mb-3">
+        <Wand2 className="text-amber-400 mt-0.5 shrink-0" size={16} />
+        <div>
+          <div className="text-xs font-semibold text-amber-200">
+            Quick Fill — preencher por ID e salvar direto
+          </div>
+          <div className="text-[11px] text-zinc-400 mt-0.5">
+            Atalho pra quando você já tem os IDs. Cola, clica Salvar IDs no banco e pronto.
+            Não depende dos dropdowns abaixo nem da listagem do Kommo.
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <QuickInput
+          label="Reply Field ID"
+          placeholder="ex: 1577998"
+          value={props.replyFieldId}
+          onChange={props.onReplyFieldChange}
+        />
+        <QuickInput
+          label="Paused Field ID"
+          placeholder="ex: 1578230"
+          value={props.pausedFieldId}
+          onChange={props.onPausedFieldChange}
+        />
+        <QuickInput
+          label="Salesbot ID"
+          placeholder="ex: 44604"
+          value={props.salesbotId}
+          onChange={props.onSalesbotChange}
+        />
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">
+            Won Status IDs
+          </label>
+          <input
+            type="text"
+            value={wonStr}
+            onChange={(e) => {
+              const ids = e.target.value
+                .split(',')
+                .map((s) => Number(s.trim()))
+                .filter((n) => Number.isFinite(n) && n > 0);
+              props.onWonStatusIdsChange(ids);
+            }}
+            placeholder="ex: 142 (separe por vírgula)"
+            className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 mt-3">
+        <button
+          type="button"
+          onClick={async () => {
+            setMsg(null);
+            try {
+              await props.onSave();
+              setMsg({ kind: 'ok', text: 'IDs salvos no banco ✓' });
+            } catch (err) {
+              setMsg({ kind: 'err', text: errMessage(err) });
+            }
+          }}
+          disabled={props.saving || props.disabled}
+          className="text-xs px-4 py-2 rounded bg-amber-500/20 text-amber-100 ring-1 ring-amber-500/40 inline-flex items-center gap-1.5 hover:bg-amber-500/30 disabled:opacity-50 font-medium"
+        >
+          {props.saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />}
+          Salvar IDs no banco
+        </button>
+        {msg && (
+          <span
+            className={clsx(
+              'text-[11px] px-2 py-1 rounded',
+              msg.kind === 'ok' ? 'bg-emerald-500/15 text-emerald-200' : 'bg-rose-500/15 text-rose-300',
+            )}
+          >
+            {msg.text}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function QuickInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: number | null;
+  onChange: (id: number | null) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+      <input
+        type="number"
+        value={value ?? ''}
+        placeholder={placeholder}
+        onChange={(e) => {
+          const v = e.target.value.trim();
+          const n = v === '' ? null : Number(v);
+          onChange(n && Number.isFinite(n) && n > 0 ? n : null);
+        }}
+        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
+      />
     </div>
   );
 }
