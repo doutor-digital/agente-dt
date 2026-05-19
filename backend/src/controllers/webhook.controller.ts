@@ -259,6 +259,27 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     return;
   }
 
+  // PREVENÇÃO DE LOOP: só rodamos o agente quando há mensagem real do lead
+  // (message.add com type=incoming) OU quando é uma chamada manual de teste
+  // (leadId + text no body). Webhooks de `leads.update` disparados por NOSSAS
+  // próprias mutações (setar Resposta IA, mover etapa) NÃO devem reativar o
+  // agente — senão entramos em loop infinito processando nossas mudanças.
+  const hasIncomingMessage = !!getIncomingMessage(parsed.data);
+  const hasManualTestInput = !!parsed.data.leadId && !!parsed.data.text;
+  if (!hasIncomingMessage && !hasManualTestInput) {
+    logger.debug(
+      { unit: unit.slug, hasLeadsUpdate: !!parsed.data.leads?.update?.length },
+      'kommo webhook: nenhuma mensagem entrante, pulando agente (provável eco da própria mutação)',
+    );
+    res.status(200).json({
+      ok: true,
+      skipped: 'no_incoming_message',
+      converted: conversion.converted,
+      unit: unit.slug,
+    });
+    return;
+  }
+
   const leadId = extractLeadId(parsed.data);
   if (!leadId) {
     logger.warn({ body: req.body }, 'webhook sem leadId');
