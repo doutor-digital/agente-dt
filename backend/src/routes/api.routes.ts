@@ -31,6 +31,7 @@ import {
   kommoFieldsHandler,
   kommoSalesbotsHandler,
   kommoTagsHandler,
+  previewPromptHandler,
 } from '../controllers/units.controller.js';
 import {
   listLlmCallsHandler,
@@ -94,6 +95,7 @@ apiRouter.get('/units/:id/kommo-fields', kommoFieldsHandler);
 apiRouter.get('/units/:id/kommo-salesbots', kommoSalesbotsHandler);
 apiRouter.get('/units/:id/kommo-tags', kommoTagsHandler);
 apiRouter.post('/units/:id/kommo-validate', kommoValidateHandler);
+apiRouter.post('/units/:id/preview-prompt', previewPromptHandler);
 apiRouter.get('/units/:id/integrations', getIntegrations);
 apiRouter.get('/units/:id/openai-debug', openaiDebugHandler);
 apiRouter.get('/units/:id/prompt-performance', getPromptPerformanceHandler);

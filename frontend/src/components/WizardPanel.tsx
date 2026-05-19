@@ -27,6 +27,8 @@ import {
   ChevronRight,
   Clock,
   Coffee,
+  Eye,
+  EyeOff,
   Flame,
   Gift,
   Loader2,
@@ -123,6 +125,9 @@ export function WizardPanel() {
   const [draft, setDraft] = useState<WizardDraft | null>(null);
   const [pipelines, setPipelines] = useState<KommoPipelinesResponse | null>(null);
   const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState<{ prompt: string; chars: number } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
 
   useEffect(() => {
     if (!selectedUnitId) {
@@ -147,6 +152,20 @@ export function WizardPanel() {
       alive = false;
     };
   }, [selectedUnitId]);
+
+  // Debounced live preview do prompt composto.
+  useEffect(() => {
+    if (!selectedUnitId || !draft || !showPreview) return;
+    const handler = setTimeout(() => {
+      setPreviewLoading(true);
+      api
+        .previewPrompt(selectedUnitId, draft as Record<string, unknown>)
+        .then((p) => setPreview(p))
+        .catch(() => setPreview(null))
+        .finally(() => setPreviewLoading(false));
+    }, 600); // 600ms debounce — não fica disparando a cada keystroke
+    return () => clearTimeout(handler);
+  }, [selectedUnitId, draft, showPreview]);
 
   const stages = useMemo(() => {
     const out: Array<{ id: number; label: string }> = [];
@@ -501,6 +520,50 @@ export function WizardPanel() {
             distribuir tráfego entre elas, e usar o juiz LLM existente pra comparar performance.
           </div>
         </FeatureCard>
+
+        {/* Live preview do prompt composto */}
+        <section className="rounded-xl border border-zinc-800 bg-zinc-950/60 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowPreview(!showPreview)}
+            className="w-full flex items-center gap-2 p-4 text-left hover:bg-zinc-900/40 transition-colors"
+          >
+            {showPreview ? (
+              <Eye size={16} className="text-emerald-400" />
+            ) : (
+              <EyeOff size={16} className="text-zinc-500" />
+            )}
+            <div className="flex-1">
+              <div className="text-sm font-semibold text-zinc-100">
+                Preview do prompt da IA
+              </div>
+              <div className="text-[11px] text-zinc-500 mt-0.5">
+                Veja exatamente o que a IA vai ler quando o cliente mandar uma mensagem.
+                Atualiza automaticamente conforme você muda os toggles acima.
+              </div>
+            </div>
+            {previewLoading && <Loader2 size={14} className="animate-spin text-zinc-500" />}
+            {preview && !previewLoading && (
+              <span className="text-[10px] font-mono text-zinc-600">{preview.chars} chars</span>
+            )}
+            {showPreview ? (
+              <ChevronDown size={14} className="text-zinc-600" />
+            ) : (
+              <ChevronRight size={14} className="text-zinc-600" />
+            )}
+          </button>
+          {showPreview && (
+            <div className="border-t border-zinc-800/40 p-4">
+              {!preview ? (
+                <div className="text-xs text-zinc-600 italic">Calculando preview…</div>
+              ) : (
+                <pre className="text-[11px] font-mono text-zinc-300 whitespace-pre-wrap leading-relaxed bg-zinc-950 rounded-md p-3 border border-zinc-800/40 max-h-96 overflow-y-auto">
+                  {preview.prompt || '<vazio>'}
+                </pre>
+              )}
+            </div>
+          )}
+        </section>
 
         {/* Café no fim */}
         <div className="text-center text-zinc-700 text-xs py-4 flex items-center justify-center gap-2">

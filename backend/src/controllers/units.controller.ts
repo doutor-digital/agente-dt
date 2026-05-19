@@ -290,6 +290,30 @@ export async function kommoFieldsHandler(req: Request, res: Response): Promise<v
 // nas regras de automação (aplicar_tag dropdown ao invés de texto livre).
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Preview do system prompt composto — usado pelo WizardPanel pra mostrar ao
+// vivo o que a IA vai ler. Aceita um body parcial (`overrides`) que sobrescreve
+// campos da Unit corrente sem precisar salvar — assim o leigo vê o efeito das
+// mudanças antes de salvar.
+// ---------------------------------------------------------------------------
+
+import { composeSystemPrompt } from '../agent/prompt-composer.js';
+
+export async function previewPromptHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  // O body pode trazer overrides parciais — qualquer campo do Unit.
+  // Não validamos com rigor: é só preview, nada vai pro banco.
+  const overrides = (req.body ?? {}) as Partial<typeof unit>;
+  const merged = { ...unit, ...overrides };
+  const prompt = composeSystemPrompt({ unit: merged as typeof unit });
+  res.json({ prompt, chars: prompt.length });
+}
+
 export async function kommoTagsHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
   const unit = await prisma.unit.findUnique({ where: { id } });

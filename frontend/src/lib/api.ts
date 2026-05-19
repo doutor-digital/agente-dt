@@ -205,6 +205,15 @@ export const api = {
     return data;
   },
 
+  async previewPrompt(unitId: string, overrides: Record<string, unknown>): Promise<{ prompt: string; chars: number }> {
+    const { data } = await http.post<{ prompt: string; chars: number }>(
+      `/units/${unitId}/preview-prompt`,
+      overrides,
+      { timeout: 10_000 },
+    );
+    return data;
+  },
+
   // -------------------------------------------------------------------------
   // Debug do Admin Key da OpenAI
   // -------------------------------------------------------------------------
