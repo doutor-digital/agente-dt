@@ -107,6 +107,7 @@ export function UnitsPanel() {
       const e = err as { response?: { data?: { error?: string; issues?: unknown } }; message?: string };
       const code = e?.response?.data?.error;
       setMsg({ kind: 'err', text: code ?? e?.message ?? 'erro' });
+      throw err; // re-lança pra callers (ex: botão dedicado dentro do KommoExplorer) saberem do erro
     } finally {
       setSaving(false);
     }
@@ -219,7 +220,9 @@ export function UnitsPanel() {
               )}
               <button
                 type="button"
-                onClick={handleSave}
+                onClick={() => {
+                  void handleSave().catch(() => {});
+                }}
                 disabled={saving || (!creating && !selectedId)}
                 className="text-xs px-3 py-1.5 rounded bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/30 inline-flex items-center gap-1 hover:bg-brand-500/30 disabled:opacity-50"
               >
@@ -321,6 +324,8 @@ export function UnitsPanel() {
                   onReplyFieldChange={(id) => setDraft({ ...draft, kommoReplyFieldId: id })}
                   onPausedFieldChange={(id) => setDraft({ ...draft, kommoPausedFieldId: id })}
                   onWonStatusIdsChange={(ids) => setDraft({ ...draft, kommoWonStatusIds: ids })}
+                  onSave={handleSave}
+                  saving={saving}
                 />
               </Section>
 

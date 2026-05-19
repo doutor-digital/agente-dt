@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Loader2, RefreshCw, XCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, RefreshCw, Save, XCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type {
@@ -35,6 +35,9 @@ interface Props {
   onReplyFieldChange: (id: number | null) => void;
   onPausedFieldChange: (id: number | null) => void;
   onWonStatusIdsChange: (ids: number[]) => void;
+  /** Salva a Unit inteira no banco (mesma ação do botão "Salvar" do topo). */
+  onSave: () => Promise<void>;
+  saving?: boolean;
 }
 
 export function KommoExplorer(props: Props) {
@@ -45,6 +48,7 @@ export function KommoExplorer(props: Props) {
   const [validation, setValidation] = useState<KommoValidateResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!unitId) return;
@@ -226,6 +230,53 @@ export function KommoExplorer(props: Props) {
 
       {/* Validation result */}
       {validation && <ValidationResults result={validation} />}
+
+      {/* Botão de salvar dedicado — persiste tudo no banco. */}
+      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 mt-2">
+        <div className="flex items-start gap-3">
+          <Save className="text-emerald-400 mt-0.5 shrink-0" size={16} />
+          <div className="flex-1">
+            <div className="text-xs font-semibold text-emerald-200 mb-1">
+              Salvar configuração Kommo no banco
+            </div>
+            <div className="text-[11px] text-zinc-400 mb-3">
+              Persiste suas seleções (Resposta IA, IA Pausada, Salesbot ID, etapas de Ganho) na Unit.
+              Sem clicar aqui, o agente continua usando os valores antigos.
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  setSaveMsg(null);
+                  try {
+                    await props.onSave();
+                    setSaveMsg({ kind: 'ok', text: 'Configuração salva no banco ✓' });
+                  } catch (err) {
+                    setSaveMsg({ kind: 'err', text: errMessage(err) });
+                  }
+                }}
+                disabled={props.saving || !unitId}
+                className="text-xs px-4 py-2 rounded bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-500/40 inline-flex items-center gap-1.5 hover:bg-emerald-500/30 disabled:opacity-50 font-medium"
+              >
+                {props.saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />}
+                Salvar configuração Kommo
+              </button>
+              {saveMsg && (
+                <span
+                  className={clsx(
+                    'text-[11px] px-2 py-1 rounded',
+                    saveMsg.kind === 'ok'
+                      ? 'bg-emerald-500/15 text-emerald-200'
+                      : 'bg-rose-500/15 text-rose-300',
+                  )}
+                >
+                  {saveMsg.text}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
