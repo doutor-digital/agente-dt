@@ -1,21 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   Check,
   ChevronDown,
   ChevronRight,
   GitBranch,
+  Lightbulb,
   ListChecks,
   Loader2,
+  Pause,
   Plus,
   RotateCcw,
   Save,
   Sparkles,
+  Tag,
   Trash2,
+  Workflow,
   Wrench,
 } from 'lucide-react';
 import { api } from '../lib/api';
-import type { AgentConfigInput, AgentConfigResponse, ToolConfig, WorkflowRule } from '../types/api';
+import type {
+  AgentConfigInput,
+  AgentConfigResponse,
+  KommoPipelinesResponse,
+  KommoTagsResponse,
+  ToolConfig,
+  WorkflowRule,
+} from '../types/api';
 import { useUnit } from '../context/UnitContext';
 
 /**
@@ -41,6 +52,44 @@ export function AgentConfigPanel() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [openTools, setOpenTools] = useState<Record<string, boolean>>({});
+
+  // Tags + pipelines do Kommo da Unit corrente — popula os dropdowns das regras.
+  // Buscados em paralelo no primeiro mount. Erro é silencioso (a regra cai pro
+  // modo "advanced text" se não conseguir popular).
+  const [kommoTags, setKommoTags] = useState<KommoTagsResponse | null>(null);
+  const [kommoPipelines, setKommoPipelines] = useState<KommoPipelinesResponse | null>(null);
+
+  useEffect(() => {
+    if (!selectedUnitId) {
+      setKommoTags(null);
+      setKommoPipelines(null);
+      return;
+    }
+    let alive = true;
+    Promise.all([
+      api.kommoTags(selectedUnitId).catch(() => null),
+      api.kommoPipelines(selectedUnitId).catch(() => null),
+    ]).then(([t, p]) => {
+      if (!alive) return;
+      setKommoTags(t);
+      setKommoPipelines(p);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [selectedUnitId]);
+
+  // Lista plana de etapas pra dropdown.
+  const allStages = useMemo(() => {
+    const out: Array<{ id: number; label: string }> = [];
+    for (const p of kommoPipelines?.pipelines ?? []) {
+      if (p.isArchive) continue;
+      for (const s of p.statuses) {
+        out.push({ id: s.id, label: `${p.name} → ${s.name}` });
+      }
+    }
+    return out;
+  }, [kommoPipelines]);
 
   useEffect(() => {
     let alive = true;
@@ -333,7 +382,7 @@ export function AgentConfigPanel() {
                     <Trash2 size={14} />
                   </button>
 
-                  <div className="grid md:grid-cols-2 gap-3 ml-3">
+                  <div className="space-y-3 ml-3">
                     <div>
                       <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
                         SE (gatilho)
@@ -341,29 +390,28 @@ export function AgentConfigPanel() {
                       <textarea
                         value={rule.when}
                         onChange={(e) => updateRule(rule.id, { when: e.target.value })}
-                        rows={3}
-                        placeholder='ex: "o lead mencionou orçamento aprovado"'
+                        rows={2}
+                        placeholder='ex: "o cliente mencionou orçamento aprovado"'
                         className="w-full px-3 py-2 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500 resize-vertical"
                       />
                     </div>
-                    <div>
-                      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
-                        ENTÃO (ação)
-                      </label>
-                      <textarea
-                        value={rule.then}
-                        onChange={(e) => updateRule(rule.id, { then: e.target.value })}
-                        rows={3}
-                        placeholder='ex: aplicar tag "Quente" e responder confirmando interesse'
-                        className="w-full px-3 py-2 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500 resize-vertical"
-                      />
-                    </div>
+                    <RuleActionBuilder
+                      thenText={rule.then}
+                      onChange={(next) => updateRule(rule.id, { then: next })}
+                      tags={kommoTags?.tags ?? []}
+                      stages={allStages}
+                      tagsLoading={selectedUnitId !== null && kommoTags === null}
+                      stagesLoading={selectedUnitId !== null && kommoPipelines === null}
+                    />
                   </div>
                 </div>
               ))}
             </div>
           )}
         </section>
+
+        {/* IDEIAS PRONTAS PRA ATIVAR */}
+        <IdeasSection />
 
         {/* MODELO */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
@@ -415,5 +463,288 @@ export function AgentConfigPanel() {
         </section>
       </div>
     </div>
+  );
+}
+
+// ===========================================================================
+// RuleActionBuilder — editor estruturado pro "ENTÃO" das regras de automação
+// ===========================================================================
+//
+// Substitui a textarea livre por dropdowns das tags e etapas REAIS do Kommo
+// (puxados via API). O componente parseia o `then` existente best-effort:
+//   aplicar_tag("Quente") · mover_etapa(105414491) · pausar_ia · <custom>
+// Modifica via UI e serializa de volta nesse formato — que é o que a LLM lê
+// no system prompt.
+//
+// Tem um modo "advanced" (toggle) que mostra a textarea raw pra power users.
+// ===========================================================================
+
+interface ParsedAction {
+  tag: string | null;
+  statusId: number | null;
+  pause: boolean;
+  custom: string;
+}
+
+function parseThen(then: string): ParsedAction {
+  const tagMatch = then.match(/aplicar_tag\("([^"]+)"\)/);
+  const stageMatch = then.match(/mover_etapa\((\d+)\)/);
+  const pauseMatch = /pausar_ia(?:\(\))?/.test(then);
+  let custom = then;
+  custom = custom.replace(/aplicar_tag\("[^"]+"\)/g, '');
+  custom = custom.replace(/mover_etapa\(\d+\)/g, '');
+  custom = custom.replace(/pausar_ia(?:\(\))?/g, '');
+  custom = custom.replace(/[·,;]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return {
+    tag: tagMatch?.[1] ?? null,
+    statusId: stageMatch ? Number(stageMatch[1]) : null,
+    pause: pauseMatch,
+    custom,
+  };
+}
+
+function serializeThen(action: ParsedAction): string {
+  const parts: string[] = [];
+  if (action.tag) parts.push(`aplicar_tag("${action.tag}")`);
+  if (action.statusId) parts.push(`mover_etapa(${action.statusId})`);
+  if (action.pause) parts.push('pausar_ia');
+  const struct = parts.join(' · ');
+  const custom = action.custom.trim();
+  if (struct && custom) return `${struct} · ${custom}`;
+  return struct || custom;
+}
+
+function RuleActionBuilder({
+  thenText,
+  onChange,
+  tags,
+  stages,
+  tagsLoading,
+  stagesLoading,
+}: {
+  thenText: string;
+  onChange: (next: string) => void;
+  tags: Array<{ id: number; name: string; color: string | null }>;
+  stages: Array<{ id: number; label: string }>;
+  tagsLoading: boolean;
+  stagesLoading: boolean;
+}) {
+  const parsed = useMemo(() => parseThen(thenText), [thenText]);
+  const [advanced, setAdvanced] = useState(false);
+
+  const apply = (patch: Partial<ParsedAction>) => {
+    onChange(serializeThen({ ...parsed, ...patch }));
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+          ENTÃO (ações)
+        </label>
+        <button
+          type="button"
+          onClick={() => setAdvanced(!advanced)}
+          className="text-[10px] text-zinc-500 hover:text-zinc-300"
+        >
+          {advanced ? '← voltar pro builder' : 'editar texto livre →'}
+        </button>
+      </div>
+
+      {advanced ? (
+        <textarea
+          value={thenText}
+          onChange={(e) => onChange(e.target.value)}
+          rows={3}
+          placeholder='ex: aplicar_tag("Quente") · mover_etapa(105414491) · pausar_ia'
+          className="w-full px-3 py-2 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 font-mono focus:outline-none focus:border-brand-500 resize-vertical"
+        />
+      ) : (
+        <div className="space-y-2 rounded-md border border-zinc-800 bg-zinc-950/40 p-3">
+          {/* Aplicar tag */}
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!parsed.tag}
+              onChange={(e) => apply({ tag: e.target.checked ? tags[0]?.name ?? '' : null })}
+              className="accent-brand-500"
+            />
+            <Tag size={12} className="text-amber-400 shrink-0" />
+            <span className="text-xs text-zinc-300 w-24 shrink-0">Aplicar tag</span>
+            <select
+              value={parsed.tag ?? ''}
+              onChange={(e) => apply({ tag: e.target.value || null })}
+              disabled={!parsed.tag}
+              className="flex-1 px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 disabled:opacity-50 focus:outline-none focus:border-brand-500"
+            >
+              {tagsLoading && <option value="">carregando tags…</option>}
+              {!tagsLoading && tags.length === 0 && <option value="">Nenhuma tag no Kommo</option>}
+              {tags.map((t) => (
+                <option key={t.id} value={t.name}>
+                  {t.name}
+                </option>
+              ))}
+              {parsed.tag && !tags.some((t) => t.name === parsed.tag) && (
+                <option value={parsed.tag}>{parsed.tag} (atual)</option>
+              )}
+            </select>
+          </div>
+
+          {/* Mover etapa */}
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!parsed.statusId}
+              onChange={(e) => apply({ statusId: e.target.checked ? stages[0]?.id ?? null : null })}
+              className="accent-brand-500"
+            />
+            <Workflow size={12} className="text-sky-400 shrink-0" />
+            <span className="text-xs text-zinc-300 w-24 shrink-0">Mover etapa</span>
+            <select
+              value={parsed.statusId ?? ''}
+              onChange={(e) => apply({ statusId: e.target.value ? Number(e.target.value) : null })}
+              disabled={!parsed.statusId}
+              className="flex-1 px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 disabled:opacity-50 focus:outline-none focus:border-brand-500"
+            >
+              {stagesLoading && <option value="">carregando etapas…</option>}
+              {!stagesLoading && stages.length === 0 && <option value="">Nenhuma etapa</option>}
+              {stages.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label} (#{s.id})
+                </option>
+              ))}
+              {parsed.statusId && !stages.some((s) => s.id === parsed.statusId) && (
+                <option value={parsed.statusId}>#{parsed.statusId} (atual)</option>
+              )}
+            </select>
+          </div>
+
+          {/* Pausar IA */}
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={parsed.pause}
+              onChange={(e) => apply({ pause: e.target.checked })}
+              className="accent-brand-500"
+            />
+            <Pause size={12} className="text-rose-400 shrink-0" />
+            <span className="text-xs text-zinc-300 w-24 shrink-0">Pausar IA</span>
+            <span className="flex-1 text-[10px] text-zinc-600">
+              Marca o checkbox "IA Pausada" no lead — humano assume.
+            </span>
+          </div>
+
+          {/* Instrução custom */}
+          <div>
+            <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">
+              Instrução adicional (texto livre)
+            </label>
+            <input
+              type="text"
+              value={parsed.custom}
+              onChange={(e) => apply({ custom: e.target.value })}
+              placeholder="ex: responder confirmando interesse e perguntar urgência"
+              className="w-full px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500"
+            />
+          </div>
+
+          {/* Preview do que o LLM vai ler */}
+          {thenText.trim() && (
+            <div className="mt-2 rounded bg-zinc-900/60 border border-zinc-800 px-2 py-1.5">
+              <div className="text-[9px] uppercase tracking-wider text-zinc-600 mb-0.5">
+                Como a IA vai ler isso
+              </div>
+              <div className="text-[10px] text-zinc-400 font-mono break-words">{thenText}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===========================================================================
+// IdeasSection — cards informativos de funcionalidades pra construir depois
+// ===========================================================================
+
+const IDEAS: Array<{ icon: string; title: string; desc: string }> = [
+  {
+    icon: '🔥',
+    title: 'Qualificação Quente/Frio automática',
+    desc:
+      'Detecta sinais de interesse (orçamento, urgência, decisor) ou desinteresse e aplica tag automática. Hoje você configura na mão como regra; ideia: heurística pré-pronta + ML leve.',
+  },
+  {
+    icon: '👤',
+    title: 'Handoff humano por palavras-chave',
+    desc:
+      'Lista de gatilhos (ex: "falar com pessoa", "atendente", "reclamação") que pausam a IA e notificam um operador específico no Slack/WhatsApp.',
+  },
+  {
+    icon: '💰',
+    title: 'Pipeline automático por intenção',
+    desc:
+      'Move o lead de etapa baseado em padrões de fala. "Pedi orçamento" → Qualificado. "Confirmei pedido" → Pedido realizado. Sem precisar criar regra manual pra cada caso.',
+  },
+  {
+    icon: '📞',
+    title: 'Coleta proativa de contato',
+    desc:
+      'Se o lead não preencheu email/telefone após N turnos, a IA pede de forma natural ("posso te enviar mais detalhes por email?"). Salva no campo certo do Kommo.',
+  },
+  {
+    icon: '⏰',
+    title: 'Horário comercial',
+    desc:
+      'Fora do expediente, a IA responde com mensagem padrão de boas-vindas e marca o lead como "esperando contato humano amanhã". Evita resposta robótica às 3h da manhã.',
+  },
+  {
+    icon: '🎁',
+    title: 'Cupom de boas-vindas',
+    desc:
+      'Se for o PRIMEIRO contato do lead (sem histórico), IA oferece cupom configurável. Útil pra converter visitante curioso em lead quente.',
+  },
+  {
+    icon: '🔁',
+    title: 'Follow-up automático',
+    desc:
+      'Lead sumiu há X horas sem fechar? A IA manda uma mensagem leve ("ainda interessado?") e move pra etapa "Reaquecimento" se responder.',
+  },
+  {
+    icon: '📊',
+    title: 'A/B de prompts',
+    desc:
+      'Mantém 2+ versões do system prompt ativas em paralelo. Cada conversa nova recebe uma versão aleatória. O juiz LLM (já existente) compara taxa de conversão entre versões.',
+  },
+];
+
+function IdeasSection() {
+  return (
+    <section className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <Lightbulb size={16} className="text-amber-300" />
+        <h2 className="font-semibold text-zinc-100">Ideias pra ativar depois</h2>
+      </div>
+      <p className="text-xs text-zinc-400 mb-4">
+        Funcionalidades inspiradas em padrões comuns de vendas/atendimento. Não estão construídas
+        ainda — me peça quando quiser ativar alguma e eu implemento.
+      </p>
+      <div className="grid md:grid-cols-2 gap-3">
+        {IDEAS.map((idea) => (
+          <div
+            key={idea.title}
+            className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 hover:border-amber-500/30 transition-colors"
+          >
+            <div className="flex items-start gap-2">
+              <span className="text-lg leading-none mt-0.5">{idea.icon}</span>
+              <div>
+                <div className="text-xs font-semibold text-zinc-200">{idea.title}</div>
+                <div className="text-[11px] text-zinc-500 mt-1 leading-snug">{idea.desc}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

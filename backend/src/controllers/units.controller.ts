@@ -262,6 +262,35 @@ export async function kommoFieldsHandler(req: Request, res: Response): Promise<v
 }
 
 // ---------------------------------------------------------------------------
+// Tags de leads do Kommo (por Unit) — usado no painel pra montar dropdowns
+// nas regras de automação (aplicar_tag dropdown ao invés de texto livre).
+// ---------------------------------------------------------------------------
+
+export async function kommoTagsHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(400).json({ error: 'kommo_not_configured' });
+    return;
+  }
+  try {
+    const client = createKommoClient(unit);
+    const tags = await client.listLeadTags();
+    res.json({
+      ok: true,
+      tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color ?? null })),
+    });
+  } catch (err) {
+    logger.warn({ err, id }, 'kommo-tags (por Unit) falhou');
+    res.status(kommoErrorStatus(err)).json(kommoErrorPayload(err));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Salesbots do Kommo (por Unit).
 // ---------------------------------------------------------------------------
 

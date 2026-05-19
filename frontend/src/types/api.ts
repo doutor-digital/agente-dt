@@ -140,6 +140,11 @@ export interface KommoSalesbotsResponse extends KommoErrorEnvelope {
   bots?: Array<{ id: number; name: string }>;
 }
 
+export interface KommoTagsResponse extends KommoErrorEnvelope {
+  ok: boolean;
+  tags?: Array<{ id: number; name: string; color: string | null }>;
+}
+
 export interface KommoPipelinesResponse extends KommoErrorEnvelope {
   pipelines?: Array<{
     id: number;

@@ -11,6 +11,7 @@ import type {
   KommoFieldsResponse,
   KommoPipelinesResponse,
   KommoSalesbotsResponse,
+  KommoTagsResponse,
   KommoValidateResponse,
   LlmCallDetail,
   LlmCallSummary,
@@ -177,6 +178,13 @@ export const api = {
   async kommoSalesbots(unitId: string): Promise<KommoSalesbotsResponse> {
     const { data } = await http.get<KommoSalesbotsResponse>(
       `/units/${unitId}/kommo-salesbots`,
+      { timeout: 30_000 },
+    );
+    return data;
+  },
+  async kommoTags(unitId: string): Promise<KommoTagsResponse> {
+    const { data } = await http.get<KommoTagsResponse>(
+      `/units/${unitId}/kommo-tags`,
       { timeout: 30_000 },
     );
     return data;

@@ -78,6 +78,12 @@ export interface KommoSalesbot {
   name: string;
 }
 
+export interface KommoTag {
+  id: number;
+  name: string;
+  color?: string | null;
+}
+
 export interface AddTagParams {
   leadId: number;
   tag: string;
@@ -349,6 +355,29 @@ export class KommoClient {
     } catch (err) {
       wrapAxiosError(err, `getCustomField(${fieldId})`);
     }
+  }
+
+  /**
+   * Lista tags de leads. Kommo pagina (limit 250). Buscamos até 4 páginas
+   * (1000 tags) — suficiente pra qualquer conta normal.
+   */
+  async listLeadTags(): Promise<KommoTag[]> {
+    const all: KommoTag[] = [];
+    for (let page = 1; page <= 4; page++) {
+      try {
+        const { data } = await this.http.get<{
+          _embedded?: { tags?: KommoTag[] };
+          _links?: { next?: { href: string } };
+        }>('/leads/tags', { params: { page, limit: 250 } });
+        const tags = data?._embedded?.tags ?? [];
+        all.push(...tags);
+        if (!data?._links?.next || tags.length === 0) break;
+      } catch (err) {
+        if (page === 1) wrapAxiosError(err, 'listLeadTags');
+        break;
+      }
+    }
+    return all;
   }
 
   /** Validação: tenta buscar um Salesbot por ID. */
