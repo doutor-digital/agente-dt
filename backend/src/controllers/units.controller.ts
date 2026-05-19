@@ -227,6 +227,72 @@ export async function unitStatsHandler(req: Request, res: Response): Promise<voi
 // que o usuário copia pro system prompt e pra `kommoWonStatusIds`.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Custom fields do Kommo (por Unit). Versão moderna do legado
+// /admin/kommo-fields, que dependia das credenciais do .env.
+// ---------------------------------------------------------------------------
+
+export async function kommoFieldsHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(400).json({ error: 'kommo_not_configured' });
+    return;
+  }
+  try {
+    const client = createKommoClient(unit);
+    const raw = (await client.listLeadCustomFields()) as {
+      _embedded?: { custom_fields?: Array<{ id: number; name: string; type: string; code?: string | null }> };
+    };
+    const fields = (raw?._embedded?.custom_fields ?? []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      type: f.type,
+      code: f.code ?? null,
+    }));
+    res.json({ ok: true, fields });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = err instanceof KommoApiError ? err.status ?? 502 : 502;
+    logger.warn({ err, id }, 'kommo-fields (por Unit) falhou');
+    res.status(status).json({ ok: false, error: msg });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Salesbots do Kommo (por Unit).
+// ---------------------------------------------------------------------------
+
+export async function kommoSalesbotsHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(400).json({ error: 'kommo_not_configured' });
+    return;
+  }
+  try {
+    const client = createKommoClient(unit);
+    const raw = (await client.listSalesbots()) as {
+      _embedded?: { salesbot?: Array<{ id: number; name: string }> };
+    };
+    const bots = (raw?._embedded?.salesbot ?? []).map((b) => ({ id: b.id, name: b.name }));
+    res.json({ ok: true, bots });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = err instanceof KommoApiError ? err.status ?? 502 : 502;
+    logger.warn({ err, id }, 'kommo-salesbots (por Unit) falhou');
+    res.status(status).json({ ok: false, error: msg });
+  }
+}
+
 export async function kommoPipelinesHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
   const unit = await prisma.unit.findUnique({ where: { id } });

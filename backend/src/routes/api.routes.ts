@@ -28,6 +28,8 @@ import {
   unitStatsHandler,
   kommoPipelinesHandler,
   kommoValidateHandler,
+  kommoFieldsHandler,
+  kommoSalesbotsHandler,
 } from '../controllers/units.controller.js';
 import {
   listLlmCallsHandler,
@@ -87,6 +89,8 @@ apiRouter.patch('/units/:id', updateUnitHandler);
 apiRouter.delete('/units/:id', deleteUnitHandler);
 apiRouter.get('/units/:id/stats', unitStatsHandler);
 apiRouter.get('/units/:id/kommo-pipelines', kommoPipelinesHandler);
+apiRouter.get('/units/:id/kommo-fields', kommoFieldsHandler);
+apiRouter.get('/units/:id/kommo-salesbots', kommoSalesbotsHandler);
 apiRouter.post('/units/:id/kommo-validate', kommoValidateHandler);
 apiRouter.get('/units/:id/integrations', getIntegrations);
 apiRouter.get('/units/:id/openai-debug', openaiDebugHandler);
