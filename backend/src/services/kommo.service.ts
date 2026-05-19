@@ -361,6 +361,19 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Estratégia em duas etapas, do mais geral pro mais específico:
+   *  1. PATCH no custom field "Resposta IA" — SEMPRE. Esse é o evento que o
+   *     Digital Pipeline do Kommo escuta com o trigger "Quando campo muda"
+   *     pra disparar o Salesbot automaticamente. É a fonte da verdade.
+   *  2. POST /salesbot/{id}/run — best-effort. Algumas contas (ex:
+   *     hmtecnologiakommon) retornam 404 nesse endpoint, mas continuam
+   *     enviando via Digital Pipeline. Por isso engolimos o 404 silenciosa-
+   *     mente — outros erros (401, 500) continuam propagando.
+   *
+   * Resultado: o PATCH bem-sucedido conta como salesbot disparado. Sem o
+   * 404 do POST/run abortar o caminho e fazer cair pro fallback de nota.
+   */
   async runSalesbot({
     leadId,
     salesbotId,
@@ -384,8 +397,18 @@ export class KommoClient {
       const { data } = await this.http.post(`/salesbot/${salesbotId}/run`, [
         { bot_id: salesbotId, entity_type: 2, entity_id: leadId },
       ]);
-      return data;
+      return { runApi: 'ok', data };
     } catch (err) {
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      if (status === 404) {
+        // Conta não expõe o endpoint /run via REST. O trigger do Digital
+        // Pipeline cuida do disparo. Não é falha — é o caminho esperado.
+        logger.debug(
+          { leadId, salesbotId },
+          'runSalesbot: POST /run 404 (conta sem API). Confiando no Digital Pipeline trigger.',
+        );
+        return { runApi: 'unavailable_404', triggeredBy: 'field_change' };
+      }
       wrapAxiosError(err, `runSalesbot:run(${leadId}, bot=${salesbotId})`);
     }
   }
