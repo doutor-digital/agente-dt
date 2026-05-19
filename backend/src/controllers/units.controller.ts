@@ -256,10 +256,8 @@ export async function kommoFieldsHandler(req: Request, res: Response): Promise<v
     }));
     res.json({ ok: true, fields });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const status = err instanceof KommoApiError ? err.status ?? 502 : 502;
     logger.warn({ err, id }, 'kommo-fields (por Unit) falhou');
-    res.status(status).json({ ok: false, error: msg });
+    res.status(kommoErrorStatus(err)).json(kommoErrorPayload(err));
   }
 }
 
@@ -286,10 +284,8 @@ export async function kommoSalesbotsHandler(req: Request, res: Response): Promis
     const bots = (raw?._embedded?.salesbot ?? []).map((b) => ({ id: b.id, name: b.name }));
     res.json({ ok: true, bots });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const status = err instanceof KommoApiError ? err.status ?? 502 : 502;
     logger.warn({ err, id }, 'kommo-salesbots (por Unit) falhou');
-    res.status(status).json({ ok: false, error: msg });
+    res.status(kommoErrorStatus(err)).json(kommoErrorPayload(err));
   }
 }
 
@@ -317,11 +313,33 @@ export async function kommoPipelinesHandler(req: Request, res: Response): Promis
       })),
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const status = err instanceof KommoApiError ? err.status ?? 502 : 502;
     logger.warn({ err, id }, 'kommo-pipelines falhou');
-    res.status(status).json({ error: 'kommo_pipelines_failed', message: msg });
+    res.status(kommoErrorStatus(err)).json(kommoErrorPayload(err));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — extrai detalhes do erro do Kommo para devolver ao front.
+// O front precisa do `kommoBody` pra exibir "Authorization required", "Account
+// blocked", etc. Sem isso, só vê "Request failed with status code 401".
+// ---------------------------------------------------------------------------
+
+function kommoErrorStatus(err: unknown): number {
+  if (err instanceof KommoApiError) return err.status ?? 502;
+  return 502;
+}
+
+function kommoErrorPayload(err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (err instanceof KommoApiError) {
+    return {
+      ok: false,
+      error: msg,
+      kommoStatus: err.status ?? null,
+      kommoBody: err.responseBody ?? null,
+    };
+  }
+  return { ok: false, error: msg };
 }
 
 // ---------------------------------------------------------------------------

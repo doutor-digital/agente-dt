@@ -18,6 +18,7 @@ import { CheckCircle2, Loader2, RefreshCw, XCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type {
+  KommoErrorEnvelope,
   KommoFieldsResponse,
   KommoPipelinesResponse,
   KommoSalesbotsResponse,
@@ -127,7 +128,7 @@ export function KommoExplorer(props: Props) {
         onChange={props.onReplyFieldChange}
         options={textFields.map((f) => ({ id: f.id, label: `${f.name} · #${f.id} (${f.type})` }))}
         emptyHint={fields ? 'Nenhum campo de texto encontrado no Kommo.' : 'Carregue os campos pra escolher.'}
-        error={fields && !fields.ok ? fields.error : null}
+        error={fields && !fields.ok ? fields : null}
       />
 
       {/* Paused Field (checkbox) */}
@@ -138,7 +139,7 @@ export function KommoExplorer(props: Props) {
         onChange={props.onPausedFieldChange}
         options={checkboxFields.map((f) => ({ id: f.id, label: `${f.name} · #${f.id}` }))}
         emptyHint={fields ? 'Nenhum campo checkbox encontrado.' : 'Carregue os campos pra escolher.'}
-        error={fields && !fields.ok ? fields.error : null}
+        error={fields && !fields.ok ? fields : null}
       />
 
       {/* Salesbot */}
@@ -149,7 +150,7 @@ export function KommoExplorer(props: Props) {
         onChange={props.onSalesbotChange}
         options={(bots?.bots ?? []).map((b) => ({ id: b.id, label: `${b.name} · #${b.id}` }))}
         emptyHint={bots ? 'Nenhum salesbot ativo.' : 'Carregue pra escolher.'}
-        error={bots && !bots.ok ? bots.error : null}
+        error={bots && !bots.ok ? bots : null}
       />
 
       {/* Pipelines + Won statuses */}
@@ -160,7 +161,7 @@ export function KommoExplorer(props: Props) {
         <div className="text-[10px] text-zinc-600 mb-2">
           Marque as etapas que significam conversão. Quando o lead entra numa delas, a conversa é marcada como convertida e o juiz LLM avalia.
         </div>
-        {pipelines?.error && <ErrorBanner message={pipelines.message ?? pipelines.error} />}
+        {pipelines?.error && <ErrorBanner envelope={pipelines} />}
         {!pipelines && (
           <div className="text-[11px] text-zinc-600 italic">Carregue os dados do Kommo pra escolher etapas.</div>
         )}
@@ -236,12 +237,12 @@ function KommoSelect({
   onChange: (id: number | null) => void;
   options: Array<{ id: number; label: string }>;
   emptyHint: string;
-  error: string | null | undefined;
+  error: KommoErrorEnvelope | null | undefined;
 }) {
   return (
     <div>
       <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
-      {error && <ErrorBanner message={error} />}
+      {error && <ErrorBanner envelope={error} />}
       <select
         value={value ?? 0}
         onChange={(e) => {
@@ -270,12 +271,42 @@ function KommoSelect({
   );
 }
 
-function ErrorBanner({ message }: { message: string }) {
+function ErrorBanner({ envelope }: { envelope: KommoErrorEnvelope }) {
+  const detail = formatKommoBody(envelope.kommoBody);
   return (
-    <div className="mb-1 rounded bg-rose-500/10 ring-1 ring-rose-500/30 px-2 py-1 text-[10px] text-rose-200">
-      <strong className="font-semibold">Kommo respondeu:</strong> {message}
+    <div className="mb-1 rounded bg-rose-500/10 ring-1 ring-rose-500/30 px-2 py-1.5 text-[10px] text-rose-200 space-y-1">
+      <div>
+        <strong className="font-semibold">Kommo</strong>
+        {envelope.kommoStatus && (
+          <span className="ml-1 inline-block rounded bg-rose-500/20 px-1.5 py-0.5 font-mono">
+            HTTP {envelope.kommoStatus}
+          </span>
+        )}
+        {envelope.error && <span className="ml-1 text-rose-300/80">— {envelope.error}</span>}
+      </div>
+      {detail && (
+        <pre className="font-mono text-[10px] text-rose-300/90 whitespace-pre-wrap break-words">
+          {detail}
+        </pre>
+      )}
     </div>
   );
+}
+
+function formatKommoBody(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  // Kommo costuma devolver { title, type, status, detail, "validation-errors": [...] }
+  const b = body as Record<string, unknown>;
+  const lines: string[] = [];
+  if (typeof b.detail === 'string') lines.push(`detail: ${b.detail}`);
+  else if (typeof b.title === 'string') lines.push(`title: ${b.title}`);
+  if (b.hint && typeof b.hint === 'string') lines.push(`hint: ${b.hint}`);
+  if (Array.isArray(b['validation-errors'])) {
+    lines.push('validation-errors:');
+    for (const ve of b['validation-errors'] as unknown[]) lines.push(`  · ${JSON.stringify(ve)}`);
+  }
+  if (lines.length === 0) lines.push(JSON.stringify(body, null, 2));
+  return lines.join('\n');
 }
 
 function ValidationResults({ result }: { result: KommoValidateResponse }) {

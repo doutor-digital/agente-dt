@@ -124,19 +124,23 @@ export type UnitInput = Partial<Omit<Unit, 'id' | 'createdAt' | 'updatedAt' | '_
 // Kommo Explorer — dados ao vivo do CRM Kommo (campos, salesbots, pipelines)
 // ---------------------------------------------------------------------------
 
-export interface KommoFieldsResponse {
+export interface KommoErrorEnvelope {
+  error?: string;
+  kommoStatus?: number | null;
+  kommoBody?: unknown;
+}
+
+export interface KommoFieldsResponse extends KommoErrorEnvelope {
   ok: boolean;
   fields?: Array<{ id: number; name: string; type: string; code: string | null }>;
-  error?: string;
 }
 
-export interface KommoSalesbotsResponse {
+export interface KommoSalesbotsResponse extends KommoErrorEnvelope {
   ok: boolean;
   bots?: Array<{ id: number; name: string }>;
-  error?: string;
 }
 
-export interface KommoPipelinesResponse {
+export interface KommoPipelinesResponse extends KommoErrorEnvelope {
   pipelines?: Array<{
     id: number;
     name: string;
@@ -144,7 +148,6 @@ export interface KommoPipelinesResponse {
     isArchive: boolean;
     statuses: Array<{ id: number; name: string; color: string | null }>;
   }>;
-  error?: string;
   message?: string;
 }
 

@@ -232,12 +232,27 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Lista Salesbots da conta. Kommo expõe via `/api/v4/salesbots` (plural),
+   * conforme https://developers.kommo.com/reference/list-of-bots — algumas
+   * versões antigas usavam `/salesbot` (singular) que agora retorna 404.
+   * Fallback transparente: se plural 404, tenta singular.
+   */
   async listSalesbots(): Promise<unknown> {
     try {
-      const { data } = await this.http.get('/salesbot');
+      const { data } = await this.http.get('/salesbots');
       return data;
-    } catch (err) {
-      wrapAxiosError(err, 'listSalesbots');
+    } catch (errPlural) {
+      const pluralStatus = axios.isAxiosError(errPlural) ? errPlural.response?.status : undefined;
+      if (pluralStatus === 404) {
+        try {
+          const { data } = await this.http.get('/salesbot');
+          return data;
+        } catch (errSingular) {
+          wrapAxiosError(errSingular, 'listSalesbots (fallback singular)');
+        }
+      }
+      wrapAxiosError(errPlural, 'listSalesbots');
     }
   }
 
