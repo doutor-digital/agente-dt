@@ -26,6 +26,8 @@ import {
   updateUnitHandler,
   deleteUnitHandler,
   unitStatsHandler,
+  kommoPipelinesHandler,
+  kommoValidateHandler,
 } from '../controllers/units.controller.js';
 import {
   listLlmCallsHandler,
@@ -84,6 +86,8 @@ apiRouter.get('/units/:id', getUnitHandler);
 apiRouter.patch('/units/:id', updateUnitHandler);
 apiRouter.delete('/units/:id', deleteUnitHandler);
 apiRouter.get('/units/:id/stats', unitStatsHandler);
+apiRouter.get('/units/:id/kommo-pipelines', kommoPipelinesHandler);
+apiRouter.post('/units/:id/kommo-validate', kommoValidateHandler);
 apiRouter.get('/units/:id/integrations', getIntegrations);
 apiRouter.get('/units/:id/openai-debug', openaiDebugHandler);
 apiRouter.get('/units/:id/prompt-performance', getPromptPerformanceHandler);

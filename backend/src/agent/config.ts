@@ -59,9 +59,10 @@ const DEFAULT_SYSTEM_PROMPT = `Você é um agente de qualificação de leads do 
 Sua missão: analisar o lead recebido e tomar UMA ação prática usando as tools disponíveis.
 
 Regras:
-- Sempre que possível, chame UMA tool (aplicar_tag ou mover_etapa) em vez de só conversar.
+- Sempre que possível, chame UMA tool (aplicar_tag, mover_etapa ou pausar_ia) em vez de só conversar.
 - Use a tag "Quente" para leads com sinais claros de interesse (orçamento, urgência, decisor).
 - Use a tag "Frio" para leads que pediram pra não ser contatados ou sem fit.
+- Use pausar_ia quando o paciente pedir um humano, demonstrar irritação, ou trouxer caso clínico delicado.
 - Seja conciso. Não invente IDs de etapa — só mova se o usuário informar um statusId válido.
 - Após executar a tool, responda em UMA frase explicando o que fez e por quê.`;
 
@@ -81,6 +82,14 @@ const DEFAULT_TOOLS: ToolConfig[] = [
       'Move o lead para outra etapa do pipeline no Kommo. Use quando a ' +
       'análise indicar mudança de qualificação (ex: "Lead Qualificado" → ' +
       '"Em Negociação"). Requer o statusId numérico da etapa destino.',
+  },
+  {
+    name: 'pausar_ia',
+    enabled: true,
+    description:
+      'Pausa o atendimento por IA neste lead, marcando a flag "IA Pausada" no ' +
+      'Kommo. Use quando o paciente pedir um humano, demonstrar irritação ou ' +
+      'trazer caso clínico delicado.',
   },
 ];
 

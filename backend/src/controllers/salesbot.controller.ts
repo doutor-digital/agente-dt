@@ -23,6 +23,7 @@ import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder } from '../agent/trace-recorder.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
+import { isLeadPaused } from '../services/kommo.service.js';
 
 // ---------------------------------------------------------------------------
 // Schema permissivo — aceita string ou número para IDs.
@@ -132,6 +133,25 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     role: 'user',
     content: message,
   });
+
+  // Guard: operador humano marcou "IA Pausada" → não invoca o agente,
+  // devolve reply vazio. O Salesbot do Kommo deve tratar vazio como "skip send".
+  if (await isLeadPaused(unit, Number(leadId))) {
+    const totalLatency = Math.round(performance.now() - requestStart);
+    await recorder.step({
+      kind: 'COMPLETED',
+      title: 'IA pausada por humano — resposta omitida',
+      payload: { leadId, reason: 'kommo_paused_field_checked' },
+      latencyMs: totalLatency,
+    });
+    await recorder.finalize({
+      status: 'SUCCESS',
+      latencyMs: totalLatency,
+      iaDecision: '__paused__',
+    });
+    res.json({ ok: true, paused: true, reply: '', traceId: trace.id, unit: unit.slug });
+    return;
+  }
 
   const humanMessage = `${currentTimeTag()} ${message}`;
 

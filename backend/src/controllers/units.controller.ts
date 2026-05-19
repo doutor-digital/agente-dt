@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
+import { createKommoClient, KommoApiError } from '../services/kommo.service.js';
 import {
   createUnit,
   deleteUnit,
@@ -40,6 +41,7 @@ const unitInputBase = {
   kommoAccessToken: z.string().nullable().optional(),
   kommoSalesbotId: z.coerce.number().int().nullable().optional(),
   kommoReplyFieldId: z.coerce.number().int().nullable().optional(),
+  kommoPausedFieldId: z.coerce.number().int().nullable().optional(),
   kommoWonStatusIds: z.array(z.coerce.number().int()).optional(),
   openaiApiKey: z.string().nullable().optional(),
   openaiAdminKey: z.string().nullable().optional(),
@@ -218,4 +220,150 @@ export async function unitStatsHandler(req: Request, res: Response): Promise<voi
       })),
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Pipelines do Kommo — usado pelo painel pra mostrar as etapas (statusId+nome)
+// que o usuário copia pro system prompt e pra `kommoWonStatusIds`.
+// ---------------------------------------------------------------------------
+
+export async function kommoPipelinesHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(400).json({ error: 'kommo_not_configured' });
+    return;
+  }
+  try {
+    const client = createKommoClient(unit);
+    const pipelines = await client.listPipelines();
+    res.json({
+      pipelines: pipelines.map((p) => ({
+        id: p.id,
+        name: p.name,
+        isMain: !!p.is_main,
+        isArchive: !!p.is_archive,
+        statuses: p.statuses.map((s) => ({ id: s.id, name: s.name, color: s.color ?? null })),
+      })),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const status = err instanceof KommoApiError ? err.status ?? 502 : 502;
+    logger.warn({ err, id }, 'kommo-pipelines falhou');
+    res.status(status).json({ error: 'kommo_pipelines_failed', message: msg });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Validate Kommo — checa se os IDs configurados (salesbot, fields, etapas Won)
+// existem de fato na conta. Retorna checklist verde/vermelho pro front.
+//
+// SOFT: nunca falha o request. Cada checagem reporta seu próprio ok/erro.
+// ---------------------------------------------------------------------------
+
+interface KommoCheck {
+  name: string;
+  ok: boolean;
+  detail?: string;
+}
+
+export async function kommoValidateHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(400).json({ error: 'kommo_not_configured' });
+    return;
+  }
+
+  const client = createKommoClient(unit);
+  const checks: KommoCheck[] = [];
+
+  // 1) Subdomain + token — qualquer chamada serve. Listamos pipelines pq
+  //    é leve e reusamos pra validar `kommoWonStatusIds`.
+  let pipelines: Awaited<ReturnType<typeof client.listPipelines>> | null = null;
+  try {
+    pipelines = await client.listPipelines();
+    checks.push({ name: 'credentials', ok: true, detail: `${pipelines.length} pipeline(s) carregados` });
+  } catch (err) {
+    const msg = err instanceof KommoApiError ? `${err.status ?? '?'}: ${err.message}` : (err as Error).message;
+    checks.push({ name: 'credentials', ok: false, detail: msg });
+  }
+
+  // 2) Salesbot.
+  if (unit.kommoSalesbotId) {
+    try {
+      const bot = await client.getSalesbot(unit.kommoSalesbotId);
+      checks.push({ name: 'salesbot', ok: true, detail: `"${bot.name}" (#${bot.id})` });
+    } catch (err) {
+      const msg = err instanceof KommoApiError ? `${err.status ?? '?'}: ${err.message}` : (err as Error).message;
+      checks.push({ name: 'salesbot', ok: false, detail: msg });
+    }
+  } else {
+    checks.push({ name: 'salesbot', ok: false, detail: 'kommoSalesbotId não configurado' });
+  }
+
+  // 3) Reply field.
+  if (unit.kommoReplyFieldId) {
+    try {
+      const f = await client.getCustomField(unit.kommoReplyFieldId);
+      checks.push({ name: 'replyField', ok: true, detail: `"${f.name}" (${f.type})` });
+    } catch (err) {
+      const msg = err instanceof KommoApiError ? `${err.status ?? '?'}: ${err.message}` : (err as Error).message;
+      checks.push({ name: 'replyField', ok: false, detail: msg });
+    }
+  } else {
+    checks.push({ name: 'replyField', ok: false, detail: 'kommoReplyFieldId não configurado' });
+  }
+
+  // 4) Paused field (opcional).
+  if (unit.kommoPausedFieldId) {
+    try {
+      const f = await client.getCustomField(unit.kommoPausedFieldId);
+      const looksOk = f.type === 'checkbox';
+      checks.push({
+        name: 'pausedField',
+        ok: looksOk,
+        detail: looksOk ? `"${f.name}" (checkbox)` : `"${f.name}" tem tipo "${f.type}" — esperado "checkbox"`,
+      });
+    } catch (err) {
+      const msg = err instanceof KommoApiError ? `${err.status ?? '?'}: ${err.message}` : (err as Error).message;
+      checks.push({ name: 'pausedField', ok: false, detail: msg });
+    }
+  } else {
+    checks.push({ name: 'pausedField', ok: false, detail: 'kommoPausedFieldId não configurado (opcional)' });
+  }
+
+  // 5) Won status IDs — cross-check com os pipelines carregados.
+  if (unit.kommoWonStatusIds.length === 0) {
+    checks.push({ name: 'wonStatusIds', ok: false, detail: 'nenhum statusId de "Ganho" configurado' });
+  } else if (!pipelines) {
+    checks.push({ name: 'wonStatusIds', ok: false, detail: 'não foi possível validar (falha em credentials)' });
+  } else {
+    const validIds = new Set(pipelines.flatMap((p) => p.statuses.map((s) => s.id)));
+    const missing = unit.kommoWonStatusIds.filter((sid) => !validIds.has(sid));
+    if (missing.length === 0) {
+      checks.push({
+        name: 'wonStatusIds',
+        ok: true,
+        detail: `${unit.kommoWonStatusIds.length} status existente(s)`,
+      });
+    } else {
+      checks.push({
+        name: 'wonStatusIds',
+        ok: false,
+        detail: `IDs inexistentes: ${missing.join(', ')}`,
+      });
+    }
+  }
+
+  const allOk = checks.every((c) => c.ok || c.name === 'pausedField'); // pausedField é opcional
+  res.json({ ok: allOk, checks });
 }

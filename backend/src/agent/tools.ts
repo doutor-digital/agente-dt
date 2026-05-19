@@ -38,6 +38,12 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     'Move o lead para outra etapa do pipeline no Kommo. Use quando a ' +
     'análise indicar mudança de qualificação (ex: "Lead Qualificado" → ' +
     '"Em Negociação"). Requer o statusId numérico da etapa destino.',
+  pausar_ia:
+    'Pausa o atendimento por IA neste lead, marcando a flag "IA Pausada" no ' +
+    'Kommo. Use APENAS quando: (a) o paciente pedir explicitamente pra falar ' +
+    'com um humano; (b) a situação é clínica/sensível e exige atendente real; ' +
+    '(c) o paciente está agitado/insatisfeito. Após pausar, responda UMA frase ' +
+    'avisando que um humano vai assumir.',
 };
 
 // ---------------------------------------------------------------------------
@@ -51,9 +57,16 @@ export interface BuildToolsArgs {
   recorder: TraceRecorder;
   kommo: KommoClient;
   descriptionOverrides?: Record<string, string>;
+  /** ID do custom field "IA Pausada". Sem isso, `pausar_ia` retorna erro suave. */
+  pausedFieldId?: number | null;
 }
 
-export function buildTools({ recorder, kommo, descriptionOverrides = {} }: BuildToolsArgs) {
+export function buildTools({
+  recorder,
+  kommo,
+  descriptionOverrides = {},
+  pausedFieldId = null,
+}: BuildToolsArgs) {
   const desc = (name: string) => descriptionOverrides[name] || DEFAULT_TOOL_DESCRIPTIONS[name];
 
   const aplicarTagSchema = z.object({
@@ -153,7 +166,63 @@ export function buildTools({ recorder, kommo, descriptionOverrides = {} }: Build
     },
   });
 
-  return [aplicar_tag, mover_etapa];
+  const pausarIaSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    motivo: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe('Por que está pausando a IA neste lead (registrado no trace).'),
+  });
+
+  const pausar_ia = new DynamicStructuredTool({
+    name: 'pausar_ia',
+    description: desc('pausar_ia'),
+    schema: pausarIaSchema,
+    func: async ({ leadId, motivo }) => {
+      const t0 = performance.now();
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: pausar IA no lead ${leadId} (${motivo})`,
+        payload: { leadId, motivo },
+      });
+
+      if (!pausedFieldId) {
+        const msg = 'Unit não tem kommoPausedFieldId configurado — pausa não pode ser persistida.';
+        await recorder.step({
+          kind: 'ERROR',
+          title: msg,
+          payload: { leadId, motivo },
+          latencyMs: Math.round(performance.now() - t0),
+        });
+        return `ERRO: ${msg} Avise a equipe e prossiga sem pausar.`;
+      }
+
+      try {
+        await kommo.setLeadFieldFlag(leadId, pausedFieldId, true);
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `IA pausada no lead ${leadId}`,
+          payload: { leadId, motivo, fieldId: pausedFieldId },
+          latencyMs: latency,
+        });
+        return `OK — IA pausada no lead ${leadId} (${latency}ms). Responda em UMA frase avisando o paciente.`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha ao pausar IA: ${msg}`,
+          payload: { leadId, motivo, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao pausar IA: ${msg}`;
+      }
+    },
+  });
+
+  return [aplicar_tag, mover_etapa, pausar_ia];
 }
 
 export type AgentTools = ReturnType<typeof buildTools>;

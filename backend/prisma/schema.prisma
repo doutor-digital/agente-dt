@@ -65,6 +65,10 @@ model Unit {
   kommoAccessToken String? @map("kommo_access_token")
   kommoSalesbotId  Int?    @map("kommo_salesbot_id")
   kommoReplyFieldId Int?   @map("kommo_reply_field_id")
+  // ID do custom field "IA Pausada" (checkbox). Quando o lead tem essa
+  // flag em true, o agente NÃO responde — operador humano pediu pausa.
+  // Também é o field que a tool `pausar_ia` escreve.
+  kommoPausedFieldId Int?  @map("kommo_paused_field_id")
   // Etapas do funil consideradas "Ganho/Convertido". Quando o webhook
   // recebe leads.status com um id desta lista, marcamos a Conversation
   // como convertida e disparamos o juiz LLM.

@@ -20,7 +20,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
-import { createKommoClient } from '../services/kommo.service.js';
+import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
@@ -142,6 +142,14 @@ async function resolveUnit(req: Request): Promise<Unit | null> {
   return ensureDefaultUnit();
 }
 
+// Quando a Unit tem Meta WhatsApp Cloud API configurada, ela é o canal
+// primário do agente. O webhook Kommo continua útil pra detectar conversão
+// (status change), mas não deve disparar o agente nem gravar mensagens —
+// quem cuida disso é o webhook Meta. Evita resposta duplicada.
+function isMetaPrimary(unit: Unit): boolean {
+  return !!unit.metaPhoneNumberId && !!unit.metaAccessToken;
+}
+
 // ---------------------------------------------------------------------------
 // Detecta entrada em etapa de "Ganho" do Kommo.
 //
@@ -237,6 +245,20 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     return;
   }
 
+  if (isMetaPrimary(unit)) {
+    logger.debug(
+      { unit: unit.slug },
+      'kommo webhook: Meta é canal primário, ignorando gatilho do agente',
+    );
+    res.status(200).json({
+      ok: true,
+      skipped: 'meta_is_primary',
+      converted: conversion.converted,
+      unit: unit.slug,
+    });
+    return;
+  }
+
   const leadId = extractLeadId(parsed.data);
   if (!leadId) {
     logger.warn({ body: req.body }, 'webhook sem leadId');
@@ -318,6 +340,25 @@ async function processAgent(args: {
   const { unit, leadId, traceId, humanMessage, chatId, talkId, contactId, isChatMessage, requestStart } = args;
   const recorder = new TraceRecorder(traceId, unit.id);
   await syncRecorderSequence(recorder, traceId);
+
+  // Guard: se operador humano marcou "IA Pausada", não invocamos o agente.
+  // Verificação síncrona porque é 1 GET barato comparado ao custo da LLM.
+  if (await isLeadPaused(unit, leadId)) {
+    const totalLatency = Math.round(performance.now() - requestStart);
+    await recorder.step({
+      kind: 'COMPLETED',
+      title: 'IA pausada por humano — agente não respondeu',
+      payload: { leadId, reason: 'kommo_paused_field_checked' },
+      latencyMs: totalLatency,
+    });
+    await recorder.finalize({
+      status: 'SUCCESS',
+      latencyMs: totalLatency,
+      iaDecision: '__paused__',
+    });
+    logger.info({ traceId, leadId, unit: unit.slug }, 'agente pulado (IA Pausada)');
+    return;
+  }
 
   try {
     const graph = await buildAgentGraph(recorder, unit);

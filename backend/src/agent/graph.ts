@@ -107,7 +107,12 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
   }
 
   const allTools = kommoClient
-    ? buildTools({ recorder, kommo: kommoClient, descriptionOverrides })
+    ? buildTools({
+        recorder,
+        kommo: kommoClient,
+        descriptionOverrides,
+        pausedFieldId: unit.kommoPausedFieldId,
+      })
     : [];
 
   // Filtra tools desabilitadas no AgentConfig.

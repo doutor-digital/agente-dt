@@ -76,6 +76,7 @@ export interface UnitInput {
   kommoAccessToken?: string | null;
   kommoSalesbotId?: number | null;
   kommoReplyFieldId?: number | null;
+  kommoPausedFieldId?: number | null;
   kommoWonStatusIds?: number[];
 
   openaiApiKey?: string | null;
@@ -108,6 +109,7 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       kommoAccessToken: input.kommoAccessToken ?? null,
       kommoSalesbotId: input.kommoSalesbotId ?? null,
       kommoReplyFieldId: input.kommoReplyFieldId ?? null,
+      kommoPausedFieldId: input.kommoPausedFieldId ?? null,
       kommoWonStatusIds: input.kommoWonStatusIds ?? [],
       openaiApiKey: input.openaiApiKey ?? null,
       openaiAdminKey: input.openaiAdminKey ?? null,
@@ -136,6 +138,7 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.kommoAccessToken !== undefined && { kommoAccessToken: input.kommoAccessToken }),
       ...(input.kommoSalesbotId !== undefined && { kommoSalesbotId: input.kommoSalesbotId }),
       ...(input.kommoReplyFieldId !== undefined && { kommoReplyFieldId: input.kommoReplyFieldId }),
+      ...(input.kommoPausedFieldId !== undefined && { kommoPausedFieldId: input.kommoPausedFieldId }),
       ...(input.kommoWonStatusIds !== undefined && { kommoWonStatusIds: input.kommoWonStatusIds }),
       ...(input.openaiApiKey !== undefined && { openaiApiKey: input.openaiApiKey }),
       ...(input.openaiAdminKey !== undefined && { openaiAdminKey: input.openaiAdminKey }),

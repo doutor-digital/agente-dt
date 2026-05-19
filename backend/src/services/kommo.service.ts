@@ -27,16 +27,55 @@ import { logger } from '../lib/logger.js';
 // Tipos públicos
 // ---------------------------------------------------------------------------
 
+export interface KommoCustomFieldValue {
+  field_id: number;
+  field_name?: string;
+  field_code?: string | null;
+  field_type?: string;
+  values: Array<{ value: unknown }>;
+}
+
 export interface KommoLead {
   id: number;
   name: string;
   status_id: number;
   pipeline_id: number;
   price?: number;
+  custom_fields_values?: KommoCustomFieldValue[] | null;
   _embedded?: {
     tags?: Array<{ id: number; name: string }>;
     contacts?: Array<{ id: number }>;
   };
+}
+
+export interface KommoPipelineStatus {
+  id: number;
+  name: string;
+  sort?: number;
+  is_editable?: boolean;
+  color?: string;
+  type?: number;
+}
+
+export interface KommoPipeline {
+  id: number;
+  name: string;
+  is_main?: boolean;
+  is_archive?: boolean;
+  sort?: number;
+  statuses: KommoPipelineStatus[];
+}
+
+export interface KommoCustomField {
+  id: number;
+  name: string;
+  type: string;
+  code?: string | null;
+}
+
+export interface KommoSalesbot {
+  id: number;
+  name: string;
 }
 
 export interface AddTagParams {
@@ -221,6 +260,92 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Lista pipelines do CRM com suas etapas (statuses) embedadas.
+   * Usado pelo painel pra mostrar quais IDs colocar no prompt e em
+   * `kommoWonStatusIds`.
+   */
+  async listPipelines(): Promise<KommoPipeline[]> {
+    try {
+      const { data } = await this.http.get<{
+        _embedded?: {
+          pipelines?: Array<{
+            id: number;
+            name: string;
+            is_main?: boolean;
+            is_archive?: boolean;
+            sort?: number;
+            _embedded?: { statuses?: KommoPipelineStatus[] };
+          }>;
+        };
+      }>('/leads/pipelines');
+      const pipelines = data?._embedded?.pipelines ?? [];
+      return pipelines.map((p) => ({
+        id: p.id,
+        name: p.name,
+        is_main: p.is_main,
+        is_archive: p.is_archive,
+        sort: p.sort,
+        statuses: p._embedded?.statuses ?? [],
+      }));
+    } catch (err) {
+      wrapAxiosError(err, 'listPipelines');
+    }
+  }
+
+  /**
+   * Lê o lead e retorna o valor de um custom field específico como boolean.
+   * Trata Kommo checkbox quirks: o value pode vir como true/false/"1"/"0"/null.
+   * Retorna false quando o field não existe no lead (não estourar pausa por
+   * ausência).
+   */
+  async isLeadFieldChecked(leadId: number, fieldId: number): Promise<boolean> {
+    let lead: KommoLead;
+    try {
+      lead = (await this.http.get<KommoLead>(`/leads/${leadId}`)).data;
+    } catch (err) {
+      wrapAxiosError(err, `isLeadFieldChecked:getLead(${leadId})`);
+    }
+    const fv = lead.custom_fields_values?.find((f) => f.field_id === fieldId);
+    if (!fv) return false;
+    const raw = fv.values?.[0]?.value;
+    if (raw === true) return true;
+    if (typeof raw === 'string') return raw === 'true' || raw === '1';
+    if (typeof raw === 'number') return raw === 1;
+    return false;
+  }
+
+  /** Escreve um boolean num custom field do lead (usado pela tool `pausar_ia`). */
+  async setLeadFieldFlag(leadId: number, fieldId: number, value: boolean): Promise<void> {
+    try {
+      await this.http.patch(`/leads/${leadId}`, {
+        custom_fields_values: [{ field_id: fieldId, values: [{ value }] }],
+      });
+    } catch (err) {
+      wrapAxiosError(err, `setLeadFieldFlag(${leadId}, ${fieldId}, ${value})`);
+    }
+  }
+
+  /** Validação: tenta buscar um custom field por ID. 404 → não existe. */
+  async getCustomField(fieldId: number): Promise<KommoCustomField> {
+    try {
+      const { data } = await this.http.get<KommoCustomField>(`/leads/custom_fields/${fieldId}`);
+      return data;
+    } catch (err) {
+      wrapAxiosError(err, `getCustomField(${fieldId})`);
+    }
+  }
+
+  /** Validação: tenta buscar um Salesbot por ID. */
+  async getSalesbot(salesbotId: number): Promise<KommoSalesbot> {
+    try {
+      const { data } = await this.http.get<KommoSalesbot>(`/salesbot/${salesbotId}`);
+      return data;
+    } catch (err) {
+      wrapAxiosError(err, `getSalesbot(${salesbotId})`);
+    }
+  }
+
   async runSalesbot({
     leadId,
     salesbotId,
@@ -315,6 +440,27 @@ export function createKommoClient(
 ): KommoClient {
   const creds = credsFromUnit(unit);
   return new KommoClient(creds, buildHttp(creds));
+}
+
+/**
+ * Checa se o lead tem o checkbox "IA Pausada" marcado no Kommo.
+ *
+ * Retorna `false` quando: a Unit não tem `kommoPausedFieldId` configurado,
+ * o Kommo está indisponível, ou o field não está checado. Falha SILENCIOSA
+ * é proposital — se a checagem cair, melhor a IA responder do que ficar mudo.
+ */
+export async function isLeadPaused(
+  unit: Pick<Unit, 'kommoSubdomain' | 'kommoAccessToken' | 'kommoSalesbotId' | 'kommoReplyFieldId' | 'kommoPausedFieldId'>,
+  leadId: number,
+): Promise<boolean> {
+  if (!unit.kommoPausedFieldId) return false;
+  try {
+    const client = createKommoClient(unit);
+    return await client.isLeadFieldChecked(leadId, unit.kommoPausedFieldId);
+  } catch (err) {
+    logger.warn({ err, leadId, unit: unit.kommoSubdomain }, 'isLeadPaused: falha — assumindo não pausado');
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
