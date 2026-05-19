@@ -142,16 +142,28 @@ export function KommoExplorer(props: Props) {
         error={fields && !fields.ok ? fields : null}
       />
 
-      {/* Salesbot */}
-      <KommoSelect
-        label="Salesbot"
-        hint='Bot do Kommo que envia a mensagem pelo canal nativo (WhatsApp/Instagram).'
-        value={props.salesbotId}
-        onChange={props.onSalesbotChange}
-        options={(bots?.bots ?? []).map((b) => ({ id: b.id, label: `${b.name} · #${b.id}` }))}
-        emptyHint={bots ? 'Nenhum salesbot ativo.' : 'Carregue pra escolher.'}
-        error={bots && !bots.ok ? bots : null}
-      />
+      {/* Salesbot — listagem 404 em algumas contas Kommo. Mostra input manual
+          como fallback, porque o disparo (POST /salesbot/{id}/run) funciona
+          mesmo sem a API de listagem. */}
+      {bots && !bots.ok && bots.kommoStatus === 404 ? (
+        <ManualIdField
+          label="Salesbot ID"
+          value={props.salesbotId}
+          onChange={props.onSalesbotChange}
+          hint='A API do Kommo não lista salesbots nesta conta (404). Pegue o ID na URL do bot no Kommo (.../salesbot/{ID} ou ?bot_id={ID}) e cole aqui.'
+          error={bots}
+        />
+      ) : (
+        <KommoSelect
+          label="Salesbot"
+          hint='Bot do Kommo que envia a mensagem pelo canal nativo (WhatsApp/Instagram).'
+          value={props.salesbotId}
+          onChange={props.onSalesbotChange}
+          options={(bots?.bots ?? []).map((b) => ({ id: b.id, label: `${b.name} · #${b.id}` }))}
+          emptyHint={bots ? 'Nenhum salesbot ativo.' : 'Carregue pra escolher.'}
+          error={bots && !bots.ok ? bots : null}
+        />
+      )}
 
       {/* Pipelines + Won statuses */}
       <div>
@@ -266,6 +278,39 @@ function KommoSelect({
       {options.length === 0 && !error && (
         <div className="text-[10px] text-zinc-600 mt-1 italic">{emptyHint}</div>
       )}
+      {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
+    </div>
+  );
+}
+
+function ManualIdField({
+  label,
+  value,
+  onChange,
+  hint,
+  error,
+}: {
+  label: string;
+  value: number | null;
+  onChange: (id: number | null) => void;
+  hint?: string;
+  error?: KommoErrorEnvelope | null;
+}) {
+  return (
+    <div>
+      <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+      {error && <ErrorBanner envelope={error} />}
+      <input
+        type="number"
+        value={value ?? ''}
+        onChange={(e) => {
+          const v = e.target.value.trim();
+          const n = v === '' ? null : Number(v);
+          onChange(n && Number.isFinite(n) && n > 0 ? n : null);
+        }}
+        placeholder="Cole o ID aqui (ex: 12345)"
+        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
+      />
       {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
     </div>
   );
