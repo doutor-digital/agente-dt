@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -12,6 +12,7 @@ import {
   Save,
   Sparkles,
   Tag,
+  ThumbsDown,
   Trash2,
   Workflow,
   Wrench,
@@ -20,6 +21,7 @@ import { api } from '../lib/api';
 import type {
   AgentConfigInput,
   AgentConfigResponse,
+  FlaggedMessage,
   KommoPipelinesResponse,
   KommoTagsResponse,
   ToolConfig,
@@ -396,6 +398,9 @@ export function AgentConfigPanel() {
           )}
         </section>
 
+        {/* EXEMPLOS A EVITAR (flagged messages) */}
+        <FlaggedExamplesSection unitId={selectedUnitId} />
+
         {/* IDEIAS PRONTAS PRA ATIVAR */}
         <IdeasSection />
 
@@ -703,6 +708,87 @@ const IDEAS: Array<{ icon: string; title: string; desc: string }> = [
       'Mantém 2+ versões do system prompt ativas em paralelo. Cada conversa nova recebe uma versão aleatória. O juiz LLM (já existente) compara taxa de conversão entre versões.',
   },
 ];
+
+function FlaggedExamplesSection({ unitId }: { unitId: string | null }) {
+  const [items, setItems] = useState<FlaggedMessage[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!unitId) {
+      setItems([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const list = await api.listFlaggedMessages(unitId);
+      setItems(list);
+    } finally {
+      setLoading(false);
+    }
+  }, [unitId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function unflag(id: string) {
+    await api.flagMessage(id, false);
+    setItems(items.filter((m) => m.id !== id));
+  }
+
+  return (
+    <section className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-5">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <ThumbsDown size={16} className="text-rose-300" />
+          <h2 className="font-semibold text-zinc-100">Exemplos a evitar</h2>
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          className="text-[11px] text-zinc-500 hover:text-zinc-300"
+        >
+          {loading ? 'recarregando…' : 'recarregar'}
+        </button>
+      </div>
+      <p className="text-xs text-zinc-400 mb-3">
+        Respostas que você marcou com 👎 nas Conversas. O agente recebe esta lista no prompt
+        com instrução de NÃO responder de forma parecida. Útil pra ensinar a IA por exemplos
+        negativos.
+      </p>
+      {items.length === 0 ? (
+        <div className="text-[11px] text-zinc-600 italic text-center py-4">
+          Nenhuma resposta flaggada ainda. Vá em Conversas, passe o mouse numa resposta da IA
+          e clique no 👎 pra adicionar exemplos aqui.
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {items.map((m) => (
+            <li
+              key={m.id}
+              className="rounded-md bg-zinc-950/40 border border-zinc-800 p-3 text-xs text-zinc-300"
+            >
+              <div className="text-[10px] text-zinc-500 mb-1 flex items-center gap-2">
+                <span>{m.conversation.contactName ?? 'Lead'} #{m.conversation.leadId}</span>
+                <span>·</span>
+                <span>{new Date(m.createdAt).toLocaleString('pt-BR')}</span>
+                <button
+                  type="button"
+                  onClick={() => unflag(m.id)}
+                  className="ml-auto text-rose-400 hover:text-rose-200"
+                  title="Desmarcar"
+                >
+                  remover
+                </button>
+              </div>
+              <div className="italic">"{m.content}"</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
 
 function IdeasSection() {
   return (

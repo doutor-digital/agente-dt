@@ -23,6 +23,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  BookText,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -34,10 +35,12 @@ import {
   Loader2,
   MessageSquarePlus,
   PhoneCall,
+  Plus,
   Repeat,
   Save,
   Sparkles,
   TestTube,
+  Trash2,
   UserCog,
   Workflow as WorkflowIcon,
 } from 'lucide-react';
@@ -45,7 +48,7 @@ import clsx from 'clsx';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
-import type { KommoPipelinesResponse, Unit, UnitInput } from '../types/api';
+import type { KommoPipelinesResponse, MessageTemplate, Unit, UnitInput } from '../types/api';
 
 type WizardDraft = Pick<
   Unit,
@@ -521,6 +524,9 @@ export function WizardPanel() {
           </div>
         </FeatureCard>
 
+        {/* 10. TEMPLATES DE MENSAGEM */}
+        <TemplatesSection unitId={selectedUnitId} />
+
         {/* Live preview do prompt composto */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-950/60 overflow-hidden">
           <button
@@ -865,3 +871,157 @@ function KeywordList({
     </div>
   );
 }
+
+// ===========================================================================
+// TemplatesSection — CRUD de respostas prontas (MessageTemplate)
+// ===========================================================================
+
+function TemplatesSection({ unitId }: { unitId: string | null }) {
+  const toast = useToast();
+  const [items, setItems] = useState<MessageTemplate[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!unitId) {
+      setItems([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const list = await api.listTemplates(unitId);
+      setItems(list);
+    } catch {
+      toast.error('Não foi possível carregar templates');
+    } finally {
+      setLoading(false);
+    }
+  }, [unitId, toast]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function handleCreate() {
+    if (!unitId) return;
+    setCreating(true);
+    try {
+      const t = await api.createTemplate(unitId, {
+        name: 'Novo template',
+        triggerKeywords: [],
+        response: '',
+      });
+      setItems([...items, t]);
+      toast.success('Template criado');
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } } };
+      toast.error(e?.response?.data?.error === 'template_name_duplicate' ? 'Já existe um template com esse nome' : 'Falha ao criar');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleUpdate(t: MessageTemplate, patch: Partial<MessageTemplate>) {
+    if (!unitId) return;
+    const optimistic = items.map((x) => (x.id === t.id ? { ...x, ...patch } : x));
+    setItems(optimistic);
+    try {
+      await api.updateTemplate(unitId, t.id, patch);
+    } catch {
+      toast.error('Falha ao salvar template');
+      void load();
+    }
+  }
+
+  async function handleDelete(t: MessageTemplate) {
+    if (!unitId) return;
+    if (!confirm(`Apagar template "${t.name}"?`)) return;
+    setItems(items.filter((x) => x.id !== t.id));
+    try {
+      await api.deleteTemplate(unitId, t.id);
+      toast.success('Template apagado');
+    } catch {
+      toast.error('Falha ao apagar');
+      void load();
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-cyan-500/20 bg-cyan-500/5">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-3 p-4 text-left"
+      >
+        <BookText size={16} className="text-cyan-300" />
+        <div className="flex-1">
+          <div className="text-sm font-semibold text-zinc-100">Templates de mensagens</div>
+          <div className="text-[11px] text-zinc-500 mt-0.5">
+            Respostas prontas que a IA usa quando detecta palavras-chave. Reduz alucinação em FAQs.
+          </div>
+        </div>
+        <span className="text-[10px] text-zinc-500">{items.length} template(s)</span>
+        {open ? <ChevronDown size={14} className="text-zinc-600" /> : <ChevronRight size={14} className="text-zinc-600" />}
+      </button>
+      {open && (
+        <div className="px-4 pb-4 pt-1 space-y-3 border-t border-zinc-800/40">
+          {loading && <div className="text-[11px] text-zinc-600">Carregando…</div>}
+          {!loading && items.length === 0 && (
+            <div className="text-[11px] text-zinc-600 italic text-center py-2">
+              Nenhum template ainda. Clique em "+ Novo" pra criar o primeiro.
+            </div>
+          )}
+          {items.map((t) => (
+            <div key={t.id} className="rounded-md border border-zinc-800 bg-zinc-950/40 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={t.name}
+                  onChange={(e) => handleUpdate(t, { name: e.target.value })}
+                  className="flex-1 px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 font-semibold focus:outline-none focus:border-brand-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleDelete(t)}
+                  className="text-rose-400 hover:text-rose-200 p-1"
+                  title="Apagar template"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">Palavras-chave de gatilho</label>
+                <KeywordList
+                  keywords={t.triggerKeywords}
+                  onChange={(kws) => handleUpdate(t, { triggerKeywords: kws })}
+                  placeholder="ex: preço, valor, quanto custa"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">Resposta</label>
+                <textarea
+                  value={t.response}
+                  onChange={(e) => handleUpdate(t, { response: e.target.value })}
+                  rows={3}
+                  placeholder="Resposta que a IA deve dar quando match"
+                  className="w-full px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500 resize-vertical"
+                />
+              </div>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={creating || !unitId}
+            className="w-full inline-flex items-center justify-center gap-1 px-3 py-2 rounded-md border border-dashed border-zinc-700 text-xs text-zinc-300 hover:bg-zinc-900/40 disabled:opacity-50"
+          >
+            {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+            Novo template
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+

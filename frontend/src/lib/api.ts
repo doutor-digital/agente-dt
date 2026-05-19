@@ -8,11 +8,13 @@ import type {
   ConversationSummary,
   GlobalAlert,
   IntegrationsResponse,
+  FlaggedMessage,
   KommoFieldsResponse,
   KommoPipelinesResponse,
   KommoSalesbotsResponse,
   KommoTagsResponse,
   KommoValidateResponse,
+  MessageTemplate,
   LlmCallDetail,
   LlmCallSummary,
   OpenAIDebugResponse,
@@ -212,6 +214,36 @@ export const api = {
       { timeout: 10_000 },
     );
     return data;
+  },
+
+  // -------------------------------------------------------------------------
+  // Templates
+  // -------------------------------------------------------------------------
+  async listTemplates(unitId: string): Promise<MessageTemplate[]> {
+    const { data } = await http.get<{ templates: MessageTemplate[] }>(`/units/${unitId}/templates`);
+    return data.templates;
+  },
+  async createTemplate(unitId: string, input: { name: string; triggerKeywords: string[]; response: string }): Promise<MessageTemplate> {
+    const { data } = await http.post<{ template: MessageTemplate }>(`/units/${unitId}/templates`, input);
+    return data.template;
+  },
+  async updateTemplate(unitId: string, templateId: string, input: { name?: string; triggerKeywords?: string[]; response?: string }): Promise<MessageTemplate> {
+    const { data } = await http.patch<{ template: MessageTemplate }>(`/units/${unitId}/templates/${templateId}`, input);
+    return data.template;
+  },
+  async deleteTemplate(unitId: string, templateId: string): Promise<void> {
+    await http.delete(`/units/${unitId}/templates/${templateId}`);
+  },
+
+  // -------------------------------------------------------------------------
+  // Flag de mensagens
+  // -------------------------------------------------------------------------
+  async flagMessage(messageId: string, flagged: boolean): Promise<void> {
+    await http.patch(`/messages/${messageId}/flag`, { flagged });
+  },
+  async listFlaggedMessages(unitId: string): Promise<FlaggedMessage[]> {
+    const { data } = await http.get<{ messages: FlaggedMessage[] }>(`/units/${unitId}/flagged-messages`);
+    return data.messages;
   },
 
   // -------------------------------------------------------------------------

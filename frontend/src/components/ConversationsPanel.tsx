@@ -6,10 +6,11 @@
 // ============================================================================
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, Loader2, MessageCircle, Phone, User2 } from 'lucide-react';
+import { Bot, Loader2, MessageCircle, Phone, ThumbsDown, User2 } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
+import { useToast } from '../context/ToastContext';
 import { usePolling } from '../hooks/usePolling';
 import type { ConversationDetail, ConversationMessage } from '../types/api';
 
@@ -134,7 +135,14 @@ export function ConversationsPanel() {
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
               {detail.messages.map((m) => (
-                <MessageBubble key={m.id} m={m} />
+                <MessageBubble
+                  key={m.id}
+                  m={m}
+                  onFlagToggle={(flagged) => {
+                    // Atualização otimista — refresh do detail quando o usuário trocar de conversa.
+                    m.flagged = flagged;
+                  }}
+                />
               ))}
             </div>
           </>
@@ -144,16 +152,43 @@ export function ConversationsPanel() {
   );
 }
 
-function MessageBubble({ m }: { m: ConversationMessage }) {
+function MessageBubble({
+  m,
+  onFlagToggle,
+}: {
+  m: ConversationMessage;
+  onFlagToggle: (flagged: boolean) => void;
+}) {
   const isUser = m.role === 'user';
+  const toast = useToast();
+  const [flagged, setFlagged] = useState(!!m.flagged);
+  const [busy, setBusy] = useState(false);
+
+  async function toggleFlag() {
+    const next = !flagged;
+    setBusy(true);
+    try {
+      await api.flagMessage(m.id, next);
+      setFlagged(next);
+      onFlagToggle(next);
+      toast.info(next ? 'Marcada como ruim — a IA vai evitar isso' : 'Flag removida');
+    } catch {
+      toast.error('Não foi possível atualizar a flag');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <div className={clsx('flex', isUser ? 'justify-start' : 'justify-end')}>
+    <div className={clsx('flex group', isUser ? 'justify-start' : 'justify-end')}>
       <div
         className={clsx(
-          'max-w-[70%] rounded-lg px-3 py-2 text-xs whitespace-pre-wrap',
+          'max-w-[70%] rounded-lg px-3 py-2 text-xs whitespace-pre-wrap relative',
           isUser
             ? 'bg-zinc-900 ring-1 ring-zinc-800 text-zinc-100'
-            : 'bg-brand-500/15 ring-1 ring-brand-500/30 text-brand-100',
+            : flagged
+              ? 'bg-rose-500/10 ring-1 ring-rose-500/40 text-rose-100'
+              : 'bg-brand-500/15 ring-1 ring-brand-500/30 text-brand-100',
         )}
       >
         <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 mb-1">
@@ -161,8 +196,29 @@ function MessageBubble({ m }: { m: ConversationMessage }) {
           <span>{isUser ? 'Paciente' : 'IA'}</span>
           <span>·</span>
           <span>{new Date(m.createdAt).toLocaleString('pt-BR')}</span>
+          {flagged && (
+            <span className="ml-auto text-[9px] uppercase tracking-wider text-rose-300/80">
+              flaggada
+            </span>
+          )}
         </div>
         <div>{m.content}</div>
+        {!isUser && (
+          <button
+            type="button"
+            onClick={toggleFlag}
+            disabled={busy}
+            title={flagged ? 'Desmarcar' : 'Marcar como resposta ruim'}
+            className={clsx(
+              'absolute -bottom-2 -right-2 p-1 rounded-full bg-zinc-900 ring-1 transition opacity-0 group-hover:opacity-100',
+              flagged
+                ? 'ring-rose-500/50 text-rose-300 opacity-100'
+                : 'ring-zinc-700 text-zinc-500 hover:text-rose-300 hover:ring-rose-500/40',
+            )}
+          >
+            <ThumbsDown size={11} />
+          </button>
+        )}
       </div>
     </div>
   );

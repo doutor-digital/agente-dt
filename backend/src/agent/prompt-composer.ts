@@ -18,7 +18,8 @@
 //   ...passa pra LLM.
 // ============================================================================
 
-import type { Unit } from '@prisma/client';
+import type { MessageTemplate, Unit } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 
 // ---------------------------------------------------------------------------
 // Resultado da checagem de horário comercial.
@@ -195,6 +196,29 @@ function renderFollowUp(unit: Unit): string {
   ${msg ? `"${msg}"` : '"Sem pressão, fica à vontade. Te chamo daqui ${unit.followUpAfterHours}h pra ver se posso ajudar em algo, ok?"'}`;
 }
 
+function renderTemplates(templates: MessageTemplate[]): string {
+  if (templates.length === 0) return '';
+  const lines = templates.map((t, i) => {
+    const kws = t.triggerKeywords.length ? `[gatilhos: ${t.triggerKeywords.join(', ')}]` : '[sem gatilho fixo]';
+    return `${i + 1}. ${t.name} ${kws}\n   "${t.response.replace(/\n/g, ' ').slice(0, 280)}"`;
+  });
+  return `# RESPOSTAS PRONTAS (templates)
+- Quando o cliente usar alguma das palavras-chave de gatilho abaixo, prefira a
+  resposta pronta correspondente (pode adaptar levemente o tom, mas mantenha
+  a informação igual). NÃO mencione que está usando template.
+
+${lines.join('\n\n')}`;
+}
+
+function renderFlaggedExamples(flagged: Array<{ content: string }>): string {
+  if (flagged.length === 0) return '';
+  const lines = flagged.slice(0, 10).map((m, i) => `${i + 1}. "${m.content.slice(0, 200)}"`);
+  return `# EXEMPLOS DE RESPOSTAS RUINS (NÃO REPITA!)
+- O operador marcou estas respostas como ruins. Não responda de forma parecida:
+
+${lines.join('\n')}`;
+}
+
 // ---------------------------------------------------------------------------
 // Composer principal.
 // ---------------------------------------------------------------------------
@@ -205,10 +229,14 @@ export interface ComposeInput {
   agentConfigPrompt?: string;
   /** Texto vindo das regras (renderWorkflowGuidance). */
   workflowText?: string;
+  /** Templates já carregados — se ausente, NÃO faz lookup (use compose async). */
+  templates?: MessageTemplate[];
+  /** Mensagens flaggadas como exemplos a evitar. */
+  flaggedExamples?: Array<{ content: string }>;
 }
 
 export function composeSystemPrompt(input: ComposeInput): string {
-  const { unit, agentConfigPrompt, workflowText } = input;
+  const { unit, agentConfigPrompt, workflowText, templates = [], flaggedExamples = [] } = input;
 
   // Bloco 1: persona base. Se o usuário escreveu um systemPrompt customizado,
   // ele aparece PRIMEIRO (tem prioridade sobre o auto-gerado).
@@ -243,11 +271,49 @@ export function composeSystemPrompt(input: ComposeInput): string {
     blocks.push(...featureBlocks);
   }
 
+  const templatesBlock = renderTemplates(templates);
+  if (templatesBlock) blocks.push(templatesBlock);
+
+  const flaggedBlock = renderFlaggedExamples(flaggedExamples);
+  if (flaggedBlock) blocks.push(flaggedBlock);
+
   if (workflowText && workflowText.trim()) {
     blocks.push(workflowText.trim());
   }
 
   return blocks.join('\n\n');
+}
+
+/**
+ * Async variant — busca templates + flaggedExamples do banco automaticamente.
+ * Usar em runtime do agente (graph.ts).
+ */
+export async function composeSystemPromptForUnit(input: {
+  unit: Unit;
+  agentConfigPrompt?: string;
+  workflowText?: string;
+}): Promise<string> {
+  const [templates, flagged] = await Promise.all([
+    prisma.messageTemplate.findMany({
+      where: { unitId: input.unit.id },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.message.findMany({
+      where: {
+        conversation: { unitId: input.unit.id },
+        flagged: true,
+        role: 'assistant',
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+      select: { content: true },
+    }),
+  ]);
+  return composeSystemPrompt({
+    ...input,
+    templates,
+    flaggedExamples: flagged,
+  });
 }
 
 /**

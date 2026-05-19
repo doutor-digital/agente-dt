@@ -40,7 +40,15 @@ import {
 import {
   listConversationsHandler,
   getConversationHandler,
+  flagMessageHandler,
+  listFlaggedMessagesHandler,
 } from '../controllers/conversations.controller.js';
+import {
+  listTemplatesHandler,
+  createTemplateHandler,
+  updateTemplateHandler,
+  deleteTemplateHandler,
+} from '../controllers/templates.controller.js';
 import { getAlerts, getIntegrations } from '../controllers/integrations.controller.js';
 import {
   getPromptPerformanceHandler,
@@ -74,6 +82,14 @@ apiRouter.get('/llm-calls', listLlmCallsHandler);
 apiRouter.get('/llm-calls/:id', getLlmCallHandler);
 apiRouter.get('/conversations', listConversationsHandler);
 apiRouter.get('/conversations/:id', getConversationHandler);
+apiRouter.patch('/messages/:messageId/flag', flagMessageHandler);
+apiRouter.get('/units/:id/flagged-messages', listFlaggedMessagesHandler);
+
+// Templates CRUD
+apiRouter.get('/units/:id/templates', listTemplatesHandler);
+apiRouter.post('/units/:id/templates', createTemplateHandler);
+apiRouter.patch('/units/:id/templates/:templateId', updateTemplateHandler);
+apiRouter.delete('/units/:id/templates/:templateId', deleteTemplateHandler);
 
 // ---------------------------------------------------------------------------
 // Configuração do agente — prompt, tools e sequências (por Unit).

@@ -325,7 +325,26 @@ export interface ConversationMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   meta: Record<string, unknown> | null;
+  flagged?: boolean;
   createdAt: string;
+}
+
+export interface MessageTemplate {
+  id: string;
+  unitId: string;
+  name: string;
+  triggerKeywords: string[];
+  response: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FlaggedMessage {
+  id: string;
+  content: string;
+  createdAt: string;
+  conversationId: string;
+  conversation: { contactName: string | null; leadId: string };
 }
 
 export interface ConversationDetail {

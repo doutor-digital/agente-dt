@@ -145,12 +145,36 @@ model Unit {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  agentConfigs   AgentConfig[]
-  traces         ExecutionTrace[]
-  llmCalls       LlmCall[]
-  conversations  Conversation[]
+  agentConfigs     AgentConfig[]
+  traces           ExecutionTrace[]
+  llmCalls         LlmCall[]
+  conversations    Conversation[]
+  messageTemplates MessageTemplate[]
 
   @@map("units")
+}
+
+// ===========================================================================
+// MessageTemplate — respostas prontas que a IA pode usar.
+// ===========================================================================
+// Cada template tem palavras-chave de gatilho. O composer inclui a lista no
+// system prompt instruindo a IA a usar essas respostas quando detectar
+// algum dos gatilhos na mensagem do cliente.
+// ===========================================================================
+model MessageTemplate {
+  id              String   @id @default(cuid())
+  unitId          String   @map("unit_id")
+  name            String
+  triggerKeywords String[] @default([]) @map("trigger_keywords")
+  response        String   @db.Text
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, name])
+  @@index([unitId])
+  @@map("message_templates")
 }
 
 // ===========================================================================
@@ -273,12 +297,16 @@ model Message {
   role           String
   content        String   @db.Text
   meta           Json?
+  // Flagged: operador marcou esta resposta da IA como ruim (exemplo a evitar).
+  // O composer inclui as últimas N flaggadas como "examples to avoid" no prompt.
+  flagged        Boolean  @default(false)
   createdAt      DateTime @default(now()) @map("created_at")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId])
   @@index([createdAt(sort: Desc)])
+  @@index([flagged])
   @@map("messages")
 }
 

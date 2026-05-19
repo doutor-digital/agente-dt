@@ -50,7 +50,7 @@ import { AgentState, type AgentStateType } from './state.js';
 import { buildTools } from './tools.js';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig, renderWorkflowGuidance } from './config.js';
-import { composeSystemPrompt } from './prompt-composer.js';
+import { composeSystemPromptForUnit } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 
@@ -127,7 +127,7 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
   //    - Blocos das features ativadas no wizard da Unit (qualificação, handoff,
   //      pipeline-by-intent, coleta de contato, cupom, horário, follow-up)
   //    - Regras estruturadas (renderWorkflowGuidance)
-  const systemPrompt = composeSystemPrompt({
+  const systemPrompt = await composeSystemPromptForUnit({
     unit,
     agentConfigPrompt: config.systemPrompt,
     workflowText: renderWorkflowGuidance(config.workflow),
