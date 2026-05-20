@@ -165,6 +165,17 @@ function round6(n: number): number {
 
 export async function getConversationEvaluationHandler(req: Request, res: Response): Promise<void> {
   const conversationId = String(req.params.id ?? '');
+  // UNIT_ADMIN só vê avaliações de conversas da própria unit.
+  if (req.user?.role === 'UNIT_ADMIN') {
+    const conv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { unitId: true },
+    });
+    if (!conv || conv.unitId !== req.user.unitId) {
+      res.status(404).json({ error: 'evaluation_not_found' });
+      return;
+    }
+  }
   const ev = await prisma.conversationEvaluation.findUnique({
     where: { conversationId },
   });
@@ -191,6 +202,11 @@ export async function reEvaluateConversationHandler(req: Request, res: Response)
   const conversationId = String(req.params.id ?? '');
   const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
   if (!conv) {
+    res.status(404).json({ error: 'conversation_not_found' });
+    return;
+  }
+  // UNIT_ADMIN só re-avalia conversas da própria unit.
+  if (req.user?.role === 'UNIT_ADMIN' && conv.unitId !== req.user.unitId) {
     res.status(404).json({ error: 'conversation_not_found' });
     return;
   }

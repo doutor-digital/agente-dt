@@ -13,7 +13,11 @@ import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 
 export async function listLlmCallsHandler(req: Request, res: Response): Promise<void> {
-  const unitId = (req.query.unitId as string | undefined) ?? undefined;
+  // UNIT_ADMIN sempre fica preso à própria unit. SUPER_ADMIN respeita o query.
+  const unitId =
+    req.user?.role === 'UNIT_ADMIN'
+      ? (req.user.unitId ?? '__never_match__')
+      : ((req.query.unitId as string | undefined) ?? undefined);
   const traceId = (req.query.traceId as string | undefined) ?? undefined;
   const limit = Math.min(Number(req.query.limit ?? 100), 500);
 
@@ -54,6 +58,11 @@ export async function getLlmCallHandler(req: Request, res: Response): Promise<vo
   const id = String(req.params.id ?? '');
   const call = await prisma.llmCall.findUnique({ where: { id } });
   if (!call) {
+    res.status(404).json({ error: 'llm_call_not_found' });
+    return;
+  }
+  // UNIT_ADMIN só vê chamadas da própria unit.
+  if (req.user?.role === 'UNIT_ADMIN' && call.unitId !== req.user.unitId) {
     res.status(404).json({ error: 'llm_call_not_found' });
     return;
   }

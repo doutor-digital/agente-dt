@@ -15,23 +15,41 @@ import { AppSidebar, type AppTab } from './components/AppSidebar';
 import { DashboardPanel } from './components/DashboardPanel';
 import { OnboardingModal } from './components/OnboardingModal';
 import { UnitProvider, useUnit } from './context/UnitContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { Login } from './components/Login';
+import { Splash } from './components/Splash';
+import { UsersPanel } from './components/UsersPanel';
 import { usePolling } from './hooks/usePolling';
 import { api } from './lib/api';
 import type { TraceDetail } from './types/api';
 
 /**
- * App root — multi-tenant.
+ * App root — multi-tenant + autenticado.
  *
- * Tabs:
- *  - "traces": dashboard de execuções (sidebar + console + stats)
- *  - "conversations": chat por lead
- *  - "llm": chamadas IA com tokens/custo (painel "ByteGPT")
- *  - "config": editor do AgentConfig (por unidade)
- *  - "units": CRUD de unidades + credenciais
+ * Pipeline:
+ *   AuthProvider (sessão Google)
+ *     ├─ user === undefined → Splash (verificando /auth/me)
+ *     ├─ user === null      → Login (tela Google)
+ *     └─ user !== null      → UnitProvider + Shell
+ *
+ * Tabs (depois de logado):
+ *  - "dashboard", "traces", "conversations", "llm", "prompts", ...
+ *  - "users": gestão de admins (só SUPER_ADMIN)
  *
  * O dropdown UnitSelector no topo filtra todas as views por unidade.
  */
 export function App() {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
+  );
+}
+
+function AuthGate() {
+  const { user } = useAuth();
+  if (user === undefined) return <Splash />;
+  if (user === null) return <Login />;
   return (
     <UnitProvider>
       <Shell />
@@ -59,6 +77,7 @@ function Shell() {
         {tab === 'actions' && <AcoesPanel />}
         {tab === 'config' && <AgentConfigPanel />}
         {tab === 'units' && <UnitsPanel />}
+        {tab === 'users' && <UsersPanel />}
       </main>
       <OnboardingModal />
     </div>

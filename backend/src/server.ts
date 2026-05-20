@@ -18,6 +18,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { env } from './lib/env.js';
@@ -46,9 +47,14 @@ async function main(): Promise<void> {
         const allowed = env.FRONTEND_ORIGIN.includes(origin);
         return cb(null, allowed);
       },
-      credentials: false,
+      // true: o cookie `dt_session` (httpOnly) circula entre o frontend
+      // (porta 5173 ou domínio prod) e a API. Sem isso o login não persiste.
+      credentials: true,
     }),
   );
+
+  // Cookie parser — popula req.cookies pro middleware de auth.
+  app.use(cookieParser());
 
   // Body parser urlencoded (webhooks Kommo).
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));

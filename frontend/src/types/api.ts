@@ -84,6 +84,40 @@ export interface Stats {
 }
 
 // ---------------------------------------------------------------------------
+// Auth — user logado no painel
+// ---------------------------------------------------------------------------
+
+export type UserRole = 'SUPER_ADMIN' | 'UNIT_ADMIN';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string | null;
+  picture: string | null;
+  role: UserRole;
+  unitId: string | null;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string | null;
+  picture: string | null;
+  role: UserRole;
+  unitId: string | null;
+  isActive: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+}
+
+export interface AdminUserInput {
+  email: string;
+  name?: string | null;
+  role: UserRole;
+  unitId?: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Unit
 // ---------------------------------------------------------------------------
 

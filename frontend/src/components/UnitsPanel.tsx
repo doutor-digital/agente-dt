@@ -16,6 +16,7 @@ import { api } from '../lib/api';
 import type { Unit, UnitInput } from '../types/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
+import { useAuth } from '../context/AuthContext';
 import { KommoExplorer } from './KommoExplorer';
 
 const blankInput: UnitInput = {
@@ -70,6 +71,8 @@ function unitToInput(u: Unit): UnitInput {
 
 export function UnitsPanel() {
   const { units, refresh, loading: ctxLoading } = useUnit();
+  const { user } = useAuth();
+  const isSuper = user?.role === 'SUPER_ADMIN';
   const toast = useToast();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<UnitInput>(blankInput);
@@ -140,14 +143,16 @@ export function UnitsPanel() {
       <aside className="w-64 shrink-0 border-r border-zinc-800/80 bg-ink-900 flex flex-col">
         <div className="p-3 border-b border-zinc-800/80 flex items-center justify-between">
           <span className="text-[11px] uppercase tracking-wider text-zinc-500">Unidades</span>
-          <button
-            type="button"
-            onClick={startCreate}
-            className="text-xs px-2 py-1 rounded bg-brand-500/10 text-brand-300 ring-1 ring-brand-500/30 inline-flex items-center gap-1 hover:bg-brand-500/20"
-          >
-            <Plus size={12} />
-            Nova
-          </button>
+          {isSuper && (
+            <button
+              type="button"
+              onClick={startCreate}
+              className="text-xs px-2 py-1 rounded bg-brand-500/10 text-brand-300 ring-1 ring-brand-500/30 inline-flex items-center gap-1 hover:bg-brand-500/20"
+            >
+              <Plus size={12} />
+              Nova
+            </button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           {ctxLoading && <Loader2 className="animate-spin text-zinc-500 mx-auto mt-4" size={14} />}
@@ -197,7 +202,7 @@ export function UnitsPanel() {
               {creating ? 'Nova unidade' : selectedId ? draft.name || 'Sem nome' : 'Selecione uma unidade'}
             </h2>
             <div className="flex items-center gap-2">
-              {!creating && selectedId && (
+              {!creating && selectedId && isSuper && (
                 <button
                   type="button"
                   onClick={handleDelete}

@@ -1,8 +1,11 @@
 import axios from 'axios';
 import type {
+  AdminUser,
+  AdminUserInput,
   AgentConfig,
   AgentConfigInput,
   AgentConfigResponse,
+  AuthUser,
   ConversationDetail,
   ConversationEvaluationResponse,
   ConversationSummary,
@@ -37,13 +40,66 @@ const apiBase = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
   : '/api';
 
-const http = axios.create({ baseURL: apiBase, timeout: 15_000 });
+// `withCredentials: true` faz o axios enviar e receber cookies (dt_session).
+// Sem isso, login não persiste — o navegador joga fora o Set-Cookie.
+const http = axios.create({ baseURL: apiBase, timeout: 15_000, withCredentials: true });
+
+// Interceptor de 401 — dispara um CustomEvent que o AuthContext escuta pra
+// limpar o user e cair na tela de login. Evita acoplar contexto aqui.
+// O login flow em si pode receber 401 também (ex: /auth/me antes de logar),
+// então não fazemos retry/redirect — só notificamos.
+http.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    if (err?.response?.status === 401) {
+      window.dispatchEvent(new CustomEvent('auth:expired'));
+    }
+    return Promise.reject(err);
+  },
+);
 
 function withUnit(params: Record<string, unknown> | undefined, unitId: string | null) {
   return unitId ? { ...(params ?? {}), unitId } : params;
 }
 
 export const api = {
+  // -------------------------------------------------------------------------
+  // Auth — sessão Google + gestão de admins
+  // -------------------------------------------------------------------------
+  async me(): Promise<AuthUser | null> {
+    try {
+      const { data } = await http.get<{ user: AuthUser }>('/auth/me');
+      return data.user;
+    } catch (err) {
+      const e = err as { response?: { status?: number } };
+      if (e.response?.status === 401) return null;
+      throw err;
+    }
+  },
+  async logout(): Promise<void> {
+    await http.post('/auth/logout');
+  },
+  // Hard redirect — o backend devolve um 302 pro consentimento do Google.
+  loginUrl(): string {
+    return `${apiBase}/auth/google/start`;
+  },
+
+  async listUsers(): Promise<AdminUser[]> {
+    const { data } = await http.get<{ users: AdminUser[] }>('/users');
+    return data.users;
+  },
+  async createUser(input: AdminUserInput): Promise<AdminUser> {
+    const { data } = await http.post<{ user: AdminUser }>('/users', input);
+    return data.user;
+  },
+  async updateUser(id: string, input: Partial<AdminUserInput> & { isActive?: boolean }): Promise<AdminUser> {
+    const { data } = await http.patch<{ user: AdminUser }>(`/users/${id}`, input);
+    return data.user;
+  },
+  async deleteUser(id: string): Promise<void> {
+    await http.delete(`/users/${id}`);
+  },
+
   // -------------------------------------------------------------------------
   // Traces
   // -------------------------------------------------------------------------

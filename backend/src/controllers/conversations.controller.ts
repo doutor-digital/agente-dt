@@ -5,6 +5,10 @@
 // --------------------
 // Endpoints simples: lista conversas (resumo) e detalhe com todas as
 // mensagens em ordem cronológica. Filtragem por unitId.
+//
+// Isolamento multi-tenant: UNIT_ADMIN só enxerga conversas da própria
+// unit, mesmo que tente passar `?unitId=outra` no query. O controller
+// força `req.user.unitId` quando role === 'UNIT_ADMIN'.
 // ============================================================================
 
 import type { Request, Response } from 'express';
@@ -13,7 +17,10 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
 export async function listConversationsHandler(req: Request, res: Response): Promise<void> {
-  const unitId = (req.query.unitId as string | undefined) ?? null;
+  const unitId =
+    req.user?.role === 'UNIT_ADMIN'
+      ? (req.user.unitId ?? '__never_match__')
+      : ((req.query.unitId as string | undefined) ?? null);
   const limit = Math.min(Number(req.query.limit ?? 100), 500);
   const conversations = await listConversations(unitId, limit);
   res.json({ conversations });
@@ -23,6 +30,11 @@ export async function getConversationHandler(req: Request, res: Response): Promi
   const id = String(req.params.id ?? '');
   const conv = await getConversation(id);
   if (!conv) {
+    res.status(404).json({ error: 'conversation_not_found' });
+    return;
+  }
+  // UNIT_ADMIN só vê conversas da própria unit.
+  if (req.user?.role === 'UNIT_ADMIN' && conv.unitId !== req.user.unitId) {
     res.status(404).json({ error: 'conversation_not_found' });
     return;
   }
@@ -36,6 +48,19 @@ export async function getConversationHandler(req: Request, res: Response): Promi
 export async function flagMessageHandler(req: Request, res: Response): Promise<void> {
   const messageId = String(req.params.messageId ?? '');
   const flagged = !!req.body?.flagged;
+
+  // Verifica acesso antes de mutar: UNIT_ADMIN só altera mensagens da própria unit.
+  if (req.user?.role === 'UNIT_ADMIN') {
+    const msg = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { conversation: { select: { unitId: true } } },
+    });
+    if (!msg || msg.conversation.unitId !== req.user.unitId) {
+      res.status(404).json({ error: 'message_not_found' });
+      return;
+    }
+  }
+
   try {
     const msg = await prisma.message.update({
       where: { id: messageId },
@@ -52,6 +77,8 @@ export async function flagMessageHandler(req: Request, res: Response): Promise<v
 // ---------------------------------------------------------------------------
 // GET /units/:id/flagged-messages — lista todas as mensagens flaggadas da Unit.
 // Usado pelo AgentConfigPanel (seção "Exemplos a evitar").
+// Rota já passa por requireUnitAccess, então UNIT_ADMIN só consegue chegar
+// aqui pra própria unit.
 // ---------------------------------------------------------------------------
 export async function listFlaggedMessagesHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id ?? '');

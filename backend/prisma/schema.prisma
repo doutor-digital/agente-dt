@@ -177,8 +177,44 @@ model Unit {
   messageTemplates MessageTemplate[]
   knowledgeBase    KnowledgeBaseEntry[]
   actions          UnitAction[]
+  admins           User[]
 
   @@map("units")
+}
+
+// ============================================================================
+// User — autenticação Google. Não armazena senha.
+//
+// Roles:
+//  SUPER_ADMIN — vê/edita todas as units, gerencia usuários (unitId é null).
+//  UNIT_ADMIN  — vê só uma unit (unitId obrigatório). Cliente final.
+//
+// Bootstrap "first-login-wins": se a tabela está vazia, o primeiro email
+// que logar via Google vira SUPER_ADMIN. Após isso, novos logins exigem
+// que o email já exista (criado por um super admin pelo painel).
+// ============================================================================
+enum UserRole {
+  SUPER_ADMIN
+  UNIT_ADMIN
+}
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  name        String?
+  picture     String?
+  role        UserRole
+  unitId      String?   @map("unit_id")
+  isActive    Boolean   @default(true) @map("is_active")
+  lastLoginAt DateTime? @map("last_login_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  unit Unit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  @@index([role])
+  @@index([unitId])
+  @@map("users")
 }
 
 // ============================================================================

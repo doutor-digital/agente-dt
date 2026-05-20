@@ -1,16 +1,18 @@
 // ============================================================================
-// api.routes.ts — Roteamento HTTP (multi-tenant).
+// api.routes.ts — Roteamento HTTP (multi-tenant + autenticado).
 //
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Webhooks são versionados por Unit via slug na URL:
-//   /api/webhooks/:unitSlug/{kommo|salesbot|meta}
+// CAMADAS DE AUTORIZAÇÃO
+// ----------------------
+// 1) ABERTO — webhooks (Kommo/Meta não logam), /health, /auth/google/*.
+// 2) requireAuth — qualquer user logado (SUPER_ADMIN ou UNIT_ADMIN).
+//    Aplica via apiRouter.use depois das rotas abertas.
+// 3) requireSuperAdmin — gestão de Units (criar/apagar) e Users.
+// 4) requireUnitAccess — endpoints /units/:id/*: SUPER passa direto,
+//    UNIT_ADMIN só se a unit alvo for a dele.
+// 5) Endpoints "amplos" (/traces, /llm-calls, /conversations) filtram
+//    por role no controller (não confiam no client).
 //
-// As rotas legadas (sem slug) permanecem por retrocompat — caem na "default
-// unit" semeada do .env no boot.
-//
-// API admin (CRUD de Unit, observabilidade) NÃO tem auth no MVP — está no
-// roadmap. Rodar atrás de VPN.
+// Webhooks ficam ANTES do `requireAuth` global, senão Kommo/Meta levavam 401.
 // ============================================================================
 
 import { Router } from 'express';
@@ -74,24 +76,106 @@ import {
   reEvaluateConversationHandler,
   openaiDebugHandler,
 } from '../controllers/prompts.controller.js';
+import {
+  googleStartHandler,
+  googleCallbackHandler,
+  logoutHandler,
+  meHandler,
+} from '../controllers/auth.controller.js';
+import {
+  listUsersHandler,
+  createUserHandler,
+  updateUserHandler,
+  deleteUserHandler,
+} from '../controllers/users.controller.js';
 import { KommoService } from '../services/kommo.service.js';
+import { requireAuth, requireSuperAdmin, requireUnitAccess } from '../middleware/auth.js';
 
 export const apiRouter = Router();
 
-// ---------------------------------------------------------------------------
-// Webhooks — multi-tenant.
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// 1) ABERTO — nenhum middleware de auth.
+// ===========================================================================
+
+// Webhooks externos.
 apiRouter.post('/webhooks/:unitSlug/kommo', handleKommoWebhook);
 apiRouter.post('/webhooks/:unitSlug/salesbot', handleSalesbotWebhook);
 apiRouter.get('/webhooks/:unitSlug/meta', handleMetaVerify);
 apiRouter.post('/webhooks/:unitSlug/meta', handleMetaWebhook);
+apiRouter.post('/webhooks/kommo', handleKommoWebhook);          // retrocompat
+apiRouter.post('/webhooks/salesbot', handleSalesbotWebhook);    // retrocompat
 
-// Retrocompat — caem na default unit (semeada do .env).
-apiRouter.post('/webhooks/kommo', handleKommoWebhook);
-apiRouter.post('/webhooks/salesbot', handleSalesbotWebhook);
+// Health.
+apiRouter.get('/health', (_req, res) => {
+  res.json({ ok: true, ts: new Date().toISOString() });
+});
+
+// Login Google — não pode exigir cookie (justamente quem vai ganhar o cookie).
+apiRouter.get('/auth/google/start', googleStartHandler);
+apiRouter.get('/auth/google/callback', googleCallbackHandler);
+
+// Google Calendar OAuth callback (já existia, segue aberto — usa `state`).
+apiRouter.get('/google-oauth/callback', googleOAuthCallbackHandler);
+
+// ===========================================================================
+// 2) DAQUI PRA BAIXO: TUDO exige sessão válida.
+// ===========================================================================
+
+apiRouter.use(requireAuth);
+
+// Auth — me + logout (já passou pelo requireAuth).
+apiRouter.get('/auth/me', meHandler);
+apiRouter.post('/auth/logout', logoutHandler);
 
 // ---------------------------------------------------------------------------
-// Observabilidade — consumida pelo dashboard.
+// CRUD de Units — listar/criar/apagar é só SUPER_ADMIN.
+// `listUnitsHandler` filtra internamente: UNIT_ADMIN recebe só sua unit.
+// ---------------------------------------------------------------------------
+apiRouter.get('/units', listUnitsHandler);                              // filtrado por role no controller
+apiRouter.post('/units', requireSuperAdmin, createUnitHandler);
+apiRouter.delete('/units/:id', requireSuperAdmin, deleteUnitHandler);
+
+// Leitura/edição de uma unit específica — super OU unit_admin da própria.
+apiRouter.get('/units/:id', requireUnitAccess, getUnitHandler);
+apiRouter.patch('/units/:id', requireUnitAccess, updateUnitHandler);
+apiRouter.get('/units/:id/stats', requireUnitAccess, unitStatsHandler);
+apiRouter.get('/units/:id/dashboard', requireUnitAccess, dashboardHandler);
+apiRouter.get('/units/:id/integrations', requireUnitAccess, getIntegrations);
+apiRouter.get('/units/:id/openai-debug', requireUnitAccess, openaiDebugHandler);
+apiRouter.get('/units/:id/prompt-performance', requireUnitAccess, getPromptPerformanceHandler);
+apiRouter.get('/units/:id/flagged-messages', requireUnitAccess, listFlaggedMessagesHandler);
+apiRouter.post('/units/:id/preview-prompt', requireUnitAccess, previewPromptHandler);
+
+// Kommo helpers — UNIT_ADMIN também pode (precisa configurar a própria unit).
+apiRouter.get('/units/:id/kommo-pipelines', requireUnitAccess, kommoPipelinesHandler);
+apiRouter.get('/units/:id/kommo-fields', requireUnitAccess, kommoFieldsHandler);
+apiRouter.get('/units/:id/kommo-salesbots', requireUnitAccess, kommoSalesbotsHandler);
+apiRouter.get('/units/:id/kommo-tags', requireUnitAccess, kommoTagsHandler);
+apiRouter.post('/units/:id/kommo-validate', requireUnitAccess, kommoValidateHandler);
+
+// Templates / Knowledge / Ações — UNIT_ADMIN edita os da sua unit.
+apiRouter.get('/units/:id/templates', requireUnitAccess, listTemplatesHandler);
+apiRouter.post('/units/:id/templates', requireUnitAccess, createTemplateHandler);
+apiRouter.patch('/units/:id/templates/:templateId', requireUnitAccess, updateTemplateHandler);
+apiRouter.delete('/units/:id/templates/:templateId', requireUnitAccess, deleteTemplateHandler);
+
+apiRouter.get('/units/:id/knowledge', requireUnitAccess, listKnowledgeHandler);
+apiRouter.post('/units/:id/knowledge', requireUnitAccess, createKnowledgeHandler);
+apiRouter.patch('/units/:id/knowledge/:entryId', requireUnitAccess, updateKnowledgeHandler);
+apiRouter.delete('/units/:id/knowledge/:entryId', requireUnitAccess, deleteKnowledgeHandler);
+
+apiRouter.get('/units/:id/actions', requireUnitAccess, listActionsHandler);
+apiRouter.post('/units/:id/actions', requireUnitAccess, createActionHandler);
+apiRouter.patch('/units/:id/actions/:actionId', requireUnitAccess, updateActionHandler);
+apiRouter.delete('/units/:id/actions/:actionId', requireUnitAccess, deleteActionHandler);
+
+// Google Calendar OAuth (escopo Unit).
+apiRouter.get('/units/:id/google-oauth/start', requireUnitAccess, googleOAuthStartHandler);
+apiRouter.delete('/units/:id/google-oauth', requireUnitAccess, googleOAuthDisconnectHandler);
+
+// ---------------------------------------------------------------------------
+// Endpoints "amplos" — o controller força unitId do user (UNIT_ADMIN não
+// consegue snifar outras units mesmo passando ?unitId=outra).
 // ---------------------------------------------------------------------------
 apiRouter.get('/traces', listTraces);
 apiRouter.get('/traces/:id', getTrace);
@@ -101,74 +185,28 @@ apiRouter.get('/llm-calls/:id', getLlmCallHandler);
 apiRouter.get('/conversations', listConversationsHandler);
 apiRouter.get('/conversations/:id', getConversationHandler);
 apiRouter.patch('/messages/:messageId/flag', flagMessageHandler);
-apiRouter.get('/units/:id/flagged-messages', listFlaggedMessagesHandler);
-
-// Templates CRUD
-apiRouter.get('/units/:id/templates', listTemplatesHandler);
-apiRouter.post('/units/:id/templates', createTemplateHandler);
-apiRouter.patch('/units/:id/templates/:templateId', updateTemplateHandler);
-apiRouter.delete('/units/:id/templates/:templateId', deleteTemplateHandler);
-
-// Knowledge base (RAG) CRUD
-apiRouter.get('/units/:id/knowledge', listKnowledgeHandler);
-apiRouter.post('/units/:id/knowledge', createKnowledgeHandler);
-apiRouter.patch('/units/:id/knowledge/:entryId', updateKnowledgeHandler);
-apiRouter.delete('/units/:id/knowledge/:entryId', deleteKnowledgeHandler);
-
-// Ações (regras "quando → faça") CRUD
-apiRouter.get('/units/:id/actions', listActionsHandler);
-apiRouter.post('/units/:id/actions', createActionHandler);
-apiRouter.patch('/units/:id/actions/:actionId', updateActionHandler);
-apiRouter.delete('/units/:id/actions/:actionId', deleteActionHandler);
-
-// Google Calendar OAuth
-apiRouter.get('/units/:id/google-oauth/start', googleOAuthStartHandler);
-apiRouter.get('/google-oauth/callback', googleOAuthCallbackHandler);
-apiRouter.delete('/units/:id/google-oauth', googleOAuthDisconnectHandler);
-
-// ---------------------------------------------------------------------------
-// Configuração do agente — prompt, tools e sequências (por Unit).
-// ---------------------------------------------------------------------------
-apiRouter.get('/config', getConfig);
-apiRouter.put('/config', putConfig);
-
-// ---------------------------------------------------------------------------
-// CRUD de Units.
-// ---------------------------------------------------------------------------
-apiRouter.get('/units', listUnitsHandler);
-apiRouter.post('/units', createUnitHandler);
-apiRouter.get('/units/:id', getUnitHandler);
-apiRouter.patch('/units/:id', updateUnitHandler);
-apiRouter.delete('/units/:id', deleteUnitHandler);
-apiRouter.get('/units/:id/stats', unitStatsHandler);
-apiRouter.get('/units/:id/kommo-pipelines', kommoPipelinesHandler);
-apiRouter.get('/units/:id/kommo-fields', kommoFieldsHandler);
-apiRouter.get('/units/:id/kommo-salesbots', kommoSalesbotsHandler);
-apiRouter.get('/units/:id/kommo-tags', kommoTagsHandler);
-apiRouter.post('/units/:id/kommo-validate', kommoValidateHandler);
-apiRouter.post('/units/:id/preview-prompt', previewPromptHandler);
-apiRouter.get('/units/:id/dashboard', dashboardHandler);
-apiRouter.get('/units/:id/integrations', getIntegrations);
-apiRouter.get('/units/:id/openai-debug', openaiDebugHandler);
-apiRouter.get('/units/:id/prompt-performance', getPromptPerformanceHandler);
-
-// Avaliação de uma conversa (LLM-as-judge).
 apiRouter.get('/conversations/:id/evaluation', getConversationEvaluationHandler);
 apiRouter.post('/conversations/:id/evaluate', reEvaluateConversationHandler);
 
-// ---------------------------------------------------------------------------
-// Alertas globais (todas as Units) — usado pelo badge no header.
-// ---------------------------------------------------------------------------
-apiRouter.get('/alerts', getAlerts);
+// Config — legado, mantém aberto pra qualquer logado (refactor pendente).
+apiRouter.get('/config', getConfig);
+apiRouter.put('/config', putConfig);
+
+// Alertas globais — só SUPER_ADMIN faz sentido (agrega múltiplas units).
+apiRouter.get('/alerts', requireSuperAdmin, getAlerts);
 
 // ---------------------------------------------------------------------------
-// Health + endpoints de debug.
+// Users CRUD — só SUPER_ADMIN.
 // ---------------------------------------------------------------------------
-apiRouter.get('/health', (_req, res) => {
-  res.json({ ok: true, ts: new Date().toISOString() });
-});
+apiRouter.get('/users', requireSuperAdmin, listUsersHandler);
+apiRouter.post('/users', requireSuperAdmin, createUserHandler);
+apiRouter.patch('/users/:id', requireSuperAdmin, updateUserHandler);
+apiRouter.delete('/users/:id', requireSuperAdmin, deleteUserHandler);
 
-apiRouter.get('/admin/kommo-fields', async (_req, res) => {
+// ---------------------------------------------------------------------------
+// Endpoints admin do .env (Kommo default) — só SUPER_ADMIN.
+// ---------------------------------------------------------------------------
+apiRouter.get('/admin/kommo-fields', requireSuperAdmin, async (_req, res) => {
   try {
     const raw = (await KommoService.listLeadCustomFields()) as {
       _embedded?: { custom_fields?: Array<{ id: number; name: string; type: string }> };
@@ -185,7 +223,7 @@ apiRouter.get('/admin/kommo-fields', async (_req, res) => {
   }
 });
 
-apiRouter.get('/admin/kommo-salesbots', async (_req, res) => {
+apiRouter.get('/admin/kommo-salesbots', requireSuperAdmin, async (_req, res) => {
   try {
     const raw = (await KommoService.listSalesbots()) as {
       _embedded?: { salesbot?: Array<{ id: number; name: string }> };

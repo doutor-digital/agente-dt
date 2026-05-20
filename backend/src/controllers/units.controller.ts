@@ -119,8 +119,12 @@ function dropMaskedSecrets<T extends Partial<UnitInput>>(input: T): T {
 // Handlers.
 // ---------------------------------------------------------------------------
 
-export async function listUnitsHandler(_req: Request, res: Response): Promise<void> {
-  const units = await listUnits();
+export async function listUnitsHandler(req: Request, res: Response): Promise<void> {
+  // UNIT_ADMIN só vê sua própria unit. SUPER_ADMIN vê todas.
+  let units = await listUnits();
+  if (req.user?.role === 'UNIT_ADMIN') {
+    units = units.filter((u) => u.id === req.user!.unitId);
+  }
   res.json({ units: units.map(maskUnitSecrets) });
 }
 

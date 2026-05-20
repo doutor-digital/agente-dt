@@ -21,16 +21,19 @@ import {
   Cpu,
   FileText,
   LayoutDashboard,
+  LogOut,
   MessageCircle,
   Settings,
   Sparkles,
   Terminal,
+  UserCog,
   Wand2,
   Zap,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { UnitSelector } from './UnitSelector';
 import { NotificationsBadge } from './NotificationsBadge';
+import { useAuth } from '../context/AuthContext';
 
 export type AppTab =
   | 'dashboard'
@@ -43,13 +46,15 @@ export type AppTab =
   | 'sources'
   | 'actions'
   | 'config'
-  | 'units';
+  | 'units'
+  | 'users';
 
 interface NavItem {
   id: AppTab;
   label: string;
   icon: typeof Terminal;
   group: 'primary' | 'secondary';
+  superOnly?: boolean;
 }
 
 const NAV: NavItem[] = [
@@ -64,7 +69,8 @@ const NAV: NavItem[] = [
   { id: 'prompts', label: 'Prompts', icon: Sparkles, group: 'secondary' },
   { id: 'integrations', label: 'Integrações', icon: Cable, group: 'secondary' },
   { id: 'config', label: 'Avançado', icon: Settings, group: 'secondary' },
-  { id: 'units', label: 'Unidades', icon: Building2, group: 'secondary' },
+  { id: 'units', label: 'Unidades', icon: Building2, group: 'secondary', superOnly: true },
+  { id: 'users', label: 'Usuários', icon: UserCog, group: 'secondary', superOnly: true },
 ];
 
 export function AppSidebar({
@@ -74,8 +80,10 @@ export function AppSidebar({
   tab: AppTab;
   onChange: (t: AppTab) => void;
 }) {
-  const primary = NAV.filter((n) => n.group === 'primary');
-  const secondary = NAV.filter((n) => n.group === 'secondary');
+  const { user, logout } = useAuth();
+  const visible = NAV.filter((n) => !n.superOnly || user?.role === 'SUPER_ADMIN');
+  const primary = visible.filter((n) => n.group === 'primary');
+  const secondary = visible.filter((n) => n.group === 'secondary');
 
   return (
     <aside className="w-60 shrink-0 border-r border-zinc-800/80 bg-ink-950 flex flex-col h-full">
@@ -120,6 +128,38 @@ export function AppSidebar({
           ))}
         </NavGroup>
       </nav>
+
+      {/* User info + logout */}
+      {user && (
+        <div className="border-t border-zinc-800/60 px-3 py-2 flex items-center gap-2">
+          {user.picture ? (
+            <img
+              src={user.picture}
+              alt=""
+              className="w-7 h-7 rounded-full ring-1 ring-zinc-700"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="w-7 h-7 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center text-xs font-bold">
+              {user.email.slice(0, 1).toUpperCase()}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="text-xs text-zinc-200 truncate font-medium">{user.name ?? user.email}</div>
+            <div className="text-[9px] uppercase tracking-wider text-zinc-500">
+              {user.role === 'SUPER_ADMIN' ? 'Super admin' : 'Unit admin'}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void logout()}
+            title="Sair"
+            className="p-1.5 rounded-md text-zinc-500 hover:text-rose-300 hover:bg-zinc-900/60"
+          >
+            <LogOut size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="border-t border-zinc-800/60 p-3 flex items-center justify-between">

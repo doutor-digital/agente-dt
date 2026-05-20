@@ -55,12 +55,39 @@ const schema = z.object({
         .filter(Boolean),
     ),
 
-  // Google OAuth — opcionais. Sem isso, integração com Calendar fica
-  // desativada (botão "Conectar" no UnitsPanel mostra erro orientando).
-  // Setup: Google Cloud Console → APIs & Services → Credentials → OAuth 2.0
+  // Google OAuth — usado tanto pelo Calendar quanto pelo login do painel.
+  // Sem isso, ambos ficam desativados. Setup: Google Cloud Console →
+  // Credentials → OAuth 2.0. O redirect URI precisa cadastrar duas URLs:
+  //   - /api/auth/google/callback  (login do painel)
+  //   - /api/google-oauth/callback (Calendar das units)
+  // GOOGLE_OAUTH_REDIRECT_URI continua sendo o do Calendar (legado).
+  // GOOGLE_AUTH_REDIRECT_URI é o novo, do login.
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+  GOOGLE_AUTH_REDIRECT_URI: z.string().url().optional(),
+
+  // ---------------------------------------------------------------------------
+  // Autenticação do painel — sessão via cookie httpOnly assinado.
+  // ---------------------------------------------------------------------------
+  // SESSION_JWT_SECRET: segredo HS256 (>=32 chars). Gere com:
+  //   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+  // Trocar invalida TODAS as sessões ativas (efeito desejado em incidentes).
+  SESSION_JWT_SECRET: z.string().min(32, 'SESSION_JWT_SECRET precisa ter >=32 chars'),
+
+  // BOOTSTRAP_ALLOWED_EMAIL: se setado, só ESSE email pode reivindicar o
+  // "first-login-wins" enquanto a tabela users está vazia. Defesa em
+  // profundidade pra produção. Em dev pode deixar em branco — primeiro
+  // que logar vira SUPER_ADMIN.
+  BOOTSTRAP_ALLOWED_EMAIL: z
+    .string()
+    .email('BOOTSTRAP_ALLOWED_EMAIL precisa ser um email válido')
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+
+  AUTH_COOKIE_NAME: z.string().default('dt_session'),
+  AUTH_COOKIE_DOMAIN: z.string().optional(),
+  AUTH_SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -14,6 +14,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Unit } from '../types/api';
 import { api } from '../lib/api';
+import { useAuth } from './AuthContext';
 
 interface UnitContextValue {
   units: Unit[];
@@ -38,10 +39,14 @@ function readStored(): string | null {
 }
 
 export function UnitProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  // UNIT_ADMIN é pinado na própria unit — ignora persistência de seleção.
+  const initialSelected =
+    user?.role === 'UNIT_ADMIN' ? (user.unitId ?? null) : readStored();
   const [units, setUnits] = useState<Unit[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedUnitId, setSelectedUnitIdState] = useState<string | null>(readStored());
+  const [selectedUnitId, setSelectedUnitIdState] = useState<string | null>(initialSelected);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -49,7 +54,13 @@ export function UnitProvider({ children }: { children: ReactNode }) {
     try {
       const list = await api.listUnits();
       setUnits(list);
-      // Se a Unit persistida não existe mais, cai pra null (todas).
+      // UNIT_ADMIN sempre na sua unit (backend já filtra a lista).
+      if (user?.role === 'UNIT_ADMIN') {
+        const fixedId = user.unitId ?? (list[0]?.id ?? null);
+        setSelectedUnitIdState(fixedId);
+        return;
+      }
+      // SUPER_ADMIN: se a Unit persistida não existe mais, cai pra null (todas).
       if (selectedUnitId && !list.some((u) => u.id === selectedUnitId)) {
         setSelectedUnitIdState(null);
         try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
@@ -64,20 +75,25 @@ export function UnitProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [selectedUnitId]);
+  }, [selectedUnitId, user]);
 
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user?.id, user?.role]);
 
-  const setSelectedUnitId = useCallback((id: string | null) => {
-    setSelectedUnitIdState(id);
-    try {
-      if (id) localStorage.setItem(STORAGE_KEY, id);
-      else localStorage.removeItem(STORAGE_KEY);
-    } catch { /* ignore */ }
-  }, []);
+  const setSelectedUnitId = useCallback(
+    (id: string | null) => {
+      // UNIT_ADMIN não pode trocar de unit — ignora silenciosamente.
+      if (user?.role === 'UNIT_ADMIN') return;
+      setSelectedUnitIdState(id);
+      try {
+        if (id) localStorage.setItem(STORAGE_KEY, id);
+        else localStorage.removeItem(STORAGE_KEY);
+      } catch { /* ignore */ }
+    },
+    [user],
+  );
 
   const selectedUnit = selectedUnitId ? (units.find((u) => u.id === selectedUnitId) ?? null) : null;
 
