@@ -25,6 +25,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
+  Bot,
   Brain,
   CalendarDays,
   Clock4,
@@ -34,15 +35,16 @@ import {
   RefreshCcw,
   Repeat,
   Sparkles,
-  Target,
   TrendingUp,
   Users,
+  UserCheck,
 } from 'lucide-react';
 import clsx from 'clsx';
 import axios from 'axios';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
-import type { DashboardResponse } from '../types/api';
+import type { DashboardResponse, LeadsBucket } from '../types/api';
+import { LeadsBucketModal } from './LeadsBucketModal';
 
 const PERIOD_OPTIONS = [
   { days: 7, label: 'Últimos 7 dias' },
@@ -56,6 +58,7 @@ export function DashboardPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState(7);
+  const [openBucket, setOpenBucket] = useState<LeadsBucket | null>(null);
 
   const load = useCallback(async () => {
     if (!selectedUnitId) return;
@@ -174,22 +177,29 @@ export function DashboardPanel() {
               icon={<CalendarDays size={18} />}
               label="Leads do fim de semana"
               value={data?.kpis.weekendLeads ?? 0}
-              sublabel="criados em sábado/domingo"
+              sublabel="criados em sábado/domingo · clique pra ver"
               color="cyan"
+              onClick={() => setOpenBucket('weekend_leads')}
             />
             <KpiCard
               icon={<CalendarDays size={18} />}
               label="Conversas de fim de semana"
               value={data?.kpis.weekendConversations ?? 0}
-              sublabel="qualquer mensagem em sáb/dom"
+              sublabel="qualquer mensagem em sáb/dom · clique pra ver"
               color="violet"
+              onClick={() => setOpenBucket('weekend_conversations')}
             />
             <KpiCard
               icon={<Repeat size={18} />}
               label="Taxa de transferência"
               value={data ? `${(data.kpis.handoffRate * 100).toFixed(0)}%` : '—'}
-              sublabel={data ? `${data.kpis.handoffCount} escalados pra humano` : 'sem dados'}
+              sublabel={
+                data
+                  ? `${data.kpis.handoffCount} escalados pra humano · clique pra ver`
+                  : 'sem dados'
+              }
               color="amber"
+              onClick={() => setOpenBucket('handoff')}
             />
             <KpiCard
               icon={<Brain size={18} />}
@@ -204,10 +214,11 @@ export function DashboardPanel() {
             />
             <KpiCard
               icon={<AlertCircle size={18} />}
-              label="Perguntas sem resposta"
+              label="Leads não respondidos"
               value={data?.kpis.unansweredQuestions ?? 0}
-              sublabel="sem reply em 60min"
+              sublabel="sem reply em 60min · clique pra ver"
               color="orange"
+              onClick={() => setOpenBucket('unanswered')}
             />
             <KpiCard
               icon={<Clock4 size={18} />}
@@ -223,19 +234,50 @@ export function DashboardPanel() {
           </div>
         </section>
 
-        {/* Bloco secundário — conversão e custo (contexto financeiro) */}
+        {/* Bloco secundário — conversão (separada IA vs SDR) + custo */}
         <section>
-          <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold mb-3">
-            Conversão & custo
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">
+              Conversão por responsável
+            </div>
+            {data && (
+              <div className="text-[11px] text-zinc-500">
+                Total: <span className="text-zinc-300 font-semibold">{data.kpis.convertedCount}</span>{' '}
+                convertidos ({(data.kpis.conversionRate * 100).toFixed(1)}%)
+              </div>
+            )}
           </div>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 gap-4 mb-4">
             <KpiCard
-              icon={<Target size={18} />}
-              label="Taxa de conversão"
-              value={data ? `${(data.kpis.conversionRate * 100).toFixed(1)}%` : '—'}
-              sublabel={data ? `${data.kpis.convertedCount} convertidos` : 'sem dados'}
+              icon={<Bot size={18} />}
+              label="Convertidos pela IA"
+              value={data ? `${(data.kpis.conversionRateIa * 100).toFixed(1)}%` : '—'}
+              sublabel={
+                data
+                  ? `${data.kpis.convertedByIa} fecharam sem handoff · clique pra ver`
+                  : 'IA fechou sem handoff'
+              }
               color="emerald"
+              onClick={() => setOpenBucket('converted_ia')}
             />
+            <KpiCard
+              icon={<UserCheck size={18} />}
+              label="Convertidos pela SDR"
+              value={data ? `${(data.kpis.conversionRateSdr * 100).toFixed(1)}%` : '—'}
+              sublabel={
+                data
+                  ? `${data.kpis.convertedBySdr} fecharam após handoff · clique pra ver`
+                  : 'humano fechou pós-pausar_ia'
+              }
+              color="sky"
+              onClick={() => setOpenBucket('converted_sdr')}
+            />
+          </div>
+
+          <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold mb-3">
+            Custo
+          </div>
+          <div className="grid grid-cols-2 gap-4">
             <KpiCard
               icon={<TrendingUp size={18} />}
               label="Custo OpenAI"
@@ -328,6 +370,15 @@ export function DashboardPanel() {
             })}
         </section>
       </div>
+
+      {openBucket && selectedUnitId && (
+        <LeadsBucketModal
+          unitId={selectedUnitId}
+          bucket={openBucket}
+          days={days}
+          onClose={() => setOpenBucket(null)}
+        />
+      )}
     </div>
   );
 }
@@ -388,26 +439,37 @@ function KpiCard({
   value,
   sublabel,
   color = 'brand',
+  onClick,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string | number;
   sublabel: string;
   color?: keyof typeof colorClasses;
+  onClick?: () => void;
 }) {
   const c = colorClasses[color] ?? colorClasses.brand;
-  return (
-    <div
-      className={clsx(
-        'rounded-xl ring-1 p-4 transition-transform hover:-translate-y-0.5',
-        c.ring,
-        c.bg,
-      )}
-    >
+  const clickable = !!onClick;
+  const className = clsx(
+    'rounded-xl ring-1 p-4 transition-transform hover:-translate-y-0.5 text-left w-full',
+    c.ring,
+    c.bg,
+    clickable && 'cursor-pointer hover:ring-2 focus:outline-none focus:ring-2',
+  );
+  const body = (
+    <>
       <div className={clsx('flex items-center gap-2 mb-3', c.icon)}>{icon}</div>
       <div className={clsx('text-2xl font-display font-bold tracking-tight', c.text)}>{value}</div>
       <div className="text-[11px] text-zinc-400 mt-1">{label}</div>
       <div className="text-[10px] text-zinc-500 mt-0.5">{sublabel}</div>
-    </div>
+    </>
   );
+  if (clickable) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        {body}
+      </button>
+    );
+  }
+  return <div className={className}>{body}</div>;
 }

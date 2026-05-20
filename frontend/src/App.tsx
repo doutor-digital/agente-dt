@@ -59,6 +59,15 @@ function AuthGate() {
 
 function Shell() {
   const [tab, setTab] = useState<AppTab>('dashboard');
+
+  // Drill-down do Dashboard: o LeadsBucketModal dispara `app:openConversation`.
+  // Aqui trocamos pra aba Conversas; o ConversationsPanel escuta o mesmo
+  // evento e seleciona a conversa correspondente.
+  useEffect(() => {
+    const handler = () => setTab('conversations');
+    window.addEventListener('app:openConversation', handler);
+    return () => window.removeEventListener('app:openConversation', handler);
+  }, []);
   // App renderiza imediatamente — cada panel cuida do próprio loading state.
   // (A Splash com logo continua disponível em ./components/Splash, mas não
   // bloqueia mais o boot.)

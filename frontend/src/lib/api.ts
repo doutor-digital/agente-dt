@@ -19,6 +19,8 @@ import type {
   KommoSalesbotsResponse,
   KommoTagsResponse,
   KommoValidateResponse,
+  LeadsBucket,
+  LeadsBucketResponse,
   MessageTemplate,
   LlmCallDetail,
   UnitAction,
@@ -164,6 +166,13 @@ export const api = {
   async unitDashboard(id: string, days = 7): Promise<DashboardResponse> {
     const { data } = await http.get<DashboardResponse>(`/units/${id}/dashboard`, {
       params: { days },
+      timeout: 30_000,
+    });
+    return data;
+  },
+  async leadsBucket(id: string, bucket: LeadsBucket, days = 7): Promise<LeadsBucketResponse> {
+    const { data } = await http.get<LeadsBucketResponse>(`/units/${id}/leads-bucket`, {
+      params: { bucket, days },
       timeout: 30_000,
     });
     return data;

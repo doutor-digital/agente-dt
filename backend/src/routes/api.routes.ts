@@ -35,6 +35,7 @@ import {
   kommoTagsHandler,
   previewPromptHandler,
   dashboardHandler,
+  leadsBucketHandler,
 } from '../controllers/units.controller.js';
 import {
   listLlmCallsHandler,
@@ -140,6 +141,7 @@ apiRouter.get('/units/:id', requireUnitAccess, getUnitHandler);
 apiRouter.patch('/units/:id', requireUnitAccess, updateUnitHandler);
 apiRouter.get('/units/:id/stats', requireUnitAccess, unitStatsHandler);
 apiRouter.get('/units/:id/dashboard', requireUnitAccess, dashboardHandler);
+apiRouter.get('/units/:id/leads-bucket', requireUnitAccess, leadsBucketHandler);
 apiRouter.get('/units/:id/integrations', requireUnitAccess, getIntegrations);
 apiRouter.get('/units/:id/openai-debug', requireUnitAccess, openaiDebugHandler);
 apiRouter.get('/units/:id/prompt-performance', requireUnitAccess, getPromptPerformanceHandler);

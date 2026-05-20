@@ -227,6 +227,32 @@ export interface KommoPipelinesResponse extends KommoErrorEnvelope {
   message?: string;
 }
 
+export type LeadsBucket =
+  | 'unanswered'
+  | 'weekend_leads'
+  | 'weekend_conversations'
+  | 'handoff'
+  | 'converted_ia'
+  | 'converted_sdr';
+
+export interface LeadsBucketItem {
+  conversationId: string;
+  leadId: string;
+  contactName: string | null;
+  phone: string | null;
+  lastMessageAt: string;
+  createdAt: string;
+  convertedAt?: string | null;
+  hint?: string | null;
+}
+
+export interface LeadsBucketResponse {
+  bucket: LeadsBucket;
+  periodDays: number;
+  count: number;
+  items: LeadsBucketItem[];
+}
+
 export interface KommoValidateResponse {
   ok: boolean;
   checks: Array<{ name: string; ok: boolean; detail?: string }>;
@@ -245,6 +271,11 @@ export interface DashboardResponse {
     unansweredQuestions: number;
     convertedCount: number;
     conversionRate: number;
+    // Split SDR (humano fechou após pausar_ia) vs IA (IA fechou sozinha).
+    convertedByIa: number;
+    convertedBySdr: number;
+    conversionRateIa: number;
+    conversionRateSdr: number;
     llmCostUsd: number;
     llmCallsCount: number;
     peakHour: number | null;

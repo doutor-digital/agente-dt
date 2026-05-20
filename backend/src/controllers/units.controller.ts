@@ -333,6 +333,7 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     unansweredRow,
     convertedConvos,
     totalConvos,
+    convertedBySdrRow,
     llmAgg,
     convsByHour,
     avgRespLatency,
@@ -400,12 +401,34 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
             AND m2.created_at < m.created_at + INTERVAL '60 minutes'
         )
     `,
+    // Conversões totais (mantém o número agregado, mesmo agora que separamos).
     prisma.conversation.count({
       where: { unitId: id, createdAt: { gte: periodStart }, convertedAt: { not: null } },
     }),
     prisma.conversation.count({
       where: { unitId: id, createdAt: { gte: periodStart } },
     }),
+    // Conversões pela SDR: conversa convertida E teve `pausar_ia` (handoff)
+    // ANTES do convertedAt. Heurística: lead_id da conversa apareceu num
+    // execution_step kind=TOOL_CALL title ILIKE 'decisão: pausar%' antes do
+    // converted_at. Como a Conversation guarda leadId (não trace.id), o join
+    // é por lead_id+unit_id+created_at — exatamente como o handoffCount já faz.
+    prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(DISTINCT c.id)::bigint AS count
+      FROM conversations c
+      WHERE c.unit_id = ${id}
+        AND c.created_at >= ${periodStart}
+        AND c.converted_at IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM execution_traces et
+          JOIN execution_steps es ON es.trace_id = et.id
+          WHERE et.unit_id = c.unit_id
+            AND et.lead_id = c.lead_id
+            AND et.created_at < c.converted_at
+            AND es.kind = 'TOOL_CALL'
+            AND es.title ILIKE 'decisão: pausar%'
+        )
+    `,
     prisma.llmCall.aggregate({
       where: { unitId: id, createdAt: { gte: periodStart } },
       _sum: { costUsd: true, totalTokens: true },
@@ -443,6 +466,13 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
   const peakHour = convsByHour[0]?.hour ?? null;
   const handoffRate = uniqueLeads > 0 ? handoffCount / uniqueLeads : 0;
   const conversionRate = totalConvos > 0 ? convertedConvos / totalConvos : 0;
+
+  // Split SDR vs IA: SDR = converteu APÓS um handoff (pausar_ia). IA = converteu
+  // sozinha (sem handoff antes). É garantido que sdr <= convertedConvos.
+  const convertedBySdr = Number(convertedBySdrRow[0]?.count ?? 0);
+  const convertedByIa = Math.max(0, convertedConvos - convertedBySdr);
+  const conversionRateSdr = totalConvos > 0 ? convertedBySdr / totalConvos : 0;
+  const conversionRateIa = totalConvos > 0 ? convertedByIa / totalConvos : 0;
 
   // Funil: lista leads do Kommo e agrupa por status_id.
   let funnel: Array<{
@@ -490,6 +520,10 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       unansweredQuestions,
       convertedCount: convertedConvos,
       conversionRate,
+      convertedByIa,
+      convertedBySdr,
+      conversionRateIa,
+      conversionRateSdr,
       llmCostUsd: totalCost,
       llmCallsCount: llmAgg._count._all,
       peakHour,
@@ -638,6 +672,186 @@ interface KommoCheck {
   name: string;
   ok: boolean;
   detail?: string;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/units/:id/leads-bucket?bucket=unanswered|weekend|handoff|converted_ia|converted_sdr
+//
+// Devolve a LISTA dos leads/conversas que compõem cada KPI do dashboard —
+// permite "drill-down" clicável. As queries SQL espelham as do dashboardHandler
+// trocando COUNT por SELECT (mesmo período padrão 7d).
+// ---------------------------------------------------------------------------
+
+type BucketRow = {
+  conversationId: string;
+  leadId: string;
+  contactName: string | null;
+  phone: string | null;
+  lastMessageAt: Date | string;
+  createdAt: Date | string;
+  convertedAt?: Date | string | null;
+  // Texto curto pra mostrar como dica em cada linha (1 linha de contexto).
+  hint?: string | null;
+};
+
+export async function leadsBucketHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const bucket = String(req.query.bucket ?? '');
+  const daysParam = Number(req.query.days ?? 7);
+  const periodDays = Number.isFinite(daysParam)
+    ? Math.max(1, Math.min(Math.round(daysParam), 365))
+    : 7;
+  const periodStart = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+  const limit = 200;
+
+  const allowed = ['unanswered', 'weekend_leads', 'weekend_conversations', 'handoff', 'converted_ia', 'converted_sdr'];
+  if (!allowed.includes(bucket)) {
+    res.status(400).json({ error: 'invalid_bucket', allowed });
+    return;
+  }
+
+  let rows: BucketRow[] = [];
+
+  if (bucket === 'unanswered') {
+    // Mensagens do paciente sem resposta da IA em 60min. Devolve uma linha
+    // por mensagem não respondida (com a conversa+lead correspondente).
+    rows = await prisma.$queryRaw<BucketRow[]>`
+      SELECT c.id AS "conversationId",
+             c.lead_id AS "leadId",
+             c.contact_name AS "contactName",
+             c.phone AS "phone",
+             c.last_message_at AS "lastMessageAt",
+             c.created_at AS "createdAt",
+             LEFT(m.content, 140) AS "hint"
+      FROM messages m
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.unit_id = ${id}
+        AND m.role = 'user'
+        AND m.created_at >= ${periodStart}
+        AND NOT EXISTS (
+          SELECT 1 FROM messages m2
+          WHERE m2.conversation_id = m.conversation_id
+            AND m2.role = 'assistant'
+            AND m2.created_at > m.created_at
+            AND m2.created_at < m.created_at + INTERVAL '60 minutes'
+        )
+      ORDER BY m.created_at DESC
+      LIMIT ${limit}
+    `;
+  } else if (bucket === 'weekend_leads') {
+    // Lead cuja PRIMEIRA mensagem caiu em sábado/domingo no período.
+    rows = await prisma.$queryRaw<BucketRow[]>`
+      SELECT c.id AS "conversationId",
+             c.lead_id AS "leadId",
+             c.contact_name AS "contactName",
+             c.phone AS "phone",
+             c.last_message_at AS "lastMessageAt",
+             c.created_at AS "createdAt",
+             TO_CHAR(c.created_at, 'TMDay HH24:MI') AS "hint"
+      FROM conversations c
+      WHERE c.unit_id = ${id}
+        AND c.created_at >= ${periodStart}
+        AND EXTRACT(DOW FROM c.created_at) IN (0, 6)
+      ORDER BY c.created_at DESC
+      LIMIT ${limit}
+    `;
+  } else if (bucket === 'weekend_conversations') {
+    // Conversas com QUALQUER mensagem em sáb/dom no período.
+    rows = await prisma.$queryRaw<BucketRow[]>`
+      SELECT DISTINCT ON (c.id)
+             c.id AS "conversationId",
+             c.lead_id AS "leadId",
+             c.contact_name AS "contactName",
+             c.phone AS "phone",
+             c.last_message_at AS "lastMessageAt",
+             c.created_at AS "createdAt",
+             NULL::text AS "hint"
+      FROM conversations c
+      JOIN messages m ON m.conversation_id = c.id
+      WHERE c.unit_id = ${id}
+        AND m.created_at >= ${periodStart}
+        AND EXTRACT(DOW FROM m.created_at) IN (0, 6)
+      ORDER BY c.id, c.last_message_at DESC
+      LIMIT ${limit}
+    `;
+  } else if (bucket === 'handoff') {
+    // Conversas que tiveram pausar_ia (handoff pra humano) no período.
+    rows = await prisma.$queryRaw<BucketRow[]>`
+      SELECT DISTINCT ON (c.id)
+             c.id AS "conversationId",
+             c.lead_id AS "leadId",
+             c.contact_name AS "contactName",
+             c.phone AS "phone",
+             c.last_message_at AS "lastMessageAt",
+             c.created_at AS "createdAt",
+             'IA pausada' AS "hint"
+      FROM conversations c
+      JOIN execution_traces et ON et.unit_id = c.unit_id AND et.lead_id = c.lead_id
+      JOIN execution_steps es ON es.trace_id = et.id
+      WHERE c.unit_id = ${id}
+        AND et.created_at >= ${periodStart}
+        AND es.kind = 'TOOL_CALL'
+        AND es.title ILIKE 'decisão: pausar%'
+      ORDER BY c.id, c.last_message_at DESC
+      LIMIT ${limit}
+    `;
+  } else if (bucket === 'converted_ia') {
+    // Convertidos sem handoff prévio.
+    rows = await prisma.$queryRaw<BucketRow[]>`
+      SELECT c.id AS "conversationId",
+             c.lead_id AS "leadId",
+             c.contact_name AS "contactName",
+             c.phone AS "phone",
+             c.last_message_at AS "lastMessageAt",
+             c.created_at AS "createdAt",
+             c.converted_at AS "convertedAt",
+             'Convertido pela IA' AS "hint"
+      FROM conversations c
+      WHERE c.unit_id = ${id}
+        AND c.created_at >= ${periodStart}
+        AND c.converted_at IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM execution_traces et
+          JOIN execution_steps es ON es.trace_id = et.id
+          WHERE et.unit_id = c.unit_id
+            AND et.lead_id = c.lead_id
+            AND et.created_at < c.converted_at
+            AND es.kind = 'TOOL_CALL'
+            AND es.title ILIKE 'decisão: pausar%'
+        )
+      ORDER BY c.converted_at DESC
+      LIMIT ${limit}
+    `;
+  } else if (bucket === 'converted_sdr') {
+    // Convertidos COM handoff prévio (humano fechou).
+    rows = await prisma.$queryRaw<BucketRow[]>`
+      SELECT c.id AS "conversationId",
+             c.lead_id AS "leadId",
+             c.contact_name AS "contactName",
+             c.phone AS "phone",
+             c.last_message_at AS "lastMessageAt",
+             c.created_at AS "createdAt",
+             c.converted_at AS "convertedAt",
+             'Convertido pela SDR (após handoff)' AS "hint"
+      FROM conversations c
+      WHERE c.unit_id = ${id}
+        AND c.created_at >= ${periodStart}
+        AND c.converted_at IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM execution_traces et
+          JOIN execution_steps es ON es.trace_id = et.id
+          WHERE et.unit_id = c.unit_id
+            AND et.lead_id = c.lead_id
+            AND et.created_at < c.converted_at
+            AND es.kind = 'TOOL_CALL'
+            AND es.title ILIKE 'decisão: pausar%'
+        )
+      ORDER BY c.converted_at DESC
+      LIMIT ${limit}
+    `;
+  }
+
+  res.json({ bucket, periodDays, count: rows.length, items: rows });
 }
 
 export async function kommoValidateHandler(req: Request, res: Response): Promise<void> {

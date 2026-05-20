@@ -41,6 +41,20 @@ export function ConversationsPanel() {
     setDetail(null);
   }, [selectedUnitId]);
 
+  // Quando o usuário clica num lead pelo Dashboard (modal LeadsBucketModal),
+  // ele dispara `app:openConversation` — selecionamos a conversa correspondente
+  // ao ser montados.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = e as CustomEvent<{ conversationId?: string }>;
+      if (ev.detail?.conversationId) {
+        setSelectedId(ev.detail.conversationId);
+      }
+    };
+    window.addEventListener('app:openConversation', handler);
+    return () => window.removeEventListener('app:openConversation', handler);
+  }, []);
+
   const detailFetcher = useMemo(
     () => async () => (selectedId ? api.getConversation(selectedId) : null),
     [selectedId],
