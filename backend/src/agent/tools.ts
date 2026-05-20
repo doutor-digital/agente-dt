@@ -22,7 +22,9 @@
 
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
+import type { Unit } from '@prisma/client';
 import type { KommoClient } from '../services/kommo.service.js';
+import { createCalendarEvent } from '../services/google-calendar.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 
 // ---------------------------------------------------------------------------
@@ -44,6 +46,11 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     'com um humano; (b) a situação é clínica/sensível e exige atendente real; ' +
     '(c) o paciente está agitado/insatisfeito. Após pausar, responda UMA frase ' +
     'avisando que um humano vai assumir.',
+  agendar_consulta:
+    'Cria um evento no Google Calendar e envia convite por email. Use quando ' +
+    'o cliente pedir explicitamente um agendamento (consulta, reunião, visita) ' +
+    'e fornecer/aceitar data + horário. SEMPRE confirme dia e hora antes de ' +
+    'agendar. Inclua o email do cliente em attendeeEmails se você o tiver.',
 };
 
 // ---------------------------------------------------------------------------
@@ -59,6 +66,8 @@ export interface BuildToolsArgs {
   descriptionOverrides?: Record<string, string>;
   /** ID do custom field "IA Pausada". Sem isso, `pausar_ia` retorna erro suave. */
   pausedFieldId?: number | null;
+  /** Unit corrente — necessária pra tool agendar_consulta (Google Calendar). */
+  unit?: Unit;
 }
 
 export function buildTools({
@@ -66,6 +75,7 @@ export function buildTools({
   kommo,
   descriptionOverrides = {},
   pausedFieldId = null,
+  unit,
 }: BuildToolsArgs) {
   const desc = (name: string) => descriptionOverrides[name] || DEFAULT_TOOL_DESCRIPTIONS[name];
 
@@ -222,7 +232,85 @@ export function buildTools({
     },
   });
 
-  return [aplicar_tag, mover_etapa, pausar_ia];
+  const agendarConsultaSchema = z.object({
+    summary: z.string().min(1).max(200).describe('Título do evento. Ex: "Consulta — Maria Silva"'),
+    description: z.string().max(2000).optional().describe('Detalhes do evento (opcional).'),
+    startIso: z
+      .string()
+      .describe('Data e hora de início em ISO 8601 com fuso. Ex: "2026-05-25T14:30:00-03:00"'),
+    durationMinutes: z
+      .number()
+      .int()
+      .min(15)
+      .max(480)
+      .describe('Duração em minutos. Ex: 60 pra uma consulta de 1h.'),
+    attendeeEmails: z
+      .array(z.string().email())
+      .max(10)
+      .optional()
+      .describe('Emails dos convidados (cliente recebe convite automático).'),
+    timeZone: z
+      .string()
+      .default('America/Sao_Paulo')
+      .describe('IANA timezone. Default America/Sao_Paulo.'),
+  });
+
+  const agendar_consulta = new DynamicStructuredTool({
+    name: 'agendar_consulta',
+    description: desc('agendar_consulta'),
+    schema: agendarConsultaSchema,
+    func: async ({ summary, description, startIso, durationMinutes, attendeeEmails, timeZone }) => {
+      const t0 = performance.now();
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: agendar "${summary}" em ${startIso}`,
+        payload: { summary, startIso, durationMinutes, attendeeEmails },
+      });
+
+      if (!unit) {
+        const msg = 'Tool agendar_consulta indisponível: Unit ausente no contexto.';
+        await recorder.step({ kind: 'ERROR', title: msg, latencyMs: 0 });
+        return `ERRO: ${msg}`;
+      }
+      if (!unit.googleAccessToken || !unit.googleRefreshToken) {
+        const msg = 'Google Calendar não conectado nesta Unit. Avise ao paciente que vai chamar um humano pra agendar.';
+        await recorder.step({ kind: 'ERROR', title: msg, latencyMs: 0 });
+        return `ERRO: ${msg}`;
+      }
+
+      try {
+        const event = await createCalendarEvent(unit, {
+          summary,
+          description,
+          startIso,
+          durationMinutes,
+          attendeeEmails,
+          timeZone,
+        });
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Evento criado no Google Calendar: ${summary}`,
+          payload: { eventId: event.eventId, htmlLink: event.htmlLink, meetLink: event.meetLink },
+          latencyMs: latency,
+        });
+        const meetMsg = event.meetLink ? ` Link Meet: ${event.meetLink}.` : '';
+        return `OK — agendado pra ${startIso} (${durationMinutes}min).${meetMsg} Confirme com o cliente.`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha ao agendar: ${msg}`,
+          payload: { summary, startIso, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao agendar: ${msg}`;
+      }
+    },
+  });
+
+  return [aplicar_tag, mover_etapa, pausar_ia, agendar_consulta];
 }
 
 export type AgentTools = ReturnType<typeof buildTools>;

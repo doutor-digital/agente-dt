@@ -54,6 +54,13 @@ const schema = z.object({
         .map((o) => o.trim().replace(/\/$/, ''))
         .filter(Boolean),
     ),
+
+  // Google OAuth — opcionais. Sem isso, integração com Calendar fica
+  // desativada (botão "Conectar" no UnitsPanel mostra erro orientando).
+  // Setup: Google Cloud Console → APIs & Services → Credentials → OAuth 2.0
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

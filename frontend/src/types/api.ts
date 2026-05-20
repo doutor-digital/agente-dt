@@ -111,6 +111,10 @@ export interface Unit {
   metaAppSecret: string | null;
   systemPrompt: string;
 
+  // Google Calendar (OAuth)
+  googleAuthorizedEmail: string | null;
+  googleAuthorizedAt: string | null;
+
   // Wizard fields
   personaCompanyName: string | null;
   personaTone: 'casual' | 'formal' | 'friendly' | null;

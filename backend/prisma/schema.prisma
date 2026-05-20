@@ -142,6 +142,15 @@ model Unit {
   followUpAfterHours Int     @default(24) @map("follow_up_after_hours")
   followUpMessage    String? @map("follow_up_message")
 
+  // GOOGLE CALENDAR — habilita a tool `agendar_consulta` da IA.
+  // Conectado via OAuth 2.0; refreshToken usado pra renovar accessToken.
+  googleAccessToken       String?   @map("google_access_token")
+  googleRefreshToken      String?   @map("google_refresh_token")
+  googleTokenExpiresAt    DateTime? @map("google_token_expires_at")
+  googleCalendarId        String?   @map("google_calendar_id")
+  googleAuthorizedEmail   String?   @map("google_authorized_email")
+  googleAuthorizedAt      DateTime? @map("google_authorized_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

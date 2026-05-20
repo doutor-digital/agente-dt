@@ -56,6 +56,11 @@ import {
   updateKnowledgeHandler,
   deleteKnowledgeHandler,
 } from '../controllers/knowledge.controller.js';
+import {
+  googleOAuthStartHandler,
+  googleOAuthCallbackHandler,
+  googleOAuthDisconnectHandler,
+} from '../controllers/google-oauth.controller.js';
 import { getAlerts, getIntegrations } from '../controllers/integrations.controller.js';
 import {
   getPromptPerformanceHandler,
@@ -103,6 +108,11 @@ apiRouter.get('/units/:id/knowledge', listKnowledgeHandler);
 apiRouter.post('/units/:id/knowledge', createKnowledgeHandler);
 apiRouter.patch('/units/:id/knowledge/:entryId', updateKnowledgeHandler);
 apiRouter.delete('/units/:id/knowledge/:entryId', deleteKnowledgeHandler);
+
+// Google Calendar OAuth
+apiRouter.get('/units/:id/google-oauth/start', googleOAuthStartHandler);
+apiRouter.get('/google-oauth/callback', googleOAuthCallbackHandler);
+apiRouter.delete('/units/:id/google-oauth', googleOAuthDisconnectHandler);
 
 // ---------------------------------------------------------------------------
 // Configuração do agente — prompt, tools e sequências (por Unit).

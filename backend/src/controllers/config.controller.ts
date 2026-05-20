@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { getActiveConfig, saveConfig, DEFAULTS } from '../agent/config.js';
 import { logger } from '../lib/logger.js';
 
-const KNOWN_TOOLS = ['aplicar_tag', 'mover_etapa', 'pausar_ia'];
+const KNOWN_TOOLS = ['aplicar_tag', 'mover_etapa', 'pausar_ia', 'agendar_consulta'];
 
 const toolSchema = z.object({
   name: z.string().min(1),
