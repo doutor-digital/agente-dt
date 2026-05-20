@@ -19,6 +19,7 @@ import {
   Building2,
   Cable,
   Cpu,
+  FileText,
   LayoutDashboard,
   MessageCircle,
   Settings,
@@ -38,6 +39,7 @@ export type AppTab =
   | 'prompts'
   | 'integrations'
   | 'wizard'
+  | 'sources'
   | 'config'
   | 'units';
 
@@ -51,6 +53,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'primary' },
   { id: 'wizard', label: 'Configurar IA', icon: Wand2, group: 'primary' },
+  { id: 'sources', label: 'Fontes', icon: FileText, group: 'primary' },
   { id: 'conversations', label: 'Conversas', icon: MessageCircle, group: 'primary' },
   { id: 'traces', label: 'Execuções', icon: Terminal, group: 'primary' },
 

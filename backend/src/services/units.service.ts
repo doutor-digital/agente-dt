@@ -99,6 +99,11 @@ export interface UnitInput {
   personaTone?: string | null;
   personaGreeting?: string | null;
 
+  // Fontes (aba Fontes do painel da IA — 3 docs longos que entram no prompt).
+  sourcePapel?: string | null;
+  sourceProdutos?: string | null;
+  sourceNegocio?: string | null;
+
   qualificationEnabled?: boolean;
   qualificationHotTag?: string;
   qualificationColdTag?: string;
@@ -158,6 +163,9 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       personaCompanyName: input.personaCompanyName ?? null,
       personaTone: input.personaTone ?? null,
       personaGreeting: input.personaGreeting ?? null,
+      sourcePapel: input.sourcePapel ?? null,
+      sourceProdutos: input.sourceProdutos ?? null,
+      sourceNegocio: input.sourceNegocio ?? null,
       qualificationEnabled: input.qualificationEnabled ?? false,
       qualificationHotTag: input.qualificationHotTag ?? 'Quente',
       qualificationColdTag: input.qualificationColdTag ?? 'Frio',
@@ -209,6 +217,9 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.personaCompanyName !== undefined && { personaCompanyName: input.personaCompanyName }),
       ...(input.personaTone !== undefined && { personaTone: input.personaTone }),
       ...(input.personaGreeting !== undefined && { personaGreeting: input.personaGreeting }),
+      ...(input.sourcePapel !== undefined && { sourcePapel: input.sourcePapel }),
+      ...(input.sourceProdutos !== undefined && { sourceProdutos: input.sourceProdutos }),
+      ...(input.sourceNegocio !== undefined && { sourceNegocio: input.sourceNegocio }),
       ...(input.qualificationEnabled !== undefined && { qualificationEnabled: input.qualificationEnabled }),
       ...(input.qualificationHotTag !== undefined && { qualificationHotTag: input.qualificationHotTag }),
       ...(input.qualificationColdTag !== undefined && { qualificationColdTag: input.qualificationColdTag }),

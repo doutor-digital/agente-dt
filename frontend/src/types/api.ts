@@ -135,6 +135,11 @@ export interface Unit {
   businessHoursDays: string[];
   businessHoursTimezone: string;
   outOfHoursMessage: string | null;
+
+  // Fontes (aba Fontes do painel da IA — 3 docs longos que entram no prompt).
+  sourcePapel: string | null;
+  sourceProdutos: string | null;
+  sourceNegocio: string | null;
   followUpEnabled: boolean;
   followUpAfterHours: number;
   followUpMessage: string | null;

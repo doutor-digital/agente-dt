@@ -102,6 +102,23 @@ function renderPersona(unit: Unit): string {
   return lines.join('\n');
 }
 
+function renderSources(unit: Unit): string {
+  const sections: string[] = [];
+  const papel = unit.sourcePapel?.trim();
+  const produtos = unit.sourceProdutos?.trim();
+  const negocio = unit.sourceNegocio?.trim();
+  if (papel) {
+    sections.push(`# FATOS IMPORTANTES (PAPEL E FLUXO)\n${papel}`);
+  }
+  if (produtos) {
+    sections.push(`# PRODUTOS E SERVIÇOS\n${produtos}`);
+  }
+  if (negocio) {
+    sections.push(`# VISÃO GERAL DO NEGÓCIO\n${negocio}`);
+  }
+  return sections.join('\n\n');
+}
+
 function renderRulesGlobal(): string {
   return `# REGRAS GERAIS DE TOM
 - Respostas curtas: 1 a 3 frases. WhatsApp não é email.
@@ -277,6 +294,11 @@ export function composeSystemPrompt(input: ComposeInput): string {
     // Sem texto custom — usa persona auto-gerada.
     blocks.push(renderPersona(unit));
   }
+
+  // Fontes — 3 docs estruturados da aba Fontes vêm logo após a persona pra
+  // que a IA tenha o contexto do negócio antes das regras operacionais.
+  const sourcesBlock = renderSources(unit);
+  if (sourcesBlock) blocks.push(sourcesBlock);
 
   blocks.push(renderRulesGlobal());
 

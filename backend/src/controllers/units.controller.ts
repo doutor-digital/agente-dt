@@ -60,6 +60,10 @@ const unitInputBase = {
   personaCompanyName: z.string().max(200).nullable().optional(),
   personaTone: z.enum(['casual', 'formal', 'friendly']).nullable().optional(),
   personaGreeting: z.string().max(500).nullable().optional(),
+  // Fontes — textos longos. Tamanho generoso pra acomodar docs ricos.
+  sourcePapel: z.string().max(20_000).nullable().optional(),
+  sourceProdutos: z.string().max(20_000).nullable().optional(),
+  sourceNegocio: z.string().max(20_000).nullable().optional(),
   qualificationEnabled: z.boolean().optional(),
   qualificationHotTag: z.string().max(50).optional(),
   qualificationColdTag: z.string().max(50).optional(),

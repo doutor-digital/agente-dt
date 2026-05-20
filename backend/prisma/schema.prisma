@@ -108,6 +108,14 @@ model Unit {
   personaTone        String? @map("persona_tone")          // "casual" | "formal" | "friendly"
   personaGreeting    String? @map("persona_greeting")
 
+  // FONTES — 3 documentos estruturados que entram inteiros no prompt da IA.
+  // O dono da clínica edita esses 3 campos como texto livre na aba "Fontes".
+  // O composer renderiza cada um como uma seção (# FATOS, # PRODUTOS, # NEGÓCIO).
+  // Coexistem com a tabela KnowledgeBaseEntry (RAG vetorizado pra FAQ).
+  sourcePapel    String? @map("source_papel")    @db.Text  // Fatos importantes / papel da IA / fluxo
+  sourceProdutos String? @map("source_produtos") @db.Text  // Produtos, serviços, valores permitidos
+  sourceNegocio  String? @map("source_negocio")  @db.Text  // Visão geral do negócio, contatos, horários
+
   // AUTO-QUALIFICAÇÃO (Quente/Frio).
   qualificationEnabled  Boolean @default(false) @map("qualification_enabled")
   qualificationHotTag   String  @default("Quente") @map("qualification_hot_tag")
