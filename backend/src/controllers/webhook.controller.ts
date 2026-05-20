@@ -22,6 +22,7 @@ import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
+import { transcribeAudio } from '../services/transcription.service.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
@@ -30,6 +31,18 @@ import { z } from 'zod';
 // ---------------------------------------------------------------------------
 // Schema do payload do Kommo (CRM events + chat events).
 // ---------------------------------------------------------------------------
+
+// Attachment do Kommo — vem quando o cliente manda áudio, imagem, doc.
+// Kommo usa nomes variados conforme versão: `attachment` (singular) ou
+// `attachments` (plural). Schema permissivo aceita ambos.
+const attachmentSchema = z
+  .object({
+    type: z.string().optional(),     // "voice" | "audio" | "image" | "file" | ...
+    link: z.string().url().optional(),
+    file_name: z.string().optional(),
+    name: z.string().optional(),
+  })
+  .partial();
 
 const messageAddSchema = z.object({
   id: z.string().optional(),
@@ -42,6 +55,8 @@ const messageAddSchema = z.object({
   entity_type: z.string().optional(),
   type: z.string().optional(), // "incoming" | "outgoing"
   origin: z.string().optional(),
+  attachment: attachmentSchema.optional(),
+  attachments: z.array(attachmentSchema).optional(),
   author: z
     .object({
       id: z.string().optional(),
@@ -85,8 +100,34 @@ type MessageEvent = z.infer<typeof messageAddSchema>;
 
 function getIncomingMessage(parsed: ParsedWebhook): MessageEvent | null {
   const messages = parsed.message?.add ?? [];
-  const incoming = messages.find((m) => (m.type ?? 'incoming') === 'incoming' && m.text);
+  // Aceita mensagens com texto OU com áudio anexo (vamos transcrever depois).
+  const incoming = messages.find(
+    (m) => (m.type ?? 'incoming') === 'incoming' && (m.text || hasAudioAttachment(m)),
+  );
   return incoming ?? null;
+}
+
+const AUDIO_TYPES = new Set(['voice', 'audio']);
+const AUDIO_EXT_RE = /\.(ogg|opus|mp3|m4a|wav|aac)$/i;
+
+function hasAudioAttachment(msg: MessageEvent): boolean {
+  return !!getAudioUrl(msg);
+}
+
+/** Retorna o URL do áudio da mensagem, ou null se não houver. */
+function getAudioUrl(msg: MessageEvent): string | null {
+  const all = [
+    ...(msg.attachment ? [msg.attachment] : []),
+    ...(msg.attachments ?? []),
+  ];
+  for (const a of all) {
+    if (!a.link) continue;
+    const type = (a.type ?? '').toLowerCase();
+    if (AUDIO_TYPES.has(type)) return a.link;
+    const name = (a.file_name ?? a.name ?? a.link).toLowerCase();
+    if (AUDIO_EXT_RE.test(name)) return a.link;
+  }
+  return null;
 }
 
 function extractLeadId(parsed: ParsedWebhook): number | null {
@@ -104,6 +145,7 @@ function extractLeadId(parsed: ParsedWebhook): number | null {
 
 interface ExtractedContext {
   humanMessage: string;
+  audioUrl: string | null;
   chatId: string | null;
   talkId: string | null;
   contactId: string | null;
@@ -113,9 +155,10 @@ interface ExtractedContext {
 
 function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext {
   const msg = getIncomingMessage(parsed);
-  if (msg?.text) {
+  if (msg) {
     return {
-      humanMessage: msg.text,
+      humanMessage: msg.text ?? '',
+      audioUrl: getAudioUrl(msg),
       chatId: msg.chat_id ?? null,
       talkId: msg.talk_id ?? null,
       contactId: msg.contact_id ?? null,
@@ -125,6 +168,7 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
   }
   return {
     humanMessage: parsed.text ?? `Webhook recebido para lead ${leadId}. Analise e tome a melhor ação.`,
+    audioUrl: null,
     chatId: null,
     talkId: null,
     contactId: null,
@@ -334,6 +378,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     leadId,
     traceId: trace.id,
     humanMessage: ctx.humanMessage,
+    audioUrl: ctx.audioUrl,
     chatId: ctx.chatId,
     talkId: ctx.talkId,
     contactId: ctx.contactId,
@@ -353,15 +398,42 @@ async function processAgent(args: {
   leadId: number;
   traceId: string;
   humanMessage: string;
+  audioUrl: string | null;
   chatId: string | null;
   talkId: string | null;
   contactId: string | null;
   isChatMessage: boolean;
   requestStart: number;
 }): Promise<void> {
-  const { unit, leadId, traceId, humanMessage, chatId, talkId, contactId, isChatMessage, requestStart } = args;
+  const { unit, leadId, traceId, audioUrl, chatId, talkId, contactId, isChatMessage, requestStart } = args;
+  let { humanMessage } = args;
   const recorder = new TraceRecorder(traceId, unit.id);
   await syncRecorderSequence(recorder, traceId);
+
+  // Se cliente mandou áudio, transcreve antes de chamar a IA.
+  if (audioUrl) {
+    try {
+      const t = await transcribeAudio(unit, audioUrl);
+      const transcript = t.text || '[áudio sem fala detectada]';
+      humanMessage = humanMessage ? `${humanMessage}\n\n[áudio do cliente]: ${transcript}` : transcript;
+      await recorder.step({
+        kind: 'THINKING',
+        title: `Áudio transcrito (${t.durationMs}ms): "${transcript.slice(0, 80)}"`,
+        payload: { audioUrl, transcript, ms: t.durationMs },
+        latencyMs: t.durationMs,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ err, audioUrl, leadId }, 'falha ao transcrever áudio');
+      await recorder.step({
+        kind: 'ERROR',
+        title: `Falha ao transcrever áudio: ${msg}`,
+        payload: { audioUrl, error: msg },
+      });
+      // Não aborta — cai pra mensagem default avisando.
+      humanMessage = humanMessage || '[cliente mandou um áudio, mas não foi possível transcrever]';
+    }
+  }
 
   // Guard: horário comercial. Se a Unit está fora do horário configurado,
   // pulamos a LLM e mandamos a mensagem padrão de "fora do expediente" via
