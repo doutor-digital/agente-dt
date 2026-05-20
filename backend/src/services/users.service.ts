@@ -1,20 +1,23 @@
 // ============================================================================
 // users.service.ts — gestão de usuários do painel.
 //
-// Diferente de auth.service.ts (que cuida do login), esse módulo é o CRUD
-// usado pelo SUPER_ADMIN no painel: convidar UNIT_ADMIN, promover, revogar.
-// Não envia email — o convite é "implícito" (basta o email logar com Google).
+// CRUD usado pelo SUPER_ADMIN no painel: criar UNIT_ADMIN, promover, revogar,
+// resetar senha. Não envia email — o super admin passa a senha pra pessoa
+// por canal externo (WhatsApp/voz).
 // ============================================================================
 
 import type { User, UserRole } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { hashPassword } from './auth.service.js';
 
 export interface UserInputCreate {
   email: string;
   name?: string | null;
   role: UserRole;
   unitId?: string | null;
+  /** Senha em texto plano. Será hasheada antes de gravar. */
+  password: string;
 }
 
 export interface UserInputUpdate {
@@ -22,6 +25,8 @@ export interface UserInputUpdate {
   role?: UserRole;
   unitId?: string | null;
   isActive?: boolean;
+  /** Reset de senha — opcional. Se ausente, senha não muda. */
+  password?: string;
 }
 
 export async function listUsers(): Promise<User[]> {
@@ -30,19 +35,20 @@ export async function listUsers(): Promise<User[]> {
 
 export async function createUser(input: UserInputCreate): Promise<User> {
   validateRoleConsistency(input.role, input.unitId ?? null);
+  const passwordHash = await hashPassword(input.password);
   return prisma.user.create({
     data: {
       email: input.email.toLowerCase(),
       name: input.name ?? null,
       role: input.role,
       unitId: input.role === 'UNIT_ADMIN' ? (input.unitId ?? null) : null,
+      passwordHash,
       isActive: true,
     },
   });
 }
 
 export async function updateUser(id: string, input: UserInputUpdate): Promise<User> {
-  // Pra validar a consistência role/unitId, precisamos saber o estado final.
   const current = await prisma.user.findUnique({ where: { id } });
   if (!current) {
     throw new Prisma.PrismaClientKnownRequestError('User não encontrado', {
@@ -54,6 +60,8 @@ export async function updateUser(id: string, input: UserInputUpdate): Promise<Us
   const finalUnitId = input.unitId !== undefined ? input.unitId : current.unitId;
   validateRoleConsistency(finalRole, finalUnitId);
 
+  const passwordHash = input.password ? await hashPassword(input.password) : undefined;
+
   return prisma.user.update({
     where: { id },
     data: {
@@ -63,6 +71,7 @@ export async function updateUser(id: string, input: UserInputUpdate): Promise<Us
         unitId: finalRole === 'UNIT_ADMIN' ? input.unitId : null,
       }),
       ...(input.isActive !== undefined && { isActive: input.isActive }),
+      ...(passwordHash !== undefined && { passwordHash }),
     },
   });
 }

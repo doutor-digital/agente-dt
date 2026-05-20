@@ -72,12 +72,7 @@ import {
   reEvaluateConversationHandler,
   openaiDebugHandler,
 } from '../controllers/prompts.controller.js';
-import {
-  googleStartHandler,
-  googleCallbackHandler,
-  logoutHandler,
-  meHandler,
-} from '../controllers/auth.controller.js';
+import { loginHandler, logoutHandler, meHandler } from '../controllers/auth.controller.js';
 import {
   listUsersHandler,
   createUserHandler,
@@ -106,9 +101,8 @@ apiRouter.get('/health', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-// Login Google — não pode exigir cookie (justamente quem vai ganhar o cookie).
-apiRouter.get('/auth/google/start', googleStartHandler);
-apiRouter.get('/auth/google/callback', googleCallbackHandler);
+// Login com senha — recebe { email, password }, devolve cookie de sessão.
+apiRouter.post('/auth/login', loginHandler);
 
 // ===========================================================================
 // 2) DAQUI PRA BAIXO: TUDO exige sessão válida.

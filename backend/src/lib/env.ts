@@ -55,30 +55,13 @@ const schema = z.object({
         .filter(Boolean),
     ),
 
-  // Google OAuth — exclusivo do login do painel (Calendar foi removido).
-  // Setup: Google Cloud Console → Credentials → OAuth 2.0 (Web app).
-  // Redirect URI a cadastrar: <BACKEND>/api/auth/google/callback.
-  GOOGLE_CLIENT_ID: z.string().optional(),
-  GOOGLE_CLIENT_SECRET: z.string().optional(),
-  GOOGLE_AUTH_REDIRECT_URI: z.string().url().optional(),
-
   // ---------------------------------------------------------------------------
-  // Autenticação do painel — sessão via cookie httpOnly assinado.
+  // Autenticação do painel — login com email/senha + cookie httpOnly assinado.
   // ---------------------------------------------------------------------------
   // SESSION_JWT_SECRET: segredo HS256 (>=32 chars). Gere com:
   //   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
   // Trocar invalida TODAS as sessões ativas (efeito desejado em incidentes).
   SESSION_JWT_SECRET: z.string().min(32, 'SESSION_JWT_SECRET precisa ter >=32 chars'),
-
-  // BOOTSTRAP_ALLOWED_EMAIL: se setado, só ESSE email pode reivindicar o
-  // "first-login-wins" enquanto a tabela users está vazia. Defesa em
-  // profundidade pra produção. Em dev pode deixar em branco — primeiro
-  // que logar vira SUPER_ADMIN.
-  BOOTSTRAP_ALLOWED_EMAIL: z
-    .string()
-    .email('BOOTSTRAP_ALLOWED_EMAIL precisa ser um email válido')
-    .optional()
-    .or(z.literal('').transform(() => undefined)),
 
   AUTH_COOKIE_NAME: z.string().default('dt_session'),
   AUTH_COOKIE_DOMAIN: z.string().optional(),

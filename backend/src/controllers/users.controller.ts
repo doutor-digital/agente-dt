@@ -19,6 +19,7 @@ const createSchema = z
     name: z.string().max(120).nullable().optional(),
     role: roleSchema,
     unitId: z.string().cuid().nullable().optional(),
+    password: z.string().min(8, 'Senha precisa ter no mínimo 8 caracteres'),
   })
   .refine((d) => d.role !== 'UNIT_ADMIN' || !!d.unitId, {
     message: 'UNIT_ADMIN exige unitId',
@@ -30,6 +31,8 @@ const updateSchema = z.object({
   role: roleSchema.optional(),
   unitId: z.string().cuid().nullable().optional(),
   isActive: z.boolean().optional(),
+  // Reset de senha — opcional.
+  password: z.string().min(8, 'Senha precisa ter no mínimo 8 caracteres').optional(),
 });
 
 // Output: never returns email-only sensitive data. User schema é "público" por natureza.

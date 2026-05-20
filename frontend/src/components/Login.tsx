@@ -1,99 +1,114 @@
 // ============================================================================
-// Login — tela única com botão "Entrar com Google".
+// Login — tela com form email/senha.
 //
-// Lê `?auth_error=...` do querystring (vindo do redirect do callback) e
-// mostra mensagem apropriada. Códigos esperados:
-//   not_invited        — email não foi pré-cadastrado por super admin
-//   account_disabled   — usuário existente foi desativado
-//   email_not_verified — Google retornou email sem verificação
-//   state_mismatch     — CSRF (cookie auth_state ausente/divergente)
-//   oauth_not_configured — falta GOOGLE_CLIENT_ID/SECRET no .env do backend
-//   invalid_code       — code expirado/usado/inválido
+// Sem signup público — o super admin cria usuários pelo painel ou via CLI.
+// Códigos de erro retornados pelo backend:
+//   invalid_credentials — email/senha errados
+//   account_disabled    — user desativado pelo super admin
+//   no_password_set     — user existe mas ainda sem senha (peça reset)
 // ============================================================================
 
-import { useEffect, useState } from 'react';
+import { useState, type FormEvent } from 'react';
+import { Loader2, LogIn } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const LOGO_URL = 'https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png';
 
 const ERROR_MESSAGES: Record<string, string> = {
-  not_invited:
-    'Esta conta Google não está cadastrada no painel. Peça pro administrador te convidar.',
+  invalid_credentials: 'Email ou senha incorretos.',
   account_disabled: 'Esta conta foi desativada. Fale com o administrador.',
-  email_not_verified:
-    'O Google retornou esse email como não verificado. Verifique sua conta Google e tente de novo.',
-  state_mismatch: 'A sessão de login expirou (CSRF). Tente entrar de novo.',
-  oauth_not_configured:
-    'O backend ainda não tem as credenciais do Google OAuth. Configure GOOGLE_CLIENT_ID/SECRET no .env.',
-  invalid_code: 'Não foi possível trocar o código de login. Tente entrar de novo.',
-  internal_error: 'Erro inesperado durante o login. Tente novamente.',
-  missing_code: 'O Google não retornou um código de autorização. Tente de novo.',
+  no_password_set:
+    'Sua conta existe mas ainda não tem senha definida. Peça pro administrador resetar.',
+  invalid_input: 'Preencha email e senha corretamente.',
+  internal_error: 'Erro interno. Tente de novo em alguns segundos.',
 };
 
 export function Login() {
   const { login } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Pega ?auth_error=... e limpa da URL pra não persistir após refresh.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('auth_error');
-    if (code) {
-      setError(ERROR_MESSAGES[code] ?? `Erro: ${code}`);
-      params.delete('auth_error');
-      const newUrl =
-        window.location.pathname + (params.toString() ? `?${params.toString()}` : '');
-      window.history.replaceState({}, '', newUrl);
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      await login(email.trim().toLowerCase(), password);
+      // AuthContext atualiza o user e o AuthGate troca de tela.
+    } catch (err) {
+      const e2 = err as { response?: { data?: { error?: string } }; message?: string };
+      const code = e2?.response?.data?.error;
+      setError(ERROR_MESSAGES[code ?? ''] ?? e2?.message ?? 'Erro ao entrar.');
+    } finally {
+      setSubmitting(false);
     }
-  }, []);
+  }
 
   return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-zinc-950 text-zinc-100 px-6">
       <img
         src={LOGO_URL}
         alt="Agente DT"
-        className="w-32 h-32 object-contain mb-6 drop-shadow-[0_0_30px_rgba(124,77,255,0.35)]"
+        className="w-28 h-28 object-contain mb-5 drop-shadow-[0_0_30px_rgba(124,77,255,0.35)]"
       />
       <h1 className="text-2xl font-semibold text-zinc-100 mb-1">Agente DT</h1>
       <p className="text-xs uppercase tracking-[0.3em] text-zinc-500 font-display mb-8">
         Painel administrativo
       </p>
 
-      {error && (
-        <div className="mb-6 max-w-sm rounded-md bg-rose-500/10 ring-1 ring-rose-500/30 px-4 py-3 text-xs text-rose-200">
-          {error}
-        </div>
-      )}
-
-      <button
-        type="button"
-        onClick={login}
-        className="px-6 py-3 rounded-md bg-white text-zinc-900 inline-flex items-center gap-3 hover:bg-zinc-100 font-medium shadow-lg shadow-black/40"
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-sm space-y-3 bg-zinc-900/40 rounded-xl ring-1 ring-zinc-800 p-6"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24">
-          <path
-            fill="#4285F4"
-            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+        {error && (
+          <div className="rounded-md bg-rose-500/10 ring-1 ring-rose-500/30 px-3 py-2 text-xs text-rose-200">
+            {error}
+          </div>
+        )}
+
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">
+            Email
+          </label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+            autoFocus
+            required
+            className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:ring-brand-500/40 focus:outline-none"
           />
-          <path
-            fill="#34A853"
-            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A10.997 10.997 0 0 0 12 23z"
+        </div>
+
+        <div>
+          <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">
+            Senha
+          </label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            required
+            className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:ring-brand-500/40 focus:outline-none"
           />
-          <path
-            fill="#FBBC05"
-            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18A10.997 10.997 0 0 0 1 12c0 1.77.42 3.45 1.18 4.93l2.85-2.22.81-.62z"
-          />
-          <path
-            fill="#EA4335"
-            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-          />
-        </svg>
-        Entrar com Google
-      </button>
+        </div>
+
+        <button
+          type="submit"
+          disabled={submitting || !email || !password}
+          className="w-full px-4 py-2.5 rounded-md bg-brand-500/20 text-brand-100 ring-1 ring-brand-500/40 inline-flex items-center justify-center gap-2 hover:bg-brand-500/30 disabled:opacity-50 disabled:cursor-not-allowed font-medium text-sm"
+        >
+          {submitting ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
+          Entrar
+        </button>
+      </form>
 
       <p className="mt-6 text-[11px] text-zinc-600 max-w-sm text-center">
-        Acesso restrito. Se não tem cadastro, peça pro administrador te convidar pelo email da sua
-        conta Google.
+        Acesso restrito. Se não tem cadastro, peça pro administrador criar uma conta pra você.
       </p>
     </div>
   );

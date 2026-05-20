@@ -1,100 +1,67 @@
 // ============================================================================
-// auth.controller.ts — Endpoints de login/logout/me + callback OAuth.
+// auth.controller.ts — Endpoints de login/logout/me.
 //
 // FLUXO
-//   1. GET /api/auth/google/start    → seta cookie `auth_state` (CSRF), redir
-//   2. GET /api/auth/google/callback → valida state, troca code, cria sessão
-//   3. POST /api/auth/logout         → limpa cookie
-//   4. GET  /api/auth/me             → eco do user atual (ou 401)
-//
-// O cookie `auth_state` é httpOnly e expira em 10min. Sem ele no callback,
-// rejeita (proteção CSRF contra ataque de login-CSRF onde o atacante faz a
-// vítima logar na conta DELE). State value: base64url 32 bytes.
+//   1. POST /api/auth/login   { email, password } → seta cookie de sessão
+//   2. POST /api/auth/logout                      → limpa cookie
+//   3. GET  /api/auth/me                          → eco do user atual
 // ============================================================================
 
-import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
+import { z } from 'zod';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
-import {
-  AuthError,
-  buildAuthUrl,
-  exchangeCodeForGoogleUser,
-  isAuthConfigured,
-  loginOrProvisionUser,
-} from '../services/auth.service.js';
+import { AuthError, login } from '../services/auth.service.js';
 import {
   signSession,
   sessionCookieOptions,
   SESSION_COOKIE_MAX_AGE_MS,
 } from '../lib/auth.js';
 
-const STATE_COOKIE = 'auth_state';
-const STATE_COOKIE_MAX_AGE_MS = 10 * 60 * 1000;
-
-function frontendOrigin(): string {
-  return env.FRONTEND_ORIGIN[0] ?? 'http://localhost:5173';
-}
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+});
 
 // ---------------------------------------------------------------------------
-// GET /api/auth/google/start
+// POST /api/auth/login
 // ---------------------------------------------------------------------------
 
-export function googleStartHandler(req: Request, res: Response): void {
-  if (!isAuthConfigured()) {
-    res.status(503).json({
-      error: 'oauth_not_configured',
-      hint: 'Setar GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_AUTH_REDIRECT_URI no .env',
-    });
+export async function loginHandler(req: Request, res: Response): Promise<void> {
+  const parsed = loginSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'invalid_input' });
     return;
   }
-  const state = crypto.randomBytes(24).toString('base64url');
-  res.cookie(STATE_COOKIE, state, sessionCookieOptions(STATE_COOKIE_MAX_AGE_MS));
-  res.redirect(buildAuthUrl(state));
-}
-
-// ---------------------------------------------------------------------------
-// GET /api/auth/google/callback
-// ---------------------------------------------------------------------------
-
-export async function googleCallbackHandler(req: Request, res: Response): Promise<void> {
-  const code = String(req.query.code ?? '');
-  const state = String(req.query.state ?? '');
-  const expectedState = req.cookies?.[STATE_COOKIE];
-
-  // Limpa o state cookie de imediato — uso único.
-  res.clearCookie(STATE_COOKIE, sessionCookieOptions());
-
-  if (!code) {
-    return redirectWithError(res, 'missing_code');
-  }
-  if (!state || !expectedState || state !== expectedState) {
-    return redirectWithError(res, 'state_mismatch');
-  }
-
   try {
-    const googleUser = await exchangeCodeForGoogleUser(code);
-    const user = await loginOrProvisionUser(googleUser);
+    const user = await login(parsed.data.email, parsed.data.password);
     const jwt = signSession({
       userId: user.id,
       role: user.role,
       unitId: user.unitId,
     });
     res.cookie(env.AUTH_COOKIE_NAME, jwt, sessionCookieOptions(SESSION_COOKIE_MAX_AGE_MS));
-    res.redirect(frontendOrigin());
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        picture: user.picture,
+        role: user.role,
+        unitId: user.unitId,
+      },
+    });
   } catch (err) {
     if (err instanceof AuthError) {
-      logger.warn({ code: err.code }, 'auth callback rejeitou login');
-      return redirectWithError(res, err.code);
+      // Não vaze diferença entre "email não existe" e "senha errada".
+      const expose: AuthError['code'][] = ['account_disabled', 'no_password_set'];
+      const code = expose.includes(err.code) ? err.code : 'invalid_credentials';
+      res.status(401).json({ error: code });
+      return;
     }
-    logger.error({ err }, 'auth callback erro inesperado');
-    return redirectWithError(res, 'internal_error');
+    logger.error({ err }, 'login erro inesperado');
+    res.status(500).json({ error: 'internal_error' });
   }
-}
-
-function redirectWithError(res: Response, code: string): void {
-  const url = `${frontendOrigin()}/?auth_error=${encodeURIComponent(code)}`;
-  res.redirect(url);
 }
 
 // ---------------------------------------------------------------------------

@@ -10,13 +10,17 @@
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, Plus, Save, Trash2, UserCheck, UserX } from 'lucide-react';
+import { KeyRound, Loader2, Plus, Save, Trash2, UserCheck, UserX } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type { AdminUser, AdminUserInput, UserRole } from '../types/api';
 import { useUnit } from '../context/UnitContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+
+interface DraftUser extends AdminUserInput {
+  password: string;
+}
 
 export function UsersPanel() {
   const { user: currentUser } = useAuth();
@@ -25,11 +29,12 @@ export function UsersPanel() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState<AdminUserInput>({
+  const [draft, setDraft] = useState<DraftUser>({
     email: '',
     name: '',
     role: 'UNIT_ADMIN',
     unitId: units[0]?.id ?? null,
+    password: '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -59,6 +64,10 @@ export function UsersPanel() {
       toast.error('selecione uma unidade');
       return;
     }
+    if (!draft.password || draft.password.length < 8) {
+      toast.error('senha precisa ter no mínimo 8 caracteres');
+      return;
+    }
     setSaving(true);
     try {
       await api.createUser({
@@ -66,16 +75,39 @@ export function UsersPanel() {
         name: draft.name?.trim() || null,
         role: draft.role,
         unitId: draft.role === 'UNIT_ADMIN' ? draft.unitId : null,
+        password: draft.password,
       });
       setCreating(false);
-      setDraft({ email: '', name: '', role: 'UNIT_ADMIN', unitId: units[0]?.id ?? null });
+      setDraft({
+        email: '',
+        name: '',
+        role: 'UNIT_ADMIN',
+        unitId: units[0]?.id ?? null,
+        password: '',
+      });
       await refresh();
-      toast.success('usuário convidado');
+      toast.success('usuário criado · repasse a senha pelo canal seguro');
     } catch (err) {
       const e = err as { response?: { data?: { error?: string } } };
       toast.error(e.response?.data?.error ?? 'falha ao criar');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleResetPassword(u: AdminUser) {
+    const newPw = prompt(`Nova senha pra ${u.email} (mín. 8 chars):`);
+    if (!newPw) return;
+    if (newPw.length < 8) {
+      toast.error('senha precisa ter no mínimo 8 caracteres');
+      return;
+    }
+    try {
+      await api.updateUser(u.id, { password: newPw });
+      toast.success(`senha de ${u.email} redefinida — repasse pela pessoa`);
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } } };
+      toast.error(e.response?.data?.error ?? 'falha ao resetar');
     }
   }
 
@@ -140,7 +172,7 @@ export function UsersPanel() {
           <h3 className="text-sm font-semibold text-zinc-100 mb-3">Novo usuário</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Field
-              label="Email da conta Google"
+              label="Email"
               value={draft.email}
               onChange={(v) => setDraft({ ...draft, email: v })}
             />
@@ -148,6 +180,12 @@ export function UsersPanel() {
               label="Nome (opcional)"
               value={draft.name ?? ''}
               onChange={(v) => setDraft({ ...draft, name: v })}
+            />
+            <Field
+              label="Senha inicial (mín. 8 chars)"
+              value={draft.password}
+              onChange={(v) => setDraft({ ...draft, password: v })}
+              type="password"
             />
             <div>
               <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">
@@ -259,6 +297,14 @@ export function UsersPanel() {
                     <div className="inline-flex items-center gap-1">
                       <button
                         type="button"
+                        onClick={() => void handleResetPassword(u)}
+                        title="Resetar senha"
+                        className="p-1.5 rounded text-zinc-500 hover:text-brand-300 hover:bg-brand-500/10"
+                      >
+                        <KeyRound size={13} />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => void handleToggleActive(u)}
                         title={u.isActive ? 'Desativar' : 'Reativar'}
                         className="p-1.5 rounded text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800/60"
@@ -289,16 +335,18 @@ function Field({
   label,
   value,
   onChange,
+  type = 'text',
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  type?: 'text' | 'password';
 }) {
   return (
     <div>
       <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
       <input
-        type="text"
+        type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"

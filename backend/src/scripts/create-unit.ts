@@ -19,6 +19,7 @@ interface Args {
   slug?: string;
   name?: string;
   adminEmail?: string;
+  adminPassword?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -30,6 +31,7 @@ function parseArgs(argv: string[]): Args {
     if (key === 'slug') out.slug = value;
     else if (key === 'name') out.name = value;
     else if (key === 'admin-email') out.adminEmail = value;
+    else if (key === 'admin-password') out.adminPassword = value;
   }
   return out;
 }
@@ -38,7 +40,17 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (!args.slug || !args.name) {
-    console.error('Uso: --slug=<kebab-case> --name="<nome>" [--admin-email=<email>]');
+    console.error(
+      'Uso: --slug=<kebab-case> --name="<nome>" [--admin-email=<email> --admin-password=<senha>]',
+    );
+    process.exit(2);
+  }
+  if (args.adminEmail && !args.adminPassword) {
+    console.error('--admin-email exige --admin-password (mín. 8 chars).');
+    process.exit(2);
+  }
+  if (args.adminPassword && args.adminPassword.length < 8) {
+    console.error('--admin-password precisa ter no mínimo 8 caracteres.');
     process.exit(2);
   }
 
@@ -52,7 +64,7 @@ async function main() {
     const unit = await createUnit({ slug: args.slug, name: args.name });
     console.log(`✅ Unit criada: id=${unit.id} slug=${unit.slug} name=${unit.name}`);
 
-    if (args.adminEmail) {
+    if (args.adminEmail && args.adminPassword) {
       const email = args.adminEmail.toLowerCase();
       const existing = await prisma.user.findUnique({ where: { email } });
       if (existing) {
@@ -60,17 +72,21 @@ async function main() {
           role: 'UNIT_ADMIN',
           unitId: unit.id,
           isActive: true,
+          password: args.adminPassword,
         });
-        console.log(`✅ Admin promovido: ${updated.email} → UNIT_ADMIN de ${unit.slug}`);
+        console.log(
+          `✅ Admin promovido: ${updated.email} → UNIT_ADMIN de ${unit.slug} (senha redefinida)`,
+        );
       } else {
         const user = await createUser({
           email,
           role: 'UNIT_ADMIN',
           unitId: unit.id,
+          password: args.adminPassword,
         });
         console.log(
           `✅ Admin convidado: ${user.email} (UNIT_ADMIN de ${unit.slug}). ` +
-            `Peça pra essa pessoa fazer login no painel com Google usando esse email.`,
+            `Repasse a senha pelo canal seguro.`,
         );
       }
     }

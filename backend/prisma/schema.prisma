@@ -199,16 +199,19 @@ enum UserRole {
 }
 
 model User {
-  id          String    @id @default(cuid())
-  email       String    @unique
-  name        String?
-  picture     String?
-  role        UserRole
-  unitId      String?   @map("unit_id")
-  isActive    Boolean   @default(true) @map("is_active")
-  lastLoginAt DateTime? @map("last_login_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  picture      String?
+  role         UserRole
+  unitId       String?   @map("unit_id")
+  // Hash bcrypt da senha. Nullable porque os Users criados antes da virada
+  // pra senha (login Google removido) ficam sem hash até o admin resetar.
+  passwordHash String?   @map("password_hash")
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
 
   unit Unit? @relation(fields: [unitId], references: [id], onDelete: SetNull)
 

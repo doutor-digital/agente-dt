@@ -78,23 +78,26 @@ export const api = {
       throw err;
     }
   },
+  async login(email: string, password: string): Promise<AuthUser> {
+    const { data } = await http.post<{ user: AuthUser }>('/auth/login', { email, password });
+    return data.user;
+  },
   async logout(): Promise<void> {
     await http.post('/auth/logout');
-  },
-  // Hard redirect — o backend devolve um 302 pro consentimento do Google.
-  loginUrl(): string {
-    return `${apiBase}/auth/google/start`;
   },
 
   async listUsers(): Promise<AdminUser[]> {
     const { data } = await http.get<{ users: AdminUser[] }>('/users');
     return data.users;
   },
-  async createUser(input: AdminUserInput): Promise<AdminUser> {
+  async createUser(input: AdminUserInput & { password: string }): Promise<AdminUser> {
     const { data } = await http.post<{ user: AdminUser }>('/users', input);
     return data.user;
   },
-  async updateUser(id: string, input: Partial<AdminUserInput> & { isActive?: boolean }): Promise<AdminUser> {
+  async updateUser(
+    id: string,
+    input: Partial<AdminUserInput> & { isActive?: boolean; password?: string },
+  ): Promise<AdminUser> {
     const { data } = await http.patch<{ user: AdminUser }>(`/users/${id}`, input);
     return data.user;
   },

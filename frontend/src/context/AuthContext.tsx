@@ -22,7 +22,7 @@ import { api } from '../lib/api';
 interface AuthState {
   user: AuthUser | null | undefined;
   refresh: () => Promise<void>;
-  login: () => void;
+  login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -40,9 +40,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const login = useCallback(() => {
-    // Hard redirect — o backend responde 302 e o navegador segue.
-    window.location.href = api.loginUrl();
+  const login = useCallback(async (email: string, password: string) => {
+    const u = await api.login(email, password);
+    setUser(u);
   }, []);
 
   const logout = useCallback(async () => {
