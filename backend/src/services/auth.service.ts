@@ -3,7 +3,7 @@
 //
 // LÓGICA DE ENGENHARIA
 // --------------------
-// OAuth 2.0 do Google sem SDK (mesmo padrão de google-calendar.service.ts):
+// OAuth 2.0 do Google sem SDK (axios direto, endpoints oficiais):
 //  1. /api/auth/google/start  → URL do consentimento
 //  2. callback recebe code    → troca por access_token + id_token
 //  3. id_token decodificado pra extrair email já verificado

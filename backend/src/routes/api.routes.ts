@@ -65,11 +65,6 @@ import {
   updateActionHandler,
   deleteActionHandler,
 } from '../controllers/actions.controller.js';
-import {
-  googleOAuthStartHandler,
-  googleOAuthCallbackHandler,
-  googleOAuthDisconnectHandler,
-} from '../controllers/google-oauth.controller.js';
 import { getAlerts, getIntegrations } from '../controllers/integrations.controller.js';
 import {
   getPromptPerformanceHandler,
@@ -114,9 +109,6 @@ apiRouter.get('/health', (_req, res) => {
 // Login Google — não pode exigir cookie (justamente quem vai ganhar o cookie).
 apiRouter.get('/auth/google/start', googleStartHandler);
 apiRouter.get('/auth/google/callback', googleCallbackHandler);
-
-// Google Calendar OAuth callback (já existia, segue aberto — usa `state`).
-apiRouter.get('/google-oauth/callback', googleOAuthCallbackHandler);
 
 // ===========================================================================
 // 2) DAQUI PRA BAIXO: TUDO exige sessão válida.
@@ -170,10 +162,6 @@ apiRouter.get('/units/:id/actions', requireUnitAccess, listActionsHandler);
 apiRouter.post('/units/:id/actions', requireUnitAccess, createActionHandler);
 apiRouter.patch('/units/:id/actions/:actionId', requireUnitAccess, updateActionHandler);
 apiRouter.delete('/units/:id/actions/:actionId', requireUnitAccess, deleteActionHandler);
-
-// Google Calendar OAuth (escopo Unit).
-apiRouter.get('/units/:id/google-oauth/start', requireUnitAccess, googleOAuthStartHandler);
-apiRouter.delete('/units/:id/google-oauth', requireUnitAccess, googleOAuthDisconnectHandler);
 
 // ---------------------------------------------------------------------------
 // Endpoints "amplos" — o controller força unitId do user (UNIT_ADMIN não

@@ -360,9 +360,6 @@ export function UnitsPanel() {
                 />
               </Section>
 
-              {selectedId && !creating && (
-                <GoogleCalendarSection unitId={selectedId} onChanged={refresh} />
-              )}
             </div>
           )}
         </div>
@@ -455,79 +452,3 @@ function Toggle({ label, value, onChange }: { label: string; value: boolean; onC
   );
 }
 
-// ===========================================================================
-// GoogleCalendarSection — conexão OAuth do calendário (tool agendar_consulta)
-// ===========================================================================
-
-function GoogleCalendarSection({ unitId, onChanged }: { unitId: string; onChanged: () => Promise<void> }) {
-  const toast = useToast();
-  const { units } = useUnit();
-  const unit = units.find((u) => u.id === unitId);
-  const connected = !!unit?.googleAuthorizedEmail;
-
-  const apiBase = import.meta.env.VITE_API_URL
-    ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
-    : `${window.location.origin}/api`;
-
-  function connect() {
-    const url = `${apiBase}/units/${unitId}/google-oauth/start`;
-    window.open(url, '_blank', 'noopener,noreferrer,width=600,height=700');
-    // Poll: depois de 2s tenta atualizar a Unit pra refletir conexão.
-    setTimeout(async () => {
-      await onChanged();
-    }, 4000);
-  }
-
-  async function disconnect() {
-    if (!confirm('Desconectar Google Calendar desta unidade? A IA não poderá mais agendar.')) return;
-    try {
-      await fetch(`${apiBase}/units/${unitId}/google-oauth`, { method: 'DELETE' });
-      await onChanged();
-      toast.success('Google Calendar desconectado');
-    } catch {
-      toast.error('Falha ao desconectar');
-    }
-  }
-
-  return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-4">
-      <div className="mb-3">
-        <h3 className="text-sm font-semibold text-zinc-100">Google Calendar</h3>
-        <p className="text-[11px] text-zinc-500 mt-0.5">
-          Conecte pra IA ganhar a tool <code>agendar_consulta</code>. Útil pra clínicas, consultórios e agências.
-        </p>
-      </div>
-      {connected ? (
-        <div className="space-y-2">
-          <div className="rounded-md bg-emerald-500/10 ring-1 ring-emerald-500/30 px-3 py-2 text-xs text-emerald-200 flex items-center gap-2">
-            <span>✅</span>
-            <span>
-              Conectado como <strong>{unit?.googleAuthorizedEmail}</strong>
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={disconnect}
-            className="text-xs px-3 py-1.5 rounded-md bg-zinc-800 text-rose-300 ring-1 ring-rose-500/20 hover:bg-rose-500/10"
-          >
-            Desconectar
-          </button>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <button
-            type="button"
-            onClick={connect}
-            className="text-xs px-4 py-2 rounded-md bg-white text-zinc-900 inline-flex items-center gap-2 hover:bg-zinc-100 font-medium"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A10.997 10.997 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18A10.997 10.997 0 0 0 1 12c0 1.77.42 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-            Conectar Google Calendar
-          </button>
-          <p className="text-[10px] text-zinc-600">
-            Vai abrir uma janela do Google pra você autorizar. Depois de aceitar, volta aqui e atualiza.
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}

@@ -59,11 +59,16 @@ export function verifySession(token: string): SessionPayload | null {
 // Cookie config compartilhado entre set e clear, pra garantir que o `clear`
 // bata exatamente o mesmo cookie que o `set`. Diferente do que parece, o
 // navegador NÃO apaga um cookie se domain/path divergirem do original.
+//
+// SameSite em produção é 'none' porque o front (Vercel) e o back (Railway)
+// vivem em domínios diferentes — XHR cross-site só carrega o cookie se for
+// SameSite=None + Secure. Em dev (mesmo localhost), 'lax' é mais seguro.
 export function sessionCookieOptions(maxAge?: number) {
+  const isProd = env.NODE_ENV === 'production';
   return {
     httpOnly: true,
-    sameSite: 'lax' as const,
-    secure: env.NODE_ENV === 'production',
+    sameSite: (isProd ? 'none' : 'lax') as 'none' | 'lax',
+    secure: isProd, // obrigatório quando sameSite='none'
     path: '/',
     domain: env.AUTH_COOKIE_DOMAIN,
     ...(maxAge !== undefined ? { maxAge } : {}),

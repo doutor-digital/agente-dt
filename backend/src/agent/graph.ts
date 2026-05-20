@@ -113,7 +113,6 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
         kommo: kommoClient,
         descriptionOverrides,
         pausedFieldId: unit.kommoPausedFieldId,
-        unit,
       })
     : [];
 

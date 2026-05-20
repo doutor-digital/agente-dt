@@ -91,14 +91,6 @@ const DEFAULT_TOOLS: ToolConfig[] = [
       'Kommo. Use quando o paciente pedir um humano, demonstrar irritação ou ' +
       'trazer caso clínico delicado.',
   },
-  {
-    name: 'agendar_consulta',
-    enabled: true,
-    description:
-      'Cria um evento no Google Calendar quando o cliente solicita um ' +
-      'agendamento (consulta, reunião). Requer Unit conectada ao Google ' +
-      'Calendar via OAuth nas Configurações.',
-  },
 ];
 
 const DEFAULT_WORKFLOW: WorkflowRule[] = [];

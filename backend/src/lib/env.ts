@@ -55,16 +55,11 @@ const schema = z.object({
         .filter(Boolean),
     ),
 
-  // Google OAuth — usado tanto pelo Calendar quanto pelo login do painel.
-  // Sem isso, ambos ficam desativados. Setup: Google Cloud Console →
-  // Credentials → OAuth 2.0. O redirect URI precisa cadastrar duas URLs:
-  //   - /api/auth/google/callback  (login do painel)
-  //   - /api/google-oauth/callback (Calendar das units)
-  // GOOGLE_OAUTH_REDIRECT_URI continua sendo o do Calendar (legado).
-  // GOOGLE_AUTH_REDIRECT_URI é o novo, do login.
+  // Google OAuth — exclusivo do login do painel (Calendar foi removido).
+  // Setup: Google Cloud Console → Credentials → OAuth 2.0 (Web app).
+  // Redirect URI a cadastrar: <BACKEND>/api/auth/google/callback.
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
-  GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
   GOOGLE_AUTH_REDIRECT_URI: z.string().url().optional(),
 
   // ---------------------------------------------------------------------------
