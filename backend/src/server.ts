@@ -45,6 +45,15 @@ async function main(): Promise<void> {
       origin: (origin, cb) => {
         if (!origin) return cb(null, true);
         const allowed = env.FRONTEND_ORIGIN.includes(origin);
+        if (!allowed) {
+          // Log explícito quando origin é bloqueado — antes era silencioso
+          // (header simplesmente saía vazio). Sem isso, debugar CORS em prod
+          // é adivinhação.
+          logger.warn(
+            { origin, allowedOrigins: env.FRONTEND_ORIGIN },
+            'CORS: origin bloqueado — verifique FRONTEND_ORIGIN no .env',
+          );
+        }
         return cb(null, allowed);
       },
       // true: o cookie `dt_session` (httpOnly) circula entre o frontend
