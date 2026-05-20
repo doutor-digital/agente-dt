@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
+  AlertTriangle,
   Brain,
   Clock4,
   DollarSign,
@@ -30,6 +31,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import clsx from 'clsx';
+import axios from 'axios';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import type { DashboardResponse } from '../types/api';
@@ -38,13 +40,23 @@ export function DashboardPanel() {
   const { selectedUnitId, units } = useUnit();
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!selectedUnitId) return;
     setLoading(true);
+    setError(null);
     try {
       const r = await api.unitDashboard(selectedUnitId);
       setData(r);
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setError('Dashboard indisponível — backend desta versão não expõe `/units/:id/dashboard`. Confirme se o backend de produção está atualizado.');
+      } else if (axios.isAxiosError(err) && !err.response) {
+        setError('Não foi possível conectar ao backend. Verifique a variável VITE_API_URL do deploy.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Falha ao carregar o dashboard.');
+      }
     } finally {
       setLoading(false);
     }
@@ -88,6 +100,16 @@ export function DashboardPanel() {
             Atualizar
           </button>
         </div>
+
+        {error && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+            <AlertTriangle size={18} className="text-amber-300 mt-0.5 shrink-0" />
+            <div className="space-y-1">
+              <div className="font-semibold text-amber-200">Não foi possível carregar o dashboard</div>
+              <div className="text-amber-100/80 text-[13px]">{error}</div>
+            </div>
+          </div>
+        )}
 
         {/* KPIs grandes */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
