@@ -24,6 +24,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   BookText,
+  BrainCircuit,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -48,7 +49,13 @@ import clsx from 'clsx';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
-import type { KommoPipelinesResponse, MessageTemplate, Unit, UnitInput } from '../types/api';
+import type {
+  KnowledgeEntry,
+  KommoPipelinesResponse,
+  MessageTemplate,
+  Unit,
+  UnitInput,
+} from '../types/api';
 
 type WizardDraft = Pick<
   Unit,
@@ -526,6 +533,9 @@ export function WizardPanel() {
 
         {/* 10. TEMPLATES DE MENSAGEM */}
         <TemplatesSection unitId={selectedUnitId} />
+
+        {/* 11. BASE DE CONHECIMENTO (RAG) */}
+        <KnowledgeSection unitId={selectedUnitId} />
 
         {/* Live preview do prompt composto */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-950/60 overflow-hidden">
@@ -1025,3 +1035,187 @@ function TemplatesSection({ unitId }: { unitId: string | null }) {
   );
 }
 
+
+// ===========================================================================
+// KnowledgeSection — CRUD da base de conhecimento (RAG semântico)
+// ===========================================================================
+// Cada entrada é embedda no backend (OpenAI text-embedding-3-small).
+// O composer faz busca semântica em runtime e injeta as 3 mais
+// relevantes no prompt. Diferente de templates (busca por keyword), aqui
+// é busca por SIGNIFICADO.
+
+function KnowledgeSection({ unitId }: { unitId: string | null }) {
+  const toast = useToast();
+  const [items, setItems] = useState<KnowledgeEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState({ question: '', answer: '' });
+
+  const load = useCallback(async () => {
+    if (!unitId) {
+      setItems([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const list = await api.listKnowledge(unitId);
+      setItems(list);
+    } catch {
+      toast.error('Não foi possível carregar a base de conhecimento');
+    } finally {
+      setLoading(false);
+    }
+  }, [unitId, toast]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function handleCreate() {
+    if (!unitId) return;
+    if (!draft.question.trim() || !draft.answer.trim()) {
+      toast.error('Preencha pergunta e resposta');
+      return;
+    }
+    setCreating(true);
+    try {
+      const e = await api.createKnowledge(unitId, draft);
+      setItems([e, ...items]);
+      setDraft({ question: '', answer: '' });
+      toast.success('Conhecimento adicionado');
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } } };
+      toast.error(e?.response?.data?.error ?? 'Falha ao criar');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleUpdate(e: KnowledgeEntry, patch: Partial<KnowledgeEntry>) {
+    if (!unitId) return;
+    const optimistic = items.map((x) => (x.id === e.id ? { ...x, ...patch } : x));
+    setItems(optimistic);
+    try {
+      await api.updateKnowledge(unitId, e.id, patch);
+    } catch {
+      toast.error('Falha ao atualizar');
+      void load();
+    }
+  }
+
+  async function handleDelete(e: KnowledgeEntry) {
+    if (!unitId) return;
+    if (!confirm(`Apagar conhecimento "${e.question.slice(0, 60)}..."?`)) return;
+    setItems(items.filter((x) => x.id !== e.id));
+    try {
+      await api.deleteKnowledge(unitId, e.id);
+      toast.success('Apagado');
+    } catch {
+      toast.error('Falha ao apagar');
+      void load();
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-violet-500/20 bg-violet-500/5">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-3 p-4 text-left"
+      >
+        <BrainCircuit size={16} className="text-violet-300" />
+        <div className="flex-1">
+          <div className="text-sm font-semibold text-zinc-100">
+            Base de conhecimento (RAG)
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-0.5">
+            Perguntas e respostas reais. A IA busca por significado (não keyword)
+            e usa as mais relevantes pra responder. Reduz alucinação a quase zero.
+          </div>
+        </div>
+        <span className="text-[10px] text-zinc-500">{items.length} entrada(s)</span>
+        {open ? <ChevronDown size={14} className="text-zinc-600" /> : <ChevronRight size={14} className="text-zinc-600" />}
+      </button>
+      {open && (
+        <div className="px-4 pb-4 pt-1 space-y-3 border-t border-zinc-800/40">
+          {/* Form de criação */}
+          <div className="rounded-md border border-zinc-800 bg-zinc-950/40 p-3 space-y-2">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+              Nova entrada
+            </div>
+            <input
+              type="text"
+              value={draft.question}
+              onChange={(e) => setDraft({ ...draft, question: e.target.value })}
+              placeholder="Pergunta típica (ex: 'qual o horário de funcionamento?')"
+              className="w-full px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-violet-500"
+            />
+            <textarea
+              value={draft.answer}
+              onChange={(e) => setDraft({ ...draft, answer: e.target.value })}
+              rows={3}
+              placeholder="Resposta oficial (ex: 'Atendemos de segunda a sexta, das 9h às 18h, no endereço X.')"
+              className="w-full px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 resize-vertical"
+            />
+            <button
+              type="button"
+              onClick={handleCreate}
+              disabled={creating || !unitId || !draft.question.trim() || !draft.answer.trim()}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-violet-500/20 text-violet-200 ring-1 ring-violet-500/40 text-xs hover:bg-violet-500/30 disabled:opacity-50"
+            >
+              {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+              Adicionar conhecimento
+            </button>
+          </div>
+
+          {/* Lista existente */}
+          {loading && <div className="text-[11px] text-zinc-600">Carregando…</div>}
+          {!loading && items.length === 0 && (
+            <div className="text-[11px] text-zinc-600 italic text-center py-2">
+              Nenhuma entrada ainda. Comece adicionando perguntas frequentes acima.
+            </div>
+          )}
+          {items.map((e) => (
+            <details key={e.id} className="rounded-md border border-zinc-800 bg-zinc-950/40 group">
+              <summary className="px-3 py-2 text-xs text-zinc-200 cursor-pointer flex items-center gap-2 hover:bg-zinc-900/40">
+                <span className="flex-1 truncate font-medium">{e.question}</span>
+                <button
+                  type="button"
+                  onClick={(ev) => {
+                    ev.preventDefault();
+                    void handleDelete(e);
+                  }}
+                  className="text-rose-400 hover:text-rose-200 opacity-0 group-hover:opacity-100"
+                  title="Apagar"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </summary>
+              <div className="px-3 pb-3 pt-1 space-y-2 border-t border-zinc-800/40">
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">Pergunta</label>
+                  <input
+                    type="text"
+                    value={e.question}
+                    onChange={(ev) => handleUpdate(e, { question: ev.target.value })}
+                    className="w-full px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-violet-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">Resposta</label>
+                  <textarea
+                    value={e.answer}
+                    onChange={(ev) => handleUpdate(e, { answer: ev.target.value })}
+                    rows={3}
+                    className="w-full px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 resize-vertical"
+                  />
+                </div>
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}

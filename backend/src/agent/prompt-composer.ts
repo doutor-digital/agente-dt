@@ -18,8 +18,10 @@
 //   ...passa pra LLM.
 // ============================================================================
 
-import type { MessageTemplate, Unit } from '@prisma/client';
+import type { KnowledgeBaseEntry, MessageTemplate, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { searchKnowledge } from '../services/knowledge.service.js';
+import { logger } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
 // Resultado da checagem de horário comercial.
@@ -219,6 +221,19 @@ function renderFlaggedExamples(flagged: Array<{ content: string }>): string {
 ${lines.join('\n')}`;
 }
 
+function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>): string {
+  if (entries.length === 0) return '';
+  const lines = entries.map(
+    (e, i) =>
+      `${i + 1}. P: "${e.question.trim().slice(0, 200)}"\n   R: "${e.answer.trim().slice(0, 400)}"`,
+  );
+  return `# CONHECIMENTO RELEVANTE (use estas informações reais)
+- Estas são respostas oficiais da empresa, pré-cadastradas. PREFIRA usar
+  estas informações em vez de inventar. Adapte o tom mas mantenha os fatos.
+
+${lines.join('\n\n')}`;
+}
+
 // ---------------------------------------------------------------------------
 // Composer principal.
 // ---------------------------------------------------------------------------
@@ -233,10 +248,19 @@ export interface ComposeInput {
   templates?: MessageTemplate[];
   /** Mensagens flaggadas como exemplos a evitar. */
   flaggedExamples?: Array<{ content: string }>;
+  /** Entradas da base de conhecimento já filtradas/scored. */
+  knowledge?: Array<KnowledgeBaseEntry & { score: number }>;
 }
 
 export function composeSystemPrompt(input: ComposeInput): string {
-  const { unit, agentConfigPrompt, workflowText, templates = [], flaggedExamples = [] } = input;
+  const {
+    unit,
+    agentConfigPrompt,
+    workflowText,
+    templates = [],
+    flaggedExamples = [],
+    knowledge = [],
+  } = input;
 
   // Bloco 1: persona base. Se o usuário escreveu um systemPrompt customizado,
   // ele aparece PRIMEIRO (tem prioridade sobre o auto-gerado).
@@ -274,6 +298,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
   const templatesBlock = renderTemplates(templates);
   if (templatesBlock) blocks.push(templatesBlock);
 
+  const knowledgeBlock = renderKnowledge(knowledge);
+  if (knowledgeBlock) blocks.push(knowledgeBlock);
+
   const flaggedBlock = renderFlaggedExamples(flaggedExamples);
   if (flaggedBlock) blocks.push(flaggedBlock);
 
@@ -285,15 +312,19 @@ export function composeSystemPrompt(input: ComposeInput): string {
 }
 
 /**
- * Async variant — busca templates + flaggedExamples do banco automaticamente.
- * Usar em runtime do agente (graph.ts).
+ * Async variant — busca templates + flaggedExamples + RAG do banco
+ * automaticamente. Usar em runtime do agente (graph.ts).
+ *
+ * Se `userMessage` for passado, faz busca semântica na base de conhecimento
+ * e injeta as top-3 mais relevantes no prompt. Sem userMessage, pula RAG.
  */
 export async function composeSystemPromptForUnit(input: {
   unit: Unit;
   agentConfigPrompt?: string;
   workflowText?: string;
+  userMessage?: string;
 }): Promise<string> {
-  const [templates, flagged] = await Promise.all([
+  const [templates, flagged, knowledge] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -308,11 +339,20 @@ export async function composeSystemPromptForUnit(input: {
       take: 10,
       select: { content: true },
     }),
+    input.userMessage && input.unit.openaiApiKey
+      ? searchKnowledge(input.unit, input.userMessage, { topK: 3, minScore: 0.25 }).catch(
+          (err) => {
+            logger.warn({ err, unitId: input.unit.id }, 'RAG search failed, sem KB no prompt');
+            return [];
+          },
+        )
+      : Promise.resolve([]),
   ]);
   return composeSystemPrompt({
     ...input,
     templates,
     flaggedExamples: flagged,
+    knowledge,
   });
 }
 

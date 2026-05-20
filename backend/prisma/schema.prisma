@@ -150,6 +150,7 @@ model Unit {
   llmCalls         LlmCall[]
   conversations    Conversation[]
   messageTemplates MessageTemplate[]
+  knowledgeBase    KnowledgeBaseEntry[]
 
   @@map("units")
 }
@@ -175,6 +176,33 @@ model MessageTemplate {
   @@unique([unitId, name])
   @@index([unitId])
   @@map("message_templates")
+}
+
+// ===========================================================================
+// KnowledgeBaseEntry — base de conhecimento da Unit (RAG).
+// ===========================================================================
+// Cada entry tem pergunta + resposta. O composer faz busca semântica
+// (cosine similarity sobre embeddings) e injeta as top-3 mais relevantes
+// no system prompt. Diferente de MessageTemplate: aqui é "conhecimento de
+// domínio" (preços, endereço, horário, política), não respostas prontas.
+//
+// `embedding` é o vetor de 1536 dimensões do OpenAI text-embedding-3-small,
+// computado quando entry é criada/editada. Busca é in-memory (cosine sim)
+// até 10K entradas por Unit — pra escalar, migrar pra pgvector.
+// ===========================================================================
+model KnowledgeBaseEntry {
+  id        String   @id @default(cuid())
+  unitId    String   @map("unit_id")
+  question  String   @db.Text
+  answer    String   @db.Text
+  embedding Float[]  @default([])
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@index([unitId])
+  @@map("knowledge_base_entries")
 }
 
 // ===========================================================================

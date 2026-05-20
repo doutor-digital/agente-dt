@@ -122,16 +122,10 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     return cfg ? cfg.enabled : true;
   });
 
-  // 2) System prompt — agora usa o composer, que mescla:
-  //    - Persona/base text (AgentConfig.systemPrompt > Unit.systemPrompt > auto)
-  //    - Blocos das features ativadas no wizard da Unit (qualificação, handoff,
-  //      pipeline-by-intent, coleta de contato, cupom, horário, follow-up)
-  //    - Regras estruturadas (renderWorkflowGuidance)
-  const systemPrompt = await composeSystemPromptForUnit({
-    unit,
-    agentConfigPrompt: config.systemPrompt,
-    workflowText: renderWorkflowGuidance(config.workflow),
-  });
+  // 2) System prompt — montado dentro do agentNode em cada turno
+  //    pra incorporar RAG (busca semântica baseada na mensagem do usuário).
+  //    A montagem usa composer async que combina persona + features +
+  //    templates + knowledge base + flagged examples.
 
   // 3) Modelo OpenAI da Unit.
   const modelName = config.model || unit.openaiModel || env.OPENAI_MODEL;
@@ -165,8 +159,23 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     // SystemMessage antiga que o PostgresSaver tenha persistido e prependamos
     // a atual. Sem isso, conversas existentes ficam presas no prompt antigo
     // pra sempre.
+    //
+    // Pega a última mensagem do paciente pra alimentar a busca semântica
+    // (RAG) — assim o composer puxa só conhecimento relevante pra essa pergunta.
     const nonSystemMessages = state.messages.filter((m) => m.getType() !== 'system');
-    const finalMessages: BaseMessage[] = [new SystemMessage(systemPrompt), ...nonSystemMessages];
+    const lastHuman = [...nonSystemMessages].reverse().find((m) => m.getType() === 'human');
+    const userMessage = lastHuman
+      ? typeof lastHuman.content === 'string'
+        ? lastHuman.content
+        : JSON.stringify(lastHuman.content)
+      : undefined;
+    const dynamicPrompt = await composeSystemPromptForUnit({
+      unit,
+      agentConfigPrompt: config.systemPrompt,
+      workflowText: renderWorkflowGuidance(config.workflow),
+      userMessage,
+    });
+    const finalMessages: BaseMessage[] = [new SystemMessage(dynamicPrompt), ...nonSystemMessages];
 
     const t0 = performance.now();
     const response = (await invokeChatModel({

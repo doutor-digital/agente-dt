@@ -363,6 +363,15 @@ export interface MessageTemplate {
   updatedAt: string;
 }
 
+export interface KnowledgeEntry {
+  id: string;
+  unitId: string;
+  question: string;
+  answer: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface FlaggedMessage {
   id: string;
   content: string;

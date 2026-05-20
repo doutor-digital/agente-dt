@@ -50,6 +50,12 @@ import {
   updateTemplateHandler,
   deleteTemplateHandler,
 } from '../controllers/templates.controller.js';
+import {
+  listKnowledgeHandler,
+  createKnowledgeHandler,
+  updateKnowledgeHandler,
+  deleteKnowledgeHandler,
+} from '../controllers/knowledge.controller.js';
 import { getAlerts, getIntegrations } from '../controllers/integrations.controller.js';
 import {
   getPromptPerformanceHandler,
@@ -91,6 +97,12 @@ apiRouter.get('/units/:id/templates', listTemplatesHandler);
 apiRouter.post('/units/:id/templates', createTemplateHandler);
 apiRouter.patch('/units/:id/templates/:templateId', updateTemplateHandler);
 apiRouter.delete('/units/:id/templates/:templateId', deleteTemplateHandler);
+
+// Knowledge base (RAG) CRUD
+apiRouter.get('/units/:id/knowledge', listKnowledgeHandler);
+apiRouter.post('/units/:id/knowledge', createKnowledgeHandler);
+apiRouter.patch('/units/:id/knowledge/:entryId', updateKnowledgeHandler);
+apiRouter.delete('/units/:id/knowledge/:entryId', deleteKnowledgeHandler);
 
 // ---------------------------------------------------------------------------
 // Configuração do agente — prompt, tools e sequências (por Unit).

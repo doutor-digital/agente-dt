@@ -10,6 +10,7 @@ import type {
   GlobalAlert,
   IntegrationsResponse,
   FlaggedMessage,
+  KnowledgeEntry,
   KommoFieldsResponse,
   KommoPipelinesResponse,
   KommoSalesbotsResponse,
@@ -238,6 +239,31 @@ export const api = {
   },
   async deleteTemplate(unitId: string, templateId: string): Promise<void> {
     await http.delete(`/units/${unitId}/templates/${templateId}`);
+  },
+
+  // -------------------------------------------------------------------------
+  // Knowledge base (RAG)
+  // -------------------------------------------------------------------------
+  async listKnowledge(unitId: string): Promise<KnowledgeEntry[]> {
+    const { data } = await http.get<{ entries: KnowledgeEntry[] }>(`/units/${unitId}/knowledge`);
+    return data.entries;
+  },
+  async createKnowledge(unitId: string, input: { question: string; answer: string }): Promise<KnowledgeEntry> {
+    const { data } = await http.post<{ entry: KnowledgeEntry }>(`/units/${unitId}/knowledge`, input, {
+      timeout: 30_000,
+    });
+    return data.entry;
+  },
+  async updateKnowledge(unitId: string, entryId: string, input: { question?: string; answer?: string }): Promise<KnowledgeEntry> {
+    const { data } = await http.patch<{ entry: KnowledgeEntry }>(
+      `/units/${unitId}/knowledge/${entryId}`,
+      input,
+      { timeout: 30_000 },
+    );
+    return data.entry;
+  },
+  async deleteKnowledge(unitId: string, entryId: string): Promise<void> {
+    await http.delete(`/units/${unitId}/knowledge/${entryId}`);
   },
 
   // -------------------------------------------------------------------------
