@@ -21,7 +21,7 @@
 // + 1 placeholder pra A/B (em construção)
 // ============================================================================
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BookText,
   BrainCircuit,
