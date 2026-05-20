@@ -183,6 +183,11 @@ async function processMetaMessage(
 
     const reply = (result.decision ?? '').toString().trim();
     if (reply) {
+      // Pausa "humanizada" — ver webhook.controller.ts.
+      const delaySec = Math.max(0, Math.min(unit.personaResponseDelaySec ?? 0, 30));
+      if (delaySec > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delaySec * 1000));
+      }
       const sendStart = performance.now();
       const sendResult = await MetaService.sendText(unit, msg.from, reply);
       if (sendResult.ok) {

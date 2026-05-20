@@ -107,6 +107,14 @@ model Unit {
   personaCompanyName String? @map("persona_company_name")
   personaTone        String? @map("persona_tone")          // "casual" | "formal" | "friendly"
   personaGreeting    String? @map("persona_greeting")
+  // Tamanho desejado da resposta — "curta" (1 frase) | "normal" (1-3 frases) | "detalhada" (parágrafo)
+  personaResponseLength String @default("normal") @map("persona_response_length")
+  // Idioma principal — usado pra forçar respostas em outro idioma quando necessário.
+  // BCP-47 simplificado: "pt-BR", "en-US", "es-ES", "fr-FR".
+  personaLanguage   String  @default("pt-BR") @map("persona_language")
+  // Pausa em segundos antes de enviar a resposta, simulando "digitando…" humano.
+  // 0 = sem pausa. Útil pra não parecer bot em mensagens curtas.
+  personaResponseDelaySec Int @default(0) @map("persona_response_delay_sec")
 
   // FONTES — 3 documentos estruturados que entram inteiros no prompt da IA.
   // O dono da clínica edita esses 3 campos como texto livre na aba "Fontes".

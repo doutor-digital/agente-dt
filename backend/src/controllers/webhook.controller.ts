@@ -505,6 +505,13 @@ async function processAgent(args: {
     const reply = (result.decision ?? '').toString().trim();
 
     if (isChatMessage && reply) {
+      // Pausa "humanizada" antes de enviar a resposta. Configurável por Unit
+      // pra evitar o feel "robô instantâneo". Cap em 30s pra não travar webhook.
+      const delaySec = Math.max(0, Math.min(unit.personaResponseDelaySec ?? 0, 30));
+      if (delaySec > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delaySec * 1000));
+      }
+
       const sendStart = performance.now();
       try {
         const kommo = createKommoClient(unit);

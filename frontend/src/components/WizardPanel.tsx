@@ -62,6 +62,9 @@ type WizardDraft = Pick<
   | 'personaCompanyName'
   | 'personaTone'
   | 'personaGreeting'
+  | 'personaResponseLength'
+  | 'personaLanguage'
+  | 'personaResponseDelaySec'
   | 'qualificationEnabled'
   | 'qualificationHotTag'
   | 'qualificationColdTag'
@@ -106,6 +109,9 @@ function unitToDraft(u: Unit): WizardDraft {
     personaCompanyName: u.personaCompanyName,
     personaTone: u.personaTone,
     personaGreeting: u.personaGreeting,
+    personaResponseLength: u.personaResponseLength,
+    personaLanguage: u.personaLanguage,
+    personaResponseDelaySec: u.personaResponseDelaySec,
     qualificationEnabled: u.qualificationEnabled,
     qualificationHotTag: u.qualificationHotTag,
     qualificationColdTag: u.qualificationColdTag,
@@ -280,6 +286,41 @@ export function WizardPanel() {
             onChange={(v) => update({ personaGreeting: v || null })}
             placeholder='ex: "Olá, tudo bem? Sou o assistente virtual da HM Tecnologia, em que posso te ajudar?"'
           />
+          <div className="grid md:grid-cols-3 gap-3 mt-2">
+            <SelectField
+              label="Tamanho da resposta"
+              value={draft.personaResponseLength}
+              onChange={(v) =>
+                update({ personaResponseLength: v as WizardDraft['personaResponseLength'] })
+              }
+              options={[
+                { value: 'curta', label: '✂️ Curta (1 frase)' },
+                { value: 'normal', label: '📝 Normal (1-3 frases)' },
+                { value: 'detalhada', label: '📄 Detalhada (parágrafo)' },
+              ]}
+            />
+            <SelectField
+              label="Idioma"
+              value={draft.personaLanguage}
+              onChange={(v) =>
+                update({ personaLanguage: v as WizardDraft['personaLanguage'] })
+              }
+              options={[
+                { value: 'pt-BR', label: '🇧🇷 Português (BR)' },
+                { value: 'en-US', label: '🇺🇸 English (US)' },
+                { value: 'es-ES', label: '🇪🇸 Español' },
+                { value: 'fr-FR', label: '🇫🇷 Français' },
+              ]}
+            />
+            <NumberField
+              label="Pausa antes de responder (s)"
+              value={draft.personaResponseDelaySec}
+              onChange={(v) => update({ personaResponseDelaySec: v })}
+              min={0}
+              max={30}
+              hint="0 = imediato. Simula 'digitando…' humano."
+            />
+          </div>
         </FeatureCard>
 
         {/* 2. AUTO-QUALIFICAÇÃO */}
@@ -726,12 +767,14 @@ function NumberField({
   onChange,
   min,
   max,
+  hint,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
   min?: number;
   max?: number;
+  hint?: string;
 }) {
   return (
     <div>
@@ -746,6 +789,7 @@ function NumberField({
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-full px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 font-mono focus:outline-none focus:border-brand-500"
       />
+      {hint && <p className="text-[10px] text-zinc-500 mt-1">{hint}</p>}
     </div>
   );
 }

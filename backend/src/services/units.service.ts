@@ -98,6 +98,9 @@ export interface UnitInput {
   personaCompanyName?: string | null;
   personaTone?: string | null;
   personaGreeting?: string | null;
+  personaResponseLength?: string;
+  personaLanguage?: string;
+  personaResponseDelaySec?: number;
 
   // Fontes (aba Fontes do painel da IA — 3 docs longos que entram no prompt).
   sourcePapel?: string | null;
@@ -163,6 +166,9 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       personaCompanyName: input.personaCompanyName ?? null,
       personaTone: input.personaTone ?? null,
       personaGreeting: input.personaGreeting ?? null,
+      personaResponseLength: input.personaResponseLength ?? 'normal',
+      personaLanguage: input.personaLanguage ?? 'pt-BR',
+      personaResponseDelaySec: input.personaResponseDelaySec ?? 0,
       sourcePapel: input.sourcePapel ?? null,
       sourceProdutos: input.sourceProdutos ?? null,
       sourceNegocio: input.sourceNegocio ?? null,
@@ -217,6 +223,9 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.personaCompanyName !== undefined && { personaCompanyName: input.personaCompanyName }),
       ...(input.personaTone !== undefined && { personaTone: input.personaTone }),
       ...(input.personaGreeting !== undefined && { personaGreeting: input.personaGreeting }),
+      ...(input.personaResponseLength !== undefined && { personaResponseLength: input.personaResponseLength }),
+      ...(input.personaLanguage !== undefined && { personaLanguage: input.personaLanguage }),
+      ...(input.personaResponseDelaySec !== undefined && { personaResponseDelaySec: input.personaResponseDelaySec }),
       ...(input.sourcePapel !== undefined && { sourcePapel: input.sourcePapel }),
       ...(input.sourceProdutos !== undefined && { sourceProdutos: input.sourceProdutos }),
       ...(input.sourceNegocio !== undefined && { sourceNegocio: input.sourceNegocio }),

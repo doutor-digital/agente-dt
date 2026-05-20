@@ -95,11 +95,35 @@ function renderPersona(unit: Unit): string {
     lines.push('Você é o atendente virtual da empresa, conversando pelo WhatsApp com clientes.');
   }
   lines.push(renderToneInstruction(unit.personaTone));
+  lines.push(renderResponseLength(unit.personaResponseLength));
+  lines.push(renderLanguage(unit.personaLanguage));
   const greeting = unit.personaGreeting?.trim();
   if (greeting) {
     lines.push(`Saudação preferida (use quando for o primeiro contato): "${greeting}"`);
   }
   return lines.join('\n');
+}
+
+function renderResponseLength(length: string | null | undefined): string {
+  switch (length) {
+    case 'curta':
+      return 'Tamanho: respostas MUITO curtas, 1 frase. Vá direto ao ponto.';
+    case 'detalhada':
+      return 'Tamanho: respostas detalhadas, parágrafos curtos. Explique com contexto quando útil.';
+    case 'normal':
+    default:
+      return 'Tamanho: respostas curtas, 1 a 3 frases. WhatsApp não é email.';
+  }
+}
+
+function renderLanguage(lang: string | null | undefined): string {
+  const map: Record<string, string> = {
+    'pt-BR': 'Idioma: português do Brasil. Use "você", evite "tu/vós".',
+    'en-US': 'Language: respond in English (US). Adapt tone naturally.',
+    'es-ES': 'Idioma: responde en español. Adapta el tono naturalmente.',
+    'fr-FR': 'Langue: réponds en français. Adapte le ton naturellement.',
+  };
+  return map[lang ?? 'pt-BR'] ?? map['pt-BR'];
 }
 
 function renderSources(unit: Unit): string {
