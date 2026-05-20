@@ -26,6 +26,7 @@ import {
   Sparkles,
   Terminal,
   Wand2,
+  Zap,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { UnitSelector } from './UnitSelector';
@@ -40,6 +41,7 @@ export type AppTab =
   | 'integrations'
   | 'wizard'
   | 'sources'
+  | 'actions'
   | 'config'
   | 'units';
 
@@ -54,6 +56,7 @@ const NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'primary' },
   { id: 'wizard', label: 'Configurar IA', icon: Wand2, group: 'primary' },
   { id: 'sources', label: 'Fontes', icon: FileText, group: 'primary' },
+  { id: 'actions', label: 'Ações', icon: Zap, group: 'primary' },
   { id: 'conversations', label: 'Conversas', icon: MessageCircle, group: 'primary' },
   { id: 'traces', label: 'Execuções', icon: Terminal, group: 'primary' },
 

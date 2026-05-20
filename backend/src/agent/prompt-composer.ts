@@ -18,9 +18,10 @@
 //   ...passa pra LLM.
 // ============================================================================
 
-import type { KnowledgeBaseEntry, MessageTemplate, Unit } from '@prisma/client';
+import type { KnowledgeBaseEntry, MessageTemplate, Unit, UnitAction } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { searchKnowledge } from '../services/knowledge.service.js';
+import { listEnabledActions } from '../services/actions.service.js';
 import { logger } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -262,6 +263,56 @@ function renderFlaggedExamples(flagged: Array<{ content: string }>): string {
 ${lines.join('\n')}`;
 }
 
+function humanizeAction(action: UnitAction): string {
+  const params = (action.actionParams as Record<string, unknown>) ?? {};
+  switch (action.actionKind) {
+    case 'add_tag': {
+      const tags = Array.isArray(params.tags) ? (params.tags as string[]) : [];
+      if (tags.length === 0) return 'aplicar uma tag relevante (não configurada)';
+      if (tags.length === 1) return `chame aplicar_tag("${tags[0]}")`;
+      const calls = tags.map((t) => `aplicar_tag("${t}")`).join(' e ');
+      return `chame ${calls}`;
+    }
+    case 'transfer_with_permission': {
+      const inc = params.includeSummary !== false;
+      return [
+        'pergunte ao cliente se ele aceita ser transferido pra um humano',
+        '(ex: "Posso te conectar com a equipe?").',
+        'Se ele aceitar, chame pausar_ia',
+        inc ? 'e inclua um resumo breve do contexto pra o operador.' : '.',
+      ].join(' ');
+    }
+    case 'transfer_without_permission': {
+      const inc = params.includeSummary !== false;
+      return [
+        'chame pausar_ia imediatamente (sem pedir confirmação)',
+        inc ? 'e deixe um resumo breve do contexto pra o operador.' : '.',
+      ].join(' ');
+    }
+    default:
+      return `executar ação "${action.actionKind}"`;
+  }
+}
+
+function renderActions(actions: UnitAction[]): string {
+  if (actions.length === 0) return '';
+  const lines = actions.map((a, i) => {
+    const cond = a.conditionDescription.trim();
+    const act = humanizeAction(a);
+    const notes = a.notes?.trim();
+    const lineParts = [`${i + 1}. Quando ${cond}, ${act}`];
+    if (notes) lineParts.push(`   Detalhes: ${notes}`);
+    return lineParts.join('\n');
+  });
+  return `# AÇÕES CONFIGURADAS
+- Use estas regras como guia pra detectar situações e disparar a ação correspondente
+  via as tools disponíveis. Adapte a linguagem ao tom, mas mantenha a lógica.
+- As ações são silenciosas — não anuncie ao cliente que aplicou uma tag ou transferiu.
+  Exceção: transferência com permissão exige perguntar primeiro.
+
+${lines.join('\n\n')}`;
+}
+
 function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>): string {
   if (entries.length === 0) return '';
   const lines = entries.map(
@@ -291,6 +342,8 @@ export interface ComposeInput {
   flaggedExamples?: Array<{ content: string }>;
   /** Entradas da base de conhecimento já filtradas/scored. */
   knowledge?: Array<KnowledgeBaseEntry & { score: number }>;
+  /** Regras "quando → faça" cadastradas na Unit. */
+  actions?: UnitAction[];
 }
 
 export function composeSystemPrompt(input: ComposeInput): string {
@@ -301,6 +354,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     templates = [],
     flaggedExamples = [],
     knowledge = [],
+    actions = [],
   } = input;
 
   // Bloco 1: persona base. Se o usuário escreveu um systemPrompt customizado,
@@ -341,6 +395,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
     blocks.push(...featureBlocks);
   }
 
+  const actionsBlock = renderActions(actions);
+  if (actionsBlock) blocks.push(actionsBlock);
+
   const templatesBlock = renderTemplates(templates);
   if (templatesBlock) blocks.push(templatesBlock);
 
@@ -370,7 +427,7 @@ export async function composeSystemPromptForUnit(input: {
   workflowText?: string;
   userMessage?: string;
 }): Promise<string> {
-  const [templates, flagged, knowledge] = await Promise.all([
+  const [templates, flagged, knowledge, actions] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -393,12 +450,14 @@ export async function composeSystemPromptForUnit(input: {
           },
         )
       : Promise.resolve([]),
+    listEnabledActions(input.unit.id),
   ]);
   return composeSystemPrompt({
     ...input,
     templates,
     flaggedExamples: flagged,
     knowledge,
+    actions,
   });
 }
 

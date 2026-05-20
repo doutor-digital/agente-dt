@@ -534,3 +534,32 @@ export type AgentConfigInput = {
   temperature?: number;
   maxTokens?: number;
 };
+
+// ---------------------------------------------------------------------------
+// Ações estruturadas — regras "quando → faça" cadastradas por Unit.
+// ---------------------------------------------------------------------------
+
+export type ActionKind =
+  | 'add_tag'
+  | 'transfer_with_permission'
+  | 'transfer_without_permission';
+
+export interface UnitAction {
+  id: string;
+  unitId: string;
+  conditionDescription: string;
+  actionKind: ActionKind;
+  actionParams: Record<string, unknown>;
+  notes: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UnitActionInput {
+  conditionDescription: string;
+  actionKind: ActionKind;
+  actionParams: Record<string, unknown>;
+  notes?: string | null;
+  enabled?: boolean;
+}

@@ -57,6 +57,12 @@ import {
   deleteKnowledgeHandler,
 } from '../controllers/knowledge.controller.js';
 import {
+  listActionsHandler,
+  createActionHandler,
+  updateActionHandler,
+  deleteActionHandler,
+} from '../controllers/actions.controller.js';
+import {
   googleOAuthStartHandler,
   googleOAuthCallbackHandler,
   googleOAuthDisconnectHandler,
@@ -108,6 +114,12 @@ apiRouter.get('/units/:id/knowledge', listKnowledgeHandler);
 apiRouter.post('/units/:id/knowledge', createKnowledgeHandler);
 apiRouter.patch('/units/:id/knowledge/:entryId', updateKnowledgeHandler);
 apiRouter.delete('/units/:id/knowledge/:entryId', deleteKnowledgeHandler);
+
+// Ações (regras "quando → faça") CRUD
+apiRouter.get('/units/:id/actions', listActionsHandler);
+apiRouter.post('/units/:id/actions', createActionHandler);
+apiRouter.patch('/units/:id/actions/:actionId', updateActionHandler);
+apiRouter.delete('/units/:id/actions/:actionId', deleteActionHandler);
 
 // Google Calendar OAuth
 apiRouter.get('/units/:id/google-oauth/start', googleOAuthStartHandler);

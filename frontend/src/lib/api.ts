@@ -18,6 +18,8 @@ import type {
   KommoValidateResponse,
   MessageTemplate,
   LlmCallDetail,
+  UnitAction,
+  UnitActionInput,
   LlmCallSummary,
   OpenAIDebugResponse,
   PromptPerformanceResponse,
@@ -264,6 +266,32 @@ export const api = {
   },
   async deleteKnowledge(unitId: string, entryId: string): Promise<void> {
     await http.delete(`/units/${unitId}/knowledge/${entryId}`);
+  },
+
+  // -------------------------------------------------------------------------
+  // Ações (regras "quando → faça")
+  // -------------------------------------------------------------------------
+  async listActions(unitId: string): Promise<UnitAction[]> {
+    const { data } = await http.get<{ actions: UnitAction[] }>(`/units/${unitId}/actions`);
+    return data.actions;
+  },
+  async createAction(unitId: string, input: UnitActionInput): Promise<UnitAction> {
+    const { data } = await http.post<{ action: UnitAction }>(`/units/${unitId}/actions`, input);
+    return data.action;
+  },
+  async updateAction(
+    unitId: string,
+    actionId: string,
+    input: Partial<UnitActionInput>,
+  ): Promise<UnitAction> {
+    const { data } = await http.patch<{ action: UnitAction }>(
+      `/units/${unitId}/actions/${actionId}`,
+      input,
+    );
+    return data.action;
+  },
+  async deleteAction(unitId: string, actionId: string): Promise<void> {
+    await http.delete(`/units/${unitId}/actions/${actionId}`);
   },
 
   // -------------------------------------------------------------------------

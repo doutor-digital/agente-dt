@@ -176,8 +176,44 @@ model Unit {
   conversations    Conversation[]
   messageTemplates MessageTemplate[]
   knowledgeBase    KnowledgeBaseEntry[]
+  actions          UnitAction[]
 
   @@map("units")
+}
+
+// ============================================================================
+// UnitAction — regras "quando → faça" configuráveis pelo dono da clínica.
+//
+// Cada regra é uma instrução semântica que vai pro prompt da IA. A IA decide
+// quando aplicar (LLM faz o matching) e usa as tools existentes (aplicar_tag,
+// pausar_ia) pra executar a ação.
+//
+// actionKind:
+//   - "add_tag"                     : aplica uma ou mais tags do Kommo
+//   - "transfer_with_permission"    : pede confirmação antes de transferir
+//   - "transfer_without_permission" : transfere imediatamente (emergência)
+//
+// actionParams (Json) varia por kind:
+//   - add_tag: { tags: string[] }
+//   - transfer_*: { includeSummary: boolean }
+// ============================================================================
+
+model UnitAction {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  conditionDescription String @map("condition_description")
+  actionKind           String @map("action_kind")
+  actionParams         Json   @default("{}") @map("action_params")
+  notes                String? @map("notes")
+  enabled              Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([unitId, enabled])
+  @@map("unit_actions")
 }
 
 // ===========================================================================
