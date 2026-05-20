@@ -1,34 +1,42 @@
 // ============================================================================
-// DashboardPanel — visão executiva da Unit.
+// DashboardPanel — visão executiva da Unit (atividade do agente de IA).
 //
 // LÓGICA DE ENGENHARIA
 // --------------------
-// Página default da app. Mostra:
-//   - 6 KPI cards grandes (hoje, 30d, conversão, custo, custo/lead, hora pico)
-//   - Funil de vendas: contagem de leads por etapa, em barras horizontais
-//     com largura proporcional ao maior valor.
+// Página default da app. KPIs centrados na operação do agente:
 //
-// Dados vêm de GET /units/:id/dashboard que combina:
-//   - métricas do nosso DB (conversations, llmCalls, traces)
+//   - Leads únicos             : pacientes distintos no período
+//   - Conversas respondidas    : conversas onde a IA chegou a responder
+//   - Leads do fim de semana   : criados em sáb/dom
+//   - Conversas do fim de semana : qualquer mensagem em sáb/dom
+//   - Taxa de transferência    : % de conversas que escalaram pra humano
+//   - Tempo médio de resposta  : latência média do agente
+//   - Perguntas sem resposta   : msgs do paciente sem resposta em 60min
+//   - Conversões / Custo       : ainda úteis pra contexto financeiro
+//
+// Seletor de período (7d / 30d / 90d) — default 7d (alinhado ao mock).
+//
+// Dados vêm de GET /units/:id/dashboard?days=N que combina:
+//   - métricas do nosso DB (conversations, messages, traces, llmCalls)
 //   - leads do Kommo paginados (até 1000)
-//
-// Reflete o estado dos últimos 30 dias.
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Activity,
+  AlertCircle,
   AlertTriangle,
   Brain,
+  CalendarDays,
   Clock4,
   DollarSign,
-  Flame,
   Loader2,
   MessageCircleMore,
   RefreshCcw,
+  Repeat,
   Sparkles,
   Target,
   TrendingUp,
+  Users,
 } from 'lucide-react';
 import clsx from 'clsx';
 import axios from 'axios';
@@ -36,22 +44,31 @@ import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import type { DashboardResponse } from '../types/api';
 
+const PERIOD_OPTIONS = [
+  { days: 7, label: 'Últimos 7 dias' },
+  { days: 30, label: 'Últimos 30 dias' },
+  { days: 90, label: 'Últimos 90 dias' },
+];
+
 export function DashboardPanel() {
   const { selectedUnitId, units } = useUnit();
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [days, setDays] = useState(7);
 
   const load = useCallback(async () => {
     if (!selectedUnitId) return;
     setLoading(true);
     setError(null);
     try {
-      const r = await api.unitDashboard(selectedUnitId);
+      const r = await api.unitDashboard(selectedUnitId, days);
       setData(r);
     } catch (err) {
       if (axios.isAxiosError(err) && err.response?.status === 404) {
-        setError('Dashboard indisponível — backend desta versão não expõe `/units/:id/dashboard`. Confirme se o backend de produção está atualizado.');
+        setError(
+          'Dashboard indisponível — backend desta versão não expõe `/units/:id/dashboard`. Confirme se o backend de produção está atualizado.',
+        );
       } else if (axios.isAxiosError(err) && !err.response) {
         setError('Não foi possível conectar ao backend. Verifique a variável VITE_API_URL do deploy.');
       } else {
@@ -60,7 +77,7 @@ export function DashboardPanel() {
     } finally {
       setLoading(false);
     }
-  }, [selectedUnitId]);
+  }, [selectedUnitId, days]);
 
   useEffect(() => {
     setData(null);
@@ -77,99 +94,168 @@ export function DashboardPanel() {
     );
   }
 
+  const periodLabel = PERIOD_OPTIONS.find((p) => p.days === days)?.label ?? `${days} dias`;
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         {/* Header */}
-        <div className="flex items-end justify-between">
+        <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-display font-bold text-zinc-100 tracking-tight">
-              Dashboard
+              Painel
             </h1>
             <p className="text-sm text-zinc-500 mt-1">
-              {unit?.name ?? 'Unidade'} · últimos 30 dias
+              Atividade do agente de IA · {unit?.name ?? 'Unidade'} · {periodLabel.toLowerCase()}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={load}
-            disabled={loading}
-            className="inline-flex items-center gap-2 text-sm px-3 py-1.5 rounded-md bg-zinc-900 text-zinc-200 ring-1 ring-zinc-800 hover:bg-zinc-800 disabled:opacity-50"
-          >
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCcw size={14} />}
-            Atualizar
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Period selector */}
+            <div className="flex items-center bg-zinc-900 rounded-md ring-1 ring-zinc-800 p-0.5">
+              {PERIOD_OPTIONS.map((opt) => (
+                <button
+                  key={opt.days}
+                  type="button"
+                  onClick={() => setDays(opt.days)}
+                  className={clsx(
+                    'text-xs px-3 py-1 rounded transition',
+                    days === opt.days
+                      ? 'bg-brand-500/20 text-brand-100 ring-1 ring-brand-500/30'
+                      : 'text-zinc-400 hover:text-zinc-200',
+                  )}
+                >
+                  {opt.days}d
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={load}
+              disabled={loading}
+              className="inline-flex items-center gap-2 text-sm px-3 py-1.5 rounded-md bg-zinc-900 text-zinc-200 ring-1 ring-zinc-800 hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCcw size={14} />}
+              Atualizar
+            </button>
+          </div>
         </div>
 
         {error && (
           <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
             <AlertTriangle size={18} className="text-amber-300 mt-0.5 shrink-0" />
             <div className="space-y-1">
-              <div className="font-semibold text-amber-200">Não foi possível carregar o dashboard</div>
+              <div className="font-semibold text-amber-200">Não foi possível carregar o painel</div>
               <div className="text-amber-100/80 text-[13px]">{error}</div>
             </div>
           </div>
         )}
 
-        {/* KPIs grandes */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <KpiCard
-            icon={<MessageCircleMore size={18} />}
-            label="Conversas hoje"
-            value={data?.kpis.conversationsToday ?? 0}
-            sublabel="leads atendidos hoje"
-            color="brand"
-          />
-          <KpiCard
-            icon={<Activity size={18} />}
-            label="Conversas 30d"
-            value={data?.kpis.conversationsLast30d ?? 0}
-            sublabel="total no último mês"
-            color="sky"
-          />
-          <KpiCard
-            icon={<Target size={18} />}
-            label="Taxa de conversão"
-            value={data ? `${(data.kpis.conversionRate30d * 100).toFixed(1)}%` : '—'}
-            sublabel={data ? `${data.kpis.convertedLast30d} convertidos` : 'sem dados'}
-            color="emerald"
-          />
-          <KpiCard
-            icon={<TrendingUp size={18} />}
-            label="Custo total"
-            value={data ? `$${data.kpis.llmCostUsd30d.toFixed(2)}` : '—'}
-            sublabel={data ? `${data.kpis.llmCallsLast30d} chamadas LLM` : 'sem dados'}
-            color="amber"
-          />
-          <KpiCard
-            icon={<DollarSign size={18} />}
-            label="Custo médio/lead"
-            value={data ? `$${data.kpis.avgCostPerLead.toFixed(3)}` : '—'}
-            sublabel="custo OpenAI por conversa"
-            color="violet"
-          />
-          <KpiCard
-            icon={<Brain size={18} />}
-            label="Latência média"
-            value={data ? `${data.kpis.avgResponseLatencyMs}ms` : '—'}
-            sublabel="tempo médio de resposta"
-            color="rose"
-          />
-          <KpiCard
-            icon={<Clock4 size={18} />}
-            label="Hora de pico"
-            value={data?.kpis.peakHour !== null && data?.kpis.peakHour !== undefined ? `${data.kpis.peakHour}h` : '—'}
-            sublabel="hora com mais mensagens"
-            color="cyan"
-          />
-          <KpiCard
-            icon={<Flame size={18} />}
-            label="Conversão (abs)"
-            value={data?.kpis.convertedLast30d ?? 0}
-            sublabel="leads marcados como ganho"
-            color="orange"
-          />
-        </div>
+        {/* Estatísticas — bloco principal de KPIs */}
+        <section>
+          <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold mb-3">
+            Estatísticas
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <KpiCard
+              icon={<Users size={18} />}
+              label="Leads únicos"
+              value={data?.kpis.uniqueLeads ?? 0}
+              sublabel="pacientes distintos no período"
+              color="brand"
+            />
+            <KpiCard
+              icon={<MessageCircleMore size={18} />}
+              label="Conversas respondidas"
+              value={data?.kpis.answeredConversations ?? 0}
+              sublabel="onde a IA chegou a responder"
+              color="sky"
+            />
+            <KpiCard
+              icon={<CalendarDays size={18} />}
+              label="Leads do fim de semana"
+              value={data?.kpis.weekendLeads ?? 0}
+              sublabel="criados em sábado/domingo"
+              color="cyan"
+            />
+            <KpiCard
+              icon={<CalendarDays size={18} />}
+              label="Conversas de fim de semana"
+              value={data?.kpis.weekendConversations ?? 0}
+              sublabel="qualquer mensagem em sáb/dom"
+              color="violet"
+            />
+            <KpiCard
+              icon={<Repeat size={18} />}
+              label="Taxa de transferência"
+              value={data ? `${(data.kpis.handoffRate * 100).toFixed(0)}%` : '—'}
+              sublabel={data ? `${data.kpis.handoffCount} escalados pra humano` : 'sem dados'}
+              color="amber"
+            />
+            <KpiCard
+              icon={<Brain size={18} />}
+              label="Tempo médio de resposta"
+              value={
+                data && data.kpis.avgResponseLatencyMs > 0
+                  ? `${(data.kpis.avgResponseLatencyMs / 1000).toFixed(1)}s`
+                  : '—'
+              }
+              sublabel="latência média do agente"
+              color="rose"
+            />
+            <KpiCard
+              icon={<AlertCircle size={18} />}
+              label="Perguntas sem resposta"
+              value={data?.kpis.unansweredQuestions ?? 0}
+              sublabel="sem reply em 60min"
+              color="orange"
+            />
+            <KpiCard
+              icon={<Clock4 size={18} />}
+              label="Hora de pico"
+              value={
+                data?.kpis.peakHour !== null && data?.kpis.peakHour !== undefined
+                  ? `${data.kpis.peakHour}h`
+                  : '—'
+              }
+              sublabel="hora com mais mensagens"
+              color="emerald"
+            />
+          </div>
+        </section>
+
+        {/* Bloco secundário — conversão e custo (contexto financeiro) */}
+        <section>
+          <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold mb-3">
+            Conversão & custo
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+            <KpiCard
+              icon={<Target size={18} />}
+              label="Taxa de conversão"
+              value={data ? `${(data.kpis.conversionRate * 100).toFixed(1)}%` : '—'}
+              sublabel={data ? `${data.kpis.convertedCount} convertidos` : 'sem dados'}
+              color="emerald"
+            />
+            <KpiCard
+              icon={<TrendingUp size={18} />}
+              label="Custo OpenAI"
+              value={data ? `$${data.kpis.llmCostUsd.toFixed(2)}` : '—'}
+              sublabel={data ? `${data.kpis.llmCallsCount} chamadas LLM` : 'sem dados'}
+              color="amber"
+            />
+            <KpiCard
+              icon={<DollarSign size={18} />}
+              label="Custo médio/lead"
+              value={
+                data && data.kpis.uniqueLeads > 0
+                  ? `$${(data.kpis.llmCostUsd / data.kpis.uniqueLeads).toFixed(3)}`
+                  : '—'
+              }
+              sublabel="custo IA por lead único"
+              color="violet"
+            />
+          </div>
+        </section>
 
         {/* FUNIL */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-6">
@@ -207,7 +293,10 @@ export function DashboardPanel() {
                       return (
                         <div key={status.statusId} className="group">
                           <div className="flex items-center gap-3 text-xs">
-                            <div className="w-44 shrink-0 text-zinc-300 truncate" title={status.statusName}>
+                            <div
+                              className="w-44 shrink-0 text-zinc-300 truncate"
+                              title={status.statusName}
+                            >
                               {status.statusName}
                             </div>
                             <div className="flex-1 relative h-7 bg-zinc-950 rounded">
@@ -248,14 +337,49 @@ export function DashboardPanel() {
 // ---------------------------------------------------------------------------
 
 const colorClasses: Record<string, { ring: string; bg: string; text: string; icon: string }> = {
-  brand: { ring: 'ring-brand-500/30', bg: 'bg-brand-500/10', text: 'text-brand-100', icon: 'text-brand-300' },
+  brand: {
+    ring: 'ring-brand-500/30',
+    bg: 'bg-brand-500/10',
+    text: 'text-brand-100',
+    icon: 'text-brand-300',
+  },
   sky: { ring: 'ring-sky-500/30', bg: 'bg-sky-500/10', text: 'text-sky-100', icon: 'text-sky-300' },
-  emerald: { ring: 'ring-emerald-500/30', bg: 'bg-emerald-500/10', text: 'text-emerald-100', icon: 'text-emerald-300' },
-  amber: { ring: 'ring-amber-500/30', bg: 'bg-amber-500/10', text: 'text-amber-100', icon: 'text-amber-300' },
-  violet: { ring: 'ring-violet-500/30', bg: 'bg-violet-500/10', text: 'text-violet-100', icon: 'text-violet-300' },
-  rose: { ring: 'ring-rose-500/30', bg: 'bg-rose-500/10', text: 'text-rose-100', icon: 'text-rose-300' },
-  cyan: { ring: 'ring-cyan-500/30', bg: 'bg-cyan-500/10', text: 'text-cyan-100', icon: 'text-cyan-300' },
-  orange: { ring: 'ring-orange-500/30', bg: 'bg-orange-500/10', text: 'text-orange-100', icon: 'text-orange-300' },
+  emerald: {
+    ring: 'ring-emerald-500/30',
+    bg: 'bg-emerald-500/10',
+    text: 'text-emerald-100',
+    icon: 'text-emerald-300',
+  },
+  amber: {
+    ring: 'ring-amber-500/30',
+    bg: 'bg-amber-500/10',
+    text: 'text-amber-100',
+    icon: 'text-amber-300',
+  },
+  violet: {
+    ring: 'ring-violet-500/30',
+    bg: 'bg-violet-500/10',
+    text: 'text-violet-100',
+    icon: 'text-violet-300',
+  },
+  rose: {
+    ring: 'ring-rose-500/30',
+    bg: 'bg-rose-500/10',
+    text: 'text-rose-100',
+    icon: 'text-rose-300',
+  },
+  cyan: {
+    ring: 'ring-cyan-500/30',
+    bg: 'bg-cyan-500/10',
+    text: 'text-cyan-100',
+    icon: 'text-cyan-300',
+  },
+  orange: {
+    ring: 'ring-orange-500/30',
+    bg: 'bg-orange-500/10',
+    text: 'text-orange-100',
+    icon: 'text-orange-300',
+  },
 };
 
 function KpiCard({

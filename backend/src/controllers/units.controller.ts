@@ -309,58 +309,143 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     return;
   }
 
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const last30Start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  // Período configurável via ?days=N — default 7 (alinhado com o mock do
+  // "ATIVIDADE DO AGENTE DE IA — ÚLTIMOS 7 DIAS"). Clamp [1, 365].
+  const daysParam = Number(req.query.days ?? 7);
+  const periodDays = Number.isFinite(daysParam)
+    ? Math.max(1, Math.min(Math.round(daysParam), 365))
+    : 7;
 
-  // KPIs nossos — derivados das tabelas locais.
+  const now = new Date();
+  const periodStart = new Date(now.getTime() - periodDays * 24 * 60 * 60 * 1000);
+
+  // 1 round-trip em paralelo. Cada query é independente.
   const [
-    convosToday,
-    convos30d,
-    convertedConvos30d,
-    llm30d,
+    uniqueLeadsRow,
+    answeredConvosRow,
+    weekendLeadsRow,
+    weekendConvosRow,
+    handoffRow,
+    unansweredRow,
+    convertedConvos,
+    totalConvos,
+    llmAgg,
     convsByHour,
     avgRespLatency,
   ] = await Promise.all([
+    prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(DISTINCT lead_id)::bigint AS count
+      FROM conversations
+      WHERE unit_id = ${id}
+        AND last_message_at >= ${periodStart}
+    `,
+    prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(DISTINCT c.id)::bigint AS count
+      FROM conversations c
+      WHERE c.unit_id = ${id}
+        AND c.last_message_at >= ${periodStart}
+        AND EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.conversation_id = c.id
+            AND m.role = 'assistant'
+            AND m.created_at >= ${periodStart}
+        )
+    `,
+    // Leads cuja PRIMEIRA mensagem caiu num sábado (6) ou domingo (0).
+    prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(DISTINCT c.lead_id)::bigint AS count
+      FROM conversations c
+      WHERE c.unit_id = ${id}
+        AND c.created_at >= ${periodStart}
+        AND EXTRACT(DOW FROM c.created_at) IN (0, 6)
+    `,
+    // Conversas com QUALQUER mensagem em sábado/domingo no período.
+    prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(DISTINCT c.id)::bigint AS count
+      FROM conversations c
+      JOIN messages m ON m.conversation_id = c.id
+      WHERE c.unit_id = ${id}
+        AND m.created_at >= ${periodStart}
+        AND EXTRACT(DOW FROM m.created_at) IN (0, 6)
+    `,
+    // Transferências: conversas (leadId distinto) onde rodou step de pausar_ia
+    // no período. Match por título — o recorder inscreve "Decisão: pausar IA…".
+    prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(DISTINCT et.lead_id)::bigint AS count
+      FROM execution_traces et
+      JOIN execution_steps es ON es.trace_id = et.id
+      WHERE et.unit_id = ${id}
+        AND et.created_at >= ${periodStart}
+        AND es.kind = 'TOOL_CALL'
+        AND es.title ILIKE 'decisão: pausar%'
+    `,
+    // Perguntas sem resposta: mensagem do paciente que não recebeu resposta
+    // do assistant dentro de 60min na mesma conversa.
+    prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM messages m
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.unit_id = ${id}
+        AND m.role = 'user'
+        AND m.created_at >= ${periodStart}
+        AND NOT EXISTS (
+          SELECT 1 FROM messages m2
+          WHERE m2.conversation_id = m.conversation_id
+            AND m2.role = 'assistant'
+            AND m2.created_at > m.created_at
+            AND m2.created_at < m.created_at + INTERVAL '60 minutes'
+        )
+    `,
     prisma.conversation.count({
-      where: { unitId: id, lastMessageAt: { gte: todayStart } },
+      where: { unitId: id, createdAt: { gte: periodStart }, convertedAt: { not: null } },
     }),
     prisma.conversation.count({
-      where: { unitId: id, createdAt: { gte: last30Start } },
-    }),
-    prisma.conversation.count({
-      where: { unitId: id, createdAt: { gte: last30Start }, convertedAt: { not: null } },
+      where: { unitId: id, createdAt: { gte: periodStart } },
     }),
     prisma.llmCall.aggregate({
-      where: { unitId: id, createdAt: { gte: last30Start } },
+      where: { unitId: id, createdAt: { gte: periodStart } },
       _sum: { costUsd: true, totalTokens: true },
       _count: { _all: true },
     }),
-    // Mensagens dos pacientes por hora — pra calcular hora de pico.
     prisma.$queryRaw<Array<{ hour: number; count: bigint }>>`
       SELECT EXTRACT(HOUR FROM m."created_at")::int AS hour, COUNT(*)::bigint AS count
       FROM messages m
       JOIN conversations c ON c.id = m.conversation_id
       WHERE c.unit_id = ${id}
         AND m.role = 'user'
-        AND m.created_at >= ${last30Start}
+        AND m.created_at >= ${periodStart}
       GROUP BY 1
       ORDER BY 2 DESC
       LIMIT 1
     `,
     prisma.executionTrace.aggregate({
-      where: { unitId: id, status: 'SUCCESS', latencyMs: { not: null }, createdAt: { gte: last30Start } },
+      where: {
+        unitId: id,
+        status: 'SUCCESS',
+        latencyMs: { not: null },
+        createdAt: { gte: periodStart },
+      },
       _avg: { latencyMs: true },
     }),
   ]);
 
-  const totalCost = Number(llm30d._sum.costUsd ?? 0);
-  const convosForAvg = Math.max(convos30d, 1);
+  const uniqueLeads = Number(uniqueLeadsRow[0]?.count ?? 0);
+  const answeredConversations = Number(answeredConvosRow[0]?.count ?? 0);
+  const weekendLeads = Number(weekendLeadsRow[0]?.count ?? 0);
+  const weekendConversations = Number(weekendConvosRow[0]?.count ?? 0);
+  const handoffCount = Number(handoffRow[0]?.count ?? 0);
+  const unansweredQuestions = Number(unansweredRow[0]?.count ?? 0);
+  const totalCost = Number(llmAgg._sum.costUsd ?? 0);
   const peakHour = convsByHour[0]?.hour ?? null;
+  const handoffRate = uniqueLeads > 0 ? handoffCount / uniqueLeads : 0;
+  const conversionRate = totalConvos > 0 ? convertedConvos / totalConvos : 0;
 
-  // Funil: lista leads do Kommo (até 1000 leads) e agrupa por status_id.
-  // Se Kommo não estiver configurado ou der erro, devolvemos funil vazio.
-  let funnel: Array<{ pipelineId: number; pipelineName: string; statuses: Array<{ statusId: number; statusName: string; count: number; color: string | null }> }> = [];
+  // Funil: lista leads do Kommo e agrupa por status_id.
+  let funnel: Array<{
+    pipelineId: number;
+    pipelineName: string;
+    statuses: Array<{ statusId: number; statusName: string; count: number; color: string | null }>;
+  }> = [];
   if (unit.kommoSubdomain && unit.kommoAccessToken) {
     try {
       const client = createKommoClient(unit);
@@ -387,15 +472,22 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
   }
 
   res.json({
+    periodDays,
     kpis: {
-      conversationsToday: convosToday,
-      conversationsLast30d: convos30d,
-      conversionRate30d: convos30d > 0 ? convertedConvos30d / convos30d : 0,
-      convertedLast30d: convertedConvos30d,
-      llmCostUsd30d: totalCost,
-      llmCallsLast30d: llm30d._count._all,
-      avgCostPerLead: totalCost / convosForAvg,
-      avgResponseLatencyMs: avgRespLatency._avg.latencyMs ? Math.round(avgRespLatency._avg.latencyMs) : 0,
+      uniqueLeads,
+      answeredConversations,
+      weekendLeads,
+      weekendConversations,
+      handoffCount,
+      handoffRate,
+      avgResponseLatencyMs: avgRespLatency._avg.latencyMs
+        ? Math.round(avgRespLatency._avg.latencyMs)
+        : 0,
+      unansweredQuestions,
+      convertedCount: convertedConvos,
+      conversionRate,
+      llmCostUsd: totalCost,
+      llmCallsCount: llmAgg._count._all,
       peakHour,
     },
     funnel,

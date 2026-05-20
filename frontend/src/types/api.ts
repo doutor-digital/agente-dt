@@ -199,15 +199,20 @@ export interface KommoValidateResponse {
 }
 
 export interface DashboardResponse {
+  periodDays: number;
   kpis: {
-    conversationsToday: number;
-    conversationsLast30d: number;
-    conversionRate30d: number;
-    convertedLast30d: number;
-    llmCostUsd30d: number;
-    llmCallsLast30d: number;
-    avgCostPerLead: number;
+    uniqueLeads: number;
+    answeredConversations: number;
+    weekendLeads: number;
+    weekendConversations: number;
+    handoffCount: number;
+    handoffRate: number;
     avgResponseLatencyMs: number;
+    unansweredQuestions: number;
+    convertedCount: number;
+    conversionRate: number;
+    llmCostUsd: number;
+    llmCallsCount: number;
     peakHour: number | null;
   };
   funnel: Array<{

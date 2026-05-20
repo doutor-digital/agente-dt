@@ -105,8 +105,11 @@ export const api = {
     const { data } = await http.get<UnitStats>(`/units/${id}/stats`, { params: { days } });
     return data;
   },
-  async unitDashboard(id: string): Promise<DashboardResponse> {
-    const { data } = await http.get<DashboardResponse>(`/units/${id}/dashboard`, { timeout: 30_000 });
+  async unitDashboard(id: string, days = 7): Promise<DashboardResponse> {
+    const { data } = await http.get<DashboardResponse>(`/units/${id}/dashboard`, {
+      params: { days },
+      timeout: 30_000,
+    });
     return data;
   },
 
