@@ -30,6 +30,7 @@ import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js'
 import { findUnitBySlug } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { MetaService, type MetaInboundMessage } from '../services/meta.service.js';
+import { claimMessageId } from '../lib/dedup-cache.js';
 
 // ---------------------------------------------------------------------------
 // GET — handshake de verificação.
@@ -103,8 +104,15 @@ export async function handleMetaWebhook(req: Request, res: Response): Promise<vo
     return;
   }
 
-  // Processa cada mensagem em background.
+  // Processa cada mensagem em background — descartando retries do webhook.
   for (const msg of inbound) {
+    if (msg.messageId && !claimMessageId('meta', msg.messageId)) {
+      logger.info(
+        { slug, msgId: msg.messageId },
+        'meta webhook duplicado (retry) — ignorando',
+      );
+      continue;
+    }
     void processMetaMessage(unit, msg, performance.now()).catch((err) => {
       logger.error({ err, slug, msgId: msg.messageId }, 'erro processando mensagem Meta');
     });

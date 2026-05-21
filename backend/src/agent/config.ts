@@ -147,14 +147,37 @@ function toShape(row: {
 // ---------------------------------------------------------------------------
 // getActiveConfig — busca o AgentConfig ativo da Unit (ou global, se nulo).
 // Cria um default se não existir.
+//
+// CACHE: cada turno do agente chama essa função. Sem cache são ~30-100ms de
+// Postgres no caminho crítico. TTL 30s — propagação rápida após salvar via
+// Wizard, e `saveConfig` invalida explicitamente.
 // ---------------------------------------------------------------------------
 
+const CONFIG_TTL_MS = 30_000;
+const configCache = new Map<string, { value: AgentConfigShape; expiresAt: number }>();
+
+function configCacheKey(unitId: string | null): string {
+  return unitId ?? '__global__';
+}
+
+export function invalidateActiveConfig(unitId: string | null): void {
+  configCache.delete(configCacheKey(unitId));
+}
+
 export async function getActiveConfig(unitId: string | null = null): Promise<AgentConfigShape> {
+  const key = configCacheKey(unitId);
+  const cached = configCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
   const active = await prisma.agentConfig.findFirst({
     where: { isActive: true, unitId },
     orderBy: { updatedAt: 'desc' },
   });
-  if (active) return toShape(active);
+  if (active) {
+    const shape = toShape(active);
+    configCache.set(key, { value: shape, expiresAt: Date.now() + CONFIG_TTL_MS });
+    return shape;
+  }
 
   logger.info({ unitId }, 'AgentConfig: nenhum ativo encontrado, semeando default');
   const seeded = await prisma.agentConfig.create({
@@ -170,7 +193,9 @@ export async function getActiveConfig(unitId: string | null = null): Promise<Age
       maxTokens: DEFAULTS.maxTokens,
     },
   });
-  return toShape(seeded);
+  const shape = toShape(seeded);
+  configCache.set(key, { value: shape, expiresAt: Date.now() + CONFIG_TTL_MS });
+  return shape;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +243,9 @@ export async function saveConfig(input: SaveConfigInput): Promise<AgentConfigSha
       data: { unitId, name: 'default', isActive: true, ...data },
     });
   });
+
+  // Limpa o cache pra próxima execução pegar a versão fresca.
+  invalidateActiveConfig(unitId);
 
   return toShape(saved);
 }

@@ -233,15 +233,22 @@ function renderBusinessHours(unit: Unit): string {
 
 function renderCollectName(unit: Unit): string {
   if (!unit.collectNameEnabled) return '';
-  return `# COLETA DE NOME
-- Se você AINDA não souber o nome do paciente, pergunte de forma natural e
-  acolhedora na PRIMEIRA ou SEGUNDA resposta (ex: "Antes de continuar, como
-  posso te chamar?"). Não fique repetindo se ele preferir não responder.
+  return `# COLETA DE NOME (PROATIVA)
+- Esta é uma instrução de ALTA PRIORIDADE. Se você ainda NÃO souber o nome
+  do paciente, sua PRIMEIRA mensagem nesta conversa OBRIGATORIAMENTE deve
+  abrir com saudação calorosa + emoji + pergunta pelo nome. Não responda
+  a qualquer outra coisa antes de ter feito essa pergunta.
+- A saudação deve ser breve, simpática, com 1-2 emojis bonitos. Use 1 destes
+  estilos como referência (varie palavras pra não soar robótico):
+    • "Oiê! 😊✨ Que bom ter você por aqui! Pra começar, como posso te chamar?"
+    • "Olá! 🌷 Seja muito bem-vindo(a) à clínica! Antes de continuar, qual seu nome?"
+    • "Oi! 👋💜 Tudo bem? Pra te atender melhor, posso saber seu nome? 🙏"
 - Assim que o paciente disser o nome, chame IMEDIATAMENTE
-  atualizar_titulo_lead(leadId, "<Nome>") pra mudar o título do card no Kommo
-  de "WhatsApp Web/Visitante" para o nome real. Essa chamada é silenciosa —
-  NÃO fale "atualizei seu cadastro" ou similar.
-- Depois de obtido, USE o nome do paciente nas respostas seguintes (sem abusar).`;
+  atualizar_titulo_lead(leadId, "<Nome>") pra mudar o título do card no Kommo.
+  A chamada é silenciosa — NUNCA fale "atualizei seu cadastro" ou similar.
+- Depois de obtido, USE o nome do paciente nas respostas seguintes (com
+  moderação — 1 vez a cada 2-3 mensagens, pra não parecer forçado).
+- Se o paciente insistir em não dizer o nome, deixe pra lá após 2 tentativas.`;
 }
 
 function renderCollectSource(unit: Unit): string {
@@ -249,13 +256,17 @@ function renderCollectSource(unit: Unit): string {
   const opts = (unit.collectSourceOptions ?? []).filter(Boolean);
   const optsLine =
     opts.length > 0
-      ? `Sugestões pra apresentar (cite naturalmente, sem virar checklist): ${opts.join(', ')}.`
+      ? `Cite 2 ou 3 opções dessas no exemplo, de forma natural: ${opts.join(', ')}.`
       : 'Pergunte aberto, sem sugerir opções fixas.';
   return `# COLETA DE ORIGEM (COMO CONHECEU)
-- Em algum momento dos primeiros turnos, pergunte de forma natural por onde o
-  paciente conheceu a clínica (ex: "Pra ficar curiosa: por onde você nos
-  conheceu?"). Faça UMA vez só — se ele desconversar, deixa pra lá.
+- Em algum momento dos PRIMEIROS 2-3 turnos da conversa (depois do nome se
+  estiver coletando nome também), pergunte de forma leve e curiosa por onde o
+  paciente conheceu a clínica. Sempre com 1-2 emojis. Exemplos:
+    • "Ah, antes que eu esqueça: por onde você nos conheceu? 🤔 (Instagram, indicação…)"
+    • "Curiosidade nossa 🌸: como você chegou até a gente?"
+    • "Pra fechar o quebra-gelo 🍃 — por onde nos descobriu?"
 - ${optsLine}
+- Faça UMA vez só na conversa. Se ele desconversar, deixa pra lá.
 - Quando ele responder, chame aplicar_tag("Origem: <fonte>"), exemplo:
   aplicar_tag("Origem: Instagram"). Use exatamente o prefixo "Origem: " pra
   facilitar o filtro no Kommo. Tag silenciosa — NÃO mencione na resposta.`;
@@ -411,12 +422,14 @@ export function composeSystemPrompt(input: ComposeInput): string {
   blocks.push(renderRulesGlobal());
 
   const featureBlocks = [
+    // Coleta de nome/origem PRIMEIRO — a IA precisa saudar com isso antes de
+    // qualquer outra coisa quando ativados.
+    renderCollectName(unit),
+    renderCollectSource(unit),
     renderQualification(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderContactCollection(unit),
-    renderCollectName(unit),
-    renderCollectSource(unit),
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
     renderFollowUp(unit),
@@ -447,11 +460,34 @@ export function composeSystemPrompt(input: ComposeInput): string {
 }
 
 /**
+ * Heurística: mensagem é "trivial" (saudação, ack curto) e RAG não vai
+ * trazer nada útil mesmo? Pulamos o embedding (economiza ~500-800ms).
+ *
+ * Critérios (qualquer um basta):
+ *   - texto ≤ 18 chars sem ponto de interrogação
+ *   - bate com regex de saudação/ack comum
+ *
+ * Conservador: se NÃO bater, faz RAG normalmente — preferimos pagar o custo
+ * a perder uma resposta relevante.
+ */
+function isTrivialUserMessage(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (normalized.length === 0) return true;
+  if (normalized.includes('?')) return false; // pergunta → vale RAG
+  if (normalized.length <= 18) return true;
+  return /^(oi|ol[áa]|alo|hi|hello|bom dia|boa tarde|boa noite|tudo bem|td bem|obrigad[oa]|ok|valeu|tks|thanks|👋|🙏|😊)[\s.!?,]*$/i.test(
+    normalized,
+  );
+}
+
+/**
  * Async variant — busca templates + flaggedExamples + RAG do banco
  * automaticamente. Usar em runtime do agente (graph.ts).
  *
  * Se `userMessage` for passado, faz busca semântica na base de conhecimento
  * e injeta as top-3 mais relevantes no prompt. Sem userMessage, pula RAG.
+ * Mensagens triviais (saudações, "ok", "obrigado") também pulam — embedding
+ * é caro e não vai casar com FAQ mesmo.
  */
 export async function composeSystemPromptForUnit(input: {
   unit: Unit;
@@ -459,6 +495,11 @@ export async function composeSystemPromptForUnit(input: {
   workflowText?: string;
   userMessage?: string;
 }): Promise<string> {
+  const shouldRunRag =
+    !!input.userMessage &&
+    !!input.unit.openaiApiKey &&
+    !isTrivialUserMessage(input.userMessage);
+
   const [templates, flagged, knowledge, actions] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
@@ -474,8 +515,8 @@ export async function composeSystemPromptForUnit(input: {
       take: 10,
       select: { content: true },
     }),
-    input.userMessage && input.unit.openaiApiKey
-      ? searchKnowledge(input.unit, input.userMessage, { topK: 3, minScore: 0.25 }).catch(
+    shouldRunRag
+      ? searchKnowledge(input.unit, input.userMessage!, { topK: 3, minScore: 0.25 }).catch(
           (err) => {
             logger.warn({ err, unitId: input.unit.id }, 'RAG search failed, sem KB no prompt');
             return [];

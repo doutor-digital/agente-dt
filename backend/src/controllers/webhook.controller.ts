@@ -26,6 +26,7 @@ import { transcribeAudio } from '../services/transcription.service.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
+import { claimMessageId } from '../lib/dedup-cache.js';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -309,8 +310,21 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   // (leadId + text no body). Webhooks de `leads.update` disparados por NOSSAS
   // próprias mutações (setar Resposta IA, mover etapa) NÃO devem reativar o
   // agente — senão entramos em loop infinito processando nossas mudanças.
-  const hasIncomingMessage = !!getIncomingMessage(parsed.data);
+  const incomingMsg = getIncomingMessage(parsed.data);
+  const hasIncomingMessage = !!incomingMsg;
   const hasManualTestInput = !!parsed.data.leadId && !!parsed.data.text;
+
+  // Dedup por id da mensagem do Kommo — retry do webhook não dispara 2 turnos
+  // de IA. Sem id (payload manual de teste, p.ex.) deixamos passar.
+  if (incomingMsg?.id && !claimMessageId('kommo', incomingMsg.id)) {
+    logger.info(
+      { unit: unit.slug, msgId: incomingMsg.id },
+      'kommo webhook duplicado (retry) — ignorando',
+    );
+    res.status(200).json({ ok: true, skipped: 'duplicate_message_id', unit: unit.slug });
+    return;
+  }
+
   if (!hasIncomingMessage && !hasManualTestInput) {
     logger.debug(
       { unit: unit.slug, hasLeadsUpdate: !!parsed.data.leads?.update?.length },

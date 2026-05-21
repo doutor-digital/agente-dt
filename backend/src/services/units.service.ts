@@ -24,10 +24,32 @@ const DEFAULT_SLUG = 'default';
 
 // ---------------------------------------------------------------------------
 // Resolve a Unit pelo slug. Lança erro se não existir.
+//
+// CACHE: os webhooks chamam essa função em cada turno (e em cada msg num
+// payload com várias). TTL 30s — propagação rápida após updateUnit, que
+// invalida explicitamente.
 // ---------------------------------------------------------------------------
 
+const UNIT_TTL_MS = 30_000;
+const unitBySlugCache = new Map<string, { value: Unit | null; expiresAt: number }>();
+const unitByIdCache = new Map<string, { value: Unit | null; expiresAt: number }>();
+
+function invalidateUnitCacheFor(unit: Unit | null, fallbackId?: string): void {
+  if (unit) {
+    unitBySlugCache.delete(unit.slug);
+    unitByIdCache.delete(unit.id);
+  } else if (fallbackId) {
+    unitByIdCache.delete(fallbackId);
+  }
+}
+
 export async function findUnitBySlug(slug: string): Promise<Unit | null> {
-  return prisma.unit.findUnique({ where: { slug } });
+  const cached = unitBySlugCache.get(slug);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const unit = await prisma.unit.findUnique({ where: { slug } });
+  unitBySlugCache.set(slug, { value: unit, expiresAt: Date.now() + UNIT_TTL_MS });
+  if (unit) unitByIdCache.set(unit.id, { value: unit, expiresAt: Date.now() + UNIT_TTL_MS });
+  return unit;
 }
 
 export async function findUnitBySlugOrThrow(slug: string): Promise<Unit> {
@@ -200,7 +222,7 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
 }
 
 export async function updateUnit(id: string, input: Partial<UnitInput>): Promise<Unit> {
-  return prisma.unit.update({
+  const updated = await prisma.unit.update({
     where: { id },
     data: {
       ...(input.slug !== undefined && { slug: input.slug }),
@@ -257,10 +279,13 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.collectSourceOptions !== undefined && { collectSourceOptions: input.collectSourceOptions }),
     },
   });
+  invalidateUnitCacheFor(updated, id);
+  return updated;
 }
 
 export async function deleteUnit(id: string): Promise<void> {
   await prisma.unit.delete({ where: { id } });
+  invalidateUnitCacheFor(null, id);
 }
 
 // ---------------------------------------------------------------------------

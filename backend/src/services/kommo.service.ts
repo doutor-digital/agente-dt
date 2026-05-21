@@ -451,10 +451,24 @@ export class KommoClient {
     replyFieldId: number;
     text: string;
   }): Promise<unknown> {
+    // ⚠ ATENÇÃO À DUPLICAÇÃO: este método dispara o salesbot por DOIS caminhos:
+    //   1. PATCH no campo "Resposta IA" — se o Digital Pipeline do Kommo está
+    //      configurado pra "Quando campo muda → rodar Salesbot", esse PATCH
+    //      sozinho JÁ envia a mensagem.
+    //   2. POST /salesbot/{id}/run — também dispara.
+    // Se AMBOS os gatilhos estão ativos, o paciente recebe a mensagem 2x.
+    // Os logs abaixo permitem ver o duplo disparo: se o POST retornou 200
+    // (não 404) E o paciente recebeu 2 mensagens, desabilite o trigger do
+    // Digital Pipeline ou troque o `kommoReplyFieldId` por um campo "burro"
+    // (sem trigger do DP).
     try {
       await this.http.patch(`/leads/${leadId}`, {
         custom_fields_values: [{ field_id: replyFieldId, values: [{ value: text }] }],
       });
+      logger.debug(
+        { leadId, replyFieldId, route: 'patch_field' },
+        'runSalesbot: PATCH no campo Resposta IA enviado (pode disparar Digital Pipeline)',
+      );
     } catch (err) {
       wrapAxiosError(err, `runSalesbot:setField(${leadId}, field=${replyFieldId})`);
     }
@@ -463,6 +477,10 @@ export class KommoClient {
       const { data } = await this.http.post(`/salesbot/${salesbotId}/run`, [
         { bot_id: salesbotId, entity_type: 2, entity_id: leadId },
       ]);
+      logger.warn(
+        { leadId, salesbotId, route: 'post_run' },
+        'runSalesbot: POST /salesbot/run retornou 200 — se o Digital Pipeline também dispara o bot ao mudar Resposta IA, o paciente vai receber a mensagem 2x',
+      );
       return { runApi: 'ok', data };
     } catch (err) {
       const status = axios.isAxiosError(err) ? err.response?.status : undefined;
