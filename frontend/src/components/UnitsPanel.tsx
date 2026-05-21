@@ -19,7 +19,7 @@ import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { KommoExplorer } from './KommoExplorer';
 
-const DEFAULT_UNIT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/624/624523.png';
+const DEFAULT_UNIT_AVATAR = 'https://fiqon.com.br/wp-content/uploads/2025/04/kommo.png';
 
 const blankInput: UnitInput = {
   slug: '',
