@@ -98,11 +98,30 @@ function renderPersona(unit: Unit): string {
   lines.push(renderToneInstruction(unit.personaTone));
   lines.push(renderResponseLength(unit.personaResponseLength));
   lines.push(renderLanguage(unit.personaLanguage));
+  const emojiBlock = renderEmojiStyle(unit);
+  if (emojiBlock) lines.push(emojiBlock);
   const greeting = unit.personaGreeting?.trim();
   if (greeting) {
     lines.push(`Saudação preferida (use quando for o primeiro contato): "${greeting}"`);
   }
   return lines.join('\n');
+}
+
+function renderEmojiStyle(unit: Unit): string {
+  const palette = (unit.personaEmojis ?? []).filter((e) => e && e.trim().length > 0);
+  if (palette.length === 0) return '';
+  const freq = unit.personaEmojiFrequency ?? 'normal';
+  const guide: Record<string, string> = {
+    low: 'Use NO MÁXIMO 1 emoji por mensagem — só quando reforçar o tom.',
+    normal: 'Use 1 a 2 emojis por mensagem, espalhados (saudação + ponto-chave).',
+    high: 'Use 2 a 4 emojis por mensagem pra deixar bem caloroso. Varie pra não repetir.',
+  };
+  return [
+    'Emojis: você TEM uma paleta autorizada e DEVE usar — respostas sem emoji ficam secas.',
+    `Paleta: ${palette.join(' ')}`,
+    guide[freq] ?? guide.normal,
+    'Nunca use emojis fora dessa paleta. Posicione naturalmente, evite empilhar 3+ seguidos.',
+  ].join('\n');
 }
 
 function renderResponseLength(length: string | null | undefined): string {
@@ -149,7 +168,13 @@ function renderRulesGlobal(): string {
 - Respostas curtas: 1 a 3 frases. WhatsApp não é email.
 - NUNCA use as palavras técnicas: "lead", "ID", "tag", "etapa", "pipeline", "tool", "campo", "sistema", "erro", "API", "função".
 - Se algo deu errado por trás (tool falhou), NÃO conte ao cliente. Responda como se tudo estivesse normal.
-- Tool errors são telemetria interna que você ignora completamente na resposta visível ao cliente.`;
+- Tool errors são telemetria interna que você ignora completamente na resposta visível ao cliente.
+- TODA resposta sua DEVE terminar com uma pergunta de continuidade — uma pergunta
+  curta e relevante que mantém a conversa fluindo. Exemplos: "Faz sentido?",
+  "Quer que eu te explique mais?", "Pode me contar um pouco mais sobre isso?",
+  "Te ajudo a marcar um horário agora?". Sem isso, a conversa morre.
+- A pergunta final precisa ter sentido — NUNCA termine com um "?" isolado ou uma
+  frase truncada. Releia antes de mandar.`;
 }
 
 function renderQualification(unit: Unit): string {

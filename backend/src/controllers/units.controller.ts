@@ -63,6 +63,8 @@ const unitInputBase = {
   personaResponseLength: z.enum(['curta', 'normal', 'detalhada']).optional(),
   personaLanguage: z.enum(['pt-BR', 'en-US', 'es-ES', 'fr-FR']).optional(),
   personaResponseDelaySec: z.coerce.number().int().min(0).max(30).optional(),
+  personaEmojis: z.array(z.string().min(1).max(8)).max(60).optional(),
+  personaEmojiFrequency: z.enum(['low', 'normal', 'high']).optional(),
   // Fontes — textos longos. Tamanho generoso pra acomodar docs ricos.
   sourcePapel: z.string().max(20_000).nullable().optional(),
   sourceProdutos: z.string().max(20_000).nullable().optional(),

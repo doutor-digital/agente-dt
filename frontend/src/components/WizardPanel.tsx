@@ -67,6 +67,8 @@ type WizardDraft = Pick<
   | 'personaResponseLength'
   | 'personaLanguage'
   | 'personaResponseDelaySec'
+  | 'personaEmojis'
+  | 'personaEmojiFrequency'
   | 'qualificationEnabled'
   | 'qualificationHotTag'
   | 'qualificationColdTag'
@@ -117,6 +119,8 @@ function unitToDraft(u: Unit): WizardDraft {
     personaResponseLength: u.personaResponseLength,
     personaLanguage: u.personaLanguage,
     personaResponseDelaySec: u.personaResponseDelaySec,
+    personaEmojis: u.personaEmojis ?? [],
+    personaEmojiFrequency: u.personaEmojiFrequency ?? 'normal',
     qualificationEnabled: u.qualificationEnabled,
     qualificationHotTag: u.qualificationHotTag,
     qualificationColdTag: u.qualificationColdTag,
@@ -327,6 +331,14 @@ export function WizardPanel() {
               min={0}
               max={30}
               hint="0 = imediato. Simula 'digitando…' humano."
+            />
+          </div>
+          <div className="mt-3">
+            <EmojiPaletteField
+              emojis={draft.personaEmojis}
+              frequency={draft.personaEmojiFrequency}
+              onChangeEmojis={(arr) => update({ personaEmojis: arr })}
+              onChangeFrequency={(f) => update({ personaEmojiFrequency: f })}
             />
           </div>
         </FeatureCard>
@@ -993,6 +1005,140 @@ function KeywordList({
           Adicionar
         </button>
       </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// EmojiPaletteField — paleta de emojis configurável + frequência de uso.
+// ===========================================================================
+
+const EMOJI_SUGGESTIONS = [
+  '😊', '😉', '🥰', '🤗', '🙏', '👋', '👏', '💜', '💙', '💚',
+  '🌷', '🌸', '🌟', '✨', '🌈', '☀️', '☕', '🍃', '🌿', '🎉',
+  '😄', '😅', '🙌', '👌', '👍', '💪', '🔥', '⚡', '💡', '🎯',
+  '😢', '😔', '🥺', '🤔', '🙇', '🤝', '❤️‍🩹', '🩺', '💊', '🏥',
+];
+
+function EmojiPaletteField({
+  emojis,
+  frequency,
+  onChangeEmojis,
+  onChangeFrequency,
+}: {
+  emojis: string[];
+  frequency: 'low' | 'normal' | 'high';
+  onChangeEmojis: (arr: string[]) => void;
+  onChangeFrequency: (f: 'low' | 'normal' | 'high') => void;
+}) {
+  const [input, setInput] = useState('');
+
+  function addEmoji(raw: string) {
+    const v = raw.trim();
+    if (!v) return;
+    if (emojis.includes(v)) {
+      setInput('');
+      return;
+    }
+    onChangeEmojis([...emojis, v]);
+    setInput('');
+  }
+
+  function remove(emoji: string) {
+    onChangeEmojis(emojis.filter((e) => e !== emoji));
+  }
+
+  const unusedSuggestions = EMOJI_SUGGESTIONS.filter((e) => !emojis.includes(e));
+
+  return (
+    <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/5 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-[10px] uppercase tracking-wider text-fuchsia-200 font-semibold">
+          🎨 Paleta de emojis (use livremente)
+        </label>
+        <select
+          value={frequency}
+          onChange={(e) => onChangeFrequency(e.target.value as 'low' | 'normal' | 'high')}
+          className="text-[11px] px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-zinc-100 focus:outline-none focus:border-fuchsia-500"
+        >
+          <option value="low">🪶 Frequência baixa (1 por msg)</option>
+          <option value="normal">✨ Normal (1-2 por msg)</option>
+          <option value="high">🎉 Alta (2-4 por msg, bem caloroso)</option>
+        </select>
+      </div>
+
+      <p className="text-[11px] text-zinc-400 mb-2">
+        Adicione quantos emojis quiser. A IA vai usá-los livremente nas respostas pra deixar
+        a conversa mais bonita e calorosa. ✨ Vazio = sem instrução, herda só do tom de voz.
+      </p>
+
+      {/* Emojis selecionados */}
+      <div className="flex flex-wrap gap-1.5 mb-2 min-h-[36px] p-2 rounded-md bg-zinc-950/60 border border-zinc-800/60">
+        {emojis.length === 0 ? (
+          <span className="text-[11px] text-zinc-600 italic self-center">
+            Nenhum emoji ainda. Cole abaixo ou clique nas sugestões. 👇
+          </span>
+        ) : (
+          emojis.map((e) => (
+            <button
+              key={e}
+              type="button"
+              onClick={() => remove(e)}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-fuchsia-500/15 ring-1 ring-fuchsia-500/40 text-base hover:bg-rose-500/15 hover:ring-rose-500/40 transition-colors"
+              title="Clique pra remover"
+            >
+              <span>{e}</span>
+            </button>
+          ))
+        )}
+      </div>
+
+      {/* Input livre */}
+      <div className="flex gap-2 mb-3">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              addEmoji(input);
+            }
+          }}
+          placeholder="Cole ou digite qualquer emoji…  Enter pra adicionar"
+          className="flex-1 px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-base text-zinc-100 focus:outline-none focus:border-fuchsia-500"
+        />
+        <button
+          type="button"
+          onClick={() => addEmoji(input)}
+          disabled={!input.trim()}
+          className="px-3 py-1.5 rounded-md bg-fuchsia-500/20 ring-1 ring-fuchsia-500/40 text-xs text-fuchsia-100 hover:bg-fuchsia-500/30 disabled:opacity-50"
+        >
+          Adicionar
+        </button>
+      </div>
+
+      {/* Sugestões clicáveis */}
+      {unusedSuggestions.length > 0 && (
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5">
+            Sugestões (clique pra adicionar)
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {unusedSuggestions.map((e) => (
+              <button
+                key={e}
+                type="button"
+                onClick={() => addEmoji(e)}
+                className="text-base px-1.5 py-0.5 rounded hover:bg-fuchsia-500/15 hover:ring-1 hover:ring-fuchsia-500/40 transition-colors"
+                title="Adicionar à paleta"
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

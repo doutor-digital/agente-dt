@@ -116,6 +116,12 @@ model Unit {
   // 0 = sem pausa. Útil pra não parecer bot em mensagens curtas.
   personaResponseDelaySec Int @default(0) @map("persona_response_delay_sec")
 
+  // EMOJI STYLE — paleta de emojis que a IA pode usar livremente nas respostas
+  // (string[] de qualquer emoji) + frequência ("low" | "normal" | "high").
+  // Vazio = comportamento herda do `personaTone`.
+  personaEmojis         String[] @default([]) @map("persona_emojis")
+  personaEmojiFrequency String   @default("normal") @map("persona_emoji_frequency")
+
   // FONTES — 3 documentos estruturados que entram inteiros no prompt da IA.
   // O dono da clínica edita esses 3 campos como texto livre na aba "Fontes".
   // O composer renderiza cada um como uma seção (# FATOS, # PRODUTOS, # NEGÓCIO).

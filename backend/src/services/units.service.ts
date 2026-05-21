@@ -123,6 +123,8 @@ export interface UnitInput {
   personaResponseLength?: string;
   personaLanguage?: string;
   personaResponseDelaySec?: number;
+  personaEmojis?: string[];
+  personaEmojiFrequency?: string;
 
   // Fontes (aba Fontes do painel da IA — 3 docs longos que entram no prompt).
   sourcePapel?: string | null;
@@ -252,6 +254,8 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.personaResponseLength !== undefined && { personaResponseLength: input.personaResponseLength }),
       ...(input.personaLanguage !== undefined && { personaLanguage: input.personaLanguage }),
       ...(input.personaResponseDelaySec !== undefined && { personaResponseDelaySec: input.personaResponseDelaySec }),
+      ...(input.personaEmojis !== undefined && { personaEmojis: input.personaEmojis }),
+      ...(input.personaEmojiFrequency !== undefined && { personaEmojiFrequency: input.personaEmojiFrequency }),
       ...(input.sourcePapel !== undefined && { sourcePapel: input.sourcePapel }),
       ...(input.sourceProdutos !== undefined && { sourceProdutos: input.sourceProdutos }),
       ...(input.sourceNegocio !== undefined && { sourceNegocio: input.sourceNegocio }),

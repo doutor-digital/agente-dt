@@ -152,6 +152,8 @@ export interface Unit {
   personaResponseLength: 'curta' | 'normal' | 'detalhada';
   personaLanguage: 'pt-BR' | 'en-US' | 'es-ES' | 'fr-FR';
   personaResponseDelaySec: number;
+  personaEmojis: string[];
+  personaEmojiFrequency: 'low' | 'normal' | 'high';
   qualificationEnabled: boolean;
   qualificationHotTag: string;
   qualificationColdTag: string;
