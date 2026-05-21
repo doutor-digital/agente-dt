@@ -132,6 +132,10 @@ export interface UnitInput {
   followUpEnabled?: boolean;
   followUpAfterHours?: number;
   followUpMessage?: string | null;
+
+  collectNameEnabled?: boolean;
+  collectSourceEnabled?: boolean;
+  collectSourceOptions?: string[];
 }
 
 export async function listUnits(): Promise<Unit[]> {
@@ -248,6 +252,9 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.followUpEnabled !== undefined && { followUpEnabled: input.followUpEnabled }),
       ...(input.followUpAfterHours !== undefined && { followUpAfterHours: input.followUpAfterHours }),
       ...(input.followUpMessage !== undefined && { followUpMessage: input.followUpMessage }),
+      ...(input.collectNameEnabled !== undefined && { collectNameEnabled: input.collectNameEnabled }),
+      ...(input.collectSourceEnabled !== undefined && { collectSourceEnabled: input.collectSourceEnabled }),
+      ...(input.collectSourceOptions !== undefined && { collectSourceOptions: input.collectSourceOptions }),
     },
   });
 }
