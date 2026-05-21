@@ -360,6 +360,18 @@ function humanizeAction(action: UnitAction): string {
       const calls = tags.map((t) => `aplicar_tag("${t}")`).join(' e ');
       return `chame ${calls}`;
     }
+    case 'move_stage': {
+      const statusId = typeof params.statusId === 'number' ? params.statusId : Number(params.statusId);
+      const label = typeof params.statusLabel === 'string' ? params.statusLabel : null;
+      if (!Number.isFinite(statusId) || statusId <= 0) {
+        return 'mover o lead pra uma etapa (não configurada)';
+      }
+      const pipelineId = typeof params.pipelineId === 'number' ? params.pipelineId : undefined;
+      const call = pipelineId
+        ? `mover_etapa(leadId, ${statusId}, ${pipelineId})`
+        : `mover_etapa(leadId, ${statusId})`;
+      return label ? `chame ${call} — etapa "${label}"` : `chame ${call}`;
+    }
     case 'transfer_with_permission': {
       const inc = params.includeSummary !== false;
       return [

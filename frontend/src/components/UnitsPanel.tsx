@@ -10,7 +10,7 @@
 // ============================================================================
 
 import { useEffect, useMemo, useState } from 'react';
-import { Copy, Loader2, MoreVertical, Plus, Save, Search, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Copy, Loader2, MoreVertical, Plus, Save, Search, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type { Unit, UnitInput } from '../types/api';
@@ -87,7 +87,7 @@ export function UnitsPanel() {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [cloningId, setCloningId] = useState<string | null>(null);
 
-  const drawerOpen = creating || selectedId !== null;
+  const editing = creating || selectedId !== null;
 
   useEffect(() => {
     const u = units.find((x) => x.id === selectedId);
@@ -173,98 +173,32 @@ export function UnitsPanel() {
     setDraft(blankInput);
   }
 
-  function closeDrawer() {
+  function closeEdit() {
     setSelectedId(null);
     setCreating(false);
   }
 
-  return (
-    <div className="flex-1 overflow-y-auto">
-      {/* Header: título + search + nova */}
-      <div className="max-w-6xl mx-auto px-8 pt-10 pb-6">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex-1" />
-          <h1 className="text-2xl font-semibold text-zinc-100 text-center">Escolha uma conta</h1>
-          <div className="flex-1 flex justify-end">
-            {isSuper && (
+  // Renderização condicional: grid OU página de edição em tela cheia.
+  // Antes era grid + drawer overlay; o user pediu pra ocupar a tela toda.
+  if (editing) {
+    return (
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-3xl mx-auto px-6 py-6">
+            {/* Header sticky com voltar + ações */}
+            <div className="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur-sm flex items-center gap-3 pb-4 mb-2 border-b border-zinc-800/60">
               <button
                 type="button"
-                onClick={startCreate}
-                className="text-xs px-3 py-1.5 rounded-md bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/30 inline-flex items-center gap-1.5 hover:bg-brand-500/30"
+                onClick={closeEdit}
+                className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1.5 rounded hover:bg-zinc-900/60"
+                title="Voltar pra lista de unidades"
               >
-                <Plus size={13} />
-                Nova unidade
+                <ArrowLeft size={14} />
+                Voltar
               </button>
-            )}
-          </div>
-        </div>
-
-        <div className="max-w-md mx-auto mb-10">
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Pesquisar sua conta"
-              className="w-full bg-zinc-900/60 border border-zinc-800 rounded-md text-sm pl-9 pr-3 py-2 text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-brand-500/40"
-            />
-          </div>
-        </div>
-
-        {ctxLoading && (
-          <div className="flex justify-center py-12">
-            <Loader2 className="animate-spin text-zinc-500" size={18} />
-          </div>
-        )}
-
-        {!ctxLoading && filteredUnits.length === 0 && (
-          <div className="text-center text-sm text-zinc-500 py-12">
-            {search ? 'Nenhuma unidade bate com a busca.' : 'Nenhuma unidade ainda.'}
-          </div>
-        )}
-
-        {/* Grid de cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-x-4 gap-y-8">
-          {filteredUnits.map((u) => (
-            <UnitCard
-              key={u.id}
-              unit={u}
-              onOpen={() => {
-                setCreating(false);
-                setSelectedId(u.id);
-              }}
-              onClone={() => void handleClone(u)}
-              onDelete={() => void handleDelete(u)}
-              menuOpen={openMenuId === u.id}
-              onMenuToggle={(e) => {
-                e.stopPropagation();
-                setOpenMenuId(openMenuId === u.id ? null : u.id);
-              }}
-              cloning={cloningId === u.id}
-              canEdit={isSuper || user?.unitId === u.id}
-              canDelete={isSuper}
-              canClone={isSuper}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Drawer de edição */}
-      {drawerOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
-          onClick={closeDrawer}
-        >
-          <aside
-            className="absolute right-0 top-0 bottom-0 w-[760px] max-w-[95vw] bg-zinc-950 border-l border-zinc-800 flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800/80">
-              <h2 className="text-base font-semibold text-zinc-100">
+              <h2 className="text-base font-semibold text-zinc-100 flex-1 truncate">
                 {creating ? 'Nova unidade' : draft.name || 'Sem nome'}
               </h2>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {!creating && selectedId && isSuper && (
                   <button
                     type="button"
@@ -289,18 +223,10 @@ export function UnitsPanel() {
                   {saving ? <Loader2 className="animate-spin" size={12} /> : <Save size={12} />}
                   Salvar
                 </button>
-                <button
-                  type="button"
-                  onClick={closeDrawer}
-                  className="text-zinc-500 hover:text-zinc-200 p-1"
-                >
-                  <X size={16} />
-                </button>
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6">
-              <div className="space-y-6">
+            <div className="pt-4 space-y-6">
               <Section title="Identidade">
                 <Field
                   label="Nome"
@@ -495,11 +421,84 @@ export function UnitsPanel() {
                 )}
               </Section>
 
-              </div>
             </div>
-          </aside>
+          </div>
         </div>
-      )}
+      </div>
+    );
+  }
+
+  // Grid view — quando nenhuma unidade está sendo editada.
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-6xl mx-auto px-8 pt-10 pb-6">
+        {/* Header: título + nova */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex-1" />
+          <h1 className="text-2xl font-semibold text-zinc-100 text-center">Escolha uma conta</h1>
+          <div className="flex-1 flex justify-end">
+            {isSuper && (
+              <button
+                type="button"
+                onClick={startCreate}
+                className="text-xs px-3 py-1.5 rounded-md bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/30 inline-flex items-center gap-1.5 hover:bg-brand-500/30"
+              >
+                <Plus size={13} />
+                Nova unidade
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="max-w-md mx-auto mb-10">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Pesquisar sua conta"
+              className="w-full bg-zinc-900/60 border border-zinc-800 rounded-md text-sm pl-9 pr-3 py-2 text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-brand-500/40"
+            />
+          </div>
+        </div>
+
+        {ctxLoading && (
+          <div className="flex justify-center py-12">
+            <Loader2 className="animate-spin text-zinc-500" size={18} />
+          </div>
+        )}
+
+        {!ctxLoading && filteredUnits.length === 0 && (
+          <div className="text-center text-sm text-zinc-500 py-12">
+            {search ? 'Nenhuma unidade bate com a busca.' : 'Nenhuma unidade ainda.'}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-x-4 gap-y-8">
+          {filteredUnits.map((u) => (
+            <UnitCard
+              key={u.id}
+              unit={u}
+              onOpen={() => {
+                setCreating(false);
+                setSelectedId(u.id);
+              }}
+              onClone={() => void handleClone(u)}
+              onDelete={() => void handleDelete(u)}
+              menuOpen={openMenuId === u.id}
+              onMenuToggle={(e) => {
+                e.stopPropagation();
+                setOpenMenuId(openMenuId === u.id ? null : u.id);
+              }}
+              cloning={cloningId === u.id}
+              canEdit={isSuper || user?.unitId === u.id}
+              canDelete={isSuper}
+              canClone={isSuper}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

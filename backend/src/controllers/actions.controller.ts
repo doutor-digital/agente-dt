@@ -16,6 +16,7 @@ import { logger } from '../lib/logger.js';
 
 const ACTION_KINDS: ActionKind[] = [
   'add_tag',
+  'move_stage',
   'transfer_with_permission',
   'transfer_without_permission',
 ];
@@ -23,6 +24,11 @@ const ACTION_KINDS: ActionKind[] = [
 // Params depende do kind — usamos validação por união discriminada.
 const addTagParams = z.object({
   tags: z.array(z.string().min(1).max(80)).min(1).max(10),
+});
+const moveStageParams = z.object({
+  statusId: z.coerce.number().int().positive(),
+  pipelineId: z.coerce.number().int().positive().optional(),
+  statusLabel: z.string().max(120).optional(),
 });
 const transferParams = z.object({
   includeSummary: z.boolean().default(true),
@@ -44,6 +50,15 @@ const actionInputSchema = z
           code: 'custom',
           path: ['actionParams'],
           message: `add_tag exige { tags: string[] } — ${r.error.message}`,
+        });
+      }
+    } else if (data.actionKind === 'move_stage') {
+      const r = moveStageParams.safeParse(data.actionParams);
+      if (!r.success) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['actionParams'],
+          message: `move_stage exige { statusId: number, pipelineId?: number } — ${r.error.message}`,
         });
       }
     } else if (
