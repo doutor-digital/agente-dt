@@ -242,15 +242,42 @@ function buildHttp(creds: KommoCreds): AxiosInstance {
   const http = axios.create({
     baseURL: `https://${creds.subdomain}.kommo.com/api/v4`,
     timeout: 15_000,
+    // RFC 8259 já manda `application/json` ser UTF-8, mas alguns proxies/CDNs
+    // na frente do Kommo tratam como ASCII quando não tem charset explícito.
+    // Forçar elimina ambiguidade.
     headers: {
       Authorization: `Bearer ${creds.accessToken}`,
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/json; charset=utf-8',
       Accept: 'application/json',
+      'Accept-Charset': 'utf-8',
     },
+    // Garante que o axios serialize o JSON via JSON.stringify nativo (UTF-16
+    // → UTF-8 limpo), sem passar por encoders legados que podem stripar
+    // surrogate pairs (que é como os emojis fora do BMP são representados).
+    responseType: 'json',
   });
 
   http.interceptors.request.use((config) => {
     (config as { metadata?: { start: number } }).metadata = { start: performance.now() };
+    // Log defensivo: serializa o body como UTF-8 buffer e mostra os bytes
+    // do emoji se houver. Útil quando o paciente reclama "não chegou emoji".
+    if (config.data && typeof config.data === 'object') {
+      const json = JSON.stringify(config.data);
+      const hasEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(json);
+      if (hasEmoji) {
+        const bytes = Buffer.byteLength(json, 'utf8');
+        logger.debug(
+          {
+            url: config.url,
+            method: config.method,
+            jsonLen: json.length,
+            bytes,
+            preview: json.slice(0, 200),
+          },
+          'kommo http: payload contém emoji, mandando como UTF-8',
+        );
+      }
+    }
     return config;
   });
   http.interceptors.response.use(
