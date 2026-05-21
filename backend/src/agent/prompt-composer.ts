@@ -231,6 +231,36 @@ function renderBusinessHours(unit: Unit): string {
   responda normalmente quando estiver no ar.`;
 }
 
+function renderCollectName(unit: Unit): string {
+  if (!unit.collectNameEnabled) return '';
+  return `# COLETA DE NOME
+- Se você AINDA não souber o nome do paciente, pergunte de forma natural e
+  acolhedora na PRIMEIRA ou SEGUNDA resposta (ex: "Antes de continuar, como
+  posso te chamar?"). Não fique repetindo se ele preferir não responder.
+- Assim que o paciente disser o nome, chame IMEDIATAMENTE
+  atualizar_titulo_lead(leadId, "<Nome>") pra mudar o título do card no Kommo
+  de "WhatsApp Web/Visitante" para o nome real. Essa chamada é silenciosa —
+  NÃO fale "atualizei seu cadastro" ou similar.
+- Depois de obtido, USE o nome do paciente nas respostas seguintes (sem abusar).`;
+}
+
+function renderCollectSource(unit: Unit): string {
+  if (!unit.collectSourceEnabled) return '';
+  const opts = (unit.collectSourceOptions ?? []).filter(Boolean);
+  const optsLine =
+    opts.length > 0
+      ? `Sugestões pra apresentar (cite naturalmente, sem virar checklist): ${opts.join(', ')}.`
+      : 'Pergunte aberto, sem sugerir opções fixas.';
+  return `# COLETA DE ORIGEM (COMO CONHECEU)
+- Em algum momento dos primeiros turnos, pergunte de forma natural por onde o
+  paciente conheceu a clínica (ex: "Pra ficar curiosa: por onde você nos
+  conheceu?"). Faça UMA vez só — se ele desconversar, deixa pra lá.
+- ${optsLine}
+- Quando ele responder, chame aplicar_tag("Origem: <fonte>"), exemplo:
+  aplicar_tag("Origem: Instagram"). Use exatamente o prefixo "Origem: " pra
+  facilitar o filtro no Kommo. Tag silenciosa — NÃO mencione na resposta.`;
+}
+
 function renderFollowUp(unit: Unit): string {
   if (!unit.followUpEnabled) return '';
   const msg = unit.followUpMessage?.trim();
@@ -385,6 +415,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderContactCollection(unit),
+    renderCollectName(unit),
+    renderCollectSource(unit),
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
     renderFollowUp(unit),

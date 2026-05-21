@@ -158,6 +158,17 @@ model Unit {
   followUpAfterHours Int     @default(24) @map("follow_up_after_hours")
   followUpMessage    String? @map("follow_up_message")
 
+  // COLETA DE NOME — IA pergunta o nome do lead e atualiza o título do lead
+  // no Kommo via tool `atualizar_titulo_lead`. Útil quando o lead chega
+  // anônimo ("Visitante", "WhatsApp Web", etc).
+  collectNameEnabled Boolean @default(false) @map("collect_name_enabled")
+
+  // COLETA DE ORIGEM — IA pergunta "como conheceu a clínica". A resposta
+  // vira uma tag "Origem: <fonte>" via `aplicar_tag`. As opções abaixo
+  // são oferecidas como sugestão (mas o lead pode dizer qualquer coisa).
+  collectSourceEnabled Boolean  @default(false) @map("collect_source_enabled")
+  collectSourceOptions String[] @default(["Instagram", "Google", "Indicação", "TikTok", "Facebook"]) @map("collect_source_options")
+
   // GOOGLE CALENDAR — habilita a tool `agendar_consulta` da IA.
   // Conectado via OAuth 2.0; refreshToken usado pra renovar accessToken.
   googleAccessToken       String?   @map("google_access_token")

@@ -73,6 +73,7 @@ import {
   openaiDebugHandler,
 } from '../controllers/prompts.controller.js';
 import { loginHandler, logoutHandler, meHandler } from '../controllers/auth.controller.js';
+import { playgroundRunHandler } from '../controllers/playground.controller.js';
 import {
   listUsersHandler,
   createUserHandler,
@@ -133,6 +134,7 @@ apiRouter.get('/units/:id/openai-debug', requireUnitAccess, openaiDebugHandler);
 apiRouter.get('/units/:id/prompt-performance', requireUnitAccess, getPromptPerformanceHandler);
 apiRouter.get('/units/:id/flagged-messages', requireUnitAccess, listFlaggedMessagesHandler);
 apiRouter.post('/units/:id/preview-prompt', requireUnitAccess, previewPromptHandler);
+apiRouter.post('/units/:id/playground/run', requireUnitAccess, playgroundRunHandler);
 
 // Kommo helpers — UNIT_ADMIN também pode (precisa configurar a própria unit).
 apiRouter.get('/units/:id/kommo-pipelines', requireUnitAccess, kommoPipelinesHandler);

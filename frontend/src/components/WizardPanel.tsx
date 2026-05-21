@@ -29,10 +29,12 @@ import {
   ChevronRight,
   Clock,
   Coffee,
+  Compass,
   Eye,
   EyeOff,
   Flame,
   Gift,
+  IdCard,
   Loader2,
   MessageSquarePlus,
   PhoneCall,
@@ -73,6 +75,9 @@ type WizardDraft = Pick<
   | 'pipelineIntents'
   | 'contactCollectionEnabled'
   | 'contactCollectionAfterTurns'
+  | 'collectNameEnabled'
+  | 'collectSourceEnabled'
+  | 'collectSourceOptions'
   | 'welcomeCouponEnabled'
   | 'welcomeCouponMessage'
   | 'businessHoursEnabled'
@@ -120,6 +125,9 @@ function unitToDraft(u: Unit): WizardDraft {
     pipelineIntents: u.pipelineIntents,
     contactCollectionEnabled: u.contactCollectionEnabled,
     contactCollectionAfterTurns: u.contactCollectionAfterTurns,
+    collectNameEnabled: u.collectNameEnabled,
+    collectSourceEnabled: u.collectSourceEnabled,
+    collectSourceOptions: u.collectSourceOptions ?? [],
     welcomeCouponEnabled: u.welcomeCouponEnabled,
     welcomeCouponMessage: u.welcomeCouponMessage,
     businessHoursEnabled: u.businessHoursEnabled,
@@ -236,11 +244,11 @@ export function WizardPanel() {
           <div>
             <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
               <Sparkles size={18} className="text-brand-300" />
-              Configurar a IA
+              ✨ Configurar a IA
             </h1>
             <p className="text-xs text-zinc-500 mt-0.5">
               Modo guiado: ative só o que quer, preencha os campos, e salve. A IA usa as novas
-              configurações na próxima mensagem.
+              configurações na próxima mensagem. 🚀
             </p>
           </div>
           <button
@@ -256,7 +264,7 @@ export function WizardPanel() {
         {/* 1. PERSONA */}
         <FeatureCard
           icon={<UserCog size={16} className="text-brand-300" />}
-          title="Persona da IA"
+          title="🎭 Persona da IA"
           subtitle="Quem é o agente, como ele fala."
           enabled
           alwaysOn
@@ -326,7 +334,7 @@ export function WizardPanel() {
         {/* 2. AUTO-QUALIFICAÇÃO */}
         <FeatureCard
           icon={<Flame size={16} className="text-orange-400" />}
-          title="Auto-qualificação Quente/Frio"
+          title="🔥 Auto-qualificação Quente/Frio"
           subtitle="A IA aplica tags automaticamente conforme o interesse do cliente."
           enabled={draft.qualificationEnabled}
           onToggle={(v) => update({ qualificationEnabled: v })}
@@ -354,7 +362,7 @@ export function WizardPanel() {
         {/* 3. HANDOFF HUMANO */}
         <FeatureCard
           icon={<PhoneCall size={16} className="text-rose-400" />}
-          title="Handoff humano automático"
+          title="🙋‍♀️ Handoff humano automático"
           subtitle="Quando o cliente usa certas palavras, a IA pausa e chama um humano."
           enabled={draft.handoffEnabled}
           onToggle={(v) => update({ handoffEnabled: v })}
@@ -373,7 +381,7 @@ export function WizardPanel() {
         {/* 4. PIPELINE INTENTS */}
         <FeatureCard
           icon={<WorkflowIcon size={16} className="text-sky-400" />}
-          title="Pipeline automático por intenção"
+          title="🔀 Pipeline automático por intenção"
           subtitle="A IA move o lead de etapa baseado no que o cliente diz."
           enabled={!!draft.pipelineIntents && Object.keys(draft.pipelineIntents).length > 0}
           onToggle={(v) =>
@@ -421,7 +429,7 @@ export function WizardPanel() {
         {/* 5. COLETA DE CONTATO */}
         <FeatureCard
           icon={<MessageSquarePlus size={16} className="text-emerald-400" />}
-          title="Coleta proativa de contato"
+          title="📩 Coleta proativa de contato"
           subtitle="Depois de N turnos, a IA pede email/telefone com naturalidade."
           enabled={draft.contactCollectionEnabled}
           onToggle={(v) => update({ contactCollectionEnabled: v })}
@@ -441,10 +449,73 @@ export function WizardPanel() {
           </p>
         </FeatureCard>
 
+        {/* 5b. COLETAR NOME DO LEAD */}
+        <FeatureCard
+          icon={<IdCard size={16} className="text-fuchsia-400" />}
+          title="🪪 Coletar nome do lead"
+          subtitle="A IA pergunta o nome e atualiza o título do card no Kommo automaticamente."
+          enabled={draft.collectNameEnabled}
+          onToggle={(v) => update({ collectNameEnabled: v })}
+        >
+          <p className="text-[11px] text-zinc-400 leading-relaxed">
+            Quando o lead chega anônimo (ex: "WhatsApp Web", "Visitante"), a IA pergunta o nome
+            de forma natural nas primeiras respostas. Assim que ele responder, a tool{' '}
+            <code className="text-[10px] px-1 py-0.5 rounded bg-zinc-900 text-fuchsia-300">
+              atualizar_titulo_lead
+            </code>{' '}
+            troca o título do card no Kommo. A IA não fala "atualizei seu cadastro" — passa
+            invisível pro lead.
+          </p>
+          <div className="mt-2 rounded-md bg-zinc-950/60 border border-zinc-800/60 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1">
+              Exemplo de pergunta da IA
+            </div>
+            <div className="text-[11px] text-zinc-300 italic">
+              "Antes de continuar, como posso te chamar? 😊"
+            </div>
+          </div>
+        </FeatureCard>
+
+        {/* 5c. COLETAR ORIGEM (POR ONDE CONHECEU) */}
+        <FeatureCard
+          icon={<Compass size={16} className="text-teal-400" />}
+          title="🧭 Como conheceu a clínica"
+          subtitle="A IA pergunta a origem e aplica tag 'Origem: <fonte>' no lead."
+          enabled={draft.collectSourceEnabled}
+          onToggle={(v) => update({ collectSourceEnabled: v })}
+        >
+          <p className="text-[11px] text-zinc-400 leading-relaxed">
+            A IA faz UMA pergunta natural sobre por onde o lead chegou na clínica. Quando ele
+            responder (Instagram, indicação, Google…), aplica uma tag{' '}
+            <code className="text-[10px] px-1 py-0.5 rounded bg-zinc-900 text-teal-300">
+              Origem: &lt;fonte&gt;
+            </code>{' '}
+            no Kommo pra você medir canais que mais convertem.
+          </p>
+          <div className="mt-3">
+            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+              Opções sugeridas (a IA cita naturalmente)
+            </label>
+            <KeywordList
+              keywords={draft.collectSourceOptions}
+              onChange={(opts) => update({ collectSourceOptions: opts })}
+              placeholder="ex: Instagram, Google, Indicação, TikTok"
+            />
+          </div>
+          <div className="mt-2 rounded-md bg-zinc-950/60 border border-zinc-800/60 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1">
+              Exemplo de pergunta da IA
+            </div>
+            <div className="text-[11px] text-zinc-300 italic">
+              "Aproveitando: por onde você nos conheceu? 🤔 (Instagram, indicação…)"
+            </div>
+          </div>
+        </FeatureCard>
+
         {/* 6. CUPOM */}
         <FeatureCard
           icon={<Gift size={16} className="text-pink-400" />}
-          title="Cupom de boas-vindas"
+          title="🎁 Cupom de boas-vindas"
           subtitle="Primeiro contato? A IA oferece um cupom."
           enabled={draft.welcomeCouponEnabled}
           onToggle={(v) => update({ welcomeCouponEnabled: v })}
@@ -461,7 +532,7 @@ export function WizardPanel() {
         {/* 7. HORÁRIO COMERCIAL */}
         <FeatureCard
           icon={<Clock size={16} className="text-amber-400" />}
-          title="Horário comercial"
+          title="🕒 Horário comercial"
           subtitle="Fora desse intervalo, a IA não responde — manda uma mensagem padrão."
           enabled={draft.businessHoursEnabled}
           onToggle={(v) => update({ businessHoursEnabled: v })}
@@ -530,7 +601,7 @@ export function WizardPanel() {
         {/* 8. FOLLOW-UP */}
         <FeatureCard
           icon={<Repeat size={16} className="text-violet-400" />}
-          title="Follow-up educado"
+          title="🔁 Follow-up educado"
           subtitle="A IA termina conversas inacabadas com um follow-up cordial."
           enabled={draft.followUpEnabled}
           onToggle={(v) => update({ followUpEnabled: v })}
@@ -560,7 +631,7 @@ export function WizardPanel() {
         {/* 9. A/B PROMPTS (placeholder) */}
         <FeatureCard
           icon={<TestTube size={16} className="text-zinc-500" />}
-          title="A/B test de prompts"
+          title="🧪 A/B test de prompts"
           subtitle="Compare versões do prompt e veja qual converte mais."
           enabled={false}
           disabled

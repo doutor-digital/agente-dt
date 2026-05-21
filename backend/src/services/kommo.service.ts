@@ -282,6 +282,19 @@ export class KommoClient {
   }
 
   /**
+   * Atualiza o `name` do lead — que é o que aparece como título no Kommo.
+   * Usado pela tool `atualizar_titulo_lead` quando a IA descobre o nome real
+   * do paciente e quer trocar o título genérico ("WhatsApp Web", "Visitante").
+   */
+  async updateLeadName(leadId: number, name: string): Promise<void> {
+    try {
+      await this.http.patch(`/leads/${leadId}`, { name });
+    } catch (err) {
+      wrapAxiosError(err, `updateLeadName(${leadId}, ${name})`);
+    }
+  }
+
+  /**
    * Lista TODOS os leads paginando até `maxPages` (default 4 = 1000 leads).
    * Usado pelo dashboard pra contar leads por etapa do funil. NÃO traz custom
    * fields nem tags pra ficar leve.

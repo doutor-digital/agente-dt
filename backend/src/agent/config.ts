@@ -91,6 +91,14 @@ const DEFAULT_TOOLS: ToolConfig[] = [
       'Kommo. Use quando o paciente pedir um humano, demonstrar irritação ou ' +
       'trazer caso clínico delicado.',
   },
+  {
+    name: 'atualizar_titulo_lead',
+    enabled: true,
+    description:
+      'Atualiza o título (nome) do lead no Kommo. Use IMEDIATAMENTE quando o ' +
+      'paciente disser o próprio nome — o título do card no Kommo deixa de ser ' +
+      'genérico e passa a ser o nome real.',
+  },
 ];
 
 const DEFAULT_WORKFLOW: WorkflowRule[] = [];

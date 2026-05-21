@@ -86,6 +86,9 @@ const unitInputBase = {
   followUpEnabled: z.boolean().optional(),
   followUpAfterHours: z.coerce.number().int().min(1).max(720).optional(),
   followUpMessage: z.string().max(500).nullable().optional(),
+  collectNameEnabled: z.boolean().optional(),
+  collectSourceEnabled: z.boolean().optional(),
+  collectSourceOptions: z.array(z.string().min(1).max(50)).max(20).optional(),
 };
 
 const createSchema = z.object(unitInputBase);

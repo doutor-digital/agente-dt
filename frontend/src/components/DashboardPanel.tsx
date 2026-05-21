@@ -161,41 +161,41 @@ export function DashboardPanel() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <KpiCard
               icon={<Users size={18} />}
-              label="Leads únicos"
+              label="👥 Leads únicos"
               value={data?.kpis.uniqueLeads ?? 0}
               sublabel="pacientes distintos no período"
               color="brand"
             />
             <KpiCard
               icon={<MessageCircleMore size={18} />}
-              label="Conversas respondidas"
+              label="💬 Conversas respondidas"
               value={data?.kpis.answeredConversations ?? 0}
               sublabel="onde a IA chegou a responder"
               color="sky"
             />
             <KpiCard
               icon={<CalendarDays size={18} />}
-              label="Leads do fim de semana"
+              label="🌴 Leads do fim de semana"
               value={data?.kpis.weekendLeads ?? 0}
-              sublabel="criados em sábado/domingo · clique pra ver"
+              sublabel="criados em sáb/dom"
               color="cyan"
               onClick={() => setOpenBucket('weekend_leads')}
             />
             <KpiCard
               icon={<CalendarDays size={18} />}
-              label="Conversas de fim de semana"
+              label="📅 Conversas de fim de semana"
               value={data?.kpis.weekendConversations ?? 0}
-              sublabel="qualquer mensagem em sáb/dom · clique pra ver"
+              sublabel="qualquer mensagem em sáb/dom"
               color="violet"
               onClick={() => setOpenBucket('weekend_conversations')}
             />
             <KpiCard
               icon={<Repeat size={18} />}
-              label="Taxa de transferência"
+              label="🤝 Taxa de transferência"
               value={data ? `${(data.kpis.handoffRate * 100).toFixed(0)}%` : '—'}
               sublabel={
                 data
-                  ? `${data.kpis.handoffCount} escalados pra humano · clique pra ver`
+                  ? `${data.kpis.handoffCount} escalados pra humano`
                   : 'sem dados'
               }
               color="amber"
@@ -203,7 +203,7 @@ export function DashboardPanel() {
             />
             <KpiCard
               icon={<Brain size={18} />}
-              label="Tempo médio de resposta"
+              label="⏱️ Tempo médio de resposta"
               value={
                 data && data.kpis.avgResponseLatencyMs > 0
                   ? `${(data.kpis.avgResponseLatencyMs / 1000).toFixed(1)}s`
@@ -214,15 +214,15 @@ export function DashboardPanel() {
             />
             <KpiCard
               icon={<AlertCircle size={18} />}
-              label="Leads não respondidos"
+              label="🚨 Leads não respondidos"
               value={data?.kpis.unansweredQuestions ?? 0}
-              sublabel="sem reply em 60min · clique pra ver"
+              sublabel="sem reply em 60min"
               color="orange"
               onClick={() => setOpenBucket('unanswered')}
             />
             <KpiCard
               icon={<Clock4 size={18} />}
-              label="Hora de pico"
+              label="🔥 Hora de pico"
               value={
                 data?.kpis.peakHour !== null && data?.kpis.peakHour !== undefined
                   ? `${data.kpis.peakHour}h`

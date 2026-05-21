@@ -44,6 +44,11 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     'com um humano; (b) a situação é clínica/sensível e exige atendente real; ' +
     '(c) o paciente está agitado/insatisfeito. Após pausar, responda UMA frase ' +
     'avisando que um humano vai assumir.',
+  atualizar_titulo_lead:
+    'Atualiza o título (nome) do lead no Kommo. Use IMEDIATAMENTE quando o ' +
+    'paciente disser o próprio nome — o título do card no Kommo deixa de ser ' +
+    'genérico ("WhatsApp Web", "Visitante") e passa a ser o nome real. ' +
+    'Idempotente: passar o mesmo nome duas vezes não muda nada.',
 };
 
 // ---------------------------------------------------------------------------
@@ -222,7 +227,55 @@ export function buildTools({
     },
   });
 
-  return [aplicar_tag, mover_etapa, pausar_ia];
+  const atualizarTituloLeadSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    nome: z
+      .string()
+      .min(1)
+      .max(120)
+      .describe(
+        'Nome real do paciente como ele se identificou. Use o que ele disse, ' +
+          'com inicial maiúscula (ex: "Maria Silva"). Não invente sobrenomes.',
+      ),
+  });
+
+  const atualizar_titulo_lead = new DynamicStructuredTool({
+    name: 'atualizar_titulo_lead',
+    description: desc('atualizar_titulo_lead'),
+    schema: atualizarTituloLeadSchema,
+    func: async ({ leadId, nome }) => {
+      const t0 = performance.now();
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: atualizar título do lead ${leadId} para "${nome}"`,
+        payload: { leadId, nome },
+      });
+
+      try {
+        await kommo.updateLeadName(leadId, nome);
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Título do lead ${leadId} atualizado para "${nome}"`,
+          payload: { leadId, nome },
+          latencyMs: latency,
+        });
+        return `OK — título do lead ${leadId} agora é "${nome}" (${latency}ms).`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha ao atualizar título: ${msg}`,
+          payload: { leadId, nome, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao atualizar título: ${msg}`;
+      }
+    },
+  });
+
+  return [aplicar_tag, mover_etapa, pausar_ia, atualizar_titulo_lead];
 }
 
 export type AgentTools = ReturnType<typeof buildTools>;

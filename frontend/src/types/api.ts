@@ -177,6 +177,10 @@ export interface Unit {
   followUpAfterHours: number;
   followUpMessage: string | null;
 
+  collectNameEnabled: boolean;
+  collectSourceEnabled: boolean;
+  collectSourceOptions: string[];
+
   createdAt: string;
   updatedAt: string;
   _hasSecrets?: Record<string, boolean>;

@@ -9,6 +9,7 @@ import { PromptsPanel } from './components/PromptsPanel';
 import { UnitsPanel } from './components/UnitsPanel';
 import { IntegrationsPanel } from './components/IntegrationsPanel';
 import { WizardPanel } from './components/WizardPanel';
+import { PlaygroundPanel } from './components/PlaygroundPanel';
 import { FontesPanel } from './components/FontesPanel';
 import { AcoesPanel } from './components/AcoesPanel';
 import { AppSidebar, type AppTab } from './components/AppSidebar';
@@ -82,6 +83,7 @@ function Shell() {
         {tab === 'prompts' && <PromptsPanel />}
         {tab === 'integrations' && <IntegrationsPanel />}
         {tab === 'wizard' && <WizardPanel />}
+        {tab === 'playground' && <PlaygroundPanel />}
         {tab === 'sources' && <FontesPanel />}
         {tab === 'actions' && <AcoesPanel />}
         {tab === 'config' && <AgentConfigPanel />}

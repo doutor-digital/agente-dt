@@ -295,6 +295,20 @@ export const api = {
     return data;
   },
 
+  async playgroundRun(
+    unitId: string,
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  ): Promise<{
+    reply: string;
+    actions: Array<{ tool: string; args: Record<string, unknown>; result: string }>;
+  }> {
+    const { data } = await http.post<{
+      reply: string;
+      actions: Array<{ tool: string; args: Record<string, unknown>; result: string }>;
+    }>(`/units/${unitId}/playground/run`, { messages }, { timeout: 60_000 });
+    return data;
+  },
+
   // -------------------------------------------------------------------------
   // Templates
   // -------------------------------------------------------------------------
