@@ -602,17 +602,16 @@ export class KommoClient {
       logger.debug({ leadId }, 'sendChatReply: salesbot bypass ativado, indo direto pra /chats');
     } else if (this.creds.salesbotId && this.creds.replyFieldId) {
       try {
-        // Salesbot do Kommo trunca tudo após o primeiro emoji — removemos
-        // antes de enviar por essa rota. Pra manter emojis no WhatsApp final,
-        // o usuário precisa marcar `kommoBypassSalesbot` na Unit.
-        const sanitized = stripEmojis(text);
-        if (sanitized !== text) {
-          logger.info(
-            { leadId, originalLen: text.length, sanitizedLen: sanitized.length },
-            'kommo salesbot: emojis removidos pra evitar truncamento (ative kommoBypassSalesbot pra preservar)',
-          );
-        }
-        const chunks = splitIntoChunks(sanitized, 240);
+        // Kommo aceita emoji nativamente — passamos a string INTEIRA, sem
+        // sanitização. Histórico: já tivemos um strip aqui pra contornar
+        // truncamento do Salesbot, mas o usuário confirmou que o Kommo
+        // aceita emoji quando o campo é editado manualmente, então o
+        // problema era outro (config do Salesbot template ou cache).
+        const chunks = splitIntoChunks(text, 240);
+        logger.debug(
+          { leadId, originalText: text, chunks: chunks.length },
+          'kommo salesbot: enviando resposta da IA',
+        );
         let lastData: unknown = null;
         for (let i = 0; i < chunks.length; i++) {
           lastData = await this.runSalesbot({
