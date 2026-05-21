@@ -132,6 +132,7 @@ export interface Unit {
   kommoReplyFieldId: number | null;
   kommoPausedFieldId: number | null;
   kommoWonStatusIds: number[];
+  kommoBypassSalesbot: boolean;
   openaiApiKey: string | null;
   openaiAdminKey: string | null;
   openaiModel: string;

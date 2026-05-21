@@ -72,7 +72,7 @@ const NAV: NavItem[] = [
   { id: 'llm', label: 'Chamadas IA', icon: Cpu, group: 'secondary' },
   { id: 'prompts', label: 'Prompts', icon: Sparkles, group: 'secondary' },
   { id: 'integrations', label: 'Integrações', icon: Cable, group: 'secondary' },
-  { id: 'config', label: 'Avançado', icon: Settings, group: 'secondary' },
+  { id: 'config', label: 'Avançado (técnico)', icon: Settings, group: 'secondary' },
   { id: 'units', label: 'Unidades', icon: Building2, group: 'secondary', superOnly: true },
   { id: 'users', label: 'Usuários', icon: UserCog, group: 'secondary', superOnly: true },
 ];

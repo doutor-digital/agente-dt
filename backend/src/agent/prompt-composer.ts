@@ -151,20 +151,41 @@ function renderSources(unit: Unit): string {
   const papel = unit.sourcePapel?.trim();
   const produtos = unit.sourceProdutos?.trim();
   const negocio = unit.sourceNegocio?.trim();
+  if (!papel && !produtos && !negocio) return '';
+
+  // Cabeçalho de PRIORIDADE — instrui a LLM a tratar as Fontes como
+  // verdade absoluta. Sem isso a IA dilui a informação ao misturar com
+  // conhecimento pré-treinado e pode inventar coisas que não estão lá.
+  sections.push(
+    [
+      '# 📚 FONTES OFICIAIS DA CLÍNICA — PRIORIDADE MÁXIMA',
+      'O que está nesta seção é a verdade absoluta sobre o negócio. RESPONDA',
+      'sempre baseado APENAS nestas informações. Se a pergunta do paciente',
+      'não tem resposta aqui (e nem na base de conhecimento abaixo), diga',
+      'honestamente que vai checar com a equipe — NUNCA invente preços,',
+      'horários, procedimentos, prazos ou políticas que não estejam escritos',
+      'aqui. Isso vale acima de qualquer regra de tom ou estilo.',
+    ].join('\n'),
+  );
   if (papel) {
-    sections.push(`# FATOS IMPORTANTES (PAPEL E FLUXO)\n${papel}`);
+    sections.push(`## 📋 Papel e Fluxo da IA\n${papel}`);
   }
   if (produtos) {
-    sections.push(`# PRODUTOS E SERVIÇOS\n${produtos}`);
+    sections.push(`## 💼 Produtos e Serviços\n${produtos}`);
   }
   if (negocio) {
-    sections.push(`# VISÃO GERAL DO NEGÓCIO\n${negocio}`);
+    sections.push(`## 🏢 Visão Geral do Negócio\n${negocio}`);
   }
   return sections.join('\n\n');
 }
 
 function renderRulesGlobal(): string {
   return `# REGRAS GERAIS DE TOM
+- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,
+  procedimentos, prazos, políticas, médicos, especialidades, endereços).
+  Use APENAS o que está nas Fontes Oficiais acima OU na Base de Conhecimento.
+  Se a informação não está em nenhum dos dois, responda: "Vou confirmar isso
+  com a equipe e te retorno, tá? 😊". Pequenas variações de tom OK; inventar fatos NÃO.
 - Respostas curtas: 1 a 3 frases. WhatsApp não é email.
 - NUNCA use as palavras técnicas: "lead", "ID", "tag", "etapa", "pipeline", "tool", "campo", "sistema", "erro", "API", "função".
 - Se algo deu errado por trás (tool falhou), NÃO conte ao cliente. Responda como se tudo estivesse normal.
@@ -471,8 +492,15 @@ export function composeSystemPrompt(input: ComposeInput): string {
     isFirstTurn = false,
   } = input;
 
-  // Bloco 1: persona base. Se o usuário escreveu um systemPrompt customizado,
-  // ele aparece PRIMEIRO (tem prioridade sobre o auto-gerado).
+  // ORDEM DOS BLOCOS — pensada pra qualidade da resposta:
+  //   1. Persona auto-gerada do Wizard (quem a IA é, como fala, paleta de emoji).
+  //   2. FONTES OFICIAIS — verdade absoluta sobre o negócio, vêm logo cedo pra
+  //      a LLM ancorar antes das regras de tom.
+  //   3. customBase opcional do "Avançado" — instrução extra do super-admin,
+  //      vem DEPOIS das Fontes pra nunca sobrescrever (antes da refatoração,
+  //      podia sobrescrever a persona e diluía as Fontes).
+  //   4. Regras globais (anti-alucinação, tom, fechamento com pergunta).
+  //   5. Feature blocks do Wizard (coleta de nome, qualificação, etc).
   const customBase = (agentConfigPrompt && agentConfigPrompt.trim().length > 0
     ? agentConfigPrompt
     : unit.systemPrompt
@@ -480,17 +508,18 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   const blocks: string[] = [];
 
-  if (customBase) {
-    blocks.push(customBase);
-  } else {
-    // Sem texto custom — usa persona auto-gerada.
-    blocks.push(renderPersona(unit));
-  }
+  // SEMPRE inclui a persona auto-gerada (não é mais opcional). O customBase
+  // virou aditivo, não substituto — assim as Fontes nunca ficam órfãs.
+  blocks.push(renderPersona(unit));
 
-  // Fontes — 3 docs estruturados da aba Fontes vêm logo após a persona pra
-  // que a IA tenha o contexto do negócio antes das regras operacionais.
+  // Fontes oficiais vêm BEM CEDO. São a verdade do negócio.
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) blocks.push(sourcesBlock);
+
+  // Texto avançado opcional — adiciona, não sobrescreve.
+  if (customBase) {
+    blocks.push(`# 🔧 INSTRUÇÕES EXTRAS (avançado)\n${customBase}`);
+  }
 
   blocks.push(renderRulesGlobal());
 

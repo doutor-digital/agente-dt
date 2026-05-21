@@ -126,6 +126,34 @@ export class KommoApiError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// stripEmojis — remove emojis e símbolos pictográficos do texto.
+//
+// O Salesbot do Kommo (rota PATCH no campo "Resposta IA" + POST /salesbot/run)
+// tem um bug conhecido: trunca tudo que vem depois do primeiro caractere
+// multibyte UTF-8 (emoji). "Boa tarde! 🌼 Como posso..." chega como "Boa tarde!".
+//
+// Pra essa rota, removemos emojis preservando o texto. Quem quiser MANTER
+// emojis no WhatsApp final tem que ativar `kommoBypassSalesbot` na Unit, que
+// envia direto via /chats/{chatId}/messages (sem passar pelo Salesbot).
+//
+// Regex cobre: emoticons, símbolos & pictograms, transportes, bandeiras,
+// flags compostas, ZWJ sequences. Mantém pontuação ASCII e letras com acento.
+// ---------------------------------------------------------------------------
+
+export function stripEmojis(text: string): string {
+  // Unicode property escape — suporte em todos os Node ≥ 12.
+  // - \p{Extended_Pictographic}: emoticons, símbolos pictográficos, transportes
+  // - \p{Regional_Indicator}: pares que formam bandeiras (🇧🇷, 🇺🇸, …)
+  // - ZWJ + variation selectors + skin tone modifiers: removidos juntos
+  return text
+    .replace(/\p{Extended_Pictographic}(‍\p{Extended_Pictographic})*[️‍]*/gu, '')
+    .replace(/\p{Regional_Indicator}{2}/gu, '')
+    .replace(/[️‍\u{1F3FB}-\u{1F3FF}]/gu, '')
+    .replace(/ {2,}/g, ' ') // colapsa espaços extras deixados pela remoção
+    .trim();
+}
+
+// ---------------------------------------------------------------------------
 // splitIntoChunks — quebra texto longo em pedaços ≤ maxLen respeitando
 // fronteiras naturais (parágrafo > frase > palavra).
 //
@@ -175,9 +203,19 @@ interface KommoCreds {
   accessToken: string;
   salesbotId: number | null;
   replyFieldId: number | null;
+  bypassSalesbot: boolean;
 }
 
-function credsFromUnit(unit: Pick<Unit, 'kommoSubdomain' | 'kommoAccessToken' | 'kommoSalesbotId' | 'kommoReplyFieldId'>): KommoCreds {
+function credsFromUnit(
+  unit: Pick<
+    Unit,
+    | 'kommoSubdomain'
+    | 'kommoAccessToken'
+    | 'kommoSalesbotId'
+    | 'kommoReplyFieldId'
+    | 'kommoBypassSalesbot'
+  >,
+): KommoCreds {
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     throw new Error('Unit sem credenciais Kommo configuradas');
   }
@@ -186,6 +224,7 @@ function credsFromUnit(unit: Pick<Unit, 'kommoSubdomain' | 'kommoAccessToken' | 
     accessToken: unit.kommoAccessToken,
     salesbotId: unit.kommoSalesbotId,
     replyFieldId: unit.kommoReplyFieldId,
+    bypassSalesbot: unit.kommoBypassSalesbot ?? false,
   };
 }
 
@@ -195,6 +234,7 @@ function credsFromEnv(): KommoCreds {
     accessToken: env.KOMMO_ACCESS_TOKEN,
     salesbotId: env.KOMMO_SALESBOT_ID ?? null,
     replyFieldId: env.KOMMO_REPLY_FIELD_ID ?? null,
+    bypassSalesbot: false,
   };
 }
 
@@ -556,9 +596,23 @@ export class KommoClient {
     talkId,
     contactId,
   }: SendChatReplyParams): Promise<SendChatReplyResult> {
-    if (this.creds.salesbotId && this.creds.replyFieldId) {
+    // Bypass: usuário marcou no Wizard pra pular o Salesbot porque ele
+    // estava cortando/sobrescrevendo a mensagem. Pula direto pro caminho 2.
+    if (this.creds.bypassSalesbot) {
+      logger.debug({ leadId }, 'sendChatReply: salesbot bypass ativado, indo direto pra /chats');
+    } else if (this.creds.salesbotId && this.creds.replyFieldId) {
       try {
-        const chunks = splitIntoChunks(text, 240);
+        // Salesbot do Kommo trunca tudo após o primeiro emoji — removemos
+        // antes de enviar por essa rota. Pra manter emojis no WhatsApp final,
+        // o usuário precisa marcar `kommoBypassSalesbot` na Unit.
+        const sanitized = stripEmojis(text);
+        if (sanitized !== text) {
+          logger.info(
+            { leadId, originalLen: text.length, sanitizedLen: sanitized.length },
+            'kommo salesbot: emojis removidos pra evitar truncamento (ative kommoBypassSalesbot pra preservar)',
+          );
+        }
+        const chunks = splitIntoChunks(sanitized, 240);
         let lastData: unknown = null;
         for (let i = 0; i < chunks.length; i++) {
           lastData = await this.runSalesbot({
@@ -614,7 +668,14 @@ export class KommoClient {
 // ---------------------------------------------------------------------------
 
 export function createKommoClient(
-  unit: Pick<Unit, 'kommoSubdomain' | 'kommoAccessToken' | 'kommoSalesbotId' | 'kommoReplyFieldId'>,
+  unit: Pick<
+    Unit,
+    | 'kommoSubdomain'
+    | 'kommoAccessToken'
+    | 'kommoSalesbotId'
+    | 'kommoReplyFieldId'
+    | 'kommoBypassSalesbot'
+  >,
 ): KommoClient {
   const creds = credsFromUnit(unit);
   return new KommoClient(creds, buildHttp(creds));
@@ -628,7 +689,15 @@ export function createKommoClient(
  * é proposital — se a checagem cair, melhor a IA responder do que ficar mudo.
  */
 export async function isLeadPaused(
-  unit: Pick<Unit, 'kommoSubdomain' | 'kommoAccessToken' | 'kommoSalesbotId' | 'kommoReplyFieldId' | 'kommoPausedFieldId'>,
+  unit: Pick<
+    Unit,
+    | 'kommoSubdomain'
+    | 'kommoAccessToken'
+    | 'kommoSalesbotId'
+    | 'kommoReplyFieldId'
+    | 'kommoPausedFieldId'
+    | 'kommoBypassSalesbot'
+  >,
   leadId: number,
 ): Promise<boolean> {
   if (!unit.kommoPausedFieldId) return false;

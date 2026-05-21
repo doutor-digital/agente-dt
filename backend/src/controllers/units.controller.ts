@@ -43,6 +43,7 @@ const unitInputBase = {
   kommoReplyFieldId: z.coerce.number().int().nullable().optional(),
   kommoPausedFieldId: z.coerce.number().int().nullable().optional(),
   kommoWonStatusIds: z.array(z.coerce.number().int()).optional(),
+  kommoBypassSalesbot: z.boolean().optional(),
   openaiApiKey: z.string().nullable().optional(),
   openaiAdminKey: z.string().nullable().optional(),
   openaiModel: z.string().min(1).optional(),

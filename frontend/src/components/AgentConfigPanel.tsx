@@ -200,10 +200,10 @@ export function AgentConfigPanel() {
           <div>
             <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
               <Sparkles size={18} className="text-brand-300" />
-              Configuração do Agente
+              🔧 Avançado — Configuração técnica
             </h1>
             <p className="text-xs text-zinc-500 mt-0.5">
-              Define o comportamento da IA — prompt, tools habilitadas, sequências de automação.
+              Edição fina do prompt, tools habilitadas, sequências e modelo.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -218,12 +218,35 @@ export function AgentConfigPanel() {
           </div>
         </div>
 
+        {/* Banner de orientação — modo avançado */}
+        <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="flex items-start gap-3">
+            <span className="text-2xl leading-none">⚠️</span>
+            <div className="text-xs text-amber-100/90 leading-relaxed">
+              <strong className="text-amber-200">Modo avançado.</strong> O caminho normal pra
+              configurar a IA é <strong>Configurar IA</strong> (tom, emojis, toggles) +{' '}
+              <strong>Fontes</strong> (papel, produtos, negócio). Esses dois bastam pra 95%
+              dos casos. Use este painel apenas pra:
+              <ul className="mt-2 space-y-0.5 list-disc list-inside text-amber-100/70">
+                <li>Adicionar instruções extras (vão DEPOIS das Fontes, sem sobrescrever)</li>
+                <li>Ligar/desligar tools individuais</li>
+                <li>Criar sequências "SE X ENTÃO Y" muito específicas</li>
+                <li>Ajustar modelo/temperatura/maxTokens</li>
+              </ul>
+              <div className="mt-2 text-amber-300/80">
+                💡 Dica: deixe o <strong>System Prompt</strong> abaixo vazio se você já
+                preencheu as Fontes — a IA gera a persona sozinha a partir do Wizard.
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* SYSTEM PROMPT */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Sparkles size={16} className="text-brand-300" />
-              <h2 className="font-semibold text-zinc-100">System Prompt</h2>
+              <h2 className="font-semibold text-zinc-100">Instruções extras (opcional)</h2>
             </div>
             <button
               onClick={handleResetPrompt}
@@ -234,8 +257,10 @@ export function AgentConfigPanel() {
             </button>
           </div>
           <p className="text-xs text-zinc-500 mb-3">
-            É a personalidade e as regras do agente. O LLM lê isso ANTES de cada interação. Mantenha
-            curto e direcional — instruções cirúrgicas levam a tool-calls consistentes.
+            <strong className="text-zinc-300">Aditivo</strong> — o texto aqui é injetado <em>depois</em>{' '}
+            das Fontes, sem sobrescrever a persona do Wizard. Use pra regras específicas que não
+            cabem em toggle (ex: "se cliente perguntar sobre planos, sempre cite o plano Premium").
+            Deixe vazio se as Fontes já dão conta.
           </p>
           <textarea
             value={draft.systemPrompt}

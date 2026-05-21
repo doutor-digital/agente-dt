@@ -69,6 +69,10 @@ model Unit {
   // flag em true, o agente NÃO responde — operador humano pediu pausa.
   // Também é o field que a tool `pausar_ia` escreve.
   kommoPausedFieldId Int?  @map("kommo_paused_field_id")
+  // Quando true, sendChatReply pula o Salesbot e envia direto via
+  // POST /chats/{chatId}/messages. Usar quando o Salesbot está mandando
+  // saudação hardcoded antes ou cortando a mensagem da IA.
+  kommoBypassSalesbot Boolean @default(false) @map("kommo_bypass_salesbot")
   // Etapas do funil consideradas "Ganho/Convertido". Quando o webhook
   // recebe leads.status com um id desta lista, marcamos a Conversation
   // como convertida e disparamos o juiz LLM.

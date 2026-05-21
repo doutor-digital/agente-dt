@@ -29,6 +29,7 @@ const blankInput: UnitInput = {
   kommoReplyFieldId: null,
   kommoPausedFieldId: null,
   kommoWonStatusIds: [],
+  kommoBypassSalesbot: false,
   openaiApiKey: '',
   openaiAdminKey: '',
   openaiModel: 'gpt-4o-mini',
@@ -54,6 +55,7 @@ function unitToInput(u: Unit): UnitInput {
     kommoReplyFieldId: u.kommoReplyFieldId,
     kommoPausedFieldId: u.kommoPausedFieldId ?? null,
     kommoWonStatusIds: u.kommoWonStatusIds ?? [],
+    kommoBypassSalesbot: u.kommoBypassSalesbot ?? false,
     openaiApiKey: u.openaiApiKey ?? '',
     openaiAdminKey: u.openaiAdminKey ?? '',
     openaiModel: u.openaiModel,
@@ -321,6 +323,25 @@ export function UnitsPanel() {
                   onSave={handleSave}
                   saving={saving}
                 />
+                <label className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 mt-3 cursor-pointer hover:bg-amber-500/10 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={!!draft.kommoBypassSalesbot}
+                    onChange={(e) => setDraft({ ...draft, kommoBypassSalesbot: e.target.checked })}
+                    className="mt-0.5 accent-amber-500"
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-amber-100">
+                      ⚠️ Pular o Salesbot do Kommo (bypass)
+                    </div>
+                    <div className="text-[11px] text-amber-200/70 mt-1 leading-relaxed">
+                      Marque se o Salesbot está cortando ou sobrescrevendo a mensagem da IA
+                      (ex: chegando "Oi!" no lugar de "Oi! 👋 Como posso te ajudar?"). Quando
+                      ativo, mandamos direto via <code className="text-[10px] px-1 rounded bg-zinc-900">POST /chats/&lt;id&gt;/messages</code>{' '}
+                      sem passar pelo Salesbot. Exige que o lead tenha chat aberto no Kommo.
+                    </div>
+                  </div>
+                </label>
               </Section>
 
               <Section title="Meta WhatsApp Cloud" subtitle="Opcional — habilita o canal Meta direto.">
@@ -351,13 +372,33 @@ export function UnitsPanel() {
                 />
               </Section>
 
-              <Section title="System Prompt" subtitle="Personalidade default da IA pra essa unidade.">
+              <Section
+                title="System Prompt (legado)"
+                subtitle="⚠️ Não use mais — sobrescrito pela aba 'Configurar IA' + 'Fontes'. Deixe vazio."
+              >
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 mb-2 text-[11px] text-amber-100/90 leading-relaxed">
+                  <strong>Recomendação:</strong> deixe este campo VAZIO. A personalidade
+                  da IA agora é gerada automaticamente pela aba <strong>Configurar IA</strong>{' '}
+                  (tom, emojis, idioma, toggles) + os documentos da aba <strong>Fontes</strong>{' '}
+                  (papel, produtos, negócio). Se preencher aqui, esse texto vira "instrução
+                  extra" injetada depois das Fontes — útil só pra casos avançados.
+                </div>
                 <textarea
                   value={draft.systemPrompt ?? ''}
                   onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
-                  rows={10}
+                  rows={6}
+                  placeholder="Deixe vazio — use 'Configurar IA' e 'Fontes' pra montar a persona."
                   className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-2 text-xs text-zinc-200 font-mono"
                 />
+                {(draft.systemPrompt?.trim().length ?? 0) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setDraft({ ...draft, systemPrompt: '' })}
+                    className="mt-2 text-[11px] text-zinc-400 hover:text-rose-300 underline"
+                  >
+                    Limpar este campo (recomendado)
+                  </button>
+                )}
               </Section>
 
             </div>
