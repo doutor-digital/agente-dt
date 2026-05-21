@@ -35,6 +35,7 @@ import clsx from 'clsx';
 import { UnitSelector } from './UnitSelector';
 import { NotificationsBadge } from './NotificationsBadge';
 import { useAuth } from '../context/AuthContext';
+import { tabToPath } from '../hooks/useRoute';
 
 export type AppTab =
   | 'dashboard'
@@ -202,11 +203,18 @@ function NavLink({
   onClick: (t: AppTab) => void;
 }) {
   const Icon = item.icon;
+  const href = tabToPath(item.id);
   return (
     <li>
-      <button
-        type="button"
-        onClick={() => onClick(item.id)}
+      <a
+        href={href}
+        // Ctrl/Cmd/middle-click caem no comportamento default do <a> (abre
+        // nova aba). Clique normal é interceptado pra navegação SPA sem reload.
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+          e.preventDefault();
+          onClick(item.id);
+        }}
         className={clsx(
           'w-full inline-flex items-center gap-2.5 text-sm px-3 py-2 rounded-md transition-all',
           active
@@ -218,7 +226,7 @@ function NavLink({
         <span className={clsx(active ? 'font-display font-semibold' : 'font-medium')}>
           {item.label}
         </span>
-      </button>
+      </a>
     </li>
   );
 }

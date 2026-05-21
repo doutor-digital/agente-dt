@@ -12,7 +12,7 @@ import { WizardPanel } from './components/WizardPanel';
 import { PlaygroundPanel } from './components/PlaygroundPanel';
 import { FontesPanel } from './components/FontesPanel';
 import { AcoesPanel } from './components/AcoesPanel';
-import { AppSidebar, type AppTab } from './components/AppSidebar';
+import { AppSidebar } from './components/AppSidebar';
 import { DashboardPanel } from './components/DashboardPanel';
 import { OnboardingModal } from './components/OnboardingModal';
 import { UnitProvider, useUnit } from './context/UnitContext';
@@ -21,6 +21,7 @@ import { Login } from './components/Login';
 import { Splash } from './components/Splash';
 import { UsersPanel } from './components/UsersPanel';
 import { usePolling } from './hooks/usePolling';
+import { useRoute } from './hooks/useRoute';
 import { api } from './lib/api';
 import type { TraceDetail } from './types/api';
 
@@ -59,22 +60,22 @@ function AuthGate() {
 }
 
 function Shell() {
-  const [tab, setTab] = useState<AppTab>('dashboard');
+  const { tab, navigate } = useRoute();
 
   // Drill-down do Dashboard: o LeadsBucketModal dispara `app:openConversation`.
-  // Aqui trocamos pra aba Conversas; o ConversationsPanel escuta o mesmo
-  // evento e seleciona a conversa correspondente.
+  // Aqui navegamos pra aba Conversas (atualizando a URL via useRoute); o
+  // ConversationsPanel escuta o mesmo evento e seleciona a conversa.
   useEffect(() => {
-    const handler = () => setTab('conversations');
+    const handler = () => navigate('conversations');
     window.addEventListener('app:openConversation', handler);
     return () => window.removeEventListener('app:openConversation', handler);
-  }, []);
+  }, [navigate]);
   // App renderiza imediatamente — cada panel cuida do próprio loading state.
   // (A Splash com logo continua disponível em ./components/Splash, mas não
   // bloqueia mais o boot.)
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
-      <AppSidebar tab={tab} onChange={setTab} />
+      <AppSidebar tab={tab} onChange={navigate} />
       <main className="flex-1 flex flex-col overflow-hidden">
         {tab === 'dashboard' && <DashboardPanel />}
         {tab === 'traces' && <TracesView />}
