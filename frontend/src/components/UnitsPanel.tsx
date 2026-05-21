@@ -9,8 +9,8 @@
 // sem precisar redigitar token.
 // ============================================================================
 
-import { useEffect, useState } from 'react';
-import { Building2, Loader2, Plus, Save, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Copy, Loader2, MoreVertical, Plus, Save, Search, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type { Unit, UnitInput } from '../types/api';
@@ -18,6 +18,8 @@ import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { KommoExplorer } from './KommoExplorer';
+
+const DEFAULT_UNIT_AVATAR = 'https://cdn-icons-png.flaticon.com/512/624/624523.png';
 
 const blankInput: UnitInput = {
   slug: '',
@@ -80,12 +82,11 @@ export function UnitsPanel() {
   const [draft, setDraft] = useState<UnitInput>(blankInput);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState('');
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [cloningId, setCloningId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!selectedId && units.length > 0) {
-      setSelectedId(units[0].id);
-    }
-  }, [units, selectedId]);
+  const drawerOpen = creating || selectedId !== null;
 
   useEffect(() => {
     const u = units.find((x) => x.id === selectedId);
@@ -94,6 +95,22 @@ export function UnitsPanel() {
       setCreating(false);
     }
   }, [units, selectedId]);
+
+  // Fecha menu "..." ao clicar fora.
+  useEffect(() => {
+    if (!openMenuId) return;
+    const handler = () => setOpenMenuId(null);
+    window.addEventListener('click', handler);
+    return () => window.removeEventListener('click', handler);
+  }, [openMenuId]);
+
+  const filteredUnits = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return units;
+    return units.filter(
+      (u) => u.name.toLowerCase().includes(q) || u.slug.toLowerCase().includes(q),
+    );
+  }, [units, search]);
 
   async function handleSave() {
     setSaving(true);
@@ -118,18 +135,34 @@ export function UnitsPanel() {
     }
   }
 
-  async function handleDelete() {
-    if (!selectedId) return;
-    if (!confirm(`Apagar unidade "${draft.name}"? Toda a observabilidade dela vai junto.`)) return;
+  async function handleDelete(unit: Unit) {
+    if (!confirm(`Apagar unidade "${unit.name}"? Toda a observabilidade dela vai junto.`)) return;
     try {
-      await api.deleteUnit(selectedId);
-      setSelectedId(null);
-      setDraft(blankInput);
+      await api.deleteUnit(unit.id);
+      if (selectedId === unit.id) {
+        setSelectedId(null);
+        setDraft(blankInput);
+      }
       await refresh();
       toast.success('Unidade apagada');
     } catch (err) {
       const e = err as { message?: string };
       toast.error(e?.message ?? 'erro ao apagar');
+    }
+  }
+
+  async function handleClone(unit: Unit) {
+    setCloningId(unit.id);
+    try {
+      const created = await api.cloneUnit(unit.id);
+      await refresh();
+      toast.success(`"${unit.name}" clonada — ajuste o slug/nome`);
+      setSelectedId(created.id);
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string };
+      toast.error(e?.response?.data?.error ?? e?.message ?? 'erro ao clonar');
+    } finally {
+      setCloningId(null);
     }
   }
 
@@ -139,97 +172,134 @@ export function UnitsPanel() {
     setDraft(blankInput);
   }
 
+  function closeDrawer() {
+    setSelectedId(null);
+    setCreating(false);
+  }
+
   return (
-    <div className="flex flex-1 overflow-hidden">
-      {/* Lista */}
-      <aside className="w-64 shrink-0 border-r border-zinc-800/80 bg-ink-900 flex flex-col">
-        <div className="p-3 border-b border-zinc-800/80 flex items-center justify-between">
-          <span className="text-[11px] uppercase tracking-wider text-zinc-500">Unidades</span>
-          {isSuper && (
-            <button
-              type="button"
-              onClick={startCreate}
-              className="text-xs px-2 py-1 rounded bg-brand-500/10 text-brand-300 ring-1 ring-brand-500/30 inline-flex items-center gap-1 hover:bg-brand-500/20"
-            >
-              <Plus size={12} />
-              Nova
-            </button>
-          )}
+    <div className="flex-1 overflow-y-auto">
+      {/* Header: título + search + nova */}
+      <div className="max-w-6xl mx-auto px-8 pt-10 pb-6">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex-1" />
+          <h1 className="text-2xl font-semibold text-zinc-100 text-center">Escolha uma conta</h1>
+          <div className="flex-1 flex justify-end">
+            {isSuper && (
+              <button
+                type="button"
+                onClick={startCreate}
+                className="text-xs px-3 py-1.5 rounded-md bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/30 inline-flex items-center gap-1.5 hover:bg-brand-500/30"
+              >
+                <Plus size={13} />
+                Nova unidade
+              </button>
+            )}
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          {ctxLoading && <Loader2 className="animate-spin text-zinc-500 mx-auto mt-4" size={14} />}
-          {!ctxLoading && units.length === 0 && !creating && (
-            <div className="text-[11px] text-zinc-600 text-center mt-6 px-2">
-              Nenhuma unidade. Clique em "Nova" pra começar.
-            </div>
-          )}
-          <ul className="space-y-0.5">
-            {units.map((u) => (
-              <li key={u.id}>
+
+        <div className="max-w-md mx-auto mb-10">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Pesquisar sua conta"
+              className="w-full bg-zinc-900/60 border border-zinc-800 rounded-md text-sm pl-9 pr-3 py-2 text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-brand-500/40"
+            />
+          </div>
+        </div>
+
+        {ctxLoading && (
+          <div className="flex justify-center py-12">
+            <Loader2 className="animate-spin text-zinc-500" size={18} />
+          </div>
+        )}
+
+        {!ctxLoading && filteredUnits.length === 0 && (
+          <div className="text-center text-sm text-zinc-500 py-12">
+            {search ? 'Nenhuma unidade bate com a busca.' : 'Nenhuma unidade ainda.'}
+          </div>
+        )}
+
+        {/* Grid de cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-x-4 gap-y-8">
+          {filteredUnits.map((u) => (
+            <UnitCard
+              key={u.id}
+              unit={u}
+              onOpen={() => {
+                setCreating(false);
+                setSelectedId(u.id);
+              }}
+              onClone={() => void handleClone(u)}
+              onDelete={() => void handleDelete(u)}
+              menuOpen={openMenuId === u.id}
+              onMenuToggle={(e) => {
+                e.stopPropagation();
+                setOpenMenuId(openMenuId === u.id ? null : u.id);
+              }}
+              cloning={cloningId === u.id}
+              canEdit={isSuper || user?.unitId === u.id}
+              canDelete={isSuper}
+              canClone={isSuper}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Drawer de edição */}
+      {drawerOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+          onClick={closeDrawer}
+        >
+          <aside
+            className="absolute right-0 top-0 bottom-0 w-[760px] max-w-[95vw] bg-zinc-950 border-l border-zinc-800 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800/80">
+              <h2 className="text-base font-semibold text-zinc-100">
+                {creating ? 'Nova unidade' : draft.name || 'Sem nome'}
+              </h2>
+              <div className="flex items-center gap-2">
+                {!creating && selectedId && isSuper && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const u = units.find((x) => x.id === selectedId);
+                      if (u) void handleDelete(u);
+                    }}
+                    className="text-xs px-3 py-1.5 rounded inline-flex items-center gap-1 text-rose-300 hover:bg-rose-500/10 ring-1 ring-rose-500/20"
+                  >
+                    <Trash2 size={12} />
+                    Apagar
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
-                    setCreating(false);
-                    setSelectedId(u.id);
+                    void handleSave().catch(() => {});
                   }}
-                  className={clsx(
-                    'w-full text-left px-3 py-2 rounded-md transition border-l-2',
-                    selectedId === u.id
-                      ? 'bg-zinc-800/70 border-brand-500'
-                      : 'border-transparent hover:bg-zinc-800/30',
-                  )}
+                  disabled={saving}
+                  className="text-xs px-3 py-1.5 rounded bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/30 inline-flex items-center gap-1 hover:bg-brand-500/30 disabled:opacity-50"
                 >
-                  <div className="flex items-center gap-2">
-                    <Building2 size={12} className="text-brand-400" />
-                    <span className="text-xs font-medium text-zinc-200 truncate">{u.name}</span>
-                    {!u.isActive && (
-                      <span className="ml-auto text-[9px] uppercase tracking-wider text-amber-500/80">
-                        off
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[10px] text-zinc-500 mt-0.5 truncate">/{u.slug}</div>
+                  {saving ? <Loader2 className="animate-spin" size={12} /> : <Save size={12} />}
+                  Salvar
                 </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </aside>
-
-      {/* Form */}
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-zinc-100">
-              {creating ? 'Nova unidade' : selectedId ? draft.name || 'Sem nome' : 'Selecione uma unidade'}
-            </h2>
-            <div className="flex items-center gap-2">
-              {!creating && selectedId && isSuper && (
                 <button
                   type="button"
-                  onClick={handleDelete}
-                  className="text-xs px-3 py-1.5 rounded inline-flex items-center gap-1 text-rose-300 hover:bg-rose-500/10 ring-1 ring-rose-500/20"
+                  onClick={closeDrawer}
+                  className="text-zinc-500 hover:text-zinc-200 p-1"
                 >
-                  <Trash2 size={12} />
-                  Apagar
+                  <X size={16} />
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  void handleSave().catch(() => {});
-                }}
-                disabled={saving || (!creating && !selectedId)}
-                className="text-xs px-3 py-1.5 rounded bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/30 inline-flex items-center gap-1 hover:bg-brand-500/30 disabled:opacity-50"
-              >
-                {saving ? <Loader2 className="animate-spin" size={12} /> : <Save size={12} />}
-                Salvar
-              </button>
+              </div>
             </div>
-          </div>
 
-          {(creating || selectedId) && (
-            <div className="space-y-6">
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="space-y-6">
               <Section title="Identidade">
                 <Field
                   label="Nome"
@@ -405,10 +475,131 @@ export function UnitsPanel() {
                 )}
               </Section>
 
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// UnitCard — card circular do grid "Escolha uma conta".
+// ---------------------------------------------------------------------------
+function UnitCard({
+  unit,
+  onOpen,
+  onClone,
+  onDelete,
+  menuOpen,
+  onMenuToggle,
+  cloning,
+  canEdit,
+  canDelete,
+  canClone,
+}: {
+  unit: Unit;
+  onOpen: () => void;
+  onClone: () => void;
+  onDelete: () => void;
+  menuOpen: boolean;
+  onMenuToggle: (e: React.MouseEvent) => void;
+  cloning: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  canClone: boolean;
+}) {
+  const showMenu = canClone || canDelete;
+  return (
+    <div className="relative group">
+      <button
+        type="button"
+        onClick={onOpen}
+        disabled={!canEdit}
+        className="w-full flex flex-col items-center text-center disabled:cursor-not-allowed"
+        title={canEdit ? `Editar ${unit.name}` : 'Sem permissão de edição'}
+      >
+        <div
+          className={clsx(
+            'relative w-24 h-24 rounded-full bg-zinc-900/60 ring-2 ring-zinc-800 overflow-hidden mb-2 transition',
+            canEdit && 'group-hover:ring-brand-500/60 group-hover:shadow-[0_0_24px_rgba(124,77,255,0.18)]',
+            !unit.isActive && 'opacity-60',
+          )}
+        >
+          <img
+            src={DEFAULT_UNIT_AVATAR}
+            alt=""
+            className="w-full h-full object-cover p-3"
+            referrerPolicy="no-referrer"
+          />
+          {cloning && (
+            <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+              <Loader2 className="animate-spin text-zinc-200" size={20} />
+            </div>
+          )}
+          {!unit.isActive && (
+            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-wider text-amber-300 bg-zinc-950/80 px-1.5 py-0.5 rounded">
+              off
             </div>
           )}
         </div>
-      </div>
+        <div className="text-xs font-semibold text-zinc-100 uppercase tracking-wide leading-tight px-1 break-words line-clamp-2">
+          {unit.name}
+        </div>
+        <div className="text-[10px] text-zinc-500 mt-0.5 truncate max-w-full">/{unit.slug}</div>
+      </button>
+
+      {showMenu && (
+        <>
+          <button
+            type="button"
+            onClick={onMenuToggle}
+            className="absolute top-0 right-0 p-1.5 rounded-md text-zinc-500 opacity-0 group-hover:opacity-100 hover:bg-zinc-800/80 hover:text-zinc-200 transition"
+            title="Mais ações"
+          >
+            <MoreVertical size={14} />
+          </button>
+          {menuOpen && (
+            <div
+              className="absolute top-7 right-0 z-10 w-36 rounded-md bg-zinc-900 ring-1 ring-zinc-700 shadow-lg py-1"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpen();
+                  }}
+                  className="w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/60"
+                >
+                  Editar
+                </button>
+              )}
+              {canClone && (
+                <button
+                  type="button"
+                  onClick={onClone}
+                  className="w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/60 inline-flex items-center gap-2"
+                >
+                  <Copy size={12} />
+                  Clonar
+                </button>
+              )}
+              {canDelete && (
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  className="w-full text-left px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10 inline-flex items-center gap-2"
+                >
+                  <Trash2 size={12} />
+                  Apagar
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

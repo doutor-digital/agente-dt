@@ -28,6 +28,7 @@ import {
   createUnitHandler,
   updateUnitHandler,
   deleteUnitHandler,
+  cloneUnitHandler,
   unitStatsHandler,
   kommoPipelinesHandler,
   kommoValidateHandler,
@@ -122,6 +123,7 @@ apiRouter.post('/auth/logout', logoutHandler);
 // ---------------------------------------------------------------------------
 apiRouter.get('/units', listUnitsHandler);                              // filtrado por role no controller
 apiRouter.post('/units', requireSuperAdmin, createUnitHandler);
+apiRouter.post('/units/:id/clone', requireSuperAdmin, cloneUnitHandler);
 apiRouter.delete('/units/:id', requireSuperAdmin, deleteUnitHandler);
 
 // Leitura/edição de uma unit específica — super OU unit_admin da própria.

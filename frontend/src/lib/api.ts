@@ -184,6 +184,10 @@ export const api = {
   async deleteUnit(id: string): Promise<void> {
     await http.delete(`/units/${id}`);
   },
+  async cloneUnit(id: string): Promise<Unit> {
+    const { data } = await http.post<{ unit: Unit }>(`/units/${id}/clone`);
+    return data.unit;
+  },
   async unitStats(id: string, days = 30): Promise<UnitStats> {
     const { data } = await http.get<UnitStats>(`/units/${id}/stats`, { params: { days } });
     return data;

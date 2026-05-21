@@ -201,6 +201,62 @@ export async function deleteUnitHandler(req: Request, res: Response): Promise<vo
 }
 
 // ---------------------------------------------------------------------------
+// Clone — duplica uma unidade copiando TODOS os campos (inclusive secrets).
+//
+// Server-side de propósito: o GET retorna secrets mascarados, então clonar
+// pelo front (criar nova + paste) não funcionaria — pegaria a máscara em vez
+// do token real. Aqui lemos do DB sem máscara, derivamos slug/name únicos e
+// criamos a nova row em uma única operação. Token nunca sai do servidor.
+// ---------------------------------------------------------------------------
+export async function cloneUnitHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  try {
+    const source = await prisma.unit.findUnique({ where: { id } });
+    if (!source) {
+      res.status(404).json({ error: 'unit_not_found' });
+      return;
+    }
+
+    // Slug único: {slug}-copy, {slug}-copy-2, ...
+    const baseSlug = `${source.slug}-copy`.slice(0, 48);
+    let candidateSlug = baseSlug;
+    for (let n = 2; n < 100; n += 1) {
+      const exists = await prisma.unit.findUnique({ where: { slug: candidateSlug } });
+      if (!exists) break;
+      candidateSlug = `${baseSlug}-${n}`.slice(0, 50);
+    }
+
+    const newName = `${source.name} (cópia)`.slice(0, 120);
+
+    // Copia tudo exceto id/slug/name/timestamps. Json nullable precisa de
+    // Prisma.DbNull (não aceita TS null direto).
+    const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, ...rest } = source;
+    const cloned = await prisma.unit.create({
+      data: {
+        ...rest,
+        slug: candidateSlug,
+        name: newName,
+        pipelineIntents: pipelineIntents === null ? Prisma.DbNull : (pipelineIntents as Prisma.InputJsonValue),
+      },
+    });
+
+    logger.info(
+      { sourceId: source.id, newId: cloned.id, slug: cloned.slug },
+      'unit clonada com auth completa',
+    );
+    res.status(201).json({ unit: maskUnitSecrets(cloned) });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      res.status(409).json({ error: 'slug_already_exists' });
+      return;
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err, sourceId: id, module: 'units.controller' }, 'falha clonando unit');
+    res.status(500).json({ error: 'clone_failed', message: msg });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Stats da unidade — usados no card de header do dashboard.
 // Retorna totais de execuções, taxa de sucesso, latência média, custo total
 // (USD) e tokens consumidos.
