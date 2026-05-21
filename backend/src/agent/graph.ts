@@ -169,11 +169,17 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
         ? lastHuman.content
         : JSON.stringify(lastHuman.content)
       : undefined;
+    // Primeiro turno = 1 única mensagem humana e nenhuma resposta da IA ainda.
+    // Usado pra forçar saudação caprichada/coleta de nome na abertura.
+    const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
+    const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
+    const isFirstTurn = humanCount === 1 && aiCount === 0;
     const dynamicPrompt = await composeSystemPromptForUnit({
       unit,
       agentConfigPrompt: config.systemPrompt,
       workflowText: renderWorkflowGuidance(config.workflow),
       userMessage,
+      isFirstTurn,
     });
     const finalMessages: BaseMessage[] = [new SystemMessage(dynamicPrompt), ...nonSystemMessages];
 

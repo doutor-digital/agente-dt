@@ -127,12 +127,12 @@ function renderEmojiStyle(unit: Unit): string {
 function renderResponseLength(length: string | null | undefined): string {
   switch (length) {
     case 'curta':
-      return 'Tamanho: respostas MUITO curtas, 1 frase. Vá direto ao ponto.';
+      return 'Tamanho: respostas MUITO curtas, 1 frase, ≤ 200 caracteres. Vá direto ao ponto.';
     case 'detalhada':
-      return 'Tamanho: respostas detalhadas, parágrafos curtos. Explique com contexto quando útil.';
+      return 'Tamanho: respostas detalhadas, parágrafos curtos. ≤ 480 caracteres no total — o WhatsApp não é email e o CRM trunca textos longos.';
     case 'normal':
     default:
-      return 'Tamanho: respostas curtas, 1 a 3 frases. WhatsApp não é email.';
+      return 'Tamanho: respostas curtas, 1 a 3 frases, ≤ 240 caracteres no total. WhatsApp não é email e o CRM trunca textos longos.';
   }
 }
 
@@ -410,6 +410,53 @@ export interface ComposeInput {
   knowledge?: Array<KnowledgeBaseEntry & { score: number }>;
   /** Regras "quando → faça" cadastradas na Unit. */
   actions?: UnitAction[];
+  /** Este é o PRIMEIRO turno do paciente? (1 humana, 0 IA). */
+  isFirstTurn?: boolean;
+}
+
+function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
+  if (!isFirstTurn) return '';
+  const collectName = unit.collectNameEnabled;
+  const collectSource = unit.collectSourceEnabled;
+  const palette = (unit.personaEmojis ?? []).filter(Boolean);
+  const emojisHint =
+    palette.length > 0
+      ? `Use 2-3 emojis da sua paleta (${palette.slice(0, 8).join(' ')}).`
+      : 'Use 2-3 emojis acolhedores (😊 🌷 ✨ 🙏 👋).';
+
+  const lines: string[] = [
+    '# 🚨 TURNO 1 — PRIMEIRA MENSAGEM DA CONVERSA (PRIORIDADE MÁXIMA)',
+    'Esta é a sua PRIMEIRA resposta ao paciente. NUNCA responda só "Olá!" ou',
+    '"Oi!" sozinho. Respostas curtas/secas estão TERMINANTEMENTE PROIBIDAS aqui.',
+    '',
+    'Sua resposta DEVE conter, nesta ordem:',
+    '  1. Saudação calorosa + emoji (não só "olá")',
+    '  2. Apresentação rápida (você é da clínica X)',
+  ];
+  let step = 3;
+  if (collectName) {
+    lines.push(`  ${step}. Pergunta natural pelo nome do paciente`);
+    step++;
+  }
+  if (collectSource) {
+    lines.push(`  ${step}. (opcional) Pode já encaixar de leve "por onde nos conheceu?"`);
+    step++;
+  }
+  lines.push(`  ${step}. SE o paciente já trouxe um problema (dor, dúvida), reconheça com empatia ANTES de pedir o nome.`);
+  lines.push('');
+  lines.push(emojisHint);
+  lines.push('Tamanho-alvo: 2 a 4 frases. Nem curto demais ("Olá!"), nem texto-livro.');
+  lines.push('');
+  lines.push('Exemplo de resposta BOA (adapte ao tom da sua clínica, NÃO copie literal):');
+  lines.push(
+    `  "Oiê! 🌷 Que bom te receber por aqui na ${unit.personaCompanyName ?? 'clínica'}! ` +
+      'Antes de tudo, como posso te chamar? 😊"',
+  );
+  lines.push('');
+  lines.push('Exemplo de resposta RUIM (NUNCA faça assim):');
+  lines.push('  ❌ "Olá!"');
+  lines.push('  ❌ "Oi! Como posso ajudar?"');
+  return lines.join('\n');
 }
 
 export function composeSystemPrompt(input: ComposeInput): string {
@@ -421,6 +468,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     flaggedExamples = [],
     knowledge = [],
     actions = [],
+    isFirstTurn = false,
   } = input;
 
   // Bloco 1: persona base. Se o usuário escreveu um systemPrompt customizado,
@@ -481,6 +529,11 @@ export function composeSystemPrompt(input: ComposeInput): string {
     blocks.push(workflowText.trim());
   }
 
+  // Boost de primeiro turno vai POR ÚLTIMO — instruções no fim do prompt têm
+  // mais influência (efeito "recência") nos LLMs atuais.
+  const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
+  if (firstTurnBlock) blocks.push(firstTurnBlock);
+
   return blocks.join('\n\n');
 }
 
@@ -519,6 +572,7 @@ export async function composeSystemPromptForUnit(input: {
   agentConfigPrompt?: string;
   workflowText?: string;
   userMessage?: string;
+  isFirstTurn?: boolean;
 }): Promise<string> {
   const shouldRunRag =
     !!input.userMessage &&

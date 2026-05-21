@@ -126,6 +126,47 @@ export class KommoApiError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// splitIntoChunks — quebra texto longo em pedaços ≤ maxLen respeitando
+// fronteiras naturais (parágrafo > frase > palavra).
+//
+// O campo "Resposta IA" do Kommo (custom field type=text) trunca silenciosa-
+// mente em ~250 chars. Esta função produz N pedaços que são enviados em
+// sequência pelo sendChatReply, simulando vários balões de WhatsApp.
+// ---------------------------------------------------------------------------
+
+export function splitIntoChunks(text: string, maxLen: number): string[] {
+  const clean = text.trim();
+  if (clean.length === 0) return [];
+  if (clean.length <= maxLen) return [clean];
+
+  const chunks: string[] = [];
+  let remaining = clean;
+
+  while (remaining.length > maxLen) {
+    let cut = maxLen;
+    // Tenta cortar no último final de sentença antes do limite.
+    const slice = remaining.slice(0, maxLen);
+    const lastBoundary = Math.max(
+      slice.lastIndexOf('\n\n'),
+      slice.lastIndexOf('. '),
+      slice.lastIndexOf('? '),
+      slice.lastIndexOf('! '),
+    );
+    if (lastBoundary > maxLen * 0.5) {
+      cut = lastBoundary + 1; // inclui o '.', '?' ou '!'
+    } else {
+      // Sem fim-de-sentença útil — corta no último espaço pra não rachar palavra.
+      const lastSpace = slice.lastIndexOf(' ');
+      if (lastSpace > maxLen * 0.5) cut = lastSpace;
+    }
+    chunks.push(remaining.slice(0, cut).trim());
+    remaining = remaining.slice(cut).trim();
+  }
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
+// ---------------------------------------------------------------------------
 // Config interna do cliente — derivada de uma Unit ou do env legado.
 // ---------------------------------------------------------------------------
 
@@ -502,6 +543,11 @@ export class KommoClient {
    *  1. Salesbot (se Unit tem salesbotId + replyFieldId).
    *  2. POST /chats/{chatId}/messages (raro funcionar com WABA nativo).
    *  3. Cria nota comum no lead (sempre funciona, mas só visível ao operador).
+   *
+   * CHUNKING: o campo "Resposta IA" do Kommo (custom field type=text) tem
+   * limite ~250 chars. Se a resposta passar disso, quebramos em N pedaços
+   * e disparamos o Salesbot uma vez por pedaço com 900ms entre eles — sai
+   * como se a IA tivesse digitado várias mensagens.
    */
   async sendChatReply({
     leadId,
@@ -512,14 +558,24 @@ export class KommoClient {
   }: SendChatReplyParams): Promise<SendChatReplyResult> {
     if (this.creds.salesbotId && this.creds.replyFieldId) {
       try {
-        const data = await this.runSalesbot({
-          leadId,
-          salesbotId: this.creds.salesbotId,
-          replyFieldId: this.creds.replyFieldId,
-          text,
-        });
-        logger.info({ leadId, salesbotId: this.creds.salesbotId }, 'kommo salesbot disparado');
-        return { via: 'salesbot', detail: data };
+        const chunks = splitIntoChunks(text, 240);
+        let lastData: unknown = null;
+        for (let i = 0; i < chunks.length; i++) {
+          lastData = await this.runSalesbot({
+            leadId,
+            salesbotId: this.creds.salesbotId,
+            replyFieldId: this.creds.replyFieldId,
+            text: chunks[i],
+          });
+          if (i < chunks.length - 1) {
+            await new Promise((r) => setTimeout(r, 900));
+          }
+        }
+        logger.info(
+          { leadId, salesbotId: this.creds.salesbotId, chunks: chunks.length },
+          'kommo salesbot disparado',
+        );
+        return { via: 'salesbot', detail: lastData };
       } catch (err) {
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
         logger.warn({ err, leadId, status }, 'salesbot falhou, tentando outros caminhos');

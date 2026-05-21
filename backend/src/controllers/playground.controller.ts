@@ -136,11 +136,16 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
 
   // Última mensagem do usuário alimenta a busca semântica do RAG.
   const lastUser = [...parsed.data.messages].reverse().find((m) => m.role === 'user');
+  // Primeiro turno = só 1 mensagem do user e nenhuma da IA no histórico.
+  const userCount = parsed.data.messages.filter((m) => m.role === 'user').length;
+  const assistantCount = parsed.data.messages.filter((m) => m.role === 'assistant').length;
+  const isFirstTurn = userCount === 1 && assistantCount === 0;
   const systemPrompt = await composeSystemPromptForUnit({
     unit,
     agentConfigPrompt: config.systemPrompt,
     workflowText: renderWorkflowGuidance(config.workflow),
     userMessage: lastUser?.content,
+    isFirstTurn,
   });
 
   // Acrescenta info do "lead sintético" pra IA poder chamar as tools (precisa do leadId).
