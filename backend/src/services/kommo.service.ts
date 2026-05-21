@@ -623,17 +623,40 @@ export class KommoClient {
     talkId,
     contactId,
   }: SendChatReplyParams): Promise<SendChatReplyResult> {
-    // Bypass: usuário marcou no Wizard pra pular o Salesbot porque ele
-    // estava cortando/sobrescrevendo a mensagem. Pula direto pro caminho 2.
-    if (this.creds.bypassSalesbot) {
-      logger.debug({ leadId }, 'sendChatReply: salesbot bypass ativado, indo direto pra /chats');
+    // ─────────────────────────────────────────────────────────────────────
+    // MODO BYPASS — comportamento "edição manual": faz APENAS o PATCH no
+    // campo Resposta IA e deixa o Digital Pipeline do Kommo disparar o
+    // Salesbot uma única vez. Mesma rota que acontece quando o usuário
+    // edita o campo na UI do Kommo. Resolve casos onde:
+    //   - O Salesbot via POST /salesbot/run corrompe emoji
+    //   - Há disparo duplo (DP trigger + POST /run)
+    // Pré-requisito: o Digital Pipeline da Unit tem um gatilho
+    // "Quando campo Resposta IA mudar → rodar Salesbot".
+    // ─────────────────────────────────────────────────────────────────────
+    if (this.creds.bypassSalesbot && this.creds.replyFieldId) {
+      try {
+        const chunks = splitIntoChunks(text, 240);
+        for (let i = 0; i < chunks.length; i++) {
+          await this.http.patch(`/leads/${leadId}`, {
+            custom_fields_values: [
+              { field_id: this.creds.replyFieldId, values: [{ value: chunks[i] }] },
+            ],
+          });
+          if (i < chunks.length - 1) {
+            await new Promise((r) => setTimeout(r, 900));
+          }
+        }
+        logger.info(
+          { leadId, replyFieldId: this.creds.replyFieldId, chunks: chunks.length, mode: 'patch_only' },
+          'kommo bypass: PATCH-only no campo Resposta IA (Digital Pipeline cuida do envio)',
+        );
+        return { via: 'salesbot', detail: { mode: 'patch_only', chunks: chunks.length } };
+      } catch (err) {
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        logger.warn({ err, leadId, status }, 'kommo bypass: PATCH falhou, tentando outros caminhos');
+      }
     } else if (this.creds.salesbotId && this.creds.replyFieldId) {
       try {
-        // Kommo aceita emoji nativamente — passamos a string INTEIRA, sem
-        // sanitização. Histórico: já tivemos um strip aqui pra contornar
-        // truncamento do Salesbot, mas o usuário confirmou que o Kommo
-        // aceita emoji quando o campo é editado manualmente, então o
-        // problema era outro (config do Salesbot template ou cache).
         const chunks = splitIntoChunks(text, 240);
         logger.debug(
           { leadId, originalText: text, chunks: chunks.length },
@@ -673,7 +696,13 @@ export class KommoClient {
         return { via: 'chat_message', detail: data };
       } catch (err) {
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
-        logger.debug({ err, leadId, chatId, status }, 'chats/{id}/messages falhou, caindo pra nota');
+        const body = axios.isAxiosError(err) ? err.response?.data : undefined;
+        // Subimos de `debug` pra `warn` — esse fallback é importante pro
+        // operador entender por que a mensagem foi pra nota interna.
+        logger.warn(
+          { leadId, chatId, talkId, status, body },
+          'kommo /chats/{id}/messages falhou — caindo pra nota interna (mensagem NÃO vai pro paciente)',
+        );
       }
     }
 

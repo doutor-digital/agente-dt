@@ -332,13 +332,17 @@ export function UnitsPanel() {
                   />
                   <div className="flex-1">
                     <div className="text-sm font-semibold text-amber-100">
-                      ⚠️ Pular o Salesbot do Kommo (bypass)
+                      ⚠️ Modo "edição manual" — pular o disparo direto do Salesbot
                     </div>
                     <div className="text-[11px] text-amber-200/70 mt-1 leading-relaxed">
-                      Marque se o Salesbot está cortando ou sobrescrevendo a mensagem da IA
-                      (ex: chegando "Oi!" no lugar de "Oi! 👋 Como posso te ajudar?"). Quando
-                      ativo, mandamos direto via <code className="text-[10px] px-1 rounded bg-zinc-900">POST /chats/&lt;id&gt;/messages</code>{' '}
-                      sem passar pelo Salesbot. Exige que o lead tenha chat aberto no Kommo.
+                      Quando ligado, em vez de chamar <code className="text-[10px] px-1 rounded bg-zinc-900">POST /salesbot/run</code>,
+                      nós só fazemos <code className="text-[10px] px-1 rounded bg-zinc-900">PATCH</code>{' '}
+                      no campo "Resposta IA" — exatamente como acontece quando você edita o
+                      campo manualmente no Kommo. O Digital Pipeline do Kommo se encarrega de
+                      disparar o Salesbot uma única vez. <strong>Resolve casos onde o emoji
+                      não chega via API, mas chega na edição manual.</strong>{' '}
+                      Pré-requisito: o seu Digital Pipeline tem um gatilho "Quando campo
+                      Resposta IA mudar → rodar Salesbot".
                     </div>
                   </div>
                 </label>
