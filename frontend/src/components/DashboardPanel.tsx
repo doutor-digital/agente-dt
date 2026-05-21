@@ -238,7 +238,7 @@ export function DashboardPanel() {
         <section>
           <div className="flex items-center justify-between mb-3">
             <div className="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">
-              Conversão por responsável
+              🎯 Conversão — IA vs SDR (clique pra ver detalhes)
             </div>
             {data && (
               <div className="text-[11px] text-zinc-500">
@@ -250,11 +250,11 @@ export function DashboardPanel() {
           <div className="grid grid-cols-2 gap-4 mb-4">
             <KpiCard
               icon={<Bot size={18} />}
-              label="Convertidos pela IA"
+              label="🤖 Convertidos pela IA"
               value={data ? `${(data.kpis.conversionRateIa * 100).toFixed(1)}%` : '—'}
               sublabel={
                 data
-                  ? `${data.kpis.convertedByIa} fecharam sem handoff · clique pra ver`
+                  ? `${data.kpis.convertedByIa} fecharam sem precisar de humano`
                   : 'IA fechou sem handoff'
               }
               color="emerald"
@@ -262,11 +262,11 @@ export function DashboardPanel() {
             />
             <KpiCard
               icon={<UserCheck size={18} />}
-              label="Convertidos pela SDR"
+              label="🧑‍💼 Convertidos pela SDR"
               value={data ? `${(data.kpis.conversionRateSdr * 100).toFixed(1)}%` : '—'}
               sublabel={
                 data
-                  ? `${data.kpis.convertedBySdr} fecharam após handoff · clique pra ver`
+                  ? `${data.kpis.convertedBySdr} fecharam após humano assumir`
                   : 'humano fechou pós-pausar_ia'
               }
               color="sky"
@@ -451,14 +451,27 @@ function KpiCard({
   const c = colorClasses[color] ?? colorClasses.brand;
   const clickable = !!onClick;
   const className = clsx(
-    'rounded-xl ring-1 p-4 transition-transform hover:-translate-y-0.5 text-left w-full',
+    'relative rounded-xl ring-1 p-4 transition-transform hover:-translate-y-0.5 text-left w-full',
     c.ring,
     c.bg,
-    clickable && 'cursor-pointer hover:ring-2 focus:outline-none focus:ring-2',
+    clickable && 'cursor-pointer hover:ring-2 focus:outline-none focus:ring-2 group',
   );
   const body = (
     <>
-      <div className={clsx('flex items-center gap-2 mb-3', c.icon)}>{icon}</div>
+      <div className={clsx('flex items-center gap-2 mb-3', c.icon)}>
+        {icon}
+        {clickable && (
+          <span
+            className={clsx(
+              'ml-auto text-[10px] uppercase tracking-wider opacity-60 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1',
+              c.icon,
+            )}
+            title="Clique pra ver os leads"
+          >
+            ver leads →
+          </span>
+        )}
+      </div>
       <div className={clsx('text-2xl font-display font-bold tracking-tight', c.text)}>{value}</div>
       <div className="text-[11px] text-zinc-400 mt-1">{label}</div>
       <div className="text-[10px] text-zinc-500 mt-0.5">{sublabel}</div>
