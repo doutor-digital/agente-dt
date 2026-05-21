@@ -18,6 +18,7 @@ import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { KommoExplorer } from './KommoExplorer';
+import { KommoSchemaPreview } from './KommoSchemaPreview';
 
 const DEFAULT_UNIT_AVATAR = 'https://fiqon.com.br/wp-content/uploads/2025/04/kommo.png';
 
@@ -417,6 +418,25 @@ export function UnitsPanel() {
                   </div>
                 </label>
               </Section>
+
+              {!creating && selectedId && (
+                <Section
+                  title="Etapas e tags do Kommo"
+                  subtitle="Read-only — puxado direto da sua conta. Use os IDs/nomes ao instruir a IA."
+                >
+                  <KommoSchemaPreview
+                    unitId={selectedId}
+                    canFetch={
+                      !!draft.kommoSubdomain &&
+                      !!draft.kommoAccessToken &&
+                      // Se o token está mascarado (••••), significa que JÁ foi salvo no
+                      // backend. Aí dá pra buscar. Se for vazio ou texto novo não-salvo,
+                      // não dá — o endpoint usa o que está no DB.
+                      (draft.kommoAccessToken.includes('••••') || draft.kommoAccessToken.length > 0)
+                    }
+                  />
+                </Section>
+              )}
 
               <Section title="Meta WhatsApp Cloud" subtitle="Opcional — habilita o canal Meta direto.">
                 <Field
