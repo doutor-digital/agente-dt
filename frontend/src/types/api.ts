@@ -84,6 +84,36 @@ export interface Stats {
 }
 
 // ---------------------------------------------------------------------------
+// SystemLog — painel "Erros" (warn/error/fatal persistidos)
+// ---------------------------------------------------------------------------
+
+export type LogLevel = 'WARN' | 'ERROR' | 'FATAL';
+
+export interface SystemLog {
+  id: string;
+  level: LogLevel;
+  module: string | null;
+  msg: string;
+  context: unknown;
+  unitId: string | null;
+  traceId: string | null;
+  createdAt: string;
+}
+
+export interface SystemLogListResponse {
+  logs: SystemLog[];
+  counts: Record<LogLevel, number>;
+}
+
+export interface SystemLogQuery {
+  level?: LogLevel;
+  module?: string;
+  q?: string;
+  since?: string; // ISO date
+  limit?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Auth — user logado no painel
 // ---------------------------------------------------------------------------
 

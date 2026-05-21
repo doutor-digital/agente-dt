@@ -15,6 +15,7 @@
 
 import type { ReactNode } from 'react';
 import {
+  AlertOctagon,
   BookOpen,
   Building2,
   Cable,
@@ -50,7 +51,8 @@ export type AppTab =
   | 'actions'
   | 'config'
   | 'units'
-  | 'users';
+  | 'users'
+  | 'errors';
 
 interface NavItem {
   id: AppTab;
@@ -68,6 +70,7 @@ const NAV: NavItem[] = [
   { id: 'actions', label: 'Ações', icon: Zap, group: 'primary' },
   { id: 'conversations', label: 'Conversas', icon: MessageCircle, group: 'primary' },
   { id: 'traces', label: 'Execuções', icon: Terminal, group: 'primary' },
+  { id: 'errors', label: 'Erros', icon: AlertOctagon, group: 'primary' },
 
   { id: 'llm', label: 'Chamadas IA', icon: Cpu, group: 'secondary' },
   { id: 'prompts', label: 'Prompts', icon: Sparkles, group: 'secondary' },

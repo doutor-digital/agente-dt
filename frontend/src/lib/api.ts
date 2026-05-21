@@ -29,6 +29,8 @@ import type {
   OpenAIDebugResponse,
   PromptPerformanceResponse,
   Stats,
+  SystemLogListResponse,
+  SystemLogQuery,
   TraceDetail,
   TraceSummary,
   Unit,
@@ -123,6 +125,26 @@ export const api = {
   async getStats(unitId: string | null = null): Promise<Stats> {
     const { data } = await http.get<Stats>('/stats', { params: withUnit(undefined, unitId) });
     return data;
+  },
+
+  // -------------------------------------------------------------------------
+  // SystemLogs — painel "Erros"
+  // -------------------------------------------------------------------------
+  async listSystemLogs(
+    unitId: string | null = null,
+    query: SystemLogQuery = {},
+  ): Promise<SystemLogListResponse> {
+    const { data } = await http.get<SystemLogListResponse>('/system-logs', {
+      params: withUnit(query as Record<string, unknown>, unitId),
+    });
+    return data;
+  },
+
+  async listSystemLogModules(unitId: string | null = null): Promise<string[]> {
+    const { data } = await http.get<{ modules: string[] }>('/system-logs/modules', {
+      params: withUnit(undefined, unitId),
+    });
+    return data.modules;
   },
 
   // -------------------------------------------------------------------------

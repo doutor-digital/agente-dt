@@ -14,6 +14,7 @@ import { FontesPanel } from './components/FontesPanel';
 import { AcoesPanel } from './components/AcoesPanel';
 import { AppSidebar } from './components/AppSidebar';
 import { DashboardPanel } from './components/DashboardPanel';
+import { ErrorsPanel } from './components/ErrorsPanel';
 import { OnboardingModal } from './components/OnboardingModal';
 import { UnitProvider, useUnit } from './context/UnitContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -79,6 +80,7 @@ function Shell() {
       <main className="flex-1 flex flex-col overflow-hidden">
         {tab === 'dashboard' && <DashboardPanel />}
         {tab === 'traces' && <TracesView />}
+        {tab === 'errors' && <ErrorsPanel />}
         {tab === 'conversations' && <ConversationsPanel />}
         {tab === 'llm' && <LlmCallsPanel />}
         {tab === 'prompts' && <PromptsPanel />}

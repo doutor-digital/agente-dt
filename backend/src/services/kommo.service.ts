@@ -166,6 +166,73 @@ export function stripEmojis(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// downgradeEmoji — substitui emoji 4-byte por equivalentes do BMP (3-byte).
+//
+// Por que existe: o storage do Kommo (custom_fields_values e provavelmente
+// outros campos texto) usa MySQL com collation `utf8` (3 bytes), que trunca
+// silenciosamente strings no primeiro code point >= U+10000. Diagnóstico
+// confirmado pelo readback em runSalesbot: "Boa noite! 🌙 Como posso..."
+// chega como "Boa noite! " (corte EXATO no emoji).
+//
+// Diferente de `stripEmojis`, aqui preservamos a vibe da mensagem: mapeamos
+// o emoji 4-byte pro símbolo BMP mais próximo (☾, ☺, ♥, …). O que sobra
+// fora do mapa é stripado pra impedir a truncagem.
+//
+// Tabela enxuta de propósito: só os emoji que o agente costuma emitir.
+// Quando notar um emoji novo "sumindo" no readback, adiciona aqui.
+// ---------------------------------------------------------------------------
+
+const EMOJI_BMP_DOWNGRADE: ReadonlyMap<string, string> = new Map([
+  // Lua / noite
+  ['🌙', '☾'], ['🌛', '☾'], ['🌜', '☾'], ['🌚', '☾'], ['🌝', '☾'],
+  // Sol / dia
+  ['🌞', '☀'], ['🌅', '☀'], ['🌄', '☀'],
+  // Sorriso / positivo
+  ['😊', '☺'], ['😀', '☺'], ['😃', '☺'], ['😄', '☺'], ['🙂', '☺'], ['😁', '☺'],
+  // Tristeza / negativo
+  ['😢', '☹'], ['😞', '☹'], ['😔', '☹'], ['🙁', '☹'], ['😟', '☹'],
+  // Coração (todas as cores → ♥)
+  ['❤', '♥'], ['💜', '♥'], ['💙', '♥'], ['💚', '♥'], ['💛', '♥'],
+  ['🤍', '♥'], ['🖤', '♥'], ['🤎', '♥'], ['💕', '♥'], ['💖', '♥'],
+  ['💗', '♥'], ['💓', '♥'], ['💝', '♥'],
+  // Telefone / contato
+  ['📞', '☎'], ['📱', '☎'], ['📲', '☎'],
+  // Saúde / clínica (caduceu BMP)
+  ['🏥', '⚕'], ['💊', '⚕'], ['💉', '⚕'], ['🩺', '⚕'], ['🩹', '⚕'],
+  // Estrelas
+  ['🌟', '★'], ['⭐', '★'], ['🌠', '★'], ['💫', '★'],
+  // Mão / aprovação
+  ['👍', '✔'], ['👌', '✔'], ['🙌', '✔'], ['🤝', '✔'],
+  // Reprovação
+  ['👎', '✖'],
+  // Relógio
+  ['⏰', '⌚'], ['⏱', '⌚'], ['🕐', '⌚'], ['🕑', '⌚'], ['🕒', '⌚'],
+  // Fogo / atenção
+  ['🔥', '※'], ['⚠', '⚠'],
+  // Apontando
+  ['👉', '➤'], ['👈', '◀'], ['👇', '▼'], ['☝', '☝'],
+  // Setas comuns
+  ['↗', '↗'], ['↘', '↘'],
+  // Festa / sucesso
+  ['🎉', '✨'], ['🎊', '✨'], ['✨', '✨'],
+  // Calendário / agendamento
+  ['📅', '✎'], ['📆', '✎'], ['🗓', '✎'], ['📝', '✎'], ['✏', '✎'],
+]);
+
+export function downgradeEmoji(text: string): string {
+  let out = text;
+  for (const [from, to] of EMOJI_BMP_DOWNGRADE) {
+    if (out.includes(from)) out = out.replaceAll(from, to);
+  }
+  // Sobra (qualquer emoji 4-byte fora do mapa) → strip silencioso pra
+  // não engatilhar a truncagem do Kommo. Inclui variation selectors
+  // (FE0E/FE0F) órfãos que podem sobrar depois das substituições.
+  out = out.replace(/[\u{10000}-\u{10FFFF}]/gu, '');
+  out = out.replace(/[︎️]/g, '');
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // splitIntoChunks — quebra texto longo em pedaços ≤ maxLen respeitando
 // fronteiras naturais (parágrafo > frase > palavra).
 //
@@ -585,10 +652,14 @@ export class KommoClient {
     // (sem trigger do DP).
     const t0Patch = performance.now();
     try {
-      const sentBytes = Buffer.byteLength(text, 'utf8');
-      const hasEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(text);
+      // Downgrade 4-byte emoji ANTES do envio. Kommo trunca a string no
+      // primeiro char fora do BMP (bug de utf8 vs utf8mb4 no storage deles).
+      const safeText = downgradeEmoji(text);
+      const wasDowngraded = safeText !== text;
+      const sentBytes = Buffer.byteLength(safeText, 'utf8');
+      const hasEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(safeText);
       await this.http.patch(`/leads/${leadId}`, {
-        custom_fields_values: [{ field_id: replyFieldId, values: [{ value: text }] }],
+        custom_fields_values: [{ field_id: replyFieldId, values: [{ value: safeText }] }],
       });
       const patchMs = Math.round(performance.now() - t0Patch);
       logger.info(
@@ -596,31 +667,36 @@ export class KommoClient {
           leadId,
           replyFieldId,
           route: 'patch_field',
-          sentText: text,
-          sentLen: text.length,
+          sentText: safeText,
+          originalText: wasDowngraded ? text : undefined,
+          sentLen: safeText.length,
           sentBytes,
           hasEmoji,
+          wasDowngraded,
         },
         'runSalesbot: PATCH no campo Resposta IA enviado',
       );
       await recorder?.step({
         kind: 'KOMMO_ACTION',
-        title: `📤 PATCH "Resposta IA" — ${text.length} chars, ${sentBytes} bytes${hasEmoji ? ' (com emoji)' : ''}`,
+        title: `📤 PATCH "Resposta IA" — ${safeText.length} chars, ${sentBytes} bytes${hasEmoji ? ' (emoji BMP)' : ''}${wasDowngraded ? ' [downgrade]' : ''}`,
         payload: {
           leadId,
           replyFieldId,
-          sentText: text,
-          sentLen: text.length,
+          sentText: safeText,
+          originalText: wasDowngraded ? text : undefined,
+          sentLen: safeText.length,
           sentBytes,
           hasEmoji,
+          wasDowngraded,
         },
         latencyMs: patchMs,
       });
 
       // READBACK — lê o lead de volta pra confirmar o que ficou armazenado.
-      // Isola se o emoji se perde no fio (encoding) ou na renderização do
-      // Salesbot. Faz só quando há emoji pra não gastar API em todo turno.
-      if (hasEmoji) {
+      // Compara contra `safeText` (o que de fato mandamos depois do downgrade),
+      // não contra `text`. Se mesmo o BMP estiver sumindo, o problema é
+      // outro (ex: Kommo aplicando algum strip extra) e a gente precisa saber.
+      if (hasEmoji || wasDowngraded) {
         const t0Read = performance.now();
         try {
           const { data: lead } = await this.http.get<KommoLead>(`/leads/${leadId}`);
@@ -633,26 +709,28 @@ export class KommoClient {
             typeof storedStr === 'string'
               ? /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(storedStr)
               : false;
-          const match = storedStr === text;
+          const match = storedStr === safeText;
           logger.info(
-            { leadId, replyFieldId, storedValue: storedStr, storedHasEmoji, match },
-            storedHasEmoji
-              ? '🟢 Kommo armazenou COM emoji — se não chega ao paciente, é o Salesbot/template removendo'
-              : '🔴 Kommo armazenou SEM emoji — emoji se perdeu no PATCH (encoding/charset issue)',
+            { leadId, replyFieldId, storedValue: storedStr, storedHasEmoji, match, wasDowngraded },
+            match
+              ? '🟢 Kommo armazenou idêntico ao enviado (downgrade efetivo)'
+              : '🔴 Storage do Kommo divergiu mesmo após downgrade — investigar',
           );
           await recorder?.step({
             kind: 'KOMMO_ACTION',
-            title: storedHasEmoji
-              ? `🟢 Readback: Kommo armazenou COM emoji (${match ? 'idêntico ao enviado' : 'diferente do enviado'})`
-              : '🔴 Readback: Kommo armazenou SEM emoji — perda no PATCH',
+            title: match
+              ? `🟢 Readback: Kommo armazenou idêntico (${storedStr.length} chars)`
+              : '🔴 Readback: divergência mesmo após downgrade',
             payload: {
-              sentText: text,
+              sentText: safeText,
+              originalText: wasDowngraded ? text : undefined,
               storedValue: storedStr,
               storedHasEmoji,
               match,
-              diagnostico: storedHasEmoji
-                ? 'Storage do Kommo OK. Se paciente não vê emoji → Salesbot/template removendo na renderização.'
-                : 'Kommo descartou emoji ao receber via API. Workaround: usar bypass ou mexer no encoding.',
+              wasDowngraded,
+              diagnostico: match
+                ? 'Downgrade resolveu — mensagem chegou íntegra ao Kommo.'
+                : 'Mesmo com chars BMP houve perda — Kommo pode estar aplicando outro filtro de sanitização.',
             },
             latencyMs: readMs,
           });
@@ -837,18 +915,31 @@ export class KommoClient {
 
     if (chatId) {
       const t0 = performance.now();
+      // Mesmo downgrade defensivo do PATCH: /chats também pode passar pelo
+      // storage com utf8 (3-byte). Se na prática esse endpoint aceitar 4-byte
+      // sem truncar, o downgrade só preserva consistência visual entre os
+      // dois caminhos — não há regressão.
+      const safeText = downgradeEmoji(text);
+      const wasDowngraded = safeText !== text;
       try {
         const { data } = await this.http.post(`/chats/${chatId}/messages`, {
-          text,
+          text: safeText,
           ...(talkId ? { talk_id: talkId } : {}),
           ...(contactId ? { contact_id: contactId } : {}),
         });
         const ms = Math.round(performance.now() - t0);
-        logger.info({ leadId, chatId, talkId }, 'kommo chat message enviada');
+        logger.info({ leadId, chatId, talkId, wasDowngraded }, 'kommo chat message enviada');
         await recorder?.step({
           kind: 'KOMMO_ACTION',
-          title: `📨 Mensagem enviada via /chats/${chatId}/messages`,
-          payload: { leadId, chatId, talkId, sentText: text },
+          title: `📨 Mensagem enviada via /chats/${chatId}/messages${wasDowngraded ? ' [downgrade]' : ''}`,
+          payload: {
+            leadId,
+            chatId,
+            talkId,
+            sentText: safeText,
+            originalText: wasDowngraded ? text : undefined,
+            wasDowngraded,
+          },
           latencyMs: ms,
         });
         return { via: 'chat_message', detail: data };

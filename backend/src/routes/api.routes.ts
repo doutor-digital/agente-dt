@@ -20,6 +20,7 @@ import { handleKommoWebhook } from '../controllers/webhook.controller.js';
 import { handleSalesbotWebhook } from '../controllers/salesbot.controller.js';
 import { handleMetaVerify, handleMetaWebhook } from '../controllers/meta.controller.js';
 import { listTraces, getTrace, getStats } from '../controllers/traces.controller.js';
+import { listSystemLogs, listSystemLogModules } from '../controllers/logs.controller.js';
 import { getConfig, putConfig } from '../controllers/config.controller.js';
 import {
   listUnitsHandler,
@@ -166,6 +167,8 @@ apiRouter.delete('/units/:id/actions/:actionId', requireUnitAccess, deleteAction
 apiRouter.get('/traces', listTraces);
 apiRouter.get('/traces/:id', getTrace);
 apiRouter.get('/stats', getStats);
+apiRouter.get('/system-logs', listSystemLogs);
+apiRouter.get('/system-logs/modules', listSystemLogModules);
 apiRouter.get('/llm-calls', listLlmCallsHandler);
 apiRouter.get('/llm-calls/:id', getLlmCallHandler);
 apiRouter.get('/conversations', listConversationsHandler);

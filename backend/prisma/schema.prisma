@@ -199,6 +199,7 @@ model Unit {
   knowledgeBase    KnowledgeBaseEntry[]
   actions          UnitAction[]
   admins           User[]
+  systemLogs       SystemLog[]
 
   @@map("units")
 }
@@ -343,9 +344,10 @@ model ExecutionTrace {
   createdAt    DateTime    @default(now()) @map("created_at")
   updatedAt    DateTime    @updatedAt @map("updated_at")
 
-  steps    ExecutionStep[]
-  llmCalls LlmCall[]
-  unit     Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  steps      ExecutionStep[]
+  llmCalls   LlmCall[]
+  unit       Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  systemLogs SystemLog[]
 
   @@index([unitId])
   @@index([threadId])
@@ -398,6 +400,47 @@ enum StepKind {
   META_ACTION
   COMPLETED
   ERROR
+}
+
+// ===========================================================================
+// SystemLog — logs estruturados (warn+) persistidos para o painel "Erros".
+// ===========================================================================
+// Captura automática via hook do Pino em backend/src/lib/logger.ts:
+// todo logger.warn/error/fatal é gravado aqui de forma fire-and-forget,
+// sem mudar callsites. Stdout continua intacto pra dev e agregadores.
+//
+// `module` identifica a origem (ex: "kommo.service", "webhook.controller").
+// `context` é o objeto livre que vai como primeiro arg do Pino — fica
+// inteiro pra inspeção no painel.
+//
+// `traceId` e `unitId` são nullable porque nem todo log nasce dentro de
+// uma execução (ex: erro de boot, erro de auth global). Quando presentes,
+// permitem drill-down: do erro pro trace pro lead.
+// ===========================================================================
+model SystemLog {
+  id        String      @id @default(cuid())
+  level     LogLevel
+  module    String?
+  msg       String
+  context   Json?
+  unitId    String?     @map("unit_id")
+  traceId   String?     @map("trace_id")
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  unit  Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  trace ExecutionTrace? @relation(fields: [traceId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([level])
+  @@index([unitId])
+  @@index([module])
+  @@map("system_logs")
+}
+
+enum LogLevel {
+  WARN
+  ERROR
+  FATAL
 }
 
 // ===========================================================================
