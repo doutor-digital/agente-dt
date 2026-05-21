@@ -535,6 +535,7 @@ async function processAgent(args: {
           talkId,
           contactId,
           text: reply,
+          recorder,
         });
         await recorder.step({
           kind: 'KOMMO_ACTION',

@@ -51,6 +51,13 @@ const KIND_STYLE: Record<
     color: 'text-violet-300',
     ring: 'ring-violet-500/40 bg-violet-500/10',
   },
+  META_ACTION: {
+    icon: Zap,
+    emoji: '💬',
+    label: 'WhatsApp',
+    color: 'text-emerald-300',
+    ring: 'ring-emerald-500/40 bg-emerald-500/10',
+  },
   COMPLETED: {
     icon: CheckCircle2,
     emoji: '✅',

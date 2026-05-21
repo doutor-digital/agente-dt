@@ -95,12 +95,24 @@ export interface MoveStageParams {
   pipelineId?: number;
 }
 
+/** Interface mínima do recorder pra evitar import circular. */
+export interface KommoStepRecorder {
+  step(args: {
+    kind: 'KOMMO_ACTION' | 'ERROR';
+    title: string;
+    payload?: unknown;
+    latencyMs?: number;
+  }): Promise<void>;
+}
+
 export interface SendChatReplyParams {
   leadId: number;
   text: string;
   chatId: string | null;
   talkId: string | null;
   contactId: string | null;
+  /** Opcional: se passado, cada operação Kommo vira um step no painel. */
+  recorder?: KommoStepRecorder;
 }
 
 export type SendChatReplyVia = 'salesbot' | 'chat_message' | 'lead_note';
@@ -553,11 +565,13 @@ export class KommoClient {
     salesbotId,
     replyFieldId,
     text,
+    recorder,
   }: {
     leadId: number;
     salesbotId: number;
     replyFieldId: number;
     text: string;
+    recorder?: KommoStepRecorder;
   }): Promise<unknown> {
     // ⚠ ATENÇÃO À DUPLICAÇÃO: este método dispara o salesbot por DOIS caminhos:
     //   1. PATCH no campo "Resposta IA" — se o Digital Pipeline do Kommo está
@@ -569,29 +583,124 @@ export class KommoClient {
     // (não 404) E o paciente recebeu 2 mensagens, desabilite o trigger do
     // Digital Pipeline ou troque o `kommoReplyFieldId` por um campo "burro"
     // (sem trigger do DP).
+    const t0Patch = performance.now();
     try {
+      const sentBytes = Buffer.byteLength(text, 'utf8');
+      const hasEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(text);
       await this.http.patch(`/leads/${leadId}`, {
         custom_fields_values: [{ field_id: replyFieldId, values: [{ value: text }] }],
       });
-      logger.debug(
-        { leadId, replyFieldId, route: 'patch_field' },
-        'runSalesbot: PATCH no campo Resposta IA enviado (pode disparar Digital Pipeline)',
+      const patchMs = Math.round(performance.now() - t0Patch);
+      logger.info(
+        {
+          leadId,
+          replyFieldId,
+          route: 'patch_field',
+          sentText: text,
+          sentLen: text.length,
+          sentBytes,
+          hasEmoji,
+        },
+        'runSalesbot: PATCH no campo Resposta IA enviado',
       );
+      await recorder?.step({
+        kind: 'KOMMO_ACTION',
+        title: `📤 PATCH "Resposta IA" — ${text.length} chars, ${sentBytes} bytes${hasEmoji ? ' (com emoji)' : ''}`,
+        payload: {
+          leadId,
+          replyFieldId,
+          sentText: text,
+          sentLen: text.length,
+          sentBytes,
+          hasEmoji,
+        },
+        latencyMs: patchMs,
+      });
+
+      // READBACK — lê o lead de volta pra confirmar o que ficou armazenado.
+      // Isola se o emoji se perde no fio (encoding) ou na renderização do
+      // Salesbot. Faz só quando há emoji pra não gastar API em todo turno.
+      if (hasEmoji) {
+        const t0Read = performance.now();
+        try {
+          const { data: lead } = await this.http.get<KommoLead>(`/leads/${leadId}`);
+          const readMs = Math.round(performance.now() - t0Read);
+          const stored = lead.custom_fields_values?.find((f) => f.field_id === replyFieldId);
+          const storedValue = stored?.values?.[0]?.value;
+          const storedStr =
+            typeof storedValue === 'string' ? storedValue : JSON.stringify(storedValue);
+          const storedHasEmoji =
+            typeof storedStr === 'string'
+              ? /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(storedStr)
+              : false;
+          const match = storedStr === text;
+          logger.info(
+            { leadId, replyFieldId, storedValue: storedStr, storedHasEmoji, match },
+            storedHasEmoji
+              ? '🟢 Kommo armazenou COM emoji — se não chega ao paciente, é o Salesbot/template removendo'
+              : '🔴 Kommo armazenou SEM emoji — emoji se perdeu no PATCH (encoding/charset issue)',
+          );
+          await recorder?.step({
+            kind: 'KOMMO_ACTION',
+            title: storedHasEmoji
+              ? `🟢 Readback: Kommo armazenou COM emoji (${match ? 'idêntico ao enviado' : 'diferente do enviado'})`
+              : '🔴 Readback: Kommo armazenou SEM emoji — perda no PATCH',
+            payload: {
+              sentText: text,
+              storedValue: storedStr,
+              storedHasEmoji,
+              match,
+              diagnostico: storedHasEmoji
+                ? 'Storage do Kommo OK. Se paciente não vê emoji → Salesbot/template removendo na renderização.'
+                : 'Kommo descartou emoji ao receber via API. Workaround: usar bypass ou mexer no encoding.',
+            },
+            latencyMs: readMs,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ err, leadId }, 'readback falhou — não conseguimos ler o campo de volta');
+          await recorder?.step({
+            kind: 'ERROR',
+            title: `Readback falhou: ${msg}`,
+            payload: { leadId, error: msg },
+          });
+        }
+      }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await recorder?.step({
+        kind: 'ERROR',
+        title: `❌ PATCH no campo "Resposta IA" falhou: ${msg}`,
+        payload: { leadId, replyFieldId, error: msg },
+      });
       wrapAxiosError(err, `runSalesbot:setField(${leadId}, field=${replyFieldId})`);
     }
 
+    const t0Run = performance.now();
     try {
       const { data } = await this.http.post(`/salesbot/${salesbotId}/run`, [
         { bot_id: salesbotId, entity_type: 2, entity_id: leadId },
       ]);
+      const runMs = Math.round(performance.now() - t0Run);
       logger.warn(
         { leadId, salesbotId, route: 'post_run' },
         'runSalesbot: POST /salesbot/run retornou 200 — se o Digital Pipeline também dispara o bot ao mudar Resposta IA, o paciente vai receber a mensagem 2x',
       );
+      await recorder?.step({
+        kind: 'KOMMO_ACTION',
+        title: `⚠️ POST /salesbot/${salesbotId}/run retornou 200 — risco de disparo duplo`,
+        payload: {
+          leadId,
+          salesbotId,
+          alerta:
+            'Se o Digital Pipeline também dispara este Salesbot ao mudar o campo, o paciente recebe a mensagem 2x. Considere desligar um dos gatilhos.',
+        },
+        latencyMs: runMs,
+      });
       return { runApi: 'ok', data };
     } catch (err) {
       const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      const runMs = Math.round(performance.now() - t0Run);
       if (status === 404) {
         // Conta não expõe o endpoint /run via REST. O trigger do Digital
         // Pipeline cuida do disparo. Não é falha — é o caminho esperado.
@@ -599,8 +708,26 @@ export class KommoClient {
           { leadId, salesbotId },
           'runSalesbot: POST /run 404 (conta sem API). Confiando no Digital Pipeline trigger.',
         );
+        await recorder?.step({
+          kind: 'KOMMO_ACTION',
+          title: '🔁 POST /salesbot/run = 404 (esperado nesta conta). Digital Pipeline cuida.',
+          payload: {
+            leadId,
+            salesbotId,
+            triggeredBy: 'field_change',
+            nota: 'Sua conta Kommo não expõe POST /salesbot/{id}/run. O envio acontece pelo gatilho do Digital Pipeline quando o campo "Resposta IA" muda.',
+          },
+          latencyMs: runMs,
+        });
         return { runApi: 'unavailable_404', triggeredBy: 'field_change' };
       }
+      const msg = err instanceof Error ? err.message : String(err);
+      await recorder?.step({
+        kind: 'ERROR',
+        title: `❌ POST /salesbot/run falhou (${status ?? 'sem status'}): ${msg}`,
+        payload: { leadId, salesbotId, status, error: msg },
+        latencyMs: runMs,
+      });
       wrapAxiosError(err, `runSalesbot:run(${leadId}, bot=${salesbotId})`);
     }
   }
@@ -622,6 +749,7 @@ export class KommoClient {
     chatId,
     talkId,
     contactId,
+    recorder,
   }: SendChatReplyParams): Promise<SendChatReplyResult> {
     // ─────────────────────────────────────────────────────────────────────
     // MODO BYPASS — comportamento "edição manual": faz APENAS o PATCH no
@@ -634,6 +762,7 @@ export class KommoClient {
     // "Quando campo Resposta IA mudar → rodar Salesbot".
     // ─────────────────────────────────────────────────────────────────────
     if (this.creds.bypassSalesbot && this.creds.replyFieldId) {
+      const t0 = performance.now();
       try {
         const chunks = splitIntoChunks(text, 240);
         for (let i = 0; i < chunks.length; i++) {
@@ -646,14 +775,34 @@ export class KommoClient {
             await new Promise((r) => setTimeout(r, 900));
           }
         }
+        const ms = Math.round(performance.now() - t0);
         logger.info(
           { leadId, replyFieldId: this.creds.replyFieldId, chunks: chunks.length, mode: 'patch_only' },
           'kommo bypass: PATCH-only no campo Resposta IA (Digital Pipeline cuida do envio)',
         );
+        await recorder?.step({
+          kind: 'KOMMO_ACTION',
+          title: `📤 Modo "edição manual" — PATCH ${chunks.length}× no campo, Digital Pipeline cuida do envio`,
+          payload: {
+            mode: 'patch_only',
+            chunks: chunks.length,
+            sentText: text,
+            leadId,
+            replyFieldId: this.creds.replyFieldId,
+          },
+          latencyMs: ms,
+        });
         return { via: 'salesbot', detail: { mode: 'patch_only', chunks: chunks.length } };
       } catch (err) {
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        const msg = err instanceof Error ? err.message : String(err);
         logger.warn({ err, leadId, status }, 'kommo bypass: PATCH falhou, tentando outros caminhos');
+        await recorder?.step({
+          kind: 'ERROR',
+          title: `❌ Bypass PATCH falhou (${status ?? '?'}): ${msg}`,
+          payload: { leadId, status, error: msg },
+          latencyMs: Math.round(performance.now() - t0),
+        });
       }
     } else if (this.creds.salesbotId && this.creds.replyFieldId) {
       try {
@@ -669,6 +818,7 @@ export class KommoClient {
             salesbotId: this.creds.salesbotId,
             replyFieldId: this.creds.replyFieldId,
             text: chunks[i],
+            recorder,
           });
           if (i < chunks.length - 1) {
             await new Promise((r) => setTimeout(r, 900));
@@ -686,31 +836,63 @@ export class KommoClient {
     }
 
     if (chatId) {
+      const t0 = performance.now();
       try {
         const { data } = await this.http.post(`/chats/${chatId}/messages`, {
           text,
           ...(talkId ? { talk_id: talkId } : {}),
           ...(contactId ? { contact_id: contactId } : {}),
         });
+        const ms = Math.round(performance.now() - t0);
         logger.info({ leadId, chatId, talkId }, 'kommo chat message enviada');
+        await recorder?.step({
+          kind: 'KOMMO_ACTION',
+          title: `📨 Mensagem enviada via /chats/${chatId}/messages`,
+          payload: { leadId, chatId, talkId, sentText: text },
+          latencyMs: ms,
+        });
         return { via: 'chat_message', detail: data };
       } catch (err) {
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
         const body = axios.isAxiosError(err) ? err.response?.data : undefined;
-        // Subimos de `debug` pra `warn` — esse fallback é importante pro
-        // operador entender por que a mensagem foi pra nota interna.
         logger.warn(
           { leadId, chatId, talkId, status, body },
           'kommo /chats/{id}/messages falhou — caindo pra nota interna (mensagem NÃO vai pro paciente)',
         );
+        await recorder?.step({
+          kind: 'ERROR',
+          title: `⚠️ /chats/${chatId}/messages falhou (${status ?? '?'}) — caindo pra nota interna`,
+          payload: {
+            leadId,
+            chatId,
+            status,
+            body,
+            atencao:
+              'Sua conta Kommo não suporta esse endpoint. Mensagem vai virar nota interna (paciente NÃO recebe).',
+          },
+          latencyMs: Math.round(performance.now() - t0),
+        });
       }
     }
 
+    const t0Note = performance.now();
     try {
       const { data } = await this.http.post(`/leads/${leadId}/notes`, [
         { note_type: 'common', params: { text: `🤖 IA: ${text}` } },
       ]);
+      const ms = Math.round(performance.now() - t0Note);
       logger.info({ leadId }, 'kommo nota criada com resposta da IA');
+      await recorder?.step({
+        kind: 'KOMMO_ACTION',
+        title: `📝 Caiu no fallback: nota interna criada (paciente NÃO recebe)`,
+        payload: {
+          leadId,
+          sentText: text,
+          atencao:
+            'Esta é a última camada de fallback. O paciente NÃO recebeu a mensagem — só ficou registrada como nota no lead pra revisão.',
+        },
+        latencyMs: ms,
+      });
       return { via: 'lead_note', detail: data };
     } catch (err) {
       wrapAxiosError(err, `sendChatReply(${leadId})`);
