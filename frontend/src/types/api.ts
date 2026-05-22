@@ -706,7 +706,8 @@ export type ActionKind =
   | 'move_stage'
   | 'transfer_with_permission'
   | 'transfer_without_permission'
-  | 'summarize_to_note';
+  | 'summarize_to_note'
+  | 'send_message';
 
 /** Uma ação dentro de uma regra (várias podem rodar juntas). */
 export interface ActionStep {

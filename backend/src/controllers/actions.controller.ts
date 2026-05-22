@@ -25,6 +25,7 @@ const ACTION_KINDS: ActionKind[] = [
   'transfer_with_permission',
   'transfer_without_permission',
   'summarize_to_note',
+  'send_message',
 ];
 
 // Params validators por kind.
@@ -42,6 +43,9 @@ const transferParams = z.object({
 const summarizeParams = z.object({
   focusHint: z.string().max(400).optional(),
 });
+const sendMessageParams = z.object({
+  text: z.string().min(1, 'mensagem vazia').max(2000),
+});
 
 function validateActionStep(step: { kind: string; params: unknown }, ctx: z.RefinementCtx, idx: number) {
   const path: (string | number)[] = ['actions', idx, 'params'];
@@ -57,6 +61,9 @@ function validateActionStep(step: { kind: string; params: unknown }, ctx: z.Refi
   } else if (step.kind === 'summarize_to_note') {
     const r = summarizeParams.safeParse(step.params);
     if (!r.success) ctx.addIssue({ code: 'custom', path, message: `summarize_to_note: focusHint inválido` });
+  } else if (step.kind === 'send_message') {
+    const r = sendMessageParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `send_message exige { text: string } não vazio (até 2000 chars)` });
   }
 }
 

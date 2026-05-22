@@ -23,7 +23,8 @@ export type ActionKind =
   | 'move_stage'
   | 'transfer_with_permission'
   | 'transfer_without_permission'
-  | 'summarize_to_note';
+  | 'summarize_to_note'
+  | 'send_message';
 
 export interface AddTagParams {
   tags: string[];
@@ -45,11 +46,17 @@ export interface SummarizeToNoteParams {
   focusHint?: string;
 }
 
+export interface SendMessageParams {
+  /** Texto exato que a IA deve enviar quando esta ação dispara. */
+  text: string;
+}
+
 export type ActionParams =
   | AddTagParams
   | MoveStageParams
   | TransferParams
   | SummarizeToNoteParams
+  | SendMessageParams
   | Record<string, never>;
 
 /** Uma ação dentro de uma regra (array element). */

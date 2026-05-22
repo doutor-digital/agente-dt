@@ -22,6 +22,7 @@ import {
   CheckCircle2,
   FileText,
   Loader2,
+  MessageCircle,
   Pencil,
   Plus,
   RefreshCw,
@@ -58,6 +59,8 @@ interface DraftStep {
   includeSummary?: boolean;
   /** summarize_to_note */
   focusHint?: string;
+  /** send_message */
+  text?: string;
 }
 
 interface DraftRule {
@@ -71,6 +74,7 @@ function defaultStep(kind: ActionKind): DraftStep {
   if (kind === 'add_tag') return { kind, tags: [] };
   if (kind === 'move_stage') return { kind, statusId: null, pipelineId: null, statusLabel: null };
   if (kind === 'summarize_to_note') return { kind, focusHint: '' };
+  if (kind === 'send_message') return { kind, text: '' };
   return { kind, includeSummary: true };
 }
 
@@ -104,6 +108,9 @@ function stepFromAction(s: ActionStep): DraftStep {
   if (s.kind === 'summarize_to_note') {
     return { kind: s.kind, focusHint: typeof params.focusHint === 'string' ? params.focusHint : '' };
   }
+  if (s.kind === 'send_message') {
+    return { kind: s.kind, text: typeof params.text === 'string' ? params.text : '' };
+  }
   return { kind: s.kind, includeSummary: params.includeSummary !== false };
 }
 
@@ -129,6 +136,9 @@ function stepToParams(s: DraftStep): Record<string, unknown> {
   if (s.kind === 'summarize_to_note') {
     return s.focusHint?.trim() ? { focusHint: s.focusHint.trim() } : {};
   }
+  if (s.kind === 'send_message') {
+    return { text: (s.text ?? '').trim() };
+  }
   return { includeSummary: s.includeSummary !== false };
 }
 
@@ -144,6 +154,7 @@ function draftToInput(d: DraftRule): UnitActionInput {
 function isStepValid(s: DraftStep): boolean {
   if (s.kind === 'add_tag') return (s.tags?.length ?? 0) > 0;
   if (s.kind === 'move_stage') return !!s.statusId && s.statusId > 0;
+  if (s.kind === 'send_message') return !!s.text && s.text.trim().length > 0;
   return true; // transfer_* e summarize_to_note são válidos sem params extras
 }
 
@@ -170,6 +181,11 @@ const KIND_LABEL: Record<ActionKind, { label: string; icon: typeof Tag; color: s
     label: 'Resumir lead pro SDR (nota interna)',
     icon: FileText,
     color: 'text-violet-300',
+  },
+  send_message: {
+    label: 'Enviar mensagem',
+    icon: MessageCircle,
+    color: 'text-cyan-300',
   },
 };
 
@@ -1121,6 +1137,30 @@ function StepEditor({
           </p>
         </div>
       )}
+      {step.kind === 'send_message' && (
+        <div className="space-y-1.5">
+          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+            Mensagem que a IA vai enviar
+          </label>
+          <textarea
+            value={step.text ?? ''}
+            onChange={(e) => onChange({ ...step, text: e.target.value })}
+            rows={4}
+            maxLength={2000}
+            placeholder={'ex: Já estou te conectando com nossa equipe de agendamento, só um instante 💚'}
+            className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none transition resize-y leading-relaxed"
+          />
+          <div className="flex items-center justify-between text-[10px] leading-tight">
+            <p className="text-zinc-600">
+              A IA envia <strong className="text-zinc-400">exatamente</strong> esse texto quando a regra bater
+              (sem reformular). Pode incluir emoji.
+            </p>
+            <span className="text-zinc-600 font-mono shrink-0 ml-2">
+              {(step.text ?? '').length}/2000
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1159,6 +1199,14 @@ function StepSummary({ step }: { step: ActionStep }) {
       {step.kind === 'summarize_to_note' && focusHint && (
         <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-200 text-[11px] ring-1 ring-violet-500/30 italic">
           foco: {focusHint}
+        </span>
+      )}
+      {step.kind === 'send_message' && typeof params.text === 'string' && params.text.trim() && (
+        <span
+          className="inline-flex items-center px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-100 text-[11px] ring-1 ring-cyan-500/30 italic max-w-full"
+          title={params.text}
+        >
+          <span className="truncate">"{params.text.slice(0, 60)}{params.text.length > 60 ? '…' : ''}"</span>
         </span>
       )}
     </div>

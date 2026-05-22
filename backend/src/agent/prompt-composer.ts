@@ -408,6 +408,13 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
         : '';
       return `chame resumir_lead_para_sdr(leadId) — gera um resumo do contexto e posta como NOTA INTERNA no Kommo pro SDR humano ver.${hint} A nota fica visível só pros operadores; o paciente não vê.`;
     }
+    case 'send_message': {
+      const text = typeof params.text === 'string' ? params.text.trim() : '';
+      if (!text) return 'enviar mensagem (texto não configurado)';
+      // Aspas triplas pro LLM identificar o bloco literal. Reforçamos a regra
+      // de "verbatim" — sem isso o LLM tende a parafrasear.
+      return `ENVIE EXATAMENTE esta mensagem como sua resposta no turno corrente (reproduza palavra-por-palavra, sem reformular nem resumir; pode adicionar 1 emoji no fim se combinar com o tom):\n"""\n${text}\n"""`;
+    }
     default:
       return `executar ação "${step.kind}"`;
   }
