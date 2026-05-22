@@ -65,7 +65,8 @@ export type AppTab =
   | 'config'
   | 'units'
   | 'users'
-  | 'errors';
+  | 'errors'
+  | 'whatsapp';
 
 interface NavItem {
   id: AppTab;
@@ -88,6 +89,7 @@ const NAV: NavItem[] = [
   { id: 'errors', label: 'Erros', icon: AlertOctagon, group: 'primary' },
 
   { id: 'reports', label: 'Relatórios', icon: FileBarChart, group: 'secondary' },
+  { id: 'whatsapp', label: 'Custo WhatsApp', icon: MessageCircle, group: 'secondary' },
   { id: 'llm', label: 'Chamadas IA', icon: Cpu, group: 'secondary' },
   { id: 'prompts', label: 'Prompts', icon: Sparkles, group: 'secondary' },
   { id: 'integrations', label: 'Integrações', icon: Cable, group: 'secondary' },

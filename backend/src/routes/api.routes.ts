@@ -80,6 +80,7 @@ import {
   reportLlmCostHandler,
   reportActionsHandler,
   reportErrorsHandler,
+  reportWhatsappCostHandler,
 } from '../controllers/reports.controller.js';
 import {
   listLeadFieldRulesHandler,
@@ -89,6 +90,11 @@ import {
   listKommoLeadCustomFieldsHandler,
 } from '../controllers/lead-field-rules.controller.js';
 import { getAlerts, getIntegrations } from '../controllers/integrations.controller.js';
+import {
+  getWhatsappCostsHandler,
+  getWhatsappTemplatesHandler,
+  syncWhatsappCostsHandler,
+} from '../controllers/whatsapp-costs.controller.js';
 import {
   getPromptPerformanceHandler,
   getConversationEvaluationHandler,
@@ -154,6 +160,9 @@ apiRouter.get('/units/:id/stats', requireUnitAccess, unitStatsHandler);
 apiRouter.get('/units/:id/dashboard', requireUnitAccess, dashboardHandler);
 apiRouter.get('/units/:id/leads-bucket', requireUnitAccess, leadsBucketHandler);
 apiRouter.get('/units/:id/integrations', requireUnitAccess, getIntegrations);
+apiRouter.get('/units/:id/whatsapp-costs', requireUnitAccess, getWhatsappCostsHandler);
+apiRouter.get('/units/:id/whatsapp-templates', requireUnitAccess, getWhatsappTemplatesHandler);
+apiRouter.post('/units/:id/whatsapp-costs/sync', requireUnitAccess, syncWhatsappCostsHandler);
 apiRouter.get('/units/:id/openai-debug', requireUnitAccess, openaiDebugHandler);
 apiRouter.get('/units/:id/prompt-performance', requireUnitAccess, getPromptPerformanceHandler);
 apiRouter.get('/units/:id/flagged-messages', requireUnitAccess, listFlaggedMessagesHandler);
@@ -197,6 +206,7 @@ apiRouter.get('/reports/conversations', reportConversationsHandler);
 apiRouter.get('/reports/llm-cost', reportLlmCostHandler);
 apiRouter.get('/reports/actions', reportActionsHandler);
 apiRouter.get('/reports/errors', reportErrorsHandler);
+apiRouter.get('/reports/whatsapp-cost', reportWhatsappCostHandler);
 
 // LeadFieldRules — captura de dados pra custom fields do Kommo.
 apiRouter.get('/units/:id/lead-field-rules', requireUnitAccess, listLeadFieldRulesHandler);

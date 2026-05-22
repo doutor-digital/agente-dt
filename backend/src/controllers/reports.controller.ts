@@ -425,6 +425,73 @@ export async function reportErrorsHandler(req: Request, res: Response): Promise<
   await sendReport(res, format, 'erros', spec, range);
 }
 
+// ---------------------------------------------------------------------------
+// 5) WhatsApp Cost (Meta Graph API — pricing_analytics + template_analytics)
+// ---------------------------------------------------------------------------
+
+export async function reportWhatsappCostHandler(req: Request, res: Response): Promise<void> {
+  const parsed = querySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+  const { format, from: fromStr, to: toStr } = parsed.data;
+  const range = resolveRange(fromStr, toStr);
+  const scope = resolveUnitScope(req, parsed.data.unitId);
+
+  // Agrega via SQL pra suportar muitas linhas sem inflar memória.
+  const aggregates = await prisma.whatsappCostDaily.groupBy({
+    by: ['unitId', 'pricingCategory', 'pricingType', 'country'],
+    where: {
+      date: { gte: range.from, lt: range.to },
+      ...(scope.unitId ? { unitId: scope.unitId } : {}),
+    },
+    _sum: { volume: true, costUsd: true },
+    _count: true,
+  });
+
+  const unitIds = [...new Set(aggregates.map((a) => a.unitId))];
+  const units = unitIds.length
+    ? await prisma.unit.findMany({
+        where: { id: { in: unitIds } },
+        select: { id: true, slug: true },
+      })
+    : [];
+  const unitSlug = new Map(units.map((u) => [u.id, u.slug]));
+
+  const rows: ReportRow[] = aggregates.map((a) => ({
+    unit: unitSlug.get(a.unitId) ?? a.unitId,
+    categoria: a.pricingCategory,
+    tipo: a.pricingType,
+    pais: a.country || '(agregado)',
+    volume: a._sum.volume ?? 0,
+    custo_usd: (a._sum.costUsd?.toNumber() ?? 0).toFixed(6),
+  }));
+  rows.sort((a, b) => Number(b.custo_usd) - Number(a.custo_usd));
+
+  const totalVolume = aggregates.reduce((sum, a) => sum + (a._sum.volume ?? 0), 0);
+  const totalCost = aggregates.reduce((sum, a) => sum + (a._sum.costUsd?.toNumber() ?? 0), 0);
+
+  const spec: ReportSpec = {
+    title: 'Custo WhatsApp (Meta)',
+    subtitle: `Período: ${fmtDate(range.from)} → ${fmtDate(
+      new Date(range.to.getTime() - 1),
+    )} · ${scope.unitId ? `Unit: ${unitSlug.get(scope.unitId) ?? scope.unitId}` : 'Todas as units'} · ${totalVolume.toLocaleString('pt-BR')} mensagens · $${totalCost.toFixed(4)}`,
+    columns: [
+      { key: 'unit', label: 'Unit', width: 1 },
+      { key: 'categoria', label: 'Categoria', width: 1.4 },
+      { key: 'tipo', label: 'Tipo', width: 1.2 },
+      { key: 'pais', label: 'País', width: 0.8 },
+      { key: 'volume', label: 'Mensagens', width: 1 },
+      { key: 'custo_usd', label: 'Custo USD', width: 1 },
+    ],
+    rows,
+    footer: `Gerado em ${fmtDateTime(new Date())} · fonte: Meta pricing_analytics`,
+  };
+
+  await sendReport(res, format, 'custo-whatsapp', spec, range);
+}
+
 export function registerReportsLogging(): void {
   // Placeholder caso queira instrumentar uma métrica unificada depois.
   logger.debug({ module: 'reports' }, 'reports controller registrado');

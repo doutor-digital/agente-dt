@@ -18,7 +18,8 @@
     "lint": "tsc --noEmit",
     "create-unit": "tsx src/scripts/create-unit.ts",
     "promote-admin": "tsx src/scripts/promote-admin.ts",
-    "seed-global-actions": "tsx src/scripts/seed-global-actions.ts"
+    "seed-global-actions": "tsx src/scripts/seed-global-actions.ts",
+    "sync-whatsapp-costs": "tsx src/scripts/sync-whatsapp-costs.ts"
   },
   "dependencies": {
     "@langchain/anthropic": "^1.3.29",

@@ -110,10 +110,32 @@ export interface MetaCard {
   configured: boolean;
   status: CardStatus;
   phoneNumberId: string | null;
+  wabaId: string | null;
   hasAccessToken: boolean;
   hasVerifyToken: boolean;
   hasAppSecret: boolean;
   webhookUrl: string;
+  // Custo do mês corrente (vem da tabela whatsapp_cost_daily — populada
+  // pelo sync diário). null se WABA não está configurada ou sem dados ainda.
+  cost: null | {
+    monthSpentUsd: number;
+    monthVolume: number;
+    todayCostUsd: number;
+    todayVolume: number;
+    last7DaysCostUsd: number;
+    last7DaysVolume: number;
+    byCategory: Array<{ pricingCategory: string; volume: number; costUsd: number }>;
+    lastSyncedAt: string | null;
+  };
+  budget: {
+    monthlyUsd: number;
+    spentUsd: number;
+    pctUsed: number;
+    remainingUsd: number;
+    daysIntoMonth: number;
+    projectedMonthUsd: number;
+    alert: 'ok' | 'warning' | 'danger' | 'over';
+  };
   alerts: string[];
 }
 
@@ -421,25 +443,126 @@ async function buildKommoCard(unit: Unit): Promise<KommoCard> {
   }
 }
 
-function buildMetaCard(unit: Unit, host: string): MetaCard {
+async function buildMetaCard(unit: Unit, host: string): Promise<MetaCard> {
   const hasPhone = !!unit.metaPhoneNumberId;
   const hasToken = !!unit.metaAccessToken;
   const hasVerify = !!unit.metaVerifyToken;
   const hasSecret = !!unit.metaAppSecret;
+  const hasWaba = !!unit.metaWabaId;
   const configured = hasPhone && hasToken;
   const webhookUrl = `${host}/api/webhooks/${unit.slug}/meta`;
   const alerts: string[] = [];
   if (!configured) alerts.push('Meta WhatsApp Cloud não configurada');
   if (configured && !hasVerify) alerts.push('Verify token não configurado — webhook não verifica');
   if (configured && !hasSecret) alerts.push('App Secret não configurado — signature do webhook não validada');
+  if (configured && !hasWaba) alerts.push('WABA ID não configurado — custo da Meta não será sincronizado');
+
+  // Mês corrente + janelas curtas via tabela snapshot.
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const daysIntoMonth = Math.max(1, Math.ceil((Date.now() - monthStart.getTime()) / 86_400_000));
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const last7 = new Date(today);
+  last7.setUTCDate(last7.getUTCDate() - 6);
+
+  let cost: MetaCard['cost'] = null;
+  if (hasWaba) {
+    const monthRows = await prisma.whatsappCostDaily.findMany({
+      where: { unitId: unit.id, date: { gte: monthStart } },
+      select: {
+        date: true,
+        pricingCategory: true,
+        volume: true,
+        costUsd: true,
+        syncedAt: true,
+      },
+    });
+    let monthSpentUsd = 0;
+    let monthVolume = 0;
+    let todayCostUsd = 0;
+    let todayVolume = 0;
+    let last7CostUsd = 0;
+    let last7Volume = 0;
+    let lastSync: Date | null = null;
+    const byCategoryMap = new Map<string, { volume: number; costUsd: number }>();
+    for (const r of monthRows) {
+      const c = Number(r.costUsd);
+      monthSpentUsd += c;
+      monthVolume += r.volume;
+      const day = r.date.getTime();
+      if (day === today.getTime()) {
+        todayCostUsd += c;
+        todayVolume += r.volume;
+      }
+      if (r.date >= last7) {
+        last7CostUsd += c;
+        last7Volume += r.volume;
+      }
+      if (!lastSync || r.syncedAt > lastSync) lastSync = r.syncedAt;
+      const cur = byCategoryMap.get(r.pricingCategory) ?? { volume: 0, costUsd: 0 };
+      cur.volume += r.volume;
+      cur.costUsd += c;
+      byCategoryMap.set(r.pricingCategory, cur);
+    }
+    cost = {
+      monthSpentUsd,
+      monthVolume,
+      todayCostUsd,
+      todayVolume,
+      last7DaysCostUsd: last7CostUsd,
+      last7DaysVolume: last7Volume,
+      byCategory: [...byCategoryMap.entries()]
+        .map(([pricingCategory, v]) => ({ pricingCategory, ...v }))
+        .sort((a, b) => b.costUsd - a.costUsd),
+      lastSyncedAt: lastSync ? lastSync.toISOString() : null,
+    };
+  }
+
+  const monthlyUsd = Number(unit.metaMonthlyBudgetUsd ?? 0);
+  const spentUsd = cost?.monthSpentUsd ?? 0;
+  const pctUsed = monthlyUsd > 0 ? (spentUsd / monthlyUsd) * 100 : 0;
+  const remainingUsd = Math.max(0, monthlyUsd - spentUsd);
+  const projectedMonthUsd = daysIntoMonth > 0 ? (spentUsd / daysIntoMonth) * 30 : 0;
+  let budgetAlert: MetaCard['budget']['alert'] = 'ok';
+  if (pctUsed >= 100) budgetAlert = 'over';
+  else if (pctUsed >= 90) budgetAlert = 'danger';
+  else if (pctUsed >= 70) budgetAlert = 'warning';
+  if (budgetAlert === 'over') {
+    alerts.push(`🚨 Orçamento Meta estourado: $${spentUsd.toFixed(2)} de $${monthlyUsd.toFixed(2)}`);
+  } else if (budgetAlert === 'danger') {
+    alerts.push(`⚠️ Meta: ${pctUsed.toFixed(0)}% do orçamento mensal já consumido`);
+  } else if (budgetAlert === 'warning') {
+    alerts.push(`Atenção (Meta): ${pctUsed.toFixed(0)}% do orçamento usado`);
+  }
+
+  let status: CardStatus = 'idle';
+  if (configured) {
+    if (budgetAlert === 'over') status = 'danger';
+    else if (budgetAlert === 'danger' || alerts.length > 0) status = 'warning';
+    else status = 'ok';
+  }
+
   return {
     configured,
-    status: !configured ? 'idle' : alerts.length > 0 ? 'warning' : 'ok',
+    status,
     phoneNumberId: unit.metaPhoneNumberId,
+    wabaId: unit.metaWabaId,
     hasAccessToken: hasToken,
     hasVerifyToken: hasVerify,
     hasAppSecret: hasSecret,
     webhookUrl,
+    cost,
+    budget: {
+      monthlyUsd,
+      spentUsd,
+      pctUsed,
+      remainingUsd,
+      daysIntoMonth,
+      projectedMonthUsd,
+      alert: budgetAlert,
+    },
     alerts,
   };
 }
@@ -458,11 +581,11 @@ export async function getIntegrations(req: Request, res: Response): Promise<void
   }
 
   const host = `${req.protocol}://${req.get('host')}`;
-  const [openai, kommo] = await Promise.all([
+  const [openai, kommo, meta] = await Promise.all([
     buildOpenAICard(unit, sinceDays),
     buildKommoCard(unit),
+    buildMetaCard(unit, host),
   ]);
-  const meta = buildMetaCard(unit, host);
 
   // Agrega alerts por severidade pra exibir no badge global.
   const alerts: IntegrationsResponse['alerts'] = [];
@@ -471,7 +594,10 @@ export async function getIntegrations(req: Request, res: Response): Promise<void
     alerts.push({ severity, integration: 'openai', message: a });
   }
   for (const a of kommo.alerts) alerts.push({ severity: 'danger', integration: 'kommo', message: a });
-  for (const a of meta.alerts) alerts.push({ severity: 'info', integration: 'meta', message: a });
+  for (const a of meta.alerts) {
+    const severity = a.startsWith('🚨') ? 'danger' : a.startsWith('⚠️') ? 'warning' : 'info';
+    alerts.push({ severity, integration: 'meta', message: a });
+  }
 
   const payload: IntegrationsResponse = {
     unit: { id: unit.id, slug: unit.slug, name: unit.name },

@@ -55,6 +55,8 @@ const unitInputBase = {
   metaAccessToken: z.string().nullable().optional(),
   metaVerifyToken: z.string().nullable().optional(),
   metaAppSecret: z.string().nullable().optional(),
+  metaWabaId: z.string().nullable().optional(),
+  metaMonthlyBudgetUsd: z.coerce.number().min(0).max(1_000_000).optional(),
   systemPrompt: z.string().max(20_000).optional(),
 
   // Wizard

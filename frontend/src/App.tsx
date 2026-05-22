@@ -55,6 +55,9 @@ const FerramentasPanel = lazy(() =>
 const ReportsPanel = lazy(() =>
   import('./components/ReportsPanel').then((m) => ({ default: m.ReportsPanel })),
 );
+const WhatsappCostsPanel = lazy(() =>
+  import('./components/WhatsappCostsPanel').then((m) => ({ default: m.WhatsappCostsPanel })),
+);
 const AgentConfigPanel = lazy(() =>
   import('./components/AgentConfigPanel').then((m) => ({ default: m.AgentConfigPanel })),
 );
@@ -134,6 +137,7 @@ function Shell() {
           {tab === 'global-actions' && <AcoesPanel scope="global" />}
           {tab === 'tools' && <FerramentasPanel />}
           {tab === 'reports' && <ReportsPanel />}
+          {tab === 'whatsapp' && <WhatsappCostsPanel />}
           {tab === 'captures' && <CapturesPanel />}
           {tab === 'config' && <AgentConfigPanel />}
           {tab === 'units' && <UnitsPanel />}

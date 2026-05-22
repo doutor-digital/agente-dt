@@ -233,6 +233,8 @@ export interface Unit {
   metaAccessToken: string | null;
   metaVerifyToken: string | null;
   metaAppSecret: string | null;
+  metaWabaId: string | null;
+  metaMonthlyBudgetUsd: number | string;
   systemPrompt: string;
 
   // Wizard fields
@@ -473,10 +475,30 @@ export interface MetaIntegrationCard {
   configured: boolean;
   status: CardStatus;
   phoneNumberId: string | null;
+  wabaId: string | null;
   hasAccessToken: boolean;
   hasVerifyToken: boolean;
   hasAppSecret: boolean;
   webhookUrl: string;
+  cost: null | {
+    monthSpentUsd: number;
+    monthVolume: number;
+    todayCostUsd: number;
+    todayVolume: number;
+    last7DaysCostUsd: number;
+    last7DaysVolume: number;
+    byCategory: Array<{ pricingCategory: string; volume: number; costUsd: number }>;
+    lastSyncedAt: string | null;
+  };
+  budget: {
+    monthlyUsd: number;
+    spentUsd: number;
+    pctUsed: number;
+    remainingUsd: number;
+    daysIntoMonth: number;
+    projectedMonthUsd: number;
+    alert: 'ok' | 'warning' | 'danger' | 'over';
+  };
   alerts: string[];
 }
 
@@ -487,6 +509,62 @@ export interface IntegrationsResponse {
   kommo: KommoIntegrationCard;
   meta: MetaIntegrationCard;
   alerts: Array<{ severity: 'info' | 'warning' | 'danger'; integration: string; message: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp cost (Meta pricing_analytics + template_analytics)
+// ---------------------------------------------------------------------------
+
+export interface WhatsappCostsResponse {
+  unit: { id: string; slug: string; name: string; wabaId: string | null };
+  range: { from: string; to: string };
+  totals: { volume: number; costUsd: number; currency: string; rowsCount: number };
+  byCategory: Array<{ pricingCategory: string; volume: number; costUsd: number }>;
+  byType: Array<{ pricingType: string; volume: number; costUsd: number }>;
+  byCountry: Array<{ country: string; volume: number; costUsd: number }>;
+  timeline: Array<{ date: string; volume: number; costUsd: number }>;
+  budget: {
+    monthlyUsd: number;
+    spentUsd: number;
+    pctUsed: number;
+    remainingUsd: number;
+    daysIntoMonth: number;
+    projectedMonthUsd: number;
+    alert: 'ok' | 'warning' | 'danger' | 'over';
+  };
+  lastSyncedAt: string | null;
+}
+
+export interface WhatsappTemplateRow {
+  templateId: string;
+  templateName: string | null;
+  language: string;
+  sent: number;
+  delivered: number;
+  read: number;
+  clicked: number;
+  costUsd: number;
+  deliveryRate: number;
+  readRate: number;
+  clickRate: number;
+}
+
+export interface WhatsappTemplatesResponse {
+  unit: { id: string; slug: string; name: string };
+  range: { from: string; to: string };
+  totals: { sent: number; delivered: number; read: number; clicked: number; costUsd: number };
+  templates: WhatsappTemplateRow[];
+}
+
+export interface WhatsappSyncResult {
+  unitId: string;
+  unitSlug: string;
+  ok: boolean;
+  pricingRowsUpserted: number;
+  templateRowsUpserted: number;
+  totalCostUsd: number;
+  totalVolume: number;
+  errors: string[];
 }
 
 export interface GlobalAlert {

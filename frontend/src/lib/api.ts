@@ -41,6 +41,9 @@ import type {
   Unit,
   UnitInput,
   UnitStats,
+  WhatsappCostsResponse,
+  WhatsappTemplatesResponse,
+  WhatsappSyncResult,
 } from '../types/api';
 
 // Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
@@ -312,6 +315,41 @@ export const api = {
   },
 
   // -------------------------------------------------------------------------
+  // WhatsApp cost (Meta pricing_analytics + template_analytics)
+  // -------------------------------------------------------------------------
+  async getWhatsappCosts(
+    unitId: string,
+    range: { from?: string; to?: string } = {},
+  ): Promise<WhatsappCostsResponse> {
+    const { data } = await http.get<WhatsappCostsResponse>(
+      `/units/${unitId}/whatsapp-costs`,
+      { params: range },
+    );
+    return data;
+  },
+  async getWhatsappTemplates(
+    unitId: string,
+    range: { from?: string; to?: string } = {},
+  ): Promise<WhatsappTemplatesResponse> {
+    const { data } = await http.get<WhatsappTemplatesResponse>(
+      `/units/${unitId}/whatsapp-templates`,
+      { params: range },
+    );
+    return data;
+  },
+  async syncWhatsappCosts(
+    unitId: string,
+    body: { lookbackDays?: number } = {},
+  ): Promise<WhatsappSyncResult> {
+    const { data } = await http.post<WhatsappSyncResult>(
+      `/units/${unitId}/whatsapp-costs/sync`,
+      body,
+      { timeout: 60_000 },
+    );
+    return data;
+  },
+
+  // -------------------------------------------------------------------------
   // LlmCalls
   // -------------------------------------------------------------------------
   async listLlmCalls(unitId: string | null = null, limit = 100): Promise<LlmCallSummary[]> {
@@ -533,7 +571,7 @@ export const api = {
   // Relatórios — baixa CSV ou PDF (responseType: blob, dispara download).
   // -------------------------------------------------------------------------
   async downloadReport(
-    type: 'conversations' | 'llm-cost' | 'actions' | 'errors',
+    type: 'conversations' | 'llm-cost' | 'actions' | 'errors' | 'whatsapp-cost',
     format: 'csv' | 'pdf',
     filters: { unitId?: string | null; from?: string; to?: string } = {},
   ): Promise<void> {

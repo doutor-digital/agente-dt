@@ -44,6 +44,8 @@ const blankInput: UnitInput = {
   metaAccessToken: '',
   metaVerifyToken: '',
   metaAppSecret: '',
+  metaWabaId: '',
+  metaMonthlyBudgetUsd: 0,
   systemPrompt: '',
 };
 
@@ -70,6 +72,8 @@ function unitToInput(u: Unit): UnitInput {
     metaAccessToken: u.metaAccessToken ?? '',
     metaVerifyToken: u.metaVerifyToken ?? '',
     metaAppSecret: u.metaAppSecret ?? '',
+    metaWabaId: u.metaWabaId ?? '',
+    metaMonthlyBudgetUsd: Number(u.metaMonthlyBudgetUsd ?? 0),
     systemPrompt: u.systemPrompt,
   };
 }
@@ -371,6 +375,12 @@ export function UnitsPanel() {
                   onChange={(v) => setDraft({ ...draft, metaPhoneNumberId: v })}
                 />
                 <Field
+                  label="WABA ID"
+                  value={draft.metaWabaId ?? ''}
+                  onChange={(v) => setDraft({ ...draft, metaWabaId: v })}
+                  hint="ID da WhatsApp Business Account. Necessário pra sincronizar custo (pricing_analytics + template_analytics)."
+                />
+                <Field
                   label="Access Token"
                   value={draft.metaAccessToken ?? ''}
                   onChange={(v) => setDraft({ ...draft, metaAccessToken: v })}
@@ -389,6 +399,15 @@ export function UnitsPanel() {
                   onChange={(v) => setDraft({ ...draft, metaAppSecret: v })}
                   type="password"
                   hint="Usado pra validar a signature HMAC dos webhooks."
+                />
+                <Field
+                  label="Orçamento mensal Meta (USD)"
+                  value={String(draft.metaMonthlyBudgetUsd ?? 0)}
+                  onChange={(v) =>
+                    setDraft({ ...draft, metaMonthlyBudgetUsd: Number(v) || 0 })
+                  }
+                  type="number"
+                  hint="Limite mensal de gasto WhatsApp em USD. Dispara alertas 70/90/100% no painel."
                 />
               </Section>
 

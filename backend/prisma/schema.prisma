@@ -96,6 +96,12 @@ model Unit {
   metaAccessToken   String? @map("meta_access_token")
   metaVerifyToken   String? @map("meta_verify_token")
   metaAppSecret     String? @map("meta_app_secret")
+  // WABA ID — necessário pra Graph API analytics (pricing_analytics,
+  // template_analytics). É diferente do phone_number_id: WABA agrupa
+  // várias phone numbers da mesma conta WhatsApp Business.
+  metaWabaId        String? @map("meta_waba_id")
+  // Limite mensal em USD pra alertas no painel (gastos cobrados pela Meta).
+  metaMonthlyBudgetUsd Decimal @default(0) @map("meta_monthly_budget_usd") @db.Decimal(10, 2)
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -202,6 +208,8 @@ model Unit {
   systemLogs       SystemLog[]
   leadFieldRules   LeadFieldRule[]
   leadMemories     LeadMemory[]
+  whatsappCostDaily     WhatsappCostDaily[]
+  whatsappTemplateDaily WhatsappTemplateDaily[]
 
   @@map("units")
 }
@@ -727,6 +735,92 @@ model AgentConfig {
   @@index([isActive])
   @@index([unitId])
   @@map("agent_configs")
+}
+
+// ===========================================================================
+// WhatsappCostDaily — snapshot diário de custo da Meta WhatsApp Cloud API.
+// ===========================================================================
+// Populado por sync diário (cron) que chama /v25.0/{WABA_ID}/pricing_analytics
+// na Graph API. Cada linha representa um bucket DAILY agrupado por categoria
+// de cobrança (MARKETING/UTILITY/AUTHENTICATION/SERVICE/...), tipo (REGULAR /
+// FREE_ENTRY_POINT / FREE_CUSTOMER_SERVICE), país, número de telefone e tier
+// de volume.
+//
+// `costUsd` vem em USD direto da Meta (campo `cost` da resposta). `currency`
+// fica como "USD" mas guardamos por segurança caso a Meta mude no futuro.
+// `volume` é a contagem de mensagens cobradas naquela combinação.
+//
+// CHAVE LÓGICA: (unitId, date, pricingCategory, pricingType, country,
+// phoneNumber, tier) — unique pra permitir upsert idempotente. NULL em
+// country/phoneNumber/tier significa "dimensão não retornada/agregada".
+// ===========================================================================
+model WhatsappCostDaily {
+  id              String   @id @default(cuid())
+  unitId          String   @map("unit_id")
+  /** Dia do bucket (UTC), truncado a 00:00:00. */
+  date            DateTime @db.Date
+  /** MARKETING | UTILITY | AUTHENTICATION | SERVICE | AUTHENTICATION_INTERNATIONAL | etc. */
+  pricingCategory String   @map("pricing_category")
+  /** REGULAR | FREE_ENTRY_POINT | FREE_CUSTOMER_SERVICE | FREE_GROUP_CUSTOMER_SERVICE */
+  pricingType     String   @default("REGULAR") @map("pricing_type")
+  /** ISO 3166-1 alpha-2 (ex: "BR", "US"). String vazia = agregado/desconhecido. */
+  country         String   @default("")
+  /** Phone number id da Meta. String vazia = agregado por WABA inteira. */
+  phoneNumber     String   @default("") @map("phone_number")
+  /** Tier de volume cobrado (string opaca da Meta). String vazia = N/A. */
+  tier            String   @default("")
+  /** Contagem de mensagens cobradas neste bucket. */
+  volume          Int      @default(0)
+  /** Custo total em USD (Meta cobra em USD; campo numérico-fixo). */
+  costUsd         Decimal  @default(0) @map("cost_usd") @db.Decimal(12, 6)
+  /** Moeda originária reportada pela Meta (sempre "USD" hoje). */
+  currency        String   @default("USD")
+  /** Quando o sync rodou pela última vez pra esta combinação. */
+  syncedAt        DateTime @default(now()) @map("synced_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, date, pricingCategory, pricingType, country, phoneNumber, tier], map: "whatsapp_cost_daily_uniq")
+  @@index([unitId, date(sort: Desc)])
+  @@index([date(sort: Desc)])
+  @@map("whatsapp_cost_daily")
+}
+
+// ===========================================================================
+// WhatsappTemplateDaily — snapshot diário de métricas de template.
+// ===========================================================================
+// Populado pelo mesmo sync chamando /v25.0/{WABA_ID}/template_analytics.
+// Cada linha = um template em um dia. Inclui funil de entrega (SENT,
+// DELIVERED, READ, CLICKED) + custo agregado quando a Meta retorna.
+//
+// `templateId` é o ID literal do template na Meta. `templateName` e
+// `language` ficam denormalizados pra UI não precisar de outra tabela.
+// ===========================================================================
+model WhatsappTemplateDaily {
+  id           String   @id @default(cuid())
+  unitId       String   @map("unit_id")
+  /** Dia do bucket (UTC), truncado a 00:00:00. */
+  date         DateTime @db.Date
+  /** ID do template na Meta (numérico em string). */
+  templateId   String   @map("template_id")
+  /** Nome legível do template. Desnormalizado da lista de templates. */
+  templateName String?  @map("template_name")
+  /** Código do idioma (pt_BR, en_US, ...). String vazia = não-segmentado. */
+  language     String   @default("") @map("language")
+  sent         Int      @default(0)
+  delivered    Int      @default(0)
+  read         Int      @default(0)
+  clicked      Int      @default(0)
+  costUsd      Decimal  @default(0) @map("cost_usd") @db.Decimal(12, 6)
+  currency     String   @default("USD")
+  syncedAt     DateTime @default(now()) @map("synced_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, date, templateId, language], map: "whatsapp_template_daily_uniq")
+  @@index([unitId, date(sort: Desc)])
+  @@index([date(sort: Desc)])
+  @@map("whatsapp_template_daily")
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   config: 'avancado',
   units: 'unidades',
   users: 'usuarios',
+  whatsapp: 'custo-whatsapp',
 };
 
 const SLUG_TO_TAB = Object.fromEntries(

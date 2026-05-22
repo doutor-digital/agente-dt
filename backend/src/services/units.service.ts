@@ -122,6 +122,8 @@ export interface UnitInput {
   metaAccessToken?: string | null;
   metaVerifyToken?: string | null;
   metaAppSecret?: string | null;
+  metaWabaId?: string | null;
+  metaMonthlyBudgetUsd?: number;
 
   systemPrompt?: string;
 
@@ -198,6 +200,8 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       metaAccessToken: input.metaAccessToken ?? null,
       metaVerifyToken: input.metaVerifyToken ?? null,
       metaAppSecret: input.metaAppSecret ?? null,
+      metaWabaId: input.metaWabaId ?? null,
+      metaMonthlyBudgetUsd: input.metaMonthlyBudgetUsd ?? 0,
       systemPrompt: input.systemPrompt ?? '',
       // Wizard
       personaCompanyName: input.personaCompanyName ?? null,
@@ -257,6 +261,8 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.metaAccessToken !== undefined && { metaAccessToken: input.metaAccessToken }),
       ...(input.metaVerifyToken !== undefined && { metaVerifyToken: input.metaVerifyToken }),
       ...(input.metaAppSecret !== undefined && { metaAppSecret: input.metaAppSecret }),
+      ...(input.metaWabaId !== undefined && { metaWabaId: input.metaWabaId }),
+      ...(input.metaMonthlyBudgetUsd !== undefined && { metaMonthlyBudgetUsd: input.metaMonthlyBudgetUsd }),
       ...(input.systemPrompt !== undefined && { systemPrompt: input.systemPrompt }),
       ...(input.personaCompanyName !== undefined && { personaCompanyName: input.personaCompanyName }),
       ...(input.personaTone !== undefined && { personaTone: input.personaTone }),

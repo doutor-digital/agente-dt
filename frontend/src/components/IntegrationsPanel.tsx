@@ -736,6 +736,18 @@ function KommoCardView({ card }: { card: KommoIntegrationCard }) {
 
 function MetaCardView({ card }: { card: MetaIntegrationCard }) {
   const sc = statusColor(card.status);
+  const budgetTone = (() => {
+    switch (card.budget.alert) {
+      case 'over':
+        return { bg: 'bg-rose-500/15', text: 'text-rose-300', label: 'estourado' };
+      case 'danger':
+        return { bg: 'bg-rose-500/10', text: 'text-rose-300', label: 'crítico' };
+      case 'warning':
+        return { bg: 'bg-amber-500/10', text: 'text-amber-300', label: 'atenção' };
+      default:
+        return { bg: 'bg-emerald-500/10', text: 'text-emerald-300', label: 'ok' };
+    }
+  })();
   return (
     <section className={clsx('rounded-xl border border-zinc-800 bg-zinc-900/40', sc.ring, 'ring-1')}>
       <div className="px-5 py-4 border-b border-zinc-800/80 flex items-center gap-3">
@@ -748,13 +760,65 @@ function MetaCardView({ card }: { card: MetaIntegrationCard }) {
           </h3>
           <p className="text-[11px] text-zinc-500 mt-0.5">
             {card.phoneNumberId ? <>Phone Number ID: <span className="text-zinc-300 font-mono">{card.phoneNumberId}</span></> : 'Phone Number ID não cadastrado'}
+            {card.wabaId && <> · WABA: <span className="text-zinc-300 font-mono">{card.wabaId}</span></>}
           </p>
         </div>
       </div>
+      {card.cost && (
+        <div className="px-5 py-4 border-b border-zinc-800/80 grid grid-cols-3 gap-3 text-xs">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">Hoje</div>
+            <div className="text-zinc-100 font-semibold">{fmtUsd(card.cost.todayCostUsd)}</div>
+            <div className="text-[10px] text-zinc-500">{fmtN(card.cost.todayVolume)} msgs</div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">Últimos 7 dias</div>
+            <div className="text-zinc-100 font-semibold">{fmtUsd(card.cost.last7DaysCostUsd)}</div>
+            <div className="text-[10px] text-zinc-500">{fmtN(card.cost.last7DaysVolume)} msgs</div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500">Mês corrente</div>
+            <div className="text-zinc-100 font-semibold">{fmtUsd(card.cost.monthSpentUsd)}</div>
+            <div className="text-[10px] text-zinc-500">{fmtN(card.cost.monthVolume)} msgs</div>
+          </div>
+        </div>
+      )}
+      {card.cost && card.cost.byCategory.length > 0 && (
+        <div className="px-5 py-3 border-b border-zinc-800/80 space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500">Por categoria (mês)</div>
+          {card.cost.byCategory.slice(0, 4).map((c) => {
+            const total = card.cost!.monthSpentUsd || 1;
+            const pct = (c.costUsd / total) * 100;
+            return (
+              <div key={c.pricingCategory} className="flex items-center gap-2 text-[11px]">
+                <span className="text-zinc-400 capitalize w-28 shrink-0">{c.pricingCategory.toLowerCase()}</span>
+                <div className="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                  <div className="h-full bg-emerald-500/60" style={{ width: `${Math.min(100, pct)}%` }} />
+                </div>
+                <span className="text-zinc-300 font-mono w-20 text-right">{fmtUsd(c.costUsd)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {card.budget.monthlyUsd > 0 && (
+        <div className={clsx('px-5 py-3 border-b border-zinc-800/80 flex items-center justify-between text-xs', budgetTone.bg)}>
+          <div className="flex items-center gap-2">
+            <Wallet size={14} className={budgetTone.text} />
+            <span className="text-zinc-300">
+              Orçamento: {fmtUsd(card.budget.spentUsd)} / {fmtUsd(card.budget.monthlyUsd)}
+            </span>
+          </div>
+          <div className={clsx('font-mono', budgetTone.text)}>
+            {fmtPct(card.budget.pctUsed)} · {budgetTone.label}
+          </div>
+        </div>
+      )}
       <div className="px-5 py-4 space-y-2 text-xs">
         <CheckRow ok={card.hasAccessToken} label="Access Token" />
         <CheckRow ok={card.hasVerifyToken} label="Verify Token (handshake)" />
         <CheckRow ok={card.hasAppSecret} label="App Secret (signature dos webhooks)" />
+        <CheckRow ok={!!card.wabaId} label="WABA ID (necessário pra custo)" />
       </div>
       <div className="px-5 pb-4">
         <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Webhook URL</div>
@@ -764,6 +828,11 @@ function MetaCardView({ card }: { card: MetaIntegrationCard }) {
         <div className="text-[10px] text-zinc-500 mt-1">
           Cole essa URL no painel Meta for Developers ao cadastrar o webhook.
         </div>
+        {card.cost?.lastSyncedAt && (
+          <div className="text-[10px] text-zinc-500 mt-2">
+            Último sync de custo: <span className="text-zinc-300">{new Date(card.cost.lastSyncedAt).toLocaleString('pt-BR')}</span>
+          </div>
+        )}
       </div>
     </section>
   );
