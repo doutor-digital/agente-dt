@@ -1,5 +1,9 @@
 // ============================================================================
 // actions.controller.ts — endpoints REST de UnitAction (regras quando→faça).
+//
+// Formato API atual: cada regra tem `actions: Array<{ kind, params }>`.
+// O cliente legado (que mandava `actionKind` + `actionParams`) ainda é
+// aceito e convertido internamente — fica transparente até o front atualizar.
 // ============================================================================
 
 import type { Request, Response } from 'express';
@@ -11,6 +15,7 @@ import {
   updateAction,
   type ActionInput,
   type ActionKind,
+  type ActionStep,
 } from '../services/actions.service.js';
 import { logger } from '../lib/logger.js';
 
@@ -19,9 +24,10 @@ const ACTION_KINDS: ActionKind[] = [
   'move_stage',
   'transfer_with_permission',
   'transfer_without_permission',
+  'summarize_to_note',
 ];
 
-// Params depende do kind — usamos validação por união discriminada.
+// Params validators por kind.
 const addTagParams = z.object({
   tags: z.array(z.string().min(1).max(80)).min(1).max(10),
 });
@@ -33,48 +39,77 @@ const moveStageParams = z.object({
 const transferParams = z.object({
   includeSummary: z.boolean().default(true),
 });
+const summarizeParams = z.object({
+  focusHint: z.string().max(400).optional(),
+});
+
+function validateActionStep(step: { kind: string; params: unknown }, ctx: z.RefinementCtx, idx: number) {
+  const path: (string | number)[] = ['actions', idx, 'params'];
+  if (step.kind === 'add_tag') {
+    const r = addTagParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `add_tag exige { tags: string[] } — ${r.error.message}` });
+  } else if (step.kind === 'move_stage') {
+    const r = moveStageParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `move_stage exige { statusId: number } — ${r.error.message}` });
+  } else if (step.kind === 'transfer_with_permission' || step.kind === 'transfer_without_permission') {
+    const r = transferParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `transfer_* exige { includeSummary: boolean }` });
+  } else if (step.kind === 'summarize_to_note') {
+    const r = summarizeParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `summarize_to_note: focusHint inválido` });
+  }
+}
+
+const actionStepSchema = z.object({
+  kind: z.enum(ACTION_KINDS as [ActionKind, ...ActionKind[]]),
+  params: z.record(z.string(), z.unknown()).default({}),
+});
 
 const actionInputSchema = z
   .object({
     conditionDescription: z.string().min(3).max(2000),
-    actionKind: z.enum(ACTION_KINDS as [ActionKind, ...ActionKind[]]),
-    actionParams: z.record(z.string(), z.unknown()).default({}),
+    /** Novo formato. Se vier vazio e os campos legados vierem, convertemos. */
+    actions: z.array(actionStepSchema).max(8).optional(),
+    /** @deprecated — clientes antigos. */
+    actionKind: z.enum(ACTION_KINDS as [ActionKind, ...ActionKind[]]).optional(),
+    /** @deprecated — clientes antigos. */
+    actionParams: z.record(z.string(), z.unknown()).optional(),
     notes: z.string().max(2000).nullable().optional(),
     enabled: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.actionKind === 'add_tag') {
-      const r = addTagParams.safeParse(data.actionParams);
-      if (!r.success) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['actionParams'],
-          message: `add_tag exige { tags: string[] } — ${r.error.message}`,
-        });
-      }
-    } else if (data.actionKind === 'move_stage') {
-      const r = moveStageParams.safeParse(data.actionParams);
-      if (!r.success) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['actionParams'],
-          message: `move_stage exige { statusId: number, pipelineId?: number } — ${r.error.message}`,
-        });
-      }
-    } else if (
-      data.actionKind === 'transfer_with_permission' ||
-      data.actionKind === 'transfer_without_permission'
-    ) {
-      const r = transferParams.safeParse(data.actionParams);
-      if (!r.success) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['actionParams'],
-          message: `transfer_* exige { includeSummary: boolean }`,
-        });
-      }
+    const actions = data.actions ?? [];
+    // Aceita formato legado: { actionKind, actionParams } vira [1 step].
+    if (actions.length === 0 && data.actionKind) {
+      const step = { kind: data.actionKind, params: data.actionParams ?? {} };
+      validateActionStep(step, ctx, 0);
+      return;
     }
+    if (actions.length === 0) {
+      ctx.addIssue({ code: 'custom', path: ['actions'], message: 'pelo menos 1 ação é obrigatória' });
+      return;
+    }
+    actions.forEach((step, i) => validateActionStep(step, ctx, i));
   });
+
+/** Normaliza o body validado num ActionInput canônico (array). */
+function toActionInput(parsed: z.infer<typeof actionInputSchema>): ActionInput {
+  const actions: ActionStep[] =
+    parsed.actions && parsed.actions.length > 0
+      ? (parsed.actions as ActionStep[])
+      : [
+          {
+            kind: parsed.actionKind as ActionKind,
+            params: (parsed.actionParams ?? {}) as ActionStep['params'],
+          },
+        ];
+  return {
+    conditionDescription: parsed.conditionDescription,
+    actions,
+    notes: parsed.notes ?? null,
+    enabled: parsed.enabled,
+  };
+}
 
 export async function listActionsHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id ?? '');
@@ -98,7 +133,7 @@ export async function createActionHandler(req: Request, res: Response): Promise<
     return;
   }
   try {
-    const action = await createAction(unitId, parsed.data as ActionInput);
+    const action = await createAction(unitId, toActionInput(parsed.data));
     res.status(201).json({ action });
   } catch (err) {
     logger.error({ err, unitId }, 'createAction failed');
@@ -112,13 +147,12 @@ export async function updateActionHandler(req: Request, res: Response): Promise<
     res.status(400).json({ error: 'actionId é obrigatório' });
     return;
   }
-  // Update aceita parcial; revalida o kind+params se um dos dois vier.
+  // Update aceita parcial; valida o que vier.
   const parsed = z
     .object({
       conditionDescription: z.string().min(3).max(2000).optional(),
-      actionKind: z
-        .enum(ACTION_KINDS as [ActionKind, ...ActionKind[]])
-        .optional(),
+      actions: z.array(actionStepSchema).max(8).optional(),
+      actionKind: z.enum(ACTION_KINDS as [ActionKind, ...ActionKind[]]).optional(),
       actionParams: z.record(z.string(), z.unknown()).optional(),
       notes: z.string().max(2000).nullable().optional(),
       enabled: z.boolean().optional(),
@@ -129,7 +163,22 @@ export async function updateActionHandler(req: Request, res: Response): Promise<
     return;
   }
   try {
-    const action = await updateAction(actionId, parsed.data as Partial<ActionInput>);
+    const data = parsed.data;
+    const patch: Partial<ActionInput> = {};
+    if (data.conditionDescription !== undefined) patch.conditionDescription = data.conditionDescription;
+    if (data.notes !== undefined) patch.notes = data.notes;
+    if (data.enabled !== undefined) patch.enabled = data.enabled;
+    if (data.actions !== undefined) {
+      patch.actions = data.actions as ActionStep[];
+    } else if (data.actionKind !== undefined) {
+      patch.actions = [
+        {
+          kind: data.actionKind as ActionKind,
+          params: (data.actionParams ?? {}) as ActionStep['params'],
+        },
+      ];
+    }
+    const action = await updateAction(actionId, patch);
     res.json({ action });
   } catch (err) {
     logger.error({ err, actionId }, 'updateAction failed');

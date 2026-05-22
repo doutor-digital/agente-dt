@@ -99,3 +99,28 @@ export async function getConversation(id: string) {
     },
   });
 }
+
+/**
+ * Pega o histórico de mensagens user/assistant de um lead. Usado pela tool
+ * de resumo pra alimentar o LLM de sumarização. Limita a `limit` últimas
+ * mensagens pra não estourar contexto em conversas longas.
+ */
+export async function getRecentMessagesByLead(
+  unitId: string,
+  leadId: string,
+  limit = 40,
+): Promise<Array<{ role: string; content: string; createdAt: Date }>> {
+  const conv = await prisma.conversation.findFirst({
+    where: { unitId, leadId },
+    orderBy: { lastMessageAt: 'desc' },
+    select: { id: true },
+  });
+  if (!conv) return [];
+  const msgs = await prisma.message.findMany({
+    where: { conversationId: conv.id },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    select: { role: true, content: true, createdAt: true },
+  });
+  return msgs.reverse(); // volta ao ordem cronológica
+}

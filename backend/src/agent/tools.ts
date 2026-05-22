@@ -21,10 +21,13 @@
 // ============================================================================
 
 import { DynamicStructuredTool } from '@langchain/core/tools';
+import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { z } from 'zod';
-import type { LeadFieldRule } from '@prisma/client';
+import type { LeadFieldRule, Unit } from '@prisma/client';
 import type { KommoClient, KommoFieldType } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
+import { getRecentMessagesByLead } from '../services/conversations.service.js';
+import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 
 // ---------------------------------------------------------------------------
 // Descrições default — fonte de verdade pro seed do AgentConfig.
@@ -52,6 +55,14 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     '(ex: "Maria Silva 20/05/2026"). Você só precisa passar o NOME — não ' +
     'inclua data, ela é adicionada automaticamente. Idempotente: chamar duas ' +
     'vezes com o mesmo nome não altera o título.',
+  resumir_lead_para_sdr:
+    'Gera um RESUMO do lead (queixa, contexto, sinais de interesse, próximos ' +
+    'passos sugeridos) e posta como NOTA INTERNA no Kommo. A nota é visível ' +
+    'só pros operadores humanos (SDR/vendedor) — o paciente NÃO vê. Use no ' +
+    'momento de transferir o lead pra um humano (ex: agendamento confirmado, ' +
+    'caso clínico delicado, paciente quente pedindo orçamento) pra que o SDR ' +
+    'pegue o lead com contexto pronto. Idempotente em termos lógicos, mas ' +
+    'cria uma nota nova a cada chamada — chame só 1x por transição.',
 };
 
 // ---------------------------------------------------------------------------
@@ -69,6 +80,8 @@ export interface BuildToolsArgs {
   pausedFieldId?: number | null;
   /** Regras de captura de dados — cada uma vira uma tool dinâmica. */
   leadFieldRules?: LeadFieldRule[];
+  /** Unit completa — usada pela tool de resumo pra montar o LLM da unidade. */
+  unit?: Unit;
 }
 
 export function buildTools({
@@ -77,6 +90,7 @@ export function buildTools({
   descriptionOverrides = {},
   pausedFieldId = null,
   leadFieldRules = [],
+  unit,
 }: BuildToolsArgs) {
   const desc = (name: string) => descriptionOverrides[name] || DEFAULT_TOOL_DESCRIPTIONS[name];
 
@@ -305,13 +319,144 @@ export function buildTools({
     },
   });
 
+  // resumir_lead_para_sdr — gera resumo e posta como nota interna no Kommo.
+  // Só registrada se tivermos `unit` (precisa pra montar o LLM da unidade).
+  const resumirLeadParaSdrSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    focusHint: z
+      .string()
+      .max(400)
+      .optional()
+      .describe(
+        'Opcional. Dica do que destacar no resumo (ex: "foco em queixa clínica e ' +
+          'preferência de horário"). Se omitido, gera resumo equilibrado.',
+      ),
+  });
+
+  const resumir_lead_para_sdr = unit
+    ? new DynamicStructuredTool({
+        name: 'resumir_lead_para_sdr',
+        description: desc('resumir_lead_para_sdr'),
+        schema: resumirLeadParaSdrSchema,
+        func: async ({ leadId, focusHint }) => {
+          const t0 = performance.now();
+          await recorder.step({
+            kind: 'TOOL_CALL',
+            title: `Decisão: resumir lead ${leadId} pra SDR (nota interna)`,
+            payload: { leadId, focusHint: focusHint ?? null },
+          });
+
+          try {
+            // 1) Histórico da conversa (últimas 40 msgs).
+            const msgs = await getRecentMessagesByLead(unit.id, String(leadId), 40);
+            if (msgs.length === 0) {
+              const latency = Math.round(performance.now() - t0);
+              await recorder.step({
+                kind: 'KOMMO_ACTION',
+                title: `Sem histórico de conversa pra lead ${leadId} — nota não criada`,
+                payload: { leadId },
+                latencyMs: latency,
+              });
+              return `Sem histórico de mensagens pra resumir (lead ${leadId}).`;
+            }
+
+            // 2) Monta prompt de sumarização.
+            const transcript = msgs
+              .map((m) => `${m.role === 'user' ? 'PACIENTE' : 'IA'}: ${m.content}`)
+              .join('\n');
+            const sys = new SystemMessage(
+              [
+                'Você é um assistente que escreve resumos rápidos pra um SDR ' +
+                  'humano. O SDR vai abrir o lead no CRM e ler ESSE resumo ' +
+                  'pra entender o contexto em 10 segundos.',
+                '',
+                'Formato obrigatório (markdown simples, sem emoji excessivo):',
+                '• **Quem é**: nome + 1 detalhe (se souber)',
+                '• **Queixa/Demanda**: o que o paciente quer',
+                '• **Sinais de interesse**: orçamento? urgência? indicação?',
+                '• **Próximo passo sugerido**: o que o SDR faz agora',
+                '',
+                'Regras:',
+                '- Máx 6 linhas no total. Curto e útil.',
+                '- Não invente informação que não está na conversa.',
+                '- Não cumprimente o SDR, vá direto ao conteúdo.',
+                focusHint ? `- Foco extra desta vez: ${focusHint}` : '',
+              ]
+                .filter(Boolean)
+                .join('\n'),
+            );
+            const human = new HumanMessage(
+              `Conversa entre PACIENTE e IA (mais antiga em cima):\n\n${transcript}`,
+            );
+
+            // 3) Chama o LLM da unidade.
+            const model = createChatOpenAI(unit, {
+              model: unit.openaiModel ?? undefined,
+              temperature: 0.3,
+              maxTokens: 600,
+            });
+            const t1 = performance.now();
+            const response = (await invokeChatModel({
+              model: model as unknown as Parameters<typeof invokeChatModel>[0]['model'],
+              messages: [sys, human],
+              unitId: unit.id,
+              traceId: recorder.traceId,
+              modelName: unit.openaiModel ?? 'gpt-4o-mini',
+            })) as { content: unknown };
+            const llmMs = Math.round(performance.now() - t1);
+            const summary =
+              typeof response.content === 'string'
+                ? response.content
+                : JSON.stringify(response.content);
+
+            // 4) Posta nota interna no Kommo.
+            const note = await kommo.addLeadNote(leadId, `📋 Resumo da IA (auto):\n\n${summary}`);
+
+            const latency = Math.round(performance.now() - t0);
+            await recorder.step({
+              kind: 'KOMMO_ACTION',
+              title: `Nota interna criada no lead ${leadId} (resumo pra SDR)`,
+              payload: {
+                leadId,
+                summaryPreview: summary.slice(0, 200),
+                noteId: note?.id ?? null,
+                msgCount: msgs.length,
+                llmMs,
+              },
+              latencyMs: latency,
+            });
+            return `OK — resumo postado como nota interna no lead ${leadId} (${msgs.length} msgs analisadas, ${llmMs}ms LLM, ${latency}ms total).`;
+          } catch (err) {
+            const latency = Math.round(performance.now() - t0);
+            const msg = err instanceof Error ? err.message : String(err);
+            await recorder.step({
+              kind: 'ERROR',
+              title: `Falha ao gerar resumo pra SDR: ${msg}`,
+              payload: { leadId, error: msg },
+              latencyMs: latency,
+            });
+            return `ERRO ao resumir lead: ${msg}`;
+          }
+        },
+      })
+    : null;
+
   // Tools dinâmicas — uma por LeadFieldRule ativa. Cada rule escreve em um
   // custom field específico do Kommo, com schema ditado pelo tipo do campo.
   const dynamicTools = leadFieldRules.map((rule) =>
     buildLeadFieldRuleTool({ rule, kommo, recorder }),
   );
 
-  return [aplicar_tag, mover_etapa, pausar_ia, atualizar_titulo_lead, ...dynamicTools];
+  // Tipo amplo pra acomodar tools com schemas diferentes — TS infere o array
+  // pelo 1º elemento e rejeitaria o resumir_lead_para_sdr senão.
+  const nativeTools: DynamicStructuredTool[] = [
+    aplicar_tag,
+    mover_etapa,
+    pausar_ia,
+    atualizar_titulo_lead,
+  ];
+  if (resumir_lead_para_sdr) nativeTools.push(resumir_lead_para_sdr);
+  return [...nativeTools, ...dynamicTools];
 }
 
 // ---------------------------------------------------------------------------

@@ -99,6 +99,14 @@ const DEFAULT_TOOLS: ToolConfig[] = [
       'paciente disser o próprio nome — o título do card no Kommo deixa de ser ' +
       'genérico e passa a ser o nome real.',
   },
+  {
+    name: 'resumir_lead_para_sdr',
+    enabled: true,
+    description:
+      'Gera um resumo do lead (queixa, contexto, próximos passos) e posta como ' +
+      'NOTA INTERNA no Kommo pro SDR humano ver. Use quando transferir o lead ' +
+      'pra um humano ou em momentos-chave (paciente quente, agendamento confirmado).',
+  },
 ];
 
 const DEFAULT_WORKFLOW: WorkflowRule[] = [];

@@ -246,18 +246,20 @@ model User {
 // ============================================================================
 // UnitAction — regras "quando → faça" configuráveis pelo dono da clínica.
 //
-// Cada regra é uma instrução semântica que vai pro prompt da IA. A IA decide
-// quando aplicar (LLM faz o matching) e usa as tools existentes (aplicar_tag,
-// pausar_ia) pra executar a ação.
+// Cada regra tem UMA condição em PT-BR e UMA OU MAIS ações. A IA decide quando
+// aplicar (matching semântico via LLM) e dispara todas as ações configuradas
+// juntas, usando as tools nativas.
 //
-// actionKind:
-//   - "add_tag"                     : aplica uma ou mais tags do Kommo
-//   - "transfer_with_permission"    : pede confirmação antes de transferir
-//   - "transfer_without_permission" : transfere imediatamente (emergência)
+// actions (Json) é um array de { kind, params }:
+//   - { kind: "add_tag",                     params: { tags: string[] } }
+//   - { kind: "move_stage",                  params: { statusId: number, pipelineId?: number, statusLabel?: string } }
+//   - { kind: "transfer_with_permission",    params: { includeSummary: boolean } }
+//   - { kind: "transfer_without_permission", params: { includeSummary: boolean } }
+//   - { kind: "summarize_to_note",           params: { focusHint?: string } }
 //
-// actionParams (Json) varia por kind:
-//   - add_tag: { tags: string[] }
-//   - transfer_*: { includeSummary: boolean }
+// Os campos legados `actionKind` / `actionParams` ficam mantidos por
+// compatibilidade — leitura cai pra eles se `actions` estiver vazio.
+// Escrita sempre vai pro `actions`.
 // ============================================================================
 
 model UnitAction {
@@ -266,7 +268,11 @@ model UnitAction {
   unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
   conditionDescription String @map("condition_description")
-  actionKind           String @map("action_kind")
+  /** Lista de ações que disparam juntas quando a condição bate. */
+  actions              Json   @default("[]") @map("actions")
+  /** @deprecated Substituído por `actions[]`. Mantido pra rollback seguro. */
+  actionKind           String @default("") @map("action_kind")
+  /** @deprecated Substituído por `actions[]`. Mantido pra rollback seguro. */
   actionParams         Json   @default("{}") @map("action_params")
   notes                String? @map("notes")
   enabled              Boolean @default(true)

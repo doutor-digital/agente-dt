@@ -625,6 +625,28 @@ export class KommoClient {
   }
 
   /**
+   * Posta uma nota interna no lead. Aparece no painel do Kommo pros operadores
+   * humanos (SDR, vendedor) mas NÃO é enviada pro paciente.
+   *
+   * Usado pela tool `resumir_lead_para_sdr` pra registrar o resumo gerado
+   * pela IA. O texto passa por downgradeEmoji por garantia (Kommo trunca
+   * 4-byte emoji).
+   */
+  async addLeadNote(leadId: number, text: string): Promise<{ id?: number } | null> {
+    try {
+      const { data } = await this.http.post<{
+        _embedded?: { notes?: Array<{ id: number }> };
+      }>(`/leads/${leadId}/notes`, [
+        { note_type: 'common', params: { text: downgradeEmoji(text) } },
+      ]);
+      const id = data?._embedded?.notes?.[0]?.id;
+      return id ? { id } : null;
+    } catch (err) {
+      wrapAxiosError(err, `addLeadNote(${leadId})`);
+    }
+  }
+
+  /**
    * Lista TODOS os leads paginando até `maxPages` (default 4 = 1000 leads).
    * Usado pelo dashboard pra contar leads por etapa do funil. NÃO traz custom
    * fields nem tags pra ficar leve.

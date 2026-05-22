@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  FileText,
   Loader2,
   Pencil,
   Plus,
@@ -37,96 +38,119 @@ import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import type {
   ActionKind,
+  ActionStep,
   KommoPipelinesResponse,
   KommoTagsResponse,
   UnitAction,
   UnitActionInput,
 } from '../types/api';
 
-interface DraftAction {
+/** Forma de UM passo do rascunho. Cada `kind` usa um subset dos campos. */
+interface DraftStep {
+  kind: ActionKind;
+  /** add_tag */
+  tags?: string[];
+  /** move_stage */
+  statusId?: number | null;
+  pipelineId?: number | null;
+  statusLabel?: string | null;
+  /** transfer_* */
+  includeSummary?: boolean;
+  /** summarize_to_note */
+  focusHint?: string;
+}
+
+interface DraftRule {
   conditionDescription: string;
-  actionKind: ActionKind;
-  /** tags como array — picker da Kommo cuida do merge com strings custom. */
-  tags: string[];
-  /** move_stage params. */
-  statusId: number | null;
-  pipelineId: number | null;
-  statusLabel: string | null;
-  includeSummary: boolean;
+  steps: DraftStep[];
   notes: string;
   enabled: boolean;
 }
 
-const EMPTY_DRAFT: DraftAction = {
+function defaultStep(kind: ActionKind): DraftStep {
+  if (kind === 'add_tag') return { kind, tags: [] };
+  if (kind === 'move_stage') return { kind, statusId: null, pipelineId: null, statusLabel: null };
+  if (kind === 'summarize_to_note') return { kind, focusHint: '' };
+  return { kind, includeSummary: true };
+}
+
+const EMPTY_DRAFT: DraftRule = {
   conditionDescription: '',
-  actionKind: 'add_tag',
-  tags: [],
-  statusId: null,
-  pipelineId: null,
-  statusLabel: null,
-  includeSummary: true,
+  steps: [defaultStep('add_tag')],
   notes: '',
   enabled: true,
 };
 
-function actionToDraft(a: UnitAction): DraftAction {
-  const params = a.actionParams ?? {};
-  const tagsArr = Array.isArray((params as { tags?: unknown }).tags)
-    ? ((params as { tags: string[] }).tags ?? [])
-    : [];
-  const includeSummary = (params as { includeSummary?: boolean }).includeSummary !== false;
-  const statusId =
-    typeof (params as { statusId?: unknown }).statusId === 'number'
-      ? ((params as { statusId: number }).statusId)
-      : null;
-  const pipelineId =
-    typeof (params as { pipelineId?: unknown }).pipelineId === 'number'
-      ? ((params as { pipelineId: number }).pipelineId)
-      : null;
-  const statusLabel =
-    typeof (params as { statusLabel?: unknown }).statusLabel === 'string'
-      ? ((params as { statusLabel: string }).statusLabel)
-      : null;
+/** Lê os passos de uma UnitAction (formato novo ou legado). */
+function readSteps(a: UnitAction): ActionStep[] {
+  if (Array.isArray(a.actions) && a.actions.length > 0) return a.actions;
+  if (a.actionKind) return [{ kind: a.actionKind, params: a.actionParams ?? {} }];
+  return [];
+}
+
+function stepFromAction(s: ActionStep): DraftStep {
+  const params = (s.params ?? {}) as Record<string, unknown>;
+  if (s.kind === 'add_tag') {
+    return { kind: s.kind, tags: Array.isArray(params.tags) ? (params.tags as string[]) : [] };
+  }
+  if (s.kind === 'move_stage') {
+    return {
+      kind: s.kind,
+      statusId: typeof params.statusId === 'number' ? params.statusId : null,
+      pipelineId: typeof params.pipelineId === 'number' ? params.pipelineId : null,
+      statusLabel: typeof params.statusLabel === 'string' ? params.statusLabel : null,
+    };
+  }
+  if (s.kind === 'summarize_to_note') {
+    return { kind: s.kind, focusHint: typeof params.focusHint === 'string' ? params.focusHint : '' };
+  }
+  return { kind: s.kind, includeSummary: params.includeSummary !== false };
+}
+
+function actionToDraft(a: UnitAction): DraftRule {
+  const steps = readSteps(a).map(stepFromAction);
   return {
     conditionDescription: a.conditionDescription,
-    actionKind: a.actionKind,
-    tags: tagsArr,
-    statusId,
-    pipelineId,
-    statusLabel,
-    includeSummary,
+    steps: steps.length > 0 ? steps : [defaultStep('add_tag')],
     notes: a.notes ?? '',
     enabled: a.enabled,
   };
 }
 
-function draftToInput(d: DraftAction): UnitActionInput {
-  let params: Record<string, unknown>;
-  if (d.actionKind === 'add_tag') {
-    params = { tags: d.tags };
-  } else if (d.actionKind === 'move_stage') {
-    params = {
-      statusId: d.statusId,
-      ...(d.pipelineId ? { pipelineId: d.pipelineId } : {}),
-      ...(d.statusLabel ? { statusLabel: d.statusLabel } : {}),
+function stepToParams(s: DraftStep): Record<string, unknown> {
+  if (s.kind === 'add_tag') return { tags: s.tags ?? [] };
+  if (s.kind === 'move_stage') {
+    return {
+      statusId: s.statusId,
+      ...(s.pipelineId ? { pipelineId: s.pipelineId } : {}),
+      ...(s.statusLabel ? { statusLabel: s.statusLabel } : {}),
     };
-  } else {
-    params = { includeSummary: d.includeSummary };
   }
+  if (s.kind === 'summarize_to_note') {
+    return s.focusHint?.trim() ? { focusHint: s.focusHint.trim() } : {};
+  }
+  return { includeSummary: s.includeSummary !== false };
+}
+
+function draftToInput(d: DraftRule): UnitActionInput {
   return {
     conditionDescription: d.conditionDescription.trim(),
-    actionKind: d.actionKind,
-    actionParams: params,
+    actions: d.steps.map((s) => ({ kind: s.kind, params: stepToParams(s) })),
     notes: d.notes.trim() || null,
     enabled: d.enabled,
   };
 }
 
-function isValid(d: DraftAction): boolean {
+function isStepValid(s: DraftStep): boolean {
+  if (s.kind === 'add_tag') return (s.tags?.length ?? 0) > 0;
+  if (s.kind === 'move_stage') return !!s.statusId && s.statusId > 0;
+  return true; // transfer_* e summarize_to_note são válidos sem params extras
+}
+
+function isValid(d: DraftRule): boolean {
   if (d.conditionDescription.trim().length < 3) return false;
-  if (d.actionKind === 'add_tag' && d.tags.length === 0) return false;
-  if (d.actionKind === 'move_stage' && (!d.statusId || d.statusId <= 0)) return false;
-  return true;
+  if (d.steps.length === 0) return false;
+  return d.steps.every(isStepValid);
 }
 
 const KIND_LABEL: Record<ActionKind, { label: string; icon: typeof Tag; color: string }> = {
@@ -141,6 +165,11 @@ const KIND_LABEL: Record<ActionKind, { label: string; icon: typeof Tag; color: s
     label: 'Transferir SEM permissão',
     icon: Zap,
     color: 'text-rose-300',
+  },
+  summarize_to_note: {
+    label: 'Resumir lead pro SDR (nota interna)',
+    icon: FileText,
+    color: 'text-violet-300',
   },
 };
 
@@ -171,7 +200,7 @@ export function AcoesPanel() {
     void load();
   }, [load]);
 
-  async function handleSave(draft: DraftAction) {
+  async function handleSave(draft: DraftRule) {
     if (!selectedUnitId) return;
     try {
       const input = draftToInput(draft);
@@ -318,19 +347,7 @@ function ActionCard({
   onDelete: () => void;
   onToggle: () => void;
 }) {
-  const kind = KIND_LABEL[action.actionKind] ?? KIND_LABEL.add_tag;
-  const Icon = kind.icon;
-  const tags = Array.isArray((action.actionParams as { tags?: unknown }).tags)
-    ? ((action.actionParams as { tags: string[] }).tags ?? [])
-    : [];
-  const stageStatusId =
-    typeof (action.actionParams as { statusId?: unknown }).statusId === 'number'
-      ? (action.actionParams as { statusId: number }).statusId
-      : null;
-  const stageLabel =
-    typeof (action.actionParams as { statusLabel?: unknown }).statusLabel === 'string'
-      ? (action.actionParams as { statusLabel: string }).statusLabel
-      : null;
+  const steps = readSteps(action);
   return (
     <li
       className={clsx(
@@ -341,9 +358,6 @@ function ActionCard({
       )}
     >
       <div className="flex items-start gap-3">
-        <div className={clsx('mt-0.5', kind.color)}>
-          <Icon size={18} />
-        </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5">
             <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">
@@ -354,25 +368,15 @@ function ActionCard({
 
           <div className="mt-3">
             <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">
-              Fazer
+              {steps.length > 1 ? `Fazer (${steps.length} ações)` : 'Fazer'}
             </span>
-            <p className={clsx('text-sm mt-1.5 flex flex-wrap items-center gap-1.5', kind.color)}>
-              {kind.label}
-              {action.actionKind === 'add_tag' &&
-                tags.map((t) => (
-                  <span
-                    key={t}
-                    className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-200 text-[11px] ring-1 ring-amber-500/30 font-mono"
-                  >
-                    #{t}
-                  </span>
-                ))}
-              {action.actionKind === 'move_stage' && stageStatusId && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-200 text-[11px] ring-1 ring-sky-500/30">
-                  → {stageLabel ?? `etapa #${stageStatusId}`}
-                </span>
-              )}
-            </p>
+            <ul className="mt-1.5 space-y-1.5">
+              {steps.map((step, i) => (
+                <li key={i}>
+                  <StepSummary step={step} />
+                </li>
+              ))}
+            </ul>
           </div>
 
           {action.notes && (
@@ -431,12 +435,12 @@ function ActionEditor({
   onCancel,
 }: {
   unitId: string | null;
-  initial: DraftAction;
+  initial: DraftRule;
   isEditing: boolean;
-  onSave: (d: DraftAction) => Promise<void>;
+  onSave: (d: DraftRule) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [draft, setDraft] = useState<DraftAction>(initial);
+  const [draft, setDraft] = useState<DraftRule>(initial);
   const [saving, setSaving] = useState(false);
   const [tagsData, setTagsData] = useState<KommoTagsResponse | null>(null);
   const [pipelinesData, setPipelinesData] = useState<KommoPipelinesResponse | null>(null);
@@ -591,73 +595,52 @@ function ActionEditor({
             />
           </div>
 
-          {/* Fazer — selector */}
+          {/* Fazer — lista de steps. Cada step tem seletor de tipo + params próprios. */}
           <div>
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1.5 block">
-              Fazer
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {(Object.keys(KIND_LABEL) as ActionKind[]).map((k) => {
-                const meta = KIND_LABEL[k];
-                const Icon = meta.icon;
-                const active = draft.actionKind === k;
-                return (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => setDraft({ ...draft, actionKind: k })}
-                    className={clsx(
-                      'flex items-center gap-2 p-3 rounded-md text-left transition border',
-                      active
-                        ? 'border-brand-500/40 bg-brand-500/10 text-brand-100'
-                        : 'border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700',
-                    )}
-                  >
-                    <Icon size={16} className={active ? 'text-brand-300' : meta.color} />
-                    <span className="text-xs font-medium leading-tight">{meta.label}</span>
-                  </button>
-                );
-              })}
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+                Fazer ({draft.steps.length} ação{draft.steps.length !== 1 ? 'ões' : ''})
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  setDraft({ ...draft, steps: [...draft.steps, defaultStep('add_tag')] })
+                }
+                disabled={draft.steps.length >= 8}
+                className="text-[11px] inline-flex items-center gap-1 text-brand-300 hover:text-brand-200 disabled:opacity-40"
+                title="Adicionar mais uma ação à regra"
+              >
+                <Plus size={12} /> adicionar ação
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-500 mb-2">
+              Todas as ações da lista disparam JUNTAS quando a IA detectar a condição.
+            </p>
+            <div className="space-y-3">
+              {draft.steps.map((step, idx) => (
+                <StepEditor
+                  key={idx}
+                  index={idx}
+                  step={step}
+                  canRemove={draft.steps.length > 1}
+                  onChange={(next) => {
+                    const steps = [...draft.steps];
+                    steps[idx] = next;
+                    setDraft({ ...draft, steps });
+                  }}
+                  onRemove={() => {
+                    const steps = draft.steps.filter((_, i) => i !== idx);
+                    setDraft({ ...draft, steps });
+                  }}
+                  tagsData={tagsData}
+                  pipelinesForSelect={pipelinesForSelect}
+                  loadingKommo={loadingKommo}
+                  tagsError={tagsError}
+                  pipelinesError={pipelinesError}
+                />
+              ))}
             </div>
           </div>
-
-          {/* Params — add_tag: multi-picker da Kommo + texto custom */}
-          {draft.actionKind === 'add_tag' && (
-            <TagsPicker
-              selected={draft.tags}
-              onChange={(tags) => setDraft({ ...draft, tags })}
-              available={tagsData?.tags ?? []}
-              loading={loadingKommo}
-              error={tagsError}
-            />
-          )}
-
-          {/* Params — move_stage: dropdown agrupado por pipeline */}
-          {draft.actionKind === 'move_stage' && (
-            <StagePicker
-              selectedStatusId={draft.statusId}
-              selectedLabel={draft.statusLabel}
-              onChange={(statusId, pipelineId, label) =>
-                setDraft({ ...draft, statusId, pipelineId, statusLabel: label })
-              }
-              pipelines={pipelinesForSelect}
-              loading={loadingKommo}
-              error={pipelinesError}
-            />
-          )}
-
-          {(draft.actionKind === 'transfer_with_permission' ||
-            draft.actionKind === 'transfer_without_permission') && (
-            <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={draft.includeSummary}
-                onChange={(e) => setDraft({ ...draft, includeSummary: e.target.checked })}
-                className="accent-brand-500"
-              />
-              Incluir resumo da conversa pra o operador humano
-            </label>
-          )}
 
           {/* Mais */}
           <div>
@@ -727,9 +710,17 @@ function TagsPicker({
   error: string | null;
 }) {
   const [customInput, setCustomInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Set pra checagem rápida + preservação de ordem do selected.
   const selectedSet = useMemo(() => new Set(selected.map((s) => s.toLowerCase())), [selected]);
+
+  // Filtra tags por substring case-insensitive do nome.
+  const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return available;
+    return available.filter((t) => t.name.toLowerCase().includes(q));
+  }, [available, searchQuery]);
 
   function toggleTag(name: string) {
     const lower = name.toLowerCase();
@@ -779,6 +770,29 @@ function TagsPicker({
         </div>
       )}
 
+      {/* Busca — só aparece se tem o que filtrar */}
+      {!loading && !error && available.length > 5 && (
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={`Buscar entre ${available.length} tags…`}
+            className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md pl-3 pr-7 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none transition"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200"
+              title="Limpar busca"
+            >
+              <X size={11} />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Picker da Kommo */}
       <div className="rounded-md border border-zinc-800 bg-zinc-950/40 max-h-44 overflow-y-auto">
         {loading && (
@@ -797,9 +811,14 @@ function TagsPicker({
             Nenhuma tag cadastrada na conta Kommo. Use o campo abaixo pra criar uma nova.
           </div>
         )}
-        {!loading && !error && available.length > 0 && (
+        {!loading && !error && available.length > 0 && filtered.length === 0 && (
+          <div className="px-3 py-2 text-[11px] text-zinc-500">
+            Nenhuma tag bate com "{searchQuery}".
+          </div>
+        )}
+        {!loading && !error && filtered.length > 0 && (
           <ul className="divide-y divide-zinc-800/40">
-            {available.map((t) => {
+            {filtered.map((t) => {
               const checked = selectedSet.has(t.name.toLowerCase());
               return (
                 <li key={t.id}>
@@ -943,6 +962,173 @@ function StagePicker({
           Atual: <span className="text-sky-300 font-mono">{selectedLabel}</span>
           <span className="text-zinc-700 ml-2">(statusId {selectedStatusId})</span>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// StepEditor — UMA ação dentro da regra. Tipo + params + botão de remover.
+// Usado pelo ActionEditor que renderiza N StepEditors numa lista.
+// ---------------------------------------------------------------------------
+
+function StepEditor({
+  index,
+  step,
+  canRemove,
+  onChange,
+  onRemove,
+  tagsData,
+  pipelinesForSelect,
+  loadingKommo,
+  tagsError,
+  pipelinesError,
+}: {
+  index: number;
+  step: DraftStep;
+  canRemove: boolean;
+  onChange: (next: DraftStep) => void;
+  onRemove: () => void;
+  tagsData: KommoTagsResponse | null;
+  pipelinesForSelect: NonNullable<KommoPipelinesResponse['pipelines']>;
+  loadingKommo: boolean;
+  tagsError: string | null;
+  pipelinesError: string | null;
+}) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-3 space-y-3">
+      {/* Header com índice + remover */}
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+          Ação #{index + 1}
+        </span>
+        {canRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="text-[11px] text-zinc-500 hover:text-rose-300 inline-flex items-center gap-1"
+            title="Remover esta ação"
+          >
+            <X size={11} /> remover
+          </button>
+        )}
+      </div>
+
+      {/* Seletor de tipo */}
+      <div className="grid grid-cols-2 gap-2">
+        {(Object.keys(KIND_LABEL) as ActionKind[]).map((k) => {
+          const meta = KIND_LABEL[k];
+          const Icon = meta.icon;
+          const active = step.kind === k;
+          return (
+            <button
+              key={k}
+              type="button"
+              onClick={() => onChange(defaultStep(k))}
+              className={clsx(
+                'flex items-center gap-2 p-2.5 rounded-md text-left transition border',
+                active
+                  ? 'border-brand-500/40 bg-brand-500/10 text-brand-100'
+                  : 'border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700',
+              )}
+            >
+              <Icon size={14} className={active ? 'text-brand-300' : meta.color} />
+              <span className="text-[11px] font-medium leading-tight">{meta.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Params por tipo */}
+      {step.kind === 'add_tag' && (
+        <TagsPicker
+          selected={step.tags ?? []}
+          onChange={(tags) => onChange({ ...step, tags })}
+          available={tagsData?.tags ?? []}
+          loading={loadingKommo}
+          error={tagsError}
+        />
+      )}
+      {step.kind === 'move_stage' && (
+        <StagePicker
+          selectedStatusId={step.statusId ?? null}
+          selectedLabel={step.statusLabel ?? null}
+          onChange={(statusId, pipelineId, label) =>
+            onChange({ ...step, statusId, pipelineId, statusLabel: label })
+          }
+          pipelines={pipelinesForSelect}
+          loading={loadingKommo}
+          error={pipelinesError}
+        />
+      )}
+      {(step.kind === 'transfer_with_permission' || step.kind === 'transfer_without_permission') && (
+        <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={step.includeSummary !== false}
+            onChange={(e) => onChange({ ...step, includeSummary: e.target.checked })}
+            className="accent-brand-500"
+          />
+          Incluir resumo da conversa pra o operador humano
+        </label>
+      )}
+      {step.kind === 'summarize_to_note' && (
+        <div className="space-y-1.5">
+          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+            Foco do resumo (opcional)
+          </label>
+          <input
+            type="text"
+            value={step.focusHint ?? ''}
+            onChange={(e) => onChange({ ...step, focusHint: e.target.value })}
+            placeholder="ex: foco em queixa clínica e preferência de horário"
+            className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none transition"
+          />
+          <p className="text-[10px] text-zinc-600 leading-tight">
+            A IA vai gerar um resumo do lead e postar como nota interna no Kommo (paciente NÃO vê).
+            Use foco pra direcionar o que destacar. Sem foco, gera resumo equilibrado.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// StepSummary — linha visual de UMA ação dentro de uma regra. Usada tanto
+// no card da lista quanto no editor.
+// ---------------------------------------------------------------------------
+
+function StepSummary({ step }: { step: ActionStep }) {
+  const meta = KIND_LABEL[step.kind] ?? KIND_LABEL.add_tag;
+  const Icon = meta.icon;
+  const params = (step.params ?? {}) as Record<string, unknown>;
+  const tags = Array.isArray(params.tags) ? (params.tags as string[]) : [];
+  const stageStatusId = typeof params.statusId === 'number' ? params.statusId : null;
+  const stageLabel = typeof params.statusLabel === 'string' ? params.statusLabel : null;
+  const focusHint = typeof params.focusHint === 'string' ? params.focusHint : null;
+  return (
+    <div className={clsx('text-sm flex flex-wrap items-center gap-1.5', meta.color)}>
+      <Icon size={14} className="shrink-0" />
+      <span className="font-medium">{meta.label}</span>
+      {step.kind === 'add_tag' &&
+        tags.map((t) => (
+          <span
+            key={t}
+            className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-200 text-[11px] ring-1 ring-amber-500/30 font-mono"
+          >
+            #{t}
+          </span>
+        ))}
+      {step.kind === 'move_stage' && stageStatusId && (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-200 text-[11px] ring-1 ring-sky-500/30">
+          → {stageLabel ?? `etapa #${stageStatusId}`}
+        </span>
+      )}
+      {step.kind === 'summarize_to_note' && focusHint && (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-200 text-[11px] ring-1 ring-violet-500/30 italic">
+          foco: {focusHint}
+        </span>
       )}
     </div>
   );

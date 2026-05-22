@@ -364,9 +364,9 @@ function renderFlaggedExamples(flagged: Array<{ content: string }>): string {
 ${lines.join('\n')}`;
 }
 
-function humanizeAction(action: UnitAction): string {
-  const params = (action.actionParams as Record<string, unknown>) ?? {};
-  switch (action.actionKind) {
+function humanizeActionStep(step: { kind: string; params: Record<string, unknown> }): string {
+  const params = step.params ?? {};
+  switch (step.kind) {
     case 'add_tag': {
       const tags = Array.isArray(params.tags) ? (params.tags as string[]) : [];
       if (tags.length === 0) return 'aplicar uma tag relevante (não configurada)';
@@ -402,9 +402,32 @@ function humanizeAction(action: UnitAction): string {
         inc ? 'e deixe um resumo breve do contexto pra o operador.' : '.',
       ].join(' ');
     }
+    case 'summarize_to_note': {
+      const hint = typeof params.focusHint === 'string' && params.focusHint.trim()
+        ? ` Foco: ${params.focusHint.trim()}.`
+        : '';
+      return `chame resumir_lead_para_sdr(leadId) — gera um resumo do contexto e posta como NOTA INTERNA no Kommo pro SDR humano ver.${hint} A nota fica visível só pros operadores; o paciente não vê.`;
+    }
     default:
-      return `executar ação "${action.actionKind}"`;
+      return `executar ação "${step.kind}"`;
   }
+}
+
+/** Para uma UnitAction, devolve a string descrevendo TODAS as ações dela. */
+function humanizeAction(action: UnitAction): string {
+  // Lê o array novo OU cai pra par legado.
+  const arr = Array.isArray(action.actions) ? (action.actions as Array<{ kind: string; params: Record<string, unknown> }>) : [];
+  const steps =
+    arr.length > 0
+      ? arr
+      : action.actionKind
+        ? [{ kind: action.actionKind, params: (action.actionParams as Record<string, unknown>) ?? {} }]
+        : [];
+  if (steps.length === 0) return 'sem ação configurada';
+  if (steps.length === 1) return humanizeActionStep(steps[0]);
+  // Multi-ação: lista numerada inline.
+  const parts = steps.map((s, i) => `(${i + 1}) ${humanizeActionStep(s)}`);
+  return `dispare TODAS as ações abaixo, em ordem: ${parts.join('; ')}`;
 }
 
 function renderActions(actions: UnitAction[]): string {
@@ -418,9 +441,11 @@ function renderActions(actions: UnitAction[]): string {
     return lineParts.join('\n');
   });
   return `# AÇÕES CONFIGURADAS
-- Use estas regras como guia pra detectar situações e disparar a ação correspondente
-  via as tools disponíveis. Adapte a linguagem ao tom, mas mantenha a lógica.
-- As ações são silenciosas — não anuncie ao cliente que aplicou uma tag ou transferiu.
+- Use estas regras como guia pra detectar situações e disparar TODAS as ações
+  correspondentes via as tools disponíveis. Cada regra pode ter múltiplas
+  ações que devem ser executadas juntas no mesmo turno.
+- As ações são silenciosas — não anuncie ao cliente que aplicou uma tag,
+  mudou de etapa, transferiu ou gerou resumo interno.
   Exceção: transferência com permissão exige perguntar primeiro.
 
 ${lines.join('\n\n')}`;

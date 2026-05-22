@@ -705,13 +705,24 @@ export type ActionKind =
   | 'add_tag'
   | 'move_stage'
   | 'transfer_with_permission'
-  | 'transfer_without_permission';
+  | 'transfer_without_permission'
+  | 'summarize_to_note';
+
+/** Uma ação dentro de uma regra (várias podem rodar juntas). */
+export interface ActionStep {
+  kind: ActionKind;
+  params: Record<string, unknown>;
+}
 
 export interface UnitAction {
   id: string;
   unitId: string;
   conditionDescription: string;
+  /** Formato canônico: lista de ações. */
+  actions: ActionStep[];
+  /** @deprecated mantido pra compatibilidade. */
   actionKind: ActionKind;
+  /** @deprecated mantido pra compatibilidade. */
   actionParams: Record<string, unknown>;
   notes: string | null;
   enabled: boolean;
@@ -721,8 +732,7 @@ export interface UnitAction {
 
 export interface UnitActionInput {
   conditionDescription: string;
-  actionKind: ActionKind;
-  actionParams: Record<string, unknown>;
+  actions: ActionStep[];
   notes?: string | null;
   enabled?: boolean;
 }
