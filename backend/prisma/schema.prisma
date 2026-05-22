@@ -200,6 +200,7 @@ model Unit {
   actions          UnitAction[]
   admins           User[]
   systemLogs       SystemLog[]
+  leadFieldRules   LeadFieldRule[]
 
   @@map("units")
 }
@@ -441,6 +442,51 @@ enum LogLevel {
   WARN
   ERROR
   FATAL
+}
+
+// ===========================================================================
+// LeadFieldRule — captura de dados pra um custom field específico do Kommo.
+// ===========================================================================
+// Cada regra vira UMA tool dinâmica no agente. Quando o paciente disser
+// um dado relevante, a IA chama a tool e o valor vai pro field do Kommo.
+//
+// Exemplo: rule {
+//   kommoFieldId: 12345,
+//   kommoFieldName: "Idade",
+//   kommoFieldType: "numeric",
+//   toolName: "salvar_idade",
+//   instruction: "Quando o paciente disser a idade dele, salve aqui.",
+//   valueHint: "Número inteiro entre 0 e 120.",
+//   examples: ["Tenho 34 anos", "vou fazer 50", "tenho 28"],
+// }
+// → vira a tool `salvar_idade(leadId, idade: number)` que faz PATCH no field.
+//
+// `kommoFieldEnums` cachea as opções de select/multiselect [{id, value}] pra
+// não bater na API toda vez. Refresh manual quando o usuário editar a regra
+// (o controller refaz o lookup).
+//
+// `examples` ajuda a IA a reconhecer variações de frase — vai parar no prompt.
+// ===========================================================================
+model LeadFieldRule {
+  id              String   @id @default(cuid())
+  unitId          String   @map("unit_id")
+  kommoFieldId    Int      @map("kommo_field_id")
+  kommoFieldName  String   @map("kommo_field_name")
+  kommoFieldType  String   @map("kommo_field_type") // text|textarea|numeric|date|birthday|select|multiselect|radiobutton
+  kommoFieldEnums Json?    @map("kommo_field_enums") // [{id, value}] pra select/multiselect
+  toolName        String   @map("tool_name")        // ex: "salvar_idade"
+  instruction     String                              // quando o agente deve chamar a tool
+  valueHint       String?  @map("value_hint")       // formato esperado (ex: "número inteiro 0-120")
+  examples        String[] @default([])
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, toolName])
+  @@index([unitId, enabled])
+  @@map("lead_field_rules")
 }
 
 // ===========================================================================

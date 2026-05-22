@@ -52,6 +52,7 @@ import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig } from './config.js';
 import { composeSystemPromptForUnit } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
+import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 
 // ---------------------------------------------------------------------------
@@ -107,12 +108,17 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     logger.warn({ err, unit: unit.slug }, 'Unit sem credenciais Kommo — tools desabilitadas');
   }
 
+  // Captura de dados — regras configuradas no painel "Capturas". Cada regra
+  // ativa vira uma tool dinâmica que escreve em um custom field do Kommo.
+  const leadFieldRules = await listEnabledLeadFieldRules(unit.id);
+
   const allTools = kommoClient
     ? buildTools({
         recorder,
         kommo: kommoClient,
         descriptionOverrides,
         pausedFieldId: unit.kommoPausedFieldId,
+        leadFieldRules,
       })
     : [];
 

@@ -114,6 +114,65 @@ export interface SystemLogQuery {
 }
 
 // ---------------------------------------------------------------------------
+// LeadFieldRule — captura de dados em custom fields do Kommo via tools dinâmicas
+// ---------------------------------------------------------------------------
+
+export type KommoFieldType =
+  | 'text'
+  | 'textarea'
+  | 'numeric'
+  | 'date'
+  | 'birthday'
+  | 'select'
+  | 'multiselect'
+  | 'radiobutton';
+
+export interface KommoLeadCustomField {
+  id: number;
+  name: string;
+  type: KommoFieldType;
+  code: string | null;
+  enums: Array<{ id: number; value: string }>;
+}
+
+export interface KommoLeadCustomFieldsResponse {
+  ok: boolean;
+  fields?: KommoLeadCustomField[];
+  error?: string;
+  message?: string;
+  kommoStatus?: number | null;
+  kommoBody?: unknown;
+}
+
+export interface LeadFieldRule {
+  id: string;
+  unitId: string;
+  kommoFieldId: number;
+  kommoFieldName: string;
+  kommoFieldType: KommoFieldType;
+  kommoFieldEnums: Array<{ id: number; value: string }> | null;
+  toolName: string;
+  instruction: string;
+  valueHint: string | null;
+  examples: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LeadFieldRuleInput {
+  kommoFieldId: number;
+  kommoFieldName: string;
+  kommoFieldType: KommoFieldType;
+  kommoFieldEnums?: Array<{ id: number; value: string }> | null;
+  toolName: string;
+  instruction: string;
+  valueHint?: string | null;
+  examples?: string[];
+  enabled?: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Auth — user logado no painel
 // ---------------------------------------------------------------------------
 

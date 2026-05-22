@@ -60,6 +60,40 @@ export interface KommoPipelineStatus {
   type?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Custom field types: o que a gente expõe na UI de Captura de Dados.
+// ---------------------------------------------------------------------------
+
+export type KommoFieldType =
+  | 'text'
+  | 'textarea'
+  | 'numeric'
+  | 'date'
+  | 'birthday'
+  | 'select'
+  | 'multiselect'
+  | 'radiobutton';
+
+export const SUPPORTED_FIELD_TYPES: ReadonlySet<string> = new Set<KommoFieldType>([
+  'text',
+  'textarea',
+  'numeric',
+  'date',
+  'birthday',
+  'select',
+  'multiselect',
+  'radiobutton',
+]);
+
+export interface KommoLeadCustomField {
+  id: number;
+  name: string;
+  type: KommoFieldType;
+  code: string | null;
+  /** Só pra select/multiselect/radiobutton — opções disponíveis. */
+  enums: Array<{ id: number; value: string }>;
+}
+
 export interface KommoPipeline {
   id: number;
   name: string;
@@ -425,6 +459,112 @@ export class KommoClient {
       return data;
     } catch (err) {
       wrapAxiosError(err, 'listLeadCustomFields');
+    }
+  }
+
+  /**
+   * Lista os custom fields de lead já normalizados pra UI: { id, name, type,
+   * code, enums?: [{id, value}] }. Apaga campos que a gente não suporta na
+   * UI de regras (smart_address, items, etc — exigem schema complexo).
+   */
+  async listLeadCustomFieldsTyped(): Promise<KommoLeadCustomField[]> {
+    const raw = (await this.listLeadCustomFields()) as {
+      _embedded?: {
+        custom_fields?: Array<{
+          id: number;
+          name: string;
+          type: string;
+          code?: string | null;
+          enums?: Array<{ id: number; value: string; sort?: number }> | null;
+        }>;
+      };
+    };
+    const all = raw?._embedded?.custom_fields ?? [];
+    return all
+      .filter((f) => SUPPORTED_FIELD_TYPES.has(f.type))
+      .map((f) => ({
+        id: f.id,
+        name: f.name,
+        type: f.type as KommoLeadCustomField['type'],
+        code: f.code ?? null,
+        enums: (f.enums ?? [])
+          .slice()
+          .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+          .map((e) => ({ id: e.id, value: e.value })),
+      }));
+  }
+
+  /**
+   * Escreve um valor em um custom field de lead. O formato do `values[0]`
+   * varia por tipo — encapsulamos aqui pra que o caller (tool) só passe
+   * { fieldId, type, value } e a gente cuida da serialização.
+   *
+   * Tipos suportados:
+   *  - text/textarea       → values: [{ value: string }]
+   *  - numeric             → values: [{ value: number }]
+   *  - date/birthday       → values: [{ value: unix seconds }]
+   *  - select/radiobutton  → values: [{ enum_id }] ou [{ value: enumLabel }]
+   *  - multiselect         → values: enums.map(e => ({ enum_id }))
+   *
+   * Aplica downgradeEmoji em valores string pra evitar truncagem (mesma
+   * razão do PATCH no campo "Resposta IA" — bug do MySQL utf8).
+   */
+  async setLeadCustomFieldValue(
+    leadId: number,
+    fieldId: number,
+    fieldType: KommoFieldType,
+    value: string | number | string[],
+  ): Promise<void> {
+    let values: Array<Record<string, unknown>>;
+
+    if (fieldType === 'text' || fieldType === 'textarea') {
+      if (typeof value !== 'string') {
+        throw new Error(`field ${fieldId} (${fieldType}) requer string, recebeu ${typeof value}`);
+      }
+      values = [{ value: downgradeEmoji(value) }];
+    } else if (fieldType === 'numeric') {
+      const num = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(num)) {
+        throw new Error(`field ${fieldId} (numeric) recebeu valor não-numérico: ${value}`);
+      }
+      values = [{ value: num }];
+    } else if (fieldType === 'date' || fieldType === 'birthday') {
+      // Kommo espera unix seconds. Aceita ISO string ou number ms/seconds.
+      let unixSec: number;
+      if (typeof value === 'number') {
+        unixSec = value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
+      } else if (typeof value === 'string') {
+        const parsed = new Date(value).getTime();
+        if (!Number.isFinite(parsed)) {
+          throw new Error(`field ${fieldId} (${fieldType}) ISO inválido: ${value}`);
+        }
+        unixSec = Math.floor(parsed / 1000);
+      } else {
+        throw new Error(`field ${fieldId} (${fieldType}) requer ISO string ou number`);
+      }
+      values = [{ value: unixSec }];
+    } else if (fieldType === 'select' || fieldType === 'radiobutton') {
+      // Aceita label (string) — Kommo casa pelo `value` se enum_id não vier.
+      if (typeof value !== 'string') {
+        throw new Error(`field ${fieldId} (${fieldType}) requer string (label da opção)`);
+      }
+      values = [{ value: downgradeEmoji(value) }];
+    } else if (fieldType === 'multiselect') {
+      const arr = Array.isArray(value) ? value : [value];
+      values = arr.map((v) => ({ value: downgradeEmoji(String(v)) }));
+    } else {
+      throw new Error(`field ${fieldId} tipo não suportado: ${fieldType}`);
+    }
+
+    try {
+      await this.http.patch(`/leads/${leadId}`, {
+        custom_fields_values: [{ field_id: fieldId, values }],
+      });
+    } catch (err) {
+      wrapAxiosError(
+        err,
+        `setLeadCustomFieldValue(${leadId}, field=${fieldId}, type=${fieldType})`,
+      );
     }
   }
 

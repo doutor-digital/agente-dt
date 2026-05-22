@@ -27,6 +27,9 @@ import type {
   UnitActionInput,
   LlmCallSummary,
   OpenAIDebugResponse,
+  KommoLeadCustomFieldsResponse,
+  LeadFieldRule,
+  LeadFieldRuleInput,
   PromptPerformanceResponse,
   Stats,
   SystemLogListResponse,
@@ -145,6 +148,44 @@ export const api = {
       params: withUnit(undefined, unitId),
     });
     return data.modules;
+  },
+
+  // -------------------------------------------------------------------------
+  // Captura de dados — LeadFieldRule (tools dinâmicas por custom field)
+  // -------------------------------------------------------------------------
+  async listLeadFieldRules(unitId: string): Promise<LeadFieldRule[]> {
+    const { data } = await http.get<{ rules: LeadFieldRule[] }>(
+      `/units/${unitId}/lead-field-rules`,
+    );
+    return data.rules;
+  },
+  async createLeadFieldRule(unitId: string, input: LeadFieldRuleInput): Promise<LeadFieldRule> {
+    const { data } = await http.post<{ rule: LeadFieldRule }>(
+      `/units/${unitId}/lead-field-rules`,
+      input,
+    );
+    return data.rule;
+  },
+  async updateLeadFieldRule(
+    unitId: string,
+    ruleId: string,
+    input: Partial<LeadFieldRuleInput>,
+  ): Promise<LeadFieldRule> {
+    const { data } = await http.patch<{ rule: LeadFieldRule }>(
+      `/units/${unitId}/lead-field-rules/${ruleId}`,
+      input,
+    );
+    return data.rule;
+  },
+  async deleteLeadFieldRule(unitId: string, ruleId: string): Promise<void> {
+    await http.delete(`/units/${unitId}/lead-field-rules/${ruleId}`);
+  },
+  async kommoLeadCustomFields(unitId: string): Promise<KommoLeadCustomFieldsResponse> {
+    const { data } = await http.get<KommoLeadCustomFieldsResponse>(
+      `/units/${unitId}/kommo-lead-custom-fields`,
+      { validateStatus: () => true },
+    );
+    return data;
   },
 
   // -------------------------------------------------------------------------

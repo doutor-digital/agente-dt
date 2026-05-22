@@ -67,6 +67,13 @@ import {
   updateActionHandler,
   deleteActionHandler,
 } from '../controllers/actions.controller.js';
+import {
+  listLeadFieldRulesHandler,
+  createLeadFieldRuleHandler,
+  updateLeadFieldRuleHandler,
+  deleteLeadFieldRuleHandler,
+  listKommoLeadCustomFieldsHandler,
+} from '../controllers/lead-field-rules.controller.js';
 import { getAlerts, getIntegrations } from '../controllers/integrations.controller.js';
 import {
   getPromptPerformanceHandler,
@@ -161,6 +168,13 @@ apiRouter.get('/units/:id/actions', requireUnitAccess, listActionsHandler);
 apiRouter.post('/units/:id/actions', requireUnitAccess, createActionHandler);
 apiRouter.patch('/units/:id/actions/:actionId', requireUnitAccess, updateActionHandler);
 apiRouter.delete('/units/:id/actions/:actionId', requireUnitAccess, deleteActionHandler);
+
+// LeadFieldRules — captura de dados pra custom fields do Kommo.
+apiRouter.get('/units/:id/lead-field-rules', requireUnitAccess, listLeadFieldRulesHandler);
+apiRouter.post('/units/:id/lead-field-rules', requireUnitAccess, createLeadFieldRuleHandler);
+apiRouter.patch('/units/:id/lead-field-rules/:ruleId', requireUnitAccess, updateLeadFieldRuleHandler);
+apiRouter.delete('/units/:id/lead-field-rules/:ruleId', requireUnitAccess, deleteLeadFieldRuleHandler);
+apiRouter.get('/units/:id/kommo-lead-custom-fields', requireUnitAccess, listKommoLeadCustomFieldsHandler);
 
 // ---------------------------------------------------------------------------
 // Endpoints "amplos" — o controller força unitId do user (UNIT_ADMIN não

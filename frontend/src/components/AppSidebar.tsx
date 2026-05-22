@@ -20,6 +20,7 @@ import {
   Building2,
   Cable,
   Cpu,
+  Database,
   FileText,
   LayoutDashboard,
   LogOut,
@@ -49,6 +50,7 @@ export type AppTab =
   | 'playground'
   | 'sources'
   | 'actions'
+  | 'captures'
   | 'config'
   | 'units'
   | 'users'
@@ -68,6 +70,7 @@ const NAV: NavItem[] = [
   { id: 'playground', label: 'Testar IA', icon: TestTube2, group: 'primary' },
   { id: 'sources', label: 'Fontes', icon: FileText, group: 'primary' },
   { id: 'actions', label: 'Ações', icon: Zap, group: 'primary' },
+  { id: 'captures', label: 'Captura de Dados', icon: Database, group: 'primary' },
   { id: 'conversations', label: 'Conversas', icon: MessageCircle, group: 'primary' },
   { id: 'traces', label: 'Execuções', icon: Terminal, group: 'primary' },
   { id: 'errors', label: 'Erros', icon: AlertOctagon, group: 'primary' },

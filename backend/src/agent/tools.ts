@@ -22,7 +22,8 @@
 
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import type { KommoClient } from '../services/kommo.service.js';
+import type { LeadFieldRule } from '@prisma/client';
+import type { KommoClient, KommoFieldType } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,8 @@ export interface BuildToolsArgs {
   descriptionOverrides?: Record<string, string>;
   /** ID do custom field "IA Pausada". Sem isso, `pausar_ia` retorna erro suave. */
   pausedFieldId?: number | null;
+  /** Regras de captura de dados — cada uma vira uma tool dinâmica. */
+  leadFieldRules?: LeadFieldRule[];
 }
 
 export function buildTools({
@@ -73,6 +76,7 @@ export function buildTools({
   kommo,
   descriptionOverrides = {},
   pausedFieldId = null,
+  leadFieldRules = [],
 }: BuildToolsArgs) {
   const desc = (name: string) => descriptionOverrides[name] || DEFAULT_TOOL_DESCRIPTIONS[name];
 
@@ -301,7 +305,123 @@ export function buildTools({
     },
   });
 
-  return [aplicar_tag, mover_etapa, pausar_ia, atualizar_titulo_lead];
+  // Tools dinâmicas — uma por LeadFieldRule ativa. Cada rule escreve em um
+  // custom field específico do Kommo, com schema ditado pelo tipo do campo.
+  const dynamicTools = leadFieldRules.map((rule) =>
+    buildLeadFieldRuleTool({ rule, kommo, recorder }),
+  );
+
+  return [aplicar_tag, mover_etapa, pausar_ia, atualizar_titulo_lead, ...dynamicTools];
+}
+
+// ---------------------------------------------------------------------------
+// Tool dinâmica de captura — schema depende do tipo do field.
+// ---------------------------------------------------------------------------
+
+function buildLeadFieldRuleTool({
+  rule,
+  kommo,
+  recorder,
+}: {
+  rule: LeadFieldRule;
+  kommo: KommoClient;
+  recorder: TraceRecorder;
+}) {
+  const fieldType = rule.kommoFieldType as KommoFieldType;
+  const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
+  const enumValues = enums.map((e) => e.value);
+
+  // Schema da tool muda por tipo. value sempre fica como string no contrato
+  // pra simplificar — convertemos depois antes de mandar pro Kommo.
+  const baseSchema: Record<string, z.ZodTypeAny> = {
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+  };
+
+  if (fieldType === 'numeric') {
+    baseSchema.value = z
+      .number()
+      .describe(rule.valueHint ?? `Valor numérico pra "${rule.kommoFieldName}".`);
+  } else if (fieldType === 'date' || fieldType === 'birthday') {
+    baseSchema.value = z
+      .string()
+      .describe(
+        rule.valueHint ??
+          'Data em ISO 8601 (YYYY-MM-DD). Converta o que o paciente disser pra esse formato.',
+      );
+  } else if (fieldType === 'multiselect') {
+    const arr = enumValues.length > 0 ? z.array(z.enum(enumValues as [string, ...string[]])) : z.array(z.string());
+    baseSchema.values = arr.describe(
+      rule.valueHint ??
+        (enumValues.length > 0
+          ? `Uma ou mais opções dentre: ${enumValues.join(', ')}`
+          : `Opções pra "${rule.kommoFieldName}".`),
+    );
+  } else if ((fieldType === 'select' || fieldType === 'radiobutton') && enumValues.length > 0) {
+    baseSchema.value = z
+      .enum(enumValues as [string, ...string[]])
+      .describe(
+        rule.valueHint ?? `Escolha UMA das opções: ${enumValues.join(', ')}`,
+      );
+  } else {
+    baseSchema.value = z
+      .string()
+      .min(1)
+      .max(2000)
+      .describe(rule.valueHint ?? `Valor pra "${rule.kommoFieldName}".`);
+  }
+
+  const schema = z.object(baseSchema);
+  const examplesBlock =
+    rule.examples.length > 0
+      ? ` Exemplos de quando chamar: ${rule.examples.slice(0, 5).map((e) => `"${e}"`).join('; ')}.`
+      : '';
+
+  const description =
+    `${rule.instruction.trim()} Salva no campo "${rule.kommoFieldName}" do lead no Kommo (tipo ${fieldType}).${examplesBlock} Chame em silêncio — não comente a captura na resposta ao paciente.`;
+
+  return new DynamicStructuredTool({
+    name: rule.toolName,
+    description,
+    schema,
+    func: async (args: Record<string, unknown>) => {
+      const leadId = Number(args.leadId);
+      const value = fieldType === 'multiselect' ? args.values : args.value;
+      const t0 = performance.now();
+
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: ${rule.toolName}(leadId=${leadId}) → "${rule.kommoFieldName}"`,
+        payload: { leadId, fieldId: rule.kommoFieldId, fieldName: rule.kommoFieldName, fieldType, value },
+      });
+
+      try {
+        await kommo.setLeadCustomFieldValue(
+          leadId,
+          rule.kommoFieldId,
+          fieldType,
+          value as string | number | string[],
+        );
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `"${rule.kommoFieldName}" gravado no lead ${leadId}`,
+          payload: { leadId, fieldId: rule.kommoFieldId, fieldType, value },
+          latencyMs: latency,
+        });
+        return `OK — "${rule.kommoFieldName}" gravado (${latency}ms).`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha em ${rule.toolName}: ${msg}`,
+          payload: { leadId, fieldId: rule.kommoFieldId, fieldType, value, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao gravar "${rule.kommoFieldName}": ${msg}`;
+      }
+    },
+  });
 }
 
 export type AgentTools = ReturnType<typeof buildTools>;

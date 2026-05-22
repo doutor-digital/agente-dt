@@ -18,10 +18,17 @@
 //   ...passa pra LLM.
 // ============================================================================
 
-import type { KnowledgeBaseEntry, MessageTemplate, Unit, UnitAction } from '@prisma/client';
+import type {
+  KnowledgeBaseEntry,
+  LeadFieldRule,
+  MessageTemplate,
+  Unit,
+  UnitAction,
+} from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { searchKnowledge } from '../services/knowledge.service.js';
 import { listEnabledActions } from '../services/actions.service.js';
+import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { logger } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -414,6 +421,28 @@ function renderActions(actions: UnitAction[]): string {
 ${lines.join('\n\n')}`;
 }
 
+function renderLeadFieldRules(rules: LeadFieldRule[]): string {
+  if (rules.length === 0) return '';
+  const lines = rules.map((r, i) => {
+    const enums = (r.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
+    const enumsLine =
+      enums.length > 0 ? `\n   Opções permitidas: ${enums.map((e) => `"${e.value}"`).join(', ')}` : '';
+    const hintLine = r.valueHint?.trim() ? `\n   Formato: ${r.valueHint.trim()}` : '';
+    const examplesLine =
+      r.examples.length > 0
+        ? `\n   Gatilhos: ${r.examples.slice(0, 5).map((e) => `"${e}"`).join('; ')}`
+        : '';
+    return `${i + 1}. ${r.toolName} → grava em "${r.kommoFieldName}" (${r.kommoFieldType})
+   Quando usar: ${r.instruction.trim()}${hintLine}${enumsLine}${examplesLine}`;
+  });
+  return `# CAPTURA DE DADOS
+- As tools abaixo gravam informações estruturadas no card do paciente no Kommo.
+- Chame em SILÊNCIO assim que detectar a informação — NÃO anuncie ("anotei seu...").
+- Cada tool é idempotente; chamar duas vezes com o mesmo valor não duplica.
+
+${lines.join('\n\n')}`;
+}
+
 function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>): string {
   if (entries.length === 0) return '';
   const lines = entries.map(
@@ -445,6 +474,8 @@ export interface ComposeInput {
   knowledge?: Array<KnowledgeBaseEntry & { score: number }>;
   /** Regras "quando → faça" cadastradas na Unit. */
   actions?: UnitAction[];
+  /** Regras de captura de dados (LeadFieldRule) — viram tools dinâmicas. */
+  leadFieldRules?: LeadFieldRule[];
   /** Este é o PRIMEIRO turno do paciente? (1 humana, 0 IA). */
   isFirstTurn?: boolean;
 }
@@ -503,6 +534,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     flaggedExamples = [],
     knowledge = [],
     actions = [],
+    leadFieldRules = [],
     isFirstTurn = false,
   } = input;
 
@@ -558,6 +590,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   const actionsBlock = renderActions(actions);
   if (actionsBlock) blocks.push(actionsBlock);
+
+  const leadFieldsBlock = renderLeadFieldRules(leadFieldRules);
+  if (leadFieldsBlock) blocks.push(leadFieldsBlock);
 
   const templatesBlock = renderTemplates(templates);
   if (templatesBlock) blocks.push(templatesBlock);
@@ -622,7 +657,7 @@ export async function composeSystemPromptForUnit(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions] = await Promise.all([
+  const [templates, flagged, knowledge, actions, leadFieldRules] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -646,6 +681,7 @@ export async function composeSystemPromptForUnit(input: {
         )
       : Promise.resolve([]),
     listEnabledActions(input.unit.id),
+    listEnabledLeadFieldRules(input.unit.id),
   ]);
   return composeSystemPrompt({
     ...input,
@@ -653,6 +689,7 @@ export async function composeSystemPromptForUnit(input: {
     flaggedExamples: flagged,
     knowledge,
     actions,
+    leadFieldRules,
   });
 }
 
