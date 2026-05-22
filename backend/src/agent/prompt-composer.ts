@@ -301,6 +301,11 @@ function renderCollectName(unit: Unit): string {
   Passe SOMENTE o nome — o sistema acrescenta automaticamente a data da
   conversa, gravando como "<Nome> DD/MM/YYYY" (ex: "João 20/05/2026").
   A chamada é silenciosa — NUNCA fale "atualizei seu cadastro" ou similar.
+- REGRA RÍGIDA: você NÃO PODE responder com texto que use o nome do paciente
+  ANTES de ter chamado atualizar_titulo_lead nesse mesmo turno. Sequência
+  obrigatória: (1) chamar a tool com o nome, (2) aguardar resposta da tool,
+  (3) só então redigir a resposta usando o nome. Se você responder texto
+  primeiro, o título do card NÃO atualiza e o registro fica corrompido.
 - Depois de obtido, USE o nome do paciente nas respostas seguintes (com
   moderação — 1 vez a cada 2-3 mensagens, pra não parecer forçado).
 - Se o paciente insistir em não dizer o nome, deixe pra lá após 2 tentativas.`;

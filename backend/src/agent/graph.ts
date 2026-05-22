@@ -212,6 +212,22 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
         payload: { text },
         latencyMs: latency,
       });
+
+      // Rede de segurança: se o usuário acabou de dizer o nome e a IA esqueceu
+      // de chamar atualizar_titulo_lead, executa a tool nós mesmos. Idempotente
+      // — só roda se o lead.name na Kommo ainda estiver genérico (sem o nome).
+      if (kommoClient && unit.collectNameEnabled && userMessage && state.leadId) {
+        const detected = detectNameDisclosure(userMessage);
+        if (detected) {
+          await maybeAutoUpdateLeadTitle({
+            recorder,
+            kommo: kommoClient,
+            leadId: state.leadId,
+            name: detected,
+          });
+        }
+      }
+
       return { messages: [response], decision: text } satisfies Partial<AgentStateType>;
     }
 
@@ -251,4 +267,116 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
   const compiled = workflow.compile({ checkpointer });
 
   return compiled;
+}
+
+// ---------------------------------------------------------------------------
+// Heurísticas pra rede de segurança do "IA esqueceu de chamar a tool".
+// ---------------------------------------------------------------------------
+
+/**
+ * Tenta extrair o nome do paciente da mensagem dele. Cobre os padrões
+ * mais comuns em PT-BR. Retorna null se não bater em nada — caso em
+ * que NÃO mexemos no lead (evita falso positivo).
+ *
+ * Patterns aceitos:
+ *   "meu nome é José"            → "José"
+ *   "me chamo Maria Silva"       → "Maria Silva"
+ *   "sou o João"                 → "João"
+ *   "aqui é a Ana"               → "Ana"
+ *   "é Carlos"                   → "Carlos"  (quando vier sozinho)
+ *
+ * Limita a 4 palavras pra não pegar frase inteira como nome.
+ */
+function detectNameDisclosure(userMessage: string): string | null {
+  const cleaned = userMessage.trim();
+  // Lista de prefixos comuns. Capturar até 4 palavras seguidas
+  // de letras/acentos/hífens.
+  const NAME_CHARS = "[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\\-]*";
+  const NAME_GROUP = `(${NAME_CHARS}(?:\\s+${NAME_CHARS}){0,3})`;
+  const patterns: RegExp[] = [
+    new RegExp(`\\bmeu\\s+nome\\s+é\\s+${NAME_GROUP}`, 'i'),
+    new RegExp(`\\bme\\s+chamo\\s+${NAME_GROUP}`, 'i'),
+    new RegExp(`\\b(?:eu\\s+)?sou\\s+(?:o|a)?\\s*${NAME_GROUP}`, 'i'),
+    new RegExp(`\\baqui\\s+é\\s+(?:o|a)?\\s*${NAME_GROUP}`, 'i'),
+    new RegExp(`\\bsou\\s+${NAME_GROUP}`, 'i'),
+  ];
+  for (const p of patterns) {
+    const m = cleaned.match(p);
+    if (m && m[1]) {
+      const name = m[1].trim();
+      // Rejeita palavras óbvias que não são nome (caso a regex capture algo errado).
+      if (/^(bem|bom|boa|ok|sim|n[aã]o|aqui|ali|paciente|cliente)$/i.test(name)) continue;
+      return name;
+    }
+  }
+  return null;
+}
+
+/** Capitaliza cada palavra do nome (ex: "joão silva" → "João Silva"). */
+function titleCaseName(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((w) => (w.length === 0 ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
+    .join(' ');
+}
+
+/**
+ * Se o lead.name no Kommo for genérico ("Lead #123", vazio, igual ao
+ * contact name padrão do WhatsApp), atualiza pra `<Nome> DD/MM/YYYY`.
+ * Caso contrário, no-op.
+ */
+async function maybeAutoUpdateLeadTitle({
+  recorder,
+  kommo,
+  leadId,
+  name,
+}: {
+  recorder: TraceRecorder;
+  kommo: ReturnType<typeof createKommoClient>;
+  leadId: number;
+  name: string;
+}): Promise<void> {
+  const t0 = performance.now();
+  const display = titleCaseName(name);
+  try {
+    const lead = await kommo.getLead(leadId);
+    const current = (lead.name ?? '').trim();
+    const looksGeneric =
+      current.length === 0 ||
+      /^lead\s*#?\d+$/i.test(current) ||
+      // Se o nome já contém o que a IA captou, considera "já atualizado".
+      current.toLowerCase().includes(display.toLowerCase());
+    if (!looksGeneric) {
+      await recorder.step({
+        kind: 'KOMMO_ACTION',
+        title: `[safety-net] título do lead já está como "${current}" — não sobrescreve`,
+        payload: { leadId, current, detected: display },
+        latencyMs: Math.round(performance.now() - t0),
+      });
+      return;
+    }
+    const createdAtMs = (lead.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
+    const dateBR = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(new Date(createdAtMs));
+    const desired = `${display} ${dateBR}`;
+    await kommo.updateLeadName(leadId, desired);
+    await recorder.step({
+      kind: 'KOMMO_ACTION',
+      title: `[safety-net] IA esqueceu de chamar atualizar_titulo_lead — corrigido: "${current}" → "${desired}"`,
+      payload: { leadId, previous: current, desired, name: display, dateBR },
+      latencyMs: Math.round(performance.now() - t0),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await recorder.step({
+      kind: 'ERROR',
+      title: `[safety-net] falha ao atualizar título automaticamente: ${msg}`,
+      payload: { leadId, name: display, error: msg },
+      latencyMs: Math.round(performance.now() - t0),
+    });
+  }
 }
