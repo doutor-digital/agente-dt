@@ -10,7 +10,19 @@
 // ============================================================================
 
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Copy, Loader2, MoreVertical, Plus, Save, Search, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Copy,
+  Loader2,
+  MoreVertical,
+  Plus,
+  Save,
+  Search,
+  ShieldCheck,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type { Unit, UnitInput } from '../types/api';
@@ -21,6 +33,18 @@ import { KommoExplorer } from './KommoExplorer';
 import { KommoSchemaPreview } from './KommoSchemaPreview';
 
 const DEFAULT_UNIT_AVATAR = 'https://fiqon.com.br/wp-content/uploads/2025/04/kommo.png';
+
+const META_CHECK_LABELS: Record<string, string> = {
+  accessToken: 'Access Token',
+  wabaId: 'WABA ID',
+  waba: 'WABA acessível',
+  phoneNumber: 'Phone Number',
+  scopeMessaging: 'Escopo whatsapp_business_management',
+  scopeAnalytics: 'Escopo pricing_analytics',
+};
+function checkLabel(name: string): string {
+  return META_CHECK_LABELS[name] ?? name;
+}
 
 const blankInput: UnitInput = {
   slug: '',
@@ -90,6 +114,10 @@ export function UnitsPanel() {
   const [search, setSearch] = useState('');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [cloningId, setCloningId] = useState<string | null>(null);
+  const [validatingMeta, setValidatingMeta] = useState(false);
+  const [metaChecks, setMetaChecks] = useState<
+    { ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> } | null
+  >(null);
 
   const editing = creating || selectedId !== null;
 
@@ -99,6 +127,8 @@ export function UnitsPanel() {
       setDraft(unitToInput(u));
       setCreating(false);
     }
+    // Resetar resultado de validação quando trocar de unit ou entrar em "criar".
+    setMetaChecks(null);
   }, [units, selectedId]);
 
   // Fecha menu "..." ao clicar fora.
@@ -137,6 +167,32 @@ export function UnitsPanel() {
       throw err; // re-lança pra callers (ex: botão dedicado dentro do KommoExplorer)
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleValidateMeta() {
+    if (!selectedId) {
+      toast.error('Salve a unidade antes de validar.');
+      return;
+    }
+    setValidatingMeta(true);
+    setMetaChecks(null);
+    try {
+      // Manda o que está no draft como override — funciona com credenciais
+      // novas (não salvas) e ignora os mascarados (••••).
+      const res = await api.metaValidate(selectedId, {
+        metaWabaId: draft.metaWabaId ?? null,
+        metaAccessToken: draft.metaAccessToken ?? null,
+        metaPhoneNumberId: draft.metaPhoneNumberId ?? null,
+      });
+      setMetaChecks(res);
+      if (res.ok) toast.success('Credenciais Meta validadas.');
+      else toast.error('Algumas checagens falharam — veja detalhes abaixo.');
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string };
+      toast.error(e?.response?.data?.error ?? e?.message ?? 'erro ao validar');
+    } finally {
+      setValidatingMeta(false);
     }
   }
 
@@ -409,6 +465,59 @@ export function UnitsPanel() {
                   type="number"
                   hint="Limite mensal de gasto WhatsApp em USD. Dispara alertas 70/90/100% no painel."
                 />
+
+                {/* Validar credenciais Meta — chama Graph API e mostra checks. */}
+                <div className="mt-3 pt-3 border-t border-zinc-800/60 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[11px] text-zinc-500 leading-relaxed">
+                      Valida WABA, Phone Number, escopo de envio e escopo de analytics
+                      direto na Graph API. Não salva — use depois de preencher pra
+                      confirmar que vai funcionar.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleValidateMeta()}
+                      disabled={validatingMeta || !selectedId}
+                      title={!selectedId ? 'Salve a unidade antes de validar' : 'Validar credenciais na Graph API'}
+                      className="shrink-0 text-xs px-3 py-1.5 rounded inline-flex items-center gap-1.5 bg-emerald-600/30 ring-1 ring-emerald-500/40 text-emerald-200 hover:bg-emerald-600/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {validatingMeta ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <ShieldCheck size={12} />
+                      )}
+                      Validar credenciais
+                    </button>
+                  </div>
+                  {metaChecks && (
+                    <div
+                      className={clsx(
+                        'rounded-md ring-1 px-3 py-2 space-y-1.5',
+                        metaChecks.ok
+                          ? 'bg-emerald-500/5 ring-emerald-500/30'
+                          : 'bg-amber-500/5 ring-amber-500/30',
+                      )}
+                    >
+                      {metaChecks.checks.map((c) => (
+                        <div key={c.name} className="flex items-start gap-2 text-[11px]">
+                          {c.ok ? (
+                            <CheckCircle2 size={13} className="text-emerald-400 shrink-0 mt-0.5" />
+                          ) : (
+                            <XCircle size={13} className="text-rose-400 shrink-0 mt-0.5" />
+                          )}
+                          <div className="flex-1">
+                            <div className={clsx('font-medium', c.ok ? 'text-emerald-200' : 'text-rose-200')}>
+                              {checkLabel(c.name)}
+                            </div>
+                            {c.detail && (
+                              <div className="text-zinc-400 break-all">{c.detail}</div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </Section>
 
               <Section

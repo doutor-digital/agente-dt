@@ -40,6 +40,7 @@ import {
   previewPromptHandler,
   dashboardHandler,
   leadsBucketHandler,
+  metaValidateHandler,
 } from '../controllers/units.controller.js';
 import {
   listLlmCallsHandler,
@@ -177,6 +178,7 @@ apiRouter.get('/units/:id/kommo-tags', requireUnitAccess, kommoTagsHandler);
 apiRouter.get('/units/:id/kommo-users', requireUnitAccess, kommoUsersHandler);
 apiRouter.get('/units/:id/kommo-loss-reasons', requireUnitAccess, kommoLossReasonsHandler);
 apiRouter.post('/units/:id/kommo-validate', requireUnitAccess, kommoValidateHandler);
+apiRouter.post('/units/:id/meta-validate', requireUnitAccess, metaValidateHandler);
 
 // Templates / Knowledge / Ações — UNIT_ADMIN edita os da sua unit.
 apiRouter.get('/units/:id/templates', requireUnitAccess, listTemplatesHandler);

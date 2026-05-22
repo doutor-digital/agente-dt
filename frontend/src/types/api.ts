@@ -352,6 +352,17 @@ export interface KommoValidateResponse {
   checks: Array<{ name: string; ok: boolean; detail?: string }>;
 }
 
+export interface MetaValidateResponse {
+  ok: boolean;
+  checks: Array<{ name: string; ok: boolean; detail?: string }>;
+}
+
+export interface MetaValidateInput {
+  metaWabaId?: string | null;
+  metaAccessToken?: string | null;
+  metaPhoneNumberId?: string | null;
+}
+
 export interface DashboardResponse {
   periodDays: number;
   kpis: {

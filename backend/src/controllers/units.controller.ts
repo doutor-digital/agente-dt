@@ -1199,3 +1199,208 @@ export async function kommoValidateHandler(req: Request, res: Response): Promise
   const allOk = checks.every((c) => c.ok || c.name === 'pausedField'); // pausedField é opcional
   res.json({ ok: allOk, checks });
 }
+
+// ---------------------------------------------------------------------------
+// metaValidateHandler — valida credenciais Meta antes de salvar.
+//
+// Aceita override no body pra "validar antes de salvar":
+//   POST /units/:id/meta-validate
+//   body: { metaWabaId?, metaAccessToken?, metaPhoneNumberId? }
+//
+// Se o body trouxer valores, esses sobrescrevem os da Unit pra esta validação
+// (sem persistir). Se vier mascarado (••••), descartamos e usamos o do banco.
+//
+// 4 checks (todos soft-fail):
+//   1) WABA acessível       — GET /v25.0/{WABA_ID}?fields=id,name,currency
+//   2) Phone Number ID      — GET /v25.0/{phone_number_id} (opcional)
+//   3) Escopo Messaging     — GET /v25.0/{WABA_ID}/message_templates?limit=1
+//   4) Escopo Analytics     — GET /v25.0/{WABA_ID}/pricing_analytics (1 dia)
+// ---------------------------------------------------------------------------
+
+interface MetaCheck {
+  name: string;
+  ok: boolean;
+  detail?: string;
+}
+
+const metaValidateBodySchema = z.object({
+  metaWabaId: z.string().nullable().optional(),
+  metaAccessToken: z.string().nullable().optional(),
+  metaPhoneNumberId: z.string().nullable().optional(),
+});
+
+const META_GRAPH_BASE = 'https://graph.facebook.com/v25.0';
+
+async function metaGet(
+  path: string,
+  params: Record<string, unknown>,
+  accessToken: string,
+): Promise<{ ok: boolean; status: number; body: unknown; error?: string }> {
+  const { default: axios } = await import('axios');
+  try {
+    const res = await axios.get(`${META_GRAPH_BASE}${path}`, {
+      params: { ...params, access_token: accessToken },
+      timeout: 12_000,
+      validateStatus: () => true,
+    });
+    if (res.status >= 200 && res.status < 300) {
+      return { ok: true, status: res.status, body: res.data };
+    }
+    const errBody = res.data as { error?: { message?: string; code?: number; type?: string } };
+    return {
+      ok: false,
+      status: res.status,
+      body: res.data,
+      error: errBody?.error?.message ?? `HTTP ${res.status}`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, status: 0, body: null, error: msg };
+  }
+}
+
+export async function metaValidateHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+
+  const parsed = metaValidateBodySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'invalid_input', issues: parsed.error.flatten() });
+    return;
+  }
+
+  // Combina body (override) + banco. Mascarados são ignorados.
+  const pick = <T>(override: T | null | undefined, persisted: T | null): T | null => {
+    if (override === undefined || override === null) return persisted;
+    if (typeof override === 'string' && isMasked(override)) return persisted;
+    return override;
+  };
+  const wabaId = pick(parsed.data.metaWabaId, unit.metaWabaId);
+  const accessToken = pick(parsed.data.metaAccessToken, unit.metaAccessToken);
+  const phoneNumberId = pick(parsed.data.metaPhoneNumberId, unit.metaPhoneNumberId);
+
+  const checks: MetaCheck[] = [];
+
+  if (!accessToken) {
+    checks.push({ name: 'accessToken', ok: false, detail: 'metaAccessToken não configurado' });
+    res.json({ ok: false, checks });
+    return;
+  }
+  if (!wabaId) {
+    checks.push({
+      name: 'wabaId',
+      ok: false,
+      detail: 'metaWabaId não configurado — necessário pra validar e pra sincronizar custo',
+    });
+    res.json({ ok: false, checks });
+    return;
+  }
+
+  // 1) WABA acessível.
+  const wabaInfo = await metaGet(
+    `/${wabaId}`,
+    { fields: 'id,name,currency,timezone_id,message_template_namespace' },
+    accessToken,
+  );
+  if (wabaInfo.ok) {
+    const body = wabaInfo.body as { name?: string; currency?: string; id?: string };
+    checks.push({
+      name: 'waba',
+      ok: true,
+      detail: `WABA "${body.name ?? '?'}" (id ${body.id ?? wabaId}, moeda ${body.currency ?? '?'})`,
+    });
+  } else {
+    checks.push({
+      name: 'waba',
+      ok: false,
+      detail: `${wabaInfo.status || '?'}: ${wabaInfo.error ?? 'erro desconhecido'}`,
+    });
+  }
+
+  // 2) Phone Number ID (opcional — só se cadastrado).
+  if (phoneNumberId) {
+    const phone = await metaGet(
+      `/${phoneNumberId}`,
+      { fields: 'display_phone_number,verified_name,quality_rating' },
+      accessToken,
+    );
+    if (phone.ok) {
+      const body = phone.body as {
+        display_phone_number?: string;
+        verified_name?: string;
+        quality_rating?: string;
+      };
+      checks.push({
+        name: 'phoneNumber',
+        ok: true,
+        detail: `"${body.verified_name ?? '?'}" (${body.display_phone_number ?? phoneNumberId})${body.quality_rating ? ` · quality ${body.quality_rating}` : ''}`,
+      });
+    } else {
+      checks.push({
+        name: 'phoneNumber',
+        ok: false,
+        detail: `${phone.status || '?'}: ${phone.error ?? 'erro'}`,
+      });
+    }
+  } else {
+    checks.push({
+      name: 'phoneNumber',
+      ok: false,
+      detail: 'metaPhoneNumberId não configurado (necessário pra ENVIAR mensagens)',
+    });
+  }
+
+  // 3) Escopo de Messaging — listar templates.
+  const tmplCheck = await metaGet(`/${wabaId}/message_templates`, { limit: 1 }, accessToken);
+  if (tmplCheck.ok) {
+    const body = tmplCheck.body as { data?: unknown[] };
+    checks.push({
+      name: 'scopeMessaging',
+      ok: true,
+      detail: `Escopo whatsapp_business_management OK (${(body.data ?? []).length} template listado)`,
+    });
+  } else {
+    checks.push({
+      name: 'scopeMessaging',
+      ok: false,
+      detail: `${tmplCheck.status || '?'}: ${tmplCheck.error ?? 'erro'} — token precisa de "whatsapp_business_management"`,
+    });
+  }
+
+  // 4) Escopo de Analytics — janela curta (ontem 00:00 → hoje 00:00 UTC).
+  const nowSec = Math.floor(Date.now() / 1000);
+  const endSec = nowSec;
+  const startSec = nowSec - 86_400;
+  const pricing = await metaGet(
+    `/${wabaId}/pricing_analytics`,
+    {
+      start: startSec,
+      end: endSec,
+      granularity: 'DAILY',
+      metric_types: JSON.stringify(['VOLUME', 'COST']),
+    },
+    accessToken,
+  );
+  if (pricing.ok) {
+    const body = pricing.body as { data?: unknown[] };
+    checks.push({
+      name: 'scopeAnalytics',
+      ok: true,
+      detail: `pricing_analytics OK (${(body.data ?? []).length} bucket no último 1d)`,
+    });
+  } else {
+    checks.push({
+      name: 'scopeAnalytics',
+      ok: false,
+      detail: `${pricing.status || '?'}: ${pricing.error ?? 'erro'} — token pode precisar de permissão de analytics na WABA`,
+    });
+  }
+
+  const required = ['accessToken', 'wabaId', 'waba', 'scopeMessaging', 'scopeAnalytics'];
+  const allOk = checks.filter((c) => required.includes(c.name)).every((c) => c.ok);
+  res.json({ ok: allOk, checks });
+}

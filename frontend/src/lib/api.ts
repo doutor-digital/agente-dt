@@ -21,6 +21,8 @@ import type {
   KommoTagsResponse,
   KommoUsersResponse,
   KommoValidateResponse,
+  MetaValidateInput,
+  MetaValidateResponse,
   LeadsBucket,
   LeadsBucketResponse,
   MessageTemplate,
@@ -446,6 +448,17 @@ export const api = {
     const { data } = await http.post<KommoValidateResponse>(
       `/units/${unitId}/kommo-validate`,
       {},
+      { timeout: 30_000 },
+    );
+    return data;
+  },
+  async metaValidate(
+    unitId: string,
+    override: MetaValidateInput = {},
+  ): Promise<MetaValidateResponse> {
+    const { data } = await http.post<MetaValidateResponse>(
+      `/units/${unitId}/meta-validate`,
+      override,
       { timeout: 30_000 },
     );
     return data;
