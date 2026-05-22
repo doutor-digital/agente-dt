@@ -29,6 +29,7 @@ import {
   fetchPricingAnalytics,
   fetchTemplateAnalytics,
   fetchMessageTemplates,
+  formatMetaError,
   type MessageTemplate,
 } from './meta-analytics.service.js';
 
@@ -98,7 +99,7 @@ export async function syncUnitWhatsappCosts(
   // ---- pricing_analytics -------------------------------------------------
   const pricing = await fetchPricingAnalytics(unit, { start: startSec, end: endSec });
   if (!pricing.ok || !pricing.data) {
-    result.errors.push(`pricing_analytics: ${pricing.error ?? 'erro desconhecido'}`);
+    result.errors.push(`pricing_analytics: ${formatMetaError(pricing)}`);
   } else {
     for (const row of pricing.data.rows) {
       // start é o início do bucket DAILY — usamos a parte de data (UTC).
@@ -158,7 +159,7 @@ export async function syncUnitWhatsappCosts(
     for (const t of templates.data) templateMeta.set(t.id, t);
   } else {
     // Não é fatal — só não denormaliza name/language. Logamos pra UI ver.
-    result.errors.push(`message_templates: ${templates.error ?? 'erro desconhecido'}`);
+    result.errors.push(`message_templates: ${formatMetaError(templates)}`);
   }
 
   const allTemplateIds = [...templateMeta.keys()];
@@ -176,7 +177,7 @@ export async function syncUnitWhatsappCosts(
       );
       if (!templateAnalytics.ok || !templateAnalytics.data) {
         result.errors.push(
-          `template_analytics (batch ${i / CHUNK_SIZE + 1}): ${templateAnalytics.error ?? 'erro desconhecido'}`,
+          `template_analytics (batch ${i / CHUNK_SIZE + 1}): ${formatMetaError(templateAnalytics)}`,
         );
         continue;
       }

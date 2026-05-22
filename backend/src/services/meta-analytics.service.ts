@@ -38,11 +38,35 @@ const REQUEST_TIMEOUT_MS = 15_000;
 // Tipos públicos.
 // ---------------------------------------------------------------------------
 
+export interface MetaErrorBody {
+  message?: string;
+  code?: number;
+  error_subcode?: number;
+  fbtrace_id?: string;
+  type?: string;
+}
+
 export interface CallEnvelope<T> {
   ok: boolean;
   data?: T;
   status?: number;
   error?: string;
+  /** Corpo de erro retornado pela Meta — útil pra debug sem precisar de logs do server. */
+  meta?: MetaErrorBody;
+}
+
+/** Formata um envelope de erro em string compacta com code + trace pra exibir na UI. */
+export function formatMetaError(env: { error?: string; meta?: MetaErrorBody; status?: number }): string {
+  const parts: string[] = [];
+  if (env.meta?.code !== undefined) {
+    const sub = env.meta.error_subcode ? `/${env.meta.error_subcode}` : '';
+    parts.push(`(#${env.meta.code}${sub})`);
+  } else if (env.status) {
+    parts.push(`HTTP ${env.status}`);
+  }
+  parts.push(env.error ?? env.meta?.message ?? 'erro desconhecido');
+  if (env.meta?.fbtrace_id) parts.push(`[trace ${env.meta.fbtrace_id}]`);
+  return parts.join(' ');
 }
 
 /** Linha de pricing_analytics achatada — uma por combinação dimensional. */
@@ -242,9 +266,9 @@ export async function fetchPricingAnalytics(
       validateStatus: () => true,
     });
     if (res.status < 200 || res.status >= 300) {
-      const errMsg = (res.data as unknown as { error?: { message?: string } })?.error?.message
-        ?? `HTTP ${res.status}`;
-      return { ok: false, status: res.status, error: errMsg };
+      const body = res.data as unknown as { error?: MetaErrorBody };
+      const errMsg = body?.error?.message ?? `HTTP ${res.status}`;
+      return { ok: false, status: res.status, error: errMsg, meta: body?.error };
     }
 
     const rows: PricingAnalyticsRow[] = [];
@@ -394,12 +418,9 @@ export async function fetchTemplateAnalytics(
       validateStatus: () => true,
     });
     if (res.status < 200 || res.status >= 300) {
-      const body = res.data as unknown as {
-        error?: { message?: string; code?: number; error_subcode?: number; fbtrace_id?: string };
-      };
+      const body = res.data as unknown as { error?: MetaErrorBody };
       const errMsg = body?.error?.message ?? `HTTP ${res.status}`;
-      // Loga o erro Meta inteiro — "unknown error" só dá pra debugar com
-      // code/subcode/fbtrace_id e o payload exato que disparou.
+      // Loga + retorna o erro Meta — UI exibe direto sem precisar de logs do server.
       logger.warn(
         {
           unitWaba: unit.metaWabaId,
@@ -416,7 +437,7 @@ export async function fetchTemplateAnalytics(
         },
         'fetchTemplateAnalytics resposta Meta com erro',
       );
-      return { ok: false, status: res.status, error: errMsg };
+      return { ok: false, status: res.status, error: errMsg, meta: body?.error };
     }
 
     const rows: TemplateAnalyticsRow[] = [];
@@ -479,9 +500,9 @@ export async function fetchMessageTemplates(
       validateStatus: () => true,
     });
     if (res.status < 200 || res.status >= 300) {
-      const errMsg = (res.data as unknown as { error?: { message?: string } })?.error?.message
-        ?? `HTTP ${res.status}`;
-      return { ok: false, status: res.status, error: errMsg };
+      const body = res.data as unknown as { error?: MetaErrorBody };
+      const errMsg = body?.error?.message ?? `HTTP ${res.status}`;
+      return { ok: false, status: res.status, error: errMsg, meta: body?.error };
     }
     const items: MessageTemplate[] = (res.data?.data ?? []).map((t) => ({
       id: toStr(t.id),

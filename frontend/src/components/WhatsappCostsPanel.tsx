@@ -64,6 +64,7 @@ export function WhatsappCostsPanel() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncErrors, setSyncErrors] = useState<string[] | null>(null);
 
   async function load() {
     if (!targetUnitId) {
@@ -96,19 +97,24 @@ export function WhatsappCostsPanel() {
   async function handleSync() {
     if (!targetUnitId) return;
     setSyncing(true);
+    setSyncErrors(null);
     try {
       const r = await api.syncWhatsappCosts(targetUnitId, { lookbackDays: 7 });
       if (r.ok) {
         toast.success(
           `Sync OK: ${r.pricingRowsUpserted} linhas de custo + ${r.templateRowsUpserted} de template`,
         );
+        setSyncErrors(null);
       } else {
-        toast.error(`Sync com erros: ${r.errors.slice(0, 2).join('; ')}`);
+        toast.error('Sync com erros — veja detalhes abaixo');
+        setSyncErrors(r.errors);
       }
       await load();
     } catch (err) {
       const e = err as { response?: { data?: { message?: string } }; message?: string };
-      toast.error(e?.response?.data?.message ?? e?.message ?? 'falha no sync');
+      const msg = e?.response?.data?.message ?? e?.message ?? 'falha no sync';
+      toast.error(msg);
+      setSyncErrors([msg]);
     } finally {
       setSyncing(false);
     }
@@ -222,6 +228,34 @@ export function WhatsappCostsPanel() {
         {error && (
           <div className="mb-4 rounded-lg bg-rose-500/10 ring-1 ring-rose-500/30 px-4 py-3 text-sm text-rose-300">
             Falha ao carregar: {error}
+          </div>
+        )}
+
+        {syncErrors && syncErrors.length > 0 && (
+          <div className="mb-4 rounded-lg bg-amber-500/10 ring-1 ring-amber-500/30 px-4 py-3 text-xs">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-amber-300 font-semibold">
+                Erros do último sync ({syncErrors.length})
+              </div>
+              <button
+                type="button"
+                onClick={() => setSyncErrors(null)}
+                className="text-[10px] text-amber-300/70 hover:text-amber-200"
+              >
+                fechar
+              </button>
+            </div>
+            <ul className="space-y-1 text-amber-100/90 font-mono break-all">
+              {syncErrors.map((e, i) => (
+                <li key={i} className="flex gap-2">
+                  <span className="text-amber-300/60 shrink-0">•</span>
+                  <span>{e}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="text-[10px] text-amber-300/60 mt-2 font-normal">
+              Cole o <code className="text-amber-200">[trace ...]</code> em developer support da Meta se precisar abrir ticket.
+            </div>
           </div>
         )}
 
