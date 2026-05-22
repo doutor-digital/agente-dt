@@ -596,12 +596,6 @@ export interface ToolConfig {
   description: string;
 }
 
-export interface WorkflowRule {
-  id: string;
-  when: string;
-  then: string;
-}
-
 export interface AgentConfig {
   id: string;
   unitId: string | null;
@@ -609,7 +603,6 @@ export interface AgentConfig {
   isActive: boolean;
   systemPrompt: string;
   tools: ToolConfig[];
-  workflow: WorkflowRule[];
   model: string;
   temperature: number;
   maxTokens: number;
@@ -710,7 +703,6 @@ export type AgentConfigInput = {
   unitId?: string | null;
   systemPrompt: string;
   tools: ToolConfig[];
-  workflow: WorkflowRule[];
   model?: string;
   temperature?: number;
   maxTokens?: number;

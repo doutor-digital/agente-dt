@@ -52,6 +52,9 @@ const CapturesPanel = lazy(() =>
 const FerramentasPanel = lazy(() =>
   import('./components/FerramentasPanel').then((m) => ({ default: m.FerramentasPanel })),
 );
+const ReportsPanel = lazy(() =>
+  import('./components/ReportsPanel').then((m) => ({ default: m.ReportsPanel })),
+);
 const AgentConfigPanel = lazy(() =>
   import('./components/AgentConfigPanel').then((m) => ({ default: m.AgentConfigPanel })),
 );
@@ -130,6 +133,7 @@ function Shell() {
           {tab === 'actions' && <AcoesPanel />}
           {tab === 'global-actions' && <AcoesPanel scope="global" />}
           {tab === 'tools' && <FerramentasPanel />}
+          {tab === 'reports' && <ReportsPanel />}
           {tab === 'captures' && <CapturesPanel />}
           {tab === 'config' && <AgentConfigPanel />}
           {tab === 'units' && <UnitsPanel />}

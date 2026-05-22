@@ -1,5 +1,5 @@
 // ============================================================================
-// config.ts — AgentConfig: prompt + tools habilitadas + workflow declarativo.
+// config.ts — AgentConfig: prompt + tools habilitadas.
 //
 // LÓGICA DE ENGENHARIA — MULTI-TENANT
 // -----------------------------------
@@ -17,8 +17,8 @@
 //   - O graph filtra `enabled === false` antes do `bindTools`.
 //   - O graph SUBSTITUI a description original pela versão editada.
 //
-// `workflow`: { id, when, then }[]
-//   - Concatenado ao system prompt. Não é um sub-grafo.
+// O array `workflow` (legado) foi removido — workflow declarativo migrou
+// pra UnitAction (aba "Ações" no painel).
 // ============================================================================
 
 import { prisma } from '../lib/prisma.js';
@@ -30,12 +30,6 @@ export type ToolConfig = {
   description: string;
 };
 
-export type WorkflowRule = {
-  id: string;
-  when: string;
-  then: string;
-};
-
 export type AgentConfigShape = {
   id: string;
   unitId: string | null;
@@ -43,7 +37,6 @@ export type AgentConfigShape = {
   isActive: boolean;
   systemPrompt: string;
   tools: ToolConfig[];
-  workflow: WorkflowRule[];
   model: string;
   temperature: number;
   maxTokens: number;
@@ -157,12 +150,9 @@ const DEFAULT_TOOLS: ToolConfig[] = [
   },
 ];
 
-const DEFAULT_WORKFLOW: WorkflowRule[] = [];
-
 export const DEFAULTS = {
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   tools: DEFAULT_TOOLS,
-  workflow: DEFAULT_WORKFLOW,
   model: 'gpt-4o-mini',
   temperature: 0,
   maxTokens: 1024,
@@ -179,7 +169,6 @@ function toShape(row: {
   isActive: boolean;
   systemPrompt: string;
   tools: unknown;
-  workflow: unknown;
   model: string;
   temperature: number;
   maxTokens: number;
@@ -192,7 +181,6 @@ function toShape(row: {
     isActive: row.isActive,
     systemPrompt: row.systemPrompt,
     tools: Array.isArray(row.tools) ? (row.tools as ToolConfig[]) : DEFAULTS.tools,
-    workflow: Array.isArray(row.workflow) ? (row.workflow as WorkflowRule[]) : [],
     model: row.model,
     temperature: row.temperature,
     maxTokens: row.maxTokens,
@@ -250,7 +238,6 @@ export async function getActiveConfig(unitId: string | null = null): Promise<Age
       isActive: true,
       systemPrompt: DEFAULTS.systemPrompt,
       tools: DEFAULTS.tools,
-      workflow: DEFAULTS.workflow,
       model: DEFAULTS.model,
       temperature: DEFAULTS.temperature,
       maxTokens: DEFAULTS.maxTokens,
@@ -269,7 +256,6 @@ export type SaveConfigInput = {
   unitId?: string | null;
   systemPrompt: string;
   tools: ToolConfig[];
-  workflow: WorkflowRule[];
   model?: string;
   temperature?: number;
   maxTokens?: number;
@@ -280,7 +266,6 @@ export async function saveConfig(input: SaveConfigInput): Promise<AgentConfigSha
   const data = {
     systemPrompt: input.systemPrompt,
     tools: input.tools,
-    workflow: input.workflow,
     model: input.model ?? DEFAULTS.model,
     temperature: input.temperature ?? DEFAULTS.temperature,
     maxTokens: input.maxTokens ?? DEFAULTS.maxTokens,
@@ -313,13 +298,3 @@ export async function saveConfig(input: SaveConfigInput): Promise<AgentConfigSha
   return toShape(saved);
 }
 
-// ---------------------------------------------------------------------------
-// renderWorkflowGuidance — converte regras declarativas num bloco de texto
-// anexado ao system prompt.
-// ---------------------------------------------------------------------------
-
-export function renderWorkflowGuidance(rules: WorkflowRule[]): string {
-  if (!rules.length) return '';
-  const lines = rules.map((r, i) => `${i + 1}. SE ${r.when} ENTÃO ${r.then}`);
-  return `\n\nSequências de automação (siga estas regras quando aplicáveis):\n${lines.join('\n')}`;
-}

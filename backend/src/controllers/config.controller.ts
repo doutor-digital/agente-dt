@@ -21,17 +21,14 @@ const toolSchema = z.object({
   description: z.string().min(1).max(2000),
 });
 
-const workflowRuleSchema = z.object({
-  id: z.string().min(1),
-  when: z.string().min(1).max(500),
-  then: z.string().min(1).max(500),
-});
-
+// workflow declarativo aposentado — substituído por UnitAction. Continuamos
+// aceitando o campo no payload (e ignorando) por 1-2 ciclos pra clientes antigos
+// não quebrarem ao salvar — o front atual já não envia.
 const saveSchema = z.object({
   unitId: z.string().nullable().optional(),
   systemPrompt: z.string().min(10).max(20000),
   tools: z.array(toolSchema).max(20),
-  workflow: z.array(workflowRuleSchema).max(50),
+  workflow: z.unknown().optional(),
   model: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().min(1).max(8192).optional(),
@@ -65,7 +62,6 @@ export async function putConfig(req: Request, res: Response): Promise<void> {
       unitId: parsed.data.unitId ?? null,
       systemPrompt: parsed.data.systemPrompt,
       tools,
-      workflow: parsed.data.workflow,
       model: parsed.data.model,
       temperature: parsed.data.temperature,
       maxTokens: parsed.data.maxTokens,

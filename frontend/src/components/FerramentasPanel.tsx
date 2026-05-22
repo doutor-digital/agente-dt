@@ -53,7 +53,6 @@ export function FerramentasPanel() {
         unitId: selectedUnitId,
         systemPrompt: r.config.systemPrompt,
         tools: merged,
-        workflow: r.config.workflow,
         model: r.config.model,
         temperature: r.config.temperature,
         maxTokens: r.config.maxTokens,

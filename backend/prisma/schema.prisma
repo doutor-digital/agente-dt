@@ -700,12 +700,14 @@ model ConversationEvaluation {
 }
 
 // ===========================================================================
-// AgentConfig — prompt + tools + workflow editáveis pelo dashboard.
+// AgentConfig — prompt + tools editáveis pelo dashboard.
 // ===========================================================================
 // Continua existindo, mas agora opcional por Unit. Se a Unit tiver um
 // AgentConfig ativo, ele tem prioridade sobre os defaults da Unit.
 // Se não tiver, usamos os campos `systemPrompt`/`openaiModel`/etc da própria
 // Unit.
+//
+// O array `workflow` (legado) foi REMOVIDO em favor da aba "Ações" (UnitAction).
 // ===========================================================================
 model AgentConfig {
   id           String   @id @default(cuid())
@@ -714,7 +716,6 @@ model AgentConfig {
   isActive     Boolean  @default(false) @map("is_active")
   systemPrompt String   @map("system_prompt")
   tools        Json     @default("[]")
-  workflow     Json     @default("[]")
   model        String   @default("gpt-4o-mini")
   temperature  Float    @default(0)
   maxTokens    Int      @default(1024) @map("max_tokens")

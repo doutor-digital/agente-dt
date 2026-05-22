@@ -699,8 +699,6 @@ export interface ComposeInput {
   unit: Unit;
   /** Texto vindo do AgentConfig (sobrescreve persona base se preenchido). */
   agentConfigPrompt?: string;
-  /** Texto vindo das regras (renderWorkflowGuidance). */
-  workflowText?: string;
   /** Templates já carregados — se ausente, NÃO faz lookup (use compose async). */
   templates?: MessageTemplate[];
   /** Mensagens flaggadas como exemplos a evitar. */
@@ -774,7 +772,6 @@ export function composeSystemPrompt(input: ComposeInput): string {
   const {
     unit,
     agentConfigPrompt,
-    workflowText,
     templates = [],
     flaggedExamples = [],
     knowledge = [],
@@ -875,10 +872,6 @@ export function composeSystemPrompt(input: ComposeInput): string {
   const flaggedBlock = renderFlaggedExamples(flaggedExamples);
   if (flaggedBlock) blocks.push(flaggedBlock);
 
-  if (workflowText && workflowText.trim()) {
-    blocks.push(workflowText.trim());
-  }
-
   // Boost de primeiro turno vai POR ÚLTIMO — instruções no fim do prompt têm
   // mais influência (efeito "recência") nos LLMs atuais.
   const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
@@ -920,7 +913,6 @@ function isTrivialUserMessage(text: string): boolean {
 export async function composeSystemPromptForUnit(input: {
   unit: Unit;
   agentConfigPrompt?: string;
-  workflowText?: string;
   userMessage?: string;
   isFirstTurn?: boolean;
   /** leadId do Kommo — injetado no bloco "CONTEXTO DA CONVERSA" pras tools. */

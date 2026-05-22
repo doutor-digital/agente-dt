@@ -23,6 +23,7 @@ import {
   Cpu,
   Database,
   Eraser,
+  FileBarChart,
   FileText,
   Globe,
   LayoutDashboard,
@@ -60,6 +61,7 @@ export type AppTab =
   | 'global-actions'
   | 'captures'
   | 'tools'
+  | 'reports'
   | 'config'
   | 'units'
   | 'users'
@@ -85,6 +87,7 @@ const NAV: NavItem[] = [
   { id: 'traces', label: 'Execuções', icon: Terminal, group: 'primary' },
   { id: 'errors', label: 'Erros', icon: AlertOctagon, group: 'primary' },
 
+  { id: 'reports', label: 'Relatórios', icon: FileBarChart, group: 'secondary' },
   { id: 'llm', label: 'Chamadas IA', icon: Cpu, group: 'secondary' },
   { id: 'prompts', label: 'Prompts', icon: Sparkles, group: 'secondary' },
   { id: 'integrations', label: 'Integrações', icon: Cable, group: 'secondary' },

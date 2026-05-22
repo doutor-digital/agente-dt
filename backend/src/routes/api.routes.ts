@@ -76,6 +76,12 @@ import {
   deleteGlobalActionHandler,
 } from '../controllers/global-actions.controller.js';
 import {
+  reportConversationsHandler,
+  reportLlmCostHandler,
+  reportActionsHandler,
+  reportErrorsHandler,
+} from '../controllers/reports.controller.js';
+import {
   listLeadFieldRulesHandler,
   createLeadFieldRuleHandler,
   updateLeadFieldRuleHandler,
@@ -184,6 +190,13 @@ apiRouter.get('/global-actions', requireSuperAdmin, listGlobalActionsHandler);
 apiRouter.post('/global-actions', requireSuperAdmin, createGlobalActionHandler);
 apiRouter.patch('/global-actions/:actionId', requireSuperAdmin, updateGlobalActionHandler);
 apiRouter.delete('/global-actions/:actionId', requireSuperAdmin, deleteGlobalActionHandler);
+
+// Relatórios — CSV/PDF. Controller respeita o escopo do user (UNIT_ADMIN só
+// vê a sua unit; SUPER_ADMIN pode escolher unitId ou ver todas).
+apiRouter.get('/reports/conversations', reportConversationsHandler);
+apiRouter.get('/reports/llm-cost', reportLlmCostHandler);
+apiRouter.get('/reports/actions', reportActionsHandler);
+apiRouter.get('/reports/errors', reportErrorsHandler);
 
 // LeadFieldRules — captura de dados pra custom fields do Kommo.
 apiRouter.get('/units/:id/lead-field-rules', requireUnitAccess, listLeadFieldRulesHandler);

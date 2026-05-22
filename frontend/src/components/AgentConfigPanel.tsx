@@ -51,7 +51,6 @@ export function AgentConfigPanel() {
         unitId: selectedUnitId,
         systemPrompt: r.config.systemPrompt,
         tools: r.config.tools,
-        workflow: r.config.workflow,
         model: r.config.model,
         temperature: r.config.temperature,
         maxTokens: r.config.maxTokens,
@@ -73,8 +72,7 @@ export function AgentConfigPanel() {
 
   const dirty =
     draft.systemPrompt !== loaded.config.systemPrompt ||
-    JSON.stringify(draft.tools) !== JSON.stringify(loaded.config.tools) ||
-    JSON.stringify(draft.workflow) !== JSON.stringify(loaded.config.workflow);
+    JSON.stringify(draft.tools) !== JSON.stringify(loaded.config.tools);
 
   const handleSave = async () => {
     setSaving(true);

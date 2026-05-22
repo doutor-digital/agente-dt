@@ -530,6 +530,40 @@ export const api = {
   },
 
   // -------------------------------------------------------------------------
+  // Relatórios — baixa CSV ou PDF (responseType: blob, dispara download).
+  // -------------------------------------------------------------------------
+  async downloadReport(
+    type: 'conversations' | 'llm-cost' | 'actions' | 'errors',
+    format: 'csv' | 'pdf',
+    filters: { unitId?: string | null; from?: string; to?: string } = {},
+  ): Promise<void> {
+    const params = new URLSearchParams({ format });
+    if (filters.unitId) params.set('unitId', filters.unitId);
+    if (filters.from) params.set('from', filters.from);
+    if (filters.to) params.set('to', filters.to);
+
+    const res = await http.get(`/reports/${type}?${params.toString()}`, {
+      responseType: 'blob',
+      timeout: 60_000,
+    });
+    const cd = res.headers['content-disposition'] as string | undefined;
+    const match = cd?.match(/filename="?([^";]+)"?/);
+    const filename = match?.[1] ?? `relatorio-${type}.${format}`;
+
+    const blob = new Blob([res.data as BlobPart], {
+      type: format === 'pdf' ? 'application/pdf' : 'text/csv;charset=utf-8',
+    });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+
+  // -------------------------------------------------------------------------
   // Flag de mensagens
   // -------------------------------------------------------------------------
   async flagMessage(messageId: string, flagged: boolean): Promise<void> {

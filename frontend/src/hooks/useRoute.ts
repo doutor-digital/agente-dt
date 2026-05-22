@@ -32,6 +32,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   actions: 'acoes',
   'global-actions': 'regras-globais',
   tools: 'ferramentas',
+  reports: 'relatorios',
   captures: 'capturas',
   conversations: 'conversas',
   traces: 'execucoes',
