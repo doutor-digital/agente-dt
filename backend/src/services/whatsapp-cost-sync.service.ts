@@ -166,7 +166,7 @@ export async function syncUnitWhatsappCosts(
     // WABA sem templates cadastrados → não tem o que pedir.
     // Não é erro; só pula silenciosamente.
   } else {
-    const CHUNK_SIZE = 50;
+    const CHUNK_SIZE = 25;
     for (let i = 0; i < allTemplateIds.length; i += CHUNK_SIZE) {
       const batch = allTemplateIds.slice(i, i + CHUNK_SIZE);
       const templateAnalytics = await fetchTemplateAnalytics(

@@ -375,13 +375,14 @@ export async function fetchTemplateAnalytics(
     return { ok: true, data: { rows: [] } };
   }
   const granularity = args.granularity ?? 'DAILY';
-  // metric_types varia por versão; SENT/DELIVERED/READ/CLICKED são estáveis.
-  // COST está disponível pra alguns templates — pedimos sempre, Meta ignora se N/A.
+  // metric_types: só SENT/DELIVERED/READ/CLICKED. NÃO incluir COST aqui —
+  // muitas WABAs respondem "(#1) An unknown error occurred" se COST aparece
+  // em template_analytics. Custo total já é coberto por pricing_analytics.
   const params: Record<string, unknown> = {
     start: args.start,
     end: args.end,
     granularity,
-    metric_types: JSON.stringify(['SENT', 'DELIVERED', 'READ', 'CLICKED', 'COST']),
+    metric_types: JSON.stringify(['SENT', 'DELIVERED', 'READ', 'CLICKED']),
     template_ids: JSON.stringify(args.templateIds),
     access_token: unit.metaAccessToken,
   };
@@ -393,8 +394,28 @@ export async function fetchTemplateAnalytics(
       validateStatus: () => true,
     });
     if (res.status < 200 || res.status >= 300) {
-      const errMsg = (res.data as unknown as { error?: { message?: string } })?.error?.message
-        ?? `HTTP ${res.status}`;
+      const body = res.data as unknown as {
+        error?: { message?: string; code?: number; error_subcode?: number; fbtrace_id?: string };
+      };
+      const errMsg = body?.error?.message ?? `HTTP ${res.status}`;
+      // Loga o erro Meta inteiro — "unknown error" só dá pra debugar com
+      // code/subcode/fbtrace_id e o payload exato que disparou.
+      logger.warn(
+        {
+          unitWaba: unit.metaWabaId,
+          status: res.status,
+          metaError: body?.error,
+          requestParams: {
+            start: args.start,
+            end: args.end,
+            granularity,
+            metric_types: params.metric_types,
+            template_ids_count: args.templateIds.length,
+            template_ids_sample: args.templateIds.slice(0, 3),
+          },
+        },
+        'fetchTemplateAnalytics resposta Meta com erro',
+      );
       return { ok: false, status: res.status, error: errMsg };
     }
 
