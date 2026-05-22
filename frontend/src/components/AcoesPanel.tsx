@@ -18,10 +18,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
   Loader2,
   Pencil,
   Plus,
+  RefreshCw,
   Tag,
   Trash2,
   UserCog,
@@ -441,9 +443,23 @@ function ActionEditor({
   const [tagsError, setTagsError] = useState<string | null>(null);
   const [pipelinesError, setPipelinesError] = useState<string | null>(null);
   const [loadingKommo, setLoadingKommo] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
   const valid = isValid(draft);
 
-  // Carrega tags + pipelines do Kommo ao abrir o modal — lazy, só uma vez.
+  // Traduz códigos crus do backend pra mensagens úteis ao usuário.
+  function friendlyError(raw: string | undefined): string {
+    if (!raw) return 'falha ao carregar do Kommo';
+    if (raw === 'kommo_not_configured')
+      return 'Unidade sem subdomínio/token do Kommo configurado. Vá em Unidades → conecte o Kommo.';
+    if (/401|unauthor/i.test(raw))
+      return 'Token do Kommo recusado (401). Gere um Long-lived token novo em Unidades.';
+    if (/403|forbidden/i.test(raw))
+      return 'Sem permissão pra ler tags/etapas (403). Cheque os escopos do token Kommo.';
+    return raw;
+  }
+
+  // Carrega tags + pipelines do Kommo ao abrir o modal — lazy.
+  // `reloadTick` permite recarregar manualmente sem fechar o modal.
   useEffect(() => {
     if (!unitId) return;
     let alive = true;
@@ -455,15 +471,18 @@ function ActionEditor({
       api.kommoPipelines(unitId).catch((err) => ({ _err: err } as const)),
     ]).then(([t, p]) => {
       if (!alive) return;
+      // Diagnóstico — fica no console pra debug em produção.
+      // eslint-disable-next-line no-console
+      console.warn('[AcoesPanel] kommo fetch', { unitId, tags: t, pipelines: p });
       if ('_err' in t) {
         const e = t._err as { response?: { data?: { message?: string; error?: string } } };
-        setTagsError(e?.response?.data?.message ?? e?.response?.data?.error ?? 'falha ao carregar tags do Kommo');
+        setTagsError(friendlyError(e?.response?.data?.message ?? e?.response?.data?.error));
       } else {
         setTagsData(t);
       }
       if ('_err' in p) {
         const e = p._err as { response?: { data?: { message?: string; error?: string } } };
-        setPipelinesError(e?.response?.data?.message ?? e?.response?.data?.error ?? 'falha ao carregar etapas do Kommo');
+        setPipelinesError(friendlyError(e?.response?.data?.message ?? e?.response?.data?.error));
       } else {
         setPipelinesData(p);
       }
@@ -472,7 +491,14 @@ function ActionEditor({
     return () => {
       alive = false;
     };
-  }, [unitId]);
+  }, [unitId, reloadTick]);
+
+  const tagsCount = tagsData?.tags?.length ?? 0;
+  const pipelinesCount = (pipelinesData?.pipelines ?? []).filter((p) => !p.isArchive).length;
+  const stagesCount = (pipelinesData?.pipelines ?? []).reduce(
+    (acc, p) => acc + (p.isArchive ? 0 : p.statuses.length),
+    0,
+  );
 
   // Lista plana de etapas pro dropdown — agrupado por funil no `<optgroup>`.
   const pipelinesForSelect = useMemo(() => {
@@ -502,6 +528,53 @@ function ActionEditor({
         </div>
 
         <div className="p-5 space-y-4">
+          {/* Diagnóstico Kommo — mostra contagem real e botão de recarregar.
+              Útil pra distinguir "lista vazia da Kommo" vs "erro de fetch". */}
+          <div
+            className={clsx(
+              'rounded-md text-[11px] px-3 py-2 flex items-center gap-2 border',
+              loadingKommo
+                ? 'border-zinc-800 bg-zinc-950/40 text-zinc-400'
+                : tagsError || pipelinesError
+                  ? 'border-amber-500/30 bg-amber-500/5 text-amber-200'
+                  : 'border-zinc-800 bg-zinc-950/40 text-zinc-400',
+            )}
+          >
+            {loadingKommo ? (
+              <Loader2 size={12} className="animate-spin shrink-0" />
+            ) : tagsError || pipelinesError ? (
+              <AlertTriangle size={12} className="text-amber-300 shrink-0" />
+            ) : (
+              <CheckCircle2 size={12} className="text-emerald-400 shrink-0" />
+            )}
+            <span className="flex-1 leading-tight">
+              {loadingKommo ? (
+                <>Carregando dados do Kommo…</>
+              ) : tagsError || pipelinesError ? (
+                <>
+                  {tagsError && <span className="block">Tags: {tagsError}</span>}
+                  {pipelinesError && <span className="block">Etapas: {pipelinesError}</span>}
+                </>
+              ) : (
+                <>
+                  Kommo: <strong className="text-zinc-200">{tagsCount}</strong> tag(s),{' '}
+                  <strong className="text-zinc-200">{pipelinesCount}</strong> funil(is),{' '}
+                  <strong className="text-zinc-200">{stagesCount}</strong> etapa(s) ativas.
+                </>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => setReloadTick((n) => n + 1)}
+              disabled={loadingKommo}
+              className="inline-flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-100 disabled:opacity-40"
+              title="Recarregar tags e etapas da Kommo"
+            >
+              <RefreshCw size={11} className={loadingKommo ? 'animate-spin' : ''} />
+              Recarregar
+            </button>
+          </div>
+
           {/* Quando */}
           <div>
             <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1.5 block">

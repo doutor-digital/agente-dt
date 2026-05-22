@@ -1,18 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  ChevronDown,
-  ChevronRight,
   Lightbulb,
   Loader2,
-  Pause,
-  Plus,
   RotateCcw,
   Save,
   Sparkles,
-  Tag,
   ThumbsDown,
-  Trash2,
-  Workflow,
   Wrench,
 } from 'lucide-react';
 import { api } from '../lib/api';
@@ -20,10 +13,6 @@ import type {
   AgentConfigInput,
   AgentConfigResponse,
   FlaggedMessage,
-  KommoPipelinesResponse,
-  KommoTagsResponse,
-  ToolConfig,
-  WorkflowRule,
 } from '../types/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
@@ -49,46 +38,7 @@ export function AgentConfigPanel() {
   const [loaded, setLoaded] = useState<AgentConfigResponse | null>(null);
   const [draft, setDraft] = useState<AgentConfigInput | null>(null);
   const [saving, setSaving] = useState(false);
-  const [openTools, setOpenTools] = useState<Record<string, boolean>>({});
   const toast = useToast();
-
-  // Tags + pipelines do Kommo da Unit corrente — popula os dropdowns das regras.
-  // Buscados em paralelo no primeiro mount. Erro é silencioso (a regra cai pro
-  // modo "advanced text" se não conseguir popular).
-  const [kommoTags, setKommoTags] = useState<KommoTagsResponse | null>(null);
-  const [kommoPipelines, setKommoPipelines] = useState<KommoPipelinesResponse | null>(null);
-
-  useEffect(() => {
-    if (!selectedUnitId) {
-      setKommoTags(null);
-      setKommoPipelines(null);
-      return;
-    }
-    let alive = true;
-    Promise.all([
-      api.kommoTags(selectedUnitId).catch(() => null),
-      api.kommoPipelines(selectedUnitId).catch(() => null),
-    ]).then(([t, p]) => {
-      if (!alive) return;
-      setKommoTags(t);
-      setKommoPipelines(p);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [selectedUnitId]);
-
-  // Lista plana de etapas pra dropdown.
-  const allStages = useMemo(() => {
-    const out: Array<{ id: number; label: string }> = [];
-    for (const p of kommoPipelines?.pipelines ?? []) {
-      if (p.isArchive) continue;
-      for (const s of p.statuses) {
-        out.push({ id: s.id, label: `${p.name} → ${s.name}` });
-      }
-    }
-    return out;
-  }, [kommoPipelines]);
 
   useEffect(() => {
     let alive = true;
@@ -97,24 +47,10 @@ export function AgentConfigPanel() {
     api.getConfig(selectedUnitId).then((r) => {
       if (!alive) return;
       setLoaded(r);
-      // Merge das tools conhecidas com as salvas — garante que tools
-      // novas no código apareçam na UI mesmo sem registro no banco.
-      const byName = new Map(r.config.tools.map((t) => [t.name, t]));
-      const merged: ToolConfig[] = r.knownTools.map((name) => {
-        const existing = byName.get(name);
-        const fallback = r.defaults.tools.find((t) => t.name === name);
-        return (
-          existing ?? {
-            name,
-            enabled: true,
-            description: fallback?.description ?? '',
-          }
-        );
-      });
       setDraft({
         unitId: selectedUnitId,
         systemPrompt: r.config.systemPrompt,
-        tools: merged,
+        tools: r.config.tools,
         workflow: r.config.workflow,
         model: r.config.model,
         temperature: r.config.temperature,
@@ -158,18 +94,6 @@ export function AgentConfigPanel() {
     setDraft({ ...draft, systemPrompt: loaded.defaults.systemPrompt });
   };
 
-  const updateTool = (name: string, patch: Partial<ToolConfig>) => {
-    setDraft({
-      ...draft,
-      tools: draft.tools.map((t) => (t.name === name ? { ...t, ...patch } : t)),
-    });
-  };
-
-  const resetToolDescription = (name: string) => {
-    const fallback = loaded.defaults.tools.find((t) => t.name === name);
-    if (fallback) updateTool(name, { description: fallback.description });
-  };
-
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-6">
@@ -207,10 +131,11 @@ export function AgentConfigPanel() {
               dos casos. Use este painel apenas pra:
               <ul className="mt-2 space-y-0.5 list-disc list-inside text-amber-100/70">
                 <li>Adicionar instruções extras (vão DEPOIS das Fontes, sem sobrescrever)</li>
-                <li>Ligar/desligar tools individuais</li>
-                <li>Criar sequências "SE X ENTÃO Y" muito específicas</li>
                 <li>Ajustar modelo/temperatura/maxTokens</li>
               </ul>
+              <div className="mt-1 text-amber-100/60">
+                Pra ligar/desligar tools, use a aba <strong>Ferramentas</strong>.
+              </div>
               <div className="mt-2 text-amber-300/80">
                 💡 Dica: deixe o <strong>System Prompt</strong> abaixo vazio se você já
                 preencheu as Fontes — a IA gera a persona sozinha a partir do Wizard.
@@ -251,82 +176,6 @@ export function AgentConfigPanel() {
             {draft.systemPrompt.length} caracteres
           </div>
         </section>
-
-        {/* TOOLS */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <Wrench size={16} className="text-brand-300" />
-            <h2 className="font-semibold text-zinc-100">Tools (Gatilhos da IA)</h2>
-          </div>
-          <p className="text-xs text-zinc-500 mb-4">
-            A descrição de cada tool é o que o LLM lê pra decidir <strong>QUANDO</strong> chamá-la.
-            Edite as descrições pra mudar comportamento sem mexer no código. Toggle desliga a tool.
-          </p>
-
-          <div className="space-y-2">
-            {draft.tools.map((tool) => {
-              const expanded = openTools[tool.name] ?? false;
-              return (
-                <div
-                  key={tool.name}
-                  className="rounded-lg border border-zinc-800 bg-zinc-950/40"
-                >
-                  <div
-                    onClick={() => setOpenTools({ ...openTools, [tool.name]: !expanded })}
-                    className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-zinc-900/50"
-                  >
-                    {expanded ? (
-                      <ChevronDown size={14} className="text-zinc-500" />
-                    ) : (
-                      <ChevronRight size={14} className="text-zinc-500" />
-                    )}
-                    <code className="text-sm font-mono text-brand-300">{tool.name}</code>
-                    <span className="text-xs text-zinc-500 truncate flex-1">
-                      {tool.description.slice(0, 80)}
-                      {tool.description.length > 80 && '…'}
-                    </span>
-                    <label
-                      onClick={(e) => e.stopPropagation()}
-                      className="inline-flex items-center cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={tool.enabled}
-                        onChange={(e) => updateTool(tool.name, { enabled: e.target.checked })}
-                        className="sr-only peer"
-                      />
-                      <div className="relative w-9 h-5 bg-zinc-800 rounded-full peer peer-checked:bg-brand-500 transition-colors">
-                        <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-zinc-300 rounded-full transition-transform peer-checked:translate-x-4" />
-                      </div>
-                    </label>
-                  </div>
-
-                  {expanded && (
-                    <div className="px-4 pb-4 pt-1 border-t border-zinc-800/60">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs text-zinc-400">Descrição (gatilho)</label>
-                        <button
-                          onClick={() => resetToolDescription(tool.name)}
-                          className="text-[10px] text-zinc-500 hover:text-zinc-300 inline-flex items-center gap-1"
-                        >
-                          <RotateCcw size={10} /> padrão
-                        </button>
-                      </div>
-                      <textarea
-                        value={tool.description}
-                        onChange={(e) => updateTool(tool.name, { description: e.target.value })}
-                        rows={4}
-                        className="w-full px-3 py-2 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 leading-relaxed focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/40 resize-vertical"
-                        placeholder="Descreva o caso de uso da tool…"
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
 
         {/* EXEMPLOS A EVITAR (flagged messages) */}
         <FlaggedExamplesSection unitId={selectedUnitId} />

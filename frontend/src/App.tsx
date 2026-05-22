@@ -14,6 +14,7 @@ import { FontesPanel } from './components/FontesPanel';
 import { AcoesPanel } from './components/AcoesPanel';
 import { AppSidebar } from './components/AppSidebar';
 import { CapturesPanel } from './components/CapturesPanel';
+import { FerramentasPanel } from './components/FerramentasPanel';
 import { DashboardPanel } from './components/DashboardPanel';
 import { ErrorsPanel } from './components/ErrorsPanel';
 import { OnboardingModal } from './components/OnboardingModal';
@@ -90,6 +91,7 @@ function Shell() {
         {tab === 'playground' && <PlaygroundPanel />}
         {tab === 'sources' && <FontesPanel />}
         {tab === 'actions' && <AcoesPanel />}
+        {tab === 'tools' && <FerramentasPanel />}
         {tab === 'captures' && <CapturesPanel />}
         {tab === 'config' && <AgentConfigPanel />}
         {tab === 'units' && <UnitsPanel />}
