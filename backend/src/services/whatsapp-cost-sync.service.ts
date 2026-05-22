@@ -149,6 +149,9 @@ export async function syncUnitWhatsappCosts(
   }
 
   // ---- template_analytics (com metadata de templates) -------------------
+  // A Meta EXIGE `template_ids` como obrigatório no endpoint. Buscamos a
+  // lista de templates da WABA e passamos os IDs em batches (limite ~50 por
+  // chamada — a Meta corta com erro se passar muitos).
   const templates = await fetchMessageTemplates(unit);
   const templateMeta = new Map<string, MessageTemplate>();
   if (templates.ok && templates.data) {
@@ -158,57 +161,69 @@ export async function syncUnitWhatsappCosts(
     result.errors.push(`message_templates: ${templates.error ?? 'erro desconhecido'}`);
   }
 
-  const templateAnalytics = await fetchTemplateAnalytics(
-    unit,
-    { start: startSec, end: endSec },
-    templateMeta,
-  );
-  if (!templateAnalytics.ok || !templateAnalytics.data) {
-    result.errors.push(`template_analytics: ${templateAnalytics.error ?? 'erro desconhecido'}`);
+  const allTemplateIds = [...templateMeta.keys()];
+  if (allTemplateIds.length === 0) {
+    // WABA sem templates cadastrados → não tem o que pedir.
+    // Não é erro; só pula silenciosamente.
   } else {
-    for (const row of templateAnalytics.data.rows) {
-      const date = toUtcMidnight(new Date(row.start * 1000));
-      try {
-        const key = {
-          unitId_date_templateId_language: {
-            unitId: unit.id,
-            date,
-            templateId: row.templateId,
-            language: row.language,
-          },
-        } satisfies Prisma.WhatsappTemplateDailyWhereUniqueInput;
-        await prisma.whatsappTemplateDaily.upsert({
-          where: key,
-          create: {
-            unitId: unit.id,
-            date,
-            templateId: row.templateId,
-            templateName: row.templateName,
-            language: row.language,
-            sent: row.sent,
-            delivered: row.delivered,
-            read: row.read,
-            clicked: row.clicked,
-            costUsd: row.costUsd,
-            currency: row.currency,
-            syncedAt: new Date(),
-          },
-          update: {
-            templateName: row.templateName,
-            sent: row.sent,
-            delivered: row.delivered,
-            read: row.read,
-            clicked: row.clicked,
-            costUsd: row.costUsd,
-            currency: row.currency,
-            syncedAt: new Date(),
-          },
-        });
-        result.templateRowsUpserted += 1;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn({ err, unitId: unit.id, row }, 'upsert whatsappTemplateDaily falhou');
-        result.errors.push(`upsert template: ${msg}`);
+    const CHUNK_SIZE = 50;
+    for (let i = 0; i < allTemplateIds.length; i += CHUNK_SIZE) {
+      const batch = allTemplateIds.slice(i, i + CHUNK_SIZE);
+      const templateAnalytics = await fetchTemplateAnalytics(
+        unit,
+        { start: startSec, end: endSec, templateIds: batch },
+        templateMeta,
+      );
+      if (!templateAnalytics.ok || !templateAnalytics.data) {
+        result.errors.push(
+          `template_analytics (batch ${i / CHUNK_SIZE + 1}): ${templateAnalytics.error ?? 'erro desconhecido'}`,
+        );
+        continue;
+      }
+      for (const row of templateAnalytics.data.rows) {
+        const date = toUtcMidnight(new Date(row.start * 1000));
+        try {
+          const key = {
+            unitId_date_templateId_language: {
+              unitId: unit.id,
+              date,
+              templateId: row.templateId,
+              language: row.language,
+            },
+          } satisfies Prisma.WhatsappTemplateDailyWhereUniqueInput;
+          await prisma.whatsappTemplateDaily.upsert({
+            where: key,
+            create: {
+              unitId: unit.id,
+              date,
+              templateId: row.templateId,
+              templateName: row.templateName,
+              language: row.language,
+              sent: row.sent,
+              delivered: row.delivered,
+              read: row.read,
+              clicked: row.clicked,
+              costUsd: row.costUsd,
+              currency: row.currency,
+              syncedAt: new Date(),
+            },
+            update: {
+              templateName: row.templateName,
+              sent: row.sent,
+              delivered: row.delivered,
+              read: row.read,
+              clicked: row.clicked,
+              costUsd: row.costUsd,
+              currency: row.currency,
+              syncedAt: new Date(),
+            },
+          });
+          result.templateRowsUpserted += 1;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ err, unitId: unit.id, row }, 'upsert whatsappTemplateDaily falhou');
+          result.errors.push(`upsert template: ${msg}`);
+        }
       }
     }
   }

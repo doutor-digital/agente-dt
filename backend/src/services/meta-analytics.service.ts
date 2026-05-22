@@ -330,8 +330,13 @@ export interface FetchTemplateAnalyticsArgs {
   start: number;
   end: number;
   granularity?: 'DAILY';
-  /** Lista de template_ids — alguns retornos exigem. Se vazio, omitimos. */
-  templateIds?: string[];
+  /**
+   * Lista de template_ids. **Obrigatório** pela Meta — chamar sem isso
+   * retorna `(#100) The parameter template_ids is required`. O caller é
+   * responsável por buscar os IDs (via fetchMessageTemplates) e chunkar
+   * em batches de ≤ 50 quando a WABA tem muitos templates.
+   */
+  templateIds: string[];
 }
 
 function normalizeTemplatePoint(
@@ -366,6 +371,9 @@ export async function fetchTemplateAnalytics(
   if (!unitHasAnalyticsCreds(unit)) {
     return { ok: false, error: 'sem metaWabaId ou metaAccessToken' };
   }
+  if (args.templateIds.length === 0) {
+    return { ok: true, data: { rows: [] } };
+  }
   const granularity = args.granularity ?? 'DAILY';
   // metric_types varia por versão; SENT/DELIVERED/READ/CLICKED são estáveis.
   // COST está disponível pra alguns templates — pedimos sempre, Meta ignora se N/A.
@@ -374,11 +382,9 @@ export async function fetchTemplateAnalytics(
     end: args.end,
     granularity,
     metric_types: JSON.stringify(['SENT', 'DELIVERED', 'READ', 'CLICKED', 'COST']),
+    template_ids: JSON.stringify(args.templateIds),
     access_token: unit.metaAccessToken,
   };
-  if (args.templateIds && args.templateIds.length > 0) {
-    params.template_ids = JSON.stringify(args.templateIds);
-  }
   try {
     const url = `${META_GRAPH_BASE}/${unit.metaWabaId}/template_analytics`;
     const res = await axios.get<TemplateRoot>(url, {
@@ -514,7 +520,7 @@ export const MetaAnalytics = {
         args.start,
         args.end,
         args.granularity ?? 'DAILY',
-        (args.templateIds ?? []).sort().join(','),
+        [...args.templateIds].sort().join(','),
       ]),
       () => fetchTemplateAnalytics(unit, args, meta),
     ),
