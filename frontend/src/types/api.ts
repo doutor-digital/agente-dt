@@ -708,6 +708,7 @@ export type ActionKind =
   | 'transfer_without_permission'
   | 'summarize_to_note'
   | 'send_message'
+  | 'respond_with_intent'
   | 'create_task'
   | 'assign_responsible'
   | 'remove_tag'

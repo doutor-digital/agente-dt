@@ -25,6 +25,7 @@ export type ActionKind =
   | 'transfer_without_permission'
   | 'summarize_to_note'
   | 'send_message'
+  | 'respond_with_intent'
   | 'create_task'
   | 'assign_responsible'
   | 'remove_tag'
@@ -55,6 +56,16 @@ export interface SummarizeToNoteParams {
 export interface SendMessageParams {
   /** Texto exato que a IA deve enviar quando esta ação dispara. */
   text: string;
+}
+
+export interface RespondWithIntentParams {
+  /**
+   * Diretriz em PT-BR que a IA segue pra compor a resposta — sem reproduzir
+   * literal, mas respeitando o conteúdo/intenção. Pode incluir lógica condicional
+   * ("se paciente pedir alívio imediato, diga X"). Diferente de send_message
+   * que é verbatim.
+   */
+  instruction: string;
 }
 
 export interface CreateTaskParams {
@@ -99,6 +110,7 @@ export type ActionParams =
   | TransferParams
   | SummarizeToNoteParams
   | SendMessageParams
+  | RespondWithIntentParams
   | CreateTaskParams
   | AssignResponsibleParams
   | RemoveTagParams

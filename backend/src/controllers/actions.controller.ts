@@ -26,6 +26,7 @@ const ACTION_KINDS: ActionKind[] = [
   'transfer_without_permission',
   'summarize_to_note',
   'send_message',
+  'respond_with_intent',
   'create_task',
   'assign_responsible',
   'remove_tag',
@@ -51,6 +52,9 @@ const summarizeParams = z.object({
 });
 const sendMessageParams = z.object({
   text: z.string().min(1, 'mensagem vazia').max(2000),
+});
+const respondWithIntentParams = z.object({
+  instruction: z.string().min(5, 'orientação muito curta').max(2000),
 });
 const createTaskParams = z.object({
   text: z.string().min(3).max(500),
@@ -97,6 +101,9 @@ function validateActionStep(step: { kind: string; params: unknown }, ctx: z.Refi
   } else if (step.kind === 'send_message') {
     const r = sendMessageParams.safeParse(step.params);
     if (!r.success) ctx.addIssue({ code: 'custom', path, message: `send_message exige { text: string } não vazio (até 2000 chars)` });
+  } else if (step.kind === 'respond_with_intent') {
+    const r = respondWithIntentParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `respond_with_intent exige { instruction: string } com pelo menos 5 chars (até 2000)` });
   } else if (step.kind === 'create_task') {
     const r = createTaskParams.safeParse(step.params);
     if (!r.success) ctx.addIssue({ code: 'custom', path, message: `create_task exige { text, deadlineMinutes } — ${r.error.message}` });

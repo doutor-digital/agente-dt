@@ -413,6 +413,19 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       if (!text) return 'enviar mensagem (texto não configurado)';
       return `ENVIE EXATAMENTE esta mensagem como sua resposta no turno corrente (reproduza palavra-por-palavra, sem reformular nem resumir; pode adicionar 1 emoji no fim se combinar com o tom):\n"""\n${text}\n"""`;
     }
+    case 'respond_with_intent': {
+      const instruction = typeof params.instruction === 'string' ? params.instruction.trim() : '';
+      if (!instruction) return 'orientar resposta (orientação não configurada)';
+      // Oposto do send_message: a IA NÃO copia literal. Reformula com palavras
+      // próprias, respeitando o conteúdo/intenção e a lógica condicional da
+      // orientação. O bloco em aspas duplas (não triplas) reduz a tendência
+      // do LLM de reproduzir literal — sinal visual diferente do send_message.
+      return [
+        `SUA RESPOSTA NESTE TURNO DEVE SEGUIR A ORIENTAÇÃO ABAIXO. Use SUAS PRÓPRIAS PALAVRAS — NÃO copie literalmente. Respeite a intenção, o conteúdo e qualquer lógica condicional ("se X então Y") que a orientação trouxer. Mantenha o tom da persona configurada (não fique formal demais nem robótico):`,
+        '',
+        `Orientação: ${instruction}`,
+      ].join('\n');
+    }
     case 'create_task': {
       const text = typeof params.text === 'string' ? params.text.trim() : '';
       const deadlineMinutes =

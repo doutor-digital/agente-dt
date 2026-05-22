@@ -22,6 +22,7 @@ import {
   CalendarClock,
   CheckCircle2,
   CircleDollarSign,
+  Compass,
   FileText,
   Flag,
   GitBranch,
@@ -70,6 +71,8 @@ interface DraftStep {
   focusHint?: string;
   /** send_message */
   text?: string;
+  /** respond_with_intent */
+  instruction?: string;
   /** create_task */
   deadlineMinutes?: number;
   responsibleUserId?: number | null;
@@ -99,6 +102,7 @@ function defaultStep(kind: ActionKind): DraftStep {
   if (kind === 'move_stage') return { kind, statusId: null, pipelineId: null, statusLabel: null };
   if (kind === 'summarize_to_note') return { kind, focusHint: '' };
   if (kind === 'send_message') return { kind, text: '' };
+  if (kind === 'respond_with_intent') return { kind, instruction: '' };
   if (kind === 'create_task') return { kind, text: '', deadlineMinutes: 60, responsibleUserId: null, responsibleUserName: null };
   if (kind === 'assign_responsible') return { kind, userId: null, userName: null };
   if (kind === 'remove_tag') return { kind, singleTag: '' };
@@ -140,6 +144,9 @@ function stepFromAction(s: ActionStep): DraftStep {
   }
   if (s.kind === 'send_message') {
     return { kind: s.kind, text: typeof params.text === 'string' ? params.text : '' };
+  }
+  if (s.kind === 'respond_with_intent') {
+    return { kind: s.kind, instruction: typeof params.instruction === 'string' ? params.instruction : '' };
   }
   if (s.kind === 'create_task') {
     return {
@@ -209,6 +216,9 @@ function stepToParams(s: DraftStep): Record<string, unknown> {
   if (s.kind === 'send_message') {
     return { text: (s.text ?? '').trim() };
   }
+  if (s.kind === 'respond_with_intent') {
+    return { instruction: (s.instruction ?? '').trim() };
+  }
   if (s.kind === 'create_task') {
     return {
       text: (s.text ?? '').trim(),
@@ -260,6 +270,7 @@ function isStepValid(s: DraftStep): boolean {
   if (s.kind === 'add_tag') return (s.tags?.length ?? 0) > 0;
   if (s.kind === 'move_stage') return !!s.statusId && s.statusId > 0;
   if (s.kind === 'send_message') return !!s.text && s.text.trim().length > 0;
+  if (s.kind === 'respond_with_intent') return !!s.instruction && s.instruction.trim().length >= 5;
   if (s.kind === 'create_task')
     return !!s.text && s.text.trim().length >= 3 && !!s.deadlineMinutes && s.deadlineMinutes > 0;
   if (s.kind === 'assign_responsible') return !!s.userId && s.userId > 0;
@@ -295,9 +306,14 @@ const KIND_LABEL: Record<ActionKind, { label: string; icon: typeof Tag; color: s
     color: 'text-violet-300',
   },
   send_message: {
-    label: 'Enviar mensagem',
+    label: 'Enviar mensagem (literal)',
     icon: MessageCircle,
     color: 'text-cyan-300',
+  },
+  respond_with_intent: {
+    label: 'Orientar resposta (intenção)',
+    icon: Compass,
+    color: 'text-sky-300',
   },
   create_task: {
     label: 'Criar tarefa pro SDR',
@@ -1315,6 +1331,32 @@ function StepEditor({
           </div>
         </div>
       )}
+      {step.kind === 'respond_with_intent' && (
+        <div className="space-y-1.5">
+          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+            Orientação pra resposta (intenção)
+          </label>
+          <textarea
+            value={step.instruction ?? ''}
+            onChange={(e) => onChange({ ...step, instruction: e.target.value })}
+            rows={5}
+            maxLength={2000}
+            placeholder={
+              'ex: Explique em 1 frase que isso precisa ser avaliado pela fisioterapeuta presencialmente porque cada caso é único. Se o paciente pedir alívio imediato, diga que o ideal é agendar a consulta e até lá evitar esforço no local.'
+            }
+            className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none transition resize-y leading-relaxed"
+          />
+          <div className="flex items-center justify-between text-[10px] leading-tight">
+            <p className="text-zinc-600">
+              A IA <strong className="text-zinc-400">reformula com palavras dela</strong> seguindo
+              essa orientação. Diferente de "Enviar mensagem" (que é literal). Aceita "se X então Y".
+            </p>
+            <span className="text-zinc-600 font-mono shrink-0 ml-2">
+              {(step.instruction ?? '').length}/2000
+            </span>
+          </div>
+        </div>
+      )}
       {step.kind === 'create_task' && (
         <div className="space-y-2">
           <div className="space-y-1.5">
@@ -1801,6 +1843,14 @@ function StepSummary({ step }: { step: ActionStep }) {
           title={params.text}
         >
           <span className="truncate">"{params.text.slice(0, 60)}{params.text.length > 60 ? '…' : ''}"</span>
+        </span>
+      )}
+      {step.kind === 'respond_with_intent' && typeof params.instruction === 'string' && params.instruction.trim() && (
+        <span
+          className="inline-flex items-center px-2 py-0.5 rounded bg-sky-500/15 text-sky-100 text-[11px] ring-1 ring-sky-500/30 max-w-full"
+          title={params.instruction}
+        >
+          <span className="truncate">→ {params.instruction.slice(0, 70)}{params.instruction.length > 70 ? '…' : ''}</span>
         </span>
       )}
       {step.kind === 'create_task' && typeof params.text === 'string' && (
