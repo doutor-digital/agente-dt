@@ -45,6 +45,7 @@ import clsx from 'clsx';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
+import { useKommoMeta } from '../context/KommoMetaContext';
 import type {
   ActionKind,
   ActionStep,
@@ -527,7 +528,6 @@ export function AcoesPanel() {
         {/* Modal de edição/criação */}
         {(creating || editing) && (
           <ActionEditor
-            unitId={selectedUnitId}
             initial={editing ? actionToDraft(editing) : EMPTY_DRAFT}
             isEditing={!!editing}
             onSave={handleSave}
@@ -660,13 +660,11 @@ function ActionCard({
 // ---------------------------------------------------------------------------
 
 function ActionEditor({
-  unitId,
   initial,
   isEditing,
   onSave,
   onCancel,
 }: {
-  unitId: string | null;
   initial: DraftRule;
   isEditing: boolean;
   onSave: (d: DraftRule) => Promise<void>;
@@ -674,66 +672,18 @@ function ActionEditor({
 }) {
   const [draft, setDraft] = useState<DraftRule>(initial);
   const [saving, setSaving] = useState(false);
-  const [tagsData, setTagsData] = useState<KommoTagsResponse | null>(null);
-  const [pipelinesData, setPipelinesData] = useState<KommoPipelinesResponse | null>(null);
-  const [usersData, setUsersData] = useState<KommoUsersResponse | null>(null);
-  const [lossReasonsData, setLossReasonsData] = useState<KommoLossReasonsResponse | null>(null);
-  const [tagsError, setTagsError] = useState<string | null>(null);
-  const [pipelinesError, setPipelinesError] = useState<string | null>(null);
-  const [loadingKommo, setLoadingKommo] = useState(false);
-  const [reloadTick, setReloadTick] = useState(0);
+  // Lê metadados do Kommo do cache compartilhado — não refetch a cada abertura.
+  const {
+    tags: tagsData,
+    pipelines: pipelinesData,
+    users: usersData,
+    lossReasons: lossReasonsData,
+    loading: loadingKommo,
+    tagsError,
+    pipelinesError,
+    refresh: refreshKommo,
+  } = useKommoMeta();
   const valid = isValid(draft);
-
-  // Traduz códigos crus do backend pra mensagens úteis ao usuário.
-  function friendlyError(raw: string | undefined): string {
-    if (!raw) return 'falha ao carregar do Kommo';
-    if (raw === 'kommo_not_configured')
-      return 'Unidade sem subdomínio/token do Kommo configurado. Vá em Unidades → conecte o Kommo.';
-    if (/401|unauthor/i.test(raw))
-      return 'Token do Kommo recusado (401). Gere um Long-lived token novo em Unidades.';
-    if (/403|forbidden/i.test(raw))
-      return 'Sem permissão pra ler tags/etapas (403). Cheque os escopos do token Kommo.';
-    return raw;
-  }
-
-  // Carrega tags + pipelines do Kommo ao abrir o modal — lazy.
-  // `reloadTick` permite recarregar manualmente sem fechar o modal.
-  useEffect(() => {
-    if (!unitId) return;
-    let alive = true;
-    setLoadingKommo(true);
-    setTagsError(null);
-    setPipelinesError(null);
-    Promise.all([
-      api.kommoTags(unitId).catch((err) => ({ _err: err } as const)),
-      api.kommoPipelines(unitId).catch((err) => ({ _err: err } as const)),
-      api.kommoUsers(unitId).catch((err) => ({ _err: err } as const)),
-      api.kommoLossReasons(unitId).catch((err) => ({ _err: err } as const)),
-    ]).then(([t, p, u, lr]) => {
-      if (!alive) return;
-      // eslint-disable-next-line no-console
-      console.warn('[AcoesPanel] kommo fetch', { unitId, tags: t, pipelines: p, users: u, lossReasons: lr });
-      if ('_err' in t) {
-        const e = t._err as { response?: { data?: { message?: string; error?: string } } };
-        setTagsError(friendlyError(e?.response?.data?.message ?? e?.response?.data?.error));
-      } else {
-        setTagsData(t);
-      }
-      if ('_err' in p) {
-        const e = p._err as { response?: { data?: { message?: string; error?: string } } };
-        setPipelinesError(friendlyError(e?.response?.data?.message ?? e?.response?.data?.error));
-      } else {
-        setPipelinesData(p);
-      }
-      // Users e lossReasons — erro silencioso (campos opcionais nas ações).
-      if (!('_err' in u)) setUsersData(u);
-      if (!('_err' in lr)) setLossReasonsData(lr);
-      setLoadingKommo(false);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [unitId, reloadTick]);
 
   const tagsCount = tagsData?.tags?.length ?? 0;
   const pipelinesCount = (pipelinesData?.pipelines ?? []).filter((p) => !p.isArchive).length;
@@ -807,7 +757,7 @@ function ActionEditor({
             </span>
             <button
               type="button"
-              onClick={() => setReloadTick((n) => n + 1)}
+              onClick={() => refreshKommo()}
               disabled={loadingKommo}
               className="inline-flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-100 disabled:opacity-40"
               title="Recarregar tags e etapas da Kommo"

@@ -1,32 +1,66 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Sidebar } from './components/Sidebar';
-import { ExecutionTrace } from './components/ExecutionTrace';
-import { StatsHeader } from './components/StatsHeader';
-import { AgentConfigPanel } from './components/AgentConfigPanel';
-import { ConversationsPanel } from './components/ConversationsPanel';
-import { LlmCallsPanel } from './components/LlmCallsPanel';
-import { PromptsPanel } from './components/PromptsPanel';
-import { UnitsPanel } from './components/UnitsPanel';
-import { IntegrationsPanel } from './components/IntegrationsPanel';
-import { WizardPanel } from './components/WizardPanel';
-import { PlaygroundPanel } from './components/PlaygroundPanel';
-import { FontesPanel } from './components/FontesPanel';
-import { AcoesPanel } from './components/AcoesPanel';
+import { lazy, Suspense, useEffect } from 'react';
+import { Loader2 } from 'lucide-react';
 import { AppSidebar } from './components/AppSidebar';
-import { CapturesPanel } from './components/CapturesPanel';
-import { FerramentasPanel } from './components/FerramentasPanel';
-import { DashboardPanel } from './components/DashboardPanel';
-import { ErrorsPanel } from './components/ErrorsPanel';
 import { OnboardingModal } from './components/OnboardingModal';
-import { UnitProvider, useUnit } from './context/UnitContext';
+import { UnitProvider } from './context/UnitContext';
+import { KommoMetaProvider } from './context/KommoMetaContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Login } from './components/Login';
 import { Splash } from './components/Splash';
-import { UsersPanel } from './components/UsersPanel';
-import { usePolling } from './hooks/usePolling';
 import { useRoute } from './hooks/useRoute';
-import { api } from './lib/api';
-import type { TraceDetail } from './types/api';
+
+// Lazy panels — cada um vira um chunk separado, baixa só quando o usuário
+// abre a aba. Reduz drasticamente o JS inicial (de ~660KB pra ~150KB) e o
+// custo de troca entre abas. React.lazy aceita só default export, então
+// adaptamos os named exports em linha.
+const DashboardPanel = lazy(() =>
+  import('./components/DashboardPanel').then((m) => ({ default: m.DashboardPanel })),
+);
+const TracesView = lazy(() =>
+  import('./components/TracesView').then((m) => ({ default: m.TracesView })),
+);
+const ErrorsPanel = lazy(() =>
+  import('./components/ErrorsPanel').then((m) => ({ default: m.ErrorsPanel })),
+);
+const ConversationsPanel = lazy(() =>
+  import('./components/ConversationsPanel').then((m) => ({ default: m.ConversationsPanel })),
+);
+const LlmCallsPanel = lazy(() =>
+  import('./components/LlmCallsPanel').then((m) => ({ default: m.LlmCallsPanel })),
+);
+const PromptsPanel = lazy(() =>
+  import('./components/PromptsPanel').then((m) => ({ default: m.PromptsPanel })),
+);
+const IntegrationsPanel = lazy(() =>
+  import('./components/IntegrationsPanel').then((m) => ({ default: m.IntegrationsPanel })),
+);
+const WizardPanel = lazy(() =>
+  import('./components/WizardPanel').then((m) => ({ default: m.WizardPanel })),
+);
+const PlaygroundPanel = lazy(() =>
+  import('./components/PlaygroundPanel').then((m) => ({ default: m.PlaygroundPanel })),
+);
+const FontesPanel = lazy(() =>
+  import('./components/FontesPanel').then((m) => ({ default: m.FontesPanel })),
+);
+const AcoesPanel = lazy(() =>
+  import('./components/AcoesPanel').then((m) => ({ default: m.AcoesPanel })),
+);
+const CapturesPanel = lazy(() =>
+  import('./components/CapturesPanel').then((m) => ({ default: m.CapturesPanel })),
+);
+const FerramentasPanel = lazy(() =>
+  import('./components/FerramentasPanel').then((m) => ({ default: m.FerramentasPanel })),
+);
+const AgentConfigPanel = lazy(() =>
+  import('./components/AgentConfigPanel').then((m) => ({ default: m.AgentConfigPanel })),
+);
+const UnitsPanel = lazy(() =>
+  import('./components/UnitsPanel').then((m) => ({ default: m.UnitsPanel })),
+);
+const UsersPanel = lazy(() =>
+  import('./components/UsersPanel').then((m) => ({ default: m.UsersPanel })),
+);
 
 /**
  * App root — multi-tenant + autenticado.
@@ -57,7 +91,9 @@ function AuthGate() {
   if (user === null) return <Login />;
   return (
     <UnitProvider>
-      <Shell />
+      <KommoMetaProvider>
+        <Shell />
+      </KommoMetaProvider>
     </UnitProvider>
   );
 }
@@ -80,80 +116,36 @@ function Shell() {
     <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
       <AppSidebar tab={tab} onChange={navigate} />
       <main className="flex-1 flex flex-col overflow-hidden">
-        {tab === 'dashboard' && <DashboardPanel />}
-        {tab === 'traces' && <TracesView />}
-        {tab === 'errors' && <ErrorsPanel />}
-        {tab === 'conversations' && <ConversationsPanel />}
-        {tab === 'llm' && <LlmCallsPanel />}
-        {tab === 'prompts' && <PromptsPanel />}
-        {tab === 'integrations' && <IntegrationsPanel />}
-        {tab === 'wizard' && <WizardPanel />}
-        {tab === 'playground' && <PlaygroundPanel />}
-        {tab === 'sources' && <FontesPanel />}
-        {tab === 'actions' && <AcoesPanel />}
-        {tab === 'tools' && <FerramentasPanel />}
-        {tab === 'captures' && <CapturesPanel />}
-        {tab === 'config' && <AgentConfigPanel />}
-        {tab === 'units' && <UnitsPanel />}
-        {tab === 'users' && <UsersPanel />}
+        <Suspense fallback={<PanelSkeleton />}>
+          {tab === 'dashboard' && <DashboardPanel />}
+          {tab === 'traces' && <TracesView />}
+          {tab === 'errors' && <ErrorsPanel />}
+          {tab === 'conversations' && <ConversationsPanel />}
+          {tab === 'llm' && <LlmCallsPanel />}
+          {tab === 'prompts' && <PromptsPanel />}
+          {tab === 'integrations' && <IntegrationsPanel />}
+          {tab === 'wizard' && <WizardPanel />}
+          {tab === 'playground' && <PlaygroundPanel />}
+          {tab === 'sources' && <FontesPanel />}
+          {tab === 'actions' && <AcoesPanel />}
+          {tab === 'tools' && <FerramentasPanel />}
+          {tab === 'captures' && <CapturesPanel />}
+          {tab === 'config' && <AgentConfigPanel />}
+          {tab === 'units' && <UnitsPanel />}
+          {tab === 'users' && <UsersPanel />}
+        </Suspense>
       </main>
       <OnboardingModal />
     </div>
   );
 }
 
-
-function TracesView() {
-  const { selectedUnitId } = useUnit();
-  const tracesFetcher = useMemo(() => () => api.listTraces(selectedUnitId), [selectedUnitId]);
-  const statsFetcher = useMemo(() => () => api.getStats(selectedUnitId), [selectedUnitId]);
-
-  const { data: traces, loading } = usePolling(tracesFetcher, 3000, [selectedUnitId]);
-  const { data: stats } = usePolling(statsFetcher, 5000, [selectedUnitId]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<TraceDetail | null>(null);
-
-  // Reset quando troca de unidade.
-  useEffect(() => {
-    setSelectedId(null);
-    setDetail(null);
-  }, [selectedUnitId]);
-
-  useEffect(() => {
-    if (!selectedId && traces && traces.length > 0) {
-      setSelectedId(traces[0].id);
-    }
-  }, [traces, selectedId]);
-
-  const detailInterval = detail?.status === 'RUNNING' ? 1000 : 4000;
-  const detailFetcher = useMemo(
-    () => async () => (selectedId ? api.getTrace(selectedId) : null),
-    [selectedId],
-  );
-  const { data: fetchedDetail } = usePolling(detailFetcher, detailInterval, [selectedId]);
-
-  useEffect(() => {
-    if (fetchedDetail) setDetail(fetchedDetail);
-    if (!selectedId) setDetail(null);
-  }, [fetchedDetail, selectedId]);
-
+/** Spinner que aparece enquanto o chunk JS do panel baixa. */
+function PanelSkeleton() {
   return (
-    <div className="flex flex-1 overflow-hidden">
-      <Sidebar
-        traces={traces ?? []}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        loading={loading}
-      />
-
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="px-6 pt-5">
-          <StatsHeader stats={stats} />
-        </div>
-        <div className="flex-1 overflow-hidden flex flex-col">
-          <ExecutionTrace trace={detail} />
-        </div>
-      </div>
+    <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm">
+      <Loader2 className="animate-spin mr-2" size={16} />
+      Carregando…
     </div>
   );
 }
