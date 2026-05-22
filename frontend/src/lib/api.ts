@@ -71,6 +71,50 @@ function withUnit(params: Record<string, unknown> | undefined, unitId: string | 
   return unitId ? { ...(params ?? {}), unitId } : params;
 }
 
+// ---------------------------------------------------------------------------
+// Playground types — espelham o que /units/:id/playground/run devolve.
+// ---------------------------------------------------------------------------
+export type PlaygroundAction = {
+  tool: string;
+  args: Record<string, unknown>;
+  result: string;
+};
+
+export type PlaygroundTokens = { prompt: number; completion: number; total: number };
+
+export type PlaygroundTimelineEvent =
+  | { kind: 'user_message'; ts: number; content: string }
+  | {
+      kind: 'thinking';
+      ts: number;
+      durationMs: number;
+      model: string;
+      iteration: number;
+      tokens?: PlaygroundTokens;
+      costUsd?: number;
+    }
+  | {
+      kind: 'tool_call';
+      ts: number;
+      tool: string;
+      args: Record<string, unknown>;
+      result: string;
+    }
+  | { kind: 'assistant_message'; ts: number; content: string };
+
+export type PlaygroundRunResult = {
+  reply: string;
+  actions: PlaygroundAction[];
+  timeline: PlaygroundTimelineEvent[];
+  meta: {
+    model: string;
+    iterations: number;
+    totalLatencyMs: number;
+    tokens: PlaygroundTokens | null;
+    costUsd: number | null;
+  };
+};
+
 export const api = {
   // -------------------------------------------------------------------------
   // Auth — sessão Google + gestão de admins
@@ -381,14 +425,12 @@ export const api = {
   async playgroundRun(
     unitId: string,
     messages: Array<{ role: 'user' | 'assistant'; content: string }>,
-  ): Promise<{
-    reply: string;
-    actions: Array<{ tool: string; args: Record<string, unknown>; result: string }>;
-  }> {
-    const { data } = await http.post<{
-      reply: string;
-      actions: Array<{ tool: string; args: Record<string, unknown>; result: string }>;
-    }>(`/units/${unitId}/playground/run`, { messages }, { timeout: 60_000 });
+  ): Promise<PlaygroundRunResult> {
+    const { data } = await http.post<PlaygroundRunResult>(
+      `/units/${unitId}/playground/run`,
+      { messages },
+      { timeout: 60_000 },
+    );
     return data;
   },
 

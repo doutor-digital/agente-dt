@@ -31,7 +31,7 @@ import { z as zod } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { getActiveConfig } from '../agent/config.js';
 import { composeSystemPromptForUnit } from '../agent/prompt-composer.js';
-import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
+import { calculateCost, createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
 
 // Lead ID sintético — fica no histórico/payload mas nunca chega no Kommo.
@@ -50,6 +50,55 @@ interface SandboxAction {
   tool: string;
   args: Record<string, unknown>;
   result: string;
+}
+
+// Eventos cronológicos do turno atual — alimentam a Timeline no frontend.
+// `ts` é Unix-ms absoluto; o frontend só formata.
+type TimelineEvent =
+  | { kind: 'user_message'; ts: number; content: string }
+  | {
+      kind: 'thinking';
+      ts: number;
+      durationMs: number;
+      model: string;
+      iteration: number;
+      tokens?: { prompt: number; completion: number; total: number };
+      costUsd?: number;
+    }
+  | {
+      kind: 'tool_call';
+      ts: number;
+      tool: string;
+      args: Record<string, unknown>;
+      result: string;
+    }
+  | { kind: 'assistant_message'; ts: number; content: string };
+
+// Shape parcial do AIMessage do LangChain que nos interessa.
+// Em runtime ele tem `usage_metadata` (padrão LC) e/ou `response_metadata.tokenUsage`.
+interface AIMessageLike {
+  content: unknown;
+  tool_calls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }>;
+  usage_metadata?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+  response_metadata?: { tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } };
+}
+
+function extractUsage(ai: AIMessageLike): { prompt: number; completion: number; total: number } | null {
+  const u = ai.usage_metadata;
+  if (u && (u.input_tokens || u.output_tokens || u.total_tokens)) {
+    const prompt = u.input_tokens ?? 0;
+    const completion = u.output_tokens ?? 0;
+    const total = u.total_tokens ?? prompt + completion;
+    return { prompt, completion, total };
+  }
+  const t = ai.response_metadata?.tokenUsage;
+  if (t && (t.promptTokens || t.completionTokens || t.totalTokens)) {
+    const prompt = t.promptTokens ?? 0;
+    const completion = t.completionTokens ?? 0;
+    const total = t.totalTokens ?? prompt + completion;
+    return { prompt, completion, total };
+  }
+  return null;
 }
 
 function buildSandboxTools(opts: { onCall: (a: SandboxAction) => void }) {
@@ -164,7 +213,23 @@ operador revisar.`;
   const fullSystem = `${systemPrompt}\n\n${sandboxPreamble}`;
 
   const actions: SandboxAction[] = [];
-  const tools = buildSandboxTools({ onCall: (a) => actions.push(a) });
+  const timeline: TimelineEvent[] = [];
+  // Marca a msg do usuário deste turno como primeiro evento da timeline.
+  if (lastUser) {
+    timeline.push({ kind: 'user_message', ts: Date.now(), content: lastUser.content });
+  }
+  const tools = buildSandboxTools({
+    onCall: (a) => {
+      actions.push(a);
+      timeline.push({
+        kind: 'tool_call',
+        ts: Date.now(),
+        tool: a.tool,
+        args: a.args,
+        result: a.result,
+      });
+    },
+  });
 
   const modelName = config.model || unit.openaiModel;
   const baseModel = createChatOpenAI(unit, {
@@ -183,8 +248,14 @@ operador revisar.`;
   // Loop ReAct manual. Máximo 5 voltas pra não rodar infinito se a IA insistir.
   const MAX_ITERS = 5;
   let finalReply = '';
+  let iterations = 0;
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  let totalCostUsd = 0;
+  const turnStart = performance.now();
   try {
     for (let i = 0; i < MAX_ITERS; i++) {
+      const iterStart = performance.now();
       const ai = (await invokeChatModel({
         model,
         messages: history,
@@ -192,13 +263,34 @@ operador revisar.`;
         traceId: null,
         modelName,
         tools,
-      })) as AIMessage;
+      })) as AIMessage & AIMessageLike;
+      const iterMs = Math.round(performance.now() - iterStart);
+      iterations++;
+
+      const usage = extractUsage(ai);
+      const costUsd = usage ? calculateCost(modelName, usage.prompt, usage.completion) : undefined;
+      if (usage) {
+        totalPromptTokens += usage.prompt;
+        totalCompletionTokens += usage.completion;
+      }
+      if (costUsd) totalCostUsd += costUsd;
+
+      timeline.push({
+        kind: 'thinking',
+        ts: Date.now(),
+        durationMs: iterMs,
+        model: modelName,
+        iteration: i + 1,
+        tokens: usage ?? undefined,
+        costUsd,
+      });
 
       history.push(ai);
       const toolCalls = ai.tool_calls ?? [];
 
       if (toolCalls.length === 0) {
         finalReply = typeof ai.content === 'string' ? ai.content : JSON.stringify(ai.content);
+        timeline.push({ kind: 'assistant_message', ts: Date.now(), content: finalReply });
         break;
       }
 
@@ -224,9 +316,29 @@ operador revisar.`;
     if (!finalReply) {
       finalReply =
         '(A IA esgotou o limite de 5 chamadas de tool sem responder em texto. Verifique o prompt.)';
+      timeline.push({ kind: 'assistant_message', ts: Date.now(), content: finalReply });
     }
 
-    res.json({ reply: finalReply, actions });
+    const totalLatencyMs = Math.round(performance.now() - turnStart);
+    res.json({
+      reply: finalReply,
+      actions,
+      timeline,
+      meta: {
+        model: modelName,
+        iterations,
+        totalLatencyMs,
+        tokens:
+          totalPromptTokens || totalCompletionTokens
+            ? {
+                prompt: totalPromptTokens,
+                completion: totalCompletionTokens,
+                total: totalPromptTokens + totalCompletionTokens,
+              }
+            : null,
+        costUsd: totalCostUsd > 0 ? Math.round(totalCostUsd * 1_000_000) / 1_000_000 : null,
+      },
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ err, unitId }, 'playground falhou');
