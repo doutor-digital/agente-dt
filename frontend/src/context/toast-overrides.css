@@ -1,0 +1,53 @@
+/* ===========================================================================
+ * Toast overrides — afina o tema "dark" da react-toastify pra combinar com
+ * o ink-950/zinc-* do app. Mantemos os componentes padrão da lib (variants
+ * de cor por severity), só ajustamos surface, ring e tipografia.
+ * =========================================================================== */
+
+.Toastify__toast.dt-toast {
+  border-radius: 0.625rem; /* rounded-lg */
+  background-color: rgb(9 9 11 / 0.95); /* zinc-950/95 */
+  color: rgb(244 244 245); /* zinc-100 */
+  font-family: inherit;
+  font-size: 0.875rem; /* text-sm */
+  line-height: 1.35;
+  padding: 0.625rem 0.75rem;
+  box-shadow:
+    0 20px 50px -10px rgb(0 0 0 / 0.5),
+    0 0 0 1px rgb(63 63 70 / 0.5); /* zinc-700/50 */
+  backdrop-filter: blur(6px);
+}
+
+/* Severity ring — finos, sem fundão colorido (mais sóbrio que o default). */
+.Toastify__toast--success.dt-toast {
+  box-shadow:
+    0 20px 50px -10px rgb(0 0 0 / 0.5),
+    0 0 0 1px rgb(16 185 129 / 0.4); /* emerald-500/40 */
+}
+.Toastify__toast--error.dt-toast {
+  box-shadow:
+    0 20px 50px -10px rgb(0 0 0 / 0.5),
+    0 0 0 1px rgb(244 63 94 / 0.4); /* rose-500/40 */
+}
+.Toastify__toast--info.dt-toast {
+  box-shadow:
+    0 20px 50px -10px rgb(0 0 0 / 0.5),
+    0 0 0 1px rgb(14 165 233 / 0.4); /* sky-500/40 */
+}
+
+/* Barra de progresso fina e na cor da severity. */
+.Toastify__progress-bar.dt-toast,
+.Toastify__progress-bar {
+  height: 2px;
+  opacity: 0.8;
+}
+
+.Toastify__close-button {
+  color: rgb(161 161 170); /* zinc-400 */
+  opacity: 0.7;
+  align-self: center;
+}
+.Toastify__close-button:hover {
+  color: rgb(244 244 245);
+  opacity: 1;
+}
