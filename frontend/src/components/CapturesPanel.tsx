@@ -261,6 +261,17 @@ export function CapturesPanel() {
     }
   }
 
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rules;
+    return rules.filter(
+      (r) =>
+        r.kommoFieldName.toLowerCase().includes(q) ||
+        r.toolName.toLowerCase().includes(q) ||
+        r.instruction.toLowerCase().includes(q),
+    );
+  }, [rules, search]);
+
   if (!selectedUnitId) {
     return (
       <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm">
@@ -287,17 +298,6 @@ export function CapturesPanel() {
       />
     );
   }
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rules;
-    return rules.filter(
-      (r) =>
-        r.kommoFieldName.toLowerCase().includes(q) ||
-        r.toolName.toLowerCase().includes(q) ||
-        r.instruction.toLowerCase().includes(q),
-    );
-  }, [rules, search]);
 
   return (
     <div className="flex-1 overflow-y-auto">
