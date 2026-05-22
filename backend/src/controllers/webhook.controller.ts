@@ -27,6 +27,7 @@ import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js'
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
+import { scheduleAgentRun } from '../lib/agent-coalescer.js';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -387,20 +388,71 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
 
   res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
 
-  void processAgent({
-    unit,
+  // Coalescer: junta mensagens em rajada num único run do agente. Se o lead
+  // mandar 3 msgs em sequência, só roda o agente UMA vez (após 3s de silêncio)
+  // com tudo combinado — evita 3 respostas duplicadas.
+  const status = scheduleAgentRun({
+    unitSlug: unit.slug,
     leadId,
     traceId: trace.id,
     humanMessage: ctx.humanMessage,
     audioUrl: ctx.audioUrl,
-    chatId: ctx.chatId,
-    talkId: ctx.talkId,
-    contactId: ctx.contactId,
-    isChatMessage: ctx.isChatMessage,
-    requestStart,
-  }).catch((err) => {
-    logger.error({ err, traceId: trace.id }, 'erro fatal no background do agente');
+    run: async (combinedMessage, audioUrls, traceIds) => {
+      // Marca traces "satélites" do burst (todos menos o primeiro) como
+      // coalescidos, pra ficar claro no painel que não rodaram a IA sozinhos.
+      const ownerTraceId = traceIds[0];
+      const satelliteTraceIds = traceIds.slice(1);
+      if (satelliteTraceIds.length > 0) {
+        await prisma.executionTrace.updateMany({
+          where: { id: { in: satelliteTraceIds } },
+          data: {
+            status: 'SUCCESS',
+            iaDecision: `__coalesced_into__:${ownerTraceId}`,
+            latencyMs: 0,
+          },
+        });
+      }
+      // Roda processAgent com a mensagem combinada e o trace dono.
+      await processAgent({
+        unit,
+        leadId,
+        traceId: ownerTraceId,
+        humanMessage: combinedMessage,
+        // Áudio: por enquanto pega só o 1º — combinar transcrições de múltiplos
+        // áudios no mesmo turno é caso raro. Se virar comum, evoluir.
+        audioUrl: audioUrls[0] ?? null,
+        chatId: ctx.chatId,
+        talkId: ctx.talkId,
+        contactId: ctx.contactId,
+        isChatMessage: ctx.isChatMessage,
+        requestStart,
+        burstSize: traceIds.length,
+      });
+    },
   });
+
+  if (status === 'joined') {
+    logger.info(
+      { leadId, traceId: trace.id, unit: unit.slug },
+      'webhook: mensagem anexada a burst em curso',
+    );
+  } else if (status === 'rejected') {
+    // Burst cheio (>20 msgs). Roda esta mensagem isoladamente como fallback.
+    void processAgent({
+      unit,
+      leadId,
+      traceId: trace.id,
+      humanMessage: ctx.humanMessage,
+      audioUrl: ctx.audioUrl,
+      chatId: ctx.chatId,
+      talkId: ctx.talkId,
+      contactId: ctx.contactId,
+      isChatMessage: ctx.isChatMessage,
+      requestStart,
+    }).catch((err) => {
+      logger.error({ err, traceId: trace.id }, 'erro fatal no background do agente (fallback)');
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -418,11 +470,23 @@ async function processAgent(args: {
   contactId: string | null;
   isChatMessage: boolean;
   requestStart: number;
+  /** Quantas mensagens do burst foram coalescidas nesta execução. >1 quando o
+   *  paciente mandou várias msgs em sequência e o debouncer juntou. */
+  burstSize?: number;
 }): Promise<void> {
-  const { unit, leadId, traceId, audioUrl, chatId, talkId, contactId, isChatMessage, requestStart } = args;
+  const { unit, leadId, traceId, audioUrl, chatId, talkId, contactId, isChatMessage, requestStart, burstSize } = args;
   let { humanMessage } = args;
   const recorder = new TraceRecorder(traceId, unit.id);
   await syncRecorderSequence(recorder, traceId);
+
+  // Registra no trace se este turno é resultado de coalescência (>1 mensagem).
+  if (burstSize && burstSize > 1) {
+    await recorder.step({
+      kind: 'THINKING',
+      title: `Burst coalescido: ${burstSize} mensagens do paciente combinadas em 1 turno`,
+      payload: { burstSize, combined: humanMessage.slice(0, 400) },
+    });
+  }
 
   // Se cliente mandou áudio, transcreve antes de chamar a IA.
   if (audioUrl) {
