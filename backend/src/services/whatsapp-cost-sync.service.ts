@@ -162,26 +162,27 @@ export async function syncUnitWhatsappCosts(
     result.errors.push(`message_templates: ${formatMetaError(templates)}`);
   }
 
-  const allTemplateIds = [...templateMeta.keys()];
+  // Filtra só templates APPROVED — REJECTED/PENDING/PAUSED disparam
+  // "(#1/4182004) unknown error" no endpoint template_analytics da Meta.
+  const allTemplateIds = [...templateMeta.values()]
+    .filter((t) => !t.status || t.status === 'APPROVED')
+    .map((t) => t.id);
   if (allTemplateIds.length === 0) {
-    // WABA sem templates cadastrados → não tem o que pedir.
+    // WABA sem templates APPROVED → não tem o que pedir.
     // Não é erro; só pula silenciosamente.
   } else {
-    const CHUNK_SIZE = 25;
-    for (let i = 0; i < allTemplateIds.length; i += CHUNK_SIZE) {
-      const batch = allTemplateIds.slice(i, i + CHUNK_SIZE);
-      const templateAnalytics = await fetchTemplateAnalytics(
+    // Função interna: chama template_analytics + upserta linhas. Retorna
+    // os IDs problemáticos (não retornados pela Meta) pra eventual retry.
+    const runBatch = async (ids: string[]): Promise<{ ok: boolean; errorMsg?: string }> => {
+      const r = await fetchTemplateAnalytics(
         unit,
-        { start: startSec, end: endSec, templateIds: batch },
+        { start: startSec, end: endSec, templateIds: ids },
         templateMeta,
       );
-      if (!templateAnalytics.ok || !templateAnalytics.data) {
-        result.errors.push(
-          `template_analytics (batch ${i / CHUNK_SIZE + 1}): ${formatMetaError(templateAnalytics)}`,
-        );
-        continue;
+      if (!r.ok || !r.data) {
+        return { ok: false, errorMsg: formatMetaError(r) };
       }
-      for (const row of templateAnalytics.data.rows) {
+      for (const row of r.data.rows) {
         const date = toUtcMidnight(new Date(row.start * 1000));
         try {
           const key = {
@@ -226,6 +227,35 @@ export async function syncUnitWhatsappCosts(
           result.errors.push(`upsert template: ${msg}`);
         }
       }
+      return { ok: true };
+    };
+
+    // Batch pequeno facilita identificar template ruim — quando o batch
+    // falha com erro Meta, retentamos 1-por-1 pra salvar o que dá e
+    // isolar quem é o problemático.
+    const CHUNK_SIZE = 10;
+    for (let i = 0; i < allTemplateIds.length; i += CHUNK_SIZE) {
+      const batch = allTemplateIds.slice(i, i + CHUNK_SIZE);
+      const batchN = i / CHUNK_SIZE + 1;
+      const r = await runBatch(batch);
+      if (r.ok) continue;
+
+      // Batch falhou — tenta 1-por-1 pra isolar.
+      const failed: string[] = [];
+      for (const id of batch) {
+        const single = await runBatch([id]);
+        if (!single.ok) {
+          const name = templateMeta.get(id)?.name ?? id;
+          failed.push(`${name} (${id})`);
+        }
+      }
+      if (failed.length === 0) {
+        // Retry 1-por-1 funcionou — só o batch agregado dava erro. Ok.
+        continue;
+      }
+      result.errors.push(
+        `template_analytics (batch ${batchN}): ${r.errorMsg}. Templates problemáticos: ${failed.join(', ')}`,
+      );
     }
   }
 
