@@ -913,17 +913,17 @@ export class KommoClient {
   }
 
   /**
-   * Estratégia em duas etapas, do mais geral pro mais específico:
-   *  1. PATCH no custom field "Resposta IA" — SEMPRE. Esse é o evento que o
-   *     Digital Pipeline do Kommo escuta com o trigger "Quando campo muda"
-   *     pra disparar o Salesbot automaticamente. É a fonte da verdade.
-   *  2. POST /salesbot/{id}/run — best-effort. Algumas contas (ex:
-   *     hmtecnologiakommon) retornam 404 nesse endpoint, mas continuam
-   *     enviando via Digital Pipeline. Por isso engolimos o 404 silenciosa-
-   *     mente — outros erros (401, 500) continuam propagando.
+   * Dispara o Salesbot via PATCH no custom field "Resposta IA".
    *
-   * Resultado: o PATCH bem-sucedido conta como salesbot disparado. Sem o
-   * 404 do POST/run abortar o caminho e fazer cair pro fallback de nota.
+   * O Digital Pipeline do Kommo escuta o evento "Quando campo Resposta IA
+   * muda" e roda o Salesbot configurado. Isso É o disparo — não chamamos
+   * POST /salesbot/{id}/run em paralelo, porque em contas que aceitam ambos
+   * a mensagem chega 2x ao paciente. Ver comentário dentro do método.
+   *
+   * Pré-requisito (config no Kommo, não no nosso código):
+   *   Digital Pipeline → Trigger "Campo {replyFieldId} muda" → Ação "Rodar
+   *   Salesbot {salesbotId}". Se essa regra não estiver no Kommo, a
+   *   mensagem não vai pro paciente — investigue lá.
    */
   async runSalesbot({
     leadId,
@@ -938,16 +938,23 @@ export class KommoClient {
     text: string;
     recorder?: KommoStepRecorder;
   }): Promise<unknown> {
-    // ⚠ ATENÇÃO À DUPLICAÇÃO: este método dispara o salesbot por DOIS caminhos:
-    //   1. PATCH no campo "Resposta IA" — se o Digital Pipeline do Kommo está
-    //      configurado pra "Quando campo muda → rodar Salesbot", esse PATCH
-    //      sozinho JÁ envia a mensagem.
-    //   2. POST /salesbot/{id}/run — também dispara.
-    // Se AMBOS os gatilhos estão ativos, o paciente recebe a mensagem 2x.
-    // Os logs abaixo permitem ver o duplo disparo: se o POST retornou 200
-    // (não 404) E o paciente recebeu 2 mensagens, desabilite o trigger do
-    // Digital Pipeline ou troque o `kommoReplyFieldId` por um campo "burro"
-    // (sem trigger do DP).
+    // ESTRATÉGIA PATCH-ONLY (corrige duplicação histórica):
+    //
+    // O Kommo aciona o Salesbot por DOIS caminhos possíveis:
+    //   1. PATCH no campo "Resposta IA" — quando o Digital Pipeline do Kommo
+    //      tem regra "Quando campo muda → rodar Salesbot", esse PATCH SOZINHO
+    //      JÁ envia a mensagem ao paciente.
+    //   2. POST /salesbot/{id}/run — dispara o mesmo bot via REST.
+    //
+    // Originalmente o código fazia ambos por defesa, mas em contas com o
+    // trigger do Digital Pipeline ATIVO + endpoint /run retornando 200, isso
+    // entregava a resposta 2x ao paciente (bug observado em produção).
+    //
+    // Decisão: confiar SÓ no PATCH + Digital Pipeline. Requer que cada Unit
+    // tenha o gatilho configurado no Kommo (Digital Pipeline → "Quando o
+    // campo Resposta IA mudar → rodar Salesbot {salesbotId}"). É a config
+    // padrão recomendada e historicamente foi o caminho que sempre funcionou
+    // em contas com /run = 404.
     const t0Patch = performance.now();
     try {
       // Downgrade 4-byte emoji ANTES do envio. Kommo trunca a string no
@@ -1052,60 +1059,21 @@ export class KommoClient {
       wrapAxiosError(err, `runSalesbot:setField(${leadId}, field=${replyFieldId})`);
     }
 
-    const t0Run = performance.now();
-    try {
-      const { data } = await this.http.post(`/salesbot/${salesbotId}/run`, [
-        { bot_id: salesbotId, entity_type: 2, entity_id: leadId },
-      ]);
-      const runMs = Math.round(performance.now() - t0Run);
-      logger.warn(
-        { leadId, salesbotId, route: 'post_run' },
-        'runSalesbot: POST /salesbot/run retornou 200 — se o Digital Pipeline também dispara o bot ao mudar Resposta IA, o paciente vai receber a mensagem 2x',
-      );
-      await recorder?.step({
-        kind: 'KOMMO_ACTION',
-        title: `⚠️ POST /salesbot/${salesbotId}/run retornou 200 — risco de disparo duplo`,
-        payload: {
-          leadId,
-          salesbotId,
-          alerta:
-            'Se o Digital Pipeline também dispara este Salesbot ao mudar o campo, o paciente recebe a mensagem 2x. Considere desligar um dos gatilhos.',
-        },
-        latencyMs: runMs,
-      });
-      return { runApi: 'ok', data };
-    } catch (err) {
-      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
-      const runMs = Math.round(performance.now() - t0Run);
-      if (status === 404) {
-        // Conta não expõe o endpoint /run via REST. O trigger do Digital
-        // Pipeline cuida do disparo. Não é falha — é o caminho esperado.
-        logger.debug(
-          { leadId, salesbotId },
-          'runSalesbot: POST /run 404 (conta sem API). Confiando no Digital Pipeline trigger.',
-        );
-        await recorder?.step({
-          kind: 'KOMMO_ACTION',
-          title: '🔁 POST /salesbot/run = 404 (esperado nesta conta). Digital Pipeline cuida.',
-          payload: {
-            leadId,
-            salesbotId,
-            triggeredBy: 'field_change',
-            nota: 'Sua conta Kommo não expõe POST /salesbot/{id}/run. O envio acontece pelo gatilho do Digital Pipeline quando o campo "Resposta IA" muda.',
-          },
-          latencyMs: runMs,
-        });
-        return { runApi: 'unavailable_404', triggeredBy: 'field_change' };
-      }
-      const msg = err instanceof Error ? err.message : String(err);
-      await recorder?.step({
-        kind: 'ERROR',
-        title: `❌ POST /salesbot/run falhou (${status ?? 'sem status'}): ${msg}`,
-        payload: { leadId, salesbotId, status, error: msg },
-        latencyMs: runMs,
-      });
-      wrapAxiosError(err, `runSalesbot:run(${leadId}, bot=${salesbotId})`);
-    }
+    // PATCH foi o disparo. NÃO chamamos POST /salesbot/{id}/run pra evitar
+    // duplicação. Se uma conta NÃO tem o trigger do Digital Pipeline e a
+    // resposta nunca chega ao paciente, é sinal de config faltando no Kommo
+    // (não de bug aqui).
+    await recorder?.step({
+      kind: 'KOMMO_ACTION',
+      title: '✅ PATCH-only: Digital Pipeline aciona o Salesbot ao mudar o campo',
+      payload: {
+        leadId,
+        salesbotId,
+        triggeredBy: 'field_change',
+        nota: 'O envio depende do gatilho "Digital Pipeline → Quando o campo Resposta IA mudar → rodar Salesbot" configurado no Kommo desta conta.',
+      },
+    });
+    return { runApi: 'patch_only', triggeredBy: 'field_change', salesbotId };
   }
 
   /**
