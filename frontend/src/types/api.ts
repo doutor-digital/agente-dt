@@ -644,6 +644,7 @@ export type AgentConfigInput = {
 
 export type ActionKind =
   | 'add_tag'
+  | 'move_stage'
   | 'transfer_with_permission'
   | 'transfer_without_permission';
 
