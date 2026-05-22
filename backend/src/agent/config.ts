@@ -107,6 +107,54 @@ const DEFAULT_TOOLS: ToolConfig[] = [
       'NOTA INTERNA no Kommo pro SDR humano ver. Use quando transferir o lead ' +
       'pra um humano ou em momentos-chave (paciente quente, agendamento confirmado).',
   },
+  {
+    name: 'criar_tarefa',
+    enabled: true,
+    description:
+      'Cria uma tarefa no Kommo vinculada ao lead, com prazo e (opcional) ' +
+      'responsável. Use pra delegar follow-up ao SDR — ex: "ligar amanhã às ' +
+      '14h", "confirmar consulta em 2 dias". A tarefa não envia mensagem ao paciente.',
+  },
+  {
+    name: 'atribuir_responsavel',
+    enabled: true,
+    description:
+      'Define o usuário Kommo responsável pelo lead (transferência de dono). ' +
+      'Use quando o caso precisa de uma pessoa específica (ex: caso clínico ' +
+      '→ Dra. Ana). Combine com pausar_ia pra humano assumir a conversa.',
+  },
+  {
+    name: 'remover_tag',
+    enabled: true,
+    description:
+      'Remove uma tag específica do lead no Kommo. Use pra limpar classificações ' +
+      'antigas — ex: lead estava "Frio" e voltou engajado → remover "Frio". ' +
+      'Idempotente: remover tag inexistente é no-op.',
+  },
+  {
+    name: 'definir_valor_lead',
+    enabled: true,
+    description:
+      'Define o valor (price) do lead no Kommo. Use quando o paciente confirma ' +
+      'um procedimento/plano com preço conhecido. Alimenta as métricas de ' +
+      'pipeline em dinheiro no dashboard.',
+  },
+  {
+    name: 'fechar_lead',
+    enabled: true,
+    description:
+      'Fecha o lead como VENDA REALIZADA (won) ou VENDA PERDIDA (lost). Use ' +
+      'em momentos de encerramento explícito — paciente confirmou pagamento ' +
+      'OU desistiu definitivamente. Pra lost, pode passar lossReasonId.',
+  },
+  {
+    name: 'mover_funil',
+    enabled: true,
+    description:
+      'Move o lead pra OUTRO funil inteiro no Kommo (não apenas etapa). Use ' +
+      'quando muda o contexto — ex: lead que fechou venda volta com nova demanda ' +
+      '→ mover do funil "Captação" pro "Pós-venda".',
+  },
 ];
 
 const DEFAULT_WORKFLOW: WorkflowRule[] = [];

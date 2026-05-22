@@ -15,9 +15,11 @@ import type {
   FlaggedMessage,
   KnowledgeEntry,
   KommoFieldsResponse,
+  KommoLossReasonsResponse,
   KommoPipelinesResponse,
   KommoSalesbotsResponse,
   KommoTagsResponse,
+  KommoUsersResponse,
   KommoValidateResponse,
   LeadsBucket,
   LeadsBucketResponse,
@@ -340,6 +342,20 @@ export const api = {
   async kommoPipelines(unitId: string): Promise<KommoPipelinesResponse> {
     const { data } = await http.get<KommoPipelinesResponse>(
       `/units/${unitId}/kommo-pipelines`,
+      { timeout: 30_000 },
+    );
+    return data;
+  },
+  async kommoUsers(unitId: string): Promise<KommoUsersResponse> {
+    const { data } = await http.get<KommoUsersResponse>(
+      `/units/${unitId}/kommo-users`,
+      { timeout: 30_000 },
+    );
+    return data;
+  },
+  async kommoLossReasons(unitId: string): Promise<KommoLossReasonsResponse> {
+    const { data } = await http.get<KommoLossReasonsResponse>(
+      `/units/${unitId}/kommo-loss-reasons`,
       { timeout: 30_000 },
     );
     return data;

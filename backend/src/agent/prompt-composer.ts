@@ -411,13 +411,78 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
     case 'send_message': {
       const text = typeof params.text === 'string' ? params.text.trim() : '';
       if (!text) return 'enviar mensagem (texto não configurado)';
-      // Aspas triplas pro LLM identificar o bloco literal. Reforçamos a regra
-      // de "verbatim" — sem isso o LLM tende a parafrasear.
       return `ENVIE EXATAMENTE esta mensagem como sua resposta no turno corrente (reproduza palavra-por-palavra, sem reformular nem resumir; pode adicionar 1 emoji no fim se combinar com o tom):\n"""\n${text}\n"""`;
+    }
+    case 'create_task': {
+      const text = typeof params.text === 'string' ? params.text.trim() : '';
+      const deadlineMinutes =
+        typeof params.deadlineMinutes === 'number' ? params.deadlineMinutes : 0;
+      const userId =
+        typeof params.responsibleUserId === 'number' ? params.responsibleUserId : null;
+      const userName = typeof params.responsibleUserName === 'string' ? params.responsibleUserName : null;
+      if (!text || !deadlineMinutes) return 'criar tarefa (não configurada)';
+      const userPart = userId ? `, responsibleUserId=${userId}` : '';
+      const deadlineHuman = formatDeadline(deadlineMinutes);
+      const userHuman = userName ? ` — atribuída a ${userName}` : '';
+      return `chame criar_tarefa(leadId, "${text}", deadlineMinutes=${deadlineMinutes}${userPart}) — cria tarefa pro SDR no Kommo com prazo de ${deadlineHuman}${userHuman}. Silencioso pro paciente.`;
+    }
+    case 'assign_responsible': {
+      const userId = typeof params.userId === 'number' ? params.userId : null;
+      const userName = typeof params.userName === 'string' ? params.userName : null;
+      if (!userId) return 'atribuir responsável (não configurado)';
+      const label = userName ? ` (${userName})` : '';
+      return `chame atribuir_responsavel(leadId, ${userId}) — transfere a propriedade do lead pro usuário Kommo${label}.`;
+    }
+    case 'remove_tag': {
+      const tag = typeof params.tag === 'string' ? params.tag : '';
+      if (!tag) return 'remover tag (não configurada)';
+      return `chame remover_tag(leadId, "${tag}") — remove a tag "${tag}" do lead. Idempotente.`;
+    }
+    case 'set_lead_value': {
+      const price = typeof params.price === 'number' ? params.price : Number(params.price);
+      if (!Number.isFinite(price)) return 'definir valor (não configurado)';
+      return `chame definir_valor_lead(leadId, ${price}) — define o valor (price) do lead em R$ ${price}.`;
+    }
+    case 'mark_lead_status': {
+      const status = params.status === 'won' || params.status === 'lost' ? params.status : null;
+      const lossReasonId =
+        typeof params.lossReasonId === 'number' ? params.lossReasonId : null;
+      const lossReasonLabel =
+        typeof params.lossReasonLabel === 'string' ? params.lossReasonLabel : null;
+      if (!status) return 'fechar lead (status não configurado)';
+      if (status === 'won') {
+        return `chame fechar_lead(leadId, "won") — marca o lead como VENDA REALIZADA no Kommo.`;
+      }
+      const reasonPart = lossReasonId ? `, lossReasonId=${lossReasonId}` : '';
+      const reasonLabel = lossReasonLabel ? ` (motivo: ${lossReasonLabel})` : '';
+      return `chame fechar_lead(leadId, "lost"${reasonPart}) — marca o lead como VENDA PERDIDA${reasonLabel}.`;
+    }
+    case 'move_pipeline': {
+      const pipelineId =
+        typeof params.pipelineId === 'number' ? params.pipelineId : Number(params.pipelineId);
+      const pipelineLabel = typeof params.pipelineLabel === 'string' ? params.pipelineLabel : null;
+      const statusId = typeof params.statusId === 'number' ? params.statusId : null;
+      const statusLabel = typeof params.statusLabel === 'string' ? params.statusLabel : null;
+      if (!Number.isFinite(pipelineId) || pipelineId <= 0) return 'mover funil (não configurado)';
+      const statusPart = statusId ? `, ${statusId}` : '';
+      const label = [pipelineLabel, statusLabel].filter(Boolean).join(' → ');
+      const labelHuman = label ? ` — funil "${label}"` : '';
+      return `chame mover_funil(leadId, ${pipelineId}${statusPart}) — move o lead pro funil destino${labelHuman}.`;
     }
     default:
       return `executar ação "${step.kind}"`;
   }
+}
+
+/** Formata minutos como texto legível pro prompt. */
+function formatDeadline(minutes: number): string {
+  if (minutes < 60) return `${minutes}min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? '1 hora' : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return days === 1 ? '1 dia' : `${days} dias`;
+  const weeks = Math.floor(days / 7);
+  return weeks === 1 ? '1 semana' : `${weeks} semanas`;
 }
 
 /** Para uma UnitAction, devolve a string descrevendo TODAS as ações dela. */

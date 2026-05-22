@@ -600,6 +600,21 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Remove uma tag específica do lead. Kommo aceita o atalho
+   * `_embedded.tags_to_delete: [{ name }]` que remove sem mexer no resto.
+   * Idempotente: remover tag que não existe é no-op (Kommo retorna 200).
+   */
+  async removeTag(leadId: number, tag: string): Promise<void> {
+    try {
+      await this.http.patch(`/leads/${leadId}`, {
+        _embedded: { tags_to_delete: [{ name: tag }] },
+      });
+    } catch (err) {
+      wrapAxiosError(err, `removeTag(${leadId}, ${tag})`);
+    }
+  }
+
   async moveStage({ leadId, statusId, pipelineId }: MoveStageParams): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, {
@@ -608,6 +623,124 @@ export class KommoClient {
       });
     } catch (err) {
       wrapAxiosError(err, `moveStage(${leadId}, status=${statusId})`);
+    }
+  }
+
+  /** Define o responsável (usuário Kommo) pelo lead. */
+  async setLeadResponsible(leadId: number, userId: number): Promise<void> {
+    try {
+      await this.http.patch(`/leads/${leadId}`, { responsible_user_id: userId });
+    } catch (err) {
+      wrapAxiosError(err, `setLeadResponsible(${leadId}, user=${userId})`);
+    }
+  }
+
+  /** Define o valor (preço) do lead em reais inteiros (Kommo armazena number). */
+  async setLeadPrice(leadId: number, price: number): Promise<void> {
+    try {
+      await this.http.patch(`/leads/${leadId}`, { price });
+    } catch (err) {
+      wrapAxiosError(err, `setLeadPrice(${leadId}, price=${price})`);
+    }
+  }
+
+  /**
+   * Fecha o lead como WON ou LOST. Kommo trata isso via status_id =
+   * 142 (lost) ou 143 (won) — IDs fixos por convenção.
+   *
+   * `lossReasonId` é opcional pra LOST: identifica POR QUE perdeu (ex:
+   * "Sem orçamento", "Concorrente"). Os IDs vêm de /leads/loss_reasons.
+   */
+  async setLeadStatus(
+    leadId: number,
+    options: { won: boolean; lossReasonId?: number },
+  ): Promise<void> {
+    // IDs fixos da Kommo:
+    //   142 = SUCCESSFUL (Venda Realizada / Won)
+    //   143 = UNSUCCESSFUL (Venda Perdida / Lost)
+    const statusId = options.won ? 142 : 143;
+    const body: Record<string, unknown> = { status_id: statusId };
+    if (!options.won && options.lossReasonId) body.loss_reason_id = options.lossReasonId;
+    try {
+      await this.http.patch(`/leads/${leadId}`, body);
+    } catch (err) {
+      wrapAxiosError(err, `setLeadStatus(${leadId}, won=${options.won})`);
+    }
+  }
+
+  /**
+   * Move lead pra outro pipeline. Se `statusId` não vier, Kommo coloca no
+   * primeiro status do pipeline destino automaticamente.
+   */
+  async setLeadPipeline(
+    leadId: number,
+    pipelineId: number,
+    statusId?: number,
+  ): Promise<void> {
+    const body: Record<string, unknown> = { pipeline_id: pipelineId };
+    if (statusId) body.status_id = statusId;
+    try {
+      await this.http.patch(`/leads/${leadId}`, body);
+    } catch (err) {
+      wrapAxiosError(err, `setLeadPipeline(${leadId}, pipeline=${pipelineId})`);
+    }
+  }
+
+  /**
+   * Cria tarefa no Kommo vinculada ao lead. `completeAt` em unix seconds
+   * (Kommo usa segundos, não ms). `responsibleUserId` opcional — sem ele,
+   * herda do responsável do lead.
+   */
+  async createTask(args: {
+    leadId: number;
+    text: string;
+    completeAt: number;
+    responsibleUserId?: number;
+    taskTypeId?: number;
+  }): Promise<{ id?: number } | null> {
+    const body = [
+      {
+        entity_id: args.leadId,
+        entity_type: 'leads',
+        text: downgradeEmoji(args.text),
+        complete_till: args.completeAt,
+        ...(args.responsibleUserId ? { responsible_user_id: args.responsibleUserId } : {}),
+        ...(args.taskTypeId ? { task_type_id: args.taskTypeId } : {}),
+      },
+    ];
+    try {
+      const { data } = await this.http.post<{ _embedded?: { tasks?: Array<{ id: number }> } }>(
+        '/tasks',
+        body,
+      );
+      const id = data?._embedded?.tasks?.[0]?.id;
+      return id ? { id } : null;
+    } catch (err) {
+      wrapAxiosError(err, `createTask(${args.leadId})`);
+    }
+  }
+
+  /** Lista usuários da conta Kommo. Usado pelo picker de "responsável". */
+  async listUsers(): Promise<Array<{ id: number; name: string; email?: string }>> {
+    try {
+      const { data } = await this.http.get<{
+        _embedded?: { users?: Array<{ id: number; name: string; email?: string }> };
+      }>('/users', { params: { page: 1, limit: 250 } });
+      return data?._embedded?.users ?? [];
+    } catch (err) {
+      wrapAxiosError(err, 'listUsers');
+    }
+  }
+
+  /** Lista loss_reasons (motivos de perda) — usado pelo picker do fechar lead. */
+  async listLossReasons(): Promise<Array<{ id: number; name: string }>> {
+    try {
+      const { data } = await this.http.get<{
+        _embedded?: { loss_reasons?: Array<{ id: number; name: string }> };
+      }>('/leads/loss_reasons', { params: { page: 1, limit: 250 } });
+      return data?._embedded?.loss_reasons ?? [];
+    } catch (err) {
+      wrapAxiosError(err, 'listLossReasons');
     }
   }
 

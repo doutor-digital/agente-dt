@@ -19,15 +19,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
+  CircleDollarSign,
   FileText,
+  Flag,
+  GitBranch,
   Loader2,
   MessageCircle,
   Pencil,
   Plus,
   RefreshCw,
   Tag,
+  TagsIcon,
   Trash2,
+  UserCheck,
   UserCog,
   Workflow,
   X,
@@ -40,8 +46,10 @@ import { useToast } from '../context/ToastContext';
 import type {
   ActionKind,
   ActionStep,
+  KommoLossReasonsResponse,
   KommoPipelinesResponse,
   KommoTagsResponse,
+  KommoUsersResponse,
   UnitAction,
   UnitActionInput,
 } from '../types/api';
@@ -51,16 +59,32 @@ interface DraftStep {
   kind: ActionKind;
   /** add_tag */
   tags?: string[];
-  /** move_stage */
+  /** move_stage + move_pipeline */
   statusId?: number | null;
   pipelineId?: number | null;
   statusLabel?: string | null;
+  pipelineLabel?: string | null;
   /** transfer_* */
   includeSummary?: boolean;
   /** summarize_to_note */
   focusHint?: string;
   /** send_message */
   text?: string;
+  /** create_task */
+  deadlineMinutes?: number;
+  responsibleUserId?: number | null;
+  responsibleUserName?: string | null;
+  /** assign_responsible */
+  userId?: number | null;
+  userName?: string | null;
+  /** remove_tag */
+  singleTag?: string;
+  /** set_lead_value */
+  price?: number;
+  /** mark_lead_status */
+  status?: 'won' | 'lost';
+  lossReasonId?: number | null;
+  lossReasonLabel?: string | null;
 }
 
 interface DraftRule {
@@ -75,6 +99,12 @@ function defaultStep(kind: ActionKind): DraftStep {
   if (kind === 'move_stage') return { kind, statusId: null, pipelineId: null, statusLabel: null };
   if (kind === 'summarize_to_note') return { kind, focusHint: '' };
   if (kind === 'send_message') return { kind, text: '' };
+  if (kind === 'create_task') return { kind, text: '', deadlineMinutes: 60, responsibleUserId: null, responsibleUserName: null };
+  if (kind === 'assign_responsible') return { kind, userId: null, userName: null };
+  if (kind === 'remove_tag') return { kind, singleTag: '' };
+  if (kind === 'set_lead_value') return { kind, price: 0 };
+  if (kind === 'mark_lead_status') return { kind, status: 'won', lossReasonId: null, lossReasonLabel: null };
+  if (kind === 'move_pipeline') return { kind, pipelineId: null, pipelineLabel: null, statusId: null, statusLabel: null };
   return { kind, includeSummary: true };
 }
 
@@ -111,6 +141,46 @@ function stepFromAction(s: ActionStep): DraftStep {
   if (s.kind === 'send_message') {
     return { kind: s.kind, text: typeof params.text === 'string' ? params.text : '' };
   }
+  if (s.kind === 'create_task') {
+    return {
+      kind: s.kind,
+      text: typeof params.text === 'string' ? params.text : '',
+      deadlineMinutes: typeof params.deadlineMinutes === 'number' ? params.deadlineMinutes : 60,
+      responsibleUserId: typeof params.responsibleUserId === 'number' ? params.responsibleUserId : null,
+      responsibleUserName: typeof params.responsibleUserName === 'string' ? params.responsibleUserName : null,
+    };
+  }
+  if (s.kind === 'assign_responsible') {
+    return {
+      kind: s.kind,
+      userId: typeof params.userId === 'number' ? params.userId : null,
+      userName: typeof params.userName === 'string' ? params.userName : null,
+    };
+  }
+  if (s.kind === 'remove_tag') {
+    return { kind: s.kind, singleTag: typeof params.tag === 'string' ? params.tag : '' };
+  }
+  if (s.kind === 'set_lead_value') {
+    return { kind: s.kind, price: typeof params.price === 'number' ? params.price : Number(params.price) || 0 };
+  }
+  if (s.kind === 'mark_lead_status') {
+    const status: 'won' | 'lost' = params.status === 'lost' ? 'lost' : 'won';
+    return {
+      kind: s.kind,
+      status,
+      lossReasonId: typeof params.lossReasonId === 'number' ? params.lossReasonId : null,
+      lossReasonLabel: typeof params.lossReasonLabel === 'string' ? params.lossReasonLabel : null,
+    };
+  }
+  if (s.kind === 'move_pipeline') {
+    return {
+      kind: s.kind,
+      pipelineId: typeof params.pipelineId === 'number' ? params.pipelineId : null,
+      pipelineLabel: typeof params.pipelineLabel === 'string' ? params.pipelineLabel : null,
+      statusId: typeof params.statusId === 'number' ? params.statusId : null,
+      statusLabel: typeof params.statusLabel === 'string' ? params.statusLabel : null,
+    };
+  }
   return { kind: s.kind, includeSummary: params.includeSummary !== false };
 }
 
@@ -139,6 +209,41 @@ function stepToParams(s: DraftStep): Record<string, unknown> {
   if (s.kind === 'send_message') {
     return { text: (s.text ?? '').trim() };
   }
+  if (s.kind === 'create_task') {
+    return {
+      text: (s.text ?? '').trim(),
+      deadlineMinutes: s.deadlineMinutes ?? 60,
+      ...(s.responsibleUserId ? { responsibleUserId: s.responsibleUserId } : {}),
+      ...(s.responsibleUserName ? { responsibleUserName: s.responsibleUserName } : {}),
+    };
+  }
+  if (s.kind === 'assign_responsible') {
+    return {
+      userId: s.userId ?? 0,
+      ...(s.userName ? { userName: s.userName } : {}),
+    };
+  }
+  if (s.kind === 'remove_tag') {
+    return { tag: (s.singleTag ?? '').trim() };
+  }
+  if (s.kind === 'set_lead_value') {
+    return { price: typeof s.price === 'number' ? s.price : Number(s.price) || 0 };
+  }
+  if (s.kind === 'mark_lead_status') {
+    return {
+      status: s.status ?? 'won',
+      ...(s.lossReasonId ? { lossReasonId: s.lossReasonId } : {}),
+      ...(s.lossReasonLabel ? { lossReasonLabel: s.lossReasonLabel } : {}),
+    };
+  }
+  if (s.kind === 'move_pipeline') {
+    return {
+      pipelineId: s.pipelineId ?? 0,
+      ...(s.pipelineLabel ? { pipelineLabel: s.pipelineLabel } : {}),
+      ...(s.statusId ? { statusId: s.statusId } : {}),
+      ...(s.statusLabel ? { statusLabel: s.statusLabel } : {}),
+    };
+  }
   return { includeSummary: s.includeSummary !== false };
 }
 
@@ -155,6 +260,13 @@ function isStepValid(s: DraftStep): boolean {
   if (s.kind === 'add_tag') return (s.tags?.length ?? 0) > 0;
   if (s.kind === 'move_stage') return !!s.statusId && s.statusId > 0;
   if (s.kind === 'send_message') return !!s.text && s.text.trim().length > 0;
+  if (s.kind === 'create_task')
+    return !!s.text && s.text.trim().length >= 3 && !!s.deadlineMinutes && s.deadlineMinutes > 0;
+  if (s.kind === 'assign_responsible') return !!s.userId && s.userId > 0;
+  if (s.kind === 'remove_tag') return !!s.singleTag && s.singleTag.trim().length > 0;
+  if (s.kind === 'set_lead_value') return typeof s.price === 'number' && s.price >= 0;
+  if (s.kind === 'mark_lead_status') return s.status === 'won' || s.status === 'lost';
+  if (s.kind === 'move_pipeline') return !!s.pipelineId && s.pipelineId > 0;
   return true; // transfer_* e summarize_to_note são válidos sem params extras
 }
 
@@ -186,6 +298,36 @@ const KIND_LABEL: Record<ActionKind, { label: string; icon: typeof Tag; color: s
     label: 'Enviar mensagem',
     icon: MessageCircle,
     color: 'text-cyan-300',
+  },
+  create_task: {
+    label: 'Criar tarefa pro SDR',
+    icon: CalendarClock,
+    color: 'text-orange-300',
+  },
+  assign_responsible: {
+    label: 'Atribuir responsável',
+    icon: UserCheck,
+    color: 'text-teal-300',
+  },
+  remove_tag: {
+    label: 'Remover tag',
+    icon: TagsIcon,
+    color: 'text-stone-300',
+  },
+  set_lead_value: {
+    label: 'Definir valor (R$)',
+    icon: CircleDollarSign,
+    color: 'text-lime-300',
+  },
+  mark_lead_status: {
+    label: 'Fechar lead (Won/Lost)',
+    icon: Flag,
+    color: 'text-fuchsia-300',
+  },
+  move_pipeline: {
+    label: 'Mover de funil',
+    icon: GitBranch,
+    color: 'text-indigo-300',
   },
 };
 
@@ -491,6 +633,8 @@ function ActionEditor({
   const [saving, setSaving] = useState(false);
   const [tagsData, setTagsData] = useState<KommoTagsResponse | null>(null);
   const [pipelinesData, setPipelinesData] = useState<KommoPipelinesResponse | null>(null);
+  const [usersData, setUsersData] = useState<KommoUsersResponse | null>(null);
+  const [lossReasonsData, setLossReasonsData] = useState<KommoLossReasonsResponse | null>(null);
   const [tagsError, setTagsError] = useState<string | null>(null);
   const [pipelinesError, setPipelinesError] = useState<string | null>(null);
   const [loadingKommo, setLoadingKommo] = useState(false);
@@ -520,11 +664,12 @@ function ActionEditor({
     Promise.all([
       api.kommoTags(unitId).catch((err) => ({ _err: err } as const)),
       api.kommoPipelines(unitId).catch((err) => ({ _err: err } as const)),
-    ]).then(([t, p]) => {
+      api.kommoUsers(unitId).catch((err) => ({ _err: err } as const)),
+      api.kommoLossReasons(unitId).catch((err) => ({ _err: err } as const)),
+    ]).then(([t, p, u, lr]) => {
       if (!alive) return;
-      // Diagnóstico — fica no console pra debug em produção.
       // eslint-disable-next-line no-console
-      console.warn('[AcoesPanel] kommo fetch', { unitId, tags: t, pipelines: p });
+      console.warn('[AcoesPanel] kommo fetch', { unitId, tags: t, pipelines: p, users: u, lossReasons: lr });
       if ('_err' in t) {
         const e = t._err as { response?: { data?: { message?: string; error?: string } } };
         setTagsError(friendlyError(e?.response?.data?.message ?? e?.response?.data?.error));
@@ -537,6 +682,9 @@ function ActionEditor({
       } else {
         setPipelinesData(p);
       }
+      // Users e lossReasons — erro silencioso (campos opcionais nas ações).
+      if (!('_err' in u)) setUsersData(u);
+      if (!('_err' in lr)) setLossReasonsData(lr);
       setLoadingKommo(false);
     });
     return () => {
@@ -681,6 +829,8 @@ function ActionEditor({
                   }}
                   tagsData={tagsData}
                   pipelinesForSelect={pipelinesForSelect}
+                  usersData={usersData}
+                  lossReasonsData={lossReasonsData}
                   loadingKommo={loadingKommo}
                   tagsError={tagsError}
                   pipelinesError={pipelinesError}
@@ -1027,6 +1177,8 @@ function StepEditor({
   onRemove,
   tagsData,
   pipelinesForSelect,
+  usersData,
+  lossReasonsData,
   loadingKommo,
   tagsError,
   pipelinesError,
@@ -1038,6 +1190,8 @@ function StepEditor({
   onRemove: () => void;
   tagsData: KommoTagsResponse | null;
   pipelinesForSelect: NonNullable<KommoPipelinesResponse['pipelines']>;
+  usersData: KommoUsersResponse | null;
+  lossReasonsData: KommoLossReasonsResponse | null;
   loadingKommo: boolean;
   tagsError: string | null;
   pipelinesError: string | null;
@@ -1161,6 +1315,446 @@ function StepEditor({
           </div>
         </div>
       )}
+      {step.kind === 'create_task' && (
+        <div className="space-y-2">
+          <div className="space-y-1.5">
+            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+              Tarefa (o que o SDR vai fazer)
+            </label>
+            <input
+              type="text"
+              value={step.text ?? ''}
+              onChange={(e) => onChange({ ...step, text: e.target.value })}
+              maxLength={500}
+              placeholder="ex: Ligar pro paciente confirmando consulta"
+              className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none transition"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+              Prazo
+            </label>
+            <select
+              value={step.deadlineMinutes ?? 60}
+              onChange={(e) => onChange({ ...step, deadlineMinutes: Number(e.target.value) })}
+              className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-1.5 text-xs text-zinc-200 outline-none transition"
+            >
+              <option value={30}>Em 30 minutos</option>
+              <option value={60}>Em 1 hora</option>
+              <option value={180}>Em 3 horas</option>
+              <option value={1440}>Amanhã (24h)</option>
+              <option value={2880}>Em 2 dias</option>
+              <option value={4320}>Em 3 dias</option>
+              <option value={10080}>Em 1 semana</option>
+              <option value={20160}>Em 2 semanas</option>
+            </select>
+          </div>
+          <UserPickerInline
+            label="Responsável (opcional)"
+            usersData={usersData}
+            loading={loadingKommo}
+            selectedId={step.responsibleUserId ?? null}
+            onChange={(id, name) =>
+              onChange({ ...step, responsibleUserId: id, responsibleUserName: name })
+            }
+          />
+        </div>
+      )}
+      {step.kind === 'assign_responsible' && (
+        <UserPickerInline
+          label="Atribuir a"
+          usersData={usersData}
+          loading={loadingKommo}
+          selectedId={step.userId ?? null}
+          onChange={(id, name) => onChange({ ...step, userId: id, userName: name })}
+        />
+      )}
+      {step.kind === 'remove_tag' && (
+        <SingleTagPicker
+          selected={step.singleTag ?? ''}
+          onChange={(tag) => onChange({ ...step, singleTag: tag })}
+          available={tagsData?.tags ?? []}
+          loading={loadingKommo}
+          error={tagsError}
+        />
+      )}
+      {step.kind === 'set_lead_value' && (
+        <div className="space-y-1.5">
+          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+            Valor do lead (R$)
+          </label>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-xs font-mono">
+              R$
+            </span>
+            <input
+              type="number"
+              min={0}
+              max={10_000_000}
+              step={1}
+              value={step.price ?? 0}
+              onChange={(e) => onChange({ ...step, price: Number(e.target.value) })}
+              className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md pl-9 pr-3 py-1.5 text-xs text-zinc-200 font-mono outline-none transition"
+            />
+          </div>
+          <p className="text-[10px] text-zinc-600">
+            Vai pro campo "price" do lead no Kommo. Alimenta as métricas do dashboard.
+          </p>
+        </div>
+      )}
+      {step.kind === 'mark_lead_status' && (
+        <div className="space-y-2">
+          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+            Fechar como
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                onChange({ ...step, status: 'won', lossReasonId: null, lossReasonLabel: null })
+              }
+              className={clsx(
+                'p-2.5 rounded-md text-xs font-medium transition border text-left',
+                step.status === 'won'
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                  : 'border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:border-zinc-700',
+              )}
+            >
+              ✓ Venda realizada
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ ...step, status: 'lost' })}
+              className={clsx(
+                'p-2.5 rounded-md text-xs font-medium transition border text-left',
+                step.status === 'lost'
+                  ? 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+                  : 'border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:border-zinc-700',
+              )}
+            >
+              ✗ Venda perdida
+            </button>
+          </div>
+          {step.status === 'lost' && (
+            <LossReasonPicker
+              lossReasonsData={lossReasonsData}
+              loading={loadingKommo}
+              selectedId={step.lossReasonId ?? null}
+              onChange={(id, name) =>
+                onChange({ ...step, lossReasonId: id, lossReasonLabel: name })
+              }
+            />
+          )}
+        </div>
+      )}
+      {step.kind === 'move_pipeline' && (
+        <PipelinePicker
+          pipelines={pipelinesForSelect}
+          loading={loadingKommo}
+          error={pipelinesError}
+          selectedPipelineId={step.pipelineId ?? null}
+          selectedStatusId={step.statusId ?? null}
+          onChange={(pipelineId, pipelineLabel, statusId, statusLabel) =>
+            onChange({ ...step, pipelineId, pipelineLabel, statusId, statusLabel })
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Picker reusável: usuário do Kommo (pra create_task + assign_responsible).
+// ---------------------------------------------------------------------------
+
+function UserPickerInline({
+  label,
+  usersData,
+  loading,
+  selectedId,
+  onChange,
+}: {
+  label: string;
+  usersData: KommoUsersResponse | null;
+  loading: boolean;
+  selectedId: number | null;
+  onChange: (id: number | null, name: string | null) => void;
+}) {
+  const users = usersData?.users ?? [];
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+        {label}
+      </label>
+      {loading && !usersData ? (
+        <div className="text-[11px] text-zinc-500 inline-flex items-center gap-2">
+          <Loader2 className="animate-spin" size={11} />
+          Carregando usuários…
+        </div>
+      ) : users.length === 0 ? (
+        <div className="text-[11px] text-zinc-500">Nenhum usuário Kommo encontrado.</div>
+      ) : (
+        <select
+          value={selectedId ?? ''}
+          onChange={(e) => {
+            const id = e.target.value ? Number(e.target.value) : null;
+            const u = users.find((x) => x.id === id);
+            onChange(id, u?.name ?? null);
+          }}
+          className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-1.5 text-xs text-zinc-200 outline-none transition"
+        >
+          <option value="">— sem responsável fixo —</option>
+          {users.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.name}
+              {u.email ? ` (${u.email})` : ''}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Picker reusável: motivo de perda (loss_reason).
+// ---------------------------------------------------------------------------
+
+function LossReasonPicker({
+  lossReasonsData,
+  loading,
+  selectedId,
+  onChange,
+}: {
+  lossReasonsData: KommoLossReasonsResponse | null;
+  loading: boolean;
+  selectedId: number | null;
+  onChange: (id: number | null, name: string | null) => void;
+}) {
+  const reasons = lossReasonsData?.reasons ?? [];
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+        Motivo da perda (opcional)
+      </label>
+      {loading && !lossReasonsData ? (
+        <div className="text-[11px] text-zinc-500 inline-flex items-center gap-2">
+          <Loader2 className="animate-spin" size={11} />
+          Carregando motivos…
+        </div>
+      ) : reasons.length === 0 ? (
+        <div className="text-[11px] text-zinc-600 italic">
+          Nenhum motivo cadastrado no Kommo. Você ainda pode fechar como Perdida sem motivo.
+        </div>
+      ) : (
+        <select
+          value={selectedId ?? ''}
+          onChange={(e) => {
+            const id = e.target.value ? Number(e.target.value) : null;
+            const r = reasons.find((x) => x.id === id);
+            onChange(id, r?.name ?? null);
+          }}
+          className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-1.5 text-xs text-zinc-200 outline-none transition"
+        >
+          <option value="">— sem motivo específico —</option>
+          {reasons.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Picker reusável: single-tag (pra remove_tag).
+// ---------------------------------------------------------------------------
+
+function SingleTagPicker({
+  selected,
+  onChange,
+  available,
+  loading,
+  error,
+}: {
+  selected: string;
+  onChange: (tag: string) => void;
+  available: Array<{ id: number; name: string; color: string | null }>;
+  loading: boolean;
+  error: string | null;
+}) {
+  const [query, setQuery] = useState('');
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return available;
+    return available.filter((t) => t.name.toLowerCase().includes(q));
+  }, [available, query]);
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+        Tag a remover
+      </label>
+      {available.length > 5 && (
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={`Buscar entre ${available.length} tags…`}
+          className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none transition"
+        />
+      )}
+      <div className="rounded-md border border-zinc-800 bg-zinc-950/40 max-h-44 overflow-y-auto">
+        {loading && (
+          <div className="px-3 py-2 text-[11px] text-zinc-500 inline-flex items-center gap-2">
+            <Loader2 className="animate-spin" size={11} />
+            Carregando tags…
+          </div>
+        )}
+        {error && (
+          <div className="px-3 py-2 text-[11px] text-amber-300/80">⚠ {error}</div>
+        )}
+        {!loading && !error && filtered.length === 0 && (
+          <div className="px-3 py-2 text-[11px] text-zinc-500">
+            {available.length === 0 ? 'Nenhuma tag cadastrada.' : `Nenhuma bate com "${query}".`}
+          </div>
+        )}
+        {!loading && !error && filtered.length > 0 && (
+          <ul className="divide-y divide-zinc-800/40">
+            {filtered.map((t) => {
+              const checked = selected.toLowerCase() === t.name.toLowerCase();
+              return (
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    onClick={() => onChange(t.name)}
+                    className={clsx(
+                      'w-full text-left flex items-center gap-2 px-3 py-1.5 text-xs transition',
+                      checked
+                        ? 'bg-stone-500/10 text-stone-100'
+                        : 'text-zinc-300 hover:bg-zinc-900/50',
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      checked={checked}
+                      readOnly
+                      className="accent-stone-400 pointer-events-none"
+                    />
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: t.color ?? '#52525b' }}
+                    />
+                    <span className="flex-1 truncate">{t.name}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+      <input
+        type="text"
+        value={selected}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="ou digite nome exato"
+        className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-700 font-mono outline-none transition"
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Picker reusável: pipeline+status agrupado (pra move_pipeline).
+// ---------------------------------------------------------------------------
+
+function PipelinePicker({
+  pipelines,
+  loading,
+  error,
+  selectedPipelineId,
+  selectedStatusId,
+  onChange,
+}: {
+  pipelines: NonNullable<KommoPipelinesResponse['pipelines']>;
+  loading: boolean;
+  error: string | null;
+  selectedPipelineId: number | null;
+  selectedStatusId: number | null;
+  onChange: (
+    pipelineId: number | null,
+    pipelineLabel: string | null,
+    statusId: number | null,
+    statusLabel: string | null,
+  ) => void;
+}) {
+  const selectedPipeline = pipelines.find((p) => p.id === selectedPipelineId);
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+        Funil destino
+      </label>
+      {loading && (
+        <div className="text-[11px] text-zinc-500 inline-flex items-center gap-2">
+          <Loader2 className="animate-spin" size={11} />
+          Carregando funis…
+        </div>
+      )}
+      {error && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] text-amber-300/90">
+          ⚠ {error}
+        </div>
+      )}
+      {!loading && !error && (
+        <>
+          <select
+            value={selectedPipelineId ?? ''}
+            onChange={(e) => {
+              const id = e.target.value ? Number(e.target.value) : null;
+              const p = pipelines.find((x) => x.id === id);
+              onChange(id, p?.name ?? null, null, null);
+            }}
+            className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-1.5 text-sm text-zinc-200 outline-none transition"
+          >
+            <option value="">— escolha um funil —</option>
+            {pipelines.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.isMain ? ' (principal)' : ''}
+              </option>
+            ))}
+          </select>
+          {selectedPipeline && (
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block mt-2 mb-1">
+                Etapa inicial (opcional)
+              </label>
+              <select
+                value={selectedStatusId ?? ''}
+                onChange={(e) => {
+                  const id = e.target.value ? Number(e.target.value) : null;
+                  const s = selectedPipeline.statuses.find((x) => x.id === id);
+                  onChange(
+                    selectedPipeline.id,
+                    selectedPipeline.name,
+                    id,
+                    s ? `${selectedPipeline.name} → ${s.name}` : null,
+                  );
+                }}
+                className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-1.5 text-sm text-zinc-200 outline-none transition"
+              >
+                <option value="">— primeira etapa (padrão) —</option>
+                {selectedPipeline.statuses.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1209,6 +1803,68 @@ function StepSummary({ step }: { step: ActionStep }) {
           <span className="truncate">"{params.text.slice(0, 60)}{params.text.length > 60 ? '…' : ''}"</span>
         </span>
       )}
+      {step.kind === 'create_task' && typeof params.text === 'string' && (
+        <>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-200 text-[11px] ring-1 ring-orange-500/30 italic max-w-full" title={params.text}>
+            <span className="truncate">"{params.text.slice(0, 50)}{params.text.length > 50 ? '…' : ''}"</span>
+          </span>
+          {typeof params.deadlineMinutes === 'number' && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-300 text-[11px] ring-1 ring-orange-500/20 font-mono">
+              {humanDeadline(params.deadlineMinutes)}
+            </span>
+          )}
+          {typeof params.responsibleUserName === 'string' && params.responsibleUserName && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-zinc-700/50 text-zinc-300 text-[11px] ring-1 ring-zinc-600/40">
+              @{params.responsibleUserName}
+            </span>
+          )}
+        </>
+      )}
+      {step.kind === 'assign_responsible' && typeof params.userName === 'string' && params.userName && (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-200 text-[11px] ring-1 ring-teal-500/30">
+          → {params.userName}
+        </span>
+      )}
+      {step.kind === 'remove_tag' && typeof params.tag === 'string' && params.tag && (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-stone-500/15 text-stone-200 text-[11px] ring-1 ring-stone-500/30 font-mono line-through">
+          #{params.tag}
+        </span>
+      )}
+      {step.kind === 'set_lead_value' && typeof params.price === 'number' && (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-lime-500/15 text-lime-200 text-[11px] ring-1 ring-lime-500/30 font-mono">
+          R$ {params.price.toLocaleString('pt-BR')}
+        </span>
+      )}
+      {step.kind === 'mark_lead_status' && (
+        <span
+          className={clsx(
+            'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] ring-1',
+            params.status === 'won'
+              ? 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30'
+              : 'bg-rose-500/15 text-rose-200 ring-rose-500/30',
+          )}
+        >
+          {params.status === 'won' ? '✓ Realizada' : '✗ Perdida'}
+          {params.status === 'lost' && typeof params.lossReasonLabel === 'string' && params.lossReasonLabel
+            ? ` (${params.lossReasonLabel})`
+            : ''}
+        </span>
+      )}
+      {step.kind === 'move_pipeline' && typeof params.pipelineLabel === 'string' && params.pipelineLabel && (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-200 text-[11px] ring-1 ring-indigo-500/30">
+          → {params.pipelineLabel}
+          {typeof params.statusLabel === 'string' && params.statusLabel ? ` (${params.statusLabel})` : ''}
+        </span>
+      )}
     </div>
   );
+}
+
+/** Formatador humano de minutos pra rótulo curto (chip do card). */
+function humanDeadline(m: number): string {
+  if (m < 60) return `${m}min`;
+  if (m < 1440) return `${Math.floor(m / 60)}h`;
+  const d = Math.floor(m / 1440);
+  if (d < 7) return `${d}d`;
+  return `${Math.floor(d / 7)}sem`;
 }

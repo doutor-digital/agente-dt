@@ -700,6 +700,53 @@ export async function kommoPipelinesHandler(req: Request, res: Response): Promis
 }
 
 // ---------------------------------------------------------------------------
+// Pickers extras pras novas Action kinds: usuários e motivos de perda.
+// Mesmo padrão dos endpoints acima (gate de credencial + erro estruturado).
+// ---------------------------------------------------------------------------
+
+export async function kommoUsersHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(400).json({ error: 'kommo_not_configured' });
+    return;
+  }
+  try {
+    const client = createKommoClient(unit);
+    const users = await client.listUsers();
+    res.json({ ok: true, users: users.map((u) => ({ id: u.id, name: u.name, email: u.email ?? null })) });
+  } catch (err) {
+    logger.warn({ err, id }, 'kommo-users falhou');
+    res.status(kommoErrorStatus(err)).json(kommoErrorPayload(err));
+  }
+}
+
+export async function kommoLossReasonsHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(400).json({ error: 'kommo_not_configured' });
+    return;
+  }
+  try {
+    const client = createKommoClient(unit);
+    const reasons = await client.listLossReasons();
+    res.json({ ok: true, reasons });
+  } catch (err) {
+    logger.warn({ err, id }, 'kommo-loss-reasons falhou');
+    res.status(kommoErrorStatus(err)).json(kommoErrorPayload(err));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers — extrai detalhes do erro do Kommo para devolver ao front.
 // O front precisa do `kommoBody` pra exibir "Authorization required", "Account
 // blocked", etc. Sem isso, só vê "Request failed with status code 401".

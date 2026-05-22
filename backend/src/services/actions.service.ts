@@ -24,7 +24,13 @@ export type ActionKind =
   | 'transfer_with_permission'
   | 'transfer_without_permission'
   | 'summarize_to_note'
-  | 'send_message';
+  | 'send_message'
+  | 'create_task'
+  | 'assign_responsible'
+  | 'remove_tag'
+  | 'set_lead_value'
+  | 'mark_lead_status'
+  | 'move_pipeline';
 
 export interface AddTagParams {
   tags: string[];
@@ -51,12 +57,54 @@ export interface SendMessageParams {
   text: string;
 }
 
+export interface CreateTaskParams {
+  text: string;
+  /** Minutos a partir de "agora" pro deadline. Ex: 1440 = 1 dia. */
+  deadlineMinutes: number;
+  responsibleUserId?: number;
+  responsibleUserName?: string;
+}
+
+export interface AssignResponsibleParams {
+  userId: number;
+  userName?: string;
+}
+
+export interface RemoveTagParams {
+  /** Apenas 1 tag por step (consistente com o tool schema). */
+  tag: string;
+}
+
+export interface SetLeadValueParams {
+  /** Preço em reais (number). 1500 = R$1500,00. */
+  price: number;
+}
+
+export interface MarkLeadStatusParams {
+  status: 'won' | 'lost';
+  lossReasonId?: number;
+  lossReasonLabel?: string;
+}
+
+export interface MovePipelineParams {
+  pipelineId: number;
+  pipelineLabel?: string;
+  statusId?: number;
+  statusLabel?: string;
+}
+
 export type ActionParams =
   | AddTagParams
   | MoveStageParams
   | TransferParams
   | SummarizeToNoteParams
   | SendMessageParams
+  | CreateTaskParams
+  | AssignResponsibleParams
+  | RemoveTagParams
+  | SetLeadValueParams
+  | MarkLeadStatusParams
+  | MovePipelineParams
   | Record<string, never>;
 
 /** Uma ação dentro de uma regra (array element). */

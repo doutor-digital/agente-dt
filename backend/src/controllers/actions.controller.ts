@@ -26,6 +26,12 @@ const ACTION_KINDS: ActionKind[] = [
   'transfer_without_permission',
   'summarize_to_note',
   'send_message',
+  'create_task',
+  'assign_responsible',
+  'remove_tag',
+  'set_lead_value',
+  'mark_lead_status',
+  'move_pipeline',
 ];
 
 // Params validators por kind.
@@ -46,6 +52,33 @@ const summarizeParams = z.object({
 const sendMessageParams = z.object({
   text: z.string().min(1, 'mensagem vazia').max(2000),
 });
+const createTaskParams = z.object({
+  text: z.string().min(3).max(500),
+  deadlineMinutes: z.coerce.number().int().positive().max(60 * 24 * 30),
+  responsibleUserId: z.coerce.number().int().positive().optional(),
+  responsibleUserName: z.string().max(120).optional(),
+});
+const assignResponsibleParams = z.object({
+  userId: z.coerce.number().int().positive(),
+  userName: z.string().max(120).optional(),
+});
+const removeTagParams = z.object({
+  tag: z.string().min(1).max(80),
+});
+const setLeadValueParams = z.object({
+  price: z.coerce.number().nonnegative().max(10_000_000),
+});
+const markLeadStatusParams = z.object({
+  status: z.enum(['won', 'lost']),
+  lossReasonId: z.coerce.number().int().positive().optional(),
+  lossReasonLabel: z.string().max(120).optional(),
+});
+const movePipelineParams = z.object({
+  pipelineId: z.coerce.number().int().positive(),
+  pipelineLabel: z.string().max(120).optional(),
+  statusId: z.coerce.number().int().positive().optional(),
+  statusLabel: z.string().max(120).optional(),
+});
 
 function validateActionStep(step: { kind: string; params: unknown }, ctx: z.RefinementCtx, idx: number) {
   const path: (string | number)[] = ['actions', idx, 'params'];
@@ -64,6 +97,24 @@ function validateActionStep(step: { kind: string; params: unknown }, ctx: z.Refi
   } else if (step.kind === 'send_message') {
     const r = sendMessageParams.safeParse(step.params);
     if (!r.success) ctx.addIssue({ code: 'custom', path, message: `send_message exige { text: string } não vazio (até 2000 chars)` });
+  } else if (step.kind === 'create_task') {
+    const r = createTaskParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `create_task exige { text, deadlineMinutes } — ${r.error.message}` });
+  } else if (step.kind === 'assign_responsible') {
+    const r = assignResponsibleParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `assign_responsible exige { userId } — ${r.error.message}` });
+  } else if (step.kind === 'remove_tag') {
+    const r = removeTagParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `remove_tag exige { tag: string }` });
+  } else if (step.kind === 'set_lead_value') {
+    const r = setLeadValueParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `set_lead_value exige { price: number >= 0 }` });
+  } else if (step.kind === 'mark_lead_status') {
+    const r = markLeadStatusParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `mark_lead_status exige { status: 'won'|'lost' }` });
+  } else if (step.kind === 'move_pipeline') {
+    const r = movePipelineParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `move_pipeline exige { pipelineId: number }` });
   }
 }
 

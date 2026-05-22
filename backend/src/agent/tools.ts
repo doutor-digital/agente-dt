@@ -63,6 +63,36 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     'caso clínico delicado, paciente quente pedindo orçamento) pra que o SDR ' +
     'pegue o lead com contexto pronto. Idempotente em termos lógicos, mas ' +
     'cria uma nota nova a cada chamada — chame só 1x por transição.',
+  criar_tarefa:
+    'Cria uma TAREFA no Kommo vinculada ao lead, com prazo e (opcional) ' +
+    'usuário responsável. Use pra delegar follow-up ao SDR humano (ex: "ligar ' +
+    'amanhã às 14h", "confirmar consulta em 2 dias"). A tarefa aparece no ' +
+    'painel de tarefas do Kommo do operador. Não envia mensagem ao paciente.',
+  atribuir_responsavel:
+    'Define qual usuário do Kommo é o RESPONSÁVEL pelo lead (transferência ' +
+    'de propriedade). Use quando o caso precisa de uma pessoa específica ' +
+    '(ex: caso clínico → Dra. Ana; agendamento padrão → Equipe Comercial). ' +
+    'Combine com pausar_ia se quiser que o humano assuma a conversa.',
+  remover_tag:
+    'Remove uma tag específica do lead no Kommo. Use pra limpar classificações ' +
+    'antigas que não se aplicam mais (ex: lead estava "Frio", voltou ' +
+    'engajado → remover "Frio" e aplicar "Quente"). Idempotente: remover ' +
+    'tag inexistente é no-op.',
+  definir_valor_lead:
+    'Define o VALOR (preço, em reais) do lead no Kommo — campo nativo "price" ' +
+    'do card. Use quando o paciente confirma um procedimento/plano com ' +
+    'preço conhecido (ex: avaliação R$200, cirurgia R$5000). Esse valor ' +
+    'alimenta as métricas de pipeline em dinheiro no dashboard.',
+  fechar_lead:
+    'FECHA o lead formalmente como VENDA REALIZADA (won) ou VENDA PERDIDA ' +
+    '(lost). Use só em momentos de encerramento explícito: paciente confirmou ' +
+    'pagamento (won) ou desistiu definitivamente (lost). Pra LOST, pode ' +
+    'passar o motivo (lossReasonId) se conhecido.',
+  mover_funil:
+    'Move o lead pra OUTRO FUNIL inteiro do Kommo (não apenas etapa). Use ' +
+    'quando muda o contexto do lead — ex: lead que fechou primeira venda ' +
+    'volta com nova demanda → move do funil "Captação" pro "Pós-venda". ' +
+    'Se não passar statusId, Kommo coloca no primeiro status do funil destino.',
 };
 
 // ---------------------------------------------------------------------------
@@ -319,6 +349,290 @@ export function buildTools({
     },
   });
 
+  // -------------------------------------------------------------------------
+  // criar_tarefa — POST /tasks no Kommo, vinculado ao lead.
+  // -------------------------------------------------------------------------
+  const criarTarefaSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    text: z.string().min(3).max(500).describe('Texto da tarefa (o que fazer).'),
+    deadlineMinutes: z
+      .number()
+      .int()
+      .positive()
+      .max(60 * 24 * 30) // 30 dias
+      .describe(
+        'Quantos minutos a partir de agora pro deadline. Ex: 60=1h, 1440=1 dia, ' +
+          '10080=1 semana. A tarefa aparece pro operador com esse prazo.',
+      ),
+    responsibleUserId: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('ID do usuário Kommo responsável. Se omitido, herda do lead.'),
+  });
+  const criar_tarefa = new DynamicStructuredTool({
+    name: 'criar_tarefa',
+    description: desc('criar_tarefa'),
+    schema: criarTarefaSchema,
+    func: async ({ leadId, text, deadlineMinutes, responsibleUserId }) => {
+      const t0 = performance.now();
+      const completeAt = Math.floor(Date.now() / 1000) + deadlineMinutes * 60;
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: criar tarefa pro lead ${leadId} ("${text.slice(0, 50)}")`,
+        payload: { leadId, text, deadlineMinutes, responsibleUserId: responsibleUserId ?? null, completeAt },
+      });
+      try {
+        const result = await kommo.createTask({ leadId, text, completeAt, responsibleUserId });
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Tarefa criada no lead ${leadId} (id ${result?.id ?? '?'})`,
+          payload: { leadId, taskId: result?.id ?? null, completeAt, text },
+          latencyMs: latency,
+        });
+        return `OK — tarefa criada no lead ${leadId} pra ${new Date(completeAt * 1000).toLocaleString('pt-BR')} (${latency}ms).`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha ao criar tarefa: ${msg}`,
+          payload: { leadId, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao criar tarefa: ${msg}`;
+      }
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // atribuir_responsavel — PATCH /leads com responsible_user_id.
+  // -------------------------------------------------------------------------
+  const atribuirResponsavelSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    userId: z.number().int().positive().describe('ID do usuário Kommo que vai assumir o lead.'),
+  });
+  const atribuir_responsavel = new DynamicStructuredTool({
+    name: 'atribuir_responsavel',
+    description: desc('atribuir_responsavel'),
+    schema: atribuirResponsavelSchema,
+    func: async ({ leadId, userId }) => {
+      const t0 = performance.now();
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: atribuir lead ${leadId} ao usuário ${userId}`,
+        payload: { leadId, userId },
+      });
+      try {
+        await kommo.setLeadResponsible(leadId, userId);
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Lead ${leadId} agora pertence ao usuário ${userId}`,
+          payload: { leadId, userId },
+          latencyMs: latency,
+        });
+        return `OK — lead ${leadId} atribuído ao usuário ${userId} (${latency}ms).`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha ao atribuir responsável: ${msg}`,
+          payload: { leadId, userId, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao atribuir responsável: ${msg}`;
+      }
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // remover_tag — PATCH com _embedded.tags_to_delete.
+  // -------------------------------------------------------------------------
+  const removerTagSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    tag: z.string().min(1).max(50).describe('Nome exato da tag a remover.'),
+  });
+  const remover_tag = new DynamicStructuredTool({
+    name: 'remover_tag',
+    description: desc('remover_tag'),
+    schema: removerTagSchema,
+    func: async ({ leadId, tag }) => {
+      const t0 = performance.now();
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: remover tag "${tag}" do lead ${leadId}`,
+        payload: { leadId, tag },
+      });
+      try {
+        await kommo.removeTag(leadId, tag);
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Tag "${tag}" removida do lead ${leadId}`,
+          payload: { leadId, tag },
+          latencyMs: latency,
+        });
+        return `OK — tag "${tag}" removida do lead ${leadId} (${latency}ms).`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha ao remover tag: ${msg}`,
+          payload: { leadId, tag, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao remover tag: ${msg}`;
+      }
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // definir_valor_lead — PATCH com price.
+  // -------------------------------------------------------------------------
+  const definirValorLeadSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    price: z
+      .number()
+      .nonnegative()
+      .max(10_000_000)
+      .describe('Valor em reais (number). Ex: 1500 = R$ 1500,00.'),
+  });
+  const definir_valor_lead = new DynamicStructuredTool({
+    name: 'definir_valor_lead',
+    description: desc('definir_valor_lead'),
+    schema: definirValorLeadSchema,
+    func: async ({ leadId, price }) => {
+      const t0 = performance.now();
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: definir valor R$ ${price} no lead ${leadId}`,
+        payload: { leadId, price },
+      });
+      try {
+        await kommo.setLeadPrice(leadId, price);
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Valor do lead ${leadId} agora é R$ ${price}`,
+          payload: { leadId, price },
+          latencyMs: latency,
+        });
+        return `OK — valor do lead ${leadId} = R$ ${price} (${latency}ms).`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha ao definir valor: ${msg}`,
+          payload: { leadId, price, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao definir valor: ${msg}`;
+      }
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // fechar_lead — PATCH com status_id (142=won, 143=lost) + lossReasonId.
+  // -------------------------------------------------------------------------
+  const fecharLeadSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    status: z.enum(['won', 'lost']).describe('"won" = venda realizada, "lost" = venda perdida.'),
+    lossReasonId: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('Opcional. ID do motivo de perda (Kommo /leads/loss_reasons). Só pra lost.'),
+  });
+  const fechar_lead = new DynamicStructuredTool({
+    name: 'fechar_lead',
+    description: desc('fechar_lead'),
+    schema: fecharLeadSchema,
+    func: async ({ leadId, status, lossReasonId }) => {
+      const t0 = performance.now();
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: fechar lead ${leadId} como ${status.toUpperCase()}`,
+        payload: { leadId, status, lossReasonId: lossReasonId ?? null },
+      });
+      try {
+        await kommo.setLeadStatus(leadId, { won: status === 'won', lossReasonId });
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Lead ${leadId} fechado como ${status === 'won' ? 'VENDA REALIZADA' : 'VENDA PERDIDA'}`,
+          payload: { leadId, status, lossReasonId },
+          latencyMs: latency,
+        });
+        return `OK — lead ${leadId} fechado como ${status} (${latency}ms).`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha ao fechar lead: ${msg}`,
+          payload: { leadId, status, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao fechar lead: ${msg}`;
+      }
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // mover_funil — PATCH com pipeline_id + status_id opcional.
+  // -------------------------------------------------------------------------
+  const moverFunilSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    pipelineId: z.number().int().positive().describe('ID do funil destino.'),
+    statusId: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('Opcional. ID da etapa dentro do novo funil. Sem isso, Kommo usa a primeira etapa.'),
+  });
+  const mover_funil = new DynamicStructuredTool({
+    name: 'mover_funil',
+    description: desc('mover_funil'),
+    schema: moverFunilSchema,
+    func: async ({ leadId, pipelineId, statusId }) => {
+      const t0 = performance.now();
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: mover lead ${leadId} pro funil ${pipelineId}${statusId ? ` (etapa ${statusId})` : ''}`,
+        payload: { leadId, pipelineId, statusId: statusId ?? null },
+      });
+      try {
+        await kommo.setLeadPipeline(leadId, pipelineId, statusId);
+        const latency = Math.round(performance.now() - t0);
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Lead ${leadId} movido pro funil ${pipelineId}`,
+          payload: { leadId, pipelineId, statusId },
+          latencyMs: latency,
+        });
+        return `OK — lead ${leadId} movido pro funil ${pipelineId} (${latency}ms).`;
+      } catch (err) {
+        const latency = Math.round(performance.now() - t0);
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder.step({
+          kind: 'ERROR',
+          title: `Falha ao mover funil: ${msg}`,
+          payload: { leadId, pipelineId, error: msg },
+          latencyMs: latency,
+        });
+        return `ERRO ao mover funil: ${msg}`;
+      }
+    },
+  });
+
   // resumir_lead_para_sdr — gera resumo e posta como nota interna no Kommo.
   // Só registrada se tivermos `unit` (precisa pra montar o LLM da unidade).
   const resumirLeadParaSdrSchema = z.object({
@@ -448,12 +762,18 @@ export function buildTools({
   );
 
   // Tipo amplo pra acomodar tools com schemas diferentes — TS infere o array
-  // pelo 1º elemento e rejeitaria o resumir_lead_para_sdr senão.
+  // pelo 1º elemento e rejeitaria os outros schemas senão.
   const nativeTools: DynamicStructuredTool[] = [
     aplicar_tag,
     mover_etapa,
     pausar_ia,
     atualizar_titulo_lead,
+    criar_tarefa,
+    atribuir_responsavel,
+    remover_tag,
+    definir_valor_lead,
+    fechar_lead,
+    mover_funil,
   ];
   if (resumir_lead_para_sdr) nativeTools.push(resumir_lead_para_sdr);
   return [...nativeTools, ...dynamicTools];

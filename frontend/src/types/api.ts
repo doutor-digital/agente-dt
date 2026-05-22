@@ -707,7 +707,27 @@ export type ActionKind =
   | 'transfer_with_permission'
   | 'transfer_without_permission'
   | 'summarize_to_note'
-  | 'send_message';
+  | 'send_message'
+  | 'create_task'
+  | 'assign_responsible'
+  | 'remove_tag'
+  | 'set_lead_value'
+  | 'mark_lead_status'
+  | 'move_pipeline';
+
+export interface KommoUsersResponse {
+  ok: boolean;
+  users?: Array<{ id: number; name: string; email: string | null }>;
+  error?: string;
+  message?: string;
+}
+
+export interface KommoLossReasonsResponse {
+  ok: boolean;
+  reasons?: Array<{ id: number; name: string }>;
+  error?: string;
+  message?: string;
+}
 
 /** Uma ação dentro de uma regra (várias podem rodar juntas). */
 export interface ActionStep {
