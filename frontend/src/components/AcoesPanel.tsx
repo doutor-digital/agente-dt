@@ -257,7 +257,7 @@ export function AcoesPanel() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-4xl mx-auto p-6 space-y-5">
+      <div className="max-w-7xl mx-auto p-6 space-y-6">
         {/* Header */}
         <div className="flex items-end justify-between gap-4">
           <div>
@@ -283,7 +283,13 @@ export function AcoesPanel() {
           </button>
         </div>
 
-        {/* Lista */}
+        {/* Grid responsivo de cards. Cada card tem largura mínima generosa
+            (min 320px) e o grid auto-fit balanceia colunas conforme o viewport:
+              - mobile  → 1 coluna
+              - tablet  → 2 colunas
+              - desktop → 2-3 colunas (a partir de ~1280px aceita 3)
+            `auto-rows-fr` força altura igual entre cards na mesma linha pra
+            os botões de ação ficarem alinhados horizontalmente. */}
         {loading ? (
           <div className="flex items-center justify-center py-12 text-zinc-500">
             <Loader2 className="animate-spin mr-2" size={16} />
@@ -298,7 +304,10 @@ export function AcoesPanel() {
             </p>
           </div>
         ) : (
-          <ul className="space-y-3">
+          <ul
+            className="grid gap-4 auto-rows-fr"
+            style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))' }}
+          >
             {actions.map((a) => (
               <ActionCard
                 key={a.id}
@@ -351,73 +360,95 @@ function ActionCard({
   return (
     <li
       className={clsx(
-        'rounded-xl border p-4 transition-opacity',
+        // Card em flex-col + `h-full` faz ele ocupar a célula inteira do grid
+        // (em conjunto com auto-rows-fr no container). Botões de ação ficam
+        // grudados no rodapé via mt-auto, alinhados entre cards.
+        'flex flex-col h-full rounded-xl border transition-all hover:border-zinc-700',
         action.enabled
           ? 'border-zinc-800 bg-zinc-900/40'
-          : 'border-zinc-800/50 bg-zinc-900/20 opacity-60',
+          : 'border-zinc-800/50 bg-zinc-900/20 opacity-60 hover:opacity-80',
       )}
     >
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">
-              Quando
-            </span>
-          </div>
-          <p className="text-sm text-zinc-200 leading-relaxed">{action.conditionDescription}</p>
-
-          <div className="mt-3">
-            <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">
-              {steps.length > 1 ? `Fazer (${steps.length} ações)` : 'Fazer'}
-            </span>
-            <ul className="mt-1.5 space-y-1.5">
-              {steps.map((step, i) => (
-                <li key={i}>
-                  <StepSummary step={step} />
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {action.notes && (
-            <div className="mt-3">
-              <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500">
-                Mais
-              </span>
-              <p className="text-xs text-zinc-400 mt-1 leading-relaxed italic">{action.notes}</p>
-            </div>
+      {/* Header: status + título Quando */}
+      <div className="px-5 pt-5 pb-2 flex items-start justify-between gap-2">
+        <span
+          className={clsx(
+            'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-semibold',
+            action.enabled
+              ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30'
+              : 'bg-zinc-800/50 text-zinc-500 ring-1 ring-zinc-700/50',
           )}
+        >
+          {action.enabled ? 'Ativa' : 'Inativa'}
+        </span>
+        <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-600">
+          {steps.length} {steps.length === 1 ? 'ação' : 'ações'}
+        </span>
+      </div>
+
+      {/* Corpo — cresce e empurra o footer pro fim */}
+      <div className="px-5 pb-3 flex-1 min-w-0">
+        <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-1">
+          Quando
+        </div>
+        <p className="text-sm text-zinc-200 leading-relaxed line-clamp-3" title={action.conditionDescription}>
+          {action.conditionDescription}
+        </p>
+
+        <div className="mt-4">
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-1.5">
+            Fazer
+          </div>
+          <ul className="space-y-1.5">
+            {steps.map((step, i) => (
+              <li key={i}>
+                <StepSummary step={step} />
+              </li>
+            ))}
+          </ul>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={onToggle}
-            title={action.enabled ? 'Desativar' : 'Ativar'}
-            className={clsx(
-              'p-1.5 rounded hover:bg-zinc-800',
-              action.enabled ? 'text-emerald-400' : 'text-zinc-600',
-            )}
-          >
-            <CheckCircle2 size={15} />
-          </button>
-          <button
-            type="button"
-            onClick={onEdit}
-            title="Editar"
-            className="p-1.5 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
-          >
-            <Pencil size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            title="Excluir"
-            className="p-1.5 rounded text-zinc-400 hover:text-rose-300 hover:bg-rose-500/10"
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
+        {action.notes && (
+          <div className="mt-4">
+            <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-1">
+              Mais
+            </div>
+            <p className="text-xs text-zinc-400 leading-relaxed italic line-clamp-2" title={action.notes}>
+              {action.notes}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Footer com botões — `mt-auto` cola no fim quando o card tá curto */}
+      <div className="mt-auto px-3 py-2 border-t border-zinc-800/60 flex items-center justify-end gap-1">
+        <button
+          type="button"
+          onClick={onToggle}
+          title={action.enabled ? 'Desativar' : 'Ativar'}
+          className={clsx(
+            'p-1.5 rounded hover:bg-zinc-800',
+            action.enabled ? 'text-emerald-400' : 'text-zinc-600',
+          )}
+        >
+          <CheckCircle2 size={15} />
+        </button>
+        <button
+          type="button"
+          onClick={onEdit}
+          title="Editar"
+          className="p-1.5 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+        >
+          <Pencil size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          title="Excluir"
+          className="p-1.5 rounded text-zinc-400 hover:text-rose-300 hover:bg-rose-500/10"
+        >
+          <Trash2 size={14} />
+        </button>
       </div>
     </li>
   );
