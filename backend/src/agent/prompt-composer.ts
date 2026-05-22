@@ -246,7 +246,7 @@ function renderPipelineIntents(unit: Unit): string {
   };
   const lines = Object.entries(intents).map(([intent, statusId]) => {
     const label = labelMap[intent] ?? intent;
-    return `  - Cliente ${label} → chame mover_etapa(${statusId})`;
+    return `  - Cliente ${label} → chame mover_etapa({ statusId: ${statusId} })`;
   });
   return `# PIPELINE POR INTENÇÃO
 - Mova o lead automaticamente conforme detectar essas intenções:\n${lines.join('\n')}
@@ -297,7 +297,7 @@ function renderCollectName(unit: Unit): string {
     • "Olá! 🌷 Seja muito bem-vindo(a) à clínica! Antes de continuar, qual seu nome?"
     • "Oi! 👋💜 Tudo bem? Pra te atender melhor, posso saber seu nome? 🙏"
 - Assim que o paciente disser o nome, chame IMEDIATAMENTE
-  atualizar_titulo_lead(leadId, "<Nome>") pra mudar o título do card no Kommo.
+  atualizar_titulo_lead({ nome: "<Nome>" }) pra mudar o título do card no Kommo.
   Passe SOMENTE o nome — o sistema acrescenta automaticamente a data da
   conversa, gravando como "<Nome> DD/MM/YYYY" (ex: "João 20/05/2026").
   A chamada é silenciosa — NUNCA fale "atualizei seu cadastro" ou similar.
@@ -382,8 +382,8 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       }
       const pipelineId = typeof params.pipelineId === 'number' ? params.pipelineId : undefined;
       const call = pipelineId
-        ? `mover_etapa(leadId, ${statusId}, ${pipelineId})`
-        : `mover_etapa(leadId, ${statusId})`;
+        ? `mover_etapa({ statusId: ${statusId}, pipelineId: ${pipelineId} })`
+        : `mover_etapa({ statusId: ${statusId} })`;
       return label ? `chame ${call} — etapa "${label}"` : `chame ${call}`;
     }
     case 'transfer_with_permission': {
@@ -406,7 +406,7 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       const hint = typeof params.focusHint === 'string' && params.focusHint.trim()
         ? ` Foco: ${params.focusHint.trim()}.`
         : '';
-      return `chame resumir_lead_para_sdr(leadId) — gera um resumo do contexto e posta como NOTA INTERNA no Kommo pro SDR humano ver.${hint} A nota fica visível só pros operadores; o paciente não vê.`;
+      return `chame resumir_lead_para_sdr — gera um resumo do contexto e posta como NOTA INTERNA no Kommo pro SDR humano ver.${hint} A nota fica visível só pros operadores; o paciente não vê.`;
     }
     case 'send_message': {
       const text = typeof params.text === 'string' ? params.text.trim() : '';
@@ -434,27 +434,27 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
         typeof params.responsibleUserId === 'number' ? params.responsibleUserId : null;
       const userName = typeof params.responsibleUserName === 'string' ? params.responsibleUserName : null;
       if (!text || !deadlineMinutes) return 'criar tarefa (não configurada)';
-      const userPart = userId ? `, responsibleUserId=${userId}` : '';
+      const userPart = userId ? `, responsibleUserId: ${userId}` : '';
       const deadlineHuman = formatDeadline(deadlineMinutes);
       const userHuman = userName ? ` — atribuída a ${userName}` : '';
-      return `chame criar_tarefa(leadId, "${text}", deadlineMinutes=${deadlineMinutes}${userPart}) — cria tarefa pro SDR no Kommo com prazo de ${deadlineHuman}${userHuman}. Silencioso pro paciente.`;
+      return `chame criar_tarefa({ text: "${text}", deadlineMinutes: ${deadlineMinutes}${userPart} }) — cria tarefa pro SDR no Kommo com prazo de ${deadlineHuman}${userHuman}. Silencioso pro paciente.`;
     }
     case 'assign_responsible': {
       const userId = typeof params.userId === 'number' ? params.userId : null;
       const userName = typeof params.userName === 'string' ? params.userName : null;
       if (!userId) return 'atribuir responsável (não configurado)';
       const label = userName ? ` (${userName})` : '';
-      return `chame atribuir_responsavel(leadId, ${userId}) — transfere a propriedade do lead pro usuário Kommo${label}.`;
+      return `chame atribuir_responsavel({ userId: ${userId} }) — transfere a propriedade do lead pro usuário Kommo${label}.`;
     }
     case 'remove_tag': {
       const tag = typeof params.tag === 'string' ? params.tag : '';
       if (!tag) return 'remover tag (não configurada)';
-      return `chame remover_tag(leadId, "${tag}") — remove a tag "${tag}" do lead. Idempotente.`;
+      return `chame remover_tag({ tag: "${tag}" }) — remove a tag "${tag}" do lead. Idempotente.`;
     }
     case 'set_lead_value': {
       const price = typeof params.price === 'number' ? params.price : Number(params.price);
       if (!Number.isFinite(price)) return 'definir valor (não configurado)';
-      return `chame definir_valor_lead(leadId, ${price}) — define o valor (price) do lead em R$ ${price}.`;
+      return `chame definir_valor_lead({ price: ${price} }) — define o valor (price) do lead em R$ ${price}.`;
     }
     case 'mark_lead_status': {
       const status = params.status === 'won' || params.status === 'lost' ? params.status : null;
@@ -464,11 +464,11 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
         typeof params.lossReasonLabel === 'string' ? params.lossReasonLabel : null;
       if (!status) return 'fechar lead (status não configurado)';
       if (status === 'won') {
-        return `chame fechar_lead(leadId, "won") — marca o lead como VENDA REALIZADA no Kommo.`;
+        return `chame fechar_lead({ won: true }) — marca o lead como VENDA REALIZADA no Kommo.`;
       }
-      const reasonPart = lossReasonId ? `, lossReasonId=${lossReasonId}` : '';
+      const reasonPart = lossReasonId ? `, lossReasonId: ${lossReasonId}` : '';
       const reasonLabel = lossReasonLabel ? ` (motivo: ${lossReasonLabel})` : '';
-      return `chame fechar_lead(leadId, "lost"${reasonPart}) — marca o lead como VENDA PERDIDA${reasonLabel}.`;
+      return `chame fechar_lead({ won: false${reasonPart} }) — marca o lead como VENDA PERDIDA${reasonLabel}.`;
     }
     case 'move_pipeline': {
       const pipelineId =
@@ -477,10 +477,10 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       const statusId = typeof params.statusId === 'number' ? params.statusId : null;
       const statusLabel = typeof params.statusLabel === 'string' ? params.statusLabel : null;
       if (!Number.isFinite(pipelineId) || pipelineId <= 0) return 'mover funil (não configurado)';
-      const statusPart = statusId ? `, ${statusId}` : '';
+      const statusPart = statusId ? `, statusId: ${statusId}` : '';
       const label = [pipelineLabel, statusLabel].filter(Boolean).join(' → ');
       const labelHuman = label ? ` — funil "${label}"` : '';
-      return `chame mover_funil(leadId, ${pipelineId}${statusPart}) — move o lead pro funil destino${labelHuman}.`;
+      return `chame mover_funil({ pipelineId: ${pipelineId}${statusPart} }) — move o lead pro funil destino${labelHuman}.`;
     }
     case 'pause_ai': {
       const stageId =
@@ -489,11 +489,11 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
         typeof params.moveToPipelineId === 'number' ? params.moveToPipelineId : null;
       const stageLabel =
         typeof params.moveToStageLabel === 'string' ? params.moveToStageLabel : null;
-      const parts = ['chame pausar_ia(leadId) — desliga a IA pra esse lead, Salesbot do Kommo para de disparar'];
+      const parts = ['chame pausar_ia — desliga a IA pra esse lead, Salesbot do Kommo para de disparar'];
       if (stageId && stageId > 0) {
-        const pipelinePart = pipelineId ? `, ${pipelineId}` : '';
+        const pipelinePart = pipelineId ? `, pipelineId: ${pipelineId}` : '';
         const labelHuman = stageLabel ? ` (etapa "${stageLabel}")` : '';
-        parts.push(`e DEPOIS chame mover_etapa(leadId, ${stageId}${pipelinePart})${labelHuman} — pra o SDR encontrar o lead no funil`);
+        parts.push(`e DEPOIS chame mover_etapa({ statusId: ${stageId}${pipelinePart} })${labelHuman} — pra o SDR encontrar o lead no funil`);
       }
       parts.push('Ação silenciosa — não anuncie ao paciente que a IA foi pausada.');
       return parts.join('. ') + '.';
@@ -607,6 +607,12 @@ export interface ComposeInput {
   actions?: UnitAction[];
   /** Regras de captura de dados (LeadFieldRule) — viram tools dinâmicas. */
   leadFieldRules?: LeadFieldRule[];
+  /**
+   * leadId numérico do Kommo para este turno. Injetado no system prompt como
+   * "CONTEXTO DA CONVERSA" pra IA usar nas tool calls. Sem isso, a IA passa
+   * `leadId: 0` ou similar e as tools falham silenciosamente.
+   */
+  leadId?: number;
   /** Este é o PRIMEIRO turno do paciente? (1 humana, 0 IA). */
   isFirstTurn?: boolean;
 }
@@ -667,6 +673,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     actions = [],
     leadFieldRules = [],
     isFirstTurn = false,
+    leadId,
   } = input;
 
   // ORDEM DOS BLOCOS — pensada pra qualidade da resposta:
@@ -717,6 +724,21 @@ export function composeSystemPrompt(input: ComposeInput): string {
   if (featureBlocks.length > 0) {
     blocks.push('# COMPORTAMENTOS ATIVADOS');
     blocks.push(...featureBlocks);
+  }
+
+  // CONTEXTO DA CONVERSA — vai ANTES das Ações pra IA ler o leadId real e usar
+  // nas tool calls. Sem isso, ela passa `leadId: 0` literalmente (a palavra
+  // "leadId" aparece nos textos de orientação das ações como placeholder).
+  if (leadId && Number.isFinite(leadId) && leadId > 0) {
+    blocks.push(
+      [
+        '# 🔑 CONTEXTO DA CONVERSA',
+        `- leadId desta conversa: **${leadId}**`,
+        '- Ao chamar QUALQUER tool, use ESTE número EXATAMENTE como o argumento `leadId`.',
+        '- NUNCA passe 0, NUNCA passe a string "leadId", NUNCA invente outro número.',
+        `- Exemplo correto: aplicar_tag({ leadId: ${leadId}, tag: "..." }).`,
+      ].join('\n'),
+    );
   }
 
   const actionsBlock = renderActions(actions);
@@ -782,6 +804,8 @@ export async function composeSystemPromptForUnit(input: {
   workflowText?: string;
   userMessage?: string;
   isFirstTurn?: boolean;
+  /** leadId do Kommo — injetado no bloco "CONTEXTO DA CONVERSA" pras tools. */
+  leadId?: number;
 }): Promise<string> {
   const shouldRunRag =
     !!input.userMessage &&

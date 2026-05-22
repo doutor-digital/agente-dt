@@ -189,6 +189,7 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       agentConfigPrompt: config.systemPrompt,
       userMessage,
       isFirstTurn,
+      leadId: state.leadId,
     });
     const finalMessages: BaseMessage[] = [new SystemMessage(dynamicPrompt), ...nonSystemMessages];
 
