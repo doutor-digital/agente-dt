@@ -164,6 +164,13 @@ export function invalidateActiveConfig(unitId: string | null): void {
   configCache.delete(configCacheKey(unitId));
 }
 
+/** Limpa TODO o cache de config — usado pelo endpoint admin "Limpar cache". */
+export function clearAllConfigCache(): number {
+  const n = configCache.size;
+  configCache.clear();
+  return n;
+}
+
 export async function getActiveConfig(unitId: string | null = null): Promise<AgentConfigShape> {
   const key = configCacheKey(unitId);
   const cached = configCache.get(key);

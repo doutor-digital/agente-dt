@@ -14,6 +14,7 @@
 // ============================================================================
 
 import type { ReactNode } from 'react';
+import { useState } from 'react';
 import {
   AlertOctagon,
   BookOpen,
@@ -21,8 +22,10 @@ import {
   Cable,
   Cpu,
   Database,
+  Eraser,
   FileText,
   LayoutDashboard,
+  Loader2,
   LogOut,
   MessageCircle,
   Settings,
@@ -38,7 +41,9 @@ import clsx from 'clsx';
 import { UnitSelector } from './UnitSelector';
 import { NotificationsBadge } from './NotificationsBadge';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { tabToPath } from '../hooks/useRoute';
+import { api } from '../lib/api';
 
 export type AppTab =
   | 'dashboard'
@@ -94,9 +99,45 @@ export function AppSidebar({
   onChange: (t: AppTab) => void;
 }) {
   const { user, logout } = useAuth();
+  const toast = useToast();
+  const [clearing, setClearing] = useState(false);
   const visible = NAV.filter((n) => !n.superOnly || user?.role === 'SUPER_ADMIN');
   const primary = visible.filter((n) => n.group === 'primary');
   const secondary = visible.filter((n) => n.group === 'secondary');
+
+  // "Limpar cache" — chama o backend pra esvaziar caches em memória, limpa o
+  // localStorage do front e força hard-reload pra puxar bundle fresco.
+  // Útil quando algo "ficou grudado" após mudar dado no banco/Kommo.
+  async function handleClearCache() {
+    if (clearing) return;
+    const confirmed = window.confirm(
+      'Limpar cache do sistema?\n\n' +
+        '• Esvazia caches em memória do backend (config, unit, dedup)\n' +
+        '• Limpa armazenamento local do navegador\n' +
+        '• Recarrega a página\n\n' +
+        'Nenhum dado é apagado — só os caches.',
+    );
+    if (!confirmed) return;
+    setClearing(true);
+    try {
+      const r = await api.clearCache();
+      try {
+        window.localStorage.clear();
+        window.sessionStorage.clear();
+      } catch {
+        // Ignorar se o navegador bloquear (modo privado).
+      }
+      toast.success(
+        `Cache limpo: ${r.cleared.configCache} config(s), ${r.cleared.unitBySlugCache} unit(s), ${r.cleared.dedupCache} dedup. Recarregando…`,
+      );
+      // Pequeno delay pra o toast aparecer antes do reload.
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Falha ao limpar cache: ${msg}`);
+      setClearing(false);
+    }
+  }
 
   return (
     <aside className="w-60 shrink-0 border-r border-zinc-800/80 bg-ink-950 flex flex-col h-full">
@@ -175,8 +216,18 @@ export function AppSidebar({
       )}
 
       {/* Footer */}
-      <div className="border-t border-zinc-800/60 p-3 flex items-center justify-between">
+      <div className="border-t border-zinc-800/60 p-3 flex items-center justify-between gap-1">
         <NotificationsBadge />
+        <button
+          type="button"
+          onClick={() => void handleClearCache()}
+          disabled={clearing}
+          title="Limpa caches em memória do backend, localStorage do navegador e recarrega"
+          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {clearing ? <Loader2 size={13} className="animate-spin" /> : <Eraser size={13} />}
+          {clearing ? 'Limpando…' : 'Limpar cache'}
+        </button>
         <a
           href="/docs"
           target="_blank"

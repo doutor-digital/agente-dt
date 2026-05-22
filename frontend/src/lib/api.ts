@@ -467,4 +467,20 @@ export const api = {
     );
     return data;
   },
+
+  // -------------------------------------------------------------------------
+  // Limpa todos os caches em memória do backend (config, unit, dedup) + o
+  // localStorage do front. Pra usar quando algo "ficou grudado" e o usuário
+  // quer forçar reload do estado.
+  // -------------------------------------------------------------------------
+  async clearCache(): Promise<{
+    ok: boolean;
+    cleared: { configCache: number; unitBySlugCache: number; unitByIdCache: number; dedupCache: number };
+  }> {
+    const { data } = await http.post<{
+      ok: boolean;
+      cleared: { configCache: number; unitBySlugCache: number; unitByIdCache: number; dedupCache: number };
+    }>('/admin/clear-cache');
+    return data;
+  },
 };

@@ -240,3 +240,27 @@ apiRouter.get('/admin/kommo-salesbots', requireSuperAdmin, async (_req, res) => 
     res.status(500).json({ ok: false, error: msg });
   }
 });
+
+// "Limpar cache" — botão da UI. Esvazia TODOS os caches em memória do backend:
+//   • config do agente (por unit)
+//   • Unit por slug/id
+//   • dedup de webhook (mensagens já vistas)
+// Idempotente. Próxima request reidrata do banco/Kommo. Útil quando o usuário
+// muda algo direto no banco/Kommo e quer ver refletido sem esperar TTL.
+apiRouter.post('/admin/clear-cache', requireAuth, async (_req, res) => {
+  const { clearAllConfigCache } = await import('../agent/config.js');
+  const { clearAllUnitCache } = await import('../services/units.service.js');
+  const { clearDedupCache } = await import('../lib/dedup-cache.js');
+  const configCleared = clearAllConfigCache();
+  const unitCleared = clearAllUnitCache();
+  const dedupCleared = clearDedupCache();
+  res.json({
+    ok: true,
+    cleared: {
+      configCache: configCleared,
+      unitBySlugCache: unitCleared.slug,
+      unitByIdCache: unitCleared.id,
+      dedupCache: dedupCleared,
+    },
+  });
+});

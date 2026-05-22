@@ -43,6 +43,14 @@ function invalidateUnitCacheFor(unit: Unit | null, fallbackId?: string): void {
   }
 }
 
+/** Limpa TODOS os caches de Unit — usado pelo endpoint admin "Limpar cache". */
+export function clearAllUnitCache(): { slug: number; id: number } {
+  const out = { slug: unitBySlugCache.size, id: unitByIdCache.size };
+  unitBySlugCache.clear();
+  unitByIdCache.clear();
+  return out;
+}
+
 export async function findUnitBySlug(slug: string): Promise<Unit | null> {
   const cached = unitBySlugCache.get(slug);
   if (cached && cached.expiresAt > Date.now()) return cached.value;

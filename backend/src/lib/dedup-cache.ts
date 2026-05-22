@@ -61,3 +61,10 @@ export function claimMessageId(scope: string, messageId: string): boolean {
 export function _dedupStats(): { size: number } {
   return { size: store.size };
 }
+
+/** Limpa o dedup cache inteiro — usado pelo endpoint admin "Limpar cache". */
+export function clearDedupCache(): number {
+  const n = store.size;
+  store.clear();
+  return n;
+}
