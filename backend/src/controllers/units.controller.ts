@@ -384,6 +384,10 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
 
   const now = new Date();
   const periodStart = new Date(now.getTime() - periodDays * 24 * 60 * 60 * 1000);
+  // Período anterior — mesma duração, imediatamente antes do atual.
+  // Usado pra calcular delta % ("+12% vs período anterior").
+  const prevPeriodStart = new Date(periodStart.getTime() - periodDays * 24 * 60 * 60 * 1000);
+  const prevPeriodEnd = periodStart;
 
   // 1 round-trip em paralelo. Cada query é independente.
   const [
@@ -399,6 +403,10 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     llmAgg,
     convsByHour,
     avgRespLatency,
+    // === 3 queries novas pro dashboard enriquecido ===
+    channelsByCountRow,
+    dailySeriesRow,
+    prevKpis,
   ] = await Promise.all([
     prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(DISTINCT lead_id)::bigint AS count
@@ -516,6 +524,77 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       },
       _avg: { latencyMs: true },
     }),
+    // Breakdown por canal — mensagens DO PACIENTE agrupadas por canal.
+    // O canal vem de `conversation.channel` (kommo_chat, meta, etc).
+    prisma.$queryRaw<Array<{ channel: string; count: bigint }>>`
+      SELECT c.channel, COUNT(m.id)::bigint AS count
+      FROM messages m
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.unit_id = ${id}
+        AND m.role = 'user'
+        AND m.created_at >= ${periodStart}
+      GROUP BY c.channel
+      ORDER BY 2 DESC
+    `,
+    // Série temporal — mensagens E conversas únicas por dia.
+    // DATE_TRUNC dá o dia exato; ORDER ASC pra desenhar sparkline cronológico.
+    prisma.$queryRaw<Array<{ day: Date; messages: bigint; conversations: bigint }>>`
+      SELECT
+        DATE_TRUNC('day', m.created_at) AS day,
+        COUNT(*)::bigint AS messages,
+        COUNT(DISTINCT c.id)::bigint AS conversations
+      FROM messages m
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.unit_id = ${id}
+        AND m.created_at >= ${periodStart}
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `,
+    // Período anterior — 4 KPIs principais pra calcular delta %.
+    // Bloco separado pra não inflar com 12 queries duplicadas (só as que
+    // alimentam os deltas mais úteis).
+    (async () => {
+      const [uniqLeadsPrev, answeredPrev, convertedPrev, llmCostPrev] = await Promise.all([
+        prisma.$queryRaw<Array<{ count: bigint }>>`
+          SELECT COUNT(DISTINCT lead_id)::bigint AS count
+          FROM conversations
+          WHERE unit_id = ${id}
+            AND last_message_at >= ${prevPeriodStart}
+            AND last_message_at < ${prevPeriodEnd}
+        `,
+        prisma.$queryRaw<Array<{ count: bigint }>>`
+          SELECT COUNT(DISTINCT c.id)::bigint AS count
+          FROM conversations c
+          WHERE c.unit_id = ${id}
+            AND c.last_message_at >= ${prevPeriodStart}
+            AND c.last_message_at < ${prevPeriodEnd}
+            AND EXISTS (
+              SELECT 1 FROM messages m
+              WHERE m.conversation_id = c.id
+                AND m.role = 'assistant'
+                AND m.created_at >= ${prevPeriodStart}
+                AND m.created_at < ${prevPeriodEnd}
+            )
+        `,
+        prisma.conversation.count({
+          where: {
+            unitId: id,
+            createdAt: { gte: prevPeriodStart, lt: prevPeriodEnd },
+            convertedAt: { not: null },
+          },
+        }),
+        prisma.llmCall.aggregate({
+          where: { unitId: id, createdAt: { gte: prevPeriodStart, lt: prevPeriodEnd } },
+          _sum: { costUsd: true },
+        }),
+      ]);
+      return {
+        uniqueLeads: Number(uniqLeadsPrev[0]?.count ?? 0),
+        answeredConversations: Number(answeredPrev[0]?.count ?? 0),
+        convertedCount: convertedPrev,
+        llmCostUsd: Number(llmCostPrev._sum.costUsd ?? 0),
+      };
+    })(),
   ]);
 
   const uniqueLeads = Number(uniqueLeadsRow[0]?.count ?? 0);
@@ -567,6 +646,28 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     }
   }
 
+  // Normaliza canais — mapeia código interno pra label legível.
+  const messagesByChannel = channelsByCountRow.map((row) => ({
+    channel: row.channel || 'unknown',
+    label: channelLabel(row.channel || 'unknown'),
+    count: Number(row.count),
+  }));
+
+  // Série temporal — preenche dias vazios com zero pra sparkline ficar
+  // contínuo (sem buracos de calendário).
+  const dailyMap = new Map<string, { messages: number; conversations: number }>();
+  for (const row of dailySeriesRow) {
+    const key = row.day.toISOString().slice(0, 10);
+    dailyMap.set(key, { messages: Number(row.messages), conversations: Number(row.conversations) });
+  }
+  const dailySeries: Array<{ date: string; messages: number; conversations: number }> = [];
+  for (let i = 0; i < periodDays; i++) {
+    const d = new Date(periodStart.getTime() + i * 24 * 60 * 60 * 1000);
+    const key = d.toISOString().slice(0, 10);
+    const v = dailyMap.get(key) ?? { messages: 0, conversations: 0 };
+    dailySeries.push({ date: key, messages: v.messages, conversations: v.conversations });
+  }
+
   res.json({
     periodDays,
     kpis: {
@@ -590,8 +691,33 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       llmCallsCount: llmAgg._count._all,
       peakHour,
     },
+    /** KPIs do período ANTERIOR (mesmo comprimento, imediatamente antes).
+     *  Subset reduzido — só os que alimentam badges de delta no front. */
+    previousKpis: prevKpis,
+    /** Volume por canal de origem da mensagem. */
+    messagesByChannel,
+    /** Série temporal diária do período. Inclui dias com zero. */
+    dailySeries,
     funnel,
   });
+}
+
+/** Converte código de canal pra label legível pro usuário. */
+function channelLabel(channel: string): string {
+  switch (channel) {
+    case 'kommo_chat':
+      return 'WhatsApp (Kommo)';
+    case 'kommo':
+      return 'Kommo';
+    case 'meta':
+      return 'WhatsApp (Meta direto)';
+    case 'salesbot':
+      return 'Salesbot';
+    case 'unknown':
+      return 'Desconhecido';
+    default:
+      return channel;
+  }
 }
 
 // ---------------------------------------------------------------------------

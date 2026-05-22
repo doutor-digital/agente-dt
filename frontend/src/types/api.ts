@@ -382,6 +382,25 @@ export interface DashboardResponse {
       color: string | null;
     }>;
   }>;
+  /** KPIs do período anterior (mesma duração, imediatamente antes). Subset. */
+  previousKpis: {
+    uniqueLeads: number;
+    answeredConversations: number;
+    convertedCount: number;
+    llmCostUsd: number;
+  };
+  /** Mensagens DO PACIENTE agrupadas por canal. */
+  messagesByChannel: Array<{
+    channel: string;
+    label: string;
+    count: number;
+  }>;
+  /** Série temporal diária — 1 entrada por dia do período (zeros preenchidos). */
+  dailySeries: Array<{
+    date: string; // YYYY-MM-DD
+    messages: number;
+    conversations: number;
+  }>;
 }
 
 // ---------------------------------------------------------------------------

@@ -18,11 +18,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
   Brain,
   Calendar,
   CalendarDays,
   Clock4,
   DollarSign,
+  LineChart,
   Loader2,
   MessageCircleMore,
   RefreshCcw,
@@ -164,6 +167,11 @@ export function DashboardPanel() {
             sublabel="pacientes distintos"
             color="purple"
             icon={<Users size={16} />}
+            delta={
+              data
+                ? computeDelta(data.kpis.uniqueLeads, data.previousKpis.uniqueLeads)
+                : undefined
+            }
           />
           <BigStatCard
             label="Sem resposta"
@@ -200,13 +208,21 @@ export function DashboardPanel() {
           <FunnelDonut data={data} />
         </div>
 
-        {/* Stat strip — leads ganhos / ativos / fim de semana */}
+        {/* Sparkline — volume diário de mensagens + conversas */}
+        <SparklineCard data={data} loading={loading} />
+
+        {/* Stat strip — convertidos + custo, com badge de delta no total/custo */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatStrip
             label="Convertidos total"
             value={data?.kpis.convertedCount ?? 0}
             accent="text-emerald-300"
             sub={data ? `${(data.kpis.conversionRate * 100).toFixed(1)}% conversão` : ''}
+            delta={
+              data
+                ? computeDelta(data.kpis.convertedCount, data.previousKpis.convertedCount)
+                : undefined
+            }
           />
           <StatStrip
             label="Convertidos pela IA"
@@ -227,6 +243,13 @@ export function DashboardPanel() {
             value={data ? `$${data.kpis.llmCostUsd.toFixed(2)}` : '—'}
             accent="text-amber-200"
             sub={data ? `${data.kpis.llmCallsCount} chamadas LLM` : ''}
+            delta={
+              data
+                ? computeDelta(data.kpis.llmCostUsd, data.previousKpis.llmCostUsd)
+                : undefined
+            }
+            // Custo mais alto NÃO é positivo — invertemos a cor do badge.
+            deltaInverted
           />
         </div>
 
@@ -388,9 +411,14 @@ function HeroCard({
 }) {
   const value = data?.kpis.answeredConversations ?? 0;
   const totalLeads = data?.kpis.uniqueLeads ?? 0;
-  // Calcula um proxy: % de leads que tiveram pelo menos uma resposta.
   const respondedPct =
     totalLeads > 0 ? Math.round((value / totalLeads) * 100) : 0;
+  // Delta vs período anterior (proxy: variação de answeredConversations).
+  const prev = data?.previousKpis.answeredConversations ?? 0;
+  const delta = computeDelta(value, prev);
+
+  const channels = data?.messagesByChannel ?? [];
+  const totalMsgsByChannel = channels.reduce((a, c) => a + c.count, 0);
 
   return (
     <div className="col-span-1 md:col-span-2 row-span-2 rounded-2xl bg-zinc-900/60 border border-zinc-800 p-6 backdrop-blur relative overflow-hidden">
@@ -417,8 +445,11 @@ function HeroCard({
           </div>
         ) : (
           <>
-            <div className="text-7xl md:text-8xl font-display font-bold text-emerald-300 tracking-tight leading-none">
-              {value}
+            <div className="flex items-end gap-3 flex-wrap">
+              <div className="text-7xl md:text-8xl font-display font-bold text-emerald-300 tracking-tight leading-none">
+                {value}
+              </div>
+              {delta && <DeltaBadge {...delta} />}
             </div>
             <div className="text-xs text-zinc-400 mt-3">
               de {totalLeads} leads únicos no período
@@ -429,7 +460,7 @@ function HeroCard({
           </>
         )}
 
-        {/* Breakdown — mostra split conversão IA/SDR como barra horizontal */}
+        {/* Breakdown — split conversão IA/SDR como barra horizontal */}
         {data && totalLeads > 0 && (
           <div className="mt-6 space-y-2">
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">
@@ -461,8 +492,67 @@ function HeroCard({
             />
           </div>
         )}
+
+        {/* CANAIS — mensagens do paciente por canal de origem (estilo Kommo) */}
+        {channels.length > 0 && (
+          <div className="mt-6 space-y-2">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2 flex items-center gap-2">
+              📥 Mensagens por canal
+              <span className="text-zinc-600 font-normal normal-case tracking-normal">
+                · total {totalMsgsByChannel}
+              </span>
+            </div>
+            {channels.map((c, i) => (
+              <BreakdownRow
+                key={c.channel}
+                label={c.label}
+                count={c.count}
+                total={totalMsgsByChannel}
+                color={CHANNEL_PALETTE[i % CHANNEL_PALETTE.length]}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+const CHANNEL_PALETTE = ['#10b981', '#0ea5e9', '#8b5cf6', '#f59e0b', '#f43f5e', '#06b6d4'];
+
+/** Calcula delta % entre valor atual e anterior. Retorna null se anterior=0. */
+function computeDelta(current: number, previous: number): {
+  pct: number;
+  positive: boolean;
+} | null {
+  if (previous === 0) {
+    if (current === 0) return null;
+    // Subiu de 0 pra algo — não dá pct, mas marca "novo".
+    return { pct: 100, positive: true };
+  }
+  const pct = ((current - previous) / previous) * 100;
+  return { pct, positive: pct >= 0 };
+}
+
+function DeltaBadge({ pct, positive }: { pct: number; positive: boolean }) {
+  const sign = positive ? '+' : '';
+  const absPct = Math.abs(pct);
+  // Trunca em 999% pra não estourar visual em casos absurdos.
+  const display = absPct > 999 ? '>999' : absPct.toFixed(0);
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold font-mono ring-1',
+        positive
+          ? 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/30'
+          : 'bg-rose-500/15 text-rose-300 ring-rose-500/30',
+      )}
+      title="Variação vs período anterior (mesma duração)"
+    >
+      {positive ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+      {sign}
+      {display}%
+    </span>
   );
 }
 
@@ -512,6 +602,7 @@ function BigStatCard({
   sublabel,
   color = 'purple',
   icon,
+  delta,
   onClick,
 }: {
   label: string;
@@ -519,6 +610,8 @@ function BigStatCard({
   sublabel: string;
   color?: keyof typeof bigColors;
   icon?: React.ReactNode;
+  /** Variação vs período anterior. Aparece como badge no canto superior direito. */
+  delta?: { pct: number; positive: boolean } | null;
   onClick?: () => void;
 }) {
   const c = bigColors[color] ?? bigColors.purple;
@@ -529,7 +622,7 @@ function BigStatCard({
       onClick={onClick}
       disabled={!clickable}
       className={clsx(
-        'rounded-2xl border border-zinc-800 bg-zinc-900/60 backdrop-blur p-4 text-left transition-all',
+        'rounded-2xl border border-zinc-800 bg-zinc-900/60 backdrop-blur p-4 text-left transition-all relative',
         clickable
           ? 'cursor-pointer hover:border-zinc-700 hover:-translate-y-0.5'
           : 'cursor-default',
@@ -540,6 +633,11 @@ function BigStatCard({
         <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">
           {label}
         </span>
+        {delta && (
+          <span className="ml-auto">
+            <DeltaBadge {...delta} />
+          </span>
+        )}
       </div>
       <div className={clsx('text-4xl md:text-5xl font-display font-bold tracking-tight leading-none', c.number)}>
         {value}
@@ -558,15 +656,23 @@ function StatStrip({
   value,
   accent,
   sub,
+  delta,
+  deltaInverted,
   onClick,
 }: {
   label: string;
   value: string | number;
   accent: string;
   sub: string;
+  delta?: { pct: number; positive: boolean } | null;
+  /** Quando true, inverte a semântica: subir é ruim (ex: custo). */
+  deltaInverted?: boolean;
   onClick?: () => void;
 }) {
   const Tag = onClick ? 'button' : 'div';
+  // Se o delta é "inverted" (custo), subir vira negativo visualmente.
+  const adjustedDelta =
+    delta && deltaInverted ? { ...delta, positive: !delta.positive } : delta;
   return (
     <Tag
       type={onClick ? 'button' : undefined}
@@ -576,14 +682,157 @@ function StatStrip({
         onClick && 'cursor-pointer hover:border-zinc-700',
       )}
     >
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1">
-        {label}
+      <div className="flex items-center gap-2 mb-1">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold flex-1 min-w-0">
+          {label}
+        </div>
+        {adjustedDelta && <DeltaBadge {...adjustedDelta} />}
       </div>
       <div className={clsx('text-3xl font-display font-bold tracking-tight', accent)}>
         {value}
       </div>
       {sub && <div className="text-[10px] text-zinc-500 mt-1">{sub}</div>}
     </Tag>
+  );
+}
+
+// ===========================================================================
+// SparklineCard — gráfico de linha SVG mostrando mensagens + conversas por dia.
+// Inspirado nos sparklines da Kommo. Sem dependência externa.
+// ===========================================================================
+
+function SparklineCard({
+  data,
+  loading,
+}: {
+  data: DashboardResponse | null;
+  loading: boolean;
+}) {
+  const series = data?.dailySeries ?? [];
+  const maxMsg = Math.max(1, ...series.map((s) => s.messages));
+  const maxConv = Math.max(1, ...series.map((s) => s.conversations));
+  const totalMsg = series.reduce((a, s) => a + s.messages, 0);
+  const totalConv = series.reduce((a, s) => a + s.conversations, 0);
+
+  return (
+    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 backdrop-blur p-5">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <LineChart size={14} className="text-sky-300" />
+          <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">
+            Volume diário
+          </span>
+        </div>
+        <div className="flex items-center gap-4 text-[11px]">
+          <span className="inline-flex items-center gap-1.5 text-emerald-300">
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            Mensagens
+            <span className="text-zinc-400 font-mono ml-1">{totalMsg}</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5 text-sky-300">
+            <span className="w-2 h-2 rounded-full bg-sky-400" />
+            Conversas
+            <span className="text-zinc-400 font-mono ml-1">{totalConv}</span>
+          </span>
+        </div>
+      </div>
+
+      {loading && !data ? (
+        <div className="h-32 flex items-center justify-center text-zinc-600 text-xs">
+          <Loader2 size={14} className="animate-spin mr-2" />
+          Carregando série…
+        </div>
+      ) : series.length === 0 ? (
+        <div className="h-32 flex items-center justify-center text-zinc-600 text-xs italic">
+          Sem dados de mensagens no período.
+        </div>
+      ) : (
+        <Sparkline series={series} maxMsg={maxMsg} maxConv={maxConv} />
+      )}
+    </div>
+  );
+}
+
+function Sparkline({
+  series,
+  maxMsg,
+  maxConv,
+}: {
+  series: Array<{ date: string; messages: number; conversations: number }>;
+  maxMsg: number;
+  maxConv: number;
+}) {
+  const W = 800;
+  const H = 120;
+  const PAD = { top: 8, right: 8, bottom: 18, left: 8 };
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+  const n = series.length;
+
+  // Helper pra converter [valor, índice] em coordenadas SVG.
+  const xAt = (i: number) => PAD.left + (n > 1 ? (i / (n - 1)) * innerW : innerW / 2);
+  const yMsg = (v: number) => PAD.top + innerH - (v / maxMsg) * innerH;
+  const yConv = (v: number) => PAD.top + innerH - (v / maxConv) * innerH;
+
+  // Path de linha + área.
+  const msgPath = series.map((s, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i)},${yMsg(s.messages)}`).join(' ');
+  const msgArea = `${msgPath} L ${xAt(n - 1)},${PAD.top + innerH} L ${xAt(0)},${PAD.top + innerH} Z`;
+  const convPath = series.map((s, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i)},${yConv(s.conversations)}`).join(' ');
+
+  // Labels de data — primeira, meio, última.
+  const labelIdxs = n <= 1 ? [0] : n <= 3 ? Array.from({ length: n }, (_, i) => i) : [0, Math.floor(n / 2), n - 1];
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="none">
+      {/* Grid horizontal sutil */}
+      <line x1={PAD.left} x2={W - PAD.right} y1={PAD.top + innerH / 2} y2={PAD.top + innerH / 2} stroke="rgba(82,82,91,0.15)" strokeWidth="1" />
+      <line x1={PAD.left} x2={W - PAD.right} y1={PAD.top + innerH} y2={PAD.top + innerH} stroke="rgba(82,82,91,0.3)" strokeWidth="1" />
+
+      {/* Área verde sob mensagens */}
+      <path d={msgArea} fill="url(#sparkGradient)" opacity="0.5" />
+      <defs>
+        <linearGradient id="sparkGradient" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor="#10b981" stopOpacity="0.5" />
+          <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+
+      {/* Linha mensagens (verde) */}
+      <path d={msgPath} fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      {/* Linha conversas (sky) */}
+      <path d={convPath} fill="none" stroke="#0ea5e9" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" />
+
+      {/* Pontos */}
+      {series.map((s, i) => (
+        <g key={i}>
+          <circle cx={xAt(i)} cy={yMsg(s.messages)} r="2.5" fill="#10b981" />
+          <circle cx={xAt(i)} cy={yConv(s.conversations)} r="2" fill="#0ea5e9" />
+          {/* tooltip via <title> nativo do SVG */}
+          <title>
+            {s.date}: {s.messages} msg · {s.conversations} conv
+          </title>
+        </g>
+      ))}
+
+      {/* Labels de data */}
+      {labelIdxs.map((i) => {
+        const d = series[i];
+        const short = d.date.slice(5); // MM-DD
+        return (
+          <text
+            key={i}
+            x={xAt(i)}
+            y={H - 4}
+            textAnchor={i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}
+            fontSize="9"
+            fill="#71717a"
+            fontFamily="ui-sans-serif, system-ui"
+          >
+            {short}
+          </text>
+        );
+      })}
+    </svg>
   );
 }
 
