@@ -28,6 +28,7 @@ import {
   GitBranch,
   Loader2,
   MessageCircle,
+  PauseCircle,
   Pencil,
   Plus,
   RefreshCw,
@@ -88,6 +89,10 @@ interface DraftStep {
   status?: 'won' | 'lost';
   lossReasonId?: number | null;
   lossReasonLabel?: string | null;
+  /** pause_ai */
+  moveToStageId?: number | null;
+  moveToPipelineId?: number | null;
+  moveToStageLabel?: string | null;
 }
 
 interface DraftRule {
@@ -109,6 +114,7 @@ function defaultStep(kind: ActionKind): DraftStep {
   if (kind === 'set_lead_value') return { kind, price: 0 };
   if (kind === 'mark_lead_status') return { kind, status: 'won', lossReasonId: null, lossReasonLabel: null };
   if (kind === 'move_pipeline') return { kind, pipelineId: null, pipelineLabel: null, statusId: null, statusLabel: null };
+  if (kind === 'pause_ai') return { kind, moveToStageId: null, moveToPipelineId: null, moveToStageLabel: null };
   return { kind, includeSummary: true };
 }
 
@@ -188,6 +194,14 @@ function stepFromAction(s: ActionStep): DraftStep {
       statusLabel: typeof params.statusLabel === 'string' ? params.statusLabel : null,
     };
   }
+  if (s.kind === 'pause_ai') {
+    return {
+      kind: s.kind,
+      moveToStageId: typeof params.moveToStageId === 'number' ? params.moveToStageId : null,
+      moveToPipelineId: typeof params.moveToPipelineId === 'number' ? params.moveToPipelineId : null,
+      moveToStageLabel: typeof params.moveToStageLabel === 'string' ? params.moveToStageLabel : null,
+    };
+  }
   return { kind: s.kind, includeSummary: params.includeSummary !== false };
 }
 
@@ -254,6 +268,13 @@ function stepToParams(s: DraftStep): Record<string, unknown> {
       ...(s.statusLabel ? { statusLabel: s.statusLabel } : {}),
     };
   }
+  if (s.kind === 'pause_ai') {
+    return {
+      ...(s.moveToStageId ? { moveToStageId: s.moveToStageId } : {}),
+      ...(s.moveToPipelineId ? { moveToPipelineId: s.moveToPipelineId } : {}),
+      ...(s.moveToStageLabel ? { moveToStageLabel: s.moveToStageLabel } : {}),
+    };
+  }
   return { includeSummary: s.includeSummary !== false };
 }
 
@@ -278,6 +299,7 @@ function isStepValid(s: DraftStep): boolean {
   if (s.kind === 'set_lead_value') return typeof s.price === 'number' && s.price >= 0;
   if (s.kind === 'mark_lead_status') return s.status === 'won' || s.status === 'lost';
   if (s.kind === 'move_pipeline') return !!s.pipelineId && s.pipelineId > 0;
+  if (s.kind === 'pause_ai') return true; // pause_ai é sempre válido, etapa é opcional
   return true; // transfer_* e summarize_to_note são válidos sem params extras
 }
 
@@ -344,6 +366,11 @@ const KIND_LABEL: Record<ActionKind, { label: string; icon: typeof Tag; color: s
     label: 'Mover de funil',
     icon: GitBranch,
     color: 'text-indigo-300',
+  },
+  pause_ai: {
+    label: 'Pausar IA (Salesbot)',
+    icon: PauseCircle,
+    color: 'text-rose-300',
   },
 };
 
@@ -1501,6 +1528,38 @@ function StepEditor({
           }
         />
       )}
+      {step.kind === 'pause_ai' && (
+        <div className="space-y-2">
+          <div className="rounded-md border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-[11px] text-rose-200/80 leading-relaxed">
+            Desliga a IA pra esse lead — o Salesbot do Kommo para de ser
+            acionado nos turnos seguintes. A IA não anuncia ao paciente.
+          </div>
+          <div>
+            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block mb-1.5">
+              Mover pra etapa (opcional)
+            </label>
+            <p className="text-[10px] text-zinc-500 mb-2 leading-tight">
+              Útil pra colocar o lead onde o SDR vai encontrar (ex: "Aguardando atendimento").
+              Deixe vazio se for só pausar sem mexer no funil.
+            </p>
+            <StagePicker
+              selectedStatusId={step.moveToStageId ?? null}
+              selectedLabel={step.moveToStageLabel ?? null}
+              onChange={(statusId, pipelineId, label) =>
+                onChange({
+                  ...step,
+                  moveToStageId: statusId,
+                  moveToPipelineId: pipelineId,
+                  moveToStageLabel: label,
+                })
+              }
+              pipelines={pipelinesForSelect}
+              loading={loadingKommo}
+              error={pipelinesError}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1904,6 +1963,11 @@ function StepSummary({ step }: { step: ActionStep }) {
         <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-200 text-[11px] ring-1 ring-indigo-500/30">
           → {params.pipelineLabel}
           {typeof params.statusLabel === 'string' && params.statusLabel ? ` (${params.statusLabel})` : ''}
+        </span>
+      )}
+      {step.kind === 'pause_ai' && typeof params.moveToStageLabel === 'string' && params.moveToStageLabel && (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-200 text-[11px] ring-1 ring-rose-500/30">
+          → {params.moveToStageLabel}
         </span>
       )}
     </div>

@@ -31,7 +31,8 @@ export type ActionKind =
   | 'remove_tag'
   | 'set_lead_value'
   | 'mark_lead_status'
-  | 'move_pipeline';
+  | 'move_pipeline'
+  | 'pause_ai';
 
 export interface AddTagParams {
   tags: string[];
@@ -104,6 +105,13 @@ export interface MovePipelineParams {
   statusLabel?: string;
 }
 
+export interface PauseAiParams {
+  /** Opcional. Se preenchido, também move o lead pra essa etapa quando pausar. */
+  moveToStageId?: number;
+  moveToPipelineId?: number;
+  moveToStageLabel?: string;
+}
+
 export type ActionParams =
   | AddTagParams
   | MoveStageParams
@@ -117,6 +125,7 @@ export type ActionParams =
   | SetLeadValueParams
   | MarkLeadStatusParams
   | MovePipelineParams
+  | PauseAiParams
   | Record<string, never>;
 
 /** Uma ação dentro de uma regra (array element). */

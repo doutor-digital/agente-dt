@@ -714,7 +714,8 @@ export type ActionKind =
   | 'remove_tag'
   | 'set_lead_value'
   | 'mark_lead_status'
-  | 'move_pipeline';
+  | 'move_pipeline'
+  | 'pause_ai';
 
 export interface KommoUsersResponse {
   ok: boolean;

@@ -482,6 +482,22 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       const labelHuman = label ? ` — funil "${label}"` : '';
       return `chame mover_funil(leadId, ${pipelineId}${statusPart}) — move o lead pro funil destino${labelHuman}.`;
     }
+    case 'pause_ai': {
+      const stageId =
+        typeof params.moveToStageId === 'number' ? params.moveToStageId : null;
+      const pipelineId =
+        typeof params.moveToPipelineId === 'number' ? params.moveToPipelineId : null;
+      const stageLabel =
+        typeof params.moveToStageLabel === 'string' ? params.moveToStageLabel : null;
+      const parts = ['chame pausar_ia(leadId) — desliga a IA pra esse lead, Salesbot do Kommo para de disparar'];
+      if (stageId && stageId > 0) {
+        const pipelinePart = pipelineId ? `, ${pipelineId}` : '';
+        const labelHuman = stageLabel ? ` (etapa "${stageLabel}")` : '';
+        parts.push(`e DEPOIS chame mover_etapa(leadId, ${stageId}${pipelinePart})${labelHuman} — pra o SDR encontrar o lead no funil`);
+      }
+      parts.push('Ação silenciosa — não anuncie ao paciente que a IA foi pausada.');
+      return parts.join('. ') + '.';
+    }
     default:
       return `executar ação "${step.kind}"`;
   }

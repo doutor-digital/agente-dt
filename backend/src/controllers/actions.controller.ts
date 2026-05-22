@@ -33,6 +33,7 @@ const ACTION_KINDS: ActionKind[] = [
   'set_lead_value',
   'mark_lead_status',
   'move_pipeline',
+  'pause_ai',
 ];
 
 // Params validators por kind.
@@ -83,6 +84,11 @@ const movePipelineParams = z.object({
   statusId: z.coerce.number().int().positive().optional(),
   statusLabel: z.string().max(120).optional(),
 });
+const pauseAiParams = z.object({
+  moveToStageId: z.coerce.number().int().positive().optional(),
+  moveToPipelineId: z.coerce.number().int().positive().optional(),
+  moveToStageLabel: z.string().max(120).optional(),
+});
 
 function validateActionStep(step: { kind: string; params: unknown }, ctx: z.RefinementCtx, idx: number) {
   const path: (string | number)[] = ['actions', idx, 'params'];
@@ -122,6 +128,9 @@ function validateActionStep(step: { kind: string; params: unknown }, ctx: z.Refi
   } else if (step.kind === 'move_pipeline') {
     const r = movePipelineParams.safeParse(step.params);
     if (!r.success) ctx.addIssue({ code: 'custom', path, message: `move_pipeline exige { pipelineId: number }` });
+  } else if (step.kind === 'pause_ai') {
+    const r = pauseAiParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `pause_ai aceita opcionalmente { moveToStageId }` });
   }
 }
 
