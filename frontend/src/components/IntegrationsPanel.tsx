@@ -816,24 +816,13 @@ function MetaCardView({ card }: { card: MetaIntegrationCard }) {
       )}
       <div className="px-5 py-4 space-y-2 text-xs">
         <CheckRow ok={card.hasAccessToken} label="Access Token" />
-        <CheckRow ok={card.hasVerifyToken} label="Verify Token (handshake)" />
-        <CheckRow ok={card.hasAppSecret} label="App Secret (signature dos webhooks)" />
         <CheckRow ok={!!card.wabaId} label="WABA ID (necessário pra custo)" />
       </div>
-      <div className="px-5 pb-4">
-        <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Webhook URL</div>
-        <code className="text-[11px] block bg-zinc-950/60 ring-1 ring-zinc-800 px-2 py-1.5 rounded text-zinc-300 break-all">
-          {card.webhookUrl}
-        </code>
-        <div className="text-[10px] text-zinc-500 mt-1">
-          Cole essa URL no painel Meta for Developers ao cadastrar o webhook.
+      {card.cost?.lastSyncedAt && (
+        <div className="px-5 pb-4 text-[10px] text-zinc-500">
+          Último sync de custo: <span className="text-zinc-300">{new Date(card.cost.lastSyncedAt).toLocaleString('pt-BR')}</span>
         </div>
-        {card.cost?.lastSyncedAt && (
-          <div className="text-[10px] text-zinc-500 mt-2">
-            Último sync de custo: <span className="text-zinc-300">{new Date(card.cost.lastSyncedAt).toLocaleString('pt-BR')}</span>
-          </div>
-        )}
-      </div>
+      )}
     </section>
   );
 }

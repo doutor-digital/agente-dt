@@ -488,8 +488,6 @@ export interface MetaIntegrationCard {
   phoneNumberId: string | null;
   wabaId: string | null;
   hasAccessToken: boolean;
-  hasVerifyToken: boolean;
-  hasAppSecret: boolean;
   webhookUrl: string;
   cost: null | {
     monthSpentUsd: number;

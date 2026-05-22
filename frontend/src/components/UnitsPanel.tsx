@@ -424,11 +424,15 @@ export function UnitsPanel() {
                 </Section>
               )}
 
-              <Section title="Meta WhatsApp Cloud" subtitle="Opcional — habilita o canal Meta direto.">
+              <Section
+                title="Meta WhatsApp Cloud"
+                subtitle="Acesso à Graph API pra puxar custo (pricing_analytics) e métricas de template. O canal de envio/recepção continua sendo o Kommo."
+              >
                 <Field
                   label="Phone Number ID"
                   value={draft.metaPhoneNumberId ?? ''}
                   onChange={(v) => setDraft({ ...draft, metaPhoneNumberId: v })}
+                  hint="Opcional. Usado só pra check de validação mostrar nome/quality do número."
                 />
                 <Field
                   label="WABA ID"
@@ -441,20 +445,7 @@ export function UnitsPanel() {
                   value={draft.metaAccessToken ?? ''}
                   onChange={(v) => setDraft({ ...draft, metaAccessToken: v })}
                   type="password"
-                />
-                <Field
-                  label="Verify Token"
-                  value={draft.metaVerifyToken ?? ''}
-                  onChange={(v) => setDraft({ ...draft, metaVerifyToken: v })}
-                  type="password"
-                  hint="Token aleatório que você cadastra no painel da Meta."
-                />
-                <Field
-                  label="App Secret"
-                  value={draft.metaAppSecret ?? ''}
-                  onChange={(v) => setDraft({ ...draft, metaAppSecret: v })}
-                  type="password"
-                  hint="Usado pra validar a signature HMAC dos webhooks."
+                  hint="System User token com escopo whatsapp_business_management."
                 />
                 <Field
                   label="Orçamento mensal Meta (USD)"

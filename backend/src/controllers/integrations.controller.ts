@@ -112,8 +112,6 @@ export interface MetaCard {
   phoneNumberId: string | null;
   wabaId: string | null;
   hasAccessToken: boolean;
-  hasVerifyToken: boolean;
-  hasAppSecret: boolean;
   webhookUrl: string;
   // Custo do mês corrente (vem da tabela whatsapp_cost_daily — populada
   // pelo sync diário). null se WABA não está configurada ou sem dados ainda.
@@ -444,18 +442,15 @@ async function buildKommoCard(unit: Unit): Promise<KommoCard> {
 }
 
 async function buildMetaCard(unit: Unit, host: string): Promise<MetaCard> {
-  const hasPhone = !!unit.metaPhoneNumberId;
   const hasToken = !!unit.metaAccessToken;
-  const hasVerify = !!unit.metaVerifyToken;
-  const hasSecret = !!unit.metaAppSecret;
   const hasWaba = !!unit.metaWabaId;
-  const configured = hasPhone && hasToken;
+  // "Configurado" agora = tem o que precisa pra puxar custo via Graph API.
+  // Phone Number ID virou opcional (canal de envio/recepção é o Kommo).
+  const configured = hasToken && hasWaba;
   const webhookUrl = `${host}/api/webhooks/${unit.slug}/meta`;
   const alerts: string[] = [];
-  if (!configured) alerts.push('Meta WhatsApp Cloud não configurada');
-  if (configured && !hasVerify) alerts.push('Verify token não configurado — webhook não verifica');
-  if (configured && !hasSecret) alerts.push('App Secret não configurado — signature do webhook não validada');
-  if (configured && !hasWaba) alerts.push('WABA ID não configurado — custo da Meta não será sincronizado');
+  if (!hasToken) alerts.push('Access Token da Meta não configurado');
+  if (hasToken && !hasWaba) alerts.push('WABA ID não configurado — custo da Meta não será sincronizado');
 
   // Mês corrente + janelas curtas via tabela snapshot.
   const monthStart = new Date();
@@ -550,8 +545,6 @@ async function buildMetaCard(unit: Unit, host: string): Promise<MetaCard> {
     phoneNumberId: unit.metaPhoneNumberId,
     wabaId: unit.metaWabaId,
     hasAccessToken: hasToken,
-    hasVerifyToken: hasVerify,
-    hasAppSecret: hasSecret,
     webhookUrl,
     cost,
     budget: {
