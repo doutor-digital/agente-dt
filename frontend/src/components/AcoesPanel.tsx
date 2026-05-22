@@ -375,7 +375,19 @@ const KIND_LABEL: Record<ActionKind, { label: string; icon: typeof Tag; color: s
   },
 };
 
-export function AcoesPanel() {
+/**
+ * Renderiza o painel de ações em dois modos:
+ *  - "unit"   (default): ações da Unit selecionada. Endpoints /units/:id/actions.
+ *  - "global": regras que valem pra TODAS as units. Endpoints /global-actions.
+ *
+ * Visualmente só muda o título/subtítulo + dispensa exigência de
+ * `selectedUnitId`. A UI de cards, editor e CRUD é a mesma.
+ */
+export interface AcoesPanelProps {
+  scope?: 'unit' | 'global';
+}
+
+export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
   const { selectedUnitId } = useUnit();
   const toast = useToast();
   const [actions, setActions] = useState<UnitAction[]>([]);
@@ -383,37 +395,45 @@ export function AcoesPanel() {
   const [editing, setEditing] = useState<UnitAction | null>(null);
   const [creating, setCreating] = useState(false);
 
+  const isGlobal = scope === 'global';
+
   const load = useCallback(async () => {
-    if (!selectedUnitId) {
+    if (!isGlobal && !selectedUnitId) {
       setActions([]);
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const list = await api.listActions(selectedUnitId);
+      const list = isGlobal
+        ? await api.listGlobalActions()
+        : await api.listActions(selectedUnitId!);
       setActions(list);
     } finally {
       setLoading(false);
     }
-  }, [selectedUnitId]);
+  }, [isGlobal, selectedUnitId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   async function handleSave(draft: DraftRule) {
-    if (!selectedUnitId) return;
+    if (!isGlobal && !selectedUnitId) return;
     try {
       const input = draftToInput(draft);
       if (editing) {
-        const updated = await api.updateAction(selectedUnitId, editing.id, input);
+        const updated = isGlobal
+          ? await api.updateGlobalAction(editing.id, input)
+          : await api.updateAction(selectedUnitId!, editing.id, input);
         setActions((cur) => cur.map((a) => (a.id === updated.id ? updated : a)));
-        toast.success('Ação atualizada.');
+        toast.success(isGlobal ? 'Regra global atualizada.' : 'Ação atualizada.');
       } else {
-        const created = await api.createAction(selectedUnitId, input);
+        const created = isGlobal
+          ? await api.createGlobalAction(input)
+          : await api.createAction(selectedUnitId!, input);
         setActions((cur) => [...cur, created]);
-        toast.success('Ação criada.');
+        toast.success(isGlobal ? 'Regra global criada.' : 'Ação criada.');
       }
       setEditing(null);
       setCreating(false);
@@ -424,12 +444,13 @@ export function AcoesPanel() {
   }
 
   async function handleDelete(action: UnitAction) {
-    if (!selectedUnitId) return;
-    if (!confirm(`Excluir esta ação?\n\n"${action.conditionDescription.slice(0, 80)}…"`)) return;
+    if (!isGlobal && !selectedUnitId) return;
+    if (!confirm(`Excluir esta ${isGlobal ? 'regra global' : 'ação'}?\n\n"${action.conditionDescription.slice(0, 80)}…"`)) return;
     try {
-      await api.deleteAction(selectedUnitId, action.id);
+      if (isGlobal) await api.deleteGlobalAction(action.id);
+      else await api.deleteAction(selectedUnitId!, action.id);
       setActions((cur) => cur.filter((a) => a.id !== action.id));
-      toast.success('Ação excluída.');
+      toast.success(isGlobal ? 'Regra global excluída.' : 'Ação excluída.');
     } catch (err) {
       const e = err as { message?: string };
       toast.error(`Falha ao excluir: ${e?.message ?? 'erro'}`);
@@ -437,11 +458,11 @@ export function AcoesPanel() {
   }
 
   async function handleToggle(action: UnitAction) {
-    if (!selectedUnitId) return;
+    if (!isGlobal && !selectedUnitId) return;
     try {
-      const updated = await api.updateAction(selectedUnitId, action.id, {
-        enabled: !action.enabled,
-      });
+      const updated = isGlobal
+        ? await api.updateGlobalAction(action.id, { enabled: !action.enabled })
+        : await api.updateAction(selectedUnitId!, action.id, { enabled: !action.enabled });
       setActions((cur) => cur.map((a) => (a.id === updated.id ? updated : a)));
     } catch (err) {
       const e = err as { message?: string };
@@ -449,7 +470,7 @@ export function AcoesPanel() {
     }
   }
 
-  if (!selectedUnitId) {
+  if (!isGlobal && !selectedUnitId) {
     return (
       <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm">
         Selecione uma unidade pra configurar as Ações.
@@ -464,12 +485,18 @@ export function AcoesPanel() {
         <div className="flex items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-display font-bold text-zinc-100 tracking-tight flex items-center gap-2">
-              <Zap size={22} className="text-brand-300" />
-              Ações
+              <Zap size={22} className={isGlobal ? 'text-violet-300' : 'text-brand-300'} />
+              {isGlobal ? '🌐 Regras Globais' : 'Ações'}
+              {isGlobal && (
+                <span className="text-[10px] uppercase tracking-wider bg-violet-500/15 text-violet-300 px-2 py-0.5 rounded-full ring-1 ring-violet-500/30 font-normal">
+                  Toda a plataforma
+                </span>
+              )}
             </h1>
             <p className="text-sm text-zinc-500 mt-1 max-w-2xl">
-              Regras de "quando o cliente fizer X, a IA faz Y". O agente lê todas as regras a
-              cada mensagem e decide se alguma se aplica.
+              {isGlobal
+                ? 'Regras "quando → faça" que valem pra TODAS as units. Têm prioridade sobre as ações da Unit. Use pra segurança/compliance (handoff humano, emergência médica, ofensa, anti-diagnóstico).'
+                : 'Regras de "quando o cliente fizer X, a IA faz Y". O agente lê todas as regras a cada mensagem e decide se alguma se aplica.'}
             </p>
           </div>
           <button
@@ -478,10 +505,14 @@ export function AcoesPanel() {
               setCreating(true);
               setEditing(null);
             }}
-            className="inline-flex items-center gap-2 text-sm px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-500 text-white font-medium shrink-0"
+            className={`inline-flex items-center gap-2 text-sm px-4 py-2 rounded-md text-white font-medium shrink-0 ${
+              isGlobal
+                ? 'bg-violet-600 hover:bg-violet-500'
+                : 'bg-brand-600 hover:bg-brand-500'
+            }`}
           >
             <Plus size={14} />
-            Nova ação
+            {isGlobal ? 'Nova regra global' : 'Nova ação'}
           </button>
         </div>
 

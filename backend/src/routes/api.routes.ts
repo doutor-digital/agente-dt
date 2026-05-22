@@ -70,6 +70,12 @@ import {
   deleteActionHandler,
 } from '../controllers/actions.controller.js';
 import {
+  listGlobalActionsHandler,
+  createGlobalActionHandler,
+  updateGlobalActionHandler,
+  deleteGlobalActionHandler,
+} from '../controllers/global-actions.controller.js';
+import {
   listLeadFieldRulesHandler,
   createLeadFieldRuleHandler,
   updateLeadFieldRuleHandler,
@@ -172,6 +178,12 @@ apiRouter.get('/units/:id/actions', requireUnitAccess, listActionsHandler);
 apiRouter.post('/units/:id/actions', requireUnitAccess, createActionHandler);
 apiRouter.patch('/units/:id/actions/:actionId', requireUnitAccess, updateActionHandler);
 apiRouter.delete('/units/:id/actions/:actionId', requireUnitAccess, deleteActionHandler);
+
+// Regras globais — só SUPER_ADMIN. Valem pra TODAS as units.
+apiRouter.get('/global-actions', requireSuperAdmin, listGlobalActionsHandler);
+apiRouter.post('/global-actions', requireSuperAdmin, createGlobalActionHandler);
+apiRouter.patch('/global-actions/:actionId', requireSuperAdmin, updateGlobalActionHandler);
+apiRouter.delete('/global-actions/:actionId', requireSuperAdmin, deleteGlobalActionHandler);
 
 // LeadFieldRules — captura de dados pra custom fields do Kommo.
 apiRouter.get('/units/:id/lead-field-rules', requireUnitAccess, listLeadFieldRulesHandler);

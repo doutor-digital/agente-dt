@@ -215,3 +215,65 @@ export async function updateAction(
 export async function deleteAction(actionId: string): Promise<void> {
   await prisma.unitAction.delete({ where: { id: actionId } });
 }
+
+// ===========================================================================
+// GlobalAction — regras que valem pra TODAS as units (gerenciadas por admin).
+// ===========================================================================
+
+import type { GlobalAction } from '@prisma/client';
+
+export async function listGlobalActions(): Promise<GlobalAction[]> {
+  return prisma.globalAction.findMany({
+    orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+  });
+}
+
+export async function listEnabledGlobalActions(): Promise<GlobalAction[]> {
+  return prisma.globalAction.findMany({
+    where: { enabled: true },
+    orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+  });
+}
+
+export async function createGlobalAction(input: ActionInput & { priority?: number }): Promise<GlobalAction> {
+  return prisma.globalAction.create({
+    data: {
+      conditionDescription: input.conditionDescription,
+      actions: input.actions as unknown as object,
+      notes: input.notes ?? null,
+      enabled: input.enabled ?? true,
+      priority: input.priority ?? 0,
+    },
+  });
+}
+
+export async function updateGlobalAction(
+  actionId: string,
+  input: Partial<ActionInput & { priority: number }>,
+): Promise<GlobalAction> {
+  return prisma.globalAction.update({
+    where: { id: actionId },
+    data: {
+      ...(input.conditionDescription !== undefined && {
+        conditionDescription: input.conditionDescription,
+      }),
+      ...(input.actions !== undefined && { actions: input.actions as unknown as object }),
+      ...(input.notes !== undefined && { notes: input.notes }),
+      ...(input.enabled !== undefined && { enabled: input.enabled }),
+      ...(input.priority !== undefined && { priority: input.priority }),
+    },
+  });
+}
+
+export async function deleteGlobalAction(actionId: string): Promise<void> {
+  await prisma.globalAction.delete({ where: { id: actionId } });
+}
+
+/** Lê o array de ações de uma GlobalAction. Mesma semântica do readActions de UnitAction. */
+export function readGlobalActionSteps(row: GlobalAction): ActionStep[] {
+  const raw = row.actions;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw as unknown as ActionStep[];
+  }
+  return [];
+}

@@ -19,6 +19,7 @@
 // ============================================================================
 
 import type {
+  GlobalAction,
   KnowledgeBaseEntry,
   LeadFieldRule,
   MessageTemplate,
@@ -27,7 +28,10 @@ import type {
 } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { searchKnowledge } from '../services/knowledge.service.js';
-import { listEnabledActions } from '../services/actions.service.js';
+import {
+  listEnabledActions,
+  listEnabledGlobalActions,
+} from '../services/actions.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { logger } from '../lib/logger.js';
 
@@ -370,9 +374,10 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
     case 'add_tag': {
       const tags = Array.isArray(params.tags) ? (params.tags as string[]) : [];
       if (tags.length === 0) return 'aplicar uma tag relevante (não configurada)';
-      if (tags.length === 1) return `chame aplicar_tag("${tags[0]}")`;
-      const calls = tags.map((t) => `aplicar_tag("${t}")`).join(' e ');
-      return `chame ${calls}`;
+      if (tags.length === 1) return `chame aplicar_tag({ tag: "${tags[0]}" })`;
+      // Múltiplas tags numa única chamada — atômico no Kommo, mais barato.
+      const tagsArr = tags.map((t) => `"${t}"`).join(', ');
+      return `chame aplicar_tag({ tags: [${tagsArr}] }) — todas de uma vez (UMA chamada só, NÃO chame várias vezes)`;
     }
     case 'move_stage': {
       const statusId = typeof params.statusId === 'number' ? params.statusId : Number(params.statusId);
@@ -515,8 +520,21 @@ function formatDeadline(minutes: number): string {
 }
 
 /** Para uma UnitAction, devolve a string descrevendo TODAS as ações dela. */
-function humanizeAction(action: UnitAction): string {
-  // Lê o array novo OU cai pra par legado.
+/**
+ * Shape mínimo aceito por humanizeAction / renderActions / renderGlobalActions.
+ * Cobre tanto UnitAction (com fallback legado actionKind/actionParams) quanto
+ * GlobalAction (só o array `actions` novo).
+ */
+interface ActionLike {
+  actions: unknown;
+  actionKind?: string;
+  actionParams?: unknown;
+  conditionDescription: string;
+  notes?: string | null;
+}
+
+function humanizeAction(action: ActionLike): string {
+  // Lê o array novo OU cai pra par legado (só UnitAction tem isso).
   const arr = Array.isArray(action.actions) ? (action.actions as Array<{ kind: string; params: Record<string, unknown> }>) : [];
   const steps =
     arr.length > 0
@@ -548,6 +566,35 @@ function renderActions(actions: UnitAction[]): string {
 - As ações são silenciosas — não anuncie ao cliente que aplicou uma tag,
   mudou de etapa, transferiu ou gerou resumo interno.
   Exceção: transferência com permissão exige perguntar primeiro.
+
+${lines.join('\n\n')}`;
+}
+
+/**
+ * Renderiza regras globais (`GlobalAction[]`). Vem ANTES das regras da unit no
+ * prompt, com header próprio destacado pra IA dar a elas peso máximo —
+ * tipicamente cobrem segurança/compliance (handoff humano, emergência médica,
+ * anti-diagnóstico, ofensa).
+ *
+ * Em caso de conflito com regras da unit, as globais ganham (são mais
+ * conservadoras: param a IA em vez de tentar virar a conversa).
+ */
+function renderGlobalActions(actions: GlobalAction[]): string {
+  if (actions.length === 0) return '';
+  const lines = actions.map((a, i) => {
+    const cond = a.conditionDescription.trim();
+    const act = humanizeAction(a);
+    const notes = a.notes?.trim();
+    const lineParts = [`${i + 1}. Quando ${cond}, ${act}`];
+    if (notes) lineParts.push(`   Detalhes: ${notes}`);
+    return lineParts.join('\n');
+  });
+  return `# 🌐 REGRAS GLOBAIS DA PLATAFORMA (prioridade máxima)
+- Estas regras valem pra TODAS as unidades. Têm PRIORIDADE sobre as ações
+  específicas da unit — quando uma regra global bate, ela é não-negociável.
+- Aplica TODAS as ações da regra quando a condição bater, em silêncio.
+- Em conflito com regras da unit: a global ganha (são mais conservadoras —
+  segurança e compliance).
 
 ${lines.join('\n\n')}`;
 }
@@ -605,6 +652,8 @@ export interface ComposeInput {
   knowledge?: Array<KnowledgeBaseEntry & { score: number }>;
   /** Regras "quando → faça" cadastradas na Unit. */
   actions?: UnitAction[];
+  /** Regras "quando → faça" GLOBAIS (valem pra todas as units). */
+  globalActions?: GlobalAction[];
   /** Regras de captura de dados (LeadFieldRule) — viram tools dinâmicas. */
   leadFieldRules?: LeadFieldRule[];
   /**
@@ -671,6 +720,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     flaggedExamples = [],
     knowledge = [],
     actions = [],
+    globalActions = [],
     leadFieldRules = [],
     isFirstTurn = false,
     leadId,
@@ -740,6 +790,10 @@ export function composeSystemPrompt(input: ComposeInput): string {
       ].join('\n'),
     );
   }
+
+  // Globais antes — peso semântico maior e cobrem segurança/compliance.
+  const globalActionsBlock = renderGlobalActions(globalActions);
+  if (globalActionsBlock) blocks.push(globalActionsBlock);
 
   const actionsBlock = renderActions(actions);
   if (actionsBlock) blocks.push(actionsBlock);
@@ -812,7 +866,7 @@ export async function composeSystemPromptForUnit(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions, leadFieldRules] = await Promise.all([
+  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -836,6 +890,11 @@ export async function composeSystemPromptForUnit(input: {
         )
       : Promise.resolve([]),
     listEnabledActions(input.unit.id),
+    listEnabledGlobalActions().catch((err) => {
+      // Se a tabela GlobalAction ainda não foi migrada, não derruba o prompt.
+      logger.warn({ err }, 'listEnabledGlobalActions falhou — seguindo sem regras globais');
+      return [];
+    }),
     listEnabledLeadFieldRules(input.unit.id),
   ]);
   return composeSystemPrompt({
@@ -844,6 +903,7 @@ export async function composeSystemPromptForUnit(input: {
     flaggedExamples: flagged,
     knowledge,
     actions,
+    globalActions,
     leadFieldRules,
   });
 }

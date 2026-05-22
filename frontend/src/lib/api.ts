@@ -505,6 +505,31 @@ export const api = {
   },
 
   // -------------------------------------------------------------------------
+  // Regras Globais — só SUPER_ADMIN, valem pra todas as units.
+  // -------------------------------------------------------------------------
+  async listGlobalActions(): Promise<UnitAction[]> {
+    const { data } = await http.get<{ actions: UnitAction[] }>(`/global-actions`);
+    return data.actions;
+  },
+  async createGlobalAction(input: UnitActionInput): Promise<UnitAction> {
+    const { data } = await http.post<{ action: UnitAction }>(`/global-actions`, input);
+    return data.action;
+  },
+  async updateGlobalAction(
+    actionId: string,
+    input: Partial<UnitActionInput>,
+  ): Promise<UnitAction> {
+    const { data } = await http.patch<{ action: UnitAction }>(
+      `/global-actions/${actionId}`,
+      input,
+    );
+    return data.action;
+  },
+  async deleteGlobalAction(actionId: string): Promise<void> {
+    await http.delete(`/global-actions/${actionId}`);
+  },
+
+  // -------------------------------------------------------------------------
   // Flag de mensagens
   // -------------------------------------------------------------------------
   async flagMessage(messageId: string, flagged: boolean): Promise<void> {

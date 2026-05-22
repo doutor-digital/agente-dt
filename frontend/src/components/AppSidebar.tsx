@@ -24,6 +24,7 @@ import {
   Database,
   Eraser,
   FileText,
+  Globe,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -56,6 +57,7 @@ export type AppTab =
   | 'playground'
   | 'sources'
   | 'actions'
+  | 'global-actions'
   | 'captures'
   | 'tools'
   | 'config'
@@ -87,6 +89,7 @@ const NAV: NavItem[] = [
   { id: 'prompts', label: 'Prompts', icon: Sparkles, group: 'secondary' },
   { id: 'integrations', label: 'Integrações', icon: Cable, group: 'secondary' },
   { id: 'config', label: 'Avançado (técnico)', icon: Settings, group: 'secondary' },
+  { id: 'global-actions', label: 'Regras Globais', icon: Globe, group: 'secondary', superOnly: true },
   { id: 'units', label: 'Unidades', icon: Building2, group: 'secondary', superOnly: true },
   { id: 'users', label: 'Usuários', icon: UserCog, group: 'secondary', superOnly: true },
 ];

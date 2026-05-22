@@ -130,7 +130,18 @@ export function buildTools({
       .string()
       .min(1)
       .max(50)
-      .describe('Nome da tag a aplicar. Use exemplos como "Quente", "Frio", "Pronto para Fechar".'),
+      .optional()
+      .describe('Nome da única tag a aplicar. Use ISTO OU `tags`, não os dois.'),
+    tags: z
+      .array(z.string().min(1).max(50))
+      .min(1)
+      .max(15)
+      .optional()
+      .describe(
+        'Lista de tags a aplicar de uma vez (1 a 15). Prefira esta forma quando ' +
+          'precisar aplicar MAIS DE UMA tag no mesmo turno — economiza chamadas ' +
+          'e é atômico no Kommo.',
+      ),
   });
 
   const moverEtapaSchema = z.object({
@@ -152,35 +163,50 @@ export function buildTools({
     name: 'aplicar_tag',
     description: desc('aplicar_tag'),
     schema: aplicarTagSchema,
-    func: async ({ leadId, tag }) => {
+    func: async ({ leadId, tag, tags }) => {
       const t0 = performance.now();
+      // Normaliza pra array. Aceita `tag` (legado, 1 tag), `tags` (novo) ou ambos.
+      const list = [
+        ...(tag ? [tag] : []),
+        ...(Array.isArray(tags) ? tags : []),
+      ]
+        .map((t) => t?.trim())
+        .filter((t): t is string => !!t);
+      const label = list.length === 1 ? `tag "${list[0]}"` : `${list.length} tags`;
+
       await recorder.step({
         kind: 'TOOL_CALL',
-        title: `Decisão: aplicar tag "${tag}" no lead ${leadId}`,
-        payload: { leadId, tag },
+        title: `Decisão: aplicar ${label} no lead ${leadId}`,
+        payload: { leadId, tags: list },
       });
 
+      if (list.length === 0) {
+        return `ERRO ao aplicar tag: nenhuma tag fornecida (passe "tag" ou "tags").`;
+      }
+
       try {
-        await kommo.addTag({ leadId, tag });
+        await kommo.addTag({ leadId, tags: list });
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
           kind: 'KOMMO_ACTION',
-          title: `Tag "${tag}" aplicada no Kommo`,
-          payload: { leadId, tag },
+          title: list.length === 1
+            ? `Tag "${list[0]}" aplicada no Kommo`
+            : `${list.length} tags aplicadas no Kommo: ${list.map((t) => `"${t}"`).join(', ')}`,
+          payload: { leadId, tags: list },
           latencyMs: latency,
         });
-        return `OK — tag "${tag}" aplicada no lead ${leadId} (${latency}ms).`;
+        return `OK — ${label} aplicada(s) no lead ${leadId} (${latency}ms).`;
       } catch (err) {
         const latency = Math.round(performance.now() - t0);
         const msg = err instanceof Error ? err.message : String(err);
         await recorder.step({
           kind: 'ERROR',
-          title: `Falha ao aplicar tag: ${msg}`,
-          payload: { leadId, tag, error: msg },
+          title: `Falha ao aplicar ${label}: ${msg}`,
+          payload: { leadId, tags: list, error: msg },
           latencyMs: latency,
         });
         // Devolvemos a falha como string pra LLM poder reagir. NÃO lançamos.
-        return `ERRO ao aplicar tag: ${msg}`;
+        return `ERRO ao aplicar ${label}: ${msg}`;
       }
     },
   });

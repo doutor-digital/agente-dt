@@ -123,7 +123,10 @@ export interface KommoTag {
 
 export interface AddTagParams {
   leadId: number;
-  tag: string;
+  /** Uma única tag. Use isto OU `tags` (não os dois). */
+  tag?: string;
+  /** Múltiplas tags numa só chamada — vira UM PATCH no Kommo (atômico). */
+  tags?: string[];
 }
 
 export interface MoveStageParams {
@@ -592,11 +595,38 @@ export class KommoClient {
     }
   }
 
-  async addTag({ leadId, tag }: AddTagParams): Promise<void> {
+  /**
+   * Adiciona uma OU várias tags ao lead, SEM remover as existentes.
+   *
+   * Aceita `tag` (string única) OU `tags` (array). Quando vários, faz UM ÚNICO
+   * PATCH com todas — atômico do ponto de vista da observabilidade do Kommo e
+   * mais barato que N chamadas.
+   *
+   * ⚠ HISTÓRICO: a versão anterior usava `_embedded.tags: [{name}]` que faz o
+   * Kommo SUBSTITUIR a lista inteira de tags pelas enviadas. Resultado: chamar
+   * addTag 3x em sequência deixava só a última tag (as anteriores eram
+   * apagadas silenciosamente — bug observado em produção).
+   *
+   * O atalho correto é `_embedded.tags_to_add: [{name}]` (espelho do
+   * `tags_to_delete` em removeTag), que ANEXA sem mexer no resto.
+   */
+  async addTag({ leadId, tag, tags }: AddTagParams): Promise<void> {
+    const all = [
+      ...(tag ? [tag] : []),
+      ...(Array.isArray(tags) ? tags : []),
+    ]
+      .map((t) => t?.trim())
+      .filter((t): t is string => !!t);
+    if (all.length === 0) return; // no-op silencioso
+    // Dedupe preservando ordem.
+    const seen = new Set<string>();
+    const unique = all.filter((t) => (seen.has(t) ? false : (seen.add(t), true)));
     try {
-      await this.http.patch(`/leads/${leadId}`, { _embedded: { tags: [{ name: tag }] } });
+      await this.http.patch(`/leads/${leadId}`, {
+        _embedded: { tags_to_add: unique.map((name) => ({ name })) },
+      });
     } catch (err) {
-      wrapAxiosError(err, `addTag(${leadId}, ${tag})`);
+      wrapAxiosError(err, `addTag(${leadId}, [${unique.join(', ')}])`);
     }
   }
 

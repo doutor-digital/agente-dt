@@ -105,14 +105,20 @@ function buildSandboxTools(opts: { onCall: (a: SandboxAction) => void }) {
   const aplicar_tag = new DynamicStructuredTool({
     name: 'aplicar_tag',
     description:
-      'Aplica uma tag ao lead no Kommo (sandbox: simulado, não chama o CRM).',
+      'Aplica uma OU várias tags ao lead no Kommo (sandbox: simulado). Use `tags: [...]` pra múltiplas numa só chamada.',
     schema: zod.object({
       leadId: zod.number().int().positive(),
-      tag: zod.string().min(1).max(50),
+      tag: zod.string().min(1).max(50).optional(),
+      tags: zod.array(zod.string().min(1).max(50)).min(1).max(15).optional(),
     }),
-    func: async ({ leadId, tag }) => {
-      const result = `[SANDBOX] aplicar_tag("${tag}") no lead ${leadId} — simulado.`;
-      opts.onCall({ tool: 'aplicar_tag', args: { leadId, tag }, result });
+    func: async ({ leadId, tag, tags }) => {
+      const list = [
+        ...(tag ? [tag] : []),
+        ...(Array.isArray(tags) ? tags : []),
+      ].filter((t): t is string => !!t);
+      const label = list.length === 1 ? `"${list[0]}"` : `[${list.map((t) => `"${t}"`).join(', ')}]`;
+      const result = `[SANDBOX] aplicar_tag(${label}) no lead ${leadId} — simulado.`;
+      opts.onCall({ tool: 'aplicar_tag', args: { leadId, tags: list }, result });
       return result;
     },
   });

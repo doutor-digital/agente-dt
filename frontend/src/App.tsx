@@ -128,6 +128,7 @@ function Shell() {
           {tab === 'playground' && <PlaygroundPanel />}
           {tab === 'sources' && <FontesPanel />}
           {tab === 'actions' && <AcoesPanel />}
+          {tab === 'global-actions' && <AcoesPanel scope="global" />}
           {tab === 'tools' && <FerramentasPanel />}
           {tab === 'captures' && <CapturesPanel />}
           {tab === 'config' && <AgentConfigPanel />}

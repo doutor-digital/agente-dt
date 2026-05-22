@@ -30,6 +30,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   playground: 'testar-ia',
   sources: 'fontes',
   actions: 'acoes',
+  'global-actions': 'regras-globais',
   tools: 'ferramentas',
   captures: 'capturas',
   conversations: 'conversas',

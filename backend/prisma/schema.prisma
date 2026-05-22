@@ -285,6 +285,36 @@ model UnitAction {
 }
 
 // ===========================================================================
+// GlobalAction — regras "quando → faça" que valem pra TODAS as units.
+// ===========================================================================
+// Espelho de UnitAction sem unitId. O composer injeta as globais ANTES das
+// regras da unit no system prompt, sob o título "REGRAS GLOBAIS DA PLATAFORMA".
+//
+// Gerenciado só por super-admin. Casos de uso: handoff humano, acolhimento
+// de emergência (CVV 188), pausa em caso de ofensa, anti-diagnóstico.
+//
+// "ações específicas da unit" continuam em UnitAction — globais NÃO removem
+// nem sobrescrevem, só somam.
+// ===========================================================================
+model GlobalAction {
+  id String @id @default(cuid())
+
+  conditionDescription String  @map("condition_description")
+  /** Mesma estrutura de UnitAction.actions: [{ kind, params }, ...]. */
+  actions              Json    @default("[]") @map("actions")
+  notes                String? @map("notes")
+  enabled              Boolean @default(true)
+  /** Ordem de exibição/aplicação no prompt. Globais com `priority` menor vêm primeiro. */
+  priority             Int     @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([enabled, priority])
+  @@map("global_actions")
+}
+
+// ===========================================================================
 // MessageTemplate — respostas prontas que a IA pode usar.
 // ===========================================================================
 // Cada template tem palavras-chave de gatilho. O composer inclui a lista no
