@@ -2,9 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
-  GitBranch,
   Lightbulb,
-  ListChecks,
   Loader2,
   Pause,
   Plus,
@@ -172,26 +170,6 @@ export function AgentConfigPanel() {
     if (fallback) updateTool(name, { description: fallback.description });
   };
 
-  const addWorkflowRule = () => {
-    const rule: WorkflowRule = {
-      id: crypto.randomUUID(),
-      when: '',
-      then: '',
-    };
-    setDraft({ ...draft, workflow: [...draft.workflow, rule] });
-  };
-
-  const updateRule = (id: string, patch: Partial<WorkflowRule>) => {
-    setDraft({
-      ...draft,
-      workflow: draft.workflow.map((r) => (r.id === id ? { ...r, ...patch } : r)),
-    });
-  };
-
-  const removeRule = (id: string) => {
-    setDraft({ ...draft, workflow: draft.workflow.filter((r) => r.id !== id) });
-  };
-
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-6">
@@ -349,79 +327,6 @@ export function AgentConfigPanel() {
           </div>
         </section>
 
-        {/* SEQUÊNCIAS / WORKFLOW */}
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <GitBranch size={16} className="text-brand-300" />
-              <h2 className="font-semibold text-zinc-100">Sequências de Automação</h2>
-            </div>
-            <button
-              onClick={addWorkflowRule}
-              className="inline-flex items-center gap-1 text-xs text-brand-300 hover:text-brand-200 border border-brand-500/30 rounded-md px-2.5 py-1 hover:bg-brand-500/10"
-            >
-              <Plus size={12} />
-              Nova regra
-            </button>
-          </div>
-          <p className="text-xs text-zinc-500 mb-4">
-            Regras declarativas que o agente recebe junto ao prompt. Formato:{' '}
-            <strong>SE</strong> &lt;gatilho&gt; <strong>ENTÃO</strong> &lt;ação esperada&gt;.
-            Funcionam como "policy" pra guiar o loop ReAct — não substituem a decisão do LLM.
-          </p>
-
-          {draft.workflow.length === 0 ? (
-            <div className="text-center py-8 border border-dashed border-zinc-800 rounded-lg">
-              <ListChecks size={28} className="text-zinc-700 mx-auto mb-2" />
-              <p className="text-xs text-zinc-500">
-                Nenhuma sequência cadastrada. O agente vai operar só com o System Prompt.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {draft.workflow.map((rule, i) => (
-                <div
-                  key={rule.id}
-                  className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 relative"
-                >
-                  <div className="absolute -left-2.5 top-3 w-5 h-5 rounded-full bg-zinc-900 border border-brand-500/40 flex items-center justify-center text-[10px] font-mono font-bold text-brand-300">
-                    {i + 1}
-                  </div>
-                  <button
-                    onClick={() => removeRule(rule.id)}
-                    className="absolute top-2 right-2 text-zinc-600 hover:text-rose-400 p-1"
-                    title="Remover"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-
-                  <div className="space-y-3 ml-3">
-                    <div>
-                      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
-                        SE (gatilho)
-                      </label>
-                      <textarea
-                        value={rule.when}
-                        onChange={(e) => updateRule(rule.id, { when: e.target.value })}
-                        rows={2}
-                        placeholder='ex: "o cliente mencionou orçamento aprovado"'
-                        className="w-full px-3 py-2 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500 resize-vertical"
-                      />
-                    </div>
-                    <RuleActionBuilder
-                      thenText={rule.then}
-                      onChange={(next) => updateRule(rule.id, { then: next })}
-                      tags={kommoTags?.tags ?? []}
-                      stages={allStages}
-                      tagsLoading={selectedUnitId !== null && kommoTags === null}
-                      stagesLoading={selectedUnitId !== null && kommoPipelines === null}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
 
         {/* EXEMPLOS A EVITAR (flagged messages) */}
         <FlaggedExamplesSection unitId={selectedUnitId} />
@@ -483,201 +388,11 @@ export function AgentConfigPanel() {
 }
 
 // ===========================================================================
-// RuleActionBuilder — editor estruturado pro "ENTÃO" das regras de automação
+// (RuleActionBuilder e helpers de workflow removidos — substituídos pela aba
+// "Ações"/UnitAction com pickers tipados de tag e etapa. As Sequências de
+// Automação foram aposentadas; a coluna agent_configs.workflow ainda existe
+// mas não é mais injetada no prompt.)
 // ===========================================================================
-//
-// Substitui a textarea livre por dropdowns das tags e etapas REAIS do Kommo
-// (puxados via API). O componente parseia o `then` existente best-effort:
-//   aplicar_tag("Quente") · mover_etapa(105414491) · pausar_ia · <custom>
-// Modifica via UI e serializa de volta nesse formato — que é o que a LLM lê
-// no system prompt.
-//
-// Tem um modo "advanced" (toggle) que mostra a textarea raw pra power users.
-// ===========================================================================
-
-interface ParsedAction {
-  tag: string | null;
-  statusId: number | null;
-  pause: boolean;
-  custom: string;
-}
-
-function parseThen(then: string): ParsedAction {
-  const tagMatch = then.match(/aplicar_tag\("([^"]+)"\)/);
-  const stageMatch = then.match(/mover_etapa\((\d+)\)/);
-  const pauseMatch = /pausar_ia(?:\(\))?/.test(then);
-  let custom = then;
-  custom = custom.replace(/aplicar_tag\("[^"]+"\)/g, '');
-  custom = custom.replace(/mover_etapa\(\d+\)/g, '');
-  custom = custom.replace(/pausar_ia(?:\(\))?/g, '');
-  custom = custom.replace(/[·,;]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return {
-    tag: tagMatch?.[1] ?? null,
-    statusId: stageMatch ? Number(stageMatch[1]) : null,
-    pause: pauseMatch,
-    custom,
-  };
-}
-
-function serializeThen(action: ParsedAction): string {
-  const parts: string[] = [];
-  if (action.tag) parts.push(`aplicar_tag("${action.tag}")`);
-  if (action.statusId) parts.push(`mover_etapa(${action.statusId})`);
-  if (action.pause) parts.push('pausar_ia');
-  const struct = parts.join(' · ');
-  const custom = action.custom.trim();
-  if (struct && custom) return `${struct} · ${custom}`;
-  return struct || custom;
-}
-
-function RuleActionBuilder({
-  thenText,
-  onChange,
-  tags,
-  stages,
-  tagsLoading,
-  stagesLoading,
-}: {
-  thenText: string;
-  onChange: (next: string) => void;
-  tags: Array<{ id: number; name: string; color: string | null }>;
-  stages: Array<{ id: number; label: string }>;
-  tagsLoading: boolean;
-  stagesLoading: boolean;
-}) {
-  const parsed = useMemo(() => parseThen(thenText), [thenText]);
-  const [advanced, setAdvanced] = useState(false);
-
-  const apply = (patch: Partial<ParsedAction>) => {
-    onChange(serializeThen({ ...parsed, ...patch }));
-  };
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
-          ENTÃO (ações)
-        </label>
-        <button
-          type="button"
-          onClick={() => setAdvanced(!advanced)}
-          className="text-[10px] text-zinc-500 hover:text-zinc-300"
-        >
-          {advanced ? '← voltar pro builder' : 'editar texto livre →'}
-        </button>
-      </div>
-
-      {advanced ? (
-        <textarea
-          value={thenText}
-          onChange={(e) => onChange(e.target.value)}
-          rows={3}
-          placeholder='ex: aplicar_tag("Quente") · mover_etapa(105414491) · pausar_ia'
-          className="w-full px-3 py-2 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 font-mono focus:outline-none focus:border-brand-500 resize-vertical"
-        />
-      ) : (
-        <div className="space-y-2 rounded-md border border-zinc-800 bg-zinc-950/40 p-3">
-          {/* Aplicar tag */}
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={!!parsed.tag}
-              onChange={(e) => apply({ tag: e.target.checked ? tags[0]?.name ?? '' : null })}
-              className="accent-brand-500"
-            />
-            <Tag size={12} className="text-amber-400 shrink-0" />
-            <span className="text-xs text-zinc-300 w-24 shrink-0">Aplicar tag</span>
-            <select
-              value={parsed.tag ?? ''}
-              onChange={(e) => apply({ tag: e.target.value || null })}
-              disabled={!parsed.tag}
-              className="flex-1 px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 disabled:opacity-50 focus:outline-none focus:border-brand-500"
-            >
-              {tagsLoading && <option value="">carregando tags…</option>}
-              {!tagsLoading && tags.length === 0 && <option value="">Nenhuma tag no Kommo</option>}
-              {tags.map((t) => (
-                <option key={t.id} value={t.name}>
-                  {t.name}
-                </option>
-              ))}
-              {parsed.tag && !tags.some((t) => t.name === parsed.tag) && (
-                <option value={parsed.tag}>{parsed.tag} (atual)</option>
-              )}
-            </select>
-          </div>
-
-          {/* Mover etapa */}
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={!!parsed.statusId}
-              onChange={(e) => apply({ statusId: e.target.checked ? stages[0]?.id ?? null : null })}
-              className="accent-brand-500"
-            />
-            <Workflow size={12} className="text-sky-400 shrink-0" />
-            <span className="text-xs text-zinc-300 w-24 shrink-0">Mover etapa</span>
-            <select
-              value={parsed.statusId ?? ''}
-              onChange={(e) => apply({ statusId: e.target.value ? Number(e.target.value) : null })}
-              disabled={!parsed.statusId}
-              className="flex-1 px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 disabled:opacity-50 focus:outline-none focus:border-brand-500"
-            >
-              {stagesLoading && <option value="">carregando etapas…</option>}
-              {!stagesLoading && stages.length === 0 && <option value="">Nenhuma etapa</option>}
-              {stages.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label} (#{s.id})
-                </option>
-              ))}
-              {parsed.statusId && !stages.some((s) => s.id === parsed.statusId) && (
-                <option value={parsed.statusId}>#{parsed.statusId} (atual)</option>
-              )}
-            </select>
-          </div>
-
-          {/* Pausar IA */}
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={parsed.pause}
-              onChange={(e) => apply({ pause: e.target.checked })}
-              className="accent-brand-500"
-            />
-            <Pause size={12} className="text-rose-400 shrink-0" />
-            <span className="text-xs text-zinc-300 w-24 shrink-0">Pausar IA</span>
-            <span className="flex-1 text-[10px] text-zinc-600">
-              Marca o checkbox "IA Pausada" no lead — humano assume.
-            </span>
-          </div>
-
-          {/* Instrução custom */}
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">
-              Instrução adicional (texto livre)
-            </label>
-            <input
-              type="text"
-              value={parsed.custom}
-              onChange={(e) => apply({ custom: e.target.value })}
-              placeholder="ex: responder confirmando interesse e perguntar urgência"
-              className="w-full px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500"
-            />
-          </div>
-
-          {/* Preview do que o LLM vai ler */}
-          {thenText.trim() && (
-            <div className="mt-2 rounded bg-zinc-900/60 border border-zinc-800 px-2 py-1.5">
-              <div className="text-[9px] uppercase tracking-wider text-zinc-600 mb-0.5">
-                Como a IA vai ler isso
-              </div>
-              <div className="text-[10px] text-zinc-400 font-mono break-words">{thenText}</div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ===========================================================================
 // IdeasSection — cards informativos de funcionalidades pra construir depois

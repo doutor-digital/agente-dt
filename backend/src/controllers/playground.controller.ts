@@ -29,7 +29,7 @@ import {
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z as zod } from 'zod';
 import { prisma } from '../lib/prisma.js';
-import { getActiveConfig, renderWorkflowGuidance } from '../agent/config.js';
+import { getActiveConfig } from '../agent/config.js';
 import { composeSystemPromptForUnit } from '../agent/prompt-composer.js';
 import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
@@ -143,7 +143,6 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
   const systemPrompt = await composeSystemPromptForUnit({
     unit,
     agentConfigPrompt: config.systemPrompt,
-    workflowText: renderWorkflowGuidance(config.workflow),
     userMessage: lastUser?.content,
     isFirstTurn,
   });

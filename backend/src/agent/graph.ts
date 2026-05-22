@@ -49,7 +49,7 @@ import { logger } from '../lib/logger.js';
 import { AgentState, type AgentStateType } from './state.js';
 import { buildTools } from './tools.js';
 import { TraceRecorder } from './trace-recorder.js';
-import { getActiveConfig, renderWorkflowGuidance } from './config.js';
+import { getActiveConfig } from './config.js';
 import { composeSystemPromptForUnit } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
@@ -174,10 +174,12 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;
+    // workflowText foi aposentado em favor da aba "Ações" (UnitAction, tipada).
+    // A coluna agent_configs.workflow ainda existe no DB mas não influencia
+    // mais o prompt — recriar as regras na aba Ações se precisar.
     const dynamicPrompt = await composeSystemPromptForUnit({
       unit,
       agentConfigPrompt: config.systemPrompt,
-      workflowText: renderWorkflowGuidance(config.workflow),
       userMessage,
       isFirstTurn,
     });
