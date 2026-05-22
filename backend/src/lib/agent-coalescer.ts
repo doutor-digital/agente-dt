@@ -44,14 +44,22 @@ interface PendingMessage {
 interface BufferEntry {
   /** Quando o buffer abriu (1ª mensagem do burst). */
   openedAt: number;
-  /** Timer atual de debounce. */
-  timer: NodeJS.Timeout;
-  /** Hard-cap timer — força flush mesmo se mensagens não param. */
-  maxTimer: NodeJS.Timeout;
+  /** Timer atual de debounce. Null quando o flush está em execução. */
+  timer: NodeJS.Timeout | null;
+  /** Hard-cap timer — força flush mesmo se mensagens não param. Null durante o running. */
+  maxTimer: NodeJS.Timeout | null;
   /** Mensagens acumuladas, em ordem de chegada. */
   pending: PendingMessage[];
   /** Função que roda quando o timer expira (closure preservando args do 1º webhook). */
   flush: (combined: string, audioUrls: string[], traceIds: string[]) => Promise<void>;
+  /**
+   * Flag de execução. Verdadeira enquanto um flush() está rodando.
+   * Mensagens que chegam neste estado SÃO acumuladas em `pending` mas NÃO
+   * disparam novo timer — quando o flush atual termina, se sobrou `pending`,
+   * agendamos um novo flush em sequência. Isso evita 2 processAgent
+   * concorrentes para o mesmo lead (causa raiz da resposta duplicada).
+   */
+  running: boolean;
 }
 
 const buffers = new Map<string, BufferEntry>();
@@ -104,9 +112,21 @@ export function scheduleAgentRun(args: {
       );
       return 'rejected';
     }
-    // Anexa + reinicia timer.
-    clearTimeout(existing.timer);
+    // Sempre atualiza a closure pra refletir args do webhook mais recente
+    // (ex: chatId/talkId podem variar entre msgs — usamos a mais recente).
+    existing.flush = args.run;
     existing.pending.push(newMsg);
+    if (existing.running) {
+      // Flush em curso: NÃO agenda timer. Quando o flush atual terminar
+      // ele detecta `pending.length > 0` e re-agenda automaticamente.
+      logger.debug(
+        { key, count: existing.pending.length },
+        'coalescer: msg anexada durante flush em curso (sem novo timer)',
+      );
+      return 'joined';
+    }
+    // Caso normal: anexa + reinicia timer.
+    if (existing.timer) clearTimeout(existing.timer);
     existing.timer = setTimeout(() => fire(key), COALESCE_WINDOW_MS);
     logger.debug(
       { key, count: existing.pending.length, sinceOpen: now - existing.openedAt },
@@ -122,6 +142,7 @@ export function scheduleAgentRun(args: {
     flush: args.run,
     timer: setTimeout(() => fire(key), COALESCE_WINDOW_MS),
     maxTimer: setTimeout(() => fire(key), MAX_BURST_DURATION_MS),
+    running: false,
   };
   buffers.set(key, entry);
   logger.debug({ key }, 'coalescer: burst iniciado');
@@ -129,20 +150,41 @@ export function scheduleAgentRun(args: {
 }
 
 /**
- * Dispara o flush do buffer. Idempotente — se chamado 2x (timer + maxTimer
- * concorrendo), o segundo encontra buffer vazio e sai.
+ * Dispara o flush do buffer.
+ *
+ * Mantém o entry no map durante toda a execução com `running=true`, pra que
+ * mensagens chegando enquanto a IA responde sejam ENFILEIRADAS no mesmo entry
+ * em vez de criarem um burst paralelo. Quando o flush termina, se sobrou
+ * `pending`, reagenda automaticamente — garantindo execução SERIAL por lead.
+ *
+ * Idempotente: chamado 2x (timer + maxTimer concorrendo) o segundo encontra
+ * `running=true` ou `pending.length=0` e sai.
  */
 function fire(key: string): void {
   const entry = buffers.get(key);
   if (!entry) return;
-  buffers.delete(key);
-  clearTimeout(entry.timer);
-  clearTimeout(entry.maxTimer);
+  if (entry.running) {
+    // Outro fire já está executando — não disparamos paralelamente.
+    return;
+  }
+  if (entry.pending.length === 0) {
+    // Nada pra processar (raro: maxTimer disparou após flush limpar tudo).
+    buffers.delete(key);
+    return;
+  }
 
-  const messages = entry.pending;
+  if (entry.timer) clearTimeout(entry.timer);
+  if (entry.maxTimer) clearTimeout(entry.maxTimer);
+  entry.timer = null;
+  entry.maxTimer = null;
+
+  // Snapshot do que vamos processar; esvazia o buffer pra acumular novas msgs.
+  const messages = entry.pending.splice(0, entry.pending.length);
   const combined = messages.map((m) => m.text).join('\n\n');
   const audioUrls = messages.map((m) => m.audioUrl).filter((u): u is string => !!u);
   const traceIds = messages.map((m) => m.traceId);
+  const flush = entry.flush;
+  entry.running = true;
 
   logger.info(
     {
@@ -157,9 +199,30 @@ function fire(key: string): void {
   );
 
   // Fire-and-forget. Erros propagados pelo logger do próprio flush.
-  void entry.flush(combined, audioUrls, traceIds).catch((err) => {
-    logger.error({ err, key }, 'coalescer: erro no flush');
-  });
+  // Importante: tudo após o flush precisa rodar via .finally() pra liberar
+  // o lock independente de sucesso/erro.
+  void flush(combined, audioUrls, traceIds)
+    .catch((err) => {
+      logger.error({ err, key }, 'coalescer: erro no flush');
+    })
+    .finally(() => {
+      const cur = buffers.get(key);
+      if (!cur) return;
+      cur.running = false;
+      if (cur.pending.length > 0) {
+        // Mensagens chegaram durante a execução — reagenda outro turno em
+        // sequência. Usa janela curta porque o usuário pode estar parado já.
+        logger.info(
+          { key, count: cur.pending.length },
+          'coalescer: msgs chegaram durante flush — encadeando próximo turno',
+        );
+        cur.timer = setTimeout(() => fire(key), COALESCE_WINDOW_MS);
+        cur.maxTimer = setTimeout(() => fire(key), MAX_BURST_DURATION_MS);
+        cur.openedAt = Date.now();
+      } else {
+        buffers.delete(key);
+      }
+    });
 }
 
 /** Só pra observabilidade/testes. */
