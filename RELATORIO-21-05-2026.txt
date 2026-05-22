@@ -1,0 +1,216 @@
+================================================================================
+  RELATÓRIO DO DIA — 21/05/2026
+  Agente DT (backend + frontend)
+================================================================================
+
+Resumo executivo
+----------------
+Hoje a gente atacou três frentes grandes e várias melhorias menores. O sistema
+ficou: (1) mais previsível pra você ver/diagnosticar problemas, (2) mais
+poderoso pro agente coletar dados estruturados no Kommo, e (3) mais profissional
+visualmente em pelo menos duas telas.
+
+
+1. PROBLEMA DOS EMOJI NO KOMMO — RESOLVIDO
+------------------------------------------
+O agente respondia com emoji ("Boa noite! 🌙 …") mas o Kommo recebia truncado
+("Boa noite! "). Investigado: o Kommo usa um tipo de banco que não aceita
+caracteres especiais de 4 bytes (emoji modernos como 🌙 😊 ❤️).
+
+O que foi feito:
+  • Criada uma tabela interna de "tradução" de 60+ emoji 4-byte pros equivalentes
+    BMP (3 bytes) que cabem no banco da Kommo:
+       🌙 → ☾       😊 → ☺       ❤️ → ♥
+       🏥 → ⚕       🌟 → ★       📞 → ☎
+  • Antes de enviar qualquer mensagem ao Kommo, o sistema agora substitui
+    automaticamente. Emoji que não estão na lista são removidos pra evitar
+    truncagem da mensagem inteira.
+  • Indicador no painel: cada vez que isso acontece, aparece "[downgrade]" no
+    log do passo, e a comparação "o que enviei × o que o Kommo armazenou" passa
+    a confirmar "🟢 idêntico".
+
+Resultado: paciente passa a receber a mensagem inteira, com algo no lugar do
+emoji em vez de cortar no meio. Você confirmou que funcionou.
+
+
+2. PAINEL "ERROS" — NOVA ABA
+----------------------------
+Antes os erros e avisos do sistema só apareciam no terminal — chato de
+acompanhar. Criamos:
+
+  • Uma aba nova no menu lateral chamada "Erros".
+  • Toda vez que o sistema emite um aviso/erro/erro crítico, ele agora vai
+    parar em uma tabela no banco e aparece nessa tela.
+  • Filtros: nível (warn/error/fatal), módulo de origem, busca por texto,
+    janela de tempo (1h / 24h / 7d / tudo).
+  • Cada linha pode ser clicada e revela o "contexto completo" (JSON com tudo
+    que aconteceu na hora do erro). Se o erro veio de uma conversa específica,
+    tem um link direto pra "abrir a execução" na aba Execuções.
+  • Contagem por nível no topo (quantos warn, error, fatal nas últimas X horas).
+
+Resultado: você ganha visão completa do que está dando errado no sistema sem
+precisar de SSH no servidor.
+
+
+3. UNIDADES — REDESIGN COMPLETO
+-------------------------------
+A página de unidades estava com lista lateral + formulário grande à direita.
+Trocamos por uma página "Escolha uma conta" inspirada no próprio Kommo:
+
+  • Grid central de cards circulares, com o logo do Kommo (que você escolheu),
+    nome da unidade embaixo, busca em cima.
+  • Hover no card revela um menu "..." com Editar / Clonar / Apagar.
+  • Click no card abre o formulário de edição em TELA CHEIA (não mais drawer
+    lateral, conforme você pediu).
+  • Botão "← Voltar" sticky no topo pra voltar ao grid.
+
+CLONAR UNIDADE — FEATURE NOVA
+  • Botão "Clonar" no menu de cada card.
+  • Server-side, então copia TUDO incluindo os tokens secretos da Kommo,
+    OpenAI e Meta — antes não dava pra clonar pelo front porque o sistema
+    mascarava os tokens na resposta. Agora a cópia é feita direto no banco.
+  • Slug auto-gerado ({slug}-copy, e se já existir vira -copy-2, etc).
+  • Nome auto-gerado ({nome} (cópia)).
+  • Depois você só ajusta o que for específico daquela nova unidade.
+
+VISUALIZADOR DE ETAPAS E TAGS DO KOMMO
+  • Dentro do form de edição da unidade tem uma seção nova "Etapas e tags do
+    Kommo" — puxa direto da conta Kommo e mostra:
+      ▸ Cada funil ativo com suas etapas (com bolinha colorida e ID).
+      ▸ Cada tag da conta (com cor e ID).
+      ▸ Botão "Copiar ID" / "Copiar nome" pra usar nas instruções da IA.
+      ▸ Botão "Recarregar" pra atualizar depois que você editar no Kommo.
+      ▸ Se o token não estiver válido, mostra mensagem específica pedindo
+        pra ajustar credencial.
+
+
+4. PAINEL "AÇÕES" — MELHORADO
+-----------------------------
+Antes você digitava as tags separadas por vírgula em texto livre. Agora:
+
+  • Picker visual das tags da Kommo: lista com bolinha colorida, checkbox,
+    nome, e ainda dá pra digitar uma tag nova caso queira criar.
+  • Chips visuais das tags selecionadas no topo, com X pra remover.
+
+TIPO NOVO: "MOVER DE ETAPA"
+  • Adicionado um quarto tipo de ação (além de Adicionar tag, Transferir COM
+    e Transferir SEM permissão).
+  • Dropdown agrupado por funil mostra todas as etapas da Kommo organizadas.
+  • Ao escolher, salva o nome legível também ("Vendas → Em negociação"), pra
+    aparecer bonito na lista de ações sem precisar consultar o Kommo de novo.
+  • A IA, ao detectar a condição configurada, chama a tool nativa de mover_etapa
+    com o ID certo.
+
+
+5. "SEQUÊNCIAS DE AUTOMAÇÃO" — APOSENTADA
+-----------------------------------------
+Tinha um sistema legado no painel "Avançado" que fazia a mesma coisa que o
+painel "Ações", só que com texto livre e UI menos boa. Você sinalizou a
+redundância. Removemos:
+
+  • A seção "Sequências de Automação" sumiu do painel Avançado.
+  • O sistema parou de injetar essas regras antigas no prompt da IA.
+  • Os dados antigos no banco foram preservados (não foi deletado nada), só
+    deixaram de influenciar o comportamento.
+  • Quem tinha regras lá precisa recriar em "Ações" (mais limpo, mais visual).
+
+
+6. TÍTULO DO LEAD COM A DATA
+----------------------------
+A IA já sabia atualizar o título do card do lead com o nome do paciente
+(ex: trocar "WhatsApp Web" por "João"). Agora também adiciona a data da
+conversa:
+
+  • Formato: "Nome DD/MM/AAAA" — exatamente como você pediu.
+  • Ex: "João 20/05/2026".
+  • A data usada é a de criação do lead na Kommo (não "hoje"), então o título
+    fica estável ao longo dos dias — não muda toda madrugada.
+  • A IA continua passando só o nome; o sistema acrescenta a data sozinho.
+
+
+7. CAPTURA DE DADOS — A GRANDE FEATURE DO FINAL DO DIA
+------------------------------------------------------
+Aba nova no menu lateral: "Captura de Dados".
+
+O que faz:
+Você configura "regras de captura" pra qualquer custom field do Kommo (idade,
+cidade, procedimento, data de nascimento, etc). Pra cada regra, a IA ganha
+uma ferramenta nova que sabe extrair o valor da conversa e gravar no campo
+correspondente, em silêncio.
+
+Como é a tela (UX):
+  • Lista de capturas em formato de cards com:
+      ▸ Ícone colorido por tipo de campo (texto, número, data, seleção, ...)
+      ▸ Nome do campo do Kommo
+      ▸ Tag colorida do tipo (Texto, Número, Data, Seleção única, etc)
+      ▸ Resumo da instrução
+      ▸ Nome da tool (ex: salvar_idade)
+      ▸ Pré-visualização dos gatilhos
+      ▸ Toggle de ativa/desativa direto no card (verde/cinza)
+      ▸ Botões Editar e Apagar
+  • Busca por nome do campo, nome da tool ou texto da instrução.
+  • Estado vazio acolhedor explicando pra que serve, com botão pra criar.
+  • Avisos visíveis se o Kommo da unidade não estiver configurado.
+
+Editor em 3 passos numerados:
+  1. Qual campo do Kommo você quer preencher?
+       → Combobox com busca, mostrando tipo + ID de cada campo
+       → Pra campos de seleção, mostra todas as opções disponíveis
+  2. Como a IA deve detectar e capturar?
+       → Texto livre descrevendo "quando capturar"
+       → Hint de formato (auto-preenchido com sugestão pelo tipo)
+       → Frases-gatilho como chips (adiciona com Enter)
+  3. Identidade da ferramenta
+       → Nome da tool (gerado automaticamente do nome do campo, editável)
+       → Toggle de ativa/inativa
+
+Tem ainda uma seção colapsada "Onde isto aparece pra IA?" que mostra ao vivo
+o trecho exato que vai pro system prompt da IA — útil pra quem quer entender
+o que o agente vai ler.
+
+Tipos suportados:
+  • Texto e texto longo (text/textarea)
+  • Número (numeric)
+  • Data e aniversário (date/birthday) — formato ISO automaticamente
+  • Seleção única (select/radiobutton) — IA escolhe uma das opções da Kommo
+  • Múltipla escolha (multiselect) — IA escolhe uma ou mais
+
+Atrás dos panos:
+  • Tabela nova no banco: lead_field_rules
+  • Endpoints REST completos (criar, listar, atualizar, deletar)
+  • Endpoint pra puxar a lista de custom fields da Kommo (filtra só os tipos
+    suportados)
+  • A cada conversa, o sistema carrega todas as regras ativas da unidade e
+    monta dinamicamente as tools — então é só você cadastrar a regra e a IA
+    já passa a usar na próxima mensagem que receber.
+
+
+================================================================================
+ESTATÍSTICAS DO DIA
+================================================================================
+
+Commits:                     ~14
+Tabelas novas no banco:      2 (system_logs, lead_field_rules)
+Migrações em produção:       2 (aplicadas com SQL manual revisado antes,
+                                  evitando dropar tabelas do LangGraph que o
+                                  diff automático queria deletar)
+Abas novas no menu:          2 (Erros, Captura de Dados)
+Telas redesenhadas:          1 (Unidades)
+Bugs resolvidos:             2 (emoji truncado, "Sequências" redundantes)
+Features novas pro agente:   3 (downgrade emoji, título com data,
+                                 captura de dados configurável)
+
+
+PRÓXIMOS PASSOS SUGERIDOS
+-------------------------
+1. Criar capturas para os campos da Kommo que você usa muito (idade, cidade,
+   procedimento de interesse, etc) — assim a IA já passa a preencher
+   automaticamente.
+2. Revisar/recriar em "Ações" qualquer regra que existia na antiga
+   "Sequências de Automação" e era importante.
+3. Em algum momento, considerar adicionar mover_etapa também via captura
+   contextual (hoje só na aba Ações), se virar uma necessidade.
+4. Decidir retenção dos logs (hoje cresce indefinidamente — quando o volume
+   ficar alto a gente prune o que tem mais de 30 dias).
+
+================================================================================
