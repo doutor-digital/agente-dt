@@ -162,7 +162,7 @@ export function KommoSchemaPreview({ unitId, canFetch }: Props) {
       <SubBlock
         icon={<Tag size={14} className="text-amber-400" />}
         title="Tags do Kommo"
-        subtitle="Use os nomes ao instruir a IA: 'aplicar_tag(\"Quente\")'. A tool é idempotente."
+        subtitle={'Use os nomes ao instruir a IA: \'aplicar_tag("Quente")\'. A tool é idempotente.'}
         loading={loadingTags}
         onReload={() => void loadTags()}
       >

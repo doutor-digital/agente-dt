@@ -12,7 +12,7 @@
 // passo natural é avaliar uma amostra de não-convertidas pra contrastar.
 // ============================================================================
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Loader2, Sparkles, ChevronDown, ChevronRight, RefreshCw, AlertCircle, BadgeCheck } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
@@ -235,7 +235,7 @@ function PromptCard({
             </div>
             <div className="grid grid-cols-5 gap-2">
               {criteria.map((c) => {
-                const v = (item.avgScores as Record<string, number>)[c.key] ?? 0;
+                const v = (item.avgScores as unknown as Record<string, number>)[c.key] ?? 0;
                 return (
                   <div key={c.key}>
                     <div className="text-[10px] text-zinc-500 truncate" title={c.desc}>
@@ -294,7 +294,7 @@ function PromptCard({
                   </div>
                   <div className="grid grid-cols-5 gap-2 mb-2">
                     {criteria.map((c) => {
-                      const v = (e.scores as Record<string, number>)[c.key] ?? 0;
+                      const v = (e.scores as unknown as Record<string, number>)[c.key] ?? 0;
                       return (
                         <div key={c.key}>
                           <div className="text-[9px] text-zinc-600 truncate">{c.label}</div>

@@ -422,7 +422,6 @@ export function UnitsPanel() {
               </Section>
 
             </div>
-          </div>
         </div>
       </div>
     );
