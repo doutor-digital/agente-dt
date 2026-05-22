@@ -45,10 +45,12 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     '(c) o paciente está agitado/insatisfeito. Após pausar, responda UMA frase ' +
     'avisando que um humano vai assumir.',
   atualizar_titulo_lead:
-    'Atualiza o título (nome) do lead no Kommo. Use IMEDIATAMENTE quando o ' +
-    'paciente disser o próprio nome — o título do card no Kommo deixa de ser ' +
-    'genérico ("WhatsApp Web", "Visitante") e passa a ser o nome real. ' +
-    'Idempotente: passar o mesmo nome duas vezes não muda nada.',
+    'Atualiza o título do card do lead no Kommo com o nome do paciente. ' +
+    'Use IMEDIATAMENTE quando o paciente disser o próprio nome. O sistema ' +
+    'acrescenta automaticamente a data da conversa no formato "Nome DD/MM/YYYY" ' +
+    '(ex: "Maria Silva 20/05/2026"). Você só precisa passar o NOME — não ' +
+    'inclua data, ela é adicionada automaticamente. Idempotente: chamar duas ' +
+    'vezes com o mesmo nome não altera o título.',
 };
 
 // ---------------------------------------------------------------------------
@@ -252,15 +254,39 @@ export function buildTools({
       });
 
       try {
-        await kommo.updateLeadName(leadId, nome);
+        // Lê o lead atual pra (a) usar `created_at` como data da conversa (faz
+        // a tool ser idempotente entre dias — usando data de criação fixa
+        // em vez de "hoje") e (b) checar se o título já está como queremos.
+        const lead = await kommo.getLead(leadId);
+        const createdAtMs = (lead.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
+        const dateBR = new Intl.DateTimeFormat('pt-BR', {
+          timeZone: 'America/Sao_Paulo',
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        }).format(new Date(createdAtMs));
+        const desired = `${nome.trim()} ${dateBR}`;
+
+        if (lead.name === desired) {
+          const latency = Math.round(performance.now() - t0);
+          await recorder.step({
+            kind: 'KOMMO_ACTION',
+            title: `Título já está como "${desired}" — no-op`,
+            payload: { leadId, current: lead.name, desired },
+            latencyMs: latency,
+          });
+          return `OK — título já está como "${desired}" (sem alteração, ${latency}ms).`;
+        }
+
+        await kommo.updateLeadName(leadId, desired);
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
           kind: 'KOMMO_ACTION',
-          title: `Título do lead ${leadId} atualizado para "${nome}"`,
-          payload: { leadId, nome },
+          title: `Título do lead ${leadId} atualizado: "${lead.name}" → "${desired}"`,
+          payload: { leadId, nome, dateBR, desired, previous: lead.name },
           latencyMs: latency,
         });
-        return `OK — título do lead ${leadId} agora é "${nome}" (${latency}ms).`;
+        return `OK — título do lead ${leadId} agora é "${desired}" (${latency}ms).`;
       } catch (err) {
         const latency = Math.round(performance.now() - t0);
         const msg = err instanceof Error ? err.message : String(err);

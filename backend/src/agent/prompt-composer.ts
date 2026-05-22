@@ -291,6 +291,8 @@ function renderCollectName(unit: Unit): string {
     • "Oi! 👋💜 Tudo bem? Pra te atender melhor, posso saber seu nome? 🙏"
 - Assim que o paciente disser o nome, chame IMEDIATAMENTE
   atualizar_titulo_lead(leadId, "<Nome>") pra mudar o título do card no Kommo.
+  Passe SOMENTE o nome — o sistema acrescenta automaticamente a data da
+  conversa, gravando como "<Nome> DD/MM/YYYY" (ex: "João 20/05/2026").
   A chamada é silenciosa — NUNCA fale "atualizei seu cadastro" ou similar.
 - Depois de obtido, USE o nome do paciente nas respostas seguintes (com
   moderação — 1 vez a cada 2-3 mensagens, pra não parecer forçado).

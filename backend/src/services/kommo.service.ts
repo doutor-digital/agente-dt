@@ -41,6 +41,9 @@ export interface KommoLead {
   status_id: number;
   pipeline_id: number;
   price?: number;
+  /** Unix timestamp em segundos (Kommo retorna assim). */
+  created_at?: number;
+  updated_at?: number;
   custom_fields_values?: KommoCustomFieldValue[] | null;
   _embedded?: {
     tags?: Array<{ id: number; name: string }>;

@@ -105,8 +105,16 @@ function buildSandboxTools(opts: { onCall: (a: SandboxAction) => void }) {
       nome: zod.string().min(1).max(120),
     }),
     func: async ({ leadId, nome }) => {
-      const result = `[SANDBOX] atualizar_titulo_lead("${nome}") no lead ${leadId} — simulado.`;
-      opts.onCall({ tool: 'atualizar_titulo_lead', args: { leadId, nome }, result });
+      // No sandbox usamos a data de hoje (não temos lead real com created_at).
+      const dateBR = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }).format(new Date());
+      const desired = `${nome.trim()} ${dateBR}`;
+      const result = `[SANDBOX] atualizar_titulo_lead("${nome}") → título seria "${desired}" no lead ${leadId} — simulado.`;
+      opts.onCall({ tool: 'atualizar_titulo_lead', args: { leadId, nome, formatted: desired }, result });
       return result;
     },
   });
