@@ -28,6 +28,8 @@ import { addMessage, upsertConversation } from '../services/conversations.servic
 import { judgeConversation } from '../services/conversation-judge.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
+import { getPausedStagesGlobalSet } from '../services/actions.service.js';
+import { scheduleLeadMemoryUpdate } from '../services/lead-memory.service.js';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -564,6 +566,49 @@ async function processAgent(args: {
     return;
   }
 
+  // Guard global: lead está em uma das etapas configuradas como "IA pausada"
+  // pelas regras globais? (kind=pause_in_stages — gerenciado pelo super-admin)
+  // Faz 1 GET no lead e cruza com o Set agregado de pares (pipelineId, statusId).
+  try {
+    const pausedStages = await getPausedStagesGlobalSet();
+    if (pausedStages.size > 0) {
+      const kommo = createKommoClient(unit);
+      const lead = await kommo.getLead(leadId);
+      const sid = lead.status_id;
+      const pid = lead.pipeline_id;
+      const matched =
+        (sid && pausedStages.has(`*:${sid}`)) ||
+        (sid && pid && pausedStages.has(`${pid}:${sid}`));
+      if (matched) {
+        const totalLatency = Math.round(performance.now() - requestStart);
+        await recorder.step({
+          kind: 'COMPLETED',
+          title: `IA pausada por regra global — lead em etapa ${sid} (pipeline ${pid})`,
+          payload: {
+            leadId,
+            statusId: sid,
+            pipelineId: pid,
+            reason: 'global_rule_pause_in_stages',
+          },
+          latencyMs: totalLatency,
+        });
+        await recorder.finalize({
+          status: 'SUCCESS',
+          latencyMs: totalLatency,
+          iaDecision: '__paused_by_stage__',
+        });
+        logger.info(
+          { traceId, leadId, unit: unit.slug, statusId: sid, pipelineId: pid },
+          'agente pulado (regra global pause_in_stages)',
+        );
+        return;
+      }
+    }
+  } catch (err) {
+    // Guard nunca pode derrubar o agente — se a checagem falhou, segue normal.
+    logger.warn({ err, leadId, unit: unit.slug }, 'falha no guard pause_in_stages — seguindo');
+  }
+
   try {
     const graph = await buildAgentGraph(recorder, unit);
     const threadId = buildThreadId(unit.slug, leadId);
@@ -644,6 +689,18 @@ async function processAgent(args: {
       status: 'SUCCESS',
       latencyMs: totalLatency,
       iaDecision: result.decision ?? null,
+    });
+
+    // Memória de longo prazo: agenda atualização em BACKGROUND.
+    // NÃO bloqueia a resposta (já saiu). Updater faz throttle interno
+    // pra não rodar a cada turno (custo desprezível ao longo prazo).
+    scheduleLeadMemoryUpdate({
+      unit,
+      leadId,
+      recentTurns: [
+        { role: 'user', content: humanMessage },
+        ...(reply ? [{ role: 'assistant' as const, content: reply }] : []),
+      ],
     });
 
     logger.info({ traceId, leadId, ms: totalLatency, unit: unit.slug }, 'agente concluído');

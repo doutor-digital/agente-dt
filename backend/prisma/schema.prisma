@@ -201,6 +201,7 @@ model Unit {
   admins           User[]
   systemLogs       SystemLog[]
   leadFieldRules   LeadFieldRule[]
+  leadMemories     LeadMemory[]
 
   @@map("units")
 }
@@ -282,6 +283,44 @@ model UnitAction {
 
   @@index([unitId, enabled])
   @@map("unit_actions")
+}
+
+// ===========================================================================
+// LeadMemory — memória de longo prazo por lead (resumo + fatos).
+// ===========================================================================
+// "Memória" do paciente que persiste entre turnos e conversas, lida pelo
+// composer SEM custo extra significativo (1 query indexada por unitId+leadId)
+// e atualizada em BACKGROUND após cada turno via LLM-mini barato.
+//
+// Modelagem:
+//   - summary: parágrafo curto (≤ 600 chars) descrevendo quem é o paciente,
+//     queixa, contexto-chave. Vai pro system prompt.
+//   - facts:   chave→valor estruturado pra dados específicos que valem mais
+//     como par do que como texto livre (ex: { idade: 35, dor_localizada: "joelho direito" }).
+//   - turnsSinceUpdate: counter pra throttle do updater (só re-resume a cada N turnos).
+//
+// Performance: leitura O(1) com índice único. Escrita NUNCA bloqueia a
+// resposta ao paciente (fire-and-forget). LLM updater roda só de N em N turnos.
+// ===========================================================================
+model LeadMemory {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  /** ID do lead no Kommo. Único por unit — cada paciente tem 1 memória. */
+  leadId String @map("lead_id")
+
+  summary          String  @default("") @db.Text
+  facts            Json    @default("{}") @map("facts")
+  /** Quantas mensagens novas o paciente mandou desde o último resumo. */
+  turnsSinceUpdate Int     @default(0) @map("turns_since_update")
+  /** Última vez que o updater rodou (não a última leitura). */
+  lastSummarizedAt DateTime? @map("last_summarized_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([unitId, leadId])
+  @@map("lead_memories")
 }
 
 // ===========================================================================

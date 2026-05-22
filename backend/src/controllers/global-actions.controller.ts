@@ -36,6 +36,7 @@ const ACTION_KINDS: ActionKind[] = [
   'mark_lead_status',
   'move_pipeline',
   'pause_ai',
+  'pause_in_stages',
 ];
 
 const actionStepSchema = z.object({

@@ -94,6 +94,13 @@ interface DraftStep {
   moveToStageId?: number | null;
   moveToPipelineId?: number | null;
   moveToStageLabel?: string | null;
+  /** pause_in_stages — lista de etapas que pausam a IA (multi-stage). */
+  pausedStages?: Array<{
+    statusId: number;
+    pipelineId?: number;
+    statusLabel?: string;
+    pipelineLabel?: string;
+  }>;
 }
 
 interface DraftRule {
@@ -116,6 +123,7 @@ function defaultStep(kind: ActionKind): DraftStep {
   if (kind === 'mark_lead_status') return { kind, status: 'won', lossReasonId: null, lossReasonLabel: null };
   if (kind === 'move_pipeline') return { kind, pipelineId: null, pipelineLabel: null, statusId: null, statusLabel: null };
   if (kind === 'pause_ai') return { kind, moveToStageId: null, moveToPipelineId: null, moveToStageLabel: null };
+  if (kind === 'pause_in_stages') return { kind, pausedStages: [] };
   return { kind, includeSummary: true };
 }
 
@@ -203,6 +211,20 @@ function stepFromAction(s: ActionStep): DraftStep {
       moveToStageLabel: typeof params.moveToStageLabel === 'string' ? params.moveToStageLabel : null,
     };
   }
+  if (s.kind === 'pause_in_stages') {
+    const raw = Array.isArray(params.stages) ? (params.stages as Array<Record<string, unknown>>) : [];
+    return {
+      kind: s.kind,
+      pausedStages: raw
+        .filter((it) => typeof it.statusId === 'number' && (it.statusId as number) > 0)
+        .map((it) => ({
+          statusId: it.statusId as number,
+          pipelineId: typeof it.pipelineId === 'number' ? (it.pipelineId as number) : undefined,
+          statusLabel: typeof it.statusLabel === 'string' ? (it.statusLabel as string) : undefined,
+          pipelineLabel: typeof it.pipelineLabel === 'string' ? (it.pipelineLabel as string) : undefined,
+        })),
+    };
+  }
   return { kind: s.kind, includeSummary: params.includeSummary !== false };
 }
 
@@ -276,6 +298,9 @@ function stepToParams(s: DraftStep): Record<string, unknown> {
       ...(s.moveToStageLabel ? { moveToStageLabel: s.moveToStageLabel } : {}),
     };
   }
+  if (s.kind === 'pause_in_stages') {
+    return { stages: s.pausedStages ?? [] };
+  }
   return { includeSummary: s.includeSummary !== false };
 }
 
@@ -301,6 +326,7 @@ function isStepValid(s: DraftStep): boolean {
   if (s.kind === 'mark_lead_status') return s.status === 'won' || s.status === 'lost';
   if (s.kind === 'move_pipeline') return !!s.pipelineId && s.pipelineId > 0;
   if (s.kind === 'pause_ai') return true; // pause_ai é sempre válido, etapa é opcional
+  if (s.kind === 'pause_in_stages') return (s.pausedStages?.length ?? 0) > 0;
   return true; // transfer_* e summarize_to_note são válidos sem params extras
 }
 
@@ -372,6 +398,11 @@ const KIND_LABEL: Record<ActionKind, { label: string; icon: typeof Tag; color: s
     label: 'Pausar IA (Salesbot)',
     icon: PauseCircle,
     color: 'text-rose-300',
+  },
+  pause_in_stages: {
+    label: 'Pausar IA em etapas (guard)',
+    icon: PauseCircle,
+    color: 'text-violet-300',
   },
 };
 
@@ -1540,6 +1571,145 @@ function StepEditor({
             />
           </div>
         </div>
+      )}
+      {step.kind === 'pause_in_stages' && (
+        <div className="space-y-2">
+          <div className="rounded-md border border-violet-500/20 bg-violet-500/5 px-3 py-2 text-[11px] text-violet-200/80 leading-relaxed">
+            <strong className="text-violet-200">Guard automático.</strong> A IA é
+            silenciada SEMPRE que o lead estiver em qualquer uma das etapas
+            selecionadas — não vai pro prompt, é avaliado no recebimento do
+            webhook. Use pra etapas terminais (fechado, perdido, em atendimento humano).
+          </div>
+          <MultiStagePicker
+            selected={step.pausedStages ?? []}
+            onChange={(stages) => onChange({ ...step, pausedStages: stages })}
+            pipelines={pipelinesForSelect}
+            loading={loadingKommo}
+            error={pipelinesError}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MultiStagePicker — permite selecionar VÁRIAS etapas (de qualquer funil) e
+// listá-las como chips removíveis. Usado pelo kind `pause_in_stages`.
+// ---------------------------------------------------------------------------
+
+function MultiStagePicker({
+  selected,
+  onChange,
+  pipelines,
+  loading,
+  error,
+}: {
+  selected: Array<{ statusId: number; pipelineId?: number; statusLabel?: string; pipelineLabel?: string }>;
+  onChange: (
+    stages: Array<{ statusId: number; pipelineId?: number; statusLabel?: string; pipelineLabel?: string }>,
+  ) => void;
+  pipelines: NonNullable<KommoPipelinesResponse['pipelines']>;
+  loading: boolean;
+  error: string | null;
+}) {
+  function addStage(statusId: number) {
+    // Se já tem essa stage, no-op.
+    if (selected.some((s) => s.statusId === statusId)) return;
+    for (const p of pipelines) {
+      const st = p.statuses.find((x) => x.id === statusId);
+      if (st) {
+        onChange([
+          ...selected,
+          {
+            statusId,
+            pipelineId: p.id,
+            statusLabel: st.name,
+            pipelineLabel: p.name,
+          },
+        ]);
+        return;
+      }
+    }
+  }
+
+  function removeStage(statusId: number) {
+    onChange(selected.filter((s) => s.statusId !== statusId));
+  }
+
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+        Etapas onde a IA fica silenciosa
+      </label>
+
+      {loading && (
+        <div className="text-[11px] text-zinc-500 inline-flex items-center gap-2">
+          <Loader2 className="animate-spin" size={11} />
+          Carregando etapas da Kommo…
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] text-amber-300/90">
+          ⚠ {error}. Confira o token do Kommo na unidade.
+        </div>
+      )}
+
+      {/* Chips das etapas selecionadas */}
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {selected.map((s) => (
+            <span
+              key={s.statusId}
+              className="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full bg-violet-500/10 text-violet-200 ring-1 ring-violet-500/30"
+            >
+              {s.pipelineLabel ? `${s.pipelineLabel} → ` : ''}
+              {s.statusLabel ?? `etapa ${s.statusId}`}
+              <button
+                type="button"
+                onClick={() => removeStage(s.statusId)}
+                className="text-violet-100/70 hover:text-violet-50"
+                title="Remover"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Seletor pra adicionar mais */}
+      {!loading && !error && pipelines.length > 0 && (
+        <select
+          value=""
+          onChange={(e) => {
+            const id = e.target.value ? Number(e.target.value) : null;
+            if (id) addStage(id);
+            // Reset visual do select pra "—".
+            e.currentTarget.value = '';
+          }}
+          className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-violet-500/40 rounded-md px-3 py-2 text-sm text-zinc-200 outline-none transition"
+        >
+          <option value="">+ adicionar etapa…</option>
+          {pipelines.map((p) => (
+            <optgroup key={p.id} label={p.name}>
+              {p.statuses
+                .filter((st) => !selected.some((sel) => sel.statusId === st.id))
+                .map((st) => (
+                  <option key={st.id} value={st.id}>
+                    {st.name}
+                  </option>
+                ))}
+            </optgroup>
+          ))}
+        </select>
+      )}
+
+      {selected.length === 0 && !loading && !error && (
+        <p className="text-[11px] text-zinc-500">
+          Nenhuma etapa selecionada. Use o seletor acima pra adicionar (você pode adicionar várias).
+        </p>
       )}
     </div>
   );

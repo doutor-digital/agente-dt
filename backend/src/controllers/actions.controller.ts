@@ -34,6 +34,7 @@ const ACTION_KINDS: ActionKind[] = [
   'mark_lead_status',
   'move_pipeline',
   'pause_ai',
+  'pause_in_stages',
 ];
 
 // Params validators por kind.
@@ -89,6 +90,19 @@ const pauseAiParams = z.object({
   moveToPipelineId: z.coerce.number().int().positive().optional(),
   moveToStageLabel: z.string().max(120).optional(),
 });
+const pauseInStagesParams = z.object({
+  stages: z
+    .array(
+      z.object({
+        statusId: z.coerce.number().int().positive(),
+        pipelineId: z.coerce.number().int().positive().optional(),
+        statusLabel: z.string().max(120).optional(),
+        pipelineLabel: z.string().max(120).optional(),
+      }),
+    )
+    .min(1, 'selecione pelo menos 1 etapa')
+    .max(50),
+});
 
 function validateActionStep(step: { kind: string; params: unknown }, ctx: z.RefinementCtx, idx: number) {
   const path: (string | number)[] = ['actions', idx, 'params'];
@@ -131,6 +145,9 @@ function validateActionStep(step: { kind: string; params: unknown }, ctx: z.Refi
   } else if (step.kind === 'pause_ai') {
     const r = pauseAiParams.safeParse(step.params);
     if (!r.success) ctx.addIssue({ code: 'custom', path, message: `pause_ai aceita opcionalmente { moveToStageId }` });
+  } else if (step.kind === 'pause_in_stages') {
+    const r = pauseInStagesParams.safeParse(step.params);
+    if (!r.success) ctx.addIssue({ code: 'custom', path, message: `pause_in_stages exige { stages: [{ statusId, pipelineId? }, ...] } com pelo menos 1 item` });
   }
 }
 

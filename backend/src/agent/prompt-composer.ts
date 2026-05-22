@@ -22,6 +22,7 @@ import type {
   GlobalAction,
   KnowledgeBaseEntry,
   LeadFieldRule,
+  LeadMemory,
   MessageTemplate,
   Unit,
   UnitAction,
@@ -33,6 +34,7 @@ import {
   listEnabledGlobalActions,
 } from '../services/actions.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
+import { getLeadMemory, type LeadMemoryFacts } from '../services/lead-memory.service.js';
 import { logger } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -503,6 +505,17 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       parts.push('Ação silenciosa — não anuncie ao paciente que a IA foi pausada.');
       return parts.join('. ') + '.';
     }
+    case 'pause_in_stages': {
+      // Não vai pro prompt — é um GUARD avaliado no webhook controller ANTES
+      // de invocar o agent. Se a regra cair aqui no render é porque está
+      // misturada com outras ações; mostramos uma linha curta só pra registro.
+      const stages = Array.isArray(params.stages) ? (params.stages as Array<{ statusLabel?: string; statusId: number }>) : [];
+      if (stages.length === 0) return '(guard) pausar IA em etapas: nenhuma configurada';
+      const labels = stages
+        .map((s) => s.statusLabel || `etapa ${s.statusId}`)
+        .join(', ');
+      return `(guard automático — não requer ação sua) IA é pausada quando o lead está em: ${labels}`;
+    }
     default:
       return `executar ação "${step.kind}"`;
   }
@@ -549,9 +562,21 @@ function humanizeAction(action: ActionLike): string {
   return `dispare TODAS as ações abaixo, em ordem: ${parts.join('; ')}`;
 }
 
+/**
+ * Determina se uma regra é puramente "guard" (só steps que NÃO vão pro prompt
+ * do LLM — caso de pause_in_stages, que é avaliado pelo webhook controller).
+ * Regras 100% guard são omitidas do prompt pra economizar tokens.
+ */
+function isPureGuardRule(action: ActionLike): boolean {
+  const arr = Array.isArray(action.actions) ? (action.actions as Array<{ kind: string }>) : [];
+  if (arr.length === 0) return false;
+  return arr.every((s) => s.kind === 'pause_in_stages');
+}
+
 function renderActions(actions: UnitAction[]): string {
-  if (actions.length === 0) return '';
-  const lines = actions.map((a, i) => {
+  const visible = actions.filter((a) => !isPureGuardRule(a));
+  if (visible.length === 0) return '';
+  const lines = visible.map((a, i) => {
     const cond = a.conditionDescription.trim();
     const act = humanizeAction(a);
     const notes = a.notes?.trim();
@@ -580,8 +605,9 @@ ${lines.join('\n\n')}`;
  * conservadoras: param a IA em vez de tentar virar a conversa).
  */
 function renderGlobalActions(actions: GlobalAction[]): string {
-  if (actions.length === 0) return '';
-  const lines = actions.map((a, i) => {
+  const visible = actions.filter((a) => !isPureGuardRule(a));
+  if (visible.length === 0) return '';
+  const lines = visible.map((a, i) => {
     const cond = a.conditionDescription.trim();
     const act = humanizeAction(a);
     const notes = a.notes?.trim();
@@ -621,6 +647,37 @@ function renderLeadFieldRules(rules: LeadFieldRule[]): string {
 ${lines.join('\n\n')}`;
 }
 
+/**
+ * Renderiza a memória de longo prazo do lead — summary + facts.
+ *
+ * Posicionado cedo no prompt (antes das ações) pra ancorar respostas em
+ * contexto histórico do paciente. Pequeno e barato — atualizado em background
+ * pelo lead-memory.service, então a leitura aqui é só 1 query indexada.
+ */
+function renderLeadMemory(mem: LeadMemory | null): string {
+  if (!mem) return '';
+  const summary = (mem.summary ?? '').trim();
+  const facts = (mem.facts as LeadMemoryFacts | null) ?? {};
+  const factsEntries = Object.entries(facts).filter(([, v]) => v !== null && v !== undefined && v !== '');
+  if (!summary && factsEntries.length === 0) return '';
+
+  const lines: string[] = ['# 🧠 MEMÓRIA DO PACIENTE (longo prazo)'];
+  lines.push('- Dados consolidados de conversas anteriores. Use pra personalizar SEM citar explicitamente que tem registro.');
+  lines.push('- Se houver conflito com a mensagem atual, dê preferência ao que o paciente está dizendo AGORA.');
+  if (summary) {
+    lines.push('');
+    lines.push(`**Resumo:** ${summary}`);
+  }
+  if (factsEntries.length > 0) {
+    lines.push('');
+    lines.push('**Dados estruturados:**');
+    for (const [k, v] of factsEntries) {
+      lines.push(`  - ${k}: ${String(v)}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>): string {
   if (entries.length === 0) return '';
   const lines = entries.map(
@@ -656,6 +713,8 @@ export interface ComposeInput {
   globalActions?: GlobalAction[];
   /** Regras de captura de dados (LeadFieldRule) — viram tools dinâmicas. */
   leadFieldRules?: LeadFieldRule[];
+  /** Memória de longo prazo do lead. Vai pro prompt como bloco "🧠 MEMÓRIA". */
+  leadMemory?: LeadMemory | null;
   /**
    * leadId numérico do Kommo para este turno. Injetado no system prompt como
    * "CONTEXTO DA CONVERSA" pra IA usar nas tool calls. Sem isso, a IA passa
@@ -722,6 +781,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     actions = [],
     globalActions = [],
     leadFieldRules = [],
+    leadMemory = null,
     isFirstTurn = false,
     leadId,
   } = input;
@@ -775,6 +835,11 @@ export function composeSystemPrompt(input: ComposeInput): string {
     blocks.push('# COMPORTAMENTOS ATIVADOS');
     blocks.push(...featureBlocks);
   }
+
+  // MEMÓRIA DO PACIENTE — vem cedo (antes das Ações) pra IA ancorar resposta
+  // em contexto histórico. Só carrega/renderiza se houver registro.
+  const memoryBlock = renderLeadMemory(leadMemory);
+  if (memoryBlock) blocks.push(memoryBlock);
 
   // CONTEXTO DA CONVERSA — vai ANTES das Ações pra IA ler o leadId real e usar
   // nas tool calls. Sem isso, ela passa `leadId: 0` literalmente (a palavra
@@ -866,7 +931,7 @@ export async function composeSystemPromptForUnit(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules] = await Promise.all([
+  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -896,6 +961,13 @@ export async function composeSystemPromptForUnit(input: {
       return [];
     }),
     listEnabledLeadFieldRules(input.unit.id),
+    input.leadId
+      ? getLeadMemory(input.unit.id, input.leadId).catch((err) => {
+          // Tabela pode não existir ainda em ambiente não-migrado.
+          logger.warn({ err, leadId: input.leadId }, 'getLeadMemory falhou — sem memória no prompt');
+          return null;
+        })
+      : Promise.resolve(null),
   ]);
   return composeSystemPrompt({
     ...input,
@@ -905,6 +977,7 @@ export async function composeSystemPromptForUnit(input: {
     actions,
     globalActions,
     leadFieldRules,
+    leadMemory,
   });
 }
 

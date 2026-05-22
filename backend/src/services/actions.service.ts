@@ -32,7 +32,8 @@ export type ActionKind =
   | 'set_lead_value'
   | 'mark_lead_status'
   | 'move_pipeline'
-  | 'pause_ai';
+  | 'pause_ai'
+  | 'pause_in_stages';
 
 export interface AddTagParams {
   tags: string[];
@@ -112,6 +113,30 @@ export interface PauseAiParams {
   moveToStageLabel?: string;
 }
 
+/**
+ * Pausa a IA quando o lead JÁ ESTÁ em uma das etapas listadas.
+ *
+ * NÃO é uma ação reativa (não vai pro prompt). É um GUARD avaliado no webhook
+ * controller antes de invocar o agent: se o status atual do lead bate com
+ * algum item de `stages`, pula `graph.invoke`. Use pra silenciar a IA em
+ * etapas terminais (fechado/won/lost/handoff humano/etc.) sem precisar marcar
+ * o campo "IA Pausada" lead a lead.
+ *
+ * `stages` deve ter pelo menos 1 item. `pipelineId` é opcional — quando
+ * omitido, só `statusId` é comparado (útil quando IDs de etapa são únicos
+ * globalmente na conta).
+ */
+export interface PauseInStagesParams {
+  stages: Array<{
+    statusId: number;
+    pipelineId?: number;
+    /** Nome amigável da etapa pra UI (não usado pela lógica). */
+    statusLabel?: string;
+    /** Nome do pipeline pra UI. */
+    pipelineLabel?: string;
+  }>;
+}
+
 export type ActionParams =
   | AddTagParams
   | MoveStageParams
@@ -126,6 +151,7 @@ export type ActionParams =
   | MarkLeadStatusParams
   | MovePipelineParams
   | PauseAiParams
+  | PauseInStagesParams
   | Record<string, never>;
 
 /** Uma ação dentro de uma regra (array element). */
@@ -276,4 +302,34 @@ export function readGlobalActionSteps(row: GlobalAction): ActionStep[] {
     return raw as unknown as ActionStep[];
   }
   return [];
+}
+
+/**
+ * Agrega o conjunto de etapas em que a IA deve ser pausada, lendo TODAS as
+ * GlobalActions habilitadas com pelo menos um step kind === 'pause_in_stages'.
+ *
+ * Resultado: Set<"pipelineId:statusId" | "*:statusId"> pra lookup O(1) no
+ * guard do webhook. Usar string composta evita confusão com IDs duplicados
+ * entre pipelines.
+ */
+export async function getPausedStagesGlobalSet(): Promise<Set<string>> {
+  const globals = await prisma.globalAction.findMany({
+    where: { enabled: true },
+    select: { actions: true },
+  });
+  const set = new Set<string>();
+  for (const g of globals) {
+    const arr = Array.isArray(g.actions) ? (g.actions as unknown as ActionStep[]) : [];
+    for (const step of arr) {
+      if (step.kind !== 'pause_in_stages') continue;
+      const params = step.params as PauseInStagesParams | undefined;
+      const stages = params?.stages ?? [];
+      for (const s of stages) {
+        if (!s || !Number.isFinite(s.statusId)) continue;
+        const key = s.pipelineId ? `${s.pipelineId}:${s.statusId}` : `*:${s.statusId}`;
+        set.add(key);
+      }
+    }
+  }
+  return set;
 }
