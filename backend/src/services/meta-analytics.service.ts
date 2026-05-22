@@ -419,6 +419,17 @@ export async function fetchTemplateAnalytics(
     });
     if (res.status < 200 || res.status >= 300) {
       const body = res.data as unknown as { error?: MetaErrorBody };
+      const code = body?.error?.code;
+      const subcode = body?.error?.error_subcode;
+
+      // (#1/4182004) "An unknown error occurred" — empiricamente a Meta
+      // dispara isso quando NENHUM dos templateIds do batch teve envio no
+      // período (em vez de retornar `data: []`). Tratamos como sucesso vazio
+      // — sem dados ainda é dado válido.
+      if (code === 1 && subcode === 4182004) {
+        return { ok: true, status: res.status, data: { rows: [] } };
+      }
+
       const errMsg = body?.error?.message ?? `HTTP ${res.status}`;
       // Loga + retorna o erro Meta — UI exibe direto sem precisar de logs do server.
       logger.warn(
