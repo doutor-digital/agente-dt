@@ -692,22 +692,41 @@ export function buildTools({
             const transcript = msgs
               .map((m) => `${m.role === 'user' ? 'PACIENTE' : 'IA'}: ${m.content}`)
               .join('\n');
+            // Formato profissional plain-text — Kommo NÃO renderiza markdown
+            // em notas nem em campos custom. Asteriscos viram literais e
+            // estragam a leitura. Solução: cabeçalhos em MAIÚSCULAS como
+            // âncoras visuais, separados por linha em branco. Escaneável
+            // em <5s pelo SDR.
             const sys = new SystemMessage(
               [
                 'Você é um assistente que escreve resumos rápidos pra um SDR ' +
                   'humano. O SDR vai abrir o lead no CRM e ler ESSE resumo ' +
-                  'pra entender o contexto em 10 segundos.',
+                  'pra entender o contexto em até 10 segundos.',
                 '',
-                'Formato obrigatório (markdown simples, sem emoji excessivo):',
-                '• **Quem é**: nome + 1 detalhe (se souber)',
-                '• **Queixa/Demanda**: o que o paciente quer',
-                '• **Sinais de interesse**: orçamento? urgência? indicação?',
-                '• **Próximo passo sugerido**: o que o SDR faz agora',
+                'FORMATO OBRIGATÓRIO — copie a estrutura abaixo EXATAMENTE, ' +
+                  'incluindo as quebras de linha e os cabeçalhos em maiúsculas. ' +
+                  'NÃO use markdown (sem **negrito**, sem # cabeçalho, sem ` ` ' +
+                  'código). É texto puro porque o CRM não renderiza markdown.',
                 '',
-                'Regras:',
-                '- Máx 6 linhas no total. Curto e útil.',
-                '- Não invente informação que não está na conversa.',
-                '- Não cumprimente o SDR, vá direto ao conteúdo.',
+                'PACIENTE',
+                '<nome + 1 detalhe relevante; se não souber o nome, escreva apenas o detalhe>',
+                '',
+                'DEMANDA',
+                '<o que o paciente quer, em 1-2 frases curtas>',
+                '',
+                'SINAIS DE INTERESSE',
+                '<urgência, prazo, orçamento mencionado, indicação, expectativa — em 1-3 frases. Se nada relevante, escreva "Nenhum sinal forte coletado.">',
+                '',
+                'PRÓXIMO PASSO',
+                '<ação concreta pro SDR fazer agora, em 1 frase>',
+                '',
+                'REGRAS:',
+                '- Texto entre <…> é placeholder. Substitua pelo conteúdo real, NÃO mantenha os colchetes.',
+                '- Cada seção tem o cabeçalho em MAIÚSCULAS, seguido pelo conteúdo na linha de baixo, e UMA linha em branco antes da próxima seção.',
+                '- Máximo 2-3 frases por seção. Tom direto e profissional, sem floreio.',
+                '- Não cumprimente o SDR, não use "Olá" nem assinaturas.',
+                '- Sem emojis, sem bullet points (• - *), sem números (1. 2.).',
+                '- NÃO invente informação que não está na conversa. Se faltou informação, omita.',
                 focusHint ? `- Foco extra desta vez: ${focusHint}` : '',
               ]
                 .filter(Boolean)
