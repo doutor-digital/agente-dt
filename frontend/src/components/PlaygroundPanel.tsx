@@ -390,7 +390,7 @@ function ChatListSidebar({
       <div className="flex-1 overflow-y-auto">
         <button
           type="button"
-          className="w-full flex items-center gap-3 px-3 py-3 hover:bg-zinc-900/40 transition-colors bg-emerald-500/[0.04] border-l-2 border-emerald-500"
+          className="w-full flex items-center gap-3 px-3 py-3 hover:bg-zinc-900/40 transition-colors bg-emerald-500/4 border-l-2 border-emerald-500"
         >
           <div className="w-12 h-12 rounded-full bg-emerald-700/60 flex items-center justify-center text-white text-base font-semibold ring-2 ring-emerald-500/20 shrink-0">
             🤒
@@ -603,7 +603,7 @@ function ChatBubble({
             : 'bg-zinc-800/95 text-zinc-100 rounded-tl-sm',
         )}
       >
-        <div className="text-[13px] leading-relaxed whitespace-pre-wrap break-words">
+        <div className="text-[13px] leading-relaxed whitespace-pre-wrap wrap-break-word">
           {item.content}
         </div>
         <div
@@ -679,7 +679,7 @@ function ToolSystemBubble({
                 </div>
               ))
             )}
-            <div className="mt-1 pt-1 border-t border-current/10 opacity-80 break-words">
+            <div className="mt-1 pt-1 border-t border-current/10 opacity-80 wrap-break-word">
               <span className="opacity-60">→ </span>
               {item.result}
             </div>
@@ -757,10 +757,6 @@ function ContactInfoSidebar({
           label="Tools sandbox"
           value="5"
           hint="tag · etapa · pausa · título · resumo"
-        />
-        <SectionRow
-          label="Coleta de nome"
-          value={unit?.collectNameEnabled ? 'on' : 'off'}
         />
         <SectionRow
           label="Coleta de origem"
@@ -849,7 +845,7 @@ function SectionRow({
 }) {
   return (
     <div className="px-4 py-1.5 flex items-baseline gap-3">
-      <div className="text-[11px] text-zinc-500 shrink-0 w-[110px]">{label}</div>
+      <div className="text-[11px] text-zinc-500 shrink-0 w-27.5">{label}</div>
       <div className="flex-1 min-w-0">
         <div
           className={clsx(

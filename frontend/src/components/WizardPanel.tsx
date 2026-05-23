@@ -34,7 +34,6 @@ import {
   EyeOff,
   Flame,
   Gift,
-  IdCard,
   Loader2,
   MessageSquarePlus,
   PhoneCall,
@@ -78,7 +77,6 @@ type WizardDraft = Pick<
   | 'pipelineIntents'
   | 'contactCollectionEnabled'
   | 'contactCollectionAfterTurns'
-  | 'collectNameEnabled'
   | 'collectSourceEnabled'
   | 'collectSourceOptions'
   | 'summaryCustomFieldId'
@@ -132,7 +130,6 @@ function unitToDraft(u: Unit): WizardDraft {
     pipelineIntents: u.pipelineIntents,
     contactCollectionEnabled: u.contactCollectionEnabled,
     contactCollectionAfterTurns: u.contactCollectionAfterTurns,
-    collectNameEnabled: u.collectNameEnabled,
     collectSourceEnabled: u.collectSourceEnabled,
     collectSourceOptions: u.collectSourceOptions ?? [],
     summaryCustomFieldId: u.summaryCustomFieldId,
@@ -533,33 +530,6 @@ export function WizardPanel() {
             Em ${draft.contactCollectionAfterTurns} turnos, a IA pergunta o email/WhatsApp uma vez,
             só se ainda não tiver coletado.
           </p>
-        </FeatureCard>
-
-        {/* 5b. COLETAR NOME DO LEAD */}
-        <FeatureCard
-          icon={<IdCard size={16} className="text-fuchsia-400" />}
-          title="🪪 Coletar nome do lead"
-          subtitle="A IA pergunta o nome e atualiza o título do card no Kommo automaticamente."
-          enabled={draft.collectNameEnabled}
-          onToggle={(v) => update({ collectNameEnabled: v })}
-        >
-          <p className="text-[11px] text-zinc-400 leading-relaxed">
-            Quando o lead chega anônimo (ex: "WhatsApp Web", "Visitante"), a IA pergunta o nome
-            de forma natural nas primeiras respostas. Assim que ele responder, a tool{' '}
-            <code className="text-[10px] px-1 py-0.5 rounded bg-zinc-900 text-fuchsia-300">
-              atualizar_titulo_lead
-            </code>{' '}
-            troca o título do card no Kommo. A IA não fala "atualizei seu cadastro" — passa
-            invisível pro lead.
-          </p>
-          <div className="mt-2 rounded-md bg-zinc-950/60 border border-zinc-800/60 px-3 py-2">
-            <div className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1">
-              Exemplo de pergunta da IA
-            </div>
-            <div className="text-[11px] text-zinc-300 italic">
-              "Antes de continuar, como posso te chamar? 😊"
-            </div>
-          </div>
         </FeatureCard>
 
         {/* 5c. COLETAR ORIGEM (POR ONDE CONHECEU) */}
