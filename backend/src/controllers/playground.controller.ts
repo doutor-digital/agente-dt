@@ -208,6 +208,10 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
     agentConfigPrompt: config.systemPrompt,
     userMessage: lastUser?.content,
     isFirstTurn,
+    // Sandbox não registra as tools `salvar_*` dinâmicas — instruir a IA sobre
+    // elas só leva a chamadas com erro. Captura de dados é testada na própria
+    // tela de Captura de Dados, não aqui.
+    excludeLeadFieldRules: true,
   });
 
   // Acrescenta info do "lead sintético" pra IA poder chamar as tools (precisa do leadId).

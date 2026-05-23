@@ -328,36 +328,24 @@ export function buildTools({
       });
 
       try {
-        // Lê o lead atual pra (a) usar `created_at` como data da conversa (faz
-        // a tool ser idempotente entre dias — usando data de criação fixa
-        // em vez de "hoje") e (b) checar se o título já está como queremos.
-        const lead = await kommo.getLead(leadId);
-        const createdAtMs = (lead.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
-        const dateBR = new Intl.DateTimeFormat('pt-BR', {
-          timeZone: 'America/Sao_Paulo',
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
-        }).format(new Date(createdAtMs));
-        const desired = `${nome.trim()} ${dateBR}`;
-
-        if (lead.name === desired) {
-          const latency = Math.round(performance.now() - t0);
+        const { previous, desired, changed } = await kommo.updateLeadTitleWithDate(
+          leadId,
+          nome,
+        );
+        const latency = Math.round(performance.now() - t0);
+        if (!changed) {
           await recorder.step({
             kind: 'KOMMO_ACTION',
             title: `Título já está como "${desired}" — no-op`,
-            payload: { leadId, current: lead.name, desired },
+            payload: { leadId, current: previous, desired },
             latencyMs: latency,
           });
           return `OK — título já está como "${desired}" (sem alteração, ${latency}ms).`;
         }
-
-        await kommo.updateLeadName(leadId, desired);
-        const latency = Math.round(performance.now() - t0);
         await recorder.step({
           kind: 'KOMMO_ACTION',
-          title: `Título do lead ${leadId} atualizado: "${lead.name}" → "${desired}"`,
-          payload: { leadId, nome, dateBR, desired, previous: lead.name },
+          title: `Título do lead ${leadId} atualizado: "${previous}" → "${desired}"`,
+          payload: { leadId, nome, desired, previous },
           latencyMs: latency,
         });
         return `OK — título do lead ${leadId} agora é "${desired}" (${latency}ms).`;
@@ -867,8 +855,14 @@ function buildLeadFieldRuleTool({
       ? ` Exemplos de quando chamar: ${rule.examples.slice(0, 5).map((e) => `"${e}"`).join('; ')}.`
       : '';
 
+  // Quando a regra tem updatesLeadTitle, sinaliza na description pro modelo
+  // entender que esta tool é "o caminho do nome" — útil quando há ambiguidade
+  // (ex: existir AINDA o toggle collectNameEnabled com sua própria tool).
+  const titleHint = rule.updatesLeadTitle
+    ? ' TAMBÉM atualiza o título do card no Kommo com este valor (formato "<Valor> DD/MM/YYYY").'
+    : '';
   const description =
-    `${rule.instruction.trim()} Salva no campo "${rule.kommoFieldName}" do lead no Kommo (tipo ${fieldType}).${examplesBlock} Chame em silêncio — não comente a captura na resposta ao paciente.`;
+    `${rule.instruction.trim()} Salva no campo "${rule.kommoFieldName}" do lead no Kommo (tipo ${fieldType}).${titleHint}${examplesBlock} Chame em silêncio — não comente a captura na resposta ao paciente.`;
 
   return new DynamicStructuredTool({
     name: rule.toolName,
@@ -899,7 +893,39 @@ function buildLeadFieldRuleTool({
           payload: { leadId, fieldId: rule.kommoFieldId, fieldType, value },
           latencyMs: latency,
         });
-        return `OK — "${rule.kommoFieldName}" gravado (${latency}ms).`;
+
+        // Side effect opcional: atualizar título do card. Só faz sentido pra
+        // valores textuais (nome do paciente). Falha aqui NÃO inverte o
+        // sucesso da gravação principal — logamos como ERROR e seguimos.
+        let titleNote = '';
+        if (rule.updatesLeadTitle && typeof value === 'string' && value.trim()) {
+          try {
+            const { previous, desired, changed } = await kommo.updateLeadTitleWithDate(
+              leadId,
+              value.trim(),
+            );
+            await recorder.step({
+              kind: 'KOMMO_ACTION',
+              title: changed
+                ? `Título atualizado: "${previous}" → "${desired}"`
+                : `Título já estava como "${desired}" — no-op`,
+              payload: { leadId, previous, desired, changed, via: rule.toolName },
+            });
+            titleNote = changed
+              ? ` + título do card atualizado pra "${desired}"`
+              : ` (título já estava em "${desired}")`;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await recorder.step({
+              kind: 'ERROR',
+              title: `Falha ao atualizar título (campo principal gravou ok): ${msg}`,
+              payload: { leadId, via: rule.toolName, error: msg },
+            });
+            titleNote = ' (atenção: título do card NÃO atualizou — campo gravou)';
+          }
+        }
+
+        return `OK — "${rule.kommoFieldName}" gravado (${latency}ms)${titleNote}.`;
       } catch (err) {
         const latency = Math.round(performance.now() - t0);
         const msg = err instanceof Error ? err.message : String(err);

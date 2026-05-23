@@ -562,6 +562,11 @@ model LeadFieldRule {
   valueHint       String?  @map("value_hint")       // formato esperado (ex: "número inteiro 0-120")
   examples        String[] @default([])
   enabled         Boolean  @default(true)
+  // Quando true, a tool gerada por esta regra ALÉM de gravar no campo custom
+  // também atualiza o `name` do lead (o título visível do card no Kommo).
+  // Caso de uso: regra "Nome da pessoa" — antes morava no toggle dedicado
+  // collectNameEnabled, agora é por-regra.
+  updatesLeadTitle Boolean @default(false) @map("updates_lead_title")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

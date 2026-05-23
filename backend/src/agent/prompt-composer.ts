@@ -917,6 +917,12 @@ export async function composeSystemPromptForUnit(input: {
   isFirstTurn?: boolean;
   /** leadId do Kommo — injetado no bloco "CONTEXTO DA CONVERSA" pras tools. */
   leadId?: number;
+  /**
+   * Quando true, omite as regras de captura de dados (LeadFieldRule) do
+   * prompt. Usado pelo Playground — sandbox não registra as tools `salvar_*`
+   * dinâmicas, então sem isso a IA acabaria tentando chamar tool inexistente.
+   */
+  excludeLeadFieldRules?: boolean;
 }): Promise<string> {
   const shouldRunRag =
     !!input.userMessage &&
@@ -952,7 +958,9 @@ export async function composeSystemPromptForUnit(input: {
       logger.warn({ err }, 'listEnabledGlobalActions falhou — seguindo sem regras globais');
       return [];
     }),
-    listEnabledLeadFieldRules(input.unit.id),
+    input.excludeLeadFieldRules
+      ? Promise.resolve([])
+      : listEnabledLeadFieldRules(input.unit.id),
     input.leadId
       ? getLeadMemory(input.unit.id, input.leadId).catch((err) => {
           // Tabela pode não existir ainda em ambiente não-migrado.

@@ -24,6 +24,8 @@ export interface LeadFieldRuleInput {
   valueHint?: string | null;
   examples?: string[];
   enabled?: boolean;
+  /** Quando true, a tool também atualiza o título do card no Kommo. */
+  updatesLeadTitle?: boolean;
 }
 
 export async function listLeadFieldRules(unitId: string): Promise<LeadFieldRule[]> {
@@ -59,6 +61,7 @@ export async function createLeadFieldRule(
       valueHint: input.valueHint ?? null,
       examples: input.examples ?? [],
       enabled: input.enabled ?? true,
+      updatesLeadTitle: input.updatesLeadTitle ?? false,
     },
   });
 }
@@ -84,6 +87,9 @@ export async function updateLeadFieldRule(
       ...(input.valueHint !== undefined && { valueHint: input.valueHint }),
       ...(input.examples !== undefined && { examples: input.examples }),
       ...(input.enabled !== undefined && { enabled: input.enabled }),
+      ...(input.updatesLeadTitle !== undefined && {
+        updatesLeadTitle: input.updatesLeadTitle,
+      }),
     },
   });
 }

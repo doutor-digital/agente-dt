@@ -156,6 +156,7 @@ export interface LeadFieldRule {
   valueHint: string | null;
   examples: string[];
   enabled: boolean;
+  updatesLeadTitle: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -170,6 +171,7 @@ export interface LeadFieldRuleInput {
   valueHint?: string | null;
   examples?: string[];
   enabled?: boolean;
+  updatesLeadTitle?: boolean;
 }
 
 // ---------------------------------------------------------------------------

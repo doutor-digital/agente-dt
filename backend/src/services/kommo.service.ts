@@ -790,6 +790,38 @@ export class KommoClient {
   }
 
   /**
+   * Atualiza o título do card no padrão "<Nome> DD/MM/YYYY", usando
+   * `lead.created_at` como base da data (faz o título ser idempotente entre
+   * dias — sempre fica a data de criação do lead, não "hoje").
+   *
+   * Idempotente: lê o lead primeiro e compara o título atual; se já estiver
+   * no formato desejado, devolve `changed: false` sem chamar o PATCH.
+   *
+   * Compartilhado entre a tool dedicada `atualizar_titulo_lead` (toggle
+   * `collectNameEnabled`) e a flag `updatesLeadTitle` nas regras de captura.
+   */
+  async updateLeadTitleWithDate(
+    leadId: number,
+    nome: string,
+  ): Promise<{ previous: string | null; desired: string; changed: boolean }> {
+    const lead = await this.getLead(leadId);
+    const createdAtMs = (lead.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
+    const dateBR = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(new Date(createdAtMs));
+    const desired = `${nome.trim()} ${dateBR}`;
+    const previous = lead.name ?? null;
+    if (previous === desired) {
+      return { previous, desired, changed: false };
+    }
+    await this.updateLeadName(leadId, desired);
+    return { previous, desired, changed: true };
+  }
+
+  /**
    * Posta uma nota interna no lead. Aparece no painel do Kommo pros operadores
    * humanos (SDR, vendedor) mas NÃO é enviada pro paciente.
    *

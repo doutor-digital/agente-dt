@@ -58,6 +58,7 @@ const ruleInputSchema = z.object({
   valueHint: z.string().max(500).nullable().optional(),
   examples: z.array(z.string().min(1).max(300)).max(20).optional(),
   enabled: z.boolean().optional(),
+  updatesLeadTitle: z.boolean().optional(),
 });
 
 const ruleUpdateSchema = ruleInputSchema.partial();

@@ -565,6 +565,7 @@ interface DraftRule {
   valueHint: string;
   examples: string[];
   enabled: boolean;
+  updatesLeadTitle: boolean;
 }
 
 function ruleToDraft(rule: LeadFieldRule): DraftRule {
@@ -578,6 +579,7 @@ function ruleToDraft(rule: LeadFieldRule): DraftRule {
     valueHint: rule.valueHint ?? '',
     examples: rule.examples,
     enabled: rule.enabled,
+    updatesLeadTitle: rule.updatesLeadTitle,
   };
 }
 
@@ -591,6 +593,7 @@ const EMPTY_DRAFT: DraftRule = {
   valueHint: '',
   examples: [],
   enabled: true,
+  updatesLeadTitle: false,
 };
 
 function CaptureEditor({
@@ -672,6 +675,7 @@ function CaptureEditor({
         valueHint: draft.valueHint.trim() || null,
         examples: draft.examples,
         enabled: draft.enabled,
+        updatesLeadTitle: draft.updatesLeadTitle,
       };
       await onSave(input);
     } catch {
@@ -899,6 +903,24 @@ function CaptureEditor({
               className="accent-emerald-500"
             />
             Captura ativa (a tool fica disponível pra IA)
+          </label>
+
+          <label className="flex items-start gap-2 text-sm text-zinc-300 cursor-pointer mt-2">
+            <input
+              type="checkbox"
+              checked={draft.updatesLeadTitle}
+              onChange={(e) => setDraft({ ...draft, updatesLeadTitle: e.target.checked })}
+              className="accent-emerald-500 mt-0.5"
+            />
+            <span>
+              Também atualizar o título do card no Kommo
+              <span className="block text-[11px] text-zinc-500 mt-0.5">
+                Marque pra regra que captura o nome do paciente. Quando a tool roda, além
+                de gravar no campo custom, o título do card vira{' '}
+                <code className="text-zinc-400">{'"<Valor> DD/MM/YYYY"'}</code> usando a
+                data de criação do lead.
+              </span>
+            </span>
           </label>
         </Section>
 
