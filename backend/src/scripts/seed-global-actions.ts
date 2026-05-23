@@ -69,6 +69,28 @@ const SEEDS: SeedGlobal[] = [
       'NÃO responda à ofensa nem entre em discussão. Pause a IA, registre a tag pra o time decidir, e encerre cordialmente sem se desculpar pela ofensa do outro lado.',
   },
 
+  // 5. Nome do lead obrigatório antes de mover etapa.
+  //    Evita que cards anônimos ("WhatsApp Web", "Visitante", telefone) avancem
+  //    no funil sem identificação. Se o paciente recusar 2x, IA grava
+  //    "Lead sem nome" no título — a data DD/MM/YYYY é adicionada automaticamente
+  //    pelo helper updateLeadTitleWithDate, usando lead.created_at.
+  {
+    priority: 50,
+    conditionDescription:
+      'Você está prestes a chamar mover_etapa MAS o paciente ainda não informou o nome dele (o título do card no Kommo ainda está genérico: "WhatsApp Web", "Visitante", apenas um número de telefone, ou qualquer placeholder do tipo)',
+    actions: [
+      {
+        kind: 'respond_with_intent',
+        params: {
+          instruction:
+            'ANTES de mover a etapa, peça o nome do paciente de forma calorosa numa frase só (ex: "Antes de seguir, como posso te chamar? 😊"). Só chame mover_etapa DEPOIS que o paciente disser o nome e você tiver chamado a tool que atualiza o título do card (atualizar_titulo_lead OU a tool de captura de nome com flag de título). Se o paciente recusar EXPLICITAMENTE duas vezes ("não quero dizer", "depois", "tanto faz", "não importa"), grave "Lead sem nome" como nome — o sistema acrescenta a data automaticamente — e então PROSSIGA normalmente com mover_etapa. Nunca avance o funil com card anônimo.',
+        },
+      },
+    ],
+    notes:
+      'Trava de qualidade do funil. Garante que nenhum lead avance pra próxima etapa sem identificação mínima. Fallback "Lead sem nome DD/MM/YYYY" é aceitável após 2 recusas.',
+  },
+
   // 4. Anti-diagnóstico — vale pra QUALQUER unidade de saúde.
   {
     priority: 40,

@@ -277,6 +277,11 @@ export interface Unit {
   collectSourceEnabled: boolean;
   collectSourceOptions: string[];
 
+  /** Campo customizado do Kommo onde o resumo da IA (resumir_lead_para_sdr) é
+   *  gravado, além da nota interna. NULL = só nota. */
+  summaryCustomFieldId: number | null;
+  summaryCustomFieldName: string | null;
+
   createdAt: string;
   updatedAt: string;
   _hasSecrets?: Record<string, boolean>;

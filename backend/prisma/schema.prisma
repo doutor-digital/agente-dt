@@ -179,6 +179,13 @@ model Unit {
   // anônimo ("Visitante", "WhatsApp Web", etc).
   collectNameEnabled Boolean @default(false) @map("collect_name_enabled")
 
+  // RESUMO EM CAMPO CUSTOM — quando configurado, a tool resumir_lead_para_sdr
+  // grava o resumo gerado nesse custom field DO LEAD no Kommo (além da nota
+  // interna que já é postada). Útil pra deixar o último resumo visível no
+  // card pra o SDR humano. NULL = só nota interna (comportamento legado).
+  summaryCustomFieldId   Int?    @map("summary_custom_field_id")
+  summaryCustomFieldName String? @map("summary_custom_field_name")
+
   // COLETA DE ORIGEM — IA pergunta "como conheceu a clínica". A resposta
   // vira uma tag "Origem: <fonte>" via `aplicar_tag`. As opções abaixo
   // são oferecidas como sugestão (mas o lead pode dizer qualquer coisa).

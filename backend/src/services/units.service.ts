@@ -171,6 +171,9 @@ export interface UnitInput {
   collectNameEnabled?: boolean;
   collectSourceEnabled?: boolean;
   collectSourceOptions?: string[];
+
+  summaryCustomFieldId?: number | null;
+  summaryCustomFieldName?: string | null;
 }
 
 export async function listUnits(): Promise<Unit[]> {
@@ -297,6 +300,8 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.collectNameEnabled !== undefined && { collectNameEnabled: input.collectNameEnabled }),
       ...(input.collectSourceEnabled !== undefined && { collectSourceEnabled: input.collectSourceEnabled }),
       ...(input.collectSourceOptions !== undefined && { collectSourceOptions: input.collectSourceOptions }),
+      ...(input.summaryCustomFieldId !== undefined && { summaryCustomFieldId: input.summaryCustomFieldId }),
+      ...(input.summaryCustomFieldName !== undefined && { summaryCustomFieldName: input.summaryCustomFieldName }),
     },
   });
   invalidateUnitCacheFor(updated, id);

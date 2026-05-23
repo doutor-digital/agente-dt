@@ -94,6 +94,8 @@ const unitInputBase = {
   collectNameEnabled: z.boolean().optional(),
   collectSourceEnabled: z.boolean().optional(),
   collectSourceOptions: z.array(z.string().min(1).max(50)).max(20).optional(),
+  summaryCustomFieldId: z.coerce.number().int().positive().nullable().optional(),
+  summaryCustomFieldName: z.string().max(200).nullable().optional(),
 };
 
 const createSchema = z.object(unitInputBase);

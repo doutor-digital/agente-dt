@@ -737,7 +737,7 @@ export function buildTools({
                 ? response.content
                 : JSON.stringify(response.content);
 
-            // 4) Posta nota interna no Kommo.
+            // 4) Posta nota interna no Kommo (sempre — histórico/timeline).
             const note = await kommo.addLeadNote(leadId, `📋 Resumo da IA (auto):\n\n${summary}`);
 
             const latency = Math.round(performance.now() - t0);
@@ -753,7 +753,44 @@ export function buildTools({
               },
               latencyMs: latency,
             });
-            return `OK — resumo postado como nota interna no lead ${leadId} (${msgs.length} msgs analisadas, ${llmMs}ms LLM, ${latency}ms total).`;
+
+            // 5) Também grava no custom field configurado (se houver). Falha
+            //    aqui NÃO inverte o sucesso da nota — logamos ERROR e seguimos.
+            let fieldNote = '';
+            if (unit.summaryCustomFieldId) {
+              try {
+                await kommo.setLeadCustomFieldValue(
+                  leadId,
+                  unit.summaryCustomFieldId,
+                  'textarea',
+                  summary,
+                );
+                await recorder.step({
+                  kind: 'KOMMO_ACTION',
+                  title: `Resumo também gravado em "${unit.summaryCustomFieldName ?? 'campo custom'}" do lead ${leadId}`,
+                  payload: {
+                    leadId,
+                    fieldId: unit.summaryCustomFieldId,
+                    fieldName: unit.summaryCustomFieldName,
+                  },
+                });
+                fieldNote = ` + campo "${unit.summaryCustomFieldName ?? unit.summaryCustomFieldId}"`;
+              } catch (err) {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                await recorder.step({
+                  kind: 'ERROR',
+                  title: `Falha ao gravar resumo no campo custom (nota foi criada): ${errMsg}`,
+                  payload: {
+                    leadId,
+                    fieldId: unit.summaryCustomFieldId,
+                    error: errMsg,
+                  },
+                });
+                fieldNote = ' (atenção: campo custom NÃO atualizou — nota foi postada)';
+              }
+            }
+
+            return `OK — resumo postado como nota interna no lead ${leadId}${fieldNote} (${msgs.length} msgs analisadas, ${llmMs}ms LLM, ${latency}ms total).`;
           } catch (err) {
             const latency = Math.round(performance.now() - t0);
             const msg = err instanceof Error ? err.message : String(err);

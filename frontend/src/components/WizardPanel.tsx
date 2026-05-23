@@ -53,6 +53,7 @@ import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import type {
   KnowledgeEntry,
+  KommoLeadCustomField,
   KommoPipelinesResponse,
   MessageTemplate,
   Unit,
@@ -80,6 +81,8 @@ type WizardDraft = Pick<
   | 'collectNameEnabled'
   | 'collectSourceEnabled'
   | 'collectSourceOptions'
+  | 'summaryCustomFieldId'
+  | 'summaryCustomFieldName'
   | 'welcomeCouponEnabled'
   | 'welcomeCouponMessage'
   | 'businessHoursEnabled'
@@ -132,6 +135,8 @@ function unitToDraft(u: Unit): WizardDraft {
     collectNameEnabled: u.collectNameEnabled,
     collectSourceEnabled: u.collectSourceEnabled,
     collectSourceOptions: u.collectSourceOptions ?? [],
+    summaryCustomFieldId: u.summaryCustomFieldId,
+    summaryCustomFieldName: u.summaryCustomFieldName,
     welcomeCouponEnabled: u.welcomeCouponEnabled,
     welcomeCouponMessage: u.welcomeCouponMessage,
     businessHoursEnabled: u.businessHoursEnabled,
@@ -157,11 +162,17 @@ export function WizardPanel() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(true);
 
+  // Campos custom do lead no Kommo — só usado pelo seletor "campo do resumo".
+  // Carregado lazy junto com pipelines no load inicial; falha silencia (UI
+  // mostra "Kommo não configurado ainda").
+  const [kommoFields, setKommoFields] = useState<KommoLeadCustomField[] | null>(null);
+
   useEffect(() => {
     if (!selectedUnitId) {
       setUnit(null);
       setDraft(null);
       setPipelines(null);
+      setKommoFields(null);
       return;
     }
     let alive = true;
@@ -170,11 +181,13 @@ export function WizardPanel() {
     Promise.all([
       api.getUnit(selectedUnitId),
       api.kommoPipelines(selectedUnitId).catch(() => null),
-    ]).then(([u, p]) => {
+      api.kommoLeadCustomFields(selectedUnitId).catch(() => null),
+    ]).then(([u, p, f]) => {
       if (!alive) return;
       setUnit(u);
       setDraft(unitToDraft(u));
       setPipelines(p);
+      setKommoFields(f?.ok && f.fields ? f.fields : null);
     });
     return () => {
       alive = false;
@@ -388,6 +401,67 @@ export function WizardPanel() {
             onChange={(kws) => update({ handoffKeywords: kws })}
             placeholder="ex: humano, atendente, falar com pessoa"
           />
+        </FeatureCard>
+
+        {/* 3b. RESUMO EM CAMPO CUSTOM */}
+        <FeatureCard
+          icon={<BookText size={16} className="text-amber-400" />}
+          title="📝 Resumo no campo do Kommo"
+          subtitle="Quando a IA gera resumo (handoff/transfer), também grava num custom field do lead."
+          enabled={!!draft.summaryCustomFieldId}
+          alwaysOn
+        >
+          <p className="text-[11px] text-zinc-400 leading-relaxed">
+            A tool{' '}
+            <code className="text-[10px] px-1 py-0.5 rounded bg-zinc-900 text-amber-300">
+              resumir_lead_para_sdr
+            </code>{' '}
+            sempre posta o resumo como nota interna (histórico). Quando você escolhe um campo
+            abaixo, o último resumo também aparece direto no card pra o SDR encontrar
+            rapidamente. Sugestão: campo <em>Observações</em>.
+          </p>
+          <div className="mt-3">
+            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+              Campo de destino
+            </label>
+            {kommoFields === null ? (
+              <div className="text-[11px] text-zinc-500 italic px-3 py-2 rounded-md bg-zinc-950/60 border border-zinc-800/60">
+                Configure o Kommo (subdomínio + token) primeiro pra listar os campos.
+              </div>
+            ) : (
+              <select
+                value={draft.summaryCustomFieldId ?? ''}
+                onChange={(e) => {
+                  const idStr = e.target.value;
+                  if (!idStr) {
+                    update({ summaryCustomFieldId: null, summaryCustomFieldName: null });
+                    return;
+                  }
+                  const id = Number(idStr);
+                  const field = kommoFields.find((f) => f.id === id);
+                  if (!field) return;
+                  update({
+                    summaryCustomFieldId: id,
+                    summaryCustomFieldName: field.name,
+                  });
+                }}
+                className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-2 text-sm text-zinc-100 outline-none transition"
+              >
+                <option value="">— Nenhum (só nota interna) —</option>
+                {kommoFields
+                  .filter((f) => f.type === 'text' || f.type === 'textarea')
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({f.type})
+                    </option>
+                  ))}
+              </select>
+            )}
+            <p className="text-[11px] text-zinc-600 mt-1">
+              Mostra só campos do tipo <code>text</code>/<code>textarea</code> — os outros tipos
+              não cabem texto livre.
+            </p>
+          </div>
         </FeatureCard>
 
         {/* 4. PIPELINE INTENTS */}
