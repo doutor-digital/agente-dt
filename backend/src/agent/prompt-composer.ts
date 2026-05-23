@@ -398,16 +398,17 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       return [
         'pergunte ao cliente se ele aceita ser transferido pra um humano',
         '(ex: "Posso te conectar com a equipe?").',
-        'Se ele aceitar, chame pausar_ia',
-        inc ? 'e inclua um resumo breve do contexto pra o operador.' : '.',
+        'Se ele aceitar:',
+        inc
+          ? '(1) PRIMEIRO chame resumir_lead_para_sdr({ leadId }) — gera resumo e grava em nota + campo custom; (2) DEPOIS chame pausar_ia. Sequência obrigatória nessa ordem; não pule o resumo.'
+          : 'chame pausar_ia.',
       ].join(' ');
     }
     case 'transfer_without_permission': {
       const inc = params.includeSummary !== false;
-      return [
-        'chame pausar_ia imediatamente (sem pedir confirmação)',
-        inc ? 'e deixe um resumo breve do contexto pra o operador.' : '.',
-      ].join(' ');
+      return inc
+        ? '(1) PRIMEIRO chame resumir_lead_para_sdr({ leadId }) — gera resumo e grava em nota + campo custom; (2) DEPOIS chame pausar_ia imediatamente (sem pedir confirmação). Sequência obrigatória nessa ordem; não pule o resumo.'
+        : 'chame pausar_ia imediatamente (sem pedir confirmação).';
     }
     case 'summarize_to_note': {
       const hint = typeof params.focusHint === 'string' && params.focusHint.trim()

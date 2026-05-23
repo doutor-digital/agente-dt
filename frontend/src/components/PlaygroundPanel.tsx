@@ -1,39 +1,51 @@
 // ============================================================================
-// PlaygroundPanel — chat de teste pra conversar com a IA da Unit selecionada.
+// PlaygroundPanel — chat de teste no layout WhatsApp Web (3 colunas).
 //
 // LÓGICA DE ENGENHARIA
 // --------------------
 // 100% sandbox: nenhuma mensagem vai pro banco, nenhuma ação chega no Kommo.
 // O backend (/units/:id/playground/run) recebe o histórico de mensagens,
-// compõe o systemPrompt real da Unit (com tudo do Wizard + RAG + templates)
-// e roda o LLM com tools "fakes" que só registram a chamada.
+// compõe o systemPrompt real da Unit e roda o LLM com tools "fakes" que
+// só registram a chamada.
 //
-// A UI mostra:
-//   - Mockup de celular à esquerda com chat estilo WhatsApp dentro
-//   - Timeline cronológica à direita com tudo que aconteceu por turno:
-//     msg do lead → IA pensou (latência/tokens/custo) → tool calls → resposta
+// Layout (estilo WhatsApp Web):
+//   - Esquerda: lista de chats — 1 contato fixo "Paciente Teste" (sandbox)
+//   - Centro:   conversa ativa — bolhas verdes/cinzas + tool calls inline
+//                 como bolhas system (centralizadas, pequenas, clicáveis pra
+//                 expandir args)
+//   - Direita:  info do contato — persona da Unit + métricas da sessão
+//                 (latência/tokens/custo cumulativos)
+//
+// Decisão de design — tool calls inline em vez de Timeline lateral:
+// WhatsApp Web puro não tem espaço pra timeline. As tool calls viram bolhas
+// "sistema" centralizadas no chat com emoji + label curto (ex: "🏷️ aplicou
+// tag desqualificado"). Clicar expande args. Preserva debugabilidade sem
+// coluna extra.
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BatteryFull,
+  ArrowLeft,
+  BookOpen,
   Bot,
-  Brain,
+  CheckCheck,
   ChevronDown,
   ChevronRight,
+  Filter,
+  Hash,
   Loader2,
-  MessageSquare,
-  Mic,
+  MoreVertical,
   Paperclip,
   Phone,
+  Plus,
   RotateCcw,
+  Search,
   Send,
-  Signal,
   Smile,
   Sparkles,
   TestTube2,
   Video,
-  Wifi,
+  Zap,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { api, type PlaygroundTimelineEvent } from '../lib/api';
@@ -42,30 +54,68 @@ import { useToast } from '../context/ToastContext';
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string; ts: number };
 
+// Item renderizado no centro do chat — derivado do `events`. Mensagens user/
+// assistant viram bolhas; tool_calls viram pílulas system centralizadas.
+type ChatItem =
+  | { kind: 'user'; content: string; ts: number }
+  | { kind: 'assistant'; content: string; ts: number }
+  | {
+      kind: 'tool';
+      tool: string;
+      args: Record<string, unknown>;
+      result: string;
+      ts: number;
+    };
+
 const TOOL_META: Record<
   string,
-  { label: string; emoji: string; color: 'amber' | 'sky' | 'rose' | 'fuchsia' | 'zinc' }
+  {
+    label: (args: Record<string, unknown>) => string;
+    emoji: string;
+    color: 'amber' | 'sky' | 'rose' | 'fuchsia' | 'violet' | 'zinc';
+  }
 > = {
-  aplicar_tag: { label: 'Tag aplicada', emoji: '🏷️', color: 'amber' },
-  mover_etapa: { label: 'Etapa movida', emoji: '🔀', color: 'sky' },
-  pausar_ia: { label: 'IA pausada', emoji: '⏸️', color: 'rose' },
-  atualizar_titulo_lead: { label: 'Título atualizado', emoji: '🪪', color: 'fuchsia' },
+  aplicar_tag: {
+    emoji: '🏷️',
+    color: 'amber',
+    label: (a) => {
+      const tags = (a.tags as string[] | undefined) ?? [];
+      if (tags.length === 0) return 'aplicou tag';
+      if (tags.length === 1) return `aplicou tag "${tags[0]}"`;
+      return `aplicou ${tags.length} tags`;
+    },
+  },
+  mover_etapa: {
+    emoji: '🔀',
+    color: 'sky',
+    label: (a) => {
+      const sid = a.statusId;
+      return `moveu pra etapa ${typeof sid === 'number' ? `#${sid}` : ''}`.trim();
+    },
+  },
+  pausar_ia: { emoji: '⏸️', color: 'rose', label: () => 'pausou a IA' },
+  atualizar_titulo_lead: {
+    emoji: '🪪',
+    color: 'fuchsia',
+    label: (a) => {
+      const nome = a.nome;
+      return typeof nome === 'string' ? `atualizou título: "${nome}"` : 'atualizou título';
+    },
+  },
+  resumir_lead_para_sdr: {
+    emoji: '📋',
+    color: 'violet',
+    label: () => 'gerou resumo pro SDR',
+  },
 };
 
-const TOOL_COLOR_CLASSES: Record<string, string> = {
-  amber: 'bg-amber-500/10 border-amber-500/30 text-amber-200',
-  sky: 'bg-sky-500/10 border-sky-500/30 text-sky-200',
-  rose: 'bg-rose-500/10 border-rose-500/30 text-rose-200',
-  fuchsia: 'bg-fuchsia-500/10 border-fuchsia-500/30 text-fuchsia-200',
-  zinc: 'bg-zinc-900 border-zinc-800 text-zinc-300',
-};
-
-const TOOL_DOT_CLASSES: Record<string, string> = {
-  amber: 'bg-amber-400',
-  sky: 'bg-sky-400',
-  rose: 'bg-rose-400',
-  fuchsia: 'bg-fuchsia-400',
-  zinc: 'bg-zinc-400',
+const TOOL_BUBBLE_CLASSES: Record<string, string> = {
+  amber: 'bg-amber-500/10 border-amber-500/30 text-amber-200 hover:bg-amber-500/15',
+  sky: 'bg-sky-500/10 border-sky-500/30 text-sky-200 hover:bg-sky-500/15',
+  rose: 'bg-rose-500/10 border-rose-500/30 text-rose-200 hover:bg-rose-500/15',
+  fuchsia: 'bg-fuchsia-500/10 border-fuchsia-500/30 text-fuchsia-200 hover:bg-fuchsia-500/15',
+  violet: 'bg-violet-500/10 border-violet-500/30 text-violet-200 hover:bg-violet-500/15',
+  zinc: 'bg-zinc-800/80 border-zinc-700/60 text-zinc-300 hover:bg-zinc-800',
 };
 
 const SUGGESTIONS: string[] = [
@@ -77,7 +127,7 @@ const SUGGESTIONS: string[] = [
   '👀 Vi vocês no Instagram',
 ];
 
-// Agregado da timeline (acumula todos os turnos do session).
+// Agregado da sessão (acumula todos os turnos).
 type TurnMeta = {
   model: string;
   iterations: number;
@@ -87,29 +137,21 @@ type TurnMeta = {
 };
 
 export function PlaygroundPanel() {
-  const { selectedUnitId } = useUnit();
+  const { selectedUnitId, selectedUnit } = useUnit();
   const toast = useToast();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [events, setEvents] = useState<PlaygroundTimelineEvent[]>([]);
   const [turns, setTurns] = useState<TurnMeta[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const phoneScrollRef = useRef<HTMLDivElement>(null);
-  const timelineScrollRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll do chat quando chegam mensagens novas.
+  // Auto-scroll quando chegam itens novos no chat.
   useEffect(() => {
-    const el = phoneScrollRef.current;
+    const el = chatScrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, loading]);
-
-  // Auto-scroll da timeline pra mostrar o evento mais recente.
-  useEffect(() => {
-    const el = timelineScrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [events, loading]);
+  }, [events, messages, loading]);
 
   // Reset quando troca de unidade.
   useEffect(() => {
@@ -123,6 +165,47 @@ export function PlaygroundPanel() {
     () => !!selectedUnitId && input.trim().length > 0 && !loading,
     [selectedUnitId, input, loading],
   );
+
+  // Deriva os itens do chat (user/assistant/tool) a partir dos events. Os
+  // events do servidor já vêm em ordem cronológica — só filtramos thinking
+  // (ruído visual demais como bolha).
+  const chatItems = useMemo<ChatItem[]>(() => {
+    const items: ChatItem[] = [];
+    for (const ev of events) {
+      if (ev.kind === 'user_message') {
+        items.push({ kind: 'user', content: ev.content, ts: ev.ts });
+      } else if (ev.kind === 'assistant_message') {
+        items.push({ kind: 'assistant', content: ev.content, ts: ev.ts });
+      } else if (ev.kind === 'tool_call') {
+        items.push({
+          kind: 'tool',
+          tool: ev.tool,
+          args: ev.args,
+          result: ev.result,
+          ts: ev.ts,
+        });
+      }
+    }
+    // Durante o loading, a msg do user já foi pra `messages` mas ainda não
+    // veio do server em `events`. Acrescenta no final pra não "sumir".
+    if (loading && messages.length > 0) {
+      const lastUserInMsgs = [...messages].reverse().find((m) => m.role === 'user');
+      const lastUserInEvents = [...items].reverse().find((i) => i.kind === 'user') as
+        | (ChatItem & { kind: 'user' })
+        | undefined;
+      if (
+        lastUserInMsgs &&
+        (!lastUserInEvents || lastUserInEvents.content !== lastUserInMsgs.content)
+      ) {
+        items.push({
+          kind: 'user',
+          content: lastUserInMsgs.content,
+          ts: lastUserInMsgs.ts,
+        });
+      }
+    }
+    return items;
+  }, [events, loading, messages]);
 
   async function send(text: string) {
     if (!selectedUnitId) return;
@@ -167,460 +250,425 @@ export function PlaygroundPanel() {
     );
   }
 
-  // Métricas agregadas pro header da timeline.
+  // Métricas agregadas da sessão.
   const totalLatency = turns.reduce((acc, t) => acc + t.totalLatencyMs, 0);
   const totalCost = turns.reduce((acc, t) => acc + (t.costUsd ?? 0), 0);
   const totalTokens = turns.reduce((acc, t) => acc + (t.tokens?.total ?? 0), 0);
   const lastModel = turns.length > 0 ? turns[turns.length - 1].model : null;
 
+  // Preview da última mensagem pra mostrar na lista lateral.
+  const lastChatItem = chatItems[chatItems.length - 1];
+  const lastMessagePreview =
+    lastChatItem?.kind === 'user'
+      ? lastChatItem.content
+      : lastChatItem?.kind === 'assistant'
+        ? lastChatItem.content
+        : lastChatItem?.kind === 'tool'
+          ? `ação: ${TOOL_META[lastChatItem.tool]?.emoji ?? '⚙️'} ${lastChatItem.tool}`
+          : null;
+
+  const session: SessionMetrics = {
+    turns: turns.length,
+    totalLatencyMs: totalLatency,
+    totalTokens,
+    totalCostUsd: totalCost,
+    lastModel,
+  };
+
   return (
-    <div className="flex-1 overflow-hidden flex flex-col">
-      {/* Header sticky compartilhado */}
-      <div className="px-6 pt-5 pb-3 border-b border-zinc-800/60 bg-zinc-950/95 backdrop-blur">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
-              <TestTube2 size={18} className="text-emerald-300" />
-              Testar IA
-              <span className="text-[10px] uppercase tracking-wider bg-emerald-500/15 text-emerald-300 px-2 py-0.5 rounded-full ring-1 ring-emerald-500/30">
-                Sandbox 🧪
-              </span>
-            </h1>
-            <p className="text-xs text-zinc-500 mt-0.5">
-              Converse no celular simulado. Nada vai pro Kommo nem pro banco — a timeline ao lado mostra cada passo. ✨
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={reset}
-            disabled={messages.length === 0 && events.length === 0}
-            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60 disabled:opacity-40 disabled:hover:bg-transparent"
-            title="Reiniciar conversa"
-          >
-            <RotateCcw size={13} />
-            Resetar
-          </button>
-        </div>
-      </div>
+    <div className="flex-1 overflow-hidden flex flex-col bg-zinc-950">
+      {/* Header slim */}
+      <SlimHeader
+        onReset={reset}
+        canReset={messages.length > 0 || events.length > 0}
+      />
 
+      {/* Corpo 3 colunas */}
       <div className="flex-1 overflow-hidden flex">
-        {/* Coluna esquerda — phone frame */}
-        <div className="flex-1 min-w-0 flex items-center justify-center px-6 py-6 bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.06),transparent_60%)]">
-          <PhoneFrame
-            messages={messages}
-            loading={loading}
-            input={input}
-            onInputChange={setInput}
-            onSend={() => void send(input)}
-            onSuggestion={(s) => void send(s)}
-            canSend={canSend}
-          />
-        </div>
-
-        {/* Coluna direita — timeline */}
-        <aside className="w-[420px] shrink-0 flex flex-col border-l border-zinc-800/60 bg-zinc-950/70">
-          <div className="px-4 py-3 border-b border-zinc-800/60">
-            <div className="flex items-center gap-2 mb-2">
-              <Sparkles size={14} className="text-violet-300" />
-              <h2 className="text-sm font-semibold text-zinc-100">Timeline da resposta</h2>
-              <span className="text-[10px] text-zinc-500 ml-auto">
-                {events.length} {events.length === 1 ? 'evento' : 'eventos'}
-              </span>
-            </div>
-            {turns.length > 0 ? (
-              <div className="grid grid-cols-4 gap-1.5 text-[10px]">
-                <MetricChip label="Modelo" value={lastModel ?? '—'} accent="violet" />
-                <MetricChip
-                  label="Latência"
-                  value={formatLatency(totalLatency)}
-                  accent="emerald"
-                />
-                <MetricChip
-                  label="Tokens"
-                  value={totalTokens > 0 ? formatNumber(totalTokens) : '—'}
-                  accent="sky"
-                />
-                <MetricChip
-                  label="Custo"
-                  value={totalCost > 0 ? `$${totalCost.toFixed(4)}` : '—'}
-                  accent="amber"
-                />
-              </div>
-            ) : (
-              <p className="text-[11px] text-zinc-500 leading-relaxed">
-                Cada mensagem cria uma linha do tempo aqui: o que o lead disse, quanto a IA pensou, quais ações ela tomaria, e a resposta final. 👇
-              </p>
-            )}
-          </div>
-
-          <div ref={timelineScrollRef} className="flex-1 overflow-y-auto px-4 py-3">
-            {events.length === 0 ? (
-              <div className="text-center py-10 border border-dashed border-zinc-800 rounded-lg">
-                <Brain size={22} className="text-zinc-700 mx-auto mb-2" />
-                <p className="text-[11px] text-zinc-600 px-4">
-                  Mande uma mensagem no celular pra ver o passo a passo da decisão.
-                </p>
-              </div>
-            ) : (
-              <ol className="relative space-y-2.5">
-                {/* Linha vertical conectando os pontos */}
-                <span
-                  aria-hidden
-                  className="absolute left-[11px] top-1.5 bottom-1.5 w-px bg-gradient-to-b from-zinc-800 via-zinc-800/60 to-transparent"
-                />
-                {events.map((ev, i) => (
-                  <TimelineRow key={i} event={ev} />
-                ))}
-                {loading && <TimelineLoadingRow />}
-              </ol>
-            )}
-          </div>
-        </aside>
+        <ChatListSidebar
+          lastMessagePreview={lastMessagePreview}
+          lastTs={lastChatItem?.ts ?? null}
+        />
+        <ChatCenter
+          chatScrollRef={chatScrollRef}
+          chatItems={chatItems}
+          loading={loading}
+          input={input}
+          onInputChange={setInput}
+          onSend={() => void send(input)}
+          onSuggestion={(s) => void send(s)}
+          canSend={canSend}
+        />
+        <ContactInfoSidebar unit={selectedUnit} session={session} />
       </div>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// PhoneFrame — mockup de smartphone com status bar, header WhatsApp e chat.
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Header slim — fica no topo, fora das 3 colunas
+// ===========================================================================
 
-interface PhoneFrameProps {
-  messages: ChatMessage[];
-  loading: boolean;
-  input: string;
-  onInputChange: (v: string) => void;
-  onSend: () => void;
-  onSuggestion: (s: string) => void;
-  canSend: boolean;
+function SlimHeader({
+  onReset,
+  canReset,
+}: {
+  onReset: () => void;
+  canReset: boolean;
+}) {
+  return (
+    <div className="px-6 py-3 border-b border-zinc-800/60 bg-zinc-950/95 backdrop-blur flex items-center justify-between">
+      <div className="flex items-center gap-2.5">
+        <TestTube2 size={18} className="text-emerald-300" />
+        <h1 className="text-sm font-semibold text-zinc-100">Testar IA</h1>
+        <span className="text-[10px] uppercase tracking-wider bg-emerald-500/15 text-emerald-300 px-2 py-0.5 rounded-full ring-1 ring-emerald-500/30">
+          Sandbox 🧪
+        </span>
+        <span className="text-[11px] text-zinc-500 ml-2 hidden md:inline">
+          Nada vai pro Kommo nem pro banco — as ações da IA aparecem como balões no chat.
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={onReset}
+        disabled={!canReset}
+        className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60 disabled:opacity-40 disabled:hover:bg-transparent"
+        title="Reiniciar conversa"
+      >
+        <RotateCcw size={13} />
+        Resetar
+      </button>
+    </div>
+  );
 }
 
-function PhoneFrame({
-  messages,
+// ===========================================================================
+// Coluna esquerda — lista de chats (1 contato fixo)
+// ===========================================================================
+
+function ChatListSidebar({
+  lastMessagePreview,
+  lastTs,
+}: {
+  lastMessagePreview: string | null;
+  lastTs: number | null;
+}) {
+  return (
+    <aside className="w-[320px] shrink-0 flex flex-col border-r border-zinc-800/60 bg-zinc-950">
+      {/* Header da lista — barra de busca decorativa */}
+      <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center gap-2">
+        <div className="w-9 h-9 rounded-full bg-emerald-700/80 flex items-center justify-center text-white text-sm font-semibold ring-2 ring-emerald-500/30">
+          DT
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[12px] font-semibold text-zinc-100">Conversas</div>
+          <div className="text-[10px] text-zinc-500">sandbox · 1 chat</div>
+        </div>
+        <button
+          type="button"
+          className="w-8 h-8 rounded-full hover:bg-zinc-900/60 flex items-center justify-center text-zinc-500"
+          title="Filtrar (decorativo)"
+        >
+          <Filter size={14} />
+        </button>
+      </div>
+
+      {/* Barra de busca decorativa */}
+      <div className="px-3 py-2 border-b border-zinc-800/60">
+        <div className="flex items-center gap-2 bg-zinc-900/80 rounded-full px-3 py-1.5 ring-1 ring-zinc-800/80">
+          <Search size={13} className="text-zinc-500 shrink-0" />
+          <input
+            type="text"
+            disabled
+            placeholder="Pesquisar conversa…"
+            className="flex-1 bg-transparent text-[11.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
+          />
+        </div>
+      </div>
+
+      {/* Item único — Paciente Teste */}
+      <div className="flex-1 overflow-y-auto">
+        <button
+          type="button"
+          className="w-full flex items-center gap-3 px-3 py-3 hover:bg-zinc-900/40 transition-colors bg-emerald-500/[0.04] border-l-2 border-emerald-500"
+        >
+          <div className="w-12 h-12 rounded-full bg-emerald-700/60 flex items-center justify-center text-white text-base font-semibold ring-2 ring-emerald-500/20 shrink-0">
+            🤒
+          </div>
+          <div className="flex-1 min-w-0 text-left">
+            <div className="flex items-center gap-2">
+              <div className="text-[13px] font-semibold text-zinc-100 truncate">
+                Paciente Teste
+              </div>
+              <div className="ml-auto text-[10px] text-zinc-500 tabular-nums shrink-0">
+                {lastTs ? formatClock(lastTs) : '—'}
+              </div>
+            </div>
+            <div className="text-[11.5px] text-zinc-400 truncate mt-0.5">
+              {lastMessagePreview ?? 'Comece uma conversa pra simular um lead.'}
+            </div>
+          </div>
+        </button>
+
+        <div className="px-4 py-6 text-center text-[11px] text-zinc-600 leading-relaxed">
+          Só um contato no sandbox.
+          <br />
+          Pra testar mais cenários, resete e mande uma mensagem diferente.
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+// ===========================================================================
+// Centro — chat com bolhas + tool calls inline + composer
+// ===========================================================================
+
+function ChatCenter({
+  chatScrollRef,
+  chatItems,
   loading,
   input,
   onInputChange,
   onSend,
   onSuggestion,
   canSend,
-}: PhoneFrameProps) {
-  const phoneScrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = phoneScrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages, loading]);
-
-  const now = useNow();
-
+}: {
+  chatScrollRef: React.RefObject<HTMLDivElement | null>;
+  chatItems: ChatItem[];
+  loading: boolean;
+  input: string;
+  onInputChange: (v: string) => void;
+  onSend: () => void;
+  onSuggestion: (s: string) => void;
+  canSend: boolean;
+}) {
   return (
-    <div
-      className="relative shadow-2xl shadow-emerald-500/10"
-      style={{ width: 360, height: 720 }}
-    >
-      {/* Bezel externo do celular */}
-      <div className="absolute inset-0 rounded-[44px] bg-zinc-900 ring-1 ring-zinc-700/60 p-[10px]">
-        {/* Botões laterais decorativos */}
-        <span className="absolute top-24 -left-[3px] w-[3px] h-10 rounded-l-sm bg-zinc-800" />
-        <span className="absolute top-40 -left-[3px] w-[3px] h-16 rounded-l-sm bg-zinc-800" />
-        <span className="absolute top-32 -right-[3px] w-[3px] h-20 rounded-r-sm bg-zinc-800" />
-
-        {/* Tela */}
-        <div className="relative h-full w-full rounded-[34px] overflow-hidden bg-zinc-950 flex flex-col">
-          {/* Dynamic Island */}
-          <div className="absolute top-2 left-1/2 -translate-x-1/2 w-[100px] h-[26px] rounded-full bg-black z-30" />
-
-          {/* Status bar */}
-          <div className="flex items-center justify-between px-6 pt-2.5 pb-1 text-[11px] font-medium text-white relative z-20">
-            <span className="tracking-tight">{formatClock(now)}</span>
-            <div className="flex items-center gap-1 opacity-90">
-              <Signal size={11} />
-              <Wifi size={11} />
-              <BatteryFull size={13} />
-            </div>
-          </div>
-
-          {/* Header WhatsApp */}
-          <div className="flex items-center gap-3 px-3 py-2.5 bg-emerald-700/95 border-b border-emerald-800/50">
-            <div className="w-9 h-9 rounded-full bg-emerald-500 flex items-center justify-center ring-2 ring-emerald-300/30">
-              <Bot size={18} className="text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-semibold text-white truncate">DT IA</div>
-              <div className="text-[10px] text-emerald-100/80">
-                {loading ? 'digitando…' : 'online'}
-              </div>
-            </div>
-            <Video size={16} className="text-emerald-100/80" />
-            <Phone size={15} className="text-emerald-100/80" />
-          </div>
-
-          {/* Chat — wallpaper */}
-          <div
-            ref={phoneScrollRef}
-            className="flex-1 overflow-y-auto px-3 py-3 space-y-2"
-            style={{
-              backgroundColor: '#0b1410',
-              backgroundImage:
-                'radial-gradient(circle at 20% 30%, rgba(16,185,129,0.08) 0px, transparent 60%), radial-gradient(circle at 80% 70%, rgba(16,185,129,0.05) 0px, transparent 50%)',
-            }}
-          >
-            {messages.length === 0 && !loading && (
-              <div className="flex flex-col items-center pt-6">
-                <div className="text-[10px] text-emerald-100/60 bg-emerald-900/40 px-2 py-1 rounded-full mb-4">
-                  🔒 Mensagens fim-a-fim (sandbox)
-                </div>
-                <MessageSquare size={28} className="text-emerald-700/40 mb-2" />
-                <p className="text-[11px] text-zinc-400 text-center mb-3 px-6">
-                  Comece como se fosse um lead falando.
-                </p>
-                <div className="flex flex-wrap gap-1.5 justify-center px-2">
-                  {SUGGESTIONS.slice(0, 4).map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => onSuggestion(s)}
-                      className="text-[10px] px-2 py-1 rounded-full bg-emerald-900/40 text-emerald-100 ring-1 ring-emerald-700/40 hover:bg-emerald-800/50 transition-colors"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {messages.map((m, i) => (
-              <PhoneBubble key={i} message={m} />
-            ))}
-
-            {loading && <PhoneTypingIndicator />}
-          </div>
-
-          {/* Composer */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              onSend();
-            }}
-            className="flex items-center gap-1.5 px-2 py-2 bg-zinc-900 border-t border-zinc-800"
-          >
-            <div className="flex-1 flex items-center gap-1.5 bg-zinc-800/80 rounded-full px-3 py-1.5 ring-1 ring-zinc-700/60">
-              <Smile size={15} className="text-zinc-500 shrink-0" />
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => onInputChange(e.target.value)}
-                placeholder="Mensagem"
-                className="flex-1 bg-transparent text-[12px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none min-w-0"
-                disabled={loading}
-              />
-              <Paperclip size={14} className="text-zinc-500 shrink-0" />
-            </div>
-            <button
-              type={canSend ? 'submit' : 'button'}
-              disabled={!canSend}
-              className="w-9 h-9 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:opacity-60 flex items-center justify-center text-white transition-colors"
-              title={canSend ? 'Enviar' : 'Digite uma mensagem'}
-            >
-              {loading ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : canSend ? (
-                <Send size={14} />
-              ) : (
-                <Mic size={14} />
-              )}
-            </button>
-          </form>
-
-          {/* Home indicator */}
-          <div className="flex justify-center py-1.5 bg-zinc-900">
-            <span className="w-28 h-1 rounded-full bg-zinc-600/80" />
+    <div className="flex-1 min-w-0 flex flex-col bg-[#0b141a]">
+      {/* Header do chat — contato ativo */}
+      <div className="flex items-center gap-3 px-4 py-2.5 bg-zinc-900/80 border-b border-zinc-800/60">
+        <button
+          type="button"
+          className="md:hidden text-zinc-400 hover:text-zinc-100"
+          title="Voltar (decorativo)"
+        >
+          <ArrowLeft size={16} />
+        </button>
+        <div className="w-10 h-10 rounded-full bg-emerald-700/60 flex items-center justify-center text-white text-base font-semibold ring-2 ring-emerald-500/20">
+          🤒
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-zinc-100">Paciente Teste</div>
+          <div className="text-[10.5px] text-emerald-300/80">
+            {loading ? 'digitando…' : 'online · sandbox 🧪'}
           </div>
         </div>
+        <button
+          type="button"
+          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400"
+          title="Vídeo (decorativo)"
+          disabled
+        >
+          <Video size={15} />
+        </button>
+        <button
+          type="button"
+          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400"
+          title="Chamada (decorativo)"
+          disabled
+        >
+          <Phone size={14} />
+        </button>
+        <button
+          type="button"
+          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400"
+          title="Mais (decorativo)"
+          disabled
+        >
+          <MoreVertical size={15} />
+        </button>
+      </div>
+
+      {/* Stream do chat — wallpaper estilo WhatsApp */}
+      <div
+        ref={chatScrollRef}
+        className="flex-1 overflow-y-auto px-6 py-4 space-y-2"
+        style={{
+          backgroundColor: '#0b141a',
+          backgroundImage:
+            'radial-gradient(circle at 15% 20%, rgba(16,185,129,0.05) 0px, transparent 55%), radial-gradient(circle at 85% 80%, rgba(16,185,129,0.04) 0px, transparent 50%)',
+        }}
+      >
+        {chatItems.length === 0 && !loading && (
+          <EmptyChatState onSuggestion={onSuggestion} />
+        )}
+
+        {chatItems.map((item, i) => (
+          <ChatItemRow key={`${item.ts}-${i}`} item={item} />
+        ))}
+
+        {loading && <TypingIndicator />}
+      </div>
+
+      {/* Composer */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSend();
+        }}
+        className="flex items-center gap-2 px-4 py-2.5 bg-zinc-900/80 border-t border-zinc-800/60"
+      >
+        <button
+          type="button"
+          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400 shrink-0"
+          title="Emoji (decorativo)"
+          disabled
+        >
+          <Smile size={18} />
+        </button>
+        <button
+          type="button"
+          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400 shrink-0"
+          title="Anexo (decorativo)"
+          disabled
+        >
+          <Paperclip size={17} />
+        </button>
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => onInputChange(e.target.value)}
+          placeholder="Digite uma mensagem como se fosse o lead…"
+          disabled={loading}
+          className="flex-1 bg-zinc-800/80 rounded-full px-4 py-2 text-[13px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/40 min-w-0"
+        />
+        <button
+          type={canSend ? 'submit' : 'button'}
+          disabled={!canSend}
+          className="w-10 h-10 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:opacity-50 flex items-center justify-center text-white shrink-0 transition-colors"
+          title={canSend ? 'Enviar' : 'Digite uma mensagem'}
+        >
+          {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function EmptyChatState({ onSuggestion }: { onSuggestion: (s: string) => void }) {
+  return (
+    <div className="h-full flex flex-col items-center justify-center pt-10">
+      <div className="text-[10px] text-emerald-100/60 bg-emerald-900/40 px-2.5 py-1 rounded-full mb-6 ring-1 ring-emerald-800/40">
+        🔒 Mensagens fim-a-fim (sandbox)
+      </div>
+      <Bot size={48} className="text-emerald-700/30 mb-3" />
+      <p className="text-[12px] text-zinc-400 text-center mb-4 max-w-sm">
+        Mande uma mensagem como se fosse o lead.
+        <br />A IA vai responder e as ações que ela tomar aparecem como balões no chat.
+      </p>
+      <div className="flex flex-wrap gap-1.5 justify-center max-w-md px-4">
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => onSuggestion(s)}
+            className="text-[11px] px-2.5 py-1 rounded-full bg-emerald-900/30 text-emerald-100 ring-1 ring-emerald-700/30 hover:bg-emerald-800/40 transition-colors"
+          >
+            {s}
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
-function PhoneBubble({ message }: { message: ChatMessage }) {
-  const isUser = message.role === 'user';
+function ChatItemRow({ item }: { item: ChatItem }) {
+  if (item.kind === 'user' || item.kind === 'assistant') return <ChatBubble item={item} />;
+  return <ToolSystemBubble item={item} />;
+}
+
+function ChatBubble({
+  item,
+}: {
+  item: Extract<ChatItem, { kind: 'user' | 'assistant' }>;
+}) {
+  const isUser = item.kind === 'user';
   return (
     <div className={clsx('flex', isUser ? 'justify-end' : 'justify-start')}>
       <div
         className={clsx(
-          'max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm relative',
+          'max-w-[65%] rounded-lg px-3 py-1.5 shadow-sm relative',
           isUser
-            ? 'bg-emerald-700/95 text-white rounded-tr-sm'
-            : 'bg-zinc-800/90 text-zinc-100 rounded-tl-sm',
+            ? 'bg-emerald-700 text-white rounded-tr-sm'
+            : 'bg-zinc-800/95 text-zinc-100 rounded-tl-sm',
         )}
       >
-        <div className="text-[12.5px] leading-snug whitespace-pre-wrap break-words">
-          {message.content}
+        <div className="text-[13px] leading-relaxed whitespace-pre-wrap break-words">
+          {item.content}
         </div>
         <div
           className={clsx(
-            'text-[9px] mt-0.5 text-right tabular-nums',
+            'flex items-center gap-1 mt-1 text-[10px] justify-end tabular-nums',
             isUser ? 'text-emerald-100/70' : 'text-zinc-500',
           )}
         >
-          {formatClock(message.ts)} {isUser && '✓✓'}
+          <span>{formatClock(item.ts)}</span>
+          {isUser && <CheckCheck size={12} className="text-emerald-100/80" />}
         </div>
       </div>
     </div>
   );
 }
 
-function PhoneTypingIndicator() {
-  return (
-    <div className="flex justify-start">
-      <div className="bg-zinc-800/90 rounded-lg rounded-tl-sm px-3 py-2 flex items-center gap-1">
-        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" />
-        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0.15s]" />
-        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0.3s]" />
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Timeline rows.
-// ---------------------------------------------------------------------------
-
-function TimelineRow({ event }: { event: PlaygroundTimelineEvent }) {
-  switch (event.kind) {
-    case 'user_message':
-      return <UserMessageRow event={event} />;
-    case 'thinking':
-      return <ThinkingRow event={event} />;
-    case 'tool_call':
-      return <ToolCallRow event={event} />;
-    case 'assistant_message':
-      return <AssistantMessageRow event={event} />;
-  }
-}
-
-function TimelineDot({ accent }: { accent: string }) {
-  return (
-    <span
-      className={clsx(
-        'absolute left-[7px] top-2.5 w-[10px] h-[10px] rounded-full ring-2 ring-zinc-950 z-10',
-        accent,
-      )}
-    />
-  );
-}
-
-function UserMessageRow({
-  event,
+function ToolSystemBubble({
+  item,
 }: {
-  event: Extract<PlaygroundTimelineEvent, { kind: 'user_message' }>;
-}) {
-  return (
-    <li className="relative pl-7">
-      <TimelineDot accent="bg-sky-400" />
-      <div className="rounded-md border border-sky-500/20 bg-sky-500/5 px-3 py-2">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-[10px] uppercase tracking-wider font-semibold text-sky-300">
-            Lead enviou
-          </span>
-          <span className="ml-auto text-[10px] text-zinc-500 tabular-nums">
-            {formatClock(event.ts)}
-          </span>
-        </div>
-        <div className="text-[12px] text-zinc-200 leading-snug break-words">
-          “{event.content}”
-        </div>
-      </div>
-    </li>
-  );
-}
-
-function ThinkingRow({
-  event,
-}: {
-  event: Extract<PlaygroundTimelineEvent, { kind: 'thinking' }>;
-}) {
-  return (
-    <li className="relative pl-7">
-      <TimelineDot accent="bg-violet-400" />
-      <div className="rounded-md border border-violet-500/20 bg-violet-500/5 px-3 py-2">
-        <div className="flex items-center gap-2 mb-1">
-          <Brain size={11} className="text-violet-300" />
-          <span className="text-[10px] uppercase tracking-wider font-semibold text-violet-300">
-            IA processou (iter #{event.iteration})
-          </span>
-          <span className="ml-auto text-[10px] text-zinc-500 tabular-nums">
-            {formatClock(event.ts)}
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-1.5 text-[10px]">
-          <span className="px-1.5 py-0.5 rounded bg-zinc-900 ring-1 ring-zinc-800 text-zinc-300 font-mono">
-            {event.model}
-          </span>
-          <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 ring-1 ring-emerald-500/20 text-emerald-200 tabular-nums">
-            ⏱ {formatLatency(event.durationMs)}
-          </span>
-          {event.tokens && (
-            <span
-              className="px-1.5 py-0.5 rounded bg-sky-500/10 ring-1 ring-sky-500/20 text-sky-200 tabular-nums"
-              title={`prompt ${event.tokens.prompt} · completion ${event.tokens.completion}`}
-            >
-              🪙 {formatNumber(event.tokens.total)} tok
-            </span>
-          )}
-          {event.costUsd !== undefined && event.costUsd > 0 && (
-            <span className="px-1.5 py-0.5 rounded bg-amber-500/10 ring-1 ring-amber-500/20 text-amber-200 tabular-nums">
-              💲 ${event.costUsd.toFixed(5)}
-            </span>
-          )}
-        </div>
-      </div>
-    </li>
-  );
-}
-
-function ToolCallRow({
-  event,
-}: {
-  event: Extract<PlaygroundTimelineEvent, { kind: 'tool_call' }>;
+  item: Extract<ChatItem, { kind: 'tool' }>;
 }) {
   const [open, setOpen] = useState(false);
-  const meta = TOOL_META[event.tool] ?? {
-    label: event.tool,
+  const meta = TOOL_META[item.tool] ?? {
     emoji: '⚙️',
     color: 'zinc' as const,
+    label: () => item.tool,
   };
-  const argsEntries = Object.entries(event.args).filter(([k]) => k !== 'leadId');
+  const argsEntries = Object.entries(item.args).filter(([k]) => k !== 'leadId');
 
   return (
-    <li className="relative pl-7">
-      <TimelineDot accent={TOOL_DOT_CLASSES[meta.color] ?? TOOL_DOT_CLASSES.zinc} />
+    <div className="flex justify-center my-1">
       <div
         className={clsx(
-          'rounded-md border px-3 py-2',
-          TOOL_COLOR_CLASSES[meta.color] ?? TOOL_COLOR_CLASSES.zinc,
+          'inline-flex flex-col max-w-[80%] rounded-full text-[11px]',
+          'transition-colors',
         )}
       >
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="w-full flex items-center gap-2 text-left"
+          className={clsx(
+            'inline-flex items-center gap-1.5 px-3 py-1 rounded-full border',
+            TOOL_BUBBLE_CLASSES[meta.color] ?? TOOL_BUBBLE_CLASSES.zinc,
+          )}
+          title="Detalhes da ação da IA"
         >
-          <span className="text-sm">{meta.emoji}</span>
-          <span className="text-[11px] font-semibold">{meta.label}</span>
-          <code className="text-[9px] font-mono opacity-60">{event.tool}</code>
-          <span className="ml-auto text-[10px] opacity-70 tabular-nums">
-            {formatClock(event.ts)}
-          </span>
+          <span>{meta.emoji}</span>
+          <span className="font-medium">{meta.label(item.args)}</span>
+          <span className="opacity-50 text-[10px] tabular-nums">{formatClock(item.ts)}</span>
           {open ? (
-            <ChevronDown size={11} className="opacity-70" />
+            <ChevronDown size={11} className="opacity-60" />
           ) : (
-            <ChevronRight size={11} className="opacity-70" />
+            <ChevronRight size={11} className="opacity-60" />
           )}
         </button>
-
         {open && (
-          <div className="mt-2 pt-2 border-t border-current/20 space-y-1 text-[10.5px] font-mono">
+          <div
+            className={clsx(
+              'mt-1 rounded-md border px-3 py-2 text-[10.5px] font-mono space-y-1',
+              TOOL_BUBBLE_CLASSES[meta.color] ?? TOOL_BUBBLE_CLASSES.zinc,
+            )}
+          >
+            <div className="text-[10px] opacity-60 uppercase tracking-wider">
+              {item.tool}
+            </div>
             {argsEntries.length === 0 ? (
               <div className="opacity-60">(sem args além de leadId)</div>
             ) : (
@@ -631,96 +679,196 @@ function ToolCallRow({
                 </div>
               ))
             )}
-            <div className="mt-1 pt-1 border-t border-current/10 opacity-75">
+            <div className="mt-1 pt-1 border-t border-current/10 opacity-80 break-words">
               <span className="opacity-60">→ </span>
-              {event.result}
+              {item.result}
             </div>
           </div>
         )}
-      </div>
-    </li>
-  );
-}
-
-function AssistantMessageRow({
-  event,
-}: {
-  event: Extract<PlaygroundTimelineEvent, { kind: 'assistant_message' }>;
-}) {
-  return (
-    <li className="relative pl-7">
-      <TimelineDot accent="bg-emerald-400" />
-      <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
-        <div className="flex items-center gap-2 mb-1">
-          <Bot size={11} className="text-emerald-300" />
-          <span className="text-[10px] uppercase tracking-wider font-semibold text-emerald-300">
-            IA respondeu
-          </span>
-          <span className="ml-auto text-[10px] text-zinc-500 tabular-nums">
-            {formatClock(event.ts)}
-          </span>
-        </div>
-        <div className="text-[12px] text-zinc-200 leading-snug whitespace-pre-wrap break-words">
-          {event.content}
-        </div>
-      </div>
-    </li>
-  );
-}
-
-function TimelineLoadingRow() {
-  return (
-    <li className="relative pl-7">
-      <span className="absolute left-[7px] top-2.5 w-[10px] h-[10px] rounded-full ring-2 ring-zinc-950 bg-violet-500 animate-pulse z-10" />
-      <div className="rounded-md border border-violet-500/20 bg-violet-500/5 px-3 py-2 flex items-center gap-2">
-        <Loader2 size={11} className="text-violet-300 animate-spin" />
-        <span className="text-[11px] text-violet-200">IA pensando…</span>
-      </div>
-    </li>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// MetricChip — bloquinhos do header da timeline.
-// ---------------------------------------------------------------------------
-
-function MetricChip({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent: 'violet' | 'emerald' | 'sky' | 'amber';
-}) {
-  const cls: Record<typeof accent, string> = {
-    violet: 'border-violet-500/20 bg-violet-500/5 text-violet-200',
-    emerald: 'border-emerald-500/20 bg-emerald-500/5 text-emerald-200',
-    sky: 'border-sky-500/20 bg-sky-500/5 text-sky-200',
-    amber: 'border-amber-500/20 bg-amber-500/5 text-amber-200',
-  };
-  return (
-    <div className={clsx('rounded-md border px-2 py-1', cls[accent])}>
-      <div className="text-[9px] uppercase tracking-wider opacity-70">{label}</div>
-      <div className="text-[11px] font-mono truncate" title={value}>
-        {value}
       </div>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helpers.
-// ---------------------------------------------------------------------------
-
-function useNow() {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, []);
-  return now;
+function TypingIndicator() {
+  return (
+    <div className="flex justify-start">
+      <div className="bg-zinc-800/95 rounded-lg rounded-tl-sm px-3 py-2 flex items-center gap-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" />
+        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0.15s]" />
+        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0.3s]" />
+      </div>
+    </div>
+  );
 }
+
+// ===========================================================================
+// Coluna direita — info do contato + métricas da sessão
+// ===========================================================================
+
+interface SessionMetrics {
+  turns: number;
+  totalLatencyMs: number;
+  totalTokens: number;
+  totalCostUsd: number;
+  lastModel: string | null;
+}
+
+function ContactInfoSidebar({
+  unit,
+  session,
+}: {
+  unit: ReturnType<typeof useUnit>['selectedUnit'];
+  session: SessionMetrics;
+}) {
+  const personaTone = unit?.personaTone ?? '—';
+  const personaCompany = unit?.personaCompanyName ?? unit?.name ?? '—';
+
+  return (
+    <aside className="w-[320px] shrink-0 flex flex-col border-l border-zinc-800/60 bg-zinc-950 overflow-y-auto">
+      {/* Hero — avatar grande + nome */}
+      <div className="px-6 pt-8 pb-5 text-center border-b border-zinc-800/60">
+        <div className="w-24 h-24 rounded-full bg-emerald-700/40 flex items-center justify-center text-3xl ring-4 ring-emerald-500/15 mx-auto mb-3">
+          🤒
+        </div>
+        <div className="text-[15px] font-semibold text-zinc-100">Paciente Teste</div>
+        <div className="text-[11px] text-zinc-500 mt-0.5">WhatsApp · sandbox 🧪</div>
+      </div>
+
+      {/* Persona ativa */}
+      <Section icon={<Sparkles size={13} className="text-violet-300" />} title="Persona ativa">
+        <SectionRow label="Empresa" value={personaCompany} />
+        <SectionRow label="Tom" value={String(personaTone)} />
+        {unit?.personaGreeting && (
+          <div className="px-3 pb-2">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
+              Saudação
+            </div>
+            <div className="text-[11px] text-zinc-300 italic line-clamp-3">
+              "{unit.personaGreeting}"
+            </div>
+          </div>
+        )}
+      </Section>
+
+      {/* Setup do agente */}
+      <Section icon={<Zap size={13} className="text-amber-300" />} title="Setup do agente">
+        <SectionRow
+          label="Tools sandbox"
+          value="5"
+          hint="tag · etapa · pausa · título · resumo"
+        />
+        <SectionRow
+          label="Coleta de nome"
+          value={unit?.collectNameEnabled ? 'on' : 'off'}
+        />
+        <SectionRow
+          label="Coleta de origem"
+          value={unit?.collectSourceEnabled ? 'on' : 'off'}
+        />
+        <SectionRow
+          label="Horário comercial"
+          value={unit?.businessHoursEnabled ? 'on' : 'off'}
+        />
+        <SectionRow
+          label="Resumo→campo"
+          value={
+            unit?.summaryCustomFieldName
+              ? `"${unit.summaryCustomFieldName}"`
+              : '(só nota)'
+          }
+        />
+      </Section>
+
+      {/* Métricas da sessão */}
+      <Section icon={<Hash size={13} className="text-sky-300" />} title="Sessão atual">
+        <SectionRow label="Turnos" value={String(session.turns)} />
+        <SectionRow
+          label="Latência total"
+          value={session.totalLatencyMs > 0 ? formatLatency(session.totalLatencyMs) : '—'}
+        />
+        <SectionRow
+          label="Tokens"
+          value={session.totalTokens > 0 ? formatNumber(session.totalTokens) : '—'}
+        />
+        <SectionRow
+          label="Custo"
+          value={session.totalCostUsd > 0 ? `$${session.totalCostUsd.toFixed(4)}` : '—'}
+        />
+        {session.lastModel && (
+          <SectionRow label="Último modelo" value={session.lastModel} mono />
+        )}
+      </Section>
+
+      {/* Dica */}
+      <div className="px-4 py-4 mt-auto border-t border-zinc-800/60">
+        <div className="flex items-start gap-2 text-[11px] text-zinc-500 leading-relaxed">
+          <BookOpen size={13} className="text-zinc-600 shrink-0 mt-0.5" />
+          <p>
+            Os balões coloridos centralizados no chat são <strong>ações da IA</strong> — clique
+            num pra ver os argumentos.
+          </p>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function Section({
+  icon,
+  title,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="border-b border-zinc-800/60">
+      <div className="px-4 pt-4 pb-2 flex items-center gap-2">
+        {icon}
+        <h3 className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+          {title}
+        </h3>
+      </div>
+      <div className="pb-2 space-y-1">{children}</div>
+    </div>
+  );
+}
+
+function SectionRow({
+  label,
+  value,
+  hint,
+  mono,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="px-4 py-1.5 flex items-baseline gap-3">
+      <div className="text-[11px] text-zinc-500 shrink-0 w-[110px]">{label}</div>
+      <div className="flex-1 min-w-0">
+        <div
+          className={clsx(
+            'text-[12px] text-zinc-200 truncate',
+            mono && 'font-mono text-[11px]',
+          )}
+          title={value}
+        >
+          {value}
+        </div>
+        {hint && <div className="text-[10px] text-zinc-600 truncate">{hint}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// Helpers
+// ===========================================================================
 
 function formatClock(ts: number): string {
   return new Date(ts).toLocaleTimeString('pt-BR', {
@@ -739,3 +887,7 @@ function formatNumber(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
+
+// Re-export pra evitar warning de import não utilizado em casos parciais.
+// (Plus é placeholder se quisermos um botão "novo chat" no futuro.)
+void Plus;

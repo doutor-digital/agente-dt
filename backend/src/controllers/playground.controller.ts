@@ -174,7 +174,30 @@ function buildSandboxTools(opts: { onCall: (a: SandboxAction) => void }) {
     },
   });
 
-  return [aplicar_tag, mover_etapa, pausar_ia, atualizar_titulo_lead];
+  // Stub do resumo. Não chama LLM nem Kommo — devolve marcador previsível
+  // pra timeline do playground mostrar que a IA decidiu resumir. Em prod
+  // (agent/tools.ts) a tool real gera summary via LLM e grava em nota + campo.
+  const resumir_lead_para_sdr = new DynamicStructuredTool({
+    name: 'resumir_lead_para_sdr',
+    description:
+      'Gera resumo da conversa pra o SDR humano e posta como nota interna + ' +
+      'grava em campo custom se configurado (sandbox: simulado, não chama LLM).',
+    schema: zod.object({
+      leadId: zod.number().int().positive(),
+      focusHint: zod.string().max(400).optional(),
+    }),
+    func: async ({ leadId, focusHint }) => {
+      const result = `[SANDBOX] resumir_lead_para_sdr(lead ${leadId}${focusHint ? `, foco: "${focusHint}"` : ''}) → em prod isto chamaria o LLM, postaria nota interna e gravaria no campo "Observações" — simulado.`;
+      opts.onCall({
+        tool: 'resumir_lead_para_sdr',
+        args: { leadId, focusHint: focusHint ?? null },
+        result,
+      });
+      return result;
+    },
+  });
+
+  return [aplicar_tag, mover_etapa, pausar_ia, atualizar_titulo_lead, resumir_lead_para_sdr];
 }
 
 export async function playgroundRunHandler(req: Request, res: Response): Promise<void> {
