@@ -758,33 +758,98 @@ export function buildTools({
             //    aqui NÃO inverte o sucesso da nota — logamos ERROR e seguimos.
             let fieldNote = '';
             if (unit.summaryCustomFieldId) {
+              const fieldId = unit.summaryCustomFieldId;
+              const fieldLabel = unit.summaryCustomFieldName ?? `field ${fieldId}`;
               try {
-                await kommo.setLeadCustomFieldValue(
-                  leadId,
-                  unit.summaryCustomFieldId,
-                  'textarea',
-                  summary,
-                );
+                const writeStart = performance.now();
+                await kommo.setLeadCustomFieldValue(leadId, fieldId, 'textarea', summary);
+                const writeMs = Math.round(performance.now() - writeStart);
                 await recorder.step({
                   kind: 'KOMMO_ACTION',
-                  title: `Resumo também gravado em "${unit.summaryCustomFieldName ?? 'campo custom'}" do lead ${leadId}`,
+                  title: `📤 PATCH "${fieldLabel}" — ${summary.length} chars (custom field do resumo)`,
                   payload: {
                     leadId,
-                    fieldId: unit.summaryCustomFieldId,
+                    fieldId,
                     fieldName: unit.summaryCustomFieldName,
+                    sentLen: summary.length,
                   },
+                  latencyMs: writeMs,
                 });
-                fieldNote = ` + campo "${unit.summaryCustomFieldName ?? unit.summaryCustomFieldId}"`;
+
+                // Readback — releitura do lead pra confirmar que o Kommo
+                // armazenou de fato. Mesmo padrão da "Resposta IA" — alguns
+                // campos custom têm silent rejection (Kommo retorna 200 mas
+                // não persiste, tipo o bug histórico do `tags_to_add`).
+                const readStart = performance.now();
+                try {
+                  const lead = await kommo.getLead(leadId);
+                  const stored = lead.custom_fields_values?.find(
+                    (f) => f.field_id === fieldId,
+                  );
+                  const storedRaw = stored?.values?.[0]?.value;
+                  const storedValue =
+                    typeof storedRaw === 'string' ? storedRaw : storedRaw == null ? '' : String(storedRaw);
+                  const readMs = Math.round(performance.now() - readStart);
+                  // Kommo aplica downgrade de emoji no servidor (mesma razão da
+                  // Resposta IA), então a comparação deve ser feita contra a
+                  // versão "downgraded" do summary. Truque pragmático: comparar
+                  // pelo prefixo de 80 chars (suficiente pra confirmar persistência
+                  // sem falsos negativos por sanitização de caracteres).
+                  const sentPrefix = summary.slice(0, 80);
+                  const storedPrefix = storedValue.slice(0, 80);
+                  const persisted = storedValue.length > 0;
+                  const looksSame = storedPrefix.replace(/[^\w\s]/g, '') ===
+                    sentPrefix.replace(/[^\w\s]/g, '');
+                  if (persisted && (looksSame || storedValue.length >= summary.length * 0.5)) {
+                    await recorder.step({
+                      kind: 'KOMMO_ACTION',
+                      title: `🟢 Readback "${fieldLabel}": Kommo armazenou (${storedValue.length} chars)`,
+                      payload: {
+                        leadId,
+                        fieldId,
+                        match: true,
+                        storedLen: storedValue.length,
+                        sentLen: summary.length,
+                        storedPreview: storedValue.slice(0, 200),
+                      },
+                      latencyMs: readMs,
+                    });
+                    fieldNote = ` + campo "${fieldLabel}"`;
+                  } else {
+                    await recorder.step({
+                      kind: 'ERROR',
+                      title: `🔴 Readback "${fieldLabel}": Kommo NÃO persistiu o resumo (silent rejection)`,
+                      payload: {
+                        leadId,
+                        fieldId,
+                        match: false,
+                        sentLen: summary.length,
+                        storedLen: storedValue.length,
+                        storedPreview: storedValue.slice(0, 200),
+                        sentPreview: summary.slice(0, 200),
+                        diagnostico:
+                          'PATCH retornou 200 mas o Kommo descartou. Verifique se o field é text/textarea e se o token tem permissão. Pode ser limite de tamanho do tipo text (single line).',
+                      },
+                      latencyMs: readMs,
+                    });
+                    fieldNote =
+                      ' (atenção: Kommo aceitou 200 mas campo NÃO foi populado — readback detectou)';
+                  }
+                } catch (readErr) {
+                  const errMsg = readErr instanceof Error ? readErr.message : String(readErr);
+                  await recorder.step({
+                    kind: 'ERROR',
+                    title: `⚠️ Readback falhou (PATCH foi enviado): ${errMsg}`,
+                    payload: { leadId, fieldId, error: errMsg },
+                  });
+                  fieldNote = ` + campo "${fieldLabel}" (readback falhou — verificar manualmente)`;
+                }
               } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 await recorder.step({
                   kind: 'ERROR',
                   title: `Falha ao gravar resumo no campo custom (nota foi criada): ${errMsg}`,
-                  payload: {
-                    leadId,
-                    fieldId: unit.summaryCustomFieldId,
-                    error: errMsg,
-                  },
+                  payload: { leadId, fieldId, error: errMsg },
                 });
                 fieldNote = ' (atenção: campo custom NÃO atualizou — nota foi postada)';
               }
