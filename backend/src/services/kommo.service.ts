@@ -602,13 +602,15 @@ export class KommoClient {
    * PATCH com todas — atômico do ponto de vista da observabilidade do Kommo e
    * mais barato que N chamadas.
    *
-   * ⚠ HISTÓRICO: a versão anterior usava `_embedded.tags: [{name}]` que faz o
-   * Kommo SUBSTITUIR a lista inteira de tags pelas enviadas. Resultado: chamar
-   * addTag 3x em sequência deixava só a última tag (as anteriores eram
-   * apagadas silenciosamente — bug observado em produção).
+   * ⚠ HISTÓRICO: tentativas anteriores quebradas:
+   *   1) `_embedded.tags: [{name}]` — SUBSTITUI a lista inteira; chamar 3x
+   *      deixava só a última tag (apagava as anteriores).
+   *   2) `_embedded.tags_to_add: [{name}]` — Kommo ignora silenciosamente
+   *      (retorna 200 mas não anexa nada). A chave `tags_to_add` é de RAIZ
+   *      do body, não vai aninhada em `_embedded`.
    *
-   * O atalho correto é `_embedded.tags_to_add: [{name}]` (espelho do
-   * `tags_to_delete` em removeTag), que ANEXA sem mexer no resto.
+   * Forma correta: `tags_to_add` no root, aceita `name` (cria se não existe)
+   * ou `id` (referência a tag já catalogada). ANEXA sem mexer no resto.
    */
   async addTag({ leadId, tag, tags }: AddTagParams): Promise<void> {
     const all = [
@@ -623,7 +625,7 @@ export class KommoClient {
     const unique = all.filter((t) => (seen.has(t) ? false : (seen.add(t), true)));
     try {
       await this.http.patch(`/leads/${leadId}`, {
-        _embedded: { tags_to_add: unique.map((name) => ({ name })) },
+        tags_to_add: unique.map((name) => ({ name })),
       });
     } catch (err) {
       wrapAxiosError(err, `addTag(${leadId}, [${unique.join(', ')}])`);
@@ -631,14 +633,14 @@ export class KommoClient {
   }
 
   /**
-   * Remove uma tag específica do lead. Kommo aceita o atalho
-   * `_embedded.tags_to_delete: [{ name }]` que remove sem mexer no resto.
+   * Remove uma tag específica do lead. Kommo aceita `tags_to_delete: [{name}]`
+   * no root do body — remove sem mexer no resto.
    * Idempotente: remover tag que não existe é no-op (Kommo retorna 200).
    */
   async removeTag(leadId: number, tag: string): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, {
-        _embedded: { tags_to_delete: [{ name: tag }] },
+        tags_to_delete: [{ name: tag }],
       });
     } catch (err) {
       wrapAxiosError(err, `removeTag(${leadId}, ${tag})`);
