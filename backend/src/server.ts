@@ -28,6 +28,7 @@ import { apiRouter } from './routes/api.routes.js';
 import { getCheckpointer } from './agent/graph.js';
 import { ensureDefaultUnit } from './services/units.service.js';
 import { startWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
+import { startDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -108,6 +109,11 @@ async function main(): Promise<void> {
   // Agendador in-process do sync de custos WhatsApp (Graph API pricing_analytics
   // + template_analytics). Roda 1x/dia às 03:00 UTC, com upsert idempotente.
   startWhatsappCostScheduler();
+
+  // Refresh in-process das materialized views do dashboard (mv_unit_daily +
+  // mv_unit_daily_channel). REFRESH CONCURRENTLY a cada 5min — stale window
+  // aceito pra dashboard executivo.
+  startDashboardMvRefresher();
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);

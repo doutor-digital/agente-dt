@@ -391,7 +391,14 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
   const prevPeriodStart = new Date(periodStart.getTime() - periodDays * 24 * 60 * 60 * 1000);
   const prevPeriodEnd = periodStart;
 
-  // 1 round-trip em paralelo. Cada query é independente.
+  // Queries em paralelo. Divisão por origem:
+  //   - mvAgg / mvDaily / mvChannel / mvPrev: leem as MATERIALIZED VIEWS
+  //     mv_unit_daily e mv_unit_daily_channel (refresh a cada 5min). Cobrem
+  //     SUMs agregados, série diária, breakdown por canal e deltas do período
+  //     anterior — antes eram ~9 table-scans, agora são ~4 reads indexados.
+  //   - O resto fica como query live: DISTINCT lead_id, NOT EXISTS, correlações
+  //     com execution_steps por título — coisas que não cabem num agregado
+  //     diário limpo. Stale window aceitável de até 5min nas MVs.
   const [
     uniqueLeadsRow,
     answeredConvosRow,
@@ -399,16 +406,13 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     weekendConvosRow,
     handoffRow,
     unansweredRow,
-    convertedConvos,
-    totalConvos,
     convertedBySdrRow,
-    llmAgg,
     convsByHour,
-    avgRespLatency,
-    // === 3 queries novas pro dashboard enriquecido ===
-    channelsByCountRow,
-    dailySeriesRow,
-    prevKpis,
+    // === leituras da MV ===
+    mvAgg,
+    mvDaily,
+    mvChannel,
+    mvPrev,
   ] = await Promise.all([
     prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(DISTINCT lead_id)::bigint AS count
@@ -473,18 +477,11 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
             AND m2.created_at < m.created_at + INTERVAL '60 minutes'
         )
     `,
-    // Conversões totais (mantém o número agregado, mesmo agora que separamos).
-    prisma.conversation.count({
-      where: { unitId: id, createdAt: { gte: periodStart }, convertedAt: { not: null } },
-    }),
-    prisma.conversation.count({
-      where: { unitId: id, createdAt: { gte: periodStart } },
-    }),
     // Conversões pela SDR: conversa convertida E teve `pausar_ia` (handoff)
     // ANTES do convertedAt. Heurística: lead_id da conversa apareceu num
     // execution_step kind=TOOL_CALL title ILIKE 'decisão: pausar%' antes do
-    // converted_at. Como a Conversation guarda leadId (não trace.id), o join
-    // é por lead_id+unit_id+created_at — exatamente como o handoffCount já faz.
+    // converted_at. Fica live porque depende de correlação por lead_id com
+    // execution_steps — não é agregável por dia sem perder a semântica.
     prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(DISTINCT c.id)::bigint AS count
       FROM conversations c
@@ -501,11 +498,9 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
             AND es.title ILIKE 'decisão: pausar%'
         )
     `,
-    prisma.llmCall.aggregate({
-      where: { unitId: id, createdAt: { gte: periodStart } },
-      _sum: { costUsd: true, totalTokens: true },
-      _count: { _all: true },
-    }),
+    // Peak hour — fica live porque a MV está em grão diário. Mover pra MV
+    // exigiria mv_unit_day_hour (uma linha por hora) — vale criar quando
+    // outros KPIs horários aparecerem no roadmap.
     prisma.$queryRaw<Array<{ hour: number; count: bigint }>>`
       SELECT EXTRACT(HOUR FROM m."created_at")::int AS hour, COUNT(*)::bigint AS count
       FROM messages m
@@ -517,46 +512,63 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       ORDER BY 2 DESC
       LIMIT 1
     `,
-    prisma.executionTrace.aggregate({
-      where: {
-        unitId: id,
-        status: 'SUCCESS',
-        latencyMs: { not: null },
-        createdAt: { gte: periodStart },
-      },
-      _avg: { latencyMs: true },
-    }),
-    // Breakdown por canal — mensagens DO PACIENTE agrupadas por canal.
-    // O canal vem de `conversation.channel` (kommo_chat, meta, etc).
+    // === MV: SUMs agregados do período atual ===
+    // Um único SELECT cobre conversões, custo LLM, calls, tokens, latência média.
+    prisma.$queryRaw<Array<{
+      new_conversations: bigint;
+      converted_count: bigint;
+      llm_cost_usd: Prisma.Decimal;
+      llm_calls_count: bigint;
+      llm_tokens_total: bigint;
+      latency_sum_ms: bigint;
+      latency_trace_count: bigint;
+    }>>`
+      SELECT
+        COALESCE(SUM(new_conversations),   0)::bigint           AS new_conversations,
+        COALESCE(SUM(converted_count),     0)::bigint           AS converted_count,
+        COALESCE(SUM(llm_cost_usd),        0)::numeric(14, 6)   AS llm_cost_usd,
+        COALESCE(SUM(llm_calls_count),     0)::bigint           AS llm_calls_count,
+        COALESCE(SUM(llm_tokens_total),    0)::bigint           AS llm_tokens_total,
+        COALESCE(SUM(latency_sum_ms),      0)::bigint           AS latency_sum_ms,
+        COALESCE(SUM(latency_trace_count), 0)::bigint           AS latency_trace_count
+      FROM mv_unit_daily
+      WHERE unit_id = ${id}
+        AND day >= ${periodStart}::date
+    `,
+    // === MV: série temporal diária — base do sparkline ===
+    prisma.$queryRaw<Array<{ day: Date; messages: bigint; conversations: bigint }>>`
+      SELECT day, msgs_total AS messages, active_conversations AS conversations
+      FROM mv_unit_daily
+      WHERE unit_id = ${id}
+        AND day >= ${periodStart}::date
+      ORDER BY day ASC
+    `,
+    // === MV: breakdown de mensagens por canal (do paciente) ===
     prisma.$queryRaw<Array<{ channel: string; count: bigint }>>`
-      SELECT c.channel, COUNT(m.id)::bigint AS count
-      FROM messages m
-      JOIN conversations c ON c.id = m.conversation_id
-      WHERE c.unit_id = ${id}
-        AND m.role = 'user'
-        AND m.created_at >= ${periodStart}
-      GROUP BY c.channel
+      SELECT channel, COALESCE(SUM(msgs_user), 0)::bigint AS count
+      FROM mv_unit_daily_channel
+      WHERE unit_id = ${id}
+        AND day >= ${periodStart}::date
+      GROUP BY channel
+      HAVING COALESCE(SUM(msgs_user), 0) > 0
       ORDER BY 2 DESC
     `,
-    // Série temporal — mensagens E conversas únicas por dia.
-    // DATE_TRUNC dá o dia exato; ORDER ASC pra desenhar sparkline cronológico.
-    prisma.$queryRaw<Array<{ day: Date; messages: bigint; conversations: bigint }>>`
-      SELECT
-        DATE_TRUNC('day', m.created_at) AS day,
-        COUNT(*)::bigint AS messages,
-        COUNT(DISTINCT c.id)::bigint AS conversations
-      FROM messages m
-      JOIN conversations c ON c.id = m.conversation_id
-      WHERE c.unit_id = ${id}
-        AND m.created_at >= ${periodStart}
-      GROUP BY 1
-      ORDER BY 1 ASC
-    `,
-    // Período anterior — 4 KPIs principais pra calcular delta %.
-    // Bloco separado pra não inflar com 12 queries duplicadas (só as que
-    // alimentam os deltas mais úteis).
+    // === Período anterior — KPIs cobertos pela MV (converted + llm_cost) ===
+    // uniqLeadsPrev e answeredPrev continuam como queries DISTINCT live.
     (async () => {
-      const [uniqLeadsPrev, answeredPrev, convertedPrev, llmCostPrev] = await Promise.all([
+      const [mvPrevAgg, uniqLeadsPrev, answeredPrev] = await Promise.all([
+        prisma.$queryRaw<Array<{
+          converted_count: bigint;
+          llm_cost_usd: Prisma.Decimal;
+        }>>`
+          SELECT
+            COALESCE(SUM(converted_count), 0)::bigint         AS converted_count,
+            COALESCE(SUM(llm_cost_usd),    0)::numeric(14, 6) AS llm_cost_usd
+          FROM mv_unit_daily
+          WHERE unit_id = ${id}
+            AND day >= ${prevPeriodStart}::date
+            AND day <  ${prevPeriodEnd}::date
+        `,
         prisma.$queryRaw<Array<{ count: bigint }>>`
           SELECT COUNT(DISTINCT lead_id)::bigint AS count
           FROM conversations
@@ -578,26 +590,28 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
                 AND m.created_at < ${prevPeriodEnd}
             )
         `,
-        prisma.conversation.count({
-          where: {
-            unitId: id,
-            createdAt: { gte: prevPeriodStart, lt: prevPeriodEnd },
-            convertedAt: { not: null },
-          },
-        }),
-        prisma.llmCall.aggregate({
-          where: { unitId: id, createdAt: { gte: prevPeriodStart, lt: prevPeriodEnd } },
-          _sum: { costUsd: true },
-        }),
       ]);
+      const row = mvPrevAgg[0];
       return {
         uniqueLeads: Number(uniqLeadsPrev[0]?.count ?? 0),
         answeredConversations: Number(answeredPrev[0]?.count ?? 0),
-        convertedCount: convertedPrev,
-        llmCostUsd: Number(llmCostPrev._sum.costUsd ?? 0),
+        convertedCount: Number(row?.converted_count ?? 0),
+        llmCostUsd: Number(row?.llm_cost_usd ?? 0),
       };
     })(),
   ]);
+
+  // Desempacota agregados da MV em variáveis equivalentes às originais.
+  // `llm_tokens_total` existe no agregado mas o contrato do dashboard
+  // não expõe — fica disponível pra evoluções futuras sem nova query.
+  const mvRow = mvAgg[0];
+  const totalConvos = Number(mvRow?.new_conversations ?? 0);
+  const convertedConvos = Number(mvRow?.converted_count ?? 0);
+  const totalCost = Number(mvRow?.llm_cost_usd ?? 0);
+  const llmCallsCount = Number(mvRow?.llm_calls_count ?? 0);
+  const latencySum = Number(mvRow?.latency_sum_ms ?? 0);
+  const latencyN = Number(mvRow?.latency_trace_count ?? 0);
+  const avgResponseLatencyMs = latencyN > 0 ? Math.round(latencySum / latencyN) : 0;
 
   const uniqueLeads = Number(uniqueLeadsRow[0]?.count ?? 0);
   const answeredConversations = Number(answeredConvosRow[0]?.count ?? 0);
@@ -605,10 +619,14 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
   const weekendConversations = Number(weekendConvosRow[0]?.count ?? 0);
   const handoffCount = Number(handoffRow[0]?.count ?? 0);
   const unansweredQuestions = Number(unansweredRow[0]?.count ?? 0);
-  const totalCost = Number(llmAgg._sum.costUsd ?? 0);
   const peakHour = convsByHour[0]?.hour ?? null;
   const handoffRate = uniqueLeads > 0 ? handoffCount / uniqueLeads : 0;
   const conversionRate = totalConvos > 0 ? convertedConvos / totalConvos : 0;
+
+  // Renomeia pros nomes que o resto do handler espera.
+  const channelsByCountRow = mvChannel;
+  const dailySeriesRow = mvDaily;
+  const prevKpis = mvPrev;
 
   // Split SDR vs IA: SDR = converteu APÓS um handoff (pausar_ia). IA = converteu
   // sozinha (sem handoff antes). É garantido que sdr <= convertedConvos.
@@ -679,9 +697,7 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       weekendConversations,
       handoffCount,
       handoffRate,
-      avgResponseLatencyMs: avgRespLatency._avg.latencyMs
-        ? Math.round(avgRespLatency._avg.latencyMs)
-        : 0,
+      avgResponseLatencyMs,
       unansweredQuestions,
       convertedCount: convertedConvos,
       conversionRate,
@@ -690,7 +706,7 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       conversionRateIa,
       conversionRateSdr,
       llmCostUsd: totalCost,
-      llmCallsCount: llmAgg._count._all,
+      llmCallsCount,
       peakHour,
     },
     /** KPIs do período ANTERIOR (mesmo comprimento, imediatamente antes).
