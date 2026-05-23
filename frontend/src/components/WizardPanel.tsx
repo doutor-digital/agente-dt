@@ -1117,7 +1117,7 @@ function EmojiPaletteField({
       </p>
 
       {/* Emojis selecionados */}
-      <div className="flex flex-wrap gap-1.5 mb-2 min-h-[36px] p-2 rounded-md bg-zinc-950/60 border border-zinc-800/60">
+      <div className="flex flex-wrap gap-1.5 mb-2 min-h-9 p-2 rounded-md bg-zinc-950/60 border border-zinc-800/60">
         {emojis.length === 0 ? (
           <span className="text-[11px] text-zinc-600 italic self-center">
             Nenhum emoji ainda. Cole abaixo ou clique nas sugestões. 👇

@@ -28,6 +28,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   dashboard: 'dashboard',
   wizard: 'configurar-ia',
   playground: 'testar-ia',
+  training: 'treinar-ia',
   sources: 'fontes',
   actions: 'acoes',
   'global-actions': 'regras-globais',

@@ -26,6 +26,7 @@ import {
   FileBarChart,
   FileText,
   Globe,
+  GraduationCap,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -56,6 +57,7 @@ export type AppTab =
   | 'integrations'
   | 'wizard'
   | 'playground'
+  | 'training'
   | 'sources'
   | 'actions'
   | 'global-actions'
@@ -80,6 +82,7 @@ const NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'primary' },
   { id: 'wizard', label: 'Configurar IA', icon: Wand2, group: 'primary' },
   { id: 'playground', label: 'Testar IA', icon: TestTube2, group: 'primary' },
+  { id: 'training', label: 'Treinar IA', icon: GraduationCap, group: 'primary' },
   { id: 'sources', label: 'Fontes', icon: FileText, group: 'primary' },
   { id: 'actions', label: 'Ações', icon: Zap, group: 'primary' },
   { id: 'tools', label: 'Ferramentas', icon: Wrench, group: 'primary' },

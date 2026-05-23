@@ -40,6 +40,9 @@ const WizardPanel = lazy(() =>
 const PlaygroundPanel = lazy(() =>
   import('./components/PlaygroundPanel').then((m) => ({ default: m.PlaygroundPanel })),
 );
+const TrainingPanel = lazy(() =>
+  import('./components/TrainingPanel').then((m) => ({ default: m.TrainingPanel })),
+);
 const FontesPanel = lazy(() =>
   import('./components/FontesPanel').then((m) => ({ default: m.FontesPanel })),
 );
@@ -132,6 +135,7 @@ function Shell() {
           {tab === 'integrations' && <IntegrationsPanel />}
           {tab === 'wizard' && <WizardPanel />}
           {tab === 'playground' && <PlaygroundPanel />}
+          {tab === 'training' && <TrainingPanel onNavigate={navigate} />}
           {tab === 'sources' && <FontesPanel />}
           {tab === 'actions' && <AcoesPanel />}
           {tab === 'global-actions' && <AcoesPanel scope="global" />}
