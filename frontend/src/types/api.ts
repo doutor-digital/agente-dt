@@ -820,7 +820,8 @@ export type ActionKind =
   | 'set_lead_value'
   | 'mark_lead_status'
   | 'move_pipeline'
-  | 'pause_ai';
+  | 'pause_ai'
+  | 'pause_in_stages';
 
 export interface KommoUsersResponse {
   ok: boolean;

@@ -767,7 +767,7 @@ function Field({
   label: string;
   value: string;
   onChange: (v: string) => void;
-  type?: 'text' | 'password';
+  type?: 'text' | 'password' | 'number';
   hint?: string;
 }) {
   return (
