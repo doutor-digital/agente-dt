@@ -3,11 +3,12 @@
 //
 // LÓGICA VISUAL
 // -------------
-// Grid masonry de 4 colunas (1 mobile, 2 tablet, 4 desktop), com cards de
-// tamanhos variados. Hero card destaca a métrica principal (conversas
-// respondidas) com número GIGANTE colorido. Cards menores acompanham com
-// os outros KPIs. Funil ocupa linha cheia. Donut chart SVG inline (sem
-// dependência externa). Background com gradiente sutil azul.
+// Estilo do painel nativo do Kommo: foto de fundo (céu) com overlay escuro,
+// título centralizado (nome da unidade) + filtros segmentados, e cards
+// translúcidos "glass" (bg escuro + ring claro) por cima. Grid masonry de 4
+// colunas. Hero card = "Mensagens recebidas" (número GIGANTE violeta + lista
+// por canal). Donut "Distribuição de leads" e funil ocupam linha cheia.
+// Charts em SVG inline (sem dependência externa).
 //
 // DADOS
 // -----
@@ -106,19 +107,17 @@ export function DashboardPanel() {
       }}
     >
       <div className="max-w-[1400px] mx-auto p-6 space-y-6">
-        {/* Header — título + filtros estilo Kommo */}
-        <div className="flex items-end justify-between gap-4 flex-wrap">
-          <div>
-            <h1 className="text-3xl font-display font-bold text-zinc-50 tracking-tight">
-              Painel
+        {/* Header — título centralizado + filtros segmentados (estilo Kommo) */}
+        <div className="flex flex-col items-center gap-4 pt-2">
+          <div className="text-center">
+            <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight drop-shadow-lg">
+              {unit?.name ?? 'Painel'}
             </h1>
-            <p className="text-sm text-zinc-400 mt-1">
-              {unit?.name ?? 'Unidade'} · {periodLabel.toLowerCase()}
-            </p>
+            <p className="text-xs text-zinc-300/90 mt-1">{periodLabel.toLowerCase()}</p>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Filter pills */}
-            <div className="flex items-center bg-zinc-900/60 rounded-full ring-1 ring-zinc-800 p-1 backdrop-blur">
+          <div className="flex items-center gap-2 flex-wrap justify-center">
+            {/* Filter pills — segmented control claro como o Kommo */}
+            <div className="flex items-center bg-black/30 rounded-full ring-1 ring-white/15 p-1 backdrop-blur">
               {PERIOD_OPTIONS.map((opt) => (
                 <button
                   key={opt.days}
@@ -127,8 +126,8 @@ export function DashboardPanel() {
                   className={clsx(
                     'text-xs px-4 py-1.5 rounded-full transition font-medium',
                     days === opt.days
-                      ? 'bg-brand-500 text-white shadow-lg shadow-brand-500/20'
-                      : 'text-zinc-400 hover:text-zinc-100',
+                      ? 'bg-white text-zinc-900 shadow'
+                      : 'text-zinc-200 hover:text-white',
                   )}
                 >
                   {opt.label}
@@ -139,7 +138,7 @@ export function DashboardPanel() {
               type="button"
               onClick={load}
               disabled={loading}
-              className="inline-flex items-center gap-2 text-sm px-3 py-2 rounded-full bg-zinc-900/60 text-zinc-200 ring-1 ring-zinc-800 hover:bg-zinc-800 disabled:opacity-50 backdrop-blur"
+              className="inline-flex items-center gap-2 text-sm px-3 py-2 rounded-full bg-black/30 text-zinc-100 ring-1 ring-white/15 hover:bg-black/40 disabled:opacity-50 backdrop-blur"
               title="Atualizar"
             >
               {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCcw size={14} />}
@@ -183,10 +182,10 @@ export function DashboardPanel() {
             }
           />
           <BigStatCard
-            label="Sem resposta"
+            label="Chats sem resposta"
             value={data?.kpis.unansweredQuestions ?? 0}
             sublabel="> 60min sem reply"
-            color="rose"
+            color="purple"
             icon={<AlertCircle size={16} />}
             onClick={() => setOpenBucket('unanswered')}
           />
@@ -321,7 +320,7 @@ export function DashboardPanel() {
         </div>
 
         {/* FUNIL DE VENDAS — full width */}
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6 backdrop-blur">
+        <section className="rounded-2xl ring-1 ring-white/10 bg-zinc-900/45 p-6 backdrop-blur">
           <div className="flex items-center gap-2 mb-4">
             <Sparkles size={16} className="text-brand-300" />
             <h2 className="text-lg font-display font-semibold text-zinc-100">Funil de vendas</h2>
@@ -418,109 +417,56 @@ function HeroCard({
   data: DashboardResponse | null;
   loading: boolean;
 }) {
-  const value = data?.kpis.answeredConversations ?? 0;
-  const totalLeads = data?.kpis.uniqueLeads ?? 0;
-  const respondedPct =
-    totalLeads > 0 ? Math.round((value / totalLeads) * 100) : 0;
-  // Delta vs período anterior (proxy: variação de answeredConversations).
-  const prev = data?.previousKpis.answeredConversations ?? 0;
-  const delta = computeDelta(value, prev);
-
   const channels = data?.messagesByChannel ?? [];
   const totalMsgsByChannel = channels.reduce((a, c) => a + c.count, 0);
+  // Sem volume de mensagens do período anterior; usamos a variação de conversas
+  // respondidas como proxy de tendência só pro badge "esta semana".
+  const delta = data
+    ? computeDelta(data.kpis.answeredConversations, data.previousKpis.answeredConversations)
+    : null;
 
   return (
-    <div className="col-span-1 md:col-span-2 row-span-2 rounded-2xl bg-zinc-900/60 border border-zinc-800 p-6 backdrop-blur relative overflow-hidden">
-      {/* Glow decorativo */}
-      <div
-        className="absolute -top-12 -right-12 w-48 h-48 rounded-full opacity-20 blur-3xl"
-        style={{ background: 'radial-gradient(circle, #39D98A 0%, transparent 70%)' }}
-      />
-
+    <div className="col-span-1 md:col-span-2 row-span-2 rounded-2xl bg-zinc-900/55 ring-1 ring-white/10 p-6 backdrop-blur relative overflow-hidden">
       <div className="relative">
         <div className="flex items-center gap-2 mb-2">
-          <MessageCircleMore size={14} className="text-emerald-300" />
-          <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">
-            Conversas respondidas
+          <MessageCircleMore size={14} className="text-violet-300" />
+          <span className="text-[10px] uppercase tracking-wider text-zinc-300 font-semibold">
+            Mensagens recebidas
           </span>
         </div>
-        <p className="text-[11px] text-zinc-500 mb-4">
-          conversas onde a IA chegou a enviar pelo menos 1 mensagem
-        </p>
 
         {loading && !data ? (
-          <div className="text-zinc-600 inline-flex items-center gap-2 text-sm">
+          <div className="text-zinc-500 inline-flex items-center gap-2 text-sm mt-4">
             <Loader2 size={14} className="animate-spin" /> Carregando…
           </div>
         ) : (
           <>
             <div className="flex items-end gap-3 flex-wrap">
-              <div className="text-7xl md:text-8xl font-display font-bold text-emerald-300 tracking-tight leading-none">
-                {value}
+              <div className="text-6xl md:text-7xl font-bold text-violet-300 tracking-tight leading-none">
+                {totalMsgsByChannel}
               </div>
               {delta && <DeltaBadge {...delta} />}
             </div>
-            <div className="text-xs text-zinc-400 mt-3">
-              de {totalLeads} leads únicos no período
-              {totalLeads > 0 && (
-                <span className="ml-2 text-emerald-300 font-mono">({respondedPct}%)</span>
+            <div className="text-xs text-zinc-400 mt-3">mensagens do paciente no período</div>
+
+            {/* Lista por canal — nome à esquerda, contagem à direita (estilo Kommo) */}
+            <ul className="mt-6 divide-y divide-white/5">
+              {channels.length === 0 ? (
+                <li className="py-3 text-xs text-zinc-500 italic">Sem mensagens no período.</li>
+              ) : (
+                channels.map((c, i) => (
+                  <li key={c.channel} className="flex items-center gap-3 py-2.5 text-sm">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: CHANNEL_PALETTE[i % CHANNEL_PALETTE.length] }}
+                    />
+                    <span className="text-zinc-300 truncate flex-1">{c.label}</span>
+                    <span className="text-zinc-100 font-semibold tabular-nums shrink-0">{c.count}</span>
+                  </li>
+                ))
               )}
-            </div>
+            </ul>
           </>
-        )}
-
-        {/* Breakdown — split conversão IA/SDR como barra horizontal */}
-        {data && totalLeads > 0 && (
-          <div className="mt-6 space-y-2">
-            <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">
-              Desfecho das conversas
-            </div>
-            <BreakdownRow
-              label="🤖 IA fechou sozinha"
-              count={data.kpis.convertedByIa}
-              total={totalLeads}
-              color="#10b981"
-            />
-            <BreakdownRow
-              label="🧑‍💼 SDR fechou (pós-handoff)"
-              count={data.kpis.convertedBySdr}
-              total={totalLeads}
-              color="#0ea5e9"
-            />
-            <BreakdownRow
-              label="🤝 Transferido pra humano"
-              count={data.kpis.handoffCount}
-              total={totalLeads}
-              color="#f59e0b"
-            />
-            <BreakdownRow
-              label="🚨 Sem resposta há > 60min"
-              count={data.kpis.unansweredQuestions}
-              total={totalLeads}
-              color="#f43f5e"
-            />
-          </div>
-        )}
-
-        {/* CANAIS — mensagens do paciente por canal de origem (estilo Kommo) */}
-        {channels.length > 0 && (
-          <div className="mt-6 space-y-2">
-            <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2 flex items-center gap-2">
-              📥 Mensagens por canal
-              <span className="text-zinc-600 font-normal normal-case tracking-normal">
-                · total {totalMsgsByChannel}
-              </span>
-            </div>
-            {channels.map((c, i) => (
-              <BreakdownRow
-                key={c.channel}
-                label={c.label}
-                count={c.count}
-                total={totalMsgsByChannel}
-                color={CHANNEL_PALETTE[i % CHANNEL_PALETTE.length]}
-              />
-            ))}
-          </div>
         )}
       </div>
     </div>
@@ -565,34 +511,6 @@ function DeltaBadge({ pct, positive }: { pct: number; positive: boolean }) {
   );
 }
 
-function BreakdownRow({
-  label,
-  count,
-  total,
-  color,
-}: {
-  label: string;
-  count: number;
-  total: number;
-  color: string;
-}) {
-  const pct = total > 0 ? (count / total) * 100 : 0;
-  return (
-    <div>
-      <div className="flex items-center justify-between text-[11px] mb-1">
-        <span className="text-zinc-300 truncate">{label}</span>
-        <span className="text-zinc-400 font-mono shrink-0 ml-2">{count}</span>
-      </div>
-      <div className="h-1.5 bg-zinc-950/60 rounded-full overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all"
-          style={{ width: `${pct}%`, backgroundColor: color }}
-        />
-      </div>
-    </div>
-  );
-}
-
 // ===========================================================================
 // BigStatCard — KPI lateral com número grande colorido.
 // ===========================================================================
@@ -631,7 +549,7 @@ function BigStatCard({
       onClick={onClick}
       disabled={!clickable}
       className={clsx(
-        'rounded-2xl border border-zinc-800 bg-zinc-900/60 backdrop-blur p-4 text-left transition-all relative',
+        'rounded-2xl ring-1 ring-white/10 bg-zinc-900/55 backdrop-blur p-4 text-left transition-all relative',
         clickable
           ? 'cursor-pointer hover:border-zinc-700 hover:-translate-y-0.5'
           : 'cursor-default',
@@ -687,7 +605,7 @@ function StatStrip({
       type={onClick ? 'button' : undefined}
       onClick={onClick}
       className={clsx(
-        'rounded-2xl border border-zinc-800 bg-zinc-900/60 backdrop-blur p-4 text-left w-full transition-all',
+        'rounded-2xl ring-1 ring-white/10 bg-zinc-900/55 backdrop-blur p-4 text-left w-full transition-all',
         onClick && 'cursor-pointer hover:border-zinc-700',
       )}
     >
@@ -724,7 +642,7 @@ function SparklineCard({
   const totalConv = series.reduce((a, s) => a + s.conversations, 0);
 
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 backdrop-blur p-5">
+    <div className="rounded-2xl ring-1 ring-white/10 bg-zinc-900/55 backdrop-blur p-5">
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <LineChart size={14} className="text-sky-300" />
@@ -859,7 +777,7 @@ function SecondaryCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 backdrop-blur p-4">
+    <div className="rounded-2xl ring-1 ring-white/10 bg-zinc-900/55 backdrop-blur p-4">
       <div className="flex items-center gap-2">
         {icon}
         <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">
@@ -925,7 +843,7 @@ function FunnelDonut({ data }: { data: DashboardResponse | null }) {
   const total = slices.reduce((a, s) => a + s.count, 0);
 
   return (
-    <div className="col-span-1 md:col-span-2 row-span-2 rounded-2xl border border-zinc-800 bg-zinc-900/60 backdrop-blur p-6 relative overflow-hidden">
+    <div className="col-span-1 md:col-span-2 row-span-2 rounded-2xl ring-1 ring-white/10 bg-zinc-900/55 backdrop-blur p-6 relative overflow-hidden">
       <div className="flex items-center gap-2 mb-4">
         <Sparkles size={14} className="text-violet-300" />
         <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">
