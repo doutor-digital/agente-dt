@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDown,
   CalendarClock,
   CheckCircle2,
   CircleDollarSign,
@@ -512,39 +513,71 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-7xl mx-auto p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-display font-bold text-zinc-100 tracking-tight flex items-center gap-2">
-              <Zap size={22} className={isGlobal ? 'text-violet-300' : 'text-brand-300'} />
-              {isGlobal ? '🌐 Regras Globais' : 'Ações'}
-              {isGlobal && (
-                <span className="text-[10px] uppercase tracking-wider bg-violet-500/15 text-violet-300 px-2 py-0.5 rounded-full ring-1 ring-violet-500/30 font-normal">
-                  Toda a plataforma
-                </span>
-              )}
-            </h1>
-            <p className="text-sm text-zinc-500 mt-1 max-w-2xl">
-              {isGlobal
-                ? 'Regras "quando → faça" que valem pra TODAS as units. Têm prioridade sobre as ações da Unit. Use pra segurança/compliance (handoff humano, emergência médica, ofensa, anti-diagnóstico).'
-                : 'Regras de "quando o cliente fizer X, a IA faz Y". O agente lê todas as regras a cada mensagem e decide se alguma se aplica.'}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setCreating(true);
-              setEditing(null);
+        {/* Header — faixa com vidro + glow sutil, ícone em chip e contagem */}
+        <div className="relative overflow-hidden rounded-2xl ring-1 ring-white/10 bg-gradient-to-br from-zinc-900/70 to-zinc-900/20 backdrop-blur p-6">
+          <div
+            className="pointer-events-none absolute -top-20 -right-12 w-64 h-64 rounded-full blur-3xl opacity-20"
+            style={{
+              background: isGlobal
+                ? 'radial-gradient(circle, #8b5cf6 0%, transparent 70%)'
+                : 'radial-gradient(circle, #7c4dff 0%, transparent 70%)',
             }}
-            className={`inline-flex items-center gap-2 text-sm px-4 py-2 rounded-md text-white font-medium shrink-0 ${
-              isGlobal
-                ? 'bg-violet-600 hover:bg-violet-500'
-                : 'bg-brand-600 hover:bg-brand-500'
-            }`}
-          >
-            <Plus size={14} />
-            {isGlobal ? 'Nova regra global' : 'Nova ação'}
-          </button>
+          />
+          <div className="relative flex items-start justify-between gap-4 flex-wrap">
+            <div className="flex items-start gap-3.5">
+              <div
+                className={clsx(
+                  'w-12 h-12 rounded-2xl flex items-center justify-center ring-1 shadow-lg shrink-0',
+                  isGlobal
+                    ? 'bg-violet-500/15 ring-violet-500/30 text-violet-300 shadow-violet-500/10'
+                    : 'bg-brand-500/15 ring-brand-400/30 text-brand-300 shadow-brand-500/10',
+                )}
+              >
+                <Zap size={24} />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-2xl font-bold text-zinc-100 tracking-tight flex items-center gap-2 flex-wrap">
+                  {isGlobal ? 'Regras Globais' : 'Ações'}
+                  {isGlobal && (
+                    <span className="text-[10px] uppercase tracking-wider bg-violet-500/15 text-violet-300 px-2 py-0.5 rounded-full ring-1 ring-violet-500/30 font-normal">
+                      Toda a plataforma
+                    </span>
+                  )}
+                </h1>
+                <p className="text-sm text-zinc-400 mt-1 max-w-2xl leading-relaxed">
+                  {isGlobal
+                    ? 'Regras "quando → faça" que valem pra TODAS as units. Têm prioridade sobre as ações da Unit — use pra segurança e compliance (handoff humano, emergência médica, ofensa, anti-diagnóstico).'
+                    : 'Quando o cliente fizer X, a IA faz Y. O agente lê todas as regras a cada mensagem e decide quais se aplicam.'}
+                </p>
+                {!loading && actions.length > 0 && (
+                  <div className="flex items-center gap-3 mt-3 text-[11px]">
+                    <span className="inline-flex items-center gap-1.5 text-emerald-300">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      {actions.filter((a) => a.enabled).length} ativa{actions.filter((a) => a.enabled).length === 1 ? '' : 's'}
+                    </span>
+                    <span className="text-zinc-600">·</span>
+                    <span className="text-zinc-500">{actions.length} no total</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setCreating(true);
+                setEditing(null);
+              }}
+              className={clsx(
+                'inline-flex items-center gap-2 text-sm px-4 py-2.5 rounded-xl text-white font-semibold shrink-0 shadow-lg transition-all hover:-translate-y-0.5 active:translate-y-0',
+                isGlobal
+                  ? 'bg-violet-600 hover:bg-violet-500 shadow-violet-600/25'
+                  : 'bg-brand-600 hover:bg-brand-500 shadow-brand-600/25',
+              )}
+            >
+              <Plus size={15} />
+              {isGlobal ? 'Nova regra global' : 'Nova ação'}
+            </button>
+          </div>
         </div>
 
         {/* Grid responsivo de cards. Cada card tem largura mínima generosa
@@ -560,22 +593,40 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
             Carregando…
           </div>
         ) : actions.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/20 p-10 text-center">
-            <Zap size={28} className="mx-auto text-zinc-700 mb-3" />
-            <p className="text-sm text-zinc-400 mb-1">Nenhuma ação cadastrada ainda.</p>
-            <p className="text-xs text-zinc-600">
-              Crie regras pra a IA aplicar tags, transferir ou escalar automaticamente.
+          <div className="rounded-2xl ring-1 ring-white/10 bg-zinc-900/30 backdrop-blur p-12 text-center">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-brand-500/10 ring-1 ring-brand-400/20 flex items-center justify-center text-brand-300 mb-4">
+              <Zap size={28} />
+            </div>
+            <p className="text-base text-zinc-200 font-semibold mb-1">Nenhuma ação ainda</p>
+            <p className="text-sm text-zinc-500 max-w-md mx-auto leading-relaxed">
+              Crie regras pra a IA aplicar tags, transferir pra um humano ou avançar etapas
+              automaticamente — sem você mexer em nada.
             </p>
+            <button
+              type="button"
+              onClick={() => {
+                setCreating(true);
+                setEditing(null);
+              }}
+              className={clsx(
+                'mt-6 inline-flex items-center gap-2 text-sm px-4 py-2.5 rounded-xl text-white font-semibold shadow-lg transition-all hover:-translate-y-0.5',
+                isGlobal ? 'bg-violet-600 hover:bg-violet-500' : 'bg-brand-600 hover:bg-brand-500',
+              )}
+            >
+              <Plus size={15} />
+              {isGlobal ? 'Criar primeira regra' : 'Criar primeira ação'}
+            </button>
           </div>
         ) : (
           <ul
             className="grid gap-4 auto-rows-fr"
             style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))' }}
           >
-            {actions.map((a) => (
+            {actions.map((a, i) => (
               <ActionCard
                 key={a.id}
                 action={a}
+                index={i}
                 onEdit={() => {
                   setEditing(a);
                   setCreating(false);
@@ -610,11 +661,13 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
 
 function ActionCard({
   action,
+  index = 0,
   onEdit,
   onDelete,
   onToggle,
 }: {
   action: UnitAction;
+  index?: number;
   onEdit: () => void;
   onDelete: () => void;
   onToggle: () => void;
@@ -622,26 +675,27 @@ function ActionCard({
   const steps = readSteps(action);
   return (
     <li
+      style={{ animationDelay: `${Math.min(index, 14) * 45}ms` }}
       className={clsx(
-        // Card em flex-col + `h-full` faz ele ocupar a célula inteira do grid
-        // (em conjunto com auto-rows-fr no container). Botões de ação ficam
-        // grudados no rodapé via mt-auto, alinhados entre cards.
-        'flex flex-col h-full rounded-xl border transition-all hover:border-zinc-700',
+        // flex-col + h-full ocupa a célula inteira do grid (com auto-rows-fr);
+        // footer colado no fim via mt-auto. Vidro + hover que levanta.
+        'animate-fade-in-up group flex flex-col h-full rounded-2xl ring-1 backdrop-blur transition-all duration-300 hover:-translate-y-1',
         action.enabled
-          ? 'border-zinc-800 bg-zinc-900/40'
-          : 'border-zinc-800/50 bg-zinc-900/20 opacity-60 hover:opacity-80',
+          ? 'ring-white/10 bg-zinc-900/50 hover:ring-brand-400/50 hover:shadow-xl hover:shadow-brand-500/5'
+          : 'ring-white/5 bg-zinc-900/20 opacity-55 hover:opacity-90',
       )}
     >
-      {/* Header: status + título Quando */}
-      <div className="px-5 pt-5 pb-2 flex items-start justify-between gap-2">
+      {/* Header: status + contagem */}
+      <div className="px-5 pt-4 pb-1 flex items-center justify-between gap-2">
         <span
           className={clsx(
-            'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-semibold',
+            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-semibold',
             action.enabled
               ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30'
               : 'bg-zinc-800/50 text-zinc-500 ring-1 ring-zinc-700/50',
           )}
         >
+          <span className={clsx('w-1.5 h-1.5 rounded-full', action.enabled ? 'bg-emerald-400' : 'bg-zinc-600')} />
           {action.enabled ? 'Ativa' : 'Inativa'}
         </span>
         <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-600">
@@ -651,40 +705,43 @@ function ActionCard({
 
       {/* Corpo — cresce e empurra o footer pro fim */}
       <div className="px-5 pb-3 flex-1 min-w-0">
-        <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-1">
-          Quando
+        {/* QUANDO */}
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="text-[10px] uppercase tracking-wider font-bold text-amber-300/90">Quando</span>
+          <span className="h-px flex-1 bg-gradient-to-r from-amber-400/30 to-transparent" />
         </div>
         <p className="text-sm text-zinc-200 leading-relaxed line-clamp-3" title={action.conditionDescription}>
           {action.conditionDescription}
         </p>
 
-        <div className="mt-4">
-          <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-1.5">
-            Fazer
-          </div>
-          <ul className="space-y-1.5">
-            {steps.map((step, i) => (
-              <li key={i}>
-                <StepSummary step={step} />
-              </li>
-            ))}
-          </ul>
+        {/* Conector visual Quando → Faça */}
+        <div className="flex items-center gap-2 my-3 text-brand-300/70">
+          <ArrowDown size={14} className="shrink-0" />
+          <span className="h-px flex-1 bg-white/5" />
         </div>
 
+        {/* A IA FAZ */}
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[10px] uppercase tracking-wider font-bold text-brand-300">A IA faz</span>
+          <span className="h-px flex-1 bg-gradient-to-r from-brand-400/30 to-transparent" />
+        </div>
+        <ul className="space-y-1.5">
+          {steps.map((step, i) => (
+            <li key={i} className="rounded-lg bg-white/[0.03] ring-1 ring-white/5 px-2.5 py-1.5">
+              <StepSummary step={step} />
+            </li>
+          ))}
+        </ul>
+
         {action.notes && (
-          <div className="mt-4">
-            <div className="text-[10px] uppercase tracking-wider font-semibold text-zinc-500 mb-1">
-              Mais
-            </div>
-            <p className="text-xs text-zinc-400 leading-relaxed italic line-clamp-2" title={action.notes}>
-              {action.notes}
-            </p>
-          </div>
+          <p className="mt-3 text-xs text-zinc-500 leading-relaxed italic line-clamp-2" title={action.notes}>
+            {action.notes}
+          </p>
         )}
       </div>
 
       {/* Footer com botões — `mt-auto` cola no fim quando o card tá curto */}
-      <div className="mt-auto px-3 py-2 border-t border-zinc-800/60 flex items-center justify-end gap-1">
+      <div className="mt-auto px-3 py-2 border-t border-white/5 flex items-center justify-end gap-1">
         <button
           type="button"
           onClick={onToggle}
