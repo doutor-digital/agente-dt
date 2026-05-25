@@ -10,13 +10,19 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@tiptap/extension-highlight": "^2.11.5",
+    "@tiptap/extension-placeholder": "^2.11.5",
+    "@tiptap/pm": "^2.11.5",
+    "@tiptap/react": "^2.11.5",
+    "@tiptap/starter-kit": "^2.11.5",
     "axios": "^1.16.0",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
     "lucide-react": "^0.547.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-toastify": "^11.1.0"
+    "react-toastify": "^11.1.0",
+    "tiptap-markdown": "^0.8.10"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.0",

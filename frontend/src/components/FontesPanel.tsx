@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileText, Loader2, Save, Sparkles } from 'lucide-react';
+import { RichTextEditor } from './RichTextEditor';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
@@ -219,13 +220,7 @@ function SourceField({
         </span>
       </div>
       <p className="text-xs text-zinc-500 mb-3">{hint}</p>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        rows={14}
-        className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-brand-500/40 rounded-md px-3 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-700 font-mono leading-relaxed resize-y min-h-[200px] outline-none transition"
-      />
+      <RichTextEditor value={value} onChange={onChange} placeholder={placeholder} />
     </section>
   );
 }

@@ -85,3 +85,97 @@ h1, h2, h3, h4, h5, h6 {
     0 0 0 1px color-mix(in oklab, var(--color-brand-500) 40%, transparent),
     0 0 24px -4px color-mix(in oklab, var(--color-brand-500) 30%, transparent);
 }
+
+/* ===========================================================================
+ * Editor WYSIWYG das Fontes (RichTextEditor / TipTap).
+ * Renderiza o markdown "estilo Word" no tema escuro. O conteúdo é editável
+ * (contenteditable), então estilizamos os nós do ProseMirror manualmente —
+ * não há plugin de typography.
+ * =========================================================================== */
+.fontes-editor {
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  line-height: 1.7;
+  color: var(--color-zinc-200, #e4e4e7);
+  max-height: 540px;
+  overflow-y: auto;
+  outline: none;
+}
+.fontes-editor:focus { outline: none; }
+
+.fontes-editor > * + * { margin-top: 0.6em; }
+
+.fontes-editor h1 {
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #fafafa;
+  margin: 0.9em 0 0.35em;
+  line-height: 1.25;
+}
+.fontes-editor h2 {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #f4f4f5;
+  margin: 0.85em 0 0.3em;
+  line-height: 1.3;
+}
+.fontes-editor h3 {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  color: #ededf0;
+  margin: 0.8em 0 0.25em;
+}
+.fontes-editor p { margin: 0; }
+
+.fontes-editor ul,
+.fontes-editor ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+.fontes-editor ul { list-style: disc; }
+.fontes-editor ol { list-style: decimal; }
+.fontes-editor li { margin: 0.15em 0; }
+.fontes-editor li::marker { color: var(--color-brand-400); }
+.fontes-editor li > p { margin: 0; }
+
+.fontes-editor strong { font-weight: 700; color: #ffffff; }
+.fontes-editor em { font-style: italic; }
+
+/* Destaque (highlight) — amarelo suave, legível no escuro. */
+.fontes-editor mark {
+  background: color-mix(in oklab, #facc15 75%, transparent);
+  color: #1a1205;
+  padding: 0.05em 0.25em;
+  border-radius: 0.25em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.fontes-editor blockquote {
+  border-left: 3px solid var(--color-brand-500);
+  padding-left: 0.9em;
+  margin: 0.5em 0;
+  color: #c4c4cc;
+  font-style: italic;
+}
+
+.fontes-editor code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  background: var(--color-ink-700);
+  padding: 0.1em 0.35em;
+  border-radius: 0.3em;
+}
+
+/* Placeholder (extensão @tiptap/extension-placeholder). */
+.fontes-editor p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: #52525b;
+  pointer-events: none;
+}
