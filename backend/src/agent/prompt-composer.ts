@@ -290,6 +290,27 @@ function renderBusinessHours(unit: Unit): string {
   responda normalmente quando estiver no ar.`;
 }
 
+function renderTriage(unit: Unit): string {
+  if (!unit.triageEnabled) return '';
+  const steps = (unit.triageInstructions ?? '').trim();
+  if (!steps) return '';
+  return `# TRIAGEM E AVANÇO DE ETAPA (ALTA PRIORIDADE)
+- Conduza a triagem ao longo da conversa, de forma natural — UMA pergunta de
+  cada vez, sem soar interrogatório. A triagem está COMPLETA quando você tiver
+  coletado os itens abaixo:
+${steps}
+- Salve CADA item assim que o paciente informar, chamando na hora a tool de
+  campo correspondente (nome, origem, queixa/observações). NÃO espere o fim da
+  conversa pra salvar.
+- Assim que a triagem estiver COMPLETA — OU o paciente demonstrar interesse
+  claro antes disso (perguntar preço/valor, pedir pra agendar, perguntar
+  horários, dizer "quero"/"tenho interesse") — você DEVE AVANÇAR o lead
+  IMEDIATAMENTE: dispare a ação de mover de etapa configurada (mover_etapa pra
+  a etapa de qualificado) e avise o paciente que vai transferir pra equipe.
+- REGRA RÍGIDA: nunca deixe um lead com triagem completa parado na etapa
+  inicial. Mover de etapa após a triagem é OBRIGATÓRIO, não opcional.`;
+}
+
 function renderCollectName(unit: Unit): string {
   if (!unit.collectNameEnabled) return '';
   return `# COLETA DE NOME (PROATIVA)
@@ -821,6 +842,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderCollectName(unit),
     renderCollectSource(unit),
     renderQualification(unit),
+    renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderContactCollection(unit),

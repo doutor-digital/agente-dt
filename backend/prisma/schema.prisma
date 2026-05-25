@@ -145,6 +145,14 @@ model Unit {
   qualificationHotTag   String  @default("Quente") @map("qualification_hot_tag")
   qualificationColdTag  String  @default("Frio") @map("qualification_cold_tag")
 
+  // TRIAGEM — define o que a IA precisa coletar antes de avançar o lead de
+  // etapa, e reforça que, quando a triagem estiver completa (ou houver
+  // interesse claro), ela DEVE mover de etapa. Renderizado pelo composer como
+  // bloco "# TRIAGEM E AVANÇO DE ETAPA". `triageInstructions` é o texto livre
+  // (lista do que coletar) que o dono da unidade edita.
+  triageEnabled      Boolean @default(false) @map("triage_enabled")
+  triageInstructions String? @map("triage_instructions") @db.Text
+
   // HANDOFF — palavras que disparam pausar_ia automaticamente.
   handoffEnabled  Boolean  @default(false) @map("handoff_enabled")
   handoffKeywords String[] @default([]) @map("handoff_keywords")
