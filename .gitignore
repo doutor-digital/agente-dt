@@ -6,3 +6,7 @@ dist
 .DS_Store
 .pnpm-store
 .turbo
+
+# Ferramenta local de agente (skills instaladas) — não é código da aplicação
+.agents/
+skills-lock.json
