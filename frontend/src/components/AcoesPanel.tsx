@@ -22,6 +22,7 @@ import {
   ArrowDown,
   CalendarClock,
   CheckCircle2,
+  ChevronDown,
   CircleDollarSign,
   Compass,
   FileText,
@@ -419,6 +420,16 @@ export interface AcoesPanelProps {
   scope?: 'unit' | 'global';
 }
 
+// 5 versões de visualização pra avaliar (switcher no topo da página).
+type ActionView = 'fluxo' | 'se_entao' | 'tabela' | 'faixa' | 'lista';
+const ACTION_VIEWS: Array<{ id: ActionView; label: string }> = [
+  { id: 'fluxo', label: 'V1 · Fluxo' },
+  { id: 'se_entao', label: 'V2 · SE→ENTÃO' },
+  { id: 'tabela', label: 'V3 · Tabela' },
+  { id: 'faixa', label: 'V4 · Faixa' },
+  { id: 'lista', label: 'V5 · Lista' },
+];
+
 export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
   const { selectedUnitId } = useUnit();
   const toast = useToast();
@@ -426,6 +437,22 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<UnitAction | null>(null);
   const [creating, setCreating] = useState(false);
+  // Visualização escolhida (5 versões pra avaliar). Persistida no navegador.
+  const [view, setView] = useState<ActionView>(() => {
+    try {
+      return (localStorage.getItem('acoes:view') as ActionView) || 'fluxo';
+    } catch {
+      return 'fluxo';
+    }
+  });
+  const changeView = (v: ActionView) => {
+    setView(v);
+    try {
+      localStorage.setItem('acoes:view', v);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const isGlobal = scope === 'global';
 
@@ -580,13 +607,25 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
           </div>
         </div>
 
-        {/* Grid responsivo de cards. Cada card tem largura mínima generosa
-            (min 320px) e o grid auto-fit balanceia colunas conforme o viewport:
-              - mobile  → 1 coluna
-              - tablet  → 2 colunas
-              - desktop → 2-3 colunas (a partir de ~1280px aceita 3)
-            `auto-rows-fr` força altura igual entre cards na mesma linha pra
-            os botões de ação ficarem alinhados horizontalmente. */}
+        {/* Switcher de visualização — 5 versões pra você escolher */}
+        {!loading && actions.length > 0 && (
+          <div className="flex items-center gap-1 bg-zinc-900/40 ring-1 ring-white/10 rounded-full p-1 w-fit backdrop-blur overflow-x-auto">
+            {ACTION_VIEWS.map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                onClick={() => changeView(v.id)}
+                className={clsx(
+                  'text-xs px-3 py-1.5 rounded-full font-medium transition whitespace-nowrap',
+                  view === v.id ? 'bg-brand-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-100',
+                )}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {loading ? (
           <div className="flex items-center justify-center py-12 text-zinc-500">
             <Loader2 className="animate-spin mr-2" size={16} />
@@ -618,24 +657,16 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
             </button>
           </div>
         ) : (
-          <ul
-            className="grid gap-4 auto-rows-fr"
-            style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))' }}
-          >
-            {actions.map((a, i) => (
-              <ActionCard
-                key={a.id}
-                action={a}
-                index={i}
-                onEdit={() => {
-                  setEditing(a);
-                  setCreating(false);
-                }}
-                onDelete={() => handleDelete(a)}
-                onToggle={() => handleToggle(a)}
-              />
-            ))}
-          </ul>
+          <ActionsView
+            view={view}
+            actions={actions}
+            onEdit={(a) => {
+              setEditing(a);
+              setCreating(false);
+            }}
+            onDelete={(a) => handleDelete(a)}
+            onToggle={(a) => handleToggle(a)}
+          />
         )}
 
         {/* Modal de edição/criação */}
@@ -771,6 +802,332 @@ function ActionCard({
         </button>
       </div>
     </li>
+  );
+}
+
+// ===========================================================================
+// As 5 VISUALIZAÇÕES. ActionsView despacha pra variante escolhida no switcher.
+// V1 Fluxo = ActionCard (acima). V2 Split, V3 Tabela, V4 Faixa, V5 Lista abaixo.
+// ===========================================================================
+
+type ActHandler = (a: UnitAction) => void;
+
+/** Cor da faixa (V4) pelo tipo do 1º passo da ação. */
+const KIND_BAND: Record<string, string> = {
+  add_tag: 'bg-amber-500',
+  remove_tag: 'bg-stone-500',
+  move_stage: 'bg-sky-500',
+  move_pipeline: 'bg-indigo-500',
+  pause_ai: 'bg-rose-500',
+  transfer_with_permission: 'bg-rose-500',
+  transfer_without_permission: 'bg-rose-500',
+  pause_in_stages: 'bg-rose-500',
+  summarize_to_note: 'bg-violet-500',
+  send_message: 'bg-cyan-500',
+  respond_with_intent: 'bg-sky-500',
+  create_task: 'bg-orange-500',
+  assign_responsible: 'bg-teal-500',
+  set_lead_value: 'bg-lime-500',
+  mark_lead_status: 'bg-emerald-500',
+};
+
+function StatusPill({ enabled }: { enabled: boolean }) {
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-semibold',
+        enabled
+          ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30'
+          : 'bg-zinc-800/50 text-zinc-500 ring-1 ring-zinc-700/50',
+      )}
+    >
+      <span className={clsx('w-1.5 h-1.5 rounded-full', enabled ? 'bg-emerald-400' : 'bg-zinc-600')} />
+      {enabled ? 'Ativa' : 'Inativa'}
+    </span>
+  );
+}
+
+function RowControls({
+  action,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  action: UnitAction;
+  onEdit: ActHandler;
+  onDelete: ActHandler;
+  onToggle: ActHandler;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <button
+        type="button"
+        onClick={() => onToggle(action)}
+        title={action.enabled ? 'Desativar' : 'Ativar'}
+        className={clsx('p-1.5 rounded hover:bg-zinc-800', action.enabled ? 'text-emerald-400' : 'text-zinc-600')}
+      >
+        <CheckCircle2 size={15} />
+      </button>
+      <button type="button" onClick={() => onEdit(action)} title="Editar" className="p-1.5 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
+        <Pencil size={14} />
+      </button>
+      <button type="button" onClick={() => onDelete(action)} title="Excluir" className="p-1.5 rounded text-zinc-400 hover:text-rose-300 hover:bg-rose-500/10">
+        <Trash2 size={14} />
+      </button>
+    </div>
+  );
+}
+
+function ActionsView({
+  view,
+  actions,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  view: ActionView;
+  actions: UnitAction[];
+  onEdit: ActHandler;
+  onDelete: ActHandler;
+  onToggle: ActHandler;
+}) {
+  if (view === 'tabela') return <ActionsTable actions={actions} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />;
+  if (view === 'lista') return <ActionsAccordion actions={actions} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />;
+  const minW = view === 'se_entao' ? 440 : 320;
+  return (
+    <ul className="grid gap-4 auto-rows-fr" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(${minW}px, 100%), 1fr))` }}>
+      {actions.map((a, i) => {
+        const props = { action: a, index: i, onEdit: () => onEdit(a), onDelete: () => onDelete(a), onToggle: () => onToggle(a) };
+        if (view === 'se_entao') return <ActionCardSplit key={a.id} {...props} />;
+        if (view === 'faixa') return <ActionCardBanded key={a.id} {...props} />;
+        return <ActionCard key={a.id} {...props} />;
+      })}
+    </ul>
+  );
+}
+
+// V2 — SE / ENTÃO lado a lado (estilo automação)
+function ActionCardSplit({
+  action,
+  index = 0,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  action: UnitAction;
+  index?: number;
+  onEdit: () => void;
+  onDelete: () => void;
+  onToggle: () => void;
+}) {
+  const steps = readSteps(action);
+  return (
+    <li
+      style={{ animationDelay: `${Math.min(index, 14) * 45}ms` }}
+      className={clsx(
+        'animate-fade-in-up group flex flex-col h-full rounded-2xl ring-1 backdrop-blur transition-all duration-300 hover:-translate-y-1',
+        action.enabled ? 'ring-white/10 bg-zinc-900/50 hover:ring-brand-400/50' : 'ring-white/5 bg-zinc-900/20 opacity-55 hover:opacity-90',
+      )}
+    >
+      <div className="px-5 pt-4 flex items-center justify-between gap-2">
+        <StatusPill enabled={action.enabled} />
+        <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-600">
+          {steps.length} {steps.length === 1 ? 'ação' : 'ações'}
+        </span>
+      </div>
+      <div className="px-4 py-3 flex-1 grid grid-cols-[1fr_auto_1fr] gap-2 items-stretch">
+        <div className="rounded-xl bg-amber-500/[0.06] ring-1 ring-amber-500/15 p-3">
+          <div className="text-[10px] uppercase tracking-wider font-bold text-amber-300/90 mb-1">SE</div>
+          <p className="text-sm text-zinc-200 leading-snug line-clamp-5" title={action.conditionDescription}>
+            {action.conditionDescription}
+          </p>
+        </div>
+        <div className="flex items-center text-brand-300/60 text-xl font-light">→</div>
+        <div className="rounded-xl bg-brand-500/[0.06] ring-1 ring-brand-500/15 p-3">
+          <div className="text-[10px] uppercase tracking-wider font-bold text-brand-300 mb-1.5">ENTÃO</div>
+          <ul className="space-y-1.5">
+            {steps.map((step, i) => (
+              <li key={i}>
+                <StepSummary step={step} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      <div className="mt-auto px-3 py-2 border-t border-white/5">
+        <RowControls action={action} onEdit={() => onEdit()} onDelete={() => onDelete()} onToggle={() => onToggle()} />
+      </div>
+    </li>
+  );
+}
+
+// V4 — Cartão com faixa de cor por tipo
+function ActionCardBanded({
+  action,
+  index = 0,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  action: UnitAction;
+  index?: number;
+  onEdit: () => void;
+  onDelete: () => void;
+  onToggle: () => void;
+}) {
+  const steps = readSteps(action);
+  const band = KIND_BAND[steps[0]?.kind ?? ''] ?? 'bg-brand-500';
+  return (
+    <li
+      style={{ animationDelay: `${Math.min(index, 14) * 45}ms` }}
+      className={clsx(
+        'animate-fade-in-up group flex flex-col h-full rounded-2xl ring-1 ring-white/10 bg-zinc-900/50 backdrop-blur overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:ring-brand-400/50 hover:shadow-xl hover:shadow-brand-500/5',
+        !action.enabled && 'opacity-55 hover:opacity-90',
+      )}
+    >
+      <div className={clsx('h-1.5 w-full', band)} />
+      <div className="px-5 pt-3 pb-1 flex items-center justify-between gap-2">
+        <StatusPill enabled={action.enabled} />
+        <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-600">
+          {steps.length} {steps.length === 1 ? 'ação' : 'ações'}
+        </span>
+      </div>
+      <div className="px-5 pb-3 flex-1 min-w-0">
+        <p className="text-sm text-zinc-200 leading-relaxed line-clamp-3" title={action.conditionDescription}>
+          {action.conditionDescription}
+        </p>
+        <ul className="mt-3 space-y-1.5">
+          {steps.map((step, i) => (
+            <li key={i} className="rounded-lg bg-white/[0.03] ring-1 ring-white/5 px-2.5 py-1.5">
+              <StepSummary step={step} />
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="mt-auto px-3 py-2 border-t border-white/5">
+        <RowControls action={action} onEdit={() => onEdit()} onDelete={() => onDelete()} onToggle={() => onToggle()} />
+      </div>
+    </li>
+  );
+}
+
+// V3 — Tabela enterprise
+function ActionsTable({
+  actions,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  actions: UnitAction[];
+  onEdit: ActHandler;
+  onDelete: ActHandler;
+  onToggle: ActHandler;
+}) {
+  return (
+    <div className="animate-fade-in-up rounded-2xl ring-1 ring-white/10 bg-zinc-900/50 backdrop-blur overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-wider text-zinc-500 border-b border-white/10">
+            <th className="text-left font-semibold px-4 py-3 w-28">Status</th>
+            <th className="text-left font-semibold px-4 py-3">Quando</th>
+            <th className="text-left font-semibold px-4 py-3">A IA faz</th>
+            <th className="px-4 py-3 w-28" />
+          </tr>
+        </thead>
+        <tbody>
+          {actions.map((a) => {
+            const steps = readSteps(a);
+            return (
+              <tr key={a.id} className={clsx('border-b border-white/5 hover:bg-white/[0.03] transition', !a.enabled && 'opacity-50')}>
+                <td className="px-4 py-3 align-top">
+                  <StatusPill enabled={a.enabled} />
+                </td>
+                <td className="px-4 py-3 align-top text-zinc-200 max-w-xs">
+                  <span className="line-clamp-2" title={a.conditionDescription}>{a.conditionDescription}</span>
+                </td>
+                <td className="px-4 py-3 align-top">
+                  <div className="space-y-1">
+                    {steps.map((step, i) => (
+                      <StepSummary key={i} step={step} />
+                    ))}
+                  </div>
+                </td>
+                <td className="px-4 py-3 align-top">
+                  <RowControls action={a} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// V5 — Lista accordion minimalista
+function ActionsAccordion({
+  actions,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  actions: UnitAction[];
+  onEdit: ActHandler;
+  onDelete: ActHandler;
+  onToggle: ActHandler;
+}) {
+  return (
+    <div className="animate-fade-in-up rounded-2xl ring-1 ring-white/10 bg-zinc-900/40 backdrop-blur divide-y divide-white/5 overflow-hidden">
+      {actions.map((a) => (
+        <AccordionRow key={a.id} action={a} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
+      ))}
+    </div>
+  );
+}
+
+function AccordionRow({
+  action,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  action: UnitAction;
+  onEdit: ActHandler;
+  onDelete: ActHandler;
+  onToggle: ActHandler;
+}) {
+  const [open, setOpen] = useState(false);
+  const steps = readSteps(action);
+  return (
+    <div className={clsx(!action.enabled && 'opacity-55')}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03] text-left transition"
+      >
+        <span className={clsx('w-2 h-2 rounded-full shrink-0', action.enabled ? 'bg-emerald-400' : 'bg-zinc-600')} />
+        <span className="flex-1 text-sm text-zinc-200 truncate" title={action.conditionDescription}>
+          {action.conditionDescription}
+        </span>
+        <span className="text-[11px] text-zinc-500 shrink-0">
+          {steps.length} {steps.length === 1 ? 'ação' : 'ações'}
+        </span>
+        <ChevronDown size={15} className={clsx('text-zinc-500 transition-transform shrink-0', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="px-4 pb-3 pl-9 space-y-2">
+          <ul className="space-y-1.5">
+            {steps.map((step, i) => (
+              <li key={i} className="rounded-lg bg-white/[0.03] ring-1 ring-white/5 px-2.5 py-1.5">
+                <StepSummary step={step} />
+              </li>
+            ))}
+          </ul>
+          {action.notes && <p className="text-xs text-zinc-500 italic leading-relaxed">{action.notes}</p>}
+          <RowControls action={action} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
+        </div>
+      )}
+    </div>
   );
 }
 
