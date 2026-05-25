@@ -41,6 +41,7 @@ import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import type { DashboardResponse, LeadsBucket } from '../types/api';
 import { LeadsBucketModal } from './LeadsBucketModal';
+import { AllUnitsDashboard } from './AllUnitsDashboard';
 
 const PERIOD_OPTIONS = [
   { days: 1, label: 'Hoje' },
@@ -50,7 +51,7 @@ const PERIOD_OPTIONS = [
 ];
 
 export function DashboardPanel() {
-  const { selectedUnitId, units } = useUnit();
+  const { selectedUnitId, units, setSelectedUnitId } = useUnit();
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,12 +87,10 @@ export function DashboardPanel() {
 
   const unit = units.find((u) => u.id === selectedUnitId);
 
+  // "Todas as unidades" (nenhuma selecionada) → visão geral agregada, com
+  // clique pra entrar em cada unidade.
   if (!selectedUnitId) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm">
-        Selecione uma unidade pra ver o dashboard.
-      </div>
-    );
+    return <AllUnitsDashboard units={units} onSelectUnit={setSelectedUnitId} />;
   }
 
   const periodLabel = PERIOD_OPTIONS.find((p) => p.days === days)?.label ?? `${days}d`;
