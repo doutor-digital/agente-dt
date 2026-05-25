@@ -11,6 +11,10 @@
 //
 // O conteúdo principal fica à direita ocupando o resto da viewport.
 // Cada panel é responsável pelo seu próprio header.
+//
+// TEMA: sidebar CLARA (estilo Kommo) — fundo branco, texto escuro, ícones
+// cinza, item ativo com fundo lavanda + cor de marca. O conteúdo à direita
+// continua escuro (layout híbrido, igual ao Kommo).
 // ============================================================================
 
 import type { ReactNode } from 'react';
@@ -151,27 +155,27 @@ export function AppSidebar({
   }
 
   return (
-    <aside className="w-60 shrink-0 border-r border-zinc-800/80 bg-ink-950 flex flex-col h-full">
+    <aside className="w-60 shrink-0 border-r border-zinc-200 bg-white flex flex-col h-full">
       {/* Brand com logo */}
-      <div className="px-4 py-4 border-b border-zinc-800/60 flex items-center gap-3">
+      <div className="px-4 py-4 border-b border-zinc-200 flex items-center gap-3">
         <img
           src="https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png"
           alt="Agente DT"
-          className="w-10 h-10 object-contain shrink-0 drop-shadow-[0_0_8px_rgba(124,77,255,0.4)]"
+          className="w-10 h-10 object-contain shrink-0"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-display font-bold text-zinc-100 tracking-tight leading-none">
+          <div className="text-sm font-bold text-zinc-900 tracking-tight leading-none">
             Agente DT
           </div>
-          <div className="text-[9px] font-display font-medium uppercase tracking-widest text-zinc-500 mt-1">
+          <div className="text-[9px] font-medium uppercase tracking-widest text-zinc-400 mt-1">
             Kommo Console v0.2
           </div>
         </div>
       </div>
 
       {/* Unit selector */}
-      <div className="px-3 py-3 border-b border-zinc-800/60">
-        <div className="text-[9px] font-display font-semibold uppercase tracking-widest text-zinc-500 mb-1.5 px-1">
+      <div className="px-3 py-3 border-b border-zinc-200">
+        <div className="text-[9px] font-semibold uppercase tracking-widest text-zinc-400 mb-1.5 px-1">
           Unidade ativa
         </div>
         <UnitSelector />
@@ -185,7 +189,7 @@ export function AppSidebar({
           ))}
         </NavGroup>
 
-        <div className="my-3 h-px bg-zinc-800/40 mx-2" />
+        <div className="my-3 h-px bg-zinc-200 mx-2" />
 
         <NavGroup label="Administração">
           {secondary.map((item) => (
@@ -196,22 +200,22 @@ export function AppSidebar({
 
       {/* User info + logout */}
       {user && (
-        <div className="border-t border-zinc-800/60 px-3 py-2 flex items-center gap-2">
+        <div className="border-t border-zinc-200 px-3 py-2 flex items-center gap-2">
           {user.picture ? (
             <img
               src={user.picture}
               alt=""
-              className="w-7 h-7 rounded-full ring-1 ring-zinc-700"
+              className="w-7 h-7 rounded-full ring-1 ring-zinc-200"
               referrerPolicy="no-referrer"
             />
           ) : (
-            <div className="w-7 h-7 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center text-xs font-bold">
+            <div className="w-7 h-7 rounded-full bg-zinc-100 text-zinc-500 flex items-center justify-center text-xs font-bold">
               {user.email.slice(0, 1).toUpperCase()}
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <div className="text-xs text-zinc-200 truncate font-medium">{user.name ?? user.email}</div>
-            <div className="text-[9px] uppercase tracking-wider text-zinc-500">
+            <div className="text-xs text-zinc-800 truncate font-medium">{user.name ?? user.email}</div>
+            <div className="text-[9px] uppercase tracking-wider text-zinc-400">
               {user.role === 'SUPER_ADMIN' ? 'Super admin' : 'Unit admin'}
             </div>
           </div>
@@ -219,7 +223,7 @@ export function AppSidebar({
             type="button"
             onClick={() => void logout()}
             title="Sair"
-            className="p-1.5 rounded-md text-zinc-500 hover:text-rose-300 hover:bg-zinc-900/60"
+            className="p-1.5 rounded-md text-zinc-400 hover:text-rose-500 hover:bg-zinc-100 transition-colors"
           >
             <LogOut size={14} />
           </button>
@@ -227,14 +231,14 @@ export function AppSidebar({
       )}
 
       {/* Footer */}
-      <div className="border-t border-zinc-800/60 p-3 flex items-center justify-between gap-1">
+      <div className="border-t border-zinc-200 p-3 flex items-center justify-between gap-1">
         <NotificationsBadge />
         <button
           type="button"
           onClick={() => void handleClearCache()}
           disabled={clearing}
           title="Limpa caches em memória do backend, localStorage do navegador e recarrega"
-          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {clearing ? <Loader2 size={13} className="animate-spin" /> : <Eraser size={13} />}
           {clearing ? 'Limpando…' : 'Limpar cache'}
@@ -243,7 +247,7 @@ export function AppSidebar({
           href="/docs"
           target="_blank"
           rel="noopener"
-          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60 transition-colors"
+          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors"
         >
           <BookOpen size={13} />
           Docs
@@ -256,7 +260,7 @@ export function AppSidebar({
 function NavGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <div className="text-[9px] font-display font-semibold uppercase tracking-widest text-zinc-600 mb-1 px-3">
+      <div className="text-[9px] font-semibold uppercase tracking-widest text-zinc-400 mb-1 px-3">
         {label}
       </div>
       <ul className="space-y-0.5">{children}</ul>
@@ -289,12 +293,12 @@ function NavLink({
         className={clsx(
           'w-full inline-flex items-center gap-2.5 text-sm px-3 py-2 rounded-md transition-all',
           active
-            ? 'bg-brand-500/15 text-brand-100 ring-1 ring-brand-500/30 shadow-[inset_0_0_0_1px_rgba(124,77,255,0.1)]'
-            : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/60',
+            ? 'bg-brand-50 text-brand-700'
+            : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100',
         )}
       >
-        <Icon size={15} className={clsx(active ? 'text-brand-300' : 'text-zinc-500')} />
-        <span className={clsx(active ? 'font-display font-semibold' : 'font-medium')}>
+        <Icon size={15} className={clsx(active ? 'text-brand-600' : 'text-zinc-400')} />
+        <span className={active ? 'font-semibold' : 'font-medium'}>
           {item.label}
         </span>
       </a>

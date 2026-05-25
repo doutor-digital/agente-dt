@@ -36,15 +36,15 @@ export function UnitSelector() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-zinc-900/60 ring-1 ring-zinc-800 hover:ring-zinc-700 text-zinc-200 transition"
+        className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-zinc-50 ring-1 ring-zinc-200 hover:ring-zinc-300 text-zinc-700 transition"
       >
-        <Building2 size={13} className="text-brand-400" />
+        <Building2 size={13} className="text-brand-500" />
         <span className="max-w-[180px] truncate">{label}</span>
-        <ChevronDown size={12} className="text-zinc-500" />
+        <ChevronDown size={12} className="text-zinc-400" />
       </button>
 
       {open && (
-        <div className="absolute left-0 mt-1 z-30 w-72 rounded-md border border-zinc-800 bg-zinc-950/95 backdrop-blur shadow-2xl py-1.5">
+        <div className="absolute left-0 mt-1 z-30 w-72 rounded-md border border-zinc-200 bg-white shadow-xl py-1.5">
           <button
             type="button"
             onClick={() => {
@@ -52,15 +52,15 @@ export function UnitSelector() {
               setOpen(false);
             }}
             className={clsx(
-              'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-900',
-              !selectedUnitId && 'text-brand-300',
+              'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-100',
+              !selectedUnitId ? 'text-brand-700' : 'text-zinc-700',
             )}
           >
             {!selectedUnitId ? <Check size={12} /> : <span className="w-3" />}
             <span>Todas as unidades (admin)</span>
           </button>
 
-          <div className="my-1 border-t border-zinc-800/60" />
+          <div className="my-1 border-t border-zinc-200" />
 
           {units.length === 0 && (
             <div className="px-3 py-3 text-[11px] text-zinc-500">
@@ -78,17 +78,17 @@ export function UnitSelector() {
                 setOpen(false);
               }}
               className={clsx(
-                'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-900',
-                selectedUnitId === u.id && 'text-brand-300',
+                'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-100',
+                selectedUnitId === u.id ? 'text-brand-700' : 'text-zinc-700',
               )}
             >
               {selectedUnitId === u.id ? <Check size={12} /> : <span className="w-3" />}
               <div className="flex-1 min-w-0">
                 <div className="truncate">{u.name}</div>
-                <div className="text-[10px] text-zinc-600 truncate">{u.slug}</div>
+                <div className="text-[10px] text-zinc-400 truncate">{u.slug}</div>
               </div>
               {!u.isActive && (
-                <span className="text-[9px] text-amber-500/80 uppercase tracking-wider">off</span>
+                <span className="text-[9px] text-amber-500 uppercase tracking-wider">off</span>
               )}
             </button>
           ))}

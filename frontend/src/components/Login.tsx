@@ -6,6 +6,8 @@
 //   invalid_credentials — email/senha errados
 //   account_disabled    — user desativado pelo super admin
 //   no_password_set     — user existe mas ainda sem senha (peça reset)
+//
+// TEMA: card branco sobre foto de fundo (estilo híbrido do Kommo).
 // ============================================================================
 
 import { useState, type FormEvent } from 'react';
@@ -47,67 +49,68 @@ export function Login() {
   }
 
   return (
-    <div className="h-screen w-screen flex flex-col items-center justify-center bg-zinc-950 text-zinc-100 px-6">
-      <img
-        src={LOGO_URL}
-        alt="Agente DT"
-        className="w-28 h-28 object-contain mb-5 drop-shadow-[0_0_30px_rgba(124,77,255,0.35)]"
-      />
-      <h1 className="text-2xl font-semibold text-zinc-100 mb-1">Agente DT</h1>
-      <p className="text-xs uppercase tracking-[0.3em] text-zinc-500 font-display mb-8">
-        Painel administrativo
-      </p>
+    <div
+      className="h-screen w-screen flex flex-col items-center justify-center px-6 bg-cover bg-center bg-[#0a1628]"
+      style={{
+        backgroundImage:
+          'linear-gradient(to bottom, rgba(8,8,12,0.55) 0%, rgba(8,8,12,0.78) 100%), url(https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=2000&q=70)',
+      }}
+    >
+      <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl ring-1 ring-black/5 p-7 flex flex-col items-center">
+        <img src={LOGO_URL} alt="Agente DT" className="w-20 h-20 object-contain mb-4" />
+        <h1 className="text-2xl font-bold text-zinc-900">Agente DT</h1>
+        <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-400 mb-6">
+          Painel administrativo
+        </p>
 
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-sm space-y-3 bg-zinc-900/40 rounded-xl ring-1 ring-zinc-800 p-6"
-      >
-        {error && (
-          <div className="rounded-md bg-rose-500/10 ring-1 ring-rose-500/30 px-3 py-2 text-xs text-rose-200">
-            {error}
+        <form onSubmit={handleSubmit} className="w-full space-y-3">
+          {error && (
+            <div className="rounded-md bg-rose-50 ring-1 ring-rose-200 px-3 py-2 text-xs text-rose-700">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              autoFocus
+              required
+              className="w-full rounded-md bg-zinc-50 ring-1 ring-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:outline-none transition"
+            />
           </div>
-        )}
 
-        <div>
-          <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">
-            Email
-          </label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            autoComplete="email"
-            autoFocus
-            required
-            className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:ring-brand-500/40 focus:outline-none"
-          />
-        </div>
+          <div>
+            <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">
+              Senha
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+              className="w-full rounded-md bg-zinc-50 ring-1 ring-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:outline-none transition"
+            />
+          </div>
 
-        <div>
-          <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">
-            Senha
-          </label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-            className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:ring-brand-500/40 focus:outline-none"
-          />
-        </div>
+          <button
+            type="submit"
+            disabled={submitting || !email || !password}
+            className="w-full px-4 py-2.5 rounded-md bg-brand-600 text-white inline-flex items-center justify-center gap-2 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-semibold text-sm transition-colors shadow-sm shadow-brand-600/20"
+          >
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
+            Entrar
+          </button>
+        </form>
+      </div>
 
-        <button
-          type="submit"
-          disabled={submitting || !email || !password}
-          className="w-full px-4 py-2.5 rounded-md bg-brand-500/20 text-brand-100 ring-1 ring-brand-500/40 inline-flex items-center justify-center gap-2 hover:bg-brand-500/30 disabled:opacity-50 disabled:cursor-not-allowed font-medium text-sm"
-        >
-          {submitting ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
-          Entrar
-        </button>
-      </form>
-
-      <p className="mt-6 text-[11px] text-zinc-600 max-w-sm text-center">
+      <p className="mt-6 text-[11px] text-zinc-300 max-w-sm text-center">
         Acesso restrito. Se não tem cadastro, peça pro administrador criar uma conta pra você.
       </p>
     </div>

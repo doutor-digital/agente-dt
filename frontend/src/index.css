@@ -23,22 +23,20 @@
   --color-ink-700: #1f1f2e;
   --color-ink-600: #2a2a3d;
 
-  /* Tipografia:
-   *  - display  → Poppins, pra títulos e elementos de hierarquia visual
-   *  - body     → Open Sans, pra texto corrido (mais legível em parágrafos)
-   *  - mono     → JetBrains Mono, pra IDs, código, logs
+  /* Tipografia: PT Sans em tudo (mesma fonte do Kommo), Arial de fallback.
+   *  - display/body/sans → PT Sans (tem só pesos 400 e 700)
+   *  - mono → JetBrains Mono, pra IDs, código, logs
    *  font-sans é alias de body (Tailwind usa por padrão). */
-  --font-display: "Poppins", "Inter", "system-ui", sans-serif;
-  --font-body:    "Open Sans", "Inter", "system-ui", sans-serif;
-  --font-sans:    "Open Sans", "Inter", "system-ui", sans-serif;
+  --font-display: "PT Sans", Arial, sans-serif;
+  --font-body:    "PT Sans", Arial, sans-serif;
+  --font-sans:    "PT Sans", Arial, sans-serif;
   --font-mono:    "JetBrains Mono", "ui-monospace", "SFMono-Regular", monospace;
 }
 
-/* Tipografia base — corpo em Open Sans, títulos em Poppins.
+/* Tipografia base — PT Sans em todo o app (mesma do Kommo).
  * Componentes individuais podem sobrescrever via classes Tailwind. */
 html, body {
   font-family: var(--font-body);
-  font-feature-settings: "cv11", "ss01", "ss03"; /* Open Sans ligatures */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

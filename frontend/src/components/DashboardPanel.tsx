@@ -96,7 +96,15 @@ export function DashboardPanel() {
   const periodLabel = PERIOD_OPTIONS.find((p) => p.days === days)?.label ?? `${days}d`;
 
   return (
-    <div className="flex-1 overflow-y-auto bg-gradient-to-br from-[#0a1628] via-zinc-950 to-zinc-950">
+    <div
+      className="flex-1 overflow-y-auto bg-cover bg-center bg-[#0a1628]"
+      style={{
+        // Foto de fundo (céu/paisagem) + overlay escuro pra manter os cards
+        // translúcidos legíveis — estilo do painel do Kommo (img #4).
+        backgroundImage:
+          'linear-gradient(to bottom, rgba(8,8,12,0.74) 0%, rgba(8,8,12,0.88) 60%, rgba(8,8,12,0.96) 100%), url(https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=2000&q=70)',
+      }}
+    >
       <div className="max-w-[1400px] mx-auto p-6 space-y-6">
         {/* Header — título + filtros estilo Kommo */}
         <div className="flex items-end justify-between gap-4 flex-wrap">
