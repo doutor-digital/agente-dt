@@ -8,7 +8,7 @@
 // ============================================================================
 
 import { useState } from 'react';
-import { ArrowRight, Building2, Check, LayoutGrid, Loader2, Plus, X } from 'lucide-react';
+import { ArrowRight, Check, LayoutGrid, Loader2, Plus, X } from 'lucide-react';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import { api } from '../lib/api';
@@ -17,6 +17,9 @@ import { CATEGORY_OPTIONS } from './WizardPanel';
 const LOGO_URL = 'https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png';
 const SKY =
   'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=2000&q=70';
+// Banner exibido no topo de cada card de unidade.
+const UNIT_IMAGE =
+  'https://play-lh.googleusercontent.com/9OYcYnz7sixdse2N_gYlA3Qc0bkpIGAtaZaPBVQDD9cqu8avN_ykIGhBlkgfoahdYzQ=w600-h300-pc0xffffff-pd';
 
 function categoryLabel(cat: string | null): string {
   const o = CATEGORY_OPTIONS.find((c) => c.value === (cat ?? ''));
@@ -93,21 +96,28 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
                 key={u.id}
                 type="button"
                 onClick={() => setSelectedUnitId(u.id)}
-                className="group text-left rounded-2xl bg-zinc-900/55 ring-1 ring-white/10 hover:ring-brand-400/50 hover:bg-zinc-900/70 backdrop-blur p-5 transition-all"
+                className="group text-left rounded-2xl bg-zinc-900/55 ring-1 ring-white/10 hover:ring-brand-400/50 hover:bg-zinc-900/70 backdrop-blur overflow-hidden transition-all"
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="w-10 h-10 rounded-xl bg-brand-500/15 ring-1 ring-brand-400/30 flex items-center justify-center text-brand-300">
-                    <Building2 size={18} />
+                <img
+                  src={UNIT_IMAGE}
+                  alt=""
+                  loading="lazy"
+                  className="w-full h-28 object-contain bg-white"
+                />
+                <div className="p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-zinc-100 font-semibold truncate">{u.name}</div>
+                      <div className="text-[11px] text-zinc-500 truncate">{u.slug}</div>
+                    </div>
+                    <ArrowRight
+                      size={16}
+                      className="shrink-0 text-zinc-500 group-hover:text-brand-300 group-hover:translate-x-0.5 transition-all"
+                    />
                   </div>
-                  <ArrowRight
-                    size={16}
-                    className="text-zinc-500 group-hover:text-brand-300 group-hover:translate-x-0.5 transition-all"
-                  />
-                </div>
-                <div className="mt-3 text-zinc-100 font-semibold truncate">{u.name}</div>
-                <div className="text-[11px] text-zinc-500 truncate">{u.slug}</div>
-                <div className="mt-3 inline-flex items-center text-[11px] px-2 py-0.5 rounded-full bg-white/5 ring-1 ring-white/10 text-zinc-300">
-                  {categoryLabel(u.category)}
+                  <div className="mt-3 inline-flex items-center text-[11px] px-2 py-0.5 rounded-full bg-white/5 ring-1 ring-white/10 text-zinc-300">
+                    {categoryLabel(u.category)}
+                  </div>
                 </div>
               </button>
             ))}
