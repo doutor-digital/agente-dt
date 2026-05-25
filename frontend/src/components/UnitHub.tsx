@@ -8,7 +8,7 @@
 // ============================================================================
 
 import { useState } from 'react';
-import { ArrowRight, Check, LayoutGrid, Loader2, Plus, X } from 'lucide-react';
+import { Check, LayoutGrid, Loader2, Plus, X } from 'lucide-react';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import { api } from '../lib/api';
@@ -91,33 +91,24 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {units.map((u) => (
+            {units.map((u, i) => (
               <button
                 key={u.id}
                 type="button"
                 onClick={() => setSelectedUnitId(u.id)}
-                className="group text-left rounded-2xl bg-zinc-900/55 ring-1 ring-white/10 hover:ring-brand-400/50 hover:bg-zinc-900/70 backdrop-blur overflow-hidden transition-all"
+                style={{ animationDelay: `${i * 50}ms` }}
+                className="animate-fade-in-up group flex flex-col items-center text-center rounded-2xl bg-zinc-900/55 ring-1 ring-white/10 hover:ring-brand-400/60 hover:bg-zinc-900/70 hover:shadow-xl hover:shadow-brand-500/10 backdrop-blur p-5 transition-all duration-300 hover:-translate-y-1.5 active:translate-y-0"
               >
                 <img
                   src={UNIT_IMAGE}
                   alt=""
                   loading="lazy"
-                  className="w-full h-28 object-contain bg-white"
+                  className="w-20 h-20 rounded-full object-contain bg-white ring-2 ring-white/15 group-hover:ring-brand-400/70 shadow-lg transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3"
                 />
-                <div className="p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="text-zinc-100 font-semibold truncate">{u.name}</div>
-                      <div className="text-[11px] text-zinc-500 truncate">{u.slug}</div>
-                    </div>
-                    <ArrowRight
-                      size={16}
-                      className="shrink-0 text-zinc-500 group-hover:text-brand-300 group-hover:translate-x-0.5 transition-all"
-                    />
-                  </div>
-                  <div className="mt-3 inline-flex items-center text-[11px] px-2 py-0.5 rounded-full bg-white/5 ring-1 ring-white/10 text-zinc-300">
-                    {categoryLabel(u.category)}
-                  </div>
+                <div className="mt-3 text-zinc-100 font-semibold truncate w-full">{u.name}</div>
+                <div className="text-[11px] text-zinc-500 truncate w-full">{u.slug}</div>
+                <div className="mt-3 inline-flex items-center text-[11px] px-2.5 py-0.5 rounded-full bg-white/5 ring-1 ring-white/10 text-zinc-300">
+                  {categoryLabel(u.category)}
                 </div>
               </button>
             ))}
@@ -127,10 +118,13 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
               <button
                 type="button"
                 onClick={() => setShowForm(true)}
-                className="rounded-2xl border-2 border-dashed border-white/15 hover:border-brand-400/50 hover:bg-white/5 p-5 flex flex-col items-center justify-center gap-2 text-zinc-400 hover:text-brand-200 transition-all min-h-[150px]"
+                style={{ animationDelay: `${units.length * 50}ms` }}
+                className="animate-fade-in-up group rounded-2xl bg-zinc-900/30 ring-1 ring-white/10 hover:bg-white/5 p-5 flex flex-col items-center justify-center text-zinc-400 hover:text-brand-200 transition-all duration-300 hover:-translate-y-1.5 active:translate-y-0"
               >
-                <Plus size={22} />
-                <span className="text-sm font-medium">Criar nova unidade</span>
+                <div className="w-20 h-20 rounded-full border-2 border-dashed border-white/20 group-hover:border-brand-400/60 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-90">
+                  <Plus size={26} />
+                </div>
+                <span className="mt-3 text-sm font-medium">Criar nova unidade</span>
               </button>
             ) : (
               <div className="rounded-2xl bg-zinc-900/70 ring-1 ring-white/10 backdrop-blur p-5 space-y-3 sm:col-span-2 lg:col-span-1">
