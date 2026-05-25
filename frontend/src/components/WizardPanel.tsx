@@ -61,6 +61,7 @@ import type {
 
 type WizardDraft = Pick<
   Unit,
+  | 'category'
   | 'personaCompanyName'
   | 'personaTone'
   | 'personaGreeting'
@@ -112,8 +113,17 @@ const INTENTS: Array<{ key: string; label: string }> = [
   { key: 'refused', label: 'Cliente recusou explicitamente' },
 ];
 
+// Categorias/segmentos disponíveis. Cada uma mapeia pra um preset de persona
+// no backend (prompt-composer). Adicionar uma nova aqui + no composer.
+export const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '', label: 'Genérica (sem categoria)' },
+  { value: 'saude', label: '🩺 Saúde (Dra. Sofia)' },
+  { value: 'energia_solar', label: '☀️ Energia Solar (Dr. João)' },
+];
+
 function unitToDraft(u: Unit): WizardDraft {
   return {
+    category: u.category,
     personaCompanyName: u.personaCompanyName,
     personaTone: u.personaTone,
     personaGreeting: u.personaGreeting,
@@ -302,6 +312,15 @@ export function WizardPanel() {
               ]}
             />
           </div>
+          <SelectField
+            label="Categoria / segmento — define a identidade da IA"
+            value={draft.category ?? ''}
+            onChange={(v) => update({ category: v || null })}
+            options={CATEGORY_OPTIONS}
+          />
+          <p className="text-[11px] text-zinc-500 -mt-1">
+            A categoria dá um nome e um enquadramento à IA: Saúde → Dra. Sofia, Energia Solar → Dr. João.
+          </p>
           <TextField
             label="Saudação preferida (opcional)"
             value={draft.personaGreeting ?? ''}

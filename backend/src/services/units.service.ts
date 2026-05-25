@@ -127,6 +127,9 @@ export interface UnitInput {
 
   systemPrompt?: string;
 
+  /** Categoria/segmento da unidade (ex: "saude", "energia_solar"). */
+  category?: string | null;
+
   // Wizard fields
   personaCompanyName?: string | null;
   personaTone?: string | null;
@@ -206,6 +209,7 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       metaWabaId: input.metaWabaId ?? null,
       metaMonthlyBudgetUsd: input.metaMonthlyBudgetUsd ?? 0,
       systemPrompt: input.systemPrompt ?? '',
+      category: input.category ?? null,
       // Wizard
       personaCompanyName: input.personaCompanyName ?? null,
       personaTone: input.personaTone ?? null,
@@ -267,6 +271,7 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.metaWabaId !== undefined && { metaWabaId: input.metaWabaId }),
       ...(input.metaMonthlyBudgetUsd !== undefined && { metaMonthlyBudgetUsd: input.metaMonthlyBudgetUsd }),
       ...(input.systemPrompt !== undefined && { systemPrompt: input.systemPrompt }),
+      ...(input.category !== undefined && { category: input.category }),
       ...(input.personaCompanyName !== undefined && { personaCompanyName: input.personaCompanyName }),
       ...(input.personaTone !== undefined && { personaTone: input.personaTone }),
       ...(input.personaGreeting !== undefined && { personaGreeting: input.personaGreeting }),

@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { AppSidebar } from './components/AppSidebar';
 import { OnboardingModal } from './components/OnboardingModal';
-import { UnitProvider } from './context/UnitContext';
+import { UnitHub } from './components/UnitHub';
+import { UnitProvider, useUnit } from './context/UnitContext';
 import { KommoMetaProvider } from './context/KommoMetaContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Login } from './components/Login';
@@ -101,13 +102,40 @@ function AuthGate() {
   return (
     <UnitProvider>
       <KommoMetaProvider>
-        <Shell />
+        <AppEntry />
       </KommoMetaProvider>
     </UnitProvider>
   );
 }
 
-function Shell() {
+// Decide entre a landing de unidades (UnitHub) e o app (Shell). SUPER_ADMIN sem
+// unidade escolhida cai no hub; UNIT_ADMIN (pinado na própria unit) e quem já
+// escolheu uma unidade vão direto pro Shell. "Ver painel geral" (viewAll) entra
+// no Shell com a visão de todas as unidades.
+function AppEntry() {
+  const { user } = useAuth();
+  const { selectedUnitId, setSelectedUnitId } = useUnit();
+  const [viewAll, setViewAll] = useState(false);
+
+  const showHub = user?.role === 'SUPER_ADMIN' && !selectedUnitId && !viewAll;
+  if (showHub) {
+    return <UnitHub onViewAll={() => setViewAll(true)} />;
+  }
+  return (
+    <Shell
+      onBackToHub={
+        user?.role === 'SUPER_ADMIN'
+          ? () => {
+              setViewAll(false);
+              setSelectedUnitId(null);
+            }
+          : undefined
+      }
+    />
+  );
+}
+
+function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
   const { tab, navigate } = useRoute();
 
   // Drill-down do Dashboard: o LeadsBucketModal dispara `app:openConversation`.
@@ -123,7 +151,7 @@ function Shell() {
   // bloqueia mais o boot.)
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
-      <AppSidebar tab={tab} onChange={navigate} />
+      <AppSidebar tab={tab} onChange={navigate} onBackToHub={onBackToHub} />
       <main className="flex-1 flex flex-col overflow-hidden">
         <Suspense fallback={<PanelSkeleton />}>
           {tab === 'dashboard' && <DashboardPanel />}

@@ -238,6 +238,8 @@ export interface Unit {
   metaWabaId: string | null;
   metaMonthlyBudgetUsd: number | string;
   systemPrompt: string;
+  /** Categoria/segmento — seleciona o preset de persona (ex: "saude", "energia_solar"). */
+  category: string | null;
 
   // Wizard fields
   personaCompanyName: string | null;

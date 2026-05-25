@@ -32,6 +32,7 @@ import {
   Globe,
   GraduationCap,
   LayoutDashboard,
+  LayoutGrid,
   Loader2,
   LogOut,
   MessageCircle,
@@ -109,9 +110,12 @@ const NAV: NavItem[] = [
 export function AppSidebar({
   tab,
   onChange,
+  onBackToHub,
 }: {
   tab: AppTab;
   onChange: (t: AppTab) => void;
+  /** Quando presente, a marca vira clicável e volta pra landing de unidades. */
+  onBackToHub?: () => void;
 }) {
   const { user, logout } = useAuth();
   const toast = useToast();
@@ -171,6 +175,16 @@ export function AppSidebar({
             Kommo Console v0.2
           </div>
         </div>
+        {onBackToHub && (
+          <button
+            type="button"
+            onClick={onBackToHub}
+            title="Trocar de unidade"
+            className="p-1.5 rounded-md text-zinc-400 hover:text-brand-600 hover:bg-zinc-100 transition-colors shrink-0"
+          >
+            <LayoutGrid size={15} />
+          </button>
+        )}
       </div>
 
       {/* Unit selector */}
