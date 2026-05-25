@@ -100,10 +100,53 @@ function renderToneInstruction(tone: string | null): string {
 // Renders parciais de cada feature.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// PRESETS POR CATEGORIA / SEGMENTO — dão à IA um nome e um enquadramento
+// específicos da vertical. `Unit.category` (texto livre) seleciona o preset;
+// adicionar uma vertical nova é só incluir uma entrada aqui (sem migration).
+// Sem categoria (ou categoria desconhecida) → persona genérica "atendente
+// virtual" (comportamento anterior preservado).
+// ---------------------------------------------------------------------------
+interface CategoryPreset {
+  /** Nome com que a IA se apresenta (ex: "Dra. Sofia"). */
+  agentName: string;
+  /** Como descrever o negócio (ex: "clínica de saúde"). */
+  vertical: string;
+  /** Linhas extras de enquadramento de comportamento da vertical. */
+  framing: string[];
+}
+
+const CATEGORY_PRESETS: Record<string, CategoryPreset> = {
+  saude: {
+    agentName: 'Dra. Sofia',
+    vertical: 'clínica de saúde',
+    framing: [
+      'Tom: calorosa, acolhedora e empática — você cuida de pessoas que estão com dor ou preocupadas.',
+      'Foque em entender a queixa do paciente, acolher e conduzir pro agendamento da consulta.',
+      'NUNCA dê diagnóstico, prescrição ou conduta clínica — isso é avaliado presencialmente pelo profissional.',
+    ],
+  },
+  energia_solar: {
+    agentName: 'Dr. João',
+    vertical: 'empresa de energia solar',
+    framing: [
+      'Tom: objetivo, confiável e consultivo.',
+      'Foque em entender o consumo / a conta de luz do cliente, explicar a economia e o retorno do investimento (payback), e conduzir pra um orçamento ou visita técnica.',
+    ],
+  },
+};
+
 function renderPersona(unit: Unit): string {
   const lines: string[] = ['# PERSONA'];
   const company = unit.personaCompanyName?.trim();
-  if (company) {
+  const preset = unit.category ? CATEGORY_PRESETS[unit.category.trim()] : undefined;
+  if (preset) {
+    const where = company ? `da ${company}` : 'da empresa';
+    lines.push(
+      `Você é ${preset.agentName}, assistente virtual ${where} (${preset.vertical}), conversando pelo WhatsApp com os clientes.`,
+    );
+    for (const f of preset.framing) lines.push(f);
+  } else if (company) {
     lines.push(`Você é o atendente virtual da ${company}, conversando pelo WhatsApp com clientes.`);
   } else {
     lines.push('Você é o atendente virtual da empresa, conversando pelo WhatsApp com clientes.');

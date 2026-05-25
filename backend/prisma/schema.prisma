@@ -60,6 +60,13 @@ model Unit {
 
   isActive Boolean @default(true) @map("is_active")
 
+  // CATEGORIA / SEGMENTO — define a "vertical" da unidade (ex: "saude",
+  // "energia_solar"). O composer usa pra escolher um preset de persona
+  // (nome da IA, enquadramento do segmento). NULL = persona genérica.
+  // Texto livre de propósito: novas categorias entram só adicionando um
+  // preset no composer, sem migration.
+  category String? @map("category")
+
   // Kommo
   kommoSubdomain   String? @map("kommo_subdomain")
   kommoAccessToken String? @map("kommo_access_token")
