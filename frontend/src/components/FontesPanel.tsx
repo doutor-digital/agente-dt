@@ -22,7 +22,7 @@
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FileText, Loader2, Save, Sparkles } from 'lucide-react';
+import { Eye, FileText, Loader2, Pencil, Save, Sparkles } from 'lucide-react';
 import { RichTextEditor } from './RichTextEditor';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
@@ -64,6 +64,15 @@ const FIELDS: Array<{
   },
 ];
 
+// Botão do segmentado Editar/Visualizar — sólido no ativo (aria-pressed),
+// foco de teclado visível, transição ease-out de 150ms. Sem gradiente.
+const SEG_BTN =
+  'inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded ' +
+  'transition-[color,background-color] duration-150 ease-[cubic-bezier(0.16,0.84,0.44,1)] ' +
+  'text-zinc-400 hover:text-zinc-100 ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 ' +
+  'aria-pressed:bg-zinc-800 aria-pressed:text-zinc-50';
+
 function unitToDraft(u: Unit): SourcesDraft {
   return {
     sourcePapel: u.sourcePapel ?? '',
@@ -78,6 +87,7 @@ export function FontesPanel() {
   const [unit, setUnit] = useState<Unit | null>(null);
   const [draft, setDraft] = useState<SourcesDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [mode, setMode] = useState<'edit' | 'view'>('edit');
 
   const load = useCallback(async () => {
     if (!selectedUnitId) {
@@ -151,15 +161,41 @@ export function FontesPanel() {
               Cole aqui o que ela precisa saber — papel, produtos, identidade do negócio.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving || !dirty}
-            className="inline-flex items-center gap-2 text-sm px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-500 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-          >
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-            {dirty ? 'Salvar alterações' : 'Salvo'}
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Segmentado Editar | Visualizar — roving via Tab natural, estado
+                via aria-pressed (preenchido), foco de teclado visível. */}
+            <div
+              role="group"
+              aria-label="Modo de exibição"
+              className="inline-flex rounded-md bg-zinc-900 ring-1 ring-zinc-800 p-0.5"
+            >
+              <button
+                type="button"
+                onClick={() => setMode('edit')}
+                aria-pressed={mode === 'edit'}
+                className={SEG_BTN}
+              >
+                <Pencil size={13} /> Editar
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('view')}
+                aria-pressed={mode === 'view'}
+                className={SEG_BTN}
+              >
+                <Eye size={13} /> Visualizar
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || !dirty}
+              className="inline-flex items-center gap-2 text-sm px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-500 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              {dirty ? 'Salvar alterações' : 'Salvo'}
+            </button>
+          </div>
         </div>
 
         {/* Aviso de contexto */}
@@ -182,6 +218,7 @@ export function FontesPanel() {
             placeholder={field.placeholder}
             value={draft[field.key]}
             onChange={(v) => setDraft({ ...draft, [field.key]: v })}
+            mode={mode}
           />
         ))}
       </div>
@@ -195,32 +232,38 @@ function SourceField({
   placeholder,
   value,
   onChange,
+  mode,
 }: {
   label: string;
   hint: string;
   placeholder: string;
   value: string;
   onChange: (v: string) => void;
+  mode: 'edit' | 'view';
 }) {
   const chars = value.length;
   const MAX = 20_000;
   const tooBig = chars > MAX;
+  const isView = mode === 'view';
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
       <div className="flex items-baseline justify-between mb-1.5">
         <label className="text-sm font-display font-semibold text-zinc-100">{label}</label>
-        <span
-          className={
-            tooBig
-              ? 'text-[11px] font-mono text-rose-300'
-              : 'text-[11px] font-mono text-zinc-600'
-          }
-        >
-          {chars.toLocaleString('pt-BR')} / {MAX.toLocaleString('pt-BR')}
-        </span>
+        {/* Contador é afordância de edição — fica fora do modo leitura. */}
+        {!isView && (
+          <span
+            className={
+              tooBig
+                ? 'text-[11px] font-mono tabular-nums text-rose-300'
+                : 'text-[11px] font-mono tabular-nums text-zinc-600'
+            }
+          >
+            {chars.toLocaleString('pt-BR')} / {MAX.toLocaleString('pt-BR')}
+          </span>
+        )}
       </div>
       <p className="text-xs text-zinc-500 mb-3">{hint}</p>
-      <RichTextEditor value={value} onChange={onChange} placeholder={placeholder} />
+      <RichTextEditor value={value} onChange={onChange} placeholder={placeholder} readOnly={isView} />
     </section>
   );
 }

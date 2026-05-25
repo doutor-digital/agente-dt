@@ -46,6 +46,8 @@ interface RichTextEditorProps {
   /** Recebe o Markdown atualizado a cada edição. */
   onChange: (markdown: string) => void;
   placeholder?: string;
+  /** Modo leitura: esconde a barra, desliga edição, renderiza só o conteúdo. */
+  readOnly?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,8 +183,9 @@ function Toolbar({ editor }: { editor: Editor }) {
   );
 }
 
-export function RichTextEditor({ value, onChange, placeholder }: RichTextEditorProps) {
+export function RichTextEditor({ value, onChange, placeholder, readOnly = false }: RichTextEditorProps) {
   const editor = useEditor({
+    editable: !readOnly,
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
       Highlight,
@@ -211,10 +214,29 @@ export function RichTextEditor({ value, onChange, placeholder }: RichTextEditorP
     }
   }, [value, editor]);
 
+  // Alterna editável quando o modo muda (Editar ↔ Visualizar) sem recriar o editor.
+  useEffect(() => {
+    editor?.setEditable(!readOnly);
+  }, [readOnly, editor]);
+
+  const isEmptyView = readOnly && value.trim().length === 0;
+
   return (
-    <div className="rounded-lg overflow-hidden bg-zinc-950 ring-1 ring-zinc-800 transition-shadow duration-150 ease-[cubic-bezier(0.16,0.84,0.44,1)] focus-within:ring-2 focus-within:ring-brand-400/60">
-      {editor && <Toolbar editor={editor} />}
-      <EditorContent editor={editor} />
+    <div
+      className={
+        readOnly
+          ? 'rounded-lg overflow-hidden'
+          : 'rounded-lg overflow-hidden bg-zinc-950 ring-1 ring-zinc-800 transition-shadow duration-150 ease-[cubic-bezier(0.16,0.84,0.44,1)] focus-within:ring-2 focus-within:ring-brand-400/60'
+      }
+    >
+      {!readOnly && editor && <Toolbar editor={editor} />}
+      {isEmptyView ? (
+        <p className="px-4 py-6 text-sm italic text-zinc-600">
+          Sem conteúdo ainda — toque em “Editar” para escrever.
+        </p>
+      ) : (
+        <EditorContent editor={editor} />
+      )}
     </div>
   );
 }
