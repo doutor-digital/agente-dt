@@ -314,6 +314,43 @@ export function splitIntoChunks(text: string, maxLen: number): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// resolveEnumId — casa um label (texto da opção) com o enum_id correspondente
+// de um campo select/multiselect/radiobutton do Kommo.
+//
+// Por que existe: gravar campo dropdown por `value` (texto) é frágil — o Kommo
+// responde 200 mas DESCARTA silenciosamente quando o texto não bate EXATAMENTE
+// com uma opção cadastrada (espaço sobrando, caixa diferente, acento, emoji no
+// label). É o mesmo silent no-op do histórico do `tags_to_add`. Gravar por
+// `enum_id` é à prova disso. A tool dinâmica já trava o LLM nas opções
+// existentes (z.enum), então o match costuma ser exato; o normalizador cobre
+// as bordas (trim/caixa/acento). Retorna null se não achar — o caller cai pro
+// `value` como antes (sem regressão).
+// ---------------------------------------------------------------------------
+
+function normalizeEnumLabel(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // remove acentos (ç, ã, é, …)
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function resolveEnumId(
+  label: string,
+  enums: ReadonlyArray<{ id: number; value: string }>,
+): number | null {
+  if (enums.length === 0) return null;
+  // 1) Match exato — caminho normal (LLM travado em z.enum manda o label igual).
+  const exact = enums.find((e) => e.value === label);
+  if (exact) return exact.id;
+  // 2) Match tolerante a trim/caixa/acento.
+  const norm = normalizeEnumLabel(label);
+  const fuzzy = enums.find((e) => normalizeEnumLabel(e.value) === norm);
+  return fuzzy ? fuzzy.id : null;
+}
+
+// ---------------------------------------------------------------------------
 // Config interna do cliente — derivada de uma Unit ou do env legado.
 // ---------------------------------------------------------------------------
 
@@ -511,12 +548,18 @@ export class KommoClient {
    *
    * Aplica downgradeEmoji em valores string pra evitar truncagem (mesma
    * razão do PATCH no campo "Resposta IA" — bug do MySQL utf8).
+   *
+   * `enums` (opcional): opções cadastradas do campo, no formato {id, value}.
+   * Quando passado em campos select/radiobutton/multiselect, resolvemos o
+   * label pro `enum_id` e gravamos por id (à prova do silent no-op do Kommo).
+   * Sem `enums` ou sem match, cai pro `value` (texto) como antes.
    */
   async setLeadCustomFieldValue(
     leadId: number,
     fieldId: number,
     fieldType: KommoFieldType,
     value: string | number | string[],
+    enums: ReadonlyArray<{ id: number; value: string }> = [],
   ): Promise<void> {
     let values: Array<Record<string, unknown>>;
 
@@ -547,14 +590,19 @@ export class KommoClient {
       }
       values = [{ value: unixSec }];
     } else if (fieldType === 'select' || fieldType === 'radiobutton') {
-      // Aceita label (string) — Kommo casa pelo `value` se enum_id não vier.
       if (typeof value !== 'string') {
         throw new Error(`field ${fieldId} (${fieldType}) requer string (label da opção)`);
       }
-      values = [{ value: downgradeEmoji(value) }];
+      // Preferir enum_id (à prova do silent no-op). Cai pro label se não casar.
+      const enumId = resolveEnumId(value, enums);
+      values = enumId != null ? [{ enum_id: enumId }] : [{ value: downgradeEmoji(value) }];
     } else if (fieldType === 'multiselect') {
       const arr = Array.isArray(value) ? value : [value];
-      values = arr.map((v) => ({ value: downgradeEmoji(String(v)) }));
+      values = arr.map((v) => {
+        const label = String(v);
+        const enumId = resolveEnumId(label, enums);
+        return enumId != null ? { enum_id: enumId } : { value: downgradeEmoji(label) };
+      });
     } else {
       throw new Error(`field ${fieldId} tipo não suportado: ${fieldType}`);
     }

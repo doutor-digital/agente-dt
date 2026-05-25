@@ -1006,6 +1006,7 @@ function buildLeadFieldRuleTool({
           rule.kommoFieldId,
           fieldType,
           value as string | number | string[],
+          enums,
         );
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
