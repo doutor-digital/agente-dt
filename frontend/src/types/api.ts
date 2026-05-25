@@ -425,6 +425,37 @@ export interface DashboardResponse {
   }>;
 }
 
+/** Resposta do GET /dashboard — agregado de todas as unidades acessíveis. */
+export interface AggregateUnitRow {
+  id: string;
+  name: string;
+  slug: string;
+  category: string | null;
+  uniqueLeads: number;
+  answeredConversations: number;
+  newConversations: number;
+  convertedCount: number;
+  conversionRate: number;
+  llmCostUsd: number;
+  llmCallsCount: number;
+}
+
+export interface AggregateDashboardResponse {
+  periodDays: number;
+  totals: {
+    uniqueLeads: number;
+    answeredConversations: number;
+    newConversations: number;
+    convertedCount: number;
+    conversionRate: number;
+    llmCostUsd: number;
+    llmCallsCount: number;
+  };
+  units: AggregateUnitRow[];
+  messagesByChannel: Array<{ channel: string; label: string; count: number }>;
+  dailySeries: Array<{ date: string; messages: number; conversations: number }>;
+}
+
 // ---------------------------------------------------------------------------
 // Integrations / Alerts
 // ---------------------------------------------------------------------------

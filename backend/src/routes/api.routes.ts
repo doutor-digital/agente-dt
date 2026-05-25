@@ -39,6 +39,7 @@ import {
   kommoLossReasonsHandler,
   previewPromptHandler,
   dashboardHandler,
+  dashboardAggregateHandler,
   leadsBucketHandler,
   metaValidateHandler,
 } from '../controllers/units.controller.js';
@@ -224,6 +225,9 @@ apiRouter.get('/units/:id/kommo-lead-custom-fields', requireUnitAccess, listKomm
 apiRouter.get('/traces', listTraces);
 apiRouter.get('/traces/:id', getTrace);
 apiRouter.get('/stats', getStats);
+// Dashboard AGREGADO de todas as unidades (filtra por papel + ?category). O
+// controller força o escopo do user (UNIT_ADMIN só vê a própria).
+apiRouter.get('/dashboard', dashboardAggregateHandler);
 apiRouter.get('/system-logs', listSystemLogs);
 apiRouter.get('/system-logs/modules', listSystemLogModules);
 apiRouter.get('/llm-calls', listLlmCallsHandler);

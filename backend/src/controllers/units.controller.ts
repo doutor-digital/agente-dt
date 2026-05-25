@@ -724,6 +724,129 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
   });
 }
 
+// ---------------------------------------------------------------------------
+// GET /dashboard — visão AGREGADA de todas as unidades acessíveis. Filtros:
+//   ?days=N        período (clamp [1,365], default 7)
+//   ?category=X    só unidades dessa categoria (opcional)
+// SUPER_ADMIN vê todas as unidades ativas; UNIT_ADMIN só a própria.
+// Agrega via materialized views (mv_unit_daily / _channel) com GROUP BY —
+// barato. Funil (Kommo) NÃO entra aqui (fica no painel por-unidade) pra não
+// disparar N chamadas Kommo a cada carga.
+// ---------------------------------------------------------------------------
+export async function dashboardAggregateHandler(req: Request, res: Response): Promise<void> {
+  const daysParam = Number(req.query.days ?? 7);
+  const periodDays = Number.isFinite(daysParam) ? Math.max(1, Math.min(Math.round(daysParam), 365)) : 7;
+  const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : null;
+  const periodStart = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+
+  const unitWhere: Prisma.UnitWhereInput = { isActive: true };
+  if (req.user?.role === 'UNIT_ADMIN') unitWhere.id = req.user.unitId ?? '__never_match__';
+  if (category) unitWhere.category = category;
+
+  const units = await prisma.unit.findMany({
+    where: unitWhere,
+    select: { id: true, name: true, slug: true, category: true },
+    orderBy: { name: 'asc' },
+  });
+
+  const emptyTotals = {
+    uniqueLeads: 0,
+    answeredConversations: 0,
+    newConversations: 0,
+    convertedCount: 0,
+    conversionRate: 0,
+    llmCostUsd: 0,
+    llmCallsCount: 0,
+  };
+  if (units.length === 0) {
+    res.json({ periodDays, totals: emptyTotals, units: [], messagesByChannel: [], dailySeries: [] });
+    return;
+  }
+
+  const idList = Prisma.join(units.map((u) => u.id));
+
+  const [mvRows, leadsRows, answeredRows, channelRows, dailyRows] = await Promise.all([
+    prisma.$queryRaw<Array<{ unit_id: string; nc: bigint; cc: bigint; cost: Prisma.Decimal; calls: bigint }>>`
+      SELECT unit_id,
+        COALESCE(SUM(new_conversations), 0)::bigint        AS nc,
+        COALESCE(SUM(converted_count),   0)::bigint        AS cc,
+        COALESCE(SUM(llm_cost_usd),      0)::numeric(14,6)  AS cost,
+        COALESCE(SUM(llm_calls_count),   0)::bigint        AS calls
+      FROM mv_unit_daily WHERE unit_id IN (${idList}) AND day >= ${periodStart}::date GROUP BY unit_id`,
+    prisma.$queryRaw<Array<{ unit_id: string; count: bigint }>>`
+      SELECT unit_id, COUNT(DISTINCT lead_id)::bigint AS count FROM conversations
+      WHERE unit_id IN (${idList}) AND last_message_at >= ${periodStart} GROUP BY unit_id`,
+    prisma.$queryRaw<Array<{ unit_id: string; count: bigint }>>`
+      SELECT c.unit_id, COUNT(DISTINCT c.id)::bigint AS count FROM conversations c
+      WHERE c.unit_id IN (${idList}) AND c.last_message_at >= ${periodStart}
+        AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.role = 'assistant' AND m.created_at >= ${periodStart})
+      GROUP BY c.unit_id`,
+    prisma.$queryRaw<Array<{ channel: string; count: bigint }>>`
+      SELECT channel, COALESCE(SUM(msgs_user), 0)::bigint AS count FROM mv_unit_daily_channel
+      WHERE unit_id IN (${idList}) AND day >= ${periodStart}::date
+      GROUP BY channel HAVING COALESCE(SUM(msgs_user), 0) > 0 ORDER BY 2 DESC`,
+    prisma.$queryRaw<Array<{ day: Date; messages: bigint; conversations: bigint }>>`
+      SELECT day, COALESCE(SUM(msgs_total), 0)::bigint AS messages, COALESCE(SUM(active_conversations), 0)::bigint AS conversations
+      FROM mv_unit_daily WHERE unit_id IN (${idList}) AND day >= ${periodStart}::date GROUP BY day ORDER BY day ASC`,
+  ]);
+
+  const mvByUnit = new Map(mvRows.map((r) => [r.unit_id, r]));
+  const leadsByUnit = new Map(leadsRows.map((r) => [r.unit_id, Number(r.count)]));
+  const answeredByUnit = new Map(answeredRows.map((r) => [r.unit_id, Number(r.count)]));
+
+  const perUnit = units.map((u) => {
+    const mv = mvByUnit.get(u.id);
+    const newConvos = Number(mv?.nc ?? 0);
+    const converted = Number(mv?.cc ?? 0);
+    return {
+      id: u.id,
+      name: u.name,
+      slug: u.slug,
+      category: u.category,
+      uniqueLeads: leadsByUnit.get(u.id) ?? 0,
+      answeredConversations: answeredByUnit.get(u.id) ?? 0,
+      newConversations: newConvos,
+      convertedCount: converted,
+      conversionRate: newConvos > 0 ? converted / newConvos : 0,
+      llmCostUsd: Number(mv?.cost ?? 0),
+      llmCallsCount: Number(mv?.calls ?? 0),
+    };
+  });
+
+  const totals = perUnit.reduce(
+    (a, u) => ({
+      uniqueLeads: a.uniqueLeads + u.uniqueLeads,
+      answeredConversations: a.answeredConversations + u.answeredConversations,
+      newConversations: a.newConversations + u.newConversations,
+      convertedCount: a.convertedCount + u.convertedCount,
+      llmCostUsd: a.llmCostUsd + u.llmCostUsd,
+      llmCallsCount: a.llmCallsCount + u.llmCallsCount,
+      conversionRate: 0,
+    }),
+    { ...emptyTotals },
+  );
+  totals.conversionRate = totals.newConversations > 0 ? totals.convertedCount / totals.newConversations : 0;
+
+  const messagesByChannel = channelRows.map((r) => ({
+    channel: r.channel || 'unknown',
+    label: channelLabel(r.channel || 'unknown'),
+    count: Number(r.count),
+  }));
+
+  const dailyMap = new Map<string, { messages: number; conversations: number }>();
+  for (const r of dailyRows) {
+    dailyMap.set(r.day.toISOString().slice(0, 10), { messages: Number(r.messages), conversations: Number(r.conversations) });
+  }
+  const dailySeries: Array<{ date: string; messages: number; conversations: number }> = [];
+  for (let i = 0; i < periodDays; i++) {
+    const key = new Date(periodStart.getTime() + i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const v = dailyMap.get(key) ?? { messages: 0, conversations: 0 };
+    dailySeries.push({ date: key, messages: v.messages, conversations: v.conversations });
+  }
+
+  res.json({ periodDays, totals, units: perUnit, messagesByChannel, dailySeries });
+}
+
 /** Converte código de canal pra label legível pro usuário. */
 function channelLabel(channel: string): string {
   switch (channel) {
