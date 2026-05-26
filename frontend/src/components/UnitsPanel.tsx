@@ -12,13 +12,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  Bot,
   Check,
   CheckCircle2,
+  ChevronDown,
   Copy,
+  FileText,
+  Fingerprint,
   KeyRound,
+  ListTree,
   Loader2,
+  MessageCircle,
   MoreVertical,
   Pencil,
+  Plug,
   Plus,
   RotateCcw,
   Save,
@@ -28,6 +35,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type { Unit, UnitInput } from '../types/api';
@@ -55,6 +63,16 @@ function hasOwnKey(unit: Unit): boolean {
   return !!unit._hasSecrets?.openaiApiKey;
 }
 
+// 5 layouts do FORMULÁRIO de edição da unidade (switcher no topo do editor).
+// Persistido no navegador. As seções são as mesmas; muda só o arranjo.
+type FormView = 'unico' | 'duas' | 'abas' | 'acordeao' | 'cartoes';
+const FORM_VIEWS: Array<{ id: FormView; label: string }> = [
+  { id: 'unico', label: 'V1 · Único' },
+  { id: 'duas', label: 'V2 · 2 colunas' },
+  { id: 'abas', label: 'V3 · Abas' },
+  { id: 'acordeao', label: 'V4 · Acordeão' },
+  { id: 'cartoes', label: 'V5 · Cartões' },
+];
 const META_CHECK_LABELS: Record<string, string> = {
   accessToken: 'Access Token',
   wabaId: 'WABA ID',
@@ -160,6 +178,25 @@ export function UnitsPanel() {
   const [metaChecks, setMetaChecks] = useState<
     { ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> } | null
   >(null);
+
+  // Layout do formulário de edição (5 versões pra escolher). Persistido.
+  const [formView, setFormView] = useState<FormView>(() => {
+    try {
+      return (localStorage.getItem('unidade:formview') as FormView) || 'unico';
+    } catch {
+      return 'unico';
+    }
+  });
+  const changeFormView = (v: FormView) => {
+    setFormView(v);
+    try {
+      localStorage.setItem('unidade:formview', v);
+    } catch {
+      /* ignore */
+    }
+  };
+  const [activeTab, setActiveTab] = useState(0);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
 
   const editing = creating || selectedId !== null;
 
@@ -283,9 +320,295 @@ export function UnitsPanel() {
   // Renderização condicional: grid OU página de edição em tela cheia.
   // Antes era grid + drawer overlay; o user pediu pra ocupar a tela toda.
   if (editing) {
+    const showSchema = !creating && !!selectedId;
+    const formSections: FormSection[] = [
+      {
+        id: 'identidade',
+        label: 'Identidade',
+        icon: Fingerprint,
+        body: (
+          <>
+            <Field label="Nome" value={draft.name} onChange={(v) => setDraft({ ...draft, name: v })} />
+            <Field
+              label="Slug (URL)"
+              value={draft.slug}
+              onChange={(v) => setDraft({ ...draft, slug: v })}
+              hint="Aparece em /api/webhooks/{slug}/... — kebab-case"
+            />
+            <Toggle label="Ativa" value={!!draft.isActive} onChange={(v) => setDraft({ ...draft, isActive: v })} />
+          </>
+        ),
+      },
+      {
+        id: 'openai',
+        label: 'OpenAI & Chave',
+        icon: Bot,
+        subtitle: 'Cada unidade tem sua API key, Assistant e orçamento.',
+        body: (
+          <>
+            <Field
+              label="API Key (sk-proj-...)"
+              value={draft.openaiApiKey ?? ''}
+              onChange={(v) => setDraft({ ...draft, openaiApiKey: v })}
+              type="password"
+              hint="Chave de projeto, usada nas chamadas de inferência."
+            />
+            <Field
+              label="Admin Key (sk-admin-...) — opcional"
+              value={draft.openaiAdminKey ?? ''}
+              onChange={(v) => setDraft({ ...draft, openaiAdminKey: v })}
+              type="password"
+              hint="Habilita gastos REAIS da OpenAI no painel de Integrações (custos, projetos, usage)."
+            />
+            <Field label="Modelo" value={draft.openaiModel ?? ''} onChange={(v) => setDraft({ ...draft, openaiModel: v })} />
+            <Field
+              label="Assistant ID (opcional)"
+              value={draft.openaiAssistantId ?? ''}
+              onChange={(v) => setDraft({ ...draft, openaiAssistantId: v })}
+              hint="Se preenchido, usa Assistants API ao invés de Chat Completions."
+            />
+            <div className="grid grid-cols-3 gap-3">
+              <NumberField
+                label="Temperature"
+                value={draft.openaiTemperature ?? 0}
+                onChange={(v) => setDraft({ ...draft, openaiTemperature: v })}
+                step={0.1}
+              />
+              <NumberField
+                label="Max tokens"
+                value={draft.openaiMaxTokens ?? 1024}
+                onChange={(v) => setDraft({ ...draft, openaiMaxTokens: v })}
+              />
+              <NumberField
+                label="Orçamento $USD/mês"
+                value={Number(draft.openaiMonthlyBudgetUsd ?? 50)}
+                onChange={(v) => setDraft({ ...draft, openaiMonthlyBudgetUsd: v })}
+                step={1}
+                allowZero
+              />
+            </div>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              Amostragem avançada (opcional). Padrão Top P 1 e penalties 0 = sem efeito. Use Top P <em>ou</em> Temperature,
+              não os dois.
+            </p>
+            <div className="grid grid-cols-3 gap-3">
+              <NumberField
+                label="Top P (0–1)"
+                value={draft.openaiTopP ?? 1}
+                onChange={(v) => setDraft({ ...draft, openaiTopP: v })}
+                step={0.05}
+                allowZero
+              />
+              <NumberField
+                label="Freq. penalty (-2 a 2)"
+                value={draft.openaiFrequencyPenalty ?? 0}
+                onChange={(v) => setDraft({ ...draft, openaiFrequencyPenalty: v })}
+                step={0.1}
+                allowZero
+              />
+              <NumberField
+                label="Presence penalty (-2 a 2)"
+                value={draft.openaiPresencePenalty ?? 0}
+                onChange={(v) => setDraft({ ...draft, openaiPresencePenalty: v })}
+                step={0.1}
+                allowZero
+              />
+            </div>
+          </>
+        ),
+      },
+      {
+        id: 'kommo',
+        label: 'Kommo',
+        icon: Plug,
+        subtitle: 'Long-Lived Access Token + subdomínio.',
+        body: (
+          <>
+            <Field
+              label="Subdomínio"
+              value={draft.kommoSubdomain ?? ''}
+              onChange={(v) => setDraft({ ...draft, kommoSubdomain: v })}
+              hint="Ex: minhaempresa (de minhaempresa.kommo.com)"
+            />
+            <Field
+              label="Access Token"
+              value={draft.kommoAccessToken ?? ''}
+              onChange={(v) => setDraft({ ...draft, kommoAccessToken: v })}
+              type="password"
+            />
+            <KommoExplorer
+              unitId={selectedId}
+              salesbotId={draft.kommoSalesbotId ?? null}
+              replyFieldId={draft.kommoReplyFieldId ?? null}
+              pausedFieldId={draft.kommoPausedFieldId ?? null}
+              wonStatusIds={draft.kommoWonStatusIds ?? []}
+              onSalesbotChange={(id) => setDraft({ ...draft, kommoSalesbotId: id })}
+              onReplyFieldChange={(id) => setDraft({ ...draft, kommoReplyFieldId: id })}
+              onPausedFieldChange={(id) => setDraft({ ...draft, kommoPausedFieldId: id })}
+              onWonStatusIdsChange={(ids) => setDraft({ ...draft, kommoWonStatusIds: ids })}
+              onSave={handleSave}
+              saving={saving}
+            />
+            <label className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 mt-3 cursor-pointer hover:bg-amber-500/10 transition-colors">
+              <input
+                type="checkbox"
+                checked={!!draft.kommoBypassSalesbot}
+                onChange={(e) => setDraft({ ...draft, kommoBypassSalesbot: e.target.checked })}
+                className="mt-0.5 accent-amber-500"
+              />
+              <div className="flex-1">
+                <div className="text-sm font-semibold text-amber-100">
+                  ⚠️ Modo "edição manual" — pular o disparo direto do Salesbot
+                </div>
+                <div className="text-[11px] text-amber-200/70 mt-1 leading-relaxed">
+                  Quando ligado, em vez de chamar <code className="text-[10px] px-1 rounded bg-zinc-900">POST /salesbot/run</code>,
+                  nós só fazemos <code className="text-[10px] px-1 rounded bg-zinc-900">PATCH</code> no campo "Resposta IA" —
+                  exatamente como acontece quando você edita o campo manualmente no Kommo. O Digital Pipeline do Kommo se
+                  encarrega de disparar o Salesbot uma única vez. <strong>Resolve casos onde o emoji não chega via API, mas
+                  chega na edição manual.</strong> Pré-requisito: o seu Digital Pipeline tem um gatilho "Quando campo Resposta
+                  IA mudar → rodar Salesbot".
+                </div>
+              </div>
+            </label>
+          </>
+        ),
+      },
+      ...(showSchema
+        ? [
+            {
+              id: 'schema',
+              label: 'Etapas & tags',
+              icon: ListTree,
+              subtitle: 'Read-only — puxado direto da sua conta. Use os IDs/nomes ao instruir a IA.',
+              body: (
+                <KommoSchemaPreview
+                  unitId={selectedId}
+                  canFetch={
+                    !!draft.kommoSubdomain &&
+                    !!draft.kommoAccessToken &&
+                    (draft.kommoAccessToken.includes('••••') || draft.kommoAccessToken.length > 0)
+                  }
+                />
+              ),
+            } as FormSection,
+          ]
+        : []),
+      {
+        id: 'meta',
+        label: 'Meta WhatsApp',
+        icon: MessageCircle,
+        subtitle:
+          'Acesso à Graph API pra puxar custo (pricing_analytics) e métricas de template. O canal de envio/recepção continua sendo o Kommo.',
+        body: (
+          <>
+            <Field
+              label="Phone Number ID"
+              value={draft.metaPhoneNumberId ?? ''}
+              onChange={(v) => setDraft({ ...draft, metaPhoneNumberId: v })}
+              hint="Opcional. Usado só pra check de validação mostrar nome/quality do número."
+            />
+            <Field
+              label="WABA ID"
+              value={draft.metaWabaId ?? ''}
+              onChange={(v) => setDraft({ ...draft, metaWabaId: v })}
+              hint="ID da WhatsApp Business Account. Necessário pra sincronizar custo (pricing_analytics + template_analytics)."
+            />
+            <Field
+              label="Access Token"
+              value={draft.metaAccessToken ?? ''}
+              onChange={(v) => setDraft({ ...draft, metaAccessToken: v })}
+              type="password"
+              hint="System User token com escopo whatsapp_business_management."
+            />
+            <Field
+              label="Orçamento mensal Meta (USD)"
+              value={String(draft.metaMonthlyBudgetUsd ?? 0)}
+              onChange={(v) => setDraft({ ...draft, metaMonthlyBudgetUsd: Number(v) || 0 })}
+              type="number"
+              hint="Limite mensal de gasto WhatsApp em USD. Dispara alertas 70/90/100% no painel."
+            />
+            <div className="mt-3 pt-3 border-t border-zinc-800/60 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] text-zinc-500 leading-relaxed">
+                  Valida WABA, Phone Number, escopo de envio e escopo de analytics direto na Graph API. Não salva — use
+                  depois de preencher pra confirmar que vai funcionar.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleValidateMeta()}
+                  disabled={validatingMeta || !selectedId}
+                  title={!selectedId ? 'Salve a unidade antes de validar' : 'Validar credenciais na Graph API'}
+                  className="shrink-0 text-xs px-3 py-1.5 rounded inline-flex items-center gap-1.5 bg-emerald-600/30 ring-1 ring-emerald-500/40 text-emerald-200 hover:bg-emerald-600/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {validatingMeta ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />}
+                  Validar credenciais
+                </button>
+              </div>
+              {metaChecks && (
+                <div
+                  className={clsx(
+                    'rounded-md ring-1 px-3 py-2 space-y-1.5',
+                    metaChecks.ok ? 'bg-emerald-500/5 ring-emerald-500/30' : 'bg-amber-500/5 ring-amber-500/30',
+                  )}
+                >
+                  {metaChecks.checks.map((c) => (
+                    <div key={c.name} className="flex items-start gap-2 text-[11px]">
+                      {c.ok ? (
+                        <CheckCircle2 size={13} className="text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <XCircle size={13} className="text-rose-400 shrink-0 mt-0.5" />
+                      )}
+                      <div className="flex-1">
+                        <div className={clsx('font-medium', c.ok ? 'text-emerald-200' : 'text-rose-200')}>
+                          {checkLabel(c.name)}
+                        </div>
+                        {c.detail && <div className="text-zinc-400 break-all">{c.detail}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        ),
+      },
+      {
+        id: 'prompt',
+        label: 'System Prompt',
+        icon: FileText,
+        subtitle: "⚠️ Não use mais — sobrescrito pela aba 'Configurar IA' + 'Fontes'. Deixe vazio.",
+        body: (
+          <>
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 mb-2 text-[11px] text-amber-100/90 leading-relaxed">
+              <strong>Recomendação:</strong> deixe este campo VAZIO. A personalidade da IA agora é gerada automaticamente
+              pela aba <strong>Configurar IA</strong> (tom, emojis, idioma, toggles) + os documentos da aba{' '}
+              <strong>Fontes</strong> (papel, produtos, negócio). Se preencher aqui, esse texto vira "instrução extra"
+              injetada depois das Fontes — útil só pra casos avançados.
+            </div>
+            <textarea
+              value={draft.systemPrompt ?? ''}
+              onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
+              rows={6}
+              placeholder="Deixe vazio — use 'Configurar IA' e 'Fontes' pra montar a persona."
+              className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-2 text-xs text-zinc-200 font-mono"
+            />
+            {(draft.systemPrompt?.trim().length ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, systemPrompt: '' })}
+                className="mt-2 text-[11px] text-zinc-400 hover:text-rose-300 underline"
+              >
+                Limpar este campo (recomendado)
+              </button>
+            )}
+          </>
+        ),
+      },
+    ];
+    const containerMax = formView === 'duas' || formView === 'cartoes' ? 'max-w-5xl' : 'max-w-3xl';
     return (
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-6 py-6">
+        <div className={clsx('mx-auto px-6 py-6', containerMax)}>
             {/* Header sticky com voltar + ações */}
             <div className="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur-sm flex items-center gap-3 pb-4 mb-2 border-b border-zinc-800/60">
               <button
@@ -328,288 +651,33 @@ export function UnitsPanel() {
               </div>
             </div>
 
-            <div className="pt-4 space-y-6">
-              <Section title="Identidade">
-                <Field
-                  label="Nome"
-                  value={draft.name}
-                  onChange={(v) => setDraft({ ...draft, name: v })}
-                />
-                <Field
-                  label="Slug (URL)"
-                  value={draft.slug}
-                  onChange={(v) => setDraft({ ...draft, slug: v })}
-                  hint="Aparece em /api/webhooks/{slug}/... — kebab-case"
-                />
-                <Toggle
-                  label="Ativa"
-                  value={!!draft.isActive}
-                  onChange={(v) => setDraft({ ...draft, isActive: v })}
-                />
-              </Section>
-
-              <Section title="OpenAI" subtitle="Cada unidade tem sua API key, Assistant e orçamento.">
-                <Field
-                  label="API Key (sk-proj-...)"
-                  value={draft.openaiApiKey ?? ''}
-                  onChange={(v) => setDraft({ ...draft, openaiApiKey: v })}
-                  type="password"
-                  hint="Chave de projeto, usada nas chamadas de inferência."
-                />
-                <Field
-                  label="Admin Key (sk-admin-...) — opcional"
-                  value={draft.openaiAdminKey ?? ''}
-                  onChange={(v) => setDraft({ ...draft, openaiAdminKey: v })}
-                  type="password"
-                  hint="Habilita gastos REAIS da OpenAI no painel de Integrações (custos, projetos, usage)."
-                />
-                <Field
-                  label="Modelo"
-                  value={draft.openaiModel ?? ''}
-                  onChange={(v) => setDraft({ ...draft, openaiModel: v })}
-                />
-                <Field
-                  label="Assistant ID (opcional)"
-                  value={draft.openaiAssistantId ?? ''}
-                  onChange={(v) => setDraft({ ...draft, openaiAssistantId: v })}
-                  hint="Se preenchido, usa Assistants API ao invés de Chat Completions."
-                />
-                <div className="grid grid-cols-3 gap-3">
-                  <NumberField
-                    label="Temperature"
-                    value={draft.openaiTemperature ?? 0}
-                    onChange={(v) => setDraft({ ...draft, openaiTemperature: v })}
-                    step={0.1}
-                  />
-                  <NumberField
-                    label="Max tokens"
-                    value={draft.openaiMaxTokens ?? 1024}
-                    onChange={(v) => setDraft({ ...draft, openaiMaxTokens: v })}
-                  />
-                  <NumberField
-                    label="Orçamento $USD/mês"
-                    value={Number(draft.openaiMonthlyBudgetUsd ?? 50)}
-                    onChange={(v) => setDraft({ ...draft, openaiMonthlyBudgetUsd: v })}
-                    step={1}
-                    allowZero
-                  />
-                </div>
-                <p className="text-[11px] text-zinc-500 mt-1">
-                  Amostragem avançada (opcional). Padrão Top P 1 e penalties 0 = sem efeito.
-                  Use Top P <em>ou</em> Temperature, não os dois.
-                </p>
-                <div className="grid grid-cols-3 gap-3">
-                  <NumberField
-                    label="Top P (0–1)"
-                    value={draft.openaiTopP ?? 1}
-                    onChange={(v) => setDraft({ ...draft, openaiTopP: v })}
-                    step={0.05}
-                    allowZero
-                  />
-                  <NumberField
-                    label="Freq. penalty (-2 a 2)"
-                    value={draft.openaiFrequencyPenalty ?? 0}
-                    onChange={(v) => setDraft({ ...draft, openaiFrequencyPenalty: v })}
-                    step={0.1}
-                    allowZero
-                  />
-                  <NumberField
-                    label="Presence penalty (-2 a 2)"
-                    value={draft.openaiPresencePenalty ?? 0}
-                    onChange={(v) => setDraft({ ...draft, openaiPresencePenalty: v })}
-                    step={0.1}
-                    allowZero
-                  />
-                </div>
-              </Section>
-
-              <Section title="Kommo" subtitle="Long-Lived Access Token + subdomínio.">
-                <Field
-                  label="Subdomínio"
-                  value={draft.kommoSubdomain ?? ''}
-                  onChange={(v) => setDraft({ ...draft, kommoSubdomain: v })}
-                  hint="Ex: minhaempresa (de minhaempresa.kommo.com)"
-                />
-                <Field
-                  label="Access Token"
-                  value={draft.kommoAccessToken ?? ''}
-                  onChange={(v) => setDraft({ ...draft, kommoAccessToken: v })}
-                  type="password"
-                />
-                <KommoExplorer
-                  unitId={selectedId}
-                  salesbotId={draft.kommoSalesbotId ?? null}
-                  replyFieldId={draft.kommoReplyFieldId ?? null}
-                  pausedFieldId={draft.kommoPausedFieldId ?? null}
-                  wonStatusIds={draft.kommoWonStatusIds ?? []}
-                  onSalesbotChange={(id) => setDraft({ ...draft, kommoSalesbotId: id })}
-                  onReplyFieldChange={(id) => setDraft({ ...draft, kommoReplyFieldId: id })}
-                  onPausedFieldChange={(id) => setDraft({ ...draft, kommoPausedFieldId: id })}
-                  onWonStatusIdsChange={(ids) => setDraft({ ...draft, kommoWonStatusIds: ids })}
-                  onSave={handleSave}
-                  saving={saving}
-                />
-                <label className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 mt-3 cursor-pointer hover:bg-amber-500/10 transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={!!draft.kommoBypassSalesbot}
-                    onChange={(e) => setDraft({ ...draft, kommoBypassSalesbot: e.target.checked })}
-                    className="mt-0.5 accent-amber-500"
-                  />
-                  <div className="flex-1">
-                    <div className="text-sm font-semibold text-amber-100">
-                      ⚠️ Modo "edição manual" — pular o disparo direto do Salesbot
-                    </div>
-                    <div className="text-[11px] text-amber-200/70 mt-1 leading-relaxed">
-                      Quando ligado, em vez de chamar <code className="text-[10px] px-1 rounded bg-zinc-900">POST /salesbot/run</code>,
-                      nós só fazemos <code className="text-[10px] px-1 rounded bg-zinc-900">PATCH</code>{' '}
-                      no campo "Resposta IA" — exatamente como acontece quando você edita o
-                      campo manualmente no Kommo. O Digital Pipeline do Kommo se encarrega de
-                      disparar o Salesbot uma única vez. <strong>Resolve casos onde o emoji
-                      não chega via API, mas chega na edição manual.</strong>{' '}
-                      Pré-requisito: o seu Digital Pipeline tem um gatilho "Quando campo
-                      Resposta IA mudar → rodar Salesbot".
-                    </div>
-                  </div>
-                </label>
-              </Section>
-
-              {!creating && selectedId && (
-                <Section
-                  title="Etapas e tags do Kommo"
-                  subtitle="Read-only — puxado direto da sua conta. Use os IDs/nomes ao instruir a IA."
-                >
-                  <KommoSchemaPreview
-                    unitId={selectedId}
-                    canFetch={
-                      !!draft.kommoSubdomain &&
-                      !!draft.kommoAccessToken &&
-                      // Se o token está mascarado (••••), significa que JÁ foi salvo no
-                      // backend. Aí dá pra buscar. Se for vazio ou texto novo não-salvo,
-                      // não dá — o endpoint usa o que está no DB.
-                      (draft.kommoAccessToken.includes('••••') || draft.kommoAccessToken.length > 0)
-                    }
-                  />
-                </Section>
-              )}
-
-              <Section
-                title="Meta WhatsApp Cloud"
-                subtitle="Acesso à Graph API pra puxar custo (pricing_analytics) e métricas de template. O canal de envio/recepção continua sendo o Kommo."
-              >
-                <Field
-                  label="Phone Number ID"
-                  value={draft.metaPhoneNumberId ?? ''}
-                  onChange={(v) => setDraft({ ...draft, metaPhoneNumberId: v })}
-                  hint="Opcional. Usado só pra check de validação mostrar nome/quality do número."
-                />
-                <Field
-                  label="WABA ID"
-                  value={draft.metaWabaId ?? ''}
-                  onChange={(v) => setDraft({ ...draft, metaWabaId: v })}
-                  hint="ID da WhatsApp Business Account. Necessário pra sincronizar custo (pricing_analytics + template_analytics)."
-                />
-                <Field
-                  label="Access Token"
-                  value={draft.metaAccessToken ?? ''}
-                  onChange={(v) => setDraft({ ...draft, metaAccessToken: v })}
-                  type="password"
-                  hint="System User token com escopo whatsapp_business_management."
-                />
-                <Field
-                  label="Orçamento mensal Meta (USD)"
-                  value={String(draft.metaMonthlyBudgetUsd ?? 0)}
-                  onChange={(v) =>
-                    setDraft({ ...draft, metaMonthlyBudgetUsd: Number(v) || 0 })
-                  }
-                  type="number"
-                  hint="Limite mensal de gasto WhatsApp em USD. Dispara alertas 70/90/100% no painel."
-                />
-
-                {/* Validar credenciais Meta — chama Graph API e mostra checks. */}
-                <div className="mt-3 pt-3 border-t border-zinc-800/60 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-[11px] text-zinc-500 leading-relaxed">
-                      Valida WABA, Phone Number, escopo de envio e escopo de analytics
-                      direto na Graph API. Não salva — use depois de preencher pra
-                      confirmar que vai funcionar.
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void handleValidateMeta()}
-                      disabled={validatingMeta || !selectedId}
-                      title={!selectedId ? 'Salve a unidade antes de validar' : 'Validar credenciais na Graph API'}
-                      className="shrink-0 text-xs px-3 py-1.5 rounded inline-flex items-center gap-1.5 bg-emerald-600/30 ring-1 ring-emerald-500/40 text-emerald-200 hover:bg-emerald-600/40 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      {validatingMeta ? (
-                        <Loader2 size={12} className="animate-spin" />
-                      ) : (
-                        <ShieldCheck size={12} />
-                      )}
-                      Validar credenciais
-                    </button>
-                  </div>
-                  {metaChecks && (
-                    <div
-                      className={clsx(
-                        'rounded-md ring-1 px-3 py-2 space-y-1.5',
-                        metaChecks.ok
-                          ? 'bg-emerald-500/5 ring-emerald-500/30'
-                          : 'bg-amber-500/5 ring-amber-500/30',
-                      )}
-                    >
-                      {metaChecks.checks.map((c) => (
-                        <div key={c.name} className="flex items-start gap-2 text-[11px]">
-                          {c.ok ? (
-                            <CheckCircle2 size={13} className="text-emerald-400 shrink-0 mt-0.5" />
-                          ) : (
-                            <XCircle size={13} className="text-rose-400 shrink-0 mt-0.5" />
-                          )}
-                          <div className="flex-1">
-                            <div className={clsx('font-medium', c.ok ? 'text-emerald-200' : 'text-rose-200')}>
-                              {checkLabel(c.name)}
-                            </div>
-                            {c.detail && (
-                              <div className="text-zinc-400 break-all">{c.detail}</div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </Section>
-
-              <Section
-                title="System Prompt (legado)"
-                subtitle="⚠️ Não use mais — sobrescrito pela aba 'Configurar IA' + 'Fontes'. Deixe vazio."
-              >
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 mb-2 text-[11px] text-amber-100/90 leading-relaxed">
-                  <strong>Recomendação:</strong> deixe este campo VAZIO. A personalidade
-                  da IA agora é gerada automaticamente pela aba <strong>Configurar IA</strong>{' '}
-                  (tom, emojis, idioma, toggles) + os documentos da aba <strong>Fontes</strong>{' '}
-                  (papel, produtos, negócio). Se preencher aqui, esse texto vira "instrução
-                  extra" injetada depois das Fontes — útil só pra casos avançados.
-                </div>
-                <textarea
-                  value={draft.systemPrompt ?? ''}
-                  onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
-                  rows={6}
-                  placeholder="Deixe vazio — use 'Configurar IA' e 'Fontes' pra montar a persona."
-                  className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-2 text-xs text-zinc-200 font-mono"
-                />
-                {(draft.systemPrompt?.trim().length ?? 0) > 0 && (
+            {/* Switcher de layout do formulário — 5 versões pra escolher */}
+            <div className="flex items-center justify-center pt-4 mb-5">
+              <div className="flex items-center gap-1 bg-zinc-900/40 ring-1 ring-white/10 rounded-full p-1 w-fit backdrop-blur overflow-x-auto">
+                {FORM_VIEWS.map((v) => (
                   <button
+                    key={v.id}
                     type="button"
-                    onClick={() => setDraft({ ...draft, systemPrompt: '' })}
-                    className="mt-2 text-[11px] text-zinc-400 hover:text-rose-300 underline"
+                    onClick={() => changeFormView(v.id)}
+                    className={clsx(
+                      'text-xs px-3 py-1.5 rounded-full font-medium transition whitespace-nowrap',
+                      formView === v.id ? 'bg-brand-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-100',
+                    )}
                   >
-                    Limpar este campo (recomendado)
+                    {v.label}
                   </button>
-                )}
-              </Section>
-
+                ))}
+              </div>
             </div>
+
+            <FormSections
+              view={formView}
+              sections={formSections}
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+              openSections={openSections}
+              setOpenSections={setOpenSections}
+            />
         </div>
       </div>
     );
@@ -1248,15 +1316,142 @@ function UnitsList({ units, isSuper, canEdit, onOpen, onClone, onDelete, onKeySa
 }
 
 // ---------------------------------------------------------------------------
+// As 5 versões de LAYOUT do formulário. FormSections recebe as mesmas seções
+// e só muda o arranjo conforme o switcher (Único, 2 colunas, Abas, Acordeão,
+// Cartões). Persistência/handlers ficam no UnitsPanel (closure nas `body`).
+// ---------------------------------------------------------------------------
+interface FormSection {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  subtitle?: string;
+  body: React.ReactNode;
+}
+
+function FormSections({
+  view,
+  sections,
+  activeTab,
+  setActiveTab,
+  openSections,
+  setOpenSections,
+}: {
+  view: FormView;
+  sections: FormSection[];
+  activeTab: number;
+  setActiveTab: (i: number) => void;
+  openSections: Record<string, boolean>;
+  setOpenSections: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+}) {
+  // V3 · Abas — uma seção por vez.
+  if (view === 'abas') {
+    const idx = Math.min(activeTab, sections.length - 1);
+    const active = sections[idx];
+    return (
+      <div>
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-zinc-800 mb-5">
+          {sections.map((s, i) => {
+            const Icon = s.icon;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => setActiveTab(i)}
+                className={clsx(
+                  'inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 -mb-px whitespace-nowrap transition',
+                  i === idx ? 'border-brand-500 text-brand-200' : 'border-transparent text-zinc-400 hover:text-zinc-100',
+                )}
+              >
+                <Icon size={13} />
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+        {active && (
+          <Section title={active.label} subtitle={active.subtitle} icon={active.icon}>
+            {active.body}
+          </Section>
+        )}
+      </div>
+    );
+  }
+
+  // V4 · Acordeão — seções colapsáveis.
+  if (view === 'acordeao') {
+    return (
+      <div className="space-y-2">
+        {sections.map((s, i) => {
+          const Icon = s.icon;
+          const open = openSections[s.id] ?? i === 0;
+          return (
+            <div key={s.id} className="rounded-lg border border-zinc-800 bg-zinc-900/30 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setOpenSections((prev) => ({ ...prev, [s.id]: !(prev[s.id] ?? i === 0) }))}
+                className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-zinc-900/50 transition"
+              >
+                <Icon size={15} className="text-brand-300 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-zinc-100">{s.label}</div>
+                  {s.subtitle && !open && <div className="text-[11px] text-zinc-500 truncate">{s.subtitle}</div>}
+                </div>
+                <ChevronDown size={16} className={clsx('text-zinc-500 transition-transform shrink-0', open && 'rotate-180')} />
+              </button>
+              {open && (
+                <div className="px-4 pb-4 pt-1 space-y-3">
+                  {s.subtitle && <p className="text-[11px] text-zinc-500 -mt-1 mb-2">{s.subtitle}</p>}
+                  {s.body}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // V2 · 2 colunas (masonry) | V5 · Cartões (grid) | V1 · Único (pilha).
+  const layoutClass =
+    view === 'duas'
+      ? 'columns-1 lg:columns-2 gap-5 [&>*]:mb-5 [&>*]:break-inside-avoid'
+      : view === 'cartoes'
+        ? 'grid grid-cols-1 md:grid-cols-2 gap-4 items-start'
+        : 'space-y-6';
+  return (
+    <div className={layoutClass}>
+      {sections.map((s) => (
+        <Section key={s.id} title={s.label} subtitle={s.subtitle} icon={s.icon}>
+          {s.body}
+        </Section>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Pequenos helpers de UI
 // ---------------------------------------------------------------------------
 
-function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+function Section({
+  title,
+  subtitle,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  icon?: LucideIcon;
+  children: React.ReactNode;
+}) {
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-4">
-      <div className="mb-3">
-        <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
-        {subtitle && <p className="text-[11px] text-zinc-500 mt-0.5">{subtitle}</p>}
+      <div className="mb-3 flex items-start gap-2">
+        {Icon && <Icon size={15} className="text-brand-300 shrink-0 mt-0.5" />}
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
+          {subtitle && <p className="text-[11px] text-zinc-500 mt-0.5">{subtitle}</p>}
+        </div>
       </div>
       <div className="space-y-3">{children}</div>
     </div>
