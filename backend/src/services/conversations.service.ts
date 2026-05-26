@@ -71,6 +71,30 @@ export async function addMessage(p: AddMessageParams): Promise<Message> {
   return message;
 }
 
+/**
+ * Anti-loop de reenvio: true se a ÚLTIMA mensagem do assistente nesta conversa
+ * tiver conteúdo idêntico (trimmed) ao `content`, dentro de `windowMs`.
+ *
+ * Existe pra cortar o reenvio em loop do Salesbot: o Digital Pipeline do Kommo
+ * relê o campo "Resposta IA" e dispara o Salesbot de novo, fazendo a IA repetir
+ * a mesma última frase ("Ótimo! Fico à disposição…") várias vezes. Se a fala é
+ * idêntica à anterior recente, o caller cancela o envio.
+ */
+export async function isDuplicateAssistantReply(
+  conversationId: string,
+  content: string,
+  windowMs = 15 * 60 * 1000,
+): Promise<boolean> {
+  const last = await prisma.message.findFirst({
+    where: { conversationId, role: 'assistant' },
+    orderBy: { createdAt: 'desc' },
+    select: { content: true, createdAt: true },
+  });
+  if (!last) return false;
+  if (last.content.trim() !== content.trim()) return false;
+  return Date.now() - last.createdAt.getTime() <= windowMs;
+}
+
 export async function listConversations(unitId: string | null, limit = 50) {
   return prisma.conversation.findMany({
     where: unitId ? { unitId } : undefined,

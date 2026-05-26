@@ -22,7 +22,7 @@ import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder } from '../agent/trace-recorder.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
-import { addMessage, upsertConversation } from '../services/conversations.service.js';
+import { addMessage, isDuplicateAssistantReply, upsertConversation } from '../services/conversations.service.js';
 import { isLeadPaused } from '../services/kommo.service.js';
 
 // ---------------------------------------------------------------------------
@@ -175,6 +175,23 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       (result.decision ?? '').trim() ||
       'Recebi sua mensagem, tô só verificando com a equipe um instante 🙏';
     const totalLatency = Math.round(performance.now() - requestStart);
+
+    // ANTI-LOOP: se a IA já mandou exatamente essa frase como última resposta
+    // (Salesbot/Digital Pipeline re-disparando e a IA, em temperature 0,
+    // regenerando a mesma despedida), cancela o envio devolvendo reply vazio —
+    // o Salesbot trata vazio como "skip send". Não grava a duplicata.
+    if (await isDuplicateAssistantReply(conv.id, reply)) {
+      await recorder.step({
+        kind: 'COMPLETED',
+        title: 'Envio cancelado — mensagem idêntica à anterior (anti-loop)',
+        payload: { reply },
+        latencyMs: totalLatency,
+      });
+      await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__duplicate_skipped__' });
+      logger.info({ traceId: trace.id, leadId, unit: unit.slug }, 'salesbot: envio duplicado cancelado');
+      res.json({ ok: true, skipped: 'duplicate_reply', reply: '', traceId: trace.id, unit: unit.slug });
+      return;
+    }
 
     await recorder.step({
       kind: 'COMPLETED',
