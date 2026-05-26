@@ -103,12 +103,16 @@ export interface ChatOpenAIOverrides {
   presencePenalty?: number;
 }
 
-// Teto de tempo POR chamada à OpenAI. Acima disso, aborta. A mediana é ~1,5s e
-// ~95% das chamadas ficam abaixo de 5s — o teto corta só a cauda longa (respostas
-// de 30s+ da OpenAI) que inflava a latência média. Em timeout, faz 1 retry (que
-// normalmente responde rápido) pra não deixar o paciente sem resposta.
+// Teto de tempo POR chamada à OpenAI. Acima disso, aborta.
+// HISTÓRICO: o teto entrou em 5s (commit 5bcc7a5) achando que ~95% das chamadas
+// ficavam abaixo de 5s. Os dados de produção provaram o contrário — o p95 REAL é
+// ~7s. Resultado: o teto de 5s cortava no meio do tráfego normal, abortava chamadas
+// que iam dar certo e refazia do zero (retry), DOBRANDO a latência das mais pesadas
+// (p95 piorou de 6,9s → 8,4s) e gerando "Request timed out" onde o paciente ficava
+// sem resposta. Subido para 15s: acima do p95 real (~7s) e do cluster de 8-11s, então
+// só mata travamento genuíno (a cauda de 30s+ que motivou o teto original). 1 retry.
 // Ajustável por env: OPENAI_TIMEOUT_MS / OPENAI_MAX_RETRIES (0 = fail-fast, sem retry).
-const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS) || 5000;
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS) || 15000;
 const OPENAI_MAX_RETRIES = Number.isFinite(Number(process.env.OPENAI_MAX_RETRIES))
   ? Number(process.env.OPENAI_MAX_RETRIES)
   : 1;
