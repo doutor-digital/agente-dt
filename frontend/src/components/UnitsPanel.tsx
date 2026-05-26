@@ -182,7 +182,9 @@ export function UnitsPanel() {
   // Layout do formulário de edição (5 versões pra escolher). Persistido.
   const [formView, setFormView] = useState<FormView>(() => {
     try {
-      return (localStorage.getItem('unidade:formview') as FormView) || 'abas';
+      // Chave com sufixo :v2 pra invalidar preferências antigas — assim o novo
+      // padrão (Abas) realmente aparece pra quem já tinha escolhido outra versão.
+      return (localStorage.getItem('unidade:formview:v2') as FormView) || 'abas';
     } catch {
       return 'abas';
     }
@@ -190,7 +192,7 @@ export function UnitsPanel() {
   const changeFormView = (v: FormView) => {
     setFormView(v);
     try {
-      localStorage.setItem('unidade:formview', v);
+      localStorage.setItem('unidade:formview:v2', v);
     } catch {
       /* ignore */
     }
