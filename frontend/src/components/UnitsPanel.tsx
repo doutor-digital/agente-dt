@@ -12,26 +12,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
-  Bot,
+  BrainCircuit,
+  Cable,
   Check,
   CheckCircle2,
   ChevronDown,
   Copy,
-  FileText,
-  Fingerprint,
   KeyRound,
-  ListTree,
   Loader2,
-  MessageCircle,
+  MessagesSquare,
   MoreVertical,
   Pencil,
-  Plug,
   Plus,
   RotateCcw,
   Save,
+  ScrollText,
   Search,
   ShieldCheck,
+  Tags,
   Trash2,
+  UserRound,
   X,
   XCircle,
 } from 'lucide-react';
@@ -182,9 +182,9 @@ export function UnitsPanel() {
   // Layout do formulário de edição (5 versões pra escolher). Persistido.
   const [formView, setFormView] = useState<FormView>(() => {
     try {
-      return (localStorage.getItem('unidade:formview') as FormView) || 'unico';
+      return (localStorage.getItem('unidade:formview') as FormView) || 'abas';
     } catch {
-      return 'unico';
+      return 'abas';
     }
   });
   const changeFormView = (v: FormView) => {
@@ -325,7 +325,7 @@ export function UnitsPanel() {
       {
         id: 'identidade',
         label: 'Identidade',
-        icon: Fingerprint,
+        icon: UserRound,
         body: (
           <>
             <Field label="Nome" value={draft.name} onChange={(v) => setDraft({ ...draft, name: v })} />
@@ -342,7 +342,7 @@ export function UnitsPanel() {
       {
         id: 'openai',
         label: 'OpenAI & Chave',
-        icon: Bot,
+        icon: BrainCircuit,
         subtitle: 'Cada unidade tem sua API key, Assistant e orçamento.',
         body: (
           <>
@@ -420,7 +420,7 @@ export function UnitsPanel() {
       {
         id: 'kommo',
         label: 'Kommo',
-        icon: Plug,
+        icon: Cable,
         subtitle: 'Long-Lived Access Token + subdomínio.',
         body: (
           <>
@@ -478,7 +478,7 @@ export function UnitsPanel() {
             {
               id: 'schema',
               label: 'Etapas & tags',
-              icon: ListTree,
+              icon: Tags,
               subtitle: 'Read-only — puxado direto da sua conta. Use os IDs/nomes ao instruir a IA.',
               body: (
                 <KommoSchemaPreview
@@ -496,7 +496,7 @@ export function UnitsPanel() {
       {
         id: 'meta',
         label: 'Meta WhatsApp',
-        icon: MessageCircle,
+        icon: MessagesSquare,
         subtitle:
           'Acesso à Graph API pra puxar custo (pricing_analytics) e métricas de template. O canal de envio/recepção continua sendo o Kommo.',
         body: (
@@ -575,7 +575,7 @@ export function UnitsPanel() {
       {
         id: 'prompt',
         label: 'System Prompt',
-        icon: FileText,
+        icon: ScrollText,
         subtitle: "⚠️ Não use mais — sobrescrito pela aba 'Configurar IA' + 'Fontes'. Deixe vazio.",
         body: (
           <>
@@ -1348,30 +1348,59 @@ function FormSections({
     const idx = Math.min(activeTab, sections.length - 1);
     const active = sections[idx];
     return (
-      <div>
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-zinc-800 mb-5">
+      <div className="unidade-tabs">
+        {/* Animações "lottie-like" escopadas só nesta página (prefixo .utab*). */}
+        <style>{`
+          .utab svg { transition: transform .25s ease, filter .25s ease, color .25s ease; }
+          .utab:hover svg { transform: scale(1.18) rotate(-4deg); filter: drop-shadow(0 0 6px rgba(124,77,255,.55)); }
+          .utab-active svg {
+            color: #a78bfa;
+            filter: drop-shadow(0 0 8px rgba(124,77,255,.75));
+            stroke-dasharray: 64;
+            animation: utabDraw .6s cubic-bezier(.65,0,.35,1) forwards;
+          }
+          @keyframes utabDraw {
+            0%   { stroke-dashoffset: 64; opacity: .3; transform: rotate(-15deg) scale(.85); }
+            55%  { opacity: 1; }
+            100% { stroke-dashoffset: 0; opacity: 1; transform: rotate(0) scale(1); }
+          }
+          .utab-underline {
+            position: absolute; left: 12%; right: 12%; bottom: -1px; height: 2px; border-radius: 2px;
+            background: linear-gradient(90deg, transparent, #7c4dff, transparent);
+            box-shadow: 0 0 8px 1px rgba(124,77,255,.7);
+            transform-origin: center; animation: utabUnder .35s ease forwards;
+          }
+          @keyframes utabUnder { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
+          .utab-content { animation: utabIn .32s cubic-bezier(.22,1,.36,1); }
+          @keyframes utabIn { from { opacity: 0; transform: translateY(10px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        `}</style>
+        <div className="relative flex items-center gap-1 overflow-x-auto border-b border-zinc-800 mb-5">
           {sections.map((s, i) => {
             const Icon = s.icon;
+            const isActive = i === idx;
             return (
               <button
                 key={s.id}
                 type="button"
                 onClick={() => setActiveTab(i)}
                 className={clsx(
-                  'inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 -mb-px whitespace-nowrap transition',
-                  i === idx ? 'border-brand-500 text-brand-200' : 'border-transparent text-zinc-400 hover:text-zinc-100',
+                  'utab relative inline-flex items-center gap-2 px-3.5 py-2.5 text-xs font-medium whitespace-nowrap transition-colors -mb-px',
+                  isActive ? 'utab-active text-brand-200' : 'text-zinc-400 hover:text-zinc-100',
                 )}
               >
-                <Icon size={13} />
+                <Icon size={16} />
                 {s.label}
+                {isActive && <span className="utab-underline" />}
               </button>
             );
           })}
         </div>
         {active && (
-          <Section title={active.label} subtitle={active.subtitle} icon={active.icon}>
-            {active.body}
-          </Section>
+          <div key={active.id} className="utab-content">
+            <Section title={active.label} subtitle={active.subtitle} icon={active.icon}>
+              {active.body}
+            </Section>
+          </div>
         )}
       </div>
     );
