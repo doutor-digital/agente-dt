@@ -103,6 +103,16 @@ export interface ChatOpenAIOverrides {
   presencePenalty?: number;
 }
 
+// Teto de tempo POR chamada à OpenAI. Acima disso, aborta. A mediana é ~1,5s e
+// ~95% das chamadas ficam abaixo de 5s — o teto corta só a cauda longa (respostas
+// de 30s+ da OpenAI) que inflava a latência média. Em timeout, faz 1 retry (que
+// normalmente responde rápido) pra não deixar o paciente sem resposta.
+// Ajustável por env: OPENAI_TIMEOUT_MS / OPENAI_MAX_RETRIES (0 = fail-fast, sem retry).
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS) || 5000;
+const OPENAI_MAX_RETRIES = Number.isFinite(Number(process.env.OPENAI_MAX_RETRIES))
+  ? Number(process.env.OPENAI_MAX_RETRIES)
+  : 1;
+
 export function createChatOpenAI(
   unit: Pick<
     Unit,
@@ -124,6 +134,9 @@ export function createChatOpenAI(
     topP: overrides.topP ?? unit?.openaiTopP ?? 1,
     frequencyPenalty: overrides.frequencyPenalty ?? unit?.openaiFrequencyPenalty ?? 0,
     presencePenalty: overrides.presencePenalty ?? unit?.openaiPresencePenalty ?? 0,
+    // Teto de 5s por chamada — corta a cauda longa que inflava a latência média.
+    timeout: OPENAI_TIMEOUT_MS,
+    maxRetries: OPENAI_MAX_RETRIES,
   });
 }
 
