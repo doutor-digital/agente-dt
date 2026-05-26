@@ -63,16 +63,10 @@ function hasOwnKey(unit: Unit): boolean {
   return !!unit._hasSecrets?.openaiApiKey;
 }
 
-// 5 layouts do FORMULÁRIO de edição da unidade (switcher no topo do editor).
-// Persistido no navegador. As seções são as mesmas; muda só o arranjo.
+// Layouts possíveis do formulário de edição. Hoje o editor é fixo em 'abas'
+// (sem switcher); os outros valores seguem suportados por FormSections caso a
+// gente queira reativar a troca de layout no futuro.
 type FormView = 'unico' | 'duas' | 'abas' | 'acordeao' | 'cartoes';
-const FORM_VIEWS: Array<{ id: FormView; label: string }> = [
-  { id: 'unico', label: 'V1 · Único' },
-  { id: 'duas', label: 'V2 · 2 colunas' },
-  { id: 'abas', label: 'V3 · Abas' },
-  { id: 'acordeao', label: 'V4 · Acordeão' },
-  { id: 'cartoes', label: 'V5 · Cartões' },
-];
 const META_CHECK_LABELS: Record<string, string> = {
   accessToken: 'Access Token',
   wabaId: 'WABA ID',
@@ -179,24 +173,7 @@ export function UnitsPanel() {
     { ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> } | null
   >(null);
 
-  // Layout do formulário de edição (5 versões pra escolher). Persistido.
-  const [formView, setFormView] = useState<FormView>(() => {
-    try {
-      // Chave com sufixo :v2 pra invalidar preferências antigas — assim o novo
-      // padrão (Abas) realmente aparece pra quem já tinha escolhido outra versão.
-      return (localStorage.getItem('unidade:formview:v2') as FormView) || 'abas';
-    } catch {
-      return 'abas';
-    }
-  });
-  const changeFormView = (v: FormView) => {
-    setFormView(v);
-    try {
-      localStorage.setItem('unidade:formview:v2', v);
-    } catch {
-      /* ignore */
-    }
-  };
+  // Formulário de edição fixo no layout de Abas (sem switcher — decisão do produto).
   const [activeTab, setActiveTab] = useState(0);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
 
@@ -607,10 +584,9 @@ export function UnitsPanel() {
         ),
       },
     ];
-    const containerMax = formView === 'duas' || formView === 'cartoes' ? 'max-w-5xl' : 'max-w-3xl';
     return (
       <div className="flex-1 overflow-y-auto">
-        <div className={clsx('mx-auto px-6 py-6', containerMax)}>
+        <div className="max-w-3xl mx-auto px-6 py-6">
             {/* Header sticky com voltar + ações */}
             <div className="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur-sm flex items-center gap-3 pb-4 mb-2 border-b border-zinc-800/60">
               <button
@@ -653,33 +629,17 @@ export function UnitsPanel() {
               </div>
             </div>
 
-            {/* Switcher de layout do formulário — 5 versões pra escolher */}
-            <div className="flex items-center justify-center pt-4 mb-5">
-              <div className="flex items-center gap-1 bg-zinc-900/40 ring-1 ring-white/10 rounded-full p-1 w-fit backdrop-blur overflow-x-auto">
-                {FORM_VIEWS.map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    onClick={() => changeFormView(v.id)}
-                    className={clsx(
-                      'text-xs px-3 py-1.5 rounded-full font-medium transition whitespace-nowrap',
-                      formView === v.id ? 'bg-brand-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-100',
-                    )}
-                  >
-                    {v.label}
-                  </button>
-                ))}
-              </div>
+            {/* Layout fixo em Abas (sem switcher) — decisão do produto. */}
+            <div className="pt-4">
+              <FormSections
+                view="abas"
+                sections={formSections}
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                openSections={openSections}
+                setOpenSections={setOpenSections}
+              />
             </div>
-
-            <FormSections
-              view={formView}
-              sections={formSections}
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-              openSections={openSections}
-              setOpenSections={setOpenSections}
-            />
         </div>
       </div>
     );
