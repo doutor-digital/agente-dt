@@ -357,29 +357,11 @@ ${steps}
 
 function renderCollectName(unit: Unit): string {
   if (!unit.collectNameEnabled) return '';
-  return xmlBlock('coleta_nome', `(PROATIVA)
-- Esta é uma instrução de ALTA PRIORIDADE. Se você ainda NÃO souber o nome
-  do paciente, sua PRIMEIRA mensagem nesta conversa OBRIGATORIAMENTE deve
-  abrir com saudação calorosa + emoji + pergunta pelo nome. Não responda
-  a qualquer outra coisa antes de ter feito essa pergunta.
-- A saudação deve ser breve, simpática, com 1-2 emojis bonitos. Use 1 destes
-  estilos como referência (varie palavras pra não soar robótico):
-    • "Oiê! 😊✨ Que bom ter você por aqui! Pra começar, como posso te chamar?"
-    • "Olá! 🌷 Seja muito bem-vindo(a) à clínica! Antes de continuar, qual seu nome?"
-    • "Oi! 👋💜 Tudo bem? Pra te atender melhor, posso saber seu nome? 🙏"
-- Assim que o paciente disser o nome, chame IMEDIATAMENTE
-  atualizar_titulo_lead({ nome: "<Nome>" }) pra mudar o título do card no Kommo.
-  Passe SOMENTE o nome — o sistema acrescenta automaticamente a data da
-  conversa, gravando como "<Nome> DD/MM/YYYY" (ex: "João 20/05/2026").
-  A chamada é silenciosa — NUNCA fale "atualizei seu cadastro" ou similar.
-- REGRA RÍGIDA: você NÃO PODE responder com texto que use o nome do paciente
-  ANTES de ter chamado atualizar_titulo_lead nesse mesmo turno. Sequência
-  obrigatória: (1) chamar a tool com o nome, (2) aguardar resposta da tool,
-  (3) só então redigir a resposta usando o nome. Se você responder texto
-  primeiro, o título do card NÃO atualiza e o registro fica corrompido.
-- Depois de obtido, USE o nome do paciente nas respostas seguintes (com
-  moderação — 1 vez a cada 2-3 mensagens, pra não parecer forçado).
-- Se o paciente insistir em não dizer o nome, deixe pra lá após 2 tentativas.`);
+  return xmlBlock('coleta_nome', `(PROATIVA — ALTA PRIORIDADE)
+- Se ainda NÃO souber o nome, sua PRIMEIRA mensagem deve abrir com saudação calorosa + 1-2 emojis + pergunta pelo nome. Ex: "Oiê! 😊 Que bom te receber! Como posso te chamar?" (varie as palavras, não soe robótico).
+- Assim que o paciente disser o nome, chame IMEDIATAMENTE atualizar_titulo_lead({ nome: "<Nome>" }) — passe SÓ o nome (o sistema adiciona a data, vira "<Nome> DD/MM/YYYY"). Silencioso, não comente.
+- Sequência obrigatória: (1) chamar a tool com o nome, (2) só então responder usando o nome. NUNCA use o nome em texto antes de chamar a tool no mesmo turno.
+- Depois, use o nome com moderação (1 a cada 2-3 mensagens). Se recusar 2x, deixe pra lá.`);
 }
 
 function renderCollectSource(unit: Unit): string {
@@ -647,12 +629,8 @@ function renderActions(actions: UnitAction[]): string {
     if (notes) lineParts.push(`   Detalhes: ${notes}`);
     return lineParts.join('\n');
   });
-  return xmlBlock('acoes', `- Use estas regras como guia pra detectar situações e disparar TODAS as ações
-  correspondentes via as tools disponíveis. Cada regra pode ter múltiplas
-  ações que devem ser executadas juntas no mesmo turno.
-- As ações são silenciosas — não anuncie ao cliente que aplicou uma tag,
-  mudou de etapa, transferiu ou gerou resumo interno.
-  Exceção: transferência com permissão exige perguntar primeiro.
+  return xmlBlock('acoes', `- Detecte a situação e dispare TODAS as ações da regra (via tools), juntas no mesmo turno.
+- Ações silenciosas — não anuncie (tag, etapa, transferência, resumo). Exceção: transferência COM permissão pergunta antes.
 
 ${lines.join('\n\n')}`);
 }
@@ -678,11 +656,8 @@ function renderGlobalActions(actions: GlobalAction[]): string {
     return lineParts.join('\n');
   });
   return xmlBlock('regras_globais', `(prioridade máxima)
-- Estas regras valem pra TODAS as unidades. Têm PRIORIDADE sobre as ações
-  específicas da unit — quando uma regra global bate, ela é não-negociável.
-- Aplica TODAS as ações da regra quando a condição bater, em silêncio.
-- Em conflito com regras da unit: a global ganha (são mais conservadoras —
-  segurança e compliance).
+- Valem pra TODAS as unidades e ganham das regras da unit (não-negociáveis).
+- Dispare todas as ações da regra, em silêncio.
 
 ${lines.join('\n\n')}`);
 }
