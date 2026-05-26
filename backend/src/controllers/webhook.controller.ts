@@ -24,7 +24,7 @@ import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
-import { addMessage, isDuplicateAssistantReply, upsertConversation } from '../services/conversations.service.js';
+import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
@@ -633,16 +633,6 @@ async function processAgent(args: {
         leadId: String(leadId),
         channel: 'kommo_chat',
       });
-      // ANTI-LOOP: se a última fala da IA for idêntica a esta (Kommo re-disparando
-      // o envio em loop), NÃO reenvia. Corta a repetição na origem.
-      if (await isDuplicateAssistantReply(conv.id, reply)) {
-        await recorder.step({
-          kind: 'KOMMO_ACTION',
-          title: 'Envio cancelado — resposta idêntica à anterior (anti-loop)',
-          payload: { reply },
-        });
-        logger.info({ traceId, leadId }, 'webhook: envio duplicado cancelado');
-      } else {
       // Pausa "humanizada" antes de enviar a resposta. Configurável por Unit
       // pra evitar o feel "robô instantâneo". Cap em 30s pra não travar webhook.
       const delaySec = Math.max(0, Math.min(unit.personaResponseDelaySec ?? 0, 30));
@@ -684,7 +674,6 @@ async function processAgent(args: {
           latencyMs: Math.round(performance.now() - sendStart),
         });
         logger.error({ err: sendErr, traceId, leadId }, 'falha enviando resposta ao Kommo');
-      }
       }
     }
 
