@@ -12,15 +12,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  Check,
   CheckCircle2,
   Copy,
+  KeyRound,
   Loader2,
   MoreVertical,
+  Pencil,
   Plus,
+  RotateCcw,
   Save,
   Search,
   ShieldCheck,
   Trash2,
+  X,
   XCircle,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -33,6 +38,22 @@ import { KommoExplorer } from './KommoExplorer';
 import { KommoSchemaPreview } from './KommoSchemaPreview';
 
 const DEFAULT_UNIT_AVATAR = 'https://fiqon.com.br/wp-content/uploads/2025/04/kommo.png';
+
+// 5 versões de visualização da lista de unidades (switcher no topo), todas com
+// a CHAVE OPENAI por unidade em destaque. Persistida no navegador.
+type UnitsView = 'avatares' | 'cartoes' | 'tabela' | 'chaves' | 'lista';
+const UNIT_VIEWS: Array<{ id: UnitsView; label: string }> = [
+  { id: 'avatares', label: 'V1 · Avatares' },
+  { id: 'cartoes', label: 'V2 · Cartões' },
+  { id: 'tabela', label: 'V3 · Tabela' },
+  { id: 'chaves', label: 'V4 · Foco na chave' },
+  { id: 'lista', label: 'V5 · Lista' },
+];
+
+/** Unidade usa chave própria? (vem do `_hasSecrets` mascarado pelo back). */
+function hasOwnKey(unit: Unit): boolean {
+  return !!unit._hasSecrets?.openaiApiKey;
+}
 
 const META_CHECK_LABELS: Record<string, string> = {
   accessToken: 'Access Token',
@@ -118,6 +139,21 @@ export function UnitsPanel() {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
+  const [view, setView] = useState<UnitsView>(() => {
+    try {
+      return (localStorage.getItem('unidades:view') as UnitsView) || 'avatares';
+    } catch {
+      return 'avatares';
+    }
+  });
+  const changeView = (v: UnitsView) => {
+    setView(v);
+    try {
+      localStorage.setItem('unidades:view', v);
+    } catch {
+      /* ignore */
+    }
+  };
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [cloningId, setCloningId] = useState<string | null>(null);
   const [validatingMeta, setValidatingMeta] = useState(false);
@@ -614,6 +650,27 @@ export function UnitsPanel() {
           </div>
         </div>
 
+        {/* Switcher de visualização — 5 versões, todas com a chave OpenAI por unidade em destaque */}
+        {!ctxLoading && filteredUnits.length > 0 && (
+          <div className="flex items-center justify-center mb-8">
+            <div className="flex items-center gap-1 bg-zinc-900/40 ring-1 ring-white/10 rounded-full p-1 w-fit backdrop-blur overflow-x-auto">
+              {UNIT_VIEWS.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => changeView(v.id)}
+                  className={clsx(
+                    'text-xs px-3 py-1.5 rounded-full font-medium transition whitespace-nowrap',
+                    view === v.id ? 'bg-brand-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-100',
+                  )}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {ctxLoading && (
           <div className="flex justify-center py-12">
             <Loader2 className="animate-spin text-zinc-500" size={18} />
@@ -626,29 +683,27 @@ export function UnitsPanel() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-x-4 gap-y-8">
-          {filteredUnits.map((u) => (
-            <UnitCard
-              key={u.id}
-              unit={u}
-              onOpen={() => {
-                setCreating(false);
-                setSelectedId(u.id);
-              }}
-              onClone={() => void handleClone(u)}
-              onDelete={() => void handleDelete(u)}
-              menuOpen={openMenuId === u.id}
-              onMenuToggle={(e) => {
-                e.stopPropagation();
-                setOpenMenuId(openMenuId === u.id ? null : u.id);
-              }}
-              cloning={cloningId === u.id}
-              canEdit={isSuper || user?.unitId === u.id}
-              canDelete={isSuper}
-              canClone={isSuper}
-            />
-          ))}
-        </div>
+        {!ctxLoading && filteredUnits.length > 0 && (
+          <UnitsListView
+            view={view}
+            units={filteredUnits}
+            isSuper={isSuper}
+            cloningId={cloningId}
+            canEdit={(u) => isSuper || user?.unitId === u.id}
+            onOpen={(u) => {
+              setCreating(false);
+              setSelectedId(u.id);
+            }}
+            onClone={(u) => void handleClone(u)}
+            onDelete={(u) => void handleDelete(u)}
+            onKeySaved={() => void refresh()}
+            menuOpenId={openMenuId}
+            onMenuToggle={(u, e) => {
+              e.stopPropagation();
+              setOpenMenuId(openMenuId === u.id ? null : u.id);
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -662,6 +717,7 @@ function UnitCard({
   onOpen,
   onClone,
   onDelete,
+  onKeySaved,
   menuOpen,
   onMenuToggle,
   cloning,
@@ -673,6 +729,7 @@ function UnitCard({
   onOpen: () => void;
   onClone: () => void;
   onDelete: () => void;
+  onKeySaved: () => void;
   menuOpen: boolean;
   onMenuToggle: (e: React.MouseEvent) => void;
   cloning: boolean;
@@ -719,6 +776,10 @@ function UnitCard({
         </div>
         <div className="text-[10px] text-zinc-500 mt-0.5 truncate max-w-full">/{unit.slug}</div>
       </button>
+
+      <div className="mt-1.5 flex justify-center">
+        <InlineKeyEditor unit={unit} onSaved={onKeySaved} />
+      </div>
 
       {showMenu && (
         <>
@@ -770,6 +831,418 @@ function UnitCard({
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CHAVE OPENAI por unidade — editor inline reaproveitado por todas as views.
+// Mostra o status (própria vs compartilhada) num chip clicável que expande um
+// popover pra definir/trocar a chave, ou voltar pra compartilhada (envia null).
+// Vazio no back = cai na chave única do servidor (resolveOpenAIApiKey).
+// ---------------------------------------------------------------------------
+function InlineKeyEditor({
+  unit,
+  onSaved,
+  align = 'left',
+}: {
+  unit: Unit;
+  onSaved: () => void;
+  align?: 'left' | 'right';
+}) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const own = hasOwnKey(unit);
+
+  async function save(next: string | null) {
+    setSaving(true);
+    try {
+      await api.updateUnit(unit.id, { openaiApiKey: next });
+      toast.success(next ? 'Chave própria salva ✓' : 'Voltou pra chave compartilhada');
+      setValue('');
+      setOpen(false);
+      onSaved();
+    } catch {
+      toast.error('Erro ao salvar a chave');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="relative inline-block">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className={clsx(
+          'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 transition',
+          own
+            ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30 hover:bg-emerald-500/20'
+            : 'bg-zinc-700/30 text-zinc-400 ring-zinc-600/40 hover:text-zinc-200',
+        )}
+        title={
+          own
+            ? 'Chave própria configurada — clique pra trocar'
+            : 'Usando a chave compartilhada — clique pra definir uma própria'
+        }
+      >
+        <KeyRound size={10} />
+        {own ? 'Chave própria' : 'Compartilhada'}
+        <Pencil size={9} className="opacity-60" />
+      </button>
+
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={clsx(
+            'absolute z-20 mt-1 w-64 rounded-lg bg-zinc-900 ring-1 ring-zinc-700 shadow-xl p-3 space-y-2',
+            align === 'right' ? 'right-0' : 'left-0',
+          )}
+        >
+          <div className="text-[11px] text-zinc-400 leading-snug">
+            Chave OpenAI desta unidade. Vazio = usa a chave compartilhada do servidor.
+          </div>
+          <input
+            type="password"
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={own ? 'Nova chave sk-proj-…' : 'sk-proj-…'}
+            className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-brand-500/40"
+          />
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={saving || value.trim().length < 8}
+              onClick={() => void save(value.trim())}
+              className="flex-1 text-[11px] px-2 py-1.5 rounded-md bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/30 inline-flex items-center justify-center gap-1 hover:bg-brand-500/30 disabled:opacity-40"
+            >
+              {saving ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+              Salvar
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setValue('');
+              }}
+              className="text-[11px] px-2 py-1.5 rounded-md text-zinc-400 ring-1 ring-zinc-700 hover:text-zinc-200"
+              title="Cancelar"
+            >
+              <X size={11} />
+            </button>
+          </div>
+          {own && (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void save(null)}
+              className="w-full text-[10px] text-zinc-500 hover:text-amber-300 inline-flex items-center justify-center gap-1 pt-0.5"
+            >
+              <RotateCcw size={10} />
+              Voltar pra chave compartilhada
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IconBtn({
+  children,
+  title,
+  onClick,
+  danger,
+  disabled,
+}: {
+  children: React.ReactNode;
+  title: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={clsx(
+        'p-1.5 rounded-md ring-1 transition disabled:opacity-30',
+        danger
+          ? 'text-rose-300 ring-rose-500/20 hover:bg-rose-500/10'
+          : 'text-zinc-400 ring-zinc-700/60 hover:text-zinc-100 hover:bg-zinc-800/60',
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// As 5 VISUALIZAÇÕES. UnitsListView despacha pra variante escolhida no switcher.
+// V1 Avatares = UnitCard (acima, com chip de chave). V2-V5 abaixo.
+// ---------------------------------------------------------------------------
+interface ViewProps {
+  units: Unit[];
+  isSuper: boolean;
+  cloningId: string | null;
+  canEdit: (u: Unit) => boolean;
+  onOpen: (u: Unit) => void;
+  onClone: (u: Unit) => void;
+  onDelete: (u: Unit) => void;
+  onKeySaved: () => void;
+}
+
+function UnitsListView(
+  props: ViewProps & {
+    view: UnitsView;
+    menuOpenId: string | null;
+    onMenuToggle: (u: Unit, e: React.MouseEvent) => void;
+  },
+) {
+  const { view, menuOpenId, onMenuToggle, ...rest } = props;
+  if (view === 'cartoes') return <UnitsCards {...rest} />;
+  if (view === 'tabela') return <UnitsTable {...rest} />;
+  if (view === 'chaves') return <UnitsKeyFocus {...rest} />;
+  if (view === 'lista') return <UnitsList {...rest} />;
+  // V1 · Avatares — cards circulares com dropdown (preserva o comportamento antigo).
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-x-4 gap-y-8">
+      {rest.units.map((u) => (
+        <UnitCard
+          key={u.id}
+          unit={u}
+          onOpen={() => rest.onOpen(u)}
+          onClone={() => rest.onClone(u)}
+          onDelete={() => rest.onDelete(u)}
+          onKeySaved={rest.onKeySaved}
+          menuOpen={menuOpenId === u.id}
+          onMenuToggle={(e) => onMenuToggle(u, e)}
+          cloning={rest.cloningId === u.id}
+          canEdit={rest.canEdit(u)}
+          canDelete={rest.isSuper}
+          canClone={rest.isSuper}
+        />
+      ))}
+    </div>
+  );
+}
+
+// V2 — Cartões retangulares com avatar, modelo e chip de chave.
+function UnitsCards({ units, isSuper, cloningId, canEdit, onOpen, onClone, onDelete, onKeySaved }: ViewProps) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {units.map((u) => (
+        <div
+          key={u.id}
+          className={clsx(
+            'group relative rounded-xl bg-zinc-900/40 ring-1 ring-zinc-800 p-4 transition hover:ring-brand-500/40 hover:bg-zinc-900/70',
+            !u.isActive && 'opacity-60',
+          )}
+        >
+          <button
+            type="button"
+            disabled={!canEdit(u)}
+            onClick={() => onOpen(u)}
+            className="w-full text-left disabled:cursor-not-allowed"
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <img
+                src={DEFAULT_UNIT_AVATAR}
+                alt=""
+                className="w-10 h-10 rounded-lg bg-zinc-950/60 object-contain p-1.5 ring-1 ring-zinc-800 shrink-0"
+                referrerPolicy="no-referrer"
+              />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-zinc-100 truncate">{u.name}</div>
+                <div className="text-[10px] text-zinc-500 truncate">/{u.slug}</div>
+              </div>
+              {cloningId === u.id && <Loader2 className="animate-spin text-zinc-400 ml-auto shrink-0" size={14} />}
+            </div>
+            <div className="flex items-center gap-2 text-[10px] text-zinc-500 mb-3">
+              <span className="rounded bg-zinc-800/60 px-1.5 py-0.5">{u.openaiModel}</span>
+              {!u.isActive && <span className="text-amber-300">inativa</span>}
+            </div>
+          </button>
+          <div className="flex items-center justify-between gap-2">
+            <InlineKeyEditor unit={u} onSaved={onKeySaved} />
+            {isSuper && (
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                <IconBtn title="Clonar" onClick={() => onClone(u)}>
+                  <Copy size={13} />
+                </IconBtn>
+                <IconBtn title="Apagar" danger onClick={() => onDelete(u)}>
+                  <Trash2 size={13} />
+                </IconBtn>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// V3 — Tabela enterprise.
+function UnitsTable({ units, isSuper, canEdit, onOpen, onClone, onDelete, onKeySaved }: ViewProps) {
+  return (
+    <div className="rounded-xl ring-1 ring-zinc-800">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wider text-zinc-500 bg-zinc-900/60">
+            <th className="px-4 py-2.5 font-medium">Unidade</th>
+            <th className="px-4 py-2.5 font-medium">Modelo</th>
+            <th className="px-4 py-2.5 font-medium">Chave OpenAI</th>
+            <th className="px-4 py-2.5 font-medium">Status</th>
+            <th className="px-4 py-2.5 font-medium text-right">Ações</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-800/60">
+          {units.map((u) => (
+            <tr key={u.id} className={clsx('hover:bg-zinc-900/40 transition', !u.isActive && 'opacity-60')}>
+              <td className="px-4 py-2.5">
+                <button
+                  type="button"
+                  disabled={!canEdit(u)}
+                  onClick={() => onOpen(u)}
+                  className="text-left disabled:cursor-not-allowed"
+                >
+                  <div className="text-zinc-100 font-medium hover:text-brand-200">{u.name}</div>
+                  <div className="text-[10px] text-zinc-500">/{u.slug}</div>
+                </button>
+              </td>
+              <td className="px-4 py-2.5 text-zinc-400 text-xs whitespace-nowrap">{u.openaiModel}</td>
+              <td className="px-4 py-2.5">
+                <InlineKeyEditor unit={u} onSaved={onKeySaved} />
+              </td>
+              <td className="px-4 py-2.5">
+                <span className={clsx('text-[10px]', u.isActive ? 'text-emerald-300' : 'text-amber-300')}>
+                  {u.isActive ? '● ativa' : '○ inativa'}
+                </span>
+              </td>
+              <td className="px-4 py-2.5">
+                <div className="flex items-center justify-end gap-1">
+                  <IconBtn title="Editar" disabled={!canEdit(u)} onClick={() => onOpen(u)}>
+                    <Pencil size={13} />
+                  </IconBtn>
+                  {isSuper && (
+                    <IconBtn title="Clonar" onClick={() => onClone(u)}>
+                      <Copy size={13} />
+                    </IconBtn>
+                  )}
+                  {isSuper && (
+                    <IconBtn title="Apagar" danger onClick={() => onDelete(u)}>
+                      <Trash2 size={13} />
+                    </IconBtn>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// V4 — Foco na chave: ícone grande de chave + status por unidade.
+function UnitsKeyFocus({ units, isSuper, canEdit, onOpen, onClone, onDelete, onKeySaved }: ViewProps) {
+  const ownCount = units.filter(hasOwnKey).length;
+  return (
+    <div className="space-y-3">
+      <div className="text-center text-[11px] text-zinc-500">
+        {ownCount} de {units.length} unidades com chave própria · as demais usam a chave compartilhada do servidor
+      </div>
+      {units.map((u) => {
+        const own = hasOwnKey(u);
+        return (
+          <div
+            key={u.id}
+            className={clsx(
+              'flex items-center gap-4 rounded-xl bg-zinc-900/40 ring-1 p-4 transition',
+              own ? 'ring-emerald-500/20' : 'ring-zinc-800',
+              !u.isActive && 'opacity-60',
+            )}
+          >
+            <div
+              className={clsx(
+                'shrink-0 w-11 h-11 rounded-full grid place-items-center ring-1',
+                own ? 'bg-emerald-500/10 ring-emerald-500/30 text-emerald-300' : 'bg-zinc-800/60 ring-zinc-700 text-zinc-500',
+              )}
+            >
+              <KeyRound size={18} />
+            </div>
+            <button
+              type="button"
+              disabled={!canEdit(u)}
+              onClick={() => onOpen(u)}
+              className="text-left min-w-0 flex-1 disabled:cursor-not-allowed"
+            >
+              <div className="text-sm font-semibold text-zinc-100 truncate">{u.name}</div>
+              <div className="text-[11px] text-zinc-500 truncate">
+                {own ? 'Chave própria configurada' : 'Sem chave própria — usando a compartilhada'} · {u.openaiModel}
+              </div>
+            </button>
+            <InlineKeyEditor unit={u} onSaved={onKeySaved} align="right" />
+            {isSuper && (
+              <div className="flex items-center gap-1 shrink-0">
+                <IconBtn title="Clonar" onClick={() => onClone(u)}>
+                  <Copy size={13} />
+                </IconBtn>
+                <IconBtn title="Apagar" danger onClick={() => onDelete(u)}>
+                  <Trash2 size={13} />
+                </IconBtn>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// V5 — Lista compacta.
+function UnitsList({ units, isSuper, canEdit, onOpen, onClone, onDelete, onKeySaved }: ViewProps) {
+  return (
+    <div className="rounded-xl ring-1 ring-zinc-800 divide-y divide-zinc-800/60">
+      {units.map((u) => (
+        <div
+          key={u.id}
+          className={clsx('flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-900/40 transition', !u.isActive && 'opacity-60')}
+        >
+          <button
+            type="button"
+            disabled={!canEdit(u)}
+            onClick={() => onOpen(u)}
+            className="text-left min-w-0 flex-1 flex items-center gap-2 disabled:cursor-not-allowed"
+          >
+            <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', u.isActive ? 'bg-emerald-400' : 'bg-zinc-600')} />
+            <span className="text-sm text-zinc-100 truncate hover:text-brand-200">{u.name}</span>
+            <span className="text-[10px] text-zinc-600 truncate">/{u.slug}</span>
+          </button>
+          <InlineKeyEditor unit={u} onSaved={onKeySaved} align="right" />
+          {isSuper && (
+            <div className="flex items-center gap-1 shrink-0">
+              <IconBtn title="Clonar" onClick={() => onClone(u)}>
+                <Copy size={13} />
+              </IconBtn>
+              <IconBtn title="Apagar" danger onClick={() => onDelete(u)}>
+                <Trash2 size={13} />
+              </IconBtn>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
