@@ -300,6 +300,9 @@ export function UnitsPanel() {
   // Antes era grid + drawer overlay; o user pediu pra ocupar a tela toda.
   if (editing) {
     const showSchema = !creating && !!selectedId;
+    // Estado da IA pra mostrar o selo "IA configurada" (lê o estado SALVO da unit).
+    const currentUnit = units.find((x) => x.id === selectedId) ?? null;
+    const ownKey = !!currentUnit?._hasSecrets?.openaiApiKey;
     const formSections: FormSection[] = [
       {
         id: 'identidade',
@@ -325,6 +328,37 @@ export function UnitsPanel() {
         subtitle: 'Cada unidade tem sua API key, Assistant e orçamento.',
         body: (
           <>
+            {!creating ? (
+              <div
+                className={clsx(
+                  'flex items-center gap-3 rounded-lg p-3 ring-1',
+                  ownKey ? 'bg-emerald-500/10 ring-emerald-500/30' : 'bg-sky-500/10 ring-sky-500/30',
+                )}
+              >
+                <div
+                  className={clsx(
+                    'w-9 h-9 rounded-full grid place-items-center shrink-0',
+                    ownKey ? 'bg-emerald-500/20 text-emerald-300' : 'bg-sky-500/20 text-sky-300',
+                  )}
+                >
+                  <CheckCircle2 size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className={clsx('text-sm font-semibold', ownKey ? 'text-emerald-200' : 'text-sky-200')}>
+                    IA configurada
+                  </div>
+                  <div className="text-[11px] text-zinc-400">
+                    {ownKey ? 'Chave própria desta unidade' : 'Usando a chave compartilhada do servidor'}
+                    {' · '}modelo <span className="text-zinc-300">{draft.openaiModel || '—'}</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 rounded-lg p-3 ring-1 bg-zinc-800/40 ring-zinc-700 text-[11px] text-zinc-400">
+                <KeyRound size={14} className="text-zinc-500 shrink-0" />
+                Preencha e clique em <strong className="text-zinc-200">Salvar</strong> pra ativar a IA desta unidade.
+              </div>
+            )}
             <Field
               label="API Key (sk-proj-...)"
               value={draft.openaiApiKey ?? ''}
