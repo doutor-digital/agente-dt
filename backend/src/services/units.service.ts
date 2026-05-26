@@ -116,6 +116,9 @@ export interface UnitInput {
   openaiAssistantId?: string | null;
   openaiTemperature?: number;
   openaiMaxTokens?: number;
+  openaiTopP?: number;
+  openaiFrequencyPenalty?: number;
+  openaiPresencePenalty?: number;
   openaiMonthlyBudgetUsd?: number;
 
   metaPhoneNumberId?: string | null;
@@ -201,6 +204,9 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       openaiAssistantId: input.openaiAssistantId ?? null,
       openaiTemperature: input.openaiTemperature ?? 0,
       openaiMaxTokens: input.openaiMaxTokens ?? 1024,
+      openaiTopP: input.openaiTopP ?? 1,
+      openaiFrequencyPenalty: input.openaiFrequencyPenalty ?? 0,
+      openaiPresencePenalty: input.openaiPresencePenalty ?? 0,
       openaiMonthlyBudgetUsd: input.openaiMonthlyBudgetUsd ?? 50,
       metaPhoneNumberId: input.metaPhoneNumberId ?? null,
       metaAccessToken: input.metaAccessToken ?? null,
@@ -263,6 +269,9 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.openaiAssistantId !== undefined && { openaiAssistantId: input.openaiAssistantId }),
       ...(input.openaiTemperature !== undefined && { openaiTemperature: input.openaiTemperature }),
       ...(input.openaiMaxTokens !== undefined && { openaiMaxTokens: input.openaiMaxTokens }),
+      ...(input.openaiTopP !== undefined && { openaiTopP: input.openaiTopP }),
+      ...(input.openaiFrequencyPenalty !== undefined && { openaiFrequencyPenalty: input.openaiFrequencyPenalty }),
+      ...(input.openaiPresencePenalty !== undefined && { openaiPresencePenalty: input.openaiPresencePenalty }),
       ...(input.openaiMonthlyBudgetUsd !== undefined && { openaiMonthlyBudgetUsd: input.openaiMonthlyBudgetUsd }),
       ...(input.metaPhoneNumberId !== undefined && { metaPhoneNumberId: input.metaPhoneNumberId }),
       ...(input.metaAccessToken !== undefined && { metaAccessToken: input.metaAccessToken }),

@@ -98,10 +98,22 @@ export interface ChatOpenAIOverrides {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  topP?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
 }
 
 export function createChatOpenAI(
-  unit: Pick<Unit, 'openaiApiKey' | 'openaiModel' | 'openaiTemperature' | 'openaiMaxTokens'> | null,
+  unit: Pick<
+    Unit,
+    | 'openaiApiKey'
+    | 'openaiModel'
+    | 'openaiTemperature'
+    | 'openaiMaxTokens'
+    | 'openaiTopP'
+    | 'openaiFrequencyPenalty'
+    | 'openaiPresencePenalty'
+  > | null,
   overrides: ChatOpenAIOverrides = {},
 ): ChatOpenAI<ChatOpenAICallOptions> {
   return new ChatOpenAI({
@@ -109,6 +121,9 @@ export function createChatOpenAI(
     model: overrides.model ?? unit?.openaiModel ?? env.OPENAI_MODEL,
     temperature: overrides.temperature ?? unit?.openaiTemperature ?? 0,
     maxTokens: overrides.maxTokens ?? unit?.openaiMaxTokens ?? 1024,
+    topP: overrides.topP ?? unit?.openaiTopP ?? 1,
+    frequencyPenalty: overrides.frequencyPenalty ?? unit?.openaiFrequencyPenalty ?? 0,
+    presencePenalty: overrides.presencePenalty ?? unit?.openaiPresencePenalty ?? 0,
   });
 }
 

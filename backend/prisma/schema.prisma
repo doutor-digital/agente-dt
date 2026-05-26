@@ -95,6 +95,14 @@ model Unit {
   openaiAssistantId String? @map("openai_assistant_id")
   openaiTemperature Float   @default(0) @map("openai_temperature")
   openaiMaxTokens   Int     @default(1024) @map("openai_max_tokens")
+  // Amostragem avançada (alternativas/complementos à temperature).
+  // topP=1 + penalties=0 reproduz o comportamento padrão (sem efeito).
+  // topP: corta a "cauda" de tokens improváveis (0-1). Mexa nele OU na
+  // temperature, não nos dois. frequencyPenalty/presencePenalty (-2 a 2):
+  // reduzem repetição de palavras / incentivam variar de assunto.
+  openaiTopP             Float @default(1) @map("openai_top_p")
+  openaiFrequencyPenalty Float @default(0) @map("openai_frequency_penalty")
+  openaiPresencePenalty  Float @default(0) @map("openai_presence_penalty")
   // Limite mensal em USD pra disparar alertas no painel.
   openaiMonthlyBudgetUsd Decimal @default(50) @map("openai_monthly_budget_usd") @db.Decimal(10, 2)
 

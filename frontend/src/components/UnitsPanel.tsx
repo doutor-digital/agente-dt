@@ -63,6 +63,9 @@ const blankInput: UnitInput = {
   openaiAssistantId: '',
   openaiTemperature: 0,
   openaiMaxTokens: 1024,
+  openaiTopP: 1,
+  openaiFrequencyPenalty: 0,
+  openaiPresencePenalty: 0,
   openaiMonthlyBudgetUsd: 50,
   metaPhoneNumberId: '',
   metaAccessToken: '',
@@ -91,6 +94,9 @@ function unitToInput(u: Unit): UnitInput {
     openaiAssistantId: u.openaiAssistantId ?? '',
     openaiTemperature: u.openaiTemperature,
     openaiMaxTokens: u.openaiMaxTokens,
+    openaiTopP: u.openaiTopP ?? 1,
+    openaiFrequencyPenalty: u.openaiFrequencyPenalty ?? 0,
+    openaiPresencePenalty: u.openaiPresencePenalty ?? 0,
     openaiMonthlyBudgetUsd: Number(u.openaiMonthlyBudgetUsd ?? 50),
     metaPhoneNumberId: u.metaPhoneNumberId ?? '',
     metaAccessToken: u.metaAccessToken ?? '',
@@ -349,6 +355,33 @@ export function UnitsPanel() {
                     value={Number(draft.openaiMonthlyBudgetUsd ?? 50)}
                     onChange={(v) => setDraft({ ...draft, openaiMonthlyBudgetUsd: v })}
                     step={1}
+                    allowZero
+                  />
+                </div>
+                <p className="text-[11px] text-zinc-500 mt-1">
+                  Amostragem avançada (opcional). Padrão Top P 1 e penalties 0 = sem efeito.
+                  Use Top P <em>ou</em> Temperature, não os dois.
+                </p>
+                <div className="grid grid-cols-3 gap-3">
+                  <NumberField
+                    label="Top P (0–1)"
+                    value={draft.openaiTopP ?? 1}
+                    onChange={(v) => setDraft({ ...draft, openaiTopP: v })}
+                    step={0.05}
+                    allowZero
+                  />
+                  <NumberField
+                    label="Freq. penalty (-2 a 2)"
+                    value={draft.openaiFrequencyPenalty ?? 0}
+                    onChange={(v) => setDraft({ ...draft, openaiFrequencyPenalty: v })}
+                    step={0.1}
+                    allowZero
+                  />
+                  <NumberField
+                    label="Presence penalty (-2 a 2)"
+                    value={draft.openaiPresencePenalty ?? 0}
+                    onChange={(v) => setDraft({ ...draft, openaiPresencePenalty: v })}
+                    step={0.1}
                     allowZero
                   />
                 </div>

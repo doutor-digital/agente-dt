@@ -230,6 +230,9 @@ export interface Unit {
   openaiAssistantId: string | null;
   openaiTemperature: number;
   openaiMaxTokens: number;
+  openaiTopP: number;
+  openaiFrequencyPenalty: number;
+  openaiPresencePenalty: number;
   openaiMonthlyBudgetUsd: number | string;
   metaPhoneNumberId: string | null;
   metaAccessToken: string | null;
