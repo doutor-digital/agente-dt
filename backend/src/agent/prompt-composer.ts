@@ -98,7 +98,16 @@ function renderToneInstruction(tone: string | null): string {
 
 // ---------------------------------------------------------------------------
 // Renders parciais de cada feature.
+//
+// ESTILO: cada bloco é envolto em uma tag XML (`<persona>…</persona>`) em vez de
+// cabeçalho markdown. A tag fecha o bloco explicitamente, o que dá ao LLM um
+// delimitador inequívoco de onde cada seção começa E termina (markdown `#` só
+// marca o início). `xmlBlock` centraliza esse wrapping.
 // ---------------------------------------------------------------------------
+
+function xmlBlock(tag: string, content: string): string {
+  return `<${tag}>\n${content.trim()}\n</${tag}>`;
+}
 
 // ---------------------------------------------------------------------------
 // PRESETS POR CATEGORIA / SEGMENTO — dão à IA um nome e um enquadramento
@@ -137,7 +146,7 @@ const CATEGORY_PRESETS: Record<string, CategoryPreset> = {
 };
 
 function renderPersona(unit: Unit): string {
-  const lines: string[] = ['# PERSONA'];
+  const lines: string[] = [];
   const company = unit.personaCompanyName?.trim();
   const preset = unit.category ? CATEGORY_PRESETS[unit.category.trim()] : undefined;
   if (preset) {
@@ -160,7 +169,7 @@ function renderPersona(unit: Unit): string {
   if (greeting) {
     lines.push(`Saudação preferida (use quando for o primeiro contato): "${greeting}"`);
   }
-  return lines.join('\n');
+  return xmlBlock('persona', lines.join('\n'));
 }
 
 function renderEmojiStyle(unit: Unit): string {
@@ -214,7 +223,7 @@ function renderSources(unit: Unit): string {
   // conhecimento pré-treinado e pode inventar coisas que não estão lá.
   sections.push(
     [
-      '# 📚 FONTES OFICIAIS DA CLÍNICA — PRIORIDADE MÁXIMA',
+      'FONTES OFICIAIS DA CLÍNICA — PRIORIDADE MÁXIMA.',
       'O que está nesta seção é a verdade absoluta sobre o negócio. RESPONDA',
       'sempre baseado APENAS nestas informações. Se a pergunta do paciente',
       'não tem resposta aqui (e nem na base de conhecimento abaixo), diga',
@@ -224,20 +233,19 @@ function renderSources(unit: Unit): string {
     ].join('\n'),
   );
   if (papel) {
-    sections.push(`## 📋 Papel e Fluxo da IA\n${papel}`);
+    sections.push(xmlBlock('papel', papel));
   }
   if (produtos) {
-    sections.push(`## 💼 Produtos e Serviços\n${produtos}`);
+    sections.push(xmlBlock('produtos', produtos));
   }
   if (negocio) {
-    sections.push(`## 🏢 Visão Geral do Negócio\n${negocio}`);
+    sections.push(xmlBlock('negocio', negocio));
   }
-  return sections.join('\n\n');
+  return xmlBlock('fontes', sections.join('\n\n'));
 }
 
 function renderRulesGlobal(): string {
-  return `# REGRAS GERAIS DE TOM
-- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,
+  return xmlBlock('regras_gerais', `- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,
   procedimentos, prazos, políticas, médicos, especialidades, endereços).
   Use APENAS o que está nas Fontes Oficiais acima OU na Base de Conhecimento.
   Se a informação não está em nenhum dos dois, responda: "Vou confirmar isso
@@ -251,35 +259,32 @@ function renderRulesGlobal(): string {
   "Quer que eu te explique mais?", "Pode me contar um pouco mais sobre isso?",
   "Te ajudo a marcar um horário agora?". Sem isso, a conversa morre.
 - A pergunta final precisa ter sentido — NUNCA termine com um "?" isolado ou uma
-  frase truncada. Releia antes de mandar.`;
+  frase truncada. Releia antes de mandar.`);
 }
 
 function renderQualification(unit: Unit): string {
   if (!unit.qualificationEnabled) return '';
-  return `# AUTO-QUALIFICAÇÃO
-- Aplique tag "${unit.qualificationHotTag}" via aplicar_tag quando houver sinal claro de compra:
+  return xmlBlock('qualificacao', `- Aplique tag "${unit.qualificationHotTag}" via aplicar_tag quando houver sinal claro de compra:
   cliente pediu orçamento/preço, demonstrou urgência, mencionou decisão, ou disse "quero comprar".
 - Aplique tag "${unit.qualificationColdTag}" quando o cliente pedir pra não ser contatado, dizer
   que não tem interesse, ou usar tom ofensivo.
-- A tag é silenciosa. NÃO mencione na resposta ao cliente.`;
+- A tag é silenciosa. NÃO mencione na resposta ao cliente.`);
 }
 
 function renderHandoff(unit: Unit): string {
   if (!unit.handoffEnabled) return '';
   const kws = (unit.handoffKeywords ?? []).filter(Boolean);
   if (kws.length === 0) {
-    return `# HANDOFF HUMANO
-- Quando o cliente pedir explicitamente um humano ("atendente", "falar com pessoa",
+    return xmlBlock('handoff', `- Quando o cliente pedir explicitamente um humano ("atendente", "falar com pessoa",
   "humano"), chame pausar_ia e responda: "Claro! Vou chamar alguém da equipe pra te
-  atender. Um instante 🙏". Não tente continuar a conversa.`;
+  atender. Um instante 🙏". Não tente continuar a conversa.`);
   }
   const list = kws.map((k) => `"${k}"`).join(', ');
-  return `# HANDOFF HUMANO
-- Se o cliente usar QUALQUER uma destas palavras/frases (mesmo aproximadas), chame
+  return xmlBlock('handoff', `- Se o cliente usar QUALQUER uma destas palavras/frases (mesmo aproximadas), chame
   pausar_ia imediatamente:
   ${list}
 - Após pausar, responda apenas: "Claro! Vou chamar alguém da equipe pra te atender. Um instante 🙏".
-  Não continue a conversa depois disso.`;
+  Não continue a conversa depois disso.`);
 }
 
 function renderPipelineIntents(unit: Unit): string {
@@ -297,47 +302,43 @@ function renderPipelineIntents(unit: Unit): string {
     const label = labelMap[intent] ?? intent;
     return `  - Cliente ${label} → chame mover_etapa({ statusId: ${statusId} })`;
   });
-  return `# PIPELINE POR INTENÇÃO
-- Mova o lead automaticamente conforme detectar essas intenções:\n${lines.join('\n')}
-- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.`;
+  return xmlBlock('pipeline_intents', `- Mova o lead automaticamente conforme detectar essas intenções:\n${lines.join('\n')}
+- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.`);
 }
 
 function renderContactCollection(unit: Unit): string {
   if (!unit.contactCollectionEnabled) return '';
   const n = unit.contactCollectionAfterTurns;
-  return `# COLETA PROATIVA DE CONTATO
-- Após ${n} turnos de conversa, se você AINDA não tiver email ou telefone do cliente,
+  return xmlBlock('coleta_contato', `- Após ${n} turnos de conversa, se você AINDA não tiver email ou telefone do cliente,
   peça de forma natural numa das suas respostas. Exemplos:
   "Pra te enviar mais detalhes, qual seu melhor email?"
   "Tem um WhatsApp/telefone melhor pra eu te enviar a proposta?"
-- Não pergunte antes do turno ${n}. Não pergunte mais de uma vez.`;
+- Não pergunte antes do turno ${n}. Não pergunte mais de uma vez.`);
 }
 
 function renderWelcomeCoupon(unit: Unit): string {
   if (!unit.welcomeCouponEnabled) return '';
   const msg = unit.welcomeCouponMessage?.trim();
-  return `# CUPOM DE BOAS-VINDAS
-- Se for o PRIMEIRO contato do cliente (apenas 1 mensagem na conversa até agora),
+  return xmlBlock('cupom_boas_vindas', `- Se for o PRIMEIRO contato do cliente (apenas 1 mensagem na conversa até agora),
   mencione o cupom de boas-vindas: ${msg ? `"${msg}"` : '<mensagem do cupom não configurada — pule>'}
-- Não mencione o cupom mais de uma vez na mesma conversa.`;
+- Não mencione o cupom mais de uma vez na mesma conversa.`);
 }
 
 function renderBusinessHours(unit: Unit): string {
   if (!unit.businessHoursEnabled) return '';
   const days = unit.businessHoursDays.join(', ');
-  return `# HORÁRIO COMERCIAL
-- Atendimento ativo: ${days}, das ${unit.businessHoursStart}h às ${unit.businessHoursEnd}h
+  return xmlBlock('horario_comercial', `- Atendimento ativo: ${days}, das ${unit.businessHoursStart}h às ${unit.businessHoursEnd}h
   (${unit.businessHoursTimezone}).
 - Quando o cliente escrever fora do horário, esta IA NÃO responde (o sistema envia
   mensagem automática separada). Você não precisa se preocupar com isso — apenas
-  responda normalmente quando estiver no ar.`;
+  responda normalmente quando estiver no ar.`);
 }
 
 function renderTriage(unit: Unit): string {
   if (!unit.triageEnabled) return '';
   const steps = (unit.triageInstructions ?? '').trim();
   if (!steps) return '';
-  return `# TRIAGEM E AVANÇO DE ETAPA (ALTA PRIORIDADE)
+  return xmlBlock('triagem', `(ALTA PRIORIDADE)
 - Conduza a triagem ao longo da conversa, de forma natural — UMA pergunta de
   cada vez, sem soar interrogatório. A triagem está COMPLETA quando você tiver
   coletado os itens abaixo:
@@ -351,12 +352,12 @@ ${steps}
   IMEDIATAMENTE: dispare a ação de mover de etapa configurada (mover_etapa pra
   a etapa de qualificado) e avise o paciente que vai transferir pra equipe.
 - REGRA RÍGIDA: nunca deixe um lead com triagem completa parado na etapa
-  inicial. Mover de etapa após a triagem é OBRIGATÓRIO, não opcional.`;
+  inicial. Mover de etapa após a triagem é OBRIGATÓRIO, não opcional.`);
 }
 
 function renderCollectName(unit: Unit): string {
   if (!unit.collectNameEnabled) return '';
-  return `# COLETA DE NOME (PROATIVA)
+  return xmlBlock('coleta_nome', `(PROATIVA)
 - Esta é uma instrução de ALTA PRIORIDADE. Se você ainda NÃO souber o nome
   do paciente, sua PRIMEIRA mensagem nesta conversa OBRIGATORIAMENTE deve
   abrir com saudação calorosa + emoji + pergunta pelo nome. Não responda
@@ -378,7 +379,7 @@ function renderCollectName(unit: Unit): string {
   primeiro, o título do card NÃO atualiza e o registro fica corrompido.
 - Depois de obtido, USE o nome do paciente nas respostas seguintes (com
   moderação — 1 vez a cada 2-3 mensagens, pra não parecer forçado).
-- Se o paciente insistir em não dizer o nome, deixe pra lá após 2 tentativas.`;
+- Se o paciente insistir em não dizer o nome, deixe pra lá após 2 tentativas.`);
 }
 
 function renderCollectSource(unit: Unit): string {
@@ -388,7 +389,7 @@ function renderCollectSource(unit: Unit): string {
     opts.length > 0
       ? `Cite 2 ou 3 opções dessas no exemplo, de forma natural: ${opts.join(', ')}.`
       : 'Pergunte aberto, sem sugerir opções fixas.';
-  return `# COLETA DE ORIGEM (COMO CONHECEU)
+  return xmlBlock('coleta_origem', `(COMO CONHECEU)
 - Em algum momento dos PRIMEIROS 2-3 turnos da conversa (depois do nome se
   estiver coletando nome também), pergunte de forma leve e curiosa por onde o
   paciente conheceu a clínica. Sempre com 1-2 emojis. Exemplos:
@@ -399,16 +400,15 @@ function renderCollectSource(unit: Unit): string {
 - Faça UMA vez só na conversa. Se ele desconversar, deixa pra lá.
 - Quando ele responder, chame aplicar_tag("Origem: <fonte>"), exemplo:
   aplicar_tag("Origem: Instagram"). Use exatamente o prefixo "Origem: " pra
-  facilitar o filtro no Kommo. Tag silenciosa — NÃO mencione na resposta.`;
+  facilitar o filtro no Kommo. Tag silenciosa — NÃO mencione na resposta.`);
 }
 
 function renderFollowUp(unit: Unit): string {
   if (!unit.followUpEnabled) return '';
   const msg = unit.followUpMessage?.trim();
-  return `# FOLLOW-UP
-- Se a conversa terminar sem fechar (cliente ficou em dúvida, pediu pra pensar),
+  return xmlBlock('follow_up', `- Se a conversa terminar sem fechar (cliente ficou em dúvida, pediu pra pensar),
   ofereça um follow-up cordial. Exemplo de mensagem de fechamento:
-  ${msg ? `"${msg}"` : '"Sem pressão, fica à vontade. Te chamo daqui ${unit.followUpAfterHours}h pra ver se posso ajudar em algo, ok?"'}`;
+  ${msg ? `"${msg}"` : '"Sem pressão, fica à vontade. Te chamo daqui ${unit.followUpAfterHours}h pra ver se posso ajudar em algo, ok?"'}`);
 }
 
 function renderTemplates(templates: MessageTemplate[]): string {
@@ -417,21 +417,19 @@ function renderTemplates(templates: MessageTemplate[]): string {
     const kws = t.triggerKeywords.length ? `[gatilhos: ${t.triggerKeywords.join(', ')}]` : '[sem gatilho fixo]';
     return `${i + 1}. ${t.name} ${kws}\n   "${t.response.replace(/\n/g, ' ').slice(0, 280)}"`;
   });
-  return `# RESPOSTAS PRONTAS (templates)
-- Quando o cliente usar alguma das palavras-chave de gatilho abaixo, prefira a
+  return xmlBlock('respostas_prontas', `- Quando o cliente usar alguma das palavras-chave de gatilho abaixo, prefira a
   resposta pronta correspondente (pode adaptar levemente o tom, mas mantenha
   a informação igual). NÃO mencione que está usando template.
 
-${lines.join('\n\n')}`;
+${lines.join('\n\n')}`);
 }
 
 function renderFlaggedExamples(flagged: Array<{ content: string }>): string {
   if (flagged.length === 0) return '';
   const lines = flagged.slice(0, 10).map((m, i) => `${i + 1}. "${m.content.slice(0, 200)}"`);
-  return `# EXEMPLOS DE RESPOSTAS RUINS (NÃO REPITA!)
-- O operador marcou estas respostas como ruins. Não responda de forma parecida:
+  return xmlBlock('exemplos_ruins', `- O operador marcou estas respostas como ruins. Não responda de forma parecida:
 
-${lines.join('\n')}`;
+${lines.join('\n')}`);
 }
 
 function humanizeActionStep(step: { kind: string; params: Record<string, unknown> }): string {
@@ -649,15 +647,14 @@ function renderActions(actions: UnitAction[]): string {
     if (notes) lineParts.push(`   Detalhes: ${notes}`);
     return lineParts.join('\n');
   });
-  return `# AÇÕES CONFIGURADAS
-- Use estas regras como guia pra detectar situações e disparar TODAS as ações
+  return xmlBlock('acoes', `- Use estas regras como guia pra detectar situações e disparar TODAS as ações
   correspondentes via as tools disponíveis. Cada regra pode ter múltiplas
   ações que devem ser executadas juntas no mesmo turno.
 - As ações são silenciosas — não anuncie ao cliente que aplicou uma tag,
   mudou de etapa, transferiu ou gerou resumo interno.
   Exceção: transferência com permissão exige perguntar primeiro.
 
-${lines.join('\n\n')}`;
+${lines.join('\n\n')}`);
 }
 
 /**
@@ -680,14 +677,14 @@ function renderGlobalActions(actions: GlobalAction[]): string {
     if (notes) lineParts.push(`   Detalhes: ${notes}`);
     return lineParts.join('\n');
   });
-  return `# 🌐 REGRAS GLOBAIS DA PLATAFORMA (prioridade máxima)
+  return xmlBlock('regras_globais', `(prioridade máxima)
 - Estas regras valem pra TODAS as unidades. Têm PRIORIDADE sobre as ações
   específicas da unit — quando uma regra global bate, ela é não-negociável.
 - Aplica TODAS as ações da regra quando a condição bater, em silêncio.
 - Em conflito com regras da unit: a global ganha (são mais conservadoras —
   segurança e compliance).
 
-${lines.join('\n\n')}`;
+${lines.join('\n\n')}`);
 }
 
 function renderLeadFieldRules(rules: LeadFieldRule[]): string {
@@ -704,12 +701,11 @@ function renderLeadFieldRules(rules: LeadFieldRule[]): string {
     return `${i + 1}. ${r.toolName} → grava em "${r.kommoFieldName}" (${r.kommoFieldType})
    Quando usar: ${r.instruction.trim()}${hintLine}${enumsLine}${examplesLine}`;
   });
-  return `# CAPTURA DE DADOS
-- As tools abaixo gravam informações estruturadas no card do paciente no Kommo.
+  return xmlBlock('captura_dados', `- As tools abaixo gravam informações estruturadas no card do paciente no Kommo.
 - Chame em SILÊNCIO assim que detectar a informação — NÃO anuncie ("anotei seu...").
 - Cada tool é idempotente; chamar duas vezes com o mesmo valor não duplica.
 
-${lines.join('\n\n')}`;
+${lines.join('\n\n')}`);
 }
 
 /**
@@ -726,7 +722,7 @@ function renderLeadMemory(mem: LeadMemory | null): string {
   const factsEntries = Object.entries(facts).filter(([, v]) => v !== null && v !== undefined && v !== '');
   if (!summary && factsEntries.length === 0) return '';
 
-  const lines: string[] = ['# 🧠 MEMÓRIA DO PACIENTE (longo prazo)'];
+  const lines: string[] = [];
   lines.push('- Dados consolidados de conversas anteriores. Use pra personalizar SEM citar explicitamente que tem registro.');
   lines.push('- Se houver conflito com a mensagem atual, dê preferência ao que o paciente está dizendo AGORA.');
   if (summary) {
@@ -740,7 +736,7 @@ function renderLeadMemory(mem: LeadMemory | null): string {
       lines.push(`  - ${k}: ${String(v)}`);
     }
   }
-  return lines.join('\n');
+  return xmlBlock('memoria_paciente', lines.join('\n'));
 }
 
 function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>): string {
@@ -749,11 +745,11 @@ function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>)
     (e, i) =>
       `${i + 1}. P: "${e.question.trim().slice(0, 200)}"\n   R: "${e.answer.trim().slice(0, 400)}"`,
   );
-  return `# CONHECIMENTO RELEVANTE (use estas informações reais)
+  return xmlBlock('conhecimento', `(use estas informações reais)
 - Estas são respostas oficiais da empresa, pré-cadastradas. PREFIRA usar
   estas informações em vez de inventar. Adapte o tom mas mantenha os fatos.
 
-${lines.join('\n\n')}`;
+${lines.join('\n\n')}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -799,7 +795,7 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
       : 'Use 2-3 emojis acolhedores (😊 🌷 ✨ 🙏 👋).';
 
   const lines: string[] = [
-    '# 🚨 TURNO 1 — PRIMEIRA MENSAGEM DA CONVERSA (PRIORIDADE MÁXIMA)',
+    'PRIMEIRA MENSAGEM DA CONVERSA — PRIORIDADE MÁXIMA.',
     'Esta é a sua PRIMEIRA resposta ao paciente. NUNCA responda só "Olá!" ou',
     '"Oi!" sozinho. Respostas curtas/secas estão TERMINANTEMENTE PROIBIDAS aqui.',
     '',
@@ -830,7 +826,7 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
   lines.push('Exemplo de resposta RUIM (NUNCA faça assim):');
   lines.push('  ❌ "Olá!"');
   lines.push('  ❌ "Oi! Como posso ajudar?"');
-  return lines.join('\n');
+  return xmlBlock('primeiro_turno', lines.join('\n'));
 }
 
 export function composeSystemPrompt(input: ComposeInput): string {
@@ -874,7 +870,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   // Texto avançado opcional — adiciona, não sobrescreve.
   if (customBase) {
-    blocks.push(`# 🔧 INSTRUÇÕES EXTRAS (avançado)\n${customBase}`);
+    blocks.push(xmlBlock('instrucoes_extras', customBase));
   }
 
   blocks.push(renderRulesGlobal());
@@ -895,8 +891,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   ].filter((b) => b.trim().length > 0);
 
   if (featureBlocks.length > 0) {
-    blocks.push('# COMPORTAMENTOS ATIVADOS');
-    blocks.push(...featureBlocks);
+    blocks.push(xmlBlock('comportamentos_ativados', featureBlocks.join('\n\n')));
   }
 
   // MEMÓRIA DO PACIENTE — vem cedo (antes das Ações) pra IA ancorar resposta
@@ -909,13 +904,12 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // "leadId" aparece nos textos de orientação das ações como placeholder).
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
     blocks.push(
-      [
-        '# 🔑 CONTEXTO DA CONVERSA',
+      xmlBlock('contexto_conversa', [
         `- leadId desta conversa: **${leadId}**`,
         '- Ao chamar QUALQUER tool, use ESTE número EXATAMENTE como o argumento `leadId`.',
         '- NUNCA passe 0, NUNCA passe a string "leadId", NUNCA invente outro número.',
         `- Exemplo correto: aplicar_tag({ leadId: ${leadId}, tag: "..." }).`,
-      ].join('\n'),
+      ].join('\n')),
     );
   }
 
