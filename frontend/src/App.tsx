@@ -23,6 +23,9 @@ const TracesView = lazy(() =>
 const ErrorsPanel = lazy(() =>
   import('./components/ErrorsPanel').then((m) => ({ default: m.ErrorsPanel })),
 );
+const DeliveryMonitorPanel = lazy(() =>
+  import('./components/DeliveryMonitorPanel').then((m) => ({ default: m.DeliveryMonitorPanel })),
+);
 const ConversationsPanel = lazy(() =>
   import('./components/ConversationsPanel').then((m) => ({ default: m.ConversationsPanel })),
 );
@@ -157,6 +160,7 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
           {tab === 'dashboard' && <DashboardPanel />}
           {tab === 'traces' && <TracesView />}
           {tab === 'errors' && <ErrorsPanel />}
+          {tab === 'delivery' && <DeliveryMonitorPanel />}
           {tab === 'conversations' && <ConversationsPanel />}
           {tab === 'llm' && <LlmCallsPanel />}
           {tab === 'prompts' && <PromptsPanel />}

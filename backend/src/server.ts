@@ -29,6 +29,7 @@ import { getCheckpointer } from './agent/graph.js';
 import { ensureDefaultUnit } from './services/units.service.js';
 import { startWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
 import { startDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
+import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,6 +115,10 @@ async function main(): Promise<void> {
   // mv_unit_daily_channel). REFRESH CONCURRENTLY a cada 5min — stale window
   // aceito pra dashboard executivo.
   startDashboardMvRefresher();
+
+  // Monitor de "resposta parada": alerta quando uma resposta da IA fica gravada
+  // no campo "Resposta IA" além do limite sem o Salesbot do Kommo entregá-la.
+  startStaleReplyMonitor();
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);

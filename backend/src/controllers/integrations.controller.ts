@@ -40,6 +40,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { OpenAIPlatform } from '../services/openai-platform.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
+import { getStaleReplies, getDeliveryStatus } from '../lib/stale-reply-monitor.js';
 import axios from 'axios';
 
 // ---------------------------------------------------------------------------
@@ -651,5 +652,29 @@ export async function getAlerts(_req: Request, res: Response): Promise<void> {
     }
   }
 
+  // Respostas da IA paradas no campo "Resposta IA" sem o Salesbot entregar
+  // (estado em memória do monitor, global — não por-Unit).
+  for (const s of getStaleReplies()) {
+    out.push({
+      unitId: s.unitId,
+      unitSlug: s.unitSlug,
+      unitName: s.unitName,
+      severity: 'danger',
+      integration: 'kommo',
+      message: `🐢 Resposta parada há ${s.ageMin}min sem entrega (lead ${s.leadId}) — Salesbot do Kommo travado. Empurre com /Agente DT.`,
+    });
+  }
+
   res.json({ alerts: out });
+}
+
+// ---------------------------------------------------------------------------
+// Endpoint /delivery-monitor — painel "Saúde da Entrega" (Salesbot).
+// Estado global em memória do monitor de "resposta parada": o que está parado
+// agora + histórico recente de latências (PATCH no campo → entrega confirmada
+// pelo webhook outgoing). Não é por-Unit, então gating de super admin.
+// ---------------------------------------------------------------------------
+
+export function getDeliveryMonitor(_req: Request, res: Response): void {
+  res.json(getDeliveryStatus());
 }

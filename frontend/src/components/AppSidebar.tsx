@@ -40,6 +40,7 @@ import {
   Sparkles,
   Terminal,
   TestTube2,
+  Truck,
   UserCog,
   Wand2,
   Wrench,
@@ -73,6 +74,7 @@ export type AppTab =
   | 'units'
   | 'users'
   | 'errors'
+  | 'delivery'
   | 'whatsapp';
 
 interface NavItem {
@@ -95,6 +97,7 @@ const NAV: NavItem[] = [
   { id: 'conversations', label: 'Conversas', icon: MessageCircle, group: 'primary' },
   { id: 'traces', label: 'Execuções', icon: Terminal, group: 'primary' },
   { id: 'errors', label: 'Erros', icon: AlertOctagon, group: 'primary' },
+  { id: 'delivery', label: 'Entrega', icon: Truck, group: 'primary', superOnly: true },
 
   { id: 'reports', label: 'Relatórios', icon: FileBarChart, group: 'secondary' },
   { id: 'whatsapp', label: 'Custo WhatsApp', icon: MessageCircle, group: 'secondary' },

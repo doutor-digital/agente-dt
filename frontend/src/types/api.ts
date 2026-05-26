@@ -628,6 +628,36 @@ export interface GlobalAlert {
   message: string;
 }
 
+// Saúde da Entrega (Salesbot) — snapshot do monitor de "resposta parada".
+export interface DeliveryMonitor {
+  /** Já vimos ao menos UMA entrega confirmada? Sem isso, o monitor não confia. */
+  everConfirmed: boolean;
+  /** Limiar (min) acima do qual uma resposta gravada é considerada "parada". */
+  thresholdMin: number;
+  /** Respostas gravadas aguardando entrega agora (inclui as ainda dentro do prazo). */
+  pendingCount: number;
+  /** Latência média das últimas entregas confirmadas (ms), ou null se nenhuma. */
+  avgLatencyMs: number | null;
+  /** Quantas das recentes passaram do limiar (entregues, mas lentas). */
+  slowCount: number;
+  /** Paradas agora (acima do limiar, sem entrega). */
+  stale: Array<{
+    unitId: string;
+    unitSlug: string;
+    unitName: string;
+    leadId: string;
+    ageMin: number;
+  }>;
+  /** Histórico recente de entregas confirmadas (mais recente primeiro). */
+  recent: Array<{
+    unitSlug: string;
+    leadId: string;
+    latencyMs: number;
+    slow: boolean;
+    ageSec: number;
+  }>;
+}
+
 export interface UnitStats {
   sinceDays: number;
   traces: {

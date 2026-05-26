@@ -91,7 +91,11 @@ import {
   deleteLeadFieldRuleHandler,
   listKommoLeadCustomFieldsHandler,
 } from '../controllers/lead-field-rules.controller.js';
-import { getAlerts, getIntegrations } from '../controllers/integrations.controller.js';
+import {
+  getAlerts,
+  getIntegrations,
+  getDeliveryMonitor,
+} from '../controllers/integrations.controller.js';
 import {
   getWhatsappCostsHandler,
   getWhatsappTemplatesHandler,
@@ -244,6 +248,9 @@ apiRouter.put('/config', putConfig);
 
 // Alertas globais — só SUPER_ADMIN faz sentido (agrega múltiplas units).
 apiRouter.get('/alerts', requireSuperAdmin, getAlerts);
+
+// Monitor de entrega do Salesbot (estado global em memória) — idem.
+apiRouter.get('/delivery-monitor', requireSuperAdmin, getDeliveryMonitor);
 
 // ---------------------------------------------------------------------------
 // Users CRUD — só SUPER_ADMIN.

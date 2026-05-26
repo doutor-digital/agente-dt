@@ -27,6 +27,7 @@ import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js'
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
+import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate } from '../services/lead-memory.service.js';
@@ -109,6 +110,13 @@ function getIncomingMessage(parsed: ParsedWebhook): MessageEvent | null {
     (m) => (m.type ?? 'incoming') === 'incoming' && (m.text || hasAudioAttachment(m)),
   );
   return incoming ?? null;
+}
+
+// Mensagens OUTGOING do webhook — o Kommo nos avisa quando o Salesbot ENTREGA
+// a resposta. Não acionam o agente; servem só pra confirmar entrega no monitor
+// de "resposta parada".
+function getOutgoingMessages(parsed: ParsedWebhook): MessageEvent[] {
+  return (parsed.message?.add ?? []).filter((m) => (m.type ?? 'incoming') === 'outgoing');
 }
 
 const AUDIO_TYPES = new Set(['voice', 'audio']);
@@ -272,6 +280,15 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     logger.warn({ errors: parsed.error.flatten() }, 'webhook inválido');
     res.status(400).json({ ok: false, error: 'invalid payload' });
     return;
+  }
+
+  // Confirmação de entrega: o Kommo manda webhook de mensagem OUTGOING quando o
+  // Salesbot entrega a resposta. Fechamos o ciclo do monitor de "resposta
+  // parada" (essas mensagens não acionam o agente).
+  for (const out of getOutgoingMessages(parsed.data)) {
+    if (out.entity_id) {
+      confirmDelivery({ unitId: unit.id, leadId: out.entity_id, text: out.text });
+    }
   }
 
   // Detecta conversão ANTES de tudo. Eventos de mudança de status podem
@@ -657,6 +674,18 @@ async function processAgent(args: {
           payload: { reply, via: sendResult.via, detail: sendResult.detail },
           latencyMs: Math.round(performance.now() - sendStart),
         });
+        // Monitor de "resposta parada": só a rota 'salesbot' depende do Kommo
+        // entregar (PATCH no campo → bot dispara). 'chat_message' já saiu e
+        // 'lead_note' nem foi pro paciente, então não rastreamos esses.
+        if (sendResult.via === 'salesbot') {
+          trackPendingReply({
+            unitId: unit.id,
+            unitSlug: unit.slug,
+            unitName: unit.name,
+            leadId: String(leadId),
+            text: reply,
+          });
+        }
         // Registra turno do assistente na conversa.
         await addMessage({
           conversationId: conv.id,

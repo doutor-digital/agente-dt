@@ -38,6 +38,11 @@ const schema = z.object({
   KOMMO_SALESBOT_ID: z.coerce.number().int().positive().optional(),
   KOMMO_REPLY_FIELD_ID: z.coerce.number().int().positive().optional(),
 
+  // Monitor de "resposta parada": quantos minutos uma resposta pode ficar
+  // gravada no campo "Resposta IA" sem o Salesbot do Kommo entregá-la antes de
+  // disparar alerta. O normal é entrega em segundos; default 3 min = travou.
+  STALE_REPLY_ALERT_MINUTES: z.coerce.number().int().positive().default(3),
+
   OPENAI_API_KEY: z.string().min(10),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 

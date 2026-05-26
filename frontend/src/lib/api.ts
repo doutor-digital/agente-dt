@@ -11,6 +11,7 @@ import type {
   ConversationEvaluationResponse,
   ConversationSummary,
   DashboardResponse,
+  DeliveryMonitor,
   GlobalAlert,
   IntegrationsResponse,
   FlaggedMessage,
@@ -322,6 +323,12 @@ export const api = {
       timeout: 30_000,
     });
     return data.alerts;
+  },
+  async getDeliveryMonitor(): Promise<DeliveryMonitor> {
+    const { data } = await http.get<DeliveryMonitor>('/delivery-monitor', {
+      timeout: 30_000,
+    });
+    return data;
   },
 
   // -------------------------------------------------------------------------

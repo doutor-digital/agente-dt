@@ -38,6 +38,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   conversations: 'conversas',
   traces: 'execucoes',
   errors: 'erros',
+  delivery: 'entrega',
   llm: 'chamadas-ia',
   prompts: 'prompts',
   integrations: 'integracoes',
