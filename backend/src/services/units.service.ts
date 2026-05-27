@@ -109,6 +109,9 @@ export interface UnitInput {
   kommoPausedFieldId?: number | null;
   kommoWonStatusIds?: number[];
   kommoBypassSalesbot?: boolean;
+  kommoWidgetReplyEnabled?: boolean;
+  kommoWidgetSecret?: string | null;
+  kommoWidgetSalesbotId?: number | null;
 
   openaiApiKey?: string | null;
   openaiAdminKey?: string | null;
@@ -198,6 +201,9 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       kommoReplyFieldId: input.kommoReplyFieldId ?? null,
       kommoPausedFieldId: input.kommoPausedFieldId ?? null,
       kommoWonStatusIds: input.kommoWonStatusIds ?? [],
+      kommoWidgetReplyEnabled: input.kommoWidgetReplyEnabled ?? false,
+      kommoWidgetSecret: input.kommoWidgetSecret ?? null,
+      kommoWidgetSalesbotId: input.kommoWidgetSalesbotId ?? null,
       openaiApiKey: input.openaiApiKey ?? null,
       openaiAdminKey: input.openaiAdminKey ?? null,
       openaiModel: input.openaiModel ?? 'gpt-4o-mini',
@@ -263,6 +269,9 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.kommoPausedFieldId !== undefined && { kommoPausedFieldId: input.kommoPausedFieldId }),
       ...(input.kommoWonStatusIds !== undefined && { kommoWonStatusIds: input.kommoWonStatusIds }),
       ...(input.kommoBypassSalesbot !== undefined && { kommoBypassSalesbot: input.kommoBypassSalesbot }),
+      ...(input.kommoWidgetReplyEnabled !== undefined && { kommoWidgetReplyEnabled: input.kommoWidgetReplyEnabled }),
+      ...(input.kommoWidgetSecret !== undefined && { kommoWidgetSecret: input.kommoWidgetSecret }),
+      ...(input.kommoWidgetSalesbotId !== undefined && { kommoWidgetSalesbotId: input.kommoWidgetSalesbotId }),
       ...(input.openaiApiKey !== undefined && { openaiApiKey: input.openaiApiKey }),
       ...(input.openaiAdminKey !== undefined && { openaiAdminKey: input.openaiAdminKey }),
       ...(input.openaiModel !== undefined && { openaiModel: input.openaiModel }),
@@ -337,6 +346,7 @@ export function maskUnitSecrets<T extends Unit>(unit: T): T & { _hasSecrets: Rec
   return {
     ...unit,
     kommoAccessToken: mask(unit.kommoAccessToken),
+    kommoWidgetSecret: mask(unit.kommoWidgetSecret),
     openaiApiKey: mask(unit.openaiApiKey),
     openaiAdminKey: mask(unit.openaiAdminKey),
     metaAccessToken: mask(unit.metaAccessToken),
@@ -344,6 +354,7 @@ export function maskUnitSecrets<T extends Unit>(unit: T): T & { _hasSecrets: Rec
     metaVerifyToken: mask(unit.metaVerifyToken),
     _hasSecrets: {
       kommoAccessToken: !!unit.kommoAccessToken,
+      kommoWidgetSecret: !!unit.kommoWidgetSecret,
       openaiApiKey: !!unit.openaiApiKey,
       openaiAdminKey: !!unit.openaiAdminKey,
       metaAccessToken: !!unit.metaAccessToken,

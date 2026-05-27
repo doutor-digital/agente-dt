@@ -224,6 +224,11 @@ export interface Unit {
   kommoPausedFieldId: number | null;
   kommoWonStatusIds: number[];
   kommoBypassSalesbot: boolean;
+  /** Modo widget (handler widget_request do Salesbot) — entrega via return_url
+   *  em vez de PATCH+Digital Pipeline. Flag de piloto, por unidade. */
+  kommoWidgetReplyEnabled: boolean;
+  kommoWidgetSecret: string | null;
+  kommoWidgetSalesbotId: number | null;
   openaiApiKey: string | null;
   openaiAdminKey: string | null;
   openaiModel: string;

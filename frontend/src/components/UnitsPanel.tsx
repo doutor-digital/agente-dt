@@ -90,6 +90,9 @@ const blankInput: UnitInput = {
   kommoPausedFieldId: null,
   kommoWonStatusIds: [],
   kommoBypassSalesbot: false,
+  kommoWidgetReplyEnabled: false,
+  kommoWidgetSecret: '',
+  kommoWidgetSalesbotId: null,
   openaiApiKey: '',
   openaiAdminKey: '',
   openaiModel: 'gpt-4o-mini',
@@ -121,6 +124,9 @@ function unitToInput(u: Unit): UnitInput {
     kommoPausedFieldId: u.kommoPausedFieldId ?? null,
     kommoWonStatusIds: u.kommoWonStatusIds ?? [],
     kommoBypassSalesbot: u.kommoBypassSalesbot ?? false,
+    kommoWidgetReplyEnabled: u.kommoWidgetReplyEnabled ?? false,
+    kommoWidgetSecret: u.kommoWidgetSecret ?? '',
+    kommoWidgetSalesbotId: u.kommoWidgetSalesbotId ?? null,
     openaiApiKey: u.openaiApiKey ?? '',
     openaiAdminKey: u.openaiAdminKey ?? '',
     openaiModel: u.openaiModel,
@@ -483,6 +489,54 @@ export function UnitsPanel() {
                 </div>
               </div>
             </label>
+
+            <label className="flex items-start gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 mt-3 cursor-pointer hover:bg-emerald-500/10 transition-colors">
+              <input
+                type="checkbox"
+                checked={!!draft.kommoWidgetReplyEnabled}
+                onChange={(e) => setDraft({ ...draft, kommoWidgetReplyEnabled: e.target.checked })}
+                className="mt-0.5 accent-emerald-500"
+              />
+              <div className="flex-1">
+                <div className="text-sm font-semibold text-emerald-100">
+                  🚀 Modo Widget (widget_request) — entrega via return_url
+                </div>
+                <div className="text-[11px] text-emerald-200/70 mt-1 leading-relaxed">
+                  Caminho oficial do Kommo pra "LLM externo". O Salesbot chama nosso endpoint e nós retomamos o bot com{' '}
+                  <code className="text-[10px] px-1 rounded bg-zinc-900">execute_handlers [show]</code> — sem PATCH no campo,
+                  sem o Digital Pipeline reler (acaba a <strong>duplicata</strong>) e com balões nativos (acaba o{' '}
+                  <strong>chunking truncado</strong>). Exige plano Avançado+ (WebSDK) e o widget customizado configurado no
+                  Salesbot. Quando ligado, esta unidade ignora o caminho PATCH+Digital Pipeline.
+                </div>
+              </div>
+            </label>
+
+            {draft.kommoWidgetReplyEnabled && (
+              <div className="mt-3 space-y-3 rounded-lg border border-zinc-700 bg-zinc-900/40 p-3">
+                <div className="text-[11px] text-zinc-400 leading-relaxed">
+                  URL do webhook pra colar no passo <strong>Widget</strong> do Salesbot:
+                  <code className="block mt-1 text-[10px] px-2 py-1 rounded bg-zinc-950 text-emerald-300 break-all">
+                    {`<seu-backend>/api/webhooks/${draft.slug || '<slug>'}/widget`}
+                  </code>
+                </div>
+                <Field
+                  label="Client Secret da integração (assina o JWT)"
+                  value={draft.kommoWidgetSecret ?? ''}
+                  onChange={(v) => setDraft({ ...draft, kommoWidgetSecret: v })}
+                  type="password"
+                  hint="Da integração privada no Kommo. Opcional no piloto (validação permissiva), recomendado em produção."
+                />
+                <Field
+                  label="Salesbot ID do widget (opcional)"
+                  value={draft.kommoWidgetSalesbotId != null ? String(draft.kommoWidgetSalesbotId) : ''}
+                  onChange={(v) => {
+                    const n = parseInt(v, 10);
+                    setDraft({ ...draft, kommoWidgetSalesbotId: Number.isNaN(n) ? null : n });
+                  }}
+                  hint="Só pra diagnóstico/log. O disparo é configurado no Digital Pipeline do Kommo."
+                />
+              </div>
+            )}
           </>
         ),
       },

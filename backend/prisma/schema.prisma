@@ -85,6 +85,22 @@ model Unit {
   // como convertida e disparamos o juiz LLM.
   kommoWonStatusIds Int[]   @default([]) @map("kommo_won_status_ids")
 
+  // MODO WIDGET (handler `widget_request` do Salesbot) — alternativa ao
+  // PATCH no campo "Resposta IA" + gatilho do Digital Pipeline. Quando
+  // ligado, a resposta da IA é gerada E entregue pelo endpoint
+  // /api/webhooks/{slug}/widget (chamado pelo passo "Widget" do Salesbot):
+  // respondemos no `return_url` com execute_handlers [show…]. Elimina a
+  // duplicata (não há campo pro DP reler) e o chunking truncado (balões
+  // nativos numa só chamada). Por-unidade pra permitir piloto. Ver
+  // widget.controller.ts + KommoClient.continueSalesbotWidget.
+  kommoWidgetReplyEnabled Boolean @default(false) @map("kommo_widget_reply_enabled")
+  // Client secret da integração privada do Kommo — assina o JWT que chega
+  // no corpo do widget_request. NULL = validação permissiva (loga e segue),
+  // útil pra destravar o piloto antes de fiar o secret.
+  kommoWidgetSecret       String? @map("kommo_widget_secret")
+  // ID do Salesbot novo (o que tem o passo Widget). Opcional — só logging.
+  kommoWidgetSalesbotId   Int?    @map("kommo_widget_salesbot_id")
+
   // OpenAI — credenciais por unidade (cada uma com sua API key e assistant)
   openaiApiKey      String? @map("openai_api_key")
   // Admin key (sk-admin-...) — usada pelos endpoints /v1/organization/*

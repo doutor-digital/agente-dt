@@ -325,6 +325,26 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     return;
   }
 
+  // MODO WIDGET: quando ligado, a geração E a entrega da resposta acontecem no
+  // endpoint /widget (disparado pelo passo "Widget" do Salesbot via
+  // widget_request). O webhook /kommo segue útil pra eventos de status/conversão
+  // (tratados acima), mas NÃO dispara o agente nem grava a mensagem do paciente
+  // — quem faz isso é o widget.controller. Evita resposta duplicada e turno de
+  // IA em dobro (o mesmo princípio do isMetaPrimary).
+  if (unit.kommoWidgetReplyEnabled) {
+    logger.debug(
+      { unit: unit.slug },
+      'kommo webhook: modo widget ligado, ignorando gatilho do agente (entrega via /widget)',
+    );
+    res.status(200).json({
+      ok: true,
+      skipped: 'widget_mode',
+      converted: conversion.converted,
+      unit: unit.slug,
+    });
+    return;
+  }
+
   // PREVENÇÃO DE LOOP: só rodamos o agente quando há mensagem real do lead
   // (message.add com type=incoming) OU quando é uma chamada manual de teste
   // (leadId + text no body). Webhooks de `leads.update` disparados por NOSSAS
@@ -478,7 +498,14 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
 // Processamento assíncrono.
 // ---------------------------------------------------------------------------
 
-async function processAgent(args: {
+/** Entrega customizada da resposta. Quando fornecida ao processAgent, é usada
+ *  no lugar do sendChatReply (PATCH+Digital Pipeline). É o ponto de extensão do
+ *  MODO WIDGET: o widget.controller passa um deliver que retoma o Salesbot via
+ *  return_url. Convenção: `deliver('')` finaliza o fluxo SEM enviar texto —
+ *  usado pelos guards (IA pausada etc.) pra liberar o bot pausado. */
+export type AgentDeliverFn = (text: string) => Promise<{ via: string; detail: unknown }>;
+
+export async function processAgent(args: {
   unit: Unit;
   leadId: number;
   traceId: string;
@@ -492,9 +519,24 @@ async function processAgent(args: {
   /** Quantas mensagens do burst foram coalescidas nesta execução. >1 quando o
    *  paciente mandou várias msgs em sequência e o debouncer juntou. */
   burstSize?: number;
+  /** MODO WIDGET — ver AgentDeliverFn. Ausente = caminho legado (sendChatReply). */
+  deliver?: AgentDeliverFn;
 }): Promise<void> {
-  const { unit, leadId, traceId, audioUrl, chatId, talkId, contactId, isChatMessage, requestStart, burstSize } = args;
+  const { unit, leadId, traceId, audioUrl, chatId, talkId, contactId, isChatMessage, requestStart, burstSize, deliver } = args;
   let { humanMessage } = args;
+  // MODO WIDGET: garante que o Salesbot pausado seja retomado EXATAMENTE uma vez
+  // (resposta, mensagem de guard, ou fallback de erro). Sem isso o bot trava.
+  let delivered = false;
+  const finishWidgetSilently = async (): Promise<void> => {
+    if (deliver && !delivered) {
+      delivered = true;
+      try {
+        await deliver('');
+      } catch (e) {
+        logger.warn({ err: e, traceId, leadId }, 'widget: falha ao finalizar bot sem texto');
+      }
+    }
+  };
   const recorder = new TraceRecorder(traceId, unit.id);
   await syncRecorderSequence(recorder, traceId);
 
@@ -538,7 +580,11 @@ async function processAgent(args: {
   const hours = checkBusinessHours(unit);
   if (hours.enabled && !hours.isOpen && hours.outOfHoursMessage) {
     try {
-      if (unit.kommoSalesbotId && unit.kommoReplyFieldId) {
+      if (deliver) {
+        // Widget: entrega a mensagem fora-horário retomando o Salesbot.
+        delivered = true;
+        await deliver(hours.outOfHoursMessage);
+      } else if (unit.kommoSalesbotId && unit.kommoReplyFieldId) {
         const kommo = createKommoClient(unit);
         await kommo.runSalesbot({
           leadId,
@@ -567,6 +613,7 @@ async function processAgent(args: {
   // Guard: se operador humano marcou "IA Pausada", não invocamos o agente.
   // Verificação síncrona porque é 1 GET barato comparado ao custo da LLM.
   if (await isLeadPaused(unit, leadId)) {
+    await finishWidgetSilently(); // libera o Salesbot pausado (modo widget)
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({
       kind: 'COMPLETED',
@@ -597,6 +644,7 @@ async function processAgent(args: {
         (sid && pausedStages.has(`*:${sid}`)) ||
         (sid && pid && pausedStages.has(`${pid}:${sid}`));
       if (matched) {
+        await finishWidgetSilently(); // libera o Salesbot pausado (modo widget)
         const totalLatency = Math.round(performance.now() - requestStart);
         await recorder.step({
           kind: 'COMPLETED',
@@ -659,15 +707,23 @@ async function processAgent(args: {
 
       const sendStart = performance.now();
       try {
-        const kommo = createKommoClient(unit);
-        const sendResult = await kommo.sendChatReply({
-          leadId,
-          chatId,
-          talkId,
-          contactId,
-          text: reply,
-          recorder,
-        });
+        // MODO WIDGET usa o deliver (retoma o Salesbot via return_url);
+        // caminho legado usa sendChatReply (PATCH + Digital Pipeline).
+        let sendResult: { via: string; detail?: unknown };
+        if (deliver) {
+          delivered = true;
+          sendResult = await deliver(reply);
+        } else {
+          const kommo = createKommoClient(unit);
+          sendResult = await kommo.sendChatReply({
+            leadId,
+            chatId,
+            talkId,
+            contactId,
+            text: reply,
+            recorder,
+          });
+        }
         await recorder.step({
           kind: 'KOMMO_ACTION',
           title: `Resposta entregue ao paciente via ${sendResult.via}`,
@@ -704,6 +760,10 @@ async function processAgent(args: {
         });
         logger.error({ err: sendErr, traceId, leadId }, 'falha enviando resposta ao Kommo');
       }
+    } else if (isChatMessage && deliver && !delivered) {
+      // Widget: a IA não produziu texto (reply vazio). O Salesbot está pausado
+      // esperando o continue — finaliza o fluxo sem mensagem pra não pendurar.
+      await finishWidgetSilently();
     }
 
     const totalLatency = Math.round(performance.now() - requestStart);
@@ -736,6 +796,16 @@ async function processAgent(args: {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const totalLatency = Math.round(performance.now() - requestStart);
+    // MODO WIDGET: o Salesbot está pausado esperando o continue. Mesmo no erro,
+    // precisamos retomá-lo (com um aviso curto) pra não deixá-lo pendurado.
+    if (deliver && !delivered) {
+      delivered = true;
+      try {
+        await deliver('Tive um probleminha técnico aqui, mas já já te respondo. 🙏');
+      } catch (e) {
+        logger.warn({ err: e, traceId, leadId }, 'widget: falha ao entregar fallback de erro');
+      }
+    }
     await recorder.step({
       kind: 'ERROR',
       title: `Falha no agente: ${msg}`,

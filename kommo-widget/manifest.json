@@ -1,0 +1,33 @@
+{
+  "widget": {
+    "name": "widget.name",
+    "description": "widget.description",
+    "short_description": "widget.short_description",
+    "version": "1.0.0",
+    "interface_version": 2,
+    "init_once": true,
+    "locale": ["pt"],
+    "installation": false,
+    "support": {
+      "link": "https://doutordigital.com.br",
+      "email": "doutordigitalconsultoria@gmail.com"
+    }
+  },
+
+  "locations": ["salesbot_designer"],
+
+  "salesbot_designer": {
+    "logo": "/images/logo_min.png",
+    "handler_code": {
+      "name": "salesbot.handler_name",
+      "settings": {
+        "url": {
+          "name": "salesbot.url",
+          "default_value": "https://SEU-BACKEND/api/webhooks/SUA-UNIDADE/widget",
+          "type": "text",
+          "manual": true
+        }
+      }
+    }
+  }
+}

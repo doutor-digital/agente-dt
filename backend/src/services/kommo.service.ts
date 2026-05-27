@@ -1367,6 +1367,69 @@ export class KommoClient {
       wrapAxiosError(err, `sendChatReply(${leadId})`);
     }
   }
+
+  /**
+   * MODO WIDGET — entrega a resposta RETOMANDO o Salesbot via `return_url`.
+   *
+   * Diferente do caminho PATCH + Digital Pipeline (runSalesbot/sendChatReply),
+   * aqui o Salesbot está PAUSADO no passo "Widget" esperando o nosso continue.
+   * Respondemos no `return_url` (que o Kommo nos entregou, assinado, no corpo
+   * do widget_request) com `execute_handlers`: cada balão vira um handler
+   * `show` de texto e fechamos com `goto finish`.
+   *
+   * Por que resolve os bugs do caminho legado:
+   *   • Sem campo "Resposta IA" no meio → o Digital Pipeline não relê e não
+   *     reenvia em loop (mata a duplicata).
+   *   • Balões nativos numa ÚNICA chamada → sem o chunking truncado em 240
+   *     chars nem o PATCH sequencial racy de 900ms.
+   *
+   * `text` vazio = finaliza o bot SEM mensagem (só `goto finish`). Usado pelos
+   * guards (IA pausada / global) pra liberar o fluxo do Salesbot em vez de
+   * deixá-lo pendurado esperando um continue que nunca vem.
+   *
+   * Sem teto de 240 chars (aquele era limite do custom field no MySQL do
+   * Kommo). Emoji vai puro — não há storage utf8 nesse caminho, então o
+   * downgradeEmoji do PATCH não se aplica.
+   */
+  async continueSalesbotWidget(
+    returnUrl: string,
+    args: { text: string; data?: Record<string, unknown>; recorder?: KommoStepRecorder },
+  ): Promise<{ via: 'widget_continue'; chunks: number; detail: unknown }> {
+    const t0 = performance.now();
+    const chunks = splitIntoChunks(args.text, 900);
+    const executeHandlers: Array<Record<string, unknown>> = [
+      ...chunks.map((value) => ({ handler: 'show', params: { type: 'text', value } })),
+      { handler: 'goto', params: { type: 'finish' } },
+    ];
+    // `data` volta pro widget e fica acessível no Salesbot como {{json.x}}.
+    // Default `status: success` casa com o bloco de conditions sugerido pela
+    // doc do Kommo (term1: {{json.status}} == success), caso a unidade encadeie
+    // passos após o Widget.
+    const payload = { data: args.data ?? { status: 'success' }, execute_handlers: executeHandlers };
+    try {
+      // `return_url` é absoluto (https://<sub>.kommo.com/api/v4/salesbot/{id}/
+      // continue/{id}). O axios usa a URL absoluta e ignora o baseURL,
+      // herdando Authorization Bearer + headers UTF-8 desta instância.
+      const { data } = await this.http.post(returnUrl, payload);
+      const ms = Math.round(performance.now() - t0);
+      logger.info(
+        { returnUrl, chunks: chunks.length, finishOnly: chunks.length === 0 },
+        'widget continue: Salesbot retomado via return_url',
+      );
+      await args.recorder?.step({
+        kind: 'KOMMO_ACTION',
+        title:
+          chunks.length === 0
+            ? '📤 Widget continue: bot finalizado sem mensagem (goto finish)'
+            : `📤 Widget continue: ${chunks.length} balão(ões) via execute_handlers [show]`,
+        payload: { returnUrl, chunks: chunks.length, sentText: args.text },
+        latencyMs: ms,
+      });
+      return { via: 'widget_continue', chunks: chunks.length, detail: data };
+    } catch (err) {
+      wrapAxiosError(err, `continueSalesbotWidget(${returnUrl})`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

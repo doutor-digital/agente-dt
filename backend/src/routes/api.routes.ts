@@ -18,6 +18,7 @@
 import { Router } from 'express';
 import { handleKommoWebhook } from '../controllers/webhook.controller.js';
 import { handleSalesbotWebhook } from '../controllers/salesbot.controller.js';
+import { handleWidgetRequest } from '../controllers/widget.controller.js';
 import { handleMetaVerify, handleMetaWebhook } from '../controllers/meta.controller.js';
 import { listTraces, getTrace, getStats } from '../controllers/traces.controller.js';
 import { listSystemLogs, listSystemLogModules } from '../controllers/logs.controller.js';
@@ -127,6 +128,8 @@ export const apiRouter = Router();
 // Webhooks externos.
 apiRouter.post('/webhooks/:unitSlug/kommo', handleKommoWebhook);
 apiRouter.post('/webhooks/:unitSlug/salesbot', handleSalesbotWebhook);
+// Handler `widget_request` do Salesbot (modo widget — entrega via return_url).
+apiRouter.post('/webhooks/:unitSlug/widget', handleWidgetRequest);
 apiRouter.get('/webhooks/:unitSlug/meta', handleMetaVerify);
 apiRouter.post('/webhooks/:unitSlug/meta', handleMetaWebhook);
 apiRouter.post('/webhooks/kommo', handleKommoWebhook);          // retrocompat
