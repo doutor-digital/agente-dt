@@ -38,6 +38,7 @@ import {
   kommoTagsHandler,
   kommoUsersHandler,
   kommoLossReasonsHandler,
+  widgetStatusHandler,
   previewPromptHandler,
   dashboardHandler,
   dashboardAggregateHandler,
@@ -187,6 +188,7 @@ apiRouter.get('/units/:id/kommo-users', requireUnitAccess, kommoUsersHandler);
 apiRouter.get('/units/:id/kommo-loss-reasons', requireUnitAccess, kommoLossReasonsHandler);
 apiRouter.post('/units/:id/kommo-validate', requireUnitAccess, kommoValidateHandler);
 apiRouter.post('/units/:id/meta-validate', requireUnitAccess, metaValidateHandler);
+apiRouter.get('/units/:id/widget-status', requireUnitAccess, widgetStatusHandler);
 
 // Templates / Knowledge / Ações — UNIT_ADMIN edita os da sua unit.
 apiRouter.get('/units/:id/templates', requireUnitAccess, listTemplatesHandler);

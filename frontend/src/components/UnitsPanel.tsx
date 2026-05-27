@@ -38,7 +38,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
-import type { Unit, UnitInput } from '../types/api';
+import type { Unit, UnitInput, WidgetStatusResponse } from '../types/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
@@ -175,6 +175,8 @@ export function UnitsPanel() {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [cloningId, setCloningId] = useState<string | null>(null);
   const [validatingMeta, setValidatingMeta] = useState(false);
+  const [widgetStatus, setWidgetStatus] = useState<WidgetStatusResponse | null>(null);
+  const [checkingWidget, setCheckingWidget] = useState(false);
   const [metaChecks, setMetaChecks] = useState<
     { ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> } | null
   >(null);
@@ -257,6 +259,23 @@ export function UnitsPanel() {
       toast.error(e?.response?.data?.error ?? e?.message ?? 'erro ao validar');
     } finally {
       setValidatingMeta(false);
+    }
+  }
+
+  async function handleCheckWidget() {
+    if (!selectedId) {
+      toast.error('Salve a unidade antes de verificar a conexão.');
+      return;
+    }
+    setCheckingWidget(true);
+    try {
+      const res = await api.widgetStatus(selectedId);
+      setWidgetStatus(res);
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string };
+      toast.error(e?.response?.data?.error ?? e?.message ?? 'erro ao verificar conexão');
+    } finally {
+      setCheckingWidget(false);
     }
   }
 
@@ -535,6 +554,39 @@ export function UnitsPanel() {
                   }}
                   hint="Só pra diagnóstico/log. O disparo é configurado no Digital Pipeline do Kommo."
                 />
+
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={handleCheckWidget}
+                    disabled={checkingWidget}
+                    className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    {checkingWidget ? 'Verificando…' : '🔌 Verificar conexão'}
+                  </button>
+                  <div className="mt-1 text-[10px] text-zinc-500 leading-relaxed">
+                    Não dá pra testar a chave direto no Kommo. Salve, mande <strong>1 mensagem
+                    de teste</strong> no WhatsApp dessa conta e clique aqui — mostramos se o
+                    último <code className="px-1 rounded bg-zinc-900">widget_request</code> chegou
+                    e se o JWT bateu.
+                  </div>
+                  {widgetStatus && (
+                    <div
+                      className={
+                        'mt-2 rounded-md border p-2 text-[11px] leading-relaxed ' +
+                        (widgetStatus.level === 'ok'
+                          ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-100'
+                          : widgetStatus.level === 'warn'
+                            ? 'border-amber-500/30 bg-amber-500/5 text-amber-100'
+                            : widgetStatus.level === 'error'
+                              ? 'border-red-500/30 bg-red-500/5 text-red-100'
+                              : 'border-zinc-600/40 bg-zinc-800/40 text-zinc-300')
+                      }
+                    >
+                      {widgetStatus.message}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </>

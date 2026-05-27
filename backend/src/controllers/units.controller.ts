@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
+import { getWidgetConnection } from '../lib/widget-connection-monitor.js';
 import { createKommoClient, KommoApiError } from '../services/kommo.service.js';
 import {
   createUnit,
@@ -1553,4 +1554,79 @@ export async function metaValidateHandler(req: Request, res: Response): Promise<
   const required = ['accessToken', 'wabaId', 'waba', 'scopeMessaging', 'scopeAnalytics'];
   const allOk = checks.filter((c) => required.includes(c.name)).every((c) => c.ok);
   res.json({ ok: allOk, checks });
+}
+
+// ---------------------------------------------------------------------------
+// GET /units/:id/widget-status — "status da conexão" do modo widget.
+//
+// A client secret NÃO é validável contra o Kommo (não há endpoint de teste).
+// O único teste real é PASSIVO: ver o último widget_request recebido e se o JWT
+// bateu. Este handler compõe esse status + uma EXPLICAÇÃO em PT pro painel.
+// ---------------------------------------------------------------------------
+export async function widgetStatusHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+
+  const enabled = unit.kommoWidgetReplyEnabled;
+  const hasSecret = !!unit.kommoWidgetSecret;
+  const webhookPath = `/api/webhooks/${unit.slug}/widget`;
+  const last = getWidgetConnection(unit.id);
+
+  // level: idle (cinza) | ok (verde) | warn (amarelo) | error (vermelho)
+  let level: 'idle' | 'ok' | 'warn' | 'error' = 'idle';
+  let message: string;
+
+  if (!enabled) {
+    level = 'idle';
+    message =
+      'Modo Widget está DESLIGADO nesta unidade. Ligue o toggle acima pra ativar a entrega via widget_request.';
+  } else if (!last) {
+    level = 'idle';
+    message =
+      'Ainda não recebemos nenhum widget_request do Kommo nesta unidade. Mande 1 mensagem de teste no WhatsApp dessa conta e clique em Verificar. Se nada chegar: confira a URL no passo "Widget" do Salesbot e o gatilho do Digital Pipeline ("mensagem recebida → rodar Salesbot").';
+  } else {
+    const agoSec = Math.round((Date.now() - last.lastAt) / 1000);
+    const ago = agoSec < 90 ? `${agoSec}s` : `${Math.round(agoSec / 60)}min`;
+
+    // 1) Origem/JWT
+    if (last.jwt === 'valid') {
+      level = 'ok';
+      message = `✅ Recebemos um widget_request há ${ago} e o JWT bateu com a client secret — conexão e origem confirmadas.`;
+    } else if (last.jwt === 'invalid') {
+      level = 'error';
+      message = `⚠️ Recebemos um widget_request há ${ago}, mas o JWT NÃO bateu com a client secret (secret errada ou algoritmo de assinatura diferente). No piloto seguimos mesmo assim, mas confira a chave. `;
+    } else if (last.jwt === 'no_secret') {
+      level = 'warn';
+      message = `Recebemos um widget_request há ${ago}, mas a client secret está vazia — não dá pra validar a origem. Cole a client secret pra fechar a verificação. `;
+    } else {
+      // no_token
+      level = 'warn';
+      message = `Recebemos um widget_request há ${ago}, mas SEM token JWT no corpo — verifique a integração no Kommo. `;
+    }
+
+    // 2) Entrega (continue via return_url)
+    if (last.delivered === true) {
+      if (level !== 'error' && level !== 'warn') level = 'ok';
+      message += ' A resposta foi entregue de volta ao Kommo (return_url ok).';
+    } else if (last.delivered === false) {
+      level = 'error';
+      message += ` Mas FALHOU ao retomar o bot via return_url${last.error ? `: ${last.error}` : ''}.`;
+    } else {
+      message += ' Entrega ainda em processamento (ou a IA não produziu resposta).';
+    }
+  }
+
+  res.json({
+    ok: true,
+    enabled,
+    hasSecret,
+    webhookPath,
+    level,
+    message,
+    lastEvent: last,
+  });
 }

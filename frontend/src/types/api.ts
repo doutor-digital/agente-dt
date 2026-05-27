@@ -302,6 +302,24 @@ export type UnitInput = Partial<Omit<Unit, 'id' | 'createdAt' | 'updatedAt' | '_
   name: string;
 };
 
+// Status da conexão do modo widget (widget_request). Não valida o secret
+// contra o Kommo (não dá) — reflete o ÚLTIMO widget_request recebido.
+export interface WidgetStatusResponse {
+  ok: boolean;
+  enabled: boolean;
+  hasSecret: boolean;
+  webhookPath: string;
+  level: 'idle' | 'ok' | 'warn' | 'error';
+  message: string;
+  lastEvent: {
+    lastAt: number;
+    jwt: 'valid' | 'invalid' | 'no_token' | 'no_secret';
+    leadId: number | null;
+    delivered: boolean | null;
+    error: string | null;
+  } | null;
+}
+
 // ---------------------------------------------------------------------------
 // Kommo Explorer — dados ao vivo do CRM Kommo (campos, salesbots, pipelines)
 // ---------------------------------------------------------------------------

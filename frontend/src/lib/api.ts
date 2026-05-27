@@ -25,6 +25,7 @@ import type {
   KommoValidateResponse,
   MetaValidateInput,
   MetaValidateResponse,
+  WidgetStatusResponse,
   LeadsBucket,
   LeadsBucketResponse,
   MessageTemplate,
@@ -475,6 +476,14 @@ export const api = {
       `/units/${unitId}/meta-validate`,
       override,
       { timeout: 30_000 },
+    );
+    return data;
+  },
+
+  async widgetStatus(unitId: string): Promise<WidgetStatusResponse> {
+    const { data } = await http.get<WidgetStatusResponse>(
+      `/units/${unitId}/widget-status`,
+      { timeout: 15_000 },
     );
     return data;
   },

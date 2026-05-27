@@ -29,6 +29,11 @@ import { createKommoClient } from '../services/kommo.service.js';
 import { findUnitBySlug } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
+import {
+  recordWidgetRequest,
+  recordWidgetDelivery,
+  type WidgetJwtStatus,
+} from '../lib/widget-connection-monitor.js';
 import { processAgent, type AgentDeliverFn } from './webhook.controller.js';
 import type { Unit } from '@prisma/client';
 
@@ -50,22 +55,28 @@ const widgetBodySchema = z.object({
 // próprio Kommo. Depois de confirmar o algoritmo de assinatura em produção,
 // trocar os `warn` por `throw`/401.
 // ---------------------------------------------------------------------------
-function verifyWidgetToken(token: string | undefined, secret: string | null, unitSlug: string): void {
+function verifyWidgetToken(
+  token: string | undefined,
+  secret: string | null,
+  unitSlug: string,
+): WidgetJwtStatus {
   if (!secret) {
     logger.warn({ unit: unitSlug }, 'widget: kommoWidgetSecret não configurado — validação de JWT pulada (permissivo)');
-    return;
+    return 'no_secret';
   }
   if (!token) {
     logger.warn({ unit: unitSlug }, 'widget: request sem token JWT (secret existe) — seguindo (permissivo no piloto)');
-    return;
+    return 'no_token';
   }
   try {
     jwt.verify(token, secret, { algorithms: ['HS256'] });
+    return 'valid';
   } catch (err) {
     logger.warn(
       { unit: unitSlug, err },
       'widget: JWT inválido — seguindo mesmo assim (permissivo no piloto); endurecer pra 401 após validar a assinatura do Kommo',
     );
+    return 'invalid';
   }
 }
 
@@ -98,10 +109,16 @@ export async function handleWidgetRequest(req: Request, res: Response): Promise<
   }
   const { token, data, return_url: returnUrl } = parsed.data;
 
-  verifyWidgetToken(token, unit.kommoWidgetSecret, unit.slug);
+  const jwtStatus = verifyWidgetToken(token, unit.kommoWidgetSecret, unit.slug);
 
   const message = typeof data?.message === 'string' ? data.message : String(data?.message ?? '');
   const leadId = Number(data?.lead);
+  // Registra a CHEGADA pro painel de "status da conexão" (mesmo se o lead vier
+  // inválido — o usuário vê que a chamada chegou e que o JWT bateu).
+  recordWidgetRequest(unit.id, {
+    jwt: jwtStatus,
+    leadId: leadId && !Number.isNaN(leadId) ? leadId : null,
+  });
   if (!leadId || Number.isNaN(leadId)) {
     logger.warn({ unit: unit.slug, lead: data?.lead }, 'widget request sem leadId válido em data.lead');
     res.status(400).json({ ok: false, error: 'lead not found in data' });
@@ -116,7 +133,9 @@ export async function handleWidgetRequest(req: Request, res: Response): Promise<
   if (!message.trim()) {
     try {
       await createKommoClient(unit).continueSalesbotWidget(returnUrl, { text: '' });
+      recordWidgetDelivery(unit.id, { ok: true });
     } catch (err) {
+      recordWidgetDelivery(unit.id, { ok: false, error: err instanceof Error ? err.message : String(err) });
       logger.warn({ err, unit: unit.slug, leadId }, 'widget: falha ao finalizar bot em mensagem vazia');
     }
     return;
@@ -184,8 +203,14 @@ async function processWidget(args: {
   // resposta, pras mensagens de guard e pro fallback de erro.
   const kommo = createKommoClient(unit);
   const deliver: AgentDeliverFn = async (text) => {
-    const detail = await kommo.continueSalesbotWidget(returnUrl, { text, recorder });
-    return { via: detail.via, detail };
+    try {
+      const detail = await kommo.continueSalesbotWidget(returnUrl, { text, recorder });
+      recordWidgetDelivery(unit.id, { ok: true });
+      return { via: detail.via, detail };
+    } catch (e) {
+      recordWidgetDelivery(unit.id, { ok: false, error: e instanceof Error ? e.message : String(e) });
+      throw e;
+    }
   };
 
   await processAgent({
