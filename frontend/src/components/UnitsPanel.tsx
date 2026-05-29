@@ -91,6 +91,7 @@ const blankInput: UnitInput = {
   kommoWonStatusIds: [],
   kommoBypassSalesbot: false,
   kommoWidgetReplyEnabled: false,
+  kommoSalesbotExecuteEnabled: false,
   kommoWidgetSecret: '',
   kommoWidgetSalesbotId: null,
   openaiApiKey: '',
@@ -125,6 +126,7 @@ function unitToInput(u: Unit): UnitInput {
     kommoWonStatusIds: u.kommoWonStatusIds ?? [],
     kommoBypassSalesbot: u.kommoBypassSalesbot ?? false,
     kommoWidgetReplyEnabled: u.kommoWidgetReplyEnabled ?? false,
+    kommoSalesbotExecuteEnabled: u.kommoSalesbotExecuteEnabled ?? false,
     kommoWidgetSecret: u.kommoWidgetSecret ?? '',
     kommoWidgetSalesbotId: u.kommoWidgetSalesbotId ?? null,
     openaiApiKey: u.openaiApiKey ?? '',
@@ -526,6 +528,28 @@ export function UnitsPanel() {
                   sem o Digital Pipeline reler (acaba a <strong>duplicata</strong>) e com balões nativos (acaba o{' '}
                   <strong>chunking truncado</strong>). Exige plano Avançado+ (WebSDK) e o widget customizado configurado no
                   Salesbot. Quando ligado, esta unidade ignora o caminho PATCH+Digital Pipeline.
+                </div>
+              </div>
+            </label>
+
+            <label className="flex items-start gap-3 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 mt-3 cursor-pointer hover:bg-sky-500/10 transition-colors">
+              <input
+                type="checkbox"
+                checked={!!draft.kommoSalesbotExecuteEnabled}
+                onChange={(e) => setDraft({ ...draft, kommoSalesbotExecuteEnabled: e.target.checked })}
+                className="mt-0.5 accent-sky-500"
+              />
+              <div className="flex-1">
+                <div className="text-sm font-semibold text-sky-100">
+                  ⚙️ Modo /execute — disparar o Salesbot pela API
+                </div>
+                <div className="text-[11px] text-sky-200/70 mt-1 leading-relaxed">
+                  Caminho legado (PATCH no campo "Resposta IA") + disparo explícito do bot via{' '}
+                  <code className="text-[10px] px-1 rounded bg-zinc-900">POST /api/v4/bots/{'{id}'}/run</code> — recomendação
+                  do suporte do Kommo contra o anti-loop (ativação duplicada do gatilho).{' '}
+                  <strong>Ao ligar, DESLIGUE no Kommo o gatilho "Quando o campo Resposta IA mudar → rodar Salesbot"</strong>{' '}
+                  desta unidade, senão o bot dispara 2× e a mensagem duplica. Use junto com o "Intervalo mínimo entre
+                  respostas" na aba Persona.
                 </div>
               </div>
             </label>

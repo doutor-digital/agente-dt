@@ -112,6 +112,7 @@ export interface UnitInput {
   kommoWidgetReplyEnabled?: boolean;
   kommoWidgetSecret?: string | null;
   kommoWidgetSalesbotId?: number | null;
+  kommoSalesbotExecuteEnabled?: boolean;
 
   openaiApiKey?: string | null;
   openaiAdminKey?: string | null;
@@ -143,6 +144,7 @@ export interface UnitInput {
   personaResponseLength?: string;
   personaLanguage?: string;
   personaResponseDelaySec?: number;
+  personaMinReplyGapSec?: number;
   personaEmojis?: string[];
   personaEmojiFrequency?: string;
 
@@ -204,6 +206,7 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       kommoWidgetReplyEnabled: input.kommoWidgetReplyEnabled ?? false,
       kommoWidgetSecret: input.kommoWidgetSecret ?? null,
       kommoWidgetSalesbotId: input.kommoWidgetSalesbotId ?? null,
+      kommoSalesbotExecuteEnabled: input.kommoSalesbotExecuteEnabled ?? false,
       openaiApiKey: input.openaiApiKey ?? null,
       openaiAdminKey: input.openaiAdminKey ?? null,
       openaiModel: input.openaiModel ?? 'gpt-4o-mini',
@@ -229,6 +232,7 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       personaResponseLength: input.personaResponseLength ?? 'normal',
       personaLanguage: input.personaLanguage ?? 'pt-BR',
       personaResponseDelaySec: input.personaResponseDelaySec ?? 0,
+      personaMinReplyGapSec: input.personaMinReplyGapSec ?? 0,
       sourcePapel: input.sourcePapel ?? null,
       sourceProdutos: input.sourceProdutos ?? null,
       sourceNegocio: input.sourceNegocio ?? null,
@@ -272,6 +276,7 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.kommoWidgetReplyEnabled !== undefined && { kommoWidgetReplyEnabled: input.kommoWidgetReplyEnabled }),
       ...(input.kommoWidgetSecret !== undefined && { kommoWidgetSecret: input.kommoWidgetSecret }),
       ...(input.kommoWidgetSalesbotId !== undefined && { kommoWidgetSalesbotId: input.kommoWidgetSalesbotId }),
+      ...(input.kommoSalesbotExecuteEnabled !== undefined && { kommoSalesbotExecuteEnabled: input.kommoSalesbotExecuteEnabled }),
       ...(input.openaiApiKey !== undefined && { openaiApiKey: input.openaiApiKey }),
       ...(input.openaiAdminKey !== undefined && { openaiAdminKey: input.openaiAdminKey }),
       ...(input.openaiModel !== undefined && { openaiModel: input.openaiModel }),
@@ -296,6 +301,7 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.personaResponseLength !== undefined && { personaResponseLength: input.personaResponseLength }),
       ...(input.personaLanguage !== undefined && { personaLanguage: input.personaLanguage }),
       ...(input.personaResponseDelaySec !== undefined && { personaResponseDelaySec: input.personaResponseDelaySec }),
+      ...(input.personaMinReplyGapSec !== undefined && { personaMinReplyGapSec: input.personaMinReplyGapSec }),
       ...(input.personaEmojis !== undefined && { personaEmojis: input.personaEmojis }),
       ...(input.personaEmojiFrequency !== undefined && { personaEmojiFrequency: input.personaEmojiFrequency }),
       ...(input.sourcePapel !== undefined && { sourcePapel: input.sourcePapel }),

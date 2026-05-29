@@ -27,6 +27,7 @@ import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js'
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
+import { enforceReplyGap } from '../lib/reply-gate.js';
 import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
@@ -704,6 +705,12 @@ export async function processAgent(args: {
       if (delaySec > 0) {
         await new Promise((resolve) => setTimeout(resolve, delaySec * 1000));
       }
+
+      // Trava anti-loop por lead: garante um intervalo MÍNIMO entre DUAS
+      // respostas no MESMO lead (o anti-loop do Kommo trava quando duas saem
+      // muito próximas). Configurável por Unit; 0 = desligado. Vale pro modo
+      // widget e pro legado — os dois entregam resposta no mesmo lead.
+      await enforceReplyGap(unit.id, leadId, unit.personaMinReplyGapSec ?? 0);
 
       const sendStart = performance.now();
       try {

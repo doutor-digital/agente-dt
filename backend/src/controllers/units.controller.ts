@@ -48,6 +48,7 @@ const unitInputBase = {
   kommoWidgetReplyEnabled: z.boolean().optional(),
   kommoWidgetSecret: z.string().nullable().optional(),
   kommoWidgetSalesbotId: z.coerce.number().int().nullable().optional(),
+  kommoSalesbotExecuteEnabled: z.boolean().optional(),
   openaiApiKey: z.string().nullable().optional(),
   openaiAdminKey: z.string().nullable().optional(),
   openaiModel: z.string().min(1).optional(),
@@ -75,6 +76,7 @@ const unitInputBase = {
   personaResponseLength: z.enum(['curta', 'normal', 'detalhada']).optional(),
   personaLanguage: z.enum(['pt-BR', 'en-US', 'es-ES', 'fr-FR']).optional(),
   personaResponseDelaySec: z.coerce.number().int().min(0).max(30).optional(),
+  personaMinReplyGapSec: z.coerce.number().int().min(0).max(120).optional(),
   personaEmojis: z.array(z.string().min(1).max(8)).max(60).optional(),
   personaEmojiFrequency: z.enum(['low', 'normal', 'high']).optional(),
   // Fontes — textos longos. Tamanho generoso pra acomodar docs ricos.

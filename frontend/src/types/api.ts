@@ -229,6 +229,9 @@ export interface Unit {
   kommoWidgetReplyEnabled: boolean;
   kommoWidgetSecret: string | null;
   kommoWidgetSalesbotId: number | null;
+  /** Modo /execute (legado): dispara o Salesbot via POST /bots/{id}/run após o
+   *  PATCH, em vez de depender do gatilho do Digital Pipeline. Por unidade. */
+  kommoSalesbotExecuteEnabled: boolean;
   openaiApiKey: string | null;
   openaiAdminKey: string | null;
   openaiModel: string;
@@ -256,6 +259,7 @@ export interface Unit {
   personaResponseLength: 'curta' | 'normal' | 'detalhada';
   personaLanguage: 'pt-BR' | 'en-US' | 'es-ES' | 'fr-FR';
   personaResponseDelaySec: number;
+  personaMinReplyGapSec: number;
   personaEmojis: string[];
   personaEmojiFrequency: 'low' | 'normal' | 'high';
   qualificationEnabled: boolean;

@@ -68,6 +68,7 @@ type WizardDraft = Pick<
   | 'personaResponseLength'
   | 'personaLanguage'
   | 'personaResponseDelaySec'
+  | 'personaMinReplyGapSec'
   | 'personaEmojis'
   | 'personaEmojiFrequency'
   | 'qualificationEnabled'
@@ -130,6 +131,7 @@ function unitToDraft(u: Unit): WizardDraft {
     personaResponseLength: u.personaResponseLength,
     personaLanguage: u.personaLanguage,
     personaResponseDelaySec: u.personaResponseDelaySec,
+    personaMinReplyGapSec: u.personaMinReplyGapSec,
     personaEmojis: u.personaEmojis ?? [],
     personaEmojiFrequency: u.personaEmojiFrequency ?? 'normal',
     qualificationEnabled: u.qualificationEnabled,
@@ -360,6 +362,14 @@ export function WizardPanel() {
               min={0}
               max={30}
               hint="0 = imediato. Simula 'digitando…' humano."
+            />
+            <NumberField
+              label="Intervalo mínimo entre respostas no mesmo lead (s)"
+              value={draft.personaMinReplyGapSec}
+              onChange={(v) => update({ personaMinReplyGapSec: v })}
+              min={0}
+              max={120}
+              hint="Trava anti-loop do Kommo. 0 = desligado. Recomendado 30 com o modo /execute."
             />
           </div>
           <div className="mt-3">

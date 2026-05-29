@@ -100,6 +100,14 @@ model Unit {
   kommoWidgetSecret       String? @map("kommo_widget_secret")
   // ID do Salesbot novo (o que tem o passo Widget). Opcional — só logging.
   kommoWidgetSalesbotId   Int?    @map("kommo_widget_salesbot_id")
+  // MODO /execute (opt-in por unidade) — caminho LEGADO (PATCH no campo
+  // "Resposta IA") + disparo EXPLÍCITO do Salesbot via POST /api/v4/bots/{id}/run
+  // (https://developers.kommo.com/reference/lancar-um-salesbot), em vez de
+  // depender do gatilho do Digital Pipeline "campo mudou → rodar Salesbot".
+  // Recomendado pelo suporte do Kommo contra o anti-loop (ativação duplicada
+  // do gatilho). ATENÇÃO: ao ligar, o gatilho de "campo mudou" do DP DEVE ser
+  // DESLIGADO nesta unidade, senão dispara 2× e duplica a mensagem.
+  kommoSalesbotExecuteEnabled Boolean @default(false) @map("kommo_salesbot_execute_enabled")
 
   // OpenAI — credenciais por unidade (cada uma com sua API key e assistant)
   openaiApiKey      String? @map("openai_api_key")
@@ -156,6 +164,11 @@ model Unit {
   // Pausa em segundos antes de enviar a resposta, simulando "digitando…" humano.
   // 0 = sem pausa. Útil pra não parecer bot em mensagens curtas.
   personaResponseDelaySec Int @default(0) @map("persona_response_delay_sec")
+  // Intervalo MÍNIMO (segundos) entre DUAS respostas no MESMO lead. Trava
+  // anti-loop: o algoritmo do Kommo trava o gatilho quando duas respostas
+  // saem muito próximas no mesmo lead. Se uma 2ª resposta tentar sair antes
+  // desse intervalo, ela espera o tempo restante. 0 = desligado.
+  personaMinReplyGapSec Int @default(0) @map("persona_min_reply_gap_sec")
 
   // EMOJI STYLE — paleta de emojis que a IA pode usar livremente nas respostas
   // (string[] de qualquer emoji) + frequência ("low" | "normal" | "high").

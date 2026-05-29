@@ -360,6 +360,8 @@ interface KommoCreds {
   salesbotId: number | null;
   replyFieldId: number | null;
   bypassSalesbot: boolean;
+  /** Modo /execute: dispara o Salesbot via POST /bots/{id}/run após o PATCH. */
+  salesbotExecuteEnabled: boolean;
 }
 
 function credsFromUnit(
@@ -370,6 +372,7 @@ function credsFromUnit(
     | 'kommoSalesbotId'
     | 'kommoReplyFieldId'
     | 'kommoBypassSalesbot'
+    | 'kommoSalesbotExecuteEnabled'
   >,
 ): KommoCreds {
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
@@ -381,6 +384,7 @@ function credsFromUnit(
     salesbotId: unit.kommoSalesbotId,
     replyFieldId: unit.kommoReplyFieldId,
     bypassSalesbot: unit.kommoBypassSalesbot ?? false,
+    salesbotExecuteEnabled: unit.kommoSalesbotExecuteEnabled ?? false,
   };
 }
 
@@ -391,6 +395,7 @@ function credsFromEnv(): KommoCreds {
     salesbotId: env.KOMMO_SALESBOT_ID ?? null,
     replyFieldId: env.KOMMO_REPLY_FIELD_ID ?? null,
     bypassSalesbot: false,
+    salesbotExecuteEnabled: false,
   };
 }
 
@@ -1171,6 +1176,51 @@ export class KommoClient {
       wrapAxiosError(err, `runSalesbot:setField(${leadId}, field=${replyFieldId})`);
     }
 
+    // MODO /execute (opt-in por unidade `kommoSalesbotExecuteEnabled`):
+    // além do PATCH — que grava o texto que o bot vai LER — disparamos o
+    // Salesbot EXPLICITAMENTE via POST /api/v4/bots/{id}/run. Nesse modo o
+    // gatilho do Digital Pipeline "campo Resposta IA mudou → rodar Salesbot"
+    // DEVE estar DESLIGADO no Kommo desta unidade; senão dispara 2× (pelo
+    // campo + pelo nosso /run) e a mensagem duplica.
+    // Endpoint oficial: https://developers.kommo.com/reference/lancar-um-salesbot
+    // (entity_type é a STRING "leads", não um número; sucesso = 202).
+    if (this.creds.salesbotExecuteEnabled) {
+      const t0Run = performance.now();
+      try {
+        await this.http.post(`/bots/${salesbotId}/run`, {
+          entity_id: leadId,
+          entity_type: 'leads',
+        });
+        const runMs = Math.round(performance.now() - t0Run);
+        logger.info(
+          { leadId, salesbotId, route: 'bots_run' },
+          'runSalesbot: POST /bots/{id}/run (modo /execute) enviado',
+        );
+        await recorder?.step({
+          kind: 'KOMMO_ACTION',
+          title: `🤖 /execute: POST /bots/${salesbotId}/run (entity_type=leads)`,
+          payload: {
+            leadId,
+            salesbotId,
+            triggeredBy: 'execute_api',
+            endpoint: `/api/v4/bots/${salesbotId}/run`,
+            nota: 'Modo /execute: o gatilho de "campo mudou" do Digital Pipeline DEVE estar DESLIGADO nesta unidade pra não duplicar.',
+          },
+          latencyMs: runMs,
+        });
+        return { runApi: 'execute', triggeredBy: 'execute_api', salesbotId };
+      } catch (err) {
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        const msg = err instanceof Error ? err.message : String(err);
+        await recorder?.step({
+          kind: 'ERROR',
+          title: `❌ /execute POST /bots/${salesbotId}/run falhou (${status ?? '?'}): ${msg}`,
+          payload: { leadId, salesbotId, status, error: msg },
+        });
+        wrapAxiosError(err, `runSalesbot:execute(${leadId}, bot=${salesbotId})`);
+      }
+    }
+
     // PATCH foi o disparo. NÃO chamamos POST /salesbot/{id}/run pra evitar
     // duplicação. Se uma conta NÃO tem o trigger do Digital Pipeline e a
     // resposta nunca chega ao paciente, é sinal de config faltando no Kommo
@@ -1444,6 +1494,7 @@ export function createKommoClient(
     | 'kommoSalesbotId'
     | 'kommoReplyFieldId'
     | 'kommoBypassSalesbot'
+    | 'kommoSalesbotExecuteEnabled'
   >,
 ): KommoClient {
   const creds = credsFromUnit(unit);
@@ -1466,6 +1517,7 @@ export async function isLeadPaused(
     | 'kommoReplyFieldId'
     | 'kommoPausedFieldId'
     | 'kommoBypassSalesbot'
+    | 'kommoSalesbotExecuteEnabled'
   >,
   leadId: number,
 ): Promise<boolean> {
