@@ -16,6 +16,7 @@
 // ============================================================================
 
 import type { Conversation, Message } from '@prisma/client';
+import { notifyDashboard } from '../lib/dashboard-webhook.js';
 import { prisma } from '../lib/prisma.js';
 
 export interface UpsertConversationParams {
@@ -68,6 +69,10 @@ export async function addMessage(p: AddMessageParams): Promise<Message> {
     where: { id: p.conversationId },
     data: { lastMessageAt: new Date() },
   });
+
+  // Notifica o painel Doutor-Digital-Dash (fire-and-forget, jamais bloqueia).
+  void notifyDashboard(p.conversationId);
+
   return message;
 }
 

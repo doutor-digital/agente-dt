@@ -71,6 +71,16 @@ const schema = z.object({
   AUTH_COOKIE_NAME: z.string().default('dt_session'),
   AUTH_COOKIE_DOMAIN: z.string().optional(),
   AUTH_SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+
+  // ---------------------------------------------------------------------------
+  // Webhook outbound pro painel Doutor-Digital-Dash. Toda mensagem de conversa
+  // (paciente ou IA) é re-enviada pra esse endpoint pra alimentar o dashboard
+  // /conversas. Vazio = desligado (modo dev).
+  // ---------------------------------------------------------------------------
+  DASHBOARD_WEBHOOK_BASE_URL: z
+    .string()
+    .url()
+    .default('https://doutor-digital-dash-production.up.railway.app/webhooks/agent'),
 });
 
 const parsed = schema.safeParse(process.env);
