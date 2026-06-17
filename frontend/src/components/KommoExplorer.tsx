@@ -31,10 +31,12 @@ interface Props {
   replyFieldId: number | null;
   pausedFieldId: number | null;
   wonStatusIds: number[];
+  allowedStatusIds: number[];
   onSalesbotChange: (id: number | null) => void;
   onReplyFieldChange: (id: number | null) => void;
   onPausedFieldChange: (id: number | null) => void;
   onWonStatusIdsChange: (ids: number[]) => void;
+  onAllowedStatusIdsChange: (ids: number[]) => void;
   /** Salva a Unit inteira no banco (mesma ação do botão "Salvar" do topo). */
   onSave: () => Promise<void>;
   saving?: boolean;
@@ -230,6 +232,63 @@ export function KommoExplorer(props: Props) {
                               props.onWonStatusIdsChange(next);
                             }}
                             className="accent-emerald-500"
+                          />
+                          <span className="truncate">{s.name}</span>
+                          <span className="ml-auto text-[10px] text-zinc-500">#{s.id}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+          </div>
+        )}
+      </div>
+
+      {/* Pipelines + etapas permitidas (allowlist de resposta da IA) */}
+      <div>
+        <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
+          Etapas em que a IA responde
+        </div>
+        <div className="text-[10px] text-zinc-600 mb-2">
+          Marque as etapas em que a IA deve responder. Se deixar <strong>tudo desmarcado</strong>, a IA
+          responde em qualquer etapa. Marcando, ela <strong>só</strong> responde nas selecionadas — nas
+          demais (ex: agendado, em tratamento) o agente fica em silêncio.
+        </div>
+        {!pipelines && (
+          <div className="text-[11px] text-zinc-600 italic">Carregue os dados do Kommo pra escolher etapas.</div>
+        )}
+        {pipelines?.pipelines && pipelines.pipelines.length > 0 && (
+          <div className="space-y-2">
+            {pipelines.pipelines
+              .filter((p) => !p.isArchive)
+              .map((p) => (
+                <div key={p.id} className="rounded border border-zinc-800 bg-zinc-950/40 p-2">
+                  <div className="text-[11px] font-medium text-zinc-300 mb-1.5 flex items-center gap-2">
+                    {p.name}
+                    {p.isMain && <span className="text-[9px] uppercase tracking-wider text-brand-400">Principal</span>}
+                  </div>
+                  <div className="grid grid-cols-2 gap-1">
+                    {p.statuses.map((s) => {
+                      const checked = props.allowedStatusIds.includes(s.id);
+                      return (
+                        <label
+                          key={s.id}
+                          className={clsx(
+                            'flex items-center gap-2 px-2 py-1 rounded text-xs cursor-pointer transition',
+                            checked ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-300 hover:bg-zinc-800/40',
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const next = e.target.checked
+                                ? [...props.allowedStatusIds, s.id]
+                                : props.allowedStatusIds.filter((x) => x !== s.id);
+                              props.onAllowedStatusIdsChange(next);
+                            }}
+                            className="accent-sky-500"
                           />
                           <span className="truncate">{s.name}</span>
                           <span className="ml-auto text-[10px] text-zinc-500">#{s.id}</span>

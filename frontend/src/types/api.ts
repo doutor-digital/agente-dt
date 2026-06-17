@@ -223,6 +223,9 @@ export interface Unit {
   kommoReplyFieldId: number | null;
   kommoPausedFieldId: number | null;
   kommoWonStatusIds: number[];
+  /** Etapas em que a IA tem permissão de responder (allowlist). Vazio = responde
+   *  em qualquer etapa; preenchido = só responde nas etapas marcadas. */
+  kommoAllowedStatusIds: number[];
   kommoBypassSalesbot: boolean;
   /** Modo widget (handler widget_request do Salesbot) — entrega via return_url
    *  em vez de PATCH+Digital Pipeline. Flag de piloto, por unidade. */

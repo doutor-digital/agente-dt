@@ -631,16 +631,51 @@ export async function processAgent(args: {
     return;
   }
 
-  // Guard global: lead está em uma das etapas configuradas como "IA pausada"
-  // pelas regras globais? (kind=pause_in_stages — gerenciado pelo super-admin)
-  // Faz 1 GET no lead e cruza com o Set agregado de pares (pipelineId, statusId).
+  // Guards que dependem da ETAPA atual do lead. Ambos precisam de 1 GET no
+  // lead, então buscamos uma vez só e cruzamos os dois:
+  //   1. unit.kommoAllowedStatusIds (allowlist por unidade): se preenchida, a
+  //      IA SÓ responde quando o lead está numa dessas etapas. Qualquer outra
+  //      (ex: agendado, em tratamento) → pula. Lista vazia = responde em tudo.
+  //   2. pause_in_stages (regra global, super-admin): etapas onde a IA fica
+  //      pausada. Cruza com o Set agregado de pares (pipelineId, statusId).
   try {
+    const allowedStatusIds = unit.kommoAllowedStatusIds ?? [];
     const pausedStages = await getPausedStagesGlobalSet();
-    if (pausedStages.size > 0) {
+    if (allowedStatusIds.length > 0 || pausedStages.size > 0) {
       const kommo = createKommoClient(unit);
       const lead = await kommo.getLead(leadId);
       const sid = lead.status_id;
       const pid = lead.pipeline_id;
+
+      // Allowlist por unidade: se preenchida e o lead NÃO está numa etapa
+      // permitida, a IA não responde. (sid ausente → trata como não permitido.)
+      if (allowedStatusIds.length > 0 && (!sid || !allowedStatusIds.includes(sid))) {
+        await finishWidgetSilently(); // libera o Salesbot pausado (modo widget)
+        const totalLatency = Math.round(performance.now() - requestStart);
+        await recorder.step({
+          kind: 'COMPLETED',
+          title: `IA não responde nesta etapa — lead em ${sid ?? '?'} (pipeline ${pid ?? '?'}), fora das etapas permitidas`,
+          payload: {
+            leadId,
+            statusId: sid,
+            pipelineId: pid,
+            allowedStatusIds,
+            reason: 'stage_not_in_allowlist',
+          },
+          latencyMs: totalLatency,
+        });
+        await recorder.finalize({
+          status: 'SUCCESS',
+          latencyMs: totalLatency,
+          iaDecision: '__stage_not_allowed__',
+        });
+        logger.info(
+          { traceId, leadId, unit: unit.slug, statusId: sid, pipelineId: pid, allowedStatusIds },
+          'agente pulado (etapa fora da allowlist kommoAllowedStatusIds)',
+        );
+        return;
+      }
+
       const matched =
         (sid && pausedStages.has(`*:${sid}`)) ||
         (sid && pid && pausedStages.has(`${pid}:${sid}`));
@@ -672,7 +707,7 @@ export async function processAgent(args: {
     }
   } catch (err) {
     // Guard nunca pode derrubar o agente — se a checagem falhou, segue normal.
-    logger.warn({ err, leadId, unit: unit.slug }, 'falha no guard pause_in_stages — seguindo');
+    logger.warn({ err, leadId, unit: unit.slug }, 'falha no guard de etapa (allowlist/pause_in_stages) — seguindo');
   }
 
   try {

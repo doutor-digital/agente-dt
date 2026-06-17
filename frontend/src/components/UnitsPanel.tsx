@@ -89,6 +89,7 @@ const blankInput: UnitInput = {
   kommoReplyFieldId: null,
   kommoPausedFieldId: null,
   kommoWonStatusIds: [],
+  kommoAllowedStatusIds: [],
   kommoBypassSalesbot: false,
   kommoWidgetReplyEnabled: false,
   kommoSalesbotExecuteEnabled: false,
@@ -124,6 +125,7 @@ function unitToInput(u: Unit): UnitInput {
     kommoReplyFieldId: u.kommoReplyFieldId,
     kommoPausedFieldId: u.kommoPausedFieldId ?? null,
     kommoWonStatusIds: u.kommoWonStatusIds ?? [],
+    kommoAllowedStatusIds: u.kommoAllowedStatusIds ?? [],
     kommoBypassSalesbot: u.kommoBypassSalesbot ?? false,
     kommoWidgetReplyEnabled: u.kommoWidgetReplyEnabled ?? false,
     kommoSalesbotExecuteEnabled: u.kommoSalesbotExecuteEnabled ?? false,
@@ -482,10 +484,12 @@ export function UnitsPanel() {
               replyFieldId={draft.kommoReplyFieldId ?? null}
               pausedFieldId={draft.kommoPausedFieldId ?? null}
               wonStatusIds={draft.kommoWonStatusIds ?? []}
+              allowedStatusIds={draft.kommoAllowedStatusIds ?? []}
               onSalesbotChange={(id) => setDraft({ ...draft, kommoSalesbotId: id })}
               onReplyFieldChange={(id) => setDraft({ ...draft, kommoReplyFieldId: id })}
               onPausedFieldChange={(id) => setDraft({ ...draft, kommoPausedFieldId: id })}
               onWonStatusIdsChange={(ids) => setDraft({ ...draft, kommoWonStatusIds: ids })}
+              onAllowedStatusIdsChange={(ids) => setDraft({ ...draft, kommoAllowedStatusIds: ids })}
               onSave={handleSave}
               saving={saving}
             />

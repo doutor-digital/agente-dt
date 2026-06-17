@@ -84,6 +84,12 @@ model Unit {
   // recebe leads.status com um id desta lista, marcamos a Conversation
   // como convertida e disparamos o juiz LLM.
   kommoWonStatusIds Int[]   @default([]) @map("kommo_won_status_ids")
+  // Etapas do funil em que a IA TEM permissão de responder (allowlist). Quando
+  // a lista está VAZIA, a IA responde em qualquer etapa (comportamento padrão).
+  // Quando preenchida, a IA SÓ responde se o lead estiver numa dessas etapas;
+  // em qualquer outra (ex: agendado, em tratamento) o agente é pulado. Guard
+  // no webhook (processAgent) cruza com lead.status_id.
+  kommoAllowedStatusIds Int[] @default([]) @map("kommo_allowed_status_ids")
 
   // MODO WIDGET (handler `widget_request` do Salesbot) — alternativa ao
   // PATCH no campo "Resposta IA" + gatilho do Digital Pipeline. Quando

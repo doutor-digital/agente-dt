@@ -108,6 +108,7 @@ export interface UnitInput {
   kommoReplyFieldId?: number | null;
   kommoPausedFieldId?: number | null;
   kommoWonStatusIds?: number[];
+  kommoAllowedStatusIds?: number[];
   kommoBypassSalesbot?: boolean;
   kommoWidgetReplyEnabled?: boolean;
   kommoWidgetSecret?: string | null;
@@ -203,6 +204,7 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       kommoReplyFieldId: input.kommoReplyFieldId ?? null,
       kommoPausedFieldId: input.kommoPausedFieldId ?? null,
       kommoWonStatusIds: input.kommoWonStatusIds ?? [],
+      kommoAllowedStatusIds: input.kommoAllowedStatusIds ?? [],
       kommoWidgetReplyEnabled: input.kommoWidgetReplyEnabled ?? false,
       kommoWidgetSecret: input.kommoWidgetSecret ?? null,
       kommoWidgetSalesbotId: input.kommoWidgetSalesbotId ?? null,
@@ -272,6 +274,7 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.kommoReplyFieldId !== undefined && { kommoReplyFieldId: input.kommoReplyFieldId }),
       ...(input.kommoPausedFieldId !== undefined && { kommoPausedFieldId: input.kommoPausedFieldId }),
       ...(input.kommoWonStatusIds !== undefined && { kommoWonStatusIds: input.kommoWonStatusIds }),
+      ...(input.kommoAllowedStatusIds !== undefined && { kommoAllowedStatusIds: input.kommoAllowedStatusIds }),
       ...(input.kommoBypassSalesbot !== undefined && { kommoBypassSalesbot: input.kommoBypassSalesbot }),
       ...(input.kommoWidgetReplyEnabled !== undefined && { kommoWidgetReplyEnabled: input.kommoWidgetReplyEnabled }),
       ...(input.kommoWidgetSecret !== undefined && { kommoWidgetSecret: input.kommoWidgetSecret }),
