@@ -22,7 +22,7 @@ import { handleWidgetRequest } from '../controllers/widget.controller.js';
 import { handleMetaVerify, handleMetaWebhook } from '../controllers/meta.controller.js';
 import { listTraces, getTrace, getStats } from '../controllers/traces.controller.js';
 import { listSystemLogs, listSystemLogModules } from '../controllers/logs.controller.js';
-import { getConfig, putConfig } from '../controllers/config.controller.js';
+import { getConfig, putConfig, getFlattenedPrompt } from '../controllers/config.controller.js';
 import {
   listUnitsHandler,
   getUnitHandler,
@@ -249,6 +249,7 @@ apiRouter.post('/conversations/:id/evaluate', reEvaluateConversationHandler);
 
 // Config — legado, mantém aberto pra qualquer logado (refactor pendente).
 apiRouter.get('/config', getConfig);
+apiRouter.get('/config/flatten', getFlattenedPrompt);
 apiRouter.put('/config', putConfig);
 
 // Alertas globais — só SUPER_ADMIN faz sentido (agrega múltiplas units).

@@ -252,6 +252,8 @@ export interface Unit {
   metaWabaId: string | null;
   metaMonthlyBudgetUsd: number | string;
   systemPrompt: string;
+  /** Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer). */
+  singlePromptMode: boolean;
   /** Categoria/segmento — seleciona o preset de persona (ex: "saude", "energia_solar"). */
   category: string | null;
 

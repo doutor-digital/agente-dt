@@ -804,6 +804,74 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
   return xmlBlock('primeiro_turno', lines.join('\n'));
 }
 
+// Bloco de RUNTIME: injeta o leadId real desta conversa pra IA usar nas tool
+// calls. Sem isso, ela passa `leadId: 0` ou a string "leadId" e as tools falham.
+function renderConversationContext(leadId: number): string {
+  return xmlBlock('contexto_conversa', [
+    `- leadId desta conversa: **${leadId}**`,
+    '- Ao chamar QUALQUER tool, use ESTE número EXATAMENTE como o argumento `leadId`.',
+    '- NUNCA passe 0, NUNCA passe a string "leadId", NUNCA invente outro número.',
+    `- Exemplo correto: aplicar_tag({ leadId: ${leadId}, tag: "..." }).`,
+  ].join('\n'));
+}
+
+/**
+ * "Achatar" a config atual num texto único — usado pelo botão "Centralizar no
+ * prompt". Renderiza TODOS os blocos de política fixa (persona, fontes, regras,
+ * toggles, ações, templates) na mesma ordem do modo em camadas, mas SEM os
+ * blocos de runtime (memória, leadId, RAG) — esses seguem dinâmicos. O texto
+ * resultante vira o novo systemPrompt e o usuário passa a editar só ali.
+ */
+export function composeFlattenedPrompt(input: ComposeInput): string {
+  const {
+    unit,
+    agentConfigPrompt,
+    templates = [],
+    actions = [],
+    globalActions = [],
+    leadFieldRules = [],
+  } = input;
+
+  const customBase = (agentConfigPrompt && agentConfigPrompt.trim().length > 0
+    ? agentConfigPrompt
+    : unit.systemPrompt
+  )?.trim();
+
+  const blocks: string[] = [];
+  blocks.push(renderPersona(unit));
+  const sourcesBlock = renderSources(unit);
+  if (sourcesBlock) blocks.push(sourcesBlock);
+  if (customBase) blocks.push(xmlBlock('instrucoes_extras', customBase));
+  blocks.push(renderRulesGlobal());
+
+  const featureBlocks = [
+    renderCollectName(unit),
+    renderCollectSource(unit),
+    renderQualification(unit),
+    renderTriage(unit),
+    renderHandoff(unit),
+    renderPipelineIntents(unit),
+    renderContactCollection(unit),
+    renderWelcomeCoupon(unit),
+    renderBusinessHours(unit),
+    renderFollowUp(unit),
+  ].filter((b) => b.trim().length > 0);
+  if (featureBlocks.length > 0) {
+    blocks.push(xmlBlock('comportamentos_ativados', featureBlocks.join('\n\n')));
+  }
+
+  const globalActionsBlock = renderGlobalActions(globalActions);
+  if (globalActionsBlock) blocks.push(globalActionsBlock);
+  const actionsBlock = renderActions(actions);
+  if (actionsBlock) blocks.push(actionsBlock);
+  const leadFieldsBlock = renderLeadFieldRules(leadFieldRules);
+  if (leadFieldsBlock) blocks.push(leadFieldsBlock);
+  const templatesBlock = renderTemplates(templates);
+  if (templatesBlock) blocks.push(templatesBlock);
+
+  return blocks.join('\n\n');
+}
+
 export function composeSystemPrompt(input: ComposeInput): string {
   const {
     unit,
@@ -832,6 +900,24 @@ export function composeSystemPrompt(input: ComposeInput): string {
     ? agentConfigPrompt
     : unit.systemPrompt
   )?.trim();
+
+  // MODO PROMPT ÚNICO: o texto do usuário é o prompt INTEIRO. Não injetamos
+  // nenhum bloco auto-gerado (persona, regras, toggles, fontes, ações, templates
+  // — tudo isso o usuário já escreveu no próprio texto via "Centralizar no
+  // prompt"). Só somamos os 3 blocos de RUNTIME (dado vivo que não cabe num
+  // texto fixo): memória do paciente, contexto do leadId e RAG.
+  if (unit.singlePromptMode) {
+    const single: string[] = [];
+    if (customBase) single.push(customBase);
+    const memBlock = renderLeadMemory(leadMemory);
+    if (memBlock) single.push(memBlock);
+    if (leadId && Number.isFinite(leadId) && leadId > 0) {
+      single.push(renderConversationContext(leadId));
+    }
+    const knBlock = renderKnowledge(knowledge);
+    if (knBlock) single.push(knBlock);
+    return single.join('\n\n');
+  }
 
   const blocks: string[] = [];
 
@@ -878,14 +964,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // nas tool calls. Sem isso, ela passa `leadId: 0` literalmente (a palavra
   // "leadId" aparece nos textos de orientação das ações como placeholder).
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
-    blocks.push(
-      xmlBlock('contexto_conversa', [
-        `- leadId desta conversa: **${leadId}**`,
-        '- Ao chamar QUALQUER tool, use ESTE número EXATAMENTE como o argumento `leadId`.',
-        '- NUNCA passe 0, NUNCA passe a string "leadId", NUNCA invente outro número.',
-        `- Exemplo correto: aplicar_tag({ leadId: ${leadId}, tag: "..." }).`,
-      ].join('\n')),
-    );
+    blocks.push(renderConversationContext(leadId));
   }
 
   // Globais antes — peso semântico maior e cobrem segurança/compliance.
@@ -1022,4 +1101,35 @@ export async function composeSystemPromptForUnit(input: {
  */
 export function previewComposedPrompt(unit: Unit): string {
   return composeSystemPrompt({ unit });
+}
+
+/**
+ * Async variant do "achatar" — carrega templates/ações/regras do banco e
+ * devolve o texto da config atual flatten. Usado pelo endpoint do botão
+ * "Centralizar no prompt". Não carrega RAG/memória/flagged: esses são runtime.
+ */
+export async function composeFlattenedPromptForUnit(input: {
+  unit: Unit;
+  agentConfigPrompt?: string;
+}): Promise<string> {
+  const [templates, actions, globalActions, leadFieldRules] = await Promise.all([
+    prisma.messageTemplate.findMany({
+      where: { unitId: input.unit.id },
+      orderBy: { name: 'asc' },
+    }),
+    listEnabledActions(input.unit.id),
+    listEnabledGlobalActions().catch((err) => {
+      logger.warn({ err }, 'composeFlattenedPromptForUnit: listEnabledGlobalActions falhou — seguindo sem');
+      return [];
+    }),
+    listEnabledLeadFieldRules(input.unit.id),
+  ]);
+  return composeFlattenedPrompt({
+    unit: input.unit,
+    agentConfigPrompt: input.agentConfigPrompt,
+    templates,
+    actions,
+    globalActions,
+    leadFieldRules,
+  });
 }

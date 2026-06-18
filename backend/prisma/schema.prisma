@@ -153,6 +153,13 @@ model Unit {
   // (qualificação, handoff, etc) na hora de gerar o prompt efetivo.
   systemPrompt String @default("") @map("system_prompt")
 
+  // MODO PROMPT ÚNICO — quando true, o systemPrompt (ou AgentConfig.systemPrompt)
+  // É o prompt inteiro. O composer NÃO injeta os blocos auto-gerados (persona,
+  // regras, toggles, fontes, ações, templates) — só os 3 blocos de runtime
+  // (leadId, memória do paciente, RAG). Os campos do Wizard continuam salvos,
+  // só ficam inertes enquanto isto está ligado. Default false = modo em camadas.
+  singlePromptMode Boolean @default(false) @map("single_prompt_mode")
+
   // -------------------------------------------------------------------------
   // Wizard de configuração (features para leigos editarem sem mexer no prompt).
   // O `prompt-composer` lê esses campos e gera o systemPrompt final em runtime.

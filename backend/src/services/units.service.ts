@@ -66,6 +66,15 @@ export async function findUnitBySlugOrThrow(slug: string): Promise<Unit> {
   return unit;
 }
 
+export async function findUnitById(id: string): Promise<Unit | null> {
+  const cached = unitByIdCache.get(id);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const unit = await prisma.unit.findUnique({ where: { id } });
+  unitByIdCache.set(id, { value: unit, expiresAt: Date.now() + UNIT_TTL_MS });
+  if (unit) unitBySlugCache.set(unit.slug, { value: unit, expiresAt: Date.now() + UNIT_TTL_MS });
+  return unit;
+}
+
 // ---------------------------------------------------------------------------
 // Garante a unidade default — semeia a partir do .env se ainda não existir.
 // É chamada no boot. Sem isso, os webhooks legados ficam sem unidade.
@@ -134,6 +143,9 @@ export interface UnitInput {
   metaMonthlyBudgetUsd?: number;
 
   systemPrompt?: string;
+
+  /** Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer). */
+  singlePromptMode?: boolean;
 
   /** Categoria/segmento da unidade (ex: "saude", "energia_solar"). */
   category?: string | null;
@@ -226,6 +238,7 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
       metaWabaId: input.metaWabaId ?? null,
       metaMonthlyBudgetUsd: input.metaMonthlyBudgetUsd ?? 0,
       systemPrompt: input.systemPrompt ?? '',
+      singlePromptMode: input.singlePromptMode ?? false,
       category: input.category ?? null,
       // Wizard
       personaCompanyName: input.personaCompanyName ?? null,
@@ -297,6 +310,7 @@ export async function updateUnit(id: string, input: Partial<UnitInput>): Promise
       ...(input.metaWabaId !== undefined && { metaWabaId: input.metaWabaId }),
       ...(input.metaMonthlyBudgetUsd !== undefined && { metaMonthlyBudgetUsd: input.metaMonthlyBudgetUsd }),
       ...(input.systemPrompt !== undefined && { systemPrompt: input.systemPrompt }),
+      ...(input.singlePromptMode !== undefined && { singlePromptMode: input.singlePromptMode }),
       ...(input.category !== undefined && { category: input.category }),
       ...(input.personaCompanyName !== undefined && { personaCompanyName: input.personaCompanyName }),
       ...(input.personaTone !== undefined && { personaTone: input.personaTone }),

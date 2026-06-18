@@ -6,6 +6,7 @@ import {
   Save,
   Sparkles,
   ThumbsDown,
+  Wand2,
   Wrench,
 } from 'lucide-react';
 import { api } from '../lib/api';
@@ -38,6 +39,10 @@ export function AgentConfigPanel() {
   const [loaded, setLoaded] = useState<AgentConfigResponse | null>(null);
   const [draft, setDraft] = useState<AgentConfigInput | null>(null);
   const [saving, setSaving] = useState(false);
+  // Modo prompt único (flag na Unit, persistida na hora que muda).
+  const [singleMode, setSingleMode] = useState(false);
+  const [togglingMode, setTogglingMode] = useState(false);
+  const [flattening, setFlattening] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -56,6 +61,14 @@ export function AgentConfigPanel() {
         maxTokens: r.config.maxTokens,
       });
     });
+    // Carrega a flag singlePromptMode da unidade (separada do AgentConfig).
+    if (selectedUnitId) {
+      api.getUnit(selectedUnitId)
+        .then((u) => { if (alive) setSingleMode(u.singlePromptMode); })
+        .catch(() => { if (alive) setSingleMode(false); });
+    } else {
+      setSingleMode(false);
+    }
     return () => {
       alive = false;
     };
@@ -90,6 +103,48 @@ export function AgentConfigPanel() {
 
   const handleResetPrompt = () => {
     setDraft({ ...draft, systemPrompt: loaded.defaults.systemPrompt });
+  };
+
+  // Liga/desliga o modo prompt único — persiste na Unit imediatamente.
+  const handleToggleSingleMode = async (v: boolean) => {
+    if (!selectedUnitId) {
+      toast.error('Selecione uma unidade primeiro.');
+      return;
+    }
+    setTogglingMode(true);
+    try {
+      await api.updateUnit(selectedUnitId, { singlePromptMode: v });
+      setSingleMode(v);
+      toast.success(
+        v
+          ? 'Modo prompt único LIGADO. O texto abaixo agora é o prompt inteiro.'
+          : 'Modo prompt único desligado. Voltou ao modo em camadas.',
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Falha ao alternar modo: ${msg}`);
+    } finally {
+      setTogglingMode(false);
+    }
+  };
+
+  // "Centralizar no prompt": puxa a config achatada e joga no editor (não salva).
+  const handleFlatten = async () => {
+    if (!selectedUnitId) {
+      toast.error('Selecione uma unidade primeiro.');
+      return;
+    }
+    setFlattening(true);
+    try {
+      const prompt = await api.getFlattenedPrompt(selectedUnitId);
+      setDraft({ ...draft, systemPrompt: prompt });
+      toast.success('Config achatada no editor abaixo. Revise e clique em Salvar alterações.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Falha ao centralizar: ${msg}`);
+    } finally {
+      setFlattening(false);
+    }
   };
 
   return (
@@ -142,12 +197,64 @@ export function AgentConfigPanel() {
           </div>
         </section>
 
+        {/* MODO PROMPT ÚNICO */}
+        <section className="rounded-xl border border-brand-500/30 bg-brand-500/5 p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
+              <h2 className="font-semibold text-zinc-100 flex items-center gap-2">
+                <Sparkles size={16} className="text-brand-300" />
+                Modo prompt único
+              </h2>
+              <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                Quando ligado, o <strong className="text-zinc-200">texto abaixo é o prompt
+                INTEIRO</strong>. A IA para de usar os blocos auto-gerados (persona, regras,
+                toggles, Fontes, ações, templates) — só os dados de runtime (leadId, memória do
+                paciente, base de conhecimento) entram automaticamente. Seus toggles continuam
+                salvos; só ficam inertes enquanto isto está ligado.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={singleMode}
+              onClick={() => handleToggleSingleMode(!singleMode)}
+              disabled={togglingMode || !selectedUnitId}
+              className={`relative shrink-0 w-11 h-6 rounded-full transition-colors disabled:opacity-50 ${
+                singleMode ? 'bg-brand-500' : 'bg-zinc-700'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                  singleMode ? 'translate-x-5' : ''
+                }`}
+              />
+            </button>
+          </div>
+          <div className="mt-4 flex items-center gap-3 flex-wrap">
+            <button
+              onClick={handleFlatten}
+              disabled={flattening || !selectedUnitId}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-100 text-xs font-medium transition-colors"
+            >
+              {flattening ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />}
+              {flattening ? 'Centralizando…' : 'Centralizar no prompt'}
+            </button>
+            <span className="text-[11px] text-zinc-500 flex-1 min-w-[200px]">
+              Puxa tudo que você já configurou (persona, Fontes, toggles…) e escreve aqui embaixo,
+              num lugar só. <strong className="text-zinc-400">Revise e clique em Salvar</strong> —
+              depois ligue o modo único acima.
+            </span>
+          </div>
+        </section>
+
         {/* SYSTEM PROMPT */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Sparkles size={16} className="text-brand-300" />
-              <h2 className="font-semibold text-zinc-100">Instruções extras (opcional)</h2>
+              <h2 className="font-semibold text-zinc-100">
+                {singleMode ? 'Prompt completo (modo único ativo)' : 'Instruções extras (opcional)'}
+              </h2>
             </div>
             <button
               onClick={handleResetPrompt}

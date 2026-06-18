@@ -67,6 +67,8 @@ const unitInputBase = {
   metaWabaId: z.string().nullable().optional(),
   metaMonthlyBudgetUsd: z.coerce.number().min(0).max(1_000_000).optional(),
   systemPrompt: z.string().max(20_000).optional(),
+  // Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer).
+  singlePromptMode: z.boolean().optional(),
   // Categoria/segmento — seleciona o preset de persona no composer.
   category: z.string().max(60).nullable().optional(),
 

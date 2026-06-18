@@ -257,6 +257,14 @@ export const api = {
     return data.config;
   },
 
+  /** "Centralizar no prompt": achata a config atual da unidade num texto único. */
+  async getFlattenedPrompt(unitId: string): Promise<string> {
+    const { data } = await http.get<{ prompt: string }>('/config/flatten', {
+      params: { unitId },
+    });
+    return data.prompt;
+  },
+
   // -------------------------------------------------------------------------
   // Units
   // -------------------------------------------------------------------------

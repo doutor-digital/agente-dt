@@ -11,6 +11,8 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { getActiveConfig, saveConfig, DEFAULTS } from '../agent/config.js';
+import { composeFlattenedPromptForUnit } from '../agent/prompt-composer.js';
+import { findUnitById } from '../services/units.service.js';
 import { logger } from '../lib/logger.js';
 
 const KNOWN_TOOLS = ['aplicar_tag', 'mover_etapa', 'pausar_ia', 'atualizar_titulo_lead'];
@@ -46,6 +48,34 @@ export async function getConfig(req: Request, res: Response): Promise<void> {
       tools: DEFAULTS.tools,
     },
   });
+}
+
+// "Centralizar no prompt": achata a config atual da unidade (persona, fontes,
+// regras, toggles, ações, templates) num texto único e devolve pro front
+// preencher o editor. NÃO persiste nada — o usuário revisa e salva. Read-only.
+export async function getFlattenedPrompt(req: Request, res: Response): Promise<void> {
+  const unitId = (req.query.unitId as string | undefined) ?? null;
+  if (!unitId) {
+    res.status(400).json({ error: 'unitId_required' });
+    return;
+  }
+  const unit = await findUnitById(unitId);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  try {
+    const config = await getActiveConfig(unitId);
+    const prompt = await composeFlattenedPromptForUnit({
+      unit,
+      agentConfigPrompt: config.systemPrompt,
+    });
+    res.json({ prompt });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err, unitId }, 'falha ao achatar prompt');
+    res.status(500).json({ error: 'flatten_failed', message: msg });
+  }
 }
 
 export async function putConfig(req: Request, res: Response): Promise<void> {
