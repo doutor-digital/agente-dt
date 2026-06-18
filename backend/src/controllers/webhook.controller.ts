@@ -283,12 +283,41 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     return;
   }
 
-  // Confirmação de entrega: o Kommo manda webhook de mensagem OUTGOING quando o
-  // Salesbot entrega a resposta. Fechamos o ciclo do monitor de "resposta
-  // parada" (essas mensagens não acionam o agente).
+  // Confirmação de entrega + detecção de takeover humano. O Kommo manda webhook
+  // OUTGOING tanto quando o Salesbot entrega a NOSSA resposta quanto quando um
+  // atendente responde na mão. confirmDelivery() devolve true se a outgoing
+  // casou com uma resposta nossa pendente (= foi a IA). Uma outgoing que NÃO é
+  // nossa e cujo autor é um usuário da conta (author.type="user") significa que
+  // um humano assumiu — o cliente vem como author.type="external".
+  let humanTakeoverLeadId: number | null = null;
   for (const out of getOutgoingMessages(parsed.data)) {
-    if (out.entity_id) {
-      confirmDelivery({ unitId: unit.id, leadId: out.entity_id, text: out.text });
+    if (!out.entity_id) continue;
+    const wasOurReply = confirmDelivery({ unitId: unit.id, leadId: out.entity_id, text: out.text });
+    if (!wasOurReply && (out.author?.type ?? '').toLowerCase() === 'user') {
+      humanTakeoverLeadId = out.entity_id;
+    }
+  }
+
+  // Auto-pausa por takeover humano: atendente respondeu manualmente pelo Kommo →
+  // marcamos "IA Pausada" pra IA não atropelar a conversa. Destrava só manual
+  // (operador desmarca o campo). A TRAVA 2 (isLeadPaused) barra as próximas
+  // mensagens do cliente. Requer kommoPausedFieldId configurado.
+  if (humanTakeoverLeadId && unit.kommoPausedFieldId) {
+    try {
+      const kommo = createKommoClient(unit);
+      // Evita PATCH redundante a cada mensagem do atendente.
+      if (!(await kommo.isLeadFieldChecked(humanTakeoverLeadId, unit.kommoPausedFieldId))) {
+        await kommo.setLeadFieldFlag(humanTakeoverLeadId, unit.kommoPausedFieldId, true);
+        logger.info(
+          { leadId: humanTakeoverLeadId, unit: unit.slug },
+          'IA auto-pausada: atendente humano assumiu a conversa',
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        { err, leadId: humanTakeoverLeadId, unit: unit.slug },
+        'falha ao auto-pausar por takeover humano — seguindo',
+      );
     }
   }
 

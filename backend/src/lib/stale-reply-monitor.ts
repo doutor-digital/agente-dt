@@ -114,10 +114,10 @@ export function confirmDelivery(args: {
   unitId: string;
   leadId: string | number;
   text?: string | null;
-}): void {
+}): boolean {
   const k = key(args.unitId, String(args.leadId));
   const p = pendings.get(k);
-  if (!p) return;
+  if (!p) return false; // nada pendente — não foi uma resposta nossa rastreada
 
   // Correspondência: o Salesbot manda o valor do campo (a resposta, possivelmente
   // quebrada em chunks → substring). Se a outgoing não trouxer texto, confirmamos
@@ -125,7 +125,7 @@ export function confirmDelivery(args: {
   const out = args.text ? normalize(args.text) : '';
   const exp = normalize(p.text);
   const matches = out === '' || exp.includes(out) || out.includes(exp);
-  if (!matches) return; // outgoing não corresponde — provável msg manual do operador
+  if (!matches) return false; // outgoing não corresponde — provável msg manual do operador
 
   const latencyMs = Date.now() - p.patchedAt;
   pendings.delete(k);
@@ -147,6 +147,7 @@ export function confirmDelivery(args: {
     },
     `entrega confirmada — Salesbot do Kommo levou ${(latencyMs / 1000).toFixed(1)}s`,
   );
+  return true; // casou com nossa resposta pendente — foi a IA, não um humano
 }
 
 // Varredura periódica: alerta pendentes que passaram do limite.
