@@ -9,33 +9,25 @@
 // campos e gera o systemPrompt automaticamente — usuário leigo não precisa
 // nem ver o prompt.
 //
-// 8 features:
+// Features:
 //   1. Persona (nome, tom, saudação)
 //   2. Auto-qualificação Quente/Frio
 //   3. Handoff humano por palavras-chave
-//   4. Pipeline por intenção
-//   5. Coleta de contato proativa
-//   6. Cupom de boas-vindas
-//   7. Horário comercial
-//   8. Follow-up
+//   4. Follow-up
 // + 1 placeholder pra A/B (em construção)
 // ============================================================================
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   BookText,
   BrainCircuit,
   ChevronDown,
   ChevronRight,
-  Clock,
   Coffee,
-  Compass,
   Eye,
   EyeOff,
   Flame,
-  Gift,
   Loader2,
-  MessageSquarePlus,
   PhoneCall,
   Plus,
   Repeat,
@@ -44,7 +36,6 @@ import {
   TestTube,
   Trash2,
   UserCog,
-  Workflow as WorkflowIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
@@ -53,7 +44,6 @@ import { useToast } from '../context/ToastContext';
 import type {
   KnowledgeEntry,
   KommoLeadCustomField,
-  KommoPipelinesResponse,
   MessageTemplate,
   Unit,
   UnitInput,
@@ -95,24 +85,6 @@ type WizardDraft = Pick<
   | 'followUpAfterHours'
   | 'followUpMessage'
 >;
-
-const DAYS: Array<{ id: string; label: string }> = [
-  { id: 'sun', label: 'Dom' },
-  { id: 'mon', label: 'Seg' },
-  { id: 'tue', label: 'Ter' },
-  { id: 'wed', label: 'Qua' },
-  { id: 'thu', label: 'Qui' },
-  { id: 'fri', label: 'Sex' },
-  { id: 'sat', label: 'Sáb' },
-];
-
-const INTENTS: Array<{ key: string; label: string }> = [
-  { key: 'asked_quote', label: 'Cliente pediu orçamento/preço' },
-  { key: 'confirmed_order', label: 'Cliente confirmou que vai comprar' },
-  { key: 'scheduled_meeting', label: 'Cliente agendou reunião/consulta' },
-  { key: 'paid', label: 'Cliente confirmou pagamento' },
-  { key: 'refused', label: 'Cliente recusou explicitamente' },
-];
 
 // Categorias/segmentos disponíveis. Cada uma mapeia pra um preset de persona
 // no backend (prompt-composer). Adicionar uma nova aqui + no composer.
@@ -165,7 +137,6 @@ export function WizardPanel() {
   const toast = useToast();
   const [unit, setUnit] = useState<Unit | null>(null);
   const [draft, setDraft] = useState<WizardDraft | null>(null);
-  const [pipelines, setPipelines] = useState<KommoPipelinesResponse | null>(null);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<{ prompt: string; chars: number } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -180,7 +151,6 @@ export function WizardPanel() {
     if (!selectedUnitId) {
       setUnit(null);
       setDraft(null);
-      setPipelines(null);
       setKommoFields(null);
       return;
     }
@@ -189,13 +159,11 @@ export function WizardPanel() {
     setDraft(null);
     Promise.all([
       api.getUnit(selectedUnitId),
-      api.kommoPipelines(selectedUnitId).catch(() => null),
       api.kommoLeadCustomFields(selectedUnitId).catch(() => null),
-    ]).then(([u, p, f]) => {
+    ]).then(([u, f]) => {
       if (!alive) return;
       setUnit(u);
       setDraft(unitToDraft(u));
-      setPipelines(p);
       setKommoFields(f?.ok && f.fields ? f.fields : null);
     });
     return () => {
@@ -216,15 +184,6 @@ export function WizardPanel() {
     }, 600); // 600ms debounce — não fica disparando a cada keystroke
     return () => clearTimeout(handler);
   }, [selectedUnitId, draft, showPreview]);
-
-  const stages = useMemo(() => {
-    const out: Array<{ id: number; label: string }> = [];
-    for (const p of pipelines?.pipelines ?? []) {
-      if (p.isArchive) continue;
-      for (const s of p.statuses) out.push({ id: s.id, label: `${p.name} → ${s.name}` });
-    }
-    return out;
-  }, [pipelines]);
 
   if (!selectedUnitId) {
     return (
@@ -488,199 +447,6 @@ export function WizardPanel() {
               não cabem texto livre.
             </p>
           </div>
-        </FeatureCard>
-
-        {/* 4. PIPELINE INTENTS */}
-        <FeatureCard
-          icon={<WorkflowIcon size={16} className="text-sky-400" />}
-          title="🔀 Pipeline automático por intenção"
-          subtitle="A IA move o lead de etapa baseado no que o cliente diz."
-          enabled={!!draft.pipelineIntents && Object.keys(draft.pipelineIntents).length > 0}
-          onToggle={(v) =>
-            update({ pipelineIntents: v ? draft.pipelineIntents ?? {} : null })
-          }
-        >
-          <p className="text-[11px] text-zinc-400 mb-3">
-            Pra cada intenção, escolha pra qual etapa do funil o lead deve ir.
-          </p>
-          {stages.length === 0 && (
-            <div className="text-[11px] text-amber-300 mb-2">
-              ⚠ Etapas não carregaram. Confira o token do Kommo na aba Unidades.
-            </div>
-          )}
-          <div className="space-y-2">
-            {INTENTS.map((intent) => {
-              const current = (draft.pipelineIntents ?? {})[intent.key] ?? null;
-              return (
-                <div key={intent.key} className="flex items-center gap-2">
-                  <span className="text-xs text-zinc-300 flex-1">{intent.label}</span>
-                  <select
-                    value={current ?? ''}
-                    onChange={(e) => {
-                      const id = e.target.value ? Number(e.target.value) : null;
-                      const next = { ...(draft.pipelineIntents ?? {}) };
-                      if (id) next[intent.key] = id;
-                      else delete next[intent.key];
-                      update({ pipelineIntents: Object.keys(next).length ? next : null });
-                    }}
-                    className="w-72 px-2 py-1 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 focus:outline-none focus:border-brand-500"
-                  >
-                    <option value="">— não mover —</option>
-                    {stages.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              );
-            })}
-          </div>
-        </FeatureCard>
-
-        {/* 5. COLETA DE CONTATO */}
-        <FeatureCard
-          icon={<MessageSquarePlus size={16} className="text-emerald-400" />}
-          title="📩 Coleta proativa de contato"
-          subtitle="Depois de N turnos, a IA pede email/telefone com naturalidade."
-          enabled={draft.contactCollectionEnabled}
-          onToggle={(v) => update({ contactCollectionEnabled: v })}
-        >
-          <div className="grid md:grid-cols-2 gap-3">
-            <NumberField
-              label="Pedir contato após quantos turnos?"
-              value={draft.contactCollectionAfterTurns}
-              onChange={(v) => update({ contactCollectionAfterTurns: Math.max(1, v) })}
-              min={1}
-              max={20}
-            />
-          </div>
-          <p className="text-[11px] text-zinc-500 mt-2">
-            Em ${draft.contactCollectionAfterTurns} turnos, a IA pergunta o email/WhatsApp uma vez,
-            só se ainda não tiver coletado.
-          </p>
-        </FeatureCard>
-
-        {/* 5c. COLETAR ORIGEM (POR ONDE CONHECEU) */}
-        <FeatureCard
-          icon={<Compass size={16} className="text-teal-400" />}
-          title="🧭 Como conheceu a clínica"
-          subtitle="A IA pergunta a origem e aplica tag 'Origem: <fonte>' no lead."
-          enabled={draft.collectSourceEnabled}
-          onToggle={(v) => update({ collectSourceEnabled: v })}
-        >
-          <p className="text-[11px] text-zinc-400 leading-relaxed">
-            A IA faz UMA pergunta natural sobre por onde o lead chegou na clínica. Quando ele
-            responder (Instagram, indicação, Google…), aplica uma tag{' '}
-            <code className="text-[10px] px-1 py-0.5 rounded bg-zinc-900 text-teal-300">
-              Origem: &lt;fonte&gt;
-            </code>{' '}
-            no Kommo pra você medir canais que mais convertem.
-          </p>
-          <div className="mt-3">
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
-              Opções sugeridas (a IA cita naturalmente)
-            </label>
-            <KeywordList
-              keywords={draft.collectSourceOptions}
-              onChange={(opts) => update({ collectSourceOptions: opts })}
-              placeholder="ex: Instagram, Google, Indicação, TikTok"
-            />
-          </div>
-          <div className="mt-2 rounded-md bg-zinc-950/60 border border-zinc-800/60 px-3 py-2">
-            <div className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1">
-              Exemplo de pergunta da IA
-            </div>
-            <div className="text-[11px] text-zinc-300 italic">
-              "Aproveitando: por onde você nos conheceu? 🤔 (Instagram, indicação…)"
-            </div>
-          </div>
-        </FeatureCard>
-
-        {/* 6. CUPOM */}
-        <FeatureCard
-          icon={<Gift size={16} className="text-pink-400" />}
-          title="🎁 Cupom de boas-vindas"
-          subtitle="Primeiro contato? A IA oferece um cupom."
-          enabled={draft.welcomeCouponEnabled}
-          onToggle={(v) => update({ welcomeCouponEnabled: v })}
-        >
-          <TextareaField
-            label="Mensagem do cupom"
-            value={draft.welcomeCouponMessage ?? ''}
-            onChange={(v) => update({ welcomeCouponMessage: v || null })}
-            placeholder='ex: "Como é seu primeiro contato, tem 10% de desconto no primeiro pedido — código BEMVINDO10"'
-            rows={2}
-          />
-        </FeatureCard>
-
-        {/* 7. HORÁRIO COMERCIAL */}
-        <FeatureCard
-          icon={<Clock size={16} className="text-amber-400" />}
-          title="🕒 Horário comercial"
-          subtitle="Fora desse intervalo, a IA não responde — manda uma mensagem padrão."
-          enabled={draft.businessHoursEnabled}
-          onToggle={(v) => update({ businessHoursEnabled: v })}
-        >
-          <div className="grid md:grid-cols-3 gap-3">
-            <NumberField
-              label="Início (0-23)"
-              value={draft.businessHoursStart}
-              onChange={(v) => update({ businessHoursStart: Math.min(23, Math.max(0, v)) })}
-              min={0}
-              max={23}
-            />
-            <NumberField
-              label="Fim (0-23)"
-              value={draft.businessHoursEnd}
-              onChange={(v) => update({ businessHoursEnd: Math.min(23, Math.max(0, v)) })}
-              min={0}
-              max={23}
-            />
-            <TextField
-              label="Fuso"
-              value={draft.businessHoursTimezone}
-              onChange={(v) => update({ businessHoursTimezone: v })}
-              placeholder="America/Sao_Paulo"
-            />
-          </div>
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
-              Dias da semana
-            </label>
-            <div className="flex flex-wrap gap-1">
-              {DAYS.map((d) => {
-                const checked = draft.businessHoursDays.includes(d.id);
-                return (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => {
-                      const next = checked
-                        ? draft.businessHoursDays.filter((x) => x !== d.id)
-                        : [...draft.businessHoursDays, d.id];
-                      update({ businessHoursDays: next });
-                    }}
-                    className={clsx(
-                      'px-2.5 py-1 rounded-md text-xs transition',
-                      checked
-                        ? 'bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/40'
-                        : 'bg-zinc-900 text-zinc-500 ring-1 ring-zinc-800 hover:text-zinc-300',
-                    )}
-                  >
-                    {d.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <TextareaField
-            label="Mensagem fora do horário"
-            value={draft.outOfHoursMessage ?? ''}
-            onChange={(v) => update({ outOfHoursMessage: v || null })}
-            placeholder='ex: "Oi! Estamos atendendo de segunda a sexta, das 9h às 18h. Te respondemos amanhã cedo 🙏"'
-            rows={2}
-          />
         </FeatureCard>
 
         {/* 8. FOLLOW-UP */}
