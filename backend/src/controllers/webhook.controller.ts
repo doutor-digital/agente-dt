@@ -23,6 +23,9 @@ import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js'
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
+import { synthesizeSpeech } from '../services/tts.service.js';
+import { putAudio } from '../services/audio-store.js';
+import { env } from '../lib/env.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
@@ -776,6 +779,36 @@ export async function processAgent(args: {
       // widget e pro legado — os dois entregam resposta no mesmo lead.
       await enforceReplyGap(unit.id, leadId, unit.personaMinReplyGapSec ?? 0);
 
+      // ÁUDIO DE SAÍDA (TESTE): se o cliente mandou áudio, devolvemos em VOZ.
+      // Gera TTS, guarda em memória e troca o texto pelo LINK entre [colchetes]
+      // — o Salesbot do Kommo interpreta `[url]` no campo Resposta IA como
+      // arquivo e entrega como nota de voz. Só no caminho LEGADO: o modo widget
+      // (execute_handlers show:text) mostraria o link como texto literal.
+      // Falhou o TTS? cai de volta pro texto (outgoing = reply).
+      let outgoing = reply;
+      if (audioUrl && !deliver) {
+        try {
+          const speech = await synthesizeSpeech(unit, reply);
+          const id = putAudio(speech.buffer, speech.contentType, speech.ext);
+          const publicUrl = `${env.BACKEND_PUBLIC_URL}/audio/${id}.${speech.ext}`;
+          outgoing = `[${publicUrl}]`;
+          await recorder.step({
+            kind: 'THINKING',
+            title: `Resposta convertida em áudio (${speech.durationMs}ms) — enviando como nota de voz`,
+            payload: { publicUrl, bytes: speech.buffer.byteLength, ttsMs: speech.durationMs, text: reply },
+            latencyMs: speech.durationMs,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ err, leadId }, 'falha ao gerar áudio TTS — caindo pra texto');
+          await recorder.step({
+            kind: 'ERROR',
+            title: `Falha ao gerar áudio (TTS): ${msg} — enviando em texto`,
+            payload: { error: msg },
+          });
+        }
+      }
+
       const sendStart = performance.now();
       try {
         // MODO WIDGET usa o deliver (retoma o Salesbot via return_url);
@@ -783,7 +816,7 @@ export async function processAgent(args: {
         let sendResult: { via: string; detail?: unknown };
         if (deliver) {
           delivered = true;
-          sendResult = await deliver(reply);
+          sendResult = await deliver(outgoing);
         } else {
           const kommo = createKommoClient(unit);
           sendResult = await kommo.sendChatReply({
@@ -791,7 +824,7 @@ export async function processAgent(args: {
             chatId,
             talkId,
             contactId,
-            text: reply,
+            text: outgoing,
             recorder,
           });
         }
@@ -810,7 +843,7 @@ export async function processAgent(args: {
             unitSlug: unit.slug,
             unitName: unit.name,
             leadId: String(leadId),
-            text: reply,
+            text: outgoing,
           });
         }
         // Registra turno do assistente na conversa.

@@ -27,6 +27,7 @@ import { prisma } from './lib/prisma.js';
 import { apiRouter } from './routes/api.routes.js';
 import { getCheckpointer } from './agent/graph.js';
 import { ensureDefaultUnit } from './services/units.service.js';
+import { getAudio } from './services/audio-store.js';
 import { startWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
 import { startDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
@@ -92,6 +93,23 @@ async function main(): Promise<void> {
   });
 
   app.use('/api', apiRouter);
+
+  // Áudio TTS — rota PÚBLICA (sem auth) que serve os áudios gerados pela IA.
+  // O Kommo busca esse link (`[<url>]` no campo Resposta IA) e entrega ao
+  // paciente como nota de voz. Registrada antes do /docs e fora do /api de
+  // propósito: precisa ser acessível sem cookie de sessão.
+  app.get('/audio/:file', (req, res) => {
+    const id = req.params.file.replace(/\.[a-z0-9]+$/i, ''); // tira a extensão
+    const entry = getAudio(id);
+    if (!entry) {
+      res.status(404).json({ error: 'áudio não encontrado ou expirado' });
+      return;
+    }
+    res.setHeader('Content-Type', entry.contentType);
+    res.setHeader('Content-Length', String(entry.buf.byteLength));
+    res.setHeader('Cache-Control', 'public, max-age=600');
+    res.status(200).end(entry.buf);
+  });
 
   // Documentação web — servida em /docs.
   app.use('/docs', express.static(DOCS_DIR, { extensions: ['html'] }));

@@ -46,6 +46,23 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().min(10),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 
+  // ---------------------------------------------------------------------------
+  // Áudio de SAÍDA (TTS) — resposta da IA em voz quando o cliente manda áudio.
+  // ---------------------------------------------------------------------------
+  // OPENAI_TTS_MODEL: modelo de fala da OpenAI (tts-1, tts-1-hd, gpt-4o-mini-tts).
+  // OPENAI_TTS_VOICE: alloy, echo, fable, onyx, nova, shimmer.
+  OPENAI_TTS_MODEL: z.string().default('gpt-4o-mini-tts'),
+  OPENAI_TTS_VOICE: z.string().default('nova'),
+
+  // URL pública do PRÓPRIO backend — o Kommo busca o áudio gerado nesse host
+  // (`<BACKEND_PUBLIC_URL>/audio/<id>.ogg`). PRECISA ser alcançável pela
+  // internet (o mesmo domínio que recebe os webhooks; em dev, um túnel ngrok).
+  BACKEND_PUBLIC_URL: z
+    .string()
+    .url()
+    .default('http://localhost:3001')
+    .transform((s) => s.replace(/\/$/, '')), // tira barra final → evita //audio
+
   // Aceita lista separada por vírgula pra suportar múltiplas origens
   // (ex: domínio do Vercel + domínio customizado). Strip trailing slash
   // de cada uma — CORS exige match byte-a-byte e o navegador nunca manda
