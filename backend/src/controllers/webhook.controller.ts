@@ -779,54 +779,44 @@ export async function processAgent(args: {
       // widget e pro legado — os dois entregam resposta no mesmo lead.
       await enforceReplyGap(unit.id, leadId, unit.personaMinReplyGapSec ?? 0);
 
-      // ÁUDIO DE SAÍDA: se o cliente mandou áudio, respondemos em VOZ.
-      // Caminho CAMPO-SEPARADO: grava a URL CRUA do .ogg no campo dedicado
-      // (KOMMO_AUDIO_REPLY_FIELD_ID). O colchete vive LITERAL no passo do
-      // Salesbot (`[{{lead.cf.<id>}}]`) e um gatilho do Digital Pipeline nesse
-      // campo dispara o envio. Só no legado (sem widget). Quando entrega áudio,
-      // NÃO manda o texto junto (áudio-only). Falhou o TTS/PATCH → cai pro texto.
-      let audioResult: { via: string; detail?: unknown } | null = null;
-      if (audioUrl && !deliver && env.KOMMO_AUDIO_REPLY_FIELD_ID) {
+      // ÁUDIO DE SAÍDA (TESTE): se o cliente mandou áudio, devolvemos em VOZ.
+      // Gera TTS, guarda em memória e troca o texto pelo LINK entre [colchetes]
+      // — o Salesbot do Kommo interpreta `[url]` no campo Resposta IA como
+      // arquivo e entrega como nota de voz. Só no caminho LEGADO: o modo widget
+      // (execute_handlers show:text) mostraria o link como texto literal.
+      // Falhou o TTS? cai de volta pro texto (outgoing = reply).
+      let outgoing = reply;
+      if (audioUrl && !deliver) {
         try {
           const speech = await synthesizeSpeech(unit, reply);
           const id = putAudio(speech.buffer, speech.contentType, speech.ext);
           const publicUrl = `${env.BACKEND_PUBLIC_URL}/audio/${id}.${speech.ext}`;
+          outgoing = `[${publicUrl}]`;
           await recorder.step({
             kind: 'THINKING',
-            title: `Resposta convertida em áudio (${speech.durationMs}ms) — entregando via campo de áudio`,
+            title: `Resposta convertida em áudio (${speech.durationMs}ms) — enviando como nota de voz`,
             payload: { publicUrl, bytes: speech.buffer.byteLength, ttsMs: speech.durationMs, text: reply },
             latencyMs: speech.durationMs,
           });
-          const kommo = createKommoClient(unit);
-          audioResult = await kommo.setLeadCustomField(
-            leadId,
-            env.KOMMO_AUDIO_REPLY_FIELD_ID,
-            publicUrl,
-            recorder,
-          );
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger.warn({ err, leadId }, 'falha ao gerar/entregar áudio TTS — caindo pra texto');
+          logger.warn({ err, leadId }, 'falha ao gerar áudio TTS — caindo pra texto');
           await recorder.step({
             kind: 'ERROR',
-            title: `Falha no áudio (TTS/campo): ${msg} — enviando em texto`,
+            title: `Falha ao gerar áudio (TTS): ${msg} — enviando em texto`,
             payload: { error: msg },
           });
-          audioResult = null;
         }
       }
 
       const sendStart = performance.now();
       try {
-        // ÁUDIO já entregue via campo dedicado → não manda texto.
         // MODO WIDGET usa o deliver (retoma o Salesbot via return_url);
         // caminho legado usa sendChatReply (PATCH + Digital Pipeline).
         let sendResult: { via: string; detail?: unknown };
-        if (audioResult) {
-          sendResult = audioResult;
-        } else if (deliver) {
+        if (deliver) {
           delivered = true;
-          sendResult = await deliver(reply);
+          sendResult = await deliver(outgoing);
         } else {
           const kommo = createKommoClient(unit);
           sendResult = await kommo.sendChatReply({
@@ -834,7 +824,7 @@ export async function processAgent(args: {
             chatId,
             talkId,
             contactId,
-            text: reply,
+            text: outgoing,
             recorder,
           });
         }
@@ -853,7 +843,7 @@ export async function processAgent(args: {
             unitSlug: unit.slug,
             unitName: unit.name,
             leadId: String(leadId),
-            text: reply,
+            text: outgoing,
           });
         }
         // Registra turno do assistente na conversa.

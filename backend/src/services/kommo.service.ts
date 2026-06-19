@@ -1419,34 +1419,6 @@ export class KommoClient {
   }
 
   /**
-   * Grava um valor cru num custom field do lead (1 PATCH). Usado pela entrega
-   * de ÁUDIO: escreve a URL do .ogg no campo "Resposta IA Áudio". Um gatilho do
-   * Digital Pipeline nesse campo dispara o Salesbot, que tem um passo
-   * `[{{lead.cf.<id>}}]` — o colchete LITERAL no passo faz o Kommo tratar a URL
-   * como arquivo e entregar como nota de voz.
-   */
-  async setLeadCustomField(
-    leadId: number,
-    fieldId: number,
-    value: string,
-    recorder?: KommoStepRecorder,
-  ): Promise<{ via: 'audio_field'; detail: unknown }> {
-    const t0 = performance.now();
-    const { data } = await this.http.patch(`/leads/${leadId}`, {
-      custom_fields_values: [{ field_id: fieldId, values: [{ value }] }],
-    });
-    const ms = Math.round(performance.now() - t0);
-    logger.info({ leadId, fieldId }, 'kommo: campo de áudio gravado (Digital Pipeline dispara o Salesbot)');
-    await recorder?.step({
-      kind: 'KOMMO_ACTION',
-      title: `🔊 URL do áudio gravada no campo ${fieldId} — Digital Pipeline cuida do envio`,
-      payload: { leadId, fieldId, value },
-      latencyMs: ms,
-    });
-    return { via: 'audio_field', detail: data };
-  }
-
-  /**
    * MODO WIDGET — entrega a resposta RETOMANDO o Salesbot via `return_url`.
    *
    * Diferente do caminho PATCH + Digital Pipeline (runSalesbot/sendChatReply),

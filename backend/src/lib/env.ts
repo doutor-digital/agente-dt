@@ -54,13 +54,6 @@ const schema = z.object({
   OPENAI_TTS_MODEL: z.string().default('gpt-4o-mini-tts'),
   OPENAI_TTS_VOICE: z.string().default('nova'),
 
-  // ID do custom field DEDICADO a áudio ("Resposta IA Áudio"). Quando o cliente
-  // manda áudio e este ID está setado, a IA grava a URL CRUA do áudio nesse
-  // campo (sem colchete). O Salesbot deve ter um passo com `[{{lead.cf.<id>}}]`
-  // (colchete LITERAL no passo) + um gatilho do Digital Pipeline nesse campo.
-  // Vazio = recurso desligado (cai pro texto normal).
-  KOMMO_AUDIO_REPLY_FIELD_ID: z.coerce.number().int().positive().optional(),
-
   // URL pública do PRÓPRIO backend — o Kommo busca o áudio gerado nesse host
   // (`<BACKEND_PUBLIC_URL>/audio/<id>.ogg`). PRECISA ser alcançável pela
   // internet (o mesmo domínio que recebe os webhooks; em dev, um túnel ngrok).
