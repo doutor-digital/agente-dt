@@ -16,6 +16,7 @@
 // ============================================================================
 
 import { prisma } from '../lib/prisma.js';
+import { createKnowledge, listKnowledge } from '../services/knowledge.service.js';
 
 const SLUG = 'advocacia-magalhaes';
 const KOMMO_SUBDOMAIN = 'magalhaesadv2025';
@@ -343,6 +344,88 @@ const templates = [
   },
 ] as const;
 
+// --- Conhecimento (RAG): Q&A com busca semântica -------------------------
+// Mais rico que as Respostas prontas (pega variações que palavra-chave não
+// cobre, aceita textos mais longos). Só é inserido quando a unidade tiver
+// openaiApiKey (a geração de embedding depende dela). Re-rodar o seed depois
+// de configurar a chave popula a base automaticamente (dedupe por pergunta).
+const knowledge: Array<{ question: string; answer: string }> = [
+  // Institucional
+  {
+    question: 'Quem é o advogado responsável pelo escritório?',
+    answer:
+      'O Dr. Thiago Magalhães (OAB/TO 7419), com mais de 10 anos de experiência, focado em Direito Previdenciário (INSS).',
+  },
+  {
+    question: 'Onde fica o escritório? Vocês atendem presencial?',
+    answer:
+      'Ficamos na Rua Ademar Vicente Ferreira, 540, Setor Noroeste, Araguaína-TO. A primeira conversa também pode ser online, de casa.',
+  },
+  {
+    question: 'Qual o horário de atendimento?',
+    answer: 'Atendemos de segunda a sexta, das 8h às 18h.',
+  },
+  {
+    question: 'Vocês atendem online ou só em Araguaína? Atendem em outras cidades?',
+    answer: 'Atendemos em todo o território nacional, com a conversa online, de onde a pessoa estiver.',
+  },
+  {
+    question: 'A primeira conversa é paga? Quanto custa a consulta?',
+    answer:
+      'A primeira conversa, pra entender o caso, é gratuita e sem compromisso. Valores de honorário quem explica é o próprio Dr., depois.',
+  },
+  {
+    question: 'Quais áreas o escritório atende?',
+    answer:
+      'Foco em Direito Previdenciário (INSS) e Tributário; também avaliamos casos trabalhistas (rescisão, verbas, assédio).',
+  },
+  {
+    question: 'Qual o contato e as redes do escritório?',
+    answer:
+      'WhatsApp (63) 99301-5935 e (63) 99209-4343, e-mail magalhaesadv2025@gmail.com, Instagram @magalhaes_advocacia_aux.',
+  },
+  // Previdenciário (respostas honestas — nunca prometem, nunca dão parecer)
+  {
+    question: 'O INSS cortou / cessou meu auxílio-doença, o que eu faço?',
+    answer:
+      'Quando o INSS corta, não quer dizer que acabou — muita vez dá pra recorrer, no próprio INSS ou na Justiça. Quem avalia seu caso e diz o caminho é o Dr., numa conversa gratuita.',
+  },
+  {
+    question: 'Meu benefício foi negado/indeferido, ainda tenho chance?',
+    answer:
+      'Pode ter caminho sim, mas quem confirma é o advogado olhando seu caso. A primeira conversa é exatamente pra isso.',
+  },
+  {
+    question: 'O que é BPC/LOAS e quem tem direito?',
+    answer:
+      'É um benefício pra idosos (65+) ou pessoas com deficiência de baixa renda, que não exige ter contribuído ao INSS. O Dr. avalia se a pessoa se encaixa.',
+  },
+  {
+    question: 'Sou trabalhador rural, tenho direito a aposentadoria?',
+    answer:
+      'Pode ter sim — trabalhador rural tem regras próprias. O Dr. analisa o tempo e os documentos na conversa.',
+  },
+  {
+    question: 'O que é aposentadoria especial?',
+    answer:
+      'É pra quem trabalhou exposto a agentes nocivos (ruído, calor, químicos etc.). O Dr. verifica se a atividade dá esse direito.',
+  },
+  {
+    question: 'Preciso levar/mandar algum documento para a primeira conversa?',
+    answer:
+      'Pra primeira conversa não precisa de nada — é só pra entender o caso. Se precisar de algum documento depois, o Dr. orienta. (Nunca peça laudo/CID ou documento pelo chat.)',
+  },
+  {
+    question: 'Quanto tempo demora um processo no INSS / na Justiça?',
+    answer: 'Depende muito de cada caso — quem explica os prazos com calma é o Dr., olhando a situação.',
+  },
+  {
+    question: 'Vocês garantem que eu vou ganhar a causa?',
+    answer:
+      'A gente nunca promete resultado — seria desonesto. O que o Dr. faz é analisar o caso com seriedade e dizer as chances reais.',
+  },
+];
+
 async function main() {
   // 1) Unidade
   const unit = await prisma.unit.upsert({
@@ -412,6 +495,22 @@ async function main() {
     });
   }
   console.log(`✅ Respostas prontas: ${templates.length} templates (FAQ do escritório).`);
+
+  // 5) Conhecimento (RAG) — só com chave OpenAI (geração de embedding)
+  if (!unit.openaiApiKey) {
+    console.log(`⏭️  Conhecimento: ${knowledge.length} Q&A prontos, mas PULADOS — falta openaiApiKey.`);
+    console.log('   Configure a chave da unidade e rode este seed de novo pra popular a base.');
+  } else {
+    const existing = await listKnowledge(unit.id);
+    const seen = new Set(existing.map((e) => e.question.trim()));
+    let kCreated = 0;
+    for (const qa of knowledge) {
+      if (seen.has(qa.question.trim())) continue;
+      await createKnowledge(unit, qa);
+      kCreated += 1;
+    }
+    console.log(`✅ Conhecimento: ${kCreated} Q&A embedados (${knowledge.length - kCreated} já existiam).`);
+  }
 
   console.log('');
   console.log('⏭️  AINDA FALTA (fora do nosso banco — painel do Kommo / credenciais):');
