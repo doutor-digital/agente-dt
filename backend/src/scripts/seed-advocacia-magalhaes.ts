@@ -33,6 +33,7 @@ const ST_EM_QUALIFICACAO = 108260503; // 2 - Em qualificação
 const ST_QUALIFICADO = 108260507;   // 3 - Qualificado
 const ST_ANALISE_AGENDADA = 108260511; // 4 - Análise agendada
 const ST_GANHO = 142;               // Fechado - ganho
+const ST_PERDIDO = 143;             // Fechado - perdido
 
 const personaGreeting = 'Oii! Aqui é a Ana, do escritório Magalhães 💛';
 
@@ -261,32 +262,74 @@ const captures = [
   },
 ] as const;
 
-// --- Ações de funil: a IA move o card conforme a triagem evolui ------------
+// --- Ações "quando → faça": a IA conduz o funil e sabe a hora de parar -----
+// Marcador no `notes` permite o seed SUBSTITUIR só as ações que ele gerencia,
+// sem apagar ações criadas à mão no painel.
+const ACTION_MARKER = '[seed-magalhaes]';
+// Condições das 3 ações antigas (1ª versão) — pra limpeza one-shot no re-run.
+const OLD_ACTION_CONDITIONS = [
+  'A pessoa respondeu e começou a contar o problema/situação dela (saiu do "oi" inicial e há contexto do caso).',
+  'Você já entendeu o caso e classificou a área (previdenciário ou trabalhista), mas a pessoa ainda NÃO marcou um horário.',
+  'A pessoa aceitou um horário pra primeira conversa com o advogado e confirmou o agendamento.',
+];
 const actions = [
+  // --- Funil (avança conforme a triagem evolui) ---
   {
     conditionDescription:
-      'A pessoa respondeu e começou a contar o problema/situação dela (saiu do "oi" inicial e há contexto do caso).',
+      'A pessoa respondeu e começou a contar a situação/o problema dela (já há contexto do caso, saiu do "oi" inicial).',
     actions: [
       { kind: 'move_stage', params: { statusId: ST_EM_QUALIFICACAO, pipelineId: PIPELINE_COMERCIAL, statusLabel: '2 - Em qualificação' } },
     ],
-    notes: 'Funil: leva o card pra Em qualificação assim que a conversa engata.',
+    notes: `${ACTION_MARKER} Funil: card vai pra Em qualificação quando a conversa engata.`,
   },
   {
     conditionDescription:
-      'Você já entendeu o caso e classificou a área (previdenciário ou trabalhista), mas a pessoa ainda NÃO marcou um horário.',
+      'Você já entendeu o caso e classificou a área (previdenciário/INSS, tributário ou trabalhista), mas a pessoa ainda NÃO marcou horário.',
     actions: [
       { kind: 'move_stage', params: { statusId: ST_QUALIFICADO, pipelineId: PIPELINE_COMERCIAL, statusLabel: '3 - Qualificado' } },
     ],
-    notes: 'Funil: marca como Qualificado quando a triagem do caso está clara.',
+    notes: `${ACTION_MARKER} Funil: marca Qualificado quando o caso e a área estão claros.`,
   },
   {
     conditionDescription:
       'A pessoa aceitou um horário pra primeira conversa com o advogado e confirmou o agendamento.',
     actions: [
       { kind: 'move_stage', params: { statusId: ST_ANALISE_AGENDADA, pipelineId: PIPELINE_COMERCIAL, statusLabel: '4 - Análise agendada' } },
-      { kind: 'summarize_to_note', params: { focusHint: 'caso e horário combinado' } },
+      { kind: 'summarize_to_note', params: { focusHint: 'relato do caso, área (INSS/benefício, tributário ou trabalhista) e o horário combinado — pro Dr. Thiago já chegar situado' } },
     ],
-    notes: 'Funil: agenda a análise + posta resumo na timeline pro advogado.',
+    notes: `${ACTION_MARKER} Funil: agenda a análise + resumo na timeline pro advogado.`,
+  },
+  // --- Saber a hora de parar / encaminhar ---
+  {
+    conditionDescription:
+      'A pessoa diz CLARAMENTE que não quer continuar / desiste / não tem interesse / pede pra não receber mais mensagens. (NÃO vale pra "vou pensar", "depois", "tô ocupado".)',
+    actions: [
+      { kind: 'summarize_to_note', params: { focusHint: 'motivo da desistência ou recusa, em 1 frase' } },
+      { kind: 'move_stage', params: { statusId: ST_PERDIDO, pipelineId: PIPELINE_COMERCIAL, statusLabel: 'Fechado - perdido' } },
+    ],
+    notes: `${ACTION_MARKER} Respeita LGPD ("não quero mais"): resume o motivo e fecha como perdido.`,
+  },
+  {
+    conditionDescription:
+      'A pessoa insiste em falar com o advogado AGORA, faz uma pergunta que exige opinião/parecer jurídico (que você não pode dar), ou o caso é urgente/grave (prazo correndo, perícia ou audiência já marcada).',
+    actions: [
+      { kind: 'transfer_with_permission', params: { includeSummary: true } },
+    ],
+    notes: `${ACTION_MARKER} Handoff inteligente: oferece transferir, resume e pausa a IA pro Dr.`,
+  },
+  {
+    conditionDescription:
+      'O assunto está claramente FORA do foco do escritório (não é previdenciário/INSS, tributário nem trabalhista — ex.: criminal, divórcio/família, consumidor, trânsito).',
+    actions: [
+      {
+        kind: 'respond_with_intent',
+        params: {
+          instruction:
+            'Diga com gentileza que o foco do escritório é Direito Previdenciário (INSS) e Tributário (e alguns casos trabalhistas), então talvez não seja a área ideal pra esse caso. NÃO prometa nada. Pergunte se, mesmo assim, a pessoa quer que a equipe dê uma olhada — se sim, peça um resumo curto do que aconteceu.',
+        },
+      },
+    ],
+    notes: `${ACTION_MARKER} Fora de escopo: declina com gentileza, sem mover etapa (humano decide).`,
   },
 ] as const;
 
@@ -486,25 +529,28 @@ async function main() {
   }
   console.log(`✅ Capturas: ${captures.length} regras (a IA preenche os campos do Kommo).`);
 
-  // 3) Ações de funil (insert-if-absent por conditionDescription)
-  let created = 0;
-  for (const a of actions) {
-    const exists = await prisma.unitAction.findFirst({
-      where: { unitId: unit.id, conditionDescription: a.conditionDescription },
-    });
-    if (exists) continue;
-    await prisma.unitAction.create({
-      data: {
-        unitId: unit.id,
-        conditionDescription: a.conditionDescription,
-        actions: a.actions as object,
-        notes: a.notes,
-        enabled: true,
-      },
-    });
-    created += 1;
-  }
-  console.log(`✅ Ações de funil: ${created} criadas (${actions.length - created} já existiam).`);
+  // 3) Ações "quando → faça" — substitui só as gerenciadas pelo seed
+  // (marcador no notes) + limpa as 3 antigas (sem marcador) num re-run.
+  // Ações criadas à mão no painel (sem marcador/condição antiga) ficam intactas.
+  const removed = await prisma.unitAction.deleteMany({
+    where: {
+      unitId: unit.id,
+      OR: [
+        { notes: { startsWith: ACTION_MARKER } },
+        { conditionDescription: { in: OLD_ACTION_CONDITIONS } },
+      ],
+    },
+  });
+  await prisma.unitAction.createMany({
+    data: actions.map((a) => ({
+      unitId: unit.id,
+      conditionDescription: a.conditionDescription,
+      actions: a.actions as object,
+      notes: a.notes,
+      enabled: true,
+    })),
+  });
+  console.log(`✅ Ações: ${actions.length} criadas (removidas ${removed.count} gerenciadas anteriores).`);
 
   // 4) Respostas prontas (templates) — FAQ institucional, sem embedding
   for (const t of templates) {
