@@ -426,6 +426,26 @@ const knowledge: Array<{ question: string; answer: string }> = [
   },
 ];
 
+// --- Correções (exemplos a evitar) ----------------------------------------
+// O composer injeta as respostas flaggadas como bloco <exemplos_ruins> ("não
+// responda parecido"). Como não há conversas reais ainda, semeamos os erros
+// clássicos do briefing (coluna "robô/juridiquês" + "o que ela NUNCA fala")
+// numa conversa de TREINO rotulada — um por guardrail. Some da lista de
+// Conversas se você apagar essa conversa; pode rodar à vontade (idempotente).
+const TRAINING_LEAD_ID = 'treino-correcoes';
+const TRAINING_CONTACT = '⚙️ Exemplos de treino (não é lead real)';
+const corrections = [
+  'Prezado(a), identificamos a cessação do seu benefício e a necessidade de análise do mérito.', // juridiquês
+  'Agende uma consulta para análise do mérito da sua demanda.', // juridiquês/frio
+  'Houve o indeferimento administrativo, sendo necessário ajuizar a lide quanto ao mérito.', // juridiquês
+  'O senhor possui direito ao benefício previdenciário pleiteado.', // dá parecer jurídico
+  'Pode ficar tranquilo que o senhor vai ganhar, é garantido.', // promete resultado
+  'A gente reverte esse corte pra você, com certeza dá certo.', // promete resultado
+  'Nossos honorários ficam em 30% do benefício, mais 7 salários.', // fala honorário
+  'Somos especialistas e o melhor escritório da região.', // usa "especialista"
+  'Últimas vagas! Só hoje pra garantir seu agendamento.', // falsa urgência
+];
+
 async function main() {
   // 1) Unidade
   const unit = await prisma.unit.upsert({
@@ -511,6 +531,24 @@ async function main() {
     }
     console.log(`✅ Conhecimento: ${kCreated} Q&A embedados (${knowledge.length - kCreated} já existiam).`);
   }
+
+  // 6) Correções (exemplos a evitar) — conversa de treino com respostas flaggadas
+  const trainingConv = await prisma.conversation.upsert({
+    where: { unitId_leadId: { unitId: unit.id, leadId: TRAINING_LEAD_ID } },
+    create: { unitId: unit.id, leadId: TRAINING_LEAD_ID, contactName: TRAINING_CONTACT, channel: 'manual' },
+    update: { contactName: TRAINING_CONTACT },
+  });
+  // Idempotente: limpa e recria as mensagens dessa conversa de treino.
+  await prisma.message.deleteMany({ where: { conversationId: trainingConv.id } });
+  await prisma.message.createMany({
+    data: corrections.map((content) => ({
+      conversationId: trainingConv.id,
+      role: 'assistant',
+      content,
+      flagged: true,
+    })),
+  });
+  console.log(`✅ Correções: ${corrections.length} exemplos a evitar (conversa de treino "${TRAINING_CONTACT}").`);
 
   console.log('');
   console.log('⏭️  AINDA FALTA (fora do nosso banco — painel do Kommo):');
