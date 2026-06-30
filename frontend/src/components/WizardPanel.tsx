@@ -92,6 +92,7 @@ export const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '', label: 'Genérica (sem categoria)' },
   { value: 'saude', label: '🩺 Saúde (Dra. Sofia)' },
   { value: 'energia_solar', label: '☀️ Energia Solar (Dr. João)' },
+  { value: 'advocacia', label: '⚖️ Advocacia (Ana)' },
 ];
 
 function unitToDraft(u: Unit): WizardDraft {
