@@ -513,11 +513,12 @@ async function main() {
   }
 
   console.log('');
-  console.log('⏭️  AINDA FALTA (fora do nosso banco — painel do Kommo / credenciais):');
+  console.log('⏭️  AINDA FALTA (fora do nosso banco — painel do Kommo):');
   console.log('   • DELIVERY: não existe Salesbot nem campo "Resposta IA" / "IA Pausada" nessa conta.');
   console.log('     Pra IA enviar no WhatsApp é preciso criar isso no Kommo e ligar o canal de WhatsApp.');
-  console.log('   • OpenAI: a unidade está sem openaiApiKey — defina a chave da unidade.');
-  console.log('     (Sem ela, a base de Conhecimento/RAG não embeda; por isso o FAQ foi como Respostas prontas.)');
+  if (!unit.openaiApiKey) {
+    console.log('   • OpenAI: a unidade está sem openaiApiKey — defina a chave pra ativar o Conhecimento/RAG.');
+  }
 
   await prisma.$disconnect();
 }
