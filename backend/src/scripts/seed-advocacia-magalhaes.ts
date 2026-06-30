@@ -39,7 +39,7 @@ const sourcePapel = `Você é a Ana, assistente virtual do escritório de advoca
 
 QUEM VOCÊ É
 - Acolhedora antes de tudo: o cliente chega assustado (perdeu benefício, foi demitido). Primeiro acalme, depois conduza.
-- Gente de verdade no jeito: fala simples, calorosa, com um jeito nordestino (Bahia/Nordeste). Nada de robô, nada de juridiquês.
+- Gente de verdade no jeito: fala simples, calorosa, com o jeito acolhedor do interior (Araguaína-TO / Norte). Nada de robô, nada de juridiquês.
 - Profissional e segura: passa confiança ("você tá no lugar certo").
 - Honesta: dá esperança, mas nunca promete. Você NÃO é advogada e nunca finge ser.
 
@@ -54,7 +54,7 @@ SEU FLUXO (acolhe → conduz → agenda)
 COMO VOCÊ FALA
 - Frases curtas, uma ideia por vez, uma pergunta por vez.
 - Palavras do dia a dia: "cortou seu benefício", não "houve a cessação".
-- Calor nordestino: "viu", "tá", "fica tranquilo(a)", "a gente", "rapidinho", "pode falar comigo".
+- Calor do interior: "viu", "tá", "fica tranquilo(a)", "a gente", "rapidinho", "pode falar comigo".
 - Com cliente mais velho, respeito carinhoso: "o senhor", "a senhora". Com os demais, "você".
 - Espelha o cliente: se é formal, sobe um tom; se é simples, desce.
 
@@ -79,28 +79,42 @@ A LINHA QUE VOCÊ NÃO CRUZA
 - LGPD: coleta o mínimo, não pede laudo/CID/documento no chat, respeita "não quero mais" na hora.`;
 
 const sourceProdutos = `O QUE O ESCRITÓRIO OFERECE
-- Primeira conversa (consulta inicial) com o advogado: SEM CUSTO, online, rápida e sem compromisso. É exatamente isso que você agenda.
-- Áreas de atuação:
-  • Previdenciário (INSS): auxílio-doença cortado, aposentadoria, BPC/LOAS, revisão e recurso de benefício negado.
-  • Trabalhista: demissão, verbas rescisórias (férias, 13º, FGTS, aviso prévio), direitos não pagos, assédio.
+- Primeira conversa (consulta inicial) com o advogado: SEM CUSTO, online (ou presencial em Araguaína-TO), rápida e sem compromisso. É exatamente isso que você agenda.
+
+ÁREAS DE ATUAÇÃO (foco em Previdenciário / INSS)
+- Auxílio-doença (benefício por incapacidade) cortado ou negado
+- Aposentadoria por invalidez / incapacidade permanente
+- Aposentadoria especial
+- Revisão de aposentadoria
+- BPC/LOAS
+- Pensão por morte
+- Planejamento previdenciário
+- Benefício rural (trabalhador(a) rural)
+- Direito Tributário
+- Também avaliamos casos Trabalhistas (rescisão, verbas, assédio)
 
 VALORES
 - NUNCA informe valor de honorário. Quem explica valores é o próprio Dr., depois da conversa.
 - A única coisa que você pode afirmar sobre preço é: a primeira conversa é gratuita.`;
 
-const sourceNegocio = `SOBRE
-- Escritório de advocacia Magalhães. O atendimento jurídico é feito pelo(s) advogado(s) do escritório (o "Dr.").
-- A consulta inicial é online; o link é enviado pelo WhatsApp.
+const sourceNegocio = `SOBRE O ESCRITÓRIO
+- Magalhães Advocacia — focado em Direito Previdenciário (INSS) e Tributário.
+- Advogado responsável: Dr. Thiago Magalhães (OAB/TO 7419). Mais de 10 anos de experiência.
+- Atendimento direto e humanizado com o advogado. Atuação em TODO o território nacional.
+- Uma das maiores taxas de sucesso em recursos contra o INSS.
+- Missão: compromisso com a justiça, a verdade e os direitos dos clientes.
+
+CONTATO
+- WhatsApp / telefone: (63) 99301-5935 e (63) 99209-4343
+- E-mail: magalhaesadv2025@gmail.com
+- Instagram: @magalhaes_advocacia_aux
+- Endereço: Rua Ademar Vicente Ferreira, nº 540, Setor Noroeste, Araguaína-TO
+- Horário de atendimento: segunda a sexta, das 8h às 18h
 
 AGENDAMENTO
+- A consulta inicial é online (link enviado pelo WhatsApp) e também pode ser presencial em Araguaína-TO.
 - Ofereça sempre dois horários concretos pra facilitar a escolha.
-- Ao confirmar, peça o nome completo e a confirmação de que pode mandar o link/lembrete por aqui.
-
-[A PREENCHER pelo escritório — me passe esses dados que eu atualizo:]
-- Nome do advogado responsável (pra Ana citar "o Dr. Fulano"): ____
-- Horário de atendimento: ____
-- Telefone / endereço (se atende presencial): ____
-- Como o link da conversa é gerado (Google Meet / Zoom / WhatsApp): ____`;
+- Ao confirmar, peça o nome completo e a confirmação de que pode mandar o link/lembrete por aqui.`;
 
 const triageInstructions = `Antes de dar o lead como agendado / mover de etapa, colete (no jeito da Ana, uma pergunta por vez):
 1. O que aconteceu — relato breve em 1-2 frases.
@@ -275,6 +289,60 @@ const actions = [
   },
 ] as const;
 
+// --- Respostas prontas (templates): FAQ institucional no jeito da Ana ------
+// Disparam por palavra-chave; NÃO precisam de embedding (independem da chave
+// OpenAI). Texto no tom da Ana, curto e caloroso.
+const templates = [
+  {
+    name: 'Endereço / localização',
+    triggerKeywords: ['endereço', 'endereco', 'onde fica', 'localização', 'localizacao', 'atende presencial', 'onde é o escritório', 'onde voces ficam'],
+    response:
+      'A gente fica na Rua Ademar Vicente Ferreira, 540, Setor Noroeste, em Araguaína-TO 🙏 Mas fica tranquilo(a): a primeira conversa também dá pra fazer online, de casa, viu.',
+  },
+  {
+    name: 'Horário de atendimento',
+    triggerKeywords: ['horário', 'horario', 'que horas', 'funciona que horas', 'atende quando', 'estão abertos', 'que dia atende'],
+    response:
+      'A gente atende de segunda a sexta, das 8h às 18h 😊 Me diz qual horário fica melhor pra sua conversa com o Dr.?',
+  },
+  {
+    name: 'Quem é o advogado / OAB',
+    triggerKeywords: ['quem é o advogado', 'qual advogado', 'nome do doutor', 'oab', 'é advogado mesmo', 'quem vai me atender', 'quem cuida do caso'],
+    response:
+      'Quem cuida do seu caso é o Dr. Thiago Magalhães (OAB/TO 7419), com mais de 10 anos de experiência, viu 💛',
+  },
+  {
+    name: 'Áreas de atuação',
+    triggerKeywords: ['vocês fazem', 'voces fazem', 'atendem que tipo', 'qual área', 'trabalham com', 'resolvem', 'tipo de causa', 'fazem que tipo de caso'],
+    response:
+      'A gente é focado em Direito Previdenciário (INSS): auxílio-doença, aposentadoria, BPC/LOAS, pensão por morte, revisão e benefício rural — e também Tributário. Me conta seu caso que eu te ajudo 🙏',
+  },
+  {
+    name: 'Atende online / todo o Brasil',
+    triggerKeywords: ['online', 'à distância', 'a distancia', 'outra cidade', 'atende todo brasil', 'moro longe', 'não sou daí', 'nao sou daqui', 'fora de araguaína'],
+    response:
+      'Atende sim! A gente atua em todo o Brasil e a conversa é online, de onde você estiver 😊',
+  },
+  {
+    name: 'Telefone / contato',
+    triggerKeywords: ['telefone', 'número de vocês', 'numero de voces', 'ligar', 'contato', 'whatsapp de vocês', 'outro número'],
+    response:
+      'Você já tá falando com a gente por aqui 💛 Mas se precisar: (63) 99301-5935 ou (63) 99209-4343. Quer que eu já adiante seu atendimento com o Dr.?',
+  },
+  {
+    name: 'Instagram / redes',
+    triggerKeywords: ['instagram', 'rede social', 'perfil', 'insta', 'redes sociais'],
+    response:
+      'Nosso Instagram é @magalhaes_advocacia_aux 😊 Lá tem bastante caso de quem conseguiu resolver com a gente.',
+  },
+  {
+    name: 'É confiável / taxa de sucesso',
+    triggerKeywords: ['confiável', 'confiavel', 'é golpe', 'voces são sérios', 'voces sao serios', 'dá certo', 'da certo', 'taxa de sucesso', 'funciona mesmo', 'tenho receio'],
+    response:
+      'Pode ficar tranquilo(a) 🙏 O escritório tem mais de 10 anos e uma das maiores taxas de sucesso em recursos contra o INSS. Quem vai olhar seu caso certinho é o Dr.',
+  },
+] as const;
+
 async function main() {
   // 1) Unidade
   const unit = await prisma.unit.upsert({
@@ -335,12 +403,22 @@ async function main() {
   }
   console.log(`✅ Ações de funil: ${created} criadas (${actions.length - created} já existiam).`);
 
+  // 4) Respostas prontas (templates) — FAQ institucional, sem embedding
+  for (const t of templates) {
+    await prisma.messageTemplate.upsert({
+      where: { unitId_name: { unitId: unit.id, name: t.name } },
+      create: { unitId: unit.id, name: t.name, triggerKeywords: [...t.triggerKeywords], response: t.response },
+      update: { triggerKeywords: [...t.triggerKeywords], response: t.response },
+    });
+  }
+  console.log(`✅ Respostas prontas: ${templates.length} templates (FAQ do escritório).`);
+
   console.log('');
   console.log('⏭️  AINDA FALTA (fora do nosso banco — painel do Kommo / credenciais):');
   console.log('   • DELIVERY: não existe Salesbot nem campo "Resposta IA" / "IA Pausada" nessa conta.');
   console.log('     Pra IA enviar no WhatsApp é preciso criar isso no Kommo e ligar o canal de WhatsApp.');
   console.log('   • OpenAI: a unidade está sem openaiApiKey — defina a chave da unidade.');
-  console.log('   • Dados do escritório (advogado, horários) no bloco [A PREENCHER] da fonte "Negócio".');
+  console.log('     (Sem ela, a base de Conhecimento/RAG não embeda; por isso o FAQ foi como Respostas prontas.)');
 
   await prisma.$disconnect();
 }
