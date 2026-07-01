@@ -115,6 +115,16 @@ model Unit {
   // DESLIGADO nesta unidade, senão dispara 2× e duplica a mensagem.
   kommoSalesbotExecuteEnabled Boolean @default(false) @map("kommo_salesbot_execute_enabled")
 
+  // PROVEDOR DE LLM DO CHAT — "openai" (padrão) ou "anthropic". Define qual
+  // modelo o agente (graph.ts) usa. Embeddings (RAG) e transcrição de áudio
+  // SEMPRE usam OpenAI (Anthropic não tem API de embeddings/whisper) — por isso
+  // openaiApiKey continua necessário mesmo com provider="anthropic".
+  llmProvider     String  @default("openai") @map("llm_provider")
+  // Chave da Anthropic (sk-ant-...) — usada quando llmProvider="anthropic".
+  anthropicApiKey String? @map("anthropic_api_key")
+  // Modelo Claude do agente. Opus 4.8 rejeita temperature/top_p/penalties.
+  anthropicModel  String  @default("claude-opus-4-8") @map("anthropic_model")
+
   // OpenAI — credenciais por unidade (cada uma com sua API key e assistant)
   openaiApiKey      String? @map("openai_api_key")
   // Admin key (sk-admin-...) — usada pelos endpoints /v1/organization/*

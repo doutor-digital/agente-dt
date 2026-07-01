@@ -1009,6 +1009,96 @@ export function composeSystemPrompt(input: ComposeInput): string {
 }
 
 /**
+ * Variante do composer que separa o prompt em DOIS pedaços pro prompt caching
+ * do Anthropic (Claude): `cacheable` (estático — persona, fontes, regras,
+ * ações, templates, correções: igual em todo turno do mesmo lead) e `dynamic`
+ * (volátil — memória, leadId, RAG e boost de 1º turno: muda a cada mensagem).
+ *
+ * O caller (graph.ts) põe um `cache_control` no bloco cacheable, então ele é
+ * lido a 0.1x do preço em turnos seguintes; só o `dynamic` (pequeno) paga cheio.
+ * A ordem interna é a mesma do composeSystemPrompt, só que o volátil todo vai
+ * pro fim — o que também favorece recência.
+ */
+export function composeSystemPromptParts(input: ComposeInput): {
+  cacheable: string;
+  dynamic: string;
+} {
+  const {
+    unit,
+    agentConfigPrompt,
+    templates = [],
+    flaggedExamples = [],
+    knowledge = [],
+    actions = [],
+    globalActions = [],
+    leadFieldRules = [],
+    leadMemory = null,
+    isFirstTurn = false,
+    leadId,
+  } = input;
+
+  const customBase = (agentConfigPrompt && agentConfigPrompt.trim().length > 0
+    ? agentConfigPrompt
+    : unit.systemPrompt
+  )?.trim();
+
+  const dynamic: string[] = [];
+  const memoryBlock = renderLeadMemory(leadMemory);
+  if (memoryBlock) dynamic.push(memoryBlock);
+  if (leadId && Number.isFinite(leadId) && leadId > 0) {
+    dynamic.push(renderConversationContext(leadId));
+  }
+  const knowledgeBlock = renderKnowledge(knowledge);
+  if (knowledgeBlock) dynamic.push(knowledgeBlock);
+
+  // MODO PROMPT ÚNICO — o texto do usuário é o prompt inteiro (cacheable);
+  // só os blocos de runtime ficam no dynamic.
+  if (unit.singlePromptMode) {
+    return { cacheable: (customBase ?? '').trim(), dynamic: dynamic.join('\n\n') };
+  }
+
+  const cache: string[] = [];
+  cache.push(renderPersona(unit));
+  const sourcesBlock = renderSources(unit);
+  if (sourcesBlock) cache.push(sourcesBlock);
+  if (customBase) cache.push(xmlBlock('instrucoes_extras', customBase));
+  cache.push(renderRulesGlobal());
+
+  const featureBlocks = [
+    renderCollectName(unit),
+    renderCollectSource(unit),
+    renderQualification(unit),
+    renderTriage(unit),
+    renderHandoff(unit),
+    renderPipelineIntents(unit),
+    renderContactCollection(unit),
+    renderWelcomeCoupon(unit),
+    renderBusinessHours(unit),
+    renderFollowUp(unit),
+  ].filter((b) => b.trim().length > 0);
+  if (featureBlocks.length > 0) {
+    cache.push(xmlBlock('comportamentos_ativados', featureBlocks.join('\n\n')));
+  }
+
+  const globalActionsBlock = renderGlobalActions(globalActions);
+  if (globalActionsBlock) cache.push(globalActionsBlock);
+  const actionsBlock = renderActions(actions);
+  if (actionsBlock) cache.push(actionsBlock);
+  const leadFieldsBlock = renderLeadFieldRules(leadFieldRules);
+  if (leadFieldsBlock) cache.push(leadFieldsBlock);
+  const templatesBlock = renderTemplates(templates);
+  if (templatesBlock) cache.push(templatesBlock);
+  const flaggedBlock = renderFlaggedExamples(flaggedExamples);
+  if (flaggedBlock) cache.push(flaggedBlock);
+
+  // Boost de 1º turno é volátil (muda turno 1 vs resto) → vai no dynamic, no fim.
+  const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
+  if (firstTurnBlock) dynamic.push(firstTurnBlock);
+
+  return { cacheable: cache.join('\n\n'), dynamic: dynamic.join('\n\n') };
+}
+
+/**
  * Heurística: mensagem é "trivial" (saudação, ack curto) e RAG não vai
  * trazer nada útil mesmo? Pulamos o embedding (economiza ~500-800ms).
  *
@@ -1052,6 +1142,38 @@ export async function composeSystemPromptForUnit(input: {
    */
   excludeLeadFieldRules?: boolean;
 }): Promise<string> {
+  return composeSystemPrompt(await loadComposeInput(input));
+}
+
+/**
+ * Mesma carga do banco do composeSystemPromptForUnit, mas devolve os pedaços
+ * cacheable/dynamic pro prompt caching do Claude. Usado pelo graph.ts quando
+ * a unidade é `llmProvider="anthropic"`.
+ */
+export async function composeSystemPromptPartsForUnit(input: {
+  unit: Unit;
+  agentConfigPrompt?: string;
+  userMessage?: string;
+  isFirstTurn?: boolean;
+  leadId?: number;
+  excludeLeadFieldRules?: boolean;
+}): Promise<{ cacheable: string; dynamic: string }> {
+  return composeSystemPromptParts(await loadComposeInput(input));
+}
+
+/**
+ * Carrega do banco tudo que o composer precisa (templates, flagged, RAG,
+ * ações, regras, memória) e devolve o ComposeInput pronto. Fator comum das
+ * duas variantes async (string e parts) — mantém a carga em UM lugar só.
+ */
+async function loadComposeInput(input: {
+  unit: Unit;
+  agentConfigPrompt?: string;
+  userMessage?: string;
+  isFirstTurn?: boolean;
+  leadId?: number;
+  excludeLeadFieldRules?: boolean;
+}): Promise<ComposeInput> {
   const shouldRunRag =
     !!input.userMessage &&
     !!input.unit.openaiApiKey &&
@@ -1097,7 +1219,7 @@ export async function composeSystemPromptForUnit(input: {
         })
       : Promise.resolve(null),
   ]);
-  return composeSystemPrompt({
+  return {
     ...input,
     templates,
     flaggedExamples: flagged,
@@ -1106,7 +1228,7 @@ export async function composeSystemPromptForUnit(input: {
     globalActions,
     leadFieldRules,
     leadMemory,
-  });
+  };
 }
 
 /**

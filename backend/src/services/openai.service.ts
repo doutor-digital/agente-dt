@@ -29,6 +29,7 @@
 // ============================================================================
 
 import { ChatOpenAI, type ChatOpenAICallOptions } from '@langchain/openai';
+import { ChatAnthropic } from '@langchain/anthropic';
 import { Prisma } from '@prisma/client';
 import type { Unit } from '@prisma/client';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -62,16 +63,31 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
   // O-series
   'o1-mini': { inputPer1M: 3, outputPer1M: 12 },
   'o1': { inputPer1M: 15, outputPer1M: 60 },
+  // Anthropic (Claude) — base input/output. Cache hit = 0.1x input, cache
+  // write (TTL 1h) = 2x input; tratados em calculateCost via cache tokens.
+  'claude-opus-4-8': { inputPer1M: 5, outputPer1M: 25 },
+  'claude-opus-4-7': { inputPer1M: 5, outputPer1M: 25 },
+  'claude-sonnet-5': { inputPer1M: 3, outputPer1M: 15 },
+  'claude-haiku-4-5': { inputPer1M: 1, outputPer1M: 5 },
 };
 
 export function calculateCost(
   model: string,
   promptTokens: number,
   completionTokens: number,
+  // Prompt caching (Anthropic): tokens lidos do cache custam 0.1x o input base;
+  // tokens escritos no cache (TTL 1h) custam 2x. `promptTokens` é o TOTAL de
+  // input (inclui cache read + write); o resto é input "cru" a preço cheio.
+  cacheReadTokens = 0,
+  cacheWriteTokens = 0,
 ): number {
   const price = MODEL_PRICES[model];
   if (!price) return 0;
-  const inputCost = (promptTokens / 1_000_000) * price.inputPer1M;
+  const uncached = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
+  const inputCost =
+    (uncached / 1_000_000) * price.inputPer1M +
+    (cacheReadTokens / 1_000_000) * price.inputPer1M * 0.1 +
+    (cacheWriteTokens / 1_000_000) * price.inputPer1M * 2;
   const outputCost = (completionTokens / 1_000_000) * price.outputPer1M;
   // 6 casas decimais para não perder centavos em chamadas baratas.
   return Math.round((inputCost + outputCost) * 1_000_000) / 1_000_000;
@@ -145,6 +161,36 @@ export function createChatOpenAI(
 }
 
 // ---------------------------------------------------------------------------
+// Factory por PROVEDOR — escolhe OpenAI ou Anthropic (Claude) pela Unit.
+//
+// `llmProvider="anthropic"` + `anthropicApiKey` → ChatAnthropic (ex: Opus 4.8).
+// Opus 4.8 REJEITA temperature/top_p/penalties (400), então NÃO os passamos.
+// Qualquer outra config → cai no ChatOpenAI de sempre (comportamento atual).
+//
+// O caller liga as tools via `.bindTools()` — ChatAnthropic tem a mesma
+// interface. O system prompt com cache_control é montado no graph.ts.
+// ---------------------------------------------------------------------------
+export type ChatModel =
+  | ChatOpenAI<ChatOpenAICallOptions>
+  | ChatAnthropic;
+
+export function createChatModel(
+  unit: Unit | null,
+  overrides: ChatOpenAIOverrides = {},
+): ChatModel {
+  if (unit?.llmProvider === 'anthropic' && unit.anthropicApiKey) {
+    return new ChatAnthropic({
+      apiKey: unit.anthropicApiKey,
+      model: overrides.model ?? unit.anthropicModel ?? 'claude-opus-4-8',
+      maxTokens: overrides.maxTokens ?? unit.openaiMaxTokens ?? 1024,
+      // SEM temperature/topP/penalties — Opus 4.8 os rejeita.
+      maxRetries: OPENAI_MAX_RETRIES,
+    });
+  }
+  return createChatOpenAI(unit, overrides);
+}
+
+// ---------------------------------------------------------------------------
 // LlmCall recorder — instrumentação fora do LangChain.
 //
 // Estratégia: o LangChain expõe callbacks (`callbacks: [...]`) com hooks
@@ -165,6 +211,9 @@ export interface RecordLlmCallParams {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  // Prompt caching (Anthropic) — pra custo correto: read = 0.1x, write = 2x.
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   latencyMs: number;
   status?: 'success' | 'error';
   errorMessage?: string;
@@ -176,7 +225,13 @@ export async function recordLlmCall(p: RecordLlmCallParams): Promise<void> {
   const promptTokens = p.promptTokens ?? 0;
   const completionTokens = p.completionTokens ?? 0;
   const totalTokens = p.totalTokens ?? promptTokens + completionTokens;
-  const costUsd = calculateCost(p.model, promptTokens, completionTokens);
+  const costUsd = calculateCost(
+    p.model,
+    promptTokens,
+    completionTokens,
+    p.cacheReadTokens ?? 0,
+    p.cacheWriteTokens ?? 0,
+  );
 
   try {
     await prisma.llmCall.create({
@@ -227,12 +282,22 @@ interface TokenUsage {
   totalTokens?: number;
 }
 
+// Formato do `usage_metadata` que o LangChain popula no AIMessage do Claude.
+interface AnthropicUsageMetadata {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  input_token_details?: { cache_read?: number; cache_creation?: number };
+}
+
 export interface InvokeChatModelArgs {
   model: InvokableModel;
   messages: BaseMessage[];
   unitId: string | null;
   traceId: string | null;
   modelName: string;
+  /** "openai" (default) ou "anthropic" — grava no LlmCall. */
+  provider?: string;
   // Para registrar o request body. Stringificar a lista de mensagens é caro
   // se a conversa é longa — passamos só os essenciais (role + content + tools).
   tools?: Pick<StructuredToolInterface, 'name'>[];
@@ -257,14 +322,31 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
     const latencyMs = Math.round(performance.now() - t0);
 
     const finalUsage: TokenUsage = usage ?? {};
+    // ChatOpenAI expõe usage via callback (`llmOutput.tokenUsage`). ChatAnthropic
+    // NÃO — o usage vem no próprio AIMessage retornado (`usage_metadata`), que
+    // ainda traz os tokens de cache. Fallback pra ele quando o callback não veio.
+    let { promptTokens, completionTokens, totalTokens } = finalUsage;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    const um = (response as { usage_metadata?: AnthropicUsageMetadata }).usage_metadata;
+    if (promptTokens == null && um) {
+      promptTokens = um.input_tokens;
+      completionTokens = um.output_tokens;
+      totalTokens = um.total_tokens;
+      cacheReadTokens = um.input_token_details?.cache_read ?? 0;
+      cacheWriteTokens = um.input_token_details?.cache_creation ?? 0;
+    }
     void recordLlmCall({
       unitId: args.unitId,
       traceId: args.traceId,
+      provider: args.provider ?? 'openai',
       model: args.modelName,
       endpoint: 'chat.completions',
-      promptTokens: finalUsage.promptTokens,
-      completionTokens: finalUsage.completionTokens,
-      totalTokens: finalUsage.totalTokens,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
       latencyMs,
       status: 'success',
       requestBody: {
@@ -285,6 +367,7 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
     void recordLlmCall({
       unitId: args.unitId,
       traceId: args.traceId,
+      provider: args.provider ?? 'openai',
       model: args.modelName,
       endpoint: 'chat.completions',
       latencyMs,

@@ -50,10 +50,10 @@ import { AgentState, type AgentStateType } from './state.js';
 import { buildTools } from './tools.js';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig } from './config.js';
-import { composeSystemPromptForUnit } from './prompt-composer.js';
+import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
-import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
+import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 
 // ---------------------------------------------------------------------------
 // Checkpointer (singleton).
@@ -134,10 +134,15 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
   //    A montagem usa composer async que combina persona + features +
   //    templates + knowledge base + flagged examples.
 
-  // 3) Modelo OpenAI da Unit.
-  const modelName = config.model || unit.openaiModel || env.OPENAI_MODEL;
-  const baseModel = createChatOpenAI(unit, {
+  // 3) Modelo da Unit — OpenAI (padrão) ou Anthropic/Claude.
+  const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
+  const provider = useAnthropic ? 'anthropic' : 'openai';
+  const modelName = useAnthropic
+    ? unit.anthropicModel || 'claude-opus-4-8'
+    : config.model || unit.openaiModel || env.OPENAI_MODEL;
+  const baseModel = createChatModel(unit, {
     model: modelName,
+    // temperature só vai pro caminho OpenAI; ChatAnthropic (Opus 4.8) ignora.
     temperature: config.temperature,
     maxTokens: config.maxTokens,
   });
@@ -184,14 +189,36 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     // workflowText foi aposentado em favor da aba "Ações" (UnitAction, tipada).
     // A coluna agent_configs.workflow ainda existe no DB mas não influencia
     // mais o prompt — recriar as regras na aba Ações se precisar.
-    const dynamicPrompt = await composeSystemPromptForUnit({
-      unit,
-      agentConfigPrompt: config.systemPrompt,
-      userMessage,
-      isFirstTurn,
-      leadId: state.leadId,
-    });
-    const finalMessages: BaseMessage[] = [new SystemMessage(dynamicPrompt), ...nonSystemMessages];
+    // Anthropic/Claude: system em 2 blocos com prompt caching — o estático
+    // (persona, fontes, regras, ações) leva `cache_control` (TTL 1h) e é lido
+    // a 0.1x em turnos seguintes; o volátil (memória, leadId, RAG) fica sem
+    // cache. OpenAI: prompt único (string), sem caching manual.
+    let systemMessage: SystemMessage;
+    if (useAnthropic) {
+      const { cacheable, dynamic } = await composeSystemPromptPartsForUnit({
+        unit,
+        agentConfigPrompt: config.systemPrompt,
+        userMessage,
+        isFirstTurn,
+        leadId: state.leadId,
+      });
+      systemMessage = new SystemMessage({
+        content: [
+          { type: 'text', text: cacheable, cache_control: { type: 'ephemeral', ttl: '1h' } },
+          ...(dynamic ? [{ type: 'text', text: dynamic }] : []),
+        ],
+      } as never);
+    } else {
+      const dynamicPrompt = await composeSystemPromptForUnit({
+        unit,
+        agentConfigPrompt: config.systemPrompt,
+        userMessage,
+        isFirstTurn,
+        leadId: state.leadId,
+      });
+      systemMessage = new SystemMessage(dynamicPrompt);
+    }
+    const finalMessages: BaseMessage[] = [systemMessage, ...nonSystemMessages];
 
     const t0 = performance.now();
     const response = (await invokeChatModel({
@@ -200,6 +227,7 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       unitId: unit.id,
       traceId: recorder.traceId,
       modelName,
+      provider,
       tools,
     })) as AIMessage;
     const latency = Math.round(performance.now() - t0);

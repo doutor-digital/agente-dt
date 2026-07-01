@@ -130,6 +130,12 @@ const unitContent = {
   name: 'Advocacia Magalhães',
   category: 'advocacia',
   isActive: true,
+  // Agente roda no Claude (Opus 4.8) com prompt caching. A chave da Anthropic
+  // (anthropicApiKey) é setada FORA do seed (segredo — não vai pro git) e NÃO é
+  // sobrescrita aqui. Sem a chave no banco, createChatModel cai pro OpenAI.
+  // Embeddings (RAG) e áudio continuam no OpenAI (openaiApiKey).
+  llmProvider: 'anthropic',
+  anthropicModel: 'claude-opus-4-8',
   kommoSubdomain: KOMMO_SUBDOMAIN,
   kommoAccessToken: KOMMO_ACCESS_TOKEN,
   // Funil: etapas em que a IA pode responder (allowlist) + etapa de "ganho".
