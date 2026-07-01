@@ -186,6 +186,14 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;
+
+    // Tag de data de ENTRADA do lead (só unidades em ENTRY_DATE_TAG_SLUGS).
+    // Roda uma vez, no 1º turno. Fire-and-forget (void) pra não somar latência
+    // à resposta — a tag não é usada na geração.
+    if (isFirstTurn && kommoClient && state.leadId && ENTRY_DATE_TAG_SLUGS.has(unit.slug)) {
+      void maybeAddEntryDateTag({ recorder, kommo: kommoClient, leadId: state.leadId });
+    }
+
     // workflowText foi aposentado em favor da aba "Ações" (UnitAction, tipada).
     // A coluna agent_configs.workflow ainda existe no DB mas não influencia
     // mais o prompt — recriar as regras na aba Ações se precisar.
@@ -406,6 +414,51 @@ async function maybeAutoUpdateLeadTitle({
       kind: 'ERROR',
       title: `[safety-net] falha ao atualizar título automaticamente: ${msg}`,
       payload: { leadId, name: display, error: msg },
+      latencyMs: Math.round(performance.now() - t0),
+    });
+  }
+}
+
+// Slugs das unidades que recebem a tag de data de entrada do lead. Mantido como
+// lista explícita (pedido: "só a Magalhães") — adicionar outra unidade aqui.
+const ENTRY_DATE_TAG_SLUGS = new Set(['advocacia-magalhaes']);
+
+// Aplica no lead uma TAG com a data de ENTRADA (lead.created_at) no formato
+// DD/MM/AA (ex: "01/01/26") — igual ao padrão de tags de data já usado na conta.
+// Baseada em created_at → idempotente (mesma tag em toda execução; addTag no
+// Kommo cria a tag se não existir e não duplica se já estiver no lead).
+async function maybeAddEntryDateTag({
+  recorder,
+  kommo,
+  leadId,
+}: {
+  recorder: TraceRecorder;
+  kommo: ReturnType<typeof createKommoClient>;
+  leadId: number;
+}): Promise<void> {
+  const t0 = performance.now();
+  try {
+    const lead = await kommo.getLead(leadId);
+    const createdAtMs = (lead.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
+    const dateTag = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit',
+    }).format(new Date(createdAtMs)); // ex: "01/01/26"
+    await kommo.addTag({ leadId, tag: dateTag });
+    await recorder.step({
+      kind: 'KOMMO_ACTION',
+      title: `tag de data de entrada aplicada: "${dateTag}"`,
+      payload: { leadId, dateTag },
+      latencyMs: Math.round(performance.now() - t0),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await recorder.step({
+      kind: 'ERROR',
+      title: `falha ao aplicar tag de data de entrada: ${msg}`,
+      payload: { leadId, error: msg },
       latencyMs: Math.round(performance.now() - t0),
     });
   }
