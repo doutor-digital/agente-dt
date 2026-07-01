@@ -235,6 +235,10 @@ export interface Unit {
   /** Modo /execute (legado): dispara o Salesbot via POST /bots/{id}/run após o
    *  PATCH, em vez de depender do gatilho do Digital Pipeline. Por unidade. */
   kommoSalesbotExecuteEnabled: boolean;
+  /** Provedor de LLM do chat: "openai" (default) ou "anthropic" (Claude). */
+  llmProvider: string;
+  anthropicApiKey: string | null;
+  anthropicModel: string;
   openaiApiKey: string | null;
   openaiAdminKey: string | null;
   openaiModel: string;

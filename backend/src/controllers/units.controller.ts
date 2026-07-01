@@ -50,6 +50,9 @@ const unitInputBase = {
   kommoWidgetSecret: z.string().nullable().optional(),
   kommoWidgetSalesbotId: z.coerce.number().int().nullable().optional(),
   kommoSalesbotExecuteEnabled: z.boolean().optional(),
+  llmProvider: z.enum(['openai', 'anthropic']).optional(),
+  anthropicApiKey: z.string().nullable().optional(),
+  anthropicModel: z.string().min(1).max(60).optional(),
   openaiApiKey: z.string().nullable().optional(),
   openaiAdminKey: z.string().nullable().optional(),
   openaiModel: z.string().min(1).optional(),
@@ -129,6 +132,7 @@ function dropMaskedSecrets<T extends Partial<UnitInput>>(input: T): T {
   for (const k of [
     'kommoAccessToken',
     'kommoWidgetSecret',
+    'anthropicApiKey',
     'openaiApiKey',
     'openaiAdminKey',
     'metaAccessToken',

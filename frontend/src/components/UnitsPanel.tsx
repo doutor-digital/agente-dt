@@ -95,6 +95,9 @@ const blankInput: UnitInput = {
   kommoSalesbotExecuteEnabled: false,
   kommoWidgetSecret: '',
   kommoWidgetSalesbotId: null,
+  llmProvider: 'openai',
+  anthropicApiKey: '',
+  anthropicModel: 'claude-opus-4-8',
   openaiApiKey: '',
   openaiAdminKey: '',
   openaiModel: 'gpt-4o-mini',
@@ -131,6 +134,9 @@ function unitToInput(u: Unit): UnitInput {
     kommoSalesbotExecuteEnabled: u.kommoSalesbotExecuteEnabled ?? false,
     kommoWidgetSecret: u.kommoWidgetSecret ?? '',
     kommoWidgetSalesbotId: u.kommoWidgetSalesbotId ?? null,
+    llmProvider: u.llmProvider ?? 'openai',
+    anthropicApiKey: u.anthropicApiKey ?? '',
+    anthropicModel: u.anthropicModel ?? 'claude-opus-4-8',
     openaiApiKey: u.openaiApiKey ?? '',
     openaiAdminKey: u.openaiAdminKey ?? '',
     openaiModel: u.openaiModel,
@@ -352,11 +358,59 @@ export function UnitsPanel() {
       },
       {
         id: 'openai',
-        label: 'OpenAI & Chave',
+        label: 'IA & Chave',
         icon: BrainCircuit,
-        subtitle: 'Cada unidade tem sua API key, Assistant e orçamento.',
+        subtitle: 'Provedor do agente (OpenAI/Claude), chave e orçamento.',
         body: (
           <>
+            {/* Provedor de LLM do chat — OpenAI (GPT) ou Anthropic (Claude). */}
+            <div className="space-y-2">
+              <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">
+                Provedor de IA (chat)
+              </div>
+              <div className="flex gap-2">
+                {(['openai', 'anthropic'] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setDraft({ ...draft, llmProvider: p })}
+                    className={clsx(
+                      'flex-1 rounded-lg px-3 py-2 text-sm ring-1 transition',
+                      (draft.llmProvider ?? 'openai') === p
+                        ? 'bg-brand-500/15 ring-brand-500/40 text-brand-100 font-semibold'
+                        : 'bg-zinc-900/40 ring-zinc-800 text-zinc-400 hover:text-zinc-200',
+                    )}
+                  >
+                    {p === 'openai' ? 'OpenAI (GPT)' : 'Anthropic (Claude)'}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-zinc-500">
+                Define o modelo do <strong className="text-zinc-300">agente</strong>. Embeddings (base de
+                Conhecimento) e transcrição de áudio usam <strong className="text-zinc-300">sempre</strong> a
+                chave OpenAI abaixo — mantenha-a preenchida mesmo usando o Claude.
+              </p>
+            </div>
+
+            {(draft.llmProvider ?? 'openai') === 'anthropic' && (
+              <div className="space-y-3 rounded-lg p-3 ring-1 bg-violet-500/5 ring-violet-500/25">
+                <div className="text-[11px] font-semibold text-violet-200">Claude (Anthropic)</div>
+                <Field
+                  label="Anthropic API Key (sk-ant-...)"
+                  value={draft.anthropicApiKey ?? ''}
+                  onChange={(v) => setDraft({ ...draft, anthropicApiKey: v })}
+                  type="password"
+                  hint="Chave do Console da Anthropic (console.anthropic.com). Usada nas chamadas do Claude."
+                />
+                <Field
+                  label="Modelo Claude"
+                  value={draft.anthropicModel ?? ''}
+                  onChange={(v) => setDraft({ ...draft, anthropicModel: v })}
+                  hint="Ex: claude-opus-4-8 (mais capaz), claude-sonnet-5, claude-haiku-4-5 (mais barato)."
+                />
+              </div>
+            )}
+
             {!creating ? (
               <div
                 className={clsx(
@@ -377,8 +431,17 @@ export function UnitsPanel() {
                     IA configurada
                   </div>
                   <div className="text-[11px] text-zinc-400">
-                    {ownKey ? 'Chave própria desta unidade' : 'Usando a chave compartilhada do servidor'}
-                    {' · '}modelo <span className="text-zinc-300">{draft.openaiModel || '—'}</span>
+                    {(draft.llmProvider ?? 'openai') === 'anthropic'
+                      ? 'Claude (Anthropic)'
+                      : ownKey
+                        ? 'Chave própria desta unidade'
+                        : 'Usando a chave compartilhada do servidor'}
+                    {' · '}modelo{' '}
+                    <span className="text-zinc-300">
+                      {((draft.llmProvider ?? 'openai') === 'anthropic'
+                        ? draft.anthropicModel
+                        : draft.openaiModel) || '—'}
+                    </span>
                   </div>
                 </div>
               </div>
