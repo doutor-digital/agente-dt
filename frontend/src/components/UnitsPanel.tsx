@@ -395,18 +395,20 @@ export function UnitsPanel() {
             {(draft.llmProvider ?? 'openai') === 'anthropic' && (
               <div className="space-y-3 rounded-lg p-3 ring-1 bg-violet-500/5 ring-violet-500/25">
                 <div className="text-[11px] font-semibold text-violet-200">Claude (Anthropic)</div>
-                <Field
+                <SecretField
                   label="Anthropic API Key (sk-ant-...)"
                   value={draft.anthropicApiKey ?? ''}
                   onChange={(v) => setDraft({ ...draft, anthropicApiKey: v })}
-                  type="password"
-                  hint="Chave do Console da Anthropic (console.anthropic.com). Usada nas chamadas do Claude."
+                  hasSecret={!!currentUnit?._hasSecrets?.anthropicApiKey}
+                  placeholder="sk-ant-api03-…"
+                  hint="Chave do Console da Anthropic (console.anthropic.com)."
                 />
-                <Field
+                <SelectField
                   label="Modelo Claude"
-                  value={draft.anthropicModel ?? ''}
+                  value={draft.anthropicModel ?? 'claude-opus-4-8'}
                   onChange={(v) => setDraft({ ...draft, anthropicModel: v })}
-                  hint="Ex: claude-opus-4-8 (mais capaz), claude-sonnet-5, claude-haiku-4-5 (mais barato)."
+                  options={CLAUDE_MODELS}
+                  hint="Opus = mais inteligente; Haiku = mais barato e rápido."
                 />
               </div>
             )}
@@ -451,36 +453,44 @@ export function UnitsPanel() {
                 Preencha e clique em <strong className="text-zinc-200">Salvar</strong> pra ativar a IA desta unidade.
               </div>
             )}
-            <Field
+            <div className="text-[11px] font-semibold text-zinc-400 pt-1">OpenAI (GPT)</div>
+            <SecretField
               label="API Key (sk-proj-...)"
               value={draft.openaiApiKey ?? ''}
               onChange={(v) => setDraft({ ...draft, openaiApiKey: v })}
-              type="password"
-              hint="Chave de projeto, usada nas chamadas de inferência."
+              hasSecret={!!currentUnit?._hasSecrets?.openaiApiKey}
+              placeholder="sk-proj-…"
+              hint={
+                (draft.llmProvider ?? 'openai') === 'anthropic'
+                  ? 'Mesmo no Claude, esta chave é usada nos embeddings (RAG) e no áudio. Mantenha preenchida.'
+                  : 'Chave de projeto, usada nas chamadas de inferência.'
+              }
             />
-            <Field
+            <SecretField
               label="Admin Key (sk-admin-...) — opcional"
               value={draft.openaiAdminKey ?? ''}
               onChange={(v) => setDraft({ ...draft, openaiAdminKey: v })}
-              type="password"
+              hasSecret={!!currentUnit?._hasSecrets?.openaiAdminKey}
+              placeholder="sk-admin-…"
               hint="Habilita gastos REAIS da OpenAI no painel de Integrações (custos, projetos, usage)."
             />
-            <Field label="Modelo" value={draft.openaiModel ?? ''} onChange={(v) => setDraft({ ...draft, openaiModel: v })} />
-            <Field
-              label="Assistant ID (opcional)"
-              value={draft.openaiAssistantId ?? ''}
-              onChange={(v) => setDraft({ ...draft, openaiAssistantId: v })}
-              hint="Se preenchido, usa Assistants API ao invés de Chat Completions."
+            <SelectField
+              label={(draft.llmProvider ?? 'openai') === 'anthropic' ? 'Modelo OpenAI (embeddings/áudio)' : 'Modelo'}
+              value={draft.openaiModel ?? 'gpt-4o-mini'}
+              onChange={(v) => setDraft({ ...draft, openaiModel: v })}
+              options={OPENAI_MODELS}
             />
-            <div className="grid grid-cols-3 gap-3">
-              <NumberField
-                label="Temperature"
-                value={draft.openaiTemperature ?? 0}
-                onChange={(v) => setDraft({ ...draft, openaiTemperature: v })}
-                step={0.1}
+            {(draft.llmProvider ?? 'openai') === 'openai' && (
+              <Field
+                label="Assistant ID (opcional)"
+                value={draft.openaiAssistantId ?? ''}
+                onChange={(v) => setDraft({ ...draft, openaiAssistantId: v })}
+                hint="Se preenchido, usa Assistants API ao invés de Chat Completions."
               />
+            )}
+            <div className="grid grid-cols-2 gap-3 pt-1">
               <NumberField
-                label="Max tokens"
+                label="Max tokens (resposta)"
                 value={draft.openaiMaxTokens ?? 1024}
                 onChange={(v) => setDraft({ ...draft, openaiMaxTokens: v })}
               />
@@ -492,33 +502,49 @@ export function UnitsPanel() {
                 allowZero
               />
             </div>
-            <p className="text-[11px] text-zinc-500 mt-1">
-              Amostragem avançada (opcional). Padrão Top P 1 e penalties 0 = sem efeito. Use Top P <em>ou</em> Temperature,
-              não os dois.
-            </p>
-            <div className="grid grid-cols-3 gap-3">
-              <NumberField
-                label="Top P (0–1)"
-                value={draft.openaiTopP ?? 1}
-                onChange={(v) => setDraft({ ...draft, openaiTopP: v })}
-                step={0.05}
-                allowZero
-              />
-              <NumberField
-                label="Freq. penalty (-2 a 2)"
-                value={draft.openaiFrequencyPenalty ?? 0}
-                onChange={(v) => setDraft({ ...draft, openaiFrequencyPenalty: v })}
-                step={0.1}
-                allowZero
-              />
-              <NumberField
-                label="Presence penalty (-2 a 2)"
-                value={draft.openaiPresencePenalty ?? 0}
-                onChange={(v) => setDraft({ ...draft, openaiPresencePenalty: v })}
-                step={0.1}
-                allowZero
-              />
-            </div>
+            {(draft.llmProvider ?? 'openai') === 'anthropic' ? (
+              <p className="text-[11px] text-zinc-500">
+                O Claude (Opus 4.8) não usa <em>temperature</em>, <em>top-p</em> nem <em>penalties</em> — esses campos
+                ficam ocultos porque não têm efeito.
+              </p>
+            ) : (
+              <>
+                <p className="text-[11px] text-zinc-500 mt-1">
+                  Amostragem avançada (opcional). Padrão Top P 1 e penalties 0 = sem efeito. Use Top P <em>ou</em>{' '}
+                  Temperature, não os dois.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <NumberField
+                    label="Temperature (0–2)"
+                    value={draft.openaiTemperature ?? 0}
+                    onChange={(v) => setDraft({ ...draft, openaiTemperature: v })}
+                    step={0.1}
+                    allowZero
+                  />
+                  <NumberField
+                    label="Top P (0–1)"
+                    value={draft.openaiTopP ?? 1}
+                    onChange={(v) => setDraft({ ...draft, openaiTopP: v })}
+                    step={0.05}
+                    allowZero
+                  />
+                  <NumberField
+                    label="Freq. penalty (-2 a 2)"
+                    value={draft.openaiFrequencyPenalty ?? 0}
+                    onChange={(v) => setDraft({ ...draft, openaiFrequencyPenalty: v })}
+                    step={0.1}
+                    allowZero
+                  />
+                  <NumberField
+                    label="Presence penalty (-2 a 2)"
+                    value={draft.openaiPresencePenalty ?? 0}
+                    onChange={(v) => setDraft({ ...draft, openaiPresencePenalty: v })}
+                    step={0.1}
+                    allowZero
+                  />
+                </div>
+              </>
+            )}
           </>
         ),
       },
@@ -1701,6 +1727,135 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
+      />
+      {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
+    </div>
+  );
+}
+
+// Modelos oferecidos no select. Se a unidade tiver um valor fora da lista,
+// o SelectField adiciona ele como "(atual)" pra não sumir.
+const CLAUDE_MODELS = [
+  { value: 'claude-opus-4-8', label: 'Opus 4.8 — mais capaz ($5/$25 por Mtok)' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5 — equilíbrio ($3/$15)' },
+  { value: 'claude-haiku-4-5', label: 'Haiku 4.5 — mais barato/rápido ($1/$5)' },
+  { value: 'claude-opus-4-7', label: 'Opus 4.7 — geração anterior ($5/$25)' },
+];
+const OPENAI_MODELS = [
+  { value: 'gpt-4o-mini', label: 'gpt-4o-mini — barato ($0.15/$0.60)' },
+  { value: 'gpt-4o', label: 'gpt-4o ($2.5/$10)' },
+  { value: 'gpt-5-mini', label: 'gpt-5-mini ($0.25/$1.25)' },
+  { value: 'gpt-5', label: 'gpt-5 ($5/$15)' },
+  { value: 'o1-mini', label: 'o1-mini ($3/$12)' },
+];
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  hint?: string;
+}) {
+  const known = options.some((o) => o.value === value);
+  return (
+    <div>
+      <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-brand-500/40"
+      >
+        {!known && value && <option value={value}>{value} (atual)</option>}
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
+    </div>
+  );
+}
+
+// Campo de segredo com estado "configurada". Quando a chave já existe (valor
+// mascarado ••••), mostra um chip + botão "Trocar" em vez de um blob ilegível.
+// Trocar → input vazio pra colar a nova; Cancelar restaura a mascarada (que o
+// back preserva). Assim dá pra EDITAR sem apagar a chave sem querer.
+function SecretField({
+  label,
+  value,
+  onChange,
+  hasSecret,
+  hint,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  hasSecret?: boolean;
+  hint?: string;
+  placeholder?: string;
+}) {
+  const isMasked = value.includes('••••');
+  const [editing, setEditing] = useState(false);
+  const [maskedBackup, setMaskedBackup] = useState('');
+
+  if (hasSecret && isMasked && !editing) {
+    return (
+      <div>
+        <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+        <div className="flex items-center gap-2 rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5">
+          <KeyRound size={13} className="text-emerald-400 shrink-0" />
+          <span className="text-xs text-zinc-400 flex-1 truncate">
+            Configurada · <span className="text-zinc-600">{value}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setMaskedBackup(value);
+              setEditing(true);
+              onChange('');
+            }}
+            className="text-[11px] text-brand-300 hover:text-brand-200 font-semibold shrink-0"
+          >
+            Trocar
+          </button>
+        </div>
+        {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 flex items-center justify-between">
+        <span>{label}</span>
+        {editing && (
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              onChange(maskedBackup);
+            }}
+            className="text-[10px] text-zinc-400 hover:text-zinc-200 normal-case tracking-normal"
+          >
+            cancelar
+          </button>
+        )}
+      </label>
+      <input
+        type="password"
+        autoFocus={editing}
+        value={value}
+        placeholder={placeholder ?? 'Cole a chave aqui'}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-brand-500/40"
       />
       {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
     </div>
