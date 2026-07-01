@@ -29,7 +29,7 @@
 
 import { logger } from './logger.js';
 
-const COALESCE_WINDOW_MS = 3_000;       // 3s de silêncio antes de rodar
+const COALESCE_WINDOW_MS = 8_000;       // 8s de silêncio antes de rodar
 const MAX_BURST_DURATION_MS = 30_000;   // hard cap: nunca segura mais de 30s
 const MAX_MESSAGES_PER_BURST = 20;      // safety: evita memória crescente sem limite
 
