@@ -25,6 +25,9 @@ WORKDIR /repo
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY backend/package.json backend/
 COPY frontend/package.json frontend/
+# O postinstall do backend roda `prisma generate` durante o install — por isso o
+# schema tem que existir ANTES do pnpm install, senão falha ("schema not found").
+COPY backend/prisma/ backend/prisma/
 RUN pnpm install --filter=agente-dt-backend --frozen-lockfile
 
 # Código + build (prisma generate roda no postinstall também; explícito aqui p/
