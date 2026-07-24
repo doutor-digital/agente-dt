@@ -26,6 +26,7 @@ import type { AppTab } from '../components/AppSidebar';
 // Map tab ↔ slug. Slugs em PT-BR (pra ficar bonito na URL).
 const TAB_TO_SLUG: Record<AppTab, string> = {
   dashboard: 'dashboard',
+  configure: 'configurar-agente',
   wizard: 'configurar-ia',
   playground: 'testar-ia',
   training: 'treinar-ia',

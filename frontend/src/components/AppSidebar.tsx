@@ -56,6 +56,7 @@ import { api } from '../lib/api';
 
 export type AppTab =
   | 'dashboard'
+  | 'configure'
   | 'traces'
   | 'conversations'
   | 'llm'
@@ -87,26 +88,20 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'primary' },
-  { id: 'wizard', label: 'Configurar IA', icon: Wand2, group: 'primary' },
-  { id: 'playground', label: 'Testar IA', icon: TestTube2, group: 'primary' },
-  { id: 'training', label: 'Treinar IA', icon: GraduationCap, group: 'primary' },
-  { id: 'sources', label: 'Fontes', icon: FileText, group: 'primary' },
-  { id: 'actions', label: 'Ações', icon: Zap, group: 'primary' },
-  { id: 'tools', label: 'Ferramentas', icon: Wrench, group: 'primary' },
-  { id: 'captures', label: 'Captura de Dados', icon: Database, group: 'primary' },
+  { id: 'units', label: 'Agentes', icon: Building2, group: 'primary', superOnly: true },
+  { id: 'configure', label: 'Configurar agente', icon: Wand2, group: 'primary' },
   { id: 'conversations', label: 'Conversas', icon: MessageCircle, group: 'primary' },
   { id: 'traces', label: 'Execuções', icon: Terminal, group: 'primary' },
   { id: 'errors', label: 'Erros', icon: AlertOctagon, group: 'primary' },
-  { id: 'delivery', label: 'Entrega', icon: Truck, group: 'primary', superOnly: true },
 
   { id: 'reports', label: 'Relatórios', icon: FileBarChart, group: 'secondary' },
   { id: 'whatsapp', label: 'Custo WhatsApp', icon: MessageCircle, group: 'secondary' },
   { id: 'llm', label: 'Chamadas IA', icon: Cpu, group: 'secondary' },
   { id: 'prompts', label: 'Prompts', icon: Sparkles, group: 'secondary' },
   { id: 'integrations', label: 'Integrações', icon: Cable, group: 'secondary' },
+  { id: 'delivery', label: 'Entrega', icon: Truck, group: 'secondary', superOnly: true },
   { id: 'config', label: 'Avançado (técnico)', icon: Settings, group: 'secondary' },
   { id: 'global-actions', label: 'Regras Globais', icon: Globe, group: 'secondary', superOnly: true },
-  { id: 'units', label: 'Agentes', icon: Building2, group: 'secondary', superOnly: true },
   { id: 'users', label: 'Usuários', icon: UserCog, group: 'secondary', superOnly: true },
 ];
 

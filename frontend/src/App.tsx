@@ -71,6 +71,9 @@ const AgentConfigPanel = lazy(() =>
 const UnitsPanel = lazy(() =>
   import('./components/UnitsPanel').then((m) => ({ default: m.UnitsPanel })),
 );
+const AgentWorkspace = lazy(() =>
+  import('./components/AgentWorkspace').then((m) => ({ default: m.AgentWorkspace })),
+);
 const UsersPanel = lazy(() =>
   import('./components/UsersPanel').then((m) => ({ default: m.UsersPanel })),
 );
@@ -158,6 +161,7 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
       <main className="flex-1 flex flex-col overflow-hidden">
         <Suspense fallback={<PanelSkeleton />}>
           {tab === 'dashboard' && <DashboardPanel />}
+          {tab === 'configure' && <AgentWorkspace />}
           {tab === 'traces' && <TracesView />}
           {tab === 'errors' && <ErrorsPanel />}
           {tab === 'delivery' && <DeliveryMonitorPanel />}
