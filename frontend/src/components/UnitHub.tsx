@@ -1,25 +1,19 @@
 // ============================================================================
-// UnitHub — landing pós-login: escolher uma unidade existente, criar uma nova
-// (atribuindo categoria) ou entrar no painel geral (todas as unidades).
-//
-// Aparece pro SUPER_ADMIN quando nenhuma unidade está selecionada. Selecionar
-// uma unidade (ou criá-la) entra no app já no contexto dela. A categoria define
-// a identidade da IA (Saúde → Dra. Sofia, Energia Solar → Dr. João).
+// UnitHub — landing pós-login: as CLÍNICAS e, dentro de cada uma, seus AGENTES.
+// Cada agente é uma unidade; agentes da mesma clínica compartilham o nome da
+// clínica (personaCompanyName) e o mesmo Kommo. Clicar num agente entra na
+// configuração dele.
 // ============================================================================
 
-import { useState } from 'react';
-import { Check, LayoutGrid, Loader2, Plus, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Bot, Check, LayoutGrid, Loader2, Plus, X } from 'lucide-react';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import { api } from '../lib/api';
 import { CATEGORY_OPTIONS } from './WizardPanel';
+import type { Unit } from '../types/api';
 
-const LOGO_URL = 'https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png';
-const SKY =
-  'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=2000&q=70';
-// Banner exibido no topo de cada card de unidade.
-const UNIT_IMAGE =
-  'https://play-lh.googleusercontent.com/9OYcYnz7sixdse2N_gYlA3Qc0bkpIGAtaZaPBVQDD9cqu8avN_ykIGhBlkgfoahdYzQ=w600-h300-pc0xffffff-pd';
+const LOGO_URL = '/logo-dd.png';
 
 function categoryLabel(cat: string | null): string {
   const o = CATEGORY_OPTIONS.find((c) => c.value === (cat ?? ''));
@@ -43,91 +37,107 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
   const [category, setCategory] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Agrupa as unidades (agentes) por clínica: personaCompanyName é o nome da
+  // clínica; cai pra kommoSubdomain / nome quando não houver.
+  const groups = useMemo(() => {
+    const m = new Map<string, { label: string; units: Unit[] }>();
+    for (const u of units) {
+      const key = u.personaCompanyName?.trim() || u.kommoSubdomain?.trim() || u.name;
+      const label = u.personaCompanyName?.trim() || u.name;
+      if (!m.has(key)) m.set(key, { label, units: [] });
+      m.get(key)!.units.push(u);
+    }
+    return [...m.values()].sort((a, b) => b.units.length - a.units.length);
+  }, [units]);
+
   async function handleCreate() {
     const trimmed = name.trim();
     if (!trimmed) {
-      toast.error('Dê um nome à unidade.');
+      toast.error('Dê um nome ao agente.');
       return;
     }
     setSaving(true);
     try {
       const created = await api.createUnit({
         name: trimmed,
-        slug: slugify(trimmed) || `unidade-${Date.now()}`,
+        slug: slugify(trimmed) || `agente-${Date.now()}`,
         category: category || null,
       });
       await refresh();
-      toast.success(`Unidade "${created.name}" criada!`);
-      setSelectedUnitId(created.id); // entra direto na nova unidade
+      toast.success(`Agente "${created.name}" criado!`);
+      setSelectedUnitId(created.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`Falha ao criar unidade: ${msg}`);
+      toast.error(`Falha ao criar agente: ${msg}`);
       setSaving(false);
     }
   }
 
   return (
-    <div
-      className="h-screen w-screen overflow-y-auto bg-cover bg-center bg-[#0a1628]"
-      style={{
-        backgroundImage: `linear-gradient(to bottom, rgba(8,8,12,0.82), rgba(8,8,12,0.94)), url(${SKY})`,
-      }}
-    >
-      <div className="max-w-5xl mx-auto px-6 py-12">
+    <div className="h-screen w-screen overflow-y-auto" style={{ background: '#0e0c16' }}>
+      <div className="max-w-4xl mx-auto px-6 py-12">
         {/* Header */}
         <div className="flex flex-col items-center text-center mb-10">
-          <img src={LOGO_URL} alt="Agente DT" className="w-14 h-14 object-contain mb-3" />
+          <img src={LOGO_URL} alt="Doutor Digital" className="w-14 h-14 object-contain mb-3" />
           <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">
-            Escolha um agente
+            Clínicas e agentes
           </h1>
-          <p className="text-sm text-zinc-300/90 mt-1">
-            Cada unidade tem sua própria IA. A categoria define a identidade dela.
+          <p className="text-sm text-zinc-400 mt-1">
+            Escolha a clínica e clique no agente para configurá-lo.
           </p>
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-20 text-zinc-300">
-            <Loader2 className="animate-spin mr-2" size={18} /> Carregando unidades…
+          <div className="flex items-center justify-center py-20 text-zinc-400">
+            <Loader2 className="animate-spin mr-2" size={18} /> Carregando…
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {units.map((u, i) => (
-              <button
-                key={u.id}
-                type="button"
-                onClick={() => setSelectedUnitId(u.id)}
-                style={{ animationDelay: `${i * 50}ms` }}
-                className="animate-fade-in-up group flex flex-col items-center text-center rounded-2xl bg-zinc-900/55 ring-1 ring-white/10 hover:ring-brand-400/60 hover:bg-zinc-900/70 hover:shadow-xl hover:shadow-brand-500/10 backdrop-blur p-5 transition-all duration-300 hover:-translate-y-1.5 active:translate-y-0"
+          <div className="space-y-8">
+            {groups.map((g) => (
+              <section
+                key={g.label}
+                className="rounded-2xl ring-1 ring-white/10 bg-white/[0.03] p-5"
               >
-                <img
-                  src={UNIT_IMAGE}
-                  alt=""
-                  loading="lazy"
-                  className="w-20 h-20 rounded-full object-contain bg-white ring-2 ring-white/15 group-hover:ring-brand-400/70 shadow-lg transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3"
-                />
-                <div className="mt-3 text-zinc-100 font-semibold truncate w-full">{u.name}</div>
-                <div className="text-[11px] text-zinc-500 truncate w-full">{u.slug}</div>
-                <div className="mt-3 inline-flex items-center text-[11px] px-2.5 py-0.5 rounded-full bg-white/5 ring-1 ring-white/10 text-zinc-300">
-                  {categoryLabel(u.category)}
+                <div className="flex items-baseline gap-2 mb-4">
+                  <h2 className="text-base font-semibold text-white">{g.label}</h2>
+                  <span className="text-xs text-zinc-500">
+                    {g.units.length} {g.units.length === 1 ? 'agente' : 'agentes'}
+                  </span>
                 </div>
-              </button>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {g.units.map((u) => (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => setSelectedUnitId(u.id)}
+                      className="group flex flex-col items-start text-left rounded-xl bg-zinc-900/60 ring-1 ring-white/10 hover:ring-brand-400/60 hover:bg-zinc-900 p-4 transition-all duration-200 hover:-translate-y-0.5"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-brand-500/15 ring-1 ring-brand-400/30 flex items-center justify-center text-brand-300 group-hover:bg-brand-500/25 transition">
+                        <Bot size={18} />
+                      </div>
+                      <div className="mt-3 text-sm font-semibold text-zinc-100 truncate w-full">
+                        {u.name}
+                      </div>
+                      <div className="text-[11px] text-zinc-500 truncate w-full">
+                        {categoryLabel(u.category)}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
             ))}
 
-            {/* Card de criar nova unidade */}
+            {/* Criar novo agente */}
             {!showForm ? (
               <button
                 type="button"
                 onClick={() => setShowForm(true)}
-                style={{ animationDelay: `${units.length * 50}ms` }}
-                className="animate-fade-in-up group rounded-2xl bg-zinc-900/30 ring-1 ring-white/10 hover:bg-white/5 p-5 flex flex-col items-center justify-center text-zinc-400 hover:text-brand-200 transition-all duration-300 hover:-translate-y-1.5 active:translate-y-0"
+                className="w-full rounded-2xl ring-1 ring-dashed ring-white/15 hover:ring-brand-400/50 bg-white/[0.02] hover:bg-white/[0.04] p-4 flex items-center justify-center gap-2 text-zinc-400 hover:text-brand-200 transition"
               >
-                <div className="w-20 h-20 rounded-full border-2 border-dashed border-white/20 group-hover:border-brand-400/60 flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-90">
-                  <Plus size={26} />
-                </div>
-                <span className="mt-3 text-sm font-medium">Criar nova unidade</span>
+                <Plus size={18} /> Novo agente
               </button>
             ) : (
-              <div className="rounded-2xl bg-zinc-900/70 ring-1 ring-white/10 backdrop-blur p-5 space-y-3 sm:col-span-2 lg:col-span-1">
+              <div className="rounded-2xl bg-zinc-900/70 ring-1 ring-white/10 p-5 space-y-3 max-w-md mx-auto">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-semibold text-zinc-100">Novo agente</span>
                   <button
@@ -146,7 +156,7 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     autoFocus
-                    placeholder="ex: Clínica Sorriso"
+                    placeholder="ex: Resgate"
                     className="w-full rounded-md bg-zinc-950/60 ring-1 ring-white/10 px-3 py-2 text-sm text-zinc-100 focus:ring-2 focus:ring-brand-500/50 focus:outline-none"
                   />
                   {name.trim() && (
@@ -183,15 +193,14 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
           </div>
         )}
 
-        {/* Painel geral */}
         <div className="flex justify-center mt-10">
           <button
             type="button"
             onClick={onViewAll}
-            className="inline-flex items-center gap-2 text-sm px-4 py-2 rounded-full bg-white/5 ring-1 ring-white/10 text-zinc-300 hover:text-white hover:bg-white/10 transition"
+            className="inline-flex items-center gap-2 text-sm px-4 py-2 rounded-full bg-white/5 ring-1 ring-white/10 text-zinc-400 hover:text-white hover:bg-white/10 transition"
           >
             <LayoutGrid size={15} />
-            Ver painel geral (todas as unidades)
+            Ver painel geral
           </button>
         </div>
       </div>
