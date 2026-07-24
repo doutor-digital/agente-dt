@@ -1,0 +1,124 @@
+name: deploy-agente-dt
+
+# Backend do agente-dt: build da imagem no runner do GitHub → GHCR → deploy no
+# self-hosted runner da VPS (docker stack deploy, rolling sem downtime).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "!backend/**/*.md"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-agente-dt
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: agente-dt-backend
+  STACK_NAME: ddagent
+  REMOTE_DIR: /opt/doutordigital/agente-dt
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Owner em minúsculas
+        id: owner
+        run: echo "lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .            # raiz do repo — o Dockerfile precisa do pnpm-lock/workspace
+          push: true
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ghcr.io/${{ steps.owner.outputs.lc }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    # Self-hosted runner na VPS (precisa estar registrado NESTE repo com estes
+    # labels). O deploy é local — docker stack deploy direto no daemon do host.
+    runs-on: [self-hosted, linux, vps]
+    permissions:
+      contents: read
+      packages: read       # p/ o GITHUB_TOKEN puxar a imagem do GHCR
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rolling update sem downtime
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.tag }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+        run: |
+          set -eu
+
+          # compose versionado é a fonte da verdade.
+          cp docker-compose.yml ${{ env.REMOTE_DIR }}/docker-compose.yml
+          cd ${{ env.REMOTE_DIR }}
+
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+
+          CI_TAG="$IMAGE_TAG"
+          set -a
+          . ./.env
+          set +a
+          IMAGE_TAG="$CI_TAG"
+          export IMAGE_TAG
+
+          echo "deploying $IMAGE_TAG"
+          docker stack deploy -c docker-compose.yml --with-registry-auth --prune ${{ env.STACK_NAME }}
+
+          SVC=${{ env.STACK_NAME }}_agent
+          n=0
+          while [ "$n" -lt 60 ]; do
+            STATE=$(docker service inspect "$SVC" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{else}}completed{{end}}')
+            echo "state: $STATE"
+            if [ "$STATE" = "completed" ]; then
+              echo "rollout OK"
+              exit 0
+            fi
+            case "$STATE" in
+              rollback_*|paused)
+                echo "rollout FAILED ($STATE) - swarm reverteu"
+                docker service ps "$SVC" --no-trunc | head -20
+                exit 1
+                ;;
+            esac
+            n=$((n + 1))
+            sleep 5
+          done
+          echo "timeout esperando convergencia"
+          docker service ps "$SVC" --no-trunc | head -20
+          exit 1
+
+      - name: Smoke test publico
+        run: |
+          for i in $(seq 1 10); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              "https://${{ vars.AGENT_DOMAIN }}/api/health" --max-time 10 || echo 000)
+            [ "$CODE" = "200" ] && { echo "health respondeu 200"; exit 0; }
+            echo "tentativa $i: HTTP $CODE"; sleep 6
+          done
+          echo "health nao respondeu 200"; exit 1

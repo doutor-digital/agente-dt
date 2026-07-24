@@ -1,0 +1,83 @@
+# Stack Swarm do BACKEND do agente-dt na VPS (mesma pegada do dashboard: ddapi/ddweb).
+#
+# Aplicado pelo workflow com:
+#   set -a && . .env && set +a
+#   docker stack deploy -c docker-compose.yml --with-registry-auth --prune ddagent
+#
+# Depende de infra que já existe na VPS: Traefik (TLS) + Postgres, ambos na overlay
+# externa `portainer-next`. O banco é o `agente_dt` (novo) no Postgres da VPS.
+#
+# ATENÇÃO — o A record de ${AGENT_DOMAIN} tem que resolver p/ a VPS ANTES do 1º
+# deploy, senão o Let's Encrypt contabiliza falha e cai no rate limit.
+
+version: "3.8"
+
+networks:
+  portainer-next:
+    external: true
+
+services:
+  agent:
+    image: ghcr.io/${GHCR_OWNER}/agente-dt-backend:${IMAGE_TAG:-latest}
+    networks: [portainer-next]
+
+    # Todas as variáveis de app (DATABASE_URL, KOMMO_*, OPENAI_API_KEY,
+    # SESSION_JWT_SECRET, etc.) vêm do .env que fica em /opt/doutordigital/agente-dt.
+    env_file:
+      - .env
+
+    # Fixos de infra (sobrepõem o que vier do .env).
+    environment:
+      NODE_ENV: "production"
+      PORT: "8080"
+      TZ: "America/Sao_Paulo"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s      # margem p/ o prisma migrate deploy no boot
+
+    stop_grace_period: 30s
+
+    deploy:
+      # 1 réplica: o backend tem monitores/timers (stale-reply-monitor) sem lock
+      # distribuído — 2 réplicas rodariam em duplicata.
+      replicas: 1
+
+      update_config:
+        order: start-first     # sobe o novo, valida no /api/health, só então mata o antigo
+        failure_action: rollback
+        delay: 10s
+        monitor: 90s
+
+      rollback_config:
+        order: start-first
+        failure_action: pause
+
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=portainer-next
+        - traefik.http.routers.ddagent.rule=Host(`${AGENT_DOMAIN}`)
+        - traefik.http.routers.ddagent.entrypoints=websecure
+        - traefik.http.routers.ddagent.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.ddagent.service=ddagent
+        - traefik.http.services.ddagent.loadbalancer.server.port=8080
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
