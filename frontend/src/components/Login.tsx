@@ -1,5 +1,5 @@
 // ============================================================================
-// Login — tela com form email/senha.
+// Login — tela dark com verde (identidade Doutor Digital).
 //
 // Sem signup público — o super admin cria usuários pelo painel ou via CLI.
 // Códigos de erro retornados pelo backend:
@@ -7,21 +7,23 @@
 //   account_disabled    — user desativado pelo super admin
 //   no_password_set     — user existe mas ainda sem senha (peça reset)
 //
-// TEMA: card branco sobre foto de fundo (estilo híbrido do Kommo).
+// TEMA: fundo escuro, coluna esquerda com a logo DD + chamada, card de LOGIN
+// verde à direita. Estilo próprio (verde inline), não usa o brand roxo global.
 // ============================================================================
 
-import { useState, type FormEvent } from 'react';
-import { Loader2, LogIn } from 'lucide-react';
+import { useState, type FormEvent, type CSSProperties } from 'react';
+import { Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
-const LOGO_URL = 'https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png';
+const GREEN = '#2EE68E';
+const GREEN_DEEP = '#0f2b1e';
 
 const ERROR_MESSAGES: Record<string, string> = {
-  invalid_credentials: 'Email ou senha incorretos.',
+  invalid_credentials: 'Usuário ou senha incorretos.',
   account_disabled: 'Esta conta foi desativada. Fale com o administrador.',
   no_password_set:
     'Sua conta existe mas ainda não tem senha definida. Peça pro administrador resetar.',
-  invalid_input: 'Preencha email e senha corretamente.',
+  invalid_input: 'Preencha usuário e senha corretamente.',
   internal_error: 'Erro interno. Tente de novo em alguns segundos.',
 };
 
@@ -31,10 +33,12 @@ export function Login() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setInfo(null);
     setSubmitting(true);
     try {
       await login(email.trim().toLowerCase(), password);
@@ -48,71 +52,135 @@ export function Login() {
     }
   }
 
+  const inputStyle: CSSProperties = {
+    background: '#3a3348',
+    color: '#eceaf3',
+    border: '1px solid #46405a',
+  };
+
   return (
     <div
-      className="h-screen w-screen flex flex-col items-center justify-center px-6 bg-cover bg-center bg-[#0a1628]"
-      style={{
-        backgroundImage:
-          'linear-gradient(to bottom, rgba(8,8,12,0.55) 0%, rgba(8,8,12,0.78) 100%), url(https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=2000&q=70)',
-      }}
+      className="min-h-screen w-full flex items-center justify-center px-6 py-10"
+      style={{ background: '#1b1725' }}
     >
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl ring-1 ring-black/5 p-7 flex flex-col items-center">
-        <img src={LOGO_URL} alt="Agente DT" className="w-20 h-20 object-contain mb-4" />
-        <h1 className="text-2xl font-bold text-zinc-900">Agente DT</h1>
-        <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-400 mb-6">
-          Painel administrativo
-        </p>
-
-        <form onSubmit={handleSubmit} className="w-full space-y-3">
-          {error && (
-            <div className="rounded-md bg-rose-50 ring-1 ring-rose-200 px-3 py-2 text-xs text-rose-700">
-              {error}
-            </div>
-          )}
-
-          <div>
-            <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">
-              Email
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
-              autoFocus
-              required
-              className="w-full rounded-md bg-zinc-50 ring-1 ring-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:outline-none transition"
-            />
-          </div>
-
-          <div>
-            <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">
-              Senha
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-              className="w-full rounded-md bg-zinc-50 ring-1 ring-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:outline-none transition"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={submitting || !email || !password}
-            className="w-full px-4 py-2.5 rounded-md bg-brand-600 text-white inline-flex items-center justify-center gap-2 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed font-semibold text-sm transition-colors shadow-sm shadow-brand-600/20"
+      <div className="w-full max-w-5xl grid gap-12 md:grid-cols-2 md:gap-8 items-center">
+        {/* ── Coluna esquerda: chamada + logo DD ────────────────────────── */}
+        <div className="flex flex-col items-center md:items-start text-center md:text-left gap-8">
+          <h1
+            className="text-3xl md:text-[2.75rem] font-bold leading-tight text-balance"
+            style={{ color: GREEN }}
           >
-            {submitting ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
-            Entrar
-          </button>
-        </form>
-      </div>
+            Faça login
+            <br />E entre para o nosso time
+          </h1>
+          <img
+            src="/logo-dd.png"
+            alt="Doutor Digital"
+            className="w-40 md:w-56 h-auto select-none"
+            style={{ filter: 'drop-shadow(0 8px 40px rgba(46,230,142,0.15))' }}
+            draggable={false}
+          />
+        </div>
 
-      <p className="mt-6 text-[11px] text-zinc-300 max-w-sm text-center">
-        Acesso restrito. Se não tem cadastro, peça pro administrador criar uma conta pra você.
-      </p>
+        {/* ── Card de LOGIN ─────────────────────────────────────────────── */}
+        <div className="w-full max-w-sm mx-auto md:mx-0 md:justify-self-end">
+          <div
+            className="rounded-2xl p-7 sm:p-8"
+            style={{
+              background: '#2a2436',
+              border: '1px solid #3a3348',
+              boxShadow: '0 24px 60px -20px rgba(0,0,0,0.6)',
+            }}
+          >
+            <h2
+              className="text-center text-2xl font-extrabold tracking-[0.2em] mb-7"
+              style={{ color: GREEN }}
+            >
+              LOGIN
+            </h2>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {error && (
+                <div className="rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(244,63,94,0.12)', border: '1px solid rgba(244,63,94,0.35)', color: '#fca5a5' }}>
+                  {error}
+                </div>
+              )}
+              {info && (
+                <div className="rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(46,230,142,0.10)', border: '1px solid rgba(46,230,142,0.3)', color: GREEN }}>
+                  {info}
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="login-user" className="block mb-1.5 text-sm" style={{ color: '#c9c3d9' }}>
+                  Usuário
+                </label>
+                <input
+                  id="login-user"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Usuário"
+                  autoComplete="username"
+                  autoFocus
+                  required
+                  className="w-full rounded-lg px-3.5 py-2.5 text-sm outline-none transition focus:ring-2"
+                  style={inputStyle}
+                  onFocus={(e) => (e.currentTarget.style.boxShadow = `0 0 0 2px ${GREEN}55`)}
+                  onBlur={(e) => (e.currentTarget.style.boxShadow = 'none')}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="login-pass" className="block mb-1.5 text-sm" style={{ color: '#c9c3d9' }}>
+                  Senha
+                </label>
+                <input
+                  id="login-pass"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Senha"
+                  autoComplete="current-password"
+                  required
+                  className="w-full rounded-lg px-3.5 py-2.5 text-sm outline-none transition"
+                  style={inputStyle}
+                  onFocus={(e) => (e.currentTarget.style.boxShadow = `0 0 0 2px ${GREEN}55`)}
+                  onBlur={(e) => (e.currentTarget.style.boxShadow = 'none')}
+                />
+                <div className="text-right mt-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setInfo('Recuperação por aqui ainda não está ativa. Peça ao administrador para resetar sua senha.')}
+                    className="text-xs hover:underline"
+                    style={{ color: '#a79ec2' }}
+                  >
+                    Recuperar senha?
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting || !email || !password}
+                className="w-full py-3 rounded-lg font-bold tracking-widest text-sm inline-flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  background: GREEN,
+                  color: GREEN_DEEP,
+                  boxShadow: `0 0 26px -2px ${GREEN}99`,
+                }}
+              >
+                {submitting ? <Loader2 size={16} className="animate-spin" /> : null}
+                LOGIN
+              </button>
+            </form>
+          </div>
+
+          <p className="mt-5 text-center text-[11px]" style={{ color: '#7d7690' }}>
+            Acesso restrito. Sem cadastro? Peça pro administrador criar sua conta.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
