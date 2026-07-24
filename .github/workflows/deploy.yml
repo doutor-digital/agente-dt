@@ -115,10 +115,12 @@ jobs:
 
       - name: Smoke test publico
         run: |
-          for i in $(seq 1 10); do
+          # Janela generosa: no PRIMEIRO deploy de um domínio novo o Let's Encrypt
+          # ainda está emitindo o cert (retorna 000 até sair). ~24x8s = ~3min cobre isso.
+          for i in $(seq 1 24); do
             CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               "https://${{ vars.AGENT_DOMAIN }}/api/health" --max-time 10 || echo 000)
-            [ "$CODE" = "200" ] && { echo "health respondeu 200"; exit 0; }
-            echo "tentativa $i: HTTP $CODE"; sleep 6
+            [ "$CODE" = "200" ] && { echo "health respondeu 200 (tentativa $i)"; exit 0; }
+            echo "tentativa $i: HTTP $CODE (aguardando app/TLS)"; sleep 8
           done
           echo "health nao respondeu 200"; exit 1
