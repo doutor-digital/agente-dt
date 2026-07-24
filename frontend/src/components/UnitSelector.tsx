@@ -65,7 +65,7 @@ export function UnitSelector() {
           {units.length === 0 && (
             <div className="px-3 py-3 text-[11px] text-zinc-500">
               Nenhuma unidade cadastrada.<br />
-              Use a aba "Unidades" pra criar.
+              Use a aba "Agentes" pra criar.
             </div>
           )}
 

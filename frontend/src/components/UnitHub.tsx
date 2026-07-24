@@ -78,7 +78,7 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
         <div className="flex flex-col items-center text-center mb-10">
           <img src={LOGO_URL} alt="Agente DT" className="w-14 h-14 object-contain mb-3" />
           <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">
-            Escolha uma unidade
+            Escolha um agente
           </h1>
           <p className="text-sm text-zinc-300/90 mt-1">
             Cada unidade tem sua própria IA. A categoria define a identidade dela.
@@ -129,7 +129,7 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
             ) : (
               <div className="rounded-2xl bg-zinc-900/70 ring-1 ring-white/10 backdrop-blur p-5 space-y-3 sm:col-span-2 lg:col-span-1">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-zinc-100">Nova unidade</span>
+                  <span className="text-sm font-semibold text-zinc-100">Novo agente</span>
                   <button
                     type="button"
                     onClick={() => setShowForm(false)}

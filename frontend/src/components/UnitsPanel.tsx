@@ -856,7 +856,7 @@ export function UnitsPanel() {
                 Voltar
               </button>
               <h2 className="text-base font-semibold text-zinc-100 flex-1 truncate">
-                {creating ? 'Nova unidade' : draft.name || 'Sem nome'}
+                {creating ? 'Novo agente' : draft.name || 'Sem nome'}
               </h2>
               <div className="flex items-center gap-2 shrink-0">
                 {!creating && selectedId && isSuper && (
@@ -918,7 +918,7 @@ export function UnitsPanel() {
                 className="text-xs px-3 py-1.5 rounded-md bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/30 inline-flex items-center gap-1.5 hover:bg-brand-500/30"
               >
                 <Plus size={13} />
-                Nova unidade
+                Novo agente
               </button>
             )}
           </div>

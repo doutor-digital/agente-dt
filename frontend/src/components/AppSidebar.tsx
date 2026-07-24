@@ -106,7 +106,7 @@ const NAV: NavItem[] = [
   { id: 'integrations', label: 'Integrações', icon: Cable, group: 'secondary' },
   { id: 'config', label: 'Avançado (técnico)', icon: Settings, group: 'secondary' },
   { id: 'global-actions', label: 'Regras Globais', icon: Globe, group: 'secondary', superOnly: true },
-  { id: 'units', label: 'Unidades', icon: Building2, group: 'secondary', superOnly: true },
+  { id: 'units', label: 'Agentes', icon: Building2, group: 'secondary', superOnly: true },
   { id: 'users', label: 'Usuários', icon: UserCog, group: 'secondary', superOnly: true },
 ];
 
@@ -193,7 +193,7 @@ export function AppSidebar({
       {/* Unit selector */}
       <div className="px-3 py-3 border-b border-zinc-200">
         <div className="text-[9px] font-semibold uppercase tracking-widest text-zinc-400 mb-1.5 px-1">
-          Unidade ativa
+          Agente ativo
         </div>
         <UnitSelector />
       </div>
