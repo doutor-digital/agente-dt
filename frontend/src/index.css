@@ -33,6 +33,40 @@
   --font-mono:    "JetBrains Mono", "ui-monospace", "SFMono-Regular", monospace;
 }
 
+/* ===========================================================================
+ * TEMA claro/escuro — a escala `zinc` (usada como escala semântica dark-first
+ * em todo o app) vira variável de runtime. No escuro são os valores normais;
+ * no claro a escala é REFLETIDA (950 = fundo branco, 100 = texto quase preto),
+ * então `bg-zinc-950`, `text-zinc-100`, `border-zinc-800`… trocam de tema sem
+ * precisar editar um único componente. `@theme inline` faz os utilitários
+ * apontarem direto pra var, e o `color-mix` do v4 preserva as opacidades (/60).
+ * O acento (brand roxo) e o branco/preto absolutos NÃO trocam.
+ * =========================================================================== */
+@theme inline {
+  --color-zinc-50:  var(--z-50);
+  --color-zinc-100: var(--z-100);
+  --color-zinc-200: var(--z-200);
+  --color-zinc-300: var(--z-300);
+  --color-zinc-400: var(--z-400);
+  --color-zinc-500: var(--z-500);
+  --color-zinc-600: var(--z-600);
+  --color-zinc-700: var(--z-700);
+  --color-zinc-800: var(--z-800);
+  --color-zinc-900: var(--z-900);
+  --color-zinc-950: var(--z-950);
+}
+
+:root, .dark {
+  color-scheme: dark;
+  --z-50:#fafafa; --z-100:#f4f4f5; --z-200:#e4e4e7; --z-300:#d4d4d8; --z-400:#a1a1aa;
+  --z-500:#71717a; --z-600:#52525b; --z-700:#3f3f46; --z-800:#27272a; --z-900:#18181b; --z-950:#09090b;
+}
+.light {
+  color-scheme: light;
+  --z-50:#09090b; --z-100:#18181b; --z-200:#27272a; --z-300:#3f3f46; --z-400:#52525b;
+  --z-500:#6f7278; --z-600:#9ca0a6; --z-700:#d4d4d8; --z-800:#e6e7ea; --z-900:#f4f5f6; --z-950:#ffffff;
+}
+
 /* Tipografia base — PT Sans em todo o app (mesma do Kommo).
  * Componentes individuais podem sobrescrever via classes Tailwind. */
 html, body {
@@ -49,10 +83,10 @@ h1, h2, h3, h4, h5, h6 {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-ink-700);
+  background: var(--z-700);
   border-radius: 999px;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--color-ink-600); }
+::-webkit-scrollbar-thumb:hover { background: var(--z-600); }
 
 /* Animação de "pulse" para o cursor de digitação. */
 @keyframes blink {
@@ -106,7 +140,7 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 0.9375rem;            /* 15px — leitura de prosa, não label */
   line-height: 1.7;                /* + leading: compensação texto-claro/escuro */
   letter-spacing: 0.01em;          /* idem — capitais/peso somem no escuro */
-  color: #e4e4e7;                  /* zinc-200, neutro tintado (não cinza puro) */
+  color: var(--z-200);             /* neutro tintado, temável */
   padding: 0.75rem 1rem;           /* 12 / 16 — grade 4pt */
   min-height: 220px;
   max-height: 540px;
@@ -131,9 +165,9 @@ h1, h2, h3, h4, h5, h6 {
   letter-spacing: -0.01em;
   line-height: 1.25;
 }
-.fontes-editor h1 { font-size: 1.5rem;    font-weight: 700; color: #fafafa; margin-top: 1.4em; }
-.fontes-editor h2 { font-size: 1.1875rem; font-weight: 600; color: #f4f4f5; margin-top: 1.2em; }
-.fontes-editor h3 { font-size: 1rem;      font-weight: 600; color: #e4e4e7; margin-top: 1em; }
+.fontes-editor h1 { font-size: 1.5rem;    font-weight: 700; color: var(--z-50); margin-top: 1.4em; }
+.fontes-editor h2 { font-size: 1.1875rem; font-weight: 600; color: var(--z-100); margin-top: 1.2em; }
+.fontes-editor h3 { font-size: 1rem;      font-weight: 600; color: var(--z-200); margin-top: 1em; }
 
 .fontes-editor p { text-wrap: pretty; }   /* menos órfãs/viúvas */
 
@@ -145,7 +179,7 @@ h1, h2, h3, h4, h5, h6 {
 .fontes-editor li::marker { color: #9374ff; }   /* brand-400 */
 .fontes-editor li > p { margin: 0; max-width: none; }
 
-.fontes-editor strong { font-weight: 700; color: #fafafa; }  /* zinc-50, não #fff */
+.fontes-editor strong { font-weight: 700; color: var(--z-50); }
 .fontes-editor em { font-style: italic; }
 
 /* Destaque: marcador sólido de alto contraste (sem alpha — alpha só em estado). */
@@ -162,8 +196,8 @@ h1, h2, h3, h4, h5, h6 {
 .fontes-editor blockquote {
   margin: 0.5em 0;
   padding-left: 0.9em;
-  border-left: 1px solid #3f3f46;  /* zinc-700 */
-  color: #a1a1aa;                  /* zinc-400 */
+  border-left: 1px solid var(--z-700);
+  color: var(--z-400);
   font-style: italic;
 }
 
@@ -171,8 +205,8 @@ h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-mono);
   font-size: 0.85em;
   font-variant-ligatures: none;    /* sem ligaduras em código */
-  background: #27272a;             /* zinc-800 */
-  color: #e4e4e7;
+  background: var(--z-800);
+  color: var(--z-200);
   padding: 0.1em 0.35em;
   border-radius: 0.3rem;
 }
@@ -183,6 +217,6 @@ h1, h2, h3, h4, h5, h6 {
   content: attr(data-placeholder);
   float: left;
   height: 0;
-  color: #71717a;                  /* zinc-500 */
+  color: var(--z-500);
   pointer-events: none;
 }

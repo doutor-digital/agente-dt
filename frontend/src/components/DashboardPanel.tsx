@@ -97,7 +97,7 @@ export function DashboardPanel() {
 
   return (
     <div
-      className="flex-1 overflow-y-auto bg-cover bg-center bg-[#0a1628]"
+      className="dark flex-1 overflow-y-auto bg-cover bg-center bg-[#0a1628]"
       style={{
         // Foto de fundo (céu/paisagem) + overlay escuro pra manter os cards
         // translúcidos legíveis — estilo do painel do Kommo (img #4).

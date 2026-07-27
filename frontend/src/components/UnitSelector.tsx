@@ -36,7 +36,7 @@ export function UnitSelector() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-zinc-50 ring-1 ring-zinc-200 hover:ring-zinc-300 text-zinc-700 transition"
+        className="inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-zinc-50 ring-1 ring-zinc-800 hover:ring-zinc-300 text-zinc-700 transition"
       >
         <Building2 size={13} className="text-brand-500" />
         <span className="max-w-[180px] truncate">{label}</span>
@@ -44,7 +44,7 @@ export function UnitSelector() {
       </button>
 
       {open && (
-        <div className="absolute left-0 mt-1 z-30 w-72 rounded-md border border-zinc-200 bg-white shadow-xl py-1.5">
+        <div className="absolute left-0 mt-1 z-30 w-72 rounded-md border border-zinc-800 bg-zinc-900 shadow-xl py-1.5">
           <button
             type="button"
             onClick={() => {
@@ -52,15 +52,15 @@ export function UnitSelector() {
               setOpen(false);
             }}
             className={clsx(
-              'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-100',
-              !selectedUnitId ? 'text-brand-700' : 'text-zinc-700',
+              'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-800',
+              !selectedUnitId ? 'text-brand-300' : 'text-zinc-700',
             )}
           >
             {!selectedUnitId ? <Check size={12} /> : <span className="w-3" />}
             <span>Todas as unidades (admin)</span>
           </button>
 
-          <div className="my-1 border-t border-zinc-200" />
+          <div className="my-1 border-t border-zinc-800" />
 
           {units.length === 0 && (
             <div className="px-3 py-3 text-[11px] text-zinc-500">
@@ -78,8 +78,8 @@ export function UnitSelector() {
                 setOpen(false);
               }}
               className={clsx(
-                'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-100',
-                selectedUnitId === u.id ? 'text-brand-700' : 'text-zinc-700',
+                'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-zinc-800',
+                selectedUnitId === u.id ? 'text-brand-300' : 'text-zinc-700',
               )}
             >
               {selectedUnitId === u.id ? <Check size={12} /> : <span className="w-3" />}

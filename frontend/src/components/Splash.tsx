@@ -7,7 +7,7 @@ const LOGO_URL = 'https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png';
 
 export function Splash() {
   return (
-    <div className="h-screen w-screen flex flex-col items-center justify-center bg-zinc-950 text-zinc-100 gap-6">
+    <div className="dark h-screen w-screen flex flex-col items-center justify-center bg-zinc-950 text-zinc-100 gap-6">
       <img
         src={LOGO_URL}
         alt="Agente DT"

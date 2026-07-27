@@ -61,7 +61,7 @@ export function Login() {
 
   return (
     <div
-      className="min-h-screen w-full flex items-center justify-center px-6 py-10"
+      className="dark min-h-screen w-full flex items-center justify-center px-6 py-10"
       style={{ background: '#1b1725' }}
     >
       <div className="w-full max-w-5xl grid gap-12 md:grid-cols-2 md:gap-8 items-center">

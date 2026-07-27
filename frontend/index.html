@@ -1,7 +1,20 @@
 <!doctype html>
-<html lang="pt-BR" class="dark">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
+    <!-- Tema claro/escuro sem flash: aplica a classe antes de qualquer paint.
+         Default = claro; respeita a escolha salva em localStorage. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('theme');
+          if (t !== 'light' && t !== 'dark') t = 'light';
+          document.documentElement.classList.add(t);
+        } catch (e) {
+          document.documentElement.classList.add('light');
+        }
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agente DT — Kommo Automation Console</title>
     <meta name="description" content="Console de observabilidade do agente de automação Kommo." />

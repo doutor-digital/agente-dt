@@ -80,7 +80,7 @@ export function AllUnitsDashboard({
 
   return (
     <div
-      className="flex-1 overflow-y-auto bg-cover bg-center bg-[#0a1628]"
+      className="dark flex-1 overflow-y-auto bg-cover bg-center bg-[#0a1628]"
       style={{
         backgroundImage: `linear-gradient(to bottom, rgba(8,8,12,0.78) 0%, rgba(8,8,12,0.92) 60%, rgba(8,8,12,0.96) 100%), url(${SKY})`,
       }}

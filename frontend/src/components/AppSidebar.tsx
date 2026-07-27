@@ -43,6 +43,7 @@ import {
 import clsx from 'clsx';
 import { UnitSelector } from './UnitSelector';
 import { NotificationsBadge } from './NotificationsBadge';
+import { ThemeToggle } from './ThemeToggle';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { tabToPath } from '../hooks/useRoute';
@@ -151,16 +152,16 @@ export function AppSidebar({
   }
 
   return (
-    <aside className="w-60 shrink-0 border-r border-zinc-200 bg-white flex flex-col h-full">
+    <aside className="w-60 shrink-0 border-r border-zinc-800 bg-zinc-900 flex flex-col h-full">
       {/* Brand com logo */}
-      <div className="px-4 py-4 border-b border-zinc-200 flex items-center gap-3">
+      <div className="px-4 py-4 border-b border-zinc-800 flex items-center gap-3">
         <img
           src="https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png"
           alt="Agente DT"
           className="w-10 h-10 object-contain shrink-0"
         />
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-bold text-zinc-900 tracking-tight leading-none">
+          <div className="text-sm font-bold text-zinc-100 tracking-tight leading-none">
             Agente DT
           </div>
           <div className="text-[9px] font-medium uppercase tracking-widest text-zinc-400 mt-1">
@@ -172,7 +173,7 @@ export function AppSidebar({
             type="button"
             onClick={onBackToHub}
             title="Trocar de unidade"
-            className="p-1.5 rounded-md text-zinc-400 hover:text-brand-600 hover:bg-zinc-100 transition-colors shrink-0"
+            className="p-1.5 rounded-md text-zinc-400 hover:text-brand-400 hover:bg-zinc-800 transition-colors shrink-0"
           >
             <LayoutGrid size={15} />
           </button>
@@ -180,7 +181,7 @@ export function AppSidebar({
       </div>
 
       {/* Unit selector */}
-      <div className="px-3 py-3 border-b border-zinc-200">
+      <div className="px-3 py-3 border-b border-zinc-800">
         <div className="text-[9px] font-semibold uppercase tracking-widest text-zinc-400 mb-1.5 px-1">
           Agente ativo
         </div>
@@ -195,7 +196,7 @@ export function AppSidebar({
           ))}
         </NavGroup>
 
-        <div className="my-3 h-px bg-zinc-200 mx-2" />
+        <div className="my-3 h-px bg-zinc-800 mx-2" />
 
         <NavGroup label="Administração">
           {secondary.map((item) => (
@@ -206,21 +207,21 @@ export function AppSidebar({
 
       {/* User info + logout */}
       {user && (
-        <div className="border-t border-zinc-200 px-3 py-2 flex items-center gap-2">
+        <div className="border-t border-zinc-800 px-3 py-2 flex items-center gap-2">
           {user.picture ? (
             <img
               src={user.picture}
               alt=""
-              className="w-7 h-7 rounded-full ring-1 ring-zinc-200"
+              className="w-7 h-7 rounded-full ring-1 ring-zinc-800"
               referrerPolicy="no-referrer"
             />
           ) : (
-            <div className="w-7 h-7 rounded-full bg-zinc-100 text-zinc-500 flex items-center justify-center text-xs font-bold">
+            <div className="w-7 h-7 rounded-full bg-zinc-800 text-zinc-500 flex items-center justify-center text-xs font-bold">
               {user.email.slice(0, 1).toUpperCase()}
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <div className="text-xs text-zinc-800 truncate font-medium">{user.name ?? user.email}</div>
+            <div className="text-xs text-zinc-100 truncate font-medium">{user.name ?? user.email}</div>
             <div className="text-[9px] uppercase tracking-wider text-zinc-400">
               {user.role === 'SUPER_ADMIN' ? 'Super admin' : 'Unit admin'}
             </div>
@@ -229,7 +230,7 @@ export function AppSidebar({
             type="button"
             onClick={() => void logout()}
             title="Sair"
-            className="p-1.5 rounded-md text-zinc-400 hover:text-rose-500 hover:bg-zinc-100 transition-colors"
+            className="p-1.5 rounded-md text-zinc-400 hover:text-rose-500 hover:bg-zinc-800 transition-colors"
           >
             <LogOut size={14} />
           </button>
@@ -237,14 +238,15 @@ export function AppSidebar({
       )}
 
       {/* Footer */}
-      <div className="border-t border-zinc-200 p-3 flex items-center justify-between gap-1">
+      <div className="border-t border-zinc-800 p-3 flex items-center justify-between gap-1">
         <NotificationsBadge />
+        <ThemeToggle />
         <button
           type="button"
           onClick={() => void handleClearCache()}
           disabled={clearing}
           title="Limpa caches em memória do backend, localStorage do navegador e recarrega"
-          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {clearing ? <Loader2 size={13} className="animate-spin" /> : <Eraser size={13} />}
           {clearing ? 'Limpando…' : 'Limpar cache'}
@@ -253,7 +255,7 @@ export function AppSidebar({
           href="/docs"
           target="_blank"
           rel="noopener"
-          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors"
+          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
         >
           <BookOpen size={13} />
           Docs
@@ -299,11 +301,11 @@ function NavLink({
         className={clsx(
           'w-full inline-flex items-center gap-2.5 text-sm px-3 py-2 rounded-md transition-all',
           active
-            ? 'bg-brand-50 text-brand-700'
-            : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100',
+            ? 'bg-brand-500/15 text-brand-300'
+            : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800',
         )}
       >
-        <Icon size={15} className={clsx(active ? 'text-brand-600' : 'text-zinc-400')} />
+        <Icon size={15} className={clsx(active ? 'text-brand-400' : 'text-zinc-400')} />
         <span className={active ? 'font-semibold' : 'font-medium'}>
           {item.label}
         </span>

@@ -74,7 +74,7 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
   }
 
   return (
-    <div className="h-screen w-screen overflow-y-auto" style={{ background: '#0e0c16' }}>
+    <div className="dark h-screen w-screen overflow-y-auto" style={{ background: '#0e0c16' }}>
       <div className="max-w-4xl mx-auto px-6 py-12">
         {/* Header */}
         <div className="flex flex-col items-center text-center mb-10">

@@ -57,7 +57,7 @@ export function NotificationsBadge() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         className={clsx(
-          'relative inline-flex items-center justify-center w-8 h-8 rounded-md hover:bg-zinc-100 transition',
+          'relative inline-flex items-center justify-center w-8 h-8 rounded-md hover:bg-zinc-800 transition',
           tone,
         )}
         title={
@@ -78,8 +78,8 @@ export function NotificationsBadge() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-1 z-30 w-96 max-h-125 overflow-y-auto rounded-md border border-zinc-200 bg-white shadow-xl">
-          <div className="px-3 py-2 border-b border-zinc-200 text-[11px] uppercase tracking-wider text-zinc-500 flex items-center justify-between">
+        <div className="absolute right-0 mt-1 z-30 w-96 max-h-125 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900 shadow-xl">
+          <div className="px-3 py-2 border-b border-zinc-800 text-[11px] uppercase tracking-wider text-zinc-500 flex items-center justify-between">
             <span>Notificações</span>
             <span>
               {danger > 0 && <span className="text-rose-500">{danger} críticas</span>}
