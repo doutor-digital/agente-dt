@@ -6,6 +6,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
+import { resolveOpenAIApiKey } from '../services/openai.service.js';
 import {
   createKnowledge,
   deleteKnowledge,
@@ -36,7 +37,8 @@ export async function createKnowledgeHandler(req: Request, res: Response): Promi
     res.status(404).json({ error: 'unit_not_found' });
     return;
   }
-  if (!unit.openaiApiKey) {
+  // Chave EFETIVA — a unidade pode rodar na key da plataforma (env).
+  if (!resolveOpenAIApiKey(unit)) {
     res.status(400).json({ error: 'openai_key_missing' });
     return;
   }

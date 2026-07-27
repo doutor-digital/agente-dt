@@ -17,9 +17,24 @@ import axios from 'axios';
 import FormData from 'form-data';
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
+import { resolveOpenAIApiKey } from './openai.service.js';
 
-const WHISPER_URL = 'https://api.openai.com/v1/audio/transcriptions';
-const WHISPER_MODEL = 'whisper-1';
+const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
+
+/**
+ * Modelo de transcrição. `gpt-4o-mini-transcribe` substituiu o `whisper-1`:
+ * mesma rota, mesmo multipart, menos erro em áudio de celular (ruído, sotaque,
+ * fala rápida) e mais barato por minuto.
+ *
+ * Sobrescrevível por env pra dar rollback sem deploy — se algo sair errado em
+ * produção, `TRANSCRIPTION_MODEL=whisper-1` volta o comportamento antigo.
+ *
+ * ATENÇÃO ao trocar: os modelos gpt-4o-*-transcribe só aceitam
+ * `response_format` `json` ou `text`. Se um dia precisar de timestamps
+ * (`verbose_json`), o caminho é voltar pro whisper-1 — não existe nos novos.
+ */
+const TRANSCRIBE_MODEL = process.env.TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe';
+
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // limite da API
 
 export interface TranscriptionResult {
@@ -36,8 +51,11 @@ export async function transcribeAudio(
   audioUrl: string,
   language: string = 'pt',
 ): Promise<TranscriptionResult> {
-  if (!unit.openaiApiKey) {
-    throw new Error('Unit sem openaiApiKey — não dá pra transcrever');
+  // Chave EFETIVA, não a coluna da Unit: unidades que rodam na key da
+  // plataforma (env) têm `openaiApiKey` nulo e mesmo assim transcrevem.
+  const apiKey = resolveOpenAIApiKey(unit);
+  if (!apiKey) {
+    throw new Error('Nenhuma chave OpenAI disponível — não dá pra transcrever');
   }
 
   const t0 = performance.now();
@@ -78,14 +96,14 @@ export async function transcribeAudio(
   // 3. Envia pra Whisper como multipart/form-data.
   const form = new FormData();
   form.append('file', audioBuf, { filename: `audio.${ext}`, contentType: `audio/${ext}` });
-  form.append('model', WHISPER_MODEL);
+  form.append('model', TRANSCRIBE_MODEL);
   form.append('language', language);
   form.append('response_format', 'json');
 
-  const res = await axios.post<{ text: string }>(WHISPER_URL, form, {
+  const res = await axios.post<{ text: string }>(TRANSCRIBE_URL, form, {
     headers: {
       ...form.getHeaders(),
-      Authorization: `Bearer ${unit.openaiApiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     timeout: 60_000,
     maxContentLength: Infinity,

@@ -7,6 +7,7 @@
 
 import axios from 'axios';
 import type { Unit } from '@prisma/client';
+import { resolveOpenAIApiKey } from './openai.service.js';
 
 const EMBED_URL = 'https://api.openai.com/v1/embeddings';
 const EMBED_MODEL = 'text-embedding-3-small'; // 1536 dimensions, cheap, good enough
@@ -21,14 +22,16 @@ export interface EmbedResult {
 }
 
 export async function embedTexts({ unit, texts }: EmbedInput): Promise<EmbedResult> {
-  if (!unit.openaiApiKey) throw new Error('openaiApiKey ausente — embedding bloqueado');
+  // Chave EFETIVA — a unidade pode estar rodando na key da plataforma (env).
+  const apiKey = resolveOpenAIApiKey(unit);
+  if (!apiKey) throw new Error('Nenhuma chave OpenAI disponível — embedding bloqueado');
   if (texts.length === 0) return { vectors: [] };
 
   const { data } = await axios.post<{ data: Array<{ embedding: number[] }> }>(
     EMBED_URL,
     { model: EMBED_MODEL, input: texts, encoding_format: 'float' },
     {
-      headers: { Authorization: `Bearer ${unit.openaiApiKey}` },
+      headers: { Authorization: `Bearer ${apiKey}` },
       timeout: 30_000,
     },
   );
