@@ -287,7 +287,7 @@ export function WizardPanel() {
             label="Saudação preferida (opcional)"
             value={draft.personaGreeting ?? ''}
             onChange={(v) => update({ personaGreeting: v || null })}
-            placeholder='ex: "Olá, tudo bem? Sou o assistente virtual da HM Tecnologia, em que posso te ajudar?"'
+            placeholder='ex: "Oi, tudo bem? Sou a Sofia, da HM Tecnologia. Como posso te chamar?"'
           />
           <div className="grid md:grid-cols-3 gap-3 mt-2">
             <SelectField

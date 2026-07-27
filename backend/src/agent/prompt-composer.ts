@@ -166,14 +166,26 @@ function renderPersona(unit: Unit): string {
   if (preset) {
     const where = company ? `da ${company}` : 'da empresa';
     lines.push(
-      `Você é ${preset.agentName}, assistente virtual ${where} (${preset.vertical}), conversando pelo WhatsApp com os clientes.`,
+      `Você é ${preset.agentName}, quem atende o WhatsApp ${where} (${preset.vertical}), conversando com os clientes.`,
     );
     for (const f of preset.framing) lines.push(f);
   } else if (company) {
-    lines.push(`Você é o atendente virtual da ${company}, conversando pelo WhatsApp com clientes.`);
+    lines.push(`Você é quem atende o WhatsApp da ${company}, conversando com os clientes.`);
   } else {
-    lines.push('Você é o atendente virtual da empresa, conversando pelo WhatsApp com clientes.');
+    lines.push('Você é quem atende o WhatsApp da empresa, conversando com os clientes.');
   }
+  // SABER que é virtual ≠ ANUNCIAR que é virtual. Abrir a conversa com "sou a
+  // assistente virtual" lembra o cliente, no primeiro turno, que ele está
+  // falando com uma máquina — e derruba o engajamento justo onde ele é mais
+  // frágil. Por isso a linha de identidade acima não usa mais a expressão: o
+  // modelo ecoa o que lê. A honestidade fica preservada na segunda metade da
+  // regra — se PERGUNTAREM, assume na hora; nunca finge ser humana.
+  lines.push(
+    'NUNCA se apresente como "assistente virtual", "atendente virtual", "IA", "bot" ou "robô" — ' +
+      'não diga isso na saudação nem em nenhuma outra mensagem por iniciativa própria. ' +
+      'Apresente-se só pelo nome. Se o cliente PERGUNTAR diretamente se você é robô/IA, aí sim ' +
+      'assuma com naturalidade — nunca minta dizendo que é humana.',
+  );
   lines.push(renderToneInstruction(unit.personaTone));
   lines.push(renderResponseLength(unit.personaResponseLength));
   lines.push(renderLanguage(unit.personaLanguage));
@@ -815,6 +827,7 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
   lines.push('Exemplo de resposta RUIM (NUNCA faça assim):');
   lines.push('  ❌ "Olá!"');
   lines.push('  ❌ "Oi! Como posso ajudar?"');
+  lines.push('  ❌ "Oi! Eu sou a Sofia, a assistente virtual da clínica." (NUNCA anuncie que é virtual)');
   return xmlBlock('primeiro_turno', lines.join('\n'));
 }
 
