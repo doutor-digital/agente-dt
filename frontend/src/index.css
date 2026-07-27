@@ -320,18 +320,14 @@
  * muito sutil no topo da área de conteúdo, que dá profundidade sem custar
  * legibilidade. Fica atrás de tudo (pointer-events: none no elemento).
  * =========================================================================== */
+/* Feito com BACKGROUND, de propósito — não com um ::before posicionado.
+ * Background pinta atrás de todo o conteúdo sem criar stacking context; a
+ * versão com `::before { z-index: -1 }` exigia `isolation: isolate` no
+ * contêiner, e isso PRENDIA os modais dos painéis (fixed inset-0 do
+ * LeadsBucketModal, ErrorsPanel, LlmCallsPanel, AcoesPanel) num contexto
+ * abaixo do TopBar. Aqui não há contexto nenhum: os modais sobem livres. */
 .app-ambient {
-  position: relative;
-  isolation: isolate;
-}
-.app-ambient::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 420px;
-  z-index: -1;
-  pointer-events: none;
-  background:
+  background-image:
     radial-gradient(
       70% 100% at 18% 0%,
       color-mix(in oklab, var(--b-500) 11%, transparent) 0%,
@@ -342,6 +338,9 @@
       color-mix(in oklab, var(--b-400) 6%, transparent) 0%,
       transparent 72%
     );
+  background-repeat: no-repeat;
+  background-size: 100% 420px;
+  background-position: top center;
 }
 
 /* Malha de pontos — fundo das telas de entrada (login, hub, splash). */

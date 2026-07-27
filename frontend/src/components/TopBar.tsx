@@ -41,8 +41,14 @@ export function TopBar({
 }) {
   const meta = navItem(tab);
 
+  // O `relative z-30` do <header> é OBRIGATÓRIO, não cosmético: o
+  // `backdrop-blur` cria um stacking context mesmo num elemento estático, e o
+  // contexto de um elemento NÃO-posicionado é pintado abaixo de qualquer irmão
+  // posicionado (a área de conteúdo). Sem ele, os dropdowns filhos (sino,
+  // seletor de agente, menu de conta) ficam atrás do conteúdo — invisíveis e
+  // sem receber clique, o que quebrava até o botão "Sair".
   return (
-    <header className="h-14 shrink-0 flex items-center gap-3 px-4 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl supports-[backdrop-filter]:bg-zinc-950/60">
+    <header className="relative z-30 h-14 shrink-0 flex items-center gap-3 px-4 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl supports-backdrop-filter:bg-zinc-950/60">
       {/* Breadcrumb: agente ativo › página */}
       <div className="flex items-center gap-2 min-w-0">
         <UnitSelector />
