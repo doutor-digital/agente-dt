@@ -143,6 +143,14 @@ type TurnMeta = {
 const MAX_HISTORY = 40;
 const MAX_CONTENT = 4000;
 
+/** Códigos de erro do backend → o que o usuário faz a respeito. */
+const RUN_ERRORS: Record<string, string> = {
+  openai_not_configured:
+    'Nenhuma chave da OpenAI disponível para este agente. Configure em Integrações → IA & Chave.',
+  invalid_input: 'O backend recusou o histórico da conversa. Clique em "Resetar" e tente de novo.',
+  unit_not_found: 'Agente não encontrado — ele pode ter sido removido.',
+};
+
 /** Histórico → payload aceito pelo backend: janela deslizante, sem vazios. */
 function toPayload(
   history: ChatMessage[],
@@ -242,12 +250,14 @@ export function PlaygroundPanel() {
       setEvents((prev) => [...prev, ...result.timeline]);
       setTurns((prev) => [...prev, result.meta]);
     } catch (err) {
-      // O backend devolve o motivo em `error`; sem isso o usuário só via
+      // O backend devolve o motivo em `error`; sem traduzir, o usuário só via
       // "Request failed with status code 400" e não tinha o que fazer.
+      const code = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       const detail =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        (code && RUN_ERRORS[code]) ??
+        code ??
         (err instanceof Error ? err.message : String(err));
-      toast.error(`Falha no playground: ${detail}`);
+      toast.error(detail);
     } finally {
       setLoading(false);
     }

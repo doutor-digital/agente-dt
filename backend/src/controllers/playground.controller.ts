@@ -31,7 +31,12 @@ import { z as zod } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { getActiveConfig } from '../agent/config.js';
 import { composeSystemPromptForUnit } from '../agent/prompt-composer.js';
-import { calculateCost, createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
+import {
+  calculateCost,
+  createChatOpenAI,
+  invokeChatModel,
+  resolveOpenAIApiKey,
+} from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
 
 // Lead ID sintético — fica no histórico/payload mas nunca chega no Kommo.
@@ -213,7 +218,13 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
     res.status(404).json({ error: 'unit_not_found' });
     return;
   }
-  if (!unit.openaiApiKey) {
+  // Tem que ser a chave EFETIVA, não a coluna da Unit: `resolveOpenAIApiKey`
+  // cai na key da plataforma (env) quando a unidade não tem a própria, e é
+  // exatamente isso que o `createChatOpenAI` mais abaixo vai usar. Checar
+  // `unit.openaiApiKey` direto barrava com 400 toda unidade que roda na key da
+  // plataforma — o agente respondia normal em produção e só o playground
+  // recusava, desde a primeira mensagem.
+  if (!resolveOpenAIApiKey(unit)) {
     res.status(400).json({ error: 'openai_not_configured' });
     return;
   }
