@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
 import { AppSidebar } from './components/AppSidebar';
+import { TopBar } from './components/TopBar';
+import { CommandPalette, useCommandPalette } from './components/CommandPalette';
 import { OnboardingModal } from './components/OnboardingModal';
 import { UnitHub } from './components/UnitHub';
 import { UnitProvider, useUnit } from './context/UnitContext';
@@ -143,6 +144,7 @@ function AppEntry() {
 
 function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
   const { tab, navigate } = useRoute();
+  const [paletteOpen, openPalette, closePalette] = useCommandPalette();
 
   // Drill-down do Dashboard: o LeadsBucketModal dispara `app:openConversation`.
   // Aqui navegamos pra aba Conversas (atualizando a URL via useRoute); o
@@ -152,49 +154,69 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
     window.addEventListener('app:openConversation', handler);
     return () => window.removeEventListener('app:openConversation', handler);
   }, [navigate]);
+
   // App renderiza imediatamente — cada panel cuida do próprio loading state.
-  // (A Splash com logo continua disponível em ./components/Splash, mas não
-  // bloqueia mais o boot.)
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
       <AppSidebar tab={tab} onChange={navigate} onBackToHub={onBackToHub} />
-      <main className="flex-1 flex flex-col overflow-hidden">
-        <Suspense fallback={<PanelSkeleton />}>
-          {tab === 'dashboard' && <DashboardPanel />}
-          {tab === 'configure' && <AgentWorkspace />}
-          {tab === 'traces' && <TracesView />}
-          {tab === 'errors' && <ErrorsPanel />}
-          {tab === 'delivery' && <DeliveryMonitorPanel />}
-          {tab === 'conversations' && <ConversationsPanel />}
-          {tab === 'llm' && <LlmCallsPanel />}
-          {tab === 'prompts' && <PromptsPanel />}
-          {tab === 'integrations' && <IntegrationsPanel />}
-          {tab === 'wizard' && <WizardPanel />}
-          {tab === 'playground' && <PlaygroundPanel />}
-          {tab === 'training' && <TrainingPanel onNavigate={navigate} />}
-          {tab === 'sources' && <FontesPanel />}
-          {tab === 'actions' && <AcoesPanel />}
-          {tab === 'global-actions' && <AcoesPanel scope="global" />}
-          {tab === 'tools' && <FerramentasPanel />}
-          {tab === 'reports' && <ReportsPanel />}
-          {tab === 'whatsapp' && <WhatsappCostsPanel />}
-          {tab === 'captures' && <CapturesPanel />}
-          {tab === 'config' && <AgentConfigPanel />}
-          {tab === 'units' && <UnitsPanel />}
-          {tab === 'users' && <UsersPanel />}
-        </Suspense>
+      <main className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <TopBar tab={tab} onOpenPalette={openPalette} onBackToHub={onBackToHub} />
+        {/* `app-ambient` põe o halo de acento no topo do conteúdo — a assinatura
+            visual do console. `key` remonta a área a cada troca de aba pra
+            reiniciar a animação de entrada. */}
+        <div key={tab} className="app-ambient flex-1 flex flex-col overflow-hidden animate-fade-in-up">
+          <Suspense fallback={<PanelSkeleton />}>
+            {tab === 'dashboard' && <DashboardPanel />}
+            {tab === 'configure' && <AgentWorkspace />}
+            {tab === 'traces' && <TracesView />}
+            {tab === 'errors' && <ErrorsPanel />}
+            {tab === 'delivery' && <DeliveryMonitorPanel />}
+            {tab === 'conversations' && <ConversationsPanel />}
+            {tab === 'llm' && <LlmCallsPanel />}
+            {tab === 'prompts' && <PromptsPanel />}
+            {tab === 'integrations' && <IntegrationsPanel />}
+            {tab === 'wizard' && <WizardPanel />}
+            {tab === 'playground' && <PlaygroundPanel />}
+            {tab === 'training' && <TrainingPanel onNavigate={navigate} />}
+            {tab === 'sources' && <FontesPanel />}
+            {tab === 'actions' && <AcoesPanel />}
+            {tab === 'global-actions' && <AcoesPanel scope="global" />}
+            {tab === 'tools' && <FerramentasPanel />}
+            {tab === 'reports' && <ReportsPanel />}
+            {tab === 'whatsapp' && <WhatsappCostsPanel />}
+            {tab === 'captures' && <CapturesPanel />}
+            {tab === 'config' && <AgentConfigPanel />}
+            {tab === 'units' && <UnitsPanel />}
+            {tab === 'users' && <UsersPanel />}
+          </Suspense>
+        </div>
       </main>
+
+      <CommandPalette open={paletteOpen} onClose={closePalette} onNavigate={navigate} />
       <OnboardingModal />
     </div>
   );
 }
 
-/** Spinner que aparece enquanto o chunk JS do panel baixa. */
+/**
+ * Esqueleto exibido enquanto o chunk JS do painel baixa. Blocos com o mesmo
+ * ritmo do conteúdo real — menos "pulo" na hora que o painel monta do que um
+ * spinner centralizado.
+ */
 function PanelSkeleton() {
   return (
-    <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm">
-      <Loader2 className="animate-spin mr-2" size={16} />
-      Carregando…
+    <div className="flex-1 p-6 space-y-4">
+      <div className="h-7 w-56 rounded-lg bg-zinc-900 animate-pulse" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="h-20 rounded-xl bg-zinc-900 animate-pulse"
+            style={{ animationDelay: `${i * 80}ms` }}
+          />
+        ))}
+      </div>
+      <div className="h-64 rounded-xl bg-zinc-900 animate-pulse" style={{ animationDelay: '160ms' }} />
     </div>
   );
 }

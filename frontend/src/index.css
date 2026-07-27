@@ -1,47 +1,54 @@
 @import "tailwindcss";
 
 /* ===========================================================================
- * Tema "AgentGPT Terminal" — paleta escura com toques de violeta neon.
- * Tailwind v4 lê o `@theme` inline e gera utilitários automaticamente.
+ * DESIGN SYSTEM — "Console"
+ *
+ * Referência: consoles de produto de IA (OpenAI Platform, Anthropic Console,
+ * Vercel, Linear). O que define essa linguagem:
+ *   - fundo quase-preto neutro, superfícies separadas por 1px, não por sombra
+ *   - tipografia densa (Inter), tracking negativo em títulos, tabular-nums
+ *   - um único acento, usado com parcimônia (verde Doutor Digital)
+ *   - raios generosos e sombras difusas, quase invisíveis
+ *
+ * ALAVANCA: o app inteiro usa `zinc-*` (escala semântica) + `brand-*`. Trocar
+ * os tokens aqui reestiliza TODAS as páginas sem tocar em componente nenhum.
  * =========================================================================== */
+
 @theme {
-  --color-brand-50:  #f3f1ff;
-  --color-brand-100: #e9e5ff;
-  --color-brand-200: #d5ccff;
-  --color-brand-300: #b6a4ff;
-  --color-brand-400: #9374ff;
-  --color-brand-500: #7c4dff;
-  --color-brand-600: #6c2eff;
-  --color-brand-700: #5a1de0;
-  --color-brand-800: #4818b0;
-  --color-brand-900: #2e0f73;
+  /* Tipografia — Inter variable. `font-sans` é o default do Tailwind, então
+   * cai em todo o app; `mono` fica pra IDs, logs, código, números de tabela. */
+  --font-display: "Inter", "Inter Variable", system-ui, -apple-system, sans-serif;
+  --font-body:    "Inter", "Inter Variable", system-ui, -apple-system, sans-serif;
+  --font-sans:    "Inter", "Inter Variable", system-ui, -apple-system, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
 
-  --color-ink-950: #08080c;
-  --color-ink-900: #0c0c12;
-  --color-ink-850: #11111a;
-  --color-ink-800: #161622;
-  --color-ink-700: #1f1f2e;
-  --color-ink-600: #2a2a3d;
+  /* Raios — mais generosos que o default do Tailwind. Como quase todo o app
+   * usa `rounded-md/lg/xl`, mexer aqui arredonda o produto inteiro. */
+  --radius-xs:   0.25rem;
+  --radius-sm:   0.375rem;
+  --radius-md:   0.5rem;
+  --radius-lg:   0.75rem;
+  --radius-xl:   1rem;
+  --radius-2xl:  1.25rem;
+  --radius-3xl:  1.75rem;
 
-  /* Tipografia: PT Sans em tudo (mesma fonte do Kommo), Arial de fallback.
-   *  - display/body/sans → PT Sans (tem só pesos 400 e 700)
-   *  - mono → JetBrains Mono, pra IDs, código, logs
-   *  font-sans é alias de body (Tailwind usa por padrão). */
-  --font-display: "PT Sans", Arial, sans-serif;
-  --font-body:    "PT Sans", Arial, sans-serif;
-  --font-sans:    "PT Sans", Arial, sans-serif;
-  --font-mono:    "JetBrains Mono", "ui-monospace", "SFMono-Regular", monospace;
+  /* Sombras difusas e escuras — em UI dark, sombra preta e larga lê como
+   * profundidade; sombra cinza e curta lê como sujeira. */
+  --shadow-sm:  0 1px 2px 0 rgb(0 0 0 / 0.28);
+  --shadow-md:  0 4px 12px -2px rgb(0 0 0 / 0.34);
+  --shadow-lg:  0 12px 32px -8px rgb(0 0 0 / 0.44);
+  --shadow-xl:  0 24px 56px -16px rgb(0 0 0 / 0.52);
+  --shadow-2xl: 0 40px 90px -24px rgb(0 0 0 / 0.6);
 }
 
-/* ===========================================================================
- * TEMA claro/escuro — a escala `zinc` (usada como escala semântica dark-first
- * em todo o app) vira variável de runtime. No escuro são os valores normais;
- * no claro a escala é REFLETIDA (950 = fundo branco, 100 = texto quase preto),
- * então `bg-zinc-950`, `text-zinc-100`, `border-zinc-800`… trocam de tema sem
- * precisar editar um único componente. `@theme inline` faz os utilitários
- * apontarem direto pra var, e o `color-mix` do v4 preserva as opacidades (/60).
- * O acento (brand roxo) e o branco/preto absolutos NÃO trocam.
- * =========================================================================== */
+/* ---------------------------------------------------------------------------
+ * TEMA claro/escuro.
+ *
+ * `zinc` e `brand` são variáveis de runtime. No escuro valem os valores
+ * naturais; no claro a escala neutra é REFLETIDA (950 = branco, 100 = quase
+ * preto) e os tons de texto do acento escurecem — assim `bg-zinc-950`,
+ * `text-zinc-400`, `text-brand-300`… trocam de tema sem editar componente.
+ * -------------------------------------------------------------------------*/
 @theme inline {
   --color-zinc-50:  var(--z-50);
   --color-zinc-100: var(--z-100);
@@ -54,106 +61,380 @@
   --color-zinc-800: var(--z-800);
   --color-zinc-900: var(--z-900);
   --color-zinc-950: var(--z-950);
+
+  --color-brand-50:  var(--b-50);
+  --color-brand-100: var(--b-100);
+  --color-brand-200: var(--b-200);
+  --color-brand-300: var(--b-300);
+  --color-brand-400: var(--b-400);
+  --color-brand-500: var(--b-500);
+  --color-brand-600: var(--b-600);
+  --color-brand-700: var(--b-700);
+  --color-brand-800: var(--b-800);
+  --color-brand-900: var(--b-900);
 }
 
-:root, .dark {
+:root,
+.dark {
   color-scheme: dark;
-  --z-50:#fafafa; --z-100:#f4f4f5; --z-200:#e4e4e7; --z-300:#d4d4d8; --z-400:#a1a1aa;
-  --z-500:#71717a; --z-600:#52525b; --z-700:#3f3f46; --z-800:#27272a; --z-900:#18181b; --z-950:#09090b;
+
+  /* Neutros frios quase-neutros — nada de cinza-azulado saturado. */
+  --z-50:  #fafafa;
+  --z-100: #ecedee;
+  --z-200: #d3d5d8;
+  --z-300: #adb1b6;
+  --z-400: #82878e;   /* texto secundário */
+  --z-500: #62676e;   /* texto terciário / ícone apagado */
+  --z-600: #44494f;
+  --z-700: #2c3035;   /* borda forte, scrollbar */
+  --z-800: #1f2225;   /* borda padrão */
+  --z-900: #131517;   /* superfície (card, sidebar) */
+  --z-950: #0a0b0c;   /* fundo base */
+
+  /* Acento: verde Doutor Digital (#2EE68E) virou escala completa. */
+  --b-50:  #eefdf6;
+  --b-100: #cbfae4;
+  --b-200: #97f3cb;
+  --b-300: #5aecae;
+  --b-400: #2ee68e;   /* a cor da marca */
+  --b-500: #14cd7c;
+  --b-600: #07a866;
+  --b-700: #078353;
+  --b-800: #086743;
+  --b-900: #064b31;
+
+  /* Superfícies compostas — usadas pelas classes utilitárias abaixo. */
+  --surface-glass: rgb(255 255 255 / 0.03);
+  --hairline:      rgb(255 255 255 / 0.07);
 }
+
 .light {
   color-scheme: light;
-  --z-50:#09090b; --z-100:#18181b; --z-200:#27272a; --z-300:#3f3f46; --z-400:#52525b;
-  --z-500:#6f7278; --z-600:#9ca0a6; --z-700:#d4d4d8; --z-800:#e6e7ea; --z-900:#f4f5f6; --z-950:#ffffff;
+
+  --z-50:  #0a0b0c;
+  --z-100: #17191c;
+  --z-200: #2c3035;
+  --z-300: #494e55;
+  --z-400: #6b7076;   /* texto secundário */
+  --z-500: #878c93;
+  --z-600: #b6babf;
+  --z-700: #dcdee1;   /* borda forte */
+  --z-800: #e8eaec;   /* borda padrão */
+  --z-900: #f6f7f8;   /* superfície */
+  --z-950: #ffffff;   /* fundo base */
+
+  /* Tons de TEXTO do acento (50–400) escurecem; os de PREENCHIMENTO (500–700)
+   * ficam escuros o bastante pra sustentar texto branco por cima. */
+  --b-50:  #f2fdf8;
+  --b-100: #05553a;
+  --b-200: #05613f;
+  --b-300: #046b45;
+  --b-400: #05784e;
+  --b-500: #0a9160;
+  --b-600: #077a50;
+  --b-700: #066140;
+  --b-800: #054c33;
+  --b-900: #033524;
+
+  --surface-glass: rgb(0 0 0 / 0.025);
+  --hairline:      rgb(0 0 0 / 0.07);
 }
 
-/* Tipografia base — PT Sans em todo o app (mesma do Kommo).
- * Componentes individuais podem sobrescrever via classes Tailwind. */
-html, body {
-  font-family: var(--font-body);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-display);
-  letter-spacing: -0.01em;
+/* ===========================================================================
+ * BASE
+ * =========================================================================== */
+@layer base {
+  html,
+  body {
+    font-family: var(--font-body);
+    background: var(--z-950);
+    color: var(--z-100);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Inter: sem ligaduras de código, números tabulares em UI densa. */
+    font-feature-settings: "cv11", "ss01";
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    letter-spacing: -0.018em;
+    text-wrap: balance;
+  }
+
+  /* Foco visível e consistente no app inteiro — só via teclado. */
+  :focus-visible {
+    outline: 2px solid var(--b-500);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--b-500) 32%, transparent);
+    color: var(--z-50);
+  }
+
+  /* Controles de formulário sem classe própria já nascem no tema. */
+  input, select, textarea {
+    font-family: inherit;
+    color: inherit;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--z-500);
+  }
+  /* Dropdown nativo: o popup é desenhado pelo SO e ignora Tailwind. */
+  select option {
+    background: var(--z-900);
+    color: var(--z-100);
+  }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--z-700);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: var(--z-600); }
+  ::-webkit-scrollbar-corner { background: transparent; }
 }
 
-/* Scrollbar discreta. */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: var(--z-700);
-  border-radius: 999px;
-}
-::-webkit-scrollbar-thumb:hover { background: var(--z-600); }
+/* ===========================================================================
+ * PRIMITIVAS — classes reutilizáveis pro chrome novo. Ficam em `components`
+ * pra que qualquer utilitário Tailwind aplicado no JSX continue vencendo.
+ * =========================================================================== */
+@layer components {
+  /* Superfície padrão: 1px de contorno + fundo levemente elevado. */
+  .surface {
+    background: var(--z-900);
+    border: 1px solid var(--z-800);
+    border-radius: var(--radius-xl);
+  }
 
-/* Animação de "pulse" para o cursor de digitação. */
-@keyframes blink {
-  50% { opacity: 0; }
+  /* Cartão "vidro": pro que flutua sobre o fundo (menus, hub, login). */
+  .glass {
+    background: var(--surface-glass);
+    border: 1px solid var(--hairline);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  /* Painel flutuante (dropdown, popover, command palette). */
+  .popover {
+    background: color-mix(in oklab, var(--z-900) 92%, transparent);
+    border: 1px solid var(--z-800);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+  }
+
+  /* Rótulo de seção — caixa alta, minúsculo, muito espaçado. */
+  .eyebrow {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--z-500);
+  }
+
+  /* Botão primário do acento. */
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.9rem;
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #fff;
+    background: var(--b-600);
+    box-shadow: 0 1px 0 0 color-mix(in oklab, #fff 18%, transparent) inset;
+    transition: background 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+  }
+  .btn-primary:hover { background: var(--b-500); }
+  .btn-primary:active { transform: translateY(0.5px); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Botão neutro/secundário. */
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.9rem;
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--z-300);
+    background: transparent;
+    border: 1px solid var(--z-800);
+    transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  }
+  .btn-ghost:hover {
+    color: var(--z-100);
+    background: var(--z-800);
+    border-color: var(--z-700);
+  }
+
+  /* Campo de texto. */
+  .field {
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+    color: var(--z-100);
+    background: var(--z-950);
+    border: 1px solid var(--z-800);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .field:focus {
+    outline: none;
+    border-color: color-mix(in oklab, var(--b-500) 60%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--b-500) 16%, transparent);
+  }
+
+  /* Tecla de atalho (⌘K). */
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.3rem;
+    border-radius: var(--radius-xs);
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    line-height: 1;
+    color: var(--z-400);
+    background: var(--z-800);
+    border: 1px solid var(--z-700);
+  }
 }
 
-/* Entrada suave (fade + slide up) — usada nos cards do UnitHub. O atraso é
-   aplicado por item via style inline (animation-delay) pra dar o efeito
-   escalonado. `backwards` mantém o estado inicial durante o delay. */
+/* ===========================================================================
+ * AMBIENTE — o "brilho" de fundo dos consoles de IA. Um gradiente radial
+ * muito sutil no topo da área de conteúdo, que dá profundidade sem custar
+ * legibilidade. Fica atrás de tudo (pointer-events: none no elemento).
+ * =========================================================================== */
+.app-ambient {
+  position: relative;
+  isolation: isolate;
+}
+.app-ambient::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 420px;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      70% 100% at 18% 0%,
+      color-mix(in oklab, var(--b-500) 11%, transparent) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      60% 100% at 92% 0%,
+      color-mix(in oklab, var(--b-400) 6%, transparent) 0%,
+      transparent 72%
+    );
+}
+
+/* Malha de pontos — fundo das telas de entrada (login, hub, splash). */
+.grid-mesh {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in oklab, var(--z-100) 9%, transparent) 1px,
+    transparent 0
+  );
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, #000 30%, transparent 78%);
+  -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, #000 30%, transparent 78%);
+}
+
+/* ===========================================================================
+ * ANIMAÇÕES
+ * =========================================================================== */
+@keyframes blink { 50% { opacity: 0; } }
+
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(16px); }
+  from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.animate-fade-in-up {
-  animation: fadeInUp 0.4s ease-out backwards;
+.animate-fade-in-up { animation: fadeInUp 0.42s cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+
+@keyframes popIn {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
+.animate-pop-in { animation: popIn 0.16s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Varredura de brilho — usada no logo da splash e no aro do login. */
+@keyframes sheen {
+  0%   { background-position: -140% 0; }
+  100% { background-position: 240% 0; }
+}
+.animate-sheen {
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in oklab, var(--b-400) 26%, transparent) 50%,
+    transparent 80%
+  );
+  background-size: 220% 100%;
+  animation: sheen 2.2s linear infinite;
+}
+
 .caret::after {
   content: "▍";
   margin-left: 2px;
   animation: blink 1s steps(1) infinite;
-  color: var(--color-brand-400);
+  color: var(--b-400);
 }
 
-/* Linha tracejada vertical do timeline. */
+/* Linha tracejada vertical do timeline (ExecutionTrace). */
 .timeline-line {
   background-image: linear-gradient(
     to bottom,
-    color-mix(in oklab, var(--color-brand-500) 60%, transparent) 0,
-    color-mix(in oklab, var(--color-brand-500) 60%, transparent) 50%,
+    color-mix(in oklab, var(--b-500) 55%, transparent) 0,
+    color-mix(in oklab, var(--b-500) 55%, transparent) 50%,
     transparent 50%
   );
   background-size: 2px 8px;
   background-repeat: repeat-y;
 }
 
-/* Glow sutil em cards ativos. */
+/* Realce de card ativo — aro do acento + halo difuso. */
 .glow-brand {
   box-shadow:
-    0 0 0 1px color-mix(in oklab, var(--color-brand-500) 40%, transparent),
-    0 0 24px -4px color-mix(in oklab, var(--color-brand-500) 30%, transparent);
+    0 0 0 1px color-mix(in oklab, var(--b-500) 45%, transparent),
+    0 0 28px -6px color-mix(in oklab, var(--b-500) 32%, transparent);
 }
 
 /* ===========================================================================
  * Editor WYSIWYG das Fontes (RichTextEditor / TipTap).
- * Renderiza o markdown "estilo Word" no tema escuro. O conteúdo é editável
- * (contenteditable), então estilizamos os nós do ProseMirror manualmente —
- * não há plugin de typography.
+ * O conteúdo é contenteditable — estilizamos os nós do ProseMirror na mão.
  * =========================================================================== */
 .fontes-editor {
   font-family: var(--font-body);
   font-size: 0.9375rem;            /* 15px — leitura de prosa, não label */
-  line-height: 1.7;                /* + leading: compensação texto-claro/escuro */
-  letter-spacing: 0.01em;          /* idem — capitais/peso somem no escuro */
-  color: var(--z-200);             /* neutro tintado, temável */
-  padding: 0.75rem 1rem;           /* 12 / 16 — grade 4pt */
+  line-height: 1.7;
+  letter-spacing: 0.005em;
+  color: var(--z-200);
+  padding: 0.875rem 1.125rem;
   min-height: 220px;
   max-height: 540px;
   overflow-y: auto;
-  font-kerning: normal;
+  font-variant-numeric: normal;    /* prosa: números proporcionais */
 }
 .fontes-editor:focus { outline: none; }
 
-/* Medida: cada bloco no intervalo legível (~70ch). O poço fica de largura
-   cheia e clicável; só a linha de texto é limitada. */
+/* Medida: cada bloco no intervalo legível (~70ch). */
 .fontes-editor > * { max-width: 70ch; }
-
-/* Ritmo vertical variado: títulos respiram mais acima que parágrafos. */
 .fontes-editor > * + * { margin-top: 0.7em; }
 .fontes-editor > :first-child { margin-top: 0; }
 
@@ -161,38 +442,36 @@ h1, h2, h3, h4, h5, h6 {
 .fontes-editor h2,
 .fontes-editor h3 {
   font-family: var(--font-display);
-  text-wrap: balance;              /* títulos quebram em linhas equilibradas */
-  letter-spacing: -0.01em;
+  text-wrap: balance;
+  letter-spacing: -0.02em;
   line-height: 1.25;
 }
-.fontes-editor h1 { font-size: 1.5rem;    font-weight: 700; color: var(--z-50); margin-top: 1.4em; }
+.fontes-editor h1 { font-size: 1.5rem;    font-weight: 700; color: var(--z-50);  margin-top: 1.4em; }
 .fontes-editor h2 { font-size: 1.1875rem; font-weight: 600; color: var(--z-100); margin-top: 1.2em; }
 .fontes-editor h3 { font-size: 1rem;      font-weight: 600; color: var(--z-200); margin-top: 1em; }
 
-.fontes-editor p { text-wrap: pretty; }   /* menos órfãs/viúvas */
+.fontes-editor p { text-wrap: pretty; }
 
 .fontes-editor ul,
 .fontes-editor ol { margin: 0.5em 0; padding-left: 1.4em; }
 .fontes-editor ul { list-style: disc; }
 .fontes-editor ol { list-style: decimal; }
 .fontes-editor li { margin: 0.2em 0; }
-.fontes-editor li::marker { color: #9374ff; }   /* brand-400 */
+.fontes-editor li::marker { color: var(--b-400); }
 .fontes-editor li > p { margin: 0; max-width: none; }
 
 .fontes-editor strong { font-weight: 700; color: var(--z-50); }
 .fontes-editor em { font-style: italic; }
 
-/* Destaque: marcador sólido de alto contraste (sem alpha — alpha só em estado). */
 .fontes-editor mark {
   background: #fcd34d;             /* amber-300 */
   color: #422006;                  /* amber-950 */
   padding: 0.05em 0.28em;
-  border-radius: 0.25rem;
+  border-radius: var(--radius-xs);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
 
-/* Citação: fio de 1px neutro + recuo (sem side-stripe colorido grosso). */
 .fontes-editor blockquote {
   margin: 0.5em 0;
   padding-left: 0.9em;
@@ -204,15 +483,13 @@ h1, h2, h3, h4, h5, h6 {
 .fontes-editor code {
   font-family: var(--font-mono);
   font-size: 0.85em;
-  font-variant-ligatures: none;    /* sem ligaduras em código */
+  font-variant-ligatures: none;
   background: var(--z-800);
   color: var(--z-200);
   padding: 0.1em 0.35em;
-  border-radius: 0.3rem;
+  border-radius: var(--radius-xs);
 }
 
-/* Placeholder (extensão @tiptap/extension-placeholder) — contraste maior que o
-   cinza-fantasma de costume. */
 .fontes-editor p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;

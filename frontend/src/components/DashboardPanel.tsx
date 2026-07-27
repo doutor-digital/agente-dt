@@ -1,14 +1,13 @@
 // ============================================================================
-// DashboardPanel — Painel executivo inspirado no dashboard nativo da Kommo.
+// DashboardPanel — painel executivo do agente.
 //
 // LÓGICA VISUAL
 // -------------
-// Estilo do painel nativo do Kommo: foto de fundo (céu) com overlay escuro,
-// título centralizado (nome da unidade) + filtros segmentados, e cards
-// translúcidos "glass" (bg escuro + ring claro) por cima. Grid masonry de 4
-// colunas. Hero card = "Mensagens recebidas" (número GIGANTE violeta + lista
-// por canal). Donut "Distribuição de leads" e funil ocupam linha cheia.
-// Charts em SVG inline (sem dependência externa).
+// Header de página (título à esquerda, período + refresh à direita) e grid
+// masonry de 4 colunas. O fundo vem do `app-ambient` do shell — nada de foto
+// de stock. Hero card = "Conversas respondidas" (número grande + lista por
+// canal); donut "Distribuição de leads" e funil ocupam linha cheia. Charts em
+// SVG inline (sem dependência externa).
 //
 // DADOS
 // -----
@@ -96,37 +95,34 @@ export function DashboardPanel() {
   const periodLabel = PERIOD_OPTIONS.find((p) => p.days === days)?.label ?? `${days}d`;
 
   return (
-    <div
-      className="dark flex-1 overflow-y-auto bg-cover bg-center bg-[#0a1628]"
-      style={{
-        // Foto de fundo (céu/paisagem) + overlay escuro pra manter os cards
-        // translúcidos legíveis — estilo do painel do Kommo (img #4).
-        backgroundImage:
-          'linear-gradient(to bottom, rgba(8,8,12,0.74) 0%, rgba(8,8,12,0.88) 60%, rgba(8,8,12,0.96) 100%), url(https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=2000&q=70)',
-      }}
-    >
-      <div className="max-w-[1400px] mx-auto p-6 space-y-6">
-        {/* Header — título centralizado + filtros segmentados (estilo Kommo) */}
-        <div className="flex flex-col items-center gap-4 pt-2">
-          <div className="text-center">
-            <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight drop-shadow-lg">
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-350 mx-auto p-6 space-y-6">
+        {/* Header da página — título à esquerda, controles à direita. O fundo
+            fica por conta do `app-ambient` do shell (nada de foto de stock). */}
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0">
+            <div className="eyebrow mb-1.5">Painel do agente</div>
+            <h1 className="text-2xl font-semibold text-zinc-50 tracking-tight truncate">
               {unit?.name ?? 'Painel'}
             </h1>
-            <p className="text-xs text-zinc-300/90 mt-1">{periodLabel.toLowerCase()}</p>
+            <p className="text-[13px] text-zinc-500 mt-1">
+              Últimos dados de {periodLabel.toLowerCase()}
+            </p>
           </div>
-          <div className="flex items-center gap-2 flex-wrap justify-center">
-            {/* Filter pills — segmented control claro como o Kommo */}
-            <div className="flex items-center bg-black/30 rounded-full ring-1 ring-white/15 p-1 backdrop-blur">
+
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Segmented control do período. */}
+            <div className="flex items-center gap-0.5 p-0.5 rounded-lg border border-zinc-800 bg-zinc-900/60">
               {PERIOD_OPTIONS.map((opt) => (
                 <button
                   key={opt.days}
                   type="button"
                   onClick={() => setDays(opt.days)}
                   className={clsx(
-                    'text-xs px-4 py-1.5 rounded-full transition font-medium',
+                    'text-[12px] px-3 py-1.5 rounded-md transition-colors',
                     days === opt.days
-                      ? 'bg-white text-zinc-900 shadow'
-                      : 'text-zinc-200 hover:text-white',
+                      ? 'bg-zinc-800 text-zinc-50 font-medium'
+                      : 'text-zinc-500 hover:text-zinc-200',
                   )}
                 >
                   {opt.label}
@@ -137,7 +133,7 @@ export function DashboardPanel() {
               type="button"
               onClick={load}
               disabled={loading}
-              className="inline-flex items-center gap-2 text-sm px-3 py-2 rounded-full bg-black/30 text-zinc-100 ring-1 ring-white/15 hover:bg-black/40 disabled:opacity-50 backdrop-blur"
+              className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700 disabled:opacity-50 transition-colors"
               title="Atualizar"
             >
               {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCcw size={14} />}

@@ -11,3 +11,5 @@ dist
 .agents/
 skills-lock.json
 widget
+# Build artifact do tsc (--build) — não é código
+*.tsbuildinfo

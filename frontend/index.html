@@ -2,32 +2,38 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <!-- Tema claro/escuro sem flash: aplica a classe antes de qualquer paint.
-         Default = claro; respeita a escolha salva em localStorage. -->
+    <!-- Tema sem flash: aplica a classe antes de qualquer paint.
+         Default = escuro (o console é dark-first); respeita a escolha salva. -->
     <script>
       (function () {
         try {
           var t = localStorage.getItem('theme');
-          if (t !== 'light' && t !== 'dark') t = 'light';
+          if (t !== 'light' && t !== 'dark') t = 'dark';
           document.documentElement.classList.add(t);
+          document.documentElement.style.colorScheme = t;
         } catch (e) {
-          document.documentElement.classList.add('light');
+          document.documentElement.classList.add('dark');
         }
       })();
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agente DT — Kommo Automation Console</title>
-    <meta name="description" content="Console de observabilidade do agente de automação Kommo." />
-    <!-- Fonte Google: PT Sans (mesma fonte do Kommo) — só 400 e 700 -->
+    <title>Agente DT — Console</title>
+    <meta
+      name="description"
+      content="Console de operação e observabilidade dos agentes de IA da Doutor Digital."
+    />
+    <meta name="theme-color" content="#0a0b0c" />
+
+    <!-- Inter variable — a fonte de UI dos consoles modernos. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=PT+Sans:ital,wght@0,400;0,700;1,400;1,700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..800;1,14..32,300..700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <!-- Logo: preconnect + preload pra evitar flash na sidebar -->
-    <link rel="preconnect" href="https://i.postimg.cc" crossorigin />
-    <link rel="preload" as="image" href="https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png" />
+
+    <link rel="icon" href="/logo-dd.png" />
+    <link rel="preload" as="image" href="/logo-dd.png" />
   </head>
   <body class="bg-zinc-950 text-zinc-100 antialiased font-body">
     <div id="root"></div>

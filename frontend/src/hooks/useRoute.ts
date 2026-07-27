@@ -21,7 +21,7 @@
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
-import type { AppTab } from '../components/AppSidebar';
+import type { AppTab } from '../lib/nav';
 
 // Map tab ↔ slug. Slugs em PT-BR (pra ficar bonito na URL).
 const TAB_TO_SLUG: Record<AppTab, string> = {

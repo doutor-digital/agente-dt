@@ -1,104 +1,39 @@
 // ============================================================================
-// AppSidebar — navegação principal lateral.
+// AppSidebar — navegação primária do console.
 //
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Substitui o TopNav horizontal. Sidebar fixa à esquerda agrupa:
-//   - Brand
-//   - UnitSelector (a unidade ativa)
-//   - Tabs verticais com ícones + labels
-//   - Notificações + link de Docs no rodapé
+// Padrão dos consoles de IA modernos: uma coluna estreita, escura, puramente
+// NAVEGACIONAL. Nada de identidade/estado do usuário aqui — isso vive no
+// TopBar. A sidebar responde a uma pergunta só: "onde eu estou e pra onde
+// posso ir".
 //
-// O conteúdo principal fica à direita ocupando o resto da viewport.
-// Cada panel é responsável pelo seu próprio header.
+//   - grupos rotulados (Operação / Agente / Análise / Plataforma)
+//   - item ativo = superfície elevada + barra de acento à esquerda
+//   - colapsável pra 64px (só ícones + tooltip); a escolha persiste
+//   - <a href> real: ctrl/cmd-clique abre em nova aba de verdade
 //
-// TEMA: sidebar CLARA (estilo Kommo) — fundo branco, texto escuro, ícones
-// cinza, item ativo com fundo lavanda + cor de marca. O conteúdo à direita
-// continua escuro (layout híbrido, igual ao Kommo).
+// A lista de itens vem de `lib/nav.ts` — a mesma que alimenta o breadcrumb e
+// a paleta de comandos.
 // ============================================================================
 
-import type { ReactNode } from 'react';
-import { useState } from 'react';
-import {
-  AlertOctagon,
-  BookOpen,
-  Building2,
-  Cable,
-  Cpu,
-  Eraser,
-  FileBarChart,
-  Globe,
-  LayoutDashboard,
-  LayoutGrid,
-  Loader2,
-  LogOut,
-  MessageCircle,
-  Settings,
-  Sparkles,
-  Terminal,
-  Truck,
-  UserCog,
-  Wand2,
-} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { BookOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import clsx from 'clsx';
-import { UnitSelector } from './UnitSelector';
-import { NotificationsBadge } from './NotificationsBadge';
-import { ThemeToggle } from './ThemeToggle';
 import { useAuth } from '../context/AuthContext';
-import { useToast } from '../context/ToastContext';
 import { tabToPath } from '../hooks/useRoute';
-import { api } from '../lib/api';
+import {
+  NAV_ITEMS,
+  SECTION_LABEL,
+  type AppTab,
+  type NavItem,
+  type NavSection,
+} from '../lib/nav';
 
-export type AppTab =
-  | 'dashboard'
-  | 'configure'
-  | 'traces'
-  | 'conversations'
-  | 'llm'
-  | 'prompts'
-  | 'integrations'
-  | 'wizard'
-  | 'playground'
-  | 'training'
-  | 'sources'
-  | 'actions'
-  | 'global-actions'
-  | 'captures'
-  | 'tools'
-  | 'reports'
-  | 'config'
-  | 'units'
-  | 'users'
-  | 'errors'
-  | 'delivery'
-  | 'whatsapp';
+// Reexportado porque outros painéis já importavam o tipo daqui.
+export type { AppTab };
 
-interface NavItem {
-  id: AppTab;
-  label: string;
-  icon: typeof Terminal;
-  group: 'primary' | 'secondary';
-  superOnly?: boolean;
-}
-
-const NAV: NavItem[] = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'primary' },
-  { id: 'units', label: 'Agentes', icon: Building2, group: 'primary', superOnly: true },
-  { id: 'configure', label: 'Configurar agente', icon: Wand2, group: 'primary' },
-  { id: 'conversations', label: 'Conversas', icon: MessageCircle, group: 'primary' },
-  { id: 'traces', label: 'Execuções', icon: Terminal, group: 'primary' },
-  { id: 'errors', label: 'Erros', icon: AlertOctagon, group: 'primary' },
-
-  { id: 'reports', label: 'Relatórios', icon: FileBarChart, group: 'secondary' },
-  { id: 'whatsapp', label: 'Custo WhatsApp', icon: MessageCircle, group: 'secondary' },
-  { id: 'llm', label: 'Chamadas IA', icon: Cpu, group: 'secondary' },
-  { id: 'prompts', label: 'Prompts', icon: Sparkles, group: 'secondary' },
-  { id: 'integrations', label: 'Integrações', icon: Cable, group: 'secondary' },
-  { id: 'delivery', label: 'Entrega', icon: Truck, group: 'secondary', superOnly: true },
-  { id: 'config', label: 'Avançado (técnico)', icon: Settings, group: 'secondary' },
-  { id: 'global-actions', label: 'Regras Globais', icon: Globe, group: 'secondary', superOnly: true },
-  { id: 'users', label: 'Usuários', icon: UserCog, group: 'secondary', superOnly: true },
-];
+const LOGO_URL = '/logo-dd.png';
+const COLLAPSE_KEY = 'sidebar:collapsed';
+const SECTION_ORDER: NavSection[] = ['operacao', 'agente', 'analise', 'plataforma'];
 
 export function AppSidebar({
   tab,
@@ -107,208 +42,187 @@ export function AppSidebar({
 }: {
   tab: AppTab;
   onChange: (t: AppTab) => void;
-  /** Quando presente, a marca vira clicável e volta pra landing de unidades. */
+  /** Quando presente, a marca vira clicável e volta pra landing de agentes. */
   onBackToHub?: () => void;
 }) {
-  const { user, logout } = useAuth();
-  const toast = useToast();
-  const [clearing, setClearing] = useState(false);
-  const visible = NAV.filter((n) => !n.superOnly || user?.role === 'SUPER_ADMIN');
-  const primary = visible.filter((n) => n.group === 'primary');
-  const secondary = visible.filter((n) => n.group === 'secondary');
-
-  // "Limpar cache" — chama o backend pra esvaziar caches em memória, limpa o
-  // localStorage do front e força hard-reload pra puxar bundle fresco.
-  // Útil quando algo "ficou grudado" após mudar dado no banco/Kommo.
-  async function handleClearCache() {
-    if (clearing) return;
-    const confirmed = window.confirm(
-      'Limpar cache do sistema?\n\n' +
-        '• Esvazia caches em memória do backend (config, unit, dedup)\n' +
-        '• Limpa armazenamento local do navegador\n' +
-        '• Recarrega a página\n\n' +
-        'Nenhum dado é apagado — só os caches.',
-    );
-    if (!confirmed) return;
-    setClearing(true);
+  const { user } = useAuth();
+  const [collapsed, setCollapsed] = useState(() => {
     try {
-      const r = await api.clearCache();
-      try {
-        window.localStorage.clear();
-        window.sessionStorage.clear();
-      } catch {
-        // Ignorar se o navegador bloquear (modo privado).
-      }
-      toast.success(
-        `Cache limpo: ${r.cleared.configCache} config(s), ${r.cleared.unitBySlugCache} unit(s), ${r.cleared.dedupCache} dedup. Recarregando…`,
-      );
-      // Pequeno delay pra o toast aparecer antes do reload.
-      setTimeout(() => window.location.reload(), 600);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`Falha ao limpar cache: ${msg}`);
-      setClearing(false);
+      return window.localStorage.getItem(COLLAPSE_KEY) === '1';
+    } catch {
+      return false;
     }
-  }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
+    } catch {
+      // modo privado — vale só nesta sessão
+    }
+  }, [collapsed]);
+
+  const visible = NAV_ITEMS.filter((n) => !n.superOnly || user?.role === 'SUPER_ADMIN');
 
   return (
-    <aside className="w-60 shrink-0 border-r border-zinc-800 bg-zinc-900 flex flex-col h-full">
-      {/* Brand com logo */}
-      <div className="px-4 py-4 border-b border-zinc-800 flex items-center gap-3">
-        <img
-          src="https://i.postimg.cc/9fkz8kVx/DESIGN-(1).png"
-          alt="Agente DT"
-          className="w-10 h-10 object-contain shrink-0"
-        />
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-bold text-zinc-100 tracking-tight leading-none">
-            Agente DT
-          </div>
-          <div className="text-[9px] font-medium uppercase tracking-widest text-zinc-400 mt-1">
-            Kommo Console v0.2
-          </div>
-        </div>
-        {onBackToHub && (
+    <aside
+      className={clsx(
+        'shrink-0 h-full flex flex-col border-r border-zinc-800 bg-zinc-900/50 transition-[width] duration-200 ease-out',
+        collapsed ? 'w-16' : 'w-[248px]',
+      )}
+    >
+      {/* ── Marca ─────────────────────────────────────────────────────────── */}
+      <div
+        className={clsx(
+          'h-14 shrink-0 flex items-center gap-2.5 border-b border-zinc-800',
+          collapsed ? 'justify-center px-2' : 'px-3',
+        )}
+      >
+        <button
+          type="button"
+          onClick={onBackToHub}
+          disabled={!onBackToHub}
+          title={onBackToHub ? 'Trocar de agente' : 'Agente DT'}
+          className={clsx(
+            'flex items-center gap-2.5 min-w-0 rounded-lg p-1 -m-1 transition-colors',
+            onBackToHub && 'hover:bg-zinc-800/70 cursor-pointer',
+          )}
+        >
+          <img
+            src={LOGO_URL}
+            alt=""
+            className="w-8 h-8 rounded-lg object-contain shrink-0 ring-1 ring-zinc-800 bg-zinc-950 p-1"
+          />
+          {!collapsed && (
+            <span className="flex flex-col items-start min-w-0">
+              <span className="text-[13px] font-semibold text-zinc-50 leading-none tracking-tight">
+                Agente DT
+              </span>
+              <span className="text-[10px] text-zinc-500 leading-none mt-1">Console</span>
+            </span>
+          )}
+        </button>
+
+        {!collapsed && (
           <button
             type="button"
-            onClick={onBackToHub}
-            title="Trocar de unidade"
-            className="p-1.5 rounded-md text-zinc-400 hover:text-brand-400 hover:bg-zinc-800 transition-colors shrink-0"
+            onClick={() => setCollapsed(true)}
+            title="Recolher menu"
+            className="ml-auto p-1.5 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
           >
-            <LayoutGrid size={15} />
+            <PanelLeftClose size={15} />
           </button>
         )}
       </div>
 
-      {/* Unit selector */}
-      <div className="px-3 py-3 border-b border-zinc-800">
-        <div className="text-[9px] font-semibold uppercase tracking-widest text-zinc-400 mb-1.5 px-1">
-          Agente ativo
-        </div>
-        <UnitSelector />
-      </div>
-
-      {/* Nav primary */}
-      <nav className="flex-1 overflow-y-auto py-3 px-2">
-        <NavGroup label="Principal">
-          {primary.map((item) => (
-            <NavLink key={item.id} item={item} active={tab === item.id} onClick={onChange} />
-          ))}
-        </NavGroup>
-
-        <div className="my-3 h-px bg-zinc-800 mx-2" />
-
-        <NavGroup label="Administração">
-          {secondary.map((item) => (
-            <NavLink key={item.id} item={item} active={tab === item.id} onClick={onChange} />
-          ))}
-        </NavGroup>
+      {/* ── Navegação ─────────────────────────────────────────────────────── */}
+      <nav className={clsx('flex-1 overflow-y-auto overflow-x-hidden py-3', collapsed ? 'px-2' : 'px-2.5')}>
+        {SECTION_ORDER.map((section) => {
+          const items = visible.filter((n) => n.section === section);
+          if (items.length === 0) return null;
+          return (
+            <div key={section} className="mb-4 last:mb-0">
+              {collapsed ? (
+                <div className="h-px bg-zinc-800 mx-2 mb-2 first:hidden" />
+              ) : (
+                <div className="eyebrow px-2.5 mb-1.5">{SECTION_LABEL[section]}</div>
+              )}
+              <ul className="space-y-0.5">
+                {items.map((item) => (
+                  <NavLink
+                    key={item.id}
+                    item={item}
+                    active={tab === item.id}
+                    collapsed={collapsed}
+                    onClick={onChange}
+                  />
+                ))}
+              </ul>
+            </div>
+          );
+        })}
       </nav>
 
-      {/* User info + logout */}
-      {user && (
-        <div className="border-t border-zinc-800 px-3 py-2 flex items-center gap-2">
-          {user.picture ? (
-            <img
-              src={user.picture}
-              alt=""
-              className="w-7 h-7 rounded-full ring-1 ring-zinc-800"
-              referrerPolicy="no-referrer"
-            />
-          ) : (
-            <div className="w-7 h-7 rounded-full bg-zinc-800 text-zinc-500 flex items-center justify-center text-xs font-bold">
-              {user.email.slice(0, 1).toUpperCase()}
-            </div>
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="text-xs text-zinc-100 truncate font-medium">{user.name ?? user.email}</div>
-            <div className="text-[9px] uppercase tracking-wider text-zinc-400">
-              {user.role === 'SUPER_ADMIN' ? 'Super admin' : 'Unit admin'}
-            </div>
-          </div>
+      {/* ── Rodapé ────────────────────────────────────────────────────────── */}
+      <div
+        className={clsx(
+          'shrink-0 border-t border-zinc-800 p-2 flex items-center gap-1',
+          collapsed ? 'flex-col' : '',
+        )}
+      >
+        {collapsed && (
           <button
             type="button"
-            onClick={() => void logout()}
-            title="Sair"
-            className="p-1.5 rounded-md text-zinc-400 hover:text-rose-500 hover:bg-zinc-800 transition-colors"
+            onClick={() => setCollapsed(false)}
+            title="Expandir menu"
+            className="w-full flex items-center justify-center p-2 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
           >
-            <LogOut size={14} />
+            <PanelLeftOpen size={15} />
           </button>
-        </div>
-      )}
-
-      {/* Footer */}
-      <div className="border-t border-zinc-800 p-3 flex items-center justify-between gap-1">
-        <NotificationsBadge />
-        <ThemeToggle />
-        <button
-          type="button"
-          onClick={() => void handleClearCache()}
-          disabled={clearing}
-          title="Limpa caches em memória do backend, localStorage do navegador e recarrega"
-          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {clearing ? <Loader2 size={13} className="animate-spin" /> : <Eraser size={13} />}
-          {clearing ? 'Limpando…' : 'Limpar cache'}
-        </button>
+        )}
         <a
           href="/docs"
           target="_blank"
           rel="noopener"
-          className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
+          title="Documentação"
+          className={clsx(
+            'flex items-center gap-2 rounded-lg text-xs text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors',
+            collapsed ? 'w-full justify-center p-2' : 'flex-1 px-2.5 py-2',
+          )}
         >
-          <BookOpen size={13} />
-          Docs
+          <BookOpen size={14} />
+          {!collapsed && <span>Documentação</span>}
         </a>
       </div>
     </aside>
   );
 }
 
-function NavGroup({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <div className="text-[9px] font-semibold uppercase tracking-widest text-zinc-400 mb-1 px-3">
-        {label}
-      </div>
-      <ul className="space-y-0.5">{children}</ul>
-    </div>
-  );
-}
-
 function NavLink({
   item,
   active,
+  collapsed,
   onClick,
 }: {
   item: NavItem;
   active: boolean;
+  collapsed: boolean;
   onClick: (t: AppTab) => void;
 }) {
   const Icon = item.icon;
-  const href = tabToPath(item.id);
   return (
     <li>
       <a
-        href={href}
-        // Ctrl/Cmd/middle-click caem no comportamento default do <a> (abre
-        // nova aba). Clique normal é interceptado pra navegação SPA sem reload.
+        href={tabToPath(item.id)}
+        title={collapsed ? item.label : undefined}
+        // Ctrl/Cmd/middle-click caem no comportamento default do <a> (nova aba).
+        // Clique normal é interceptado pra navegação SPA sem reload.
         onClick={(e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
           e.preventDefault();
           onClick(item.id);
         }}
         className={clsx(
-          'w-full inline-flex items-center gap-2.5 text-sm px-3 py-2 rounded-md transition-all',
+          'group relative flex items-center gap-2.5 rounded-lg text-[13px] transition-colors duration-150',
+          collapsed ? 'justify-center px-0 py-2.5' : 'px-2.5 py-2',
           active
-            ? 'bg-brand-500/15 text-brand-300'
-            : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800',
+            ? 'bg-zinc-800 text-zinc-50 font-medium'
+            : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
         )}
       >
-        <Icon size={15} className={clsx(active ? 'text-brand-400' : 'text-zinc-400')} />
-        <span className={active ? 'font-semibold' : 'font-medium'}>
-          {item.label}
-        </span>
+        {/* Barra de acento do item ativo. */}
+        <span
+          className={clsx(
+            'absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-brand-400 transition-opacity',
+            active ? 'opacity-100' : 'opacity-0',
+          )}
+        />
+        <Icon
+          size={16}
+          strokeWidth={active ? 2.1 : 1.8}
+          className={clsx('shrink-0', active ? 'text-brand-400' : 'text-zinc-500 group-hover:text-zinc-300')}
+        />
+        {!collapsed && <span className="truncate">{item.label}</span>}
       </a>
     </li>
   );

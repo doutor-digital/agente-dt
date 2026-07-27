@@ -2,8 +2,11 @@ import { Activity, CheckCircle2, Clock, Cpu, DollarSign, XCircle, Zap } from 'lu
 import type { Stats } from '../types/api';
 
 /**
- * Header do dashboard — KPIs estilo "control panel" com observabilidade
- * de custo e tokens (multi-tenant).
+ * Faixa de KPIs do topo — execuções, qualidade, custo.
+ *
+ * Formato "stat tile" dos consoles modernos: rótulo pequeno em cima, número
+ * grande embaixo, ícone discreto no canto. A cor entra só no ícone — o número
+ * fica neutro pra a linha inteira ser comparável de relance.
  */
 export function StatsHeader({ stats }: { stats: Stats | null }) {
   const cards = [
@@ -11,11 +14,11 @@ export function StatsHeader({ stats }: { stats: Stats | null }) {
       icon: Activity,
       label: 'Execuções',
       value: stats?.total ?? '—',
-      tone: 'text-brand-300',
+      tone: 'text-brand-400',
     },
     {
       icon: CheckCircle2,
-      label: 'Taxa sucesso',
+      label: 'Taxa de sucesso',
       value: stats ? `${(stats.successRate * 100).toFixed(1)}%` : '—',
       tone: 'text-emerald-400',
     },
@@ -23,7 +26,7 @@ export function StatsHeader({ stats }: { stats: Stats | null }) {
       icon: Clock,
       label: 'Latência média',
       value: stats ? `${stats.avgLatencyMs}ms` : '—',
-      tone: 'text-amber-300',
+      tone: 'text-amber-400',
     },
     {
       icon: XCircle,
@@ -35,35 +38,37 @@ export function StatsHeader({ stats }: { stats: Stats | null }) {
       icon: Cpu,
       label: 'Chamadas IA',
       value: stats?.llm.calls ?? '—',
-      tone: 'text-sky-300',
+      tone: 'text-sky-400',
     },
     {
       icon: Zap,
       label: 'Tokens',
       value: stats ? stats.llm.totalTokens.toLocaleString('pt-BR') : '—',
-      tone: 'text-violet-300',
+      tone: 'text-violet-400',
     },
     {
       icon: DollarSign,
       label: 'Custo USD',
       value: stats ? formatUsd(stats.llm.costUsd) : '—',
-      tone: 'text-emerald-300',
+      tone: 'text-teal-400',
     },
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2.5 mb-4">
+    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 mb-5">
       {cards.map(({ icon: Icon, label, value, tone }) => (
         <div
           key={label}
-          className="rounded-lg border border-zinc-800 bg-zinc-900/40 backdrop-blur p-2.5 flex items-center gap-2"
+          className="group relative rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 transition-colors hover:border-zinc-700"
         >
-          <div className={`${tone} bg-zinc-950/60 rounded-md p-1.5 ring-1 ring-zinc-800`}>
-            <Icon size={14} />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-500 truncate">
+              {label}
+            </span>
+            <Icon size={13} className={`${tone} shrink-0 opacity-70`} />
           </div>
-          <div className="min-w-0">
-            <div className="text-[9px] uppercase tracking-wider text-zinc-500">{label}</div>
-            <div className="text-sm font-semibold text-zinc-100 truncate">{value}</div>
+          <div className="mt-2 text-lg font-semibold tracking-tight text-zinc-50 truncate tabular-nums">
+            {value}
           </div>
         </div>
       ))}

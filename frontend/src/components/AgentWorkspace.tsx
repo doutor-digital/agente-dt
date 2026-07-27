@@ -115,64 +115,86 @@ export function AgentWorkspace() {
     setSubId(target.subs[0].id);
   }
 
+  const stepIndex = SEGMENTS.findIndex((s) => s.id === segId);
+
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      {/* Barra de seções */}
-      <div className="shrink-0 border-b border-zinc-800 bg-zinc-950 px-4 pt-3 pb-3">
-        <div className="inline-flex gap-1 p-1 rounded-xl bg-zinc-900 border border-zinc-800 overflow-x-auto max-w-full">
-          {SEGMENTS.map((s) => {
+      {/* ── Barra de seções: passos numerados, estilo "setup guiado" ──────── */}
+      <div className="shrink-0 border-b border-zinc-800 px-4 pt-3.5 pb-0">
+        <div className="flex items-center gap-1 overflow-x-auto pb-3.5">
+          {SEGMENTS.map((s, i) => {
             const Icon = s.icon;
             const active = s.id === segId;
+            const done = i < stepIndex;
             return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => goSeg(s.id)}
-                className={clsx(
-                  'inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg whitespace-nowrap transition-colors',
-                  active
-                    ? 'bg-brand-500/15 text-brand-200 font-semibold'
-                    : 'text-zinc-400 hover:text-zinc-100',
+              <div key={s.id} className="flex items-center shrink-0">
+                <button
+                  type="button"
+                  onClick={() => goSeg(s.id)}
+                  className={clsx(
+                    'inline-flex items-center gap-2 pl-2 pr-3.5 py-1.5 text-[13px] rounded-full whitespace-nowrap transition-colors border',
+                    active
+                      ? 'border-brand-500/40 bg-brand-500/12 text-brand-200 font-medium'
+                      : 'border-transparent text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-5 h-5 rounded-full flex items-center justify-center shrink-0',
+                      active
+                        ? 'bg-brand-500/20 text-brand-300'
+                        : done
+                          ? 'bg-zinc-800 text-zinc-300'
+                          : 'bg-zinc-800/70 text-zinc-500',
+                    )}
+                  >
+                    <Icon size={12} />
+                  </span>
+                  {s.label}
+                </button>
+                {i < SEGMENTS.length - 1 && (
+                  <span className="w-4 h-px bg-zinc-800 mx-0.5 shrink-0" />
                 )}
-              >
-                <Icon size={15} className={active ? 'text-brand-400' : 'text-zinc-500'} />
-                {s.label}
-              </button>
+              </div>
             );
           })}
         </div>
 
-        <p className="mt-2 text-xs text-zinc-500">{seg.hint}</p>
+        <div className="flex items-center justify-between gap-4 pb-3">
+          <p className="text-[12px] text-zinc-500">{seg.hint}</p>
 
-        {/* Sub-navegação (só quando a seção tem mais de um painel) */}
-        {seg.subs.length > 1 && (
-          <div className="mt-3 flex flex-wrap gap-1">
-            {seg.subs.map((su) => {
-              const SubIcon = su.icon;
-              const active = su.id === sub.id;
-              return (
-                <button
-                  key={su.id}
-                  type="button"
-                  onClick={() => setSubId(su.id)}
-                  className={clsx(
-                    'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors',
-                    active
-                      ? 'bg-zinc-800 text-zinc-100'
-                      : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900',
-                  )}
-                >
-                  <SubIcon size={13} />
-                  {su.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
+          {/* Sub-navegação (só quando a seção tem mais de um painel) */}
+          {seg.subs.length > 1 && (
+            <div className="inline-flex gap-0.5 p-0.5 rounded-lg bg-zinc-900 border border-zinc-800 shrink-0">
+              {seg.subs.map((su) => {
+                const SubIcon = su.icon;
+                const active = su.id === sub.id;
+                return (
+                  <button
+                    key={su.id}
+                    type="button"
+                    onClick={() => setSubId(su.id)}
+                    className={clsx(
+                      'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] rounded-md transition-colors',
+                      active
+                        ? 'bg-zinc-800 text-zinc-100 font-medium'
+                        : 'text-zinc-500 hover:text-zinc-200',
+                    )}
+                  >
+                    <SubIcon size={12} />
+                    {su.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Conteúdo da seção ativa */}
-      <div className="flex-1 min-h-0 overflow-auto">{sub.render(goSeg)}</div>
+      <div key={`${segId}:${sub.id}`} className="flex-1 min-h-0 overflow-auto animate-fade-in-up">
+        {sub.render(goSeg)}
+      </div>
     </div>
   );
 }

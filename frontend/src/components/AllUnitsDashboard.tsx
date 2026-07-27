@@ -28,8 +28,6 @@ const PERIOD_OPTIONS = [
   { days: 30, label: '30 dias' },
   { days: 90, label: '90 dias' },
 ];
-const SKY =
-  'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=2000&q=70';
 const CHANNEL_PALETTE = ['#10b981', '#0ea5e9', '#8b5cf6', '#f59e0b', '#f43f5e', '#06b6d4'];
 
 // Opções do FILTRO de categoria ("Todas" + as categorias reais, sem a "Genérica").
@@ -79,33 +77,33 @@ export function AllUnitsDashboard({
   const rows = data?.units ?? [];
 
   return (
-    <div
-      className="dark flex-1 overflow-y-auto bg-cover bg-center bg-[#0a1628]"
-      style={{
-        backgroundImage: `linear-gradient(to bottom, rgba(8,8,12,0.78) 0%, rgba(8,8,12,0.92) 60%, rgba(8,8,12,0.96) 100%), url(${SKY})`,
-      }}
-    >
-      <div className="max-w-[1400px] mx-auto p-6 space-y-6">
-        {/* Header */}
-        <div className="flex flex-col items-center gap-4 pt-2">
-          <div className="text-center">
-            <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight drop-shadow-lg">
-              Todas as unidades
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-350 mx-auto p-6 space-y-6">
+        {/* Header da página — mesmo padrão do painel por agente. */}
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0">
+            <div className="eyebrow mb-1.5">Visão consolidada</div>
+            <h1 className="text-2xl font-semibold text-zinc-50 tracking-tight">
+              Todos os agentes
             </h1>
-            <p className="text-xs text-zinc-300/90 mt-1">
-              {rows.length || units.length} unidade{(rows.length || units.length) === 1 ? '' : 's'} · visão geral
+            <p className="text-[13px] text-zinc-500 mt-1">
+              {rows.length || units.length} agente
+              {(rows.length || units.length) === 1 ? '' : 's'} no período selecionado
             </p>
           </div>
-          <div className="flex items-center gap-2 flex-wrap justify-center">
-            <div className="flex items-center bg-black/30 rounded-full ring-1 ring-white/15 p-1 backdrop-blur">
+
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-0.5 p-0.5 rounded-lg border border-zinc-800 bg-zinc-900/60">
               {PERIOD_OPTIONS.map((opt) => (
                 <button
                   key={opt.days}
                   type="button"
                   onClick={() => setDays(opt.days)}
                   className={clsx(
-                    'text-xs px-4 py-1.5 rounded-full transition font-medium',
-                    days === opt.days ? 'bg-white text-zinc-900 shadow' : 'text-zinc-200 hover:text-white',
+                    'text-[12px] px-3 py-1.5 rounded-md transition-colors',
+                    days === opt.days
+                      ? 'bg-zinc-800 text-zinc-50 font-medium'
+                      : 'text-zinc-500 hover:text-zinc-200',
                   )}
                 >
                   {opt.label}
@@ -115,7 +113,7 @@ export function AllUnitsDashboard({
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="text-xs px-3 py-2 rounded-full bg-black/30 text-zinc-100 ring-1 ring-white/15 hover:bg-black/40 backdrop-blur focus:outline-none"
+              className="text-[12px] px-3 h-9 rounded-lg border border-zinc-800 bg-zinc-900/60 text-zinc-300 hover:border-zinc-700 focus:outline-none"
             >
               {CATEGORY_FILTERS.map((o) => (
                 <option key={o.value} value={o.value} className="bg-zinc-900">
