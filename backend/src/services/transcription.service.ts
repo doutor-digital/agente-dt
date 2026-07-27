@@ -17,6 +17,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
+import { env } from '../lib/env.js';
 import { resolveOpenAIApiKey } from './openai.service.js';
 
 const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
@@ -51,9 +52,13 @@ export async function transcribeAudio(
   audioUrl: string,
   language: string = 'pt',
 ): Promise<TranscriptionResult> {
-  // Chave EFETIVA, não a coluna da Unit: unidades que rodam na key da
-  // plataforma (env) têm `openaiApiKey` nulo e mesmo assim transcrevem.
-  const apiKey = resolveOpenAIApiKey(unit);
+  // Ordem de resolução da chave:
+  //   1. OPENAI_TRANSCRIPTION_API_KEY — chave dedicada ao áudio, quando existe.
+  //      Serve pra separar a fatura da transcrição da fatura do chat.
+  //   2. resolveOpenAIApiKey(unit) — chave da unidade, senão a da plataforma.
+  //      É a chave EFETIVA: unidades que rodam na key da plataforma têm
+  //      `openaiApiKey` nulo no banco e mesmo assim transcrevem.
+  const apiKey = env.OPENAI_TRANSCRIPTION_API_KEY || resolveOpenAIApiKey(unit);
   if (!apiKey) {
     throw new Error('Nenhuma chave OpenAI disponível — não dá pra transcrever');
   }

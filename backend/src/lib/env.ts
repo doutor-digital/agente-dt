@@ -46,6 +46,12 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().min(10),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 
+  // Chave DEDICADA à transcrição de áudio (opcional). Existe pra separar a
+  // fatura do áudio da fatura do chat — pode apontar pra outra conta/projeto
+  // da OpenAI. Vazia = transcrição usa a resolução normal (chave da unidade,
+  // senão OPENAI_API_KEY).
+  OPENAI_TRANSCRIPTION_API_KEY: z.string().min(10).optional(),
+
   // Aceita lista separada por vírgula pra suportar múltiplas origens
   // (ex: domínio do Vercel + domínio customizado). Strip trailing slash
   // de cada uma — CORS exige match byte-a-byte e o navegador nunca manda
