@@ -6,9 +6,10 @@
 // e o mesmo Kommo. Clicar num agente entra na configuração dele.
 //
 // A tela é a primeira coisa que o usuário vê logado, então carrega mais peso
-// visual que os painéis internos: malha neural animada ao fundo (a mesma do
-// login), ilustração no cabeçalho, cartões com entrada escalonada e o ícone da
-// categoria em cada agente.
+// visual que os painéis internos: correntes de espaço latente animadas ao
+// fundo, ilustração no cabeçalho, cartões com entrada escalonada e o ícone da
+// categoria em cada agente. O fundo é DIFERENTE do login de propósito — duas
+// telas seguidas com a mesma animação lêem como uma só.
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -31,7 +32,7 @@ import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import { api } from '../lib/api';
 import { normalize } from '../lib/nav';
-import { NeuralField } from './NeuralField';
+import { LatentField } from './LatentField';
 import { CATEGORY_OPTIONS } from './WizardPanel';
 import type { Unit } from '../types/api';
 
@@ -150,12 +151,12 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
     <div className="dark relative h-screen w-screen overflow-y-auto bg-zinc-950 text-zinc-100">
       {/* ── Ambiente ─────────────────────────────────────────────────────── */}
       <div className="fixed inset-x-0 top-0 h-140 pointer-events-none">
-        <NeuralField
-          className="absolute inset-0 w-full h-full opacity-60"
+        <LatentField
+          className="absolute inset-0 w-full h-full opacity-70"
           style={{
-            maskImage: 'radial-gradient(ellipse 80% 100% at 50% 0%, #000 10%, transparent 72%)',
+            maskImage: 'radial-gradient(ellipse 85% 100% at 50% 0%, #000 8%, transparent 76%)',
             WebkitMaskImage:
-              'radial-gradient(ellipse 80% 100% at 50% 0%, #000 10%, transparent 72%)',
+              'radial-gradient(ellipse 85% 100% at 50% 0%, #000 8%, transparent 76%)',
           }}
         />
         <div
