@@ -461,6 +461,24 @@
 }
 
 /* ===========================================================================
+ * AÇÕES — canvas de workflow (linguagem visual do n8n).
+ *
+ * Malha de pontos fina como plano de fundo das esteiras de nós. Os pontos são
+ * menores e mais próximos que os da `.grid-mesh` das telas de entrada: aqui
+ * eles funcionam como papel milimetrado atrás do diagrama, não como textura
+ * decorativa — precisam dar noção de grade sem competir com os nós.
+ * =========================================================================== */
+.wf-canvas {
+  background-color: color-mix(in oklab, var(--z-950) 60%, var(--z-900));
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in oklab, var(--z-100) 11%, transparent) 1px,
+    transparent 0
+  );
+  background-size: 18px 18px;
+}
+
+/* ===========================================================================
  * PLAYGROUND — linguagem visual do WhatsApp.
  *
  * Estas cores NÃO seguem o tema do console de propósito: o playground imita a

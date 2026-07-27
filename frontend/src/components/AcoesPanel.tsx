@@ -16,7 +16,7 @@
 // CONFIGURADAS". Sem mágica de matching — é o LLM que decide quando aplicar.
 // ============================================================================
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
@@ -420,9 +420,10 @@ export interface AcoesPanelProps {
   scope?: 'unit' | 'global';
 }
 
-// 5 versões de visualização pra avaliar (switcher no topo da página).
-type ActionView = 'fluxo' | 'se_entao' | 'tabela' | 'faixa' | 'lista';
+// 6 versões de visualização pra avaliar (switcher no topo da página).
+type ActionView = 'fluxo' | 'se_entao' | 'tabela' | 'faixa' | 'lista' | 'n8n';
 const ACTION_VIEWS: Array<{ id: ActionView; label: string }> = [
+  { id: 'n8n', label: 'V6 · Workflow' },
   { id: 'fluxo', label: 'V1 · Fluxo' },
   { id: 'se_entao', label: 'V2 · SE→ENTÃO' },
   { id: 'tabela', label: 'V3 · Tabela' },
@@ -440,9 +441,9 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
   // Visualização escolhida (5 versões pra avaliar). Persistida no navegador.
   const [view, setView] = useState<ActionView>(() => {
     try {
-      return (localStorage.getItem('acoes:view') as ActionView) || 'fluxo';
+      return (localStorage.getItem('acoes:view') as ActionView) || 'n8n';
     } catch {
-      return 'fluxo';
+      return 'n8n';
     }
   });
   const changeView = (v: ActionView) => {
@@ -891,6 +892,7 @@ function ActionsView({
   onDelete: ActHandler;
   onToggle: ActHandler;
 }) {
+  if (view === 'n8n') return <ActionsCanvas actions={actions} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />;
   if (view === 'tabela') return <ActionsTable actions={actions} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />;
   if (view === 'lista') return <ActionsAccordion actions={actions} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />;
   const minW = view === 'se_entao' ? 440 : 320;
@@ -903,6 +905,191 @@ function ActionsView({
         return <ActionCard key={a.id} {...props} />;
       })}
     </ul>
+  );
+}
+
+// ===========================================================================
+// V6 — WORKFLOW (linguagem visual do n8n)
+//
+// Cada regra vira uma esteira: nó de GATILHO (o "quando", canto esquerdo
+// arredondado como no n8n) → nós de AÇÃO ligados por conectores.
+//
+// Por que conector em CSS e não SVG: os nós ficam todos na mesma linha e
+// quebram juntos, então a ligação é sempre um segmento horizontal. Curva de
+// Bézier exigiria medir posição de cada nó no layout e recalcular no resize —
+// custo alto pra um traço que, aqui, é sempre reto.
+// ===========================================================================
+
+/** Resumo curto do passo, pra caber sob o nó. Vazio quando não há parâmetro. */
+function stepDetail(step: ActionStep): string | null {
+  const p = (step.params ?? {}) as Record<string, unknown>;
+  if (step.kind === 'add_tag' || step.kind === 'remove_tag') {
+    const tags = Array.isArray(p.tags) ? (p.tags as string[]) : [];
+    return tags.length ? tags.map((t) => `#${t}`).join(' ') : null;
+  }
+  if (step.kind === 'move_stage') {
+    return typeof p.statusLabel === 'string'
+      ? p.statusLabel
+      : typeof p.statusId === 'number'
+        ? `etapa #${p.statusId}`
+        : null;
+  }
+  if (step.kind === 'create_task' && typeof p.text === 'string') return p.text;
+  if (step.kind === 'send_message' && typeof p.text === 'string') return `"${p.text}"`;
+  if (step.kind === 'respond_with_intent' && typeof p.instruction === 'string') return p.instruction;
+  if (step.kind === 'summarize_to_note' && typeof p.focusHint === 'string') return p.focusHint;
+  return null;
+}
+
+function ActionsCanvas({
+  actions,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  actions: UnitAction[];
+  onEdit: ActHandler;
+  onDelete: ActHandler;
+  onToggle: ActHandler;
+}) {
+  return (
+    <div className="wf-canvas rounded-2xl border border-zinc-800 p-4 sm:p-6 space-y-4">
+      {actions.map((a, i) => (
+        <WorkflowRule
+          key={a.id}
+          action={a}
+          index={i}
+          onEdit={() => onEdit(a)}
+          onDelete={() => onDelete(a)}
+          onToggle={() => onToggle(a)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function WorkflowRule({
+  action,
+  index,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  action: UnitAction;
+  index: number;
+  onEdit: () => void;
+  onDelete: () => void;
+  onToggle: () => void;
+}) {
+  const steps = readSteps(action);
+  const off = !action.enabled;
+
+  return (
+    <section
+      className={clsx(
+        'group/wf relative rounded-xl border bg-zinc-950/55 backdrop-blur-[2px] transition-colors animate-fade-in-up',
+        off ? 'border-zinc-800/70 opacity-55' : 'border-zinc-800 hover:border-zinc-700',
+      )}
+      style={{ animationDelay: `${index * 50}ms` }}
+    >
+      {/* Barra do "workflow": nome, estado e controles */}
+      <header className="flex items-center gap-2.5 px-3.5 py-2 border-b border-zinc-800/80">
+        <span
+          className={clsx('w-1.5 h-1.5 rounded-full shrink-0', off ? 'bg-zinc-600' : 'bg-emerald-400')}
+        />
+        <span className="text-[12px] font-medium text-zinc-200 truncate">
+          {action.notes?.trim() || `Regra ${index + 1}`}
+        </span>
+        <span className="text-[11px] text-zinc-600 shrink-0">
+          {steps.length} {steps.length === 1 ? 'nó' : 'nós'}
+        </span>
+        <span className="flex-1" />
+        <span className="opacity-0 group-hover/wf:opacity-100 transition-opacity">
+          <RowControls action={action} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
+        </span>
+      </header>
+
+      {/* A esteira */}
+      <div className="overflow-x-auto">
+        <div className="flex items-start gap-0 px-4 py-5 min-w-max">
+          <TriggerNode text={action.conditionDescription} onClick={onEdit} />
+          {steps.map((s, i) => (
+            <Fragment key={i}>
+              <Connector />
+              <StepNode step={s} onClick={onEdit} />
+            </Fragment>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Conector entre dois nós — traço + ponta de seta. */
+function Connector() {
+  return (
+    <span aria-hidden className="flex items-center shrink-0 mt-8 w-9">
+      <span className="h-px flex-1 bg-zinc-700" />
+      <span className="w-0 h-0 border-y-[4px] border-y-transparent border-l-[6px] border-l-zinc-700" />
+    </span>
+  );
+}
+
+/** Nó de gatilho — canto esquerdo arredondado, como o trigger do n8n. */
+function TriggerNode({ text, onClick }: { text: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="shrink-0 w-40 text-left group/n">
+      <span
+        className="flex items-center justify-center h-16 w-16 border transition-colors"
+        style={{
+          borderRadius: '2rem 0.75rem 0.75rem 2rem',
+          background: 'color-mix(in oklab, #f43f5e 12%, transparent)',
+          borderColor: 'color-mix(in oklab, #f43f5e 35%, transparent)',
+        }}
+      >
+        <Zap size={22} className="text-rose-300" />
+      </span>
+      <span className="block mt-2 text-[11px] font-semibold text-zinc-300 uppercase tracking-wide">
+        Quando
+      </span>
+      <span
+        className="mt-0.5 text-[11px] text-zinc-500 leading-snug line-clamp-3 group-hover/n:text-zinc-400 transition-colors"
+        title={text}
+      >
+        {text}
+      </span>
+    </button>
+  );
+}
+
+/** Nó de ação — quadrado arredondado, ícone e cor vindos do KIND_LABEL. */
+function StepNode({ step, onClick }: { step: ActionStep; onClick: () => void }) {
+  const meta = KIND_LABEL[step.kind] ?? KIND_LABEL.add_tag;
+  const Icon = meta.icon;
+  const detail = stepDetail(step);
+  return (
+    <button type="button" onClick={onClick} className="shrink-0 w-40 text-left group/n">
+      <span
+        className={clsx(
+          'flex items-center justify-center h-16 w-16 rounded-xl border border-zinc-700 bg-zinc-900',
+          'transition-colors group-hover/n:border-zinc-600 group-hover/n:bg-zinc-800',
+          meta.color,
+        )}
+      >
+        <Icon size={22} />
+      </span>
+      <span className="mt-2 text-[11px] font-medium text-zinc-300 leading-snug line-clamp-2">
+        {meta.label}
+      </span>
+      {detail && (
+        <span
+          className="mt-0.5 text-[11px] text-zinc-500 leading-snug line-clamp-2 font-mono"
+          title={detail}
+        >
+          {detail}
+        </span>
+      )}
+    </button>
   );
 }
 
