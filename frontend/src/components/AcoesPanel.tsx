@@ -19,10 +19,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  ArrowDown,
   CalendarClock,
   CheckCircle2,
-  ChevronDown,
   CircleDollarSign,
   Compass,
   FileText,
@@ -420,16 +418,6 @@ export interface AcoesPanelProps {
   scope?: 'unit' | 'global';
 }
 
-// 6 versões de visualização pra avaliar (switcher no topo da página).
-type ActionView = 'fluxo' | 'se_entao' | 'tabela' | 'faixa' | 'lista' | 'n8n';
-const ACTION_VIEWS: Array<{ id: ActionView; label: string }> = [
-  { id: 'n8n', label: 'V6 · Workflow' },
-  { id: 'fluxo', label: 'V1 · Fluxo' },
-  { id: 'se_entao', label: 'V2 · SE→ENTÃO' },
-  { id: 'tabela', label: 'V3 · Tabela' },
-  { id: 'faixa', label: 'V4 · Faixa' },
-  { id: 'lista', label: 'V5 · Lista' },
-];
 
 export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
   const { selectedUnitId } = useUnit();
@@ -438,22 +426,6 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<UnitAction | null>(null);
   const [creating, setCreating] = useState(false);
-  // Visualização escolhida (5 versões pra avaliar). Persistida no navegador.
-  const [view, setView] = useState<ActionView>(() => {
-    try {
-      return (localStorage.getItem('acoes:view') as ActionView) || 'n8n';
-    } catch {
-      return 'n8n';
-    }
-  });
-  const changeView = (v: ActionView) => {
-    setView(v);
-    try {
-      localStorage.setItem('acoes:view', v);
-    } catch {
-      /* ignore */
-    }
-  };
 
   const isGlobal = scope === 'global';
 
@@ -608,25 +580,6 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
           </div>
         </div>
 
-        {/* Switcher de visualização — 5 versões pra você escolher */}
-        {!loading && actions.length > 0 && (
-          <div className="flex items-center gap-1 bg-zinc-900/40 ring-1 ring-white/10 rounded-full p-1 w-fit backdrop-blur overflow-x-auto">
-            {ACTION_VIEWS.map((v) => (
-              <button
-                key={v.id}
-                type="button"
-                onClick={() => changeView(v.id)}
-                className={clsx(
-                  'text-xs px-3 py-1.5 rounded-full font-medium transition whitespace-nowrap',
-                  view === v.id ? 'bg-brand-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-100',
-                )}
-              >
-                {v.label}
-              </button>
-            ))}
-          </div>
-        )}
-
         {loading ? (
           <div className="flex items-center justify-center py-12 text-zinc-500">
             <Loader2 className="animate-spin mr-2" size={16} />
@@ -658,8 +611,7 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
             </button>
           </div>
         ) : (
-          <ActionsView
-            view={view}
+          <ActionsCanvas
             actions={actions}
             onEdit={(a) => {
               setEditing(a);
@@ -691,162 +643,6 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
 // Card de uma ação na lista.
 // ---------------------------------------------------------------------------
 
-function ActionCard({
-  action,
-  index = 0,
-  onEdit,
-  onDelete,
-  onToggle,
-}: {
-  action: UnitAction;
-  index?: number;
-  onEdit: () => void;
-  onDelete: () => void;
-  onToggle: () => void;
-}) {
-  const steps = readSteps(action);
-  return (
-    <li
-      style={{ animationDelay: `${Math.min(index, 14) * 45}ms` }}
-      className={clsx(
-        // flex-col + h-full ocupa a célula inteira do grid (com auto-rows-fr);
-        // footer colado no fim via mt-auto. Vidro + hover que levanta.
-        'animate-fade-in-up group flex flex-col h-full rounded-2xl ring-1 backdrop-blur transition-all duration-300 hover:-translate-y-1',
-        action.enabled
-          ? 'ring-white/10 bg-zinc-900/50 hover:ring-brand-400/50 hover:shadow-xl hover:shadow-brand-500/5'
-          : 'ring-white/5 bg-zinc-900/20 opacity-55 hover:opacity-90',
-      )}
-    >
-      {/* Header: status + contagem */}
-      <div className="px-5 pt-4 pb-1 flex items-center justify-between gap-2">
-        <span
-          className={clsx(
-            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-semibold',
-            action.enabled
-              ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30'
-              : 'bg-zinc-800/50 text-zinc-500 ring-1 ring-zinc-700/50',
-          )}
-        >
-          <span className={clsx('w-1.5 h-1.5 rounded-full', action.enabled ? 'bg-emerald-400' : 'bg-zinc-600')} />
-          {action.enabled ? 'Ativa' : 'Inativa'}
-        </span>
-        <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-600">
-          {steps.length} {steps.length === 1 ? 'ação' : 'ações'}
-        </span>
-      </div>
-
-      {/* Corpo — cresce e empurra o footer pro fim */}
-      <div className="px-5 pb-3 flex-1 min-w-0">
-        {/* QUANDO */}
-        <div className="flex items-center gap-2 mb-1.5">
-          <span className="text-[10px] uppercase tracking-wider font-bold text-amber-300/90">Quando</span>
-          <span className="h-px flex-1 bg-gradient-to-r from-amber-400/30 to-transparent" />
-        </div>
-        <p className="text-sm text-zinc-200 leading-relaxed line-clamp-3" title={action.conditionDescription}>
-          {action.conditionDescription}
-        </p>
-
-        {/* Conector visual Quando → Faça */}
-        <div className="flex items-center gap-2 my-3 text-brand-300/70">
-          <ArrowDown size={14} className="shrink-0" />
-          <span className="h-px flex-1 bg-white/5" />
-        </div>
-
-        {/* A IA FAZ */}
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-[10px] uppercase tracking-wider font-bold text-brand-300">A IA faz</span>
-          <span className="h-px flex-1 bg-gradient-to-r from-brand-400/30 to-transparent" />
-        </div>
-        <ul className="space-y-1.5">
-          {steps.map((step, i) => (
-            <li key={i} className="rounded-lg bg-white/[0.03] ring-1 ring-white/5 px-2.5 py-1.5">
-              <StepSummary step={step} />
-            </li>
-          ))}
-        </ul>
-
-        {action.notes && (
-          <p className="mt-3 text-xs text-zinc-500 leading-relaxed italic line-clamp-2" title={action.notes}>
-            {action.notes}
-          </p>
-        )}
-      </div>
-
-      {/* Footer com botões — `mt-auto` cola no fim quando o card tá curto */}
-      <div className="mt-auto px-3 py-2 border-t border-white/5 flex items-center justify-end gap-1">
-        <button
-          type="button"
-          onClick={onToggle}
-          title={action.enabled ? 'Desativar' : 'Ativar'}
-          className={clsx(
-            'p-1.5 rounded hover:bg-zinc-800',
-            action.enabled ? 'text-emerald-400' : 'text-zinc-600',
-          )}
-        >
-          <CheckCircle2 size={15} />
-        </button>
-        <button
-          type="button"
-          onClick={onEdit}
-          title="Editar"
-          className="p-1.5 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
-        >
-          <Pencil size={14} />
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          title="Excluir"
-          className="p-1.5 rounded text-zinc-400 hover:text-rose-300 hover:bg-rose-500/10"
-        >
-          <Trash2 size={14} />
-        </button>
-      </div>
-    </li>
-  );
-}
-
-// ===========================================================================
-// As 5 VISUALIZAÇÕES. ActionsView despacha pra variante escolhida no switcher.
-// V1 Fluxo = ActionCard (acima). V2 Split, V3 Tabela, V4 Faixa, V5 Lista abaixo.
-// ===========================================================================
-
-type ActHandler = (a: UnitAction) => void;
-
-/** Cor da faixa (V4) pelo tipo do 1º passo da ação. */
-const KIND_BAND: Record<string, string> = {
-  add_tag: 'bg-amber-500',
-  remove_tag: 'bg-stone-500',
-  move_stage: 'bg-sky-500',
-  move_pipeline: 'bg-indigo-500',
-  pause_ai: 'bg-rose-500',
-  transfer_with_permission: 'bg-rose-500',
-  transfer_without_permission: 'bg-rose-500',
-  pause_in_stages: 'bg-rose-500',
-  summarize_to_note: 'bg-violet-500',
-  send_message: 'bg-cyan-500',
-  respond_with_intent: 'bg-sky-500',
-  create_task: 'bg-orange-500',
-  assign_responsible: 'bg-teal-500',
-  set_lead_value: 'bg-lime-500',
-  mark_lead_status: 'bg-emerald-500',
-};
-
-function StatusPill({ enabled }: { enabled: boolean }) {
-  return (
-    <span
-      className={clsx(
-        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] uppercase tracking-wider font-semibold',
-        enabled
-          ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30'
-          : 'bg-zinc-800/50 text-zinc-500 ring-1 ring-zinc-700/50',
-      )}
-    >
-      <span className={clsx('w-1.5 h-1.5 rounded-full', enabled ? 'bg-emerald-400' : 'bg-zinc-600')} />
-      {enabled ? 'Ativa' : 'Inativa'}
-    </span>
-  );
-}
 
 function RowControls({
   action,
@@ -879,37 +675,10 @@ function RowControls({
   );
 }
 
-function ActionsView({
-  view,
-  actions,
-  onEdit,
-  onDelete,
-  onToggle,
-}: {
-  view: ActionView;
-  actions: UnitAction[];
-  onEdit: ActHandler;
-  onDelete: ActHandler;
-  onToggle: ActHandler;
-}) {
-  if (view === 'n8n') return <ActionsCanvas actions={actions} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />;
-  if (view === 'tabela') return <ActionsTable actions={actions} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />;
-  if (view === 'lista') return <ActionsAccordion actions={actions} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />;
-  const minW = view === 'se_entao' ? 440 : 320;
-  return (
-    <ul className="grid gap-4 auto-rows-fr" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(${minW}px, 100%), 1fr))` }}>
-      {actions.map((a, i) => {
-        const props = { action: a, index: i, onEdit: () => onEdit(a), onDelete: () => onDelete(a), onToggle: () => onToggle(a) };
-        if (view === 'se_entao') return <ActionCardSplit key={a.id} {...props} />;
-        if (view === 'faixa') return <ActionCardBanded key={a.id} {...props} />;
-        return <ActionCard key={a.id} {...props} />;
-      })}
-    </ul>
-  );
-}
+type ActHandler = (a: UnitAction) => void;
 
 // ===========================================================================
-// V6 — WORKFLOW (linguagem visual do n8n)
+// AÇÕES — WORKFLOW (linguagem visual do n8n)
 //
 // Cada regra vira uma esteira: nó de GATILHO (o "quando", canto esquerdo
 // arredondado como no n8n) → nós de AÇÃO ligados por conectores.
@@ -1093,235 +862,7 @@ function StepNode({ step, onClick }: { step: ActionStep; onClick: () => void }) 
   );
 }
 
-// V2 — SE / ENTÃO lado a lado (estilo automação)
-function ActionCardSplit({
-  action,
-  index = 0,
-  onEdit,
-  onDelete,
-  onToggle,
-}: {
-  action: UnitAction;
-  index?: number;
-  onEdit: () => void;
-  onDelete: () => void;
-  onToggle: () => void;
-}) {
-  const steps = readSteps(action);
-  return (
-    <li
-      style={{ animationDelay: `${Math.min(index, 14) * 45}ms` }}
-      className={clsx(
-        'animate-fade-in-up group flex flex-col h-full rounded-2xl ring-1 backdrop-blur transition-all duration-300 hover:-translate-y-1',
-        action.enabled ? 'ring-white/10 bg-zinc-900/50 hover:ring-brand-400/50' : 'ring-white/5 bg-zinc-900/20 opacity-55 hover:opacity-90',
-      )}
-    >
-      <div className="px-5 pt-4 flex items-center justify-between gap-2">
-        <StatusPill enabled={action.enabled} />
-        <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-600">
-          {steps.length} {steps.length === 1 ? 'ação' : 'ações'}
-        </span>
-      </div>
-      <div className="px-4 py-3 flex-1 grid grid-cols-[1fr_auto_1fr] gap-2 items-stretch">
-        <div className="rounded-xl bg-amber-500/[0.06] ring-1 ring-amber-500/15 p-3">
-          <div className="text-[10px] uppercase tracking-wider font-bold text-amber-300/90 mb-1">SE</div>
-          <p className="text-sm text-zinc-200 leading-snug line-clamp-5" title={action.conditionDescription}>
-            {action.conditionDescription}
-          </p>
-        </div>
-        <div className="flex items-center text-brand-300/60 text-xl font-light">→</div>
-        <div className="rounded-xl bg-brand-500/[0.06] ring-1 ring-brand-500/15 p-3">
-          <div className="text-[10px] uppercase tracking-wider font-bold text-brand-300 mb-1.5">ENTÃO</div>
-          <ul className="space-y-1.5">
-            {steps.map((step, i) => (
-              <li key={i}>
-                <StepSummary step={step} />
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-      <div className="mt-auto px-3 py-2 border-t border-white/5">
-        <RowControls action={action} onEdit={() => onEdit()} onDelete={() => onDelete()} onToggle={() => onToggle()} />
-      </div>
-    </li>
-  );
-}
-
-// V4 — Cartão com faixa de cor por tipo
-function ActionCardBanded({
-  action,
-  index = 0,
-  onEdit,
-  onDelete,
-  onToggle,
-}: {
-  action: UnitAction;
-  index?: number;
-  onEdit: () => void;
-  onDelete: () => void;
-  onToggle: () => void;
-}) {
-  const steps = readSteps(action);
-  const band = KIND_BAND[steps[0]?.kind ?? ''] ?? 'bg-brand-500';
-  return (
-    <li
-      style={{ animationDelay: `${Math.min(index, 14) * 45}ms` }}
-      className={clsx(
-        'animate-fade-in-up group flex flex-col h-full rounded-2xl ring-1 ring-white/10 bg-zinc-900/50 backdrop-blur overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:ring-brand-400/50 hover:shadow-xl hover:shadow-brand-500/5',
-        !action.enabled && 'opacity-55 hover:opacity-90',
-      )}
-    >
-      <div className={clsx('h-1.5 w-full', band)} />
-      <div className="px-5 pt-3 pb-1 flex items-center justify-between gap-2">
-        <StatusPill enabled={action.enabled} />
-        <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-600">
-          {steps.length} {steps.length === 1 ? 'ação' : 'ações'}
-        </span>
-      </div>
-      <div className="px-5 pb-3 flex-1 min-w-0">
-        <p className="text-sm text-zinc-200 leading-relaxed line-clamp-3" title={action.conditionDescription}>
-          {action.conditionDescription}
-        </p>
-        <ul className="mt-3 space-y-1.5">
-          {steps.map((step, i) => (
-            <li key={i} className="rounded-lg bg-white/[0.03] ring-1 ring-white/5 px-2.5 py-1.5">
-              <StepSummary step={step} />
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div className="mt-auto px-3 py-2 border-t border-white/5">
-        <RowControls action={action} onEdit={() => onEdit()} onDelete={() => onDelete()} onToggle={() => onToggle()} />
-      </div>
-    </li>
-  );
-}
-
-// V3 — Tabela enterprise
-function ActionsTable({
-  actions,
-  onEdit,
-  onDelete,
-  onToggle,
-}: {
-  actions: UnitAction[];
-  onEdit: ActHandler;
-  onDelete: ActHandler;
-  onToggle: ActHandler;
-}) {
-  return (
-    <div className="animate-fade-in-up rounded-2xl ring-1 ring-white/10 bg-zinc-900/50 backdrop-blur overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-[10px] uppercase tracking-wider text-zinc-500 border-b border-white/10">
-            <th className="text-left font-semibold px-4 py-3 w-28">Status</th>
-            <th className="text-left font-semibold px-4 py-3">Quando</th>
-            <th className="text-left font-semibold px-4 py-3">A IA faz</th>
-            <th className="px-4 py-3 w-28" />
-          </tr>
-        </thead>
-        <tbody>
-          {actions.map((a) => {
-            const steps = readSteps(a);
-            return (
-              <tr key={a.id} className={clsx('border-b border-white/5 hover:bg-white/[0.03] transition', !a.enabled && 'opacity-50')}>
-                <td className="px-4 py-3 align-top">
-                  <StatusPill enabled={a.enabled} />
-                </td>
-                <td className="px-4 py-3 align-top text-zinc-200 max-w-xs">
-                  <span className="line-clamp-2" title={a.conditionDescription}>{a.conditionDescription}</span>
-                </td>
-                <td className="px-4 py-3 align-top">
-                  <div className="space-y-1">
-                    {steps.map((step, i) => (
-                      <StepSummary key={i} step={step} />
-                    ))}
-                  </div>
-                </td>
-                <td className="px-4 py-3 align-top">
-                  <RowControls action={a} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 // V5 — Lista accordion minimalista
-function ActionsAccordion({
-  actions,
-  onEdit,
-  onDelete,
-  onToggle,
-}: {
-  actions: UnitAction[];
-  onEdit: ActHandler;
-  onDelete: ActHandler;
-  onToggle: ActHandler;
-}) {
-  return (
-    <div className="animate-fade-in-up rounded-2xl ring-1 ring-white/10 bg-zinc-900/40 backdrop-blur divide-y divide-white/5 overflow-hidden">
-      {actions.map((a) => (
-        <AccordionRow key={a.id} action={a} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
-      ))}
-    </div>
-  );
-}
-
-function AccordionRow({
-  action,
-  onEdit,
-  onDelete,
-  onToggle,
-}: {
-  action: UnitAction;
-  onEdit: ActHandler;
-  onDelete: ActHandler;
-  onToggle: ActHandler;
-}) {
-  const [open, setOpen] = useState(false);
-  const steps = readSteps(action);
-  return (
-    <div className={clsx(!action.enabled && 'opacity-55')}>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03] text-left transition"
-      >
-        <span className={clsx('w-2 h-2 rounded-full shrink-0', action.enabled ? 'bg-emerald-400' : 'bg-zinc-600')} />
-        <span className="flex-1 text-sm text-zinc-200 truncate" title={action.conditionDescription}>
-          {action.conditionDescription}
-        </span>
-        <span className="text-[11px] text-zinc-500 shrink-0">
-          {steps.length} {steps.length === 1 ? 'ação' : 'ações'}
-        </span>
-        <ChevronDown size={15} className={clsx('text-zinc-500 transition-transform shrink-0', open && 'rotate-180')} />
-      </button>
-      {open && (
-        <div className="px-4 pb-3 pl-9 space-y-2">
-          <ul className="space-y-1.5">
-            {steps.map((step, i) => (
-              <li key={i} className="rounded-lg bg-white/[0.03] ring-1 ring-white/5 px-2.5 py-1.5">
-                <StepSummary step={step} />
-              </li>
-            ))}
-          </ul>
-          {action.notes && <p className="text-xs text-zinc-500 italic leading-relaxed">{action.notes}</p>}
-          <RowControls action={action} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Editor (modal-ish) — usado tanto pra criar quanto pra editar.
-// ---------------------------------------------------------------------------
-
 function ActionEditor({
   initial,
   isEditing,
@@ -2612,125 +2153,5 @@ function PipelinePicker({
   );
 }
 
-// ---------------------------------------------------------------------------
-// StepSummary — linha visual de UMA ação dentro de uma regra. Usada tanto
-// no card da lista quanto no editor.
-// ---------------------------------------------------------------------------
-
-function StepSummary({ step }: { step: ActionStep }) {
-  const meta = KIND_LABEL[step.kind] ?? KIND_LABEL.add_tag;
-  const Icon = meta.icon;
-  const params = (step.params ?? {}) as Record<string, unknown>;
-  const tags = Array.isArray(params.tags) ? (params.tags as string[]) : [];
-  const stageStatusId = typeof params.statusId === 'number' ? params.statusId : null;
-  const stageLabel = typeof params.statusLabel === 'string' ? params.statusLabel : null;
-  const focusHint = typeof params.focusHint === 'string' ? params.focusHint : null;
-  return (
-    <div className={clsx('text-sm flex flex-wrap items-center gap-1.5', meta.color)}>
-      <Icon size={14} className="shrink-0" />
-      <span className="font-medium">{meta.label}</span>
-      {step.kind === 'add_tag' &&
-        tags.map((t) => (
-          <span
-            key={t}
-            className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-200 text-[11px] ring-1 ring-amber-500/30 font-mono"
-          >
-            #{t}
-          </span>
-        ))}
-      {step.kind === 'move_stage' && stageStatusId && (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-200 text-[11px] ring-1 ring-sky-500/30">
-          → {stageLabel ?? `etapa #${stageStatusId}`}
-        </span>
-      )}
-      {step.kind === 'summarize_to_note' && focusHint && (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-200 text-[11px] ring-1 ring-violet-500/30 italic">
-          foco: {focusHint}
-        </span>
-      )}
-      {step.kind === 'send_message' && typeof params.text === 'string' && params.text.trim() && (
-        <span
-          className="inline-flex items-center px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-100 text-[11px] ring-1 ring-cyan-500/30 italic max-w-full"
-          title={params.text}
-        >
-          <span className="truncate">"{params.text.slice(0, 60)}{params.text.length > 60 ? '…' : ''}"</span>
-        </span>
-      )}
-      {step.kind === 'respond_with_intent' && typeof params.instruction === 'string' && params.instruction.trim() && (
-        <span
-          className="inline-flex items-center px-2 py-0.5 rounded bg-sky-500/15 text-sky-100 text-[11px] ring-1 ring-sky-500/30 max-w-full"
-          title={params.instruction}
-        >
-          <span className="truncate">→ {params.instruction.slice(0, 70)}{params.instruction.length > 70 ? '…' : ''}</span>
-        </span>
-      )}
-      {step.kind === 'create_task' && typeof params.text === 'string' && (
-        <>
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-200 text-[11px] ring-1 ring-orange-500/30 italic max-w-full" title={params.text}>
-            <span className="truncate">"{params.text.slice(0, 50)}{params.text.length > 50 ? '…' : ''}"</span>
-          </span>
-          {typeof params.deadlineMinutes === 'number' && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-300 text-[11px] ring-1 ring-orange-500/20 font-mono">
-              {humanDeadline(params.deadlineMinutes)}
-            </span>
-          )}
-          {typeof params.responsibleUserName === 'string' && params.responsibleUserName && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-zinc-700/50 text-zinc-300 text-[11px] ring-1 ring-zinc-600/40">
-              @{params.responsibleUserName}
-            </span>
-          )}
-        </>
-      )}
-      {step.kind === 'assign_responsible' && typeof params.userName === 'string' && params.userName && (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-200 text-[11px] ring-1 ring-teal-500/30">
-          → {params.userName}
-        </span>
-      )}
-      {step.kind === 'remove_tag' && typeof params.tag === 'string' && params.tag && (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-stone-500/15 text-stone-200 text-[11px] ring-1 ring-stone-500/30 font-mono line-through">
-          #{params.tag}
-        </span>
-      )}
-      {step.kind === 'set_lead_value' && typeof params.price === 'number' && (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-lime-500/15 text-lime-200 text-[11px] ring-1 ring-lime-500/30 font-mono">
-          R$ {params.price.toLocaleString('pt-BR')}
-        </span>
-      )}
-      {step.kind === 'mark_lead_status' && (
-        <span
-          className={clsx(
-            'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] ring-1',
-            params.status === 'won'
-              ? 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30'
-              : 'bg-rose-500/15 text-rose-200 ring-rose-500/30',
-          )}
-        >
-          {params.status === 'won' ? '✓ Realizada' : '✗ Perdida'}
-          {params.status === 'lost' && typeof params.lossReasonLabel === 'string' && params.lossReasonLabel
-            ? ` (${params.lossReasonLabel})`
-            : ''}
-        </span>
-      )}
-      {step.kind === 'move_pipeline' && typeof params.pipelineLabel === 'string' && params.pipelineLabel && (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-200 text-[11px] ring-1 ring-indigo-500/30">
-          → {params.pipelineLabel}
-          {typeof params.statusLabel === 'string' && params.statusLabel ? ` (${params.statusLabel})` : ''}
-        </span>
-      )}
-      {step.kind === 'pause_ai' && typeof params.moveToStageLabel === 'string' && params.moveToStageLabel && (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-200 text-[11px] ring-1 ring-rose-500/30">
-          → {params.moveToStageLabel}
-        </span>
-      )}
-    </div>
-  );
-}
 
 /** Formatador humano de minutos pra rótulo curto (chip do card). */
-function humanDeadline(m: number): string {
-  if (m < 60) return `${m}min`;
-  if (m < 1440) return `${Math.floor(m / 60)}h`;
-  const d = Math.floor(m / 1440);
-  if (d < 7) return `${d}d`;
-  return `${Math.floor(d / 7)}sem`;
-}
