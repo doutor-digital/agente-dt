@@ -25,12 +25,9 @@ import {
   Building2,
   Cable,
   Cpu,
-  Database,
   Eraser,
   FileBarChart,
-  FileText,
   Globe,
-  GraduationCap,
   LayoutDashboard,
   LayoutGrid,
   Loader2,
@@ -39,12 +36,9 @@ import {
   Settings,
   Sparkles,
   Terminal,
-  TestTube2,
   Truck,
   UserCog,
   Wand2,
-  Wrench,
-  Zap,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { UnitSelector } from './UnitSelector';
