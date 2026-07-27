@@ -14,6 +14,7 @@
 import { useState, type FormEvent, type CSSProperties } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { LoginArt } from './LoginArt';
 
 const GREEN = '#2EE68E';
 const GREEN_DEEP = '#0f2b1e';
@@ -73,13 +74,7 @@ export function Login() {
             Faça login
             <br />E entre para o nosso time
           </h1>
-          <img
-            src="/logo-dd.png"
-            alt="Doutor Digital"
-            className="w-40 md:w-56 h-auto select-none"
-            style={{ filter: 'drop-shadow(0 8px 40px rgba(46,230,142,0.15))' }}
-            draggable={false}
-          />
+          <LoginArt className="w-full max-w-md h-auto select-none" />
         </div>
 
         {/* ── Card de LOGIN ─────────────────────────────────────────────── */}
