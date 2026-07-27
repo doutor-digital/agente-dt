@@ -16,6 +16,7 @@
 import { useState, type FormEvent } from 'react';
 import { ArrowRight, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { NeuralNet } from './NeuralNet';
 
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_credentials: 'Usuário ou senha incorretos.',
@@ -67,6 +68,22 @@ export function Login() {
           style={{
             background:
               'radial-gradient(70% 60% at 20% 10%, color-mix(in oklab, var(--b-500) 16%, transparent), transparent 70%)',
+          }}
+        />
+
+        {/* Grafo neural como PANO DE FUNDO da coluna, não como figura ao lado
+            do texto: a 1440 essa coluna tem ~754px e o texto (max-w-lg) come
+            512 deles — não sobra vão pra uma figura respirar ao lado.
+            A máscara está centrada em 78% (e não no meio) de propósito: puxa o
+            peso do desenho pro terço direito, onde não há texto. Centrada, um
+            dos nós acesos caía em cima do parágrafo. Fica atrás de tudo e não
+            intercepta clique. */}
+        <NeuralNet
+          className="absolute inset-0 m-auto h-auto w-216 max-w-none opacity-70 pointer-events-none select-none"
+          style={{
+            maskImage: 'radial-gradient(ellipse 60% 68% at 78% 50%, #000 18%, transparent 74%)',
+            WebkitMaskImage:
+              'radial-gradient(ellipse 60% 68% at 78% 50%, #000 18%, transparent 74%)',
           }}
         />
 

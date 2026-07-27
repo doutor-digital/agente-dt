@@ -388,6 +388,41 @@
   animation: sheen 2.2s linear infinite;
 }
 
+/* Ilustração da rede neural (NeuralNet.tsx) — pulso percorrendo a aresta e
+ * halo respirando nos nós ativos. `pathLength=240` nas linhas normaliza o
+ * comprimento, então o mesmo dasharray vale pra aresta curta e longa. */
+@keyframes neuralPulse {
+  0%   { stroke-dashoffset: 240; opacity: 0; }
+  12%  { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+.neural-pulse {
+  stroke-dasharray: 34 206;
+  animation: neuralPulse 3.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes neuralHalo {
+  0%, 100% { opacity: 0.08; transform: scale(0.82); }
+  50%      { opacity: 0.22; transform: scale(1.12); }
+}
+.neural-halo {
+  transform-box: fill-box;      /* escala a partir do próprio nó, não da origem */
+  transform-origin: center;
+  animation: neuralHalo 4s ease-in-out infinite;
+}
+
+/* Movimento é decoração aqui — quem pediu menos movimento fica com o desenho
+   estático, sem perder informação nenhuma. */
+@media (prefers-reduced-motion: reduce) {
+  .neural-pulse,
+  .neural-halo,
+  .animate-sheen {
+    animation: none;
+  }
+  .neural-pulse { stroke-dasharray: none; opacity: 0.5; }
+}
+
 .caret::after {
   content: "▍";
   margin-left: 2px;
