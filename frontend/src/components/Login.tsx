@@ -16,7 +16,7 @@
 import { useState, type FormEvent } from 'react';
 import { ArrowRight, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { NeuralNet } from './NeuralNet';
+import { NeuralField } from './NeuralField';
 
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_credentials: 'Usuário ou senha incorretos.',
@@ -71,19 +71,19 @@ export function Login() {
           }}
         />
 
-        {/* Grafo neural como PANO DE FUNDO da coluna, não como figura ao lado
-            do texto: a 1440 essa coluna tem ~754px e o texto (max-w-lg) come
-            512 deles — não sobra vão pra uma figura respirar ao lado.
-            A máscara está centrada em 78% (e não no meio) de propósito: puxa o
-            peso do desenho pro terço direito, onde não há texto. Centrada, um
-            dos nós acesos caía em cima do parágrafo. Fica atrás de tudo e não
-            intercepta clique. */}
-        <NeuralNet
-          className="absolute inset-0 m-auto h-auto w-216 max-w-none opacity-70 pointer-events-none select-none"
+        {/* Malha neural animada como PANO DE FUNDO da coluna, não como figura
+            ao lado do texto: a 1440 essa coluna tem ~754px e o texto
+            (max-w-lg) come 512 deles — não sobra vão pra uma figura respirar
+            ao lado. A máscara está centrada em 72% (e não no meio) de
+            propósito: puxa o peso da malha pro terço direito, onde não há
+            texto. Fica atrás de tudo e não intercepta clique. */}
+        <NeuralField
+          className="absolute inset-0 w-full h-full opacity-90 pointer-events-none select-none"
           style={{
-            maskImage: 'radial-gradient(ellipse 60% 68% at 78% 50%, #000 18%, transparent 74%)',
+            maskImage:
+              'radial-gradient(ellipse 66% 72% at 72% 50%, #000 16%, transparent 76%)',
             WebkitMaskImage:
-              'radial-gradient(ellipse 60% 68% at 78% 50%, #000 18%, transparent 74%)',
+              'radial-gradient(ellipse 66% 72% at 72% 50%, #000 16%, transparent 76%)',
           }}
         />
 

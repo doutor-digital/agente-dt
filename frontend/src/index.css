@@ -421,6 +421,17 @@
     animation: none;
   }
   .neural-pulse { stroke-dasharray: none; opacity: 0.5; }
+
+  /* CRÍTICO, não cosmético: `fadeInUp` usa fill-mode `backwards`, ou seja o
+     elemento fica em opacity:0 durante o animation-delay. Cancelar só a
+     animação sem restaurar a opacidade deixaria todo conteúdo escalonado
+     (os cartões do hub) INVISÍVEL pra quem pediu menos movimento. */
+  .animate-fade-in-up,
+  .animate-pop-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .caret::after {
