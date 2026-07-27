@@ -918,15 +918,13 @@ export function buildTools({
 // Tool dinâmica de captura — schema depende do tipo do field.
 // ---------------------------------------------------------------------------
 
-function buildLeadFieldRuleTool({
-  rule,
-  kommo,
-  recorder,
-}: {
-  rule: LeadFieldRule;
-  kommo: KommoClient;
-  recorder: TraceRecorder;
-}) {
+/**
+ * Schema da tool de captura. EXPORTADA porque o Playground monta versões
+ * "falsas" das mesmas tools (que registram a chamada em vez de gravar no
+ * Kommo) — se cada lado montasse o próprio schema, um tipo de campo novo
+ * passaria a funcionar em produção e continuar quebrado no sandbox.
+ */
+export function leadFieldRuleSchema(rule: LeadFieldRule) {
   const fieldType = rule.kommoFieldType as KommoFieldType;
   const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
   const enumValues = enums.map((e) => e.value);
@@ -970,7 +968,12 @@ function buildLeadFieldRuleTool({
       .describe(rule.valueHint ?? `Valor pra "${rule.kommoFieldName}".`);
   }
 
-  const schema = z.object(baseSchema);
+  return z.object(baseSchema);
+}
+
+/** Description da tool de captura — mesma razão de ser exportada que o schema. */
+export function leadFieldRuleDescription(rule: LeadFieldRule): string {
+  const fieldType = rule.kommoFieldType as KommoFieldType;
   const examplesBlock =
     rule.examples.length > 0
       ? ` Exemplos de quando chamar: ${rule.examples.slice(0, 5).map((e) => `"${e}"`).join('; ')}.`
@@ -982,13 +985,27 @@ function buildLeadFieldRuleTool({
   const titleHint = rule.updatesLeadTitle
     ? ' TAMBÉM atualiza o título do card no Kommo com este valor (formato "<Valor> DD/MM/YYYY").'
     : '';
-  const description =
-    `${rule.instruction.trim()} Salva no campo "${rule.kommoFieldName}" do lead no Kommo (tipo ${fieldType}).${titleHint}${examplesBlock} Chame em silêncio — não comente a captura na resposta ao paciente.`;
+  return `${rule.instruction.trim()} Salva no campo "${rule.kommoFieldName}" do lead no Kommo (tipo ${fieldType}).${titleHint}${examplesBlock} Chame em silêncio — não comente a captura na resposta ao paciente.`;
+}
+
+function buildLeadFieldRuleTool({
+  rule,
+  kommo,
+  recorder,
+}: {
+  rule: LeadFieldRule;
+  kommo: KommoClient;
+  recorder: TraceRecorder;
+}) {
+  const fieldType = rule.kommoFieldType as KommoFieldType;
+  // Precisa dos enums crus (id + value) pra converter o rótulo escolhido pelo
+  // modelo no enum_id que o Kommo espera.
+  const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
 
   return new DynamicStructuredTool({
     name: rule.toolName,
-    description,
-    schema,
+    description: leadFieldRuleDescription(rule),
+    schema: leadFieldRuleSchema(rule),
     func: async (args: Record<string, unknown>) => {
       const leadId = Number(args.leadId);
       const value = fieldType === 'multiselect' ? args.values : args.value;

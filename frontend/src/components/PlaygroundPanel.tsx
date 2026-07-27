@@ -115,6 +115,9 @@ const TOOL_BUBBLE_CLASSES: Record<string, string> = {
   rose: 'bg-rose-500/10 border-rose-500/30 text-rose-200 hover:bg-rose-500/15',
   fuchsia: 'bg-fuchsia-500/10 border-fuchsia-500/30 text-fuchsia-200 hover:bg-fuchsia-500/15',
   violet: 'bg-violet-500/10 border-violet-500/30 text-violet-200 hover:bg-violet-500/15',
+  // Captura de dados — cor própria pra separar "guardou um dado" das ações
+  // que mexem no lead (tag, etapa, transferência).
+  emerald: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200 hover:bg-emerald-500/15',
   zinc: 'bg-zinc-800/80 border-zinc-700/60 text-zinc-300 hover:bg-zinc-800',
 };
 
@@ -167,6 +170,10 @@ export function PlaygroundPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [events, setEvents] = useState<PlaygroundTimelineEvent[]>([]);
   const [turns, setTurns] = useState<TurnMeta[]>([]);
+  // Quantas tools de CAPTURA o sandbox vai registrar. O contador do painel
+  // dizia "5" fixo, o que virou mentira quando as `salvar_*` passaram a rodar
+  // aqui — o número muda por unidade, conforme as regras ativas.
+  const [captureCount, setCaptureCount] = useState<number | null>(null);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -177,6 +184,26 @@ export function PlaygroundPanel() {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [events, messages, loading]);
+
+  useEffect(() => {
+    if (!selectedUnitId) {
+      setCaptureCount(null);
+      return;
+    }
+    let alive = true;
+    void api
+      .listLeadFieldRules(selectedUnitId)
+      .then((rules) => {
+        if (alive) setCaptureCount(rules.filter((r) => r.enabled).length);
+      })
+      .catch(() => {
+        // Contador é informativo — se falhar, some em vez de quebrar a tela.
+        if (alive) setCaptureCount(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedUnitId]);
 
   // Reset quando troca de unidade.
   useEffect(() => {
@@ -327,7 +354,7 @@ export function PlaygroundPanel() {
           onSuggestion={(s) => void send(s)}
           canSend={canSend}
         />
-        <ContactInfoSidebar unit={selectedUnit} session={session} />
+        <ContactInfoSidebar unit={selectedUnit} session={session} captureCount={captureCount} />
       </div>
     </div>
   );
@@ -681,11 +708,28 @@ function ToolSystemBubble({
   item: Extract<ChatItem, { kind: 'tool' }>;
 }) {
   const [open, setOpen] = useState(false);
-  const meta = TOOL_META[item.tool] ?? {
-    emoji: '⚙️',
-    color: 'zinc' as const,
-    label: () => item.tool,
-  };
+  // Tools de captura são DINÂMICAS (uma por regra), então não cabem no
+  // TOOL_META fixo. O backend manda `fieldName`/`value` nos args justamente
+  // pra timeline conseguir mostrar "salvou Queixa: …" em vez do nome cru.
+  const capture =
+    item.tool.startsWith('salvar_') || typeof item.args.fieldName === 'string'
+      ? {
+          emoji: '💾',
+          color: 'emerald' as const,
+          label: (a: Record<string, unknown>) => {
+            const field = typeof a.fieldName === 'string' ? a.fieldName : item.tool;
+            const raw = a.values ?? a.value;
+            const val = Array.isArray(raw) ? raw.join(', ') : String(raw ?? '');
+            return val ? `salvou ${field}: ${val}` : `salvou ${field}`;
+          },
+        }
+      : null;
+  const meta = capture ??
+    TOOL_META[item.tool] ?? {
+      emoji: '⚙️',
+      color: 'zinc' as const,
+      label: () => item.tool,
+    };
   const argsEntries = Object.entries(item.args).filter(([k]) => k !== 'leadId');
 
   return (
@@ -779,9 +823,12 @@ interface SessionMetrics {
 function ContactInfoSidebar({
   unit,
   session,
+  captureCount,
 }: {
   unit: ReturnType<typeof useUnit>['selectedUnit'];
   session: SessionMetrics;
+  /** Regras de captura ativas — null enquanto carrega ou se a busca falhar. */
+  captureCount: number | null;
 }) {
   const personaTone = unit?.personaTone ?? '—';
   const personaCompany = unit?.personaCompanyName ?? unit?.name ?? '—';
@@ -817,8 +864,12 @@ function ContactInfoSidebar({
       <Section icon={<Zap size={13} className="text-amber-300" />} title="Setup do agente">
         <SectionRow
           label="Tools sandbox"
-          value="5"
-          hint="tag · etapa · pausa · título · resumo"
+          value={captureCount === null ? '5' : String(5 + captureCount)}
+          hint={
+            captureCount
+              ? `tag · etapa · pausa · título · resumo · ${captureCount} captura${captureCount === 1 ? '' : 's'}`
+              : 'tag · etapa · pausa · título · resumo'
+          }
         />
         <SectionRow
           label="Coleta de origem"

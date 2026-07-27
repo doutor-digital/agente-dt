@@ -31,6 +31,9 @@ import { z as zod } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { getActiveConfig } from '../agent/config.js';
 import { composeSystemPromptForUnit } from '../agent/prompt-composer.js';
+import { leadFieldRuleDescription, leadFieldRuleSchema } from '../agent/tools.js';
+import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
+import type { LeadFieldRule } from '@prisma/client';
 import {
   calculateCost,
   createChatOpenAI,
@@ -106,7 +109,11 @@ function extractUsage(ai: AIMessageLike): { prompt: number; completion: number; 
   return null;
 }
 
-function buildSandboxTools(opts: { onCall: (a: SandboxAction) => void }) {
+function buildSandboxTools(opts: {
+  onCall: (a: SandboxAction) => void;
+  /** Regras de captura ativas — viram tools `salvar_*` simuladas. */
+  leadFieldRules: LeadFieldRule[];
+}) {
   const aplicar_tag = new DynamicStructuredTool({
     name: 'aplicar_tag',
     description:
@@ -202,7 +209,38 @@ function buildSandboxTools(opts: { onCall: (a: SandboxAction) => void }) {
     },
   });
 
-  return [aplicar_tag, mover_etapa, pausar_ia, atualizar_titulo_lead, resumir_lead_para_sdr];
+  // Tools de CAPTURA simuladas — uma por regra ativa. Reusam o schema e a
+  // description reais (agent/tools.ts), então o modelo enxerga exatamente o
+  // mesmo contrato de produção; só o efeito muda: em vez de gravar no Kommo,
+  // registram a chamada pra timeline. É isso que permite testar captura aqui.
+  const captura = opts.leadFieldRules.map(
+    (rule) =>
+      new DynamicStructuredTool({
+        name: rule.toolName,
+        description: `${leadFieldRuleDescription(rule)} (sandbox: não grava no Kommo)`,
+        schema: leadFieldRuleSchema(rule),
+        func: async (args: Record<string, unknown>) => {
+          const value = rule.kommoFieldType === 'multiselect' ? args.values : args.value;
+          const shown = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+          const result = `[SANDBOX] ${rule.toolName} → "${rule.kommoFieldName}" = "${shown}" — simulado, nada gravado no Kommo.`;
+          opts.onCall({
+            tool: rule.toolName,
+            args: { ...args, fieldName: rule.kommoFieldName, fieldType: rule.kommoFieldType },
+            result,
+          });
+          return result;
+        },
+      }),
+  );
+
+  return [
+    aplicar_tag,
+    mover_etapa,
+    pausar_ia,
+    atualizar_titulo_lead,
+    resumir_lead_para_sdr,
+    ...captura,
+  ];
 }
 
 export async function playgroundRunHandler(req: Request, res: Response): Promise<void> {
@@ -242,10 +280,11 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
     agentConfigPrompt: config.systemPrompt,
     userMessage: lastUser?.content,
     isFirstTurn,
-    // Sandbox não registra as tools `salvar_*` dinâmicas — instruir a IA sobre
-    // elas só leva a chamadas com erro. Captura de dados é testada na própria
-    // tela de Captura de Dados, não aqui.
-    excludeLeadFieldRules: true,
+    // O sandbox AGORA registra as tools `salvar_*` (simuladas, logo abaixo),
+    // então as instruções de captura precisam entrar no prompt — sem elas o
+    // modelo não sabe quando chamar. Era essa exclusão que impedia testar
+    // captura aqui.
+    excludeLeadFieldRules: false,
   });
 
   // Acrescenta info do "lead sintético" pra IA poder chamar as tools (precisa do leadId).
@@ -262,7 +301,9 @@ operador revisar.`;
   if (lastUser) {
     timeline.push({ kind: 'user_message', ts: Date.now(), content: lastUser.content });
   }
+  const leadFieldRules = await listEnabledLeadFieldRules(unit.id);
   const tools = buildSandboxTools({
+    leadFieldRules,
     onCall: (a) => {
       actions.push(a);
       timeline.push({
