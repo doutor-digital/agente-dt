@@ -967,3 +967,28 @@ export interface UnitActionInput {
   notes?: string | null;
   enabled?: boolean;
 }
+
+
+// ---------------------------------------------------------------------------
+// Cobertura de captura — "o campo combinado está mesmo sendo preenchido?"
+// Vem de dado de produção (ExecutionStep), não de teste no sandbox.
+// ---------------------------------------------------------------------------
+export interface CaptureCoverageRow {
+  ruleId: string;
+  toolName: string;
+  kommoFieldId: number;
+  kommoFieldName: string;
+  enabled: boolean;
+  /** Gravações no período (pode repetir no mesmo lead). */
+  writes: number;
+  /** Leads distintos em que o campo foi gravado — o numerador. */
+  leads: number;
+  lastAt: string | null;
+}
+
+export interface CaptureCoverage {
+  days: number;
+  /** Leads distintos com execução no período — o denominador. */
+  totalLeads: number;
+  rows: CaptureCoverageRow[];
+}

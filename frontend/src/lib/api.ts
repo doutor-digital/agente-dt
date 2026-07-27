@@ -35,6 +35,7 @@ import type {
   LlmCallSummary,
   OpenAIDebugResponse,
   KommoLeadCustomFieldsResponse,
+  CaptureCoverage,
   LeadFieldRule,
   LeadFieldRuleInput,
   PromptPerformanceResponse,
@@ -212,6 +213,13 @@ export const api = {
       `/units/${unitId}/lead-field-rules`,
     );
     return data.rules;
+  },
+  async captureCoverage(unitId: string, days = 30): Promise<CaptureCoverage> {
+    const { data } = await http.get<CaptureCoverage>(
+      `/units/${unitId}/lead-field-rules/coverage`,
+      { params: { days } },
+    );
+    return data;
   },
   async createLeadFieldRule(unitId: string, input: LeadFieldRuleInput): Promise<LeadFieldRule> {
     const { data } = await http.post<{ rule: LeadFieldRule }>(

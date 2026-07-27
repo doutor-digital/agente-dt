@@ -25,6 +25,7 @@ import {
 import {
   createLeadFieldRule,
   deleteLeadFieldRule,
+  getCaptureCoverage,
   listLeadFieldRules,
   updateLeadFieldRule,
 } from '../services/lead-field-rules.service.js';
@@ -67,6 +68,16 @@ export async function listLeadFieldRulesHandler(req: Request, res: Response): Pr
   const unitId = String(req.params.id ?? '');
   const rules = await listLeadFieldRules(unitId);
   res.json({ rules });
+}
+
+/** GET /units/:id/lead-field-rules/coverage?days=30 */
+export async function captureCoverageHandler(req: Request, res: Response): Promise<void> {
+  const unitId = String(req.params.id ?? '');
+  // Janela curta demais não acumula amostra; longa demais esconde uma regra
+  // que quebrou ontem. 30 dias é o default; 1–180 é o intervalo aceito.
+  const raw = Number(req.query.days ?? 30);
+  const days = Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 1), 180) : 30;
+  res.json(await getCaptureCoverage(unitId, days));
 }
 
 export async function createLeadFieldRuleHandler(req: Request, res: Response): Promise<void> {

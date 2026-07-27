@@ -92,6 +92,7 @@ import {
   updateLeadFieldRuleHandler,
   deleteLeadFieldRuleHandler,
   listKommoLeadCustomFieldsHandler,
+  captureCoverageHandler,
 } from '../controllers/lead-field-rules.controller.js';
 import {
   getAlerts,
@@ -222,6 +223,12 @@ apiRouter.get('/reports/whatsapp-cost', reportWhatsappCostHandler);
 
 // LeadFieldRules — captura de dados pra custom fields do Kommo.
 apiRouter.get('/units/:id/lead-field-rules', requireUnitAccess, listLeadFieldRulesHandler);
+// Cobertura ANTES da rota com :ruleId — senão "coverage" casaria como um id.
+apiRouter.get(
+  '/units/:id/lead-field-rules/coverage',
+  requireUnitAccess,
+  captureCoverageHandler,
+);
 apiRouter.post('/units/:id/lead-field-rules', requireUnitAccess, createLeadFieldRuleHandler);
 apiRouter.patch('/units/:id/lead-field-rules/:ruleId', requireUnitAccess, updateLeadFieldRuleHandler);
 apiRouter.delete('/units/:id/lead-field-rules/:ruleId', requireUnitAccess, deleteLeadFieldRuleHandler);

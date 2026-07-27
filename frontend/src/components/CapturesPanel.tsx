@@ -55,6 +55,8 @@ import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import type {
+  CaptureCoverage,
+  CaptureCoverageRow,
   KommoFieldType,
   KommoLeadCustomField,
   KommoLeadCustomFieldsResponse,
@@ -159,6 +161,9 @@ export function CapturesPanel() {
   const toast = useToast();
 
   const [rules, setRules] = useState<LeadFieldRule[]>([]);
+  // Cobertura de PRODUÇÃO por regra — responde "está mesmo preenchendo?".
+  // Best-effort: se a query falhar, os cartões só não mostram a barra.
+  const [coverage, setCoverage] = useState<CaptureCoverage | null>(null);
   const [loading, setLoading] = useState(true);
   const [fieldsData, setFieldsData] = useState<KommoLeadCustomFieldsResponse | null>(null);
   const [loadingFields, setLoadingFields] = useState(false);
@@ -174,6 +179,10 @@ export function CapturesPanel() {
     setLoading(true);
     try {
       const list = await api.listLeadFieldRules(selectedUnitId);
+      void api
+        .captureCoverage(selectedUnitId, 30)
+        .then(setCoverage)
+        .catch(() => setCoverage(null));
       setRules(list);
     } finally {
       setLoading(false);
@@ -392,6 +401,9 @@ export function CapturesPanel() {
               <RuleCard
                 key={rule.id}
                 rule={rule}
+                coverage={coverage?.rows.find((r) => r.ruleId === rule.id) ?? null}
+                totalLeads={coverage?.totalLeads ?? 0}
+                days={coverage?.days ?? 30}
                 onEdit={() => setEdit({ mode: 'edit', rule })}
                 onDelete={() => handleDelete(rule)}
                 onToggle={() => handleToggle(rule)}
@@ -440,11 +452,17 @@ function EmptyState({ disabled, onCreate }: { disabled: boolean; onCreate: () =>
 
 function RuleCard({
   rule,
+  coverage,
+  totalLeads,
+  days,
   onEdit,
   onDelete,
   onToggle,
 }: {
   rule: LeadFieldRule;
+  coverage: CaptureCoverageRow | null;
+  totalLeads: number;
+  days: number;
   onEdit: () => void;
   onDelete: () => void;
   onToggle: () => void;
@@ -472,6 +490,12 @@ function RuleCard({
         </div>
 
         <div className="flex-1 min-w-0">
+          <CoverageBar
+            coverage={coverage}
+            totalLeads={totalLeads}
+            days={days}
+            enabled={rule.enabled}
+          />
           {/* Header line */}
           <div className="flex items-center gap-2 flex-wrap mb-1.5">
             <span className="text-sm font-semibold text-zinc-100 truncate">
@@ -1135,4 +1159,67 @@ function previewPromptBlock(draft: DraftRule): string {
     lines.push(`   Gatilhos: ${draft.examples.slice(0, 5).map((e) => `"${e}"`).join('; ')}`);
   }
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// CoverageBar — "esse campo está mesmo sendo preenchido?"
+//
+// Mostra em quantos leads DISTINTOS o campo foi gravado sobre o total de leads
+// atendidos no período. Contar gravações seria enganoso: 12 gravações podem
+// ser 12 leads ou o mesmo lead 12 vezes.
+//
+// Deliberadamente NÃO pinta vermelho abaixo de um limiar. Cobertura baixa pode
+// ser regra quebrada OU simplesmente um dado que poucos pacientes mencionam
+// (metade não fala de convênio, e aí 50% é o teto). Quem sabe a expectativa é
+// você — o componente entrega o número, não o julgamento.
+// ---------------------------------------------------------------------------
+function CoverageBar({
+  coverage,
+  totalLeads,
+  days,
+  enabled,
+}: {
+  coverage: CaptureCoverageRow | null;
+  totalLeads: number;
+  days: number;
+  enabled: boolean;
+}) {
+  if (!coverage) return null;
+
+  const pct = totalLeads > 0 ? Math.round((coverage.leads / totalLeads) * 100) : 0;
+  const never = coverage.leads === 0;
+
+  return (
+    <div className="mb-2 flex items-center gap-2 flex-wrap text-[11px]">
+      <span className="inline-flex items-center gap-1.5">
+        <span className="w-20 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+          <span
+            className={clsx(
+              'block h-full rounded-full',
+              never ? 'bg-zinc-700' : 'bg-brand-500',
+            )}
+            style={{ width: `${Math.min(pct, 100)}%` }}
+          />
+        </span>
+        <span className={clsx('tabular-nums font-medium', never ? 'text-zinc-500' : 'text-zinc-300')}>
+          {pct}%
+        </span>
+      </span>
+
+      <span className="text-zinc-500">
+        {totalLeads === 0
+          ? `sem leads atendidos em ${days}d`
+          : `${coverage.leads} de ${totalLeads} leads · ${days}d`}
+      </span>
+
+      {never && enabled && totalLeads > 0 && (
+        <span className="text-amber-400/90">nunca preencheu no período</span>
+      )}
+      {coverage.lastAt && (
+        <span className="text-zinc-600">
+          último {new Date(coverage.lastAt).toLocaleDateString('pt-BR')}
+        </span>
+      )}
+    </div>
+  );
 }

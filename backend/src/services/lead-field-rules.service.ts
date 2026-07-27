@@ -97,3 +97,101 @@ export async function updateLeadFieldRule(
 export async function deleteLeadFieldRule(id: string): Promise<void> {
   await prisma.leadFieldRule.delete({ where: { id } });
 }
+
+// ===========================================================================
+// COBERTURA DE CAPTURA
+//
+// Responde "cada campo combinado está mesmo sendo preenchido?" com dado de
+// PRODUÇÃO, não com teste no sandbox.
+//
+// De onde vem: toda gravação bem-sucedida deixa um ExecutionStep
+// KOMMO_ACTION cujo payload carrega o `fieldId` (ver buildLeadFieldRuleTool
+// em agent/tools.ts). Então basta agrupar esses steps por fieldId e cruzar
+// com as regras da unidade.
+//
+// O denominador é o número de leads DISTINTOS que tiveram execução no
+// período — sem isso, "12 gravações" não diz nada: pode ser 12 leads ou o
+// mesmo lead 12 vezes. O que interessa é a fração de leads em que o campo
+// foi preenchido.
+//
+// Uma ressalva honesta na leitura: cobertura baixa NÃO significa
+// necessariamente regra quebrada. Se o campo é "Plano de saúde" e metade dos
+// pacientes não menciona convênio, 50% é o teto natural. O número serve pra
+// comparar com a sua expectativa, não pra perseguir 100%.
+// ===========================================================================
+
+export interface CaptureCoverageRow {
+  ruleId: string;
+  toolName: string;
+  kommoFieldId: number;
+  kommoFieldName: string;
+  enabled: boolean;
+  /** Gravações bem-sucedidas no período (pode repetir no mesmo lead). */
+  writes: number;
+  /** Leads distintos em que o campo foi gravado. */
+  leads: number;
+  /** Última gravação, ISO. Null = nunca gravou no período. */
+  lastAt: string | null;
+}
+
+export interface CaptureCoverage {
+  days: number;
+  /** Leads distintos com execução no período — o denominador. */
+  totalLeads: number;
+  rows: CaptureCoverageRow[];
+}
+
+export async function getCaptureCoverage(
+  unitId: string,
+  days: number,
+): Promise<CaptureCoverage> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const rules = await listLeadFieldRules(unitId);
+
+  // Denominador: leads distintos com QUALQUER execução no período.
+  const totalLeadsRows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT COUNT(DISTINCT lead_id) AS n
+    FROM execution_traces
+    WHERE unit_id = ${unitId} AND created_at >= ${since}
+  `;
+  const totalLeads = Number(totalLeadsRows[0]?.n ?? 0);
+
+  // Numerador por campo. Agrupa direto pelo fieldId do payload — uma query só,
+  // em vez de uma por regra.
+  const stats = await prisma.$queryRaw<
+    Array<{ field_id: number; writes: bigint; leads: bigint; last_at: Date }>
+  >`
+    SELECT
+      (s.payload->>'fieldId')::int AS field_id,
+      COUNT(*)                     AS writes,
+      COUNT(DISTINCT t.lead_id)    AS leads,
+      MAX(s.created_at)            AS last_at
+    FROM execution_steps s
+    JOIN execution_traces t ON t.id = s.trace_id
+    WHERE t.unit_id = ${unitId}
+      AND s.created_at >= ${since}
+      AND s.kind = 'KOMMO_ACTION'
+      AND s.payload ? 'fieldId'
+    GROUP BY 1
+  `;
+
+  const byField = new Map(stats.map((r) => [Number(r.field_id), r]));
+
+  return {
+    days,
+    totalLeads,
+    rows: rules.map((rule) => {
+      const hit = byField.get(rule.kommoFieldId);
+      return {
+        ruleId: rule.id,
+        toolName: rule.toolName,
+        kommoFieldId: rule.kommoFieldId,
+        kommoFieldName: rule.kommoFieldName,
+        enabled: rule.enabled,
+        writes: hit ? Number(hit.writes) : 0,
+        leads: hit ? Number(hit.leads) : 0,
+        lastAt: hit?.last_at ? new Date(hit.last_at).toISOString() : null,
+      };
+    }),
+  };
+}
