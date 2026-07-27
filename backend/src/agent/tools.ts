@@ -81,7 +81,7 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
   definir_valor_lead:
     'Define o VALOR (preço, em reais) do lead no Kommo — campo nativo "price" ' +
     'do card. Use quando o paciente confirma um procedimento/plano com ' +
-    'preço conhecido (ex: avaliação R$200, cirurgia R$5000). Esse valor ' +
+    'preço conhecido (ex: consulta R$200, cirurgia R$5000). Esse valor ' +
     'alimenta as métricas de pipeline em dinheiro no dashboard.',
   fechar_lead:
     'FECHA o lead formalmente como VENDA REALIZADA (won) ou VENDA PERDIDA ' +

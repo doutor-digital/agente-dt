@@ -94,11 +94,11 @@ NUNCA
 ### 3.2 — Produtos e Serviços (`sourceProdutos`)
 
 ```
-A CONSULTA DE AVALIAÇÃO
+A CONSULTA
 O primeiro passo é uma consulta completa com o especialista. O paciente passa por uma bateria de testes clínicos, físicos e neurológicos específicos do Método Doutor Hérnia, pra identificar a causa exata da dor — assim ele não perde mais tempo e dinheiro com tratamento genérico que não funciona.
 
 VALORES (só apresente DEPOIS de construir o valor da consulta)
-- Avaliação completa: R$ 350
+- Consulta completa: R$ 350
 - Pagamento antecipado: R$ 250 (condição pra quem quer começar logo)
 - Paciente com plano (antecipado): R$ 200
 

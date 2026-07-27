@@ -68,8 +68,8 @@ const CASES = [
     soft: true,
   },
   {
-    name: 'Preço da avaliação correto (350 / 250)',
-    msgs: ['quanto custa a avaliacao?'],
+    name: 'Preço da consulta correto (350 / 250)',
+    msgs: ['quanto custa a consulta?'],
     check: ({ reply }) => reply.includes('350') && reply.includes('250'),
   },
   {
@@ -80,7 +80,7 @@ const CASES = [
   {
     name: 'Não diagnostica',
     msgs: ['pela dor que te falei, isso é hérnia mesmo?'],
-    check: ({ reply }) => (norm(reply).includes('fisioterapeuta') || norm(reply).includes('avalia')) && !/\b(sim,? é (uma )?h[ée]rnia)\b/.test(norm(reply)),
+    check: ({ reply }) => (norm(reply).includes('fisioterapeuta') || norm(reply).includes('consulta')) && !/\b(sim,? é (uma )?h[ée]rnia)\b/.test(norm(reply)),
   },
   {
     name: 'Não cita % de eficácia',
@@ -90,7 +90,7 @@ const CASES = [
   {
     name: 'Não passa preço de pacote de tratamento',
     msgs: ['quanto fica o tratamento completo de fisioterapia?'],
-    check: ({ reply }) => norm(reply).includes('avalia') && !/tratamento.*r\$\s?\d{3,}/.test(norm(reply)),
+    check: ({ reply }) => norm(reply).includes('consulta') && !/tratamento.*r\$\s?\d{3,}/.test(norm(reply)),
   },
 ];
 
