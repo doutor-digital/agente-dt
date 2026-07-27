@@ -136,6 +136,23 @@ type TurnMeta = {
   costUsd: number | null;
 };
 
+// Limites do schema do backend (playground.controller.ts). Espelhados aqui
+// porque estourá-los devolve 400 — e o front mandava o histórico INTEIRO, então
+// a partir da 21ª troca todo envio falhava com "Request failed with status code
+// 400" e a conversa de teste morria sem explicação.
+const MAX_HISTORY = 40;
+const MAX_CONTENT = 4000;
+
+/** Histórico → payload aceito pelo backend: janela deslizante, sem vazios. */
+function toPayload(
+  history: ChatMessage[],
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return history
+    .filter((m) => m.content.trim().length > 0) // content tem min(1) no schema
+    .slice(-MAX_HISTORY) // as mais recentes são as que importam pro contexto
+    .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_CONTENT) }));
+}
+
 export function PlaygroundPanel() {
   const { selectedUnitId, selectedUnit } = useUnit();
   const toast = useToast();
@@ -219,17 +236,18 @@ export function PlaygroundPanel() {
     setLoading(true);
 
     try {
-      const result = await api.playgroundRun(
-        selectedUnitId,
-        nextHistory.map((m) => ({ role: m.role, content: m.content })),
-      );
+      const result = await api.playgroundRun(selectedUnitId, toPayload(nextHistory));
 
       setMessages([...nextHistory, { role: 'assistant', content: result.reply, ts: Date.now() }]);
       setEvents((prev) => [...prev, ...result.timeline]);
       setTurns((prev) => [...prev, result.meta]);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`Falha no playground: ${msg}`);
+      // O backend devolve o motivo em `error`; sem isso o usuário só via
+      // "Request failed with status code 400" e não tinha o que fazer.
+      const detail =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        (err instanceof Error ? err.message : String(err));
+      toast.error(`Falha no playground: ${detail}`);
     } finally {
       setLoading(false);
     }
@@ -444,68 +462,86 @@ function ChatCenter({
   canSend: boolean;
 }) {
   return (
-    <div className="flex-1 min-w-0 flex flex-col bg-[#0b141a]">
+    <div className="wa-theme flex-1 min-w-0 flex flex-col" style={{ background: 'var(--wa-bg)' }}>
       {/* Header do chat — contato ativo */}
-      <div className="flex items-center gap-3 px-4 py-2.5 bg-zinc-900/80 border-b border-zinc-800/60">
+      <div
+        className="flex items-center gap-3 px-4 py-2 shrink-0"
+        style={{ background: 'var(--wa-bar)' }}
+      >
         <button
           type="button"
-          className="md:hidden text-zinc-400 hover:text-zinc-100"
+          className="md:hidden hover:opacity-80"
+          style={{ color: 'var(--wa-muted)' }}
           title="Voltar (decorativo)"
         >
           <ArrowLeft size={16} />
         </button>
-        <div className="w-10 h-10 rounded-full bg-emerald-700/60 flex items-center justify-center text-white text-base font-semibold ring-2 ring-emerald-500/20">
-          🤒
+        <div className="relative shrink-0">
+          <div className="w-10 h-10 rounded-full bg-[#6a7175] flex items-center justify-center text-lg">
+            🤒
+          </div>
+          <span
+            className="absolute bottom-0 right-0 w-3 h-3 rounded-full border-2"
+            style={{ background: '#00a884', borderColor: 'var(--wa-bar)' }}
+          />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-semibold text-zinc-100">Paciente Teste</div>
-          <div className="text-[10.5px] text-emerald-300/80">
-            {loading ? 'digitando…' : 'online · sandbox 🧪'}
+          <div className="text-[15px] font-normal" style={{ color: 'var(--wa-text)' }}>
+            Paciente Teste
+          </div>
+          <div
+            className="text-[12px] truncate"
+            style={{ color: loading ? '#00a884' : 'var(--wa-muted)' }}
+          >
+            {loading ? 'digitando…' : 'online'}
           </div>
         </div>
-        <button
-          type="button"
-          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400"
-          title="Vídeo (decorativo)"
-          disabled
+        <span
+          className="hidden lg:inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full mr-1"
+          style={{ background: 'rgba(0,168,132,0.12)', color: '#00a884' }}
+          title="Nada aqui vai pro Kommo nem pro banco"
         >
-          <Video size={15} />
-        </button>
-        <button
-          type="button"
-          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400"
-          title="Chamada (decorativo)"
-          disabled
-        >
-          <Phone size={14} />
-        </button>
-        <button
-          type="button"
-          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400"
-          title="Mais (decorativo)"
-          disabled
-        >
-          <MoreVertical size={15} />
-        </button>
+          🧪 sandbox
+        </span>
+        {[Video, Phone, MoreVertical].map((Icon, i) => (
+          <button
+            key={i}
+            type="button"
+            className="w-9 h-9 rounded-full hover:bg-white/5 flex items-center justify-center shrink-0"
+            style={{ color: 'var(--wa-muted)' }}
+            title="Decorativo"
+            disabled
+          >
+            <Icon size={i === 1 ? 14 : 15} />
+          </button>
+        ))}
       </div>
 
-      {/* Stream do chat — wallpaper estilo WhatsApp */}
+      {/* Stream do chat — papel de parede do WhatsApp */}
       <div
         ref={chatScrollRef}
-        className="flex-1 overflow-y-auto px-6 py-4 space-y-2"
-        style={{
-          backgroundColor: '#0b141a',
-          backgroundImage:
-            'radial-gradient(circle at 15% 20%, rgba(16,185,129,0.05) 0px, transparent 55%), radial-gradient(circle at 85% 80%, rgba(16,185,129,0.04) 0px, transparent 50%)',
-        }}
+        className="wa-wallpaper flex-1 overflow-y-auto px-4 md:px-12 py-4 space-y-0.75"
       >
-        {chatItems.length === 0 && !loading && (
-          <EmptyChatState onSuggestion={onSuggestion} />
+        {chatItems.length === 0 && !loading && <EmptyChatState onSuggestion={onSuggestion} />}
+
+        {chatItems.length > 0 && (
+          <div className="flex justify-center py-2">
+            <span
+              className="text-[11px] px-3 py-1 rounded-lg uppercase tracking-wide"
+              style={{ background: 'rgba(32,44,51,0.92)', color: 'var(--wa-muted)' }}
+            >
+              Hoje
+            </span>
+          </div>
         )}
 
-        {chatItems.map((item, i) => (
-          <ChatItemRow key={`${item.ts}-${i}`} item={item} />
-        ))}
+        {chatItems.map((item, i) => {
+          // O rabinho só vai na PRIMEIRA de uma sequência do mesmo remetente —
+          // é assim no app, e sem isso um bloco de 4 respostas vira uma serra.
+          const prev = chatItems[i - 1];
+          const first = !prev || prev.kind !== item.kind;
+          return <ChatItemRow key={`${item.ts}-${i}`} item={item} first={first} />;
+        })}
 
         {loading && <TypingIndicator />}
       </div>
@@ -516,39 +552,38 @@ function ChatCenter({
           e.preventDefault();
           onSend();
         }}
-        className="flex items-center gap-2 px-4 py-2.5 bg-zinc-900/80 border-t border-zinc-800/60"
+        className="flex items-end gap-2 px-4 py-2.5 shrink-0"
+        style={{ background: 'var(--wa-bar)' }}
       >
-        <button
-          type="button"
-          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400 shrink-0"
-          title="Emoji (decorativo)"
-          disabled
-        >
-          <Smile size={18} />
-        </button>
-        <button
-          type="button"
-          className="w-9 h-9 rounded-full hover:bg-zinc-800/60 flex items-center justify-center text-zinc-400 shrink-0"
-          title="Anexo (decorativo)"
-          disabled
-        >
-          <Paperclip size={17} />
-        </button>
+        {[Smile, Paperclip].map((Icon, i) => (
+          <button
+            key={i}
+            type="button"
+            className="w-10 h-10 rounded-full hover:bg-white/5 flex items-center justify-center shrink-0"
+            style={{ color: 'var(--wa-muted)' }}
+            title="Decorativo"
+            disabled
+          >
+            <Icon size={i === 0 ? 20 : 19} />
+          </button>
+        ))}
         <input
           type="text"
           value={input}
           onChange={(e) => onInputChange(e.target.value)}
-          placeholder="Digite uma mensagem como se fosse o lead…"
+          placeholder="Digite uma mensagem"
           disabled={loading}
-          className="flex-1 bg-zinc-800/80 rounded-full px-4 py-2 text-[13px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/40 min-w-0"
+          className="flex-1 rounded-lg px-4 py-2.5 text-[15px] focus:outline-none min-w-0 placeholder:opacity-70"
+          style={{ background: '#2a3942', color: 'var(--wa-text)' }}
         />
         <button
           type={canSend ? 'submit' : 'button'}
           disabled={!canSend}
-          className="w-10 h-10 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:opacity-50 flex items-center justify-center text-white shrink-0 transition-colors"
+          className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-opacity disabled:opacity-45"
+          style={{ color: canSend ? '#00a884' : 'var(--wa-muted)' }}
           title={canSend ? 'Enviar' : 'Digite uma mensagem'}
         >
-          {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+          {loading ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
         </button>
       </form>
     </div>
@@ -582,39 +617,49 @@ function EmptyChatState({ onSuggestion }: { onSuggestion: (s: string) => void })
   );
 }
 
-function ChatItemRow({ item }: { item: ChatItem }) {
-  if (item.kind === 'user' || item.kind === 'assistant') return <ChatBubble item={item} />;
+function ChatItemRow({ item, first }: { item: ChatItem; first: boolean }) {
+  if (item.kind === 'user' || item.kind === 'assistant') {
+    return <ChatBubble item={item} first={first} />;
+  }
   return <ToolSystemBubble item={item} />;
 }
 
 function ChatBubble({
   item,
+  first,
 }: {
   item: Extract<ChatItem, { kind: 'user' | 'assistant' }>;
+  /** Primeira de uma sequência do mesmo remetente — só ela leva o rabinho. */
+  first: boolean;
 }) {
   const isUser = item.kind === 'user';
   return (
     <div className={clsx('flex', isUser ? 'justify-end' : 'justify-start')}>
       <div
         className={clsx(
-          'max-w-[65%] rounded-lg px-3 py-1.5 shadow-sm relative',
-          isUser
-            ? 'bg-emerald-700 text-white rounded-tr-sm'
-            : 'bg-zinc-800/95 text-zinc-100 rounded-tl-sm',
+          'relative max-w-[75%] md:max-w-[65%] rounded-lg px-2.5 pt-1.5 pb-1',
+          first && (isUser ? 'wa-tail-out rounded-tr-none' : 'wa-tail-in rounded-tl-none'),
         )}
+        style={{
+          background: isUser ? 'var(--wa-out)' : 'var(--wa-in)',
+          color: 'var(--wa-text)',
+          boxShadow: '0 1px 0.5px rgba(11,20,26,0.35)',
+        }}
       >
-        <div className="text-[13px] leading-relaxed whitespace-pre-wrap wrap-break-word">
+        {/* O horário flutua no canto: o texto corre por baixo e só a ÚLTIMA
+            linha reserva espaço pra ele — é o truque do WhatsApp que evita
+            tanto a linha órfã quanto o bloco de altura dobrada. */}
+        <div className="text-[14.2px] leading-4.75 whitespace-pre-wrap wrap-break-word">
           {item.content}
+          <span className="inline-block w-15.5 h-1 align-bottom" aria-hidden />
         </div>
-        <div
-          className={clsx(
-            'flex items-center gap-1 mt-1 text-[10px] justify-end tabular-nums',
-            isUser ? 'text-emerald-100/70' : 'text-zinc-500',
-          )}
+        <span
+          className="absolute bottom-1 right-2.5 flex items-center gap-1 text-[11px] tabular-nums"
+          style={{ color: isUser ? 'rgba(233,237,239,0.6)' : 'var(--wa-muted)' }}
         >
-          <span>{formatClock(item.ts)}</span>
-          {isUser && <CheckCheck size={12} className="text-emerald-100/80" />}
-        </div>
+          {formatClock(item.ts)}
+          {isUser && <CheckCheck size={14} style={{ color: 'var(--wa-tick)' }} />}
+        </span>
       </div>
     </div>
   );
@@ -693,10 +738,17 @@ function ToolSystemBubble({
 function TypingIndicator() {
   return (
     <div className="flex justify-start">
-      <div className="bg-zinc-800/95 rounded-lg rounded-tl-sm px-3 py-2 flex items-center gap-1">
-        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" />
-        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0.15s]" />
-        <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce [animation-delay:0.3s]" />
+      <div
+        className="wa-tail-in relative rounded-lg rounded-tl-none px-3.5 py-3 flex items-center gap-1.5"
+        style={{ background: 'var(--wa-in)', boxShadow: '0 1px 0.5px rgba(11,20,26,0.35)' }}
+      >
+        {[0, 0.18, 0.36].map((d) => (
+          <span
+            key={d}
+            className="wa-typing-dot w-2 h-2 rounded-full"
+            style={{ background: 'var(--wa-muted)', animationDelay: `${d}s` }}
+          />
+        ))}
       </div>
     </div>
   );
