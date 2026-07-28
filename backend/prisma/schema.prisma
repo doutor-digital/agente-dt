@@ -68,28 +68,28 @@ model Unit {
   category String? @map("category")
 
   // Kommo
-  kommoSubdomain   String? @map("kommo_subdomain")
-  kommoAccessToken String? @map("kommo_access_token")
-  kommoSalesbotId  Int?    @map("kommo_salesbot_id")
-  kommoReplyFieldId Int?   @map("kommo_reply_field_id")
+  kommoSubdomain        String? @map("kommo_subdomain")
+  kommoAccessToken      String? @map("kommo_access_token")
+  kommoSalesbotId       Int?    @map("kommo_salesbot_id")
+  kommoReplyFieldId     Int?    @map("kommo_reply_field_id")
   // ID do custom field "IA Pausada" (checkbox). Quando o lead tem essa
   // flag em true, o agente NÃO responde — operador humano pediu pausa.
   // Também é o field que a tool `pausar_ia` escreve.
-  kommoPausedFieldId Int?  @map("kommo_paused_field_id")
+  kommoPausedFieldId    Int?    @map("kommo_paused_field_id")
   // Quando true, sendChatReply pula o Salesbot e envia direto via
   // POST /chats/{chatId}/messages. Usar quando o Salesbot está mandando
   // saudação hardcoded antes ou cortando a mensagem da IA.
-  kommoBypassSalesbot Boolean @default(false) @map("kommo_bypass_salesbot")
+  kommoBypassSalesbot   Boolean @default(false) @map("kommo_bypass_salesbot")
   // Etapas do funil consideradas "Ganho/Convertido". Quando o webhook
   // recebe leads.status com um id desta lista, marcamos a Conversation
   // como convertida e disparamos o juiz LLM.
-  kommoWonStatusIds Int[]   @default([]) @map("kommo_won_status_ids")
+  kommoWonStatusIds     Int[]   @default([]) @map("kommo_won_status_ids")
   // Etapas do funil em que a IA TEM permissão de responder (allowlist). Quando
   // a lista está VAZIA, a IA responde em qualquer etapa (comportamento padrão).
   // Quando preenchida, a IA SÓ responde se o lead estiver numa dessas etapas;
   // em qualquer outra (ex: agendado, em tratamento) o agente é pulado. Guard
   // no webhook (processAgent) cruza com lead.status_id.
-  kommoAllowedStatusIds Int[] @default([]) @map("kommo_allowed_status_ids")
+  kommoAllowedStatusIds Int[]   @default([]) @map("kommo_allowed_status_ids")
 
   // MODO WIDGET (handler `widget_request` do Salesbot) — alternativa ao
   // PATCH no campo "Resposta IA" + gatilho do Digital Pipeline. Quando
@@ -99,13 +99,13 @@ model Unit {
   // duplicata (não há campo pro DP reler) e o chunking truncado (balões
   // nativos numa só chamada). Por-unidade pra permitir piloto. Ver
   // widget.controller.ts + KommoClient.continueSalesbotWidget.
-  kommoWidgetReplyEnabled Boolean @default(false) @map("kommo_widget_reply_enabled")
+  kommoWidgetReplyEnabled     Boolean @default(false) @map("kommo_widget_reply_enabled")
   // Client secret da integração privada do Kommo — assina o JWT que chega
   // no corpo do widget_request. NULL = validação permissiva (loga e segue),
   // útil pra destravar o piloto antes de fiar o secret.
-  kommoWidgetSecret       String? @map("kommo_widget_secret")
+  kommoWidgetSecret           String? @map("kommo_widget_secret")
   // ID do Salesbot novo (o que tem o passo Widget). Opcional — só logging.
-  kommoWidgetSalesbotId   Int?    @map("kommo_widget_salesbot_id")
+  kommoWidgetSalesbotId       Int?    @map("kommo_widget_salesbot_id")
   // MODO /execute (opt-in por unidade) — caminho LEGADO (PATCH no campo
   // "Resposta IA") + disparo EXPLÍCITO do Salesbot via POST /api/v4/bots/{id}/run
   // (https://developers.kommo.com/reference/lancar-um-salesbot), em vez de
@@ -126,37 +126,60 @@ model Unit {
   anthropicModel  String  @default("claude-opus-4-8") @map("anthropic_model")
 
   // OpenAI — credenciais por unidade (cada uma com sua API key e assistant)
-  openaiApiKey      String? @map("openai_api_key")
+  openaiApiKey           String? @map("openai_api_key")
   // Admin key (sk-admin-...) — usada pelos endpoints /v1/organization/*
   // (costs, usage, projects). Opcional. Sem ela, o painel de Integrações
   // mostra só os números MEDIDOS por nós (LlmCall) e o ping com /v1/models.
-  openaiAdminKey    String? @map("openai_admin_key")
-  openaiModel       String  @default("gpt-4o-mini") @map("openai_model")
-  openaiAssistantId String? @map("openai_assistant_id")
-  openaiTemperature Float   @default(0) @map("openai_temperature")
-  openaiMaxTokens   Int     @default(1024) @map("openai_max_tokens")
+  openaiAdminKey         String? @map("openai_admin_key")
+  openaiModel            String  @default("gpt-4o-mini") @map("openai_model")
+  openaiAssistantId      String? @map("openai_assistant_id")
+  openaiTemperature      Float   @default(0) @map("openai_temperature")
+  openaiMaxTokens        Int     @default(1024) @map("openai_max_tokens")
   // Amostragem avançada (alternativas/complementos à temperature).
   // topP=1 + penalties=0 reproduz o comportamento padrão (sem efeito).
   // topP: corta a "cauda" de tokens improváveis (0-1). Mexa nele OU na
   // temperature, não nos dois. frequencyPenalty/presencePenalty (-2 a 2):
   // reduzem repetição de palavras / incentivam variar de assunto.
-  openaiTopP             Float @default(1) @map("openai_top_p")
-  openaiFrequencyPenalty Float @default(0) @map("openai_frequency_penalty")
-  openaiPresencePenalty  Float @default(0) @map("openai_presence_penalty")
+  openaiTopP             Float   @default(1) @map("openai_top_p")
+  openaiFrequencyPenalty Float   @default(0) @map("openai_frequency_penalty")
+  openaiPresencePenalty  Float   @default(0) @map("openai_presence_penalty")
   // Limite mensal em USD pra disparar alertas no painel.
   openaiMonthlyBudgetUsd Decimal @default(50) @map("openai_monthly_budget_usd") @db.Decimal(10, 2)
 
   // Meta WhatsApp Cloud API
-  metaPhoneNumberId String? @map("meta_phone_number_id")
-  metaAccessToken   String? @map("meta_access_token")
-  metaVerifyToken   String? @map("meta_verify_token")
-  metaAppSecret     String? @map("meta_app_secret")
+  metaPhoneNumberId    String? @map("meta_phone_number_id")
+  metaAccessToken      String? @map("meta_access_token")
+  metaVerifyToken      String? @map("meta_verify_token")
+  metaAppSecret        String? @map("meta_app_secret")
   // WABA ID — necessário pra Graph API analytics (pricing_analytics,
   // template_analytics). É diferente do phone_number_id: WABA agrupa
   // várias phone numbers da mesma conta WhatsApp Business.
-  metaWabaId        String? @map("meta_waba_id")
+  metaWabaId           String? @map("meta_waba_id")
   // Limite mensal em USD pra alertas no painel (gastos cobrados pela Meta).
   metaMonthlyBudgetUsd Decimal @default(0) @map("meta_monthly_budget_usd") @db.Decimal(10, 2)
+
+  // ── INSTAGRAM — agente de comentários ──────────────────────────────────
+  // Canal SEPARADO do WhatsApp: comentário público não é conversa. O agente
+  // classifica, responde em público por template e puxa a pessoa pro privado
+  // (DM), que é onde a Sofia assume. Credenciais podem ser do MESMO app da
+  // Meta ou de um app próprio — por isso `igAppSecret` é opcional e cai pra
+  // `metaAppSecret` quando vazio.
+  igEnabled         Boolean @default(false) @map("ig_enabled")
+  igUserId          String? @map("ig_user_id") // IG Business Account ID
+  igAccessToken     String? @map("ig_access_token") // token da Página/IG
+  igVerifyToken     String? @map("ig_verify_token") // handshake hub.verify_token
+  igAppSecret       String? @map("ig_app_secret") // HMAC; fallback metaAppSecret
+  // DRY RUN LIGADO POR PADRÃO, e é de propósito: postar em público é
+  // irreversível e visível pra todo mundo. Em dry run o agente faz TODO o
+  // trabalho e grava o rascunho, sem publicar — vira fila de aprovação. Só
+  // desligue depois de ler algumas dezenas de respostas e confiar nelas.
+  igDryRun          Boolean @default(true) @map("ig_dry_run")
+  // Número E.164 SEM '+' pro link wa.me que vai no DM (nunca no comentário).
+  igWhatsappNumber  String? @map("ig_whatsapp_number")
+  // Assinatura opcional no fim da resposta pública (ex: "— Equipe DH").
+  igPublicSignature String? @map("ig_public_signature")
+
+  instagramComments InstagramComment[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -176,22 +199,22 @@ model Unit {
   // -------------------------------------------------------------------------
 
   // PERSONA — quem a IA está representando.
-  personaCompanyName String? @map("persona_company_name")
-  personaTone        String? @map("persona_tone")          // "casual" | "formal" | "friendly"
-  personaGreeting    String? @map("persona_greeting")
+  personaCompanyName      String? @map("persona_company_name")
+  personaTone             String? @map("persona_tone") // "casual" | "formal" | "friendly"
+  personaGreeting         String? @map("persona_greeting")
   // Tamanho desejado da resposta — "curta" (1 frase) | "normal" (1-3 frases) | "detalhada" (parágrafo)
-  personaResponseLength String @default("normal") @map("persona_response_length")
+  personaResponseLength   String  @default("normal") @map("persona_response_length")
   // Idioma principal — usado pra forçar respostas em outro idioma quando necessário.
   // BCP-47 simplificado: "pt-BR", "en-US", "es-ES", "fr-FR".
-  personaLanguage   String  @default("pt-BR") @map("persona_language")
+  personaLanguage         String  @default("pt-BR") @map("persona_language")
   // Pausa em segundos antes de enviar a resposta, simulando "digitando…" humano.
   // 0 = sem pausa. Útil pra não parecer bot em mensagens curtas.
-  personaResponseDelaySec Int @default(0) @map("persona_response_delay_sec")
+  personaResponseDelaySec Int     @default(0) @map("persona_response_delay_sec")
   // Intervalo MÍNIMO (segundos) entre DUAS respostas no MESMO lead. Trava
   // anti-loop: o algoritmo do Kommo trava o gatilho quando duas respostas
   // saem muito próximas no mesmo lead. Se uma 2ª resposta tentar sair antes
   // desse intervalo, ela espera o tempo restante. 0 = desligado.
-  personaMinReplyGapSec Int @default(0) @map("persona_min_reply_gap_sec")
+  personaMinReplyGapSec   Int     @default(0) @map("persona_min_reply_gap_sec")
 
   // EMOJI STYLE — paleta de emojis que a IA pode usar livremente nas respostas
   // (string[] de qualquer emoji) + frequência ("low" | "normal" | "high").
@@ -203,14 +226,14 @@ model Unit {
   // O dono da clínica edita esses 3 campos como texto livre na aba "Fontes".
   // O composer renderiza cada um como uma seção (# FATOS, # PRODUTOS, # NEGÓCIO).
   // Coexistem com a tabela KnowledgeBaseEntry (RAG vetorizado pra FAQ).
-  sourcePapel    String? @map("source_papel")    @db.Text  // Fatos importantes / papel da IA / fluxo
-  sourceProdutos String? @map("source_produtos") @db.Text  // Produtos, serviços, valores permitidos
-  sourceNegocio  String? @map("source_negocio")  @db.Text  // Visão geral do negócio, contatos, horários
+  sourcePapel    String? @map("source_papel") @db.Text // Fatos importantes / papel da IA / fluxo
+  sourceProdutos String? @map("source_produtos") @db.Text // Produtos, serviços, valores permitidos
+  sourceNegocio  String? @map("source_negocio") @db.Text // Visão geral do negócio, contatos, horários
 
   // AUTO-QUALIFICAÇÃO (Quente/Frio).
-  qualificationEnabled  Boolean @default(false) @map("qualification_enabled")
-  qualificationHotTag   String  @default("Quente") @map("qualification_hot_tag")
-  qualificationColdTag  String  @default("Frio") @map("qualification_cold_tag")
+  qualificationEnabled Boolean @default(false) @map("qualification_enabled")
+  qualificationHotTag  String  @default("Quente") @map("qualification_hot_tag")
+  qualificationColdTag String  @default("Frio") @map("qualification_cold_tag")
 
   // TRIAGEM — define o que a IA precisa coletar antes de avançar o lead de
   // etapa, e reforça que, quando a triagem estiver completa (ou houver
@@ -238,9 +261,9 @@ model Unit {
 
   // HORÁRIO COMERCIAL — fora desse intervalo, IA responde mensagem padrão.
   businessHoursEnabled  Boolean  @default(false) @map("business_hours_enabled")
-  businessHoursStart    Int      @default(9) @map("business_hours_start")   // 0-23
-  businessHoursEnd      Int      @default(18) @map("business_hours_end")    // 0-23
-  businessHoursDays     String[] @default(["mon","tue","wed","thu","fri"]) @map("business_hours_days")
+  businessHoursStart    Int      @default(9) @map("business_hours_start") // 0-23
+  businessHoursEnd      Int      @default(18) @map("business_hours_end") // 0-23
+  businessHoursDays     String[] @default(["mon", "tue", "wed", "thu", "fri"]) @map("business_hours_days")
   businessHoursTimezone String   @default("America/Sao_Paulo") @map("business_hours_timezone")
   outOfHoursMessage     String?  @map("out_of_hours_message")
 
@@ -269,27 +292,27 @@ model Unit {
 
   // GOOGLE CALENDAR — habilita a tool `agendar_consulta` da IA.
   // Conectado via OAuth 2.0; refreshToken usado pra renovar accessToken.
-  googleAccessToken       String?   @map("google_access_token")
-  googleRefreshToken      String?   @map("google_refresh_token")
-  googleTokenExpiresAt    DateTime? @map("google_token_expires_at")
-  googleCalendarId        String?   @map("google_calendar_id")
-  googleAuthorizedEmail   String?   @map("google_authorized_email")
-  googleAuthorizedAt      DateTime? @map("google_authorized_at")
+  googleAccessToken     String?   @map("google_access_token")
+  googleRefreshToken    String?   @map("google_refresh_token")
+  googleTokenExpiresAt  DateTime? @map("google_token_expires_at")
+  googleCalendarId      String?   @map("google_calendar_id")
+  googleAuthorizedEmail String?   @map("google_authorized_email")
+  googleAuthorizedAt    DateTime? @map("google_authorized_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  agentConfigs     AgentConfig[]
-  traces           ExecutionTrace[]
-  llmCalls         LlmCall[]
-  conversations    Conversation[]
-  messageTemplates MessageTemplate[]
-  knowledgeBase    KnowledgeBaseEntry[]
-  actions          UnitAction[]
-  admins           User[]
-  systemLogs       SystemLog[]
-  leadFieldRules   LeadFieldRule[]
-  leadMemories     LeadMemory[]
+  agentConfigs          AgentConfig[]
+  traces                ExecutionTrace[]
+  llmCalls              LlmCall[]
+  conversations         Conversation[]
+  messageTemplates      MessageTemplate[]
+  knowledgeBase         KnowledgeBaseEntry[]
+  actions               UnitAction[]
+  admins                User[]
+  systemLogs            SystemLog[]
+  leadFieldRules        LeadFieldRule[]
+  leadMemories          LeadMemory[]
   whatsappCostDaily     WhatsappCostDaily[]
   whatsappTemplateDaily WhatsappTemplateDaily[]
 
@@ -358,13 +381,19 @@ model UnitAction {
   unitId String @map("unit_id")
   unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
-  conditionDescription String @map("condition_description")
-  /** Lista de ações que disparam juntas quando a condição bate. */
-  actions              Json   @default("[]") @map("actions")
-  /** @deprecated Substituído por `actions[]`. Mantido pra rollback seguro. */
-  actionKind           String @default("") @map("action_kind")
-  /** @deprecated Substituído por `actions[]`. Mantido pra rollback seguro. */
-  actionParams         Json   @default("{}") @map("action_params")
+  conditionDescription String  @map("condition_description")
+  /**
+   * Lista de ações que disparam juntas quando a condição bate.
+   */
+  actions              Json    @default("[]") @map("actions")
+  /**
+   * @deprecated Substituído por `actions[]`. Mantido pra rollback seguro.
+   */
+  actionKind           String  @default("") @map("action_kind")
+  /**
+   * @deprecated Substituído por `actions[]`. Mantido pra rollback seguro.
+   */
+  actionParams         Json    @default("{}") @map("action_params")
   notes                String? @map("notes")
   enabled              Boolean @default(true)
 
@@ -396,14 +425,20 @@ model LeadMemory {
   id     String @id @default(cuid())
   unitId String @map("unit_id")
   unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  /** ID do lead no Kommo. Único por unit — cada paciente tem 1 memória. */
+  /**
+   * ID do lead no Kommo. Único por unit — cada paciente tem 1 memória.
+   */
   leadId String @map("lead_id")
 
-  summary          String  @default("") @db.Text
-  facts            Json    @default("{}") @map("facts")
-  /** Quantas mensagens novas o paciente mandou desde o último resumo. */
-  turnsSinceUpdate Int     @default(0) @map("turns_since_update")
-  /** Última vez que o updater rodou (não a última leitura). */
+  summary          String    @default("") @db.Text
+  facts            Json      @default("{}") @map("facts")
+  /**
+   * Quantas mensagens novas o paciente mandou desde o último resumo.
+   */
+  turnsSinceUpdate Int       @default(0) @map("turns_since_update")
+  /**
+   * Última vez que o updater rodou (não a última leitura).
+   */
   lastSummarizedAt DateTime? @map("last_summarized_at")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -429,11 +464,15 @@ model GlobalAction {
   id String @id @default(cuid())
 
   conditionDescription String  @map("condition_description")
-  /** Mesma estrutura de UnitAction.actions: [{ kind, params }, ...]. */
+  /**
+   * Mesma estrutura de UnitAction.actions: [{ kind, params }, ...].
+   */
   actions              Json    @default("[]") @map("actions")
   notes                String? @map("notes")
   enabled              Boolean @default(true)
-  /** Ordem de exibição/aplicação no prompt. Globais com `priority` menor vêm primeiro. */
+  /**
+   * Ordem de exibição/aplicação no prompt. Globais com `priority` menor vêm primeiro.
+   */
   priority             Int     @default(0)
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -584,14 +623,14 @@ enum StepKind {
 // permitem drill-down: do erro pro trace pro lead.
 // ===========================================================================
 model SystemLog {
-  id        String      @id @default(cuid())
+  id        String   @id @default(cuid())
   level     LogLevel
   module    String?
   msg       String
   context   Json?
-  unitId    String?     @map("unit_id")
-  traceId   String?     @map("trace_id")
-  createdAt DateTime    @default(now()) @map("created_at")
+  unitId    String?  @map("unit_id")
+  traceId   String?  @map("trace_id")
+  createdAt DateTime @default(now()) @map("created_at")
 
   unit  Unit?           @relation(fields: [unitId], references: [id], onDelete: SetNull)
   trace ExecutionTrace? @relation(fields: [traceId], references: [id], onDelete: SetNull)
@@ -633,24 +672,24 @@ enum LogLevel {
 // `examples` ajuda a IA a reconhecer variações de frase — vai parar no prompt.
 // ===========================================================================
 model LeadFieldRule {
-  id              String   @id @default(cuid())
-  unitId          String   @map("unit_id")
-  kommoFieldId    Int      @map("kommo_field_id")
-  kommoFieldName  String   @map("kommo_field_name")
-  kommoFieldType  String   @map("kommo_field_type") // text|textarea|numeric|date|birthday|select|multiselect|radiobutton
-  kommoFieldEnums Json?    @map("kommo_field_enums") // [{id, value}] pra select/multiselect
-  toolName        String   @map("tool_name")        // ex: "salvar_idade"
-  instruction     String                              // quando o agente deve chamar a tool
-  valueHint       String?  @map("value_hint")       // formato esperado (ex: "número inteiro 0-120")
-  examples        String[] @default([])
-  enabled         Boolean  @default(true)
+  id               String   @id @default(cuid())
+  unitId           String   @map("unit_id")
+  kommoFieldId     Int      @map("kommo_field_id")
+  kommoFieldName   String   @map("kommo_field_name")
+  kommoFieldType   String   @map("kommo_field_type") // text|textarea|numeric|date|birthday|select|multiselect|radiobutton
+  kommoFieldEnums  Json?    @map("kommo_field_enums") // [{id, value}] pra select/multiselect
+  toolName         String   @map("tool_name") // ex: "salvar_idade"
+  instruction      String // quando o agente deve chamar a tool
+  valueHint        String?  @map("value_hint") // formato esperado (ex: "número inteiro 0-120")
+  examples         String[] @default([])
+  enabled          Boolean  @default(true)
   // Quando true, a tool gerada por esta regra ALÉM de gravar no campo custom
   // também atualiza o `name` do lead (o título visível do card no Kommo).
   // Caso de uso: regra "Nome da pessoa" — antes morava no toggle dedicado
   // collectNameEnabled, agora é por-regra.
-  updatesLeadTitle Boolean @default(false) @map("updates_lead_title")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  updatesLeadTitle Boolean  @default(false) @map("updates_lead_title")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
   unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
@@ -671,14 +710,14 @@ model LeadFieldRule {
 // Cloud direto), manual (quando um operador respondeu pelo painel).
 // ===========================================================================
 model Conversation {
-  id          String   @id @default(cuid())
-  unitId      String   @map("unit_id")
-  leadId      String   @map("lead_id")
-  contactName String?  @map("contact_name")
-  phone       String?
-  channel     String   @default("kommo")
+  id            String   @id @default(cuid())
+  unitId        String   @map("unit_id")
+  leadId        String   @map("lead_id")
+  contactName   String?  @map("contact_name")
+  phone         String?
+  channel       String   @default("kommo")
   lastMessageAt DateTime @default(now()) @map("last_message_at")
-  createdAt   DateTime @default(now()) @map("created_at")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   // Marca de conversão. `convertedAt` é NULL enquanto o lead não entrou
   // numa etapa de "Ganho". `convertedStatusId` é o status_id do Kommo
@@ -686,9 +725,9 @@ model Conversation {
   convertedAt       DateTime? @map("converted_at")
   convertedStatusId Int?      @map("converted_status_id")
 
-  unit         Unit                     @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  messages     Message[]
-  evaluations  ConversationEvaluation[]
+  unit        Unit                     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  messages    Message[]
+  evaluations ConversationEvaluation[]
 
   @@unique([unitId, leadId])
   @@index([unitId])
@@ -772,18 +811,18 @@ model LlmCall {
 // que o Unit.systemPrompt mude depois, conseguimos reconstruir a versão.
 // ===========================================================================
 model ConversationEvaluation {
-  id              String   @id @default(cuid())
-  conversationId  String   @map("conversation_id")
-  unitId          String   @map("unit_id")
-  promptHash      String   @map("prompt_hash")
-  promptSnapshot  String   @map("prompt_snapshot") @db.Text
-  model           String
-  scores          Json
-  overallScore    Float    @default(0) @map("overall_score")
-  verdict         String   @db.Text
-  costUsd         Decimal  @default(0) @map("cost_usd") @db.Decimal(12, 6)
-  latencyMs       Int      @default(0) @map("latency_ms")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  unitId         String   @map("unit_id")
+  promptHash     String   @map("prompt_hash")
+  promptSnapshot String   @map("prompt_snapshot") @db.Text
+  model          String
+  scores         Json
+  overallScore   Float    @default(0) @map("overall_score")
+  verdict        String   @db.Text
+  costUsd        Decimal  @default(0) @map("cost_usd") @db.Decimal(12, 6)
+  latencyMs      Int      @default(0) @map("latency_ms")
+  createdAt      DateTime @default(now()) @map("created_at")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
@@ -844,25 +883,45 @@ model AgentConfig {
 model WhatsappCostDaily {
   id              String   @id @default(cuid())
   unitId          String   @map("unit_id")
-  /** Dia do bucket (UTC), truncado a 00:00:00. */
+  /**
+   * Dia do bucket (UTC), truncado a 00:00:00.
+   */
   date            DateTime @db.Date
-  /** MARKETING | UTILITY | AUTHENTICATION | SERVICE | AUTHENTICATION_INTERNATIONAL | etc. */
+  /**
+   * MARKETING | UTILITY | AUTHENTICATION | SERVICE | AUTHENTICATION_INTERNATIONAL | etc.
+   */
   pricingCategory String   @map("pricing_category")
-  /** REGULAR | FREE_ENTRY_POINT | FREE_CUSTOMER_SERVICE | FREE_GROUP_CUSTOMER_SERVICE */
+  /**
+   * REGULAR | FREE_ENTRY_POINT | FREE_CUSTOMER_SERVICE | FREE_GROUP_CUSTOMER_SERVICE
+   */
   pricingType     String   @default("REGULAR") @map("pricing_type")
-  /** ISO 3166-1 alpha-2 (ex: "BR", "US"). String vazia = agregado/desconhecido. */
+  /**
+   * ISO 3166-1 alpha-2 (ex: "BR", "US"). String vazia = agregado/desconhecido.
+   */
   country         String   @default("")
-  /** Phone number id da Meta. String vazia = agregado por WABA inteira. */
+  /**
+   * Phone number id da Meta. String vazia = agregado por WABA inteira.
+   */
   phoneNumber     String   @default("") @map("phone_number")
-  /** Tier de volume cobrado (string opaca da Meta). String vazia = N/A. */
+  /**
+   * Tier de volume cobrado (string opaca da Meta). String vazia = N/A.
+   */
   tier            String   @default("")
-  /** Contagem de mensagens cobradas neste bucket. */
+  /**
+   * Contagem de mensagens cobradas neste bucket.
+   */
   volume          Int      @default(0)
-  /** Custo total em USD (Meta cobra em USD; campo numérico-fixo). */
+  /**
+   * Custo total em USD (Meta cobra em USD; campo numérico-fixo).
+   */
   costUsd         Decimal  @default(0) @map("cost_usd") @db.Decimal(12, 6)
-  /** Moeda originária reportada pela Meta (sempre "USD" hoje). */
+  /**
+   * Moeda originária reportada pela Meta (sempre "USD" hoje).
+   */
   currency        String   @default("USD")
-  /** Quando o sync rodou pela última vez pra esta combinação. */
+  /**
+   * Quando o sync rodou pela última vez pra esta combinação.
+   */
   syncedAt        DateTime @default(now()) @map("synced_at")
 
   unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
@@ -886,13 +945,21 @@ model WhatsappCostDaily {
 model WhatsappTemplateDaily {
   id           String   @id @default(cuid())
   unitId       String   @map("unit_id")
-  /** Dia do bucket (UTC), truncado a 00:00:00. */
+  /**
+   * Dia do bucket (UTC), truncado a 00:00:00.
+   */
   date         DateTime @db.Date
-  /** ID do template na Meta (numérico em string). */
+  /**
+   * ID do template na Meta (numérico em string).
+   */
   templateId   String   @map("template_id")
-  /** Nome legível do template. Desnormalizado da lista de templates. */
+  /**
+   * Nome legível do template. Desnormalizado da lista de templates.
+   */
   templateName String?  @map("template_name")
-  /** Código do idioma (pt_BR, en_US, ...). String vazia = não-segmentado. */
+  /**
+   * Código do idioma (pt_BR, en_US, ...). String vazia = não-segmentado.
+   */
   language     String   @default("") @map("language")
   sent         Int      @default(0)
   delivered    Int      @default(0)
@@ -915,3 +982,80 @@ model WhatsappTemplateDaily {
 // O `checkpointer.setup()` no boot cria/migra `checkpoints`, `checkpoint_writes`,
 // `checkpoint_blobs`, `checkpoint_migrations` com schema correto (JSONB).
 // ---------------------------------------------------------------------------
+
+// ===========================================================================
+// InstagramComment — um comentário recebido no Instagram e o que fizemos com ele.
+// ===========================================================================
+// POR QUE PERSISTIR, se o Kommo já guarda o lead?
+//   1. DEDUP DURÁVEL. A Meta reentrega webhook em retry, e o cache em memória
+//      morre no deploy. `commentId` único no banco é o que garante que a gente
+//      não responde duas vezes o mesmo comentário — em público, na frente de
+//      todo mundo.
+//   2. FILA DE APROVAÇÃO. Em dry run o agente grava o rascunho aqui em vez de
+//      publicar. A mesma tabela serve de auditoria depois que sai o dry run.
+//   3. O comentário NÃO vira lead. Quem vira lead é a conversa no DM. Sem esta
+//      tabela, o trabalho do agente de comentário não deixaria rastro nenhum.
+//
+// Não há FK pro lead do Kommo de propósito: quando o comentário chega, o lead
+// ainda não existe — e pode nunca existir, se a pessoa não responder o DM.
+// ===========================================================================
+model InstagramComment {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+
+  /**
+   * ID do comentário na Meta. Chave de dedup — único global.
+   */
+  commentId String  @unique @map("comment_id")
+  /**
+   * Post/reel onde o comentário foi feito.
+   */
+  mediaId   String? @map("media_id")
+  /**
+   * Se for resposta a outro comentário, o id do pai.
+   */
+  parentId  String? @map("parent_id")
+
+  authorId       String? @map("author_id")
+  authorUsername String? @map("author_username")
+  text           String  @db.Text
+
+  /**
+   * ELOGIO | PRECO | CLINICA | AGENDAR | SPAM | OUTRO
+   */
+  category   String @default("OUTRO")
+  /**
+   * Confiança da classificação (0-1). Baixa → não publica, mesmo fora do dry run.
+   */
+  confidence Float  @default(0)
+
+  /**
+   * Texto que respondemos (ou responderíamos) no comentário público.
+   */
+  publicReply  String? @map("public_reply") @db.Text
+  /**
+   * Texto do DM que puxa pro privado / WhatsApp.
+   */
+  privateReply String? @map("private_reply") @db.Text
+
+  /**
+   * PENDING | SENT | SKIPPED | FAILED
+   */
+  status        String    @default("PENDING")
+  publicSentAt  DateTime? @map("public_sent_at")
+  privateSentAt DateTime? @map("private_sent_at")
+  /**
+   * Por que pulamos (spam, comentário nosso, confiança baixa, dry run).
+   */
+  skipReason    String?   @map("skip_reason")
+  error         String?   @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@index([unitId, createdAt(sort: Desc)])
+  @@index([unitId, status])
+  @@map("instagram_comments")
+}

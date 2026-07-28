@@ -69,6 +69,16 @@ const unitInputBase = {
   metaAppSecret: z.string().nullable().optional(),
   metaWabaId: z.string().nullable().optional(),
   metaMonthlyBudgetUsd: z.coerce.number().min(0).max(1_000_000).optional(),
+
+  // Instagram — agente de comentários (canal separado do WhatsApp).
+  igEnabled: z.boolean().optional(),
+  igUserId: z.string().nullable().optional(),
+  igAccessToken: z.string().nullable().optional(),
+  igVerifyToken: z.string().nullable().optional(),
+  igAppSecret: z.string().nullable().optional(),
+  igDryRun: z.boolean().optional(),
+  igWhatsappNumber: z.string().max(30).nullable().optional(),
+  igPublicSignature: z.string().max(60).nullable().optional(),
   systemPrompt: z.string().max(20_000).optional(),
   // Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer).
   singlePromptMode: z.boolean().optional(),
@@ -138,6 +148,9 @@ function dropMaskedSecrets<T extends Partial<UnitInput>>(input: T): T {
     'metaAccessToken',
     'metaAppSecret',
     'metaVerifyToken',
+    'igAccessToken',
+    'igAppSecret',
+    'igVerifyToken',
   ] as const) {
     if (isMasked(out[k])) delete out[k];
   }

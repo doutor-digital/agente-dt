@@ -95,6 +95,13 @@ import {
   captureCoverageHandler,
 } from '../controllers/lead-field-rules.controller.js';
 import {
+  handleInstagramVerify,
+  handleInstagramWebhook,
+  listInstagramCommentsHandler,
+  approveInstagramCommentHandler,
+  rejectInstagramCommentHandler,
+} from '../controllers/instagram.controller.js';
+import {
   getAlerts,
   getIntegrations,
   getDeliveryMonitor,
@@ -134,6 +141,9 @@ apiRouter.post('/webhooks/:unitSlug/salesbot', handleSalesbotWebhook);
 apiRouter.post('/webhooks/:unitSlug/widget', handleWidgetRequest);
 apiRouter.get('/webhooks/:unitSlug/meta', handleMetaVerify);
 apiRouter.post('/webhooks/:unitSlug/meta', handleMetaWebhook);
+// Comentários do Instagram — canal separado do WhatsApp (ver instagram.controller).
+apiRouter.get('/webhooks/:unitSlug/instagram', handleInstagramVerify);
+apiRouter.post('/webhooks/:unitSlug/instagram', handleInstagramWebhook);
 apiRouter.post('/webhooks/kommo', handleKommoWebhook);          // retrocompat
 apiRouter.post('/webhooks/salesbot', handleSalesbotWebhook);    // retrocompat
 
@@ -232,6 +242,19 @@ apiRouter.get(
 apiRouter.post('/units/:id/lead-field-rules', requireUnitAccess, createLeadFieldRuleHandler);
 apiRouter.patch('/units/:id/lead-field-rules/:ruleId', requireUnitAccess, updateLeadFieldRuleHandler);
 apiRouter.delete('/units/:id/lead-field-rules/:ruleId', requireUnitAccess, deleteLeadFieldRuleHandler);
+
+// Fila de moderação dos comentários do Instagram.
+apiRouter.get('/units/:id/instagram/comments', requireUnitAccess, listInstagramCommentsHandler);
+apiRouter.post(
+  '/units/:id/instagram/comments/:commentRowId/approve',
+  requireUnitAccess,
+  approveInstagramCommentHandler,
+);
+apiRouter.post(
+  '/units/:id/instagram/comments/:commentRowId/reject',
+  requireUnitAccess,
+  rejectInstagramCommentHandler,
+);
 apiRouter.get('/units/:id/kommo-lead-custom-fields', requireUnitAccess, listKommoLeadCustomFieldsHandler);
 
 // ---------------------------------------------------------------------------

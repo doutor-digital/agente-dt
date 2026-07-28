@@ -50,6 +50,9 @@ import type {
   WhatsappCostsResponse,
   WhatsappTemplatesResponse,
   WhatsappSyncResult,
+  IgCommentStatus,
+  InstagramComment,
+  InstagramCommentsResponse,
 } from '../types/api';
 
 // Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
@@ -213,6 +216,34 @@ export const api = {
       `/units/${unitId}/lead-field-rules`,
     );
     return data.rules;
+  },
+  // ── Instagram — fila de moderação de comentários ──
+  async instagramComments(
+    unitId: string,
+    params: { status?: IgCommentStatus; limit?: number } = {},
+  ): Promise<InstagramCommentsResponse> {
+    const { data } = await http.get<InstagramCommentsResponse>(
+      `/units/${unitId}/instagram/comments`,
+      { params },
+    );
+    return data;
+  },
+  async approveInstagramComment(
+    unitId: string,
+    rowId: string,
+    body: { publicReply?: string | null; privateReply?: string | null } = {},
+  ): Promise<InstagramComment> {
+    const { data } = await http.post<{ comment: InstagramComment }>(
+      `/units/${unitId}/instagram/comments/${rowId}/approve`,
+      body,
+    );
+    return data.comment;
+  },
+  async rejectInstagramComment(unitId: string, rowId: string): Promise<InstagramComment> {
+    const { data } = await http.post<{ comment: InstagramComment }>(
+      `/units/${unitId}/instagram/comments/${rowId}/reject`,
+    );
+    return data.comment;
   },
   async captureCoverage(unitId: string, days = 30): Promise<CaptureCoverage> {
     const { data } = await http.get<CaptureCoverage>(

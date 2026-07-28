@@ -387,6 +387,9 @@ export function maskUnitSecrets<T extends Unit>(unit: T): T & { _hasSecrets: Rec
     metaAccessToken: mask(unit.metaAccessToken),
     metaAppSecret: mask(unit.metaAppSecret),
     metaVerifyToken: mask(unit.metaVerifyToken),
+    igAccessToken: mask(unit.igAccessToken),
+    igAppSecret: mask(unit.igAppSecret),
+    igVerifyToken: mask(unit.igVerifyToken),
     _hasSecrets: {
       kommoAccessToken: !!unit.kommoAccessToken,
       kommoWidgetSecret: !!unit.kommoWidgetSecret,
@@ -396,6 +399,9 @@ export function maskUnitSecrets<T extends Unit>(unit: T): T & { _hasSecrets: Rec
       metaAccessToken: !!unit.metaAccessToken,
       metaAppSecret: !!unit.metaAppSecret,
       metaVerifyToken: !!unit.metaVerifyToken,
+      igAccessToken: !!unit.igAccessToken,
+      igAppSecret: !!unit.igAppSecret,
+      igVerifyToken: !!unit.igVerifyToken,
     },
   };
 }

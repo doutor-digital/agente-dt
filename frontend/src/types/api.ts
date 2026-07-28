@@ -254,6 +254,15 @@ export interface Unit {
   metaVerifyToken: string | null;
   metaAppSecret: string | null;
   metaWabaId: string | null;
+  // Instagram — agente de comentários.
+  igEnabled: boolean;
+  igUserId: string | null;
+  igAccessToken: string | null;
+  igVerifyToken: string | null;
+  igAppSecret: string | null;
+  igDryRun: boolean;
+  igWhatsappNumber: string | null;
+  igPublicSignature: string | null;
   metaMonthlyBudgetUsd: number | string;
   systemPrompt: string;
   /** Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer). */
@@ -991,4 +1000,39 @@ export interface CaptureCoverage {
   /** Leads distintos com execução no período — o denominador. */
   totalLeads: number;
   rows: CaptureCoverageRow[];
+}
+
+
+// ---------------------------------------------------------------------------
+// Instagram — comentários e fila de moderação.
+// ---------------------------------------------------------------------------
+
+export type IgCommentCategory = 'ELOGIO' | 'PRECO' | 'CLINICA' | 'AGENDAR' | 'SPAM' | 'OUTRO';
+export type IgCommentStatus = 'PENDING' | 'SENT' | 'SKIPPED' | 'FAILED';
+
+export interface InstagramComment {
+  id: string;
+  unitId: string;
+  commentId: string;
+  mediaId: string | null;
+  parentId: string | null;
+  authorId: string | null;
+  authorUsername: string | null;
+  text: string;
+  category: IgCommentCategory;
+  confidence: number;
+  publicReply: string | null;
+  privateReply: string | null;
+  status: IgCommentStatus;
+  publicSentAt: string | null;
+  privateSentAt: string | null;
+  skipReason: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InstagramCommentsResponse {
+  comments: InstagramComment[];
+  counts: Partial<Record<IgCommentStatus, number>>;
 }

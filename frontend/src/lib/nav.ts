@@ -16,6 +16,7 @@ import {
   Cpu,
   FileBarChart,
   Globe,
+  Instagram,
   LayoutDashboard,
   MessageCircle,
   MessagesSquare,
@@ -50,7 +51,8 @@ export type AppTab =
   | 'users'
   | 'errors'
   | 'delivery'
-  | 'whatsapp';
+  | 'whatsapp'
+  | 'instagram';
 
 /** Grupos da sidebar, na ordem em que aparecem. */
 export type NavSection = 'operacao' | 'agente' | 'analise' | 'plataforma';
@@ -123,6 +125,14 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Wand2,
     section: 'agente',
     keywords: ['persona', 'prompt', 'fontes', 'acoes', 'playground', 'treinar'],
+  },
+  {
+    id: 'instagram',
+    label: 'Instagram',
+    hint: 'Comentários respondidos pelo agente e fila de aprovação.',
+    icon: Instagram,
+    section: 'agente',
+    keywords: ['comentarios', 'insta', 'direct', 'dm', 'post', 'reels'],
   },
   {
     id: 'units',

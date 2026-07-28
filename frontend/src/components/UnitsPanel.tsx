@@ -20,6 +20,7 @@ import {
   Copy,
   KeyRound,
   Loader2,
+  Instagram,
   MessagesSquare,
   MoreVertical,
   Pencil,
@@ -729,6 +730,72 @@ export function UnitsPanel() {
             } as FormSection,
           ]
         : []),
+      {
+        id: 'instagram',
+        label: 'Instagram — comentários',
+        icon: Instagram,
+        subtitle:
+          'Agente que responde comentários no perfil e puxa a pessoa pro direct/WhatsApp. Canal separado do WhatsApp: o que vale aqui é a conta IG Profissional ligada à Página.',
+        body: (
+          <>
+            <div className="rounded-md bg-zinc-900/60 ring-1 ring-zinc-800 px-3 py-2 text-[11px] text-zinc-400 leading-relaxed">
+              URL do webhook pra cadastrar no app da Meta (campo <span className="text-zinc-300">comments</span>):
+              <div className="mt-1 font-mono text-[11px] text-zinc-300 break-all">
+                {window.location.origin}/api/webhooks/{draft.slug || '<slug>'}/instagram
+              </div>
+            </div>
+            <Toggle
+              label="Ligar o agente de comentários"
+              value={draft.igEnabled ?? false}
+              onChange={(v) => setDraft({ ...draft, igEnabled: v })}
+            />
+            <Toggle
+              label="Modo revisão (não publica sozinho)"
+              value={draft.igDryRun ?? true}
+              onChange={(v) => setDraft({ ...draft, igDryRun: v })}
+            />
+            <Field
+              label="IG User ID"
+              value={draft.igUserId ?? ''}
+              onChange={(v) => setDraft({ ...draft, igUserId: v })}
+              hint="ID da conta Instagram Profissional (não é o @). Usado pra mandar o direct e pra ignorar os comentários da própria conta."
+            />
+            <Field
+              label="Access Token"
+              value={draft.igAccessToken ?? ''}
+              onChange={(v) => setDraft({ ...draft, igAccessToken: v })}
+              type="password"
+              hint="Token da Página com permissão de gerenciar comentários e mensagens."
+            />
+            <Field
+              label="Verify Token"
+              value={draft.igVerifyToken ?? ''}
+              onChange={(v) => setDraft({ ...draft, igVerifyToken: v })}
+              type="password"
+              hint="Qualquer string sua — a mesma que você digita no painel da Meta. Vazio herda o do WhatsApp."
+            />
+            <Field
+              label="App Secret"
+              value={draft.igAppSecret ?? ''}
+              onChange={(v) => setDraft({ ...draft, igAppSecret: v })}
+              type="password"
+              hint="Só se o Instagram estiver num app diferente. Vazio herda o App Secret do WhatsApp."
+            />
+            <Field
+              label="WhatsApp do direct"
+              value={draft.igWhatsappNumber ?? ''}
+              onChange={(v) => setDraft({ ...draft, igWhatsappNumber: v })}
+              hint="Formato 5599999999999 (DDI+DDD, só dígitos). Vira link wa.me DENTRO do direct — nunca no comentário público."
+            />
+            <Field
+              label="Assinatura na resposta pública"
+              value={draft.igPublicSignature ?? ''}
+              onChange={(v) => setDraft({ ...draft, igPublicSignature: v })}
+              hint="Opcional, ex: — Equipe DH. Vai colado no fim de todo comentário respondido."
+            />
+          </>
+        ),
+      } as FormSection,
       {
         id: 'meta',
         label: 'Meta WhatsApp',

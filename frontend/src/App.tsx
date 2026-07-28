@@ -54,6 +54,7 @@ const FontesPanel = lazy(() =>
 const AcoesPanel = lazy(() =>
   import('./components/AcoesPanel').then((m) => ({ default: m.AcoesPanel })),
 );
+const InstagramPanel = lazy(() => import('./components/InstagramPanel'));
 const CapturesPanel = lazy(() =>
   import('./components/CapturesPanel').then((m) => ({ default: m.CapturesPanel })),
 );
@@ -185,6 +186,7 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
             {tab === 'reports' && <ReportsPanel />}
             {tab === 'whatsapp' && <WhatsappCostsPanel />}
             {tab === 'captures' && <CapturesPanel />}
+            {tab === 'instagram' && <InstagramPanel />}
             {tab === 'config' && <AgentConfigPanel />}
             {tab === 'units' && <UnitsPanel />}
             {tab === 'users' && <UsersPanel />}
