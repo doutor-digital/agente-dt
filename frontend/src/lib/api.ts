@@ -61,6 +61,19 @@ const apiBase = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
   : '/api';
 
+// ORIGEM ABSOLUTA DA API. O webhook da Meta é cadastrado no painel deles e
+// precisa apontar pro BACKEND — que em produção vive num domínio DIFERENTE do
+// front (agente-vps.* vs agente.*). Montar essa URL com window.location.origin
+// dá um endereço que responde 404: o front não tem /api.
+export const apiOrigin = import.meta.env.VITE_API_URL
+  ? String(import.meta.env.VITE_API_URL).replace(/\/$/, '')
+  : window.location.origin;
+
+/** URL completa de um webhook, pronta pra colar no painel da Meta. */
+export function webhookUrl(slug: string, channel: 'instagram' | 'meta' | 'kommo'): string {
+  return `${apiOrigin}/api/webhooks/${slug}/${channel}`;
+}
+
 // `withCredentials: true` faz o axios enviar e receber cookies (dt_session).
 // Sem isso, login não persiste — o navegador joga fora o Set-Cookie.
 const http = axios.create({ baseURL: apiBase, timeout: 15_000, withCredentials: true });

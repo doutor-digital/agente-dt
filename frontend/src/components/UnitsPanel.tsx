@@ -38,7 +38,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
-import { api } from '../lib/api';
+import { api , webhookUrl } from '../lib/api';
 import type { Unit, UnitInput, WidgetStatusResponse } from '../types/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
@@ -741,7 +741,7 @@ export function UnitsPanel() {
             <div className="rounded-md bg-zinc-900/60 ring-1 ring-zinc-800 px-3 py-2 text-[11px] text-zinc-400 leading-relaxed">
               URL do webhook pra cadastrar no app da Meta (campo <span className="text-zinc-300">comments</span>):
               <div className="mt-1 font-mono text-[11px] text-zinc-300 break-all">
-                {window.location.origin}/api/webhooks/{draft.slug || '<slug>'}/instagram
+                {webhookUrl(draft.slug || '<slug>', 'instagram')}
               </div>
             </div>
             <Toggle
