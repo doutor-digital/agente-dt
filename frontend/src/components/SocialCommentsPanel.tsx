@@ -170,14 +170,20 @@ export default function SocialCommentsPanel({
     return <p className="text-sm text-zinc-400">Selecione um agente.</p>;
   }
 
+  // O shell do app NÃO dá padding nem scroll — cada painel monta o seu, como
+  // fazem CapturesPanel e DashboardPanel. Sem esse wrapper o conteúdo cola nas
+  // bordas e a página não rola: era exatamente o "espremido" que aparecia com
+  // a barra lateral recolhida.
   return (
-    <div className="space-y-6 animate-fade-in-up">
-      <PageHeader unit={unit} skin={skin} view={view} onView={setView} />
-      {view === 'fila' ? (
-        <Queue unit={unit} skin={skin} platform={platform} onGoConfig={() => setView('config')} />
-      ) : (
-        <Setup unit={unit} skin={skin} onSaved={refresh} />
-      )}
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-[1500px] space-y-7 p-8">
+        <PageHeader unit={unit} skin={skin} view={view} onView={setView} />
+        {view === 'fila' ? (
+          <Queue unit={unit} skin={skin} platform={platform} onGoConfig={() => setView('config')} />
+        ) : (
+          <Setup unit={unit} skin={skin} onSaved={refresh} />
+        )}
+      </div>
     </div>
   );
 }
@@ -195,7 +201,7 @@ function PageHeader({
 }) {
   const Brand = skin.Brand;
   return (
-    <header className="relative overflow-hidden surface p-5">
+    <header className="relative overflow-hidden surface p-7">
       {/* Fundo com o gradiente do Instagram, bem discreto — dá identidade de
           canal sem competir com o conteúdo. */}
       <div
@@ -208,7 +214,7 @@ function PageHeader({
           <div className="eyebrow flex items-center gap-1.5">
             <Brand size={12} /> Canal
           </div>
-          <h1 className="mt-1 text-xl font-semibold text-zinc-100">
+          <h1 className="mt-1.5 text-2xl font-semibold tracking-tight text-zinc-100">
             Comentários do {skin.label}
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-zinc-400">
@@ -343,11 +349,11 @@ function Setup({
       ].filter(Boolean);
 
   return (
-    <div className="space-y-5 pb-24">
+    <div className="space-y-7 pb-28">
       {/* Duas colunas em telas largas: sem isso a página vira uma coluna fina
           no meio de dois desertos — foi a reclamação de "espremido". */}
       <div className="grid gap-5 xl:grid-cols-2">
-        <section className="surface p-6">
+        <section className="surface p-7">
           <SectionTitle
             title="Por onde a resposta sai"
             desc="Define o que o agente precisa e o que você tem que configurar."
@@ -369,7 +375,7 @@ function Setup({
           </div>
         </section>
 
-        <section className="surface p-6">
+        <section className="surface p-7">
           <SectionTitle title="Como o agente deve agir" desc="Vale só para este canal." />
           <div className="mt-5 space-y-3">
             <SwitchRow
@@ -390,7 +396,7 @@ function Setup({
       </div>
 
       {/* O prompt ocupa a largura toda: é o campo que mais precisa de espaço. */}
-      <section className="surface p-6">
+      <section className="surface p-7">
         <SectionTitle
           title="Instrução do agente"
           desc={`Como ele deve escrever a mensagem que leva a pessoa pro ${skin.privado}.`}
@@ -424,7 +430,7 @@ function Setup({
 
       {/* Credenciais / entrega */}
       {viaKommo ? (
-        <section className="surface p-6">
+        <section className="surface p-7">
           <SectionTitle
             title="Entrega pelo Salesbot"
             desc="O mesmo caminho que a IA já usa no WhatsApp: a resposta é escrita num campo e o Salesbot envia."
@@ -464,7 +470,7 @@ function Setup({
         </section>
       ) : (
         <div className="grid gap-5 xl:grid-cols-2">
-          <section className="surface p-6">
+          <section className="surface p-7">
             <SectionTitle
               title="Webhook na Meta"
               desc={`No painel do seu app, em Webhooks, assine o objeto ${skin.label} e marque o campo de comentários.`}
@@ -479,7 +485,7 @@ function Setup({
             </p>
           </section>
 
-          <section className="surface p-6">
+          <section className="surface p-7">
             <SectionTitle title="Credenciais" desc="" />
             <div className="mt-5 grid gap-5 sm:grid-cols-2">
               <TextField
@@ -644,8 +650,8 @@ function Queue({
   const counts = data?.counts ?? {};
 
   return (
-    <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="space-y-6">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Aguardando você" value={counts.PENDING ?? 0} tone="amber" icon={PiShieldCheckBold} />
         <Stat label="Publicados" value={counts.SENT ?? 0} tone="emerald" icon={PiPaperPlaneTiltBold} />
         <Stat label="Ignorados" value={counts.SKIPPED ?? 0} tone="zinc" icon={PiXBold} />
@@ -708,7 +714,7 @@ function Queue({
       )}
 
       {data && data.comments.length === 0 && !loading && (
-        <div className="surface p-12 text-center">
+        <div className="surface p-16 text-center">
           <PiSparkleBold size={22} className="mx-auto text-zinc-600" />
           <p className="mt-3 text-sm text-zinc-400">
             {status === 'PENDING'
@@ -718,7 +724,7 @@ function Queue({
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-4">
         {data?.comments.map((c) => (
           <CommentCard key={c.id} unitId={unit.id} skin={skin} comment={c} onDone={load} />
         ))}
@@ -745,12 +751,12 @@ function Stat({
     zinc: 'text-zinc-500',
   }[tone];
   return (
-    <div className="surface p-4">
+    <div className="surface p-5">
       <div className="flex items-center justify-between">
         <span className="text-xs text-zinc-400">{label}</span>
         <Icon size={14} className={color} />
       </div>
-      <p className={`mt-2 text-2xl font-semibold tabular-nums ${value > 0 ? 'text-zinc-100' : 'text-zinc-600'}`}>
+      <p className={`mt-3 text-3xl font-semibold tabular-nums ${value > 0 ? 'text-zinc-100' : 'text-zinc-600'}`}>
         {value}
       </p>
     </div>
@@ -814,7 +820,7 @@ function CommentCard({
         </span>
       </div>
 
-      <div className="p-4">
+      <div className="p-5">
         <p className="border-l-2 border-zinc-700 pl-3 text-sm whitespace-pre-wrap text-zinc-200">
           {comment.text || <span className="italic text-zinc-500">(comentário sem texto)</span>}
         </p>
