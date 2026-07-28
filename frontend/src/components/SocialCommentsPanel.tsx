@@ -292,6 +292,7 @@ function Setup({
   const [err, setErr] = useState<string | null>(null);
 
   const viaKommo = draft.modo === 'kommo';
+  const urlCanal = skin.label === 'Facebook' ? 'facebook' : 'instagram';
 
   // Lista de campos do Kommo só faz sentido no modo Kommo — e é chamada de
   // rede na API deles, então não vale puxar quando não vai ser usada.
@@ -395,6 +396,28 @@ function Setup({
         </section>
       </div>
 
+      {/* A URL do webhook fica SEMPRE visível, nos dois modos. Antes ela só
+          aparecia no modo direto — e quem estava no modo Kommo não tinha onde
+          copiar, mesmo precisando dela pra assinar o canal na Meta. */}
+      <section className="surface p-7">
+        <SectionTitle
+          title="URL do webhook"
+          desc={`Cole no painel do seu app da Meta, em Webhooks, assinando o objeto ${skin.label} e o campo de comentários.`}
+        />
+        <CopyField label="Callback URL" value={webhookUrl(unit.slug, urlCanal)} className="mt-4" />
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <p className="text-xs leading-relaxed text-zinc-500">
+            É o endereço do <span className="text-zinc-400">backend</span>, não o do painel — são
+            domínios diferentes, e a URL do painel responderia 404.
+          </p>
+          <p className="text-xs leading-relaxed text-zinc-500">
+            {viaKommo
+              ? 'No modo Kommo quem assina o canal é o próprio Kommo. Guarde esta URL pra quando você migrar pro modo direto.'
+              : 'O Verify Token que a Meta pede é o do campo abaixo. Vazio, ele herda o do WhatsApp.'}
+          </p>
+        </div>
+      </section>
+
       {/* O prompt ocupa a largura toda: é o campo que mais precisa de espaço. */}
       <section className="surface p-7">
         <SectionTitle
@@ -470,21 +493,6 @@ function Setup({
         </section>
       ) : (
         <div className="grid gap-5 xl:grid-cols-2">
-          <section className="surface p-7">
-            <SectionTitle
-              title="Webhook na Meta"
-              desc={`No painel do seu app, em Webhooks, assine o objeto ${skin.label} e marque o campo de comentários.`}
-            />
-            <CopyField
-              label="Callback URL"
-              value={webhookUrl(unit.slug, skin.label === 'Facebook' ? 'facebook' : 'instagram')}
-              className="mt-4"
-            />
-            <p className="mt-2 text-xs text-zinc-500">
-              É o endereço do backend, não o do painel — são domínios diferentes.
-            </p>
-          </section>
-
           <section className="surface p-7">
             <SectionTitle title="Credenciais" desc="" />
             <div className="mt-5 grid gap-5 sm:grid-cols-2">
