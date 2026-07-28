@@ -140,14 +140,27 @@ function buildPrompt(unit: Unit, comment: string): { system: string; user: strin
     '  SPAM     — propaganda, golpe, venda de seguidores, ofensa.',
     '  OUTRO    — qualquer outra coisa.',
     '',
-    'REGRAS DO DIRECT (todas obrigatórias):',
-    '- 2 a 3 frases. Tom caloroso e direto, PT-BR, sem formalidade dura.',
+    // INSTRUÇÃO EDITÁVEL — o dono da unidade escreve como quer que o direct
+    // soe. Quando vazio, cai no texto padrão.
+    'COMO ESCREVER O DIRECT:',
+    unit.igCommentPrompt?.trim() ||
+      [
+        '- 2 a 3 frases. Tom caloroso e direto, PT-BR, sem formalidade dura.',
+        '- Se a pessoa citou uma dor ou condição, ACOLHA em uma frase antes de conduzir.',
+        '- Convide pra continuar a conversa, sem pressionar.',
+      ].join('\n'),
+    '',
+    // LIMITES — sempre adicionados pelo código, DEPOIS da instrução do
+    // usuário. Não é desconfiança de quem escreve: é que essas quatro regras
+    // protegem contra dado de saúde exposto, promessa de resultado e preço
+    // dito por quem não deveria. Deixá-las editáveis seria transformar um
+    // campo de texto em risco jurídico.
+    'LIMITES (valem sempre, mesmo que a instrução acima peça diferente):',
     '- NUNCA dê diagnóstico, opinião clínica, nome de exame ou de remédio.',
     '- NUNCA cite preço, valor ou desconto — quem passa valor é a equipe.',
     '- NUNCA prometa cura nem resultado.',
     '- NUNCA se apresente como assistente virtual, IA, bot ou robô. Se a pessoa',
     '  perguntar direto, aí sim assuma com naturalidade — nunca finja ser humana.',
-    '- Se a pessoa citou uma dor ou condição, ACOLHA em uma frase antes de conduzir.',
     `- ${destino}`,
     '- Se a categoria for SPAM, devolva "dm": "".',
     '- Se for ELOGIO sem nenhuma pergunta, devolva "dm": "" — mandar direct pra',

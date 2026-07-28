@@ -79,6 +79,9 @@ const unitInputBase = {
   igDryRun: z.boolean().optional(),
   igWhatsappNumber: z.string().max(30).nullable().optional(),
   igPublicSignature: z.string().max(60).nullable().optional(),
+  igDeliveryMode: z.enum(['kommo', 'direct']).optional(),
+  igReplyFieldId: z.coerce.number().int().positive().nullable().optional(),
+  igCommentPrompt: z.string().max(4000).nullable().optional(),
   systemPrompt: z.string().max(20_000).optional(),
   // Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer).
   singlePromptMode: z.boolean().optional(),

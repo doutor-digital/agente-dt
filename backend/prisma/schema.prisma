@@ -179,6 +179,22 @@ model Unit {
   // Assinatura opcional no fim da resposta pública (ex: "— Equipe DH").
   igPublicSignature String? @map("ig_public_signature")
 
+  // COMO A RESPOSTA SAI. "kommo" (padrão) = o comentário chega pelo Kommo,
+  // que já tem as permissões da Meta aprovadas, e a resposta é entregue pelo
+  // Salesbot via campo customizado — mesmo caminho do WhatsApp. "direct" =
+  // falamos com a Graph API por conta própria, o que exige App Review nosso.
+  // Começar por "kommo" tira o App Review do caminho crítico.
+  igDeliveryMode  String  @default("kommo") @map("ig_delivery_mode")
+  // Campo customizado do Kommo onde a resposta é escrita pro Salesbot ler.
+  // Análogo a kommoReplyFieldId, mas separado: a resposta de comentário tem
+  // objetivo diferente e pode ir por outro gatilho.
+  igReplyFieldId  Int?    @map("ig_reply_field_id")
+  // INSTRUÇÃO DO AGENTE DE COMENTÁRIOS. Texto livre, editável na tela do
+  // Instagram. Substitui as regras padrão de redação do direct — os limites
+  // de segurança (nada de diagnóstico, preço ou se anunciar como IA) seguem
+  // sendo adicionados pelo código, não dependem de quem escreve aqui.
+  igCommentPrompt String? @map("ig_comment_prompt") @db.Text
+
   instagramComments InstagramComment[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.

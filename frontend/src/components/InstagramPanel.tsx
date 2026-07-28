@@ -36,6 +36,7 @@ import {
   RefreshCw,
   Send,
   Settings2,
+  Radio,
   ShieldCheck,
   Sparkles,
   X,
@@ -44,6 +45,7 @@ import { api, webhookUrl } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import type {
   IgCommentCategory,
+  KommoLeadCustomField,
   IgCommentStatus,
   InstagramComment,
   InstagramCommentsResponse,
@@ -183,6 +185,9 @@ function Setup({ unit, onSaved }: { unit: Unit; onSaved: () => Promise<void> }) 
   const [draft, setDraft] = useState({
     igEnabled: unit.igEnabled,
     igDryRun: unit.igDryRun,
+    igDeliveryMode: unit.igDeliveryMode ?? 'kommo',
+    igReplyFieldId: unit.igReplyFieldId,
+    igCommentPrompt: unit.igCommentPrompt ?? '',
     igUserId: unit.igUserId ?? '',
     igAccessToken: '',
     igVerifyToken: '',
@@ -190,11 +195,26 @@ function Setup({ unit, onSaved }: { unit: Unit; onSaved: () => Promise<void> }) 
     igWhatsappNumber: unit.igWhatsappNumber ?? '',
     igPublicSignature: unit.igPublicSignature ?? '',
   });
+  const [fields, setFields] = useState<KommoLeadCustomField[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const url = webhookUrl(unit.slug, 'instagram');
+  const viaKommo = draft.igDeliveryMode === 'kommo';
+
+  // Lista de campos do Kommo só faz sentido no modo Kommo — e é chamada de
+  // rede na API deles, então não vale puxar quando não vai ser usada.
+  useEffect(() => {
+    if (!viaKommo) return;
+    let vivo = true;
+    void api
+      .kommoLeadCustomFields(unit.id)
+      .then((r) => vivo && setFields(r.fields ?? []))
+      .catch(() => undefined);
+    return () => {
+      vivo = false;
+    };
+  }, [unit.id, viaKommo]);
 
   async function save() {
     setSaving(true);
@@ -202,10 +222,13 @@ function Setup({ unit, onSaved }: { unit: Unit; onSaved: () => Promise<void> }) 
     setSaved(false);
     try {
       // Segredo em branco = "não mexer". Mandar '' apagaria o que já está lá,
-      // e o campo vem sempre em branco porque a API devolve mascarado.
+      // e o campo vem sempre vazio porque a API devolve mascarado.
       const payload: Record<string, unknown> = {
         igEnabled: draft.igEnabled,
         igDryRun: draft.igDryRun,
+        igDeliveryMode: draft.igDeliveryMode,
+        igReplyFieldId: draft.igReplyFieldId ?? null,
+        igCommentPrompt: draft.igCommentPrompt.trim() || null,
         igUserId: draft.igUserId.trim() || null,
         igWhatsappNumber: draft.igWhatsappNumber.trim() || null,
         igPublicSignature: draft.igPublicSignature.trim() || null,
@@ -227,150 +250,270 @@ function Setup({ unit, onSaved }: { unit: Unit; onSaved: () => Promise<void> }) 
   }
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-      <div className="space-y-5">
-        {/* ---- Passo 1: a URL ---- */}
-        <section className="surface p-5">
-          <StepTitle n={1} title="Cadastre esta URL no app da Meta" />
-          <p className="mt-1 text-sm text-zinc-400">
-            No painel do seu app, em Webhooks, assine o objeto{' '}
-            <span className="text-zinc-300">Instagram</span> e marque o campo{' '}
-            <span className="text-zinc-300">comments</span>. Cole a URL abaixo como Callback URL.
-          </p>
-          <CopyField label="URL do webhook" value={url} className="mt-3" />
-          <p className="mt-2 text-xs text-zinc-500">
-            É o endereço do backend, não o do painel — são domínios diferentes.
-          </p>
-        </section>
+    <div className="mx-auto max-w-4xl space-y-5 pb-24">
+      {/* ---- Caminho de entrega ---- */}
+      <section className="surface p-6">
+        <SectionTitle
+          title="Por onde a resposta sai"
+          desc="Define o que o agente precisa e o que você tem que configurar."
+        />
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <ModeCard
+            active={viaKommo}
+            onClick={() => setDraft({ ...draft, igDeliveryMode: 'kommo' })}
+            title="Pelo Kommo"
+            badge="recomendado"
+            desc="O comentário vira lead pela integração nativa do Kommo, o agente responde e o Salesbot entrega. Não depende do nosso App Review na Meta."
+          />
+          <ModeCard
+            active={!viaKommo}
+            onClick={() => setDraft({ ...draft, igDeliveryMode: 'direct' })}
+            title="Direto na Meta"
+            desc="Falamos com a Graph API por conta própria: resposta no comentário e direct automático. Exige App Review aprovado."
+          />
+        </div>
+      </section>
 
-        {/* ---- Passo 2: credenciais ---- */}
-        <section className="surface p-5">
-          <StepTitle n={2} title="Credenciais da conta" />
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+      {/* ---- O prompt ---- */}
+      <section className="surface p-6">
+        <SectionTitle
+          title="Instrução do agente"
+          desc="Como ele deve escrever a mensagem que leva a pessoa pro privado."
+        />
+        <textarea
+          className="field mt-4 min-h-[190px] leading-relaxed"
+          value={draft.igCommentPrompt}
+          onChange={(e) => setDraft({ ...draft, igCommentPrompt: e.target.value })}
+          placeholder={`- 2 a 3 frases, tom caloroso e direto.
+- Se a pessoa citou uma dor, acolha em uma frase antes de conduzir.
+- Convide pra continuar no privado, sem pressionar.`}
+        />
+        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+          <p className="text-xs font-medium text-zinc-300">
+            Quatro limites entram sempre, mesmo que você escreva o contrário
+          </p>
+          <ul className="mt-2 space-y-1 text-xs leading-relaxed text-zinc-500">
+            <li>· nada de diagnóstico, exame ou remédio</li>
+            <li>· nada de preço, valor ou desconto</li>
+            <li>· nada de promessa de cura ou resultado</li>
+            <li>· não se anuncia como IA, mas assume se perguntarem</li>
+          </ul>
+          <p className="mt-2 text-[11px] leading-relaxed text-zinc-600">
+            Não é desconfiança do texto — é que esses quatro protegem contra dado de saúde
+            exposto e preço dito por quem não deveria. Vazio usa a instrução padrão.
+          </p>
+        </div>
+      </section>
+
+      {/* ---- Entrega: Kommo ---- */}
+      {viaKommo ? (
+        <section className="surface p-6">
+          <SectionTitle
+            title="Entrega pelo Salesbot"
+            desc="O mesmo caminho que a IA já usa no WhatsApp: a resposta é escrita num campo e o Salesbot envia."
+          />
+          <div className="mt-4">
+            <label className="block">
+              <span className="text-xs font-medium text-zinc-300">Campo da resposta</span>
+              <select
+                className="field mt-1"
+                value={draft.igReplyFieldId ?? ''}
+                onChange={(e) =>
+                  setDraft({ ...draft, igReplyFieldId: e.target.value ? Number(e.target.value) : null })
+                }
+              >
+                <option value="">
+                  {fields.length ? 'Escolha um campo do Kommo…' : 'Carregando campos do Kommo…'}
+                </option>
+                {fields.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} · {f.id}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-[11px] leading-relaxed text-zinc-500">
+                Pode ser o mesmo campo do WhatsApp ou um só pra comentário — separado dá pra
+                usar um gatilho diferente no Digital Pipeline.
+              </span>
+            </label>
+          </div>
+          <div className="mt-4">
             <TextField
-              label="IG User ID"
-              value={draft.igUserId}
-              onChange={(v) => setDraft({ ...draft, igUserId: v })}
-              hint="ID numérico da conta Profissional — não é o @."
-            />
-            <TextField
-              label="WhatsApp do direct"
+              label="WhatsApp do convite"
               value={draft.igWhatsappNumber}
               onChange={(v) => setDraft({ ...draft, igWhatsappNumber: v })}
               placeholder="5599999999999"
-              hint="DDI + DDD, só dígitos. Vira link no direct, nunca no comentário."
-            />
-            <SecretField
-              label="Access Token"
-              value={draft.igAccessToken}
-              onChange={(v) => setDraft({ ...draft, igAccessToken: v })}
-              filled={!!unit.igAccessToken}
-              hint="Token da Página com permissão de comentários e mensagens."
-            />
-            <SecretField
-              label="Verify Token"
-              value={draft.igVerifyToken}
-              onChange={(v) => setDraft({ ...draft, igVerifyToken: v })}
-              filled={!!unit.igVerifyToken}
-              hint="Uma senha sua, a mesma que você digita na Meta. Vazio herda a do WhatsApp."
-            />
-            <SecretField
-              label="App Secret"
-              value={draft.igAppSecret}
-              onChange={(v) => setDraft({ ...draft, igAppSecret: v })}
-              filled={!!unit.igAppSecret}
-              hint="Só se o Instagram estiver em outro app. Vazio herda o do WhatsApp."
-            />
-            <TextField
-              label="Assinatura pública"
-              value={draft.igPublicSignature}
-              onChange={(v) => setDraft({ ...draft, igPublicSignature: v })}
-              placeholder="— Equipe DH"
-              hint="Opcional. Vai no fim de toda resposta pública."
+              hint="DDI + DDD, só dígitos. Vira link no privado — nunca no comentário público."
             />
           </div>
         </section>
-
-        {/* ---- Passo 3: comportamento ---- */}
-        <section className="surface p-5">
-          <StepTitle n={3} title="Como o agente deve agir" />
-          <div className="mt-4 space-y-3">
-            <SwitchRow
-              checked={draft.igEnabled}
-              onChange={(v) => setDraft({ ...draft, igEnabled: v })}
-              title="Ligar o agente de comentários"
-              desc="Desligado, os comentários que chegarem no webhook são descartados."
+      ) : (
+        <>
+          <section className="surface p-6">
+            <SectionTitle
+              title="Webhook na Meta"
+              desc="No painel do seu app, em Webhooks, assine o objeto Instagram e marque o campo comments."
             />
-            <SwitchRow
-              checked={draft.igDryRun}
-              onChange={(v) => setDraft({ ...draft, igDryRun: v })}
-              title="Modo revisão"
-              desc="O agente escreve tudo mas não publica — você aprova na fila. Deixe ligado até confiar no texto."
-              accent="sky"
-            />
-          </div>
-        </section>
+            <CopyField label="Callback URL" value={webhookUrl(unit.slug, 'instagram')} className="mt-4" />
+            <p className="mt-2 text-xs text-zinc-500">
+              É o endereço do backend, não o do painel — são domínios diferentes.
+            </p>
+          </section>
 
-        <div className="flex items-center gap-3">
-          <button className="btn-primary" onClick={() => void save()} disabled={saving}>
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-            Salvar configuração
-          </button>
-          {saved && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
-              <CheckCircle2 size={13} /> salvo
-            </span>
-          )}
-          {err && <span className="text-xs text-rose-300">{err}</span>}
+          <section className="surface p-6">
+            <SectionTitle title="Credenciais da conta" desc="Da conta Instagram Profissional ligada à Página." />
+            <div className="mt-5 grid gap-5 sm:grid-cols-2">
+              <TextField
+                label="IG User ID"
+                value={draft.igUserId}
+                onChange={(v) => setDraft({ ...draft, igUserId: v })}
+                hint="ID numérico da conta Profissional — não é o @."
+              />
+              <TextField
+                label="WhatsApp do direct"
+                value={draft.igWhatsappNumber}
+                onChange={(v) => setDraft({ ...draft, igWhatsappNumber: v })}
+                placeholder="5599999999999"
+                hint="DDI + DDD, só dígitos. Vira link no direct, nunca no comentário."
+              />
+              <SecretField
+                label="Access Token"
+                value={draft.igAccessToken}
+                onChange={(v) => setDraft({ ...draft, igAccessToken: v })}
+                filled={!!unit.igAccessToken}
+                hint="Token da Página com permissão de comentários e mensagens."
+              />
+              <SecretField
+                label="Verify Token"
+                value={draft.igVerifyToken}
+                onChange={(v) => setDraft({ ...draft, igVerifyToken: v })}
+                filled={!!unit.igVerifyToken}
+                hint="Uma senha sua, a mesma que você digita na Meta. Vazio herda a do WhatsApp."
+              />
+              <SecretField
+                label="App Secret"
+                value={draft.igAppSecret}
+                onChange={(v) => setDraft({ ...draft, igAppSecret: v })}
+                filled={!!unit.igAppSecret}
+                hint="Só se o Instagram estiver em outro app. Vazio herda o do WhatsApp."
+              />
+              <TextField
+                label="Assinatura pública"
+                value={draft.igPublicSignature}
+                onChange={(v) => setDraft({ ...draft, igPublicSignature: v })}
+                placeholder="— Equipe DH"
+                hint="Opcional. Vai no fim de toda resposta pública."
+              />
+            </div>
+          </section>
+        </>
+      )}
+
+      {/* ---- Comportamento ---- */}
+      <section className="surface p-6">
+        <SectionTitle title="Como o agente deve agir" desc="" />
+        <div className="mt-4 space-y-3">
+          <SwitchRow
+            checked={draft.igEnabled}
+            onChange={(v) => setDraft({ ...draft, igEnabled: v })}
+            title="Ligar o agente de comentários"
+            desc="Desligado, o que chegar é descartado."
+          />
+          <SwitchRow
+            checked={draft.igDryRun}
+            onChange={(v) => setDraft({ ...draft, igDryRun: v })}
+            title="Modo revisão"
+            desc="O agente escreve tudo mas não publica — você aprova na fila. Deixe ligado até confiar no texto."
+            accent="sky"
+          />
         </div>
-      </div>
+      </section>
 
-      <Checklist unit={unit} />
+      {/* ---- Barra de salvar, fixa ---- */}
+      <div className="sticky bottom-4 flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/90 px-4 py-3 backdrop-blur">
+        <button className="btn-primary" onClick={() => void save()} disabled={saving}>
+          {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+          Salvar
+        </button>
+        {saved && (
+          <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
+            <CheckCircle2 size={13} /> salvo
+          </span>
+        )}
+        {err && <span className="text-xs text-rose-300">{err}</span>}
+        <span className="ml-auto">
+          <MiniChecklist unit={unit} viaKommo={viaKommo} />
+        </span>
+      </div>
     </div>
   );
 }
 
-/** O que ainda falta pro canal funcionar — evita a caçada de "por que nada chega?". */
-function Checklist({ unit }: { unit: Unit }) {
-  const items = [
-    { ok: !!unit.igUserId, label: 'IG User ID preenchido' },
-    { ok: !!unit.igAccessToken, label: 'Access Token salvo' },
-    { ok: !!unit.igVerifyToken || !!unit.metaVerifyToken, label: 'Verify Token disponível' },
-    { ok: !!unit.igWhatsappNumber, label: 'WhatsApp do direct', optional: true },
-    { ok: unit.igEnabled, label: 'Canal ligado' },
-  ];
-  const faltando = items.filter((i) => !i.ok && !i.optional).length;
-
+function SectionTitle({ title, desc }: { title: string; desc: string }) {
   return (
-    <aside className="surface h-fit p-5 lg:sticky lg:top-4">
-      <div className="eyebrow">Estado</div>
-      <p className="mt-1 text-sm text-zinc-300">
-        {faltando === 0 ? 'Tudo pronto deste lado.' : `Faltam ${faltando} item(ns).`}
-      </p>
-      <ul className="mt-4 space-y-2.5">
-        {items.map((i) => (
-          <li key={i.label} className="flex items-start gap-2 text-sm">
-            {i.ok ? (
-              <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-400" />
-            ) : (
-              <Circle size={15} className={`mt-0.5 shrink-0 ${i.optional ? 'text-zinc-600' : 'text-amber-400'}`} />
-            )}
-            <span className={i.ok ? 'text-zinc-300' : 'text-zinc-400'}>
-              {i.label}
-              {i.optional && <span className="text-zinc-600"> · opcional</span>}
-            </span>
-          </li>
-        ))}
-      </ul>
+    <div>
+      <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>
+      {desc && <p className="mt-1 text-sm leading-relaxed text-zinc-400">{desc}</p>}
+    </div>
+  );
+}
 
-      <div className="mt-5 border-t border-zinc-800 pt-4">
-        <div className="eyebrow">Falta do lado da Meta</div>
-        <p className="mt-1.5 text-xs leading-relaxed text-zinc-400">
-          As permissões de gerenciar comentários e mensagens passam por App Review. Enquanto
-          não saírem, o webhook chega mas as respostas falham ao publicar.
-        </p>
-      </div>
-    </aside>
+function ModeCard({
+  active,
+  onClick,
+  title,
+  desc,
+  badge,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  desc: string;
+  badge?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border p-4 text-left transition-colors ${
+        active ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-zinc-800 hover:bg-zinc-900'
+      }`}
+    >
+      <span className="flex items-center gap-2">
+        <Radio size={14} className={active ? 'text-emerald-400' : 'text-zinc-600'} />
+        <span className="text-sm font-medium text-zinc-100">{title}</span>
+        {badge && (
+          <span className="rounded px-1.5 py-0.5 text-[10px] font-medium text-emerald-300 ring-1 ring-emerald-500/25">
+            {badge}
+          </span>
+        )}
+      </span>
+      <span className="mt-2 block text-xs leading-relaxed text-zinc-400">{desc}</span>
+    </button>
+  );
+}
+
+/** Resumo curto do que falta — na barra de salvar, sem roubar largura. */
+function MiniChecklist({ unit, viaKommo }: { unit: Unit; viaKommo: boolean }) {
+  const faltam = viaKommo
+    ? [!unit.igReplyFieldId && 'campo do Kommo', !unit.igEnabled && 'ligar o canal'].filter(Boolean)
+    : [
+        !unit.igUserId && 'IG User ID',
+        !unit.igAccessToken && 'Access Token',
+        !unit.igEnabled && 'ligar o canal',
+      ].filter(Boolean);
+
+  if (faltam.length === 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
+        <CheckCircle2 size={13} /> tudo configurado
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-amber-400">
+      <Circle size={13} /> falta: {faltam.join(', ')}
+    </span>
   );
 }
 
@@ -653,17 +796,6 @@ function StatusChip({ comment }: { comment: InstagramComment }) {
 // ---------------------------------------------------------------------------
 // Peças de formulário
 // ---------------------------------------------------------------------------
-
-function StepTitle({ n, title }: { n: number; title: string }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-zinc-800 text-[11px] font-semibold text-zinc-300">
-        {n}
-      </span>
-      <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>
-    </div>
-  );
-}
 
 function CopyField({ label, value, className = '' }: { label: string; value: string; className?: string }) {
   const [copied, setCopied] = useState(false);

@@ -263,6 +263,9 @@ export interface Unit {
   igDryRun: boolean;
   igWhatsappNumber: string | null;
   igPublicSignature: string | null;
+  igDeliveryMode: 'kommo' | 'direct';
+  igReplyFieldId: number | null;
+  igCommentPrompt: string | null;
   metaMonthlyBudgetUsd: number | string;
   systemPrompt: string;
   /** Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer). */
