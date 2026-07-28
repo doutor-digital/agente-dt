@@ -23,24 +23,26 @@
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+// Ícones: Phosphor (traço mais suave e cantos arredondados) + as marcas do
+// Font Awesome, ambos via react-icons.
 import {
-  AlertTriangle,
-  ArrowRight,
-  Check,
-  CheckCircle2,
-  Circle,
-  Copy,
-  Instagram,
-  Loader2,
-  MessageCircle,
-  RefreshCw,
-  Send,
-  Settings2,
-  Radio,
-  ShieldCheck,
-  Sparkles,
-  X,
-} from 'lucide-react';
+  PiWarningCircleBold,
+  PiArrowRightBold,
+  PiCheckBold,
+  PiCheckCircleFill,
+  PiCircleBold,
+  PiCopyBold,
+  PiSpinnerGapBold,
+  PiChatCircleDotsBold,
+  PiArrowsClockwiseBold,
+  PiPaperPlaneTiltBold,
+  PiSlidersHorizontalBold,
+  PiRadioButtonBold,
+  PiShieldCheckBold,
+  PiSparkleBold,
+  PiXBold,
+} from 'react-icons/pi';
+import { FaInstagram, FaFacebookF } from 'react-icons/fa6';
 import { api, webhookUrl } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import type {
@@ -51,6 +53,69 @@ import type {
   InstagramCommentsResponse,
   Unit,
 } from '../types/api';
+
+// ---------------------------------------------------------------------------
+// A rede como parâmetro
+// ---------------------------------------------------------------------------
+// Instagram e Facebook resolvem o MESMO problema (comentário público → conversa
+// privada) com credenciais e endpoints diferentes. Duplicar a tela significaria
+// corrigir cada ajuste duas vezes e, na prática, uma das cópias envelhecer. Só
+// o que realmente muda vira dado aqui.
+
+export type SocialPlatform = 'instagram' | 'facebook';
+
+interface PlatformSkin {
+  label: string;
+  privado: string;
+  Brand: typeof FaInstagram;
+  gradiente: string;
+  campos: {
+    enabled: 'igEnabled' | 'fbEnabled';
+    dryRun: 'igDryRun' | 'fbDryRun';
+    accountId: 'igUserId' | 'fbPageId';
+    accessToken: 'igAccessToken' | 'fbAccessToken';
+    verifyToken: 'igVerifyToken' | 'fbVerifyToken';
+    appSecret: 'igAppSecret' | 'fbAppSecret';
+    whatsapp: 'igWhatsappNumber' | 'fbWhatsappNumber';
+    assinatura: 'igPublicSignature' | 'fbPublicSignature';
+    modo: 'igDeliveryMode' | 'fbDeliveryMode';
+    campoResposta: 'igReplyFieldId' | 'fbReplyFieldId';
+    prompt: 'igCommentPrompt' | 'fbCommentPrompt';
+  };
+  contaLabel: string;
+  contaHint: string;
+}
+
+const SKIN: Record<SocialPlatform, PlatformSkin> = {
+  instagram: {
+    label: 'Instagram',
+    privado: 'direct',
+    Brand: FaInstagram,
+    gradiente: 'conic-gradient(from 210deg, #f9ce34, #ee2a7b, #6228d7, #f9ce34)',
+    contaLabel: 'IG User ID',
+    contaHint: 'ID numérico da conta Profissional — não é o @.',
+    campos: {
+      enabled: 'igEnabled', dryRun: 'igDryRun', accountId: 'igUserId',
+      accessToken: 'igAccessToken', verifyToken: 'igVerifyToken', appSecret: 'igAppSecret',
+      whatsapp: 'igWhatsappNumber', assinatura: 'igPublicSignature',
+      modo: 'igDeliveryMode', campoResposta: 'igReplyFieldId', prompt: 'igCommentPrompt',
+    },
+  },
+  facebook: {
+    label: 'Facebook',
+    privado: 'privado',
+    Brand: FaFacebookF,
+    gradiente: 'conic-gradient(from 210deg, #1877f2, #4267b2, #0a3d8f, #1877f2)',
+    contaLabel: 'Page ID',
+    contaHint: 'ID numérico da Página — aparece em Configurações → Informações.',
+    campos: {
+      enabled: 'fbEnabled', dryRun: 'fbDryRun', accountId: 'fbPageId',
+      accessToken: 'fbAccessToken', verifyToken: 'fbVerifyToken', appSecret: 'fbAppSecret',
+      whatsapp: 'fbWhatsappNumber', assinatura: 'fbPublicSignature',
+      modo: 'fbDeliveryMode', campoResposta: 'fbReplyFieldId', prompt: 'fbCommentPrompt',
+    },
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Vocabulário visual
@@ -86,14 +151,20 @@ function formatWhen(iso: string): string {
 // Página
 // ===========================================================================
 
-export default function InstagramPanel() {
+export default function SocialCommentsPanel({
+  platform = 'instagram',
+}: {
+  platform?: SocialPlatform;
+}) {
   const { selectedUnit: unit, refresh } = useUnit();
+  const skin = SKIN[platform];
   const [view, setView] = useState<'fila' | 'config'>('fila');
+  const ligado = unit ? Boolean(unit[skin.campos.enabled]) : false;
 
   // Sem canal configurado, cair na fila é cair numa tela vazia sem explicação.
   useEffect(() => {
-    if (unit && !unit.igEnabled) setView('config');
-  }, [unit?.id, unit?.igEnabled]);
+    if (unit && !ligado) setView('config');
+  }, [unit?.id, ligado]);
 
   if (!unit) {
     return <p className="text-sm text-zinc-400">Selecione um agente.</p>;
@@ -101,11 +172,11 @@ export default function InstagramPanel() {
 
   return (
     <div className="space-y-6 animate-fade-in-up">
-      <PageHeader unit={unit} view={view} onView={setView} />
+      <PageHeader unit={unit} skin={skin} view={view} onView={setView} />
       {view === 'fila' ? (
-        <Queue unit={unit} onGoConfig={() => setView('config')} />
+        <Queue unit={unit} skin={skin} platform={platform} onGoConfig={() => setView('config')} />
       ) : (
-        <Setup unit={unit} onSaved={refresh} />
+        <Setup unit={unit} skin={skin} onSaved={refresh} />
       )}
     </div>
   );
@@ -113,13 +184,16 @@ export default function InstagramPanel() {
 
 function PageHeader({
   unit,
+  skin,
   view,
   onView,
 }: {
   unit: Unit;
+  skin: PlatformSkin;
   view: 'fila' | 'config';
   onView: (v: 'fila' | 'config') => void;
 }) {
+  const Brand = skin.Brand;
   return (
     <header className="relative overflow-hidden surface p-5">
       {/* Fundo com o gradiente do Instagram, bem discreto — dá identidade de
@@ -127,22 +201,24 @@ function PageHeader({
       <div
         aria-hidden
         className="pointer-events-none absolute -top-24 -right-16 h-56 w-56 rounded-full blur-3xl opacity-[0.18]"
-        style={{ background: 'conic-gradient(from 210deg, #f9ce34, #ee2a7b, #6228d7, #f9ce34)' }}
+        style={{ background: skin.gradiente }}
       />
       <div className="relative flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="eyebrow flex items-center gap-1.5">
-            <Instagram size={12} /> Canal
+            <Brand size={12} /> Canal
           </div>
-          <h1 className="mt-1 text-xl font-semibold text-zinc-100">Comentários do Instagram</h1>
+          <h1 className="mt-1 text-xl font-semibold text-zinc-100">
+            Comentários do {skin.label}
+          </h1>
           <p className="mt-1 max-w-2xl text-sm text-zinc-400">
             O agente classifica cada comentário, responde em público com um texto seguro e
-            escreve o direct que leva a pessoa pro WhatsApp.
+            escreve a mensagem no {skin.privado} que leva a pessoa pro WhatsApp.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <StatusPill unit={unit} />
+          <StatusPill unit={unit} skin={skin} />
           <div className="flex rounded-lg border border-zinc-800 p-0.5">
             {(['fila', 'config'] as const).map((v) => (
               <button
@@ -152,7 +228,7 @@ function PageHeader({
                   view === v ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >
-                {v === 'fila' ? <MessageCircle size={13} /> : <Settings2 size={13} />}
+                {v === 'fila' ? <PiChatCircleDotsBold size={13} /> : <PiSlidersHorizontalBold size={13} />}
                 {v === 'fila' ? 'Fila' : 'Configuração'}
               </button>
             ))}
@@ -163,10 +239,10 @@ function PageHeader({
   );
 }
 
-function StatusPill({ unit }: { unit: Unit }) {
-  const [tone, label] = !unit.igEnabled
+function StatusPill({ unit, skin }: { unit: Unit; skin: PlatformSkin }) {
+  const [tone, label] = !unit[skin.campos.enabled]
     ? (['text-zinc-400 bg-zinc-500/10 ring-zinc-500/25', 'Desligado'] as const)
-    : unit.igDryRun
+    : unit[skin.campos.dryRun]
       ? (['text-sky-300 bg-sky-500/10 ring-sky-500/25', 'Revisão manual'] as const)
       : (['text-emerald-300 bg-emerald-500/10 ring-emerald-500/25', 'Publicando'] as const);
   return (
@@ -181,26 +257,35 @@ function StatusPill({ unit }: { unit: Unit }) {
 // Configuração
 // ===========================================================================
 
-function Setup({ unit, onSaved }: { unit: Unit; onSaved: () => Promise<void> }) {
+function Setup({
+  unit,
+  skin,
+  onSaved,
+}: {
+  unit: Unit;
+  skin: PlatformSkin;
+  onSaved: () => Promise<void>;
+}) {
+  const f = skin.campos;
   const [draft, setDraft] = useState({
-    igEnabled: unit.igEnabled,
-    igDryRun: unit.igDryRun,
-    igDeliveryMode: unit.igDeliveryMode ?? 'kommo',
-    igReplyFieldId: unit.igReplyFieldId,
-    igCommentPrompt: unit.igCommentPrompt ?? '',
-    igUserId: unit.igUserId ?? '',
-    igAccessToken: '',
-    igVerifyToken: '',
-    igAppSecret: '',
-    igWhatsappNumber: unit.igWhatsappNumber ?? '',
-    igPublicSignature: unit.igPublicSignature ?? '',
+    enabled: Boolean(unit[f.enabled]),
+    dryRun: Boolean(unit[f.dryRun]),
+    modo: (unit[f.modo] as string) ?? 'kommo',
+    campoResposta: (unit[f.campoResposta] as number | null) ?? null,
+    prompt: (unit[f.prompt] as string | null) ?? '',
+    accountId: (unit[f.accountId] as string | null) ?? '',
+    accessToken: '',
+    verifyToken: '',
+    appSecret: '',
+    whatsapp: (unit[f.whatsapp] as string | null) ?? '',
+    assinatura: (unit[f.assinatura] as string | null) ?? '',
   });
   const [fields, setFields] = useState<KommoLeadCustomField[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const viaKommo = draft.igDeliveryMode === 'kommo';
+  const viaKommo = draft.modo === 'kommo';
 
   // Lista de campos do Kommo só faz sentido no modo Kommo — e é chamada de
   // rede na API deles, então não vale puxar quando não vai ser usada.
@@ -224,22 +309,22 @@ function Setup({ unit, onSaved }: { unit: Unit; onSaved: () => Promise<void> }) 
       // Segredo em branco = "não mexer". Mandar '' apagaria o que já está lá,
       // e o campo vem sempre vazio porque a API devolve mascarado.
       const payload: Record<string, unknown> = {
-        igEnabled: draft.igEnabled,
-        igDryRun: draft.igDryRun,
-        igDeliveryMode: draft.igDeliveryMode,
-        igReplyFieldId: draft.igReplyFieldId ?? null,
-        igCommentPrompt: draft.igCommentPrompt.trim() || null,
-        igUserId: draft.igUserId.trim() || null,
-        igWhatsappNumber: draft.igWhatsappNumber.trim() || null,
-        igPublicSignature: draft.igPublicSignature.trim() || null,
+        [f.enabled]: draft.enabled,
+        [f.dryRun]: draft.dryRun,
+        [f.modo]: draft.modo,
+        [f.campoResposta]: draft.campoResposta ?? null,
+        [f.prompt]: draft.prompt.trim() || null,
+        [f.accountId]: draft.accountId.trim() || null,
+        [f.whatsapp]: draft.whatsapp.trim() || null,
+        [f.assinatura]: draft.assinatura.trim() || null,
       };
-      if (draft.igAccessToken.trim()) payload.igAccessToken = draft.igAccessToken.trim();
-      if (draft.igVerifyToken.trim()) payload.igVerifyToken = draft.igVerifyToken.trim();
-      if (draft.igAppSecret.trim()) payload.igAppSecret = draft.igAppSecret.trim();
+      if (draft.accessToken.trim()) payload[f.accessToken] = draft.accessToken.trim();
+      if (draft.verifyToken.trim()) payload[f.verifyToken] = draft.verifyToken.trim();
+      if (draft.appSecret.trim()) payload[f.appSecret] = draft.appSecret.trim();
 
       await api.updateUnit(unit.id, payload);
       await onSaved();
-      setDraft((d) => ({ ...d, igAccessToken: '', igVerifyToken: '', igAppSecret: '' }));
+      setDraft((d) => ({ ...d, accessToken: '', verifyToken: '', appSecret: '' }));
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
@@ -249,200 +334,221 @@ function Setup({ unit, onSaved }: { unit: Unit; onSaved: () => Promise<void> }) 
     }
   }
 
-  return (
-    <div className="mx-auto max-w-4xl space-y-5 pb-24">
-      {/* ---- Caminho de entrega ---- */}
-      <section className="surface p-6">
-        <SectionTitle
-          title="Por onde a resposta sai"
-          desc="Define o que o agente precisa e o que você tem que configurar."
-        />
-        <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          <ModeCard
-            active={viaKommo}
-            onClick={() => setDraft({ ...draft, igDeliveryMode: 'kommo' })}
-            title="Pelo Kommo"
-            badge="recomendado"
-            desc="O comentário vira lead pela integração nativa do Kommo, o agente responde e o Salesbot entrega. Não depende do nosso App Review na Meta."
-          />
-          <ModeCard
-            active={!viaKommo}
-            onClick={() => setDraft({ ...draft, igDeliveryMode: 'direct' })}
-            title="Direto na Meta"
-            desc="Falamos com a Graph API por conta própria: resposta no comentário e direct automático. Exige App Review aprovado."
-          />
-        </div>
-      </section>
+  const faltam = viaKommo
+    ? [!unit[f.campoResposta] && 'campo do Kommo', !unit[f.enabled] && 'ligar o canal'].filter(Boolean)
+    : [
+        !unit[f.accountId] && skin.contaLabel,
+        !unit[f.accessToken] && 'Access Token',
+        !unit[f.enabled] && 'ligar o canal',
+      ].filter(Boolean);
 
-      {/* ---- O prompt ---- */}
+  return (
+    <div className="space-y-5 pb-24">
+      {/* Duas colunas em telas largas: sem isso a página vira uma coluna fina
+          no meio de dois desertos — foi a reclamação de "espremido". */}
+      <div className="grid gap-5 xl:grid-cols-2">
+        <section className="surface p-6">
+          <SectionTitle
+            title="Por onde a resposta sai"
+            desc="Define o que o agente precisa e o que você tem que configurar."
+          />
+          <div className="mt-5 space-y-3">
+            <ModeCard
+              active={viaKommo}
+              onClick={() => setDraft({ ...draft, modo: 'kommo' })}
+              title="Pelo Kommo"
+              badge="recomendado"
+              desc="O comentário vira lead pela integração nativa do Kommo, o agente responde e o Salesbot entrega. Não depende do nosso App Review na Meta."
+            />
+            <ModeCard
+              active={!viaKommo}
+              onClick={() => setDraft({ ...draft, modo: 'direct' })}
+              title="Direto na Meta"
+              desc={`Falamos com a Graph API por conta própria: resposta no comentário e ${skin.privado} automático. Exige App Review aprovado.`}
+            />
+          </div>
+        </section>
+
+        <section className="surface p-6">
+          <SectionTitle title="Como o agente deve agir" desc="Vale só para este canal." />
+          <div className="mt-5 space-y-3">
+            <SwitchRow
+              checked={draft.enabled}
+              onChange={(v) => setDraft({ ...draft, enabled: v })}
+              title={`Ligar o agente de comentários do ${skin.label}`}
+              desc="Desligado, o que chegar é descartado."
+            />
+            <SwitchRow
+              checked={draft.dryRun}
+              onChange={(v) => setDraft({ ...draft, dryRun: v })}
+              title="Modo revisão"
+              desc="O agente escreve tudo mas não publica — você aprova na fila. Deixe ligado até confiar no texto."
+              accent="sky"
+            />
+          </div>
+        </section>
+      </div>
+
+      {/* O prompt ocupa a largura toda: é o campo que mais precisa de espaço. */}
       <section className="surface p-6">
         <SectionTitle
           title="Instrução do agente"
-          desc="Como ele deve escrever a mensagem que leva a pessoa pro privado."
+          desc={`Como ele deve escrever a mensagem que leva a pessoa pro ${skin.privado}.`}
         />
-        <textarea
-          className="field mt-4 min-h-[190px] leading-relaxed"
-          value={draft.igCommentPrompt}
-          onChange={(e) => setDraft({ ...draft, igCommentPrompt: e.target.value })}
-          placeholder={`- 2 a 3 frases, tom caloroso e direto.
+        <div className="mt-4 grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <textarea
+            className="field min-h-[240px] leading-relaxed"
+            value={draft.prompt}
+            onChange={(e) => setDraft({ ...draft, prompt: e.target.value })}
+            placeholder={`- 2 a 3 frases, tom caloroso e direto.
 - Se a pessoa citou uma dor, acolha em uma frase antes de conduzir.
 - Convide pra continuar no privado, sem pressionar.`}
-        />
-        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
-          <p className="text-xs font-medium text-zinc-300">
-            Quatro limites entram sempre, mesmo que você escreva o contrário
-          </p>
-          <ul className="mt-2 space-y-1 text-xs leading-relaxed text-zinc-500">
-            <li>· nada de diagnóstico, exame ou remédio</li>
-            <li>· nada de preço, valor ou desconto</li>
-            <li>· nada de promessa de cura ou resultado</li>
-            <li>· não se anuncia como IA, mas assume se perguntarem</li>
-          </ul>
-          <p className="mt-2 text-[11px] leading-relaxed text-zinc-600">
-            Não é desconfiança do texto — é que esses quatro protegem contra dado de saúde
-            exposto e preço dito por quem não deveria. Vazio usa a instrução padrão.
-          </p>
+          />
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+            <p className="text-xs font-medium text-zinc-300">
+              Quatro limites entram sempre, mesmo que você escreva o contrário
+            </p>
+            <ul className="mt-2.5 space-y-1.5 text-xs leading-relaxed text-zinc-500">
+              <li>· nada de diagnóstico, exame ou remédio</li>
+              <li>· nada de preço, valor ou desconto</li>
+              <li>· nada de promessa de cura ou resultado</li>
+              <li>· não se anuncia como IA, mas assume se perguntarem</li>
+            </ul>
+            <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
+              Não é desconfiança do texto — é que esses quatro protegem contra dado de saúde
+              exposto e preço dito por quem não deveria. Vazio usa a instrução padrão.
+            </p>
+          </div>
         </div>
       </section>
 
-      {/* ---- Entrega: Kommo ---- */}
+      {/* Credenciais / entrega */}
       {viaKommo ? (
         <section className="surface p-6">
           <SectionTitle
             title="Entrega pelo Salesbot"
             desc="O mesmo caminho que a IA já usa no WhatsApp: a resposta é escrita num campo e o Salesbot envia."
           />
-          <div className="mt-4">
+          <div className="mt-5 grid gap-5 md:grid-cols-2">
             <label className="block">
               <span className="text-xs font-medium text-zinc-300">Campo da resposta</span>
               <select
                 className="field mt-1"
-                value={draft.igReplyFieldId ?? ''}
+                value={draft.campoResposta ?? ''}
                 onChange={(e) =>
-                  setDraft({ ...draft, igReplyFieldId: e.target.value ? Number(e.target.value) : null })
+                  setDraft({ ...draft, campoResposta: e.target.value ? Number(e.target.value) : null })
                 }
               >
                 <option value="">
                   {fields.length ? 'Escolha um campo do Kommo…' : 'Carregando campos do Kommo…'}
                 </option>
-                {fields.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name} · {f.id}
+                {fields.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name} · {k.id}
                   </option>
                 ))}
               </select>
               <span className="mt-1 block text-[11px] leading-relaxed text-zinc-500">
-                Pode ser o mesmo campo do WhatsApp ou um só pra comentário — separado dá pra
-                usar um gatilho diferente no Digital Pipeline.
+                Pode ser o mesmo campo do WhatsApp ou um só pra comentário — separado permite
+                um gatilho diferente no Digital Pipeline.
               </span>
             </label>
-          </div>
-          <div className="mt-4">
             <TextField
               label="WhatsApp do convite"
-              value={draft.igWhatsappNumber}
-              onChange={(v) => setDraft({ ...draft, igWhatsappNumber: v })}
+              value={draft.whatsapp}
+              onChange={(v) => setDraft({ ...draft, whatsapp: v })}
               placeholder="5599999999999"
               hint="DDI + DDD, só dígitos. Vira link no privado — nunca no comentário público."
             />
           </div>
         </section>
       ) : (
-        <>
+        <div className="grid gap-5 xl:grid-cols-2">
           <section className="surface p-6">
             <SectionTitle
               title="Webhook na Meta"
-              desc="No painel do seu app, em Webhooks, assine o objeto Instagram e marque o campo comments."
+              desc={`No painel do seu app, em Webhooks, assine o objeto ${skin.label} e marque o campo de comentários.`}
             />
-            <CopyField label="Callback URL" value={webhookUrl(unit.slug, 'instagram')} className="mt-4" />
+            <CopyField
+              label="Callback URL"
+              value={webhookUrl(unit.slug, skin.label === 'Facebook' ? 'facebook' : 'instagram')}
+              className="mt-4"
+            />
             <p className="mt-2 text-xs text-zinc-500">
               É o endereço do backend, não o do painel — são domínios diferentes.
             </p>
           </section>
 
           <section className="surface p-6">
-            <SectionTitle title="Credenciais da conta" desc="Da conta Instagram Profissional ligada à Página." />
+            <SectionTitle title="Credenciais" desc="" />
             <div className="mt-5 grid gap-5 sm:grid-cols-2">
               <TextField
-                label="IG User ID"
-                value={draft.igUserId}
-                onChange={(v) => setDraft({ ...draft, igUserId: v })}
-                hint="ID numérico da conta Profissional — não é o @."
+                label={skin.contaLabel}
+                value={draft.accountId}
+                onChange={(v) => setDraft({ ...draft, accountId: v })}
+                hint={skin.contaHint}
               />
               <TextField
-                label="WhatsApp do direct"
-                value={draft.igWhatsappNumber}
-                onChange={(v) => setDraft({ ...draft, igWhatsappNumber: v })}
+                label="WhatsApp do convite"
+                value={draft.whatsapp}
+                onChange={(v) => setDraft({ ...draft, whatsapp: v })}
                 placeholder="5599999999999"
-                hint="DDI + DDD, só dígitos. Vira link no direct, nunca no comentário."
+                hint="DDI + DDD, só dígitos."
               />
               <SecretField
                 label="Access Token"
-                value={draft.igAccessToken}
-                onChange={(v) => setDraft({ ...draft, igAccessToken: v })}
-                filled={!!unit.igAccessToken}
+                value={draft.accessToken}
+                onChange={(v) => setDraft({ ...draft, accessToken: v })}
+                filled={!!unit[f.accessToken]}
                 hint="Token da Página com permissão de comentários e mensagens."
               />
               <SecretField
                 label="Verify Token"
-                value={draft.igVerifyToken}
-                onChange={(v) => setDraft({ ...draft, igVerifyToken: v })}
-                filled={!!unit.igVerifyToken}
+                value={draft.verifyToken}
+                onChange={(v) => setDraft({ ...draft, verifyToken: v })}
+                filled={!!unit[f.verifyToken]}
                 hint="Uma senha sua, a mesma que você digita na Meta. Vazio herda a do WhatsApp."
               />
               <SecretField
                 label="App Secret"
-                value={draft.igAppSecret}
-                onChange={(v) => setDraft({ ...draft, igAppSecret: v })}
-                filled={!!unit.igAppSecret}
-                hint="Só se o Instagram estiver em outro app. Vazio herda o do WhatsApp."
+                value={draft.appSecret}
+                onChange={(v) => setDraft({ ...draft, appSecret: v })}
+                filled={!!unit[f.appSecret]}
+                hint="Só se estiver em outro app. Vazio herda o do WhatsApp."
               />
               <TextField
                 label="Assinatura pública"
-                value={draft.igPublicSignature}
-                onChange={(v) => setDraft({ ...draft, igPublicSignature: v })}
+                value={draft.assinatura}
+                onChange={(v) => setDraft({ ...draft, assinatura: v })}
                 placeholder="— Equipe DH"
                 hint="Opcional. Vai no fim de toda resposta pública."
               />
             </div>
           </section>
-        </>
+        </div>
       )}
 
-      {/* ---- Comportamento ---- */}
-      <section className="surface p-6">
-        <SectionTitle title="Como o agente deve agir" desc="" />
-        <div className="mt-4 space-y-3">
-          <SwitchRow
-            checked={draft.igEnabled}
-            onChange={(v) => setDraft({ ...draft, igEnabled: v })}
-            title="Ligar o agente de comentários"
-            desc="Desligado, o que chegar é descartado."
-          />
-          <SwitchRow
-            checked={draft.igDryRun}
-            onChange={(v) => setDraft({ ...draft, igDryRun: v })}
-            title="Modo revisão"
-            desc="O agente escreve tudo mas não publica — você aprova na fila. Deixe ligado até confiar no texto."
-            accent="sky"
-          />
-        </div>
-      </section>
-
-      {/* ---- Barra de salvar, fixa ---- */}
       <div className="sticky bottom-4 flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/90 px-4 py-3 backdrop-blur">
         <button className="btn-primary" onClick={() => void save()} disabled={saving}>
-          {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+          {saving ? <PiSpinnerGapBold size={14} className="animate-spin" /> : <PiCheckBold size={14} />}
           Salvar
         </button>
         {saved && (
           <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
-            <CheckCircle2 size={13} /> salvo
+            <PiCheckCircleFill size={13} /> salvo
           </span>
         )}
         {err && <span className="text-xs text-rose-300">{err}</span>}
         <span className="ml-auto">
-          <MiniChecklist unit={unit} viaKommo={viaKommo} />
+          {faltam.length === 0 ? (
+            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
+              <PiCheckCircleFill size={13} /> tudo configurado
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 text-xs text-amber-400">
+              <PiCircleBold size={13} /> falta: {faltam.join(', ')}
+            </span>
+          )}
         </span>
       </div>
     </div>
@@ -480,7 +586,7 @@ function ModeCard({
       }`}
     >
       <span className="flex items-center gap-2">
-        <Radio size={14} className={active ? 'text-emerald-400' : 'text-zinc-600'} />
+        <PiRadioButtonBold size={14} className={active ? 'text-emerald-400' : 'text-zinc-600'} />
         <span className="text-sm font-medium text-zinc-100">{title}</span>
         {badge && (
           <span className="rounded px-1.5 py-0.5 text-[10px] font-medium text-emerald-300 ring-1 ring-emerald-500/25">
@@ -493,35 +599,21 @@ function ModeCard({
   );
 }
 
-/** Resumo curto do que falta — na barra de salvar, sem roubar largura. */
-function MiniChecklist({ unit, viaKommo }: { unit: Unit; viaKommo: boolean }) {
-  const faltam = viaKommo
-    ? [!unit.igReplyFieldId && 'campo do Kommo', !unit.igEnabled && 'ligar o canal'].filter(Boolean)
-    : [
-        !unit.igUserId && 'IG User ID',
-        !unit.igAccessToken && 'Access Token',
-        !unit.igEnabled && 'ligar o canal',
-      ].filter(Boolean);
-
-  if (faltam.length === 0) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
-        <CheckCircle2 size={13} /> tudo configurado
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-amber-400">
-      <Circle size={13} /> falta: {faltam.join(', ')}
-    </span>
-  );
-}
-
 // ===========================================================================
 // Fila
 // ===========================================================================
 
-function Queue({ unit, onGoConfig }: { unit: Unit; onGoConfig: () => void }) {
+function Queue({
+  unit,
+  skin,
+  platform,
+  onGoConfig,
+}: {
+  unit: Unit;
+  skin: PlatformSkin;
+  platform: SocialPlatform;
+  onGoConfig: () => void;
+}) {
   const [status, setStatus] = useState<IgCommentStatus | 'ALL'>('PENDING');
   const [data, setData] = useState<InstagramCommentsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -534,6 +626,7 @@ function Queue({ unit, onGoConfig }: { unit: Unit; onGoConfig: () => void }) {
       setData(
         await api.instagramComments(unit.id, {
           status: status === 'ALL' ? undefined : status,
+          platform,
           limit: 100,
         }),
       );
@@ -542,7 +635,7 @@ function Queue({ unit, onGoConfig }: { unit: Unit; onGoConfig: () => void }) {
     } finally {
       setLoading(false);
     }
-  }, [unit.id, status]);
+  }, [unit.id, status, platform]);
 
   useEffect(() => {
     void load();
@@ -553,25 +646,25 @@ function Queue({ unit, onGoConfig }: { unit: Unit; onGoConfig: () => void }) {
   return (
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Aguardando você" value={counts.PENDING ?? 0} tone="amber" icon={ShieldCheck} />
-        <Stat label="Publicados" value={counts.SENT ?? 0} tone="emerald" icon={Send} />
-        <Stat label="Ignorados" value={counts.SKIPPED ?? 0} tone="zinc" icon={X} />
-        <Stat label="Falharam" value={counts.FAILED ?? 0} tone="rose" icon={AlertTriangle} />
+        <Stat label="Aguardando você" value={counts.PENDING ?? 0} tone="amber" icon={PiShieldCheckBold} />
+        <Stat label="Publicados" value={counts.SENT ?? 0} tone="emerald" icon={PiPaperPlaneTiltBold} />
+        <Stat label="Ignorados" value={counts.SKIPPED ?? 0} tone="zinc" icon={PiXBold} />
+        <Stat label="Falharam" value={counts.FAILED ?? 0} tone="rose" icon={PiWarningCircleBold} />
       </div>
 
-      {!unit.igEnabled && (
+      {!unit[skin.campos.enabled] && (
         <button
           onClick={onGoConfig}
           className="surface flex w-full items-center gap-3 border-amber-500/25 p-4 text-left transition-colors hover:bg-zinc-900"
         >
-          <AlertTriangle size={16} className="shrink-0 text-amber-400" />
+          <PiWarningCircleBold size={16} className="shrink-0 text-amber-400" />
           <div className="min-w-0 flex-1 text-sm">
             <p className="font-medium text-zinc-200">Canal desligado</p>
             <p className="mt-0.5 text-zinc-400">
               Nada é processado enquanto isso. Abra a configuração para ligar.
             </p>
           </div>
-          <ArrowRight size={15} className="shrink-0 text-zinc-500" />
+          <PiArrowRightBold size={15} className="shrink-0 text-zinc-500" />
         </button>
       )}
 
@@ -596,27 +689,27 @@ function Queue({ unit, onGoConfig }: { unit: Unit; onGoConfig: () => void }) {
           })}
         </div>
         <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+          {loading ? <PiSpinnerGapBold size={14} className="animate-spin" /> : <PiArrowsClockwiseBold size={14} />}
           Atualizar
         </button>
       </div>
 
       {error && (
         <div className="surface flex items-start gap-2 border-rose-500/30 p-4 text-sm text-rose-300">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <PiWarningCircleBold size={16} className="mt-0.5 shrink-0" />
           {error}
         </div>
       )}
 
       {loading && !data && (
         <div className="surface flex items-center justify-center p-12 text-zinc-500">
-          <Loader2 size={18} className="animate-spin" />
+          <PiSpinnerGapBold size={18} className="animate-spin" />
         </div>
       )}
 
       {data && data.comments.length === 0 && !loading && (
         <div className="surface p-12 text-center">
-          <Sparkles size={22} className="mx-auto text-zinc-600" />
+          <PiSparkleBold size={22} className="mx-auto text-zinc-600" />
           <p className="mt-3 text-sm text-zinc-400">
             {status === 'PENDING'
               ? 'Nenhum comentário esperando aprovação.'
@@ -627,7 +720,7 @@ function Queue({ unit, onGoConfig }: { unit: Unit; onGoConfig: () => void }) {
 
       <div className="space-y-3">
         {data?.comments.map((c) => (
-          <CommentCard key={c.id} unitId={unit.id} comment={c} onDone={load} />
+          <CommentCard key={c.id} unitId={unit.id} skin={skin} comment={c} onDone={load} />
         ))}
       </div>
     </div>
@@ -643,7 +736,7 @@ function Stat({
   label: string;
   value: number;
   tone: 'amber' | 'emerald' | 'rose' | 'zinc';
-  icon: typeof Send;
+  icon: typeof PiPaperPlaneTiltBold;
 }) {
   const color = {
     amber: 'text-amber-400',
@@ -666,10 +759,12 @@ function Stat({
 
 function CommentCard({
   unitId,
+  skin,
   comment,
   onDone,
 }: {
   unitId: string;
+  skin: PlatformSkin;
   comment: InstagramComment;
   onDone: () => void | Promise<void>;
 }) {
@@ -735,7 +830,7 @@ function CommentCard({
             sent={!!comment.publicSentAt}
           />
           <ReplyBox
-            label="Direct"
+            label={skin.privado === 'direct' ? 'Direct' : 'Mensagem privada'}
             hint="Privado. Uma única mensagem por comentário."
             value={privateReply}
             onChange={setPrivateReply}
@@ -747,7 +842,7 @@ function CommentCard({
 
         {comment.error && (
           <p className="mt-3 flex items-start gap-1.5 text-xs text-rose-300">
-            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            <PiWarningCircleBold size={13} className="mt-0.5 shrink-0" />
             {comment.error}
           </p>
         )}
@@ -756,11 +851,11 @@ function CommentCard({
         {editable && (
           <div className="mt-4 flex items-center gap-2">
             <button className="btn-primary" onClick={() => void run('approve')} disabled={busy !== null}>
-              {busy === 'approve' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              {busy === 'approve' ? <PiSpinnerGapBold size={14} className="animate-spin" /> : <PiCheckBold size={14} />}
               Publicar{dirty ? ' com as edições' : ''}
             </button>
             <button className="btn-ghost" onClick={() => void run('reject')} disabled={busy !== null}>
-              {busy === 'reject' ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />}
+              {busy === 'reject' ? <PiSpinnerGapBold size={14} className="animate-spin" /> : <PiXBold size={14} />}
               Não responder
             </button>
           </div>
@@ -774,8 +869,8 @@ function StatusChip({ comment }: { comment: InstagramComment }) {
   if (comment.status === 'SENT') {
     return (
       <span className="inline-flex items-center gap-1 text-emerald-400">
-        <Check size={12} />
-        {comment.privateSentAt ? 'público + direct' : 'público'}
+        <PiCheckBold size={12} />
+        {comment.privateSentAt ? 'público + privado' : 'público'}
       </span>
     );
   }
@@ -819,7 +914,7 @@ function CopyField({ label, value, className = '' }: { label: string; value: str
           className="field flex-1 font-mono text-xs"
         />
         <button className="btn-ghost shrink-0" onClick={() => void copy()}>
-          {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+          {copied ? <PiCheckBold size={14} className="text-emerald-400" /> : <PiCopyBold size={14} />}
           {copied ? 'Copiado' : 'Copiar'}
         </button>
       </div>
@@ -873,7 +968,7 @@ function SecretField({
         {label}
         {filled && (
           <span className="inline-flex items-center gap-1 text-[10px] font-normal text-emerald-400">
-            <CheckCircle2 size={11} /> salvo
+            <PiCheckCircleFill size={11} /> salvo
           </span>
         )}
       </span>
@@ -949,7 +1044,7 @@ function ReplyBox({
         {label}
         {sent && (
           <span className="inline-flex items-center gap-1 text-[10px] font-normal text-emerald-400">
-            <Check size={11} /> enviado
+            <PiCheckBold size={11} /> enviado
           </span>
         )}
       </span>

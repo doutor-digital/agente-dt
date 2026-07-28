@@ -195,6 +195,24 @@ model Unit {
   // sendo adicionados pelo código, não dependem de quem escreve aqui.
   igCommentPrompt String? @map("ig_comment_prompt") @db.Text
 
+  // ── FACEBOOK — mesmo agente, outra rede ────────────────────────────────
+  // Espelha os campos do Instagram porque as duas redes têm o MESMO problema
+  // (comentário público → conversa privada) mas credenciais e limites
+  // diferentes: no Facebook a resposta privada sai por outro endpoint e a
+  // Página tem token próprio. Compartilhar os campos economizaria colunas e
+  // custaria a possibilidade de ligar uma rede sem a outra.
+  fbEnabled         Boolean @default(false) @map("fb_enabled")
+  fbPageId          String? @map("fb_page_id")
+  fbAccessToken     String? @map("fb_access_token")
+  fbVerifyToken     String? @map("fb_verify_token")
+  fbAppSecret       String? @map("fb_app_secret")
+  fbDryRun          Boolean @default(true) @map("fb_dry_run")
+  fbWhatsappNumber  String? @map("fb_whatsapp_number")
+  fbPublicSignature String? @map("fb_public_signature")
+  fbDeliveryMode    String  @default("kommo") @map("fb_delivery_mode")
+  fbReplyFieldId    Int?    @map("fb_reply_field_id")
+  fbCommentPrompt   String? @map("fb_comment_prompt") @db.Text
+
   instagramComments InstagramComment[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
@@ -1022,6 +1040,12 @@ model InstagramComment {
   /**
    * ID do comentário na Meta. Chave de dedup — único global.
    */
+  /**
+   * /**
+   * /** "instagram" | "facebook" — de qual rede veio.
+   */
+  platform String @default("instagram")
+
   commentId String  @unique @map("comment_id")
   /**
    * Post/reel onde o comentário foi feito.
@@ -1073,5 +1097,6 @@ model InstagramComment {
 
   @@index([unitId, createdAt(sort: Desc)])
   @@index([unitId, status])
+  @@index([unitId, platform, createdAt(sort: Desc)])
   @@map("instagram_comments")
 }

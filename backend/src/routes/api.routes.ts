@@ -144,6 +144,9 @@ apiRouter.post('/webhooks/:unitSlug/meta', handleMetaWebhook);
 // Comentários do Instagram — canal separado do WhatsApp (ver instagram.controller).
 apiRouter.get('/webhooks/:unitSlug/instagram', handleInstagramVerify);
 apiRouter.post('/webhooks/:unitSlug/instagram', handleInstagramWebhook);
+// Facebook usa os MESMOS handlers — a plataforma é deduzida do path.
+apiRouter.get('/webhooks/:unitSlug/facebook', handleInstagramVerify);
+apiRouter.post('/webhooks/:unitSlug/facebook', handleInstagramWebhook);
 apiRouter.post('/webhooks/kommo', handleKommoWebhook);          // retrocompat
 apiRouter.post('/webhooks/salesbot', handleSalesbotWebhook);    // retrocompat
 

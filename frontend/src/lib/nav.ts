@@ -16,7 +16,6 @@ import {
   Cpu,
   FileBarChart,
   Globe,
-  Instagram,
   LayoutDashboard,
   MessageCircle,
   MessagesSquare,
@@ -26,8 +25,21 @@ import {
   Truck,
   UserCog,
   Wand2,
-  type LucideIcon,
 } from 'lucide-react';
+import { FaFacebookF, FaInstagram } from 'react-icons/fa6';
+import type { ComponentType } from 'react';
+
+/**
+ * As duas bibliotecas de ícone convivem: lucide no chrome antigo, react-icons
+ * nas telas novas (e nas marcas, que o lucide deprecou). Tipar pela FORMA da
+ * prop, e não pela lib, é o que permite migrar uma tela por vez sem quebrar as
+ * outras.
+ */
+export type IconComponent = ComponentType<{
+  size?: number | string;
+  className?: string;
+  strokeWidth?: number;
+}>;
 
 export type AppTab =
   | 'dashboard'
@@ -52,7 +64,8 @@ export type AppTab =
   | 'errors'
   | 'delivery'
   | 'whatsapp'
-  | 'instagram';
+  | 'instagram'
+  | 'facebook';
 
 /** Grupos da sidebar, na ordem em que aparecem. */
 export type NavSection = 'operacao' | 'agente' | 'analise' | 'plataforma';
@@ -69,7 +82,7 @@ export interface NavItem {
   label: string;
   /** Uma linha explicando a página — usada na paleta de comandos. */
   hint: string;
-  icon: LucideIcon;
+  icon: IconComponent;
   section: NavSection;
   superOnly?: boolean;
   keywords?: string[];
@@ -130,9 +143,17 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'instagram',
     label: 'Instagram',
     hint: 'Comentários respondidos pelo agente e fila de aprovação.',
-    icon: Instagram,
+    icon: FaInstagram,
     section: 'agente',
     keywords: ['comentarios', 'insta', 'direct', 'dm', 'post', 'reels'],
+  },
+  {
+    id: 'facebook',
+    label: 'Facebook',
+    hint: 'Comentários da Página respondidos pelo agente e fila de aprovação.',
+    icon: FaFacebookF,
+    section: 'agente',
+    keywords: ['comentarios', 'face', 'fb', 'pagina', 'post', 'inbox'],
   },
   {
     id: 'units',

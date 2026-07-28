@@ -82,6 +82,19 @@ const unitInputBase = {
   igDeliveryMode: z.enum(['kommo', 'direct']).optional(),
   igReplyFieldId: z.coerce.number().int().positive().nullable().optional(),
   igCommentPrompt: z.string().max(4000).nullable().optional(),
+
+  // Facebook — espelha o Instagram.
+  fbEnabled: z.boolean().optional(),
+  fbPageId: z.string().nullable().optional(),
+  fbAccessToken: z.string().nullable().optional(),
+  fbVerifyToken: z.string().nullable().optional(),
+  fbAppSecret: z.string().nullable().optional(),
+  fbDryRun: z.boolean().optional(),
+  fbWhatsappNumber: z.string().max(30).nullable().optional(),
+  fbPublicSignature: z.string().max(60).nullable().optional(),
+  fbDeliveryMode: z.enum(['kommo', 'direct']).optional(),
+  fbReplyFieldId: z.coerce.number().int().positive().nullable().optional(),
+  fbCommentPrompt: z.string().max(4000).nullable().optional(),
   systemPrompt: z.string().max(20_000).optional(),
   // Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer).
   singlePromptMode: z.boolean().optional(),
@@ -154,6 +167,9 @@ function dropMaskedSecrets<T extends Partial<UnitInput>>(input: T): T {
     'igAccessToken',
     'igAppSecret',
     'igVerifyToken',
+    'fbAccessToken',
+    'fbAppSecret',
+    'fbVerifyToken',
   ] as const) {
     if (isMasked(out[k])) delete out[k];
   }

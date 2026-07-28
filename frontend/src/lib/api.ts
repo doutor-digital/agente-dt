@@ -70,7 +70,10 @@ export const apiOrigin = import.meta.env.VITE_API_URL
   : window.location.origin;
 
 /** URL completa de um webhook, pronta pra colar no painel da Meta. */
-export function webhookUrl(slug: string, channel: 'instagram' | 'meta' | 'kommo'): string {
+export function webhookUrl(
+  slug: string,
+  channel: 'instagram' | 'facebook' | 'meta' | 'kommo',
+): string {
   return `${apiOrigin}/api/webhooks/${slug}/${channel}`;
 }
 
@@ -233,7 +236,7 @@ export const api = {
   // ── Instagram — fila de moderação de comentários ──
   async instagramComments(
     unitId: string,
-    params: { status?: IgCommentStatus; limit?: number } = {},
+    params: { status?: IgCommentStatus; platform?: 'instagram' | 'facebook'; limit?: number } = {},
   ): Promise<InstagramCommentsResponse> {
     const { data } = await http.get<InstagramCommentsResponse>(
       `/units/${unitId}/instagram/comments`,

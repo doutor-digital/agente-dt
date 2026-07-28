@@ -266,6 +266,18 @@ export interface Unit {
   igDeliveryMode: 'kommo' | 'direct';
   igReplyFieldId: number | null;
   igCommentPrompt: string | null;
+  // Facebook — espelha o Instagram.
+  fbEnabled: boolean;
+  fbPageId: string | null;
+  fbAccessToken: string | null;
+  fbVerifyToken: string | null;
+  fbAppSecret: string | null;
+  fbDryRun: boolean;
+  fbWhatsappNumber: string | null;
+  fbPublicSignature: string | null;
+  fbDeliveryMode: 'kommo' | 'direct';
+  fbReplyFieldId: number | null;
+  fbCommentPrompt: string | null;
   metaMonthlyBudgetUsd: number | string;
   systemPrompt: string;
   /** Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer). */
@@ -1016,6 +1028,7 @@ export type IgCommentStatus = 'PENDING' | 'SENT' | 'SKIPPED' | 'FAILED';
 export interface InstagramComment {
   id: string;
   unitId: string;
+  platform: 'instagram' | 'facebook';
   commentId: string;
   mediaId: string | null;
   parentId: string | null;

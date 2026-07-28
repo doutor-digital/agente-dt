@@ -34,6 +34,60 @@ import { logger } from '../lib/logger.js';
 
 const IG_GRAPH_BASE = 'https://graph.facebook.com/v22.0';
 
+export type SocialPlatform = 'instagram' | 'facebook';
+
+/**
+ * As duas redes têm os MESMOS conceitos com nomes de coluna diferentes.
+ * Resolver isso num lugar só evita `platform === 'facebook' ? unit.fbX :
+ * unit.igX` espalhado por controller, service e agente — que é exatamente o
+ * padrão que fez a transcrição de áudio morrer em silêncio: cada call site
+ * lendo a credencial do seu jeito, um deles errado.
+ */
+export interface PlatformConfig {
+  enabled: boolean;
+  accountId: string | null;
+  accessToken: string | null;
+  verifyToken: string | null;
+  appSecret: string | null;
+  dryRun: boolean;
+  whatsappNumber: string | null;
+  publicSignature: string | null;
+  deliveryMode: string;
+  replyFieldId: number | null;
+  commentPrompt: string | null;
+}
+
+export function platformConfig(unit: Unit, platform: SocialPlatform): PlatformConfig {
+  if (platform === 'facebook') {
+    return {
+      enabled: unit.fbEnabled,
+      accountId: unit.fbPageId,
+      accessToken: unit.fbAccessToken,
+      verifyToken: unit.fbVerifyToken?.trim() || unit.metaVerifyToken?.trim() || null,
+      appSecret: unit.fbAppSecret?.trim() || unit.metaAppSecret?.trim() || null,
+      dryRun: unit.fbDryRun,
+      whatsappNumber: unit.fbWhatsappNumber,
+      publicSignature: unit.fbPublicSignature,
+      deliveryMode: unit.fbDeliveryMode,
+      replyFieldId: unit.fbReplyFieldId,
+      commentPrompt: unit.fbCommentPrompt,
+    };
+  }
+  return {
+    enabled: unit.igEnabled,
+    accountId: unit.igUserId,
+    accessToken: unit.igAccessToken,
+    verifyToken: unit.igVerifyToken?.trim() || unit.metaVerifyToken?.trim() || null,
+    appSecret: unit.igAppSecret?.trim() || unit.metaAppSecret?.trim() || null,
+    dryRun: unit.igDryRun,
+    whatsappNumber: unit.igWhatsappNumber,
+    publicSignature: unit.igPublicSignature,
+    deliveryMode: unit.igDeliveryMode,
+    replyFieldId: unit.igReplyFieldId,
+    commentPrompt: unit.igCommentPrompt,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tipos
 // ---------------------------------------------------------------------------
@@ -82,10 +136,11 @@ export function resolveIgVerifyToken(
 // ---------------------------------------------------------------------------
 
 export function verifyWebhook(
-  unit: Pick<Unit, 'igVerifyToken' | 'metaVerifyToken'>,
+  unit: Unit,
   query: { mode?: string; token?: string; challenge?: string },
+  platform: SocialPlatform = 'instagram',
 ): { ok: boolean; challenge?: string; reason?: string } {
-  const expected = resolveIgVerifyToken(unit);
+  const expected = platformConfig(unit, platform).verifyToken;
   if (!expected) return { ok: false, reason: 'unit sem ig_verify_token' };
   if (query.mode !== 'subscribe') return { ok: false, reason: 'mode != subscribe' };
   if (query.token !== expected) return { ok: false, reason: 'token inválido' };
@@ -160,21 +215,89 @@ export function parseComments(payload: unknown): IgInboundComment[] {
 }
 
 // ---------------------------------------------------------------------------
+// Parse do payload de comentários do FACEBOOK.
+// ---------------------------------------------------------------------------
+// Formato (object: "page", field: "feed"):
+// {
+//   "object": "page",
+//   "entry": [{ "id": "<PAGE_ID>", "time": 170..., "changes": [{
+//     "field": "feed",
+//     "value": {
+//       "item": "comment", "verb": "add",
+//       "comment_id": "...", "post_id": "...", "parent_id": "...",
+//       "from": { "id": "...", "name": "Fulana" }, "message": "quanto custa?"
+//     }}]}]
+// }
+//
+// O `feed` da Página carrega MUITA coisa além de comentário — curtida, reação,
+// post novo, edição, remoção. Filtrar por item=comment E verb=add é o que
+// impede o agente de "responder" a uma curtida ou a um comentário apagado.
+
+export function parseFacebookComments(payload: unknown): IgInboundComment[] {
+  const out: IgInboundComment[] = [];
+  const root = payload as {
+    object?: string;
+    entry?: Array<{
+      id?: string;
+      time?: number;
+      changes?: Array<{
+        field?: string;
+        value?: {
+          item?: string;
+          verb?: string;
+          comment_id?: string;
+          post_id?: string;
+          parent_id?: string;
+          message?: string;
+          from?: { id?: string; name?: string };
+        };
+      }>;
+    }>;
+  };
+
+  if (root.object && root.object !== 'page') return out;
+
+  for (const entry of root.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      if (change.field !== 'feed') continue;
+      const v = change.value;
+      if (!v || v.item !== 'comment' || v.verb !== 'add' || !v.comment_id) continue;
+      out.push({
+        commentId: v.comment_id,
+        mediaId: v.post_id ?? null,
+        // No Facebook o parent_id do comentário raiz é o próprio post — só é
+        // resposta a outro comentário quando difere do post_id.
+        parentId: v.parent_id && v.parent_id !== v.post_id ? v.parent_id : null,
+        authorId: v.from?.id ?? null,
+        authorUsername: v.from?.name ?? null,
+        text: (v.message ?? '').trim(),
+        recipientId: entry.id ?? null,
+        timestamp: entry.time ?? 0,
+      });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Escrita 1 — resposta PÚBLICA no comentário.
 // ---------------------------------------------------------------------------
 
 export async function replyToComment(
-  unit: Pick<Unit, 'igAccessToken'>,
+  cfg: Pick<PlatformConfig, 'accessToken'>,
   commentId: string,
   message: string,
+  platform: SocialPlatform = 'instagram',
 ): Promise<IgSendResult> {
-  if (!unit.igAccessToken) return { ok: false, error: 'unit sem ig_access_token' };
+  if (!cfg.accessToken) return { ok: false, error: 'sem access token' };
+  // Instagram responde em /replies; a Página do Facebook, em /comments.
+  const path = platform === 'facebook' ? 'comments' : 'replies';
   try {
     const { data } = await axios.post(
-      `${IG_GRAPH_BASE}/${commentId}/replies`,
+      `${IG_GRAPH_BASE}/${commentId}/${path}`,
       { message },
       {
-        headers: { Authorization: `Bearer ${unit.igAccessToken}` },
+        headers: { Authorization: `Bearer ${cfg.accessToken}` },
         timeout: 15_000,
       },
     );
@@ -194,26 +317,32 @@ export async function replyToComment(
 // isso quem chama precisa ter certeza antes: não há retry sem custo aqui.
 
 export async function sendPrivateReply(
-  unit: Pick<Unit, 'igUserId' | 'igAccessToken'>,
+  cfg: Pick<PlatformConfig, 'accountId' | 'accessToken'>,
   commentId: string,
   text: string,
+  platform: SocialPlatform = 'instagram',
 ): Promise<IgSendResult> {
-  if (!unit.igUserId || !unit.igAccessToken) {
-    return { ok: false, error: 'unit sem ig_user_id/ig_access_token' };
+  if (!cfg.accessToken) return { ok: false, error: 'sem access token' };
+  if (platform === 'instagram' && !cfg.accountId) {
+    return { ok: false, error: 'sem ig_user_id' };
   }
+  // Os dois caminhos são DIFERENTES, não é detalhe cosmético:
+  //   Instagram → POST /{ig-user-id}/messages  com recipient.comment_id
+  //   Facebook  → POST /{comment-id}/private_replies  com message
+  const url =
+    platform === 'facebook'
+      ? `${IG_GRAPH_BASE}/${commentId}/private_replies`
+      : `${IG_GRAPH_BASE}/${cfg.accountId}/messages`;
+  const body =
+    platform === 'facebook'
+      ? { message: text }
+      : { recipient: { comment_id: commentId }, message: { text } };
   try {
-    const { data } = await axios.post(
-      `${IG_GRAPH_BASE}/${unit.igUserId}/messages`,
-      {
-        recipient: { comment_id: commentId },
-        message: { text },
-      },
-      {
-        headers: { Authorization: `Bearer ${unit.igAccessToken}` },
-        timeout: 15_000,
-      },
-    );
-    return { ok: true, id: (data as { message_id?: string }).message_id };
+    const { data } = await axios.post(url, body, {
+      headers: { Authorization: `Bearer ${cfg.accessToken}` },
+      timeout: 15_000,
+    });
+    return { ok: true, id: (data as { message_id?: string; id?: string }).message_id ?? (data as { id?: string }).id };
   } catch (err) {
     const msg = describeAxiosError(err);
     logger.warn({ err, commentId }, 'instagram: resposta privada falhou');
@@ -244,6 +373,8 @@ function describeAxiosError(err: unknown): string {
 export const InstagramService = {
   verifyWebhook,
   parseComments,
+  parseFacebookComments,
+  platformConfig,
   replyToComment,
   sendPrivateReply,
   buildWhatsappLink,

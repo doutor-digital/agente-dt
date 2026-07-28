@@ -34,8 +34,9 @@ import { claimMessageId } from '../lib/dedup-cache.js';
 import { MetaService } from '../services/meta.service.js';
 import {
   InstagramService,
-  resolveIgAppSecret,
+  platformConfig,
   type IgInboundComment,
+  type SocialPlatform,
 } from '../services/instagram.service.js';
 import { decideOnComment } from '../services/comment-agent.service.js';
 
@@ -54,6 +55,10 @@ interface RawBodyRequest extends Request {
 // GET — handshake.
 // ---------------------------------------------------------------------------
 
+function platformOf(req: Request): SocialPlatform {
+  return req.path.endsWith('/facebook') ? 'facebook' : 'instagram';
+}
+
 export async function handleInstagramVerify(req: Request, res: Response): Promise<void> {
   const slug = String(req.params.unitSlug ?? '');
   if (!slug) {
@@ -66,11 +71,15 @@ export async function handleInstagramVerify(req: Request, res: Response): Promis
     return;
   }
 
-  const result = InstagramService.verifyWebhook(unit, {
-    mode: req.query['hub.mode'] as string | undefined,
-    token: req.query['hub.verify_token'] as string | undefined,
-    challenge: req.query['hub.challenge'] as string | undefined,
-  });
+  const result = InstagramService.verifyWebhook(
+    unit,
+    {
+      mode: req.query['hub.mode'] as string | undefined,
+      token: req.query['hub.verify_token'] as string | undefined,
+      challenge: req.query['hub.challenge'] as string | undefined,
+    },
+    platformOf(req),
+  );
 
   if (!result.ok) {
     logger.warn({ slug, reason: result.reason }, 'instagram verify falhou');
@@ -96,7 +105,9 @@ export async function handleInstagramWebhook(req: Request, res: Response): Promi
     return;
   }
 
-  const appSecret = resolveIgAppSecret(unit);
+  const platform = platformOf(req);
+  const cfg = platformConfig(unit, platform);
+  const appSecret = cfg.appSecret;
   const rawBody = (req as RawBodyRequest).rawBody;
   if (rawBody && appSecret) {
     const valid = MetaService.validateSignature(
@@ -111,22 +122,25 @@ export async function handleInstagramWebhook(req: Request, res: Response): Promi
     }
   }
 
-  const comments = InstagramService.parseComments(req.body);
+  const comments =
+    platform === 'facebook'
+      ? InstagramService.parseFacebookComments(req.body)
+      : InstagramService.parseComments(req.body);
 
   res.status(200).json({ ok: true, received: comments.length });
 
-  if (!unit.igEnabled) {
+  if (!cfg.enabled) {
     logger.debug({ slug }, 'instagram: canal desligado na unidade — ignorando');
     return;
   }
   if (comments.length === 0) return;
 
   for (const c of comments) {
-    if (!claimMessageId('ig-comment', c.commentId)) {
+    if (!claimMessageId(`${platform}-comment`, c.commentId)) {
       logger.info({ slug, commentId: c.commentId }, 'instagram: webhook duplicado — ignorando');
       continue;
     }
-    void processComment(unit, c).catch((err) => {
+    void processComment(unit, c, platform).catch((err) => {
       logger.error({ err, slug, commentId: c.commentId }, 'erro processando comentário IG');
     });
   }
@@ -136,9 +150,15 @@ export async function handleInstagramWebhook(req: Request, res: Response): Promi
 // Processamento de um comentário.
 // ---------------------------------------------------------------------------
 
-async function processComment(unit: Unit, c: IgInboundComment): Promise<void> {
+async function processComment(
+  unit: Unit,
+  c: IgInboundComment,
+  platform: SocialPlatform,
+): Promise<void> {
+  const cfg = platformConfig(unit, platform);
+
   // 1. LOOP GUARD. A resposta que publicamos chega de volta como comentário.
-  if (unit.igUserId && c.authorId && c.authorId === unit.igUserId) {
+  if (cfg.accountId && c.authorId && c.authorId === cfg.accountId) {
     logger.debug({ commentId: c.commentId }, 'instagram: comentário nosso — ignorando');
     return;
   }
@@ -150,6 +170,7 @@ async function processComment(unit: Unit, c: IgInboundComment): Promise<void> {
     row = await prisma.instagramComment.create({
       data: {
         unitId: unit.id,
+        platform,
         commentId: c.commentId,
         mediaId: c.mediaId,
         parentId: c.parentId,
@@ -170,6 +191,7 @@ async function processComment(unit: Unit, c: IgInboundComment): Promise<void> {
   const decision = await decideOnComment(unit, {
     commentId: c.commentId,
     text: c.text,
+    platform,
   });
 
   const patch: Record<string, unknown> = {
@@ -191,23 +213,31 @@ async function processComment(unit: Unit, c: IgInboundComment): Promise<void> {
   const lowConfidence =
     decision.viaRule === null && decision.confidence < MIN_CONFIDENCE_TO_PUBLISH;
 
-  if (unit.igDryRun || lowConfidence) {
+  if (cfg.dryRun || lowConfidence) {
     await prisma.instagramComment.update({
       where: { id: row.id },
       data: {
         ...patch,
         status: 'PENDING',
-        skipReason: unit.igDryRun ? 'dry_run' : 'confianca_baixa',
+        skipReason: cfg.dryRun ? 'dry_run' : 'confianca_baixa',
       },
     });
     logger.info(
-      { commentId: c.commentId, category: decision.category, dryRun: unit.igDryRun },
+      { commentId: c.commentId, category: decision.category, dryRun: cfg.dryRun },
       'instagram: rascunho na fila de aprovação',
     );
     return;
   }
 
-  await publishDecision(unit, row.id, c.commentId, decision.publicReply, decision.privateReply, patch);
+  await publishDecision(
+    unit,
+    row.id,
+    c.commentId,
+    decision.publicReply,
+    decision.privateReply,
+    patch,
+    platform,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -225,14 +255,16 @@ export async function publishDecision(
   publicReply: string | null,
   privateReply: string | null,
   extraPatch: Record<string, unknown> = {},
+  platform: SocialPlatform = 'instagram',
 ): Promise<void> {
+  const cfg = platformConfig(unit, platform);
   const patch: Record<string, unknown> = { ...extraPatch };
   const errors: string[] = [];
 
   if (publicReply) {
-    const signature = unit.igPublicSignature?.trim();
+    const signature = cfg.publicSignature?.trim();
     const text = signature ? `${publicReply} ${signature}` : publicReply;
-    const r = await InstagramService.replyToComment(unit, commentId, text);
+    const r = await InstagramService.replyToComment(cfg, commentId, text, platform);
     if (r.ok) {
       patch.publicSentAt = new Date();
     } else {
@@ -241,7 +273,7 @@ export async function publishDecision(
   }
 
   if (privateReply) {
-    const r = await InstagramService.sendPrivateReply(unit, commentId, privateReply);
+    const r = await InstagramService.sendPrivateReply(cfg, commentId, privateReply, platform);
     if (r.ok) {
       patch.privateSentAt = new Date();
     } else {
@@ -266,6 +298,7 @@ export async function publishDecision(
 
 const listQuerySchema = z.object({
   status: z.enum(['PENDING', 'SENT', 'SKIPPED', 'FAILED']).optional(),
+  platform: z.enum(['instagram', 'facebook']).default('instagram'),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
@@ -276,17 +309,17 @@ export async function listInstagramCommentsHandler(req: Request, res: Response):
     res.status(400).json({ error: 'invalid_query', detail: parsed.error.flatten() });
     return;
   }
-  const { status, limit } = parsed.data;
+  const { status, limit, platform } = parsed.data;
 
   const [rows, counts] = await Promise.all([
     prisma.instagramComment.findMany({
-      where: { unitId, ...(status ? { status } : {}) },
+      where: { unitId, platform, ...(status ? { status } : {}) },
       orderBy: { createdAt: 'desc' },
       take: limit,
     }),
     prisma.instagramComment.groupBy({
       by: ['status'],
-      where: { unitId },
+      where: { unitId, platform },
       _count: { _all: true },
     }),
   ]);
@@ -336,11 +369,15 @@ export async function approveInstagramCommentHandler(req: Request, res: Response
   const privateReply =
     parsed.data.privateReply !== undefined ? parsed.data.privateReply : row.privateReply;
 
-  await publishDecision(unit, row.id, row.commentId, publicReply, privateReply, {
+  await publishDecision(
+    unit,
+    row.id,
+    row.commentId,
     publicReply,
     privateReply,
-    skipReason: null,
-  });
+    { publicReply, privateReply, skipReason: null },
+    (row.platform as SocialPlatform) ?? 'instagram',
+  );
 
   const updated = await prisma.instagramComment.findUnique({ where: { id: row.id } });
   res.json({ comment: updated });

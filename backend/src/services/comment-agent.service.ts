@@ -30,7 +30,7 @@ import { SystemMessage, HumanMessage, type AIMessage } from '@langchain/core/mes
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import { resolveOpenAIApiKey, recordLlmCall } from './openai.service.js';
-import { buildWhatsappLink } from './instagram.service.js';
+import { buildWhatsappLink, platformConfig, type SocialPlatform } from './instagram.service.js';
 
 const COMMENT_MODEL = process.env.COMMENT_AGENT_MODEL ?? 'gpt-4o-mini';
 
@@ -115,16 +115,22 @@ export function triage(text: string): { category: CommentCategory; reason: strin
 // O prompt do agente.
 // ---------------------------------------------------------------------------
 
-function buildPrompt(unit: Unit, comment: string): { system: string; user: string } {
+function buildPrompt(
+  unit: Unit,
+  comment: string,
+  platform: SocialPlatform,
+): { system: string; user: string } {
   const company = unit.personaCompanyName?.trim() || unit.name;
-  const waLink = buildWhatsappLink(unit.igWhatsappNumber);
+  const cfg = platformConfig(unit, platform);
+  const waLink = buildWhatsappLink(cfg.whatsappNumber);
+  const rede = platform === 'facebook' ? 'Facebook' : 'Instagram';
 
   const destino = waLink
     ? `Feche convidando pro WhatsApp e INCLUA o link exatamente assim, em linha própria: ${waLink}`
     : 'Feche convidando a pessoa a responder aqui mesmo no direct.';
 
   const system = [
-    `Você atende o Instagram da ${company}. Alguém comentou num post e você vai`,
+    `Você atende o ${rede} da ${company}. Alguém comentou num post e você vai`,
     'escrever a mensagem PRIVADA (direct) que essa pessoa vai receber.',
     '',
     'SUA TAREFA — devolva JSON com exatamente estas chaves:',
@@ -143,7 +149,7 @@ function buildPrompt(unit: Unit, comment: string): { system: string; user: strin
     // INSTRUÇÃO EDITÁVEL — o dono da unidade escreve como quer que o direct
     // soe. Quando vazio, cai no texto padrão.
     'COMO ESCREVER O DIRECT:',
-    unit.igCommentPrompt?.trim() ||
+    cfg.commentPrompt?.trim() ||
       [
         '- 2 a 3 frases. Tom caloroso e direto, PT-BR, sem formalidade dura.',
         '- Se a pessoa citou uma dor ou condição, ACOLHA em uma frase antes de conduzir.',
@@ -179,9 +185,10 @@ function buildPrompt(unit: Unit, comment: string): { system: string; user: strin
 
 export async function decideOnComment(
   unit: Unit,
-  params: { commentId: string; text: string; traceId?: string | null },
+  params: { commentId: string; text: string; traceId?: string | null; platform?: SocialPlatform },
 ): Promise<CommentDecision> {
   const { commentId, text } = params;
+  const platform = params.platform ?? 'instagram';
 
   const ruled = triage(text);
   if (ruled) {
@@ -207,7 +214,7 @@ export async function decideOnComment(
     };
   }
 
-  const { system, user } = buildPrompt(unit, text);
+  const { system, user } = buildPrompt(unit, text, platform);
   const model = new ChatOpenAI({
     apiKey,
     model: COMMENT_MODEL,

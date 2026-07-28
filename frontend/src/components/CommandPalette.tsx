@@ -13,12 +13,13 @@
 // digita "custo" acha "Chamadas IA" e "Custo WhatsApp".
 // ============================================================================
 
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, CornerDownLeft, Search } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../context/AuthContext';
 import { useUnit } from '../context/UnitContext';
 import { NAV_ITEMS, SECTION_LABEL, normalize, type AppTab } from '../lib/nav';
+import type { IconComponent } from '../lib/nav';
 
 interface Row {
   key: string;
@@ -28,7 +29,7 @@ interface Row {
   group: string;
   haystack: string;
   run: () => void;
-  icon: ComponentType<{ size?: number; className?: string }>;
+  icon: IconComponent;
 }
 
 export function CommandPalette({
