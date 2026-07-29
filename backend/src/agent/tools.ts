@@ -21,6 +21,7 @@
 // ============================================================================
 
 import { DynamicStructuredTool } from '@langchain/core/tools';
+import { buildAgendaTools } from './agenda-tools.js';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import type { LeadFieldRule, Unit } from '@prisma/client';
@@ -911,7 +912,13 @@ export function buildTools({
     mover_funil,
   ];
   if (resumir_lead_para_sdr) nativeTools.push(resumir_lead_para_sdr);
-  return [...nativeTools, ...dynamicTools];
+
+  // Tools de agenda só existem pra unidade com a API da franquia conectada.
+  // Fora isso o agente nem vê que agendar é possível — melhor do que ver e
+  // receber erro, que ele tentaria contornar conversando.
+  const agendaTools = unit ? buildAgendaTools({ unit, recorder }) : [];
+
+  return [...nativeTools, ...agendaTools, ...dynamicTools];
 }
 
 // ---------------------------------------------------------------------------

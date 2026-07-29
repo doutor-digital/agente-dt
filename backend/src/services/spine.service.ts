@@ -394,6 +394,39 @@ export async function createSchedule(
 }
 
 // ---------------------------------------------------------------------------
+// Busca de pacientes.
+// ---------------------------------------------------------------------------
+// Agendar exige `idClient`, que não existe do lado do Kommo — o lead do CRM e
+// o paciente da franquia são cadastros distintos. Esta busca é a ponte.
+
+export interface SpineClient {
+  idClient: number | null;
+  name: string | null;
+  whatsapp: string | null;
+}
+
+export async function searchClients(
+  unit: SpineUnit,
+  name: string,
+): Promise<SpineResult<{ clients: SpineClient[] }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  try {
+    const { data } = await http.post<{
+      data?: { data?: Array<{ idClient?: number; name?: string; whatsapp?: string }> };
+    }>('/api/clients/search', { name, pagination: { page: 1, rowsPerPage: 20 } });
+    const clients = (data?.data?.data ?? []).map((c) => ({
+      idClient: c.idClient ?? null,
+      name: c.name ?? null,
+      whatsapp: c.whatsapp ?? null,
+    }));
+    return { ok: true, data: { clients } };
+  } catch (err) {
+    return { ok: false, ...describe(err) };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Teste de credencial.
 // ---------------------------------------------------------------------------
 // A doc sugere validar em /api/clients/search — é o endpoint mais barato que
@@ -413,6 +446,7 @@ export async function ping(unit: SpineUnit): Promise<SpineResult<{ total: number
 }
 
 export const SpineService = {
+  searchClients,
   instanteNoFuso,
   localParaUtcIso,
   searchSchedules,
