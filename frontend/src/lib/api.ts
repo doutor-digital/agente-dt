@@ -55,6 +55,7 @@ import type {
   InstagramCommentsResponse,
   SpineStatus,
   SpineSchedulesResponse,
+  AgendaBlock,
 } from '../types/api';
 
 // Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
@@ -255,6 +256,19 @@ export const api = {
       `/units/${unitId}/spine/ping`,
     );
     return data;
+  },
+  async blockAgenda(
+    unitId: string,
+    body: { dayLocal: string; startTime: string; endTime: string; reason?: string | null },
+  ): Promise<AgendaBlock> {
+    const { data } = await http.post<{ block: AgendaBlock }>(
+      `/units/${unitId}/agenda/blocks`,
+      body,
+    );
+    return data.block;
+  },
+  async unblockAgenda(unitId: string, blockId: string): Promise<void> {
+    await http.delete(`/units/${unitId}/agenda/blocks/${blockId}`);
   },
   async emergencyPause(unitId: string, reason?: string): Promise<void> {
     await http.post('/system/emergency-pause', { unitId, reason });

@@ -33,7 +33,17 @@ export interface AgendaConfig {
   slotMinutes: number;
 }
 
-export type SlotStatus = 'livre' | 'ocupado' | 'incerto';
+export type SlotStatus = 'livre' | 'ocupado' | 'incerto' | 'bloqueado';
+
+/** Bloqueio manual — o dado que a API da franquia não expõe. */
+export interface AgendaBlockInput {
+  dayLocal: string;
+  /** "HH:mm" inclusive. */
+  startTime: string;
+  /** "HH:mm" exclusive. */
+  endTime: string;
+  reason?: string | null;
+}
 
 export interface AgendaSlot {
   /** "YYYY-MM-DD" no fuso da clínica. */
@@ -76,6 +86,8 @@ export function buildAgenda(
   range: { initialDate: string; endDate: string },
   /** Instante "agora" no fuso da clínica, ISO curto — slots anteriores saem. */
   nowLocalIso: string,
+  /** Bloqueios manuais da recepção. Vencem tudo. */
+  blocks: AgendaBlockInput[] = [],
 ): AgendaSlot[] {
   const inicio = toMinutes(cfg.start);
   const fim = toMinutes(cfg.end);
@@ -112,6 +124,22 @@ export function buildAgenda(
       const hhmm = fromMinutes(m);
       const quando = `${dia}T${hhmm}:00`;
       if (quando <= nowLocalIso) continue;
+
+      // BLOQUEIO VENCE TUDO, inclusive um agendamento que exista no mesmo
+      // horário. Se a recepção bloqueou, ela sabe de algo que a API não conta —
+      // é justamente esse o motivo do recurso existir.
+      const bloqueio = blocks.find(
+        (b) => b.dayLocal === dia && hhmm >= b.startTime && hhmm < b.endTime,
+      );
+      if (bloqueio) {
+        out.push({
+          day: dia,
+          time: hhmm,
+          status: 'bloqueado',
+          motivo: bloqueio.reason?.trim() || 'bloqueado pela recepção',
+        });
+        continue;
+      }
 
       const achado = ocupado.get(`${dia} ${hhmm}`);
       if (!achado) {

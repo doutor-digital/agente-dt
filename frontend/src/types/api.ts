@@ -1088,7 +1088,7 @@ export interface SpineStatus {
   };
 }
 
-export type SpineSlotStatus = 'livre' | 'ocupado' | 'incerto';
+export type SpineSlotStatus = 'livre' | 'ocupado' | 'incerto' | 'bloqueado';
 
 export interface SpineSlot {
   day: string;
@@ -1097,11 +1097,23 @@ export interface SpineSlot {
   motivo?: string;
 }
 
+export interface AgendaBlock {
+  id: string;
+  unitId: string;
+  dayLocal: string;
+  startTime: string;
+  endTime: string;
+  reason: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
 export interface SpineSchedulesResponse {
   paused: boolean;
   range: { initialDate: string; endDate: string };
   total: number;
   pages: number;
   slots: SpineSlot[];
-  resumo: { livres: number; ocupados: number; incertos: number };
+  blocks: AgendaBlock[];
+  resumo: { livres: number; ocupados: number; incertos: number; bloqueados: number };
 }

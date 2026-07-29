@@ -142,7 +142,16 @@ export async function spineSchedulesHandler(req: Request, res: Response): Promis
     return;
   }
 
-  const r = await SpineService.searchSchedules(unit, parsed.data);
+  const [r, blocks] = await Promise.all([
+    SpineService.searchSchedules(unit, parsed.data),
+    prisma.agendaBlock.findMany({
+      where: {
+        unitId: unit.id,
+        dayLocal: { gte: parsed.data.initialDate, lte: parsed.data.endDate },
+      },
+      orderBy: [{ dayLocal: 'asc' }, { startTime: 'asc' }],
+    }),
+  ]);
   if (!r.ok || !r.data) {
     res.status(502).json({ error: 'spine_indisponivel', detail: r.error });
     return;
@@ -160,6 +169,7 @@ export async function spineSchedulesHandler(req: Request, res: Response): Promis
     r.data.schedules,
     parsed.data,
     agoraLocalIso(tz),
+    blocks,
   );
 
   res.json({
@@ -169,12 +179,63 @@ export async function spineSchedulesHandler(req: Request, res: Response): Promis
     total: r.data.total,
     pages: r.data.pages,
     slots,
+    blocks,
     resumo: {
       livres: slots.filter((s) => s.status === 'livre').length,
       ocupados: slots.filter((s) => s.status === 'ocupado').length,
       incertos: slots.filter((s) => s.status === 'incerto').length,
+      bloqueados: slots.filter((s) => s.status === 'bloqueado').length,
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Bloqueios manuais
+// ---------------------------------------------------------------------------
+
+const blockSchema = z.object({
+  dayLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/),
+  reason: z.string().max(200).nullable().optional(),
+});
+
+export async function createAgendaBlockHandler(req: Request, res: Response): Promise<void> {
+  const unitId = String(req.params.id);
+  const parsed = blockSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'invalid_body', detail: parsed.error.flatten() });
+    return;
+  }
+  if (parsed.data.endTime <= parsed.data.startTime) {
+    res.status(400).json({ error: 'intervalo_invalido', detail: 'fim precisa ser depois do início' });
+    return;
+  }
+
+  const block = await prisma.agendaBlock.create({
+    data: {
+      unitId,
+      ...parsed.data,
+      createdBy: (req as Request & { user?: { email?: string } }).user?.email ?? null,
+    },
+  });
+  logger.info(
+    { unitId, dia: block.dayLocal, de: block.startTime, ate: block.endTime },
+    'agenda: horário bloqueado pela recepção',
+  );
+  res.status(201).json({ block });
+}
+
+export async function deleteAgendaBlockHandler(req: Request, res: Response): Promise<void> {
+  const unitId = String(req.params.id);
+  const blockId = String(req.params.blockId);
+  const achado = await prisma.agendaBlock.findFirst({ where: { id: blockId, unitId } });
+  if (!achado) {
+    res.status(404).json({ error: 'block_not_found' });
+    return;
+  }
+  await prisma.agendaBlock.delete({ where: { id: blockId } });
+  res.json({ ok: true });
 }
 
 export async function spinePingHandler(req: Request, res: Response): Promise<void> {

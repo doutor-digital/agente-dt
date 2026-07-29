@@ -249,6 +249,7 @@ model Unit {
   spineTimezone    String  @default("America/Sao_Paulo") @map("spine_timezone")
 
   instagramComments InstagramComment[]
+  agendaBlocks      AgendaBlock[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -1080,6 +1081,7 @@ model InstagramComment {
    * /**
    * /**
    * /**
+   * /**
    * /** "instagram" | "facebook" — de qual rede veio.
    */
   platform String @default("instagram")
@@ -1137,4 +1139,54 @@ model InstagramComment {
   @@index([unitId, status])
   @@index([unitId, platform, createdAt(sort: Desc)])
   @@map("instagram_comments")
+}
+
+// ===========================================================================
+// AgendaBlock — bloqueio manual de horário, do nosso lado.
+// ===========================================================================
+// EXISTE PORQUE A API DA FRANQUIA NÃO TEM ISSO. Quando o médico trava um
+// horário lá dentro, o bloqueio não vira agendamento e não aparece em
+// /api/schedules/search — para nós aquele horário parece vago, e a IA
+// marcaria em cima. Não há como ler esse dado; então a recepção registra
+// aqui, e a grade passa a subtraí-lo.
+//
+// É a diferença entre o kill switch e isto: o botão vermelho para TUDO, e
+// serve pro dia em que a agenda desandou. O bloqueio é cirúrgico — "das 14h
+// às 15h de quinta o doutor não atende" — e deixa o resto do dia funcionando.
+// Sem ele, a recepção só teria a opção nuclear, e na dúvida usaria ela.
+//
+// Guardado em hora LOCAL da clínica (dia + HH:mm), não em UTC, porque é assim
+// que a recepção pensa e é assim que a grade é montada. Converter aqui só
+// criaria uma chance a mais de erro de fuso entre o que se digita e o que se
+// vê.
+// ===========================================================================
+model AgendaBlock {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+
+  /**
+   * "YYYY-MM-DD" no fuso da clínica.
+   */
+  dayLocal  String @map("day_local")
+  /**
+   * "HH:mm" inclusive.
+   */
+  startTime String @map("start_time")
+  /**
+   * "HH:mm" exclusive — 14:00–15:00 bloqueia 14:00 e 14:30, não 15:00.
+   */
+  endTime   String @map("end_time")
+
+  reason    String? @db.Text
+  /**
+   * E-mail de quem bloqueou — a recepção precisa saber a quem perguntar.
+   */
+  createdBy String? @map("created_by")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@index([unitId, dayLocal])
+  @@map("agenda_blocks")
 }

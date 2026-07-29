@@ -37,6 +37,8 @@ import {
   PiCalendarBlankBold,
   PiPlugsConnectedBold,
   PiQuestionBold,
+  PiLockSimpleBold,
+  PiLockSimpleOpenBold,
 } from 'react-icons/pi';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
@@ -87,7 +89,11 @@ export default function AgendaPanel() {
             {erro}
           </div>
         )}
-        <Agenda unit={unit} paused={status?.paused ?? false} />
+        <Agenda
+          unit={unit}
+          paused={status?.paused ?? false}
+          passoMin={status?.agenda?.slotMinutes ?? 30}
+        />
         <Configuracao unit={unit} status={status} onSaved={async () => {
           await refresh();
           await carregar();
@@ -228,11 +234,20 @@ function KillSwitch({
 // Agenda do dia
 // ---------------------------------------------------------------------------
 
-function Agenda({ unit, paused }: { unit: { id: string }; paused: boolean }) {
+function Agenda({
+  unit,
+  paused,
+  passoMin,
+}: {
+  unit: { id: string };
+  paused: boolean;
+  passoMin: number;
+}) {
   const [dia, setDia] = useState(() => new Date().toISOString().slice(0, 10));
   const [dados, setDados] = useState<SpineSchedulesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [salvandoBloco, setSalvandoBloco] = useState<string | null>(null);
 
   const buscar = useCallback(async () => {
     setLoading(true);
@@ -250,6 +265,50 @@ function Agenda({ unit, paused }: { unit: { id: string }; paused: boolean }) {
   useEffect(() => {
     void buscar();
   }, [buscar]);
+
+  /**
+   * Bloquear é o oposto de pausar: cirúrgico em vez de nuclear. O horário sai
+   * da oferta da I.A. e o resto do dia segue funcionando.
+   */
+  async function alternarBloqueio(slot: { day: string; time: string; status: string }) {
+    const chave = `${slot.day}-${slot.time}`;
+    setSalvandoBloco(chave);
+    setErro(null);
+    try {
+      if (slot.status === 'bloqueado') {
+        const b = dados?.blocks.find(
+          (x) => x.dayLocal === slot.day && slot.time >= x.startTime && slot.time < x.endTime,
+        );
+        if (b) await api.unblockAgenda(unit.id, b.id);
+      } else {
+        // Bloqueia exatamente um slot: do horário clicado até o próximo.
+        const [h, m] = slot.time.split(':').map(Number);
+        const fimMin = h * 60 + m + passoMin;
+        const fim = `${String(Math.floor(fimMin / 60)).padStart(2, '0')}:${String(fimMin % 60).padStart(2, '0')}`;
+        await api.blockAgenda(unit.id, {
+          dayLocal: slot.day,
+          startTime: slot.time,
+          endTime: fim,
+          reason: null,
+        });
+      }
+      await buscar();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao alterar o bloqueio');
+    } finally {
+      setSalvandoBloco(null);
+    }
+  }
+
+  async function removerBloco(id: string) {
+    setErro(null);
+    try {
+      await api.unblockAgenda(unit.id, id);
+      await buscar();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao liberar');
+    }
+  }
 
   return (
     <section className="surface p-7">
@@ -289,7 +348,7 @@ function Agenda({ unit, paused }: { unit: { id: string }; paused: boolean }) {
 
       {dados && (
         <>
-          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Tile label="Livres" valor={dados.resumo.livres} cor="text-emerald-400" />
             <Tile label="Ocupados" valor={dados.resumo.ocupados} cor="text-zinc-400" />
             <Tile
@@ -298,31 +357,78 @@ function Agenda({ unit, paused }: { unit: { id: string }; paused: boolean }) {
               cor="text-amber-400"
               hint="paciente desmarcou — pode ter virado bloqueio"
             />
+            <Tile
+              label="Bloqueados por você"
+              valor={dados.resumo.bloqueados ?? 0}
+              cor="text-rose-400"
+              hint="a I.A. não oferece"
+            />
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-2">
+          <p className="mt-5 text-xs text-zinc-500">
+            Clique num horário para bloquear — a I.A. deixa de oferecê-lo. Clique de novo para
+            liberar. É assim que se registra o que a franquia não conta: intercorrência, reunião,
+            médico que saiu.
+          </p>
+
+          <div className="mt-3 flex flex-wrap gap-2">
             {dados.slots.length === 0 && (
               <p className="text-sm text-zinc-500">
                 Nenhum horário nesta data — fora dos dias de atendimento, ou tudo já passou.
               </p>
             )}
-            {dados.slots.map((s) => (
-              <span
-                key={`${s.day}-${s.time}`}
-                title={s.motivo ?? 'livre'}
-                className={`rounded-lg px-3 py-1.5 text-sm font-medium tabular-nums ring-1 ${
-                  s.status === 'livre'
-                    ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/25'
-                    : s.status === 'ocupado'
-                      ? 'bg-zinc-800 text-zinc-500 ring-zinc-700 line-through'
-                      : 'bg-amber-500/10 text-amber-300 ring-amber-500/25'
-                }`}
-              >
-                {s.time}
-                {s.status === 'incerto' && <PiQuestionBold size={11} className="ml-1 inline" />}
-              </span>
-            ))}
+            {dados.slots.map((s) => {
+              const bloqueado = s.status === 'bloqueado';
+              const podeClicar = s.status === 'livre' || bloqueado || s.status === 'incerto';
+              return (
+                <button
+                  key={`${s.day}-${s.time}`}
+                  type="button"
+                  title={s.motivo ?? 'livre — clique para bloquear'}
+                  disabled={!podeClicar || salvandoBloco === `${s.day}-${s.time}`}
+                  onClick={() => void alternarBloqueio(s)}
+                  className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-medium tabular-nums ring-1 transition-colors ${
+                    bloqueado
+                      ? 'bg-rose-500/15 text-rose-300 ring-rose-500/30 hover:bg-rose-500/25'
+                      : s.status === 'livre'
+                        ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/25 hover:bg-emerald-500/20'
+                        : s.status === 'ocupado'
+                          ? 'cursor-default bg-zinc-800 text-zinc-500 ring-zinc-700 line-through'
+                          : 'bg-amber-500/10 text-amber-300 ring-amber-500/25 hover:bg-amber-500/20'
+                  }`}
+                >
+                  {s.time}
+                  {bloqueado && <PiLockSimpleBold size={11} />}
+                  {s.status === 'incerto' && <PiQuestionBold size={11} />}
+                </button>
+              );
+            })}
           </div>
+
+          {dados.blocks.length > 0 && (
+            <div className="mt-5 rounded-lg border border-zinc-800 p-4">
+              <p className="flex items-center gap-1.5 text-xs font-medium text-zinc-300">
+                <PiLockSimpleBold size={13} /> Bloqueios deste dia
+              </p>
+              <ul className="mt-2 space-y-1.5">
+                {dados.blocks.map((b) => (
+                  <li key={b.id} className="flex items-center gap-2 text-xs text-zinc-400">
+                    <span className="tabular-nums text-zinc-300">
+                      {b.startTime}–{b.endTime}
+                    </span>
+                    <span className="truncate">{b.reason || 'sem motivo informado'}</span>
+                    {b.createdBy && <span className="text-zinc-600">· {b.createdBy}</span>}
+                    <button
+                      className="ml-auto inline-flex items-center gap-1 text-zinc-500 hover:text-emerald-400"
+                      onClick={() => void removerBloco(b.id)}
+                    >
+                      <PiLockSimpleOpenBold size={12} /> liberar
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {paused && (
             <p className="mt-4 text-xs text-rose-300">

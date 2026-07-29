@@ -107,6 +107,8 @@ import {
   spineStatusHandler,
   spineSchedulesHandler,
   spinePingHandler,
+  createAgendaBlockHandler,
+  deleteAgendaBlockHandler,
 } from '../controllers/spine.controller.js';
 import {
   getAlerts,
@@ -275,6 +277,9 @@ apiRouter.post('/system/resume', requireAuth, resumeHandler);
 apiRouter.get('/units/:id/spine/status', requireUnitAccess, spineStatusHandler);
 apiRouter.get('/units/:id/spine/schedules', requireUnitAccess, spineSchedulesHandler);
 apiRouter.post('/units/:id/spine/ping', requireUnitAccess, spinePingHandler);
+// Bloqueio manual de horário — supre o que a API da franquia não expõe.
+apiRouter.post('/units/:id/agenda/blocks', requireUnitAccess, createAgendaBlockHandler);
+apiRouter.delete('/units/:id/agenda/blocks/:blockId', requireUnitAccess, deleteAgendaBlockHandler);
 apiRouter.get('/units/:id/kommo-lead-custom-fields', requireUnitAccess, listKommoLeadCustomFieldsHandler);
 
 // ---------------------------------------------------------------------------
