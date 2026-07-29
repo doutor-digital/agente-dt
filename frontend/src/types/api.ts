@@ -290,6 +290,8 @@ export interface Unit {
   spineAgendaDays: number[];
   spineSlotMinutes: number;
   spineAiPaused: boolean;
+  triageEnabled: boolean;
+  triageInstructions: string | null;
   metaMonthlyBudgetUsd: number | string;
   systemPrompt: string;
   /** Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer). */

@@ -107,6 +107,10 @@ const unitInputBase = {
   spineLunchEnd: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
   spineAgendaDays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   spineSlotMinutes: z.number().int().min(5).max(240).optional(),
+
+  // Triagem — o que a IA precisa descobrir antes de conduzir adiante.
+  triageEnabled: z.boolean().optional(),
+  triageInstructions: z.string().max(4000).nullable().optional(),
   systemPrompt: z.string().max(20_000).optional(),
   // Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer).
   singlePromptMode: z.boolean().optional(),

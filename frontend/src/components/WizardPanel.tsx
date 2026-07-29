@@ -21,6 +21,8 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   BookText,
   BrainCircuit,
+  CalendarCheck,
+  ClipboardList,
   ChevronDown,
   ChevronRight,
   Coffee,
@@ -67,6 +69,8 @@ type WizardDraft = Pick<
   | 'handoffEnabled'
   | 'handoffKeywords'
   | 'pipelineIntents'
+  | 'triageEnabled'
+  | 'triageInstructions'
   | 'contactCollectionEnabled'
   | 'contactCollectionAfterTurns'
   | 'collectSourceEnabled'
@@ -113,6 +117,8 @@ function unitToDraft(u: Unit): WizardDraft {
     handoffEnabled: u.handoffEnabled,
     handoffKeywords: u.handoffKeywords ?? [],
     pipelineIntents: u.pipelineIntents,
+    triageEnabled: u.triageEnabled,
+    triageInstructions: u.triageInstructions ?? '',
     contactCollectionEnabled: u.contactCollectionEnabled,
     contactCollectionAfterTurns: u.contactCollectionAfterTurns,
     collectSourceEnabled: u.collectSourceEnabled,
@@ -342,6 +348,31 @@ export function WizardPanel() {
           </div>
         </FeatureCard>
 
+        {/* 1b. TRIAGEM */}
+        <FeatureCard
+          icon={<ClipboardList size={16} className="text-sky-400" />}
+          title="🩺 Triagem"
+          subtitle="O que a IA precisa descobrir antes de conduzir o cliente adiante."
+          enabled={draft.triageEnabled}
+          onToggle={(v) => update({ triageEnabled: v })}
+        >
+          <p className="mb-2 text-[11px] leading-relaxed text-zinc-400">
+            Escreva como quem explica pra um atendente novo. A IA coleta ao longo da conversa,
+            uma pergunta por vez — não como formulário. O que ela salva em cada campo do CRM é
+            configurado em <span className="text-zinc-300">Ações → Captura</span>.
+          </p>
+          <textarea
+            className="field min-h-[170px] w-full leading-relaxed"
+            value={draft.triageInstructions ?? ''}
+            onChange={(e) => update({ triageInstructions: e.target.value })}
+            placeholder={`- nome do paciente
+- a queixa: onde dói, há quanto tempo, se atrapalha o dia a dia
+- se a dor é dele ou de outra pessoa
+
+Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento.`}
+          />
+        </FeatureCard>
+
         {/* 2. AUTO-QUALIFICAÇÃO */}
         <FeatureCard
           icon={<Flame size={16} className="text-orange-400" />}
@@ -387,6 +418,37 @@ export function WizardPanel() {
             onChange={(kws) => update({ handoffKeywords: kws })}
             placeholder="ex: humano, atendente, falar com pessoa"
           />
+        </FeatureCard>
+
+        {/* 3a. ETAPA APÓS AGENDAR */}
+        <FeatureCard
+          icon={<CalendarCheck size={16} className="text-emerald-400" />}
+          title="📅 Etapa depois de agendar"
+          subtitle="Para onde o lead vai quando a consulta é marcada de fato."
+          enabled={!!(draft.pipelineIntents as Record<string, number> | null)?.scheduled_meeting}
+          alwaysOn
+        >
+          <p className="mb-2 text-[11px] leading-relaxed text-zinc-400">
+            A IA move o lead <span className="text-zinc-300">só depois</span> de a consulta existir
+            na agenda da clínica. Se a marcação falhar, ela não move nada — a etapa precisa
+            refletir o que aconteceu, não o que se pretendia.
+          </p>
+          <TextField
+            label="ID da etapa no Kommo"
+            value={String((draft.pipelineIntents as Record<string, number> | null)?.scheduled_meeting ?? '')}
+            onChange={(v) => {
+              const atual = (draft.pipelineIntents as Record<string, number> | null) ?? {};
+              const n = Number(v);
+              const novo = { ...atual };
+              if (Number.isFinite(n) && n > 0) novo.scheduled_meeting = n;
+              else delete novo.scheduled_meeting;
+              update({ pipelineIntents: novo });
+            }}
+            placeholder="ex: 108773008"
+          />
+          <p className="mt-1 text-[11px] text-zinc-500">
+            O ID aparece na URL do Kommo ao abrir a etapa no funil.
+          </p>
         </FeatureCard>
 
         {/* 3b. RESUMO EM CAMPO CUSTOM */}
