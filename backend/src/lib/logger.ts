@@ -141,6 +141,34 @@ function persistLog(numericLevel: number, args: unknown[]): void {
 export const logger = pino({
   level: env.LOG_LEVEL,
   base: { service: 'agente-dt-backend' },
+  // REDAÇÃO DE CREDENCIAL — sistêmica, não por call site.
+  //
+  // `logger.warn({ err })` com um erro do axios despeja o objeto inteiro,
+  // inclusive `err.config.headers.Authorization` com o Bearer token do
+  // serviço. Como warn+ é PERSISTIDO no banco, a credencial ia parar numa
+  // tabela consultável pelo painel.
+  //
+  // Corrigir cada chamada seria enxugar gelo: o próximo `logger.warn({ err })`
+  // reabre o buraco, e ninguém lembra da regra. Aqui o caminho é fechado uma
+  // vez, para todas as chamadas presentes e futuras.
+  redact: {
+    paths: [
+      'err.config.headers.Authorization',
+      'err.config.headers.authorization',
+      'err.response.config.headers.Authorization',
+      'err.response.config.headers.authorization',
+      'err.request._header',
+      'err.config.data',
+      '*.config.headers.Authorization',
+      '*.config.headers.authorization',
+      'headers.Authorization',
+      'headers.authorization',
+      'token',
+      'accessToken',
+      'spineToken',
+    ],
+    censor: '[redigido]',
+  },
   hooks: {
     logMethod(args, method, level) {
       // Sempre chama o método original primeiro (stdout intacto, comportamento

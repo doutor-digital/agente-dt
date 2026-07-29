@@ -304,7 +304,8 @@ export async function replyToComment(
     return { ok: true, id: (data as { id?: string }).id };
   } catch (err) {
     const msg = describeAxiosError(err);
-    logger.warn({ err, commentId }, 'instagram: resposta pública falhou');
+    // Nunca o erro cru: ele traz o header Authorization com o token da Página.
+    logger.warn({ erro: msg, commentId }, 'instagram: resposta pública falhou');
     return { ok: false, error: msg };
   }
 }
@@ -345,7 +346,7 @@ export async function sendPrivateReply(
     return { ok: true, id: (data as { message_id?: string; id?: string }).message_id ?? (data as { id?: string }).id };
   } catch (err) {
     const msg = describeAxiosError(err);
-    logger.warn({ err, commentId }, 'instagram: resposta privada falhou');
+    logger.warn({ erro: msg, commentId }, 'instagram: resposta privada falhou');
     return { ok: false, error: msg };
   }
 }

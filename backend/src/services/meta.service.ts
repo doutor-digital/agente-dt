@@ -219,7 +219,10 @@ export async function sendText(
     const msg = axios.isAxiosError(err)
       ? `${err.response?.status ?? '?'}: ${JSON.stringify(err.response?.data ?? err.message)}`
       : err instanceof Error ? err.message : String(err);
-    logger.warn({ err, to, phoneNumberId: unit.metaPhoneNumberId }, 'meta sendText falhou');
+    // `err` cru do axios carrega os headers da requisição — inclusive o
+    // Authorization com o token da Meta — e warns são persistidos no banco.
+    // Só a mensagem já resolvida vai pro log.
+    logger.warn({ erro: msg, to, phoneNumberId: unit.metaPhoneNumberId }, 'meta sendText falhou');
     return { ok: false, error: msg };
   }
 }
