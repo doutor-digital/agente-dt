@@ -332,6 +332,59 @@ function renderPipelineIntents(unit: Unit): string {
 - A movimentação é silenciosa. NÃO mencione na resposta ao cliente.`);
 }
 
+
+/**
+ * AGENDAMENTO — só existe quando a unidade tem a agenda da franquia conectada.
+ *
+ * Este bloco NÃO repete as travas de segurança, e isso é deliberado: a recusa
+ * de horário ocupado, bloqueado ou com a I.A. pausada acontece dentro das
+ * tools, em código. Instrução em prompt é sugestão — sob insistência do
+ * paciente ("mas não tem nada às 14h?") o modelo cede. O que este bloco faz é
+ * outra coisa: ensinar a SEQUÊNCIA e o que dizer quando a tool recusar, para
+ * que a recusa vire uma frase decente em vez de um silêncio esquisito.
+ */
+function renderAgenda(unit: Unit): string {
+  if (!unit.spineEnabled) return '';
+
+  const almoco =
+    unit.spineLunchStart && unit.spineLunchEnd
+      ? ` Fecha para almoço das ${unit.spineLunchStart} às ${unit.spineLunchEnd}.`
+      : '';
+
+  const intents = unit.pipelineIntents as Record<string, number> | null;
+  const etapaAgendado = intents?.scheduled_meeting;
+  const moverDepois = etapaAgendado
+    ? `\n5. SÓ DEPOIS de a consulta ser marcada com sucesso, chame ` +
+      `mover_etapa({ statusId: ${etapaAgendado} }). Se a marcação falhou, NÃO mova nada — ` +
+      `a etapa tem que refletir o que de fato aconteceu.`
+    : '';
+
+  return xmlBlock(
+    'agendamento',
+    `A clínica atende das ${unit.spineAgendaStart} às ${unit.spineAgendaEnd}.${almoco}
+
+SEQUÊNCIA OBRIGATÓRIA, sem pular passo:
+1. NUNCA invente horário, nem repita horário de uma conversa anterior. Toda vez
+   que for falar de horário, chame consultar_horarios({ data }) primeiro.
+2. Ofereça no MÁXIMO 2 ou 3 opções da lista que a tool devolveu. Oferecer dez
+   vira lista de compras e o paciente não escolhe nenhum.
+3. Quando ele escolher, chame buscar_paciente({ nome }) para achar o cadastro.
+4. Com o cadastro em mãos, chame agendar_consulta({ idClient, data, hora }).${moverDepois}
+
+QUANDO A TOOL RECUSAR (horário ocupado, bloqueado ou agenda pausada):
+- NUNCA diga que está agendado. Nunca prometa dia ou hora.
+- Peça desculpas em UMA frase, sem explicar o motivo técnico — nada de
+  "bloqueado", "sistema", "API" ou "erro".
+- Se foi horário indisponível: consulte de novo e ofereça outro.
+- Se a agenda estiver pausada: diga que houve um imprevisto na agenda e que
+  você volta em instantes com os horários. NÃO ofereça nada nesse turno.
+
+SE NÃO ACHAR O CADASTRO do paciente em buscar_paciente:
+- NÃO invente cadastro e NÃO marque nada.
+- Diga que a equipe finaliza o cadastro e confirma o horário, e transfira.`,
+  );
+}
+
 function renderContactCollection(unit: Unit): string {
   if (!unit.contactCollectionEnabled) return '';
   const n = unit.contactCollectionAfterTurns;
@@ -878,6 +931,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
     renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
+    renderAgenda(unit),
     renderContactCollection(unit),
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
@@ -972,6 +1026,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
+    renderAgenda(unit),
     renderContactCollection(unit),
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
@@ -1084,6 +1139,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
+    renderAgenda(unit),
     renderContactCollection(unit),
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),

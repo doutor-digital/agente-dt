@@ -24,6 +24,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import type { TraceRecorder } from './trace-recorder.js';
+import type { KommoClient } from '../services/kommo.service.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaService } from '../services/agenda.service.js';
 
@@ -41,7 +42,21 @@ async function unidadeFresca(unitId: string): Promise<Unit | null> {
 interface Contexto {
   unit: Unit;
   recorder: TraceRecorder;
+  /** Opcional: sem ele o agendamento funciona, só não carimba o CRM. */
+  kommo?: KommoClient;
 }
+
+/**
+ * Campos do Kommo que registram o agendamento.
+ *
+ * Preenchidos PELA TOOL, não por regra de captura. A diferença importa: regra
+ * de captura depende de a I.A. decidir chamá-la, e "esqueci de marcar Agendou"
+ * é invisível — some numa estatística que ninguém confere. Aqui, se a consulta
+ * foi marcada, o campo é escrito no mesmo passo. Não há caminho em que uma
+ * coisa aconteça sem a outra.
+ */
+const CAMPO_AGENDOU = 2442703;      // ✓ Agendou (select Sim/Não)
+const CAMPO_DATA_AGENDAMENTO = 2440909; // ◷ Data de agendamento (date_time)
 
 // ---------------------------------------------------------------------------
 // Grade de um dia, já com tudo subtraído.
@@ -172,7 +187,7 @@ export function buildBuscarPaciente({ unit, recorder }: Contexto) {
 // agendar_consulta
 // ---------------------------------------------------------------------------
 
-export function buildAgendarConsulta({ unit, recorder }: Contexto) {
+export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
   return new DynamicStructuredTool({
     name: 'agendar_consulta',
     description:
@@ -190,8 +205,20 @@ export function buildAgendarConsulta({ unit, recorder }: Contexto) {
         .positive()
         .optional()
         .describe('Categoria do atendimento. Padrão 1 (consulta).'),
+      leadId: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('ID do lead no Kommo — use o leadId desta conversa.'),
     }),
-    func: async (args: { idClient: number; data: string; hora: string; idCategory?: number }) => {
+    func: async (args: {
+      idClient: number;
+      data: string;
+      hora: string;
+      idCategory?: number;
+      leadId?: number;
+    }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
 
       if (!fresca.spineEnabled || !fresca.spineToken) {
@@ -254,6 +281,31 @@ export function buildAgendarConsulta({ unit, recorder }: Contexto) {
         title: `Consulta marcada: ${args.data} ${args.hora} (idSchedule ${r.data?.idSchedule})`,
         payload: { ...args, idSchedule: r.data?.idSchedule },
       });
+
+      // Carimba o CRM no MESMO passo. Fire-and-forget porque falhar aqui não
+      // desfaz o agendamento — a consulta está marcada na franquia, e voltar
+      // erro faria a I.A. dizer ao paciente que não marcou, o que seria falso.
+      if (kommo && args.leadId) {
+        void (async () => {
+          try {
+            await kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_AGENDOU, 'select', 'Sim');
+            await kommo.setLeadCustomFieldValue(
+              args.leadId!,
+              CAMPO_DATA_AGENDAMENTO,
+              'date',
+              `${args.data}T${args.hora}:00`,
+            );
+            await recorder.step({
+              kind: 'KOMMO_ACTION',
+              title: 'Campos de agendamento preenchidos (Agendou, Data de agendamento)',
+              payload: { leadId: args.leadId, data: args.data, hora: args.hora },
+            });
+          } catch (err) {
+            logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao carimbar campos no Kommo');
+          }
+        })();
+      }
+
       return `Consulta marcada para ${args.data} às ${args.hora}. Confirme ao paciente com dia e hora.`;
     },
   });

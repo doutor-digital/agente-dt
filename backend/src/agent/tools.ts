@@ -916,7 +916,7 @@ export function buildTools({
   // Tools de agenda só existem pra unidade com a API da franquia conectada.
   // Fora isso o agente nem vê que agendar é possível — melhor do que ver e
   // receber erro, que ele tentaria contornar conversando.
-  const agendaTools = unit ? buildAgendaTools({ unit, recorder }) : [];
+  const agendaTools = unit ? buildAgendaTools({ unit, recorder, kommo }) : [];
 
   return [...nativeTools, ...agendaTools, ...dynamicTools];
 }
