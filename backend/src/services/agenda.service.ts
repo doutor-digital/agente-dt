@@ -90,6 +90,8 @@ export function buildAgenda(
   const ocupado = new Map<string, SpineSchedule>();
   for (const s of schedules) {
     if (!s.dayLocal || !s.timeLocal) continue;
+    // Todo registro entra no índice: ocupado de verdade OU desmarcado (que
+    // vira "conferir"). Nenhum agendamento é descartado em silêncio.
     if (!s.isBusy && !s.requiresManualValidation) continue;
     const chave = `${s.dayLocal} ${s.timeLocal}`;
     const anterior = ocupado.get(chave);

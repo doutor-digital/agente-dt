@@ -51,14 +51,42 @@ const DEFAULT_TZ = 'America/Sao_Paulo';
 /** Teto de páginas por varredura — trava contra `totalPages` absurdo. */
 const MAX_PAGES = 40;
 
+// LEVANTADOS DA AGENDA REAL (mai–ago/2026), não da documentação:
+//   42 ATENDIDO       147
+//   57 DESMARCADO     112
+//   37 AGENDADO        23   ← consulta futura marcada
+//   41 REMARCADO       13
+//   38 CONFIRMADO       4
+//   40 NÃO COMPARECEU   1
 export const SPINE_STATUS = {
-  ATENDIDO: 42,
+  AGENDADO: 37,
+  CONFIRMADO: 38,
+  NAO_COMPARECEU: 40,
   REMARCADO: 41,
+  ATENDIDO: 42,
   DESMARCADO: 57,
 } as const;
 
-/** Status que ocupam o horário de forma inequívoca. */
-const BUSY_STATUS: number[] = [SPINE_STATUS.ATENDIDO, SPINE_STATUS.REMARCADO];
+/**
+ * OCUPADO É O PADRÃO. Só o cancelamento explícito libera.
+ *
+ * A regra estava invertida — uma allowlist com 42 e 41 — e o resultado foi
+ * medido: num dia com 5 agendamentos, quatro deles "AGENDADO" (37), a grade
+ * mostrou 08:30 e 09:00 como LIVRES. A IA ofereceria horário em cima de
+ * paciente marcado.
+ *
+ * A assimetria dos erros manda no desenho: marcar livre o que está ocupado
+ * põe duas pessoas na mesma cadeira; marcar ocupado o que está livre só
+ * esconde um horário. O primeiro é incidente, o segundo é desperdício. E
+ * quando a franquia criar um status novo, ele entra como ocupado sozinho —
+ * uma allowlist precisaria ser lembrada, e ninguém lembra.
+ */
+const FREE_STATUS: number[] = [SPINE_STATUS.DESMARCADO];
+
+function ocupa(idStatus: number | null): boolean {
+  if (idStatus === null) return true; // sem status legível: assume ocupado
+  return !FREE_STATUS.includes(idStatus);
+}
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -243,7 +271,7 @@ function normalize(raw: SpineRawSchedule, tz: string): SpineSchedule {
     dateAttendanceLocal: local,
     dayLocal: day,
     timeLocal: time,
-    isBusy: idStatus !== null && BUSY_STATUS.includes(idStatus),
+    isBusy: ocupa(idStatus),
     requiresManualValidation: idStatus === SPINE_STATUS.DESMARCADO,
   };
 }
