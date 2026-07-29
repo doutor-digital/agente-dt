@@ -27,6 +27,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { FaFacebookF, FaInstagram } from 'react-icons/fa6';
+import { PiCalendarBlankBold } from 'react-icons/pi';
 import type { ComponentType } from 'react';
 
 /**
@@ -65,7 +66,8 @@ export type AppTab =
   | 'delivery'
   | 'whatsapp'
   | 'instagram'
-  | 'facebook';
+  | 'facebook'
+  | 'agenda';
 
 /** Grupos da sidebar, na ordem em que aparecem. */
 export type NavSection = 'operacao' | 'agente' | 'analise' | 'plataforma';
@@ -146,6 +148,14 @@ export const NAV_ITEMS: NavItem[] = [
     icon: FaInstagram,
     section: 'agente',
     keywords: ['comentarios', 'insta', 'direct', 'dm', 'post', 'reels'],
+  },
+  {
+    id: 'agenda',
+    label: 'Agenda',
+    hint: 'Horários da franquia e o botão de pausa da IA.',
+    icon: PiCalendarBlankBold,
+    section: 'operacao',
+    keywords: ['agendamento', 'spine', 'pausar', 'kill switch', 'recepcao', 'horarios'],
   },
   {
     id: 'facebook',

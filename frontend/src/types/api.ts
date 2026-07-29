@@ -278,6 +278,18 @@ export interface Unit {
   fbDeliveryMode: 'kommo' | 'direct';
   fbReplyFieldId: number | null;
   fbCommentPrompt: string | null;
+  // API Spine (franquia) — agenda.
+  spineEnabled: boolean;
+  spineBaseUrl: string;
+  spineToken: string | null;
+  spineTimezone: string;
+  spineAgendaStart: string;
+  spineAgendaEnd: string;
+  spineLunchStart: string | null;
+  spineLunchEnd: string | null;
+  spineAgendaDays: number[];
+  spineSlotMinutes: number;
+  spineAiPaused: boolean;
   metaMonthlyBudgetUsd: number | string;
   systemPrompt: string;
   /** Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer). */
@@ -1051,4 +1063,45 @@ export interface InstagramComment {
 export interface InstagramCommentsResponse {
   comments: InstagramComment[];
   counts: Partial<Record<IgCommentStatus, number>>;
+}
+
+
+// ---------------------------------------------------------------------------
+// API Spine (franquia Doutor Hérnia)
+// ---------------------------------------------------------------------------
+
+export interface SpineStatus {
+  enabled: boolean;
+  hasToken: boolean;
+  baseUrl: string;
+  paused: boolean;
+  pausedAt: string | null;
+  pausedReason: string | null;
+  timezone: string;
+  agenda: {
+    start: string;
+    end: string;
+    lunchStart: string | null;
+    lunchEnd: string | null;
+    days: number[];
+    slotMinutes: number;
+  };
+}
+
+export type SpineSlotStatus = 'livre' | 'ocupado' | 'incerto';
+
+export interface SpineSlot {
+  day: string;
+  time: string;
+  status: SpineSlotStatus;
+  motivo?: string;
+}
+
+export interface SpineSchedulesResponse {
+  paused: boolean;
+  range: { initialDate: string; endDate: string };
+  total: number;
+  pages: number;
+  slots: SpineSlot[];
+  resumo: { livres: number; ocupados: number; incertos: number };
 }

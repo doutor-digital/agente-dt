@@ -53,6 +53,8 @@ import type {
   IgCommentStatus,
   InstagramComment,
   InstagramCommentsResponse,
+  SpineStatus,
+  SpineSchedulesResponse,
 } from '../types/api';
 
 // Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
@@ -233,6 +235,34 @@ export const api = {
     );
     return data.rules;
   },
+  // ── API Spine (franquia) + kill switch ──
+  async spineStatus(unitId: string): Promise<SpineStatus> {
+    const { data } = await http.get<SpineStatus>(`/units/${unitId}/spine/status`);
+    return data;
+  },
+  async spineSchedules(
+    unitId: string,
+    params: { initialDate: string; endDate: string },
+  ): Promise<SpineSchedulesResponse> {
+    const { data } = await http.get<SpineSchedulesResponse>(
+      `/units/${unitId}/spine/schedules`,
+      { params },
+    );
+    return data;
+  },
+  async spinePing(unitId: string): Promise<{ ok: boolean; error?: string }> {
+    const { data } = await http.post<{ ok: boolean; error?: string }>(
+      `/units/${unitId}/spine/ping`,
+    );
+    return data;
+  },
+  async emergencyPause(unitId: string, reason?: string): Promise<void> {
+    await http.post('/system/emergency-pause', { unitId, reason });
+  },
+  async resumeAi(unitId: string): Promise<void> {
+    await http.post('/system/resume', { unitId });
+  },
+
   // ── Instagram — fila de moderação de comentários ──
   async instagramComments(
     unitId: string,

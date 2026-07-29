@@ -49,6 +49,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   whatsapp: 'custo-whatsapp',
   instagram: 'instagram',
   facebook: 'facebook',
+  agenda: 'agenda',
 };
 
 const SLUG_TO_TAB = Object.fromEntries(

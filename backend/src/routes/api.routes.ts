@@ -102,6 +102,13 @@ import {
   rejectInstagramCommentHandler,
 } from '../controllers/instagram.controller.js';
 import {
+  emergencyPauseHandler,
+  resumeHandler,
+  spineStatusHandler,
+  spineSchedulesHandler,
+  spinePingHandler,
+} from '../controllers/spine.controller.js';
+import {
   getAlerts,
   getIntegrations,
   getDeliveryMonitor,
@@ -258,6 +265,16 @@ apiRouter.post(
   requireUnitAccess,
   rejectInstagramCommentHandler,
 );
+
+// ── API Spine (franquia) + kill switch da agenda ──
+// As duas rotas de /system/* existem com esse nome por contrato com o painel
+// da recepção. São as mais simples do sistema de propósito: quem aperta esse
+// botão está no meio de um incidente.
+apiRouter.post('/system/emergency-pause', requireAuth, emergencyPauseHandler);
+apiRouter.post('/system/resume', requireAuth, resumeHandler);
+apiRouter.get('/units/:id/spine/status', requireUnitAccess, spineStatusHandler);
+apiRouter.get('/units/:id/spine/schedules', requireUnitAccess, spineSchedulesHandler);
+apiRouter.post('/units/:id/spine/ping', requireUnitAccess, spinePingHandler);
 apiRouter.get('/units/:id/kommo-lead-custom-fields', requireUnitAccess, listKommoLeadCustomFieldsHandler);
 
 // ---------------------------------------------------------------------------

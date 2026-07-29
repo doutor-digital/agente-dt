@@ -213,6 +213,41 @@ model Unit {
   fbReplyFieldId    Int?    @map("fb_reply_field_id")
   fbCommentPrompt   String? @map("fb_comment_prompt") @db.Text
 
+  // ── API SPINE (franquia Doutor Hérnia) — agenda ────────────────────────
+  // A API da franquia NÃO expõe "horários livres" nem "bloqueios de agenda".
+  // O único endpoint é /api/schedules/search, que devolve o histórico de
+  // agendamentos. Logo, disponibilidade aqui é DEDUZIDA, e dedução erra:
+  // um bloqueio manual do médico é invisível pra nós. É por isso que existe
+  // o kill switch abaixo — ele não é conveniência, é a contenção do único
+  // modo de falha que não temos como detectar.
+  spineEnabled Boolean @default(false) @map("spine_enabled")
+  spineBaseUrl String  @default("https://app-api-prod.doutorhernia.com.br") @map("spine_base_url")
+  spineToken   String? @map("spine_token")
+
+  // KILL SWITCH — a recepção pausa a IA quando o médico atrasa ou some da
+  // agenda. Estado no banco, não em memória: precisa sobreviver a deploy e
+  // valer para todas as réplicas do container ao mesmo tempo.
+  spineAiPaused     Boolean   @default(false) @map("spine_ai_paused")
+  spinePausedAt     DateTime? @map("spine_paused_at")
+  spinePausedReason String?   @map("spine_paused_reason")
+
+  // JANELA DE AGENDAMENTO — separada de businessHours*, que governa quando a
+  // IA RESPONDE. Aqui é quando a clínica ATENDE: a IA pode conversar às 19h
+  // e ainda assim não poder marcar às 19h.
+  spineAgendaStart String  @default("08:00") @map("spine_agenda_start")
+  spineAgendaEnd   String  @default("18:00") @map("spine_agenda_end")
+  spineLunchStart  String? @default("12:00") @map("spine_lunch_start")
+  spineLunchEnd    String? @default("13:00") @map("spine_lunch_end")
+  /**
+   * 0=domingo … 6=sábado.
+   */
+  spineAgendaDays  Int[]   @default([1, 2, 3, 4, 5]) @map("spine_agenda_days")
+  spineSlotMinutes Int     @default(30) @map("spine_slot_minutes")
+  /// Fuso IANA da clínica. Offset fixo no código quebraria em unidade de
+  /// Manaus (UTC-4) ou Rio Branco (UTC-5) — e quebraria em silêncio: o
+  /// horário pareceria plausível e o paciente chegaria na hora errada.
+  spineTimezone    String  @default("America/Sao_Paulo") @map("spine_timezone")
+
   instagramComments InstagramComment[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
@@ -1041,6 +1076,9 @@ model InstagramComment {
    * ID do comentário na Meta. Chave de dedup — único global.
    */
   /**
+   * /**
+   * /**
+   * /**
    * /**
    * /** "instagram" | "facebook" — de qual rede veio.
    */

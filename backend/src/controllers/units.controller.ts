@@ -95,6 +95,18 @@ const unitInputBase = {
   fbDeliveryMode: z.enum(['kommo', 'direct']).optional(),
   fbReplyFieldId: z.coerce.number().int().positive().nullable().optional(),
   fbCommentPrompt: z.string().max(4000).nullable().optional(),
+
+  // API Spine (franquia Doutor Hérnia) — agenda.
+  spineEnabled: z.boolean().optional(),
+  spineBaseUrl: z.string().url().optional(),
+  spineToken: z.string().nullable().optional(),
+  spineTimezone: z.string().max(60).optional(),
+  spineAgendaStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  spineAgendaEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  spineLunchStart: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  spineLunchEnd: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  spineAgendaDays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+  spineSlotMinutes: z.number().int().min(5).max(240).optional(),
   systemPrompt: z.string().max(20_000).optional(),
   // Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer).
   singlePromptMode: z.boolean().optional(),
@@ -170,6 +182,7 @@ function dropMaskedSecrets<T extends Partial<UnitInput>>(input: T): T {
     'fbAccessToken',
     'fbAppSecret',
     'fbVerifyToken',
+    'spineToken',
   ] as const) {
     if (isMasked(out[k])) delete out[k];
   }
