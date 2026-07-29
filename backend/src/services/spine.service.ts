@@ -348,7 +348,7 @@ export async function searchSchedules(
     };
   } catch (err) {
     const d = describe(err);
-    logger.warn({ err, ...params }, 'spine: falha ao buscar agendamentos');
+    logger.warn({ erro: d.error, ...params }, 'spine: falha ao buscar agendamentos');
     return { ok: false, ...d };
   }
 }
@@ -372,14 +372,30 @@ export async function createSchedule(
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
 
-  // O caminho de volta: a recepção pensa no relógio da parede, a API exige UTC.
-  const utc = localParaUtcIso(input.dateAttendanceLocal, unit.spineTimezone || DEFAULT_TZ);
-  if (!utc) return { ok: false, error: 'dateAttendanceLocal inválida' };
+  // A LEITURA E A ESCRITA USAM FUSOS DIFERENTES. Medido contra a API:
+  //
+  //   LER   -> devolve UTC com Z  ("2026-08-05T15:00:00.000Z" = 12:00 na clínica)
+  //   GRAVAR-> espera hora LOCAL, SEM sufixo. Enviei "2026-12-29T11:00:00"
+  //            e a API gravou 2026-12-29T14:00:00Z, ou seja, 11:00 local.
+  //            Ela mesma converte.
+  //
+  // Duas armadilhas nisso, e as duas mordem calado:
+  //   1. Converter pra UTC antes de enviar faz a API somar o offset DE NOVO —
+  //      o paciente é marcado 3 horas depois. Nada dá erro.
+  //   2. Enviar com "Z" devolve 500 sem explicação ("erro inesperado"), o que
+  //      manda procurar o problema no lugar errado.
+  //
+  // A doc diz "ISO 8601, convenção UTC". Não é o que a API faz.
+  const local = input.dateAttendanceLocal.trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(local)) {
+    return { ok: false, error: 'dateAttendanceLocal inválida (use AAAA-MM-DDTHH:mm:ss, sem fuso)' };
+  }
+  const dateAttendance = local.length === 16 ? `${local}:00` : local;
 
   try {
     const { data } = await http.post<{ idSchedule?: number; data?: { idSchedule?: number } }>('/api/schedules', {
       idClient: input.idClient,
-      dateAttendance: utc,
+      dateAttendance,
       idCategory: input.idCategory,
       ...(input.idStaff !== undefined ? { idStaff: input.idStaff } : {}),
     });
@@ -388,7 +404,10 @@ export async function createSchedule(
     return { ok: true, data: { idSchedule: data?.data?.idSchedule ?? data?.idSchedule } };
   } catch (err) {
     const d = describe(err);
-    logger.warn({ err, input }, 'spine: falha ao criar agendamento');
+    // Só o essencial no log. Passar o erro cru do axios despeja os headers da
+    // requisição — inclusive o Authorization com o token da franquia — e o
+    // logger persiste warns no banco. Credencial em log é vazamento silencioso.
+    logger.warn({ erro: d.error, input }, 'spine: falha ao criar agendamento');
     return { ok: false, ...d };
   }
 }
