@@ -226,6 +226,100 @@ export async function createAgendaBlockHandler(req: Request, res: Response): Pro
   res.status(201).json({ block });
 }
 
+/**
+ * Bloqueio em LOTE — "de 10 a 20 de agosto, o dia todo".
+ *
+ * Existe porque a alternativa é clicar horário por horário, dia após dia: uma
+ * semana de recesso com blocos de 30 min são ~180 cliques. Ninguém faz isso;
+ * quem precisa disso acaba usando o kill switch, que para a I.A. inteira —
+ * inclusive nos dias em que ela poderia continuar atendendo.
+ *
+ * `weekdays` filtra o que interessa: bloquear "as duas próximas semanas" sem
+ * gerar linha inútil pra sábado e domingo, que já não são dia de atendimento.
+ */
+const bulkSchema = z.object({
+  fromDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  toDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/).default('00:00'),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/).default('23:59'),
+  /** 0=domingo … 6=sábado. Vazio = todos os dias do intervalo. */
+  weekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+  reason: z.string().max(200).nullable().optional(),
+});
+
+/** Teto de dias por operação — trava contra intervalo digitado errado. */
+const MAX_DIAS_LOTE = 180;
+
+export async function createAgendaBlockBulkHandler(req: Request, res: Response): Promise<void> {
+  const unitId = String(req.params.id);
+  const parsed = bulkSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'invalid_body', detail: parsed.error.flatten() });
+    return;
+  }
+  const { fromDay, toDay, startTime, endTime, weekdays, reason } = parsed.data;
+  if (toDay < fromDay) {
+    res.status(400).json({ error: 'intervalo_invalido', detail: 'fim antes do início' });
+    return;
+  }
+  if (endTime <= startTime) {
+    res.status(400).json({ error: 'horario_invalido', detail: 'fim precisa ser depois do início' });
+    return;
+  }
+
+  const dias: string[] = [];
+  for (
+    let t = Date.parse(`${fromDay}T00:00:00Z`);
+    t <= Date.parse(`${toDay}T00:00:00Z`);
+    t += 86_400_000
+  ) {
+    const d = new Date(t);
+    if (weekdays && weekdays.length > 0 && !weekdays.includes(d.getUTCDay())) continue;
+    dias.push(d.toISOString().slice(0, 10));
+    if (dias.length > MAX_DIAS_LOTE) {
+      res.status(400).json({ error: 'intervalo_longo', detail: `máximo de ${MAX_DIAS_LOTE} dias` });
+      return;
+    }
+  }
+  if (dias.length === 0) {
+    res.status(400).json({ error: 'sem_dias', detail: 'nenhum dia no intervalo com esses filtros' });
+    return;
+  }
+
+  const criadoPor = (req as Request & { user?: { email?: string } }).user?.email ?? null;
+  const criados = await prisma.agendaBlock.createMany({
+    data: dias.map((dayLocal) => ({
+      unitId,
+      dayLocal,
+      startTime,
+      endTime,
+      reason: reason ?? null,
+      createdBy: criadoPor,
+    })),
+  });
+
+  logger.warn(
+    { unitId, de: fromDay, ate: toDay, dias: dias.length, motivo: reason },
+    'agenda: bloqueio em lote',
+  );
+  res.status(201).json({ ok: true, dias: dias.length, criados: criados.count });
+}
+
+/** Liberação em lote — desfazer precisa ser tão barato quanto fazer. */
+export async function deleteAgendaBlockBulkHandler(req: Request, res: Response): Promise<void> {
+  const unitId = String(req.params.id);
+  const fromDay = String(req.query.fromDay ?? '');
+  const toDay = String(req.query.toDay ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDay) || !/^\d{4}-\d{2}-\d{2}$/.test(toDay)) {
+    res.status(400).json({ error: 'datas_invalidas' });
+    return;
+  }
+  const r = await prisma.agendaBlock.deleteMany({
+    where: { unitId, dayLocal: { gte: fromDay, lte: toDay } },
+  });
+  res.json({ ok: true, removidos: r.count });
+}
+
 export async function deleteAgendaBlockHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id);
   const blockId = String(req.params.blockId);
@@ -246,4 +340,22 @@ export async function spinePingHandler(req: Request, res: Response): Promise<voi
   }
   const r = await SpineService.ping(unit);
   res.status(r.ok ? 200 : 502).json(r);
+}
+
+
+/** Lista os bloqueios de um período — a tela de período precisa mostrar o que já existe. */
+export async function listAgendaBlocksHandler(req: Request, res: Response): Promise<void> {
+  const unitId = String(req.params.id);
+  const fromDay = String(req.query.fromDay ?? '');
+  const toDay = String(req.query.toDay ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDay) || !/^\d{4}-\d{2}-\d{2}$/.test(toDay)) {
+    res.status(400).json({ error: 'datas_invalidas' });
+    return;
+  }
+  const blocks = await prisma.agendaBlock.findMany({
+    where: { unitId, dayLocal: { gte: fromDay, lte: toDay } },
+    orderBy: [{ dayLocal: 'asc' }, { startTime: 'asc' }],
+    take: 2000,
+  });
+  res.json({ blocks });
 }

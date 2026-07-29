@@ -109,6 +109,9 @@ import {
   spinePingHandler,
   createAgendaBlockHandler,
   deleteAgendaBlockHandler,
+  createAgendaBlockBulkHandler,
+  deleteAgendaBlockBulkHandler,
+  listAgendaBlocksHandler,
 } from '../controllers/spine.controller.js';
 import {
   getAlerts,
@@ -279,6 +282,10 @@ apiRouter.get('/units/:id/spine/schedules', requireUnitAccess, spineSchedulesHan
 apiRouter.post('/units/:id/spine/ping', requireUnitAccess, spinePingHandler);
 // Bloqueio manual de horário — supre o que a API da franquia não expõe.
 apiRouter.post('/units/:id/agenda/blocks', requireUnitAccess, createAgendaBlockHandler);
+apiRouter.get('/units/:id/agenda/blocks', requireUnitAccess, listAgendaBlocksHandler);
+// Lote ANTES da rota com :blockId — senão "bulk" seria lido como um id.
+apiRouter.post('/units/:id/agenda/blocks/bulk', requireUnitAccess, createAgendaBlockBulkHandler);
+apiRouter.delete('/units/:id/agenda/blocks/bulk', requireUnitAccess, deleteAgendaBlockBulkHandler);
 apiRouter.delete('/units/:id/agenda/blocks/:blockId', requireUnitAccess, deleteAgendaBlockHandler);
 apiRouter.get('/units/:id/kommo-lead-custom-fields', requireUnitAccess, listKommoLeadCustomFieldsHandler);
 

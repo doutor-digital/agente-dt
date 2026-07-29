@@ -37,10 +37,10 @@ import {
   PiCalendarBlankBold,
   PiPlugsConnectedBold,
   PiQuestionBold,
-  PiLockSimpleBold,
   PiLockSimpleOpenBold,
 } from 'react-icons/pi';
 import { api } from '../lib/api';
+import { BloquearIcon } from './BloquearIcon';
 import { useUnit } from '../context/UnitContext';
 import type { SpineStatus, SpineSchedulesResponse } from '../types/api';
 
@@ -252,6 +252,7 @@ function Agenda({
   const [aBloquear, setABloquear] = useState<{ day: string; time: string } | null>(null);
   const [motivo, setMotivo] = useState('');
   const [ateHora, setAteHora] = useState('');
+  const [periodo, setPeriodo] = useState(false);
 
   const buscar = useCallback(async () => {
     setLoading(true);
@@ -355,6 +356,10 @@ function Agenda({
             value={dia}
             onChange={(e) => setDia(e.target.value)}
           />
+          <button className="btn-ghost" onClick={() => setPeriodo(true)}>
+            <BloquearIcon size={14} />
+            Bloquear período
+          </button>
           <button className="btn-ghost" onClick={() => void buscar()} disabled={loading}>
             {loading ? (
               <PiSpinnerGapBold size={14} className="animate-spin" />
@@ -425,7 +430,7 @@ function Agenda({
                   }`}
                 >
                   {s.time}
-                  {bloqueado && <PiLockSimpleBold size={11} />}
+                  {bloqueado && <BloquearIcon size={12} />}
                   {s.status === 'incerto' && <PiQuestionBold size={11} />}
                 </button>
               );
@@ -435,7 +440,7 @@ function Agenda({
           {dados.blocks.length > 0 && (
             <div className="mt-5 rounded-lg border border-zinc-800 p-4">
               <p className="flex items-center gap-1.5 text-xs font-medium text-zinc-300">
-                <PiLockSimpleBold size={13} /> Bloqueios deste dia
+                <BloquearIcon size={13} /> Bloqueios deste dia
               </p>
               <ul className="mt-2 space-y-1.5">
                 {dados.blocks.map((b) => (
@@ -465,11 +470,23 @@ function Agenda({
         </>
       )}
 
+      {periodo && (
+        <BloqueioEmLote
+          unitId={unit.id}
+          diaBase={dia}
+          onFechar={() => setPeriodo(false)}
+          onPronto={async () => {
+            setPeriodo(false);
+            await buscar();
+          }}
+        />
+      )}
+
       {aBloquear && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="surface w-full max-w-md p-6">
             <h3 className="flex items-center gap-2 text-base font-semibold text-zinc-100">
-              <PiLockSimpleBold size={16} className="text-rose-400" />
+              <BloquearIcon size={18} />
               Bloquear {aBloquear.time} de {aBloquear.day.split('-').reverse().join('/')}
             </h3>
             <p className="mt-1.5 text-sm leading-relaxed text-zinc-400">
@@ -535,7 +552,7 @@ function Agenda({
                 {salvandoBloco ? (
                   <PiSpinnerGapBold size={16} className="animate-spin" />
                 ) : (
-                  <PiLockSimpleBold size={16} />
+                  <BloquearIcon size={16} inner="#fff" />
                 )}
                 Bloquear
               </button>
@@ -829,5 +846,213 @@ function Hora({ label, v, on }: { label: string; v: string; on: (v: string) => v
       <span className="text-xs font-medium text-zinc-300">{label}</span>
       <input type="time" className="field mt-1" value={v} onChange={(e) => on(e.target.value)} />
     </label>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Bloqueio em lote
+// ---------------------------------------------------------------------------
+// Clicar horário por horário serve pra "das 14h às 15h de quinta". Não serve
+// pra recesso, congresso ou férias: uma semana em blocos de 30 min são ~180
+// cliques. Quem precisa disso e não tem essa tela acaba usando o kill switch,
+// que para a I.A. inteira — inclusive nos dias em que ela poderia atender.
+
+const SEMANA = [
+  { n: 1, label: 'Seg' },
+  { n: 2, label: 'Ter' },
+  { n: 3, label: 'Qua' },
+  { n: 4, label: 'Qui' },
+  { n: 5, label: 'Sex' },
+  { n: 6, label: 'Sáb' },
+  { n: 0, label: 'Dom' },
+];
+
+function BloqueioEmLote({
+  unitId,
+  diaBase,
+  onFechar,
+  onPronto,
+}: {
+  unitId: string;
+  diaBase: string;
+  onFechar: () => void;
+  onPronto: () => Promise<void>;
+}) {
+  const [de, setDe] = useState(diaBase);
+  const [ate, setAte] = useState(diaBase);
+  const [diaInteiro, setDiaInteiro] = useState(true);
+  const [inicio, setInicio] = useState('08:00');
+  const [fim, setFim] = useState('18:00');
+  const [dias, setDias] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [motivo, setMotivo] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [feito, setFeito] = useState<string | null>(null);
+
+  async function bloquear() {
+    setOcupado(true);
+    setErro(null);
+    setFeito(null);
+    try {
+      const r = await api.blockAgendaBulk(unitId, {
+        fromDay: de,
+        toDay: ate,
+        startTime: diaInteiro ? '00:00' : inicio,
+        endTime: diaInteiro ? '23:59' : fim,
+        weekdays: dias.length > 0 && dias.length < 7 ? dias : undefined,
+        reason: motivo.trim() || null,
+      });
+      setFeito(`${r.dias} dia(s) bloqueado(s).`);
+      await onPronto();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao bloquear o período');
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function liberar() {
+    setOcupado(true);
+    setErro(null);
+    setFeito(null);
+    try {
+      const r = await api.unblockAgendaBulk(unitId, { fromDay: de, toDay: ate });
+      setFeito(`${r.removidos} bloqueio(s) removido(s).`);
+      await onPronto();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao liberar');
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="surface max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
+        <h3 className="flex items-center gap-2 text-base font-semibold text-zinc-100">
+          <BloquearIcon size={18} /> Bloquear um período
+        </h3>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-400">
+          Para recesso, congresso, férias ou reforma — de uma vez, sem clicar dia a dia.
+        </p>
+
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <label className="block">
+            <span className="text-xs font-medium text-zinc-300">De</span>
+            <input type="date" className="field mt-1" value={de} onChange={(e) => setDe(e.target.value)} />
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-zinc-300">Até</span>
+            <input type="date" className="field mt-1" value={ate} onChange={(e) => setAte(e.target.value)} />
+          </label>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setDiaInteiro(!diaInteiro)}
+          className="mt-4 flex w-full items-start gap-3 rounded-lg border border-zinc-800 p-3 text-left transition-colors hover:bg-zinc-900"
+        >
+          <span
+            className={`mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${
+              diaInteiro ? 'bg-rose-500' : 'bg-zinc-700'
+            }`}
+          >
+            <span
+              className={`h-4 w-4 rounded-full bg-white transition-transform ${diaInteiro ? 'translate-x-4' : ''}`}
+            />
+          </span>
+          <span>
+            <span className="block text-sm font-medium text-zinc-200">Dia inteiro</span>
+            <span className="mt-0.5 block text-xs text-zinc-400">
+              Desligue para bloquear só uma faixa de horário em cada dia.
+            </span>
+          </span>
+        </button>
+
+        {!diaInteiro && (
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="text-xs font-medium text-zinc-300">A partir de</span>
+              <input type="time" className="field mt-1" value={inicio} onChange={(e) => setInicio(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-zinc-300">Até</span>
+              <input type="time" className="field mt-1" value={fim} onChange={(e) => setFim(e.target.value)} />
+            </label>
+          </div>
+        )}
+
+        <div className="mt-4">
+          <span className="text-xs font-medium text-zinc-300">Só nestes dias da semana</span>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {SEMANA.map((d) => {
+              const on = dias.includes(d.n);
+              return (
+                <button
+                  key={d.n}
+                  type="button"
+                  onClick={() => setDias(on ? dias.filter((x) => x !== d.n) : [...dias, d.n])}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-colors ${
+                    on ? 'bg-rose-500/10 text-rose-300 ring-rose-500/30' : 'text-zinc-500 ring-zinc-800 hover:text-zinc-300'
+                  }`}
+                >
+                  {d.label}
+                </button>
+              );
+            })}
+          </div>
+          <span className="mt-1.5 block text-[11px] leading-relaxed text-zinc-500">
+            Evita criar bloqueio inútil em dia que a clínica já não atende.
+          </span>
+        </div>
+
+        <label className="mt-4 block">
+          <span className="text-xs font-medium text-zinc-300">Motivo</span>
+          <input
+            className="field mt-1"
+            value={motivo}
+            placeholder="ex: recesso de fim de ano"
+            onChange={(e) => setMotivo(e.target.value)}
+          />
+        </label>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {['Recesso', 'Férias', 'Congresso', 'Feriado', 'Reforma'].map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMotivo(m)}
+              className={`rounded-lg px-2.5 py-1 text-xs ring-1 transition-colors ${
+                motivo === m ? 'bg-zinc-800 text-zinc-100 ring-zinc-700' : 'text-zinc-400 ring-zinc-800 hover:text-zinc-200'
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+
+        {erro && <p className="mt-3 text-xs text-rose-300">{erro}</p>}
+        {feito && <p className="mt-3 text-xs text-emerald-400">{feito}</p>}
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          <button
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-rose-600 px-4 py-2.5 font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
+            onClick={() => void bloquear()}
+            disabled={ocupado}
+          >
+            {ocupado ? <PiSpinnerGapBold size={16} className="animate-spin" /> : <BloquearIcon size={16} />}
+            Bloquear período
+          </button>
+          {/* Desfazer precisa ser tão barato quanto fazer — senão um intervalo
+              digitado errado vira trabalho manual de limpeza. */}
+          <button className="btn-ghost" onClick={() => void liberar()} disabled={ocupado}>
+            <PiLockSimpleOpenBold size={14} /> Liberar período
+          </button>
+          <button className="btn-ghost" onClick={onFechar} disabled={ocupado}>
+            Fechar
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

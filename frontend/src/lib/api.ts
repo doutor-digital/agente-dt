@@ -267,6 +267,43 @@ export const api = {
     );
     return data.block;
   },
+  async blockAgendaBulk(
+    unitId: string,
+    body: {
+      fromDay: string;
+      toDay: string;
+      startTime?: string;
+      endTime?: string;
+      weekdays?: number[];
+      reason?: string | null;
+    },
+  ): Promise<{ dias: number; criados: number }> {
+    const { data } = await http.post<{ dias: number; criados: number }>(
+      `/units/${unitId}/agenda/blocks/bulk`,
+      body,
+    );
+    return data;
+  },
+  async unblockAgendaBulk(
+    unitId: string,
+    params: { fromDay: string; toDay: string },
+  ): Promise<{ removidos: number }> {
+    const { data } = await http.delete<{ removidos: number }>(
+      `/units/${unitId}/agenda/blocks/bulk`,
+      { params },
+    );
+    return data;
+  },
+  async listAgendaBlocks(
+    unitId: string,
+    params: { fromDay: string; toDay: string },
+  ): Promise<AgendaBlock[]> {
+    const { data } = await http.get<{ blocks: AgendaBlock[] }>(
+      `/units/${unitId}/agenda/blocks`,
+      { params },
+    );
+    return data.blocks;
+  },
   async unblockAgenda(unitId: string, blockId: string): Promise<void> {
     await http.delete(`/units/${unitId}/agenda/blocks/${blockId}`);
   },
