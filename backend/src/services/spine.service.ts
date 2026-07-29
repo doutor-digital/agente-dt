@@ -251,6 +251,23 @@ function normalize(raw: SpineRawSchedule, tz: string): SpineSchedule {
 // ---------------------------------------------------------------------------
 // Busca de agendamentos — paginada até o fim.
 // ---------------------------------------------------------------------------
+// `endDate` DA API É EXCLUSIVO. Medido, não deduzido:
+//   [06/07, 10/07] devolveu atendimentos de 06 a 09
+//   [27/07, 29/07] devolveu 27 e 28
+//   [05/08, 05/08] devolveu ZERO — mas o dia tem 5 agendamentos
+//
+// A consulta de UM dia, que é o uso mais comum da recepção, retornaria vazia
+// sempre. E vazio aqui não dá erro: vira "18 horários livres" numa agenda
+// cheia. Por isso pedimos um dia a mais à API e recortamos de volta no fim —
+// o recorte existe pra que, se a semântica mudar do lado deles, a gente
+// devolva a mais e não a menos.
+
+/** Soma dias a uma data "YYYY-MM-DD" sem depender de fuso. */
+function somarDias(yyyymmdd: string, dias: number): string {
+  const t = Date.parse(`${yyyymmdd}T00:00:00Z`);
+  if (Number.isNaN(t)) return yyyymmdd;
+  return new Date(t + dias * 86_400_000).toISOString().slice(0, 10);
+}
 
 export async function searchSchedules(
   unit: SpineUnit,
@@ -260,6 +277,7 @@ export async function searchSchedules(
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
 
   const rowsPerPage = Math.min(params.rowsPerPage ?? 50, 100);
+  const fimExclusivo = somarDias(params.endDate, 1);
   const todos: SpineSchedule[] = [];
   let page = 1;
   let totalPages = 1;
@@ -269,7 +287,7 @@ export async function searchSchedules(
     do {
       const { data } = await http.post<SpineEnvelope>('/api/schedules/search', {
         initialDate: params.initialDate,
-        endDate: params.endDate,
+        endDate: fimExclusivo,
         pagination: { page, rowsPerPage },
       });
 
@@ -290,7 +308,16 @@ export async function searchSchedules(
       );
     }
 
-    return { ok: true, data: { schedules: todos, pages: Math.min(totalPages, MAX_PAGES), total } };
+    // Recorte final pelo dia LOCAL: a API filtra pelo relógio da clínica, e o
+    // dia extra que pedimos pode trazer atendimentos além do intervalo pedido.
+    const dentro = todos.filter(
+      (s) => s.dayLocal !== null && s.dayLocal >= params.initialDate && s.dayLocal <= params.endDate,
+    );
+
+    return {
+      ok: true,
+      data: { schedules: dentro, pages: Math.min(totalPages, MAX_PAGES), total: dentro.length },
+    };
   } catch (err) {
     const d = describe(err);
     logger.warn({ err, ...params }, 'spine: falha ao buscar agendamentos');

@@ -366,31 +366,36 @@ function Configuracao({
 }: {
   unit: {
     id: string;
-    spineEnabled: boolean;
-    spineBaseUrl: string;
-    spineToken: string | null;
-    spineTimezone: string;
-    spineAgendaStart: string;
-    spineAgendaEnd: string;
-    spineLunchStart: string | null;
-    spineLunchEnd: string | null;
-    spineAgendaDays: number[];
-    spineSlotMinutes: number;
+    spineEnabled?: boolean;
+    spineBaseUrl?: string;
+    spineToken?: string | null;
+    spineTimezone?: string;
+    spineAgendaStart?: string;
+    spineAgendaEnd?: string;
+    spineLunchStart?: string | null;
+    spineLunchEnd?: string | null;
+    spineAgendaDays?: number[];
+    spineSlotMinutes?: number;
   };
   status: SpineStatus | null;
   onSaved: () => Promise<void>;
 }) {
+  // TODO CAMPO COM DEFAULT. O painel e o backend sobem por pipelines
+  // diferentes (Vercel e VPS), então existe uma janela de minutos em que o
+  // front novo conversa com uma API que ainda não devolve estes campos.
+  // Sem os defaults, `spineAgendaDays.includes(...)` explode e a tela inteira
+  // fica branca — falha total por causa de um campo ausente.
   const [d, setD] = useState({
-    spineEnabled: unit.spineEnabled,
-    spineBaseUrl: unit.spineBaseUrl,
+    spineEnabled: unit.spineEnabled ?? false,
+    spineBaseUrl: unit.spineBaseUrl ?? 'https://app-api-prod.doutorhernia.com.br',
     spineToken: '',
-    spineTimezone: unit.spineTimezone,
-    spineAgendaStart: unit.spineAgendaStart,
-    spineAgendaEnd: unit.spineAgendaEnd,
+    spineTimezone: unit.spineTimezone ?? 'America/Sao_Paulo',
+    spineAgendaStart: unit.spineAgendaStart ?? '08:00',
+    spineAgendaEnd: unit.spineAgendaEnd ?? '18:00',
     spineLunchStart: unit.spineLunchStart ?? '',
     spineLunchEnd: unit.spineLunchEnd ?? '',
-    spineAgendaDays: unit.spineAgendaDays,
-    spineSlotMinutes: unit.spineSlotMinutes,
+    spineAgendaDays: unit.spineAgendaDays ?? [1, 2, 3, 4, 5],
+    spineSlotMinutes: unit.spineSlotMinutes ?? 30,
   });
   const [salvando, setSalvando] = useState(false);
   const [salvo, setSalvo] = useState(false);
@@ -525,7 +530,7 @@ function Configuracao({
             <span className="text-xs font-medium text-zinc-300">Dias de atendimento</span>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {DIAS.map((dia) => {
-                const ativo = d.spineAgendaDays.includes(dia.n);
+                const ativo = (d.spineAgendaDays ?? []).includes(dia.n);
                 return (
                   <button
                     key={dia.n}
@@ -534,8 +539,8 @@ function Configuracao({
                       setD({
                         ...d,
                         spineAgendaDays: ativo
-                          ? d.spineAgendaDays.filter((x) => x !== dia.n)
-                          : [...d.spineAgendaDays, dia.n].sort(),
+                          ? (d.spineAgendaDays ?? []).filter((x) => x !== dia.n)
+                          : [...(d.spineAgendaDays ?? []), dia.n].sort(),
                       })
                     }
                     className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-colors ${
