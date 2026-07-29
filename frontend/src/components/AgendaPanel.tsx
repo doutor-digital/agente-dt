@@ -248,6 +248,10 @@ function Agenda({
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [salvandoBloco, setSalvandoBloco] = useState<string | null>(null);
+  // Slot escolhido para bloquear, aguardando o motivo.
+  const [aBloquear, setABloquear] = useState<{ day: string; time: string } | null>(null);
+  const [motivo, setMotivo] = useState('');
+  const [ateHora, setAteHora] = useState('');
 
   const buscar = useCallback(async () => {
     setLoading(true);
@@ -281,20 +285,43 @@ function Agenda({
         );
         if (b) await api.unblockAgenda(unit.id, b.id);
       } else {
-        // Bloqueia exatamente um slot: do horário clicado até o próximo.
+        // Bloquear ABRE O MODAL em vez de gravar direto. O motivo não é
+        // burocracia: quem vê "14:00 bloqueado" amanhã precisa saber se pode
+        // desfazer. Sem ele, o bloqueio vira mistério e alguém libera na
+        // dúvida — justo o horário que não podia ser oferecido.
         const [h, m] = slot.time.split(':').map(Number);
         const fimMin = h * 60 + m + passoMin;
-        const fim = `${String(Math.floor(fimMin / 60)).padStart(2, '0')}:${String(fimMin % 60).padStart(2, '0')}`;
-        await api.blockAgenda(unit.id, {
-          dayLocal: slot.day,
-          startTime: slot.time,
-          endTime: fim,
-          reason: null,
-        });
+        setABloquear({ day: slot.day, time: slot.time });
+        setMotivo('');
+        setAteHora(
+          `${String(Math.floor(fimMin / 60)).padStart(2, '0')}:${String(fimMin % 60).padStart(2, '0')}`,
+        );
+        setSalvandoBloco(null);
+        return;
       }
       await buscar();
     } catch (e) {
       setErro(e instanceof Error ? e.message : 'Falha ao alterar o bloqueio');
+    } finally {
+      setSalvandoBloco(null);
+    }
+  }
+
+  async function confirmarBloqueio() {
+    if (!aBloquear) return;
+    setSalvandoBloco(`${aBloquear.day}-${aBloquear.time}`);
+    setErro(null);
+    try {
+      await api.blockAgenda(unit.id, {
+        dayLocal: aBloquear.day,
+        startTime: aBloquear.time,
+        endTime: ateHora,
+        reason: motivo.trim() || null,
+      });
+      setABloquear(null);
+      await buscar();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao bloquear');
     } finally {
       setSalvandoBloco(null);
     }
@@ -436,6 +463,88 @@ function Agenda({
             </p>
           )}
         </>
+      )}
+
+      {aBloquear && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="surface w-full max-w-md p-6">
+            <h3 className="flex items-center gap-2 text-base font-semibold text-zinc-100">
+              <PiLockSimpleBold size={16} className="text-rose-400" />
+              Bloquear {aBloquear.time} de {aBloquear.day.split('-').reverse().join('/')}
+            </h3>
+            <p className="mt-1.5 text-sm leading-relaxed text-zinc-400">
+              A I.A. deixa de oferecer este horário. O resto do dia continua funcionando.
+            </p>
+
+            <label className="mt-4 block">
+              <span className="text-xs font-medium text-zinc-300">Bloquear até</span>
+              <input
+                type="time"
+                className="field mt-1"
+                value={ateHora}
+                onChange={(e) => setAteHora(e.target.value)}
+              />
+              <span className="mt-1 block text-[11px] text-zinc-500">
+                Para bloquear várias horas seguidas, estenda este horário.
+              </span>
+            </label>
+
+            <label className="mt-4 block">
+              <span className="text-xs font-medium text-zinc-300">Motivo</span>
+              <input
+                className="field mt-1"
+                value={motivo}
+                autoFocus
+                placeholder="ex: médico em cirurgia"
+                onChange={(e) => setMotivo(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void confirmarBloqueio();
+                }}
+              />
+              <span className="mt-1 block text-[11px] leading-relaxed text-zinc-500">
+                Quem olhar amanhã precisa saber se pode liberar. Sem motivo, alguém libera na
+                dúvida — e justo o horário que não podia ser oferecido volta pra fila.
+              </span>
+            </label>
+
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {['Intercorrência', 'Médico em cirurgia', 'Reunião', 'Ausência', 'Encaixe manual'].map(
+                (m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setMotivo(m)}
+                    className={`rounded-lg px-2.5 py-1 text-xs ring-1 transition-colors ${
+                      motivo === m
+                        ? 'bg-zinc-800 text-zinc-100 ring-zinc-700'
+                        : 'text-zinc-400 ring-zinc-800 hover:text-zinc-200'
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ),
+              )}
+            </div>
+
+            <div className="mt-5 flex gap-3">
+              <button
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-rose-600 px-4 py-2.5 font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
+                onClick={() => void confirmarBloqueio()}
+                disabled={salvandoBloco !== null}
+              >
+                {salvandoBloco ? (
+                  <PiSpinnerGapBold size={16} className="animate-spin" />
+                ) : (
+                  <PiLockSimpleBold size={16} />
+                )}
+                Bloquear
+              </button>
+              <button className="btn-ghost" onClick={() => setABloquear(null)}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );
