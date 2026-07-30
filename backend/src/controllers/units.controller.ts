@@ -20,6 +20,7 @@ import { logger } from '../lib/logger.js';
 import { getWidgetConnection } from '../lib/widget-connection-monitor.js';
 import { createKommoClient, KommoApiError } from '../services/kommo.service.js';
 import {
+  colunasEditaveisDaUnit,
   createUnit,
   deleteUnit,
   listUnits,
@@ -192,6 +193,30 @@ const updateSchema = z.object({
   slug: unitInputBase.slug.optional(),
   name: unitInputBase.name.optional(),
 }).partial();
+
+// ---------------------------------------------------------------------------
+// GUARD DE BOOT: tudo que a validação aceita tem que ser gravável.
+//
+// O bug que isto previne já aconteceu e custou caro: 35 campos (Spine, Instagram,
+// Facebook, triagem) estavam no schema de validação e no formulário, o PATCH
+// respondia 200 com a unidade inteira no corpo — e nada era gravado, porque a
+// camada de persistência tinha uma lista de campos escrita à mão que ninguém
+// atualizou. Sem erro, sem log, sem sintoma: a tela dizia "salvo".
+//
+// Roda uma vez, no import. Não derruba o processo — um agente no ar vale mais
+// que um campo novo — mas grita no log em nível de erro, que é onde a operação
+// já olha.
+// ---------------------------------------------------------------------------
+{
+  const gravaveis = new Set(colunasEditaveisDaUnit());
+  const orfaos = Object.keys(updateSchema.shape).filter((k) => !gravaveis.has(k));
+  if (orfaos.length > 0) {
+    logger.error(
+      { campos: orfaos },
+      'units: campos aceitos pela validação que o banco NÃO grava — a tela vai dizer "salvo" sem salvar',
+    );
+  }
+}
 
 // Heurística pra detectar valor mascarado vindo do front e ignorá-lo no PATCH.
 function isMasked(v: unknown): boolean {

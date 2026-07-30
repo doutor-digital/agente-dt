@@ -14,7 +14,7 @@
 // banco, criamos uma a partir do .env (institutotraumakommon). Idempotente.
 // ============================================================================
 
-import type { Unit } from '@prisma/client';
+import { Prisma, type Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
@@ -205,162 +205,145 @@ export interface UnitInput {
   summaryCustomFieldName?: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// QUAIS COLUNAS UM PATCH DA TELA PODE ESCREVER.
+//
+// Isto já foi uma lista escrita à mão — uma linha por campo, ~75 linhas de
+// `...(input.x !== undefined && { x: input.x })`. O modo de falha dessa lista
+// não é erro: é SILÊNCIO. Um campo novo passava pela validação, o endpoint
+// devolvia 200 com a unidade inteira no corpo, e o valor simplesmente não era
+// gravado. Foi exatamente o que aconteceu com os 35 campos de Spine, Instagram,
+// Facebook e triagem: a tela salvava, dizia "salvo", e o banco continuava igual.
+//
+// Agora a lista vem do próprio schema do Prisma. Coluna que existe é gravável,
+// exceto as que estão na negação abaixo. Não há mais como acrescentar um campo
+// e esquecer de "ligar" a escrita.
+// ---------------------------------------------------------------------------
+
+/** Colunas que NUNCA vêm de um PATCH da tela — cada uma por um motivo. */
+const NAO_EDITAVEL = new Set<string>([
+  'id',
+  'createdAt',
+  'updatedAt',
+  // Pausa de emergência tem rota própria (/spine/emergency-pause|resume).
+  // Editável aqui viraria um segundo caminho para o mesmo controle de
+  // incidente — e quem aperta o botão precisa de UM caminho, auditado.
+  'spineAiPaused',
+  'spinePausedAt',
+  'spinePausedReason',
+  // OAuth do Google: gravado pelo callback do fluxo de autorização. Digitar
+  // um access token à mão produz credencial que expira sem refresh.
+  'googleAccessToken',
+  'googleRefreshToken',
+  'googleTokenExpiresAt',
+  'googleAuthorizedEmail',
+  'googleAuthorizedAt',
+]);
+
+const CAMPOS_UNIT = Prisma.dmmf.datamodel.models.find((m) => m.name === 'Unit')?.fields ?? [];
+
+/** Nome da coluna -> é Json? (Json nulo precisa de DbNull, não de `null`). */
+const COLUNAS_EDITAVEIS = new Map<string, boolean>(
+  CAMPOS_UNIT.filter((f) => (f.kind === 'scalar' || f.kind === 'enum') && !NAO_EDITAVEL.has(f.name))
+    .map((f) => [f.name, f.type === 'Json'] as const),
+);
+
+/**
+ * Copia de `input` só o que é coluna gravável. O que sobrar é devolvido em
+ * `ignorados` — o chamador registra, porque campo descartado em silêncio é a
+ * falha que esta função existe pra impedir.
+ */
+function projetarColunas(input: object): {
+  data: Record<string, unknown>;
+  ignorados: string[];
+} {
+  const data: Record<string, unknown> = {};
+  const ignorados: string[] = [];
+  for (const [chave, valor] of Object.entries(input)) {
+    if (valor === undefined) continue; // "não mexe neste campo"
+    const ehJson = COLUNAS_EDITAVEIS.get(chave);
+    if (ehJson === undefined) {
+      ignorados.push(chave);
+      continue;
+    }
+    // Json nulo: `null` é rejeitado pelo Prisma; DbNull é o NULL do banco.
+    data[chave] = ehJson && valor === null ? Prisma.DbNull : valor;
+  }
+  return { data, ignorados };
+}
+
+/** Só para o guard de boot conferir a validação contra o banco. */
+export function colunasEditaveisDaUnit(): string[] {
+  return [...COLUNAS_EDITAVEIS.keys()];
+}
+
+/**
+ * Padrões aplicados só na CRIAÇÃO, e só onde o formulário não mandou nada.
+ * O que não está aqui cai no `@default` do schema — este objeto existe para os
+ * casos em que o padrão de produto difere do padrão da coluna.
+ */
+const PADROES_DE_CRIACAO: Record<string, unknown> = {
+  isActive: true,
+  kommoWonStatusIds: [],
+  kommoAllowedStatusIds: [],
+  kommoWidgetReplyEnabled: false,
+  kommoSalesbotExecuteEnabled: false,
+  llmProvider: 'openai',
+  anthropicModel: 'claude-opus-4-8',
+  openaiModel: 'gpt-4o-mini',
+  openaiTemperature: 0,
+  openaiMaxTokens: 1024,
+  openaiTopP: 1,
+  openaiFrequencyPenalty: 0,
+  openaiPresencePenalty: 0,
+  openaiMonthlyBudgetUsd: 50,
+  metaMonthlyBudgetUsd: 0,
+  systemPrompt: '',
+  singlePromptMode: false,
+  personaResponseLength: 'normal',
+  personaLanguage: 'pt-BR',
+  personaResponseDelaySec: 0,
+  personaMinReplyGapSec: 0,
+  qualificationEnabled: false,
+  qualificationHotTag: 'Quente',
+  qualificationColdTag: 'Frio',
+  handoffEnabled: false,
+  handoffKeywords: [],
+  contactCollectionEnabled: false,
+  contactCollectionAfterTurns: 3,
+  welcomeCouponEnabled: false,
+  businessHoursEnabled: false,
+  businessHoursStart: 9,
+  businessHoursEnd: 18,
+  businessHoursDays: ['mon', 'tue', 'wed', 'thu', 'fri'],
+  businessHoursTimezone: 'America/Sao_Paulo',
+  followUpEnabled: false,
+  followUpAfterHours: 24,
+};
+
 export async function listUnits(): Promise<Unit[]> {
   return prisma.unit.findMany({ orderBy: { createdAt: 'asc' } });
 }
 
 export async function createUnit(input: UnitInput): Promise<Unit> {
-  return prisma.unit.create({
-    data: {
-      slug: input.slug,
-      name: input.name,
-      isActive: input.isActive ?? true,
-      kommoSubdomain: input.kommoSubdomain ?? null,
-      kommoAccessToken: input.kommoAccessToken ?? null,
-      kommoSalesbotId: input.kommoSalesbotId ?? null,
-      kommoReplyFieldId: input.kommoReplyFieldId ?? null,
-      kommoPausedFieldId: input.kommoPausedFieldId ?? null,
-      kommoWonStatusIds: input.kommoWonStatusIds ?? [],
-      kommoAllowedStatusIds: input.kommoAllowedStatusIds ?? [],
-      kommoWidgetReplyEnabled: input.kommoWidgetReplyEnabled ?? false,
-      kommoWidgetSecret: input.kommoWidgetSecret ?? null,
-      kommoWidgetSalesbotId: input.kommoWidgetSalesbotId ?? null,
-      kommoSalesbotExecuteEnabled: input.kommoSalesbotExecuteEnabled ?? false,
-      llmProvider: input.llmProvider ?? 'openai',
-      anthropicApiKey: input.anthropicApiKey ?? null,
-      anthropicModel: input.anthropicModel ?? 'claude-opus-4-8',
-      openaiApiKey: input.openaiApiKey ?? null,
-      openaiAdminKey: input.openaiAdminKey ?? null,
-      openaiModel: input.openaiModel ?? 'gpt-4o-mini',
-      openaiAssistantId: input.openaiAssistantId ?? null,
-      openaiTemperature: input.openaiTemperature ?? 0,
-      openaiMaxTokens: input.openaiMaxTokens ?? 1024,
-      openaiTopP: input.openaiTopP ?? 1,
-      openaiFrequencyPenalty: input.openaiFrequencyPenalty ?? 0,
-      openaiPresencePenalty: input.openaiPresencePenalty ?? 0,
-      openaiMonthlyBudgetUsd: input.openaiMonthlyBudgetUsd ?? 50,
-      metaPhoneNumberId: input.metaPhoneNumberId ?? null,
-      metaAccessToken: input.metaAccessToken ?? null,
-      metaVerifyToken: input.metaVerifyToken ?? null,
-      metaAppSecret: input.metaAppSecret ?? null,
-      metaWabaId: input.metaWabaId ?? null,
-      metaMonthlyBudgetUsd: input.metaMonthlyBudgetUsd ?? 0,
-      systemPrompt: input.systemPrompt ?? '',
-      singlePromptMode: input.singlePromptMode ?? false,
-      category: input.category ?? null,
-      // Wizard
-      personaCompanyName: input.personaCompanyName ?? null,
-      personaTone: input.personaTone ?? null,
-      personaGreeting: input.personaGreeting ?? null,
-      personaResponseLength: input.personaResponseLength ?? 'normal',
-      personaLanguage: input.personaLanguage ?? 'pt-BR',
-      personaResponseDelaySec: input.personaResponseDelaySec ?? 0,
-      personaMinReplyGapSec: input.personaMinReplyGapSec ?? 0,
-      sourcePapel: input.sourcePapel ?? null,
-      sourceProdutos: input.sourceProdutos ?? null,
-      sourceNegocio: input.sourceNegocio ?? null,
-      qualificationEnabled: input.qualificationEnabled ?? false,
-      qualificationHotTag: input.qualificationHotTag ?? 'Quente',
-      qualificationColdTag: input.qualificationColdTag ?? 'Frio',
-      handoffEnabled: input.handoffEnabled ?? false,
-      handoffKeywords: input.handoffKeywords ?? [],
-      pipelineIntents: input.pipelineIntents ?? undefined,
-      contactCollectionEnabled: input.contactCollectionEnabled ?? false,
-      contactCollectionAfterTurns: input.contactCollectionAfterTurns ?? 3,
-      welcomeCouponEnabled: input.welcomeCouponEnabled ?? false,
-      welcomeCouponMessage: input.welcomeCouponMessage ?? null,
-      businessHoursEnabled: input.businessHoursEnabled ?? false,
-      businessHoursStart: input.businessHoursStart ?? 9,
-      businessHoursEnd: input.businessHoursEnd ?? 18,
-      businessHoursDays: input.businessHoursDays ?? ['mon', 'tue', 'wed', 'thu', 'fri'],
-      businessHoursTimezone: input.businessHoursTimezone ?? 'America/Sao_Paulo',
-      outOfHoursMessage: input.outOfHoursMessage ?? null,
-      followUpEnabled: input.followUpEnabled ?? false,
-      followUpAfterHours: input.followUpAfterHours ?? 24,
-      followUpMessage: input.followUpMessage ?? null,
-    },
+  const { data, ignorados } = projetarColunas(input);
+  if (ignorados.length > 0) {
+    logger.warn({ slug: input.slug, ignorados }, 'createUnit: campos fora do schema, descartados');
+  }
+  const unit = await prisma.unit.create({
+    data: { ...PADROES_DE_CRIACAO, ...data, slug: input.slug, name: input.name },
   });
+  return unit;
 }
 
 export async function updateUnit(id: string, input: Partial<UnitInput>): Promise<Unit> {
-  const updated = await prisma.unit.update({
-    where: { id },
-    data: {
-      ...(input.slug !== undefined && { slug: input.slug }),
-      ...(input.name !== undefined && { name: input.name }),
-      ...(input.isActive !== undefined && { isActive: input.isActive }),
-      ...(input.kommoSubdomain !== undefined && { kommoSubdomain: input.kommoSubdomain }),
-      ...(input.kommoAccessToken !== undefined && { kommoAccessToken: input.kommoAccessToken }),
-      ...(input.kommoSalesbotId !== undefined && { kommoSalesbotId: input.kommoSalesbotId }),
-      ...(input.kommoReplyFieldId !== undefined && { kommoReplyFieldId: input.kommoReplyFieldId }),
-      ...(input.kommoPausedFieldId !== undefined && { kommoPausedFieldId: input.kommoPausedFieldId }),
-      ...(input.kommoWonStatusIds !== undefined && { kommoWonStatusIds: input.kommoWonStatusIds }),
-      ...(input.kommoAllowedStatusIds !== undefined && { kommoAllowedStatusIds: input.kommoAllowedStatusIds }),
-      ...(input.kommoBypassSalesbot !== undefined && { kommoBypassSalesbot: input.kommoBypassSalesbot }),
-      ...(input.kommoWidgetReplyEnabled !== undefined && { kommoWidgetReplyEnabled: input.kommoWidgetReplyEnabled }),
-      ...(input.kommoWidgetSecret !== undefined && { kommoWidgetSecret: input.kommoWidgetSecret }),
-      ...(input.kommoWidgetSalesbotId !== undefined && { kommoWidgetSalesbotId: input.kommoWidgetSalesbotId }),
-      ...(input.kommoSalesbotExecuteEnabled !== undefined && { kommoSalesbotExecuteEnabled: input.kommoSalesbotExecuteEnabled }),
-      ...(input.llmProvider !== undefined && { llmProvider: input.llmProvider }),
-      ...(input.anthropicApiKey !== undefined && { anthropicApiKey: input.anthropicApiKey }),
-      ...(input.anthropicModel !== undefined && { anthropicModel: input.anthropicModel }),
-      ...(input.openaiApiKey !== undefined && { openaiApiKey: input.openaiApiKey }),
-      ...(input.openaiAdminKey !== undefined && { openaiAdminKey: input.openaiAdminKey }),
-      ...(input.openaiModel !== undefined && { openaiModel: input.openaiModel }),
-      ...(input.openaiAssistantId !== undefined && { openaiAssistantId: input.openaiAssistantId }),
-      ...(input.openaiTemperature !== undefined && { openaiTemperature: input.openaiTemperature }),
-      ...(input.openaiMaxTokens !== undefined && { openaiMaxTokens: input.openaiMaxTokens }),
-      ...(input.openaiTopP !== undefined && { openaiTopP: input.openaiTopP }),
-      ...(input.openaiFrequencyPenalty !== undefined && { openaiFrequencyPenalty: input.openaiFrequencyPenalty }),
-      ...(input.openaiPresencePenalty !== undefined && { openaiPresencePenalty: input.openaiPresencePenalty }),
-      ...(input.openaiMonthlyBudgetUsd !== undefined && { openaiMonthlyBudgetUsd: input.openaiMonthlyBudgetUsd }),
-      ...(input.metaPhoneNumberId !== undefined && { metaPhoneNumberId: input.metaPhoneNumberId }),
-      ...(input.metaAccessToken !== undefined && { metaAccessToken: input.metaAccessToken }),
-      ...(input.metaVerifyToken !== undefined && { metaVerifyToken: input.metaVerifyToken }),
-      ...(input.metaAppSecret !== undefined && { metaAppSecret: input.metaAppSecret }),
-      ...(input.metaWabaId !== undefined && { metaWabaId: input.metaWabaId }),
-      ...(input.metaMonthlyBudgetUsd !== undefined && { metaMonthlyBudgetUsd: input.metaMonthlyBudgetUsd }),
-      ...(input.systemPrompt !== undefined && { systemPrompt: input.systemPrompt }),
-      ...(input.singlePromptMode !== undefined && { singlePromptMode: input.singlePromptMode }),
-      ...(input.category !== undefined && { category: input.category }),
-      ...(input.personaCompanyName !== undefined && { personaCompanyName: input.personaCompanyName }),
-      ...(input.personaTone !== undefined && { personaTone: input.personaTone }),
-      ...(input.personaGreeting !== undefined && { personaGreeting: input.personaGreeting }),
-      ...(input.personaResponseLength !== undefined && { personaResponseLength: input.personaResponseLength }),
-      ...(input.personaLanguage !== undefined && { personaLanguage: input.personaLanguage }),
-      ...(input.personaResponseDelaySec !== undefined && { personaResponseDelaySec: input.personaResponseDelaySec }),
-      ...(input.personaMinReplyGapSec !== undefined && { personaMinReplyGapSec: input.personaMinReplyGapSec }),
-      ...(input.personaEmojis !== undefined && { personaEmojis: input.personaEmojis }),
-      ...(input.personaEmojiFrequency !== undefined && { personaEmojiFrequency: input.personaEmojiFrequency }),
-      ...(input.sourcePapel !== undefined && { sourcePapel: input.sourcePapel }),
-      ...(input.sourceProdutos !== undefined && { sourceProdutos: input.sourceProdutos }),
-      ...(input.sourceNegocio !== undefined && { sourceNegocio: input.sourceNegocio }),
-      ...(input.qualificationEnabled !== undefined && { qualificationEnabled: input.qualificationEnabled }),
-      ...(input.qualificationHotTag !== undefined && { qualificationHotTag: input.qualificationHotTag }),
-      ...(input.qualificationColdTag !== undefined && { qualificationColdTag: input.qualificationColdTag }),
-      ...(input.handoffEnabled !== undefined && { handoffEnabled: input.handoffEnabled }),
-      ...(input.handoffKeywords !== undefined && { handoffKeywords: input.handoffKeywords }),
-      ...(input.pipelineIntents !== undefined && { pipelineIntents: input.pipelineIntents ?? undefined }),
-      ...(input.contactCollectionEnabled !== undefined && { contactCollectionEnabled: input.contactCollectionEnabled }),
-      ...(input.contactCollectionAfterTurns !== undefined && { contactCollectionAfterTurns: input.contactCollectionAfterTurns }),
-      ...(input.welcomeCouponEnabled !== undefined && { welcomeCouponEnabled: input.welcomeCouponEnabled }),
-      ...(input.welcomeCouponMessage !== undefined && { welcomeCouponMessage: input.welcomeCouponMessage }),
-      ...(input.businessHoursEnabled !== undefined && { businessHoursEnabled: input.businessHoursEnabled }),
-      ...(input.businessHoursStart !== undefined && { businessHoursStart: input.businessHoursStart }),
-      ...(input.businessHoursEnd !== undefined && { businessHoursEnd: input.businessHoursEnd }),
-      ...(input.businessHoursDays !== undefined && { businessHoursDays: input.businessHoursDays }),
-      ...(input.businessHoursTimezone !== undefined && { businessHoursTimezone: input.businessHoursTimezone }),
-      ...(input.outOfHoursMessage !== undefined && { outOfHoursMessage: input.outOfHoursMessage }),
-      ...(input.followUpEnabled !== undefined && { followUpEnabled: input.followUpEnabled }),
-      ...(input.followUpAfterHours !== undefined && { followUpAfterHours: input.followUpAfterHours }),
-      ...(input.followUpMessage !== undefined && { followUpMessage: input.followUpMessage }),
-      ...(input.collectNameEnabled !== undefined && { collectNameEnabled: input.collectNameEnabled }),
-      ...(input.collectSourceEnabled !== undefined && { collectSourceEnabled: input.collectSourceEnabled }),
-      ...(input.collectSourceOptions !== undefined && { collectSourceOptions: input.collectSourceOptions }),
-      ...(input.summaryCustomFieldId !== undefined && { summaryCustomFieldId: input.summaryCustomFieldId }),
-      ...(input.summaryCustomFieldName !== undefined && { summaryCustomFieldName: input.summaryCustomFieldName }),
-    },
-  });
+  const { data, ignorados } = projetarColunas(input);
+  if (ignorados.length > 0) {
+    // Chega aqui só se o Zod deixou passar algo que não é coluna. Não é o
+    // caso normal — e é justamente o que era invisível antes.
+    logger.warn({ id, ignorados }, 'updateUnit: campos fora do schema, descartados');
+  }
+  const updated = await prisma.unit.update({ where: { id }, data });
   invalidateUnitCacheFor(updated, id);
   return updated;
 }
