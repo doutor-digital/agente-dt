@@ -56,6 +56,7 @@ import type {
   SpineStatus,
   SpineSchedulesResponse,
   AgendaBlock,
+  SpineLeadLinksResponse,
 } from '../types/api';
 
 // Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
@@ -254,6 +255,17 @@ export const api = {
   async spinePing(unitId: string): Promise<{ ok: boolean; error?: string }> {
     const { data } = await http.post<{ ok: boolean; error?: string }>(
       `/units/${unitId}/spine/ping`,
+    );
+    return data;
+  },
+  async spineLeadLinks(unitId: string): Promise<SpineLeadLinksResponse> {
+    const { data } = await http.get<SpineLeadLinksResponse>(`/units/${unitId}/spine/lead-links`);
+    return data;
+  },
+  async spineSyncLead(unitId: string, kommoLeadId: number): Promise<{ ok: boolean; motivo?: string; spineIdLead?: number }> {
+    const { data } = await http.post<{ ok: boolean; motivo?: string; spineIdLead?: number }>(
+      `/units/${unitId}/spine/sync-lead`,
+      { kommoLeadId },
     );
     return data;
   },

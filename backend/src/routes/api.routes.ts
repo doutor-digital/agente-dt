@@ -113,6 +113,7 @@ import {
   deleteAgendaBlockBulkHandler,
   listAgendaBlocksHandler,
   syncLeadHandler,
+  listLeadLinksHandler,
 } from '../controllers/spine.controller.js';
 import {
   getAlerts,
@@ -282,6 +283,7 @@ apiRouter.get('/units/:id/spine/status', requireUnitAccess, spineStatusHandler);
 apiRouter.get('/units/:id/spine/schedules', requireUnitAccess, spineSchedulesHandler);
 apiRouter.post('/units/:id/spine/ping', requireUnitAccess, spinePingHandler);
 apiRouter.post('/units/:id/spine/sync-lead', requireUnitAccess, syncLeadHandler);
+apiRouter.get('/units/:id/spine/lead-links', requireUnitAccess, listLeadLinksHandler);
 // Bloqueio manual de horário — supre o que a API da franquia não expõe.
 apiRouter.post('/units/:id/agenda/blocks', requireUnitAccess, createAgendaBlockHandler);
 apiRouter.get('/units/:id/agenda/blocks', requireUnitAccess, listAgendaBlocksHandler);

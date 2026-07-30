@@ -32,6 +32,7 @@ import {
   PiCheckCircleFill,
   PiSpinnerGapBold,
   PiArrowsClockwiseBold,
+  PiArrowRightBold,
   PiPauseBold,
   PiPlayBold,
   PiCalendarBlankBold,
@@ -42,7 +43,7 @@ import {
 import { api } from '../lib/api';
 import { BloquearIcon } from './BloquearIcon';
 import { useUnit } from '../context/UnitContext';
-import type { SpineStatus, SpineSchedulesResponse } from '../types/api';
+import type { SpineStatus, SpineSchedulesResponse, SpineLeadLinksResponse } from '../types/api';
 
 const DIAS = [
   { n: 0, label: 'Dom' },
@@ -95,6 +96,10 @@ export default function AgendaPanel() {
           passoMin={status?.agenda?.slotMinutes ?? 30}
         />
         <Configuracao unit={unit} status={status} onSaved={async () => {
+          await refresh();
+          await carregar();
+        }} />
+        <EspelharLeads unit={unit} status={status} onSaved={async () => {
           await refresh();
           await carregar();
         }} />
@@ -1055,4 +1060,203 @@ function BloqueioEmLote({
       </div>
     </div>
   );
+}
+
+
+// ---------------------------------------------------------------------------
+// Espelhar leads no CRM da franquia
+// ---------------------------------------------------------------------------
+// Controle SEPARADO do da agenda, e isso não é preciosismo: consultar a agenda
+// é leitura e não deixa rastro; criar lead é escrita PERMANENTE — a API da
+// franquia não tem exclusão de lead. Ligar a agenda não pode significar, de
+// tabela, começar a escrever no CRM do cliente.
+//
+// Por isso a tela explica ANTES de ligar o que exatamente vai acontecer, e
+// mostra o histórico depois: sem ele, "está sincronizando?" não tem resposta.
+
+const ORIGENS_FRANQUIA = [
+  { id: 20, nome: 'WHATSAPP' },
+  { id: 23, nome: 'INSTAGRAM' },
+  { id: 22, nome: 'FACEBOOK' },
+  { id: 7, nome: 'Site / Landing Page' },
+  { id: 3, nome: 'INDICAÇÃO' },
+  { id: 1, nome: 'GOOGLE' },
+  { id: 9999, nome: 'IA2GO' },
+];
+
+function EspelharLeads({
+  unit,
+  status,
+  onSaved,
+}: {
+  unit: { id: string; spineSyncLeads?: boolean; spineDefaultSourceId?: number };
+  status: SpineStatus | null;
+  onSaved: () => Promise<void>;
+}) {
+  const [ligado, setLigado] = useState(unit.spineSyncLeads ?? false);
+  const [origem, setOrigem] = useState(unit.spineDefaultSourceId ?? 20);
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [hist, setHist] = useState<SpineLeadLinksResponse | null>(null);
+
+  const carregarHist = useCallback(async () => {
+    try {
+      setHist(await api.spineLeadLinks(unit.id));
+    } catch {
+      setHist(null);
+    }
+  }, [unit.id]);
+
+  useEffect(() => {
+    void carregarHist();
+  }, [carregarHist]);
+
+  async function salvar(novoLigado: boolean, novaOrigem: number) {
+    setSalvando(true);
+    setErro(null);
+    try {
+      await api.updateUnit(unit.id, {
+        spineSyncLeads: novoLigado,
+        spineDefaultSourceId: novaOrigem,
+      } as Record<string, unknown>);
+      await onSaved();
+      await carregarHist();
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao salvar');
+      setLigado(!novoLigado);
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  const semToken = !status?.hasToken;
+
+  return (
+    <section className="surface p-7">
+      <h2 className="text-sm font-semibold text-zinc-100">Espelhar leads no CRM da franquia</h2>
+      <p className="mt-1 text-sm leading-relaxed text-zinc-400">
+        Quando alguém entra em contato no Kommo, o cadastro é criado também no sistema da
+        clínica — sem ninguém digitar duas vezes.
+      </p>
+
+      <div className="mt-5 rounded-xl border border-zinc-800 p-4">
+        <button
+          type="button"
+          disabled={semToken || salvando}
+          onClick={() => {
+            const novo = !ligado;
+            setLigado(novo);
+            void salvar(novo, origem);
+          }}
+          className="flex w-full items-start gap-3 text-left disabled:opacity-50"
+        >
+          <span
+            className={`mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${
+              ligado ? 'bg-emerald-500' : 'bg-zinc-700'
+            }`}
+          >
+            <span
+              className={`h-4 w-4 rounded-full bg-white transition-transform ${ligado ? 'translate-x-4' : ''}`}
+            />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-zinc-200">
+              Enviar leads do Kommo para a franquia
+            </span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-zinc-400">
+              {semToken
+                ? 'Configure o token da franquia acima primeiro.'
+                : ligado
+                  ? 'Ligado — cada lead novo com nome vai para o CRM da clínica.'
+                  : 'Desligado — nada é enviado.'}
+            </span>
+          </span>
+        </button>
+      </div>
+
+      {/* O QUE ACONTECE — antes de ligar, não depois. Escrita permanente
+          merece que a pessoa saiba no que está mexendo. */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+          <p className="text-xs font-medium text-zinc-300">Quando envia</p>
+          <ul className="mt-2 space-y-1.5 text-xs leading-relaxed text-zinc-500">
+            <li>· depois de cada resposta da IA, se o lead já tiver nome de verdade</li>
+            <li>· uma vez só por lead — reenvio não cria cadastro duplicado</li>
+            <li>· leva nome, WhatsApp, cidade, UF, origem e a queixa</li>
+          </ul>
+        </div>
+        <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-4">
+          <p className="text-xs font-medium text-amber-300">Quando NÃO envia</p>
+          <ul className="mt-2 space-y-1.5 text-xs leading-relaxed text-zinc-400">
+            <li>· lead ainda com título automático (&quot;Lead #123&quot;, só o telefone)</li>
+            <li>
+              · a franquia <span className="text-zinc-300">não permite apagar lead</span> — por
+              isso o filtro é rígido: cadastro errado lá é permanente
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <label className="mt-5 block max-w-sm">
+        <span className="text-xs font-medium text-zinc-300">Origem quando não houver correspondente</span>
+        <select
+          className="field mt-1"
+          value={origem}
+          disabled={salvando}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setOrigem(v);
+            void salvar(ligado, v);
+          }}
+        >
+          {ORIGENS_FRANQUIA.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.nome} · {o.id}
+            </option>
+          ))}
+        </select>
+        <span className="mt-1 block text-[11px] leading-relaxed text-zinc-500">
+          Instagram, Facebook, WhatsApp e Site são traduzidos automaticamente. Esta é a origem
+          para o que não casar com nenhuma.
+        </span>
+      </label>
+
+      {erro && <p className="mt-3 text-xs text-rose-300">{erro}</p>}
+
+      {hist && (
+        <div className="mt-6 border-t border-zinc-800 pt-5">
+          <div className="flex flex-wrap items-baseline gap-4">
+            <p className="text-xs font-medium text-zinc-300">Enviados</p>
+            <p className="text-sm text-zinc-400">
+              <span className="font-semibold text-zinc-100">{hist.hoje}</span> hoje ·{' '}
+              <span className="font-semibold text-zinc-100">{hist.total}</span> no total
+            </p>
+          </div>
+          {hist.links.length > 0 && (
+            <ul className="mt-3 space-y-1">
+              {hist.links.slice(0, 8).map((l) => (
+                <li key={l.id} className="flex items-center gap-2 text-xs text-zinc-500">
+                  <span className="tabular-nums text-zinc-400">Kommo {l.kommoLeadId}</span>
+                  <ArrowRightIcon />
+                  <span className="tabular-nums text-emerald-400">franquia {l.spineIdLead}</span>
+                  <span className="ml-auto">
+                    {new Date(l.createdAt).toLocaleString('pt-BR', {
+                      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                    })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {hist.links.length === 0 && (
+            <p className="mt-2 text-xs text-zinc-500">Nenhum lead enviado ainda.</p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ArrowRightIcon() {
+  return <PiArrowRightBold size={11} className="text-zinc-600" />;
 }

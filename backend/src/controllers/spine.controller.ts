@@ -97,6 +97,8 @@ export async function spineStatusHandler(req: Request, res: Response): Promise<v
     pausedAt: unit.spinePausedAt,
     pausedReason: unit.spinePausedReason,
     timezone: unit.spineTimezone,
+    syncLeads: unit.spineSyncLeads,
+    defaultSourceId: unit.spineDefaultSourceId,
     agenda: {
       start: unit.spineAgendaStart,
       end: unit.spineAgendaEnd,
@@ -376,4 +378,24 @@ export async function syncLeadHandler(req: Request, res: Response): Promise<void
   }
   const r = await SpineSyncService.syncLeadToSpine(unit, kommoLeadId);
   res.status(r.ok ? 200 : 422).json(r);
+}
+
+
+/** Histórico do espelhamento — sem isso, "está sincronizando?" não tem resposta. */
+export async function listLeadLinksHandler(req: Request, res: Response): Promise<void> {
+  const unitId = String(req.params.id);
+  const [links, total] = await Promise.all([
+    prisma.spineLeadLink.findMany({
+      where: { unitId },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+    }),
+    prisma.spineLeadLink.count({ where: { unitId } }),
+  ]);
+  const hoje = new Date();
+  hoje.setUTCHours(0, 0, 0, 0);
+  const noDia = await prisma.spineLeadLink.count({
+    where: { unitId, createdAt: { gte: hoje } },
+  });
+  res.json({ links, total, hoje: noDia });
 }

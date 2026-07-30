@@ -248,6 +248,14 @@ model Unit {
   /// horário pareceria plausível e o paciente chegaria na hora errada.
   spineTimezone    String  @default("America/Sao_Paulo") @map("spine_timezone")
 
+  /// ESPELHAR LEADS NO CRM DA FRANQUIA. Separado de `spineEnabled` de
+  /// propósito: consultar a agenda é leitura e não deixa rastro; criar lead é
+  /// escrita PERMANENTE — a API da franquia não tem exclusão de lead. Ligar a
+  /// agenda não pode significar, de tabela, começar a escrever no CRM deles.
+  spineSyncLeads       Boolean @default(false) @map("spine_sync_leads")
+  /// Origem usada quando a do Kommo não tem correspondente (20 = WHATSAPP).
+  spineDefaultSourceId Int     @default(20) @map("spine_default_source_id")
+
   instagramComments InstagramComment[]
   agendaBlocks      AgendaBlock[]
   spineLeadLinks    SpineLeadLink[]
@@ -1078,6 +1086,7 @@ model InstagramComment {
    * ID do comentário na Meta. Chave de dedup — único global.
    */
   /**
+   * /**
    * /**
    * /**
    * /**

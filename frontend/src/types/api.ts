@@ -290,6 +290,8 @@ export interface Unit {
   spineAgendaDays: number[];
   spineSlotMinutes: number;
   spineAiPaused: boolean;
+  spineSyncLeads: boolean;
+  spineDefaultSourceId: number;
   triageEnabled: boolean;
   triageInstructions: string | null;
   metaMonthlyBudgetUsd: number | string;
@@ -1080,6 +1082,8 @@ export interface SpineStatus {
   pausedAt: string | null;
   pausedReason: string | null;
   timezone: string;
+  syncLeads: boolean;
+  defaultSourceId: number;
   agenda: {
     start: string;
     end: string;
@@ -1118,4 +1122,19 @@ export interface SpineSchedulesResponse {
   slots: SpineSlot[];
   blocks: AgendaBlock[];
   resumo: { livres: number; ocupados: number; incertos: number; bloqueados: number };
+}
+
+
+export interface SpineLeadLink {
+  id: string;
+  unitId: string;
+  kommoLeadId: number;
+  spineIdLead: number;
+  createdAt: string;
+}
+
+export interface SpineLeadLinksResponse {
+  links: SpineLeadLink[];
+  total: number;
+  hoje: number;
 }

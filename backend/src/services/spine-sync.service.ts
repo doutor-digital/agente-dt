@@ -63,7 +63,10 @@ export interface ResultadoSync {
 
 export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<ResultadoSync> {
   if (!unit.spineEnabled || !unit.spineToken) {
-    return { ok: false, motivo: 'agenda da franquia não conectada nesta unidade' };
+    return { ok: false, motivo: 'franquia não conectada nesta unidade' };
+  }
+  if (!unit.spineSyncLeads) {
+    return { ok: false, motivo: 'espelhamento de leads desligado nesta unidade' };
   }
   if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
     return { ok: false, motivo: 'leadId inválido' };
@@ -108,7 +111,7 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
     }
   }
 
-  const idSource = SpineService.resolverIdSource(valor(CAMPO_ORIGEM), 20); // 20 = WHATSAPP
+  const idSource = SpineService.resolverIdSource(valor(CAMPO_ORIGEM), unit.spineDefaultSourceId);
   const queixa = valor(CAMPO_QUEIXA);
 
   const r = await SpineService.createLead(unit, {

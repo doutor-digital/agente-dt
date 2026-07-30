@@ -101,6 +101,8 @@ const unitInputBase = {
   spineBaseUrl: z.string().url().optional(),
   spineToken: z.string().nullable().optional(),
   spineTimezone: z.string().max(60).optional(),
+  spineSyncLeads: z.boolean().optional(),
+  spineDefaultSourceId: z.coerce.number().int().positive().optional(),
   spineAgendaStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   spineAgendaEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   spineLunchStart: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
