@@ -815,6 +815,19 @@ model Conversation {
   convertedAt       DateTime? @map("converted_at")
   convertedStatusId Int?      @map("converted_status_id")
 
+  /**
+   * Reengajamento. `followUpStep` é qual degrau da escada já saiu (0 = nenhum),
+   * e zera assim que o paciente responde — quem voltou a falar não é quem
+   * sumiu.
+   *
+   * `followUpStoppedReason` congela o envio de vez: consulta marcada, pedido
+   * de parar, ou escada esgotada. Sem isso, um lead que agendou continuaria
+   * recebendo "ainda está aí?" — que é o jeito mais rápido de virar spam.
+   */
+  followUpStep          Int       @default(0) @map("follow_up_step")
+  followUpLastAt        DateTime? @map("follow_up_last_at")
+  followUpStoppedReason String?   @map("follow_up_stopped_reason")
+
   unit        Unit                     @relation(fields: [unitId], references: [id], onDelete: Cascade)
   messages    Message[]
   evaluations ConversationEvaluation[]
@@ -823,6 +836,7 @@ model Conversation {
   @@index([unitId])
   @@index([lastMessageAt(sort: Desc)])
   @@index([convertedAt(sort: Desc)])
+  @@index([unitId, followUpStep, lastMessageAt])
   @@map("conversations")
 }
 

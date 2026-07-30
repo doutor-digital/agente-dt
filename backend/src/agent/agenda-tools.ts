@@ -90,6 +90,73 @@ async function gradeDoDia(unit: Unit, dia: string) {
 // consultar_horarios
 // ---------------------------------------------------------------------------
 
+/**
+ * PERGUNTA À FRANQUIA se o horário aceita mesmo, em vez de deduzir.
+ *
+ * A dedução ("não tem ninguém marcado, logo está livre") erra porque não
+ * enxergamos o TURNO da profissional. Medido em produção numa quarta: 08:00 e
+ * 10:00 aceitos, 11:00 e 16:00 recusados — sem ninguém marcado em nenhum dos
+ * dois. A API não expõe disponibilidade; o único jeito de saber é tentar.
+ *
+ * Tentar é seguro porque agendamento É a única escrita nossa que a franquia
+ * desfaz (DELETE /api/schedules). Cria e cancela na mesma volta.
+ *
+ * Custa duas chamadas por horário, então valida poucos — quem oferece dez
+ * horários não converte mais que quem oferece três.
+ */
+const MAX_VALIDACOES = 4;
+
+async function horariosQueAFranquiaAceita(
+  unit: Unit,
+  data: string,
+  candidatos: string[],
+  idClientSonda: number,
+): Promise<{ aceitos: string[]; conferidos: number }> {
+  const aceitos: string[] = [];
+  let conferidos = 0;
+  for (const hora of candidatos.slice(0, MAX_VALIDACOES)) {
+    conferidos++;
+    const r = await SpineService.createSchedule(unit, {
+      idClient: idClientSonda,
+      dateAttendanceLocal: `${data}T${hora}:00`,
+      idCategory: 1,
+    });
+    if (r.ok && r.data?.idSchedule) {
+      aceitos.push(hora);
+      // Cancela IMEDIATAMENTE. Se este cancelamento falhar, sobra um
+      // agendamento fantasma na agenda da clínica — por isso o log é warn e
+      // carrega o id: é o que a recepção leva pra remover lá.
+      const c = await SpineService.cancelSchedule(unit, r.data.idSchedule);
+      if (!c.ok) {
+        logger.warn(
+          { idSchedule: r.data.idSchedule, data, hora, unit: unit.slug },
+          'sondagem: NÃO consegui cancelar — agendamento fantasma na franquia',
+        );
+      }
+    }
+  }
+  return { aceitos, conferidos };
+}
+
+/**
+ * Paciente usado só para sondar. Qualquer cliente da unidade serve — o
+ * agendamento é desfeito em seguida e nunca chega a existir de verdade.
+ */
+let sondaCache: { unitId: string; idClient: number; em: number } | null = null;
+
+async function clienteDeSondagem(unit: Unit): Promise<number | null> {
+  if (sondaCache?.unitId === unit.id && Date.now() - sondaCache.em < 30 * 60_000) {
+    return sondaCache.idClient;
+  }
+  const vinculo = await prisma.spineLeadLink.findFirst({
+    where: { unitId: unit.id, spineIdClient: { not: null } },
+    orderBy: { updatedAt: 'desc' },
+  });
+  const id = vinculo?.spineIdClient ?? null;
+  if (id) sondaCache = { unitId: unit.id, idClient: id, em: Date.now() };
+  return id;
+}
+
 export function buildConsultarHorarios({ unit, recorder }: Contexto) {
   return new DynamicStructuredTool({
     name: 'consultar_horarios',
@@ -131,16 +198,32 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
       }
 
       const livres = slots.filter((s) => s.status === 'livre').map((s) => s.time);
+
+      // A grade é só a PRIMEIRA peneira: ela desconta quem já está marcado,
+      // almoço e bloqueio da recepção. O que ela não sabe é o turno da
+      // profissional — e é aí que a franquia recusa. Confirma com ela.
+      const sonda = await clienteDeSondagem(fresca);
+      let oferecer = livres;
+      let conferidos = 0;
+      if (sonda && livres.length > 0) {
+        const r = await horariosQueAFranquiaAceita(fresca, data, livres, sonda);
+        conferidos = r.conferidos;
+        // Só substitui a lista pelos confirmados quando ALGUM passou. Se
+        // nenhum passar, pode ser instabilidade da API deles — e devolver
+        // "nada livre" por causa disso perderia o paciente por engano.
+        if (r.aceitos.length > 0) oferecer = r.aceitos;
+      }
+
       await recorder.step({
         kind: 'TOOL_RESULT',
-        title: `consultar_horarios ${data}: ${livres.length} livre(s)`,
-        payload: { data, livres, total: slots.length },
+        title: `consultar_horarios ${data}: ${oferecer.length} confirmado(s) de ${livres.length}`,
+        payload: { data, naGrade: livres, oferecer, conferidos, sonda },
       });
 
-      if (livres.length === 0) {
+      if (oferecer.length === 0) {
         return `Nenhum horário livre em ${data}. Ofereça outra data — NÃO insista nesta.`;
       }
-      return `Horários livres em ${data}: ${livres.join(', ')}. Ofereça no máximo 2 ou 3 deles.`;
+      return `Horários livres em ${data}: ${oferecer.join(', ')}. Ofereça no máximo 2 ou 3 deles.`;
     },
   });
 }
