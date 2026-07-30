@@ -1137,6 +1137,8 @@ export interface SpineLeadLink {
   spineIdClient?: number | null;
   /** O nome que foi enviado — o histórico sem isto é lista de números. */
   nome?: string | null;
+  spineIdSchedule?: number | null;
+  agendadoPara?: string | null;
   status: 'ok' | 'falhou' | 'ignorado';
   motivo: string | null;
   tentativas: number;
@@ -1198,6 +1200,8 @@ export interface SpineLeadPendente {
   spineIdClient?: number | null;
   /** O nome que foi enviado — o histórico sem isto é lista de números. */
   nome?: string | null;
+  spineIdSchedule?: number | null;
+  agendadoPara?: string | null;
   situacao: 'pronto' | 'sem-nome' | 'falhou' | 'enviado';
   motivo: string | null;
   tentativas: number;

@@ -238,6 +238,7 @@ export default function CrmFranquiaPanel() {
 
         <Espelhamento form={form} setForm={setForm} temToken={status?.hasToken ?? false} />
 
+        <Consultas hist={hist} />
         <Confirmacao form={form} setForm={setForm} />
         <Previa unitId={unit.id} onEnviado={carregar} />
         <PacienteNaFranquia unitId={unit.id} hist={hist} onEnviado={carregar} />
@@ -939,6 +940,73 @@ function Esteira({
       )}
     </section>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Consultas marcadas pela IA.
+//
+// O sistema passou a guardar QUAL consulta é de cada lead — é o que permite
+// cancelar e remarcar sem casar por nome. Mostrar isso não é enfeite: quando o
+// paciente liga dizendo "cancelei" ou "mudei de horário", quem atende precisa
+// ver o que a IA fez, e o número da consulta é o que se leva pra franquia.
+// ---------------------------------------------------------------------------
+
+function Consultas({ hist }: { hist: SpineLeadLinksResponse | null }) {
+  const marcadas = (hist?.links ?? []).filter((l) => l.spineIdSchedule && l.agendadoPara);
+
+  return (
+    <section className="surface p-7">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-zinc-100">Consultas marcadas pela IA</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
+            Cada lead tem no máximo uma. Remarcar troca a linha; cancelar tira daqui.
+          </p>
+        </div>
+        {marcadas.length > 0 && (
+          <span className="shrink-0 rounded-full border border-emerald-500/25 bg-emerald-500/5 px-3 py-1 text-xs text-emerald-300">
+            {marcadas.length} {marcadas.length === 1 ? 'consulta' : 'consultas'}
+          </span>
+        )}
+      </div>
+
+      {marcadas.length === 0 ? (
+        <p className="mt-5 text-sm text-zinc-500">
+          Nenhuma consulta marcada pela IA ainda. Quando ela marcar, aparece aqui com dia, hora e o
+          número da consulta na franquia.
+        </p>
+      ) : (
+        <ul className="mt-5 space-y-1.5">
+          {marcadas.map((l) => (
+            <li
+              key={l.kommoLeadId}
+              className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-zinc-800 p-3.5 text-xs"
+            >
+              <span className="text-[13px] font-medium text-zinc-100">{l.nome ?? `Lead ${l.kommoLeadId}`}</span>
+              <span className="text-emerald-300">{quandoLegivel(l.agendadoPara)}</span>
+              <span className="ml-auto flex items-center gap-3 tabular-nums text-zinc-600">
+                <span>Kommo {l.kommoLeadId}</span>
+                {/* O número da consulta é o que a recepção leva pra franquia
+                    quando precisa mexer lá. */}
+                <span>consulta {l.spineIdSchedule}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** "2026-08-05T08:00" -> "qua, 05/08 às 08:00". */
+function quandoLegivel(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const [dia, hora] = iso.split('T');
+  const d = new Date(`${dia}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  const semana = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'][d.getUTCDay()];
+  const [, m, dd] = dia.split('-');
+  return `${semana}, ${dd}/${m} às ${hora ?? ''}`.trim();
 }
 
 // ---------------------------------------------------------------------------
