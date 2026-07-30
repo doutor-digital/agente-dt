@@ -174,11 +174,97 @@ export function buildBuscarPaciente({ unit, recorder }: Contexto) {
         payload: { nome, achados },
       });
       if (achados.length === 0) {
-        return `Nenhum cadastro encontrado para "${nome}". NÃO agende — avise que a equipe vai concluir o cadastro e o agendamento.`;
+        return (
+          `Nenhum cadastro encontrado para "${nome}". ` +
+          'Peça o NOME COMPLETO e o telefone com DDD e use cadastrar_paciente — ' +
+          'depois disso dá pra agendar normalmente.'
+        );
       }
       return achados
         .map((c) => `idClient ${c.idClient} — ${c.name}${c.whatsapp ? ` (${c.whatsapp})` : ''}`)
         .join(' | ');
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// cadastrar_paciente
+//
+// O ELO QUE FALTAVA. POST /api/schedules exige idClient — sem paciente não
+// existe agendamento. Antes, quando a busca não achava ninguém, a IA parava e
+// passava pra equipe; agora ela conclui o cadastro e segue.
+//
+// As recusas são as mesmas do painel, e ficam AQUI, não no prompt: prompt é
+// instrução, e instrução se contorna. A franquia não apaga paciente, então o
+// que não pode acontecer não pode depender de o modelo lembrar.
+// ---------------------------------------------------------------------------
+
+export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
+  return new DynamicStructuredTool({
+    name: 'cadastrar_paciente',
+    description:
+      'Cadastra o paciente no sistema da clínica quando buscar_paciente não achou ninguém. ' +
+      'Exige NOME COMPLETO (nome e sobrenome) e telefone com DDD. Devolve o idClient ' +
+      'para usar em agendar_consulta. Se recusar, peça ao paciente o que faltou.',
+    schema: z.object({
+      nome: z.string().min(3).max(120).describe('Nome COMPLETO: nome e sobrenome.'),
+      telefone: z.string().min(8).max(30).describe('Telefone com DDD.'),
+      cidade: z.string().max(80).optional().describe('Cidade, se o paciente disse.'),
+      uf: z.string().max(30).optional().describe('Estado ou sigla, se o paciente disse.'),
+    }),
+    func: async (args: { nome: string; telefone: string; cidade?: string; uf?: string }) => {
+      const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      if (!fresca.spineEnabled || !fresca.spineToken) {
+        return 'Sistema da clínica não conectado. Transfira para a equipe.';
+      }
+
+      // "Nome Completo" é o nome do campo lá. Só o primeiro nome vira cadastro
+      // que a recepção não distingue dos outros — e não sai mais.
+      const partes = args.nome.trim().split(/\s+/).filter((x) => x.length >= 2);
+      if (partes.length < 2) {
+        return 'RECUSADO: falta o sobrenome. Pergunte o nome completo antes de cadastrar.';
+      }
+
+      const fone = SpineService.normalizarWhatsapp(args.telefone);
+      if (!fone || fone.replace(/\D/g, '').length < 12) {
+        return 'RECUSADO: telefone incompleto. Peça o número com DDD.';
+      }
+
+      // Já existe? Cadastrar de novo cria duplicata permanente.
+      const jaTem = await SpineService.searchClients(fresca, args.nome);
+      const igual = jaTem.ok
+        ? (jaTem.data?.clients ?? []).find(
+            (c) => (c.whatsapp ?? '').replace(/\D/g, '').slice(-8) === fone.replace(/\D/g, '').slice(-8),
+          )
+        : undefined;
+      if (igual) {
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title: `cadastrar_paciente: já existia (${igual.idClient})`,
+          payload: { nome: args.nome, idClient: igual.idClient },
+        });
+        return `Já existia. idClient ${igual.idClient} — ${igual.name}. Use este para agendar.`;
+      }
+
+      const r = await SpineService.createClient(fresca, {
+        name: args.nome.trim(),
+        whatsapp: fone,
+        idSource: fresca.spineDefaultSourceId,
+        addressCity: args.cidade?.trim().toUpperCase() ?? null,
+        addressUf: SpineService.resolverUf(args.uf ?? null),
+      });
+
+      await recorder.step({
+        kind: 'TOOL_RESULT',
+        title: `cadastrar_paciente "${args.nome}": ${r.ok ? 'ok' : 'falhou'}`,
+        payload: { nome: args.nome, telefone: fone, resultado: r },
+      });
+
+      if (!r.ok || !r.data?.idClient) {
+        logger.warn({ unit: fresca.slug, erro: r.error }, 'agenda-tools: falha ao cadastrar paciente');
+        return `Não consegui concluir o cadastro (${r.error}). Avise que a equipe vai finalizar.`;
+      }
+      return `Cadastrado. idClient ${r.data.idClient} — use este número em agendar_consulta.`;
     },
   });
 }
@@ -317,6 +403,7 @@ export function buildAgendaTools(ctx: Contexto): DynamicStructuredTool[] {
   return [
     buildConsultarHorarios(ctx),
     buildBuscarPaciente(ctx),
+    buildCadastrarPaciente(ctx),
     buildAgendarConsulta(ctx),
   ] as unknown as DynamicStructuredTool[];
 }

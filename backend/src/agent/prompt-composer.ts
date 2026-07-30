@@ -354,7 +354,7 @@ function renderAgenda(unit: Unit): string {
   const intents = unit.pipelineIntents as Record<string, number> | null;
   const etapaAgendado = intents?.scheduled_meeting;
   const moverDepois = etapaAgendado
-    ? `\n5. SÓ DEPOIS de a consulta ser marcada com sucesso, chame ` +
+    ? `\n6. SÓ DEPOIS de a consulta ser marcada com sucesso, chame ` +
       `mover_etapa({ statusId: ${etapaAgendado} }). Se a marcação falhou, NÃO mova nada — ` +
       `a etapa tem que refletir o que de fato aconteceu.`
     : '';
@@ -369,7 +369,10 @@ SEQUÊNCIA OBRIGATÓRIA, sem pular passo:
 2. Ofereça no MÁXIMO 2 ou 3 opções da lista que a tool devolveu. Oferecer dez
    vira lista de compras e o paciente não escolhe nenhum.
 3. Quando ele escolher, chame buscar_paciente({ nome }) para achar o cadastro.
-4. Com o cadastro em mãos, chame agendar_consulta({ idClient, data, hora }).${moverDepois}
+4. Se NÃO achar, pergunte o nome completo e o telefone com DDD e chame
+   cadastrar_paciente({ nome, telefone }). Ela devolve o idClient e o
+   agendamento segue normalmente — não transfira por causa disso.
+5. Com o idClient em mãos, chame agendar_consulta({ idClient, data, hora }).${moverDepois}
 
 QUANDO A TOOL RECUSAR (horário ocupado, bloqueado ou agenda pausada):
 - NUNCA diga que está agendado. Nunca prometa dia ou hora.
@@ -379,9 +382,12 @@ QUANDO A TOOL RECUSAR (horário ocupado, bloqueado ou agenda pausada):
 - Se a agenda estiver pausada: diga que houve um imprevisto na agenda e que
   você volta em instantes com os horários. NÃO ofereça nada nesse turno.
 
-SE NÃO ACHAR O CADASTRO do paciente em buscar_paciente:
-- NÃO invente cadastro e NÃO marque nada.
-- Diga que a equipe finaliza o cadastro e confirma o horário, e transfira.`,
+SOBRE O CADASTRO DO PACIENTE:
+- NUNCA invente um idClient. Ele vem de buscar_paciente ou de cadastrar_paciente.
+- cadastrar_paciente exige NOME COMPLETO (nome e sobrenome) e telefone com DDD.
+  Se ela recusar, peça ao paciente exatamente o que faltou — sem falar em
+  "sistema" nem "cadastro recusado". "Como é seu sobrenome?" resolve.
+- Se ela falhar por outro motivo, aí sim diga que a equipe finaliza e transfira.`,
   );
 }
 
