@@ -281,6 +281,20 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
   // lá e a recepção consegue cadastrar à mão pelo botão da tela deles — o
   // contrário (paciente sem lead) deixaria cadastro solto.
   if (unit.spineSyncPatients) {
+    // O campo lá se chama "Nome Completo". Um lead pode entrar com "Pedro" —
+    // é contato, o vendedor completa depois. Paciente é o cadastro que a
+    // recepção usa pra chamar na sala, e "PEDRO" sozinho vira registro que
+    // ninguém consegue distinguir dos outros Pedros nem apagar. Espera o
+    // sobrenome, do mesmo jeito que o lead espera o nome.
+    const partes = preparo.payload.name.trim().split(/\s+/).filter((x) => x.length >= 2);
+    if (partes.length < 2) {
+      logger.info(
+        { kommoLeadId, nome: preparo.payload.name, unit: unit.slug },
+        'spine-sync: paciente aguardando nome completo',
+      );
+      return { ok: true, spineIdLead: r.data.idLead };
+    }
+
     const p = await SpineService.createClient(unit, {
       name: preparo.payload.name,
       whatsapp: preparo.payload.whatsapp,
