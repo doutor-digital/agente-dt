@@ -77,7 +77,16 @@ const unitInputBase = {
   igVerifyToken: z.string().nullable().optional(),
   igAppSecret: z.string().nullable().optional(),
   igDryRun: z.boolean().optional(),
-  igWhatsappNumber: z.string().max(30).nullable().optional(),
+  // Vira link wa.me. Número curto gera link quebrado: o paciente clica e cai
+  // no nada — falha visível pra ele e invisível pra gente.
+  igWhatsappNumber: z
+    .string()
+    .max(30)
+    .refine((v) => v.trim() === '' || v.replace(/\D/g, '').length >= 10, {
+      message: 'WhatsApp incompleto — use DDI+DDD+número, ex: 5599999999999',
+    })
+    .nullable()
+    .optional(),
   igPublicSignature: z.string().max(60).nullable().optional(),
   igDeliveryMode: z.enum(['kommo', 'direct']).optional(),
   igReplyFieldId: z.coerce.number().int().positive().nullable().optional(),
@@ -100,7 +109,25 @@ const unitInputBase = {
   spineEnabled: z.boolean().optional(),
   spineBaseUrl: z.string().url().optional(),
   spineToken: z.string().nullable().optional(),
-  spineTimezone: z.string().max(60).optional(),
+  // FUSO PRECISA SER IANA DE VERDADE. "America/SaoPaulo" (sem underscore)
+  // passaria por qualquer validação de string e quebraria a conversão de
+  // horário EM SILÊNCIO — o paciente combinaria um horário e chegaria em
+  // outro. O `Intl` é a única fonte que sabe quais fusos existem.
+  spineTimezone: z
+    .string()
+    .max(60)
+    .refine(
+      (tz) => {
+        try {
+          new Intl.DateTimeFormat('en-CA', { timeZone: tz });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      { message: 'fuso inválido — use um identificador IANA, ex: America/Sao_Paulo' },
+    )
+    .optional(),
   spineSyncLeads: z.boolean().optional(),
   spineDefaultSourceId: z.coerce.number().int().positive().optional(),
   spineAgendaStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
@@ -241,7 +268,7 @@ export async function createUnitHandler(req: Request, res: Response): Promise<vo
 
 export async function updateUnitHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
-  const parsed = updateSchema.safeParse(req.body);
+  const parsed = updateSchemaValidado.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'invalid_input', issues: parsed.error.flatten() });
     return;
@@ -1438,6 +1465,51 @@ const metaValidateBodySchema = z.object({
   metaWabaId: z.string().nullable().optional(),
   metaAccessToken: z.string().nullable().optional(),
   metaPhoneNumberId: z.string().nullable().optional(),
+});
+
+/**
+ * VALIDAÇÃO SEMÂNTICA — o que regex nenhum pega.
+ *
+ * "18:00" e "08:00" são strings válidas nas duas ordens; só a comparação
+ * revela que a clínica não fecha antes de abrir. Sem isto a grade sairia
+ * VAZIA e a I.A. responderia "nenhum horário disponível" o dia inteiro — sem
+ * erro em lugar nenhum, e ninguém ligaria uma coisa à outra.
+ *
+ * É este o sentido de "configurado no front, validado no back": a tela pode
+ * ajudar, mas quem garante a coerência é o servidor, que é por onde toda
+ * escrita passa.
+ */
+const updateSchemaValidado = updateSchema.superRefine((v, ctx) => {
+  const erro = (path: string, message: string) =>
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+
+  if (v.spineAgendaStart && v.spineAgendaEnd && v.spineAgendaEnd <= v.spineAgendaStart) {
+    erro('spineAgendaEnd', 'o fechamento tem que ser depois da abertura');
+  }
+  if (v.spineLunchStart && v.spineLunchEnd) {
+    if (v.spineLunchEnd <= v.spineLunchStart) {
+      erro('spineLunchEnd', 'o fim do almoço tem que ser depois do início');
+    }
+    // Almoço fora do expediente não bloqueia nada e ainda dá a impressão de
+    // estar configurado.
+    if (v.spineAgendaStart && v.spineLunchStart < v.spineAgendaStart) {
+      erro('spineLunchStart', 'o almoço começa antes de a clínica abrir');
+    }
+    if (v.spineAgendaEnd && v.spineLunchEnd > v.spineAgendaEnd) {
+      erro('spineLunchEnd', 'o almoço termina depois de a clínica fechar');
+    }
+  }
+  if (v.spineEnabled && v.spineAgendaDays && v.spineAgendaDays.length === 0) {
+    erro('spineAgendaDays', 'escolha ao menos um dia de atendimento');
+  }
+  // Espelhar leads escreve de forma PERMANENTE no CRM do cliente. Ligar sem
+  // credencial só produziria falha silenciosa a cada atendimento.
+  if (v.spineSyncLeads === true && v.spineToken === null) {
+    erro('spineSyncLeads', 'informe o token da franquia antes de ligar o espelhamento');
+  }
+  if (v.igEnabled && v.igDeliveryMode === 'kommo' && v.igReplyFieldId === null) {
+    erro('igReplyFieldId', 'escolha o campo do Kommo que recebe a resposta');
+  }
 });
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v25.0';
