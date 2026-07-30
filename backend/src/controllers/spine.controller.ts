@@ -99,6 +99,7 @@ export async function spineStatusHandler(req: Request, res: Response): Promise<v
     pausedReason: unit.spinePausedReason,
     timezone: unit.spineTimezone,
     syncLeads: unit.spineSyncLeads,
+    syncPatients: unit.spineSyncPatients,
     defaultSourceId: unit.spineDefaultSourceId,
     agenda: {
       start: unit.spineAgendaStart,

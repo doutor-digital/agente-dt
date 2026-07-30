@@ -84,6 +84,7 @@ interface Form {
   spineAgendaDays: number[];
   spineSlotMinutes: number;
   spineSyncLeads: boolean;
+  spineSyncPatients: boolean;
   spineDefaultSourceId: number;
 }
 
@@ -105,6 +106,7 @@ function doServidor(u: Partial<Unit>): Form {
     spineAgendaDays: u.spineAgendaDays ?? [1, 2, 3, 4, 5],
     spineSlotMinutes: u.spineSlotMinutes ?? 30,
     spineSyncLeads: u.spineSyncLeads ?? false,
+    spineSyncPatients: u.spineSyncPatients ?? false,
     spineDefaultSourceId: u.spineDefaultSourceId ?? 20,
   };
 }
@@ -653,6 +655,33 @@ function Espelhamento({
         </div>
       </div>
 
+      {/* PACIENTE — interruptor separado de propósito. É o segundo cadastro,
+          com validação mais dura do lado deles, e tão permanente quanto o
+          primeiro. Herdar do espelhamento de leads faria um clique criar dois
+          registros que ninguém consegue apagar. */}
+      <div className="mt-5 rounded-xl border border-zinc-800 p-4">
+        <Interruptor
+          ligado={form.spineSyncPatients}
+          desabilitado={!temToken || !form.spineSyncLeads}
+          onChange={(v) => setForm({ ...form, spineSyncPatients: v })}
+          titulo="Cadastrar também como paciente"
+          ligadoTexto="Ligado — a IA preenche nome, origem e telefone no cadastro de paciente, já vinculado ao lead."
+          desligadoTexto={
+            !temToken
+              ? 'Configure o token da franquia acima primeiro.'
+              : !form.spineSyncLeads
+                ? 'Ligue o espelhamento de leads antes — o paciente nasce a partir do lead.'
+                : 'Desligado — o lead entra, mas quem clica em "Cadastrar Paciente" é a recepção.'
+          }
+        />
+        <p className="mt-3 border-t border-zinc-800 pt-3 text-xs leading-relaxed text-zinc-500">
+          É o mesmo botão &quot;Cadastrar Paciente&quot; que existe dentro do lead no sistema da
+          clínica. A franquia exige{' '}
+          <span className="text-zinc-300">nome, origem e telefone</span> — sem telefone o cadastro
+          não é criado, porque a recepção ficaria com um nome sem como ligar.
+        </p>
+      </div>
+
       <label className="mt-5 block max-w-sm">
         <span className="text-xs font-medium text-zinc-300">
           Origem quando não houver correspondente
@@ -1027,7 +1056,10 @@ function Historico({
               {l.spineIdLead ? (
                 <>
                   <PiArrowRightBold size={11} className="text-zinc-600" />
-                  <span className="tabular-nums text-emerald-400">franquia {l.spineIdLead}</span>
+                  <span className="tabular-nums text-emerald-400">
+                    franquia {l.spineIdLead}
+                    {l.spineIdClient ? ` · paciente ${l.spineIdClient}` : ''}
+                  </span>
                 </>
               ) : (
                 <span className="truncate text-zinc-500">{l.motivo}</span>

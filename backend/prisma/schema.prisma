@@ -253,6 +253,10 @@ model Unit {
   /// escrita PERMANENTE — a API da franquia não tem exclusão de lead. Ligar a
   /// agenda não pode significar, de tabela, começar a escrever no CRM deles.
   spineSyncLeads       Boolean @default(false) @map("spine_sync_leads")
+  /// Cadastra também o PACIENTE (client) na franquia, vinculado ao lead.
+  /// Separado de spineSyncLeads: o lead é um contato, o paciente é o cadastro
+  /// que a recepção usa — e nenhum dos dois pode ser apagado depois.
+  spineSyncPatients    Boolean @default(false) @map("spine_sync_patients")
   /// Origem usada quando a do Kommo não tem correspondente (20 = WHATSAPP).
   spineDefaultSourceId Int     @default(20) @map("spine_default_source_id")
 
@@ -1226,6 +1230,8 @@ model SpineLeadLink {
    * ID do lead criado na franquia. Nulo enquanto não foi criado.
    */
   spineIdLead Int? @map("spine_id_lead")
+  /// Paciente criado na franquia a partir deste lead (idClient lá).
+  spineIdClient Int? @map("spine_id_client")
 
   /**
    * "ok" | "falhou" | "ignorado".

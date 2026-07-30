@@ -130,6 +130,7 @@ const unitInputBase = {
     )
     .optional(),
   spineSyncLeads: z.boolean().optional(),
+  spineSyncPatients: z.boolean().optional(),
   spineDefaultSourceId: z.coerce.number().int().positive().optional(),
   spineAgendaStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   spineAgendaEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),

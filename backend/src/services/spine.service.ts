@@ -551,6 +551,69 @@ export async function createLead(
   }
 }
 
+// ---------------------------------------------------------------------------
+// PACIENTE (a franquia chama de "client")
+//
+// É o "CADASTRAR PACIENTE" que aparece dentro de cada lead. O lead é o contato;
+// o paciente é o cadastro de verdade, e o campo `idClient` do lead é o elo
+// entre os dois.
+//
+// O QUE A VALIDAÇÃO DELES EXIGE (medido, não suposto):
+//   "Origem é obrigatório." / "Nome é obrigatório." / "WhatsApp ou Email é
+//   obrigatório." / "Telefone deve iniciar com + seguido do código do país"
+//
+// Essa última é a pegadinha: /api/leads engole telefone em vários formatos,
+// /api/clients EXIGE E.164. Mandar o que serve pro lead dá 400 aqui.
+// ---------------------------------------------------------------------------
+
+export interface SpineCreateClient {
+  name: string;
+  whatsapp?: string | null;
+  email?: string | null;
+  idSource: number;
+  /** Vincula o paciente ao lead de origem — preenche `idClient` lá. */
+  idLead?: number | null;
+  addressCity?: string | null;
+  addressUf?: string | null;
+}
+
+export async function createClient(
+  unit: SpineUnit,
+  input: SpineCreateClient,
+): Promise<SpineResult<{ idClient?: number }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+
+  const fone = input.whatsapp ? normalizarWhatsapp(input.whatsapp) : '';
+  // A regra deles é "WhatsApp OU Email". Sem nenhum dos dois o cadastro vira
+  // um nome que a recepção não tem como contatar — e não dá pra apagar.
+  if (!fone && !input.email) {
+    return { ok: false, error: 'paciente sem telefone nem e-mail' };
+  }
+
+  const corpo: Record<string, unknown> = {
+    name: input.name.trim().slice(0, 255),
+    idSource: input.idSource,
+  };
+  if (fone) corpo.whatsapp = fone;
+  if (input.email) corpo.email = input.email.trim().slice(0, 255);
+  if (input.idLead) corpo.idLead = input.idLead;
+  if (input.addressCity) corpo.addressCity = input.addressCity.trim().toUpperCase().slice(0, 100);
+  if (input.addressUf) corpo.addressUf = input.addressUf.trim().toUpperCase().slice(0, 2);
+
+  try {
+    const { data } = await http.post<{ idClient?: number; data?: { idClient?: number } }>(
+      '/api/clients',
+      corpo,
+    );
+    return { ok: true, data: { idClient: data?.data?.idClient ?? data?.idClient } };
+  } catch (err) {
+    const d = describe(err);
+    logger.warn({ erro: d.error, nome: input.name }, 'spine: falha ao criar paciente');
+    return { ok: false, ...d };
+  }
+}
+
 /** A franquia guarda "+5599991665121". O Kommo entrega em vários formatos. */
 export function normalizarWhatsapp(bruto: string): string {
   const digitos = bruto.replace(/\D/g, '');
@@ -665,6 +728,7 @@ export async function ping(unit: SpineUnit): Promise<SpineResult<{ total: number
 
 export const SpineService = {
   createLead,
+  createClient,
   searchLeads,
   resolverIdSource,
   nomeDaOrigem,

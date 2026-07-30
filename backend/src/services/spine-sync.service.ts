@@ -277,6 +277,37 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
 
   await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead);
 
+  // O paciente é o passo seguinte, não parte deste. Se falhar, o lead já está
+  // lá e a recepção consegue cadastrar à mão pelo botão da tela deles — o
+  // contrário (paciente sem lead) deixaria cadastro solto.
+  if (unit.spineSyncPatients) {
+    const p = await SpineService.createClient(unit, {
+      name: preparo.payload.name,
+      whatsapp: preparo.payload.whatsapp,
+      idSource: preparo.payload.idSource,
+      idLead: r.data.idLead,
+      addressCity: preparo.payload.addressCity,
+      addressUf: preparo.payload.addressUf,
+    });
+    if (p.ok && p.data?.idClient) {
+      await prisma.spineLeadLink
+        .update({
+          where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+          data: { spineIdClient: p.data.idClient },
+        })
+        .catch(() => undefined);
+      logger.info(
+        { kommoLeadId, spineIdClient: p.data.idClient, unit: unit.slug },
+        'spine-sync: paciente cadastrado na franquia',
+      );
+    } else {
+      logger.warn(
+        { kommoLeadId, erro: p.error, unit: unit.slug },
+        'spine-sync: lead entrou mas o paciente falhou',
+      );
+    }
+  }
+
   logger.info(
     {
       kommoLeadId,

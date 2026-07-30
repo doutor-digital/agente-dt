@@ -291,6 +291,7 @@ export interface Unit {
   spineSlotMinutes: number;
   spineAiPaused: boolean;
   spineSyncLeads: boolean;
+  spineSyncPatients: boolean;
   spineDefaultSourceId: number;
   triageEnabled: boolean;
   triageInstructions: string | null;
@@ -1130,6 +1131,7 @@ export interface SpineLeadLink {
   unitId: string;
   kommoLeadId: number;
   spineIdLead: number | null;
+  spineIdClient?: number | null;
   status: 'ok' | 'falhou' | 'ignorado';
   motivo: string | null;
   tentativas: number;
@@ -1188,6 +1190,7 @@ export interface SpineLeadPendente {
   nomeLimpo: string | null;
   criadoEm: string | null;
   spineIdLead: number | null;
+  spineIdClient?: number | null;
   situacao: 'pronto' | 'sem-nome' | 'falhou' | 'enviado';
   motivo: string | null;
   tentativas: number;
