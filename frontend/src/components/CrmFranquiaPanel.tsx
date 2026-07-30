@@ -208,6 +208,11 @@ export default function CrmFranquiaPanel() {
           </div>
         )}
 
+        <Esteira
+          status={status}
+          hist={hist}
+          form={form}
+        />
         <Pecas prontidao={prontidao} onRecarregar={carregar} />
 
         <Conexao
@@ -309,6 +314,17 @@ function BarraDeEstado({
 // As peças
 // ---------------------------------------------------------------------------
 
+/**
+ * A CONFERÊNCIA — o que a esteira NÃO sabe.
+ *
+ * A esteira mostra o que está ligado, que é o que a gente gravou. Isto pergunta
+ * à franquia se realmente chegou. A diferença importa: se o token perder
+ * permissão ou a API deles mudar, os nossos contadores continuam subindo felizes
+ * enquanto nada entra do outro lado.
+ *
+ * Por isso o que está OK vira uma linha só. Lista de itens verdes é ruído — quem
+ * abre a tela quer saber se tem problema, e qual.
+ */
 function Pecas({
   prontidao,
   onRecarregar,
@@ -317,61 +333,65 @@ function Pecas({
   onRecarregar: () => Promise<void>;
 }) {
   const [conferindo, setConferindo] = useState(false);
+  const problemas = (prontidao?.pecas ?? []).filter((p) => !p.ok);
+  const tudoOk = !!prontidao && problemas.length === 0;
 
   return (
-    <section className="surface p-7">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold text-zinc-100">As peças do encaixe</h2>
-          <p className="mt-1 text-sm text-zinc-400">
-            Cada uma verificada agora, contra a franquia — não contra o que salvamos.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {prontidao && (
-            <span
-              className={`text-xs tabular-nums ${
-                prontidao.prontas === prontidao.total ? 'text-emerald-400' : 'text-amber-400'
-              }`}
-            >
-              {prontidao.prontas}/{prontidao.total} prontas
-            </span>
+    <section className="surface p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="flex items-center gap-2 text-sm">
+          {!prontidao ? (
+            <>
+              <PiSpinnerGapBold size={15} className="animate-spin text-zinc-500" />
+              <span className="text-zinc-500">Perguntando à franquia…</span>
+            </>
+          ) : tudoOk ? (
+            <>
+              <PiCheckCircleFill size={15} className="shrink-0 text-emerald-400" />
+              <span className="text-zinc-300">
+                Conferido agora contra o sistema da clínica:{' '}
+                <span className="text-emerald-300">as {prontidao.total} peças respondem</span>.
+              </span>
+            </>
+          ) : (
+            <>
+              <PiWarningCircleBold size={15} className="shrink-0 text-amber-400" />
+              <span className="text-zinc-300">
+                Conferido agora:{' '}
+                <span className="text-amber-300 tabular-nums">
+                  {problemas.length} de {prontidao.total}
+                </span>{' '}
+                peças {problemas.length === 1 ? 'precisa' : 'precisam'} de atenção.
+              </span>
+            </>
           )}
-          <button
-            className="btn-ghost"
-            disabled={conferindo}
-            onClick={async () => {
-              setConferindo(true);
-              await onRecarregar();
-              setConferindo(false);
-            }}
-          >
-            <PiArrowsClockwiseBold size={14} className={conferindo ? 'animate-spin' : ''} />
-            Conferir de novo
-          </button>
-        </div>
+        </p>
+        <button
+          className="btn-ghost"
+          disabled={conferindo}
+          onClick={async () => {
+            setConferindo(true);
+            await onRecarregar();
+            setConferindo(false);
+          }}
+        >
+          <PiArrowsClockwiseBold size={14} className={conferindo ? 'animate-spin' : ''} />
+          Conferir de novo
+        </button>
       </div>
 
-      {!prontidao ? (
-        <p className="mt-5 text-sm text-zinc-500">Conferindo…</p>
-      ) : (
-        <ul className="mt-5 space-y-2">
-          {prontidao.pecas.map((p) => (
+      {problemas.length > 0 && (
+        <ul className="mt-4 space-y-2">
+          {problemas.map((p) => (
             <li
               key={p.id}
-              className={`flex items-start gap-3 rounded-lg border p-3.5 ${
-                p.ok ? 'border-zinc-800' : 'border-amber-500/25 bg-amber-500/5'
-              }`}
+              className="flex items-start gap-3 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3.5"
             >
-              {p.ok ? (
-                <PiCheckCircleFill size={16} className="mt-0.5 shrink-0 text-emerald-400" />
-              ) : (
-                <PiXCircleFill size={16} className="mt-0.5 shrink-0 text-amber-400" />
-              )}
+              <PiXCircleFill size={16} className="mt-0.5 shrink-0 text-amber-400" />
               <div className="min-w-0">
                 <p className="text-sm font-medium text-zinc-200">{p.titulo}</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-zinc-400">{p.detalhe}</p>
-                {!p.ok && p.comoResolver && (
+                {p.comoResolver && (
                   <p className="mt-1 text-xs leading-relaxed text-amber-300/80">{p.comoResolver}</p>
                 )}
               </div>
@@ -706,6 +726,209 @@ function Espelhamento({
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// A ESTEIRA — o caminho inteiro em cinco quadros.
+//
+// O resto da tela responde "como configuro". Isto responde a pergunta anterior,
+// que é a que a pessoa faz primeiro: O QUE ACONTECE, e ONDE ESTÁ PARANDO.
+//
+// Cada quadro diz três coisas e só três: o que é, se está ligado, e quantos
+// passaram. Um quadro apagado é um passo que não acontece — e a seta antes dele
+// fica apagada também, porque a esteira para ali. Ler a linha da esquerda pra
+// direita tem que bastar; se precisar do texto embaixo, o desenho falhou.
+// ---------------------------------------------------------------------------
+
+type EstadoPasso = 'ok' | 'desligado' | 'atencao';
+
+function Esteira({
+  status,
+  hist,
+  form,
+}: {
+  status: SpineStatus | null;
+  hist: SpineLeadLinksResponse | null;
+  form: Form;
+}) {
+  const temToken = status?.hasToken ?? false;
+  const c: Record<string, number> = hist?.contagem ?? {};
+  const enviados = c.ok ?? 0;
+  const falharam = c.falhou ?? 0;
+  const esperando = c.ignorado ?? 0;
+  const pacientes = (hist?.links ?? []).filter((l) => l.spineIdClient).length;
+
+  const passos: {
+    titulo: string;
+    sub: string;
+    estado: EstadoPasso;
+    numero?: string;
+    legenda?: string;
+  }[] = [
+    {
+      titulo: 'Paciente chama',
+      sub: 'WhatsApp, Instagram ou Facebook',
+      estado: 'ok',
+      legenda: 'sempre ligado',
+    },
+    {
+      titulo: 'Kommo cria o lead',
+      sub: 'e a Sofia responde',
+      estado: 'ok',
+      legenda: 'sempre ligado',
+    },
+    {
+      titulo: 'Conexão com a clínica',
+      sub: temToken ? 'credencial configurada' : 'falta o token da franquia',
+      estado: temToken ? 'ok' : 'atencao',
+    },
+    {
+      titulo: 'Vira lead na franquia',
+      sub: form.spineSyncLeads ? 'assim que tiver nome' : 'ninguém é enviado',
+      estado: form.spineSyncLeads ? 'ok' : 'desligado',
+      numero: String(enviados),
+      legenda: enviados === 1 ? 'lead enviado' : 'leads enviados',
+    },
+    {
+      titulo: 'Vira paciente',
+      sub: form.spineSyncPatients ? 'com nome, origem e telefone' : 'a recepção cadastra à mão',
+      estado: form.spineSyncPatients ? 'ok' : 'desligado',
+      numero: String(pacientes),
+      legenda: pacientes === 1 ? 'paciente cadastrado' : 'pacientes cadastrados',
+    },
+  ];
+
+  // Onde a esteira para: o primeiro passo que não está ok. Tudo depois dele é
+  // consequência, não problema separado — e apontar cinco problemas quando só
+  // existe um faz a pessoa procurar no lugar errado.
+  const parou = passos.findIndex((p) => p.estado !== 'ok');
+
+  return (
+    <section className="surface p-7">
+      <h2 className="text-sm font-semibold text-zinc-100">Como funciona, do começo ao fim</h2>
+      <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
+        Cada quadro é um passo. Aceso acontece sozinho; apagado não acontece.
+      </p>
+
+      <ol className="mt-6 flex flex-col gap-2 lg:flex-row lg:items-stretch">
+        {passos.map((p, i) => (
+          <li key={p.titulo} className="flex flex-1 items-stretch gap-2">
+            {i > 0 && (
+              <div className="flex shrink-0 items-center justify-center lg:w-6">
+                <PiArrowRightBold
+                  size={15}
+                  className={`hidden lg:block ${
+                    parou >= 0 && i > parou ? 'text-zinc-800' : 'text-zinc-600'
+                  }`}
+                />
+                <PiArrowRightBold
+                  size={13}
+                  className={`rotate-90 lg:hidden ${
+                    parou >= 0 && i > parou ? 'text-zinc-800' : 'text-zinc-600'
+                  }`}
+                />
+              </div>
+            )}
+            <div
+              className={`flex flex-1 flex-col rounded-xl border p-4 transition-colors ${
+                p.estado === 'ok'
+                  ? 'border-emerald-500/30 bg-emerald-500/5'
+                  : p.estado === 'atencao'
+                    ? 'border-amber-500/30 bg-amber-500/5'
+                    : 'border-zinc-800 bg-zinc-950/60'
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                {p.estado === 'ok' ? (
+                  <PiCheckCircleFill size={14} className="shrink-0 text-emerald-400" />
+                ) : p.estado === 'atencao' ? (
+                  <PiWarningCircleBold size={14} className="shrink-0 text-amber-400" />
+                ) : (
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full border border-zinc-600" />
+                )}
+                <span
+                  className={`text-[10px] font-semibold uppercase tracking-wider ${
+                    p.estado === 'ok'
+                      ? 'text-emerald-400'
+                      : p.estado === 'atencao'
+                        ? 'text-amber-400'
+                        : 'text-zinc-500'
+                  }`}
+                >
+                  {p.estado === 'ok' ? 'ligado' : p.estado === 'atencao' ? 'falta config' : 'desligado'}
+                </span>
+              </div>
+
+              <p
+                className={`mt-2 text-[13px] font-medium leading-snug ${
+                  p.estado === 'desligado' ? 'text-zinc-400' : 'text-zinc-100'
+                }`}
+              >
+                {p.titulo}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{p.sub}</p>
+
+              {p.numero !== undefined && (
+                <p className="mt-auto pt-3">
+                  <span
+                    className={`text-2xl font-semibold tabular-nums ${
+                      p.estado === 'ok' ? 'text-zinc-100' : 'text-zinc-600'
+                    }`}
+                  >
+                    {p.numero}
+                  </span>
+                  <span className="ml-1.5 text-[11px] text-zinc-500">{p.legenda}</span>
+                </p>
+              )}
+              {p.numero === undefined && p.legenda && (
+                <p className="mt-auto pt-3 text-[11px] text-zinc-600">{p.legenda}</p>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      {/* UMA frase dizendo o que fazer. Não uma lista de tudo que poderia
+          estar errado — a pessoa precisa do próximo passo, não do inventário. */}
+      <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+        {parou < 0 ? (
+          <p className="flex items-start gap-2 text-sm leading-relaxed text-emerald-300">
+            <PiCheckCircleFill size={15} className="mt-0.5 shrink-0" />
+            A esteira está inteira. Quem chega no WhatsApp vira lead e paciente no sistema da
+            clínica, sem ninguém digitar nada.
+          </p>
+        ) : (
+          <p className="flex items-start gap-2 text-sm leading-relaxed text-zinc-300">
+            <PiWarningCircleBold size={15} className="mt-0.5 shrink-0 text-amber-400" />
+            <span>
+              Para aqui: <span className="text-zinc-100">{passos[parou].titulo}</span>.{' '}
+              {parou === 2
+                ? 'Cole o token da franquia em "Conexão", logo abaixo.'
+                : 'Ligue o interruptor em "Espelhar leads", logo abaixo.'}{' '}
+              Nada depois disso acontece enquanto este passo estiver apagado.
+            </span>
+          </p>
+        )}
+      </div>
+
+      {(falharam > 0 || esperando > 0) && (
+        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-zinc-500">
+          {esperando > 0 && (
+            <span>
+              <span className="text-zinc-300">{esperando}</span> esperando a pessoa dizer o nome
+            </span>
+          )}
+          {falharam > 0 && (
+            <span>
+              <span className="text-rose-300">{falharam}</span> falharam — veja o histórico no fim da
+              página
+            </span>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Prévia e envio manual.
 //
@@ -719,6 +942,16 @@ function Espelhamento({
 //      prévia carregou, e pede confirmação mostrando o nome que vai gravar.
 //      Escrita permanente atrás de um clique distraído é questão de tempo.
 // ---------------------------------------------------------------------------
+
+/**
+ * Data legível, ou um traço. "Invalid Date" na tela é pior que ausência: parece
+ * defeito do sistema inteiro quando é só um campo que não veio.
+ */
+function quando(iso: string | null | undefined, opts: Intl.DateTimeFormatOptions): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR', opts);
+}
 
 const ROTULO_SITUACAO: Record<string, { texto: string; cor: string }> = {
   pronto: { texto: 'pronto pra enviar', cor: 'text-emerald-400' },
@@ -1068,7 +1301,7 @@ function Historico({
                 <span className="text-amber-400">{l.tentativas} tentativas</span>
               )}
               <span className="ml-auto text-zinc-600">
-                {new Date(l.updatedAt).toLocaleString('pt-BR', {
+                {quando(l.updatedAt, {
                   day: '2-digit',
                   month: '2-digit',
                   hour: '2-digit',
