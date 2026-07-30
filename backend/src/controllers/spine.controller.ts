@@ -20,6 +20,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaService } from '../services/agenda.service.js';
+import { SpineSyncService } from '../services/spine-sync.service.js';
 
 /** "agora" no relógio da clínica — usa o fuso IANA da unidade. */
 function agoraLocalIso(tz: string): string {
@@ -358,4 +359,21 @@ export async function listAgendaBlocksHandler(req: Request, res: Response): Prom
     take: 2000,
   });
   res.json({ blocks });
+}
+
+
+/** Envia UM lead do Kommo para a franquia. Existe pra testar antes de automatizar. */
+export async function syncLeadHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  const kommoLeadId = Number(req.body?.kommoLeadId);
+  if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
+    res.status(400).json({ error: 'kommoLeadId_obrigatorio' });
+    return;
+  }
+  const r = await SpineSyncService.syncLeadToSpine(unit, kommoLeadId);
+  res.status(r.ok ? 200 : 422).json(r);
 }

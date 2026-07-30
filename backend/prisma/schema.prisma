@@ -250,6 +250,7 @@ model Unit {
 
   instagramComments InstagramComment[]
   agendaBlocks      AgendaBlock[]
+  spineLeadLinks    SpineLeadLink[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -1082,6 +1083,7 @@ model InstagramComment {
    * /**
    * /**
    * /**
+   * /**
    * /** "instagram" | "facebook" — de qual rede veio.
    */
   platform String @default("instagram")
@@ -1189,4 +1191,37 @@ model AgendaBlock {
 
   @@index([unitId, dayLocal])
   @@map("agenda_blocks")
+}
+
+// ===========================================================================
+// SpineLeadLink — ponte entre o lead do Kommo e o lead da franquia.
+// ===========================================================================
+// Os dois sistemas têm cadastros independentes e nenhum conhece o id do outro.
+// Sem esta tabela não há como saber se um lead já foi enviado — e a API da
+// franquia não tem exclusão de lead, então cada duplicata é permanente e só
+// some na mão, na interface deles.
+//
+// O unique em (unitId, kommoLeadId) é a trava: reprocessar o mesmo webhook,
+// coisa que o Kommo faz em retry, não cria um segundo cadastro.
+// ===========================================================================
+model SpineLeadLink {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+
+  /**
+   * ID do lead no Kommo.
+   */
+  kommoLeadId Int @map("kommo_lead_id")
+  /**
+   * ID do lead criado na franquia.
+   */
+  spineIdLead Int @map("spine_id_lead")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, kommoLeadId])
+  @@index([unitId, createdAt(sort: Desc)])
+  @@map("spine_lead_links")
 }

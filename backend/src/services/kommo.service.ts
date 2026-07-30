@@ -487,6 +487,26 @@ export class KommoClient {
     return this.creds.subdomain;
   }
 
+  /**
+   * Telefone do contato. Mora no CONTATO e não no lead — sem isso, a
+   * sincronização com a franquia entrega um nome que ninguém consegue ligar.
+   */
+  async getContactPhone(contactId: number): Promise<string | null> {
+    try {
+      const { data } = await this.http.get<{
+        custom_fields_values?: Array<{
+          field_code?: string;
+          values?: Array<{ value?: string }>;
+        }>;
+      }>(`/contacts/${contactId}`);
+      const campo = data?.custom_fields_values?.find((f) => f.field_code === 'PHONE');
+      const v = campo?.values?.[0]?.value;
+      return typeof v === 'string' && v.trim() ? v.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
   async getLead(leadId: number): Promise<KommoLead> {
     try {
       const { data } = await this.http.get<KommoLead>(`/leads/${leadId}`, {

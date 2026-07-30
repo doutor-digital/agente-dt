@@ -32,6 +32,7 @@ import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.j
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate } from '../services/lead-memory.service.js';
+import { SpineSyncService } from '../services/spine-sync.service.js';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -862,6 +863,17 @@ export async function processAgent(args: {
         ...(reply ? [{ role: 'assistant' as const, content: reply }] : []),
       ],
     });
+
+    // PONTE COM A FRANQUIA — depois de responder, nunca antes.
+    // Roda a cada turno de propósito: o nome costuma aparecer no 2º ou 3º, e o
+    // service ignora sozinho quem ainda tem título automático. O unique no
+    // vínculo garante um cadastro só, então repetir é barato e não suja nada.
+    // Fire-and-forget: se a franquia cair, o paciente segue sendo atendido.
+    if (unit.spineEnabled && leadId > 0) {
+      void SpineSyncService.syncLeadToSpine(unit, leadId).catch((err) => {
+        logger.warn({ err: String(err), leadId, unit: unit.slug }, 'spine-sync: erro inesperado');
+      });
+    }
 
     logger.info({ traceId, leadId, ms: totalLatency, unit: unit.slug }, 'agente concluído');
   } catch (err) {

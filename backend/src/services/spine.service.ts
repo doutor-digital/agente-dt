@@ -446,6 +446,109 @@ export async function searchClients(
 }
 
 // ---------------------------------------------------------------------------
+// Criação de LEAD na franquia.
+// ---------------------------------------------------------------------------
+// O lead do Kommo e o lead da franquia são registros distintos. Este é o
+// caminho de ida: quem chega pelo WhatsApp entra também no CRM da franquia,
+// que é onde a clínica opera.
+//
+// FORMATO APRENDIDO DOS LEADS QUE JÁ EXISTEM, não da doc:
+//   idCategory 3   — é o que todos os leads da unidade usam ("CONTATO")
+//   whatsapp       — "+5599991665121", com +55
+//   addressCity/Uf — "IMPERATRIZ" / "MA", em caixa alta
+//   description    — texto livre; usamos a queixa
+//
+// A doc chama o campo de `idLeadsCategory`; os registros devolvem `idCategory`.
+// Mandamos os DOIS, porque descobrir qual é o certo custaria mais uma rodada
+// de tentativa e erro contra a produção de um cliente.
+
+/** Categoria "CONTATO" — a única em uso nos leads da unidade. */
+export const SPINE_LEAD_CATEGORY_CONTATO = 3;
+
+/**
+ * De onde o lead veio, traduzido do vocabulário do Kommo para os ids da
+ * franquia. Sem isso todo lead cairia numa origem só e o relatório de origem
+ * da clínica — que é como ela decide onde investir — ficaria cego.
+ */
+const MAPA_ORIGEM: Record<string, number> = {
+  'meta-instagram': 23,
+  'org-instagram': 23,
+  instagram: 23,
+  'meta-facebook': 22,
+  'org-facebook': 22,
+  facebook: 22,
+  'org-whatsapp': 20,
+  whatsapp: 20,
+  'site oficial - franquia': 7,
+  site: 7,
+  indicação: 3,
+  indicacao: 3,
+  google: 1,
+  tiktok: 10000,
+  'tik tok': 10000,
+};
+
+export function resolverIdSource(origemKommo: string | null | undefined, padrao: number): number {
+  if (!origemKommo) return padrao;
+  const chave = origemKommo.trim().toLowerCase();
+  return MAPA_ORIGEM[chave] ?? padrao;
+}
+
+export interface SpineCreateLead {
+  name: string;
+  /** "+55DDNNNNNNNNN" */
+  whatsapp?: string | null;
+  email?: string | null;
+  description: string;
+  idSource: number;
+  addressCity?: string | null;
+  addressUf?: string | null;
+}
+
+export async function createLead(
+  unit: SpineUnit,
+  input: SpineCreateLead,
+): Promise<SpineResult<{ idLead?: number }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+
+  const corpo: Record<string, unknown> = {
+    name: input.name.trim().slice(0, 255),
+    description: (input.description || '').trim().slice(0, 1000) || '-',
+    idSource: input.idSource,
+    idLeadsCategory: SPINE_LEAD_CATEGORY_CONTATO,
+    idCategory: SPINE_LEAD_CATEGORY_CONTATO,
+  };
+  if (input.whatsapp) corpo.whatsapp = normalizarWhatsapp(input.whatsapp);
+  if (input.email) corpo.email = input.email.trim().slice(0, 255);
+  if (input.addressCity) corpo.addressCity = input.addressCity.trim().toUpperCase().slice(0, 100);
+  if (input.addressUf) corpo.addressUf = input.addressUf.trim().toUpperCase().slice(0, 2);
+
+  try {
+    const { data } = await http.post<{ idLead?: number; data?: { idLead?: number } }>(
+      '/api/leads',
+      corpo,
+    );
+    return { ok: true, data: { idLead: data?.data?.idLead ?? data?.idLead } };
+  } catch (err) {
+    const d = describe(err);
+    logger.warn({ erro: d.error, nome: input.name }, 'spine: falha ao criar lead');
+    return { ok: false, ...d };
+  }
+}
+
+/** A franquia guarda "+5599991665121". O Kommo entrega em vários formatos. */
+export function normalizarWhatsapp(bruto: string): string {
+  const digitos = bruto.replace(/\D/g, '');
+  if (digitos.length === 0) return '';
+  // Já veio com DDI do Brasil.
+  if (digitos.startsWith('55') && digitos.length >= 12) return `+${digitos}`;
+  // 10 ou 11 dígitos = DDD + número, sem país.
+  if (digitos.length === 10 || digitos.length === 11) return `+55${digitos}`;
+  return `+${digitos}`;
+}
+
+// ---------------------------------------------------------------------------
 // Teste de credencial.
 // ---------------------------------------------------------------------------
 // A doc sugere validar em /api/clients/search — é o endpoint mais barato que
@@ -465,6 +568,9 @@ export async function ping(unit: SpineUnit): Promise<SpineResult<{ total: number
 }
 
 export const SpineService = {
+  createLead,
+  resolverIdSource,
+  normalizarWhatsapp,
   searchClients,
   instanteNoFuso,
   localParaUtcIso,
