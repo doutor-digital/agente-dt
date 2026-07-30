@@ -1240,6 +1240,17 @@ model SpineLeadLink {
   /// Paciente criado na franquia a partir deste lead (idClient lá).
   spineIdClient Int? @map("spine_id_client")
   /**
+   * A consulta ATUAL deste lead na franquia. Um lead tem no máximo uma —
+   * remarcar troca este valor, cancelar zera.
+   *
+   * Guardar o id é o que torna cancelar e remarcar precisos. A busca da
+   * franquia devolve `clientName` e não `idClient`, então sem isto só restaria
+   * casar por nome — e cancelar a consulta do homônimo errado não tem desfazer.
+   */
+  spineIdSchedule Int?    @map("spine_id_schedule")
+  /// "AAAA-MM-DDTHH:mm" no fuso da clínica — pra dizer ao paciente qual é.
+  agendadoPara    String? @map("agendado_para")
+  /**
    * O nome que foi (ou seria) enviado. Desnormalizado de propósito: sem ele o
    * histórico e a tela de paciente viram lista de números, e ninguém confere
    * um cadastro permanente olhando "13012964 -> 5916621".

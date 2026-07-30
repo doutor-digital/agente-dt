@@ -622,6 +622,30 @@ export async function createClient(
   }
 }
 
+/**
+ * Cancela um agendamento. Diferente de lead e paciente, agendamento TEM
+ * exclusão pela API (status DELETED) — é a única escrita nossa na franquia que
+ * dá pra desfazer, e é o que torna remarcar possível.
+ */
+export async function cancelSchedule(
+  unit: SpineUnit,
+  idSchedule: number,
+): Promise<SpineResult<{ idSchedule?: number }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  try {
+    const { data } = await http.delete<{ idSchedule?: number; data?: { idSchedule?: number } }>(
+      '/api/schedules',
+      { data: { idSchedule } },
+    );
+    return { ok: true, data: { idSchedule: data?.data?.idSchedule ?? data?.idSchedule } };
+  } catch (err) {
+    const d = describe(err);
+    logger.warn({ erro: d.error, idSchedule }, 'spine: falha ao cancelar agendamento');
+    return { ok: false, ...d };
+  }
+}
+
 /** A franquia guarda "+5599991665121". O Kommo entrega em vários formatos. */
 export function normalizarWhatsapp(bruto: string): string {
   const digitos = bruto.replace(/\D/g, '');
@@ -747,6 +771,7 @@ export const SpineService = {
   localParaUtcIso,
   searchSchedules,
   createSchedule,
+  cancelSchedule,
   ping,
   SPINE_STATUS,
 };

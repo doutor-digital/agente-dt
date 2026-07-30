@@ -270,6 +270,135 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
 }
 
 // ---------------------------------------------------------------------------
+// cancelar_consulta e remarcar_consulta
+//
+// A CONFIRMAÇÃO MORA NA TOOL, não no prompt.
+//
+// Cancelar é destrutivo do ponto de vista do paciente: ele perde a vaga e
+// alguém pode pegá-la em seguida. Uma instrução no prompt ("pergunte antes")
+// depende de o modelo lembrar no meio de uma conversa longa. Aqui a tool
+// simplesmente RECUSA sem `confirmado: true` e devolve a pergunta pronta — o
+// caminho errado deixa de existir em vez de ficar desaconselhado.
+//
+// Um lead tem no máximo UMA consulta. Por isso agendar recusa quem já tem, e
+// remarcar existe: ele MARCA A NOVA PRIMEIRO e só então cancela a antiga. Na
+// ordem inversa, uma falha no meio deixaria o paciente sem consulta nenhuma —
+// e a vaga antiga já teria sido devolvida pra fila.
+// ---------------------------------------------------------------------------
+
+async function consultaAtual(unitId: string, leadId: number | undefined) {
+  if (!leadId) return null;
+  const l = await prisma.spineLeadLink.findFirst({
+    where: { unitId, kommoLeadId: leadId },
+  });
+  return l?.spineIdSchedule ? { idSchedule: l.spineIdSchedule, quando: l.agendadoPara } : null;
+}
+
+function porExtenso(quando: string | null | undefined): string {
+  if (!quando) return 'a consulta marcada';
+  const [dia, hora] = quando.split('T');
+  const [a, m, d] = dia.split('-');
+  return `${d}/${m}/${a} às ${hora}`;
+}
+
+export function buildCancelarConsulta({ unit, recorder }: Contexto) {
+  return new DynamicStructuredTool({
+    name: 'cancelar_consulta',
+    description:
+      'Cancela a consulta do paciente na clínica. Chame PRIMEIRO sem confirmado ' +
+      '(ou confirmado=false) para receber a pergunta de confirmação e fazê-la ao ' +
+      'paciente. Só chame com confirmado=true depois de ele responder que sim.',
+    schema: z.object({
+      leadId: z.number().int().positive().describe('Lead do Kommo desta conversa.'),
+      confirmado: z
+        .boolean()
+        .optional()
+        .describe('true SOMENTE depois de o paciente confirmar que quer cancelar.'),
+    }),
+    func: async (args: { leadId: number; confirmado?: boolean }) => {
+      const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      const atual = await consultaAtual(fresca.id, args.leadId);
+      if (!atual) return 'Este paciente não tem consulta marcada por aqui. Não há o que cancelar.';
+
+      if (!args.confirmado) {
+        return (
+          'AINDA NÃO CANCELEI. Pergunte ao paciente, com estas palavras: ' +
+          `"Você tem certeza que deseja cancelar seu agendamento de ${porExtenso(atual.quando)}? ` +
+          'Se cancelar, a vaga volta para a fila e pode ser ocupada por outra pessoa. ' +
+          'Me confirma: cancelar ou manter?" ' +
+          'Só chame de novo com confirmado=true se ele responder que quer MESMO cancelar. ' +
+          'Se ele quiser outro dia ou horário, use remarcar_consulta em vez de cancelar.'
+        );
+      }
+
+      const r = await SpineService.cancelSchedule(fresca, atual.idSchedule);
+      await recorder.step({
+        kind: r.ok ? 'TOOL_RESULT' : 'ERROR',
+        title: `cancelar_consulta ${atual.idSchedule}: ${r.ok ? 'cancelada' : r.error}`,
+        payload: { leadId: args.leadId, idSchedule: atual.idSchedule, quando: atual.quando },
+      });
+      if (!r.ok) {
+        return `Não consegui cancelar (${r.error}). NÃO diga que foi cancelado — avise que a equipe confirma.`;
+      }
+
+      await prisma.spineLeadLink
+        .updateMany({
+          where: { unitId: fresca.id, kommoLeadId: args.leadId },
+          data: { spineIdSchedule: null, agendadoPara: null },
+        })
+        .catch(() => undefined);
+
+      return `Consulta de ${porExtenso(atual.quando)} cancelada. Confirme ao paciente e pergunte se ele quer remarcar para outro dia.`;
+    },
+  });
+}
+
+export function buildRemarcarConsulta(ctx: Contexto) {
+  const { unit, recorder } = ctx;
+  const agendar = buildAgendarConsulta(ctx);
+  return new DynamicStructuredTool({
+    name: 'remarcar_consulta',
+    description:
+      'Troca a consulta do paciente para outro dia/horário. Use quando ele já tem ' +
+      'consulta marcada e quer mudar — NÃO cancele e agende separadamente. ' +
+      'Consulte os horários antes e use um da lista.',
+    schema: z.object({
+      leadId: z.number().int().positive(),
+      idClient: z.number().int().positive().describe('idClient do paciente.'),
+      data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Nova data AAAA-MM-DD.'),
+      hora: z.string().regex(/^\d{2}:\d{2}$/).describe('Novo horário HH:mm.'),
+    }),
+    func: async (args: { leadId: number; idClient: number; data: string; hora: string }) => {
+      const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      const atual = await consultaAtual(fresca.id, args.leadId);
+
+      // MARCA A NOVA PRIMEIRO. Se cancelasse antes e a nova falhasse, o
+      // paciente ficaria sem consulta e a vaga antiga já teria ido embora.
+      const nova = await (agendar as unknown as { func: (a: unknown) => Promise<string> }).func({
+        leadId: args.leadId,
+        idClient: args.idClient,
+        data: args.data,
+        hora: args.hora,
+        remarcando: true,
+      });
+      if (!/marcada/i.test(nova)) {
+        return `A consulta antiga CONTINUA valendo — não consegui marcar a nova. ${nova}`;
+      }
+
+      if (atual) {
+        const c = await SpineService.cancelSchedule(fresca, atual.idSchedule);
+        await recorder.step({
+          kind: c.ok ? 'TOOL_RESULT' : 'ERROR',
+          title: `remarcar: antiga ${atual.idSchedule} ${c.ok ? 'cancelada' : 'NÃO cancelada'}`,
+          payload: { leadId: args.leadId, antiga: atual.idSchedule, nova: `${args.data} ${args.hora}` },
+        });
+      }
+      return `Remarcada de ${porExtenso(atual?.quando)} para ${porExtenso(`${args.data}T${args.hora}`)}. ${nova}`;
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // agendar_consulta
 // ---------------------------------------------------------------------------
 
@@ -283,6 +412,10 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       'própria: explique ao paciente e ofereça consultar de novo.',
     schema: z.object({
       idClient: z.number().int().positive().describe('idClient do paciente (de buscar_paciente).'),
+      remarcando: z
+        .boolean()
+        .optional()
+        .describe('Uso interno de remarcar_consulta. NÃO use — para trocar de horário chame remarcar_consulta.'),
       data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Data AAAA-MM-DD.'),
       hora: z.string().regex(/^\d{2}:\d{2}$/).describe('Hora HH:mm do fuso da clínica.'),
       idCategory: z
@@ -300,6 +433,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
     }),
     func: async (args: {
       idClient: number;
+      remarcando?: boolean;
       data: string;
       hora: string;
       idCategory?: number;
@@ -347,6 +481,22 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
 
+      // UMA CONSULTA POR LEAD. Sem isto, o paciente que pede outro horário
+      // acaba com duas vagas ocupadas — e a clínica descobre no dia. Remarcar
+      // passa por aqui de propósito, com a flag, porque ele já cancela a
+      // antiga logo depois.
+      if (!args.remarcando) {
+        const ja = await consultaAtual(fresca.id, args.leadId);
+        if (ja) {
+          return (
+            `RECUSADO: este paciente já tem consulta em ${porExtenso(ja.quando)}. ` +
+            'Um paciente só pode ter uma. Se ele quer OUTRO dia ou horário, chame ' +
+            'remarcar_consulta; se quer desmarcar, chame cancelar_consulta. ' +
+            'NÃO marque uma segunda.'
+          );
+        }
+      }
+
       const r = await SpineService.createSchedule(fresca, {
         idClient: args.idClient,
         dateAttendanceLocal: `${args.data}T${args.hora}:00`,
@@ -387,6 +537,21 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         payload: { ...args, idSchedule: r.data?.idSchedule, especialista },
       });
 
+      // Guarda QUAL é a consulta deste lead. É o que permite depois cancelar
+      // e remarcar sem casar por nome — a busca da franquia não devolve
+      // idClient, e cancelar a consulta de um homônimo não tem desfazer.
+      if (args.leadId) {
+        await prisma.spineLeadLink
+          .updateMany({
+            where: { unitId: fresca.id, kommoLeadId: args.leadId },
+            data: {
+              spineIdSchedule: r.data?.idSchedule ?? null,
+              agendadoPara: `${args.data}T${args.hora}`,
+            },
+          })
+          .catch(() => undefined);
+      }
+
       // Carimba o CRM no MESMO passo. Fire-and-forget porque falhar aqui não
       // desfaz o agendamento — a consulta está marcada na franquia, e voltar
       // erro faria a I.A. dizer ao paciente que não marcou, o que seria falso.
@@ -426,5 +591,7 @@ export function buildAgendaTools(ctx: Contexto): DynamicStructuredTool[] {
     buildBuscarPaciente(ctx),
     buildCadastrarPaciente(ctx),
     buildAgendarConsulta(ctx),
+    buildRemarcarConsulta(ctx),
+    buildCancelarConsulta(ctx),
   ] as unknown as DynamicStructuredTool[];
 }
