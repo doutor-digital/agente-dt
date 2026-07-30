@@ -1153,3 +1153,29 @@ export interface SpineLeadLinksResponse {
   contagem: { ok: number; falhou: number; ignorado: number };
   conferencia: SpineConferencia;
 }
+
+/** Prévia do cadastro que iria para a franquia — nada é escrito ao pedir isto. */
+export interface SpineLeadPreview {
+  ok: boolean;
+  /** Onde travou: conexao | desligado | ja-enviado | kommo | nome | pronto. */
+  etapa?: string;
+  motivo?: string;
+  tituloKommo?: string;
+  spineIdLead?: number;
+  origemLegivel?: string | null;
+  payload?: {
+    name: string;
+    whatsapp: string | null;
+    description: string;
+    idSource: number;
+    addressCity: string | null;
+    addressUf: string | null;
+  };
+}
+
+/** Estado de cada peça da integração, conferido contra a franquia. */
+export interface SpineProntidao {
+  pecas: { id: string; titulo: string; ok: boolean; detalhe: string; comoResolver?: string }[];
+  prontas: number;
+  total: number;
+}

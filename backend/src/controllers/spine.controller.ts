@@ -382,6 +382,106 @@ export async function syncLeadHandler(req: Request, res: Response): Promise<void
 
 
 /**
+ * PRÉVIA — mostra o cadastro que sairia, sem enviar nada.
+ *
+ * A franquia não apaga lead: cada engano vira chamado no suporte deles e
+ * limpeza manual. Revisar antes é a única defesa barata que existe.
+ */
+export async function previewLeadHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  const kommoLeadId = Number(req.body?.kommoLeadId ?? req.query?.kommoLeadId);
+  if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
+    res.status(400).json({ error: 'kommoLeadId_obrigatorio' });
+    return;
+  }
+  const preparo = await SpineSyncService.prepararLead(unit, kommoLeadId);
+  res.json({
+    ...preparo,
+    // Pra tela traduzir o número em nome sem ter a tabela.
+    origemLegivel: preparo.payload ? SpineService.nomeDaOrigem(preparo.payload.idSource) : null,
+  });
+}
+
+/**
+ * PRONTIDÃO — cada peça do encaixe, e o que falta pra próxima.
+ *
+ * Existe porque "está funcionando?" tem seis respostas possíveis e nenhuma
+ * delas cabe num booleano. Sem isto, descobrir qual peça faltou exige o dev.
+ */
+export async function prontidaoHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+
+  const pecas: { id: string; titulo: string; ok: boolean; detalhe: string; comoResolver?: string }[] = [];
+
+  pecas.push({
+    id: 'token',
+    titulo: 'Token da franquia',
+    ok: Boolean(unit.spineToken),
+    detalhe: unit.spineToken ? 'Guardado no servidor.' : 'Nenhum token salvo.',
+    comoResolver: 'Peça ao suporte da franquia e cole em Conexão.',
+  });
+
+  // Só chama a franquia se houver token — sem ele o 401 não informa nada.
+  let apiOk = false;
+  let apiDetalhe = 'Não testado — falta o token.';
+  if (unit.spineToken) {
+    const ping = await SpineService.ping(unit);
+    apiOk = ping.ok;
+    apiDetalhe = ping.ok ? 'A API respondeu com o token atual.' : (ping.error ?? 'sem resposta');
+  }
+  pecas.push({
+    id: 'api',
+    titulo: 'A API responde',
+    ok: apiOk,
+    detalhe: apiDetalhe,
+    comoResolver: 'Token vencido ou ambiente errado — confira em Conexão.',
+  });
+
+  pecas.push({
+    id: 'agenda',
+    titulo: 'Agenda ligada',
+    ok: unit.spineEnabled,
+    detalhe: unit.spineEnabled
+      ? `A IA consulta horários e agenda (${unit.spineAgendaStart}–${unit.spineAgendaEnd}, ${unit.spineTimezone}).`
+      : 'A IA não consulta nem cria agendamento.',
+    comoResolver: 'Ligue em Conexão com a franquia.',
+  });
+
+  pecas.push({
+    id: 'espelhamento',
+    titulo: 'Espelhar leads no CRM',
+    ok: unit.spineSyncLeads,
+    detalhe: unit.spineSyncLeads
+      ? 'Lead novo do Kommo é cadastrado na franquia.'
+      : 'Desligado — nenhum lead é enviado.',
+    comoResolver: 'Ligue em Espelhar leads. Escrita é permanente: a franquia não apaga lead.',
+  });
+
+  const semNome = await prisma.spineLeadLink.count({ where: { unitId: unit.id, status: 'ignorado' } });
+  const falhas = await prisma.spineLeadLink.count({ where: { unitId: unit.id, status: 'falhou' } });
+  pecas.push({
+    id: 'fila',
+    titulo: 'Nada travado',
+    ok: falhas === 0,
+    detalhe:
+      falhas === 0
+        ? `Sem falhas.${semNome > 0 ? ` ${semNome} aguardando o nome (normal).` : ''}`
+        : `${falhas} lead(s) falharam no envio.`,
+    comoResolver: 'Veja o motivo na lista abaixo — cada linha traz o erro da franquia.',
+  });
+
+  res.json({ pecas, prontas: pecas.filter((p) => p.ok).length, total: pecas.length });
+}
+
+/**
  * Estado do espelhamento + CONFERÊNCIA CONTRA A FRANQUIA.
  *
  * Contar o que a gente acha que enviou não prova nada: se a API deles mudar,

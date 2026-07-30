@@ -85,25 +85,50 @@ async function registrar(
   }
 }
 
-export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<ResultadoSync> {
+/** O cadastro exato que iria pra franquia — nada além disto é enviado. */
+export interface PayloadDoLead {
+  name: string;
+  whatsapp: string | null;
+  description: string;
+  idSource: number;
+  addressCity: string | null;
+  addressUf: string | null;
+}
+
+export interface Preparo {
+  ok: boolean;
+  motivo?: string;
+  /** Onde a decisão travou: útil pra tela dizer O QUE consertar. */
+  etapa?: 'conexao' | 'desligado' | 'ja-enviado' | 'kommo' | 'nome' | 'pronto';
+  payload?: PayloadDoLead;
+  tituloKommo?: string;
+  spineIdLead?: number;
+}
+
+/**
+ * Monta o cadastro sem enviar nada.
+ *
+ * Separado do envio de propósito: a API da franquia não tem exclusão de lead
+ * (testado: 404 nas duas formas). Cada erro nosso vira chamado no suporte
+ * deles. Poder OLHAR o que sairia, antes de sair, é a diferença entre revisar
+ * e descobrir depois.
+ */
+export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Preparo> {
   if (!unit.spineEnabled || !unit.spineToken) {
-    return { ok: false, motivo: 'franquia não conectada nesta unidade' };
-  }
-  if (!unit.spineSyncLeads) {
-    return { ok: false, motivo: 'espelhamento de leads desligado nesta unidade' };
+    return { ok: false, etapa: 'conexao', motivo: 'franquia não conectada nesta unidade' };
   }
   if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
-    return { ok: false, motivo: 'leadId inválido' };
+    return { ok: false, etapa: 'kommo', motivo: 'leadId inválido' };
   }
 
   const jaTem = await prisma.spineLeadLink.findUnique({
     where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
   });
-  // Só para se JÁ FOI CRIADO. Uma tentativa anterior que falhou ou foi
-  // ignorada (lead sem nome) tem que ser retentada — é assim que o lead entra
-  // assim que a IA descobre o nome, sem ninguém precisar reprocessar nada.
+  // Só bloqueia se JÁ FOI CRIADO. Uma tentativa que falhou, ou que foi ignorada
+  // por falta de nome, tem que ser retentada — é assim que o lead entra sozinho
+  // no turno em que a IA descobre o nome, sem ninguém reprocessar nada.
   if (jaTem?.status === 'ok' && jaTem.spineIdLead) {
-    return { ok: true, spineIdLead: jaTem.spineIdLead, jaExistia: true };
+    return { ok: false, etapa: 'ja-enviado', spineIdLead: jaTem.spineIdLead };
   }
 
   const kommo = createKommoClient(unit);
@@ -111,18 +136,13 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
   try {
     lead = await kommo.getLead(kommoLeadId);
   } catch (err) {
-    const motivo = `não consegui ler o lead no Kommo: ${String(err)}`;
-    await registrar(unit.id, kommoLeadId, 'falhou', motivo, null);
-    return { ok: false, motivo };
+    return { ok: false, etapa: 'kommo', motivo: `não consegui ler o lead no Kommo: ${String(err)}` };
   }
 
   const titulo = lead.name ?? '';
   if (pareceNomeAutomatico(titulo)) {
-    const motivo = `aguardando nome ("${titulo}")`;
-    await registrar(unit.id, kommoLeadId, 'ignorado', motivo, null);
-    return { ok: false, motivo };
+    return { ok: false, etapa: 'nome', tituloKommo: titulo, motivo: `aguardando nome ("${titulo}")` };
   }
-  const nome = limparNome(titulo);
 
   const valor = (fieldId: number): string | null => {
     const f = lead.custom_fields_values?.find((x) => x.field_id === fieldId);
@@ -142,23 +162,48 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
     }
   }
 
-  const idSource = SpineService.resolverIdSource(valor(CAMPO_ORIGEM), unit.spineDefaultSourceId);
-  const queixa = valor(CAMPO_QUEIXA);
+  return {
+    ok: true,
+    etapa: 'pronto',
+    tituloKommo: titulo,
+    payload: {
+      name: limparNome(titulo),
+      whatsapp,
+      description: valor(CAMPO_QUEIXA) ?? 'Lead vindo do atendimento por WhatsApp.',
+      idSource: SpineService.resolverIdSource(valor(CAMPO_ORIGEM), unit.spineDefaultSourceId),
+      addressCity: valor(CAMPO_CIDADE),
+      addressUf: valor(CAMPO_ESTADO),
+    },
+  };
+}
 
-  const r = await SpineService.createLead(unit, {
-    name: nome,
-    whatsapp,
-    description: queixa ?? 'Lead vindo do atendimento por WhatsApp.',
-    idSource,
-    addressCity: valor(CAMPO_CIDADE),
-    addressUf: valor(CAMPO_ESTADO),
-  });
+export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<ResultadoSync> {
+  if (!unit.spineSyncLeads) {
+    return { ok: false, motivo: 'espelhamento de leads desligado nesta unidade' };
+  }
+
+  const preparo = await prepararLead(unit, kommoLeadId);
+  if (preparo.etapa === 'ja-enviado') {
+    return { ok: true, spineIdLead: preparo.spineIdLead, jaExistia: true };
+  }
+  if (!preparo.ok || !preparo.payload) {
+    const motivo = preparo.motivo ?? 'não deu pra montar o cadastro';
+    // "Sem conexão" não é estado do lead — não suja o histórico dele.
+    if (preparo.etapa === 'nome') {
+      await registrar(unit.id, kommoLeadId, 'ignorado', motivo, null);
+    } else if (preparo.etapa === 'kommo') {
+      await registrar(unit.id, kommoLeadId, 'falhou', motivo, null);
+    }
+    return { ok: false, motivo };
+  }
+
+  const r = await SpineService.createLead(unit, preparo.payload);
 
   if (!r.ok || !r.data?.idLead) {
     const motivo = r.error ?? 'a franquia não devolveu idLead';
     await registrar(unit.id, kommoLeadId, 'falhou', motivo, null);
     logger.warn(
-      { kommoLeadId, nome, erro: motivo, unit: unit.slug },
+      { kommoLeadId, nome: preparo.payload.name, erro: motivo, unit: unit.slug },
       'spine-sync: falha ao criar lead na franquia',
     );
     return { ok: false, motivo };
@@ -167,10 +212,16 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
   await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead);
 
   logger.info(
-    { kommoLeadId, spineIdLead: r.data.idLead, nome, idSource, unit: unit.slug },
+    {
+      kommoLeadId,
+      spineIdLead: r.data.idLead,
+      nome: preparo.payload.name,
+      idSource: preparo.payload.idSource,
+      unit: unit.slug,
+    },
     'spine-sync: lead enviado para a franquia',
   );
   return { ok: true, spineIdLead: r.data.idLead };
 }
 
-export const SpineSyncService = { syncLeadToSpine, pareceNomeAutomatico, limparNome };
+export const SpineSyncService = { syncLeadToSpine, prepararLead, pareceNomeAutomatico, limparNome };

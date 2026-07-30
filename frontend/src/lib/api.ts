@@ -57,6 +57,8 @@ import type {
   SpineSchedulesResponse,
   AgendaBlock,
   SpineLeadLinksResponse,
+  SpineLeadPreview,
+  SpineProntidao,
 } from '../types/api';
 
 // Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
@@ -256,6 +258,19 @@ export const api = {
     const { data } = await http.post<{ ok: boolean; error?: string }>(
       `/units/${unitId}/spine/ping`,
     );
+    return data;
+  },
+  /** Monta o cadastro do lead e devolve — NÃO escreve nada na franquia. */
+  async spineLeadPreview(unitId: string, kommoLeadId: number): Promise<SpineLeadPreview> {
+    const { data } = await http.post<SpineLeadPreview>(
+      `/units/${unitId}/spine/lead-preview`,
+      { kommoLeadId },
+    );
+    return data;
+  },
+  /** Cada peça do encaixe, verificada contra a franquia agora. */
+  async spineProntidao(unitId: string): Promise<SpineProntidao> {
+    const { data } = await http.get<SpineProntidao>(`/units/${unitId}/spine/prontidao`);
     return data;
   },
   async spineLeadLinks(unitId: string): Promise<SpineLeadLinksResponse> {

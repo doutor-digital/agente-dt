@@ -27,7 +27,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { FaFacebookF, FaInstagram } from 'react-icons/fa6';
-import { PiCalendarBlankBold } from 'react-icons/pi';
+import { PiCalendarBlankBold, PiPlugsConnectedBold } from 'react-icons/pi';
 import type { ComponentType } from 'react';
 
 /**
@@ -67,7 +67,8 @@ export type AppTab =
   | 'whatsapp'
   | 'instagram'
   | 'facebook'
-  | 'agenda';
+  | 'agenda'
+  | 'crm-franquia';
 
 /** Grupos da sidebar, na ordem em que aparecem. */
 export type NavSection = 'operacao' | 'agente' | 'analise' | 'plataforma';
@@ -156,6 +157,17 @@ export const NAV_ITEMS: NavItem[] = [
     icon: PiCalendarBlankBold,
     section: 'operacao',
     keywords: ['agendamento', 'spine', 'pausar', 'kill switch', 'recepcao', 'horarios'],
+  },
+  {
+    id: 'crm-franquia',
+    label: 'CRM da franquia',
+    hint: 'Conexão, horários da clínica e espelhamento de leads no CRM da franquia.',
+    icon: PiPlugsConnectedBold,
+    section: 'agente',
+    keywords: [
+      'spine', 'franquia', 'doutor hernia', 'token', 'integracao', 'crm',
+      'espelhar', 'leads', 'horario', 'almoco', 'fuso',
+    ],
   },
   {
     id: 'facebook',

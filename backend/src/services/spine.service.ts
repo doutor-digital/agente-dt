@@ -494,6 +494,20 @@ export function resolverIdSource(origemKommo: string | null | undefined, padrao:
   return MAPA_ORIGEM[chave] ?? padrao;
 }
 
+/** Volta do id para um rótulo legível — a prévia mostra "23" e "Instagram". */
+export function nomeDaOrigem(id: number): string {
+  const rotulos: Record<number, string> = {
+    1: 'Google',
+    3: 'Indicação',
+    7: 'Site oficial',
+    20: 'WhatsApp',
+    22: 'Facebook',
+    23: 'Instagram',
+    10000: 'TikTok',
+  };
+  return rotulos[id] ?? `origem #${id}`;
+}
+
 export interface SpineCreateLead {
   name: string;
   /** "+55DDNNNNNNNNN" */
@@ -618,6 +632,7 @@ export const SpineService = {
   createLead,
   searchLeads,
   resolverIdSource,
+  nomeDaOrigem,
   normalizarWhatsapp,
   searchClients,
   instanteNoFuso,
