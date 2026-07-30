@@ -562,6 +562,41 @@ export function normalizarWhatsapp(bruto: string): string {
   return `+${digitos}`;
 }
 
+/**
+ * Nome do estado -> sigla. O Kommo guarda "Maranhão", a franquia quer "MA".
+ *
+ * Cortar as duas primeiras letras parece resolver e resolve METADE: acerta
+ * Maranhão, Bahia e Goiás por coincidência, e erra Minas Gerais ("MI"),
+ * Paraná ("PA", que é Pará), Santa Catarina ("SA"), Mato Grosso ("MA", que é
+ * Maranhão) e Rio Grande do Sul ("RI"). Cada erro desses é um cadastro
+ * permanente no CRM da franquia, com o paciente no estado errado.
+ */
+const UF_POR_NOME: Record<string, string> = {
+  acre: 'AC', alagoas: 'AL', amapa: 'AP', amazonas: 'AM', bahia: 'BA',
+  ceara: 'CE', 'distrito federal': 'DF', 'espirito santo': 'ES', goias: 'GO',
+  maranhao: 'MA', 'mato grosso': 'MT', 'mato grosso do sul': 'MS',
+  'minas gerais': 'MG', para: 'PA', paraiba: 'PB', parana: 'PR',
+  pernambuco: 'PE', piaui: 'PI', 'rio de janeiro': 'RJ',
+  'rio grande do norte': 'RN', 'rio grande do sul': 'RS', rondonia: 'RO',
+  roraima: 'RR', 'santa catarina': 'SC', 'sao paulo': 'SP', sergipe: 'SE',
+  tocantins: 'TO',
+};
+
+const SIGLAS = new Set(Object.values(UF_POR_NOME));
+
+/** Devolve a sigla, ou null quando não dá pra ter certeza — melhor vazio que errado. */
+export function resolverUf(bruto: string | null | undefined): string | null {
+  if (!bruto) return null;
+  const t = bruto.trim();
+  if (t.length === 2 && SIGLAS.has(t.toUpperCase())) return t.toUpperCase();
+  const chave = t
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+  return UF_POR_NOME[chave] ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Busca de leads — usada pela conferência.
 // ---------------------------------------------------------------------------
@@ -633,6 +668,7 @@ export const SpineService = {
   searchLeads,
   resolverIdSource,
   nomeDaOrigem,
+  resolverUf,
   normalizarWhatsapp,
   searchClients,
   instanteNoFuso,

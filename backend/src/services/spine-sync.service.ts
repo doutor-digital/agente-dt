@@ -210,13 +210,18 @@ export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Pre
     }
   }
 
+  // NORMALIZA AQUI, não na hora de mandar. A prévia só serve pra alguma coisa
+  // se mostrar o que REALMENTE sai — e o Kommo devolve o telefone com um
+  // apóstrofo na frente ("'+5563…") e o estado por extenso ("Maranhão").
+  // Formatar só no envio faria a tela exibir um valor e a franquia receber
+  // outro, que é o defeito que a prévia existe pra impedir.
   return {
     ok: true,
     etapa: 'pronto',
     tituloKommo: titulo,
     payload: {
       name: limparNome(titulo),
-      whatsapp,
+      whatsapp: whatsapp ? SpineService.normalizarWhatsapp(whatsapp) || null : null,
       description: valor(CAMPO_QUEIXA) ?? 'Lead vindo do atendimento por WhatsApp.',
       // A origem manda no relatório de onde a clínica investe. Quando o campo
       // do Kommo está vazio, o próprio título costuma dizer o canal ("... Insta")
@@ -226,8 +231,11 @@ export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Pre
         valor(CAMPO_ORIGEM) ?? canalNoTitulo(titulo),
         unit.spineDefaultSourceId,
       ),
-      addressCity: valor(CAMPO_CIDADE),
-      addressUf: valor(CAMPO_ESTADO),
+      addressCity: valor(CAMPO_CIDADE)?.toUpperCase() ?? null,
+      // "Maranhão" -> "MA". Devolve null quando não reconhece: campo vazio a
+      // recepção completa; sigla errada vira paciente no estado errado, e lá
+      // não se apaga cadastro.
+      addressUf: SpineService.resolverUf(valor(CAMPO_ESTADO)),
     },
   };
 }
