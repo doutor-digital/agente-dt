@@ -120,12 +120,21 @@ async function registrar(
   status: 'ok' | 'falhou' | 'ignorado',
   motivo: string | null,
   spineIdLead: number | null,
+  nome: string | null = null,
 ): Promise<void> {
   try {
     await prisma.spineLeadLink.upsert({
       where: { unitId_kommoLeadId: { unitId, kommoLeadId } },
-      create: { unitId, kommoLeadId, status, motivo, spineIdLead },
-      update: { status, motivo, spineIdLead, tentativas: { increment: 1 } },
+      create: { unitId, kommoLeadId, status, motivo, spineIdLead, nome },
+      update: {
+        status,
+        motivo,
+        spineIdLead,
+        tentativas: { increment: 1 },
+        // Só sobrescreve quando temos nome: um turno que falhou por rede não
+        // pode apagar o nome que um turno anterior já tinha descoberto.
+        ...(nome ? { nome } : {}),
+      },
     });
   } catch (err) {
     logger.warn({ err: String(err), kommoLeadId }, 'spine-sync: não consegui registrar o estado');
@@ -400,7 +409,7 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
     const motivo = preparo.motivo ?? 'não deu pra montar o cadastro';
     // "Sem conexão" não é estado do lead — não suja o histórico dele.
     if (preparo.etapa === 'nome') {
-      await registrar(unit.id, kommoLeadId, 'ignorado', motivo, null);
+      await registrar(unit.id, kommoLeadId, 'ignorado', motivo, null, null);
     } else if (preparo.etapa === 'kommo') {
       await registrar(unit.id, kommoLeadId, 'falhou', motivo, null);
     }
@@ -411,7 +420,7 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
 
   if (!r.ok || !r.data?.idLead) {
     const motivo = r.error ?? 'a franquia não devolveu idLead';
-    await registrar(unit.id, kommoLeadId, 'falhou', motivo, null);
+    await registrar(unit.id, kommoLeadId, 'falhou', motivo, null, preparo.payload.name);
     logger.warn(
       { kommoLeadId, nome: preparo.payload.name, erro: motivo, unit: unit.slug },
       'spine-sync: falha ao criar lead na franquia',
@@ -419,7 +428,7 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
     return { ok: false, motivo };
   }
 
-  await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead);
+  await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead, preparo.payload.name);
 
   // O paciente é o passo seguinte, não parte deste. Se falhar, o lead já está
   // lá e a recepção consegue cadastrar à mão pelo botão da tela deles — o

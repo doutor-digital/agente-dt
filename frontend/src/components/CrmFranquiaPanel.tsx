@@ -1238,7 +1238,7 @@ function PacienteNaFranquia({
   // Só leads que JÁ estão na franquia podem virar paciente — os outros nem
   // aparecem, em vez de aparecerem e recusarem depois do clique.
   const candidatos = (hist?.links ?? []).filter((l) => l.spineIdLead && !l.spineIdClient);
-  const jaPacientes = (hist?.links ?? []).filter((l) => l.spineIdClient).length;
+  const jaPacientes = (hist?.links ?? []).filter((l) => l.spineIdClient);
 
   async function ver(id: number) {
     setCarregando(true);
@@ -1261,7 +1261,7 @@ function PacienteNaFranquia({
     try {
       const res = await api.spineSyncPatient(unitId, Number(leadId));
       if (res.ok) {
-        setFeito(`Paciente cadastrado com o id ${res.spineIdClient}.`);
+        setFeito(`Cadastrado como paciente ${res.spineIdClient}.`);
         setR(null);
         await onEnviado();
       } else {
@@ -1276,118 +1276,161 @@ function PacienteNaFranquia({
   }
 
   const bloqueio = r && !r.ok && r.etapa ? MOTIVO_PACIENTE[r.etapa] : null;
+  const selecionado = candidatos.find((l) => String(l.kommoLeadId) === leadId);
 
   return (
-    <section className="surface p-7">
-      <h2 className="text-sm font-semibold text-zinc-100">Cadastro de paciente</h2>
-      <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
-        O mesmo botão &quot;Cadastrar Paciente&quot; que existe dentro do lead no sistema da clínica.
-        A franquia pede três campos, e a Sofia preenche os três.
-      </p>
-
-      {/* A CHAMADA LITERAL. Quem confere algo que não dá pra apagar merece ver
-          o endereço exato, não uma descrição dele. */}
-      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3.5 font-mono text-[11px]">
-        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-400">
-          POST
-        </span>
-        <span className="text-zinc-300">{r?.requisicao?.rota ?? '/api/clients'}</span>
-        <span className="text-zinc-600">
-          {r?.requisicao?.base ?? 'https://app-api-prod.doutorhernia.com.br'}
-        </span>
-        <span className="ml-auto font-sans text-zinc-500">
-          obrigatórios: <span className="text-zinc-300">nome, origem, telefone</span>
-        </span>
-      </div>
-
-      {candidatos.length > 0 ? (
-        <>
-          <p className="mt-5 text-xs font-medium text-zinc-300">
-            Leads que já estão na franquia e ainda não são pacientes
-          </p>
-          <ul className="mt-2 space-y-1.5">
-            {candidatos.slice(0, 10).map((l) => (
-              <li key={l.kommoLeadId}>
-                <button
-                  type="button"
-                  onClick={() => void ver(l.kommoLeadId)}
-                  className={`flex w-full flex-wrap items-center gap-2.5 rounded-lg border p-3 text-left text-xs transition-colors ${
-                    leadId === String(l.kommoLeadId)
-                      ? 'border-zinc-600 bg-zinc-800/50'
-                      : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50'
-                  }`}
-                >
-                  <span className="tabular-nums text-zinc-300">Kommo {l.kommoLeadId}</span>
-                  <PiArrowRightBold size={11} className="text-zinc-600" />
-                  <span className="tabular-nums text-emerald-400">franquia {l.spineIdLead}</span>
-                  <span className="ml-auto text-zinc-500">ver o que sairia</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : (
-        <p className="mt-5 text-sm text-zinc-500">
-          {jaPacientes > 0
-            ? `Nenhum lead pendente — os ${jaPacientes} que estão na franquia já são pacientes.`
-            : 'Nenhum lead espelhado na franquia ainda. Envie um na seção acima primeiro.'}
-        </p>
-      )}
-
-      {erro && <p className="mt-3 text-xs text-rose-300">{erro}</p>}
-      {feito && (
-        <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-emerald-400">
-          <PiCheckCircleFill size={13} /> {feito}
-        </p>
-      )}
-      {carregando && (
-        <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-zinc-500">
-          <PiSpinnerGapBold size={13} className="animate-spin" /> montando o cadastro…
-        </p>
-      )}
-
-      {bloqueio && (
-        <div className="mt-4 rounded-lg border border-amber-500/25 bg-amber-500/5 p-4">
-          <p className="text-sm font-medium text-amber-300">
-            {r?.etapa === 'ja-cadastrado'
-              ? `${bloqueio.titulo} (id ${r.spineIdClient})`
-              : bloqueio.titulo}
-          </p>
-          <p className="mt-1 text-xs leading-relaxed text-zinc-400">{bloqueio.explica}</p>
-        </div>
-      )}
-
-      {r?.payload && (
-        <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
-          <p className="text-xs font-medium text-zinc-300">
-            {r.ok ? 'Cadastro que sairia' : 'O que temos até agora'}
-          </p>
-          <dl className="mt-3 grid gap-x-8 gap-y-2.5 sm:grid-cols-2">
-            <Campo rotulo="Nome completo" valor={r.payload.name} />
-            <Campo
-              rotulo="Telefone (formato da franquia)"
-              valor={r.payload.whatsapp}
-              alerta="obrigatório — sem ele o cadastro é recusado"
-            />
-            <Campo rotulo="Origem" valor={`${r.origemLegivel ?? ''} · ${r.payload.idSource}`} />
-            <Campo rotulo="Vinculado ao lead" valor={r.payload.idLead ? `#${r.payload.idLead}` : null} />
-            <Campo rotulo="Cidade" valor={r.payload.addressCity} />
-            <Campo rotulo="UF" valor={r.payload.addressUf} />
-          </dl>
-
-          {r.ok && (
-            <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-zinc-800 pt-4">
-              <button className="btn-primary" onClick={() => setConfirmando(true)} disabled={enviando}>
-                <PiArrowRightBold size={14} />
-                Cadastrar paciente
-              </button>
-              <span className="text-[11px] leading-relaxed text-zinc-500">
-                Confira os campos. Depois de cadastrar, só o suporte da franquia consegue apagar.
-              </span>
-            </div>
+    <section className="surface overflow-hidden">
+      <div className="border-b border-zinc-800 p-7 pb-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-100">Cadastro de paciente</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
+              O mesmo botão &quot;Cadastrar Paciente&quot; que existe dentro do lead no sistema da
+              clínica. A franquia pede três campos, e a Sofia preenche os três.
+            </p>
+          </div>
+          {jaPacientes.length > 0 && (
+            <span className="shrink-0 rounded-full border border-emerald-500/25 bg-emerald-500/5 px-3 py-1 text-xs text-emerald-300">
+              {jaPacientes.length} já {jaPacientes.length === 1 ? 'cadastrado' : 'cadastrados'}
+            </span>
           )}
         </div>
-      )}
+      </div>
+
+      <div className="grid gap-0 lg:grid-cols-[minmax(0,340px)_1fr]">
+        {/* ESQUERDA — quem pode virar paciente. Nome primeiro: ninguém confere
+            um cadastro permanente olhando para "13012964 -> 5916621". */}
+        <div className="border-b border-zinc-800 p-5 lg:border-b-0 lg:border-r">
+          <p className="eyebrow">Prontos para cadastrar</p>
+          {candidatos.length > 0 ? (
+            <ul className="mt-3 space-y-1">
+              {candidatos.slice(0, 12).map((l) => {
+                const ativo = leadId === String(l.kommoLeadId);
+                return (
+                  <li key={l.kommoLeadId}>
+                    <button
+                      type="button"
+                      onClick={() => void ver(l.kommoLeadId)}
+                      className={`w-full rounded-lg border p-3 text-left transition-colors ${
+                        ativo
+                          ? 'border-brand-400/40 bg-brand-400/5'
+                          : 'border-transparent hover:border-zinc-700 hover:bg-zinc-900/60'
+                      }`}
+                    >
+                      <span
+                        className={`block truncate text-[13px] font-medium ${
+                          ativo ? 'text-zinc-50' : 'text-zinc-200'
+                        }`}
+                      >
+                        {l.nome ?? `Lead ${l.kommoLeadId}`}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] tabular-nums text-zinc-500">
+                        lead {l.spineIdLead} na franquia
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="mt-3 text-sm leading-relaxed text-zinc-500">
+              {jaPacientes.length > 0
+                ? 'Todos os leads espelhados já são pacientes.'
+                : 'Nenhum lead espelhado ainda. Envie um na seção acima primeiro.'}
+            </p>
+          )}
+        </div>
+
+        {/* DIREITA — a ficha. Vazia até escolher, pra não sugerir que existe
+            algo pronto pra enviar quando não existe. */}
+        <div className="p-5">
+          {!leadId && !feito && (
+            <p className="py-10 text-center text-sm text-zinc-600">
+              Escolha alguém à esquerda para ver a ficha que seria criada.
+            </p>
+          )}
+
+          {carregando && (
+            <p className="inline-flex items-center gap-2 py-10 text-sm text-zinc-500">
+              <PiSpinnerGapBold size={15} className="animate-spin" /> montando a ficha…
+            </p>
+          )}
+
+          {erro && (
+            <p className="rounded-lg border border-rose-500/25 bg-rose-500/5 p-3.5 text-xs text-rose-300">
+              {erro}
+            </p>
+          )}
+          {feito && (
+            <p className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3.5 text-sm text-emerald-300">
+              <PiCheckCircleFill size={15} /> {feito}
+            </p>
+          )}
+
+          {bloqueio && (
+            <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-4">
+              <p className="text-sm font-medium text-amber-300">
+                {r?.etapa === 'ja-cadastrado'
+                  ? `${bloqueio.titulo} (id ${r.spineIdClient})`
+                  : bloqueio.titulo}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-zinc-400">{bloqueio.explica}</p>
+            </div>
+          )}
+
+          {r?.payload && (
+            <>
+              {/* OS TRÊS OBRIGATÓRIOS EM DESTAQUE. A franquia recusa sem eles, e
+                  o telefone aparece já no formato que sai (E.164) — mostrar o
+                  bruto seria exibir um valor e mandar outro. */}
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Obrigatorio rotulo="Nome completo" valor={r.payload.name} />
+                <Obrigatorio rotulo="Telefone" valor={r.payload.whatsapp} mono />
+                <Obrigatorio rotulo="Origem" valor={r.origemLegivel ?? String(r.payload.idSource)} />
+              </div>
+
+              <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 border-t border-zinc-800 pt-4 text-xs">
+                <div>
+                  <dt className="text-zinc-500">Cidade</dt>
+                  <dd className="mt-0.5 text-zinc-300">{r.payload.addressCity ?? '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-500">UF</dt>
+                  <dd className="mt-0.5 text-zinc-300">{r.payload.addressUf ?? '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-zinc-500">Vinculado ao lead</dt>
+                  <dd className="mt-0.5 tabular-nums text-zinc-300">
+                    {r.payload.idLead ? `#${r.payload.idLead}` : '—'}
+                  </dd>
+                </div>
+                <div className="ml-auto">
+                  <dt className="text-zinc-500">Vai para</dt>
+                  <dd className="mt-0.5 font-mono text-[11px] text-zinc-400">
+                    POST {r.requisicao?.rota ?? '/api/clients'}
+                  </dd>
+                </div>
+              </dl>
+
+              {r.ok && (
+                <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-zinc-800 pt-4">
+                  <button
+                    className="btn-primary"
+                    onClick={() => setConfirmando(true)}
+                    disabled={enviando}
+                  >
+                    <PiArrowRightBold size={14} />
+                    Cadastrar {selecionado?.nome ?? 'paciente'}
+                  </button>
+                  <span className="text-[11px] leading-relaxed text-zinc-500">
+                    Depois de cadastrar, só o suporte da franquia consegue apagar.
+                  </span>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
 
       {confirmando && r?.payload && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -1418,6 +1461,35 @@ function PacienteNaFranquia({
         </div>
       )}
     </section>
+  );
+}
+
+/** Campo que a franquia recusa se vier vazio — por isso ganha peso visual. */
+function Obrigatorio({
+  rotulo,
+  valor,
+  mono,
+}: {
+  rotulo: string;
+  valor: string | null;
+  mono?: boolean;
+}) {
+  const vazio = !valor;
+  return (
+    <div
+      className={`rounded-lg border p-3.5 ${
+        vazio ? 'border-amber-500/30 bg-amber-500/5' : 'border-zinc-800 bg-zinc-950/60'
+      }`}
+    >
+      <p className="text-[10px] uppercase tracking-wider text-zinc-500">{rotulo}</p>
+      <p
+        className={`mt-1 wrap-break-word text-sm ${mono ? 'font-mono' : ''} ${
+          vazio ? 'text-amber-300' : 'text-zinc-100'
+        }`}
+      >
+        {valor ?? 'faltando'}
+      </p>
+    </div>
   );
 }
 
@@ -1527,7 +1599,11 @@ function Historico({
                       : 'bg-zinc-600'
                 }`}
               />
-              <span className="tabular-nums text-zinc-400">Kommo {l.kommoLeadId}</span>
+              {/* Nome antes do id: quem confere o histórico procura por pessoa,
+                  não por número. O id fica, porque é o que se leva pro suporte
+                  da franquia quando algo precisa ser corrigido lá. */}
+              <span className="font-medium text-zinc-200">{l.nome ?? '—'}</span>
+              <span className="tabular-nums text-zinc-500">Kommo {l.kommoLeadId}</span>
               {l.spineIdLead ? (
                 <>
                   <PiArrowRightBold size={11} className="text-zinc-600" />

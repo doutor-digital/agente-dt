@@ -1232,6 +1232,12 @@ model SpineLeadLink {
   spineIdLead Int? @map("spine_id_lead")
   /// Paciente criado na franquia a partir deste lead (idClient lá).
   spineIdClient Int? @map("spine_id_client")
+  /**
+   * O nome que foi (ou seria) enviado. Desnormalizado de propósito: sem ele o
+   * histórico e a tela de paciente viram lista de números, e ninguém confere
+   * um cadastro permanente olhando "13012964 -> 5916621".
+   */
+  nome String? @db.Text
 
   /**
    * "ok" | "falhou" | "ignorado".

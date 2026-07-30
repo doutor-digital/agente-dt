@@ -1132,6 +1132,8 @@ export interface SpineLeadLink {
   kommoLeadId: number;
   spineIdLead: number | null;
   spineIdClient?: number | null;
+  /** O nome que foi enviado — o histórico sem isto é lista de números. */
+  nome?: string | null;
   status: 'ok' | 'falhou' | 'ignorado';
   motivo: string | null;
   tentativas: number;
@@ -1191,6 +1193,8 @@ export interface SpineLeadPendente {
   criadoEm: string | null;
   spineIdLead: number | null;
   spineIdClient?: number | null;
+  /** O nome que foi enviado — o histórico sem isto é lista de números. */
+  nome?: string | null;
   situacao: 'pronto' | 'sem-nome' | 'falhou' | 'enviado';
   motivo: string | null;
   tentativas: number;
