@@ -549,6 +549,53 @@ export function normalizarWhatsapp(bruto: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Busca de leads — usada pela conferência.
+// ---------------------------------------------------------------------------
+
+export interface SpineLeadResumo {
+  idLead: number;
+  name: string | null;
+  whatsapp: string | null;
+  idSource: number | null;
+}
+
+export async function searchLeads(
+  unit: SpineUnit,
+  params: { initialDate: string; endDate: string },
+): Promise<SpineResult<{ leads: SpineLeadResumo[] }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  const leads: SpineLeadResumo[] = [];
+  let page = 1;
+  let totalPages = 1;
+  try {
+    do {
+      const { data } = await http.post<{
+        data?: {
+          data?: Array<{ idLead?: number; name?: string; whatsapp?: string; idSource?: number }>;
+          totalPages?: number;
+        };
+      }>('/api/leads/search', { ...params, pagination: { page, rowsPerPage: 100 } });
+      for (const l of data?.data?.data ?? []) {
+        if (typeof l.idLead === 'number') {
+          leads.push({
+            idLead: l.idLead,
+            name: l.name ?? null,
+            whatsapp: l.whatsapp ?? null,
+            idSource: l.idSource ?? null,
+          });
+        }
+      }
+      totalPages = Math.max(1, Number(data?.data?.totalPages) || 1);
+      page++;
+    } while (page <= totalPages && page <= 10);
+    return { ok: true, data: { leads } };
+  } catch (err) {
+    return { ok: false, ...describe(err) };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Teste de credencial.
 // ---------------------------------------------------------------------------
 // A doc sugere validar em /api/clients/search — é o endpoint mais barato que
@@ -569,6 +616,7 @@ export async function ping(unit: SpineUnit): Promise<SpineResult<{ total: number
 
 export const SpineService = {
   createLead,
+  searchLeads,
   resolverIdSource,
   normalizarWhatsapp,
   searchClients,

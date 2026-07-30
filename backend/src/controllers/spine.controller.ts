@@ -381,21 +381,79 @@ export async function syncLeadHandler(req: Request, res: Response): Promise<void
 }
 
 
-/** Histórico do espelhamento — sem isso, "está sincronizando?" não tem resposta. */
+/**
+ * Estado do espelhamento + CONFERÊNCIA CONTRA A FRANQUIA.
+ *
+ * Contar o que a gente acha que enviou não prova nada: se a API deles mudar,
+ * ou o token perder permissão, nosso contador segue subindo feliz enquanto
+ * nada chega do outro lado. A única resposta honesta para "está chegando?" é
+ * perguntar à franquia — e é isso que `conferencia` faz, comparando os ids
+ * que registramos com os que existem lá de verdade.
+ */
 export async function listLeadLinksHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id);
-  const [links, total] = await Promise.all([
-    prisma.spineLeadLink.findMany({
-      where: { unitId },
-      orderBy: { createdAt: 'desc' },
-      take: 30,
-    }),
-    prisma.spineLeadLink.count({ where: { unitId } }),
+  const unit = await prisma.unit.findUnique({ where: { id: unitId } });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+
+  const inicioHoje = new Date();
+  inicioHoje.setUTCHours(0, 0, 0, 0);
+
+  const [links, porStatus, hojeOk] = await Promise.all([
+    prisma.spineLeadLink.findMany({ where: { unitId }, orderBy: { updatedAt: 'desc' }, take: 40 }),
+    prisma.spineLeadLink.groupBy({ by: ['status'], where: { unitId }, _count: { _all: true } }),
+    prisma.spineLeadLink.count({ where: { unitId, status: 'ok', updatedAt: { gte: inicioHoje } } }),
   ]);
-  const hoje = new Date();
-  hoje.setUTCHours(0, 0, 0, 0);
-  const noDia = await prisma.spineLeadLink.count({
-    where: { unitId, createdAt: { gte: hoje } },
+
+  const contagem = Object.fromEntries(porStatus.map((r) => [r.status, r._count._all]));
+
+  // Conferência: só faz sentido se houver o que conferir e credencial pra isso.
+  let conferencia: {
+    checado: boolean;
+    periodo?: { de: string; ate: string };
+    enviadosPorNos?: number;
+    encontradosLa?: number;
+    faltando?: number[];
+    erro?: string;
+  } = { checado: false };
+
+  const enviadosRecentes = links.filter((l) => l.status === 'ok' && l.spineIdLead);
+  if (unit.spineToken && enviadosRecentes.length > 0) {
+    const tz = unit.spineTimezone || 'America/Sao_Paulo';
+    const hoje = SpineService.instanteNoFuso(new Date(), tz).slice(0, 10);
+    const de = new Date(Date.parse(`${hoje}T00:00:00Z`) - 6 * 86_400_000).toISOString().slice(0, 10);
+    // `endDate` é EXCLUSIVO nesta API — sem o +1 dia, hoje ficaria de fora.
+    const ate = new Date(Date.parse(`${hoje}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+    const r = await SpineService.searchLeads(unit, { initialDate: de, endDate: ate });
+    if (!r.ok || !r.data) {
+      conferencia = { checado: false, erro: r.error ?? 'franquia não respondeu' };
+    } else {
+      const idsLa = new Set(r.data.leads.map((l) => l.idLead));
+      const nossos = enviadosRecentes
+        .filter((l) => l.updatedAt >= new Date(Date.parse(`${de}T00:00:00Z`)))
+        .map((l) => l.spineIdLead as number);
+      const faltando = nossos.filter((id) => !idsLa.has(id));
+      conferencia = {
+        checado: true,
+        periodo: { de, ate: hoje },
+        enviadosPorNos: nossos.length,
+        encontradosLa: nossos.length - faltando.length,
+        faltando,
+      };
+    }
+  }
+
+  res.json({
+    links,
+    total: links.length,
+    hoje: hojeOk,
+    contagem: {
+      ok: contagem.ok ?? 0,
+      falhou: contagem.falhou ?? 0,
+      ignorado: contagem.ignorado ?? 0,
+    },
+    conferencia,
   });
-  res.json({ links, total, hoje: noDia });
 }

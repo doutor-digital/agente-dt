@@ -1093,6 +1093,7 @@ model InstagramComment {
    * /**
    * /**
    * /**
+   * /**
    * /** "instagram" | "facebook" — de qual rede veio.
    */
   platform String @default("instagram")
@@ -1220,17 +1221,33 @@ model SpineLeadLink {
   /**
    * ID do lead no Kommo.
    */
-  kommoLeadId Int @map("kommo_lead_id")
+  kommoLeadId Int  @map("kommo_lead_id")
   /**
-   * ID do lead criado na franquia.
+   * ID do lead criado na franquia. Nulo enquanto não foi criado.
    */
-  spineIdLead Int @map("spine_id_lead")
+  spineIdLead Int? @map("spine_id_lead")
+
+  /**
+   * "ok" | "falhou" | "ignorado".
+   * Guardar também o que NÃO foi enviado é o ponto: sucesso a gente enxerga
+   * abrindo o CRM da franquia; o que sumiu no caminho, não. Sem isto "faltou
+   * um lead" vira caça ao log — e log rotaciona.
+   */
+  status     String  @default("ok")
+  motivo     String? @db.Text
+  /**
+   * Sobe a cada turno enquanto não dá certo. Distingue "tentou 1 vez e o nome
+   * ainda não veio" de "tenta há 20 turnos e algo está quebrado".
+   */
+  tentativas Int     @default(1)
 
   createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
   @@unique([unitId, kommoLeadId])
   @@index([unitId, createdAt(sort: Desc)])
+  @@index([unitId, status])
   @@map("spine_lead_links")
 }

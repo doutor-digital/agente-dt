@@ -1129,12 +1129,27 @@ export interface SpineLeadLink {
   id: string;
   unitId: string;
   kommoLeadId: number;
-  spineIdLead: number;
+  spineIdLead: number | null;
+  status: 'ok' | 'falhou' | 'ignorado';
+  motivo: string | null;
+  tentativas: number;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface SpineConferencia {
+  checado: boolean;
+  periodo?: { de: string; ate: string };
+  enviadosPorNos?: number;
+  encontradosLa?: number;
+  faltando?: number[];
+  erro?: string;
 }
 
 export interface SpineLeadLinksResponse {
   links: SpineLeadLink[];
   total: number;
   hoje: number;
+  contagem: { ok: number; falhou: number; ignorado: number };
+  conferencia: SpineConferencia;
 }

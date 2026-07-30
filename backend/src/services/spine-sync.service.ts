@@ -61,6 +61,30 @@ export interface ResultadoSync {
   jaExistia?: boolean;
 }
 
+/**
+ * Grava o estado atual da tentativa. Uma linha por lead, atualizada — não um
+ * log que cresce sem fim. O que interessa é "onde este lead está agora", e
+ * `tentativas` distingue "ainda não tem nome" de "tenta há 20 turnos e algo
+ * quebrou".
+ */
+async function registrar(
+  unitId: string,
+  kommoLeadId: number,
+  status: 'ok' | 'falhou' | 'ignorado',
+  motivo: string | null,
+  spineIdLead: number | null,
+): Promise<void> {
+  try {
+    await prisma.spineLeadLink.upsert({
+      where: { unitId_kommoLeadId: { unitId, kommoLeadId } },
+      create: { unitId, kommoLeadId, status, motivo, spineIdLead },
+      update: { status, motivo, spineIdLead, tentativas: { increment: 1 } },
+    });
+  } catch (err) {
+    logger.warn({ err: String(err), kommoLeadId }, 'spine-sync: não consegui registrar o estado');
+  }
+}
+
 export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<ResultadoSync> {
   if (!unit.spineEnabled || !unit.spineToken) {
     return { ok: false, motivo: 'franquia não conectada nesta unidade' };
@@ -75,7 +99,10 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
   const jaTem = await prisma.spineLeadLink.findUnique({
     where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
   });
-  if (jaTem) {
+  // Só para se JÁ FOI CRIADO. Uma tentativa anterior que falhou ou foi
+  // ignorada (lead sem nome) tem que ser retentada — é assim que o lead entra
+  // assim que a IA descobre o nome, sem ninguém precisar reprocessar nada.
+  if (jaTem?.status === 'ok' && jaTem.spineIdLead) {
     return { ok: true, spineIdLead: jaTem.spineIdLead, jaExistia: true };
   }
 
@@ -84,12 +111,16 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
   try {
     lead = await kommo.getLead(kommoLeadId);
   } catch (err) {
-    return { ok: false, motivo: `não consegui ler o lead no Kommo: ${String(err)}` };
+    const motivo = `não consegui ler o lead no Kommo: ${String(err)}`;
+    await registrar(unit.id, kommoLeadId, 'falhou', motivo, null);
+    return { ok: false, motivo };
   }
 
   const titulo = lead.name ?? '';
   if (pareceNomeAutomatico(titulo)) {
-    return { ok: false, motivo: `lead ainda sem nome real ("${titulo}")` };
+    const motivo = `aguardando nome ("${titulo}")`;
+    await registrar(unit.id, kommoLeadId, 'ignorado', motivo, null);
+    return { ok: false, motivo };
   }
   const nome = limparNome(titulo);
 
@@ -124,22 +155,16 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
   });
 
   if (!r.ok || !r.data?.idLead) {
+    const motivo = r.error ?? 'a franquia não devolveu idLead';
+    await registrar(unit.id, kommoLeadId, 'falhou', motivo, null);
     logger.warn(
-      { kommoLeadId, nome, erro: r.error, unit: unit.slug },
+      { kommoLeadId, nome, erro: motivo, unit: unit.slug },
       'spine-sync: falha ao criar lead na franquia',
     );
-    return { ok: false, motivo: r.error ?? 'a franquia não devolveu idLead' };
+    return { ok: false, motivo };
   }
 
-  try {
-    await prisma.spineLeadLink.create({
-      data: { unitId: unit.id, kommoLeadId, spineIdLead: r.data.idLead },
-    });
-  } catch {
-    // Corrida: dois webhooks do mesmo lead ao mesmo tempo. O cadastro já foi
-    // criado — registrar isso é o que importa, e o unique fez o trabalho dele.
-    logger.info({ kommoLeadId }, 'spine-sync: vínculo já existia (corrida)');
-  }
+  await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead);
 
   logger.info(
     { kommoLeadId, spineIdLead: r.data.idLead, nome, idSource, unit: unit.slug },

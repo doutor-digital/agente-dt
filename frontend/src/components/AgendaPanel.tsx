@@ -1225,22 +1225,83 @@ function EspelharLeads({
 
       {hist && (
         <div className="mt-6 border-t border-zinc-800 pt-5">
-          <div className="flex flex-wrap items-baseline gap-4">
-            <p className="text-xs font-medium text-zinc-300">Enviados</p>
-            <p className="text-sm text-zinc-400">
-              <span className="font-semibold text-zinc-100">{hist.hoje}</span> hoje ·{' '}
-              <span className="font-semibold text-zinc-100">{hist.total}</span> no total
-            </p>
+          {/* CONFERÊNCIA — a única resposta honesta pra "está chegando?".
+              Contar o que a gente acha que enviou não prova nada: se a API
+              deles mudar ou o token perder permissão, nosso contador segue
+              subindo enquanto nada chega do outro lado. */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Tile label="Enviados hoje" valor={hist.hoje} cor="text-emerald-400" />
+            <Tile
+              label="Falharam"
+              valor={hist.contagem.falhou}
+              cor={hist.contagem.falhou > 0 ? 'text-rose-400' : 'text-zinc-600'}
+              hint={hist.contagem.falhou > 0 ? 'veja o motivo na lista' : undefined}
+            />
+            <Tile
+              label="Aguardando nome"
+              valor={hist.contagem.ignorado}
+              cor="text-zinc-500"
+              hint="entram sozinhos quando a IA descobrir o nome"
+            />
           </div>
+
+          <div
+            className={`mt-4 rounded-lg border p-4 ${
+              !hist.conferencia.checado
+                ? 'border-zinc-800'
+                : (hist.conferencia.faltando?.length ?? 0) > 0
+                  ? 'border-rose-500/30 bg-rose-500/5'
+                  : 'border-emerald-500/25 bg-emerald-500/5'
+            }`}
+          >
+            <p className="text-xs font-medium text-zinc-300">Conferência na franquia</p>
+            {!hist.conferencia.checado ? (
+              <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                {hist.conferencia.erro
+                  ? `Não consegui conferir agora: ${hist.conferencia.erro}`
+                  : 'Nada enviado ainda para conferir.'}
+              </p>
+            ) : (hist.conferencia.faltando?.length ?? 0) === 0 ? (
+              <p className="mt-1 text-xs leading-relaxed text-emerald-300">
+                Os {hist.conferencia.enviadosPorNos} leads que enviamos nos últimos 7 dias estão
+                lá. Conferido consultando o CRM da franquia agora, não o nosso contador.
+              </p>
+            ) : (
+              <p className="mt-1 text-xs leading-relaxed text-rose-300">
+                {hist.conferencia.faltando?.length} de {hist.conferencia.enviadosPorNos} leads que
+                enviamos NÃO estão no CRM da franquia (ids {hist.conferencia.faltando?.slice(0, 5).join(', ')}).
+                Algo mudou do lado deles — ou o lead foi apagado por lá.
+              </p>
+            )}
+          </div>
+
           {hist.links.length > 0 && (
-            <ul className="mt-3 space-y-1">
-              {hist.links.slice(0, 8).map((l) => (
-                <li key={l.id} className="flex items-center gap-2 text-xs text-zinc-500">
+            <ul className="mt-4 space-y-1.5">
+              {hist.links.slice(0, 10).map((l) => (
+                <li key={l.id} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                      l.status === 'ok'
+                        ? 'bg-emerald-400'
+                        : l.status === 'falhou'
+                          ? 'bg-rose-400'
+                          : 'bg-zinc-600'
+                    }`}
+                  />
                   <span className="tabular-nums text-zinc-400">Kommo {l.kommoLeadId}</span>
-                  <ArrowRightIcon />
-                  <span className="tabular-nums text-emerald-400">franquia {l.spineIdLead}</span>
-                  <span className="ml-auto">
-                    {new Date(l.createdAt).toLocaleString('pt-BR', {
+                  {l.spineIdLead ? (
+                    <>
+                      <PiArrowRightBold size={11} className="text-zinc-600" />
+                      <span className="tabular-nums text-emerald-400">franquia {l.spineIdLead}</span>
+                    </>
+                  ) : (
+                    <span className="truncate text-zinc-500">{l.motivo}</span>
+                  )}
+                  {l.tentativas > 3 && !l.spineIdLead && (
+                    <span className="text-amber-400">{l.tentativas} tentativas</span>
+                  )}
+                  <span className="ml-auto text-zinc-600">
+                    {new Date(l.updatedAt).toLocaleString('pt-BR', {
                       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
                     })}
                   </span>
@@ -1249,14 +1310,12 @@ function EspelharLeads({
             </ul>
           )}
           {hist.links.length === 0 && (
-            <p className="mt-2 text-xs text-zinc-500">Nenhum lead enviado ainda.</p>
+            <p className="mt-3 text-xs text-zinc-500">Nenhum lead processado ainda.</p>
           )}
         </div>
       )}
+
     </section>
   );
-}
 
-function ArrowRightIcon() {
-  return <PiArrowRightBold size={11} className="text-zinc-600" />;
 }
