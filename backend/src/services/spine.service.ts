@@ -571,7 +571,15 @@ export interface SpineCreateClient {
   whatsapp?: string | null;
   email?: string | null;
   idSource: number;
-  /** Vincula o paciente ao lead de origem — preenche `idClient` lá. */
+  /**
+   * Lead de origem. MEDIDO: a API aceita este campo, responde 201 e NÃO
+   * estabelece o vínculo — depois de criar, `lead.idClient` continua vazio.
+   * Não existe rota de atualização (PUT/PATCH em /api/clients e /api/leads dão
+   * 404) e a API não recusa campo desconhecido, então não dá pra descobrir o
+   * nome certo sondando. A interface deles liga os dois por outra rota, de
+   * sessão. Continuamos mandando: é inócuo e passa a valer sozinho se eles
+   * implementarem — mas NADA na tela pode afirmar que o vínculo existe.
+   */
   idLead?: number | null;
   addressCity?: string | null;
   addressUf?: string | null;

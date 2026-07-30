@@ -1399,7 +1399,11 @@ function PacienteNaFranquia({
                   <dd className="mt-0.5 text-zinc-300">{r.payload.addressUf ?? '—'}</dd>
                 </div>
                 <div>
-                  <dt className="text-zinc-500">Vinculado ao lead</dt>
+                  {/* NÃO diz "vinculado": mandamos idLead e a API engole em
+                      silêncio — medido, lead.idClient continua vazio depois.
+                      Afirmar o vínculo aqui seria a tela mentir sobre o que o
+                      outro lado fez. */}
+                  <dt className="text-zinc-500">Veio do lead</dt>
                   <dd className="mt-0.5 tabular-nums text-zinc-300">
                     {r.payload.idLead ? `#${r.payload.idLead}` : '—'}
                   </dd>
@@ -1438,8 +1442,7 @@ function PacienteNaFranquia({
             <h3 className="text-sm font-semibold text-zinc-100">Cadastrar paciente?</h3>
             <p className="mt-2 text-sm leading-relaxed text-zinc-400">
               Vai criar <span className="text-zinc-100">{r.payload.name}</span>
-              {r.payload.whatsapp ? ` (${r.payload.whatsapp})` : ''} como paciente, vinculado ao lead{' '}
-              {r.payload.idLead}.
+              {r.payload.whatsapp ? ` (${r.payload.whatsapp})` : ''} como paciente na clínica.
             </p>
             <p className="mt-2 text-xs leading-relaxed text-amber-300">
               A franquia não tem exclusão. Se estiver errado, só sai abrindo chamado no suporte deles.
