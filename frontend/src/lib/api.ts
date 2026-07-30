@@ -443,9 +443,23 @@ export const api = {
     const { data } = await http.post<{ unit: Unit }>('/units', input);
     return data.unit;
   },
+  // Salvar configuração é a operação que MAIS dói falhar: quem está na tela
+  // acabou de digitar e não sabe se pegou. O backend sobe com rolling update,
+  // então existe uma janela de segundos em que a conexão pendura e estoura o
+  // teto de 15s — nada errado com o pedido, só timing. Como o PATCH é
+  // idempotente (mesmo corpo, mesmo resultado), reenviar é seguro: tenta de
+  // novo uma vez, com mais fôlego, antes de acusar erro.
   async updateUnit(id: string, input: Partial<UnitInput>): Promise<Unit> {
-    const { data } = await http.patch<{ unit: Unit }>(`/units/${id}`, input);
-    return data.unit;
+    try {
+      const { data } = await http.patch<{ unit: Unit }>(`/units/${id}`, input, { timeout: 20_000 });
+      return data.unit;
+    } catch (err) {
+      const semResposta = axios.isAxiosError(err) && !err.response;
+      if (!semResposta) throw err; // 400/409/500 — reenviar não muda nada
+      await new Promise((r) => setTimeout(r, 1500));
+      const { data } = await http.patch<{ unit: Unit }>(`/units/${id}`, input, { timeout: 45_000 });
+      return data.unit;
+    }
   },
   async deleteUnit(id: string): Promise<void> {
     await http.delete(`/units/${id}`);

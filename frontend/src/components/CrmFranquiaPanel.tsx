@@ -171,7 +171,14 @@ export default function CrmFranquiaPanel() {
       await refresh(); // re-lê do servidor: é o refresh que apaga o "não salvo"
       await carregar();
     } catch (e) {
-      setErroSalvar(e instanceof Error ? e.message : 'Falha ao salvar');
+      const msg = e instanceof Error ? e.message : 'Falha ao salvar';
+      // "timeout exceeded" não diz nada a quem está usando, e o que importa
+      // aqui é que NADA foi gravado e o que foi digitado continua na tela.
+      setErroSalvar(
+        /timeout|Network Error/i.test(msg)
+          ? 'O servidor não respondeu a tempo (costuma ser atualização em andamento). Nada foi gravado e o que você digitou continua aqui — clique em salvar de novo.'
+          : msg,
+      );
     } finally {
       setSalvando(false);
     }
