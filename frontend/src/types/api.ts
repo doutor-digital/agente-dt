@@ -292,6 +292,9 @@ export interface Unit {
   spineAiPaused: boolean;
   spineSyncLeads: boolean;
   spineSyncPatients: boolean;
+  clinicAddress?: string | null;
+  pixKey?: string | null;
+  pixHolder?: string | null;
   spineDefaultSourceId: number;
   triageEnabled: boolean;
   triageInstructions: string | null;

@@ -257,6 +257,13 @@ model Unit {
   /// Separado de spineSyncLeads: o lead é um contato, o paciente é o cadastro
   /// que a recepção usa — e nenhum dos dois pode ser apagado depois.
   spineSyncPatients    Boolean @default(false) @map("spine_sync_patients")
+  /// Endereço da clínica, para a mensagem de confirmação. Vazio = a IA diz
+  /// que a equipe confirma, em vez de inventar — paciente indo no lugar
+  /// errado é pior que paciente perguntando onde é.
+  clinicAddress        String? @map("clinic_address")
+  /// Chave PIX e favorecido, exibidos na confirmação do agendamento.
+  pixKey               String? @map("pix_key")
+  pixHolder            String? @map("pix_holder")
   /// Origem usada quando a do Kommo não tem correspondente (20 = WHATSAPP).
   spineDefaultSourceId Int     @default(20) @map("spine_default_source_id")
 

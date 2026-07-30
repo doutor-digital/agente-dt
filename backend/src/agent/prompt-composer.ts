@@ -359,6 +359,46 @@ function renderAgenda(unit: Unit): string {
       `a etapa tem que refletir o que de fato aconteceu.`
     : '';
 
+  // A confirmação é o único momento em que a IA manda um bloco formatado. O
+  // resto da conversa é fala solta; aqui o paciente precisa CONFERIR data,
+  // hora e endereço depois, então tem que dar pra reler e achar cada dado.
+  const endereco = unit.clinicAddress?.trim();
+  const pix = unit.pixKey?.trim();
+  const favorecido = unit.pixHolder?.trim();
+
+  const linhaEndereco = endereco
+    ? `📍 Endereço: ${endereco}`
+    : '(omita a linha do endereço — não temos o endereço cadastrado, e inventar faz o paciente ir no lugar errado; diga que a equipe confirma o endereço)';
+
+  const linhaPix = pix
+    ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
+    : 'A equipe envia a chave do PIX para garantir a vaga.';
+
+  const confirmacao = `
+QUANDO A CONSULTA FOR MARCADA COM SUCESSO, mande EXATAMENTE este formato — é o
+momento em que o paciente vai reler pra conferir, então precisa ser blocado e
+não um parágrafo corrido:
+
+Olá, {primeiro nome}! Parabéns pelo seu agendamento! 👏
+
+📅 Data: {dia da semana}, {DD/MM}
+⏰ Horário: {HH:mm}
+${linhaEndereco}
+💰 Valor da consulta: R$ 150 à vista no PIX (ou R$ 350)
+👨‍⚕️ Especialista: {o nome que a tool devolveu — se não devolveu, omita esta linha}
+
+${linhaPix}
+
+Se surgir qualquer dúvida, estamos à disposição para te ajudar!
+Nos vemos em breve.
+
+REGRAS DESTA MENSAGEM:
+- Só depois de a tool confirmar. Nunca antes, nunca "vou marcar".
+- Não invente endereço, nome de especialista nem chave PIX. Linha sem dado
+  confirmado sai da mensagem — o paciente pergunta, e a equipe responde certo.
+- R$ 150 é ANTECIPADO no PIX; sem antecipar, R$ 350. Não arredonde nem
+  ofereça desconto.`;
+
   return xmlBlock(
     'agendamento',
     `A clínica atende das ${unit.spineAgendaStart} às ${unit.spineAgendaEnd}.${almoco}
@@ -387,7 +427,8 @@ SOBRE O CADASTRO DO PACIENTE:
 - cadastrar_paciente exige NOME COMPLETO (nome e sobrenome) e telefone com DDD.
   Se ela recusar, peça ao paciente exatamente o que faltou — sem falar em
   "sistema" nem "cadastro recusado". "Como é seu sobrenome?" resolve.
-- Se ela falhar por outro motivo, aí sim diga que a equipe finaliza e transfira.`,
+- Se ela falhar por outro motivo, aí sim diga que a equipe finaliza e transfira.
+${confirmacao}`,
   );
 }
 

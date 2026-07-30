@@ -362,10 +362,29 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         return `Não consegui concluir o agendamento (${r.error}). NÃO diga que está marcado — avise que a equipe confirma.`;
       }
 
+      // LÊ DE VOLTA quem ficou com o atendimento, em vez de assumir. A
+      // franquia é quem escolhe o profissional (não mandamos idStaff), então
+      // o nome só é confiável depois de perguntar a ela. Se a leitura falhar,
+      // fica vazio e a IA omite a linha — melhor que anunciar o especialista
+      // errado a quem vai atravessar a cidade pra consulta.
+      let especialista: string | null = null;
+      try {
+        const conf = await SpineService.searchSchedules(fresca, {
+          initialDate: args.data,
+          endDate: args.data,
+        });
+        const meu = (conf.data?.schedules ?? []).find(
+          (x) => x.idSchedule === r.data?.idSchedule,
+        );
+        especialista = meu?.physicalTherapist?.trim() || null;
+      } catch {
+        especialista = null;
+      }
+
       await recorder.step({
         kind: 'TOOL_RESULT',
         title: `Consulta marcada: ${args.data} ${args.hora} (idSchedule ${r.data?.idSchedule})`,
-        payload: { ...args, idSchedule: r.data?.idSchedule },
+        payload: { ...args, idSchedule: r.data?.idSchedule, especialista },
       });
 
       // Carimba o CRM no MESMO passo. Fire-and-forget porque falhar aqui não
@@ -392,7 +411,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         })();
       }
 
-      return `Consulta marcada para ${args.data} às ${args.hora}. Confirme ao paciente com dia e hora.`;
+      return `Consulta marcada para ${args.data} às ${args.hora}.${
+        especialista ? ` Especialista: ${especialista}.` : ''
+      } Confirme ao paciente com dia e hora.`;
     },
   });
 }

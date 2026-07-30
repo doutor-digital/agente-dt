@@ -87,6 +87,9 @@ interface Form {
   spineSyncLeads: boolean;
   spineSyncPatients: boolean;
   spineDefaultSourceId: number;
+  clinicAddress: string;
+  pixKey: string;
+  pixHolder: string;
 }
 
 /**
@@ -109,6 +112,9 @@ function doServidor(u: Partial<Unit>): Form {
     spineSyncLeads: u.spineSyncLeads ?? false,
     spineSyncPatients: u.spineSyncPatients ?? false,
     spineDefaultSourceId: u.spineDefaultSourceId ?? 20,
+    clinicAddress: u.clinicAddress ?? '',
+    pixKey: u.pixKey ?? '',
+    pixHolder: u.pixHolder ?? '',
   };
 }
 
@@ -166,6 +172,9 @@ export default function CrmFranquiaPanel() {
         ...form,
         spineLunchStart: form.spineLunchStart || null,
         spineLunchEnd: form.spineLunchEnd || null,
+        clinicAddress: form.clinicAddress.trim() || null,
+        pixKey: form.pixKey.trim() || null,
+        pixHolder: form.pixHolder.trim() || null,
       };
       // Token em branco = manter o atual. A API devolve mascarado, então
       // mandar '' apagaria a credencial da franquia.
@@ -229,6 +238,7 @@ export default function CrmFranquiaPanel() {
 
         <Espelhamento form={form} setForm={setForm} temToken={status?.hasToken ?? false} />
 
+        <Confirmacao form={form} setForm={setForm} />
         <Previa unitId={unit.id} onEnviado={carregar} />
         <PacienteNaFranquia unitId={unit.id} hist={hist} onEnviado={carregar} />
 
@@ -927,6 +937,104 @@ function Esteira({
           )}
         </div>
       )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mensagem de confirmação — os dados que a IA NÃO pode inventar.
+//
+// Endereço, chave PIX e favorecido ficam aqui, e não no prompt, porque mudam
+// sem que ninguém queira reescrever a persona — e porque endereço enterrado
+// num parágrafo de texto livre é endereço que ninguém acha pra corrigir.
+//
+// Campo vazio não vira improviso: a linha some da mensagem e a IA diz que a
+// equipe confirma. Paciente indo no endereço errado é pior que paciente
+// perguntando onde é.
+// ---------------------------------------------------------------------------
+
+function Confirmacao({ form, setForm }: { form: Form; setForm: (f: Form) => void }) {
+  const faltando = [
+    !form.clinicAddress.trim() && 'endereço',
+    !form.pixKey.trim() && 'chave PIX',
+  ].filter(Boolean) as string[];
+
+  return (
+    <section className="surface p-7">
+      <h2 className="text-sm font-semibold text-zinc-100">Mensagem de confirmação</h2>
+      <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
+        O que a Sofia manda depois de marcar a consulta. Estes campos ela nunca inventa — o que
+        estiver vazio some da mensagem, e ela diz que a equipe confirma.
+      </p>
+
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <div className="space-y-4">
+          <label className="block">
+            <span className="text-xs font-medium text-zinc-300">Endereço da clínica</span>
+            <input
+              className="field mt-1"
+              placeholder="Rua, número, bairro — e um ponto de referência ajuda"
+              value={form.clinicAddress}
+              onChange={(e) => setForm({ ...form, clinicAddress: e.target.value })}
+            />
+          </label>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="text-xs font-medium text-zinc-300">Chave PIX</span>
+              <input
+                className="field mt-1"
+                placeholder="CNPJ, telefone ou e-mail"
+                value={form.pixKey}
+                onChange={(e) => setForm({ ...form, pixKey: e.target.value })}
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-zinc-300">Favorecido</span>
+              <input
+                className="field mt-1"
+                placeholder="Razão social que aparece pro paciente"
+                value={form.pixHolder}
+                onChange={(e) => setForm({ ...form, pixHolder: e.target.value })}
+              />
+            </label>
+          </div>
+          {faltando.length > 0 && (
+            <p className="text-xs leading-relaxed text-amber-300">
+              Sem {faltando.join(' e ')}, essa linha não aparece na mensagem.
+            </p>
+          )}
+        </div>
+
+        {/* A prévia usa os valores digitados AGORA, não os salvos: dá pra ver o
+            efeito antes de gravar. */}
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
+          <p className="eyebrow">Como o paciente recebe</p>
+          <div className="mt-3 space-y-1 text-[13px] leading-relaxed text-zinc-300">
+            <p>Olá, João! Parabéns pelo seu agendamento! 👏</p>
+            <p className="h-2" />
+            <p>📅 Data: quarta-feira, 05/08</p>
+            <p>⏰ Horário: 08:00</p>
+            {form.clinicAddress.trim() && <p>📍 Endereço: {form.clinicAddress}</p>}
+            <p>💰 Valor da consulta: R$ 150 à vista no PIX (ou R$ 350)</p>
+            <p>👨‍⚕️ Especialista: Dra. Bárbara Wirtzbiki</p>
+            <p className="h-2" />
+            <p className="text-zinc-400">
+              {form.pixKey.trim()
+                ? `A vaga é garantida com o pagamento antecipado no PIX: ${form.pixKey}${
+                    form.pixHolder.trim() ? ` (${form.pixHolder})` : ''
+                  }.`
+                : 'A equipe envia a chave do PIX para garantir a vaga.'}
+            </p>
+            <p className="h-2" />
+            <p>Se surgir qualquer dúvida, estamos à disposição para te ajudar!</p>
+            <p>Nos vemos em breve.</p>
+          </div>
+          <p className="mt-4 border-t border-zinc-800 pt-3 text-[11px] leading-relaxed text-zinc-500">
+            O nome do especialista é lido da agenda da franquia depois de marcar — se lá mudar de
+            profissional, a mensagem muda junto.
+          </p>
+        </div>
+      </div>
     </section>
   );
 }
