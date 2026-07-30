@@ -1041,7 +1041,7 @@ function Confirmacao({ form, setForm }: { form: Form; setForm: (f: Form) => void
             <span className="text-xs font-medium text-zinc-300">Endereço da clínica</span>
             <input
               className="field mt-1"
-              placeholder="Rua, número, bairro — e um ponto de referência ajuda"
+              placeholder="Rua, número, bairro — pode colar o link do Google Maps junto"
               value={form.clinicAddress}
               onChange={(e) => setForm({ ...form, clinicAddress: e.target.value })}
             />
@@ -1083,6 +1083,7 @@ function Confirmacao({ form, setForm }: { form: Form; setForm: (f: Form) => void
             <p>📅 Data: quarta-feira, 05/08</p>
             <p>⏰ Horário: 08:00</p>
             {form.clinicAddress.trim() && <p>📍 Endereço: {form.clinicAddress}</p>}
+            <p>⏱️ Chegue com 15 minutos de antecedência</p>
             <p>💰 Valor da consulta: R$ 150 à vista no PIX (ou R$ 350)</p>
             <p>👨‍⚕️ Especialista: Dra. Bárbara Wirtzbiki</p>
             <p className="h-2" />

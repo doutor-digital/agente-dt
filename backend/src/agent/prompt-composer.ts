@@ -370,6 +370,10 @@ function renderAgenda(unit: Unit): string {
     ? `📍 Endereço: ${endereco}`
     : '(omita a linha do endereço — não temos o endereço cadastrado, e inventar faz o paciente ir no lugar errado; diga que a equipe confirma o endereço)';
 
+  // Chegar antes não é formalidade: é ficha, pagamento e o paciente entrar no
+  // horário dele. Atraso de um empurra o dia inteiro da profissional.
+  const linhaAntecedencia = '⏱️ Chegue com 15 minutos de antecedência';
+
   const linhaPix = pix
     ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
     : 'A equipe envia a chave do PIX para garantir a vaga.';
@@ -394,6 +398,7 @@ Olá, {primeiro nome}! Parabéns pelo seu agendamento! 👏
 📅 Data: {dia da semana}, {DD/MM}
 ⏰ Horário: {HH:mm}
 ${linhaEndereco}
+${linhaAntecedencia}
 💰 Valor da consulta: R$ 150 à vista no PIX (ou R$ 350)
 👨‍⚕️ Especialista: {o nome que a tool devolveu — se não devolveu, omita esta linha}
 
