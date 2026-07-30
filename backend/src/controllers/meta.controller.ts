@@ -185,7 +185,9 @@ async function processMetaMessage(
       },
       {
         configurable: { thread_id: threadId },
-        recursionLimit: 6,
+        // Mesmo agente, mesmas ferramentas do webhook — ver o comentário lá.
+        // 6 não cobre nem consultar + agendar.
+        recursionLimit: 24,
       },
     );
 

@@ -592,7 +592,17 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           title: `agendar_consulta falhou: ${r.error}`,
           payload: { ...args, error: r.error },
         });
-        return `Não consegui concluir o agendamento (${r.error}). NÃO diga que está marcado — avise que a equipe confirma.`;
+        // PARE de propósito. Uma recusa costuma significar que o horário saiu
+        // da grade da profissional, e tentar o vizinho leva a mesma recusa —
+        // foi assim que um turno queimou o limite de passos do grafo e o
+        // paciente ficou SEM RESPOSTA NENHUMA, que é pior que um "não" claro.
+        return (
+          `Não consegui marcar às ${args.hora} (${r.error}). ` +
+          'PARE AQUI: não chame agendar_consulta de novo neste turno e não tente ' +
+          'outro horário agora. Responda ao paciente pedindo desculpas em UMA ' +
+          'frase, sem termo técnico, diga que vai confirmar a melhor opção e ' +
+          'que retorna em instantes. No próximo turno você consulta de novo.'
+        );
       }
 
       // LÊ DE VOLTA quem ficou com o atendimento, em vez de assumir. A

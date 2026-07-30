@@ -752,7 +752,16 @@ export async function processAgent(args: {
       },
       {
         configurable: { thread_id: threadId },
-        recursionLimit: 10,
+        // O limite conta CADA passo do grafo — modelo e tool alternam, então
+        // uma ferramenta custa dois. O caminho de agendamento hoje é
+        // consultar_horarios → buscar_paciente → cadastrar_paciente →
+        // agendar_consulta, mais os campos de qualificação que a IA grava no
+        // mesmo turno: passa de 10 sem nenhuma retentativa. Estourar aqui não
+        // degrada, ABORTA — o paciente fica sem resposta nenhuma.
+        //
+        // 24 cobre o caminho inteiro com folga para uma recuperação (horário
+        // ocupado entre oferecer e fechar), e ainda barra loop de verdade.
+        recursionLimit: 24,
       },
     );
 
