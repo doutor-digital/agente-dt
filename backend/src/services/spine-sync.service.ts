@@ -43,14 +43,61 @@ function pareceNomeAutomatico(titulo: string): boolean {
   if (/^lead\b/i.test(t)) return true; // "Lead #123", "Lead 2 27/7/26"
   if (/^\+?\d[\d\s()\-]{6,}$/.test(t)) return true; // só telefone
   if (/^(whatsapp|instagram|facebook|contato|cliente)$/i.test(t)) return true;
-  // "Fulano 27/07/2026" é nome com data — vale; tira a data e vê o que sobra.
-  const semData = t.replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, '').trim();
-  return semData.length < 3;
+  // "Fulano 27/07 Insta" é nome com etiqueta — vale. Tira a etiqueta e vê o
+  // que sobra: se não sobrou nome, o título era só etiqueta.
+  const limpo = limparNome(t);
+  if (limpo.length < 3) return true;
+  return /^(whatsapp|instagram|facebook|contato|cliente|insta|face|fb)$/i.test(limpo);
 }
 
-/** Tira a data que a tool de título acrescenta: "Maria Silva 27/07/2026". */
+/**
+ * Tira do título tudo que a operação carimba depois do nome.
+ *
+ * O título do lead no Kommo não é um campo de nome — é uma etiqueta de
+ * trabalho. Na prática vem "Renata Souza 12/05 Insta": nome, dia do contato e
+ * canal. Sem limpar isso, o CRM da franquia ganha uma PACIENTE chamada
+ * "Renata Souza 12/05 Insta", para sempre — lá não existe exclusão de lead.
+ *
+ * Só remove sufixos: data (12/05, 27/07/2026), canal e separadores soltos.
+ * Repete enquanto encontrar, porque eles se empilham em qualquer ordem. O que
+ * vier ANTES nunca é tocado — sobrenome de verdade não corre risco.
+ */
+const SUFIXOS_DE_ETIQUETA = [
+  /\s*[-–—|/]\s*$/, // separador solto que sobra depois de tirar o resto
+  /\s+\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*$/, // 12/05 e 27/07/2026
+  /\s+\d{1,2}[-.]\d{1,2}([-.]\d{2,4})?\s*$/, // 12-05, 12.05.2026
+  /\s+(insta|instagram|face|facebook|fb|whats|whatsapp|wpp|zap|dm|direct|site|google|tiktok|tik\s?tok|indica[çc][ãa]o|an[úu]ncio|ads|trafego|tr[áa]fego|org[âa]nico|organico)\s*$/i,
+];
+
+/**
+ * O canal que a operação anotou no fim do título, no vocabulário que o mapa de
+ * origem entende. Só o sufixo — "Ana Face" conta, "Faceira Souza" não.
+ */
+function canalNoTitulo(titulo: string): string | null {
+  const m = /\s(insta|instagram|face|facebook|fb|whats|whatsapp|wpp|zap|site|google|tiktok|indica[çc][ãa]o)\s*$/i
+    .exec(titulo.trim());
+  if (!m) return null;
+  const bruto = m[1].toLowerCase();
+  const canonico: Record<string, string> = {
+    insta: 'instagram', instagram: 'instagram',
+    face: 'facebook', facebook: 'facebook', fb: 'facebook',
+    whats: 'whatsapp', whatsapp: 'whatsapp', wpp: 'whatsapp', zap: 'whatsapp',
+    site: 'site', google: 'google', tiktok: 'tiktok',
+    indicação: 'indicacao', indicacao: 'indicacao',
+  };
+  return canonico[bruto] ?? null;
+}
+
 function limparNome(titulo: string): string {
-  return titulo.replace(/\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s*$/, '').trim();
+  let t = titulo.trim();
+  for (let volta = 0; volta < 6; volta++) {
+    const antes = t;
+    for (const re of SUFIXOS_DE_ETIQUETA) t = t.replace(re, '').trim();
+    if (t === antes) break;
+  }
+  // Se a limpeza comeu o nome inteiro (título que era só etiqueta), devolve o
+  // original: quem decide se presta é `pareceNomeAutomatico`.
+  return t.length >= 3 ? t : titulo.trim();
 }
 
 export interface ResultadoSync {
@@ -171,7 +218,14 @@ export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Pre
       name: limparNome(titulo),
       whatsapp,
       description: valor(CAMPO_QUEIXA) ?? 'Lead vindo do atendimento por WhatsApp.',
-      idSource: SpineService.resolverIdSource(valor(CAMPO_ORIGEM), unit.spineDefaultSourceId),
+      // A origem manda no relatório de onde a clínica investe. Quando o campo
+      // do Kommo está vazio, o próprio título costuma dizer o canal ("... Insta")
+      // — usar isso é melhor que jogar tudo no padrão e contar Instagram como
+      // WhatsApp.
+      idSource: SpineService.resolverIdSource(
+        valor(CAMPO_ORIGEM) ?? canalNoTitulo(titulo),
+        unit.spineDefaultSourceId,
+      ),
       addressCity: valor(CAMPO_CIDADE),
       addressUf: valor(CAMPO_ESTADO),
     },
