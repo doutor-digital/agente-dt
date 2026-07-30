@@ -160,25 +160,15 @@ export interface Preparo {
  * deles. Poder OLHAR o que sairia, antes de sair, é a diferença entre revisar
  * e descobrir depois.
  */
-export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Preparo> {
-  // NÃO exige franquia conectada de propósito: montar o cadastro só lê o
-  // Kommo. Travar aqui derrubaria justamente o caso de uso da prévia —
-  // conferir os campos ANTES de ligar o espelhamento. Quem decide se pode
-  // enviar é `syncLeadToSpine`.
-  if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
-    return { ok: false, etapa: 'kommo', motivo: 'leadId inválido' };
-  }
-
-  const jaTem = await prisma.spineLeadLink.findUnique({
-    where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
-  });
-  // Só bloqueia se JÁ FOI CRIADO. Uma tentativa que falhou, ou que foi ignorada
-  // por falta de nome, tem que ser retentada — é assim que o lead entra sozinho
-  // no turno em que a IA descobre o nome, sem ninguém reprocessar nada.
-  if (jaTem?.status === 'ok' && jaTem.spineIdLead) {
-    return { ok: false, etapa: 'ja-enviado', spineIdLead: jaTem.spineIdLead };
-  }
-
+/**
+ * Lê o Kommo e monta o payload. NÃO decide se pode enviar — só traduz.
+ *
+ * Separado de `prepararLead` porque as duas perguntas são diferentes: "o que
+ * sairia" vale sempre; "pode sair" depende de já ter ido. O cadastro de
+ * paciente precisa da primeira justamente quando a segunda diz não, porque o
+ * paciente nasce de um lead que JÁ foi espelhado.
+ */
+export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Preparo> {
   const kommo = createKommoClient(unit);
   let lead;
   try {
@@ -238,6 +228,160 @@ export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Pre
       addressUf: SpineService.resolverUf(valor(CAMPO_ESTADO)),
     },
   };
+}
+
+export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Preparo> {
+  // NÃO exige franquia conectada de propósito: montar o cadastro só lê o
+  // Kommo. Travar aqui derrubaria justamente o caso de uso da prévia —
+  // conferir os campos ANTES de ligar o espelhamento. Quem decide se pode
+  // enviar é `syncLeadToSpine`.
+  if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
+    return { ok: false, etapa: 'kommo', motivo: 'leadId inválido' };
+  }
+
+  const jaTem = await prisma.spineLeadLink.findUnique({
+    where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+  });
+  // Só bloqueia se JÁ FOI CRIADO. Uma tentativa que falhou, ou que foi ignorada
+  // por falta de nome, tem que ser retentada — é assim que o lead entra sozinho
+  // no turno em que a IA descobre o nome, sem ninguém reprocessar nada.
+  if (jaTem?.status === 'ok' && jaTem.spineIdLead) {
+    return { ok: false, etapa: 'ja-enviado', spineIdLead: jaTem.spineIdLead };
+  }
+
+  return montarPayload(unit, kommoLeadId);
+}
+
+/** O cadastro de PACIENTE que iria — só os campos que a franquia exige. */
+export interface PayloadDoPaciente {
+  name: string;
+  /** Já em E.164: /api/clients recusa qualquer outro formato. */
+  whatsapp: string | null;
+  idSource: number;
+  idLead: number | null;
+  addressCity: string | null;
+  addressUf: string | null;
+}
+
+export interface PreparoPaciente {
+  ok: boolean;
+  motivo?: string;
+  etapa?: 'desligado' | 'sem-lead' | 'ja-cadastrado' | 'nome-incompleto' | 'sem-contato' | 'pronto';
+  payload?: PayloadDoPaciente;
+  spineIdClient?: number;
+}
+
+/**
+ * Monta o cadastro de paciente sem enviar. Mesmo motivo da prévia do lead: lá
+ * não existe exclusão, então poder olhar antes é a defesa que sobra.
+ *
+ * As recusas aqui são mais duras que as do lead de propósito — ver cada etapa.
+ */
+export async function prepararPaciente(
+  unit: Unit,
+  kommoLeadId: number,
+): Promise<PreparoPaciente> {
+  const vinculo = await prisma.spineLeadLink.findUnique({
+    where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+  });
+
+  if (vinculo?.spineIdClient) {
+    return { ok: false, etapa: 'ja-cadastrado', spineIdClient: vinculo.spineIdClient };
+  }
+  // O paciente nasce do lead: sem idLead não há o que vincular, e um paciente
+  // solto no CRM deles não aparece no fluxo que a recepção usa.
+  if (!vinculo?.spineIdLead) {
+    return {
+      ok: false,
+      etapa: 'sem-lead',
+      motivo: 'este lead ainda não foi espelhado na franquia — o paciente nasce a partir dele',
+    };
+  }
+
+  // montarPayload, e NÃO prepararLead: este último recusa quando o lead já foi
+  // espelhado, que aqui é exatamente a pré-condição.
+  const preparo = await montarPayload(unit, kommoLeadId);
+  const base = preparo.payload;
+  if (!base) {
+    return {
+      ok: false,
+      etapa: preparo.etapa === 'nome' ? 'nome-incompleto' : 'sem-contato',
+      motivo: preparo.motivo ?? 'não deu pra montar o cadastro',
+    };
+  }
+
+  const partes = base.name.trim().split(/\s+/).filter((x) => x.length >= 2);
+  if (partes.length < 2) {
+    return {
+      ok: false,
+      etapa: 'nome-incompleto',
+      motivo: `o campo lá se chama "Nome Completo" e só temos "${base.name}" — falta o sobrenome`,
+      payload: {
+        name: base.name,
+        whatsapp: base.whatsapp ? SpineService.normalizarWhatsapp(base.whatsapp) : null,
+        idSource: base.idSource,
+        idLead: vinculo.spineIdLead,
+        addressCity: base.addressCity,
+        addressUf: base.addressUf,
+      },
+    };
+  }
+
+  const fone = base.whatsapp ? SpineService.normalizarWhatsapp(base.whatsapp) : null;
+  if (!fone) {
+    return {
+      ok: false,
+      etapa: 'sem-contato',
+      motivo: 'a franquia exige WhatsApp ou e-mail, e a recepção ficaria sem como ligar',
+    };
+  }
+
+  return {
+    ok: true,
+    etapa: 'pronto',
+    payload: {
+      name: base.name,
+      whatsapp: fone,
+      idSource: base.idSource,
+      idLead: vinculo.spineIdLead,
+      addressCity: base.addressCity,
+      addressUf: base.addressUf,
+    },
+  };
+}
+
+/** Cadastra o paciente na franquia a partir de um lead já espelhado. */
+export async function syncPatientToSpine(
+  unit: Unit,
+  kommoLeadId: number,
+): Promise<{ ok: boolean; motivo?: string; spineIdClient?: number; jaExistia?: boolean }> {
+  if (!unit.spineToken) return { ok: false, motivo: 'franquia não conectada nesta unidade' };
+
+  const p = await prepararPaciente(unit, kommoLeadId);
+  if (p.etapa === 'ja-cadastrado') {
+    return { ok: true, spineIdClient: p.spineIdClient, jaExistia: true };
+  }
+  if (!p.ok || !p.payload) return { ok: false, motivo: p.motivo ?? 'não deu pra montar o cadastro' };
+
+  const r = await SpineService.createClient(unit, p.payload);
+  if (!r.ok || !r.data?.idClient) {
+    const motivo = r.error ?? 'a franquia não devolveu idClient';
+    logger.warn({ kommoLeadId, erro: motivo, unit: unit.slug }, 'spine-sync: falha ao criar paciente');
+    return { ok: false, motivo };
+  }
+
+  await prisma.spineLeadLink
+    .update({
+      where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+      data: { spineIdClient: r.data.idClient },
+    })
+    .catch(() => undefined);
+
+  logger.info(
+    { kommoLeadId, spineIdClient: r.data.idClient, unit: unit.slug },
+    'spine-sync: paciente cadastrado na franquia',
+  );
+  return { ok: true, spineIdClient: r.data.idClient };
 }
 
 export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<ResultadoSync> {
@@ -335,4 +479,7 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
   return { ok: true, spineIdLead: r.data.idLead };
 }
 
-export const SpineSyncService = { syncLeadToSpine, prepararLead, pareceNomeAutomatico, limparNome };
+export const SpineSyncService = {
+  prepararPaciente,
+  syncPatientToSpine,
+  montarPayload, syncLeadToSpine, prepararLead, pareceNomeAutomatico, limparNome };

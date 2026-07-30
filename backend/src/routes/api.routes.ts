@@ -117,6 +117,8 @@ import {
   previewLeadHandler,
   prontidaoHandler,
   pendentesHandler,
+  previewPatientHandler,
+  syncPatientHandler,
 } from '../controllers/spine.controller.js';
 import {
   getAlerts,
@@ -291,6 +293,8 @@ apiRouter.get('/units/:id/spine/lead-links', requireUnitAccess, listLeadLinksHan
 apiRouter.post('/units/:id/spine/lead-preview', requireUnitAccess, previewLeadHandler);
 apiRouter.get('/units/:id/spine/prontidao', requireUnitAccess, prontidaoHandler);
 apiRouter.get('/units/:id/spine/pendentes', requireUnitAccess, pendentesHandler);
+apiRouter.post('/units/:id/spine/patient-preview', requireUnitAccess, previewPatientHandler);
+apiRouter.post('/units/:id/spine/sync-patient', requireUnitAccess, syncPatientHandler);
 // Bloqueio manual de horário — supre o que a API da franquia não expõe.
 apiRouter.post('/units/:id/agenda/blocks', requireUnitAccess, createAgendaBlockHandler);
 apiRouter.get('/units/:id/agenda/blocks', requireUnitAccess, listAgendaBlocksHandler);

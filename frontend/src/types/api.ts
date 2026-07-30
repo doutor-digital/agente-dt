@@ -1201,3 +1201,21 @@ export interface SpinePendentesResponse {
   leads: SpineLeadPendente[];
   resumo: Record<string, number>;
 }
+
+/** O cadastro de paciente que iria pro POST /api/clients da franquia. */
+export interface SpinePatientPreview {
+  ok: boolean;
+  motivo?: string;
+  etapa?: 'desligado' | 'sem-lead' | 'ja-cadastrado' | 'nome-incompleto' | 'sem-contato' | 'pronto';
+  payload?: {
+    name: string;
+    whatsapp: string | null;
+    idSource: number;
+    idLead: number | null;
+    addressCity: string | null;
+    addressUf: string | null;
+  };
+  spineIdClient?: number;
+  origemLegivel?: string | null;
+  requisicao?: { metodo: string; rota: string; base: string };
+}

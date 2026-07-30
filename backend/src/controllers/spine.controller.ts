@@ -408,6 +408,44 @@ export async function previewLeadHandler(req: Request, res: Response): Promise<v
   });
 }
 
+/** PRÉVIA DO PACIENTE — o que iria pro POST /api/clients, sem enviar. */
+export async function previewPatientHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  const kommoLeadId = Number(req.body?.kommoLeadId ?? req.query?.kommoLeadId);
+  if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
+    res.status(400).json({ error: 'kommoLeadId_obrigatorio' });
+    return;
+  }
+  const p = await SpineSyncService.prepararPaciente(unit, kommoLeadId);
+  res.json({
+    ...p,
+    origemLegivel: p.payload ? SpineService.nomeDaOrigem(p.payload.idSource) : null,
+    // A tela mostra a chamada literal. Quem confere um cadastro que não dá pra
+    // apagar merece ver o endereço exato pra onde ele vai.
+    requisicao: { metodo: 'POST', rota: '/api/clients', base: unit.spineBaseUrl },
+  });
+}
+
+/** Cadastra o paciente — manual, a partir de um lead já espelhado. */
+export async function syncPatientHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  const kommoLeadId = Number(req.body?.kommoLeadId);
+  if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
+    res.status(400).json({ error: 'kommoLeadId_obrigatorio' });
+    return;
+  }
+  const r = await SpineSyncService.syncPatientToSpine(unit, kommoLeadId);
+  res.status(r.ok ? 200 : 422).json(r);
+}
+
 /**
  * LEADS PENDENTES — quem entrou no Kommo e ainda não está na franquia.
  *

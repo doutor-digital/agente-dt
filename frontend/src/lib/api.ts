@@ -60,6 +60,7 @@ import type {
   SpineLeadPreview,
   SpineProntidao,
   SpinePendentesResponse,
+  SpinePatientPreview,
 } from '../types/api';
 
 // Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
@@ -266,6 +267,27 @@ export const api = {
     const { data } = await http.post<SpineLeadPreview>(
       `/units/${unitId}/spine/lead-preview`,
       { kommoLeadId },
+    );
+    return data;
+  },
+  /** O cadastro de PACIENTE que sairia — nada é escrito na franquia. */
+  async spinePatientPreview(unitId: string, kommoLeadId: number): Promise<SpinePatientPreview> {
+    const { data } = await http.post<SpinePatientPreview>(
+      `/units/${unitId}/spine/patient-preview`,
+      { kommoLeadId },
+      { timeout: 30_000 },
+    );
+    return data;
+  },
+  /** Cadastra o paciente na franquia. Permanente — só depois da prévia. */
+  async spineSyncPatient(
+    unitId: string,
+    kommoLeadId: number,
+  ): Promise<{ ok: boolean; motivo?: string; spineIdClient?: number }> {
+    const { data } = await http.post<{ ok: boolean; motivo?: string; spineIdClient?: number }>(
+      `/units/${unitId}/spine/sync-patient`,
+      { kommoLeadId },
+      { timeout: 30_000, validateStatus: (s) => s === 200 || s === 422 },
     );
     return data;
   },

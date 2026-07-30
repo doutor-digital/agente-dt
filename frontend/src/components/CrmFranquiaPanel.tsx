@@ -45,6 +45,7 @@ import type {
   SpineLeadPreview,
   SpineProntidao,
   SpinePendentesResponse,
+  SpinePatientPreview,
   Unit,
 } from '../types/api';
 
@@ -229,6 +230,7 @@ export default function CrmFranquiaPanel() {
         <Espelhamento form={form} setForm={setForm} temToken={status?.hasToken ?? false} />
 
         <Previa unitId={unit.id} onEnviado={carregar} />
+        <PacienteNaFranquia unitId={unit.id} hist={hist} onEnviado={carregar} />
 
         <Historico hist={hist} onRecarregar={carregar} />
       </div>
@@ -281,7 +283,7 @@ function BarraDeEstado({
   }
   return (
     <div className="sticky bottom-0 border-t border-amber-500/30 bg-zinc-950/95 px-8 py-4 backdrop-blur">
-      <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3">
+      <div className="mx-auto flex max-w-375 flex-wrap items-center gap-3">
         <PiWarningCircleBold size={16} className="shrink-0 text-amber-400" />
         <span className="text-sm text-zinc-200">
           {erro ? 'Não salvou.' : 'Alterações não salvas.'}
@@ -1164,6 +1166,246 @@ function Previa({ unitId, onEnviado }: { unitId: string; onEnviado: () => Promis
                 Cancelar
               </button>
               <button className="btn-primary" onClick={() => void enviar()} disabled={enviando}>
+                {enviando ? (
+                  <PiSpinnerGapBold size={14} className="animate-spin" />
+                ) : (
+                  <PiCheckBold size={14} />
+                )}
+                Cadastrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// PACIENTE — o "Cadastrar Paciente" que existe dentro do lead, do nosso lado.
+//
+// Um lead é contato; um paciente é o cadastro que a recepção usa pra chamar na
+// sala. São dois registros, dois endpoints e duas validações — e NENHUM dos
+// dois tem exclusão pela API da franquia.
+//
+// Por isso a seção mostra a chamada literal (POST /api/clients) e cada campo
+// do jeito que sai, não do jeito que está no Kommo. O telefone é o caso claro:
+// o Kommo devolve "'+55 (99) 98185-7135" e este endpoint recusa qualquer coisa
+// que não seja "+5599981857135". Mostrar o valor bruto seria mostrar uma coisa
+// e mandar outra — que é o defeito que a prévia existe pra impedir.
+// ---------------------------------------------------------------------------
+
+const MOTIVO_PACIENTE: Record<string, { titulo: string; explica: string }> = {
+  'sem-lead': {
+    titulo: 'Este lead ainda não está na franquia',
+    explica:
+      'O paciente nasce a partir do lead — ele precisa existir lá primeiro. Envie o lead na seção acima.',
+  },
+  'nome-incompleto': {
+    titulo: 'Falta o sobrenome',
+    explica:
+      'O campo da franquia se chama "Nome Completo". Só o primeiro nome vira um cadastro que não distingue dos outros — e lá não se apaga. Assim que a Sofia descobrir, o envio libera sozinho.',
+  },
+  'sem-contato': {
+    titulo: 'Sem telefone',
+    explica:
+      'A franquia exige WhatsApp ou e-mail. Sem nenhum dos dois, a recepção fica com um nome sem como ligar.',
+  },
+  'ja-cadastrado': {
+    titulo: 'Já é paciente lá',
+    explica: 'Nada seria enviado de novo.',
+  },
+};
+
+function PacienteNaFranquia({
+  unitId,
+  hist,
+  onEnviado,
+}: {
+  unitId: string;
+  hist: SpineLeadLinksResponse | null;
+  onEnviado: () => Promise<void>;
+}) {
+  const [leadId, setLeadId] = useState('');
+  const [r, setR] = useState<SpinePatientPreview | null>(null);
+  const [carregando, setCarregando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [confirmando, setConfirmando] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [feito, setFeito] = useState<string | null>(null);
+
+  // Só leads que JÁ estão na franquia podem virar paciente — os outros nem
+  // aparecem, em vez de aparecerem e recusarem depois do clique.
+  const candidatos = (hist?.links ?? []).filter((l) => l.spineIdLead && !l.spineIdClient);
+  const jaPacientes = (hist?.links ?? []).filter((l) => l.spineIdClient).length;
+
+  async function ver(id: number) {
+    setCarregando(true);
+    setErro(null);
+    setR(null);
+    setFeito(null);
+    setLeadId(String(id));
+    try {
+      setR(await api.spinePatientPreview(unitId, id));
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao consultar');
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  async function cadastrar() {
+    setEnviando(true);
+    setErro(null);
+    try {
+      const res = await api.spineSyncPatient(unitId, Number(leadId));
+      if (res.ok) {
+        setFeito(`Paciente cadastrado com o id ${res.spineIdClient}.`);
+        setR(null);
+        await onEnviado();
+      } else {
+        setErro(res.motivo ?? 'a franquia recusou');
+      }
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao cadastrar');
+    } finally {
+      setEnviando(false);
+      setConfirmando(false);
+    }
+  }
+
+  const bloqueio = r && !r.ok && r.etapa ? MOTIVO_PACIENTE[r.etapa] : null;
+
+  return (
+    <section className="surface p-7">
+      <h2 className="text-sm font-semibold text-zinc-100">Cadastro de paciente</h2>
+      <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
+        O mesmo botão &quot;Cadastrar Paciente&quot; que existe dentro do lead no sistema da clínica.
+        A franquia pede três campos, e a Sofia preenche os três.
+      </p>
+
+      {/* A CHAMADA LITERAL. Quem confere algo que não dá pra apagar merece ver
+          o endereço exato, não uma descrição dele. */}
+      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3.5 font-mono text-[11px]">
+        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-400">
+          POST
+        </span>
+        <span className="text-zinc-300">{r?.requisicao?.rota ?? '/api/clients'}</span>
+        <span className="text-zinc-600">
+          {r?.requisicao?.base ?? 'https://app-api-prod.doutorhernia.com.br'}
+        </span>
+        <span className="ml-auto font-sans text-zinc-500">
+          obrigatórios: <span className="text-zinc-300">nome, origem, telefone</span>
+        </span>
+      </div>
+
+      {candidatos.length > 0 ? (
+        <>
+          <p className="mt-5 text-xs font-medium text-zinc-300">
+            Leads que já estão na franquia e ainda não são pacientes
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {candidatos.slice(0, 10).map((l) => (
+              <li key={l.kommoLeadId}>
+                <button
+                  type="button"
+                  onClick={() => void ver(l.kommoLeadId)}
+                  className={`flex w-full flex-wrap items-center gap-2.5 rounded-lg border p-3 text-left text-xs transition-colors ${
+                    leadId === String(l.kommoLeadId)
+                      ? 'border-zinc-600 bg-zinc-800/50'
+                      : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50'
+                  }`}
+                >
+                  <span className="tabular-nums text-zinc-300">Kommo {l.kommoLeadId}</span>
+                  <PiArrowRightBold size={11} className="text-zinc-600" />
+                  <span className="tabular-nums text-emerald-400">franquia {l.spineIdLead}</span>
+                  <span className="ml-auto text-zinc-500">ver o que sairia</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="mt-5 text-sm text-zinc-500">
+          {jaPacientes > 0
+            ? `Nenhum lead pendente — os ${jaPacientes} que estão na franquia já são pacientes.`
+            : 'Nenhum lead espelhado na franquia ainda. Envie um na seção acima primeiro.'}
+        </p>
+      )}
+
+      {erro && <p className="mt-3 text-xs text-rose-300">{erro}</p>}
+      {feito && (
+        <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-emerald-400">
+          <PiCheckCircleFill size={13} /> {feito}
+        </p>
+      )}
+      {carregando && (
+        <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-zinc-500">
+          <PiSpinnerGapBold size={13} className="animate-spin" /> montando o cadastro…
+        </p>
+      )}
+
+      {bloqueio && (
+        <div className="mt-4 rounded-lg border border-amber-500/25 bg-amber-500/5 p-4">
+          <p className="text-sm font-medium text-amber-300">
+            {r?.etapa === 'ja-cadastrado'
+              ? `${bloqueio.titulo} (id ${r.spineIdClient})`
+              : bloqueio.titulo}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-zinc-400">{bloqueio.explica}</p>
+        </div>
+      )}
+
+      {r?.payload && (
+        <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
+          <p className="text-xs font-medium text-zinc-300">
+            {r.ok ? 'Cadastro que sairia' : 'O que temos até agora'}
+          </p>
+          <dl className="mt-3 grid gap-x-8 gap-y-2.5 sm:grid-cols-2">
+            <Campo rotulo="Nome completo" valor={r.payload.name} />
+            <Campo
+              rotulo="Telefone (formato da franquia)"
+              valor={r.payload.whatsapp}
+              alerta="obrigatório — sem ele o cadastro é recusado"
+            />
+            <Campo rotulo="Origem" valor={`${r.origemLegivel ?? ''} · ${r.payload.idSource}`} />
+            <Campo rotulo="Vinculado ao lead" valor={r.payload.idLead ? `#${r.payload.idLead}` : null} />
+            <Campo rotulo="Cidade" valor={r.payload.addressCity} />
+            <Campo rotulo="UF" valor={r.payload.addressUf} />
+          </dl>
+
+          {r.ok && (
+            <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-zinc-800 pt-4">
+              <button className="btn-primary" onClick={() => setConfirmando(true)} disabled={enviando}>
+                <PiArrowRightBold size={14} />
+                Cadastrar paciente
+              </button>
+              <span className="text-[11px] leading-relaxed text-zinc-500">
+                Confira os campos. Depois de cadastrar, só o suporte da franquia consegue apagar.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {confirmando && r?.payload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-6">
+            <h3 className="text-sm font-semibold text-zinc-100">Cadastrar paciente?</h3>
+            <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+              Vai criar <span className="text-zinc-100">{r.payload.name}</span>
+              {r.payload.whatsapp ? ` (${r.payload.whatsapp})` : ''} como paciente, vinculado ao lead{' '}
+              {r.payload.idLead}.
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-amber-300">
+              A franquia não tem exclusão. Se estiver errado, só sai abrindo chamado no suporte deles.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => setConfirmando(false)} disabled={enviando}>
+                Cancelar
+              </button>
+              <button className="btn-primary" onClick={() => void cadastrar()} disabled={enviando}>
                 {enviando ? (
                   <PiSpinnerGapBold size={14} className="animate-spin" />
                 ) : (
