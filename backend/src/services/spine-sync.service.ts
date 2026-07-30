@@ -114,9 +114,10 @@ export interface Preparo {
  * e descobrir depois.
  */
 export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Preparo> {
-  if (!unit.spineEnabled || !unit.spineToken) {
-    return { ok: false, etapa: 'conexao', motivo: 'franquia não conectada nesta unidade' };
-  }
+  // NÃO exige franquia conectada de propósito: montar o cadastro só lê o
+  // Kommo. Travar aqui derrubaria justamente o caso de uso da prévia —
+  // conferir os campos ANTES de ligar o espelhamento. Quem decide se pode
+  // enviar é `syncLeadToSpine`.
   if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
     return { ok: false, etapa: 'kommo', motivo: 'leadId inválido' };
   }
@@ -178,6 +179,9 @@ export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Pre
 }
 
 export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<ResultadoSync> {
+  if (!unit.spineToken) {
+    return { ok: false, motivo: 'franquia não conectada nesta unidade' };
+  }
   if (!unit.spineSyncLeads) {
     return { ok: false, motivo: 'espelhamento de leads desligado nesta unidade' };
   }
