@@ -44,6 +44,7 @@ import type {
   SpineLeadLinksResponse,
   SpineLeadPreview,
   SpineProntidao,
+  SpinePendentesResponse,
   Unit,
 } from '../types/api';
 
@@ -220,7 +221,7 @@ export default function CrmFranquiaPanel() {
 
         <Espelhamento form={form} setForm={setForm} temToken={status?.hasToken ?? false} />
 
-        <Previa unitId={unit.id} />
+        <Previa unitId={unit.id} onEnviado={carregar} />
 
         <Historico hist={hist} onRecarregar={carregar} />
       </div>
@@ -677,27 +678,58 @@ function Espelhamento({
 }
 
 // ---------------------------------------------------------------------------
-// Prévia — ver o cadastro antes de ele existir do outro lado.
+// Prévia e envio manual.
 //
-// É a única defesa barata contra o que não dá pra desfazer. Consulta o Kommo,
-// monta exatamente o que sairia e devolve; nada é escrito na franquia.
+// A franquia não apaga lead: cada engano vira chamado no suporte deles. Duas
+// consequências no desenho desta seção:
+//
+//   1. NINGUÉM DIGITA ID. A lista mostra quem entrou no Kommo e ainda não
+//      chegou lá, já separado por situação. Sem isso, usar a prévia exigia
+//      saber o id de cabeça — ou seja, exigia o dev.
+//   2. NÃO EXISTE "ENVIAR" SEM TER OLHADO. O botão só aparece depois que a
+//      prévia carregou, e pede confirmação mostrando o nome que vai gravar.
+//      Escrita permanente atrás de um clique distraído é questão de tempo.
 // ---------------------------------------------------------------------------
 
-function Previa({ unitId }: { unitId: string }) {
+const ROTULO_SITUACAO: Record<string, { texto: string; cor: string }> = {
+  pronto: { texto: 'pronto pra enviar', cor: 'text-emerald-400' },
+  'sem-nome': { texto: 'aguardando nome', cor: 'text-zinc-500' },
+  falhou: { texto: 'falhou', cor: 'text-rose-400' },
+  enviado: { texto: 'já está lá', cor: 'text-zinc-600' },
+};
+
+function Previa({ unitId, onEnviado }: { unitId: string; onEnviado: () => Promise<void> }) {
+  const [pend, setPend] = useState<SpinePendentesResponse | null>(null);
+  const [carregandoLista, setCarregandoLista] = useState(false);
   const [leadId, setLeadId] = useState('');
   const [r, setR] = useState<SpineLeadPreview | null>(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [confirmando, setConfirmando] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [enviado, setEnviado] = useState<string | null>(null);
 
-  async function ver() {
-    const id = Number(leadId);
-    if (!Number.isFinite(id) || id <= 0) {
-      setErro('Informe o id do lead no Kommo.');
-      return;
+  const carregarLista = useCallback(async () => {
+    setCarregandoLista(true);
+    try {
+      setPend(await api.spinePendentes(unitId, 7));
+    } catch {
+      setPend(null); // depende do Kommo; falhar aqui não trava a busca por id
+    } finally {
+      setCarregandoLista(false);
     }
+  }, [unitId]);
+
+  useEffect(() => {
+    void carregarLista();
+  }, [carregarLista]);
+
+  async function ver(id: number) {
     setCarregando(true);
     setErro(null);
     setR(null);
+    setEnviado(null);
+    setLeadId(String(id));
     try {
       setR(await api.spineLeadPreview(unitId, id));
     } catch (e) {
@@ -707,17 +739,81 @@ function Previa({ unitId }: { unitId: string }) {
     }
   }
 
+  async function enviar() {
+    const id = Number(leadId);
+    setEnviando(true);
+    setErro(null);
+    try {
+      const res = await api.spineSyncLead(unitId, id);
+      if (res.ok) {
+        setEnviado(`Cadastrado na franquia com o id ${res.spineIdLead}.`);
+        setR(null);
+        await Promise.all([carregarLista(), onEnviado()]);
+      } else {
+        setErro(res.motivo ?? 'a franquia recusou');
+      }
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao enviar');
+    } finally {
+      setEnviando(false);
+      setConfirmando(false);
+    }
+  }
+
+  const naoEnviados = (pend?.leads ?? []).filter((l) => l.situacao !== 'enviado');
+
   return (
     <section className="surface p-7">
-      <h2 className="text-sm font-semibold text-zinc-100">Prévia — o que seria enviado</h2>
-      <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
-        Monta o cadastro a partir de um lead do Kommo e mostra aqui, sem escrever nada na franquia.
-        Use antes de ligar o espelhamento, ou sempre que desconfiar de um campo.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-zinc-100">Quem ainda não chegou lá</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
+            Leads dos últimos 7 dias que não estão no CRM da franquia. Clique em um para ver o
+            cadastro exato que sairia — a prévia não escreve nada.
+          </p>
+        </div>
+        <button className="btn-ghost" disabled={carregandoLista} onClick={() => void carregarLista()}>
+          <PiArrowsClockwiseBold size={14} className={carregandoLista ? 'animate-spin' : ''} />
+          Atualizar
+        </button>
+      </div>
 
-      <div className="mt-5 flex flex-wrap items-end gap-3">
+      {naoEnviados.length > 0 ? (
+        <ul className="mt-5 space-y-1.5">
+          {naoEnviados.slice(0, 12).map((l) => {
+            const rot = ROTULO_SITUACAO[l.situacao] ?? ROTULO_SITUACAO['sem-nome'];
+            const ativo = leadId === String(l.kommoLeadId);
+            return (
+              <li key={l.kommoLeadId}>
+                <button
+                  type="button"
+                  onClick={() => void ver(l.kommoLeadId)}
+                  className={`flex w-full flex-wrap items-center gap-2.5 rounded-lg border p-3 text-left text-xs transition-colors ${
+                    ativo
+                      ? 'border-zinc-600 bg-zinc-800/50'
+                      : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50'
+                  }`}
+                >
+                  <span className="font-medium text-zinc-200">
+                    {l.nomeLimpo ?? (l.titulo || `Lead ${l.kommoLeadId}`)}
+                  </span>
+                  <span className={rot.cor}>{rot.texto}</span>
+                  {l.tentativas > 3 && <span className="text-amber-400">{l.tentativas} tentativas</span>}
+                  <span className="ml-auto tabular-nums text-zinc-600">{l.kommoLeadId}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="mt-5 text-sm text-zinc-500">
+          {pend ? 'Nenhum lead pendente nos últimos 7 dias.' : 'Carregando…'}
+        </p>
+      )}
+
+      <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-zinc-800 pt-5">
         <label className="block">
-          <span className="text-xs font-medium text-zinc-300">Id do lead no Kommo</span>
+          <span className="text-xs font-medium text-zinc-300">Ou busque por id do Kommo</span>
           <input
             className="field mt-1 w-48"
             inputMode="numeric"
@@ -725,21 +821,26 @@ function Previa({ unitId }: { unitId: string }) {
             value={leadId}
             onChange={(e) => setLeadId(e.target.value.replace(/\D/g, ''))}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void ver();
+              if (e.key === 'Enter' && leadId) void ver(Number(leadId));
             }}
           />
         </label>
-        <button className="btn-ghost" onClick={() => void ver()} disabled={carregando}>
-          {carregando ? (
-            <PiSpinnerGapBold size={14} className="animate-spin" />
-          ) : (
-            <PiEyeBold size={14} />
-          )}
+        <button
+          className="btn-ghost"
+          onClick={() => leadId && void ver(Number(leadId))}
+          disabled={carregando || !leadId}
+        >
+          {carregando ? <PiSpinnerGapBold size={14} className="animate-spin" /> : <PiEyeBold size={14} />}
           Ver sem enviar
         </button>
       </div>
 
       {erro && <p className="mt-3 text-xs text-rose-300">{erro}</p>}
+      {enviado && (
+        <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-emerald-400">
+          <PiCheckCircleFill size={13} /> {enviado}
+        </p>
+      )}
 
       {r && !r.payload && (
         <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-500/5 p-4">
@@ -754,31 +855,62 @@ function Previa({ unitId }: { unitId: string }) {
 
       {r?.payload && (
         <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
-          <p className="text-xs font-medium text-zinc-300">
-            Cadastro que sairia — e nada além disto
-          </p>
+          <p className="text-xs font-medium text-zinc-300">Cadastro que sairia — e nada além disto</p>
           <dl className="mt-3 grid gap-x-8 gap-y-2.5 sm:grid-cols-2">
             <Campo rotulo="Nome" valor={r.payload.name} />
             <Campo rotulo="WhatsApp" valor={r.payload.whatsapp} alerta="a recepção fica sem como ligar" />
-            <Campo
-              rotulo="Origem"
-              valor={`${r.origemLegivel ?? ''} · ${r.payload.idSource}`}
-            />
+            <Campo rotulo="Origem" valor={`${r.origemLegivel ?? ''} · ${r.payload.idSource}`} />
             <Campo rotulo="Cidade" valor={r.payload.addressCity} />
             <Campo rotulo="UF" valor={r.payload.addressUf} />
             <div className="sm:col-span-2">
               <dt className="text-[11px] uppercase tracking-wide text-zinc-500">Descrição</dt>
-              <dd className="mt-0.5 text-sm leading-relaxed text-zinc-200">
-                {r.payload.description}
-              </dd>
+              <dd className="mt-0.5 text-sm leading-relaxed text-zinc-200">{r.payload.description}</dd>
             </div>
           </dl>
           {r.tituloKommo && r.tituloKommo !== r.payload.name && (
             <p className="mt-4 border-t border-zinc-800 pt-3 text-[11px] leading-relaxed text-zinc-500">
-              No Kommo o título é &quot;{r.tituloKommo}&quot; — a data do fim é removida antes de
-              enviar.
+              No Kommo o título é &quot;{r.tituloKommo}&quot; — data e canal saem antes de enviar.
             </p>
           )}
+
+          <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-zinc-800 pt-4">
+            <button className="btn-primary" onClick={() => setConfirmando(true)} disabled={enviando}>
+              <PiArrowRightBold size={14} />
+              Enviar para a franquia
+            </button>
+            <span className="text-[11px] leading-relaxed text-zinc-500">
+              Confira os campos acima. Depois de enviar, só o suporte da franquia consegue apagar.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {confirmando && r?.payload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-6">
+            <h3 className="text-sm font-semibold text-zinc-100">Cadastrar na franquia?</h3>
+            <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+              Vai criar <span className="text-zinc-100">{r.payload.name}</span>
+              {r.payload.whatsapp ? ` (${r.payload.whatsapp})` : ''} no CRM da clínica.
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-amber-300">
+              A franquia não tem exclusão de lead. Se estiver errado, só sai abrindo chamado no
+              suporte deles.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => setConfirmando(false)} disabled={enviando}>
+                Cancelar
+              </button>
+              <button className="btn-primary" onClick={() => void enviar()} disabled={enviando}>
+                {enviando ? (
+                  <PiSpinnerGapBold size={14} className="animate-spin" />
+                ) : (
+                  <PiCheckBold size={14} />
+                )}
+                Cadastrar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>

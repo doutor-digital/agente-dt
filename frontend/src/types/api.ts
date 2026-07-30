@@ -1179,3 +1179,22 @@ export interface SpineProntidao {
   prontas: number;
   total: number;
 }
+
+/** Um lead do Kommo na janela recente e o que falta pra ele chegar na franquia. */
+export interface SpineLeadPendente {
+  kommoLeadId: number;
+  titulo: string;
+  /** O nome que sairia — null quando o título ainda é etiqueta automática. */
+  nomeLimpo: string | null;
+  criadoEm: string | null;
+  spineIdLead: number | null;
+  situacao: 'pronto' | 'sem-nome' | 'falhou' | 'enviado';
+  motivo: string | null;
+  tentativas: number;
+}
+
+export interface SpinePendentesResponse {
+  dias: number;
+  leads: SpineLeadPendente[];
+  resumo: Record<string, number>;
+}

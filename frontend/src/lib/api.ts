@@ -59,6 +59,7 @@ import type {
   SpineLeadLinksResponse,
   SpineLeadPreview,
   SpineProntidao,
+  SpinePendentesResponse,
 } from '../types/api';
 
 // Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
@@ -265,6 +266,14 @@ export const api = {
     const { data } = await http.post<SpineLeadPreview>(
       `/units/${unitId}/spine/lead-preview`,
       { kommoLeadId },
+    );
+    return data;
+  },
+  /** Quem entrou no Kommo na janela recente e ainda não está na franquia. */
+  async spinePendentes(unitId: string, dias = 7): Promise<SpinePendentesResponse> {
+    const { data } = await http.get<SpinePendentesResponse>(
+      `/units/${unitId}/spine/pendentes`,
+      { params: { dias }, timeout: 30_000 },
     );
     return data;
   },

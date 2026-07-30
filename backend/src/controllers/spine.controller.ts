@@ -21,6 +21,7 @@ import { logger } from '../lib/logger.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaService } from '../services/agenda.service.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
+import { createKommoClient } from '../services/kommo.service.js';
 
 /** "agora" no relógio da clínica — usa o fuso IANA da unidade. */
 function agoraLocalIso(tz: string): string {
@@ -403,6 +404,72 @@ export async function previewLeadHandler(req: Request, res: Response): Promise<v
     ...preparo,
     // Pra tela traduzir o número em nome sem ter a tabela.
     origemLegivel: preparo.payload ? SpineService.nomeDaOrigem(preparo.payload.idSource) : null,
+  });
+}
+
+/**
+ * LEADS PENDENTES — quem entrou no Kommo e ainda não está na franquia.
+ *
+ * Sem isto, usar a prévia exige saber o id do lead de cabeça, e mandar um lead
+ * atrasado exige o dev. A lista responde "quem falta" e dá o id de bandeja.
+ */
+export async function pendentesHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+
+  const dias = Math.min(Math.max(Number(req.query.dias ?? 7), 1), 30);
+  const desde = Math.floor(Date.now() / 1000) - dias * 86_400;
+
+  let brutos: { id: number; name?: string | null; created_at?: number }[] = [];
+  try {
+    const kommo = createKommoClient(unit);
+    brutos = await kommo.listLeadsDesde(desde, 100);
+  } catch (err) {
+    res.status(502).json({ error: 'kommo_indisponivel', message: String(err) });
+    return;
+  }
+
+  const vinculos = await prisma.spineLeadLink.findMany({
+    where: { unitId: unit.id, kommoLeadId: { in: brutos.map((l) => l.id) } },
+  });
+  const porLead = new Map(vinculos.map((v) => [v.kommoLeadId, v]));
+
+  const leads = brutos.map((l) => {
+    const v = porLead.get(l.id);
+    const titulo = l.name ?? '';
+    const semNome = SpineSyncService.pareceNomeAutomatico(titulo);
+    return {
+      kommoLeadId: l.id,
+      titulo,
+      // O nome que sairia — o título é etiqueta de trabalho, não nome.
+      nomeLimpo: semNome ? null : SpineSyncService.limparNome(titulo),
+      criadoEm: l.created_at ? new Date(l.created_at * 1000).toISOString() : null,
+      spineIdLead: v?.spineIdLead ?? null,
+      // O estado que a tela usa pra agrupar e decidir o que oferecer.
+      situacao: v?.spineIdLead
+        ? ('enviado' as const)
+        : semNome
+          ? ('sem-nome' as const)
+          : v?.status === 'falhou'
+            ? ('falhou' as const)
+            : ('pronto' as const),
+      motivo: v?.motivo ?? null,
+      tentativas: v?.tentativas ?? 0,
+    };
+  });
+
+  res.json({
+    dias,
+    leads,
+    resumo: {
+      pronto: leads.filter((l) => l.situacao === 'pronto').length,
+      'sem-nome': leads.filter((l) => l.situacao === 'sem-nome').length,
+      falhou: leads.filter((l) => l.situacao === 'falhou').length,
+      enviado: leads.filter((l) => l.situacao === 'enviado').length,
+    },
   });
 }
 

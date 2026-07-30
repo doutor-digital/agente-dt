@@ -941,6 +941,27 @@ export class KommoClient {
   }
 
   /**
+   * Leads criados a partir de um instante (epoch em segundos), mais recentes
+   * primeiro. Diferente de `listLeads`, que varre tudo: aqui interessa só a
+   * janela recente, e trazer 1000 leads pra achar os 20 de ontem é desperdício.
+   */
+  async listLeadsDesde(desdeEpochSeg: number, limite = 100): Promise<KommoLead[]> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
+        params: {
+          limit: Math.min(limite, 250),
+          'filter[created_at][from]': desdeEpochSeg,
+          order: { created_at: 'desc' },
+        },
+      });
+      return data?._embedded?.leads ?? [];
+    } catch (err) {
+      wrapAxiosError(err, 'listLeadsDesde');
+      return [];
+    }
+  }
+
+  /**
    * Lista pipelines do CRM com suas etapas (statuses) embedadas.
    * Usado pelo painel pra mostrar quais IDs colocar no prompt e em
    * `kommoWonStatusIds`.
