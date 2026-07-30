@@ -869,7 +869,12 @@ export async function processAgent(args: {
     // service ignora sozinho quem ainda tem título automático. O unique no
     // vínculo garante um cadastro só, então repetir é barato e não suja nada.
     // Fire-and-forget: se a franquia cair, o paciente segue sendo atendido.
-    if (unit.spineEnabled && unit.spineSyncLeads && leadId > 0) {
+    // Só `spineSyncLeads`. `spineEnabled` governa a AGENDA (consultar horário,
+    // criar agendamento) — são decisões diferentes, e a tela as mostra como
+    // dois interruptores independentes. Exigir os dois aqui fazia "Espelhar
+    // leads: ligado" não espelhar nada, sem nada na tela denunciando.
+    // Token e demais condições quem confere é o próprio service.
+    if (unit.spineSyncLeads && leadId > 0) {
       void SpineSyncService.syncLeadToSpine(unit, leadId).catch((err) => {
         logger.warn({ err: String(err), leadId, unit: unit.slug }, 'spine-sync: erro inesperado');
       });
