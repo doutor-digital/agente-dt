@@ -982,6 +982,34 @@ export class KommoClient {
   }
 
   /**
+   * Leads MEXIDOS recentemente, com etapa e motivo de perda.
+   *
+   * Filtra por updated_at e não created_at de propósito: um lead criado semana
+   * passada e movido pra PERDIDO hoje precisa aparecer — é justamente ele que
+   * o reengajamento por etapa procura. Por created_at ele ficaria invisível.
+   */
+  async listLeadsAtualizadosDesde(
+    desdeEpochSeg: number,
+    limite = 250,
+  ): Promise<Array<{ id: number; status_id?: number; loss_reason_id?: number | null }>> {
+    try {
+      const { data } = await this.http.get<{
+        _embedded?: { leads?: Array<{ id: number; status_id?: number; loss_reason_id?: number | null }> };
+      }>('/leads', {
+        params: {
+          limit: Math.min(limite, 250),
+          'filter[updated_at][from]': desdeEpochSeg,
+          order: { updated_at: 'desc' },
+        },
+      });
+      return data?._embedded?.leads ?? [];
+    } catch (err) {
+      wrapAxiosError(err, 'listLeadsAtualizadosDesde');
+      return [];
+    }
+  }
+
+  /**
    * Lista pipelines do CRM com suas etapas (statuses) embedadas.
    * Usado pelo painel pra mostrar quais IDs colocar no prompt e em
    * `kommoWonStatusIds`.

@@ -7,6 +7,12 @@
 // prometer "te chamo depois". Só que ninguém chamava: não havia worker nenhum.
 // Era uma promessa que o sistema nunca cumpriu.
 //
+// A ESCADA VEM DA TELA, POR ETAPA DO FUNIL
+// -----------------------------------------
+// Quem decide os degraus é FollowUpRule, configurada na tela de Follow-up: uma
+// escada para EM QUALIFICAÇÃO, outra para AGENDADO, outra por motivo de perda.
+// Sem regra ligada, ninguém recebe nada — mesmo com a chave geral ligada.
+//
 // A ESCADA CABE NA JANELA DE 24 HORAS, e isso não é detalhe
 // ----------------------------------------------------------
 // O WhatsApp só permite mensagem livre dentro de 24h desde a última mensagem
@@ -43,6 +49,7 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
+import { ehIntocavel } from './follow-up-presets.js';
 
 /** Varredura a cada minuto: o primeiro degrau é de 5 min e precisa de resolução. */
 const SWEEP_MS = 60_000;
@@ -57,49 +64,84 @@ interface Degrau {
   intencao: string;
 }
 
-const ESCADA: Degrau[] = [
-  {
-    aposMin: 5,
-    intencao:
-      'Toque leve, uma linha, como quem continua a mesma conversa. NÃO recomece ' +
-      'nem se reapresente. Retome exatamente onde parou e devolva a pergunta que ' +
-      'ficou no ar. Se você tinha oferecido horários, ofereça os mesmos de novo.',
-  },
-  {
-    aposMin: 30,
-    intencao:
-      'Ele pode ter se distraído. Retome pelo lado DELE — a queixa que ele contou ' +
-      '— e facilite a resposta: pergunta fechada, de escolher entre duas opções, ' +
-      'não aberta.',
-  },
-  {
-    aposMin: 2 * 60,
-    intencao:
-      'Traga algo de valor, não só cobrança. Um esclarecimento curto sobre o que ' +
-      'acontece na consulta, ou o que a especialista avalia. Termine oferecendo ' +
-      'horário de novo, sem pressa.',
-  },
-  {
-    aposMin: 6 * 60,
-    intencao:
-      'Último toque com oferta ativa. Reconheça o tempo que passou sem cobrar ' +
-      '("imagino que a correria apertou") e ofereça verificar os horários.',
-  },
-  {
-    // 20h: última chance antes de a janela de 24h do WhatsApp fechar. Depois
-    // disto só template pago, então é aqui que a conversa se encerra bem.
-    aposMin: 20 * 60,
-    intencao:
-      'Encerramento educado, SEM pedir resposta. Deixe claro que ele pode chamar ' +
-      'quando quiser e que a porta fica aberta. Esta é a última mensagem.',
-  },
-];
+// A escada NÃO mora mais aqui. Cada etapa do funil tem a sua, configurada na
+// tela de Follow-up e guardada em FollowUpRule; os modelos prontos estão em
+// follow-up-presets.ts.
+//
+// Uma escada fixa neste arquivo continuaria compilando e nunca seria usada —
+// código morto que PARECE configuração é pior que código morto comum: quem
+// vier depois ajusta os minutos aqui, testa, e não entende por que nada muda.
 
 /**
  * Teto absoluto. Passou disto, a janela do WhatsApp fechou e mensagem livre não
  * chega — mandar seria gastar chamada de modelo pra produzir silêncio.
  */
 const JANELA_WHATSAPP_MIN = 23 * 60;
+
+/**
+ * ETAPA DE CADA LEAD, EM LOTE E COM CACHE.
+ *
+ * A regra a aplicar depende de onde o lead está no funil, e essa informação
+ * mora no Kommo. Consultar lead a lead seriam 40 chamadas por varredura, a cada
+ * minuto — inviável.
+ *
+ * Então busca em lote os leads MEXIDOS nos últimos dias (updated_at, não
+ * created_at: um lead antigo movido pra PERDIDO hoje precisa aparecer) e
+ * guarda por 3 minutos. O degrau mais fino é de 5 minutos, então 3 de cache
+ * não atrasa nada perceptível e derruba as chamadas de ~2400/h para ~20/h.
+ */
+interface EstadoDoLead {
+  statusId: number | null;
+  lossReasonId: number | null;
+}
+const CACHE_ETAPAS_MS = 3 * 60_000;
+const cacheEtapas = new Map<string, { em: number; mapa: Map<number, EstadoDoLead> }>();
+
+async function etapasDosLeads(unit: {
+  id: string;
+  slug: string;
+}): Promise<Map<number, EstadoDoLead>> {
+  const cached = cacheEtapas.get(unit.id);
+  if (cached && Date.now() - cached.em < CACHE_ETAPAS_MS) return cached.mapa;
+
+  const mapa = new Map<number, EstadoDoLead>();
+  try {
+    const completa = await prisma.unit.findUnique({ where: { id: unit.id } });
+    if (!completa) return mapa;
+    const kommo = createKommoClient(completa);
+    const desde = Math.floor(Date.now() / 1000) - 3 * 86_400;
+    for (const l of await kommo.listLeadsAtualizadosDesde(desde)) {
+      mapa.set(l.id, {
+        statusId: l.status_id ?? null,
+        lossReasonId: l.loss_reason_id ?? null,
+      });
+    }
+    cacheEtapas.set(unit.id, { em: Date.now(), mapa });
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, 'follow-up: não consegui ler as etapas');
+  }
+  return mapa;
+}
+
+/**
+ * A regra que vale para este lead: primeiro a específica do motivo de perda,
+ * senão a da etapa. Sem regra ligada, ninguém recebe nada — é o comportamento
+ * certo, porque a tela é quem decide, não o código.
+ */
+function regraPara(
+  regras: Array<{ statusId: number; lossReasonId: number | null; steps: unknown }>,
+  estado: EstadoDoLead,
+): Degrau[] | null {
+  if (estado.statusId == null) return null;
+  const doMotivo = regras.find(
+    (r) => r.statusId === estado.statusId && r.lossReasonId === estado.lossReasonId,
+  );
+  const daEtapa = regras.find((r) => r.statusId === estado.statusId && r.lossReasonId === null);
+  const escolhida = doMotivo ?? daEtapa;
+  if (!escolhida) return null;
+  const passos = escolhida.steps as Degrau[];
+  return Array.isArray(passos) && passos.length > 0 ? passos : null;
+}
 
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
@@ -158,18 +200,48 @@ async function varrer(): Promise<void> {
     for (const unit of unidades) {
       if (!dentroDoHorario(unit)) continue;
 
+      // Sem regra ligada, a unidade não reengaja ninguém — mesmo com a chave
+      // geral ligada. Quem manda é a tela.
+      const regras = await prisma.followUpRule.findMany({
+        where: { unitId: unit.id, enabled: true },
+      });
+      if (regras.length === 0) continue;
+
+      const etapas = await etapasDosLeads(unit);
+
       const candidatas = await prisma.conversation.findMany({
         where: {
           unitId: unit.id,
           followUpStoppedReason: null,
-          followUpStep: { lt: ESCADA.length },
           convertedAt: null,
         },
         orderBy: { lastMessageAt: 'asc' },
-        take: 40,
+        take: 60,
       });
 
       for (const conv of candidatas) {
+        const estado = etapas.get(Number(conv.leadId));
+        // Lead que não veio no lote (mexido há mais de 3 dias) não é candidato:
+        // a janela de 24h já teria fechado de qualquer jeito.
+        if (!estado) continue;
+
+        // Motivo intocável vence QUALQUER regra ligada. A trava está aqui e no
+        // controller: nem por engano, nem por regra antiga salva antes desta
+        // lista existir, alguém recebe cobrança tendo dito que não pode pagar.
+        if (ehIntocavel(estado.lossReasonId)) {
+          await prisma.conversation
+            .update({
+              where: { id: conv.id },
+              data: { followUpStoppedReason: 'motivo de perda não recebe follow-up' },
+            })
+            .catch(() => undefined);
+          continue;
+        }
+
+        const ESCADA_DA_REGRA = regraPara(regras, estado);
+        if (!ESCADA_DA_REGRA) continue;
+        if (conv.followUpStep >= ESCADA_DA_REGRA.length) continue;
+
         // A referência é a ÚLTIMA mensagem da conversa, não o último follow-up:
         // se o paciente respondeu, lastMessageAt andou e o silêncio recomeça.
         const paradoMin = (Date.now() - conv.lastMessageAt.getTime()) / 60_000;
@@ -190,11 +262,11 @@ async function varrer(): Promise<void> {
         // a mensagem de 6h, que é a escrita para esse tempo. Os degraus
         // pulados são dados como enviados, porque o momento deles passou.
         let alvo = -1;
-        for (let i = conv.followUpStep; i < ESCADA.length; i++) {
-          if (paradoMin >= ESCADA[i].aposMin) alvo = i;
+        for (let i = conv.followUpStep; i < ESCADA_DA_REGRA.length; i++) {
+          if (paradoMin >= ESCADA_DA_REGRA[i].aposMin) alvo = i;
         }
         if (alvo < 0) continue;
-        const proximo = ESCADA[alvo];
+        const proximo = ESCADA_DA_REGRA[alvo];
 
         // ESPAÇAMENTO MÍNIMO desde o último reengajamento. Segunda trava contra
         // rajada: mesmo escolhendo o degrau certo, dois envios seguidos com um
@@ -202,7 +274,8 @@ async function varrer(): Promise<void> {
         // o degrau anterior e este.
         if (conv.followUpLastAt) {
           const desdeUltimo = (Date.now() - conv.followUpLastAt.getTime()) / 60_000;
-          const intervaloNatural = alvo > 0 ? ESCADA[alvo].aposMin - ESCADA[alvo - 1].aposMin : 5;
+          const intervaloNatural =
+            alvo > 0 ? ESCADA_DA_REGRA[alvo].aposMin - ESCADA_DA_REGRA[alvo - 1].aposMin : 5;
           if (desdeUltimo < intervaloNatural) continue;
         }
 
@@ -240,7 +313,7 @@ async function varrer(): Promise<void> {
           continue;
         }
 
-        await enviarDegrau(unit, conv, proximo, alvo);
+        await enviarDegrau(unit, conv, proximo, alvo, ESCADA_DA_REGRA.length);
       }
     }
   } catch (err) {
@@ -256,6 +329,8 @@ async function enviarDegrau(
   degrau: Degrau,
   /** Índice do degrau escolhido — pode ter pulado os que venceram juntos. */
   indice: number,
+  /** Tamanho da escada DESTA regra: cada etapa do funil tem a sua. */
+  totalDegraus: number,
 ): Promise<void> {
   const leadId = Number(conv.leadId);
   if (!Number.isFinite(leadId)) return;
@@ -267,7 +342,7 @@ async function enviarDegrau(
       leadId,
       conversationId: conv.id,
       intencao: degrau.intencao,
-      ultimoDegrau: indice === ESCADA.length - 1,
+      ultimoDegrau: indice === totalDegraus - 1,
     });
     if (!texto) return;
 
@@ -286,7 +361,7 @@ async function enviarDegrau(
         // senão a rajada volta pela porta dos fundos na varredura seguinte.
         followUpStep: indice + 1,
         followUpLastAt: new Date(),
-        ...(indice + 1 >= ESCADA.length ? { followUpStoppedReason: 'escada concluída' } : {}),
+        ...(indice + 1 >= totalDegraus ? { followUpStoppedReason: 'escada concluída' } : {}),
       },
     });
 
@@ -343,12 +418,10 @@ export async function reiniciarFollowUp(unitId: string, leadId: string | number)
 export function startFollowUpWorker(): void {
   if (timer) return;
   timer = setInterval(() => void varrer(), SWEEP_MS);
-  logger.info({ degrausMin: ESCADA.map((d) => d.aposMin) }, 'follow-up: worker iniciado');
+  logger.info('follow-up: worker iniciado — escadas vêm das regras por etapa');
 }
 
 export function stopFollowUpWorker(): void {
   if (timer) clearInterval(timer);
   timer = null;
 }
-
-export const ESCADA_FOLLOW_UP = ESCADA;
