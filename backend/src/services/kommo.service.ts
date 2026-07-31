@@ -291,20 +291,40 @@ export function splitIntoChunks(text: string, maxLen: number): string[] {
 
   while (remaining.length > maxLen) {
     let cut = maxLen;
-    // Tenta cortar no último final de sentença antes do limite.
     const slice = remaining.slice(0, maxLen);
-    const lastBoundary = Math.max(
-      slice.lastIndexOf('\n\n'),
-      slice.lastIndexOf('. '),
-      slice.lastIndexOf('? '),
-      slice.lastIndexOf('! '),
-    );
-    if (lastBoundary > maxLen * 0.5) {
-      cut = lastBoundary + 1; // inclui o '.', '?' ou '!'
+
+    // ORDEM DE PREFERÊNCIA, e a QUEBRA DE LINHA SIMPLES entra aqui.
+    //
+    // Ela faltava, e o efeito aparecia na mensagem mais importante que a IA
+    // manda. A confirmação do agendamento é um bloco de linhas curtas —
+    // "📅 Data: ...", "⏰ Horário: ...", "📍 Endereço: ..." — e nenhuma delas
+    // termina em ponto. Sem '\n' na lista, nada casava, o corte caía no
+    // "último espaço" e partia a linha no meio: o paciente recebia o endereço
+    // pela metade e o resto chegava na mensagem seguinte.
+    //
+    // Cada candidato guarda quanto avançar depois do corte, porque '\n\n'
+    // consome dois caracteres e '. ' consome um.
+    const candidatos: Array<{ em: number; inclui: number }> = [
+      { em: slice.lastIndexOf('\n\n'), inclui: 0 },
+      { em: slice.lastIndexOf('\n'), inclui: 0 },
+      { em: slice.lastIndexOf('. '), inclui: 1 },
+      { em: slice.lastIndexOf('? '), inclui: 1 },
+      { em: slice.lastIndexOf('! '), inclui: 1 },
+    ];
+    const melhor = candidatos
+      // 0.35 e não 0.5: numa lista de linhas curtas, a última quebra útil pode
+      // cair antes da metade. Aceitar um pedaço menor é melhor que rachar uma
+      // linha ao meio — pedaço curto o paciente lê, linha partida ele não
+      // entende.
+      .filter((c) => c.em > maxLen * 0.35)
+      .sort((a, b) => b.em - a.em)[0];
+
+    if (melhor) {
+      cut = melhor.em + melhor.inclui;
     } else {
-      // Sem fim-de-sentença útil — corta no último espaço pra não rachar palavra.
+      // Sem fronteira nenhuma — corta no último espaço pra não rachar palavra.
       const lastSpace = slice.lastIndexOf(' ');
-      if (lastSpace > maxLen * 0.5) cut = lastSpace;
+      if (lastSpace > maxLen * 0.35) cut = lastSpace;
     }
     chunks.push(remaining.slice(0, cut).trim());
     remaining = remaining.slice(cut).trim();
