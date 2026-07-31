@@ -56,6 +56,7 @@ const AcoesPanel = lazy(() =>
 );
 const SocialCommentsPanel = lazy(() => import('./components/SocialCommentsPanel'));
 const AgendaPanel = lazy(() => import('./components/AgendaPanel'));
+const FollowUpPanel = lazy(() => import('./components/FollowUpPanel'));
 const CrmFranquiaPanel = lazy(() => import('./components/CrmFranquiaPanel'));
 const CapturesPanel = lazy(() =>
   import('./components/CapturesPanel').then((m) => ({ default: m.CapturesPanel })),
@@ -191,6 +192,7 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
             {tab === 'instagram' && <SocialCommentsPanel platform="instagram" />}
             {tab === 'facebook' && <SocialCommentsPanel platform="facebook" />}
             {tab === 'agenda' && <AgendaPanel />}
+            {tab === 'follow-up' && <FollowUpPanel />}
             {tab === 'crm-franquia' && <CrmFranquiaPanel />}
             {tab === 'config' && <AgentConfigPanel />}
             {tab === 'units' && <UnitsPanel />}

@@ -102,6 +102,11 @@ import {
   rejectInstagramCommentHandler,
 } from '../controllers/instagram.controller.js';
 import {
+  listFollowUpRulesHandler,
+  upsertFollowUpRuleHandler,
+  toggleFollowUpHandler,
+} from '../controllers/follow-up.controller.js';
+import {
   emergencyPauseHandler,
   resumeHandler,
   spineStatusHandler,
@@ -285,6 +290,10 @@ apiRouter.post(
 // botão está no meio de um incidente.
 apiRouter.post('/system/emergency-pause', requireAuth, emergencyPauseHandler);
 apiRouter.post('/system/resume', requireAuth, resumeHandler);
+apiRouter.get('/units/:id/follow-up/rules', requireUnitAccess, listFollowUpRulesHandler);
+apiRouter.post('/units/:id/follow-up/rules', requireUnitAccess, upsertFollowUpRuleHandler);
+apiRouter.post('/units/:id/follow-up/toggle', requireUnitAccess, toggleFollowUpHandler);
+
 apiRouter.get('/units/:id/spine/status', requireUnitAccess, spineStatusHandler);
 apiRouter.get('/units/:id/spine/schedules', requireUnitAccess, spineSchedulesHandler);
 apiRouter.post('/units/:id/spine/ping', requireUnitAccess, spinePingHandler);

@@ -61,6 +61,8 @@ import type {
   SpineProntidao,
   SpinePendentesResponse,
   SpinePatientPreview,
+  FollowUpRulesResponse,
+  FollowUpStep,
 } from '../types/api';
 
 // Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
@@ -303,6 +305,30 @@ export const api = {
     );
     return data;
   },
+  // -------------------------------------------------------------------------
+  // Follow-up — reengajamento por etapa do funil
+  // -------------------------------------------------------------------------
+  async followUpRules(unitId: string): Promise<FollowUpRulesResponse> {
+    const { data } = await http.get<FollowUpRulesResponse>(`/units/${unitId}/follow-up/rules`);
+    return data;
+  },
+  async saveFollowUpRule(
+    unitId: string,
+    regra: {
+      statusId: number;
+      lossReasonId: number | null;
+      lossReasonName?: string | null;
+      enabled?: boolean;
+      notes?: string | null;
+      steps?: FollowUpStep[];
+    },
+  ): Promise<void> {
+    await http.post(`/units/${unitId}/follow-up/rules`, regra, { timeout: 20_000 });
+  },
+  async toggleFollowUp(unitId: string, enabled: boolean): Promise<void> {
+    await http.post(`/units/${unitId}/follow-up/toggle`, { enabled }, { timeout: 20_000 });
+  },
+
   /** Quem entrou no Kommo na janela recente e ainda não está na franquia. */
   async spinePendentes(unitId: string, dias = 7): Promise<SpinePendentesResponse> {
     const { data } = await http.get<SpinePendentesResponse>(

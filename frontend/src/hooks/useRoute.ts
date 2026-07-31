@@ -50,6 +50,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   instagram: 'instagram',
   facebook: 'facebook',
   agenda: 'agenda',
+  'follow-up': 'follow-up',
   'crm-franquia': 'crm-franquia',
 };
 

@@ -397,6 +397,7 @@ model Unit {
   llmCalls              LlmCall[]
   conversations         Conversation[]
   messageTemplates      MessageTemplate[]
+  followUpRules         FollowUpRule[]
   knowledgeBase         KnowledgeBaseEntry[]
   actions               UnitAction[]
   admins                User[]
@@ -579,6 +580,45 @@ model GlobalAction {
 // system prompt instruindo a IA a usar essas respostas quando detectar
 // algum dos gatilhos na mensagem do cliente.
 // ===========================================================================
+/// ===========================================================================
+/// FollowUpRule — reengajamento POR ETAPA do funil.
+/// ===========================================================================
+/// Uma escada só por unidade não serve: o objetivo muda com a etapa. Quem está
+/// EM QUALIFICAÇÃO precisa voltar a conversar; quem está AGENDADO precisa pagar
+/// o antecipado; quem foi PERDIDO precisa de um argumento que depende do
+/// MOTIVO — "achou caro" e "vai viajar" não se recuperam com a mesma frase.
+///
+/// Por isso a regra é (etapa, motivo de perda), e cada uma tem a própria
+/// escada de degraus.
+/// ===========================================================================
+model FollowUpRule {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+
+  /// status_id do Kommo (ex.: 108773004 = EM QUALIFICAÇÃO, 143 = PERDIDO).
+  statusId Int @map("status_id")
+  /// Motivo de perda. Só faz sentido com statusId=143; null = vale para
+  /// qualquer motivo que não tenha regra própria.
+  lossReasonId   Int?    @map("loss_reason_id")
+  /// Guardado junto pra tela não depender de buscar no Kommo pra exibir.
+  lossReasonName String? @map("loss_reason_name")
+
+  enabled Boolean @default(false)
+  /// [{ aposMin: number, intencao: string }] — a escada desta regra.
+  steps   Json    @default("[]")
+  /// Por que esta regra existe, em uma linha. Aparece na tela.
+  notes   String? @map("notes")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, statusId, lossReasonId])
+  @@index([unitId, enabled])
+  @@map("follow_up_rules")
+}
+
 model MessageTemplate {
   id              String   @id @default(cuid())
   unitId          String   @map("unit_id")

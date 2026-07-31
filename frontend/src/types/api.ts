@@ -1230,3 +1230,32 @@ export interface SpinePatientPreview {
   origemLegivel?: string | null;
   requisicao?: { metodo: string; rota: string; base: string };
 }
+
+/** Um degrau da escada de reengajamento. */
+export interface FollowUpStep {
+  aposMin: number;
+  /** O que a mensagem precisa provocar — não é o texto final. */
+  intencao: string;
+}
+
+export interface FollowUpRegra {
+  id: string | null;
+  /** false = é só um modelo sugerido, ainda não foi criado. */
+  existe: boolean;
+  statusId: number;
+  statusName: string;
+  lossReasonId: number | null;
+  lossReasonName: string | null;
+  enabled: boolean;
+  notes: string | null;
+  steps: FollowUpStep[];
+  /** A escada salva não bate mais com o modelo — alguém editou. */
+  editada: boolean;
+}
+
+export interface FollowUpRulesResponse {
+  followUpEnabled: boolean;
+  regras: FollowUpRegra[];
+  intocaveis: Array<{ id: number; nome: string; porque: string }>;
+  ligadas: number;
+}

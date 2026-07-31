@@ -27,7 +27,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { FaFacebookF, FaInstagram } from 'react-icons/fa6';
-import { PiCalendarBlankBold, PiPlugsConnectedBold } from 'react-icons/pi';
+import { PiCalendarBlankBold, PiPlugsConnectedBold, PiChatsCircleBold } from 'react-icons/pi';
 import type { ComponentType } from 'react';
 
 /**
@@ -68,6 +68,7 @@ export type AppTab =
   | 'instagram'
   | 'facebook'
   | 'agenda'
+  | 'follow-up'
   | 'crm-franquia';
 
 /** Grupos da sidebar, na ordem em que aparecem. */
@@ -168,6 +169,14 @@ export const NAV_ITEMS: NavItem[] = [
       'spine', 'franquia', 'doutor hernia', 'token', 'integracao', 'crm',
       'espelhar', 'leads', 'horario', 'almoco', 'fuso',
     ],
+  },
+  {
+    id: 'follow-up',
+    label: 'Follow-up',
+    hint: 'Reengajamento de quem parou de responder, por etapa do funil.',
+    icon: PiChatsCircleBold,
+    section: 'agente',
+    keywords: ['reengajamento', 'follow up', 'followup', 'perdido', 'retomar', 'lembrete'],
   },
   {
     id: 'facebook',

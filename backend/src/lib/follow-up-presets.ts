@@ -1,0 +1,250 @@
+// ============================================================================
+// follow-up-presets.ts — Escadas prontas por etapa e por motivo de perda.
+//
+// POR QUE POR ETAPA, E NÃO UMA SÓ
+// -------------------------------
+// O objetivo muda com a etapa, e a mensagem tem que mudar junto:
+//   EM QUALIFICAÇÃO → trazer de volta pra marcar
+//   AGENDADO        → garantir o antecipado e o comparecimento
+//   PERDIDO         → depende do MOTIVO. "Achou caro" e "vai viajar" não se
+//                     recuperam com a mesma frase, nem no mesmo prazo.
+//
+// MOTIVOS QUE NÃO SE PERSEGUE — a lista de baixo
+// ----------------------------------------------
+// Alguns motivos são um "não" que merece respeito, e insistir neles não é
+// conversão, é dano: quem declarou não ter condições financeiras, quem tem
+// bandeira vermelha clínica, quem clicou por engano. Isso fica no CÓDIGO e não
+// só na tela, porque é o tipo de decisão que não pode depender de alguém
+// lembrar de deixar o interruptor desligado.
+//
+// TODAS AS ESCADAS CABEM EM 24H
+// -----------------------------
+// O WhatsApp só entrega mensagem livre dentro de 24h da última fala do
+// paciente. Um degrau em "3 dias" não seria entregue — e um lead perdido há
+// uma semana está fora de alcance por qualquer escada.
+// ============================================================================
+
+export interface Degrau {
+  aposMin: number;
+  intencao: string;
+}
+
+export interface Preset {
+  statusId: number;
+  statusName: string;
+  lossReasonId: number | null;
+  lossReasonName: string | null;
+  notes: string;
+  steps: Degrau[];
+}
+
+/** Etapas do funil COMERCIAL da Doutor Hérnia. */
+export const ETAPAS = {
+  QUALIFICACAO: 108773004,
+  AGENDADO: 108773008,
+  COMPARECEU: 108773012,
+  NEGOCIACAO: 108773016,
+  PERDIDO: 143,
+} as const;
+
+/**
+ * Motivos de perda que NUNCA recebem reengajamento automático.
+ *
+ * Três famílias, e cada uma por uma razão diferente:
+ *   - dinheiro que a pessoa não tem: insistir é constranger quem já se
+ *     expôs ao dizer que não pode pagar;
+ *   - risco clínico: bandeira vermelha precisa de gente, não de automação;
+ *   - o "não" claro: sem interesse, engano, terceiro — perseguir aqui só
+ *     gera bloqueio no WhatsApp, e bloqueio derruba a reputação do número.
+ */
+export const MOTIVOS_INTOCAVEIS: Array<{ id: number; nome: string; porque: string }> = [
+  { id: 37797692, nome: 'Sem condições financeiras', porque: 'já disse que não pode pagar — insistir constrange' },
+  { id: 37797684, nome: 'Financeiramente vulnerável', porque: 'mesma razão, e aqui a exposição é maior' },
+  { id: 37797664, nome: 'Bandeira vermelha', porque: 'risco clínico — precisa de gente, não de automação' },
+  { id: 37797716, nome: 'Sem interesse', porque: 'é um não claro; insistir vira bloqueio no WhatsApp' },
+  { id: 37797708, nome: 'Clicou por engano', porque: 'nunca foi um lead' },
+  { id: 37797700, nome: 'Informação para terceiro', porque: 'quem decide não é quem está na conversa' },
+  { id: 37797680, nome: 'Assinou contrato', porque: 'já converteu' },
+  { id: 37797652, nome: 'Caso enviado para a franquia', porque: 'saiu da nossa alçada' },
+  { id: 37797660, nome: 'Mora em outra cidade', porque: 'não é objeção, é impossibilidade' },
+  { id: 37797688, nome: 'Outra cidade', porque: 'mesma razão' },
+];
+
+export const PRESETS: Preset[] = [
+  // -------------------------------------------------------------------------
+  // EM QUALIFICAÇÃO — conversou e sumiu antes de marcar.
+  // -------------------------------------------------------------------------
+  {
+    statusId: ETAPAS.QUALIFICACAO,
+    statusName: 'EM QUALIFICAÇÃO',
+    lossReasonId: null,
+    lossReasonName: null,
+    notes: 'Conversou e parou antes de marcar. O objetivo é voltar ao horário.',
+    steps: [
+      {
+        aposMin: 5,
+        intencao:
+          'Toque leve, uma linha, como quem continua a mesma conversa. NÃO recomece ' +
+          'nem se reapresente. Retome exatamente onde parou e devolva a pergunta que ' +
+          'ficou no ar. Se você tinha oferecido horários, ofereça os mesmos de novo.',
+      },
+      {
+        aposMin: 30,
+        intencao:
+          'Ele pode ter se distraído. Retome pelo lado DELE — a queixa que contou — e ' +
+          'facilite a resposta: pergunta fechada, de escolher entre duas opções.',
+      },
+      {
+        aposMin: 120,
+        intencao:
+          'Traga valor, não cobrança. Um esclarecimento curto sobre o que acontece na ' +
+          'consulta e o que a especialista avalia. Termine oferecendo horário, sem pressa.',
+      },
+      {
+        aposMin: 360,
+        intencao:
+          'Último toque com oferta ativa. Reconheça o tempo que passou sem cobrar ' +
+          '("imagino que a correria apertou") e ofereça verificar os horários.',
+      },
+      {
+        aposMin: 1200,
+        intencao:
+          'Encerramento educado, SEM pedir resposta. Deixe claro que ele pode chamar ' +
+          'quando quiser e que a porta fica aberta.',
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // AGENDADO — marcou. Falta o antecipado e falta comparecer.
+  // -------------------------------------------------------------------------
+  {
+    statusId: ETAPAS.AGENDADO,
+    statusName: 'AGENDADO',
+    lossReasonId: null,
+    lossReasonName: null,
+    notes:
+      'Marcou mas não pagou o antecipado. Vale dinheiro direto: R$ 150 garantido ' +
+      'contra R$ 350 que talvez não venha, e quem paga antes falta menos.',
+    steps: [
+      {
+        aposMin: 10,
+        intencao:
+          'Confirme o dia e a hora em uma linha e pergunte se conseguiu fazer o PIX ' +
+          'para garantir a vaga. Ofereça reenviar a chave. NÃO cobre — facilite.',
+      },
+      {
+        aposMin: 240,
+        intencao:
+          'Lembre do valor antecipado (R$ 150 no PIX contra R$ 350) como vantagem dele, ' +
+          'não como cobrança. Pergunte se ficou alguma dúvida sobre a consulta.',
+      },
+      {
+        aposMin: 1200,
+        intencao:
+          'Reforce dia, hora e que ele deve chegar 15 minutos antes. Sem pedir resposta ' +
+          'e sem falar de pagamento de novo — quem não pagou até aqui paga na hora.',
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // PERDIDO, por motivo. Cada um pede um argumento diferente.
+  // -------------------------------------------------------------------------
+  {
+    statusId: ETAPAS.PERDIDO,
+    statusName: 'PERDIDO',
+    lossReasonId: 37797672,
+    lossReasonName: 'Achou caro',
+    notes: 'Objeção de preço. Reancorar no custo de não tratar, nunca dar desconto.',
+    steps: [
+      {
+        aposMin: 120,
+        intencao:
+          'NÃO defenda o preço e NÃO dê desconto. Pergunte, com genuíno interesse, quanto ' +
+          'ele já gastou tentando resolver por conta — pomada, remédio, sessão avulsa. ' +
+          'Deixe ele fazer a conta. Termine oferecendo o antecipado de R$ 150.',
+      },
+      {
+        aposMin: 1200,
+        intencao:
+          'Um último toque leve: diga que se ele quiser retomar depois a porta fica ' +
+          'aberta, e que a consulta é onde se descobre a causa. NÃO peça resposta.',
+      },
+    ],
+  },
+  {
+    statusId: ETAPAS.PERDIDO,
+    statusName: 'PERDIDO',
+    lossReasonId: 37797676,
+    lossReasonName: 'Vai se organizar financeiramente',
+    notes:
+      'Não é um não — é um "ainda não". Aqui só se mantém a porta aberta; cobrar ' +
+      'quem está se organizando empurra pro lado de quem não pode pagar.',
+    steps: [
+      {
+        aposMin: 1200,
+        intencao:
+          'Uma mensagem só, curta e sem cobrança. Diga que entende, que a vaga existe ' +
+          'quando ele puder, e que é só chamar. NÃO ofereça horário nem fale de valor.',
+      },
+    ],
+  },
+  {
+    statusId: ETAPAS.PERDIDO,
+    statusName: 'PERDIDO',
+    lossReasonId: 37797656,
+    lossReasonName: 'Decidir com a família',
+    notes: 'A decisão é de casa. O papel aqui é facilitar, não disputar.',
+    steps: [
+      {
+        aposMin: 180,
+        intencao:
+          'Ofereça mandar por escrito o que ele precisa pra conversar em casa: o que a ' +
+          'consulta avalia, quanto custa, quanto dura. Facilite a conversa dele com a ' +
+          'família em vez de disputar com ela.',
+      },
+      {
+        aposMin: 1200,
+        intencao:
+          'Pergunte, sem pressa, se conseguiram conversar — e ofereça segurar um horário ' +
+          'se decidirem seguir.',
+      },
+    ],
+  },
+  {
+    statusId: ETAPAS.PERDIDO,
+    statusName: 'PERDIDO',
+    lossReasonId: 37797648,
+    lossReasonName: 'Solicitado exames',
+    notes: 'Está esperando exame. O gancho é o próprio exame.',
+    steps: [
+      {
+        aposMin: 1200,
+        intencao:
+          'Diga que quando os exames ficarem prontos a especialista os analisa na consulta, ' +
+          'e ofereça já deixar um horário reservado pra depois da data prevista.',
+      },
+    ],
+  },
+  {
+    statusId: ETAPAS.PERDIDO,
+    statusName: 'PERDIDO',
+    lossReasonId: 37797696,
+    lossReasonName: 'Não interagiu',
+    notes: 'Nunca respondeu. Uma tentativa só, curta — mais que isso é insistência com quem nunca falou.',
+    steps: [
+      {
+        aposMin: 240,
+        intencao:
+          'Uma linha, leve, sem cobrar o silêncio. Pergunte de forma simples se ele ainda ' +
+          'sente a dor que o trouxe até aqui. Pergunta fechada, fácil de responder.',
+      },
+    ],
+  },
+];
+
+export function ehIntocavel(lossReasonId: number | null | undefined): boolean {
+  if (lossReasonId == null) return false;
+  return MOTIVOS_INTOCAVEIS.some((m) => m.id === lossReasonId);
+}
