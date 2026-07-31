@@ -147,33 +147,41 @@ export async function upsertFollowUpRuleHandler(req: Request, res: Response): Pr
   const escada = steps ? [...steps].sort((a, b) => a.aposMin - b.aposMin) : undefined;
 
   const base = PRESETS.find((p) => p.statusId === statusId && p.lossReasonId === lossReasonId);
-  const regra = await prisma.followUpRule.upsert({
-    where: {
-      // O Prisma tipa a chave composta como não-nula, mas a coluna aceita NULL
-      // e o unique do Postgres trata NULL como valor distinto — que é
-      // exatamente o comportamento que queremos: uma regra "sem motivo" por
-      // etapa, mais uma por motivo.
-      unitId_statusId_lossReasonId: {
-        unitId: unit.id,
-        statusId,
-        lossReasonId: lossReasonId as number,
-      },
-    },
-    create: {
-      unitId: unit.id,
-      statusId,
-      lossReasonId,
-      lossReasonName: lossReasonName ?? base?.lossReasonName ?? null,
-      enabled: enabled ?? false,
-      notes: notes ?? base?.notes ?? null,
-      steps: (escada ?? base?.steps ?? []) as object,
-    },
-    update: {
-      ...(enabled !== undefined ? { enabled } : {}),
-      ...(notes !== undefined ? { notes } : {}),
-      ...(escada ? { steps: escada as object } : {}),
-    },
+
+  // NÃO USA upsert DE PROPÓSITO.
+  //
+  // O Prisma recusa `null` dentro de uma chave única composta — a tipagem do
+  // `where` exige number e ele valida em runtime. E null aqui é o caso NORMAL:
+  // toda regra de etapa sem motivo de perda tem lossReasonId nulo, que é a
+  // maioria delas. O upsert falhava com 500 em cima da primeira regra que
+  // alguém tentasse ligar.
+  //
+  // O Postgres trata NULL como distinto no índice único, então buscar-e-decidir
+  // dá o comportamento certo: uma regra por etapa, mais uma por motivo.
+  const existente = await prisma.followUpRule.findFirst({
+    where: { unitId: unit.id, statusId, lossReasonId },
   });
+
+  const regra = existente
+    ? await prisma.followUpRule.update({
+        where: { id: existente.id },
+        data: {
+          ...(enabled !== undefined ? { enabled } : {}),
+          ...(notes !== undefined ? { notes } : {}),
+          ...(escada ? { steps: escada as object } : {}),
+        },
+      })
+    : await prisma.followUpRule.create({
+        data: {
+          unitId: unit.id,
+          statusId,
+          lossReasonId,
+          lossReasonName: lossReasonName ?? base?.lossReasonName ?? null,
+          enabled: enabled ?? false,
+          notes: notes ?? base?.notes ?? null,
+          steps: (escada ?? base?.steps ?? []) as object,
+        },
+      });
 
   logger.info(
     { unit: unit.slug, statusId, lossReasonId, enabled: regra.enabled },
