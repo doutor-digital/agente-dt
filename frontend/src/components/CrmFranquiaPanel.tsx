@@ -238,7 +238,7 @@ export default function CrmFranquiaPanel() {
 
         <Espelhamento form={form} setForm={setForm} temToken={status?.hasToken ?? false} />
 
-        <Consultas hist={hist} />
+        <Consultas hist={hist} unitId={unit.id} onMudou={carregar} />
         <Confirmacao form={form} setForm={setForm} />
         <Previa unitId={unit.id} onEnviado={carregar} />
         <PacienteNaFranquia unitId={unit.id} hist={hist} onEnviado={carregar} />
@@ -951,7 +951,41 @@ function Esteira({
 // ver o que a IA fez, e o número da consulta é o que se leva pra franquia.
 // ---------------------------------------------------------------------------
 
-function Consultas({ hist }: { hist: SpineLeadLinksResponse | null }) {
+function Consultas({
+  hist,
+  unitId,
+  onMudou,
+}: {
+  hist: SpineLeadLinksResponse | null;
+  unitId: string;
+  onMudou: () => Promise<void>;
+}) {
+  // Cancelar aqui reflete na franquia. Por isso passa por confirmação com o
+  // nome e o horário à vista: a recepção está desmarcando um paciente de
+  // verdade, que vai receber ou não receber uma ligação por causa disso.
+  const [confirmando, setConfirmando] = useState<{ leadId: number; nome: string; quando: string } | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function cancelar() {
+    if (!confirmando) return;
+    setOcupado(true);
+    setErro(null);
+    try {
+      const r = await api.spineCancelSchedule(unitId, confirmando.leadId);
+      if (r.ok) {
+        setConfirmando(null);
+        await onMudou();
+      } else {
+        setErro(r.motivo ?? 'a franquia recusou o cancelamento');
+      }
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao cancelar');
+    } finally {
+      setOcupado(false);
+    }
+  }
+
   const marcadas = (hist?.links ?? []).filter((l) => l.spineIdSchedule && l.agendadoPara);
 
   return (
@@ -989,10 +1023,49 @@ function Consultas({ hist }: { hist: SpineLeadLinksResponse | null }) {
                 {/* O número da consulta é o que a recepção leva pra franquia
                     quando precisa mexer lá. */}
                 <span>consulta {l.spineIdSchedule}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setConfirmando({
+                      leadId: l.kommoLeadId,
+                      nome: l.nome ?? `Lead ${l.kommoLeadId}`,
+                      quando: quandoLegivel(l.agendadoPara),
+                    })
+                  }
+                  className="rounded-md border border-zinc-700 px-2 py-1 font-sans text-[11px] text-zinc-400 transition-colors hover:border-rose-500/40 hover:text-rose-300"
+                >
+                  Cancelar
+                </button>
               </span>
             </li>
           ))}
         </ul>
+      )}
+
+      {erro && <p className="mt-3 text-xs text-rose-300">{erro}</p>}
+
+      {confirmando && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-6">
+            <h3 className="text-sm font-semibold text-zinc-100">Cancelar esta consulta?</h3>
+            <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+              <span className="text-zinc-100">{confirmando.nome}</span> perde o horário de{' '}
+              {confirmando.quando}. O cancelamento vale também na agenda da clínica.
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-amber-300">
+              O paciente NÃO é avisado automaticamente — alguém precisa falar com ele.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => setConfirmando(null)} disabled={ocupado}>
+                Manter
+              </button>
+              <button className="btn-primary" onClick={() => void cancelar()} disabled={ocupado}>
+                {ocupado ? <PiSpinnerGapBold size={14} className="animate-spin" /> : <PiCheckBold size={14} />}
+                Cancelar consulta
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

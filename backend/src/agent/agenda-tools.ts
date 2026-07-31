@@ -111,11 +111,10 @@ async function horariosQueAFranquiaAceita(
   data: string,
   candidatos: string[],
   idClientSonda: number,
-): Promise<{ aceitos: string[]; conferidos: number }> {
+): Promise<{ aceitos: string[]; recusados: string[] }> {
   const aceitos: string[] = [];
-  let conferidos = 0;
+  const recusados: string[] = [];
   for (const hora of candidatos.slice(0, MAX_VALIDACOES)) {
-    conferidos++;
     const r = await SpineService.createSchedule(unit, {
       idClient: idClientSonda,
       dateAttendanceLocal: `${data}T${hora}:00`,
@@ -133,9 +132,14 @@ async function horariosQueAFranquiaAceita(
           'sondagem: NÃO consegui cancelar — agendamento fantasma na franquia',
         );
       }
+    } else {
+      // Guardar os recusados é o que impede o pior caso: quando NENHUM dos
+      // sondados passa, cair de volta na lista da grade reofereceria
+      // exatamente os horários que a franquia acabou de negar.
+      recusados.push(hora);
     }
   }
-  return { aceitos, conferidos };
+  return { aceitos, recusados };
 }
 
 /**
@@ -161,7 +165,9 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
   return new DynamicStructuredTool({
     name: 'consultar_horarios',
     description:
-      'Consulta os horários REALMENTE disponíveis da clínica numa data. Use SEMPRE ' +
+      'Consulta os horários REALMENTE disponíveis da clínica numa data. Já desconta ' +
+      'consultas marcadas, almoço, dias sem atendimento e os bloqueios da recepção, ' +
+      'e ainda CONFIRMA com o sistema da clínica antes de devolver. Use SEMPRE ' +
       'antes de oferecer qualquer horário ao paciente — nunca invente nem repita ' +
       'horário de uma consulta anterior. Devolve só o que está livre: já desconta ' +
       'consultas marcadas, almoço, dias sem atendimento e bloqueios da recepção.',
@@ -170,8 +176,15 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
         .string()
         .regex(/^\d{4}-\d{2}-\d{2}$/)
         .describe('Data no formato AAAA-MM-DD, no fuso da clínica.'),
+      turno: z
+        .enum(['manha', 'tarde'])
+        .optional()
+        .describe(
+          'Passe quando o paciente disser a preferência ("de manhã", "à tarde"). ' +
+          'Sem isso a consulta gasta a verificação em horários que ele não quer.',
+        ),
     }),
-    func: async ({ data }: { data: string }) => {
+    func: async ({ data, turno }: { data: string; turno?: 'manha' | 'tarde' }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
 
       if (!fresca.spineEnabled || !fresca.spineToken) {
@@ -197,31 +210,49 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
         return `Não consegui consultar a agenda agora (${erro}). NÃO ofereça horários; diga que a equipe confirma em seguida.`;
       }
 
-      const livres = slots.filter((s) => s.status === 'livre').map((s) => s.time);
+      const todosLivres = slots.filter((s) => s.status === 'livre').map((s) => s.time);
+
+      // O TURNO ENTRA ANTES DA VERIFICAÇÃO, não depois. Verificar custa duas
+      // chamadas por horário e o orçamento é pequeno; gastá-lo de manhã quando
+      // o paciente pediu tarde devolve uma lista vazia de horários que ele nem
+      // queria — e é assim que a conversa morre.
+      const noTurno = turno
+        ? todosLivres.filter((h) => (turno === 'manha' ? h < '12:00' : h >= '12:00'))
+        : todosLivres;
+      const livres = noTurno.length > 0 ? noTurno : todosLivres;
 
       // A grade é só a PRIMEIRA peneira: ela desconta quem já está marcado,
       // almoço e bloqueio da recepção. O que ela não sabe é o turno da
       // profissional — e é aí que a franquia recusa. Confirma com ela.
       const sonda = await clienteDeSondagem(fresca);
       let oferecer = livres;
-      let conferidos = 0;
+      let recusados: string[] = [];
       if (sonda && livres.length > 0) {
         const r = await horariosQueAFranquiaAceita(fresca, data, livres, sonda);
-        conferidos = r.conferidos;
-        // Só substitui a lista pelos confirmados quando ALGUM passou. Se
-        // nenhum passar, pode ser instabilidade da API deles — e devolver
-        // "nada livre" por causa disso perderia o paciente por engano.
-        if (r.aceitos.length > 0) oferecer = r.aceitos;
+        recusados = r.recusados;
+        oferecer = r.aceitos.length
+          ? r.aceitos
+          : // Nenhum confirmado. Cai de volta nos NÃO SONDADOS — nunca nos
+            // recusados, que reoferecer seria repetir o erro que a verificação
+            // existe pra impedir. Se a API deles estiver instável, os não
+            // sondados ainda são a melhor aposta disponível.
+            livres.filter((h) => !recusados.includes(h));
       }
 
       await recorder.step({
         kind: 'TOOL_RESULT',
-        title: `consultar_horarios ${data}: ${oferecer.length} confirmado(s) de ${livres.length}`,
-        payload: { data, naGrade: livres, oferecer, conferidos, sonda },
+        title: `consultar_horarios ${data}${turno ? ` (${turno})` : ''}: ${oferecer.length} de ${livres.length}`,
+        payload: { data, turno, naGrade: todosLivres, noTurno: livres, oferecer, recusados, sonda },
       });
 
       if (oferecer.length === 0) {
-        return `Nenhum horário livre em ${data}. Ofereça outra data — NÃO insista nesta.`;
+        return (
+          `Nenhum horário livre em ${data}${turno === 'manha' ? ' de manhã' : turno === 'tarde' ? ' à tarde' : ''}. ` +
+          (turno && todosLivres.length > 0
+            ? `No outro turno ainda há vaga — pergunte se ele aceita. `
+            : '') +
+          'Ofereça outra data — NÃO insista nesta.'
+        );
       }
       return `Horários livres em ${data}: ${oferecer.join(', ')}. Ofereça no máximo 2 ou 3 deles.`;
     },

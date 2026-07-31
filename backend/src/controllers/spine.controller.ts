@@ -408,6 +408,53 @@ export async function previewLeadHandler(req: Request, res: Response): Promise<v
   });
 }
 
+/**
+ * CANCELAR PELA RECEPÇÃO — reflete na franquia, não só aqui.
+ *
+ * A IA cancela a pedido do paciente; isto é o outro lado, pra quando quem
+ * precisa desmarcar é a clínica. Cancela na API deles PRIMEIRO e só então
+ * limpa o nosso registro: na ordem inversa, uma falha lá deixaria a consulta
+ * viva na agenda da clínica e invisível pra nós — que é o pior estado
+ * possível, porque ninguém vai atrás do que não aparece.
+ */
+export async function cancelScheduleHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  const kommoLeadId = Number(req.body?.kommoLeadId);
+  if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
+    res.status(400).json({ error: 'kommoLeadId_obrigatorio' });
+    return;
+  }
+
+  const vinculo = await prisma.spineLeadLink.findUnique({
+    where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+  });
+  if (!vinculo?.spineIdSchedule) {
+    res.status(422).json({ ok: false, motivo: 'este lead não tem consulta marcada por aqui' });
+    return;
+  }
+
+  const r = await SpineService.cancelSchedule(unit, vinculo.spineIdSchedule);
+  if (!r.ok) {
+    res.status(502).json({ ok: false, motivo: r.error ?? 'a franquia recusou o cancelamento' });
+    return;
+  }
+
+  await prisma.spineLeadLink.update({
+    where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+    data: { spineIdSchedule: null, agendadoPara: null },
+  });
+
+  logger.warn(
+    { unit: unit.slug, kommoLeadId, idSchedule: vinculo.spineIdSchedule, quando: vinculo.agendadoPara },
+    'agenda: consulta cancelada pela recepção no painel',
+  );
+  res.json({ ok: true, idSchedule: vinculo.spineIdSchedule, quando: vinculo.agendadoPara });
+}
+
 /** PRÉVIA DO PACIENTE — o que iria pro POST /api/clients, sem enviar. */
 export async function previewPatientHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);

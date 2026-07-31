@@ -270,6 +270,18 @@ export const api = {
     );
     return data;
   },
+  /** Cancela a consulta do lead — reflete na franquia. */
+  async spineCancelSchedule(
+    unitId: string,
+    kommoLeadId: number,
+  ): Promise<{ ok: boolean; motivo?: string; quando?: string | null }> {
+    const { data } = await http.post<{ ok: boolean; motivo?: string; quando?: string | null }>(
+      `/units/${unitId}/spine/cancel-schedule`,
+      { kommoLeadId },
+      { timeout: 30_000, validateStatus: (s) => s === 200 || s === 422 || s === 502 },
+    );
+    return data;
+  },
   /** O cadastro de PACIENTE que sairia — nada é escrito na franquia. */
   async spinePatientPreview(unitId: string, kommoLeadId: number): Promise<SpinePatientPreview> {
     const { data } = await http.post<SpinePatientPreview>(
