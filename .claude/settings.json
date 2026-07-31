@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pkill -f \"vite\")",
+      "Bash(gh run *)",
+      "Bash(google-chrome --headless --disable-gpu --no-sandbox --hide-scrollbars --window-size=1440,820 --virtual-time-budget=9000 --screenshot=live1440.png http://localhost:5173/)",
+      "Bash(pkill -f vite)",
+      "Bash(google-chrome --headless --disable-gpu --no-sandbox --hide-scrollbars --window-size=1440,1000 --virtual-time-budget=9000 --screenshot=hub1.png http://localhost:5173/)",
+      "Bash(google-chrome --headless --disable-gpu --no-sandbox --hide-scrollbars --force-prefers-reduced-motion --window-size=1440,1000 --virtual-time-budget=8000 --screenshot=hub2.png http://localhost:5173/)",
+      "Bash(pkill -f \"vite|mockapi\")",
+      "Bash(google-chrome --headless --disable-gpu --no-sandbox --hide-scrollbars --window-size=1440,1000 --virtual-time-budget=12000 --screenshot=hub3.png http://localhost:5173/)",
+      "Bash(google-chrome --headless --disable-gpu --no-sandbox --hide-scrollbars --force-prefers-reduced-motion --window-size=1440,1000 --virtual-time-budget=8000 --screenshot=hub4.png http://localhost:5173/)",
+      "Bash(google-chrome --headless --disable-gpu --no-sandbox --hide-scrollbars --force-prefers-reduced-motion --window-size=1440,1000 --virtual-time-budget=8000 --screenshot=hub5.png http://localhost:5173/)",
+      "Bash(google-chrome --headless --disable-gpu --no-sandbox --hide-scrollbars --force-prefers-reduced-motion --window-size=1440,1000 --virtual-time-budget=8000 --screenshot=hub6.png http://localhost:5173/)",
+      "Bash(google-chrome --headless --disable-gpu --no-sandbox --hide-scrollbars --window-size=1440,1000 --virtual-time-budget=14000 --screenshot=hub7.png http://localhost:5173/)",
+      "Bash(google-chrome --headless --disable-gpu --no-sandbox --hide-scrollbars --window-size=1440,1000 --virtual-time-budget=14000 --screenshot=hub8.png http://localhost:5173/)",
+      "Bash(pkill -f \"mockapi\")",
+      "Bash(pkill -f \"remote-debugging-port\")",
+      "Bash(exit 0)",
+      "Bash(echo \"backend tsc exit=$?\")"
+    ]
+  }
+}
