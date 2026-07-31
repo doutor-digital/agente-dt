@@ -170,13 +170,41 @@ async function varrer(): Promise<void> {
       });
 
       for (const conv of candidatas) {
-        const proximo = ESCADA[conv.followUpStep];
-        if (!proximo) continue;
-
         // A referência é a ÚLTIMA mensagem da conversa, não o último follow-up:
         // se o paciente respondeu, lastMessageAt andou e o silêncio recomeça.
         const paradoMin = (Date.now() - conv.lastMessageAt.getTime()) / 60_000;
-        if (paradoMin < proximo.aposMin) continue;
+
+        // A ESCADA É FUNÇÃO DO SILÊNCIO, NÃO UMA FILA.
+        //
+        // Pegar sempre o próximo degrau não enviado parece natural e produz
+        // dois defeitos, os dois medidos antes de isto entrar no ar:
+        //
+        // 1. RAJADA. Uma conversa parada há 11h com degrau 0 tem TODOS os
+        //    degraus vencidos. A varredura manda o 1º; um minuto depois o 2º
+        //    também está vencido e vai; depois o 3º, 4º, 5º. Cinco mensagens
+        //    em cinco minutos — e no WhatsApp isso não se desfaz.
+        // 2. TOM ERRADO. Quem sumiu há 11 horas receberia "toque leve, como
+        //    quem continua a conversa", escrito para 5 minutos de silêncio.
+        //
+        // Então escolhemos o ÚLTIMO degrau já vencido: 11h de silêncio recebe
+        // a mensagem de 6h, que é a escrita para esse tempo. Os degraus
+        // pulados são dados como enviados, porque o momento deles passou.
+        let alvo = -1;
+        for (let i = conv.followUpStep; i < ESCADA.length; i++) {
+          if (paradoMin >= ESCADA[i].aposMin) alvo = i;
+        }
+        if (alvo < 0) continue;
+        const proximo = ESCADA[alvo];
+
+        // ESPAÇAMENTO MÍNIMO desde o último reengajamento. Segunda trava contra
+        // rajada: mesmo escolhendo o degrau certo, dois envios seguidos com um
+        // minuto de intervalo seriam agressivos. Usa o intervalo natural entre
+        // o degrau anterior e este.
+        if (conv.followUpLastAt) {
+          const desdeUltimo = (Date.now() - conv.followUpLastAt.getTime()) / 60_000;
+          const intervaloNatural = alvo > 0 ? ESCADA[alvo].aposMin - ESCADA[alvo - 1].aposMin : 5;
+          if (desdeUltimo < intervaloNatural) continue;
+        }
 
         if (paradoMin > JANELA_WHATSAPP_MIN) {
           await prisma.conversation
@@ -212,7 +240,7 @@ async function varrer(): Promise<void> {
           continue;
         }
 
-        await enviarDegrau(unit, conv, proximo);
+        await enviarDegrau(unit, conv, proximo, alvo);
       }
     }
   } catch (err) {
@@ -226,6 +254,8 @@ async function enviarDegrau(
   unit: { id: string; slug: string },
   conv: { id: string; leadId: string; followUpStep: number },
   degrau: Degrau,
+  /** Índice do degrau escolhido — pode ter pulado os que venceram juntos. */
+  indice: number,
 ): Promise<void> {
   const leadId = Number(conv.leadId);
   if (!Number.isFinite(leadId)) return;
@@ -237,7 +267,7 @@ async function enviarDegrau(
       leadId,
       conversationId: conv.id,
       intencao: degrau.intencao,
-      ultimoDegrau: conv.followUpStep === ESCADA.length - 1,
+      ultimoDegrau: indice === ESCADA.length - 1,
     });
     if (!texto) return;
 
@@ -252,11 +282,11 @@ async function enviarDegrau(
     await prisma.conversation.update({
       where: { id: conv.id },
       data: {
-        followUpStep: conv.followUpStep + 1,
+        // indice + 1, não step + 1: os degraus pulados contam como enviados,
+        // senão a rajada volta pela porta dos fundos na varredura seguinte.
+        followUpStep: indice + 1,
         followUpLastAt: new Date(),
-        ...(conv.followUpStep + 1 >= ESCADA.length
-          ? { followUpStoppedReason: 'escada concluída' }
-          : {}),
+        ...(indice + 1 >= ESCADA.length ? { followUpStoppedReason: 'escada concluída' } : {}),
       },
     });
 
@@ -268,12 +298,12 @@ async function enviarDegrau(
         conversationId: conv.id,
         role: 'assistant',
         content: texto,
-        meta: { followUp: conv.followUpStep + 1 },
+        meta: { followUp: indice + 1 },
       },
     });
 
     logger.info(
-      { unit: unit.slug, leadId, degrau: conv.followUpStep + 1 },
+      { unit: unit.slug, leadId, degrau: indice + 1, pulados: indice - conv.followUpStep },
       'follow-up: reengajamento enviado',
     );
   } catch (err) {
