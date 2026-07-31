@@ -17,6 +17,20 @@
 // só na tela, porque é o tipo de decisão que não pode depender de alguém
 // lembrar de deixar o interruptor desligado.
 //
+// TRÊS TENTATIVAS EM DIAS DISTINTOS — e por que não fazemos assim
+// ---------------------------------------------------------------
+// A recomendação clássica de clínicas é três tentativas em dias diferentes, e
+// ela é boa. Nós não conseguimos segui-la ao pé da letra, e a razão é técnica,
+// não de estratégia: no WhatsApp, mensagem livre só passa dentro de 24h da
+// última fala do paciente. Uma tentativa no dia 2 exige template pago
+// aprovado pela Meta — outro produto, com texto fixo, que não sabe o que foi
+// conversado.
+//
+// Então concentramos as tentativas dentro da janela e mudamos a INTENÇÃO de
+// cada uma, em vez do dia. O efeito buscado é o mesmo: mais de um toque, cada
+// um com ângulo diferente. Se um dia a clínica aprovar templates na Meta, o
+// degrau do dia 2 e do dia 4 passam a ser possíveis — e aí vale acrescentar.
+//
 // TODAS AS ESCADAS CABEM EM 24H
 // -----------------------------
 // O WhatsApp só entrega mensagem livre dentro de 24h da última fala do
