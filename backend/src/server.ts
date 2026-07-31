@@ -29,6 +29,7 @@ import { getCheckpointer } from './agent/graph.js';
 import { ensureDefaultUnit } from './services/units.service.js';
 import { startWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
 import { startDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
+import { startFollowUpWorker } from './lib/follow-up-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -119,6 +120,9 @@ async function main(): Promise<void> {
   // Monitor de "resposta parada": alerta quando uma resposta da IA fica gravada
   // no campo "Resposta IA" além do limite sem o Salesbot do Kommo entregá-la.
   startStaleReplyMonitor();
+  // Reengajamento de quem parou de responder. Único motor que decide QUANDO
+  // falar — o Salesbot é só o canal de entrega.
+  startFollowUpWorker();
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);

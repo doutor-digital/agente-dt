@@ -65,9 +65,20 @@ export async function addMessage(p: AddMessageParams): Promise<Message> {
     },
   });
   // Toca o lastMessageAt da conversa.
+  //
+  // E, quando quem falou foi o PACIENTE, zera a escada de reengajamento: ele
+  // voltou, então não é mais quem sumiu. Sem isto, alguém que responde no
+  // terceiro follow-up e some de novo pularia direto pro quarto degrau — e a
+  // retomada, que é justamente o momento de tratar bem, chegaria como despedida.
+  //
+  // Fica aqui, e não no worker, porque este é o único ponto por onde TODA
+  // mensagem do paciente passa, venha do webhook, do salesbot ou do widget.
   await prisma.conversation.update({
     where: { id: p.conversationId },
-    data: { lastMessageAt: new Date() },
+    data: {
+      lastMessageAt: new Date(),
+      ...(p.role === 'user' ? { followUpStep: 0, followUpLastAt: null } : {}),
+    },
   });
 
   // Notifica o painel Doutor-Digital-Dash (fire-and-forget, jamais bloqueia).
