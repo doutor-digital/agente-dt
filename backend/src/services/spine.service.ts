@@ -804,6 +804,111 @@ export async function cancelSchedule(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Confirmação de presença.
+// ---------------------------------------------------------------------------
+// O PAR QUE FALTAVA DO LEMBRETE. O paciente responde "confirmo" e, até aqui,
+// isso morria na conversa: a franquia continuava vendo AGENDADO (37) e a
+// recepção ligava de novo pra confirmar o que já estava confirmado.
+//
+// A rota move o agendamento para SCHEDULE_CONFIRMED (38), marca a notificação
+// como confirmada e grava `notificationAt` do lado deles — ou seja, o registro
+// é deles, não nosso, e é isso que faz a recepção parar de ligar.
+//
+// NÃO é destrutiva e NÃO é o oposto de cancelar: confirmar duas vezes não
+// quebra nada, e a consulta segue existindo. Por isso ela não pede a
+// confirmação-em-dois-passos que o cancelamento pede.
+// ---------------------------------------------------------------------------
+
+export async function confirmSchedule(
+  unit: SpineUnit,
+  idSchedule: number,
+): Promise<SpineResult<{ idSchedule?: number }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  try {
+    const { data } = await http.patch<{ idSchedule?: number; data?: { idSchedule?: number } }>(
+      '/api/schedules/confirm',
+      { idSchedule },
+    );
+    return { ok: true, data: { idSchedule: data?.data?.idSchedule ?? data?.idSchedule ?? idSchedule } };
+  } catch (err) {
+    const d = describe(err);
+    logger.warn({ erro: d.error, idSchedule }, 'spine: falha ao confirmar presença');
+    return { ok: false, ...d };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// BI — leads por origem.
+// ---------------------------------------------------------------------------
+// A ORIGEM OFICIAL, e por que ela não é a nossa.
+//
+// O painel hoje mostra a origem que a SDR digitou no Kommo. A franquia cobra
+// pelo número DELA, que sai daqui. Quando os dois divergem, quem ganha a
+// discussão é este endpoint — então ele precisa estar na tela ao lado do
+// nosso, e não substituindo: a diferença entre os dois É a informação.
+//
+// A doc pede 1–2 consultas por dia e no máximo 100 dias de intervalo. Um
+// painel que recarrega chama isso a cada F5, então o cache não é otimização,
+// é obedecer o contrato de uso deles.
+// ---------------------------------------------------------------------------
+
+export interface SpineLeadSource {
+  sourceName: string;
+  total: number;
+}
+
+/** Teto do intervalo aceito pela API deles. Pedir mais devolve 400. */
+const BI_MAX_DIAS = 100;
+
+const biCache = new Map<string, { em: number; valor: { sources: SpineLeadSource[]; total: number } }>();
+const BI_TTL_MS = 60 * 60_000; // 1h — dentro do "1 a 2 vezes ao dia" da doc
+
+export async function biLeadsSources(
+  unit: SpineUnit & { id?: string },
+  params: { initialDate: string; endDate: string },
+): Promise<SpineResult<{ sources: SpineLeadSource[]; total: number; cache: boolean }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+
+  const dias =
+    (Date.parse(`${params.endDate}T00:00:00Z`) - Date.parse(`${params.initialDate}T00:00:00Z`)) /
+    86_400_000;
+  if (!Number.isFinite(dias) || dias < 0) {
+    return { ok: false, error: 'intervalo inválido (use AAAA-MM-DD, endDate >= initialDate)' };
+  }
+  if (dias > BI_MAX_DIAS) {
+    return { ok: false, error: `intervalo maior que ${BI_MAX_DIAS} dias — a API da franquia recusa` };
+  }
+
+  const k = `${unit.id ?? unit.spineToken?.slice(-8)}:${params.initialDate}:${params.endDate}`;
+  const hit = biCache.get(k);
+  if (hit && Date.now() - hit.em < BI_TTL_MS) {
+    return { ok: true, data: { ...hit.valor, cache: true } };
+  }
+
+  try {
+    // Envelope agrupado DENTRO de `data` — não é array simples, ao contrário
+    // dos outros endpoints de busca. A doc avisa disso e desta vez confere.
+    const { data } = await http.post<{
+      data?: { sources?: Array<{ sourceName?: string; total?: number }>; total?: number };
+    }>('/api/bi/leads/sources', { initialDate: params.initialDate, endDate: params.endDate });
+
+    const sources = (data?.data?.sources ?? [])
+      .map((s) => ({ sourceName: s.sourceName ?? '(sem origem)', total: s.total ?? 0 }))
+      .sort((a, b) => b.total - a.total);
+    const valor = { sources, total: data?.data?.total ?? sources.reduce((n, s) => n + s.total, 0) };
+
+    biCache.set(k, { em: Date.now(), valor });
+    return { ok: true, data: { ...valor, cache: false } };
+  } catch (err) {
+    const d = describe(err);
+    logger.warn({ erro: d.error, ...params }, 'spine: falha no BI de origem de leads');
+    return { ok: false, ...d };
+  }
+}
+
 /** A franquia guarda "+5599991665121". O Kommo entrega em vários formatos. */
 export function normalizarWhatsapp(bruto: string): string {
   const digitos = bruto.replace(/\D/g, '');
@@ -927,6 +1032,8 @@ export const SpineService = {
   searchClients,
   getClient,
   convertLead,
+  confirmSchedule,
+  biLeadsSources,
   instanteNoFuso,
   localParaUtcIso,
   searchSchedules,

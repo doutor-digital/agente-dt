@@ -688,6 +688,70 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// confirmar_presenca
+//
+// O par do lembrete. Sem isto, "confirmo" morria na conversa: a franquia
+// seguia vendo AGENDADO e a recepção ligava pra confirmar o que já estava
+// confirmado. O registro tem que ser do lado DELES pra parar a ligação.
+//
+// Não pede confirmação em dois passos, ao contrário de cancelar: confirmar de
+// novo não tira a vaga de ninguém, e o pior caso é um PATCH repetido.
+// ---------------------------------------------------------------------------
+
+export function buildConfirmarPresenca({ unit, recorder }: Contexto) {
+  return new DynamicStructuredTool({
+    name: 'confirmar_presenca',
+    description:
+      'Registra na clínica que o paciente CONFIRMOU que vai comparecer. Use quando ' +
+      'ele disser que confirma, que estará lá, ou responder "confirmo" ao lembrete. ' +
+      'Não use para marcar consulta nova — isso é agendar_consulta.',
+    schema: z.object({
+      leadId: z.number().int().positive().describe('Lead do Kommo desta conversa.'),
+    }),
+    func: async (args: { leadId: number }) => {
+      const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      if (!fresca.spineEnabled || !fresca.spineToken) {
+        return 'Agenda não conectada. Agradeça a confirmação e diga que a equipe registra.';
+      }
+
+      const atual = await consultaAtual(fresca, args.leadId);
+      if (!atual) {
+        return (
+          'Este paciente não tem consulta marcada por aqui — não há presença a confirmar. ' +
+          'Se ele quer marcar, use consultar_horarios e agende.'
+        );
+      }
+      // Confirmar um horário que eu não consegui conferir é prometer ao
+      // paciente que está tudo certo para uma hora que pode ter mudado.
+      if (!atual.confirmada) {
+        return (
+          'NÃO confirmei: não consegui checar a consulta dele na clínica agora. ' +
+          'NÃO cite dia nem hora. Agradeça e diga que a equipe confirma em seguida.'
+        );
+      }
+
+      const r = await SpineService.confirmSchedule(fresca, atual.idSchedule);
+      await recorder.step({
+        kind: r.ok ? 'TOOL_RESULT' : 'ERROR',
+        title: `confirmar_presenca ${atual.idSchedule}: ${r.ok ? 'confirmada' : r.error}`,
+        payload: { leadId: args.leadId, idSchedule: atual.idSchedule, quando: atual.quando },
+      });
+      if (!r.ok) {
+        return (
+          `Não consegui registrar a confirmação (${r.error}). Agradeça mesmo assim e diga ` +
+          'que está tudo certo para o horário — NÃO invente problema para o paciente.'
+        );
+      }
+      AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
+      return (
+        `Presença confirmada para ${porExtenso(atual.quando)}. Agradeça, confirme o dia e a ` +
+        'hora e lembre de chegar 15 minutos antes.'
+      );
+    },
+  });
+}
+
 export function buildRemarcarConsulta(ctx: Contexto) {
   const { unit, recorder } = ctx;
   const agendar = buildAgendarConsulta(ctx);
@@ -982,5 +1046,6 @@ export function buildAgendaTools(ctx: Contexto): DynamicStructuredTool[] {
     buildAgendarConsulta(ctx),
     buildRemarcarConsulta(ctx),
     buildCancelarConsulta(ctx),
+    buildConfirmarPresenca(ctx),
   ] as unknown as DynamicStructuredTool[];
 }

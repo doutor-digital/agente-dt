@@ -455,6 +455,93 @@ export async function cancelScheduleHandler(req: Request, res: Response): Promis
   res.json({ ok: true, idSchedule: vinculo.spineIdSchedule, quando: vinculo.agendadoPara });
 }
 
+/**
+ * CONFIRMAR PRESENÇA pelo painel — o par do "Confirmar presença" do lembrete.
+ *
+ * Ao contrário do cancelamento, não mexe no nosso vínculo: a consulta continua
+ * a mesma, só muda de status lá (AGENDADO → CONFIRMADO). Por isso também não
+ * exige a confirmação em dois passos — repetir não tira a vaga de ninguém.
+ */
+export async function confirmScheduleHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  const kommoLeadId = Number(req.body?.kommoLeadId);
+  if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
+    res.status(400).json({ error: 'kommoLeadId_obrigatorio' });
+    return;
+  }
+
+  const vinculo = await prisma.spineLeadLink.findUnique({
+    where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+  });
+  if (!vinculo?.spineIdSchedule) {
+    res.status(422).json({ ok: false, motivo: 'este lead não tem consulta marcada por aqui' });
+    return;
+  }
+
+  const r = await SpineService.confirmSchedule(unit, vinculo.spineIdSchedule);
+  if (!r.ok) {
+    res.status(502).json({ ok: false, motivo: r.error ?? 'a franquia recusou a confirmação' });
+    return;
+  }
+
+  logger.info(
+    { unit: unit.slug, kommoLeadId, idSchedule: vinculo.spineIdSchedule, quando: vinculo.agendadoPara },
+    'agenda: presença confirmada pelo painel',
+  );
+  res.json({ ok: true, idSchedule: vinculo.spineIdSchedule, quando: vinculo.agendadoPara });
+}
+
+/**
+ * ORIGEM DE LEADS PELA FRANQUIA — o número que ELES usam para cobrar.
+ *
+ * Não substitui a origem do nosso painel (a que a SDR digita no Kommo): a
+ * divergência entre os dois é o que interessa. Sem intervalo explícito, os
+ * últimos 30 dias, que é o recorte de cobrança.
+ */
+export async function biLeadsSourcesHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  if (!unit.spineEnabled || !unit.spineToken) {
+    res.status(422).json({ ok: false, motivo: 'unidade sem a API da franquia conectada' });
+    return;
+  }
+
+  const hoje = SpineService.instanteNoFuso(new Date(), unit.spineTimezone || 'America/Sao_Paulo').slice(0, 10);
+  const trintaAtras = new Date(Date.parse(`${hoje}T00:00:00Z`) - 30 * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
+  const dia = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+  const parsed = z
+    .object({ initialDate: dia.optional(), endDate: dia.optional() })
+    .safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'datas_invalidas', detalhe: 'use AAAA-MM-DD' });
+    return;
+  }
+
+  const r = await SpineService.biLeadsSources(unit, {
+    initialDate: parsed.data.initialDate ?? trintaAtras,
+    endDate: parsed.data.endDate ?? hoje,
+  });
+  if (!r.ok) {
+    res.status(502).json({ ok: false, motivo: r.error ?? 'a franquia recusou a consulta' });
+    return;
+  }
+  res.json({
+    ok: true,
+    periodo: { initialDate: parsed.data.initialDate ?? trintaAtras, endDate: parsed.data.endDate ?? hoje },
+    ...r.data,
+  });
+}
+
 /** PRÉVIA DO PACIENTE — o que iria pro POST /api/clients, sem enviar. */
 export async function previewPatientHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);

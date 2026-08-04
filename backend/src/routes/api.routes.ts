@@ -112,6 +112,8 @@ import {
   spineStatusHandler,
   spineSchedulesHandler,
   spinePingHandler,
+  confirmScheduleHandler,
+  biLeadsSourcesHandler,
   createAgendaBlockHandler,
   deleteAgendaBlockHandler,
   createAgendaBlockBulkHandler,
@@ -306,6 +308,8 @@ apiRouter.get('/units/:id/spine/pendentes', requireUnitAccess, pendentesHandler)
 apiRouter.post('/units/:id/spine/patient-preview', requireUnitAccess, previewPatientHandler);
 apiRouter.post('/units/:id/spine/sync-patient', requireUnitAccess, syncPatientHandler);
 apiRouter.post('/units/:id/spine/cancel-schedule', requireUnitAccess, cancelScheduleHandler);
+apiRouter.post('/units/:id/spine/confirm-schedule', requireUnitAccess, confirmScheduleHandler);
+apiRouter.get('/units/:id/spine/bi/leads-sources', requireUnitAccess, biLeadsSourcesHandler);
 // Bloqueio manual de horário — supre o que a API da franquia não expõe.
 apiRouter.post('/units/:id/agenda/blocks', requireUnitAccess, createAgendaBlockHandler);
 apiRouter.get('/units/:id/agenda/blocks', requireUnitAccess, listAgendaBlocksHandler);
