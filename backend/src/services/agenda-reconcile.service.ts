@@ -206,23 +206,34 @@ async function reconciliar(unit: Unit, kommoLeadId: number): Promise<ConsultaRec
   if (!unit.spineEnabled || !unit.spineToken) return base;
 
   try {
-    // 0) CAMINHO CURTO — quando sabemos quem é o paciente, GET /api/clients/{id}
-    //    devolve os agendamentos dele já embutidos, com data e status atuais.
-    //    Uma chamada, e imune ao caso que mais engana: a recepção mudar o DIA,
-    //    que faz a busca por intervalo procurar no lugar errado.
-    let achado = link.spineIdClient
-      ? await pelosAgendamentosDoPaciente(unit, link.spineIdClient, link.spineIdSchedule)
-      : null;
+    // A ORDEM AQUI É POR CUSTO MEDIDO, não por elegância. Contra a produção:
+    //
+    //   busca de 1 dia          mediana  155ms
+    //   varredura de 90 dias    mediana  304ms
+    //   GET /api/clients/{id}   mediana 1435ms   (812 … 1957)
+    //
+    // "Uma chamada só" parecia o caminho barato — a ficha do paciente já traz
+    // os agendamentos dele. É o mais CARO dos três, quase 10x a busca por dia,
+    // porque a rota carrega tratamentos e o resto do cadastro junto. Como isto
+    // roda na montagem do prompt, cada milissegundo aqui é o paciente esperando.
 
-    // 1) O dia que a gente acha que é. Uma chamada, o caso comum.
+    // 1) O dia que a gente acha que é. O caso comum, e o mais barato.
     const dia = link.agendadoPara?.slice(0, 10) ?? null;
-    if (!achado && dia) achado = await procurar(unit, link.spineIdSchedule, dia, dia);
+    let achado = dia ? await procurar(unit, link.spineIdSchedule, dia, dia) : null;
 
-    // 2) Sumiu do dia esperado: ou remarcaram para outra data, ou apagaram.
-    //    Varre a janela à frente. Caro, e por isso só aqui.
+    // 2) Sumiu do dia esperado: remarcaram para outra data. A varredura à
+    //    frente cobre isso e ainda sai mais barata que perguntar pela ficha.
     if (!achado) {
       const hoje = hojeNaClinica(unit);
       achado = await procurar(unit, link.spineIdSchedule, hoje, somarDias(hoje, JANELA_DIAS));
+    }
+
+    // 3) ÚLTIMO RECURSO — a ficha do paciente. Cara, então só quando as duas
+    //    buscas por data falharam: pega o que ficou fora da janela (remarcado
+    //    para daqui a mais de 90 dias, ou para trás). Sem isto, esses casos
+    //    virariam "não confirmada" e a I.A. calaria sobre o horário à toa.
+    if (!achado && link.spineIdClient) {
+      achado = await pelosAgendamentosDoPaciente(unit, link.spineIdClient, link.spineIdSchedule);
     }
 
     // 3) Não está em lugar nenhum. Pode ter sido excluído na franquia (o
