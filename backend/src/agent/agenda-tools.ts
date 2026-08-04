@@ -27,6 +27,7 @@ import type { TraceRecorder } from './trace-recorder.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaService } from '../services/agenda.service.js';
+import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 
 const TZ_PADRAO = 'America/Sao_Paulo';
 
@@ -263,40 +264,166 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
 // buscar_paciente
 // ---------------------------------------------------------------------------
 
-export function buildBuscarPaciente({ unit, recorder }: Contexto) {
+/**
+ * Últimos 8 dígitos — é o que dá pra comparar com segurança entre as duas
+ * pontas. O WhatsApp entrega o número do Brasil sem o nono dígito (o `wa_id`
+ * de "+55 99 99150-7569" chega como "+559991507569"), então casar o número
+ * inteiro reprovaria a mesma pessoa. Os 8 finais sobrevivem a isso.
+ */
+function fim8(fone: string | null | undefined): string | null {
+  const d = (fone ?? '').replace(/\D/g, '');
+  return d.length >= 8 ? d.slice(-8) : null;
+}
+
+/** Telefone do paciente pelo lead do Kommo — mora no CONTATO, não no lead. */
+async function telefoneDoLead(
+  kommo: KommoClient | undefined,
+  leadId: number | undefined,
+): Promise<string | null> {
+  if (!kommo || !leadId) return null;
+  try {
+    const lead = await kommo.getLead(leadId);
+    const contactId = lead?._embedded?.contacts?.[0]?.id;
+    if (!contactId) return null;
+    return await kommo.getContactPhone(contactId);
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// buscar_paciente
+//
+// POR QUE ESTA TOOL RECUSA MAIS DO QUE ACHA
+// -----------------------------------------
+// A busca da franquia casa por PEDAÇO do nome. Procurar "Keyla" devolve
+// "KEYLA DA SILVA LIMA KOMATSU" — outra pessoa, cadastrada em 2024, com outro
+// telefone. Foi o que aconteceu: a consulta de uma paciente nova foi marcada
+// no prontuário de uma xará. Ninguém percebeu porque, do lado de fora, deu
+// tudo certo — a IA achou "a paciente", confirmou o horário, e a agenda da
+// clínica passou a esperar a pessoa errada.
+//
+// Dois erros possíveis, de tamanhos MUITO diferentes:
+//   - usar o cadastro de um xará → prontuário trocado, consulta no nome de
+//     outra pessoa, e a paciente de verdade não é esperada. Sem desfazer.
+//   - criar um cadastro a mais → uma linha duplicada que a recepção junta.
+// O primeiro é incidente clínico, o segundo é bagunça. Na dúvida, o segundo.
+//
+// Por isso o telefone MANDA: é a única coisa que distingue xará de paciente.
+// Sem ele, nenhum idClient sai daqui.
+// ---------------------------------------------------------------------------
+
+export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
   return new DynamicStructuredTool({
     name: 'buscar_paciente',
     description:
-      'Procura o paciente no sistema da clínica pelo nome, para obter o cadastro ' +
-      'necessário ao agendamento. Use antes de agendar. Se não encontrar, NÃO ' +
-      'invente cadastro — transfira para a equipe.',
+      'Procura o paciente já cadastrado no sistema da clínica, para agendar no ' +
+      'cadastro certo. EXIGE o nome COMPLETO (nome e sobrenome) — buscar só pelo ' +
+      'primeiro nome traz xarás e a tool recusa. Se não encontrar, use ' +
+      'cadastrar_paciente. NUNCA invente idClient.',
     schema: z.object({
-      nome: z.string().min(2).max(120).describe('Nome do paciente, completo ou parcial.'),
+      nome: z
+        .string()
+        .min(2)
+        .max(120)
+        .describe('Nome COMPLETO do paciente: nome e sobrenome. Só o primeiro nome é recusado.'),
+      telefone: z
+        .string()
+        .max(30)
+        .optional()
+        .describe(
+          'Telefone do paciente com DDD, se ele já disse. É o que confirma que o ' +
+          'cadastro encontrado é dele mesmo, e não de um xará.',
+        ),
+      leadId: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Lead do Kommo desta conversa — permite conferir o telefone sozinho.'),
     }),
-    func: async ({ nome }: { nome: string }) => {
+    func: async (args: { nome: string; telefone?: string; leadId?: number }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'Sistema da clínica não conectado. Transfira para a equipe.';
       }
-      const r = await SpineService.searchClients(fresca, nome);
+
+      // GUARD 1 — sobrenome. A mesma régua do cadastrar_paciente, que já
+      // recusa cadastro sem sobrenome. Antes valia só na escrita; o buraco
+      // estava na leitura, que é justamente onde o xará entra.
+      const partes = args.nome.trim().split(/\s+/).filter((x) => x.length >= 2);
+      if (partes.length < 2) {
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title: `buscar_paciente recusado — "${args.nome}" é só o primeiro nome`,
+          payload: { nome: args.nome },
+        });
+        return (
+          `RECUSADO: "${args.nome}" é só o primeiro nome, e buscar assim traz o cadastro ` +
+          'de outra pessoa com o mesmo nome. Pergunte o NOME COMPLETO ao paciente ' +
+          '(e o telefone com DDD, se ainda não tiver) e chame esta tool de novo.'
+        );
+      }
+
+      const r = await SpineService.searchClients(fresca, args.nome);
       if (!r.ok || !r.data) return `Não consegui consultar o cadastro (${r.error}).`;
 
       const achados = r.data.clients.slice(0, 5);
-      await recorder.step({
-        kind: 'TOOL_RESULT',
-        title: `buscar_paciente "${nome}": ${achados.length} resultado(s)`,
-        payload: { nome, achados },
-      });
       if (achados.length === 0) {
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title: `buscar_paciente "${args.nome}": 0 resultado(s)`,
+          payload: { nome: args.nome, achados },
+        });
         return (
-          `Nenhum cadastro encontrado para "${nome}". ` +
-          'Peça o NOME COMPLETO e o telefone com DDD e use cadastrar_paciente — ' +
+          `Nenhum cadastro encontrado para "${args.nome}". ` +
+          'Peça o telefone com DDD (se ainda não tiver) e use cadastrar_paciente — ' +
           'depois disso dá pra agendar normalmente.'
         );
       }
-      return achados
-        .map((c) => `idClient ${c.idClient} — ${c.name}${c.whatsapp ? ` (${c.whatsapp})` : ''}`)
-        .join(' | ');
+
+      // GUARD 2 — telefone. O que a IA passou, ou o do contato no Kommo.
+      const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
+      const fone = foneInformado ?? (await telefoneDoLead(kommo, args.leadId));
+      const alvo = fim8(fone);
+      const batem = alvo ? achados.filter((c) => fim8(c.whatsapp) === alvo) : [];
+
+      await recorder.step({
+        kind: 'TOOL_RESULT',
+        title: `buscar_paciente "${args.nome}": ${achados.length} achado(s), ${batem.length} com telefone batendo`,
+        payload: { nome: args.nome, achados, telefoneConferido: fone, batem },
+      });
+
+      // Sem telefone nenhum pra comparar: não devolve idClient. Entregar o
+      // cadastro aqui é apostar que não há xará — e foi exatamente essa aposta
+      // que pôs a consulta no prontuário errado.
+      if (!alvo) {
+        return (
+          `Encontrei ${achados.length} cadastro(s) com esse nome, mas NÃO tenho telefone ` +
+          'pra confirmar que é o dele. NÃO agende ainda. Peça o telefone com DDD ao ' +
+          'paciente e chame buscar_paciente de novo passando `telefone`.'
+        );
+      }
+
+      if (batem.length === 0) {
+        return (
+          `ATENÇÃO: existe(m) ${achados.length} cadastro(s) com o nome "${args.nome}", mas ` +
+          'NENHUM tem o telefone deste paciente. É XARÁ, não é ele. NÃO use esses cadastros. ' +
+          'Pergunte ao paciente se ele já se consultou aqui antes: se disser que NÃO, ' +
+          'chame cadastrar_paciente e siga; se disser que SIM, NÃO agende — diga que a ' +
+          'equipe vai localizar o cadastro dele e retorna em seguida.'
+        );
+      }
+
+      // Um só bate: é ele, sem ambiguidade. Guarda o vínculo. Com mais de um,
+      // não dá pra escolher por nós — quem decide é a I.A. com o paciente.
+      if (batem.length === 1) await guardarPaciente(fresca.id, args.leadId, batem[0].idClient);
+
+      return (
+        `Confirmado pelo telefone: ${batem
+          .map((c) => `idClient ${c.idClient} — ${c.name}`)
+          .join(' | ')}. Use este idClient em agendar_consulta.`
+      );
     },
   });
 }
@@ -325,8 +452,20 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
       telefone: z.string().min(8).max(30).describe('Telefone com DDD.'),
       cidade: z.string().max(80).optional().describe('Cidade, se o paciente disse.'),
       uf: z.string().max(30).optional().describe('Estado ou sigla, se o paciente disse.'),
+      leadId: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Lead do Kommo desta conversa — liga o cadastro ao contato já existente.'),
     }),
-    func: async (args: { nome: string; telefone: string; cidade?: string; uf?: string }) => {
+    func: async (args: {
+      nome: string;
+      telefone: string;
+      cidade?: string;
+      uf?: string;
+      leadId?: number;
+    }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'Sistema da clínica não conectado. Transfira para a equipe.';
@@ -357,28 +496,78 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
           title: `cadastrar_paciente: já existia (${igual.idClient})`,
           payload: { nome: args.nome, idClient: igual.idClient },
         });
+        await guardarPaciente(fresca.id, args.leadId, igual.idClient);
         return `Já existia. idClient ${igual.idClient} — ${igual.name}. Use este para agendar.`;
       }
 
-      const r = await SpineService.createClient(fresca, {
-        name: args.nome.trim(),
-        whatsapp: fone,
-        idSource: fresca.spineDefaultSourceId,
-        addressCity: args.cidade?.trim().toUpperCase() ?? null,
-        addressUf: SpineService.resolverUf(args.uf ?? null),
-      });
+      // CONVERTER, NÃO CRIAR DO ZERO.
+      //
+      // Quando o lead já foi espelhado na franquia, criar um paciente novo
+      // deixa DUAS fichas da mesma pessoa, sem nada ligando uma à outra — e
+      // com nomes diferentes, porque o lead foi espelhado com o nome parcial
+      // que a I.A. tinha no minuto (o primeiro nome) e o paciente nasce com o
+      // nome completo. Quem procura por um não acha o outro.
+      //
+      // /api/leads/convert transforma a MESMA ficha em paciente. Uma pessoa,
+      // um cadastro, já com o nome completo.
+      const vinculo = args.leadId
+        ? await prisma.spineLeadLink.findFirst({
+            where: { unitId: fresca.id, kommoLeadId: args.leadId },
+          })
+        : null;
+
+      let idClient: number | null = null;
+      let via: 'convert' | 'create' = 'create';
+
+      if (vinculo?.spineIdLead) {
+        const c = await SpineService.convertLead(fresca, {
+          idLead: vinculo.spineIdLead,
+          name: args.nome.trim(),
+          idSource: fresca.spineDefaultSourceId,
+          whatsapp: fone,
+        });
+        if (c.ok && c.data?.idClient) {
+          idClient = c.data.idClient;
+          via = 'convert';
+        } else {
+          // CAI PARA A CRIAÇÃO. Duas fichas é ruim; paciente sem cadastro
+          // nenhum, na hora de fechar o agendamento, é pior — perde a
+          // consulta. O log marca pra dar pra ver se a conversão vive.
+          logger.warn(
+            { unit: fresca.slug, idLead: vinculo.spineIdLead, erro: c.error },
+            'agenda-tools: conversão do lead falhou — caindo para cadastro novo',
+          );
+        }
+      }
+
+      if (idClient === null) {
+        const r = await SpineService.createClient(fresca, {
+          name: args.nome.trim(),
+          whatsapp: fone,
+          idSource: fresca.spineDefaultSourceId,
+          idLead: vinculo?.spineIdLead ?? null,
+          addressCity: args.cidade?.trim().toUpperCase() ?? null,
+          addressUf: SpineService.resolverUf(args.uf ?? null),
+        });
+        if (!r.ok || !r.data?.idClient) {
+          await recorder.step({
+            kind: 'ERROR',
+            title: `cadastrar_paciente "${args.nome}": falhou`,
+            payload: { nome: args.nome, telefone: fone, resultado: r },
+          });
+          logger.warn({ unit: fresca.slug, erro: r.error }, 'agenda-tools: falha ao cadastrar paciente');
+          return `Não consegui concluir o cadastro (${r.error}). Avise que a equipe vai finalizar.`;
+        }
+        idClient = r.data.idClient;
+      }
 
       await recorder.step({
         kind: 'TOOL_RESULT',
-        title: `cadastrar_paciente "${args.nome}": ${r.ok ? 'ok' : 'falhou'}`,
-        payload: { nome: args.nome, telefone: fone, resultado: r },
+        title: `cadastrar_paciente "${args.nome}": ok via ${via} (idClient ${idClient})`,
+        payload: { nome: args.nome, telefone: fone, idClient, via, idLead: vinculo?.spineIdLead ?? null },
       });
-
-      if (!r.ok || !r.data?.idClient) {
-        logger.warn({ unit: fresca.slug, erro: r.error }, 'agenda-tools: falha ao cadastrar paciente');
-        return `Não consegui concluir o cadastro (${r.error}). Avise que a equipe vai finalizar.`;
-      }
-      return `Cadastrado. idClient ${r.data.idClient} — use este número em agendar_consulta.`;
+      await guardarPaciente(fresca.id, args.leadId, idClient);
+      return `Cadastrado. idClient ${idClient} — use este número em agendar_consulta.`;
     },
   });
 }
@@ -400,19 +589,39 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
 // e a vaga antiga já teria sido devolvida pra fila.
 // ---------------------------------------------------------------------------
 
-async function consultaAtual(unitId: string, leadId: number | undefined) {
-  if (!leadId) return null;
-  const l = await prisma.spineLeadLink.findFirst({
-    where: { unitId, kommoLeadId: leadId },
-  });
-  return l?.spineIdSchedule ? { idSchedule: l.spineIdSchedule, quando: l.agendadoPara } : null;
+/**
+ * A consulta do lead, CONFERIDA na franquia — não a lembrança do nosso banco.
+ *
+ * A recepção remarca pelo sistema dela e nunca passa por aqui. Decidir com o
+ * valor salvo faz o cancelamento mirar um horário que não existe mais e faz a
+ * IA repetir ao paciente uma hora que já mudou.
+ */
+async function consultaAtual(unit: Unit, leadId: number | undefined) {
+  const c = await AgendaReconcileService.consultaDoLead(unit, leadId);
+  if (!c || !c.idSchedule || c.estado === 'cancelada') return null;
+  return { idSchedule: c.idSchedule, quando: c.quando, confirmada: c.estado === 'confirmada' };
 }
 
-function porExtenso(quando: string | null | undefined): string {
-  if (!quando) return 'a consulta marcada';
-  const [dia, hora] = quando.split('T');
-  const [a, m, d] = dia.split('-');
-  return `${d}/${m}/${a} às ${hora}`;
+const porExtenso = AgendaReconcileService.porExtenso;
+
+/**
+ * Guarda QUEM é o paciente deste lead na franquia.
+ *
+ * Ficava perdido: a tool criava o cadastro, devolvia o idClient para a I.A. e
+ * não escrevia em lugar nenhum. Sem isto o painel mostra lead sem paciente, e
+ * a releitura do agendamento precisa varrer a agenda por data em vez de
+ * perguntar direto pela ficha dele.
+ */
+async function guardarPaciente(
+  unitId: string,
+  leadId: number | undefined,
+  idClient: number | null | undefined,
+): Promise<void> {
+  if (!leadId || !idClient) return;
+  await prisma.spineLeadLink
+    .updateMany({ where: { unitId, kommoLeadId: leadId }, data: { spineIdClient: idClient } })
+    .catch(() => undefined);
+  AgendaReconcileService.esqueceConsulta(unitId, leadId);
 }
 
 export function buildCancelarConsulta({ unit, recorder }: Contexto) {
@@ -431,8 +640,19 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
     }),
     func: async (args: { leadId: number; confirmado?: boolean }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
-      const atual = await consultaAtual(fresca.id, args.leadId);
+      const atual = await consultaAtual(fresca, args.leadId);
       if (!atual) return 'Este paciente não tem consulta marcada por aqui. Não há o que cancelar.';
+
+      // Não confirmei o horário na franquia agora. Perguntar "quer cancelar a
+      // de 08:00?" quando a recepção já mudou pra 09:30 faz o paciente
+      // desmentir a IA — ou pior, concordar com a coisa errada.
+      if (!atual.confirmada) {
+        return (
+          'NÃO CANCELEI: não consegui confirmar na clínica qual é a consulta dele agora. ' +
+          'NÃO cite dia nem hora. Diga que vai confirmar o agendamento com a equipe e ' +
+          'retornar em instantes.'
+        );
+      }
 
       if (!args.confirmado) {
         return (
@@ -461,6 +681,7 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
           data: { spineIdSchedule: null, agendadoPara: null },
         })
         .catch(() => undefined);
+      AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
 
       return `Consulta de ${porExtenso(atual.quando)} cancelada. Confirme ao paciente e pergunte se ele quer remarcar para outro dia.`;
     },
@@ -484,7 +705,7 @@ export function buildRemarcarConsulta(ctx: Contexto) {
     }),
     func: async (args: { leadId: number; idClient: number; data: string; hora: string }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
-      const atual = await consultaAtual(fresca.id, args.leadId);
+      const atual = await consultaAtual(fresca, args.leadId);
 
       // MARCA A NOVA PRIMEIRO. Se cancelasse antes e a nova falhasse, o
       // paciente ficaria sem consulta e a vaga antiga já teria ido embora.
@@ -506,6 +727,7 @@ export function buildRemarcarConsulta(ctx: Contexto) {
           title: `remarcar: antiga ${atual.idSchedule} ${c.ok ? 'cancelada' : 'NÃO cancelada'}`,
           payload: { leadId: args.leadId, antiga: atual.idSchedule, nova: `${args.data} ${args.hora}` },
         });
+        AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
       }
       return `Remarcada de ${porExtenso(atual?.quando)} para ${porExtenso(`${args.data}T${args.hora}`)}. ${nova}`;
     },
@@ -600,13 +822,55 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       // passa por aqui de propósito, com a flag, porque ele já cancela a
       // antiga logo depois.
       if (!args.remarcando) {
-        const ja = await consultaAtual(fresca.id, args.leadId);
+        const ja = await consultaAtual(fresca, args.leadId);
         if (ja) {
           return (
             `RECUSADO: este paciente já tem consulta em ${porExtenso(ja.quando)}. ` +
             'Um paciente só pode ter uma. Se ele quer OUTRO dia ou horário, chame ' +
             'remarcar_consulta; se quer desmarcar, chame cancelar_consulta. ' +
             'NÃO marque uma segunda.'
+          );
+        }
+      }
+
+      // GUARD 3 — o idClient é mesmo deste paciente?
+      //
+      // As travas do buscar_paciente impedem que a I.A. RECEBA um idClient não
+      // verificado, mas não impediam que ela PASSASSE um. Aqui a conferência é
+      // contra a franquia: quem é esse cadastro, e o telefone dele bate com o
+      // WhatsApp de quem está conversando? Foi assim que a consulta de uma
+      // paciente nova acabou no prontuário de uma xará de 2024.
+      const conf = await SpineService.getClient(fresca, args.idClient);
+      if (conf.ok && !conf.data?.client) {
+        await recorder.step({
+          kind: 'ERROR',
+          title: `agendar_consulta recusado — idClient ${args.idClient} não existe`,
+          payload: { ...args },
+        });
+        return (
+          `RECUSADO: o cadastro ${args.idClient} não existe na clínica. NÃO diga que marcou. ` +
+          'Use buscar_paciente com o nome completo, ou cadastrar_paciente se ele for novo.'
+        );
+      }
+      // Falha de rede não vira recusa: bloquear aqui por indisponibilidade
+      // deles custaria agendamentos legítimos. Só a resposta EXPLÍCITA de
+      // "não existe" ou de telefone divergente barra.
+      const paciente = conf.ok ? conf.data?.client ?? null : null;
+      if (paciente) {
+        const foneLead = await telefoneDoLead(kommo, args.leadId);
+        const a = fim8(foneLead);
+        const b = fim8(paciente.whatsapp);
+        if (a && b && a !== b) {
+          await recorder.step({
+            kind: 'ERROR',
+            title: `agendar_consulta recusado — idClient ${args.idClient} é de outra pessoa`,
+            payload: { ...args, cadastro: paciente.name, foneCadastro: paciente.whatsapp, foneLead },
+          });
+          return (
+            `RECUSADO: o cadastro ${args.idClient} é de "${paciente.name}", e o telefone dele ` +
+            'NÃO é o deste paciente. Marcar aqui poria a consulta no prontuário de outra ' +
+            'pessoa. NÃO diga que marcou. Confirme o nome completo e use buscar_paciente ' +
+            'de novo; se ele nunca se consultou aí, use cadastrar_paciente.'
           );
         }
       }
@@ -674,6 +938,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             },
           })
           .catch(() => undefined);
+        AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
       }
 
       // Carimba o CRM no MESMO passo. Fire-and-forget porque falhar aqui não

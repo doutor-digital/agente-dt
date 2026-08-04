@@ -35,6 +35,11 @@ import {
 } from '../services/actions.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { getLeadMemory, type LeadMemoryFacts } from '../services/lead-memory.service.js';
+import {
+  consultaDoLead,
+  porExtenso,
+  type ConsultaReconciliada,
+} from '../services/agenda-reconcile.service.js';
 import { logger } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -1161,6 +1166,12 @@ export interface ComposeInput {
   leadId?: number;
   /** Este é o PRIMEIRO turno do paciente? (1 humana, 0 IA). */
   isFirstTurn?: boolean;
+  /**
+   * A consulta do lead na franquia, já conferida contra a API deles. `null` =
+   * não tem consulta. Vira o bloco <consulta_do_paciente>, que existe pra IA
+   * nunca repetir um horário que a recepção já mudou.
+   */
+  consulta?: ConsultaReconciliada | null;
 }
 
 function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
@@ -1211,6 +1222,55 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
 
 // Bloco de RUNTIME: injeta o leadId real desta conversa pra IA usar nas tool
 // calls. Sem isso, ela passa `leadId: 0` ou a string "leadId" e as tools falham.
+/**
+ * A CONSULTA DESTE PACIENTE, conferida na franquia neste turno.
+ *
+ * Existe porque o caminho mais comum de errar não passa por tool nenhuma: o
+ * paciente pergunta "que horas mesmo é minha consulta?" e a IA responde pelo
+ * histórico — onde está escrito o horário do dia em que ela marcou. Se a
+ * recepção remarcou depois (e remarca), aquele texto virou mentira. O bloco
+ * vai no `dynamic`, no fim do prompt, porque precisa ganhar da conversa.
+ */
+function renderConsultaMarcada(c: ConsultaReconciliada | null | undefined): string {
+  if (!c) return '';
+
+  if (c.estado === 'cancelada') {
+    return xmlBlock('consulta_do_paciente', [
+      'A consulta deste paciente foi DESMARCADA no sistema da clínica.',
+      'Ele NÃO tem mais horário reservado. Se o histórico desta conversa disser',
+      'que ele tem, aquilo está VENCIDO — a recepção desmarcou depois.',
+      'Se ele quiser voltar a marcar, use consultar_horarios e agende do zero.',
+    ].join('\n'));
+  }
+
+  if (c.estado === 'nao_confirmada') {
+    return xmlBlock('consulta_do_paciente', [
+      'Este paciente TEM consulta marcada, mas eu NÃO consegui confirmar o dia e a',
+      'hora no sistema da clínica agora.',
+      '',
+      'NÃO afirme dia nem horário — nem os que aparecem no histórico desta conversa.',
+      'Se ele perguntar, diga que vai confirmar com a equipe e retorna em instantes.',
+    ].join('\n'));
+  }
+
+  return xmlBlock('consulta_do_paciente', [
+    `Consulta CONFIRMADA agora no sistema da clínica: **${porExtenso(c.quando)}**` +
+      (c.especialista ? ` — com ${c.especialista}.` : '.'),
+    '',
+    'Este é o único horário válido. Se em algum ponto DESTA conversa você disse',
+    'outro dia ou outra hora, aquilo está DESATUALIZADO: a recepção remarcou pelo',
+    'sistema dela. Use sempre o horário acima, sem exceção.',
+    ...(c.mudou
+      ? [
+          '',
+          'ATENÇÃO: o horário MUDOU desde a última vez. Se o paciente citar o antigo,',
+          'corrija com naturalidade e sem culpar ninguém — "a agenda foi ajustada para',
+          `${porExtenso(c.quando)}" — e confirme que ele consegue nesse horário.`,
+        ]
+      : []),
+  ].join('\n'));
+}
+
 function renderConversationContext(leadId: number): string {
   return xmlBlock('contexto_conversa', [
     `- leadId desta conversa: **${leadId}**`,
@@ -1292,6 +1352,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     leadMemory = null,
     isFirstTurn = false,
     leadId,
+    consulta = null,
   } = input;
 
   // ORDEM DOS BLOCOS — pensada pra qualidade da resposta:
@@ -1323,6 +1384,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
     }
     const knBlock = renderKnowledge(knowledge);
     if (knBlock) single.push(knBlock);
+    const consultaBlockSingle = renderConsultaMarcada(consulta);
+    if (consultaBlockSingle) single.push(consultaBlockSingle);
     return single.join('\n\n');
   }
 
@@ -1395,6 +1458,11 @@ export function composeSystemPrompt(input: ComposeInput): string {
   const flaggedBlock = renderFlaggedExamples(flaggedExamples);
   if (flaggedBlock) blocks.push(flaggedBlock);
 
+  // A consulta conferida vai no fim, junto com o boost, pela mesma razão de
+  // recência: precisa ganhar do horário escrito lá atrás na conversa.
+  const consultaBlock = renderConsultaMarcada(consulta);
+  if (consultaBlock) blocks.push(consultaBlock);
+
   // Boost de primeiro turno vai POR ÚLTIMO — instruções no fim do prompt têm
   // mais influência (efeito "recência") nos LLMs atuais.
   const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
@@ -1430,6 +1498,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     leadMemory = null,
     isFirstTurn = false,
     leadId,
+    consulta = null,
   } = input;
 
   const customBase = (agentConfigPrompt && agentConfigPrompt.trim().length > 0
@@ -1445,6 +1514,10 @@ export function composeSystemPromptParts(input: ComposeInput): {
   }
   const knowledgeBlock = renderKnowledge(knowledge);
   if (knowledgeBlock) dynamic.push(knowledgeBlock);
+  // NUNCA no bloco cacheável: o horário muda por fora, e um cache de 1h
+  // devolveria exatamente o dado velho que este bloco existe pra corrigir.
+  const consultaBlock = renderConsultaMarcada(consulta);
+  if (consultaBlock) dynamic.push(consultaBlock);
 
   // MODO PROMPT ÚNICO — o texto do usuário é o prompt inteiro (cacheable);
   // só os blocos de runtime ficam no dynamic.
@@ -1576,7 +1649,7 @@ async function loadComposeInput(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory] = await Promise.all([
+  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -1615,6 +1688,18 @@ async function loadComposeInput(input: {
           return null;
         })
       : Promise.resolve(null),
+    // Só bate na franquia quando a agenda está ligada E o lead pode ter
+    // consulta. Sem isso seria uma chamada HTTP externa em todo turno de todo
+    // lead — a maioria dos quais nunca marcou nada.
+    input.leadId && input.unit.spineEnabled
+      ? consultaDoLead(input.unit, input.leadId).catch((err) => {
+          logger.warn(
+            { err, leadId: input.leadId },
+            'consultaDoLead falhou — sem bloco de consulta no prompt',
+          );
+          return null;
+        })
+      : Promise.resolve(null),
   ]);
   return {
     ...input,
@@ -1625,6 +1710,7 @@ async function loadComposeInput(input: {
     globalActions,
     leadFieldRules,
     leadMemory,
+    consulta,
   };
 }
 

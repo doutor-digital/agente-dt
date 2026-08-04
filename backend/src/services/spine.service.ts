@@ -622,6 +622,164 @@ export async function createClient(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Paciente por id — a rota que faltava.
+// ---------------------------------------------------------------------------
+// Descoberta no guia de integração 1.9.3 e confirmada contra a produção (1.9.8).
+// Não estava em uso e muda duas coisas:
+//
+//   1. dá pra CONFERIR um idClient antes de agendar. Sem isto, o único jeito de
+//      achar paciente era por nome, e nome casa xará: uma consulta foi marcada
+//      no prontuário de outra pessoa com o mesmo primeiro nome.
+//   2. o retorno traz `schedules` EMBUTIDOS, com data e status atuais. Reler o
+//      agendamento vira UMA chamada por paciente, em vez de varrer a agenda por
+//      intervalo de datas — que erra quando a recepção muda o DIA.
+//
+// NÃO ENCONTRADO NÃO É 404 — medido: devolve HTTP 200 com
+//   { "status": "success", "data": { "success": false, "data": null } }
+// ou seja, o `{success:false,data:null}` da doc ANINHADO no envelope padrão, e
+// com "success" no topo. Tratar só o 404 deixaria passar um paciente que não
+// existe como se a leitura tivesse falhado — e "falhou" aqui não recusa o
+// agendamento, "não existe" recusa. O 404 fica como rede de segurança.
+// ---------------------------------------------------------------------------
+
+export interface SpineClientDetail {
+  idClient: number | null;
+  name: string | null;
+  whatsapp: string | null;
+  /** Agendamentos do paciente, já convertidos para o fuso da clínica. */
+  schedules: SpineSchedule[];
+}
+
+interface SpineRawClientDetail {
+  idClient?: number;
+  name?: string;
+  whatsapp?: string;
+  schedules?: Array<{
+    idSchedule?: number;
+    dateAttendance?: string;
+    /** Aqui o campo chama `category`; na busca de agenda chama `categoryName`. */
+    category?: string;
+    physicalTherapist?: string;
+    idStatus?: number;
+    statusName?: string;
+  }>;
+}
+
+export async function getClient(
+  unit: SpineUnit,
+  idClient: number,
+): Promise<SpineResult<{ client: SpineClientDetail | null }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  const tz = unit.spineTimezone || DEFAULT_TZ;
+  try {
+    const { data } = await http.get<{
+      success?: boolean;
+      data?: { data?: SpineRawClientDetail } | SpineRawClientDetail | null;
+    }>(`/api/clients/${idClient}`);
+
+    const envelope = data?.data as { data?: SpineRawClientDetail } | SpineRawClientDetail | null;
+    const cru =
+      (envelope && typeof envelope === 'object' && 'data' in envelope
+        ? (envelope as { data?: SpineRawClientDetail }).data
+        : (envelope as SpineRawClientDetail | null)) ?? null;
+
+    if (!cru || cru.idClient === undefined) return { ok: true, data: { client: null } };
+
+    return {
+      ok: true,
+      data: {
+        client: {
+          idClient: cru.idClient ?? null,
+          name: cru.name ?? null,
+          whatsapp: cru.whatsapp ?? null,
+          schedules: (cru.schedules ?? []).map((s) =>
+            normalize(
+              {
+                idSchedule: s.idSchedule,
+                dateAttendance: s.dateAttendance,
+                idStatus: s.idStatus,
+                statusName: s.statusName,
+                physicalTherapist: s.physicalTherapist,
+                categoryName: s.category,
+              },
+              tz,
+            ),
+          ),
+        },
+      },
+    };
+  } catch (err) {
+    const d = describe(err);
+    // 404 aqui é "paciente não existe", não falha de rede — e a diferença
+    // importa: uma é motivo pra recusar o agendamento, a outra pra tentar de novo.
+    if (d.status === 404) return { ok: true, data: { client: null } };
+    logger.warn({ erro: d.error, idClient }, 'spine: falha ao consultar paciente por id');
+    return { ok: false, ...d };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Converter lead em paciente.
+// ---------------------------------------------------------------------------
+// A ROTA QUE LIGA AS DUAS FICHAS. O lead e o paciente são cadastros distintos
+// na franquia, e criar um paciente do zero para quem já entrou como lead deixa
+// DOIS registros da mesma pessoa, sem nada ligando um ao outro — o lead com o
+// nome que a I.A. tinha no minuto em que espelhou ("ELBER"), o paciente com o
+// nome completo ("WELBER ZANOTELLI"). A recepção procura um e acha o outro.
+//
+// Mandar `idLead` no POST /api/clients NÃO resolve: a API aceita, responde 201
+// e não estabelece vínculo nenhum (medido). A rota certa é esta.
+//
+// A DOC ERRA NOS OBRIGATÓRIOS: diz "apenas idLead + name". A produção exige
+// quatro — medido com corpo vazio:
+//   "ID do lead é obrigatório." · "ID da origem é obrigatória."
+//   "Nome é obrigatório."       · "WhatsApp ou Email é obrigatório."
+// ---------------------------------------------------------------------------
+
+export interface SpineConvertLead {
+  idLead: number;
+  name: string;
+  idSource: number;
+  whatsapp?: string | null;
+  email?: string | null;
+}
+
+export async function convertLead(
+  unit: SpineUnit,
+  input: SpineConvertLead,
+): Promise<SpineResult<{ idClient?: number }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+
+  const fone = input.whatsapp ? normalizarWhatsapp(input.whatsapp) : '';
+  if (!fone && !input.email) {
+    return { ok: false, error: 'conversão exige WhatsApp ou e-mail' };
+  }
+
+  try {
+    const { data } = await http.post<{ idClient?: number; data?: { idClient?: number } }>(
+      '/api/leads/convert',
+      {
+        idLead: input.idLead,
+        name: input.name.trim().slice(0, 255),
+        idSource: input.idSource,
+        ...(fone ? { whatsapp: fone } : {}),
+        ...(input.email ? { email: input.email.trim().slice(0, 255) } : {}),
+      },
+    );
+    return { ok: true, data: { idClient: data?.data?.idClient ?? data?.idClient } };
+  } catch (err) {
+    const d = describe(err);
+    logger.warn(
+      { erro: d.error, idLead: input.idLead, nome: input.name },
+      'spine: falha ao converter lead em paciente',
+    );
+    return { ok: false, ...d };
+  }
+}
+
 /**
  * Cancela um agendamento. Diferente de lead e paciente, agendamento TEM
  * exclusão pela API (status DELETED) — é a única escrita nossa na franquia que
@@ -767,6 +925,8 @@ export const SpineService = {
   resolverUf,
   normalizarWhatsapp,
   searchClients,
+  getClient,
+  convertLead,
   instanteNoFuso,
   localParaUtcIso,
   searchSchedules,
