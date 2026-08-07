@@ -28,7 +28,59 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import type { LeadMemory, Unit } from '@prisma/client';
 import { createChatOpenAI, invokeChatModel } from './openai.service.js';
+import { createKommoClient } from './kommo.service.js';
 import { HumanMessage, SystemMessage, type AIMessage } from '@langchain/core/messages';
+
+// ---------------------------------------------------------------------------
+// FATOS DUROS DO KOMMO — o que a IA não pode "esquecer".
+//
+// O resumo do summarizer é paráfrase: bom pra tom e contexto, frágil pra dado.
+// "Está agendado", "qualificado como Quente", "prefere manhã" já estão gravados
+// em CAMPO do Kommo — dado estruturado, não interpretação. Puxamos esses campos
+// e mesclamos POR CIMA do que o LLM inventou, então o fato duro sempre vence.
+//
+// Casado por NOME do campo (não por id), porque o id do custom field varia de
+// unidade pra unidade — o nome ("✎ Queixa", "★ Qualificação") é estável. Cada
+// entrada é [rótulo curto na memória, trecho que precisa estar no nome do campo].
+// ---------------------------------------------------------------------------
+const CAMPOS_IMPORTANTES: Array<{ chave: string; casa: RegExp }> = [
+  { chave: 'queixa', casa: /queixa/i },
+  { chave: 'qualificacao', casa: /qualifica[çc][ãa]o/i },
+  { chave: 'preferencia_horario', casa: /prefer[êe]ncia.*hor[áa]rio/i },
+  { chave: 'agendou', casa: /agendou/i },
+  // A DATA do agendamento NÃO entra aqui de propósito: quem manda no horário é
+  // o bloco <consulta_do_paciente>, lido ao vivo da franquia a cada turno. Uma
+  // data guardada na memória envelhece e passa a contradizer o bloco quando a
+  // recepção remarca. A memória guarda só que ELE está agendado (agendou=Sim).
+  { chave: 'intencao', casa: /inten[çc][ãa]o/i },
+  { chave: 'cidade', casa: /cidade/i },
+  { chave: 'profissao', casa: /profiss[ãa]o/i },
+  { chave: 'sexo', casa: /sexo/i },
+];
+
+/**
+ * Lê os campos importantes do lead no Kommo e devolve como fatos duros.
+ * Falha silenciosa (Kommo fora, lead sem campos): devolve {} e a memória segue
+ * só com o resumo — nunca derruba o updater por causa disso.
+ */
+async function fatosDurosDoKommo(unit: Unit, leadId: number): Promise<LeadMemoryFacts> {
+  try {
+    const kommo = createKommoClient(unit);
+    const lead = await kommo.getLead(leadId);
+    const campos = lead.custom_fields_values ?? [];
+    const out: LeadMemoryFacts = {};
+    for (const { chave, casa } of CAMPOS_IMPORTANTES) {
+      const campo = campos.find((f) => casa.test(f.field_name ?? ''));
+      const valor = campo?.values?.[0]?.value;
+      if (valor === undefined || valor === null || String(valor).trim() === '') continue;
+      out[chave] = String(valor).slice(0, 200);
+    }
+    return out;
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'leadMemory: sem fatos do Kommo neste ciclo');
+    return {};
+  }
+}
 
 /** Dispara o updater a cada N turnos. Conservador: balancear custo × frescor. */
 const UPDATE_EVERY_N_TURNS = 4;
@@ -202,7 +254,12 @@ async function runLeadMemoryUpdate(args: {
     if (!parsed) return;
 
     const newSummary = sanitizeSummary(parsed.summary);
-    const newFacts = sanitizeFacts(parsed.facts);
+    // Fatos duros do Kommo mesclados POR CIMA do palpite do LLM: "agendou",
+    // "qualificação", "preferência" vêm do campo, não da interpretação. É o
+    // que garante que a IA nunca trate como novo um lead que o CRM já sabe
+    // agendado — sem depender de o summarizer ter captado.
+    const hardFacts = await fatosDurosDoKommo(unit, leadId);
+    const newFacts = { ...sanitizeFacts(parsed.facts), ...hardFacts };
 
     await prisma.leadMemory.update({
       where: { unitId_leadId: { unitId: unit.id, leadId: idStr } },
