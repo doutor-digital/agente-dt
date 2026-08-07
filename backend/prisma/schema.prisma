@@ -267,6 +267,18 @@ model Unit {
   /// Origem usada quando a do Kommo não tem correspondente (20 = WHATSAPP).
   spineDefaultSourceId Int     @default(20) @map("spine_default_source_id")
 
+  /// LEMBRETE DE VÉSPERA. Um dia antes da consulta, o worker aciona o Salesbot
+  /// abaixo, que envia o TEMPLATE de lembrete (única coisa que atravessa a
+  /// janela de 24h). Desligado até a unidade ter o template aprovado e o bot
+  /// montado — o worker varre e não faz nada enquanto `reminderEnabled=false`
+  /// ou `reminderSalesbotId` for nulo.
+  reminderEnabled     Boolean @default(false) @map("reminder_enabled")
+  /// Salesbot do Kommo cujo passo é "enviar template de lembrete". Difere do
+  /// kommoSalesbotId (esse entrega a resposta da IA).
+  reminderSalesbotId  Int?    @map("reminder_salesbot_id")
+  /// Hora local (0–23) em que o lembrete da véspera dispara. Padrão 9h.
+  reminderHourLocal   Int     @default(9) @map("reminder_hour_local")
+
   instagramComments InstagramComment[]
   agendaBlocks      AgendaBlock[]
   spineLeadLinks    SpineLeadLink[]

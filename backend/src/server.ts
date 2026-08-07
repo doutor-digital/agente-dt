@@ -30,6 +30,7 @@ import { ensureDefaultUnit } from './services/units.service.js';
 import { startWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
 import { startDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
 import { startFollowUpWorker } from './lib/follow-up-worker.js';
+import { startReminderWorker } from './lib/reminder-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -123,6 +124,9 @@ async function main(): Promise<void> {
   // Reengajamento de quem parou de responder. Único motor que decide QUANDO
   // falar — o Salesbot é só o canal de entrega.
   startFollowUpWorker();
+  // Lembrete de véspera. Guardado: só age em unidades com reminderEnabled e um
+  // Salesbot de lembrete configurado. Sobe inofensivo até ser ligado.
+  startReminderWorker();
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);

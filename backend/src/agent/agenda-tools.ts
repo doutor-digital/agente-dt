@@ -58,6 +58,12 @@ interface Contexto {
  */
 const CAMPO_AGENDOU = 2442703;      // ✓ Agendou (select Sim/Não)
 const CAMPO_DATA_AGENDAMENTO = 2440909; // ◷ Data de agendamento (date_time)
+// ☻ Responsável agendamento (select). Carimba QUEM marcou — a IA usa "I.A Sofia"
+// pra a recepção distinguir num relance o que foi dela do que foi humano. O
+// valor precisa existir como opção no campo (adicionado no Kommo). IDs de campo
+// são desta unidade; ver nota de multi-unidade no topo do arquivo.
+const CAMPO_RESPONSAVEL = 2440823;
+const RESPONSAVEL_IA = 'I.A Sofia';
 
 // ---------------------------------------------------------------------------
 // Grade de um dia, já com tudo subtraído.
@@ -1074,10 +1080,16 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
               'date',
               `${args.data}T${args.hora}:00`,
             );
+            await kommo.setLeadCustomFieldValue(
+              args.leadId!,
+              CAMPO_RESPONSAVEL,
+              'select',
+              RESPONSAVEL_IA,
+            );
             await recorder.step({
               kind: 'KOMMO_ACTION',
-              title: 'Campos de agendamento preenchidos (Agendou, Data de agendamento)',
-              payload: { leadId: args.leadId, data: args.data, hora: args.hora },
+              title: 'Campos de agendamento preenchidos (Agendou, Data, Responsável: I.A Sofia)',
+              payload: { leadId: args.leadId, data: args.data, hora: args.hora, responsavel: RESPONSAVEL_IA },
             });
           } catch (err) {
             logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao carimbar campos no Kommo');

@@ -1119,6 +1119,34 @@ export class KommoClient {
   }
 
   /**
+   * Aciona UM Salesbot específico num lead — o gatilho puro, sem PATCH em campo.
+   *
+   * Diferente de `runSalesbot` (que entrega a resposta da IA via campo +
+   * Digital Pipeline), aqui só disparamos `POST /bots/{id}/run`. Uso: o worker
+   * de véspera aciona o bot de LEMBRETE, cujo passo é "enviar template". Não há
+   * campo no meio, então não há gatilho de "campo mudou" pra duplicar.
+   *
+   * Devolve ok/erro em vez de lançar: um lembrete que falha num lead não pode
+   * derrubar a varredura dos outros.
+   */
+  async triggerSalesbot(
+    salesbotId: number,
+    leadId: number,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    try {
+      await this.http.post(`/bots/${salesbotId}/run`, {
+        entity_id: leadId,
+        entity_type: 'leads',
+      });
+      return { ok: true };
+    } catch (err) {
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: `${status ?? '?'}: ${msg}` };
+    }
+  }
+
+  /**
    * Dispara o Salesbot via PATCH no custom field "Resposta IA".
    *
    * O Digital Pipeline do Kommo escuta o evento "Quando campo Resposta IA
