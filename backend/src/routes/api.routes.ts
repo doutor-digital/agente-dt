@@ -110,6 +110,7 @@ import {
   emergencyPauseHandler,
   resumeHandler,
   spineStatusHandler,
+  updateReminderHandler,
   spineSchedulesHandler,
   spinePingHandler,
   confirmScheduleHandler,
@@ -297,6 +298,7 @@ apiRouter.post('/units/:id/follow-up/rules', requireUnitAccess, upsertFollowUpRu
 apiRouter.post('/units/:id/follow-up/toggle', requireUnitAccess, toggleFollowUpHandler);
 
 apiRouter.get('/units/:id/spine/status', requireUnitAccess, spineStatusHandler);
+apiRouter.patch('/units/:id/spine/reminder', requireUnitAccess, updateReminderHandler);
 apiRouter.get('/units/:id/spine/schedules', requireUnitAccess, spineSchedulesHandler);
 apiRouter.post('/units/:id/spine/ping', requireUnitAccess, spinePingHandler);
 apiRouter.post('/units/:id/spine/sync-lead', requireUnitAccess, syncLeadHandler);

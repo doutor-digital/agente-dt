@@ -248,6 +248,13 @@ export const api = {
     const { data } = await http.get<SpineStatus>(`/units/${unitId}/spine/status`);
     return data;
   },
+  async updateReminder(
+    unitId: string,
+    body: { enabled?: boolean; salesbotId?: number | null; hourLocal?: number },
+  ): Promise<{ ok: boolean; reminder?: SpineStatus['reminder'] }> {
+    const { data } = await http.patch(`/units/${unitId}/spine/reminder`, body);
+    return data;
+  },
   async spineSchedules(
     unitId: string,
     params: { initialDate: string; endDate: string },

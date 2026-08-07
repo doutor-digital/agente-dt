@@ -37,6 +37,9 @@ import {
   PiPlugsConnectedBold,
   PiQuestionBold,
   PiLockSimpleOpenBold,
+  PiBellRingingBold,
+  PiRobotBold,
+  PiClockBold,
 } from 'react-icons/pi';
 import { api } from '../lib/api';
 import { BloquearIcon } from './BloquearIcon';
@@ -73,6 +76,7 @@ export default function AgendaPanel() {
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto max-w-[1500px] space-y-7 p-8">
         <KillSwitch unit={unit} status={status} onChange={carregar} />
+        <ReminderCard unitId={unit.id} status={status} onChange={carregar} />
         {erro && (
           <div className="surface flex items-start gap-2 border-rose-500/30 p-4 text-sm text-rose-300">
             <PiWarningCircleBold size={16} className="mt-0.5 shrink-0" />
@@ -816,3 +820,148 @@ function BloqueioEmLote({
 //
 // Por isso a tela explica ANTES de ligar o que exatamente vai acontecer, e
 // mostra o histórico depois: sem ele, "está sincronizando?" não tem resposta.
+
+// ---------------------------------------------------------------------------
+// ReminderCard — o lembrete de véspera, visível e operável no painel.
+//
+// Antes isso vivia só no banco (reminder_enabled etc.) e ninguém via o que
+// estava ligado. Aqui o operador vê o estado, entende o que o worker faz, e
+// liga/desliga sem depender de dev — e sem poder ligar "no vazio" (o backend
+// recusa ligar sem Salesbot).
+// ---------------------------------------------------------------------------
+function ReminderCard({
+  unitId,
+  status,
+  onChange,
+}: {
+  unitId: string;
+  status: SpineStatus | null;
+  onChange: () => void;
+}) {
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const r = status?.reminder;
+  if (!r) return null;
+
+  const ligado = r.enabled;
+  const podeeLigar = !r.bloqueado;
+
+  async function toggle() {
+    setErro(null);
+    setSalvando(true);
+    try {
+      await api.updateReminder(unitId, { enabled: !ligado });
+      onChange();
+    } catch (e) {
+      const msg = (e as { response?: { data?: { motivo?: string } } })?.response?.data?.motivo;
+      setErro(msg ?? 'Não consegui alterar. Tente de novo.');
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <section className="surface p-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div
+            className={`grid size-11 place-items-center rounded-xl ${
+              ligado ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-800 text-zinc-500'
+            }`}
+          >
+            <PiBellRingingBold size={22} />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-zinc-100">Lembrete de véspera</p>
+            <p className="mt-0.5 text-xs text-zinc-400">
+              {ligado
+                ? 'Ativo — todo dia às ' +
+                  String(r.hourLocal).padStart(2, '0') +
+                  'h o sistema avisa quem tem consulta amanhã.'
+                : 'Desligado — nenhum lembrete é enviado.'}
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={salvando || (!ligado && !podeeLigar)}
+          className={`inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold text-white transition-colors disabled:opacity-50 ${
+            ligado ? 'bg-rose-600 hover:bg-rose-500' : 'bg-emerald-600 hover:bg-emerald-500'
+          }`}
+        >
+          {salvando ? (
+            <PiSpinnerGapBold size={18} className="animate-spin" />
+          ) : ligado ? (
+            <PiPauseBold size={18} />
+          ) : (
+            <PiPlayBold size={18} />
+          )}
+          {ligado ? 'Desligar' : 'Ligar lembrete'}
+        </button>
+      </div>
+
+      {/* Estado detalhado — o que uma consultoria perguntaria "está configurado?" */}
+      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        <Info
+          icon={<PiRobotBold size={15} />}
+          label="Bot do Kommo"
+          value={r.salesbotId ? `#${r.salesbotId}` : 'não configurado'}
+          ok={!!r.salesbotId}
+        />
+        <Info
+          icon={<PiClockBold size={15} />}
+          label="Horário do disparo"
+          value={`${String(r.hourLocal).padStart(2, '0')}:00 (véspera)`}
+          ok
+        />
+        <Info
+          icon={<PiCalendarBlankBold size={15} />}
+          label="Fonte da data"
+          value="campo Data da Consulta"
+          ok
+        />
+      </div>
+
+      {r.bloqueado && (
+        <p className="mt-4 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          <PiWarningCircleBold size={14} className="shrink-0" />
+          Não dispara: {r.bloqueado}.
+        </p>
+      )}
+      {erro && <p className="mt-3 text-xs text-rose-300">{erro}</p>}
+
+      <p className="mt-4 text-[11px] leading-relaxed text-zinc-500">
+        Como funciona: o sistema lê a agenda da franquia ao vivo, pega o horário
+        atual de cada consulta de amanhã (mesmo que a recepção tenha remarcado) e
+        aciona o bot, que envia o template aprovado com os botões “Confirmar
+        presença” e “Remarcar consulta”.
+      </p>
+    </section>
+  );
+}
+
+function Info({
+  icon,
+  label,
+  value,
+  ok,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  ok: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-500">
+        {icon}
+        {label}
+      </div>
+      <div className={`mt-1 text-sm font-medium ${ok ? 'text-zinc-100' : 'text-amber-300'}`}>
+        {value}
+      </div>
+    </div>
+  );
+}

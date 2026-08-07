@@ -109,7 +109,62 @@ export async function spineStatusHandler(req: Request, res: Response): Promise<v
       days: unit.spineAgendaDays,
       slotMinutes: unit.spineSlotMinutes,
     },
+    // Lembrete de véspera — o que o worker faz, visível no painel em vez de só
+    // no banco. `bloqueado` explica POR QUE não dispara quando desligado.
+    reminder: {
+      enabled: unit.reminderEnabled,
+      salesbotId: unit.reminderSalesbotId,
+      hourLocal: unit.reminderHourLocal,
+      bloqueado: !unit.reminderSalesbotId
+        ? 'sem Salesbot configurado'
+        : !unit.spineEnabled || !unit.spineToken
+          ? 'agenda da franquia não conectada'
+          : null,
+    },
   });
+}
+
+/**
+ * Liga/desliga e ajusta o lembrete de véspera. Editar por aqui, não por SQL —
+ * é o que o painel usa pra o operador ver e mudar sem depender de dev.
+ */
+export async function updateReminderHandler(req: Request, res: Response): Promise<void> {
+  const unit = await carregarUnidade(req);
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  const parsed = z
+    .object({
+      enabled: z.boolean().optional(),
+      salesbotId: z.number().int().positive().nullable().optional(),
+      hourLocal: z.number().int().min(0).max(23).optional(),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'payload_invalido', detalhe: parsed.error.flatten() });
+    return;
+  }
+  const { enabled, salesbotId, hourLocal } = parsed.data;
+
+  // Não deixa LIGAR sem bot — evita o painel mostrar "ligado" sem disparar nada.
+  const salesbotFinal = salesbotId !== undefined ? salesbotId : unit.reminderSalesbotId;
+  if (enabled === true && !salesbotFinal) {
+    res.status(422).json({ ok: false, motivo: 'configure o Salesbot antes de ligar o lembrete' });
+    return;
+  }
+
+  const updated = await prisma.unit.update({
+    where: { id: unit.id },
+    data: {
+      ...(enabled !== undefined ? { reminderEnabled: enabled } : {}),
+      ...(salesbotId !== undefined ? { reminderSalesbotId: salesbotId } : {}),
+      ...(hourLocal !== undefined ? { reminderHourLocal: hourLocal } : {}),
+    },
+    select: { reminderEnabled: true, reminderSalesbotId: true, reminderHourLocal: true },
+  });
+  logger.info({ unit: unit.slug, ...updated }, 'lembrete: config alterada pelo painel');
+  res.json({ ok: true, reminder: updated });
 }
 
 // ---------------------------------------------------------------------------

@@ -1105,6 +1105,13 @@ export interface SpineStatus {
     days: number[];
     slotMinutes: number;
   };
+  reminder: {
+    enabled: boolean;
+    salesbotId: number | null;
+    hourLocal: number;
+    /** Motivo de não disparar; null = tudo certo. */
+    bloqueado: string | null;
+  };
 }
 
 export type SpineSlotStatus = 'livre' | 'ocupado' | 'incerto' | 'bloqueado';
