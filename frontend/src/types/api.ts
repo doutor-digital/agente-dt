@@ -824,6 +824,15 @@ export interface ConversationDetail {
   createdAt: string;
   messages: ConversationMessage[];
   unit: { id: string; slug: string; name: string };
+  memory: LeadMemory | null;
+}
+
+/** O que a IA lembra deste lead entre conversas. */
+export interface LeadMemory {
+  summary: string;
+  /** Fatos estruturados: campos do Kommo (dado duro) + resumo do LLM. */
+  facts: Record<string, string | number | boolean | null>;
+  updatedAt: string;
 }
 
 // ---------------------------------------------------------------------------

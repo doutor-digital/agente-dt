@@ -6,9 +6,10 @@
 // ============================================================================
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, Loader2, MessageCircle, Phone, ThumbsDown, User2 } from 'lucide-react';
+import { Bot, Brain, Loader2, MessageCircle, Phone, ThumbsDown, User2 } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
+import type { LeadMemory } from '../types/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import { usePolling } from '../hooks/usePolling';
@@ -147,22 +148,133 @@ export function ConversationsPanel() {
                 </div>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-              {detail.messages.map((m) => (
-                <MessageBubble
-                  key={m.id}
-                  m={m}
-                  onFlagToggle={(flagged) => {
-                    // Atualização otimista — refresh do detail quando o usuário trocar de conversa.
-                    m.flagged = flagged;
-                  }}
-                />
-              ))}
+            <div className="flex-1 flex overflow-hidden">
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+                {detail.messages.map((m) => (
+                  <MessageBubble
+                    key={m.id}
+                    m={m}
+                    onFlagToggle={(flagged) => {
+                      // Atualização otimista — refresh do detail quando o usuário trocar de conversa.
+                      m.flagged = flagged;
+                    }}
+                  />
+                ))}
+              </div>
+              <MemoryRail memory={detail.memory} />
             </div>
           </>
         )}
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MemoryRail — o que a IA lembra deste lead, ao lado do histórico.
+//
+// Separa DADO DURO (campo do Kommo, sob "Dados do CRM") do contexto que o
+// resumo da IA inferiu ("Observado na conversa"). O operador precisa saber o
+// que é fato registrado e o que é interpretação — não são a mesma coisa na
+// hora de confiar.
+// ---------------------------------------------------------------------------
+
+// Chaves que vêm de campo do Kommo (dado duro). Espelha CAMPOS_IMPORTANTES do
+// backend — se mudar lá, atualizar aqui.
+const HARD_KEYS = new Set([
+  'queixa', 'qualificacao', 'preferencia_horario', 'agendou', 'intencao', 'cidade', 'profissao', 'sexo',
+]);
+
+const LABELS: Record<string, string> = {
+  queixa: 'Queixa',
+  qualificacao: 'Qualificação',
+  preferencia_horario: 'Preferência de horário',
+  agendou: 'Agendou',
+  intencao: 'Intenção',
+  cidade: 'Cidade',
+  profissao: 'Profissão',
+  sexo: 'Sexo',
+};
+
+function prettyKey(k: string): string {
+  return LABELS[k] ?? k.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+}
+
+function MemoryRail({ memory }: { memory: LeadMemory | null }) {
+  const facts = memory?.facts ?? {};
+  const entries = Object.entries(facts).filter(
+    ([, v]) => v !== null && v !== undefined && String(v).trim() !== '',
+  );
+  const hard = entries.filter(([k]) => HARD_KEYS.has(k));
+  const soft = entries.filter(([k]) => !HARD_KEYS.has(k));
+  const agendou = String(facts['agendou'] ?? '').toLowerCase() === 'sim';
+
+  return (
+    <aside className="w-72 shrink-0 border-l border-zinc-800/80 bg-ink-900/60 overflow-y-auto">
+      <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center gap-2 sticky top-0 bg-ink-900/95 backdrop-blur">
+        <Brain size={14} className="text-brand-300" />
+        <span className="text-xs font-semibold text-zinc-200">Memória do paciente</span>
+      </div>
+
+      {!memory ? (
+        <div className="px-4 py-6 text-[11px] text-zinc-600 leading-relaxed">
+          Ainda sem memória para este lead. Ela é montada depois de algumas
+          mensagens — aparece aqui assim que a IA consolidar.
+        </div>
+      ) : (
+        <div className="p-4 space-y-4">
+          {agendou && (
+            <div className="flex items-center gap-2 text-xs font-medium text-emerald-300 bg-emerald-500/10 ring-1 ring-emerald-500/25 rounded-md px-2.5 py-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              Paciente agendado
+            </div>
+          )}
+
+          {memory.summary && (
+            <p className="text-[12.5px] leading-relaxed text-zinc-300">{memory.summary}</p>
+          )}
+
+          {hard.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-medium">
+                Dados do CRM
+              </div>
+              {hard.map(([k, v]) => (
+                <div key={k} className="text-[11.5px]">
+                  <div className="text-zinc-500">{prettyKey(k)}</div>
+                  <div className="text-zinc-200 leading-snug">{String(v)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {soft.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-medium">
+                Observado na conversa
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {soft.map(([k, v]) => (
+                  <span
+                    key={k}
+                    className="text-[10.5px] text-zinc-300 bg-zinc-800/60 rounded px-1.5 py-0.5"
+                    title={prettyKey(k)}
+                  >
+                    {prettyKey(k)}: {String(v)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {memory.updatedAt && (
+            <div className="text-[10px] text-zinc-600 pt-1">
+              atualizada {timeAgo(memory.updatedAt)} atrás
+            </div>
+          )}
+        </div>
+      )}
+    </aside>
   );
 }
 

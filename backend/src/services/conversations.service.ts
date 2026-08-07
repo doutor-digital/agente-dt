@@ -107,13 +107,26 @@ export async function listConversations(unitId: string | null, limit = 50) {
 }
 
 export async function getConversation(id: string) {
-  return prisma.conversation.findUnique({
+  const conv = await prisma.conversation.findUnique({
     where: { id },
     include: {
       messages: { orderBy: { createdAt: 'asc' } },
       unit: { select: { id: true, slug: true, name: true } },
     },
   });
+  if (!conv) return null;
+
+  // O que a IA lembra deste lead — some junto com a conversa pra virar um painel
+  // "Memória do paciente" na tela, ao lado do histórico. `null` quando o lead
+  // nunca gerou memória (conversa curta, ou anterior à feature).
+  const memory = await prisma.leadMemory
+    .findUnique({
+      where: { unitId_leadId: { unitId: conv.unitId, leadId: conv.leadId } },
+      select: { summary: true, facts: true, updatedAt: true },
+    })
+    .catch(() => null);
+
+  return { ...conv, memory };
 }
 
 /**
