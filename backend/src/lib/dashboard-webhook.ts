@@ -11,6 +11,7 @@
 //     "channel": "whatsapp" | "instagram" | ...,
 //     "status": "active" | "closed",
 //     "contact": { "name": "...", "phone": "..." },
+//     "leadExternalId": "<id do lead na Kommo>",
 //     "messages": [
 //       { "role": "user" | "assistant" | "system",
 //         "content": "...", "at": "ISO-8601" }
@@ -59,6 +60,10 @@ export async function notifyDashboard(conversationId: string): Promise<void> {
         name: conv.contactName ?? null,
         phone: conv.phone ?? null,
       },
+      // Id do lead na Kommo. É o que liga a conversa ao card no painel — sem ele
+      // a única saída é casar telefone, e a maioria dos leads de lá não tem
+      // telefone gravado, então a conversa ficava órfã.
+      leadExternalId: conv.leadId,
       startedAt: conv.createdAt.toISOString(),
       endedAt: conv.convertedAt?.toISOString() ?? null,
       messages: conv.messages.map((m) => ({
