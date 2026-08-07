@@ -107,15 +107,38 @@ async function gradeDoDia(unit: Unit, dia: string) {
  */
 const MAX_VALIDACOES = 4;
 
+/**
+ * ESPALHA os candidatos pelo dia em vez de pegar os primeiros da fila.
+ *
+ * O que a recusa da franquia significa é "fora do turno da profissional", e
+ * turno é um bloco contínuo de horas. Sondar os quatro PRIMEIROS livres testa
+ * quatro horas coladas — se o turno dela for de tarde, os quatro dão recusa e
+ * a tarde inteira fica invisível.
+ *
+ * Medido num caso real: livres [13,14,15,16,17], sondados os quatro primeiros,
+ * todos recusados. Espalhando, o 17:00 entra na amostra e o dia se resolve numa
+ * consulta só — em vez de virar duas desculpas na cara do paciente.
+ */
+function espalhar(lista: string[], max: number): string[] {
+  if (max <= 0) return [];
+  if (lista.length <= max) return [...lista];
+  if (max === 1) return [lista[0]];
+  const passo = (lista.length - 1) / (max - 1);
+  const escolhidos = new Set<string>();
+  for (let i = 0; i < max; i++) escolhidos.add(lista[Math.round(i * passo)]);
+  return [...escolhidos];
+}
+
 async function horariosQueAFranquiaAceita(
   unit: Unit,
   data: string,
   candidatos: string[],
   idClientSonda: number,
-): Promise<{ aceitos: string[]; recusados: string[] }> {
+): Promise<{ aceitos: string[]; recusados: string[]; sondados: string[] }> {
   const aceitos: string[] = [];
   const recusados: string[] = [];
-  for (const hora of candidatos.slice(0, MAX_VALIDACOES)) {
+  const sondados = espalhar(candidatos, MAX_VALIDACOES);
+  for (const hora of sondados) {
     const r = await SpineService.createSchedule(unit, {
       idClient: idClientSonda,
       dateAttendanceLocal: `${data}T${hora}:00`,
@@ -134,13 +157,10 @@ async function horariosQueAFranquiaAceita(
         );
       }
     } else {
-      // Guardar os recusados é o que impede o pior caso: quando NENHUM dos
-      // sondados passa, cair de volta na lista da grade reofereceria
-      // exatamente os horários que a franquia acabou de negar.
       recusados.push(hora);
     }
   }
-  return { aceitos, recusados };
+  return { aceitos, recusados, sondados };
 }
 
 /**
@@ -217,10 +237,16 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
       // chamadas por horário e o orçamento é pequeno; gastá-lo de manhã quando
       // o paciente pediu tarde devolve uma lista vazia de horários que ele nem
       // queria — e é assim que a conversa morre.
-      const noTurno = turno
+      // O TURNO PEDIDO É RESPEITADO, mesmo quando não sobra nada nele.
+      //
+      // Antes, turno vazio caía em `todosLivres` — o paciente pedia manhã e a
+      // sondagem ia gastar o orçamento na tarde. Foi assim que um paciente que
+      // pediu manhã recebeu duas ofertas de 17:00, num dia em que a clínica
+      // fechava 12:30. Devolver "não tem de manhã" deixa a I.A. perguntar se
+      // ele aceita outro período, que é uma conversa honesta.
+      const livres = turno
         ? todosLivres.filter((h) => (turno === 'manha' ? h < '12:00' : h >= '12:00'))
         : todosLivres;
-      const livres = noTurno.length > 0 ? noTurno : todosLivres;
 
       // A grade é só a PRIMEIRA peneira: ela desconta quem já está marcado,
       // almoço e bloqueio da recepção. O que ela não sabe é o turno da
@@ -228,34 +254,64 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
       const sonda = await clienteDeSondagem(fresca);
       let oferecer = livres;
       let recusados: string[] = [];
+      let sondados: string[] = [];
+      let verificado = false;
+
       if (sonda && livres.length > 0) {
         const r = await horariosQueAFranquiaAceita(fresca, data, livres, sonda);
         recusados = r.recusados;
-        oferecer = r.aceitos.length
-          ? r.aceitos
-          : // Nenhum confirmado. Cai de volta nos NÃO SONDADOS — nunca nos
-            // recusados, que reoferecer seria repetir o erro que a verificação
-            // existe pra impedir. Se a API deles estiver instável, os não
-            // sondados ainda são a melhor aposta disponível.
-            livres.filter((h) => !recusados.includes(h));
+        sondados = r.sondados;
+        verificado = true;
+        // SÓ O QUE A FRANQUIA ACEITOU. Nada de cair nos não sondados.
+        //
+        // Era o que fazia antes, e o preço foi medido num paciente: quatro
+        // horários sondados, os quatro recusados, e o código ofereceu o quinto
+        // — o único que ele nunca testou — em dois dias seguidos. O paciente
+        // aceitou os dois e levou duas vezes "esse horário acabou de ser
+        // preenchido". O sinal de que o turno inteiro estava fora da escala
+        // estava dado nas quatro recusas; oferecer o resto foi ignorá-lo.
+        //
+        // Lista vazia é uma resposta honesta. Duas desculpas seguidas não.
+        oferecer = r.aceitos;
+      } else if (livres.length > 0) {
+        // Sem paciente de sondagem não há como confirmar com a franquia. A
+        // grade sozinha não enxerga o turno da profissional, então o que sai
+        // daqui é aposta — registrada como tal pra não sumir num "deu certo".
+        logger.warn(
+          { unit: fresca.slug, data, livres: livres.length },
+          'consultar_horarios: sem paciente de sondagem — horários NÃO confirmados com a franquia',
+        );
       }
 
       await recorder.step({
         kind: 'TOOL_RESULT',
-        title: `consultar_horarios ${data}${turno ? ` (${turno})` : ''}: ${oferecer.length} de ${livres.length}`,
-        payload: { data, turno, naGrade: todosLivres, noTurno: livres, oferecer, recusados, sonda },
+        title:
+          `consultar_horarios ${data}${turno ? ` (${turno})` : ''}: ` +
+          `${oferecer.length} confirmado(s) de ${livres.length} livre(s) na grade` +
+          (verificado ? '' : ' — SEM verificação'),
+        payload: { data, turno, naGrade: todosLivres, noTurno: livres, sondados, oferecer, recusados, sonda },
       });
 
       if (oferecer.length === 0) {
+        // Recusa em tudo que foi sondado é sinal de turno fechado, não de dia
+        // cheio. A diferença importa pro que a I.A. diz ao paciente: "a agenda
+        // dessa data não abriu" em vez de "está tudo ocupado".
+        const turnoFechado = verificado && recusados.length > 0;
         return (
-          `Nenhum horário livre em ${data}${turno === 'manha' ? ' de manhã' : turno === 'tarde' ? ' à tarde' : ''}. ` +
+          (turnoFechado
+            ? `A clínica não está aceitando agendamento em ${data}${turno === 'manha' ? ' de manhã' : turno === 'tarde' ? ' à tarde' : ''} — a agenda desse período não está aberta.`
+            : `Nenhum horário livre em ${data}${turno === 'manha' ? ' de manhã' : turno === 'tarde' ? ' à tarde' : ''}.`) +
+          ' ' +
           (turno && todosLivres.length > 0
-            ? `No outro turno ainda há vaga — pergunte se ele aceita. `
+            ? 'No outro turno ainda pode haver vaga — pergunte se ele aceita. '
             : '') +
-          'Ofereça outra data — NÃO insista nesta.'
+          'Ofereça outra data — NÃO insista nesta e NÃO cite horário nenhum deste dia.'
         );
       }
-      return `Horários livres em ${data}: ${oferecer.join(', ')}. Ofereça no máximo 2 ou 3 deles.`;
+      return (
+        `Horários CONFIRMADOS com a clínica em ${data}: ${oferecer.join(', ')}. ` +
+        'Ofereça no máximo 2 ou 3 deles. Não ofereça nenhum horário fora desta lista.'
+      );
     },
   });
 }
