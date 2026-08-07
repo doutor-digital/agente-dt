@@ -37,6 +37,7 @@ import type { StructuredToolInterface } from '@langchain/core/tools';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
+import { opsAlert, ehErroDeSaldo } from '../lib/ops-alert.js';
 
 // ---------------------------------------------------------------------------
 // TABELA DE PREÇOS ($/1M tokens) — atualize conforme OpenAI mudar.
@@ -378,6 +379,19 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
         toolNames: args.tools?.map((t) => t.name) ?? [],
       },
     });
+    // SALDO ZERADO É INCIDENTE, não erro comum: enquanto não recarregar, TODA
+    // conversa morre. Dispara e-mail (throttled) em vez de só logar — foi o
+    // apagão silencioso de uma madrugada que motivou isto.
+    if (ehErroDeSaldo(msg)) {
+      opsAlert({
+        chave: `saldo:${args.provider ?? 'openai'}`,
+        title: `IA sem saldo (${args.provider ?? 'openai'}) — atendimento parado`,
+        message:
+          `As chamadas à IA estão falhando por saldo/cota esgotada no provedor ` +
+          `"${args.provider ?? 'openai'}" (modelo ${args.modelName}). Enquanto não ` +
+          `recarregar, NENHUMA conversa é respondida. Erro do provedor: ${msg.slice(0, 300)}`,
+      });
+    }
     throw err;
   }
 }

@@ -28,6 +28,7 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaService } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
+import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
 
 const TZ_PADRAO = 'America/Sao_Paulo';
 
@@ -58,6 +59,10 @@ interface Contexto {
  */
 const CAMPO_AGENDOU = 2442703;      // ✓ Agendou (select Sim/Não)
 const CAMPO_DATA_AGENDAMENTO = 2440909; // ◷ Data de agendamento (date_time)
+// ◷ Data da Consulta (date_time). Campo NOVO — o antigo era só-data e o Kommo
+// não deixa mudar tipo, então criamos este date_time com o mesmo nome. É o que
+// a recepção olha e o que o lembrete de véspera usa como fonte de data+hora.
+const CAMPO_DATA_CONSULTA = 2444497;
 // ☻ Responsável agendamento (select). Carimba QUEM marcou — a IA usa "I.A Sofia"
 // pra a recepção distinguir num relance o que foi dela do que foi humano. O
 // valor precisa existir como opção no campo (adicionado no Kommo). IDs de campo
@@ -1082,6 +1087,12 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             );
             await kommo.setLeadCustomFieldValue(
               args.leadId!,
+              CAMPO_DATA_CONSULTA,
+              'date',
+              `${args.data}T${args.hora}:00`,
+            );
+            await kommo.setLeadCustomFieldValue(
+              args.leadId!,
               CAMPO_RESPONSAVEL,
               'select',
               RESPONSAVEL_IA,
@@ -1091,6 +1102,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
               title: 'Campos de agendamento preenchidos (Agendou, Data, Responsável: I.A Sofia)',
               payload: { leadId: args.leadId, data: args.data, hora: args.hora, responsavel: RESPONSAVEL_IA },
             });
+            // Métrica: tempo do 1º contato até marcar (h).
+            await registrarTempoAteAgendamento(fresca, kommo, args.leadId!);
           } catch (err) {
             logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao carimbar campos no Kommo');
           }

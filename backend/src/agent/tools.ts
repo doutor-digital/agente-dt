@@ -29,6 +29,12 @@ import type { KommoClient, KommoFieldType } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import { getRecentMessagesByLead } from '../services/conversations.service.js';
 import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
+import { logger } from '../lib/logger.js';
+
+// Campos do handoff IA → humano. Carimbados quando pausar_ia entra. IDs desta
+// unidade (mesmo padrão de agenda-tools); multi-unidade → virar config.
+const CAMPO_HANDOFF_DATA = 2442729; // ◷ Data do handoff IA → humano (date_time)
+const CAMPO_HANDOFF_HUMANO = 2442727; // ✓ Atendimento assumido por humano (select)
 
 // ---------------------------------------------------------------------------
 // Descrições default — fonte de verdade pro seed do AgentConfig.
@@ -289,6 +295,24 @@ export function buildTools({
           payload: { leadId, motivo, fieldId: pausedFieldId },
           latencyMs: latency,
         });
+        // CARIMBA O HANDOFF no mesmo passo. Pausar é passar o atendimento pra um
+        // humano; sem registrar QUANDO e QUE virou humano, não dá pra medir
+        // autonomia da IA (quantos ela resolveu sozinha, e quando desistiu).
+        // Fire-and-forget: falhar aqui não desfaz a pausa. IDs são desta unidade
+        // (mesmo padrão de agenda-tools) — multi-unidade vira config depois.
+        void (async () => {
+          try {
+            await kommo.setLeadCustomFieldValue(leadId, CAMPO_HANDOFF_DATA, 'date', new Date().toISOString());
+            await kommo.setLeadCustomFieldValue(leadId, CAMPO_HANDOFF_HUMANO, 'select', 'Sim');
+            await recorder.step({
+              kind: 'KOMMO_ACTION',
+              title: `Handoff carimbado (data + assumido por humano) no lead ${leadId}`,
+              payload: { leadId, campoData: CAMPO_HANDOFF_DATA, campoHumano: CAMPO_HANDOFF_HUMANO },
+            });
+          } catch (e) {
+            logger.warn({ err: String(e), leadId }, 'pausar_ia: falha ao carimbar data do handoff');
+          }
+        })();
         return `OK — IA pausada no lead ${leadId} (${latency}ms). Responda em UMA frase avisando o paciente.`;
       } catch (err) {
         const latency = Math.round(performance.now() - t0);

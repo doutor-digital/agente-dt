@@ -17,7 +17,12 @@
       "Bash(pkill -f \"mockapi\")",
       "Bash(pkill -f \"remote-debugging-port\")",
       "Bash(exit 0)",
-      "Bash(echo \"backend tsc exit=$?\")"
+      "Bash(echo \"backend tsc exit=$?\")",
+      "Bash(timeout 60 ssh -i ~/.ssh/doutordigital_vps -o BatchMode=yes root@89.116.214.130 'cat > /tmp/gl.sh && bash /tmp/gl.sh; rm -f /tmp/gl.sh')",
+      "Bash(timeout 60 ssh -i ~/.ssh/doutordigital_vps -o BatchMode=yes root@89.116.214.130 'cat > /tmp/gt.sh && bash /tmp/gt.sh; rm -f /tmp/gt.sh')",
+      "Bash(timeout 60 ssh -i ~/.ssh/doutordigital_vps -o BatchMode=yes root@89.116.214.130 'cat > /tmp/gv.sh && bash /tmp/gv.sh; rm -f /tmp/gv.sh')",
+      "Bash(timeout 60 ssh -i ~/.ssh/doutordigital_vps -o BatchMode=yes root@89.116.214.130 'cat > /tmp/rn.sh && bash /tmp/rn.sh; rm -f /tmp/rn.sh')",
+      "Bash(timeout 60 ssh -i ~/.ssh/doutordigital_vps -o BatchMode=yes root@89.116.214.130 'cat > /tmp/cp.sh && bash /tmp/cp.sh; rm -f /tmp/cp.sh')"
     ]
   }
 }

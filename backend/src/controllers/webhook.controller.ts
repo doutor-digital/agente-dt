@@ -32,6 +32,7 @@ import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.j
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate } from '../services/lead-memory.service.js';
+import { scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { z } from 'zod';
 
@@ -872,6 +873,10 @@ export async function processAgent(args: {
         ...(reply ? [{ role: 'assistant' as const, content: reply }] : []),
       ],
     });
+
+    // Métricas calculadas (1ª resposta, tempo até 1ª resposta, nº de mensagens).
+    // Fora do caminho da resposta — a mensagem já saiu.
+    scheduleLeadMetrics(unit, leadId);
 
     // PONTE COM A FRANQUIA — depois de responder, nunca antes.
     // Roda a cada turno de propósito: o nome costuma aparecer no 2º ou 3º, e o
