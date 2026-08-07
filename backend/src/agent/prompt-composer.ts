@@ -371,13 +371,18 @@ function renderAgenda(unit: Unit): string {
   const pix = unit.pixKey?.trim();
   const favorecido = unit.pixHolder?.trim();
 
+  // SEM EMOJI DE 4 BYTES nesta mensagem, de propósito. O caminho de entrega
+  // legado (campo "Resposta IA" do Kommo) corrompe todo emoji fora do BMP:
+  // 📅 vira ✎, ⏰ vira ⌚, 📍 💰 👏 👨‍⚕️ somem. Medido. Então a confirmação —
+  // a mensagem que o paciente mais relê — usa só rótulo de texto e, no máximo,
+  // ✅ (que sobrevive e renderiza). Layout blocado se sustenta sem ícone.
   const linhaEndereco = endereco
-    ? `📍 Endereço: ${endereco}`
-    : '(omita a linha do endereço — não temos o endereço cadastrado, e inventar faz o paciente ir no lugar errado; diga que a equipe confirma o endereço)';
+    ? `Local: ${endereco}`
+    : '(omita a linha do local — não temos o endereço cadastrado, e inventar faz o paciente ir no lugar errado; diga que a equipe confirma o endereço)';
 
   // Chegar antes não é formalidade: é ficha, pagamento e o paciente entrar no
   // horário dele. Atraso de um empurra o dia inteiro da profissional.
-  const linhaAntecedencia = '⏱️ Chegue com 15 minutos de antecedência';
+  const linhaAntecedencia = 'Chegue 15 minutos antes.';
 
   const linhaPix = pix
     ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
@@ -398,22 +403,24 @@ QUANDO A CONSULTA FOR MARCADA COM SUCESSO, mande EXATAMENTE este formato — é 
 momento em que o paciente vai reler pra conferir, então precisa ser blocado e
 não um parágrafo corrido:
 
-Olá, {primeiro nome}! Parabéns pelo seu agendamento! 👏
+✅ Agendamento confirmado, {primeiro nome}!
 
-📅 Data: {dia da semana}, {DD/MM}
-⏰ Horário: {HH:mm}
+Data: {dia da semana}, {DD/MM}
+Horário: {HH:mm}
 ${linhaEndereco}
 ${linhaAntecedencia}
-💰 Valor da consulta: R$ 150 à vista no PIX (ou R$ 350)
-👨‍⚕️ Especialista: {o nome que a tool devolveu — se não devolveu, omita esta linha}
+Valor: R$ 150 no PIX à vista (ou R$ 350)
+Especialista: {o nome que a tool devolveu — se não devolveu, omita esta linha}
 
 ${linhaPix}
 
-Se surgir qualquer dúvida, estamos à disposição para te ajudar!
-Nos vemos em breve.
+Qualquer dúvida, é só chamar. Até breve!
 
 REGRAS DESTA MENSAGEM:
 - Só depois de a tool confirmar. Nunca antes, nunca "vou marcar".
+- Use SÓ o ✅ do título. NÃO acrescente 📅 ⏰ 📍 💰 👏 nem outro emoji nas linhas:
+  neste canal eles chegam quebrados (viram ✎, ⌚ ou somem) e deixam a mensagem
+  feia. Os rótulos de texto (Data, Horário, Local...) já organizam o bloco.
 - Não invente endereço, nome de especialista nem chave PIX. Linha sem dado
   confirmado sai da mensagem — o paciente pergunta, e a equipe responde certo.
 - R$ 150 é ANTECIPADO no PIX; sem antecipar, R$ 350. Não arredonde nem
