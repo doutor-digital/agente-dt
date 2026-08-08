@@ -76,8 +76,10 @@ const AgentConfigPanel = lazy(() =>
 const UnitsPanel = lazy(() =>
   import('./components/UnitsPanel').then((m) => ({ default: m.UnitsPanel })),
 );
+// PROVISÓRIO: galeria com 5 estilos pra escolher a nova casca do /configurar-agente.
+// Quando o estilo for escolhido, voltar pra ./components/AgentWorkspace.
 const AgentWorkspace = lazy(() =>
-  import('./components/AgentWorkspace').then((m) => ({ default: m.AgentWorkspace })),
+  import('./components/AgentWorkspaceGallery').then((m) => ({ default: m.AgentWorkspaceGallery })),
 );
 const UsersPanel = lazy(() =>
   import('./components/UsersPanel').then((m) => ({ default: m.UsersPanel })),
