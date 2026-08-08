@@ -1,0 +1,312 @@
+// ============================================================================
+// formkit — peças de formulário compartilhadas, no skin "Stripe Settings"
+// (escolhido pelo João, adaptado à cor `brand` do console pra ficar coeso).
+//
+// Fonte única do visual de TODOS os formulários do agente. Um painel importa
+// daqui em vez de redefinir TextField/SelectField/etc. localmente — muda aqui,
+// muda em todo lugar.
+//
+// Assinaturas espelham as peças que já existiam no WizardPanel, então a
+// migração é só trocar a definição local pelo import.
+// ============================================================================
+
+import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import clsx from 'clsx';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+
+// Tokens do skin — um lugar só. Mexer aqui reflete em tudo.
+const INPUT =
+  'w-full px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] text-zinc-100 outline-none transition ' +
+  'placeholder:text-zinc-600 focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/15';
+const LABEL = 'block text-[12px] font-medium text-zinc-300 mb-1.5';
+const HINT = 'text-[11px] text-zinc-500 mt-1 leading-relaxed';
+
+// ── FeatureCard — seção com toggle, acordeão. Coração do formulário. ────────
+export function FeatureCard({
+  icon,
+  title,
+  subtitle,
+  enabled,
+  onToggle,
+  alwaysOn,
+  disabled,
+  comingSoonNote,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  subtitle: string;
+  enabled: boolean;
+  onToggle?: (v: boolean) => void;
+  alwaysOn?: boolean;
+  disabled?: boolean;
+  comingSoonNote?: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(enabled || !!alwaysOn);
+  useEffect(() => {
+    if (enabled || alwaysOn) setOpen(true);
+  }, [enabled, alwaysOn]);
+
+  const active = enabled || alwaysOn;
+
+  return (
+    <section
+      className={clsx(
+        'rounded-xl border transition-colors',
+        disabled
+          ? 'border-zinc-800/60 bg-zinc-950/30 opacity-70'
+          : active
+            ? 'border-brand-500/30 bg-brand-500/[0.04] shadow-sm shadow-brand-500/5'
+            : 'border-zinc-800 bg-zinc-900/40 hover:border-zinc-700',
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-3 p-4 text-left"
+        disabled={disabled}
+      >
+        <span
+          className={clsx(
+            'shrink-0 w-9 h-9 rounded-lg flex items-center justify-center',
+            active ? 'bg-brand-500/12 ring-1 ring-brand-500/20' : 'bg-zinc-800/70',
+          )}
+        >
+          {icon}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-zinc-100 flex items-center gap-2">
+            {title}
+            {comingSoonNote && (
+              <span className="text-[9px] uppercase tracking-wider bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded">
+                em breve
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-0.5">{subtitle}</div>
+        </div>
+        {!alwaysOn && !disabled && onToggle && (
+          <div onClick={(e) => e.stopPropagation()}>
+            <Toggle value={enabled} onChange={onToggle} />
+          </div>
+        )}
+        {open || alwaysOn ? (
+          <ChevronDown size={14} className="text-zinc-600 shrink-0" />
+        ) : (
+          <ChevronRight size={14} className="text-zinc-600 shrink-0" />
+        )}
+      </button>
+      {(open || alwaysOn) && (active || disabled) && (
+        <div className="px-4 pb-4 pt-1 space-y-3 border-t border-zinc-800/40">
+          {comingSoonNote && <div className="text-[11px] text-zinc-500 italic">{comingSoonNote}</div>}
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Toggle ──────────────────────────────────────────────────────────────────
+export function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!value)}
+      className={clsx(
+        'relative inline-flex h-5 w-9 items-center rounded-full transition-colors',
+        value ? 'bg-brand-500' : 'bg-zinc-700',
+      )}
+    >
+      <span
+        className={clsx(
+          'inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition',
+          value ? 'translate-x-5' : 'translate-x-1',
+        )}
+      />
+    </button>
+  );
+}
+
+// ── TextField ────────────────────────────────────────────────────────────────
+export function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <label className={LABEL}>{label}</label>
+      <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className={INPUT} />
+      {hint && <p className={HINT}>{hint}</p>}
+    </div>
+  );
+}
+
+// ── NumberField ──────────────────────────────────────────────────────────────
+export function NumberField({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  hint,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <label className={LABEL}>{label}</label>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className={clsx(INPUT, 'font-mono')}
+      />
+      {hint && <p className={HINT}>{hint}</p>}
+    </div>
+  );
+}
+
+// ── TextareaField ────────────────────────────────────────────────────────────
+export function TextareaField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  rows = 3,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  rows?: number;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <label className={LABEL}>{label}</label>
+      <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={rows} className={clsx(INPUT, 'resize-vertical')} />
+      {hint && <p className={HINT}>{hint}</p>}
+    </div>
+  );
+}
+
+// ── SelectField ──────────────────────────────────────────────────────────────
+export function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <label className={LABEL}>{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={INPUT}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {hint && <p className={HINT}>{hint}</p>}
+    </div>
+  );
+}
+
+// ── KeywordList — chips + input pra listas de palavras ───────────────────────
+export function KeywordList({
+  keywords,
+  onChange,
+  placeholder,
+}: {
+  keywords: string[];
+  onChange: (kws: string[]) => void;
+  placeholder?: string;
+}) {
+  const [input, setInput] = useState('');
+
+  function commit() {
+    const v = input.trim();
+    if (!v) return;
+    if (keywords.includes(v)) {
+      setInput('');
+      return;
+    }
+    onChange([...keywords, v]);
+    setInput('');
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {keywords.length === 0 && (
+          <span className="text-[11px] text-zinc-600 italic">Nenhuma palavra cadastrada ainda.</span>
+        )}
+        {keywords.map((kw) => (
+          <span
+            key={kw}
+            className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-lg bg-zinc-800/80 text-zinc-200 text-[12px] ring-1 ring-zinc-700"
+          >
+            {kw}
+            <button
+              type="button"
+              onClick={() => onChange(keywords.filter((x) => x !== kw))}
+              className="text-zinc-500 hover:text-zinc-100"
+              title="Remover"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commit();
+            }
+          }}
+          placeholder={placeholder}
+          className={INPUT}
+        />
+        <button
+          type="button"
+          onClick={commit}
+          disabled={!input.trim()}
+          className="px-3.5 rounded-lg bg-zinc-800 text-[12px] text-zinc-200 hover:bg-zinc-700 disabled:opacity-50 shrink-0"
+        >
+          Adicionar
+        </button>
+      </div>
+    </div>
+  );
+}

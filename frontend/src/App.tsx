@@ -76,11 +76,8 @@ const AgentConfigPanel = lazy(() =>
 const UnitsPanel = lazy(() =>
   import('./components/UnitsPanel').then((m) => ({ default: m.UnitsPanel })),
 );
-// PROVISÓRIO: galeria com 5 FORMATOS de formulário pra escolher o novo visual do
-// /configurar-agente. (A galeria da casca/navegação está em AgentWorkspaceGallery.)
-// Quando o formato for escolhido, aplicar nas peças reais e voltar pra AgentWorkspace.
 const AgentWorkspace = lazy(() =>
-  import('./components/WizardFormGallery').then((m) => ({ default: m.WizardFormGallery })),
+  import('./components/AgentWorkspace').then((m) => ({ default: m.AgentWorkspace })),
 );
 const UsersPanel = lazy(() =>
   import('./components/UsersPanel').then((m) => ({ default: m.UsersPanel })),

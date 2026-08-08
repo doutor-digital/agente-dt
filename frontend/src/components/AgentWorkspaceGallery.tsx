@@ -1,4 +1,4 @@
-// ============================================================================
+    // ============================================================================
 // AgentWorkspaceGallery — MESMO conteúdo do AgentWorkspace (Identidade →
 // Conhecimento → Ações → Kommo → Testar), mas com 5 CASCAS visuais diferentes
 // pra escolher. Um seletor no topo troca o estilo ao vivo. Quando o João
