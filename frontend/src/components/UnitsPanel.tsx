@@ -137,6 +137,8 @@ function unitToInput(u: Unit): UnitInput {
     llmProvider: u.llmProvider ?? 'openai',
     anthropicApiKey: u.anthropicApiKey ?? '',
     anthropicModel: u.anthropicModel ?? 'claude-opus-4-8',
+    googleApiKey: u.googleApiKey ?? '',
+    googleModel: u.googleModel ?? 'gemini-2.5-flash',
     openaiApiKey: u.openaiApiKey ?? '',
     openaiAdminKey: u.openaiAdminKey ?? '',
     openaiModel: u.openaiModel,
@@ -369,7 +371,7 @@ export function UnitsPanel() {
                 Provedor de IA (chat)
               </div>
               <div className="flex gap-2">
-                {(['openai', 'anthropic'] as const).map((p) => (
+                {(['openai', 'anthropic', 'google'] as const).map((p) => (
                   <button
                     key={p}
                     type="button"
@@ -381,7 +383,7 @@ export function UnitsPanel() {
                         : 'bg-zinc-900/40 ring-zinc-800 text-zinc-400 hover:text-zinc-200',
                     )}
                   >
-                    {p === 'openai' ? 'OpenAI (GPT)' : 'Anthropic (Claude)'}
+                    {p === 'openai' ? 'OpenAI (GPT)' : p === 'anthropic' ? 'Anthropic (Claude)' : 'Google (Gemini)'}
                   </button>
                 ))}
               </div>
@@ -413,6 +415,27 @@ export function UnitsPanel() {
               </div>
             )}
 
+            {(draft.llmProvider ?? 'openai') === 'google' && (
+              <div className="space-y-3 rounded-lg p-3 ring-1 bg-sky-500/5 ring-sky-500/25">
+                <div className="text-[11px] font-semibold text-sky-200">Google (Gemini)</div>
+                <SecretField
+                  label="Google API Key"
+                  value={draft.googleApiKey ?? ''}
+                  onChange={(v) => setDraft({ ...draft, googleApiKey: v })}
+                  hasSecret={!!currentUnit?._hasSecrets?.googleApiKey}
+                  placeholder="AIza… ou AQ.…"
+                  hint="Chave da API do Gemini (aistudio.google.com/apikey)."
+                />
+                <SelectField
+                  label="Modelo Gemini"
+                  value={draft.googleModel ?? 'gemini-2.5-flash'}
+                  onChange={(v) => setDraft({ ...draft, googleModel: v })}
+                  options={GEMINI_MODELS}
+                  hint="Flash = rápido/barato (recomendado p/ WhatsApp); Pro = mais capaz."
+                />
+              </div>
+            )}
+
             {!creating ? (
               <div
                 className={clsx(
@@ -435,14 +458,18 @@ export function UnitsPanel() {
                   <div className="text-[11px] text-zinc-400">
                     {(draft.llmProvider ?? 'openai') === 'anthropic'
                       ? 'Claude (Anthropic)'
-                      : ownKey
-                        ? 'Chave própria desta unidade'
-                        : 'Usando a chave compartilhada do servidor'}
+                      : (draft.llmProvider ?? 'openai') === 'google'
+                        ? 'Google (Gemini)'
+                        : ownKey
+                          ? 'Chave própria desta unidade'
+                          : 'Usando a chave compartilhada do servidor'}
                     {' · '}modelo{' '}
                     <span className="text-zinc-300">
                       {((draft.llmProvider ?? 'openai') === 'anthropic'
                         ? draft.anthropicModel
-                        : draft.openaiModel) || '—'}
+                        : (draft.llmProvider ?? 'openai') === 'google'
+                          ? draft.googleModel
+                          : draft.openaiModel) || '—'}
                     </span>
                   </div>
                 </div>
@@ -461,8 +488,8 @@ export function UnitsPanel() {
               hasSecret={!!currentUnit?._hasSecrets?.openaiApiKey}
               placeholder="sk-proj-…"
               hint={
-                (draft.llmProvider ?? 'openai') === 'anthropic'
-                  ? 'Mesmo no Claude, esta chave é usada nos embeddings (RAG) e no áudio. Mantenha preenchida.'
+                (draft.llmProvider ?? 'openai') !== 'openai'
+                  ? 'Mesmo no Claude/Gemini, esta chave é usada nos embeddings (RAG) e no áudio. Mantenha preenchida.'
                   : 'Chave de projeto, usada nas chamadas de inferência.'
               }
             />
@@ -475,7 +502,7 @@ export function UnitsPanel() {
               hint="Habilita gastos REAIS da OpenAI no painel de Integrações (custos, projetos, usage)."
             />
             <SelectField
-              label={(draft.llmProvider ?? 'openai') === 'anthropic' ? 'Modelo OpenAI (embeddings/áudio)' : 'Modelo'}
+              label={(draft.llmProvider ?? 'openai') !== 'openai' ? 'Modelo OpenAI (embeddings/áudio)' : 'Modelo'}
               value={draft.openaiModel ?? 'gpt-4o-mini'}
               onChange={(v) => setDraft({ ...draft, openaiModel: v })}
               options={OPENAI_MODELS}
@@ -1740,6 +1767,11 @@ const CLAUDE_MODELS = [
   { value: 'claude-sonnet-5', label: 'Sonnet 5 — equilíbrio ($3/$15)' },
   { value: 'claude-haiku-4-5', label: 'Haiku 4.5 — mais barato/rápido ($1/$5)' },
   { value: 'claude-opus-4-7', label: 'Opus 4.7 — geração anterior ($5/$25)' },
+];
+const GEMINI_MODELS = [
+  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — rápido/barato ($0.30/$2.50)' },
+  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — mais capaz ($1.25/$10)' },
+  { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — geração anterior ($0.10/$0.40)' },
 ];
 const OPENAI_MODELS = [
   { value: 'gpt-4o-mini', label: 'gpt-4o-mini — barato ($0.15/$0.60)' },
