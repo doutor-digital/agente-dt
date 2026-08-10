@@ -816,6 +816,19 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     dailySeries.push({ date: key, messages: v.messages, conversations: v.conversations });
   }
 
+  // CONSULTAS AGENDADAS PELA IA — o número "de fato": leads em que a Sofia
+  // marcou consulta na agenda da franquia (SpineLeadLink.spineIdSchedule
+  // preenchido). Separado de convertedByIa (que é entrar em etapa de ganho no
+  // funil): aqui é o ato concreto que é o trabalho da IA — marcar a consulta.
+  const [aiScheduledPeriod, aiScheduledTotal] = await Promise.all([
+    prisma.spineLeadLink.count({
+      where: { unitId: id, spineIdSchedule: { not: null }, createdAt: { gte: periodStart } },
+    }),
+    prisma.spineLeadLink.count({ where: { unitId: id, spineIdSchedule: { not: null } } }),
+  ]);
+  // Taxa: consultas agendadas pela IA sobre os leads únicos do período.
+  const aiScheduledRate = uniqueLeads > 0 ? aiScheduledPeriod / uniqueLeads : 0;
+
   res.json({
     periodDays,
     kpis: {
@@ -833,6 +846,9 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       convertedBySdr,
       conversionRateIa,
       conversionRateSdr,
+      aiScheduledConsults: aiScheduledPeriod,
+      aiScheduledTotal,
+      aiScheduledRate,
       llmCostUsd: totalCost,
       llmCallsCount,
       peakHour,

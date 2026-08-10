@@ -300,6 +300,18 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     }
   }
 
+  // Humano respondeu → CANCELA a reativação. A secretária está tocando o lead;
+  // a IA não pode voltar por cima. Zera o handoffAt que o worker de reativação
+  // vigia. É exatamente esta trava que faz "reativar só se o humano não agiu".
+  if (humanTakeoverLeadId) {
+    await prisma.conversation
+      .updateMany({
+        where: { unitId: unit.id, leadId: String(humanTakeoverLeadId), handoffAt: { not: null } },
+        data: { handoffAt: null },
+      })
+      .catch(() => undefined);
+  }
+
   // Auto-pausa por takeover humano: atendente respondeu manualmente pelo Kommo →
   // marcamos "IA Pausada" pra IA não atropelar a conversa. Destrava só manual
   // (operador desmarca o campo). A TRAVA 2 (isLeadPaused) barra as próximas

@@ -374,6 +374,11 @@ model Unit {
   followUpAfterHours Int     @default(24) @map("follow_up_after_hours")
   followUpMessage    String? @map("follow_up_message")
 
+  // REATIVAÇÃO PÓS-HANDOFF — nunca perder lead quente. OFF por padrão (piloto,
+  // como o lembrete). Quando ligado, o worker reativa a IA 30min após um
+  // handoff se o humano não agiu, o lead é quente e não tem consulta marcada.
+  reactivationEnabled Boolean @default(false) @map("reactivation_enabled")
+
   // COLETA DE NOME — IA pergunta o nome do lead e atualiza o título do lead
   // no Kommo via tool `atualizar_titulo_lead`. Útil quando o lead chega
   // anônimo ("Visitante", "WhatsApp Web", etc).
@@ -879,6 +884,16 @@ model Conversation {
   followUpStep          Int       @default(0) @map("follow_up_step")
   followUpLastAt        DateTime? @map("follow_up_last_at")
   followUpStoppedReason String?   @map("follow_up_stopped_reason")
+
+  /**
+   * REATIVAÇÃO PÓS-HANDOFF. `handoffAt` marca QUANDO a IA passou o lead pra um
+   * humano (pausar_ia). O worker de reativação usa isso pra, 30min depois, se
+   * o humano não respondeu nem agendou e o lead é quente, despausar a IA e
+   * reabrir o contato. Zera quando o humano responde (não atropela a secretária)
+   * ou quando marca consulta. `reactivations` é o teto anti-perseguição.
+   */
+  handoffAt     DateTime? @map("handoff_at")
+  reactivations Int       @default(0) @map("reactivations")
 
   unit        Unit                     @relation(fields: [unitId], references: [id], onDelete: Cascade)
   messages    Message[]

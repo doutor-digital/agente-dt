@@ -473,6 +473,10 @@ export interface DashboardResponse {
     convertedBySdr: number;
     conversionRateIa: number;
     conversionRateSdr: number;
+    // Consultas que a IA marcou de fato na agenda da franquia (SpineLeadLink).
+    aiScheduledConsults: number; // no período
+    aiScheduledTotal: number; // desde sempre
+    aiScheduledRate: number; // sobre os leads únicos do período
     llmCostUsd: number;
     llmCallsCount: number;
     peakHour: number | null;

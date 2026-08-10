@@ -25,6 +25,7 @@ import { buildAgendaTools } from './agenda-tools.js';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import type { LeadFieldRule, Unit } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import type { KommoClient, KommoFieldType } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import { getRecentMessagesByLead } from '../services/conversations.service.js';
@@ -311,6 +312,20 @@ export function buildTools({
             });
           } catch (e) {
             logger.warn({ err: String(e), leadId }, 'pausar_ia: falha ao carimbar data do handoff');
+          }
+          // Marca o handoff NO BANCO pra o worker de reativação: 30min depois,
+          // se o humano não respondeu nem agendou e o lead é quente, a IA volta.
+          // updateMany (não update): a conversa pode não existir ainda em casos
+          // raros — não quebrar a pausa por isso.
+          try {
+            if (unit?.id) {
+              await prisma.conversation.updateMany({
+                where: { unitId: unit.id, leadId: String(leadId) },
+                data: { handoffAt: new Date() },
+              });
+            }
+          } catch (e) {
+            logger.warn({ err: String(e), leadId }, 'pausar_ia: falha ao marcar handoffAt');
           }
         })();
         return `OK — IA pausada no lead ${leadId} (${latency}ms). Responda em UMA frase avisando o paciente.`;

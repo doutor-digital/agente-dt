@@ -31,6 +31,7 @@ import { startWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
 import { startDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
 import { startFollowUpWorker } from './lib/follow-up-worker.js';
 import { startReminderWorker } from './lib/reminder-worker.js';
+import { startReactivationWorker } from './lib/reactivation-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -127,6 +128,9 @@ async function main(): Promise<void> {
   // Lembrete de véspera. Guardado: só age em unidades com reminderEnabled e um
   // Salesbot de lembrete configurado. Sobe inofensivo até ser ligado.
   startReminderWorker();
+  // Reativação pós-handoff: nunca perder lead quente. Guardado por
+  // reactivationEnabled (OFF por padrão) — sobe inofensivo até o piloto.
+  startReactivationWorker();
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);

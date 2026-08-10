@@ -214,6 +214,28 @@ export function DashboardPanel() {
         {/* Sparkline — volume diário de mensagens + conversas */}
         <SparklineCard data={data} loading={loading} />
 
+        {/* DESTAQUE — consultas que a IA marcou de fato na agenda da clínica.
+            O número que o João quer ver: o trabalho da Sofia virando resultado. */}
+        <div className="rounded-xl border border-brand-500/30 bg-brand-500/[0.06] p-5 flex items-center justify-between gap-4">
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-brand-200/80 font-semibold">
+              📅 Consultas agendadas pela IA
+            </div>
+            <div className="mt-1 text-4xl font-bold text-brand-100 tabular-nums">
+              {data?.kpis.aiScheduledConsults ?? 0}
+            </div>
+            <div className="text-[12px] text-zinc-400 mt-1">
+              {data
+                ? `${(data.kpis.aiScheduledRate * 100).toFixed(1)}% dos leads do período · ${data.kpis.aiScheduledTotal} no total (desde sempre)`
+                : ''}
+            </div>
+          </div>
+          <p className="text-right text-[11px] text-zinc-500 max-w-[240px] hidden sm:block">
+            Consultas que a Sofia marcou de fato na agenda da clínica — não é "entrou em etapa",
+            é o agendamento concreto.
+          </p>
+        </div>
+
         {/* Stat strip — convertidos + custo, com badge de delta no total/custo */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatStrip
