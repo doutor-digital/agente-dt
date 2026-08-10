@@ -124,10 +124,12 @@ export interface UnitInput {
   kommoWidgetSalesbotId?: number | null;
   kommoSalesbotExecuteEnabled?: boolean;
 
-  // Provedor de LLM do chat: "openai" (default) ou "anthropic".
+  // Provedor de LLM do chat: "openai" (default), "anthropic" ou "google".
   llmProvider?: string;
   anthropicApiKey?: string | null;
   anthropicModel?: string;
+  googleApiKey?: string | null;
+  googleModel?: string;
 
   openaiApiKey?: string | null;
   openaiAdminKey?: string | null;
@@ -365,6 +367,7 @@ export function maskUnitSecrets<T extends Unit>(unit: T): T & { _hasSecrets: Rec
     kommoAccessToken: mask(unit.kommoAccessToken),
     kommoWidgetSecret: mask(unit.kommoWidgetSecret),
     anthropicApiKey: mask(unit.anthropicApiKey),
+    googleApiKey: mask(unit.googleApiKey),
     openaiApiKey: mask(unit.openaiApiKey),
     openaiAdminKey: mask(unit.openaiAdminKey),
     metaAccessToken: mask(unit.metaAccessToken),
@@ -381,6 +384,7 @@ export function maskUnitSecrets<T extends Unit>(unit: T): T & { _hasSecrets: Rec
       kommoAccessToken: !!unit.kommoAccessToken,
       kommoWidgetSecret: !!unit.kommoWidgetSecret,
       anthropicApiKey: !!unit.anthropicApiKey,
+      googleApiKey: !!unit.googleApiKey,
       openaiApiKey: !!unit.openaiApiKey,
       openaiAdminKey: !!unit.openaiAdminKey,
       metaAccessToken: !!unit.metaAccessToken,

@@ -30,6 +30,7 @@
 
 import { ChatOpenAI, type ChatOpenAICallOptions } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
+import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { Prisma } from '@prisma/client';
 import type { Unit } from '@prisma/client';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -70,6 +71,11 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
   'claude-opus-4-7': { inputPer1M: 5, outputPer1M: 25 },
   'claude-sonnet-5': { inputPer1M: 3, outputPer1M: 15 },
   'claude-haiku-4-5': { inputPer1M: 1, outputPer1M: 5 },
+  // Google Gemini — ESTIMATIVA (conferir em ai.google.dev/pricing). Melhor que
+  // zerar o custo no painel. Ajustar quando confirmar o preço vigente.
+  'gemini-2.5-flash': { inputPer1M: 0.3, outputPer1M: 2.5 },
+  'gemini-2.5-pro': { inputPer1M: 1.25, outputPer1M: 10 },
+  'gemini-2.0-flash': { inputPer1M: 0.1, outputPer1M: 0.4 },
 };
 
 export function calculateCost(
@@ -173,7 +179,8 @@ export function createChatOpenAI(
 // ---------------------------------------------------------------------------
 export type ChatModel =
   | ChatOpenAI<ChatOpenAICallOptions>
-  | ChatAnthropic;
+  | ChatAnthropic
+  | ChatGoogleGenerativeAI;
 
 export function createChatModel(
   unit: Unit | null,
@@ -185,6 +192,18 @@ export function createChatModel(
       model: overrides.model ?? unit.anthropicModel ?? 'claude-opus-4-8',
       maxTokens: overrides.maxTokens ?? unit.openaiMaxTokens ?? 1024,
       // SEM temperature/topP/penalties — Opus 4.8 os rejeita.
+      maxRetries: OPENAI_MAX_RETRIES,
+    });
+  }
+  // GOOGLE GEMINI (ex: unidade Serra). Prompt simples (sem cache_control do
+  // Claude — o graph.ts trata isso). Tools via bindTools, mesma interface.
+  // Embeddings/áudio seguem na OpenAI, então openaiApiKey ainda é necessário.
+  if (unit?.llmProvider === 'google' && unit.googleApiKey) {
+    return new ChatGoogleGenerativeAI({
+      apiKey: unit.googleApiKey,
+      model: overrides.model ?? unit.googleModel ?? 'gemini-2.5-flash',
+      temperature: overrides.temperature ?? unit.openaiTemperature ?? 0,
+      maxOutputTokens: overrides.maxTokens ?? unit.openaiMaxTokens ?? 1024,
       maxRetries: OPENAI_MAX_RETRIES,
     });
   }

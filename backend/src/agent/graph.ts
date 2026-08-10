@@ -136,10 +136,13 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
 
   // 3) Modelo da Unit — OpenAI (padrão) ou Anthropic/Claude.
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
-  const provider = useAnthropic ? 'anthropic' : 'openai';
+  const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
+  const provider = useAnthropic ? 'anthropic' : useGoogle ? 'google' : 'openai';
   const modelName = useAnthropic
     ? unit.anthropicModel || 'claude-opus-4-8'
-    : config.model || unit.openaiModel || env.OPENAI_MODEL;
+    : useGoogle
+      ? unit.googleModel || 'gemini-2.5-flash'
+      : config.model || unit.openaiModel || env.OPENAI_MODEL;
   const baseModel = createChatModel(unit, {
     model: modelName,
     // temperature só vai pro caminho OpenAI; ChatAnthropic (Opus 4.8) ignora.

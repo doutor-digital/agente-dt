@@ -124,6 +124,11 @@ model Unit {
   anthropicApiKey String? @map("anthropic_api_key")
   // Modelo Claude do agente. Opus 4.8 rejeita temperature/top_p/penalties.
   anthropicModel  String  @default("claude-opus-4-8") @map("anthropic_model")
+  // Google Gemini — usado quando llmProvider="google" (ex: unidade Serra).
+  // Como o Anthropic, embeddings/áudio continuam na OpenAI (openaiApiKey segue
+  // necessário). NÃO apaga OpenAI/Claude — é só mais um provider.
+  googleApiKey    String? @map("google_api_key")
+  googleModel     String  @default("gemini-2.5-flash") @map("google_model")
 
   // OpenAI — credenciais por unidade (cada uma com sua API key e assistant)
   openaiApiKey           String? @map("openai_api_key")
