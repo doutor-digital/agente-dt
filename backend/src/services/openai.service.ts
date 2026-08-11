@@ -67,9 +67,11 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
   'o1': { inputPer1M: 15, outputPer1M: 60 },
   // Anthropic (Claude) — base input/output. Cache hit = 0.1x input, cache
   // write (TTL 1h) = 2x input; tratados em calculateCost via cache tokens.
+  'claude-opus-5': { inputPer1M: 5, outputPer1M: 25 },
   'claude-opus-4-8': { inputPer1M: 5, outputPer1M: 25 },
   'claude-opus-4-7': { inputPer1M: 5, outputPer1M: 25 },
   'claude-sonnet-5': { inputPer1M: 3, outputPer1M: 15 },
+  'claude-sonnet-4-6': { inputPer1M: 3, outputPer1M: 15 },
   'claude-haiku-4-5': { inputPer1M: 1, outputPer1M: 5 },
   // Google Gemini — ESTIMATIVA (conferir em ai.google.dev/pricing). Melhor que
   // zerar o custo no painel. Ajustar quando confirmar o preço vigente.

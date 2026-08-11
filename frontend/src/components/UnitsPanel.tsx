@@ -1763,10 +1763,11 @@ function Field({
 // Modelos oferecidos no select. Se a unidade tiver um valor fora da lista,
 // o SelectField adiciona ele como "(atual)" pra não sumir.
 const CLAUDE_MODELS = [
-  { value: 'claude-opus-4-8', label: 'Opus 4.8 — mais capaz ($5/$25 por Mtok)' },
-  { value: 'claude-sonnet-5', label: 'Sonnet 5 — equilíbrio ($3/$15)' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5 — equilíbrio, recomendado ($3/$15 por Mtok)' },
+  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6 — equilíbrio, geração anterior ($3/$15)' },
   { value: 'claude-haiku-4-5', label: 'Haiku 4.5 — mais barato/rápido ($1/$5)' },
-  { value: 'claude-opus-4-7', label: 'Opus 4.7 — geração anterior ($5/$25)' },
+  { value: 'claude-opus-4-8', label: 'Opus 4.8 — mais capaz ($5/$25)' },
+  { value: 'claude-opus-5', label: 'Opus 5 — flagship mais recente ($5/$25)' },
 ];
 const GEMINI_MODELS = [
   { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — rápido/barato ($0.30/$2.50)' },

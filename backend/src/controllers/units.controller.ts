@@ -866,7 +866,7 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
         AND NOT EXISTS (
           SELECT 1 FROM spine_lead_links sll
           WHERE sll.unit_id = c.unit_id
-            AND sll.lead_id = c.lead_id
+            AND sll.kommo_lead_id::text = c.lead_id
             AND sll.spine_id_schedule IS NOT NULL
         )
       ORDER BY c.handoff_at ASC
