@@ -34,12 +34,10 @@ import {
   Plus,
   Repeat,
   Save,
-  Sparkles,
   TestTube,
   Trash2,
   UserCog,
 } from 'lucide-react';
-import clsx from 'clsx';
 import {
   FeatureCard,
   TextField,

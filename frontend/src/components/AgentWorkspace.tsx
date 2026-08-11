@@ -120,8 +120,6 @@ export function AgentWorkspace() {
     setSubId(target.subs[0].id);
   }
 
-  const stepIndex = SEGMENTS.findIndex((s) => s.id === segId);
-
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* ── Barra de seções: passos numerados, estilo "setup guiado" ──────── */}
