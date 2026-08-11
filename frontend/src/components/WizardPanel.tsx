@@ -238,7 +238,7 @@ export function WizardPanel() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-6 pb-24 space-y-0">
+      <div className="max-w-4xl mx-auto px-8 pb-24 space-y-0">
         {/* Header — editorial, contido. Sticky com barra de salvar. */}
         <div className="flex items-end justify-between gap-4 sticky top-0 bg-zinc-950/95 backdrop-blur pt-7 pb-5 z-10 border-b border-zinc-800/60">
           <div>
