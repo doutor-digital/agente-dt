@@ -21,7 +21,6 @@ import {
   Globe,
   Timer,
   Headset,
-  Check,
   X,
   Plus,
   Palette,

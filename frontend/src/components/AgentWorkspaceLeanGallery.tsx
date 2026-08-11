@@ -148,7 +148,7 @@ function GeistShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
 }
 
 // ════ 3 · EDITORIAL / LEDGER — serifa, seções numeradas, respiro ═════════════
-function EditorialShell({ seg, sub, segId, stepIndex, setSubId, goSeg, body }: Shell) {
+function EditorialShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-[#0c0b0a]">
       <div className="shrink-0 px-8 pt-6 pb-4 border-b border-zinc-800/60">
