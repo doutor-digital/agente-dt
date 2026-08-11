@@ -35,6 +35,8 @@ import {
   Users,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { motion } from 'framer-motion';
+import { Trophy } from 'lucide-react';
 import axios from 'axios';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
@@ -140,6 +142,10 @@ export function DashboardPanel() {
             </button>
           </div>
         </div>
+
+        {/* HERO — A jornada da Sofia: o funil real do paciente, conectado.
+            É a tese da página (não "mensagens recebidas", que é vaidade). */}
+        <SofiaJourney data={data} periodLabel={periodLabel} />
 
         {error && (
           <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
@@ -418,6 +424,108 @@ export function DashboardPanel() {
         />
       )}
     </div>
+  );
+}
+
+// ===========================================================================
+// SofiaJourney — HERO/assinatura. O funil real do paciente, conectado:
+// Atendeu → Agendou → Fechou, com a taxa entre cada etapa. Encoda a sequência
+// verdadeira (por isso o fluxo faz sentido, não é decoração). Gradiente
+// brand→esmeralda + blobs difusos dão identidade própria à faixa.
+// ===========================================================================
+
+const journeyTones = {
+  brand: { text: 'text-brand-200', num: 'text-brand-100', chip: 'bg-brand-500/15 ring-brand-500/25 text-brand-200' },
+  cyan: { text: 'text-cyan-200', num: 'text-cyan-100', chip: 'bg-cyan-500/15 ring-cyan-500/25 text-cyan-200' },
+  emerald: { text: 'text-emerald-200', num: 'text-emerald-100', chip: 'bg-emerald-500/15 ring-emerald-500/25 text-emerald-200' },
+} as const;
+
+function JourneyStage({
+  icon,
+  value,
+  label,
+  tone,
+}: {
+  icon: React.ReactNode;
+  value: number;
+  label: string;
+  tone: keyof typeof journeyTones;
+}) {
+  const t = journeyTones[tone];
+  return (
+    <div className="flex-1 min-w-[110px]">
+      <div className={clsx('inline-flex items-center gap-1.5 text-[11px] font-medium', t.text)}>
+        <span className={clsx('grid place-items-center w-6 h-6 rounded-lg ring-1', t.chip)}>{icon}</span>
+      </div>
+      <div className={clsx('mt-2.5 font-display font-bold tracking-tight leading-none tabular-nums text-4xl sm:text-5xl', t.num)}>
+        {value}
+      </div>
+      <div className="text-[12px] text-zinc-400 mt-1.5">{label}</div>
+    </div>
+  );
+}
+
+function JourneyConnector({ pct, label }: { pct: number; label: string }) {
+  return (
+    <div className="flex sm:flex-col items-center justify-center gap-1 shrink-0 px-1 sm:px-2 self-center">
+      <span className="hidden sm:block text-[13px] font-semibold font-mono text-zinc-200 tabular-nums">
+        {pct.toFixed(0)}%
+      </span>
+      <svg width="34" height="10" viewBox="0 0 34 10" className="text-zinc-600" fill="none">
+        <path d="M0 5 H28" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 3" />
+        <path d="M27 1 L33 5 L27 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <span className="text-[10px] text-zinc-500 sm:mt-0.5 whitespace-nowrap">
+        <span className="sm:hidden font-mono text-zinc-300">{pct.toFixed(0)}% </span>
+        {label}
+      </span>
+    </div>
+  );
+}
+
+function SofiaJourney({
+  data,
+  periodLabel,
+}: {
+  data: DashboardResponse | null;
+  periodLabel: string;
+}) {
+  const atendeu = data?.kpis.uniqueLeads ?? 0;
+  const agendou = data?.kpis.aiScheduledConsults ?? 0;
+  const fechou = data?.kpis.convertedCount ?? 0;
+  const r1 = atendeu > 0 ? (agendou / atendeu) * 100 : 0;
+  const r2 = agendou > 0 ? (fechou / agendou) * 100 : 0;
+
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+      className="relative overflow-hidden rounded-2xl ring-1 ring-white/10 p-6 sm:p-7 bg-gradient-to-br from-brand-500/[0.13] via-zinc-900/50 to-emerald-500/[0.08]"
+    >
+      {/* Atmosfera: blobs difusos, mascarados nos cantos — assinatura da faixa. */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute -top-24 -left-10 w-72 h-72 rounded-full bg-brand-500/20 blur-3xl" />
+        <div className="absolute -bottom-28 right-0 w-80 h-80 rounded-full bg-emerald-500/10 blur-3xl" />
+      </div>
+
+      <div className="relative">
+        <div className="flex items-center gap-2 mb-5">
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-200/90">
+            <Sparkles size={13} /> A jornada da Sofia
+          </span>
+          <span className="text-[11px] text-zinc-500">· {periodLabel.toLowerCase()}</span>
+        </div>
+
+        <div className="flex items-stretch gap-1 sm:gap-3">
+          <JourneyStage icon={<MessageCircleMore size={13} />} value={atendeu} label="pacientes atendidos" tone="brand" />
+          <JourneyConnector pct={r1} label="viraram consulta" />
+          <JourneyStage icon={<Calendar size={13} />} value={agendou} label="consultas agendadas" tone="cyan" />
+          <JourneyConnector pct={r2} label="fecharam" />
+          <JourneyStage icon={<Trophy size={13} />} value={fechou} label="pacientes fechados" tone="emerald" />
+        </div>
+      </div>
+    </motion.section>
   );
 }
 

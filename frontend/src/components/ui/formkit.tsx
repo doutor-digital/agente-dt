@@ -19,8 +19,20 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 const INPUT =
   'w-full px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] text-zinc-100 outline-none transition ' +
   'placeholder:text-zinc-600 focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/15';
-const LABEL = 'block text-[12px] font-medium text-zinc-300 mb-1.5';
-const HINT = 'text-[11px] text-zinc-500 mt-1 leading-relaxed';
+// ── FieldRow — linha estilo "Stripe Settings": rótulo + explicação à ESQUERDA,
+//    controle à DIREITA, um por linha. Empilha no mobile. É o que dá a cara de
+//    settings profissional (em vez de campos amontoados num grid).
+function FieldRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="grid gap-1.5 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:gap-6 sm:items-start">
+      <div className="sm:pt-2">
+        <label className="text-[13px] font-medium text-zinc-200">{label}</label>
+        {hint && <p className="text-[11.5px] text-zinc-500 mt-0.5 leading-relaxed">{hint}</p>}
+      </div>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
 
 // ── FeatureCard — seção com toggle, acordeão. Coração do formulário. ────────
 export function FeatureCard({
@@ -144,11 +156,9 @@ export function TextField({
   hint?: string;
 }) {
   return (
-    <div>
-      <label className={LABEL}>{label}</label>
+    <FieldRow label={label} hint={hint}>
       <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className={INPUT} />
-      {hint && <p className={HINT}>{hint}</p>}
-    </div>
+    </FieldRow>
   );
 }
 
@@ -169,8 +179,7 @@ export function NumberField({
   hint?: string;
 }) {
   return (
-    <div>
-      <label className={LABEL}>{label}</label>
+    <FieldRow label={label} hint={hint}>
       <input
         type="number"
         value={value}
@@ -179,8 +188,7 @@ export function NumberField({
         onChange={(e) => onChange(Number(e.target.value))}
         className={clsx(INPUT, 'font-mono')}
       />
-      {hint && <p className={HINT}>{hint}</p>}
-    </div>
+    </FieldRow>
   );
 }
 
@@ -201,11 +209,9 @@ export function TextareaField({
   hint?: string;
 }) {
   return (
-    <div>
-      <label className={LABEL}>{label}</label>
+    <FieldRow label={label} hint={hint}>
       <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={rows} className={clsx(INPUT, 'resize-vertical')} />
-      {hint && <p className={HINT}>{hint}</p>}
-    </div>
+    </FieldRow>
   );
 }
 
@@ -224,8 +230,7 @@ export function SelectField({
   hint?: string;
 }) {
   return (
-    <div>
-      <label className={LABEL}>{label}</label>
+    <FieldRow label={label} hint={hint}>
       <select value={value} onChange={(e) => onChange(e.target.value)} className={INPUT}>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -233,8 +238,7 @@ export function SelectField({
           </option>
         ))}
       </select>
-      {hint && <p className={HINT}>{hint}</p>}
-    </div>
+    </FieldRow>
   );
 }
 

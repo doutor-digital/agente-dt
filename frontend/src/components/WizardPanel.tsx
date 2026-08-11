@@ -269,7 +269,7 @@ export function WizardPanel() {
           enabled
           alwaysOn
         >
-          <div className="grid md:grid-cols-2 gap-3">
+          <div className="space-y-3">
             <TextField
               label="Nome da empresa"
               value={draft.personaCompanyName ?? ''}
@@ -303,7 +303,7 @@ export function WizardPanel() {
             onChange={(v) => update({ personaGreeting: v || null })}
             placeholder='ex: "Oi, tudo bem? Sou a Sofia, da HM Tecnologia. Como posso te chamar?"'
           />
-          <div className="grid md:grid-cols-3 gap-3 mt-2">
+          <div className="space-y-3 mt-2">
             <SelectField
               label="Tamanho da resposta"
               value={draft.personaResponseLength}
@@ -393,7 +393,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
             Quente: cliente demonstrou compra/urgência. Frio: cliente sem interesse ou pediu pra não
             ser contatado.
           </p>
-          <div className="grid md:grid-cols-2 gap-3">
+          <div className="space-y-3">
             <TextField
               label="Tag pra leads quentes"
               value={draft.qualificationHotTag}
@@ -532,7 +532,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
             ⚠ Versão atual: a IA só MENCIONA follow-up no fim da conversa (ex: "Te chamo amanhã").
             O envio agendado automático ainda está em construção.
           </p>
-          <div className="grid md:grid-cols-2 gap-3">
+          <div className="space-y-3">
             <NumberField
               label="Voltar a falar após quantas horas?"
               value={draft.followUpAfterHours}

@@ -853,7 +853,7 @@ export function UnitsPanel() {
               onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
               rows={6}
               placeholder="Deixe vazio — use 'Configurar IA' e 'Fontes' pra montar a persona."
-              className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-2 text-xs text-zinc-200 font-mono"
+              className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-2 text-[13px] text-zinc-200 font-mono"
             />
             {(draft.systemPrompt?.trim().length ?? 0) > 0 && (
               <button
@@ -1748,12 +1748,12 @@ function Field({
 }) {
   return (
     <div>
-      <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+      <label className="text-[12px] font-medium text-zinc-300 block mb-1.5">{label}</label>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
+        className="w-full rounded-lg bg-zinc-950 ring-1 ring-zinc-800 px-3 py-2 text-[13px] text-zinc-200"
       />
       {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
     </div>
@@ -1797,11 +1797,11 @@ function SelectField({
   const known = options.some((o) => o.value === value);
   return (
     <div>
-      <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+      <label className="text-[12px] font-medium text-zinc-300 block mb-1.5">{label}</label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-brand-500/40"
+        className="w-full rounded-lg bg-zinc-950 ring-1 ring-zinc-800 px-3 py-2 text-[13px] text-zinc-200 outline-none transition focus:ring-2 focus:ring-brand-500/30"
       >
         {!known && value && <option value={value}>{value} (atual)</option>}
         {options.map((o) => (
@@ -1841,8 +1841,8 @@ function SecretField({
   if (hasSecret && isMasked && !editing) {
     return (
       <div>
-        <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
-        <div className="flex items-center gap-2 rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5">
+        <label className="text-[12px] font-medium text-zinc-300 block mb-1.5">{label}</label>
+        <div className="flex items-center gap-2 rounded-lg bg-zinc-950 ring-1 ring-zinc-800 px-3 py-2">
           <KeyRound size={13} className="text-emerald-400 shrink-0" />
           <span className="text-xs text-zinc-400 flex-1 truncate">
             Configurada · <span className="text-zinc-600">{value}</span>
@@ -1887,7 +1887,7 @@ function SecretField({
         value={value}
         placeholder={placeholder ?? 'Cole a chave aqui'}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-brand-500/40"
+        className="w-full rounded-lg bg-zinc-950 ring-1 ring-zinc-800 px-3 py-2 text-[13px] text-zinc-200 placeholder:text-zinc-600 outline-none transition focus:ring-2 focus:ring-brand-500/30"
       />
       {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
     </div>
@@ -1909,13 +1909,13 @@ function NumberField({
 }) {
   return (
     <div>
-      <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+      <label className="text-[12px] font-medium text-zinc-300 block mb-1.5">{label}</label>
       <input
         type="number"
         step={step ?? 1}
         value={allowZero || value !== 0 ? value : ''}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
+        className="w-full rounded-lg bg-zinc-950 ring-1 ring-zinc-800 px-3 py-2 text-[13px] text-zinc-200"
       />
     </div>
   );
