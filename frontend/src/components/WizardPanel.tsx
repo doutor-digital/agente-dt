@@ -245,7 +245,7 @@ export function WizardPanel() {
               <Sparkles size={16} className="text-zinc-500" />
               Configurar a IA
             </h1>
-            <p className="text-xs text-zinc-500 mt-0.5">
+            <p className="text-xs mt-0.5">
               Modo guiado: ative só o que quer, preencha os campos, e salve. A IA usa as novas
               configurações na próxima mensagem. 🚀
             </p>
