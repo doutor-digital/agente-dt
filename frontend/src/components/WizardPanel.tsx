@@ -239,7 +239,7 @@ export function WizardPanel() {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-4">
         {/* Header sticky */}
-        <div className="flex items-center justify-between sticky top-0 bg-zinc-950/95 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
+        <div className="flex items-center justify-between sticky top-0 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
           <div>
             <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
               <Sparkles size={16} className="text-zinc-500" />
