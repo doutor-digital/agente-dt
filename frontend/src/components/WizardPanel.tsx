@@ -238,26 +238,20 @@ export function WizardPanel() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-4xl mx-auto p-6 space-y-4">
-        {/* Header sticky */}
-        <div className="flex items-center justify-between sticky top-0 bg-zinc-950/95 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
+      <div className="max-w-2xl mx-auto px-6 pb-24 space-y-0">
+        {/* Header — editorial, contido. Sticky com barra de salvar. */}
+        <div className="flex items-end justify-between gap-4 sticky top-0 bg-zinc-950/95 backdrop-blur pt-7 pb-5 z-10 border-b border-zinc-800/60">
           <div>
-            <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
-              <Sparkles size={16} className="text-zinc-500" />
-              Configurar a IA
-            </h1>
-            <p className="text-xs text-zinc-500 mt-0.5">
-              Modo guiado: ative só o que quer, preencha os campos, e salve. A IA usa as novas
-              configurações na próxima mensagem. 🚀
-            </p>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500 mb-2">Configuração do agente</div>
+            <h1 className="text-2xl font-semibold text-zinc-50 tracking-tight">Persona &amp; comportamento</h1>
           </div>
           <button
             onClick={handleSave}
             disabled={!dirty || saving}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-500 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors shadow-lg shadow-brand-500/20"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-zinc-100 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-zinc-900 text-[13px] font-medium transition-colors shrink-0"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-            {saving ? 'Salvando…' : dirty ? 'Salvar alterações' : 'Salvo'}
+            {saving ? 'Salvando…' : dirty ? 'Salvar' : 'Salvo'}
           </button>
         </div>
 
