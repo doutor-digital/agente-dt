@@ -22,12 +22,14 @@ import {
   Cable,
   TestTube2,
   Wand2,
+  Sparkles,
   FileText,
   GraduationCap,
   Database,
   Wrench,
 } from 'lucide-react';
 import { WizardPanel } from './WizardPanel';
+import { WizardFormGallery } from './WizardFormGallery';
 import { FontesPanel } from './FontesPanel';
 import { AcoesPanel } from './AcoesPanel';
 import { CapturesPanel } from './CapturesPanel';
@@ -58,7 +60,10 @@ const SEGMENTS: Segment[] = [
     label: 'Identidade',
     icon: UserRound,
     hint: 'Quem é o agente — nome, tom, persona e o que ele sabe fazer.',
-    subs: [{ id: 'persona', label: 'Persona', icon: Wand2, render: () => <WizardPanel /> }],
+    subs: [
+      { id: 'persona', label: 'Persona', icon: Wand2, render: () => <WizardPanel /> },
+      { id: 'design', label: 'Escolher design', icon: Sparkles, render: () => <WizardFormGallery /> },
+    ],
   },
   {
     id: 'conhecimento',
