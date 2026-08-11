@@ -76,10 +76,10 @@ const AgentConfigPanel = lazy(() =>
 const UnitsPanel = lazy(() =>
   import('./components/UnitsPanel').then((m) => ({ default: m.UnitsPanel })),
 );
-// PROVISÓRIO: galeria de 5 direções ENXUTAS (estilo produto EUA) pra escolher a
-// casca do /configurar-agente. Quando escolher, voltar pra ./components/AgentWorkspace.
+// PROVISÓRIO: 5 direções ENXUTAS do FORMULÁRIO (estilo produto EUA) pra escolher.
+// Quando escolher, aplicar nas peças reais e voltar pra ./components/AgentWorkspace.
 const AgentWorkspace = lazy(() =>
-  import('./components/AgentWorkspaceLeanGallery').then((m) => ({ default: m.AgentWorkspaceLeanGallery })),
+  import('./components/WizardFormGallery').then((m) => ({ default: m.WizardFormGallery })),
 );
 const UsersPanel = lazy(() =>
   import('./components/UsersPanel').then((m) => ({ default: m.UsersPanel })),

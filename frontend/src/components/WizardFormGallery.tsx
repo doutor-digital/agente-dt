@@ -20,7 +20,6 @@ import {
   Stethoscope,
   Globe,
   Timer,
-  Smile,
   Headset,
   Check,
   X,
@@ -184,9 +183,10 @@ function FormBody({ layout, t }: { layout: Layout; t: Tokens }) {
 
   return (
     <div className={clsx('max-w-4xl mx-auto px-4 sm:px-6 py-6', t.glass && 'relative z-10')}>
-      <header className="mb-5">
-        <h1 className={clsx('flex items-center gap-2 text-lg', t.title)}><Smile size={18} className="text-brand-400" /> Persona da IA</h1>
-        <p className={clsx('mt-1', t.hint)}>Quem é o agente, como ele fala. A IA usa as novas configurações na próxima mensagem.</p>
+      <header className="mb-6">
+        <div className={clsx('text-[11px] uppercase tracking-[0.14em] mb-2', t.hint)}>Configuração · Persona</div>
+        <h1 className={clsx('text-xl', t.title)}>Persona da IA</h1>
+        <p className={clsx('mt-1.5', t.hint)}>Quem é o agente, como ele fala.</p>
       </header>
 
       <div className={wrap}>
@@ -230,84 +230,85 @@ function FormBody({ layout, t }: { layout: Layout; t: Tokens }) {
 }
 
 // ── 5 SKINS = 5 conjuntos de tokens + layout ─────────────────────────────────
+// 5 direções ENXUTAS (estilo produto EUA). Zero gradiente/glass/blob. Cor =
+// estado, não decoração; tipografia lidera; espaço em branco é ferramenta.
 const linear: Tokens = {
   page: 'bg-zinc-950',
-  card: 'bg-zinc-900/40 border border-zinc-800/70',
-  title: 'font-semibold text-zinc-100',
+  card: 'bg-zinc-900/30 border border-zinc-800/60',
+  title: 'font-semibold text-zinc-100 tracking-tight',
   label: 'text-[13px] font-medium text-zinc-200',
   hint: 'text-[12px] text-zinc-500',
-  input: 'bg-transparent border border-zinc-800 rounded-lg px-3 py-2 text-[13px] text-zinc-100 focus:border-zinc-600 outline-none',
-  segWrap: 'bg-zinc-900/60 border border-zinc-800',
+  input: 'bg-transparent border border-zinc-800 rounded-md px-3 py-2 text-[13px] text-zinc-100 focus:border-zinc-600 outline-none transition',
+  segWrap: 'bg-zinc-900/50 border border-zinc-800',
   segIdle: 'text-zinc-500 hover:text-zinc-200',
   segActive: 'bg-zinc-800 text-zinc-100',
   chipIdle: 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:border-zinc-600',
   chipActive: 'bg-zinc-800 text-zinc-100',
-  accent: 'bg-zinc-100 !text-zinc-900',
+  accent: 'bg-brand-600 hover:bg-brand-500',
 };
 const geist: Tokens = {
   page: 'bg-black',
   card: 'bg-zinc-950 border border-zinc-800',
   title: 'font-semibold text-white tracking-tight',
-  label: 'text-[13px] font-semibold text-zinc-100 tracking-tight',
-  hint: 'text-[12px] text-zinc-500',
-  input: 'bg-black border border-zinc-800 rounded-lg px-3 py-2 text-[13px] text-white font-mono focus:border-white/40 outline-none',
+  label: 'text-[13px] font-medium text-zinc-100 tracking-tight',
+  hint: 'text-[12px] text-zinc-500 font-mono',
+  input: 'bg-black border border-zinc-800 rounded-md px-3 py-2 text-[13px] text-white font-mono focus:border-white/40 outline-none transition',
   segWrap: 'bg-zinc-950 border border-zinc-800',
   segIdle: 'text-zinc-500 hover:text-white',
   segActive: 'bg-white text-black font-medium',
   chipIdle: 'bg-zinc-950 border border-zinc-800 text-zinc-200 hover:border-zinc-600',
   chipActive: 'bg-white/10 border border-white/20 text-white',
-  accent: 'bg-white !text-black',
+  accent: 'bg-white !text-black hover:bg-zinc-200',
 };
-const stripe: Tokens = {
-  page: 'bg-[#0a0a12]',
-  card: 'bg-[#12121c] border border-indigo-500/15',
-  title: 'font-semibold text-zinc-100',
-  label: 'text-[13px] font-semibold text-zinc-100',
+const editorial: Tokens = {
+  page: 'bg-[#0c0b0a]',
+  card: 'bg-transparent border border-zinc-800/60',
+  title: 'font-serif italic text-zinc-100 tracking-tight',
+  label: 'font-serif text-[15px] text-zinc-200',
   hint: 'text-[12px] text-zinc-500 leading-relaxed',
-  input: 'bg-[#0a0a12] border border-indigo-500/20 rounded-lg px-3 py-2 text-[13px] text-zinc-100 focus:border-indigo-400/60 focus:ring-2 focus:ring-indigo-500/20 outline-none',
-  segWrap: 'bg-[#0a0a12] border border-indigo-500/20',
+  input: 'bg-transparent border-b border-zinc-700 rounded-none px-1 py-2 text-[14px] text-zinc-100 focus:border-brand-500 outline-none transition',
+  segWrap: 'bg-transparent border border-zinc-800',
   segIdle: 'text-zinc-500 hover:text-zinc-200',
-  segActive: 'bg-indigo-500 text-white',
-  chipIdle: 'bg-[#0a0a12] border border-indigo-500/20 text-zinc-300 hover:border-indigo-400/50',
-  chipActive: 'bg-indigo-500/15 border border-indigo-400/30 text-indigo-200',
-  accent: 'bg-gradient-to-r from-indigo-500 to-violet-500',
+  segActive: 'bg-zinc-800/80 text-zinc-100',
+  chipIdle: 'bg-transparent border border-zinc-800 text-zinc-300 hover:border-zinc-600',
+  chipActive: 'bg-zinc-800 text-zinc-100',
+  accent: 'bg-zinc-100 !text-zinc-900 hover:bg-white',
 };
-const glass: Tokens = {
+const raycast: Tokens = {
   page: 'bg-zinc-950',
-  card: 'bg-white/[0.04] border border-white/10 backdrop-blur-xl',
-  title: 'font-semibold text-white',
-  label: 'text-[13px] font-medium text-zinc-100',
-  hint: 'text-[12px] text-zinc-400',
-  input: 'bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[13px] text-white backdrop-blur focus:border-brand-400/60 focus:bg-white/10 outline-none transition',
-  segWrap: 'bg-white/5 border border-white/10 backdrop-blur',
-  segIdle: 'text-zinc-400 hover:text-white',
-  segActive: 'bg-white/15 text-white',
-  chipIdle: 'bg-white/5 border border-white/10 text-zinc-200 hover:bg-white/10',
-  chipActive: 'bg-gradient-to-r from-brand-500/30 to-cyan-400/20 border border-white/20 text-white',
-  accent: 'bg-gradient-to-r from-brand-500 to-cyan-400',
-  glass: true,
-};
-const bento: Tokens = {
-  page: 'bg-zinc-950',
-  card: 'bg-zinc-900/60 border border-zinc-800 hover:border-zinc-700 transition-colors',
-  title: 'font-bold text-white tracking-tight',
-  label: 'text-[13px] font-semibold text-zinc-100',
+  card: 'bg-zinc-900/50 border border-zinc-800',
+  title: 'font-semibold text-zinc-100',
+  label: 'text-[13px] font-medium text-zinc-200',
   hint: 'text-[12px] text-zinc-500',
-  input: 'bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2.5 text-[13px] text-zinc-100 focus:border-brand-500/60 outline-none',
+  input: 'bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-[13px] text-zinc-100 focus:border-orange-500/60 focus:ring-2 focus:ring-orange-500/15 outline-none transition',
   segWrap: 'bg-zinc-950 border border-zinc-800',
   segIdle: 'text-zinc-500 hover:text-zinc-200',
-  segActive: 'bg-brand-500/20 text-brand-200 border border-brand-500/30',
-  chipIdle: 'bg-zinc-950 border border-zinc-800 text-zinc-300 hover:border-brand-500/50',
-  chipActive: 'bg-brand-500/15 border border-brand-500/30 text-brand-100',
-  accent: 'bg-brand-500',
+  segActive: 'bg-orange-500/15 text-orange-200 ring-1 ring-orange-500/25',
+  chipIdle: 'bg-zinc-950 border border-zinc-800 text-zinc-300 hover:border-zinc-600',
+  chipActive: 'bg-orange-500/12 border border-orange-500/25 text-orange-200',
+  accent: 'bg-orange-500 hover:bg-orange-400',
+};
+const quiet: Tokens = {
+  page: 'bg-zinc-950',
+  card: 'bg-transparent border border-zinc-800/50',
+  title: 'font-semibold text-zinc-100',
+  label: 'text-[13px] font-medium text-zinc-300',
+  hint: 'text-[12px] text-zinc-500',
+  input: 'bg-zinc-900/40 border border-transparent rounded-lg px-3 py-2 text-[13px] text-zinc-100 focus:border-zinc-700 focus:bg-zinc-900 outline-none transition',
+  segWrap: 'bg-zinc-900/40 border border-zinc-800/60',
+  segIdle: 'text-zinc-500 hover:text-zinc-200',
+  segActive: 'bg-zinc-800 text-zinc-100',
+  chipIdle: 'bg-zinc-900/40 border border-zinc-800/60 text-zinc-300 hover:border-zinc-600',
+  chipActive: 'bg-zinc-800 text-zinc-100',
+  accent: 'bg-brand-600 hover:bg-brand-500',
 };
 
 const SKINS = [
-  { id: 1, name: 'Linear Minimal', layout: 'inline' as Layout, t: linear },
-  { id: 2, name: 'Vercel Geist', layout: 'stack' as Layout, t: geist },
-  { id: 3, name: 'Stripe Settings', layout: 'twocol' as Layout, t: stripe },
-  { id: 4, name: 'Aurora Glass', layout: 'stack' as Layout, t: glass },
-  { id: 5, name: 'Bento SaaS', layout: 'bento' as Layout, t: bento },
+  { id: 1, name: 'Linear', layout: 'inline' as Layout, t: linear },
+  { id: 2, name: 'Geist', layout: 'stack' as Layout, t: geist },
+  { id: 3, name: 'Editorial', layout: 'twocol' as Layout, t: editorial },
+  { id: 4, name: 'Raycast', layout: 'stack' as Layout, t: raycast },
+  { id: 5, name: 'Quiet', layout: 'twocol' as Layout, t: quiet },
 ];
 
 export function WizardFormGallery() {
