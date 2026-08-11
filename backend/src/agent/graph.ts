@@ -494,8 +494,8 @@ async function maybeAddEntryDateTag({
       timeZone: 'America/Sao_Paulo',
       day: '2-digit',
       month: '2-digit',
-      year: '2-digit',
-    }).format(new Date(createdAtMs)); // ex: "01/01/26"
+      year: 'numeric',
+    }).format(new Date(createdAtMs)); // ex: "01/01/2026"
     await kommo.addTag({ leadId, tag: dateTag });
     await recorder.step({
       kind: 'KOMMO_ACTION',
