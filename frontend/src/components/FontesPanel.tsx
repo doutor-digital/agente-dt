@@ -140,7 +140,7 @@ export function FontesPanel() {
     <div className="flex-1 overflow-y-auto">
       <div className="w-full px-6 py-6 space-y-6">
         {/* Header sticky — alinhado ao padrão Stripe das seções */}
-        <div className="flex items-center justify-between gap-4 sticky top-0 bg-zinc-950/95 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
+        <div className="flex items-center justify-between gap-4 sticky top-0 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
           <div>
             <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
               <FileText size={18} className="text-brand-300" />

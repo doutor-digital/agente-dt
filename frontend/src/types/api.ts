@@ -346,6 +346,10 @@ export interface Unit {
   collectSourceEnabled: boolean;
   collectSourceOptions: string[];
 
+  /** Ticket médio (R$) de uma consulta/venda — alimenta "Receita × Custo" do
+   *  dashboard. NULL = não configurado. */
+  avgTicketBrl: number | null;
+
   /** Campo customizado do Kommo onde o resumo da IA (resumir_lead_para_sdr) é
    *  gravado, além da nota interna. NULL = só nota. */
   summaryCustomFieldId: number | null;
@@ -512,6 +516,39 @@ export interface DashboardResponse {
     messages: number;
     conversations: number;
   }>;
+  /** Receita potencial × custo real, tudo em BRL. Campos com `null` = ticket
+   *  médio não configurado na unidade. */
+  economics: {
+    avgTicketBrl: number | null;
+    aiScheduledPeriod: number;
+    potentialRevenueBrl: number | null;
+    llmCostBrl: number;
+    whatsappCostBrl: number;
+    totalCostBrl: number;
+    whatsappMsgVolume: number;
+    costPerScheduledBrl: number | null;
+    roi: number | null; // (receita − custo) / custo
+    usdToBrl: number;
+  };
+  /** Leads quentes que a IA passou pra humano e seguem sem conversão/consulta. */
+  hotQueue: Array<{
+    leadId: string;
+    contactName: string | null;
+    phone: string | null;
+    channel: string;
+    handoffAt: string; // ISO
+    reactivations: number;
+    waitingMinutes: number;
+  }>;
+  /** Comparecimento (show rate) do snapshot do funil. */
+  showRate: {
+    available: boolean;
+    scheduledCount: number;
+    attendedCount: number;
+    rate: number;
+    scheduledStageName: string | null;
+    attendedStageName: string | null;
+  };
 }
 
 /** Resposta do GET /dashboard — agregado de todas as unidades acessíveis. */

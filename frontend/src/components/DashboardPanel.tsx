@@ -23,9 +23,11 @@ import {
   ArrowUpRight,
   Brain,
   Calendar,
+  CalendarCheck,
   CalendarDays,
   Clock4,
   DollarSign,
+  Flame,
   LineChart,
   Loader2,
   MessageCircleMore,
@@ -33,6 +35,7 @@ import {
   Repeat,
   Sparkles,
   Users,
+  Wallet,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { motion } from 'framer-motion';
@@ -40,7 +43,7 @@ import { Trophy } from 'lucide-react';
 import axios from 'axios';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
-import type { DashboardResponse, LeadsBucket } from '../types/api';
+import type { DashboardResponse, LeadsBucket, UnitInput } from '../types/api';
 import { LeadsBucketModal } from './LeadsBucketModal';
 import { AllUnitsDashboard } from './AllUnitsDashboard';
 
@@ -241,6 +244,19 @@ export function DashboardPanel() {
             é o agendamento concreto.
           </p>
         </div>
+
+        {/* ── FEATURE 1 · RECEITA × CUSTO + FEATURE 3 · COMPARECIMENTO ─────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-4">
+          <EconomicsCard
+            data={data}
+            unitId={selectedUnitId}
+            onTicketSaved={() => void load()}
+          />
+          <ShowRateCard data={data} />
+        </div>
+
+        {/* ── FEATURE 2 · FILA DE LEADS QUENTES PARADOS ─────────────────────── */}
+        <HotQueueCard data={data} />
 
         {/* Stat strip — convertidos + custo, com badge de delta no total/custo */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -932,6 +948,315 @@ function ClickRow({
       <div className="text-2xl font-display font-bold text-cyan-200">{value}</div>
       <div className="text-[10px] text-zinc-500">{label}</div>
     </button>
+  );
+}
+
+// ===========================================================================
+// Formatação de moeda BRL — sem centavos pra números grandes (receita),
+// com centavos pra custos por unidade.
+// ===========================================================================
+function fmtBrl(v: number, cents = false): string {
+  return v.toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    minimumFractionDigits: cents ? 2 : 0,
+    maximumFractionDigits: cents ? 2 : 0,
+  });
+}
+
+// ===========================================================================
+// FEATURE 1 · EconomicsCard — Receita potencial × custo real (tudo em BRL).
+// Prova o ROI da Sofia num piscar: "custou X, trouxe Y". Se o ticket médio
+// não está configurado, o card vira um convite pra preencher (inline).
+// ===========================================================================
+function EconomicsCard({
+  data,
+  unitId,
+  onTicketSaved,
+}: {
+  data: DashboardResponse | null;
+  unitId: string | null;
+  onTicketSaved: () => void;
+}) {
+  const eco = data?.economics;
+  const [editing, setEditing] = useState(false);
+  const [ticket, setTicket] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function saveTicket() {
+    if (!unitId) return;
+    const n = Number(ticket.replace(/\./g, '').replace(',', '.'));
+    if (!Number.isFinite(n) || n <= 0) return;
+    setSaving(true);
+    try {
+      await api.updateUnit(unitId, { avgTicketBrl: n } as Partial<UnitInput>);
+      setEditing(false);
+      onTicketSaved();
+    } catch {
+      /* toast global cobre o erro; deixamos o card como está */
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const hasTicket = eco != null && eco.avgTicketBrl != null;
+  const revenue = eco?.potentialRevenueBrl ?? null;
+  const cost = eco?.totalCostBrl ?? 0;
+  const roi = eco?.roi ?? null;
+
+  return (
+    <div className="rounded-2xl ring-1 ring-emerald-500/20 bg-gradient-to-br from-emerald-500/[0.08] to-zinc-900/40 backdrop-blur p-5">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex items-center gap-2">
+          <Wallet size={16} className="text-emerald-300" />
+          <span className="text-[10px] uppercase tracking-wider text-emerald-200/80 font-semibold">
+            Receita × custo da IA
+          </span>
+        </div>
+        {roi != null && (
+          <span
+            className={clsx(
+              'text-[11px] font-semibold px-2 py-0.5 rounded-full tabular-nums',
+              roi >= 0 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300',
+            )}
+          >
+            ROI {roi >= 0 ? '+' : ''}
+            {(roi * 100).toFixed(0)}%
+          </span>
+        )}
+      </div>
+
+      {!hasTicket ? (
+        // Sem ticket configurado → convite pra preencher inline
+        <div>
+          <p className="text-[13px] text-zinc-300 leading-relaxed">
+            Quanto vale, em média, uma consulta fechada aqui? Com esse valor eu mostro{' '}
+            <span className="text-emerald-300 font-medium">quanto a Sofia gerou de receita</span> vs
+            quanto ela custou.
+          </p>
+          <div className="flex items-center gap-2 mt-3">
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-[13px]">
+                R$
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={ticket}
+                onChange={(e) => setTicket(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && saveTicket()}
+                placeholder="250"
+                className="w-32 pl-9 pr-3 py-2 rounded-lg bg-zinc-950/70 border border-zinc-700 text-[14px] text-zinc-100 outline-none focus:border-emerald-500 tabular-nums"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={saveTicket}
+              disabled={saving || !ticket.trim() || !unitId}
+              className="px-3.5 py-2 rounded-lg bg-emerald-500 text-zinc-950 text-[13px] font-medium hover:bg-emerald-400 disabled:opacity-40"
+            >
+              {saving ? 'Salvando…' : 'Salvar ticket'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <div className="text-[11px] text-zinc-400">Receita potencial</div>
+            <div className="text-3xl font-display font-bold text-emerald-300 tabular-nums mt-0.5">
+              {revenue != null ? fmtBrl(revenue) : '—'}
+            </div>
+            <div className="text-[11px] text-zinc-500 mt-1">
+              {eco?.aiScheduledPeriod ?? 0} consultas × {fmtBrl(eco?.avgTicketBrl ?? 0)}
+              <button
+                type="button"
+                onClick={() => {
+                  setTicket(String(eco?.avgTicketBrl ?? ''));
+                  setEditing(true);
+                }}
+                className="ml-1.5 text-zinc-400 hover:text-emerald-300 underline decoration-dotted"
+              >
+                editar
+              </button>
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] text-zinc-400">Custo da IA</div>
+            <div className="text-3xl font-display font-bold text-zinc-100 tabular-nums mt-0.5">
+              {fmtBrl(cost)}
+            </div>
+            <div className="text-[11px] text-zinc-500 mt-1">
+              LLM {fmtBrl(eco?.llmCostBrl ?? 0, true)} · WhatsApp {fmtBrl(eco?.whatsappCostBrl ?? 0, true)}
+            </div>
+          </div>
+          <div className="col-span-2 flex items-center gap-4 pt-3 border-t border-white/5">
+            <div className="text-[12px] text-zinc-400">
+              Custo por consulta agendada:{' '}
+              <span className="text-zinc-100 font-medium tabular-nums">
+                {eco?.costPerScheduledBrl != null ? fmtBrl(eco.costPerScheduledBrl, true) : '—'}
+              </span>
+            </div>
+            {editing && (
+              <div className="flex items-center gap-1.5 ml-auto">
+                <span className="text-zinc-500 text-[13px]">R$</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={ticket}
+                  onChange={(e) => setTicket(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && saveTicket()}
+                  className="w-20 px-2 py-1 rounded-md bg-zinc-950/70 border border-zinc-700 text-[13px] text-zinc-100 outline-none focus:border-emerald-500 tabular-nums"
+                />
+                <button
+                  type="button"
+                  onClick={saveTicket}
+                  disabled={saving}
+                  className="px-2.5 py-1 rounded-md bg-emerald-500 text-zinc-950 text-[12px] font-medium hover:bg-emerald-400 disabled:opacity-40"
+                >
+                  ok
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditing(false)}
+                  className="text-zinc-500 hover:text-zinc-300 text-[12px]"
+                >
+                  cancelar
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===========================================================================
+// FEATURE 3 · ShowRateCard — comparecimento (agendou → compareceu). O buraco
+// clássico de clínica. Vem do snapshot do funil; se a etapa não é
+// identificável, o card explica em vez de mostrar zero.
+// ===========================================================================
+function ShowRateCard({ data }: { data: DashboardResponse | null }) {
+  const sr = data?.showRate;
+  return (
+    <div className="rounded-2xl ring-1 ring-white/10 bg-zinc-900/55 backdrop-blur p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <CalendarCheck size={16} className="text-sky-300" />
+        <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">
+          Comparecimento
+        </span>
+      </div>
+      {sr?.available ? (
+        <>
+          <div className="flex items-baseline gap-2">
+            <span className="text-4xl font-display font-bold text-sky-200 tabular-nums">
+              {(sr.rate * 100).toFixed(0)}%
+            </span>
+            <span className="text-[12px] text-zinc-400">apareceram</span>
+          </div>
+          <div className="mt-3 h-2 rounded-full bg-zinc-800 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-sky-400"
+              style={{ width: `${Math.min(100, sr.rate * 100)}%` }}
+            />
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-2 leading-relaxed">
+            {sr.attendedCount} compareceram de {sr.scheduledCount + sr.attendedCount} agendados
+            <br />
+            <span className="text-zinc-600">
+              etapas: “{sr.scheduledStageName}” → “{sr.attendedStageName}”
+            </span>
+          </div>
+        </>
+      ) : (
+        <p className="text-[12px] text-zinc-500 leading-relaxed">
+          Ainda não consigo medir. Preciso de uma etapa de{' '}
+          <span className="text-zinc-300">“Compareceu”/“Atendido”</span> no funil do Kommo pra
+          comparar com os agendados. Assim que ela existir e tiver leads, o índice aparece aqui.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ===========================================================================
+// FEATURE 2 · HotQueueCard — leads quentes que a IA passou pra humano e seguem
+// sem conversão nem consulta. Ordenados do mais antigo (mais em risco de
+// esfriar). É a fila de "corre atrás disso agora".
+// ===========================================================================
+function fmtWait(min: number): string {
+  if (min < 60) return `${min}min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}h${min % 60 ? ` ${min % 60}min` : ''}`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
+}
+function HotQueueCard({ data }: { data: DashboardResponse | null }) {
+  const queue = data?.hotQueue ?? [];
+  const openConversation = () => window.dispatchEvent(new CustomEvent('app:openConversation'));
+  return (
+    <div className="rounded-2xl ring-1 ring-amber-500/20 bg-zinc-900/55 backdrop-blur p-5">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="flex items-center gap-2">
+          <Flame size={16} className="text-amber-300" />
+          <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold">
+            Leads quentes esperando humano
+          </span>
+        </div>
+        {queue.length > 0 && (
+          <span className="text-[11px] text-amber-300 font-semibold tabular-nums">
+            {queue.length} na fila
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] text-zinc-500 mb-3">
+        A IA passou pra pessoa e ninguém fechou nem agendou. Do mais antigo (mais frio) pro mais
+        recente.
+      </p>
+      {queue.length === 0 ? (
+        <div className="text-[12px] text-zinc-500 italic py-4 text-center">
+          Nenhum lead quente parado. 🎉 Fila limpa.
+        </div>
+      ) : (
+        <div className="space-y-1.5 max-h-72 overflow-y-auto">
+          {queue.map((q) => {
+            const urgent = q.waitingMinutes >= 120;
+            return (
+              <button
+                key={q.leadId}
+                type="button"
+                onClick={openConversation}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg bg-zinc-950/40 hover:bg-zinc-800/50 transition text-left"
+              >
+                <span
+                  className={clsx(
+                    'h-2 w-2 rounded-full shrink-0',
+                    urgent ? 'bg-rose-400' : 'bg-amber-400',
+                  )}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] text-zinc-100 truncate">
+                    {q.contactName || q.phone || `Lead ${q.leadId}`}
+                  </div>
+                  <div className="text-[10.5px] text-zinc-500">
+                    {q.reactivations > 0 ? `reativado ${q.reactivations}× · ` : ''}
+                    esperando há {fmtWait(q.waitingMinutes)}
+                  </div>
+                </div>
+                <span
+                  className={clsx(
+                    'text-[11px] font-medium tabular-nums shrink-0',
+                    urgent ? 'text-rose-300' : 'text-amber-300',
+                  )}
+                >
+                  {fmtWait(q.waitingMinutes)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

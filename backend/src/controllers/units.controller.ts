@@ -191,6 +191,7 @@ const unitInputBase = {
   collectSourceOptions: z.array(z.string().min(1).max(50)).max(20).optional(),
   summaryCustomFieldId: z.coerce.number().int().positive().nullable().optional(),
   summaryCustomFieldName: z.string().max(200).nullable().optional(),
+  avgTicketBrl: z.coerce.number().min(0).max(1_000_000).nullable().optional(),
 };
 
 const createSchema = z.object(unitInputBase);
@@ -832,6 +833,85 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
   // Taxa: consultas agendadas pela IA sobre os leads únicos do período.
   const aiScheduledRate = uniqueLeads > 0 ? aiScheduledPeriod / uniqueLeads : 0;
 
+  // === RECEITA × CUSTO, FILA DE QUENTES, COMPARECIMENTO ===================
+  // Custo de WhatsApp (Meta cobra em USD) no período + fila de leads que a IA
+  // passou pra humano e que continuam sem conversão (o buraco por onde venda
+  // some). Ambos leves e independentes — rodam em paralelo.
+  const [whatsappCostRow, hotQueueRows] = await Promise.all([
+    prisma.$queryRaw<Array<{ cost_usd: Prisma.Decimal; volume: bigint }>>`
+      SELECT
+        COALESCE(SUM(cost_usd), 0)::numeric(14, 6) AS cost_usd,
+        COALESCE(SUM(volume),   0)::bigint         AS volume
+      FROM whatsapp_cost_daily
+      WHERE unit_id = ${id}
+        AND date >= ${periodStart}::date
+    `,
+    // Fila de quentes parados: conversas que a IA entregou pra humano
+    // (handoff_at preenchido) e que NÃO converteram nem marcaram consulta.
+    // Ordenadas pela mais antiga — a que corre mais risco de esfriar.
+    prisma.$queryRaw<Array<{
+      lead_id: string;
+      contact_name: string | null;
+      phone: string | null;
+      channel: string;
+      handoff_at: Date;
+      reactivations: number;
+    }>>`
+      SELECT c.lead_id, c.contact_name, c.phone, c.channel,
+             c.handoff_at, c.reactivations
+      FROM conversations c
+      WHERE c.unit_id = ${id}
+        AND c.handoff_at IS NOT NULL
+        AND c.converted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM spine_lead_links sll
+          WHERE sll.unit_id = c.unit_id
+            AND sll.lead_id = c.lead_id
+            AND sll.spine_id_schedule IS NOT NULL
+        )
+      ORDER BY c.handoff_at ASC
+      LIMIT 20
+    `,
+  ]);
+
+  const whatsappCostUsd = Number(whatsappCostRow[0]?.cost_usd ?? 0);
+  const whatsappMsgVolume = Number(whatsappCostRow[0]?.volume ?? 0);
+
+  // Câmbio USD→BRL pra unificar custo (LLM + WhatsApp em USD) com receita (BRL).
+  // Aproximado e configurável por env; custo de IA não precisa de precisão de
+  // tesouraria — precisa de ordem de grandeza confiável.
+  const usdToBrl = Number(process.env.USD_BRL ?? 5.4);
+  const llmCostBrl = totalCost * usdToBrl;
+  const whatsappCostBrl = whatsappCostUsd * usdToBrl;
+  const totalCostBrl = llmCostBrl + whatsappCostBrl;
+
+  // Receita potencial = consultas agendadas pela IA × ticket médio da unidade.
+  // Sem ticket configurado, `avgTicketBrl` é null e o front pede pra preencher.
+  const avgTicketBrl = unit.avgTicketBrl != null ? Number(unit.avgTicketBrl) : null;
+  const potentialRevenueBrl = avgTicketBrl != null ? aiScheduledPeriod * avgTicketBrl : null;
+  const costPerScheduledBrl = aiScheduledPeriod > 0 ? totalCostBrl / aiScheduledPeriod : null;
+  // ROI = (receita − custo) / custo. Só faz sentido com receita e custo > 0.
+  const roi =
+    potentialRevenueBrl != null && totalCostBrl > 0
+      ? (potentialRevenueBrl - totalCostBrl) / totalCostBrl
+      : null;
+
+  const hotQueue = hotQueueRows.map((r) => ({
+    leadId: r.lead_id,
+    contactName: r.contact_name,
+    phone: r.phone,
+    channel: r.channel,
+    handoffAt: r.handoff_at.toISOString(),
+    reactivations: Number(r.reactivations ?? 0),
+    waitingMinutes: Math.max(0, Math.round((now.getTime() - r.handoff_at.getTime()) / 60000)),
+  }));
+
+  // COMPARECIMENTO (show rate) — derivado do snapshot do funil. Identifica a
+  // etapa "agendado" (pipelineIntents.scheduled_meeting, se houver) e a etapa
+  // "compareceu"/"atendido" por heurística de nome. É direcional (o funil vem
+  // capado nas primeiras páginas do Kommo), não contábil.
+  const showRate = computeShowRate(funnel, unit);
+
   res.json({
     periodDays,
     kpis: {
@@ -856,6 +936,26 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       llmCallsCount,
       peakHour,
     },
+    /** Receita potencial × custo real (tudo em BRL). Feature "quanto a IA
+     *  custou e quanto trouxe". `avgTicketBrl`/`potentialRevenueBrl`/`roi`
+     *  são null quando o ticket médio não foi configurado na unidade. */
+    economics: {
+      avgTicketBrl,
+      aiScheduledPeriod,
+      potentialRevenueBrl,
+      llmCostBrl,
+      whatsappCostBrl,
+      totalCostBrl,
+      whatsappMsgVolume,
+      costPerScheduledBrl,
+      roi,
+      usdToBrl,
+    },
+    /** Fila de leads quentes que a IA passou pra humano e seguem sem conversão
+     *  nem consulta marcada — ordenados do mais antigo (mais em risco). */
+    hotQueue,
+    /** Comparecimento: agendou → compareceu, do snapshot do funil. */
+    showRate,
     /** KPIs do período ANTERIOR (mesmo comprimento, imediatamente antes).
      *  Subset reduzido — só os que alimentam badges de delta no front. */
     previousKpis: prevKpis,
@@ -1006,6 +1106,71 @@ function channelLabel(channel: string): string {
     default:
       return channel;
   }
+}
+
+// ---------------------------------------------------------------------------
+// computeShowRate — comparecimento a partir do snapshot do funil do Kommo.
+//
+// Um lead ocupa UMA etapa por vez. "Agendou" = está na etapa de agendamento
+// (pipelineIntents.scheduled_meeting, senão heurística por nome). "Compareceu"
+// = está numa etapa cujo nome bate compare/atend/realizad. Taxa =
+// compareceu / (agendou + compareceu): dos que chegaram ao agendamento, quantos
+// de fato apareceram. Direcional (o funil vem capado nas 1ªs páginas), não
+// contábil — por isso `available:false` quando não dá pra identificar a etapa.
+// ---------------------------------------------------------------------------
+type FunnelForShow = Array<{
+  pipelineId: number;
+  pipelineName: string;
+  statuses: Array<{ statusId: number; statusName: string; count: number; color: string | null }>;
+}>;
+
+function computeShowRate(
+  funnel: FunnelForShow,
+  unit: { pipelineIntents: Prisma.JsonValue },
+): {
+  available: boolean;
+  scheduledCount: number;
+  attendedCount: number;
+  rate: number;
+  scheduledStageName: string | null;
+  attendedStageName: string | null;
+} {
+  const empty = {
+    available: false,
+    scheduledCount: 0,
+    attendedCount: 0,
+    rate: 0,
+    scheduledStageName: null as string | null,
+    attendedStageName: null as string | null,
+  };
+  const statuses = funnel.flatMap((p) => p.statuses);
+  if (statuses.length === 0) return empty;
+
+  const intents = (unit.pipelineIntents ?? {}) as Record<string, unknown>;
+  const scheduledStageId =
+    typeof intents.scheduled_meeting === 'number' ? intents.scheduled_meeting : null;
+
+  const attendedRe = /(compare|atendid|realizad|compareceu)/i;
+  const scheduledRe = /(agendad|agenda|agendou|marcad)/i;
+
+  const attended = statuses.find((s) => attendedRe.test(s.statusName));
+  const scheduled =
+    (scheduledStageId != null ? statuses.find((s) => s.statusId === scheduledStageId) : undefined) ??
+    statuses.find((s) => scheduledRe.test(s.statusName));
+
+  if (!attended || !scheduled) return empty;
+
+  const scheduledCount = scheduled.count;
+  const attendedCount = attended.count;
+  const denom = scheduledCount + attendedCount;
+  return {
+    available: denom > 0,
+    scheduledCount,
+    attendedCount,
+    rate: denom > 0 ? attendedCount / denom : 0,
+    scheduledStageName: scheduled.statusName,
+    attendedStageName: attended.statusName,
+  };
 }
 
 // ---------------------------------------------------------------------------

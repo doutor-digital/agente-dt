@@ -384,6 +384,12 @@ model Unit {
   // handoff se o humano não agiu, o lead é quente e não tem consulta marcada.
   reactivationEnabled Boolean @default(false) @map("reactivation_enabled")
 
+  // TICKET MÉDIO (R$) — valor médio de uma consulta/venda desta unidade.
+  // Alimenta o card "Receita × Custo" do dashboard: receita potencial =
+  // consultas agendadas pela IA × ticket. NULL = não configurado (o card
+  // pede pra preencher em vez de inventar número).
+  avgTicketBrl Decimal? @map("avg_ticket_brl") @db.Decimal(10, 2)
+
   // COLETA DE NOME — IA pergunta o nome do lead e atualiza o título do lead
   // no Kommo via tool `atualizar_titulo_lead`. Útil quando o lead chega
   // anônimo ("Visitante", "WhatsApp Web", etc).
