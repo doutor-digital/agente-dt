@@ -360,6 +360,114 @@ function SkinAttio({ d, set }: SkinProps) {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// SKIN 8 — STUDIO (com preview AO VIVO). Split-screen: à esquerda o form em
+// vidro, à direita um celular renderizando a conversa da Sofia — atualiza
+// enquanto você digita nome/tom/saudação. É o padrão "premium" de editor de
+// persona. Rico, animado, tecnológico.
+// ════════════════════════════════════════════════════════════════════════
+const TONE_SAMPLE: Record<string, string> = {
+  friendly: 'Oi, tudo bem? 🥰 Sou a Sofia, da {c}. Como posso te chamar?',
+  balanced: 'Olá! Sou a Sofia, da {c}. Com quem eu falo?',
+  casual: 'Oii! 👋 Aqui é a Sofia, da {c}. Como é seu nome?',
+  formal: 'Olá, seja bem-vindo(a). Sou a Sofia, da {c}. Poderia me informar seu nome?',
+};
+
+function PhonePreview({ d }: { d: Demo }) {
+  const company = d.company || 'sua empresa';
+  const greet = (d.greeting?.trim() || TONE_SAMPLE[d.tone] || TONE_SAMPLE.balanced).replace('{c}', company);
+  return (
+    <div className="mx-auto w-[300px] shrink-0">
+      {/* moldura do celular */}
+      <div className="rounded-[2.2rem] bg-zinc-950 border border-zinc-800 p-2.5 shadow-2xl shadow-black/50">
+        <div className="rounded-[1.7rem] overflow-hidden bg-[#0b141a]">
+          {/* header WhatsApp */}
+          <div className="flex items-center gap-2.5 px-3.5 py-2.5 bg-[#202c33]">
+            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-emerald-400 to-teal-600 flex items-center justify-center text-white text-[13px] font-bold">
+              S
+            </div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium text-zinc-100 truncate">Sofia · {company}</div>
+              <div className="text-[10.5px] text-emerald-400">online</div>
+            </div>
+          </div>
+          {/* fundo do chat */}
+          <div
+            className="px-3 py-4 space-y-2 min-h-[340px]"
+            style={{
+              backgroundColor: '#0b141a',
+              backgroundImage:
+                'radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px)',
+              backgroundSize: '14px 14px',
+            }}
+          >
+            <div className="flex">
+              <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-[#202c33] px-3 py-2 text-[12.5px] text-zinc-100 leading-relaxed shadow">
+                {greet}
+                <div className="text-[9px] text-zinc-500 text-right mt-0.5">09:41</div>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-[#005c4b] px-3 py-2 text-[12.5px] text-zinc-50 leading-relaxed shadow">
+                Oi, é sobre a cirurgia de hérnia
+                <div className="text-[9px] text-emerald-200/70 text-right mt-0.5">09:41 ✓✓</div>
+              </div>
+            </div>
+            {/* typing — reflete a "pausa antes de responder" */}
+            <div className="flex">
+              <div className="rounded-2xl rounded-tl-sm bg-[#202c33] px-3.5 py-2.5 flex gap-1 items-center">
+                <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p className="text-center text-[11px] text-zinc-500 mt-3">
+        Prévia ao vivo · pausa de {d.delay}s antes de responder
+      </p>
+    </div>
+  );
+}
+
+function SkinStudio({ d, set }: SkinProps) {
+  return (
+    <div className="max-w-5xl mx-auto grid lg:grid-cols-[1fr_auto] gap-8 items-start">
+      {/* Form em vidro */}
+      <div className="rounded-2xl border border-white/10 bg-zinc-900/60 backdrop-blur-xl p-7">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 flex items-center justify-center">
+            <Sparkles size={18} className="text-white" />
+          </div>
+          <div>
+            <h2 className="text-[17px] font-semibold text-zinc-50 tracking-tight">Persona da IA</h2>
+            <p className="text-[12.5px] text-zinc-400">Edite à esquerda, veja a conversa mudar à direita.</p>
+          </div>
+        </div>
+        <div className="space-y-4">
+          {FIELDS.map((f) => (
+            <div key={f.key}>
+              <label className="text-[12.5px] font-medium text-zinc-300 mb-1.5 block">{f.label}</label>
+              <Control
+                f={f}
+                d={d}
+                set={set}
+                inputCls="w-full h-10 px-3.5 rounded-xl bg-white/[0.04] border border-white/10 text-[13px] text-zinc-100 outline-none focus:border-indigo-400/60 focus:bg-white/[0.06] focus:ring-4 focus:ring-indigo-500/10 transition"
+              />
+              {f.hint && <p className="text-[11.5px] text-zinc-500 mt-1">{f.hint}</p>}
+            </div>
+          ))}
+        </div>
+      </div>
+      {/* Preview ao vivo */}
+      <div className="lg:sticky lg:top-24">
+        <PhonePreview d={d} />
+      </div>
+    </div>
+  );
+}
+
 // ── Control — renderiza input/select/number com a classe do skin ────────────
 function Control({
   f,
@@ -412,13 +520,14 @@ function Control({
 
 // ── Registry ────────────────────────────────────────────────────────────────
 const SKINS: { id: number; name: string; sub: string; dark: boolean; render: (p: SkinProps) => ReactNode }[] = [
-  { id: 1, name: 'Linear', sub: 'Dark · hairline · tipografia', dark: true, render: (p) => <SkinLinear {...p} /> },
-  { id: 2, name: 'Stripe', sub: 'Claro · respiro · SaaS clássico', dark: false, render: (p) => <SkinStripe {...p} /> },
-  { id: 3, name: 'Vercel', sub: 'Preto & branco · alto contraste', dark: true, render: (p) => <SkinVercel {...p} /> },
-  { id: 4, name: 'Notion', sub: 'Claro-quente · amigável · ícones', dark: false, render: (p) => <SkinNotion {...p} /> },
-  { id: 5, name: 'Apple Settings', sub: 'Grupos inset · redondo', dark: true, render: (p) => <SkinApple {...p} /> },
-  { id: 6, name: 'Superhuman', sub: 'Denso · pro · command', dark: true, render: (p) => <SkinCommand {...p} /> },
-  { id: 7, name: 'Attio', sub: 'Vidro · gradiente sutil · moderno', dark: true, render: (p) => <SkinAttio {...p} /> },
+  { id: 1, name: 'Studio + Preview', sub: 'Split · conversa ao vivo · premium', dark: true, render: (p) => <SkinStudio {...p} /> },
+  { id: 2, name: 'Attio', sub: 'Vidro · gradiente sutil · moderno', dark: true, render: (p) => <SkinAttio {...p} /> },
+  { id: 3, name: 'Superhuman', sub: 'Denso · pro · command', dark: true, render: (p) => <SkinCommand {...p} /> },
+  { id: 4, name: 'Stripe', sub: 'Claro · respiro · SaaS clássico', dark: false, render: (p) => <SkinStripe {...p} /> },
+  { id: 5, name: 'Vercel', sub: 'Preto & branco · alto contraste', dark: true, render: (p) => <SkinVercel {...p} /> },
+  { id: 6, name: 'Notion', sub: 'Claro-quente · amigável · ícones', dark: false, render: (p) => <SkinNotion {...p} /> },
+  { id: 7, name: 'Apple Settings', sub: 'Grupos inset · redondo', dark: true, render: (p) => <SkinApple {...p} /> },
+  { id: 8, name: 'Linear', sub: 'Dark · hairline · tipografia', dark: true, render: (p) => <SkinLinear {...p} /> },
 ];
 
 export function WizardFormGallery() {
