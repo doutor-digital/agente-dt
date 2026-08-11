@@ -205,6 +205,11 @@ export function createChatModel(
       temperature: overrides.temperature ?? unit.openaiTemperature ?? 0,
       maxOutputTokens: overrides.maxTokens ?? unit.openaiMaxTokens ?? 1024,
       maxRetries: OPENAI_MAX_RETRIES,
+      // DESLIGA o "thinking" do 2.5-flash. Ligado, ele injeta blocos `thought` e
+      // `tool_code print(default_api.x(...))` COMO TEXTO — que vazavam no campo
+      // "Resposta da IA" e chegavam ao paciente, além de não virarem tool-call
+      // nativo. thinkingBudget:0 = resposta direta + function-calling nativo.
+      thinkingConfig: { thinkingBudget: 0, includeThoughts: false },
     });
   }
   return createChatOpenAI(unit, overrides);

@@ -81,6 +81,33 @@ export function buildThreadId(unitSlug: string, leadId: string | number): string
   return `unit-${unitSlug}-lead-${leadId}`;
 }
 
+/**
+ * Extrai só o TEXTO visível da resposta do modelo. OpenAI/Claude devolvem
+ * `content` como string; o Gemini devolve um ARRAY de partes. Sem isto, um
+ * `JSON.stringify(content)` jogava o array cru (`[{"type":"text",...}]`) no
+ * campo "Resposta da IA" e chegava ao paciente. Ignora partes de raciocínio
+ * (`thought`) e chamadas de código, junta só o texto de fato.
+ */
+function aiTextFromContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) => {
+        if (typeof p === 'string') return p;
+        if (p && typeof p === 'object') {
+          const o = p as Record<string, unknown>;
+          if (o.thought) return '';
+          if ('functionCall' in o || 'executableCode' in o || 'codeExecutionResult' in o) return '';
+          if (typeof o.text === 'string') return o.text;
+        }
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+  return '';
+}
+
 // ---------------------------------------------------------------------------
 // GEMINI — higieniza os schemas das tools.
 //
@@ -292,8 +319,7 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
 
     const toolCalls = response.tool_calls ?? [];
     if (toolCalls.length === 0) {
-      const text =
-        typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+      const text = aiTextFromContent(response.content);
       await recorder.step({
         kind: 'THINKING',
         title: 'IA respondeu (sem tool call)',
