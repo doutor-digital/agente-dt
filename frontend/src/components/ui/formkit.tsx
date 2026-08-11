@@ -67,42 +67,53 @@ export function FeatureCard({
   return (
     <section
       className={clsx(
-        'border-t border-zinc-800/50 pt-7 first:border-t-0 transition-opacity',
-        disabled && 'opacity-60',
+        'rounded-xl border transition-colors',
+        disabled
+          ? 'border-zinc-800/60 bg-zinc-950/30 opacity-70'
+          : active
+            ? 'border-brand-500/30 bg-brand-500/[0.04] shadow-sm shadow-brand-500/5'
+            : 'border-zinc-800 bg-zinc-900/40 hover:border-zinc-700',
       )}
     >
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="w-full flex items-start gap-4 text-left group"
+        className="w-full flex items-center gap-3 p-4 text-left"
         disabled={disabled}
       >
+        <span
+          className={clsx(
+            'shrink-0 w-9 h-9 rounded-lg flex items-center justify-center',
+            active ? 'bg-brand-500/12 ring-1 ring-brand-500/20' : 'bg-zinc-800/70',
+          )}
+        >
+          {icon}
+        </span>
         <div className="flex-1 min-w-0">
-          <h3 className="text-[15px] font-semibold text-zinc-100 tracking-tight flex items-center gap-2">
-            <span className="text-zinc-600 shrink-0">{icon}</span>
+          <div className="text-[13px] font-semibold text-zinc-100 flex items-center gap-2">
             {title}
             {comingSoonNote && (
               <span className="text-[9px] uppercase tracking-wider bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded">
                 em breve
               </span>
             )}
-          </h3>
-          <p className="text-[13px] text-zinc-500 mt-1 leading-relaxed max-w-xl">{subtitle}</p>
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-0.5">{subtitle}</div>
         </div>
         {!alwaysOn && !disabled && onToggle && (
-          <div onClick={(e) => e.stopPropagation()} className="mt-0.5 shrink-0">
+          <div onClick={(e) => e.stopPropagation()}>
             <Toggle value={enabled} onChange={onToggle} />
           </div>
         )}
-        {!alwaysOn && (
-          <span className="mt-1 text-zinc-600 shrink-0">
-            {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          </span>
+        {open || alwaysOn ? (
+          <ChevronDown size={14} className="text-zinc-600 shrink-0" />
+        ) : (
+          <ChevronRight size={14} className="text-zinc-600 shrink-0" />
         )}
       </button>
       {(open || alwaysOn) && (active || disabled) && (
-        <div className="mt-5">
-          {comingSoonNote && <div className="text-[12px] text-zinc-500 italic mb-3">{comingSoonNote}</div>}
+        <div className="px-4 pb-4 pt-1 space-y-3 border-t border-zinc-800/40">
+          {comingSoonNote && <div className="text-[11px] text-zinc-500 italic">{comingSoonNote}</div>}
           {children}
         </div>
       )}

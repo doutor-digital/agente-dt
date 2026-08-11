@@ -34,10 +34,12 @@ import {
   Plus,
   Repeat,
   Save,
+  Sparkles,
   TestTube,
   Trash2,
   UserCog,
 } from 'lucide-react';
+import clsx from 'clsx';
 import {
   FeatureCard,
   TextField,
@@ -100,9 +102,9 @@ type WizardDraft = Pick<
 // no backend (prompt-composer). Adicionar uma nova aqui + no composer.
 export const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '', label: 'Genérica (sem categoria)' },
-  { value: 'saude', label: 'Saúde (Dra. Sofia)' },
-  { value: 'energia_solar', label: 'Energia Solar (Dr. João)' },
-  { value: 'advocacia', label: 'Advocacia (Ana)' },
+  { value: 'saude', label: '🩺 Saúde (Dra. Sofia)' },
+  { value: 'energia_solar', label: '☀️ Energia Solar (Dr. João)' },
+  { value: 'advocacia', label: '⚖️ Advocacia (Ana)' },
 ];
 
 function unitToDraft(u: Unit): WizardDraft {
@@ -236,26 +238,32 @@ export function WizardPanel() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-8 pb-24 space-y-0">
-        {/* Header — editorial, contido. Sticky com barra de salvar. */}
-        <div className="flex items-end justify-between gap-4 sticky top-0 bg-zinc-950/95 backdrop-blur pt-7 pb-5 z-10 border-b border-zinc-800/60">
+      <div className="max-w-4xl mx-auto p-6 space-y-4">
+        {/* Header sticky */}
+        <div className="flex items-center justify-between sticky top-0 bg-zinc-950/95 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
           <div>
-            <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500 mb-2">Configuração do agente</div>
-            <h1 className="text-2xl font-semibold text-zinc-50 tracking-tight">Persona &amp; comportamento</h1>
+            <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
+              <Sparkles size={16} className="text-zinc-500" />
+              Configurar a IA
+            </h1>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Modo guiado: ative só o que quer, preencha os campos, e salve. A IA usa as novas
+              configurações na próxima mensagem. 🚀
+            </p>
           </div>
           <button
             onClick={handleSave}
             disabled={!dirty || saving}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-zinc-100 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-zinc-900 text-[13px] font-medium transition-colors shrink-0"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-brand-600 hover:bg-brand-500 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors shadow-lg shadow-brand-500/20"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-            {saving ? 'Salvando…' : dirty ? 'Salvar' : 'Salvo'}
+            {saving ? 'Salvando…' : dirty ? 'Salvar alterações' : 'Salvo'}
           </button>
         </div>
 
         {/* 1. PERSONA */}
         <FeatureCard
-          icon={<UserCog size={16} className="text-zinc-500" />}
+          icon={<UserCog size={16} className="text-brand-300" />}
           title="Persona da IA"
           subtitle="Quem é o agente, como ele fala."
           enabled
@@ -274,9 +282,9 @@ export function WizardPanel() {
               onChange={(v) => update({ personaTone: (v || null) as WizardDraft['personaTone'] })}
               options={[
                 { value: '', label: 'Equilibrado (padrão)' },
-                { value: 'friendly', label: 'Amigável e caloroso' },
-                { value: 'casual', label: 'Descontraído' },
-                { value: 'formal', label: 'Formal e profissional' },
+                { value: 'friendly', label: '😊 Amigável e caloroso' },
+                { value: 'casual', label: '🤙 Descontraído' },
+                { value: 'formal', label: '🎩 Formal e profissional' },
               ]}
             />
           </div>
@@ -303,9 +311,9 @@ export function WizardPanel() {
                 update({ personaResponseLength: v as WizardDraft['personaResponseLength'] })
               }
               options={[
-                { value: 'curta', label: 'Curta (1 frase)' },
-                { value: 'normal', label: 'Normal (1-3 frases)' },
-                { value: 'detalhada', label: 'Detalhada (parágrafo)' },
+                { value: 'curta', label: '✂️ Curta (1 frase)' },
+                { value: 'normal', label: '📝 Normal (1-3 frases)' },
+                { value: 'detalhada', label: '📄 Detalhada (parágrafo)' },
               ]}
             />
             <SelectField
@@ -315,10 +323,10 @@ export function WizardPanel() {
                 update({ personaLanguage: v as WizardDraft['personaLanguage'] })
               }
               options={[
-                { value: 'pt-BR', label: 'Português (BR)' },
-                { value: 'en-US', label: 'English (US)' },
-                { value: 'es-ES', label: 'Español' },
-                { value: 'fr-FR', label: 'Français' },
+                { value: 'pt-BR', label: '🇧🇷 Português (BR)' },
+                { value: 'en-US', label: '🇺🇸 English (US)' },
+                { value: 'es-ES', label: '🇪🇸 Español' },
+                { value: 'fr-FR', label: '🇫🇷 Français' },
               ]}
             />
             <NumberField
@@ -350,7 +358,7 @@ export function WizardPanel() {
 
         {/* 1b. TRIAGEM */}
         <FeatureCard
-          icon={<ClipboardList size={16} className="text-zinc-500" />}
+          icon={<ClipboardList size={16} className="text-sky-400" />}
           title="Triagem"
           subtitle="O que a IA precisa descobrir antes de conduzir o cliente adiante."
           enabled={draft.triageEnabled}
@@ -375,7 +383,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 2. AUTO-QUALIFICAÇÃO */}
         <FeatureCard
-          icon={<Flame size={16} className="text-zinc-500" />}
+          icon={<Flame size={16} className="text-orange-400" />}
           title="Auto-qualificação Quente/Frio"
           subtitle="A IA aplica tags automaticamente conforme o interesse do cliente."
           enabled={draft.qualificationEnabled}
@@ -403,7 +411,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 3. HANDOFF HUMANO */}
         <FeatureCard
-          icon={<PhoneCall size={16} className="text-zinc-500" />}
+          icon={<PhoneCall size={16} className="text-rose-400" />}
           title="Handoff humano automático"
           subtitle="Quando o cliente usa certas palavras, a IA pausa e chama um humano."
           enabled={draft.handoffEnabled}
@@ -422,7 +430,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 3a. ETAPA APÓS AGENDAR */}
         <FeatureCard
-          icon={<CalendarCheck size={16} className="text-zinc-500" />}
+          icon={<CalendarCheck size={16} className="text-emerald-400" />}
           title="Etapa depois de agendar"
           subtitle="Para onde o lead vai quando a consulta é marcada de fato."
           enabled={!!(draft.pipelineIntents as Record<string, number> | null)?.scheduled_meeting}
@@ -453,7 +461,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 3b. RESUMO EM CAMPO CUSTOM */}
         <FeatureCard
-          icon={<BookText size={16} className="text-zinc-500" />}
+          icon={<BookText size={16} className="text-amber-400" />}
           title="Resumo no campo do Kommo"
           subtitle="Quando a IA gera resumo (handoff/transfer), também grava num custom field do lead."
           enabled={!!draft.summaryCustomFieldId}
@@ -514,7 +522,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 8. FOLLOW-UP */}
         <FeatureCard
-          icon={<Repeat size={16} className="text-zinc-500" />}
+          icon={<Repeat size={16} className="text-violet-400" />}
           title="Follow-up educado"
           subtitle="A IA termina conversas inacabadas com um follow-up cordial."
           enabled={draft.followUpEnabled}
