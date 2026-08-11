@@ -48,6 +48,7 @@ import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { AgentState, type AgentStateType } from './state.js';
 import { buildTools } from './tools.js';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig } from './config.js';
 import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit } from './prompt-composer.js';
@@ -78,6 +79,47 @@ export async function getCheckpointer(): Promise<PostgresSaver> {
 // ---------------------------------------------------------------------------
 export function buildThreadId(unitSlug: string, leadId: string | number): string {
   return `unit-${unitSlug}-lead-${leadId}`;
+}
+
+// ---------------------------------------------------------------------------
+// GEMINI — higieniza os schemas das tools.
+//
+// O Gemini rejeita (400 Bad Request) várias palavras de JSON-Schema que o Zod
+// gera: `exclusiveMinimum` (de `.int().positive()`), `additionalProperties`,
+// `$schema`, etc. OpenAI e Claude aceitam; o Gemini não. Como a validação REAL
+// dos argumentos continua no `ToolNode(tools)` (Zod original), aqui a gente só
+// simplifica o schema que o MODELO enxerga — sem perder segurança na execução.
+// ---------------------------------------------------------------------------
+const GEMINI_SCHEMA_STRIP = new Set([
+  'exclusiveMinimum', 'exclusiveMaximum', 'minimum', 'maximum', 'multipleOf',
+  '$schema', 'additionalProperties', 'default', 'const', 'patternProperties',
+  'pattern', 'minLength', 'maxLength', 'format', 'minItems', 'maxItems',
+  'minProperties', 'maxProperties',
+]);
+function stripGeminiUnsupported(node: unknown): void {
+  if (Array.isArray(node)) {
+    node.forEach(stripGeminiUnsupported);
+    return;
+  }
+  if (node && typeof node === 'object') {
+    const obj = node as Record<string, unknown>;
+    for (const k of Object.keys(obj)) {
+      if (GEMINI_SCHEMA_STRIP.has(k)) delete obj[k];
+      else stripGeminiUnsupported(obj[k]);
+    }
+  }
+}
+function toolsParaGemini(tools: ReturnType<typeof buildTools>): unknown[] {
+  return tools.map((t) => {
+    let js: Record<string, unknown>;
+    try {
+      js = zodToJsonSchema(t.schema as never, { $refStrategy: 'none' }) as Record<string, unknown>;
+    } catch {
+      js = { type: 'object', properties: {} };
+    }
+    stripGeminiUnsupported(js);
+    return { name: t.name, description: t.description, schema: js };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -154,9 +196,14 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
   // Cast pra interface mínima — `bindTools` devolve um Runnable que não
   // bate com o tipo estrito do ChatOpenAI, mas a forma de `.invoke(messages, opts)`
   // é a mesma e é o que `invokeChatModel` precisa.
-  const model = (tools.length > 0 ? baseModel.bindTools(tools) : baseModel) as unknown as Parameters<
-    typeof invokeChatModel
-  >[0]['model'];
+  // No Gemini, liga os schemas HIGIENIZADOS (sem exclusiveMinimum etc). A
+  // execução segue no ToolNode(tools) com o Zod original — validação intacta.
+  const toolsParaModelo = useGoogle ? toolsParaGemini(tools) : tools;
+  const model = (
+    tools.length > 0
+      ? (baseModel as unknown as { bindTools: (t: unknown[]) => unknown }).bindTools(toolsParaModelo)
+      : baseModel
+  ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
 
   // -------------------------------------------------------------------------
   // NODE: agent
