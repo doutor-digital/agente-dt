@@ -15,16 +15,17 @@ import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
-// Tokens do skin — um lugar só. Mexer aqui reflete em tudo.
+// Tokens do skin — LINEAR: input transparente, borda sutil, sem anel colorido.
+// Cor = estado, não decoração. Um lugar só; mexer aqui reflete em tudo.
 const INPUT =
-  'w-full px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] text-zinc-100 outline-none transition ' +
-  'placeholder:text-zinc-600 focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/15';
-// ── FieldRow — linha estilo "Stripe Settings": rótulo + explicação à ESQUERDA,
-//    controle à DIREITA, um por linha. Empilha no mobile. É o que dá a cara de
-//    settings profissional (em vez de campos amontoados num grid).
+  'w-full px-3 py-2 rounded-md border border-zinc-800 bg-transparent text-[13px] text-zinc-100 outline-none transition ' +
+  'placeholder:text-zinc-600 focus:border-zinc-600 hover:border-zinc-700';
+// ── FieldRow — linha de settings: rótulo + explicação à ESQUERDA, controle à
+//    DIREITA, um por linha, com hairline dividindo (estilo Linear). Empilha no
+//    mobile. Dá a cara de produto enxuto em vez de campos amontoados num grid.
 function FieldRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
-    <div className="grid gap-1.5 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:gap-6 sm:items-start">
+    <div className="grid gap-1.5 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] sm:gap-6 sm:items-start py-3.5 border-b border-zinc-800/40 last:border-b-0 last:pb-0">
       <div className="sm:pt-2">
         <label className="text-[13px] font-medium text-zinc-200">{label}</label>
         {hint && <p className="text-[11.5px] text-zinc-500 mt-0.5 leading-relaxed">{hint}</p>}

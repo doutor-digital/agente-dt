@@ -243,8 +243,8 @@ export function WizardPanel() {
         <div className="flex items-center justify-between sticky top-0 bg-zinc-950/95 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
           <div>
             <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
-              <Sparkles size={18} className="text-brand-300" />
-              ✨ Configurar a IA
+              <Sparkles size={16} className="text-zinc-500" />
+              Configurar a IA
             </h1>
             <p className="text-xs text-zinc-500 mt-0.5">
               Modo guiado: ative só o que quer, preencha os campos, e salve. A IA usa as novas
@@ -264,7 +264,7 @@ export function WizardPanel() {
         {/* 1. PERSONA */}
         <FeatureCard
           icon={<UserCog size={16} className="text-brand-300" />}
-          title="🎭 Persona da IA"
+          title="Persona da IA"
           subtitle="Quem é o agente, como ele fala."
           enabled
           alwaysOn
@@ -359,7 +359,7 @@ export function WizardPanel() {
         {/* 1b. TRIAGEM */}
         <FeatureCard
           icon={<ClipboardList size={16} className="text-sky-400" />}
-          title="🩺 Triagem"
+          title="Triagem"
           subtitle="O que a IA precisa descobrir antes de conduzir o cliente adiante."
           enabled={draft.triageEnabled}
           onToggle={(v) => update({ triageEnabled: v })}
@@ -384,7 +384,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
         {/* 2. AUTO-QUALIFICAÇÃO */}
         <FeatureCard
           icon={<Flame size={16} className="text-orange-400" />}
-          title="🔥 Auto-qualificação Quente/Frio"
+          title="Auto-qualificação Quente/Frio"
           subtitle="A IA aplica tags automaticamente conforme o interesse do cliente."
           enabled={draft.qualificationEnabled}
           onToggle={(v) => update({ qualificationEnabled: v })}
@@ -412,7 +412,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
         {/* 3. HANDOFF HUMANO */}
         <FeatureCard
           icon={<PhoneCall size={16} className="text-rose-400" />}
-          title="🙋‍♀️ Handoff humano automático"
+          title="Handoff humano automático"
           subtitle="Quando o cliente usa certas palavras, a IA pausa e chama um humano."
           enabled={draft.handoffEnabled}
           onToggle={(v) => update({ handoffEnabled: v })}
@@ -431,7 +431,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
         {/* 3a. ETAPA APÓS AGENDAR */}
         <FeatureCard
           icon={<CalendarCheck size={16} className="text-emerald-400" />}
-          title="📅 Etapa depois de agendar"
+          title="Etapa depois de agendar"
           subtitle="Para onde o lead vai quando a consulta é marcada de fato."
           enabled={!!(draft.pipelineIntents as Record<string, number> | null)?.scheduled_meeting}
           alwaysOn
@@ -462,7 +462,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
         {/* 3b. RESUMO EM CAMPO CUSTOM */}
         <FeatureCard
           icon={<BookText size={16} className="text-amber-400" />}
-          title="📝 Resumo no campo do Kommo"
+          title="Resumo no campo do Kommo"
           subtitle="Quando a IA gera resumo (handoff/transfer), também grava num custom field do lead."
           enabled={!!draft.summaryCustomFieldId}
           alwaysOn
@@ -523,7 +523,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
         {/* 8. FOLLOW-UP */}
         <FeatureCard
           icon={<Repeat size={16} className="text-violet-400" />}
-          title="🔁 Follow-up educado"
+          title="Follow-up educado"
           subtitle="A IA termina conversas inacabadas com um follow-up cordial."
           enabled={draft.followUpEnabled}
           onToggle={(v) => update({ followUpEnabled: v })}
@@ -553,7 +553,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
         {/* 9. A/B PROMPTS (placeholder) */}
         <FeatureCard
           icon={<TestTube size={16} className="text-zinc-500" />}
-          title="🧪 A/B test de prompts"
+          title="A/B test de prompts"
           subtitle="Compare versões do prompt e veja qual converte mais."
           enabled={false}
           disabled
