@@ -121,44 +121,27 @@ export function AgentWorkspace() {
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* ── Barra de seções: passos numerados, estilo "setup guiado" ──────── */}
       <div className="shrink-0 border-b border-zinc-800 px-4 pt-3.5 pb-0">
-        <div className="flex items-center gap-1 overflow-x-auto pb-3.5">
-          {SEGMENTS.map((s, i) => {
+        <nav className="flex items-center gap-6 overflow-x-auto -mb-px">
+          {SEGMENTS.map((s) => {
             const Icon = s.icon;
             const active = s.id === segId;
-            const done = i < stepIndex;
             return (
-              <div key={s.id} className="flex items-center shrink-0">
-                <button
-                  type="button"
-                  onClick={() => goSeg(s.id)}
-                  className={clsx(
-                    'inline-flex items-center gap-2 pl-2 pr-3.5 py-1.5 text-[13px] rounded-full whitespace-nowrap transition-colors border',
-                    active
-                      ? 'border-brand-500/40 bg-brand-500/12 text-brand-200 font-medium'
-                      : 'border-transparent text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
-                  )}
-                >
-                  <span
-                    className={clsx(
-                      'w-5 h-5 rounded-full flex items-center justify-center shrink-0',
-                      active
-                        ? 'bg-brand-500/20 text-brand-300'
-                        : done
-                          ? 'bg-zinc-800 text-zinc-300'
-                          : 'bg-zinc-800/70 text-zinc-500',
-                    )}
-                  >
-                    <Icon size={12} />
-                  </span>
-                  {s.label}
-                </button>
-                {i < SEGMENTS.length - 1 && (
-                  <span className="w-4 h-px bg-zinc-800 mx-0.5 shrink-0" />
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => goSeg(s.id)}
+                className={clsx(
+                  'relative inline-flex items-center gap-2 py-3 text-[13px] whitespace-nowrap transition-colors',
+                  active ? 'text-zinc-100 font-medium' : 'text-zinc-500 hover:text-zinc-300',
                 )}
-              </div>
+              >
+                <Icon size={14} className={active ? 'text-zinc-300' : 'text-zinc-600'} />
+                {s.label}
+                {active && <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-brand-500" />}
+              </button>
             );
           })}
-        </div>
+        </nav>
 
         <div className="flex items-center justify-between gap-4 pb-3">
           <p className="text-[12px] text-zinc-500">{seg.hint}</p>

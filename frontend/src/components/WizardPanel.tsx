@@ -102,9 +102,9 @@ type WizardDraft = Pick<
 // no backend (prompt-composer). Adicionar uma nova aqui + no composer.
 export const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '', label: 'Genérica (sem categoria)' },
-  { value: 'saude', label: '🩺 Saúde (Dra. Sofia)' },
-  { value: 'energia_solar', label: '☀️ Energia Solar (Dr. João)' },
-  { value: 'advocacia', label: '⚖️ Advocacia (Ana)' },
+  { value: 'saude', label: 'Saúde (Dra. Sofia)' },
+  { value: 'energia_solar', label: 'Energia Solar (Dr. João)' },
+  { value: 'advocacia', label: 'Advocacia (Ana)' },
 ];
 
 function unitToDraft(u: Unit): WizardDraft {
@@ -263,7 +263,7 @@ export function WizardPanel() {
 
         {/* 1. PERSONA */}
         <FeatureCard
-          icon={<UserCog size={16} className="text-brand-300" />}
+          icon={<UserCog size={16} className="text-zinc-500" />}
           title="Persona da IA"
           subtitle="Quem é o agente, como ele fala."
           enabled
@@ -282,9 +282,9 @@ export function WizardPanel() {
               onChange={(v) => update({ personaTone: (v || null) as WizardDraft['personaTone'] })}
               options={[
                 { value: '', label: 'Equilibrado (padrão)' },
-                { value: 'friendly', label: '😊 Amigável e caloroso' },
-                { value: 'casual', label: '🤙 Descontraído' },
-                { value: 'formal', label: '🎩 Formal e profissional' },
+                { value: 'friendly', label: 'Amigável e caloroso' },
+                { value: 'casual', label: 'Descontraído' },
+                { value: 'formal', label: 'Formal e profissional' },
               ]}
             />
           </div>
@@ -311,9 +311,9 @@ export function WizardPanel() {
                 update({ personaResponseLength: v as WizardDraft['personaResponseLength'] })
               }
               options={[
-                { value: 'curta', label: '✂️ Curta (1 frase)' },
-                { value: 'normal', label: '📝 Normal (1-3 frases)' },
-                { value: 'detalhada', label: '📄 Detalhada (parágrafo)' },
+                { value: 'curta', label: 'Curta (1 frase)' },
+                { value: 'normal', label: 'Normal (1-3 frases)' },
+                { value: 'detalhada', label: 'Detalhada (parágrafo)' },
               ]}
             />
             <SelectField
@@ -323,10 +323,10 @@ export function WizardPanel() {
                 update({ personaLanguage: v as WizardDraft['personaLanguage'] })
               }
               options={[
-                { value: 'pt-BR', label: '🇧🇷 Português (BR)' },
-                { value: 'en-US', label: '🇺🇸 English (US)' },
-                { value: 'es-ES', label: '🇪🇸 Español' },
-                { value: 'fr-FR', label: '🇫🇷 Français' },
+                { value: 'pt-BR', label: 'Português (BR)' },
+                { value: 'en-US', label: 'English (US)' },
+                { value: 'es-ES', label: 'Español' },
+                { value: 'fr-FR', label: 'Français' },
               ]}
             />
             <NumberField
@@ -358,7 +358,7 @@ export function WizardPanel() {
 
         {/* 1b. TRIAGEM */}
         <FeatureCard
-          icon={<ClipboardList size={16} className="text-sky-400" />}
+          icon={<ClipboardList size={16} className="text-zinc-500" />}
           title="Triagem"
           subtitle="O que a IA precisa descobrir antes de conduzir o cliente adiante."
           enabled={draft.triageEnabled}
@@ -383,7 +383,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 2. AUTO-QUALIFICAÇÃO */}
         <FeatureCard
-          icon={<Flame size={16} className="text-orange-400" />}
+          icon={<Flame size={16} className="text-zinc-500" />}
           title="Auto-qualificação Quente/Frio"
           subtitle="A IA aplica tags automaticamente conforme o interesse do cliente."
           enabled={draft.qualificationEnabled}
@@ -411,7 +411,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 3. HANDOFF HUMANO */}
         <FeatureCard
-          icon={<PhoneCall size={16} className="text-rose-400" />}
+          icon={<PhoneCall size={16} className="text-zinc-500" />}
           title="Handoff humano automático"
           subtitle="Quando o cliente usa certas palavras, a IA pausa e chama um humano."
           enabled={draft.handoffEnabled}
@@ -430,7 +430,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 3a. ETAPA APÓS AGENDAR */}
         <FeatureCard
-          icon={<CalendarCheck size={16} className="text-emerald-400" />}
+          icon={<CalendarCheck size={16} className="text-zinc-500" />}
           title="Etapa depois de agendar"
           subtitle="Para onde o lead vai quando a consulta é marcada de fato."
           enabled={!!(draft.pipelineIntents as Record<string, number> | null)?.scheduled_meeting}
@@ -461,7 +461,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 3b. RESUMO EM CAMPO CUSTOM */}
         <FeatureCard
-          icon={<BookText size={16} className="text-amber-400" />}
+          icon={<BookText size={16} className="text-zinc-500" />}
           title="Resumo no campo do Kommo"
           subtitle="Quando a IA gera resumo (handoff/transfer), também grava num custom field do lead."
           enabled={!!draft.summaryCustomFieldId}
@@ -522,7 +522,7 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
 
         {/* 8. FOLLOW-UP */}
         <FeatureCard
-          icon={<Repeat size={16} className="text-violet-400" />}
+          icon={<Repeat size={16} className="text-zinc-500" />}
           title="Follow-up educado"
           subtitle="A IA termina conversas inacabadas com um follow-up cordial."
           enabled={draft.followUpEnabled}
