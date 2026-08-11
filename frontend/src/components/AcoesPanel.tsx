@@ -990,7 +990,7 @@ function ActionEditor({
           {/* Fazer — lista de steps. Cada step tem seletor de tipo + params próprios. */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+              <label className="text-[12px] font-medium text-zinc-300 block">
                 Fazer ({draft.steps.length} ação{draft.steps.length !== 1 ? 'ões' : ''})
               </label>
               <button
@@ -1138,7 +1138,7 @@ function TagsPicker({
 
   return (
     <div className="space-y-2">
-      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+      <label className="text-[12px] font-medium text-zinc-300 block">
         Tags a aplicar
       </label>
 
@@ -1294,7 +1294,7 @@ function StagePicker({
 }) {
   return (
     <div className="space-y-2">
-      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+      <label className="text-[12px] font-medium text-zinc-300 block">
         Mover pra qual etapa
       </label>
 
@@ -1472,7 +1472,7 @@ function StepEditor({
       )}
       {step.kind === 'summarize_to_note' && (
         <div className="space-y-1.5">
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+          <label className="text-[12px] font-medium text-zinc-300 block">
             Foco do resumo (opcional)
           </label>
           <input
@@ -1490,7 +1490,7 @@ function StepEditor({
       )}
       {step.kind === 'send_message' && (
         <div className="space-y-1.5">
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+          <label className="text-[12px] font-medium text-zinc-300 block">
             Mensagem que a IA vai enviar
           </label>
           <textarea
@@ -1514,7 +1514,7 @@ function StepEditor({
       )}
       {step.kind === 'respond_with_intent' && (
         <div className="space-y-1.5">
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+          <label className="text-[12px] font-medium text-zinc-300 block">
             Orientação pra resposta (intenção)
           </label>
           <textarea
@@ -1541,7 +1541,7 @@ function StepEditor({
       {step.kind === 'create_task' && (
         <div className="space-y-2">
           <div className="space-y-1.5">
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+            <label className="text-[12px] font-medium text-zinc-300 block">
               Tarefa (o que o SDR vai fazer)
             </label>
             <input
@@ -1554,7 +1554,7 @@ function StepEditor({
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+            <label className="text-[12px] font-medium text-zinc-300 block">
               Prazo
             </label>
             <select
@@ -1603,7 +1603,7 @@ function StepEditor({
       )}
       {step.kind === 'set_lead_value' && (
         <div className="space-y-1.5">
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+          <label className="text-[12px] font-medium text-zinc-300 block">
             Valor do lead (R$)
           </label>
           <div className="relative">
@@ -1627,7 +1627,7 @@ function StepEditor({
       )}
       {step.kind === 'mark_lead_status' && (
         <div className="space-y-2">
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+          <label className="text-[12px] font-medium text-zinc-300 block">
             Fechar como
           </label>
           <div className="grid grid-cols-2 gap-2">
@@ -1689,7 +1689,7 @@ function StepEditor({
             acionado nos turnos seguintes. A IA não anuncia ao paciente.
           </div>
           <div>
-            <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block mb-1.5">
+            <label className="text-[12px] font-medium text-zinc-300 block mb-1.5">
               Mover pra etapa (opcional)
             </label>
             <p className="text-[10px] text-zinc-500 mb-2 leading-tight">
@@ -1781,7 +1781,7 @@ function MultiStagePicker({
 
   return (
     <div className="space-y-2">
-      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+      <label className="text-[12px] font-medium text-zinc-300 block">
         Etapas onde a IA fica silenciosa
       </label>
 
@@ -1877,7 +1877,7 @@ function UserPickerInline({
   const users = usersData?.users ?? [];
   return (
     <div className="space-y-1.5">
-      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+      <label className="text-[12px] font-medium text-zinc-300 block">
         {label}
       </label>
       {loading && !usersData ? (
@@ -1928,7 +1928,7 @@ function LossReasonPicker({
   const reasons = lossReasonsData?.reasons ?? [];
   return (
     <div className="space-y-1.5">
-      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+      <label className="text-[12px] font-medium text-zinc-300 block">
         Motivo da perda (opcional)
       </label>
       {loading && !lossReasonsData ? (
@@ -1987,7 +1987,7 @@ function SingleTagPicker({
   }, [available, query]);
   return (
     <div className="space-y-2">
-      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+      <label className="text-[12px] font-medium text-zinc-300 block">
         Tag a remover
       </label>
       {available.length > 5 && (
@@ -2086,7 +2086,7 @@ function PipelinePicker({
   const selectedPipeline = pipelines.find((p) => p.id === selectedPipelineId);
   return (
     <div className="space-y-2">
-      <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block">
+      <label className="text-[12px] font-medium text-zinc-300 block">
         Funil destino
       </label>
       {loading && (
@@ -2121,7 +2121,7 @@ function PipelinePicker({
           </select>
           {selectedPipeline && (
             <div>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block mt-2 mb-1">
+              <label className="text-[12px] font-medium text-zinc-300 block mt-2 mb-1">
                 Etapa inicial (opcional)
               </label>
               <select

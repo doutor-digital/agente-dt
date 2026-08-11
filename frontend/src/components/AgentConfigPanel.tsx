@@ -274,7 +274,7 @@ export function AgentConfigPanel() {
             value={draft.systemPrompt}
             onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
             rows={14}
-            className="w-full px-3 py-2 rounded-md border border-zinc-800 bg-zinc-950 text-sm text-zinc-100 font-mono leading-relaxed focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/40 resize-vertical"
+            className="w-full px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] text-zinc-100 font-mono leading-relaxed outline-none transition placeholder:text-zinc-600 focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/15 resize-vertical"
             placeholder="Você é um agente de…"
           />
           <div className="text-[10px] text-zinc-600 mt-1 text-right font-mono">
@@ -296,19 +296,19 @@ export function AgentConfigPanel() {
           </h2>
           <div className="grid md:grid-cols-3 gap-3 text-sm">
             <div>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+              <label className="text-[12px] font-medium text-zinc-300 mb-1.5 block">
                 Modelo
               </label>
               <input
                 type="text"
                 value={draft.model ?? ''}
                 onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-                className="w-full px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs font-mono text-zinc-100 focus:outline-none focus:border-brand-500"
+                className="w-full px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] font-mono text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/15"
                 placeholder="claude-opus-4-7"
               />
             </div>
             <div>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+              <label className="text-[12px] font-medium text-zinc-300 mb-1.5 block">
                 Temperatura
               </label>
               <input
@@ -318,11 +318,11 @@ export function AgentConfigPanel() {
                 max={2}
                 value={draft.temperature ?? 0}
                 onChange={(e) => setDraft({ ...draft, temperature: Number(e.target.value) })}
-                className="w-full px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs font-mono text-zinc-100 focus:outline-none focus:border-brand-500"
+                className="w-full px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] font-mono text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/15"
               />
             </div>
             <div>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1 block">
+              <label className="text-[12px] font-medium text-zinc-300 mb-1.5 block">
                 Max tokens
               </label>
               <input
@@ -331,7 +331,7 @@ export function AgentConfigPanel() {
                 max={8192}
                 value={draft.maxTokens ?? 1024}
                 onChange={(e) => setDraft({ ...draft, maxTokens: Number(e.target.value) })}
-                className="w-full px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-950 text-xs font-mono text-zinc-100 focus:outline-none focus:border-brand-500"
+                className="w-full px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] font-mono text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/15"
               />
             </div>
           </div>

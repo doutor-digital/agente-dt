@@ -200,7 +200,7 @@ export function FerramentasPanel() {
                       value={tool.description}
                       onChange={(e) => updateTool(tool.name, { description: e.target.value })}
                       rows={4}
-                      className="w-full px-3 py-2 rounded-md border border-zinc-800 bg-zinc-950 text-xs text-zinc-100 leading-relaxed focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/40 resize-vertical"
+                      className="w-full px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] text-zinc-100 leading-relaxed outline-none transition placeholder:text-zinc-600 focus:border-brand-500/60 focus:ring-2 focus:ring-brand-500/15 resize-vertical"
                       placeholder="Descreva o caso de uso da tool…"
                     />
                   </div>
