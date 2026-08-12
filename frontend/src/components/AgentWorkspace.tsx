@@ -22,6 +22,7 @@ import {
   Cable,
   TestTube2,
   Wand2,
+  Power,
   FileText,
   GraduationCap,
   Database,
@@ -35,6 +36,7 @@ import { FerramentasPanel } from './FerramentasPanel';
 import { PlaygroundPanel } from './PlaygroundPanel';
 import { TrainingPanel } from './TrainingPanel';
 import { AgentConfigPanel } from './AgentConfigPanel';
+import { ActivationPanel } from './ActivationPanel';
 
 type SegId = 'identidade' | 'conhecimento' | 'acoes' | 'kommo' | 'testar';
 
@@ -91,7 +93,10 @@ const SEGMENTS: Segment[] = [
     label: 'Kommo',
     icon: Cable,
     hint: 'A conexão — campo de resposta e pausa, Salesbot e etapas em que responde.',
-    subs: [{ id: 'conexao', label: 'Conexão', icon: Cable, render: () => <AgentConfigPanel /> }],
+    subs: [
+      { id: 'conexao', label: 'Conexão', icon: Cable, render: () => <AgentConfigPanel /> },
+      { id: 'ativacao', label: 'Etapas & Ativação', icon: Power, render: () => <ActivationPanel /> },
+    ],
   },
   {
     id: 'testar',
