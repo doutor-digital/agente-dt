@@ -125,7 +125,7 @@ export function ActivationPanel() {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 pb-24">
         {/* Header sticky + salvar */}
-        <div className="flex items-end justify-between gap-4 sticky top-0 bg-zinc-950/95 backdrop-blur pt-6 pb-4 z-10 border-b border-zinc-800/60">
+        <div className="flex items-end justify-between gap-4 sticky top-0 backdrop-blur pt-6 pb-4 z-10 border-b border-zinc-800/60">
           <div>
             <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500 mb-1.5">
               Configuração do agente
