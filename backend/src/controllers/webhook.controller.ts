@@ -15,6 +15,7 @@
 
 import type { Request, Response } from 'express';
 import { HumanMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
@@ -200,6 +201,47 @@ async function resolveUnit(req: Request): Promise<Unit | null> {
   const slug = req.params.unitSlug ? String(req.params.unitSlug) : '';
   if (slug) return findUnitBySlug(slug);
   return ensureDefaultUnit();
+}
+
+// ---------------------------------------------------------------------------
+// HANDOFF DETERMINÍSTICO — a IA de reativação (resgate) não agenda (SOLID).
+//
+// Quando o paciente demonstra que quer marcar, a resgate deveria "passar o
+// bastão" movendo a etapa pra IA comercial. O prompt manda o LLM chamar
+// mover_etapa, mas na prática o modelo banca o agendador ("vou verificar a
+// disponibilidade…") e NÃO move — o lead trava em Perdido e ninguém agenda.
+// Provado em teste: nem prompt endurecido nem upgrade de modelo (gpt-4o)
+// resolvem de forma confiável. Então o CÓDIGO garante o handoff.
+//
+// Sinal: os tools de registro (registra_preferencia_horario / registra_intencao)
+// disparam com 100% de confiabilidade quando o paciente quer marcar — olhamos
+// as tool calls DESTE turno (após o último HumanMessage). Alvo da etapa vem de
+// `pipelineIntents.handoff_scheduling` (config por unidade — generaliza p/ cada
+// cidade; ausente = comportamento antigo, nada muda).
+// ---------------------------------------------------------------------------
+function detectedSchedulingIntent(messages: BaseMessage[]): boolean {
+  // Só o turno atual: mensagens a partir do último HumanMessage.
+  let start = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i] instanceof HumanMessage) {
+      start = i;
+      break;
+    }
+  }
+  for (let i = start; i < messages.length; i++) {
+    const calls = (messages[i] as { tool_calls?: Array<{ name?: string; args?: unknown }> })
+      .tool_calls;
+    if (!calls || calls.length === 0) continue;
+    for (const call of calls) {
+      const name = (call.name ?? '').toLowerCase();
+      const args = JSON.stringify(call.args ?? {}).toLowerCase();
+      // Deu preferência de horário → inequivocamente quer marcar.
+      if (/prefer|horari/.test(name)) return true;
+      // Intenção capturada com valor de agendamento.
+      if (/inten/.test(name) && /agend|marc|consulta|avalia/.test(args)) return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -909,6 +951,29 @@ export async function processAgent(args: {
       // Widget: a IA não produziu texto (reply vazio). O Salesbot está pausado
       // esperando o continue — finaliza o fluxo sem mensagem pra não pendurar.
       await finishWidgetSilently();
+    }
+
+    // HANDOFF DETERMINÍSTICO resgate → comercial (ver comentário em
+    // detectedSchedulingIntent). Roda DEPOIS de responder — não atrasa o
+    // paciente. A resposta deste turno ainda sai pela resgate (frase-ponte);
+    // a etapa muda pra IA comercial assumir a PARTIR da próxima mensagem.
+    const intents = unit.pipelineIntents as Record<string, number> | null;
+    const handoffStage = intents?.handoff_scheduling;
+    if (handoffStage && leadId > 0 && detectedSchedulingIntent(result.messages ?? [])) {
+      try {
+        const kommo = createKommoClient(unit);
+        await kommo.moveStage({ leadId, statusId: handoffStage });
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Handoff automático → etapa ${handoffStage} (IA comercial assume)`,
+          payload: { leadId, statusId: handoffStage, reason: 'scheduling_intent' },
+        });
+      } catch (handoffErr) {
+        logger.warn(
+          { err: String(handoffErr), leadId, unit: unit.slug },
+          'handoff automático: falha ao mover etapa',
+        );
+      }
     }
 
     const totalLatency = Math.round(performance.now() - requestStart);

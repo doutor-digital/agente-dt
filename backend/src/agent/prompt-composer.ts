@@ -341,6 +341,7 @@ function renderPipelineIntents(unit: Unit): string {
     paid: 'confirmou pagamento',
     abandoned: 'sumiu sem responder por dias',
     refused: 'recusou explicitamente',
+    handoff_scheduling: 'demonstrou que quer marcar/agendar (passe o bastão pra equipe comercial)',
   };
   const lines = Object.entries(intents).map(([intent, statusId]) => {
     const label = labelMap[intent] ?? intent;
