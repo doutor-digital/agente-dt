@@ -36,6 +36,13 @@ function agoraLocal(unit: Unit): string {
   return SpineService.instanteNoFuso(new Date(), unit.spineTimezone || TZ_PADRAO);
 }
 
+/** Soma dias a "AAAA-MM-DD" sem depender de fuso. */
+function somarDias(dia: string, n: number): string {
+  const t = Date.parse(`${dia}T00:00:00Z`);
+  if (Number.isNaN(t)) return dia;
+  return new Date(t + n * 86_400_000).toISOString().slice(0, 10);
+}
+
 /** Recarrega a unidade do banco — pausa e bloqueios mudam DURANTE a conversa. */
 async function unidadeFresca(unitId: string): Promise<Unit | null> {
   return prisma.unit.findUnique({ where: { id: unitId } });
@@ -197,12 +204,15 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
   return new DynamicStructuredTool({
     name: 'consultar_horarios',
     description:
-      'Consulta os horários REALMENTE disponíveis da clínica numa data. Já desconta ' +
-      'consultas marcadas, almoço, dias sem atendimento e os bloqueios da recepção, ' +
-      'e ainda CONFIRMA com o sistema da clínica antes de devolver. Use SEMPRE ' +
-      'antes de oferecer qualquer horário ao paciente — nunca invente nem repita ' +
-      'horário de uma consulta anterior. Devolve só o que está livre: já desconta ' +
-      'consultas marcadas, almoço, dias sem atendimento e bloqueios da recepção.',
+      'Consulta os horários REALMENTE disponíveis da clínica a partir de uma data. ' +
+      'Já desconta consultas marcadas, almoço, dias sem atendimento e bloqueios da ' +
+      'recepção, e CONFIRMA com o sistema da clínica antes de devolver. Se a data ' +
+      'pedida estiver lotada ou bloqueada, AVANÇA SOZINHA até o próximo dia com vaga ' +
+      '(inclusive semana ou mês que vem) e devolve os horários desse dia — nunca ' +
+      'deixe o paciente sem opção só porque a semana está cheia. Use SEMPRE antes de ' +
+      'oferecer qualquer horário — nunca invente nem repita horário de consulta ' +
+      'anterior. Passe a data que o paciente pediu (ou amanhã); a tool acha a próxima ' +
+      'vaga real a partir dela.',
     schema: z.object({
       data: z
         .string()
@@ -236,92 +246,96 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
         );
       }
 
-      const { erro, slots } = await gradeDoDia(fresca, data);
-      if (erro) {
-        logger.warn({ erro, data, unit: fresca.slug }, 'consultar_horarios: agenda indisponível');
-        return `Não consegui consultar a agenda agora (${erro}). NÃO ofereça horários; diga que a equipe confirma em seguida.`;
-      }
-
-      const todosLivres = slots.filter((s) => s.status === 'livre').map((s) => s.time);
-
-      // O TURNO ENTRA ANTES DA VERIFICAÇÃO, não depois. Verificar custa duas
-      // chamadas por horário e o orçamento é pequeno; gastá-lo de manhã quando
-      // o paciente pediu tarde devolve uma lista vazia de horários que ele nem
-      // queria — e é assim que a conversa morre.
-      // O TURNO PEDIDO É RESPEITADO, mesmo quando não sobra nada nele.
-      //
-      // Antes, turno vazio caía em `todosLivres` — o paciente pedia manhã e a
-      // sondagem ia gastar o orçamento na tarde. Foi assim que um paciente que
-      // pediu manhã recebeu duas ofertas de 17:00, num dia em que a clínica
-      // fechava 12:30. Devolver "não tem de manhã" deixa a I.A. perguntar se
-      // ele aceita outro período, que é uma conversa honesta.
-      const livres = turno
-        ? todosLivres.filter((h) => (turno === 'manha' ? h < '12:00' : h >= '12:00'))
-        : todosLivres;
-
-      // A grade é só a PRIMEIRA peneira: ela desconta quem já está marcado,
-      // almoço e bloqueio da recepção. O que ela não sabe é o turno da
-      // profissional — e é aí que a franquia recusa. Confirma com ela.
+      // BUSCA PRA FRENTE — o paciente NÃO pode ser perdido porque a semana está
+      // cheia. Se a data pedida não tem vaga (lotada OU bloqueada pela recepção),
+      // avança dia a dia até o próximo com horário REAL — inclusive semana ou mês
+      // que vem. Só cai na lista de espera depois de varrer LOOKAHEAD dias.
+      const LOOKAHEAD_DIAS = 30;
+      const MAX_DIAS_SONDADOS = 3; // teto de sondagem (custa create+cancel na franquia)
       const sonda = await clienteDeSondagem(fresca);
-      let oferecer = livres;
-      let recusados: string[] = [];
-      let sondados: string[] = [];
-      let verificado = false;
+      let diasSondados = 0;
+      let outroTurnoNoDiaPedido: string | null = null; // dia pedido tinha vaga no OUTRO turno
+      let cursor = data;
 
-      if (sonda && livres.length > 0) {
-        const r = await horariosQueAFranquiaAceita(fresca, data, livres, sonda);
-        recusados = r.recusados;
-        sondados = r.sondados;
-        verificado = true;
-        // SÓ O QUE A FRANQUIA ACEITOU. Nada de cair nos não sondados.
-        //
-        // Era o que fazia antes, e o preço foi medido num paciente: quatro
-        // horários sondados, os quatro recusados, e o código ofereceu o quinto
-        // — o único que ele nunca testou — em dois dias seguidos. O paciente
-        // aceitou os dois e levou duas vezes "esse horário acabou de ser
-        // preenchido". O sinal de que o turno inteiro estava fora da escala
-        // estava dado nas quatro recusas; oferecer o resto foi ignorá-lo.
-        //
-        // Lista vazia é uma resposta honesta. Duas desculpas seguidas não.
-        oferecer = r.aceitos;
-      } else if (livres.length > 0) {
-        // Sem paciente de sondagem não há como confirmar com a franquia. A
-        // grade sozinha não enxerga o turno da profissional, então o que sai
-        // daqui é aposta — registrada como tal pra não sumir num "deu certo".
-        logger.warn(
-          { unit: fresca.slug, data, livres: livres.length },
-          'consultar_horarios: sem paciente de sondagem — horários NÃO confirmados com a franquia',
-        );
-      }
+      for (let i = 0; i <= LOOKAHEAD_DIAS; i++, cursor = somarDias(cursor, 1)) {
+        // Pula dia sem atendimento sem gastar chamada de API.
+        const dow = new Date(`${cursor}T00:00:00Z`).getUTCDay();
+        if (!fresca.spineAgendaDays.includes(dow)) continue;
 
-      await recorder.step({
-        kind: 'TOOL_RESULT',
-        title:
-          `consultar_horarios ${data}${turno ? ` (${turno})` : ''}: ` +
-          `${oferecer.length} confirmado(s) de ${livres.length} livre(s) na grade` +
-          (verificado ? '' : ' — SEM verificação'),
-        payload: { data, turno, naGrade: todosLivres, noTurno: livres, sondados, oferecer, recusados, sonda },
-      });
+        const { erro, slots } = await gradeDoDia(fresca, cursor);
+        if (erro) {
+          // Erro no PRIMEIRO dia = agenda fora do ar, não dá pra prometer nada.
+          // Num dia distante é tropeço isolado — pula e segue procurando.
+          if (i === 0) {
+            logger.warn({ erro, data, unit: fresca.slug }, 'consultar_horarios: agenda indisponível');
+            return `Não consegui consultar a agenda agora (${erro}). NÃO ofereça horários; diga que a equipe confirma em seguida.`;
+          }
+          continue;
+        }
 
-      if (oferecer.length === 0) {
-        // Recusa em tudo que foi sondado é sinal de turno fechado, não de dia
-        // cheio. A diferença importa pro que a I.A. diz ao paciente: "a agenda
-        // dessa data não abriu" em vez de "está tudo ocupado".
-        const turnoFechado = verificado && recusados.length > 0;
+        // O TURNO PEDIDO É RESPEITADO (verificar custa 2 chamadas por horário; não
+        // gasta o orçamento no período que o paciente não quer).
+        const todosLivres = slots.filter((s) => s.status === 'livre').map((s) => s.time);
+        const livres = turno
+          ? todosLivres.filter((h) => (turno === 'manha' ? h < '12:00' : h >= '12:00'))
+          : todosLivres;
+
+        // Dia PEDIDO sem vaga no turno mas com vaga no outro → guarda pra sugerir.
+        if (i === 0 && turno && livres.length === 0 && todosLivres.length > 0) {
+          outroTurnoNoDiaPedido = data;
+        }
+        if (livres.length === 0) continue; // dia cheio/bloqueado → próximo dia
+
+        // Confirma com a franquia (turno da profissional, que a grade não vê).
+        // Teto de dias sondados: passou disso, oferece sem sondar (aposta) em vez
+        // de gastar create/cancel infinito — melhor que perder o lead.
+        let oferecer = livres;
+        let recusados: string[] = [];
+        let sondados: string[] = [];
+        let verificado = false;
+        if (sonda && diasSondados < MAX_DIAS_SONDADOS) {
+          diasSondados++;
+          const r = await horariosQueAFranquiaAceita(fresca, cursor, livres, sonda);
+          recusados = r.recusados;
+          sondados = r.sondados;
+          verificado = true;
+          oferecer = r.aceitos; // SÓ o que a franquia aceitou — nada de chutar o resto.
+        } else if (!sonda) {
+          logger.warn(
+            { unit: fresca.slug, data: cursor, livres: livres.length },
+            'consultar_horarios: sem paciente de sondagem — horários NÃO confirmados com a franquia',
+          );
+        }
+
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title:
+            `consultar_horarios ${cursor}${turno ? ` (${turno})` : ''}: ` +
+            `${oferecer.length} confirmado(s) de ${livres.length} livre(s) na grade` +
+            (cursor === data ? '' : ` (avançou de ${data})`) +
+            (verificado ? '' : ' — SEM verificação'),
+          payload: { pedido: data, data: cursor, turno, naGrade: todosLivres, noTurno: livres, sondados, oferecer, recusados, sonda },
+        });
+
+        if (oferecer.length === 0) continue; // turno fechado nesse dia → próximo
+
+        const mesmoDia = cursor === data;
         return (
-          (turnoFechado
-            ? `A clínica não está aceitando agendamento em ${data}${turno === 'manha' ? ' de manhã' : turno === 'tarde' ? ' à tarde' : ''} — a agenda desse período não está aberta.`
-            : `Nenhum horário livre em ${data}${turno === 'manha' ? ' de manhã' : turno === 'tarde' ? ' à tarde' : ''}.`) +
-          ' ' +
-          (turno && todosLivres.length > 0
-            ? 'No outro turno ainda pode haver vaga — pergunte se ele aceita. '
-            : '') +
-          'Ofereça outra data — NÃO insista nesta e NÃO cite horário nenhum deste dia.'
+          `Horários CONFIRMADOS com a clínica em ${cursor}: ${oferecer.join(', ')}. ` +
+          (mesmoDia
+            ? ''
+            : `A data ${data} não tinha vaga (lotada ou sem atendimento) — ${cursor} é o PRÓXIMO dia com horário. Ofereça esta data ao paciente com naturalidade. `) +
+          'Ofereça no máximo 2 ou 3 deles. Não ofereça nenhum horário fora desta lista.'
         );
       }
+
+      // Varreu LOOKAHEAD dias e não achou nada ofertável — aí sim, lista de espera.
       return (
-        `Horários CONFIRMADOS com a clínica em ${data}: ${oferecer.join(', ')}. ` +
-        'Ofereça no máximo 2 ou 3 deles. Não ofereça nenhum horário fora desta lista.'
+        (outroTurnoNoDiaPedido
+          ? `Em ${outroTurnoNoDiaPedido} não há vaga no período pedido, mas pode haver no outro turno — pergunte se ele aceita. `
+          : '') +
+        `Não encontrei horário livre de ${data} até ${cursor} (varri os próximos ${LOOKAHEAD_DIAS} dias). ` +
+        'Registre a preferência e diga que a equipe confirma o encaixe assim que abrir vaga — NÃO cite nenhum horário.'
       );
     },
   });
