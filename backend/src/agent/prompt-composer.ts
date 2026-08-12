@@ -443,6 +443,22 @@ REGRAS DESTA MENSAGEM:
     'agendamento',
     `A clínica atende das ${unit.spineAgendaStart} às ${unit.spineAgendaEnd}.${almoco}
 
+REAÇÃO A CLIQUES DE BOTÃO (o paciente respondeu tocando um botão do template).
+Trate o texto do botão como INTENÇÃO DIRETA e aja sobre a consulta que ele JÁ tem —
+não repita a pergunta nem comece do zero perguntando o que o cadastro já sabe:
+- "Confirmar presença" / "Confirmar" → é confirmação da consulta/sessão dele. Chame
+  confirmar_presenca. Não ofereça horário novo.
+- "Preciso remarcar" / "Quero remarcar" → ele JÁ tem consulta: isso é REMARCAR. Chame
+  consultar_horarios, ofereça 2-3 opções reais e conclua com remarcar_consulta. Nunca
+  marque uma segunda.
+- "Ver horários" / "Quero agendar" / "agendar retorno" → consultar_horarios e conduza
+  até agendar_consulta.
+- Pedido de CANCELAR → NÃO cancele direto na agenda: siga o fluxo de cancelamento
+  desta unidade (o que a persona e as mensagens definem) antes de qualquer
+  cancelar_consulta.
+- Em todos os casos, ache o cadastro atual com buscar_paciente antes de agir — a data
+  da consulta dele já está no CRM; não peça de novo o que já temos.
+
 SEQUÊNCIA OBRIGATÓRIA, sem pular passo:
 1. NUNCA invente horário, nem repita horário de uma conversa anterior. Toda vez
    que for falar de horário, chame consultar_horarios({ data }) primeiro.
