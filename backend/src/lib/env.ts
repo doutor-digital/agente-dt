@@ -78,6 +78,11 @@ const schema = z.object({
   AUTH_COOKIE_DOMAIN: z.string().optional(),
   AUTH_SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
 
+  // Chave compartilhada pra integrações máquina-a-máquina (ex: n8n consultando
+  // /integrations/:unitSlug/session-stats/:leadId). Header `x-internal-key`.
+  // Vazia = endpoints de integração ficam desligados (respondem 503).
+  INTERNAL_API_KEY: z.string().min(16).optional(),
+
   // ---------------------------------------------------------------------------
   // Webhook outbound pro painel Doutor-Digital-Dash. Toda mensagem de conversa
   // (paciente ou IA) é re-enviada pra esse endpoint pra alimentar o dashboard
