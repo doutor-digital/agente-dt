@@ -21,6 +21,7 @@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { SpineService } from './spine.service.js';
+import { createKommoClient } from './kommo.service.js';
 import type { Unit } from '@prisma/client';
 
 const { AGENDADO, CONFIRMADO, NAO_COMPARECEU, ATENDIDO } = SpineService.SPINE_STATUS;
@@ -51,15 +52,37 @@ const VAZIO: SessionStats = {
  * NÃO escreve no Kommo — só devolve os números (quem escreve é o n8n).
  */
 export async function computeSessionStats(unit: Unit, kommoLeadId: number): Promise<SessionStats> {
+  // 1) Fonte primária: o vínculo que a NOSSA IA criou ao agendar.
   const link = await prisma.spineLeadLink.findUnique({
     where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
   });
-  if (!link?.spineIdClient) return { ...VAZIO };
+  let idClient = link?.spineIdClient ?? null;
 
-  const r = await SpineService.getClient(unit, link.spineIdClient);
+  // 2) Fallback: campo customizado no Kommo com o idClient da franquia (backfill
+  //    por telefone, pra cobrir pacientes que a IA não agendou). O id do campo
+  //    vem de pipelineIntents.spine_client_field_id (config por unidade).
+  if (!idClient) {
+    const fieldId = (unit.pipelineIntents as Record<string, number> | null)?.spine_client_field_id;
+    if (fieldId) {
+      try {
+        const lead = await createKommoClient(unit).getLead(kommoLeadId);
+        const cfv = (lead as { custom_fields_values?: Array<{ field_id: number; values?: Array<{ value?: unknown }> }> })
+          .custom_fields_values;
+        const raw = cfv?.find((f) => f.field_id === fieldId)?.values?.[0]?.value;
+        const n = Number(raw);
+        if (Number.isInteger(n) && n > 0) idClient = n;
+      } catch (err) {
+        logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'session-stats: falha lendo campo idClient no Kommo');
+      }
+    }
+  }
+
+  if (!idClient) return { ...VAZIO };
+
+  const r = await SpineService.getClient(unit, idClient);
   if (!r.ok || !r.data?.client) {
     logger.warn(
-      { unit: unit.slug, kommoLeadId, idClient: link.spineIdClient, erro: r.ok ? 'sem cliente' : r.error },
+      { unit: unit.slug, kommoLeadId, idClient, erro: r.ok ? 'sem cliente' : r.error },
       'session-stats: falha ao ler paciente na franquia',
     );
     return { ...VAZIO, linked: true };

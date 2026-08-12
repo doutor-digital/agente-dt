@@ -331,8 +331,15 @@ function renderHandoff(unit: Unit): string {
   Não continue a conversa depois disso.`);
 }
 
+// Chaves de `pipelineIntents` que são CONFIG (não intent→etapa) e NÃO devem
+// virar instrução de mover_etapa no prompt.
+const PIPELINE_INTENT_CONFIG_KEYS = new Set(['spine_client_field_id']);
+
 function renderPipelineIntents(unit: Unit): string {
-  const intents = unit.pipelineIntents as Record<string, number> | null;
+  const todos = unit.pipelineIntents as Record<string, number> | null;
+  const intents = todos
+    ? Object.fromEntries(Object.entries(todos).filter(([k]) => !PIPELINE_INTENT_CONFIG_KEYS.has(k)))
+    : null;
   if (!intents || Object.keys(intents).length === 0) return '';
   const labelMap: Record<string, string> = {
     asked_quote: 'pediu orçamento/preço',
