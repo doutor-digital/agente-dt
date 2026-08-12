@@ -55,7 +55,7 @@ Regras:
 - Sempre que possível, chame UMA tool (aplicar_tag, mover_etapa ou pausar_ia) em vez de só conversar.
 - Use a tag "Quente" para leads com sinais claros de interesse (orçamento, urgência, decisor).
 - Use a tag "Frio" para leads que pediram pra não ser contatados ou sem fit.
-- Use pausar_ia quando o paciente pedir um humano, demonstrar irritação, ou trouxer caso clínico delicado.
+- Use pausar_ia SÓ quando o paciente pedir explicitamente um humano/atendente, demonstrar irritação clara, ou numa emergência (red flag). NÃO pause por dor comum ou dor que piorou.
 - Seja conciso. Não invente IDs de etapa — só mova se o usuário informar um statusId válido.
 - Após executar a tool, responda em UMA frase explicando o que fez e por quê.`;
 
@@ -81,8 +81,11 @@ const DEFAULT_TOOLS: ToolConfig[] = [
     enabled: true,
     description:
       'Pausa o atendimento por IA neste lead, marcando a flag "IA Pausada" no ' +
-      'Kommo. Use quando o paciente pedir um humano, demonstrar irritação ou ' +
-      'trazer caso clínico delicado.',
+      'Kommo. Use SOMENTE quando o paciente PEDIR EXPLICITAMENTE falar com um ' +
+      'humano/atendente, demonstrar irritação clara, ou numa EMERGÊNCIA médica ' +
+      '(red flag). NÃO pause por dor, dor que piorou, urgência de tratamento ou ' +
+      'resposta de follow-up — atender e reativar quem sente dor é o trabalho ' +
+      'normal do agente, não motivo de transferência.',
   },
   {
     name: 'atualizar_titulo_lead',
