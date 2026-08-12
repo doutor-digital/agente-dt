@@ -202,6 +202,53 @@ async function resolveUnit(req: Request): Promise<Unit | null> {
   return ensureDefaultUnit();
 }
 
+// ---------------------------------------------------------------------------
+// ROTEADOR POR ETAPA (contas multi-IA — uma IA por etapa).
+//
+// Numa conta Kommo com várias unidades (comercial, resgate, tratamento…), o
+// DONO do lead é a unidade cuja allowlist (`kommoAllowedStatusIds`) contém a
+// ETAPA ATUAL do lead. Ex: Perdido (143) → resgate; Qualificação → comercial.
+// É determinístico: 1 etapa = 1 IA, então nunca duas IAs respondem o mesmo
+// lead (a etapa é a trava de estado / ownership).
+//
+// Backward-compatible: se a conta só tem uma IA (nenhuma irmã com allowlist),
+// ou se nada casa com a etapa, devolve a unidade de entrada intacta — contas
+// single-IA (ex: Serra) nem chegam a fazer o GET no lead.
+// ---------------------------------------------------------------------------
+async function resolveOwnerUnitByStage(entryUnit: Unit, leadId: number): Promise<Unit> {
+  if (!entryUnit.kommoSubdomain) return entryUnit;
+  const account = await prisma.unit.findMany({
+    where: { kommoSubdomain: entryUnit.kommoSubdomain, isActive: true },
+  });
+  const hasSiblingAllow = account.some(
+    (u) => u.id !== entryUnit.id && (u.kommoAllowedStatusIds?.length ?? 0) > 0,
+  );
+  if (!hasSiblingAllow) return entryUnit;
+
+  let sid: number | undefined;
+  try {
+    const kommo = createKommoClient(entryUnit);
+    const lead = await kommo.getLead(leadId);
+    sid = lead.status_id ?? undefined;
+  } catch (err) {
+    logger.warn(
+      { err, leadId, unit: entryUnit.slug },
+      'router: falha ao ler a etapa do lead — usando unidade de entrada',
+    );
+    return entryUnit;
+  }
+  if (!sid) return entryUnit;
+
+  const owner = account.find((u) => (u.kommoAllowedStatusIds ?? []).includes(sid!));
+  if (owner && owner.id !== entryUnit.id) {
+    logger.info(
+      { leadId, from: entryUnit.slug, to: owner.slug, statusId: sid },
+      'router: lead roteado por etapa pra IA dona',
+    );
+  }
+  return owner ?? entryUnit;
+}
+
 // Quando a Unit tem Meta WhatsApp Cloud API configurada, ela é o canal
 // primário do agente. O webhook Kommo continua útil pra detectar conversão
 // (status change), mas não deve disparar o agente nem gravar mensagens —
@@ -272,7 +319,7 @@ async function detectAndHandleConversion(
 export async function handleKommoWebhook(req: Request, res: Response): Promise<void> {
   const requestStart = performance.now();
 
-  const unit = await resolveUnit(req);
+  let unit = await resolveUnit(req);
   if (!unit) {
     res.status(404).json({ ok: false, error: 'unit_not_found' });
     return;
@@ -429,6 +476,10 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     res.status(400).json({ ok: false, error: 'leadId not found in payload' });
     return;
   }
+
+  // ROTEIA por etapa: a IA que roda daqui pra frente é a DONA da etapa atual do
+  // lead (comercial, resgate, tratamento…). Trace, conversa e agente usam ela.
+  unit = await resolveOwnerUnitByStage(unit, leadId);
 
   const ctx = extractContext(parsed.data, leadId);
 

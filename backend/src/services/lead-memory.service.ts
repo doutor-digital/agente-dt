@@ -102,6 +102,47 @@ export async function getLeadMemory(
   });
 }
 
+/** Memória vazia = sem resumo e sem fatos. Usado pra decidir fallback entre IAs. */
+function isMemoryEmpty(m: LeadMemory | null): boolean {
+  if (!m) return true;
+  const semResumo = !m.summary || !m.summary.trim();
+  const facts = (m.facts ?? {}) as Record<string, unknown>;
+  return semResumo && Object.keys(facts).length === 0;
+}
+
+/**
+ * Memória do lead PRA O AGENTE, com fallback entre IAs da mesma conta Kommo.
+ *
+ * A memória é gravada por-unidade (`@@unique([unitId, leadId])`). Numa conta
+ * multi-IA (uma IA por etapa), quando o lead troca de etapa ele troca de IA —
+ * e a IA nova (ex: resgate no Perdido) começaria SEM lembrar o que a comercial
+ * conversou. Aqui, se a memória da unidade dona estiver vazia, caímos pra
+ * memória de uma IRMÃ (mesmo `kommoSubdomain`, lead mais recente). Assim a IA
+ * que assume o lead "lembra" da conversa anterior, sem duplicar dado nem migrar
+ * schema. Os campos do Kommo (queixa etc.) já são por-lead e vêm de qualquer jeito.
+ */
+export async function getLeadMemoryForAgent(
+  unit: { id: string; kommoSubdomain: string | null },
+  leadId: string | number,
+): Promise<LeadMemory | null> {
+  const own = await getLeadMemory(unit.id, leadId);
+  if (!isMemoryEmpty(own)) return own;
+  if (!unit.kommoSubdomain) return own;
+
+  const siblings = await prisma.unit.findMany({
+    where: { kommoSubdomain: unit.kommoSubdomain, id: { not: unit.id } },
+    select: { id: true },
+  });
+  if (siblings.length === 0) return own;
+
+  const irmas = await prisma.leadMemory.findMany({
+    where: { unitId: { in: siblings.map((s) => s.id) }, leadId: String(leadId) },
+    orderBy: { updatedAt: 'desc' },
+  });
+  const rica = irmas.find((m) => !isMemoryEmpty(m));
+  return rica ?? own;
+}
+
 /**
  * Incrementa turnsSinceUpdate atomicamente. Garante que o counter cresce mesmo
  * se o updater não rodar nesse turno (ex: throttle).

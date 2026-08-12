@@ -34,7 +34,7 @@ import {
   listEnabledGlobalActions,
 } from '../services/actions.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
-import { getLeadMemory, type LeadMemoryFacts } from '../services/lead-memory.service.js';
+import { getLeadMemoryForAgent, type LeadMemoryFacts } from '../services/lead-memory.service.js';
 import {
   consultaDoLead,
   porExtenso,
@@ -1738,7 +1738,7 @@ async function loadComposeInput(input: {
       ? Promise.resolve([])
       : listEnabledLeadFieldRules(input.unit.id),
     input.leadId
-      ? getLeadMemory(input.unit.id, input.leadId).catch((err) => {
+      ? getLeadMemoryForAgent(input.unit, input.leadId).catch((err) => {
           // Tabela pode não existir ainda em ambiente não-migrado.
           logger.warn({ err, leadId: input.leadId }, 'getLeadMemory falhou — sem memória no prompt');
           return null;
