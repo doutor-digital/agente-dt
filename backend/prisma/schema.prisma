@@ -906,6 +906,13 @@ model Conversation {
   handoffAt     DateTime? @map("handoff_at")
   reactivations Int       @default(0) @map("reactivations")
 
+  /**
+   * SLA de resposta humana. `slaAlertAt` marca que já avisamos os SDRs de que o
+   * humano não respondeu este handoff dentro do limiar (ex: 5min). Idempotência:
+   * 1 alerta por handoff. Reseta pra null no próximo pausar_ia (novo handoff).
+   */
+  slaAlertAt DateTime? @map("sla_alert_at")
+
   unit        Unit                     @relation(fields: [unitId], references: [id], onDelete: Cascade)
   messages    Message[]
   evaluations ConversationEvaluation[]

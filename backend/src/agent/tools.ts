@@ -321,7 +321,8 @@ export function buildTools({
             if (unit?.id) {
               await prisma.conversation.updateMany({
                 where: { unitId: unit.id, leadId: String(leadId) },
-                data: { handoffAt: new Date() },
+                // slaAlertAt: null → cada novo handoff pode gerar 1 alerta de SLA.
+                data: { handoffAt: new Date(), slaAlertAt: null },
               });
             }
           } catch (e) {

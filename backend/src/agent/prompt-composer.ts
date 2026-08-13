@@ -333,7 +333,7 @@ function renderHandoff(unit: Unit): string {
 
 // Chaves de `pipelineIntents` que são CONFIG (não intent→etapa) e NÃO devem
 // virar instrução de mover_etapa no prompt.
-const PIPELINE_INTENT_CONFIG_KEYS = new Set(['spine_client_field_id']);
+const PIPELINE_INTENT_CONFIG_KEYS = new Set(['spine_client_field_id', 'sla_alert_minutes']);
 
 function renderPipelineIntents(unit: Unit): string {
   const todos = unit.pipelineIntents as Record<string, number> | null;

@@ -32,6 +32,7 @@ import { startDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
 import { startFollowUpWorker } from './lib/follow-up-worker.js';
 import { startReminderWorker } from './lib/reminder-worker.js';
 import { startReactivationWorker } from './lib/reactivation-worker.js';
+import { startSlaAlertWorker } from './lib/sla-alert-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -131,6 +132,10 @@ async function main(): Promise<void> {
   // Reativação pós-handoff: nunca perder lead quente. Guardado por
   // reactivationEnabled (OFF por padrão) — sobe inofensivo até o piloto.
   startReactivationWorker();
+  // SLA de resposta humana pós-pausa: avisa os SDRs no WhatsApp se ninguém
+  // respondeu o lead dentro do limiar. Opt-in por unidade
+  // (pipelineIntents.sla_alert_minutes) — sobe inofensivo até ser ligado.
+  startSlaAlertWorker();
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);

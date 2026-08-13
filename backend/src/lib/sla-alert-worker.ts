@@ -1,0 +1,184 @@
+// ============================================================================
+// sla-alert-worker.ts — SLA de RESPOSTA HUMANA pós-pausa.
+//
+// O PROBLEMA
+// ----------
+// A IA passa o lead pra um humano (pausar_ia → handoffAt). A secretária pode
+// demorar a pegar. Um lead esperando 5 min sem ninguém responder é lead
+// esfriando. Queremos AVISAR os SDRs no WhatsApp quando isso acontece — mas SÓ
+// quando ninguém respondeu de verdade.
+//
+// POR QUE NÃO DÁ PRA FAZER NO SALESBOT DO KOMMO
+// ---------------------------------------------
+// O Salesbot não enxerga a resposta OUTGOING do atendente. Ele só sabe "passou
+// X min" → dispararia alarme falso toda vez que a menina respondesse dentro do
+// prazo. O backend SABE: quando o humano responde, o webhook zera o `handoffAt`
+// (webhook.controller). Logo, `handoffAt` ainda preenchido após 5 min =
+// NINGUÉM respondeu. É o gatilho exato, sem falso alarme.
+//
+// COMO O ALERTA CHEGA NO WHATSAPP
+// -------------------------------
+// Cria uma TAREFA no Kommo cujo texto começa com `ALERTA · <slug> · ...`. O
+// webhook nativo do Kommo (add_task) dispara o n8n → Evolution → grupo dos SDRs,
+// mencionando a unidade do slug. Ver project_sdr_whatsapp_alerts (memória).
+//
+// GUARDAS
+// -------
+//   - opt-in por unidade + limiar configurável em `pipelineIntents.sla_alert_minutes`
+//     (número de minutos; ausente/0 = desligado). Sem migration na Unit.
+//   - só dentro do horário comercial (não pinga o grupo às 3h)
+//   - idempotência via `Conversation.slaAlertAt` (1 alerta por handoff; reseta no
+//     próximo pausar_ia)
+//
+// Estado no BANCO (`handoffAt`, `slaAlertAt`): sobrevive a restart e vale pra
+// todas as réplicas ao mesmo tempo.
+// ============================================================================
+
+import type { Unit } from '@prisma/client';
+import { prisma } from './prisma.js';
+import { logger } from './logger.js';
+import { createKommoClient } from '../services/kommo.service.js';
+
+const SWEEP_MS = 60_000; // 1 min — mais fino que o degrau de 5, pra precisão
+const DEFAULT_MIN = 5; // fallback quando a config vem como `true`/vazia
+
+let timer: NodeJS.Timeout | null = null;
+let rodando = false;
+
+/** Minutos de espera configurados pra unidade, ou null se desligado. */
+function limiarMin(unit: Unit): number | null {
+  const cfg = (unit.pipelineIntents as Record<string, unknown> | null)?.sla_alert_minutes;
+  if (cfg === true) return DEFAULT_MIN;
+  const n = Number(cfg);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** "agora" no relógio da clínica: minutos do dia + dia da semana (0=dom). */
+function agoraLocal(tz: string): { minutos: number; diaSemana: number } {
+  const p = new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz || 'America/Sao_Paulo',
+    hour: '2-digit',
+    minute: '2-digit',
+    weekday: 'short',
+    hour12: false,
+  }).formatToParts(new Date());
+  const h = Number(p.find((x) => x.type === 'hour')?.value ?? 0);
+  const m = Number(p.find((x) => x.type === 'minute')?.value ?? 0);
+  const dias: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    minutos: h * 60 + m,
+    diaSemana: dias[p.find((x) => x.type === 'weekday')?.value ?? 'Mon'] ?? 1,
+  };
+}
+
+function paraMinutos(hhmm: string | null | undefined): number | null {
+  if (!hhmm) return null;
+  const [h, m] = hhmm.split(':').map(Number);
+  return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
+}
+
+/** Só alerta em dia/horário de atendimento (08:00–20:00 por padrão). */
+function dentroDoHorario(unit: Unit): boolean {
+  const { minutos, diaSemana } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
+  const dias = unit.spineAgendaDays?.length ? unit.spineAgendaDays : [1, 2, 3, 4, 5];
+  if (!dias.includes(diaSemana)) return false;
+  const abre = Math.max(paraMinutos(unit.spineAgendaStart) ?? 8 * 60, 8 * 60);
+  const fecha = Math.min(paraMinutos(unit.spineAgendaEnd) ?? 20 * 60, 20 * 60);
+  return minutos >= abre && minutos < fecha;
+}
+
+/** "5 min", "1h30", "2h" — a partir de ms de espera. */
+function humanizarEspera(ms: number): string {
+  const min = Math.max(0, Math.floor(ms / 60_000));
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const r = min % 60;
+  return r ? `${h}h${String(r).padStart(2, '0')}` : `${h}h`;
+}
+
+async function alertarUnidade(unit: Unit): Promise<void> {
+  const min = limiarMin(unit);
+  if (!min) return;
+  if (!dentroDoHorario(unit)) return;
+
+  const limite = new Date(Date.now() - min * 60_000);
+  const candidatas = await prisma.conversation.findMany({
+    where: {
+      unitId: unit.id,
+      handoffAt: { not: null, lte: limite }, // pausa começou há >= limiar e humano NÃO respondeu (senão handoffAt já foi zerado)
+      slaAlertAt: null, // ainda não alertamos este handoff
+      convertedAt: null,
+    },
+    orderBy: { handoffAt: 'asc' },
+    take: 40,
+  });
+  if (candidatas.length === 0) return;
+
+  const kommo = createKommoClient(unit);
+
+  for (const conv of candidatas) {
+    const leadId = Number(conv.leadId);
+    if (!Number.isFinite(leadId)) {
+      // leadId inválido nunca vira candidato de novo: marca pra sair da fila.
+      await prisma.conversation
+        .update({ where: { id: conv.id }, data: { slaAlertAt: new Date() } })
+        .catch(() => undefined);
+      continue;
+    }
+
+    try {
+      let nome = conv.contactName?.trim() || '';
+      if (!nome) {
+        // Sem nome no banco: 1 leitura (raro, baixo volume) pra alerta detalhado.
+        const lead = await kommo.getLead(leadId).catch(() => null);
+        nome = (lead?.name ?? '').trim();
+      }
+      const contato = nome ? `[Contato: ${nome}] ` : '';
+      const espera = humanizarEspera(Date.now() - (conv.handoffAt as Date).getTime());
+      const texto =
+        `ALERTA · ${unit.slug} · ${contato}` +
+        `Lead aguardando há ${espera} e ninguém respondeu (IA pausada). Priorizar!`;
+      const completeAt = Math.floor(Date.now() / 1000); // vence agora → aparece como pendente
+
+      const res = await kommo.createTask({ leadId, text: texto, completeAt });
+      if (res) {
+        await prisma.conversation.update({
+          where: { id: conv.id },
+          data: { slaAlertAt: new Date() },
+        });
+        logger.info({ unit: unit.slug, leadId, espera }, 'SLA: alerta de humano sem resposta criado');
+      }
+      // Se createTask falhou (null/throw), NÃO marca — tenta de novo no próximo sweep.
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'SLA: falha ao criar alerta — segue');
+    }
+  }
+}
+
+async function varrer(): Promise<void> {
+  if (rodando) return;
+  rodando = true;
+  try {
+    const unidades = await prisma.unit.findMany();
+    for (const unit of unidades) {
+      await alertarUnidade(unit).catch((err) =>
+        logger.warn({ err: String(err), unit: unit.slug }, 'SLA: unidade falhou'),
+      );
+    }
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'SLA: varredura falhou');
+  } finally {
+    rodando = false;
+  }
+}
+
+export function startSlaAlertWorker(): void {
+  if (timer) return;
+  timer = setInterval(() => void varrer(), SWEEP_MS);
+  logger.info('SLA: worker iniciado (opt-in por pipelineIntents.sla_alert_minutes)');
+}
+
+export function stopSlaAlertWorker(): void {
+  if (timer) clearInterval(timer);
+  timer = null;
+}
