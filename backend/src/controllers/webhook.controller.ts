@@ -750,6 +750,22 @@ export async function processAgent(args: {
   // Guard: se operador humano marcou "IA Pausada", não invocamos o agente.
   // Verificação síncrona porque é 1 GET barato comparado ao custo da LLM.
   if (await isLeadPaused(unit, leadId)) {
+    // Inicia o relógio de SLA: o lead ESCREVEU com a IA pausada e ninguém
+    // respondeu ainda. Carimba handoffAt SÓ se estiver vazio — não sobrescreve
+    // um handoff anterior nem reinicia um relógio já rodando. Isto cobre a pausa
+    // MANUAL e o takeover (que não passam pelo pausar_ia, logo não carimbavam
+    // handoffAt). O webhook zera handoffAt quando o humano responde; por isso
+    // handoffAt ainda cheio depois de X min = ninguém respondeu. slaAlertAt:null
+    // libera 1 alerta neste ciclo de espera. Guardado por `humanMessage` pra não
+    // carimbar em evento sem mensagem do cliente.
+    if (humanMessage) {
+      await prisma.conversation
+        .updateMany({
+          where: { unitId: unit.id, leadId: String(leadId), handoffAt: null },
+          data: { handoffAt: new Date(), slaAlertAt: null },
+        })
+        .catch(() => undefined);
+    }
     await finishWidgetSilently(); // libera o Salesbot pausado (modo widget)
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({
