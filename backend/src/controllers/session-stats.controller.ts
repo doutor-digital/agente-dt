@@ -21,8 +21,11 @@ export async function sessionStatsHandler(req: Request, res: Response): Promise<
     res.status(503).json({ error: 'integração desabilitada (INTERNAL_API_KEY não configurada)' });
     return;
   }
-  if (req.header('x-internal-key') !== env.INTERNAL_API_KEY) {
-    res.status(401).json({ error: 'x-internal-key inválida' });
+  // Aceita a chave por header custom (x-internal-key) OU Authorization: Bearer.
+  const bearer = req.header('authorization')?.replace(/^Bearer\s+/i, '').trim();
+  const provided = req.header('x-internal-key') ?? bearer;
+  if (provided !== env.INTERNAL_API_KEY) {
+    res.status(401).json({ error: 'chave interna inválida (x-internal-key ou Authorization: Bearer)' });
     return;
   }
 
