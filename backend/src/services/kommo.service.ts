@@ -419,6 +419,34 @@ function credsFromEnv(): KommoCreds {
   };
 }
 
+// ---------------------------------------------------------------------------
+// RATE LIMITER GLOBAL — o Kommo permite no MÁXIMO 7 requisições/segundo POR IP.
+// Passar disso devolve 429; se repetir, o Kommo BLOQUEIA O IP e passa a devolver
+// 403 em TODA chamada (derruba a IA inteira, foi o que aconteceu). Como o limite
+// é por IP, o throttle precisa ser GLOBAL do processo — serializa TODA chamada
+// Kommo (IA + sync + qualquer uma) a uma taxa segura abaixo de 7/s, sem rajada.
+// Docs: developers.kommo.com/docs/limitations
+// ---------------------------------------------------------------------------
+const KOMMO_MIN_GAP_MS = 180; // ~5,5 req/s — margem sob os 7/s do Kommo
+let kommoNextSlot = 0;
+
+/** Reserva a próxima fatia de tempo e espera até ela (serializa o processo). */
+async function kommoAcquireSlot(): Promise<void> {
+  const now = Date.now();
+  const slot = kommoNextSlot > now ? kommoNextSlot : now;
+  kommoNextSlot = slot + KOMMO_MIN_GAP_MS;
+  const wait = slot - now;
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+}
+
+/** Em 429/403, empurra o relógio pra frente pra dar um respiro e NÃO escalar
+ *  pro bloqueio de IP. `retryAfterSec` vem do corpo do 429 do Kommo. */
+function kommoBackoff(retryAfterSec?: number): void {
+  const ms = Math.min(Math.max((retryAfterSec ?? 5) * 1000, 2000), 60_000);
+  const alvo = Date.now() + ms;
+  if (alvo > kommoNextSlot) kommoNextSlot = alvo;
+}
+
 function buildHttp(creds: KommoCreds): AxiosInstance {
   const http = axios.create({
     baseURL: `https://${creds.subdomain}.kommo.com/api/v4`,
@@ -438,7 +466,8 @@ function buildHttp(creds: KommoCreds): AxiosInstance {
     responseType: 'json',
   });
 
-  http.interceptors.request.use((config) => {
+  http.interceptors.request.use(async (config) => {
+    await kommoAcquireSlot(); // respeita o teto de 7 req/s do Kommo (por IP)
     (config as { metadata?: { start: number } }).metadata = { start: performance.now() };
     // Log defensivo: serializa o body como UTF-8 buffer e mostra os bytes
     // do emoji se houver. Útil quando o paciente reclama "não chegou emoji".
@@ -473,11 +502,18 @@ function buildHttp(creds: KommoCreds): AxiosInstance {
       return response;
     },
     (error: AxiosError) => {
+      const status = error.response?.status;
+      // 429 = passou de 7/s; 403 = IP já bloqueado. Nos dois, recua o relógio
+      // global pra parar de bater e não escalar/renovar o bloqueio de IP.
+      if (status === 429 || status === 403) {
+        const ra = Number((error.response?.data as { retry_after?: number } | undefined)?.retry_after);
+        kommoBackoff(Number.isFinite(ra) ? ra : status === 403 ? 30 : undefined);
+      }
       logger.warn(
         {
           method: error.config?.method,
           url: error.config?.url,
-          status: error.response?.status,
+          status,
           body: error.response?.data,
         },
         'kommo http error',
