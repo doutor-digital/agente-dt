@@ -41,6 +41,11 @@ import { createKommoClient } from '../services/kommo.service.js';
 
 const SWEEP_MS = 60_000; // 1 min — mais fino que o degrau de 5, pra precisão
 const DEFAULT_MIN = 5; // fallback quando a config vem como `true`/vazia
+// Janela de frescor: só alerta handoff que cruzou o limiar HÁ POUCO. Sem isso,
+// ao LIGAR o SLA numa unidade, todos os handoffs velhos parados (handoffAt nunca
+// zerado) disparariam alerta de uma vez — envio em massa. Com o teto, só entra
+// lead novo (handoff recente), nunca backfill retroativo.
+const MAX_ATRASO_MIN = 30;
 
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
@@ -101,11 +106,16 @@ async function alertarUnidade(unit: Unit): Promise<void> {
   if (!min) return;
   if (!dentroDoHorario(unit)) return;
 
-  const limite = new Date(Date.now() - min * 60_000);
+  const agora = Date.now();
+  const teto = new Date(agora - min * 60_000); // já cruzou o limiar (>= min atrás)
+  const piso = new Date(agora - (min + MAX_ATRASO_MIN) * 60_000); // mas é FRESCO (não backfill de handoff velho)
   const candidatas = await prisma.conversation.findMany({
     where: {
       unitId: unit.id,
-      handoffAt: { not: null, lte: limite }, // pausa começou há >= limiar e humano NÃO respondeu (senão handoffAt já foi zerado)
+      // handoff entre [min, min+MAX_ATRASO] atrás: passou do limiar mas não é
+      // antigo. handoffAt ainda preenchido = humano NÃO respondeu (o webhook
+      // zera quando ele responde). Fora dessa janela = velho, ignora.
+      handoffAt: { not: null, lte: teto, gte: piso },
       slaAlertAt: null, // ainda não alertamos este handoff
       convertedAt: null,
     },
