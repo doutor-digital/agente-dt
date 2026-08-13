@@ -18,6 +18,7 @@
 import { Router } from 'express';
 import { handleKommoWebhook } from '../controllers/webhook.controller.js';
 import { sessionStatsHandler } from '../controllers/session-stats.controller.js';
+import { slaReportHandler } from '../controllers/sla-report.controller.js';
 import { handleSalesbotWebhook } from '../controllers/salesbot.controller.js';
 import { handleWidgetRequest } from '../controllers/widget.controller.js';
 import { handleMetaVerify, handleMetaWebhook } from '../controllers/meta.controller.js';
@@ -182,6 +183,8 @@ apiRouter.post('/webhooks/salesbot', handleSalesbotWebhook);    // retrocompat
 // Integração máquina-a-máquina (n8n) — protegida por header x-internal-key.
 // Backend lê a franquia; n8n dá PATCH nos campos do Kommo.
 apiRouter.get('/integrations/:unitSlug/session-stats/:leadId', sessionStatsHandler);
+// Resumo do dia do SLA de resposta humana (n8n agendado → grupo).
+apiRouter.get('/integrations/sla-report', slaReportHandler);
 
 // Health.
 apiRouter.get('/health', (_req, res) => {
