@@ -51,16 +51,27 @@ const VAZIO: SessionStats = {
  * Calcula as estatísticas de sessão de um lead a partir da franquia.
  * NÃO escreve no Kommo — só devolve os números (quem escreve é o n8n).
  */
-export async function computeSessionStats(unit: Unit, kommoLeadId: number): Promise<SessionStats> {
-  // 1) Fonte primária: o vínculo que a NOSSA IA criou ao agendar.
-  const link = await prisma.spineLeadLink.findUnique({
-    where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
-  });
-  let idClient = link?.spineIdClient ?? null;
+export async function computeSessionStats(
+  unit: Unit,
+  kommoLeadId: number,
+  idClientOverride?: number | null,
+): Promise<SessionStats> {
+  // 0) Se quem chama já sabe o idClient (ex: n8n leu o campo na listagem de
+  //    leads), usa direto — evita QUALQUER chamada ao Kommo aqui. Sem isso, a
+  //    sincronização em massa fazia 1 getLead por lead e o nginx do Kommo
+  //    bloqueava o IP (403) na rajada.
+  let idClient = idClientOverride && idClientOverride > 0 ? idClientOverride : null;
 
-  // 2) Fallback: campo customizado no Kommo com o idClient da franquia (backfill
-  //    por telefone, pra cobrir pacientes que a IA não agendou). O id do campo
-  //    vem de pipelineIntents.spine_client_field_id (config por unidade).
+  // 1) Vínculo que a NOSSA IA criou ao agendar.
+  if (!idClient) {
+    const link = await prisma.spineLeadLink.findUnique({
+      where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+    });
+    idClient = link?.spineIdClient ?? null;
+  }
+
+  // 2) Fallback (só p/ chamadas SEM idClient): campo customizado no Kommo com o
+  //    idClient da franquia. Faz 1 getLead — use com parcimônia (rate-limit).
   if (!idClient) {
     const fieldId = (unit.pipelineIntents as Record<string, number> | null)?.spine_client_field_id;
     if (fieldId) {

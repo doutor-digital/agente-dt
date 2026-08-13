@@ -46,8 +46,13 @@ export async function sessionStatsHandler(req: Request, res: Response): Promise<
     return;
   }
 
+  // idClient opcional na query — quem chama (n8n) já leu o campo na listagem e
+  // passa direto, pra o endpoint NÃO precisar de getLead (evita rate-limit).
+  const idClientRaw = Number(req.query.idClient);
+  const idClient = Number.isInteger(idClientRaw) && idClientRaw > 0 ? idClientRaw : undefined;
+
   try {
-    const stats = await computeSessionStats(unit, leadId);
+    const stats = await computeSessionStats(unit, leadId, idClient);
     res.json({ unit: unit.slug, leadId, ...stats });
   } catch (err) {
     logger.error({ err: String(err), unit: unitSlug, leadId }, 'session-stats: erro inesperado');
