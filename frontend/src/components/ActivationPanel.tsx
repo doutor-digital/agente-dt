@@ -11,7 +11,7 @@
 // ============================================================================
 
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Save, Power, CalendarClock, Flame, PhoneCall, Repeat, Layers } from 'lucide-react';
+import { Loader2, Save, Power, CalendarClock, Flame, PhoneCall, Repeat, Layers, Timer } from 'lucide-react';
 import clsx from 'clsx';
 import { Toggle } from './ui/formkit';
 import { api } from '../lib/api';
@@ -27,6 +27,7 @@ type Draft = Pick<
   | 'qualificationEnabled'
   | 'handoffEnabled'
   | 'followUpEnabled'
+  | 'pipelineIntents'
 >;
 
 function unitToDraft(u: Unit): Draft {
@@ -37,6 +38,7 @@ function unitToDraft(u: Unit): Draft {
     qualificationEnabled: u.qualificationEnabled,
     handoffEnabled: u.handoffEnabled,
     followUpEnabled: u.followUpEnabled,
+    pipelineIntents: u.pipelineIntents,
   };
 }
 
@@ -95,6 +97,19 @@ export function ActivationPanel() {
   const allowed = draft.kommoAllowedStatusIds ?? [];
   const respondeEmTodas = allowed.length === 0;
   const update = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
+
+  // SLA de resposta humana: mora dentro do pipelineIntents (JSON), chave
+  // `sla_alert_minutes`. 0/ausente = desligado. Mescla preservando as outras
+  // chaves (scheduled_meeting, spine_client_field_id…) — o backend sobrescreve
+  // o JSON inteiro, então SEMPRE mandamos o objeto completo.
+  const pintents = (draft.pipelineIntents as Record<string, number> | null) ?? {};
+  const slaMinutes = Number(pintents.sla_alert_minutes ?? 0);
+  const setSla = (min: number) => {
+    const novo = { ...pintents };
+    if (min > 0) novo.sla_alert_minutes = min;
+    else delete novo.sla_alert_minutes;
+    update({ pipelineIntents: novo });
+  };
 
   function toggleStage(id: number) {
     const set = new Set(allowed);
@@ -293,6 +308,25 @@ export function ActivationPanel() {
           >
             <Toggle value={draft.followUpEnabled} onChange={(v) => update({ followUpEnabled: v })} />
           </Row>
+          <Row
+            icon={<Timer size={16} className="text-rose-300" />}
+            title="Alertar SDR se ninguém responder (SLA)"
+            desc="Com a IA pausada (humano no controle), se ninguém responder o lead dentro do tempo, um alerta com o nome do lead cai no grupo de WhatsApp da unidade."
+            compact
+          >
+            <div className="flex items-center gap-3">
+              {slaMinutes > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <StepBtn label="−" onClick={() => setSla(Math.max(1, slaMinutes - 1))} />
+                  <span className="tabular-nums text-[13px] text-zinc-100 w-14 text-center">
+                    {slaMinutes} min
+                  </span>
+                  <StepBtn label="+" onClick={() => setSla(Math.min(120, slaMinutes + 1))} />
+                </div>
+              )}
+              <Toggle value={slaMinutes > 0} onChange={(v) => setSla(v ? 5 : 0)} />
+            </div>
+          </Row>
         </section>
       </div>
     </div>
@@ -328,6 +362,18 @@ function Row({
       </div>
       <div className="mt-0.5 shrink-0">{children}</div>
     </div>
+  );
+}
+
+function StepBtn({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="h-6 w-6 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[15px] leading-none flex items-center justify-center transition-colors"
+    >
+      {label}
+    </button>
   );
 }
 
