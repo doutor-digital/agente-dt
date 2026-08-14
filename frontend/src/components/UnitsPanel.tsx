@@ -1063,32 +1063,47 @@ function UnitCard({
       >
         <div
           className={clsx(
-            'relative w-24 h-24 rounded-full bg-zinc-900/60 ring-2 ring-zinc-800 overflow-hidden mb-2 transition',
-            canEdit && 'group-hover:ring-brand-500/60 group-hover:shadow-[0_0_24px_rgba(124,77,255,0.18)]',
-            !unit.isActive && 'opacity-60',
+            'relative w-32 h-32 rounded-full mb-3 p-[3px] transition-all duration-300 ease-out',
+            'bg-gradient-to-br from-brand-500/70 via-violet-500/40 to-zinc-800',
+            canEdit &&
+              'group-hover:scale-[1.06] group-hover:from-brand-400 group-hover:via-violet-400/80 group-hover:shadow-[0_0_40px_rgba(124,77,255,0.38)]',
+            !unit.isActive && 'opacity-50 grayscale',
           )}
         >
-          <img
-            src={DEFAULT_UNIT_AVATAR}
-            alt=""
-            className="w-full h-full object-cover p-3"
-            referrerPolicy="no-referrer"
-          />
+          <div className="w-full h-full rounded-full bg-zinc-950 overflow-hidden flex items-center justify-center ring-1 ring-black/40">
+            <img
+              src={DEFAULT_UNIT_AVATAR}
+              alt=""
+              className="w-full h-full object-cover p-4 transition-transform duration-300 ease-out group-hover:scale-110"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+          {/* Status ao vivo — dot verde pulsante (ativa) */}
+          {unit.isActive && !cloning && (
+            <span className="absolute bottom-2 right-2 flex h-4 w-4" title="Ativa">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400/60" />
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-400 ring-2 ring-zinc-950" />
+            </span>
+          )}
           {cloning && (
-            <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-              <Loader2 className="animate-spin text-zinc-200" size={20} />
+            <div className="absolute inset-0 rounded-full bg-black/55 flex items-center justify-center">
+              <Loader2 className="animate-spin text-zinc-200" size={24} />
             </div>
           )}
           {!unit.isActive && (
-            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-wider text-amber-300 bg-zinc-950/80 px-1.5 py-0.5 rounded">
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-wider text-amber-300 bg-zinc-950/80 px-1.5 py-0.5 rounded">
               off
             </div>
           )}
         </div>
-        <div className="text-xs font-semibold text-zinc-100 uppercase tracking-wide leading-tight px-1 break-words line-clamp-2">
+        <div className="text-[13px] font-bold text-zinc-50 uppercase tracking-wide leading-tight px-1 break-words line-clamp-2 transition-colors group-hover:text-brand-100">
           {unit.name}
         </div>
-        <div className="text-[10px] text-zinc-500 mt-0.5 truncate max-w-full">/{unit.slug}</div>
+        <div className="text-[11px] text-zinc-500 mt-1 truncate max-w-full font-mono">/{unit.slug}</div>
+        <div className="mt-1 inline-flex items-center gap-1 text-[9px] uppercase tracking-wider text-zinc-600">
+          <span className="h-1 w-1 rounded-full bg-zinc-600" />
+          {unit.openaiModel}
+        </div>
       </button>
 
       <div className="mt-1.5 flex justify-center">
@@ -1331,7 +1346,7 @@ function UnitsListView(
   if (view === 'lista') return <UnitsList {...rest} />;
   // V1 · Avatares — cards circulares com dropdown (preserva o comportamento antigo).
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-x-4 gap-y-8">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-6 gap-y-10">
       {rest.units.map((u) => (
         <UnitCard
           key={u.id}
