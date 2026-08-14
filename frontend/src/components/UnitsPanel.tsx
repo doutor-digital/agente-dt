@@ -50,13 +50,6 @@ const DEFAULT_UNIT_AVATAR = 'https://fiqon.com.br/wp-content/uploads/2025/04/kom
 // 5 versões de visualização da lista de unidades (switcher no topo), todas com
 // a CHAVE OPENAI por unidade em destaque. Persistida no navegador.
 type UnitsView = 'avatares' | 'cartoes' | 'tabela' | 'chaves' | 'lista';
-const UNIT_VIEWS: Array<{ id: UnitsView; label: string }> = [
-  { id: 'avatares', label: 'V1 · Avatares' },
-  { id: 'cartoes', label: 'V2 · Cartões' },
-  { id: 'tabela', label: 'V3 · Tabela' },
-  { id: 'chaves', label: 'V4 · Foco na chave' },
-  { id: 'lista', label: 'V5 · Lista' },
-];
 
 /** Unidade usa chave própria? (vem do `_hasSecrets` mascarado pelo back). */
 function hasOwnKey(unit: Unit): boolean {
@@ -169,21 +162,8 @@ export function UnitsPanel() {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
-  const [view, setView] = useState<UnitsView>(() => {
-    try {
-      return (localStorage.getItem('unidades:view') as UnitsView) || 'avatares';
-    } catch {
-      return 'avatares';
-    }
-  });
-  const changeView = (v: UnitsView) => {
-    setView(v);
-    try {
-      localStorage.setItem('unidades:view', v);
-    } catch {
-      /* ignore */
-    }
-  };
+  // Só a visualização de Avatares (o João removeu as outras V2-V5).
+  const view: UnitsView = 'avatares';
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [cloningId, setCloningId] = useState<string | null>(null);
   const [validatingMeta, setValidatingMeta] = useState(false);
@@ -963,27 +943,6 @@ export function UnitsPanel() {
             />
           </div>
         </div>
-
-        {/* Switcher de visualização — 5 versões, todas com a chave OpenAI por unidade em destaque */}
-        {!ctxLoading && filteredUnits.length > 0 && (
-          <div className="flex items-center justify-center mb-8">
-            <div className="flex items-center gap-1 bg-zinc-900/40 ring-1 ring-white/10 rounded-full p-1 w-fit backdrop-blur overflow-x-auto">
-              {UNIT_VIEWS.map((v) => (
-                <button
-                  key={v.id}
-                  type="button"
-                  onClick={() => changeView(v.id)}
-                  className={clsx(
-                    'text-xs px-3 py-1.5 rounded-full font-medium transition whitespace-nowrap',
-                    view === v.id ? 'bg-brand-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-100',
-                  )}
-                >
-                  {v.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         {ctxLoading && (
           <div className="flex justify-center py-12">
