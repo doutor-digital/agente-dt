@@ -226,6 +226,9 @@ export interface Unit {
   /** Etapas em que a IA tem permissão de responder (allowlist). Vazio = responde
    *  em qualquer etapa; preenchido = só responde nas etapas marcadas. */
   kommoAllowedStatusIds: number[];
+  /** Etapas em que o ALERTA de SLA vale. Vazio = qualquer etapa não-terminal;
+   *  preenchido = só nessas (ex: Entrada, Em Qualificação, Em Negociação). */
+  slaAlertStatusIds: number[];
   kommoBypassSalesbot: boolean;
   /** Modo widget (handler widget_request do Salesbot) — entrega via return_url
    *  em vez de PATCH+Digital Pipeline. Flag de piloto, por unidade. */

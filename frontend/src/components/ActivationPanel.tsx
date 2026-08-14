@@ -28,6 +28,7 @@ type Draft = Pick<
   | 'handoffEnabled'
   | 'followUpEnabled'
   | 'pipelineIntents'
+  | 'slaAlertStatusIds'
 >;
 
 function unitToDraft(u: Unit): Draft {
@@ -39,6 +40,7 @@ function unitToDraft(u: Unit): Draft {
     handoffEnabled: u.handoffEnabled,
     followUpEnabled: u.followUpEnabled,
     pipelineIntents: u.pipelineIntents,
+    slaAlertStatusIds: u.slaAlertStatusIds ?? [],
   };
 }
 
@@ -116,6 +118,15 @@ export function ActivationPanel() {
     if (set.has(id)) set.delete(id);
     else set.add(id);
     update({ kommoAllowedStatusIds: [...set] });
+  }
+
+  // Etapas em que o alerta de SLA vale (coluna slaAlertStatusIds no banco).
+  const slaStages = draft.slaAlertStatusIds ?? [];
+  function toggleSlaStage(id: number) {
+    const set = new Set(slaStages);
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+    update({ slaAlertStatusIds: [...set] });
   }
 
   async function handleSave() {
@@ -328,7 +339,101 @@ export function ActivationPanel() {
             </div>
           </Row>
         </section>
+
+        {/* Etapas em que o alerta de SLA vale — visual, salvo no banco (coluna
+            slaAlertStatusIds). Só aparece com o SLA ligado. */}
+        {slaMinutes > 0 && (
+          <section className="mt-6 border-t border-zinc-800/60 pt-6">
+            <div className="flex items-center gap-2 mb-1">
+              <Timer size={16} className="text-rose-300" />
+              <h2 className="text-[15px] font-semibold text-zinc-100">
+                Etapas em que o alerta de SLA vale
+              </h2>
+            </div>
+            <p className="text-[12.5px] text-zinc-500 mb-4 leading-relaxed">
+              O alerta só dispara quando o lead está numa destas etapas. Marque as ativas (ex:{' '}
+              <span className="text-zinc-300">Entrada, Em Qualificação, Em Negociação</span>) — assim
+              lead <span className="text-zinc-300">Perdido, Ganho ou em Tratamento</span> nunca gera
+              alerta, mesmo com a IA pausada.
+            </p>
+            {slaStages.length === 0 && (
+              <div className="text-[12px] text-amber-300/80 mb-3">
+                Nenhuma etapa marcada = alerta em qualquer etapa (menos as terminais). Recomendo
+                marcar as ativas.
+              </div>
+            )}
+            <StagePicker
+              pipelines={pipelines}
+              pipesLoaded={pipes !== null}
+              selected={slaStages}
+              onToggle={toggleSlaStage}
+            />
+          </section>
+        )}
       </div>
+    </div>
+  );
+}
+
+function StagePicker({
+  pipelines,
+  pipesLoaded,
+  selected,
+  onToggle,
+}: {
+  pipelines: NonNullable<KommoPipelinesResponse['pipelines']>;
+  pipesLoaded: boolean;
+  selected: number[];
+  onToggle: (id: number) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      {!pipesLoaded && (
+        <div className="text-[12px] text-amber-300/80">
+          Não consegui listar as etapas do Kommo — confira o subdomínio/token da unidade.
+        </div>
+      )}
+      {pipelines.map((p) => (
+        <div key={p.id} className="rounded-lg border border-zinc-800 bg-zinc-900/40 overflow-hidden">
+          <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-zinc-500 font-semibold border-b border-zinc-800/60">
+            {p.name}
+          </div>
+          <div className="p-2 grid sm:grid-cols-2 gap-1">
+            {p.statuses.map((s) => {
+              const on = selected.includes(s.id);
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => onToggle(s.id)}
+                  className={clsx(
+                    'flex items-center gap-2.5 px-2.5 py-2 rounded-md text-left transition',
+                    on ? 'bg-brand-500/10 ring-1 ring-brand-500/40' : 'hover:bg-zinc-800/50',
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'h-4 w-4 rounded flex items-center justify-center shrink-0 text-[10px]',
+                      on ? 'bg-brand-500 text-white' : 'bg-zinc-800 ring-1 ring-zinc-700',
+                    )}
+                  >
+                    {on ? '✓' : ''}
+                  </span>
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    {s.color && (
+                      <span
+                        className="h-2.5 w-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: s.color }}
+                      />
+                    )}
+                    <span className="text-[13px] text-zinc-200 truncate">{s.name}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

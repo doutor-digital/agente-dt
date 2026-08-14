@@ -46,6 +46,8 @@ const unitInputBase = {
   kommoPausedFieldId: z.coerce.number().int().nullable().optional(),
   kommoWonStatusIds: z.array(z.coerce.number().int()).optional(),
   kommoAllowedStatusIds: z.array(z.coerce.number().int()).optional(),
+  // Etapas em que o ALERTA de SLA vale (visual/configurável no front).
+  slaAlertStatusIds: z.array(z.coerce.number().int()).optional(),
   kommoBypassSalesbot: z.boolean().optional(),
   kommoWidgetReplyEnabled: z.boolean().optional(),
   kommoWidgetSecret: z.string().nullable().optional(),

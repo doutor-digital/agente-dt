@@ -381,21 +381,33 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   // nossa e cujo autor é um usuário da conta (author.type="user") significa que
   // um humano assumiu — o cliente vem como author.type="external".
   let humanTakeoverLeadId: number | null = null;
+  const respondedLeadIds = new Set<number>();
   for (const out of getOutgoingMessages(parsed.data)) {
     if (!out.entity_id) continue;
     const wasOurReply = confirmDelivery({ unitId: unit.id, leadId: out.entity_id, text: out.text });
-    if (!wasOurReply && (out.author?.type ?? '').toLowerCase() === 'user') {
+    if (wasOurReply) continue; // foi a própria IA entregando — não conta como resposta externa
+    // QUALQUER mensagem que sai pro lead (humano, TEMPLATE, automação) conta como
+    // "respondido" pro SLA/reativação. Antes só author.type='user' contava, então
+    // template escapava e o lead ficava constando "sem resposta".
+    respondedLeadIds.add(out.entity_id);
+    // Só resposta de USUÁRIO humano dispara a auto-pausa da IA (template/automação não).
+    if ((out.author?.type ?? '').toLowerCase() === 'user') {
       humanTakeoverLeadId = out.entity_id;
     }
   }
 
-  // Humano respondeu → CANCELA a reativação. A secretária está tocando o lead;
-  // a IA não pode voltar por cima. Zera o handoffAt que o worker de reativação
-  // vigia. É exatamente esta trava que faz "reativar só se o humano não agiu".
-  if (humanTakeoverLeadId) {
+  // Alguém respondeu (humano, template ou automação) → CANCELA a reativação e o
+  // SLA. A equipe está tocando o lead; a IA não volta por cima e o alerta não
+  // dispara. Zera o handoffAt que ambos os workers vigiam. É a trava "só age se
+  // ninguém respondeu" — agora robusta a template, não só a msg de 'user'.
+  if (respondedLeadIds.size > 0) {
     await prisma.conversation
       .updateMany({
-        where: { unitId: unit.id, leadId: String(humanTakeoverLeadId), handoffAt: { not: null } },
+        where: {
+          unitId: unit.id,
+          leadId: { in: [...respondedLeadIds].map(String) },
+          handoffAt: { not: null },
+        },
         data: { handoffAt: null },
       })
       .catch(() => undefined);
@@ -750,22 +762,6 @@ export async function processAgent(args: {
   // Guard: se operador humano marcou "IA Pausada", não invocamos o agente.
   // Verificação síncrona porque é 1 GET barato comparado ao custo da LLM.
   if (await isLeadPaused(unit, leadId)) {
-    // Inicia o relógio de SLA: o lead ESCREVEU com a IA pausada e ninguém
-    // respondeu ainda. Carimba handoffAt SÓ se estiver vazio — não sobrescreve
-    // um handoff anterior nem reinicia um relógio já rodando. Isto cobre a pausa
-    // MANUAL e o takeover (que não passam pelo pausar_ia, logo não carimbavam
-    // handoffAt). O webhook zera handoffAt quando o humano responde; por isso
-    // handoffAt ainda cheio depois de X min = ninguém respondeu. slaAlertAt:null
-    // libera 1 alerta neste ciclo de espera. Guardado por `humanMessage` pra não
-    // carimbar em evento sem mensagem do cliente.
-    if (humanMessage) {
-      await prisma.conversation
-        .updateMany({
-          where: { unitId: unit.id, leadId: String(leadId), handoffAt: null },
-          data: { handoffAt: new Date(), slaAlertAt: null },
-        })
-        .catch(() => undefined);
-    }
     await finishWidgetSilently(); // libera o Salesbot pausado (modo widget)
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({

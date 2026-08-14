@@ -118,6 +118,7 @@ export interface UnitInput {
   kommoPausedFieldId?: number | null;
   kommoWonStatusIds?: number[];
   kommoAllowedStatusIds?: number[];
+  slaAlertStatusIds?: number[];
   kommoBypassSalesbot?: boolean;
   kommoWidgetReplyEnabled?: boolean;
   kommoWidgetSecret?: string | null;

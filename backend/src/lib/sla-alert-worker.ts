@@ -125,6 +125,7 @@ async function alertarUnidade(unit: Unit): Promise<void> {
   if (candidatas.length === 0) return;
 
   const kommo = createKommoClient(unit);
+  const filtroEtapas = unit.slaAlertStatusIds ?? [];
 
   for (const conv of candidatas) {
     const leadId = Number(conv.leadId);
@@ -137,12 +138,26 @@ async function alertarUnidade(unit: Unit): Promise<void> {
     }
 
     try {
-      let nome = conv.contactName?.trim() || '';
-      if (!nome) {
-        // Sem nome no banco: 1 leitura (raro, baixo volume) pra alerta detalhado.
-        const lead = await kommo.getLead(leadId).catch(() => null);
-        nome = (lead?.name ?? '').trim();
+      // Busca o lead 1x quando precisa: pra checar a ETAPA (filtro) e/ou pegar o
+      // nome se faltar. Se não há filtro nem falta nome, nem lê o Kommo.
+      const precisaLead = filtroEtapas.length > 0 || !conv.contactName?.trim();
+      const lead = precisaLead ? await kommo.getLead(leadId).catch(() => null) : null;
+
+      // Filtro de etapa: o SLA só vale nas etapas ativas (ex: Entrada, Em
+      // Qualificação, Em Negociação). Lead Perdido/Ganho/Tratamento (ou fora da
+      // lista) que ficou com "Pausar IA" marcado NÃO é caso de SLA — zera o
+      // handoff pra sair da fila de vez.
+      if (filtroEtapas.length > 0) {
+        if (!lead) continue; // não conseguiu ler: tenta no próximo sweep (não dropa)
+        if (!filtroEtapas.includes(lead.status_id)) {
+          await prisma.conversation
+            .update({ where: { id: conv.id }, data: { handoffAt: null } })
+            .catch(() => undefined);
+          continue;
+        }
       }
+
+      const nome = conv.contactName?.trim() || (lead?.name ?? '').trim();
       const contato = nome ? `[Contato: ${nome}] ` : '';
       const espera = humanizarEspera(Date.now() - (conv.handoffAt as Date).getTime());
       const texto =
