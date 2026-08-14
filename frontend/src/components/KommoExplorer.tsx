@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Globe, Loader2, MessageSquareText, RefreshCw, Save, Wand2, XCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, RefreshCw, Save, Wand2, XCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type {
@@ -51,6 +51,7 @@ export function KommoExplorer(props: Props) {
   const [loading, setLoading] = useState(false);
   const [validating, setValidating] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [formStyle, setFormStyle] = useState<FormStyle>('card');
 
   const load = useCallback(async () => {
     if (!unitId) return;
@@ -101,7 +102,7 @@ export function KommoExplorer(props: Props) {
 
   return (
     <div className="space-y-4">
-      <FormStyleGallery />
+      <FormStyleSwitcher value={formStyle} onChange={(next) => { CURRENT_STYLE = next; setFormStyle(next); }} />
       <div className="flex items-center justify-between">
         <div className="text-[11px] text-zinc-500">
           {loading && !fields && !bots && !pipelines && 'Carregando dados ao vivo do Kommo…'}
@@ -395,99 +396,58 @@ function Section({
   );
 }
 
-// GALERIA DE ESTILOS — 5 versões do MESMO formulário pra o João escolher.
-// São só amostras visuais (não salvam nada). Ele escolhe o número e a gente
-// aplica o estilo nos campos reais.
-function FormStyleGallery() {
-  return (
-    <div className="rounded-2xl ring-1 ring-brand-500/25 bg-brand-500/[0.04] p-4 mb-2">
-      <div className="flex items-center gap-2 mb-1">
-        <Wand2 size={15} className="text-brand-300" />
-        <h3 className="text-[14px] font-bold text-zinc-50">Escolha o estilo do formulário</h3>
-      </div>
-      <p className="text-[12px] text-zinc-400 mb-4">
-        5 versões dos mesmos campos. Diz o número que você curtiu que eu aplico em todo o painel.
-      </p>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* 1 · Minimal / linha */}
-        <StyleCard n={1} name="Minimal" desc="Só uma linha embaixo, super limpo">
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-zinc-500 mb-2">Subdomínio</label>
-            <input defaultValue="attivacorpoementeitz" className="w-full bg-transparent border-0 border-b-2 border-zinc-700 px-1 py-2 text-sm text-zinc-100 outline-none transition focus:border-brand-500" />
-          </div>
-          <div>
-            <label className="block text-[11px] uppercase tracking-wider text-zinc-500 mb-2">Resposta IA</label>
-            <input defaultValue="Resposta da IA · #2445171" readOnly className="w-full bg-transparent border-0 border-b-2 border-zinc-700 px-1 py-2 text-sm text-zinc-100 outline-none focus:border-brand-500" />
-          </div>
-        </StyleCard>
-
-        {/* 2 · Card com ícone */}
-        <StyleCard n={2} name="Card com ícone" desc="Ícone colorido em cada campo">
-          <div>
-            <div className="flex items-center gap-2 mb-2"><span className="h-6 w-6 rounded-lg bg-brand-500/15 text-brand-300 ring-1 ring-brand-500/25 flex items-center justify-center"><Globe size={13} /></span><span className="text-[13px] font-semibold text-zinc-100">Subdomínio</span></div>
-            <div className="flex items-stretch rounded-xl bg-zinc-900 ring-1 ring-zinc-700 overflow-hidden focus-within:ring-2 focus-within:ring-brand-500 transition">
-              <span className="w-11 shrink-0 bg-zinc-800/60 border-r border-zinc-700/50 text-brand-300 flex items-center justify-center"><Globe size={16} /></span>
-              <input defaultValue="attivacorpoementeitz" className="flex-1 min-w-0 bg-transparent px-3 py-2.5 text-sm text-zinc-100 outline-none" />
-            </div>
-          </div>
-          <div>
-            <div className="flex items-center gap-2 mb-2"><span className="h-6 w-6 rounded-lg bg-brand-500/15 text-brand-300 ring-1 ring-brand-500/25 flex items-center justify-center"><MessageSquareText size={13} /></span><span className="text-[13px] font-semibold text-zinc-100">Resposta IA</span></div>
-            <div className="flex items-stretch rounded-xl bg-zinc-900 ring-1 ring-zinc-700 overflow-hidden">
-              <span className="w-11 shrink-0 bg-zinc-800/60 border-r border-zinc-700/50 text-brand-300 flex items-center justify-center"><MessageSquareText size={16} /></span>
-              <input defaultValue="Resposta da IA · #2445171" readOnly className="flex-1 min-w-0 bg-transparent px-3 py-2.5 text-sm text-zinc-100 outline-none" />
-            </div>
-          </div>
-        </StyleCard>
-
-        {/* 3 · Neon / cockpit */}
-        <StyleCard n={3} name="Neon" desc="Fundo preto + brilho verde, tipo cockpit">
-          <div>
-            <label className="block text-[11px] font-mono uppercase tracking-wider text-emerald-400/80 mb-2">Subdomínio</label>
-            <input defaultValue="attivacorpoementeitz" className="w-full rounded-lg bg-black ring-1 ring-emerald-500/30 px-3 py-2.5 text-sm text-emerald-50 font-mono shadow-[inset_0_0_12px_rgba(16,185,129,0.08)] outline-none transition focus:ring-2 focus:ring-emerald-400 focus:shadow-[0_0_16px_rgba(16,185,129,0.25)]" />
-          </div>
-          <div>
-            <label className="block text-[11px] font-mono uppercase tracking-wider text-emerald-400/80 mb-2">Resposta IA</label>
-            <input defaultValue="Resposta da IA · #2445171" readOnly className="w-full rounded-lg bg-black ring-1 ring-emerald-500/30 px-3 py-2.5 text-sm text-emerald-50 font-mono shadow-[inset_0_0_12px_rgba(16,185,129,0.08)] outline-none" />
-          </div>
-        </StyleCard>
-
-        {/* 4 · Soft / pill */}
-        <StyleCard n={4} name="Soft" desc="Cantos arredondados (pílula), amigável">
-          <div>
-            <label className="block text-[13px] font-semibold text-zinc-100 mb-2">Subdomínio</label>
-            <input defaultValue="attivacorpoementeitz" className="w-full rounded-full bg-zinc-800/70 ring-1 ring-zinc-700 px-5 py-3 text-sm text-zinc-100 outline-none transition focus:ring-2 focus:ring-brand-400" />
-          </div>
-          <div>
-            <label className="block text-[13px] font-semibold text-zinc-100 mb-2">Resposta IA</label>
-            <input defaultValue="Resposta da IA · #2445171" readOnly className="w-full rounded-full bg-zinc-800/70 ring-1 ring-zinc-700 px-5 py-3 text-sm text-zinc-100 outline-none" />
-          </div>
-        </StyleCard>
-
-        {/* 5 · Bordered / alto contraste */}
-        <StyleCard n={5} name="Bordas fortes" desc="Bordas grossas, alta legibilidade">
-          <div>
-            <label className="block text-[13px] font-bold text-zinc-100 mb-2">Subdomínio</label>
-            <input defaultValue="attivacorpoementeitz" className="w-full rounded-md bg-zinc-950 border-2 border-zinc-600 px-3 py-2.5 text-sm text-zinc-100 outline-none transition focus:border-brand-500" />
-          </div>
-          <div>
-            <label className="block text-[13px] font-bold text-zinc-100 mb-2">Resposta IA</label>
-            <input defaultValue="Resposta da IA · #2445171" readOnly className="w-full rounded-md bg-zinc-950 border-2 border-zinc-600 px-3 py-2.5 text-sm text-zinc-100 outline-none" />
-          </div>
-        </StyleCard>
-      </div>
-    </div>
-  );
+// ── ESTILOS DO FORMULÁRIO — 5 temas que o João escolhe no seletor ───────────
+type FormStyle = 'minimal' | 'card' | 'neon' | 'soft' | 'bordas';
+let CURRENT_STYLE: FormStyle = 'card';
+const FORM_STYLE_OPTIONS: Array<{ id: FormStyle; label: string }> = [
+  { id: 'minimal', label: '1 · Minimal' },
+  { id: 'card', label: '2 · Card' },
+  { id: 'neon', label: '3 · Neon' },
+  { id: 'soft', label: '4 · Soft' },
+  { id: 'bordas', label: '5 · Bordas' },
+];
+const STYLES: Record<FormStyle, { label: string; input: string }> = {
+  minimal: {
+    label: 'block text-[11px] uppercase tracking-wider text-zinc-500 mb-2',
+    input: 'w-full bg-transparent border-0 border-b-2 border-zinc-700 px-1 py-2 text-sm text-zinc-100 outline-none transition focus:border-brand-500 disabled:opacity-50',
+  },
+  card: {
+    label: 'block text-[13px] font-semibold text-zinc-100 mb-2',
+    input: 'w-full rounded-xl bg-zinc-900 ring-1 ring-zinc-700 px-4 py-3 text-sm text-zinc-100 outline-none transition focus:ring-2 focus:ring-brand-500 disabled:opacity-50',
+  },
+  neon: {
+    label: 'block text-[11px] font-mono uppercase tracking-wider text-emerald-400/80 mb-2',
+    input: 'w-full rounded-lg bg-black ring-1 ring-emerald-500/30 px-3 py-2.5 text-sm text-emerald-50 font-mono outline-none transition shadow-[inset_0_0_12px_rgba(16,185,129,0.08)] focus:ring-2 focus:ring-emerald-400 focus:shadow-[0_0_18px_rgba(16,185,129,0.28)] disabled:opacity-50',
+  },
+  soft: {
+    label: 'block text-[13px] font-semibold text-zinc-100 mb-2',
+    input: 'w-full rounded-full bg-zinc-800/70 ring-1 ring-zinc-700 px-5 py-3 text-sm text-zinc-100 outline-none transition focus:ring-2 focus:ring-brand-400 disabled:opacity-50',
+  },
+  bordas: {
+    label: 'block text-[13px] font-bold text-zinc-100 mb-2',
+    input: 'w-full rounded-md bg-zinc-950 border-2 border-zinc-600 px-3 py-2.5 text-sm text-zinc-100 outline-none transition focus:border-brand-500 disabled:opacity-50',
+  },
+};
+function fieldStyle() {
+  return STYLES[CURRENT_STYLE];
 }
-
-function StyleCard({ n, name, desc, children }: { n: number; name: string; desc: string; children: React.ReactNode }) {
+function FormStyleSwitcher({ value, onChange }: { value: FormStyle; onChange: (s: FormStyle) => void }) {
   return (
-    <div className="rounded-xl bg-zinc-950/50 ring-1 ring-zinc-800 p-4">
-      <div className="flex items-baseline gap-2 mb-3">
-        <span className="flex items-center justify-center h-6 w-6 rounded-full bg-brand-600 text-white text-[12px] font-bold shrink-0">{n}</span>
-        <span className="text-[13px] font-bold text-zinc-100">{name}</span>
-        <span className="text-[11px] text-zinc-500 truncate">— {desc}</span>
-      </div>
-      <div className="space-y-3">{children}</div>
+    <div className="rounded-xl ring-1 ring-brand-500/25 bg-brand-500/[0.04] px-4 py-3 mb-2 flex items-center gap-2 flex-wrap">
+      <span className="text-[12px] font-semibold text-zinc-200 mr-1">Estilo do formulário:</span>
+      {FORM_STYLE_OPTIONS.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          onClick={() => onChange(o.id)}
+          className={clsx(
+            'text-xs px-3 py-1.5 rounded-full font-medium transition',
+            value === o.id ? 'bg-brand-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-100 ring-1 ring-zinc-700',
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -509,9 +469,10 @@ function KommoSelect({
   emptyHint: string;
   error: KommoErrorEnvelope | null | undefined;
 }) {
+  const st = fieldStyle();
   return (
     <div>
-      <label className="block text-[13px] font-medium text-zinc-200 mb-1.5">{label}</label>
+      <label className={st.label}>{label}</label>
       {error && <ErrorBanner envelope={error} />}
       <select
         value={value ?? 0}
@@ -520,7 +481,7 @@ function KommoSelect({
           onChange(id > 0 ? id : null);
         }}
         disabled={options.length === 0}
-        className="w-full rounded-lg bg-zinc-900/70 ring-1 ring-zinc-700 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500/60 transition disabled:opacity-50"
+        className={st.input}
       >
         <option value={0}>— Nenhum —</option>
         {options.map((o) => (
@@ -558,6 +519,7 @@ function QuickFillPanel(props: {
 
   const wonStr = props.wonStatusIds.join(', ');
 
+  const st = fieldStyle();
   return (
     <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
       <div className="flex items-start gap-3 mb-3">
@@ -596,7 +558,7 @@ function QuickFillPanel(props: {
           hint="Número do bot do Kommo que dispara a mensagem (via POST /salesbot/{id}/run)."
         />
         <div>
-          <label className="block text-[13px] font-medium text-zinc-200 mb-1.5">
+          <label className={st.label}>
             IDs das etapas "Ganho"
           </label>
           <input
@@ -610,7 +572,7 @@ function QuickFillPanel(props: {
               props.onWonStatusIdsChange(ids);
             }}
             placeholder="ex: 142 (separe por vírgula)"
-            className="w-full rounded-lg bg-zinc-900/70 ring-1 ring-zinc-700 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500/60 transition"
+            className={st.input}
           />
           <div className="text-[12px] text-zinc-500 mt-1.5 leading-relaxed">
             Etapas que contam como "lead convertido". Separe por vírgula se for mais de uma.
@@ -664,9 +626,10 @@ function QuickInput({
   placeholder?: string;
   hint?: string;
 }) {
+  const st = fieldStyle();
   return (
     <div>
-      <label className="block text-[13px] font-medium text-zinc-200 mb-1.5">{label}</label>
+      <label className={st.label}>{label}</label>
       <input
         type="number"
         value={value ?? ''}
@@ -676,7 +639,7 @@ function QuickInput({
           const n = v === '' ? null : Number(v);
           onChange(n && Number.isFinite(n) && n > 0 ? n : null);
         }}
-        className="w-full rounded-lg bg-zinc-900/70 ring-1 ring-zinc-700 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500/60 transition"
+        className={st.input}
       />
       {hint && <div className="text-[12px] text-zinc-500 mt-1.5 leading-relaxed">{hint}</div>}
     </div>
@@ -696,9 +659,10 @@ function ManualIdField({
   hint?: string;
   error?: KommoErrorEnvelope | null;
 }) {
+  const st = fieldStyle();
   return (
     <div>
-      <label className="block text-[13px] font-medium text-zinc-200 mb-1.5">{label}</label>
+      <label className={st.label}>{label}</label>
       {error && <ErrorBanner envelope={error} />}
       <input
         type="number"
@@ -709,7 +673,7 @@ function ManualIdField({
           onChange(n && Number.isFinite(n) && n > 0 ? n : null);
         }}
         placeholder="Cole o ID aqui (ex: 12345)"
-        className="w-full rounded-lg bg-zinc-900/70 ring-1 ring-zinc-700 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500/60 transition"
+        className={st.input}
       />
       {hint && <div className="text-[12px] text-zinc-500 mt-1.5 leading-relaxed">{hint}</div>}
     </div>
