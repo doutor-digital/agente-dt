@@ -13,8 +13,8 @@
 // botão "Salvar" do UnitsPanel pai.
 // ============================================================================
 
-import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Loader2, RefreshCw, Save, Wand2, XCircle } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, Loader2, RefreshCw, Save, Wand2, XCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type {
@@ -51,7 +51,7 @@ export function KommoExplorer(props: Props) {
   const [loading, setLoading] = useState(false);
   const [validating, setValidating] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [formStyle, setFormStyle] = useState<FormStyle>('card');
+  const [step, setStep] = useState(0);
 
   const load = useCallback(async () => {
     if (!unitId) return;
@@ -100,9 +100,15 @@ export function KommoExplorer(props: Props) {
   const checkboxFields = (fields?.fields ?? []).filter((f) => f.type === 'checkbox');
   const textFields = (fields?.fields ?? []).filter((f) => f.type === 'text' || f.type === 'textarea');
 
+  const STEPS = [
+    { key: 'campos', title: 'Campos da IA', desc: 'Resposta, pausa e entrega' },
+    { key: 'etapas', title: 'Etapas', desc: 'Conversão e resposta da IA' },
+    { key: 'salvar', title: 'Revisar & Salvar', desc: 'Validar e persistir' },
+  ];
+
   return (
-    <div className="space-y-4">
-      <FormStyleSwitcher value={formStyle} onChange={(next) => { CURRENT_STYLE = next; setFormStyle(next); }} />
+    <div className="space-y-5">
+      <WizardHeader steps={STEPS} current={step} onJump={setStep} />
       <div className="flex items-center justify-between">
         <div className="text-[11px] text-zinc-500">
           {loading && !fields && !bots && !pipelines && 'Carregando dados ao vivo do Kommo…'}
@@ -131,6 +137,7 @@ export function KommoExplorer(props: Props) {
         </div>
       </div>
 
+      {step === 0 && (
       <Section
         title="Campos da IA"
         subtitle="Onde a IA escreve a resposta, o checkbox que pausa, e o bot que entrega. Preencha por ID (Quick Fill) ou escolha nos dropdowns abaixo."
@@ -196,7 +203,9 @@ export function KommoExplorer(props: Props) {
       )}
 
       </Section>
+      )}
 
+      {step === 1 && (
       <Section
         title="Etapas"
         subtitle="Quais etapas contam como conversão (Ganho) e em quais a IA responde."
@@ -318,7 +327,10 @@ export function KommoExplorer(props: Props) {
       </div>
 
       </Section>
+      )}
 
+      {step === 2 && (
+      <>
       {/* Validation result */}
       {validation && <ValidationResults result={validation} />}
 
@@ -368,6 +380,36 @@ export function KommoExplorer(props: Props) {
           </div>
         </div>
       </div>
+      </>
+      )}
+
+      {/* Navegação do wizard */}
+      <div className="flex items-center justify-between border-t border-zinc-800/70 pt-4">
+        <button
+          type="button"
+          onClick={() => setStep((s) => Math.max(0, s - 1))}
+          disabled={step === 0}
+          className="text-xs px-4 py-2 rounded-lg bg-zinc-800 text-zinc-200 ring-1 ring-zinc-700 inline-flex items-center gap-1.5 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <ChevronLeft size={16} /> Voltar
+        </button>
+        <span className="text-[11px] text-zinc-500 font-medium">
+          Passo {step + 1} de {STEPS.length}
+        </span>
+        {step < STEPS.length - 1 ? (
+          <button
+            type="button"
+            onClick={() => setStep((s) => Math.min(STEPS.length - 1, s + 1))}
+            className="text-xs px-4 py-2 rounded-lg bg-brand-600 text-white ring-1 ring-brand-400/50 inline-flex items-center gap-1.5 hover:bg-brand-500 font-medium shadow-[0_0_16px_rgba(99,102,241,0.25)]"
+          >
+            Próximo <ChevronRight size={16} />
+          </button>
+        ) : (
+          <span className="text-[11px] text-emerald-300 font-medium inline-flex items-center gap-1.5">
+            <Check size={14} /> Salve na seção acima
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -396,58 +438,82 @@ function Section({
   );
 }
 
-// ── ESTILOS DO FORMULÁRIO — 5 temas que o João escolhe no seletor ───────────
-type FormStyle = 'minimal' | 'card' | 'neon' | 'soft' | 'bordas';
-let CURRENT_STYLE: FormStyle = 'card';
-const FORM_STYLE_OPTIONS: Array<{ id: FormStyle; label: string }> = [
-  { id: 'minimal', label: '1 · Minimal' },
-  { id: 'card', label: '2 · Card' },
-  { id: 'neon', label: '3 · Neon' },
-  { id: 'soft', label: '4 · Soft' },
-  { id: 'bordas', label: '5 · Bordas' },
-];
-const STYLES: Record<FormStyle, { label: string; input: string }> = {
-  minimal: {
-    label: 'block text-[11px] uppercase tracking-wider text-zinc-500 mb-2',
-    input: 'w-full bg-transparent border-0 border-b-2 border-zinc-700 px-1 py-2 text-sm text-zinc-100 outline-none transition focus:border-brand-500 disabled:opacity-50',
-  },
-  card: {
-    label: 'block text-[13px] font-semibold text-zinc-100 mb-2',
-    input: 'w-full rounded-xl bg-zinc-900 ring-1 ring-zinc-700 px-4 py-3 text-sm text-zinc-100 outline-none transition focus:ring-2 focus:ring-brand-500 disabled:opacity-50',
-  },
-  neon: {
-    label: 'block text-[11px] font-mono uppercase tracking-wider text-emerald-400/80 mb-2',
-    input: 'w-full rounded-lg bg-black ring-1 ring-emerald-500/30 px-3 py-2.5 text-sm text-emerald-50 font-mono outline-none transition shadow-[inset_0_0_12px_rgba(16,185,129,0.08)] focus:ring-2 focus:ring-emerald-400 focus:shadow-[0_0_18px_rgba(16,185,129,0.28)] disabled:opacity-50',
-  },
-  soft: {
-    label: 'block text-[13px] font-semibold text-zinc-100 mb-2',
-    input: 'w-full rounded-full bg-zinc-800/70 ring-1 ring-zinc-700 px-5 py-3 text-sm text-zinc-100 outline-none transition focus:ring-2 focus:ring-brand-400 disabled:opacity-50',
-  },
-  bordas: {
-    label: 'block text-[13px] font-bold text-zinc-100 mb-2',
-    input: 'w-full rounded-md bg-zinc-950 border-2 border-zinc-600 px-3 py-2.5 text-sm text-zinc-100 outline-none transition focus:border-brand-500 disabled:opacity-50',
-  },
+// ── ESTILO DOS CAMPOS — um tema único, limpo e legível ─────────────────────
+const FIELD = {
+  label: 'block text-[13px] font-semibold text-zinc-100 mb-2',
+  input:
+    'w-full rounded-xl bg-zinc-900 ring-1 ring-zinc-700 px-4 py-3 text-sm text-zinc-100 outline-none transition focus:ring-2 focus:ring-brand-500 disabled:opacity-50',
 };
 function fieldStyle() {
-  return STYLES[CURRENT_STYLE];
+  return FIELD;
 }
-function FormStyleSwitcher({ value, onChange }: { value: FormStyle; onChange: (s: FormStyle) => void }) {
+
+// ── STEPPER DO WIZARD — cabeçalho com passos, progresso e navegação clicável ─
+function WizardHeader({
+  steps,
+  current,
+  onJump,
+}: {
+  steps: Array<{ key: string; title: string; desc: string }>;
+  current: number;
+  onJump: (i: number) => void;
+}) {
+  const pct = steps.length > 1 ? (current / (steps.length - 1)) * 100 : 0;
   return (
-    <div className="rounded-xl ring-1 ring-brand-500/25 bg-brand-500/[0.04] px-4 py-3 mb-2 flex items-center gap-2 flex-wrap">
-      <span className="text-[12px] font-semibold text-zinc-200 mr-1">Estilo do formulário:</span>
-      {FORM_STYLE_OPTIONS.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          onClick={() => onChange(o.id)}
-          className={clsx(
-            'text-xs px-3 py-1.5 rounded-full font-medium transition',
-            value === o.id ? 'bg-brand-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-100 ring-1 ring-zinc-700',
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
+    <div className="rounded-2xl ring-1 ring-zinc-800 bg-gradient-to-b from-zinc-900/70 to-zinc-900/20 px-5 pt-4 pb-3">
+      <div className="flex items-center">
+        {steps.map((s, i) => {
+          const done = i < current;
+          const active = i === current;
+          return (
+            <Fragment key={s.key}>
+              <button
+                type="button"
+                onClick={() => onJump(i)}
+                className="flex items-center gap-3 text-left group shrink-0"
+              >
+                <span
+                  className={clsx(
+                    'grid place-items-center w-9 h-9 rounded-full text-sm font-semibold ring-1 transition shrink-0',
+                    active
+                      ? 'bg-brand-600 text-white ring-brand-400 shadow-[0_0_16px_rgba(99,102,241,0.4)]'
+                      : done
+                        ? 'bg-emerald-500/20 text-emerald-300 ring-emerald-500/40'
+                        : 'bg-zinc-800 text-zinc-500 ring-zinc-700 group-hover:text-zinc-300',
+                  )}
+                >
+                  {done ? <Check size={16} /> : i + 1}
+                </span>
+                <span className="hidden sm:block">
+                  <span
+                    className={clsx(
+                      'block text-[13px] font-semibold leading-tight',
+                      active ? 'text-zinc-100' : done ? 'text-emerald-200' : 'text-zinc-500',
+                    )}
+                  >
+                    {s.title}
+                  </span>
+                  <span className="block text-[11px] text-zinc-500 leading-tight">{s.desc}</span>
+                </span>
+              </button>
+              {i < steps.length - 1 && (
+                <div
+                  className={clsx(
+                    'flex-1 h-px mx-3 transition-colors',
+                    done ? 'bg-emerald-500/40' : 'bg-zinc-800',
+                  )}
+                />
+              )}
+            </Fragment>
+          );
+        })}
+      </div>
+      <div className="mt-3 h-1 rounded-full bg-zinc-800 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-brand-500 to-violet-500 transition-all duration-300"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }
