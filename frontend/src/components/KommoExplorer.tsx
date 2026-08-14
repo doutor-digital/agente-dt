@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Loader2, RefreshCw, Save, Wand2, XCircle } from 'lucide-react';
+import { CheckCircle2, Globe, Loader2, MessageSquareText, RefreshCw, Save, Wand2, XCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import type {
@@ -101,6 +101,7 @@ export function KommoExplorer(props: Props) {
 
   return (
     <div className="space-y-4">
+      <FormStyleGallery />
       <div className="flex items-center justify-between">
         <div className="text-[11px] text-zinc-500">
           {loading && !fields && !bots && !pipelines && 'Carregando dados ao vivo do Kommo…'}
@@ -391,6 +392,103 @@ function Section({
       {!subtitle && <div className="mb-3" />}
       <div className="space-y-4">{children}</div>
     </section>
+  );
+}
+
+// GALERIA DE ESTILOS — 5 versões do MESMO formulário pra o João escolher.
+// São só amostras visuais (não salvam nada). Ele escolhe o número e a gente
+// aplica o estilo nos campos reais.
+function FormStyleGallery() {
+  return (
+    <div className="rounded-2xl ring-1 ring-brand-500/25 bg-brand-500/[0.04] p-4 mb-2">
+      <div className="flex items-center gap-2 mb-1">
+        <Wand2 size={15} className="text-brand-300" />
+        <h3 className="text-[14px] font-bold text-zinc-50">Escolha o estilo do formulário</h3>
+      </div>
+      <p className="text-[12px] text-zinc-400 mb-4">
+        5 versões dos mesmos campos. Diz o número que você curtiu que eu aplico em todo o painel.
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* 1 · Minimal / linha */}
+        <StyleCard n={1} name="Minimal" desc="Só uma linha embaixo, super limpo">
+          <div>
+            <label className="block text-[11px] uppercase tracking-wider text-zinc-500 mb-2">Subdomínio</label>
+            <input defaultValue="attivacorpoementeitz" className="w-full bg-transparent border-0 border-b-2 border-zinc-700 px-1 py-2 text-sm text-zinc-100 outline-none transition focus:border-brand-500" />
+          </div>
+          <div>
+            <label className="block text-[11px] uppercase tracking-wider text-zinc-500 mb-2">Resposta IA</label>
+            <input defaultValue="Resposta da IA · #2445171" readOnly className="w-full bg-transparent border-0 border-b-2 border-zinc-700 px-1 py-2 text-sm text-zinc-100 outline-none focus:border-brand-500" />
+          </div>
+        </StyleCard>
+
+        {/* 2 · Card com ícone */}
+        <StyleCard n={2} name="Card com ícone" desc="Ícone colorido em cada campo">
+          <div>
+            <div className="flex items-center gap-2 mb-2"><span className="h-6 w-6 rounded-lg bg-brand-500/15 text-brand-300 ring-1 ring-brand-500/25 flex items-center justify-center"><Globe size={13} /></span><span className="text-[13px] font-semibold text-zinc-100">Subdomínio</span></div>
+            <div className="flex items-stretch rounded-xl bg-zinc-900 ring-1 ring-zinc-700 overflow-hidden focus-within:ring-2 focus-within:ring-brand-500 transition">
+              <span className="w-11 shrink-0 bg-zinc-800/60 border-r border-zinc-700/50 text-brand-300 flex items-center justify-center"><Globe size={16} /></span>
+              <input defaultValue="attivacorpoementeitz" className="flex-1 min-w-0 bg-transparent px-3 py-2.5 text-sm text-zinc-100 outline-none" />
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center gap-2 mb-2"><span className="h-6 w-6 rounded-lg bg-brand-500/15 text-brand-300 ring-1 ring-brand-500/25 flex items-center justify-center"><MessageSquareText size={13} /></span><span className="text-[13px] font-semibold text-zinc-100">Resposta IA</span></div>
+            <div className="flex items-stretch rounded-xl bg-zinc-900 ring-1 ring-zinc-700 overflow-hidden">
+              <span className="w-11 shrink-0 bg-zinc-800/60 border-r border-zinc-700/50 text-brand-300 flex items-center justify-center"><MessageSquareText size={16} /></span>
+              <input defaultValue="Resposta da IA · #2445171" readOnly className="flex-1 min-w-0 bg-transparent px-3 py-2.5 text-sm text-zinc-100 outline-none" />
+            </div>
+          </div>
+        </StyleCard>
+
+        {/* 3 · Neon / cockpit */}
+        <StyleCard n={3} name="Neon" desc="Fundo preto + brilho verde, tipo cockpit">
+          <div>
+            <label className="block text-[11px] font-mono uppercase tracking-wider text-emerald-400/80 mb-2">Subdomínio</label>
+            <input defaultValue="attivacorpoementeitz" className="w-full rounded-lg bg-black ring-1 ring-emerald-500/30 px-3 py-2.5 text-sm text-emerald-50 font-mono shadow-[inset_0_0_12px_rgba(16,185,129,0.08)] outline-none transition focus:ring-2 focus:ring-emerald-400 focus:shadow-[0_0_16px_rgba(16,185,129,0.25)]" />
+          </div>
+          <div>
+            <label className="block text-[11px] font-mono uppercase tracking-wider text-emerald-400/80 mb-2">Resposta IA</label>
+            <input defaultValue="Resposta da IA · #2445171" readOnly className="w-full rounded-lg bg-black ring-1 ring-emerald-500/30 px-3 py-2.5 text-sm text-emerald-50 font-mono shadow-[inset_0_0_12px_rgba(16,185,129,0.08)] outline-none" />
+          </div>
+        </StyleCard>
+
+        {/* 4 · Soft / pill */}
+        <StyleCard n={4} name="Soft" desc="Cantos arredondados (pílula), amigável">
+          <div>
+            <label className="block text-[13px] font-semibold text-zinc-100 mb-2">Subdomínio</label>
+            <input defaultValue="attivacorpoementeitz" className="w-full rounded-full bg-zinc-800/70 ring-1 ring-zinc-700 px-5 py-3 text-sm text-zinc-100 outline-none transition focus:ring-2 focus:ring-brand-400" />
+          </div>
+          <div>
+            <label className="block text-[13px] font-semibold text-zinc-100 mb-2">Resposta IA</label>
+            <input defaultValue="Resposta da IA · #2445171" readOnly className="w-full rounded-full bg-zinc-800/70 ring-1 ring-zinc-700 px-5 py-3 text-sm text-zinc-100 outline-none" />
+          </div>
+        </StyleCard>
+
+        {/* 5 · Bordered / alto contraste */}
+        <StyleCard n={5} name="Bordas fortes" desc="Bordas grossas, alta legibilidade">
+          <div>
+            <label className="block text-[13px] font-bold text-zinc-100 mb-2">Subdomínio</label>
+            <input defaultValue="attivacorpoementeitz" className="w-full rounded-md bg-zinc-950 border-2 border-zinc-600 px-3 py-2.5 text-sm text-zinc-100 outline-none transition focus:border-brand-500" />
+          </div>
+          <div>
+            <label className="block text-[13px] font-bold text-zinc-100 mb-2">Resposta IA</label>
+            <input defaultValue="Resposta da IA · #2445171" readOnly className="w-full rounded-md bg-zinc-950 border-2 border-zinc-600 px-3 py-2.5 text-sm text-zinc-100 outline-none" />
+          </div>
+        </StyleCard>
+      </div>
+    </div>
+  );
+}
+
+function StyleCard({ n, name, desc, children }: { n: number; name: string; desc: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl bg-zinc-950/50 ring-1 ring-zinc-800 p-4">
+      <div className="flex items-baseline gap-2 mb-3">
+        <span className="flex items-center justify-center h-6 w-6 rounded-full bg-brand-600 text-white text-[12px] font-bold shrink-0">{n}</span>
+        <span className="text-[13px] font-bold text-zinc-100">{name}</span>
+        <span className="text-[11px] text-zinc-500 truncate">— {desc}</span>
+      </div>
+      <div className="space-y-3">{children}</div>
+    </div>
   );
 }
 
