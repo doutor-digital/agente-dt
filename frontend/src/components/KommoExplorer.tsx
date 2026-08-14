@@ -201,10 +201,10 @@ export function KommoExplorer(props: Props) {
       >
       {/* Pipelines + Won statuses */}
       <div>
-        <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
+        <div className="text-[13px] font-semibold text-zinc-100 mb-1">
           Etapas de "Ganho/Convertido"
         </div>
-        <div className="text-[10px] text-zinc-600 mb-2">
+        <div className="text-[12px] text-zinc-500 mb-2.5 leading-relaxed">
           Marque as etapas que significam conversão. Quando o lead entra numa delas, a conversa é marcada como convertida e o juiz LLM avalia.
         </div>
         {pipelines?.error && <ErrorBanner envelope={pipelines} />}
@@ -260,10 +260,10 @@ export function KommoExplorer(props: Props) {
 
       {/* Pipelines + etapas permitidas (allowlist de resposta da IA) */}
       <div>
-        <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
+        <div className="text-[13px] font-semibold text-zinc-100 mb-1">
           Etapas em que a IA responde
         </div>
-        <div className="text-[10px] text-zinc-600 mb-2">
+        <div className="text-[12px] text-zinc-500 mb-2.5 leading-relaxed">
           Marque as etapas em que a IA deve responder. Se deixar <strong>tudo desmarcado</strong>, a IA
           responde em qualquer etapa. Marcando, ela <strong>só</strong> responde nas selecionadas — nas
           demais (ex: agendado, em tratamento) o agente fica em silêncio.
@@ -413,7 +413,7 @@ function KommoSelect({
 }) {
   return (
     <div>
-      <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+      <label className="block text-[13px] font-medium text-zinc-200 mb-1.5">{label}</label>
       {error && <ErrorBanner envelope={error} />}
       <select
         value={value ?? 0}
@@ -422,7 +422,7 @@ function KommoSelect({
           onChange(id > 0 ? id : null);
         }}
         disabled={options.length === 0}
-        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200 disabled:opacity-50"
+        className="w-full rounded-lg bg-zinc-900/70 ring-1 ring-zinc-700 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500/60 transition disabled:opacity-50"
       >
         <option value={0}>— Nenhum —</option>
         {options.map((o) => (
@@ -436,9 +436,9 @@ function KommoSelect({
         )}
       </select>
       {options.length === 0 && !error && (
-        <div className="text-[10px] text-zinc-600 mt-1 italic">{emptyHint}</div>
+        <div className="text-[12px] text-zinc-500 mt-1.5 leading-relaxed italic">{emptyHint}</div>
       )}
-      {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
+      {hint && <div className="text-[12px] text-zinc-500 mt-1.5 leading-relaxed">{hint}</div>}
     </div>
   );
 }
@@ -498,7 +498,7 @@ function QuickFillPanel(props: {
           hint="Número do bot do Kommo que dispara a mensagem (via POST /salesbot/{id}/run)."
         />
         <div>
-          <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">
+          <label className="block text-[13px] font-medium text-zinc-200 mb-1.5">
             IDs das etapas "Ganho"
           </label>
           <input
@@ -512,9 +512,9 @@ function QuickFillPanel(props: {
               props.onWonStatusIdsChange(ids);
             }}
             placeholder="ex: 142 (separe por vírgula)"
-            className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
+            className="w-full rounded-lg bg-zinc-900/70 ring-1 ring-zinc-700 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500/60 transition"
           />
-          <div className="text-[10px] text-zinc-600 mt-1">
+          <div className="text-[12px] text-zinc-500 mt-1.5 leading-relaxed">
             Etapas que contam como "lead convertido". Separe por vírgula se for mais de uma.
           </div>
         </div>
@@ -568,7 +568,7 @@ function QuickInput({
 }) {
   return (
     <div>
-      <label className="text-[10px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+      <label className="block text-[13px] font-medium text-zinc-200 mb-1.5">{label}</label>
       <input
         type="number"
         value={value ?? ''}
@@ -578,9 +578,9 @@ function QuickInput({
           const n = v === '' ? null : Number(v);
           onChange(n && Number.isFinite(n) && n > 0 ? n : null);
         }}
-        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
+        className="w-full rounded-lg bg-zinc-900/70 ring-1 ring-zinc-700 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500/60 transition"
       />
-      {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
+      {hint && <div className="text-[12px] text-zinc-500 mt-1.5 leading-relaxed">{hint}</div>}
     </div>
   );
 }
@@ -600,7 +600,7 @@ function ManualIdField({
 }) {
   return (
     <div>
-      <label className="text-[11px] uppercase tracking-wider text-zinc-500 block mb-1">{label}</label>
+      <label className="block text-[13px] font-medium text-zinc-200 mb-1.5">{label}</label>
       {error && <ErrorBanner envelope={error} />}
       <input
         type="number"
@@ -611,9 +611,9 @@ function ManualIdField({
           onChange(n && Number.isFinite(n) && n > 0 ? n : null);
         }}
         placeholder="Cole o ID aqui (ex: 12345)"
-        className="w-full rounded-md bg-zinc-950/60 ring-1 ring-zinc-800 px-3 py-1.5 text-xs text-zinc-200"
+        className="w-full rounded-lg bg-zinc-900/70 ring-1 ring-zinc-700 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-brand-500/60 transition"
       />
-      {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
+      {hint && <div className="text-[12px] text-zinc-500 mt-1.5 leading-relaxed">{hint}</div>}
     </div>
   );
 }
