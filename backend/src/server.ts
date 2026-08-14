@@ -33,6 +33,7 @@ import { startFollowUpWorker } from './lib/follow-up-worker.js';
 import { startReminderWorker } from './lib/reminder-worker.js';
 import { startReactivationWorker } from './lib/reactivation-worker.js';
 import { startSlaAlertWorker } from './lib/sla-alert-worker.js';
+import { startCardValidationWorker } from './lib/card-validation-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -136,6 +137,9 @@ async function main(): Promise<void> {
   // respondeu o lead dentro do limiar. Opt-in por unidade
   // (pipelineIntents.sla_alert_minutes) — sobe inofensivo até ser ligado.
   startSlaAlertWorker();
+  // Validador de inconsistência do cartão: alerta erro de preenchimento (ex:
+  // Ganho sem forma de pagamento). Opt-in por unidade (cardValidationEnabled).
+  startCardValidationWorker();
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);

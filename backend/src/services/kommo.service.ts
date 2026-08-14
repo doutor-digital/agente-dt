@@ -1046,6 +1046,27 @@ export class KommoClient {
   }
 
   /**
+   * Leads atualizados desde X COM os custom_fields_values embutidos (o /leads já
+   * os traz por padrão). Usado pelo validador do cartão pra checar regras sem 1
+   * getLead por lead. Traz status_id/pipeline_id/name/custom_fields_values.
+   */
+  async listLeadsAtualizadosComCampos(desdeEpochSeg: number, limite = 250): Promise<KommoLead[]> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
+        params: {
+          limit: Math.min(limite, 250),
+          'filter[updated_at][from]': desdeEpochSeg,
+          order: { updated_at: 'desc' },
+        },
+      });
+      return data?._embedded?.leads ?? [];
+    } catch (err) {
+      wrapAxiosError(err, 'listLeadsAtualizadosComCampos');
+      return [];
+    }
+  }
+
+  /**
    * Lista pipelines do CRM com suas etapas (statuses) embedadas.
    * Usado pelo painel pra mostrar quais IDs colocar no prompt e em
    * `kommoWonStatusIds`.

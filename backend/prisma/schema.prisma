@@ -97,6 +97,10 @@ model Unit {
   // "Pausar IA" marcado. O worker cruza com lead.status_id.
   slaAlertStatusIds     Int[]   @default([]) @map("sla_alert_status_ids")
 
+  // Liga o validador de inconsistência do cartão (alerta erro de preenchimento).
+  // OFF por padrão — sobe inofensivo até ser ligado (e revisado em dry-run).
+  cardValidationEnabled Boolean @default(false) @map("card_validation_enabled")
+
   // MODO WIDGET (handler `widget_request` do Salesbot) — alternativa ao
   // PATCH no campo "Resposta IA" + gatilho do Digital Pipeline. Quando
   // ligado, a resposta da IA é gerada E entregue pelo endpoint
@@ -929,6 +933,21 @@ model Conversation {
   @@index([convertedAt(sort: Desc)])
   @@index([unitId, followUpStep, lastMessageAt])
   @@map("conversations")
+}
+
+// Dedup do alerta de inconsistência do cartão: 1 alerta por (unidade, lead,
+// regra). Quando o card é corrigido e a regra passa, a linha é apagada — aí um
+// erro futuro alerta de novo. Ver src/lib/card-validation-worker.ts.
+model CardAlert {
+  id        String   @id @default(cuid())
+  unitId    String   @map("unit_id")
+  leadId    String   @map("lead_id")
+  ruleKey   String   @map("rule_key")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([unitId, leadId, ruleKey])
+  @@index([unitId])
+  @@map("card_alert")
 }
 
 // role: "user" (paciente) | "assistant" (IA) | "system" (nota interna)
