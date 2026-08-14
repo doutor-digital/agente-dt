@@ -44,6 +44,8 @@ const ST = {
 
 const F = {
   AGENDOU: 2442703,
+  TIPO_AGENDAMENTO: 2443059,
+  SITUACAO_CONSULTA: 2444779,
   FECHOU_TRAT: 2440941,
   TRAT_FECHADO: 2440849,
   FORMA_PAG_1: 2442715,
@@ -77,9 +79,15 @@ interface Regra {
 
 const REGRAS: Regra[] = [
   {
-    key: 'A_agendado_agendou_nao',
+    key: 'A_agendado_incompleto',
     aplica: (l) => l.pipeline_id === PIPE_COMERCIAL && l.status_id === ST.AGENDADO,
-    erro: (l) => (igual(l, F.AGENDOU, 'Não') ? 'está em AGENDADO mas "✓ Agendou" = Não' : null),
+    erro: (l) => {
+      const p: string[] = [];
+      if (igual(l, F.AGENDOU, 'Não')) p.push('"✓ Agendou" = Não');
+      if (vazio(l, F.TIPO_AGENDAMENTO)) p.push('"Tipo de agendamento" vazio');
+      if (vazio(l, F.SITUACAO_CONSULTA)) p.push('"Situação da consulta" vazia');
+      return p.length ? 'está em AGENDADO mas ' + p.join('; ') : null;
+    },
   },
   {
     key: 'B_ganho_sem_fechamento',
@@ -107,12 +115,6 @@ const REGRAS: Regra[] = [
       igual(l, F.COMPARECEU_ULT, 'Não') && igual(l, F.PG_ANTECIPADO, 'Sim')
         ? '"Compareceu à última sessão" = Não mas "Consulta pg antecipado" = Sim (no-show pago)'
         : null,
-  },
-  {
-    key: 'E_emtrat_sem_sessoes',
-    aplica: (l) => l.pipeline_id === PIPE_TRATAMENTO && l.status_id === ST.EM_TRAT,
-    erro: (l) =>
-      vazio(l, F.SESSOES_PREV) ? 'está EM TRATAMENTO mas "# Sessões previstas" vazio' : null,
   },
   {
     key: 'F_cancelado_sem_dados',
@@ -196,6 +198,29 @@ async function varrer(): Promise<void> {
   } finally {
     rodando = false;
   }
+}
+
+/**
+ * BASELINE: registra TODOS os erros atuais da base SEM alertar. Roda 1x antes de
+ * (re)ligar o validador — assim os erros ANTIGOS não viram disparo em massa; só
+ * os NOVOS (que aparecerem depois) alertam. Retorna quantos erros foram semeados.
+ */
+export async function seedBaselineUnit(unit: Unit): Promise<{ leads: number; erros: number }> {
+  const kommo = createKommoClient(unit);
+  const leads = await kommo.listLeads(120); // varre a base (até ~30k leads)
+  const rows: Array<{ unitId: string; leadId: string; ruleKey: string }> = [];
+  for (const lead of leads) {
+    for (const r of REGRAS) {
+      if (r.aplica(lead) && r.erro(lead)) {
+        rows.push({ unitId: unit.id, leadId: String(lead.id), ruleKey: r.key });
+      }
+    }
+  }
+  if (rows.length) {
+    await prisma.cardAlert.createMany({ data: rows, skipDuplicates: true });
+  }
+  logger.info({ unit: unit.slug, leads: leads.length, erros: rows.length }, 'card-validation: baseline semeado');
+  return { leads: leads.length, erros: rows.length };
 }
 
 export function startCardValidationWorker(): void {
