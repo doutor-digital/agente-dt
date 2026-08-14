@@ -76,6 +76,13 @@ const CAMPO_DATA_CONSULTA = 2444497;
 // são desta unidade; ver nota de multi-unidade no topo do arquivo.
 const CAMPO_RESPONSAVEL = 2440823;
 const RESPONSAVEL_IA = 'I.A Sofia';
+// ✓ Situação da consulta (select) e ¤ Pagamento antecipado (select Não/Sim).
+// O bot de PIX lê estes dois — sem eles preenchidos, não dispara. A Sofia carimba
+// no agendamento: Situação=Agendado sempre; Pagamento antecipado=Sim (avaliação,
+// pra OFERECER o PIX e garantir a vaga) ou Não (retorno pós-alta).
+const CAMPO_SITUACAO_CONSULTA = 2444779;
+const CAMPO_PAGAMENTO_ANTECIPADO = 2440827;
+const ST_RETORNO_POS_TRATAMENTO = 110342960; // etapa comercial de retorno
 
 // ---------------------------------------------------------------------------
 // Grade de um dia, já com tudo subtraído.
@@ -1111,9 +1118,20 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
               'select',
               RESPONSAVEL_IA,
             );
+            // Situação inicial + regra de pré-pagamento. Retorno pós-alta (lead
+            // já na etapa de retorno) NÃO oferece PIX; avaliação sim.
+            const leadAtual = await kommo.getLead(args.leadId!).catch(() => null);
+            const ehRetorno = leadAtual?.status_id === ST_RETORNO_POS_TRATAMENTO;
+            await kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_SITUACAO_CONSULTA, 'select', 'Agendado');
+            await kommo.setLeadCustomFieldValue(
+              args.leadId!,
+              CAMPO_PAGAMENTO_ANTECIPADO,
+              'select',
+              ehRetorno ? 'Não' : 'Sim',
+            );
             await recorder.step({
               kind: 'KOMMO_ACTION',
-              title: 'Campos de agendamento preenchidos (Agendou, Data, Responsável: I.A Sofia)',
+              title: `Campos de agendamento preenchidos (Agendou, Data, Responsável, Situação=Agendado, Pré-pag=${ehRetorno ? 'Não' : 'Sim'})`,
               payload: { leadId: args.leadId, data: args.data, hora: args.hora, responsavel: RESPONSAVEL_IA },
             });
             // Métrica: tempo do 1º contato até marcar (h).
