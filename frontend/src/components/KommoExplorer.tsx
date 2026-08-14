@@ -70,12 +70,14 @@ export function KommoExplorer(props: Props) {
   }, [unitId]);
 
   useEffect(() => {
-    // Reset ao trocar de Unit.
+    // Reset ao trocar de Unit + carrega AUTOMÁTICO (sem precisar clicar
+    // "Carregar do Kommo"). O botão vira só "Recarregar" pra atualizar na mão.
     setFields(null);
     setBots(null);
     setPipelines(null);
     setValidation(null);
-  }, [unitId]);
+    void load();
+  }, [unitId, load]);
 
   async function validate() {
     if (!unitId) return;
@@ -101,8 +103,9 @@ export function KommoExplorer(props: Props) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="text-[11px] text-zinc-500">
-          {!fields && !bots && !pipelines && 'Clica em "Carregar do Kommo" pra puxar campos, salesbots e etapas ao vivo.'}
-          {(fields || bots || pipelines) && 'Dados ao vivo do Kommo. Clica em "Recarregar" se você alterou algo no Kommo.'}
+          {loading && !fields && !bots && !pipelines && 'Carregando dados ao vivo do Kommo…'}
+          {!loading && !fields && !bots && !pipelines && 'Sem dados — clica em "Recarregar".'}
+          {(fields || bots || pipelines) && 'Dados ao vivo do Kommo (carregados automaticamente). "Recarregar" se você mudou algo no Kommo.'}
         </div>
         <div className="flex items-center gap-2">
           <button
