@@ -129,6 +129,10 @@ export function KommoExplorer(props: Props) {
         </div>
       </div>
 
+      <Section
+        title="Campos da IA"
+        subtitle="Onde a IA escreve a resposta, o checkbox que pausa, e o bot que entrega. Preencha por ID (Quick Fill) ou escolha nos dropdowns abaixo."
+      >
       {/* Quick Fill por ID — atalho direto sem depender dos dropdowns/listagem */}
       <QuickFillPanel
         replyFieldId={props.replyFieldId}
@@ -189,6 +193,12 @@ export function KommoExplorer(props: Props) {
         />
       )}
 
+      </Section>
+
+      <Section
+        title="Etapas"
+        subtitle="Quais etapas contam como conversão (Ganho) e em quais a IA responde."
+      >
       {/* Pipelines + Won statuses */}
       <div>
         <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
@@ -305,6 +315,8 @@ export function KommoExplorer(props: Props) {
         )}
       </div>
 
+      </Section>
+
       {/* Validation result */}
       {validation && <ValidationResults result={validation} />}
 
@@ -361,6 +373,26 @@ export function KommoExplorer(props: Props) {
 // ---------------------------------------------------------------------------
 // Subcomponentes
 // ---------------------------------------------------------------------------
+
+/** Card de seção — dá hierarquia e respiro ao painel (antes era lista plana). */
+function Section({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-4">
+      <h3 className="text-[13px] font-semibold text-zinc-100 tracking-tight">{title}</h3>
+      {subtitle && <p className="text-[11px] text-zinc-500 mt-0.5 mb-3 leading-relaxed">{subtitle}</p>}
+      {!subtitle && <div className="mb-3" />}
+      <div className="space-y-4">{children}</div>
+    </section>
+  );
+}
 
 function KommoSelect({
   label,
