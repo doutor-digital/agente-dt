@@ -333,6 +333,32 @@ export function splitIntoChunks(text: string, maxLen: number): string[] {
   return chunks;
 }
 
+// ── Trava anti-duplicata de ENTREGA ────────────────────────────────────────
+// Se o MESMO texto já foi enviado pro MESMO lead há poucos segundos, não
+// reenvia. Pega duplicata de QUALQUER origem (gatilho residual do Kommo, /run
+// repetido, webhook em dobro). TTL curto — repetir o MESMO texto pro mesmo lead
+// em <45s na prática só acontece por bug.
+const ENTREGA_DEDUP_TTL_MS = 45_000;
+const entregasRecentes = new Map<string, number>();
+function chaveEntrega(leadId: number, text: string): string {
+  return `${leadId}|${text.trim().slice(0, 200)}`;
+}
+/** true = este texto já foi ENTREGUE a este lead há <45s (deve PULAR o reenvio). */
+function entregaDuplicada(leadId: number, text: string): boolean {
+  const agora = Date.now();
+  if (entregasRecentes.size > 500) {
+    for (const [k, t] of entregasRecentes) if (agora - t > ENTREGA_DEDUP_TTL_MS) entregasRecentes.delete(k);
+  }
+  const anterior = entregasRecentes.get(chaveEntrega(leadId, text));
+  return !!anterior && agora - anterior < ENTREGA_DEDUP_TTL_MS;
+}
+/** Registra a entrega BEM-SUCEDIDA (chamar só depois do PATCH dar certo). Assim
+ *  retry de uma falha não é bloqueado, mas a duplicata real (reenvio do mesmo
+ *  texto já entregue) é. */
+function registrarEntrega(leadId: number, text: string): void {
+  entregasRecentes.set(chaveEntrega(leadId, text), Date.now());
+}
+
 // ---------------------------------------------------------------------------
 // resolveEnumId — casa um label (texto da opção) com o enum_id correspondente
 // de um campo select/multiselect/radiobutton do Kommo.
@@ -1229,6 +1255,18 @@ export class KommoClient {
     text: string;
     recorder?: KommoStepRecorder;
   }): Promise<unknown> {
+    // TRAVA ANTI-DUPLICATA: mesmo texto pro mesmo lead há <45s → pula. Pega
+    // duplicata de qualquer origem (gatilho residual + /run, webhook em dobro).
+    if (entregaDuplicada(leadId, text)) {
+      logger.warn({ leadId, salesbotId }, 'runSalesbot: MESMO texto já enviado a este lead há <45s — PULANDO (anti-duplicata)');
+      await recorder?.step({
+        kind: 'KOMMO_ACTION',
+        title: '🛑 Anti-duplicata: mesmo texto já enviado há <45s — envio pulado',
+        payload: { leadId, salesbotId, mode: 'skipped_duplicate' },
+      });
+      return { via: 'skipped_duplicate' };
+    }
+
     // ESTRATÉGIA PATCH-ONLY (corrige duplicação histórica):
     //
     // O Kommo aciona o Salesbot por DOIS caminhos possíveis:
@@ -1257,6 +1295,10 @@ export class KommoClient {
       await this.http.patch(`/leads/${leadId}`, {
         custom_fields_values: [{ field_id: replyFieldId, values: [{ value: safeText }] }],
       });
+      // PATCH OK → registra a entrega (a partir daqui, reenvio do MESMO texto
+      // em <45s é bloqueado no topo). Fica DEPOIS do PATCH pra retry de falha
+      // não ser barrado.
+      registrarEntrega(leadId, text);
       const patchMs = Math.round(performance.now() - t0Patch);
       logger.info(
         {
