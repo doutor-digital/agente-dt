@@ -31,6 +31,7 @@ import type { TraceRecorder } from './trace-recorder.js';
 import { getRecentMessagesByLead } from '../services/conversations.service.js';
 import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
+import { looksLikeName } from './name-capture.js';
 
 // Campos do handoff IA → humano. Carimbados quando pausar_ia entra. IDs desta
 // unidade (mesmo padrão de agenda-tools); multi-unidade → virar config.
@@ -367,6 +368,18 @@ export function buildTools({
         title: `Decisão: atualizar título do lead ${leadId} para "${nome}"`,
         payload: { leadId, nome },
       });
+
+      // Trava: barra nomes inválidos ("um pouco coucuda", "diabética", frases).
+      // Vale pro LLM tanto quanto pra rede de segurança — dado errado não entra.
+      if (!looksLikeName(nome)) {
+        await recorder.step({
+          kind: 'THINKING',
+          title: `"${nome}" não parece um nome válido — não gravei no card`,
+          payload: { leadId, rejeitado: nome },
+          latencyMs: Math.round(performance.now() - t0),
+        });
+        return `NÃO gravei: "${nome}" não parece um nome de pessoa. Pergunte o nome ao paciente com clareza (ex.: "Como posso te chamar?") e só chame esta tool quando ele responder o nome de fato.`;
+      }
 
       try {
         const { previous, desired, changed } = await kommo.updateLeadTitleWithDate(
