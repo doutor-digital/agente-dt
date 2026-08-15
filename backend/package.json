@@ -16,6 +16,7 @@
     "prisma:studio": "prisma studio",
     "postinstall": "prisma generate",
     "lint": "tsc --noEmit",
+    "test": "tsx --test src/**/*.test.ts",
     "create-unit": "tsx src/scripts/create-unit.ts",
     "promote-admin": "tsx src/scripts/promote-admin.ts",
     "seed-global-actions": "tsx src/scripts/seed-global-actions.ts",

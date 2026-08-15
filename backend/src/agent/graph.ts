@@ -55,6 +55,7 @@ import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit } from './p
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
+import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 
 // ---------------------------------------------------------------------------
 // Checkpointer (singleton).
@@ -331,7 +332,16 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       // de chamar atualizar_titulo_lead, executa a tool nós mesmos. Idempotente
       // — só roda se o lead.name na Kommo ainda estiver genérico (sem o nome).
       if (kommoClient && unit.collectNameEnabled && userMessage && state.leadId) {
-        const detected = detectNameDisclosure(userMessage);
+        // A IA pediu o nome no turno anterior? (habilita captura de nome "pelado")
+        const lastAssistant = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
+        const lastAssistantText = lastAssistant
+          ? typeof lastAssistant.content === 'string'
+            ? lastAssistant.content
+            : JSON.stringify(lastAssistant.content)
+          : null;
+        const detected = detectNameDisclosure(userMessage, {
+          nameWasAsked: askedForName(lastAssistantText),
+        });
         if (detected) {
           await maybeAutoUpdateLeadTitle({
             recorder,
@@ -384,55 +394,9 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
 }
 
 // ---------------------------------------------------------------------------
-// Heurísticas pra rede de segurança do "IA esqueceu de chamar a tool".
+// Rede de segurança do "IA esqueceu de chamar a tool".
+// A extração/validação de nome mora em ./name-capture.ts (módulo puro, testado).
 // ---------------------------------------------------------------------------
-
-/**
- * Tenta extrair o nome do paciente da mensagem dele. Cobre os padrões
- * mais comuns em PT-BR. Retorna null se não bater em nada — caso em
- * que NÃO mexemos no lead (evita falso positivo).
- *
- * Patterns aceitos:
- *   "meu nome é José"            → "José"
- *   "me chamo Maria Silva"       → "Maria Silva"
- *   "sou o João"                 → "João"
- *   "aqui é a Ana"               → "Ana"
- *   "é Carlos"                   → "Carlos"  (quando vier sozinho)
- *
- * Limita a 4 palavras pra não pegar frase inteira como nome.
- */
-function detectNameDisclosure(userMessage: string): string | null {
-  const cleaned = userMessage.trim();
-  // Lista de prefixos comuns. Capturar até 4 palavras seguidas
-  // de letras/acentos/hífens.
-  const NAME_CHARS = "[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\\-]*";
-  const NAME_GROUP = `(${NAME_CHARS}(?:\\s+${NAME_CHARS}){0,3})`;
-  const patterns: RegExp[] = [
-    new RegExp(`\\bmeu\\s+nome\\s+é\\s+${NAME_GROUP}`, 'i'),
-    new RegExp(`\\bme\\s+chamo\\s+${NAME_GROUP}`, 'i'),
-    new RegExp(`\\b(?:eu\\s+)?sou\\s+(?:o|a)?\\s*${NAME_GROUP}`, 'i'),
-    new RegExp(`\\baqui\\s+é\\s+(?:o|a)?\\s*${NAME_GROUP}`, 'i'),
-    new RegExp(`\\bsou\\s+${NAME_GROUP}`, 'i'),
-  ];
-  for (const p of patterns) {
-    const m = cleaned.match(p);
-    if (m && m[1]) {
-      const name = m[1].trim();
-      // Rejeita palavras óbvias que não são nome (caso a regex capture algo errado).
-      if (/^(bem|bom|boa|ok|sim|n[aã]o|aqui|ali|paciente|cliente)$/i.test(name)) continue;
-      return name;
-    }
-  }
-  return null;
-}
-
-/** Capitaliza cada palavra do nome (ex: "joão silva" → "João Silva"). */
-function titleCaseName(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((w) => (w.length === 0 ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
-    .join(' ');
-}
 
 /**
  * Se o lead.name no Kommo for genérico ("Lead #123", vazio, igual ao
@@ -451,6 +415,16 @@ async function maybeAutoUpdateLeadTitle({
   name: string;
 }): Promise<void> {
   const t0 = performance.now();
+  // Trava final: mesmo que a detecção erre, não grava algo que não parece nome.
+  if (!looksLikeName(name)) {
+    await recorder.step({
+      kind: 'THINKING',
+      title: `[safety-net] "${name}" não parece nome — captura descartada`,
+      payload: { leadId, rejeitado: name },
+      latencyMs: Math.round(performance.now() - t0),
+    });
+    return;
+  }
   const display = titleCaseName(name);
   try {
     const lead = await kommo.getLead(leadId);
