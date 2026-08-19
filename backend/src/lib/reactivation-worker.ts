@@ -37,6 +37,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
+import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 
 const SWEEP_MS = 5 * 60_000; // a cada 5 min — o degrau é de 30, não precisa de mais fino
 const ESPERA_MIN = 30; // 30 min após o handoff (regra do João)
@@ -127,6 +128,18 @@ async function reativarUnidade(unit: Unit): Promise<void> {
         select: { id: true },
       });
       if (temConsulta) {
+        await encerrar(conv.id);
+        continue;
+      }
+
+      // 1b. TRAVA por etapa (pega o LEGADO). O `temConsulta` acima só enxerga
+      //     agendamento feito pela própria IA (SpineLeadLink). Lead migrado do
+      //     sistema antigo, já agendado, não tem esse link — e a reabertura
+      //     ("não quero te deixar sem sua consulta") cai justamente em cima de
+      //     quem JÁ está agendado (bug de Parauapebas). A etapa do Kommo é a
+      //     verdade que vale pro legado: se ele já agendou / é paciente, encerra.
+      const etapa = await estadoEtapaDoLead(unit, leadId);
+      if (etapa?.jaAgendadoOuPaciente) {
         await encerrar(conv.id);
         continue;
       }
