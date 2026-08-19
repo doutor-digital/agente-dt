@@ -36,7 +36,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import type { LeadFieldRule } from '@prisma/client';
 import {
   calculateCost,
-  createChatOpenAI,
+  createChatModel,
   invokeChatModel,
   resolveOpenAIApiKey,
 } from '../services/openai.service.js';
@@ -256,13 +256,14 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
     res.status(404).json({ error: 'unit_not_found' });
     return;
   }
-  // Tem que ser a chave EFETIVA, não a coluna da Unit: `resolveOpenAIApiKey`
-  // cai na key da plataforma (env) quando a unidade não tem a própria, e é
-  // exatamente isso que o `createChatOpenAI` mais abaixo vai usar. Checar
-  // `unit.openaiApiKey` direto barrava com 400 toda unidade que roda na key da
-  // plataforma — o agente respondia normal em produção e só o playground
-  // recusava, desde a primeira mensagem.
-  if (!resolveOpenAIApiKey(unit)) {
+  // PROVIDER EFETIVO — mesma regra do graph.ts de produção: Claude se
+  // anthropic+chave, Gemini se google+chave, senão OpenAI. Antes isto era
+  // cravado em OpenAI (createChatOpenAI + exigir chave OpenAI), então o
+  // playground recusava/quebrava TODA unidade que roda em Claude/Gemini —
+  // mesmo respondendo normal em produção. Cada provider exige a SUA chave.
+  const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
+  const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
+  if (!useAnthropic && !useGoogle && !resolveOpenAIApiKey(unit)) {
     res.status(400).json({ error: 'openai_not_configured' });
     return;
   }
@@ -316,13 +317,22 @@ operador revisar.`;
     },
   });
 
-  const modelName = config.model || unit.openaiModel;
-  const baseModel = createChatOpenAI(unit, {
+  // Nome do modelo por provider (mesma escolha do graph.ts). Sem isto, o
+  // `config.model` (ex.: "claude-sonnet-5") ia pro cliente da OpenAI e dava
+  // erro de modelo inexistente.
+  const modelName = useAnthropic
+    ? unit.anthropicModel || 'claude-opus-4-8'
+    : useGoogle
+      ? unit.googleModel || 'gemini-2.5-flash'
+      : config.model || unit.openaiModel;
+  const baseModel = createChatModel(unit, {
     model: modelName,
     temperature: config.temperature,
     maxTokens: config.maxTokens,
   });
-  const model = baseModel.bindTools(tools) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
+  const model = (
+    baseModel as unknown as { bindTools: (t: unknown[]) => unknown }
+  ).bindTools(tools) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
 
   const history: BaseMessage[] = [new SystemMessage(fullSystem)];
   for (const m of parsed.data.messages) {
