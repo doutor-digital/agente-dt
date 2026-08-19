@@ -40,6 +40,10 @@ import {
   porExtenso,
   type ConsultaReconciliada,
 } from '../services/agenda-reconcile.service.js';
+import {
+  estadoEtapaDoLead,
+  type EstadoEtapaLead,
+} from '../services/lead-stage.service.js';
 import { logger } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -1236,6 +1240,12 @@ export interface ComposeInput {
    * nunca repetir um horário que a recepção já mudou.
    */
   consulta?: ConsultaReconciliada | null;
+  /**
+   * A etapa atual do lead no Kommo, já classificada. Vira o bloco
+   * <etapa_do_lead>, que avisa a IA quando o paciente JÁ agendou ou já é
+   * paciente — pra ela não tratar lead legado/migrado como contato novo.
+   */
+  estadoEtapa?: EstadoEtapaLead | null;
 }
 
 function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
@@ -1335,6 +1345,27 @@ function renderConsultaMarcada(c: ConsultaReconciliada | null | undefined): stri
   ].join('\n'));
 }
 
+/**
+ * A ETAPA REAL do lead no Kommo. Só aparece quando o paciente JÁ agendou ou já
+ * é paciente — o caso em que a IA erra feio se tratar como novo (foi o bug de
+ * Parauapebas: "não quero te deixar sem sua consulta" pra quem já estava
+ * agendado no sistema antigo). Fonte de verdade que vale pro lead legado: a
+ * etapa. Vai no `dynamic`, pra ganhar recência sobre o histórico da conversa.
+ */
+function renderEtapaLead(e: EstadoEtapaLead | null | undefined): string {
+  if (!e || !e.jaAgendadoOuPaciente) return '';
+  return xmlBlock('etapa_do_lead', [
+    `Este paciente já está na etapa "${e.nome}" do sistema da clínica — ou seja, ele NÃO é`,
+    'um contato novo: já tem consulta marcada ou já é paciente. Ele pode existir de antes de você.',
+    '',
+    'REGRAS (valem acima de qualquer coisa escrita no histórico):',
+    '- NUNCA trate como primeiro contato nem ofereça "vamos agendar sua consulta" do zero. Ele já passou por essa etapa.',
+    '- Se ele perguntar o dia/horário da consulta e você não tiver certeza confirmada agora, diga que vai conferir com a equipe e retorna — NÃO afirme nem repita horário do histórico.',
+    '- Se ele quiser mudar o horário, trate como REMARCAR (não como marcar pela primeira vez).',
+    '- Use o que está na ficha do paciente; não recomece a conversa do zero.',
+  ].join('\n'));
+}
+
 function renderConversationContext(leadId: number): string {
   return xmlBlock('contexto_conversa', [
     `- leadId desta conversa: **${leadId}**`,
@@ -1417,6 +1448,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     isFirstTurn = false,
     leadId,
     consulta = null,
+    estadoEtapa = null,
   } = input;
 
   // ORDEM DOS BLOCOS — pensada pra qualidade da resposta:
@@ -1450,6 +1482,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
     if (knBlock) single.push(knBlock);
     const consultaBlockSingle = renderConsultaMarcada(consulta);
     if (consultaBlockSingle) single.push(consultaBlockSingle);
+    const etapaBlockSingle = renderEtapaLead(estadoEtapa);
+    if (etapaBlockSingle) single.push(etapaBlockSingle);
     return single.join('\n\n');
   }
 
@@ -1526,6 +1560,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // recência: precisa ganhar do horário escrito lá atrás na conversa.
   const consultaBlock = renderConsultaMarcada(consulta);
   if (consultaBlock) blocks.push(consultaBlock);
+  const etapaBlock = renderEtapaLead(estadoEtapa);
+  if (etapaBlock) blocks.push(etapaBlock);
 
   // Boost de primeiro turno vai POR ÚLTIMO — instruções no fim do prompt têm
   // mais influência (efeito "recência") nos LLMs atuais.
@@ -1563,6 +1599,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     isFirstTurn = false,
     leadId,
     consulta = null,
+    estadoEtapa = null,
   } = input;
 
   const customBase = (agentConfigPrompt && agentConfigPrompt.trim().length > 0
@@ -1582,6 +1619,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
   // devolveria exatamente o dado velho que este bloco existe pra corrigir.
   const consultaBlock = renderConsultaMarcada(consulta);
   if (consultaBlock) dynamic.push(consultaBlock);
+  const etapaBlock = renderEtapaLead(estadoEtapa);
+  if (etapaBlock) dynamic.push(etapaBlock);
 
   // MODO PROMPT ÚNICO — o texto do usuário é o prompt inteiro (cacheable);
   // só os blocos de runtime ficam no dynamic.
@@ -1713,7 +1752,7 @@ async function loadComposeInput(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta] = await Promise.all([
+  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -1764,6 +1803,17 @@ async function loadComposeInput(input: {
           return null;
         })
       : Promise.resolve(null),
+    // A ETAPA REAL do lead no Kommo (verdade que vale pro lead legado). Só bate
+    // no Kommo quando há leadId; erro aqui vira `null` (prompt segue sem o bloco).
+    input.leadId
+      ? estadoEtapaDoLead(input.unit, input.leadId).catch((err) => {
+          logger.warn(
+            { err, leadId: input.leadId },
+            'estadoEtapaDoLead falhou — sem bloco de etapa no prompt',
+          );
+          return null;
+        })
+      : Promise.resolve(null),
   ]);
   return {
     ...input,
@@ -1775,6 +1825,7 @@ async function loadComposeInput(input: {
     leadFieldRules,
     leadMemory,
     consulta,
+    estadoEtapa,
   };
 }
 
