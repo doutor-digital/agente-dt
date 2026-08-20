@@ -27,6 +27,7 @@ import {
   GraduationCap,
   Database,
   Wrench,
+  History,
 } from 'lucide-react';
 import { WizardPanel } from './WizardPanel';
 import { FontesPanel } from './FontesPanel';
@@ -37,8 +38,9 @@ import { PlaygroundPanel } from './PlaygroundPanel';
 import { TrainingPanel } from './TrainingPanel';
 import { AgentConfigPanel } from './AgentConfigPanel';
 import { ActivationPanel } from './ActivationPanel';
+import { HistoricoPanel } from './HistoricoPanel';
 
-type SegId = 'identidade' | 'conhecimento' | 'acoes' | 'kommo' | 'testar';
+type SegId = 'identidade' | 'conhecimento' | 'acoes' | 'kommo' | 'testar' | 'historico';
 
 interface SubPanel {
   id: string;
@@ -104,6 +106,13 @@ const SEGMENTS: Segment[] = [
     icon: TestTube2,
     hint: 'Converse com o agente e veja as ações que ele dispara — antes de colocar no ar.',
     subs: [{ id: 'playground', label: 'Playground', icon: TestTube2, render: () => <PlaygroundPanel /> }],
+  },
+  {
+    id: 'historico',
+    label: 'Histórico',
+    icon: History,
+    hint: 'Tudo que já foi treinado, ajustado ou corrigido na IA desta clínica.',
+    subs: [{ id: 'melhorias', label: 'Melhorias', icon: History, render: () => <HistoricoPanel /> }],
   },
 ];
 

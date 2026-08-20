@@ -851,6 +851,17 @@ export interface KnowledgeEntry {
   updatedAt: string;
 }
 
+// Histórico de melhorias por unidade (clínica).
+export interface ChangeLogEntry {
+  id: string;
+  unitId: string;
+  category: string;
+  summary: string;
+  details: string | null;
+  author: string | null;
+  createdAt: string;
+}
+
 export interface FlaggedMessage {
   id: string;
   content: string;
