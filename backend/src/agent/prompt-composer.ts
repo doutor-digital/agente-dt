@@ -1355,8 +1355,8 @@ function renderConsultaMarcada(c: ConsultaReconciliada | null | undefined): stri
 function renderEtapaLead(e: EstadoEtapaLead | null | undefined): string {
   if (!e || !e.jaAgendadoOuPaciente) return '';
   return xmlBlock('etapa_do_lead', [
-    `Este paciente já está na etapa "${e.nome}" do sistema da clínica — ou seja, ele NÃO é`,
-    'um contato novo: já tem consulta marcada ou já é paciente. Ele pode existir de antes de você.',
+    `Este paciente NÃO é um contato novo: ele já tem consulta marcada ou já é paciente`,
+    `(etapa atual no sistema: "${e.nome}"). Ele pode existir de antes de você.`,
     '',
     'REGRAS (valem acima de qualquer coisa escrita no histórico):',
     '- NUNCA trate como primeiro contato nem ofereça "vamos agendar sua consulta" do zero. Ele já passou por essa etapa.',
