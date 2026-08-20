@@ -1,23 +1,24 @@
 // ============================================================================
 // Login — tela de entrada do console.
 //
-// Layout split, padrão das plataformas de IA: à esquerda a MARCA e a promessa
-// do produto (fundo escuro com malha de pontos + halo do acento); à direita um
-// cartão de autenticação sóbrio e estreito. Em telas pequenas a coluna da
-// esquerda some e sobra só o cartão — o formulário nunca é o que quebra.
+// Estilo: split com card branco flutuante sobre fundo azul. À esquerda um
+// painel azul com a animação (Lottie de chatbot); à direita o formulário claro
+// (LOGIN, usuário, senha, lembrar, esqueci). No mobile o painel azul some.
 //
-// Sem signup público — o super admin cria usuários pelo painel ou via CLI.
+// Sem signup público nem login social — a autenticação é e-mail/senha pelo
+// backend; o super admin cria usuários pelo painel ou via CLI. Botões falsos de
+// "criar conta"/"entrar com Google" enganam, então não entram.
+//
 // Códigos de erro do backend:
 //   invalid_credentials — email/senha errados
-//   account_disabled    — user desativado pelo super admin
-//   no_password_set     — user existe mas ainda sem senha (peça reset)
+//   account_disabled    — user desativado
+//   no_password_set     — user existe mas sem senha (peça reset)
 // ============================================================================
 
 import { useEffect, useState, type FormEvent } from 'react';
 import Lottie from 'lottie-react';
-import { ArrowRight, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { NeuralField } from './NeuralField';
 
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_credentials: 'Usuário ou senha incorretos.',
@@ -28,20 +29,15 @@ const ERROR_MESSAGES: Record<string, string> = {
   internal_error: 'Erro interno. Tente de novo em alguns segundos.',
 };
 
-const HIGHLIGHTS = [
-  'Agentes de IA conectados ao seu Kommo',
-  'Cada execução rastreada: passo, custo e latência',
-  'Ações no CRM disparadas pela própria conversa',
-];
-
 export function Login() {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  // Lottie da coluna da marca — carregado de /public pra não inchar o bundle.
+  // Lottie da coluna azul — carregado de /public pra não inchar o bundle.
   const [anim, setAnim] = useState<object | null>(null);
   useEffect(() => {
     let alive = true;
@@ -63,7 +59,6 @@ export function Login() {
     setSubmitting(true);
     try {
       await login(email.trim().toLowerCase(), password);
-      // AuthContext atualiza o user e o AuthGate troca de tela.
     } catch (err) {
       const e2 = err as { response?: { data?: { error?: string } }; message?: string };
       const code = e2?.response?.data?.error;
@@ -74,192 +69,130 @@ export function Login() {
   }
 
   return (
-    <div className="dark min-h-screen w-full bg-zinc-950 text-zinc-100 lg:grid lg:grid-cols-[1.1fr_1fr]">
-      {/* ── Coluna da marca (some no mobile) ───────────────────────────────── */}
-      <aside className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden border-r border-zinc-800">
-        <div className="absolute inset-0 grid-mesh opacity-70 pointer-events-none" />
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            background:
-              'radial-gradient(70% 60% at 20% 10%, color-mix(in oklab, var(--b-500) 16%, transparent), transparent 70%)',
-          }}
-        />
+    <div
+      className="min-h-screen w-full flex items-center justify-center p-4 sm:p-6"
+      style={{
+        background: 'radial-gradient(120% 120% at 30% 10%, #5cc0ff 0%, #16a6ff 42%, #0b84e6 100%)',
+      }}
+    >
+      <div className="w-full max-w-4xl grid md:grid-cols-2 rounded-[26px] overflow-hidden bg-white shadow-[0_30px_90px_rgba(4,58,110,0.45)]">
+        {/* ── Painel azul + animação (some no mobile) ────────────────────────── */}
+        <aside className="relative hidden md:flex flex-col items-center justify-center bg-[#12a6ff] p-10 overflow-hidden">
+          {/* folhas decorativas suaves (como a referência) */}
+          <span className="pointer-events-none absolute -left-8 bottom-8 h-40 w-40 rounded-[46%] bg-white/10 blur-[2px]" />
+          <span className="pointer-events-none absolute -right-6 bottom-16 h-28 w-28 rounded-[46%] bg-white/10 blur-[2px]" />
 
-        {/* Malha neural animada como PANO DE FUNDO da coluna, não como figura
-            ao lado do texto: a 1440 essa coluna tem ~754px e o texto
-            (max-w-lg) come 512 deles — não sobra vão pra uma figura respirar
-            ao lado. A máscara está centrada em 72% (e não no meio) de
-            propósito: puxa o peso da malha pro terço direito, onde não há
-            texto. Fica atrás de tudo e não intercepta clique. */}
-        <NeuralField
-          className="absolute inset-0 w-full h-full opacity-90 pointer-events-none select-none"
-          style={{
-            maskImage:
-              'radial-gradient(ellipse 66% 72% at 72% 50%, #000 16%, transparent 76%)',
-            WebkitMaskImage:
-              'radial-gradient(ellipse 66% 72% at 72% 50%, #000 16%, transparent 76%)',
-          }}
-        />
-
-        <div className="relative flex items-center gap-3">
-          <img
-            src="/logo-dd.png"
-            alt=""
-            className="w-10 h-10 rounded-xl object-contain ring-1 ring-zinc-800 bg-zinc-900 p-1.5"
-          />
-          <div>
-            <div className="text-sm font-semibold tracking-tight">Doutor Digital</div>
-            <div className="text-[11px] text-zinc-500">Console de agentes</div>
-          </div>
-        </div>
-
-        <div className="relative max-w-lg">
-          {/* Herói: animação da IA (Lottie). Aparece assim que o JSON carrega. */}
-          <div className="mb-6 min-h-[220px] flex items-center justify-center">
-            {anim && (
-              <Lottie
-                animationData={anim}
-                loop
-                autoplay
-                className="w-full max-w-[380px] drop-shadow-[0_24px_60px_rgba(124,77,255,0.28)]"
-              />
-            )}
-          </div>
-
-          <h1 className="text-[2.6rem] leading-[1.08] font-semibold tracking-tight text-balance">
-            Seus agentes de IA,
-            <br />
-            <span className="text-brand-400">sob controle total.</span>
-          </h1>
-          <p className="mt-5 text-[15px] leading-relaxed text-zinc-400 max-w-md">
-            Configure a persona, ligue no CRM e acompanhe cada conversa — do primeiro
-            “oi” até o lead na etapa certa.
-          </p>
-
-          <ul className="mt-8 space-y-3">
-            {HIGHLIGHTS.map((h) => (
-              <li key={h} className="flex items-start gap-3 text-sm text-zinc-300">
-                <span className="mt-0.5 w-4 h-4 rounded-full bg-brand-500/15 ring-1 ring-brand-500/30 flex items-center justify-center shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-brand-400" />
-                </span>
-                {h}
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="relative text-[11px] text-zinc-600">
-          © {new Date().getFullYear()} Doutor Digital · Acesso restrito
-        </div>
-      </aside>
-
-      {/* ── Cartão de autenticação ─────────────────────────────────────────── */}
-      <main className="flex items-center justify-center px-6 py-14 min-h-screen lg:min-h-0">
-        <div className="w-full max-w-sm">
-          {/* Marca compacta — só no mobile, onde a coluna da esquerda sumiu. */}
-          <div className="flex lg:hidden items-center gap-3 mb-8">
+          <div className="relative flex items-center gap-2.5 self-start">
             <img
               src="/logo-dd.png"
               alt=""
-              className="w-9 h-9 rounded-xl object-contain ring-1 ring-zinc-800 bg-zinc-900 p-1.5"
+              className="w-9 h-9 rounded-xl object-contain bg-white/15 p-1.5 ring-1 ring-white/25"
             />
-            <span className="text-sm font-semibold tracking-tight">Agente DT</span>
+            <span className="text-white font-semibold tracking-tight">Doutor Digital</span>
           </div>
 
-          <h2 className="text-xl font-semibold tracking-tight">Entrar no console</h2>
-          <p className="mt-1.5 text-[13px] text-zinc-500">
-            Use as credenciais que o administrador criou pra você.
+          <div className="relative flex-1 w-full flex items-center justify-center py-6">
+            {anim ? (
+              <Lottie animationData={anim} loop autoplay className="w-full max-w-[300px]" />
+            ) : (
+              <div className="h-[220px]" />
+            )}
+          </div>
+
+          <p className="relative text-center text-white/90 text-[15px] leading-relaxed max-w-[280px]">
+            Seus agentes de IA, conectados ao Kommo — do primeiro “oi” ao lead na etapa
+            certa.
           </p>
+        </aside>
+
+        {/* ── Formulário ─────────────────────────────────────────────────────── */}
+        <main className="flex flex-col justify-center px-7 py-12 sm:px-12">
+          {/* marca compacta só no mobile (painel azul sumiu) */}
+          <div className="flex md:hidden items-center justify-center gap-2.5 mb-6">
+            <img src="/logo-dd.png" alt="" className="w-9 h-9 rounded-xl object-contain ring-1 ring-slate-200 p-1" />
+            <span className="text-slate-700 font-semibold tracking-tight">Doutor Digital</span>
+          </div>
+
+          <h1 className="text-2xl font-extrabold tracking-wide text-slate-800 text-center">LOGIN</h1>
 
           <form onSubmit={handleSubmit} className="mt-7 space-y-4">
             {error && (
-              <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-[12px] text-rose-300">
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-[12px] text-rose-600">
                 {error}
               </div>
             )}
             {info && (
-              <div className="rounded-lg border border-brand-500/30 bg-brand-500/10 px-3 py-2.5 text-[12px] text-brand-300">
+              <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5 text-[12px] text-sky-700">
                 {info}
               </div>
             )}
 
             <label className="block">
-              <span className="text-[12px] font-medium text-zinc-400">E-mail</span>
-              <span className="mt-1.5 relative block">
-                <Mail
-                  size={15}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none"
-                />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="voce@clinica.com.br"
-                  autoComplete="username"
-                  autoFocus
-                  required
-                  className="field pl-9 py-2.5"
-                />
-              </span>
+              <span className="text-[13px] font-medium text-slate-600">Usuário</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="@mail.com"
+                autoComplete="username"
+                autoFocus
+                required
+                className="mt-1.5 w-full rounded-lg bg-slate-100 border border-transparent px-3.5 py-2.5 text-[14px] text-slate-800 placeholder:text-slate-400 outline-none transition focus:bg-white focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+              />
             </label>
 
             <label className="block">
-              <span className="flex items-center justify-between">
-                <span className="text-[12px] font-medium text-zinc-400">Senha</span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setInfo(
-                      'Recuperação automática ainda não está ativa. Peça ao administrador para resetar sua senha.',
-                    )
-                  }
-                  className="text-[11px] text-zinc-500 hover:text-brand-300 transition-colors"
-                >
-                  Esqueci a senha
-                </button>
-              </span>
-              <span className="mt-1.5 relative block">
-                <Lock
-                  size={15}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none"
-                />
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  autoComplete="current-password"
-                  required
-                  className="field pl-9 py-2.5"
-                />
-              </span>
+              <span className="text-[13px] font-medium text-slate-600">Senha</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="senha"
+                autoComplete="current-password"
+                required
+                className="mt-1.5 w-full rounded-lg bg-slate-100 border border-transparent px-3.5 py-2.5 text-[14px] text-slate-800 placeholder:text-slate-400 outline-none transition focus:bg-white focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+              />
             </label>
+
+            <div className="flex items-center justify-between text-[13px]">
+              <label className="flex items-center gap-2 text-slate-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={remember}
+                  onChange={(e) => setRemember(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-sky-500 accent-sky-500"
+                />
+                Lembrar de mim
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  setInfo(
+                    'Recuperação automática ainda não está ativa. Peça ao administrador para resetar sua senha.',
+                  )
+                }
+                className="font-medium text-sky-600 hover:text-sky-700 transition-colors"
+              >
+                Esqueceu a senha?
+              </button>
+            </div>
 
             <button
               type="submit"
               disabled={submitting || !email || !password}
-              className="btn-primary w-full py-2.5 group"
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-[#12a6ff] py-2.5 text-[14px] font-semibold text-white shadow-[0_8px_20px_rgba(18,166,255,0.35)] transition hover:bg-[#0b93e6] disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {submitting ? (
-                <Loader2 size={15} className="animate-spin" />
-              ) : (
-                <ArrowRight
-                  size={15}
-                  className="transition-transform group-hover:translate-x-0.5"
-                />
-              )}
+              {submitting && <Loader2 size={15} className="animate-spin" />}
               {submitting ? 'Entrando…' : 'Entrar'}
             </button>
           </form>
 
-          <div className="mt-7 flex items-start gap-2 text-[11px] text-zinc-500 leading-relaxed">
-            <ShieldCheck size={13} className="mt-0.5 shrink-0 text-zinc-600" />
-            Acesso restrito ao time. Não existe cadastro público — peça ao administrador
-            para criar sua conta.
-          </div>
-        </div>
-      </main>
+          <p className="mt-8 text-center text-[12px] leading-relaxed text-slate-400">
+            Acesso restrito ao time. Não existe cadastro público — peça sua conta ao
+            administrador.
+          </p>
+        </main>
+      </div>
     </div>
   );
 }
