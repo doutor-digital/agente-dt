@@ -41,7 +41,7 @@ export function Login() {
   const [anim, setAnim] = useState<object | null>(null);
   useEffect(() => {
     let alive = true;
-    fetch('/ai-chatbot.json')
+    fetch('/ai-chatbot.json?v=2')
       .then((r) => r.json())
       .then((d) => {
         if (alive) setAnim(d);
