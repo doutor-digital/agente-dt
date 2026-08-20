@@ -24,6 +24,7 @@ import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js'
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
+import { describeImage } from '../services/vision.service.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
@@ -111,7 +112,7 @@ function getIncomingMessage(parsed: ParsedWebhook): MessageEvent | null {
   const messages = parsed.message?.add ?? [];
   // Aceita mensagens com texto OU com áudio anexo (vamos transcrever depois).
   const incoming = messages.find(
-    (m) => (m.type ?? 'incoming') === 'incoming' && (m.text || hasAudioAttachment(m)),
+    (m) => (m.type ?? 'incoming') === 'incoming' && (m.text || hasAudioAttachment(m) || hasImageAttachment(m)),
   );
   return incoming ?? null;
 }
@@ -146,6 +147,29 @@ function getAudioUrl(msg: MessageEvent): string | null {
   return null;
 }
 
+const IMAGE_TYPES = new Set(['image', 'picture', 'photo', 'sticker']);
+const IMAGE_EXT_RE = /\.(jpg|jpeg|png|webp|gif|bmp|heic)$/i;
+
+function hasImageAttachment(msg: MessageEvent): boolean {
+  return !!getImageUrl(msg);
+}
+
+/** Retorna o URL da imagem da mensagem, ou null se não houver. */
+function getImageUrl(msg: MessageEvent): string | null {
+  const all = [
+    ...(msg.attachment ? [msg.attachment] : []),
+    ...(msg.attachments ?? []),
+  ];
+  for (const a of all) {
+    if (!a.link) continue;
+    const type = (a.type ?? '').toLowerCase();
+    if (IMAGE_TYPES.has(type)) return a.link;
+    const name = (a.file_name ?? a.name ?? a.link).toLowerCase();
+    if (IMAGE_EXT_RE.test(name)) return a.link;
+  }
+  return null;
+}
+
 function extractLeadId(parsed: ParsedWebhook): number | null {
   if (parsed.leadId) return parsed.leadId;
   const msg = getIncomingMessage(parsed);
@@ -162,6 +186,7 @@ function extractLeadId(parsed: ParsedWebhook): number | null {
 interface ExtractedContext {
   humanMessage: string;
   audioUrl: string | null;
+  imageUrl: string | null;
   chatId: string | null;
   talkId: string | null;
   contactId: string | null;
@@ -175,6 +200,7 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
     return {
       humanMessage: msg.text ?? '',
       audioUrl: getAudioUrl(msg),
+      imageUrl: getImageUrl(msg),
       chatId: msg.chat_id ?? null,
       talkId: msg.talk_id ?? null,
       contactId: msg.contact_id ?? null,
@@ -185,6 +211,7 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
   return {
     humanMessage: parsed.text ?? `Webhook recebido para lead ${leadId}. Analise e tome a melhor ação.`,
     audioUrl: null,
+    imageUrl: null,
     chatId: null,
     talkId: null,
     contactId: null,
@@ -585,7 +612,8 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     traceId: trace.id,
     humanMessage: ctx.humanMessage,
     audioUrl: ctx.audioUrl,
-    run: async (combinedMessage, audioUrls, traceIds) => {
+    imageUrl: ctx.imageUrl,
+    run: async (combinedMessage, audioUrls, imageUrls, traceIds) => {
       // Marca traces "satélites" do burst (todos menos o primeiro) como
       // coalescidos, pra ficar claro no painel que não rodaram a IA sozinhos.
       const ownerTraceId = traceIds[0];
@@ -606,9 +634,10 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         leadId,
         traceId: ownerTraceId,
         humanMessage: combinedMessage,
-        // Áudio: por enquanto pega só o 1º — combinar transcrições de múltiplos
-        // áudios no mesmo turno é caso raro. Se virar comum, evoluir.
+        // Áudio/imagem: por enquanto pega só o 1º — combinar vários no mesmo
+        // turno é caso raro. Se virar comum, evoluir.
         audioUrl: audioUrls[0] ?? null,
+        imageUrl: imageUrls[0] ?? null,
         chatId: ctx.chatId,
         talkId: ctx.talkId,
         contactId: ctx.contactId,
@@ -632,6 +661,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       traceId: trace.id,
       humanMessage: ctx.humanMessage,
       audioUrl: ctx.audioUrl,
+      imageUrl: ctx.imageUrl,
       chatId: ctx.chatId,
       talkId: ctx.talkId,
       contactId: ctx.contactId,
@@ -660,6 +690,7 @@ export async function processAgent(args: {
   traceId: string;
   humanMessage: string;
   audioUrl: string | null;
+  imageUrl: string | null;
   chatId: string | null;
   talkId: string | null;
   contactId: string | null;
@@ -671,7 +702,7 @@ export async function processAgent(args: {
   /** MODO WIDGET — ver AgentDeliverFn. Ausente = caminho legado (sendChatReply). */
   deliver?: AgentDeliverFn;
 }): Promise<void> {
-  const { unit, leadId, traceId, audioUrl, chatId, talkId, contactId, isChatMessage, requestStart, burstSize, deliver } = args;
+  const { unit, leadId, traceId, audioUrl, imageUrl, chatId, talkId, contactId, isChatMessage, requestStart, burstSize, deliver } = args;
   let { humanMessage } = args;
   // MODO WIDGET: garante que o Salesbot pausado seja retomado EXATAMENTE uma vez
   // (resposta, mensagem de guard, ou fallback de erro). Sem isso o bot trava.
@@ -720,6 +751,32 @@ export async function processAgent(args: {
       });
       // Não aborta — cai pra mensagem default avisando.
       humanMessage = humanMessage || '[cliente mandou um áudio, mas não foi possível transcrever]';
+    }
+  }
+
+  // Se cliente mandou imagem, lê (visão) antes de chamar a IA.
+  if (imageUrl) {
+    try {
+      const d = await describeImage(unit, imageUrl);
+      const desc = d.text || '[imagem sem conteúdo legível]';
+      humanMessage = humanMessage
+        ? `${humanMessage}\n\n[imagem do cliente]: ${desc}`
+        : `[imagem do cliente]: ${desc}`;
+      await recorder.step({
+        kind: 'THINKING',
+        title: `Imagem lida (${d.durationMs}ms): "${desc.slice(0, 80)}"`,
+        payload: { imageUrl, desc, ms: d.durationMs },
+        latencyMs: d.durationMs,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ err, imageUrl, leadId }, 'falha ao ler imagem');
+      await recorder.step({
+        kind: 'ERROR',
+        title: `Falha ao ler imagem: ${msg}`,
+        payload: { imageUrl, error: msg },
+      });
+      humanMessage = humanMessage || '[cliente mandou uma imagem, mas não foi possível ler]';
     }
   }
 
