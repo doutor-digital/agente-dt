@@ -16,6 +16,7 @@ import type {
   IntegrationsResponse,
   FlaggedMessage,
   KnowledgeEntry,
+  ChangeLogEntry,
   KommoFieldsResponse,
   KommoLossReasonsResponse,
   KommoPipelinesResponse,
@@ -794,6 +795,10 @@ export const api = {
   // -------------------------------------------------------------------------
   async listKnowledge(unitId: string): Promise<KnowledgeEntry[]> {
     const { data } = await http.get<{ entries: KnowledgeEntry[] }>(`/units/${unitId}/knowledge`);
+    return data.entries;
+  },
+  async getChangeLog(unitId: string): Promise<ChangeLogEntry[]> {
+    const { data } = await http.get<{ entries: ChangeLogEntry[] }>(`/units/${unitId}/changelog`);
     return data.entries;
   },
   async createKnowledge(unitId: string, input: { question: string; answer: string }): Promise<KnowledgeEntry> {

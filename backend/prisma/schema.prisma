@@ -297,6 +297,7 @@ model Unit {
   instagramComments InstagramComment[]
   agendaBlocks      AgendaBlock[]
   spineLeadLinks    SpineLeadLink[]
+  changeLog         UnitChangeLog[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -575,6 +576,31 @@ model LeadMemory {
 
   @@unique([unitId, leadId])
   @@map("lead_memories")
+}
+
+// ---------------------------------------------------------------------------
+// UnitChangeLog — HISTÓRICO DE MELHORIAS por unidade (clínica). Cada correção,
+// treino ou ajuste feito na IA daquela unidade vira uma linha. Serve de trilha
+// de auditoria pro cliente ver, por clínica, tudo que já foi feito no agente.
+// ---------------------------------------------------------------------------
+model UnitChangeLog {
+  id       String @id @default(cuid())
+  unitId   String @map("unit_id")
+  unit     Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  /** Tipo: treino | correcao | config | fix | feature. */
+  category String @default("treino")
+  /** Resumo curto (o que mudou), aparece na linha do tempo. */
+  summary  String
+  /** Detalhe opcional (o antes/depois, o porquê). */
+  details  String? @db.Text
+  /** Quem fez (ex: "IA · João", "sistema"). Livre. */
+  author   String? @default("IA")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([unitId, createdAt(sort: Desc)])
+  @@map("unit_change_log")
 }
 
 // ===========================================================================

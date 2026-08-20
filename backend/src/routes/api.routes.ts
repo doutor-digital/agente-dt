@@ -149,6 +149,7 @@ import {
 } from '../controllers/prompts.controller.js';
 import { loginHandler, logoutHandler, meHandler } from '../controllers/auth.controller.js';
 import { playgroundRunHandler } from '../controllers/playground.controller.js';
+import { listChangeLogHandler } from '../controllers/change-log.controller.js';
 import {
   listUsersHandler,
   createUserHandler,
@@ -246,6 +247,7 @@ apiRouter.post('/units/:id/templates', requireUnitAccess, createTemplateHandler)
 apiRouter.patch('/units/:id/templates/:templateId', requireUnitAccess, updateTemplateHandler);
 apiRouter.delete('/units/:id/templates/:templateId', requireUnitAccess, deleteTemplateHandler);
 
+apiRouter.get('/units/:id/changelog', requireUnitAccess, listChangeLogHandler);
 apiRouter.get('/units/:id/knowledge', requireUnitAccess, listKnowledgeHandler);
 apiRouter.post('/units/:id/knowledge', requireUnitAccess, createKnowledgeHandler);
 apiRouter.patch('/units/:id/knowledge/:entryId', requireUnitAccess, updateKnowledgeHandler);
