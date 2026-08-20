@@ -1011,6 +1011,7 @@ function UnitCard({
   canClone: boolean;
 }) {
   const showMenu = canClone || canDelete;
+  const role = unitRole(unit);
   return (
     <div className="relative group">
       <button
@@ -1055,13 +1056,18 @@ function UnitCard({
             </div>
           )}
         </div>
-        <div className="text-[13px] font-bold text-zinc-50 uppercase tracking-wide leading-tight px-1 break-words line-clamp-2 transition-colors group-hover:text-brand-100">
-          {unit.name}
-        </div>
-        <div className="text-[11px] text-zinc-500 mt-1 truncate max-w-full font-mono">/{unit.slug}</div>
+        <span
+          className={clsx(
+            'inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wide ring-1',
+            role.cls,
+          )}
+        >
+          {role.label}
+        </span>
+        <div className="text-[11px] text-zinc-500 mt-1.5 truncate max-w-full font-mono">/{unit.slug}</div>
         <div className="mt-1 inline-flex items-center gap-1 text-[9px] uppercase tracking-wider text-zinc-600">
           <span className="h-1 w-1 rounded-full bg-zinc-600" />
-          {unit.openaiModel}
+          {unitModelLabel(unit)}
         </div>
       </button>
 
@@ -1277,6 +1283,64 @@ function IconBtn({
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Agrupamento por clínica + papel do agente. Sem isto, "Escolha uma conta" vira
+// uma parede de cards iguais quando há dezenas de agentes (cada clínica tem
+// Comercial, Resgate, Pós-Tratamento, Financeiro).
+// ---------------------------------------------------------------------------
+function unitRole(u: Unit): { label: string; cls: string } {
+  const s = (u.slug || '').toLowerCase();
+  const n = (u.name || '').toLowerCase();
+  if (s.includes('resgate') || n.includes('resgate'))
+    return { label: 'Resgate', cls: 'text-amber-300 bg-amber-500/10 ring-amber-500/30' };
+  if (s.includes('tratamento') || n.includes('trata'))
+    return { label: 'Pós-Tratamento', cls: 'text-sky-300 bg-sky-500/10 ring-sky-500/30' };
+  if (s.includes('financeiro') || n.includes('financ'))
+    return { label: 'Financeiro', cls: 'text-violet-300 bg-violet-500/10 ring-violet-500/30' };
+  return { label: 'Comercial', cls: 'text-emerald-300 bg-emerald-500/10 ring-emerald-500/30' };
+}
+
+const ROLE_ORDER: Record<string, number> = {
+  Comercial: 0,
+  Resgate: 1,
+  'Pós-Tratamento': 2,
+  Financeiro: 3,
+};
+
+/** Modelo REAL da unidade — corrige o rótulo que mostrava sempre o da OpenAI. */
+function unitModelLabel(u: Unit): string {
+  const p = u.llmProvider || 'openai';
+  if (p === 'anthropic') return u.anthropicModel || 'claude';
+  if (p === 'google') return u.googleModel || 'gemini';
+  return u.openaiModel || 'gpt-4o';
+}
+
+interface ClinicGroup {
+  key: string;
+  label: string;
+  units: Unit[];
+}
+
+/** Agrupa por clínica (personaCompanyName), clínicas com mais agentes primeiro,
+ *  e os agentes ordenados por papel (Comercial → Resgate → Tratamento → Financeiro). */
+function groupUnitsByClinic(units: Unit[]): ClinicGroup[] {
+  const map = new Map<string, ClinicGroup>();
+  for (const u of units) {
+    const label = u.personaCompanyName?.trim() || u.kommoSubdomain?.trim() || u.name;
+    const key = label.toLowerCase();
+    if (!map.has(key)) map.set(key, { key, label, units: [] });
+    map.get(key)!.units.push(u);
+  }
+  const groups = [...map.values()];
+  for (const g of groups) {
+    g.units.sort(
+      (a, b) => (ROLE_ORDER[unitRole(a).label] ?? 9) - (ROLE_ORDER[unitRole(b).label] ?? 9),
+    );
+  }
+  groups.sort((a, b) => b.units.length - a.units.length || a.label.localeCompare(b.label));
+  return groups;
+}
+
 // As 5 VISUALIZAÇÕES. UnitsListView despacha pra variante escolhida no switcher.
 // V1 Avatares = UnitCard (acima, com chip de chave). V2-V5 abaixo.
 // ---------------------------------------------------------------------------
@@ -1303,24 +1367,39 @@ function UnitsListView(
   if (view === 'tabela') return <UnitsTable {...rest} />;
   if (view === 'chaves') return <UnitsKeyFocus {...rest} />;
   if (view === 'lista') return <UnitsList {...rest} />;
-  // V1 · Avatares — cards circulares com dropdown (preserva o comportamento antigo).
+  // V1 · Avatares — AGRUPADO por clínica, com o papel de cada agente destacado.
+  // Uma seção por clínica; dentro, os agentes (Comercial, Resgate, etc.) claros.
+  const groups = groupUnitsByClinic(rest.units);
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-6 gap-y-10">
-      {rest.units.map((u) => (
-        <UnitCard
-          key={u.id}
-          unit={u}
-          onOpen={() => rest.onOpen(u)}
-          onClone={() => rest.onClone(u)}
-          onDelete={() => rest.onDelete(u)}
-          onKeySaved={rest.onKeySaved}
-          menuOpen={menuOpenId === u.id}
-          onMenuToggle={(e) => onMenuToggle(u, e)}
-          cloning={rest.cloningId === u.id}
-          canEdit={rest.canEdit(u)}
-          canDelete={rest.isSuper}
-          canClone={rest.isSuper}
-        />
+    <div className="space-y-11">
+      {groups.map((g) => (
+        <section key={g.key}>
+          <div className="flex items-center gap-3 mb-6 px-0.5">
+            <h2 className="text-[15px] font-semibold text-zinc-100 tracking-tight">{g.label}</h2>
+            <span className="text-[10px] font-medium text-zinc-400 px-1.5 py-0.5 rounded-md bg-zinc-900 ring-1 ring-zinc-800 tabular-nums">
+              {g.units.length} {g.units.length === 1 ? 'agente' : 'agentes'}
+            </span>
+            <span className="flex-1 h-px bg-linear-to-r from-zinc-800 to-transparent" />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-6 gap-y-10">
+            {g.units.map((u) => (
+              <UnitCard
+                key={u.id}
+                unit={u}
+                onOpen={() => rest.onOpen(u)}
+                onClone={() => rest.onClone(u)}
+                onDelete={() => rest.onDelete(u)}
+                onKeySaved={rest.onKeySaved}
+                menuOpen={menuOpenId === u.id}
+                onMenuToggle={(e) => onMenuToggle(u, e)}
+                cloning={rest.cloningId === u.id}
+                canEdit={rest.canEdit(u)}
+                canDelete={rest.isSuper}
+                canClone={rest.isSuper}
+              />
+            ))}
+          </div>
+        </section>
       ))}
     </div>
   );
