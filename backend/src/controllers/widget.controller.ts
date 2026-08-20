@@ -219,6 +219,7 @@ async function processWidget(args: {
     traceId: trace.id,
     humanMessage: message,
     audioUrl: null,
+    imageUrl: null,
     chatId: null,
     talkId: null,
     contactId: null,

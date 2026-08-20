@@ -36,6 +36,7 @@ const MAX_MESSAGES_PER_BURST = 20;      // safety: evita memória crescente sem 
 interface PendingMessage {
   text: string;
   audioUrl: string | null;
+  imageUrl: string | null;
   arrivedAt: number;
   /** traceId do webhook que trouxe ESTA mensagem em particular. */
   traceId: string;
@@ -51,7 +52,7 @@ interface BufferEntry {
   /** Mensagens acumuladas, em ordem de chegada. */
   pending: PendingMessage[];
   /** Função que roda quando o timer expira (closure preservando args do 1º webhook). */
-  flush: (combined: string, audioUrls: string[], traceIds: string[]) => Promise<void>;
+  flush: (combined: string, audioUrls: string[], imageUrls: string[], traceIds: string[]) => Promise<void>;
   /**
    * Flag de execução. Verdadeira enquanto um flush() está rodando.
    * Mensagens que chegam neste estado SÃO acumuladas em `pending` mas NÃO
@@ -82,14 +83,15 @@ export function scheduleAgentRun(args: {
   traceId: string;
   humanMessage: string;
   audioUrl: string | null;
+  imageUrl: string | null;
   /**
    * Função que de fato roda o agente. Recebe a mensagem combinada de todo o
-   * burst + a lista de audioUrls + a lista de traceIds (pra que o caller
-   * possa associar a execução a todos os webhooks que entraram).
+   * burst + a lista de audioUrls + imageUrls + a lista de traceIds (pra que o
+   * caller possa associar a execução a todos os webhooks que entraram).
    *
    * Só é chamada UMA vez, quando o debounce expirar.
    */
-  run: (combined: string, audioUrls: string[], traceIds: string[]) => Promise<void>;
+  run: (combined: string, audioUrls: string[], imageUrls: string[], traceIds: string[]) => Promise<void>;
 }): 'started' | 'joined' | 'rejected' {
   const key = bufferKey(args.unitSlug, args.leadId);
   const existing = buffers.get(key);
@@ -98,6 +100,7 @@ export function scheduleAgentRun(args: {
   const newMsg: PendingMessage = {
     text: args.humanMessage,
     audioUrl: args.audioUrl,
+    imageUrl: args.imageUrl,
     arrivedAt: now,
     traceId: args.traceId,
   };
@@ -182,6 +185,7 @@ function fire(key: string): void {
   const messages = entry.pending.splice(0, entry.pending.length);
   const combined = messages.map((m) => m.text).join('\n\n');
   const audioUrls = messages.map((m) => m.audioUrl).filter((u): u is string => !!u);
+  const imageUrls = messages.map((m) => m.imageUrl).filter((u): u is string => !!u);
   const traceIds = messages.map((m) => m.traceId);
   const flush = entry.flush;
   entry.running = true;
@@ -201,7 +205,7 @@ function fire(key: string): void {
   // Fire-and-forget. Erros propagados pelo logger do próprio flush.
   // Importante: tudo após o flush precisa rodar via .finally() pra liberar
   // o lock independente de sucesso/erro.
-  void flush(combined, audioUrls, traceIds)
+  void flush(combined, audioUrls, imageUrls, traceIds)
     .catch((err) => {
       logger.error({ err, key }, 'coalescer: erro no flush');
     })
