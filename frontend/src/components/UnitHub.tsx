@@ -56,6 +56,43 @@ function categoryIcon(cat: string | null): LucideIcon {
   return CATEGORY_ICON[cat ?? ''] ?? Bot;
 }
 
+/** Papel do agente (Comercial/Resgate/Pós-Tratamento/Financeiro) + cores. */
+function roleOf(unit: Unit): { label: string; chip: string; icon: string } {
+  const s = (unit.slug || '').toLowerCase();
+  const n = (unit.name || '').toLowerCase();
+  if (s.includes('resgate') || n.includes('resgate'))
+    return {
+      label: 'Resgate',
+      chip: 'text-amber-300 bg-amber-500/10 ring-amber-500/30',
+      icon: 'bg-amber-500/12 ring-amber-500/25 text-amber-400 group-hover:bg-amber-500/20 group-hover:ring-amber-400/50',
+    };
+  if (s.includes('tratamento') || n.includes('trata'))
+    return {
+      label: 'Pós-Tratamento',
+      chip: 'text-sky-300 bg-sky-500/10 ring-sky-500/30',
+      icon: 'bg-sky-500/12 ring-sky-500/25 text-sky-400 group-hover:bg-sky-500/20 group-hover:ring-sky-400/50',
+    };
+  if (s.includes('financeiro') || n.includes('financ'))
+    return {
+      label: 'Financeiro',
+      chip: 'text-violet-300 bg-violet-500/10 ring-violet-500/30',
+      icon: 'bg-violet-500/12 ring-violet-500/25 text-violet-400 group-hover:bg-violet-500/20 group-hover:ring-violet-400/50',
+    };
+  return {
+    label: 'Comercial',
+    chip: 'text-emerald-300 bg-emerald-500/10 ring-emerald-500/30',
+    icon: 'bg-brand-500/12 ring-brand-500/25 text-brand-400 group-hover:bg-brand-500/20 group-hover:ring-brand-400/50',
+  };
+}
+
+/** Modelo REAL do agente (corrige o rótulo que mostrava sempre o da OpenAI). */
+function modelLabel(unit: Unit): string {
+  const p = unit.llmProvider || 'openai';
+  if (p === 'anthropic') return unit.anthropicModel || 'claude';
+  if (p === 'google') return unit.googleModel || 'gemini';
+  return unit.openaiModel || 'gpt-4o';
+}
+
 function slugify(s: string): string {
   return normalize(s)
     .replace(/[^a-z0-9]+/g, '-')
@@ -411,6 +448,7 @@ function AgentCard({
   onClick: () => void;
 }) {
   const Icon = categoryIcon(unit.category);
+  const role = roleOf(unit);
   return (
     <button
       type="button"
@@ -429,11 +467,26 @@ function AgentCard({
       />
 
       <div className="relative flex items-start gap-3">
-        <span className="w-10 h-10 rounded-xl bg-brand-500/12 ring-1 ring-brand-500/25 flex items-center justify-center text-brand-400 shrink-0 transition-all duration-200 group-hover:bg-brand-500/20 group-hover:ring-brand-400/50 group-hover:scale-105">
+        <span
+          className={clsx(
+            'w-10 h-10 rounded-xl ring-1 flex items-center justify-center shrink-0 transition-all duration-200 group-hover:scale-105',
+            role.icon,
+          )}
+        >
           <Icon size={18} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-[13px] font-medium text-zinc-100 truncate">{unit.name}</span>
+          <span
+            className={clsx(
+              'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ring-1',
+              role.chip,
+            )}
+          >
+            {role.label}
+          </span>
+          <span className="block text-[13px] font-medium text-zinc-100 truncate mt-1.5">
+            {unit.name}
+          </span>
           <span className="block text-[11px] text-zinc-500 truncate mt-0.5">
             {categoryLabel(unit.category)}
           </span>
@@ -444,7 +497,7 @@ function AgentCard({
         />
       </div>
 
-      <div className="relative mt-4 flex items-center gap-1.5">
+      <div className="relative mt-3.5 pt-3 border-t border-zinc-800/60 flex items-center gap-1.5">
         <span className="relative flex w-1.5 h-1.5 shrink-0">
           {unit.isActive && (
             <span className="absolute inline-flex w-full h-full rounded-full bg-brand-400 opacity-60 animate-ping" />
@@ -457,9 +510,15 @@ function AgentCard({
           />
         </span>
         <span className="text-[10px] uppercase tracking-wider text-zinc-500">
-          {unit.isActive ? 'Ativo' : 'Desativado'}
+          {unit.isActive ? 'Ativo' : 'Off'}
         </span>
-        <span className="ml-auto text-[10px] text-zinc-600 font-mono truncate max-w-[50%]">
+        <span className="text-zinc-700" aria-hidden>
+          ·
+        </span>
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500 truncate max-w-[38%]">
+          {modelLabel(unit)}
+        </span>
+        <span className="ml-auto text-[10px] text-zinc-600 font-mono truncate max-w-[42%]">
           {unit.slug}
         </span>
       </div>
