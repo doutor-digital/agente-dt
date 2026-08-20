@@ -13,7 +13,8 @@
 //   no_password_set     — user existe mas ainda sem senha (peça reset)
 // ============================================================================
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import Lottie from 'lottie-react';
 import { ArrowRight, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { NeuralField } from './NeuralField';
@@ -40,6 +41,20 @@ export function Login() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  // Lottie da coluna da marca — carregado de /public pra não inchar o bundle.
+  const [anim, setAnim] = useState<object | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch('/ai-chatbot.json')
+      .then((r) => r.json())
+      .then((d) => {
+        if (alive) setAnim(d);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -100,6 +115,18 @@ export function Login() {
         </div>
 
         <div className="relative max-w-lg">
+          {/* Herói: animação da IA (Lottie). Aparece assim que o JSON carrega. */}
+          <div className="mb-6 min-h-[220px] flex items-center justify-center">
+            {anim && (
+              <Lottie
+                animationData={anim}
+                loop
+                autoplay
+                className="w-full max-w-[380px] drop-shadow-[0_24px_60px_rgba(124,77,255,0.28)]"
+              />
+            )}
+          </div>
+
           <h1 className="text-[2.6rem] leading-[1.08] font-semibold tracking-tight text-balance">
             Seus agentes de IA,
             <br />
