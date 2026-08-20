@@ -1,18 +1,15 @@
 // ============================================================================
 // Login — tela de entrada do console.
 //
-// Estilo: split com card branco flutuante sobre fundo azul. À esquerda um
-// painel azul com a animação (Lottie de chatbot); à direita o formulário claro
-// (LOGIN, usuário, senha, lembrar, esqueci). No mobile o painel azul some.
+// Estilo: split com card branco flutuante sobre fundo azul. Em telas largas o
+// painel azul (com a animação Lottie do chatbot) fica À ESQUERDA; em telas
+// estreitas ele EMPILHA EM CIMA do formulário (não some), pra nunca virar um
+// formulário solto e vazio.
 //
 // Sem signup público nem login social — a autenticação é e-mail/senha pelo
-// backend; o super admin cria usuários pelo painel ou via CLI. Botões falsos de
-// "criar conta"/"entrar com Google" enganam, então não entram.
+// backend; botões falsos de "criar conta"/"entrar com Google" enganam.
 //
-// Códigos de erro do backend:
-//   invalid_credentials — email/senha errados
-//   account_disabled    — user desativado
-//   no_password_set     — user existe mas sem senha (peça reset)
+// Erros do backend: invalid_credentials | account_disabled | no_password_set
 // ============================================================================
 
 import { useEffect, useState, type FormEvent } from 'react';
@@ -37,7 +34,6 @@ export function Login() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  // Lottie da coluna azul — carregado de /public pra não inchar o bundle.
   const [anim, setAnim] = useState<object | null>(null);
   useEffect(() => {
     let alive = true;
@@ -72,15 +68,14 @@ export function Login() {
     <div
       className="min-h-screen w-full flex items-center justify-center p-4 sm:p-6"
       style={{
-        background: 'radial-gradient(120% 120% at 30% 10%, #5cc0ff 0%, #16a6ff 42%, #0b84e6 100%)',
+        background: 'radial-gradient(130% 130% at 50% 0%, #a9e2ff 0%, #4dbeff 46%, #1aa6f5 100%)',
       }}
     >
-      <div className="w-full max-w-4xl grid md:grid-cols-2 rounded-[26px] overflow-hidden bg-white shadow-[0_30px_90px_rgba(4,58,110,0.45)]">
-        {/* ── Painel azul + animação (some no mobile) ────────────────────────── */}
-        <aside className="relative hidden md:flex flex-col items-center justify-center bg-[#12a6ff] p-10 overflow-hidden">
-          {/* folhas decorativas suaves (como a referência) */}
-          <span className="pointer-events-none absolute -left-8 bottom-8 h-40 w-40 rounded-[46%] bg-white/10 blur-[2px]" />
-          <span className="pointer-events-none absolute -right-6 bottom-16 h-28 w-28 rounded-[46%] bg-white/10 blur-[2px]" />
+      <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 rounded-[26px] overflow-hidden bg-white shadow-[0_24px_70px_rgba(6,90,160,0.28)]">
+        {/* ── Painel azul + animação — em cima no mobile, à esquerda no desktop ─ */}
+        <aside className="relative flex flex-col items-center justify-center gap-3 bg-[#1cabff] px-8 py-8 md:py-10 overflow-hidden">
+          <span className="pointer-events-none absolute -left-8 -bottom-6 h-40 w-40 rounded-[46%] bg-white/10 blur-[2px]" />
+          <span className="pointer-events-none absolute -right-6 bottom-10 h-24 w-24 rounded-[46%] bg-white/10 blur-[2px]" />
 
           <div className="relative flex items-center gap-2.5 self-start">
             <img
@@ -91,28 +86,27 @@ export function Login() {
             <span className="text-white font-semibold tracking-tight">Doutor Digital</span>
           </div>
 
-          <div className="relative flex-1 w-full flex items-center justify-center py-6">
+          <div className="relative w-full flex items-center justify-center py-1 md:py-4">
             {anim ? (
-              <Lottie animationData={anim} loop autoplay className="w-full max-w-[300px]" />
+              <Lottie
+                animationData={anim}
+                loop
+                autoplay
+                className="w-[210px] sm:w-[260px] md:w-full md:max-w-[320px]"
+              />
             ) : (
-              <div className="h-[220px]" />
+              <div className="h-[150px] md:h-[220px]" />
             )}
           </div>
 
-          <p className="relative text-center text-white/90 text-[15px] leading-relaxed max-w-[280px]">
+          <p className="relative text-center text-white/90 text-[13px] md:text-[15px] leading-relaxed max-w-[280px]">
             Seus agentes de IA, conectados ao Kommo — do primeiro “oi” ao lead na etapa
             certa.
           </p>
         </aside>
 
         {/* ── Formulário ─────────────────────────────────────────────────────── */}
-        <main className="flex flex-col justify-center px-7 py-12 sm:px-12">
-          {/* marca compacta só no mobile (painel azul sumiu) */}
-          <div className="flex md:hidden items-center justify-center gap-2.5 mb-6">
-            <img src="/logo-dd.png" alt="" className="w-9 h-9 rounded-xl object-contain ring-1 ring-slate-200 p-1" />
-            <span className="text-slate-700 font-semibold tracking-tight">Doutor Digital</span>
-          </div>
-
+        <main className="flex flex-col justify-center px-7 py-10 sm:px-12">
           <h1 className="text-2xl font-extrabold tracking-wide text-slate-800 text-center">LOGIN</h1>
 
           <form onSubmit={handleSubmit} className="mt-7 space-y-4">
