@@ -26,7 +26,7 @@
 // ============================================================================
 
 import type { Unit } from '@prisma/client';
-import type { KommoPipeline } from './kommo.service.js';
+import type { KommoLead, KommoPipeline } from './kommo.service.js';
 import { createKommoClient } from './kommo.service.js';
 import { logger } from '../lib/logger.js';
 
@@ -50,6 +50,39 @@ async function pipelinesDaUnidade(unit: Unit): Promise<KommoPipeline[]> {
   const pipes = await createKommoClient(unit).listPipelines();
   pipeCache.set(unit.id, { em: Date.now(), pipes });
   return pipes;
+}
+
+function normalizar(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * 2º sinal de "já agendado" — CINTO E SUSPENSÓRIO, independente da etapa. Lê o
+ * campo "Data da Consulta" (ou "Data de agendamento") do lead: se estiver
+ * preenchido com uma data de HOJE em diante, o lead tem consulta marcada, mesmo
+ * que a etapa não reflita isso. Datas PASSADAS são ignoradas de propósito — um
+ * lead reengajando teria uma data velha ali, e bloquear travaria um novo
+ * agendamento legítimo (a etapa cuida do estado atual nesses casos). Só bate no
+ * objeto do lead já carregado, sem chamada extra.
+ */
+function temConsultaMarcadaNoCampo(lead: KommoLead): boolean {
+  const campos = lead.custom_fields_values ?? [];
+  // Margem de 1 dia pra trás cobre fuso e a consulta "de hoje" (guardada à meia-noite).
+  const limiar = Math.floor(Date.now() / 1000) - 24 * 3600;
+  for (const f of campos) {
+    const nome = normalizar(f.field_name ?? '');
+    const ehCampoDeConsulta =
+      nome.includes('data') && (nome.includes('consulta') || nome.includes('agendamento'));
+    if (!ehCampoDeConsulta) continue;
+    const raw = f.values?.[0]?.value;
+    const ts = typeof raw === 'number' ? raw : Number(raw);
+    if (Number.isFinite(ts) && ts >= limiar) return true;
+  }
+  return false;
 }
 
 /**
@@ -114,6 +147,13 @@ export async function estadoEtapaDoLead(
     if (lead?.status_id) {
       const pipes = await pipelinesDaUnidade(unit);
       valor = classificar(unit, pipes, lead.pipeline_id, lead.status_id);
+    }
+    // 2º sinal (cinto e suspensório): "Data da Consulta" preenchida com data de
+    // hoje em diante conta como agendado, mesmo que a etapa não reflita.
+    if (lead && temConsultaMarcadaNoCampo(lead)) {
+      valor = valor
+        ? { ...valor, jaAgendadoOuPaciente: true }
+        : { statusId: lead.status_id ?? 0, nome: 'com consulta marcada', jaAgendadoOuPaciente: true };
     }
   } catch (err) {
     logger.warn(
