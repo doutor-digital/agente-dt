@@ -16,6 +16,7 @@ import {
   History,
   ShieldCheck,
   Lightbulb,
+  Link2,
 } from 'lucide-react';
 import { WizardPanel } from './WizardPanel';
 import { FontesPanel } from './FontesPanel';
@@ -29,6 +30,7 @@ import { ActivationPanel } from './ActivationPanel';
 import { HistoricoPanel } from './HistoricoPanel';
 import { ProtecoesPanel } from './ProtecoesPanel';
 import { AprendizadosPanel } from './AprendizadosPanel';
+import { LinksPanel } from './LinksPanel';
 
 type SegId = 'identidade' | 'conhecimento' | 'acoes' | 'kommo' | 'protecoes' | 'testar' | 'historico';
 
@@ -68,6 +70,7 @@ const SEGMENTS: Segment[] = [
         render: (go) => <TrainingPanel onNavigate={() => go('testar')} />,
       },
       { id: 'aprendizados', label: 'Aprendizados', icon: Lightbulb, render: () => <AprendizadosPanel /> },
+      { id: 'links', label: 'Links', icon: Link2, render: () => <LinksPanel /> },
     ],
   },
   {

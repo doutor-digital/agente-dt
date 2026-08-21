@@ -658,6 +658,23 @@ model LeadStrategyRun {
   @@map("lead_strategy_runs")
 }
 
+model KnowledgeLink {
+  id             String   @id @default(cuid())
+  unitId         String   @map("unit_id")
+  url            String
+  tipo           String   @default("pagina")
+  titulo         String?
+  status         String   @default("pendente")
+  erro           String?  @db.Text
+  chars          Int      @default(0)
+  entriesCriadas Int      @default(0) @map("entries_criadas")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([unitId, createdAt(sort: Desc)])
+  @@map("knowledge_links")
+}
+
 // ===========================================================================
 // GlobalAction — regras "quando → faça" que valem pra TODAS as units.
 // ===========================================================================
