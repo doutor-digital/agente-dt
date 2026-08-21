@@ -43,33 +43,33 @@ let rodando = false;
  * julgadas. Ordena das mais recentes pras mais antigas — o dono se importa
  * mais com o retrato de agora do que com o histórico.
  */
-async function candidatas(limite: number) {
-  const agora = Date.now();
-  const idleAntes = new Date(agora - IDLE_HORAS * 3_600_000);
-  const desde = new Date(agora - JANELA_DIAS * 86_400_000);
+async function candidatas(limite: number): Promise<Array<{ id: string; unitId: string }>> {
+  const idleAntes = new Date(Date.now() - IDLE_HORAS * 3_600_000);
+  const desde = new Date(Date.now() - JANELA_DIAS * 86_400_000);
 
-  return prisma.conversation.findMany({
-    where: {
-      lastMessageAt: { lt: idleAntes, gte: desde },
-      evaluations: { none: {} },
-      messages: { some: {} },
-    },
-    orderBy: { lastMessageAt: 'desc' },
-    take: limite * 3, // folga: parte cai no filtro de tamanho abaixo
-    select: {
-      id: true,
-      unitId: true,
-      _count: { select: { messages: true } },
-    },
-  });
+  // SQL cru de propósito: o filtro "tem pelo menos N mensagens" precisa acontecer
+  // ANTES do LIMIT. Filtrando em JS depois de um `take`, a página inteira podia
+  // cair no filtro e a varredura voltava vazia — que foi exatamente o que
+  // aconteceu na primeira versão.
+  return prisma.$queryRaw<Array<{ id: string; unitId: string }>>`
+    SELECT c.id, c.unit_id AS "unitId"
+    FROM conversations c
+    WHERE c.last_message_at < ${idleAntes}
+      AND c.last_message_at >= ${desde}
+      AND NOT EXISTS (
+        SELECT 1 FROM conversation_evaluations e WHERE e.conversation_id = c.id
+      )
+      AND (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) >= ${MIN_MENSAGENS}
+    ORDER BY c.last_message_at DESC
+    LIMIT ${limite}
+  `;
 }
 
 async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const pool = await candidatas(TETO_POR_VARREDURA);
-    const elegiveis = pool.filter((c) => c._count.messages >= MIN_MENSAGENS).slice(0, TETO_POR_VARREDURA);
+    const elegiveis = await candidatas(TETO_POR_VARREDURA);
     if (elegiveis.length === 0) return;
 
     // Cache de unit por id — várias conversas da mesma unidade por varredura.
@@ -82,8 +82,10 @@ async function varrer(): Promise<void> {
           unidades.set(conv.unitId, await prisma.unit.findUnique({ where: { id: conv.unitId } }));
         }
         const unit = unidades.get(conv.unitId);
-        // Sem chave de OpenAI o juiz não roda — pula sem ruído.
-        if (!unit || !unit.openaiApiKey) continue;
+        // NÃO exigir chave própria da unidade: a maioria roda Claude e o juiz
+        // resolve a chave com fallback pra OPENAI_API_KEY do ambiente
+        // (resolveOpenAIApiKey). Exigir aqui pulava 18 das 22 unidades.
+        if (!unit) continue;
 
         const r = await judgeConversation({ conversationId: conv.id, unit });
         if (r) avaliadas++;
