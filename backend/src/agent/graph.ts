@@ -56,6 +56,7 @@ import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
+import { aplicarGuardrail } from './guardrail.js';
 
 // ---------------------------------------------------------------------------
 // Checkpointer (singleton).
@@ -328,6 +329,20 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
         latencyMs: latency,
       });
 
+      // GUARDRAIL — trava dura pós-LLM (preço fora do catálogo + conduta clínica).
+      // Roda aqui porque é o ponto único por onde as 3 entregas passam.
+      const guard = aplicarGuardrail(text, unit);
+      if (guard.rewritten) {
+        // A história do lead precisa refletir o que foi ENTREGUE, não o texto barrado,
+        // senão no próximo turno a IA "lembra" de ter dito o que não disse.
+        response.content = guard.text;
+        await recorder.step({
+          kind: 'THINKING',
+          title: `🛡️ Guardrail reescreveu a resposta (${guard.triggered.join(', ')})`,
+          payload: { original: text, reescrito: guard.text, motivos: guard.triggered },
+        });
+      }
+
       // Rede de segurança: se o usuário acabou de dizer o nome e a IA esqueceu
       // de chamar atualizar_titulo_lead, executa a tool nós mesmos. Idempotente
       // — só roda se o lead.name na Kommo ainda estiver genérico (sem o nome).
@@ -352,7 +367,7 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
         }
       }
 
-      return { messages: [response], decision: text } satisfies Partial<AgentStateType>;
+      return { messages: [response], decision: guard.text } satisfies Partial<AgentStateType>;
     }
 
     return { messages: [response] } satisfies Partial<AgentStateType>;
