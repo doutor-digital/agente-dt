@@ -35,6 +35,7 @@ import { startReactivationWorker } from './lib/reactivation-worker.js';
 import { startSlaAlertWorker } from './lib/sla-alert-worker.js';
 import { startCardValidationWorker } from './lib/card-validation-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
+import { startJudgeWorker } from './lib/judge-worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -124,6 +125,10 @@ async function main(): Promise<void> {
   // Monitor de "resposta parada": alerta quando uma resposta da IA fica gravada
   // no campo "Resposta IA" além do limite sem o Salesbot do Kommo entregá-la.
   startStaleReplyMonitor();
+  // Juiz de conversa: avalia conversas encerradas pra alimentar a média de
+  // qualidade por versão de prompt (a tela "Prompts" existia mas ficava vazia,
+  // porque o único gatilho era um evento de conversão que nunca chega).
+  startJudgeWorker();
   // Reengajamento de quem parou de responder. Único motor que decide QUANDO
   // falar — o Salesbot é só o canal de entrega.
   startFollowUpWorker();
