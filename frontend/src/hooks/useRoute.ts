@@ -1,29 +1,6 @@
-// ============================================================================
-// useRoute — roteamento minimalista por History API (sem react-router).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Cada AppTab tem um slug de URL legível (ex: 'playground' → '/testar-ia').
-// O hook mantém o state em sync com `window.location.pathname`:
-//   - lê o pathname no boot (preserva aba após F5)
-//   - escuta `popstate` (botões voltar/avançar do browser)
-//   - `navigate(tab)` faz `history.pushState` SEM recarregar a página
-//
-// Por que não react-router?
-//   - Uma única navegação (sidebar) com mapeamento estático — overhead injus-
-//     tificável (~15kb gz + abstrações).
-//   - Em produção precisa do mesmo SPA fallback que tanto faz pra um caso ou
-//     outro, então não ganha nada.
-//
-// SPA fallback: o Vite dev já serve index.html pra qualquer rota não-arquivo.
-// Vercel/Netlify fazem o mesmo automaticamente. Em hosting estático "raw",
-// adicione a regra `try_files`.
-// ============================================================================
-
 import { useCallback, useEffect, useState } from 'react';
 import type { AppTab } from '../lib/nav';
 
-// Map tab ↔ slug. Slugs em PT-BR (pra ficar bonito na URL).
 const TAB_TO_SLUG: Record<AppTab, string> = {
   dashboard: 'dashboard',
   configure: 'configurar-agente',
@@ -65,7 +42,6 @@ function pathnameToTab(pathname: string): AppTab {
   return SLUG_TO_TAB[slug] ?? DEFAULT_TAB;
 }
 
-/** Path canônico de uma aba — exposto pra montar `<a href>` na sidebar. */
 export function tabToPath(tab: AppTab): string {
   return `/${TAB_TO_SLUG[tab]}`;
 }
@@ -76,15 +52,12 @@ export function useRoute(): {
 } {
   const [tab, setTab] = useState<AppTab>(() => pathnameToTab(window.location.pathname));
 
-  // Se o usuário caiu em "/" (raiz), normaliza pra "/dashboard" sem
-  // empilhar histórico — replaceState é o correto.
   useEffect(() => {
     if (window.location.pathname === '/' || window.location.pathname === '') {
       window.history.replaceState(null, '', tabToPath(DEFAULT_TAB));
     }
   }, []);
 
-  // Sincroniza com botões voltar/avançar do navegador.
   useEffect(() => {
     const handler = () => setTab(pathnameToTab(window.location.pathname));
     window.addEventListener('popstate', handler);

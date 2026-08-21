@@ -1,17 +1,3 @@
-// ============================================================================
-// middleware/auth.ts — proteção das rotas do painel.
-//
-// Três níveis:
-//   requireAuth        → existe cookie de sessão válido + user ativo no DB
-//   requireSuperAdmin  → requireAuth + role === SUPER_ADMIN
-//   requireUnitAccess  → requireAuth + (SUPER_ADMIN OU UNIT_ADMIN da unit alvo)
-//
-// O `requireAuth` faz fetch do User no DB a cada request — não confia só
-// no JWT. Isso permite revogação imediata: super admin desativa um
-// UNIT_ADMIN, ele perde acesso na próxima requisição mesmo com cookie
-// ainda válido.
-// ============================================================================
-
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../lib/env.js';
@@ -53,9 +39,6 @@ export function requireSuperAdmin(req: Request, res: Response, next: NextFunctio
   next();
 }
 
-// `requireUnitAccess` precisa do id da unit no req. Por padrão lê de
-// `req.params.id` (rota /units/:id/...) ou `req.params.unitId`. Se nenhum,
-// passa em branco e exige só auth — o caller deve validar de outro jeito.
 export function requireUnitAccess(req: Request, res: Response, next: NextFunction): void {
   if (!req.user) {
     res.status(401).json({ error: 'unauthenticated' });

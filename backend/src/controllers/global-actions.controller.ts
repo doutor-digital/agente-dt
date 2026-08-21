@@ -1,13 +1,3 @@
-// ============================================================================
-// global-actions.controller.ts — REST CRUD de GlobalAction (regras globais).
-//
-// Apenas SUPER_ADMIN pode listar/criar/editar/deletar. As regras valem pra
-// TODAS as units e são injetadas no prompt-composer antes das UnitActions.
-//
-// Validação dos `actions[]` segue o mesmo set de kinds do actions.controller —
-// reaproveitamos o validador via re-export pra evitar drift.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import {

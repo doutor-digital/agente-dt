@@ -1,17 +1,3 @@
-// ============================================================================
-// AgentWorkspace — tudo que configura UM agente num só lugar, em 5 SEÇÕES com
-// nome humano (não em 20 abas de sistema):
-//
-//   Identidade   → quem é o agente (persona)
-//   Conhecimento → o que ele sabe (fontes + treino)
-//   Ações        → o que ele faz (ações, captura, ferramentas)
-//   Kommo        → a conexão (resposta, pausa, Salesbot, etapas)
-//   Testar       → conversar com ele antes de ativar
-//
-// Cada seção reúne os painéis que já funcionam. Seções com mais de um painel
-// ganham uma sub-navegação leve. A ideia é "uma coisa de cada vez".
-// ============================================================================
-
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
@@ -145,7 +131,6 @@ export function AgentWorkspace() {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      {/* ── Barra de seções: passos numerados, estilo "setup guiado" ──────── */}
       <div className="shrink-0 border-b border-zinc-800 px-4 pt-3.5 pb-0">
         <div className="flex items-center gap-1 overflow-x-auto pb-3.5">
           {SEGMENTS.map((s, i) => {
@@ -189,7 +174,6 @@ export function AgentWorkspace() {
         <div className="flex items-center justify-between gap-4 pb-3">
           <p className="text-[12px] text-zinc-500">{seg.hint}</p>
 
-          {/* Sub-navegação (só quando a seção tem mais de um painel) */}
           {seg.subs.length > 1 && (
             <div className="inline-flex gap-0.5 p-0.5 rounded-lg bg-zinc-900 border border-zinc-800 shrink-0">
               {seg.subs.map((su) => {
@@ -217,7 +201,6 @@ export function AgentWorkspace() {
         </div>
       </div>
 
-      {/* Conteúdo da seção ativa */}
       <div key={`${segId}:${sub.id}`} className="flex-1 min-h-0 overflow-auto animate-fade-in-up">
         {sub.render(goSeg)}
       </div>

@@ -1,25 +1,3 @@
-// ============================================================================
-// meta.controller.ts — Webhook da Meta WhatsApp Cloud API (multi-tenant).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// A Meta exige DOIS handlers no mesmo path:
-//   GET  /webhooks/{slug}/meta?hub.mode=subscribe&hub.verify_token=X
-//        → respondemos com challenge se token bater. Handshake one-time.
-//   POST /webhooks/{slug}/meta
-//        → eventos (mensagens recebidas, status, etc).
-//
-// IMPORTANTE: a Meta exige resposta 200 em ≤ 5s no POST. Não dá para esperar
-// a LLM responder — fire-and-forget igual ao Kommo CRM.
-//
-// SIGNATURE VALIDATION
-// --------------------
-// O POST da Meta vem assinado em `x-hub-signature-256` calculado sobre o
-// RAW body com HMAC-SHA256 + APP_SECRET da unidade. Para isso o express
-// precisa preservar o raw body — feito no server.ts via opção `verify`
-// do express.json para esta rota específica.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { HumanMessage } from '@langchain/core/messages';
 import type { Unit } from '@prisma/client';
@@ -31,10 +9,6 @@ import { findUnitBySlug } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { MetaService, type MetaInboundMessage } from '../services/meta.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
-
-// ---------------------------------------------------------------------------
-// GET — handshake de verificação.
-// ---------------------------------------------------------------------------
 
 export async function handleMetaVerify(req: Request, res: Response): Promise<void> {
   const slug = String(req.params.unitSlug ?? '');
@@ -62,10 +36,6 @@ export async function handleMetaVerify(req: Request, res: Response): Promise<voi
   res.status(200).send(result.challenge ?? '');
 }
 
-// ---------------------------------------------------------------------------
-// POST — eventos de mensagem.
-// ---------------------------------------------------------------------------
-
 interface RawBodyRequest extends Request {
   rawBody?: Buffer;
 }
@@ -82,7 +52,6 @@ export async function handleMetaWebhook(req: Request, res: Response): Promise<vo
     return;
   }
 
-  // Validação de signature (sha256 hmac do raw body com app_secret).
   const rawBody = (req as RawBodyRequest).rawBody;
   if (rawBody && unit.metaAppSecret) {
     const sigHeader = req.header('x-hub-signature-256');
@@ -96,7 +65,6 @@ export async function handleMetaWebhook(req: Request, res: Response): Promise<vo
 
   const inbound = MetaService.parseInbound(req.body);
 
-  // ACK rápido — Meta exige 200 em ≤5s.
   res.status(200).json({ ok: true, received: inbound.length });
 
   if (inbound.length === 0) {
@@ -104,7 +72,6 @@ export async function handleMetaWebhook(req: Request, res: Response): Promise<vo
     return;
   }
 
-  // Processa cada mensagem em background — descartando retries do webhook.
   for (const msg of inbound) {
     if (msg.messageId && !claimMessageId('meta', msg.messageId)) {
       logger.info(
@@ -119,10 +86,6 @@ export async function handleMetaWebhook(req: Request, res: Response): Promise<vo
   }
 }
 
-// ---------------------------------------------------------------------------
-// Processamento por mensagem.
-// ---------------------------------------------------------------------------
-
 async function processMetaMessage(
   unit: Unit,
   msg: MetaInboundMessage,
@@ -133,8 +96,6 @@ async function processMetaMessage(
     return;
   }
 
-  // No fluxo Meta puro, "leadId" passa a ser o telefone do contato (E.164).
-  // Não temos lead numérico do Kommo aqui — usamos o `from` como chave.
   const leadId = msg.from;
 
   const trace = await prisma.executionTrace.create({
@@ -155,7 +116,6 @@ async function processMetaMessage(
     payload: msg as unknown as object,
   });
 
-  // Conversa: turno do paciente.
   const conv = await upsertConversation({
     unitId: unit.id,
     leadId,
@@ -179,21 +139,18 @@ async function processMetaMessage(
 
     const result = await graph.invoke(
       {
-        leadId: 0, // numérico não se aplica no canal Meta puro
+        leadId: 0,
         traceId: trace.id,
         messages: [new HumanMessage(msg.text)],
       },
       {
         configurable: { thread_id: threadId },
-        // Mesmo agente, mesmas ferramentas do webhook — ver o comentário lá.
-        // 6 não cobre nem consultar + agendar.
         recursionLimit: 24,
       },
     );
 
     const reply = (result.decision ?? '').toString().trim();
     if (reply) {
-      // Pausa "humanizada" — ver webhook.controller.ts.
       const delaySec = Math.max(0, Math.min(unit.personaResponseDelaySec ?? 0, 30));
       if (delaySec > 0) {
         await new Promise((resolve) => setTimeout(resolve, delaySec * 1000));

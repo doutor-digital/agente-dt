@@ -32,8 +32,6 @@ test('sanitizeOutcome só aceita desfecho conhecido', () => {
   assert.equal(sanitizeOutcome(null), null);
 });
 
-// Este é O teste que importa: sem ele a feature morre em silêncio duas semanas
-// depois, quando o summarizer reescrever os fatos por cima.
 test('o summarizer não apaga o carimbo de último contato', () => {
   const anterior = {
     ultimo_contato: '2026-06-01T10:00:00Z',
@@ -46,7 +44,6 @@ test('o summarizer não apaga o carimbo de último contato', () => {
   assert.equal(out.ultimo_contato, '2026-06-01T10:00:00Z');
   assert.equal(out.ultimo_desfecho, 'travou_preco');
   assert.equal(out.travou_em, 'preço');
-  // e o que o summarizer trouxe de novo continua valendo
   assert.equal(out.queixa, 'lombar irradiando');
   assert.equal(out.cidade, 'Canaã');
 });

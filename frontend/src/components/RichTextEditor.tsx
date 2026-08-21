@@ -1,25 +1,3 @@
-// ============================================================================
-// RichTextEditor — editor WYSIWYG "estilo Word" pros campos de Fontes.
-//
-// POR QUE EXISTE
-// --------------
-// Os campos de Fontes alimentam o system prompt da IA. O usuário formata como
-// no Word — títulos, negrito, listas, destaque — clicando em botões, SEM ver
-// marcação. O `value` que entra/sai é **Markdown** (texto puro), então o
-// conteúdo salvo continua limpo e o prompt-composer injeta direto, sem HTML.
-//
-// CRAFT (diretrizes "impeccable", register product)
-// --------------------------------------------------
-//  - Microinterações: barra segue o padrão WAI-ARIA de `role="toolbar"` com
-//    roving tabindex (Tab entra UMA vez, setas navegam). Cada botão tem os
-//    estados default/hover/active/focus-visible/disabled e distingue *toggle*
-//    (aria-pressed → preenchido) de *press* (:active → afunda 1px).
-//  - Transições 150ms com ease-out exponencial (sem bounce).
-//  - Cores sólidas e de alto contraste; alpha só em estados (foco/seleção).
-//  - Tipografia/medida/ritmo do conteúdo vivem em index.css (.fontes-editor),
-//    porque o conteúdo é contenteditable e não aceita classes utilitárias.
-// ============================================================================
-
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
@@ -41,27 +19,17 @@ import {
 } from 'lucide-react';
 
 interface RichTextEditorProps {
-  /** Conteúdo em Markdown. */
   value: string;
-  /** Recebe o Markdown atualizado a cada edição. */
   onChange: (markdown: string) => void;
   placeholder?: string;
-  /** Modo leitura: esconde a barra, desliga edição, renderiza só o conteúdo. */
   readOnly?: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Descritores das ferramentas. Dirigir a barra por dados (em vez de JSX
-// repetido) mantém o roving tabindex e os estados consistentes botão a botão —
-// "mesma forma, mesmo vocabulário" que o register product exige.
-// ---------------------------------------------------------------------------
 interface ToolDef {
   id: string;
   title: string;
   Icon: LucideIcon;
-  /** true = alterna um estado (usa aria-pressed); false = ação pontual. */
   toggle: boolean;
-  /** Índice do grupo — fronteira de grupo vira um divisor fino. */
   group: number;
   isActive: (e: Editor) => boolean;
   isEnabled: (e: Editor) => boolean;
@@ -104,8 +72,6 @@ const TOOLS: ToolDef[] = [
     run: (e) => e.chain().focus().redo().run() },
 ];
 
-// Estados completos num só lugar. Sólido por padrão; alpha só em foco/toggle
-// (exceção permitida pra estados). ease-out-quart, 150ms.
 const BTN_CLASS = [
   'inline-flex items-center justify-center h-8 w-8 rounded-md text-zinc-400',
   'transition-[color,background-color,box-shadow,transform] duration-150 ease-[cubic-bezier(0.16,0.84,0.44,1)]',
@@ -118,7 +84,6 @@ const BTN_CLASS = [
 
 function Toolbar({ editor }: { editor: Editor }) {
   const btnRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  // Roving tabindex: só UM botão é tabbable; setas movem o foco entre eles.
   const [roving, setRoving] = useState(0);
 
   const onKeyDown = useCallback(
@@ -169,7 +134,6 @@ function Toolbar({ editor }: { editor: Editor }) {
               disabled={!enabled}
               tabIndex={i === roving ? 0 : -1}
               onFocus={() => setRoving(i)}
-              // preventDefault no mousedown: não rouba a seleção do editor.
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => t.run(editor)}
               className={BTN_CLASS}
@@ -190,8 +154,6 @@ export function RichTextEditor({ value, onChange, placeholder, readOnly = false 
       StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
       Highlight,
       Placeholder.configure({ placeholder: placeholder ?? 'Escreva aqui…' }),
-      // Markdown: faz `content` (string) ser parseado como markdown e expõe
-      // `editor.storage.markdown.getMarkdown()` pra serializar de volta.
       Markdown.configure({ html: false, transformPastedText: true, transformCopiedText: true }),
     ],
     content: value,
@@ -203,9 +165,6 @@ export function RichTextEditor({ value, onChange, placeholder, readOnly = false 
     },
   });
 
-  // Sincroniza quando o `value` muda POR FORA (troca de unidade / load inicial).
-  // Comparar com o markdown atual evita resetar o conteúdo (e pular o cursor) a
-  // cada tecla — durante a digitação `value` já é igual ao do editor.
   useEffect(() => {
     if (!editor) return;
     const current = editor.storage.markdown.getMarkdown();
@@ -214,7 +173,6 @@ export function RichTextEditor({ value, onChange, placeholder, readOnly = false 
     }
   }, [value, editor]);
 
-  // Alterna editável quando o modo muda (Editar ↔ Visualizar) sem recriar o editor.
   useEffect(() => {
     editor?.setEditable(!readOnly);
   }, [readOnly, editor]);

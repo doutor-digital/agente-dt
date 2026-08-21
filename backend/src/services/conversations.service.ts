@@ -1,20 +1,3 @@
-// ============================================================================
-// conversations.service.ts — Histórico cronológico por lead.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Cada lead/contato tem UMA Conversation por Unit (unique [unitId, leadId]).
-// Toda mensagem (paciente OU IA) vira uma Message dentro dessa Conversation.
-//
-// Por que separado de ExecutionTrace?
-//   - Trace = uma execução do agente (pode envolver várias chamadas LLM).
-//   - Conversation = visão "WhatsApp-like": mensagens em ordem cronológica.
-// O dashboard tem ambas as visões: timeline técnica (trace) e chat (conversa).
-//
-// `traceId` opcional na Message permite drill-down: clicando numa resposta
-// da IA, vai pro feed de raciocínio que a gerou.
-// ============================================================================
-
 import type { Conversation, Message } from '@prisma/client';
 import { notifyDashboard } from '../lib/dashboard-webhook.js';
 import { prisma } from '../lib/prisma.js';
@@ -64,15 +47,6 @@ export async function addMessage(p: AddMessageParams): Promise<Message> {
       meta: p.meta as object | undefined,
     },
   });
-  // Toca o lastMessageAt da conversa.
-  //
-  // E, quando quem falou foi o PACIENTE, zera a escada de reengajamento: ele
-  // voltou, então não é mais quem sumiu. Sem isto, alguém que responde no
-  // terceiro follow-up e some de novo pularia direto pro quarto degrau — e a
-  // retomada, que é justamente o momento de tratar bem, chegaria como despedida.
-  //
-  // Fica aqui, e não no worker, porque este é o único ponto por onde TODA
-  // mensagem do paciente passa, venha do webhook, do salesbot ou do widget.
   await prisma.conversation.update({
     where: { id: p.conversationId },
     data: {
@@ -81,7 +55,6 @@ export async function addMessage(p: AddMessageParams): Promise<Message> {
     },
   });
 
-  // Notifica o painel Doutor-Digital-Dash (fire-and-forget, jamais bloqueia).
   void notifyDashboard(p.conversationId);
 
   return message;
@@ -116,9 +89,6 @@ export async function getConversation(id: string) {
   });
   if (!conv) return null;
 
-  // O que a IA lembra deste lead — some junto com a conversa pra virar um painel
-  // "Memória do paciente" na tela, ao lado do histórico. `null` quando o lead
-  // nunca gerou memória (conversa curta, ou anterior à feature).
   const memory = await prisma.leadMemory
     .findUnique({
       where: { unitId_leadId: { unitId: conv.unitId, leadId: conv.leadId } },
@@ -129,11 +99,6 @@ export async function getConversation(id: string) {
   return { ...conv, memory };
 }
 
-/**
- * Pega o histórico de mensagens user/assistant de um lead. Usado pela tool
- * de resumo pra alimentar o LLM de sumarização. Limita a `limit` últimas
- * mensagens pra não estourar contexto em conversas longas.
- */
 export async function getRecentMessagesByLead(
   unitId: string,
   leadId: string,
@@ -151,5 +116,5 @@ export async function getRecentMessagesByLead(
     take: limit,
     select: { role: true, content: true, createdAt: true },
   });
-  return msgs.reverse(); // volta ao ordem cronológica
+  return msgs.reverse();
 }

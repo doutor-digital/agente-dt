@@ -1,9 +1,3 @@
-// ============================================================================
-// AprendizadosPanel — memória procedural da clínica: as regras que a IA aplica
-// pra ESTA unidade (além da persona/fontes). O dono vê, adiciona, liga/desliga
-// e apaga. Cada regra ativa entra no prompt da IA como <aprendizados>.
-// ============================================================================
-
 import { useEffect, useState, useCallback } from 'react';
 import { Lightbulb, Plus, Trash2, Loader2, Sparkles } from 'lucide-react';
 import clsx from 'clsx';
@@ -114,7 +108,6 @@ export function AprendizadosPanel() {
           )}
         </p>
 
-        {/* reflexão — a IA relê as conversas e sugere regras */}
         <div className="flex items-center gap-3 mb-4 flex-wrap">
           <button
             onClick={refletir}
@@ -127,7 +120,6 @@ export function AprendizadosPanel() {
           {msg && <span className="text-[12px] text-zinc-400">{msg}</span>}
         </div>
 
-        {/* adicionar */}
         <div className="surface p-4 mb-6">
           <div className="flex gap-2 items-start">
             <input
@@ -149,7 +141,6 @@ export function AprendizadosPanel() {
           <p className="text-[11px] text-zinc-600 mt-2">Escreva no imperativo, curto e direto. Uma regra por vez.</p>
         </div>
 
-        {/* lista */}
         {lessons === null && (
           <div className="flex justify-center py-10"><Loader2 className="animate-spin text-zinc-500" size={18} /></div>
         )}

@@ -1,13 +1,3 @@
-// ============================================================================
-// reflection.service.ts — o ciclo de reflexão ("dreaming").
-//
-// Relê as conversas recentes da unidade (dando peso às mensagens que o dono
-// marcou como RUINS) e pede pra um modelo barato achar PADRÕES/ERROS que se
-// repetem. Cada padrão vira uma SUGESTÃO de aprendizado (UnitLesson com
-// source=reflexao, enabled=FALSE) — não muda nada sozinho: o dono aprova no
-// painel ligando a regra. É o que faz a IA melhorar com a própria experiência.
-// ============================================================================
-
 import { ChatOpenAI } from '@langchain/openai';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -15,7 +5,7 @@ import { logger } from '../lib/logger.js';
 import { resolveOpenAIApiKey } from './openai.service.js';
 import { listLessons } from './lessons.service.js';
 
-const REFLECT_MODEL = 'gpt-4o-mini'; // barato — é análise de padrões, não atendimento
+const REFLECT_MODEL = 'gpt-4o-mini';
 const MAX_CONVERSATIONS = 12;
 const MIN_CONVERSATIONS = 3;
 
@@ -42,7 +32,6 @@ function norm(s: string): string {
     .trim();
 }
 
-/** Parser puro e defensivo do JSON do modelo. Testável isolado. */
 export function parseSuggestions(raw: string): Array<{ rule: string; why?: string }> {
   let parsed: unknown;
   try {
@@ -66,10 +55,6 @@ export function parseSuggestions(raw: string): Array<{ rule: string; why?: strin
     }));
 }
 
-/**
- * Roda a reflexão pra uma unidade. Retorna quantas sugestões novas criou.
- * Idempotente na prática: dedup contra as regras já existentes (normalizado).
- */
 export async function runReflectionForUnit(unit: Unit): Promise<ReflectionResult> {
   const convs = await prisma.conversation.findMany({
     where: { unitId: unit.id },

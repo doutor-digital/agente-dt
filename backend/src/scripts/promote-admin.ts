@@ -1,15 +1,3 @@
-// ============================================================================
-// scripts/promote-admin.ts — cria/atualiza um usuário com role específica.
-//
-// Uso:
-//   tsx src/scripts/promote-admin.ts --email=x --password=Y --role=SUPER_ADMIN
-//   tsx src/scripts/promote-admin.ts --email=x --password=Y --role=UNIT_ADMIN --unit-slug=clinica
-//
-// `--password` é obrigatório quando cria user novo.
-// Quando user já existe, `--password` é opcional (só promove/troca unit/role
-// sem mexer na senha) — passe `--password=novo` se quiser resetar também.
-// ============================================================================
-
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { createUser, updateUser } from '../services/users.service.js';

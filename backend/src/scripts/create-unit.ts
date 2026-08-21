@@ -1,15 +1,3 @@
-// ============================================================================
-// scripts/create-unit.ts — cria uma Unit pelo terminal.
-//
-// Uso:
-//   pnpm --filter agente-dt-backend exec tsx src/scripts/create-unit.ts \
-//     --slug=clinica-sorrir --name="Clínica Sorrir" \
-//     [--admin-email=admin@clinica.com]
-//
-// `--admin-email` opcional cria/promove o user como UNIT_ADMIN da unit recém-
-// criada. Útil pra entregar acesso pra cliente final num único comando.
-// ============================================================================
-
 import { Prisma } from '@prisma/client';
 import { createUnit } from '../services/units.service.js';
 import { createUser, updateUser } from '../services/users.service.js';

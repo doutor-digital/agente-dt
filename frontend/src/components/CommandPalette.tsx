@@ -1,18 +1,3 @@
-// ============================================================================
-// CommandPalette — navegação por teclado (⌘K / Ctrl+K).
-//
-// Por que existe: o console tem ~20 páginas e N agentes. Caçar isso no menu
-// custa caro; digitar duas letras não. É o mesmo atalho que o usuário já tem
-// no dedo de outras ferramentas.
-//
-// Faz duas coisas:
-//   - "Ir para": qualquer página (respeitando o papel do usuário)
-//   - "Trocar de agente": seleciona a unidade ativa
-//
-// Busca sem acento (normalize) e por sinônimo (keywords do lib/nav.ts) — quem
-// digita "custo" acha "Chamadas IA" e "Custo WhatsApp".
-// ============================================================================
-
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, CornerDownLeft, Search } from 'lucide-react';
 import clsx from 'clsx';
@@ -48,7 +33,6 @@ export function CommandPalette({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Reabrir sempre começa limpo e com o foco no campo.
   useEffect(() => {
     if (!open) return;
     setQuery('');
@@ -92,7 +76,6 @@ export function CommandPalette({
     return rows.filter((r) => terms.every((t) => r.haystack.includes(t))).slice(0, 24);
   }, [rows, query]);
 
-  // Cursor nunca pode apontar pra fora da lista filtrada.
   useEffect(() => setCursor(0), [query]);
 
   useEffect(() => {
@@ -126,7 +109,6 @@ export function CommandPalette({
     return () => document.removeEventListener('keydown', onKey);
   }, [open, results, cursor, onClose]);
 
-  // Mantém o item selecionado visível ao navegar com as setas.
   useEffect(() => {
     listRef.current
       ?.querySelector('[data-active="true"]')
@@ -135,7 +117,6 @@ export function CommandPalette({
 
   if (!open) return null;
 
-  // Agrupa preservando a ordem de aparição dos resultados.
   const groups: { name: string; rows: Row[] }[] = [];
   for (const r of results) {
     const last = groups[groups.length - 1];
@@ -154,7 +135,6 @@ export function CommandPalette({
         className="w-full max-w-xl popover overflow-hidden animate-pop-in"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {/* Campo de busca */}
         <div className="flex items-center gap-2.5 px-4 h-13 border-b border-zinc-800">
           <Search size={16} className="text-zinc-500 shrink-0" />
           <input
@@ -167,7 +147,6 @@ export function CommandPalette({
           <span className="kbd">esc</span>
         </div>
 
-        {/* Resultados */}
         <div ref={listRef} className="max-h-[52vh] overflow-y-auto p-1.5">
           {results.length === 0 && (
             <div className="px-3 py-10 text-center text-sm text-zinc-500">
@@ -214,7 +193,6 @@ export function CommandPalette({
           ))}
         </div>
 
-        {/* Rodapé com as teclas */}
         <div className="flex items-center gap-4 px-4 py-2 border-t border-zinc-800 text-[11px] text-zinc-500">
           <span className="flex items-center gap-1.5">
             <span className="kbd">↑</span>
@@ -231,7 +209,6 @@ export function CommandPalette({
   );
 }
 
-/** Registra o atalho global ⌘K / Ctrl+K. Devolve [aberta, abrir, fechar]. */
 export function useCommandPalette(): [boolean, () => void, () => void] {
   const [open, setOpen] = useState(false);
   useEffect(() => {

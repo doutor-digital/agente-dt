@@ -1,19 +1,7 @@
-// ============================================================================
-// llm-calls.controller.ts — API REST das chamadas à LLM (painel "ByteGPT").
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Esta é a "vitrine" da observabilidade do consumo: lista todas as
-// requisições à OpenAI com tokens, custo, latência e payload completo.
-// Filtragem por unitId (consultoria) — o front sempre passa o unitId
-// selecionado.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 
 export async function listLlmCallsHandler(req: Request, res: Response): Promise<void> {
-  // UNIT_ADMIN sempre fica preso à própria unit. SUPER_ADMIN respeita o query.
   const unitId =
     req.user?.role === 'UNIT_ADMIN'
       ? (req.user.unitId ?? '__never_match__')
@@ -61,7 +49,6 @@ export async function getLlmCallHandler(req: Request, res: Response): Promise<vo
     res.status(404).json({ error: 'llm_call_not_found' });
     return;
   }
-  // UNIT_ADMIN só vê chamadas da própria unit.
   if (req.user?.role === 'UNIT_ADMIN' && call.unitId !== req.user.unitId) {
     res.status(404).json({ error: 'llm_call_not_found' });
     return;

@@ -1,7 +1,3 @@
-// ============================================================================
-// templates.service.ts — CRUD de MessageTemplate.
-// ============================================================================
-
 import type { MessageTemplate } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 

@@ -4,16 +4,6 @@ import assert from 'node:assert/strict';
 import { composeSystemPrompt } from './prompt-composer.js';
 import type { Unit } from '@prisma/client';
 
-/**
- * O composer é o ponto mais perigoso do sistema: se ele LANÇAR, o turno morre
- * e o paciente fica sem resposta nenhuma. Cada bloco novo (aprendizados,
- * demografia, memória, auto-checagem...) é uma chance de acessar um campo nulo.
- *
- * Estes testes existem pra garantir a promessa que a arquitetura faz o tempo
- * todo: dado faltando NUNCA vira exceção, vira bloco ausente.
- */
-
-/** Unidade com o mínimo absoluto — tudo que é opcional vem nulo. */
 function unidadeCrua(over: Partial<Unit> = {}): Unit {
   return {
     id: 'u1',

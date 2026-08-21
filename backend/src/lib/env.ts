@@ -1,18 +1,3 @@
-// ============================================================================
-// env.ts — Validação de variáveis de ambiente no boot.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Falhar cedo é melhor do que falhar tarde. Se o KOMMO_ACCESS_TOKEN não
-// existir, queremos saber no startup — não no momento em que o primeiro
-// webhook chegar e tentar autenticar. O Zod nos dá esse "fail-fast" com
-// uma mensagem clara.
-//
-// Centralizamos o `env` para que nenhum outro módulo precise tocar em
-// `process.env` diretamente. Isso evita typos ("ANTROPIC_API_KEY" vs
-// "ANTHROPIC_API_KEY") e dá autocompletar tipado.
-// ============================================================================
-
 import 'dotenv/config';
 import { z } from 'zod';
 
@@ -26,36 +11,16 @@ const schema = z.object({
   KOMMO_SUBDOMAIN: z.string().min(1),
   KOMMO_ACCESS_TOKEN: z.string().min(10),
 
-  // Opcionais — quando ambos setados, sendChatReply usa o Salesbot pra
-  // entregar a resposta da IA ao paciente via WhatsApp (caminho que
-  // contorna a limitação da API v4 com canais WABA nativos).
-  //
-  // KOMMO_SALESBOT_ID: ID numérico do Salesbot minimalista (1 bloco "Enviar
-  // mensagem" com conteúdo {{lead.cf.<id>}}).
-  //
-  // KOMMO_REPLY_FIELD_ID: ID numérico do custom field "Resposta IA" no lead.
-  // O backend escreve a resposta da IA nesse campo antes de disparar o bot.
   KOMMO_SALESBOT_ID: z.coerce.number().int().positive().optional(),
   KOMMO_REPLY_FIELD_ID: z.coerce.number().int().positive().optional(),
 
-  // Monitor de "resposta parada": quantos minutos uma resposta pode ficar
-  // gravada no campo "Resposta IA" sem o Salesbot do Kommo entregá-la antes de
-  // disparar alerta. O normal é entrega em segundos; default 3 min = travou.
   STALE_REPLY_ALERT_MINUTES: z.coerce.number().int().positive().default(3),
 
   OPENAI_API_KEY: z.string().min(10),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 
-  // Chave DEDICADA à transcrição de áudio (opcional). Existe pra separar a
-  // fatura do áudio da fatura do chat — pode apontar pra outra conta/projeto
-  // da OpenAI. Vazia = transcrição usa a resolução normal (chave da unidade,
-  // senão OPENAI_API_KEY).
   OPENAI_TRANSCRIPTION_API_KEY: z.string().min(10).optional(),
 
-  // Aceita lista separada por vírgula pra suportar múltiplas origens
-  // (ex: domínio do Vercel + domínio customizado). Strip trailing slash
-  // de cada uma — CORS exige match byte-a-byte e o navegador nunca manda
-  // a barra final no header Origin.
   FRONTEND_ORIGIN: z
     .string()
     .default('http://localhost:5173')
@@ -66,28 +31,14 @@ const schema = z.object({
         .filter(Boolean),
     ),
 
-  // ---------------------------------------------------------------------------
-  // Autenticação do painel — login com email/senha + cookie httpOnly assinado.
-  // ---------------------------------------------------------------------------
-  // SESSION_JWT_SECRET: segredo HS256 (>=32 chars). Gere com:
-  //   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
-  // Trocar invalida TODAS as sessões ativas (efeito desejado em incidentes).
   SESSION_JWT_SECRET: z.string().min(32, 'SESSION_JWT_SECRET precisa ter >=32 chars'),
 
   AUTH_COOKIE_NAME: z.string().default('dt_session'),
   AUTH_COOKIE_DOMAIN: z.string().optional(),
   AUTH_SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
 
-  // Chave compartilhada pra integrações máquina-a-máquina (ex: n8n consultando
-  // /integrations/:unitSlug/session-stats/:leadId). Header `x-internal-key`.
-  // Vazia = endpoints de integração ficam desligados (respondem 503).
   INTERNAL_API_KEY: z.string().min(16).optional(),
 
-  // ---------------------------------------------------------------------------
-  // Webhook outbound pro painel Doutor-Digital-Dash. Toda mensagem de conversa
-  // (paciente ou IA) é re-enviada pra esse endpoint pra alimentar o dashboard
-  // /conversas. Vazio = desligado (modo dev).
-  // ---------------------------------------------------------------------------
   DASHBOARD_WEBHOOK_BASE_URL: z
     .string()
     .url()
@@ -97,8 +48,6 @@ const schema = z.object({
 const parsed = schema.safeParse(process.env);
 
 if (!parsed.success) {
-  // Em produção isso aqui derruba o container — exatamente o que queremos
-  // se uma var crítica está faltando. Melhor crashloop do que rodar quebrado.
   console.error('[env] Configuração inválida:', parsed.error.flatten().fieldErrors);
   process.exit(1);
 }

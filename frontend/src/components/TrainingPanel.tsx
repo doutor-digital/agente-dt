@@ -1,29 +1,3 @@
-// ============================================================================
-// TrainingPanel — hub de treino da IA por unidade.
-//
-// PAPEL DESTE ARQUIVO
-// -------------------
-// Consolida, não reimplementa. As telas de Fontes (Conhecimento/Templates),
-// Conversas (flag) e Wizard (persona) continuam donas do CRUD completo.
-// Aqui: leitura agregada, entrada rápida dos dois itens mais frequentes,
-// diagnóstico de cobertura e atalhos para as telas completas.
-//
-// DECISÕES QUE VALEM COMENTÁRIO
-// -----------------------------
-// 1. Não existe "nível de treino" por volume. Contar itens premia quem
-//    despeja lixo e pune quem escreveu 6 respostas certas. O card de topo
-//    mede COBERTURA de tópicos essenciais — verificável e acionável.
-// 2. Correção (flag) não é sinal positivo. Nunca soma em progresso.
-//    Ela abre um caminho: "ensinar a resposta certa" pré-preenche o
-//    formulário de conhecimento. Flag sozinha é sinal fraco; flag + resposta
-//    correta é sinal forte.
-// 3. Carga tem guarda de corrida (sequência de request) e estado de erro
-//    explícito. Falha silenciosa aqui exibiria "0 itens", que a usuária lê
-//    como "meu treino sumiu".
-// 4. Falha parcial é parcial: se só o endpoint de flags cair, o resto
-//    renderiza e a seção quebrada avisa. Não engolimos o erro com catch(()=>[]).
-// ============================================================================
-
 import {
   useCallback,
   useEffect,
@@ -61,10 +35,6 @@ import type {
   MessageTemplate,
 } from '../types/api';
 
-// ===========================================================================
-// Texto — centralizado para revisão de copy sem caçar string no meio do JSX
-// ===========================================================================
-
 const COPY = {
   knowledge: {
     title: 'Conhecimento da clínica',
@@ -87,10 +57,6 @@ const COPY = {
       'Tom de voz, saudação, uso de emoji, horário comercial, follow-up e qualificação. Vale para toda mensagem que a IA envia.',
   },
 } as const;
-
-// ===========================================================================
-// Utilitários de texto — normalização, similaridade, ordenação
-// ===========================================================================
 
 function normalize(value: string): string {
   return value
@@ -115,10 +81,6 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return intersection / (a.size + b.size - intersection);
 }
 
-/**
- * Lê createdAt/updatedAt de forma defensiva: nem toda entidade expõe o campo.
- * Sem timestamp, retorna 0 e o sort estável preserva a ordem da API.
- */
 function timestampOf(item: unknown): number {
   if (!item || typeof item !== 'object') return 0;
   const record = item as { createdAt?: unknown; updatedAt?: unknown };
@@ -136,14 +98,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// ===========================================================================
-// Cobertura — o que uma clínica precisa ter respondido antes de soltar a IA
-// ===========================================================================
-
 interface CoverageTopic {
   id: string;
   label: string;
-  /** Pergunta sugerida ao clicar num tópico descoberto. */
   suggestedQuestion: string;
   keywords: readonly string[];
 }
@@ -215,10 +172,6 @@ function computeCoverage(
   return { covered, missing };
 }
 
-// ===========================================================================
-// Estado de carga — guarda de corrida + falha parcial por seção
-// ===========================================================================
-
 type SectionKey = 'knowledge' | 'templates' | 'flagged';
 
 interface TrainingData {
@@ -237,8 +190,6 @@ const EMPTY_DATA: TrainingData = { knowledge: [], templates: [], flagged: [] };
 
 function useTrainingData(unitId: string | null) {
   const [state, setState] = useState<LoadState>({ status: 'idle' });
-  // Cada carga incrementa o contador. Respostas de unidades antigas são
-  // descartadas — trocar de unidade rápido não pinta dado errado na tela.
   const requestSeq = useRef(0);
 
   const load = useCallback(async () => {
@@ -257,7 +208,6 @@ function useTrainingData(unitId: string | null) {
 
     if (seq !== requestSeq.current) return;
 
-    // Conhecimento e templates são o núcleo. Se os dois caírem, é erro geral.
     if (knowledgeResult.status === 'rejected' && templatesResult.status === 'rejected') {
       setState({ status: 'error', message: errorMessage(knowledgeResult.reason) });
       return;
@@ -283,7 +233,6 @@ function useTrainingData(unitId: string | null) {
     void load();
   }, [load]);
 
-  /** Insere localmente após criar, evitando 3 refetches por item adicionado. */
   const prepend = useCallback(
     <K extends 'knowledge' | 'templates'>(key: K, item: TrainingData[K][number]) => {
       setState((prev) => {
@@ -300,21 +249,11 @@ function useTrainingData(unitId: string | null) {
   return { state, reload: load, prepend };
 }
 
-// ===========================================================================
-// Pré-preenchimento do formulário de conhecimento
-// ===========================================================================
-
 interface KnowledgePrefill {
-  /** Muda a cada solicitação — é o gatilho do efeito no filho. */
   token: number;
   question?: string;
-  /** Contexto exibido acima do formulário (ex.: resposta ruim sendo corrigida). */
   context?: string;
 }
-
-// ===========================================================================
-// Componente principal
-// ===========================================================================
 
 interface TrainingPanelProps {
   onNavigate: (tab: AppTab) => void;
@@ -436,10 +375,6 @@ export function TrainingPanel({ onNavigate }: TrainingPanelProps) {
     </div>
   );
 }
-
-// ===========================================================================
-// Cobertura
-// ===========================================================================
 
 function CoverageCard({
   coverage,
@@ -565,10 +500,6 @@ function Stat({
   );
 }
 
-// ===========================================================================
-// Ordem de precedência — explica por que duas fontes podem "brigar"
-// ===========================================================================
-
 function PrecedenceCard() {
   const [open, setOpen] = useState(false);
   const contentId = 'training-precedence';
@@ -614,10 +545,6 @@ function PrecedenceCard() {
   );
 }
 
-// ===========================================================================
-// Persona
-// ===========================================================================
-
 function PersonaSection({
   unit,
   onEdit,
@@ -625,8 +552,6 @@ function PersonaSection({
   unit: { name: string; personaCompanyName?: string | null } | null | undefined;
   onEdit: () => void;
 }) {
-  // TODO(backend): expor no /units os campos de persona (tom, saudação,
-  // horário) para trocar este sinal binário por um checklist real.
   const configured = Boolean(unit?.personaCompanyName);
 
   return (
@@ -664,10 +589,6 @@ function PersonaSection({
   );
 }
 
-// ===========================================================================
-// Conhecimento
-// ===========================================================================
-
 function KnowledgeSection({
   unitId,
   items,
@@ -701,7 +622,6 @@ function KnowledgeSection({
     setOpen(true);
     if (prefill.question) setQuestion(prefill.question);
     setContext(prefill.context ?? null);
-    // rAF: o painel só recebe foco depois que a seção termina de expandir.
     const frame = requestAnimationFrame(() => {
       questionRef.current?.focus();
       questionRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -851,10 +771,6 @@ function KnowledgeSection({
   );
 }
 
-// ===========================================================================
-// Respostas prontas
-// ===========================================================================
-
 function TemplatesSection({
   unitId,
   items,
@@ -892,10 +808,6 @@ function TemplatesSection({
     [keywords],
   );
 
-  /**
-   * Colisão de gatilho é o bug mais caro desta tela: dois templates com a
-   * mesma palavra tornam a resposta imprevisível. Avisamos antes de salvar.
-   */
   const conflicts = useMemo(() => {
     const normalizedNew = parsedKeywords.map(normalize);
     const found: { keyword: string; template: string }[] = [];
@@ -1048,10 +960,6 @@ function TemplatesSection({
   );
 }
 
-// ===========================================================================
-// Correções
-// ===========================================================================
-
 function FlaggedSection({
   items,
   loading,
@@ -1121,10 +1029,6 @@ function FlaggedSection({
     </SectionCard>
   );
 }
-
-// ===========================================================================
-// Primitivos de UI
-// ===========================================================================
 
 type Accent = 'emerald' | 'sky';
 

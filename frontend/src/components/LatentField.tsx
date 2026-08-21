@@ -1,46 +1,12 @@
-// ============================================================================
-// LatentField — correntes de espaço latente. Fundo animado da tela de agentes.
-//
-// A METÁFORA
-// ----------
-// Partículas percorrem um campo vetorial que se deforma devagar, deixando
-// rastros. É a imagem de espaço latente / difusão: pontos sem sentido isolado
-// que, juntos, revelam a estrutura por onde o modelo se move. Diferente do
-// grafo de nós do login de propósito — as duas telas não podem parecer a mesma.
-//
-// COMO FUNCIONA
-// -------------
-// Nada de biblioteca de ruído: o ângulo do campo é uma soma de senos em x, y e
-// t. Barato, contínuo e sem descontinuidade — que é tudo que um campo de fluxo
-// precisa. Cada partícula lê o ângulo na posição dela, anda um passo e desenha
-// o segmento percorrido.
-//
-// Os rastros NÃO são um array de posições passadas: a cada frame o canvas
-// inteiro leva um `destination-out` de alpha baixo, que corrói o que já estava
-// desenhado. O rastro emerge sozinho, com custo de um fillRect — em vez de
-// guardar e redesenhar N pontos por partícula.
-//
-// CUIDADO NÃO ÓBVIO: campo de fluxo CONVERGE. Deixadas soltas, todas as
-// partículas caem nos mesmos atratores e o quadro morre em 20s. Por isso cada
-// uma tem uma vida útil dessincronizada e renasce em posição aleatória.
-// ============================================================================
-
 import { useEffect, useRef, type CSSProperties } from 'react';
 
 const PARTICLES = 520;
 const MAX_DPR = 2;
-/** Erosão do quadro anterior por frame. É ela que define o COMPRIMENTO do
- *  rastro: comprimento ≈ velocidade / TRAIL_FADE. A 0.055 o rastro vivia ~20px
- *  e o efeito sumia; a 0.018 vira uma corrente de ~90px, que é o que se lê. */
 const TRAIL_FADE = 0.019;
-const ACCENT_SHARE = 0.12; // fração das partículas no verde da marca
+const ACCENT_SHARE = 0.12;
 const LIFE_MIN = 120;
 const LIFE_MAX = 320;
-/** "Zoom" do campo. Menor = correntes largas e quase paralelas (lê como chuva);
- *  maior = mais curvatura e redemoinho (lê como campo). */
 const FIELD_SCALE = 0.0030;
-/** Faixas de alpha: 520 strokes por frame viram 10. A variação de fade dentro
- *  de uma faixa é imperceptível; a economia de chamadas não é. */
 const ALPHA_BUCKETS = 5;
 
 function mulberry32(seed: number): () => number {
@@ -102,11 +68,6 @@ export function LatentField({
     let h = 0;
     let dpr = 1;
 
-    // ORDEM IMPORTA: `spawn` sorteia dentro de w×h, então as partículas só
-    // podem nascer DEPOIS do primeiro resize(). Criadas antes, todas nasciam
-    // em (0,0) — o mesmo ponto, logo o mesmo vetor de campo — e saíam da tela
-    // em bloco pelo canto. O array vem vazio de propósito pra resize() poder
-    // varrê-lo sem quebrar na primeira chamada.
     const particles: Particle[] = [];
 
     const spawn = (p: Particle) => {
@@ -127,7 +88,6 @@ export function LatentField({
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // Redimensionar limpa o canvas e pode deixar partículas fora da área.
       for (const p of particles) {
         if (p.x > w || p.y > h) spawn(p);
       }
@@ -139,13 +99,10 @@ export function LatentField({
     for (let i = 0; i < PARTICLES; i++) {
       const p: Particle = { x: 0, y: 0, speed: 1, life: 0, maxLife: 1, accent: false };
       spawn(p);
-      // Vidas já começam espalhadas: sem isso a primeira leva morre toda junta
-      // e o quadro pisca em bloco.
       p.life = rand() * p.maxLife;
       particles.push(p);
     }
 
-    /** Ângulo do campo em (x, y) no tempo t. Soma de senos = curvas suaves. */
     function angleAt(x: number, y: number, t: number): number {
       const sx = x * FIELD_SCALE;
       const sy = y * FIELD_SCALE;
@@ -156,7 +113,6 @@ export function LatentField({
       );
     }
 
-    // Faixas de desenho: [0..N) neutras, [N..2N) do acento. Reusadas por frame.
     const lanes = Array.from({ length: ALPHA_BUCKETS * 2 }, () => ({
       path: new Path2D(),
       n: 0,
@@ -166,10 +122,9 @@ export function LatentField({
 
     function step(dt: number) {
       if (w === 0 || h === 0) return;
-      const f = dt / 16.67; // passo normalizado pra 60fps
+      const f = dt / 16.67;
       time += dt * 0.00028;
 
-      // Corrói o quadro anterior: é isso que vira rastro.
       ctx!.globalCompositeOperation = 'destination-out';
       ctx!.fillStyle = `rgba(0,0,0,${TRAIL_FADE * f})`;
       ctx!.fillRect(0, 0, w, h);
@@ -181,7 +136,6 @@ export function LatentField({
         const nx = p.x + Math.cos(a) * p.speed * f;
         const ny = p.y + Math.sin(a) * p.speed * f;
 
-        // Some no nascimento e na morte — partícula não deve "piscar" existindo.
         const age = p.life / p.maxLife;
         const fade = Math.sin(age * Math.PI);
 
@@ -217,8 +171,6 @@ export function LatentField({
 
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (reduced) {
-      // Sem loop: avança a simulação em silêncio e mostra o resultado. Quem
-      // pediu menos movimento recebe o desenho, não uma tela vazia.
       for (let i = 0; i < 260; i++) step(16.67);
       return () => ro.disconnect();
     }
@@ -226,8 +178,6 @@ export function LatentField({
     let raf = 0;
     let last = performance.now();
     const loop = (t: number) => {
-      // Teto no delta: voltar pra aba depois de horas não pode dar um passo
-      // gigante e jogar toda partícula pra fora da tela de uma vez.
       const dt = Math.min(t - last, 48);
       last = t;
       step(dt);

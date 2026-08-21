@@ -1,0 +1,444 @@
+{
+  "name": "TMP — Backfill CTWA (campanha/conjunto/anuncio)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ctwa-backfill-tmp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh",
+      "name": "Disparar",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        0
+      ],
+      "webhookId": "ctwa-backfill-tmp"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select distinct on (l.kommo_lead_id)\n       l.kommo_lead_id                                          as lead_id,\n       e.ad_id                                                  as ad_id,\n       e.wamid                                                  as wamid,\n       e.telefone                                               as telefone,\n       e.payload->'messages'->0->'referral'->>'source_url'      as source_url\nfrom ctwa_logs l\njoin ctwa_eventos e on e.wamid = l.wamid\nwhere l.status = 'sucesso'\n  and l.payload->>'erroGraph' is not null\n  and coalesce(l.payload->>'tipoCru', 'ad') = 'ad'\n  and l.kommo_lead_id is not null\n  and e.ad_id is not null\norder by l.kommo_lead_id, l.criado_em desc;",
+        "options": {}
+      },
+      "id": "sel",
+      "name": "Pendentes",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "loop",
+      "name": "Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -360,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/{{ $env.META_GRAPH_VERSION || 'v23.0' }}/{{ $json.ad_id }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "id,name,campaign{id,name,objective},adset{id,name,targeting{publisher_platforms}},creative{id,name,url_tags,thumbnail_url,image_url}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $env.META_ADS_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "graph",
+      "name": "Graph",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -140,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Monta a atribuicao a partir da resposta da Graph, com a MESMA precedencia de\n// UTM do fluxo principal: query string do source_url > creative.url_tags > derivado.\nconst ctx = $('Loop').first().json;\nconst g = $input.first().json || {};\n\nconst erro = g.error\n  ? String(g.error.message || g.error.error_user_msg || g.error).slice(0, 300)\n  : null;\nconst ad = erro ? {} : g;\n\nconst campanha = ad.campaign || {};\nconst conjunto = ad.adset || {};\nconst criativo = ad.creative || {};\nconst plataformas = (conjunto.targeting && conjunto.targeting.publisher_platforms) || [];\nconst plataforma = plataformas.includes('instagram') ? 'instagram'\n                 : (plataformas[0] || (/instagram/i.test(String(ctx.source_url || '')) ? 'instagram' : 'facebook'));\n\nfunction queryDe(url) {\n  const out = {};\n  const i = String(url || '').indexOf('?');\n  if (i < 0) return out;\n  for (const par of String(url).slice(i + 1).split('&')) {\n    if (!par) continue;\n    const [k, ...resto] = par.split('=');\n    try { out[decodeURIComponent(k)] = decodeURIComponent(resto.join('=').replace(/\\+/g, ' ')); }\n    catch (e) { out[k] = resto.join('='); }\n  }\n  return out;\n}\nfunction resolverMacros(texto, vars) {\n  if (!texto) return '';\n  return String(texto).replace(/\\{\\{\\s*([a-z_.]+)\\s*\\}\\}/gi, (m, chave) => {\n    const v = vars[String(chave).toLowerCase()];\n    return v === undefined || v === null ? '' : String(v);\n  });\n}\n\nconst vars = {\n  'campaign.name': campanha.name || '', 'campaign.id': campanha.id || '',\n  'adset.name': conjunto.name || '', 'adset.id': conjunto.id || '',\n  'ad.name': ad.name || '', 'ad.id': ad.id || '',\n  'site_source_name': plataforma, 'placement': plataforma,\n};\n\nconst utmUrl = queryDe(ctx.source_url);\nconst utmCriativo = queryDe('?' + resolverMacros(criativo.url_tags || '', vars));\nconst pegar = (chave, derivado) => utmUrl[chave] || utmCriativo[chave] || derivado || null;\n\nreturn [{ json: {\n  ...ctx,\n  erroGraph: erro,\n  atribuicao: {\n    campanhaNome: campanha.name || null,\n    conjuntoNome: conjunto.name || null,\n    anuncioNome: ad.name || null,\n    anuncioId: ad.id || ctx.ad_id || null,\n    plataforma,\n    imagemAnuncio: criativo.image_url || criativo.thumbnail_url || null,\n    utmSource: pegar('utm_source', plataforma),\n    utmMedium: pegar('utm_medium', 'paid_social'),\n    utmCampaign: pegar('utm_campaign', campanha.name),\n    utmContent: pegar('utm_content', ad.name),\n    utmTerm: pegar('utm_term', conjunto.name),\n  },\n} }];"
+      },
+      "id": "atr",
+      "name": "Atribuicao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://attivacorpoementeitz.kommo.com/api/v4/leads/{{ $json.lead_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "ler",
+      "name": "Ler lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        300,
+        100
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "MnPGiOOvaSPm9HgC",
+          "name": "Kommo Imperatriz"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// So preenche o que esta VAZIO — first-touch continua valendo no backfill.\nconst ctx = $('Atribuicao').first().json;\nconst a = ctx.atribuicao || {};\n\nfunction corpoJson(j) {\n  if (!j) return {};\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j;\n}\nconst lead = corpoJson($input.first().json);\n\nconst inteiro = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null; };\nconst campos = {\n  campanha:    inteiro($env.KOMMO_CF_CAMPANHA)    || 2442767,\n  conjunto:    inteiro($env.KOMMO_CF_CONJUNTO)    || 2442725,\n  anuncio:     inteiro($env.KOMMO_CF_ANUNCIO)     || 2443929,\n  anuncioId:   inteiro($env.KOMMO_CF_AD_ID)       || 2443931,\n  utmSource:   inteiro($env.KOMMO_CF_UTM_SOURCE)  || 888104,\n  utmMedium:   inteiro($env.KOMMO_CF_UTM_MEDIUM)  || 888100,\n  utmCampaign: inteiro($env.KOMMO_CF_UTM_CAMPAIGN)|| 888102,\n  utmContent:  inteiro($env.KOMMO_CF_UTM_CONTENT) || 888098,\n  utmTerm:     inteiro($env.KOMMO_CF_UTM_TERM)    || 888106,\n  plataforma:  inteiro($env.KOMMO_CF_PLATAFORMA)  || 2443939,\n  imagemAnuncio: inteiro($env.KOMMO_CF_IMAGEM_ANUNCIO) || 2444385,\n};\n\nconst atuais = new Map();\nfor (const f of (lead.custom_fields_values || [])) {\n  const v = (f.values || [])[0];\n  const valor = v ? (v.value ?? null) : null;\n  atuais.set(Number(f.field_id), valor === '' ? null : valor);\n}\n\nconst custom = [];\nconst gravados = [];\nconst preservados = [];\nfor (const [chave, valor] of Object.entries({\n  campanha: a.campanhaNome, conjunto: a.conjuntoNome, anuncio: a.anuncioNome,\n  anuncioId: a.anuncioId, utmSource: a.utmSource, utmMedium: a.utmMedium,\n  utmCampaign: a.utmCampaign, utmContent: a.utmContent, utmTerm: a.utmTerm,\n  plataforma: a.plataforma, imagemAnuncio: a.imagemAnuncio,\n})) {\n  const fieldId = campos[chave];\n  if (!fieldId || valor === null || valor === undefined || valor === '') continue;\n  if (atuais.get(fieldId)) { preservados.push(chave); continue; }\n  custom.push({ field_id: fieldId, values: [{ value: valor }] });\n  gravados.push(chave);\n}\n\nreturn [{ json: {\n  ...ctx,\n  patchBody: custom.length ? { custom_fields_values: custom } : {},\n  temAlgoParaGravar: custom.length > 0,\n  gravados, preservados,\n} }];"
+      },
+      "id": "mon",
+      "name": "Montar PATCH",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.temAlgoParaGravar }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if",
+      "name": "Tem algo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        740,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://attivacorpoementeitz.kommo.com/api/v4/leads/{{ $json.lead_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.patchBody) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "patch",
+      "name": "Gravar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        20
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "MnPGiOOvaSPm9HgC",
+          "name": "Kommo Imperatriz"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_logs (wamid, telefone, etapa, status, kommo_lead_id, detalhe, payload) VALUES ($1, $2, 'backfill', 'sucesso', $3, $4, $5::jsonb)",
+        "options": {
+          "queryReplacement": "={{ (() => { const c = $('Montar PATCH').first().json; return [ c.wamid, c.telefone, c.lead_id, 'backfill | gravados: ' + (c.gravados||[]).join(', ') + ' | preservados: ' + ((c.preservados||[]).join(', ') || 'nenhum'), JSON.stringify(c.atribuicao || {}) ]; })() }}"
+        }
+      },
+      "id": "log",
+      "name": "Log backfill",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1180,
+        20
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_logs (wamid, telefone, etapa, status, kommo_lead_id, detalhe, payload) VALUES ($1, $2, 'backfill', 'preservado', $3, $4, $5::jsonb)",
+        "options": {
+          "queryReplacement": "={{ (() => { const c = $('Montar PATCH').first().json; return [ c.wamid, c.telefone, c.lead_id, 'backfill | nada a gravar | preservados: ' + ((c.preservados||[]).join(', ') || 'nenhum') + (c.erroGraph ? ' | graph: ' + c.erroGraph : ''), JSON.stringify(c.atribuicao || {}) ]; })() }}"
+        }
+      },
+      "id": "lognada",
+      "name": "Log sem mudanca",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        220
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const linhas = $('Loop').all().map((i) => i.json);\nreturn [{ json: { processados: linhas.length, obs: 'detalhe por lead em ctwa_logs, etapa = backfill' } }];"
+      },
+      "id": "res",
+      "name": "Resumo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -140,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "resp",
+      "name": "Responder",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        80,
+        -140
+      ]
+    }
+  ],
+  "connections": {
+    "Disparar": {
+      "main": [
+        [
+          {
+            "node": "Pendentes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pendentes": {
+      "main": [
+        [
+          {
+            "node": "Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop": {
+      "main": [
+        [
+          {
+            "node": "Resumo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Graph",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Graph": {
+      "main": [
+        [
+          {
+            "node": "Atribuicao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atribuicao": {
+      "main": [
+        [
+          {
+            "node": "Ler lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler lead": {
+      "main": [
+        [
+          {
+            "node": "Montar PATCH",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar PATCH": {
+      "main": [
+        [
+          {
+            "node": "Tem algo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem algo?": {
+      "main": [
+        [
+          {
+            "node": "Gravar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log sem mudanca",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar": {
+      "main": [
+        [
+          {
+            "node": "Log backfill",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log backfill": {
+      "main": [
+        [
+          {
+            "node": "Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log sem mudanca": {
+      "main": [
+        [
+          {
+            "node": "Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumo": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo",
+    "executionTimeout": 3600
+  }
+}

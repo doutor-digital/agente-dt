@@ -1,14 +1,3 @@
-// ============================================================================
-// UnitsPanel — CRUD de unidades (consultorias).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Mostra a lista à esquerda + form de edição à direita. Secrets vêm
-// mascarados do back. Se o usuário não digitar nada novo no campo de secret
-// (mantém o valor mascarado), o back ignora — assim ele pode editar nome
-// sem precisar redigitar token.
-// ============================================================================
-
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
@@ -47,18 +36,12 @@ import { KommoSchemaPreview } from './KommoSchemaPreview';
 
 const DEFAULT_UNIT_AVATAR = 'https://fiqon.com.br/wp-content/uploads/2025/04/kommo.png';
 
-// 5 versões de visualização da lista de unidades (switcher no topo), todas com
-// a CHAVE OPENAI por unidade em destaque. Persistida no navegador.
 type UnitsView = 'avatares' | 'cartoes' | 'tabela' | 'chaves' | 'lista';
 
-/** Unidade usa chave própria? (vem do `_hasSecrets` mascarado pelo back). */
 function hasOwnKey(unit: Unit): boolean {
   return !!unit._hasSecrets?.openaiApiKey;
 }
 
-// Layouts possíveis do formulário de edição. Hoje o editor é fixo em 'abas'
-// (sem switcher); os outros valores seguem suportados por FormSections caso a
-// gente queira reativar a troca de layout no futuro.
 type FormView = 'unico' | 'duas' | 'abas' | 'acordeao' | 'cartoes';
 const META_CHECK_LABELS: Record<string, string> = {
   accessToken: 'Access Token',
@@ -162,7 +145,6 @@ export function UnitsPanel() {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
-  // Só a visualização de Avatares (o João removeu as outras V2-V5).
   const view: UnitsView = 'avatares';
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [cloningId, setCloningId] = useState<string | null>(null);
@@ -173,7 +155,6 @@ export function UnitsPanel() {
     { ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> } | null
   >(null);
 
-  // Formulário de edição fixo no layout de Abas (sem switcher — decisão do produto).
   const [activeTab, setActiveTab] = useState(0);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
 
@@ -185,11 +166,9 @@ export function UnitsPanel() {
       setDraft(unitToInput(u));
       setCreating(false);
     }
-    // Resetar resultado de validação quando trocar de unit ou entrar em "criar".
     setMetaChecks(null);
   }, [units, selectedId]);
 
-  // Fecha menu "..." ao clicar fora.
   useEffect(() => {
     if (!openMenuId) return;
     const handler = () => setOpenMenuId(null);
@@ -222,7 +201,7 @@ export function UnitsPanel() {
       const e = err as { response?: { data?: { error?: string; issues?: unknown } }; message?: string };
       const code = e?.response?.data?.error;
       toast.error(code ?? e?.message ?? 'erro ao salvar');
-      throw err; // re-lança pra callers (ex: botão dedicado dentro do KommoExplorer)
+      throw err;
     } finally {
       setSaving(false);
     }
@@ -236,8 +215,6 @@ export function UnitsPanel() {
     setValidatingMeta(true);
     setMetaChecks(null);
     try {
-      // Manda o que está no draft como override — funciona com credenciais
-      // novas (não salvas) e ignora os mascarados (••••).
       const res = await api.metaValidate(selectedId, {
         metaWabaId: draft.metaWabaId ?? null,
         metaAccessToken: draft.metaAccessToken ?? null,
@@ -313,11 +290,8 @@ export function UnitsPanel() {
     setCreating(false);
   }
 
-  // Renderização condicional: grid OU página de edição em tela cheia.
-  // Antes era grid + drawer overlay; o user pediu pra ocupar a tela toda.
   if (editing) {
     const showSchema = !creating && !!selectedId;
-    // Estado da IA pra mostrar o selo "IA configurada" (lê o estado SALVO da unit).
     const currentUnit = units.find((x) => x.id === selectedId) ?? null;
     const ownKey = !!currentUnit?._hasSecrets?.openaiApiKey;
     const formSections: FormSection[] = [
@@ -345,7 +319,6 @@ export function UnitsPanel() {
         subtitle: 'Provedor do agente (OpenAI/Claude), chave e orçamento.',
         body: (
           <>
-            {/* Provedor de LLM do chat — OpenAI (GPT) ou Anthropic (Claude). */}
             <div className="space-y-2">
               <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">
                 Provedor de IA (chat)
@@ -851,7 +824,6 @@ export function UnitsPanel() {
     return (
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-6 py-6">
-            {/* Header sticky com voltar + ações */}
             <div className="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur-sm flex items-center gap-3 pb-4 mb-2 border-b border-zinc-800/60">
               <button
                 type="button"
@@ -893,7 +865,6 @@ export function UnitsPanel() {
               </div>
             </div>
 
-            {/* Layout fixo em Abas (sem switcher) — decisão do produto. */}
             <div className="pt-4">
               <FormSections
                 view="abas"
@@ -909,11 +880,9 @@ export function UnitsPanel() {
     );
   }
 
-  // Grid view — quando nenhuma unidade está sendo editada.
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-6xl mx-auto px-8 pt-10 pb-6">
-        {/* Header: título + nova */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex-1" />
           <h1 className="text-2xl font-semibold text-zinc-100 text-center">Escolha uma conta</h1>
@@ -982,9 +951,6 @@ export function UnitsPanel() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// UnitCard — card circular do grid "Escolha uma conta".
-// ---------------------------------------------------------------------------
 function UnitCard({
   unit,
   onOpen,
@@ -1038,7 +1004,6 @@ function UnitCard({
               referrerPolicy="no-referrer"
             />
           </div>
-          {/* Status ao vivo — dot verde pulsante (ativa) */}
           {unit.isActive && !cloning && (
             <span className="absolute bottom-2 right-2 flex h-4 w-4" title="Ativa">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400/60" />
@@ -1129,12 +1094,6 @@ function UnitCard({
   );
 }
 
-// ---------------------------------------------------------------------------
-// CHAVE OPENAI por unidade — editor inline reaproveitado por todas as views.
-// Mostra o status (própria vs compartilhada) num chip clicável que expande um
-// popover pra definir/trocar a chave, ou voltar pra compartilhada (envia null).
-// Vazio no back = cai na chave única do servidor (resolveOpenAIApiKey).
-// ---------------------------------------------------------------------------
 function InlineKeyEditor({
   unit,
   onSaved,
@@ -1282,12 +1241,6 @@ function IconBtn({
   );
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Agrupamento por clínica + papel do agente. Sem isto, "Escolha uma conta" vira
-// uma parede de cards iguais quando há dezenas de agentes (cada clínica tem
-// Comercial, Resgate, Pós-Tratamento, Financeiro).
-// ---------------------------------------------------------------------------
 function unitRole(u: Unit): { label: string; cls: string } {
   const s = (u.slug || '').toLowerCase();
   const n = (u.name || '').toLowerCase();
@@ -1307,7 +1260,6 @@ const ROLE_ORDER: Record<string, number> = {
   Financeiro: 3,
 };
 
-/** Modelo REAL da unidade — corrige o rótulo que mostrava sempre o da OpenAI. */
 function unitModelLabel(u: Unit): string {
   const p = u.llmProvider || 'openai';
   if (p === 'anthropic') return u.anthropicModel || 'claude';
@@ -1321,8 +1273,6 @@ interface ClinicGroup {
   units: Unit[];
 }
 
-/** Agrupa por clínica (personaCompanyName), clínicas com mais agentes primeiro,
- *  e os agentes ordenados por papel (Comercial → Resgate → Tratamento → Financeiro). */
 function groupUnitsByClinic(units: Unit[]): ClinicGroup[] {
   const map = new Map<string, ClinicGroup>();
   for (const u of units) {
@@ -1341,9 +1291,6 @@ function groupUnitsByClinic(units: Unit[]): ClinicGroup[] {
   return groups;
 }
 
-// As 5 VISUALIZAÇÕES. UnitsListView despacha pra variante escolhida no switcher.
-// V1 Avatares = UnitCard (acima, com chip de chave). V2-V5 abaixo.
-// ---------------------------------------------------------------------------
 interface ViewProps {
   units: Unit[];
   isSuper: boolean;
@@ -1367,8 +1314,6 @@ function UnitsListView(
   if (view === 'tabela') return <UnitsTable {...rest} />;
   if (view === 'chaves') return <UnitsKeyFocus {...rest} />;
   if (view === 'lista') return <UnitsList {...rest} />;
-  // V1 · Avatares — AGRUPADO por clínica, com o papel de cada agente destacado.
-  // Uma seção por clínica; dentro, os agentes (Comercial, Resgate, etc.) claros.
   const groups = groupUnitsByClinic(rest.units);
   return (
     <div className="space-y-11">
@@ -1405,7 +1350,6 @@ function UnitsListView(
   );
 }
 
-// V2 — Cartões retangulares com avatar, modelo e chip de chave.
 function UnitsCards({ units, isSuper, cloningId, canEdit, onOpen, onClone, onDelete, onKeySaved }: ViewProps) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1460,7 +1404,6 @@ function UnitsCards({ units, isSuper, cloningId, canEdit, onOpen, onClone, onDel
   );
 }
 
-// V3 — Tabela enterprise.
 function UnitsTable({ units, isSuper, canEdit, onOpen, onClone, onDelete, onKeySaved }: ViewProps) {
   return (
     <div className="rounded-xl ring-1 ring-zinc-800">
@@ -1522,7 +1465,6 @@ function UnitsTable({ units, isSuper, canEdit, onOpen, onClone, onDelete, onKeyS
   );
 }
 
-// V4 — Foco na chave: ícone grande de chave + status por unidade.
 function UnitsKeyFocus({ units, isSuper, canEdit, onOpen, onClone, onDelete, onKeySaved }: ViewProps) {
   const ownCount = units.filter(hasOwnKey).length;
   return (
@@ -1578,7 +1520,6 @@ function UnitsKeyFocus({ units, isSuper, canEdit, onOpen, onClone, onDelete, onK
   );
 }
 
-// V5 — Lista compacta.
 function UnitsList({ units, isSuper, canEdit, onOpen, onClone, onDelete, onKeySaved }: ViewProps) {
   return (
     <div className="rounded-xl ring-1 ring-zinc-800 divide-y divide-zinc-800/60">
@@ -1614,11 +1555,6 @@ function UnitsList({ units, isSuper, canEdit, onOpen, onClone, onDelete, onKeySa
   );
 }
 
-// ---------------------------------------------------------------------------
-// As 5 versões de LAYOUT do formulário. FormSections recebe as mesmas seções
-// e só muda o arranjo conforme o switcher (Único, 2 colunas, Abas, Acordeão,
-// Cartões). Persistência/handlers ficam no UnitsPanel (closure nas `body`).
-// ---------------------------------------------------------------------------
 interface FormSection {
   id: string;
   label: string;
@@ -1642,13 +1578,11 @@ function FormSections({
   openSections: Record<string, boolean>;
   setOpenSections: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
 }) {
-  // V3 · Abas — uma seção por vez.
   if (view === 'abas') {
     const idx = Math.min(activeTab, sections.length - 1);
     const active = sections[idx];
     return (
       <div className="unidade-tabs">
-        {/* Animações "lottie-like" escopadas só nesta página (prefixo .utab*). */}
         <style>{`
           .utab svg { transition: transform .25s ease, filter .25s ease, color .25s ease; }
           .utab:hover svg { transform: scale(1.18) rotate(-4deg); filter: drop-shadow(0 0 6px rgba(124,77,255,.55)); }
@@ -1705,7 +1639,6 @@ function FormSections({
     );
   }
 
-  // V4 · Acordeão — seções colapsáveis.
   if (view === 'acordeao') {
     return (
       <div className="space-y-2">
@@ -1739,7 +1672,6 @@ function FormSections({
     );
   }
 
-  // V2 · 2 colunas (masonry) | V5 · Cartões (grid) | V1 · Único (pilha).
   const layoutClass =
     view === 'duas'
       ? 'columns-1 lg:columns-2 gap-5 [&>*]:mb-5 [&>*]:break-inside-avoid'
@@ -1756,10 +1688,6 @@ function FormSections({
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Pequenos helpers de UI
-// ---------------------------------------------------------------------------
 
 function Section({
   title,
@@ -1813,8 +1741,6 @@ function Field({
   );
 }
 
-// Modelos oferecidos no select. Se a unidade tiver um valor fora da lista,
-// o SelectField adiciona ele como "(atual)" pra não sumir.
 const CLAUDE_MODELS = [
   { value: 'claude-sonnet-5', label: 'Sonnet 5 — equilíbrio, recomendado ($3/$15 por Mtok)' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6 — equilíbrio, geração anterior ($3/$15)' },
@@ -1869,10 +1795,6 @@ function SelectField({
   );
 }
 
-// Campo de segredo com estado "configurada". Quando a chave já existe (valor
-// mascarado ••••), mostra um chip + botão "Trocar" em vez de um blob ilegível.
-// Trocar → input vazio pra colar a nova; Cancelar restaura a mascarada (que o
-// back preserva). Assim dá pra EDITAR sem apagar a chave sem querer.
 function SecretField({
   label,
   value,

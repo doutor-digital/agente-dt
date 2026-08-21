@@ -1,18 +1,3 @@
-// ============================================================================
-// ReportsPanel — exportação de relatórios em CSV ou PDF.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Painel simples com 4 cards (1 por relatório). Cada card tem:
-//   - título + descrição
-//   - filtros locais (período: from/to)
-//   - botões "Baixar CSV" e "Baixar PDF"
-//
-// O escopo de unit é controlado pelo backend (UNIT_ADMIN vê só sua unit;
-// SUPER_ADMIN pode passar unitId ou ver tudo). Aqui exibimos um seletor só
-// pra SUPER_ADMIN, lendo `useUnit().selectedUnitId` quando preenchido.
-// ============================================================================
-
 import { useState } from 'react';
 import {
   BarChart3,
@@ -97,9 +82,6 @@ export function ReportsPanel() {
     setLoading((s) => ({ ...s, [key]: true }));
     try {
       await api.downloadReport(type, format, {
-        // SUPER_ADMIN: respeita a unit selecionada se houver; senão devolve todas.
-        // UNIT_ADMIN: backend força a sua unit — qualquer valor aqui seria
-        // ignorado, mas mandamos por completude.
         unitId: isSuper ? selectedUnitId ?? undefined : selectedUnitId ?? undefined,
         from: range.from,
         to: range.to,
@@ -116,7 +98,6 @@ export function ReportsPanel() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-7xl mx-auto p-6 space-y-6">
-        {/* Header */}
         <div>
           <h1 className="text-2xl font-display font-bold text-zinc-100 tracking-tight flex items-center gap-2">
             <FileText size={22} className="text-emerald-300" />
@@ -128,7 +109,6 @@ export function ReportsPanel() {
           </p>
         </div>
 
-        {/* Filtros globais */}
         <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-4 flex flex-wrap items-end gap-4">
           <div>
             <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold block mb-1.5">
@@ -163,7 +143,6 @@ export function ReportsPanel() {
           </div>
         </div>
 
-        {/* Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 auto-rows-fr">
           {REPORTS.map((r) => (
             <ReportCard

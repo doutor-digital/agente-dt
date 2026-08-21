@@ -1,15 +1,3 @@
-// ============================================================================
-// openapi.ts — a especificação da API, gerada A PARTIR DO ROUTER REAL.
-//
-// Documentação escrita à mão envelhece: alguém adiciona uma rota, esquece do
-// arquivo, e a doc passa a mentir. Aqui a fonte da verdade é o próprio
-// `apiRouter` do Express — se a rota existe, ela aparece; se some, some junto.
-//
-// O que NÃO dá pra deduzir do router (o que cada rota faz, em português) vive
-// no mapa DESCRICOES abaixo. Rota sem descrição ainda aparece, só sem texto —
-// preferimos doc incompleta a doc desatualizada.
-// ============================================================================
-
 import type { Router } from 'express';
 
 type Metodo = 'get' | 'post' | 'put' | 'patch' | 'delete';
@@ -19,11 +7,6 @@ interface RotaLida {
   path: string;
 }
 
-/**
- * Lê a pilha interna do Express. É API não-documentada do framework, então
- * fica isolada aqui e protegida: se a forma mudar numa atualização, a doc sai
- * vazia — nunca derruba o servidor.
- */
 function lerRotas(router: Router): RotaLida[] {
   const out: RotaLida[] = [];
   try {
@@ -44,7 +27,6 @@ function lerRotas(router: Router): RotaLida[] {
   return out;
 }
 
-/** Converte `/units/:id/lessons` no formato do OpenAPI: `/units/{id}/lessons`. */
 function paraOpenApi(path: string): { path: string; params: string[] } {
   const params: string[] = [];
   const convertido = path.replace(/:(\w+)/g, (_, nome: string) => {
@@ -54,10 +36,6 @@ function paraOpenApi(path: string): { path: string; params: string[] } {
   return { path: convertido, params };
 }
 
-/**
- * Área da API a que a rota pertence. A ordem importa: a primeira regra que
- * casar vence, então o mais específico vem antes.
- */
 function areaDe(path: string): string {
   const regras: Array<[RegExp, string]> = [
     [/^\/webhooks/, 'Webhooks'],
@@ -74,7 +52,6 @@ function areaDe(path: string): string {
   return 'Outros';
 }
 
-/** Nível de acesso, deduzido do padrão de rota do projeto. */
 function acessoDe(path: string): string {
   if (path.startsWith('/webhooks')) return 'Aberto (assinatura do serviço externo)';
   if (path === '/health') return 'Aberto';
@@ -85,10 +62,6 @@ function acessoDe(path: string): string {
   return 'Logado';
 }
 
-/**
- * O que cada rota faz, em português de gente. Preenchido nas que o dono usa —
- * as demais aparecem sem descrição, o que é melhor que uma frase inventada.
- */
 const DESCRICOES: Record<string, string> = {
   'GET /health': 'Diz apenas que o servidor está de pé.',
   'GET /debug/diagnostico': 'Raio-x completo: banco, OpenAI, Claude, atendimento, juiz e unidades. Prova cada dependência em vez de só dizer "ok". Não consome crédito de IA.',

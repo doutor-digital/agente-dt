@@ -1,22 +1,3 @@
-// ============================================================================
-// WizardPanel — Configuração "guiada" da IA pra leigos.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Cada feature do agente (qualificação automática, handoff humano, horário
-// comercial, etc) tem um card aqui. Toggle pra ativar + inputs estruturados
-// pra config. Saved no Unit via PATCH. O backend (prompt-composer) lê os
-// campos e gera o systemPrompt automaticamente — usuário leigo não precisa
-// nem ver o prompt.
-//
-// Features:
-//   1. Persona (nome, tom, saudação)
-//   2. Auto-qualificação Quente/Frio
-//   3. Handoff humano por palavras-chave
-//   4. Follow-up
-// + 1 placeholder pra A/B (em construção)
-// ============================================================================
-
 import { useCallback, useEffect, useState } from 'react';
 import {
   BookText,
@@ -97,8 +78,6 @@ type WizardDraft = Pick<
   | 'followUpMessage'
 >;
 
-// Categorias/segmentos disponíveis. Cada uma mapeia pra um preset de persona
-// no backend (prompt-composer). Adicionar uma nova aqui + no composer.
 export const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '', label: 'Genérica (sem categoria)' },
   { value: 'saude', label: '🩺 Saúde (Dra. Sofia)' },
@@ -156,9 +135,6 @@ export function WizardPanel() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(true);
 
-  // Campos custom do lead no Kommo — só usado pelo seletor "campo do resumo".
-  // Carregado lazy junto com pipelines no load inicial; falha silencia (UI
-  // mostra "Kommo não configurado ainda").
   const [kommoFields, setKommoFields] = useState<KommoLeadCustomField[] | null>(null);
 
   useEffect(() => {
@@ -185,7 +161,6 @@ export function WizardPanel() {
     };
   }, [selectedUnitId]);
 
-  // Debounced live preview do prompt composto.
   useEffect(() => {
     if (!selectedUnitId || !draft || !showPreview) return;
     const handler = setTimeout(() => {
@@ -195,7 +170,7 @@ export function WizardPanel() {
         .then((p) => setPreview(p))
         .catch(() => setPreview(null))
         .finally(() => setPreviewLoading(false));
-    }, 600); // 600ms debounce — não fica disparando a cada keystroke
+    }, 600);
     return () => clearTimeout(handler);
   }, [selectedUnitId, draft, showPreview]);
 
@@ -238,7 +213,6 @@ export function WizardPanel() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-4">
-        {/* Header sticky */}
         <div className="flex items-center justify-between sticky top-0 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
           <div>
             <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
@@ -260,7 +234,6 @@ export function WizardPanel() {
           </button>
         </div>
 
-        {/* 1. PERSONA */}
         <FeatureCard
           icon={<UserCog size={16} className="text-brand-300" />}
           title="Persona da IA"
@@ -355,7 +328,6 @@ export function WizardPanel() {
           </div>
         </FeatureCard>
 
-        {/* 1b. TRIAGEM */}
         <FeatureCard
           icon={<ClipboardList size={16} className="text-sky-400" />}
           title="Triagem"
@@ -380,7 +352,6 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
           />
         </FeatureCard>
 
-        {/* 2. AUTO-QUALIFICAÇÃO */}
         <FeatureCard
           icon={<Flame size={16} className="text-orange-400" />}
           title="Auto-qualificação Quente/Frio"
@@ -408,7 +379,6 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
           </div>
         </FeatureCard>
 
-        {/* 3. HANDOFF HUMANO */}
         <FeatureCard
           icon={<PhoneCall size={16} className="text-rose-400" />}
           title="Handoff humano automático"
@@ -427,7 +397,6 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
           />
         </FeatureCard>
 
-        {/* 3a. ETAPA APÓS AGENDAR */}
         <FeatureCard
           icon={<CalendarCheck size={16} className="text-emerald-400" />}
           title="Etapa depois de agendar"
@@ -458,7 +427,6 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
           </p>
         </FeatureCard>
 
-        {/* 3b. RESUMO EM CAMPO CUSTOM */}
         <FeatureCard
           icon={<BookText size={16} className="text-amber-400" />}
           title="Resumo no campo do Kommo"
@@ -519,7 +487,6 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
           </div>
         </FeatureCard>
 
-        {/* 8. FOLLOW-UP */}
         <FeatureCard
           icon={<Repeat size={16} className="text-violet-400" />}
           title="Follow-up educado"
@@ -549,7 +516,6 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
           />
         </FeatureCard>
 
-        {/* 9. A/B PROMPTS (placeholder) */}
         <FeatureCard
           icon={<TestTube size={16} className="text-zinc-500" />}
           title="A/B test de prompts"
@@ -564,13 +530,10 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
           </div>
         </FeatureCard>
 
-        {/* 10. TEMPLATES DE MENSAGEM */}
         <TemplatesSection unitId={selectedUnitId} />
 
-        {/* 11. BASE DE CONHECIMENTO (RAG) */}
         <KnowledgeSection unitId={selectedUnitId} />
 
-        {/* Live preview do prompt composto */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-950/60 overflow-hidden">
           <button
             type="button"
@@ -614,7 +577,6 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
           )}
         </section>
 
-        {/* Café no fim */}
         <div className="text-center text-zinc-700 text-xs py-4 flex items-center justify-center gap-2">
           <Coffee size={12} />
           Configurado tudo? Clica em "Salvar alterações" no topo.
@@ -623,15 +585,6 @@ Quando demonstrar interesse claro em marcar, pare de triar e vá pro agendamento
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Subcomponentes
-// ---------------------------------------------------------------------------
-
-
-// ===========================================================================
-// EmojiPaletteField — paleta de emojis configurável + frequência de uso.
-// ===========================================================================
 
 const EMOJI_SUGGESTIONS = [
   '😊', '😉', '🥰', '🤗', '🙏', '👋', '👏', '💜', '💙', '💚',
@@ -692,7 +645,6 @@ function EmojiPaletteField({
         a conversa mais bonita e calorosa. ✨ Vazio = sem instrução, herda só do tom de voz.
       </p>
 
-      {/* Emojis selecionados */}
       <div className="flex flex-wrap gap-1.5 mb-2 min-h-9 p-2 rounded-md bg-zinc-950/60 border border-zinc-800/60">
         {emojis.length === 0 ? (
           <span className="text-[11px] text-zinc-600 italic self-center">
@@ -713,7 +665,6 @@ function EmojiPaletteField({
         )}
       </div>
 
-      {/* Input livre */}
       <div className="flex gap-2 mb-3">
         <input
           type="text"
@@ -738,7 +689,6 @@ function EmojiPaletteField({
         </button>
       </div>
 
-      {/* Sugestões clicáveis */}
       {unusedSuggestions.length > 0 && (
         <div>
           <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5">
@@ -762,10 +712,6 @@ function EmojiPaletteField({
     </div>
   );
 }
-
-// ===========================================================================
-// TemplatesSection — CRUD de respostas prontas (MessageTemplate)
-// ===========================================================================
 
 function TemplatesSection({ unitId }: { unitId: string | null }) {
   const toast = useToast();
@@ -916,15 +862,6 @@ function TemplatesSection({ unitId }: { unitId: string | null }) {
   );
 }
 
-
-// ===========================================================================
-// KnowledgeSection — CRUD da base de conhecimento (RAG semântico)
-// ===========================================================================
-// Cada entrada é embedda no backend (OpenAI text-embedding-3-small).
-// O composer faz busca semântica em runtime e injeta as 3 mais
-// relevantes no prompt. Diferente de templates (busca por keyword), aqui
-// é busca por SIGNIFICADO.
-
 function KnowledgeSection({ unitId }: { unitId: string | null }) {
   const toast = useToast();
   const [items, setItems] = useState<KnowledgeEntry[]>([]);
@@ -1020,7 +957,6 @@ function KnowledgeSection({ unitId }: { unitId: string | null }) {
       </button>
       {open && (
         <div className="px-4 pb-4 pt-1 space-y-3 border-t border-zinc-800/40">
-          {/* Form de criação */}
           <div className="rounded-md border border-zinc-800 bg-zinc-950/40 p-3 space-y-2">
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
               Nova entrada
@@ -1050,7 +986,6 @@ function KnowledgeSection({ unitId }: { unitId: string | null }) {
             </button>
           </div>
 
-          {/* Lista existente */}
           {loading && <div className="text-[11px] text-zinc-600">Carregando…</div>}
           {!loading && items.length === 0 && (
             <div className="text-[11px] text-zinc-600 italic text-center py-2">

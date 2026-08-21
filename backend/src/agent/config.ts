@@ -1,26 +1,3 @@
-// ============================================================================
-// config.ts — AgentConfig: prompt + tools habilitadas.
-//
-// LÓGICA DE ENGENHARIA — MULTI-TENANT
-// -----------------------------------
-// Cada Unit tem seu próprio AgentConfig (1:N). Quando uma execução começa
-// para uma Unit, buscamos o AgentConfig ATIVO daquela Unit. Se não existir
-// nenhum, criamos com os defaults (system prompt da Unit + tools default).
-//
-// Compatibilidade com a versão mono-tenant:
-//   - getActiveConfig(unitId?) — sem unitId, retorna o primeiro config sem
-//     unitId associado (ou cria um). Mantém o comportamento antigo.
-//
-// FORMATO DOS CAMPOS JSON
-// -----------------------
-// `tools`: { name, enabled, description }[]
-//   - O graph filtra `enabled === false` antes do `bindTools`.
-//   - O graph SUBSTITUI a description original pela versão editada.
-//
-// O array `workflow` (legado) foi removido — workflow declarativo migrou
-// pra UnitAction (aba "Ações" no painel).
-// ============================================================================
-
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 
@@ -42,10 +19,6 @@ export type AgentConfigShape = {
   maxTokens: number;
   updatedAt: Date;
 };
-
-// ---------------------------------------------------------------------------
-// DEFAULTS — bootstrap quando o banco está vazio.
-// ---------------------------------------------------------------------------
 
 const DEFAULT_SYSTEM_PROMPT = `Você é um agente de qualificação de leads do CRM Kommo.
 
@@ -161,10 +134,6 @@ export const DEFAULTS = {
   maxTokens: 1024,
 };
 
-// ---------------------------------------------------------------------------
-// Helpers de serialização — Prisma Json type é "any".
-// ---------------------------------------------------------------------------
-
 function toShape(row: {
   id: string;
   unitId: string | null;
@@ -191,15 +160,6 @@ function toShape(row: {
   };
 }
 
-// ---------------------------------------------------------------------------
-// getActiveConfig — busca o AgentConfig ativo da Unit (ou global, se nulo).
-// Cria um default se não existir.
-//
-// CACHE: cada turno do agente chama essa função. Sem cache são ~30-100ms de
-// Postgres no caminho crítico. TTL 30s — propagação rápida após salvar via
-// Wizard, e `saveConfig` invalida explicitamente.
-// ---------------------------------------------------------------------------
-
 const CONFIG_TTL_MS = 30_000;
 const configCache = new Map<string, { value: AgentConfigShape; expiresAt: number }>();
 
@@ -211,7 +171,6 @@ export function invalidateActiveConfig(unitId: string | null): void {
   configCache.delete(configCacheKey(unitId));
 }
 
-/** Limpa TODO o cache de config — usado pelo endpoint admin "Limpar cache". */
 export function clearAllConfigCache(): number {
   const n = configCache.size;
   configCache.clear();
@@ -251,10 +210,6 @@ export async function getActiveConfig(unitId: string | null = null): Promise<Age
   return shape;
 }
 
-// ---------------------------------------------------------------------------
-// saveConfig — upsert do "default" e garante único ativo por Unit.
-// ---------------------------------------------------------------------------
-
 export type SaveConfigInput = {
   unitId?: string | null;
   systemPrompt: string;
@@ -275,7 +230,6 @@ export async function saveConfig(input: SaveConfigInput): Promise<AgentConfigSha
   };
 
   const saved = await prisma.$transaction(async (tx) => {
-    // Garante único ativo por Unit (ou global).
     await tx.agentConfig.updateMany({
       where: { isActive: true, unitId },
       data: { isActive: false },
@@ -295,7 +249,6 @@ export async function saveConfig(input: SaveConfigInput): Promise<AgentConfigSha
     });
   });
 
-  // Limpa o cache pra próxima execução pegar a versão fresca.
   invalidateActiveConfig(unitId);
 
   return toShape(saved);

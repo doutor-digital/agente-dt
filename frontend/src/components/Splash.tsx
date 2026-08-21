@@ -1,11 +1,3 @@
-// ============================================================================
-// Splash — tela de carregamento (enquanto o /auth/me responde).
-//
-// Marca centralizada sobre a malha de pontos + uma barra de progresso
-// indeterminada. Sem spinner genérico: o carregamento é curto, então o que
-// importa é parecer o mesmo produto que vem depois.
-// ============================================================================
-
 export function Splash() {
   return (
     <div className="h-screen w-screen relative flex flex-col items-center justify-center gap-6 bg-zinc-950 text-zinc-100 overflow-hidden">
@@ -29,7 +21,6 @@ export function Splash() {
           <div className="text-[11px] text-zinc-500 mt-0.5">Preparando seu console…</div>
         </div>
 
-        {/* Barra indeterminada — o "sheen" percorre o trilho. */}
         <div className="w-40 h-[3px] rounded-full bg-zinc-800 overflow-hidden">
           <div className="h-full w-full animate-sheen" />
         </div>

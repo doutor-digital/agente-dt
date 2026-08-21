@@ -1,29 +1,3 @@
-// ============================================================================
-// lead-memory.service.ts — Memória de longo prazo por lead.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// O agente esquece tudo entre conversas/sessões — o checkpoint do LangGraph
-// guarda só os turnos da conversa atual (e ainda assim por thread_id, que
-// pode estourar limite de tokens em conversas longas).
-//
-// Esta camada resolve isso GUARDANDO:
-//   1. `summary` — parágrafo curto sobre o paciente (≤ 600 chars)
-//   2. `facts`   — chave→valor estruturado (idade, queixa, preferências…)
-//
-// LEITURA: barata. 1 SELECT por (unitId, leadId) com índice único. Plumbed
-// no `composeSystemPromptForUnit` que já é await/Promise.all dos blocos.
-//
-// ESCRITA: NUNCA bloqueia a resposta ao paciente. Chamada via
-// `scheduleLeadMemoryUpdate(...)` que dispara em background DEPOIS da resposta
-// ter saído. Throttle interno: só roda o LLM-mini de N em N turnos pra não
-// torrar dinheiro em conversas longas.
-//
-// CUSTO POR TURNO (esperado, gpt-4o-mini):
-//   - 0 turnos: $0 (não dispara)
-//   - 1 disparo a cada 4 turnos: ~500 input + ~250 output ≈ 0.000$ — desprezível
-// ============================================================================
-
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import type { LeadMemory, Unit } from '@prisma/client';
@@ -31,38 +5,17 @@ import { createChatOpenAI, invokeChatModel } from './openai.service.js';
 import { createKommoClient } from './kommo.service.js';
 import { HumanMessage, SystemMessage, type AIMessage } from '@langchain/core/messages';
 
-// ---------------------------------------------------------------------------
-// FATOS DUROS DO KOMMO — o que a IA não pode "esquecer".
-//
-// O resumo do summarizer é paráfrase: bom pra tom e contexto, frágil pra dado.
-// "Está agendado", "qualificado como Quente", "prefere manhã" já estão gravados
-// em CAMPO do Kommo — dado estruturado, não interpretação. Puxamos esses campos
-// e mesclamos POR CIMA do que o LLM inventou, então o fato duro sempre vence.
-//
-// Casado por NOME do campo (não por id), porque o id do custom field varia de
-// unidade pra unidade — o nome ("✎ Queixa", "★ Qualificação") é estável. Cada
-// entrada é [rótulo curto na memória, trecho que precisa estar no nome do campo].
-// ---------------------------------------------------------------------------
 const CAMPOS_IMPORTANTES: Array<{ chave: string; casa: RegExp }> = [
   { chave: 'queixa', casa: /queixa/i },
   { chave: 'qualificacao', casa: /qualifica[çc][ãa]o/i },
   { chave: 'preferencia_horario', casa: /prefer[êe]ncia.*hor[áa]rio/i },
   { chave: 'agendou', casa: /agendou/i },
-  // A DATA do agendamento NÃO entra aqui de propósito: quem manda no horário é
-  // o bloco <consulta_do_paciente>, lido ao vivo da franquia a cada turno. Uma
-  // data guardada na memória envelhece e passa a contradizer o bloco quando a
-  // recepção remarca. A memória guarda só que ELE está agendado (agendou=Sim).
   { chave: 'intencao', casa: /inten[çc][ãa]o/i },
   { chave: 'cidade', casa: /cidade/i },
   { chave: 'profissao', casa: /profiss[ãa]o/i },
   { chave: 'sexo', casa: /sexo/i },
 ];
 
-/**
- * Lê os campos importantes do lead no Kommo e devolve como fatos duros.
- * Falha silenciosa (Kommo fora, lead sem campos): devolve {} e a memória segue
- * só com o resumo — nunca derruba o updater por causa disso.
- */
 async function fatosDurosDoKommo(unit: Unit, leadId: number): Promise<LeadMemoryFacts> {
   try {
     const kommo = createKommoClient(unit);
@@ -82,45 +35,25 @@ async function fatosDurosDoKommo(unit: Unit, leadId: number): Promise<LeadMemory
   }
 }
 
-/** Dispara o updater a cada N turnos. Conservador: balancear custo × frescor. */
 const UPDATE_EVERY_N_TURNS = 4;
-/** Cap de chars do summary salvo. Prompt curto = barato e estável. */
 const SUMMARY_MAX_CHARS = 600;
-/** Modelo barato; o updater não precisa do raciocínio do modelo principal. */
 const SUMMARIZER_MODEL_FALLBACK = 'gpt-4o-mini';
 
 export interface LeadMemoryFacts {
   [key: string]: string | number | boolean | null;
 }
 
-// ---------------------------------------------------------------------------
-// ÚLTIMO CONTATO — a camada "episódica" da memória.
-//
-// A IA já não é amnésica dentro da mesma conversa (o checkpoint durável guarda
-// o thread inteiro). O que faltava era NOÇÃO DE TEMPO E DESFECHO: quando foi a
-// última vez que este paciente falou, e como aquilo terminou. Sem isso a IA
-// reabre um lead de dois meses atrás no mesmo tom de quem falou ontem.
-//
-// Mora em `facts` (Json que já existe) — nada de tabela nova.
-// ---------------------------------------------------------------------------
-
-/** Chaves de contato: preservadas entre execuções do summarizer. */
 export const CHAVES_CONTATO = ['ultimo_contato', 'ultimo_desfecho', 'travou_em'] as const;
 
 export const DESFECHOS = ['agendou', 'sumiu', 'travou_preco', 'pediu_humano', 'so_duvida'] as const;
 export type Desfecho = (typeof DESFECHOS)[number];
 
-/** Só aceita desfecho conhecido — evita o LLM inventar rótulo novo. */
 export function sanitizeOutcome(v: unknown): Desfecho | null {
   if (typeof v !== 'string') return null;
   const s = v.trim().toLowerCase();
   return (DESFECHOS as readonly string[]).includes(s) ? (s as Desfecho) : null;
 }
 
-/**
- * "há 3 dias", "ontem", "há 2 meses" — em vez de uma data ISO crua, que a IA
- * lê mal e às vezes repete pro paciente.
- */
 export function formatarQuandoFoi(iso: string, agora: Date = new Date()): string {
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return '';
@@ -136,13 +69,6 @@ export function formatarQuandoFoi(iso: string, agora: Date = new Date()): string
   return 'há mais de um ano';
 }
 
-/**
- * Mantém as chaves de contato ao reescrever os fatos.
- *
- * O summarizer devolve o objeto `facts` INTEIRO e sobrescreve o anterior — sem
- * isto, o carimbo de último contato seria apagado no ciclo seguinte e ninguém
- * perceberia (a memória continua "funcionando", só sem a noção de tempo).
- */
 export function preservarFatosDeContato(
   anterior: LeadMemoryFacts,
   novos: LeadMemoryFacts,
@@ -157,10 +83,6 @@ export function preservarFatosDeContato(
   return out;
 }
 
-/**
- * Carimba data/desfecho do contato. Fire-and-forget: memória é enriquecimento,
- * nunca pode derrubar o atendimento.
- */
 export function carimbarContato(
   unitId: string,
   leadId: string | number,
@@ -194,7 +116,6 @@ export async function getLeadMemory(
   });
 }
 
-/** Memória vazia = sem resumo e sem fatos. Usado pra decidir fallback entre IAs. */
 function isMemoryEmpty(m: LeadMemory | null): boolean {
   if (!m) return true;
   const semResumo = !m.summary || !m.summary.trim();
@@ -202,17 +123,6 @@ function isMemoryEmpty(m: LeadMemory | null): boolean {
   return semResumo && Object.keys(facts).length === 0;
 }
 
-/**
- * Memória do lead PRA O AGENTE, com fallback entre IAs da mesma conta Kommo.
- *
- * A memória é gravada por-unidade (`@@unique([unitId, leadId])`). Numa conta
- * multi-IA (uma IA por etapa), quando o lead troca de etapa ele troca de IA —
- * e a IA nova (ex: resgate no Perdido) começaria SEM lembrar o que a comercial
- * conversou. Aqui, se a memória da unidade dona estiver vazia, caímos pra
- * memória de uma IRMÃ (mesmo `kommoSubdomain`, lead mais recente). Assim a IA
- * que assume o lead "lembra" da conversa anterior, sem duplicar dado nem migrar
- * schema. Os campos do Kommo (queixa etc.) já são por-lead e vêm de qualquer jeito.
- */
 export async function getLeadMemoryForAgent(
   unit: { id: string; kommoSubdomain: string | null },
   leadId: string | number,
@@ -235,18 +145,11 @@ export async function getLeadMemoryForAgent(
   return rica ?? own;
 }
 
-/**
- * Incrementa turnsSinceUpdate atomicamente. Garante que o counter cresce mesmo
- * se o updater não rodar nesse turno (ex: throttle).
- *
- * Idempotente em relação ao registro: usa upsert.
- */
 export async function bumpLeadMemoryTurn(
   unitId: string,
   leadId: string | number,
 ): Promise<LeadMemory> {
   const id = String(leadId);
-  // upsert + increment numa só operação.
   return prisma.leadMemory.upsert({
     where: { unitId_leadId: { unitId, leadId: id } },
     create: { unitId, leadId: id, summary: '', facts: {}, turnsSinceUpdate: 1 },
@@ -254,21 +157,9 @@ export async function bumpLeadMemoryTurn(
   });
 }
 
-/**
- * Agenda atualização em background da memória do lead.
- *
- * NÃO retorna promise — fire-and-forget mesmo. O caller (webhook controller)
- * pode chamar isso APÓS já ter enviado a resposta ao paciente e seguir.
- *
- * Decide internamente se vai rodar o LLM ou só bumpa o contador:
- *   - 1ª vez (sem memória) → roda
- *   - turnsSinceUpdate >= UPDATE_EVERY_N_TURNS → roda
- *   - senão → só bumpa contador
- */
 export function scheduleLeadMemoryUpdate(args: {
   unit: Unit;
   leadId: number;
-  /** Mensagens do turno atual (lead + IA) — texto puro. */
   recentTurns: Array<{ role: 'user' | 'assistant'; content: string }>;
 }): void {
   void runLeadMemoryUpdate(args).catch((err) => {
@@ -287,19 +178,15 @@ async function runLeadMemoryUpdate(args: {
   const { unit, leadId, recentTurns } = args;
   const idStr = String(leadId);
 
-  // 1) Bump atômico — sempre roda, registra a passagem do turno.
   const after = await bumpLeadMemoryTurn(unit.id, leadId);
 
   const hasNoSummaryYet = !after.summary || after.summary.length === 0;
   const dueByThrottle = after.turnsSinceUpdate >= UPDATE_EVERY_N_TURNS;
   if (!hasNoSummaryYet && !dueByThrottle) {
-    // Throttle: este turno só conta, não chama LLM.
     return;
   }
   if (recentTurns.length === 0) return;
 
-  // 2) Pega memória atual + ÚLTIMAS N mensagens da conversa pra dar contexto
-  //    suficiente sem inflar o prompt do summarizer.
   const conv = await prisma.conversation.findUnique({
     where: { unitId_leadId: { unitId: unit.id, leadId: idStr } },
     select: { id: true },
@@ -317,7 +204,6 @@ async function runLeadMemoryUpdate(args: {
     history = recentTurns;
   }
 
-  // 3) Monta o prompt do summarizer.
   const factsCurrent = (after.facts as LeadMemoryFacts) ?? {};
   const sysPrompt = [
     'Você é um assistente de CRM que mantém memória de longo prazo dos pacientes.',
@@ -363,7 +249,6 @@ async function runLeadMemoryUpdate(args: {
     'Devolva agora a memória atualizada em JSON.',
   ].join('\n');
 
-  // 4) Roda o LLM mini. Conservador no maxTokens — saída sempre cabe.
   try {
     const model = createChatOpenAI(unit, {
       model: unit.openaiModel?.includes('mini') ? unit.openaiModel : SUMMARIZER_MODEL_FALLBACK,
@@ -392,13 +277,7 @@ async function runLeadMemoryUpdate(args: {
     if (!parsed) return;
 
     const newSummary = sanitizeSummary(parsed.summary);
-    // Fatos duros do Kommo mesclados POR CIMA do palpite do LLM: "agendou",
-    // "qualificação", "preferência" vêm do campo, não da interpretação. É o
-    // que garante que a IA nunca trate como novo um lead que o CRM já sabe
-    // agendado — sem depender de o summarizer ter captado.
     const hardFacts = await fatosDurosDoKommo(unit, leadId);
-    // preservarFatosDeContato por último: o summarizer devolve `facts` inteiro
-    // e sobrescreveria o carimbo de último contato/desfecho silenciosamente.
     const newFacts = preservarFatosDeContato(factsCurrent, {
       ...sanitizeFacts(parsed.facts),
       ...hardFacts,
@@ -423,7 +302,6 @@ async function runLeadMemoryUpdate(args: {
 }
 
 function stripJsonFence(s: string): string {
-  // Remove ```json ... ``` se algum modelo desobediente envolver.
   return s
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/i, '');

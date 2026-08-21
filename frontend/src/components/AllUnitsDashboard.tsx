@@ -1,12 +1,3 @@
-// ============================================================================
-// AllUnitsDashboard — visão geral de TODAS as unidades (modo "painel geral").
-// Consome o endpoint agregado GET /dashboard (1 request) e mostra, no formato
-// do painel do Kommo: totais (leads, conversas, gasto IA, convertidos,
-// conversão), mensagens por canal somadas, e um card por unidade com drill-in.
-// Filtros: período + categoria/segmento.
-// Funil (etapas) fica no painel por-unidade — clicar numa unidade entra nele.
-// ============================================================================
-
 import { useCallback, useEffect, useState } from 'react';
 import {
   ArrowRight,
@@ -30,7 +21,6 @@ const PERIOD_OPTIONS = [
 ];
 const CHANNEL_PALETTE = ['#10b981', '#0ea5e9', '#8b5cf6', '#f59e0b', '#f43f5e', '#06b6d4'];
 
-// Opções do FILTRO de categoria ("Todas" + as categorias reais, sem a "Genérica").
 const CATEGORY_FILTERS = [
   { value: '', label: 'Todas as categorias' },
   ...CATEGORY_OPTIONS.filter((o) => o.value),
@@ -79,7 +69,6 @@ export function AllUnitsDashboard({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-350 mx-auto p-6 space-y-6">
-        {/* Header da página — mesmo padrão do painel por agente. */}
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0">
             <div className="eyebrow mb-1.5">Visão consolidada</div>
@@ -139,7 +128,6 @@ export function AllUnitsDashboard({
           </div>
         )}
 
-        {/* KPIs agregados */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <AggCard icon={<Users size={15} />} label="Leads únicos" value={totals?.uniqueLeads ?? 0} />
           <AggCard icon={<MessageCircleMore size={15} />} label="Conversas" value={totals?.answeredConversations ?? 0} />
@@ -148,7 +136,6 @@ export function AllUnitsDashboard({
           <AggCard label="Conversão média" value={`${((totals?.conversionRate ?? 0) * 100).toFixed(1)}%`} accent="text-emerald-300" />
         </div>
 
-        {/* Mensagens por canal (somadas) */}
         <div className="rounded-2xl bg-zinc-900/55 ring-1 ring-white/10 backdrop-blur p-5">
           <div className="flex items-center gap-2 mb-1">
             <MessageCircleMore size={14} className="text-violet-300" />
@@ -172,7 +159,6 @@ export function AllUnitsDashboard({
           )}
         </div>
 
-        {/* Cards por unidade */}
         {loading && !data ? (
           <div className="flex items-center justify-center py-12 text-zinc-300">
             <Loader2 className="animate-spin mr-2" size={18} /> Carregando…

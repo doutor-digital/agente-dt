@@ -1,30 +1,3 @@
-// ============================================================================
-// CrmFranquiaPanel — tudo que liga o agente ao CRM da franquia, num lugar só.
-//
-// POR QUE É UMA PÁGINA SEPARADA DA AGENDA
-// ---------------------------------------
-// A Agenda é OPERAÇÃO: a recepção abre todo dia pra ver horário, bloquear e,
-// no pior caso, pausar a IA. Isto aqui é CONFIGURAÇÃO E INTEGRIDADE: token,
-// horários da clínica, espelhamento de leads e a prova de que está chegando.
-// Misturar as duas fazia a tela do dia a dia carregar decisões que se toma uma
-// vez — e enterrava a configuração embaixo do calendário.
-//
-// A REGRA QUE MOLDA A TELA INTEIRA
-// --------------------------------
-// A API da franquia NÃO APAGA LEAD (testado: 404 nas duas formas). Cadastro
-// errado lá vira chamado no suporte deles e limpeza manual. Então:
-//   - o que é permanente tem interruptor próprio, não herdado da agenda;
-//   - dá pra VER o cadastro que sairia antes de ele sair (prévia);
-//   - "salvo" só aparece quando o servidor confirma — ver a barra de estado.
-//
-// A BARRA DE ESTADO
-// -----------------
-// O formulário compara o que está na tela com o que o servidor devolveu depois
-// de salvar. Se um campo não for gravado, a barra continua dizendo "alterações
-// não salvas" em vez de piscar um "salvo" que mente. Isso não é enfeite: por
-// 35 campos e várias semanas, o backend respondia 200 e não gravava nada.
-// ============================================================================
-
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   PiWarningCircleBold,
@@ -69,11 +42,6 @@ const ORIGENS_FRANQUIA = [
   { id: 9999, nome: 'IA2GO' },
 ];
 
-// ---------------------------------------------------------------------------
-// O formulário inteiro é UM objeto. Salvar manda ele todo e compara o que
-// voltou: é o que permite a tela afirmar "salvo" sem estar chutando.
-// ---------------------------------------------------------------------------
-
 interface Form {
   spineEnabled: boolean;
   spineBaseUrl: string;
@@ -92,12 +60,6 @@ interface Form {
   pixHolder: string;
 }
 
-/**
- * O que o servidor diz que está gravado. Todo campo tem default: o painel
- * (Vercel) e a API (VPS) sobem por pipelines diferentes, então existe uma
- * janela em que o front novo fala com uma API que ainda não devolve o campo.
- * Sem default, `spineAgendaDays.includes(...)` derruba a tela inteira.
- */
 function doServidor(u: Partial<Unit>): Form {
   return {
     spineEnabled: u.spineEnabled ?? false,
@@ -133,9 +95,6 @@ export default function CrmFranquiaPanel() {
 
   const sujo = JSON.stringify(form) !== JSON.stringify(servidor) || token.trim() !== '';
 
-  // Adota o valor do servidor quando não há edição pendente — assim outra aba
-  // (ou o próprio salvamento) atualiza a tela sem sobrescrever o que a pessoa
-  // está digitando agora.
   const chaveServidor = JSON.stringify(servidor);
   useEffect(() => {
     if (!sujo) setForm(servidor);
@@ -155,7 +114,7 @@ export default function CrmFranquiaPanel() {
     try {
       setProntidao(await api.spineProntidao(unit.id));
     } catch {
-      setProntidao(null); // a checagem bate na franquia; falhar aqui não é fatal
+      setProntidao(null);
     }
   }, [unit?.id]);
 
@@ -176,17 +135,13 @@ export default function CrmFranquiaPanel() {
         pixKey: form.pixKey.trim() || null,
         pixHolder: form.pixHolder.trim() || null,
       };
-      // Token em branco = manter o atual. A API devolve mascarado, então
-      // mandar '' apagaria a credencial da franquia.
       if (token.trim()) payload.spineToken = token.trim();
       await api.updateUnit(unit.id, payload);
       setToken('');
-      await refresh(); // re-lê do servidor: é o refresh que apaga o "não salvo"
+      await refresh();
       await carregar();
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Falha ao salvar';
-      // "timeout exceeded" não diz nada a quem está usando, e o que importa
-      // aqui é que NADA foi gravado e o que foi digitado continua na tela.
       setErroSalvar(
         /timeout|Network Error/i.test(msg)
           ? 'O servidor não respondeu a tempo (costuma ser atualização em andamento). Nada foi gravado e o que você digitou continua aqui — clique em salvar de novo.'
@@ -261,15 +216,6 @@ export default function CrmFranquiaPanel() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Barra de estado — fica fixa no rodapé enquanto houver o que salvar.
-//
-// Um botão "Salvar" solto no meio da página não responde a pergunta que
-// importa: "o que eu mudei já está valendo?". A barra responde, e só some
-// quando o servidor confirmou. Se um campo não gravar, ela NÃO some — o
-// sintoma aparece na hora, em vez de semanas depois.
-// ---------------------------------------------------------------------------
-
 function BarraDeEstado({
   sujo,
   salvando,
@@ -323,21 +269,6 @@ function BarraDeEstado({
   );
 }
 
-// ---------------------------------------------------------------------------
-// As peças
-// ---------------------------------------------------------------------------
-
-/**
- * A CONFERÊNCIA — o que a esteira NÃO sabe.
- *
- * A esteira mostra o que está ligado, que é o que a gente gravou. Isto pergunta
- * à franquia se realmente chegou. A diferença importa: se o token perder
- * permissão ou a API deles mudar, os nossos contadores continuam subindo felizes
- * enquanto nada entra do outro lado.
- *
- * Por isso o que está OK vira uma linha só. Lista de itens verdes é ruído — quem
- * abre a tela quer saber se tem problema, e qual.
- */
 function Pecas({
   prontidao,
   onRecarregar,
@@ -415,10 +346,6 @@ function Pecas({
     </section>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Conexão
-// ---------------------------------------------------------------------------
 
 function Conexao({
   form,
@@ -526,10 +453,6 @@ function Conexao({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Horários
-// ---------------------------------------------------------------------------
-
 function Horarios({ form, setForm }: { form: Form; setForm: (f: Form) => void }) {
   return (
     <section className="surface p-7">
@@ -631,10 +554,6 @@ function Hora({ label, v, on }: { label: string; v: string; on: (v: string) => v
   );
 }
 
-// ---------------------------------------------------------------------------
-// Espelhamento
-// ---------------------------------------------------------------------------
-
 function Espelhamento({
   form,
   setForm,
@@ -665,8 +584,6 @@ function Espelhamento({
         />
       </div>
 
-      {/* O QUE ACONTECE — antes de ligar, não depois. Escrita permanente
-          merece que a pessoa saiba no que está mexendo. */}
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <p className="text-xs font-medium text-zinc-300">Quando envia</p>
@@ -688,10 +605,6 @@ function Espelhamento({
         </div>
       </div>
 
-      {/* PACIENTE — interruptor separado de propósito. É o segundo cadastro,
-          com validação mais dura do lado deles, e tão permanente quanto o
-          primeiro. Herdar do espelhamento de leads faria um clique criar dois
-          registros que ninguém consegue apagar. */}
       <div className="mt-5 rounded-xl border border-zinc-800 p-4">
         <Interruptor
           ligado={form.spineSyncPatients}
@@ -738,19 +651,6 @@ function Espelhamento({
     </section>
   );
 }
-
-
-// ---------------------------------------------------------------------------
-// A ESTEIRA — o caminho inteiro em cinco quadros.
-//
-// O resto da tela responde "como configuro". Isto responde a pergunta anterior,
-// que é a que a pessoa faz primeiro: O QUE ACONTECE, e ONDE ESTÁ PARANDO.
-//
-// Cada quadro diz três coisas e só três: o que é, se está ligado, e quantos
-// passaram. Um quadro apagado é um passo que não acontece — e a seta antes dele
-// fica apagada também, porque a esteira para ali. Ler a linha da esquerda pra
-// direita tem que bastar; se precisar do texto embaixo, o desenho falhou.
-// ---------------------------------------------------------------------------
 
 type EstadoPasso = 'ok' | 'desligado' | 'atencao';
 
@@ -810,9 +710,6 @@ function Esteira({
     },
   ];
 
-  // Onde a esteira para: o primeiro passo que não está ok. Tudo depois dele é
-  // consequência, não problema separado — e apontar cinco problemas quando só
-  // existe um faz a pessoa procurar no lugar errado.
   const parou = passos.findIndex((p) => p.estado !== 'ok');
 
   return (
@@ -900,8 +797,6 @@ function Esteira({
         ))}
       </ol>
 
-      {/* UMA frase dizendo o que fazer. Não uma lista de tudo que poderia
-          estar errado — a pessoa precisa do próximo passo, não do inventário. */}
       <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
         {parou < 0 ? (
           <p className="flex items-start gap-2 text-sm leading-relaxed text-emerald-300">
@@ -942,15 +837,6 @@ function Esteira({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Consultas marcadas pela IA.
-//
-// O sistema passou a guardar QUAL consulta é de cada lead — é o que permite
-// cancelar e remarcar sem casar por nome. Mostrar isso não é enfeite: quando o
-// paciente liga dizendo "cancelei" ou "mudei de horário", quem atende precisa
-// ver o que a IA fez, e o número da consulta é o que se leva pra franquia.
-// ---------------------------------------------------------------------------
-
 function Consultas({
   hist,
   unitId,
@@ -960,9 +846,6 @@ function Consultas({
   unitId: string;
   onMudou: () => Promise<void>;
 }) {
-  // Cancelar aqui reflete na franquia. Por isso passa por confirmação com o
-  // nome e o horário à vista: a recepção está desmarcando um paciente de
-  // verdade, que vai receber ou não receber uma ligação por causa disso.
   const [confirmando, setConfirmando] = useState<{ leadId: number; nome: string; quando: string } | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -1020,8 +903,6 @@ function Consultas({
               <span className="text-emerald-300">{quandoLegivel(l.agendadoPara)}</span>
               <span className="ml-auto flex items-center gap-3 tabular-nums text-zinc-600">
                 <span>Kommo {l.kommoLeadId}</span>
-                {/* O número da consulta é o que a recepção leva pra franquia
-                    quando precisa mexer lá. */}
                 <span>consulta {l.spineIdSchedule}</span>
                 <button
                   type="button"
@@ -1071,7 +952,6 @@ function Consultas({
   );
 }
 
-/** "2026-08-05T08:00" -> "qua, 05/08 às 08:00". */
 function quandoLegivel(iso: string | null | undefined): string {
   if (!iso) return '—';
   const [dia, hora] = iso.split('T');
@@ -1081,18 +961,6 @@ function quandoLegivel(iso: string | null | undefined): string {
   const [, m, dd] = dia.split('-');
   return `${semana}, ${dd}/${m} às ${hora ?? ''}`.trim();
 }
-
-// ---------------------------------------------------------------------------
-// Mensagem de confirmação — os dados que a IA NÃO pode inventar.
-//
-// Endereço, chave PIX e favorecido ficam aqui, e não no prompt, porque mudam
-// sem que ninguém queira reescrever a persona — e porque endereço enterrado
-// num parágrafo de texto livre é endereço que ninguém acha pra corrigir.
-//
-// Campo vazio não vira improviso: a linha some da mensagem e a IA diz que a
-// equipe confirma. Paciente indo no endereço errado é pior que paciente
-// perguntando onde é.
-// ---------------------------------------------------------------------------
 
 function Confirmacao({ form, setForm }: { form: Form; setForm: (f: Form) => void }) {
   const faltando = [
@@ -1146,8 +1014,6 @@ function Confirmacao({ form, setForm }: { form: Form; setForm: (f: Form) => void
           )}
         </div>
 
-        {/* A prévia usa os valores digitados AGORA, não os salvos: dá pra ver o
-            efeito antes de gravar. */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-5">
           <p className="eyebrow">Como o paciente recebe</p>
           <div className="mt-3 space-y-1 text-[13px] leading-relaxed text-zinc-300">
@@ -1181,24 +1047,6 @@ function Confirmacao({ form, setForm }: { form: Form; setForm: (f: Form) => void
   );
 }
 
-// ---------------------------------------------------------------------------
-// Prévia e envio manual.
-//
-// A franquia não apaga lead: cada engano vira chamado no suporte deles. Duas
-// consequências no desenho desta seção:
-//
-//   1. NINGUÉM DIGITA ID. A lista mostra quem entrou no Kommo e ainda não
-//      chegou lá, já separado por situação. Sem isso, usar a prévia exigia
-//      saber o id de cabeça — ou seja, exigia o dev.
-//   2. NÃO EXISTE "ENVIAR" SEM TER OLHADO. O botão só aparece depois que a
-//      prévia carregou, e pede confirmação mostrando o nome que vai gravar.
-//      Escrita permanente atrás de um clique distraído é questão de tempo.
-// ---------------------------------------------------------------------------
-
-/**
- * Data legível, ou um traço. "Invalid Date" na tela é pior que ausência: parece
- * defeito do sistema inteiro quando é só um campo que não veio.
- */
 function quando(iso: string | null | undefined, opts: Intl.DateTimeFormatOptions): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -1228,7 +1076,7 @@ function Previa({ unitId, onEnviado }: { unitId: string; onEnviado: () => Promis
     try {
       setPend(await api.spinePendentes(unitId, 7));
     } catch {
-      setPend(null); // depende do Kommo; falhar aqui não trava a busca por id
+      setPend(null);
     } finally {
       setCarregandoLista(false);
     }
@@ -1431,21 +1279,6 @@ function Previa({ unitId, onEnviado }: { unitId: string; onEnviado: () => Promis
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// PACIENTE — o "Cadastrar Paciente" que existe dentro do lead, do nosso lado.
-//
-// Um lead é contato; um paciente é o cadastro que a recepção usa pra chamar na
-// sala. São dois registros, dois endpoints e duas validações — e NENHUM dos
-// dois tem exclusão pela API da franquia.
-//
-// Por isso a seção mostra a chamada literal (POST /api/clients) e cada campo
-// do jeito que sai, não do jeito que está no Kommo. O telefone é o caso claro:
-// o Kommo devolve "'+55 (99) 98185-7135" e este endpoint recusa qualquer coisa
-// que não seja "+5599981857135". Mostrar o valor bruto seria mostrar uma coisa
-// e mandar outra — que é o defeito que a prévia existe pra impedir.
-// ---------------------------------------------------------------------------
-
 const MOTIVO_PACIENTE: Record<string, { titulo: string; explica: string }> = {
   'sem-lead': {
     titulo: 'Este lead ainda não está na franquia',
@@ -1485,8 +1318,6 @@ function PacienteNaFranquia({
   const [enviando, setEnviando] = useState(false);
   const [feito, setFeito] = useState<string | null>(null);
 
-  // Só leads que JÁ estão na franquia podem virar paciente — os outros nem
-  // aparecem, em vez de aparecerem e recusarem depois do clique.
   const candidatos = (hist?.links ?? []).filter((l) => l.spineIdLead && !l.spineIdClient);
   const jaPacientes = (hist?.links ?? []).filter((l) => l.spineIdClient);
 
@@ -1548,8 +1379,6 @@ function PacienteNaFranquia({
       </div>
 
       <div className="grid gap-0 lg:grid-cols-[minmax(0,340px)_1fr]">
-        {/* ESQUERDA — quem pode virar paciente. Nome primeiro: ninguém confere
-            um cadastro permanente olhando para "13012964 -> 5916621". */}
         <div className="border-b border-zinc-800 p-5 lg:border-b-0 lg:border-r">
           <p className="eyebrow">Prontos para cadastrar</p>
           {candidatos.length > 0 ? (
@@ -1591,8 +1420,6 @@ function PacienteNaFranquia({
           )}
         </div>
 
-        {/* DIREITA — a ficha. Vazia até escolher, pra não sugerir que existe
-            algo pronto pra enviar quando não existe. */}
         <div className="p-5">
           {!leadId && !feito && (
             <p className="py-10 text-center text-sm text-zinc-600">
@@ -1630,9 +1457,6 @@ function PacienteNaFranquia({
 
           {r?.payload && (
             <>
-              {/* OS TRÊS OBRIGATÓRIOS EM DESTAQUE. A franquia recusa sem eles, e
-                  o telefone aparece já no formato que sai (E.164) — mostrar o
-                  bruto seria exibir um valor e mandar outro. */}
               <div className="grid gap-3 sm:grid-cols-3">
                 <Obrigatorio rotulo="Nome completo" valor={r.payload.name} />
                 <Obrigatorio rotulo="Telefone" valor={r.payload.whatsapp} mono />
@@ -1649,10 +1473,6 @@ function PacienteNaFranquia({
                   <dd className="mt-0.5 text-zinc-300">{r.payload.addressUf ?? '—'}</dd>
                 </div>
                 <div>
-                  {/* NÃO diz "vinculado": mandamos idLead e a API engole em
-                      silêncio — medido, lead.idClient continua vazio depois.
-                      Afirmar o vínculo aqui seria a tela mentir sobre o que o
-                      outro lado fez. */}
                   <dt className="text-zinc-500">Veio do lead</dt>
                   <dd className="mt-0.5 tabular-nums text-zinc-300">
                     {r.payload.idLead ? `#${r.payload.idLead}` : '—'}
@@ -1717,7 +1537,6 @@ function PacienteNaFranquia({
   );
 }
 
-/** Campo que a franquia recusa se vier vazio — por isso ganha peso visual. */
 function Obrigatorio({
   rotulo,
   valor,
@@ -1764,10 +1583,6 @@ function Campo({
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Histórico + conferência
-// ---------------------------------------------------------------------------
 
 function Historico({
   hist,
@@ -1852,9 +1667,6 @@ function Historico({
                       : 'bg-zinc-600'
                 }`}
               />
-              {/* Nome antes do id: quem confere o histórico procura por pessoa,
-                  não por número. O id fica, porque é o que se leva pro suporte
-                  da franquia quando algo precisa ser corrigido lá. */}
               <span className="font-medium text-zinc-200">{l.nome ?? '—'}</span>
               <span className="tabular-nums text-zinc-500">Kommo {l.kommoLeadId}</span>
               {l.spineIdLead ? (

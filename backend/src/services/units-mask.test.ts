@@ -11,11 +11,6 @@ const aqui = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = resolve(aqui, '../../prisma/schema.prisma');
 const SERVICE = resolve(aqui, 'units.service.ts');
 
-/**
- * Campos que casam com "segredo" pelo nome mas NÃO são segredo de verdade.
- * pixKey é a chave Pix que a clínica entrega ao paciente — publicá-la é o
- * objetivo dela, não um vazamento.
- */
 const NAO_SAO_SEGREDO = new Set(['pixKey']);
 
 function camposSecretosDoSchema(): string[] {
@@ -28,10 +23,6 @@ function camposSecretosDoSchema(): string[] {
   );
 }
 
-// Este teste existe porque um campo secreto NOVO nasce desmascarado por padrão:
-// quem adiciona a coluna raramente lembra de editar maskUnitSecrets, e o
-// vazamento só aparece quando alguém preenche o campo em produção. Foi o caso
-// real de googleAccessToken/googleRefreshToken.
 test('todo campo secreto da Unit está na máscara da API', () => {
   const servico = readFileSync(SERVICE, 'utf8');
   const trecho = servico.slice(servico.indexOf('export function maskUnitSecrets'));

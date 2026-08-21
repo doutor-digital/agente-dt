@@ -1,29 +1,3 @@
-// ============================================================================
-// FollowUpPanel — reengajamento por etapa do funil.
-//
-// POR QUE A TELA MOSTRA O QUE AINDA NÃO EXISTE
-// --------------------------------------------
-// Listar só o que está salvo começaria vazio, e tela vazia não ensina nada:
-// ninguém descobriria que dá pra reengajar quem foi perdido por "achou caro".
-// Então o cardápio inteiro aparece, com as escadas já escritas, e cada uma diz
-// se está ligada, desligada ou ainda nem criada.
-//
-// POR QUE OS MOTIVOS INTOCÁVEIS APARECEM
-// --------------------------------------
-// Eles não são configuráveis — e é justamente por isso que precisam estar à
-// vista, com o motivo. Regra invisível é regra que ninguém entende, e alguém
-// ia perguntar por que "sem condições financeiras" não está na lista. Ver o
-// "porquê" também comunica um critério: não se persegue quem já disse que não
-// pode pagar.
-//
-// A CHAVE GERAL É SEPARADA DAS REGRAS
-// -----------------------------------
-// Ligar uma regra não faz nada enquanto a chave geral estiver desligada, e a
-// tela diz isso na cara. É proposital: dá pra montar tudo com calma e só
-// depois abrir a torneira — em vez de a primeira regra salva já começar a
-// mandar mensagem pra paciente de verdade.
-// ============================================================================
-
 import { useCallback, useEffect, useState } from 'react';
 import {
   PiWarningCircleBold,
@@ -37,7 +11,6 @@ import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
 import type { FollowUpRulesResponse, FollowUpRegra } from '../types/api';
 
-/** "90" -> "1h30". Minuto cru não se lê numa escada de cinco degraus. */
 function tempoLegivel(min: number): string {
   if (min < 60) return `${min}min`;
   const h = Math.floor(min / 60);
@@ -80,8 +53,6 @@ export default function FollowUpPanel() {
         lossReasonId: r.lossReasonId,
         lossReasonName: r.lossReasonName,
         enabled: ligar,
-        // Na primeira vez a escada do modelo vai junto — senão a regra nasceria
-        // ligada e sem nenhum degrau, que é pior que não existir.
         ...(r.existe ? {} : { steps: r.steps }),
       });
       await carregar();
@@ -133,7 +104,6 @@ export default function FollowUpPanel() {
           </div>
         )}
 
-        {/* CHAVE GERAL. Separada das regras de propósito — ver o cabeçalho. */}
         <section
           className={`surface p-6 ${geral ? 'border-emerald-500/25' : 'border-zinc-800'}`}
         >
@@ -187,8 +157,6 @@ export default function FollowUpPanel() {
           </section>
         ))}
 
-        {/* OS INTOCÁVEIS. Não são configuráveis — e por isso precisam estar
-            visíveis, com o porquê de cada um. */}
         {dados?.intocaveis?.length ? (
           <section className="surface p-6">
             <div className="flex items-start gap-2.5">
@@ -261,8 +229,6 @@ function Regra({
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-500">{regra.notes}</p>
           )}
 
-          {/* A escada em uma linha: é o que a pessoa quer saber de relance —
-              quantas mensagens e em que ritmo. */}
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             {passos.map((p, i) => (
               <span key={i} className="inline-flex items-center gap-1">

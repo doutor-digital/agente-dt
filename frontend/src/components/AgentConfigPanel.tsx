@@ -18,28 +18,11 @@ import type {
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 
-/**
- * Painel de configuração do agente.
- *
- * Três blocos:
- *  1. System Prompt — textarea grande. É a "personalidade" do agente.
- *  2. Tools — toggle de habilitação + descrição editável. A descrição é o
- *     "gatilho" que o LLM lê pra decidir QUANDO chamar a tool.
- *  3. Sequências — regras declarativas "SE X ENTÃO Y" que são anexadas ao
- *     system prompt em runtime, guiando o ReAct loop.
- *
- * Lógica:
- *  - Carrega config no mount via GET /api/config.
- *  - Usa estado local como "rascunho" — só envia ao back quando o usuário
- *    clica em Salvar (evita PUT a cada keystroke).
- *  - Flag `dirty` indica mudanças não salvas.
- */
 export function AgentConfigPanel() {
   const { selectedUnitId } = useUnit();
   const [loaded, setLoaded] = useState<AgentConfigResponse | null>(null);
   const [draft, setDraft] = useState<AgentConfigInput | null>(null);
   const [saving, setSaving] = useState(false);
-  // Modo prompt único (flag na Unit, persistida na hora que muda).
   const [singleMode, setSingleMode] = useState(false);
   const [togglingMode, setTogglingMode] = useState(false);
   const [flattening, setFlattening] = useState(false);
@@ -61,7 +44,6 @@ export function AgentConfigPanel() {
         maxTokens: r.config.maxTokens,
       });
     });
-    // Carrega a flag singlePromptMode da unidade (separada do AgentConfig).
     if (selectedUnitId) {
       api.getUnit(selectedUnitId)
         .then((u) => { if (alive) setSingleMode(u.singlePromptMode); })
@@ -105,7 +87,6 @@ export function AgentConfigPanel() {
     setDraft({ ...draft, systemPrompt: loaded.defaults.systemPrompt });
   };
 
-  // Liga/desliga o modo prompt único — persiste na Unit imediatamente.
   const handleToggleSingleMode = async (v: boolean) => {
     if (!selectedUnitId) {
       toast.error('Selecione uma unidade primeiro.');
@@ -128,7 +109,6 @@ export function AgentConfigPanel() {
     }
   };
 
-  // "Centralizar no prompt": puxa a config achatada e joga no editor (não salva).
   const handleFlatten = async () => {
     if (!selectedUnitId) {
       toast.error('Selecione uma unidade primeiro.');
@@ -150,7 +130,6 @@ export function AgentConfigPanel() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-6">
-        {/* Header */}
         <div className="flex items-center justify-between sticky top-0 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
           <div>
             <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
@@ -173,7 +152,6 @@ export function AgentConfigPanel() {
           </div>
         </div>
 
-        {/* Banner de orientação — modo avançado */}
         <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
           <div className="flex items-start gap-3">
             <span className="text-2xl leading-none">⚠️</span>
@@ -197,7 +175,6 @@ export function AgentConfigPanel() {
           </div>
         </section>
 
-        {/* MODO PROMPT ÚNICO */}
         <section className="rounded-xl border border-brand-500/30 bg-brand-500/5 p-5">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
@@ -247,7 +224,6 @@ export function AgentConfigPanel() {
           </div>
         </section>
 
-        {/* SYSTEM PROMPT */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
@@ -282,13 +258,10 @@ export function AgentConfigPanel() {
           </div>
         </section>
 
-        {/* EXEMPLOS A EVITAR (flagged messages) */}
         <FlaggedExamplesSection unitId={selectedUnitId} />
 
-        {/* IDEIAS PRONTAS PRA ATIVAR */}
         <IdeasSection />
 
-        {/* MODELO */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
           <h2 className="font-semibold text-zinc-100 mb-3 flex items-center gap-2">
             <Wrench size={16} className="text-brand-300" />
@@ -340,17 +313,6 @@ export function AgentConfigPanel() {
     </div>
   );
 }
-
-// ===========================================================================
-// (RuleActionBuilder e helpers de workflow removidos — substituídos pela aba
-// "Ações"/UnitAction com pickers tipados de tag e etapa. As Sequências de
-// Automação foram aposentadas; a coluna agent_configs.workflow ainda existe
-// mas não é mais injetada no prompt.)
-// ===========================================================================
-
-// ===========================================================================
-// IdeasSection — cards informativos de funcionalidades pra construir depois
-// ===========================================================================
 
 const IDEAS: Array<{ icon: string; title: string; desc: string }> = [
   {

@@ -1,9 +1,3 @@
-// ============================================================================
-// users.controller.ts — CRUD de admins (super admin convida unit admins).
-//
-// Todas as rotas exigem SUPER_ADMIN (aplicado no router).
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
@@ -31,11 +25,9 @@ const updateSchema = z.object({
   role: roleSchema.optional(),
   unitId: z.string().cuid().nullable().optional(),
   isActive: z.boolean().optional(),
-  // Reset de senha — opcional.
   password: z.string().min(8, 'Senha precisa ter no mínimo 8 caracteres').optional(),
 });
 
-// Output: never returns email-only sensitive data. User schema é "público" por natureza.
 function publicUser(u: Awaited<ReturnType<typeof listUsers>>[number]) {
   return {
     id: u.id,
@@ -61,7 +53,6 @@ export async function createUserHandler(req: Request, res: Response): Promise<vo
     res.status(400).json({ error: 'invalid_input', issues: parsed.error.flatten() });
     return;
   }
-  // Se UNIT_ADMIN, valida que a unit existe.
   if (parsed.data.role === 'UNIT_ADMIN' && parsed.data.unitId) {
     const unit = await prisma.unit.findUnique({ where: { id: parsed.data.unitId } });
     if (!unit) {
@@ -90,7 +81,6 @@ export async function updateUserHandler(req: Request, res: Response): Promise<vo
     res.status(400).json({ error: 'invalid_input', issues: parsed.error.flatten() });
     return;
   }
-  // Evita super admin se desativar acidentalmente (e ficar sem admin).
   if (parsed.data.isActive === false && req.user?.id === id) {
     res.status(400).json({ error: 'cannot_deactivate_self' });
     return;
@@ -111,7 +101,6 @@ export async function updateUserHandler(req: Request, res: Response): Promise<vo
 
 export async function deleteUserHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
-  // Evita auto-delete (deixaria o painel sem admin se for o único SUPER_ADMIN).
   if (req.user?.id === id) {
     res.status(400).json({ error: 'cannot_delete_self' });
     return;

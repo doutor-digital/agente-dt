@@ -1,21 +1,3 @@
-// ============================================================================
-// AcoesPanel — construtor visual de regras "quando → faça" pra o agente.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// CRUD por cima de UnitAction. Cada regra tem 3 partes:
-//
-//   - Quando (condição) : descrição semântica em PT-BR — a IA decide quando aplica.
-//   - Fazer (ação)      : enum estruturado:
-//       * add_tag                     → aplica 1+ tags Kommo
-//       * transfer_with_permission    → pede ok ao cliente e transfere
-//       * transfer_without_permission → transfere direto (emergência/sentimento)
-//   - Mais (notas)      : hint extra opcional pra LLM (frases-gatilho, exceções).
-//
-// As regras são injetadas pelo backend no system prompt como seção "AÇÕES
-// CONFIGURADAS". Sem mágica de matching — é o LLM que decide quando aplicar.
-// ============================================================================
-
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -57,44 +39,30 @@ import type {
   UnitActionInput,
 } from '../types/api';
 
-/** Forma de UM passo do rascunho. Cada `kind` usa um subset dos campos. */
 interface DraftStep {
   kind: ActionKind;
-  /** add_tag */
   tags?: string[];
-  /** move_stage + move_pipeline */
   statusId?: number | null;
   pipelineId?: number | null;
   statusLabel?: string | null;
   pipelineLabel?: string | null;
-  /** transfer_* */
   includeSummary?: boolean;
-  /** summarize_to_note */
   focusHint?: string;
-  /** send_message */
   text?: string;
-  /** respond_with_intent */
   instruction?: string;
-  /** create_task */
   deadlineMinutes?: number;
   responsibleUserId?: number | null;
   responsibleUserName?: string | null;
-  /** assign_responsible */
   userId?: number | null;
   userName?: string | null;
-  /** remove_tag */
   singleTag?: string;
-  /** set_lead_value */
   price?: number;
-  /** mark_lead_status */
   status?: 'won' | 'lost';
   lossReasonId?: number | null;
   lossReasonLabel?: string | null;
-  /** pause_ai */
   moveToStageId?: number | null;
   moveToPipelineId?: number | null;
   moveToStageLabel?: string | null;
-  /** pause_in_stages — lista de etapas que pausam a IA (multi-stage). */
   pausedStages?: Array<{
     statusId: number;
     pipelineId?: number;
@@ -134,7 +102,6 @@ const EMPTY_DRAFT: DraftRule = {
   enabled: true,
 };
 
-/** Lê os passos de uma UnitAction (formato novo ou legado). */
 function readSteps(a: UnitAction): ActionStep[] {
   if (Array.isArray(a.actions) && a.actions.length > 0) return a.actions;
   if (a.actionKind) return [{ kind: a.actionKind, params: a.actionParams ?? {} }];
@@ -325,9 +292,9 @@ function isStepValid(s: DraftStep): boolean {
   if (s.kind === 'set_lead_value') return typeof s.price === 'number' && s.price >= 0;
   if (s.kind === 'mark_lead_status') return s.status === 'won' || s.status === 'lost';
   if (s.kind === 'move_pipeline') return !!s.pipelineId && s.pipelineId > 0;
-  if (s.kind === 'pause_ai') return true; // pause_ai é sempre válido, etapa é opcional
+  if (s.kind === 'pause_ai') return true;
   if (s.kind === 'pause_in_stages') return (s.pausedStages?.length ?? 0) > 0;
-  return true; // transfer_* e summarize_to_note são válidos sem params extras
+  return true;
 }
 
 function isValid(d: DraftRule): boolean {
@@ -406,18 +373,9 @@ const KIND_LABEL: Record<ActionKind, { label: string; icon: typeof Tag; color: s
   },
 };
 
-/**
- * Renderiza o painel de ações em dois modos:
- *  - "unit"   (default): ações da Unit selecionada. Endpoints /units/:id/actions.
- *  - "global": regras que valem pra TODAS as units. Endpoints /global-actions.
- *
- * Visualmente só muda o título/subtítulo + dispensa exigência de
- * `selectedUnitId`. A UI de cards, editor e CRUD é a mesma.
- */
 export interface AcoesPanelProps {
   scope?: 'unit' | 'global';
 }
-
 
 export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
   const { selectedUnitId } = useUnit();
@@ -513,7 +471,6 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-7xl mx-auto p-6 space-y-6">
-        {/* Header — faixa com vidro + glow sutil, ícone em chip e contagem */}
         <div className="relative overflow-hidden rounded-2xl ring-1 ring-white/10 bg-gradient-to-br from-zinc-900/70 to-zinc-900/20 backdrop-blur p-6">
           <div
             className="pointer-events-none absolute -top-20 -right-12 w-64 h-64 rounded-full blur-3xl opacity-20"
@@ -622,7 +579,6 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
           />
         )}
 
-        {/* Modal de edição/criação */}
         {(creating || editing) && (
           <ActionEditor
             initial={editing ? actionToDraft(editing) : EMPTY_DRAFT}
@@ -638,11 +594,6 @@ export function AcoesPanel({ scope = 'unit' }: AcoesPanelProps = {}) {
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Card de uma ação na lista.
-// ---------------------------------------------------------------------------
-
 
 function RowControls({
   action,
@@ -677,19 +628,6 @@ function RowControls({
 
 type ActHandler = (a: UnitAction) => void;
 
-// ===========================================================================
-// AÇÕES — WORKFLOW (linguagem visual do n8n)
-//
-// Cada regra vira uma esteira: nó de GATILHO (o "quando", canto esquerdo
-// arredondado como no n8n) → nós de AÇÃO ligados por conectores.
-//
-// Por que conector em CSS e não SVG: os nós ficam todos na mesma linha e
-// quebram juntos, então a ligação é sempre um segmento horizontal. Curva de
-// Bézier exigiria medir posição de cada nó no layout e recalcular no resize —
-// custo alto pra um traço que, aqui, é sempre reto.
-// ===========================================================================
-
-/** Resumo curto do passo, pra caber sob o nó. Vazio quando não há parâmetro. */
 function stepDetail(step: ActionStep): string | null {
   const p = (step.params ?? {}) as Record<string, unknown>;
   if (step.kind === 'add_tag' || step.kind === 'remove_tag') {
@@ -761,7 +699,6 @@ function WorkflowRule({
       )}
       style={{ animationDelay: `${index * 50}ms` }}
     >
-      {/* Barra do "workflow": nome, estado e controles */}
       <header className="flex items-center gap-2.5 px-3.5 py-2 border-b border-zinc-800/80">
         <span
           className={clsx('w-1.5 h-1.5 rounded-full shrink-0', off ? 'bg-zinc-600' : 'bg-emerald-400')}
@@ -778,7 +715,6 @@ function WorkflowRule({
         </span>
       </header>
 
-      {/* A esteira */}
       <div className="overflow-x-auto">
         <div className="flex items-start gap-0 px-4 py-5 min-w-max">
           <TriggerNode text={action.conditionDescription} onClick={onEdit} />
@@ -794,7 +730,6 @@ function WorkflowRule({
   );
 }
 
-/** Conector entre dois nós — traço + ponta de seta. */
 function Connector() {
   return (
     <span aria-hidden className="flex items-center shrink-0 mt-8 w-9">
@@ -804,7 +739,6 @@ function Connector() {
   );
 }
 
-/** Nó de gatilho — canto esquerdo arredondado, como o trigger do n8n. */
 function TriggerNode({ text, onClick }: { text: string; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} className="shrink-0 w-40 text-left group/n">
@@ -831,7 +765,6 @@ function TriggerNode({ text, onClick }: { text: string; onClick: () => void }) {
   );
 }
 
-/** Nó de ação — quadrado arredondado, ícone e cor vindos do KIND_LABEL. */
 function StepNode({ step, onClick }: { step: ActionStep; onClick: () => void }) {
   const meta = KIND_LABEL[step.kind] ?? KIND_LABEL.add_tag;
   const Icon = meta.icon;
@@ -862,7 +795,6 @@ function StepNode({ step, onClick }: { step: ActionStep; onClick: () => void }) 
   );
 }
 
-// V5 — Lista accordion minimalista
 function ActionEditor({
   initial,
   isEditing,
@@ -876,7 +808,6 @@ function ActionEditor({
 }) {
   const [draft, setDraft] = useState<DraftRule>(initial);
   const [saving, setSaving] = useState(false);
-  // Lê metadados do Kommo do cache compartilhado — não refetch a cada abertura.
   const {
     tags: tagsData,
     pipelines: pipelinesData,
@@ -896,7 +827,6 @@ function ActionEditor({
     0,
   );
 
-  // Lista plana de etapas pro dropdown — agrupado por funil no `<optgroup>`.
   const pipelinesForSelect = useMemo(() => {
     return (pipelinesData?.pipelines ?? []).filter((p) => !p.isArchive);
   }, [pipelinesData]);
@@ -924,8 +854,6 @@ function ActionEditor({
         </div>
 
         <div className="p-5 space-y-4">
-          {/* Diagnóstico Kommo — mostra contagem real e botão de recarregar.
-              Útil pra distinguir "lista vazia da Kommo" vs "erro de fetch". */}
           <div
             className={clsx(
               'rounded-md text-[11px] px-3 py-2 flex items-center gap-2 border',
@@ -971,7 +899,6 @@ function ActionEditor({
             </button>
           </div>
 
-          {/* Quando */}
           <div>
             <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1.5 block">
               Quando
@@ -987,7 +914,6 @@ function ActionEditor({
             />
           </div>
 
-          {/* Fazer — lista de steps. Cada step tem seletor de tipo + params próprios. */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-[12px] font-medium text-zinc-300 block">
@@ -1036,7 +962,6 @@ function ActionEditor({
             </div>
           </div>
 
-          {/* Mais */}
           <div>
             <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-1.5 block">
               Mais (opcional)
@@ -1050,7 +975,6 @@ function ActionEditor({
             />
           </div>
 
-          {/* Enabled toggle */}
           <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
             <input
               type="checkbox"
@@ -1085,11 +1009,6 @@ function ActionEditor({
   );
 }
 
-// ---------------------------------------------------------------------------
-// TagsPicker — multi-select de tags existentes na conta Kommo + entrada
-// livre pra criar tags novas (a tool aplicar_tag aceita string arbitrária).
-// ---------------------------------------------------------------------------
-
 function TagsPicker({
   selected,
   onChange,
@@ -1106,10 +1025,8 @@ function TagsPicker({
   const [customInput, setCustomInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Set pra checagem rápida + preservação de ordem do selected.
   const selectedSet = useMemo(() => new Set(selected.map((s) => s.toLowerCase())), [selected]);
 
-  // Filtra tags por substring case-insensitive do nome.
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return available;
@@ -1142,7 +1059,6 @@ function TagsPicker({
         Tags a aplicar
       </label>
 
-      {/* Chips das selecionadas */}
       {selected.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {selected.map((t) => (
@@ -1164,7 +1080,6 @@ function TagsPicker({
         </div>
       )}
 
-      {/* Busca — só aparece se tem o que filtrar */}
       {!loading && !error && available.length > 5 && (
         <div className="relative">
           <input
@@ -1187,7 +1102,6 @@ function TagsPicker({
         </div>
       )}
 
-      {/* Picker da Kommo */}
       <div className="rounded-md border border-zinc-800 bg-zinc-950/40 max-h-44 overflow-y-auto">
         {loading && (
           <div className="px-3 py-2 text-[11px] text-zinc-500 inline-flex items-center gap-2">
@@ -1245,7 +1159,6 @@ function TagsPicker({
         )}
       </div>
 
-      {/* Custom input (sempre disponível, incluindo no fallback de erro) */}
       <div className="flex items-center gap-2">
         <input
           type="text"
@@ -1272,10 +1185,6 @@ function TagsPicker({
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// StagePicker — dropdown de etapas agrupadas por funil (vindas da Kommo).
-// ---------------------------------------------------------------------------
 
 function StagePicker({
   selectedStatusId,
@@ -1326,7 +1235,6 @@ function StagePicker({
               onChange(null, null, null);
               return;
             }
-            // Acha o pipeline+label correspondente.
             for (const p of pipelines) {
               const s = p.statuses.find((x) => x.id === id);
               if (s) {
@@ -1361,11 +1269,6 @@ function StagePicker({
   );
 }
 
-// ---------------------------------------------------------------------------
-// StepEditor — UMA ação dentro da regra. Tipo + params + botão de remover.
-// Usado pelo ActionEditor que renderiza N StepEditors numa lista.
-// ---------------------------------------------------------------------------
-
 function StepEditor({
   index,
   step,
@@ -1395,7 +1298,6 @@ function StepEditor({
 }) {
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-3 space-y-3">
-      {/* Header com índice + remover */}
       <div className="flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
           Ação #{index + 1}
@@ -1412,7 +1314,6 @@ function StepEditor({
         )}
       </div>
 
-      {/* Seletor de tipo */}
       <div className="grid grid-cols-2 gap-2">
         {(Object.keys(KIND_LABEL) as ActionKind[]).map((k) => {
           const meta = KIND_LABEL[k];
@@ -1437,7 +1338,6 @@ function StepEditor({
         })}
       </div>
 
-      {/* Params por tipo */}
       {step.kind === 'add_tag' && (
         <TagsPicker
           selected={step.tags ?? []}
@@ -1735,11 +1635,6 @@ function StepEditor({
   );
 }
 
-// ---------------------------------------------------------------------------
-// MultiStagePicker — permite selecionar VÁRIAS etapas (de qualquer funil) e
-// listá-las como chips removíveis. Usado pelo kind `pause_in_stages`.
-// ---------------------------------------------------------------------------
-
 function MultiStagePicker({
   selected,
   onChange,
@@ -1756,7 +1651,6 @@ function MultiStagePicker({
   error: string | null;
 }) {
   function addStage(statusId: number) {
-    // Se já tem essa stage, no-op.
     if (selected.some((s) => s.statusId === statusId)) return;
     for (const p of pipelines) {
       const st = p.statuses.find((x) => x.id === statusId);
@@ -1798,7 +1692,6 @@ function MultiStagePicker({
         </div>
       )}
 
-      {/* Chips das etapas selecionadas */}
       {selected.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {selected.map((s) => (
@@ -1821,14 +1714,12 @@ function MultiStagePicker({
         </div>
       )}
 
-      {/* Seletor pra adicionar mais */}
       {!loading && !error && pipelines.length > 0 && (
         <select
           value=""
           onChange={(e) => {
             const id = e.target.value ? Number(e.target.value) : null;
             if (id) addStage(id);
-            // Reset visual do select pra "—".
             e.currentTarget.value = '';
           }}
           className="w-full bg-zinc-950/60 ring-1 ring-zinc-800 focus:ring-violet-500/40 rounded-md px-3 py-2 text-sm text-zinc-200 outline-none transition"
@@ -1856,10 +1747,6 @@ function MultiStagePicker({
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Picker reusável: usuário do Kommo (pra create_task + assign_responsible).
-// ---------------------------------------------------------------------------
 
 function UserPickerInline({
   label,
@@ -1910,10 +1797,6 @@ function UserPickerInline({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Picker reusável: motivo de perda (loss_reason).
-// ---------------------------------------------------------------------------
-
 function LossReasonPicker({
   lossReasonsData,
   loading,
@@ -1961,10 +1844,6 @@ function LossReasonPicker({
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Picker reusável: single-tag (pra remove_tag).
-// ---------------------------------------------------------------------------
 
 function SingleTagPicker({
   selected,
@@ -2059,10 +1938,6 @@ function SingleTagPicker({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Picker reusável: pipeline+status agrupado (pra move_pipeline).
-// ---------------------------------------------------------------------------
-
 function PipelinePicker({
   pipelines,
   loading,
@@ -2153,5 +2028,3 @@ function PipelinePicker({
   );
 }
 
-
-/** Formatador humano de minutos pra rótulo curto (chip do card). */

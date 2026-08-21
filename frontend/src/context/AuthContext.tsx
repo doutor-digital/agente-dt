@@ -1,12 +1,3 @@
-// ============================================================================
-// AuthContext — sessão do user logado.
-//
-// Estados:
-//   undefined  → ainda checando /auth/me (mostra Splash)
-//   null       → não autenticado (mostra <Login />)
-//   AuthUser   → autenticado (mostra o app)
-// ============================================================================
-
 import {
   createContext,
   useCallback,
@@ -53,12 +44,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Boot: pega o user atual.
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  // Escuta o evento global do interceptor 401 — zera o user e força login.
   useEffect(() => {
     const handler = () => setUser(null);
     window.addEventListener('auth:expired', handler);

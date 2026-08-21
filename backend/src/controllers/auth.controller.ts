@@ -1,12 +1,3 @@
-// ============================================================================
-// auth.controller.ts — Endpoints de login/logout/me.
-//
-// FLUXO
-//   1. POST /api/auth/login   { email, password } → seta cookie de sessão
-//   2. POST /api/auth/logout                      → limpa cookie
-//   3. GET  /api/auth/me                          → eco do user atual
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { env } from '../lib/env.js';
@@ -22,10 +13,6 @@ const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
 });
-
-// ---------------------------------------------------------------------------
-// POST /api/auth/login
-// ---------------------------------------------------------------------------
 
 export async function loginHandler(req: Request, res: Response): Promise<void> {
   const parsed = loginSchema.safeParse(req.body);
@@ -53,7 +40,6 @@ export async function loginHandler(req: Request, res: Response): Promise<void> {
     });
   } catch (err) {
     if (err instanceof AuthError) {
-      // Não vaze diferença entre "email não existe" e "senha errada".
       const expose: AuthError['code'][] = ['account_disabled', 'no_password_set'];
       const code = expose.includes(err.code) ? err.code : 'invalid_credentials';
       res.status(401).json({ error: code });
@@ -64,18 +50,10 @@ export async function loginHandler(req: Request, res: Response): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// POST /api/auth/logout
-// ---------------------------------------------------------------------------
-
 export function logoutHandler(_req: Request, res: Response): void {
   res.clearCookie(env.AUTH_COOKIE_NAME, sessionCookieOptions());
   res.status(204).end();
 }
-
-// ---------------------------------------------------------------------------
-// GET /api/auth/me
-// ---------------------------------------------------------------------------
 
 export function meHandler(req: Request, res: Response): void {
   if (!req.user) {

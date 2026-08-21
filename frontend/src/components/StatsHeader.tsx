@@ -1,13 +1,6 @@
 import { Activity, CheckCircle2, Clock, Cpu, DollarSign, XCircle, Zap } from 'lucide-react';
 import type { Stats } from '../types/api';
 
-/**
- * Faixa de KPIs do topo — execuções, qualidade, custo.
- *
- * Formato "stat tile" dos consoles modernos: rótulo pequeno em cima, número
- * grande embaixo, ícone discreto no canto. A cor entra só no ícone — o número
- * fica neutro pra a linha inteira ser comparável de relance.
- */
 export function StatsHeader({ stats }: { stats: Stats | null }) {
   const cards = [
     {

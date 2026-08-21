@@ -1,5 +1,3 @@
-// ThemeToggle — alterna claro⇄escuro. O ícone mostra o tema que você VAI
-// ativar (padrão de todo console), não o atual.
 import { Moon, Sun } from 'lucide-react';
 import clsx from 'clsx';
 import { useTheme } from '../context/ThemeContext';

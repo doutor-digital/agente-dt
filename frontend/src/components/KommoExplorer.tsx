@@ -1,18 +1,3 @@
-// ============================================================================
-// KommoExplorer — visualiza e seleciona campos/salesbots/etapas do Kommo.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Substitui os NumberField manuais ("digite o ID") por dropdowns com os
-// nomes reais. Carrega os 3 datasets em paralelo (campos, salesbots,
-// pipelines) sob demanda. Erros do Kommo (401, 404) são exibidos
-// claramente — assim o usuário vê o motivo sem precisar abrir DevTools.
-//
-// O componente é "controlado": recebe os IDs atuais via props e dispara
-// `onChange` quando o usuário seleciona algo. O save continua sendo no
-// botão "Salvar" do UnitsPanel pai.
-// ============================================================================
-
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Check, CheckCircle2, ChevronLeft, ChevronRight, Loader2, RefreshCw, Save, Wand2, XCircle } from 'lucide-react';
 import clsx from 'clsx';
@@ -37,7 +22,6 @@ interface Props {
   onPausedFieldChange: (id: number | null) => void;
   onWonStatusIdsChange: (ids: number[]) => void;
   onAllowedStatusIdsChange: (ids: number[]) => void;
-  /** Salva a Unit inteira no banco (mesma ação do botão "Salvar" do topo). */
   onSave: () => Promise<void>;
   saving?: boolean;
 }
@@ -71,8 +55,6 @@ export function KommoExplorer(props: Props) {
   }, [unitId]);
 
   useEffect(() => {
-    // Reset ao trocar de Unit + carrega AUTOMÁTICO (sem precisar clicar
-    // "Carregar do Kommo"). O botão vira só "Recarregar" pra atualizar na mão.
     setFields(null);
     setBots(null);
     setPipelines(null);
@@ -142,7 +124,6 @@ export function KommoExplorer(props: Props) {
         title="Campos da IA"
         subtitle="Onde a IA escreve a resposta, o checkbox que pausa, e o bot que entrega. Preencha por ID (Quick Fill) ou escolha nos dropdowns abaixo."
       >
-      {/* Quick Fill por ID — atalho direto sem depender dos dropdowns/listagem */}
       <QuickFillPanel
         replyFieldId={props.replyFieldId}
         pausedFieldId={props.pausedFieldId}
@@ -157,7 +138,6 @@ export function KommoExplorer(props: Props) {
         disabled={!unitId}
       />
 
-      {/* Reply Field (textarea/text) */}
       <KommoSelect
         label="Resposta IA (campo de texto)"
         hint='Campo onde o agente escreve a resposta. O Salesbot lê daqui e envia ao paciente.'
@@ -168,7 +148,6 @@ export function KommoExplorer(props: Props) {
         error={fields && !fields.ok ? fields : null}
       />
 
-      {/* Paused Field (checkbox) */}
       <KommoSelect
         label="IA Pausada (checkbox)"
         hint='Checkbox que, marcado, pausa o agente. Operador humano clica pra assumir.'
@@ -179,9 +158,6 @@ export function KommoExplorer(props: Props) {
         error={fields && !fields.ok ? fields : null}
       />
 
-      {/* Salesbot — listagem 404 em algumas contas Kommo. Mostra input manual
-          como fallback, porque o disparo (POST /salesbot/{id}/run) funciona
-          mesmo sem a API de listagem. */}
       {bots && !bots.ok && bots.kommoStatus === 404 ? (
         <ManualIdField
           label="Salesbot ID"
@@ -210,7 +186,6 @@ export function KommoExplorer(props: Props) {
         title="Etapas"
         subtitle="Quais etapas contam como conversão (Ganho) e em quais a IA responde."
       >
-      {/* Pipelines + Won statuses */}
       <div>
         <div className="text-[13px] font-semibold text-zinc-100 mb-1">
           Etapas de "Ganho/Convertido"
@@ -269,7 +244,6 @@ export function KommoExplorer(props: Props) {
         )}
       </div>
 
-      {/* Pipelines + etapas permitidas (allowlist de resposta da IA) */}
       <div>
         <div className="text-[13px] font-semibold text-zinc-100 mb-1">
           Etapas em que a IA responde
@@ -331,10 +305,8 @@ export function KommoExplorer(props: Props) {
 
       {step === 2 && (
       <>
-      {/* Validation result */}
       {validation && <ValidationResults result={validation} />}
 
-      {/* Botão de salvar dedicado — persiste tudo no banco. */}
       <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 mt-2">
         <div className="flex items-start gap-3">
           <Save className="text-emerald-400 mt-0.5 shrink-0" size={16} />
@@ -383,7 +355,6 @@ export function KommoExplorer(props: Props) {
       </>
       )}
 
-      {/* Navegação do wizard */}
       <div className="flex items-center justify-between border-t border-zinc-800/70 pt-4">
         <button
           type="button"
@@ -414,11 +385,6 @@ export function KommoExplorer(props: Props) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Subcomponentes
-// ---------------------------------------------------------------------------
-
-/** Card de seção — dá hierarquia e respiro ao painel (antes era lista plana). */
 function Section({
   title,
   subtitle,
@@ -438,7 +404,6 @@ function Section({
   );
 }
 
-// ── ESTILO DOS CAMPOS — um tema único, limpo e legível ─────────────────────
 const FIELD = {
   label: 'block text-[13px] font-semibold text-zinc-100 mb-2',
   input:
@@ -448,7 +413,6 @@ function fieldStyle() {
   return FIELD;
 }
 
-// ── STEPPER DO WIZARD — cabeçalho com passos, progresso e navegação clicável ─
 function WizardHeader({
   steps,
   current,
@@ -555,7 +519,6 @@ function KommoSelect({
             {o.label}
           </option>
         ))}
-        {/* Se o valor atual não está na lista (ex: ainda não carregou os dados), mostra ele assim mesmo */}
         {value && !options.some((o) => o.id === value) && (
           <option value={value}>#{value} (atual)</option>
         )}
@@ -770,7 +733,6 @@ function ErrorBanner({ envelope }: { envelope: KommoErrorEnvelope }) {
 
 function formatKommoBody(body: unknown): string | null {
   if (!body || typeof body !== 'object') return null;
-  // Kommo costuma devolver { title, type, status, detail, "validation-errors": [...] }
   const b = body as Record<string, unknown>;
   const lines: string[] = [];
   if (typeof b.detail === 'string') lines.push(`detail: ${b.detail}`);
@@ -823,10 +785,6 @@ function ValidationResults({ result }: { result: KommoValidateResponse }) {
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function extractErrorBody<T>(err: unknown, _kind: string): T {
   const e = err as { response?: { data?: unknown }; message?: string };

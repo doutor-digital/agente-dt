@@ -1,0 +1,488 @@
+{
+  "name": "TMP — Inventário CTWA por unidade",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ctwa-inventario-tmp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh",
+      "name": "Disparar",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "ctwa-inventario-tmp"
+    },
+    {
+      "parameters": {
+        "url": "https://attivacorpoementeitz.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-imperatriz",
+      "name": "Campos Imperatriz",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "MnPGiOOvaSPm9HgC",
+          "name": "Kommo Imperatriz"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://doutorherniaacailandia.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-acailandia",
+      "name": "Campos Açailândia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "DqLADDQI9UEv6NiF",
+          "name": "Kommo Açailândia"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://araguainadoutorhernia.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-araguaina",
+      "name": "Campos Araguaína",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        580,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "QzoiphPGyGWg5dGQ",
+          "name": "Kommo Araguaína"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://doutorherniabalsas.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-balsas",
+      "name": "Campos Balsas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        760,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "7kVS4ZItRvWsZ9Rc",
+          "name": "Kommo Balsas"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://doutorherniacanaa.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-canaa",
+      "name": "Campos Canaã",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "8W38EQwnQoHBaWtM",
+          "name": "Kommo Canaã"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://marabadoutorhernia.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-maraba",
+      "name": "Campos Marabá",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "OlXyNeejUa9C25Lq",
+          "name": "Kommo Marabá"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://parauapebasdoutorhernia.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-parauapebas",
+      "name": "Campos Parauapebas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "uDAqF7NwhVpJaVS0",
+          "name": "Kommo Parauapebas"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://doutorherniaporto.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-porto",
+      "name": "Campos Porto Nacional",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1480,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "0pmkejndWKuiPTZC",
+          "name": "Kommo Porto Nacional"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://drherniaserra.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-serra",
+      "name": "Campos Serra",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1660,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "q2R9WqjWa9HCGkH4",
+          "name": "Kommo Serra"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://institutotraumakommon.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "q-trauma",
+      "name": "Campos Instituto Trauma",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1840,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "IDrv4gZyutIINGMw",
+          "name": "Kommo Trauma"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const UNIDADES = [{\"slug\":\"imperatriz\",\"nome\":\"Imperatriz\",\"subdominio\":\"attivacorpoementeitz\"},{\"slug\":\"acailandia\",\"nome\":\"Açailândia\",\"subdominio\":\"doutorherniaacailandia\"},{\"slug\":\"araguaina\",\"nome\":\"Araguaína\",\"subdominio\":\"araguainadoutorhernia\"},{\"slug\":\"balsas\",\"nome\":\"Balsas\",\"subdominio\":\"doutorherniabalsas\"},{\"slug\":\"canaa\",\"nome\":\"Canaã\",\"subdominio\":\"doutorherniacanaa\"},{\"slug\":\"maraba\",\"nome\":\"Marabá\",\"subdominio\":\"marabadoutorhernia\"},{\"slug\":\"parauapebas\",\"nome\":\"Parauapebas\",\"subdominio\":\"parauapebasdoutorhernia\"},{\"slug\":\"porto\",\"nome\":\"Porto Nacional\",\"subdominio\":\"doutorherniaporto\"},{\"slug\":\"serra\",\"nome\":\"Serra\",\"subdominio\":\"drherniaserra\"},{\"slug\":\"trauma\",\"nome\":\"Instituto Trauma\",\"subdominio\":\"institutotraumakommon\"}];\nconst CAMPOS = [{\"chave\":\"campanha\",\"nome\":\"⌂ Campanha\",\"tipo\":\"text\"},{\"chave\":\"conjunto\",\"nome\":\"⌂ Conjunto de anúncio\",\"tipo\":\"text\"},{\"chave\":\"anuncio\",\"nome\":\"⌂ Anúncio (ad)\",\"tipo\":\"text\"},{\"chave\":\"anuncioId\",\"nome\":\"⌂ ID do anúncio\",\"tipo\":\"text\"},{\"chave\":\"headline\",\"nome\":\"⌂ Título do anúncio\",\"tipo\":\"text\"},{\"chave\":\"ctwaClid\",\"nome\":\"⌂ ctwa_clid\",\"tipo\":\"text\"},{\"chave\":\"origemUrl\",\"nome\":\"⌂ URL de origem do clique\",\"tipo\":\"url\"},{\"chave\":\"plataforma\",\"nome\":\"⌂ Plataforma de origem\",\"tipo\":\"text\"},{\"chave\":\"imagemAnuncio\",\"nome\":\"⌂ Imagem do anúncio\",\"tipo\":\"url\"},{\"chave\":\"ultimoAnuncio\",\"nome\":\"⌂ Último anúncio\",\"tipo\":\"text\"},{\"chave\":\"cliques\",\"nome\":\"⌂ Cliques no anúncio\",\"tipo\":\"numeric\"},{\"chave\":\"primeiroContato\",\"nome\":\"◷ Data do primeiro contato\",\"tipo\":\"date_time\"},{\"chave\":\"origemTipo\",\"nome\":\"⚑ Origem\",\"tipo\":\"select\"},{\"chave\":\"utmSource\",\"nome\":\"utm_source\",\"tipo\":\"tracking_data\"},{\"chave\":\"utmMedium\",\"nome\":\"utm_medium\",\"tipo\":\"tracking_data\"},{\"chave\":\"utmCampaign\",\"nome\":\"utm_campaign\",\"tipo\":\"tracking_data\"},{\"chave\":\"utmContent\",\"nome\":\"utm_content\",\"tipo\":\"tracking_data\"},{\"chave\":\"utmTerm\",\"nome\":\"utm_term\",\"tipo\":\"tracking_data\"}];\nconst OPCOES = [\"Meta-Facebook\",\"Meta-Instagram\",\"Org-Facebook\",\"Org-Instagram\"];\n\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\n// Comparar por nome exige normalizar: acento, caixa e os prefixos de simbolo\n// (⌂ ⚑ ◷) variam entre contas replicadas em epocas diferentes.\nfunction normalizar(s) {\n  return String(s || '')\n    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9_]+/gi, ' ')\n    .trim().toLowerCase();\n}\n\nconst relatorio = {};\nfor (const u of UNIDADES) {\n  const resp = corpo($('Campos ' + u.nome).first().json);\n  const campos = resp?._embedded?.custom_fields || [];\n  if (!campos.length) {\n    relatorio[u.slug] = { erro: resp?.detail || resp?.title || resp?.message || 'sem campos / falha de acesso' };\n    continue;\n  }\n  const porNome = new Map(campos.map((c) => [normalizar(c.name), c]));\n  const achados = {};\n  const faltando = [];\n  for (const def of CAMPOS) {\n    const c = porNome.get(normalizar(def.nome));\n    if (c) achados[def.chave] = { id: c.id, tipo: c.type, nome: c.name };\n    else faltando.push(def.chave);\n  }\n  const origem = porNome.get(normalizar('⚑ Origem'));\n  const opcoesOrigem = (origem?.enums || []).map((e) => e.value);\n  relatorio[u.slug] = {\n    total: campos.length,\n    achados,\n    faltando,\n    opcoesOrigemFaltando: origem ? OPCOES.filter((o) => !opcoesOrigem.includes(o)) : OPCOES,\n    origemEhSelect: origem ? origem.type === 'select' : null,\n  };\n}\nreturn [{ json: relatorio }];"
+      },
+      "id": "res",
+      "name": "Resumo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "resp",
+      "name": "Responder",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2200,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Disparar": {
+      "main": [
+        [
+          {
+            "node": "Campos Imperatriz",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Imperatriz": {
+      "main": [
+        [
+          {
+            "node": "Campos Açailândia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Açailândia": {
+      "main": [
+        [
+          {
+            "node": "Campos Araguaína",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Araguaína": {
+      "main": [
+        [
+          {
+            "node": "Campos Balsas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Balsas": {
+      "main": [
+        [
+          {
+            "node": "Campos Canaã",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Canaã": {
+      "main": [
+        [
+          {
+            "node": "Campos Marabá",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Marabá": {
+      "main": [
+        [
+          {
+            "node": "Campos Parauapebas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Parauapebas": {
+      "main": [
+        [
+          {
+            "node": "Campos Porto Nacional",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Porto Nacional": {
+      "main": [
+        [
+          {
+            "node": "Campos Serra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Serra": {
+      "main": [
+        [
+          {
+            "node": "Campos Instituto Trauma",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Campos Instituto Trauma": {
+      "main": [
+        [
+          {
+            "node": "Resumo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumo": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  }
+}

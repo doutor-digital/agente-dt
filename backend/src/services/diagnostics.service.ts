@@ -1,16 +1,3 @@
-// ============================================================================
-// diagnostics.service.ts — o raio-x do sistema numa chamada.
-//
-// Nasceu de um incidente real: a conta da OpenAI ficou sem crédito e derrubou
-// juiz, memória de longo prazo, transcrição de áudio, leitura de imagem e a
-// busca na base de conhecimento — TUDO em silêncio, porque o atendimento em si
-// roda na Anthropic e continuou respondendo. Levou horas de SSH e leitura de
-// log pra achar. Este módulo responde àquela pergunta em segundos.
-//
-// A regra aqui é: NÃO diga "de pé", PROVE. Cada checagem faz a chamada mais
-// barata possível contra a dependência real e reporta o que dá pra agir.
-// ============================================================================
-
 import { prisma } from '../lib/prisma.js';
 import { env } from '../lib/env.js';
 
@@ -19,9 +6,7 @@ export type Estado = 'ok' | 'alerta' | 'falha' | 'nao_configurado';
 export interface Checagem {
   nome: string;
   estado: Estado;
-  /** Frase curta, em português, do que está acontecendo. */
   detalhe: string;
-  /** O que fazer se não estiver ok. */
   acao?: string;
   latenciaMs?: number;
 }
@@ -32,7 +17,6 @@ async function cronometrar<T>(fn: () => Promise<T>): Promise<[T, number]> {
   return [r, Date.now() - t0];
 }
 
-/** Banco: a query mais barata que prova que dá pra ler de verdade. */
 async function checarBanco(): Promise<Checagem> {
   try {
     const [, ms] = await cronometrar(() => prisma.$queryRaw`SELECT 1`);
@@ -52,16 +36,6 @@ async function checarBanco(): Promise<Checagem> {
   }
 }
 
-/**
- * OpenAI: a checagem mais importante do arquivo. Distingue os três casos que
- * confundem: chave ausente, chave inválida e — o que nos pegou — chave válida
- * SEM CRÉDITO.
- *
- * CUSTO ZERO, e isso é deliberado: usa GET /v1/models, que é metadado e NÃO
- * consome token. NÃO troque por uma chamada de completion "só pra testar" —
- * viraria custo por diagnóstico, no exato sistema onde o crédito já acabou uma
- * vez. O 429 aparece igual no /models quando a conta está sem saldo.
- */
 async function checarOpenAI(): Promise<Checagem> {
   const key = env.OPENAI_API_KEY;
   if (!key) {
@@ -108,7 +82,6 @@ async function checarOpenAI(): Promise<Checagem> {
   }
 }
 
-/** Anthropic: é quem atende o paciente na maioria das unidades. */
 async function checarAnthropic(): Promise<Checagem> {
   const unit = await prisma.unit.findFirst({
     where: { anthropicApiKey: { not: null }, llmProvider: 'anthropic' },
@@ -141,7 +114,6 @@ async function checarAnthropic(): Promise<Checagem> {
   }
 }
 
-/** O juiz alimenta o painel de qualidade por versão de prompt. */
 async function checarJuiz(): Promise<Checagem> {
   const [total, recentes] = await Promise.all([
     prisma.conversationEvaluation.count(),
@@ -165,7 +137,6 @@ async function checarJuiz(): Promise<Checagem> {
   };
 }
 
-/** Entrega ao paciente: o dado que diz se a IA está de fato falando. */
 async function checarAtendimento(): Promise<Checagem> {
   const desde = new Date(Date.now() - 24 * 3_600_000);
   const [msgs, erros] = await Promise.all([
@@ -189,7 +160,6 @@ async function checarAtendimento(): Promise<Checagem> {
   };
 }
 
-/** Unidades sem o básico configurado não atendem, e isso passa despercebido. */
 async function checarUnidades(): Promise<Checagem> {
   const units = await prisma.unit.findMany({
     select: { name: true, kommoAccessToken: true, kommoReplyFieldId: true, llmProvider: true, anthropicApiKey: true, openaiApiKey: true },
@@ -218,7 +188,6 @@ export interface Diagnostico {
   geradoEm: string;
 }
 
-/** Roda tudo em paralelo — o diagnóstico inteiro custa o tempo do mais lento. */
 export async function rodarDiagnostico(): Promise<Diagnostico> {
   const checagens = await Promise.all([
     checarBanco(),

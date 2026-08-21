@@ -1,19 +1,3 @@
-// ============================================================================
-// DashboardPanel — painel executivo do agente.
-//
-// LÓGICA VISUAL
-// -------------
-// Header de página (título à esquerda, período + refresh à direita) e grid
-// masonry de 4 colunas. O fundo vem do `app-ambient` do shell — nada de foto
-// de stock. Hero card = "Conversas respondidas" (número grande + lista por
-// canal); donut "Distribuição de leads" e funil ocupam linha cheia. Charts em
-// SVG inline (sem dependência externa).
-//
-// DADOS
-// -----
-// Mesma fonte: GET /units/:id/dashboard?days=N. Sem mudança no backend.
-// ============================================================================
-
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
@@ -91,8 +75,6 @@ export function DashboardPanel() {
 
   const unit = units.find((u) => u.id === selectedUnitId);
 
-  // "Todas as unidades" (nenhuma selecionada) → visão geral agregada, com
-  // clique pra entrar em cada unidade.
   if (!selectedUnitId) {
     return <AllUnitsDashboard units={units} onSelectUnit={setSelectedUnitId} />;
   }
@@ -102,8 +84,6 @@ export function DashboardPanel() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-350 mx-auto p-6 space-y-6">
-        {/* Header da página — título à esquerda, controles à direita. O fundo
-            fica por conta do `app-ambient` do shell (nada de foto de stock). */}
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0">
             <div className="eyebrow mb-1.5">Painel do agente</div>
@@ -116,7 +96,6 @@ export function DashboardPanel() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {/* Segmented control do período. */}
             <div className="flex items-center gap-0.5 p-0.5 rounded-lg border border-zinc-800 bg-zinc-900/60">
               {PERIOD_OPTIONS.map((opt) => (
                 <button
@@ -146,8 +125,6 @@ export function DashboardPanel() {
           </div>
         </div>
 
-        {/* HERO — A jornada da Sofia: o funil real do paciente, conectado.
-            É a tese da página (não "mensagens recebidas", que é vaidade). */}
         <SofiaJourney data={data} periodLabel={periodLabel} />
 
         {error && (
@@ -160,19 +137,9 @@ export function DashboardPanel() {
           </div>
         )}
 
-        {/* GRID PRINCIPAL — layout masonry 4 cols
-            ┌─────────────────┬───────┬───────┐
-            │                 │ Conv  │ S/resp│
-            │   HERO          ├───────┼───────┤
-            │  (Conversas)    │ Tempo │ Pico  │
-            │                 ├───────┴───────┤
-            │                 │ Donut Funil   │
-            └─────────────────┴───────────────┘ */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[minmax(140px,auto)]">
-          {/* HERO — Conversas respondidas + lista de canais (col-span 2, row-span 2) */}
           <HeroCard data={data} loading={loading} />
 
-          {/* KPIs em coluna lateral */}
           <BigStatCard
             label="Leads únicos"
             value={data?.kpis.uniqueLeads ?? 0}
@@ -216,15 +183,11 @@ export function DashboardPanel() {
             icon={<Clock4 size={16} />}
           />
 
-          {/* Donut + legend — col-span 2, row-span 2 */}
           <FunnelDonut data={data} />
         </div>
 
-        {/* Sparkline — volume diário de mensagens + conversas */}
         <SparklineCard data={data} loading={loading} />
 
-        {/* DESTAQUE — consultas que a IA marcou de fato na agenda da clínica.
-            O número que o João quer ver: o trabalho da Sofia virando resultado. */}
         <div className="rounded-xl border border-brand-500/30 bg-brand-500/[0.06] p-5 flex items-center justify-between gap-4">
           <div>
             <div className="text-[11px] uppercase tracking-wider text-brand-200/80 font-semibold">
@@ -245,7 +208,6 @@ export function DashboardPanel() {
           </p>
         </div>
 
-        {/* ── FEATURE 1 · RECEITA × CUSTO + FEATURE 3 · COMPARECIMENTO ─────── */}
         <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-4">
           <EconomicsCard
             data={data}
@@ -255,10 +217,8 @@ export function DashboardPanel() {
           <ShowRateCard data={data} />
         </div>
 
-        {/* ── FEATURE 2 · FILA DE LEADS QUENTES PARADOS ─────────────────────── */}
         <HotQueueCard data={data} />
 
-        {/* Stat strip — convertidos + custo, com badge de delta no total/custo */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatStrip
             label="Convertidos total"
@@ -295,12 +255,10 @@ export function DashboardPanel() {
                 ? computeDelta(data.kpis.llmCostUsd, data.previousKpis.llmCostUsd)
                 : undefined
             }
-            // Custo mais alto NÃO é positivo — invertemos a cor do badge.
             deltaInverted
           />
         </div>
 
-        {/* Segunda linha — fim de semana + handoff + custo por lead */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <SecondaryCard
             label="Atividade no fim de semana"
@@ -358,7 +316,6 @@ export function DashboardPanel() {
           </SecondaryCard>
         </div>
 
-        {/* FUNIL DE VENDAS — full width */}
         <section className="rounded-2xl ring-1 ring-white/10 bg-zinc-900/45 p-6 backdrop-blur">
           <div className="flex items-center gap-2 mb-4">
             <Sparkles size={16} className="text-brand-300" />
@@ -443,13 +400,6 @@ export function DashboardPanel() {
   );
 }
 
-// ===========================================================================
-// SofiaJourney — HERO/assinatura. O funil real do paciente, conectado:
-// Atendeu → Agendou → Fechou, com a taxa entre cada etapa. Encoda a sequência
-// verdadeira (por isso o fluxo faz sentido, não é decoração). Gradiente
-// brand→esmeralda + blobs difusos dão identidade própria à faixa.
-// ===========================================================================
-
 const journeyTones = {
   brand: { text: 'text-brand-200', num: 'text-brand-100', chip: 'bg-brand-500/15 ring-brand-500/25 text-brand-200' },
   cyan: { text: 'text-cyan-200', num: 'text-cyan-100', chip: 'bg-cyan-500/15 ring-cyan-500/25 text-cyan-200' },
@@ -519,7 +469,6 @@ function SofiaJourney({
       transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
       className="relative overflow-hidden rounded-2xl ring-1 ring-white/10 p-6 sm:p-7 bg-gradient-to-br from-brand-500/[0.13] via-zinc-900/50 to-emerald-500/[0.08]"
     >
-      {/* Atmosfera: blobs difusos, mascarados nos cantos — assinatura da faixa. */}
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute -top-24 -left-10 w-72 h-72 rounded-full bg-brand-500/20 blur-3xl" />
         <div className="absolute -bottom-28 right-0 w-80 h-80 rounded-full bg-emerald-500/10 blur-3xl" />
@@ -545,12 +494,6 @@ function SofiaJourney({
   );
 }
 
-// ===========================================================================
-// HeroCard — featured KPI no estilo Kommo: número GIGANTE verde + sublabel
-// + lista de detalhamento. Aqui mostramos conversas respondidas com split
-// de "primeiras mensagens" e "leads únicos".
-// ===========================================================================
-
 function HeroCard({
   data,
   loading,
@@ -560,8 +503,6 @@ function HeroCard({
 }) {
   const channels = data?.messagesByChannel ?? [];
   const totalMsgsByChannel = channels.reduce((a, c) => a + c.count, 0);
-  // Sem volume de mensagens do período anterior; usamos a variação de conversas
-  // respondidas como proxy de tendência só pro badge "esta semana".
   const delta = data
     ? computeDelta(data.kpis.answeredConversations, data.previousKpis.answeredConversations)
     : null;
@@ -590,7 +531,6 @@ function HeroCard({
             </div>
             <div className="text-xs text-zinc-400 mt-3">mensagens do paciente no período</div>
 
-            {/* Lista por canal — nome à esquerda, contagem à direita (estilo Kommo) */}
             <ul className="mt-6 divide-y divide-white/5">
               {channels.length === 0 ? (
                 <li className="py-3 text-xs text-zinc-500 italic">Sem mensagens no período.</li>
@@ -616,14 +556,12 @@ function HeroCard({
 
 const CHANNEL_PALETTE = ['#10b981', '#0ea5e9', '#8b5cf6', '#f59e0b', '#f43f5e', '#06b6d4'];
 
-/** Calcula delta % entre valor atual e anterior. Retorna null se anterior=0. */
 function computeDelta(current: number, previous: number): {
   pct: number;
   positive: boolean;
 } | null {
   if (previous === 0) {
     if (current === 0) return null;
-    // Subiu de 0 pra algo — não dá pct, mas marca "novo".
     return { pct: 100, positive: true };
   }
   const pct = ((current - previous) / previous) * 100;
@@ -633,7 +571,6 @@ function computeDelta(current: number, previous: number): {
 function DeltaBadge({ pct, positive }: { pct: number; positive: boolean }) {
   const sign = positive ? '+' : '';
   const absPct = Math.abs(pct);
-  // Trunca em 999% pra não estourar visual em casos absurdos.
   const display = absPct > 999 ? '>999' : absPct.toFixed(0);
   return (
     <span
@@ -651,10 +588,6 @@ function DeltaBadge({ pct, positive }: { pct: number; positive: boolean }) {
     </span>
   );
 }
-
-// ===========================================================================
-// BigStatCard — KPI lateral com número grande colorido.
-// ===========================================================================
 
 const bigColors: Record<string, { number: string; ring: string; icon: string }> = {
   green: { number: 'text-emerald-300', ring: 'ring-emerald-500/20', icon: 'text-emerald-300' },
@@ -678,7 +611,6 @@ function BigStatCard({
   sublabel: string;
   color?: keyof typeof bigColors;
   icon?: React.ReactNode;
-  /** Variação vs período anterior. Aparece como badge no canto superior direito. */
   delta?: { pct: number; positive: boolean } | null;
   onClick?: () => void;
 }) {
@@ -715,10 +647,6 @@ function BigStatCard({
   );
 }
 
-// ===========================================================================
-// StatStrip — card horizontal na faixa inferior.
-// ===========================================================================
-
 function StatStrip({
   label,
   value,
@@ -733,12 +661,10 @@ function StatStrip({
   accent: string;
   sub: string;
   delta?: { pct: number; positive: boolean } | null;
-  /** Quando true, inverte a semântica: subir é ruim (ex: custo). */
   deltaInverted?: boolean;
   onClick?: () => void;
 }) {
   const Tag = onClick ? 'button' : 'div';
-  // Se o delta é "inverted" (custo), subir vira negativo visualmente.
   const adjustedDelta =
     delta && deltaInverted ? { ...delta, positive: !delta.positive } : delta;
   return (
@@ -763,11 +689,6 @@ function StatStrip({
     </Tag>
   );
 }
-
-// ===========================================================================
-// SparklineCard — gráfico de linha SVG mostrando mensagens + conversas por dia.
-// Inspirado nos sparklines da Kommo. Sem dependência externa.
-// ===========================================================================
 
 function SparklineCard({
   data,
@@ -837,26 +758,21 @@ function Sparkline({
   const innerH = H - PAD.top - PAD.bottom;
   const n = series.length;
 
-  // Helper pra converter [valor, índice] em coordenadas SVG.
   const xAt = (i: number) => PAD.left + (n > 1 ? (i / (n - 1)) * innerW : innerW / 2);
   const yMsg = (v: number) => PAD.top + innerH - (v / maxMsg) * innerH;
   const yConv = (v: number) => PAD.top + innerH - (v / maxConv) * innerH;
 
-  // Path de linha + área.
   const msgPath = series.map((s, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i)},${yMsg(s.messages)}`).join(' ');
   const msgArea = `${msgPath} L ${xAt(n - 1)},${PAD.top + innerH} L ${xAt(0)},${PAD.top + innerH} Z`;
   const convPath = series.map((s, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i)},${yConv(s.conversations)}`).join(' ');
 
-  // Labels de data — primeira, meio, última.
   const labelIdxs = n <= 1 ? [0] : n <= 3 ? Array.from({ length: n }, (_, i) => i) : [0, Math.floor(n / 2), n - 1];
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="none">
-      {/* Grid horizontal sutil */}
       <line x1={PAD.left} x2={W - PAD.right} y1={PAD.top + innerH / 2} y2={PAD.top + innerH / 2} stroke="rgba(82,82,91,0.15)" strokeWidth="1" />
       <line x1={PAD.left} x2={W - PAD.right} y1={PAD.top + innerH} y2={PAD.top + innerH} stroke="rgba(82,82,91,0.3)" strokeWidth="1" />
 
-      {/* Área verde sob mensagens */}
       <path d={msgArea} fill="url(#sparkGradient)" opacity="0.5" />
       <defs>
         <linearGradient id="sparkGradient" x1="0" x2="0" y1="0" y2="1">
@@ -865,27 +781,22 @@ function Sparkline({
         </linearGradient>
       </defs>
 
-      {/* Linha mensagens (verde) */}
       <path d={msgPath} fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      {/* Linha conversas (sky) */}
       <path d={convPath} fill="none" stroke="#0ea5e9" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" />
 
-      {/* Pontos */}
       {series.map((s, i) => (
         <g key={i}>
           <circle cx={xAt(i)} cy={yMsg(s.messages)} r="2.5" fill="#10b981" />
           <circle cx={xAt(i)} cy={yConv(s.conversations)} r="2" fill="#0ea5e9" />
-          {/* tooltip via <title> nativo do SVG */}
           <title>
             {s.date}: {s.messages} msg · {s.conversations} conv
           </title>
         </g>
       ))}
 
-      {/* Labels de data */}
       {labelIdxs.map((i) => {
         const d = series[i];
-        const short = d.date.slice(5); // MM-DD
+        const short = d.date.slice(5);
         return (
           <text
             key={i}
@@ -903,10 +814,6 @@ function Sparkline({
     </svg>
   );
 }
-
-// ===========================================================================
-// SecondaryCard — card médio com label + conteúdo livre.
-// ===========================================================================
 
 function SecondaryCard({
   label,
@@ -951,10 +858,6 @@ function ClickRow({
   );
 }
 
-// ===========================================================================
-// Formatação de moeda BRL — sem centavos pra números grandes (receita),
-// com centavos pra custos por unidade.
-// ===========================================================================
 function fmtBrl(v: number, cents = false): string {
   return v.toLocaleString('pt-BR', {
     style: 'currency',
@@ -964,11 +867,6 @@ function fmtBrl(v: number, cents = false): string {
   });
 }
 
-// ===========================================================================
-// FEATURE 1 · EconomicsCard — Receita potencial × custo real (tudo em BRL).
-// Prova o ROI da Sofia num piscar: "custou X, trouxe Y". Se o ticket médio
-// não está configurado, o card vira um convite pra preencher (inline).
-// ===========================================================================
 function EconomicsCard({
   data,
   unitId,
@@ -993,7 +891,6 @@ function EconomicsCard({
       setEditing(false);
       onTicketSaved();
     } catch {
-      /* toast global cobre o erro; deixamos o card como está */
     } finally {
       setSaving(false);
     }
@@ -1027,7 +924,6 @@ function EconomicsCard({
       </div>
 
       {!hasTicket ? (
-        // Sem ticket configurado → convite pra preencher inline
         <div>
           <p className="text-[13px] text-zinc-300 leading-relaxed">
             Quanto vale, em média, uma consulta fechada aqui? Com esse valor eu mostro{' '}
@@ -1131,11 +1027,6 @@ function EconomicsCard({
   );
 }
 
-// ===========================================================================
-// FEATURE 3 · ShowRateCard — comparecimento (agendou → compareceu). O buraco
-// clássico de clínica. Vem do snapshot do funil; se a etapa não é
-// identificável, o card explica em vez de mostrar zero.
-// ===========================================================================
 function ShowRateCard({ data }: { data: DashboardResponse | null }) {
   const sr = data?.showRate;
   return (
@@ -1179,11 +1070,6 @@ function ShowRateCard({ data }: { data: DashboardResponse | null }) {
   );
 }
 
-// ===========================================================================
-// FEATURE 2 · HotQueueCard — leads quentes que a IA passou pra humano e seguem
-// sem conversão nem consulta. Ordenados do mais antigo (mais em risco de
-// esfriar). É a fila de "corre atrás disso agora".
-// ===========================================================================
 function fmtWait(min: number): string {
   if (min < 60) return `${min}min`;
   const h = Math.floor(min / 60);
@@ -1260,14 +1146,7 @@ function HotQueueCard({ data }: { data: DashboardResponse | null }) {
   );
 }
 
-// ===========================================================================
-// FunnelDonut — donut chart SVG inline (sem dependência) que mostra a
-// distribuição de leads entre os status do pipeline principal. Inspirado
-// no "Fontes de Lead" do dashboard Kommo, mas com nossos dados.
-// ===========================================================================
-
 function FunnelDonut({ data }: { data: DashboardResponse | null }) {
-  // Pega o pipeline principal (ou o 1º) e os top 5 status por count.
   const slices = useMemo(() => {
     if (!data || data.funnel.length === 0) return [];
     const main = data.funnel[0];
@@ -1275,7 +1154,6 @@ function FunnelDonut({ data }: { data: DashboardResponse | null }) {
       .filter((s) => s.count > 0)
       .sort((a, b) => b.count - a.count);
     if (all.length === 0) return [];
-    // Top 4 + "outros"
     const top = all.slice(0, 4);
     const rest = all.slice(4);
     const restTotal = rest.reduce((a, s) => a + s.count, 0);
@@ -1344,7 +1222,6 @@ function FunnelDonut({ data }: { data: DashboardResponse | null }) {
 
 const PALETTE = ['#10b981', '#0ea5e9', '#8b5cf6', '#f59e0b', '#f43f5e'];
 
-/** SVG donut: 3 anéis concêntricos pra um visual "Kommo-like". */
 function Donut({ slices, total }: { slices: Array<{ label: string; count: number; color: string }>; total: number }) {
   const size = 160;
   const cx = size / 2;
@@ -1356,7 +1233,6 @@ function Donut({ slices, total }: { slices: Array<{ label: string; count: number
   let offset = 0;
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
-      {/* Track de fundo */}
       <circle
         cx={cx}
         cy={cy}
@@ -1386,7 +1262,6 @@ function Donut({ slices, total }: { slices: Array<{ label: string; count: number
         offset += length;
         return arc;
       })}
-      {/* Texto central com total */}
       <text
         x={cx}
         y={cy - 4}
@@ -1412,10 +1287,6 @@ function Donut({ slices, total }: { slices: Array<{ label: string; count: number
     </svg>
   );
 }
-
-// ===========================================================================
-// Helpers
-// ===========================================================================
 
 function formatLatency(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;

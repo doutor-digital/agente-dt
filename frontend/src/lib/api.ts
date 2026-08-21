@@ -68,21 +68,14 @@ import type {
   FollowUpStep,
 } from '../types/api';
 
-// Em dev, o Vite proxia /api → backend. Em prod com domínios separados,
-// defina VITE_API_URL no .env do front.
 const apiBase = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
   : '/api';
 
-// ORIGEM ABSOLUTA DA API. O webhook da Meta é cadastrado no painel deles e
-// precisa apontar pro BACKEND — que em produção vive num domínio DIFERENTE do
-// front (agente-vps.* vs agente.*). Montar essa URL com window.location.origin
-// dá um endereço que responde 404: o front não tem /api.
 export const apiOrigin = import.meta.env.VITE_API_URL
   ? String(import.meta.env.VITE_API_URL).replace(/\/$/, '')
   : window.location.origin;
 
-/** URL completa de um webhook, pronta pra colar no painel da Meta. */
 export function webhookUrl(
   slug: string,
   channel: 'instagram' | 'facebook' | 'meta' | 'kommo',
@@ -90,14 +83,8 @@ export function webhookUrl(
   return `${apiOrigin}/api/webhooks/${slug}/${channel}`;
 }
 
-// `withCredentials: true` faz o axios enviar e receber cookies (dt_session).
-// Sem isso, login não persiste — o navegador joga fora o Set-Cookie.
 const http = axios.create({ baseURL: apiBase, timeout: 15_000, withCredentials: true });
 
-// Interceptor de 401 — dispara um CustomEvent que o AuthContext escuta pra
-// limpar o user e cair na tela de login. Evita acoplar contexto aqui.
-// O login flow em si pode receber 401 também (ex: /auth/me antes de logar),
-// então não fazemos retry/redirect — só notificamos.
 http.interceptors.response.use(
   (r) => r,
   (err) => {
@@ -112,9 +99,6 @@ function withUnit(params: Record<string, unknown> | undefined, unitId: string | 
   return unitId ? { ...(params ?? {}), unitId } : params;
 }
 
-// ---------------------------------------------------------------------------
-// Playground types — espelham o que /units/:id/playground/run devolve.
-// ---------------------------------------------------------------------------
 export type PlaygroundAction = {
   tool: string;
   args: Record<string, unknown>;
@@ -157,9 +141,6 @@ export type PlaygroundRunResult = {
 };
 
 export const api = {
-  // -------------------------------------------------------------------------
-  // Auth — sessão Google + gestão de admins
-  // -------------------------------------------------------------------------
   async me(): Promise<AuthUser | null> {
     try {
       const { data } = await http.get<{ user: AuthUser }>('/auth/me');
@@ -197,9 +178,6 @@ export const api = {
     await http.delete(`/users/${id}`);
   },
 
-  // -------------------------------------------------------------------------
-  // Traces
-  // -------------------------------------------------------------------------
   async listTraces(unitId: string | null = null): Promise<TraceSummary[]> {
     const { data } = await http.get<{ traces: TraceSummary[] }>('/traces', {
       params: withUnit(undefined, unitId),
@@ -217,9 +195,6 @@ export const api = {
     return data;
   },
 
-  // -------------------------------------------------------------------------
-  // SystemLogs — painel "Erros"
-  // -------------------------------------------------------------------------
   async listSystemLogs(
     unitId: string | null = null,
     query: SystemLogQuery = {},
@@ -237,16 +212,12 @@ export const api = {
     return data.modules;
   },
 
-  // -------------------------------------------------------------------------
-  // Captura de dados — LeadFieldRule (tools dinâmicas por custom field)
-  // -------------------------------------------------------------------------
   async listLeadFieldRules(unitId: string): Promise<LeadFieldRule[]> {
     const { data } = await http.get<{ rules: LeadFieldRule[] }>(
       `/units/${unitId}/lead-field-rules`,
     );
     return data.rules;
   },
-  // ── API Spine (franquia) + kill switch ──
   async spineStatus(unitId: string): Promise<SpineStatus> {
     const { data } = await http.get<SpineStatus>(`/units/${unitId}/spine/status`);
     return data;
@@ -274,7 +245,6 @@ export const api = {
     );
     return data;
   },
-  /** Monta o cadastro do lead e devolve — NÃO escreve nada na franquia. */
   async spineLeadPreview(unitId: string, kommoLeadId: number): Promise<SpineLeadPreview> {
     const { data } = await http.post<SpineLeadPreview>(
       `/units/${unitId}/spine/lead-preview`,
@@ -282,7 +252,6 @@ export const api = {
     );
     return data;
   },
-  /** Cancela a consulta do lead — reflete na franquia. */
   async spineCancelSchedule(
     unitId: string,
     kommoLeadId: number,
@@ -294,7 +263,6 @@ export const api = {
     );
     return data;
   },
-  /** O cadastro de PACIENTE que sairia — nada é escrito na franquia. */
   async spinePatientPreview(unitId: string, kommoLeadId: number): Promise<SpinePatientPreview> {
     const { data } = await http.post<SpinePatientPreview>(
       `/units/${unitId}/spine/patient-preview`,
@@ -303,7 +271,6 @@ export const api = {
     );
     return data;
   },
-  /** Cadastra o paciente na franquia. Permanente — só depois da prévia. */
   async spineSyncPatient(
     unitId: string,
     kommoLeadId: number,
@@ -315,9 +282,6 @@ export const api = {
     );
     return data;
   },
-  // -------------------------------------------------------------------------
-  // Follow-up — reengajamento por etapa do funil
-  // -------------------------------------------------------------------------
   async followUpRules(unitId: string): Promise<FollowUpRulesResponse> {
     const { data } = await http.get<FollowUpRulesResponse>(`/units/${unitId}/follow-up/rules`);
     return data;
@@ -339,7 +303,6 @@ export const api = {
     await http.post(`/units/${unitId}/follow-up/toggle`, { enabled }, { timeout: 20_000 });
   },
 
-  /** Quem entrou no Kommo na janela recente e ainda não está na franquia. */
   async spinePendentes(unitId: string, dias = 7): Promise<SpinePendentesResponse> {
     const { data } = await http.get<SpinePendentesResponse>(
       `/units/${unitId}/spine/pendentes`,
@@ -347,7 +310,6 @@ export const api = {
     );
     return data;
   },
-  /** Cada peça do encaixe, verificada contra a franquia agora. */
   async spineProntidao(unitId: string): Promise<SpineProntidao> {
     const { data } = await http.get<SpineProntidao>(`/units/${unitId}/spine/prontidao`);
     return data;
@@ -420,7 +382,6 @@ export const api = {
     await http.post('/system/resume', { unitId });
   },
 
-  // ── Instagram — fila de moderação de comentários ──
   async instagramComments(
     unitId: string,
     params: { status?: IgCommentStatus; platform?: 'instagram' | 'facebook'; limit?: number } = {},
@@ -484,9 +445,6 @@ export const api = {
     return data;
   },
 
-  // -------------------------------------------------------------------------
-  // AgentConfig
-  // -------------------------------------------------------------------------
   async getConfig(unitId: string | null = null): Promise<AgentConfigResponse> {
     const { data } = await http.get<AgentConfigResponse>('/config', {
       params: withUnit(undefined, unitId),
@@ -499,7 +457,6 @@ export const api = {
     return data.config;
   },
 
-  /** "Centralizar no prompt": achata a config atual da unidade num texto único. */
   async getFlattenedPrompt(unitId: string): Promise<string> {
     const { data } = await http.get<{ prompt: string }>('/config/flatten', {
       params: { unitId },
@@ -507,9 +464,6 @@ export const api = {
     return data.prompt;
   },
 
-  // -------------------------------------------------------------------------
-  // Units
-  // -------------------------------------------------------------------------
   async listUnits(): Promise<Unit[]> {
     const { data } = await http.get<{ units: Unit[] }>('/units');
     return data.units;
@@ -522,19 +476,13 @@ export const api = {
     const { data } = await http.post<{ unit: Unit }>('/units', input);
     return data.unit;
   },
-  // Salvar configuração é a operação que MAIS dói falhar: quem está na tela
-  // acabou de digitar e não sabe se pegou. O backend sobe com rolling update,
-  // então existe uma janela de segundos em que a conexão pendura e estoura o
-  // teto de 15s — nada errado com o pedido, só timing. Como o PATCH é
-  // idempotente (mesmo corpo, mesmo resultado), reenviar é seguro: tenta de
-  // novo uma vez, com mais fôlego, antes de acusar erro.
   async updateUnit(id: string, input: Partial<UnitInput>): Promise<Unit> {
     try {
       const { data } = await http.patch<{ unit: Unit }>(`/units/${id}`, input, { timeout: 20_000 });
       return data.unit;
     } catch (err) {
       const semResposta = axios.isAxiosError(err) && !err.response;
-      if (!semResposta) throw err; // 400/409/500 — reenviar não muda nada
+      if (!semResposta) throw err;
       await new Promise((r) => setTimeout(r, 1500));
       const { data } = await http.patch<{ unit: Unit }>(`/units/${id}`, input, { timeout: 45_000 });
       return data.unit;
@@ -573,13 +521,10 @@ export const api = {
     return data;
   },
 
-  // -------------------------------------------------------------------------
-  // Integrations + Alerts (Central de Integrações)
-  // -------------------------------------------------------------------------
   async getIntegrations(unitId: string, days = 30): Promise<IntegrationsResponse> {
     const { data } = await http.get<IntegrationsResponse>(`/units/${unitId}/integrations`, {
       params: { days },
-      timeout: 30_000, // chama OpenAI Platform e Kommo, pode levar
+      timeout: 30_000,
     });
     return data;
   },
@@ -596,9 +541,6 @@ export const api = {
     return data;
   },
 
-  // -------------------------------------------------------------------------
-  // WhatsApp cost (Meta pricing_analytics + template_analytics)
-  // -------------------------------------------------------------------------
   async getWhatsappCosts(
     unitId: string,
     range: { from?: string; to?: string } = {},
@@ -631,9 +573,6 @@ export const api = {
     return data;
   },
 
-  // -------------------------------------------------------------------------
-  // LlmCalls
-  // -------------------------------------------------------------------------
   async listLlmCalls(unitId: string | null = null, limit = 100): Promise<LlmCallSummary[]> {
     const params: Record<string, unknown> = { limit };
     if (unitId) params.unitId = unitId;
@@ -645,9 +584,6 @@ export const api = {
     return data.call;
   },
 
-  // -------------------------------------------------------------------------
-  // Conversations
-  // -------------------------------------------------------------------------
   async listConversations(unitId: string | null = null): Promise<ConversationSummary[]> {
     const { data } = await http.get<{ conversations: ConversationSummary[] }>('/conversations', {
       params: withUnit(undefined, unitId),
@@ -659,9 +595,6 @@ export const api = {
     return data.conversation;
   },
 
-  // -------------------------------------------------------------------------
-  // Prompt performance / LLM-as-judge
-  // -------------------------------------------------------------------------
   async getPromptPerformance(unitId: string, days = 90): Promise<PromptPerformanceResponse> {
     const { data } = await http.get<PromptPerformanceResponse>(
       `/units/${unitId}/prompt-performance`,
@@ -679,9 +612,6 @@ export const api = {
     await http.post(`/conversations/${conversationId}/evaluate`, {}, { timeout: 60_000 });
   },
 
-  // -------------------------------------------------------------------------
-  // Kommo Explorer — listas ao vivo do CRM por Unit
-  // -------------------------------------------------------------------------
   async kommoFields(unitId: string): Promise<KommoFieldsResponse> {
     const { data } = await http.get<KommoFieldsResponse>(
       `/units/${unitId}/kommo-fields`,
@@ -773,9 +703,6 @@ export const api = {
     return data;
   },
 
-  // -------------------------------------------------------------------------
-  // Templates
-  // -------------------------------------------------------------------------
   async listTemplates(unitId: string): Promise<MessageTemplate[]> {
     const { data } = await http.get<{ templates: MessageTemplate[] }>(`/units/${unitId}/templates`);
     return data.templates;
@@ -792,9 +719,6 @@ export const api = {
     await http.delete(`/units/${unitId}/templates/${templateId}`);
   },
 
-  // -------------------------------------------------------------------------
-  // Knowledge base (RAG)
-  // -------------------------------------------------------------------------
   async listKnowledge(unitId: string): Promise<KnowledgeEntry[]> {
     const { data } = await http.get<{ entries: KnowledgeEntry[] }>(`/units/${unitId}/knowledge`);
     return data.entries;
@@ -829,7 +753,6 @@ export const api = {
     const { data } = await http.post<StrategyLabResult>(
       `/units/${unitId}/strategy-lab`,
       { conversationId, ownerNote: ownerNote ?? null },
-      // 3 chamadas ao modelo em paralelo: o default de 15s do client é curto.
       { timeout: 60_000 },
     );
     return data;
@@ -862,9 +785,6 @@ export const api = {
     await http.delete(`/units/${unitId}/knowledge/${entryId}`);
   },
 
-  // -------------------------------------------------------------------------
-  // Ações (regras "quando → faça")
-  // -------------------------------------------------------------------------
   async listActions(unitId: string): Promise<UnitAction[]> {
     const { data } = await http.get<{ actions: UnitAction[] }>(`/units/${unitId}/actions`);
     return data.actions;
@@ -888,9 +808,6 @@ export const api = {
     await http.delete(`/units/${unitId}/actions/${actionId}`);
   },
 
-  // -------------------------------------------------------------------------
-  // Regras Globais — só SUPER_ADMIN, valem pra todas as units.
-  // -------------------------------------------------------------------------
   async listGlobalActions(): Promise<UnitAction[]> {
     const { data } = await http.get<{ actions: UnitAction[] }>(`/global-actions`);
     return data.actions;
@@ -913,9 +830,6 @@ export const api = {
     await http.delete(`/global-actions/${actionId}`);
   },
 
-  // -------------------------------------------------------------------------
-  // Relatórios — baixa CSV ou PDF (responseType: blob, dispara download).
-  // -------------------------------------------------------------------------
   async downloadReport(
     type: 'conversations' | 'llm-cost' | 'actions' | 'errors' | 'whatsapp-cost',
     format: 'csv' | 'pdf',
@@ -947,9 +861,6 @@ export const api = {
     window.URL.revokeObjectURL(url);
   },
 
-  // -------------------------------------------------------------------------
-  // Flag de mensagens
-  // -------------------------------------------------------------------------
   async flagMessage(messageId: string, flagged: boolean): Promise<void> {
     await http.patch(`/messages/${messageId}/flag`, { flagged });
   },
@@ -958,9 +869,6 @@ export const api = {
     return data.messages;
   },
 
-  // -------------------------------------------------------------------------
-  // Debug do Admin Key da OpenAI
-  // -------------------------------------------------------------------------
   async openaiDebug(unitId: string): Promise<OpenAIDebugResponse> {
     const { data } = await http.get<OpenAIDebugResponse>(
       `/units/${unitId}/openai-debug`,
@@ -969,11 +877,6 @@ export const api = {
     return data;
   },
 
-  // -------------------------------------------------------------------------
-  // Limpa todos os caches em memória do backend (config, unit, dedup) + o
-  // localStorage do front. Pra usar quando algo "ficou grudado" e o usuário
-  // quer forçar reload do estado.
-  // -------------------------------------------------------------------------
   async clearCache(): Promise<{
     ok: boolean;
     cleared: { configCache: number; unitBySlugCache: number; unitByIdCache: number; dedupCache: number };

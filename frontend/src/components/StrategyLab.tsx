@@ -1,12 +1,3 @@
-// ============================================================================
-// StrategyLab — "3 jeitos de responder" para um lead travado.
-//
-// O dono abre a conversa, clica, e recebe 3 mensagens prontas — cada uma com
-// uma abordagem diferente — pra copiar a que ele sabe que funciona com aquele
-// paciente. É busca de caminhos feita FORA do turno do paciente: aqui quem
-// espera 5 segundos é o dono, não quem está com dor.
-// ============================================================================
-
 import { useState } from 'react';
 import { Lightbulb, Copy, Check, Loader2, AlertTriangle } from 'lucide-react';
 import clsx from 'clsx';
@@ -46,7 +37,6 @@ export function StrategyLab({ conversationId }: { conversationId: string }) {
       await navigator.clipboard.writeText(c.texto);
       setCopiado(i);
       setTimeout(() => setCopiado(null), 2000);
-      // Registra a escolha — é como sabemos se a ferramenta serve de verdade.
       if (selectedUnitId && runId) void api.escolherEstrategia(selectedUnitId, runId, c.texto);
     } catch {
       setCopiado(null);

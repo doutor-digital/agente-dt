@@ -1,44 +1,3 @@
-// ============================================================================
-// graph.ts — Grafo de decisão do agente (LangGraph, multi-tenant).
-//
-// LÓGICA DE ENGENHARIA — O FLUXO DO STATE
-// ---------------------------------------
-//
-//                    ┌────────────────┐
-//                    │   START        │
-//                    └────────┬───────┘
-//                             │ (State inicial:
-//                             │  leadId, messages=[HumanMessage], traceId)
-//                             ▼
-//                    ┌────────────────┐
-//                    │   agent (LLM)  │  ← chama OpenAI da Unit corrente
-//                    └────────┬───────┘
-//                             │ (LLM responde com:
-//                             │   • tool_calls → vai pra tools
-//                             │   • texto puro → vai pro END)
-//                             ▼
-//                    ┌────────────────┐
-//                    │ shouldContinue?│
-//                    └───┬────────┬───┘
-//                  tools │        │ end
-//                        ▼        ▼
-//                   ┌─────────┐  END
-//                   │  tools  │  ← executa tool no Kommo da Unit
-//                   └────┬────┘
-//                        └────────► agent (loop ReAct)
-//
-// MULTI-TENANT
-// ------------
-// `buildAgentGraph(recorder, unit)` recebe a Unit. Toda chamada de LLM e
-// tool usa as credenciais da Unit. O `traceId` da execução fica no recorder
-// pra que `invokeChatModel` consiga associar cada LlmCall ao trace correto.
-//
-// CHECKPOINTING / MEMÓRIA DE CONVERSA
-// -----------------------------------
-// `thread_id = "unit-{slug}-lead-{leadId}"` — separa histórico por Unit, pra
-// que duas unidades nunca compartilhem memória de lead acidentalmente.
-// ============================================================================
-
 import { AIMessage, type BaseMessage, SystemMessage } from '@langchain/core/messages';
 import { END, START, StateGraph } from '@langchain/langgraph';
 import { ToolNode } from '@langchain/langgraph/prebuilt';
@@ -65,12 +24,6 @@ import {
   PLANO_B_TIMEOUT_MS,
 } from './llm-policy.js';
 
-// ---------------------------------------------------------------------------
-// Checkpointer (singleton).
-// O PostgresSaver mantém um pool TCP próprio. Criamos UMA instância e
-// reusamos. `setup()` cria as tabelas se ainda não existirem.
-// ---------------------------------------------------------------------------
-
 let checkpointerInstance: PostgresSaver | null = null;
 
 export async function getCheckpointer(): Promise<PostgresSaver> {
@@ -82,21 +35,10 @@ export async function getCheckpointer(): Promise<PostgresSaver> {
   return cp;
 }
 
-// ---------------------------------------------------------------------------
-// Constrói o thread_id estável da Unit/Lead.
-// Inclui slug pra evitar colisão entre unidades.
-// ---------------------------------------------------------------------------
 export function buildThreadId(unitSlug: string, leadId: string | number): string {
   return `unit-${unitSlug}-lead-${leadId}`;
 }
 
-/**
- * Extrai só o TEXTO visível da resposta do modelo. OpenAI/Claude devolvem
- * `content` como string; o Gemini devolve um ARRAY de partes. Sem isto, um
- * `JSON.stringify(content)` jogava o array cru (`[{"type":"text",...}]`) no
- * campo "Resposta da IA" e chegava ao paciente. Ignora partes de raciocínio
- * (`thought`) e chamadas de código, junta só o texto de fato.
- */
 function aiTextFromContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -117,15 +59,6 @@ function aiTextFromContent(content: unknown): string {
   return '';
 }
 
-// ---------------------------------------------------------------------------
-// GEMINI — higieniza os schemas das tools.
-//
-// O Gemini rejeita (400 Bad Request) várias palavras de JSON-Schema que o Zod
-// gera: `exclusiveMinimum` (de `.int().positive()`), `additionalProperties`,
-// `$schema`, etc. OpenAI e Claude aceitam; o Gemini não. Como a validação REAL
-// dos argumentos continua no `ToolNode(tools)` (Zod original), aqui a gente só
-// simplifica o schema que o MODELO enxerga — sem perder segurança na execução.
-// ---------------------------------------------------------------------------
 const GEMINI_SCHEMA_STRIP = new Set([
   'exclusiveMinimum', 'exclusiveMaximum', 'minimum', 'maximum', 'multipleOf',
   '$schema', 'additionalProperties', 'default', 'const', 'patternProperties',
@@ -158,27 +91,15 @@ function toolsParaGemini(tools: ReturnType<typeof buildTools>): unknown[] {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Construção do grafo.
-//
-// Recebe a `Unit` (credenciais + assistant_id + system prompt) e o
-// `recorder` (vinculado ao ExecutionTrace). Retorna o grafo compilado
-// pronto pra `invoke`.
-// ---------------------------------------------------------------------------
-
 export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
   const config = await getActiveConfig(unit.id);
 
-  // 1) Tools com descriptions editadas pelo dashboard, instanciadas com o
-  //    KommoClient da Unit.
   const toolConfigByName = new Map(config.tools.map((t) => [t.name, t]));
   const descriptionOverrides: Record<string, string> = {};
   for (const [name, cfg] of toolConfigByName) {
     if (cfg.description) descriptionOverrides[name] = cfg.description;
   }
 
-  // Só monta o KommoClient se a Unit tiver credenciais. Se não tiver,
-  // ainda dá pra rodar o agente em modo "só conversa" (sem tools Kommo).
   let kommoClient: ReturnType<typeof createKommoClient> | null = null;
   try {
     kommoClient = createKommoClient(unit);
@@ -186,8 +107,6 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     logger.warn({ err, unit: unit.slug }, 'Unit sem credenciais Kommo — tools desabilitadas');
   }
 
-  // Captura de dados — regras configuradas no painel "Capturas". Cada regra
-  // ativa vira uma tool dinâmica que escreve em um custom field do Kommo.
   const leadFieldRules = await listEnabledLeadFieldRules(unit.id);
 
   const allTools = kommoClient
@@ -201,18 +120,11 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       })
     : [];
 
-  // Filtra tools desabilitadas no AgentConfig.
   const tools = allTools.filter((t) => {
     const cfg = toolConfigByName.get(t.name);
     return cfg ? cfg.enabled : true;
   });
 
-  // 2) System prompt — montado dentro do agentNode em cada turno
-  //    pra incorporar RAG (busca semântica baseada na mensagem do usuário).
-  //    A montagem usa composer async que combina persona + features +
-  //    templates + knowledge base + flagged examples.
-
-  // 3) Modelo da Unit — OpenAI (padrão) ou Anthropic/Claude.
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
   const provider = useAnthropic ? 'anthropic' : useGoogle ? 'google' : 'openai';
@@ -223,17 +135,9 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       : config.model || unit.openaiModel || env.OPENAI_MODEL;
   const baseModel = createChatModel(unit, {
     model: modelName,
-    // temperature só vai pro caminho OpenAI; ChatAnthropic (Opus 4.8) ignora.
     temperature: config.temperature,
     maxTokens: config.maxTokens,
   });
-  // bindTools retorna um Runnable, não ChatOpenAI — passamos via interface
-  // mínima `InvokableModel` que `invokeChatModel` aceita.
-  // Cast pra interface mínima — `bindTools` devolve um Runnable que não
-  // bate com o tipo estrito do ChatOpenAI, mas a forma de `.invoke(messages, opts)`
-  // é a mesma e é o que `invokeChatModel` precisa.
-  // No Gemini, liga os schemas HIGIENIZADOS (sem exclusiveMinimum etc). A
-  // execução segue no ToolNode(tools) com o Zod original — validação intacta.
   const toolsParaModelo = useGoogle ? toolsParaGemini(tools) : tools;
   const model = (
     tools.length > 0
@@ -241,9 +145,6 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       : baseModel
   ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
 
-  // -------------------------------------------------------------------------
-  // NODE: agent
-  // -------------------------------------------------------------------------
   const agentNode = async (state: AgentStateType) => {
     await recorder.step({
       kind: 'THINKING',
@@ -251,15 +152,6 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       payload: { model: modelName, msgCount: state.messages.length, unit: unit.slug },
     });
 
-    // SEMPRE usa o systemPrompt atual da Unit, NUNCA o que está no checkpoint.
-    // Se o usuário edita o prompt no painel, queremos que a próxima execução
-    // dessa Conversa já use a nova versão. Por isso filtramos qualquer
-    // SystemMessage antiga que o PostgresSaver tenha persistido e prependamos
-    // a atual. Sem isso, conversas existentes ficam presas no prompt antigo
-    // pra sempre.
-    //
-    // Pega a última mensagem do paciente pra alimentar a busca semântica
-    // (RAG) — assim o composer puxa só conhecimento relevante pra essa pergunta.
     const nonSystemMessages = state.messages.filter((m) => m.getType() !== 'system');
     const lastHuman = [...nonSystemMessages].reverse().find((m) => m.getType() === 'human');
     const userMessage = lastHuman
@@ -267,26 +159,14 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
         ? lastHuman.content
         : JSON.stringify(lastHuman.content)
       : undefined;
-    // Primeiro turno = 1 única mensagem humana e nenhuma resposta da IA ainda.
-    // Usado pra forçar saudação caprichada/coleta de nome na abertura.
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;
 
-    // Tag de data de ENTRADA do lead (só unidades em ENTRY_DATE_TAG_SLUGS).
-    // Roda uma vez, no 1º turno. Fire-and-forget (void) pra não somar latência
-    // à resposta — a tag não é usada na geração.
     if (isFirstTurn && kommoClient && state.leadId && ENTRY_DATE_TAG_SLUGS.has(unit.slug)) {
       void maybeAddEntryDateTag({ recorder, kommo: kommoClient, leadId: state.leadId });
     }
 
-    // workflowText foi aposentado em favor da aba "Ações" (UnitAction, tipada).
-    // A coluna agent_configs.workflow ainda existe no DB mas não influencia
-    // mais o prompt — recriar as regras na aba Ações se precisar.
-    // Anthropic/Claude: system em 2 blocos com prompt caching — o estático
-    // (persona, fontes, regras, ações) leva `cache_control` (TTL 1h) e é lido
-    // a 0.1x em turnos seguintes; o volátil (memória, leadId, RAG) fica sem
-    // cache. OpenAI: prompt único (string), sem caching manual.
     let systemMessage: SystemMessage;
     if (useAnthropic) {
       const { cacheable, dynamic } = await composeSystemPromptPartsForUnit({
@@ -317,9 +197,6 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     const t0 = performance.now();
     let response: AIMessage;
     try {
-      // Backstop de travamento: o cliente já tem timeout+retry HTTP; aqui a
-      // política é entregar um fallback educado em vez de deixar o paciente no
-      // vácuo quando tudo isso esgota (ou o invoke nunca volta).
       response = (await withTimeout(
         invokeChatModel({
           model,
@@ -334,15 +211,10 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       )) as AIMessage;
     } catch (err) {
       const erroPrincipal = err instanceof Error ? err.message : String(err);
-      // PLANO B: antes de responder "tive uma instabilidade", tenta o outro
-      // provedor com credencial disponível. Falha de provedor costuma ser
-      // rápida (429/401), então isso quase sempre custa pouco tempo.
       const planoB = escolherPlanoB(unit, !!env.OPENAI_API_KEY);
       if (planoB) {
         try {
           const modeloB = createChatModel(
-            // Clona a unidade trocando o provedor: createChatModel decide por
-            // `llmProvider`, e não queremos duplicar a lógica de credencial.
             { ...unit, llmProvider: planoB.provider },
             { model: planoB.modelName, temperature: config.temperature, maxTokens: config.maxTokens },
           );
@@ -414,12 +286,8 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
         latencyMs: latency,
       });
 
-      // GUARDRAIL — trava dura pós-LLM (preço fora do catálogo + conduta clínica).
-      // Roda aqui porque é o ponto único por onde as 3 entregas passam.
       const guard = aplicarGuardrail(text, unit);
       if (guard.rewritten) {
-        // A história do lead precisa refletir o que foi ENTREGUE, não o texto barrado,
-        // senão no próximo turno a IA "lembra" de ter dito o que não disse.
         response.content = guard.text;
         await recorder.step({
           kind: 'THINKING',
@@ -428,11 +296,7 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
         });
       }
 
-      // Rede de segurança: se o usuário acabou de dizer o nome e a IA esqueceu
-      // de chamar atualizar_titulo_lead, executa a tool nós mesmos. Idempotente
-      // — só roda se o lead.name na Kommo ainda estiver genérico (sem o nome).
       if (kommoClient && unit.collectNameEnabled && userMessage && state.leadId) {
-        // A IA pediu o nome no turno anterior? (habilita captura de nome "pelado")
         const lastAssistant = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const lastAssistantText = lastAssistant
           ? typeof lastAssistant.content === 'string'
@@ -458,14 +322,8 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     return { messages: [response] } satisfies Partial<AgentStateType>;
   };
 
-  // -------------------------------------------------------------------------
-  // NODE: tools (ToolNode do LangGraph)
-  // -------------------------------------------------------------------------
   const toolNode = new ToolNode(tools);
 
-  // -------------------------------------------------------------------------
-  // EDGE condicional: shouldContinue
-  // -------------------------------------------------------------------------
   const shouldContinue = (state: AgentStateType): 'tools' | typeof END => {
     const last = state.messages[state.messages.length - 1] as AIMessage | undefined;
     if (last && Array.isArray(last.tool_calls) && last.tool_calls.length > 0) {
@@ -474,12 +332,7 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     return END;
   };
 
-  // -------------------------------------------------------------------------
-  // Montagem do grafo.
-  // -------------------------------------------------------------------------
   const workflow = new StateGraph(AgentState)
-    // RetryPolicy nativa do LangGraph: se o nó da IA lançar um erro transitório
-    // inesperado (fora do fallback que já tratamos), o runtime re-executa o nó.
     .addNode('agent', agentNode, { retryPolicy: { maxAttempts: 2 } })
     .addNode('tools', toolNode)
     .addEdge(START, 'agent')
@@ -495,16 +348,6 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
   return compiled;
 }
 
-// ---------------------------------------------------------------------------
-// Rede de segurança do "IA esqueceu de chamar a tool".
-// A extração/validação de nome mora em ./name-capture.ts (módulo puro, testado).
-// ---------------------------------------------------------------------------
-
-/**
- * Se o lead.name no Kommo for genérico ("Lead #123", vazio, igual ao
- * contact name padrão do WhatsApp), atualiza pra `<Nome> DD/MM/YYYY`.
- * Caso contrário, no-op.
- */
 async function maybeAutoUpdateLeadTitle({
   recorder,
   kommo,
@@ -517,7 +360,6 @@ async function maybeAutoUpdateLeadTitle({
   name: string;
 }): Promise<void> {
   const t0 = performance.now();
-  // Trava final: mesmo que a detecção erre, não grava algo que não parece nome.
   if (!looksLikeName(name)) {
     await recorder.step({
       kind: 'THINKING',
@@ -534,7 +376,6 @@ async function maybeAutoUpdateLeadTitle({
     const looksGeneric =
       current.length === 0 ||
       /^lead\s*#?\d+$/i.test(current) ||
-      // Se o nome já contém o que a IA captou, considera "já atualizado".
       current.toLowerCase().includes(display.toLowerCase());
     if (!looksGeneric) {
       await recorder.step({
@@ -571,14 +412,8 @@ async function maybeAutoUpdateLeadTitle({
   }
 }
 
-// Slugs das unidades que recebem a tag de data de entrada do lead. Mantido como
-// lista explícita (pedido: "só a Magalhães") — adicionar outra unidade aqui.
 const ENTRY_DATE_TAG_SLUGS = new Set(['advocacia-magalhaes']);
 
-// Aplica no lead uma TAG com a data de ENTRADA (lead.created_at) no formato
-// DD/MM/AA (ex: "01/01/26") — igual ao padrão de tags de data já usado na conta.
-// Baseada em created_at → idempotente (mesma tag em toda execução; addTag no
-// Kommo cria a tag se não existir e não duplica se já estiver no lead).
 async function maybeAddEntryDateTag({
   recorder,
   kommo,
@@ -597,7 +432,7 @@ async function maybeAddEntryDateTag({
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
-    }).format(new Date(createdAtMs)); // ex: "01/01/2026"
+    }).format(new Date(createdAtMs));
     await kommo.addTag({ leadId, tag: dateTag });
     await recorder.step({
       kind: 'KOMMO_ACTION',

@@ -1,18 +1,3 @@
-// ============================================================================
-// whatsapp-costs.controller.ts — Endpoints REST do custo WhatsApp (Meta).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Dados vêm da tabela `whatsapp_cost_daily` e `whatsapp_template_daily`,
-// populadas pelo sync diário (scheduler in-process + script CLI). Aqui
-// só lemos + agregamos.
-//
-// 3 handlers:
-//   GET  /api/units/:id/whatsapp-costs?from&to     → totais + breakdown + timeline
-//   GET  /api/units/:id/whatsapp-templates?from&to → ranking de templates
-//   POST /api/units/:id/whatsapp-costs/sync        → trigger manual do sync
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
@@ -39,7 +24,6 @@ function resolveRange(fromStr?: string, toStr?: string): ResolvedRange {
   const defaultFrom = new Date(today);
   defaultFrom.setUTCDate(defaultFrom.getUTCDate() - 30);
   const from = fromStr ? new Date(`${fromStr}T00:00:00Z`) : defaultFrom;
-  // `to` é inclusivo do dia: somamos 1 pra cobrir 23:59.
   const toExclusive = toStr ? new Date(`${toStr}T00:00:00Z`) : new Date(today);
   toExclusive.setUTCDate(toExclusive.getUTCDate() + 1);
   return { from, to: toExclusive };
@@ -48,10 +32,6 @@ function resolveRange(fromStr?: string, toStr?: string): ResolvedRange {
 function isoDayUTC(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
-
-// ---------------------------------------------------------------------------
-// GET /api/units/:id/whatsapp-costs
-// ---------------------------------------------------------------------------
 
 export interface WhatsappCostsResponse {
   unit: { id: string; slug: string; name: string; wabaId: string | null };
@@ -147,7 +127,6 @@ export async function getWhatsappCostsHandler(req: Request, res: Response): Prom
     timelineMap.set(day, cur);
   }
 
-  // Orçamento do mês corrente.
   const monthStart = new Date();
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
@@ -196,10 +175,6 @@ export async function getWhatsappCostsHandler(req: Request, res: Response): Prom
   };
   res.json(payload);
 }
-
-// ---------------------------------------------------------------------------
-// GET /api/units/:id/whatsapp-templates
-// ---------------------------------------------------------------------------
 
 export interface WhatsappTemplatesResponse {
   unit: { id: string; slug: string; name: string };
@@ -269,7 +244,6 @@ export async function getWhatsappTemplatesHandler(req: Request, res: Response): 
     cur.read += r.read;
     cur.clicked += r.clicked;
     cur.costUsd += Number(r.costUsd);
-    // Templates podem ter name preenchido em alguns dias e null em outros.
     if (!cur.templateName && r.templateName) cur.templateName = r.templateName;
     aggMap.set(key, cur);
   }
@@ -302,10 +276,6 @@ export async function getWhatsappTemplatesHandler(req: Request, res: Response): 
   };
   res.json(payload);
 }
-
-// ---------------------------------------------------------------------------
-// POST /api/units/:id/whatsapp-costs/sync — trigger manual.
-// ---------------------------------------------------------------------------
 
 export async function syncWhatsappCostsHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id ?? '');

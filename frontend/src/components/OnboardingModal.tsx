@@ -1,26 +1,3 @@
-// ============================================================================
-// OnboardingModal — tutorial guiado de 5 passos pra primeira Unit.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Aparece automaticamente quando:
-//   - Não há nenhuma Unit, OU
-//   - A Unit selecionada não tem credenciais Kommo + OpenAI setadas
-// (heurística: olhamos kommoAccessToken vazio).
-//
-// Pode ser dispensado (×) e fica em localStorage marcado como "dismissed"
-// pra essa Unit. Mesmo sem completar.
-//
-// 5 passos:
-//   1. Boas-vindas + visão geral
-//   2. Como pegar token Kommo (link pro Kommo settings)
-//   3. Como pegar API key OpenAI
-//   4. Onde configurar a IA (Configurar IA tab)
-//   5. Como testar (mandar uma mensagem WhatsApp)
-//
-// É puramente educacional. Não força configuração — só orienta.
-// ============================================================================
-
 import { useEffect, useState } from 'react';
 import {
   ArrowRight,
@@ -52,7 +29,6 @@ export function OnboardingModal() {
   const [step, setStep] = useState(0);
   const [visible, setVisible] = useState(false);
 
-  // Decide se deve mostrar.
   useEffect(() => {
     const dismissed = localStorage.getItem(DISMISS_KEY) === '1';
     if (dismissed) {
@@ -210,7 +186,6 @@ export function OnboardingModal() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/80 backdrop-blur-sm p-4">
       <div className="w-full max-w-2xl rounded-2xl bg-zinc-900 ring-1 ring-zinc-800 shadow-2xl overflow-hidden">
-        {/* Header */}
         <div className="flex items-start justify-between p-6 border-b border-zinc-800/60">
           <div className="flex items-start gap-4">
             <div className="shrink-0 mt-0.5">{current.icon}</div>
@@ -231,10 +206,8 @@ export function OnboardingModal() {
           </button>
         </div>
 
-        {/* Body */}
         <div className="p-6">{current.body}</div>
 
-        {/* Steps indicator */}
         <div className="px-6 pb-2 flex items-center justify-center gap-1.5">
           {steps.map((_, i) => (
             <button
@@ -249,7 +222,6 @@ export function OnboardingModal() {
           ))}
         </div>
 
-        {/* Nav */}
         <div className="flex items-center justify-between p-6 border-t border-zinc-800/60">
           <button
             type="button"

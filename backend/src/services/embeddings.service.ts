@@ -1,16 +1,9 @@
-// ============================================================================
-// embeddings.service.ts — Embeddings via OpenAI text-embedding-3-small.
-//
-// CUSTO: $0.02 / 1M tokens. Cada entry da base de conhecimento custa
-// fração de centavo. Reusamos cada embedding até a pergunta mudar.
-// ============================================================================
-
 import axios from 'axios';
 import type { Unit } from '@prisma/client';
 import { resolveOpenAIApiKey } from './openai.service.js';
 
 const EMBED_URL = 'https://api.openai.com/v1/embeddings';
-const EMBED_MODEL = 'text-embedding-3-small'; // 1536 dimensions, cheap, good enough
+const EMBED_MODEL = 'text-embedding-3-small';
 
 export interface EmbedInput {
   unit: Pick<Unit, 'openaiApiKey'>;
@@ -22,7 +15,6 @@ export interface EmbedResult {
 }
 
 export async function embedTexts({ unit, texts }: EmbedInput): Promise<EmbedResult> {
-  // Chave EFETIVA — a unidade pode estar rodando na key da plataforma (env).
   const apiKey = resolveOpenAIApiKey(unit);
   if (!apiKey) throw new Error('Nenhuma chave OpenAI disponível — embedding bloqueado');
   if (texts.length === 0) return { vectors: [] };
@@ -38,7 +30,6 @@ export async function embedTexts({ unit, texts }: EmbedInput): Promise<EmbedResu
   return { vectors: data.data.map((d) => d.embedding) };
 }
 
-/** Cosine similarity entre dois vetores. Não normaliza — assumimos OpenAI já normaliza. */
 export function cosineSim(a: number[], b: number[]): number {
   const n = Math.min(a.length, b.length);
   let dot = 0;

@@ -1,43 +1,3 @@
-// ============================================================================
-// follow-up-presets.ts — Escadas prontas por etapa e por motivo de perda.
-//
-// POR QUE POR ETAPA, E NÃO UMA SÓ
-// -------------------------------
-// O objetivo muda com a etapa, e a mensagem tem que mudar junto:
-//   EM QUALIFICAÇÃO → trazer de volta pra marcar
-//   AGENDADO        → garantir o antecipado e o comparecimento
-//   PERDIDO         → depende do MOTIVO. "Achou caro" e "vai viajar" não se
-//                     recuperam com a mesma frase, nem no mesmo prazo.
-//
-// MOTIVOS QUE NÃO SE PERSEGUE — a lista de baixo
-// ----------------------------------------------
-// Alguns motivos são um "não" que merece respeito, e insistir neles não é
-// conversão, é dano: quem declarou não ter condições financeiras, quem tem
-// bandeira vermelha clínica, quem clicou por engano. Isso fica no CÓDIGO e não
-// só na tela, porque é o tipo de decisão que não pode depender de alguém
-// lembrar de deixar o interruptor desligado.
-//
-// TRÊS TENTATIVAS EM DIAS DISTINTOS — e por que não fazemos assim
-// ---------------------------------------------------------------
-// A recomendação clássica de clínicas é três tentativas em dias diferentes, e
-// ela é boa. Nós não conseguimos segui-la ao pé da letra, e a razão é técnica,
-// não de estratégia: no WhatsApp, mensagem livre só passa dentro de 24h da
-// última fala do paciente. Uma tentativa no dia 2 exige template pago
-// aprovado pela Meta — outro produto, com texto fixo, que não sabe o que foi
-// conversado.
-//
-// Então concentramos as tentativas dentro da janela e mudamos a INTENÇÃO de
-// cada uma, em vez do dia. O efeito buscado é o mesmo: mais de um toque, cada
-// um com ângulo diferente. Se um dia a clínica aprovar templates na Meta, o
-// degrau do dia 2 e do dia 4 passam a ser possíveis — e aí vale acrescentar.
-//
-// TODAS AS ESCADAS CABEM EM 24H
-// -----------------------------
-// O WhatsApp só entrega mensagem livre dentro de 24h da última fala do
-// paciente. Um degrau em "3 dias" não seria entregue — e um lead perdido há
-// uma semana está fora de alcance por qualquer escada.
-// ============================================================================
-
 export interface Degrau {
   aposMin: number;
   intencao: string;
@@ -52,7 +12,6 @@ export interface Preset {
   steps: Degrau[];
 }
 
-/** Etapas do funil COMERCIAL da Doutor Hérnia. */
 export const ETAPAS = {
   QUALIFICACAO: 108773004,
   AGENDADO: 108773008,
@@ -61,16 +20,6 @@ export const ETAPAS = {
   PERDIDO: 143,
 } as const;
 
-/**
- * Motivos de perda que NUNCA recebem reengajamento automático.
- *
- * Três famílias, e cada uma por uma razão diferente:
- *   - dinheiro que a pessoa não tem: insistir é constranger quem já se
- *     expôs ao dizer que não pode pagar;
- *   - risco clínico: bandeira vermelha precisa de gente, não de automação;
- *   - o "não" claro: sem interesse, engano, terceiro — perseguir aqui só
- *     gera bloqueio no WhatsApp, e bloqueio derruba a reputação do número.
- */
 export const MOTIVOS_INTOCAVEIS: Array<{ id: number; nome: string; porque: string }> = [
   { id: 37797692, nome: 'Sem condições financeiras', porque: 'já disse que não pode pagar — insistir constrange' },
   { id: 37797684, nome: 'Financeiramente vulnerável', porque: 'mesma razão, e aqui a exposição é maior' },
@@ -85,9 +34,6 @@ export const MOTIVOS_INTOCAVEIS: Array<{ id: number; nome: string; porque: strin
 ];
 
 export const PRESETS: Preset[] = [
-  // -------------------------------------------------------------------------
-  // EM QUALIFICAÇÃO — conversou e sumiu antes de marcar.
-  // -------------------------------------------------------------------------
   {
     statusId: ETAPAS.QUALIFICACAO,
     statusName: 'EM QUALIFICAÇÃO',
@@ -129,9 +75,6 @@ export const PRESETS: Preset[] = [
     ],
   },
 
-  // -------------------------------------------------------------------------
-  // AGENDADO — marcou. Falta o antecipado e falta comparecer.
-  // -------------------------------------------------------------------------
   {
     statusId: ETAPAS.AGENDADO,
     statusName: 'AGENDADO',
@@ -162,9 +105,6 @@ export const PRESETS: Preset[] = [
     ],
   },
 
-  // -------------------------------------------------------------------------
-  // PERDIDO, por motivo. Cada um pede um argumento diferente.
-  // -------------------------------------------------------------------------
   {
     statusId: ETAPAS.PERDIDO,
     statusName: 'PERDIDO',

@@ -1,14 +1,3 @@
-// ============================================================================
-// sla-report.controller.ts — endpoint máquina-a-máquina pro n8n.
-//
-// GET /integrations/sla-report
-//   Auth: header x-internal-key OU Authorization: Bearer <INTERNAL_API_KEY>
-//
-// Devolve o resumo do dia do SLA (por unidade com o SLA ligado). O n8n
-// (workflow agendado de fim de dia) consome, formata e manda no grupo.
-// Rota PÚBLICA (antes do requireAuth), protegida só pela chave.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';

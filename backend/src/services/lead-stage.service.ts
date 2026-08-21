@@ -1,30 +1,3 @@
-// ============================================================================
-// lead-stage.service.ts — A ETAPA REAL do lead, lida do Kommo.
-//
-// O PROBLEMA
-// ----------
-// A IA e seus workers tratam o banco DELA como se fosse a verdade completa. Nas
-// unidades novas isso é perigoso: os MILHARES de leads migrados do sistema
-// antigo têm estado real (já agendado, já em tratamento) que existe SÓ no Kommo
-// — não no banco da IA. Foi assim que, em Parauapebas, a IA disse "não quero te
-// deixar sem sua consulta" pra um paciente que JÁ estava agendado: ela não tinha
-// como saber, porque o agendamento foi feito no sistema antigo, antes dela.
-//
-// A SOLUÇÃO
-// ---------
-// A fonte de verdade que funciona pro lead legado é a ETAPA do Kommo: a migração
-// colocou os agendados em AGENDADO/Compareceu/Ganho e os pacientes em TRATAMENTO.
-// Aqui a gente lê a etapa atual do lead e responde UMA pergunta:
-//   "esse paciente JÁ agendou ou já é paciente?" (→ não tratar como novo)
-//
-// Conservador de propósito: só devolve `jaAgendadoOuPaciente=true` quando há
-// certeza (etapa agendada+ no comercial, ganho, ou pipeline de tratamento).
-// Na dúvida, devolve false — nunca atrapalha um lead de verdade novo.
-//
-// Cache: pipelines por unidade (mudam raro) e a etapa por lead (curto), pra não
-// bater no Kommo em todo turno da mesma conversa.
-// ============================================================================
-
 import type { Unit } from '@prisma/client';
 import type { KommoLead, KommoPipeline } from './kommo.service.js';
 import { createKommoClient } from './kommo.service.js';
@@ -32,14 +5,12 @@ import { logger } from '../lib/logger.js';
 
 export interface EstadoEtapaLead {
   statusId: number;
-  /** Nome da etapa no Kommo (ex.: "AGENDADO", "EM TRATAMENTO"). */
   nome: string;
-  /** true = o lead JÁ agendou ou já é paciente — não tratar como contato novo. */
   jaAgendadoOuPaciente: boolean;
 }
 
-const ETAPA_TTL_MS = 90_000; // etapa do lead: cache curto por lead
-const PIPE_TTL_MS = 10 * 60_000; // pipelines: mudam raramente
+const ETAPA_TTL_MS = 90_000;
+const PIPE_TTL_MS = 10 * 60_000;
 
 const pipeCache = new Map<string, { em: number; pipes: KommoPipeline[] }>();
 const etapaCache = new Map<string, { em: number; valor: EstadoEtapaLead | null }>();
@@ -60,18 +31,8 @@ function normalizar(s: string): string {
     .trim();
 }
 
-/**
- * 2º sinal de "já agendado" — CINTO E SUSPENSÓRIO, independente da etapa. Lê o
- * campo "Data da Consulta" (ou "Data de agendamento") do lead: se estiver
- * preenchido com uma data de HOJE em diante, o lead tem consulta marcada, mesmo
- * que a etapa não reflita isso. Datas PASSADAS são ignoradas de propósito — um
- * lead reengajando teria uma data velha ali, e bloquear travaria um novo
- * agendamento legítimo (a etapa cuida do estado atual nesses casos). Só bate no
- * objeto do lead já carregado, sem chamada extra.
- */
 function temConsultaMarcadaNoCampo(lead: KommoLead): boolean {
   const campos = lead.custom_fields_values ?? [];
-  // Margem de 1 dia pra trás cobre fuso e a consulta "de hoje" (guardada à meia-noite).
   const limiar = Math.floor(Date.now() / 1000) - 24 * 3600;
   for (const f of campos) {
     const nome = normalizar(f.field_name ?? '');
@@ -85,12 +46,6 @@ function temConsultaMarcadaNoCampo(lead: KommoLead): boolean {
   return false;
 }
 
-/**
- * Classifica a etapa do lead. `type` 142 = Ganho e 143 = Perdido são IDs de
- * SISTEMA (iguais em toda conta). Perdido NÃO conta como "agendado" — quem trata
- * Perdido é a IA de resgate. Dentro do comercial, "agendado ou depois" é medido
- * pela posição (`sort`) contra a etapa AGENDADO (âncora).
- */
 function classificar(
   unit: Unit,
   pipes: KommoPipeline[],
@@ -104,14 +59,10 @@ function classificar(
   const nome = status?.name?.trim() || `etapa ${statusId}`;
   const semAgenda = (v: boolean): EstadoEtapaLead => ({ statusId, nome, jaAgendadoOuPaciente: v });
 
-  // Perdido (sistema): resgate cuida; não é "já agendado".
   if (statusId === 143 || status?.type === 143) return semAgenda(false);
-  // Ganho/Won (sistema): já fechou.
   if (statusId === 142 || status?.type === 142) return semAgenda(true);
-  // Pipeline de TRATAMENTO: já é paciente.
   if (pipe && /tratamento/i.test(pipe.name || '')) return semAgenda(true);
 
-  // Comercial: âncora = AGENDADO (scheduled_meeting configurado, ou nome ~ agendad*).
   const intents = unit.pipelineIntents as Record<string, unknown> | null;
   const anchorId = Number(intents?.scheduled_meeting) || null;
   let anchorSort: number | null = null;
@@ -126,11 +77,6 @@ function classificar(
   return semAgenda(jaAgendado);
 }
 
-/**
- * A etapa atual do lead no Kommo, classificada. `null` = não consegui ler
- * (sem leadId, ou o Kommo falhou) — nesse caso o prompt segue sem o bloco, que é
- * o comportamento seguro (nunca bloqueia por engano).
- */
 export async function estadoEtapaDoLead(
   unit: Unit,
   leadId: number | undefined,
@@ -148,8 +94,6 @@ export async function estadoEtapaDoLead(
       const pipes = await pipelinesDaUnidade(unit);
       valor = classificar(unit, pipes, lead.pipeline_id, lead.status_id);
     }
-    // 2º sinal (cinto e suspensório): "Data da Consulta" preenchida com data de
-    // hoje em diante conta como agendado, mesmo que a etapa não reflita.
     if (lead && temConsultaMarcadaNoCampo(lead)) {
       valor = valor
         ? { ...valor, jaAgendadoOuPaciente: true }
@@ -163,7 +107,7 @@ export async function estadoEtapaDoLead(
     valor = null;
   }
 
-  if (etapaCache.size > 5000) etapaCache.clear(); // poda simples anti-vazamento
+  if (etapaCache.size > 5000) etapaCache.clear();
   etapaCache.set(key, { em: Date.now(), valor });
   return valor;
 }

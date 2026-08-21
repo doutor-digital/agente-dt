@@ -1,28 +1,11 @@
-// ============================================================================
-// formkit — peças de formulário compartilhadas, no skin "Stripe Settings"
-// (escolhido pelo João, adaptado à cor `brand` do console pra ficar coeso).
-//
-// Fonte única do visual de TODOS os formulários do agente. Um painel importa
-// daqui em vez de redefinir TextField/SelectField/etc. localmente — muda aqui,
-// muda em todo lugar.
-//
-// Assinaturas espelham as peças que já existiam no WizardPanel, então a
-// migração é só trocar a definição local pelo import.
-// ============================================================================
-
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
-// Tokens do skin — LINEAR: input transparente, borda sutil, sem anel colorido.
-// Cor = estado, não decoração. Um lugar só; mexer aqui reflete em tudo.
 const INPUT =
   'w-full px-3 py-2 rounded-md border border-zinc-800 bg-transparent text-[13px] text-zinc-100 outline-none transition ' +
   'placeholder:text-zinc-600 focus:border-zinc-600 hover:border-zinc-700';
-// ── FieldRow — linha de settings: rótulo + explicação à ESQUERDA, controle à
-//    DIREITA, um por linha, com hairline dividindo (estilo Linear). Empilha no
-//    mobile. Dá a cara de produto enxuto em vez de campos amontoados num grid.
 function FieldRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <div className="grid gap-1.5 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] sm:gap-6 sm:items-start py-3.5 border-b border-zinc-800/40 last:border-b-0 last:pb-0">
@@ -35,7 +18,6 @@ function FieldRow({ label, hint, children }: { label: string; hint?: string; chi
   );
 }
 
-// ── FeatureCard — seção com toggle, acordeão. Coração do formulário. ────────
 export function FeatureCard({
   icon,
   title,
@@ -121,7 +103,6 @@ export function FeatureCard({
   );
 }
 
-// ── Toggle ──────────────────────────────────────────────────────────────────
 export function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
@@ -142,7 +123,6 @@ export function Toggle({ value, onChange }: { value: boolean; onChange: (v: bool
   );
 }
 
-// ── TextField ────────────────────────────────────────────────────────────────
 export function TextField({
   label,
   value,
@@ -163,7 +143,6 @@ export function TextField({
   );
 }
 
-// ── NumberField ──────────────────────────────────────────────────────────────
 export function NumberField({
   label,
   value,
@@ -193,7 +172,6 @@ export function NumberField({
   );
 }
 
-// ── TextareaField ────────────────────────────────────────────────────────────
 export function TextareaField({
   label,
   value,
@@ -216,7 +194,6 @@ export function TextareaField({
   );
 }
 
-// ── SelectField ──────────────────────────────────────────────────────────────
 export function SelectField({
   label,
   value,
@@ -243,7 +220,6 @@ export function SelectField({
   );
 }
 
-// ── KeywordList — chips + input pra listas de palavras ───────────────────────
 export function KeywordList({
   keywords,
   onChange,
