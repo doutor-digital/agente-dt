@@ -36,6 +36,29 @@ const CONNECTORS = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
 // Palavras que um NOME nunca é. Se qualquer token bater aqui, não é nome.
 // (artigos/quantificadores, verbos comuns, saudações, termos clínicos e
 // adjetivos/condições que apareceram como falso-positivo numa clínica.)
+/**
+ * Vocabulário de QUEIXA — nunca é nome de pessoa.
+ *
+ * Caso real (Imperatriz, 21/08/2026): a IA perguntou o nome, o paciente não
+ * respondeu, um atendente humano entrou perguntando dos sintomas, e o paciente
+ * escreveu "Fraqueza nas pernas". Como a última pergunta DA IA ainda era a do
+ * nome, a captura tratou a queixa como nome e o card virou
+ * "Fraqueza Nas Pernas 21/08/2026".
+ *
+ * Uma palavra clínica em qualquer posição já basta pra recusar: perder uma
+ * captura custa uma pergunta a mais; gravar a queixa como nome estraga o card,
+ * o histórico e todo tratamento que use o nome depois.
+ */
+const PALAVRAS_DE_QUEIXA = new Set([
+  'dor', 'dores', 'dorzinha', 'doi', 'doendo', 'fraqueza', 'formigamento',
+  'dormencia', 'inchaco', 'inflamacao', 'lesao', 'hernia', 'disco', 'coluna',
+  'lombar', 'cervical', 'ciatico', 'ciatica', 'nervo', 'perna', 'pernas',
+  'braco', 'bracos', 'costas', 'joelho', 'ombro', 'quadril', 'pescoco',
+  'cirurgia', 'exame', 'ressonancia', 'raio', 'fisioterapia', 'remedio',
+  'tratamento', 'consulta', 'medico', 'sintoma', 'sintomas', 'protrusao',
+  'artrose', 'bico', 'papagaio', 'travada', 'travado',
+]);
+
 const STOPWORDS = new Set([
   // artigos / quantificadores / pronomes
   'o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas', 'meu', 'minha', 'seu', 'sua',
@@ -73,6 +96,9 @@ export function looksLikeName(candidate: string): boolean {
   let temTokenReal = false;
   for (const w of words) {
     const n = norm(w);
+    // Uma palavra de queixa em qualquer posição já derruba: é resposta sobre o
+    // sintoma, não apresentação. Ver PALAVRAS_DE_QUEIXA.
+    if (PALAVRAS_DE_QUEIXA.has(n)) return false;
     if (STOPWORDS.has(n)) return false; // qualquer stopword → não é nome
     if (CONNECTORS.has(n)) continue; // conectores no meio são ok
     if (!NAME_WORD_RE.test(w)) return false; // caractere estranho
