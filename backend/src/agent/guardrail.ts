@@ -32,11 +32,11 @@ function amountApproved(v: number, approved: Set<number>): boolean {
 
 const FALLBACK_PRECO =
   'Sobre o valor, deixa eu confirmar certinho pra não te passar informação errada 🙏 ' +
-  'Me conta rapidinho: qual é o seu incômodo e onde está doendo? Aí já te oriento sobre a avaliação.';
+  'Me conta rapidinho: qual é o seu incômodo e onde está doendo? Aí já te oriento sobre a consulta.';
 
 const FALLBACK_CLINICO =
   'Sobre o que você está sentindo, quem avalia com segurança é a nossa especialista, na consulta — ' +
-  'por aqui eu não consigo dar um diagnóstico. Vamos garantir sua avaliação? 😊';
+  'por aqui eu não consigo dar um diagnóstico. Vamos garantir sua consulta? 😊';
 
 const REGRAS_CLINICAS: { key: string; re: RegExp }[] = [
   {
