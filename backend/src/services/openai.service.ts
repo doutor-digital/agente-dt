@@ -28,13 +28,25 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
   'claude-opus-5': { inputPer1M: 5, outputPer1M: 25 },
   'claude-opus-4-8': { inputPer1M: 5, outputPer1M: 25 },
   'claude-opus-4-7': { inputPer1M: 5, outputPer1M: 25 },
-  'claude-sonnet-5': { inputPer1M: 3, outputPer1M: 15 },
+  'claude-sonnet-5': { inputPer1M: 2, outputPer1M: 10 },
   'claude-sonnet-4-6': { inputPer1M: 3, outputPer1M: 15 },
   'claude-haiku-4-5': { inputPer1M: 1, outputPer1M: 5 },
   'gemini-2.5-flash': { inputPer1M: 0.3, outputPer1M: 2.5 },
   'gemini-2.5-pro': { inputPer1M: 1.25, outputPer1M: 10 },
   'gemini-2.0-flash': { inputPer1M: 0.1, outputPer1M: 0.4 },
 };
+
+const CACHE_MULTIPLIERS: Record<string, { read: number; write: number }> = {
+  anthropic: { read: 0.1, write: 2 },
+  openai: { read: 0.5, write: 0 },
+  google: { read: 0.25, write: 0 },
+};
+
+export function providerOfModel(model: string): 'anthropic' | 'openai' | 'google' {
+  if (model.startsWith('claude')) return 'anthropic';
+  if (model.startsWith('gemini')) return 'google';
+  return 'openai';
+}
 
 export function calculateCost(
   model: string,
@@ -45,11 +57,12 @@ export function calculateCost(
 ): number {
   const price = MODEL_PRICES[model];
   if (!price) return 0;
+  const mult = CACHE_MULTIPLIERS[providerOfModel(model)];
   const uncached = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
   const inputCost =
     (uncached / 1_000_000) * price.inputPer1M +
-    (cacheReadTokens / 1_000_000) * price.inputPer1M * 0.1 +
-    (cacheWriteTokens / 1_000_000) * price.inputPer1M * 2;
+    (cacheReadTokens / 1_000_000) * price.inputPer1M * mult.read +
+    (cacheWriteTokens / 1_000_000) * price.inputPer1M * mult.write;
   const outputCost = (completionTokens / 1_000_000) * price.outputPer1M;
   return Math.round((inputCost + outputCost) * 1_000_000) / 1_000_000;
 }
@@ -103,16 +116,27 @@ export type ChatModel =
   | ChatAnthropic
   | ChatGoogleGenerativeAI;
 
+const ANTHROPIC_EFFORTS = new Set(['low', 'medium', 'high']);
+
+export function resolveAnthropicEffort(v: string | null | undefined): 'low' | 'medium' | 'high' | null {
+  if (!v) return null;
+  const s = v.trim().toLowerCase();
+  return ANTHROPIC_EFFORTS.has(s) ? (s as 'low' | 'medium' | 'high') : null;
+}
+
 export function createChatModel(
   unit: Unit | null,
   overrides: ChatOpenAIOverrides = {},
 ): ChatModel {
   if (unit?.llmProvider === 'anthropic' && unit.anthropicApiKey) {
+    const effort = resolveAnthropicEffort(unit.anthropicEffort);
     return new ChatAnthropic({
       apiKey: unit.anthropicApiKey,
       model: overrides.model ?? unit.anthropicModel ?? 'claude-opus-4-8',
       maxTokens: overrides.maxTokens ?? unit.openaiMaxTokens ?? 1024,
       maxRetries: OPENAI_MAX_RETRIES,
+      thinking: { type: 'disabled' },
+      ...(effort ? { outputConfig: { effort } } : {}),
     });
   }
   if (unit?.llmProvider === 'google' && unit.googleApiKey) {
@@ -229,6 +253,15 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
       ],
     });
     const latencyMs = Math.round(performance.now() - t0);
+
+    const stopReason = (response as { additional_kwargs?: { stop_reason?: string } })
+      .additional_kwargs?.stop_reason;
+    if (stopReason === 'max_tokens') {
+      logger.warn(
+        { unitId: args.unitId, model: args.modelName, traceId: args.traceId },
+        'resposta truncada por max_tokens — aumentar openaiMaxTokens da unidade',
+      );
+    }
 
     const finalUsage: TokenUsage = usage ?? {};
     let { promptTokens, completionTokens, totalTokens } = finalUsage;

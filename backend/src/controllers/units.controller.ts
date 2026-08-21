@@ -37,6 +37,10 @@ const unitInputBase = {
   llmProvider: z.enum(['openai', 'anthropic', 'google']).optional(),
   anthropicApiKey: z.string().nullable().optional(),
   anthropicModel: z.string().min(1).max(60).optional(),
+  anthropicEffort: z.preprocess(
+    (v) => (v === '' ? null : v),
+    z.enum(['low', 'medium', 'high']).nullable().optional(),
+  ),
   googleApiKey: z.string().nullable().optional(),
   googleModel: z.string().min(1).max(60).optional(),
   openaiApiKey: z.string().nullable().optional(),

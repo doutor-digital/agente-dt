@@ -74,6 +74,7 @@ const blankInput: UnitInput = {
   llmProvider: 'openai',
   anthropicApiKey: '',
   anthropicModel: 'claude-opus-4-8',
+  anthropicEffort: '',
   openaiApiKey: '',
   openaiAdminKey: '',
   openaiModel: 'gpt-4o-mini',
@@ -113,6 +114,7 @@ function unitToInput(u: Unit): UnitInput {
     llmProvider: u.llmProvider ?? 'openai',
     anthropicApiKey: u.anthropicApiKey ?? '',
     anthropicModel: u.anthropicModel ?? 'claude-opus-4-8',
+    anthropicEffort: u.anthropicEffort ?? '',
     googleApiKey: u.googleApiKey ?? '',
     googleModel: u.googleModel ?? 'gemini-2.5-flash',
     openaiApiKey: u.openaiApiKey ?? '',
@@ -364,6 +366,13 @@ export function UnitsPanel() {
                   onChange={(v) => setDraft({ ...draft, anthropicModel: v })}
                   options={CLAUDE_MODELS}
                   hint="Opus = mais inteligente; Haiku = mais barato e rápido."
+                />
+                <SelectField
+                  label="Esforço de raciocínio"
+                  value={draft.anthropicEffort ?? ''}
+                  onChange={(v) => setDraft({ ...draft, anthropicEffort: v })}
+                  options={CLAUDE_EFFORTS}
+                  hint="Quanto a IA pensa antes de responder. Médio responde mais rápido e gasta menos; Padrão pensa mais fundo."
                 />
               </div>
             )}
@@ -1740,6 +1749,13 @@ function Field({
     </div>
   );
 }
+
+const CLAUDE_EFFORTS = [
+  { value: '', label: 'Padrão (pensa fundo)' },
+  { value: 'medium', label: 'Médio — mais rápido (recomendado)' },
+  { value: 'low', label: 'Baixo — máxima velocidade' },
+  { value: 'high', label: 'Alto — igual ao padrão' },
+];
 
 const CLAUDE_MODELS = [
   { value: 'claude-sonnet-5', label: 'Sonnet 5 — equilíbrio, recomendado ($3/$15 por Mtok)' },
