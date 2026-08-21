@@ -9,6 +9,8 @@ import {
   updateLesson,
   deleteLesson,
 } from '../services/lessons.service.js';
+import { runReflectionForUnit } from '../services/reflection.service.js';
+import { prisma } from '../lib/prisma.js';
 
 export async function listLessonsHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id ?? '');
@@ -46,4 +48,16 @@ export async function deleteLessonHandler(req: Request, res: Response): Promise<
   const id = String(req.params.lessonId ?? '');
   const count = await deleteLesson(unitId, id);
   res.json({ ok: count > 0 });
+}
+
+// Ciclo de reflexão: relê conversas e cria SUGESTÕES de aprendizado (desligadas).
+export async function reflectLessonsHandler(req: Request, res: Response): Promise<void> {
+  const unitId = String(req.params.id ?? '');
+  const unit = await prisma.unit.findUnique({ where: { id: unitId } });
+  if (!unit) {
+    res.status(404).json({ error: 'Unidade não encontrada.' });
+    return;
+  }
+  const result = await runReflectionForUnit(unit);
+  res.json(result);
 }

@@ -17,6 +17,8 @@ export function AprendizadosPanel() {
   const [novo, setNovo] = useState('');
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [reflecting, setReflecting] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!selectedUnitId) {
@@ -70,6 +72,27 @@ export function AprendizadosPanel() {
     }
   }
 
+  async function refletir() {
+    if (!selectedUnitId || reflecting) return;
+    setReflecting(true);
+    setMsg(null);
+    try {
+      const r = await api.reflectLessons(selectedUnitId);
+      setMsg(
+        r.proposed > 0
+          ? `✨ ${r.proposed} sugestã${r.proposed === 1 ? 'o nova' : 'oes novas'} — role e ligue as que fizerem sentido.`
+          : r.analisadas < 3
+            ? 'Ainda há poucas conversas pra analisar. Volte depois de mais atendimentos.'
+            : 'Nenhum padrão novo desta vez — a IA já está bem afiada aqui 👏'
+      );
+      await load();
+    } catch {
+      setMsg('Não consegui gerar sugestões agora. Tente de novo em instantes.');
+    } finally {
+      setReflecting(false);
+    }
+  }
+
   if (!selectedUnitId) {
     return <div className="p-8 text-sm text-zinc-500">Selecione um agente pra ver os aprendizados.</div>;
   }
@@ -90,6 +113,19 @@ export function AprendizadosPanel() {
             <span className="text-zinc-400"> {ativos} ativa{ativos === 1 ? '' : 's'} de {lessons.length}.</span>
           )}
         </p>
+
+        {/* reflexão — a IA relê as conversas e sugere regras */}
+        <div className="flex items-center gap-3 mb-4 flex-wrap">
+          <button
+            onClick={refletir}
+            disabled={reflecting}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-[13px] font-semibold bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/30 hover:bg-violet-500/25 disabled:opacity-50"
+          >
+            {reflecting ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+            {reflecting ? 'Analisando conversas…' : 'Gerar sugestões da IA'}
+          </button>
+          {msg && <span className="text-[12px] text-zinc-400">{msg}</span>}
+        </div>
 
         {/* adicionar */}
         <div className="surface p-4 mb-6">
@@ -128,8 +164,10 @@ export function AprendizadosPanel() {
               <li
                 key={l.id}
                 className={clsx(
-                  'surface px-4 py-3 flex items-start gap-3 transition-opacity',
-                  !l.enabled && 'opacity-55',
+                  'px-4 py-3 flex items-start gap-3 transition-all',
+                  l.source === 'reflexao' && !l.enabled
+                    ? 'rounded-xl bg-violet-500/10 ring-1 ring-violet-500/30'
+                    : clsx('surface', !l.enabled && 'opacity-55'),
                 )}
               >
                 <button
@@ -152,7 +190,8 @@ export function AprendizadosPanel() {
                   <div className="text-[14px] text-zinc-100 leading-snug">{l.content}</div>
                   {l.source === 'reflexao' && (
                     <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-semibold uppercase tracking-wide text-violet-300">
-                      <Sparkles size={10} /> aprendido pela reflexão
+                      <Sparkles size={10} />
+                      {l.enabled ? 'aprendido pela reflexão' : 'sugestão da IA — ligue pra aplicar'}
                     </span>
                   )}
                 </div>
