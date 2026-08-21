@@ -1,11 +1,3 @@
-// ============================================================================
-// eval-sofia.mjs — suíte de avaliação da Sofia (regressão de comportamento).
-// Roda casos de paciente pelo /playground/run e checa asserções automáticas.
-// Uso:
-//   BASE=... EMAIL=... PASS=... UNIT=... node src/scripts/eval-sofia.mjs
-// (defaults abaixo apontam pra produção / unidade comercial de Imperatriz)
-// ============================================================================
-
 const BASE = process.env.BASE || 'https://agente-vps.doutordigitalconsultoria.com/api';
 const EMAIL = process.env.EMAIL || 'doutordigitalconsultoria@gmail.com';
 const PASS = process.env.PASS || 'DoutorDigital2026';
@@ -18,7 +10,6 @@ async function call(method, path, body) {
     headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
-  // undici: getSetCookie() devolve array; get('set-cookie') junta e quebra.
   const sc = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
   if (sc.length) cookie = sc.map((c) => c.split(';')[0]).join('; ');
   const txt = await res.text();
@@ -28,8 +19,6 @@ async function call(method, path, body) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function run(messages, leadId) {
-  // leadId único por caso — senão as threads do LangGraph se misturam.
-  // O playground exige {role, content}; casos passam string = mensagem do paciente.
   const msgs = messages.map((m) => (typeof m === 'string' ? { role: 'user', content: m } : m));
   const { data } = await call('POST', `/units/${UNIT}/playground/run`, { leadId, messages: msgs });
   const reply = (data.reply || '').toString();
@@ -41,7 +30,6 @@ const norm = (s) => s.toLowerCase();
 const NARRATION = ['apliquei', 'atualizei o t', 'pausei a ia', 'registrei', 'adicionei a tag', 'marquei a tag', 'sandbox', 'chamei a', 'executei'];
 const noNarration = (r) => !NARRATION.some((m) => norm(r).includes(m));
 
-// cada caso: mensagens do paciente + checagem sobre {reply, tools}
 const CASES = [
   {
     name: 'Primeiro contato acolhe e pede o nome',
@@ -108,7 +96,6 @@ const CASES = [
     idx++;
     try {
       out = await run(c.msgs, 970000 + idx);
-      // 1 retry se vier vazio (chamada transitória)
       if (!out.reply) { await sleep(1500); out = await run(c.msgs, 970500 + idx); }
       await sleep(600);
       const ok = c.check(out);
