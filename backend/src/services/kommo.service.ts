@@ -338,18 +338,21 @@ export function splitIntoChunks(text: string, maxLen: number): string[] {
       { em: slice.lastIndexOf('? '), inclui: 1 },
       { em: slice.lastIndexOf('! '), inclui: 1 },
     ];
+    // PISO BAIXO, e isso é o ponto: qualquer fronteira de frase vale mais que
+    // um corte no meio dela. Com piso de 35% um caso real de produção quebrou —
+    // a única fronteira da janela (um ponto final aos 75 chars) foi descartada
+    // por ser "cedo demais", o código caiu no último espaço e o paciente
+    // recebeu "...segurar o próprio peso na" e depois "perna? E chegou...".
+    // Um balão curto se lê; uma frase partida ao meio, não.
     const melhor = candidatos
-      // 0.35 e não 0.5: numa lista de linhas curtas, a última quebra útil pode
-      // cair antes da metade. Aceitar um pedaço menor é melhor que rachar uma
-      // linha ao meio — pedaço curto o paciente lê, linha partida ele não
-      // entende.
-      .filter((c) => c.em > maxLen * 0.35)
+      .filter((c) => c.em > maxLen * 0.12)
       .sort((a, b) => b.em - a.em)[0];
 
     if (melhor) {
       cut = melhor.em + melhor.inclui;
     } else {
-      // Sem fronteira nenhuma — corta no último espaço pra não rachar palavra.
+      // Sem fronteira NENHUMA na janela (texto corrido muito longo): aí sim
+      // corta no último espaço, que ao menos não racha a palavra.
       const lastSpace = slice.lastIndexOf(' ');
       if (lastSpace > maxLen * 0.35) cut = lastSpace;
     }
