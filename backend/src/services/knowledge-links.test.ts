@@ -75,3 +75,23 @@ test('parseQaPairs não quebra com lixo', () => {
   assert.deepEqual(parseQaPairs('{}'), []);
   assert.deepEqual(parseQaPairs('{"pares": "x"}'), []);
 });
+
+test('ehPlaylistYoutube diferencia playlist de vídeo único', async () => {
+  const { ehPlaylistYoutube } = await import('./knowledge-links.service.js');
+  assert.equal(ehPlaylistYoutube('https://www.youtube.com/playlist?list=PL48lIFXu2xrs10'), true);
+  assert.equal(ehPlaylistYoutube('https://www.youtube.com/watch?v=abc12345678&list=PLxyz'), true);
+  assert.equal(ehPlaylistYoutube('https://www.youtube.com/watch?v=abc12345678'), false);
+  assert.equal(ehPlaylistYoutube('https://youtu.be/abc12345678'), false);
+});
+
+test('extrairVideoIdsYoutube deduplica, preserva ordem e respeita o teto', async () => {
+  const { extrairVideoIdsYoutube } = await import('./knowledge-links.service.js');
+  const html =
+    '"videoId":"WXuRnbq9pQo" x "videoId":"AAAAAAAAAAA" y "videoId":"WXuRnbq9pQo" z ' +
+    Array.from({ length: 20 }, (_, i) => `"videoId":"BBBBBBBBB${String(i).padStart(2, '0').slice(0, 2)}"`).join(' ');
+  const ids = extrairVideoIdsYoutube(html, 5);
+  assert.equal(ids.length, 5);
+  assert.equal(ids[0], 'WXuRnbq9pQo');
+  assert.equal(ids[1], 'AAAAAAAAAAA');
+  assert.equal(new Set(ids).size, ids.length);
+});

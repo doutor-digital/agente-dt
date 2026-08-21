@@ -13,6 +13,24 @@ const DISTILL_MODEL = 'gpt-4o-mini';
 
 export type TipoLink = 'video' | 'avaliacao' | 'artigo' | 'pagina';
 
+export function ehPlaylistYoutube(url: string): boolean {
+  return /youtube\.com\/playlist|[?&]list=/.test(url);
+}
+
+export function extrairVideoIdsYoutube(html: string, max = 8): string[] {
+  const ids: string[] = [];
+  const vistos = new Set<string>();
+  const re = /"videoId":"([A-Za-z0-9_-]{11})"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null && ids.length < max) {
+    if (!vistos.has(m[1])) {
+      vistos.add(m[1]);
+      ids.push(m[1]);
+    }
+  }
+  return ids;
+}
+
 export function detectarTipo(url: string): TipoLink {
   const u = url.toLowerCase();
   if (/youtube\.com|youtu\.be/.test(u)) return 'video';
@@ -104,30 +122,70 @@ export function parseQaPairs(raw: string): Array<{ question: string; answer: str
     .slice(0, MAX_ENTRIES_POR_LINK);
 }
 
-async function buscarConteudo(url: string, tipo: TipoLink): Promise<{ titulo: string | null; texto: string }> {
+async function buscarHtml(url: string): Promise<string> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
+    const ehYoutube = /youtube\.com|youtu\.be/.test(url);
     const res = await fetch(url, {
       signal: ctrl.signal,
       redirect: 'follow',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
         'Accept-Language': 'pt-BR,pt;q=0.9',
+        ...(ehYoutube ? { Cookie: 'CONSENT=YES+cb; SOCS=CAISAiAD' } : {}),
       },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} ao buscar o link`);
-    const html = (await res.text()).slice(0, 2_000_000);
-
-    if (tipo === 'video') {
-      const { titulo } = extrairTextoHtml(html);
-      const descricao = extrairDescricaoYoutube(html);
-      return { titulo, texto: descricao || extrairTextoHtml(html).texto };
-    }
-    return extrairTextoHtml(html);
+    return (await res.text()).slice(0, 2_000_000);
   } finally {
     clearTimeout(t);
   }
+}
+
+async function oembedYoutube(videoId: string): Promise<{ title: string; author: string } | null> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10_000);
+    const res = await fetch(
+      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
+      { signal: ctrl.signal },
+    );
+    clearTimeout(t);
+    if (!res.ok) return null;
+    const d = (await res.json()) as { title?: string; author_name?: string };
+    if (!d.title) return null;
+    return { title: d.title, author: d.author_name ?? '' };
+  } catch {
+    return null;
+  }
+}
+
+async function buscarConteudo(url: string, tipo: TipoLink): Promise<{ titulo: string | null; texto: string }> {
+  if (tipo === 'video' && ehPlaylistYoutube(url)) {
+    const html = await buscarHtml(url);
+    const { titulo } = extrairTextoHtml(html);
+    const ids = extrairVideoIdsYoutube(html);
+    const videos = (await Promise.all(ids.map((id) => oembedYoutube(id)))).filter(
+      (v): v is { title: string; author: string } => v !== null,
+    );
+    const linhas = videos.map((v) => `Depoimento em vídeo: ${v.title}${v.author ? ` (canal ${v.author})` : ''}`);
+    return { titulo, texto: linhas.join('\n') };
+  }
+
+  const html = await buscarHtml(url);
+  if (tipo === 'video') {
+    const { titulo } = extrairTextoHtml(html);
+    const descricao = extrairDescricaoYoutube(html);
+    const idMatch = url.match(/(?:v=|youtu\.be\/|shorts\/)([A-Za-z0-9_-]{11})/);
+    const oe = idMatch ? await oembedYoutube(idMatch[1]) : null;
+    const partes = [
+      oe ? `Depoimento em vídeo: ${oe.title}${oe.author ? ` (canal ${oe.author})` : ''}` : '',
+      descricao,
+    ].filter(Boolean);
+    return { titulo: oe?.title ?? titulo, texto: partes.join('\n\n') || extrairTextoHtml(html).texto };
+  }
+  return extrairTextoHtml(html);
 }
 
 async function destilar(
@@ -137,7 +195,7 @@ async function destilar(
 ): Promise<Array<{ question: string; answer: string }>> {
   const rotulo =
     contexto.tipo === 'video'
-      ? 'transcrição/descrição de um vídeo de depoimento'
+      ? 'títulos e descrições de vídeos de depoimentos de pacientes'
       : contexto.tipo === 'avaliacao'
         ? 'avaliações de pacientes'
         : contexto.tipo === 'artigo'
@@ -173,7 +231,8 @@ export async function processarLink(unit: Unit, linkId: string): Promise<{ statu
 
   try {
     const { titulo, texto } = await buscarConteudo(link.url, link.tipo as TipoLink);
-    if (texto.length < MIN_TEXTO_CHARS) {
+    const minimo = (link.tipo as TipoLink) === 'video' ? 100 : MIN_TEXTO_CHARS;
+    if (texto.length < minimo) {
       await prisma.knowledgeLink.update({
         where: { id: link.id },
         data: {
