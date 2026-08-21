@@ -57,7 +57,13 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
-import { withTimeout, AGENT_NODE_TIMEOUT_MS, FALLBACK_INDISPONIVEL } from './llm-policy.js';
+import {
+  withTimeout,
+  AGENT_NODE_TIMEOUT_MS,
+  FALLBACK_INDISPONIVEL,
+  escolherPlanoB,
+  PLANO_B_TIMEOUT_MS,
+} from './llm-policy.js';
 
 // ---------------------------------------------------------------------------
 // Checkpointer (singleton).
@@ -327,19 +333,74 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
         AGENT_NODE_TIMEOUT_MS,
       )) as AIMessage;
     } catch (err) {
-      await recorder.step({
-        kind: 'ERROR',
-        title: '⏱️ IA indisponível — fallback enviado ao paciente',
-        payload: {
-          erro: err instanceof Error ? err.message : String(err),
-          timeoutMs: AGENT_NODE_TIMEOUT_MS,
-        },
-        latencyMs: Math.round(performance.now() - t0),
-      });
-      return {
-        messages: [new AIMessage(FALLBACK_INDISPONIVEL)],
-        decision: FALLBACK_INDISPONIVEL,
-      } satisfies Partial<AgentStateType>;
+      const erroPrincipal = err instanceof Error ? err.message : String(err);
+      // PLANO B: antes de responder "tive uma instabilidade", tenta o outro
+      // provedor com credencial disponível. Falha de provedor costuma ser
+      // rápida (429/401), então isso quase sempre custa pouco tempo.
+      const planoB = escolherPlanoB(unit, !!env.OPENAI_API_KEY);
+      if (planoB) {
+        try {
+          const modeloB = createChatModel(
+            // Clona a unidade trocando o provedor: createChatModel decide por
+            // `llmProvider`, e não queremos duplicar a lógica de credencial.
+            { ...unit, llmProvider: planoB.provider },
+            { model: planoB.modelName, temperature: config.temperature, maxTokens: config.maxTokens },
+          );
+          const modeloBComTools = (
+            tools.length > 0
+              ? (modeloB as unknown as { bindTools: (t: unknown[]) => unknown }).bindTools(
+                  planoB.provider === 'google' ? toolsParaGemini(tools) : tools,
+                )
+              : modeloB
+          ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
+
+          response = (await withTimeout(
+            invokeChatModel({
+              model: modeloBComTools,
+              messages: finalMessages,
+              unitId: unit.id,
+              traceId: recorder.traceId,
+              modelName: planoB.modelName,
+              provider: planoB.provider,
+              tools,
+            }),
+            PLANO_B_TIMEOUT_MS,
+          )) as AIMessage;
+
+          await recorder.step({
+            kind: 'THINKING',
+            title: `🔁 Plano B: ${planoB.provider} (${planoB.modelName}) respondeu no lugar do modelo principal`,
+            payload: { erroPrincipal, planoB },
+            latencyMs: Math.round(performance.now() - t0),
+          });
+        } catch (err2) {
+          await recorder.step({
+            kind: 'ERROR',
+            title: '⏱️ IA indisponível — principal e plano B falharam',
+            payload: {
+              erroPrincipal,
+              erroPlanoB: err2 instanceof Error ? err2.message : String(err2),
+              planoB,
+            },
+            latencyMs: Math.round(performance.now() - t0),
+          });
+          return {
+            messages: [new AIMessage(FALLBACK_INDISPONIVEL)],
+            decision: FALLBACK_INDISPONIVEL,
+          } satisfies Partial<AgentStateType>;
+        }
+      } else {
+        await recorder.step({
+          kind: 'ERROR',
+          title: '⏱️ IA indisponível — sem plano B configurado, fallback enviado',
+          payload: { erroPrincipal, timeoutMs: AGENT_NODE_TIMEOUT_MS },
+          latencyMs: Math.round(performance.now() - t0),
+        });
+        return {
+          messages: [new AIMessage(FALLBACK_INDISPONIVEL)],
+          decision: FALLBACK_INDISPONIVEL,
+        } satisfies Partial<AgentStateType>;
+      }
     }
     const latency = Math.round(performance.now() - t0);
 
