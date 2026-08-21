@@ -170,6 +170,8 @@ import {
 import { KommoService } from '../services/kommo.service.js';
 import { requireAuth, requireSuperAdmin, requireUnitAccess } from '../middleware/auth.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
+import { apiReference } from '@scalar/express-api-reference';
+import { gerarOpenApi } from '../docs/openapi.js';
 
 export const apiRouter = Router();
 
@@ -212,6 +214,23 @@ apiRouter.get('/debug/diagnostico', requireAuth, requireSuperAdmin, async (_req,
     res.status(500).json({ error: 'diagnostico_falhou', message: err instanceof Error ? err.message : String(err) });
   }
 });
+
+// Documentação da API. A especificação é gerada a partir DESTE router, então
+// nunca fica desatualizada: rota que existe aparece, rota que some vai junto.
+// Aberta de propósito — só lista caminhos e níveis de acesso, nada sensível.
+apiRouter.get('/openapi.json', (req, res) => {
+  const base = `${req.protocol}://${req.get('host')}/api`;
+  res.json(gerarOpenApi(apiRouter, base));
+});
+
+apiRouter.get(
+  '/docs',
+  apiReference({
+    url: '/api/openapi.json',
+    theme: 'purple',
+    pageTitle: 'API do Agente DT',
+  }),
+);
 
 apiRouter.get('/health', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
