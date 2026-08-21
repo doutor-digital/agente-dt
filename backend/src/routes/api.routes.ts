@@ -151,6 +151,12 @@ import { loginHandler, logoutHandler, meHandler } from '../controllers/auth.cont
 import { playgroundRunHandler } from '../controllers/playground.controller.js';
 import { listChangeLogHandler } from '../controllers/change-log.controller.js';
 import {
+  listLessonsHandler,
+  createLessonHandler,
+  updateLessonHandler,
+  deleteLessonHandler,
+} from '../controllers/lessons.controller.js';
+import {
   listUsersHandler,
   createUserHandler,
   updateUserHandler,
@@ -248,6 +254,10 @@ apiRouter.patch('/units/:id/templates/:templateId', requireUnitAccess, updateTem
 apiRouter.delete('/units/:id/templates/:templateId', requireUnitAccess, deleteTemplateHandler);
 
 apiRouter.get('/units/:id/changelog', requireUnitAccess, listChangeLogHandler);
+apiRouter.get('/units/:id/lessons', requireUnitAccess, listLessonsHandler);
+apiRouter.post('/units/:id/lessons', requireUnitAccess, createLessonHandler);
+apiRouter.patch('/units/:id/lessons/:lessonId', requireUnitAccess, updateLessonHandler);
+apiRouter.delete('/units/:id/lessons/:lessonId', requireUnitAccess, deleteLessonHandler);
 apiRouter.get('/units/:id/knowledge', requireUnitAccess, listKnowledgeHandler);
 apiRouter.post('/units/:id/knowledge', requireUnitAccess, createKnowledgeHandler);
 apiRouter.patch('/units/:id/knowledge/:entryId', requireUnitAccess, updateKnowledgeHandler);

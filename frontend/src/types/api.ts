@@ -851,6 +851,17 @@ export interface KnowledgeEntry {
   updatedAt: string;
 }
 
+// Memória procedural: regras que a IA aprendeu pra esta clínica.
+export interface LessonEntry {
+  id: string;
+  unitId: string;
+  content: string;
+  source: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Histórico de melhorias por unidade (clínica).
 export interface ChangeLogEntry {
   id: string;

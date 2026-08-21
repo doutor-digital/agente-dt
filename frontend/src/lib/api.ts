@@ -17,6 +17,7 @@ import type {
   FlaggedMessage,
   KnowledgeEntry,
   ChangeLogEntry,
+  LessonEntry,
   KommoFieldsResponse,
   KommoLossReasonsResponse,
   KommoPipelinesResponse,
@@ -800,6 +801,24 @@ export const api = {
   async getChangeLog(unitId: string): Promise<ChangeLogEntry[]> {
     const { data } = await http.get<{ entries: ChangeLogEntry[] }>(`/units/${unitId}/changelog`);
     return data.entries;
+  },
+  async getLessons(unitId: string): Promise<LessonEntry[]> {
+    const { data } = await http.get<{ lessons: LessonEntry[] }>(`/units/${unitId}/lessons`);
+    return data.lessons;
+  },
+  async createLesson(unitId: string, content: string): Promise<LessonEntry> {
+    const { data } = await http.post<{ lesson: LessonEntry }>(`/units/${unitId}/lessons`, { content });
+    return data.lesson;
+  },
+  async updateLesson(
+    unitId: string,
+    id: string,
+    patch: { content?: string; enabled?: boolean },
+  ): Promise<void> {
+    await http.patch(`/units/${unitId}/lessons/${id}`, patch);
+  },
+  async deleteLesson(unitId: string, id: string): Promise<void> {
+    await http.delete(`/units/${unitId}/lessons/${id}`);
   },
   async createKnowledge(unitId: string, input: { question: string; answer: string }): Promise<KnowledgeEntry> {
     const { data } = await http.post<{ entry: KnowledgeEntry }>(`/units/${unitId}/knowledge`, input, {
