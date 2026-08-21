@@ -954,8 +954,17 @@ export interface JudgeCriterion {
   desc: string;
 }
 
+// Diz se a nota média desta versão tem amostra suficiente pra confiar.
+export interface EvalConfianca {
+  n: number;
+  nivel: 'insuficiente' | 'indicativo' | 'confiavel';
+  margemErro: number;
+  explicacao: string;
+}
+
 export interface PromptPerformanceItem {
   promptHash: string;
+  confianca?: EvalConfianca;
   promptSnapshot: string;
   conversions: number;
   evaluations: number;

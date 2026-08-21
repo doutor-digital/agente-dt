@@ -22,6 +22,7 @@ import {
   type CriterionScores,
 } from '../services/conversation-judge.service.js';
 import { logger } from '../lib/logger.js';
+import { confiancaDaMedia } from '../services/eval-confidence.js';
 
 interface GroupAcc {
   promptHash: string;
@@ -130,6 +131,10 @@ export async function getPromptPerformanceHandler(req: Request, res: Response): 
           tom: round1(g.scoreSum.tom / n),
         },
         avgOverall: round1(g.scoreSum.overall / n),
+        // Trava por média: a nota sozinha engana sem o tamanho da amostra.
+        // Diz ao dono se dá pra confiar nesta média — e a partir de que
+        // diferença duas versões são realmente distintas.
+        confianca: confiancaDaMedia(g.evaluations),
         totalCostUsd: round6(g.costSum),
         firstSeen: g.firstSeen.toISOString(),
         lastSeen: g.lastSeen.toISOString(),
