@@ -178,6 +178,19 @@ export class KommoApiError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// temPalavra — a mensagem diz alguma coisa?
+//
+// Existe por causa de um caso real na Serra: o paciente recebeu duas mensagens
+// que eram só "✨". Emoji sozinho no WhatsApp não é mensagem, é ruído — e ainda
+// por cima queima o anti-flood do canal. Uma letra ou um número em qualquer
+// lugar já basta pra valer como fala; emoji, pontuação e espaço, não.
+// ---------------------------------------------------------------------------
+
+export function temPalavra(text: string): boolean {
+  return /[\p{L}\p{N}]/u.test(text);
+}
+
+// ---------------------------------------------------------------------------
 // stripEmojis — remove emojis e símbolos pictográficos do texto.
 //
 // O Salesbot do Kommo (rota PATCH no campo "Resposta IA" + POST /salesbot/run)
@@ -281,6 +294,14 @@ export function downgradeEmoji(text: string): string {
 // sequência pelo sendChatReply, simulando vários balões de WhatsApp.
 // ---------------------------------------------------------------------------
 
+// Espaço entre pedaços numa resposta longa. O envio de cada pedaço é o campo
+// "Resposta IA" (PATCH) + POST /bots/{id}/run — e esse /run é ASSÍNCRONO (202):
+// o bot lê o campo um tempo DEPOIS. Se o próximo PATCH sobrescrever o campo
+// antes disso, o pedaço anterior se perde e a mensagem grande "trunca/quebra".
+// 900ms era curto demais sob carga; 1600ms dá folga pro /run consumir o campo
+// antes do próximo pedaço. Ajustável por env se precisar afinar.
+const INTER_CHUNK_DELAY_MS = Number(process.env.KOMMO_INTER_CHUNK_MS) || 1600;
+
 export function splitIntoChunks(text: string, maxLen: number): string[] {
   const clean = text.trim();
   if (clean.length === 0) return [];
@@ -330,7 +351,32 @@ export function splitIntoChunks(text: string, maxLen: number): string[] {
     remaining = remaining.slice(cut).trim();
   }
   if (remaining.length > 0) chunks.push(remaining);
-  return chunks;
+  return colarPedacosSemPalavra(chunks, maxLen);
+}
+
+// Um pedaço sem nenhuma palavra (uma linha decorativa "✨", um "🙏" solto no
+// fim) vira um BALÃO INTEIRO no WhatsApp do paciente. Ele não lê isso como
+// enfeite, lê como mensagem sem sentido. Então cola no vizinho — e se não
+// couber, descarta: o pedaço não carregava informação nenhuma mesmo.
+function colarPedacosSemPalavra(chunks: string[], maxLen: number): string[] {
+  if (chunks.length < 2) return chunks; // 1 pedaço só é assunto do chamador
+  const out: string[] = [];
+  for (const pedaco of chunks) {
+    const anterior = out[out.length - 1];
+    if (anterior !== undefined && !temPalavra(pedaco)) {
+      const junto = `${anterior} ${pedaco}`.trim();
+      if (junto.length <= maxLen) out[out.length - 1] = junto;
+      continue;
+    }
+    out.push(pedaco);
+  }
+  // O primeiro pedaço não tem vizinho anterior — cola no seguinte.
+  if (out.length > 1 && !temPalavra(out[0])) {
+    const junto = `${out[0]} ${out[1]}`.trim();
+    out.shift();
+    if (junto.length <= maxLen) out[0] = junto;
+  }
+  return out;
 }
 
 // ── Trava anti-duplicata de ENTREGA ────────────────────────────────────────
@@ -1494,7 +1540,7 @@ export class KommoClient {
             ],
           });
           if (i < chunks.length - 1) {
-            await new Promise((r) => setTimeout(r, 900));
+            await new Promise((r) => setTimeout(r, INTER_CHUNK_DELAY_MS));
           }
         }
         const ms = Math.round(performance.now() - t0);
@@ -1543,7 +1589,7 @@ export class KommoClient {
             recorder,
           });
           if (i < chunks.length - 1) {
-            await new Promise((r) => setTimeout(r, 900));
+            await new Promise((r) => setTimeout(r, INTER_CHUNK_DELAY_MS));
           }
         }
         logger.info(
