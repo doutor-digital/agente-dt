@@ -92,7 +92,11 @@ export async function getPromptPerformanceHandler(req: Request, res: Response): 
     };
     const s = ev.scores as unknown as CriterionScores;
     cur.evaluations += 1;
-    cur.conversions += 1; // 1 avaliação = 1 conversa convertida
+    // Antes o juiz só rodava quando havia conversão, então "1 avaliação = 1
+    // conversão" valia. Agora o judge-worker avalia também conversa encerrada
+    // SEM conversão (é isso que dá amostra pra média), então a conversão tem
+    // que ser contada pelo dado real — senão a coluna "conv." mente.
+    if (conv.convertedAt) cur.conversions += 1;
     cur.scoreSum.clareza += s.clareza ?? 0;
     cur.scoreSum.empatia += s.empatia ?? 0;
     cur.scoreSum.objecoes += s.objecoes ?? 0;
@@ -149,7 +153,8 @@ export async function getPromptPerformanceHandler(req: Request, res: Response): 
       conversations: totalConversations,
       converted: convertedConversations,
       evaluated: evaluations.length,
-      pendingJudge: convertedConversations - evaluations.length,
+      // Nunca negativo: hoje o juiz avalia além das convertidas.
+      pendingJudge: Math.max(0, convertedConversations - evaluations.length),
       conversionRate: totalConversations > 0 ? convertedConversations / totalConversations : 0,
     },
     criteria: JUDGE_CRITERIA,
