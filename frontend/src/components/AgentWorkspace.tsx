@@ -28,6 +28,7 @@ import {
   Database,
   Wrench,
   History,
+  ShieldCheck,
 } from 'lucide-react';
 import { WizardPanel } from './WizardPanel';
 import { FontesPanel } from './FontesPanel';
@@ -39,8 +40,9 @@ import { TrainingPanel } from './TrainingPanel';
 import { AgentConfigPanel } from './AgentConfigPanel';
 import { ActivationPanel } from './ActivationPanel';
 import { HistoricoPanel } from './HistoricoPanel';
+import { ProtecoesPanel } from './ProtecoesPanel';
 
-type SegId = 'identidade' | 'conhecimento' | 'acoes' | 'kommo' | 'testar' | 'historico';
+type SegId = 'identidade' | 'conhecimento' | 'acoes' | 'kommo' | 'protecoes' | 'testar' | 'historico';
 
 interface SubPanel {
   id: string;
@@ -99,6 +101,13 @@ const SEGMENTS: Segment[] = [
       { id: 'conexao', label: 'Conexão', icon: Cable, render: () => <AgentConfigPanel /> },
       { id: 'ativacao', label: 'Etapas & Ativação', icon: Power, render: () => <ActivationPanel /> },
     ],
+  },
+  {
+    id: 'protecoes',
+    label: 'Proteções',
+    icon: ShieldCheck,
+    hint: 'As travas de segurança da IA — preço fora do catálogo, conduta clínica e descarte de fora do escopo.',
+    subs: [{ id: 'protecoes', label: 'Proteções', icon: ShieldCheck, render: () => <ProtecoesPanel /> }],
   },
   {
     id: 'testar',
