@@ -252,14 +252,20 @@ const EMOJI_BMP_DOWNGRADE: ReadonlyMap<string, string> = new Map([
   ['📞', '☎'], ['📱', '☎'], ['📲', '☎'],
   // Saúde / clínica (caduceu BMP)
   ['🏥', '⚕'], ['💊', '⚕'], ['💉', '⚕'], ['🩺', '⚕'], ['🩹', '⚕'],
-  // Estrelas
-  ['🌟', '★'], ['⭐', '★'], ['🌠', '★'], ['💫', '★'],
+  // Estrelas (⭐ é BMP e chega colorido — NÃO rebaixar)
+  ['🌟', '★'], ['🌠', '★'], ['💫', '★'],
+  // Palmas / parabéns → check verde (BMP)
+  ['👏', '✅'],
+  // Localização / endereço (📍 é 4-byte) → seta BMP
+  ['📍', '➤'], ['🗺', '➤'],
+  // Profissional de saúde → caduceu BMP
+  ['👨‍⚕️', '⚕'], ['👩‍⚕️', '⚕'], ['🧑‍⚕️', '⚕'],
   // Mão / aprovação
   ['👍', '✔'], ['👌', '✔'], ['🙌', '✔'], ['🤝', '✔'],
   // Reprovação
   ['👎', '✖'],
-  // Relógio
-  ['⏰', '⌚'], ['⏱', '⌚'], ['🕐', '⌚'], ['🕑', '⌚'], ['🕒', '⌚'],
+  // Relógio (⏰ e ⏱ são BMP e chegam coloridos — NÃO rebaixar; só os rostos de relógio 4-byte)
+  ['🕐', '⌚'], ['🕑', '⌚'], ['🕒', '⌚'],
   // Fogo / atenção
   ['🔥', '※'], ['⚠', '⚠'],
   // Apontando

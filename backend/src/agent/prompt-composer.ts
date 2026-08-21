@@ -406,18 +406,17 @@ function renderAgenda(unit: Unit): string {
   const pix = unit.pixKey?.trim();
   const favorecido = unit.pixHolder?.trim();
 
-  // SEM EMOJI DE 4 BYTES nesta mensagem, de propósito. O caminho de entrega
-  // legado (campo "Resposta IA" do Kommo) corrompe todo emoji fora do BMP:
-  // 📅 vira ✎, ⏰ vira ⌚, 📍 💰 👏 👨‍⚕️ somem. Medido. Então a confirmação —
-  // a mensagem que o paciente mais relê — usa só rótulo de texto e, no máximo,
-  // ✅ (que sobrevive e renderiza). Layout blocado se sustenta sem ícone.
+  // EMOJI SEGURO (BMP) nesta mensagem, de propósito. O campo "Resposta IA" do
+  // Kommo (MySQL utf8mb3) corta todo emoji de 4 bytes: 📅 📍 💰 👨‍⚕️ 👏 quebram
+  // ou somem. Já os BMP de presentação-emoji (✅ ⭐ ⏰ ⏳ ✨) sobrevivem E chegam
+  // coloridos. Então a confirmação usa SÓ esses — um por linha, pra ficar bonita.
   const linhaEndereco = endereco
-    ? `Local: ${endereco}`
+    ? `⭐ Local: ${endereco}`
     : '(omita a linha do local — não temos o endereço cadastrado, e inventar faz o paciente ir no lugar errado; diga que a equipe confirma o endereço)';
 
   // Chegar antes não é formalidade: é ficha, pagamento e o paciente entrar no
   // horário dele. Atraso de um empurra o dia inteiro da profissional.
-  const linhaAntecedencia = 'Chegue 15 minutos antes.';
+  const linhaAntecedencia = '⏳ Chegue 15 minutos antes.';
 
   const linhaPix = pix
     ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
@@ -440,12 +439,12 @@ não um parágrafo corrido:
 
 ✅ Agendamento confirmado, {primeiro nome}!
 
-Data: {dia da semana}, {DD/MM}
-Horário: {HH:mm}
+⭐ Data: {dia da semana}, {DD/MM}
+⏰ Horário: {HH:mm}
 ${linhaEndereco}
 ${linhaAntecedencia}
-Valor: R$ 150 no PIX à vista (ou R$ 350)
-Especialista: {o nome que a tool devolveu — se não devolveu, omita esta linha}
+✨ Valor: R$ 150 no PIX à vista (ou R$ 350)
+⭐ Especialista: {o nome que a tool devolveu — se não devolveu, omita esta linha}
 
 ${linhaPix}
 
@@ -453,9 +452,9 @@ Qualquer dúvida, é só chamar. Até breve!
 
 REGRAS DESTA MENSAGEM:
 - Só depois de a tool confirmar. Nunca antes, nunca "vou marcar".
-- Use SÓ o ✅ do título. NÃO acrescente 📅 ⏰ 📍 💰 👏 nem outro emoji nas linhas:
-  neste canal eles chegam quebrados (viram ✎, ⌚ ou somem) e deixam a mensagem
-  feia. Os rótulos de texto (Data, Horário, Local...) já organizam o bloco.
+- Use SÓ os emojis do formato acima (✅ ⭐ ⏰ ⏳ ✨) — são BMP e chegam coloridos
+  neste canal. NUNCA use 📅 📍 💰 👏 👨‍⚕️ 🎉 😊 🙏 nem emoji de rosto/pessoa/objeto:
+  são 4 bytes, quebram no Kommo e cortam a mensagem no meio.
 - Não invente endereço, nome de especialista nem chave PIX. Linha sem dado
   confirmado sai da mensagem — o paciente pergunta, e a equipe responde certo.
 - R$ 150 é ANTECIPADO no PIX; sem antecipar, R$ 350. Não arredonde nem
