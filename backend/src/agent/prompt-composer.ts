@@ -200,6 +200,14 @@ function renderPersona(unit: Unit): string {
   lines.push(renderLanguage(unit.personaLanguage));
   const emojiBlock = renderEmojiStyle(unit);
   if (emojiBlock) lines.push(emojiBlock);
+  // Emoji é tempero, nunca a mensagem inteira. Já saiu balão com "✨" e nada
+  // mais pro paciente — vira ruído e queima o anti-flood do canal à toa.
+  lines.push(
+    'TODA mensagem sua precisa ter PALAVRAS. Nunca mande uma mensagem só com emoji ' +
+      '(nem pra "reagir" ao que o cliente disse). Se a última mensagem dele for só um ' +
+      'emoji — 🙏 👍 ❤️ costumam ser REAÇÃO do WhatsApp, não pergunta — responda com uma ' +
+      'frase curta de verdade que faça a conversa andar, tipo retomar o próximo passo.',
+  );
   const greeting = unit.personaGreeting?.trim();
   if (greeting) {
     lines.push(`Saudação preferida (use quando for o primeiro contato): "${greeting}"`);
@@ -831,6 +839,34 @@ ${steps}
   inicial. Mover de etapa após a triagem é OBRIGATÓRIO, não opcional.`);
 }
 
+// KNOCKOUT / escopo — descarta cedo quem não é caso da unidade e evita marcar
+// consulta pra quem a clínica não vai poder ajudar. Só saúde (clínicas de
+// coluna). É de propósito NÍVEL DE PROMPT (decisão do LLM, não regex): um regex
+// rejeitaria "minha hérnia de disco irradia pro ombro" como caso de ombro.
+// Mandar embora um lead real é pior do que atender uma dúvida a mais.
+function renderKnockout(unit: Unit): string {
+  if (unit.category?.trim() !== 'saude') return '';
+  return xmlBlock(
+    'escopo_e_knockout',
+    `(ALTA PRIORIDADE — QUALIFICAÇÃO)
+- PERGUNTA-ELIMINATÓRIA, cedo e com leveza: descubra QUAL é o incômodo e ONDE
+  dói ANTES de conduzir pro agendamento. É o que separa um caso nosso de um
+  fora do escopo.
+- FOCO da unidade: coluna / hérnia de disco. O que a unidade trata (e o que NÃO
+  trata) está nas <fontes> — respeite fielmente.
+- Se o paciente descrever CLARAMENTE um caso FORA do escopo (ex.: dor SÓ no
+  joelho, ombro, punho, tornozelo; fratura; hérnia umbilical/inguinal/de hiato)
+  e SEM nenhum sinal de coluna:
+    • Seja honesta e acolhedora, nunca seca: "Aqui a gente cuida especificamente
+      de coluna e hérnia de disco, então esse caso foge um pouquinho do nosso
+      foco 🙏". Oriente com gentileza a procurar o especialista certo.
+    • NÃO empurre a consulta e NÃO peça pra agendar.
+    • Chame aplicar_tag({ tag: "Fora do escopo" }) pra registrar (silencioso).
+- REGRA DE OURO: na menor dúvida, ou havendo QUALQUER sinal de coluna / hérnia
+  de disco / dor nas costas irradiando, NÃO descarte — qualifique normal.`,
+  );
+}
+
 function renderCollectName(unit: Unit): string {
   if (!unit.collectNameEnabled) return '';
   return xmlBlock('coleta_nome', `(PROATIVA — ALTA PRIORIDADE)
@@ -1409,6 +1445,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
     renderCollectSource(unit),
     renderQualification(unit),
     renderConversao(unit),
+    renderKnockout(unit),
     renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
@@ -1511,6 +1548,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderCollectSource(unit),
     renderQualification(unit),
     renderConversao(unit),
+    renderKnockout(unit),
     renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
@@ -1640,6 +1678,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     renderCollectSource(unit),
     renderQualification(unit),
     renderConversao(unit),
+    renderKnockout(unit),
     renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
