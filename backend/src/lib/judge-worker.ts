@@ -95,9 +95,9 @@ async function varrer(): Promise<void> {
       }
     }
 
-    if (avaliadas > 0) {
-      logger.info({ avaliadas, candidatas: elegiveis.length }, 'judge-worker: conversas avaliadas');
-    }
+    // Loga SEMPRE que houve candidata: silêncio total deixa impossível saber se
+    // a varredura rodou e não achou nada, ou se nem rodou.
+    logger.info({ avaliadas, candidatas: elegiveis.length }, 'judge-worker: varredura concluída');
   } catch (err) {
     logger.error({ err }, 'judge-worker: varredura falhou');
   } finally {
@@ -112,6 +112,10 @@ export function startJudgeWorker(): void {
     return;
   }
   timer = setInterval(() => void varrer(), SWEEP_MS);
+  // Uma varredura logo no boot (com folga pra o processo subir). Sem isto, um
+  // dia de deploys mais frequentes que o intervalo faz o worker NUNCA varrer —
+  // cada restart zera o setInterval. Foi exatamente o que aconteceu no piloto.
+  setTimeout(() => void varrer(), 45_000).unref?.();
   logger.info(
     { sweepMs: SWEEP_MS, minMensagens: MIN_MENSAGENS, idleHoras: IDLE_HORAS, teto: TETO_POR_VARREDURA },
     'judge-worker: iniciado (avalia conversas encerradas pra alimentar a média por versão de prompt)',
