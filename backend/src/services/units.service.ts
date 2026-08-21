@@ -381,7 +381,14 @@ export function maskUnitSecrets<T extends Unit>(unit: T): T & { _hasSecrets: Rec
     fbAppSecret: mask(unit.fbAppSecret),
     fbVerifyToken: mask(unit.fbVerifyToken),
     spineToken: mask(unit.spineToken),
+    // OAuth do Google Calendar. Hoje nulos em todas as unidades, mas estavam
+    // FORA da máscara: no dia que alguém conectasse a agenda, o refresh token
+    // (longevo, mina access tokens novos) sairia inteiro na resposta da API.
+    googleAccessToken: mask(unit.googleAccessToken),
+    googleRefreshToken: mask(unit.googleRefreshToken),
     _hasSecrets: {
+      googleAccessToken: !!unit.googleAccessToken,
+      googleRefreshToken: !!unit.googleRefreshToken,
       kommoAccessToken: !!unit.kommoAccessToken,
       kommoWidgetSecret: !!unit.kommoWidgetSecret,
       anthropicApiKey: !!unit.anthropicApiKey,
