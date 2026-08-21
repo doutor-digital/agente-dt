@@ -220,6 +220,26 @@ function PromptCard({
             <span className="text-zinc-500">score</span>{' '}
             <span className={clsx('font-semibold', overallColor)}>{item.avgOverall.toFixed(1)}</span>
           </div>
+          {/* Trava por média: nota sem amostra suficiente engana — avisa o dono. */}
+          {item.confianca && (
+            <span
+              title={item.confianca.explicacao}
+              className={clsx(
+                'px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ring-1',
+                item.confianca.nivel === 'confiavel'
+                  ? 'text-emerald-300 bg-emerald-500/10 ring-emerald-500/30'
+                  : item.confianca.nivel === 'indicativo'
+                    ? 'text-amber-300 bg-amber-500/10 ring-amber-500/30'
+                    : 'text-zinc-400 bg-zinc-500/10 ring-zinc-500/30',
+              )}
+            >
+              {item.confianca.nivel === 'confiavel'
+                ? 'confiável'
+                : item.confianca.nivel === 'indicativo'
+                  ? 'indicativo'
+                  : 'amostra baixa'}
+            </span>
+          )}
           <div className="text-zinc-500 text-[10px]">
             ${item.totalCostUsd.toFixed(4)}
           </div>
@@ -228,6 +248,11 @@ function PromptCard({
 
       {expanded && (
         <div className="border-t border-zinc-800 p-4 space-y-4">
+          {item.confianca && (
+            <div className="text-[12px] text-zinc-400 bg-zinc-900/60 border border-zinc-800 rounded-lg px-3 py-2">
+              {item.confianca.explicacao}
+            </div>
+          )}
           {/* Médias por critério */}
           <div>
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">
