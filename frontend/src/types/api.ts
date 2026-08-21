@@ -341,6 +341,7 @@ export interface Unit {
   sourcePapel: string | null;
   sourceProdutos: string | null;
   sourceNegocio: string | null;
+  sourceDemografia: string | null;
   followUpEnabled: boolean;
   followUpAfterHours: number;
   followUpMessage: string | null;

@@ -169,6 +169,7 @@ const unitInputBase = {
   sourcePapel: z.string().max(20_000).nullable().optional(),
   sourceProdutos: z.string().max(20_000).nullable().optional(),
   sourceNegocio: z.string().max(20_000).nullable().optional(),
+  sourceDemografia: z.string().max(20_000).nullable().optional(),
   qualificationEnabled: z.boolean().optional(),
   qualificationHotTag: z.string().max(50).optional(),
   qualificationColdTag: z.string().max(50).optional(),

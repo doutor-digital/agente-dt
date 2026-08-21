@@ -152,6 +152,26 @@ export function ProtecoesPanel() {
               sem marcar consulta pra quem não vamos poder ajudar. Na dúvida, ela qualifica normal.
             </p>
           </ProtCard>
+
+          {/* Auto-checagem — Self-Refine (vale pra toda unidade) */}
+          <ProtCard
+            icon={CircleCheck}
+            title="Confere antes de enviar"
+            on={true}
+            accent="bg-emerald-500/15 text-emerald-300"
+          >
+            <p>
+              Antes de mandar qualquer resposta, a IA revisa a si mesma: “estou afirmando algum
+              valor, horário ou endereço que não consigo confirmar? prometi algo que a agenda ainda
+              não fechou?”. Na dúvida, ela{' '}
+              <span className="text-zinc-200">prefere dizer que confirma depois</span> a inventar
+              agora.
+            </p>
+            <p className="text-[12px] text-zinc-600">
+              Técnica de auto-verificação (Self-Refine) — o ganho de confiabilidade mais bem
+              documentado na pesquisa de agentes.
+            </p>
+          </ProtCard>
         </div>
 
         <p className="text-[12px] text-zinc-600 mt-6">
