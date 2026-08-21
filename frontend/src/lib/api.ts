@@ -820,6 +820,13 @@ export const api = {
   async deleteLesson(unitId: string, id: string): Promise<void> {
     await http.delete(`/units/${unitId}/lessons/${id}`);
   },
+  async reflectLessons(unitId: string): Promise<{ proposed: number; analisadas: number }> {
+    const { data } = await http.post<{ proposed: number; analisadas: number }>(
+      `/units/${unitId}/lessons/reflect`,
+      {},
+    );
+    return data;
+  },
   async createKnowledge(unitId: string, input: { question: string; answer: string }): Promise<KnowledgeEntry> {
     const { data } = await http.post<{ entry: KnowledgeEntry }>(`/units/${unitId}/knowledge`, input, {
       timeout: 30_000,
