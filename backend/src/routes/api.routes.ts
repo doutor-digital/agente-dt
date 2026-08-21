@@ -155,6 +155,7 @@ import {
   createLessonHandler,
   updateLessonHandler,
   deleteLessonHandler,
+  reflectLessonsHandler,
 } from '../controllers/lessons.controller.js';
 import {
   listUsersHandler,
@@ -256,6 +257,7 @@ apiRouter.delete('/units/:id/templates/:templateId', requireUnitAccess, deleteTe
 apiRouter.get('/units/:id/changelog', requireUnitAccess, listChangeLogHandler);
 apiRouter.get('/units/:id/lessons', requireUnitAccess, listLessonsHandler);
 apiRouter.post('/units/:id/lessons', requireUnitAccess, createLessonHandler);
+apiRouter.post('/units/:id/lessons/reflect', requireUnitAccess, reflectLessonsHandler);
 apiRouter.patch('/units/:id/lessons/:lessonId', requireUnitAccess, updateLessonHandler);
 apiRouter.delete('/units/:id/lessons/:lessonId', requireUnitAccess, deleteLessonHandler);
 apiRouter.get('/units/:id/knowledge', requireUnitAccess, listKnowledgeHandler);
