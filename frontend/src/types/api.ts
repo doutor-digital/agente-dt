@@ -214,6 +214,7 @@ export interface Unit {
   llmProvider: string;
   anthropicApiKey: string | null;
   anthropicModel: string;
+  anthropicEffort: string | null;
   googleApiKey: string | null;
   googleModel: string;
   openaiApiKey: string | null;

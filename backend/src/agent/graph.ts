@@ -16,6 +16,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
+import { podarHistorico } from './history-window.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -91,6 +92,53 @@ function toolsParaGemini(tools: ReturnType<typeof buildTools>): unknown[] {
   });
 }
 
+function convoCacheHabilitado(slug: string): boolean {
+  const raw = process.env.ANTHROPIC_CONVO_CACHE_SLUGS ?? '';
+  if (!raw.trim()) return false;
+  const set = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+  return set.has('*') || set.has(slug);
+}
+
+function strictToolsHabilitado(): boolean {
+  return (process.env.ANTHROPIC_STRICT_TOOLS ?? '0') === '1';
+}
+
+function forcarAdditionalPropsFalse(node: unknown): void {
+  if (Array.isArray(node)) {
+    node.forEach(forcarAdditionalPropsFalse);
+    return;
+  }
+  if (node && typeof node === 'object') {
+    const obj = node as Record<string, unknown>;
+    if (obj.type === 'object') obj.additionalProperties = false;
+    for (const v of Object.values(obj)) forcarAdditionalPropsFalse(v);
+  }
+}
+
+function aplicarStrictAnthropic(tools: ReturnType<typeof buildTools>): void {
+  for (const t of tools) {
+    try {
+      const js = zodToJsonSchema(t.schema as never, { $refStrategy: 'none' }) as Record<
+        string,
+        unknown
+      >;
+      delete js.$schema;
+      forcarAdditionalPropsFalse(js);
+      (t as { extras?: Record<string, unknown> }).extras = {
+        ...((t as { extras?: Record<string, unknown> }).extras ?? {}),
+        providerToolDefinition: {
+          name: t.name,
+          description: t.description,
+          input_schema: js,
+          strict: true,
+        },
+      };
+    } catch (err) {
+      logger.warn({ err, tool: t.name }, 'strict tools: falha ao gerar schema, tool segue sem strict');
+    }
+  }
+}
+
 export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
   const config = await getActiveConfig(unit.id);
 
@@ -138,10 +186,19 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     temperature: config.temperature,
     maxTokens: config.maxTokens,
   });
+  if (useAnthropic && strictToolsHabilitado()) {
+    aplicarStrictAnthropic(tools);
+  }
   const toolsParaModelo = useGoogle ? toolsParaGemini(tools) : tools;
+  const convoCache =
+    useAnthropic && convoCacheHabilitado(unit.slug)
+      ? { cache_control: { type: 'ephemeral' as const } }
+      : undefined;
   const model = (
     tools.length > 0
-      ? (baseModel as unknown as { bindTools: (t: unknown[]) => unknown }).bindTools(toolsParaModelo)
+      ? (
+          baseModel as unknown as { bindTools: (t: unknown[], kw?: object) => unknown }
+        ).bindTools(toolsParaModelo, convoCache)
       : baseModel
   ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
 
@@ -192,7 +249,8 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       });
       systemMessage = new SystemMessage(dynamicPrompt);
     }
-    const finalMessages: BaseMessage[] = [systemMessage, ...nonSystemMessages];
+    const janela = podarHistorico(nonSystemMessages);
+    const finalMessages: BaseMessage[] = [systemMessage, ...janela];
 
     const t0 = performance.now();
     let response: AIMessage;
