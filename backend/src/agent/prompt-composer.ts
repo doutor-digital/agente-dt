@@ -26,6 +26,7 @@ import type {
   MessageTemplate,
   Unit,
   UnitAction,
+  UnitLesson,
 } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { searchKnowledge } from '../services/knowledge.service.js';
@@ -35,6 +36,7 @@ import {
 } from '../services/actions.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { getLeadMemoryForAgent, type LeadMemoryFacts } from '../services/lead-memory.service.js';
+import { listEnabledLessons } from '../services/lessons.service.js';
 import {
   consultaDoLead,
   porExtenso,
@@ -1244,6 +1246,18 @@ ${lines.join('\n\n')}`);
 // Composer principal.
 // ---------------------------------------------------------------------------
 
+// Memória procedural: regras que ESTA clínica já ensinou pra IA. Bloco curto e
+// de alta prioridade — a IA trata como verdade da unidade, junto das fontes.
+export function renderLessons(lessons: UnitLesson[]): string {
+  const ativos = lessons.filter((l) => l.enabled && l.content.trim());
+  if (ativos.length === 0) return '';
+  const linhas = ativos.map((l) => `- ${l.content.trim()}`).join('\n');
+  return xmlBlock(
+    'aprendizados',
+    `(ALTA PRIORIDADE — regras que esta clínica já ensinou; respeite como verdade da unidade)\n${linhas}`,
+  );
+}
+
 export interface ComposeInput {
   unit: Unit;
   /** Texto vindo do AgentConfig (sobrescreve persona base se preenchido). */
@@ -1262,6 +1276,8 @@ export interface ComposeInput {
   leadFieldRules?: LeadFieldRule[];
   /** Memória de longo prazo do lead. Vai pro prompt como bloco "🧠 MEMÓRIA". */
   leadMemory?: LeadMemory | null;
+  /** Memória procedural da unidade — regras aprendidas. Bloco <aprendizados>. */
+  lessons?: UnitLesson[];
   /**
    * leadId numérico do Kommo para este turno. Injetado no system prompt como
    * "CONTEXTO DA CONVERSA" pra IA usar nas tool calls. Sem isso, a IA passa
@@ -1482,6 +1498,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     globalActions = [],
     leadFieldRules = [],
     leadMemory = null,
+    lessons = [],
     isFirstTurn = false,
     leadId,
     consulta = null,
@@ -1565,6 +1582,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   // MEMÓRIA DO PACIENTE — vem cedo (antes das Ações) pra IA ancorar resposta
   // em contexto histórico. Só carrega/renderiza se houver registro.
+  const lessonsBlock = renderLessons(lessons);
+  if (lessonsBlock) blocks.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) blocks.push(memoryBlock);
 
@@ -1634,6 +1653,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     globalActions = [],
     leadFieldRules = [],
     leadMemory = null,
+    lessons = [],
     isFirstTurn = false,
     leadId,
     consulta = null,
@@ -1646,6 +1666,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
   )?.trim();
 
   const dynamic: string[] = [];
+  const lessonsBlock = renderLessons(lessons);
+  if (lessonsBlock) dynamic.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) dynamic.push(memoryBlock);
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
@@ -1791,7 +1813,7 @@ async function loadComposeInput(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa] = await Promise.all([
+  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -1853,6 +1875,12 @@ async function loadComposeInput(input: {
           return null;
         })
       : Promise.resolve(null),
+    // Memória procedural da unidade. `.catch` pra não derrubar o prompt se a
+    // tabela ainda não foi migrada em algum ambiente.
+    listEnabledLessons(input.unit.id).catch((err) => {
+      logger.warn({ err, unitId: input.unit.id }, 'listEnabledLessons falhou — sem aprendizados no prompt');
+      return [];
+    }),
   ]);
   return {
     ...input,
@@ -1865,6 +1893,7 @@ async function loadComposeInput(input: {
     leadMemory,
     consulta,
     estadoEtapa,
+    lessons,
   };
 }
 
