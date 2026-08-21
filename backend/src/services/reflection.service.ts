@@ -113,8 +113,11 @@ export async function runReflectionForUnit(unit: Unit): Promise<ReflectionResult
     `ESPECÍFICAS desta clínica, que evitariam esses erros no futuro.\n` +
     `Regras que JÁ existem (NÃO repita nem parafraseie): ` +
     `${existentes.length ? existentes.map((r) => `"${r}"`).join('; ') : '(nenhuma)'}\n` +
+    `Se NÃO houver erro gritante, ainda assim proponha de 1 a 3 MELHORIAS de condução (como ` +
+    `regras curtas) que aumentariam a chance de agendamento nesta clínica. Só retorne vazio se as ` +
+    `conversas forem pouquíssimas ou sem conteúdo útil.\n` +
     `Responda SÓ JSON: {"suggestions":[{"rule":"<regra curta no imperativo>","why":"<1 frase do padrão>"}]}. ` +
-    `No máximo 5. Se não houver padrão claro, retorne {"suggestions":[]}.`;
+    `No máximo 5.`;
 
   let raw = '';
   try {
