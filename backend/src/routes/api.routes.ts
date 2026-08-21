@@ -169,6 +169,7 @@ import {
 } from '../controllers/users.controller.js';
 import { KommoService } from '../services/kommo.service.js';
 import { requireAuth, requireSuperAdmin, requireUnitAccess } from '../middleware/auth.js';
+import { rodarDiagnostico } from '../services/diagnostics.service.js';
 
 export const apiRouter = Router();
 
@@ -199,6 +200,19 @@ apiRouter.get('/integrations/:unitSlug/session-stats/:leadId', sessionStatsHandl
 apiRouter.get('/integrations/sla-report', slaReportHandler);
 
 // Health.
+// Raio-x do sistema: prova cada dependência em vez de só dizer "de pé". Só
+// super admin — as mensagens dizem qual chave está inválida ou sem crédito.
+// requireAuth explícito: esta rota fica ANTES do `apiRouter.use(requireAuth)`
+// global, e `requireSuperAdmin` sozinho só lê `req.user` — sem autenticar antes,
+// daria 401 pra todo mundo, inclusive pra você.
+apiRouter.get('/debug/diagnostico', requireAuth, requireSuperAdmin, async (_req, res) => {
+  try {
+    res.json(await rodarDiagnostico());
+  } catch (err) {
+    res.status(500).json({ error: 'diagnostico_falhou', message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 apiRouter.get('/health', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
