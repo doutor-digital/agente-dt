@@ -21,7 +21,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
-import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
+import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { describeImage } from '../services/vision.service.js';
@@ -33,7 +33,7 @@ import { enforceReplyGap } from '../lib/reply-gate.js';
 import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
-import { scheduleLeadMemoryUpdate } from '../services/lead-memory.service.js';
+import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { z } from 'zod';
@@ -372,6 +372,10 @@ async function detectAndHandleConversion(
     { unitId: unit.id, leadId, statusId, conversationId: conv.id },
     'webhook: conversão detectada',
   );
+
+  // Carimba o desfecho na memória do lead: se ele voltar meses depois, a IA
+  // retoma sabendo que ele JÁ agendou — em vez de tratar como lead novo.
+  carimbarContato(unit.id, leadId, { desfecho: 'agendou' });
 
   // Dispara juiz em background — não bloqueia resposta do webhook.
   void judgeConversation({ conversationId: conv.id, unit }).catch((err) => {
@@ -819,6 +823,9 @@ export async function processAgent(args: {
   // Guard: se operador humano marcou "IA Pausada", não invocamos o agente.
   // Verificação síncrona porque é 1 GET barato comparado ao custo da LLM.
   if (await isLeadPaused(unit, leadId)) {
+    // Passou pra um humano — registra o desfecho pra IA saber disso se o lead
+    // voltar depois (não recomeçar do zero por cima de um atendimento humano).
+    carimbarContato(unit.id, leadId, { desfecho: 'pediu_humano' });
     await finishWidgetSilently(); // libera o Salesbot pausado (modo widget)
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({
@@ -942,7 +949,26 @@ export async function processAgent(args: {
 
     const reply = (result.decision ?? '').toString().trim();
 
-    if (isChatMessage && reply) {
+    // A IA às vezes fecha o turno com uma resposta que é SÓ emoji ("✨", "🙏").
+    // Aconteceu na Serra, em produção: o paciente contou a dor dele e recebeu
+    // dois balões com "✨" e mais nada. O gatilho típico é a REAÇÃO do
+    // WhatsApp — ela chega no webhook como se fosse uma mensagem de texto do
+    // paciente ("🙏"), a IA "responde" no mesmo tom e o que sai é ruído.
+    // Mensagem sem palavra nenhuma não é resposta: o turno morre aqui.
+    const respostaSemPalavra = reply.length > 0 && !temPalavra(reply);
+    if (respostaSemPalavra) {
+      logger.warn(
+        { traceId, leadId, unit: unit.slug, reply },
+        'resposta só com emoji/pontuação — descartada, nada enviado ao paciente',
+      );
+      await recorder.step({
+        kind: 'THINKING',
+        title: `🚫 Resposta descartada — só emoji/pontuação ("${reply.slice(0, 24)}")`,
+        payload: { leadId, reply, motivo: 'resposta_sem_palavra' },
+      });
+    }
+
+    if (isChatMessage && reply && !respostaSemPalavra) {
       const conv = await upsertConversation({
         unitId: unit.id,
         leadId: String(leadId),
@@ -1067,7 +1093,7 @@ export async function processAgent(args: {
       leadId,
       recentTurns: [
         { role: 'user', content: humanMessage },
-        ...(reply ? [{ role: 'assistant' as const, content: reply }] : []),
+        ...(reply && !respostaSemPalavra ? [{ role: 'assistant' as const, content: reply }] : []),
       ],
     });
 
