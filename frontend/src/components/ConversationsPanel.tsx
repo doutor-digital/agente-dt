@@ -194,7 +194,37 @@ const LABELS: Record<string, string> = {
   cidade: 'Cidade',
   profissao: 'Profissão',
   sexo: 'Sexo',
+  // Último contato — a noção de tempo/desfecho que a IA usa pra retomar.
+  ultimo_contato: 'Último contato',
+  ultimo_desfecho: 'Como terminou',
+  travou_em: 'Travou em',
 };
+
+/** Rótulo técnico do desfecho → frase que o dono entende na tela. */
+const DESFECHO_LABEL: Record<string, string> = {
+  agendou: 'Agendou',
+  sumiu: 'Parou de responder',
+  travou_preco: 'Travou no valor',
+  pediu_humano: 'Pediu atendente',
+  so_duvida: 'Só tirou dúvida',
+};
+
+/** Data crua não diz nada pro dono: vira "há 3 dias". */
+function prettyValor(k: string, v: unknown): string {
+  const s = String(v ?? '');
+  if (k === 'ultimo_desfecho') return DESFECHO_LABEL[s] ?? s;
+  if (k === 'ultimo_contato') {
+    const t = Date.parse(s);
+    if (!Number.isFinite(t)) return s;
+    const dias = Math.floor((Date.now() - t) / 86_400_000);
+    if (dias <= 0) return 'hoje';
+    if (dias === 1) return 'ontem';
+    if (dias < 30) return `há ${dias} dias`;
+    const meses = Math.floor(dias / 30);
+    return meses === 1 ? 'há um mês' : `há ${meses} meses`;
+  }
+  return s;
+}
 
 function prettyKey(k: string): string {
   return LABELS[k] ?? k.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
@@ -242,7 +272,7 @@ function MemoryRail({ memory }: { memory: LeadMemory | null }) {
               {hard.map(([k, v]) => (
                 <div key={k} className="text-[11.5px]">
                   <div className="text-zinc-500">{prettyKey(k)}</div>
-                  <div className="text-zinc-200 leading-snug">{String(v)}</div>
+                  <div className="text-zinc-200 leading-snug">{prettyValor(k, v)}</div>
                 </div>
               ))}
             </div>
@@ -260,7 +290,7 @@ function MemoryRail({ memory }: { memory: LeadMemory | null }) {
                     className="text-[10.5px] text-zinc-300 bg-zinc-800/60 rounded px-1.5 py-0.5"
                     title={prettyKey(k)}
                   >
-                    {prettyKey(k)}: {String(v)}
+                    {prettyKey(k)}: {prettyValor(k, v)}
                   </span>
                 ))}
               </div>

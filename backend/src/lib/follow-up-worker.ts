@@ -50,6 +50,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { ehIntocavel } from './follow-up-presets.js';
+import { carimbarContato } from '../services/lead-memory.service.js';
 
 /** Varredura a cada minuto: o primeiro degrau é de 5 min e precisa de resolução. */
 const SWEEP_MS = 60_000;
@@ -376,6 +377,13 @@ async function enviarDegrau(
         meta: { followUp: indice + 1 },
       },
     });
+
+    // Escada esgotada sem resposta = o lead sumiu de verdade. Carimba na
+    // memória pra que, se ele reaparecer meses depois, a IA saiba que já
+    // insistimos e não recomece a mesma sequência.
+    if (indice + 1 >= totalDegraus) {
+      carimbarContato(unit.id, leadId, { desfecho: 'sumiu' });
+    }
 
     logger.info(
       { unit: unit.slug, leadId, degrau: indice + 1, pulados: indice - conv.followUpStep },
