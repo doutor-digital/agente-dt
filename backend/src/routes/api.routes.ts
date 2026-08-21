@@ -145,6 +145,12 @@ import {
   chooseStrategyHandler,
 } from '../controllers/strategy-lab.controller.js';
 import {
+  listKnowledgeLinksHandler,
+  createKnowledgeLinkHandler,
+  reprocessKnowledgeLinkHandler,
+  deleteKnowledgeLinkHandler,
+} from '../controllers/knowledge-links.controller.js';
+import {
   listUsersHandler,
   createUserHandler,
   updateUserHandler,
@@ -247,6 +253,10 @@ apiRouter.post('/units/:id/lessons', requireUnitAccess, createLessonHandler);
 apiRouter.post('/units/:id/lessons/reflect', requireUnitAccess, reflectLessonsHandler);
 apiRouter.post('/units/:id/strategy-lab', requireUnitAccess, runStrategyLabHandler);
 apiRouter.post('/units/:id/strategy-lab/:runId/escolher', requireUnitAccess, chooseStrategyHandler);
+apiRouter.get('/units/:id/knowledge-links', requireUnitAccess, listKnowledgeLinksHandler);
+apiRouter.post('/units/:id/knowledge-links', requireUnitAccess, createKnowledgeLinkHandler);
+apiRouter.post('/units/:id/knowledge-links/:linkId/processar', requireUnitAccess, reprocessKnowledgeLinkHandler);
+apiRouter.delete('/units/:id/knowledge-links/:linkId', requireUnitAccess, deleteKnowledgeLinkHandler);
 apiRouter.patch('/units/:id/lessons/:lessonId', requireUnitAccess, updateLessonHandler);
 apiRouter.delete('/units/:id/lessons/:lessonId', requireUnitAccess, deleteLessonHandler);
 apiRouter.get('/units/:id/knowledge', requireUnitAccess, listKnowledgeHandler);

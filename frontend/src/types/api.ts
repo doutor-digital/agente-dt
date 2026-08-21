@@ -791,6 +791,20 @@ export interface StrategyLabResult {
   status: 'ok' | 'partial' | 'failed';
 }
 
+export interface KnowledgeLinkEntry {
+  id: string;
+  unitId: string;
+  url: string;
+  tipo: 'video' | 'avaliacao' | 'artigo' | 'pagina';
+  titulo: string | null;
+  status: 'pendente' | 'processado' | 'falhou';
+  erro: string | null;
+  chars: number;
+  entriesCriadas: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LessonEntry {
   id: string;
   unitId: string;
