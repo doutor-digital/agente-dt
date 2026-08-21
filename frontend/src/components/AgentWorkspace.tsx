@@ -29,6 +29,7 @@ import {
   Wrench,
   History,
   ShieldCheck,
+  Lightbulb,
 } from 'lucide-react';
 import { WizardPanel } from './WizardPanel';
 import { FontesPanel } from './FontesPanel';
@@ -41,6 +42,7 @@ import { AgentConfigPanel } from './AgentConfigPanel';
 import { ActivationPanel } from './ActivationPanel';
 import { HistoricoPanel } from './HistoricoPanel';
 import { ProtecoesPanel } from './ProtecoesPanel';
+import { AprendizadosPanel } from './AprendizadosPanel';
 
 type SegId = 'identidade' | 'conhecimento' | 'acoes' | 'kommo' | 'protecoes' | 'testar' | 'historico';
 
@@ -79,6 +81,7 @@ const SEGMENTS: Segment[] = [
         icon: GraduationCap,
         render: (go) => <TrainingPanel onNavigate={() => go('testar')} />,
       },
+      { id: 'aprendizados', label: 'Aprendizados', icon: Lightbulb, render: () => <AprendizadosPanel /> },
     ],
   },
   {

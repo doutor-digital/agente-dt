@@ -298,6 +298,7 @@ model Unit {
   agendaBlocks      AgendaBlock[]
   spineLeadLinks    SpineLeadLink[]
   changeLog         UnitChangeLog[]
+  lessons           UnitLesson[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -601,6 +602,31 @@ model UnitChangeLog {
 
   @@index([unitId, createdAt(sort: Desc)])
   @@map("unit_change_log")
+}
+
+// ---------------------------------------------------------------------------
+// UnitLesson — MEMÓRIA PROCEDURAL por unidade: as "regras que a IA aprendeu"
+// pra AQUELA clínica. Curtas e imperativas ("Sempre confirme o bairro antes de
+// oferecer horário"). Entram no prompt como bloco <aprendizados>. Editáveis no
+// painel; podem ser criadas à mão (source=manual) ou pela reflexão (futuro).
+// ---------------------------------------------------------------------------
+model UnitLesson {
+  id      String @id @default(cuid())
+  unitId  String @map("unit_id")
+  unit    Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  /** A regra em si — curta e no imperativo. */
+  content String  @db.Text
+  /** De onde veio: manual | reflexao. */
+  source  String  @default("manual")
+  /** Se está aplicada no prompt agora. */
+  enabled Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([unitId, enabled])
+  @@map("unit_lessons")
 }
 
 // ===========================================================================
