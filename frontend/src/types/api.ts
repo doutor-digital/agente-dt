@@ -1,6 +1,3 @@
-// Tipos compartilhados com o backend. Mantidos manualmente — em produção
-// valeria gerar via openapi ou tRPC.
-
 export type StepKind =
   | 'WEBHOOK_RECEIVED'
   | 'THINKING'
@@ -83,10 +80,6 @@ export interface Stats {
   };
 }
 
-// ---------------------------------------------------------------------------
-// SystemLog — painel "Erros" (warn/error/fatal persistidos)
-// ---------------------------------------------------------------------------
-
 export type LogLevel = 'WARN' | 'ERROR' | 'FATAL';
 
 export interface SystemLog {
@@ -109,13 +102,9 @@ export interface SystemLogQuery {
   level?: LogLevel;
   module?: string;
   q?: string;
-  since?: string; // ISO date
+  since?: string;
   limit?: number;
 }
-
-// ---------------------------------------------------------------------------
-// LeadFieldRule — captura de dados em custom fields do Kommo via tools dinâmicas
-// ---------------------------------------------------------------------------
 
 export type KommoFieldType =
   | 'text'
@@ -174,10 +163,6 @@ export interface LeadFieldRuleInput {
   updatesLeadTitle?: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Auth — user logado no painel
-// ---------------------------------------------------------------------------
-
 export type UserRole = 'SUPER_ADMIN' | 'UNIT_ADMIN';
 
 export interface AuthUser {
@@ -208,10 +193,6 @@ export interface AdminUserInput {
   unitId?: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Unit
-// ---------------------------------------------------------------------------
-
 export interface Unit {
   id: string;
   slug: string;
@@ -223,22 +204,13 @@ export interface Unit {
   kommoReplyFieldId: number | null;
   kommoPausedFieldId: number | null;
   kommoWonStatusIds: number[];
-  /** Etapas em que a IA tem permissão de responder (allowlist). Vazio = responde
-   *  em qualquer etapa; preenchido = só responde nas etapas marcadas. */
   kommoAllowedStatusIds: number[];
-  /** Etapas em que o ALERTA de SLA vale. Vazio = qualquer etapa não-terminal;
-   *  preenchido = só nessas (ex: Entrada, Em Qualificação, Em Negociação). */
   slaAlertStatusIds: number[];
   kommoBypassSalesbot: boolean;
-  /** Modo widget (handler widget_request do Salesbot) — entrega via return_url
-   *  em vez de PATCH+Digital Pipeline. Flag de piloto, por unidade. */
   kommoWidgetReplyEnabled: boolean;
   kommoWidgetSecret: string | null;
   kommoWidgetSalesbotId: number | null;
-  /** Modo /execute (legado): dispara o Salesbot via POST /bots/{id}/run após o
-   *  PATCH, em vez de depender do gatilho do Digital Pipeline. Por unidade. */
   kommoSalesbotExecuteEnabled: boolean;
-  /** Provedor de LLM do chat: "openai" (default), "anthropic" (Claude) ou "google" (Gemini). */
   llmProvider: string;
   anthropicApiKey: string | null;
   anthropicModel: string;
@@ -259,7 +231,6 @@ export interface Unit {
   metaVerifyToken: string | null;
   metaAppSecret: string | null;
   metaWabaId: string | null;
-  // Instagram — agente de comentários.
   igEnabled: boolean;
   igUserId: string | null;
   igAccessToken: string | null;
@@ -271,7 +242,6 @@ export interface Unit {
   igDeliveryMode: 'kommo' | 'direct';
   igReplyFieldId: number | null;
   igCommentPrompt: string | null;
-  // Facebook — espelha o Instagram.
   fbEnabled: boolean;
   fbPageId: string | null;
   fbAccessToken: string | null;
@@ -283,7 +253,6 @@ export interface Unit {
   fbDeliveryMode: 'kommo' | 'direct';
   fbReplyFieldId: number | null;
   fbCommentPrompt: string | null;
-  // API Spine (franquia) — agenda.
   spineEnabled: boolean;
   spineBaseUrl: string;
   spineToken: string | null;
@@ -305,12 +274,9 @@ export interface Unit {
   triageInstructions: string | null;
   metaMonthlyBudgetUsd: number | string;
   systemPrompt: string;
-  /** Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer). */
   singlePromptMode: boolean;
-  /** Categoria/segmento — seleciona o preset de persona (ex: "saude", "energia_solar"). */
   category: string | null;
 
-  // Wizard fields
   personaCompanyName: string | null;
   personaTone: 'casual' | 'formal' | 'friendly' | null;
   personaGreeting: string | null;
@@ -337,7 +303,6 @@ export interface Unit {
   businessHoursTimezone: string;
   outOfHoursMessage: string | null;
 
-  // Fontes (aba Fontes do painel da IA — 3 docs longos que entram no prompt).
   sourcePapel: string | null;
   sourceProdutos: string | null;
   sourceNegocio: string | null;
@@ -350,12 +315,8 @@ export interface Unit {
   collectSourceEnabled: boolean;
   collectSourceOptions: string[];
 
-  /** Ticket médio (R$) de uma consulta/venda — alimenta "Receita × Custo" do
-   *  dashboard. NULL = não configurado. */
   avgTicketBrl: number | null;
 
-  /** Campo customizado do Kommo onde o resumo da IA (resumir_lead_para_sdr) é
-   *  gravado, além da nota interna. NULL = só nota. */
   summaryCustomFieldId: number | null;
   summaryCustomFieldName: string | null;
 
@@ -369,8 +330,6 @@ export type UnitInput = Partial<Omit<Unit, 'id' | 'createdAt' | 'updatedAt' | '_
   name: string;
 };
 
-// Status da conexão do modo widget (widget_request). Não valida o secret
-// contra o Kommo (não dá) — reflete o ÚLTIMO widget_request recebido.
 export interface WidgetStatusResponse {
   ok: boolean;
   enabled: boolean;
@@ -386,10 +345,6 @@ export interface WidgetStatusResponse {
     error: string | null;
   } | null;
 }
-
-// ---------------------------------------------------------------------------
-// Kommo Explorer — dados ao vivo do CRM Kommo (campos, salesbots, pipelines)
-// ---------------------------------------------------------------------------
 
 export interface KommoErrorEnvelope {
   error?: string;
@@ -478,15 +433,13 @@ export interface DashboardResponse {
     unansweredQuestions: number;
     convertedCount: number;
     conversionRate: number;
-    // Split SDR (humano fechou após pausar_ia) vs IA (IA fechou sozinha).
     convertedByIa: number;
     convertedBySdr: number;
     conversionRateIa: number;
     conversionRateSdr: number;
-    // Consultas que a IA marcou de fato na agenda da franquia (SpineLeadLink).
-    aiScheduledConsults: number; // no período
-    aiScheduledTotal: number; // desde sempre
-    aiScheduledRate: number; // sobre os leads únicos do período
+    aiScheduledConsults: number;
+    aiScheduledTotal: number;
+    aiScheduledRate: number;
     llmCostUsd: number;
     llmCallsCount: number;
     peakHour: number | null;
@@ -501,27 +454,22 @@ export interface DashboardResponse {
       color: string | null;
     }>;
   }>;
-  /** KPIs do período anterior (mesma duração, imediatamente antes). Subset. */
   previousKpis: {
     uniqueLeads: number;
     answeredConversations: number;
     convertedCount: number;
     llmCostUsd: number;
   };
-  /** Mensagens DO PACIENTE agrupadas por canal. */
   messagesByChannel: Array<{
     channel: string;
     label: string;
     count: number;
   }>;
-  /** Série temporal diária — 1 entrada por dia do período (zeros preenchidos). */
   dailySeries: Array<{
-    date: string; // YYYY-MM-DD
+    date: string;
     messages: number;
     conversations: number;
   }>;
-  /** Receita potencial × custo real, tudo em BRL. Campos com `null` = ticket
-   *  médio não configurado na unidade. */
   economics: {
     avgTicketBrl: number | null;
     aiScheduledPeriod: number;
@@ -531,20 +479,18 @@ export interface DashboardResponse {
     totalCostBrl: number;
     whatsappMsgVolume: number;
     costPerScheduledBrl: number | null;
-    roi: number | null; // (receita − custo) / custo
+    roi: number | null;
     usdToBrl: number;
   };
-  /** Leads quentes que a IA passou pra humano e seguem sem conversão/consulta. */
   hotQueue: Array<{
     leadId: string;
     contactName: string | null;
     phone: string | null;
     channel: string;
-    handoffAt: string; // ISO
+    handoffAt: string;
     reactivations: number;
     waitingMinutes: number;
   }>;
-  /** Comparecimento (show rate) do snapshot do funil. */
   showRate: {
     available: boolean;
     scheduledCount: number;
@@ -555,7 +501,6 @@ export interface DashboardResponse {
   };
 }
 
-/** Resposta do GET /dashboard — agregado de todas as unidades acessíveis. */
 export interface AggregateUnitRow {
   id: string;
   name: string;
@@ -585,10 +530,6 @@ export interface AggregateDashboardResponse {
   messagesByChannel: Array<{ channel: string; label: string; count: number }>;
   dailySeries: Array<{ date: string; messages: number; conversations: number }>;
 }
-
-// ---------------------------------------------------------------------------
-// Integrations / Alerts
-// ---------------------------------------------------------------------------
 
 export type CardStatus = 'ok' | 'warning' | 'danger' | 'idle';
 
@@ -690,10 +631,6 @@ export interface IntegrationsResponse {
   alerts: Array<{ severity: 'info' | 'warning' | 'danger'; integration: string; message: string }>;
 }
 
-// ---------------------------------------------------------------------------
-// WhatsApp cost (Meta pricing_analytics + template_analytics)
-// ---------------------------------------------------------------------------
-
 export interface WhatsappCostsResponse {
   unit: { id: string; slug: string; name: string; wabaId: string | null };
   range: { from: string; to: string };
@@ -755,19 +692,12 @@ export interface GlobalAlert {
   message: string;
 }
 
-// Saúde da Entrega (Salesbot) — snapshot do monitor de "resposta parada".
 export interface DeliveryMonitor {
-  /** Já vimos ao menos UMA entrega confirmada? Sem isso, o monitor não confia. */
   everConfirmed: boolean;
-  /** Limiar (min) acima do qual uma resposta gravada é considerada "parada". */
   thresholdMin: number;
-  /** Respostas gravadas aguardando entrega agora (inclui as ainda dentro do prazo). */
   pendingCount: number;
-  /** Latência média das últimas entregas confirmadas (ms), ou null se nenhuma. */
   avgLatencyMs: number | null;
-  /** Quantas das recentes passaram do limiar (entregues, mas lentas). */
   slowCount: number;
-  /** Paradas agora (acima do limiar, sem entrega). */
   stale: Array<{
     unitId: string;
     unitSlug: string;
@@ -775,7 +705,6 @@ export interface DeliveryMonitor {
     leadId: string;
     ageMin: number;
   }>;
-  /** Histórico recente de entregas confirmadas (mais recente primeiro). */
   recent: Array<{
     unitSlug: string;
     leadId: string;
@@ -805,10 +734,6 @@ export interface UnitStats {
     byModel: { model: string; calls: number; totalTokens: number; costUsd: number }[];
   };
 }
-
-// ---------------------------------------------------------------------------
-// Conversation
-// ---------------------------------------------------------------------------
 
 export interface ConversationSummary {
   id: string;
@@ -852,7 +777,6 @@ export interface KnowledgeEntry {
   updatedAt: string;
 }
 
-// "3 jeitos de responder": sugestões geradas sob demanda para um lead travado.
 export interface StrategyCandidato {
   abordagem: string;
   titulo: string;
@@ -866,7 +790,6 @@ export interface StrategyLabResult {
   status: 'ok' | 'partial' | 'failed';
 }
 
-// Memória procedural: regras que a IA aprendeu pra esta clínica.
 export interface LessonEntry {
   id: string;
   unitId: string;
@@ -877,7 +800,6 @@ export interface LessonEntry {
   updatedAt: string;
 }
 
-// Histórico de melhorias por unidade (clínica).
 export interface ChangeLogEntry {
   id: string;
   unitId: string;
@@ -910,17 +832,11 @@ export interface ConversationDetail {
   memory: LeadMemory | null;
 }
 
-/** O que a IA lembra deste lead entre conversas. */
 export interface LeadMemory {
   summary: string;
-  /** Fatos estruturados: campos do Kommo (dado duro) + resumo do LLM. */
   facts: Record<string, string | number | boolean | null>;
   updatedAt: string;
 }
-
-// ---------------------------------------------------------------------------
-// AgentConfig
-// ---------------------------------------------------------------------------
 
 export interface ToolConfig {
   name: string;
@@ -950,10 +866,6 @@ export interface AgentConfigResponse {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Prompt performance / LLM-as-judge
-// ---------------------------------------------------------------------------
-
 export interface JudgeScores {
   clareza: number;
   empatia: number;
@@ -968,7 +880,6 @@ export interface JudgeCriterion {
   desc: string;
 }
 
-// Diz se a nota média desta versão tem amostra suficiente pra confiar.
 export interface EvalConfianca {
   n: number;
   nivel: 'insuficiente' | 'indicativo' | 'confiavel';
@@ -1049,10 +960,6 @@ export type AgentConfigInput = {
   maxTokens?: number;
 };
 
-// ---------------------------------------------------------------------------
-// Ações estruturadas — regras "quando → faça" cadastradas por Unit.
-// ---------------------------------------------------------------------------
-
 export type ActionKind =
   | 'add_tag'
   | 'move_stage'
@@ -1084,7 +991,6 @@ export interface KommoLossReasonsResponse {
   message?: string;
 }
 
-/** Uma ação dentro de uma regra (várias podem rodar juntas). */
 export interface ActionStep {
   kind: ActionKind;
   params: Record<string, unknown>;
@@ -1094,11 +1000,8 @@ export interface UnitAction {
   id: string;
   unitId: string;
   conditionDescription: string;
-  /** Formato canônico: lista de ações. */
   actions: ActionStep[];
-  /** @deprecated mantido pra compatibilidade. */
   actionKind: ActionKind;
-  /** @deprecated mantido pra compatibilidade. */
   actionParams: Record<string, unknown>;
   notes: string | null;
   enabled: boolean;
@@ -1113,35 +1016,22 @@ export interface UnitActionInput {
   enabled?: boolean;
 }
 
-
-// ---------------------------------------------------------------------------
-// Cobertura de captura — "o campo combinado está mesmo sendo preenchido?"
-// Vem de dado de produção (ExecutionStep), não de teste no sandbox.
-// ---------------------------------------------------------------------------
 export interface CaptureCoverageRow {
   ruleId: string;
   toolName: string;
   kommoFieldId: number;
   kommoFieldName: string;
   enabled: boolean;
-  /** Gravações no período (pode repetir no mesmo lead). */
   writes: number;
-  /** Leads distintos em que o campo foi gravado — o numerador. */
   leads: number;
   lastAt: string | null;
 }
 
 export interface CaptureCoverage {
   days: number;
-  /** Leads distintos com execução no período — o denominador. */
   totalLeads: number;
   rows: CaptureCoverageRow[];
 }
-
-
-// ---------------------------------------------------------------------------
-// Instagram — comentários e fila de moderação.
-// ---------------------------------------------------------------------------
 
 export type IgCommentCategory = 'ELOGIO' | 'PRECO' | 'CLINICA' | 'AGENDAR' | 'SPAM' | 'OUTRO';
 export type IgCommentStatus = 'PENDING' | 'SENT' | 'SKIPPED' | 'FAILED';
@@ -1174,11 +1064,6 @@ export interface InstagramCommentsResponse {
   counts: Partial<Record<IgCommentStatus, number>>;
 }
 
-
-// ---------------------------------------------------------------------------
-// API Spine (franquia Doutor Hérnia)
-// ---------------------------------------------------------------------------
-
 export interface SpineStatus {
   enabled: boolean;
   hasToken: boolean;
@@ -1201,7 +1086,6 @@ export interface SpineStatus {
     enabled: boolean;
     salesbotId: number | null;
     hourLocal: number;
-    /** Motivo de não disparar; null = tudo certo. */
     bloqueado: string | null;
   };
 }
@@ -1236,14 +1120,12 @@ export interface SpineSchedulesResponse {
   resumo: { livres: number; ocupados: number; incertos: number; bloqueados: number };
 }
 
-
 export interface SpineLeadLink {
   id: string;
   unitId: string;
   kommoLeadId: number;
   spineIdLead: number | null;
   spineIdClient?: number | null;
-  /** O nome que foi enviado — o histórico sem isto é lista de números. */
   nome?: string | null;
   spineIdSchedule?: number | null;
   agendadoPara?: string | null;
@@ -1271,10 +1153,8 @@ export interface SpineLeadLinksResponse {
   conferencia: SpineConferencia;
 }
 
-/** Prévia do cadastro que iria para a franquia — nada é escrito ao pedir isto. */
 export interface SpineLeadPreview {
   ok: boolean;
-  /** Onde travou: conexao | desligado | ja-enviado | kommo | nome | pronto. */
   etapa?: string;
   motivo?: string;
   tituloKommo?: string;
@@ -1290,23 +1170,19 @@ export interface SpineLeadPreview {
   };
 }
 
-/** Estado de cada peça da integração, conferido contra a franquia. */
 export interface SpineProntidao {
   pecas: { id: string; titulo: string; ok: boolean; detalhe: string; comoResolver?: string }[];
   prontas: number;
   total: number;
 }
 
-/** Um lead do Kommo na janela recente e o que falta pra ele chegar na franquia. */
 export interface SpineLeadPendente {
   kommoLeadId: number;
   titulo: string;
-  /** O nome que sairia — null quando o título ainda é etiqueta automática. */
   nomeLimpo: string | null;
   criadoEm: string | null;
   spineIdLead: number | null;
   spineIdClient?: number | null;
-  /** O nome que foi enviado — o histórico sem isto é lista de números. */
   nome?: string | null;
   spineIdSchedule?: number | null;
   agendadoPara?: string | null;
@@ -1321,7 +1197,6 @@ export interface SpinePendentesResponse {
   resumo: Record<string, number>;
 }
 
-/** O cadastro de paciente que iria pro POST /api/clients da franquia. */
 export interface SpinePatientPreview {
   ok: boolean;
   motivo?: string;
@@ -1339,16 +1214,13 @@ export interface SpinePatientPreview {
   requisicao?: { metodo: string; rota: string; base: string };
 }
 
-/** Um degrau da escada de reengajamento. */
 export interface FollowUpStep {
   aposMin: number;
-  /** O que a mensagem precisa provocar — não é o texto final. */
   intencao: string;
 }
 
 export interface FollowUpRegra {
   id: string | null;
-  /** false = é só um modelo sugerido, ainda não foi criado. */
   existe: boolean;
   statusId: number;
   statusName: string;
@@ -1357,7 +1229,6 @@ export interface FollowUpRegra {
   enabled: boolean;
   notes: string | null;
   steps: FollowUpStep[];
-  /** A escada salva não bate mais com o modelo — alguém editou. */
   editada: boolean;
 }
 

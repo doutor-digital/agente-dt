@@ -1,16 +1,3 @@
-// ============================================================================
-// UnitContext — gerencia a Unit selecionada globalmente.
-//
-// Mantém:
-//  - lista de Units carregada do back
-//  - id da Unit selecionada (persistido em localStorage)
-//  - opção "Todas" (selectedUnitId = null) — visão admin
-//
-// Toda página filha consome `useUnit()` para reagir à seleção. Polling de
-// dados deve usar o id atual nas deps pra resetar quando o usuário troca
-// de unidade.
-// ============================================================================
-
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Unit } from '../types/api';
 import { api } from '../lib/api';
@@ -40,7 +27,6 @@ function readStored(): string | null {
 
 export function UnitProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  // UNIT_ADMIN é pinado na própria unit — ignora persistência de seleção.
   const initialSelected =
     user?.role === 'UNIT_ADMIN' ? (user.unitId ?? null) : readStored();
   const [units, setUnits] = useState<Unit[]>([]);
@@ -54,21 +40,18 @@ export function UnitProvider({ children }: { children: ReactNode }) {
     try {
       const list = await api.listUnits();
       setUnits(list);
-      // UNIT_ADMIN sempre na sua unit (backend já filtra a lista).
       if (user?.role === 'UNIT_ADMIN') {
         const fixedId = user.unitId ?? (list[0]?.id ?? null);
         setSelectedUnitIdState(fixedId);
         return;
       }
-      // SUPER_ADMIN: se a Unit persistida não existe mais, cai pra null (todas).
       if (selectedUnitId && !list.some((u) => u.id === selectedUnitId)) {
         setSelectedUnitIdState(null);
-        try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+        try { localStorage.removeItem(STORAGE_KEY); } catch {  }
       }
-      // Se não tem nada selecionado e há só uma, seleciona ela.
       if (!selectedUnitId && list.length === 1) {
         setSelectedUnitIdState(list[0].id);
-        try { localStorage.setItem(STORAGE_KEY, list[0].id); } catch { /* ignore */ }
+        try { localStorage.setItem(STORAGE_KEY, list[0].id); } catch {  }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -84,13 +67,12 @@ export function UnitProvider({ children }: { children: ReactNode }) {
 
   const setSelectedUnitId = useCallback(
     (id: string | null) => {
-      // UNIT_ADMIN não pode trocar de unit — ignora silenciosamente.
       if (user?.role === 'UNIT_ADMIN') return;
       setSelectedUnitIdState(id);
       try {
         if (id) localStorage.setItem(STORAGE_KEY, id);
         else localStorage.removeItem(STORAGE_KEY);
-      } catch { /* ignore */ }
+      } catch {  }
     },
     [user],
   );

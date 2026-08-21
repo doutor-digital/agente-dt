@@ -1,18 +1,3 @@
-// ============================================================================
-// salesbot.controller.ts — Webhook do Kommo Salesbot (multi-tenant).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Diferente do webhook genérico do Kommo (handleKommoWebhook), o Salesbot
-// é SÍNCRONO: ele aguarda a resposta HTTP (timeout ~60s) e o que estiver
-// no campo `reply` é enviado ao paciente como mensagem.
-//
-// MULTI-TENANT
-// ------------
-// A rota é /api/webhooks/:unitSlug/salesbot. Caímos pra default unit se
-// nenhum slug — retrocompat com /api/webhooks/salesbot.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { HumanMessage } from '@langchain/core/messages';
 import type { Unit } from '@prisma/client';
@@ -24,10 +9,6 @@ import { TraceRecorder } from '../agent/trace-recorder.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { isLeadPaused } from '../services/kommo.service.js';
-
-// ---------------------------------------------------------------------------
-// Schema permissivo — aceita string ou número para IDs.
-// ---------------------------------------------------------------------------
 
 const payloadSchema = z
   .object({
@@ -50,7 +31,6 @@ const extractMessage = (p: Payload) => (p.message || p.text || '').trim() || nul
 const extractLeadId = (p: Payload) => p.lead_id || p.leadId || null;
 const extractContactName = (p: Payload) => p.contact_name || p.contactName || null;
 
-// Hora atual no fuso de Araguaína (UTC-3, sem horário de verão).
 function currentTimeTag(): string {
   const utc = new Date();
   const araguaina = new Date(utc.getTime() - 3 * 60 * 60 * 1000);
@@ -64,10 +44,6 @@ async function resolveUnit(req: Request): Promise<Unit | null> {
   if (slug) return findUnitBySlug(slug);
   return ensureDefaultUnit();
 }
-
-// ---------------------------------------------------------------------------
-// Handler principal — POST /api/webhooks/[:unitSlug/]salesbot — SÍNCRONO.
-// ---------------------------------------------------------------------------
 
 export async function handleSalesbotWebhook(req: Request, res: Response): Promise<void> {
   const requestStart = performance.now();
@@ -119,7 +95,6 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     payload: req.body as object,
   });
 
-  // Registra turno do paciente na conversa.
   const conv = await upsertConversation({
     unitId: unit.id,
     leadId,
@@ -134,8 +109,6 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     content: message,
   });
 
-  // Guard: operador humano marcou "IA Pausada" → não invoca o agente,
-  // devolve reply vazio. O Salesbot do Kommo deve tratar vazio como "skip send".
   if (await isLeadPaused(unit, Number(leadId))) {
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({
@@ -167,8 +140,6 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       },
       {
         configurable: { thread_id: threadId },
-        // Mesmo agente, mesmas ferramentas do webhook — ver o comentário lá.
-        // 6 não cobre nem consultar + agendar.
         recursionLimit: 24,
       },
     );
@@ -190,7 +161,6 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       iaDecision: reply,
     });
 
-    // Turno do assistente na conversa.
     await addMessage({
       conversationId: conv.id,
       traceId: trace.id,

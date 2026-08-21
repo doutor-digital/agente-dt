@@ -1,17 +1,3 @@
-// ============================================================================
-// lead-field-rules.controller.ts — endpoints REST das regras de captura.
-//
-// Mesmo padrão multi-tenant dos outros controllers de "/units/:id/...":
-//  - requireUnitAccess no router já garante que SUPER ou UNIT_ADMIN da
-//    própria unit acessam; outros têm 403.
-//  - Aqui dentro só validamos payload + chamamos service + tratamos
-//    conflitos (P2002 = tool_name duplicado na mesma unit).
-//
-// Endpoint extra GET /units/:id/kommo-lead-custom-fields:
-//  Front consome pra popular o dropdown "Escolha um campo do Kommo".
-//  Já vem filtrado (só tipos suportados) e ordenado.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
@@ -41,7 +27,6 @@ const FIELD_TYPES: KommoFieldType[] = [
   'radiobutton',
 ];
 
-// toolName deve ser snake_case ASCII pra LangChain aceitar como nome de tool.
 const toolNameRegex = /^[a-z][a-z0-9_]{1,48}$/;
 
 const enumSchema = z.object({
@@ -70,11 +55,8 @@ export async function listLeadFieldRulesHandler(req: Request, res: Response): Pr
   res.json({ rules });
 }
 
-/** GET /units/:id/lead-field-rules/coverage?days=30 */
 export async function captureCoverageHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id ?? '');
-  // Janela curta demais não acumula amostra; longa demais esconde uma regra
-  // que quebrou ontem. 30 dias é o default; 1–180 é o intervalo aceito.
   const raw = Number(req.query.days ?? 30);
   const days = Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 1), 180) : 30;
   res.json(await getCaptureCoverage(unitId, days));
@@ -134,10 +116,6 @@ export async function deleteLeadFieldRuleHandler(req: Request, res: Response): P
     res.status(500).json({ error: 'delete_failed', message: msg });
   }
 }
-
-// ---------------------------------------------------------------------------
-// Lookup auxiliar — lista de custom fields do Kommo da unit.
-// ---------------------------------------------------------------------------
 
 export async function listKommoLeadCustomFieldsHandler(
   req: Request,

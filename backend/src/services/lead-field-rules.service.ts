@@ -1,14 +1,3 @@
-// ============================================================================
-// lead-field-rules.service.ts — CRUD das regras de captura de dados.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Cada LeadFieldRule é uma "tool dinâmica": o agente recebe N tools (uma por
-// regra ativada) que sabem como escrever em um custom field específico do
-// Kommo. O service aqui só persiste; o factory de tools é em agent/tools.ts
-// e a renderização no prompt é em agent/prompt-composer.ts.
-// ============================================================================
-
 import type { LeadFieldRule } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -24,7 +13,6 @@ export interface LeadFieldRuleInput {
   valueHint?: string | null;
   examples?: string[];
   enabled?: boolean;
-  /** Quando true, a tool também atualiza o título do card no Kommo. */
   updatesLeadTitle?: boolean;
 }
 
@@ -98,45 +86,19 @@ export async function deleteLeadFieldRule(id: string): Promise<void> {
   await prisma.leadFieldRule.delete({ where: { id } });
 }
 
-// ===========================================================================
-// COBERTURA DE CAPTURA
-//
-// Responde "cada campo combinado está mesmo sendo preenchido?" com dado de
-// PRODUÇÃO, não com teste no sandbox.
-//
-// De onde vem: toda gravação bem-sucedida deixa um ExecutionStep
-// KOMMO_ACTION cujo payload carrega o `fieldId` (ver buildLeadFieldRuleTool
-// em agent/tools.ts). Então basta agrupar esses steps por fieldId e cruzar
-// com as regras da unidade.
-//
-// O denominador é o número de leads DISTINTOS que tiveram execução no
-// período — sem isso, "12 gravações" não diz nada: pode ser 12 leads ou o
-// mesmo lead 12 vezes. O que interessa é a fração de leads em que o campo
-// foi preenchido.
-//
-// Uma ressalva honesta na leitura: cobertura baixa NÃO significa
-// necessariamente regra quebrada. Se o campo é "Plano de saúde" e metade dos
-// pacientes não menciona convênio, 50% é o teto natural. O número serve pra
-// comparar com a sua expectativa, não pra perseguir 100%.
-// ===========================================================================
-
 export interface CaptureCoverageRow {
   ruleId: string;
   toolName: string;
   kommoFieldId: number;
   kommoFieldName: string;
   enabled: boolean;
-  /** Gravações bem-sucedidas no período (pode repetir no mesmo lead). */
   writes: number;
-  /** Leads distintos em que o campo foi gravado. */
   leads: number;
-  /** Última gravação, ISO. Null = nunca gravou no período. */
   lastAt: string | null;
 }
 
 export interface CaptureCoverage {
   days: number;
-  /** Leads distintos com execução no período — o denominador. */
   totalLeads: number;
   rows: CaptureCoverageRow[];
 }
@@ -148,7 +110,6 @@ export async function getCaptureCoverage(
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
   const rules = await listLeadFieldRules(unitId);
 
-  // Denominador: leads distintos com QUALQUER execução no período.
   const totalLeadsRows = await prisma.$queryRaw<Array<{ n: bigint }>>`
     SELECT COUNT(DISTINCT lead_id) AS n
     FROM execution_traces
@@ -156,8 +117,6 @@ export async function getCaptureCoverage(
   `;
   const totalLeads = Number(totalLeadsRows[0]?.n ?? 0);
 
-  // Numerador por campo. Agrupa direto pelo fieldId do payload — uma query só,
-  // em vez de uma por regra.
   const stats = await prisma.$queryRaw<
     Array<{ field_id: number; writes: bigint; leads: bigint; last_at: Date }>
   >`

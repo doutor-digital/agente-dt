@@ -1,23 +1,3 @@
-// ============================================================================
-// agenda-tools.ts — Tools de agendamento (API Spine da franquia).
-//
-// ONDE O GUARD REALMENTE MORA
-// ---------------------------
-// De nada adianta a recepção bloquear um horário na tela se o agente não
-// consultar esse bloqueio na hora de marcar. Por isso a checagem NÃO está no
-// prompt — instrução em prompt é sugestão, e o modelo pode contorná-la sob
-// pressão do paciente. Está aqui, no código da tool: pausado ou bloqueado, a
-// tool recusa e devolve o motivo. Não há caminho ao redor.
-//
-// REVALIDAÇÃO NA ESCRITA, e não só na oferta
-// ------------------------------------------
-// `consultar_horarios` e `agendar_consulta` refazem a mesma checagem. Parece
-// redundante e não é: entre a IA oferecer 14h e o paciente responder "pode
-// ser", passam minutos — tempo de sobra pra recepção bloquear aquele horário
-// ou outro paciente marcar. Confiar na consulta anterior é confiar num dado
-// vencido, e o preço é duas pessoas na mesma cadeira.
-// ============================================================================
-
 import { z } from 'zod';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Unit } from '@prisma/client';
@@ -36,14 +16,12 @@ function agoraLocal(unit: Unit): string {
   return SpineService.instanteNoFuso(new Date(), unit.spineTimezone || TZ_PADRAO);
 }
 
-/** Soma dias a "AAAA-MM-DD" sem depender de fuso. */
 function somarDias(dia: string, n: number): string {
   const t = Date.parse(`${dia}T00:00:00Z`);
   if (Number.isNaN(t)) return dia;
   return new Date(t + n * 86_400_000).toISOString().slice(0, 10);
 }
 
-/** Recarrega a unidade do banco — pausa e bloqueios mudam DURANTE a conversa. */
 async function unidadeFresca(unitId: string): Promise<Unit | null> {
   return prisma.unit.findUnique({ where: { id: unitId } });
 }
@@ -51,42 +29,17 @@ async function unidadeFresca(unitId: string): Promise<Unit | null> {
 interface Contexto {
   unit: Unit;
   recorder: TraceRecorder;
-  /** Opcional: sem ele o agendamento funciona, só não carimba o CRM. */
   kommo?: KommoClient;
 }
 
-/**
- * Campos do Kommo que registram o agendamento.
- *
- * Preenchidos PELA TOOL, não por regra de captura. A diferença importa: regra
- * de captura depende de a I.A. decidir chamá-la, e "esqueci de marcar Agendou"
- * é invisível — some numa estatística que ninguém confere. Aqui, se a consulta
- * foi marcada, o campo é escrito no mesmo passo. Não há caminho em que uma
- * coisa aconteça sem a outra.
- */
-const CAMPO_AGENDOU = 2442703;      // ✓ Agendou (select Sim/Não)
-const CAMPO_DATA_AGENDAMENTO = 2440909; // ◷ Data de agendamento (date_time)
-// ◷ Data da Consulta (date_time). Campo NOVO — o antigo era só-data e o Kommo
-// não deixa mudar tipo, então criamos este date_time com o mesmo nome. É o que
-// a recepção olha e o que o lembrete de véspera usa como fonte de data+hora.
+const CAMPO_AGENDOU = 2442703;
+const CAMPO_DATA_AGENDAMENTO = 2440909;
 const CAMPO_DATA_CONSULTA = 2444497;
-// ☻ Responsável agendamento (select). Carimba QUEM marcou — a IA usa "I.A Sofia"
-// pra a recepção distinguir num relance o que foi dela do que foi humano. O
-// valor precisa existir como opção no campo (adicionado no Kommo). IDs de campo
-// são desta unidade; ver nota de multi-unidade no topo do arquivo.
 const CAMPO_RESPONSAVEL = 2440823;
 const RESPONSAVEL_IA = 'I.A Sofia';
-// ✓ Situação da consulta (select) e ¤ Pagamento antecipado (select Não/Sim).
-// O bot de PIX lê estes dois — sem eles preenchidos, não dispara. A Sofia carimba
-// no agendamento: Situação=Agendado sempre; Pagamento antecipado=Sim (avaliação,
-// pra OFERECER o PIX e garantir a vaga) ou Não (retorno pós-alta).
 const CAMPO_SITUACAO_CONSULTA = 2444779;
 const CAMPO_PAGAMENTO_ANTECIPADO = 2440827;
-const ST_RETORNO_POS_TRATAMENTO = 110342960; // etapa comercial de retorno
-
-// ---------------------------------------------------------------------------
-// Grade de um dia, já com tudo subtraído.
-// ---------------------------------------------------------------------------
+const ST_RETORNO_POS_TRATAMENTO = 110342960;
 
 async function gradeDoDia(unit: Unit, dia: string) {
   const [r, blocks] = await Promise.all([
@@ -112,38 +65,8 @@ async function gradeDoDia(unit: Unit, dia: string) {
   return { erro: null, slots };
 }
 
-// ---------------------------------------------------------------------------
-// consultar_horarios
-// ---------------------------------------------------------------------------
-
-/**
- * PERGUNTA À FRANQUIA se o horário aceita mesmo, em vez de deduzir.
- *
- * A dedução ("não tem ninguém marcado, logo está livre") erra porque não
- * enxergamos o TURNO da profissional. Medido em produção numa quarta: 08:00 e
- * 10:00 aceitos, 11:00 e 16:00 recusados — sem ninguém marcado em nenhum dos
- * dois. A API não expõe disponibilidade; o único jeito de saber é tentar.
- *
- * Tentar é seguro porque agendamento É a única escrita nossa que a franquia
- * desfaz (DELETE /api/schedules). Cria e cancela na mesma volta.
- *
- * Custa duas chamadas por horário, então valida poucos — quem oferece dez
- * horários não converte mais que quem oferece três.
- */
 const MAX_VALIDACOES = 4;
 
-/**
- * ESPALHA os candidatos pelo dia em vez de pegar os primeiros da fila.
- *
- * O que a recusa da franquia significa é "fora do turno da profissional", e
- * turno é um bloco contínuo de horas. Sondar os quatro PRIMEIROS livres testa
- * quatro horas coladas — se o turno dela for de tarde, os quatro dão recusa e
- * a tarde inteira fica invisível.
- *
- * Medido num caso real: livres [13,14,15,16,17], sondados os quatro primeiros,
- * todos recusados. Espalhando, o 17:00 entra na amostra e o dia se resolve numa
- * consulta só — em vez de virar duas desculpas na cara do paciente.
- */
 function espalhar(lista: string[], max: number): string[] {
   if (max <= 0) return [];
   if (lista.length <= max) return [...lista];
@@ -171,9 +94,6 @@ async function horariosQueAFranquiaAceita(
     });
     if (r.ok && r.data?.idSchedule) {
       aceitos.push(hora);
-      // Cancela IMEDIATAMENTE. Se este cancelamento falhar, sobra um
-      // agendamento fantasma na agenda da clínica — por isso o log é warn e
-      // carrega o id: é o que a recepção leva pra remover lá.
       const c = await SpineService.cancelSchedule(unit, r.data.idSchedule);
       if (!c.ok) {
         logger.warn(
@@ -188,10 +108,6 @@ async function horariosQueAFranquiaAceita(
   return { aceitos, recusados, sondados };
 }
 
-/**
- * Paciente usado só para sondar. Qualquer cliente da unidade serve — o
- * agendamento é desfeito em seguida e nunca chega a existir de verdade.
- */
 let sondaCache: { unitId: string; idClient: number; em: number } | null = null;
 
 async function clienteDeSondagem(unit: Unit): Promise<number | null> {
@@ -253,26 +169,19 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
         );
       }
 
-      // BUSCA PRA FRENTE — o paciente NÃO pode ser perdido porque a semana está
-      // cheia. Se a data pedida não tem vaga (lotada OU bloqueada pela recepção),
-      // avança dia a dia até o próximo com horário REAL — inclusive semana ou mês
-      // que vem. Só cai na lista de espera depois de varrer LOOKAHEAD dias.
       const LOOKAHEAD_DIAS = 30;
-      const MAX_DIAS_SONDADOS = 3; // teto de sondagem (custa create+cancel na franquia)
+      const MAX_DIAS_SONDADOS = 3;
       const sonda = await clienteDeSondagem(fresca);
       let diasSondados = 0;
-      let outroTurnoNoDiaPedido: string | null = null; // dia pedido tinha vaga no OUTRO turno
+      let outroTurnoNoDiaPedido: string | null = null;
       let cursor = data;
 
       for (let i = 0; i <= LOOKAHEAD_DIAS; i++, cursor = somarDias(cursor, 1)) {
-        // Pula dia sem atendimento sem gastar chamada de API.
         const dow = new Date(`${cursor}T00:00:00Z`).getUTCDay();
         if (!fresca.spineAgendaDays.includes(dow)) continue;
 
         const { erro, slots } = await gradeDoDia(fresca, cursor);
         if (erro) {
-          // Erro no PRIMEIRO dia = agenda fora do ar, não dá pra prometer nada.
-          // Num dia distante é tropeço isolado — pula e segue procurando.
           if (i === 0) {
             logger.warn({ erro, data, unit: fresca.slug }, 'consultar_horarios: agenda indisponível');
             return `Não consegui consultar a agenda agora (${erro}). NÃO ofereça horários; diga que a equipe confirma em seguida.`;
@@ -280,22 +189,16 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
           continue;
         }
 
-        // O TURNO PEDIDO É RESPEITADO (verificar custa 2 chamadas por horário; não
-        // gasta o orçamento no período que o paciente não quer).
         const todosLivres = slots.filter((s) => s.status === 'livre').map((s) => s.time);
         const livres = turno
           ? todosLivres.filter((h) => (turno === 'manha' ? h < '12:00' : h >= '12:00'))
           : todosLivres;
 
-        // Dia PEDIDO sem vaga no turno mas com vaga no outro → guarda pra sugerir.
         if (i === 0 && turno && livres.length === 0 && todosLivres.length > 0) {
           outroTurnoNoDiaPedido = data;
         }
-        if (livres.length === 0) continue; // dia cheio/bloqueado → próximo dia
+        if (livres.length === 0) continue;
 
-        // Confirma com a franquia (turno da profissional, que a grade não vê).
-        // Teto de dias sondados: passou disso, oferece sem sondar (aposta) em vez
-        // de gastar create/cancel infinito — melhor que perder o lead.
         let oferecer = livres;
         let recusados: string[] = [];
         let sondados: string[] = [];
@@ -306,7 +209,7 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
           recusados = r.recusados;
           sondados = r.sondados;
           verificado = true;
-          oferecer = r.aceitos; // SÓ o que a franquia aceitou — nada de chutar o resto.
+          oferecer = r.aceitos;
         } else if (!sonda) {
           logger.warn(
             { unit: fresca.slug, data: cursor, livres: livres.length },
@@ -324,7 +227,7 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
           payload: { pedido: data, data: cursor, turno, naGrade: todosLivres, noTurno: livres, sondados, oferecer, recusados, sonda },
         });
 
-        if (oferecer.length === 0) continue; // turno fechado nesse dia → próximo
+        if (oferecer.length === 0) continue;
 
         const mesmoDia = cursor === data;
         return (
@@ -336,7 +239,6 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
         );
       }
 
-      // Varreu LOOKAHEAD dias e não achou nada ofertável — aí sim, lista de espera.
       return (
         (outroTurnoNoDiaPedido
           ? `Em ${outroTurnoNoDiaPedido} não há vaga no período pedido, mas pode haver no outro turno — pergunte se ele aceita. `
@@ -348,22 +250,11 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// buscar_paciente
-// ---------------------------------------------------------------------------
-
-/**
- * Últimos 8 dígitos — é o que dá pra comparar com segurança entre as duas
- * pontas. O WhatsApp entrega o número do Brasil sem o nono dígito (o `wa_id`
- * de "+55 99 99150-7569" chega como "+559991507569"), então casar o número
- * inteiro reprovaria a mesma pessoa. Os 8 finais sobrevivem a isso.
- */
 function fim8(fone: string | null | undefined): string | null {
   const d = (fone ?? '').replace(/\D/g, '');
   return d.length >= 8 ? d.slice(-8) : null;
 }
 
-/** Telefone do paciente pelo lead do Kommo — mora no CONTATO, não no lead. */
 async function telefoneDoLead(
   kommo: KommoClient | undefined,
   leadId: number | undefined,
@@ -378,28 +269,6 @@ async function telefoneDoLead(
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// buscar_paciente
-//
-// POR QUE ESTA TOOL RECUSA MAIS DO QUE ACHA
-// -----------------------------------------
-// A busca da franquia casa por PEDAÇO do nome. Procurar "Keyla" devolve
-// "KEYLA DA SILVA LIMA KOMATSU" — outra pessoa, cadastrada em 2024, com outro
-// telefone. Foi o que aconteceu: a consulta de uma paciente nova foi marcada
-// no prontuário de uma xará. Ninguém percebeu porque, do lado de fora, deu
-// tudo certo — a IA achou "a paciente", confirmou o horário, e a agenda da
-// clínica passou a esperar a pessoa errada.
-//
-// Dois erros possíveis, de tamanhos MUITO diferentes:
-//   - usar o cadastro de um xará → prontuário trocado, consulta no nome de
-//     outra pessoa, e a paciente de verdade não é esperada. Sem desfazer.
-//   - criar um cadastro a mais → uma linha duplicada que a recepção junta.
-// O primeiro é incidente clínico, o segundo é bagunça. Na dúvida, o segundo.
-//
-// Por isso o telefone MANDA: é a única coisa que distingue xará de paciente.
-// Sem ele, nenhum idClient sai daqui.
-// ---------------------------------------------------------------------------
 
 export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
   return new DynamicStructuredTool({
@@ -436,9 +305,6 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
         return 'Sistema da clínica não conectado. Transfira para a equipe.';
       }
 
-      // GUARD 1 — sobrenome. A mesma régua do cadastrar_paciente, que já
-      // recusa cadastro sem sobrenome. Antes valia só na escrita; o buraco
-      // estava na leitura, que é justamente onde o xará entra.
       const partes = args.nome.trim().split(/\s+/).filter((x) => x.length >= 2);
       if (partes.length < 2) {
         await recorder.step({
@@ -470,7 +336,6 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      // GUARD 2 — telefone. O que a IA passou, ou o do contato no Kommo.
       const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
       const fone = foneInformado ?? (await telefoneDoLead(kommo, args.leadId));
       const alvo = fim8(fone);
@@ -482,9 +347,6 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
         payload: { nome: args.nome, achados, telefoneConferido: fone, batem },
       });
 
-      // Sem telefone nenhum pra comparar: não devolve idClient. Entregar o
-      // cadastro aqui é apostar que não há xará — e foi exatamente essa aposta
-      // que pôs a consulta no prontuário errado.
       if (!alvo) {
         return (
           `Encontrei ${achados.length} cadastro(s) com esse nome, mas NÃO tenho telefone ` +
@@ -503,8 +365,6 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      // Um só bate: é ele, sem ambiguidade. Guarda o vínculo. Com mais de um,
-      // não dá pra escolher por nós — quem decide é a I.A. com o paciente.
       if (batem.length === 1) await guardarPaciente(fresca.id, args.leadId, batem[0].idClient);
 
       return (
@@ -515,18 +375,6 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
     },
   });
 }
-
-// ---------------------------------------------------------------------------
-// cadastrar_paciente
-//
-// O ELO QUE FALTAVA. POST /api/schedules exige idClient — sem paciente não
-// existe agendamento. Antes, quando a busca não achava ninguém, a IA parava e
-// passava pra equipe; agora ela conclui o cadastro e segue.
-//
-// As recusas são as mesmas do painel, e ficam AQUI, não no prompt: prompt é
-// instrução, e instrução se contorna. A franquia não apaga paciente, então o
-// que não pode acontecer não pode depender de o modelo lembrar.
-// ---------------------------------------------------------------------------
 
 export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
   return new DynamicStructuredTool({
@@ -559,8 +407,6 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
         return 'Sistema da clínica não conectado. Transfira para a equipe.';
       }
 
-      // "Nome Completo" é o nome do campo lá. Só o primeiro nome vira cadastro
-      // que a recepção não distingue dos outros — e não sai mais.
       const partes = args.nome.trim().split(/\s+/).filter((x) => x.length >= 2);
       if (partes.length < 2) {
         return 'RECUSADO: falta o sobrenome. Pergunte o nome completo antes de cadastrar.';
@@ -571,7 +417,6 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
         return 'RECUSADO: telefone incompleto. Peça o número com DDD.';
       }
 
-      // Já existe? Cadastrar de novo cria duplicata permanente.
       const jaTem = await SpineService.searchClients(fresca, args.nome);
       const igual = jaTem.ok
         ? (jaTem.data?.clients ?? []).find(
@@ -588,16 +433,6 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
         return `Já existia. idClient ${igual.idClient} — ${igual.name}. Use este para agendar.`;
       }
 
-      // CONVERTER, NÃO CRIAR DO ZERO.
-      //
-      // Quando o lead já foi espelhado na franquia, criar um paciente novo
-      // deixa DUAS fichas da mesma pessoa, sem nada ligando uma à outra — e
-      // com nomes diferentes, porque o lead foi espelhado com o nome parcial
-      // que a I.A. tinha no minuto (o primeiro nome) e o paciente nasce com o
-      // nome completo. Quem procura por um não acha o outro.
-      //
-      // /api/leads/convert transforma a MESMA ficha em paciente. Uma pessoa,
-      // um cadastro, já com o nome completo.
       const vinculo = args.leadId
         ? await prisma.spineLeadLink.findFirst({
             where: { unitId: fresca.id, kommoLeadId: args.leadId },
@@ -618,9 +453,6 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
           idClient = c.data.idClient;
           via = 'convert';
         } else {
-          // CAI PARA A CRIAÇÃO. Duas fichas é ruim; paciente sem cadastro
-          // nenhum, na hora de fechar o agendamento, é pior — perde a
-          // consulta. O log marca pra dar pra ver se a conversão vive.
           logger.warn(
             { unit: fresca.slug, idLead: vinculo.spineIdLead, erro: c.error },
             'agenda-tools: conversão do lead falhou — caindo para cadastro novo',
@@ -660,30 +492,6 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// cancelar_consulta e remarcar_consulta
-//
-// A CONFIRMAÇÃO MORA NA TOOL, não no prompt.
-//
-// Cancelar é destrutivo do ponto de vista do paciente: ele perde a vaga e
-// alguém pode pegá-la em seguida. Uma instrução no prompt ("pergunte antes")
-// depende de o modelo lembrar no meio de uma conversa longa. Aqui a tool
-// simplesmente RECUSA sem `confirmado: true` e devolve a pergunta pronta — o
-// caminho errado deixa de existir em vez de ficar desaconselhado.
-//
-// Um lead tem no máximo UMA consulta. Por isso agendar recusa quem já tem, e
-// remarcar existe: ele MARCA A NOVA PRIMEIRO e só então cancela a antiga. Na
-// ordem inversa, uma falha no meio deixaria o paciente sem consulta nenhuma —
-// e a vaga antiga já teria sido devolvida pra fila.
-// ---------------------------------------------------------------------------
-
-/**
- * A consulta do lead, CONFERIDA na franquia — não a lembrança do nosso banco.
- *
- * A recepção remarca pelo sistema dela e nunca passa por aqui. Decidir com o
- * valor salvo faz o cancelamento mirar um horário que não existe mais e faz a
- * IA repetir ao paciente uma hora que já mudou.
- */
 async function consultaAtual(unit: Unit, leadId: number | undefined) {
   const c = await AgendaReconcileService.consultaDoLead(unit, leadId);
   if (!c || !c.idSchedule || c.estado === 'cancelada') return null;
@@ -692,14 +500,6 @@ async function consultaAtual(unit: Unit, leadId: number | undefined) {
 
 const porExtenso = AgendaReconcileService.porExtenso;
 
-/**
- * Guarda QUEM é o paciente deste lead na franquia.
- *
- * Ficava perdido: a tool criava o cadastro, devolvia o idClient para a I.A. e
- * não escrevia em lugar nenhum. Sem isto o painel mostra lead sem paciente, e
- * a releitura do agendamento precisa varrer a agenda por data em vez de
- * perguntar direto pela ficha dele.
- */
 async function guardarPaciente(
   unitId: string,
   leadId: number | undefined,
@@ -731,9 +531,6 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
       const atual = await consultaAtual(fresca, args.leadId);
       if (!atual) return 'Este paciente não tem consulta marcada por aqui. Não há o que cancelar.';
 
-      // Não confirmei o horário na franquia agora. Perguntar "quer cancelar a
-      // de 08:00?" quando a recepção já mudou pra 09:30 faz o paciente
-      // desmentir a IA — ou pior, concordar com a coisa errada.
       if (!atual.confirmada) {
         return (
           'NÃO CANCELEI: não consegui confirmar na clínica qual é a consulta dele agora. ' +
@@ -776,17 +573,6 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// confirmar_presenca
-//
-// O par do lembrete. Sem isto, "confirmo" morria na conversa: a franquia
-// seguia vendo AGENDADO e a recepção ligava pra confirmar o que já estava
-// confirmado. O registro tem que ser do lado DELES pra parar a ligação.
-//
-// Não pede confirmação em dois passos, ao contrário de cancelar: confirmar de
-// novo não tira a vaga de ninguém, e o pior caso é um PATCH repetido.
-// ---------------------------------------------------------------------------
-
 export function buildConfirmarPresenca({ unit, recorder }: Contexto) {
   return new DynamicStructuredTool({
     name: 'confirmar_presenca',
@@ -810,8 +596,6 @@ export function buildConfirmarPresenca({ unit, recorder }: Contexto) {
           'Se ele quer marcar, use consultar_horarios e agende.'
         );
       }
-      // Confirmar um horário que eu não consegui conferir é prometer ao
-      // paciente que está tudo certo para uma hora que pode ter mudado.
       if (!atual.confirmada) {
         return (
           'NÃO confirmei: não consegui checar a consulta dele na clínica agora. ' +
@@ -859,8 +643,6 @@ export function buildRemarcarConsulta(ctx: Contexto) {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
       const atual = await consultaAtual(fresca, args.leadId);
 
-      // MARCA A NOVA PRIMEIRO. Se cancelasse antes e a nova falhasse, o
-      // paciente ficaria sem consulta e a vaga antiga já teria ido embora.
       const nova = await (agendar as unknown as { func: (a: unknown) => Promise<string> }).func({
         leadId: args.leadId,
         idClient: args.idClient,
@@ -885,10 +667,6 @@ export function buildRemarcarConsulta(ctx: Contexto) {
     },
   });
 }
-
-// ---------------------------------------------------------------------------
-// agendar_consulta
-// ---------------------------------------------------------------------------
 
 export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
   return new DynamicStructuredTool({
@@ -933,7 +711,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         return 'Agenda não conectada. NÃO confirme nada — diga que a equipe conclui o agendamento.';
       }
 
-      // GUARD 1 — pausa. Relido do banco AGORA, não do começo da conversa.
       if (fresca.spineAiPaused) {
         await recorder.step({
           kind: 'ERROR',
@@ -947,8 +724,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      // GUARD 2 — o horário ainda está livre? Revalidado na hora da escrita,
-      // porque entre a oferta e o "pode ser" do paciente passam minutos.
       const { erro, slots } = await gradeDoDia(fresca, args.data);
       if (erro) {
         return `Não consegui confirmar a agenda (${erro}). NÃO diga que está marcado.`;
@@ -969,10 +744,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      // UMA CONSULTA POR LEAD. Sem isto, o paciente que pede outro horário
-      // acaba com duas vagas ocupadas — e a clínica descobre no dia. Remarcar
-      // passa por aqui de propósito, com a flag, porque ele já cancela a
-      // antiga logo depois.
       if (!args.remarcando) {
         const ja = await consultaAtual(fresca, args.leadId);
         if (ja) {
@@ -985,13 +756,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         }
       }
 
-      // GUARD 3 — o idClient é mesmo deste paciente?
-      //
-      // As travas do buscar_paciente impedem que a I.A. RECEBA um idClient não
-      // verificado, mas não impediam que ela PASSASSE um. Aqui a conferência é
-      // contra a franquia: quem é esse cadastro, e o telefone dele bate com o
-      // WhatsApp de quem está conversando? Foi assim que a consulta de uma
-      // paciente nova acabou no prontuário de uma xará de 2024.
       const conf = await SpineService.getClient(fresca, args.idClient);
       if (conf.ok && !conf.data?.client) {
         await recorder.step({
@@ -1004,9 +768,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           'Use buscar_paciente com o nome completo, ou cadastrar_paciente se ele for novo.'
         );
       }
-      // Falha de rede não vira recusa: bloquear aqui por indisponibilidade
-      // deles custaria agendamentos legítimos. Só a resposta EXPLÍCITA de
-      // "não existe" ou de telefone divergente barra.
       const paciente = conf.ok ? conf.data?.client ?? null : null;
       if (paciente) {
         const foneLead = await telefoneDoLead(kommo, args.leadId);
@@ -1039,10 +800,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           title: `agendar_consulta falhou: ${r.error}`,
           payload: { ...args, error: r.error },
         });
-        // PARE de propósito. Uma recusa costuma significar que o horário saiu
-        // da grade da profissional, e tentar o vizinho leva a mesma recusa —
-        // foi assim que um turno queimou o limite de passos do grafo e o
-        // paciente ficou SEM RESPOSTA NENHUMA, que é pior que um "não" claro.
         return (
           `Não consegui marcar às ${args.hora} (${r.error}). ` +
           'PARE AQUI: não chame agendar_consulta de novo neste turno e não tente ' +
@@ -1052,11 +809,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      // LÊ DE VOLTA quem ficou com o atendimento, em vez de assumir. A
-      // franquia é quem escolhe o profissional (não mandamos idStaff), então
-      // o nome só é confiável depois de perguntar a ela. Se a leitura falhar,
-      // fica vazio e a IA omite a linha — melhor que anunciar o especialista
-      // errado a quem vai atravessar a cidade pra consulta.
       let especialista: string | null = null;
       try {
         const conf = await SpineService.searchSchedules(fresca, {
@@ -1077,9 +829,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         payload: { ...args, idSchedule: r.data?.idSchedule, especialista },
       });
 
-      // Guarda QUAL é a consulta deste lead. É o que permite depois cancelar
-      // e remarcar sem casar por nome — a busca da franquia não devolve
-      // idClient, e cancelar a consulta de um homônimo não tem desfazer.
       if (args.leadId) {
         await prisma.spineLeadLink
           .updateMany({
@@ -1093,9 +842,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
       }
 
-      // Carimba o CRM no MESMO passo. Fire-and-forget porque falhar aqui não
-      // desfaz o agendamento — a consulta está marcada na franquia, e voltar
-      // erro faria a I.A. dizer ao paciente que não marcou, o que seria falso.
       if (kommo && args.leadId) {
         void (async () => {
           try {
@@ -1118,8 +864,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
               'select',
               RESPONSAVEL_IA,
             );
-            // Situação inicial + regra de pré-pagamento. Retorno pós-alta (lead
-            // já na etapa de retorno) NÃO oferece PIX; avaliação sim.
             const leadAtual = await kommo.getLead(args.leadId!).catch(() => null);
             const ehRetorno = leadAtual?.status_id === ST_RETORNO_POS_TRATAMENTO;
             await kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_SITUACAO_CONSULTA, 'select', 'Agendado');
@@ -1134,7 +878,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
               title: `Campos de agendamento preenchidos (Agendou, Data, Responsável, Situação=Agendado, Pré-pag=${ehRetorno ? 'Não' : 'Sim'})`,
               payload: { leadId: args.leadId, data: args.data, hora: args.hora, responsavel: RESPONSAVEL_IA },
             });
-            // Métrica: tempo do 1º contato até marcar (h).
             await registrarTempoAteAgendamento(fresca, kommo, args.leadId!);
           } catch (err) {
             logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao carimbar campos no Kommo');
@@ -1149,7 +892,6 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
   });
 }
 
-/** Só entram quando a unidade tem a agenda conectada. */
 export function buildAgendaTools(ctx: Contexto): DynamicStructuredTool[] {
   if (!ctx.unit.spineEnabled) return [];
   return [

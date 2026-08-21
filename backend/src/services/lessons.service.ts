@@ -1,11 +1,3 @@
-// ============================================================================
-// lessons.service.ts — memória procedural por unidade ("aprendizados").
-//
-// São regras curtas e imperativas que a IA aplica pra AQUELA clínica, além da
-// persona/fontes. Entram no prompt via renderLessons (prompt-composer). CRUD é
-// escopado por unitId (tenant-safe) — updateMany/deleteMany com {id, unitId}.
-// ============================================================================
-
 import { prisma } from '../lib/prisma.js';
 
 export interface LessonInput {
@@ -14,7 +6,6 @@ export interface LessonInput {
   enabled?: boolean;
 }
 
-/** Só as ativas — é o que vai pro prompt. Take limitado pra não inflar. */
 export function listEnabledLessons(unitId: string) {
   return prisma.unitLesson.findMany({
     where: { unitId, enabled: true },
@@ -23,7 +14,6 @@ export function listEnabledLessons(unitId: string) {
   });
 }
 
-/** Todas (pro painel), mais recente primeiro. */
 export function listLessons(unitId: string) {
   return prisma.unitLesson.findMany({
     where: { unitId },
@@ -43,7 +33,6 @@ export function createLesson(unitId: string, input: LessonInput) {
   });
 }
 
-/** Escopado por unitId pra um admin não mexer em lição de outra unidade. */
 export async function updateLesson(
   unitId: string,
   id: string,

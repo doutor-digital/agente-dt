@@ -1,17 +1,3 @@
-// ============================================================================
-// UnitHub — landing pós-login: escolha do agente.
-//
-// As CLÍNICAS e, dentro de cada uma, seus AGENTES. Cada agente é uma unidade;
-// agentes da mesma clínica compartilham o nome da clínica (personaCompanyName)
-// e o mesmo Kommo. Clicar num agente entra na configuração dele.
-//
-// A tela é a primeira coisa que o usuário vê logado, então carrega mais peso
-// visual que os painéis internos: correntes de espaço latente animadas ao
-// fundo, ilustração no cabeçalho, cartões com entrada escalonada e o ícone da
-// categoria em cada agente. O fundo é DIFERENTE do login de propósito — duas
-// telas seguidas com a mesma animação lêem como uma só.
-// ============================================================================
-
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
@@ -36,11 +22,9 @@ import { LatentField } from './LatentField';
 import { CATEGORY_OPTIONS } from './WizardPanel';
 import type { Unit } from '../types/api';
 
-/** Ilustração do cabeçalho. Se o arquivo não existir, cai na logo (ver onError). */
 const HERO_IMG = '/agent-illustration.png';
 const LOGO_IMG = '/logo-dd.png';
 
-/** Cada categoria tem seu ícone — 12 cartões com o mesmo robô não informam nada. */
 const CATEGORY_ICON: Record<string, LucideIcon> = {
   saude: Stethoscope,
   energia_solar: Sun,
@@ -56,7 +40,6 @@ function categoryIcon(cat: string | null): LucideIcon {
   return CATEGORY_ICON[cat ?? ''] ?? Bot;
 }
 
-/** Papel do agente (Comercial/Resgate/Pós-Tratamento/Financeiro) + cores. */
 function roleOf(unit: Unit): { label: string; chip: string; icon: string } {
   const s = (unit.slug || '').toLowerCase();
   const n = (unit.name || '').toLowerCase();
@@ -85,7 +68,6 @@ function roleOf(unit: Unit): { label: string; chip: string; icon: string } {
   };
 }
 
-/** Modelo REAL do agente (corrige o rótulo que mostrava sempre o da OpenAI). */
 function modelLabel(unit: Unit): string {
   const p = unit.llmProvider || 'openai';
   if (p === 'anthropic') return unit.anthropicModel || 'claude';
@@ -110,7 +92,6 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
   const [heroBroken, setHeroBroken] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // "/" foca a busca — atalho de teclado que todo diretório de itens tem.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const el = document.activeElement;
@@ -127,8 +108,6 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  // Agrupa as unidades (agentes) por clínica: personaCompanyName é o nome da
-  // clínica; cai pra kommoSubdomain / nome quando não houver.
   const groups = useMemo(() => {
     const q = normalize(query.trim());
     const matching = q
@@ -180,13 +159,10 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
     }
   }
 
-  // Índice contínuo entre grupos: o escalonamento cascateia pela página toda em
-  // vez de reiniciar a cada clínica.
   let cardIndex = -1;
 
   return (
     <div className="dark relative h-screen w-screen overflow-y-auto bg-zinc-950 text-zinc-100">
-      {/* ── Ambiente ─────────────────────────────────────────────────────── */}
       <div className="fixed inset-x-0 top-0 h-140 pointer-events-none">
         <LatentField
           className="absolute inset-0 w-full h-full opacity-70"
@@ -206,7 +182,6 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
       </div>
 
       <div className="relative max-w-5xl mx-auto px-6 py-14">
-        {/* ── Cabeçalho ──────────────────────────────────────────────────── */}
         <header className="flex flex-col items-center text-center mb-10 animate-fade-in-up">
           <img
             src={heroBroken ? LOGO_IMG : HERO_IMG}
@@ -235,7 +210,6 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
           )}
         </header>
 
-        {/* ── Busca + ações ──────────────────────────────────────────────── */}
         <div
           className="flex flex-col sm:flex-row gap-2.5 mb-8 animate-fade-in-up"
           style={{ animationDelay: '60ms' }}
@@ -289,7 +263,6 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
           </div>
         )}
 
-        {/* ── Formulário de criação ──────────────────────────────────────── */}
         {showForm && (
           <div className="surface p-5 mb-8 animate-fade-in-up">
             <div className="flex items-center justify-between mb-4">
@@ -351,7 +324,6 @@ export function UnitHub({ onViewAll }: { onViewAll: () => void }) {
           </div>
         )}
 
-        {/* ── Clínicas → agentes ─────────────────────────────────────────── */}
         {loading ? (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {[0, 1, 2, 3, 4, 5].map((i) => (
@@ -456,7 +428,6 @@ function AgentCard({
       style={{ animationDelay: `${delayMs}ms` }}
       className="group relative overflow-hidden text-left surface p-4 animate-fade-in-up transition-[transform,border-color] duration-200 hover:-translate-y-0.5 hover:border-brand-500/40"
     >
-      {/* Brilho de acento que acende no hover — nasce no canto do ícone. */}
       <span
         aria-hidden
         className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"

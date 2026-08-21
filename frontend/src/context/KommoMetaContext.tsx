@@ -1,26 +1,3 @@
-// ============================================================================
-// KommoMetaContext — cache em memória dos metadados do Kommo por unidade.
-//
-// POR QUÊ
-// -------
-// Antes, todo modal de Ações (e cada componente que mostrava picker de tag,
-// pipeline, usuário, motivo de perda) fazia 4 chamadas HTTP em paralelo pra
-// API do Kommo a CADA abertura. Em conexões lentas, isso travava o modal.
-//
-// COMO FUNCIONA
-// -------------
-// Carrega tags + pipelines + users + lossReasons UMA vez por unidade,
-// guarda em estado. Componentes consumem via `useKommoMeta()`. Recarrega
-// só quando a unidade muda (selectedUnitId) ou quando alguém chama
-// `refresh()`.
-//
-// LIMITAÇÕES
-// ----------
-// - O cache é em memória do tab — não persiste entre refresh do navegador.
-//   Não precisa: TTL natural é a vida do tab.
-// - Erros são silenciosos por categoria (só users pode falhar sem afetar tags).
-// ============================================================================
-
 import {
   createContext,
   useCallback,
@@ -107,7 +84,6 @@ export function KommoMetaProvider({ children }: { children: ReactNode }) {
       } else {
         setPipelines(p);
       }
-      // users + lossReasons silenciosos — campos opcionais.
       if (!('_err' in u)) setUsers(u);
       if (!('_err' in lr)) setLossReasons(lr);
       setLoading(false);

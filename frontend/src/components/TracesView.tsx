@@ -1,10 +1,3 @@
-// ============================================================================
-// TracesView — aba "Execuções". Sidebar de traces + detalhe do selecionado.
-//
-// Extraído do App.tsx pra poder ser lazy-loaded junto com Sidebar/ExecutionTrace/
-// StatsHeader (que só ele usa). Reduz o bundle inicial.
-// ============================================================================
-
 import { useEffect, useMemo, useState } from 'react';
 import { Sidebar } from './Sidebar';
 import { ExecutionTrace } from './ExecutionTrace';
@@ -24,7 +17,6 @@ export function TracesView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TraceDetail | null>(null);
 
-  // Reset quando troca de unidade.
   useEffect(() => {
     setSelectedId(null);
     setDetail(null);

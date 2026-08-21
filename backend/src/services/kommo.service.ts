@@ -1,31 +1,7 @@
-// ============================================================================
-// kommo.service.ts — Cliente HTTP do Kommo CRM (multi-tenant).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Antes era um SINGLETON com credenciais do .env. Agora cada Unit tem seu
-// próprio Kommo (subdomínio + token) — então criamos UMA INSTÂNCIA por
-// Unit. A API pública continua igual: addTag, moveStage, getLead, ...
-//
-// Mantemos `KommoService` como singleton fallback (lê .env) para retrocompat
-// com webhooks legados sem slug. O caminho novo é `createKommoService(unit)`.
-//
-// CAMADA DELIBERADAMENTE BURRA
-// ----------------------------
-//  - Não conhece LangGraph.
-//  - Não conhece Prisma.
-//  - Não decide o que fazer com erros de negócio — propaga (KommoApiError).
-// Isso permite trocar Kommo por HubSpot amanhã reescrevendo só este arquivo.
-// ============================================================================
-
 import axios, { AxiosError, type AxiosInstance } from 'axios';
 import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
-
-// ---------------------------------------------------------------------------
-// Tipos públicos
-// ---------------------------------------------------------------------------
 
 export interface KommoCustomFieldValue {
   field_id: number;
@@ -41,7 +17,6 @@ export interface KommoLead {
   status_id: number;
   pipeline_id: number;
   price?: number;
-  /** Unix timestamp em segundos (Kommo retorna assim). */
   created_at?: number;
   updated_at?: number;
   custom_fields_values?: KommoCustomFieldValue[] | null;
@@ -59,10 +34,6 @@ export interface KommoPipelineStatus {
   color?: string;
   type?: number;
 }
-
-// ---------------------------------------------------------------------------
-// Custom field types: o que a gente expõe na UI de Captura de Dados.
-// ---------------------------------------------------------------------------
 
 export type KommoFieldType =
   | 'text'
@@ -90,7 +61,6 @@ export interface KommoLeadCustomField {
   name: string;
   type: KommoFieldType;
   code: string | null;
-  /** Só pra select/multiselect/radiobutton — opções disponíveis. */
   enums: Array<{ id: number; value: string }>;
 }
 
@@ -123,9 +93,7 @@ export interface KommoTag {
 
 export interface AddTagParams {
   leadId: number;
-  /** Uma única tag. Use isto OU `tags` (não os dois). */
   tag?: string;
-  /** Múltiplas tags numa só chamada — vira UM PATCH no Kommo (atômico). */
   tags?: string[];
 }
 
@@ -135,7 +103,6 @@ export interface MoveStageParams {
   pipelineId?: number;
 }
 
-/** Interface mínima do recorder pra evitar import circular. */
 export interface KommoStepRecorder {
   step(args: {
     kind: 'KOMMO_ACTION' | 'ERROR';
@@ -151,7 +118,6 @@ export interface SendChatReplyParams {
   chatId: string | null;
   talkId: string | null;
   contactId: string | null;
-  /** Opcional: se passado, cada operação Kommo vira um step no painel. */
   recorder?: KommoStepRecorder;
 }
 
@@ -161,10 +127,6 @@ export interface SendChatReplyResult {
   via: SendChatReplyVia;
   detail?: unknown;
 }
-
-// ---------------------------------------------------------------------------
-// Erro de domínio — nunca vazamos AxiosError pra cima.
-// ---------------------------------------------------------------------------
 
 export class KommoApiError extends Error {
   constructor(
@@ -177,104 +139,40 @@ export class KommoApiError extends Error {
   }
 }
 
-// ---------------------------------------------------------------------------
-// temPalavra — a mensagem diz alguma coisa?
-//
-// Existe por causa de um caso real na Serra: o paciente recebeu duas mensagens
-// que eram só "✨". Emoji sozinho no WhatsApp não é mensagem, é ruído — e ainda
-// por cima queima o anti-flood do canal. Uma letra ou um número em qualquer
-// lugar já basta pra valer como fala; emoji, pontuação e espaço, não.
-// ---------------------------------------------------------------------------
-
 export function temPalavra(text: string): boolean {
   return /[\p{L}\p{N}]/u.test(text);
 }
 
-// ---------------------------------------------------------------------------
-// stripEmojis — remove emojis e símbolos pictográficos do texto.
-//
-// O Salesbot do Kommo (rota PATCH no campo "Resposta IA" + POST /salesbot/run)
-// tem um bug conhecido: trunca tudo que vem depois do primeiro caractere
-// multibyte UTF-8 (emoji). "Boa tarde! 🌼 Como posso..." chega como "Boa tarde!".
-//
-// Pra essa rota, removemos emojis preservando o texto. Quem quiser MANTER
-// emojis no WhatsApp final tem que ativar `kommoBypassSalesbot` na Unit, que
-// envia direto via /chats/{chatId}/messages (sem passar pelo Salesbot).
-//
-// Regex cobre: emoticons, símbolos & pictograms, transportes, bandeiras,
-// flags compostas, ZWJ sequences. Mantém pontuação ASCII e letras com acento.
-// ---------------------------------------------------------------------------
-
 export function stripEmojis(text: string): string {
-  // Unicode property escape — suporte em todos os Node ≥ 12.
-  // - \p{Extended_Pictographic}: emoticons, símbolos pictográficos, transportes
-  // - \p{Regional_Indicator}: pares que formam bandeiras (🇧🇷, 🇺🇸, …)
-  // - ZWJ + variation selectors + skin tone modifiers: removidos juntos
   return text
     .replace(/\p{Extended_Pictographic}(‍\p{Extended_Pictographic})*[️‍]*/gu, '')
     .replace(/\p{Regional_Indicator}{2}/gu, '')
     .replace(/[️‍\u{1F3FB}-\u{1F3FF}]/gu, '')
-    .replace(/ {2,}/g, ' ') // colapsa espaços extras deixados pela remoção
+    .replace(/ {2,}/g, ' ')
     .trim();
 }
 
-// ---------------------------------------------------------------------------
-// downgradeEmoji — substitui emoji 4-byte por equivalentes do BMP (3-byte).
-//
-// Por que existe: o storage do Kommo (custom_fields_values e provavelmente
-// outros campos texto) usa MySQL com collation `utf8` (3 bytes), que trunca
-// silenciosamente strings no primeiro code point >= U+10000. Diagnóstico
-// confirmado pelo readback em runSalesbot: "Boa noite! 🌙 Como posso..."
-// chega como "Boa noite! " (corte EXATO no emoji).
-//
-// Diferente de `stripEmojis`, aqui preservamos a vibe da mensagem: mapeamos
-// o emoji 4-byte pro símbolo BMP mais próximo (☾, ☺, ♥, …). O que sobra
-// fora do mapa é stripado pra impedir a truncagem.
-//
-// Tabela enxuta de propósito: só os emoji que o agente costuma emitir.
-// Quando notar um emoji novo "sumindo" no readback, adiciona aqui.
-// ---------------------------------------------------------------------------
-
 const EMOJI_BMP_DOWNGRADE: ReadonlyMap<string, string> = new Map([
-  // Lua / noite
   ['🌙', '☾'], ['🌛', '☾'], ['🌜', '☾'], ['🌚', '☾'], ['🌝', '☾'],
-  // Sol / dia
   ['🌞', '☀'], ['🌅', '☀'], ['🌄', '☀'],
-  // Sorriso / positivo
   ['😊', '☺'], ['😀', '☺'], ['😃', '☺'], ['😄', '☺'], ['🙂', '☺'], ['😁', '☺'],
-  // Tristeza / negativo
   ['😢', '☹'], ['😞', '☹'], ['😔', '☹'], ['🙁', '☹'], ['😟', '☹'],
-  // Coração (todas as cores → ♥)
   ['❤', '♥'], ['💜', '♥'], ['💙', '♥'], ['💚', '♥'], ['💛', '♥'],
   ['🤍', '♥'], ['🖤', '♥'], ['🤎', '♥'], ['💕', '♥'], ['💖', '♥'],
   ['💗', '♥'], ['💓', '♥'], ['💝', '♥'],
-  // Telefone / contato
   ['📞', '☎'], ['📱', '☎'], ['📲', '☎'],
-  // Saúde / clínica (caduceu BMP)
   ['🏥', '⚕'], ['💊', '⚕'], ['💉', '⚕'], ['🩺', '⚕'], ['🩹', '⚕'],
-  // Estrelas (⭐ é BMP e chega colorido — NÃO rebaixar)
   ['🌟', '★'], ['🌠', '★'], ['💫', '★'],
-  // Palmas / parabéns → check verde (BMP)
   ['👏', '✅'],
-  // Localização / endereço (📍 é 4-byte) → seta BMP
   ['📍', '➤'], ['🗺', '➤'],
-  // Profissional de saúde → caduceu BMP
   ['👨‍⚕️', '⚕'], ['👩‍⚕️', '⚕'], ['🧑‍⚕️', '⚕'],
-  // Mão / aprovação
   ['👍', '✔'], ['👌', '✔'], ['🙌', '✔'], ['🤝', '✔'],
-  // Reprovação
   ['👎', '✖'],
-  // Relógio (⏰ e ⏱ são BMP e chegam coloridos — NÃO rebaixar; só os rostos de relógio 4-byte)
   ['🕐', '⌚'], ['🕑', '⌚'], ['🕒', '⌚'],
-  // Fogo / atenção
   ['🔥', '※'], ['⚠', '⚠'],
-  // Apontando
   ['👉', '➤'], ['👈', '◀'], ['👇', '▼'], ['☝', '☝'],
-  // Setas comuns
   ['↗', '↗'], ['↘', '↘'],
-  // Festa / sucesso
   ['🎉', '✨'], ['🎊', '✨'], ['✨', '✨'],
-  // Calendário / agendamento
   ['📅', '✎'], ['📆', '✎'], ['🗓', '✎'], ['📝', '✎'], ['✏', '✎'],
 ]);
 
@@ -283,29 +181,11 @@ export function downgradeEmoji(text: string): string {
   for (const [from, to] of EMOJI_BMP_DOWNGRADE) {
     if (out.includes(from)) out = out.replaceAll(from, to);
   }
-  // Sobra (qualquer emoji 4-byte fora do mapa) → strip silencioso pra
-  // não engatilhar a truncagem do Kommo. Inclui variation selectors
-  // (FE0E/FE0F) órfãos que podem sobrar depois das substituições.
   out = out.replace(/[\u{10000}-\u{10FFFF}]/gu, '');
   out = out.replace(/[︎️]/g, '');
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// splitIntoChunks — quebra texto longo em pedaços ≤ maxLen respeitando
-// fronteiras naturais (parágrafo > frase > palavra).
-//
-// O campo "Resposta IA" do Kommo (custom field type=text) trunca silenciosa-
-// mente em ~250 chars. Esta função produz N pedaços que são enviados em
-// sequência pelo sendChatReply, simulando vários balões de WhatsApp.
-// ---------------------------------------------------------------------------
-
-// Espaço entre pedaços numa resposta longa. O envio de cada pedaço é o campo
-// "Resposta IA" (PATCH) + POST /bots/{id}/run — e esse /run é ASSÍNCRONO (202):
-// o bot lê o campo um tempo DEPOIS. Se o próximo PATCH sobrescrever o campo
-// antes disso, o pedaço anterior se perde e a mensagem grande "trunca/quebra".
-// 900ms era curto demais sob carga; 1600ms dá folga pro /run consumir o campo
-// antes do próximo pedaço. Ajustável por env se precisar afinar.
 const INTER_CHUNK_DELAY_MS = Number(process.env.KOMMO_INTER_CHUNK_MS) || 1600;
 
 export function splitIntoChunks(text: string, maxLen: number): string[] {
@@ -320,17 +200,6 @@ export function splitIntoChunks(text: string, maxLen: number): string[] {
     let cut = maxLen;
     const slice = remaining.slice(0, maxLen);
 
-    // ORDEM DE PREFERÊNCIA, e a QUEBRA DE LINHA SIMPLES entra aqui.
-    //
-    // Ela faltava, e o efeito aparecia na mensagem mais importante que a IA
-    // manda. A confirmação do agendamento é um bloco de linhas curtas —
-    // "📅 Data: ...", "⏰ Horário: ...", "📍 Endereço: ..." — e nenhuma delas
-    // termina em ponto. Sem '\n' na lista, nada casava, o corte caía no
-    // "último espaço" e partia a linha no meio: o paciente recebia o endereço
-    // pela metade e o resto chegava na mensagem seguinte.
-    //
-    // Cada candidato guarda quanto avançar depois do corte, porque '\n\n'
-    // consome dois caracteres e '. ' consome um.
     const candidatos: Array<{ em: number; inclui: number }> = [
       { em: slice.lastIndexOf('\n\n'), inclui: 0 },
       { em: slice.lastIndexOf('\n'), inclui: 0 },
@@ -338,12 +207,6 @@ export function splitIntoChunks(text: string, maxLen: number): string[] {
       { em: slice.lastIndexOf('? '), inclui: 1 },
       { em: slice.lastIndexOf('! '), inclui: 1 },
     ];
-    // PISO BAIXO, e isso é o ponto: qualquer fronteira de frase vale mais que
-    // um corte no meio dela. Com piso de 35% um caso real de produção quebrou —
-    // a única fronteira da janela (um ponto final aos 75 chars) foi descartada
-    // por ser "cedo demais", o código caiu no último espaço e o paciente
-    // recebeu "...segurar o próprio peso na" e depois "perna? E chegou...".
-    // Um balão curto se lê; uma frase partida ao meio, não.
     const melhor = candidatos
       .filter((c) => c.em > maxLen * 0.12)
       .sort((a, b) => b.em - a.em)[0];
@@ -351,8 +214,6 @@ export function splitIntoChunks(text: string, maxLen: number): string[] {
     if (melhor) {
       cut = melhor.em + melhor.inclui;
     } else {
-      // Sem fronteira NENHUMA na janela (texto corrido muito longo): aí sim
-      // corta no último espaço, que ao menos não racha a palavra.
       const lastSpace = slice.lastIndexOf(' ');
       if (lastSpace > maxLen * 0.35) cut = lastSpace;
     }
@@ -363,12 +224,8 @@ export function splitIntoChunks(text: string, maxLen: number): string[] {
   return colarPedacosSemPalavra(chunks, maxLen);
 }
 
-// Um pedaço sem nenhuma palavra (uma linha decorativa "✨", um "🙏" solto no
-// fim) vira um BALÃO INTEIRO no WhatsApp do paciente. Ele não lê isso como
-// enfeite, lê como mensagem sem sentido. Então cola no vizinho — e se não
-// couber, descarta: o pedaço não carregava informação nenhuma mesmo.
 function colarPedacosSemPalavra(chunks: string[], maxLen: number): string[] {
-  if (chunks.length < 2) return chunks; // 1 pedaço só é assunto do chamador
+  if (chunks.length < 2) return chunks;
   const out: string[] = [];
   for (const pedaco of chunks) {
     const anterior = out[out.length - 1];
@@ -379,7 +236,6 @@ function colarPedacosSemPalavra(chunks: string[], maxLen: number): string[] {
     }
     out.push(pedaco);
   }
-  // O primeiro pedaço não tem vizinho anterior — cola no seguinte.
   if (out.length > 1 && !temPalavra(out[0])) {
     const junto = `${out[0]} ${out[1]}`.trim();
     out.shift();
@@ -388,17 +244,11 @@ function colarPedacosSemPalavra(chunks: string[], maxLen: number): string[] {
   return out;
 }
 
-// ── Trava anti-duplicata de ENTREGA ────────────────────────────────────────
-// Se o MESMO texto já foi enviado pro MESMO lead há poucos segundos, não
-// reenvia. Pega duplicata de QUALQUER origem (gatilho residual do Kommo, /run
-// repetido, webhook em dobro). TTL curto — repetir o MESMO texto pro mesmo lead
-// em <45s na prática só acontece por bug.
 const ENTREGA_DEDUP_TTL_MS = 45_000;
 const entregasRecentes = new Map<string, number>();
 function chaveEntrega(leadId: number, text: string): string {
   return `${leadId}|${text.trim().slice(0, 200)}`;
 }
-/** true = este texto já foi ENTREGUE a este lead há <45s (deve PULAR o reenvio). */
 function entregaDuplicada(leadId: number, text: string): boolean {
   const agora = Date.now();
   if (entregasRecentes.size > 500) {
@@ -407,31 +257,14 @@ function entregaDuplicada(leadId: number, text: string): boolean {
   const anterior = entregasRecentes.get(chaveEntrega(leadId, text));
   return !!anterior && agora - anterior < ENTREGA_DEDUP_TTL_MS;
 }
-/** Registra a entrega BEM-SUCEDIDA (chamar só depois do PATCH dar certo). Assim
- *  retry de uma falha não é bloqueado, mas a duplicata real (reenvio do mesmo
- *  texto já entregue) é. */
 function registrarEntrega(leadId: number, text: string): void {
   entregasRecentes.set(chaveEntrega(leadId, text), Date.now());
 }
 
-// ---------------------------------------------------------------------------
-// resolveEnumId — casa um label (texto da opção) com o enum_id correspondente
-// de um campo select/multiselect/radiobutton do Kommo.
-//
-// Por que existe: gravar campo dropdown por `value` (texto) é frágil — o Kommo
-// responde 200 mas DESCARTA silenciosamente quando o texto não bate EXATAMENTE
-// com uma opção cadastrada (espaço sobrando, caixa diferente, acento, emoji no
-// label). É o mesmo silent no-op do histórico do `tags_to_add`. Gravar por
-// `enum_id` é à prova disso. A tool dinâmica já trava o LLM nas opções
-// existentes (z.enum), então o match costuma ser exato; o normalizador cobre
-// as bordas (trim/caixa/acento). Retorna null se não achar — o caller cai pro
-// `value` como antes (sem regressão).
-// ---------------------------------------------------------------------------
-
 function normalizeEnumLabel(s: string): string {
   return s
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '') // remove acentos (ç, ã, é, …)
+    .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
@@ -442,18 +275,12 @@ export function resolveEnumId(
   enums: ReadonlyArray<{ id: number; value: string }>,
 ): number | null {
   if (enums.length === 0) return null;
-  // 1) Match exato — caminho normal (LLM travado em z.enum manda o label igual).
   const exact = enums.find((e) => e.value === label);
   if (exact) return exact.id;
-  // 2) Match tolerante a trim/caixa/acento.
   const norm = normalizeEnumLabel(label);
   const fuzzy = enums.find((e) => normalizeEnumLabel(e.value) === norm);
   return fuzzy ? fuzzy.id : null;
 }
-
-// ---------------------------------------------------------------------------
-// Config interna do cliente — derivada de uma Unit ou do env legado.
-// ---------------------------------------------------------------------------
 
 interface KommoCreds {
   subdomain: string;
@@ -461,7 +288,6 @@ interface KommoCreds {
   salesbotId: number | null;
   replyFieldId: number | null;
   bypassSalesbot: boolean;
-  /** Modo /execute: dispara o Salesbot via POST /bots/{id}/run após o PATCH. */
   salesbotExecuteEnabled: boolean;
 }
 
@@ -500,18 +326,9 @@ function credsFromEnv(): KommoCreds {
   };
 }
 
-// ---------------------------------------------------------------------------
-// RATE LIMITER GLOBAL — o Kommo permite no MÁXIMO 7 requisições/segundo POR IP.
-// Passar disso devolve 429; se repetir, o Kommo BLOQUEIA O IP e passa a devolver
-// 403 em TODA chamada (derruba a IA inteira, foi o que aconteceu). Como o limite
-// é por IP, o throttle precisa ser GLOBAL do processo — serializa TODA chamada
-// Kommo (IA + sync + qualquer uma) a uma taxa segura abaixo de 7/s, sem rajada.
-// Docs: developers.kommo.com/docs/limitations
-// ---------------------------------------------------------------------------
-const KOMMO_MIN_GAP_MS = 180; // ~5,5 req/s — margem sob os 7/s do Kommo
+const KOMMO_MIN_GAP_MS = 180;
 let kommoNextSlot = 0;
 
-/** Reserva a próxima fatia de tempo e espera até ela (serializa o processo). */
 async function kommoAcquireSlot(): Promise<void> {
   const now = Date.now();
   const slot = kommoNextSlot > now ? kommoNextSlot : now;
@@ -520,8 +337,6 @@ async function kommoAcquireSlot(): Promise<void> {
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
 
-/** Em 429/403, empurra o relógio pra frente pra dar um respiro e NÃO escalar
- *  pro bloqueio de IP. `retryAfterSec` vem do corpo do 429 do Kommo. */
 function kommoBackoff(retryAfterSec?: number): void {
   const ms = Math.min(Math.max((retryAfterSec ?? 5) * 1000, 2000), 60_000);
   const alvo = Date.now() + ms;
@@ -532,26 +347,18 @@ function buildHttp(creds: KommoCreds): AxiosInstance {
   const http = axios.create({
     baseURL: `https://${creds.subdomain}.kommo.com/api/v4`,
     timeout: 15_000,
-    // RFC 8259 já manda `application/json` ser UTF-8, mas alguns proxies/CDNs
-    // na frente do Kommo tratam como ASCII quando não tem charset explícito.
-    // Forçar elimina ambiguidade.
     headers: {
       Authorization: `Bearer ${creds.accessToken}`,
       'Content-Type': 'application/json; charset=utf-8',
       Accept: 'application/json',
       'Accept-Charset': 'utf-8',
     },
-    // Garante que o axios serialize o JSON via JSON.stringify nativo (UTF-16
-    // → UTF-8 limpo), sem passar por encoders legados que podem stripar
-    // surrogate pairs (que é como os emojis fora do BMP são representados).
     responseType: 'json',
   });
 
   http.interceptors.request.use(async (config) => {
-    await kommoAcquireSlot(); // respeita o teto de 7 req/s do Kommo (por IP)
+    await kommoAcquireSlot();
     (config as { metadata?: { start: number } }).metadata = { start: performance.now() };
-    // Log defensivo: serializa o body como UTF-8 buffer e mostra os bytes
-    // do emoji se houver. Útil quando o paciente reclama "não chegou emoji".
     if (config.data && typeof config.data === 'object') {
       const json = JSON.stringify(config.data);
       const hasEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(json);
@@ -584,8 +391,6 @@ function buildHttp(creds: KommoCreds): AxiosInstance {
     },
     (error: AxiosError) => {
       const status = error.response?.status;
-      // 429 = passou de 7/s; 403 = IP já bloqueado. Nos dois, recua o relógio
-      // global pra parar de bater e não escalar/renovar o bloqueio de IP.
       if (status === 429 || status === 403) {
         const ra = Number((error.response?.data as { retry_after?: number } | undefined)?.retry_after);
         kommoBackoff(Number.isFinite(ra) ? ra : status === 403 ? 30 : undefined);
@@ -612,11 +417,6 @@ function wrapAxiosError(err: unknown, context: string): never {
   throw err;
 }
 
-// ---------------------------------------------------------------------------
-// Classe instanciável — uma por Unit.
-// Métodos espelham o que era o objeto KommoService original.
-// ---------------------------------------------------------------------------
-
 export class KommoClient {
   constructor(private readonly creds: KommoCreds, private readonly http: AxiosInstance) {}
 
@@ -624,10 +424,6 @@ export class KommoClient {
     return this.creds.subdomain;
   }
 
-  /**
-   * Telefone do contato. Mora no CONTATO e não no lead — sem isso, a
-   * sincronização com a franquia entrega um nome que ninguém consegue ligar.
-   */
   async getContactPhone(contactId: number): Promise<string | null> {
     try {
       const { data } = await this.http.get<{
@@ -664,11 +460,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Lista os custom fields de lead já normalizados pra UI: { id, name, type,
-   * code, enums?: [{id, value}] }. Apaga campos que a gente não suporta na
-   * UI de regras (smart_address, items, etc — exigem schema complexo).
-   */
   async listLeadCustomFieldsTyped(): Promise<KommoLeadCustomField[]> {
     const raw = (await this.listLeadCustomFields()) as {
       _embedded?: {
@@ -696,26 +487,6 @@ export class KommoClient {
       }));
   }
 
-  /**
-   * Escreve um valor em um custom field de lead. O formato do `values[0]`
-   * varia por tipo — encapsulamos aqui pra que o caller (tool) só passe
-   * { fieldId, type, value } e a gente cuida da serialização.
-   *
-   * Tipos suportados:
-   *  - text/textarea       → values: [{ value: string }]
-   *  - numeric             → values: [{ value: number }]
-   *  - date/birthday       → values: [{ value: unix seconds }]
-   *  - select/radiobutton  → values: [{ enum_id }] ou [{ value: enumLabel }]
-   *  - multiselect         → values: enums.map(e => ({ enum_id }))
-   *
-   * Aplica downgradeEmoji em valores string pra evitar truncagem (mesma
-   * razão do PATCH no campo "Resposta IA" — bug do MySQL utf8).
-   *
-   * `enums` (opcional): opções cadastradas do campo, no formato {id, value}.
-   * Quando passado em campos select/radiobutton/multiselect, resolvemos o
-   * label pro `enum_id` e gravamos por id (à prova do silent no-op do Kommo).
-   * Sem `enums` ou sem match, cai pro `value` (texto) como antes.
-   */
   async setLeadCustomFieldValue(
     leadId: number,
     fieldId: number,
@@ -737,7 +508,6 @@ export class KommoClient {
       }
       values = [{ value: num }];
     } else if (fieldType === 'date' || fieldType === 'birthday') {
-      // Kommo espera unix seconds. Aceita ISO string ou number ms/seconds.
       let unixSec: number;
       if (typeof value === 'number') {
         unixSec = value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
@@ -755,7 +525,6 @@ export class KommoClient {
       if (typeof value !== 'string') {
         throw new Error(`field ${fieldId} (${fieldType}) requer string (label da opção)`);
       }
-      // Preferir enum_id (à prova do silent no-op). Cai pro label se não casar.
       const enumId = resolveEnumId(value, enums);
       values = enumId != null ? [{ enum_id: enumId }] : [{ value: downgradeEmoji(value) }];
     } else if (fieldType === 'multiselect') {
@@ -781,12 +550,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Lista Salesbots da conta. Kommo expõe via `/api/v4/salesbots` (plural),
-   * conforme https://developers.kommo.com/reference/list-of-bots — algumas
-   * versões antigas usavam `/salesbot` (singular) que agora retorna 404.
-   * Fallback transparente: se plural 404, tenta singular.
-   */
   async listSalesbots(): Promise<unknown> {
     try {
       const { data } = await this.http.get('/salesbots');
@@ -805,23 +568,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Adiciona uma OU várias tags ao lead, SEM remover as existentes.
-   *
-   * Aceita `tag` (string única) OU `tags` (array). Quando vários, faz UM ÚNICO
-   * PATCH com todas — atômico do ponto de vista da observabilidade do Kommo e
-   * mais barato que N chamadas.
-   *
-   * ⚠ HISTÓRICO: tentativas anteriores quebradas:
-   *   1) `_embedded.tags: [{name}]` — SUBSTITUI a lista inteira; chamar 3x
-   *      deixava só a última tag (apagava as anteriores).
-   *   2) `_embedded.tags_to_add: [{name}]` — Kommo ignora silenciosamente
-   *      (retorna 200 mas não anexa nada). A chave `tags_to_add` é de RAIZ
-   *      do body, não vai aninhada em `_embedded`.
-   *
-   * Forma correta: `tags_to_add` no root, aceita `name` (cria se não existe)
-   * ou `id` (referência a tag já catalogada). ANEXA sem mexer no resto.
-   */
   async addTag({ leadId, tag, tags }: AddTagParams): Promise<void> {
     const all = [
       ...(tag ? [tag] : []),
@@ -829,8 +575,7 @@ export class KommoClient {
     ]
       .map((t) => t?.trim())
       .filter((t): t is string => !!t);
-    if (all.length === 0) return; // no-op silencioso
-    // Dedupe preservando ordem.
+    if (all.length === 0) return;
     const seen = new Set<string>();
     const unique = all.filter((t) => (seen.has(t) ? false : (seen.add(t), true)));
     try {
@@ -842,11 +587,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Remove uma tag específica do lead. Kommo aceita `tags_to_delete: [{name}]`
-   * no root do body — remove sem mexer no resto.
-   * Idempotente: remover tag que não existe é no-op (Kommo retorna 200).
-   */
   async removeTag(leadId: number, tag: string): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, {
@@ -868,7 +608,6 @@ export class KommoClient {
     }
   }
 
-  /** Define o responsável (usuário Kommo) pelo lead. */
   async setLeadResponsible(leadId: number, userId: number): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, { responsible_user_id: userId });
@@ -877,7 +616,6 @@ export class KommoClient {
     }
   }
 
-  /** Define o valor (preço) do lead em reais inteiros (Kommo armazena number). */
   async setLeadPrice(leadId: number, price: number): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, { price });
@@ -886,20 +624,10 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Fecha o lead como WON ou LOST. Kommo trata isso via status_id =
-   * 142 (lost) ou 143 (won) — IDs fixos por convenção.
-   *
-   * `lossReasonId` é opcional pra LOST: identifica POR QUE perdeu (ex:
-   * "Sem orçamento", "Concorrente"). Os IDs vêm de /leads/loss_reasons.
-   */
   async setLeadStatus(
     leadId: number,
     options: { won: boolean; lossReasonId?: number },
   ): Promise<void> {
-    // IDs fixos da Kommo:
-    //   142 = SUCCESSFUL (Venda Realizada / Won)
-    //   143 = UNSUCCESSFUL (Venda Perdida / Lost)
     const statusId = options.won ? 142 : 143;
     const body: Record<string, unknown> = { status_id: statusId };
     if (!options.won && options.lossReasonId) body.loss_reason_id = options.lossReasonId;
@@ -910,10 +638,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Move lead pra outro pipeline. Se `statusId` não vier, Kommo coloca no
-   * primeiro status do pipeline destino automaticamente.
-   */
   async setLeadPipeline(
     leadId: number,
     pipelineId: number,
@@ -928,11 +652,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Cria tarefa no Kommo vinculada ao lead. `completeAt` em unix seconds
-   * (Kommo usa segundos, não ms). `responsibleUserId` opcional — sem ele,
-   * herda do responsável do lead.
-   */
   async createTask(args: {
     leadId: number;
     text: string;
@@ -962,7 +681,6 @@ export class KommoClient {
     }
   }
 
-  /** Lista usuários da conta Kommo. Usado pelo picker de "responsável". */
   async listUsers(): Promise<Array<{ id: number; name: string; email?: string }>> {
     try {
       const { data } = await this.http.get<{
@@ -974,7 +692,6 @@ export class KommoClient {
     }
   }
 
-  /** Lista loss_reasons (motivos de perda) — usado pelo picker do fechar lead. */
   async listLossReasons(): Promise<Array<{ id: number; name: string }>> {
     try {
       const { data } = await this.http.get<{
@@ -986,11 +703,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Atualiza o `name` do lead — que é o que aparece como título no Kommo.
-   * Usado pela tool `atualizar_titulo_lead` quando a IA descobre o nome real
-   * do paciente e quer trocar o título genérico ("WhatsApp Web", "Visitante").
-   */
   async updateLeadName(leadId: number, name: string): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, { name });
@@ -999,17 +711,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Atualiza o título do card no padrão "<Nome> DD/MM/YYYY", usando
-   * `lead.created_at` como base da data (faz o título ser idempotente entre
-   * dias — sempre fica a data de criação do lead, não "hoje").
-   *
-   * Idempotente: lê o lead primeiro e compara o título atual; se já estiver
-   * no formato desejado, devolve `changed: false` sem chamar o PATCH.
-   *
-   * Compartilhado entre a tool dedicada `atualizar_titulo_lead` (toggle
-   * `collectNameEnabled`) e a flag `updatesLeadTitle` nas regras de captura.
-   */
   async updateLeadTitleWithDate(
     leadId: number,
     nome: string,
@@ -1031,14 +732,6 @@ export class KommoClient {
     return { previous, desired, changed: true };
   }
 
-  /**
-   * Posta uma nota interna no lead. Aparece no painel do Kommo pros operadores
-   * humanos (SDR, vendedor) mas NÃO é enviada pro paciente.
-   *
-   * Usado pela tool `resumir_lead_para_sdr` pra registrar o resumo gerado
-   * pela IA. O texto passa por downgradeEmoji por garantia (Kommo trunca
-   * 4-byte emoji).
-   */
   async addLeadNote(leadId: number, text: string): Promise<{ id?: number } | null> {
     try {
       const { data } = await this.http.post<{
@@ -1053,11 +746,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Lista TODOS os leads paginando até `maxPages` (default 4 = 1000 leads).
-   * Usado pelo dashboard pra contar leads por etapa do funil. NÃO traz custom
-   * fields nem tags pra ficar leve.
-   */
   async listLeads(maxPages: number = 4): Promise<KommoLead[]> {
     const all: KommoLead[] = [];
     for (let page = 1; page <= maxPages; page++) {
@@ -1077,11 +765,6 @@ export class KommoClient {
     return all;
   }
 
-  /**
-   * Leads criados a partir de um instante (epoch em segundos), mais recentes
-   * primeiro. Diferente de `listLeads`, que varre tudo: aqui interessa só a
-   * janela recente, e trazer 1000 leads pra achar os 20 de ontem é desperdício.
-   */
   async listLeadsDesde(desdeEpochSeg: number, limite = 100): Promise<KommoLead[]> {
     try {
       const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
@@ -1098,13 +781,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Leads MEXIDOS recentemente, com etapa e motivo de perda.
-   *
-   * Filtra por updated_at e não created_at de propósito: um lead criado semana
-   * passada e movido pra PERDIDO hoje precisa aparecer — é justamente ele que
-   * o reengajamento por etapa procura. Por created_at ele ficaria invisível.
-   */
   async listLeadsAtualizadosDesde(
     desdeEpochSeg: number,
     limite = 250,
@@ -1126,11 +802,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Leads atualizados desde X COM os custom_fields_values embutidos (o /leads já
-   * os traz por padrão). Usado pelo validador do cartão pra checar regras sem 1
-   * getLead por lead. Traz status_id/pipeline_id/name/custom_fields_values.
-   */
   async listLeadsAtualizadosComCampos(desdeEpochSeg: number, limite = 250): Promise<KommoLead[]> {
     try {
       const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
@@ -1147,11 +818,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Lista pipelines do CRM com suas etapas (statuses) embedadas.
-   * Usado pelo painel pra mostrar quais IDs colocar no prompt e em
-   * `kommoWonStatusIds`.
-   */
   async listPipelines(): Promise<KommoPipeline[]> {
     try {
       const { data } = await this.http.get<{
@@ -1180,12 +846,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Lê o lead e retorna o valor de um custom field específico como boolean.
-   * Trata Kommo checkbox quirks: o value pode vir como true/false/"1"/"0"/null.
-   * Retorna false quando o field não existe no lead (não estourar pausa por
-   * ausência).
-   */
   async isLeadFieldChecked(leadId: number, fieldId: number): Promise<boolean> {
     let lead: KommoLead;
     try {
@@ -1202,7 +862,6 @@ export class KommoClient {
     return false;
   }
 
-  /** Escreve um boolean num custom field do lead (usado pela tool `pausar_ia`). */
   async setLeadFieldFlag(leadId: number, fieldId: number, value: boolean): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, {
@@ -1213,7 +872,6 @@ export class KommoClient {
     }
   }
 
-  /** Validação: tenta buscar um custom field por ID. 404 → não existe. */
   async getCustomField(fieldId: number): Promise<KommoCustomField> {
     try {
       const { data } = await this.http.get<KommoCustomField>(`/leads/custom_fields/${fieldId}`);
@@ -1223,10 +881,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Lista tags de leads. Kommo pagina (limit 250). Buscamos até 4 páginas
-   * (1000 tags) — suficiente pra qualquer conta normal.
-   */
   async listLeadTags(): Promise<KommoTag[]> {
     const all: KommoTag[] = [];
     for (let page = 1; page <= 4; page++) {
@@ -1246,7 +900,6 @@ export class KommoClient {
     return all;
   }
 
-  /** Validação: tenta buscar um Salesbot por ID. */
   async getSalesbot(salesbotId: number): Promise<KommoSalesbot> {
     try {
       const { data } = await this.http.get<KommoSalesbot>(`/salesbot/${salesbotId}`);
@@ -1256,17 +909,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Aciona UM Salesbot específico num lead — o gatilho puro, sem PATCH em campo.
-   *
-   * Diferente de `runSalesbot` (que entrega a resposta da IA via campo +
-   * Digital Pipeline), aqui só disparamos `POST /bots/{id}/run`. Uso: o worker
-   * de véspera aciona o bot de LEMBRETE, cujo passo é "enviar template". Não há
-   * campo no meio, então não há gatilho de "campo mudou" pra duplicar.
-   *
-   * Devolve ok/erro em vez de lançar: um lembrete que falha num lead não pode
-   * derrubar a varredura dos outros.
-   */
   async triggerSalesbot(
     salesbotId: number,
     leadId: number,
@@ -1284,19 +926,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * Dispara o Salesbot via PATCH no custom field "Resposta IA".
-   *
-   * O Digital Pipeline do Kommo escuta o evento "Quando campo Resposta IA
-   * muda" e roda o Salesbot configurado. Isso É o disparo — não chamamos
-   * POST /salesbot/{id}/run em paralelo, porque em contas que aceitam ambos
-   * a mensagem chega 2x ao paciente. Ver comentário dentro do método.
-   *
-   * Pré-requisito (config no Kommo, não no nosso código):
-   *   Digital Pipeline → Trigger "Campo {replyFieldId} muda" → Ação "Rodar
-   *   Salesbot {salesbotId}". Se essa regra não estiver no Kommo, a
-   *   mensagem não vai pro paciente — investigue lá.
-   */
   async runSalesbot({
     leadId,
     salesbotId,
@@ -1310,8 +939,6 @@ export class KommoClient {
     text: string;
     recorder?: KommoStepRecorder;
   }): Promise<unknown> {
-    // TRAVA ANTI-DUPLICATA: mesmo texto pro mesmo lead há <45s → pula. Pega
-    // duplicata de qualquer origem (gatilho residual + /run, webhook em dobro).
     if (entregaDuplicada(leadId, text)) {
       logger.warn({ leadId, salesbotId }, 'runSalesbot: MESMO texto já enviado a este lead há <45s — PULANDO (anti-duplicata)');
       await recorder?.step({
@@ -1322,27 +949,8 @@ export class KommoClient {
       return { via: 'skipped_duplicate' };
     }
 
-    // ESTRATÉGIA PATCH-ONLY (corrige duplicação histórica):
-    //
-    // O Kommo aciona o Salesbot por DOIS caminhos possíveis:
-    //   1. PATCH no campo "Resposta IA" — quando o Digital Pipeline do Kommo
-    //      tem regra "Quando campo muda → rodar Salesbot", esse PATCH SOZINHO
-    //      JÁ envia a mensagem ao paciente.
-    //   2. POST /salesbot/{id}/run — dispara o mesmo bot via REST.
-    //
-    // Originalmente o código fazia ambos por defesa, mas em contas com o
-    // trigger do Digital Pipeline ATIVO + endpoint /run retornando 200, isso
-    // entregava a resposta 2x ao paciente (bug observado em produção).
-    //
-    // Decisão: confiar SÓ no PATCH + Digital Pipeline. Requer que cada Unit
-    // tenha o gatilho configurado no Kommo (Digital Pipeline → "Quando o
-    // campo Resposta IA mudar → rodar Salesbot {salesbotId}"). É a config
-    // padrão recomendada e historicamente foi o caminho que sempre funcionou
-    // em contas com /run = 404.
     const t0Patch = performance.now();
     try {
-      // Downgrade 4-byte emoji ANTES do envio. Kommo trunca a string no
-      // primeiro char fora do BMP (bug de utf8 vs utf8mb4 no storage deles).
       const safeText = downgradeEmoji(text);
       const wasDowngraded = safeText !== text;
       const sentBytes = Buffer.byteLength(safeText, 'utf8');
@@ -1350,9 +958,6 @@ export class KommoClient {
       await this.http.patch(`/leads/${leadId}`, {
         custom_fields_values: [{ field_id: replyFieldId, values: [{ value: safeText }] }],
       });
-      // PATCH OK → registra a entrega (a partir daqui, reenvio do MESMO texto
-      // em <45s é bloqueado no topo). Fica DEPOIS do PATCH pra retry de falha
-      // não ser barrado.
       registrarEntrega(leadId, text);
       const patchMs = Math.round(performance.now() - t0Patch);
       logger.info(
@@ -1385,10 +990,6 @@ export class KommoClient {
         latencyMs: patchMs,
       });
 
-      // READBACK — lê o lead de volta pra confirmar o que ficou armazenado.
-      // Compara contra `safeText` (o que de fato mandamos depois do downgrade),
-      // não contra `text`. Se mesmo o BMP estiver sumindo, o problema é
-      // outro (ex: Kommo aplicando algum strip extra) e a gente precisa saber.
       if (hasEmoji || wasDowngraded) {
         const t0Read = performance.now();
         try {
@@ -1447,14 +1048,6 @@ export class KommoClient {
       wrapAxiosError(err, `runSalesbot:setField(${leadId}, field=${replyFieldId})`);
     }
 
-    // MODO /execute (opt-in por unidade `kommoSalesbotExecuteEnabled`):
-    // além do PATCH — que grava o texto que o bot vai LER — disparamos o
-    // Salesbot EXPLICITAMENTE via POST /api/v4/bots/{id}/run. Nesse modo o
-    // gatilho do Digital Pipeline "campo Resposta IA mudou → rodar Salesbot"
-    // DEVE estar DESLIGADO no Kommo desta unidade; senão dispara 2× (pelo
-    // campo + pelo nosso /run) e a mensagem duplica.
-    // Endpoint oficial: https://developers.kommo.com/reference/lancar-um-salesbot
-    // (entity_type é a STRING "leads", não um número; sucesso = 202).
     if (this.creds.salesbotExecuteEnabled) {
       const t0Run = performance.now();
       try {
@@ -1492,10 +1085,6 @@ export class KommoClient {
       }
     }
 
-    // PATCH foi o disparo. NÃO chamamos POST /salesbot/{id}/run pra evitar
-    // duplicação. Se uma conta NÃO tem o trigger do Digital Pipeline e a
-    // resposta nunca chega ao paciente, é sinal de config faltando no Kommo
-    // (não de bug aqui).
     await recorder?.step({
       kind: 'KOMMO_ACTION',
       title: '✅ PATCH-only: Digital Pipeline aciona o Salesbot ao mudar o campo',
@@ -1509,17 +1098,6 @@ export class KommoClient {
     return { runApi: 'patch_only', triggeredBy: 'field_change', salesbotId };
   }
 
-  /**
-   * Envia a resposta da IA de volta ao paciente. Estratégia em camadas:
-   *  1. Salesbot (se Unit tem salesbotId + replyFieldId).
-   *  2. POST /chats/{chatId}/messages (raro funcionar com WABA nativo).
-   *  3. Cria nota comum no lead (sempre funciona, mas só visível ao operador).
-   *
-   * CHUNKING: o campo "Resposta IA" do Kommo (custom field type=text) tem
-   * limite ~250 chars. Se a resposta passar disso, quebramos em N pedaços
-   * e disparamos o Salesbot uma vez por pedaço com 900ms entre eles — sai
-   * como se a IA tivesse digitado várias mensagens.
-   */
   async sendChatReply({
     leadId,
     text,
@@ -1528,16 +1106,6 @@ export class KommoClient {
     contactId,
     recorder,
   }: SendChatReplyParams): Promise<SendChatReplyResult> {
-    // ─────────────────────────────────────────────────────────────────────
-    // MODO BYPASS — comportamento "edição manual": faz APENAS o PATCH no
-    // campo Resposta IA e deixa o Digital Pipeline do Kommo disparar o
-    // Salesbot uma única vez. Mesma rota que acontece quando o usuário
-    // edita o campo na UI do Kommo. Resolve casos onde:
-    //   - O Salesbot via POST /salesbot/run corrompe emoji
-    //   - Há disparo duplo (DP trigger + POST /run)
-    // Pré-requisito: o Digital Pipeline da Unit tem um gatilho
-    // "Quando campo Resposta IA mudar → rodar Salesbot".
-    // ─────────────────────────────────────────────────────────────────────
     if (this.creds.bypassSalesbot && this.creds.replyFieldId) {
       const t0 = performance.now();
       try {
@@ -1614,10 +1182,6 @@ export class KommoClient {
 
     if (chatId) {
       const t0 = performance.now();
-      // Mesmo downgrade defensivo do PATCH: /chats também pode passar pelo
-      // storage com utf8 (3-byte). Se na prática esse endpoint aceitar 4-byte
-      // sem truncar, o downgrade só preserva consistência visual entre os
-      // dois caminhos — não há regressão.
       const safeText = downgradeEmoji(text);
       const wasDowngraded = safeText !== text;
       try {
@@ -1689,29 +1253,6 @@ export class KommoClient {
     }
   }
 
-  /**
-   * MODO WIDGET — entrega a resposta RETOMANDO o Salesbot via `return_url`.
-   *
-   * Diferente do caminho PATCH + Digital Pipeline (runSalesbot/sendChatReply),
-   * aqui o Salesbot está PAUSADO no passo "Widget" esperando o nosso continue.
-   * Respondemos no `return_url` (que o Kommo nos entregou, assinado, no corpo
-   * do widget_request) com `execute_handlers`: cada balão vira um handler
-   * `show` de texto e fechamos com `goto finish`.
-   *
-   * Por que resolve os bugs do caminho legado:
-   *   • Sem campo "Resposta IA" no meio → o Digital Pipeline não relê e não
-   *     reenvia em loop (mata a duplicata).
-   *   • Balões nativos numa ÚNICA chamada → sem o chunking truncado em 240
-   *     chars nem o PATCH sequencial racy de 900ms.
-   *
-   * `text` vazio = finaliza o bot SEM mensagem (só `goto finish`). Usado pelos
-   * guards (IA pausada / global) pra liberar o fluxo do Salesbot em vez de
-   * deixá-lo pendurado esperando um continue que nunca vem.
-   *
-   * Sem teto de 240 chars (aquele era limite do custom field no MySQL do
-   * Kommo). Emoji vai puro — não há storage utf8 nesse caminho, então o
-   * downgradeEmoji do PATCH não se aplica.
-   */
   async continueSalesbotWidget(
     returnUrl: string,
     args: { text: string; data?: Record<string, unknown>; recorder?: KommoStepRecorder },
@@ -1722,15 +1263,8 @@ export class KommoClient {
       ...chunks.map((value) => ({ handler: 'show', params: { type: 'text', value } })),
       { handler: 'goto', params: { type: 'finish' } },
     ];
-    // `data` volta pro widget e fica acessível no Salesbot como {{json.x}}.
-    // Default `status: success` casa com o bloco de conditions sugerido pela
-    // doc do Kommo (term1: {{json.status}} == success), caso a unidade encadeie
-    // passos após o Widget.
     const payload = { data: args.data ?? { status: 'success' }, execute_handlers: executeHandlers };
     try {
-      // `return_url` é absoluto (https://<sub>.kommo.com/api/v4/salesbot/{id}/
-      // continue/{id}). O axios usa a URL absoluta e ignora o baseURL,
-      // herdando Authorization Bearer + headers UTF-8 desta instância.
       const { data } = await this.http.post(returnUrl, payload);
       const ms = Math.round(performance.now() - t0);
       logger.info(
@@ -1753,10 +1287,6 @@ export class KommoClient {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Factory: cliente por Unit.
-// ---------------------------------------------------------------------------
-
 export function createKommoClient(
   unit: Pick<
     Unit,
@@ -1772,13 +1302,6 @@ export function createKommoClient(
   return new KommoClient(creds, buildHttp(creds));
 }
 
-/**
- * Checa se o lead tem o checkbox "IA Pausada" marcado no Kommo.
- *
- * Retorna `false` quando: a Unit não tem `kommoPausedFieldId` configurado,
- * o Kommo está indisponível, ou o field não está checado. Falha SILENCIOSA
- * é proposital — se a checagem cair, melhor a IA responder do que ficar mudo.
- */
 export async function isLeadPaused(
   unit: Pick<
     Unit,
@@ -1802,11 +1325,6 @@ export async function isLeadPaused(
   }
 }
 
-// ---------------------------------------------------------------------------
-// SINGLETON LEGADO — usa env, mantido pra retrocompat dos endpoints
-// `/admin/kommo-fields` e `/admin/kommo-salesbots` que ainda não recebem unit.
-// ---------------------------------------------------------------------------
-
 let envClient: KommoClient | null = null;
 
 export function getEnvKommoClient(): KommoClient {
@@ -1817,7 +1335,6 @@ export function getEnvKommoClient(): KommoClient {
   return envClient;
 }
 
-/** Compat: objeto-chamada idêntico ao antigo `KommoService.X(...)`. */
 export const KommoService = {
   getLead: (leadId: number) => getEnvKommoClient().getLead(leadId),
   listLeadCustomFields: () => getEnvKommoClient().listLeadCustomFields(),

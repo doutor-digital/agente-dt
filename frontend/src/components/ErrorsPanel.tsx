@@ -1,23 +1,3 @@
-// ============================================================================
-// ErrorsPanel — painel de logs warn/error/fatal persistidos.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Captura automática pelo hook do Pino em backend/src/lib/logger.ts: todo
-// `logger.warn/error/fatal` em qualquer lugar do backend vai parar na tabela
-// `system_logs` e aparece aqui — sem precisar instrumentar nada nos
-// callsites.
-//
-// Filtros (lado-servidor):
-//   - level   WARN | ERROR | FATAL
-//   - module  nome do arquivo emissor (ex: "kommo.service")
-//   - q       busca em msg (case-insensitive)
-//   - since   "1h" | "24h" | "7d" → convertido pra ISO antes de mandar
-//
-// Click numa linha abre o context completo (JSON) e, se houver `traceId`,
-// um link clicável pra aba "Execuções" focando aquele trace específico.
-// ============================================================================
-
 import { useEffect, useMemo, useState } from 'react';
 import { AlertOctagon, Loader2, Search, X } from 'lucide-react';
 import clsx from 'clsx';
@@ -49,11 +29,8 @@ export function ErrorsPanel() {
   const [sinceMs, setSinceMs] = useState<number | null>(24 * 60 * 60 * 1000);
   const [openId, setOpenId] = useState<string | null>(null);
 
-  // since em ISO — recalcula a cada render (curto), mas só muda quando
-  // sinceMs muda. Usar useMemo evita re-fetch desnecessário.
   const sinceIso = useMemo(
     () => (sinceMs == null ? undefined : new Date(Date.now() - sinceMs).toISOString()),
-    // recalcula somente quando o range muda (resolução grosseira é OK)
     [sinceMs],
   );
 
@@ -89,7 +66,6 @@ export function ErrorsPanel() {
 
   return (
     <div className="flex-1 overflow-hidden flex flex-col">
-      {/* Header com totais por level */}
       <div className="px-6 pt-5 pb-3 border-b border-zinc-800/80">
         <div className="flex items-center gap-3 mb-3">
           <AlertOctagon size={16} className="text-rose-400" />
@@ -104,7 +80,6 @@ export function ErrorsPanel() {
           </div>
         </div>
 
-        {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px]">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
@@ -175,7 +150,6 @@ export function ErrorsPanel() {
         </div>
       </div>
 
-      {/* Tabela */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         <table className="w-full text-xs">
           <thead className="text-[10px] uppercase tracking-wider text-zinc-500">
@@ -207,7 +181,6 @@ export function ErrorsPanel() {
         </table>
       </div>
 
-      {/* Drawer de detalhe */}
       {detail && <DetailDrawer log={detail} onClose={() => setOpenId(null)} />}
     </div>
   );

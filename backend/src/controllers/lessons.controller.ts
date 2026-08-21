@@ -1,7 +1,3 @@
-// ============================================================================
-// lessons.controller.ts — CRUD dos "aprendizados" (memória procedural) da unidade.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import {
   listLessons,
@@ -50,7 +46,6 @@ export async function deleteLessonHandler(req: Request, res: Response): Promise<
   res.json({ ok: count > 0 });
 }
 
-// Ciclo de reflexão: relê conversas e cria SUGESTÕES de aprendizado (desligadas).
 export async function reflectLessonsHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id ?? '');
   const unit = await prisma.unit.findUnique({ where: { id: unitId } });

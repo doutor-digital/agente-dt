@@ -1,17 +1,3 @@
-// ============================================================================
-// Login — tela de entrada do console.
-//
-// Estilo: split com card branco flutuante sobre fundo azul. Em telas largas o
-// painel azul (com a animação Lottie do chatbot) fica À ESQUERDA; em telas
-// estreitas ele EMPILHA EM CIMA do formulário (não some), pra nunca virar um
-// formulário solto e vazio.
-//
-// Sem signup público nem login social — a autenticação é e-mail/senha pelo
-// backend; botões falsos de "criar conta"/"entrar com Google" enganam.
-//
-// Erros do backend: invalid_credentials | account_disabled | no_password_set
-// ============================================================================
-
 import { useEffect, useState, type FormEvent } from 'react';
 import Lottie from 'lottie-react';
 import { Loader2 } from 'lucide-react';
@@ -72,7 +58,6 @@ export function Login() {
       }}
     >
       <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 rounded-[26px] overflow-hidden bg-white shadow-[0_24px_70px_rgba(6,90,160,0.28)]">
-        {/* ── Painel azul + animação — em cima no mobile, à esquerda no desktop ─ */}
         <aside className="relative flex flex-col items-center justify-center gap-3 bg-[#1cabff] px-8 py-8 md:py-10 overflow-hidden">
           <span className="pointer-events-none absolute -left-8 -bottom-6 h-40 w-40 rounded-[46%] bg-white/10 blur-[2px]" />
           <span className="pointer-events-none absolute -right-6 bottom-10 h-24 w-24 rounded-[46%] bg-white/10 blur-[2px]" />
@@ -105,7 +90,6 @@ export function Login() {
           </p>
         </aside>
 
-        {/* ── Formulário ─────────────────────────────────────────────────────── */}
         <main className="flex flex-col justify-center px-7 py-10 sm:px-12">
           <h1 className="text-2xl font-extrabold tracking-wide text-slate-800 text-center">LOGIN</h1>
 

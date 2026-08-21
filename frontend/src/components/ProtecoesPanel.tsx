@@ -1,15 +1,7 @@
-// ============================================================================
-// ProtecoesPanel — mostra as TRAVAS de segurança da IA da unidade, em
-// linguagem de dono de clínica. Status lido direto do `selectedUnit` (category
-// + Fontes), sem backend novo. O registro de QUANDO cada trava foi ligada está
-// na aba Histórico.
-// ============================================================================
-
 import { ShieldCheck, Stethoscope, Target, CircleCheck, CircleSlash } from 'lucide-react';
 import clsx from 'clsx';
 import { useUnit } from '../context/UnitContext';
 
-// Espelha o parse do backend (guardrail.ts): extrai valores R$ do texto.
 function parseAmounts(text: string | null | undefined): number[] {
   if (!text) return [];
   const out = new Set<number>();
@@ -85,7 +77,6 @@ export function ProtecoesPanel() {
         </p>
 
         <div className="grid gap-4">
-          {/* Preço */}
           <ProtCard
             icon={ShieldCheck}
             title="Trava de preço"
@@ -118,7 +109,6 @@ export function ProtecoesPanel() {
             )}
           </ProtCard>
 
-          {/* Clínico */}
           <ProtCard
             icon={Stethoscope}
             title="Trava clínica"
@@ -138,7 +128,6 @@ export function ProtecoesPanel() {
             )}
           </ProtCard>
 
-          {/* Knockout */}
           <ProtCard
             icon={Target}
             title="Qualificação — descarte de fora do escopo"
@@ -153,7 +142,6 @@ export function ProtecoesPanel() {
             </p>
           </ProtCard>
 
-          {/* Auto-checagem — Self-Refine (vale pra toda unidade) */}
           <ProtCard
             icon={CircleCheck}
             title="Confere antes de enviar"

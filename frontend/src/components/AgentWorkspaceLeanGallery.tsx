@@ -1,13 +1,3 @@
-// ============================================================================
-// AgentWorkspaceLeanGallery — 5 direções ENXUTAS (estilo produto EUA) pra a
-// casca do /configurar-agente. Ao contrário da galeria glossy anterior, aqui
-// tudo é RESTRAINED: tipografia lidera, um acento só (= estado, não enfeite),
-// espaço em branco como ferramenta. Zero gradiente/glass/neon/blob (o que dá
-// "cara de IA"). Um seletor no topo troca a direção ao vivo; o corpo de cada
-// seção é o painel real. Quando o João escolher, a gente fixa a vencedora.
-// Referências: Linear, Vercel Geist, editorial/ledger, Raycast, Notion.
-// ============================================================================
-
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
@@ -68,7 +58,6 @@ interface Shell {
   setSubId: (id: string) => void; goSeg: (id: SegId) => void; body: ReactNode;
 }
 
-// ── Corpo (painel real) — sem animação decorativa, só troca limpa. ───────────
 function Body({ subId, body }: { subId: string; body: ReactNode }) {
   return <div key={subId} className="flex-1 min-h-0 overflow-auto">{body}</div>;
 }
@@ -91,7 +80,6 @@ function SubTabs({ subs, activeId, onPick, tone }: { subs: SubPanel[]; activeId:
   );
 }
 
-// ════ 1 · LINEAR — hairlines, um acento só no ativo, escala justa ════════════
 function LinearShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-zinc-950">
@@ -119,7 +107,6 @@ function LinearShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   );
 }
 
-// ════ 2 · GEIST (VERCEL) — preto/branco, mono, bordas nítidas ════════════════
 function GeistShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-black">
@@ -147,7 +134,6 @@ function GeistShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   );
 }
 
-// ════ 3 · EDITORIAL / LEDGER — serifa, seções numeradas, respiro ═════════════
 function EditorialShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-[#0c0b0a]">
@@ -178,7 +164,6 @@ function EditorialShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   );
 }
 
-// ════ 4 · RAYCAST — barra ⌘K, cartões uniformes, um acento quente ════════════
 function RaycastShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-zinc-950">
@@ -212,7 +197,6 @@ function RaycastShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   );
 }
 
-// ════ 5 · QUIET (NOTION) — chrome mínimo, abas de texto, ponto de acento ═════
 function QuietShell({ seg, sub, segId, setSubId, goSeg, body }: Shell) {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-zinc-950">
@@ -268,7 +252,6 @@ export function AgentWorkspaceLeanGallery() {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      {/* Seletor — provisório, enxuto */}
       <div className="shrink-0 flex items-center gap-3 px-5 py-2 border-b border-zinc-800 bg-zinc-950">
         <span className="text-[11px] text-zinc-500 uppercase tracking-wider">Direção</span>
         <div className="flex items-center gap-1">

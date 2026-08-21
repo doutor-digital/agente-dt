@@ -1,24 +1,3 @@
-// ============================================================================
-// sync-whatsapp-costs.ts — Script CLI standalone.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Roda o sync de pricing_analytics + template_analytics da Meta Graph API
-// pra todas as Units que têm metaWabaId + metaAccessToken configurados.
-//
-// USO
-// ---
-//   pnpm tsx src/scripts/sync-whatsapp-costs.ts [--days=7] [--unit=<slug>]
-//
-// FLAGS
-//   --days=N      janela rolante em dias (default 7)
-//   --unit=<slug> processar somente uma unit
-//
-// Quando rodado sem argumentos, processa TODAS as Units ativas elegíveis.
-// É o mesmo código que o scheduler in-process do server.ts chama, mas
-// permite trigger manual via cron externo (k8s CronJob, GitHub Actions, etc).
-// ============================================================================
-
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import {

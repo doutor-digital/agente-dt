@@ -1,11 +1,3 @@
-// ============================================================================
-// users.service.ts — gestão de usuários do painel.
-//
-// CRUD usado pelo SUPER_ADMIN no painel: criar UNIT_ADMIN, promover, revogar,
-// resetar senha. Não envia email — o super admin passa a senha pra pessoa
-// por canal externo (WhatsApp/voz).
-// ============================================================================
-
 import type { User, UserRole } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -16,7 +8,6 @@ export interface UserInputCreate {
   name?: string | null;
   role: UserRole;
   unitId?: string | null;
-  /** Senha em texto plano. Será hasheada antes de gravar. */
   password: string;
 }
 
@@ -25,7 +16,6 @@ export interface UserInputUpdate {
   role?: UserRole;
   unitId?: string | null;
   isActive?: boolean;
-  /** Reset de senha — opcional. Se ausente, senha não muda. */
   password?: string;
 }
 
@@ -80,7 +70,6 @@ export async function deleteUser(id: string): Promise<void> {
   await prisma.user.delete({ where: { id } });
 }
 
-// SUPER_ADMIN nunca tem unitId. UNIT_ADMIN sempre tem.
 function validateRoleConsistency(role: UserRole, unitId: string | null): void {
   if (role === 'UNIT_ADMIN' && !unitId) {
     throw new Error('UNIT_ADMIN exige unitId');

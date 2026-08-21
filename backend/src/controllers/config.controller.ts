@@ -1,13 +1,3 @@
-// ============================================================================
-// config.controller.ts — CRUD do AgentConfig (multi-tenant).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Cada Unit pode ter seu próprio AgentConfig (1:N, mas só um ativo por
-// Unit). Os endpoints aceitam `unitId` na query/body. Sem unitId, opera
-// no AgentConfig "global" (sem Unit) — mantém compatibilidade.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { getActiveConfig, saveConfig, DEFAULTS } from '../agent/config.js';
@@ -23,9 +13,6 @@ const toolSchema = z.object({
   description: z.string().min(1).max(2000),
 });
 
-// workflow declarativo aposentado — substituído por UnitAction. Continuamos
-// aceitando o campo no payload (e ignorando) por 1-2 ciclos pra clientes antigos
-// não quebrarem ao salvar — o front atual já não envia.
 const saveSchema = z.object({
   unitId: z.string().nullable().optional(),
   systemPrompt: z.string().min(10).max(20000),
@@ -50,9 +37,6 @@ export async function getConfig(req: Request, res: Response): Promise<void> {
   });
 }
 
-// "Centralizar no prompt": achata a config atual da unidade (persona, fontes,
-// regras, toggles, ações, templates) num texto único e devolve pro front
-// preencher o editor. NÃO persiste nada — o usuário revisa e salva. Read-only.
 export async function getFlattenedPrompt(req: Request, res: Response): Promise<void> {
   const unitId = (req.query.unitId as string | undefined) ?? null;
   if (!unitId) {

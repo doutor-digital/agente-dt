@@ -1,21 +1,3 @@
-// ============================================================================
-// server.ts — Entry point HTTP.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Boot do servidor Express com:
-//   - CORS restrito à origem do dashboard (FRONTEND_ORIGIN, lista).
-//   - Body parser JSON + urlencoded (Kommo manda urlencoded por padrão).
-//   - RAW body preservado nas rotas /webhooks/:slug/meta — necessário pra
-//     validar a signature HMAC-SHA256 da Meta byte-a-byte.
-//   - Logger via Pino.
-//   - Setup do PostgresSaver (LangGraph) no boot — failfast.
-//   - Seed da Unit default a partir do .env (retrocompat dos webhooks legados).
-//
-// Graceful shutdown: SIGTERM/SIGINT pra fechar conexões TCP. Sem isso o
-// Kubernetes mata o pod no meio de uma query e logs aparecem como erros.
-// ============================================================================
-
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -41,7 +23,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DOCS_DIR = path.resolve(__dirname, '../../docs');
 
-// Tipo para preservar raw body (usado pela validação de signature da Meta).
 interface RawBodyRequest extends express.Request {
   rawBody?: Buffer;
 }
@@ -55,9 +36,6 @@ async function main(): Promise<void> {
         if (!origin) return cb(null, true);
         const allowed = env.FRONTEND_ORIGIN.includes(origin);
         if (!allowed) {
-          // Log explícito quando origin é bloqueado — antes era silencioso
-          // (header simplesmente saía vazio). Sem isso, debugar CORS em prod
-          // é adivinhação.
           logger.warn(
             { origin, allowedOrigins: env.FRONTEND_ORIGIN },
             'CORS: origin bloqueado — verifique FRONTEND_ORIGIN no .env',
@@ -65,21 +43,14 @@ async function main(): Promise<void> {
         }
         return cb(null, allowed);
       },
-      // true: o cookie `dt_session` (httpOnly) circula entre o frontend
-      // (porta 5173 ou domínio prod) e a API. Sem isso o login não persiste.
       credentials: true,
     }),
   );
 
-  // Cookie parser — popula req.cookies pro middleware de auth.
   app.use(cookieParser());
 
-  // Body parser urlencoded (webhooks Kommo).
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-  // Body parser JSON com `verify` que captura o RAW body — só é guardado
-  // pras rotas Meta. Deixar isso global é aceitável, custo é uma referência
-  // ao buffer já alocado pelo express.json.
   app.use(
     express.json({
       limit: '1mb',
@@ -99,13 +70,10 @@ async function main(): Promise<void> {
 
   app.use('/api', apiRouter);
 
-  // Documentação web — servida em /docs.
   app.use('/docs', express.static(DOCS_DIR, { extensions: ['html'] }));
 
-  // Inicializa checkpointer (cria tabelas do LangGraph se necessário).
   await getCheckpointer();
 
-  // Garante que a Unit default existe — retrocompat com webhooks legados.
   try {
     const def = await ensureDefaultUnit();
     logger.info({ id: def.id, slug: def.slug }, 'Unit default disponível');
@@ -113,37 +81,16 @@ async function main(): Promise<void> {
     logger.warn({ err }, 'falha ao semear Unit default — webhooks legados podem falhar');
   }
 
-  // Agendador in-process do sync de custos WhatsApp (Graph API pricing_analytics
-  // + template_analytics). Roda 1x/dia às 03:00 UTC, com upsert idempotente.
   startWhatsappCostScheduler();
 
-  // Refresh in-process das materialized views do dashboard (mv_unit_daily +
-  // mv_unit_daily_channel). REFRESH CONCURRENTLY a cada 5min — stale window
-  // aceito pra dashboard executivo.
   startDashboardMvRefresher();
 
-  // Monitor de "resposta parada": alerta quando uma resposta da IA fica gravada
-  // no campo "Resposta IA" além do limite sem o Salesbot do Kommo entregá-la.
   startStaleReplyMonitor();
-  // Juiz de conversa: avalia conversas encerradas pra alimentar a média de
-  // qualidade por versão de prompt (a tela "Prompts" existia mas ficava vazia,
-  // porque o único gatilho era um evento de conversão que nunca chega).
   startJudgeWorker();
-  // Reengajamento de quem parou de responder. Único motor que decide QUANDO
-  // falar — o Salesbot é só o canal de entrega.
   startFollowUpWorker();
-  // Lembrete de véspera. Guardado: só age em unidades com reminderEnabled e um
-  // Salesbot de lembrete configurado. Sobe inofensivo até ser ligado.
   startReminderWorker();
-  // Reativação pós-handoff: nunca perder lead quente. Guardado por
-  // reactivationEnabled (OFF por padrão) — sobe inofensivo até o piloto.
   startReactivationWorker();
-  // SLA de resposta humana pós-pausa: avisa os SDRs no WhatsApp se ninguém
-  // respondeu o lead dentro do limiar. Opt-in por unidade
-  // (pipelineIntents.sla_alert_minutes) — sobe inofensivo até ser ligado.
   startSlaAlertWorker();
-  // Validador de inconsistência do cartão: alerta erro de preenchimento (ex:
-  // Ganho sem forma de pagamento). Opt-in por unidade (cardValidationEnabled).
   startCardValidationWorker();
 
   const server = app.listen(env.PORT, () => {

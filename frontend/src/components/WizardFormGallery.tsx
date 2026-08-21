@@ -1,15 +1,3 @@
-// ============================================================================
-// WizardFormGallery — PREVIEW pra escolher o novo FORMATO do formulário de
-// "Configurar a IA". Mostra os mesmos campos (nome, tom, categoria, tamanho,
-// paleta de emoji, e um card de toggle) em 5 linguagens de design usadas lá
-// fora em 2026 (Linear, Vercel Geist, Stripe Settings, Aurora Glass, Bento).
-//
-// Estado é LOCAL/mock — nada salva. É só pra bater o olho e escolher. Quando o
-// João escolher, a gente aplica o skin vencedor nas peças reais do WizardPanel
-// (FeatureCard / TextField / SelectField / EmojiPaletteField…) e o formulário
-// inteiro herda o visual de uma vez.
-// ============================================================================
-
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
@@ -40,11 +28,10 @@ interface Tokens {
   segActive: string;
   chipIdle: string;
   chipActive: string;
-  accent: string; // toggle-on bg
+  accent: string;
   glass?: boolean;
 }
 
-// ── Dados de exemplo ─────────────────────────────────────────────────────────
 const TONES = ['Amigável', 'Formal', 'Direto', 'Consultivo'];
 const SIZES = ['Curta', 'Média', 'Detalhada'];
 const CATS = ['🩺 Saúde (Dra. Sofia)', '☀️ Energia Solar (Dr. João)', '⚖️ Advocacia', '🛒 E-commerce'];
@@ -66,7 +53,6 @@ function useFormState() {
 }
 type FormState = ReturnType<typeof useFormState>;
 
-// ── Controles genéricos (dirigidos por tokens) ───────────────────────────────
 function Segmented({ options, value, onChange, t }: { options: string[]; value: string; onChange: (v: string) => void; t: Tokens }) {
   return (
     <div className={clsx('inline-flex flex-wrap gap-1 p-1 rounded-xl', t.segWrap)}>
@@ -133,7 +119,6 @@ function KeywordList({ s, t }: { s: FormState; t: Tokens }) {
   );
 }
 
-// ── Um "campo" que se adapta ao layout ───────────────────────────────────────
 function Field({ layout, t, icon, label, hint, control, wide }: { layout: Layout; t: Tokens; icon?: ReactNode; label: string; hint?: string; control: ReactNode; wide?: boolean }) {
   if (layout === 'twocol') {
     return (
@@ -157,7 +142,6 @@ function Field({ layout, t, icon, label, hint, control, wide }: { layout: Layout
       </div>
     );
   }
-  // stack + bento
   return (
     <div className={clsx(t.card, layout === 'bento' ? 'p-4 rounded-2xl' : 'p-4 rounded-xl', wide && 'sm:col-span-2')}>
       <div className={clsx('flex items-center gap-2', t.label)}>{icon}{label}</div>
@@ -168,7 +152,6 @@ function Field({ layout, t, icon, label, hint, control, wide }: { layout: Layout
   );
 }
 
-// ── Corpo do formulário — UM só, dirigido por layout + tokens ────────────────
 function FormBody({ layout, t }: { layout: Layout; t: Tokens }) {
   const s = useFormState();
   const wrap =
@@ -203,7 +186,6 @@ function FormBody({ layout, t }: { layout: Layout; t: Tokens }) {
         <F wide icon={<Palette size={14} className="text-zinc-500" />} label="Paleta de emojis" hint="A IA usa livremente nas respostas." control={<EmojiChips s={s} t={t} />} />
       </div>
 
-      {/* Card de recurso com toggle — o padrão on/off do formulário */}
       <div className={clsx('mt-4', t.card, 'rounded-2xl overflow-hidden', s.handoff && t.glass ? '' : '')}>
         <div className="flex items-center gap-3 p-4">
           <span className={clsx('w-9 h-9 rounded-xl flex items-center justify-center shrink-0', s.handoff ? 'bg-brand-500/15 text-brand-300' : 'bg-zinc-800 text-zinc-500')}><Headset size={16} /></span>
@@ -228,9 +210,6 @@ function FormBody({ layout, t }: { layout: Layout; t: Tokens }) {
   );
 }
 
-// ── 5 SKINS = 5 conjuntos de tokens + layout ─────────────────────────────────
-// 5 direções ENXUTAS (estilo produto EUA). Zero gradiente/glass/blob. Cor =
-// estado, não decoração; tipografia lidera; espaço em branco é ferramenta.
 const linear: Tokens = {
   page: 'bg-zinc-950',
   card: 'bg-zinc-900/30 border border-zinc-800/60',
@@ -325,7 +304,6 @@ export function WizardFormGallery() {
         @media (prefers-reduced-motion: reduce){ .wf-aurora{animation:none} }
       `}</style>
 
-      {/* Seletor de formato — provisório */}
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur z-20">
         <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 uppercase tracking-wider"><Palette size={13} /> Formato</span>
         <div className="flex items-center gap-1 overflow-x-auto">

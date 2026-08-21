@@ -1,15 +1,3 @@
-// ============================================================================
-// ActivationPanel — "Etapas & Ativação" de uma IA.
-//
-// Torna VISÍVEL e GERENCIÁVEL o que antes só existia no banco: em que etapas
-// do Kommo esta IA responde (o roteador por etapa), se a agenda da franquia
-// está ligada, e quais capacidades estão ativas — tudo com switch, pra um
-// cliente de consultoria mexer sem saber de banco nem de ID de etapa.
-//
-// Regra do roteador: allowlist VAZIA = responde em TODAS as etapas. Allowlist
-// com itens = responde SÓ naquelas. A tela mostra isso em português claro.
-// ============================================================================
-
 import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Save, Power, CalendarClock, Flame, PhoneCall, Repeat, Layers, Timer } from 'lucide-react';
 import clsx from 'clsx';
@@ -100,10 +88,6 @@ export function ActivationPanel() {
   const respondeEmTodas = allowed.length === 0;
   const update = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
 
-  // SLA de resposta humana: mora dentro do pipelineIntents (JSON), chave
-  // `sla_alert_minutes`. 0/ausente = desligado. Mescla preservando as outras
-  // chaves (scheduled_meeting, spine_client_field_id…) — o backend sobrescreve
-  // o JSON inteiro, então SEMPRE mandamos o objeto completo.
   const pintents = (draft.pipelineIntents as Record<string, number> | null) ?? {};
   const slaMinutes = Number(pintents.sla_alert_minutes ?? 0);
   const setSla = (min: number) => {
@@ -120,7 +104,6 @@ export function ActivationPanel() {
     update({ kommoAllowedStatusIds: [...set] });
   }
 
-  // Etapas em que o alerta de SLA vale (coluna slaAlertStatusIds no banco).
   const slaStages = draft.slaAlertStatusIds ?? [];
   function toggleSlaStage(id: number) {
     const set = new Set(slaStages);
@@ -150,7 +133,6 @@ export function ActivationPanel() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 pb-24">
-        {/* Header sticky + salvar */}
         <div className="flex items-end justify-between gap-4 sticky top-0 backdrop-blur pt-6 pb-4 z-10 border-b border-zinc-800/60">
           <div>
             <div className="text-[11px] uppercase tracking-[0.16em] text-zinc-500 mb-1.5">
@@ -168,7 +150,6 @@ export function ActivationPanel() {
           </button>
         </div>
 
-        {/* Resumo */}
         <div
           className={clsx(
             'mt-5 rounded-xl border p-4 flex items-center gap-3',
@@ -193,7 +174,6 @@ export function ActivationPanel() {
           </div>
         </div>
 
-        {/* Liga/desliga a IA */}
         <Row
           icon={<Power size={16} className="text-emerald-300" />}
           title="IA ativa"
@@ -202,7 +182,6 @@ export function ActivationPanel() {
           <Toggle value={draft.isActive} onChange={(v) => update({ isActive: v })} />
         </Row>
 
-        {/* Etapas em que responde */}
         <section className="mt-6 border-t border-zinc-800/60 pt-6">
           <div className="flex items-center gap-2 mb-1">
             <Layers size={16} className="text-zinc-400" />
@@ -222,7 +201,6 @@ export function ActivationPanel() {
             <ModeBtn
               active={!respondeEmTodas}
               onClick={() => {
-                // entra no modo "específicas" — se estava vazio, começa sem nada marcado
                 if (respondeEmTodas) update({ kommoAllowedStatusIds: [] });
               }}
               label="Só as que eu escolher"
@@ -281,7 +259,6 @@ export function ActivationPanel() {
           )}
         </section>
 
-        {/* Agenda da franquia */}
         <Row
           icon={<CalendarClock size={16} className="text-sky-300" />}
           title="Agenda da franquia (marcar/remarcar)"
@@ -290,7 +267,6 @@ export function ActivationPanel() {
           <Toggle value={draft.spineEnabled} onChange={(v) => update({ spineEnabled: v })} />
         </Row>
 
-        {/* Capacidades */}
         <section className="mt-6 border-t border-zinc-800/60 pt-6">
           <h2 className="text-[15px] font-semibold text-zinc-100 mb-1">Capacidades</h2>
           <p className="text-[12.5px] text-zinc-500 mb-3">Ligue/desligue o que esta IA pode fazer.</p>
@@ -340,8 +316,6 @@ export function ActivationPanel() {
           </Row>
         </section>
 
-        {/* Etapas em que o alerta de SLA vale — visual, salvo no banco (coluna
-            slaAlertStatusIds). Só aparece com o SLA ligado. */}
         {slaMinutes > 0 && (
           <section className="mt-6 border-t border-zinc-800/60 pt-6">
             <div className="flex items-center gap-2 mb-1">

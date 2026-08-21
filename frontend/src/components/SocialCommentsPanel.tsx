@@ -1,30 +1,4 @@
-// ============================================================================
-// InstagramPanel — o canal de comentários inteiro numa tela só.
-//
-// LÓGICA DE PRODUTO
-// -----------------
-// Duas abas, porque são dois momentos diferentes da vida do canal:
-//
-//   CONFIGURAÇÃO — usada uma vez, no dia em que se liga o canal. Aqui mora o
-//   passo a passo, porque metade do trabalho é do lado da Meta e não do nosso:
-//   sem a URL do webhook cadastrada lá, nada chega e a fila fica vazia sem
-//   explicação. Por isso a URL vem pronta e com botão de copiar — e é a URL do
-//   BACKEND, não a do front, que são domínios diferentes em produção.
-//
-//   FILA — usada todo dia. Desenhada em torno de UMA pergunta: "posso soltar
-//   esse texto no meu perfil?". O cartão mostra o comentário e as DUAS
-//   respostas lado a lado, porque julgar uma sem a outra não dá: a pública
-//   sozinha parece vazia ("te chamei no direct"), e o direct sozinho não
-//   mostra o que ficou exposto pra todo mundo ver.
-//
-// Os dois textos são editáveis antes de aprovar — o rascunho da IA é sugestão,
-// não decisão. Se o moderador tivesse que recusar tudo que "quase serve", a
-// fila viraria trabalho em vez de economia.
-// ============================================================================
-
 import { useCallback, useEffect, useMemo, useState } from 'react';
-// Ícones: Phosphor (traço mais suave e cantos arredondados) + as marcas do
-// Font Awesome, ambos via react-icons.
 import {
   PiWarningCircleBold,
   PiArrowRightBold,
@@ -53,14 +27,6 @@ import type {
   InstagramCommentsResponse,
   Unit,
 } from '../types/api';
-
-// ---------------------------------------------------------------------------
-// A rede como parâmetro
-// ---------------------------------------------------------------------------
-// Instagram e Facebook resolvem o MESMO problema (comentário público → conversa
-// privada) com credenciais e endpoints diferentes. Duplicar a tela significaria
-// corrigir cada ajuste duas vezes e, na prática, uma das cópias envelhecer. Só
-// o que realmente muda vira dado aqui.
 
 export type SocialPlatform = 'instagram' | 'facebook';
 
@@ -117,10 +83,6 @@ const SKIN: Record<SocialPlatform, PlatformSkin> = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// Vocabulário visual
-// ---------------------------------------------------------------------------
-
 const CATEGORY: Record<IgCommentCategory, { label: string; chip: string; dot: string }> = {
   ELOGIO: { label: 'Elogio', chip: 'text-emerald-300 bg-emerald-500/10 ring-emerald-500/25', dot: 'bg-emerald-400' },
   PRECO: { label: 'Preço', chip: 'text-amber-300 bg-amber-500/10 ring-amber-500/25', dot: 'bg-amber-400' },
@@ -147,10 +109,6 @@ function formatWhen(iso: string): string {
   });
 }
 
-// ===========================================================================
-// Página
-// ===========================================================================
-
 export default function SocialCommentsPanel({
   platform = 'instagram',
 }: {
@@ -161,7 +119,6 @@ export default function SocialCommentsPanel({
   const [view, setView] = useState<'fila' | 'config'>('fila');
   const ligado = unit ? Boolean(unit[skin.campos.enabled]) : false;
 
-  // Sem canal configurado, cair na fila é cair numa tela vazia sem explicação.
   useEffect(() => {
     if (unit && !ligado) setView('config');
   }, [unit?.id, ligado]);
@@ -170,10 +127,6 @@ export default function SocialCommentsPanel({
     return <p className="text-sm text-zinc-400">Selecione um agente.</p>;
   }
 
-  // O shell do app NÃO dá padding nem scroll — cada painel monta o seu, como
-  // fazem CapturesPanel e DashboardPanel. Sem esse wrapper o conteúdo cola nas
-  // bordas e a página não rola: era exatamente o "espremido" que aparecia com
-  // a barra lateral recolhida.
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto max-w-[1500px] space-y-7 p-8">
@@ -202,8 +155,6 @@ function PageHeader({
   const Brand = skin.Brand;
   return (
     <header className="relative overflow-hidden surface p-7">
-      {/* Fundo com o gradiente do Instagram, bem discreto — dá identidade de
-          canal sem competir com o conteúdo. */}
       <div
         aria-hidden
         className="pointer-events-none absolute -top-24 -right-16 h-56 w-56 rounded-full blur-3xl opacity-[0.18]"
@@ -259,10 +210,6 @@ function StatusPill({ unit, skin }: { unit: Unit; skin: PlatformSkin }) {
   );
 }
 
-// ===========================================================================
-// Configuração
-// ===========================================================================
-
 function Setup({
   unit,
   skin,
@@ -294,8 +241,6 @@ function Setup({
   const viaKommo = draft.modo === 'kommo';
   const urlCanal = skin.label === 'Facebook' ? 'facebook' : 'instagram';
 
-  // Lista de campos do Kommo só faz sentido no modo Kommo — e é chamada de
-  // rede na API deles, então não vale puxar quando não vai ser usada.
   useEffect(() => {
     if (!viaKommo) return;
     let vivo = true;
@@ -313,8 +258,6 @@ function Setup({
     setErr(null);
     setSaved(false);
     try {
-      // Segredo em branco = "não mexer". Mandar '' apagaria o que já está lá,
-      // e o campo vem sempre vazio porque a API devolve mascarado.
       const payload: Record<string, unknown> = {
         [f.enabled]: draft.enabled,
         [f.dryRun]: draft.dryRun,
@@ -351,8 +294,6 @@ function Setup({
 
   return (
     <div className="space-y-7 pb-28">
-      {/* Duas colunas em telas largas: sem isso a página vira uma coluna fina
-          no meio de dois desertos — foi a reclamação de "espremido". */}
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="surface p-7">
           <SectionTitle
@@ -396,9 +337,6 @@ function Setup({
         </section>
       </div>
 
-      {/* A URL do webhook fica SEMPRE visível, nos dois modos. Antes ela só
-          aparecia no modo direto — e quem estava no modo Kommo não tinha onde
-          copiar, mesmo precisando dela pra assinar o canal na Meta. */}
       <section className="surface p-7">
         <SectionTitle
           title="URL do webhook"
@@ -418,7 +356,6 @@ function Setup({
         </div>
       </section>
 
-      {/* O prompt ocupa a largura toda: é o campo que mais precisa de espaço. */}
       <section className="surface p-7">
         <SectionTitle
           title="Instrução do agente"
@@ -451,7 +388,6 @@ function Setup({
         </div>
       </section>
 
-      {/* Credenciais / entrega */}
       {viaKommo ? (
         <section className="surface p-7">
           <SectionTitle
@@ -612,10 +548,6 @@ function ModeCard({
     </button>
   );
 }
-
-// ===========================================================================
-// Fila
-// ===========================================================================
 
 function Queue({
   unit,
@@ -902,17 +834,12 @@ function StatusChip({ comment }: { comment: InstagramComment }) {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Peças de formulário
-// ---------------------------------------------------------------------------
-
 function CopyField({ label, value, className = '' }: { label: string; value: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   async function copy() {
     try {
       await navigator.clipboard.writeText(value);
     } catch {
-      // clipboard bloqueado (http, permissão): o texto continua selecionável.
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);

@@ -1,8 +1,3 @@
-// ============================================================================
-// HistoricoPanel — "Histórico de melhorias" de uma clínica (unidade).
-// Linha do tempo de tudo que foi treinado/corrigido/ajustado na IA dela.
-// ============================================================================
-
 import { useEffect, useState } from 'react';
 import { History, Loader2 } from 'lucide-react';
 import clsx from 'clsx';

@@ -1,42 +1,9 @@
-// ============================================================================
-// meta-analytics.service.ts — Graph API analytics da Meta WhatsApp Cloud.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// A Meta cobra por mensagem desde 01/07/2025 (per-message pricing). Os
-// endpoints relevantes vivem na WABA (não no phone_number_id):
-//
-//   GET /v25.0/{WABA_ID}/pricing_analytics
-//       — VOLUME + COST por dia, segmentado por PRICING_CATEGORY,
-//         PRICING_TYPE, COUNTRY, PHONE, TIER.
-//
-//   GET /v25.0/{WABA_ID}/template_analytics
-//       — SENT/DELIVERED/READ/CLICKED por template, opcionalmente COST.
-//
-//   GET /v25.0/{WABA_ID}/message_templates
-//       — lista de templates (pra denormalizar template_name + language).
-//
-// CADA UNIDADE TEM AS PRÓPRIAS CREDENCIAIS — toda função recebe `unit`.
-// O token usado é o mesmo `metaAccessToken` (precisa do escopo
-// `whatsapp_business_management` além do já-requerido `whatsapp_business_messaging`).
-//
-// PADRÃO DE ENVELOPE
-// ------------------
-// Toda função retorna `{ ok, data?, error?, status? }` (como
-// openai-platform.service.ts). Nunca lança — UI/sync param de quebrar quando
-// o token expira.
-// ============================================================================
-
 import axios from 'axios';
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 
 const META_GRAPH_BASE = 'https://graph.facebook.com/v25.0';
 const REQUEST_TIMEOUT_MS = 15_000;
-
-// ---------------------------------------------------------------------------
-// Tipos públicos.
-// ---------------------------------------------------------------------------
 
 export interface MetaErrorBody {
   message?: string;
@@ -51,11 +18,9 @@ export interface CallEnvelope<T> {
   data?: T;
   status?: number;
   error?: string;
-  /** Corpo de erro retornado pela Meta — útil pra debug sem precisar de logs do server. */
   meta?: MetaErrorBody;
 }
 
-/** Formata um envelope de erro em string compacta com code + trace pra exibir na UI. */
 export function formatMetaError(env: { error?: string; meta?: MetaErrorBody; status?: number }): string {
   const parts: string[] = [];
   if (env.meta?.code !== undefined) {
@@ -69,11 +34,8 @@ export function formatMetaError(env: { error?: string; meta?: MetaErrorBody; sta
   return parts.join(' ');
 }
 
-/** Linha de pricing_analytics achatada — uma por combinação dimensional. */
 export interface PricingAnalyticsRow {
-  /** Início do bucket — segundos Unix. */
   start: number;
-  /** Fim do bucket — segundos Unix. */
   end: number;
   pricingCategory: string;
   pricingType: string;
@@ -91,7 +53,6 @@ export interface PricingAnalyticsResult {
   totalCostUsd: number;
 }
 
-/** Linha agregada de template_analytics por template/dia. */
 export interface TemplateAnalyticsRow {
   start: number;
   end: number;
@@ -117,10 +78,6 @@ export interface MessageTemplate {
   category: string | null;
   status: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// Helpers.
-// ---------------------------------------------------------------------------
 
 function describeAxiosError(err: unknown): { status?: number; message: string } {
   if (axios.isAxiosError(err)) {
@@ -148,39 +105,9 @@ function toStr(v: unknown): string {
   return String(v);
 }
 
-// ---------------------------------------------------------------------------
-// pricing_analytics.
-// ---------------------------------------------------------------------------
-// Response da Meta (shape observado — pode variar entre versões):
-// {
-//   "data": [{
-//     "start": 1735689600,
-//     "end":   1735776000,
-//     "granularity": "DAILY",
-//     "data_points": [{
-//       "start": 1735689600, "end": 1735776000,
-//       "country": "BR",
-//       "pricing_category": "MARKETING",
-//       "pricing_type": "REGULAR",
-//       "tier": "TIER_1",
-//       "phone_number": "...",
-//       "volume": 123,
-//       "cost": 4.56
-//     }]
-//   }],
-//   "paging": { ... }
-// }
-//
-// Em alguns casos a Meta achata e devolve `data: [{ start, end, country, ...,
-// volume, cost }]` direto sem `data_points`. Aceitamos os dois shapes.
-// ---------------------------------------------------------------------------
-
 export interface FetchPricingArgs {
-  /** Unix seconds — início inclusivo. */
   start: number;
-  /** Unix seconds — fim exclusivo. */
   end: number;
-  /** Default DAILY. */
   granularity?: 'HALF_HOUR' | 'DAILY' | 'MONTHLY';
 }
 
@@ -202,7 +129,6 @@ interface PricingRoot {
     end?: number | string;
     granularity?: string;
     data_points?: PricingDataPoint[];
-    // Shape achatado:
     country?: string | null;
     pricing_category?: string | null;
     pricing_type?: string | null;
@@ -249,7 +175,6 @@ export async function fetchPricingAnalytics(
     return { ok: false, error: 'sem metaWabaId ou metaAccessToken' };
   }
   const granularity = args.granularity ?? 'DAILY';
-  // A Graph API exige arrays como JSON-encoded string nos query params.
   const params = {
     start: args.start,
     end: args.end,
@@ -275,14 +200,12 @@ export async function fetchPricingAnalytics(
     for (const bucket of res.data?.data ?? []) {
       const parentStart = toNum(bucket.start);
       const parentEnd = toNum(bucket.end);
-      // Caso 1: vem com `data_points` (granularity DAILY normal).
       if (Array.isArray(bucket.data_points) && bucket.data_points.length > 0) {
         for (const pt of bucket.data_points) {
           rows.push(normalizePricingPoint(parentStart, parentEnd, pt));
         }
         continue;
       }
-      // Caso 2: vem achatado direto no nó.
       if (
         bucket.pricing_category !== undefined
         || bucket.volume !== undefined
@@ -303,26 +226,6 @@ export async function fetchPricingAnalytics(
   }
 }
 
-// ---------------------------------------------------------------------------
-// template_analytics.
-// ---------------------------------------------------------------------------
-// Response shape (similar a pricing_analytics):
-// {
-//   "data": [{
-//     "start": ..., "end": ...,
-//     "granularity": "DAILY",
-//     "data_points": [{
-//       "template_id": "1234567890",
-//       "sent": 100, "delivered": 95, "read": 60, "clicked": 12,
-//       "cost": 3.14
-//     }]
-//   }]
-// }
-//
-// Em alguns retornos a Meta vem por template-id na raíz: { template_id, sent,
-// delivered, ...}. Tratamos os dois.
-// ---------------------------------------------------------------------------
-
 interface TemplateDataPoint {
   start?: number | string;
   end?: number | string;
@@ -340,7 +243,6 @@ interface TemplateRoot {
     end?: number | string;
     granularity?: string;
     data_points?: TemplateDataPoint[];
-    // Shape achatado:
     template_id?: string | number | null;
     sent?: number | string;
     delivered?: number | string;
@@ -354,12 +256,6 @@ export interface FetchTemplateAnalyticsArgs {
   start: number;
   end: number;
   granularity?: 'DAILY';
-  /**
-   * Lista de template_ids. **Obrigatório** pela Meta — chamar sem isso
-   * retorna `(#100) The parameter template_ids is required`. O caller é
-   * responsável por buscar os IDs (via fetchMessageTemplates) e chunkar
-   * em batches de ≤ 50 quando a WABA tem muitos templates.
-   */
   templateIds: string[];
 }
 
@@ -399,9 +295,6 @@ export async function fetchTemplateAnalytics(
     return { ok: true, data: { rows: [] } };
   }
   const granularity = args.granularity ?? 'DAILY';
-  // metric_types: só SENT/DELIVERED/READ/CLICKED. NÃO incluir COST aqui —
-  // muitas WABAs respondem "(#1) An unknown error occurred" se COST aparece
-  // em template_analytics. Custo total já é coberto por pricing_analytics.
   const params: Record<string, unknown> = {
     start: args.start,
     end: args.end,
@@ -422,16 +315,11 @@ export async function fetchTemplateAnalytics(
       const code = body?.error?.code;
       const subcode = body?.error?.error_subcode;
 
-      // (#1/4182004) "An unknown error occurred" — empiricamente a Meta
-      // dispara isso quando NENHUM dos templateIds do batch teve envio no
-      // período (em vez de retornar `data: []`). Tratamos como sucesso vazio
-      // — sem dados ainda é dado válido.
       if (code === 1 && subcode === 4182004) {
         return { ok: true, status: res.status, data: { rows: [] } };
       }
 
       const errMsg = body?.error?.message ?? `HTTP ${res.status}`;
-      // Loga + retorna o erro Meta — UI exibe direto sem precisar de logs do server.
       logger.warn(
         {
           unitWaba: unit.metaWabaId,
@@ -477,11 +365,6 @@ export async function fetchTemplateAnalytics(
     return { ok: false, status, error: message };
   }
 }
-
-// ---------------------------------------------------------------------------
-// message_templates (lista) — só usamos pra denormalizar name+language.
-// Endpoint pagina; pegamos até 200 templates (suficiente pra UI).
-// ---------------------------------------------------------------------------
 
 interface MessageTemplateRoot {
   data?: Array<{
@@ -529,10 +412,6 @@ export async function fetchMessageTemplates(
     return { ok: false, status, error: message };
   }
 }
-
-// ---------------------------------------------------------------------------
-// Cache curto em memória — mesma ideia do openai-platform.service.
-// ---------------------------------------------------------------------------
 
 interface CacheEntry<T> {
   expiresAt: number;

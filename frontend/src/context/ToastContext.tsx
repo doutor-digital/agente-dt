@@ -1,27 +1,3 @@
-// ============================================================================
-// ToastContext — sistema global de notificações.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Wrapper FINO sobre `react-toastify` que preserva a API histórica do projeto
-// (`useToast().success/error/info/dismiss`). Os ~14 callers continuam funcionando
-// sem alteração. A renderização é feita pelo `<ToastContainer />` da lib, que
-// fica montado uma única vez aqui dentro do Provider.
-//
-// Por que wrapper em vez de usar `toast()` direto nos componentes?
-//   - Migrações futuras (trocar de lib de novo) ficam num único arquivo.
-//   - Mantém defaults consistentes (duração de erro maior, posição, tema).
-//   - Permite forçar um dismiss programático com nosso próprio ID se quiser.
-//
-// USO
-// ---
-//   const toast = useToast();
-//   toast.success('Salvo!');
-//   toast.error('Falhou: ' + msg);   // duração maior por padrão (6s)
-//   toast.info('Recarregando...');
-//   toast.dismiss(id);               // id opcional — sem id, fecha todos
-// ============================================================================
-
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { AlertCircle, CheckCircle2, Info } from 'lucide-react';
 import { Slide, ToastContainer, toast as toastify, type Id } from 'react-toastify';
@@ -32,7 +8,6 @@ interface ToastApi {
   success: (text: string, durationMs?: number) => Id;
   error: (text: string, durationMs?: number) => Id;
   info: (text: string, durationMs?: number) => Id;
-  /** Fecha um toast específico (id retornado de success/error/info) ou TODOS se omitido. */
   dismiss: (id?: Id) => void;
 }
 
@@ -48,7 +23,6 @@ export function useToast(): ToastApi {
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
-  // API estável (não recria a cada render).
   const api = useMemo<ToastApi>(
     () => ({
       success: (text, ms) =>
@@ -85,9 +59,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         draggable
         theme="dark"
         transition={Slide}
-        // Ajusta espaçamento pra não colar na borda em telas pequenas.
         toastClassName="dt-toast"
-        // limit evita pilha gigante quando algo dispara em loop.
         limit={6}
       />
     </ToastContext.Provider>

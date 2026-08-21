@@ -1,30 +1,3 @@
-// ============================================================================
-// CapturesPanel — Captura de Dados (LeadFieldRule).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Cada regra = 1 tool dinâmica que o agente recebe. A tool sabe escrever
-// num custom field específico do Kommo (texto, número, data, select, multi).
-//
-// PRINCÍPIOS DE UX
-// ----------------
-// 1) Tela cheia, container max-w (padrão do app). Sem drawer pra a edição —
-//    o user pediu isso explicitamente.
-// 2) Lista com cards informativos: badge do tipo, status pill, instrução
-//    encurtada, exemplos preview, tool name. Estado vazio acolhedor.
-// 3) Editor em 3 passos sutis (não wizard, só agrupamento visual):
-//      • Campo do Kommo (com badge do tipo, opções pra select)
-//      • Como a IA reconhece (instruction + valueHint + examples)
-//      • Identidade (toolName, enabled)
-// 4) Affordances UX:
-//      • Toggle "Ativa" no card pra liga/desliga sem abrir editor.
-//      • Toast verde/vermelho em toda ação.
-//      • Loading skeleton enquanto carrega fields da Kommo.
-//      • Mensagens de erro Kommo (token inválido) bem visíveis.
-//      • Acessibilidade: cada control tem label, focus rings visíveis.
-//      • Sem destructive sem confirmação.
-// ============================================================================
-
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -63,10 +36,6 @@ import type {
   LeadFieldRule,
   LeadFieldRuleInput,
 } from '../types/api';
-
-// ---------------------------------------------------------------------------
-// Type meta: ícones e labels por tipo de field.
-// ---------------------------------------------------------------------------
 
 const FIELD_TYPE_META: Record<
   KommoFieldType,
@@ -110,10 +79,6 @@ const FIELD_TYPE_META: Record<
   },
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function slugifyToolName(label: string): string {
   const base = label
     .toLowerCase()
@@ -152,17 +117,11 @@ type EditState =
   | { mode: 'create' }
   | { mode: 'edit'; rule: LeadFieldRule };
 
-// ===========================================================================
-// Panel principal
-// ===========================================================================
-
 export function CapturesPanel() {
   const { selectedUnitId, selectedUnit } = useUnit();
   const toast = useToast();
 
   const [rules, setRules] = useState<LeadFieldRule[]>([]);
-  // Cobertura de PRODUÇÃO por regra — responde "está mesmo preenchendo?".
-  // Best-effort: se a query falhar, os cartões só não mostram a barra.
   const [coverage, setCoverage] = useState<CaptureCoverage | null>(null);
   const [loading, setLoading] = useState(true);
   const [fieldsData, setFieldsData] = useState<KommoLeadCustomFieldsResponse | null>(null);
@@ -208,7 +167,6 @@ export function CapturesPanel() {
     void loadFields();
   }, [load, loadFields]);
 
-  // Reset edit ao trocar unidade.
   useEffect(() => {
     setEdit({ mode: 'closed' });
     setSearch('');
@@ -289,7 +247,6 @@ export function CapturesPanel() {
     );
   }
 
-  // Modo edição em tela cheia (padrão do app)
   if (edit.mode !== 'closed') {
     return (
       <CaptureEditor
@@ -311,7 +268,6 @@ export function CapturesPanel() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-5xl mx-auto p-6 space-y-5">
-        {/* Header */}
         <div className="flex items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-display font-bold text-zinc-100 tracking-tight flex items-center gap-2">
@@ -341,7 +297,6 @@ export function CapturesPanel() {
           </button>
         </div>
 
-        {/* Aviso se Kommo não configurado */}
         {!selectedUnit?.kommoSubdomain && (
           <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-200/90">
             <div className="font-semibold mb-1">⚠ Kommo não configurado nesta unidade</div>
@@ -350,7 +305,6 @@ export function CapturesPanel() {
           </div>
         )}
 
-        {/* Aviso se fetch dos fields falhou */}
         {fieldsData && !fieldsData.ok && selectedUnit?.kommoSubdomain && (
           <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-4 text-sm text-rose-200/90">
             <div className="flex items-start gap-2">
@@ -366,7 +320,6 @@ export function CapturesPanel() {
           </div>
         )}
 
-        {/* Busca — só mostra quando há regras */}
         {rules.length > 0 && (
           <div className="relative max-w-md">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
@@ -380,7 +333,6 @@ export function CapturesPanel() {
           </div>
         )}
 
-        {/* Lista */}
         {loading ? (
           <div className="flex items-center justify-center py-12 text-zinc-500">
             <Loader2 className="animate-spin mr-2" size={16} />
@@ -416,10 +368,6 @@ export function CapturesPanel() {
   );
 }
 
-// ===========================================================================
-// EmptyState
-// ===========================================================================
-
 function EmptyState({ disabled, onCreate }: { disabled: boolean; onCreate: () => void }) {
   return (
     <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/20 p-10 text-center">
@@ -445,10 +393,6 @@ function EmptyState({ disabled, onCreate }: { disabled: boolean; onCreate: () =>
     </div>
   );
 }
-
-// ===========================================================================
-// RuleCard — uma regra na lista
-// ===========================================================================
 
 function RuleCard({
   rule,
@@ -479,7 +423,6 @@ function RuleCard({
       )}
     >
       <div className="flex items-start gap-3">
-        {/* Type icon */}
         <div
           className={clsx(
             'w-10 h-10 shrink-0 rounded-lg ring-1 inline-flex items-center justify-center',
@@ -496,7 +439,6 @@ function RuleCard({
             days={days}
             enabled={rule.enabled}
           />
-          {/* Header line */}
           <div className="flex items-center gap-2 flex-wrap mb-1.5">
             <span className="text-sm font-semibold text-zinc-100 truncate">
               {rule.kommoFieldName}
@@ -516,12 +458,10 @@ function RuleCard({
             )}
           </div>
 
-          {/* Instruction summary */}
           <p className="text-sm text-zinc-300 leading-relaxed">
             {summarizeInstruction(rule.instruction)}
           </p>
 
-          {/* Examples preview + tool name */}
           <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
             <span className="font-mono text-brand-300 bg-brand-500/10 px-1.5 py-0.5 rounded">
               {rule.toolName}()
@@ -540,7 +480,6 @@ function RuleCard({
           </div>
         </div>
 
-        {/* Actions */}
         <div className="flex items-center gap-1 shrink-0">
           <button
             type="button"
@@ -574,10 +513,6 @@ function RuleCard({
     </li>
   );
 }
-
-// ===========================================================================
-// CaptureEditor — tela cheia
-// ===========================================================================
 
 interface DraftRule {
   kommoFieldId: number | null;
@@ -650,7 +585,6 @@ function CaptureEditor({
     return fields.find((f) => f.id === draft.kommoFieldId) ?? null;
   }, [fields, draft.kommoFieldId]);
 
-  // Quando escolhe campo, preenche tipo/nome/enums e sugere toolName/hint.
   function pickField(field: KommoLeadCustomField) {
     const newToolName =
       isEditing && draft.toolName ? draft.toolName : slugifyToolName(field.name);
@@ -703,7 +637,6 @@ function CaptureEditor({
       };
       await onSave(input);
     } catch {
-      // erro já tratado pelo callback
     } finally {
       setSaving(false);
     }
@@ -712,7 +645,6 @@ function CaptureEditor({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 py-6">
-        {/* Header sticky */}
         <div className="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur-sm flex items-center gap-3 pb-4 mb-2 border-b border-zinc-800/60">
           <button
             type="button"
@@ -736,7 +668,6 @@ function CaptureEditor({
           </button>
         </div>
 
-        {/* Step 1 — Campo */}
         <Section
           number={1}
           title="Qual campo do Kommo você quer preencher?"
@@ -774,7 +705,6 @@ function CaptureEditor({
             />
           )}
 
-          {/* Info do campo selecionado */}
           {selectedField && (
             <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 text-xs">
               <div className="text-zinc-500 mb-1">Campo selecionado</div>
@@ -809,7 +739,6 @@ function CaptureEditor({
           )}
         </Section>
 
-        {/* Step 2 — Como a IA reconhece */}
         <Section
           number={2}
           title="Como a IA deve detectar e capturar?"
@@ -890,7 +819,6 @@ function CaptureEditor({
           </div>
         </Section>
 
-        {/* Step 3 — Identidade */}
         <Section
           number={3}
           title="Identidade da ferramenta"
@@ -948,7 +876,6 @@ function CaptureEditor({
           </label>
         </Section>
 
-        {/* Preview opcional */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/30">
           <button
             type="button"
@@ -966,7 +893,6 @@ function CaptureEditor({
           )}
         </div>
 
-        {/* Footer ações duplicadas (UX: usuário não precisa rolar pra topo) */}
         <div className="flex items-center justify-between pt-2 pb-6">
           <button
             type="button"
@@ -996,10 +922,6 @@ function CaptureEditor({
     </div>
   );
 }
-
-// ===========================================================================
-// FieldPicker — dropdown searchable (combobox simples)
-// ===========================================================================
 
 function FieldPicker({
   fields,
@@ -1103,10 +1025,6 @@ function FieldPicker({
   );
 }
 
-// ===========================================================================
-// Helpers visuais
-// ===========================================================================
-
 function Section({
   number,
   title,
@@ -1161,18 +1079,6 @@ function previewPromptBlock(draft: DraftRule): string {
   return lines.join('\n');
 }
 
-// ---------------------------------------------------------------------------
-// CoverageBar — "esse campo está mesmo sendo preenchido?"
-//
-// Mostra em quantos leads DISTINTOS o campo foi gravado sobre o total de leads
-// atendidos no período. Contar gravações seria enganoso: 12 gravações podem
-// ser 12 leads ou o mesmo lead 12 vezes.
-//
-// Deliberadamente NÃO pinta vermelho abaixo de um limiar. Cobertura baixa pode
-// ser regra quebrada OU simplesmente um dado que poucos pacientes mencionam
-// (metade não fala de convênio, e aí 50% é o teto). Quem sabe a expectativa é
-// você — o componente entrega o número, não o julgamento.
-// ---------------------------------------------------------------------------
 function CoverageBar({
   coverage,
   totalLeads,

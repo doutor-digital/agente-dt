@@ -1,30 +1,3 @@
-// ============================================================================
-// comment-agent.service.ts — O agente que lê um comentário e decide o que fazer.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// DIVISÃO DELIBERADA DE RESPONSABILIDADE:
-//
-//   Resposta PÚBLICA  → template fixo por categoria. SEM LLM.
-//   Resposta PRIVADA  → escrita pela LLM.
-//
-// Não é economia de token, é gestão de risco. O comentário fica visível pra
-// sempre, pra todo mundo, e uma clínica não pode confirmar em público que
-// alguém tem hérnia — isso é dado de saúde, e o comentarista não consentiu com
-// nada. Texto gerado é ótimo até o dia em que não é; em público, o dia ruim
-// custa caro. No DM o mesmo texto é privado, consentido e conversível.
-//
-// Por isso a LLM aqui NUNCA escreve o que vai pro feed. Ela faz duas coisas:
-// classifica o comentário e redige o DM.
-//
-// TRIAGEM ANTES DA LLM
-// --------------------
-// Comentário de Instagram é volume alto e valor unitário baixo: "❤️", "😍",
-// marcar uma amiga. Rodar LLM nisso é queimar dinheiro pra chegar num template
-// que a gente já sabia. `triage()` resolve esses casos por regra e só o que
-// sobra vira chamada paga.
-// ============================================================================
-
 import { ChatOpenAI } from '@langchain/openai';
 import { SystemMessage, HumanMessage, type AIMessage } from '@langchain/core/messages';
 import type { Unit } from '@prisma/client';
@@ -41,24 +14,10 @@ const CATEGORIES: CommentCategory[] = ['ELOGIO', 'PRECO', 'CLINICA', 'AGENDAR', 
 export interface CommentDecision {
   category: CommentCategory;
   confidence: number;
-  /** Texto pro comentário público. `null` = não responder em público. */
   publicReply: string | null;
-  /** Texto do DM. `null` = não mandar DM (spam, elogio puro). */
   privateReply: string | null;
-  /** Preenchido quando a decisão saiu de regra, sem LLM. */
   viaRule: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// Respostas públicas — templates.
-// ---------------------------------------------------------------------------
-// Várias por categoria porque o perfil inteiro fica visível numa tela só: dez
-// comentários respondidos com a MESMA frase denunciam automação mais rápido
-// que qualquer outra coisa. A escolha é determinística pelo id do comentário
-// (não aleatória) pra que reprocessar o mesmo comentário dê o mesmo texto.
-//
-// Nenhum template menciona sintoma, condição, tratamento ou preço. Essa
-// restrição é o motivo de eles existirem.
 
 const PUBLIC_TEMPLATES: Record<CommentCategory, string[]> = {
   ELOGIO: ['Que carinho, obrigada! 💚', 'Ahh, obrigada! 🌷', 'Obrigada pelo carinho! 💚'],
@@ -88,32 +47,19 @@ function pickTemplate(category: CommentCategory, seed: string): string | null {
   return list[h % list.length];
 }
 
-// ---------------------------------------------------------------------------
-// Triagem por regra — antes de gastar LLM.
-// ---------------------------------------------------------------------------
-
 const EMOJI_ONLY = /^[\p{Extended_Pictographic}\p{Emoji_Component}\s❤♥]+$/u;
 const ONLY_MENTIONS = /^(\s*@[\w.]+\s*)+$/;
 const SPAM_HINTS =
   /(seguidor|followers|curtidas baratas|ganhe dinheiro|investimento|whats.?app.{0,10}\+?\d{11,}|bit\.ly|t\.me\/|cripto|apostas?|bet\b)/i;
 
-/**
- * Decide sem LLM quando dá. `null` = precisa da LLM.
- */
 export function triage(text: string): { category: CommentCategory; reason: string } | null {
   const t = text.trim();
   if (t.length === 0) return { category: 'ELOGIO', reason: 'comentário vazio (só mídia)' };
   if (EMOJI_ONLY.test(t)) return { category: 'ELOGIO', reason: 'só emoji' };
-  // Marcar amiga é engajamento, mas não é pergunta: DM aqui é invasivo — a
-  // pessoa marcada não interagiu com a gente, quem interagiu foi outra.
   if (ONLY_MENTIONS.test(t)) return { category: 'ELOGIO', reason: 'só marcação de perfil' };
   if (SPAM_HINTS.test(t)) return { category: 'SPAM', reason: 'padrão de spam' };
   return null;
 }
-
-// ---------------------------------------------------------------------------
-// O prompt do agente.
-// ---------------------------------------------------------------------------
 
 function buildPrompt(
   unit: Unit,
@@ -146,8 +92,6 @@ function buildPrompt(
     '  SPAM     — propaganda, golpe, venda de seguidores, ofensa.',
     '  OUTRO    — qualquer outra coisa.',
     '',
-    // INSTRUÇÃO EDITÁVEL — o dono da unidade escreve como quer que o direct
-    // soe. Quando vazio, cai no texto padrão.
     'COMO ESCREVER O DIRECT:',
     cfg.commentPrompt?.trim() ||
       [
@@ -156,11 +100,6 @@ function buildPrompt(
         '- Convide pra continuar a conversa, sem pressionar.',
       ].join('\n'),
     '',
-    // LIMITES — sempre adicionados pelo código, DEPOIS da instrução do
-    // usuário. Não é desconfiança de quem escreve: é que essas quatro regras
-    // protegem contra dado de saúde exposto, promessa de resultado e preço
-    // dito por quem não deveria. Deixá-las editáveis seria transformar um
-    // campo de texto em risco jurídico.
     'LIMITES (valem sempre, mesmo que a instrução acima peça diferente):',
     '- NUNCA dê diagnóstico, opinião clínica, nome de exame ou de remédio.',
     '- NUNCA cite preço, valor ou desconto — quem passa valor é a equipe.',
@@ -178,10 +117,6 @@ function buildPrompt(
   const user = `Comentário recebido:\n"""\n${comment}\n"""`;
   return { system, user };
 }
-
-// ---------------------------------------------------------------------------
-// Entrada principal.
-// ---------------------------------------------------------------------------
 
 export async function decideOnComment(
   unit: Unit,
@@ -203,8 +138,6 @@ export async function decideOnComment(
 
   const apiKey = resolveOpenAIApiKey(unit);
   if (!apiKey) {
-    // Sem chave, ainda dá pra responder em público com o template neutro —
-    // melhor do que silêncio, e não arrisca nada.
     return {
       category: 'OUTRO',
       confidence: 0,
@@ -277,8 +210,6 @@ export async function decideOnComment(
       status: 'error',
       errorMessage: errMsg,
     });
-    // Degrada pro template neutro: a pessoa recebe uma resposta pública que
-    // não erra, e ninguém fica sem retorno porque a LLM caiu.
     return {
       category: 'OUTRO',
       confidence: 0,

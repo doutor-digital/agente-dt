@@ -1,20 +1,3 @@
-// ============================================================================
-// DeliveryMonitorPanel — "Saúde da Entrega" (Salesbot do Kommo).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// O backend grava a resposta no campo "Resposta IA" (PATCH) e quem ENTREGA ao
-// WhatsApp é o Salesbot do Kommo, disparado pelo Digital Pipeline. Quando a
-// fila do Kommo engasga, a entrega atrasa (já vimos 36 min). O monitor
-// (stale-reply-monitor.ts) fecha o ciclo via webhook outgoing e mede a demora.
-//
-// Este painel lê /api/delivery-monitor (polling 15s) e mostra:
-//   - Status geral (OK / parado / sem confirmação)
-//   - Pendentes agora + latência média das últimas entregas
-//   - Lista do que está PARADO agora (acima do limiar)
-//   - Histórico recente de entregas confirmadas com latência
-// ============================================================================
-
 import { Loader2, RefreshCw, Truck, Turtle, CheckCircle2, AlertTriangle } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
@@ -53,7 +36,6 @@ export function DeliveryMonitorPanel() {
   return (
     <div className="flex-1 overflow-y-auto p-6">
       <div className="max-w-4xl mx-auto">
-        {/* Header */}
         <div className="flex items-start justify-between mb-1">
           <div className="flex items-center gap-2.5">
             <Truck size={20} className="text-brand-400" />
@@ -86,7 +68,6 @@ export function DeliveryMonitorPanel() {
           </div>
         ) : data ? (
           <>
-            {/* Status + KPIs */}
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-6">
               <StatusCard status={status} staleCount={staleCount} />
               <Kpi
@@ -107,7 +88,6 @@ export function DeliveryMonitorPanel() {
               />
             </div>
 
-            {/* Parados agora */}
             <section className="mb-6">
               <h2 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
                 Parados agora
@@ -140,7 +120,6 @@ export function DeliveryMonitorPanel() {
               )}
             </section>
 
-            {/* Salvaguarda: nunca confirmou nenhuma entrega */}
             {!data.everConfirmed && (
               <div className="mb-6 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-300 flex items-start gap-2">
                 <AlertTriangle size={14} className="shrink-0 mt-0.5" />
@@ -152,7 +131,6 @@ export function DeliveryMonitorPanel() {
               </div>
             )}
 
-            {/* Histórico recente */}
             <section>
               <h2 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 mb-2">
                 Últimas entregas confirmadas

@@ -1,16 +1,3 @@
-// ============================================================================
-// TopBar — a barra fixa do topo do console.
-//
-// Concentra tudo que é CONTEXTO e IDENTIDADE (a sidebar cuida só de navegação):
-//   - breadcrumb: agente ativo › página atual
-//   - seletor de agente (UnitSelector)
-//   - gatilho da paleta de comandos (⌘K)
-//   - notificações, tema e menu do usuário
-//
-// É a mesma divisão de responsabilidades dos consoles de IA modernos: coluna
-// à esquerda navega, barra do topo diz onde você está e quem você é.
-// ============================================================================
-
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ChevronRight,
@@ -41,15 +28,8 @@ export function TopBar({
 }) {
   const meta = navItem(tab);
 
-  // O `relative z-30` do <header> é OBRIGATÓRIO, não cosmético: o
-  // `backdrop-blur` cria um stacking context mesmo num elemento estático, e o
-  // contexto de um elemento NÃO-posicionado é pintado abaixo de qualquer irmão
-  // posicionado (a área de conteúdo). Sem ele, os dropdowns filhos (sino,
-  // seletor de agente, menu de conta) ficam atrás do conteúdo — invisíveis e
-  // sem receber clique, o que quebrava até o botão "Sair".
   return (
     <header className="relative z-30 h-14 shrink-0 flex items-center gap-3 px-4 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-xl supports-backdrop-filter:bg-zinc-950/60">
-      {/* Breadcrumb: agente ativo › página */}
       <div className="flex items-center gap-2 min-w-0">
         <UnitSelector />
         <ChevronRight size={14} className="text-zinc-600 shrink-0" />
@@ -67,7 +47,6 @@ export function TopBar({
 
       <div className="flex-1" />
 
-      {/* Gatilho da paleta de comandos */}
       <button
         type="button"
         onClick={onOpenPalette}
@@ -85,7 +64,6 @@ export function TopBar({
   );
 }
 
-/** Avatar + menu de conta: trocar de agente, limpar cache, sair. */
 function UserMenu({ onBackToHub }: { onBackToHub?: () => void }) {
   const { user, logout } = useAuth();
   const toast = useToast();
@@ -101,8 +79,6 @@ function UserMenu({ onBackToHub }: { onBackToHub?: () => void }) {
     return () => document.removeEventListener('mousedown', onClick);
   }, [open]);
 
-  // "Limpar cache" — esvazia caches em memória do backend, limpa o localStorage
-  // e força hard-reload. Útil quando algo "grudou" após mudar dado no Kommo.
   async function handleClearCache() {
     if (clearing) return;
     const confirmed = window.confirm(
@@ -120,7 +96,6 @@ function UserMenu({ onBackToHub }: { onBackToHub?: () => void }) {
         window.localStorage.clear();
         window.sessionStorage.clear();
       } catch {
-        // navegador pode bloquear em modo privado
       }
       toast.success(
         `Cache limpo: ${r.cleared.configCache} config(s), ${r.cleared.unitBySlugCache} unit(s), ${r.cleared.dedupCache} dedup. Recarregando…`,

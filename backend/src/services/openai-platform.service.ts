@@ -1,36 +1,3 @@
-// ============================================================================
-// openai-platform.service.ts — Acesso aos endpoints administrativos da OpenAI.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// A OpenAI tem dois "níveis" de chave:
-//
-//   1. PROJECT KEY (sk-proj-...) — usada pra fazer inferência: chat
-//      completions, embeddings, audio, etc. É o que vive em `Unit.openaiApiKey`.
-//      Permissões são limitadas ao projeto onde foi criada.
-//
-//   2. ADMIN KEY (sk-admin-...) — chave de organização. Necessária pra
-//      `/v1/organization/costs`, `/v1/organization/usage/*` e
-//      `/v1/organization/projects`. Vive em `Unit.openaiAdminKey`.
-//      Sem ela, só conseguimos consultar `/v1/models` (qualquer key).
-//
-// ENDPOINTS USADOS
-// ----------------
-//   GET  /v1/models                                  — ping (qualquer key)
-//   GET  /v1/organization/costs?start_time=...       — gastos $USD (Admin)
-//   GET  /v1/organization/usage/completions?...      — uso por modelo (Admin)
-//   GET  /v1/organization/projects                   — lista projetos (Admin)
-//
-// PARÂMETROS DAS APIs DE COSTS/USAGE
-// ----------------------------------
-// `start_time` e `end_time` são timestamps Unix em segundos. `bucket_width`
-// agrupa em '1d' (default), '1h' ou '1m'. As Costs API só aceita `1d`.
-// `group_by` aceita ['model', 'project_id', 'line_item', 'service_tier'].
-//
-// NUNCA quebra o caller — toda função retorna um envelope com `{ ok, data, error }`
-// pra que o handler do painel mostre o estado do componente sem tirar tudo do ar.
-// ============================================================================
-
 import axios, { type AxiosInstance } from 'axios';
 import { logger } from '../lib/logger.js';
 
@@ -51,7 +18,6 @@ function buildClient(apiKey: string): AxiosInstance {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    // Retornamos o erro como envelope, então não quebramos no .data
     validateStatus: () => true,
   });
 }
@@ -60,7 +26,6 @@ function envelopeFromAxios<T>(status: number, data: unknown): CallEnvelope<T> {
   if (status >= 200 && status < 300) {
     return { ok: true, status, data: data as T };
   }
-  // OpenAI manda { error: { message, code, type } }
   const errMsg = (() => {
     const d = data as { error?: { message?: string; code?: string } } | string;
     if (typeof d === 'string') return d;
@@ -68,11 +33,6 @@ function envelopeFromAxios<T>(status: number, data: unknown): CallEnvelope<T> {
   })();
   return { ok: false, status, error: errMsg };
 }
-
-// ---------------------------------------------------------------------------
-// Ping — qualquer key (project ou admin) consegue listar /v1/models.
-// Retorna a contagem + alguns nomes pra UI confirmar conectividade.
-// ---------------------------------------------------------------------------
 
 export interface PingResult {
   reachable: boolean;
@@ -106,12 +66,6 @@ export async function pingOpenAI(apiKey: string | null): Promise<PingResult> {
     return { reachable: false, modelCount: 0, sampleModels: [], error: msg };
   }
 }
-
-// ---------------------------------------------------------------------------
-// Costs API — gastos diários em USD da organização.
-// /v1/organization/costs aceita start_time, end_time, bucket_width=1d, group_by.
-// Retorna `{ data: [{ start_time, end_time, results: [{ amount: { value, currency }, ... }] }] }`
-// ---------------------------------------------------------------------------
 
 export interface CostBucket {
   startTime: number;
@@ -179,11 +133,6 @@ export async function getCosts(adminKey: string | null, sinceDays: number): Prom
     return { ok: false, totalUsd: 0, buckets: [], error: msg };
   }
 }
-
-// ---------------------------------------------------------------------------
-// Usage API (completions) — tokens consumidos por dia/modelo.
-// /v1/organization/usage/completions aceita start_time, bucket_width, group_by.
-// ---------------------------------------------------------------------------
 
 export interface UsageByModel {
   model: string;
@@ -316,10 +265,6 @@ export async function getUsageCompletions(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Lista projetos da organização (Admin only).
-// ---------------------------------------------------------------------------
-
 export interface ProjectInfo {
   id: string;
   name: string;
@@ -353,11 +298,6 @@ export async function listProjects(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Cache curto em memória — Costs/Usage da OpenAI tem rate-limit baixo
-// (algumas chamadas/min). Cacheamos por 60s por (adminKey, sinceDays).
-// ---------------------------------------------------------------------------
-
 interface CacheEntry<T> {
   expiresAt: number;
   value: T;
@@ -384,12 +324,6 @@ export const OpenAIPlatform = {
   listProjects: (adminKey: string | null) =>
     cached(`projects:${adminKey ?? 'none'}`, () => listProjects(adminKey)),
 };
-
-// ---------------------------------------------------------------------------
-// rawAdminCall — variante de diagnóstico. Devolve status HTTP + corpo bruto
-// (não envelopado), pra rota de debug poder mostrar a resposta da OpenAI sem
-// transformação. Bypassa o cache.
-// ---------------------------------------------------------------------------
 
 export async function rawAdminCall(
   adminKey: string | null,

@@ -1,13 +1,3 @@
-      // ============================================================================
-  // AgentWorkspaceGallery — MESMO conteúdo do AgentWorkspace (Identidade →
-  // Conhecimento → Ações → Kommo → Testar), mas com 5 CASCAS visuais diferentes
-  // pra escolher. Um seletor no topo troca o estilo ao vivo. Quando o João
-  // escolher, a gente extrai o vencedor e vira o AgentWorkspace definitivo.
-  //
-  // Só a CASCA muda (barra de seções + animações + fundo). O corpo de cada
-  // seção é o painel real (WizardPanel, FontesPanel…), renderizado uma vez.
-  // ============================================================================
-
   import { useState } from 'react';
   import type { ReactNode } from 'react';
   import clsx from 'clsx';
@@ -96,7 +86,6 @@
     },
   ];
 
-  // ── Estado compartilhado por todas as cascas ─────────────────────────────────
   interface Shell {
     seg: Segment;
     sub: SubPanel;
@@ -108,9 +97,6 @@
     body: ReactNode;
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // ESTILO 1 — NEON PULSE  (barra de comando em vidro, glow que desliza)
-  // ════════════════════════════════════════════════════════════════════════════
   function NeonPulse({ seg, sub, segId, stepIndex, setSubId, goSeg, body }: Shell) {
     return (
       <div className="flex flex-col h-full min-h-0 overflow-hidden relative bg-zinc-950">
@@ -158,9 +144,6 @@
     );
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // ESTILO 2 — HUD RAIL  (trilho lateral estilo cockpit, espinha de progresso)
-  // ════════════════════════════════════════════════════════════════════════════
   function HudRail({ seg, sub, segId, stepIndex, setSubId, goSeg, body }: Shell) {
     const pct = (stepIndex / (SEGMENTS.length - 1)) * 100;
     return (
@@ -201,9 +184,6 @@
     );
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // ESTILO 3 — ORBIT CARDS  (cartões com anel de progresso, brilho que varre)
-  // ════════════════════════════════════════════════════════════════════════════
   function OrbitCards({ seg, sub, segId, stepIndex, setSubId, goSeg, body }: Shell) {
     return (
       <div className="flex flex-col h-full min-h-0 overflow-hidden bg-zinc-950">
@@ -253,9 +233,6 @@
     );
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // ESTILO 4 — TERMINAL  (janela de console, fonte mono, cursor piscando)
-  // ════════════════════════════════════════════════════════════════════════════
   function Terminal({ seg, sub, segId, stepIndex, setSubId, goSeg, body }: Shell) {
     return (
       <div className="flex flex-col h-full min-h-0 overflow-hidden bg-[#0a0e0a]">
@@ -292,9 +269,6 @@
     );
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // ESTILO 5 — AURORA FLOW  (fundo aurora animado, pílulas flutuantes)
-  // ════════════════════════════════════════════════════════════════════════════
   function AuroraFlow({ seg, sub, segId, stepIndex, setSubId, goSeg, body }: Shell) {
     return (
       <div className="flex flex-col h-full min-h-0 overflow-hidden relative bg-zinc-950">
@@ -338,7 +312,6 @@
     );
   }
 
-  // ── Sub-navegação reaproveitável (Conhecimento/Ações têm mais de um painel) ──
   function SubNav({ variant, subs, activeId, onPick }: { variant: 'pill' | 'hud' | 'term' | 'aurora'; subs: SubPanel[]; activeId: string; onPick: (id: string) => void }) {
     return (
       <div className={clsx('inline-flex gap-0.5 p-0.5 rounded-lg shrink-0', variant === 'term' ? 'bg-emerald-950/40 border border-emerald-900/60 font-mono' : variant === 'aurora' ? 'bg-white/5 border border-white/10 backdrop-blur' : 'bg-zinc-900 border border-zinc-800')}>
@@ -356,7 +329,6 @@
     );
   }
 
-  // ── Corpo (painel real da seção). Re-anima na troca via key. ─────────────────
   function Body({ stepIndex, subId, body }: { stepIndex: number; subId: string; body: ReactNode }) {
     return (
       <div className="flex-1 min-h-0 overflow-auto relative z-10">
@@ -398,7 +370,6 @@
     return (
       <div className="flex flex-col h-full min-h-0 overflow-hidden">
         <GalleryCss />
-        {/* Seletor de estilos — provisório, pra você escolher */}
         <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
           <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 uppercase tracking-wider">
             <Palette size={13} /> Estilo
@@ -423,7 +394,6 @@
     );
   }
 
-  // Keyframes escopadas — evita mexer no index.css global.
   function GalleryCss() {
     return (
       <style>{`

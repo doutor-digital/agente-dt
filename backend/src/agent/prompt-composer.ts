@@ -1,23 +1,3 @@
-// ============================================================================
-// prompt-composer.ts — Monta o systemPrompt efetivo a partir do Unit + features.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// O `Unit.systemPrompt` é o texto base que o usuário escreve (persona +
-// missão + tom). As features do wizard (qualificação, handoff, horário,
-// etc) são CAMPOS ESTRUTURADOS na Unit. Esta função renderiza cada feature
-// ativa em um bloco de texto e concatena tudo num prompt final.
-//
-// O leigo nunca precisa escrever instruções tipo "se cliente disser X faça Y"
-// — ele só ativa toggles. O composer traduz os toggles em linguagem que a
-// LLM entende.
-//
-// USO
-// ---
-//   const finalPrompt = composeSystemPrompt(unit, agentConfigPrompt);
-//   ...passa pra LLM.
-// ============================================================================
-
 import type {
   GlobalAction,
   KnowledgeBaseEntry,
@@ -52,29 +32,17 @@ import {
 } from '../services/lead-stage.service.js';
 import { logger } from '../lib/logger.js';
 
-// ---------------------------------------------------------------------------
-// Resultado da checagem de horário comercial.
-// ---------------------------------------------------------------------------
-
 export interface BusinessHoursStatus {
-  /** Feature ativada na Unit? */
   enabled: boolean;
-  /** Está dentro do horário comercial agora? (true se feature desativada). */
   isOpen: boolean;
-  /** Mensagem padrão pra responder fora do horário (se configurada). */
   outOfHoursMessage: string | null;
 }
 
-/**
- * Verifica se o momento atual está dentro do horário comercial da Unit.
- * Se a feature estiver desativada, sempre retorna `isOpen: true`.
- */
 export function checkBusinessHours(unit: Unit, now: Date = new Date()): BusinessHoursStatus {
   if (!unit.businessHoursEnabled) {
     return { enabled: false, isOpen: true, outOfHoursMessage: unit.outOfHoursMessage };
   }
   const tz = unit.businessHoursTimezone || 'America/Sao_Paulo';
-  // Usamos Intl pra converter pro fuso da Unit sem dependência externa.
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     weekday: 'short',
@@ -94,10 +62,6 @@ export function checkBusinessHours(unit: Unit, now: Date = new Date()): Business
   };
 }
 
-// ---------------------------------------------------------------------------
-// Tom de voz por persona.
-// ---------------------------------------------------------------------------
-
 function renderToneInstruction(tone: string | null): string {
   switch (tone) {
     case 'formal':
@@ -111,32 +75,13 @@ function renderToneInstruction(tone: string | null): string {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Renders parciais de cada feature.
-//
-// ESTILO: cada bloco é envolto em uma tag XML (`<persona>…</persona>`) em vez de
-// cabeçalho markdown. A tag fecha o bloco explicitamente, o que dá ao LLM um
-// delimitador inequívoco de onde cada seção começa E termina (markdown `#` só
-// marca o início). `xmlBlock` centraliza esse wrapping.
-// ---------------------------------------------------------------------------
-
 function xmlBlock(tag: string, content: string): string {
   return `<${tag}>\n${content.trim()}\n</${tag}>`;
 }
 
-// ---------------------------------------------------------------------------
-// PRESETS POR CATEGORIA / SEGMENTO — dão à IA um nome e um enquadramento
-// específicos da vertical. `Unit.category` (texto livre) seleciona o preset;
-// adicionar uma vertical nova é só incluir uma entrada aqui (sem migration).
-// Sem categoria (ou categoria desconhecida) → persona genérica "atendente
-// virtual" (comportamento anterior preservado).
-// ---------------------------------------------------------------------------
 interface CategoryPreset {
-  /** Nome com que a IA se apresenta (ex: "Dra. Sofia"). */
   agentName: string;
-  /** Como descrever o negócio (ex: "clínica de saúde"). */
   vertical: string;
-  /** Linhas extras de enquadramento de comportamento da vertical. */
   framing: string[];
 }
 
@@ -189,12 +134,6 @@ function renderPersona(unit: Unit): string {
   } else {
     lines.push('Você é quem atende o WhatsApp da empresa, conversando com os clientes.');
   }
-  // SABER que é virtual ≠ ANUNCIAR que é virtual. Abrir a conversa com "sou a
-  // assistente virtual" lembra o cliente, no primeiro turno, que ele está
-  // falando com uma máquina — e derruba o engajamento justo onde ele é mais
-  // frágil. Por isso a linha de identidade acima não usa mais a expressão: o
-  // modelo ecoa o que lê. A honestidade fica preservada na segunda metade da
-  // regra — se PERGUNTAREM, assume na hora; nunca finge ser humana.
   lines.push(
     'NUNCA se apresente como "assistente virtual", "atendente virtual", "IA", "bot" ou "robô" — ' +
       'não diga isso na saudação nem em nenhuma outra mensagem por iniciativa própria. ' +
@@ -206,8 +145,6 @@ function renderPersona(unit: Unit): string {
   lines.push(renderLanguage(unit.personaLanguage));
   const emojiBlock = renderEmojiStyle(unit);
   if (emojiBlock) lines.push(emojiBlock);
-  // Emoji é tempero, nunca a mensagem inteira. Já saiu balão com "✨" e nada
-  // mais pro paciente — vira ruído e queima o anti-flood do canal à toa.
   lines.push(
     'TODA mensagem sua precisa ter PALAVRAS. Nunca mande uma mensagem só com emoji ' +
       '(nem pra "reagir" ao que o cliente disse). Se a última mensagem dele for só um ' +
@@ -268,9 +205,6 @@ function renderSources(unit: Unit): string {
   const demografia = unit.sourceDemografia?.trim();
   if (!papel && !produtos && !negocio && !demografia) return '';
 
-  // Cabeçalho de PRIORIDADE — instrui a LLM a tratar as Fontes como
-  // verdade absoluta. Sem isso a IA dilui a informação ao misturar com
-  // conhecimento pré-treinado e pode inventar coisas que não estão lá.
   sections.push(
     [
       'FONTES OFICIAIS DA CLÍNICA — PRIORIDADE MÁXIMA.',
@@ -292,9 +226,6 @@ function renderSources(unit: Unit): string {
     sections.push(xmlBlock('negocio', negocio));
   }
   if (demografia) {
-    // Demografia da região — separada de propósito: ajuda a IA a "se situar"
-    // (perfil da cidade, dores comuns, referências locais) sem misturar com os
-    // fatos do negócio. É contexto de fundo, não regra de atendimento.
     sections.push(
       xmlBlock(
         'demografia',
@@ -363,8 +294,6 @@ function renderHandoff(unit: Unit): string {
   Não continue a conversa depois disso.`);
 }
 
-// Chaves de `pipelineIntents` que são CONFIG (não intent→etapa) e NÃO devem
-// virar instrução de mover_etapa no prompt.
 const PIPELINE_INTENT_CONFIG_KEYS = new Set(['spine_client_field_id', 'sla_alert_minutes']);
 
 function renderPipelineIntents(unit: Unit): string {
@@ -390,17 +319,6 @@ function renderPipelineIntents(unit: Unit): string {
 - A movimentação é silenciosa. NÃO mencione na resposta ao cliente.`);
 }
 
-
-/**
- * AGENDAMENTO — só existe quando a unidade tem a agenda da franquia conectada.
- *
- * Este bloco NÃO repete as travas de segurança, e isso é deliberado: a recusa
- * de horário ocupado, bloqueado ou com a I.A. pausada acontece dentro das
- * tools, em código. Instrução em prompt é sugestão — sob insistência do
- * paciente ("mas não tem nada às 14h?") o modelo cede. O que este bloco faz é
- * outra coisa: ensinar a SEQUÊNCIA e o que dizer quando a tool recusar, para
- * que a recusa vire uma frase decente em vez de um silêncio esquisito.
- */
 function renderAgenda(unit: Unit): string {
   if (!unit.spineEnabled) return '';
 
@@ -417,23 +335,14 @@ function renderAgenda(unit: Unit): string {
       `a etapa tem que refletir o que de fato aconteceu.`
     : '';
 
-  // A confirmação é o único momento em que a IA manda um bloco formatado. O
-  // resto da conversa é fala solta; aqui o paciente precisa CONFERIR data,
-  // hora e endereço depois, então tem que dar pra reler e achar cada dado.
   const endereco = unit.clinicAddress?.trim();
   const pix = unit.pixKey?.trim();
   const favorecido = unit.pixHolder?.trim();
 
-  // EMOJI SEGURO (BMP) nesta mensagem, de propósito. O campo "Resposta IA" do
-  // Kommo (MySQL utf8mb3) corta todo emoji de 4 bytes: 📅 📍 💰 👨‍⚕️ 👏 quebram
-  // ou somem. Já os BMP de presentação-emoji (✅ ⭐ ⏰ ⏳ ✨) sobrevivem E chegam
-  // coloridos. Então a confirmação usa SÓ esses — um por linha, pra ficar bonita.
   const linhaEndereco = endereco
     ? `⭐ Local: ${endereco}`
     : '(omita a linha do local — não temos o endereço cadastrado, e inventar faz o paciente ir no lugar errado; diga que a equipe confirma o endereço)';
 
-  // Chegar antes não é formalidade: é ficha, pagamento e o paciente entrar no
-  // horário dele. Atraso de um empurra o dia inteiro da profissional.
   const linhaAntecedencia = '⏳ Chegue 15 minutos antes.';
 
   const linhaPix = pix
@@ -546,33 +455,6 @@ ${confirmacao}`,
   );
 }
 
-
-/**
- * CONVERSÃO — o que fazer quando o paciente hesita.
- *
- * As técnicas aqui não são "vendinha": são as que têm evidência em decisão de
- * saúde. Três em especial mandam no desenho:
- *
- * 1. ENTREVISTA MOTIVACIONAL (Miller & Rollnick). É o método com melhor base
- *    empírica para mudança de comportamento em saúde, e sua descoberta central
- *    é contraintuitiva: DISCUTIR COM A RESISTÊNCIA A AUMENTA. Quando a pessoa
- *    ouve o argumento contrário, ela verbaliza a própria objeção — e verbalizar
- *    consolida. Por isso a IA nunca rebate de frente; ela acolhe e devolve a
- *    decisão, o que faz a pessoa argumentar A FAVOR de se cuidar.
- *
- * 2. INTENÇÃO DE IMPLEMENTAÇÃO (Gollwitzer). Fechar o "quando/como" — dia,
- *    hora, como vem — eleva muito o comparecimento. É a diferença entre "quero
- *    marcar" e ir. Vale mais que qualquer argumento extra.
- *
- * 3. AVERSÃO À PERDA (Kahneman & Tversky). Perder pesa mais que ganhar. Mas o
- *    enquadramento só funciona ancorado no que ELE JÁ DISSE que a dor tira
- *    dele. Genérico ("sua saúde é importante") não move ninguém.
- *
- * ESCASSEZ REAL, NUNCA INVENTADA. A agenda tem poucas vagas de verdade, e o
- * número verdadeiro está a uma chamada de distância. Inventar "restam 2 vagas"
- * é desnecessário — e o dia em que o paciente descobre, a clínica perde a
- * credibilidade que sustenta todo o resto.
- */
 function renderConversao(unit: Unit): string {
   const precoAncora = 'R$ 350';
   const precoPix = 'R$ 150';
@@ -858,11 +740,6 @@ ${steps}
   inicial. Mover de etapa após a triagem é OBRIGATÓRIO, não opcional.`);
 }
 
-// KNOCKOUT / escopo — descarta cedo quem não é caso da unidade e evita marcar
-// consulta pra quem a clínica não vai poder ajudar. Só saúde (clínicas de
-// coluna). É de propósito NÍVEL DE PROMPT (decisão do LLM, não regex): um regex
-// rejeitaria "minha hérnia de disco irradia pro ombro" como caso de ombro.
-// Mandar embora um lead real é pior do que atender uma dúvida a mais.
 function renderKnockout(unit: Unit): string {
   if (unit.category?.trim() !== 'saude') return '';
   return xmlBlock(
@@ -886,10 +763,6 @@ function renderKnockout(unit: Unit): string {
   );
 }
 
-// AUTO-CHECAGEM + ABSTENÇÃO (Self-Refine + abstention, arXiv:2303.11366 e afins).
-// Ganho de qualidade que a pesquisa aponta como o maior: a IA confere a própria
-// resposta antes de enviar e, na dúvida, prefere confirmar a inventar. Vale pra
-// toda unidade — é sempre bom não afirmar o que não dá pra confirmar.
 function renderAutoChecagem(_unit: Unit): string {
   return xmlBlock(
     'auto_checagem',
@@ -967,7 +840,6 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       const tags = Array.isArray(params.tags) ? (params.tags as string[]) : [];
       if (tags.length === 0) return 'aplicar uma tag relevante (não configurada)';
       if (tags.length === 1) return `chame aplicar_tag({ tag: "${tags[0]}" })`;
-      // Múltiplas tags numa única chamada — atômico no Kommo, mais barato.
       const tagsArr = tags.map((t) => `"${t}"`).join(', ');
       return `chame aplicar_tag({ tags: [${tagsArr}] }) — todas de uma vez (UMA chamada só, NÃO chame várias vezes)`;
     }
@@ -1014,10 +886,6 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
     case 'respond_with_intent': {
       const instruction = typeof params.instruction === 'string' ? params.instruction.trim() : '';
       if (!instruction) return 'orientar resposta (orientação não configurada)';
-      // Oposto do send_message: a IA NÃO copia literal. Reformula com palavras
-      // próprias, respeitando o conteúdo/intenção e a lógica condicional da
-      // orientação. O bloco em aspas duplas (não triplas) reduz a tendência
-      // do LLM de reproduzir literal — sinal visual diferente do send_message.
       return [
         `SUA RESPOSTA NESTE TURNO DEVE SEGUIR A ORIENTAÇÃO ABAIXO. Use SUAS PRÓPRIAS PALAVRAS — NÃO copie literalmente. Respeite a intenção, o conteúdo e qualquer lógica condicional ("se X então Y") que a orientação trouxer. Mantenha o tom da persona configurada (não fique formal demais nem robótico):`,
         '',
@@ -1097,9 +965,6 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       return parts.join('. ') + '.';
     }
     case 'pause_in_stages': {
-      // Não vai pro prompt — é um GUARD avaliado no webhook controller ANTES
-      // de invocar o agent. Se a regra cair aqui no render é porque está
-      // misturada com outras ações; mostramos uma linha curta só pra registro.
       const stages = Array.isArray(params.stages) ? (params.stages as Array<{ statusLabel?: string; statusId: number }>) : [];
       if (stages.length === 0) return '(guard) pausar IA em etapas: nenhuma configurada';
       const labels = stages
@@ -1112,7 +977,6 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
   }
 }
 
-/** Formata minutos como texto legível pro prompt. */
 function formatDeadline(minutes: number): string {
   if (minutes < 60) return `${minutes}min`;
   const hours = Math.floor(minutes / 60);
@@ -1123,12 +987,6 @@ function formatDeadline(minutes: number): string {
   return weeks === 1 ? '1 semana' : `${weeks} semanas`;
 }
 
-/** Para uma UnitAction, devolve a string descrevendo TODAS as ações dela. */
-/**
- * Shape mínimo aceito por humanizeAction / renderActions / renderGlobalActions.
- * Cobre tanto UnitAction (com fallback legado actionKind/actionParams) quanto
- * GlobalAction (só o array `actions` novo).
- */
 interface ActionLike {
   actions: unknown;
   actionKind?: string;
@@ -1138,7 +996,6 @@ interface ActionLike {
 }
 
 function humanizeAction(action: ActionLike): string {
-  // Lê o array novo OU cai pra par legado (só UnitAction tem isso).
   const arr = Array.isArray(action.actions) ? (action.actions as Array<{ kind: string; params: Record<string, unknown> }>) : [];
   const steps =
     arr.length > 0
@@ -1148,16 +1005,10 @@ function humanizeAction(action: ActionLike): string {
         : [];
   if (steps.length === 0) return 'sem ação configurada';
   if (steps.length === 1) return humanizeActionStep(steps[0]);
-  // Multi-ação: lista numerada inline.
   const parts = steps.map((s, i) => `(${i + 1}) ${humanizeActionStep(s)}`);
   return `dispare TODAS as ações abaixo, em ordem: ${parts.join('; ')}`;
 }
 
-/**
- * Determina se uma regra é puramente "guard" (só steps que NÃO vão pro prompt
- * do LLM — caso de pause_in_stages, que é avaliado pelo webhook controller).
- * Regras 100% guard são omitidas do prompt pra economizar tokens.
- */
 function isPureGuardRule(action: ActionLike): boolean {
   const arr = Array.isArray(action.actions) ? (action.actions as Array<{ kind: string }>) : [];
   if (arr.length === 0) return false;
@@ -1181,15 +1032,6 @@ function renderActions(actions: UnitAction[]): string {
 ${lines.join('\n\n')}`);
 }
 
-/**
- * Renderiza regras globais (`GlobalAction[]`). Vem ANTES das regras da unit no
- * prompt, com header próprio destacado pra IA dar a elas peso máximo —
- * tipicamente cobrem segurança/compliance (handoff humano, emergência médica,
- * anti-diagnóstico, ofensa).
- *
- * Em caso de conflito com regras da unit, as globais ganham (são mais
- * conservadoras: param a IA em vez de tentar virar a conversa).
- */
 function renderGlobalActions(actions: GlobalAction[]): string {
   const visible = actions.filter((a) => !isPureGuardRule(a));
   if (visible.length === 0) return '';
@@ -1229,14 +1071,6 @@ function renderLeadFieldRules(rules: LeadFieldRule[]): string {
 ${lines.join('\n\n')}`);
 }
 
-/**
- * Renderiza a memória de longo prazo do lead — summary + facts.
- *
- * Posicionado cedo no prompt (antes das ações) pra ancorar respostas em
- * contexto histórico do paciente. Pequeno e barato — atualizado em background
- * pelo lead-memory.service, então a leitura aqui é só 1 query indexada.
- */
-/** Rótulo técnico do desfecho → frase que a IA entende sem ambiguidade. */
 const DESFECHO_HUMANO: Record<string, string> = {
   agendou: 'ele chegou a agendar',
   sumiu: 'parou de responder no meio',
@@ -1260,9 +1094,6 @@ function renderLeadMemory(mem: LeadMemory | null): string {
     lines.push('');
     lines.push(`**Resumo:** ${summary}`);
   }
-  // ÚLTIMO CONTATO — a IA precisa da noção de TEMPO. Data ISO crua ela lê mal
-  // (e às vezes repete pro paciente); aqui vira "há 2 meses" e um rótulo de
-  // desfecho, separados dos demais fatos pra ganharem peso.
   const quando = typeof facts.ultimo_contato === 'string' ? formatarQuandoFoi(facts.ultimo_contato) : '';
   const desfecho = typeof facts.ultimo_desfecho === 'string' ? facts.ultimo_desfecho : '';
   const travou = typeof facts.travou_em === 'string' ? facts.travou_em : '';
@@ -1302,12 +1133,6 @@ function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>)
 ${lines.join('\n\n')}`);
 }
 
-// ---------------------------------------------------------------------------
-// Composer principal.
-// ---------------------------------------------------------------------------
-
-// Memória procedural: regras que ESTA clínica já ensinou pra IA. Bloco curto e
-// de alta prioridade — a IA trata como verdade da unidade, junto das fontes.
 export function renderLessons(lessons: UnitLesson[]): string {
   const ativos = lessons.filter((l) => l.enabled && l.content.trim());
   if (ativos.length === 0) return '';
@@ -1320,43 +1145,18 @@ export function renderLessons(lessons: UnitLesson[]): string {
 
 export interface ComposeInput {
   unit: Unit;
-  /** Texto vindo do AgentConfig (sobrescreve persona base se preenchido). */
   agentConfigPrompt?: string;
-  /** Templates já carregados — se ausente, NÃO faz lookup (use compose async). */
   templates?: MessageTemplate[];
-  /** Mensagens flaggadas como exemplos a evitar. */
   flaggedExamples?: Array<{ content: string }>;
-  /** Entradas da base de conhecimento já filtradas/scored. */
   knowledge?: Array<KnowledgeBaseEntry & { score: number }>;
-  /** Regras "quando → faça" cadastradas na Unit. */
   actions?: UnitAction[];
-  /** Regras "quando → faça" GLOBAIS (valem pra todas as units). */
   globalActions?: GlobalAction[];
-  /** Regras de captura de dados (LeadFieldRule) — viram tools dinâmicas. */
   leadFieldRules?: LeadFieldRule[];
-  /** Memória de longo prazo do lead. Vai pro prompt como bloco "🧠 MEMÓRIA". */
   leadMemory?: LeadMemory | null;
-  /** Memória procedural da unidade — regras aprendidas. Bloco <aprendizados>. */
   lessons?: UnitLesson[];
-  /**
-   * leadId numérico do Kommo para este turno. Injetado no system prompt como
-   * "CONTEXTO DA CONVERSA" pra IA usar nas tool calls. Sem isso, a IA passa
-   * `leadId: 0` ou similar e as tools falham silenciosamente.
-   */
   leadId?: number;
-  /** Este é o PRIMEIRO turno do paciente? (1 humana, 0 IA). */
   isFirstTurn?: boolean;
-  /**
-   * A consulta do lead na franquia, já conferida contra a API deles. `null` =
-   * não tem consulta. Vira o bloco <consulta_do_paciente>, que existe pra IA
-   * nunca repetir um horário que a recepção já mudou.
-   */
   consulta?: ConsultaReconciliada | null;
-  /**
-   * A etapa atual do lead no Kommo, já classificada. Vira o bloco
-   * <etapa_do_lead>, que avisa a IA quando o paciente JÁ agendou ou já é
-   * paciente — pra ela não tratar lead legado/migrado como contato novo.
-   */
   estadoEtapa?: EstadoEtapaLead | null;
 }
 
@@ -1406,17 +1206,6 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
   return xmlBlock('primeiro_turno', lines.join('\n'));
 }
 
-// Bloco de RUNTIME: injeta o leadId real desta conversa pra IA usar nas tool
-// calls. Sem isso, ela passa `leadId: 0` ou a string "leadId" e as tools falham.
-/**
- * A CONSULTA DESTE PACIENTE, conferida na franquia neste turno.
- *
- * Existe porque o caminho mais comum de errar não passa por tool nenhuma: o
- * paciente pergunta "que horas mesmo é minha consulta?" e a IA responde pelo
- * histórico — onde está escrito o horário do dia em que ela marcou. Se a
- * recepção remarcou depois (e remarca), aquele texto virou mentira. O bloco
- * vai no `dynamic`, no fim do prompt, porque precisa ganhar da conversa.
- */
 function renderConsultaMarcada(c: ConsultaReconciliada | null | undefined): string {
   if (!c) return '';
 
@@ -1457,13 +1246,6 @@ function renderConsultaMarcada(c: ConsultaReconciliada | null | undefined): stri
   ].join('\n'));
 }
 
-/**
- * A ETAPA REAL do lead no Kommo. Só aparece quando o paciente JÁ agendou ou já
- * é paciente — o caso em que a IA erra feio se tratar como novo (foi o bug de
- * Parauapebas: "não quero te deixar sem sua consulta" pra quem já estava
- * agendado no sistema antigo). Fonte de verdade que vale pro lead legado: a
- * etapa. Vai no `dynamic`, pra ganhar recência sobre o histórico da conversa.
- */
 function renderEtapaLead(e: EstadoEtapaLead | null | undefined): string {
   if (!e || !e.jaAgendadoOuPaciente) return '';
   return xmlBlock('etapa_do_lead', [
@@ -1487,13 +1269,6 @@ function renderConversationContext(leadId: number): string {
   ].join('\n'));
 }
 
-/**
- * "Achatar" a config atual num texto único — usado pelo botão "Centralizar no
- * prompt". Renderiza TODOS os blocos de política fixa (persona, fontes, regras,
- * toggles, ações, templates) na mesma ordem do modo em camadas, mas SEM os
- * blocos de runtime (memória, leadId, RAG) — esses seguem dinâmicos. O texto
- * resultante vira o novo systemPrompt e o usuário passa a editar só ali.
- */
 export function composeFlattenedPrompt(input: ComposeInput): string {
   const {
     unit,
@@ -1566,25 +1341,11 @@ export function composeSystemPrompt(input: ComposeInput): string {
     estadoEtapa = null,
   } = input;
 
-  // ORDEM DOS BLOCOS — pensada pra qualidade da resposta:
-  //   1. Persona auto-gerada do Wizard (quem a IA é, como fala, paleta de emoji).
-  //   2. FONTES OFICIAIS — verdade absoluta sobre o negócio, vêm logo cedo pra
-  //      a LLM ancorar antes das regras de tom.
-  //   3. customBase opcional do "Avançado" — instrução extra do super-admin,
-  //      vem DEPOIS das Fontes pra nunca sobrescrever (antes da refatoração,
-  //      podia sobrescrever a persona e diluía as Fontes).
-  //   4. Regras globais (anti-alucinação, tom, fechamento com pergunta).
-  //   5. Feature blocks do Wizard (coleta de nome, qualificação, etc).
   const customBase = (agentConfigPrompt && agentConfigPrompt.trim().length > 0
     ? agentConfigPrompt
     : unit.systemPrompt
   )?.trim();
 
-  // MODO PROMPT ÚNICO: o texto do usuário é o prompt INTEIRO. Não injetamos
-  // nenhum bloco auto-gerado (persona, regras, toggles, fontes, ações, templates
-  // — tudo isso o usuário já escreveu no próprio texto via "Centralizar no
-  // prompt"). Só somamos os 3 blocos de RUNTIME (dado vivo que não cabe num
-  // texto fixo): memória do paciente, contexto do leadId e RAG.
   if (unit.singlePromptMode) {
     const single: string[] = [];
     if (customBase) single.push(customBase);
@@ -1604,15 +1365,11 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   const blocks: string[] = [];
 
-  // SEMPRE inclui a persona auto-gerada (não é mais opcional). O customBase
-  // virou aditivo, não substituto — assim as Fontes nunca ficam órfãs.
   blocks.push(renderPersona(unit));
 
-  // Fontes oficiais vêm BEM CEDO. São a verdade do negócio.
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) blocks.push(sourcesBlock);
 
-  // Texto avançado opcional — adiciona, não sobrescreve.
   if (customBase) {
     blocks.push(xmlBlock('instrucoes_extras', customBase));
   }
@@ -1620,8 +1377,6 @@ export function composeSystemPrompt(input: ComposeInput): string {
   blocks.push(renderRulesGlobal());
 
   const featureBlocks = [
-    // Coleta de nome/origem PRIMEIRO — a IA precisa saudar com isso antes de
-    // qualquer outra coisa quando ativados.
     renderCollectName(unit),
     renderCollectSource(unit),
     renderQualification(unit),
@@ -1642,21 +1397,15 @@ export function composeSystemPrompt(input: ComposeInput): string {
     blocks.push(xmlBlock('comportamentos_ativados', featureBlocks.join('\n\n')));
   }
 
-  // MEMÓRIA DO PACIENTE — vem cedo (antes das Ações) pra IA ancorar resposta
-  // em contexto histórico. Só carrega/renderiza se houver registro.
   const lessonsBlock = renderLessons(lessons);
   if (lessonsBlock) blocks.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) blocks.push(memoryBlock);
 
-  // CONTEXTO DA CONVERSA — vai ANTES das Ações pra IA ler o leadId real e usar
-  // nas tool calls. Sem isso, ela passa `leadId: 0` literalmente (a palavra
-  // "leadId" aparece nos textos de orientação das ações como placeholder).
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
     blocks.push(renderConversationContext(leadId));
   }
 
-  // Globais antes — peso semântico maior e cobrem segurança/compliance.
   const globalActionsBlock = renderGlobalActions(globalActions);
   if (globalActionsBlock) blocks.push(globalActionsBlock);
 
@@ -1675,32 +1424,17 @@ export function composeSystemPrompt(input: ComposeInput): string {
   const flaggedBlock = renderFlaggedExamples(flaggedExamples);
   if (flaggedBlock) blocks.push(flaggedBlock);
 
-  // A consulta conferida vai no fim, junto com o boost, pela mesma razão de
-  // recência: precisa ganhar do horário escrito lá atrás na conversa.
   const consultaBlock = renderConsultaMarcada(consulta);
   if (consultaBlock) blocks.push(consultaBlock);
   const etapaBlock = renderEtapaLead(estadoEtapa);
   if (etapaBlock) blocks.push(etapaBlock);
 
-  // Boost de primeiro turno vai POR ÚLTIMO — instruções no fim do prompt têm
-  // mais influência (efeito "recência") nos LLMs atuais.
   const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
   if (firstTurnBlock) blocks.push(firstTurnBlock);
 
   return blocks.join('\n\n');
 }
 
-/**
- * Variante do composer que separa o prompt em DOIS pedaços pro prompt caching
- * do Anthropic (Claude): `cacheable` (estático — persona, fontes, regras,
- * ações, templates, correções: igual em todo turno do mesmo lead) e `dynamic`
- * (volátil — memória, leadId, RAG e boost de 1º turno: muda a cada mensagem).
- *
- * O caller (graph.ts) põe um `cache_control` no bloco cacheable, então ele é
- * lido a 0.1x do preço em turnos seguintes; só o `dynamic` (pequeno) paga cheio.
- * A ordem interna é a mesma do composeSystemPrompt, só que o volátil todo vai
- * pro fim — o que também favorece recência.
- */
 export function composeSystemPromptParts(input: ComposeInput): {
   cacheable: string;
   dynamic: string;
@@ -1737,15 +1471,11 @@ export function composeSystemPromptParts(input: ComposeInput): {
   }
   const knowledgeBlock = renderKnowledge(knowledge);
   if (knowledgeBlock) dynamic.push(knowledgeBlock);
-  // NUNCA no bloco cacheável: o horário muda por fora, e um cache de 1h
-  // devolveria exatamente o dado velho que este bloco existe pra corrigir.
   const consultaBlock = renderConsultaMarcada(consulta);
   if (consultaBlock) dynamic.push(consultaBlock);
   const etapaBlock = renderEtapaLead(estadoEtapa);
   if (etapaBlock) dynamic.push(etapaBlock);
 
-  // MODO PROMPT ÚNICO — o texto do usuário é o prompt inteiro (cacheable);
-  // só os blocos de runtime ficam no dynamic.
   if (unit.singlePromptMode) {
     return { cacheable: (customBase ?? '').trim(), dynamic: dynamic.join('\n\n') };
   }
@@ -1788,65 +1518,33 @@ export function composeSystemPromptParts(input: ComposeInput): {
   const flaggedBlock = renderFlaggedExamples(flaggedExamples);
   if (flaggedBlock) cache.push(flaggedBlock);
 
-  // Boost de 1º turno é volátil (muda turno 1 vs resto) → vai no dynamic, no fim.
   const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
   if (firstTurnBlock) dynamic.push(firstTurnBlock);
 
   return { cacheable: cache.join('\n\n'), dynamic: dynamic.join('\n\n') };
 }
 
-/**
- * Heurística: mensagem é "trivial" (saudação, ack curto) e RAG não vai
- * trazer nada útil mesmo? Pulamos o embedding (economiza ~500-800ms).
- *
- * Critérios (qualquer um basta):
- *   - texto ≤ 18 chars sem ponto de interrogação
- *   - bate com regex de saudação/ack comum
- *
- * Conservador: se NÃO bater, faz RAG normalmente — preferimos pagar o custo
- * a perder uma resposta relevante.
- */
 function isTrivialUserMessage(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (normalized.length === 0) return true;
-  if (normalized.includes('?')) return false; // pergunta → vale RAG
+  if (normalized.includes('?')) return false;
   if (normalized.length <= 18) return true;
   return /^(oi|ol[áa]|alo|hi|hello|bom dia|boa tarde|boa noite|tudo bem|td bem|obrigad[oa]|ok|valeu|tks|thanks|👋|🙏|😊)[\s.!?,]*$/i.test(
     normalized,
   );
 }
 
-/**
- * Async variant — busca templates + flaggedExamples + RAG do banco
- * automaticamente. Usar em runtime do agente (graph.ts).
- *
- * Se `userMessage` for passado, faz busca semântica na base de conhecimento
- * e injeta as top-3 mais relevantes no prompt. Sem userMessage, pula RAG.
- * Mensagens triviais (saudações, "ok", "obrigado") também pulam — embedding
- * é caro e não vai casar com FAQ mesmo.
- */
 export async function composeSystemPromptForUnit(input: {
   unit: Unit;
   agentConfigPrompt?: string;
   userMessage?: string;
   isFirstTurn?: boolean;
-  /** leadId do Kommo — injetado no bloco "CONTEXTO DA CONVERSA" pras tools. */
   leadId?: number;
-  /**
-   * Quando true, omite as regras de captura de dados (LeadFieldRule) do
-   * prompt. Usado pelo Playground — sandbox não registra as tools `salvar_*`
-   * dinâmicas, então sem isso a IA acabaria tentando chamar tool inexistente.
-   */
   excludeLeadFieldRules?: boolean;
 }): Promise<string> {
   return composeSystemPrompt(await loadComposeInput(input));
 }
 
-/**
- * Mesma carga do banco do composeSystemPromptForUnit, mas devolve os pedaços
- * cacheable/dynamic pro prompt caching do Claude. Usado pelo graph.ts quando
- * a unidade é `llmProvider="anthropic"`.
- */
 export async function composeSystemPromptPartsForUnit(input: {
   unit: Unit;
   agentConfigPrompt?: string;
@@ -1858,11 +1556,6 @@ export async function composeSystemPromptPartsForUnit(input: {
   return composeSystemPromptParts(await loadComposeInput(input));
 }
 
-/**
- * Carrega do banco tudo que o composer precisa (templates, flagged, RAG,
- * ações, regras, memória) e devolve o ComposeInput pronto. Fator comum das
- * duas variantes async (string e parts) — mantém a carga em UM lugar só.
- */
 async function loadComposeInput(input: {
   unit: Unit;
   agentConfigPrompt?: string;
@@ -1901,7 +1594,6 @@ async function loadComposeInput(input: {
       : Promise.resolve([]),
     listEnabledActions(input.unit.id),
     listEnabledGlobalActions().catch((err) => {
-      // Se a tabela GlobalAction ainda não foi migrada, não derruba o prompt.
       logger.warn({ err }, 'listEnabledGlobalActions falhou — seguindo sem regras globais');
       return [];
     }),
@@ -1910,14 +1602,10 @@ async function loadComposeInput(input: {
       : listEnabledLeadFieldRules(input.unit.id),
     input.leadId
       ? getLeadMemoryForAgent(input.unit, input.leadId).catch((err) => {
-          // Tabela pode não existir ainda em ambiente não-migrado.
           logger.warn({ err, leadId: input.leadId }, 'getLeadMemory falhou — sem memória no prompt');
           return null;
         })
       : Promise.resolve(null),
-    // Só bate na franquia quando a agenda está ligada E o lead pode ter
-    // consulta. Sem isso seria uma chamada HTTP externa em todo turno de todo
-    // lead — a maioria dos quais nunca marcou nada.
     input.leadId && input.unit.spineEnabled
       ? consultaDoLead(input.unit, input.leadId).catch((err) => {
           logger.warn(
@@ -1927,8 +1615,6 @@ async function loadComposeInput(input: {
           return null;
         })
       : Promise.resolve(null),
-    // A ETAPA REAL do lead no Kommo (verdade que vale pro lead legado). Só bate
-    // no Kommo quando há leadId; erro aqui vira `null` (prompt segue sem o bloco).
     input.leadId
       ? estadoEtapaDoLead(input.unit, input.leadId).catch((err) => {
           logger.warn(
@@ -1938,8 +1624,6 @@ async function loadComposeInput(input: {
           return null;
         })
       : Promise.resolve(null),
-    // Memória procedural da unidade. `.catch` pra não derrubar o prompt se a
-    // tabela ainda não foi migrada em algum ambiente.
     listEnabledLessons(input.unit.id).catch((err) => {
       logger.warn({ err, unitId: input.unit.id }, 'listEnabledLessons falhou — sem aprendizados no prompt');
       return [];
@@ -1960,19 +1644,10 @@ async function loadComposeInput(input: {
   };
 }
 
-/**
- * Helper de preview pro front: mesma lógica do composer, mas só com a Unit
- * (sem agentConfig nem workflow). Útil pra mostrar o "preview" no wizard.
- */
 export function previewComposedPrompt(unit: Unit): string {
   return composeSystemPrompt({ unit });
 }
 
-/**
- * Async variant do "achatar" — carrega templates/ações/regras do banco e
- * devolve o texto da config atual flatten. Usado pelo endpoint do botão
- * "Centralizar no prompt". Não carrega RAG/memória/flagged: esses são runtime.
- */
 export async function composeFlattenedPromptForUnit(input: {
   unit: Unit;
   agentConfigPrompt?: string;

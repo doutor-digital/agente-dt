@@ -1,4 +1,3 @@
-
 import type { Unit } from '@prisma/client';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { prisma } from '../lib/prisma.js';
@@ -6,7 +5,6 @@ import { logger } from '../lib/logger.js';
 import { createChatModel, invokeChatModel } from './openai.service.js';
 import { aplicarGuardrail } from '../agent/guardrail.js';
 
-/** As 3 abordagens — esta é a ÚNICA fonte de diversidade entre os candidatos. */
 export const ABORDAGENS = [
   {
     key: 'devolver_escolha',
@@ -37,7 +35,6 @@ export interface Candidato {
   abordagem: AbordagemKey;
   titulo: string;
   texto: string;
-  /** Regras do guardrail que este texto disparou (vazio = limpo). */
   alertas: string[];
 }
 
@@ -121,8 +118,6 @@ export async function runStrategyLab(args: {
       ? unit.googleModel || 'gemini-2.5-flash'
       : unit.openaiModel || 'gpt-4o-mini';
 
-  // Mesmo cast que o graph.ts faz: a forma de `.invoke(messages, opts)` é a que
-  // `invokeChatModel` precisa, mas o tipo estrito do ChatOpenAI não bate.
   const model = createChatModel(unit, { model: modelName }) as unknown as Parameters<
     typeof invokeChatModel
   >[0]['model'];
@@ -154,8 +149,6 @@ export async function runStrategyLab(args: {
                   .trim()
               : '';
         if (!texto) return null;
-        // Guardrail: o texto vai ser copiado e mandado a um paciente real, então
-        // passa pelas mesmas travas de preço e conduta clínica do atendimento.
         const g = aplicarGuardrail(texto, unit);
         return {
           abordagem: ab.key,
@@ -189,7 +182,6 @@ export async function runStrategyLab(args: {
   return { runId: run.id, candidatos, status };
 }
 
-/** Marca qual sugestão o dono usou — é a métrica de adoção da feature. */
 export async function marcarEscolha(unitId: string, runId: string, texto: string): Promise<boolean> {
   const { count } = await prisma.leadStrategyRun.updateMany({
     where: { id: runId, unitId },

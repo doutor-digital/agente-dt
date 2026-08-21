@@ -1,7 +1,3 @@
-// ============================================================================
-// strategy-lab.controller.ts — "3 jeitos de responder" (sob demanda).
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { runStrategyLab, marcarEscolha } from '../services/strategy-lab.service.js';
@@ -35,7 +31,6 @@ export async function runStrategyLabHandler(req: Request, res: Response): Promis
   res.json(out);
 }
 
-/** Registra qual sugestão foi usada — mede se a ferramenta serve de verdade. */
 export async function chooseStrategyHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id ?? '');
   const runId = String(req.params.runId ?? '');

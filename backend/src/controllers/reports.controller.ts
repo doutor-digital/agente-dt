@@ -1,24 +1,3 @@
-// ============================================================================
-// reports.controller.ts — Endpoints de relatórios (CSV / PDF).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// 4 relatórios suportados:
-//   - conversations  → volume diário, conversão, tempo médio de resposta
-//   - llm-cost       → tokens & custo em USD por modelo/dia
-//   - actions        → tools chamadas (aplicar_tag, mover_etapa, etc.) por kind
-//   - errors         → falhas (LlmCall.status=error + SystemLog severity=error)
-//
-// Cada relatório aceita query params:
-//   ?format=csv|pdf       (default csv)
-//   ?unitId=<id>          (SUPER_ADMIN: opcional, vê todas se omitir; UNIT_ADMIN:
-//                         forçado pra sua unit, query param é ignorado)
-//   ?from=YYYY-MM-DD      (default: 30 dias atrás)
-//   ?to=YYYY-MM-DD        (default: hoje)
-//
-// SQL pesado fica nas queries Prisma. O controller só formata + serializa.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
@@ -32,24 +11,17 @@ const querySchema = z.object({
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
-/** Resolve o range. Se omisso: últimos 30 dias. `to` é exclusivo (00:00 do dia seguinte). */
 function resolveRange(from?: string, to?: string): { from: Date; to: Date } {
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
   const defaultFrom = new Date(today);
   defaultFrom.setUTCDate(defaultFrom.getUTCDate() - 30);
   const start = from ? new Date(`${from}T00:00:00Z`) : defaultFrom;
-  // `to` é inclusivo do dia → soma 1 dia pra cobrir 23:59 daquele dia.
   const endExclusive = to ? new Date(`${to}T00:00:00Z`) : new Date(today);
   endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
   return { from: start, to: endExclusive };
 }
 
-/**
- * Resolve o unitId efetivo respeitando o escopo do user:
- *   - UNIT_ADMIN: SEMPRE sua unit, ignora query param
- *   - SUPER_ADMIN: usa query param OU null (todas)
- */
 function resolveUnitScope(req: Request, queryUnitId?: string): { unitId: string | null; locked: boolean } {
   const user = req.user!;
   if (user.role === 'SUPER_ADMIN') {
@@ -87,10 +59,6 @@ async function sendReport(
   res.end(pdf);
 }
 
-// ---------------------------------------------------------------------------
-// 1) Conversations & conversion
-// ---------------------------------------------------------------------------
-
 export async function reportConversationsHandler(req: Request, res: Response): Promise<void> {
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -106,7 +74,6 @@ export async function reportConversationsHandler(req: Request, res: Response): P
     ...(scope.unitId ? { unitId: scope.unitId } : {}),
   };
 
-  // Volume por dia + conversões. Faz 2 queries pequenas.
   const convs = await prisma.conversation.findMany({
     where,
     select: {
@@ -124,7 +91,6 @@ export async function reportConversationsHandler(req: Request, res: Response): P
     orderBy: { createdAt: 'desc' },
   });
 
-  // Mapa de unitId → slug pra mostrar legível no relatório.
   const unitIds = [...new Set(convs.map((c) => c.unitId))];
   const units = unitIds.length
     ? await prisma.unit.findMany({ where: { id: { in: unitIds } }, select: { id: true, slug: true } })
@@ -172,10 +138,6 @@ export async function reportConversationsHandler(req: Request, res: Response): P
   await sendReport(res, format, 'conversas', spec, range);
 }
 
-// ---------------------------------------------------------------------------
-// 2) LLM cost & usage
-// ---------------------------------------------------------------------------
-
 export async function reportLlmCostHandler(req: Request, res: Response): Promise<void> {
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -186,7 +148,6 @@ export async function reportLlmCostHandler(req: Request, res: Response): Promise
   const range = resolveRange(fromStr, toStr);
   const scope = resolveUnitScope(req, parsed.data.unitId);
 
-  // Agrega via SQL pra não trazer milhares de rows pro memory.
   const rawAggregates = await prisma.llmCall.groupBy({
     by: ['unitId', 'model'],
     where: {
@@ -218,7 +179,6 @@ export async function reportLlmCostHandler(req: Request, res: Response): Promise
     total_tokens: a._sum.totalTokens ?? 0,
     cost_usd: (a._sum.costUsd?.toNumber() ?? 0).toFixed(6),
   }));
-  // Ordena por custo desc.
   rows.sort((a, b) => Number(b.cost_usd) - Number(a.cost_usd));
 
   const totalCost = rawAggregates.reduce((sum, a) => sum + (a._sum.costUsd?.toNumber() ?? 0), 0);
@@ -246,10 +206,6 @@ export async function reportLlmCostHandler(req: Request, res: Response): Promise
   await sendReport(res, format, 'custo-ia', spec, range);
 }
 
-// ---------------------------------------------------------------------------
-// 3) Ações disparadas (tool calls)
-// ---------------------------------------------------------------------------
-
 export async function reportActionsHandler(req: Request, res: Response): Promise<void> {
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -260,8 +216,6 @@ export async function reportActionsHandler(req: Request, res: Response): Promise
   const range = resolveRange(fromStr, toStr);
   const scope = resolveUnitScope(req, parsed.data.unitId);
 
-  // Tool calls são gravados como ExecutionStep kind='KOMMO_ACTION' ou 'TOOL_CALL'.
-  // Cada step tem `title` legível e `payload.tool` ou similar.
   const steps = await prisma.executionStep.findMany({
     where: {
       createdAt: { gte: range.from, lt: range.to },
@@ -278,7 +232,7 @@ export async function reportActionsHandler(req: Request, res: Response): Promise
       trace: { select: { unitId: true, leadId: true } },
     },
     orderBy: { createdAt: 'desc' },
-    take: 5000, // hard cap pra não estourar PDF
+    take: 5000,
   });
 
   const unitIds = [...new Set(steps.map((s) => s.trace?.unitId).filter((u): u is string => !!u))];
@@ -326,10 +280,6 @@ export async function reportActionsHandler(req: Request, res: Response): Promise
   await sendReport(res, format, 'acoes-ia', spec, range);
 }
 
-// ---------------------------------------------------------------------------
-// 4) Erros & falhas
-// ---------------------------------------------------------------------------
-
 export async function reportErrorsHandler(req: Request, res: Response): Promise<void> {
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -340,7 +290,6 @@ export async function reportErrorsHandler(req: Request, res: Response): Promise<
   const range = resolveRange(fromStr, toStr);
   const scope = resolveUnitScope(req, parsed.data.unitId);
 
-  // Combina LlmCall com status='error' e ExecutionStep kind='ERROR'.
   const [llmErrors, stepErrors] = await Promise.all([
     prisma.llmCall.findMany({
       where: {
@@ -425,10 +374,6 @@ export async function reportErrorsHandler(req: Request, res: Response): Promise<
   await sendReport(res, format, 'erros', spec, range);
 }
 
-// ---------------------------------------------------------------------------
-// 5) WhatsApp Cost (Meta Graph API — pricing_analytics + template_analytics)
-// ---------------------------------------------------------------------------
-
 export async function reportWhatsappCostHandler(req: Request, res: Response): Promise<void> {
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -439,7 +384,6 @@ export async function reportWhatsappCostHandler(req: Request, res: Response): Pr
   const range = resolveRange(fromStr, toStr);
   const scope = resolveUnitScope(req, parsed.data.unitId);
 
-  // Agrega via SQL pra suportar muitas linhas sem inflar memória.
   const aggregates = await prisma.whatsappCostDaily.groupBy({
     by: ['unitId', 'pricingCategory', 'pricingType', 'country'],
     where: {
@@ -493,6 +437,5 @@ export async function reportWhatsappCostHandler(req: Request, res: Response): Pr
 }
 
 export function registerReportsLogging(): void {
-  // Placeholder caso queira instrumentar uma métrica unificada depois.
   logger.debug({ module: 'reports' }, 'reports controller registrado');
 }

@@ -1,20 +1,3 @@
-// ============================================================================
-// follow-up.controller.ts — Regras de reengajamento por etapa.
-//
-// A TELA PRECISA MOSTRAR O QUE NÃO EXISTE AINDA
-// ---------------------------------------------
-// Uma listagem só do que está no banco começaria vazia, e tela vazia não
-// ensina nada — quem abre não descobre que dá pra reengajar quem foi perdido
-// por "achou caro". Então a listagem devolve as regras SALVAS mescladas com os
-// modelos prontos, marcando quais ainda não foram criados. A pessoa vê o
-// cardápio inteiro e liga o que quiser.
-//
-// E devolve também os MOTIVOS INTOCÁVEIS, com o porquê de cada um. Eles não
-// são configuráveis de propósito, mas precisam aparecer: uma regra invisível é
-// uma regra que ninguém entende, e alguém vai perguntar por que "sem condições
-// financeiras" não está na lista.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
@@ -27,7 +10,6 @@ async function carregarUnidade(req: Request) {
   return prisma.unit.findUnique({ where: { id: unitId } });
 }
 
-/** Chave que identifica uma regra: etapa + motivo (nulo = qualquer motivo). */
 function chave(statusId: number, lossReasonId: number | null): string {
   return `${statusId}:${lossReasonId ?? 'null'}`;
 }
@@ -45,9 +27,6 @@ export async function listFollowUpRulesHandler(req: Request, res: Response): Pro
   });
   const porChave = new Map(salvas.map((r) => [chave(r.statusId, r.lossReasonId), r]));
 
-  // Modelo pronto + o que está salvo por cima. `existe: false` diz à tela que
-  // aquilo é sugestão, não configuração — a diferença entre "está desligado" e
-  // "nunca foi criado".
   interface RegraNaTela {
     id: string | null;
     existe: boolean;
@@ -74,13 +53,10 @@ export async function listFollowUpRulesHandler(req: Request, res: Response): Pro
       enabled: salva?.enabled ?? false,
       notes: salva?.notes ?? p.notes,
       steps: (salva?.steps as unknown) ?? p.steps,
-      /** True quando a escada salva foi editada e não bate mais com o modelo. */
       editada: salva ? JSON.stringify(salva.steps) !== JSON.stringify(p.steps) : false,
     };
   });
 
-  // Regras que a pessoa criou fora do cardápio continuam aparecendo — senão
-  // sumiriam da tela e ficariam rodando invisíveis.
   for (const extra of porChave.values()) {
     regras.push({
       id: extra.id,
@@ -131,8 +107,6 @@ export async function upsertFollowUpRuleHandler(req: Request, res: Response): Pr
   }
   const { statusId, lossReasonId = null, lossReasonName = null, enabled, notes, steps } = parsed.data;
 
-  // Motivo intocável não vira regra, nem desligada. Bloquear aqui e não só na
-  // tela é o que garante que ninguém habilite por outro caminho.
   if (MOTIVOS_INTOCAVEIS.some((m) => m.id === lossReasonId)) {
     const m = MOTIVOS_INTOCAVEIS.find((x) => x.id === lossReasonId)!;
     res.status(422).json({
@@ -142,22 +116,10 @@ export async function upsertFollowUpRuleHandler(req: Request, res: Response): Pr
     return;
   }
 
-  // Degraus fora de ordem quebram o espaçamento do worker, que assume
-  // crescente. Ordenar aqui evita uma classe inteira de bug silencioso.
   const escada = steps ? [...steps].sort((a, b) => a.aposMin - b.aposMin) : undefined;
 
   const base = PRESETS.find((p) => p.statusId === statusId && p.lossReasonId === lossReasonId);
 
-  // NÃO USA upsert DE PROPÓSITO.
-  //
-  // O Prisma recusa `null` dentro de uma chave única composta — a tipagem do
-  // `where` exige number e ele valida em runtime. E null aqui é o caso NORMAL:
-  // toda regra de etapa sem motivo de perda tem lossReasonId nulo, que é a
-  // maioria delas. O upsert falhava com 500 em cima da primeira regra que
-  // alguém tentasse ligar.
-  //
-  // O Postgres trata NULL como distinto no índice único, então buscar-e-decidir
-  // dá o comportamento certo: uma regra por etapa, mais uma por motivo.
   const existente = await prisma.followUpRule.findFirst({
     where: { unitId: unit.id, statusId, lossReasonId },
   });
@@ -190,7 +152,6 @@ export async function upsertFollowUpRuleHandler(req: Request, res: Response): Pr
   res.json({ ok: true, regra });
 }
 
-/** Liga/desliga o reengajamento da unidade inteira — a chave geral. */
 export async function toggleFollowUpHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {

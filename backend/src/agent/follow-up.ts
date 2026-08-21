@@ -1,24 +1,3 @@
-// ============================================================================
-// follow-up.ts — Escreve a mensagem de reengajamento.
-//
-// POR QUE NÃO É TEXTO FIXO
-// ------------------------
-// Cinco mensagens prontas, disparadas em sequência, são reconhecíveis como
-// robô na segunda. Pior: elas ignoram o que já foi conversado — mandar "quer
-// agendar?" para quem já disse que o problema é o preço não reengaja ninguém.
-//
-// Então o modelo recebe a conversa real e uma INTENÇÃO ("toque leve, retome
-// onde parou"), e escreve a partir do que aquele paciente disse. É o mesmo
-// agente da conversa, com a mesma persona — não uma segunda voz.
-//
-// POR QUE UMA CHAMADA CURTA, E NÃO O AGENTE INTEIRO
-// -------------------------------------------------
-// Reengajar não precisa de ferramenta: não consulta agenda, não grava campo,
-// não agenda nada. Rodar o grafo completo aqui gastaria passos e latência para
-// produzir uma frase — e abriria a porta para a IA marcar consulta sozinha
-// enquanto o paciente está calado, que é exatamente o que não pode acontecer.
-// ============================================================================
-
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
@@ -29,13 +8,10 @@ export interface FollowUpArgs {
   unitId: string;
   leadId: number;
   conversationId: string;
-  /** O que este degrau da escada quer provocar. */
   intencao: string;
-  /** No último, a mensagem se despede — não pede resposta. */
   ultimoDegrau: boolean;
 }
 
-/** Últimas trocas, na ordem em que aconteceram. */
 async function historico(conversationId: string, limite = 12): Promise<string> {
   const msgs = await prisma.message.findMany({
     where: { conversationId },
@@ -56,8 +32,6 @@ export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | nul
   const conversa = await historico(args.conversationId);
   if (!conversa.trim()) return null;
 
-  // A persona vem do mesmo composer da conversa: a voz precisa ser a mesma, ou
-  // o paciente percebe que "outra pessoa" assumiu.
   const persona = await composeSystemPromptForUnit({ unit, isFirstTurn: false }).catch(() => null);
   const base = typeof persona === 'string' ? persona : '';
 
@@ -86,8 +60,6 @@ ${conversa}`.trim();
   try {
     const model = createChatModel(unit, { maxTokens: 300 });
     const saida = await invokeChatModel({
-      // Mesmo cast que lead-memory.service usa: os tipos do LangChain divergem
-      // entre ChatOpenAI e ChatAnthropic, e o helper aceita os dois em runtime.
       model: model as unknown as Parameters<typeof invokeChatModel>[0]['model'],
       messages: [new SystemMessage(base || 'Você é uma atendente de clínica.'), new HumanMessage(instrucao)],
       unitId: unit.id,
@@ -102,8 +74,6 @@ ${conversa}`.trim();
       : '';
 
     const limpo = texto.trim().replace(/^["']|["']$/g, '');
-    // Vazio ou absurdamente longo: melhor não mandar nada do que mandar lixo
-    // para quem já está em silêncio.
     if (!limpo || limpo.length > 600) return null;
     return limpo;
   } catch (err) {

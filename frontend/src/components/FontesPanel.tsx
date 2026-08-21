@@ -1,26 +1,3 @@
-// ============================================================================
-// FontesPanel — 3 documentos longos que entram inteiros no system prompt.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Substitui a noção de "systemPrompt cru" por 3 docs estruturados que o dono
-// da clínica edita como texto livre:
-//
-//   - Fatos importantes / papel  : papel da IA, fluxo SPIN, regras críticas
-//                                  (CREFITO, comercial), bifurcação por horário
-//   - Produtos e serviços        : condições tratadas, tecnologias, planos,
-//                                  regra de valores
-//   - Visão geral do negócio     : endereço, contatos, profissionais, horário
-//                                  humano vs IA
-//
-// Os 3 são salvos diretamente em campos da Unit (sourcePapel, sourceProdutos,
-// sourceNegocio) via PATCH /units/:id. O backend (`prompt-composer.ts`) lê e
-// renderiza como 3 seções do system prompt antes das regras operacionais.
-//
-// Coexistem com a tabela `knowledge_base_entry` — Fontes é texto fixo no
-// prompt; KB é RAG vetorizado pra FAQ.
-// ============================================================================
-
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileText, Loader2, Save, Sparkles } from 'lucide-react';
 import { RichTextEditor } from './RichTextEditor';
@@ -149,7 +126,6 @@ export function FontesPanel() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="w-full px-6 py-6 space-y-6">
-        {/* Header sticky — alinhado ao padrão Stripe das seções */}
         <div className="flex items-center justify-between gap-4 sticky top-0 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
           <div>
             <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
@@ -172,7 +148,6 @@ export function FontesPanel() {
           </button>
         </div>
 
-        {/* Aviso de contexto */}
         <div className="flex items-start gap-3 rounded-xl border border-brand-500/20 bg-brand-500/5 p-4 text-sm">
           <Sparkles size={16} className="text-brand-300 mt-0.5 shrink-0" />
           <div className="text-zinc-300 leading-relaxed">
@@ -183,7 +158,6 @@ export function FontesPanel() {
           </div>
         </div>
 
-        {/* 3 textareas */}
         {FIELDS.map((field) => (
           <SourceField
             key={field.key}
@@ -231,8 +205,6 @@ function SourceField({
       </div>
       <p className="text-xs text-zinc-500 mb-4">{hint}</p>
 
-      {/* Split: editor à esquerda, pré-via à direita. Empilha em telas
-          estreitas (responsivo estrutural, não tipografia fluida). */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="min-w-0">
           <RichTextEditor value={value} onChange={onChange} placeholder={placeholder} />

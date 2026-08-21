@@ -1,30 +1,3 @@
-// ============================================================================
-// AgendaPanel — painel operacional da agenda + kill switch.
-//
-// LÓGICA DE PRODUTO
-// -----------------
-// Esta tela tem DOIS públicos com urgências opostas, e o desenho segue isso:
-//
-//   A RECEPÇÃO, no meio de um problema. O médico atrasou, a sala encheu, e ela
-//   precisa parar a IA AGORA. Para essa pessoa, o botão vermelho ocupa o topo
-//   inteiro, tem alvo grande e não compete com nada. Um clique, uma confirmação,
-//   pronto. Nada de scroll, nada de escolher unidade, nada de ler.
-//
-//   QUEM CONFIGURA, uma vez. Token, fuso, horário de funcionamento e almoço
-//   ficam embaixo, fora do caminho de quem está com pressa.
-//
-// POR QUE O KILL SWITCH EXISTE
-// ----------------------------
-// A API da franquia não expõe bloqueios de agenda. Quando o médico trava um
-// horário à mão, ele fica invisível para nós e a IA marcaria em cima. Não há
-// conserto por código — o dado não existe. A contenção é humana, e este botão
-// é ela.
-//
-// Por isso a tela mostra `incerto` como categoria própria, em vez de somar aos
-// livres: horário que o paciente desmarcou pode ter virado bloqueio médico.
-// Esconder essa dúvida numa contagem de "livres" seria mentir com número.
-// ============================================================================
-
 import { useCallback, useEffect, useState } from 'react';
 import {
   PiWarningCircleBold,
@@ -45,7 +18,6 @@ import { api } from '../lib/api';
 import { BloquearIcon } from './BloquearIcon';
 import { useUnit } from '../context/UnitContext';
 import type { SpineStatus, SpineSchedulesResponse } from '../types/api';
-
 
 export default function AgendaPanel() {
   const { selectedUnit: unit } = useUnit();
@@ -99,12 +71,6 @@ export default function AgendaPanel() {
   );
 }
 
-/**
- * Esta tela é do dia a dia da recepção. Token, horários da clínica e
- * espelhamento de leads são decisões que se toma uma vez e moram em CRM da
- * franquia — deixá-las aqui enterrava a configuração embaixo do calendário e
- * criava dois lugares salvando o mesmo campo.
- */
 function ParaConfiguracao() {
   return (
     <a
@@ -122,10 +88,6 @@ function ParaConfiguracao() {
     </a>
   );
 }
-
-// ---------------------------------------------------------------------------
-// O botão
-// ---------------------------------------------------------------------------
 
 function KillSwitch({
   unit,
@@ -164,9 +126,6 @@ function KillSwitch({
     >
       <div className="flex flex-wrap items-center justify-between gap-4 p-6">
         <div className="flex items-center gap-4">
-          {/* O indicador pisca só quando está pausado. Piscar no estado normal
-              treinaria a recepção a ignorar o movimento — e aí ele não avisa
-              mais nada quando importa. */}
           <span
             className={`inline-flex h-3.5 w-3.5 rounded-full ${
               pausada ? 'animate-pulse bg-rose-500' : 'bg-emerald-500'
@@ -245,10 +204,6 @@ function KillSwitch({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Agenda do dia
-// ---------------------------------------------------------------------------
-
 function Agenda({
   unit,
   paused,
@@ -263,7 +218,6 @@ function Agenda({
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [salvandoBloco, setSalvandoBloco] = useState<string | null>(null);
-  // Slot escolhido para bloquear, aguardando o motivo.
   const [aBloquear, setABloquear] = useState<{ day: string; time: string } | null>(null);
   const [motivo, setMotivo] = useState('');
   const [ateHora, setAteHora] = useState('');
@@ -286,10 +240,6 @@ function Agenda({
     void buscar();
   }, [buscar]);
 
-  /**
-   * Bloquear é o oposto de pausar: cirúrgico em vez de nuclear. O horário sai
-   * da oferta da I.A. e o resto do dia segue funcionando.
-   */
   async function alternarBloqueio(slot: { day: string; time: string; status: string }) {
     const chave = `${slot.day}-${slot.time}`;
     setSalvandoBloco(chave);
@@ -301,10 +251,6 @@ function Agenda({
         );
         if (b) await api.unblockAgenda(unit.id, b.id);
       } else {
-        // Bloquear ABRE O MODAL em vez de gravar direto. O motivo não é
-        // burocracia: quem vê "14:00 bloqueado" amanhã precisa saber se pode
-        // desfazer. Sem ele, o bloqueio vira mistério e alguém libera na
-        // dúvida — justo o horário que não podia ser oferecido.
         const [h, m] = slot.time.split(':').map(Number);
         const fimMin = h * 60 + m + passoMin;
         setABloquear({ day: slot.day, time: slot.time });
@@ -602,14 +548,6 @@ function Tile({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Bloqueio em lote
-// ---------------------------------------------------------------------------
-// Clicar horário por horário serve pra "das 14h às 15h de quinta". Não serve
-// pra recesso, congresso ou férias: uma semana em blocos de 30 min são ~180
-// cliques. Quem precisa disso e não tem essa tela acaba usando o kill switch,
-// que para a I.A. inteira — inclusive nos dias em que ela poderia atender.
-
 const SEMANA = [
   { n: 1, label: 'Seg' },
   { n: 2, label: 'Ter' },
@@ -795,8 +733,6 @@ function BloqueioEmLote({
             {ocupado ? <PiSpinnerGapBold size={16} className="animate-spin" /> : <BloquearIcon size={16} />}
             Bloquear período
           </button>
-          {/* Desfazer precisa ser tão barato quanto fazer — senão um intervalo
-              digitado errado vira trabalho manual de limpeza. */}
           <button className="btn-ghost" onClick={() => void liberar()} disabled={ocupado}>
             <PiLockSimpleOpenBold size={14} /> Liberar período
           </button>
@@ -809,26 +745,6 @@ function BloqueioEmLote({
   );
 }
 
-
-// ---------------------------------------------------------------------------
-// Espelhar leads no CRM da franquia
-// ---------------------------------------------------------------------------
-// Controle SEPARADO do da agenda, e isso não é preciosismo: consultar a agenda
-// é leitura e não deixa rastro; criar lead é escrita PERMANENTE — a API da
-// franquia não tem exclusão de lead. Ligar a agenda não pode significar, de
-// tabela, começar a escrever no CRM do cliente.
-//
-// Por isso a tela explica ANTES de ligar o que exatamente vai acontecer, e
-// mostra o histórico depois: sem ele, "está sincronizando?" não tem resposta.
-
-// ---------------------------------------------------------------------------
-// ReminderCard — o lembrete de véspera, visível e operável no painel.
-//
-// Antes isso vivia só no banco (reminder_enabled etc.) e ninguém via o que
-// estava ligado. Aqui o operador vê o estado, entende o que o worker faz, e
-// liga/desliga sem depender de dev — e sem poder ligar "no vazio" (o backend
-// recusa ligar sem Salesbot).
-// ---------------------------------------------------------------------------
 function ReminderCard({
   unitId,
   status,
@@ -902,7 +818,6 @@ function ReminderCard({
         </button>
       </div>
 
-      {/* Estado detalhado — o que uma consultoria perguntaria "está configurado?" */}
       <div className="mt-5 grid gap-3 sm:grid-cols-3">
         <Info
           icon={<PiRobotBold size={15} />}

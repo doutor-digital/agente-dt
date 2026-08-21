@@ -1,13 +1,3 @@
-// ============================================================================
-// LeadsBucketModal — drill-down clicável dos KPIs do Dashboard.
-//
-// Abre quando o usuário clica num KPI (não respondido / FDS / handoff /
-// convertido IA / convertido SDR) e lista os leads/conversas que compõem
-// aquele número. Cada linha leva pra aba Conversas com a conversa aberta.
-//
-// API: GET /units/:id/leads-bucket?bucket=<X>&days=<N>
-// ============================================================================
-
 import { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { api } from '../lib/api';
@@ -74,7 +64,6 @@ export function LeadsBucketModal({
   const meta = TITLES[bucket];
 
   function openConversation(conversationId: string) {
-    // Sinal pro App trocar de aba e a ConversationsPanel selecionar a conversa.
     window.dispatchEvent(
       new CustomEvent('app:openConversation', { detail: { conversationId } }),
     );
@@ -92,7 +81,6 @@ export function LeadsBucketModal({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
       >
-        {/* Header */}
         <div className="px-5 py-4 border-b border-zinc-800 flex items-start justify-between gap-4">
           <div>
             <div className="text-base font-semibold text-zinc-100">{meta.title}</div>
@@ -111,7 +99,6 @@ export function LeadsBucketModal({
           </button>
         </div>
 
-        {/* Body */}
         <div className="flex-1 overflow-y-auto">
           {loading && (
             <div className="p-8 text-center text-zinc-500">
@@ -157,7 +144,6 @@ export function LeadsBucketModal({
           )}
         </div>
 
-        {/* Footer */}
         <div className="px-5 py-3 border-t border-zinc-800 text-[10px] text-zinc-600">
           Clique numa linha pra abrir a conversa.
         </div>
