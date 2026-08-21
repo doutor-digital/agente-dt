@@ -348,6 +348,7 @@ model Unit {
   sourcePapel    String? @map("source_papel") @db.Text // Fatos importantes / papel da IA / fluxo
   sourceProdutos String? @map("source_produtos") @db.Text // Produtos, serviços, valores permitidos
   sourceNegocio  String? @map("source_negocio") @db.Text // Visão geral do negócio, contatos, horários
+  sourceDemografia String? @map("source_demografia") @db.Text // Demografia da região/cidade — separada das outras fontes
 
   // AUTO-QUALIFICAÇÃO (Quente/Frio).
   qualificationEnabled Boolean @default(false) @map("qualification_enabled")

@@ -261,7 +261,8 @@ function renderSources(unit: Unit): string {
   const papel = unit.sourcePapel?.trim();
   const produtos = unit.sourceProdutos?.trim();
   const negocio = unit.sourceNegocio?.trim();
-  if (!papel && !produtos && !negocio) return '';
+  const demografia = unit.sourceDemografia?.trim();
+  if (!papel && !produtos && !negocio && !demografia) return '';
 
   // Cabeçalho de PRIORIDADE — instrui a LLM a tratar as Fontes como
   // verdade absoluta. Sem isso a IA dilui a informação ao misturar com
@@ -285,6 +286,19 @@ function renderSources(unit: Unit): string {
   }
   if (negocio) {
     sections.push(xmlBlock('negocio', negocio));
+  }
+  if (demografia) {
+    // Demografia da região — separada de propósito: ajuda a IA a "se situar"
+    // (perfil da cidade, dores comuns, referências locais) sem misturar com os
+    // fatos do negócio. É contexto de fundo, não regra de atendimento.
+    sections.push(
+      xmlBlock(
+        'demografia',
+        'CONTEXTO DA REGIÃO (use pra se situar e falar a língua do paciente local, ' +
+          'NÃO cite números demográficos de cara nem trate como oferta):\n' +
+          demografia,
+      ),
+    );
   }
   return xmlBlock('fontes', sections.join('\n\n'));
 }
@@ -865,6 +879,21 @@ function renderKnockout(unit: Unit): string {
     • Chame aplicar_tag({ tag: "Fora do escopo" }) pra registrar (silencioso).
 - REGRA DE OURO: na menor dúvida, ou havendo QUALQUER sinal de coluna / hérnia
   de disco / dor nas costas irradiando, NÃO descarte — qualifique normal.`,
+  );
+}
+
+// AUTO-CHECAGEM + ABSTENÇÃO (Self-Refine + abstention, arXiv:2303.11366 e afins).
+// Ganho de qualidade que a pesquisa aponta como o maior: a IA confere a própria
+// resposta antes de enviar e, na dúvida, prefere confirmar a inventar. Vale pra
+// toda unidade — é sempre bom não afirmar o que não dá pra confirmar.
+function renderAutoChecagem(_unit: Unit): string {
+  return xmlBlock(
+    'auto_checagem',
+    `(ALTA PRIORIDADE — antes de ENVIAR qualquer resposta, confira em silêncio:)
+- Tem algum VALOR, horário, endereço ou afirmação que eu não consigo confirmar nas <fontes>? Se sim, NÃO afirme — diga que confirma com a equipe ou na avaliação.
+- Prometi algo (horário, agendamento) que a ferramenta ainda NÃO confirmou? Se sim, corrija — nunca dê como certo o que não fechou.
+- É um caso claramente fora do escopo desta clínica? Se sim, acolha e oriente, sem empurrar a consulta.
+Na dúvida, PREFIRA confirmar depois a inventar agora: um "vou confirmar certinho" nunca perde o paciente; uma informação errada, sim.`,
   );
 }
 
@@ -1461,6 +1490,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
     renderQualification(unit),
     renderConversao(unit),
     renderKnockout(unit),
+    renderAutoChecagem(unit),
     renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
@@ -1565,6 +1595,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderQualification(unit),
     renderConversao(unit),
     renderKnockout(unit),
+    renderAutoChecagem(unit),
     renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
@@ -1700,6 +1731,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     renderQualification(unit),
     renderConversao(unit),
     renderKnockout(unit),
+    renderAutoChecagem(unit),
     renderTriage(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),

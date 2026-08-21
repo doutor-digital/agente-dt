@@ -33,6 +33,7 @@ type SourcesDraft = {
   sourcePapel: string;
   sourceProdutos: string;
   sourceNegocio: string;
+  sourceDemografia: string;
 };
 
 const FIELDS: Array<{
@@ -62,6 +63,13 @@ const FIELDS: Array<{
     placeholder:
       'Ex: A Clínica X é especializada em fisioterapia em Araguaína-TO.\n\nEndereço: Av. ..., 754\nWhatsApp: (63) 9126-8895\nInstagram: @...\n\nHORÁRIO HUMANO (Maria Eduarda): seg-sex 7h-19h\nHORÁRIO IA (Sofia): 24/7 — qualifica e agenda fora do expediente.\n\nIMPORTANTE: atendimento particular, sem convênio.',
   },
+  {
+    key: 'sourceDemografia',
+    label: 'Demografia da região (cidade)',
+    hint: 'Contexto da cidade/região pra IA "se situar" e falar a língua do paciente local: perfil da população, dores comuns, referências e bairros. Fica separado das outras fontes — é pano de fundo, não regra de atendimento.',
+    placeholder:
+      'Ex: Canaã dos Carajás/PA — cidade de mineração, ~80 mil habitantes, população jovem e trabalhadora.\n\nMuitos pacientes trabalham na mina (turnos, esforço físico, dores de coluna e articulações).\n\nBairros de referência: Nova Canaã, Cidade Nova...\n\nJeito de falar: direto e acolhedor; a rotina puxada é comum, então valorize praticidade de horário.',
+  },
 ];
 
 function unitToDraft(u: Unit): SourcesDraft {
@@ -69,6 +77,7 @@ function unitToDraft(u: Unit): SourcesDraft {
     sourcePapel: u.sourcePapel ?? '',
     sourceProdutos: u.sourceProdutos ?? '',
     sourceNegocio: u.sourceNegocio ?? '',
+    sourceDemografia: u.sourceDemografia ?? '',
   };
 }
 
@@ -107,6 +116,7 @@ export function FontesPanel() {
         sourcePapel: draft.sourcePapel.trim() || null,
         sourceProdutos: draft.sourceProdutos.trim() || null,
         sourceNegocio: draft.sourceNegocio.trim() || null,
+        sourceDemografia: draft.sourceDemografia.trim() || null,
       });
       setUnit(updated);
       setDraft(unitToDraft(updated));
