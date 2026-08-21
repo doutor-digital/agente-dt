@@ -18,6 +18,7 @@ import type {
   KnowledgeEntry,
   ChangeLogEntry,
   LessonEntry,
+  StrategyLabResult,
   KommoFieldsResponse,
   KommoLossReasonsResponse,
   KommoPipelinesResponse,
@@ -819,6 +820,22 @@ export const api = {
   },
   async deleteLesson(unitId: string, id: string): Promise<void> {
     await http.delete(`/units/${unitId}/lessons/${id}`);
+  },
+  async runStrategyLab(
+    unitId: string,
+    conversationId: string,
+    ownerNote?: string,
+  ): Promise<StrategyLabResult> {
+    const { data } = await http.post<StrategyLabResult>(
+      `/units/${unitId}/strategy-lab`,
+      { conversationId, ownerNote: ownerNote ?? null },
+      // 3 chamadas ao modelo em paralelo: o default de 15s do client é curto.
+      { timeout: 60_000 },
+    );
+    return data;
+  },
+  async escolherEstrategia(unitId: string, runId: string, texto: string): Promise<void> {
+    await http.post(`/units/${unitId}/strategy-lab/${runId}/escolher`, { texto });
   },
   async reflectLessons(unitId: string): Promise<{ proposed: number; analisadas: number }> {
     const { data } = await http.post<{ proposed: number; analisadas: number }>(
