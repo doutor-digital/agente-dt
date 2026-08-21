@@ -1,21 +1,3 @@
-// ============================================================================
-// vision.service.ts — Leitura de imagem via OpenAI (visão).
-//
-// LÓGICA
-// ------
-// Paciente manda foto no WhatsApp (exame, receita, foto da região que dói,
-// comprovante, print, figurinha). O Kommo entrega uma URL do arquivo. Esta
-// função:
-//   1. Baixa a imagem (sem auth; se 401/403, tenta com o token Kommo)
-//   2. Converte pra data URI base64 (a API da OpenAI busca a URL sozinha, mas
-//      URLs do Kommo podem exigir auth — mandar os bytes é mais robusto)
-//   3. Pede pro gpt-4o (visão) DESCREVER objetivamente, sem diagnosticar
-//   4. Devolve a descrição, que o webhook injeta no texto da mensagem
-//
-// Espelha transcription.service (mesma resolução de chave e download).
-// CUSTO: alguns centavos por imagem no gpt-4o-mini.
-// ============================================================================
-
 import axios from 'axios';
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
@@ -24,10 +6,9 @@ import { resolveOpenAIApiKey } from './openai.service.js';
 
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
-/** Modelo de visão. gpt-4o-mini enxerga imagem e é barato. Sobrescrevível por env. */
 const VISION_MODEL = process.env.VISION_MODEL || 'gpt-4o-mini';
 
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // limite prático da API de visão
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 const PROMPT = [
   'Você recebe uma imagem que um paciente enviou no WhatsApp de uma clínica de coluna/hérnia.',
@@ -44,10 +25,6 @@ export interface VisionResult {
   durationMs: number;
 }
 
-/**
- * Baixa uma imagem e devolve uma descrição objetiva via visão. Lança erro se
- * falhar (o webhook trata e segue sem derrubar o turno).
- */
 export async function describeImage(
   unit: Pick<Unit, 'kommoAccessToken' | 'openaiApiKey'>,
   imageUrl: string,
@@ -59,8 +36,6 @@ export async function describeImage(
 
   const t0 = performance.now();
 
-  // 1. Baixa a imagem. Kommo costuma servir público; se vier 401/403, tenta
-  //    com o Bearer da própria conta.
   let buf: Buffer;
   try {
     const r = await axios.get<ArrayBuffer>(imageUrl, {
@@ -92,7 +67,6 @@ export async function describeImage(
   const mime = detectImageMime(buf);
   const dataUri = `data:${mime};base64,${buf.toString('base64')}`;
 
-  // 2. Chama a visão.
   const res = await axios.post<{ choices?: Array<{ message?: { content?: string } }> }>(
     CHAT_URL,
     {
@@ -120,7 +94,6 @@ export async function describeImage(
   return { text, durationMs: Math.round(performance.now() - t0) };
 }
 
-/** Detecta o mime pelos primeiros bytes (magic numbers). Cai pra jpeg. */
 function detectImageMime(buf: Buffer): string {
   if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
   if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)

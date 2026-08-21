@@ -1,13 +1,3 @@
-// ============================================================================
-// LlmCallsPanel — visão "ByteGPT/IA": todas as chamadas à OpenAI.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Lista paginada das LlmCalls da unidade selecionada (ou todas). Mostra
-// modelo, tokens, custo, latência e status. Click revela payload completo
-// (request body + response body) — útil pra debug e auditoria.
-// ============================================================================
-
 import { useEffect, useMemo, useState } from 'react';
 import { Cpu, DollarSign, Loader2, X, Zap } from 'lucide-react';
 import clsx from 'clsx';
@@ -140,7 +130,6 @@ export function LlmCallsPanel() {
         </table>
       </div>
 
-      {/* Drawer de detalhe */}
       {openId && (
         <div
           className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"

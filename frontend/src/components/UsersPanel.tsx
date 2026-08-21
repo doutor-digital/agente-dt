@@ -1,14 +1,3 @@
-// ============================================================================
-// UsersPanel — gestão de admins (super admin convida unit admins).
-//
-// Acesso: só SUPER_ADMIN (a aba some no sidebar pra outros roles e o
-// backend também rejeita).
-//
-// Convite implícito: o super admin cadastra email + role (+ unitId se
-// UNIT_ADMIN). Não envia email — o convidado simplesmente entra com Google
-// usando esse email e a sessão é criada com o role/unit cadastrados.
-// ============================================================================
-
 import { useCallback, useEffect, useState } from 'react';
 import { KeyRound, Loader2, Plus, Save, Trash2, UserCheck, UserX } from 'lucide-react';
 import clsx from 'clsx';

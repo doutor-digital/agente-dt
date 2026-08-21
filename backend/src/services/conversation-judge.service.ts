@@ -1,36 +1,3 @@
-// ============================================================================
-// conversation-judge.service.ts — LLM-as-judge das conversas convertidas.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Quando um lead entra numa etapa de "Ganho" do Kommo, queremos saber se
-// foi MÉRITO do prompt da IA — e se foi, *como* o prompt se saiu nessa
-// conversa específica. Essa service materializa essa pergunta:
-//
-//   1. Lê todas as Messages da Conversation (user + assistant em ordem).
-//   2. Resolve qual `systemPrompt` da Unit estava ATIVO no momento da
-//      conversão. (Usamos o `Unit.systemPrompt` atual — não temos histórico
-//      explícito; se isso virar gargalo, adicionar versionamento via AgentConfig.)
-//   3. Monta um prompt de avaliação estruturado que pede 5 critérios
-//      pontuados 0-10 + um veredito qualitativo curto.
-//   4. Chama `gpt-4o-mini` com response_format=json_object e parseia.
-//   5. Grava ConversationEvaluation (unique por conversationId → idempotente).
-//
-// `promptHash` é sha256 hex do systemPrompt no momento — chave de
-// agrupamento do painel ("este prompt converteu N leads, score médio X").
-//
-// IDEMPOTÊNCIA
-// ------------
-// Se já existe uma ConversationEvaluation pra aquela conversa, NÃO re-roda
-// (custa dinheiro). Pra forçar nova avaliação, deletar a row antiga.
-//
-// FAIL-SOFT
-// ---------
-// Toda a observabilidade (custo, latência) é gravada via LlmCall — mesmo
-// quando o juiz falha. A exceção do juiz é logada mas NÃO sobe pro caller
-// (o webhook do Kommo é quem chama isso em background).
-// ============================================================================
-
 import crypto from 'node:crypto';
 import { ChatOpenAI } from '@langchain/openai';
 import { SystemMessage, HumanMessage, AIMessage } from '@langchain/core/messages';
@@ -40,13 +7,8 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { calculateCost, resolveOpenAIApiKey, recordLlmCall } from './openai.service.js';
 
-// Modelo padrão do juiz — pode ser sobrescrito por env JUDGE_MODEL.
-// Pro MVP, gpt-4o-mini é equilíbrio bom: bom o suficiente pra crítica
-// textual estruturada, custo ~$0.15/$0.6 por M tokens.
 const JUDGE_MODEL = process.env.JUDGE_MODEL ?? 'gpt-4o-mini';
 
-// Critérios do juiz. Adicionar/remover aqui propaga pra UI via API
-// (frontend lê as keys do scores).
 const CRITERIA = [
   { key: 'clareza',   label: 'Clareza',                   desc: 'Mensagens objetivas, sem ambiguidade, jargão controlado.' },
   { key: 'empatia',   label: 'Empatia',                   desc: 'Reconhece a dor/contexto do paciente, valida sentimentos.' },
@@ -71,17 +33,9 @@ export interface JudgeResult {
   verdict: string;
 }
 
-// ---------------------------------------------------------------------------
-// Hash do prompt — chave de agrupamento. Curto pra logs/URLs.
-// ---------------------------------------------------------------------------
-
 export function hashPrompt(prompt: string): string {
   return crypto.createHash('sha256').update(prompt, 'utf8').digest('hex').slice(0, 16);
 }
-
-// ---------------------------------------------------------------------------
-// Monta o prompt do juiz.
-// ---------------------------------------------------------------------------
 
 function buildJudgePrompt(
   systemPrompt: string,
@@ -124,17 +78,12 @@ ${transcriptText}
   return { system, user };
 }
 
-// ---------------------------------------------------------------------------
-// judgeConversation — entrada principal.
-// ---------------------------------------------------------------------------
-
 export async function judgeConversation(params: {
   conversationId: string;
   unit: Unit;
 }): Promise<JudgeResult | null> {
   const { conversationId, unit } = params;
 
-  // Idempotência — já avaliada?
   const existing = await prisma.conversationEvaluation.findUnique({
     where: { conversationId },
     select: { id: true },
@@ -202,7 +151,6 @@ export async function judgeConversation(params: {
     const completionTokens = captured.usage?.completionTokens ?? 0;
     const costUsd = calculateCost(JUDGE_MODEL, promptTokens, completionTokens);
 
-    // Grava LlmCall pra a chamada do juiz aparecer no painel "Chamadas IA".
     void recordLlmCall({
       unitId: unit.id,
       traceId: null,
@@ -264,10 +212,6 @@ export async function judgeConversation(params: {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Parser defensivo — clamp em 0-10, default 0, verdict como string.
-// ---------------------------------------------------------------------------
-
 function parseJudgeOutput(raw: string): { scores: CriterionScores; verdict: string } {
   let parsed: unknown;
   try {
@@ -299,5 +243,4 @@ function averageScore(s: CriterionScores): number {
   return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
 }
 
-// Exportado pra UI saber renderizar os critérios na mesma ordem do backend.
 export const JUDGE_CRITERIA = CRITERIA.map((c) => ({ key: c.key, label: c.label, desc: c.desc }));

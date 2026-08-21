@@ -9,11 +9,6 @@ const STATUS_BADGE = {
   FAILED: 'bg-rose-500/15 text-rose-300 ring-rose-500/30',
 };
 
-/**
- * Console principal — feed vertical animado dos steps do LangGraph.
- * Quando o trace está RUNNING, mostramos um caret piscando no final
- * sugerindo "digitando" (vibe AgentGPT terminal).
- */
 export function ExecutionTrace({ trace }: { trace: TraceDetail | null }) {
   if (!trace) {
     return (
@@ -31,7 +26,6 @@ export function ExecutionTrace({ trace }: { trace: TraceDetail | null }) {
 
   return (
     <main className="flex-1 overflow-y-auto">
-      {/* HEADER do trace */}
       <header className="sticky top-0 z-10 bg-zinc-950/85 backdrop-blur-md border-b border-zinc-800/80 px-6 py-4">
         <div className="flex items-center gap-3 mb-2">
           <span
@@ -70,7 +64,6 @@ export function ExecutionTrace({ trace }: { trace: TraceDetail | null }) {
         </div>
       </header>
 
-      {/* FEED de steps */}
       <div className="px-6 py-6">
         {trace.steps.length === 0 ? (
           <div className="text-xs text-zinc-600">Aguardando primeiro step…</div>

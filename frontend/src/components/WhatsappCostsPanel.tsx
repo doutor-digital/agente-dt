@@ -1,20 +1,3 @@
-// ============================================================================
-// WhatsappCostsPanel — Painel dedicado de custo WhatsApp (Meta Graph API).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Lê /api/units/:id/whatsapp-costs e /api/units/:id/whatsapp-templates,
-// renderiza:
-//   - 3 KPIs (mês, últimos 7 dias, hoje)
-//   - Status do orçamento mensal Meta
-//   - Timeline diária (barras simples, sem dep nova de chart)
-//   - Breakdown por categoria (MARKETING/UTILITY/AUTHENTICATION/SERVICE)
-//   - Breakdown por tipo (REGULAR / FREE_*)
-//   - Top países
-//   - Ranking de templates (funil sent → delivered → read → clicked)
-//   - Botões: Sincronizar agora · Exportar CSV/PDF
-// ============================================================================
-
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -267,7 +250,6 @@ export function WhatsappCostsPanel() {
 
         {costs && (
           <div className="space-y-5">
-            {/* KPIs */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <KpiCard
                 label="No período"
@@ -299,12 +281,10 @@ export function WhatsappCostsPanel() {
               />
             </div>
 
-            {/* Orçamento */}
             {costs.budget.monthlyUsd > 0 && (
               <BudgetBar budget={costs.budget} />
             )}
 
-            {/* Timeline */}
             <section className="rounded-xl bg-zinc-900/40 ring-1 ring-zinc-800/60 p-5">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold text-zinc-100">Custo por dia</h3>
@@ -333,7 +313,6 @@ export function WhatsappCostsPanel() {
               )}
             </section>
 
-            {/* Por categoria + Por tipo */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <BreakdownCard
                 title="Por categoria de cobrança"
@@ -357,7 +336,6 @@ export function WhatsappCostsPanel() {
               />
             </div>
 
-            {/* Países */}
             {costs.byCountry.length > 0 && (
               <BreakdownCard
                 title="Top países"
@@ -371,7 +349,6 @@ export function WhatsappCostsPanel() {
               />
             )}
 
-            {/* Templates */}
             {templates && (
               <section className="rounded-xl bg-zinc-900/40 ring-1 ring-zinc-800/60 p-5">
                 <div className="flex items-center justify-between mb-3">
@@ -427,10 +404,6 @@ export function WhatsappCostsPanel() {
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Building blocks
-// ---------------------------------------------------------------------------
 
 function KpiCard({
   label,

@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import { aplicarGuardrail } from './guardrail.js';
 import type { Unit } from '@prisma/client';
 
-// O guardrail só olha category + os 3 campos de Fontes. Um stub mínimo basta.
 function unit(over: Partial<Unit>): Unit {
   return {
     category: 'saude',

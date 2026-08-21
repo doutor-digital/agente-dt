@@ -81,12 +81,6 @@ function latencyTone(ms: number | null): string {
   return 'text-rose-400';
 }
 
-/**
- * Um "passo" do raciocínio renderizado no feed vertical.
- * Animação Framer Motion controla a entrada (slide+fade) com delay
- * incremental por sequence — assim ao abrir um trace o feed "digita"
- * sozinho de cima pra baixo (vibe terminal AgentGPT).
- */
 export function TraceStep({ step, index }: { step: ExecutionStep; index: number }) {
   const cfg = KIND_STYLE[step.kind];
   const Icon = cfg.icon;
@@ -99,10 +93,8 @@ export function TraceStep({ step, index }: { step: ExecutionStep; index: number 
       transition={{ delay: Math.min(index * 0.06, 0.6), duration: 0.25 }}
       className="relative pl-12 pb-5 last:pb-0"
     >
-      {/* linha tracejada vertical entre nós */}
       <span className="absolute left-[15px] top-7 bottom-0 w-px timeline-line" />
 
-      {/* nó (ícone) */}
       <div
         className={clsx(
           'absolute left-0 top-0.5 w-8 h-8 rounded-lg flex items-center justify-center ring-1',
@@ -112,7 +104,6 @@ export function TraceStep({ step, index }: { step: ExecutionStep; index: number 
         <Icon className={cfg.color} size={16} />
       </div>
 
-      {/* card */}
       <div className="rounded-md border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-900/80 transition">
         <button
           type="button"

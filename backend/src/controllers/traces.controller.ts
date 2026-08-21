@@ -1,28 +1,9 @@
-// ============================================================================
-// traces.controller.ts — API REST consumida pelo dashboard React.
-//
-// LÓGICA DE ENGENHARIA — MULTI-TENANT
-// -----------------------------------
-// O `unitId` que será aplicado vem em duas fontes, com prioridade:
-//   1. Se o user é UNIT_ADMIN → SEMPRE força `req.user.unitId`
-//      (ignora query param — não confia no cliente).
-//   2. Se o user é SUPER_ADMIN → respeita o query param (`?unitId=...`).
-//      Sem o query, vê tudo (visão admin global).
-//
-// Endpoints:
-//   GET /api/traces?unitId=...&limit=...
-//   GET /api/traces/:id
-//   GET /api/stats?unitId=...
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 
-// Resolve o unitId efetivo respeitando role do user.
-// Retorna `undefined` se super admin pediu visão global (sem filtro).
 function resolveUnitFilter(req: Request): string | undefined {
   if (req.user?.role === 'UNIT_ADMIN') {
-    return req.user.unitId ?? '__never_match__'; // unit_admin sem unit = vê nada
+    return req.user.unitId ?? '__never_match__';
   }
   return (req.query.unitId as string | undefined) ?? undefined;
 }
@@ -78,7 +59,6 @@ export async function getTrace(req: Request, res: Response): Promise<void> {
     res.status(404).json({ error: 'trace not found' });
     return;
   }
-  // UNIT_ADMIN só vê traces da própria unit.
   if (req.user?.role === 'UNIT_ADMIN' && trace.unitId !== req.user.unitId) {
     res.status(404).json({ error: 'trace not found' });
     return;

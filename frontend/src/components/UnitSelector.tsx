@@ -1,10 +1,3 @@
-// ============================================================================
-// UnitSelector — o "project switcher" do console: escolhe o agente ativo.
-//
-// Fica no breadcrumb do TopBar. Toda view filha reage à troca via UnitContext.
-// Com muitos agentes o dropdown ganha campo de busca (aparece a partir de 6).
-// ============================================================================
-
 import { Bot, Check, ChevronsUpDown, Globe, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';

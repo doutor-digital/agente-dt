@@ -1,20 +1,3 @@
-// ============================================================================
-// actions.service.ts — CRUD de UnitAction (regras "quando → faça").
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Cada UnitAction é uma regra com 1 condição em PT-BR + 1 ou MAIS ações que
-// disparam juntas. O prompt-composer chama listEnabledActions() e renderiza
-// como item da seção "AÇÕES CONFIGURADAS".
-//
-// FORMATO DE STORAGE
-// ------------------
-// Campo `actions` (Json) é o canônico: Array<{ kind, params }>.
-// Os campos legados `actionKind` / `actionParams` permanecem só pra rollback;
-// `readActions()` cai pra eles quando `actions` está vazio (regras antigas
-// não migradas pelo backfill).
-// ============================================================================
-
 import type { UnitAction } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 
@@ -42,7 +25,6 @@ export interface AddTagParams {
 export interface MoveStageParams {
   statusId: number;
   pipelineId?: number;
-  /** Nome legível da etapa, salvo só pra mostrar no painel/prompt sem refetch. */
   statusLabel?: string;
 }
 
@@ -51,28 +33,19 @@ export interface TransferParams {
 }
 
 export interface SummarizeToNoteParams {
-  /** Dica opcional do que destacar no resumo (ex: "foco em queixa/sintomas"). */
   focusHint?: string;
 }
 
 export interface SendMessageParams {
-  /** Texto exato que a IA deve enviar quando esta ação dispara. */
   text: string;
 }
 
 export interface RespondWithIntentParams {
-  /**
-   * Diretriz em PT-BR que a IA segue pra compor a resposta — sem reproduzir
-   * literal, mas respeitando o conteúdo/intenção. Pode incluir lógica condicional
-   * ("se paciente pedir alívio imediato, diga X"). Diferente de send_message
-   * que é verbatim.
-   */
   instruction: string;
 }
 
 export interface CreateTaskParams {
   text: string;
-  /** Minutos a partir de "agora" pro deadline. Ex: 1440 = 1 dia. */
   deadlineMinutes: number;
   responsibleUserId?: number;
   responsibleUserName?: string;
@@ -84,12 +57,10 @@ export interface AssignResponsibleParams {
 }
 
 export interface RemoveTagParams {
-  /** Apenas 1 tag por step (consistente com o tool schema). */
   tag: string;
 }
 
 export interface SetLeadValueParams {
-  /** Preço em reais (number). 1500 = R$1500,00. */
   price: number;
 }
 
@@ -107,32 +78,16 @@ export interface MovePipelineParams {
 }
 
 export interface PauseAiParams {
-  /** Opcional. Se preenchido, também move o lead pra essa etapa quando pausar. */
   moveToStageId?: number;
   moveToPipelineId?: number;
   moveToStageLabel?: string;
 }
 
-/**
- * Pausa a IA quando o lead JÁ ESTÁ em uma das etapas listadas.
- *
- * NÃO é uma ação reativa (não vai pro prompt). É um GUARD avaliado no webhook
- * controller antes de invocar o agent: se o status atual do lead bate com
- * algum item de `stages`, pula `graph.invoke`. Use pra silenciar a IA em
- * etapas terminais (fechado/won/lost/handoff humano/etc.) sem precisar marcar
- * o campo "IA Pausada" lead a lead.
- *
- * `stages` deve ter pelo menos 1 item. `pipelineId` é opcional — quando
- * omitido, só `statusId` é comparado (útil quando IDs de etapa são únicos
- * globalmente na conta).
- */
 export interface PauseInStagesParams {
   stages: Array<{
     statusId: number;
     pipelineId?: number;
-    /** Nome amigável da etapa pra UI (não usado pela lógica). */
     statusLabel?: string;
-    /** Nome do pipeline pra UI. */
     pipelineLabel?: string;
   }>;
 }
@@ -154,7 +109,6 @@ export type ActionParams =
   | PauseInStagesParams
   | Record<string, never>;
 
-/** Uma ação dentro de uma regra (array element). */
 export interface ActionStep {
   kind: ActionKind;
   params: ActionParams;
@@ -167,11 +121,6 @@ export interface ActionInput {
   enabled?: boolean;
 }
 
-/**
- * Lê o array de ações de uma UnitAction. Se `actions` estiver vazio (regra
- * antiga sem backfill), cai pro par legado `actionKind` + `actionParams`.
- * Garante que o resto do código nunca precise lidar com 2 formatos.
- */
 export function readActions(row: UnitAction): ActionStep[] {
   const arr = Array.isArray(row.actions) ? (row.actions as unknown as ActionStep[]) : [];
   if (arr.length > 0) return arr;
@@ -206,9 +155,6 @@ export async function createAction(unitId: string, input: ActionInput): Promise<
       unitId,
       conditionDescription: input.conditionDescription,
       actions: input.actions as unknown as object,
-      // Legados: ficam com a primeira ação do array só pra preservar
-      // compatibilidade temporária (read paths que ainda dependem disso
-      // não quebram caso a migração ainda esteja sendo aplicada em prod).
       actionKind: input.actions[0]?.kind ?? '',
       actionParams: (input.actions[0]?.params as object) ?? {},
       notes: input.notes ?? null,
@@ -241,10 +187,6 @@ export async function updateAction(
 export async function deleteAction(actionId: string): Promise<void> {
   await prisma.unitAction.delete({ where: { id: actionId } });
 }
-
-// ===========================================================================
-// GlobalAction — regras que valem pra TODAS as units (gerenciadas por admin).
-// ===========================================================================
 
 import type { GlobalAction } from '@prisma/client';
 
@@ -295,7 +237,6 @@ export async function deleteGlobalAction(actionId: string): Promise<void> {
   await prisma.globalAction.delete({ where: { id: actionId } });
 }
 
-/** Lê o array de ações de uma GlobalAction. Mesma semântica do readActions de UnitAction. */
 export function readGlobalActionSteps(row: GlobalAction): ActionStep[] {
   const raw = row.actions;
   if (Array.isArray(raw) && raw.length > 0) {
@@ -304,14 +245,6 @@ export function readGlobalActionSteps(row: GlobalAction): ActionStep[] {
   return [];
 }
 
-/**
- * Agrega o conjunto de etapas em que a IA deve ser pausada, lendo TODAS as
- * GlobalActions habilitadas com pelo menos um step kind === 'pause_in_stages'.
- *
- * Resultado: Set<"pipelineId:statusId" | "*:statusId"> pra lookup O(1) no
- * guard do webhook. Usar string composta evita confusão com IDs duplicados
- * entre pipelines.
- */
 export async function getPausedStagesGlobalSet(): Promise<Set<string>> {
   const globals = await prisma.globalAction.findMany({
     where: { enabled: true },

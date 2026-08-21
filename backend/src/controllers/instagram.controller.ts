@@ -1,29 +1,3 @@
-// ============================================================================
-// instagram.controller.ts — Webhook de comentários do Instagram (multi-tenant).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-//   GET  /webhooks/{slug}/instagram   → handshake (hub.challenge)
-//   POST /webhooks/{slug}/instagram   → evento de comentário
-//
-// ACK EM ≤5s, igual aos outros webhooks da Meta: respondemos 200 antes de
-// pensar, e o trabalho segue em background.
-//
-// TRÊS CAMADAS DE PROTEÇÃO ANTES DE ESCREVER EM PÚBLICO
-// -----------------------------------------------------
-// Errar aqui é diferente de errar no WhatsApp: no privado, um erro é visto
-// por uma pessoa; no comentário, por todo mundo, e fica no perfil. Então:
-//
-//   1. LOOP GUARD — se o autor do comentário é a própria conta, ignora. Sem
-//      isso, a resposta que a gente publica volta como webhook, o agente
-//      responde a si mesmo, e isso não tem fim.
-//   2. DEDUP DURÁVEL — `commentId` é unique no banco. O cache em memória
-//      (claimMessageId) pega o retry rápido; o unique pega o retry que chega
-//      depois de um deploy, quando o cache já morreu.
-//   3. DRY RUN — ligado por padrão. O agente faz tudo e grava o rascunho sem
-//      publicar. Vira fila de aprovação até a unidade confiar no texto.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import type { Unit } from '@prisma/client';
@@ -40,20 +14,11 @@ import {
 } from '../services/instagram.service.js';
 import { decideOnComment } from '../services/comment-agent.service.js';
 
-/**
- * Abaixo disso a gente não publica nada, nem fora do dry run. Uma classificação
- * incerta que vira resposta pública é exatamente o caso que a fila de aprovação
- * existe pra pegar.
- */
 const MIN_CONFIDENCE_TO_PUBLISH = 0.6;
 
 interface RawBodyRequest extends Request {
   rawBody?: Buffer;
 }
-
-// ---------------------------------------------------------------------------
-// GET — handshake.
-// ---------------------------------------------------------------------------
 
 function platformOf(req: Request): SocialPlatform {
   return req.path.endsWith('/facebook') ? 'facebook' : 'instagram';
@@ -88,10 +53,6 @@ export async function handleInstagramVerify(req: Request, res: Response): Promis
   }
   res.status(200).send(result.challenge ?? '');
 }
-
-// ---------------------------------------------------------------------------
-// POST — comentários.
-// ---------------------------------------------------------------------------
 
 export async function handleInstagramWebhook(req: Request, res: Response): Promise<void> {
   const slug = String(req.params.unitSlug ?? '');
@@ -146,10 +107,6 @@ export async function handleInstagramWebhook(req: Request, res: Response): Promi
   }
 }
 
-// ---------------------------------------------------------------------------
-// Processamento de um comentário.
-// ---------------------------------------------------------------------------
-
 async function processComment(
   unit: Unit,
   c: IgInboundComment,
@@ -157,14 +114,11 @@ async function processComment(
 ): Promise<void> {
   const cfg = platformConfig(unit, platform);
 
-  // 1. LOOP GUARD. A resposta que publicamos chega de volta como comentário.
   if (cfg.accountId && c.authorId && c.authorId === cfg.accountId) {
     logger.debug({ commentId: c.commentId }, 'instagram: comentário nosso — ignorando');
     return;
   }
 
-  // 2. DEDUP DURÁVEL. `create` com commentId unique: se já existe, a Meta
-  // reentregou e a gente para aqui — sem responder duas vezes em público.
   let row;
   try {
     row = await prisma.instagramComment.create({
@@ -201,7 +155,6 @@ async function processComment(
     privateReply: decision.privateReply,
   };
 
-  // Spam: registra e não responde. Responder spam em público dá palco.
   if (decision.category === 'SPAM') {
     await prisma.instagramComment.update({
       where: { id: row.id },
@@ -239,14 +192,6 @@ async function processComment(
     platform,
   );
 }
-
-// ---------------------------------------------------------------------------
-// Publicação — usada pelo fluxo automático E pela aprovação manual.
-// ---------------------------------------------------------------------------
-// A resposta pública sai ANTES do DM de propósito. Se o DM falhar (permissão
-// faltando, janela de 7 dias vencida), pelo menos a pessoa foi respondida em
-// público. O contrário deixaria um DM órfão dizendo "te respondi ali" apontando
-// pra um comentário sem resposta nenhuma.
 
 export async function publishDecision(
   unit: Unit,
@@ -291,11 +236,6 @@ export async function publishDecision(
   }
 }
 
-// ---------------------------------------------------------------------------
-// API do painel — fila de moderação.
-// ---------------------------------------------------------------------------
-// Rotas sob /units/:id/instagram/*, protegidas por requireUnitAccess no router.
-
 const listQuerySchema = z.object({
   status: z.enum(['PENDING', 'SENT', 'SKIPPED', 'FAILED']).optional(),
   platform: z.enum(['instagram', 'facebook']).default('instagram'),
@@ -331,8 +271,6 @@ export async function listInstagramCommentsHandler(req: Request, res: Response):
 }
 
 const approveSchema = z.object({
-  // O moderador pode corrigir os dois textos antes de publicar. É o ponto
-  // inteiro da fila: o rascunho é sugestão, não decisão.
   publicReply: z.string().max(2000).nullable().optional(),
   privateReply: z.string().max(4000).nullable().optional(),
 });
@@ -352,8 +290,6 @@ export async function approveInstagramCommentHandler(req: Request, res: Response
     return;
   }
   if (row.status === 'SENT') {
-    // Não é erro do usuário, é corrida entre dois moderadores. Mas publicar
-    // de novo criaria uma segunda resposta pública no mesmo comentário.
     res.status(409).json({ error: 'already_sent' });
     return;
   }

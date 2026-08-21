@@ -1,0 +1,1318 @@
+{
+  "name": "TMP — Provisionar campos/tags CTWA por unidade",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ctwa-provisionar-tmp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh",
+      "name": "Disparar",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "ctwa-provisionar-tmp"
+    },
+    {
+      "parameters": {
+        "url": "https://doutorherniaacailandia.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "ler-acailandia",
+      "name": "Ler Açailândia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "DqLADDQI9UEv6NiF",
+          "name": "Kommo Açailândia"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Descobre o grupo do \"⌂ Campanha\" desta conta e monta o corpo da criacao.\n// Criar ja com group_id evita um PATCH extra depois.\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\nfunction normalizar(s) {\n  return String(s || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9_]+/gi, ' ').trim().toLowerCase();\n}\nconst campos = corpo($input.first().json)?._embedded?.custom_fields || [];\nconst porNome = new Map(campos.map((c) => [normalizar(c.name), c]));\nconst referencia = porNome.get(normalizar('⌂ Campanha'));\nconst grupo = referencia?.group_id ?? null;\n\nconst desejados = [\n  { nome: '⌂ Último anúncio', tipo: 'text' },\n  { nome: '⌂ Cliques no anúncio', tipo: 'numeric' },\n];\n// Idempotente: se ja existir (rodada anterior, ou criado na mao), nao recria.\nconst criar = desejados\n  .filter((d) => !porNome.has(normalizar(d.nome)))\n  .map((d) => (grupo ? { name: d.nome, type: d.tipo, group_id: grupo } : { name: d.nome, type: d.tipo }));\n\nconst jaExistiam = desejados\n  .filter((d) => porNome.has(normalizar(d.nome)))\n  .map((d) => d.nome + ' (' + porNome.get(normalizar(d.nome)).id + ')');\n\nreturn [{ json: { unidade: 'acailandia', grupo, criar, jaExistiam, precisaCriar: criar.length > 0 } }];"
+      },
+      "id": "prep-acailandia",
+      "name": "Preparar Açailândia",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://doutorherniaacailandia.kommo.com/api/v4/leads/custom_fields",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.criar) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "criar-acailandia",
+      "name": "Criar Açailândia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        320
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "DqLADDQI9UEv6NiF",
+          "name": "Kommo Açailândia"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://doutorherniaacailandia.kommo.com/api/v4/leads/tags",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "[{\"name\":\"Origem: Anuncio pago\"},{\"name\":\"Origem: Organico\"}]",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "tags-acailandia",
+      "name": "Tags Açailândia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        480
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "DqLADDQI9UEv6NiF",
+          "name": "Kommo Açailândia"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://araguainadoutorhernia.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "ler-araguaina",
+      "name": "Ler Araguaína",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "QzoiphPGyGWg5dGQ",
+          "name": "Kommo Araguaína"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Descobre o grupo do \"⌂ Campanha\" desta conta e monta o corpo da criacao.\n// Criar ja com group_id evita um PATCH extra depois.\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\nfunction normalizar(s) {\n  return String(s || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9_]+/gi, ' ').trim().toLowerCase();\n}\nconst campos = corpo($input.first().json)?._embedded?.custom_fields || [];\nconst porNome = new Map(campos.map((c) => [normalizar(c.name), c]));\nconst referencia = porNome.get(normalizar('⌂ Campanha'));\nconst grupo = referencia?.group_id ?? null;\n\nconst desejados = [\n  { nome: '⌂ Último anúncio', tipo: 'text' },\n  { nome: '⌂ Cliques no anúncio', tipo: 'numeric' },\n];\n// Idempotente: se ja existir (rodada anterior, ou criado na mao), nao recria.\nconst criar = desejados\n  .filter((d) => !porNome.has(normalizar(d.nome)))\n  .map((d) => (grupo ? { name: d.nome, type: d.tipo, group_id: grupo } : { name: d.nome, type: d.tipo }));\n\nconst jaExistiam = desejados\n  .filter((d) => porNome.has(normalizar(d.nome)))\n  .map((d) => d.nome + ' (' + porNome.get(normalizar(d.nome)).id + ')');\n\nreturn [{ json: { unidade: 'araguaina', grupo, criar, jaExistiam, precisaCriar: criar.length > 0 } }];"
+      },
+      "id": "prep-araguaina",
+      "name": "Preparar Araguaína",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://araguainadoutorhernia.kommo.com/api/v4/leads/custom_fields",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.criar) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "criar-araguaina",
+      "name": "Criar Araguaína",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        320
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "QzoiphPGyGWg5dGQ",
+          "name": "Kommo Araguaína"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://araguainadoutorhernia.kommo.com/api/v4/leads/tags",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "[{\"name\":\"Origem: Anuncio pago\"},{\"name\":\"Origem: Organico\"}]",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "tags-araguaina",
+      "name": "Tags Araguaína",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        480
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "QzoiphPGyGWg5dGQ",
+          "name": "Kommo Araguaína"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://doutorherniabalsas.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "ler-balsas",
+      "name": "Ler Balsas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "7kVS4ZItRvWsZ9Rc",
+          "name": "Kommo Balsas"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Descobre o grupo do \"⌂ Campanha\" desta conta e monta o corpo da criacao.\n// Criar ja com group_id evita um PATCH extra depois.\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\nfunction normalizar(s) {\n  return String(s || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9_]+/gi, ' ').trim().toLowerCase();\n}\nconst campos = corpo($input.first().json)?._embedded?.custom_fields || [];\nconst porNome = new Map(campos.map((c) => [normalizar(c.name), c]));\nconst referencia = porNome.get(normalizar('⌂ Campanha'));\nconst grupo = referencia?.group_id ?? null;\n\nconst desejados = [\n  { nome: '⌂ Último anúncio', tipo: 'text' },\n  { nome: '⌂ Cliques no anúncio', tipo: 'numeric' },\n];\n// Idempotente: se ja existir (rodada anterior, ou criado na mao), nao recria.\nconst criar = desejados\n  .filter((d) => !porNome.has(normalizar(d.nome)))\n  .map((d) => (grupo ? { name: d.nome, type: d.tipo, group_id: grupo } : { name: d.nome, type: d.tipo }));\n\nconst jaExistiam = desejados\n  .filter((d) => porNome.has(normalizar(d.nome)))\n  .map((d) => d.nome + ' (' + porNome.get(normalizar(d.nome)).id + ')');\n\nreturn [{ json: { unidade: 'balsas', grupo, criar, jaExistiam, precisaCriar: criar.length > 0 } }];"
+      },
+      "id": "prep-balsas",
+      "name": "Preparar Balsas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://doutorherniabalsas.kommo.com/api/v4/leads/custom_fields",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.criar) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "criar-balsas",
+      "name": "Criar Balsas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        320
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "7kVS4ZItRvWsZ9Rc",
+          "name": "Kommo Balsas"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://doutorherniabalsas.kommo.com/api/v4/leads/tags",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "[{\"name\":\"Origem: Anuncio pago\"},{\"name\":\"Origem: Organico\"}]",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "tags-balsas",
+      "name": "Tags Balsas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        480
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "7kVS4ZItRvWsZ9Rc",
+          "name": "Kommo Balsas"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://doutorherniacanaa.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "ler-canaa",
+      "name": "Ler Canaã",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "8W38EQwnQoHBaWtM",
+          "name": "Kommo Canaã"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Descobre o grupo do \"⌂ Campanha\" desta conta e monta o corpo da criacao.\n// Criar ja com group_id evita um PATCH extra depois.\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\nfunction normalizar(s) {\n  return String(s || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9_]+/gi, ' ').trim().toLowerCase();\n}\nconst campos = corpo($input.first().json)?._embedded?.custom_fields || [];\nconst porNome = new Map(campos.map((c) => [normalizar(c.name), c]));\nconst referencia = porNome.get(normalizar('⌂ Campanha'));\nconst grupo = referencia?.group_id ?? null;\n\nconst desejados = [\n  { nome: '⌂ Último anúncio', tipo: 'text' },\n  { nome: '⌂ Cliques no anúncio', tipo: 'numeric' },\n];\n// Idempotente: se ja existir (rodada anterior, ou criado na mao), nao recria.\nconst criar = desejados\n  .filter((d) => !porNome.has(normalizar(d.nome)))\n  .map((d) => (grupo ? { name: d.nome, type: d.tipo, group_id: grupo } : { name: d.nome, type: d.tipo }));\n\nconst jaExistiam = desejados\n  .filter((d) => porNome.has(normalizar(d.nome)))\n  .map((d) => d.nome + ' (' + porNome.get(normalizar(d.nome)).id + ')');\n\nreturn [{ json: { unidade: 'canaa', grupo, criar, jaExistiam, precisaCriar: criar.length > 0 } }];"
+      },
+      "id": "prep-canaa",
+      "name": "Preparar Canaã",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://doutorherniacanaa.kommo.com/api/v4/leads/custom_fields",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.criar) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "criar-canaa",
+      "name": "Criar Canaã",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        320
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "8W38EQwnQoHBaWtM",
+          "name": "Kommo Canaã"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://doutorherniacanaa.kommo.com/api/v4/leads/tags",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "[{\"name\":\"Origem: Anuncio pago\"},{\"name\":\"Origem: Organico\"}]",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "tags-canaa",
+      "name": "Tags Canaã",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        480
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "8W38EQwnQoHBaWtM",
+          "name": "Kommo Canaã"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://marabadoutorhernia.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "ler-maraba",
+      "name": "Ler Marabá",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "OlXyNeejUa9C25Lq",
+          "name": "Kommo Marabá"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Descobre o grupo do \"⌂ Campanha\" desta conta e monta o corpo da criacao.\n// Criar ja com group_id evita um PATCH extra depois.\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\nfunction normalizar(s) {\n  return String(s || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9_]+/gi, ' ').trim().toLowerCase();\n}\nconst campos = corpo($input.first().json)?._embedded?.custom_fields || [];\nconst porNome = new Map(campos.map((c) => [normalizar(c.name), c]));\nconst referencia = porNome.get(normalizar('⌂ Campanha'));\nconst grupo = referencia?.group_id ?? null;\n\nconst desejados = [\n  { nome: '⌂ Último anúncio', tipo: 'text' },\n  { nome: '⌂ Cliques no anúncio', tipo: 'numeric' },\n];\n// Idempotente: se ja existir (rodada anterior, ou criado na mao), nao recria.\nconst criar = desejados\n  .filter((d) => !porNome.has(normalizar(d.nome)))\n  .map((d) => (grupo ? { name: d.nome, type: d.tipo, group_id: grupo } : { name: d.nome, type: d.tipo }));\n\nconst jaExistiam = desejados\n  .filter((d) => porNome.has(normalizar(d.nome)))\n  .map((d) => d.nome + ' (' + porNome.get(normalizar(d.nome)).id + ')');\n\nreturn [{ json: { unidade: 'maraba', grupo, criar, jaExistiam, precisaCriar: criar.length > 0 } }];"
+      },
+      "id": "prep-maraba",
+      "name": "Preparar Marabá",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://marabadoutorhernia.kommo.com/api/v4/leads/custom_fields",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.criar) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "criar-maraba",
+      "name": "Criar Marabá",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        320
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "OlXyNeejUa9C25Lq",
+          "name": "Kommo Marabá"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://marabadoutorhernia.kommo.com/api/v4/leads/tags",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "[{\"name\":\"Origem: Anuncio pago\"},{\"name\":\"Origem: Organico\"}]",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "tags-maraba",
+      "name": "Tags Marabá",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        480
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "OlXyNeejUa9C25Lq",
+          "name": "Kommo Marabá"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://parauapebasdoutorhernia.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "ler-parauapebas",
+      "name": "Ler Parauapebas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "uDAqF7NwhVpJaVS0",
+          "name": "Kommo Parauapebas"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Descobre o grupo do \"⌂ Campanha\" desta conta e monta o corpo da criacao.\n// Criar ja com group_id evita um PATCH extra depois.\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\nfunction normalizar(s) {\n  return String(s || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9_]+/gi, ' ').trim().toLowerCase();\n}\nconst campos = corpo($input.first().json)?._embedded?.custom_fields || [];\nconst porNome = new Map(campos.map((c) => [normalizar(c.name), c]));\nconst referencia = porNome.get(normalizar('⌂ Campanha'));\nconst grupo = referencia?.group_id ?? null;\n\nconst desejados = [\n  { nome: '⌂ Último anúncio', tipo: 'text' },\n  { nome: '⌂ Cliques no anúncio', tipo: 'numeric' },\n];\n// Idempotente: se ja existir (rodada anterior, ou criado na mao), nao recria.\nconst criar = desejados\n  .filter((d) => !porNome.has(normalizar(d.nome)))\n  .map((d) => (grupo ? { name: d.nome, type: d.tipo, group_id: grupo } : { name: d.nome, type: d.tipo }));\n\nconst jaExistiam = desejados\n  .filter((d) => porNome.has(normalizar(d.nome)))\n  .map((d) => d.nome + ' (' + porNome.get(normalizar(d.nome)).id + ')');\n\nreturn [{ json: { unidade: 'parauapebas', grupo, criar, jaExistiam, precisaCriar: criar.length > 0 } }];"
+      },
+      "id": "prep-parauapebas",
+      "name": "Preparar Parauapebas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://parauapebasdoutorhernia.kommo.com/api/v4/leads/custom_fields",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.criar) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "criar-parauapebas",
+      "name": "Criar Parauapebas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        320
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "uDAqF7NwhVpJaVS0",
+          "name": "Kommo Parauapebas"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://parauapebasdoutorhernia.kommo.com/api/v4/leads/tags",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "[{\"name\":\"Origem: Anuncio pago\"},{\"name\":\"Origem: Organico\"}]",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "tags-parauapebas",
+      "name": "Tags Parauapebas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        480
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "uDAqF7NwhVpJaVS0",
+          "name": "Kommo Parauapebas"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://doutorherniaporto.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "ler-porto",
+      "name": "Ler Porto Nacional",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "0pmkejndWKuiPTZC",
+          "name": "Kommo Porto Nacional"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Descobre o grupo do \"⌂ Campanha\" desta conta e monta o corpo da criacao.\n// Criar ja com group_id evita um PATCH extra depois.\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\nfunction normalizar(s) {\n  return String(s || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9_]+/gi, ' ').trim().toLowerCase();\n}\nconst campos = corpo($input.first().json)?._embedded?.custom_fields || [];\nconst porNome = new Map(campos.map((c) => [normalizar(c.name), c]));\nconst referencia = porNome.get(normalizar('⌂ Campanha'));\nconst grupo = referencia?.group_id ?? null;\n\nconst desejados = [\n  { nome: '⌂ Último anúncio', tipo: 'text' },\n  { nome: '⌂ Cliques no anúncio', tipo: 'numeric' },\n];\n// Idempotente: se ja existir (rodada anterior, ou criado na mao), nao recria.\nconst criar = desejados\n  .filter((d) => !porNome.has(normalizar(d.nome)))\n  .map((d) => (grupo ? { name: d.nome, type: d.tipo, group_id: grupo } : { name: d.nome, type: d.tipo }));\n\nconst jaExistiam = desejados\n  .filter((d) => porNome.has(normalizar(d.nome)))\n  .map((d) => d.nome + ' (' + porNome.get(normalizar(d.nome)).id + ')');\n\nreturn [{ json: { unidade: 'porto', grupo, criar, jaExistiam, precisaCriar: criar.length > 0 } }];"
+      },
+      "id": "prep-porto",
+      "name": "Preparar Porto Nacional",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://doutorherniaporto.kommo.com/api/v4/leads/custom_fields",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.criar) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "criar-porto",
+      "name": "Criar Porto Nacional",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        320
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "0pmkejndWKuiPTZC",
+          "name": "Kommo Porto Nacional"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://doutorherniaporto.kommo.com/api/v4/leads/tags",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "[{\"name\":\"Origem: Anuncio pago\"},{\"name\":\"Origem: Organico\"}]",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "tags-porto",
+      "name": "Tags Porto Nacional",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        480
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "0pmkejndWKuiPTZC",
+          "name": "Kommo Porto Nacional"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://drherniaserra.kommo.com/api/v4/leads/custom_fields?limit=250",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "ler-serra",
+      "name": "Ler Serra",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        0
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "q2R9WqjWa9HCGkH4",
+          "name": "Kommo Serra"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Descobre o grupo do \"⌂ Campanha\" desta conta e monta o corpo da criacao.\n// Criar ja com group_id evita um PATCH extra depois.\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\nfunction normalizar(s) {\n  return String(s || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9_]+/gi, ' ').trim().toLowerCase();\n}\nconst campos = corpo($input.first().json)?._embedded?.custom_fields || [];\nconst porNome = new Map(campos.map((c) => [normalizar(c.name), c]));\nconst referencia = porNome.get(normalizar('⌂ Campanha'));\nconst grupo = referencia?.group_id ?? null;\n\nconst desejados = [\n  { nome: '⌂ Último anúncio', tipo: 'text' },\n  { nome: '⌂ Cliques no anúncio', tipo: 'numeric' },\n];\n// Idempotente: se ja existir (rodada anterior, ou criado na mao), nao recria.\nconst criar = desejados\n  .filter((d) => !porNome.has(normalizar(d.nome)))\n  .map((d) => (grupo ? { name: d.nome, type: d.tipo, group_id: grupo } : { name: d.nome, type: d.tipo }));\n\nconst jaExistiam = desejados\n  .filter((d) => porNome.has(normalizar(d.nome)))\n  .map((d) => d.nome + ' (' + porNome.get(normalizar(d.nome)).id + ')');\n\nreturn [{ json: { unidade: 'serra', grupo, criar, jaExistiam, precisaCriar: criar.length > 0 } }];"
+      },
+      "id": "prep-serra",
+      "name": "Preparar Serra",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://drherniaserra.kommo.com/api/v4/leads/custom_fields",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.criar) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "criar-serra",
+      "name": "Criar Serra",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        320
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "q2R9WqjWa9HCGkH4",
+          "name": "Kommo Serra"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://drherniaserra.kommo.com/api/v4/leads/tags",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "[{\"name\":\"Origem: Anuncio pago\"},{\"name\":\"Origem: Organico\"}]",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "tags-serra",
+      "name": "Tags Serra",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        480
+      ],
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "q2R9WqjWa9HCGkH4",
+          "name": "Kommo Serra"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ALVOS = [{\"slug\":\"acailandia\",\"nome\":\"Açailândia\"},{\"slug\":\"araguaina\",\"nome\":\"Araguaína\"},{\"slug\":\"balsas\",\"nome\":\"Balsas\"},{\"slug\":\"canaa\",\"nome\":\"Canaã\"},{\"slug\":\"maraba\",\"nome\":\"Marabá\"},{\"slug\":\"parauapebas\",\"nome\":\"Parauapebas\"},{\"slug\":\"porto\",\"nome\":\"Porto Nacional\"},{\"slug\":\"serra\",\"nome\":\"Serra\"}];\nfunction corpo(j) {\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j?.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j || {};\n}\nconst out = {};\nfor (const u of ALVOS) {\n  const prep = $('Preparar ' + u.nome).first().json;\n  const criado = corpo($('Criar ' + u.nome).first().json);\n  const tags = corpo($('Tags ' + u.nome).first().json);\n  out[u.slug] = {\n    grupo: prep.grupo,\n    jaExistiam: prep.jaExistiam,\n    criados: (criado?._embedded?.custom_fields || []).map((c) => c.id + ' | ' + c.name + ' | grupo ' + c.group_id),\n    erroCriar: prep.precisaCriar ? (criado?.detail || criado?.title || null) : 'nada a criar',\n    tags: (tags?._embedded?.tags || []).map((t) => t.id + ' | ' + t.name),\n    erroTags: tags?.detail || tags?.title || null,\n  };\n}\nreturn [{ json: out }];"
+      },
+      "id": "res",
+      "name": "Resumo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "resp",
+      "name": "Responder",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2000,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Disparar": {
+      "main": [
+        [
+          {
+            "node": "Ler Açailândia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Açailândia": {
+      "main": [
+        [
+          {
+            "node": "Preparar Açailândia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Açailândia": {
+      "main": [
+        [
+          {
+            "node": "Criar Açailândia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Açailândia": {
+      "main": [
+        [
+          {
+            "node": "Tags Açailândia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tags Açailândia": {
+      "main": [
+        [
+          {
+            "node": "Ler Araguaína",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Araguaína": {
+      "main": [
+        [
+          {
+            "node": "Preparar Araguaína",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Araguaína": {
+      "main": [
+        [
+          {
+            "node": "Criar Araguaína",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Araguaína": {
+      "main": [
+        [
+          {
+            "node": "Tags Araguaína",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tags Araguaína": {
+      "main": [
+        [
+          {
+            "node": "Ler Balsas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Balsas": {
+      "main": [
+        [
+          {
+            "node": "Preparar Balsas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Balsas": {
+      "main": [
+        [
+          {
+            "node": "Criar Balsas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Balsas": {
+      "main": [
+        [
+          {
+            "node": "Tags Balsas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tags Balsas": {
+      "main": [
+        [
+          {
+            "node": "Ler Canaã",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Canaã": {
+      "main": [
+        [
+          {
+            "node": "Preparar Canaã",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Canaã": {
+      "main": [
+        [
+          {
+            "node": "Criar Canaã",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Canaã": {
+      "main": [
+        [
+          {
+            "node": "Tags Canaã",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tags Canaã": {
+      "main": [
+        [
+          {
+            "node": "Ler Marabá",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Marabá": {
+      "main": [
+        [
+          {
+            "node": "Preparar Marabá",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Marabá": {
+      "main": [
+        [
+          {
+            "node": "Criar Marabá",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Marabá": {
+      "main": [
+        [
+          {
+            "node": "Tags Marabá",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tags Marabá": {
+      "main": [
+        [
+          {
+            "node": "Ler Parauapebas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Parauapebas": {
+      "main": [
+        [
+          {
+            "node": "Preparar Parauapebas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Parauapebas": {
+      "main": [
+        [
+          {
+            "node": "Criar Parauapebas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Parauapebas": {
+      "main": [
+        [
+          {
+            "node": "Tags Parauapebas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tags Parauapebas": {
+      "main": [
+        [
+          {
+            "node": "Ler Porto Nacional",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Porto Nacional": {
+      "main": [
+        [
+          {
+            "node": "Preparar Porto Nacional",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Porto Nacional": {
+      "main": [
+        [
+          {
+            "node": "Criar Porto Nacional",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Porto Nacional": {
+      "main": [
+        [
+          {
+            "node": "Tags Porto Nacional",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tags Porto Nacional": {
+      "main": [
+        [
+          {
+            "node": "Ler Serra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Serra": {
+      "main": [
+        [
+          {
+            "node": "Preparar Serra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Serra": {
+      "main": [
+        [
+          {
+            "node": "Criar Serra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Serra": {
+      "main": [
+        [
+          {
+            "node": "Tags Serra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tags Serra": {
+      "main": [
+        [
+          {
+            "node": "Resumo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumo": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  }
+}

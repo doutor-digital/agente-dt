@@ -1,15 +1,3 @@
-// ============================================================================
-// knowledge.service.ts — CRUD + busca semântica da base de conhecimento.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// - Cada entry tem pergunta + resposta. Embeddamos o TEXTO COMBINADO
-//   "pergunta. resposta" pra capturar contexto melhor na busca.
-// - Busca semântica é in-memory: carrega TODOS os entries da Unit,
-//   calcula cosine similarity contra o query embedding, retorna top-K.
-//   Escala bem até ~10K entries; acima disso, migrar pra pgvector.
-// ============================================================================
-
 import type { KnowledgeBaseEntry, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { cosineSim, embedTexts } from './embeddings.service.js';
@@ -60,7 +48,6 @@ export async function updateKnowledge(
     question: input.question ?? existing.question,
     answer: input.answer ?? existing.answer,
   };
-  // Reembedar só se pergunta ou resposta mudou (pra economizar API call).
   let embedding = existing.embedding;
   if (input.question !== undefined || input.answer !== undefined) {
     const { vectors } = await embedTexts({ unit, texts: [embedText(merged)] });
@@ -76,11 +63,6 @@ export async function deleteKnowledge(unitId: string, id: string): Promise<void>
   await prisma.knowledgeBaseEntry.delete({ where: { id, unitId } });
 }
 
-/**
- * Busca semântica: dado um texto de query (mensagem do cliente), retorna
- * as `topK` entradas mais similares. Filtra entradas com sim abaixo de
- * `minScore` (default 0.2) pra evitar matches irrelevantes.
- */
 export async function searchKnowledge(
   unit: Pick<Unit, 'id' | 'openaiApiKey'>,
   query: string,

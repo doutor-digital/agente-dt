@@ -1,15 +1,3 @@
-// ============================================================================
-// seed-global-actions.ts — Popula a tabela GlobalAction com as 4 regras
-// padrão que valem pra todas as units.
-//
-// Idempotente: usa upsert por `conditionDescription` (não temos UNIQUE, então
-// fazemos findFirst+create — se quiser editar regras existentes, mexa direto
-// no painel).
-//
-// Uso:
-//   pnpm tsx src/scripts/seed-global-actions.ts
-// ============================================================================
-
 import { prisma } from '../lib/prisma.js';
 
 interface SeedGlobal {
@@ -20,9 +8,6 @@ interface SeedGlobal {
 }
 
 const SEEDS: SeedGlobal[] = [
-  // 1. Acolher emergência / sofrimento mental — PRIORIDADE MÁXIMA.
-  //    Vem primeiro: se a IA tiver que escolher uma regra global, esta é a
-  //    primeira coisa que ela vê.
   {
     priority: 10,
     conditionDescription:
@@ -42,7 +27,6 @@ const SEEDS: SeedGlobal[] = [
       'Regra global de segurança. Toda menção de crise emocional → acolhimento + CVV 188 + handoff imediato pra humano. NUNCA tente "resolver" sozinha.',
   },
 
-  // 2. Paciente pede atendente humano — handoff cordial.
   {
     priority: 20,
     conditionDescription:
@@ -55,7 +39,6 @@ const SEEDS: SeedGlobal[] = [
       'Pergunte se ele aceita ser transferido ("Posso te conectar com a equipe?") antes de pausar. Se ele já mandou que quer humano direto/com urgência, transfira sem perguntar.',
   },
 
-  // 3. Ofensa / agressão verbal — pausa pra defender o operador e o paciente.
   {
     priority: 30,
     conditionDescription:
@@ -69,11 +52,6 @@ const SEEDS: SeedGlobal[] = [
       'NÃO responda à ofensa nem entre em discussão. Pause a IA, registre a tag pra o time decidir, e encerre cordialmente sem se desculpar pela ofensa do outro lado.',
   },
 
-  // 5. Nome do lead obrigatório antes de mover etapa.
-  //    Evita que cards anônimos ("WhatsApp Web", "Visitante", telefone) avancem
-  //    no funil sem identificação. Se o paciente recusar 2x, IA grava
-  //    "Lead sem nome" no título — a data DD/MM/YYYY é adicionada automaticamente
-  //    pelo helper updateLeadTitleWithDate, usando lead.created_at.
   {
     priority: 50,
     conditionDescription:
@@ -91,7 +69,6 @@ const SEEDS: SeedGlobal[] = [
       'Trava de qualidade do funil. Garante que nenhum lead avance pra próxima etapa sem identificação mínima. Fallback "Lead sem nome DD/MM/YYYY" é aceitável após 2 recusas.',
   },
 
-  // 4. Anti-diagnóstico — vale pra QUALQUER unidade de saúde.
   {
     priority: 40,
     conditionDescription:

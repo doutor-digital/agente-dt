@@ -1,44 +1,22 @@
-// ============================================================================
-// scripts/seed-advocacia-magalhaes.ts — cria/configura a unidade da
-// Advocacia Magalhães (persona "Ana", categoria `advocacia`).
-//
-// Idempotente: upsert da unidade por slug + upsert das capturas por
-// (unitId, toolName) + insert-if-absent das ações de funil. Pode rodar quantas
-// vezes quiser. NÃO toca em credenciais de delivery (Salesbot / campo
-// "Resposta IA" / WhatsApp) — essas ainda precisam ser criadas no painel do
-// Kommo (ver nota no fim).
-//
-// Conta Kommo: magalhaesadv2025  (account_id 36633047)
-// Pipeline comercial (main): 13964971
-//
-// Uso:
-//   pnpm --filter agente-dt-backend exec tsx src/scripts/seed-advocacia-magalhaes.ts
-// ============================================================================
-
 import { prisma } from '../lib/prisma.js';
 import { createKnowledge, listKnowledge } from '../services/knowledge.service.js';
 
 const SLUG = 'advocacia-magalhaes';
 const KOMMO_SUBDOMAIN = 'magalhaesadv2025';
 
-// Token de longa duração da conta Kommo do escritório (fornecido pelo cliente).
 const KOMMO_ACCESS_TOKEN =
   'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6ImIxY2M2MGMwNDBmYmUxZTZkZjMxYThiYTcwZjdkN2FlMTdiNWY0NmUyNjY2NzhmMDUyOWM3M2U1ZGFiYzk4YjJkODMwZjE5ZDg4MzI3Njg2In0.eyJhdWQiOiJmNTNkMDA0ZC1iMDNmLTQ0ZGMtOGU0NS1lOTJmMjRjNjU1NDkiLCJqdGkiOiJiMWNjNjBjMDQwZmJlMWU2ZGYzMWE4YmE3MGY3ZDdhZTE3YjVmNDZlMjY2Njc4ZjA1MjljNzNlNWRhYmM5OGIyZDgzMGYxOWQ4ODMyNzY4NiIsImlhdCI6MTc4Mjg1NTM1OCwibmJmIjoxNzgyODU1MzU4LCJleHAiOjE5Mjc1ODQwMDAsInN1YiI6IjEyNTg2MzYzIiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjM2NjMzMDQ3LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJwdXNoX25vdGlmaWNhdGlvbnMiLCJmaWxlcyIsImNybSIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiXSwiaGFzaF91dWlkIjoiZmYzNmY0ZGUtMDkzNy00ODYzLWE0MjQtNTZmYzc5ZWMxYTc3IiwiYXBpX2RvbWFpbiI6ImFwaS1jLmtvbW1vLmNvbSJ9.jj0zZLA2DsMeiE1dxmu4Pgw9VX6W0dQdmUU3fO5HXCr3tWXRq14jp2o9SsimjKBeZlTGoIQQfuJRPVcUmlxO-PW7GE5Yqh4WnAoVgYHKj2_8SfBY-uHXsOyB4WuicPfWrIWlvyuOSjY_JkdjmX1Qa7Mt0wpODEQ4WxVQqyLSEgBPiq7YAcQqI-mrMH5d36OH1RWsWKTm2wGYDANHOmWNsSEL4-u2arJSejrWrbUUO__BeZvRnsg7McOLgu1PLXjOwi6T2EmskFuRKjQPWifjP900VWwy82GXZoMUVQxiFX4cmR4lDj5WjmSA_K40ILnT_fWKzZZ6ED9mp_MBVJhJ5w';
 
-// --- Etapas do funil comercial (pipeline 13964971) -------------------------
 const PIPELINE_COMERCIAL = 13964971;
-const ST_ENTRADA = 107774379;       // Etapa de leads de entrada
-const ST_LEAD_NOVO = 108260499;     // 1 - Lead novo
-const ST_EM_QUALIFICACAO = 108260503; // 2 - Em qualificação
-const ST_QUALIFICADO = 108260507;   // 3 - Qualificado
-const ST_ANALISE_AGENDADA = 108260511; // 4 - Análise agendada (quem move é o HUMANO ao marcar)
-const ST_GANHO = 142;               // Fechado - ganho
-const ST_PERDIDO = 143;             // Fechado - perdido
+const ST_ENTRADA = 107774379;
+const ST_LEAD_NOVO = 108260499;
+const ST_EM_QUALIFICACAO = 108260503;
+const ST_QUALIFICADO = 108260507;
+const ST_ANALISE_AGENDADA = 108260511;
+const ST_GANHO = 142;
+const ST_PERDIDO = 143;
 
-// Usuário Kommo que recebe o lead na transferência (o "responsável" humano que
-// depois repassa pro Dr.). A IA NÃO agenda: ela entende o caso, atribui à Ana
-// Esther e pausa (interruptor "IA Pausada"). Quem marca o atendimento é o humano.
-const ANA_ESTHER_USER_ID = 15490579; // Ana Esther (anaesthersilva@icloud.com)
+const ANA_ESTHER_USER_ID = 15490579;
 
 const personaGreeting = 'Oii! Aqui é a Ana, do escritório Magalhães 💛';
 
@@ -140,18 +118,12 @@ const unitContent = {
   name: 'Advocacia Magalhães',
   category: 'advocacia',
   isActive: true,
-  // Agente roda no Claude (Opus 4.8) com prompt caching. A chave da Anthropic
-  // (anthropicApiKey) é setada FORA do seed (segredo — não vai pro git) e NÃO é
-  // sobrescrita aqui. Sem a chave no banco, createChatModel cai pro OpenAI.
-  // Embeddings (RAG) e áudio continuam no OpenAI (openaiApiKey).
   llmProvider: 'anthropic',
   anthropicModel: 'claude-opus-4-8',
   kommoSubdomain: KOMMO_SUBDOMAIN,
   kommoAccessToken: KOMMO_ACCESS_TOKEN,
-  // Funil: etapas em que a IA pode responder (allowlist) + etapa de "ganho".
   kommoAllowedStatusIds: [ST_ENTRADA, ST_LEAD_NOVO, ST_EM_QUALIFICACAO, ST_QUALIFICADO, ST_ANALISE_AGENDADA],
   kommoWonStatusIds: [ST_GANHO],
-  // Persona
   personaCompanyName: 'Advocacia Magalhães',
   personaTone: 'friendly',
   personaGreeting,
@@ -159,27 +131,18 @@ const unitContent = {
   personaLanguage: 'pt-BR',
   personaEmojis: ['💛', '🙏', '😊', '✨'],
   personaEmojiFrequency: 'low',
-  // Fontes
   sourcePapel,
   sourceProdutos,
   sourceNegocio,
-  // Triagem
   triageEnabled: true,
   triageInstructions,
-  // Nome → título do card
   collectNameEnabled: true,
-  // Origem é capturada no campo "Canal de origem" (select), não em tag.
   collectSourceEnabled: false,
-  // Qualificação vai pro campo "Qualificação do lead" (select), não em tag.
   qualificationEnabled: false,
-  // Handoff em pedido explícito de humano
   handoffEnabled: true,
   handoffKeywords: ['falar com advogado agora', 'falar com humano', 'quero falar com uma pessoa', 'atendente'],
 };
 
-// --- Capturas: a IA preenche estes campos customizados do Kommo ------------
-// Só campos que a Ana consegue inferir naturalmente da conversa de triagem.
-// Os campos de processo (viabilidade, contrato, perícia, etc.) são do advogado.
 const captures = [
   {
     toolName: 'salvar_area_do_caso',
@@ -278,18 +241,13 @@ const captures = [
   },
 ] as const;
 
-// --- Ações "quando → faça": a IA conduz o funil e sabe a hora de parar -----
-// Marcador no `notes` permite o seed SUBSTITUIR só as ações que ele gerencia,
-// sem apagar ações criadas à mão no painel.
 const ACTION_MARKER = '[seed-magalhaes]';
-// Condições das 3 ações antigas (1ª versão) — pra limpeza one-shot no re-run.
 const OLD_ACTION_CONDITIONS = [
   'A pessoa respondeu e começou a contar o problema/situação dela (saiu do "oi" inicial e há contexto do caso).',
   'Você já entendeu o caso e classificou a área (previdenciário ou trabalhista), mas a pessoa ainda NÃO marcou um horário.',
   'A pessoa aceitou um horário pra primeira conversa com o advogado e confirmou o agendamento.',
 ];
 const actions = [
-  // --- Funil (avança conforme a triagem evolui) ---
   {
     conditionDescription:
       'A pessoa respondeu e começou a contar a situação/o problema dela (já há contexto do caso, saiu do "oi" inicial).',
@@ -308,7 +266,6 @@ const actions = [
     ],
     notes: `${ACTION_MARKER} Handoff: qualifica, atribui à Ana Esther e PAUSA a IA (interruptor "IA Pausada") — sem pedir permissão. A IA não agenda; a Ana repassa pro Dr. e o humano marca.`,
   },
-  // --- Saber a hora de parar / encaminhar ---
   {
     conditionDescription:
       'A pessoa diz CLARAMENTE que não quer continuar / desiste / não tem interesse / pede pra não receber mais mensagens. (NÃO vale pra "vou pensar", "depois", "tô ocupado".)',
@@ -343,9 +300,6 @@ const actions = [
   },
 ] as const;
 
-// --- Respostas prontas (templates): FAQ institucional no jeito da Ana ------
-// Disparam por palavra-chave; NÃO precisam de embedding (independem da chave
-// OpenAI). Texto no tom da Ana, curto e caloroso.
 const templates = [
   {
     name: 'Endereço / localização',
@@ -397,13 +351,7 @@ const templates = [
   },
 ] as const;
 
-// --- Conhecimento (RAG): Q&A com busca semântica -------------------------
-// Mais rico que as Respostas prontas (pega variações que palavra-chave não
-// cobre, aceita textos mais longos). Só é inserido quando a unidade tiver
-// openaiApiKey (a geração de embedding depende dela). Re-rodar o seed depois
-// de configurar a chave popula a base automaticamente (dedupe por pergunta).
 const knowledge: Array<{ question: string; answer: string }> = [
-  // Institucional
   {
     question: 'Quem é o advogado responsável pelo escritório?',
     answer:
@@ -437,7 +385,6 @@ const knowledge: Array<{ question: string; answer: string }> = [
     answer:
       'WhatsApp (63) 99301-5935 e (63) 99209-4343, e-mail magalhaesadv2025@gmail.com, Instagram @magalhaes_advocacia_aux.',
   },
-  // Previdenciário (respostas honestas — nunca prometem, nunca dão parecer)
   {
     question: 'O INSS cortou / cessou meu auxílio-doença, o que eu faço?',
     answer:
@@ -479,28 +426,21 @@ const knowledge: Array<{ question: string; answer: string }> = [
   },
 ];
 
-// --- Correções (exemplos a evitar) ----------------------------------------
-// O composer injeta as respostas flaggadas como bloco <exemplos_ruins> ("não
-// responda parecido"). Como não há conversas reais ainda, semeamos os erros
-// clássicos do briefing (coluna "robô/juridiquês" + "o que ela NUNCA fala")
-// numa conversa de TREINO rotulada — um por guardrail. Some da lista de
-// Conversas se você apagar essa conversa; pode rodar à vontade (idempotente).
 const TRAINING_LEAD_ID = 'treino-correcoes';
 const TRAINING_CONTACT = '⚙️ Exemplos de treino (não é lead real)';
 const corrections = [
-  'Prezado(a), identificamos a cessação do seu benefício e a necessidade de análise do mérito.', // juridiquês
-  'Agende uma consulta para análise do mérito da sua demanda.', // juridiquês/frio
-  'Houve o indeferimento administrativo, sendo necessário ajuizar a lide quanto ao mérito.', // juridiquês
-  'O senhor possui direito ao benefício previdenciário pleiteado.', // dá parecer jurídico
-  'Pode ficar tranquilo que o senhor vai ganhar, é garantido.', // promete resultado
-  'A gente reverte esse corte pra você, com certeza dá certo.', // promete resultado
-  'Nossos honorários ficam em 30% do benefício, mais 7 salários.', // fala honorário
-  'Somos especialistas e o melhor escritório da região.', // usa "especialista"
-  'Últimas vagas! Só hoje pra garantir seu agendamento.', // falsa urgência
+  'Prezado(a), identificamos a cessação do seu benefício e a necessidade de análise do mérito.',
+  'Agende uma consulta para análise do mérito da sua demanda.',
+  'Houve o indeferimento administrativo, sendo necessário ajuizar a lide quanto ao mérito.',
+  'O senhor possui direito ao benefício previdenciário pleiteado.',
+  'Pode ficar tranquilo que o senhor vai ganhar, é garantido.',
+  'A gente reverte esse corte pra você, com certeza dá certo.',
+  'Nossos honorários ficam em 30% do benefício, mais 7 salários.',
+  'Somos especialistas e o melhor escritório da região.',
+  'Últimas vagas! Só hoje pra garantir seu agendamento.',
 ];
 
 async function main() {
-  // 1) Unidade
   const unit = await prisma.unit.upsert({
     where: { slug: SLUG },
     create: { slug: SLUG, ...unitContent },
@@ -509,7 +449,6 @@ async function main() {
   console.log(`✅ Unidade: id=${unit.id} slug=${unit.slug} name="${unit.name}" category=${unit.category}`);
   console.log(`   subdomain=${unit.kommoSubdomain} token=${!!unit.kommoAccessToken}`);
 
-  // 2) Capturas (a IA preenche os campos customizados)
   for (const c of captures) {
     await prisma.leadFieldRule.upsert({
       where: { unitId_toolName: { unitId: unit.id, toolName: c.toolName } },
@@ -539,9 +478,6 @@ async function main() {
   }
   console.log(`✅ Capturas: ${captures.length} regras (a IA preenche os campos do Kommo).`);
 
-  // 3) Ações "quando → faça" — substitui só as gerenciadas pelo seed
-  // (marcador no notes) + limpa as 3 antigas (sem marcador) num re-run.
-  // Ações criadas à mão no painel (sem marcador/condição antiga) ficam intactas.
   const removed = await prisma.unitAction.deleteMany({
     where: {
       unitId: unit.id,
@@ -562,7 +498,6 @@ async function main() {
   });
   console.log(`✅ Ações: ${actions.length} criadas (removidas ${removed.count} gerenciadas anteriores).`);
 
-  // 4) Respostas prontas (templates) — FAQ institucional, sem embedding
   for (const t of templates) {
     await prisma.messageTemplate.upsert({
       where: { unitId_name: { unitId: unit.id, name: t.name } },
@@ -572,7 +507,6 @@ async function main() {
   }
   console.log(`✅ Respostas prontas: ${templates.length} templates (FAQ do escritório).`);
 
-  // 5) Conhecimento (RAG) — só com chave OpenAI (geração de embedding)
   if (!unit.openaiApiKey) {
     console.log(`⏭️  Conhecimento: ${knowledge.length} Q&A prontos, mas PULADOS — falta openaiApiKey.`);
     console.log('   Configure a chave da unidade e rode este seed de novo pra popular a base.');
@@ -588,13 +522,11 @@ async function main() {
     console.log(`✅ Conhecimento: ${kCreated} Q&A embedados (${knowledge.length - kCreated} já existiam).`);
   }
 
-  // 6) Correções (exemplos a evitar) — conversa de treino com respostas flaggadas
   const trainingConv = await prisma.conversation.upsert({
     where: { unitId_leadId: { unitId: unit.id, leadId: TRAINING_LEAD_ID } },
     create: { unitId: unit.id, leadId: TRAINING_LEAD_ID, contactName: TRAINING_CONTACT, channel: 'manual' },
     update: { contactName: TRAINING_CONTACT },
   });
-  // Idempotente: limpa e recria as mensagens dessa conversa de treino.
   await prisma.message.deleteMany({ where: { conversationId: trainingConv.id } });
   await prisma.message.createMany({
     data: corrections.map((content) => ({

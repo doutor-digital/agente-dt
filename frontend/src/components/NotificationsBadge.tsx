@@ -1,10 +1,3 @@
-// ============================================================================
-// NotificationsBadge — sino no header com alertas globais.
-//
-// Polling em /api/alerts (60s). Mostra badge vermelho com contagem se há
-// danger; amarelo se warning. Click abre lista detalhada.
-// ============================================================================
-
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Bell, ShieldAlert } from 'lucide-react';
 import clsx from 'clsx';
@@ -26,7 +19,6 @@ export function NotificationsBadge() {
         const a = await api.getAlerts();
         if (active) setAlerts(a);
       } catch {
-        // alerts é best-effort — silencia
       }
     };
     void tick();

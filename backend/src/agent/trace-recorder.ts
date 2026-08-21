@@ -1,21 +1,3 @@
-// ============================================================================
-// trace-recorder.ts — Adapter para gravar steps de execução no Postgres.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// O LangGraph não conhece nosso domínio de observabilidade — nem deve.
-// Esta classe é a PONTE: cada nó/tool do grafo chama `recorder.step(...)`
-// passando o que aconteceu, e este módulo persiste no banco no formato
-// que o dashboard React consome.
-//
-// Mantemos um contador `sequence` interno para ordenação estável no feed
-// mesmo quando dois steps são gravados no mesmo milissegundo.
-//
-// Async sem await no caller: na assinatura `step()` retornamos a Promise
-// mas observabilidade nunca deve derrubar a execução principal — try/catch
-// interno, log e segue.
-// ============================================================================
-
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import type { StepKind } from '@prisma/client';
@@ -70,7 +52,6 @@ export class TraceRecorder {
   }
 }
 
-/** Ressincroniza o contador interno após reconstrução do recorder. */
 export async function syncRecorderSequence(recorder: TraceRecorder, traceId: string): Promise<void> {
   const last = await prisma.executionStep.findFirst({
     where: { traceId },

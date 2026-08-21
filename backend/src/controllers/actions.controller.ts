@@ -1,11 +1,3 @@
-// ============================================================================
-// actions.controller.ts — endpoints REST de UnitAction (regras quando→faça).
-//
-// Formato API atual: cada regra tem `actions: Array<{ kind, params }>`.
-// O cliente legado (que mandava `actionKind` + `actionParams`) ainda é
-// aceito e convertido internamente — fica transparente até o front atualizar.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import {
@@ -37,7 +29,6 @@ const ACTION_KINDS: ActionKind[] = [
   'pause_in_stages',
 ];
 
-// Params validators por kind.
 const addTagParams = z.object({
   tags: z.array(z.string().min(1).max(80)).min(1).max(10),
 });
@@ -159,18 +150,14 @@ const actionStepSchema = z.object({
 const actionInputSchema = z
   .object({
     conditionDescription: z.string().min(3).max(2000),
-    /** Novo formato. Se vier vazio e os campos legados vierem, convertemos. */
     actions: z.array(actionStepSchema).max(8).optional(),
-    /** @deprecated — clientes antigos. */
     actionKind: z.enum(ACTION_KINDS as [ActionKind, ...ActionKind[]]).optional(),
-    /** @deprecated — clientes antigos. */
     actionParams: z.record(z.string(), z.unknown()).optional(),
     notes: z.string().max(2000).nullable().optional(),
     enabled: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     const actions = data.actions ?? [];
-    // Aceita formato legado: { actionKind, actionParams } vira [1 step].
     if (actions.length === 0 && data.actionKind) {
       const step = { kind: data.actionKind, params: data.actionParams ?? {} };
       validateActionStep(step, ctx, 0);
@@ -183,7 +170,6 @@ const actionInputSchema = z
     actions.forEach((step, i) => validateActionStep(step, ctx, i));
   });
 
-/** Normaliza o body validado num ActionInput canônico (array). */
 function toActionInput(parsed: z.infer<typeof actionInputSchema>): ActionInput {
   const actions: ActionStep[] =
     parsed.actions && parsed.actions.length > 0
@@ -238,7 +224,6 @@ export async function updateActionHandler(req: Request, res: Response): Promise<
     res.status(400).json({ error: 'actionId é obrigatório' });
     return;
   }
-  // Update aceita parcial; valida o que vier.
   const parsed = z
     .object({
       conditionDescription: z.string().min(3).max(2000).optional(),

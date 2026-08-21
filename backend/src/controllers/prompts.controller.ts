@@ -1,18 +1,3 @@
-// ============================================================================
-// prompts.controller.ts — Painel "Prompts" (dimensionamento de qualidade).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Cruza conversas convertidas com suas ConversationEvaluations, agrupa por
-// `promptHash` e devolve métricas por versão de prompt. É a base do recorte
-// que o usuário pediu: "qual prompt converteu qual lead, e com qual
-// qualidade".
-//
-// Não é uma view materializada — agregação ad-hoc em memória. Volume é
-// baixo (uma avaliação por lead convertido). Se passar de ~10k, mover pra
-// SQL agregado.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { rawAdminCall } from '../services/openai-platform.service.js';
@@ -44,16 +29,11 @@ interface GroupAcc {
   }>;
 }
 
-// ---------------------------------------------------------------------------
-// GET /api/units/:id/prompt-performance
-// ---------------------------------------------------------------------------
-
 export async function getPromptPerformanceHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id ?? '');
   const sinceDays = Math.min(Number(req.query.days ?? 90), 365);
   const since = new Date(Date.now() - sinceDays * 86_400_000);
 
-  // Total de conversas (denominador "tudo") e de convertidas (numerador).
   const [totalConversations, convertedConversations, evaluations] = await Promise.all([
     prisma.conversation.count({ where: { unitId, createdAt: { gte: since } } }),
     prisma.conversation.count({
@@ -75,7 +55,6 @@ export async function getPromptPerformanceHandler(req: Request, res: Response): 
     }),
   ]);
 
-  // Agrupa por promptHash.
   const groups = new Map<string, GroupAcc>();
   for (const ev of evaluations) {
     const conv = ev.conversation;
@@ -92,10 +71,6 @@ export async function getPromptPerformanceHandler(req: Request, res: Response): 
     };
     const s = ev.scores as unknown as CriterionScores;
     cur.evaluations += 1;
-    // Antes o juiz só rodava quando havia conversão, então "1 avaliação = 1
-    // conversão" valia. Agora o judge-worker avalia também conversa encerrada
-    // SEM conversão (é isso que dá amostra pra média), então a conversão tem
-    // que ser contada pelo dado real — senão a coluna "conv." mente.
     if (conv.convertedAt) cur.conversions += 1;
     cur.scoreSum.clareza += s.clareza ?? 0;
     cur.scoreSum.empatia += s.empatia ?? 0;
@@ -106,7 +81,6 @@ export async function getPromptPerformanceHandler(req: Request, res: Response): 
     cur.costSum += Number(ev.costUsd);
     if (ev.createdAt < cur.firstSeen) cur.firstSeen = ev.createdAt;
     if (ev.createdAt > cur.lastSeen) cur.lastSeen = ev.createdAt;
-    // Mantém as 5 mais recentes pra visualização rápida no painel.
     cur.topEvaluations.push({
       conversationId: conv.id,
       leadId: conv.leadId,
@@ -135,9 +109,6 @@ export async function getPromptPerformanceHandler(req: Request, res: Response): 
           tom: round1(g.scoreSum.tom / n),
         },
         avgOverall: round1(g.scoreSum.overall / n),
-        // Trava por média: a nota sozinha engana sem o tamanho da amostra.
-        // Diz ao dono se dá pra confiar nesta média — e a partir de que
-        // diferença duas versões são realmente distintas.
         confianca: confiancaDaMedia(g.evaluations),
         totalCostUsd: round6(g.costSum),
         firstSeen: g.firstSeen.toISOString(),
@@ -153,7 +124,6 @@ export async function getPromptPerformanceHandler(req: Request, res: Response): 
       conversations: totalConversations,
       converted: convertedConversations,
       evaluated: evaluations.length,
-      // Nunca negativo: hoje o juiz avalia além das convertidas.
       pendingJudge: Math.max(0, convertedConversations - evaluations.length),
       conversionRate: totalConversations > 0 ? convertedConversations / totalConversations : 0,
     },
@@ -169,13 +139,8 @@ function round6(n: number): number {
   return Math.round(n * 1_000_000) / 1_000_000;
 }
 
-// ---------------------------------------------------------------------------
-// GET /api/conversations/:id/evaluation
-// ---------------------------------------------------------------------------
-
 export async function getConversationEvaluationHandler(req: Request, res: Response): Promise<void> {
   const conversationId = String(req.params.id ?? '');
-  // UNIT_ADMIN só vê avaliações de conversas da própria unit.
   if (req.user?.role === 'UNIT_ADMIN') {
     const conv = await prisma.conversation.findUnique({
       where: { id: conversationId },
@@ -202,12 +167,6 @@ export async function getConversationEvaluationHandler(req: Request, res: Respon
   });
 }
 
-// ---------------------------------------------------------------------------
-// POST /api/conversations/:id/evaluate
-// Re-roda o juiz (mesmo se já avaliada). Útil quando o usuário editou o
-// systemPrompt e quer reavaliar uma conversa específica.
-// ---------------------------------------------------------------------------
-
 export async function reEvaluateConversationHandler(req: Request, res: Response): Promise<void> {
   const conversationId = String(req.params.id ?? '');
   const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
@@ -215,7 +174,6 @@ export async function reEvaluateConversationHandler(req: Request, res: Response)
     res.status(404).json({ error: 'conversation_not_found' });
     return;
   }
-  // UNIT_ADMIN só re-avalia conversas da própria unit.
   if (req.user?.role === 'UNIT_ADMIN' && conv.unitId !== req.user.unitId) {
     res.status(404).json({ error: 'conversation_not_found' });
     return;
@@ -225,7 +183,6 @@ export async function reEvaluateConversationHandler(req: Request, res: Response)
     res.status(404).json({ error: 'unit_not_found' });
     return;
   }
-  // Idempotente por design; pra forçar, deletamos a row antiga.
   await prisma.conversationEvaluation.deleteMany({ where: { conversationId } });
   const result = await judgeConversation({ conversationId, unit });
   if (!result) {
@@ -234,14 +191,6 @@ export async function reEvaluateConversationHandler(req: Request, res: Response)
   }
   res.json({ ok: true, result });
 }
-
-// ---------------------------------------------------------------------------
-// GET /api/units/:id/openai-debug
-//
-// Diagnóstico cru das 3 chamadas administrativas da OpenAI. Devolve status
-// HTTP + corpo bruto pra entender exatamente por que o adminKey não está
-// trazendo dados.
-// ---------------------------------------------------------------------------
 
 export async function openaiDebugHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
@@ -285,7 +234,6 @@ export async function openaiDebugHandler(req: Request, res: Response): Promise<v
     'openai-debug executado',
   );
 
-  // Diagnóstico textual pra UI mostrar conclusão clara.
   const diagnosis = diagnose(costs, usage, projects);
 
   res.json({

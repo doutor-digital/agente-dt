@@ -11,10 +11,6 @@ import { Login } from './components/Login';
 import { Splash } from './components/Splash';
 import { useRoute } from './hooks/useRoute';
 
-// Lazy panels — cada um vira um chunk separado, baixa só quando o usuário
-// abre a aba. Reduz drasticamente o JS inicial (de ~660KB pra ~150KB) e o
-// custo de troca entre abas. React.lazy aceita só default export, então
-// adaptamos os named exports em linha.
 const DashboardPanel = lazy(() =>
   import('./components/DashboardPanel').then((m) => ({ default: m.DashboardPanel })),
 );
@@ -83,21 +79,6 @@ const UsersPanel = lazy(() =>
   import('./components/UsersPanel').then((m) => ({ default: m.UsersPanel })),
 );
 
-/**
- * App root — multi-tenant + autenticado.
- *
- * Pipeline:
- *   AuthProvider (sessão Google)
- *     ├─ user === undefined → Splash (verificando /auth/me)
- *     ├─ user === null      → Login (tela Google)
- *     └─ user !== null      → UnitProvider + Shell
- *
- * Tabs (depois de logado):
- *  - "dashboard", "traces", "conversations", "llm", "prompts", ...
- *  - "users": gestão de admins (só SUPER_ADMIN)
- *
- * O dropdown UnitSelector no topo filtra todas as views por unidade.
- */
 export function App() {
   return (
     <AuthProvider>
@@ -119,10 +100,6 @@ function AuthGate() {
   );
 }
 
-// Decide entre a landing de unidades (UnitHub) e o app (Shell). SUPER_ADMIN sem
-// unidade escolhida cai no hub; UNIT_ADMIN (pinado na própria unit) e quem já
-// escolheu uma unidade vão direto pro Shell. "Ver painel geral" (viewAll) entra
-// no Shell com a visão de todas as unidades.
 function AppEntry() {
   const { user } = useAuth();
   const { selectedUnitId, setSelectedUnitId } = useUnit();
@@ -150,24 +127,17 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
   const { tab, navigate } = useRoute();
   const [paletteOpen, openPalette, closePalette] = useCommandPalette();
 
-  // Drill-down do Dashboard: o LeadsBucketModal dispara `app:openConversation`.
-  // Aqui navegamos pra aba Conversas (atualizando a URL via useRoute); o
-  // ConversationsPanel escuta o mesmo evento e seleciona a conversa.
   useEffect(() => {
     const handler = () => navigate('conversations');
     window.addEventListener('app:openConversation', handler);
     return () => window.removeEventListener('app:openConversation', handler);
   }, [navigate]);
 
-  // App renderiza imediatamente — cada panel cuida do próprio loading state.
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
       <AppSidebar tab={tab} onChange={navigate} onBackToHub={onBackToHub} />
       <main className="flex-1 flex flex-col overflow-hidden min-w-0">
         <TopBar tab={tab} onOpenPalette={openPalette} onBackToHub={onBackToHub} />
-        {/* `app-ambient` põe o halo de acento no topo do conteúdo — a assinatura
-            visual do console. `key` remonta a área a cada troca de aba pra
-            reiniciar a animação de entrada. */}
         <div key={tab} className="app-ambient flex-1 flex flex-col overflow-hidden animate-fade-in-up">
           <Suspense fallback={<PanelSkeleton />}>
             {tab === 'dashboard' && <DashboardPanel />}
@@ -207,11 +177,6 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
   );
 }
 
-/**
- * Esqueleto exibido enquanto o chunk JS do painel baixa. Blocos com o mesmo
- * ritmo do conteúdo real — menos "pulo" na hora que o painel monta do que um
- * spinner centralizado.
- */
 function PanelSkeleton() {
   return (
     <div className="flex-1 p-6 space-y-4">

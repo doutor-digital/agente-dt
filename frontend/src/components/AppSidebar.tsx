@@ -1,20 +1,3 @@
-// ============================================================================
-// AppSidebar — navegação primária do console.
-//
-// Padrão dos consoles de IA modernos: uma coluna estreita, escura, puramente
-// NAVEGACIONAL. Nada de identidade/estado do usuário aqui — isso vive no
-// TopBar. A sidebar responde a uma pergunta só: "onde eu estou e pra onde
-// posso ir".
-//
-//   - grupos rotulados (Operação / Agente / Análise / Plataforma)
-//   - item ativo = superfície elevada + barra de acento à esquerda
-//   - colapsável pra 64px (só ícones + tooltip); a escolha persiste
-//   - <a href> real: ctrl/cmd-clique abre em nova aba de verdade
-//
-// A lista de itens vem de `lib/nav.ts` — a mesma que alimenta o breadcrumb e
-// a paleta de comandos.
-// ============================================================================
-
 import { useEffect, useState } from 'react';
 import { BookOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import clsx from 'clsx';
@@ -28,7 +11,6 @@ import {
   type NavSection,
 } from '../lib/nav';
 
-// Reexportado porque outros painéis já importavam o tipo daqui.
 export type { AppTab };
 
 const LOGO_URL = '/logo-dd.png';
@@ -42,7 +24,6 @@ export function AppSidebar({
 }: {
   tab: AppTab;
   onChange: (t: AppTab) => void;
-  /** Quando presente, a marca vira clicável e volta pra landing de agentes. */
   onBackToHub?: () => void;
 }) {
   const { user } = useAuth();
@@ -58,7 +39,6 @@ export function AppSidebar({
     try {
       window.localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
     } catch {
-      // modo privado — vale só nesta sessão
     }
   }, [collapsed]);
 
@@ -71,7 +51,6 @@ export function AppSidebar({
         collapsed ? 'w-16' : 'w-[248px]',
       )}
     >
-      {/* ── Marca ─────────────────────────────────────────────────────────── */}
       <div
         className={clsx(
           'h-14 shrink-0 flex items-center gap-2.5 border-b border-zinc-800',
@@ -115,7 +94,6 @@ export function AppSidebar({
         )}
       </div>
 
-      {/* ── Navegação ─────────────────────────────────────────────────────── */}
       <nav className={clsx('flex-1 overflow-y-auto overflow-x-hidden py-3', collapsed ? 'px-2' : 'px-2.5')}>
         {SECTION_ORDER.map((section) => {
           const items = visible.filter((n) => n.section === section);
@@ -143,7 +121,6 @@ export function AppSidebar({
         })}
       </nav>
 
-      {/* ── Rodapé ────────────────────────────────────────────────────────── */}
       <div
         className={clsx(
           'shrink-0 border-t border-zinc-800 p-2 flex items-center gap-1',
@@ -195,8 +172,6 @@ function NavLink({
       <a
         href={tabToPath(item.id)}
         title={collapsed ? item.label : undefined}
-        // Ctrl/Cmd/middle-click caem no comportamento default do <a> (nova aba).
-        // Clique normal é interceptado pra navegação SPA sem reload.
         onClick={(e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
           e.preventDefault();
@@ -210,7 +185,6 @@ function NavLink({
             : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
         )}
       >
-        {/* Barra de acento do item ativo. */}
         <span
           className={clsx(
             'absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-brand-400 transition-opacity',

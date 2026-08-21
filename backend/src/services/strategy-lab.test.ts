@@ -35,7 +35,7 @@ test('similaridade não quebra com texto vazio', () => {
 test('dedup remove candidato praticamente clonado', () => {
   const out = dedupCandidates([
     cand('Consegue vir quinta às 9h?', 0),
-    cand('Consegue vir quinta as 9h', 1), // mesmo texto, sem acento/pontuação
+    cand('Consegue vir quinta as 9h', 1),
     cand('Prefere de manhã ou à tarde?', 2),
   ]);
   assert.equal(out.length, 2);

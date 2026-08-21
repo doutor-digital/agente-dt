@@ -1,8 +1,3 @@
-// ============================================================================
-// templates.controller.ts — Endpoints CRUD de MessageTemplate.
-// Todos sob /units/:id/templates.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';

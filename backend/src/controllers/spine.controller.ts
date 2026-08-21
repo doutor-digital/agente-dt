@@ -1,19 +1,3 @@
-// ============================================================================
-// spine.controller.ts — Agenda da franquia + kill switch da IA.
-//
-// O KILL SWITCH É O CORAÇÃO DISTO, não um acessório.
-// --------------------------------------------------
-// A API da franquia não conta bloqueios de agenda. Quando o médico trava um
-// horário à mão, a IA continua vendo aquele slot como vago e marcaria em cima.
-// Não há como consertar isso por código — o dado não existe do nosso lado.
-//
-// A contenção é humana: a recepção aperta o botão e a IA para de marcar na
-// hora. Por isso a rota de pausa é a mais simples do sistema — sem validação
-// de payload complexa, sem dependência de rede externa, sem nada que possa
-// falhar. Ela grava um booleano e responde. Quem usa esse botão está no meio
-// de um problema; o botão não pode ser mais um.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
@@ -23,7 +7,6 @@ import { AgendaService } from '../services/agenda.service.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
 
-/** "agora" no relógio da clínica — usa o fuso IANA da unidade. */
 function agoraLocalIso(tz: string): string {
   return SpineService.instanteNoFuso(new Date(), tz || 'America/Sao_Paulo');
 }
@@ -33,10 +16,6 @@ async function carregarUnidade(req: Request) {
   if (!unitId) return null;
   return prisma.unit.findUnique({ where: { id: unitId } });
 }
-
-// ---------------------------------------------------------------------------
-// KILL SWITCH
-// ---------------------------------------------------------------------------
 
 const pauseSchema = z.object({
   unitId: z.string().min(1),
@@ -61,9 +40,6 @@ export async function emergencyPauseHandler(req: Request, res: Response): Promis
     select: { id: true, slug: true, spineAiPaused: true, spinePausedAt: true, spinePausedReason: true },
   });
 
-  // Log em nível warn de propósito: pausa é evento de incidente e precisa
-  // aparecer no painel de Erros junto com o resto do que aconteceu naquela
-  // janela de tempo. É o que permite reconstruir o dia depois.
   logger.warn({ unit: unit.slug, reason: unit.spinePausedReason }, 'KILL SWITCH: IA pausada');
 
   res.json({ ok: true, unit });
@@ -109,8 +85,6 @@ export async function spineStatusHandler(req: Request, res: Response): Promise<v
       days: unit.spineAgendaDays,
       slotMinutes: unit.spineSlotMinutes,
     },
-    // Lembrete de véspera — o que o worker faz, visível no painel em vez de só
-    // no banco. `bloqueado` explica POR QUE não dispara quando desligado.
     reminder: {
       enabled: unit.reminderEnabled,
       salesbotId: unit.reminderSalesbotId,
@@ -124,10 +98,6 @@ export async function spineStatusHandler(req: Request, res: Response): Promise<v
   });
 }
 
-/**
- * Liga/desliga e ajusta o lembrete de véspera. Editar por aqui, não por SQL —
- * é o que o painel usa pra o operador ver e mudar sem depender de dev.
- */
 export async function updateReminderHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -147,7 +117,6 @@ export async function updateReminderHandler(req: Request, res: Response): Promis
   }
   const { enabled, salesbotId, hourLocal } = parsed.data;
 
-  // Não deixa LIGAR sem bot — evita o painel mostrar "ligado" sem disparar nada.
   const salesbotFinal = salesbotId !== undefined ? salesbotId : unit.reminderSalesbotId;
   if (enabled === true && !salesbotFinal) {
     res.status(422).json({ ok: false, motivo: 'configure o Salesbot antes de ligar o lembrete' });
@@ -166,10 +135,6 @@ export async function updateReminderHandler(req: Request, res: Response): Promis
   logger.info({ unit: unit.slug, ...updated }, 'lembrete: config alterada pelo painel');
   res.json({ ok: true, reminder: updated });
 }
-
-// ---------------------------------------------------------------------------
-// Agenda
-// ---------------------------------------------------------------------------
 
 const rangeSchema = z.object({
   initialDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -193,8 +158,6 @@ export async function spineSchedulesHandler(req: Request, res: Response): Promis
     return;
   }
 
-  // A doc da franquia limita buscas por período a 100 dias. Cortar aqui dá
-  // erro nosso, legível, em vez de um 400 opaco vindo de fora.
   const dias =
     (Date.parse(parsed.data.endDate) - Date.parse(parsed.data.initialDate)) / 86_400_000;
   if (dias < 0 || dias > 100) {
@@ -249,10 +212,6 @@ export async function spineSchedulesHandler(req: Request, res: Response): Promis
   });
 }
 
-// ---------------------------------------------------------------------------
-// Bloqueios manuais
-// ---------------------------------------------------------------------------
-
 const blockSchema = z.object({
   dayLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   startTime: z.string().regex(/^\d{2}:\d{2}$/),
@@ -286,28 +245,15 @@ export async function createAgendaBlockHandler(req: Request, res: Response): Pro
   res.status(201).json({ block });
 }
 
-/**
- * Bloqueio em LOTE — "de 10 a 20 de agosto, o dia todo".
- *
- * Existe porque a alternativa é clicar horário por horário, dia após dia: uma
- * semana de recesso com blocos de 30 min são ~180 cliques. Ninguém faz isso;
- * quem precisa disso acaba usando o kill switch, que para a I.A. inteira —
- * inclusive nos dias em que ela poderia continuar atendendo.
- *
- * `weekdays` filtra o que interessa: bloquear "as duas próximas semanas" sem
- * gerar linha inútil pra sábado e domingo, que já não são dia de atendimento.
- */
 const bulkSchema = z.object({
   fromDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   toDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   startTime: z.string().regex(/^\d{2}:\d{2}$/).default('00:00'),
   endTime: z.string().regex(/^\d{2}:\d{2}$/).default('23:59'),
-  /** 0=domingo … 6=sábado. Vazio = todos os dias do intervalo. */
   weekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   reason: z.string().max(200).nullable().optional(),
 });
 
-/** Teto de dias por operação — trava contra intervalo digitado errado. */
 const MAX_DIAS_LOTE = 180;
 
 export async function createAgendaBlockBulkHandler(req: Request, res: Response): Promise<void> {
@@ -365,7 +311,6 @@ export async function createAgendaBlockBulkHandler(req: Request, res: Response):
   res.status(201).json({ ok: true, dias: dias.length, criados: criados.count });
 }
 
-/** Liberação em lote — desfazer precisa ser tão barato quanto fazer. */
 export async function deleteAgendaBlockBulkHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id);
   const fromDay = String(req.query.fromDay ?? '');
@@ -402,8 +347,6 @@ export async function spinePingHandler(req: Request, res: Response): Promise<voi
   res.status(r.ok ? 200 : 502).json(r);
 }
 
-
-/** Lista os bloqueios de um período — a tela de período precisa mostrar o que já existe. */
 export async function listAgendaBlocksHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id);
   const fromDay = String(req.query.fromDay ?? '');
@@ -420,8 +363,6 @@ export async function listAgendaBlocksHandler(req: Request, res: Response): Prom
   res.json({ blocks });
 }
 
-
-/** Envia UM lead do Kommo para a franquia. Existe pra testar antes de automatizar. */
 export async function syncLeadHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -437,13 +378,6 @@ export async function syncLeadHandler(req: Request, res: Response): Promise<void
   res.status(r.ok ? 200 : 422).json(r);
 }
 
-
-/**
- * PRÉVIA — mostra o cadastro que sairia, sem enviar nada.
- *
- * A franquia não apaga lead: cada engano vira chamado no suporte deles e
- * limpeza manual. Revisar antes é a única defesa barata que existe.
- */
 export async function previewLeadHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -458,20 +392,10 @@ export async function previewLeadHandler(req: Request, res: Response): Promise<v
   const preparo = await SpineSyncService.prepararLead(unit, kommoLeadId);
   res.json({
     ...preparo,
-    // Pra tela traduzir o número em nome sem ter a tabela.
     origemLegivel: preparo.payload ? SpineService.nomeDaOrigem(preparo.payload.idSource) : null,
   });
 }
 
-/**
- * CANCELAR PELA RECEPÇÃO — reflete na franquia, não só aqui.
- *
- * A IA cancela a pedido do paciente; isto é o outro lado, pra quando quem
- * precisa desmarcar é a clínica. Cancela na API deles PRIMEIRO e só então
- * limpa o nosso registro: na ordem inversa, uma falha lá deixaria a consulta
- * viva na agenda da clínica e invisível pra nós — que é o pior estado
- * possível, porque ninguém vai atrás do que não aparece.
- */
 export async function cancelScheduleHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -510,13 +434,6 @@ export async function cancelScheduleHandler(req: Request, res: Response): Promis
   res.json({ ok: true, idSchedule: vinculo.spineIdSchedule, quando: vinculo.agendadoPara });
 }
 
-/**
- * CONFIRMAR PRESENÇA pelo painel — o par do "Confirmar presença" do lembrete.
- *
- * Ao contrário do cancelamento, não mexe no nosso vínculo: a consulta continua
- * a mesma, só muda de status lá (AGENDADO → CONFIRMADO). Por isso também não
- * exige a confirmação em dois passos — repetir não tira a vaga de ninguém.
- */
 export async function confirmScheduleHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -550,13 +467,6 @@ export async function confirmScheduleHandler(req: Request, res: Response): Promi
   res.json({ ok: true, idSchedule: vinculo.spineIdSchedule, quando: vinculo.agendadoPara });
 }
 
-/**
- * ORIGEM DE LEADS PELA FRANQUIA — o número que ELES usam para cobrar.
- *
- * Não substitui a origem do nosso painel (a que a SDR digita no Kommo): a
- * divergência entre os dois é o que interessa. Sem intervalo explícito, os
- * últimos 30 dias, que é o recorte de cobrança.
- */
 export async function biLeadsSourcesHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -597,7 +507,6 @@ export async function biLeadsSourcesHandler(req: Request, res: Response): Promis
   });
 }
 
-/** PRÉVIA DO PACIENTE — o que iria pro POST /api/clients, sem enviar. */
 export async function previewPatientHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -613,13 +522,10 @@ export async function previewPatientHandler(req: Request, res: Response): Promis
   res.json({
     ...p,
     origemLegivel: p.payload ? SpineService.nomeDaOrigem(p.payload.idSource) : null,
-    // A tela mostra a chamada literal. Quem confere um cadastro que não dá pra
-    // apagar merece ver o endereço exato pra onde ele vai.
     requisicao: { metodo: 'POST', rota: '/api/clients', base: unit.spineBaseUrl },
   });
 }
 
-/** Cadastra o paciente — manual, a partir de um lead já espelhado. */
 export async function syncPatientHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -635,12 +541,6 @@ export async function syncPatientHandler(req: Request, res: Response): Promise<v
   res.status(r.ok ? 200 : 422).json(r);
 }
 
-/**
- * LEADS PENDENTES — quem entrou no Kommo e ainda não está na franquia.
- *
- * Sem isto, usar a prévia exige saber o id do lead de cabeça, e mandar um lead
- * atrasado exige o dev. A lista responde "quem falta" e dá o id de bandeja.
- */
 export async function pendentesHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -672,11 +572,9 @@ export async function pendentesHandler(req: Request, res: Response): Promise<voi
     return {
       kommoLeadId: l.id,
       titulo,
-      // O nome que sairia — o título é etiqueta de trabalho, não nome.
       nomeLimpo: semNome ? null : SpineSyncService.limparNome(titulo),
       criadoEm: l.created_at ? new Date(l.created_at * 1000).toISOString() : null,
       spineIdLead: v?.spineIdLead ?? null,
-      // O estado que a tela usa pra agrupar e decidir o que oferecer.
       situacao: v?.spineIdLead
         ? ('enviado' as const)
         : semNome
@@ -701,12 +599,6 @@ export async function pendentesHandler(req: Request, res: Response): Promise<voi
   });
 }
 
-/**
- * PRONTIDÃO — cada peça do encaixe, e o que falta pra próxima.
- *
- * Existe porque "está funcionando?" tem seis respostas possíveis e nenhuma
- * delas cabe num booleano. Sem isto, descobrir qual peça faltou exige o dev.
- */
 export async function prontidaoHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -724,7 +616,6 @@ export async function prontidaoHandler(req: Request, res: Response): Promise<voi
     comoResolver: 'Peça ao suporte da franquia e cole em Conexão.',
   });
 
-  // Só chama a franquia se houver token — sem ele o 401 não informa nada.
   let apiOk = false;
   let apiDetalhe = 'Não testado — falta o token.';
   if (unit.spineToken) {
@@ -776,15 +667,6 @@ export async function prontidaoHandler(req: Request, res: Response): Promise<voi
   res.json({ pecas, prontas: pecas.filter((p) => p.ok).length, total: pecas.length });
 }
 
-/**
- * Estado do espelhamento + CONFERÊNCIA CONTRA A FRANQUIA.
- *
- * Contar o que a gente acha que enviou não prova nada: se a API deles mudar,
- * ou o token perder permissão, nosso contador segue subindo feliz enquanto
- * nada chega do outro lado. A única resposta honesta para "está chegando?" é
- * perguntar à franquia — e é isso que `conferencia` faz, comparando os ids
- * que registramos com os que existem lá de verdade.
- */
 export async function listLeadLinksHandler(req: Request, res: Response): Promise<void> {
   const unitId = String(req.params.id);
   const unit = await prisma.unit.findUnique({ where: { id: unitId } });
@@ -804,7 +686,6 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
 
   const contagem = Object.fromEntries(porStatus.map((r) => [r.status, r._count._all]));
 
-  // Conferência: só faz sentido se houver o que conferir e credencial pra isso.
   let conferencia: {
     checado: boolean;
     periodo?: { de: string; ate: string };
@@ -819,7 +700,6 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
     const tz = unit.spineTimezone || 'America/Sao_Paulo';
     const hoje = SpineService.instanteNoFuso(new Date(), tz).slice(0, 10);
     const de = new Date(Date.parse(`${hoje}T00:00:00Z`) - 6 * 86_400_000).toISOString().slice(0, 10);
-    // `endDate` é EXCLUSIVO nesta API — sem o +1 dia, hoje ficaria de fora.
     const ate = new Date(Date.parse(`${hoje}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
     const r = await SpineService.searchLeads(unit, { initialDate: de, endDate: ate });
     if (!r.ok || !r.data) {

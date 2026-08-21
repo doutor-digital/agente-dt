@@ -1,28 +1,3 @@
-// ============================================================================
-// PlaygroundPanel — chat de teste no layout WhatsApp Web (3 colunas).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// 100% sandbox: nenhuma mensagem vai pro banco, nenhuma ação chega no Kommo.
-// O backend (/units/:id/playground/run) recebe o histórico de mensagens,
-// compõe o systemPrompt real da Unit e roda o LLM com tools "fakes" que
-// só registram a chamada.
-//
-// Layout (estilo WhatsApp Web):
-//   - Esquerda: lista de chats — 1 contato fixo "Paciente Teste" (sandbox)
-//   - Centro:   conversa ativa — bolhas verdes/cinzas + tool calls inline
-//                 como bolhas system (centralizadas, pequenas, clicáveis pra
-//                 expandir args)
-//   - Direita:  info do contato — persona da Unit + métricas da sessão
-//                 (latência/tokens/custo cumulativos)
-//
-// Decisão de design — tool calls inline em vez de Timeline lateral:
-// WhatsApp Web puro não tem espaço pra timeline. As tool calls viram bolhas
-// "sistema" centralizadas no chat com emoji + label curto (ex: "🏷️ aplicou
-// tag desqualificado"). Clicar expande args. Preserva debugabilidade sem
-// coluna extra.
-// ============================================================================
-
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -54,8 +29,6 @@ import { useToast } from '../context/ToastContext';
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string; ts: number };
 
-// Item renderizado no centro do chat — derivado do `events`. Mensagens user/
-// assistant viram bolhas; tool_calls viram pílulas system centralizadas.
 type ChatItem =
   | { kind: 'user'; content: string; ts: number }
   | { kind: 'assistant'; content: string; ts: number }
@@ -115,8 +88,6 @@ const TOOL_BUBBLE_CLASSES: Record<string, string> = {
   rose: 'bg-rose-500/10 border-rose-500/30 text-rose-200 hover:bg-rose-500/15',
   fuchsia: 'bg-fuchsia-500/10 border-fuchsia-500/30 text-fuchsia-200 hover:bg-fuchsia-500/15',
   violet: 'bg-violet-500/10 border-violet-500/30 text-violet-200 hover:bg-violet-500/15',
-  // Captura de dados — cor própria pra separar "guardou um dado" das ações
-  // que mexem no lead (tag, etapa, transferência).
   emerald: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200 hover:bg-emerald-500/15',
   zinc: 'bg-zinc-800/80 border-zinc-700/60 text-zinc-300 hover:bg-zinc-800',
 };
@@ -130,7 +101,6 @@ const SUGGESTIONS: string[] = [
   '👀 Vi vocês no Instagram',
 ];
 
-// Agregado da sessão (acumula todos os turnos).
 type TurnMeta = {
   model: string;
   iterations: number;
@@ -139,14 +109,9 @@ type TurnMeta = {
   costUsd: number | null;
 };
 
-// Limites do schema do backend (playground.controller.ts). Espelhados aqui
-// porque estourá-los devolve 400 — e o front mandava o histórico INTEIRO, então
-// a partir da 21ª troca todo envio falhava com "Request failed with status code
-// 400" e a conversa de teste morria sem explicação.
 const MAX_HISTORY = 40;
 const MAX_CONTENT = 4000;
 
-/** Códigos de erro do backend → o que o usuário faz a respeito. */
 const RUN_ERRORS: Record<string, string> = {
   openai_not_configured:
     'Nenhuma chave da OpenAI disponível para este agente. Configure em Integrações → IA & Chave.',
@@ -154,13 +119,12 @@ const RUN_ERRORS: Record<string, string> = {
   unit_not_found: 'Agente não encontrado — ele pode ter sido removido.',
 };
 
-/** Histórico → payload aceito pelo backend: janela deslizante, sem vazios. */
 function toPayload(
   history: ChatMessage[],
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
   return history
-    .filter((m) => m.content.trim().length > 0) // content tem min(1) no schema
-    .slice(-MAX_HISTORY) // as mais recentes são as que importam pro contexto
+    .filter((m) => m.content.trim().length > 0)
+    .slice(-MAX_HISTORY)
     .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_CONTENT) }));
 }
 
@@ -170,15 +134,11 @@ export function PlaygroundPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [events, setEvents] = useState<PlaygroundTimelineEvent[]>([]);
   const [turns, setTurns] = useState<TurnMeta[]>([]);
-  // Quantas tools de CAPTURA o sandbox vai registrar. O contador do painel
-  // dizia "5" fixo, o que virou mentira quando as `salvar_*` passaram a rodar
-  // aqui — o número muda por unidade, conforme as regras ativas.
   const [captureCount, setCaptureCount] = useState<number | null>(null);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll quando chegam itens novos no chat.
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el) return;
@@ -197,7 +157,6 @@ export function PlaygroundPanel() {
         if (alive) setCaptureCount(rules.filter((r) => r.enabled).length);
       })
       .catch(() => {
-        // Contador é informativo — se falhar, some em vez de quebrar a tela.
         if (alive) setCaptureCount(null);
       });
     return () => {
@@ -205,7 +164,6 @@ export function PlaygroundPanel() {
     };
   }, [selectedUnitId]);
 
-  // Reset quando troca de unidade.
   useEffect(() => {
     setMessages([]);
     setEvents([]);
@@ -218,9 +176,6 @@ export function PlaygroundPanel() {
     [selectedUnitId, input, loading],
   );
 
-  // Deriva os itens do chat (user/assistant/tool) a partir dos events. Os
-  // events do servidor já vêm em ordem cronológica — só filtramos thinking
-  // (ruído visual demais como bolha).
   const chatItems = useMemo<ChatItem[]>(() => {
     const items: ChatItem[] = [];
     for (const ev of events) {
@@ -238,8 +193,6 @@ export function PlaygroundPanel() {
         });
       }
     }
-    // Durante o loading, a msg do user já foi pra `messages` mas ainda não
-    // veio do server em `events`. Acrescenta no final pra não "sumir".
     if (loading && messages.length > 0) {
       const lastUserInMsgs = [...messages].reverse().find((m) => m.role === 'user');
       const lastUserInEvents = [...items].reverse().find((i) => i.kind === 'user') as
@@ -277,8 +230,6 @@ export function PlaygroundPanel() {
       setEvents((prev) => [...prev, ...result.timeline]);
       setTurns((prev) => [...prev, result.meta]);
     } catch (err) {
-      // O backend devolve o motivo em `error`; sem traduzir, o usuário só via
-      // "Request failed with status code 400" e não tinha o que fazer.
       const code = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       const detail =
         (code && RUN_ERRORS[code]) ??
@@ -305,13 +256,11 @@ export function PlaygroundPanel() {
     );
   }
 
-  // Métricas agregadas da sessão.
   const totalLatency = turns.reduce((acc, t) => acc + t.totalLatencyMs, 0);
   const totalCost = turns.reduce((acc, t) => acc + (t.costUsd ?? 0), 0);
   const totalTokens = turns.reduce((acc, t) => acc + (t.tokens?.total ?? 0), 0);
   const lastModel = turns.length > 0 ? turns[turns.length - 1].model : null;
 
-  // Preview da última mensagem pra mostrar na lista lateral.
   const lastChatItem = chatItems[chatItems.length - 1];
   const lastMessagePreview =
     lastChatItem?.kind === 'user'
@@ -332,13 +281,11 @@ export function PlaygroundPanel() {
 
   return (
     <div className="flex-1 overflow-hidden flex flex-col bg-zinc-950">
-      {/* Header slim */}
       <SlimHeader
         onReset={reset}
         canReset={messages.length > 0 || events.length > 0}
       />
 
-      {/* Corpo 3 colunas */}
       <div className="flex-1 overflow-hidden flex">
         <ChatListSidebar
           lastMessagePreview={lastMessagePreview}
@@ -359,10 +306,6 @@ export function PlaygroundPanel() {
     </div>
   );
 }
-
-// ===========================================================================
-// Header slim — fica no topo, fora das 3 colunas
-// ===========================================================================
 
 function SlimHeader({
   onReset,
@@ -397,10 +340,6 @@ function SlimHeader({
   );
 }
 
-// ===========================================================================
-// Coluna esquerda — lista de chats (1 contato fixo)
-// ===========================================================================
-
 function ChatListSidebar({
   lastMessagePreview,
   lastTs,
@@ -410,7 +349,6 @@ function ChatListSidebar({
 }) {
   return (
     <aside className="w-[320px] shrink-0 flex flex-col border-r border-zinc-800/60 bg-zinc-950">
-      {/* Header da lista — barra de busca decorativa */}
       <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center gap-2">
         <div className="w-9 h-9 rounded-full bg-emerald-700/80 flex items-center justify-center text-white text-sm font-semibold ring-2 ring-emerald-500/30">
           DT
@@ -428,7 +366,6 @@ function ChatListSidebar({
         </button>
       </div>
 
-      {/* Barra de busca decorativa */}
       <div className="px-3 py-2 border-b border-zinc-800/60">
         <div className="flex items-center gap-2 bg-zinc-900/80 rounded-full px-3 py-1.5 ring-1 ring-zinc-800/80">
           <Search size={13} className="text-zinc-500 shrink-0" />
@@ -441,7 +378,6 @@ function ChatListSidebar({
         </div>
       </div>
 
-      {/* Item único — Paciente Teste */}
       <div className="flex-1 overflow-y-auto">
         <button
           type="button"
@@ -475,10 +411,6 @@ function ChatListSidebar({
   );
 }
 
-// ===========================================================================
-// Centro — chat com bolhas + tool calls inline + composer
-// ===========================================================================
-
 function ChatCenter({
   chatScrollRef,
   chatItems,
@@ -500,7 +432,6 @@ function ChatCenter({
 }) {
   return (
     <div className="wa-theme flex-1 min-w-0 flex flex-col" style={{ background: 'var(--wa-bg)' }}>
-      {/* Header do chat — contato ativo */}
       <div
         className="flex items-center gap-3 px-4 py-2 shrink-0"
         style={{ background: 'var(--wa-bar)' }}
@@ -554,7 +485,6 @@ function ChatCenter({
         ))}
       </div>
 
-      {/* Stream do chat — papel de parede do WhatsApp */}
       <div
         ref={chatScrollRef}
         className="wa-wallpaper flex-1 overflow-y-auto px-4 md:px-12 py-4 space-y-0.75"
@@ -573,8 +503,6 @@ function ChatCenter({
         )}
 
         {chatItems.map((item, i) => {
-          // O rabinho só vai na PRIMEIRA de uma sequência do mesmo remetente —
-          // é assim no app, e sem isso um bloco de 4 respostas vira uma serra.
           const prev = chatItems[i - 1];
           const first = !prev || prev.kind !== item.kind;
           return <ChatItemRow key={`${item.ts}-${i}`} item={item} first={first} />;
@@ -583,7 +511,6 @@ function ChatCenter({
         {loading && <TypingIndicator />}
       </div>
 
-      {/* Composer */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -666,7 +593,6 @@ function ChatBubble({
   first,
 }: {
   item: Extract<ChatItem, { kind: 'user' | 'assistant' }>;
-  /** Primeira de uma sequência do mesmo remetente — só ela leva o rabinho. */
   first: boolean;
 }) {
   const isUser = item.kind === 'user';
@@ -683,9 +609,6 @@ function ChatBubble({
           boxShadow: '0 1px 0.5px rgba(11,20,26,0.35)',
         }}
       >
-        {/* O horário flutua no canto: o texto corre por baixo e só a ÚLTIMA
-            linha reserva espaço pra ele — é o truque do WhatsApp que evita
-            tanto a linha órfã quanto o bloco de altura dobrada. */}
         <div className="text-[14.2px] leading-4.75 whitespace-pre-wrap wrap-break-word">
           {item.content}
           <span className="inline-block w-15.5 h-1 align-bottom" aria-hidden />
@@ -708,9 +631,6 @@ function ToolSystemBubble({
   item: Extract<ChatItem, { kind: 'tool' }>;
 }) {
   const [open, setOpen] = useState(false);
-  // Tools de captura são DINÂMICAS (uma por regra), então não cabem no
-  // TOOL_META fixo. O backend manda `fieldName`/`value` nos args justamente
-  // pra timeline conseguir mostrar "salvou Queixa: …" em vez do nome cru.
   const capture =
     item.tool.startsWith('salvar_') || typeof item.args.fieldName === 'string'
       ? {
@@ -808,10 +728,6 @@ function TypingIndicator() {
   );
 }
 
-// ===========================================================================
-// Coluna direita — info do contato + métricas da sessão
-// ===========================================================================
-
 interface SessionMetrics {
   turns: number;
   totalLatencyMs: number;
@@ -827,7 +743,6 @@ function ContactInfoSidebar({
 }: {
   unit: ReturnType<typeof useUnit>['selectedUnit'];
   session: SessionMetrics;
-  /** Regras de captura ativas — null enquanto carrega ou se a busca falhar. */
   captureCount: number | null;
 }) {
   const personaTone = unit?.personaTone ?? '—';
@@ -835,7 +750,6 @@ function ContactInfoSidebar({
 
   return (
     <aside className="w-[320px] shrink-0 flex flex-col border-l border-zinc-800/60 bg-zinc-950 overflow-y-auto">
-      {/* Hero — avatar grande + nome */}
       <div className="px-6 pt-8 pb-5 text-center border-b border-zinc-800/60">
         <div className="w-24 h-24 rounded-full bg-emerald-700/40 flex items-center justify-center text-3xl ring-4 ring-emerald-500/15 mx-auto mb-3">
           🤒
@@ -844,7 +758,6 @@ function ContactInfoSidebar({
         <div className="text-[11px] text-zinc-500 mt-0.5">WhatsApp · sandbox 🧪</div>
       </div>
 
-      {/* Persona ativa */}
       <Section icon={<Sparkles size={13} className="text-violet-300" />} title="Persona ativa">
         <SectionRow label="Empresa" value={personaCompany} />
         <SectionRow label="Tom" value={String(personaTone)} />
@@ -860,7 +773,6 @@ function ContactInfoSidebar({
         )}
       </Section>
 
-      {/* Setup do agente */}
       <Section icon={<Zap size={13} className="text-amber-300" />} title="Setup do agente">
         <SectionRow
           label="Tools sandbox"
@@ -889,7 +801,6 @@ function ContactInfoSidebar({
         />
       </Section>
 
-      {/* Métricas da sessão */}
       <Section icon={<Hash size={13} className="text-sky-300" />} title="Sessão atual">
         <SectionRow label="Turnos" value={String(session.turns)} />
         <SectionRow
@@ -909,7 +820,6 @@ function ContactInfoSidebar({
         )}
       </Section>
 
-      {/* Dica */}
       <div className="px-4 py-4 mt-auto border-t border-zinc-800/60">
         <div className="flex items-start gap-2 text-[11px] text-zinc-500 leading-relaxed">
           <BookOpen size={13} className="text-zinc-600 shrink-0 mt-0.5" />
@@ -975,10 +885,6 @@ function SectionRow({
   );
 }
 
-// ===========================================================================
-// Helpers
-// ===========================================================================
-
 function formatClock(ts: number): string {
   return new Date(ts).toLocaleTimeString('pt-BR', {
     hour: '2-digit',
@@ -997,6 +903,4 @@ function formatNumber(n: number): string {
   return String(n);
 }
 
-// Re-export pra evitar warning de import não utilizado em casos parciais.
-// (Plus é placeholder se quisermos um botão "novo chat" no futuro.)
 void Plus;

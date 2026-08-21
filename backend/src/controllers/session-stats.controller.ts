@@ -1,14 +1,3 @@
-// ============================================================================
-// session-stats.controller.ts — endpoint máquina-a-máquina pro n8n.
-//
-// GET /integrations/:unitSlug/session-stats/:leadId
-//   Header obrigatório: x-internal-key: <INTERNAL_API_KEY>
-//
-// Devolve os campos de sessão DERIVADOS da franquia (ver session-stats.service).
-// O n8n consome isto e dá PATCH nos campos do Kommo — "backend lê, n8n escreve".
-// Rota PÚBLICA (registrada antes do requireAuth), protegida só pela chave.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../lib/env.js';
@@ -16,12 +5,10 @@ import { logger } from '../lib/logger.js';
 import { computeSessionStats } from '../services/session-stats.service.js';
 
 export async function sessionStatsHandler(req: Request, res: Response): Promise<void> {
-  // 1) Chave interna. Sem env configurada, o endpoint fica desligado.
   if (!env.INTERNAL_API_KEY) {
     res.status(503).json({ error: 'integração desabilitada (INTERNAL_API_KEY não configurada)' });
     return;
   }
-  // Aceita a chave por header custom (x-internal-key) OU Authorization: Bearer.
   const bearer = req.header('authorization')?.replace(/^Bearer\s+/i, '').trim();
   const provided = req.header('x-internal-key') ?? bearer;
   if (provided !== env.INTERNAL_API_KEY) {
@@ -46,8 +33,6 @@ export async function sessionStatsHandler(req: Request, res: Response): Promise<
     return;
   }
 
-  // idClient opcional na query — quem chama (n8n) já leu o campo na listagem e
-  // passa direto, pra o endpoint NÃO precisar de getLead (evita rate-limit).
   const idClientRaw = Number(req.query.idClient);
   const idClient = Number.isInteger(idClientRaw) && idClientRaw > 0 ? idClientRaw : undefined;
 

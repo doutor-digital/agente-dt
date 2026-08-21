@@ -1,14 +1,3 @@
-// ============================================================================
-// prisma.ts — Singleton do Prisma Client.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Em dev, o hot-reload (tsx watch) recria módulos. Sem o singleton via
-// globalThis, abriríamos uma nova conexão TCP ao Postgres a cada reload,
-// estourando o `max_connections` em ~30 segundos de desenvolvimento.
-// Em produção o módulo só carrega uma vez, então o `if` é inócuo.
-// ============================================================================
-
 import { PrismaClient } from '@prisma/client';
 import { env } from './env.js';
 

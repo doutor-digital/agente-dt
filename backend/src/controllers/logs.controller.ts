@@ -1,22 +1,3 @@
-// ============================================================================
-// logs.controller.ts — API REST do painel "Erros" (warn/error/fatal).
-//
-// LÓGICA DE ENGENHARIA — MULTI-TENANT
-// -----------------------------------
-// Mesmo padrão do traces.controller.ts:
-//  - UNIT_ADMIN: forçado à própria unit (ignora query param).
-//  - SUPER_ADMIN: respeita ?unitId; sem param vê tudo.
-//
-// Filtros suportados:
-//   level   — WARN | ERROR | FATAL
-//   module  — match exato (ex: "kommo.service")
-//   q       — busca case-insensitive em `msg`
-//   since   — ISO date; só logs >= esse instante
-//   unitId  — usado por SUPER_ADMIN
-//
-// Limite fixo de 200 (mesmo do listTraces). Ordenado por createdAt desc.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import type { LogLevel, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -86,7 +67,6 @@ export async function listSystemLogs(req: Request, res: Response): Promise<void>
   res.json({ logs, counts });
 }
 
-// Lista distinct modules — alimenta o dropdown do filtro no front.
 export async function listSystemLogModules(req: Request, res: Response): Promise<void> {
   const unitId = resolveUnitFilter(req);
   const rows = await prisma.systemLog.findMany({

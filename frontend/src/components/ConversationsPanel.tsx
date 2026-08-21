@@ -1,10 +1,3 @@
-// ============================================================================
-// ConversationsPanel — visão "WhatsApp" agrupada por lead.
-//
-// Lista à esquerda (conversas ordenadas por última mensagem), histórico
-// completo no centro. Cada mensagem da IA mostra link pro feed do trace.
-// ============================================================================
-
 import { useEffect, useMemo, useState } from 'react';
 import { Bot, Brain, Loader2, MessageCircle, Phone, ThumbsDown, User2 } from 'lucide-react';
 import clsx from 'clsx';
@@ -37,15 +30,11 @@ export function ConversationsPanel() {
     }
   }, [conversations, selectedId]);
 
-  // Reset quando trocar de unidade.
   useEffect(() => {
     setSelectedId(null);
     setDetail(null);
   }, [selectedUnitId]);
 
-  // Quando o usuário clica num lead pelo Dashboard (modal LeadsBucketModal),
-  // ele dispara `app:openConversation` — selecionamos a conversa correspondente
-  // ao ser montados.
   useEffect(() => {
     const handler = (e: Event) => {
       const ev = e as CustomEvent<{ conversationId?: string }>;
@@ -70,7 +59,6 @@ export function ConversationsPanel() {
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      {/* Lista de conversas */}
       <aside className="w-72 shrink-0 border-r border-zinc-800/80 bg-ink-900 flex flex-col">
         <div className="p-3 border-b border-zinc-800/80 flex items-center justify-between">
           <span className="text-[11px] uppercase tracking-wider text-zinc-500">Conversas</span>
@@ -116,7 +104,6 @@ export function ConversationsPanel() {
         </div>
       </aside>
 
-      {/* Histórico */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {!detail ? (
           <div className="flex-1 grid place-items-center text-zinc-600 text-sm">
@@ -156,7 +143,6 @@ export function ConversationsPanel() {
                     key={m.id}
                     m={m}
                     onFlagToggle={(flagged) => {
-                      // Atualização otimista — refresh do detail quando o usuário trocar de conversa.
                       m.flagged = flagged;
                     }}
                   />
@@ -176,17 +162,6 @@ export function ConversationsPanel() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// MemoryRail — o que a IA lembra deste lead, ao lado do histórico.
-//
-// Separa DADO DURO (campo do Kommo, sob "Dados do CRM") do contexto que o
-// resumo da IA inferiu ("Observado na conversa"). O operador precisa saber o
-// que é fato registrado e o que é interpretação — não são a mesma coisa na
-// hora de confiar.
-// ---------------------------------------------------------------------------
-
-// Chaves que vêm de campo do Kommo (dado duro). Espelha CAMPOS_IMPORTANTES do
-// backend — se mudar lá, atualizar aqui.
 const HARD_KEYS = new Set([
   'queixa', 'qualificacao', 'preferencia_horario', 'agendou', 'intencao', 'cidade', 'profissao', 'sexo',
 ]);
@@ -200,13 +175,11 @@ const LABELS: Record<string, string> = {
   cidade: 'Cidade',
   profissao: 'Profissão',
   sexo: 'Sexo',
-  // Último contato — a noção de tempo/desfecho que a IA usa pra retomar.
   ultimo_contato: 'Último contato',
   ultimo_desfecho: 'Como terminou',
   travou_em: 'Travou em',
 };
 
-/** Rótulo técnico do desfecho → frase que o dono entende na tela. */
 const DESFECHO_LABEL: Record<string, string> = {
   agendou: 'Agendou',
   sumiu: 'Parou de responder',
@@ -215,7 +188,6 @@ const DESFECHO_LABEL: Record<string, string> = {
   so_duvida: 'Só tirou dúvida',
 };
 
-/** Data crua não diz nada pro dono: vira "há 3 dias". */
 function prettyValor(k: string, v: unknown): string {
   const s = String(v ?? '');
   if (k === 'ultimo_desfecho') return DESFECHO_LABEL[s] ?? s;

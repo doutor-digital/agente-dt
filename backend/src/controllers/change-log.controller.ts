@@ -1,7 +1,3 @@
-// ============================================================================
-// change-log.controller.ts — GET do histórico de melhorias da unidade.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { listChangeLog } from '../services/change-log.service.js';
 

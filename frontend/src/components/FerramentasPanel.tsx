@@ -1,11 +1,3 @@
-// ============================================================================
-// FerramentasPanel — aba dedicada pra ligar/desligar tools da IA e editar
-// suas descrições (que são os gatilhos que o LLM lê pra decidir QUANDO chamar).
-//
-// Antes vivia dentro de AgentConfigPanel ("Avançado"), mas a Avançado misturava
-// prompt + tools + modelo. Tools agora é cidadão de 1ª classe da sidebar.
-// ============================================================================
-
 import { useEffect, useState } from 'react';
 import {
   ChevronDown,
@@ -35,8 +27,6 @@ export function FerramentasPanel() {
     api.getConfig(selectedUnitId).then((r) => {
       if (!alive) return;
       setLoaded(r);
-      // Merge tools conhecidas (vindas do código) com as salvas no banco.
-      // Garante que tools novas apareçam na UI mesmo antes do primeiro save.
       const byName = new Map(r.config.tools.map((t) => [t.name, t]));
       const merged: ToolConfig[] = r.knownTools.map((name) => {
         const existing = byName.get(name);
@@ -105,7 +95,6 @@ export function FerramentasPanel() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-6">
-        {/* Header */}
         <div className="flex items-center justify-between sticky top-0 bg-zinc-950/95 backdrop-blur py-3 z-10 border-b border-zinc-800/60">
           <div>
             <h1 className="text-2xl font-display font-bold text-zinc-100 tracking-tight flex items-center gap-2">
@@ -132,7 +121,6 @@ export function FerramentasPanel() {
           </button>
         </div>
 
-        {/* Lista de tools */}
         <section className="space-y-2">
           {draft.tools.map((tool) => {
             const expanded = openTools[tool.name] ?? false;
@@ -210,7 +198,6 @@ export function FerramentasPanel() {
           })}
         </section>
 
-        {/* Dica final */}
         <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-xs text-zinc-400 leading-relaxed">
           <strong className="text-zinc-300">Dica:</strong> a IA decide quais tools chamar a
           cada turno baseado nas descrições aqui. Se uma tool nunca dispara, refine o gatilho

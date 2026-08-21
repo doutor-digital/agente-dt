@@ -23,11 +23,6 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 86_400_000)}d`;
 }
 
-/**
- * Sidebar escura com histórico de webhooks.
- * Layout inspirado em ChatGPT/AgentGPT: lista densa, item ativo destacado
- * com borda esquerda + bg ligeiramente mais claro.
- */
 export function Sidebar({ traces, selectedId, onSelect, loading }: Props) {
   return (
     <aside className="w-72 shrink-0 bg-ink-900 border-r border-zinc-800/80 flex flex-col h-screen">

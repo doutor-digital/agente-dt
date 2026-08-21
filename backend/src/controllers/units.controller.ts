@@ -1,17 +1,3 @@
-// ============================================================================
-// units.controller.ts — CRUD de Units + KPIs.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Endpoints simples consumidos pelo painel "Unidades". Sem auth no MVP —
-// roadmap.
-//
-// Os secrets (tokens) são MASCARADOS na resposta GET. PUT/POST aceitam
-// secrets em texto puro, mas se o front mandar o valor mascarado (ex: o
-// próprio campo retornado por GET), tratamos como "manter o atual" — assim
-// o usuário pode editar o nome sem precisar redigitar a chave.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
@@ -29,10 +15,6 @@ import {
   type UnitInput,
 } from '../services/units.service.js';
 
-// ---------------------------------------------------------------------------
-// Validação.
-// ---------------------------------------------------------------------------
-
 const slugRegex = /^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/;
 
 const unitInputBase = {
@@ -46,7 +28,6 @@ const unitInputBase = {
   kommoPausedFieldId: z.coerce.number().int().nullable().optional(),
   kommoWonStatusIds: z.array(z.coerce.number().int()).optional(),
   kommoAllowedStatusIds: z.array(z.coerce.number().int()).optional(),
-  // Etapas em que o ALERTA de SLA vale (visual/configurável no front).
   slaAlertStatusIds: z.array(z.coerce.number().int()).optional(),
   kommoBypassSalesbot: z.boolean().optional(),
   kommoWidgetReplyEnabled: z.boolean().optional(),
@@ -75,15 +56,12 @@ const unitInputBase = {
   metaWabaId: z.string().nullable().optional(),
   metaMonthlyBudgetUsd: z.coerce.number().min(0).max(1_000_000).optional(),
 
-  // Instagram — agente de comentários (canal separado do WhatsApp).
   igEnabled: z.boolean().optional(),
   igUserId: z.string().nullable().optional(),
   igAccessToken: z.string().nullable().optional(),
   igVerifyToken: z.string().nullable().optional(),
   igAppSecret: z.string().nullable().optional(),
   igDryRun: z.boolean().optional(),
-  // Vira link wa.me. Número curto gera link quebrado: o paciente clica e cai
-  // no nada — falha visível pra ele e invisível pra gente.
   igWhatsappNumber: z
     .string()
     .max(30)
@@ -97,7 +75,6 @@ const unitInputBase = {
   igReplyFieldId: z.coerce.number().int().positive().nullable().optional(),
   igCommentPrompt: z.string().max(4000).nullable().optional(),
 
-  // Facebook — espelha o Instagram.
   fbEnabled: z.boolean().optional(),
   fbPageId: z.string().nullable().optional(),
   fbAccessToken: z.string().nullable().optional(),
@@ -110,14 +87,9 @@ const unitInputBase = {
   fbReplyFieldId: z.coerce.number().int().positive().nullable().optional(),
   fbCommentPrompt: z.string().max(4000).nullable().optional(),
 
-  // API Spine (franquia Doutor Hérnia) — agenda.
   spineEnabled: z.boolean().optional(),
   spineBaseUrl: z.string().url().optional(),
   spineToken: z.string().nullable().optional(),
-  // FUSO PRECISA SER IANA DE VERDADE. "America/SaoPaulo" (sem underscore)
-  // passaria por qualquer validação de string e quebraria a conversão de
-  // horário EM SILÊNCIO — o paciente combinaria um horário e chegaria em
-  // outro. O `Intl` é a única fonte que sabe quais fusos existem.
   spineTimezone: z
     .string()
     .max(60)
@@ -146,16 +118,12 @@ const unitInputBase = {
   spineAgendaDays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   spineSlotMinutes: z.number().int().min(5).max(240).optional(),
 
-  // Triagem — o que a IA precisa descobrir antes de conduzir adiante.
   triageEnabled: z.boolean().optional(),
   triageInstructions: z.string().max(4000).nullable().optional(),
   systemPrompt: z.string().max(20_000).optional(),
-  // Modo prompt único — o systemPrompt vira o prompt inteiro (ver composer).
   singlePromptMode: z.boolean().optional(),
-  // Categoria/segmento — seleciona o preset de persona no composer.
   category: z.string().max(60).nullable().optional(),
 
-  // Wizard
   personaCompanyName: z.string().max(200).nullable().optional(),
   personaTone: z.enum(['casual', 'formal', 'friendly']).nullable().optional(),
   personaGreeting: z.string().max(500).nullable().optional(),
@@ -165,7 +133,6 @@ const unitInputBase = {
   personaMinReplyGapSec: z.coerce.number().int().min(0).max(120).optional(),
   personaEmojis: z.array(z.string().min(1).max(8)).max(60).optional(),
   personaEmojiFrequency: z.enum(['low', 'normal', 'high']).optional(),
-  // Fontes — textos longos. Tamanho generoso pra acomodar docs ricos.
   sourcePapel: z.string().max(20_000).nullable().optional(),
   sourceProdutos: z.string().max(20_000).nullable().optional(),
   sourceNegocio: z.string().max(20_000).nullable().optional(),
@@ -204,19 +171,6 @@ const updateSchema = z.object({
   name: unitInputBase.name.optional(),
 }).partial();
 
-// ---------------------------------------------------------------------------
-// GUARD DE BOOT: tudo que a validação aceita tem que ser gravável.
-//
-// O bug que isto previne já aconteceu e custou caro: 35 campos (Spine, Instagram,
-// Facebook, triagem) estavam no schema de validação e no formulário, o PATCH
-// respondia 200 com a unidade inteira no corpo — e nada era gravado, porque a
-// camada de persistência tinha uma lista de campos escrita à mão que ninguém
-// atualizou. Sem erro, sem log, sem sintoma: a tela dizia "salvo".
-//
-// Roda uma vez, no import. Não derruba o processo — um agente no ar vale mais
-// que um campo novo — mas grita no log em nível de erro, que é onde a operação
-// já olha.
-// ---------------------------------------------------------------------------
 {
   const gravaveis = new Set(colunasEditaveisDaUnit());
   const orfaos = Object.keys(updateSchema.shape).filter((k) => !gravaveis.has(k));
@@ -228,7 +182,6 @@ const updateSchema = z.object({
   }
 }
 
-// Heurística pra detectar valor mascarado vindo do front e ignorá-lo no PATCH.
 function isMasked(v: unknown): boolean {
   return typeof v === 'string' && v.includes('••••');
 }
@@ -258,12 +211,7 @@ function dropMaskedSecrets<T extends Partial<UnitInput>>(input: T): T {
   return out as T;
 }
 
-// ---------------------------------------------------------------------------
-// Handlers.
-// ---------------------------------------------------------------------------
-
 export async function listUnitsHandler(req: Request, res: Response): Promise<void> {
-  // UNIT_ADMIN só vê sua própria unit. SUPER_ADMIN vê todas.
   let units = await listUnits();
   if (req.user?.role === 'UNIT_ADMIN') {
     units = units.filter((u) => u.id === req.user!.unitId);
@@ -337,14 +285,6 @@ export async function deleteUnitHandler(req: Request, res: Response): Promise<vo
   }
 }
 
-// ---------------------------------------------------------------------------
-// Clone — duplica uma unidade copiando TODOS os campos (inclusive secrets).
-//
-// Server-side de propósito: o GET retorna secrets mascarados, então clonar
-// pelo front (criar nova + paste) não funcionaria — pegaria a máscara em vez
-// do token real. Aqui lemos do DB sem máscara, derivamos slug/name únicos e
-// criamos a nova row em uma única operação. Token nunca sai do servidor.
-// ---------------------------------------------------------------------------
 export async function cloneUnitHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
   try {
@@ -354,7 +294,6 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Slug único: {slug}-copy, {slug}-copy-2, ...
     const baseSlug = `${source.slug}-copy`.slice(0, 48);
     let candidateSlug = baseSlug;
     for (let n = 2; n < 100; n += 1) {
@@ -365,8 +304,6 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
 
     const newName = `${source.name} (cópia)`.slice(0, 120);
 
-    // Copia tudo exceto id/slug/name/timestamps. Json nullable precisa de
-    // Prisma.DbNull (não aceita TS null direto).
     const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, ...rest } = source;
     const cloned = await prisma.unit.create({
       data: {
@@ -392,12 +329,6 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
     res.status(500).json({ error: 'clone_failed', message: msg });
   }
 }
-
-// ---------------------------------------------------------------------------
-// Stats da unidade — usados no card de header do dashboard.
-// Retorna totais de execuções, taxa de sucesso, latência média, custo total
-// (USD) e tokens consumidos.
-// ---------------------------------------------------------------------------
 
 export async function unitStatsHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
@@ -456,16 +387,6 @@ export async function unitStatsHandler(req: Request, res: Response): Promise<voi
   });
 }
 
-// ---------------------------------------------------------------------------
-// Pipelines do Kommo — usado pelo painel pra mostrar as etapas (statusId+nome)
-// que o usuário copia pro system prompt e pra `kommoWonStatusIds`.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Custom fields do Kommo (por Unit). Versão moderna do legado
-// /admin/kommo-fields, que dependia das credenciais do .env.
-// ---------------------------------------------------------------------------
-
 export async function kommoFieldsHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
   const unit = await prisma.unit.findUnique({ where: { id } });
@@ -495,15 +416,6 @@ export async function kommoFieldsHandler(req: Request, res: Response): Promise<v
   }
 }
 
-// ---------------------------------------------------------------------------
-// Tags de leads do Kommo (por Unit) — usado no painel pra montar dropdowns
-// nas regras de automação (aplicar_tag dropdown ao invés de texto livre).
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Dashboard executivo — KPIs grandes + funil do pipeline.
-// ---------------------------------------------------------------------------
-
 export async function dashboardHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
   const unit = await prisma.unit.findUnique({ where: { id } });
@@ -512,8 +424,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     return;
   }
 
-  // Período configurável via ?days=N — default 7 (alinhado com o mock do
-  // "ATIVIDADE DO AGENTE DE IA — ÚLTIMOS 7 DIAS"). Clamp [1, 365].
   const daysParam = Number(req.query.days ?? 7);
   const periodDays = Number.isFinite(daysParam)
     ? Math.max(1, Math.min(Math.round(daysParam), 365))
@@ -521,19 +431,9 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
 
   const now = new Date();
   const periodStart = new Date(now.getTime() - periodDays * 24 * 60 * 60 * 1000);
-  // Período anterior — mesma duração, imediatamente antes do atual.
-  // Usado pra calcular delta % ("+12% vs período anterior").
   const prevPeriodStart = new Date(periodStart.getTime() - periodDays * 24 * 60 * 60 * 1000);
   const prevPeriodEnd = periodStart;
 
-  // Queries em paralelo. Divisão por origem:
-  //   - mvAgg / mvDaily / mvChannel / mvPrev: leem as MATERIALIZED VIEWS
-  //     mv_unit_daily e mv_unit_daily_channel (refresh a cada 5min). Cobrem
-  //     SUMs agregados, série diária, breakdown por canal e deltas do período
-  //     anterior — antes eram ~9 table-scans, agora são ~4 reads indexados.
-  //   - O resto fica como query live: DISTINCT lead_id, NOT EXISTS, correlações
-  //     com execution_steps por título — coisas que não cabem num agregado
-  //     diário limpo. Stale window aceitável de até 5min nas MVs.
   const [
     uniqueLeadsRow,
     answeredConvosRow,
@@ -543,7 +443,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     unansweredRow,
     convertedBySdrRow,
     convsByHour,
-    // === leituras da MV ===
     mvAgg,
     mvDaily,
     mvChannel,
@@ -567,7 +466,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
             AND m.created_at >= ${periodStart}
         )
     `,
-    // Leads cuja PRIMEIRA mensagem caiu num sábado (6) ou domingo (0).
     prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(DISTINCT c.lead_id)::bigint AS count
       FROM conversations c
@@ -575,7 +473,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
         AND c.created_at >= ${periodStart}
         AND EXTRACT(DOW FROM c.created_at) IN (0, 6)
     `,
-    // Conversas com QUALQUER mensagem em sábado/domingo no período.
     prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(DISTINCT c.id)::bigint AS count
       FROM conversations c
@@ -584,8 +481,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
         AND m.created_at >= ${periodStart}
         AND EXTRACT(DOW FROM m.created_at) IN (0, 6)
     `,
-    // Transferências: conversas (leadId distinto) onde rodou step de pausar_ia
-    // no período. Match por título — o recorder inscreve "Decisão: pausar IA…".
     prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(DISTINCT et.lead_id)::bigint AS count
       FROM execution_traces et
@@ -595,8 +490,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
         AND es.kind = 'TOOL_CALL'
         AND es.title ILIKE 'decisão: pausar%'
     `,
-    // Perguntas sem resposta: mensagem do paciente que não recebeu resposta
-    // do assistant dentro de 60min na mesma conversa.
     prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(*)::bigint AS count
       FROM messages m
@@ -612,11 +505,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
             AND m2.created_at < m.created_at + INTERVAL '60 minutes'
         )
     `,
-    // Conversões pela SDR: conversa convertida E teve `pausar_ia` (handoff)
-    // ANTES do convertedAt. Heurística: lead_id da conversa apareceu num
-    // execution_step kind=TOOL_CALL title ILIKE 'decisão: pausar%' antes do
-    // converted_at. Fica live porque depende de correlação por lead_id com
-    // execution_steps — não é agregável por dia sem perder a semântica.
     prisma.$queryRaw<Array<{ count: bigint }>>`
       SELECT COUNT(DISTINCT c.id)::bigint AS count
       FROM conversations c
@@ -633,9 +521,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
             AND es.title ILIKE 'decisão: pausar%'
         )
     `,
-    // Peak hour — fica live porque a MV está em grão diário. Mover pra MV
-    // exigiria mv_unit_day_hour (uma linha por hora) — vale criar quando
-    // outros KPIs horários aparecerem no roadmap.
     prisma.$queryRaw<Array<{ hour: number; count: bigint }>>`
       SELECT EXTRACT(HOUR FROM m."created_at")::int AS hour, COUNT(*)::bigint AS count
       FROM messages m
@@ -647,8 +532,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       ORDER BY 2 DESC
       LIMIT 1
     `,
-    // === MV: SUMs agregados do período atual ===
-    // Um único SELECT cobre conversões, custo LLM, calls, tokens, latência média.
     prisma.$queryRaw<Array<{
       new_conversations: bigint;
       converted_count: bigint;
@@ -670,7 +553,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       WHERE unit_id = ${id}
         AND day >= ${periodStart}::date
     `,
-    // === MV: série temporal diária — base do sparkline ===
     prisma.$queryRaw<Array<{ day: Date; messages: bigint; conversations: bigint }>>`
       SELECT day, msgs_total AS messages, active_conversations AS conversations
       FROM mv_unit_daily
@@ -678,7 +560,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
         AND day >= ${periodStart}::date
       ORDER BY day ASC
     `,
-    // === MV: breakdown de mensagens por canal (do paciente) ===
     prisma.$queryRaw<Array<{ channel: string; count: bigint }>>`
       SELECT channel, COALESCE(SUM(msgs_user), 0)::bigint AS count
       FROM mv_unit_daily_channel
@@ -688,8 +569,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       HAVING COALESCE(SUM(msgs_user), 0) > 0
       ORDER BY 2 DESC
     `,
-    // === Período anterior — KPIs cobertos pela MV (converted + llm_cost) ===
-    // uniqLeadsPrev e answeredPrev continuam como queries DISTINCT live.
     (async () => {
       const [mvPrevAgg, uniqLeadsPrev, answeredPrev] = await Promise.all([
         prisma.$queryRaw<Array<{
@@ -736,9 +615,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     })(),
   ]);
 
-  // Desempacota agregados da MV em variáveis equivalentes às originais.
-  // `llm_tokens_total` existe no agregado mas o contrato do dashboard
-  // não expõe — fica disponível pra evoluções futuras sem nova query.
   const mvRow = mvAgg[0];
   const totalConvos = Number(mvRow?.new_conversations ?? 0);
   const convertedConvos = Number(mvRow?.converted_count ?? 0);
@@ -758,19 +634,15 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
   const handoffRate = uniqueLeads > 0 ? handoffCount / uniqueLeads : 0;
   const conversionRate = totalConvos > 0 ? convertedConvos / totalConvos : 0;
 
-  // Renomeia pros nomes que o resto do handler espera.
   const channelsByCountRow = mvChannel;
   const dailySeriesRow = mvDaily;
   const prevKpis = mvPrev;
 
-  // Split SDR vs IA: SDR = converteu APÓS um handoff (pausar_ia). IA = converteu
-  // sozinha (sem handoff antes). É garantido que sdr <= convertedConvos.
   const convertedBySdr = Number(convertedBySdrRow[0]?.count ?? 0);
   const convertedByIa = Math.max(0, convertedConvos - convertedBySdr);
   const conversionRateSdr = totalConvos > 0 ? convertedBySdr / totalConvos : 0;
   const conversionRateIa = totalConvos > 0 ? convertedByIa / totalConvos : 0;
 
-  // Funil: lista leads do Kommo e agrupa por status_id.
   let funnel: Array<{
     pipelineId: number;
     pipelineName: string;
@@ -801,15 +673,12 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     }
   }
 
-  // Normaliza canais — mapeia código interno pra label legível.
   const messagesByChannel = channelsByCountRow.map((row) => ({
     channel: row.channel || 'unknown',
     label: channelLabel(row.channel || 'unknown'),
     count: Number(row.count),
   }));
 
-  // Série temporal — preenche dias vazios com zero pra sparkline ficar
-  // contínuo (sem buracos de calendário).
   const dailyMap = new Map<string, { messages: number; conversations: number }>();
   for (const row of dailySeriesRow) {
     const key = row.day.toISOString().slice(0, 10);
@@ -823,23 +692,14 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     dailySeries.push({ date: key, messages: v.messages, conversations: v.conversations });
   }
 
-  // CONSULTAS AGENDADAS PELA IA — o número "de fato": leads em que a Sofia
-  // marcou consulta na agenda da franquia (SpineLeadLink.spineIdSchedule
-  // preenchido). Separado de convertedByIa (que é entrar em etapa de ganho no
-  // funil): aqui é o ato concreto que é o trabalho da IA — marcar a consulta.
   const [aiScheduledPeriod, aiScheduledTotal] = await Promise.all([
     prisma.spineLeadLink.count({
       where: { unitId: id, spineIdSchedule: { not: null }, createdAt: { gte: periodStart } },
     }),
     prisma.spineLeadLink.count({ where: { unitId: id, spineIdSchedule: { not: null } } }),
   ]);
-  // Taxa: consultas agendadas pela IA sobre os leads únicos do período.
   const aiScheduledRate = uniqueLeads > 0 ? aiScheduledPeriod / uniqueLeads : 0;
 
-  // === RECEITA × CUSTO, FILA DE QUENTES, COMPARECIMENTO ===================
-  // Custo de WhatsApp (Meta cobra em USD) no período + fila de leads que a IA
-  // passou pra humano e que continuam sem conversão (o buraco por onde venda
-  // some). Ambos leves e independentes — rodam em paralelo.
   const [whatsappCostRow, hotQueueRows] = await Promise.all([
     prisma.$queryRaw<Array<{ cost_usd: Prisma.Decimal; volume: bigint }>>`
       SELECT
@@ -849,9 +709,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       WHERE unit_id = ${id}
         AND date >= ${periodStart}::date
     `,
-    // Fila de quentes parados: conversas que a IA entregou pra humano
-    // (handoff_at preenchido) e que NÃO converteram nem marcaram consulta.
-    // Ordenadas pela mais antiga — a que corre mais risco de esfriar.
     prisma.$queryRaw<Array<{
       lead_id: string;
       contact_name: string | null;
@@ -880,20 +737,14 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
   const whatsappCostUsd = Number(whatsappCostRow[0]?.cost_usd ?? 0);
   const whatsappMsgVolume = Number(whatsappCostRow[0]?.volume ?? 0);
 
-  // Câmbio USD→BRL pra unificar custo (LLM + WhatsApp em USD) com receita (BRL).
-  // Aproximado e configurável por env; custo de IA não precisa de precisão de
-  // tesouraria — precisa de ordem de grandeza confiável.
   const usdToBrl = Number(process.env.USD_BRL ?? 5.4);
   const llmCostBrl = totalCost * usdToBrl;
   const whatsappCostBrl = whatsappCostUsd * usdToBrl;
   const totalCostBrl = llmCostBrl + whatsappCostBrl;
 
-  // Receita potencial = consultas agendadas pela IA × ticket médio da unidade.
-  // Sem ticket configurado, `avgTicketBrl` é null e o front pede pra preencher.
   const avgTicketBrl = unit.avgTicketBrl != null ? Number(unit.avgTicketBrl) : null;
   const potentialRevenueBrl = avgTicketBrl != null ? aiScheduledPeriod * avgTicketBrl : null;
   const costPerScheduledBrl = aiScheduledPeriod > 0 ? totalCostBrl / aiScheduledPeriod : null;
-  // ROI = (receita − custo) / custo. Só faz sentido com receita e custo > 0.
   const roi =
     potentialRevenueBrl != null && totalCostBrl > 0
       ? (potentialRevenueBrl - totalCostBrl) / totalCostBrl
@@ -909,10 +760,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     waitingMinutes: Math.max(0, Math.round((now.getTime() - r.handoff_at.getTime()) / 60000)),
   }));
 
-  // COMPARECIMENTO (show rate) — derivado do snapshot do funil. Identifica a
-  // etapa "agendado" (pipelineIntents.scheduled_meeting, se houver) e a etapa
-  // "compareceu"/"atendido" por heurística de nome. É direcional (o funil vem
-  // capado nas primeiras páginas do Kommo), não contábil.
   const showRate = computeShowRate(funnel, unit);
 
   res.json({
@@ -939,9 +786,6 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       llmCallsCount,
       peakHour,
     },
-    /** Receita potencial × custo real (tudo em BRL). Feature "quanto a IA
-     *  custou e quanto trouxe". `avgTicketBrl`/`potentialRevenueBrl`/`roi`
-     *  são null quando o ticket médio não foi configurado na unidade. */
     economics: {
       avgTicketBrl,
       aiScheduledPeriod,
@@ -954,31 +798,15 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       roi,
       usdToBrl,
     },
-    /** Fila de leads quentes que a IA passou pra humano e seguem sem conversão
-     *  nem consulta marcada — ordenados do mais antigo (mais em risco). */
     hotQueue,
-    /** Comparecimento: agendou → compareceu, do snapshot do funil. */
     showRate,
-    /** KPIs do período ANTERIOR (mesmo comprimento, imediatamente antes).
-     *  Subset reduzido — só os que alimentam badges de delta no front. */
     previousKpis: prevKpis,
-    /** Volume por canal de origem da mensagem. */
     messagesByChannel,
-    /** Série temporal diária do período. Inclui dias com zero. */
     dailySeries,
     funnel,
   });
 }
 
-// ---------------------------------------------------------------------------
-// GET /dashboard — visão AGREGADA de todas as unidades acessíveis. Filtros:
-//   ?days=N        período (clamp [1,365], default 7)
-//   ?category=X    só unidades dessa categoria (opcional)
-// SUPER_ADMIN vê todas as unidades ativas; UNIT_ADMIN só a própria.
-// Agrega via materialized views (mv_unit_daily / _channel) com GROUP BY —
-// barato. Funil (Kommo) NÃO entra aqui (fica no painel por-unidade) pra não
-// disparar N chamadas Kommo a cada carga.
-// ---------------------------------------------------------------------------
 export async function dashboardAggregateHandler(req: Request, res: Response): Promise<void> {
   const daysParam = Number(req.query.days ?? 7);
   const periodDays = Number.isFinite(daysParam) ? Math.max(1, Math.min(Math.round(daysParam), 365)) : 7;
@@ -1093,7 +921,6 @@ export async function dashboardAggregateHandler(req: Request, res: Response): Pr
   res.json({ periodDays, totals, units: perUnit, messagesByChannel, dailySeries });
 }
 
-/** Converte código de canal pra label legível pro usuário. */
 function channelLabel(channel: string): string {
   switch (channel) {
     case 'kommo_chat':
@@ -1111,16 +938,6 @@ function channelLabel(channel: string): string {
   }
 }
 
-// ---------------------------------------------------------------------------
-// computeShowRate — comparecimento a partir do snapshot do funil do Kommo.
-//
-// Um lead ocupa UMA etapa por vez. "Agendou" = está na etapa de agendamento
-// (pipelineIntents.scheduled_meeting, senão heurística por nome). "Compareceu"
-// = está numa etapa cujo nome bate compare/atend/realizad. Taxa =
-// compareceu / (agendou + compareceu): dos que chegaram ao agendamento, quantos
-// de fato apareceram. Direcional (o funil vem capado nas 1ªs páginas), não
-// contábil — por isso `available:false` quando não dá pra identificar a etapa.
-// ---------------------------------------------------------------------------
 type FunnelForShow = Array<{
   pipelineId: number;
   pipelineName: string;
@@ -1176,13 +993,6 @@ function computeShowRate(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Preview do system prompt composto — usado pelo WizardPanel pra mostrar ao
-// vivo o que a IA vai ler. Aceita um body parcial (`overrides`) que sobrescreve
-// campos da Unit corrente sem precisar salvar — assim o leigo vê o efeito das
-// mudanças antes de salvar.
-// ---------------------------------------------------------------------------
-
 import { composeSystemPrompt } from '../agent/prompt-composer.js';
 
 export async function previewPromptHandler(req: Request, res: Response): Promise<void> {
@@ -1192,8 +1002,6 @@ export async function previewPromptHandler(req: Request, res: Response): Promise
     res.status(404).json({ error: 'unit_not_found' });
     return;
   }
-  // O body pode trazer overrides parciais — qualquer campo do Unit.
-  // Não validamos com rigor: é só preview, nada vai pro banco.
   const overrides = (req.body ?? {}) as Partial<typeof unit>;
   const merged = { ...unit, ...overrides };
   const prompt = composeSystemPrompt({ unit: merged as typeof unit });
@@ -1223,10 +1031,6 @@ export async function kommoTagsHandler(req: Request, res: Response): Promise<voi
     res.status(kommoErrorStatus(err)).json(kommoErrorPayload(err));
   }
 }
-
-// ---------------------------------------------------------------------------
-// Salesbots do Kommo (por Unit).
-// ---------------------------------------------------------------------------
 
 export async function kommoSalesbotsHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
@@ -1281,11 +1085,6 @@ export async function kommoPipelinesHandler(req: Request, res: Response): Promis
   }
 }
 
-// ---------------------------------------------------------------------------
-// Pickers extras pras novas Action kinds: usuários e motivos de perda.
-// Mesmo padrão dos endpoints acima (gate de credencial + erro estruturado).
-// ---------------------------------------------------------------------------
-
 export async function kommoUsersHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
   const unit = await prisma.unit.findUnique({ where: { id } });
@@ -1328,12 +1127,6 @@ export async function kommoLossReasonsHandler(req: Request, res: Response): Prom
   }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers — extrai detalhes do erro do Kommo para devolver ao front.
-// O front precisa do `kommoBody` pra exibir "Authorization required", "Account
-// blocked", etc. Sem isso, só vê "Request failed with status code 401".
-// ---------------------------------------------------------------------------
-
 function kommoErrorStatus(err: unknown): number {
   if (err instanceof KommoApiError) return err.status ?? 502;
   return 502;
@@ -1352,26 +1145,11 @@ function kommoErrorPayload(err: unknown) {
   return { ok: false, error: msg };
 }
 
-// ---------------------------------------------------------------------------
-// Validate Kommo — checa se os IDs configurados (salesbot, fields, etapas Won)
-// existem de fato na conta. Retorna checklist verde/vermelho pro front.
-//
-// SOFT: nunca falha o request. Cada checagem reporta seu próprio ok/erro.
-// ---------------------------------------------------------------------------
-
 interface KommoCheck {
   name: string;
   ok: boolean;
   detail?: string;
 }
-
-// ---------------------------------------------------------------------------
-// GET /api/units/:id/leads-bucket?bucket=unanswered|weekend|handoff|converted_ia|converted_sdr
-//
-// Devolve a LISTA dos leads/conversas que compõem cada KPI do dashboard —
-// permite "drill-down" clicável. As queries SQL espelham as do dashboardHandler
-// trocando COUNT por SELECT (mesmo período padrão 7d).
-// ---------------------------------------------------------------------------
 
 type BucketRow = {
   conversationId: string;
@@ -1381,7 +1159,6 @@ type BucketRow = {
   lastMessageAt: Date | string;
   createdAt: Date | string;
   convertedAt?: Date | string | null;
-  // Texto curto pra mostrar como dica em cada linha (1 linha de contexto).
   hint?: string | null;
 };
 
@@ -1404,8 +1181,6 @@ export async function leadsBucketHandler(req: Request, res: Response): Promise<v
   let rows: BucketRow[] = [];
 
   if (bucket === 'unanswered') {
-    // Mensagens do paciente sem resposta da IA em 60min. Devolve uma linha
-    // por mensagem não respondida (com a conversa+lead correspondente).
     rows = await prisma.$queryRaw<BucketRow[]>`
       SELECT c.id AS "conversationId",
              c.lead_id AS "leadId",
@@ -1430,7 +1205,6 @@ export async function leadsBucketHandler(req: Request, res: Response): Promise<v
       LIMIT ${limit}
     `;
   } else if (bucket === 'weekend_leads') {
-    // Lead cuja PRIMEIRA mensagem caiu em sábado/domingo no período.
     rows = await prisma.$queryRaw<BucketRow[]>`
       SELECT c.id AS "conversationId",
              c.lead_id AS "leadId",
@@ -1447,7 +1221,6 @@ export async function leadsBucketHandler(req: Request, res: Response): Promise<v
       LIMIT ${limit}
     `;
   } else if (bucket === 'weekend_conversations') {
-    // Conversas com QUALQUER mensagem em sáb/dom no período.
     rows = await prisma.$queryRaw<BucketRow[]>`
       SELECT DISTINCT ON (c.id)
              c.id AS "conversationId",
@@ -1466,7 +1239,6 @@ export async function leadsBucketHandler(req: Request, res: Response): Promise<v
       LIMIT ${limit}
     `;
   } else if (bucket === 'handoff') {
-    // Conversas que tiveram pausar_ia (handoff pra humano) no período.
     rows = await prisma.$queryRaw<BucketRow[]>`
       SELECT DISTINCT ON (c.id)
              c.id AS "conversationId",
@@ -1487,7 +1259,6 @@ export async function leadsBucketHandler(req: Request, res: Response): Promise<v
       LIMIT ${limit}
     `;
   } else if (bucket === 'converted_ia') {
-    // Convertidos sem handoff prévio.
     rows = await prisma.$queryRaw<BucketRow[]>`
       SELECT c.id AS "conversationId",
              c.lead_id AS "leadId",
@@ -1514,7 +1285,6 @@ export async function leadsBucketHandler(req: Request, res: Response): Promise<v
       LIMIT ${limit}
     `;
   } else if (bucket === 'converted_sdr') {
-    // Convertidos COM handoff prévio (humano fechou).
     rows = await prisma.$queryRaw<BucketRow[]>`
       SELECT c.id AS "conversationId",
              c.lead_id AS "leadId",
@@ -1560,8 +1330,6 @@ export async function kommoValidateHandler(req: Request, res: Response): Promise
   const client = createKommoClient(unit);
   const checks: KommoCheck[] = [];
 
-  // 1) Subdomain + token — qualquer chamada serve. Listamos pipelines pq
-  //    é leve e reusamos pra validar `kommoWonStatusIds`.
   let pipelines: Awaited<ReturnType<typeof client.listPipelines>> | null = null;
   try {
     pipelines = await client.listPipelines();
@@ -1571,10 +1339,6 @@ export async function kommoValidateHandler(req: Request, res: Response): Promise
     checks.push({ name: 'credentials', ok: false, detail: msg });
   }
 
-  // 2) Salesbot.
-  // Algumas contas Kommo não expõem GET /salesbot/{id} via REST (mesma quirk
-  // da listagem). Tratamos 404 como "API indisponível, não bloqueante" — o
-  // disparo via POST /salesbot/{id}/run continua funcionando.
   if (unit.kommoSalesbotId) {
     try {
       const bot = await client.getSalesbot(unit.kommoSalesbotId);
@@ -1596,7 +1360,6 @@ export async function kommoValidateHandler(req: Request, res: Response): Promise
     checks.push({ name: 'salesbot', ok: false, detail: 'kommoSalesbotId não configurado' });
   }
 
-  // 3) Reply field.
   if (unit.kommoReplyFieldId) {
     try {
       const f = await client.getCustomField(unit.kommoReplyFieldId);
@@ -1609,7 +1372,6 @@ export async function kommoValidateHandler(req: Request, res: Response): Promise
     checks.push({ name: 'replyField', ok: false, detail: 'kommoReplyFieldId não configurado' });
   }
 
-  // 4) Paused field (opcional).
   if (unit.kommoPausedFieldId) {
     try {
       const f = await client.getCustomField(unit.kommoPausedFieldId);
@@ -1627,7 +1389,6 @@ export async function kommoValidateHandler(req: Request, res: Response): Promise
     checks.push({ name: 'pausedField', ok: false, detail: 'kommoPausedFieldId não configurado (opcional)' });
   }
 
-  // 5) Won status IDs — cross-check com os pipelines carregados.
   if (unit.kommoWonStatusIds.length === 0) {
     checks.push({ name: 'wonStatusIds', ok: false, detail: 'nenhum statusId de "Ganho" configurado' });
   } else if (!pipelines) {
@@ -1650,26 +1411,9 @@ export async function kommoValidateHandler(req: Request, res: Response): Promise
     }
   }
 
-  const allOk = checks.every((c) => c.ok || c.name === 'pausedField'); // pausedField é opcional
+  const allOk = checks.every((c) => c.ok || c.name === 'pausedField');
   res.json({ ok: allOk, checks });
 }
-
-// ---------------------------------------------------------------------------
-// metaValidateHandler — valida credenciais Meta antes de salvar.
-//
-// Aceita override no body pra "validar antes de salvar":
-//   POST /units/:id/meta-validate
-//   body: { metaWabaId?, metaAccessToken?, metaPhoneNumberId? }
-//
-// Se o body trouxer valores, esses sobrescrevem os da Unit pra esta validação
-// (sem persistir). Se vier mascarado (••••), descartamos e usamos o do banco.
-//
-// 4 checks (todos soft-fail):
-//   1) WABA acessível       — GET /v25.0/{WABA_ID}?fields=id,name,currency
-//   2) Phone Number ID      — GET /v25.0/{phone_number_id} (opcional)
-//   3) Escopo Messaging     — GET /v25.0/{WABA_ID}/message_templates?limit=1
-//   4) Escopo Analytics     — GET /v25.0/{WABA_ID}/pricing_analytics (1 dia)
-// ---------------------------------------------------------------------------
 
 interface MetaCheck {
   name: string;
@@ -1683,18 +1427,6 @@ const metaValidateBodySchema = z.object({
   metaPhoneNumberId: z.string().nullable().optional(),
 });
 
-/**
- * VALIDAÇÃO SEMÂNTICA — o que regex nenhum pega.
- *
- * "18:00" e "08:00" são strings válidas nas duas ordens; só a comparação
- * revela que a clínica não fecha antes de abrir. Sem isto a grade sairia
- * VAZIA e a I.A. responderia "nenhum horário disponível" o dia inteiro — sem
- * erro em lugar nenhum, e ninguém ligaria uma coisa à outra.
- *
- * É este o sentido de "configurado no front, validado no back": a tela pode
- * ajudar, mas quem garante a coerência é o servidor, que é por onde toda
- * escrita passa.
- */
 const updateSchemaValidado = updateSchema.superRefine((v, ctx) => {
   const erro = (path: string, message: string) =>
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
@@ -1706,8 +1438,6 @@ const updateSchemaValidado = updateSchema.superRefine((v, ctx) => {
     if (v.spineLunchEnd <= v.spineLunchStart) {
       erro('spineLunchEnd', 'o fim do almoço tem que ser depois do início');
     }
-    // Almoço fora do expediente não bloqueia nada e ainda dá a impressão de
-    // estar configurado.
     if (v.spineAgendaStart && v.spineLunchStart < v.spineAgendaStart) {
       erro('spineLunchStart', 'o almoço começa antes de a clínica abrir');
     }
@@ -1718,8 +1448,6 @@ const updateSchemaValidado = updateSchema.superRefine((v, ctx) => {
   if (v.spineEnabled && v.spineAgendaDays && v.spineAgendaDays.length === 0) {
     erro('spineAgendaDays', 'escolha ao menos um dia de atendimento');
   }
-  // Espelhar leads escreve de forma PERMANENTE no CRM do cliente. Ligar sem
-  // credencial só produziria falha silenciosa a cada atendimento.
   if (v.spineSyncLeads === true && v.spineToken === null) {
     erro('spineSyncLeads', 'informe o token da franquia antes de ligar o espelhamento');
   }
@@ -1772,7 +1500,6 @@ export async function metaValidateHandler(req: Request, res: Response): Promise<
     return;
   }
 
-  // Combina body (override) + banco. Mascarados são ignorados.
   const pick = <T>(override: T | null | undefined, persisted: T | null): T | null => {
     if (override === undefined || override === null) return persisted;
     if (typeof override === 'string' && isMasked(override)) return persisted;
@@ -1799,7 +1526,6 @@ export async function metaValidateHandler(req: Request, res: Response): Promise<
     return;
   }
 
-  // 1) WABA acessível.
   const wabaInfo = await metaGet(
     `/${wabaId}`,
     { fields: 'id,name,currency,timezone_id,message_template_namespace' },
@@ -1820,7 +1546,6 @@ export async function metaValidateHandler(req: Request, res: Response): Promise<
     });
   }
 
-  // 2) Phone Number ID (opcional — só se cadastrado).
   if (phoneNumberId) {
     const phone = await metaGet(
       `/${phoneNumberId}`,
@@ -1853,7 +1578,6 @@ export async function metaValidateHandler(req: Request, res: Response): Promise<
     });
   }
 
-  // 3) Escopo de Messaging — listar templates.
   const tmplCheck = await metaGet(`/${wabaId}/message_templates`, { limit: 1 }, accessToken);
   if (tmplCheck.ok) {
     const body = tmplCheck.body as { data?: unknown[] };
@@ -1870,7 +1594,6 @@ export async function metaValidateHandler(req: Request, res: Response): Promise<
     });
   }
 
-  // 4) Escopo de Analytics — janela curta (ontem 00:00 → hoje 00:00 UTC).
   const nowSec = Math.floor(Date.now() / 1000);
   const endSec = nowSec;
   const startSec = nowSec - 86_400;
@@ -1904,13 +1627,6 @@ export async function metaValidateHandler(req: Request, res: Response): Promise<
   res.json({ ok: allOk, checks });
 }
 
-// ---------------------------------------------------------------------------
-// GET /units/:id/widget-status — "status da conexão" do modo widget.
-//
-// A client secret NÃO é validável contra o Kommo (não há endpoint de teste).
-// O único teste real é PASSIVO: ver o último widget_request recebido e se o JWT
-// bateu. Este handler compõe esse status + uma EXPLICAÇÃO em PT pro painel.
-// ---------------------------------------------------------------------------
 export async function widgetStatusHandler(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
   const unit = await prisma.unit.findUnique({ where: { id } });
@@ -1924,7 +1640,6 @@ export async function widgetStatusHandler(req: Request, res: Response): Promise<
   const webhookPath = `/api/webhooks/${unit.slug}/widget`;
   const last = getWidgetConnection(unit.id);
 
-  // level: idle (cinza) | ok (verde) | warn (amarelo) | error (vermelho)
   let level: 'idle' | 'ok' | 'warn' | 'error' = 'idle';
   let message: string;
 
@@ -1940,7 +1655,6 @@ export async function widgetStatusHandler(req: Request, res: Response): Promise<
     const agoSec = Math.round((Date.now() - last.lastAt) / 1000);
     const ago = agoSec < 90 ? `${agoSec}s` : `${Math.round(agoSec / 60)}min`;
 
-    // 1) Origem/JWT
     if (last.jwt === 'valid') {
       level = 'ok';
       message = `✅ Recebemos um widget_request há ${ago} e o JWT bateu com a client secret — conexão e origem confirmadas.`;
@@ -1951,12 +1665,10 @@ export async function widgetStatusHandler(req: Request, res: Response): Promise<
       level = 'warn';
       message = `Recebemos um widget_request há ${ago}, mas a client secret está vazia — não dá pra validar a origem. Cole a client secret pra fechar a verificação. `;
     } else {
-      // no_token
       level = 'warn';
       message = `Recebemos um widget_request há ${ago}, mas SEM token JWT no corpo — verifique a integração no Kommo. `;
     }
 
-    // 2) Entrega (continue via return_url)
     if (last.delivered === true) {
       if (level !== 'error' && level !== 'warn') level = 'ok';
       message += ' A resposta foi entregue de volta ao Kommo (return_url ok).';

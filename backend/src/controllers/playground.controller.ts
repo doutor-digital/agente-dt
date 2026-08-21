@@ -1,22 +1,3 @@
-// ============================================================================
-// playground.controller.ts — Endpoint sandbox pra testar a IA dentro do painel.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Roda a IA com o systemPrompt REAL da Unit (com todas as features ativadas
-// no Wizard) mas SEM tocar no Kommo nem persistir nada no banco.
-//
-// Diferenças do agent/graph.ts:
-//   - Sem PostgresSaver (sem thread_id, histórico vive na request).
-//   - Tools são instrumentadas mas NÃO chamam o Kommo — devolvem string
-//     simulada e a chamada é capturada na lista `actions` retornada.
-//   - Sem ExecutionTrace, sem TraceRecorder.
-//   - LlmCall ainda é gravado (útil pra observar custo do teste).
-//
-// Loop ReAct manual: chama o modelo, se houver tool_calls executa as fakes,
-// adiciona ToolMessages e re-invoca. Máximo de 5 iterações pra não loopar.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import {
@@ -42,7 +23,6 @@ import {
 } from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
 
-// Lead ID sintético — fica no histórico/payload mas nunca chega no Kommo.
 const SANDBOX_LEAD_ID = 999_000_001;
 
 const messageSchema = z.object({
@@ -60,8 +40,6 @@ interface SandboxAction {
   result: string;
 }
 
-// Eventos cronológicos do turno atual — alimentam a Timeline no frontend.
-// `ts` é Unix-ms absoluto; o frontend só formata.
 type TimelineEvent =
   | { kind: 'user_message'; ts: number; content: string }
   | {
@@ -82,8 +60,6 @@ type TimelineEvent =
     }
   | { kind: 'assistant_message'; ts: number; content: string };
 
-// Shape parcial do AIMessage do LangChain que nos interessa.
-// Em runtime ele tem `usage_metadata` (padrão LC) e/ou `response_metadata.tokenUsage`.
 interface AIMessageLike {
   content: unknown;
   tool_calls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }>;
@@ -111,7 +87,6 @@ function extractUsage(ai: AIMessageLike): { prompt: number; completion: number; 
 
 function buildSandboxTools(opts: {
   onCall: (a: SandboxAction) => void;
-  /** Regras de captura ativas — viram tools `salvar_*` simuladas. */
   leadFieldRules: LeadFieldRule[];
 }) {
   const aplicar_tag = new DynamicStructuredTool({
@@ -172,7 +147,6 @@ function buildSandboxTools(opts: {
       nome: zod.string().min(1).max(120),
     }),
     func: async ({ leadId, nome }) => {
-      // No sandbox usamos a data de hoje (não temos lead real com created_at).
       const dateBR = new Intl.DateTimeFormat('pt-BR', {
         timeZone: 'America/Sao_Paulo',
         day: '2-digit',
@@ -186,9 +160,6 @@ function buildSandboxTools(opts: {
     },
   });
 
-  // Stub do resumo. Não chama LLM nem Kommo — devolve marcador previsível
-  // pra timeline do playground mostrar que a IA decidiu resumir. Em prod
-  // (agent/tools.ts) a tool real gera summary via LLM e grava em nota + campo.
   const resumir_lead_para_sdr = new DynamicStructuredTool({
     name: 'resumir_lead_para_sdr',
     description:
@@ -209,10 +180,6 @@ function buildSandboxTools(opts: {
     },
   });
 
-  // Tools de CAPTURA simuladas — uma por regra ativa. Reusam o schema e a
-  // description reais (agent/tools.ts), então o modelo enxerga exatamente o
-  // mesmo contrato de produção; só o efeito muda: em vez de gravar no Kommo,
-  // registram a chamada pra timeline. É isso que permite testar captura aqui.
   const captura = opts.leadFieldRules.map(
     (rule) =>
       new DynamicStructuredTool({
@@ -256,11 +223,6 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
     res.status(404).json({ error: 'unit_not_found' });
     return;
   }
-  // PROVIDER EFETIVO — mesma regra do graph.ts de produção: Claude se
-  // anthropic+chave, Gemini se google+chave, senão OpenAI. Antes isto era
-  // cravado em OpenAI (createChatOpenAI + exigir chave OpenAI), então o
-  // playground recusava/quebrava TODA unidade que roda em Claude/Gemini —
-  // mesmo respondendo normal em produção. Cada provider exige a SUA chave.
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
   if (!useAnthropic && !useGoogle && !resolveOpenAIApiKey(unit)) {
@@ -270,9 +232,7 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
 
   const config = await getActiveConfig(unit.id);
 
-  // Última mensagem do usuário alimenta a busca semântica do RAG.
   const lastUser = [...parsed.data.messages].reverse().find((m) => m.role === 'user');
-  // Primeiro turno = só 1 mensagem do user e nenhuma da IA no histórico.
   const userCount = parsed.data.messages.filter((m) => m.role === 'user').length;
   const assistantCount = parsed.data.messages.filter((m) => m.role === 'assistant').length;
   const isFirstTurn = userCount === 1 && assistantCount === 0;
@@ -281,14 +241,9 @@ export async function playgroundRunHandler(req: Request, res: Response): Promise
     agentConfigPrompt: config.systemPrompt,
     userMessage: lastUser?.content,
     isFirstTurn,
-    // O sandbox AGORA registra as tools `salvar_*` (simuladas, logo abaixo),
-    // então as instruções de captura precisam entrar no prompt — sem elas o
-    // modelo não sabe quando chamar. Era essa exclusão que impedia testar
-    // captura aqui.
     excludeLeadFieldRules: false,
   });
 
-  // Acrescenta info do "lead sintético" pra IA poder chamar as tools (precisa do leadId).
   const sandboxPreamble = `# CONTEXTO DE TESTE
 Você está rodando em MODO SANDBOX. O leadId atual é ${SANDBOX_LEAD_ID}. Trate
 como uma conversa real e use as tools normalmente quando fizer sentido — elas
@@ -298,7 +253,6 @@ operador revisar.`;
 
   const actions: SandboxAction[] = [];
   const timeline: TimelineEvent[] = [];
-  // Marca a msg do usuário deste turno como primeiro evento da timeline.
   if (lastUser) {
     timeline.push({ kind: 'user_message', ts: Date.now(), content: lastUser.content });
   }
@@ -317,9 +271,6 @@ operador revisar.`;
     },
   });
 
-  // Nome do modelo por provider (mesma escolha do graph.ts). Sem isto, o
-  // `config.model` (ex.: "claude-sonnet-5") ia pro cliente da OpenAI e dava
-  // erro de modelo inexistente.
   const modelName = useAnthropic
     ? unit.anthropicModel || 'claude-opus-4-8'
     : useGoogle
@@ -340,7 +291,6 @@ operador revisar.`;
     else history.push(new AIMessage(m.content));
   }
 
-  // Loop ReAct manual. Máximo 5 voltas pra não rodar infinito se a IA insistir.
   const MAX_ITERS = 5;
   let finalReply = '';
   let iterations = 0;
@@ -400,8 +350,6 @@ operador revisar.`;
           );
           continue;
         }
-        // Cada DynamicStructuredTool da union tem signature de schema próprio —
-        // o TS rejeita o `.invoke` polimórfico. Cast pro shape mínimo necessário.
         const invoker = tool as unknown as { invoke: (args: unknown) => Promise<string> };
         const result = await invoker.invoke(tc.args ?? {});
         history.push(new ToolMessage({ tool_call_id: tc.id ?? '', content: result }));

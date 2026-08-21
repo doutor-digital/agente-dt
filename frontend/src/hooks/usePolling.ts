@@ -1,14 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 
-/**
- * Hook genérico de polling. Mantém o resultado em state, expõe `refresh`
- * manual e auto-pausa quando a aba está em background (visibilitychange).
- *
- * Por que polling e não SSE/websockets no MVP?
- * - Simplicidade. SSE exigiria server.headersTimeout, keepalive, etc.
- * - O dashboard é interno e baixa frequência (1 op/s no máximo).
- * - Trivial de migrar para SSE depois — basta trocar este hook.
- */
 export function usePolling<T>(
   fetcher: () => Promise<T>,
   intervalMs: number,

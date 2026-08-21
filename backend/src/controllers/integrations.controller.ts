@@ -1,40 +1,3 @@
-// ============================================================================
-// integrations.controller.ts — Central de Integrações (por Unit).
-//
-// LÓGICA DE ENGENHARIA — O QUE COMPOMOS
-// -------------------------------------
-// Para cada integração da Unit, retornamos um "card" com:
-//   - status      : 'ok' | 'warning' | 'danger' | 'idle'
-//   - configured  : boolean (se a unidade preencheu credenciais)
-//   - data        : objeto específico de cada provider
-//   - alerts[]    : lista de strings legíveis pra exibir no painel
-//
-// PROVIDERS
-// ---------
-//   OPENAI:
-//     - configured: tem openaiApiKey?
-//     - reach: ping em /v1/models (qualquer key serve)
-//     - platform: dados REAIS via Admin key (/organization/costs + /usage)
-//     - measured: o que NÓS medimos via LlmCall (sempre disponível)
-//     - budget: comparado com openaiMonthlyBudgetUsd (alerta 70%/90%/100%)
-//     - assistantId
-//
-//   KOMMO:
-//     - configured: tem subdomain + token?
-//     - reach: GET /api/v4/account → 200 ok
-//     - subdomain
-//
-//   META:
-//     - configured: tem phone_number_id + access_token?
-//     - missing: lista do que falta
-//
-// ALERTAS
-// -------
-// Cada card pode emitir alerts. O endpoint /api/alerts agrega todos os
-// alerts ATIVOS de TODAS as Units (visão admin) — usado pelo badge no
-// header do dashboard.
-// ============================================================================
-
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -42,10 +5,6 @@ import { OpenAIPlatform } from '../services/openai-platform.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { getStaleReplies, getDeliveryStatus } from '../lib/stale-reply-monitor.js';
 import axios from 'axios';
-
-// ---------------------------------------------------------------------------
-// Tipos públicos.
-// ---------------------------------------------------------------------------
 
 export type CardStatus = 'ok' | 'warning' | 'danger' | 'idle';
 
@@ -56,7 +15,6 @@ export interface OpenAICard {
   adminKey: { configured: boolean; usable: boolean | null; error?: string };
   assistantId: string | null;
   model: string;
-  // Gastos REAIS via Admin key (null se sem admin)
   platform: null | {
     sinceDays: number;
     totalCostUsd: number;
@@ -70,7 +28,6 @@ export interface OpenAICard {
     timeline: Array<{ date: string; costUsd: number; tokens: number; requests: number }>;
     projects?: Array<{ id: string; name: string; status: string }>;
   };
-  // Gastos MEDIDOS (sempre, vem do nosso LlmCall)
   measured: {
     sinceDays: number;
     totalCostUsd: number;
@@ -81,12 +38,10 @@ export interface OpenAICard {
     byModel: Array<{ model: string; calls: number; totalTokens: number; costUsd: number }>;
     timeline: Array<{ date: string; costUsd: number; tokens: number; calls: number }>;
   };
-  // Comparativo (quando platform existe): % do total da OpenAI que vem do agente
   agentShare: null | { percentOfRequests: number; percentOfCost: number };
-  // Orçamento mensal
   budget: {
     monthlyUsd: number;
-    spentUsd: number; // usa platform se houver, senão measured
+    spentUsd: number;
     spentSource: 'platform' | 'measured';
     pctUsed: number;
     remainingUsd: number;
@@ -114,8 +69,6 @@ export interface MetaCard {
   wabaId: string | null;
   hasAccessToken: boolean;
   webhookUrl: string;
-  // Custo do mês corrente (vem da tabela whatsapp_cost_daily — populada
-  // pelo sync diário). null se WABA não está configurada ou sem dados ainda.
   cost: null | {
     monthSpentUsd: number;
     monthVolume: number;
@@ -146,10 +99,6 @@ export interface IntegrationsResponse {
   meta: MetaCard;
   alerts: Array<{ severity: 'info' | 'warning' | 'danger'; integration: string; message: string }>;
 }
-
-// ---------------------------------------------------------------------------
-// Helpers de agregação dos LlmCalls (gastos medidos).
-// ---------------------------------------------------------------------------
 
 interface MeasuredAgg {
   totalCostUsd: number;
@@ -201,10 +150,6 @@ function sumWithinDays<T>(items: T[], getDate: (t: T) => Date, getValue: (t: T) 
   return items.filter((i) => getDate(i).getTime() >= cutoff).reduce((s, i) => s + getValue(i), 0);
 }
 
-// ---------------------------------------------------------------------------
-// Builders — um por integração.
-// ---------------------------------------------------------------------------
-
 async function buildOpenAICard(unit: Unit, sinceDays: number): Promise<OpenAICard> {
   const ping = await OpenAIPlatform.pingOpenAI(unit.openaiApiKey);
 
@@ -215,10 +160,8 @@ async function buildOpenAICard(unit: Unit, sinceDays: number): Promise<OpenAICar
     : { ok: false, projects: [] as Array<{ id: string; name: string; status: string }> };
   const adminKeyUsable = platformCosts.ok || platformUsage.ok;
 
-  // Pré-processa platform (se Admin key funcionou).
   let platform: OpenAICard['platform'] = null;
   if (platformCosts.ok || platformUsage.ok) {
-    // Junta costs + usage por dia (chave = startTime do dia).
     const timelineMap = new Map<string, { date: string; costUsd: number; tokens: number; requests: number }>();
     for (const b of platformCosts.buckets) {
       const date = isoDayUTC(new Date(b.startTime * 1000));
@@ -262,7 +205,6 @@ async function buildOpenAICard(unit: Unit, sinceDays: number): Promise<OpenAICar
     };
   }
 
-  // Medido (sempre).
   const meas = await measuredAggregate(unit.id, sinceDays);
   const measTimelineSorted = [...meas.timeline.entries()]
     .map(([date, v]) => ({ date, ...v }))
@@ -288,7 +230,6 @@ async function buildOpenAICard(unit: Unit, sinceDays: number): Promise<OpenAICar
     timeline: measTimelineSorted,
   };
 
-  // Comparativo agente vs total da OpenAI (% do que passa pela nossa plataforma).
   const agentShare: OpenAICard['agentShare'] = platform
     ? {
         percentOfRequests:
@@ -298,7 +239,6 @@ async function buildOpenAICard(unit: Unit, sinceDays: number): Promise<OpenAICar
       }
     : null;
 
-  // Orçamento — usa platform se disponível, senão measured.
   const monthStart = new Date();
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
@@ -314,7 +254,6 @@ async function buildOpenAICard(unit: Unit, sinceDays: number): Promise<OpenAICar
   const spentUsd = monthSpentPlatform ?? monthSpentMeasured;
   const spentSource: 'platform' | 'measured' = monthSpentPlatform !== null ? 'platform' : 'measured';
 
-  // Number(Decimal) pode dar NaN se o Decimal vier estranho — fallback pra 0.
   const monthlyUsdRaw = Number(unit.openaiMonthlyBudgetUsd);
   const monthlyUsd = Number.isFinite(monthlyUsdRaw) ? monthlyUsdRaw : 0;
   const safeSpentUsd = Number.isFinite(spentUsd) ? spentUsd : 0;
@@ -327,7 +266,6 @@ async function buildOpenAICard(unit: Unit, sinceDays: number): Promise<OpenAICar
   else if (pctUsed >= 90) budgetAlert = 'danger';
   else if (pctUsed >= 70) budgetAlert = 'warning';
 
-  // Status agregado do card.
   const alerts: string[] = [];
   if (!unit.openaiApiKey) alerts.push('API key da OpenAI não configurada');
   else if (!ping.reachable) alerts.push(`API key não responde: ${ping.error ?? 'erro desconhecido'}`);
@@ -400,8 +338,6 @@ async function buildKommoCard(unit: Unit): Promise<KommoCard> {
   }
 
   try {
-    // Não usamos o KommoClient porque ele lança em erro de domínio. Aqui
-    // queremos um ping silencioso; falha vira "unreachable" sem 500 no painel.
     const url = `https://${unit.kommoSubdomain}.kommo.com/api/v4/account`;
     const res = await axios.get(url, {
       headers: { Authorization: `Bearer ${unit.kommoAccessToken}` },
@@ -445,15 +381,12 @@ async function buildKommoCard(unit: Unit): Promise<KommoCard> {
 async function buildMetaCard(unit: Unit, host: string): Promise<MetaCard> {
   const hasToken = !!unit.metaAccessToken;
   const hasWaba = !!unit.metaWabaId;
-  // "Configurado" agora = tem o que precisa pra puxar custo via Graph API.
-  // Phone Number ID virou opcional (canal de envio/recepção é o Kommo).
   const configured = hasToken && hasWaba;
   const webhookUrl = `${host}/api/webhooks/${unit.slug}/meta`;
   const alerts: string[] = [];
   if (!hasToken) alerts.push('Access Token da Meta não configurado');
   if (hasToken && !hasWaba) alerts.push('WABA ID não configurado — custo da Meta não será sincronizado');
 
-  // Mês corrente + janelas curtas via tabela snapshot.
   const monthStart = new Date();
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
@@ -561,10 +494,6 @@ async function buildMetaCard(unit: Unit, host: string): Promise<MetaCard> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Handlers.
-// ---------------------------------------------------------------------------
-
 export async function getIntegrations(req: Request, res: Response): Promise<void> {
   const id = String(req.params.id ?? '');
   const sinceDays = Math.min(Number(req.query.days ?? 30), 90);
@@ -581,7 +510,6 @@ export async function getIntegrations(req: Request, res: Response): Promise<void
     buildMetaCard(unit, host),
   ]);
 
-  // Agrega alerts por severidade pra exibir no badge global.
   const alerts: IntegrationsResponse['alerts'] = [];
   for (const a of openai.alerts) {
     const severity = a.startsWith('🚨') ? 'danger' : a.startsWith('⚠️') ? 'warning' : 'info';
@@ -604,11 +532,6 @@ export async function getIntegrations(req: Request, res: Response): Promise<void
   res.json(payload);
 }
 
-// ---------------------------------------------------------------------------
-// Endpoint /alerts — badge no header. Corre por todas as Units ativas e
-// retorna só o que precisa de atenção (warning/danger).
-// ---------------------------------------------------------------------------
-
 export async function getAlerts(_req: Request, res: Response): Promise<void> {
   const units = await prisma.unit.findMany({ where: { isActive: true } });
   const out: Array<{
@@ -621,8 +544,6 @@ export async function getAlerts(_req: Request, res: Response): Promise<void> {
   }> = [];
 
   for (const unit of units) {
-    // Pra performance, só inspecionamos OpenAI budget (a parte mais crítica
-    // pra alerta) e Kommo ping. Ping cara; deixamos só pra unidades ativas.
     const openai = await buildOpenAICard(unit, 30);
     for (const a of openai.alerts) {
       const severity = a.startsWith('🚨') || openai.budget.alert === 'over' ? 'danger' : 'warning';
@@ -652,8 +573,6 @@ export async function getAlerts(_req: Request, res: Response): Promise<void> {
     }
   }
 
-  // Respostas da IA paradas no campo "Resposta IA" sem o Salesbot entregar
-  // (estado em memória do monitor, global — não por-Unit).
   for (const s of getStaleReplies()) {
     out.push({
       unitId: s.unitId,
@@ -667,13 +586,6 @@ export async function getAlerts(_req: Request, res: Response): Promise<void> {
 
   res.json({ alerts: out });
 }
-
-// ---------------------------------------------------------------------------
-// Endpoint /delivery-monitor — painel "Saúde da Entrega" (Salesbot).
-// Estado global em memória do monitor de "resposta parada": o que está parado
-// agora + histórico recente de latências (PATCH no campo → entrega confirmada
-// pelo webhook outgoing). Não é por-Unit, então gating de super admin.
-// ---------------------------------------------------------------------------
 
 export function getDeliveryMonitor(_req: Request, res: Response): void {
   res.json(getDeliveryStatus());

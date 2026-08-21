@@ -1,14 +1,3 @@
-// ============================================================================
-// nav.ts — REGISTRO ÚNICO de navegação do console.
-//
-// Antes cada peça do chrome tinha a própria lista de abas. Agora existe uma só:
-// a sidebar, o breadcrumb do TopBar e a paleta de comandos (⌘K) leem daqui.
-// Adicionar uma página = uma linha nesta lista (+ o slug em useRoute).
-//
-// `section` agrupa na sidebar; `keywords` alimenta a busca da paleta (inclui
-// sinônimos que o usuário digitaria em PT-BR sem acento).
-// ============================================================================
-
 import {
   AlertOctagon,
   Building2,
@@ -30,12 +19,6 @@ import { FaFacebookF, FaInstagram } from 'react-icons/fa6';
 import { PiCalendarBlankBold, PiPlugsConnectedBold, PiChatsCircleBold } from 'react-icons/pi';
 import type { ComponentType } from 'react';
 
-/**
- * As duas bibliotecas de ícone convivem: lucide no chrome antigo, react-icons
- * nas telas novas (e nas marcas, que o lucide deprecou). Tipar pela FORMA da
- * prop, e não pela lib, é o que permite migrar uma tela por vez sem quebrar as
- * outras.
- */
 export type IconComponent = ComponentType<{
   size?: number | string;
   className?: string;
@@ -71,7 +54,6 @@ export type AppTab =
   | 'follow-up'
   | 'crm-franquia';
 
-/** Grupos da sidebar, na ordem em que aparecem. */
 export type NavSection = 'operacao' | 'agente' | 'analise' | 'plataforma';
 
 export const SECTION_LABEL: Record<NavSection, string> = {
@@ -84,7 +66,6 @@ export const SECTION_LABEL: Record<NavSection, string> = {
 export interface NavItem {
   id: AppTab;
   label: string;
-  /** Uma linha explicando a página — usada na paleta de comandos. */
   hint: string;
   icon: IconComponent;
   section: NavSection;
@@ -265,7 +246,6 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-/** Metadados de UMA aba — inclui as que não aparecem na sidebar. */
 const EXTRA_LABELS: Partial<Record<AppTab, string>> = {
   wizard: 'Persona',
   playground: 'Playground',
@@ -280,12 +260,10 @@ export function navItem(tab: AppTab): NavItem | undefined {
   return NAV_ITEMS.find((n) => n.id === tab);
 }
 
-/** Título humano de qualquer aba — usado no breadcrumb do TopBar. */
 export function tabLabel(tab: AppTab): string {
   return navItem(tab)?.label ?? EXTRA_LABELS[tab] ?? 'Console';
 }
 
-/** Normaliza pra busca: minúsculo e sem acento. */
 export function normalize(s: string): string {
   return s
     .toLowerCase()

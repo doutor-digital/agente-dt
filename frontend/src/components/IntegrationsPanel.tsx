@@ -1,23 +1,3 @@
-// ============================================================================
-// IntegrationsPanel — Central de Integrações (visão pra leigo).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Cards por provider com:
-//   - status visual (verde/amarelo/vermelho)
-//   - métricas em destaque
-//   - mensagem em linguagem clara ("falta X", "tudo certo", "perto do limite")
-//
-// COMPARATIVO OPENAI
-// ------------------
-// Quando a Admin Key está cadastrada, mostramos LADO A LADO:
-//   "Sua conta ChatGPT" (gasto real reportado pela OpenAI)  vs
-//   "Pelo agente"      (o que a nossa plataforma gerou)
-//
-// O delta entre os dois é exatamente o quanto a Unit gasta em OUTRAS
-// integrações que usam a mesma chave (ex: testes manuais, ByteGPT).
-// ============================================================================
-
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -49,8 +29,6 @@ import type {
   OpenAIIntegrationCard,
 } from '../types/api';
 
-// Coerção defensiva — Prisma Decimal vira string em alguns paths, e a OpenAI
-// API às vezes devolve campos numéricos faltando. `safeNum` normaliza tudo.
 const safeNum = (n: unknown, fallback = 0): number => {
   if (n === null || n === undefined) return fallback;
   const v = typeof n === 'number' ? n : Number(n);
@@ -89,7 +67,6 @@ export function IntegrationsPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Se não houver unit selecionada, escolhe a primeira pra mostrar algo.
   const targetUnitId = selectedUnitId ?? units[0]?.id ?? null;
 
   const load = useMemo(
@@ -163,13 +140,10 @@ export function IntegrationsPanel() {
 
         {data && (
           <div className="space-y-5">
-            {/* Resumo no topo (alertas) */}
             {data.alerts.length > 0 && <AlertsBanner alerts={data.alerts} />}
 
-            {/* OpenAI — o card mais importante */}
             <OpenAICardView card={data.openai} unitId={data.unit.id} />
 
-            {/* Linha com Kommo + Meta */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <KommoCardView card={data.kommo} />
               <MetaCardView card={data.meta} />
@@ -180,10 +154,6 @@ export function IntegrationsPanel() {
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Banner de alertas no topo
-// ---------------------------------------------------------------------------
 
 function AlertsBanner({ alerts }: { alerts: IntegrationsResponse['alerts'] }) {
   const danger = alerts.filter((a) => a.severity === 'danger');
@@ -230,16 +200,11 @@ function AlertLine({
   );
 }
 
-// ---------------------------------------------------------------------------
-// CARD: OpenAI
-// ---------------------------------------------------------------------------
-
 function OpenAICardView({ card, unitId }: { card: OpenAIIntegrationCard; unitId: string }) {
   const sc = statusColor(card.status);
 
   return (
     <section className={clsx('rounded-xl border border-zinc-800 bg-zinc-900/40 overflow-hidden', sc.ring, 'ring-1')}>
-      {/* Header */}
       <div className="px-5 py-4 border-b border-zinc-800/80 flex items-center gap-3">
         <div className={clsx('rounded-lg p-2.5', sc.bg)}>
           <Bot size={20} className={sc.text} />
@@ -260,7 +225,6 @@ function OpenAICardView({ card, unitId }: { card: OpenAIIntegrationCard; unitId:
         <KeysBadges card={card} />
       </div>
 
-      {/* Comparativo (foco do painel) */}
       <div className="px-5 py-4 grid grid-cols-1 lg:grid-cols-2 gap-4 bg-zinc-950/30">
         <CostPanel
           title="Sua conta ChatGPT (real)"
@@ -298,28 +262,18 @@ function OpenAICardView({ card, unitId }: { card: OpenAIIntegrationCard; unitId:
         </div>
       )}
 
-      {/* Orçamento */}
       <BudgetBlock card={card} />
 
-      {/* Breakdown por modelo */}
       <ModelBreakdown card={card} />
 
-      {/* Linha do tempo (sparkline simples) */}
       <Timeline card={card} />
 
-      {/* Diagnóstico da Admin Key — útil quando "platform" está vazio. */}
       {card.adminKey.configured && (!card.platform || !card.adminKey.usable) && (
         <AdminKeyDebug unitId={unitId} />
       )}
     </section>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Diagnóstico cru do Admin Key.
-// Aparece quando a key está cadastrada mas não traz dados. Chama o
-// endpoint /openai-debug que devolve status HTTP + corpo bruto da OpenAI.
-// ---------------------------------------------------------------------------
 
 function AdminKeyDebug({ unitId }: { unitId: string }) {
   const [open, setOpen] = useState(false);
@@ -545,7 +499,6 @@ function BudgetBlock({ card }: { card: OpenAIIntegrationCard }) {
           className={clsx('h-full transition-all', fillColor)}
           style={{ width: `${pct}%` }}
         />
-        {/* Marcadores 70%, 90% */}
         <div className="absolute top-0 left-[70%] w-px h-full bg-amber-500/40" />
         <div className="absolute top-0 left-[90%] w-px h-full bg-rose-500/40" />
       </div>
@@ -578,7 +531,6 @@ function BudgetBlock({ card }: { card: OpenAIIntegrationCard }) {
 }
 
 function ModelBreakdown({ card }: { card: OpenAIIntegrationCard }) {
-  // Prioriza dados da plataforma, cai pra measured.
   const platformRows = card.platform?.byModel ?? [];
   const measuredRows = card.measured.byModel;
   const useReal = platformRows.length > 0;
@@ -638,7 +590,6 @@ function ModelBreakdown({ card }: { card: OpenAIIntegrationCard }) {
 function Timeline({ card }: { card: OpenAIIntegrationCard }) {
   const platformTl = card.platform?.timeline ?? [];
   const measuredTl = card.measured.timeline;
-  // Junta timelines pra exibir comparativo barra a barra.
   const dates = Array.from(
     new Set([...platformTl.map((p) => p.date), ...measuredTl.map((m) => m.date)]),
   ).sort();
@@ -696,10 +647,6 @@ function Timeline({ card }: { card: OpenAIIntegrationCard }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// CARD: Kommo
-// ---------------------------------------------------------------------------
-
 function KommoCardView({ card }: { card: KommoIntegrationCard }) {
   const sc = statusColor(card.status);
   return (
@@ -729,10 +676,6 @@ function KommoCardView({ card }: { card: KommoIntegrationCard }) {
     </section>
   );
 }
-
-// ---------------------------------------------------------------------------
-// CARD: Meta
-// ---------------------------------------------------------------------------
 
 function MetaCardView({ card }: { card: MetaIntegrationCard }) {
   const sc = statusColor(card.status);

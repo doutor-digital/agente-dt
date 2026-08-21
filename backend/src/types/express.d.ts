@@ -1,7 +1,3 @@
-// ============================================================================
-// express.d.ts — Augment do Request com `user` populado pelo requireAuth.
-// ============================================================================
-
 import type { User } from '@prisma/client';
 
 declare global {

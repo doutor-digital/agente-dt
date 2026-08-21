@@ -18,8 +18,6 @@ test('unidade de Claude cai pra OpenAI quando há chave no ambiente', () => {
   assert.equal(p?.provider, 'openai');
 });
 
-// O caso real do incidente: OpenAI zerou e as unidades que atendiam por ela
-// ficaram mudas, mesmo tendo chave da Anthropic cadastrada.
 test('unidade de OpenAI cai pra Claude quando tem chave Anthropic', () => {
   const p = escolherPlanoB(
     { ...base, llmProvider: 'openai', anthropicApiKey: 'sk-ant-x', anthropicModel: 'claude-sonnet-5' },

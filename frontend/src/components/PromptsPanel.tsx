@@ -1,17 +1,3 @@
-// ============================================================================
-// PromptsPanel — Dimensionamento de qualidade de prompts (LLM-as-judge).
-//
-// LÓGICA DE UX
-// ------------
-// Mostra, por versão de prompt (hash), quantos leads converteram e a
-// qualidade média da conversa segundo o juiz LLM. Permite drill-down em
-// cada lead convertido pra ver scores detalhados + veredito qualitativo +
-// o system prompt exato que estava em uso.
-//
-// O que NÃO mostramos: conversas não-convertidas (escopo do MVP). Próximo
-// passo natural é avaliar uma amostra de não-convertidas pra contrastar.
-// ============================================================================
-
 import { useMemo, useState } from 'react';
 import { Loader2, Sparkles, ChevronDown, ChevronRight, RefreshCw, AlertCircle, BadgeCheck } from 'lucide-react';
 import clsx from 'clsx';
@@ -133,10 +119,6 @@ export function PromptsPanel() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Linha de totais
-// ---------------------------------------------------------------------------
-
 function TotalsRow({
   totals,
 }: {
@@ -169,10 +151,6 @@ function Kpi({ label, value, hint }: { label: string; value: string; hint?: stri
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Card de um prompt (versão)
-// ---------------------------------------------------------------------------
 
 function PromptCard({
   item,
@@ -220,7 +198,6 @@ function PromptCard({
             <span className="text-zinc-500">score</span>{' '}
             <span className={clsx('font-semibold', overallColor)}>{item.avgOverall.toFixed(1)}</span>
           </div>
-          {/* Trava por média: nota sem amostra suficiente engana — avisa o dono. */}
           {item.confianca && (
             <span
               title={item.confianca.explicacao}
@@ -253,7 +230,6 @@ function PromptCard({
               {item.confianca.explicacao}
             </div>
           )}
-          {/* Médias por critério */}
           <div>
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">
               Score médio por critério
@@ -273,7 +249,6 @@ function PromptCard({
             </div>
           </div>
 
-          {/* Snapshot do prompt */}
           <details className="rounded ring-1 ring-zinc-800 bg-zinc-950/50">
             <summary className="cursor-pointer text-xs text-zinc-400 px-3 py-2">
               System prompt usado nesta versão
@@ -283,7 +258,6 @@ function PromptCard({
             </pre>
           </details>
 
-          {/* Top conversões */}
           <div>
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">
               Leads convertidos com este prompt

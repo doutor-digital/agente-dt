@@ -1,18 +1,3 @@
-// ============================================================================
-// KommoSchemaPreview — visualizador read-only de etapas e tags da unidade.
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// Puxa GET /units/:id/kommo-pipelines e /kommo-tags ao montar (ou via botão
-// Recarregar). É read-only — serve pra você SABER quais IDs/nomes existem no
-// Kommo da unidade, e usar essa info ao instruir a IA:
-//   - "mover_etapa(<id>)" — copia o ID daqui
-//   - "aplicar_tag('<nome>')" — copia o nome daqui
-//
-// Falha (token inválido, sub errado) vira um aviso inline pra ajustar a
-// credencial — não bloqueia o resto do form.
-// ============================================================================
-
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Copy, Loader2, RefreshCw, Tag, Workflow } from 'lucide-react';
 import { api } from '../lib/api';
@@ -21,7 +6,6 @@ import type { KommoPipelinesResponse, KommoTagsResponse } from '../types/api';
 
 interface Props {
   unitId: string;
-  /** Se o token ainda não foi salvo, não vale a pena tentar. */
   canFetch: boolean;
 }
 
@@ -93,7 +77,6 @@ export function KommoSchemaPreview({ unitId, canFetch }: Props) {
 
   return (
     <div className="space-y-5">
-      {/* Etapas */}
       <SubBlock
         icon={<Workflow size={14} className="text-sky-400" />}
         title="Etapas do Kommo"
@@ -158,7 +141,6 @@ export function KommoSchemaPreview({ unitId, canFetch }: Props) {
         )}
       </SubBlock>
 
-      {/* Tags */}
       <SubBlock
         icon={<Tag size={14} className="text-amber-400" />}
         title="Tags do Kommo"

@@ -1,36 +1,19 @@
-// ============================================================================
-// sla-report.service.ts — resumo do dia do SLA de resposta humana.
-//
-// Conta, por unidade (que tem o SLA ligado), quantos leads estouraram o SLA
-// HOJE (foram alertados), quantos já foram respondidos (handoff zerado) e
-// quais ainda estão sem resposta agora. Tudo derivado dos campos que o worker
-// já grava — `slaAlertAt` e `handoffAt` — sem instrumentação nova.
-//
-// Consumido pelo n8n (workflow agendado de fim de dia) que formata e manda o
-// resumo no grupo do WhatsApp. Ver [[project_sdr_whatsapp_alerts]].
-// ============================================================================
-
 import { prisma } from '../lib/prisma.js';
 
 export interface SlaReportUnit {
   slug: string;
   name: string;
   subdomain: string | null;
-  /** Leads que estouraram o SLA hoje (slaAlertAt de hoje). */
   alertedToday: number;
-  /** Desses, quantos já foram respondidos (handoffAt zerado). */
   resolvedAfter: number;
-  /** Ainda sem resposta agora (handoffAt ainda preenchido). */
   stillWaiting: Array<{ leadId: string; name: string | null }>;
 }
 
 export interface SlaReport {
-  /** Data local (AAAA-MM-DD) da unidade de referência. */
   date: string;
   units: SlaReportUnit[];
 }
 
-/** Offset (local - UTC) em ms no fuso `tz` no instante `at`. */
 function tzOffsetMs(tz: string, at: Date): number {
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
@@ -55,7 +38,6 @@ function tzOffsetMs(tz: string, at: Date): number {
   return asUTC - at.getTime();
 }
 
-/** Início do dia local (00:00 no fuso) como instante UTC. */
 function startOfDayUtc(tz: string): { start: Date; localDate: string } {
   const now = new Date();
   const off = tzOffsetMs(tz, now);
@@ -68,10 +50,6 @@ function startOfDayUtc(tz: string): { start: Date; localDate: string } {
   return { start: new Date(sodShifted - off), localDate };
 }
 
-/**
- * Monta o resumo do dia para todas as unidades com o SLA ligado.
- * NÃO escreve nada — só lê.
- */
 export async function computeSlaReport(): Promise<SlaReport> {
   const units = await prisma.unit.findMany();
   const habilitadas = units.filter((u) => {

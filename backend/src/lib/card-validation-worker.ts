@@ -1,25 +1,3 @@
-// ============================================================================
-// card-validation-worker.ts — ALERTA de erro no preenchimento do cartão.
-//
-// O que required_statuses (campos obrigatórios por etapa) do Kommo NÃO cobre:
-//   1. INCONSISTÊNCIA entre campos (ex: no-show marcado como pago).
-//   2. Campos faltando nas etapas FINAIS (Ganho/Perdido/Cancelado), onde o
-//      required_statuses do Kommo não persiste.
-// Este worker varre os leads atualizados recentemente, roda as regras e, num
-// erro, cria a tarefa `ALERTA · unidade · [Contato: Nome] ⚠️ ...` → cai no grupo
-// dos SDRs (mesmo motor dos outros alertas). Ver [[project_sdr_whatsapp_alerts]].
-//
-// GUARDAS
-// -------
-//   - opt-in por unidade (`cardValidationEnabled`, OFF por padrão)
-//   - dedup por (unidade, lead, regra) na tabela CardAlert: 1 alerta por erro.
-//     Quando o card é corrigido (regra passa), a linha some → alerta de novo se
-//     quebrar outra vez.
-//
-// IDs de campo/etapa: conta Kommo COMPARTILHADA (Imperatriz e demais unidades
-// da mesma conta usam os mesmos IDs). Pra outra CONTA, virar config depois.
-// ============================================================================
-
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
@@ -27,7 +5,7 @@ import { createKommoClient } from '../services/kommo.service.js';
 import type { KommoLead } from '../services/kommo.service.js';
 
 const SWEEP_MS = 5 * 60_000;
-const LOOKBACK_MIN = 12; // leads atualizados nos últimos 12 min (sweep de 5 tem folga)
+const LOOKBACK_MIN = 12;
 
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
@@ -36,10 +14,10 @@ const PIPE_COMERCIAL = 14091100;
 const PIPE_TRATAMENTO = 14091116;
 const ST = {
   AGENDADO: 108773008,
-  GANHO: 142, // comercial
-  PERDIDO: 143, // comercial
+  GANHO: 142,
+  PERDIDO: 143,
   EM_TRAT: 108773168,
-  CANCELADO: 143, // tratamento
+  CANCELADO: 143,
 } as const;
 
 const F = {
@@ -59,7 +37,6 @@ const F = {
   MOTIVO_CANCEL_TRAT: 2442739,
 } as const;
 
-/** Valores (texto) de um custom field do lead; [] se vazio. */
 function vals(lead: KommoLead, fid: number): string[] {
   const cf = (lead.custom_fields_values ?? []).find((f) => f.field_id === fid);
   return (cf?.values ?? [])
@@ -73,7 +50,6 @@ const igual = (lead: KommoLead, fid: number, v: string): boolean =>
 interface Regra {
   key: string;
   aplica: (l: KommoLead) => boolean;
-  /** Mensagem do erro, ou null se o card está OK nessa regra. */
   erro: (l: KommoLead) => string | null;
 }
 
@@ -134,7 +110,6 @@ async function validarUnidade(unit: Unit): Promise<void> {
   const leads = await kommo.listLeadsAtualizadosComCampos(desde, 250);
   if (leads.length === 0) return;
 
-  // Carrega o que já foi alertado (1 query) e trabalha em memória.
   const existentes = await prisma.cardAlert.findMany({
     where: { unitId: unit.id },
     select: { leadId: true, ruleKey: true },
@@ -149,7 +124,6 @@ async function validarUnidade(unit: Unit): Promise<void> {
       const erro = r.erro(lead);
 
       if (!erro) {
-        // Card corrigido nessa regra → limpa o dedup pra poder alertar de novo se quebrar.
         if (jaAlertado.has(chave)) {
           await prisma.cardAlert
             .deleteMany({ where: { unitId: unit.id, leadId: leadIdStr, ruleKey: r.key } })
@@ -159,7 +133,7 @@ async function validarUnidade(unit: Unit): Promise<void> {
         continue;
       }
 
-      if (jaAlertado.has(chave)) continue; // já avisamos deste erro
+      if (jaAlertado.has(chave)) continue;
 
       const nome = (lead.name ?? '').trim() || 'lead';
       const texto = `ALERTA · ${unit.slug} · [Contato: ${nome}] ⚠️ Card ${erro}. Revisar preenchimento no Kommo.`;
@@ -200,14 +174,9 @@ async function varrer(): Promise<void> {
   }
 }
 
-/**
- * BASELINE: registra TODOS os erros atuais da base SEM alertar. Roda 1x antes de
- * (re)ligar o validador — assim os erros ANTIGOS não viram disparo em massa; só
- * os NOVOS (que aparecerem depois) alertam. Retorna quantos erros foram semeados.
- */
 export async function seedBaselineUnit(unit: Unit): Promise<{ leads: number; erros: number }> {
   const kommo = createKommoClient(unit);
-  const leads = await kommo.listLeads(120); // varre a base (até ~30k leads)
+  const leads = await kommo.listLeads(120);
   const rows: Array<{ unitId: string; leadId: string; ruleKey: string }> = [];
   for (const lead of leads) {
     for (const r of REGRAS) {

@@ -1,25 +1,3 @@
-// ============================================================================
-// tools.ts — Tools do agente (Zod + DynamicStructuredTool, multi-tenant).
-//
-// LÓGICA DE ENGENHARIA
-// --------------------
-// As Tools são a interface entre a LLM e o mundo real. Cada Tool tem:
-//   1. SCHEMA Zod — convertido pela LangChain pro formato de tool-calling
-//      esperado pela OpenAI.
-//   2. DESCRIÇÃO em linguagem natural — o que faz o LLM decidir QUANDO
-//      chamar a tool. É o gatilho.
-//   3. FUNÇÃO de execução — delega pro `KommoClient` da Unit corrente.
-//
-// Por que NÃO chamadas axios diretas aqui?
-//   - O LangGraph fica acoplado ao Kommo. Mantendo o `KommoClient` como
-//     camada HTTP pura, a tool fica imutável quando trocarmos de CRM.
-//
-// MULTI-TENANT
-// ------------
-// Cada execução tem sua Unit. As tools precisam do `KommoClient` instanciado
-// com as credenciais da Unit — por isso passamos pelo factory `buildTools`.
-// ============================================================================
-
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { buildAgendaTools } from './agenda-tools.js';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
@@ -33,14 +11,8 @@ import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js
 import { logger } from '../lib/logger.js';
 import { looksLikeName } from './name-capture.js';
 
-// Campos do handoff IA → humano. Carimbados quando pausar_ia entra. IDs desta
-// unidade (mesmo padrão de agenda-tools); multi-unidade → virar config.
-const CAMPO_HANDOFF_DATA = 2442729; // ◷ Data do handoff IA → humano (date_time)
-const CAMPO_HANDOFF_HUMANO = 2442727; // ✓ Atendimento assumido por humano (select)
-
-// ---------------------------------------------------------------------------
-// Descrições default — fonte de verdade pro seed do AgentConfig.
-// ---------------------------------------------------------------------------
+const CAMPO_HANDOFF_DATA = 2442729;
+const CAMPO_HANDOFF_HUMANO = 2442727;
 
 export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
   aplicar_tag:
@@ -104,22 +76,12 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     'Se não passar statusId, Kommo coloca no primeiro status do funil destino.',
 };
 
-// ---------------------------------------------------------------------------
-// Factory.
-// `kommo` é o cliente já instanciado pra Unit corrente.
-// `descriptionOverrides` permite que o AgentConfig (editado pelo dashboard)
-// substitua o texto-gatilho da tool.
-// ---------------------------------------------------------------------------
-
 export interface BuildToolsArgs {
   recorder: TraceRecorder;
   kommo: KommoClient;
   descriptionOverrides?: Record<string, string>;
-  /** ID do custom field "IA Pausada". Sem isso, `pausar_ia` retorna erro suave. */
   pausedFieldId?: number | null;
-  /** Regras de captura de dados — cada uma vira uma tool dinâmica. */
   leadFieldRules?: LeadFieldRule[];
-  /** Unit completa — usada pela tool de resumo pra montar o LLM da unidade. */
   unit?: Unit;
 }
 
@@ -174,7 +136,6 @@ export function buildTools({
     schema: aplicarTagSchema,
     func: async ({ leadId, tag, tags }) => {
       const t0 = performance.now();
-      // Normaliza pra array. Aceita `tag` (legado, 1 tag), `tags` (novo) ou ambos.
       const list = [
         ...(tag ? [tag] : []),
         ...(Array.isArray(tags) ? tags : []),
@@ -214,7 +175,6 @@ export function buildTools({
           payload: { leadId, tags: list, error: msg },
           latencyMs: latency,
         });
-        // Devolvemos a falha como string pra LLM poder reagir. NÃO lançamos.
         return `ERRO ao aplicar ${label}: ${msg}`;
       }
     },
@@ -297,11 +257,6 @@ export function buildTools({
           payload: { leadId, motivo, fieldId: pausedFieldId },
           latencyMs: latency,
         });
-        // CARIMBA O HANDOFF no mesmo passo. Pausar é passar o atendimento pra um
-        // humano; sem registrar QUANDO e QUE virou humano, não dá pra medir
-        // autonomia da IA (quantos ela resolveu sozinha, e quando desistiu).
-        // Fire-and-forget: falhar aqui não desfaz a pausa. IDs são desta unidade
-        // (mesmo padrão de agenda-tools) — multi-unidade vira config depois.
         void (async () => {
           try {
             await kommo.setLeadCustomFieldValue(leadId, CAMPO_HANDOFF_DATA, 'date', new Date().toISOString());
@@ -314,15 +269,10 @@ export function buildTools({
           } catch (e) {
             logger.warn({ err: String(e), leadId }, 'pausar_ia: falha ao carimbar data do handoff');
           }
-          // Marca o handoff NO BANCO pra o worker de reativação: 30min depois,
-          // se o humano não respondeu nem agendou e o lead é quente, a IA volta.
-          // updateMany (não update): a conversa pode não existir ainda em casos
-          // raros — não quebrar a pausa por isso.
           try {
             if (unit?.id) {
               await prisma.conversation.updateMany({
                 where: { unitId: unit.id, leadId: String(leadId) },
-                // slaAlertAt: null → cada novo handoff pode gerar 1 alerta de SLA.
                 data: { handoffAt: new Date(), slaAlertAt: null },
               });
             }
@@ -369,8 +319,6 @@ export function buildTools({
         payload: { leadId, nome },
       });
 
-      // Trava: barra nomes inválidos ("um pouco coucuda", "diabética", frases).
-      // Vale pro LLM tanto quanto pra rede de segurança — dado errado não entra.
       if (!looksLikeName(nome)) {
         await recorder.step({
           kind: 'THINKING',
@@ -417,9 +365,6 @@ export function buildTools({
     },
   });
 
-  // -------------------------------------------------------------------------
-  // criar_tarefa — POST /tasks no Kommo, vinculado ao lead.
-  // -------------------------------------------------------------------------
   const criarTarefaSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
     text: z.string().min(3).max(500).describe('Texto da tarefa (o que fazer).'),
@@ -427,7 +372,7 @@ export function buildTools({
       .number()
       .int()
       .positive()
-      .max(60 * 24 * 30) // 30 dias
+      .max(60 * 24 * 30)
       .describe(
         'Quantos minutos a partir de agora pro deadline. Ex: 60=1h, 1440=1 dia, ' +
           '10080=1 semana. A tarefa aparece pro operador com esse prazo.',
@@ -475,9 +420,6 @@ export function buildTools({
     },
   });
 
-  // -------------------------------------------------------------------------
-  // atribuir_responsavel — PATCH /leads com responsible_user_id.
-  // -------------------------------------------------------------------------
   const atribuirResponsavelSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
     userId: z.number().int().positive().describe('ID do usuário Kommo que vai assumir o lead.'),
@@ -517,9 +459,6 @@ export function buildTools({
     },
   });
 
-  // -------------------------------------------------------------------------
-  // remover_tag — PATCH com _embedded.tags_to_delete.
-  // -------------------------------------------------------------------------
   const removerTagSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
     tag: z.string().min(1).max(50).describe('Nome exato da tag a remover.'),
@@ -559,9 +498,6 @@ export function buildTools({
     },
   });
 
-  // -------------------------------------------------------------------------
-  // definir_valor_lead — PATCH com price.
-  // -------------------------------------------------------------------------
   const definirValorLeadSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
     price: z
@@ -605,9 +541,6 @@ export function buildTools({
     },
   });
 
-  // -------------------------------------------------------------------------
-  // fechar_lead — PATCH com status_id (142=won, 143=lost) + lossReasonId.
-  // -------------------------------------------------------------------------
   const fecharLeadSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
     status: z.enum(['won', 'lost']).describe('"won" = venda realizada, "lost" = venda perdida.'),
@@ -653,9 +586,6 @@ export function buildTools({
     },
   });
 
-  // -------------------------------------------------------------------------
-  // mover_funil — PATCH com pipeline_id + status_id opcional.
-  // -------------------------------------------------------------------------
   const moverFunilSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
     pipelineId: z.number().int().positive().describe('ID do funil destino.'),
@@ -701,8 +631,6 @@ export function buildTools({
     },
   });
 
-  // resumir_lead_para_sdr — gera resumo e posta como nota interna no Kommo.
-  // Só registrada se tivermos `unit` (precisa pra montar o LLM da unidade).
   const resumirLeadParaSdrSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
     focusHint: z
@@ -729,7 +657,6 @@ export function buildTools({
           });
 
           try {
-            // 1) Histórico da conversa (últimas 40 msgs).
             const msgs = await getRecentMessagesByLead(unit.id, String(leadId), 40);
             if (msgs.length === 0) {
               const latency = Math.round(performance.now() - t0);
@@ -742,15 +669,9 @@ export function buildTools({
               return `Sem histórico de mensagens pra resumir (lead ${leadId}).`;
             }
 
-            // 2) Monta prompt de sumarização.
             const transcript = msgs
               .map((m) => `${m.role === 'user' ? 'PACIENTE' : 'IA'}: ${m.content}`)
               .join('\n');
-            // Formato profissional plain-text — Kommo NÃO renderiza markdown
-            // em notas nem em campos custom. Asteriscos viram literais e
-            // estragam a leitura. Solução: cabeçalhos em MAIÚSCULAS como
-            // âncoras visuais, separados por linha em branco. Escaneável
-            // em <5s pelo SDR.
             const sys = new SystemMessage(
               [
                 'Você é um assistente que escreve resumos rápidos pra um SDR ' +
@@ -790,7 +711,6 @@ export function buildTools({
               `Conversa entre PACIENTE e IA (mais antiga em cima):\n\n${transcript}`,
             );
 
-            // 3) Chama o LLM da unidade.
             const model = createChatOpenAI(unit, {
               model: unit.openaiModel ?? undefined,
               temperature: 0.3,
@@ -810,7 +730,6 @@ export function buildTools({
                 ? response.content
                 : JSON.stringify(response.content);
 
-            // 4) Posta nota interna no Kommo (sempre — histórico/timeline).
             const note = await kommo.addLeadNote(leadId, `📋 Resumo da IA (auto):\n\n${summary}`);
 
             const latency = Math.round(performance.now() - t0);
@@ -827,8 +746,6 @@ export function buildTools({
               latencyMs: latency,
             });
 
-            // 5) Também grava no custom field configurado (se houver). Falha
-            //    aqui NÃO inverte o sucesso da nota — logamos ERROR e seguimos.
             let fieldNote = '';
             if (unit.summaryCustomFieldId) {
               const fieldId = unit.summaryCustomFieldId;
@@ -849,10 +766,6 @@ export function buildTools({
                   latencyMs: writeMs,
                 });
 
-                // Readback — releitura do lead pra confirmar que o Kommo
-                // armazenou de fato. Mesmo padrão da "Resposta IA" — alguns
-                // campos custom têm silent rejection (Kommo retorna 200 mas
-                // não persiste, tipo o bug histórico do `tags_to_add`).
                 const readStart = performance.now();
                 try {
                   const lead = await kommo.getLead(leadId);
@@ -863,11 +776,6 @@ export function buildTools({
                   const storedValue =
                     typeof storedRaw === 'string' ? storedRaw : storedRaw == null ? '' : String(storedRaw);
                   const readMs = Math.round(performance.now() - readStart);
-                  // Kommo aplica downgrade de emoji no servidor (mesma razão da
-                  // Resposta IA), então a comparação deve ser feita contra a
-                  // versão "downgraded" do summary. Truque pragmático: comparar
-                  // pelo prefixo de 80 chars (suficiente pra confirmar persistência
-                  // sem falsos negativos por sanitização de caracteres).
                   const sentPrefix = summary.slice(0, 80);
                   const storedPrefix = storedValue.slice(0, 80);
                   const persisted = storedValue.length > 0;
@@ -944,14 +852,10 @@ export function buildTools({
       })
     : null;
 
-  // Tools dinâmicas — uma por LeadFieldRule ativa. Cada rule escreve em um
-  // custom field específico do Kommo, com schema ditado pelo tipo do campo.
   const dynamicTools = leadFieldRules.map((rule) =>
     buildLeadFieldRuleTool({ rule, kommo, recorder }),
   );
 
-  // Tipo amplo pra acomodar tools com schemas diferentes — TS infere o array
-  // pelo 1º elemento e rejeitaria os outros schemas senão.
   const nativeTools: DynamicStructuredTool[] = [
     aplicar_tag,
     mover_etapa,
@@ -966,31 +870,16 @@ export function buildTools({
   ];
   if (resumir_lead_para_sdr) nativeTools.push(resumir_lead_para_sdr);
 
-  // Tools de agenda só existem pra unidade com a API da franquia conectada.
-  // Fora isso o agente nem vê que agendar é possível — melhor do que ver e
-  // receber erro, que ele tentaria contornar conversando.
   const agendaTools = unit ? buildAgendaTools({ unit, recorder, kommo }) : [];
 
   return [...nativeTools, ...agendaTools, ...dynamicTools];
 }
 
-// ---------------------------------------------------------------------------
-// Tool dinâmica de captura — schema depende do tipo do field.
-// ---------------------------------------------------------------------------
-
-/**
- * Schema da tool de captura. EXPORTADA porque o Playground monta versões
- * "falsas" das mesmas tools (que registram a chamada em vez de gravar no
- * Kommo) — se cada lado montasse o próprio schema, um tipo de campo novo
- * passaria a funcionar em produção e continuar quebrado no sandbox.
- */
 export function leadFieldRuleSchema(rule: LeadFieldRule) {
   const fieldType = rule.kommoFieldType as KommoFieldType;
   const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
   const enumValues = enums.map((e) => e.value);
 
-  // Schema da tool muda por tipo. value sempre fica como string no contrato
-  // pra simplificar — convertemos depois antes de mandar pro Kommo.
   const baseSchema: Record<string, z.ZodTypeAny> = {
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
   };
@@ -1031,7 +920,6 @@ export function leadFieldRuleSchema(rule: LeadFieldRule) {
   return z.object(baseSchema);
 }
 
-/** Description da tool de captura — mesma razão de ser exportada que o schema. */
 export function leadFieldRuleDescription(rule: LeadFieldRule): string {
   const fieldType = rule.kommoFieldType as KommoFieldType;
   const examplesBlock =
@@ -1039,9 +927,6 @@ export function leadFieldRuleDescription(rule: LeadFieldRule): string {
       ? ` Exemplos de quando chamar: ${rule.examples.slice(0, 5).map((e) => `"${e}"`).join('; ')}.`
       : '';
 
-  // Quando a regra tem updatesLeadTitle, sinaliza na description pro modelo
-  // entender que esta tool é "o caminho do nome" — útil quando há ambiguidade
-  // (ex: existir AINDA o toggle collectNameEnabled com sua própria tool).
   const titleHint = rule.updatesLeadTitle
     ? ' TAMBÉM atualiza o título do card no Kommo com este valor (formato "<Valor> DD/MM/YYYY").'
     : '';
@@ -1058,8 +943,6 @@ function buildLeadFieldRuleTool({
   recorder: TraceRecorder;
 }) {
   const fieldType = rule.kommoFieldType as KommoFieldType;
-  // Precisa dos enums crus (id + value) pra converter o rótulo escolhido pelo
-  // modelo no enum_id que o Kommo espera.
   const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
 
   return new DynamicStructuredTool({
@@ -1093,9 +976,6 @@ function buildLeadFieldRuleTool({
           latencyMs: latency,
         });
 
-        // Side effect opcional: atualizar título do card. Só faz sentido pra
-        // valores textuais (nome do paciente). Falha aqui NÃO inverte o
-        // sucesso da gravação principal — logamos como ERROR e seguimos.
         let titleNote = '';
         if (rule.updatesLeadTitle && typeof value === 'string' && value.trim()) {
           try {
