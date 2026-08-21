@@ -39,7 +39,7 @@
 // que duas unidades nunca compartilhem memória de lead acidentalmente.
 // ============================================================================
 
-import { type AIMessage, type BaseMessage, SystemMessage } from '@langchain/core/messages';
+import { AIMessage, type BaseMessage, SystemMessage } from '@langchain/core/messages';
 import { END, START, StateGraph } from '@langchain/langgraph';
 import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
@@ -57,6 +57,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
+import { withTimeout, AGENT_NODE_TIMEOUT_MS, FALLBACK_INDISPONIVEL } from './llm-policy.js';
 
 // ---------------------------------------------------------------------------
 // Checkpointer (singleton).
@@ -308,15 +309,38 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
     const finalMessages: BaseMessage[] = [systemMessage, ...nonSystemMessages];
 
     const t0 = performance.now();
-    const response = (await invokeChatModel({
-      model,
-      messages: finalMessages,
-      unitId: unit.id,
-      traceId: recorder.traceId,
-      modelName,
-      provider,
-      tools,
-    })) as AIMessage;
+    let response: AIMessage;
+    try {
+      // Backstop de travamento: o cliente já tem timeout+retry HTTP; aqui a
+      // política é entregar um fallback educado em vez de deixar o paciente no
+      // vácuo quando tudo isso esgota (ou o invoke nunca volta).
+      response = (await withTimeout(
+        invokeChatModel({
+          model,
+          messages: finalMessages,
+          unitId: unit.id,
+          traceId: recorder.traceId,
+          modelName,
+          provider,
+          tools,
+        }),
+        AGENT_NODE_TIMEOUT_MS,
+      )) as AIMessage;
+    } catch (err) {
+      await recorder.step({
+        kind: 'ERROR',
+        title: '⏱️ IA indisponível — fallback enviado ao paciente',
+        payload: {
+          erro: err instanceof Error ? err.message : String(err),
+          timeoutMs: AGENT_NODE_TIMEOUT_MS,
+        },
+        latencyMs: Math.round(performance.now() - t0),
+      });
+      return {
+        messages: [new AIMessage(FALLBACK_INDISPONIVEL)],
+        decision: FALLBACK_INDISPONIVEL,
+      } satisfies Partial<AgentStateType>;
+    }
     const latency = Math.round(performance.now() - t0);
 
     const toolCalls = response.tool_calls ?? [];
@@ -393,7 +417,9 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
   // Montagem do grafo.
   // -------------------------------------------------------------------------
   const workflow = new StateGraph(AgentState)
-    .addNode('agent', agentNode)
+    // RetryPolicy nativa do LangGraph: se o nó da IA lançar um erro transitório
+    // inesperado (fora do fallback que já tratamos), o runtime re-executa o nó.
+    .addNode('agent', agentNode, { retryPolicy: { maxAttempts: 2 } })
     .addNode('tools', toolNode)
     .addEdge(START, 'agent')
     .addConditionalEdges('agent', shouldContinue, {
