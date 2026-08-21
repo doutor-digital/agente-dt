@@ -93,6 +93,98 @@ export interface LeadMemoryFacts {
   [key: string]: string | number | boolean | null;
 }
 
+// ---------------------------------------------------------------------------
+// ÚLTIMO CONTATO — a camada "episódica" da memória.
+//
+// A IA já não é amnésica dentro da mesma conversa (o checkpoint durável guarda
+// o thread inteiro). O que faltava era NOÇÃO DE TEMPO E DESFECHO: quando foi a
+// última vez que este paciente falou, e como aquilo terminou. Sem isso a IA
+// reabre um lead de dois meses atrás no mesmo tom de quem falou ontem.
+//
+// Mora em `facts` (Json que já existe) — nada de tabela nova.
+// ---------------------------------------------------------------------------
+
+/** Chaves de contato: preservadas entre execuções do summarizer. */
+export const CHAVES_CONTATO = ['ultimo_contato', 'ultimo_desfecho', 'travou_em'] as const;
+
+export const DESFECHOS = ['agendou', 'sumiu', 'travou_preco', 'pediu_humano', 'so_duvida'] as const;
+export type Desfecho = (typeof DESFECHOS)[number];
+
+/** Só aceita desfecho conhecido — evita o LLM inventar rótulo novo. */
+export function sanitizeOutcome(v: unknown): Desfecho | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim().toLowerCase();
+  return (DESFECHOS as readonly string[]).includes(s) ? (s as Desfecho) : null;
+}
+
+/**
+ * "há 3 dias", "ontem", "há 2 meses" — em vez de uma data ISO crua, que a IA
+ * lê mal e às vezes repete pro paciente.
+ */
+export function formatarQuandoFoi(iso: string, agora: Date = new Date()): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const dias = Math.floor((agora.getTime() - t) / 86_400_000);
+  if (dias <= 0) return 'hoje';
+  if (dias === 1) return 'ontem';
+  if (dias < 7) return `há ${dias} dias`;
+  if (dias < 14) return 'há uma semana';
+  if (dias < 31) return `há ${Math.floor(dias / 7)} semanas`;
+  const meses = Math.floor(dias / 30);
+  if (meses === 1) return 'há um mês';
+  if (meses < 12) return `há ${meses} meses`;
+  return 'há mais de um ano';
+}
+
+/**
+ * Mantém as chaves de contato ao reescrever os fatos.
+ *
+ * O summarizer devolve o objeto `facts` INTEIRO e sobrescreve o anterior — sem
+ * isto, o carimbo de último contato seria apagado no ciclo seguinte e ninguém
+ * perceberia (a memória continua "funcionando", só sem a noção de tempo).
+ */
+export function preservarFatosDeContato(
+  anterior: LeadMemoryFacts,
+  novos: LeadMemoryFacts,
+): LeadMemoryFacts {
+  const out: LeadMemoryFacts = { ...novos };
+  for (const k of CHAVES_CONTATO) {
+    if (out[k] === undefined || out[k] === null || out[k] === '') {
+      const antigo = anterior?.[k];
+      if (antigo !== undefined && antigo !== null && antigo !== '') out[k] = antigo;
+    }
+  }
+  return out;
+}
+
+/**
+ * Carimba data/desfecho do contato. Fire-and-forget: memória é enriquecimento,
+ * nunca pode derrubar o atendimento.
+ */
+export function carimbarContato(
+  unitId: string,
+  leadId: string | number,
+  patch: { desfecho?: Desfecho | null; travouEm?: string | null },
+): void {
+  const idStr = String(leadId);
+  void (async () => {
+    const atual = await prisma.leadMemory.findUnique({
+      where: { unitId_leadId: { unitId, leadId: idStr } },
+      select: { facts: true },
+    });
+    const facts = ((atual?.facts as LeadMemoryFacts) ?? {}) as LeadMemoryFacts;
+    facts.ultimo_contato = new Date().toISOString();
+    if (patch.desfecho) facts.ultimo_desfecho = patch.desfecho;
+    if (patch.travouEm) facts.travou_em = patch.travouEm.slice(0, 60);
+
+    await prisma.leadMemory.upsert({
+      where: { unitId_leadId: { unitId, leadId: idStr } },
+      update: { facts: facts as unknown as object },
+      create: { unitId, leadId: idStr, summary: '', facts: facts as unknown as object },
+    });
+  })().catch((err) => logger.warn({ err, unitId, leadId: idStr }, 'carimbarContato falhou'));
+}
+
 export async function getLeadMemory(
   unitId: string,
   leadId: string | number,
@@ -305,7 +397,12 @@ async function runLeadMemoryUpdate(args: {
     // que garante que a IA nunca trate como novo um lead que o CRM já sabe
     // agendado — sem depender de o summarizer ter captado.
     const hardFacts = await fatosDurosDoKommo(unit, leadId);
-    const newFacts = { ...sanitizeFacts(parsed.facts), ...hardFacts };
+    // preservarFatosDeContato por último: o summarizer devolve `facts` inteiro
+    // e sobrescreveria o carimbo de último contato/desfecho silenciosamente.
+    const newFacts = preservarFatosDeContato(factsCurrent, {
+      ...sanitizeFacts(parsed.facts),
+      ...hardFacts,
+    });
 
     await prisma.leadMemory.update({
       where: { unitId_leadId: { unitId: unit.id, leadId: idStr } },

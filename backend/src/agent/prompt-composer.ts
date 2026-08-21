@@ -35,7 +35,11 @@ import {
   listEnabledGlobalActions,
 } from '../services/actions.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
-import { getLeadMemoryForAgent, type LeadMemoryFacts } from '../services/lead-memory.service.js';
+import {
+  getLeadMemoryForAgent,
+  formatarQuandoFoi,
+  type LeadMemoryFacts,
+} from '../services/lead-memory.service.js';
 import { listEnabledLessons } from '../services/lessons.service.js';
 import {
   consultaDoLead,
@@ -1232,6 +1236,15 @@ ${lines.join('\n\n')}`);
  * contexto histórico do paciente. Pequeno e barato — atualizado em background
  * pelo lead-memory.service, então a leitura aqui é só 1 query indexada.
  */
+/** Rótulo técnico do desfecho → frase que a IA entende sem ambiguidade. */
+const DESFECHO_HUMANO: Record<string, string> = {
+  agendou: 'ele chegou a agendar',
+  sumiu: 'parou de responder no meio',
+  travou_preco: 'travou quando falamos de valor',
+  pediu_humano: 'pediu pra falar com uma pessoa',
+  so_duvida: 'era só uma dúvida, não seguiu',
+};
+
 function renderLeadMemory(mem: LeadMemory | null): string {
   if (!mem) return '';
   const summary = (mem.summary ?? '').trim();
@@ -1247,10 +1260,29 @@ function renderLeadMemory(mem: LeadMemory | null): string {
     lines.push('');
     lines.push(`**Resumo:** ${summary}`);
   }
-  if (factsEntries.length > 0) {
+  // ÚLTIMO CONTATO — a IA precisa da noção de TEMPO. Data ISO crua ela lê mal
+  // (e às vezes repete pro paciente); aqui vira "há 2 meses" e um rótulo de
+  // desfecho, separados dos demais fatos pra ganharem peso.
+  const quando = typeof facts.ultimo_contato === 'string' ? formatarQuandoFoi(facts.ultimo_contato) : '';
+  const desfecho = typeof facts.ultimo_desfecho === 'string' ? facts.ultimo_desfecho : '';
+  const travou = typeof facts.travou_em === 'string' ? facts.travou_em : '';
+  if (quando || desfecho || travou) {
+    lines.push('');
+    lines.push('**Último contato:**');
+    if (quando) lines.push(`  - Falou com a gente ${quando}.`);
+    if (desfecho) lines.push(`  - Como terminou: ${DESFECHO_HUMANO[desfecho] ?? desfecho}`);
+    if (travou) lines.push(`  - Ficou travado em: ${travou}`);
+    lines.push(
+      '  - Retome reconhecendo o tempo que passou, sem cobrar e sem recomeçar do zero como se fosse a primeira conversa.',
+    );
+  }
+
+  const OCULTOS = new Set(['ultimo_contato', 'ultimo_desfecho', 'travou_em']);
+  const outros = factsEntries.filter(([k]) => !OCULTOS.has(k));
+  if (outros.length > 0) {
     lines.push('');
     lines.push('**Dados estruturados:**');
-    for (const [k, v] of factsEntries) {
+    for (const [k, v] of outros) {
       lines.push(`  - ${k}: ${String(v)}`);
     }
   }
