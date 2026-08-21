@@ -19,6 +19,7 @@ import type {
   ChangeLogEntry,
   LessonEntry,
   StrategyLabResult,
+  KnowledgeLinkEntry,
   KommoFieldsResponse,
   KommoLossReasonsResponse,
   KommoPipelinesResponse,
@@ -759,6 +760,24 @@ export const api = {
   },
   async escolherEstrategia(unitId: string, runId: string, texto: string): Promise<void> {
     await http.post(`/units/${unitId}/strategy-lab/${runId}/escolher`, { texto });
+  },
+  async listKnowledgeLinks(unitId: string): Promise<KnowledgeLinkEntry[]> {
+    const { data } = await http.get<{ links: KnowledgeLinkEntry[] }>(`/units/${unitId}/knowledge-links`);
+    return data.links;
+  },
+  async addKnowledgeLink(unitId: string, url: string): Promise<KnowledgeLinkEntry | null> {
+    const { data } = await http.post<{ link: KnowledgeLinkEntry | null }>(
+      `/units/${unitId}/knowledge-links`,
+      { url },
+      { timeout: 90_000 },
+    );
+    return data.link;
+  },
+  async reprocessKnowledgeLink(unitId: string, linkId: string): Promise<void> {
+    await http.post(`/units/${unitId}/knowledge-links/${linkId}/processar`, {}, { timeout: 90_000 });
+  },
+  async deleteKnowledgeLink(unitId: string, linkId: string): Promise<void> {
+    await http.delete(`/units/${unitId}/knowledge-links/${linkId}`);
   },
   async reflectLessons(unitId: string): Promise<{ proposed: number; analisadas: number }> {
     const { data } = await http.post<{ proposed: number; analisadas: number }>(
