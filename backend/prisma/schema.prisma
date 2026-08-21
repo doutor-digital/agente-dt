@@ -630,6 +630,33 @@ model UnitLesson {
   @@map("unit_lessons")
 }
 
+// ---------------------------------------------------------------------------
+// LeadStrategyRun — "3 jeitos de responder": rodada sob demanda em que a IA
+// gera 3 mensagens (uma por abordagem) para um lead travado, e o dono copia a
+// que preferir. É a versão offline do LATS — busca de caminhos SEM pagar
+// latência no turno do paciente. `chosenAt` é a métrica de adoção: se ninguém
+// escolhe nada, a feature não está servindo e pode ser desligada.
+// Sem relation pra Unit de propósito (padrão CardAlert): não edita model existente.
+// ---------------------------------------------------------------------------
+model LeadStrategyRun {
+  id             String    @id @default(cuid())
+  unitId         String    @map("unit_id")
+  conversationId String    @map("conversation_id")
+  leadId         String    @map("lead_id")
+  ownerNote      String?   @map("owner_note") @db.Text
+  /// Array de { abordagem, titulo, texto, alertas[] }.
+  candidates     Json      @default("[]")
+  /// ok | partial | failed
+  status         String    @default("ok")
+  chosenText     String?   @map("chosen_text") @db.Text
+  chosenAt       DateTime? @map("chosen_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([unitId, createdAt(sort: Desc)])
+  @@index([conversationId])
+  @@map("lead_strategy_runs")
+}
+
 // ===========================================================================
 // GlobalAction — regras "quando → faça" que valem pra TODAS as units.
 // ===========================================================================

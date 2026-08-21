@@ -852,6 +852,20 @@ export interface KnowledgeEntry {
   updatedAt: string;
 }
 
+// "3 jeitos de responder": sugestões geradas sob demanda para um lead travado.
+export interface StrategyCandidato {
+  abordagem: string;
+  titulo: string;
+  texto: string;
+  alertas: string[];
+}
+
+export interface StrategyLabResult {
+  runId: string;
+  candidatos: StrategyCandidato[];
+  status: 'ok' | 'partial' | 'failed';
+}
+
 // Memória procedural: regras que a IA aprendeu pra esta clínica.
 export interface LessonEntry {
   id: string;

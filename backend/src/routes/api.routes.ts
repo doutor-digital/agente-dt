@@ -158,6 +158,10 @@ import {
   reflectLessonsHandler,
 } from '../controllers/lessons.controller.js';
 import {
+  runStrategyLabHandler,
+  chooseStrategyHandler,
+} from '../controllers/strategy-lab.controller.js';
+import {
   listUsersHandler,
   createUserHandler,
   updateUserHandler,
@@ -258,6 +262,8 @@ apiRouter.get('/units/:id/changelog', requireUnitAccess, listChangeLogHandler);
 apiRouter.get('/units/:id/lessons', requireUnitAccess, listLessonsHandler);
 apiRouter.post('/units/:id/lessons', requireUnitAccess, createLessonHandler);
 apiRouter.post('/units/:id/lessons/reflect', requireUnitAccess, reflectLessonsHandler);
+apiRouter.post('/units/:id/strategy-lab', requireUnitAccess, runStrategyLabHandler);
+apiRouter.post('/units/:id/strategy-lab/:runId/escolher', requireUnitAccess, chooseStrategyHandler);
 apiRouter.patch('/units/:id/lessons/:lessonId', requireUnitAccess, updateLessonHandler);
 apiRouter.delete('/units/:id/lessons/:lessonId', requireUnitAccess, deleteLessonHandler);
 apiRouter.get('/units/:id/knowledge', requireUnitAccess, listKnowledgeHandler);

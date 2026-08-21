@@ -13,6 +13,7 @@ import type { LeadMemory } from '../types/api';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import { usePolling } from '../hooks/usePolling';
+import { StrategyLab } from './StrategyLab';
 import type { ConversationDetail, ConversationMessage } from '../types/api';
 
 function timeAgo(iso: string): string {
@@ -161,7 +162,12 @@ export function ConversationsPanel() {
                   />
                 ))}
               </div>
-              <MemoryRail memory={detail.memory} />
+              <div className="w-72 shrink-0 flex flex-col border-l border-zinc-800/80">
+                <div className="flex-1 overflow-hidden flex">
+                  <MemoryRail memory={detail.memory} />
+                </div>
+                <StrategyLab conversationId={detail.id} />
+              </div>
             </div>
           </>
         )}
@@ -240,7 +246,7 @@ function MemoryRail({ memory }: { memory: LeadMemory | null }) {
   const agendou = String(facts['agendou'] ?? '').toLowerCase() === 'sim';
 
   return (
-    <aside className="w-72 shrink-0 border-l border-zinc-800/80 bg-ink-900/60 overflow-y-auto">
+    <aside className="flex-1 bg-ink-900/60 overflow-y-auto">
       <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center gap-2 sticky top-0 bg-ink-900/95 backdrop-blur">
         <Brain size={14} className="text-brand-300" />
         <span className="text-xs font-semibold text-zinc-200">Memória do paciente</span>
