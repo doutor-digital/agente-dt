@@ -20,6 +20,14 @@ test('detectarTipo reconhece youtube, avaliações e artigos', () => {
   assert.equal(detectarTipo('https://clinica.com.br/sobre'), 'pagina');
 });
 
+test('detectarTipo reconhece revistas brasileiras e portais OJS', () => {
+  assert.equal(detectarTipo('https://revistaft.com.br/eficacia-do-tratamento-conservador'), 'artigo');
+  assert.equal(detectarTipo('https://ojs.revistacontribuciones.com/ojs/index.php/clcs/article/view/2626'), 'artigo');
+  assert.equal(detectarTipo('https://periodicos.newsciencepubl.com/arace/article/view/4855'), 'artigo');
+  assert.equal(detectarTipo('https://bjihs.emnuvens.com.br/bjihs/article/view/3235'), 'artigo');
+  assert.equal(detectarTipo('https://www.terra.com.br/vida-e-estilo/saude/hernia'), 'pagina');
+});
+
 test('urlPermitida barra endereços internos e protocolos estranhos', () => {
   assert.equal(urlPermitida('https://www.scielo.br/artigo'), true);
   assert.equal(urlPermitida('http://exemplo.com'), true);
