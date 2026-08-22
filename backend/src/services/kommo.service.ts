@@ -1345,6 +1345,24 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Lança um Salesbot num lead. Usado no modo widget porque o Kommo só oferece
+   * gatilho de "chat iniciado" — que não dispara da 2ª mensagem em diante. Aqui
+   * quem decide a hora de rodar somos nós, a cada mensagem recebida.
+   */
+  async runBot(botId: number, leadId: number): Promise<void> {
+    const t0 = performance.now();
+    try {
+      await this.http.post(`/bots/${botId}/run`, { entity_id: leadId, entity_type: 'leads' });
+      logger.info(
+        { botId, leadId, ms: Math.round(performance.now() - t0) },
+        'widget: Salesbot lançado por API',
+      );
+    } catch (err) {
+      wrapAxiosError(err, `runBot(${botId}, lead=${leadId})`);
+    }
+  }
+
   async continueSalesbotWidget(
     returnUrl: string,
     args: {

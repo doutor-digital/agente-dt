@@ -401,6 +401,26 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         'kommo webhook: áudio de entrada guardado pro modo widget',
       );
     }
+
+    // O Kommo só tem gatilho de "chat iniciado", que não dispara da 2ª mensagem
+    // em diante — por isso a IA respondia uma vez e emudecia. Aqui a gente
+    // mesmo lança o bot do widget a cada mensagem recebida.
+    const widgetBotId = unit.kommoWidgetSalesbotId;
+    if (widgetBotId && msgEntrando?.entity_id) {
+      const unidade = unit;
+      const leadDoBot = msgEntrando.entity_id;
+      const chaveDedup = msgEntrando.id ?? `${leadDoBot}:${msgEntrando.text ?? ''}`;
+      if (claimMessageId('widget-run', chaveDedup)) {
+        void createKommoClient(unidade)
+          .runBot(widgetBotId, leadDoBot)
+          .catch((err) => {
+            logger.warn(
+              { err, unit: unidade.slug, leadId: leadDoBot, botId: widgetBotId },
+              'widget: falha ao lançar o Salesbot por API',
+            );
+          });
+      }
+    }
     logger.debug(
       { unit: unit.slug },
       'kommo webhook: modo widget ligado, ignorando gatilho do agente (entrega via /widget)',
