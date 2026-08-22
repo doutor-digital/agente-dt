@@ -9,6 +9,8 @@ import { createKommoClient } from '../services/kommo.service.js';
 import { findUnitBySlug } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
+import { takeIncomingAudio } from '../lib/pending-audio.js';
+import { sintetizarFala } from '../services/tts.service.js';
 import {
   recordWidgetRequest,
   recordWidgetDelivery,
@@ -76,6 +78,8 @@ export async function handleWidgetRequest(req: Request, res: Response): Promise<
 
   const message = typeof data?.message === 'string' ? data.message : String(data?.message ?? '');
   const leadId = Number(data?.lead);
+  // Áudio: o `{{message_text}}` vem vazio, quem tem o link é o webhook /kommo.
+  const audioUrl = leadId && !Number.isNaN(leadId) ? takeIncomingAudio(unit.id, leadId) : null;
   recordWidgetRequest(unit.id, {
     jwt: jwtStatus,
     leadId: leadId && !Number.isNaN(leadId) ? leadId : null,
@@ -88,7 +92,8 @@ export async function handleWidgetRequest(req: Request, res: Response): Promise<
 
   res.status(200).json({ ok: true, unit: unit.slug });
 
-  if (!message.trim()) {
+  // Mensagem vazia E sem áudio guardado = não há o que responder.
+  if (!message.trim() && !audioUrl) {
     try {
       await createKommoClient(unit).continueSalesbotWidget(returnUrl, { text: '' });
       recordWidgetDelivery(unit.id, { ok: true });
@@ -99,19 +104,55 @@ export async function handleWidgetRequest(req: Request, res: Response): Promise<
     return;
   }
 
-  void processWidget({ unit, leadId, message, returnUrl, requestStart }).catch((err) => {
+  void processWidget({ unit, leadId, message, audioUrl, returnUrl, requestStart }).catch((err) => {
     logger.error({ err, unit: unit.slug, leadId }, 'widget: erro fatal no processamento async');
   });
+}
+
+/**
+ * Gera o áudio da resposta e sobe pro Drive do Kommo. Devolve `null` em
+ * qualquer falha — o chamador então entrega em texto, que é sempre melhor do
+ * que não entregar nada.
+ */
+async function gerarAudioDaResposta(
+  unit: Unit,
+  kommo: ReturnType<typeof createKommoClient>,
+  text: string,
+  recorder: TraceRecorder,
+): Promise<{ uuid: string; name: string } | null> {
+  const t0 = performance.now();
+  try {
+    const { audio, chars } = await sintetizarFala(unit, text);
+    const name = `sofia-${Date.now()}.ogg`;
+    const uuid = await kommo.uploadToDrive(audio, name, 'audio/ogg');
+    await recorder.step({
+      kind: 'KOMMO_ACTION',
+      title: `🔊 Resposta convertida em áudio (${chars} chars, ${Math.round(audio.length / 1024)} KB)`,
+      payload: { uuid, name, chars },
+      latencyMs: Math.round(performance.now() - t0),
+    });
+    return { uuid, name };
+  } catch (err) {
+    logger.warn({ err, unit: unit.slug }, 'widget: falha ao gerar áudio — caindo pra texto');
+    await recorder.step({
+      kind: 'ERROR',
+      title: '🔊 Falha ao gerar áudio — respondendo em texto',
+      payload: { erro: err instanceof Error ? err.message : String(err) },
+      latencyMs: Math.round(performance.now() - t0),
+    });
+    return null;
+  }
 }
 
 async function processWidget(args: {
   unit: Unit;
   leadId: number;
   message: string;
+  audioUrl: string | null;
   returnUrl: string;
   requestStart: number;
 }): Promise<void> {
-  const { unit, leadId, message, returnUrl, requestStart } = args;
+  const { unit, leadId, message, audioUrl, returnUrl, requestStart } = args;
 
   if (!claimMessageId('widget', returnUrl)) {
     logger.info({ unit: unit.slug, leadId }, 'widget request duplicado (mesmo return_url) — ignorando reprocessamento');
@@ -152,9 +193,12 @@ async function processWidget(args: {
   const kommo = createKommoClient(unit);
   const deliver: AgentDeliverFn = async (text) => {
     try {
-      const detail = await kommo.continueSalesbotWidget(returnUrl, { text, recorder });
+      // Paciente falou, a Sofia fala de volta. Se qualquer etapa do áudio
+      // falhar, cai em texto — nunca deixa o paciente sem resposta.
+      const audio = audioUrl ? await gerarAudioDaResposta(unit, kommo, text, recorder) : null;
+      const detail = await kommo.continueSalesbotWidget(returnUrl, { text, audio, recorder });
       recordWidgetDelivery(unit.id, { ok: true });
-      return { via: detail.via, detail };
+      return { via: audio ? 'widget_continue_audio' : detail.via, detail };
     } catch (e) {
       recordWidgetDelivery(unit.id, { ok: false, error: e instanceof Error ? e.message : String(e) });
       throw e;
@@ -166,7 +210,7 @@ async function processWidget(args: {
     leadId,
     traceId: trace.id,
     humanMessage: message,
-    audioUrl: null,
+    audioUrl,
     imageUrl: null,
     chatId: null,
     talkId: null,

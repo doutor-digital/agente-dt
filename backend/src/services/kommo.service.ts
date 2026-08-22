@@ -188,6 +188,48 @@ export function downgradeEmoji(text: string): string {
 
 const INTER_CHUNK_DELAY_MS = Number(process.env.KOMMO_INTER_CHUNK_MS) || 1600;
 
+/** Teto do Kommo pro `value` de cada handler `show` no continue do Salesbot. */
+const WIDGET_SHOW_MAX_LEN = 80;
+
+/**
+ * Com o teto de 80 o corte às vezes deixa um resto minúsculo (um emoji, uma
+ * palavra) sozinho num balão. Cola esse resto no balão anterior quando couber.
+ */
+/**
+ * Handler de áudio do Salesbot. Não está na documentação pública — foi lido do
+ * "ver código" de um passo de áudio montado no designer do Kommo.
+ *
+ * O `text` PRECISA ficar vazio: com texto ou botão no mesmo passo, o Kommo
+ * manda o arquivo como anexo pra download em vez de mensagem de voz.
+ */
+function montarHandlerDeAudio(audio: { uuid: string; name: string }): Record<string, unknown> {
+  return {
+    handler: 'send_message',
+    params: {
+      type: 'external',
+      text: '',
+      send_to_all_chat_sources: true,
+      recipient: { type: 'all_contacts', way_of_communication: 'over_all' },
+      attachments: [{ value: audio.uuid, type: 'audio', is_external: true, name: audio.name }],
+      on_error: null,
+    },
+  };
+}
+
+function juntarSobras(chunks: string[]): string[] {
+  const out: string[] = [];
+  for (const chunk of chunks) {
+    const anterior = out[out.length - 1];
+    const cabe = anterior && `${anterior} ${chunk}`.length <= WIDGET_SHOW_MAX_LEN;
+    if (chunk.length <= 12 && cabe) {
+      out[out.length - 1] = `${anterior} ${chunk}`;
+    } else {
+      out.push(chunk);
+    }
+  }
+  return out;
+}
+
 export function splitIntoChunks(text: string, maxLen: number): string[] {
   const clean = text.trim();
   if (clean.length === 0) return [];
@@ -420,8 +462,58 @@ function wrapAxiosError(err: unknown, context: string): never {
 export class KommoClient {
   constructor(private readonly creds: KommoCreds, private readonly http: AxiosInstance) {}
 
+  private driveUrl: string | null = null;
+
   get subdomain(): string {
     return this.creds.subdomain;
+  }
+
+  /** O host do Drive varia por conta (drive-b, drive-c…), então vem da API. */
+  private async getDriveUrl(): Promise<string> {
+    if (this.driveUrl) return this.driveUrl;
+    const { data } = await this.http.get<{ drive_url?: string }>('/account', {
+      params: { with: 'drive_url' },
+    });
+    if (!data?.drive_url) throw new Error('conta Kommo sem drive_url');
+    this.driveUrl = data.drive_url;
+    return this.driveUrl;
+  }
+
+  /**
+   * Sobe um arquivo pro Drive do Kommo e devolve o uuid, que é o que o handler
+   * `send_message` espera em `attachments[].value`.
+   *
+   * São dois passos: abre uma sessão de upload (autenticada) e joga os bytes na
+   * `upload_url` que ela devolve — essa segunda chamada NÃO leva Authorization,
+   * o token já vai embutido na própria URL.
+   */
+  async uploadToDrive(bytes: Buffer, fileName: string, contentType: string): Promise<string> {
+    const t0 = performance.now();
+    try {
+      const driveUrl = await this.getDriveUrl();
+      const { data: session } = await axios.post<{ upload_url: string }>(
+        `${driveUrl}/v1.0/sessions`,
+        { file_name: fileName, file_size: bytes.length, content_type: contentType },
+        {
+          headers: { Authorization: `Bearer ${this.creds.accessToken}` },
+          timeout: 20_000,
+        },
+      );
+      const { data: file } = await axios.post<{ uuid?: string }>(session.upload_url, bytes, {
+        headers: { 'Content-Type': 'application/octet-stream' },
+        timeout: 60_000,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      });
+      if (!file?.uuid) throw new Error('upload sem uuid na resposta');
+      logger.info(
+        { fileName, bytes: bytes.length, uuid: file.uuid, ms: Math.round(performance.now() - t0) },
+        'kommo drive: arquivo enviado',
+      );
+      return file.uuid;
+    } catch (err) {
+      wrapAxiosError(err, `uploadToDrive(${fileName})`);
+    }
   }
 
   async getContactPhone(contactId: number): Promise<string | null> {
@@ -1255,14 +1347,23 @@ export class KommoClient {
 
   async continueSalesbotWidget(
     returnUrl: string,
-    args: { text: string; data?: Record<string, unknown>; recorder?: KommoStepRecorder },
+    args: {
+      text: string;
+      audio?: { uuid: string; name: string } | null;
+      data?: Record<string, unknown>;
+      recorder?: KommoStepRecorder;
+    },
   ): Promise<{ via: 'widget_continue'; chunks: number; detail: unknown }> {
     const t0 = performance.now();
-    const chunks = splitIntoChunks(args.text, 900);
-    const executeHandlers: Array<Record<string, unknown>> = [
-      ...chunks.map((value) => ({ handler: 'show', params: { type: 'text', value } })),
-      { handler: 'goto', params: { type: 'finish' } },
-    ];
+    // O Kommo valida cada balão do `show` em 80 chars — passar disso derruba a
+    // chamada inteira com 400 TooLong (execute_handlers.params.value) e o
+    // paciente não recebe NADA. Não é limite nosso, é do lado deles.
+    const chunks = juntarSobras(splitIntoChunks(args.text, WIDGET_SHOW_MAX_LEN));
+    // Sem `goto` no fim: `{type:'finish'}` sem `step` é inválido pro Kommo, e o
+    // bot termina sozinho quando acaba o passo.
+    const executeHandlers: Array<Record<string, unknown>> = args.audio
+      ? [montarHandlerDeAudio(args.audio)]
+      : chunks.map((value) => ({ handler: 'show', params: { type: 'text', value } }));
     const payload = { data: args.data ?? { status: 'success' }, execute_handlers: executeHandlers };
     try {
       const { data } = await this.http.post(returnUrl, payload);
