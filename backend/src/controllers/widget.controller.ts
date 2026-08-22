@@ -154,8 +154,16 @@ async function processWidget(args: {
 }): Promise<void> {
   const { unit, leadId, message, audioUrl, returnUrl, requestStart } = args;
 
-  if (!claimMessageId('widget', returnUrl)) {
-    logger.info({ unit: unit.slug, leadId }, 'widget request duplicado (mesmo return_url) — ignorando reprocessamento');
+  // A chave NÃO pode ser só o return_url: o Kommo reusa o mesmo `continue_id`
+  // dentro de uma sessão do bot, então da 2ª mensagem em diante tudo virava
+  // "duplicado" e o paciente ficava sem resposta. O áudio entra na chave porque
+  // a URL do arquivo é única por mensagem.
+  const chaveDedup = `${returnUrl}|${audioUrl ?? message}`;
+  if (!claimMessageId('widget', chaveDedup)) {
+    logger.info(
+      { unit: unit.slug, leadId },
+      'widget request duplicado (mesmo return_url e mesma mensagem) — ignorando reprocessamento',
+    );
     return;
   }
 
