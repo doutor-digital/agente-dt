@@ -14,6 +14,7 @@ import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js'
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
+import { rememberIncomingAudio } from '../lib/pending-audio.js';
 import { enforceReplyGap } from '../lib/reply-gate.js';
 import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
@@ -388,6 +389,18 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   }
 
   if (unit.kommoWidgetReplyEnabled) {
+    // O widget_request não carrega anexo — quando o paciente manda áudio, o
+    // `{{message_text}}` chega vazio e o link do arquivo só existe AQUI. Guarda
+    // pro /widget buscar daqui a pouco (ver lib/pending-audio).
+    const msgEntrando = getIncomingMessage(parsed.data);
+    const audioEntrando = msgEntrando ? getAudioUrl(msgEntrando) : null;
+    if (audioEntrando && msgEntrando?.entity_id) {
+      rememberIncomingAudio(unit.id, msgEntrando.entity_id, audioEntrando);
+      logger.info(
+        { unit: unit.slug, leadId: msgEntrando.entity_id },
+        'kommo webhook: áudio de entrada guardado pro modo widget',
+      );
+    }
     logger.debug(
       { unit: unit.slug },
       'kommo webhook: modo widget ligado, ignorando gatilho do agente (entrega via /widget)',
