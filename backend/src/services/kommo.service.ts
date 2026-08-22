@@ -1350,16 +1350,35 @@ export class KommoClient {
    * gatilho de "chat iniciado" — que não dispara da 2ª mensagem em diante. Aqui
    * quem decide a hora de rodar somos nós, a cada mensagem recebida.
    */
-  async runBot(botId: number, leadId: number): Promise<void> {
+  async runBot(botId: number, entityId: number, entityType: 'leads' | 'contacts'): Promise<void> {
     const t0 = performance.now();
     try {
-      await this.http.post(`/bots/${botId}/run`, { entity_id: leadId, entity_type: 'leads' });
+      await this.http.post(`/bots/${botId}/run`, { entity_id: entityId, entity_type: entityType });
       logger.info(
-        { botId, leadId, ms: Math.round(performance.now() - t0) },
+        { botId, entityId, entityType, ms: Math.round(performance.now() - t0) },
         'widget: Salesbot lançado por API',
       );
     } catch (err) {
-      wrapAxiosError(err, `runBot(${botId}, lead=${leadId})`);
+      wrapAxiosError(err, `runBot(${botId}, ${entityType}=${entityId})`);
+    }
+  }
+
+  /**
+   * Descobre o contato do chat de um lead.
+   *
+   * Importa MUITO no modo widget: lançar o bot com `entity_type: leads` faz o
+   * Kommo rodar em contexto de MARKETINGBOT — o `show` é aceito com 200 e
+   * descartado em silêncio, porque não há conversa. Com o contato, o bot roda
+   * como SALESBOT e a resposta chega no WhatsApp.
+   */
+  async getFirstContactId(leadId: number): Promise<number | null> {
+    try {
+      const lead = await this.getLead(leadId);
+      const contatos = (lead as { _embedded?: { contacts?: Array<{ id?: number }> } })._embedded?.contacts;
+      const id = contatos?.find((c) => typeof c.id === 'number')?.id;
+      return typeof id === 'number' ? id : null;
+    } catch {
+      return null;
     }
   }
 

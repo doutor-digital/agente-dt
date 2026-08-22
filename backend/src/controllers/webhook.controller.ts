@@ -411,14 +411,29 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       const leadDoBot = msgEntrando.entity_id;
       const chaveDedup = msgEntrando.id ?? `${leadDoBot}:${msgEntrando.text ?? ''}`;
       if (claimMessageId('widget-run', chaveDedup)) {
-        void createKommoClient(unidade)
-          .runBot(widgetBotId, leadDoBot)
-          .catch((err) => {
+        // Tem que ser pelo CONTATO. Com `leads` o Kommo roda o bot como
+        // marketingbot, sem conversa — o `show` é aceito e jogado fora.
+        const doWebhook = Number(msgEntrando.contact_id);
+        void (async () => {
+          const kommo = createKommoClient(unidade);
+          const contatoId =
+            Number.isFinite(doWebhook) && doWebhook > 0
+              ? doWebhook
+              : await kommo.getFirstContactId(leadDoBot);
+          if (!contatoId) {
             logger.warn(
-              { err, unit: unidade.slug, leadId: leadDoBot, botId: widgetBotId },
-              'widget: falha ao lançar o Salesbot por API',
+              { unit: unidade.slug, leadId: leadDoBot },
+              'widget: lead sem contato — não dá pra lançar o bot em contexto de chat',
             );
-          });
+            return;
+          }
+          await kommo.runBot(widgetBotId, contatoId, 'contacts');
+        })().catch((err) => {
+          logger.warn(
+            { err, unit: unidade.slug, leadId: leadDoBot, botId: widgetBotId },
+            'widget: falha ao lançar o Salesbot por API',
+          );
+        });
       }
     }
     logger.debug(
