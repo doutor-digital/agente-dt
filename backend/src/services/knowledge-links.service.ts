@@ -35,7 +35,10 @@ export function detectarTipo(url: string): TipoLink {
   const u = url.toLowerCase();
   if (/youtube\.com|youtu\.be/.test(u)) return 'video';
   if (/google\.[a-z.]+\/maps|maps\.app\.goo\.gl|g\.co\/|share\.google/.test(u)) return 'avaliacao';
-  if (/scielo|pubmed|ncbi\.nlm|doi\.org|sciencedirect|arxiv|springer|nature\.com|thelancet|nejm|bmj\.com|jospt/.test(u)) {
+  if (
+    /scielo|pubmed|ncbi\.nlm|doi\.org|sciencedirect|arxiv|springer|nature\.com|thelancet|nejm|bmj\.com|jospt/.test(u) ||
+    /revistaft|periodicos|revistacontribuciones|emnuvens|researchgate|revistadelos|\/ojs\/|ojs\.|\/article\/view\//.test(u)
+  ) {
     return 'artigo';
   }
   return 'pagina';
