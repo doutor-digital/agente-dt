@@ -62,6 +62,14 @@ export async function transcribeAudio(
   form.append('file', audioBuf, { filename: `audio.${ext}`, contentType: `audio/${ext}` });
   form.append('model', TRANSCRIBE_MODEL);
   form.append('language', language);
+  // Viés de contexto: sem isso o modelo alucina em áudio curto ou com ruído —
+  // já devolveu "Pull atəş, улыштәш." pra um áudio em português.
+  form.append(
+    'prompt',
+    'Paciente brasileiro falando com uma clínica de fisioterapia e reabilitação ortopédica. ' +
+      'Assuntos comuns: dor na coluna, lombar, ombro, joelho, quadril, hérnia de disco, ' +
+      'fisioterapia, pilates, consulta, agendamento, valor.',
+  );
   form.append('response_format', 'json');
 
   const res = await axios.post<{ text: string }>(TRANSCRIBE_URL, form, {
@@ -75,7 +83,30 @@ export async function transcribeAudio(
   });
 
   const text = (res.data?.text ?? '').trim();
+  if (text && !pareceportugues(text)) {
+    logger.warn(
+      { text: text.slice(0, 120), bytes: audioBuf.byteLength, ext },
+      'transcrição saiu em alfabeto estranho — tratando como áudio inaudível',
+    );
+    throw new Error('Transcrição ininteligível (alfabeto não-latino)');
+  }
+  logger.info(
+    { chars: text.length, bytes: audioBuf.byteLength, ext, ms: Math.round(performance.now() - t0) },
+    'áudio transcrito',
+  );
   return { text, durationMs: Math.round(performance.now() - t0) };
+}
+
+/**
+ * Modelo do tipo Whisper alucina quando o áudio é curto, mudo ou ruidoso — e a
+ * alucinação costuma sair em outro alfabeto (cirílico, árabe, CJK). Texto de
+ * paciente brasileiro é esmagadoramente latino; se não for, não dá pra confiar.
+ */
+function pareceportugues(text: string): boolean {
+  const letras = text.replace(/[^\p{L}]/gu, '');
+  if (letras.length === 0) return false;
+  const latinas = letras.replace(/[^\p{Script=Latin}]/gu, '').length;
+  return latinas / letras.length >= 0.8;
 }
 
 function detectAudioExt(buf: Buffer): string {

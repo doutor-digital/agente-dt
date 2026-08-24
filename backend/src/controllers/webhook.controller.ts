@@ -646,7 +646,11 @@ export async function processAgent(args: {
         title: `Falha ao transcrever áudio: ${msg}`,
         payload: { audioUrl, error: msg },
       });
-      humanMessage = humanMessage || '[cliente mandou um áudio, mas não foi possível transcrever]';
+      humanMessage =
+        humanMessage ||
+        '[o paciente mandou um áudio que não deu pra entender. Peça com gentileza pra ele ' +
+          'gravar de novo ou escrever. NÃO diga que ele falou em outro idioma nem peça pra ' +
+          'ele falar em português — o problema foi na nossa captação do áudio.]';
     }
   }
 
