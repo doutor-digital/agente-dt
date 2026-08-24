@@ -35,7 +35,16 @@ const F = {
   SESSOES_PREV: 2442731,
   DATA_CANCEL: 2440985,
   MOTIVO_CANCEL_TRAT: 2442739,
+  AGENDADO_SDR_EM: 2440909,
+  DATA_CONSULTA: 2444497,
 } as const;
+
+function dataUnix(lead: KommoLead, fid: number): number | null {
+  const bruto = vals(lead, fid)[0];
+  if (!bruto) return null;
+  const n = Number(bruto);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 function vals(lead: KommoLead, fid: number): string[] {
   const cf = (lead.custom_fields_values ?? []).find((f) => f.field_id === fid);
@@ -47,13 +56,13 @@ const vazio = (lead: KommoLead, fid: number): boolean => vals(lead, fid).length 
 const igual = (lead: KommoLead, fid: number, v: string): boolean =>
   vals(lead, fid).some((x) => x.toLowerCase() === v.toLowerCase());
 
-interface Regra {
+export interface Regra {
   key: string;
   aplica: (l: KommoLead) => boolean;
   erro: (l: KommoLead) => string | null;
 }
 
-const REGRAS: Regra[] = [
+export const REGRAS_CARD: Regra[] = [
   {
     key: 'A_agendado_incompleto',
     aplica: (l) => l.pipeline_id === PIPE_COMERCIAL && l.status_id === ST.AGENDADO,
@@ -63,6 +72,25 @@ const REGRAS: Regra[] = [
       if (vazio(l, F.TIPO_AGENDAMENTO)) p.push('"Tipo de agendamento" vazio');
       if (vazio(l, F.SITUACAO_CONSULTA)) p.push('"Situação da consulta" vazia');
       return p.length ? 'está em AGENDADO mas ' + p.join('; ') : null;
+    },
+  },
+  {
+    key: 'A2_data_agendamento_invalida',
+    aplica: (l) => l.pipeline_id === PIPE_COMERCIAL && l.status_id === ST.AGENDADO,
+    erro: (l) => {
+      const agendadoEm = dataUnix(l, F.AGENDADO_SDR_EM);
+      if (agendadoEm === null) {
+        return 'está em AGENDADO mas "◷ Agendado pela SDR em" está vazio — o agendamento não entra no relatório do dia';
+      }
+      const consulta = dataUnix(l, F.DATA_CONSULTA);
+      const agora = Math.floor(Date.now() / 1000);
+      if (agendadoEm > agora + 86_400) {
+        return 'está em AGENDADO mas "◷ Agendado pela SDR em" tem data FUTURA — esse campo é quando a SDR agendou, não a data da consulta';
+      }
+      if (consulta !== null && agendadoEm === consulta) {
+        return 'está em AGENDADO mas "◷ Agendado pela SDR em" está igual à "◷ Data da Consulta" — o primeiro é quando agendou, o segundo é quando o paciente vem';
+      }
+      return null;
     },
   },
   {
@@ -118,7 +146,7 @@ async function validarUnidade(unit: Unit): Promise<void> {
 
   for (const lead of leads) {
     const leadIdStr = String(lead.id);
-    for (const r of REGRAS) {
+    for (const r of REGRAS_CARD) {
       if (!r.aplica(lead)) continue;
       const chave = `${leadIdStr}|${r.key}`;
       const erro = r.erro(lead);
@@ -179,7 +207,7 @@ export async function seedBaselineUnit(unit: Unit): Promise<{ leads: number; err
   const leads = await kommo.listLeads(120);
   const rows: Array<{ unitId: string; leadId: string; ruleKey: string }> = [];
   for (const lead of leads) {
-    for (const r of REGRAS) {
+    for (const r of REGRAS_CARD) {
       if (r.aplica(lead) && r.erro(lead)) {
         rows.push({ unitId: unit.id, leadId: String(lead.id), ruleKey: r.key });
       }
