@@ -103,6 +103,21 @@ async function alertarUnidade(unit: Unit): Promise<void> {
         }
       }
 
+      const atividade = await kommo.atividadeHumanaDesde(
+        leadId,
+        Math.floor((conv.handoffAt as Date).getTime() / 1000),
+      );
+      if (atividade.houve) {
+        await prisma.conversation
+          .update({ where: { id: conv.id }, data: { handoffAt: null } })
+          .catch(() => undefined);
+        logger.info(
+          { unit: unit.slug, leadId, tipo: atividade.tipo, porUsuario: atividade.porUsuario },
+          'SLA: alguém já cuidou do lead — alerta cancelado',
+        );
+        continue;
+      }
+
       const nome = conv.contactName?.trim() || (lead?.name ?? '').trim();
       const contato = nome ? `[Contato: ${nome}] ` : '';
       const espera = humanizarEspera(Date.now() - (conv.handoffAt as Date).getTime());
@@ -125,6 +140,38 @@ async function alertarUnidade(unit: Unit): Promise<void> {
   }
 }
 
+async function resolverPendentes(unit: Unit): Promise<void> {
+  if (!limiarMin(unit)) return;
+  const abertas = await prisma.conversation.findMany({
+    where: { unitId: unit.id, handoffAt: { not: null }, slaAlertAt: { not: null } },
+    orderBy: { handoffAt: 'asc' },
+    take: 40,
+  });
+  if (abertas.length === 0) return;
+
+  const kommo = createKommoClient(unit);
+  for (const conv of abertas) {
+    const leadId = Number(conv.leadId);
+    if (!Number.isFinite(leadId)) continue;
+    try {
+      const atividade = await kommo.atividadeHumanaDesde(
+        leadId,
+        Math.floor((conv.handoffAt as Date).getTime() / 1000),
+      );
+      if (!atividade.houve) continue;
+      await prisma.conversation
+        .update({ where: { id: conv.id }, data: { handoffAt: null } })
+        .catch(() => undefined);
+      logger.info(
+        { unit: unit.slug, leadId, tipo: atividade.tipo, porUsuario: atividade.porUsuario },
+        'SLA: lead atendido depois do alerta — marcado como resolvido',
+      );
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'SLA: falha ao resolver pendente');
+    }
+  }
+}
+
 async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
@@ -133,6 +180,9 @@ async function varrer(): Promise<void> {
     for (const unit of unidades) {
       await alertarUnidade(unit).catch((err) =>
         logger.warn({ err: String(err), unit: unit.slug }, 'SLA: unidade falhou'),
+      );
+      await resolverPendentes(unit).catch((err) =>
+        logger.warn({ err: String(err), unit: unit.slug }, 'SLA: resolucao falhou'),
       );
     }
   } catch (err) {
