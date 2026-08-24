@@ -1398,12 +1398,44 @@ export class KommoClient {
     const chunks = juntarSobras(splitIntoChunks(args.text, WIDGET_SHOW_MAX_LEN));
     // Sem `goto` no fim: `{type:'finish'}` sem `step` é inválido pro Kommo, e o
     // bot termina sozinho quando acaba o passo.
-    const executeHandlers: Array<Record<string, unknown>> = args.audio
-      ? [montarHandlerDeAudio(args.audio)]
-      : chunks.map((value) => ({ handler: 'show', params: { type: 'text', value } }));
-    const payload = { data: args.data ?? { status: 'success' }, execute_handlers: executeHandlers };
+    const handlersDeTexto = chunks.map((value) => ({
+      handler: 'show',
+      params: { type: 'text', value },
+    }));
+    const data = args.data ?? { status: 'success' };
+
+    // Tenta áudio primeiro quando houver, mas NUNCA deixa o paciente sem
+    // resposta: se o Kommo recusar o handler, reenvia em texto na hora.
+    if (args.audio) {
+      try {
+        const resp = await this.http.post(returnUrl, {
+          data,
+          execute_handlers: [montarHandlerDeAudio(args.audio)],
+        });
+        const ms = Math.round(performance.now() - t0);
+        logger.info({ returnUrl, uuid: args.audio.uuid }, 'widget continue: resposta entregue em ÁUDIO');
+        await args.recorder?.step({
+          kind: 'KOMMO_ACTION',
+          title: '🔊 Widget continue: resposta entregue como mensagem de voz',
+          payload: { returnUrl, uuid: args.audio.uuid, sentText: args.text },
+          latencyMs: ms,
+        });
+        return { via: 'widget_continue', chunks: 1, detail: resp.data };
+      } catch (err) {
+        const detalhe = axios.isAxiosError(err)
+          ? JSON.stringify(err.response?.data)?.slice(0, 200)
+          : String(err);
+        logger.warn({ returnUrl, detalhe }, 'widget continue: áudio recusado pelo Kommo — caindo pra texto');
+        await args.recorder?.step({
+          kind: 'ERROR',
+          title: '🔊 Kommo recusou o áudio — reenviando em texto',
+          payload: { returnUrl, detalhe },
+        });
+      }
+    }
+
     try {
-      const { data } = await this.http.post(returnUrl, payload);
+      const resp = await this.http.post(returnUrl, { data, execute_handlers: handlersDeTexto });
       const ms = Math.round(performance.now() - t0);
       logger.info(
         { returnUrl, chunks: chunks.length, finishOnly: chunks.length === 0 },
@@ -1413,12 +1445,12 @@ export class KommoClient {
         kind: 'KOMMO_ACTION',
         title:
           chunks.length === 0
-            ? '📤 Widget continue: bot finalizado sem mensagem (goto finish)'
+            ? '📤 Widget continue: bot finalizado sem mensagem'
             : `📤 Widget continue: ${chunks.length} balão(ões) via execute_handlers [show]`,
         payload: { returnUrl, chunks: chunks.length, sentText: args.text },
         latencyMs: ms,
       });
-      return { via: 'widget_continue', chunks: chunks.length, detail: data };
+      return { via: 'widget_continue', chunks: chunks.length, detail: resp.data };
     } catch (err) {
       wrapAxiosError(err, `continueSalesbotWidget(${returnUrl})`);
     }
