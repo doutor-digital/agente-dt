@@ -216,6 +216,31 @@ function montarHandlerDeAudio(audio: { uuid: string; name: string }): Record<str
   };
 }
 
+/**
+ * Com o teto de 80 o corte às vezes cai depois de uma palavrinha de ligação e o
+ * balão termina em "…me contar, em", com o "português" indo pro balão seguinte.
+ * Empurra essa órfã pro próximo balão quando couber.
+ */
+const PALAVRAS_ORFAS = new Set([
+  'a', 'o', 'e', 'de', 'da', 'do', 'em', 'no', 'na', 'um', 'uma', 'os', 'as',
+  'que', 'com', 'por', 'pra', 'para', 'ao', 'à', 'se', 'ou', 'meu', 'sua',
+]);
+
+function evitarOrfas(chunks: string[]): string[] {
+  const out = [...chunks];
+  for (let i = 0; i < out.length - 1; i++) {
+    const palavras = out[i].split(' ');
+    const ultima = palavras[palavras.length - 1]?.toLowerCase().replace(/[.,!?;:]$/, '') ?? '';
+    if (palavras.length < 2 || !PALAVRAS_ORFAS.has(ultima)) continue;
+    const movida = palavras.pop() as string;
+    const candidato = `${movida} ${out[i + 1]}`;
+    if (candidato.length > WIDGET_SHOW_MAX_LEN) continue;
+    out[i] = palavras.join(' ').replace(/[,;]$/, '');
+    out[i + 1] = candidato;
+  }
+  return out.filter((c) => c.trim().length > 0);
+}
+
 function juntarSobras(chunks: string[]): string[] {
   const out: string[] = [];
   for (const chunk of chunks) {
@@ -1395,7 +1420,7 @@ export class KommoClient {
     // O Kommo valida cada balão do `show` em 80 chars — passar disso derruba a
     // chamada inteira com 400 TooLong (execute_handlers.params.value) e o
     // paciente não recebe NADA. Não é limite nosso, é do lado deles.
-    const chunks = juntarSobras(splitIntoChunks(args.text, WIDGET_SHOW_MAX_LEN));
+    const chunks = evitarOrfas(juntarSobras(splitIntoChunks(args.text, WIDGET_SHOW_MAX_LEN)));
     // Sem `goto` no fim: `{type:'finish'}` sem `step` é inválido pro Kommo, e o
     // bot termina sozinho quando acaba o passo.
     const handlersDeTexto = chunks.map((value) => ({
