@@ -697,6 +697,14 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         .positive()
         .optional()
         .describe('ID do lead no Kommo — use o leadId desta conversa.'),
+      telefone: z
+        .string()
+        .max(30)
+        .optional()
+        .describe(
+          'Telefone que o paciente informou, se ele disse um diferente do WhatsApp ' +
+          'desta conversa. Use o MESMO que você passou em buscar_paciente ou cadastrar_paciente.',
+        ),
     }),
     func: async (args: {
       idClient: number;
@@ -705,6 +713,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       hora: string;
       idCategory?: number;
       leadId?: number;
+      telefone?: string;
     }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
 
@@ -772,13 +781,16 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       const paciente = conf.ok ? conf.data?.client ?? null : null;
       if (paciente) {
         const foneLead = await telefoneDoLead(kommo, args.leadId);
-        const a = fim8(foneLead);
+        const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;
+        const aceitos = [fim8(foneLead), fim8(foneInformado)].filter(
+          (x): x is string => x !== null,
+        );
         const b = fim8(paciente.whatsapp);
-        if (a && b && a !== b) {
+        if (aceitos.length > 0 && b && !aceitos.includes(b)) {
           await recorder.step({
             kind: 'ERROR',
             title: `agendar_consulta recusado — idClient ${args.idClient} é de outra pessoa`,
-            payload: { ...args, cadastro: paciente.name, foneCadastro: paciente.whatsapp, foneLead },
+            payload: { ...args, cadastro: paciente.name, foneCadastro: paciente.whatsapp, foneLead, foneInformado },
           });
           return (
             `RECUSADO: o cadastro ${args.idClient} é de "${paciente.name}", e o telefone dele ` +
