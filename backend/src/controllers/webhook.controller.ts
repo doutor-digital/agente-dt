@@ -319,6 +319,18 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   for (const out of getOutgoingMessages(parsed.data)) {
     if (!out.entity_id) continue;
     const wasOurReply = confirmDelivery({ unitId: unit.id, leadId: out.entity_id, text: out.text });
+    logger.info(
+      {
+        unit: unit.slug,
+        leadId: out.entity_id,
+        autor: out.author?.type ?? '(sem autor)',
+        autorNome: out.author?.name ?? null,
+        texto: (out.text ?? '').slice(0, 120),
+        vazio: !out.text,
+        consideradaNossa: wasOurReply,
+      },
+      'sonda-sla: mensagem de saida recebida',
+    );
     if (wasOurReply) continue;
     respondedLeadIds.add(out.entity_id);
     if ((out.author?.type ?? '').toLowerCase() === 'user') {

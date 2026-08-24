@@ -809,6 +809,40 @@ export class KommoClient {
     }
   }
 
+  async atividadeHumanaDesde(
+    leadId: number,
+    desdeUnix: number,
+  ): Promise<{ houve: boolean; quando: number | null; tipo: string | null; porUsuario: number | null }> {
+    const vazio = { houve: false, quando: null, tipo: null, porUsuario: null };
+    try {
+      const { data } = await this.http.get<{
+        _embedded?: {
+          events?: Array<{ type?: string; created_by?: number; created_at?: number }>;
+        };
+      }>('/events', {
+        params: {
+          'filter[entity]': 'lead',
+          'filter[entity_id][]': leadId,
+          'filter[created_at][from]': desdeUnix,
+          limit: 100,
+        },
+      });
+      const eventos = data?._embedded?.events ?? [];
+      const humano = eventos
+        .filter((e) => Number(e.created_by ?? 0) > 0)
+        .sort((a, b) => Number(a.created_at ?? 0) - Number(b.created_at ?? 0))[0];
+      if (!humano) return vazio;
+      return {
+        houve: true,
+        quando: Number(humano.created_at ?? 0) || null,
+        tipo: humano.type ?? null,
+        porUsuario: Number(humano.created_by ?? 0) || null,
+      };
+    } catch {
+      return vazio;
+    }
+  }
+
   async listLossReasons(): Promise<Array<{ id: number; name: string }>> {
     try {
       const { data } = await this.http.get<{
