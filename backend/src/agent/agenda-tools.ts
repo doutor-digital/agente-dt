@@ -844,44 +844,42 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
 
       if (kommo && args.leadId) {
         void (async () => {
-          try {
-            await kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_AGENDOU, 'select', 'Sim');
-            await kommo.setLeadCustomFieldValue(
-              args.leadId!,
-              CAMPO_DATA_AGENDAMENTO,
-              'date',
-              `${args.data}T${args.hora}:00`,
-            );
-            await kommo.setLeadCustomFieldValue(
-              args.leadId!,
-              CAMPO_DATA_CONSULTA,
-              'date',
-              `${args.data}T${args.hora}:00`,
-            );
-            await kommo.setLeadCustomFieldValue(
-              args.leadId!,
-              CAMPO_RESPONSAVEL,
-              'select',
-              RESPONSAVEL_IA,
-            );
-            const leadAtual = await kommo.getLead(args.leadId!).catch(() => null);
-            const ehRetorno = leadAtual?.status_id === ST_RETORNO_POS_TRATAMENTO;
-            await kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_SITUACAO_CONSULTA, 'select', 'Agendado');
-            await kommo.setLeadCustomFieldValue(
-              args.leadId!,
-              CAMPO_PAGAMENTO_ANTECIPADO,
-              'select',
-              ehRetorno ? 'Não' : 'Sim',
-            );
-            await recorder.step({
-              kind: 'KOMMO_ACTION',
-              title: `Campos de agendamento preenchidos (Agendou, Data, Responsável, Situação=Agendado, Pré-pag=${ehRetorno ? 'Não' : 'Sim'})`,
-              payload: { leadId: args.leadId, data: args.data, hora: args.hora, responsavel: RESPONSAVEL_IA },
-            });
-            await registrarTempoAteAgendamento(fresca, kommo, args.leadId!);
-          } catch (err) {
-            logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao carimbar campos no Kommo');
+          const leadAtual = await kommo.getLead(args.leadId!).catch(() => null);
+          const ehRetorno = leadAtual?.status_id === ST_RETORNO_POS_TRATAMENTO;
+          const consultaEm = `${args.data}T${args.hora}:00`;
+          const agendadoEm = Math.floor(Date.now() / 1000);
+
+          const carimbos: Array<{ campo: string; fn: () => Promise<void> }> = [
+            { campo: 'Agendou', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_AGENDOU, 'select', 'Sim') },
+            { campo: 'Agendado pela SDR em', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_DATA_AGENDAMENTO, 'date', agendadoEm) },
+            { campo: 'Data da Consulta', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_DATA_CONSULTA, 'date', consultaEm) },
+            { campo: 'Responsável', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_RESPONSAVEL, 'select', RESPONSAVEL_IA) },
+            { campo: 'Situação da consulta', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_SITUACAO_CONSULTA, 'select', 'Agendado') },
+            { campo: 'Pagamento antecipado', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_PAGAMENTO_ANTECIPADO, 'select', ehRetorno ? 'Não' : 'Sim') },
+          ];
+
+          const falhas: string[] = [];
+          for (const c of carimbos) {
+            try {
+              await c.fn();
+            } catch (err) {
+              falhas.push(c.campo);
+              logger.warn({ err, leadId: args.leadId, campo: c.campo }, 'agenda: falha ao carimbar campo no Kommo');
+            }
           }
+
+          await recorder.step({
+            kind: falhas.length > 0 ? 'ERROR' : 'KOMMO_ACTION',
+            title:
+              falhas.length > 0
+                ? `⚠️ Agendamento gravado com ${falhas.length} campo(s) em branco: ${falhas.join(', ')}`
+                : `Campos de agendamento preenchidos (Agendou, Agendado em, Data da Consulta, Responsável, Situação=Agendado, Pré-pag=${ehRetorno ? 'Não' : 'Sim'})`,
+            payload: { leadId: args.leadId, consultaEm, agendadoEm, falhas, responsavel: RESPONSAVEL_IA },
+          });
+
+          await registrarTempoAteAgendamento(fresca, kommo, args.leadId!).catch((err) =>
+            logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao registrar tempo até agendamento'),
+          );
         })();
       }
 
