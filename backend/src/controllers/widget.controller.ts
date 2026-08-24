@@ -205,7 +205,9 @@ async function processWidget(args: {
   });
 
   const kommo = createKommoClient(unit);
+  let entregou = false;
   const deliver: AgentDeliverFn = async (text) => {
+    entregou = true;
     try {
       // Paciente falou, a Sofia fala de volta. Se qualquer etapa do áudio
       // falhar, cai em texto — nunca deixa o paciente sem resposta.
@@ -233,4 +235,18 @@ async function processWidget(args: {
     requestStart,
     deliver,
   });
+
+  // O agente pode decidir não falar (IA pausada por humano, handoff, fora de
+  // horário). Se ninguém entregou, o bot ficaria pendurado nesse contato e
+  // bloquearia a PRÓXIMA mensagem dele — então encerramos explicitamente.
+  if (!entregou) {
+    const fechou = await kommo.finalizarSalesbotWidget(returnUrl);
+    await recorder.step({
+      kind: 'KOMMO_ACTION',
+      title: fechou
+        ? '🔚 Bot encerrado sem resposta (agente decidiu não falar)'
+        : '⚠️ Não consegui encerrar o bot — ele vai expirar sozinho',
+      payload: { returnUrl, entregou: false },
+    });
+  }
 }

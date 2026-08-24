@@ -1407,6 +1407,35 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Encerra o bot sem falar nada com o paciente.
+   *
+   * Precisa existir porque há caminhos em que o agente decide NÃO responder (IA
+   * pausada por humano, fora do escopo, handoff). Sem isso o bot fica pendurado
+   * pra sempre naquele contato — e como só roda um bot por contato, a próxima
+   * mensagem dele não dispara nada. As sessões ativas só crescem.
+   *
+   * `execute_handlers` vazio não serve (400 TooFew), então mandamos `stop`. Se
+   * o Kommo recusar esse handler também, engolimos o erro: pendurado é ruim,
+   * mas quebrar o fluxo de quem NÃO ia receber resposta seria pior.
+   */
+  async finalizarSalesbotWidget(returnUrl: string): Promise<boolean> {
+    try {
+      await this.http.post(returnUrl, {
+        data: { status: 'success' },
+        execute_handlers: [{ handler: 'stop', params: {} }],
+      });
+      logger.info({ returnUrl }, 'widget: bot encerrado sem resposta (IA não respondeu)');
+      return true;
+    } catch (err) {
+      const detalhe = axios.isAxiosError(err)
+        ? JSON.stringify(err.response?.data)?.slice(0, 200)
+        : String(err);
+      logger.warn({ returnUrl, detalhe }, 'widget: não consegui encerrar o bot — vai expirar sozinho');
+      return false;
+    }
+  }
+
   async continueSalesbotWidget(
     returnUrl: string,
     args: {
