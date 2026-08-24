@@ -10,9 +10,10 @@ import { getRecentMessagesByLead } from '../services/conversations.service.js';
 import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
 import { looksLikeName } from './name-capture.js';
+import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 
-const CAMPO_HANDOFF_DATA = 2442729;
-const CAMPO_HANDOFF_HUMANO = 2442727;
+const NOME_HANDOFF_DATA = '◷ Data do handoff IA → humano';
+const NOME_HANDOFF_HUMANO = '✓ Atendimento assumido por humano';
 
 export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
   aplicar_tag:
@@ -259,13 +260,34 @@ export function buildTools({
         });
         void (async () => {
           try {
-            await kommo.setLeadCustomFieldValue(leadId, CAMPO_HANDOFF_DATA, 'date', new Date().toISOString());
-            await kommo.setLeadCustomFieldValue(leadId, CAMPO_HANDOFF_HUMANO, 'select', 'Sim');
-            await recorder.step({
-              kind: 'KOMMO_ACTION',
-              title: `Handoff carimbado (data + assumido por humano) no lead ${leadId}`,
-              payload: { leadId, campoData: CAMPO_HANDOFF_DATA, campoHumano: CAMPO_HANDOFF_HUMANO },
-            });
+            if (!unit) throw new Error('unidade ausente');
+            const esquema = await esquemaDaUnidade(unit, kommo);
+            const idData = esquema.campoPorNome(NOME_HANDOFF_DATA);
+            const idHumano = esquema.campoPorNome(NOME_HANDOFF_HUMANO);
+            const faltando = [
+              idData === null ? NOME_HANDOFF_DATA : null,
+              idHumano === null ? NOME_HANDOFF_HUMANO : null,
+            ].filter(Boolean);
+            if (faltando.length > 0) {
+              await recorder.step({
+                kind: 'ERROR',
+                title: `⚠️ Handoff não carimbado: campo inexistente nesta conta (${faltando.join(', ')})`,
+                payload: { leadId, faltando },
+              });
+            }
+            if (idData !== null) {
+              await kommo.setLeadCustomFieldValue(leadId, idData, 'date', new Date().toISOString());
+            }
+            if (idHumano !== null) {
+              await kommo.setLeadCustomFieldValue(leadId, idHumano, 'select', 'Sim');
+            }
+            if (idData !== null || idHumano !== null) {
+              await recorder.step({
+                kind: 'KOMMO_ACTION',
+                title: `Handoff carimbado (data + assumido por humano) no lead ${leadId}`,
+                payload: { leadId, campoData: idData, campoHumano: idHumano },
+              });
+            }
           } catch (e) {
             logger.warn({ err: String(e), leadId }, 'pausar_ia: falha ao carimbar data do handoff');
           }

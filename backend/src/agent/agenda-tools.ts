@@ -6,6 +6,7 @@ import { logger } from '../lib/logger.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import { SpineService } from '../services/spine.service.js';
+import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { AgendaService } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
@@ -32,14 +33,14 @@ interface Contexto {
   kommo?: KommoClient;
 }
 
-const CAMPO_AGENDOU = 2442703;
-const CAMPO_DATA_AGENDAMENTO = 2440909;
-const CAMPO_DATA_CONSULTA = 2444497;
-const CAMPO_RESPONSAVEL = 2440823;
+const NOME_AGENDOU = '✓ Agendou';
+const NOME_DATA_AGENDAMENTO = '◷ Agendado pela SDR em';
+const NOME_DATA_CONSULTA = '◷ Data da Consulta';
+const NOME_RESPONSAVEL = '☻ Responsável agendamento';
 const RESPONSAVEL_IA = 'I.A Sofia';
-const CAMPO_SITUACAO_CONSULTA = 2444779;
-const CAMPO_PAGAMENTO_ANTECIPADO = 2440827;
-const ST_RETORNO_POS_TRATAMENTO = 110342960;
+const NOME_SITUACAO_CONSULTA = '✓ Situação da consulta';
+const NOME_PAGAMENTO_ANTECIPADO = '¤ Pagamento antecipado';
+const NOME_ST_RETORNO = 'RETORNO PÓS-TRATAMENTO';
 
 async function gradeDoDia(unit: Unit, dia: string) {
   const [r, blocks] = await Promise.all([
@@ -844,24 +845,33 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
 
       if (kommo && args.leadId) {
         void (async () => {
+          const esquema = await esquemaDaUnidade(unit, kommo);
+          const idDe = (nome: string) => esquema.campoPorNome(nome);
+          const stRetorno = esquema.statusPorNome('COMERCIAL', NOME_ST_RETORNO);
+
           const leadAtual = await kommo.getLead(args.leadId!).catch(() => null);
-          const ehRetorno = leadAtual?.status_id === ST_RETORNO_POS_TRATAMENTO;
+          const ehRetorno = stRetorno !== null && leadAtual?.status_id === stRetorno;
           const consultaEm = `${args.data}T${args.hora}:00`;
           const agendadoEm = Math.floor(Date.now() / 1000);
 
-          const carimbos: Array<{ campo: string; fn: () => Promise<void> }> = [
-            { campo: 'Agendou', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_AGENDOU, 'select', 'Sim') },
-            { campo: 'Agendado pela SDR em', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_DATA_AGENDAMENTO, 'date', agendadoEm) },
-            { campo: 'Data da Consulta', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_DATA_CONSULTA, 'date', consultaEm) },
-            { campo: 'Responsável', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_RESPONSAVEL, 'select', RESPONSAVEL_IA) },
-            { campo: 'Situação da consulta', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_SITUACAO_CONSULTA, 'select', 'Agendado') },
-            { campo: 'Pagamento antecipado', fn: () => kommo.setLeadCustomFieldValue(args.leadId!, CAMPO_PAGAMENTO_ANTECIPADO, 'select', ehRetorno ? 'Não' : 'Sim') },
+          const carimbos: Array<{ campo: string; id: number | null; fn: (id: number) => Promise<void> }> = [
+            { campo: NOME_AGENDOU, id: idDe(NOME_AGENDOU), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', 'Sim') },
+            { campo: NOME_DATA_AGENDAMENTO, id: idDe(NOME_DATA_AGENDAMENTO), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'date', agendadoEm) },
+            { campo: NOME_DATA_CONSULTA, id: idDe(NOME_DATA_CONSULTA), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'date', consultaEm) },
+            { campo: NOME_RESPONSAVEL, id: idDe(NOME_RESPONSAVEL), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', RESPONSAVEL_IA) },
+            { campo: NOME_SITUACAO_CONSULTA, id: idDe(NOME_SITUACAO_CONSULTA), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', 'Agendado') },
+            { campo: NOME_PAGAMENTO_ANTECIPADO, id: idDe(NOME_PAGAMENTO_ANTECIPADO), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', ehRetorno ? 'Não' : 'Sim') },
           ];
 
           const falhas: string[] = [];
           for (const c of carimbos) {
+            if (c.id === null) {
+              falhas.push(`${c.campo} (não existe nesta conta)`);
+              logger.warn({ leadId: args.leadId, campo: c.campo, unit: unit.slug }, 'agenda: campo nao encontrado na conta');
+              continue;
+            }
             try {
-              await c.fn();
+              await c.fn(c.id);
             } catch (err) {
               falhas.push(c.campo);
               logger.warn({ err, leadId: args.leadId, campo: c.campo }, 'agenda: falha ao carimbar campo no Kommo');
