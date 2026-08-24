@@ -192,10 +192,6 @@ const INTER_CHUNK_DELAY_MS = Number(process.env.KOMMO_INTER_CHUNK_MS) || 1600;
 const WIDGET_SHOW_MAX_LEN = 80;
 
 /**
- * Com o teto de 80 o corte às vezes deixa um resto minúsculo (um emoji, uma
- * palavra) sozinho num balão. Cola esse resto no balão anterior quando couber.
- */
-/**
  * Handler de áudio do Salesbot. Não está na documentação pública — foi lido do
  * "ver código" de um passo de áudio montado no designer do Kommo.
  *
@@ -241,6 +237,10 @@ function evitarOrfas(chunks: string[]): string[] {
   return out.filter((c) => c.trim().length > 0);
 }
 
+/**
+ * Com o teto de 80 o corte às vezes deixa um resto minúsculo (um emoji, uma
+ * palavra) sozinho num balão. Cola esse resto no balão anterior quando couber.
+ */
 function juntarSobras(chunks: string[]): string[] {
   const out: string[] = [];
   for (const chunk of chunks) {
@@ -1423,7 +1423,11 @@ export class KommoClient {
     const chunks = evitarOrfas(juntarSobras(splitIntoChunks(args.text, WIDGET_SHOW_MAX_LEN)));
     // Sem `goto` no fim: `{type:'finish'}` sem `step` é inválido pro Kommo, e o
     // bot termina sozinho quando acaba o passo.
-    const handlersDeTexto = chunks.map((value) => ({
+    // Blindagem: `execute_handlers` vazio é 400 TooFew e deixa o bot pendurado
+    // (e bot pendurado bloqueia a próxima mensagem, porque só roda um por
+    // contato). Se não sobrou texto, manda ao menos uma linha.
+    const seguros = chunks.length > 0 ? chunks : ['Pode me contar um pouco mais? 🙏'];
+    const handlersDeTexto = seguros.map((value) => ({
       handler: 'show',
       params: { type: 'text', value },
     }));
@@ -1463,7 +1467,7 @@ export class KommoClient {
       const resp = await this.http.post(returnUrl, { data, execute_handlers: handlersDeTexto });
       const ms = Math.round(performance.now() - t0);
       logger.info(
-        { returnUrl, chunks: chunks.length, finishOnly: chunks.length === 0 },
+        { returnUrl, chunks: seguros.length, semTextoOriginal: chunks.length === 0 },
         'widget continue: Salesbot retomado via return_url',
       );
       await args.recorder?.step({

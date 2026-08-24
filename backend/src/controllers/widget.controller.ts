@@ -92,10 +92,16 @@ export async function handleWidgetRequest(req: Request, res: Response): Promise<
 
   res.status(200).json({ ok: true, unit: unit.slug });
 
-  // Mensagem vazia E sem áudio guardado = não há o que responder.
+  // Mensagem vazia E sem áudio guardado: o paciente mandou algo que a gente não
+  // lê (figurinha, documento, contato). NÃO dá pra encerrar com a lista de
+  // handlers vazia — o Kommo rejeita com 400 TooFew e o bot fica PENDURADO;
+  // como só roda um bot por contato, a próxima mensagem dele também morre.
+  // Então respondemos uma linha curta, que encerra o passo de forma válida.
   if (!message.trim() && !audioUrl) {
     try {
-      await createKommoClient(unit).continueSalesbotWidget(returnUrl, { text: '' });
+      await createKommoClient(unit).continueSalesbotWidget(returnUrl, {
+        text: 'Recebi aqui, mas não consegui abrir 🙏 Pode me escrever em poucas palavras o que você precisa?',
+      });
       recordWidgetDelivery(unit.id, { ok: true });
     } catch (err) {
       recordWidgetDelivery(unit.id, { ok: false, error: err instanceof Error ? err.message : String(err) });
