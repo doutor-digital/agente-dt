@@ -16,6 +16,7 @@ export interface KommoLead {
   name: string;
   status_id: number;
   pipeline_id: number;
+  loss_reason_id?: number | null;
   price?: number;
   created_at?: number;
   updated_at?: number;
