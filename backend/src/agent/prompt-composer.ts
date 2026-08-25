@@ -455,9 +455,25 @@ ${confirmacao}`,
   );
 }
 
+function valoresAprovados(unit: Unit): number[] {
+  const re = /R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)/gi;
+  const achados = new Set<number>();
+  for (const texto of [unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio]) {
+    if (!texto) continue;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(texto)) !== null) {
+      const n = Number(m[1].replace(/\./g, ''));
+      if (Number.isFinite(n) && n >= 20) achados.add(n);
+    }
+  }
+  return [...achados].sort((a, b) => a - b);
+}
+
 function renderConversao(unit: Unit): string {
-  const precoAncora = 'R$ 350';
-  const precoPix = 'R$ 150';
+  const valores = valoresAprovados(unit);
+  if (valores.length === 0) return '';
+  const precoAncora = `R$ ${valores[valores.length - 1]}`;
+  const precoPix = `R$ ${valores[0]}`;
 
   return xmlBlock(
     'conversao',
