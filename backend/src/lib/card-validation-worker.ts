@@ -183,9 +183,9 @@ export const REGRAS_CARD: Regra[] = [
   {
     key: 'C_perdido_sem_motivo',
     aplica: (l, ctx) => emComercial(l, ctx, PERDIDO),
-    erro: (r) =>
-      r.vazio('MOTIVO_NAO_AGEND') && r.vazio('MOTIVO_NAO_FECH')
-        ? 'está em PERDIDO sem "Motivo do não agendamento" nem "Motivo de não fechamento"'
+    erro: (r, l) =>
+      !l.loss_reason_id && r.vazio('MOTIVO_NAO_AGEND') && r.vazio('MOTIVO_NAO_FECH')
+        ? 'está em PERDIDO sem motivo nenhum — nem o do Kommo, nem "Motivo do não agendamento", nem "Motivo de não fechamento"'
         : null,
   },
   {
