@@ -16,6 +16,14 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
+
+const FALLBACK_LOOP_GUARDRAIL =
+  'Deixa eu confirmar essa informação com a equipe pra não te passar nada errado 🙏 ' +
+  'Já te retorno por aqui, tá bem?';
+
+function normalizarResposta(s: string): string {
+  return s.replace(/\s+/g, ' ').trim().toLowerCase();
+}
 import { podarHistorico } from './history-window.js';
 import {
   withTimeout,
@@ -346,12 +354,25 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
 
       const guard = aplicarGuardrail(text, unit);
       if (guard.rewritten) {
-        response.content = guard.text;
-        await recorder.step({
-          kind: 'THINKING',
-          title: `🛡️ Guardrail reescreveu a resposta (${guard.triggered.join(', ')})`,
-          payload: { original: text, reescrito: guard.text, motivos: guard.triggered },
-        });
+        const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
+        const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';
+        const repetindo = normalizarResposta(textoUltima) === normalizarResposta(guard.text);
+
+        if (repetindo) {
+          await recorder.step({
+            kind: 'ERROR',
+            title: `🔁 Guardrail em LOOP (${guard.triggered.join(', ')}) — repetiria a mesma resposta; escalando`,
+            payload: { original: text, reescrito: guard.text, motivos: guard.triggered },
+          });
+          response.content = FALLBACK_LOOP_GUARDRAIL;
+        } else {
+          response.content = guard.text;
+          await recorder.step({
+            kind: 'THINKING',
+            title: `🛡️ Guardrail reescreveu a resposta (${guard.triggered.join(', ')})`,
+            payload: { original: text, reescrito: guard.text, motivos: guard.triggered },
+          });
+        }
       }
 
       if (kommoClient && unit.collectNameEnabled && userMessage && state.leadId) {
