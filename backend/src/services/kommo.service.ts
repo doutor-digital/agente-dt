@@ -311,7 +311,7 @@ function colarPedacosSemPalavra(chunks: string[], maxLen: number): string[] {
   return out;
 }
 
-const ENTREGA_DEDUP_TTL_MS = 45_000;
+const ENTREGA_DEDUP_TTL_MS = 10 * 60_000;
 const entregasRecentes = new Map<string, number>();
 function chaveEntrega(leadId: number, text: string): string {
   return `${leadId}|${text.trim().slice(0, 200)}`;
@@ -1091,10 +1091,10 @@ export class KommoClient {
     recorder?: KommoStepRecorder;
   }): Promise<unknown> {
     if (entregaDuplicada(leadId, text)) {
-      logger.warn({ leadId, salesbotId }, 'runSalesbot: MESMO texto já enviado a este lead há <45s — PULANDO (anti-duplicata)');
+      logger.warn({ leadId, salesbotId }, 'runSalesbot: MESMO texto ja enviado a este lead — PULANDO (anti-duplicata)');
       await recorder?.step({
         kind: 'KOMMO_ACTION',
-        title: '🛑 Anti-duplicata: mesmo texto já enviado há <45s — envio pulado',
+        title: '🛑 Anti-duplicata: mesmo texto já enviado a este lead — envio pulado',
         payload: { leadId, salesbotId, mode: 'skipped_duplicate' },
       });
       return { via: 'skipped_duplicate' };
