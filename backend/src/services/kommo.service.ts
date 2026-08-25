@@ -1302,29 +1302,19 @@ export class KommoClient {
       }
     } else if (this.creds.salesbotId && this.creds.replyFieldId) {
       try {
-        const chunks = splitIntoChunks(text, 240);
-        logger.debug(
-          { leadId, originalText: text, chunks: chunks.length },
-          'kommo salesbot: enviando resposta da IA',
-        );
-        let lastData: unknown = null;
-        for (let i = 0; i < chunks.length; i++) {
-          lastData = await this.runSalesbot({
-            leadId,
-            salesbotId: this.creds.salesbotId,
-            replyFieldId: this.creds.replyFieldId,
-            text: chunks[i],
-            recorder,
-          });
-          if (i < chunks.length - 1) {
-            await new Promise((r) => setTimeout(r, INTER_CHUNK_DELAY_MS));
-          }
-        }
+        logger.debug({ leadId, originalText: text }, 'kommo salesbot: enviando resposta da IA');
+        const data = await this.runSalesbot({
+          leadId,
+          salesbotId: this.creds.salesbotId,
+          replyFieldId: this.creds.replyFieldId,
+          text,
+          recorder,
+        });
         logger.info(
-          { leadId, salesbotId: this.creds.salesbotId, chunks: chunks.length },
+          { leadId, salesbotId: this.creds.salesbotId, len: text.length },
           'kommo salesbot disparado',
         );
-        return { via: 'salesbot', detail: lastData };
+        return { via: 'salesbot', detail: data };
       } catch (err) {
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
         logger.warn({ err, leadId, status }, 'salesbot falhou, tentando outros caminhos');
