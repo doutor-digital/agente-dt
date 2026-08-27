@@ -1,3 +1,4 @@
+import { mascararPii } from './pii.js';
 import { logger } from './logger.js';
 
 const COALESCE_WINDOW_MS = 8_000;
@@ -116,7 +117,7 @@ function fire(key: string): void {
       key,
       count: messages.length,
       duration: Date.now() - entry.openedAt,
-      preview: combined.slice(0, 80),
+      preview: mascararPii(combined.slice(0, 80)),
     },
     messages.length > 1
       ? 'coalescer: flush — combinando burst em 1 turno'
