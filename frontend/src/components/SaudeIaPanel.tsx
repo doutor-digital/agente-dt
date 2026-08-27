@@ -109,19 +109,19 @@ export function SaudeIaPanel() {
   }, [unitId]);
 
   if (!unitId) {
-    return <p className="p-6 text-[13px] text-slate-500">Escolha uma unidade para ver a saúde da IA.</p>;
+    return <div className="flex-1 overflow-y-auto p-6 text-[13px] text-slate-500">Escolha uma unidade para ver a saúde da IA.</div>;
   }
 
   if (carregando && !data) {
     return (
-      <div className="flex items-center justify-center py-20">
+      <div className="flex flex-1 items-center justify-center py-20">
         <Loader2 className="h-5 w-5 animate-spin text-white/30" />
       </div>
     );
   }
 
   if (erro) {
-    return <p className="p-6 text-[13px] text-rose-300">{erro}</p>;
+    return <div className="flex-1 overflow-y-auto p-6 text-[13px] text-rose-300">{erro}</div>;
   }
   if (!data) return null;
 
@@ -131,7 +131,10 @@ export function SaudeIaPanel() {
     .filter((i) => i.estado !== 'ok' && i.comoLigar);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
+    // O console é h-screen com overflow-hidden, então a rolagem é
+    // responsabilidade de cada tela — sem isto o conteúdo é cortado no fim.
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 pb-16">
       <header>
         <h2 className="text-[19px] font-semibold tracking-tight text-slate-100">Saúde da IA</h2>
         <p className="mt-1 max-w-[68ch] text-[12.5px] leading-relaxed text-slate-500">
@@ -192,10 +195,11 @@ export function SaudeIaPanel() {
         </section>
       ))}
 
-      <p className="border-t border-white/[0.06] pt-4 text-[11.5px] leading-relaxed text-slate-600">
-        Esta tela existe porque recurso pronto e desligado já custou mais caro aqui que recurso
-        inexistente — ninguém lembra do que não vê.
-      </p>
+        <p className="border-t border-white/[0.06] pt-4 text-[11.5px] leading-relaxed text-slate-600">
+          Esta tela existe porque recurso pronto e desligado já custou mais caro aqui que recurso
+          inexistente — ninguém lembra do que não vê.
+        </p>
+      </div>
     </div>
   );
 }
