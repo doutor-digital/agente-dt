@@ -1,3 +1,4 @@
+import { prisma } from '../lib/prisma.js';
 import { Router } from 'express';
 import { handleKommoWebhook } from '../controllers/webhook.controller.js';
 import { sessionStatsHandler } from '../controllers/session-stats.controller.js';
@@ -204,6 +205,28 @@ apiRouter.get(
 
 apiRouter.get('/health', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
+});
+
+/**
+ * Prontidão de verdade, para quem orquestra decidir se manda tráfego.
+ *
+ * O /health acima responde "ok" mesmo com o Postgres fora — ele diz só que o
+ * processo está de pé. Isso já basta pra liveness (reiniciar travado), mas
+ * mentia como readiness: o contêiner recebia tráfego sem conseguir atender.
+ *
+ * Aqui o banco é tocado de verdade. Fica sem autenticação de propósito — probe
+ * de orquestrador não faz login — e por isso não devolve detalhe nenhum além do
+ * necessário: 200 ou 503, sem versão, sem topologia, sem mensagem de erro do
+ * driver, que seria entregar mapa da infraestrutura pra quem só chamou uma URL.
+ */
+apiRouter.get('/health/ready', async (_req, res) => {
+  const t0 = Date.now();
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ ok: true, banco: 'ok', ms: Date.now() - t0 });
+  } catch {
+    res.status(503).json({ ok: false, banco: 'fora', ms: Date.now() - t0 });
+  }
 });
 
 apiRouter.post('/auth/login', loginHandler);

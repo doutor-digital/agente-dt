@@ -6,6 +6,7 @@ import type { Unit } from '@prisma/client';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import { prisma } from '../lib/prisma.js';
+import { mascararPiiProfundo } from '../lib/pii.js';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { opsAlert, ehErroDeSaldo } from '../lib/ops-alert.js';
@@ -81,6 +82,15 @@ export interface ChatOpenAIOverrides {
 }
 
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS) || 15000;
+
+/**
+ * Teto de espera do cliente HTTP, para TODO provedor. O grafo já tem o seu
+ * (withTimeout), mas aquele corta só a espera de quem chamou: a requisição segue
+ * viva, ocupando conexão e podendo ser cobrada mesmo depois de a resposta não
+ * servir mais para ninguém. Um pouco maior que o do OpenAI porque Anthropic e
+ * Google costumam demorar mais com prompt grande.
+ */
+const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) || 30000;
 const OPENAI_MAX_RETRIES = Number.isFinite(Number(process.env.OPENAI_MAX_RETRIES))
   ? Number(process.env.OPENAI_MAX_RETRIES)
   : 1;
@@ -135,6 +145,9 @@ export function createChatModel(
       model: overrides.model ?? unit.anthropicModel ?? 'claude-opus-4-8',
       maxTokens: overrides.maxTokens ?? unit.openaiMaxTokens ?? 1024,
       maxRetries: OPENAI_MAX_RETRIES,
+      // Sem timeout aqui, o withTimeout do grafo corta a ESPERA mas a requisição
+      // HTTP continua viva em segundo plano, segurando conexão e podendo cobrar.
+      clientOptions: { timeout: LLM_TIMEOUT_MS },
       thinking: { type: 'disabled' },
       ...(effort ? { outputConfig: { effort } } : {}),
     });
@@ -146,6 +159,9 @@ export function createChatModel(
       temperature: overrides.temperature ?? unit.openaiTemperature ?? 0,
       maxOutputTokens: overrides.maxTokens ?? unit.openaiMaxTokens ?? 1024,
       maxRetries: OPENAI_MAX_RETRIES,
+      // O cliente do Google não aceita timeout no construtor — aqui a proteção
+      // fica só com o withTimeout do grafo. Está registrado na tela Saúde da IA
+      // pra ninguém achar que está coberto.
       thinkingConfig: { thinkingBudget: 0, includeThoughts: false },
     });
   }
@@ -288,15 +304,19 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
       cacheWriteTokens,
       latencyMs,
       status: 'success',
-      requestBody: {
+      // A conversa fica guardada porque é o que permite investigar depois — mas
+      // mascarada: telefone, CPF, CNPJ e e-mail saem, a queixa e o nome ficam.
+      // Sem a queixa o registro não serve pra nada; com o telefone, vira base de
+      // dado pessoal que ninguém pediu pra existir.
+      requestBody: mascararPiiProfundo({
         model: args.modelName,
         toolNames: args.tools?.map((t) => t.name) ?? [],
         messages: args.messages.map((m) => ({
           role: m.getType(),
           content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
         })),
-      },
-      responseBody: rawResponse,
+      }),
+      responseBody: mascararPiiProfundo(rawResponse),
     });
 
     return response;

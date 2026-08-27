@@ -8,6 +8,8 @@ import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
+import { detectarInjecao, explicarInjecao, avisoDeInjecao } from '../services/injecao.js';
+import { mascararPii } from '../lib/pii.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { describeImage } from '../services/vision.service.js';
@@ -816,11 +818,32 @@ export async function processAgent(args: {
     const graph = await buildAgentGraph(recorder, unit, leadId);
     const threadId = buildThreadId(unit.slug, leadId);
 
+    // Mensagem que parece dar ORDEM à IA não bloqueia o atendimento — paciente
+    // escreve coisa estranha o tempo todo, e recusar por suspeita custa lead.
+    // O que fazemos é avisar o modelo, num bloco próprio, de que aquilo é texto
+    // do paciente e não instrução. A trava contra o estrago está no código (lead
+    // e paciente fixos), não aqui; isto é a segunda camada.
+    const injecao = detectarInjecao(humanMessage);
+    if (injecao) {
+      logger.warn(
+        { traceId, leadId, unit: unit.slug, tipo: injecao.tipo, trecho: mascararPii(injecao.trecho) },
+        `mensagem do paciente parece tentar dar ordem à IA: ${explicarInjecao(injecao)}`,
+      );
+      await recorder.step({
+        kind: 'ERROR',
+        title: `🛡 ${explicarInjecao(injecao)} ("${injecao.trecho.slice(0, 46)}")`,
+        payload: { leadId, tipo: injecao.tipo, trecho: injecao.trecho },
+      });
+    }
+    const mensagemParaIa = injecao
+      ? `${avisoDeInjecao(injecao)}\n\n${humanMessage}`
+      : humanMessage;
+
     const result = await graph.invoke(
       {
         leadId,
         traceId,
-        messages: [new HumanMessage(humanMessage)],
+        messages: [new HumanMessage(mensagemParaIa)],
       },
       {
         configurable: { thread_id: threadId },
@@ -833,7 +856,7 @@ export async function processAgent(args: {
     const respostaSemPalavra = reply.length > 0 && !temPalavra(reply);
     if (respostaSemPalavra) {
       logger.warn(
-        { traceId, leadId, unit: unit.slug, reply },
+        { traceId, leadId, unit: unit.slug, reply: mascararPii(reply) },
         'resposta só com emoji/pontuação — descartada, nada enviado ao paciente',
       );
       await recorder.step({
@@ -851,7 +874,7 @@ export async function processAgent(args: {
     const vazamento = reply ? detectarVazamento(reply) : null;
     if (vazamento) {
       logger.error(
-        { traceId, leadId, unit: unit.slug, tipo: vazamento.tipo, trecho: vazamento.trecho, reply },
+        { traceId, leadId, unit: unit.slug, tipo: vazamento.tipo, trecho: vazamento.trecho, reply: mascararPii(reply) },
         `resposta bloqueada: ${explicarVazamento(vazamento)}`,
       );
       await recorder.step({

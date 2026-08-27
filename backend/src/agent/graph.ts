@@ -27,11 +27,19 @@ function normalizarResposta(s: string): string {
 }
 import { podarHistorico } from './history-window.js';
 import {
+  circuitoAberto,
+  registrarSucesso,
+  registrarFalha,
+  ehFalhaDeInfra,
+  type Provedor,
+} from './circuito.js';
+import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
   FALLBACK_INDISPONIVEL,
   escolherPlanoB,
   PLANO_B_TIMEOUT_MS,
+  LlmTimeoutError,
 } from './llm-policy.js';
 
 let checkpointerInstance: PostgresSaver | null = null;
@@ -322,6 +330,11 @@ export async function buildAgentGraph(
     const t0 = performance.now();
     let response: AIMessage;
     try {
+      // Provedor comprovadamente fora não ganha mais 35 segundos de espera por
+      // mensagem: pula direto pro plano B, e volta sozinho quando se recuperar.
+      if (circuitoAberto(provider as Provedor)) {
+        throw new LlmTimeoutError(0);
+      }
       response = (await withTimeout(
         invokeChatModel({
           model,
@@ -334,8 +347,20 @@ export async function buildAgentGraph(
         }),
         AGENT_NODE_TIMEOUT_MS,
       )) as AIMessage;
+      registrarSucesso(provider as Provedor);
     } catch (err) {
       const erroPrincipal = err instanceof Error ? err.message : String(err);
+      if (ehFalhaDeInfra(err) && registrarFalha(provider as Provedor)) {
+        logger.error(
+          { provider, unit: unit.slug, erro: erroPrincipal },
+          'provedor de IA cortado após falhas seguidas — indo direto pro plano B',
+        );
+        void recorder.step({
+          kind: 'ERROR',
+          title: `⚡ ${provider} cortado após falhas seguidas — plano B assume até ele voltar`,
+          payload: { provider, erro: erroPrincipal },
+        });
+      }
       const planoB = escolherPlanoB(unit, !!env.OPENAI_API_KEY);
       if (planoB) {
         try {
