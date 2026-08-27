@@ -6,6 +6,7 @@ import type { Unit } from '@prisma/client';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import { prisma } from '../lib/prisma.js';
+import { registrarGasto } from '../agent/teto-conversa.js';
 import { mascararPiiProfundo } from '../lib/pii.js';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
@@ -250,6 +251,12 @@ export interface InvokeChatModelArgs {
   modelName: string;
   provider?: string;
   tools?: Pick<StructuredToolInterface, 'name'>[];
+  /**
+   * Identificador da CONVERSA (não da execução). Serve pro teto de gasto, que
+   * precisa somar o que uma conversa inteira custou — o traceId muda a cada
+   * mensagem e não serviria.
+   */
+  conversaId?: string | null;
 }
 
 export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknown> {
@@ -291,6 +298,19 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
       cacheReadTokens = um.input_token_details?.cache_read ?? 0;
       cacheWriteTokens = um.input_token_details?.cache_creation ?? 0;
     }
+    if (args.conversaId) {
+      registrarGasto(
+        args.conversaId,
+        calculateCost(
+          args.modelName,
+          promptTokens ?? 0,
+          completionTokens ?? 0,
+          cacheReadTokens,
+          cacheWriteTokens,
+        ),
+      );
+    }
+
     void recordLlmCall({
       unitId: args.unitId,
       traceId: args.traceId,
