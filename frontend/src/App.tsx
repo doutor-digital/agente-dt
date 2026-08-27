@@ -54,6 +54,9 @@ const SocialCommentsPanel = lazy(() => import('./components/SocialCommentsPanel'
 const AgendaPanel = lazy(() => import('./components/AgendaPanel'));
 const FollowUpPanel = lazy(() => import('./components/FollowUpPanel'));
 const CrmFranquiaPanel = lazy(() => import('./components/CrmFranquiaPanel'));
+const SaudeIaPanel = lazy(() =>
+  import('./components/SaudeIaPanel').then((m) => ({ default: m.SaudeIaPanel })),
+);
 const CapturesPanel = lazy(() =>
   import('./components/CapturesPanel').then((m) => ({ default: m.CapturesPanel })),
 );
@@ -164,6 +167,7 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
             {tab === 'agenda' && <AgendaPanel />}
             {tab === 'follow-up' && <FollowUpPanel />}
             {tab === 'crm-franquia' && <CrmFranquiaPanel />}
+            {tab === 'saude-ia' && <SaudeIaPanel />}
             {tab === 'config' && <AgentConfigPanel />}
             {tab === 'units' && <UnitsPanel />}
             {tab === 'users' && <UsersPanel />}

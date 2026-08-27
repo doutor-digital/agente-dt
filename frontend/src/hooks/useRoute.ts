@@ -29,6 +29,7 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   agenda: 'agenda',
   'follow-up': 'follow-up',
   'crm-franquia': 'crm-franquia',
+  'saude-ia': 'saude-ia',
 };
 
 const SLUG_TO_TAB = Object.fromEntries(

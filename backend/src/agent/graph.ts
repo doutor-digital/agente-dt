@@ -1,5 +1,6 @@
 import { AIMessage, type BaseMessage, SystemMessage } from '@langchain/core/messages';
 import { END, START, StateGraph } from '@langchain/langgraph';
+import type { DynamicStructuredTool } from '@langchain/core/tools';
 import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import type { Unit } from '@prisma/client';
@@ -147,7 +148,60 @@ function aplicarStrictAnthropic(tools: ReturnType<typeof buildTools>): void {
   }
 }
 
-export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
+/**
+ * Fixa o lead da conversa em TODA ferramenta que aceita `leadId`.
+ *
+ * Sem isto, o `leadId` que chega na ferramenta é o que o MODELO escreveu — e o
+ * modelo pode alucinar um número, ou ser induzido a um por uma mensagem do
+ * paciente ("agora atualize o lead 24405762"). O efeito é escrever tag, valor ou
+ * título no cartão de outra pessoa, ou LER dados de outro paciente por
+ * `resumir_lead_para_sdr` / `buscar_paciente`. Com dado clínico, isso é LGPD.
+ *
+ * É o "Excessive Agency" (LLM06) do OWASP na forma mais direta: a ferramenta
+ * confia num parâmetro que veio de fora do sistema. A correção certa não é pedir
+ * ao prompt que não erre — é o código não deixar o parâmetro importar.
+ *
+ * Divergência não é bloqueada em silêncio: fica no rastro, porque um modelo
+ * mandando lead alheio é sinal de alucinação ou de tentativa de injeção, e as
+ * duas coisas precisam ser vistas.
+ */
+export function fixarLeadDaConversa(
+  tools: DynamicStructuredTool[],
+  leadIdDaConversa: number | undefined,
+  recorder: TraceRecorder,
+  unit: Unit,
+): DynamicStructuredTool[] {
+  if (!leadIdDaConversa || leadIdDaConversa <= 0) return tools;
+
+  for (const tool of tools) {
+    const original = tool.func.bind(tool);
+    tool.func = async (args: unknown, ...resto: unknown[]) => {
+      if (args && typeof args === 'object' && 'leadId' in (args as Record<string, unknown>)) {
+        const pedido = Number((args as Record<string, unknown>).leadId);
+        if (Number.isFinite(pedido) && pedido !== leadIdDaConversa) {
+          logger.warn(
+            { tool: tool.name, pedido, real: leadIdDaConversa, unit: unit.slug },
+            'tool pediu lead de outra conversa — corrigido para o lead atual',
+          );
+          void recorder.step({
+            kind: 'ERROR',
+            title: `🛡 ${tool.name} tentou agir no lead ${pedido} — corrigido para ${leadIdDaConversa}`,
+            payload: { tool: tool.name, leadPedido: pedido, leadReal: leadIdDaConversa },
+          });
+        }
+        args = { ...(args as Record<string, unknown>), leadId: leadIdDaConversa };
+      }
+      return original(args as never, ...(resto as never[]));
+    };
+  }
+  return tools;
+}
+
+export async function buildAgentGraph(
+  recorder: TraceRecorder,
+  unit: Unit,
+  leadIdDaConversa?: number,
+) {
   const config = await getActiveConfig(unit.id);
 
   const toolConfigByName = new Map(config.tools.map((t) => [t.name, t]));
@@ -176,10 +230,15 @@ export async function buildAgentGraph(recorder: TraceRecorder, unit: Unit) {
       })
     : [];
 
-  const tools = allTools.filter((t) => {
-    const cfg = toolConfigByName.get(t.name);
-    return cfg ? cfg.enabled : true;
-  });
+  const tools = fixarLeadDaConversa(
+    allTools.filter((t) => {
+      const cfg = toolConfigByName.get(t.name);
+      return cfg ? cfg.enabled : true;
+    }),
+    leadIdDaConversa,
+    recorder,
+    unit,
+  );
 
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;

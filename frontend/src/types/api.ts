@@ -1253,3 +1253,27 @@ export interface FollowUpRulesResponse {
   intocaveis: Array<{ id: number; nome: string; porque: string }>;
   ligadas: number;
 }
+
+export type EstadoItem = 'ok' | 'parcial' | 'falta';
+
+export interface ItemSaude {
+  chave: string;
+  titulo: string;
+  estado: EstadoItem;
+  oQueFaz: string;
+  oQueFalta?: string;
+  comoLigar?: string;
+  onde?: string;
+}
+
+export interface GrupoSaude {
+  grupo: string;
+  itens: ItemSaude[];
+}
+
+export interface SaudeIa {
+  unitId: string;
+  slug: string;
+  resumo: { ok: number; parcial: number; falta: number; total: number };
+  grupos: GrupoSaude[];
+}
