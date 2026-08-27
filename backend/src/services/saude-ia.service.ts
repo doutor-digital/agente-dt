@@ -80,17 +80,19 @@ export function montarSaudeIA(unit: Unit): GrupoSaude[] {
           chave: 'timeout_llm',
           titulo: 'Tempo máximo de espera',
           estado: 'parcial',
-          oQueFaz: 'Corta a espera em 35s e tenta o plano B em 20s.',
+          oQueFaz:
+            'Corta a espera em 35s, tenta o plano B em 20s, e o próprio cliente corta em 30s no OpenAI e na Anthropic.',
           oQueFalta:
-            'Na Anthropic e no Google o corte é só por fora: a requisição fica pendurada em segundo plano.',
+            'No Google o cliente não aceita timeout — lá a proteção fica só por fora, e a requisição pode ficar pendurada.',
           onde: 'agent/llm-policy.ts',
         },
         {
           chave: 'circuit_breaker',
           titulo: 'Desligar provedor que caiu',
-          estado: 'falta',
-          oQueFaz: 'Parar de tentar um provedor comprovadamente fora, em vez de esperar o tempo todo de novo.',
-          oQueFalta: 'Com o provedor fora, cada mensagem custa até 55 segundos de espera, indefinidamente.',
+          estado: 'ok',
+          oQueFaz:
+            'Depois de 3 falhas seguidas, para de tentar o provedor por 1 minuto e vai direto pro plano B. Antes, provedor fora custava até 55s de espera por mensagem. Ele volta sozinho quando se recuperar.',
+          onde: 'agent/circuito.ts',
         },
       ],
     },
@@ -115,11 +117,10 @@ export function montarSaudeIA(unit: Unit): GrupoSaude[] {
         {
           chave: 'guardrail_entrada',
           titulo: 'Barreira contra mensagem maliciosa',
-          estado: 'falta',
+          estado: 'ok',
           oQueFaz:
-            'Detectar, antes do modelo ler, mensagem do paciente tentando dar ordem à IA ("esqueça suas instruções").',
-          oQueFalta:
-            'Hoje só existe pedido no texto do prompt — e pedido não é trava. É o risco nº 1 da lista da OWASP.',
+            'Mensagem que tenta dar ordem à IA ("esqueça suas instruções", "system:") é marcada antes do modelo ler, e ele é avisado de que aquilo é texto do paciente. Não bloqueia o atendimento — recusar por suspeita custaria lead.',
+          onde: 'services/injecao.ts',
         },
         {
           chave: 'strict_tools',
@@ -160,10 +161,10 @@ export function montarSaudeIA(unit: Unit): GrupoSaude[] {
         {
           chave: 'pii_log',
           titulo: 'Dado pessoal mascarado no registro',
-          estado: 'falta',
-          oQueFaz: 'Esconder telefone, CPF e nome dos registros técnicos.',
-          oQueFalta:
-            'Hoje a conversa inteira é gravada sem máscara, incluindo queixa clínica. Segredo é mascarado, dado de paciente não.',
+          estado: 'ok',
+          oQueFaz:
+            'Telefone, CPF, CNPJ, e-mail e cartão saem dos registros técnicos e do banco. A queixa e o nome ficam — sem eles o registro não serve pra investigar nada.',
+          onde: 'lib/pii.ts',
         },
       ],
     },
@@ -240,9 +241,9 @@ export function montarSaudeIA(unit: Unit): GrupoSaude[] {
         {
           chave: 'readiness',
           titulo: 'Checagem de saúde de verdade',
-          estado: 'parcial',
-          oQueFaz: 'Dizer se o sistema está realmente pronto, não só de pé.',
-          oQueFalta: 'A checagem pública responde "ok" mesmo com o banco fora.',
+          estado: 'ok',
+          oQueFaz:
+            'O /health/ready toca o banco de verdade e responde 503 quando ele está fora — antes o sistema dizia "ok" com o Postgres morto e recebia tráfego que não conseguia atender.',
         },
       ],
     },
