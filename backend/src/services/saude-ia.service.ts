@@ -1,5 +1,7 @@
 import type { Unit } from '@prisma/client';
 
+import { TETO_CONVERSA_USD } from '../agent/teto-conversa.js';
+
 /**
  * Retrato do que a IA tem, do que está ligado e do que falta.
  *
@@ -200,10 +202,12 @@ export function montarSaudeIA(unit: Unit): GrupoSaude[] {
         {
           chave: 'teto_conversa',
           titulo: 'Teto de gasto por conversa',
-          estado: 'falta',
-          oQueFaz: 'Cortar uma conversa que saiu do controle antes de virar prejuízo.',
-          oQueFalta:
-            'Existe orçamento mensal por unidade, mas ele só avisa no painel — nada bloqueia a chamada.',
+          estado: 'ok',
+          oQueFaz:
+            `Uma conversa sozinha não pode queimar o orçamento do mês. Passando de ` +
+            `US$ ${TETO_CONVERSA_USD.toFixed(2)} somando todos os turnos, a IA para ali, o paciente ` +
+            `é avisado de que uma pessoa vai continuar, a IA é pausada no lead e abre tarefa no Kommo.`,
+          onde: 'agent/teto-conversa.ts',
         },
       ],
     },
@@ -225,9 +229,10 @@ export function montarSaudeIA(unit: Unit): GrupoSaude[] {
         {
           chave: 'alerta_erro',
           titulo: 'Aviso de erro subindo',
-          estado: 'falta',
-          oQueFaz: 'Avisar quando a taxa de falha sobe, em vez de esperar alguém reclamar.',
-          oQueFalta: 'Hoje só o saldo avisa. Erro técnico é gravado e ninguém compara com o normal.',
+          estado: 'ok',
+          oQueFaz:
+            'Compara a última meia hora com o normal de cada unidade e avisa quando piora. Exige volume mínimo e taxa alta de verdade — alarme que toca à toa é alarme que ninguém olha mais.',
+          onde: 'lib/taxa-erro-worker.ts',
         },
         {
           chave: 'alerta_agendamento_perdido',

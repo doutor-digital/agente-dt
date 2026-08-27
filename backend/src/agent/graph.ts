@@ -33,6 +33,7 @@ import {
   ehFalhaDeInfra,
   type Provedor,
 } from './circuito.js';
+import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto-conversa.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -40,6 +41,7 @@ import {
   escolherPlanoB,
   PLANO_B_TIMEOUT_MS,
   LlmTimeoutError,
+  FALLBACK_TETO,
 } from './llm-policy.js';
 
 let checkpointerInstance: PostgresSaver | null = null;
@@ -205,6 +207,50 @@ export function fixarLeadDaConversa(
   return tools;
 }
 
+/**
+ * Entrega a conversa a uma pessoa quando o gasto passou do teto.
+ *
+ * Pausar sem avisar seria pior que não ter teto nenhum: o paciente ficaria
+ * esperando uma resposta que não vem mais. Então são três coisas, nesta ordem de
+ * importância — pausar a IA (senão ela volta a gastar no próximo turno), abrir a
+ * tarefa no Kommo (que é onde a equipe olha, e o n8n leva pro grupo), e registrar.
+ *
+ * Roda solto, sem travar a resposta ao paciente: ele não pode esperar o Kommo.
+ */
+async function entregarAoHumano(
+  unit: Unit,
+  kommo: ReturnType<typeof createKommoClient> | null,
+  leadId: number | undefined,
+  teto: Veredito,
+  recorder: TraceRecorder,
+): Promise<void> {
+  if (!kommo || !leadId) return;
+  try {
+    if (unit.kommoPausedFieldId) {
+      await kommo.setLeadFieldFlag(leadId, unit.kommoPausedFieldId, true);
+    }
+    await kommo.createTask({
+      leadId,
+      text:
+        `ALERTA · teto de gasto · ${unit.slug} · lead ${leadId} — a conversa passou de ` +
+        `US$ ${teto.teto.toFixed(2)} (US$ ${teto.usd.toFixed(2)} em ${teto.turnos} turnos). ` +
+        `A IA foi pausada e o paciente já foi avisado de que uma pessoa continua. ` +
+        `Conversa longa assim costuma ser lead quente: vale assumir agora.`,
+      completeAt: Math.floor(Date.now() / 1000) + 900,
+    });
+    await recorder.step({
+      kind: 'KOMMO_ACTION',
+      title: `IA pausada por teto de gasto e tarefa aberta no lead ${leadId}`,
+      payload: { leadId, usd: teto.usd, teto: teto.teto },
+    });
+  } catch (err) {
+    logger.error(
+      { err: String(err), unit: unit.slug, leadId },
+      'teto de gasto: falhou ao entregar a conversa ao humano — IA pode seguir gastando',
+    );
+  }
+}
+
 export async function buildAgentGraph(
   recorder: TraceRecorder,
   unit: Unit,
@@ -277,6 +323,10 @@ export async function buildAgentGraph(
       : baseModel
   ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
 
+  // A conversa é a unidade que o teto de gasto vigia — não a mensagem, não a
+  // execução. É dentro de UMA conversa que o custo foge do controle.
+  const idDaConversa = leadIdDaConversa ? buildThreadId(unit.slug, leadIdDaConversa) : null;
+
   const agentNode = async (state: AgentStateType) => {
     await recorder.step({
       kind: 'THINKING',
@@ -327,6 +377,29 @@ export async function buildAgentGraph(
     const janela = podarHistorico(nonSystemMessages);
     const finalMessages: BaseMessage[] = [systemMessage, ...janela];
 
+    // Conferido ANTES de gastar de novo, e FORA do try: se caísse no catch, o
+    // plano B chamaria o modelo assim mesmo e o teto não seguraria nada.
+    if (idDaConversa) {
+      const teto = conferirTeto(idDaConversa);
+      if (teto.estourou) {
+        if (marcarAvisado(idDaConversa)) {
+          logarEstouro(idDaConversa, teto, unit.slug);
+          await recorder.step({
+            kind: 'ERROR',
+            title: `💸 Conversa passou do teto de gasto (US$ ${teto.usd.toFixed(2)} em ${teto.turnos} turnos) — humano assume`,
+            payload: { usd: teto.usd, turnos: teto.turnos, teto: teto.teto },
+          });
+          void entregarAoHumano(unit, kommoClient, leadIdDaConversa, teto, recorder);
+        }
+        // O paciente NÃO fica no vácuo. Conversa cara é quase sempre conversa
+        // quente: sumir agora seria perder exatamente o lead que mais interessa.
+        return {
+          messages: [new AIMessage(FALLBACK_TETO)],
+          decision: FALLBACK_TETO,
+        } satisfies Partial<AgentStateType>;
+      }
+    }
+
     const t0 = performance.now();
     let response: AIMessage;
     try {
@@ -344,6 +417,7 @@ export async function buildAgentGraph(
           modelName,
           provider,
           tools,
+          conversaId: idDaConversa,
         }),
         AGENT_NODE_TIMEOUT_MS,
       )) as AIMessage;
@@ -385,6 +459,7 @@ export async function buildAgentGraph(
               modelName: planoB.modelName,
               provider: planoB.provider,
               tools,
+              conversaId: idDaConversa,
             }),
             PLANO_B_TIMEOUT_MS,
           )) as AIMessage;

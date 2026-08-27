@@ -3,6 +3,15 @@ export const AGENT_NODE_TIMEOUT_MS = Number(process.env.AGENT_NODE_TIMEOUT_MS) |
 export const FALLBACK_INDISPONIVEL =
   'Opa, tive uma instabilidade rapidinha aqui do meu lado 🙈 Pode mandar de novo? Já te respondo.';
 
+/**
+ * Dita quando a conversa passou do teto de gasto. Não menciona custo — isso é
+ * problema nosso, não do paciente — e não pede pra ele repetir nada, porque
+ * quem vai continuar é uma pessoa, que já tem o histórico na frente.
+ */
+export const FALLBACK_TETO =
+  'Vou te passar agora pra uma pessoa da equipe continuar seu atendimento, tá? ' +
+  'Ela já está com todo o nosso papo aqui e te responde em instantes 🙂';
+
 export interface PlanoB {
   provider: 'anthropic' | 'openai' | 'google';
   modelName: string;
