@@ -232,11 +232,10 @@ export function montarSaudeIA(unit: Unit): GrupoSaude[] {
         {
           chave: 'alerta_agendamento_perdido',
           titulo: 'Aviso de agendamento perdido',
-          estado: 'falta',
+          estado: 'ok',
           oQueFaz:
-            'Avisar quando a IA oferece horário e não fecha — que é o momento exato em que a venda se perde.',
-          oQueFalta:
-            'Foi assim que 211 tentativas viraram 39 agendamentos por meses, sem nenhum alarme.',
+            'Quando a IA oferece horário e a consulta não é marcada, cria tarefa no cartão 90 minutos depois — que é o momento em que a venda ainda dá pra retomar. Um aviso por lead, nunca repetido.',
+          onde: 'lib/agendamento-perdido-worker.ts',
         },
         {
           chave: 'readiness',

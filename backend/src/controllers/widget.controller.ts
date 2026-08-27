@@ -165,7 +165,7 @@ async function processWidget(args: {
   // "duplicado" e o paciente ficava sem resposta. O áudio entra na chave porque
   // a URL do arquivo é única por mensagem.
   const chaveDedup = `${returnUrl}|${audioUrl ?? message}`;
-  if (!claimMessageId('widget', chaveDedup)) {
+  if (!(await claimMessageId('widget', chaveDedup))) {
     logger.info(
       { unit: unit.slug, leadId },
       'widget request duplicado (mesmo return_url e mesma mensagem) — ignorando reprocessamento',

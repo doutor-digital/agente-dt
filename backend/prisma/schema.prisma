@@ -1503,3 +1503,15 @@ model SpineLeadLink {
   @@index([unitId, status])
   @@map("spine_lead_links")
 }
+
+/// Dedup de mensagem que sobrevive a restart, deploy e segunda réplica. A
+/// unicidade da chave primária é o que torna a reivindicação atômica entre
+/// processos — em memória, cada réplica acharia que a mensagem é nova.
+model MessageClaim {
+  key       String   @id
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("message_claims")
+}

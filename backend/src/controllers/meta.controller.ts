@@ -73,7 +73,7 @@ export async function handleMetaWebhook(req: Request, res: Response): Promise<vo
   }
 
   for (const msg of inbound) {
-    if (msg.messageId && !claimMessageId('meta', msg.messageId)) {
+    if (msg.messageId && !(await claimMessageId('meta', msg.messageId))) {
       logger.info(
         { slug, msgId: msg.messageId },
         'meta webhook duplicado (retry) — ignorando',
