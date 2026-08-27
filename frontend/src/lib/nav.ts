@@ -52,7 +52,8 @@ export type AppTab =
   | 'facebook'
   | 'agenda'
   | 'follow-up'
-  | 'crm-franquia';
+  | 'crm-franquia'
+  | 'saude-ia';
 
 export type NavSection = 'operacao' | 'agente' | 'analise' | 'plataforma';
 
@@ -139,6 +140,17 @@ export const NAV_ITEMS: NavItem[] = [
     icon: PiCalendarBlankBold,
     section: 'operacao',
     keywords: ['agendamento', 'spine', 'pausar', 'kill switch', 'recepcao', 'horarios'],
+  },
+  {
+    id: 'saude-ia',
+    label: 'Saúde da IA',
+    hint: 'O que a IA tem, o que está ligado e o que falta — lido da configuração real.',
+    icon: PiPlugsConnectedBold,
+    section: 'agente',
+    keywords: [
+      'saude', 'diagnostico', 'checklist', 'seguranca', 'guardrail', 'protecao',
+      'cache', 'o que falta', 'recursos', 'capacidades',
+    ],
   },
   {
     id: 'crm-franquia',
