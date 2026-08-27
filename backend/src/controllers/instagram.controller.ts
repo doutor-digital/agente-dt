@@ -97,7 +97,7 @@ export async function handleInstagramWebhook(req: Request, res: Response): Promi
   if (comments.length === 0) return;
 
   for (const c of comments) {
-    if (!claimMessageId(`${platform}-comment`, c.commentId)) {
+    if (!(await claimMessageId(`${platform}-comment`, c.commentId))) {
       logger.info({ slug, commentId: c.commentId }, 'instagram: webhook duplicado — ignorando');
       continue;
     }
