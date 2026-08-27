@@ -180,6 +180,108 @@ function buildSandboxTools(opts: {
     },
   });
 
+  // Agenda em sandbox. Sem estas, a IA no playground NÃO TEM como marcar consulta —
+  // e o teste dá falso negativo: ela transfere porque não existe ferramenta, não
+  // porque decidiu transferir. Foi justamente decidir transferir o defeito que a
+  // gente precisa conseguir enxergar aqui (Porto, 26/08: 82 handoffs contra 39
+  // agendamentos em 30 dias). Os dados são fictícios e nada chega na franquia.
+  const AGENDA_FICTICIA = ['09:00', '10:00', '14:30', '16:00'];
+  const ID_CLIENT_FICTICIO = 999001;
+
+  const consultar_horarios = new DynamicStructuredTool({
+    name: 'consultar_horarios',
+    description: 'Lê os horários livres da agenda da clínica numa data (sandbox: agenda fictícia).',
+    schema: zod.object({ data: zod.string().min(8).max(10) }),
+    func: async ({ data }) => {
+      const result = `[SANDBOX] consultar_horarios(${data}) → livres: ${AGENDA_FICTICIA.join(', ')} — agenda fictícia.`;
+      opts.onCall({ tool: 'consultar_horarios', args: { data }, result });
+      return result;
+    },
+  });
+
+  const buscar_paciente = new DynamicStructuredTool({
+    name: 'buscar_paciente',
+    description: 'Procura o cadastro do paciente no CRM da franquia (sandbox: simulado).',
+    schema: zod.object({ nome: zod.string().min(2).max(120) }),
+    func: async ({ nome }) => {
+      // Sempre "não encontrado": é o caso da maioria (paciente novo) e o que
+      // levava a IA a transferir em vez de cadastrar.
+      const result = `[SANDBOX] buscar_paciente("${nome}") → nenhum cadastro encontrado. Paciente novo: use cadastrar_paciente.`;
+      opts.onCall({ tool: 'buscar_paciente', args: { nome }, result });
+      return result;
+    },
+  });
+
+  const cadastrar_paciente = new DynamicStructuredTool({
+    name: 'cadastrar_paciente',
+    description: 'Cria o cadastro do paciente na franquia e devolve o idClient (sandbox: simulado).',
+    schema: zod.object({
+      nome: zod.string().min(2).max(120),
+      telefone: zod.string().min(8).max(20).optional(),
+    }),
+    func: async ({ nome, telefone }) => {
+      const partes = nome.trim().split(/\s+/).filter((p) => p.length >= 2);
+      if (partes.length < 2) {
+        const erro = `[SANDBOX] cadastrar_paciente recusou: "${nome}" está sem sobrenome. Peça o nome completo ao paciente.`;
+        opts.onCall({ tool: 'cadastrar_paciente', args: { nome, telefone }, result: erro });
+        return erro;
+      }
+      const result = `[SANDBOX] cadastrar_paciente("${nome}") → idClient ${ID_CLIENT_FICTICIO} — simulado.`;
+      opts.onCall({ tool: 'cadastrar_paciente', args: { nome, telefone }, result });
+      return result;
+    },
+  });
+
+  const agendar_consulta = new DynamicStructuredTool({
+    name: 'agendar_consulta',
+    description: 'Marca a consulta na agenda da franquia (sandbox: simulado).',
+    schema: zod.object({
+      idClient: zod.number().int().positive(),
+      data: zod.string().min(8).max(10),
+      hora: zod.string().min(4).max(8),
+      leadId: zod.number().int().positive().optional(),
+    }),
+    func: async ({ idClient, data, hora, leadId }) => {
+      const livre = AGENDA_FICTICIA.some((h) => hora.startsWith(h.slice(0, 2)));
+      const result = livre
+        ? `[SANDBOX] agendar_consulta(${data} ${hora}) → CONSULTA MARCADA para o idClient ${idClient} — simulado.`
+        : `[SANDBOX] agendar_consulta(${data} ${hora}) recusou: horário não está livre. Consulte de novo e ofereça outro.`;
+      opts.onCall({ tool: 'agendar_consulta', args: { idClient, data, hora, leadId }, result });
+      return result;
+    },
+  });
+
+  const remarcar_consulta = new DynamicStructuredTool({
+    name: 'remarcar_consulta',
+    description: 'Move a consulta do paciente para outro horário (sandbox: simulado).',
+    schema: zod.object({
+      idSchedule: zod.number().int().positive().optional(),
+      idClient: zod.number().int().positive().optional(),
+      data: zod.string().min(8).max(10),
+      hora: zod.string().min(4).max(8),
+    }),
+    func: async (args) => {
+      const result = `[SANDBOX] remarcar_consulta → nova data ${args.data} ${args.hora} — simulado.`;
+      opts.onCall({ tool: 'remarcar_consulta', args, result });
+      return result;
+    },
+  });
+
+  const cancelar_consulta = new DynamicStructuredTool({
+    name: 'cancelar_consulta',
+    description: 'Cancela a consulta do paciente na agenda (sandbox: simulado).',
+    schema: zod.object({
+      idSchedule: zod.number().int().positive().optional(),
+      idClient: zod.number().int().positive().optional(),
+      motivo: zod.string().max(200).optional(),
+    }),
+    func: async (args) => {
+      const result = `[SANDBOX] cancelar_consulta → cancelada${args.motivo ? ` (motivo: ${args.motivo})` : ''} — simulado.`;
+      opts.onCall({ tool: 'cancelar_consulta', args, result });
+      return result;
+    },
+  });
+
   const captura = opts.leadFieldRules.map(
     (rule) =>
       new DynamicStructuredTool({
@@ -205,6 +307,12 @@ function buildSandboxTools(opts: {
     mover_etapa,
     pausar_ia,
     atualizar_titulo_lead,
+    consultar_horarios,
+    buscar_paciente,
+    cadastrar_paciente,
+    agendar_consulta,
+    remarcar_consulta,
+    cancelar_consulta,
     resumir_lead_para_sdr,
     ...captura,
   ];

@@ -9,20 +9,114 @@ const CAMPO_CIDADE = 2440803;
 const CAMPO_ESTADO = 2440807;
 const CAMPO_QUEIXA = 2440811;
 
+// Partículas de sobrenome: entram no nome, mas não valem como sobrenome.
+const PARTICULAS = new Set([
+  'da', 'de', 'do', 'das', 'dos', 'e', 'di', 'del', 'della', 'la', 'le',
+  'van', 'von', 'y', 'dal', 'st',
+]);
+
+// Palavras que denunciam que o título é a mensagem do paciente, uma saudação
+// ou o nome da própria clínica — não o nome de uma pessoa. Casadas por palavra
+// inteira e sem acento, então "dor" barra e "Dores" (nome) passa.
+const PALAVRAS_DE_CONVERSA = new Set([
+  // perguntas
+  'qual', 'quais', 'quanto', 'quanta', 'quantos', 'quantas', 'como', 'onde',
+  'quando', 'quem', 'porque', 'pq', 'custa', 'custo',
+  // saudações e conversa
+  'oi', 'ola', 'bom', 'boa', 'dia', 'tarde', 'noite', 'tudo', 'bem',
+  'obrigado', 'obrigada', 'por', 'favor', 'sim', 'nao', 'ok', 'blz',
+  // pedaços de frase
+  'pelo', 'pela', 'para', 'pra', 'com', 'sem', 'que', 'ja', 'ainda', 'muito',
+  'mais', 'menos', 'aqui', 'ali', 'isso', 'esse', 'essa', 'meu', 'minha',
+  'seu', 'sua', 'na', 'no', 'em', 'ou', 'so', 'tem', 'ter',
+  // intenção comercial
+  'quero', 'queria', 'gostaria', 'preciso', 'poderia', 'pode', 'vou', 'vai',
+  'fazer', 'marcar', 'agendar', 'agendamento', 'consulta', 'consultas',
+  'valor', 'valores', 'preco', 'precos', 'orcamento', 'plano', 'planos',
+  'convenio', 'atende', 'atendem', 'atendimento', 'atendimentos', 'aceita',
+  'aceitam', 'tipo', 'tipos', 'sobre', 'informacao', 'informacoes', 'duvida',
+  'duvidas', 'ajuda', 'exame', 'exames',
+  // queixa
+  'dor', 'doendo', 'doi', 'rebentado', 'rebentou', 'estragado', 'estragaram',
+  'inchado', 'caroco', 'cirurgia', 'hernia', 'tratamento', 'tratamentos',
+  // canal e a própria clínica
+  'whatsapp', 'whats', 'wpp', 'zap', 'instagram', 'insta', 'facebook', 'face',
+  'fb', 'site', 'google', 'tiktok', 'indicacao', 'anuncio', 'ads', 'lead',
+  'contato', 'cliente', 'doutor', 'doutora', 'dr', 'dra', 'clinica', 'unidade',
+]);
+
+function semAcento(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+export interface AvaliacaoNome {
+  ok: boolean;
+  motivo?: string;
+  nome?: string;
+}
+
+/**
+ * Decide se o título do card do Kommo pode virar nome de pessoa no CRM da
+ * franquia.
+ *
+ * Lixo (pedaço de mensagem, pergunta, data, telefone, nome da clínica) é
+ * barrado sempre — nunca foi gente, não se perde nada.
+ *
+ * Falta de sobrenome é outra história e por isso fica atrás de `exigirSobrenome`.
+ * Medido em 26/08/2026: dos leads que entraram só com o primeiro nome, apenas
+ * 4 em 60 ganharam sobrenome depois. Ligar isso hoje não adia o cadastro, some
+ * com ~93% deles. Só faz sentido depois que a IA passar a capturar o nome
+ * completo na conversa.
+ */
+export function avaliarNome(
+  titulo: string,
+  opcoes: { exigirSobrenome?: boolean } = {},
+): AvaliacaoNome {
+  const bruto = (titulo ?? '').trim();
+  if (!bruto) return { ok: false, motivo: 'o card está sem título' };
+
+  const nome = limparNome(bruto);
+  if (nome.length < 3) return { ok: false, motivo: `"${bruto}" é curto demais pra ser nome` };
+  if (/\d/.test(nome)) {
+    return { ok: false, motivo: `"${nome}" tem número — parece data ou telefone, não nome` };
+  }
+  if (/[?]/.test(nome)) {
+    return { ok: false, motivo: `"${nome}" é pergunta do paciente, não nome` };
+  }
+
+  const palavras = nome.split(/\s+/).filter(Boolean);
+  for (const p of palavras) {
+    const chave = semAcento(p).replace(/[^a-z]/g, '');
+    if (PALAVRAS_DE_CONVERSA.has(chave)) {
+      return { ok: false, motivo: `"${nome}" é mensagem do paciente, não nome (achei "${p}")` };
+    }
+  }
+
+  const partesReais = palavras.filter(
+    (p) => p.length >= 2 && !PARTICULAS.has(semAcento(p).replace(/[^a-z]/g, '')),
+  );
+  if (partesReais.length === 0) {
+    return { ok: false, motivo: `"${nome}" não tem nenhuma palavra que sirva de nome` };
+  }
+  if (opcoes.exigirSobrenome && partesReais.length < 2) {
+    return { ok: false, motivo: `"${nome}" está sem sobrenome — a recepção não acha o paciente` };
+  }
+
+  return { ok: true, nome };
+}
+
 function pareceNomeAutomatico(titulo: string): boolean {
-  const t = titulo.trim();
-  if (t.length < 3) return true;
-  if (/^lead\b/i.test(t)) return true;
-  if (/^\+?\d[\d\s()\-]{6,}$/.test(t)) return true;
-  if (/^(whatsapp|instagram|facebook|contato|cliente)$/i.test(t)) return true;
-  const limpo = limparNome(t);
-  if (limpo.length < 3) return true;
-  return /^(whatsapp|instagram|facebook|contato|cliente|insta|face|fb)$/i.test(limpo);
+  return !avaliarNome(titulo).ok;
 }
 
 const SUFIXOS_DE_ETIQUETA = [
   /\s*[-–—|/]\s*$/,
-  /\s+\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*$/,
+  // A data no fim às vezes vem colada no sobrenome ("Ferreira19/08/26") — sem
+  // o \s+ obrigatório ela também sai, e o nome da pessoa se salva.
+  /\s*\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*$/,
   /\s+\d{1,2}[-.]\d{1,2}([-.]\d{2,4})?\s*$/,
   /\s+(insta|instagram|face|facebook|fb|whats|whatsapp|wpp|zap|dm|direct|site|google|tiktok|tik\s?tok|indica[çc][ãa]o|an[úu]ncio|ads|trafego|tr[áa]fego|org[âa]nico|organico)\s*$/i,
 ];
@@ -112,8 +206,9 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
   }
 
   const titulo = lead.name ?? '';
-  if (pareceNomeAutomatico(titulo)) {
-    return { ok: false, etapa: 'nome', tituloKommo: titulo, motivo: `aguardando nome ("${titulo}")` };
+  const avaliacao = avaliarNome(titulo);
+  if (!avaliacao.ok) {
+    return { ok: false, etapa: 'nome', tituloKommo: titulo, motivo: avaliacao.motivo };
   }
 
   const valor = (fieldId: number): string | null => {
@@ -373,4 +468,4 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
 export const SpineSyncService = {
   prepararPaciente,
   syncPatientToSpine,
-  montarPayload, syncLeadToSpine, prepararLead, pareceNomeAutomatico, limparNome };
+  montarPayload, syncLeadToSpine, prepararLead, pareceNomeAutomatico, limparNome, avaliarNome };

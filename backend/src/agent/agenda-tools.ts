@@ -501,6 +501,49 @@ async function consultaAtual(unit: Unit, leadId: number | undefined) {
 
 const porExtenso = AgendaReconcileService.porExtenso;
 
+/**
+ * Confere se o `idClient` que o modelo mandou é o paciente DESTA conversa.
+ *
+ * `buscar_paciente` já é rigorosa — só confirma cadastro cujo telefone bate, e
+ * grava o vínculo lead↔paciente em `spineLeadLink.spineIdClient`. Mas o número
+ * que chega em `agendar_consulta`, `cancelar_consulta` e `remarcar_consulta` é o
+ * que o MODELO escreveu, e ninguém compara com o vínculo guardado.
+ *
+ * O estrago aqui é maior que uma tag errada: marcar, remarcar ou CANCELAR a
+ * consulta de outro paciente. E é invisível — a resposta ao paciente parece
+ * perfeitamente normal, então o guardrail de saída não pega.
+ *
+ * Só bloqueia quando existe vínculo gravado E ele diverge. Lead sem vínculo
+ * (paciente novo, primeiro agendamento) passa: aí o `idClient` acabou de sair do
+ * `cadastrar_paciente` e não há com o que comparar.
+ */
+export type ConfereePaciente = { ok: true } | { ok: false; idClientCerto: number };
+
+/** A decisão, separada da leitura do banco pra poder ser testada sozinha. */
+export function pacienteConfere(
+  guardado: number | null | undefined,
+  pedido: number,
+): ConfereePaciente {
+  if (!guardado) return { ok: true };
+  if (guardado === pedido) return { ok: true };
+  return { ok: false, idClientCerto: guardado };
+}
+
+async function conferirPacienteDoLead(
+  unitId: string,
+  leadId: number | undefined,
+  idClient: number,
+): Promise<ConfereePaciente> {
+  if (!leadId) return { ok: true };
+  const vinculo = await prisma.spineLeadLink
+    .findUnique({
+      where: { unitId_kommoLeadId: { unitId, kommoLeadId: leadId } },
+      select: { spineIdClient: true },
+    })
+    .catch(() => null);
+  return pacienteConfere(vinculo?.spineIdClient, idClient);
+}
+
 async function guardarPaciente(
   unitId: string,
   leadId: number | undefined,
@@ -731,6 +774,20 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           'AGENDAMENTO PAUSADO pela recepção. A consulta NÃO foi marcada. Explique que ' +
           'houve uma intercorrência na agenda e que a equipe confirma o horário em seguida. ' +
           'NÃO diga que está agendado.'
+        );
+      }
+
+      const dono = await conferirPacienteDoLead(fresca.id, args.leadId, args.idClient);
+      if (!dono.ok) {
+        await recorder.step({
+          kind: 'ERROR',
+          title: `🛡 agendar_consulta tentou marcar para o paciente ${args.idClient} — este lead é do ${dono.idClientCerto}`,
+          payload: { ...args, idClientCerto: dono.idClientCerto },
+        });
+        return (
+          `RECUSADO: o idClient ${args.idClient} não é o paciente desta conversa. ` +
+          `Use ${dono.idClientCerto}, que é o cadastro confirmado deste lead. ` +
+          'NÃO diga ao paciente que houve erro — apenas refaça com o número certo.'
         );
       }
 

@@ -67,6 +67,7 @@ import type {
   SpinePatientPreview,
   FollowUpRulesResponse,
   FollowUpStep,
+  SaudeIa,
 } from '../types/api';
 
 const apiBase = import.meta.env.VITE_API_URL
@@ -218,6 +219,10 @@ export const api = {
       `/units/${unitId}/lead-field-rules`,
     );
     return data.rules;
+  },
+  async saudeIa(unitId: string): Promise<SaudeIa> {
+    const { data } = await http.get<SaudeIa>(`/units/${unitId}/saude-ia`);
+    return data;
   },
   async spineStatus(unitId: string): Promise<SpineStatus> {
     const { data } = await http.get<SpineStatus>(`/units/${unitId}/spine/status`);

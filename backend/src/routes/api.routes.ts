@@ -132,6 +132,7 @@ import {
 } from '../controllers/prompts.controller.js';
 import { loginHandler, logoutHandler, meHandler } from '../controllers/auth.controller.js';
 import { playgroundRunHandler } from '../controllers/playground.controller.js';
+import { saudeIaHandler } from '../controllers/saude-ia.controller.js';
 import { listChangeLogHandler } from '../controllers/change-log.controller.js';
 import {
   listLessonsHandler,
@@ -308,6 +309,7 @@ apiRouter.get('/units/:id/follow-up/rules', requireUnitAccess, listFollowUpRules
 apiRouter.post('/units/:id/follow-up/rules', requireUnitAccess, upsertFollowUpRuleHandler);
 apiRouter.post('/units/:id/follow-up/toggle', requireUnitAccess, toggleFollowUpHandler);
 
+apiRouter.get('/units/:id/saude-ia', requireUnitAccess, saudeIaHandler);
 apiRouter.get('/units/:id/spine/status', requireUnitAccess, spineStatusHandler);
 apiRouter.patch('/units/:id/spine/reminder', requireUnitAccess, updateReminderHandler);
 apiRouter.get('/units/:id/spine/schedules', requireUnitAccess, spineSchedulesHandler);

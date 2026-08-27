@@ -129,7 +129,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
   const humanMessage = `${currentTimeTag()} ${message}`;
 
   try {
-    const graph = await buildAgentGraph(recorder, unit);
+    const graph = await buildAgentGraph(recorder, unit, Number(leadId));
     const threadId = buildThreadId(unit.slug, leadId);
 
     const result = await graph.invoke(
