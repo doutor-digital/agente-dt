@@ -425,7 +425,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       const unidade = unit;
       const leadDoBot = msgEntrando.entity_id;
       const chaveDedup = msgEntrando.id ?? `${leadDoBot}:${msgEntrando.text ?? ''}`;
-      if (claimMessageId('widget-run', chaveDedup)) {
+      if (await claimMessageId('widget-run', chaveDedup)) {
         // Tem que ser pelo CONTATO. Com `leads` o Kommo roda o bot como
         // marketingbot, sem conversa — o `show` é aceito e jogado fora.
         const doWebhook = Number(msgEntrando.contact_id);
@@ -468,7 +468,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   const hasIncomingMessage = !!incomingMsg;
   const hasManualTestInput = !!parsed.data.leadId && !!parsed.data.text;
 
-  if (incomingMsg?.id && !claimMessageId('kommo', incomingMsg.id)) {
+  if (incomingMsg?.id && !(await claimMessageId('kommo', incomingMsg.id))) {
     logger.info(
       { unit: unit.slug, msgId: incomingMsg.id },
       'kommo webhook duplicado (retry) — ignorando',

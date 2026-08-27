@@ -15,6 +15,7 @@ import { startFollowUpWorker } from './lib/follow-up-worker.js';
 import { startReminderWorker } from './lib/reminder-worker.js';
 import { startReactivationWorker } from './lib/reactivation-worker.js';
 import { startSlaAlertWorker } from './lib/sla-alert-worker.js';
+import { startAgendamentoPerdidoWorker } from './lib/agendamento-perdido-worker.js';
 import { startCardValidationWorker } from './lib/card-validation-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 import { startJudgeWorker } from './lib/judge-worker.js';
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
   startReminderWorker();
   startReactivationWorker();
   startSlaAlertWorker();
+  startAgendamentoPerdidoWorker();
   startCardValidationWorker();
 
   const server = app.listen(env.PORT, () => {
