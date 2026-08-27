@@ -7,6 +7,7 @@ import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
+import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { describeImage } from '../services/vision.service.js';
@@ -812,7 +813,7 @@ export async function processAgent(args: {
   }
 
   try {
-    const graph = await buildAgentGraph(recorder, unit);
+    const graph = await buildAgentGraph(recorder, unit, leadId);
     const threadId = buildThreadId(unit.slug, leadId);
 
     const result = await graph.invoke(
@@ -842,7 +843,27 @@ export async function processAgent(args: {
       });
     }
 
-    if (isChatMessage && reply && !respostaSemPalavra) {
+    // Bastidor não vai pro paciente. Já aconteceu duas vezes: um lead de Porto
+    // recebeu o raciocínio do modelo em inglês, e na simulação saiu a chamada da
+    // ferramenta escrita como texto. Nesses casos é melhor o paciente ficar sem
+    // resposta neste turno (ele reescreve, e a IA responde de novo) do que
+    // receber lixo — que quebra a confiança na hora e não tem desfazer.
+    const vazamento = reply ? detectarVazamento(reply) : null;
+    if (vazamento) {
+      logger.error(
+        { traceId, leadId, unit: unit.slug, tipo: vazamento.tipo, trecho: vazamento.trecho, reply },
+        `resposta bloqueada: ${explicarVazamento(vazamento)}`,
+      );
+      await recorder.step({
+        kind: 'ERROR',
+        title: `🚫 Resposta bloqueada — ${explicarVazamento(vazamento)} ("${vazamento.trecho.slice(0, 40)}")`,
+        payload: { leadId, tipo: vazamento.tipo, trecho: vazamento.trecho, reply },
+      });
+    }
+
+    const podeEnviar = !respostaSemPalavra && !vazamento;
+
+    if (isChatMessage && reply && podeEnviar) {
       const conv = await upsertConversation({
         unitId: unit.id,
         leadId: String(leadId),
@@ -946,7 +967,7 @@ export async function processAgent(args: {
       leadId,
       recentTurns: [
         { role: 'user', content: humanMessage },
-        ...(reply && !respostaSemPalavra ? [{ role: 'assistant' as const, content: reply }] : []),
+        ...(reply && podeEnviar ? [{ role: 'assistant' as const, content: reply }] : []),
       ],
     });
 

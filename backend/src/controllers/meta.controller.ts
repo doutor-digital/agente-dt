@@ -134,7 +134,7 @@ async function processMetaMessage(
   await syncRecorderSequence(recorder, trace.id);
 
   try {
-    const graph = await buildAgentGraph(recorder, unit);
+    const graph = await buildAgentGraph(recorder, unit, Number(leadId));
     const threadId = buildThreadId(unit.slug, leadId);
 
     const result = await graph.invoke(
