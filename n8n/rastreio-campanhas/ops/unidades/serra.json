@@ -17,7 +17,13 @@
         -1120,
         64
       ],
-      "webhookId": "meta-ctwa-serra"
+      "webhookId": "meta-ctwa-serra",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "q6f4vQ471pWZykAT",
+          "name": "WhatsApp Trigger · Serra"
+        }
+      }
     },
     {
       "parameters": {
