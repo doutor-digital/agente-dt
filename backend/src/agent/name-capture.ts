@@ -32,24 +32,42 @@ const STOPWORDS = new Set([
 
 const NAME_WORD_RE = /^[a-zà-ÿ][a-zà-ÿ'\-]*$/i;
 
+/**
+ * Nome brasileiro é comprido, e o limite tem que contar os pedaços QUE IMPORTAM.
+ *
+ * Antes o corte era `words.length > 4` sobre as palavras cruas, e isso descartava
+ * nome real: "Elzilene de Sales Dias Nogueira" (caso de produção, Imperatriz,
+ * 28/08/2026) tem 5 palavras — 4 tokens de nome mais o conector "de" — e o card
+ * ficou sem o nome da paciente. "Maria da Silva dos Santos" caía igual.
+ *
+ * Agora o teto vale sobre os tokens REAIS (conectores não contam) e a contagem
+ * crua serve só de guarda contra alguém colar uma frase inteira. Quem realmente
+ * separa nome de frase são as listas de queixa e de stopword — qualquer frase em
+ * português esbarra numa delas.
+ */
+const MAX_TOKENS_REAIS = 6;
+const MAX_PALAVRAS = 8;
+
 export function looksLikeName(candidate: string): boolean {
   const cleaned = (candidate ?? '').trim();
   if (!cleaned) return false;
   if (/\d/.test(cleaned)) return false;
   const words = cleaned.split(/\s+/);
-  if (words.length < 1 || words.length > 4) return false;
+  if (words.length < 1 || words.length > MAX_PALAVRAS) return false;
   if (CONNECTORS.has(norm(words[0]))) return false;
-  let temTokenReal = false;
+  let tokensReais = 0;
   for (const w of words) {
     const n = norm(w);
     if (PALAVRAS_DE_QUEIXA.has(n)) return false;
-    if (STOPWORDS.has(n)) return false;
+    // Conector ANTES de stopword: "e" está nas duas listas, e como stopword vinha
+    // primeiro, nenhum nome com "e" no meio passava.
     if (CONNECTORS.has(n)) continue;
+    if (STOPWORDS.has(n)) return false;
     if (!NAME_WORD_RE.test(w)) return false;
     if (n.length < 2) return false;
-    temTokenReal = true;
+    tokensReais++;
   }
-  return temTokenReal;
+  return tokensReais > 0 && tokensReais <= MAX_TOKENS_REAIS;
 }
 
 export function extractLeadingName(raw: string): string | null {
@@ -57,10 +75,10 @@ export function extractLeadingName(raw: string): string | null {
   const out: string[] = [];
   for (const w of words) {
     const n = norm(w);
-    if (STOPWORDS.has(n)) break;
+    if (!CONNECTORS.has(n) && STOPWORDS.has(n)) break;
     if (!CONNECTORS.has(n) && !NAME_WORD_RE.test(w)) break;
     out.push(w);
-    if (out.length >= 4) break;
+    if (out.length >= MAX_PALAVRAS) break;
   }
   while (out.length && CONNECTORS.has(norm(out[out.length - 1]))) out.pop();
   const cand = out.join(' ');
