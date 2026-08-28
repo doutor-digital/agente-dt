@@ -109,3 +109,23 @@ test('titleCaseName — capitaliza certo', () => {
   assert.equal(titleCaseName('joão silva'), 'João Silva');
   assert.equal(titleCaseName('EDNA CARDOSO'), 'Edna Cardoso');
 });
+
+/* ─── Nomes compridos (regressão de produção, 28/08/2026) ─────────────────── */
+
+test('aceita nome brasileiro comprido com conectores', () => {
+  // O caso real: Imperatriz, lead 24954279. Tinha 5 palavras e o card ficou vazio.
+  assert.equal(looksLikeName('Elzilene de Sales Dias Nogueira'), true);
+  assert.equal(looksLikeName('Maria da Silva dos Santos'), true);
+  assert.equal(looksLikeName('José Carlos de Almeida Ferreira Neto'), true);
+  assert.equal(looksLikeName('Ana Paula e Souza'), true);
+});
+
+test('continua recusando frase que o paciente digita no lugar do nome', () => {
+  assert.equal(looksLikeName('quero marcar uma consulta pra minha mãe'), false);
+  assert.equal(looksLikeName('estou com muita dor na coluna lombar'), false);
+  assert.equal(looksLikeName('bom dia gostaria de saber o valor'), false);
+});
+
+test('recusa nome longo demais para ser nome de pessoa', () => {
+  assert.equal(looksLikeName('Ana Beatriz Carolina Daniela Eduarda Fabiana Gabriela'), false);
+});
