@@ -1,5 +1,5 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import { buildAgendaTools } from './agenda-tools.js';
+import { buildAgendaTools, hojeLocal, type EstadoAgenda } from './agenda-tools.js';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import type { LeadFieldRule, Unit } from '@prisma/client';
@@ -86,6 +86,17 @@ export interface BuildToolsArgs {
   unit?: Unit;
 }
 
+/**
+ * Motivos em que a IA afirma não haver vaga ao pausar o atendimento.
+ *
+ * Amplo de propósito. Se houver vaga mesmo, a consulta devolve horários e o
+ * atendimento continua; se não houver, ela devolve o PRÓXIMO dia com vaga — que é
+ * justamente o que o paciente precisa ouvir. Nos dois casos a pausa deixa de ser um
+ * beco sem saída, então um falso positivo custa uma consulta à agenda e nada mais.
+ */
+export const MOTIVO_ALEGA_FALTA_DE_VAGA =
+  /sem vaga|sem hor[áa]ri|agenda (cheia|lotada|concorrid|sem)|n[ãa]o (h[áa]|tem|tenho|temos) (vaga|hor[áa]ri)|encaixe/i;
+
 export function buildTools({
   recorder,
   kommo,
@@ -95,6 +106,19 @@ export function buildTools({
   unit,
 }: BuildToolsArgs) {
   const desc = (name: string) => descriptionOverrides[name] || DEFAULT_TOOL_DESCRIPTIONS[name];
+
+  // Ponte entre `consultar_horarios` e o safety-net do `pausar_ia`. Preenchida mais
+  // abaixo, quando as tools de agenda são montadas — por isso é um objeto mutável e
+  // não um valor: `pausar_ia` é construída antes delas.
+  const agenda: EstadoAgenda & {
+    consultar: ((data: string) => Promise<string>) | null;
+    hoje: () => string;
+  } = {
+    consultou: false,
+    consultar: null,
+    hoje: () => (unit ? hojeLocal(unit) : new Date().toISOString().slice(0, 10)),
+  };
+
 
   const aplicarTagSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
@@ -237,6 +261,52 @@ export function buildTools({
         title: `Decisão: pausar IA no lead ${leadId} (${motivo})`,
         payload: { leadId, motivo },
       });
+
+      // SAFETY-NET: pausar alegando falta de vaga SEM ter olhado a agenda.
+      //
+      // Caso real (Imperatriz, 28/08/2026, lead 24954279): paciente com 3 noites sem
+      // dormir pediu encaixe hoje às 16h; a IA pausou com o motivo "agenda sem vaga
+      // automática" tendo respondido a conversa inteira sem um único tool call. O
+      // horário estava mesmo ocupado — mas ela não sabia disso, e a paciente saiu sem
+      // nenhuma data alternativa, embora `consultar_horarios` avance sozinha até o
+      // próximo dia com vaga.
+      //
+      // Em vez de recusar a pausa e torcer para o modelo obedecer o prompt, o
+      // safety-net CONSULTA a agenda e devolve o resultado. Determinístico. Depois
+      // desta consulta `agenda.consultou` fica true, então uma segunda chamada de
+      // pausar_ia passa direto — não há laço.
+      if (agenda.consultar && !agenda.consultou && MOTIVO_ALEGA_FALTA_DE_VAGA.test(motivo ?? '')) {
+        const dia = agenda.hoje();
+        let resultado: string;
+        try {
+          resultado = await agenda.consultar(dia);
+        } catch (e) {
+          // Agenda fora do ar não pode virar impedimento de handoff: sem ela, o
+          // humano assumir É a coisa certa. Deixa a pausa seguir.
+          await recorder.step({
+            kind: 'ERROR',
+            title: `[safety-net] agenda indisponível ao checar a alegação de "sem vaga": ${String(e)}`,
+            payload: { leadId, motivo, data: dia },
+          });
+          resultado = '';
+        }
+
+        if (resultado) {
+          await recorder.step({
+            kind: 'TOOL_RESULT',
+            title: '[safety-net] IA alegou falta de vaga sem consultar a agenda — consultei antes de pausar',
+            payload: { leadId, motivo, data: dia, resultado },
+          });
+          return (
+            'PAUSA NÃO APLICADA. Você afirmou que não havia vaga sem ter consultado a ' +
+            `agenda. Consultei agora por você: ${resultado} ` +
+            'Ofereça essas opções ao paciente com naturalidade — inclusive se forem de ' +
+            'outro dia, porque uma data real vale mais do que "a equipe entra em contato". ' +
+            'Só chame pausar_ia de novo se ele recusar todas, pedir para falar com humano, ' +
+            'ou se o assunto não for agendamento.'
+          );
+        }
+      }
 
       if (!pausedFieldId) {
         const msg = 'Unit não tem kommoPausedFieldId configurado — pausa não pode ser persistida.';
@@ -892,7 +962,13 @@ export function buildTools({
   ];
   if (resumir_lead_para_sdr) nativeTools.push(resumir_lead_para_sdr);
 
-  const agendaTools = unit ? buildAgendaTools({ unit, recorder, kommo }) : [];
+  const agendaTools = unit ? buildAgendaTools({ unit, recorder, kommo, estado: agenda }) : [];
+
+  // Fecha a ponte: agora `pausar_ia` consegue consultar a agenda por conta própria.
+  const consultarHorarios = agendaTools.find((t) => t.name === 'consultar_horarios');
+  if (consultarHorarios) {
+    agenda.consultar = async (data: string) => String(await consultarHorarios.invoke({ data }));
+  }
 
   return [...nativeTools, ...agendaTools, ...dynamicTools];
 }
