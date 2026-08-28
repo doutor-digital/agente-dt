@@ -27,10 +27,30 @@ async function unidadeFresca(unitId: string): Promise<Unit | null> {
   return prisma.unit.findUnique({ where: { id: unitId } });
 }
 
+/**
+ * Sinal de que a agenda foi realmente consultada nesta execução.
+ *
+ * Existe por causa de um caso real (Imperatriz, 28/08/2026, lead 24954279): a IA
+ * pausou o atendimento alegando "agenda sem vaga automática" sem ter chamado
+ * `consultar_horarios` uma única vez na conversa inteira. A afirmação até estava
+ * certa naquele dia — por sorte, não por verificação — e a paciente saiu sem
+ * nenhuma data alternativa, embora a tool avance sozinha até o próximo dia com vaga.
+ */
+export interface EstadoAgenda {
+  consultou: boolean;
+}
+
+/** Data de hoje (AAAA-MM-DD) no fuso da clínica, não no do servidor. */
+export function hojeLocal(unit: Unit): string {
+  return agoraLocal(unit).slice(0, 10);
+}
+
 interface Contexto {
   unit: Unit;
   recorder: TraceRecorder;
   kommo?: KommoClient;
+  /** Compartilhado com o safety-net do `pausar_ia`. */
+  estado?: EstadoAgenda;
 }
 
 const NOME_AGENDOU = '✓ Agendou';
@@ -124,7 +144,7 @@ async function clienteDeSondagem(unit: Unit): Promise<number | null> {
   return id;
 }
 
-export function buildConsultarHorarios({ unit, recorder }: Contexto) {
+export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
   return new DynamicStructuredTool({
     name: 'consultar_horarios',
     description:
@@ -151,6 +171,9 @@ export function buildConsultarHorarios({ unit, recorder }: Contexto) {
         ),
     }),
     func: async ({ data, turno }: { data: string; turno?: 'manha' | 'tarde' }) => {
+      // Marca ANTES de qualquer saída: o que interessa ao safety-net é se a agenda
+      // chegou a ser olhada, mesmo que a resposta tenha sido "não há vaga".
+      if (estado) estado.consultou = true;
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
 
       if (!fresca.spineEnabled || !fresca.spineToken) {
