@@ -446,6 +446,7 @@ model Unit {
   systemLogs            SystemLog[]
   leadFieldRules        LeadFieldRule[]
   leadMemories          LeadMemory[]
+  leadFactEvents        LeadFactEvent[]
   whatsappCostDaily     WhatsappCostDaily[]
   whatsappTemplateDaily WhatsappTemplateDaily[]
 
@@ -579,6 +580,57 @@ model LeadMemory {
 
   @@unique([unitId, leadId])
   @@map("lead_memories")
+}
+
+/// LeadFactEvent — o HISTÓRICO dos fatos do paciente, um evento por mudança.
+///
+/// `LeadMemory.facts` responde "o que eu sei sobre este lead AGORA": é um
+/// dicionário sobrescrito a cada ciclo. Serve pra conversa e vai continuar
+/// existindo. Mas ele perde três coisas que custam caro:
+///
+///   * QUANDO se soube — sem data, não dá pra dizer se o dado é de ontem ou de
+///     três meses atrás;
+///   * DE ONDE veio — sem a frase que originou, não dá pra auditar extração
+///     errada, e extração errada vira decisão comercial permanente. Já
+///     aconteceu: um lead marcado "Desqualificado" fica desqualificado pra
+///     sempre, mesmo que a IA tenha entendido errado;
+///   * O QUE MUDOU — "Frio" virando "Quente" é a informação mais valiosa da
+///     conversa, e hoje ela é justamente a que se apaga.
+///
+/// Esta tabela é APPEND-ONLY. Nada é atualizado nem removido: cada mudança
+/// nasce como um evento novo apontando pro anterior via `supersedesId`. É o que
+/// permite responder "por que a IA acha isso?" meses depois.
+model LeadFactEvent {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  /// ID do lead no Kommo, igual ao de LeadMemory.
+  leadId String @map("lead_id")
+
+  /// Chave do fato, no mesmo formato de `facts` (snake_case). Ex.: "qualificacao".
+  chave String
+  /// Valor novo. Guardado como texto — o dicionário de origem é sempre string.
+  valor String @db.Text
+  /// Valor que estava antes. Nulo quando o fato aparece pela primeira vez.
+  valorAnterior String? @map("valor_anterior") @db.Text
+
+  /// Trecho da conversa que originou o fato, com PII mascarada. É a evidência:
+  /// sem ela não dá pra saber se a IA leu certo ou inventou.
+  evidencia String? @db.Text
+
+  /// O evento que este substitui. É a aresta SUPERSEDES: o valor antigo não é
+  /// apagado, fica encadeado. Nulo no primeiro evento de cada chave.
+  supersedesId String?         @map("supersedes_id")
+  supersedes   LeadFactEvent?  @relation("SucessaoDeFato", fields: [supersedesId], references: [id], onDelete: SetNull)
+  sucessores   LeadFactEvent[] @relation("SucessaoDeFato")
+
+  observadoEm DateTime @default(now()) @map("observado_em")
+
+  /// Busca pela linha do tempo de um lead, que é como isto é lido na prática.
+  @@index([unitId, leadId, observadoEm])
+  /// Busca por chave: "quantas vezes a qualificação mudou nesta unidade?"
+  @@index([unitId, chave, observadoEm])
+  @@map("lead_fact_events")
 }
 
 // ---------------------------------------------------------------------------
