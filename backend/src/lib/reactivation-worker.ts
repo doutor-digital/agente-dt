@@ -35,10 +35,23 @@ function paraMinutos(hhmm: string | null | undefined): number | null {
   return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
 }
 
+/**
+ * Janela em que vale reativar a IA num lead que o humano não assumiu.
+ *
+ * NÃO olha o dia da semana de propósito. Antes olhava — usava `spineAgendaDays`, que
+ * nas unidades é seg–sex — e o efeito era o pior possível: um lead quente que a IA
+ * pausasse na sexta à noite ficava parado até segunda 08:00. No fim de semana não há
+ * SDR para assumir, então a trava garantia justamente o que ela deveria evitar.
+ *
+ * A clínica estar fechada é quando a IA mais importa: ela continua consultando a
+ * agenda e marcando para o próximo dia útil. O que a agenda fechada impede é a
+ * CONSULTA acontecer no domingo, não o agendamento ser feito no domingo.
+ *
+ * O que continua valendo é a hora civilizada — a janela segue presa ao horário da
+ * unidade, com piso 08:00 e teto 20:00. Ninguém recebe mensagem de madrugada.
+ */
 function dentroDoHorario(unit: Unit): boolean {
-  const { minutos, diaSemana } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
-  const dias = unit.spineAgendaDays?.length ? unit.spineAgendaDays : [1, 2, 3, 4, 5];
-  if (!dias.includes(diaSemana)) return false;
+  const { minutos } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
   const abre = Math.max(paraMinutos(unit.spineAgendaStart) ?? 8 * 60, 8 * 60);
   const fecha = Math.min(paraMinutos(unit.spineAgendaEnd) ?? 20 * 60, 20 * 60);
   return minutos >= abre && minutos < fecha;
