@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
+import { registrarMudancas } from './lead-fact-events.js';
 import type { LeadMemory, Unit } from '@prisma/client';
 import { createChatOpenAI, invokeChatModel } from './openai.service.js';
 import { createKommoClient } from './kommo.service.js';
@@ -291,6 +292,21 @@ async function runLeadMemoryUpdate(args: {
         turnsSinceUpdate: 0,
         lastSummarizedAt: new Date(),
       },
+    });
+
+    // O update acima sobrescreve `facts`: o valor antigo some, e com ele a
+    // resposta para "por que a IA acha isso?". O histórico guarda cada mudança
+    // com a data e a frase que a originou. Roda solto — auditoria nunca deve
+    // atrasar nem derrubar a memória do paciente.
+    void registrarMudancas({
+      unitId: unit.id,
+      leadId: idStr,
+      antes: factsCurrent as Record<string, unknown>,
+      depois: newFacts as unknown as Record<string, unknown>,
+      evidencia: history
+        .slice(-2)
+        .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+        .join(' | '),
     });
     logger.info(
       { unit: unit.slug, leadId, summaryLen: newSummary.length, factsCount: Object.keys(newFacts).length },
