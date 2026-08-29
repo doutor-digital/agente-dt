@@ -400,6 +400,50 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
   });
 }
 
+/**
+ * Confere se o horário que a IA diz que o paciente aceitou é um horário de
+ * verdade: existe no calendário e ainda não passou.
+ *
+ * Aceita só o formato pedido no schema. Deixar solto ("amanhã de manhã",
+ * "semana que vem") devolveria o problema pro lugar de onde ele veio: a IA
+ * escreveria qualquer coisa pra satisfazer o campo obrigatório e cadastraria
+ * o paciente do mesmo jeito.
+ */
+export function interpretarHorarioEscolhido(
+  bruto: string | undefined,
+  agora: Date = new Date(),
+): { ok: true; quando: Date } | { ok: false; motivo: string } {
+  const texto = (bruto ?? '').trim();
+  if (!texto) return { ok: false, motivo: 'não veio o horário escolhido pelo paciente.' };
+
+  const m = texto.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!m) {
+    return {
+      ok: false,
+      motivo: `"${texto.slice(0, 40)}" não é um horário concreto (esperado AAAA-MM-DD HH:MM).`,
+    };
+  }
+
+  const [, ano, mes, dia, hora, min] = m.map(Number) as unknown as number[];
+  const quando = new Date(ano, mes - 1, dia, hora, min, 0, 0);
+  // O Date do JS transborda em silêncio: 2026-13-45 vira fevereiro de 2027 e
+  // passaria como "futuro". Só aceita se a data que saiu for a que entrou.
+  const bateu =
+    quando.getFullYear() === ano &&
+    quando.getMonth() === mes - 1 &&
+    quando.getDate() === dia &&
+    quando.getHours() === hora &&
+    quando.getMinutes() === min;
+  if (!bateu) {
+    return { ok: false, motivo: `"${texto.slice(0, 40)}" não é uma data válida.` };
+  }
+  // Uma folga de 5 min pro relógio do modelo não brigar com o do servidor.
+  if (quando.getTime() < agora.getTime() - 5 * 60_000) {
+    return { ok: false, motivo: `${texto.slice(0, 16)} já passou.` };
+  }
+  return { ok: true, quando };
+}
+
 export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
   return new DynamicStructuredTool({
     name: 'cadastrar_paciente',
@@ -418,6 +462,13 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
         .positive()
         .optional()
         .describe('Lead do Kommo desta conversa — liga o cadastro ao contato já existente.'),
+      horarioEscolhido: z
+        .string()
+        .describe(
+          'OBRIGATÓRIO: a data e hora que o paciente JÁ ACEITOU, no formato ' +
+            'AAAA-MM-DD HH:MM. Só cadastre quem vai agendar agora. Se ele ainda ' +
+            'não escolheu horário, ofereça os horários primeiro — não cadastre.',
+        ),
     }),
     func: async (args: {
       nome: string;
@@ -425,6 +476,7 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
       cidade?: string;
       uf?: string;
       leadId?: number;
+      horarioEscolhido: string;
     }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
       if (!fresca.spineEnabled || !fresca.spineToken) {
@@ -434,6 +486,21 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
       const partes = args.nome.trim().split(/\s+/).filter((x) => x.length >= 2);
       if (partes.length < 2) {
         return 'RECUSADO: falta o sobrenome. Pergunte o nome completo antes de cadastrar.';
+      }
+
+      // Paciente na franquia é só quem agenda. Em 30 dias, 6 dos 22 cadastros
+      // feitos pela IA foram de gente que nunca marcou nada — vira paciente
+      // fantasma no sistema da clínica. O cadastro acontece ANTES do
+      // agendamento por desenho do fluxo, então a única forma de amarrar os
+      // dois é exigir aqui o horário que o paciente já aceitou.
+      const quando = interpretarHorarioEscolhido(args.horarioEscolhido);
+      if (!quando.ok) {
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title: `cadastrar_paciente RECUSADO: ${quando.motivo}`,
+          payload: { nome: args.nome, horarioEscolhido: args.horarioEscolhido },
+        });
+        return `RECUSADO: ${quando.motivo} Só cadastre quem já escolheu o horário — ofereça os horários primeiro.`;
       }
 
       const fone = SpineService.normalizarWhatsapp(args.telefone);
