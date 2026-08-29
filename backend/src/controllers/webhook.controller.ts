@@ -7,6 +7,7 @@ import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
+import { devoAvisar } from '../lib/paciente-insiste.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 import { detectarInjecao, explicarInjecao, avisoDeInjecao } from '../services/injecao.js';
 import { mascararPii } from '../lib/pii.js';
@@ -729,6 +730,26 @@ export async function processAgent(args: {
   if (await isLeadPaused(unit, leadId)) {
     carimbarContato(unit.id, leadId, { desfecho: 'pediu_humano' });
     await finishWidgetSilently();
+
+    // O paciente continua escrevendo e a IA está desligada. Antes isso morria
+    // aqui em silêncio; agora vira tarefa no cartão, que o fluxo de alertas
+    // leva pro grupo. A IA segue pausada — quem assume é gente.
+    if (humanMessage.trim() && isChatMessage && devoAvisar(`${unit.id}:${leadId}`)) {
+      try {
+        await createKommoClient(unit).createTask({
+          leadId,
+          text:
+            `ALERTA · ${unit.slug} · ` +
+            'O paciente continuou escrevendo com a IA pausada e ninguém respondeu. ' +
+            `Última mensagem: "${humanMessage.trim().slice(0, 120)}"`,
+          completeAt: Math.floor(Date.now() / 1000),
+        });
+        logger.info({ leadId, unit: unit.slug }, 'paciente insistiu com a IA pausada — equipe avisada');
+      } catch (err) {
+        logger.warn({ err: String(err), leadId, unit: unit.slug }, 'falha ao avisar que o paciente insistiu — segue');
+      }
+    }
+
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({
       kind: 'COMPLETED',
