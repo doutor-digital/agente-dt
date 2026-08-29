@@ -26,6 +26,14 @@ export const NOMES_CAMPO = {
   MOTIVO_CANCEL_TRAT: '⊘ Motivo do cancelamento do tratamento',
   AGENDADO_SDR_EM: '◷ Agendado pela SDR em',
   DATA_CONSULTA: '◷ Data da Consulta',
+  // Campos do fluxograma operacional: o semáforo é a leitura comercial do
+  // desfecho da consulta, e sem ele o relatório das 20h não fecha.
+  SEMAFORO: '◉ Semáforo',
+  TRAT_INDICADO: '⚕ Tratamento indicado',
+  VALOR_TRAT: '¤ Valor do tratamento',
+  ORIGEM: '⚑ Origem',
+  DATA_RETORNO: '◷ Data de retorno',
+  DATA_RETORNO_EXAMES: '◷ Data de retorno com exames',
 } as const;
 
 export type ChaveCampo = keyof typeof NOMES_CAMPO;
@@ -35,6 +43,7 @@ export interface ContextoUnidade {
   pipeComercial: number | null;
   pipeTratamento: number | null;
   stAgendado: number | null;
+  stCompareceu: number | null;
 }
 
 const GANHO = 142;
@@ -69,12 +78,15 @@ export function montarContexto(
   const comercial = pipelines.find((p) => normalizar(p.name) === normalizar('COMERCIAL'));
   const stAgendado =
     comercial?.statuses.find((s) => normalizar(s.name) === normalizar('AGENDADO'))?.id ?? null;
+  const stCompareceu =
+    comercial?.statuses.find((s) => normalizar(s.name) === normalizar('COMPARECEU'))?.id ?? null;
 
   return {
     campos: resolvido,
     pipeComercial: acharPipe('COMERCIAL'),
     pipeTratamento: acharPipe('TRATAMENTO'),
     stAgendado,
+    stCompareceu,
   };
 }
 
@@ -112,6 +124,7 @@ function vals(lead: KommoLead, ids: number[]): string[] {
 export interface Leitor {
   vazio: (c: ChaveCampo) => boolean;
   igual: (c: ChaveCampo, v: string) => boolean;
+  contem: (c: ChaveCampo, v: string) => boolean;
   data: (c: ChaveCampo) => number | null;
 }
 
@@ -120,6 +133,9 @@ function leitor(lead: KommoLead, ctx: ContextoUnidade): Leitor {
   return {
     vazio: (c) => ler(c).length === 0,
     igual: (c, v) => ler(c).some((x) => x.toLowerCase() === v.toLowerCase()),
+    // O semáforo guarda a cor e a explicação juntas ("LARANJA — não fechou:
+    // falta exame"), então comparar por igualdade nunca casaria.
+    contem: (c, v) => ler(c).some((x) => x.toLowerCase().includes(v.toLowerCase())),
     data: (c) => {
       const bruto = ler(c)[0];
       if (!bruto) return null;
@@ -169,6 +185,55 @@ export const REGRAS_CARD: Regra[] = [
       return null;
     },
   },
+  {
+    // O paciente foi atendido e saiu com tratamento indicado, mas ninguém disse
+    // se fechou, se ficou de pensar ou se não era caso. Sem o semáforo, esse
+    // atendimento não existe no relatório das 20h — nem como venda, nem como
+    // perda. É o buraco mais caro do dia, porque some justamente quem já veio.
+    key: 'G_compareceu_sem_semaforo',
+    // Amarrada à SITUAÇÃO DA CONSULTA, não à etapa. O card não fica parado em
+    // COMPARECEU — medido na Imperatriz, a etapa tem ZERO leads, então a regra
+    // presa a ela nunca dispararia. Pela situação ela encontra 69 pacientes que
+    // vieram, saíram com indicação, e cujo desfecho ninguém registrou.
+    aplica: (l, ctx) => ctx.pipeComercial !== null,
+    erro: (r) => {
+      if (!r.contem('SITUACAO_CONSULTA', 'atendido')) return null;
+      if (r.vazio('TRAT_INDICADO')) return null;
+      if (!r.vazio('SEMAFORO')) return null;
+      return 'foi atendido e tem tratamento indicado, mas o "◉ Semáforo" está vazio — sem ele o desfecho não entra no relatório do dia, nem como venda nem como perda';
+    },
+  },
+  {
+    // Fechou e ninguém lançou o valor. O tratamento aparece como vendido e o
+    // financeiro não bate — e a diferença só aparece no fim do mês.
+    key: 'H_fechou_sem_valor',
+    aplica: (l, ctx) => ctx.pipeComercial !== null || ctx.pipeTratamento !== null,
+    erro: (r) => {
+      if (!r.igual('FECHOU_TRAT', 'Sim')) return null;
+      if (!r.vazio('VALOR_TRAT')) return null;
+      return 'está com "✓ Fechou tratamento = Sim" mas sem "¤ Valor do tratamento" — o tratamento conta como vendido e o financeiro não fecha';
+    },
+  },
+  {
+    // Laranja quer dizer "não fechou porque falta exame". Se ninguém marcar o
+    // retorno, o paciente simplesmente some — e era um caso vivo, não perdido.
+    key: 'I_laranja_sem_retorno',
+    aplica: (l, ctx) => ctx.pipeComercial !== null,
+    erro: (r) => {
+      if (r.vazio('SEMAFORO')) return null;
+      const laranja = ['LARANJA', 'laranja'].some((v) => r.contem('SEMAFORO', v));
+      if (!laranja) return null;
+      if (!r.vazio('DATA_RETORNO') || !r.vazio('DATA_RETORNO_EXAMES')) return null;
+      return 'está LARANJA (falta exame) e não tem data de retorno marcada — sem isso o paciente some do funil';
+    },
+  },
+  // NÃO existe regra "agendado sem origem", e é decisão, não esquecimento.
+  // O fluxograma pede o alerta "quando o dado deveria estar disponível" — e hoje
+  // ele não está: o campo `origin.ref` do Kommo, que traz a referência do
+  // anúncio, vem VAZIO em 100% dos leads, inclusive nas contas com API oficial.
+  // Medido: dispararia em 52 dos 120 agendados da Imperatriz, cobrando da
+  // secretária um dado que ninguém tem como preencher. Quando o rastreio de
+  // anúncio estiver de pé, esta regra passa a fazer sentido.
   {
     key: 'B_ganho_sem_fechamento',
     aplica: (l, ctx) => emComercial(l, ctx, GANHO),
