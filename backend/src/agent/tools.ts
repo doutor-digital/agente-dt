@@ -13,6 +13,10 @@ import { logger } from '../lib/logger.js';
 import { looksLikeName } from './name-capture.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 
+/** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
+const STATUS_GANHO = 142;
+const STATUS_PERDIDO = 143;
+
 const NOME_HANDOFF_DATA = '◷ Data do handoff IA → humano';
 const NOME_HANDOFF_HUMANO = '✓ Atendimento assumido por humano';
 
@@ -212,6 +216,26 @@ export function buildTools({
     schema: moverEtapaSchema,
     func: async ({ leadId, statusId, pipelineId }) => {
       const t0 = performance.now();
+
+      // 142 (ganho) e 143 (perdido) são especiais no Kommo: existem em todo
+      // funil e, no caso do perdido, a conta exige o motivo junto. Esta tool
+      // manda só o status_id, então a chamada volta 400 e o lead fica parado —
+      // aconteceu 7 vezes em 14 dias, sempre no 143. Recusar aqui e apontar a
+      // tool certa resolve na hora, em vez de virar erro silencioso.
+      if (statusId === STATUS_GANHO || statusId === STATUS_PERDIDO) {
+        const qual = statusId === STATUS_GANHO ? 'ganho' : 'perdido';
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title: `mover_etapa recusado: use a tool de ${qual}, não a de etapa`,
+          payload: { leadId, statusId },
+        });
+        return (
+          `RECUSADO: ${statusId} é a etapa de ${qual}, que não se move por aqui. ` +
+          `Use \`marcar_ganho_perdido\` com status="${qual === 'ganho' ? 'won' : 'lost'}"` +
+          (qual === 'perdido' ? ' e o lossReasonId do motivo — sem ele o Kommo recusa.' : '.')
+        );
+      }
+
       await recorder.step({
         kind: 'TOOL_CALL',
         title: `Decisão: mover lead ${leadId} para etapa ${statusId}`,
