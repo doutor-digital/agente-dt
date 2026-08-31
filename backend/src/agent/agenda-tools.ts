@@ -1049,6 +1049,24 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           await registrarTempoAteAgendamento(fresca, kommo, args.leadId!).catch((err) =>
             logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao registrar tempo até agendamento'),
           );
+
+          // Marca a conversa como convertida no momento em que a consulta é
+          // marcada. Antes isso só acontecia quando o lead chegava em
+          // "GANHO/CONCLUÍDO" — o fim do tratamento, meses depois — e o
+          // resultado é que `converted_at` estava nulo em 3.869 conversas de 30
+          // dias: o sistema não tinha registro de nenhuma vitória da IA.
+          //
+          // Sem isso, a reflexão semanal só consegue aprender com o que deu
+          // errado; não há como perguntar "o que eu fiz nas conversas que
+          // fecharam". `updateMany` não falha se a conversa ainda não existir.
+          await prisma.conversation
+            .updateMany({
+              where: { unitId: fresca.id, leadId: String(args.leadId), convertedAt: null },
+              data: { convertedAt: new Date() },
+            })
+            .catch((err) =>
+              logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao marcar conversão — segue'),
+            );
         })();
       }
 
