@@ -15,7 +15,11 @@ const PROMPT = [
   'Descreva OBJETIVAMENTE, em português, o que há nela — de forma útil pro atendimento:',
   '- Exame/laudo/documento: resuma o achado principal e transcreva textos/valores relevantes.',
   '- Foto do corpo ou da região que dói: descreva o que dá pra ver, SEM diagnosticar.',
-  '- Print de conversa ou comprovante: resuma o conteúdo.',
+  '- COMPROVANTE de pagamento (PIX, transferência, recibo): comece a resposta com',
+  '  "COMPROVANTE:" e transcreva o VALOR, a DATA e hora, o NOME de quem pagou e o',
+  '  NOME/CNPJ de quem recebeu. Se algum desses não aparecer na imagem, diga qual',
+  '  falta — nunca preencha por dedução: esse dado libera o horário do paciente.',
+  '- Print de conversa: resuma o conteúdo.',
   '- Figurinha/meme/foto sem relação: diga isso em uma frase.',
   'No máximo 4 frases. NÃO faça diagnóstico nem dê conselho médico.',
 ].join('\n');
