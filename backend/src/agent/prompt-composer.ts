@@ -21,6 +21,7 @@ import {
   type LeadMemoryFacts,
 } from '../services/lead-memory.service.js';
 import { listEnabledLessons } from '../services/lessons.service.js';
+import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 import {
   consultaDoLead,
   porExtenso,
@@ -1414,9 +1415,15 @@ export function composeSystemPrompt(input: ComposeInput): string {
   }
 
   const lessonsBlock = renderLessons(lessons);
+  // O que ainda impede esta conversa de virar consulta. Sai dos fatos que a
+  // própria IA grava; sem isso ela sabe o que já foi dito e não o que falta.
+  const faltaBlock = renderFaltaParaAgendar(
+    (leadMemory?.facts as Record<string, unknown> | null) ?? null,
+  );
   if (lessonsBlock) blocks.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) blocks.push(memoryBlock);
+  if (faltaBlock) blocks.push(faltaBlock);
 
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
     blocks.push(renderConversationContext(leadId));
@@ -1482,6 +1489,10 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (lessonsBlock) dynamic.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) dynamic.push(memoryBlock);
+  const faltaBlock = renderFaltaParaAgendar(
+    (leadMemory?.facts as Record<string, unknown> | null) ?? null,
+  );
+  if (faltaBlock) dynamic.push(faltaBlock);
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
     dynamic.push(renderConversationContext(leadId));
   }
