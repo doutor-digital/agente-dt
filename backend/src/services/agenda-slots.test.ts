@@ -3,6 +3,14 @@ import assert from 'node:assert/strict';
 
 import { buildAgenda } from './agenda.service.js';
 import type { AgendaBlockInput } from './agenda.service.js';
+import type { SpineSchedule } from './spine.service.js';
+
+/** Só os campos que buildAgenda lê; o resto do SpineSchedule não influi aqui. */
+const marcado = (
+  timeLocal: string,
+  over: Partial<SpineSchedule> = {},
+): SpineSchedule =>
+  ({ dayLocal: DIA, timeLocal, isBusy: true, requiresManualValidation: false, ...over } as SpineSchedule);
 
 /**
  * Esta é a função que decide QUAIS HORÁRIOS a IA oferece ao paciente. Um erro
@@ -24,9 +32,6 @@ const DIA = '2026-09-02';
 const RANGE = { initialDate: DIA, endDate: DIA };
 const CEDO = `${DIA}T00:01:00`;
 
-const ocupado = (time: string) => ({
-  dayLocal: DIA, timeLocal: time, isBusy: true, requiresManualValidation: false,
-});
 const horas = (slots: Array<{ time: string; status: string }>, st: string) =>
   slots.filter((s) => s.status === st).map((s) => s.time);
 
@@ -36,7 +41,7 @@ test('gera a grade toda de 30 em 30, pulando o almoço', () => {
 });
 
 test('horário com paciente marcado sai como ocupado', () => {
-  const slots = buildAgenda(CFG, [ocupado('09:00')], RANGE, CEDO);
+  const slots = buildAgenda(CFG, [marcado('09:00')], RANGE, CEDO);
   assert.ok(!horas(slots, 'livre').includes('09:00'));
   assert.ok(horas(slots, 'ocupado').includes('09:00'));
 });
@@ -79,7 +84,7 @@ test('horário que já passou hoje não é oferecido', () => {
 test('agendamento que a franquia manda validar à mão não conta como livre', () => {
   const slots = buildAgenda(
     CFG,
-    [{ dayLocal: DIA, timeLocal: '09:00', isBusy: false, requiresManualValidation: true }],
+    [marcado('09:00', { isBusy: false, requiresManualValidation: true })],
     RANGE, CEDO,
   );
   assert.ok(!horas(slots, 'livre').includes('09:00'));
