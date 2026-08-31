@@ -1,26 +1,26 @@
 import { prisma } from "../lib/prisma.js"
 
-const SRC_SLUG = process.env.OLIMPIA_SRC_SLUG || "doutor-hernia-serra"
-const DST_SLUG = "doutor-hernia-olimpia"
-const DST_NAME = "Doutor Hérnia Olímpia"
-const KOMMO_SUBDOMAIN = "olimpiasp"
+const SRC_SLUG = process.env.BOITUVA_SRC_SLUG || "doutor-hernia-serra"
+const DST_SLUG = "doutor-hernia-boituva"
+const DST_NAME = "Doutor Hérnia Boituva"
+const KOMMO_SUBDOMAIN = "drherniaboituva"
 
-const PIPELINE_COMERCIAL = 14322243
-const REPLY_FIELD_ID     = 214920
-const PAUSED_FIELD_ID    = 214922
+const PIPELINE_COMERCIAL = 14329907
+const REPLY_FIELD_ID     = 218468
+const PAUSED_FIELD_ID    = 218470
 const WON_STATUS_IDS     = [ 142 ]
 const ALLOWED_STATUS_IDS = [
-    110614767, // Etapa de entrada
-    110657259, // EM QUALIFICAÇÃO
-    110657263, // AGENDADO
-    110657267, // COMPARECEU
-    110657271, // EM NEGOCIAÇÃO
-    110657275, // RETORNO PÓS-TRATAMENTO
+    110675111, // Etapa de entrada
+    110675115, // EM QUALIFICAÇÃO
+    110675119, // AGENDADO
+    110675123, // COMPARECEU
+    110675127, // EM NEGOCIAÇÃO
+    110675131, // RETORNO PÓS-TRATAMENTO
 ]
 
 const MOVE_STAGE_MAP: Record<number, { statusId: number, label: string }> = {
-    110153704: { statusId: 110657259, label: "EM QUALIFICAÇÃO" },
-    110153716: { statusId: 110657271, label: "EM NEGOCIAÇÃO"   },
+    110153704: { statusId: 110675115, label: "EM QUALIFICAÇÃO" },
+    110153716: { statusId: 110675127, label: "EM NEGOCIAÇÃO"   },
     143:       { statusId: 143,       label: "PERDIDO"         },
 }
 
@@ -46,21 +46,21 @@ const NAO_COPIAR = new Set<string>([
     "clinicAddress", "pixKey", "pixHolder",
 ])
 
-// Olímpia ainda não mandou a FICHA DA UNIDADE — nada de preço/endereço/equipe
+// Boituva ainda não mandou a FICHA DA UNIDADE — nada de preço/endereço/equipe
 // herdado da Serra pode sobrar nos textos.
 function limparTextos(texto: string): string {
     return texto
-        .replace(/Doutor Hérnia Serra/g, "Doutor Hérnia Olímpia")
-        .replace(/unidade Serra/g, "unidade Olímpia")
-        .replace(/Imperatriz/g, "Olímpia")
-        .replace(/\bSerra\b/g, "Olímpia")
+        .replace(/Doutor Hérnia Serra/g, "Doutor Hérnia Boituva")
+        .replace(/unidade Serra/g, "unidade Boituva")
+        .replace(/Imperatriz/g, "Boituva")
+        .replace(/\bSerra\b/g, "Boituva")
         .replace(/R\$ ?350/g, "R$ [valor a confirmar — aguardando ficha da unidade]")
         .replace(/R\$ ?250/g, "R$ [valor à vista a confirmar — aguardando ficha da unidade]")
         .replace(/R\$ ?150/g, "R$ [valor à vista a confirmar — aguardando ficha da unidade]")
 }
 
 const DEMOGRAFIA_STUB =
-    "PERFIL DA CIDADE — OLÍMPIA/SP\n" +
+    "PERFIL DA CIDADE — BOITUVA/SP\n" +
     "• (perfil demográfico a preencher — aguardando ficha da unidade)"
 
 type Passo = { kind?: string, params?: Record<string, unknown> }
@@ -90,12 +90,14 @@ function remapear(passos: Passo[]): { passos: Passo[], trocados: number } {
 }
 
 async function main() {
-    const token        = process.env.OLIMPIA_KOMMO_TOKEN
-    const anthropicKey = process.env.OLIMPIA_ANTHROPIC_KEY
-    if (!token) throw new Error("Faltou OLIMPIA_KOMMO_TOKEN no ambiente.")
+    const token        = process.env.BOITUVA_KOMMO_TOKEN
+    const anthropicKey = process.env.BOITUVA_ANTHROPIC_KEY
+    if (!token) throw new Error("Faltou BOITUVA_KOMMO_TOKEN no ambiente.")
+    if (!anthropicKey) throw new Error("Faltou BOITUVA_ANTHROPIC_KEY no ambiente.")
+
     const credenciais = {
-        llmProvider: "anthropic", anthropicApiKey: anthropicKey || null,
-        anthropicModel: process.env.OLIMPIA_CLAUDE_MODEL || "claude-sonnet-5",
+        llmProvider: "anthropic", anthropicApiKey: anthropicKey,
+        anthropicModel: process.env.BOITUVA_CLAUDE_MODEL || "claude-sonnet-5",
     }
 
     const src = await prisma.unit.findUnique({
@@ -127,8 +129,8 @@ async function main() {
         kommoSubdomain: KOMMO_SUBDOMAIN,
         kommoAccessToken: token,
         ...credenciais,
-        kommoReplyFieldId:  Number(process.env.OLIMPIA_REPLY_FIELD_ID  || REPLY_FIELD_ID),
-        kommoPausedFieldId: Number(process.env.OLIMPIA_PAUSED_FIELD_ID || PAUSED_FIELD_ID),
+        kommoReplyFieldId:  Number(process.env.BOITUVA_REPLY_FIELD_ID  || REPLY_FIELD_ID),
+        kommoPausedFieldId: Number(process.env.BOITUVA_PAUSED_FIELD_ID || PAUSED_FIELD_ID),
         kommoWonStatusIds:     WON_STATUS_IDS,
         kommoAllowedStatusIds: ALLOWED_STATUS_IDS,
         // entrega DESLIGADA de propósito: sem WhatsApp ainda — kommoSalesbotId fica null
@@ -139,7 +141,7 @@ async function main() {
         include: { actions: true },
     })
     if (existente && existente.actions.length > 0) {
-        console.log(`⛔ Olímpia já existe com ${existente.actions.length} ações. Abortando pra não duplicar.`)
+        console.log(`⛔ Boituva já existe com ${existente.actions.length} ações. Abortando pra não duplicar.`)
         return
     }
 
@@ -169,14 +171,14 @@ async function main() {
 
     console.log("\n⚠️  Lembretes lado Kommo (não é banco):")
     console.log("   - As tags usadas pelas ações add_tag precisam EXISTIR na conta (string exata).")
-    console.log("   - Webhook (quando o WhatsApp chegar): https://agente-vps.doutordigitalconsultoria.com/api/webhooks/doutor-hernia-olimpia/kommo")
+    console.log("   - Webhook (quando o WhatsApp chegar): https://agente-vps.doutordigitalconsultoria.com/api/webhooks/doutor-hernia-boituva/kommo")
     console.log("   - Entrega desligada de propósito (sem número): kommoSalesbotId=null, sem webhook add_message.")
 }
 
 main()
     .then(() => prisma.$disconnect())
     .catch(async (e) => {
-        console.error("❌ replicate-olimpia falhou:", e)
+        console.error("❌ replicate-boituva falhou:", e)
         await prisma.$disconnect()
         process.exit(1)
     })
