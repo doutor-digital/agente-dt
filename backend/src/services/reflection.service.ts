@@ -32,7 +32,31 @@ function norm(s: string): string {
     .trim();
 }
 
-export function parseSuggestions(raw: string): Array<{ rule: string; why?: string }> {
+export interface Sugestao {
+  rule: string;
+  why?: string;
+  frase?: string;
+  errado?: string;
+  certo?: string;
+}
+
+/**
+ * Junta a regra com a evidência num texto só — que é o que vai pro prompt.
+ *
+ * A regra sozinha ("Confirme o agendamento de forma clara") vira lembrete que o
+ * modelo lê e não obedece. Com a frase real do paciente ao lado, ele reconhece
+ * a situação quando ela reaparece. Foi a diferença entre as lições genéricas
+ * que a reflexão vinha propondo e as que funcionaram nos testes.
+ */
+export function formatarLicao(s: Sugestao): string {
+  let t = s.rule.trim();
+  if (s.frase?.trim()) t += ` Paciente disse: "${s.frase.trim()}".`;
+  if (s.errado?.trim()) t += ` ERRADO: ${s.errado.trim()}.`;
+  if (s.certo?.trim()) t += ` CERTO: ${s.certo.trim()}.`;
+  return t.replace(/\.\.+/g, '.').replace(/\s+/g, ' ').trim();
+}
+
+export function parseSuggestions(raw: string): Sugestao[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -45,13 +69,18 @@ export function parseSuggestions(raw: string): Array<{ rule: string; why?: strin
     : Array.isArray(parsed)
       ? (parsed as unknown[])
       : [];
+  const texto = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() ? v.trim() : undefined;
   return arr
-    .map((s) => s as { rule?: unknown; why?: unknown })
+    .map((s) => s as Record<string, unknown>)
     .filter((s) => typeof s.rule === 'string' && s.rule.trim().length > 0)
     .slice(0, 5)
     .map((s) => ({
       rule: String(s.rule).trim(),
-      why: typeof s.why === 'string' ? s.why : undefined,
+      why: texto(s.why),
+      frase: texto(s.frase),
+      errado: texto(s.errado),
+      certo: texto(s.certo),
     }));
 }
 
@@ -94,14 +123,22 @@ export async function runReflectionForUnit(unit: Unit): Promise<ReflectionResult
     `Você é um analista de qualidade de atendimento de uma ${vertical(unit)}. ` +
     `Releia as conversas reais abaixo e ache PADRÕES e ERROS que se REPETEM — momentos em que a IA ` +
     `perdeu o paciente, respondeu mal, ou poderia ter conduzido melhor pro agendamento. Dê peso extra ` +
-    `às mensagens marcadas [MARCADA RUIM]. A partir dos padrões, proponha REGRAS curtas, no imperativo, ` +
+    `às mensagens marcadas [MARCADA RUIM]. A partir dos padrões, proponha regras no imperativo, ` +
     `ESPECÍFICAS desta clínica, que evitariam esses erros no futuro.\n` +
+    `CADA regra precisa vir com a EVIDÊNCIA da conversa, porque regra sem exemplo vira lembrete ` +
+    `vago que a IA lê e não obedece:\n` +
+    `- "frase": a frase do PACIENTE, copiada literalmente da conversa, no momento em que a IA ` +
+    `errou. Copie palavra por palavra; não resuma nem corrija a escrita dele.\n` +
+    `- "errado": o que a IA fez ali, em poucas palavras.\n` +
+    `- "certo": o que ela deveria ter feito, concreto o bastante pra ser imitado.\n` +
+    `Se você não achar a frase literal do paciente para uma regra, NÃO invente: deixe "frase" vazia.\n` +
     `Regras que JÁ existem (NÃO repita nem parafraseie): ` +
     `${existentes.length ? existentes.map((r) => `"${r}"`).join('; ') : '(nenhuma)'}\n` +
-    `Se NÃO houver erro gritante, ainda assim proponha de 1 a 3 MELHORIAS de condução (como ` +
-    `regras curtas) que aumentariam a chance de agendamento nesta clínica. Só retorne vazio se as ` +
+    `Se NÃO houver erro gritante, ainda assim proponha de 1 a 3 MELHORIAS de condução ` +
+    `que aumentariam a chance de agendamento nesta clínica. Só retorne vazio se as ` +
     `conversas forem pouquíssimas ou sem conteúdo útil.\n` +
-    `Responda SÓ JSON: {"suggestions":[{"rule":"<regra curta no imperativo>","why":"<1 frase do padrão>"}]}. ` +
+    `Responda SÓ JSON: {"suggestions":[{"rule":"<regra no imperativo>","why":"<1 frase do padrão>",` +
+    `"frase":"<fala literal do paciente>","errado":"<o que a IA fez>","certo":"<o que fazer>"}]}. ` +
     `No máximo 5.`;
 
   let raw = '';
@@ -129,7 +166,7 @@ export async function runReflectionForUnit(unit: Unit): Promise<ReflectionResult
     const key = norm(s.rule);
     if (!key || jaTem.has(key)) continue;
     await prisma.unitLesson.create({
-      data: { unitId: unit.id, content: s.rule, source: 'reflexao', enabled: false },
+      data: { unitId: unit.id, content: formatarLicao(s), source: 'reflexao', enabled: false },
     });
     jaTem.add(key);
     proposed++;
