@@ -9,6 +9,7 @@ import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js'
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
 import { marcarNaoEntregue } from '../agent/entrega-falha.js';
+import { tratarMensagemNaoRenderizada } from '../lib/mensagem-nao-renderizada.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 import { detectarInjecao, explicarInjecao, avisoDeInjecao } from '../services/injecao.js';
 import { mascararPii } from '../lib/pii.js';
@@ -695,6 +696,11 @@ export async function processAgent(args: {
       humanMessage = humanMessage || '[cliente mandou uma imagem, mas não foi possível ler]';
     }
   }
+
+  // O Kommo entrega um aviso de erro em inglês no lugar do conteúdo quando não
+  // consegue exibir a mensagem (erro 131060). Sem trocar aqui, a IA responde ao
+  // aviso achando que é fala do paciente — 81 vezes em 7 dias.
+  humanMessage = tratarMensagemNaoRenderizada(humanMessage);
 
   const hours = checkBusinessHours(unit);
   if (hours.enabled && !hours.isOpen && hours.outOfHoursMessage) {
