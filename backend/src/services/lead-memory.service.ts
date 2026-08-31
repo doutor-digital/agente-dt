@@ -5,6 +5,7 @@ import type { LeadMemory, Unit } from '@prisma/client';
 import { createChatOpenAI, invokeChatModel } from './openai.service.js';
 import { createKommoClient } from './kommo.service.js';
 import { HumanMessage, SystemMessage, type AIMessage } from '@langchain/core/messages';
+import { canonizarFatos } from './fatos-canonicos.js';
 
 const CAMPOS_IMPORTANTES: Array<{ chave: string; casa: RegExp }> = [
   { chave: 'queixa', casa: /queixa/i },
@@ -279,10 +280,13 @@ async function runLeadMemoryUpdate(args: {
 
     const newSummary = sanitizeSummary(parsed.summary);
     const hardFacts = await fatosDurosDoKommo(unit, leadId);
-    const newFacts = preservarFatosDeContato(factsCurrent, {
-      ...sanitizeFacts(parsed.facts),
-      ...hardFacts,
-    });
+    // Canoniza antes de gravar: o modelo escolhe o nome da chave a cada
+    // conversa, e em produção conviviam quatro nomes pra "queixa". Guardar em
+    // gavetas diferentes faz a IA reperguntar o que o paciente já respondeu.
+    const newFacts = preservarFatosDeContato(
+      factsCurrent,
+      canonizarFatos({ ...sanitizeFacts(parsed.facts), ...hardFacts }) as LeadMemoryFacts,
+    );
 
     await prisma.leadMemory.update({
       where: { unitId_leadId: { unitId: unit.id, leadId: idStr } },
