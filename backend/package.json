@@ -1,6 +1,6 @@
 {
   "name": "agente-dt-backend",
-  "version": "1.56.0",
+  "version": "1.57.0",
   "description": "Agente de automação Kommo - Backend com LangGraph + Prisma",
   "main": "dist/server.js",
   "type": "module",
