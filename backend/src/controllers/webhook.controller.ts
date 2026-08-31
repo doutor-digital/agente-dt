@@ -8,6 +8,7 @@ import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
+import { marcarNaoEntregue } from '../agent/entrega-falha.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 import { detectarInjecao, explicarInjecao, avisoDeInjecao } from '../services/injecao.js';
 import { mascararPii } from '../lib/pii.js';
@@ -937,12 +938,41 @@ export async function processAgent(args: {
             recorder,
           });
         }
+        // `lead_note` não é entrega: a resposta virou nota interna no cartão e o
+        // paciente não recebeu nada. Chamar isso de "entregue ao paciente"
+        // escondeu 963 mensagens perdidas em 14 dias — a conversa seguia e
+        // ninguém, nem a equipe nem a IA, desconfiava.
+        const naoChegou = sendResult.via === 'lead_note';
         await recorder.step({
-          kind: 'KOMMO_ACTION',
-          title: `Resposta entregue ao paciente via ${sendResult.via}`,
+          kind: naoChegou ? 'ERROR' : 'KOMMO_ACTION',
+          title: naoChegou
+            ? '🔇 Resposta NÃO chegou ao paciente — virou nota interna no cartão'
+            : `Resposta entregue ao paciente via ${sendResult.via}`,
           payload: { reply, via: sendResult.via, detail: sendResult.detail },
           latencyMs: Math.round(performance.now() - sendStart),
         });
+        if (naoChegou) {
+          // Pro próximo turno ela saber que o paciente não leu nada disso.
+          marcarNaoEntregue(unit.id, leadId, reply);
+        }
+        if (naoChegou && devoAvisar(`entrega:${unit.id}:${leadId}`)) {
+          try {
+            await createKommoClient(unit).createTask({
+              leadId,
+              text:
+                `ALERTA · ${unit.slug} · A resposta da IA NÃO chegou ao paciente ` +
+                '(virou nota interna). Responder por aqui e avisar o suporte. ' +
+                `Texto que ficou preso: "${reply.trim().slice(0, 110)}"`,
+              completeAt: Math.floor(Date.now() / 1000),
+            });
+            logger.warn({ leadId, unit: unit.slug }, 'entrega falhou — equipe avisada');
+          } catch (err) {
+            logger.warn(
+              { err: String(err), leadId, unit: unit.slug },
+              'entrega falhou e o aviso à equipe também — segue',
+            );
+          }
+        }
         if (sendResult.via === 'salesbot') {
           trackPendingReply({
             unitId: unit.id,

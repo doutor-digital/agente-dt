@@ -22,6 +22,7 @@ import {
 } from '../services/lead-memory.service.js';
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
+import { consumirNaoEntregue, renderEntregaFalha } from './entrega-falha.js';
 import {
   consultaDoLead,
   porExtenso,
@@ -1424,6 +1425,12 @@ export function composeSystemPrompt(input: ComposeInput): string {
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) blocks.push(memoryBlock);
   if (faltaBlock) blocks.push(faltaBlock);
+  // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
+  // senão continua como se tivesse falado, e o paciente não viu nada.
+  if (leadId && Number.isFinite(leadId) && leadId > 0) {
+    const entregaBlock = renderEntregaFalha(consumirNaoEntregue(unit.id, leadId));
+    if (entregaBlock) blocks.push(entregaBlock);
+  }
 
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
     blocks.push(renderConversationContext(leadId));
@@ -1493,6 +1500,12 @@ export function composeSystemPromptParts(input: ComposeInput): {
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
   );
   if (faltaBlock) dynamic.push(faltaBlock);
+  // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
+  // senão continua como se tivesse falado, e o paciente não viu nada.
+  if (leadId && Number.isFinite(leadId) && leadId > 0) {
+    const entregaBlock = renderEntregaFalha(consumirNaoEntregue(unit.id, leadId));
+    if (entregaBlock) dynamic.push(entregaBlock);
+  }
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
     dynamic.push(renderConversationContext(leadId));
   }
