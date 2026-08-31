@@ -1192,10 +1192,23 @@ export class KommoClient {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Guardar o corpo da resposta do Kommo, não só o status. Sem ele, um 400
+      // recorrente vira adivinhação: testei tamanho (400 chars passam) e emoji
+      // fora do BMP (passam) sem descobrir a causa, porque o erro só dizia
+      // "status code 400". O `detail` do Kommo diz qual campo ele recusou.
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      const corpo = axios.isAxiosError(err) ? err.response?.data : undefined;
       await recorder?.step({
         kind: 'ERROR',
         title: `❌ PATCH no campo "Resposta IA" falhou: ${msg}`,
-        payload: { leadId, replyFieldId, error: msg },
+        payload: {
+          leadId,
+          replyFieldId,
+          error: msg,
+          status,
+          respostaKommo: corpo ? JSON.stringify(corpo).slice(0, 700) : undefined,
+          tamanhoTexto: text?.length,
+        },
       });
       wrapAxiosError(err, `runSalesbot:setField(${leadId}, field=${replyFieldId})`);
     }
