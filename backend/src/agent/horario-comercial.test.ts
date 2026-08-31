@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { checkBusinessHours } from './prompt-composer.js';
+import { checkBusinessHours, fusoSeguro } from './prompt-composer.js';
 import type { Unit } from '@prisma/client';
 
 /**
@@ -72,8 +72,31 @@ test('a mensagem de fora do horário é devolvida pra quem chamar', () => {
   assert.equal(r.outOfHoursMessage, 'Voltamos amanhã.');
 });
 
-test('fuso inválido não derruba o atendimento', () => {
-  assert.doesNotThrow(() =>
-    checkBusinessHours(unidade({ businessHoursTimezone: '' }), seg(10)),
-  );
+test('fuso vazio cai no padrão', () => {
+  assert.equal(checkBusinessHours(unidade({ businessHoursTimezone: '' }), seg(10)).isOpen, true);
+});
+
+test('fuso INVÁLIDO não derruba o atendimento', () => {
+  // Antes o Intl lançava RangeError aqui e a IA morria para a unidade inteira.
+  // "America/Sao Paulo", com espaço no lugar do underscore, é o erro de
+  // digitação mais provável de quem edita a unidade no console.
+  for (const ruim of ['Marte/Olimpo', 'xxx', 'America/Sao Paulo']) {
+    assert.doesNotThrow(
+      () => checkBusinessHours(unidade({ businessHoursTimezone: ruim }), seg(10)),
+      `fuso "${ruim}" derrubou o atendimento`,
+    );
+  }
+});
+
+test('com fuso inválido, responde como se fosse o padrão', () => {
+  const bom = checkBusinessHours(unidade({}), seg(10));
+  const ruim = checkBusinessHours(unidade({ businessHoursTimezone: 'xxx' }), seg(10));
+  assert.equal(ruim.isOpen, bom.isOpen);
+});
+
+test('fusoSeguro devolve o fuso quando ele é válido', () => {
+  assert.equal(fusoSeguro('America/Boa_Vista'), 'America/Boa_Vista');
+  assert.equal(fusoSeguro('xxx'), 'America/Sao_Paulo');
+  assert.equal(fusoSeguro(null), 'America/Sao_Paulo');
+  assert.equal(fusoSeguro('  '), 'America/Sao_Paulo');
 });

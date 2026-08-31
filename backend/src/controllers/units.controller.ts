@@ -155,7 +155,25 @@ const unitInputBase = {
   businessHoursStart: z.coerce.number().int().min(0).max(23).optional(),
   businessHoursEnd: z.coerce.number().int().min(0).max(23).optional(),
   businessHoursDays: z.array(z.enum(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'])).optional(),
-  businessHoursTimezone: z.string().max(64).optional(),
+  businessHoursTimezone: z
+    .string()
+    .max(64)
+    // O campo aceitava qualquer texto, e fuso inválido lança no Intl —
+    // "America/Sao Paulo" (com espaço) salvava e derrubava o atendimento
+    // daquela unidade. Melhor recusar aqui, com o erro visível na tela.
+    .refine(
+      (tz) => {
+        if (!tz.trim()) return true;
+        try {
+          new Intl.DateTimeFormat('en-US', { timeZone: tz });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      { message: 'fuso horário inválido (ex.: America/Sao_Paulo)' },
+    )
+    .optional(),
   outOfHoursMessage: z.string().max(1000).nullable().optional(),
   followUpEnabled: z.boolean().optional(),
   followUpAfterHours: z.coerce.number().int().min(1).max(720).optional(),

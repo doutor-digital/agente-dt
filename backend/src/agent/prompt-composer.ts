@@ -40,11 +40,34 @@ export interface BusinessHoursStatus {
   outOfHoursMessage: string | null;
 }
 
+/**
+ * Fuso que o Intl aceita, ou o padrão.
+ *
+ * `Intl.DateTimeFormat` lança RangeError com fuso inválido — e como isto roda no
+ * caminho da mensagem, um erro de digitação na unidade ("America/Sao Paulo",
+ * com espaço no lugar do underscore) derrubaria o atendimento inteiro daquela
+ * clínica. O campo aceita qualquer texto: nada valida na gravação.
+ *
+ * Cair no fuso padrão desloca a janela em uma hora no pior caso. Explodir deixa
+ * o paciente sem resposta nenhuma.
+ */
+export function fusoSeguro(tz: string | null | undefined, padrao = 'America/Sao_Paulo'): string {
+  const candidato = (tz ?? '').trim();
+  if (!candidato) return padrao;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidato }).format(new Date());
+    return candidato;
+  } catch {
+    logger.warn({ tz: candidato }, 'fuso horário inválido na unidade — usando o padrão');
+    return padrao;
+  }
+}
+
 export function checkBusinessHours(unit: Unit, now: Date = new Date()): BusinessHoursStatus {
   if (!unit.businessHoursEnabled) {
     return { enabled: false, isOpen: true, outOfHoursMessage: unit.outOfHoursMessage };
   }
-  const tz = unit.businessHoursTimezone || 'America/Sao_Paulo';
+  const tz = fusoSeguro(unit.businessHoursTimezone);
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     weekday: 'short',
