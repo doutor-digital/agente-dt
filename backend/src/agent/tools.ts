@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { buildAgendaTools, hojeLocal, type EstadoAgenda } from './agenda-tools.js';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
@@ -230,10 +231,21 @@ export function buildTools({
       } catch (err) {
         const latency = Math.round(performance.now() - t0);
         const msg = err instanceof Error ? err.message : String(err);
+        // Guardar o corpo da resposta, não só o status: um "400" solto não diz
+        // se a etapa não existe, se falta campo obrigatório ou se o funil está
+        // errado — e as três coisas já aconteceram aqui.
         await recorder.step({
           kind: 'ERROR',
           title: `Falha ao mover etapa: ${msg}`,
-          payload: { leadId, statusId, error: msg },
+          payload: {
+            leadId,
+            statusId,
+            error: msg,
+            status: axios.isAxiosError(err) ? err.response?.status : undefined,
+            respostaKommo: axios.isAxiosError(err) && err.response?.data
+              ? JSON.stringify(err.response.data).slice(0, 700)
+              : undefined,
+          },
           latencyMs: latency,
         });
         return `ERRO ao mover etapa: ${msg}`;
