@@ -1,7 +1,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dentroDoHorario, semJanelaDeHorario } from './follow-up-worker.js';
+import { dentroDoHorario, inicioDaJanela, semJanelaDeHorario } from './follow-up-worker.js';
 
 /**
  * Quando o follow-up pode cobrar um lead parado.
@@ -86,4 +86,26 @@ test('unidade sem 24h e com janela impossível não envia nada', () => {
   // A janela é achatada para no máximo 08h–20h; 23:00 vira 20:00 e a abertura
   // nunca alcança o fechamento, então não sai mensagem.
   assert.equal(r, false);
+});
+
+// ------------------------------------------------- fila de candidatas
+
+test('a janela de busca é de 23 horas atrás', () => {
+  const agora = new Date('2026-09-01T10:00:00Z');
+  const corte = inicioDaJanela(agora);
+  assert.equal(corte.toISOString(), '2026-08-31T11:00:00.000Z');
+});
+
+test('conversa de dez dias atrás fica fora do corte', () => {
+  // É o defeito que travava tudo: a fila era ordenada da mais antiga para a
+  // mais nova e limitada a 60. Na Parauapebas, as 60 primeiras eram de 18 a 21
+  // de agosto — presas na fila porque estão em etapas sem regra, e por isso
+  // nunca marcadas como encerradas. As 32 conversas que ainda dava para
+  // responder estavam no fim e nunca eram alcançadas.
+  const agora = new Date('2026-09-01T10:00:00Z');
+  const corte = inicioDaJanela(agora);
+  const antiga = new Date('2026-08-21T00:27:00Z');
+  const recente = new Date('2026-09-01T09:59:00Z');
+  assert.ok(antiga < corte, 'a antiga deveria ficar fora da fila');
+  assert.ok(recente > corte, 'a recente deveria entrar na fila');
 });

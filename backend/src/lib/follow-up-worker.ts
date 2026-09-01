@@ -13,6 +13,15 @@ interface Degrau {
 
 const JANELA_WHATSAPP_MIN = 23 * 60;
 
+/**
+ * O instante a partir do qual ainda da para mandar mensagem livre no WhatsApp.
+ * Depois da janela de 24h a Meta so aceita template, entao cobrar nao e
+ * possivel — e uma conversa fora dela nao deve nem entrar na fila.
+ */
+export function inicioDaJanela(agora: Date = new Date()): Date {
+  return new Date(agora.getTime() - JANELA_WHATSAPP_MIN * 60_000);
+}
+
 interface EstadoDoLead {
   statusId: number | null;
   lossReasonId: number | null;
@@ -142,6 +151,14 @@ async function varrer(): Promise<void> {
           unitId: unit.id,
           followUpStoppedReason: null,
           convertedAt: null,
+          // Fora da janela de 24h do WhatsApp nao ha o que enviar, entao essas
+          // conversas nao podem ocupar vaga na fila. Sem este filtro o motor
+          // gastava as 60 vagas em conversas de dez dias atras — presas ali
+          // porque estao em etapas sem regra, e por isso nunca marcadas como
+          // encerradas — e as recentes, que dava para salvar, nunca chegavam a
+          // ser olhadas. Medido na Parauapebas: as 60 primeiras eram de 18 a 21
+          // de agosto, e so 32 das 304 estavam dentro da janela.
+          lastMessageAt: { gt: inicioDaJanela() },
         },
         orderBy: { lastMessageAt: 'asc' },
         take: 60,
