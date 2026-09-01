@@ -1,7 +1,7 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dentroDoHorario, inicioDaJanela, semJanelaDeHorario } from './follow-up-worker.js';
+import { campoMarcado, dentroDoHorario, inicioDaJanela, semJanelaDeHorario } from './follow-up-worker.js';
 
 /**
  * Quando o follow-up pode cobrar um lead parado.
@@ -108,4 +108,28 @@ test('conversa de dez dias atrás fica fora do corte', () => {
   const recente = new Date('2026-09-01T09:59:00Z');
   assert.ok(antiga < corte, 'a antiga deveria ficar fora da fila');
   assert.ok(recente > corte, 'a recente deveria entrar na fila');
+});
+
+// --------------------------------------------------- IA pausada
+
+test('caixa marcada é reconhecida em todos os formatos que o Kommo devolve', () => {
+  // O Kommo devolve o mesmo "marcado" de quatro jeitos, dependendo de quem
+  // preencheu: a tela, um robô ou a API. Ler só um deles faria a trava falhar
+  // em silêncio justamente quando um humano assumiu a conversa.
+  for (const marcado of [true, 'true', '1', 1]) {
+    assert.equal(campoMarcado(marcado), true, `${JSON.stringify(marcado)} deveria contar como marcado`);
+  }
+});
+
+test('caixa desmarcada, vazia ou ausente não bloqueia o follow-up', () => {
+  for (const vazio of [false, 'false', '0', 0, '', null, undefined]) {
+    assert.equal(campoMarcado(vazio), false, `${JSON.stringify(vazio)} não deveria bloquear`);
+  }
+});
+
+test('texto qualquer no campo não é lido como marcado', () => {
+  // Se alguém digitar algo no campo errado, a IA não pode parar de trabalhar
+  // achando que foi pausada.
+  assert.equal(campoMarcado('sim'), false);
+  assert.equal(campoMarcado('Pausar'), false);
 });
