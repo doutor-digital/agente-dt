@@ -1196,6 +1196,8 @@ export interface ComposeInput {
   leadMemory?: LeadMemory | null;
   lessons?: UnitLesson[];
   leadId?: number;
+  /** WhatsApp do paciente, para a IA não precisar pedir. */
+  telefone?: string | null;
   isFirstTurn?: boolean;
   consulta?: ConsultaReconciliada | null;
   estadoEtapa?: EstadoEtapaLead | null;
@@ -1301,13 +1303,31 @@ function renderEtapaLead(e: EstadoEtapaLead | null | undefined): string {
   ].join('\n'));
 }
 
-function renderConversationContext(leadId: number): string {
-  return xmlBlock('contexto_conversa', [
+/**
+ * O telefone entra aqui por um motivo medido: `cadastrar_paciente` exige
+ * telefone com DDD, e até 01/09/2026 `conversations.phone` estava vazio em
+ * 100% das conversas (só o Salesbot e o Meta gravavam; o webhook do Kommo,
+ * que é o caminho de todas as unidades, não). Sem o número no prompt, a IA
+ * pedia o telefone ao paciente — e pedia justamente na hora do pagamento:
+ * "me manda o pix que eu pago agora" virava "preciso do seu telefone com DDD".
+ * O número já é conhecido: é o WhatsApp de onde a mensagem veio.
+ */
+export function renderConversationContext(leadId: number, telefone?: string | null): string {
+  const linhas = [
     `- leadId desta conversa: **${leadId}**`,
     '- Ao chamar QUALQUER tool, use ESTE número EXATAMENTE como o argumento `leadId`.',
     '- NUNCA passe 0, NUNCA passe a string "leadId", NUNCA invente outro número.',
     `- Exemplo correto: aplicar_tag({ leadId: ${leadId}, tag: "..." }).`,
-  ].join('\n'));
+  ];
+  const fone = telefone?.trim();
+  if (fone) {
+    linhas.push(
+      `- Telefone do WhatsApp deste paciente: **${fone}**`,
+      '- Use ESTE número em `cadastrar_paciente` e `agendar_consulta`. NÃO peça o telefone a ele — você já tem.',
+      '- Só peça outro número se ELE disser que prefere ser contatado em um diferente.',
+    );
+  }
+  return xmlBlock('contexto_conversa', linhas.join('\n'));
 }
 
 /**
@@ -1412,6 +1432,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     lessons = [],
     isFirstTurn = false,
     leadId,
+    telefone = null,
     consulta = null,
     estadoEtapa = null,
   } = input;
@@ -1424,7 +1445,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     const memBlock = renderLeadMemory(leadMemory);
     if (memBlock) single.push(memBlock);
     if (leadId && Number.isFinite(leadId) && leadId > 0) {
-      single.push(renderConversationContext(leadId));
+      single.push(renderConversationContext(leadId, telefone));
     }
     const knBlock = renderKnowledge(knowledge);
     if (knBlock) single.push(knBlock);
@@ -1487,7 +1508,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   }
 
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
-    blocks.push(renderConversationContext(leadId));
+    blocks.push(renderConversationContext(leadId, telefone));
   }
 
   const globalActionsBlock = renderGlobalActions(globalActions);
@@ -1536,6 +1557,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     lessons = [],
     isFirstTurn = false,
     leadId,
+    telefone = null,
     consulta = null,
     estadoEtapa = null,
   } = input;
@@ -1558,7 +1580,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     if (entregaBlock) dynamic.push(entregaBlock);
   }
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
-    dynamic.push(renderConversationContext(leadId));
+    dynamic.push(renderConversationContext(leadId, telefone));
   }
   const knowledgeBlock = renderKnowledge(knowledge);
   if (knowledgeBlock) dynamic.push(knowledgeBlock);
@@ -1660,7 +1682,7 @@ async function loadComposeInput(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons] = await Promise.all([
+  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, telefone] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -1719,6 +1741,15 @@ async function loadComposeInput(input: {
       logger.warn({ err, unitId: input.unit.id }, 'listEnabledLessons falhou — sem aprendizados no prompt');
       return [];
     }),
+    input.leadId
+      ? prisma.conversation
+          .findUnique({
+            where: { unitId_leadId: { unitId: input.unit.id, leadId: String(input.leadId) } },
+            select: { phone: true },
+          })
+          .then((c) => c?.phone ?? null)
+          .catch(() => null)
+      : Promise.resolve(null),
   ]);
   return {
     ...input,
@@ -1732,6 +1763,7 @@ async function loadComposeInput(input: {
     consulta,
     estadoEtapa,
     lessons,
+    telefone,
   };
 }
 

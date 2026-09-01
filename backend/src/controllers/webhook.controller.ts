@@ -304,6 +304,39 @@ async function detectAndHandleConversion(
   return { converted: true, leadId, statusId };
 }
 
+/**
+ * Guarda o WhatsApp do paciente na conversa, uma vez só.
+ *
+ * `conversations.phone` estava vazio em 100% das conversas até 01/09/2026:
+ * só o Salesbot e o webhook da Meta gravavam, e o webhook do Kommo — que é o
+ * caminho de TODAS as unidades Doutor Hérnia — nunca gravou. O efeito não era
+ * cosmético: `cadastrar_paciente` exige telefone com DDD, então a IA pedia o
+ * número ao paciente, e pedia na pior hora possível. Medido em teste: "me
+ * manda o pix que eu pago agora" era respondido com "preciso confirmar seu
+ * telefone com DDD", sem mandar a chave.
+ *
+ * Só busca quando ainda não tem número guardado, então é uma chamada por
+ * conversa, não por mensagem. Falha aqui não pode derrubar o atendimento: se
+ * o Kommo não responder, seguimos sem o telefone como era antes.
+ */
+async function guardarTelefoneDoContato(
+  unit: Unit,
+  conv: { id: string; phone: string | null },
+  contactId: string | null,
+): Promise<void> {
+  if (conv.phone || !contactId) return;
+  const id = Number(contactId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  try {
+    const phone = await createKommoClient(unit).getContactPhone(id);
+    if (!phone) return;
+    await prisma.conversation.update({ where: { id: conv.id }, data: { phone } });
+    logger.debug({ unitId: unit.id, conversationId: conv.id }, 'telefone do contato guardado na conversa');
+  } catch (err) {
+    logger.warn({ err, unitId: unit.id, contactId }, 'não consegui ler o telefone do contato no Kommo');
+  }
+}
+
 export async function handleKommoWebhook(req: Request, res: Response): Promise<void> {
   const requestStart = performance.now();
 
@@ -532,6 +565,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       contactName: ctx.contactName,
       channel: 'kommo_chat',
     });
+    await guardarTelefoneDoContato(unit, conv, ctx.contactId);
     await addMessage({
       conversationId: conv.id,
       traceId: trace.id,
