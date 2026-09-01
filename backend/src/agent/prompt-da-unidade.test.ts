@@ -57,14 +57,17 @@ test('o asterisco liga para todas', () => {
 test('unidade no piloto SEM manual próprio cai no config, não fica muda', () => {
   // Sem esta regra, ligar o piloto numa unidade recém-criada deixaria a IA sem
   // instrução nenhuma — pior do que o problema que estamos consertando.
+  // `systemPrompt` e `String @default("")` no schema: unidade sem manual chega
+  // como string vazia, nunca como nulo. Testar nulo aqui seria testar um caso
+  // que o banco nao produz — e foi o que quebrou o build da v1.59.0.
   process.env.PROMPT_DA_UNIDADE_SLUGS = '*';
   assert.equal(escolherBase(unidade({ systemPrompt: '   ' }), GENERICO), GENERICO);
-  assert.equal(escolherBase(unidade({ systemPrompt: null }), GENERICO), GENERICO);
+  assert.equal(escolherBase(unidade({ systemPrompt: '' }), GENERICO), GENERICO);
 });
 
 test('sem config e sem manual, devolve indefinido em vez de string vazia', () => {
   assert.equal(escolherBase(unidade({ systemPrompt: '' }), ''), undefined);
-  assert.equal(escolherBase(unidade({ systemPrompt: null }), undefined), undefined);
+  assert.equal(escolherBase(unidade({ systemPrompt: '  ' }), undefined), undefined);
 });
 
 test('sem config, o manual da unidade é usado mesmo fora do piloto', () => {
