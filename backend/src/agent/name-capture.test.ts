@@ -129,3 +129,56 @@ test('continua recusando frase que o paciente digita no lugar do nome', () => {
 test('recusa nome longo demais para ser nome de pessoa', () => {
   assert.equal(looksLikeName('Ana Beatriz Carolina Daniela Eduarda Fabiana Gabriela'), false);
 });
+
+// ------------------------------------------------- pergunta não é nome
+
+/**
+ * Caso real, Serra, 01/09/2026 — lead #20115379.
+ *
+ * A IA perguntou "como posso te chamar?". A paciente respondeu "Vcs atendem
+ * planos de saúde?". A captura leu isso como nome e renomeou o cartão dela
+ * para "Vcs Atendem Planos 25/08/2026" — que é o formato exato que o
+ * safety-net escreve, `<nome> <data>`.
+ *
+ * Responder pergunta com pergunta é o comportamento NORMAL do paciente, não a
+ * exceção: das 4 mensagens dela, 3 eram perguntas.
+ */
+test('paciente que responde com outra pergunta não vira nome', () => {
+  const perguntas = [
+    'Vcs atendem planos de saúde?',
+    'Onde vcs ficam?',
+    'Quanto custa a consulta?',
+    'Vocês aceitam convênio?',
+    'Tem horário amanhã?',
+  ];
+  for (const p of perguntas) {
+    assert.equal(detectNameDisclosure(p, { nameWasAsked: true }), null, `virou nome: ${p}`);
+  }
+});
+
+test('mesmo sem interrogação, verbo de pergunta não vira nome', () => {
+  // Muita gente escreve sem pontuação no WhatsApp.
+  for (const p of ['Vcs atendem planos de saude', 'vcs aceitam convenio', 'vc trabalha com plano']) {
+    assert.equal(detectNameDisclosure(p, { nameWasAsked: true }), null, `virou nome: ${p}`);
+  }
+});
+
+test('as correções não quebraram os nomes que já funcionavam', () => {
+  // "Maria da Silva" quase quebrou: sem acento, o "da" do nome é igual ao verbo
+  // "dá". O conector precisa vencer a lista de verbos.
+  const nomes: Array<[string, string]> = [
+    ['Dayane', 'Dayane'],
+    ['José Carlos', 'José Carlos'],
+    ['Maria da Silva dos Santos', 'Maria da Silva dos Santos'],
+    ['Elzilene de Sales Dias Nogueira', 'Elzilene de Sales Dias Nogueira'],
+  ];
+  for (const [msg, esperado] of nomes) {
+    assert.equal(detectNameDisclosure(msg, { nameWasAsked: true }), esperado);
+  }
+});
+
+test('"meu nome é X" continua funcionando mesmo com pergunta na frase', () => {
+  // O padrão explícito roda ANTES da trava de interrogação, e deve continuar
+  // assim: quem diz o nome e emenda uma pergunta está dizendo o nome.
+  assert.equal(detectNameDisclosure('meu nome é Dayane, vcs atendem plano?'), 'Dayane');
+});
