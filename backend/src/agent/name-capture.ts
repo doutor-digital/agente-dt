@@ -14,11 +14,25 @@ const PALAVRAS_DE_QUEIXA = new Set([
   'artrose', 'bico', 'papagaio', 'travada', 'travado',
 ]);
 
+/**
+ * Verbos que aparecem nas perguntas que o paciente faz logo depois de a IA
+ * perguntar o nome. Nenhum deles e nome de gente, e todos ja apareceram em
+ * conversa real: "vcs atendem planos?", "aceita convenio?", "quanto custa?".
+ */
+const VERBOS_DE_PERGUNTA = new Set([
+  'atende', 'atendem', 'atendeu', 'aceita', 'aceitam', 'faz', 'fazem', 'trabalha',
+  'trabalham', 'custa', 'custam', 'funciona', 'funcionam', 'fica', 'ficam',
+  'cobra', 'cobram', 'demora', 'demoram', 'precisa', 'precisam',
+  'tem', 'teria', 'seria', 'poderia', 'consegue', 'conseguem', 'planos', 'plano',
+  'convenio', 'convenios', 'particular',
+]);
+
 const STOPWORDS = new Set([
   'o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas', 'meu', 'minha', 'seu', 'sua',
   'muito', 'muita', 'muitos', 'muitas', 'pouco', 'pouca', 'poucos', 'poucas',
   'meio', 'meia', 'mais', 'menos', 'todo', 'toda', 'isso', 'aquilo', 'esse',
   'essa', 'este', 'esta', 'aqui', 'ali', 'la', 'gente', 'eu', 'voce', 'ela', 'ele',
+  'vc', 'vcs', 'voces', 'voc',
   'sou', 'e', 'ser', 'esta', 'estou', 'ta', 'to', 'tem', 'tenho', 'quero',
   'queria', 'gostaria', 'preciso', 'sei', 'sinto', 'acho', 'posso', 'pode',
   'saber', 'marcar', 'agendar', 'consultar', 'com', 'sem', 'em', 'por', 'para',
@@ -59,9 +73,11 @@ export function looksLikeName(candidate: string): boolean {
   for (const w of words) {
     const n = norm(w);
     if (PALAVRAS_DE_QUEIXA.has(n)) return false;
-    // Conector ANTES de stopword: "e" está nas duas listas, e como stopword vinha
-    // primeiro, nenhum nome com "e" no meio passava.
+    // Conector ANTES de stopword E de verbo: "e" está nas duas listas, e como
+    // stopword vinha primeiro, nenhum nome com "e" no meio passava. Mesma razão
+    // vale para "da" em "Maria da Silva" — sem acento ele é igual ao verbo.
     if (CONNECTORS.has(n)) continue;
+    if (VERBOS_DE_PERGUNTA.has(n)) return false;
     if (STOPWORDS.has(n)) return false;
     if (!NAME_WORD_RE.test(w)) return false;
     if (n.length < 2) return false;
@@ -119,6 +135,11 @@ export function detectNameDisclosure(
   }
 
   if (opts.nameWasAsked) {
+    // Pergunta nao e nome. Caso real (Serra, 01/09/2026): a IA perguntou "como
+    // posso te chamar?", a paciente respondeu "Vcs atendem planos de saude?" e
+    // o cartao dela foi renomeado para "Vcs Atendem Planos 25/08/2026". O
+    // paciente responder com outra pergunta e o normal, nao a excecao.
+    if (cleaned.includes('?')) return null;
     const name = extractLeadingName(cleaned);
     if (name) return name;
   }
