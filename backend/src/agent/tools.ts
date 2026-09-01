@@ -1018,10 +1018,15 @@ export function leadFieldRuleSchema(rule: LeadFieldRule) {
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
   };
 
-  if (fieldType === 'numeric') {
+  if (fieldType === 'numeric' || fieldType === 'monetary') {
     baseSchema.value = z
       .number()
-      .describe(rule.valueHint ?? `Valor numérico pra "${rule.kommoFieldName}".`);
+      .describe(
+        rule.valueHint ??
+          (fieldType === 'monetary'
+            ? `Valor em reais pra "${rule.kommoFieldName}" — só o número, sem "R$" e sem separador de milhar (ex: 200 ou 200.50).`
+            : `Valor numérico pra "${rule.kommoFieldName}".`),
+      );
   } else if (fieldType === 'date' || fieldType === 'birthday') {
     baseSchema.value = z
       .string()

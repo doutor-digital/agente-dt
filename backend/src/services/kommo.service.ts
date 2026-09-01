@@ -40,6 +40,7 @@ export type KommoFieldType =
   | 'text'
   | 'textarea'
   | 'numeric'
+  | 'monetary'
   | 'date'
   | 'birthday'
   | 'select'
@@ -50,6 +51,7 @@ export const SUPPORTED_FIELD_TYPES: ReadonlySet<string> = new Set<KommoFieldType
   'text',
   'textarea',
   'numeric',
+  'monetary',
   'date',
   'birthday',
   'select',
@@ -176,6 +178,27 @@ const EMOJI_BMP_DOWNGRADE: ReadonlyMap<string, string> = new Map([
   ['🎉', '✨'], ['🎊', '✨'], ['✨', '✨'],
   ['📅', '✎'], ['📆', '✎'], ['🗓', '✎'], ['📝', '✎'], ['✏', '✎'],
 ]);
+
+/**
+ * Lê um valor em dinheiro do jeito que o modelo escreve.
+ *
+ * A IA transcreve o valor do comprovante como o paciente mandou: às vezes
+ * `200`, às vezes `"R$ 200,00"`, às vezes `"1.250,50"`. O Kommo só aceita
+ * número puro no PATCH. Devolve `null` quando não dá pra ler — quem chama
+ * decide o que fazer, porque inventar um valor de pagamento é pior que falhar.
+ */
+export function paraNumero(value: string | number | string[]): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (Array.isArray(value)) return null;
+  const limpo = String(value)
+    .replace(/R\$/gi, '')
+    .replace(/\s/g, '')
+    .replace(/\.(?=\d{3}(\D|$))/g, '') // separador de milhar: 1.250,50 -> 1250,50
+    .replace(',', '.');
+  if (!/^-?\d+(\.\d+)?$/.test(limpo)) return null;
+  const n = Number(limpo);
+  return Number.isFinite(n) ? n : null;
+}
 
 export function downgradeEmoji(text: string): string {
   let out = text;
@@ -619,10 +642,15 @@ export class KommoClient {
         throw new Error(`field ${fieldId} (${fieldType}) requer string, recebeu ${typeof value}`);
       }
       values = [{ value: downgradeEmoji(value) }];
-    } else if (fieldType === 'numeric') {
-      const num = typeof value === 'number' ? value : Number(value);
-      if (!Number.isFinite(num)) {
-        throw new Error(`field ${fieldId} (numeric) recebeu valor não-numérico: ${value}`);
+    } else if (fieldType === 'numeric' || fieldType === 'monetary') {
+      // `monetary` aceita o mesmo formato do `numeric` no PATCH — só o número,
+      // sem "R$" e sem separador de milhar. Ficou de fora até 01/09/2026, e o
+      // efeito era a IA não conseguir gravar "Valor pago / entrada" quando o
+      // paciente mandava o comprovante: a tool estourava com "tipo não
+      // suportado" e o campo ficava vazio no cartão.
+      const num = paraNumero(value);
+      if (num == null) {
+        throw new Error(`field ${fieldId} (${fieldType}) recebeu valor não-numérico: ${value}`);
       }
       values = [{ value: num }];
     } else if (fieldType === 'date' || fieldType === 'birthday') {
