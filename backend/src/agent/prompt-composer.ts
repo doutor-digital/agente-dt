@@ -1310,6 +1310,43 @@ function renderConversationContext(leadId: number): string {
   ].join('\n'));
 }
 
+/**
+ * Decide qual texto vira o bloco `<instrucoes_extras>`: o manual escrito na
+ * unidade ou o prompt do AgentConfig.
+ *
+ * Hoje o AgentConfig ganha, e isso é um problema medido: em 31/08/2026 as 25
+ * unidades foram conferidas uma a uma e em NENHUMA o manual da unidade chegava
+ * ao modelo. O que chegava no lugar era o texto genérico que o próprio sistema
+ * semeia quando não encontra config ativa ("Você é um agente de qualificação de
+ * leads do CRM Kommo... responda em UMA frase") — 782 caracteres cobrindo de 18
+ * a 21 mil escritos à mão.
+ *
+ * Efeito concreto: a regra de Boa Vista de pedir o comprovante antes de reservar
+ * está salva na unidade e nunca foi executada.
+ *
+ * A inversão não é ligada de uma vez porque muda o comportamento de 26 unidades
+ * no mesmo instante, e a medição no banco dourado (3 passadas) deu empate — 36
+ * contra 35 casos. O que melhorou foi a ESTABILIDADE de dois comportamentos
+ * (sinal neurológico e horário ocupado), não o placar. Então vai por unidade,
+ * com `PROMPT_DA_UNIDADE_SLUGS` (lista separada por vírgula, ou `*` para todas),
+ * do mesmo jeito que os outros pilotos.
+ */
+export function escolherBase(
+  unit: Unit,
+  agentConfigPrompt: string | undefined,
+): string | undefined {
+  const daUnidade = unit.systemPrompt?.trim();
+  const doConfig = agentConfigPrompt?.trim();
+  const raw = process.env.PROMPT_DA_UNIDADE_SLUGS ?? '';
+  const lista = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+  const ligado = lista.has('*') || lista.has(unit.slug);
+
+  // Fora do piloto, nada muda. Dentro dele, o manual da unidade ganha — e se
+  // ela não tiver manual nenhum, cai no config em vez de ficar sem instrução.
+  if (ligado) return daUnidade || doConfig || undefined;
+  return doConfig || daUnidade || undefined;
+}
+
 export function composeFlattenedPrompt(input: ComposeInput): string {
   const {
     unit,
@@ -1320,10 +1357,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
     leadFieldRules = [],
   } = input;
 
-  const customBase = (agentConfigPrompt && agentConfigPrompt.trim().length > 0
-    ? agentConfigPrompt
-    : unit.systemPrompt
-  )?.trim();
+  const customBase = escolherBase(unit, agentConfigPrompt);
 
   const blocks: string[] = [];
   blocks.push(renderPersona(unit));
@@ -1382,10 +1416,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     estadoEtapa = null,
   } = input;
 
-  const customBase = (agentConfigPrompt && agentConfigPrompt.trim().length > 0
-    ? agentConfigPrompt
-    : unit.systemPrompt
-  )?.trim();
+  const customBase = escolherBase(unit, agentConfigPrompt);
 
   if (unit.singlePromptMode) {
     const single: string[] = [];
@@ -1509,10 +1540,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     estadoEtapa = null,
   } = input;
 
-  const customBase = (agentConfigPrompt && agentConfigPrompt.trim().length > 0
-    ? agentConfigPrompt
-    : unit.systemPrompt
-  )?.trim();
+  const customBase = escolherBase(unit, agentConfigPrompt);
 
   const dynamic: string[] = [];
   const lessonsBlock = renderLessons(lessons);
