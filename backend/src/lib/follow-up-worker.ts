@@ -25,6 +25,23 @@ export function inicioDaJanela(agora: Date = new Date()): Date {
 interface EstadoDoLead {
   statusId: number | null;
   lossReasonId: number | null;
+  /** Campo "Pausar IA" marcado no cartao: um humano assumiu a conversa. */
+  pausada: boolean;
+}
+
+/**
+ * Le o valor de um campo de caixa de selecao do Kommo.
+ *
+ * O Kommo devolve marcado como `true`, `"true"`, `"1"` ou `1`, dependendo de
+ * onde o campo foi preenchido — pela tela, por robo ou pela API. Tratar so um
+ * dos formatos faria a trava de pausa falhar em silencio justamente nos casos
+ * em que ela mais importa.
+ */
+export function campoMarcado(valor: unknown): boolean {
+  if (valor === true) return true;
+  if (typeof valor === 'string') return valor === 'true' || valor === '1';
+  if (typeof valor === 'number') return valor === 1;
+  return false;
 }
 const CACHE_ETAPAS_MS = 3 * 60_000;
 const cacheEtapas = new Map<string, { em: number; mapa: Map<number, EstadoDoLead> }>();
@@ -42,10 +59,17 @@ async function etapasDosLeads(unit: {
     if (!completa) return mapa;
     const kommo = createKommoClient(completa);
     const desde = Math.floor(Date.now() / 1000) - 3 * 86_400;
-    for (const l of await kommo.listLeadsAtualizadosDesde(desde)) {
+    // Com campos, e nao so a etapa: sai de graca na mesma chamada e evita uma
+    // consulta ao Kommo por lead so para saber se a IA esta pausada.
+    const pausaId = completa.kommoPausedFieldId;
+    for (const l of await kommo.listLeadsAtualizadosComCampos(desde)) {
+      const campoPausa = pausaId
+        ? l.custom_fields_values?.find((f) => f.field_id === pausaId)
+        : undefined;
       mapa.set(l.id, {
         statusId: l.status_id ?? null,
         lossReasonId: l.loss_reason_id ?? null,
+        pausada: campoMarcado(campoPausa?.values?.[0]?.value),
       });
     }
     cacheEtapas.set(unit.id, { em: Date.now(), mapa });
@@ -167,6 +191,11 @@ async function varrer(): Promise<void> {
       for (const conv of candidatas) {
         const estado = etapas.get(Number(conv.leadId));
         if (!estado) continue;
+
+        // Pausada = um humano assumiu. Cobrar aqui e falar por cima da SDR no
+        // meio do atendimento dela. Nao marca motivo de parada de proposito: a
+        // pausa e temporaria, e quando ela sair o lead volta para a fila.
+        if (estado.pausada) continue;
 
         if (ehIntocavel(estado.lossReasonId)) {
           await prisma.conversation
