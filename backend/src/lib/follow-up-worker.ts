@@ -87,12 +87,33 @@ function paraMinutos(hhmm: string | null | undefined): number | null {
   return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
 }
 
-function dentroDoHorario(unit: {
+/**
+ * Unidades que cobram lead parado a qualquer hora e qualquer dia.
+ *
+ * A trava normal segue a agenda da CLÍNICA — segunda a sexta, 8h às 20h — o que
+ * faz sentido para marcar consulta e nenhum sentido para responder quem escreveu
+ * no domingo. Foi exatamente o que aconteceu: 15 leads entraram num domingo, a
+ * IA cumprimentou, o paciente não respondeu, e ninguém cobrou até segunda. O
+ * dono ligou para eles na mão.
+ *
+ * Fica atrás de env por unidade porque cobrar às 3 da manhã é decisão de
+ * negócio, não de código, e uma escolha errada aqui vira reclamação em 25
+ * cidades ao mesmo tempo.
+ */
+export function semJanelaDeHorario(slug: string): boolean {
+  const raw = process.env.FOLLOW_UP_24H_SLUGS ?? '';
+  const lista = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+  return lista.has('*') || lista.has(slug);
+}
+
+export function dentroDoHorario(unit: {
+  slug: string;
   spineAgendaStart: string | null;
   spineAgendaEnd: string | null;
   spineTimezone: string | null;
   spineAgendaDays: number[];
 }): boolean {
+  if (semJanelaDeHorario(unit.slug)) return true;
   const { minutos, diaSemana } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
   const dias = unit.spineAgendaDays?.length ? unit.spineAgendaDays : [1, 2, 3, 4, 5];
   if (!dias.includes(diaSemana)) return false;
