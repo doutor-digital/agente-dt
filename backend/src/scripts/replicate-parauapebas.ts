@@ -28,6 +28,11 @@ const NAO_COPIAR = new Set<string>([
     "id", "slug", "name", "createdAt", "updatedAt",
     "kommoSubdomain", "kommoAccessToken", "kommoWidgetSecret", "kommoSalesbotId",
     "kommoReplyFieldId", "kommoPausedFieldId", "kommoCommentReplyFieldId",
+    // Id de campo é POR CONTA no Kommo. Copiar estes três já quebrou produção:
+    // o resumo do handoff foi parar no campo da Serra em 15 unidades, e os
+    // campos de resposta de Instagram/Facebook apontaram pra um id inexistente
+    // em 19. Falha silenciosa: o Kommo devolve 404 e o atendimento segue.
+    "summaryCustomFieldId", "igReplyFieldId", "fbReplyFieldId",
     "kommoWonStatusIds", "kommoAllowedStatusIds", "pipelineIntents",
     "kommoWidgetReplyEnabled", "kommoSalesbotExecuteEnabled",
     "llmProvider", "anthropicApiKey", "openaiApiKey", "openaiAdminKey",

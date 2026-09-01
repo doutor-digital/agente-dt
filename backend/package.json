@@ -1,6 +1,6 @@
 {
   "name": "agente-dt-backend",
-  "version": "1.58.0",
+  "version": "1.59.0",
   "description": "Agente de automação Kommo - Backend com LangGraph + Prisma",
   "main": "dist/server.js",
   "type": "module",
@@ -20,7 +20,8 @@
     "create-unit": "tsx src/scripts/create-unit.ts",
     "promote-admin": "tsx src/scripts/promote-admin.ts",
     "seed-global-actions": "tsx src/scripts/seed-global-actions.ts",
-    "sync-whatsapp-costs": "tsx src/scripts/sync-whatsapp-costs.ts"
+    "sync-whatsapp-costs": "tsx src/scripts/sync-whatsapp-costs.ts",
+    "eval": "tsx src/eval/cli.ts"
   },
   "dependencies": {
     "@langchain/anthropic": "^1.3.29",
