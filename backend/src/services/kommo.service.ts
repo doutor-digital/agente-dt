@@ -237,10 +237,18 @@ const WIDGET_SHOW_MAX_LEN = 80;
  *
  * O upload também importa: o arquivo tem de subir com
  * `audio/ogg; codecs=opus` — ver MIME_VOZ.
+ *
+ * E O HANDLER MUDA CONFORME O CAMINHO
+ * -----------------------------------
+ * Num passo de bot GUARDADO, o handler é `send_message` — provado em
+ * 02/09/2026 com nota de voz entregue pelo número real da Imperatriz.
+ * Já na resposta ao `return_url` do widget, o Kommo recusa esse mesmo
+ * handler com `400 Unsupported handler code`, e o áudio caía em texto
+ * sem ninguém perceber. Ali o handler é `send_external_message`.
  */
 function montarHandlerDeAudio(audio: { uuid: string; name: string }): Record<string, unknown> {
   return {
-    handler: 'send_message',
+    handler: 'send_external_message',
     params: {
       type: 'external',
       text: '',
