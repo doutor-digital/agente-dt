@@ -1,6 +1,8 @@
 export interface Degrau {
   aposMin: number;
   intencao: string;
+  /** Degrau sobre pagamento: não sai para quem já pagou o antecipado. */
+  pularSePagou?: boolean;
 }
 
 export interface Preset {
@@ -85,16 +87,25 @@ export const PRESETS: Preset[] = [
       'contra R$ 350 que talvez não venha, e quem paga antes falta menos.',
     steps: [
       {
-        aposMin: 10,
+        aposMin: 5,
+        pularSePagou: true,
         intencao:
-          'Confirme o dia e a hora em uma linha e pergunte se conseguiu fazer o PIX ' +
-          'para garantir a vaga. Ofereça reenviar a chave. NÃO cobre — facilite.',
+          'Ele acabou de marcar e ainda não pagou. Uma mensagem curta, animada, ' +
+          'de quem quer garantir a vaga dele — não de quem cobra. Diga que as vagas ' +
+          'são concorridas e que o horário só fica reservado com o pagamento ' +
+          'antecipado; peça o COMPROVANTE para você travar a reserva agora. ' +
+          'Ofereça reenviar a chave Pix junto. NUNCA invente quantas vagas restam ' +
+          'nem prazo que ninguém definiu. NÃO repita o endereço nem o resumo do ' +
+          'agendamento — isso ele acabou de receber.',
       },
       {
         aposMin: 240,
+        pularSePagou: true,
         intencao:
-          'Lembre do valor antecipado (R$ 150 no PIX contra R$ 350) como vantagem dele, ' +
-          'não como cobrança. Pergunte se ficou alguma dúvida sobre a consulta.',
+          'Lembre da condição de PAGAMENTO ANTECIPADO como vantagem dele, não como ' +
+          'cobrança — e diga com todas as letras que é pagar ANTES do dia, nunca ' +
+          '"à vista", que o paciente entende como pagar no balcão. Use os valores ' +
+          'das Fontes Oficiais da SUA unidade. Pergunte se ficou alguma dúvida.',
       },
       {
         aposMin: 1200,

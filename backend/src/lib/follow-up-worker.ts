@@ -9,6 +9,15 @@ const SWEEP_MS = 60_000;
 interface Degrau {
   aposMin: number;
   intencao: string;
+  /**
+   * Degrau que fala de pagamento. Nao sai para quem ja pagou o antecipado.
+   *
+   * Existe porque pagar NAO move o lead de etapa: ele fica em AGENDADO com o
+   * campo do cartao marcado. Na Imperatriz, 8 dos 25 leads parados nessa etapa
+   * ja tinham pago — sem esta trava, quase um terco das cobrancas iria para
+   * quem acabou de pagar, que e o pior erro possivel neste ponto da conversa.
+   */
+  pularSePagou?: boolean;
 }
 
 const JANELA_WHATSAPP_MIN = 23 * 60;
@@ -27,6 +36,44 @@ interface EstadoDoLead {
   lossReasonId: number | null;
   /** Campo "Pausar IA" marcado no cartao: um humano assumiu a conversa. */
   pausada: boolean;
+  /** Ja pagou a consulta antecipada — nao pode receber cobranca. */
+  pagouAntecipado: boolean;
+}
+
+/**
+ * O paciente ja pagou o antecipado?
+ *
+ * Vai por NOME do campo, nao por id: cada conta da Kommo tem os seus, e a
+ * replicacao entre unidades nao preserva id. Os nomes reais em producao sao
+ * "✓ Consulta pg antecipado", "Pagamento antecipado" e "¤ Pagamento antecipado"
+ * — o ultimo e monetario, entao qualquer valor maior que zero ja conta como pago.
+ *
+ * Na duvida esta funcao responde `false`, e o efeito de errar para esse lado e
+ * mandar uma cobranca a mais. Errar para o outro lado seria cobrar quem pagou.
+ */
+export function pagouOAntecipado(
+  campos: Array<{ field_name?: string | null; values?: Array<{ value?: unknown }> | null }> | null | undefined,
+): boolean {
+  if (!campos) return false;
+
+  for (const c of campos) {
+    const nome = (c.field_name ?? '')
+      .toLowerCase()
+      .replace(/[^a-zà-ú ]/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!nome.includes('antecipad')) continue;
+    if (nome.includes('no dia')) continue; // "Consulta pg no dia" é o oposto
+
+    const bruto = c.values?.[0]?.value;
+    if (campoMarcado(bruto)) return true;
+    if (typeof bruto === 'string' && /^\s*(sim|s)\s*$/i.test(bruto)) return true;
+
+    // Campo monetário: qualquer valor lançado significa que entrou dinheiro.
+    const n = typeof bruto === 'number' ? bruto : Number(String(bruto ?? '').replace(',', '.'));
+    if (Number.isFinite(n) && n > 0) return true;
+  }
+  return false;
 }
 
 /**
@@ -70,6 +117,7 @@ async function etapasDosLeads(unit: {
         statusId: l.status_id ?? null,
         lossReasonId: l.loss_reason_id ?? null,
         pausada: campoMarcado(campoPausa?.values?.[0]?.value),
+        pagouAntecipado: pagouOAntecipado(l.custom_fields_values),
       });
     }
     cacheEtapas.set(unit.id, { em: Date.now(), mapa });
@@ -219,6 +267,16 @@ async function varrer(): Promise<void> {
         }
         if (alvo < 0) continue;
         const proximo = ESCADA_DA_REGRA[alvo];
+
+        // Quem ja pagou nao ouve falar de pagamento. O degrau e pulado, nao
+        // adiado: se o proximo degrau tambem for de cobranca, ele cai aqui na
+        // proxima varredura pelo mesmo motivo.
+        if (proximo.pularSePagou && estado.pagouAntecipado) {
+          await prisma.conversation
+            .update({ where: { id: conv.id }, data: { followUpStep: alvo + 1 } })
+            .catch(() => undefined);
+          continue;
+        }
 
         if (conv.followUpLastAt) {
           const desdeUltimo = (Date.now() - conv.followUpLastAt.getTime()) / 60_000;
