@@ -19,6 +19,7 @@ import {
   Repeat,
   Sparkles,
   Users,
+  UserCheck,
   Wallet,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -456,11 +457,26 @@ function SofiaJourney({
   data: DashboardResponse | null;
   periodLabel: string;
 }) {
+  // O funil vai até o fim, e cada etapa mede um evento DIFERENTE.
+  //
+  // Antes o último estágio usava `convertedCount`, que é gravado quando a IA
+  // AGENDA — o mesmo evento do estágio anterior. Dava 100% de "fecharam" em
+  // toda unidade, e 100% é o número que denuncia a duplicação para qualquer
+  // pessoa que olhe com atenção. Agora comparecimento e tratamento vêm do
+  // sistema da clínica, que é quem sabe.
   const atendeu = data?.kpis.uniqueLeads ?? 0;
   const agendou = data?.kpis.aiScheduledConsults ?? 0;
-  const fechou = data?.kpis.convertedCount ?? 0;
-  const r1 = atendeu > 0 ? (agendou / atendeu) * 100 : 0;
-  const r2 = agendou > 0 ? (fechou / agendou) * 100 : 0;
+  const compareceu = data?.kpis.aiCompareceu ?? 0;
+  const fechou = data?.kpis.aiFechouTratamento ?? 0;
+  const noFuturo = data?.kpis.aiAindaNoFuturo ?? 0;
+
+  const pct = (parte: number, todo: number) => (todo > 0 ? (parte / todo) * 100 : 0);
+  const r1 = pct(agendou, atendeu);
+  // Consulta que ainda não aconteceu não pode contar como falta: o denominador
+  // do comparecimento é só o que já venceu.
+  const jaVenceu = Math.max(0, agendou - noFuturo);
+  const r2 = pct(compareceu, jaVenceu);
+  const r3 = pct(fechou, compareceu);
 
   return (
     <motion.section
@@ -486,9 +502,20 @@ function SofiaJourney({
           <JourneyStage icon={<MessageCircleMore size={13} />} value={atendeu} label="pacientes atendidos" tone="brand" />
           <JourneyConnector pct={r1} label="viraram consulta" />
           <JourneyStage icon={<Calendar size={13} />} value={agendou} label="consultas agendadas" tone="cyan" />
-          <JourneyConnector pct={r2} label="fecharam" />
-          <JourneyStage icon={<Trophy size={13} />} value={fechou} label="pacientes fechados" tone="emerald" />
+          <JourneyConnector pct={r2} label="compareceram" />
+          <JourneyStage icon={<UserCheck size={13} />} value={compareceu} label="compareceram" tone="cyan" />
+          <JourneyConnector pct={r3} label="fecharam" />
+          <JourneyStage icon={<Trophy size={13} />} value={fechou} label="fecharam tratamento" tone="emerald" />
         </div>
+
+        {noFuturo > 0 && (
+          <p className="relative mt-4 text-[11.5px] leading-relaxed text-zinc-500">
+            {noFuturo === 1
+              ? '1 consulta ainda não aconteceu, então não entra na conta de comparecimento.'
+              : `${noFuturo} consultas ainda não aconteceram, então não entram na conta de comparecimento.`}{' '}
+            Comparecimento e tratamento vêm do sistema da clínica.
+          </p>
+        )}
       </div>
     </motion.section>
   );

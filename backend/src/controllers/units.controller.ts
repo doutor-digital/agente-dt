@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { getWidgetConnection } from '../lib/widget-connection-monitor.js';
 import { createKommoClient, KommoApiError } from '../services/kommo.service.js';
+import { funilDaIA } from '../services/funil-da-ia.service.js';
 import {
   colunasEditaveisDaUnit,
   createUnit,
@@ -714,6 +715,12 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
     dailySeries.push({ date: key, messages: v.messages, conversations: v.conversations });
   }
 
+  // O desfecho real de cada consulta que a IA marcou vem da franquia — ver
+  // funil-da-ia.service. Falha ali não derruba o painel: volta zerado.
+  const funil = await funilDaIA(unit, periodStart).catch(() => ({
+    agendou: 0, compareceu: 0, fechouTratamento: 0, aindaNoFuturo: 0,
+  }));
+
   const [aiScheduledPeriod, aiScheduledTotal] = await Promise.all([
     prisma.spineLeadLink.count({
       where: { unitId: id, spineIdSchedule: { not: null }, createdAt: { gte: periodStart } },
@@ -803,6 +810,9 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
       conversionRateSdr,
       aiScheduledConsults: aiScheduledPeriod,
       aiScheduledTotal,
+      aiCompareceu: funil.compareceu,
+      aiFechouTratamento: funil.fechouTratamento,
+      aiAindaNoFuturo: funil.aindaNoFuturo,
       aiScheduledRate,
       llmCostUsd: totalCost,
       llmCallsCount,

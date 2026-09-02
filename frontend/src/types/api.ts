@@ -439,6 +439,9 @@ export interface DashboardResponse {
     conversionRateIa: number;
     conversionRateSdr: number;
     aiScheduledConsults: number;
+    aiCompareceu: number;
+    aiFechouTratamento: number;
+    aiAindaNoFuturo: number;
     aiScheduledTotal: number;
     aiScheduledRate: number;
     llmCostUsd: number;
