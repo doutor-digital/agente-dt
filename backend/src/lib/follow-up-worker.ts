@@ -327,15 +327,30 @@ async function varrer(): Promise<void> {
         });
         if (!ultima || ultima.role !== 'assistant') continue;
 
-        const temConsulta = await prisma.spineLeadLink.findFirst({
-          where: { unitId: unit.id, kommoLeadId: Number(conv.leadId), spineIdSchedule: { not: null } },
-          select: { id: true },
-        });
-        if (temConsulta) {
-          await prisma.conversation
-            .update({ where: { id: conv.id }, data: { followUpStoppedReason: 'consulta marcada' } })
-            .catch(() => undefined);
-          continue;
+        // Ter consulta marcada encerra a perseguicao por RESPOSTA, nunca a
+        // conversa sobre PAGAMENTO.
+        //
+        // Esta parada existe para o lead que marcou e continuaria ouvindo "vi
+        // que voce nao respondeu" da escada de qualificacao. Mas ela tambem
+        // calava a escada de AGENDADO, que so faz sentido para quem JA marcou:
+        // foi o terceiro motivo pelo qual o lead 25277743 ficou mudo entre
+        // marcar as 08:57 e pagar.
+        //
+        // A escada de pagamento se identifica pelos degraus com `pularSePagou`,
+        // que so existem depois do agendamento. Nessas, consulta marcada e a
+        // premissa, nao o motivo de parar.
+        const escadaDePagamento = ESCADA_DA_REGRA.some((d) => d.pularSePagou);
+        if (!escadaDePagamento) {
+          const temConsulta = await prisma.spineLeadLink.findFirst({
+            where: { unitId: unit.id, kommoLeadId: Number(conv.leadId), spineIdSchedule: { not: null } },
+            select: { id: true },
+          });
+          if (temConsulta) {
+            await prisma.conversation
+              .update({ where: { id: conv.id }, data: { followUpStoppedReason: 'consulta marcada' } })
+              .catch(() => undefined);
+            continue;
+          }
         }
 
         await enviarDegrau(unit, conv, proximo, alvo, ESCADA_DA_REGRA.length);
