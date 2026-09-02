@@ -210,6 +210,12 @@ export function downgradeEmoji(text: string): string {
   return out;
 }
 
+/**
+ * O WhatsApp só renderiza nota de voz com este mime. Com `audio/ogg` puro o
+ * arquivo chega como documento, mesmo que o handler diga `voice`.
+ */
+export const MIME_VOZ = 'audio/ogg; codecs=opus';
+
 const INTER_CHUNK_DELAY_MS = Number(process.env.KOMMO_INTER_CHUNK_MS) || 1600;
 
 /** Teto do Kommo pro `value` de cada handler `show` no continue do Salesbot. */
@@ -219,8 +225,18 @@ const WIDGET_SHOW_MAX_LEN = 80;
  * Handler de áudio do Salesbot. Não está na documentação pública — foi lido do
  * "ver código" de um passo de áudio montado no designer do Kommo.
  *
- * O `text` PRECISA ficar vazio: com texto ou botão no mesmo passo, o Kommo
- * manda o arquivo como anexo pra download em vez de mensagem de voz.
+ * DUAS COISAS PRECISAM ESTAR CERTAS, E AS DUAS SÃO SILENCIOSAS
+ * -----------------------------------------------------------
+ * 1. `text` VAZIO: com texto ou botão no mesmo passo, o Kommo manda o arquivo
+ *    como anexo para download em vez de mensagem de voz.
+ * 2. `type: 'voice'`, NÃO 'audio'. Com 'audio' o WhatsApp entrega um documento
+ *    com ícone de arquivo e o paciente precisa baixar para ouvir. Medido em
+ *    02/09/2026 com sete envios ao número do João: os que foram como 'voice'
+ *    voltaram com status `played` (que só existe para nota de voz); os 'audio'
+ *    pararam em `read`.
+ *
+ * O upload também importa: o arquivo tem de subir com
+ * `audio/ogg; codecs=opus` — ver MIME_VOZ.
  */
 function montarHandlerDeAudio(audio: { uuid: string; name: string }): Record<string, unknown> {
   return {
@@ -230,7 +246,7 @@ function montarHandlerDeAudio(audio: { uuid: string; name: string }): Record<str
       text: '',
       send_to_all_chat_sources: true,
       recipient: { type: 'all_contacts', way_of_communication: 'over_all' },
-      attachments: [{ value: audio.uuid, type: 'audio', is_external: true, name: audio.name }],
+      attachments: [{ value: audio.uuid, type: 'voice', is_external: true, name: audio.name }],
       on_error: null,
     },
   };

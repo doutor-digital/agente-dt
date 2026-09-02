@@ -5,7 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { buildThreadId } from '../agent/graph.js';
 import { TraceRecorder } from '../agent/trace-recorder.js';
-import { createKommoClient } from '../services/kommo.service.js';
+import { createKommoClient, MIME_VOZ } from '../services/kommo.service.js';
 import { findUnitBySlug } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { claimMessageId } from '../lib/dedup-cache.js';
@@ -130,7 +130,7 @@ async function gerarAudioDaResposta(
   try {
     const { audio, chars } = await sintetizarFala(unit, text);
     const name = `sofia-${Date.now()}.ogg`;
-    const uuid = await kommo.uploadToDrive(audio, name, 'audio/ogg');
+    const uuid = await kommo.uploadToDrive(audio, name, MIME_VOZ);
     await recorder.step({
       kind: 'KOMMO_ACTION',
       title: `🔊 Resposta convertida em áudio (${chars} chars, ${Math.round(audio.length / 1024)} KB)`,
