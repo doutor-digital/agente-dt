@@ -235,7 +235,19 @@ async function varrer(): Promise<void> {
         where: {
           unitId: unit.id,
           followUpStoppedReason: null,
-          convertedAt: null,
+          // Conversa CONVERTIDA continua na fila de proposito.
+          //
+          // Converter aqui quer dizer "marcou a consulta", e era o que tirava o
+          // lead da fila: o motor nasceu para perseguir quem nao marcou. So que
+          // marcar nao e a linha de chegada -- pagar e. O lead 25277743 marcou as
+          // 08:57, foi carimbado como convertido 9 segundos depois, e por isso
+          // nao recebeu nenhum dos toques entre marcar e pagar.
+          //
+          // Quem controla o que sai daqui passa a ser a REGRA DA ETAPA (quem nao
+          // tem regra e ignorado logo abaixo) e a trava de pagamento do degrau.
+          // Medido antes de mudar: 7 conversas convertidas na janela de 23h da
+          // rede inteira entram por esta porta.
+
           // Fora da janela de 24h do WhatsApp nao ha o que enviar, entao essas
           // conversas nao podem ocupar vaga na fila. Sem este filtro o motor
           // gastava as 60 vagas em conversas de dez dias atras — presas ali
