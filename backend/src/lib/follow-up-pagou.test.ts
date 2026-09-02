@@ -22,16 +22,30 @@ const campo = (nome: string, valor: unknown) => [{ field_name: nome, values: [{ 
 
 // ─── Os nomes reais, conferidos em producao ─────────────────────────────────
 
-for (const nome of [
-  '✓ Consulta pg antecipado',
-  'Pagamento antecipado',
-  '¤ Pagamento antecipado',
-  'consulta pg antecipado',
-]) {
-  test(`reconhece o campo "${nome}"`, () => {
+for (const nome of ['✓ Consulta pg antecipado', 'consulta pg antecipado', 'Consulta paga antecipado']) {
+  test(`reconhece o campo de PAGAMENTO FEITO "${nome}"`, () => {
     assert.equal(pagouOAntecipado(campo(nome, 'Sim')), true);
   });
 }
+
+/**
+ * O caso que quebrou em producao. O lead 25277743 escolheu pagar antecipado, o
+ * campo da FORMA veio "Sim", e ele ficou uma hora sem receber nada porque a
+ * trava concluiu que o dinheiro tinha entrado. Escolher nao e pagar.
+ */
+for (const nome of ['¤ Pagamento antecipado', 'Pagamento antecipado']) {
+  test(`campo de FORMA escolhida "${nome}" NAO conta como pago`, () => {
+    assert.equal(pagouOAntecipado(campo(nome, 'Sim')), false);
+  });
+}
+
+test('cartao real do lead 25277743: escolheu antecipado, nao pagou', () => {
+  const cartao = [
+    { field_name: '⚑ Origem', values: [{ value: 'Meta-Instagram' }] },
+    { field_name: '¤ Pagamento antecipado', values: [{ value: 'Sim' }] },
+  ];
+  assert.equal(pagouOAntecipado(cartao), false);
+});
 
 // ─── Os formatos que o Kommo devolve para "marcado" ─────────────────────────
 
@@ -44,13 +58,13 @@ for (const v of [true, 'true', '1', 1, 'Sim', 'sim', 'SIM']) {
 /** O campo monetario nao guarda "Sim": guarda quanto entrou. */
 for (const v of [150, '150', '250,00', '1250.50']) {
   test(`valor monetario ${JSON.stringify(v)} conta como pago`, () => {
-    assert.equal(pagouOAntecipado(campo('¤ Pagamento antecipado', v)), true);
+    assert.equal(pagouOAntecipado(campo('✓ Consulta pg antecipado', v)), true);
   });
 }
 
 test('valor monetario zerado nao conta como pago', () => {
-  assert.equal(pagouOAntecipado(campo('¤ Pagamento antecipado', 0)), false);
-  assert.equal(pagouOAntecipado(campo('¤ Pagamento antecipado', '0')), false);
+  assert.equal(pagouOAntecipado(campo('✓ Consulta pg antecipado', 0)), false);
+  assert.equal(pagouOAntecipado(campo('✓ Consulta pg antecipado', '0')), false);
 });
 
 // ─── O campo que diz o CONTRARIO ────────────────────────────────────────────
