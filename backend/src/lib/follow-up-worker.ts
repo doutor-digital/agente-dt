@@ -44,12 +44,23 @@ interface EstadoDoLead {
  * O paciente ja pagou o antecipado?
  *
  * Vai por NOME do campo, nao por id: cada conta da Kommo tem os seus, e a
- * replicacao entre unidades nao preserva id. Os nomes reais em producao sao
- * "✓ Consulta pg antecipado", "Pagamento antecipado" e "¤ Pagamento antecipado"
- * — o ultimo e monetario, entao qualquer valor maior que zero ja conta como pago.
+ * replicacao entre unidades nao preserva id.
  *
- * Na duvida esta funcao responde `false`, e o efeito de errar para esse lado e
- * mandar uma cobranca a mais. Errar para o outro lado seria cobrar quem pagou.
+ * A ARMADILHA: DOIS CAMPOS PARECIDOS, E SO UM E PROVA DE PAGAMENTO
+ * ---------------------------------------------------------------
+ * "¤ Pagamento antecipado" guarda a forma que o paciente ESCOLHEU, e vem "Sim"
+ * assim que ele diz que vai pagar por Pix — antes de o dinheiro entrar.
+ * "✓ Consulta pg antecipado" e o que a regra do comprovante e a SDR carimbam
+ * quando o pagamento aconteceu. Na Imperatriz, 19 leads tinham o primeiro sem
+ * o segundo.
+ *
+ * Aceitar o primeiro custou caro em producao: o lead 25277743 recebeu a chave
+ * Pix as 08:58 e passou uma hora sem nenhum toque, porque a trava concluiu que
+ * ele ja tinha pago. Por isso o nome do campo precisa falar da CONSULTA paga,
+ * e nao apenas de pagamento.
+ *
+ * Na duvida esta funcao responde `false`. Errar para esse lado manda uma
+ * cobranca a mais; errar para o outro deixa o lead esfriar em silencio.
  */
 export function pagouOAntecipado(
   campos: Array<{ field_name?: string | null; values?: Array<{ value?: unknown }> | null }> | null | undefined,
@@ -64,6 +75,8 @@ export function pagouOAntecipado(
       .trim();
     if (!nome.includes('antecipad')) continue;
     if (nome.includes('no dia')) continue; // "Consulta pg no dia" é o oposto
+    // Tem de falar da CONSULTA paga: "¤ Pagamento antecipado" é só a forma escolhida.
+    if (!nome.includes('consulta') && !nome.includes('pg')) continue;
 
     const bruto = c.values?.[0]?.value;
     if (campoMarcado(bruto)) return true;
