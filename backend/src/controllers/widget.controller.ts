@@ -209,9 +209,25 @@ async function processWidget(args: {
   const deliver: AgentDeliverFn = async (text) => {
     entregou = true;
     try {
-      // Paciente falou, a Sofia fala de volta. Se qualquer etapa do áudio
-      // falhar, cai em texto — nunca deixa o paciente sem resposta.
-      const audio = audioUrl ? await gerarAudioDaResposta(unit, kommo, text, recorder) : null;
+      // NÃO tente responder em áudio por aqui — o Kommo não deixa, e a
+      // tentativa custa caro.
+      //
+      // O `execute_handlers` do `return_url` aceita apenas `show` (text,
+      // buttons, buttons_url), `goto`, `conditions`, `exits`, `action` e
+      // `preset`. Não existe handler de mídia. Tanto `send_message` quanto
+      // `send_external_message` voltam com
+      // `400 {"detail":"Unsupported handler code"}` — testado nos dois em
+      // 02/09/2026, no Instituto Trauma, com áudio real do paciente.
+      //
+      // Enquanto isso ficou ligado, TODA mensagem de voz gerava um TTS e um
+      // upload para o Drive antes de ser recusada e cair em texto. O paciente
+      // nunca percebeu, e por isso a falha sobreviveu desde maio.
+      //
+      // Nota de voz FUNCIONA, mas por outro caminho: passo de bot guardado com
+      // `send_message` + `type: 'voice'` (ver montarHandlerDeAudio). O que falta
+      // ali é trocar o anexo por paciente, e isso a API de produção não permite
+      // (`PATCH /api/v4/bots/{id}` responde 405 com Bearer).
+      const audio = null;
       const detail = await kommo.continueSalesbotWidget(returnUrl, { text, audio, recorder });
       recordWidgetDelivery(unit.id, { ok: true });
       return { via: audio ? 'widget_continue_audio' : detail.via, detail };
