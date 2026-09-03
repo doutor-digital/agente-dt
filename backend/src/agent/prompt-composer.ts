@@ -335,13 +335,44 @@ function renderPipelineIntents(unit: Unit): string {
     abandoned: 'sumiu sem responder por dias',
     refused: 'recusou explicitamente',
     handoff_scheduling: 'demonstrou que quer marcar/agendar (passe o bastão pra equipe comercial)',
+    waiting_deferred:
+      'ADIOU sem dizer não — quer, mas agora não pode: vai fazer o exame antes, está viajando, ' +
+      'vai decidir com a família, sem dinheiro este mês',
   };
   const lines = Object.entries(intents).map(([intent, statusId]) => {
     const label = labelMap[intent] ?? intent;
     return `  - Cliente ${label} → chame mover_etapa({ statusId: ${statusId} })`;
   });
   return xmlBlock('pipeline_intents', `- Mova o lead automaticamente conforme detectar essas intenções:\n${lines.join('\n')}
-- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.`);
+- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.${renderEsperaRules(intents)}`);
+}
+
+/**
+ * EM ESPERA: o paciente quer, mas não agora. Existe para separar "depois" de "não":
+ * medido na Imperatriz em 03/09/2026, 2.000 cartões em PERDIDO e o motivo
+ * "Solicitado exames" escolhido 1 vez — quem adia era jogado no mesmo balde de quem
+ * recusou, e a janela do WhatsApp fechava antes de alguém voltar.
+ *
+ * A etapa só funciona com DATA: sem `◷ Retomar em` ela vira estacionamento. Por isso
+ * a ordem é rígida — salvar os dois campos (regras de captura da unidade), depois mover.
+ * A retomada na data é feita por template do Kommo (a janela de 24h já fechou); a IA
+ * volta a conversar quando o paciente responde, porque EM ESPERA está nas etapas
+ * permitidas.
+ */
+function renderEsperaRules(intents: Record<string, number>): string {
+  const statusId = intents.waiting_deferred;
+  if (!statusId) return '';
+  return `
+- EM ESPERA (statusId ${statusId}) — regras:
+  1. Só quando o paciente QUER e adia por um motivo concreto. "Não tenho interesse",
+     "não quero", "já resolvi" NÃO é espera: não mova; a equipe decide PERDIDO.
+  2. ANTES de mover, salve os dois campos com as ferramentas de captura:
+     ⊘ Motivo da espera (Exames · Vai decidir · Viajando · Financeiro agora não · Outro) e
+     ◷ Retomar em. Use a data que o paciente disser; se não disser, conte a partir de hoje:
+     Exames +10 dias · Viajando +7 · Vai decidir +3 · Financeiro agora não +30 · Outro +7.
+  3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
+     avaliação" — sem pressão e sem insistir. Só então chame mover_etapa.
+  4. Depois disso, não mande mais nada nesta conversa até a data. A retomada é automática.`;
 }
 
 function renderAgenda(unit: Unit): string {
