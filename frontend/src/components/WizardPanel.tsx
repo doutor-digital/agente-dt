@@ -10,6 +10,7 @@ import {
   Eye,
   EyeOff,
   Flame,
+  Globe,
   Loader2,
   PhoneCall,
   Plus,
@@ -29,6 +30,7 @@ import {
   KeywordList,
 } from './ui/formkit';
 import { api } from '../lib/api';
+import { FUSOS_BR, horaAgoraEm } from '../lib/fusos';
 import { useUnit } from '../context/UnitContext';
 import { useToast } from '../context/ToastContext';
 import type {
@@ -134,6 +136,12 @@ export function WizardPanel() {
   const [preview, setPreview] = useState<{ prompt: string; chars: number } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(true);
+  // Relógio da unidade: mostra "agora em Boa Vista" ao lado do fuso, atualizado a cada 30 s.
+  const [agora, setAgora] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setAgora(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   const [kommoFields, setKommoFields] = useState<KommoLeadCustomField[] | null>(null);
 
@@ -326,6 +334,40 @@ export function WizardPanel() {
               onChangeFrequency={(f) => update({ personaEmojiFrequency: f })}
             />
           </div>
+        </FeatureCard>
+
+        <FeatureCard
+          icon={<Globe size={16} className="text-amber-300" />}
+          title="Fuso horário da unidade"
+          subtitle="Vale para tudo que tem hora: horário comercial, data de entrada do lead, lembretes e a agenda da franquia."
+          enabled
+          alwaysOn
+        >
+          {(() => {
+            const tz = draft.businessHoursTimezone || 'America/Sao_Paulo';
+            const fuso = FUSOS_BR.find((f) => f.tz === tz);
+            const hora = horaAgoraEm(tz, agora);
+            const horaBrasilia = horaAgoraEm('America/Sao_Paulo', agora);
+            const diff = fuso ? Number(fuso.utc.replace('UTC', '').replace('−', '-').slice(0, 3)) + 3 : 0;
+            const relBrasilia =
+              diff === 0
+                ? 'mesma hora de Brasília'
+                : `${Math.abs(diff)} hora${Math.abs(diff) > 1 ? 's' : ''} ${diff < 0 ? 'atrás' : 'à frente'} de Brasília (${horaBrasilia})`;
+            const hint = fuso
+              ? `Agora na unidade: ${hora} · ${fuso.utc} · ${relBrasilia}.`
+              : `Fuso fora da lista (${tz}). Agora na unidade: ${hora || '—'}.`;
+            const options = FUSOS_BR.map((f) => ({ value: f.tz, label: `${f.cidade} (${f.utc})` }));
+            if (!fuso) options.unshift({ value: tz, label: tz });
+            return (
+              <SelectField
+                label="Fuso da cidade"
+                value={tz}
+                onChange={(v) => update({ businessHoursTimezone: v })}
+                options={options}
+                hint={hint}
+              />
+            );
+          })()}
         </FeatureCard>
 
         <FeatureCard

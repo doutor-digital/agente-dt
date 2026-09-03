@@ -11,6 +11,7 @@ import {
   PiArrowsClockwiseBold,
 } from 'react-icons/pi';
 import { api } from '../lib/api';
+import { FUSOS_BR } from '../lib/fusos';
 import { useUnit } from '../context/UnitContext';
 import type {
   SpineStatus,
@@ -529,11 +530,11 @@ function Horarios({ form, setForm }: { form: Form; setForm: (f: Form) => void })
               value={form.spineTimezone}
               onChange={(e) => setForm({ ...form, spineTimezone: e.target.value })}
             >
-              <option value="America/Sao_Paulo">Brasília (UTC-3)</option>
-              <option value="America/Manaus">Manaus (UTC-4)</option>
-              <option value="America/Rio_Branco">Rio Branco (UTC-5)</option>
-              <option value="America/Belem">Belém (UTC-3)</option>
-              <option value="America/Fortaleza">Fortaleza (UTC-3)</option>
+              {FUSOS_BR.map((f) => (
+                <option key={f.tz} value={f.tz}>
+                  {f.cidade} ({f.utc})
+                </option>
+              ))}
             </select>
             <span className="mt-1 block text-[11px] leading-relaxed text-zinc-500">
               A franquia responde em UTC. Errar aqui marca o paciente na hora errada.
