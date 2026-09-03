@@ -22,6 +22,7 @@ import {
   resolveOpenAIApiKey,
 } from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
 
 const SANDBOX_LEAD_ID = 999_000_001;
 
@@ -88,6 +89,7 @@ function extractUsage(ai: AIMessageLike): { prompt: number; completion: number; 
 function buildSandboxTools(opts: {
   onCall: (a: SandboxAction) => void;
   leadFieldRules: LeadFieldRule[];
+  tz: string;
 }) {
   const aplicar_tag = new DynamicStructuredTool({
     name: 'aplicar_tag',
@@ -148,7 +150,7 @@ function buildSandboxTools(opts: {
     }),
     func: async ({ leadId, nome }) => {
       const dateBR = new Intl.DateTimeFormat('pt-BR', {
-        timeZone: 'America/Sao_Paulo',
+        timeZone: opts.tz,
         day: '2-digit',
         month: '2-digit',
         year: 'numeric',
@@ -367,6 +369,7 @@ operador revisar.`;
   const leadFieldRules = await listEnabledLeadFieldRules(unit.id);
   const tools = buildSandboxTools({
     leadFieldRules,
+    tz: fusoDaUnidade(unit),
     onCall: (a) => {
       actions.push(a);
       timeline.push({

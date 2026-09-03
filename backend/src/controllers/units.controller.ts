@@ -282,6 +282,9 @@ export async function updateUnitHandler(req: Request, res: Response): Promise<vo
   }
   try {
     const cleaned = dropMaskedSecrets(parsed.data);
+    // Um fuso só por unidade: quem muda um dos dois campos históricos muda os dois.
+    if (cleaned.businessHoursTimezone && !cleaned.spineTimezone) cleaned.spineTimezone = cleaned.businessHoursTimezone;
+    else if (cleaned.spineTimezone && !cleaned.businessHoursTimezone) cleaned.businessHoursTimezone = cleaned.spineTimezone;
     const unit = await updateUnit(id, cleaned);
     logger.info({ id: unit.id }, 'unit atualizada');
     res.json({ unit: maskUnitSecrets(unit) });

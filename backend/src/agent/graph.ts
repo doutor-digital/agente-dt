@@ -43,6 +43,7 @@ import {
   LlmTimeoutError,
   FALLBACK_TETO,
 } from './llm-policy.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
 
 let checkpointerInstance: PostgresSaver | null = null;
 
@@ -346,7 +347,7 @@ export async function buildAgentGraph(
     const isFirstTurn = humanCount === 1 && aiCount === 0;
 
     if (isFirstTurn && kommoClient && state.leadId && ENTRY_DATE_TAG_SLUGS.has(unit.slug)) {
-      void maybeAddEntryDateTag({ recorder, kommo: kommoClient, leadId: state.leadId });
+      void maybeAddEntryDateTag({ recorder, kommo: kommoClient, leadId: state.leadId, tz: fusoDaUnidade(unit) });
     }
 
     let systemMessage: SystemMessage;
@@ -550,6 +551,7 @@ export async function buildAgentGraph(
             kommo: kommoClient,
             leadId: state.leadId,
             name: detected,
+            tz: fusoDaUnidade(unit),
           });
         }
       }
@@ -591,11 +593,13 @@ async function maybeAutoUpdateLeadTitle({
   kommo,
   leadId,
   name,
+  tz,
 }: {
   recorder: TraceRecorder;
   kommo: ReturnType<typeof createKommoClient>;
   leadId: number;
   name: string;
+  tz: string;
 }): Promise<void> {
   const t0 = performance.now();
   if (!looksLikeName(name)) {
@@ -626,7 +630,7 @@ async function maybeAutoUpdateLeadTitle({
     }
     const createdAtMs = (lead.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
     const dateBR = new Intl.DateTimeFormat('pt-BR', {
-      timeZone: 'America/Sao_Paulo',
+      timeZone: tz,
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
@@ -656,17 +660,19 @@ async function maybeAddEntryDateTag({
   recorder,
   kommo,
   leadId,
+  tz,
 }: {
   recorder: TraceRecorder;
   kommo: ReturnType<typeof createKommoClient>;
   leadId: number;
+  tz: string;
 }): Promise<void> {
   const t0 = performance.now();
   try {
     const lead = await kommo.getLead(leadId);
     const createdAtMs = (lead.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
     const dateTag = new Intl.DateTimeFormat('pt-BR', {
-      timeZone: 'America/Sao_Paulo',
+      timeZone: tz,
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',

@@ -918,11 +918,12 @@ export class KommoClient {
   async updateLeadTitleWithDate(
     leadId: number,
     nome: string,
+    tz: string = 'America/Sao_Paulo',
   ): Promise<{ previous: string | null; desired: string; changed: boolean }> {
     const lead = await this.getLead(leadId);
     const createdAtMs = (lead.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
     const dateBR = new Intl.DateTimeFormat('pt-BR', {
-      timeZone: 'America/Sao_Paulo',
+      timeZone: tz,
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
