@@ -12,6 +12,7 @@ import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js
 import { logger } from '../lib/logger.js';
 import { looksLikeName } from './name-capture.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
 const STATUS_GANHO = 142;
@@ -461,6 +462,7 @@ export function buildTools({
         const { previous, desired, changed } = await kommo.updateLeadTitleWithDate(
           leadId,
           nome,
+          fusoDaUnidade(unit),
         );
         const latency = Math.round(performance.now() - t0);
         if (!changed) {
@@ -981,7 +983,7 @@ export function buildTools({
     : null;
 
   const dynamicTools = leadFieldRules.map((rule) =>
-    buildLeadFieldRuleTool({ rule, kommo, recorder }),
+    buildLeadFieldRuleTool({ rule, kommo, recorder, tz: fusoDaUnidade(unit) }),
   );
 
   const nativeTools: DynamicStructuredTool[] = [
@@ -1076,10 +1078,12 @@ function buildLeadFieldRuleTool({
   rule,
   kommo,
   recorder,
+  tz,
 }: {
   rule: LeadFieldRule;
   kommo: KommoClient;
   recorder: TraceRecorder;
+  tz: string;
 }) {
   const fieldType = rule.kommoFieldType as KommoFieldType;
   const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
@@ -1121,6 +1125,7 @@ function buildLeadFieldRuleTool({
             const { previous, desired, changed } = await kommo.updateLeadTitleWithDate(
               leadId,
               value.trim(),
+              tz,
             );
             await recorder.step({
               kind: 'KOMMO_ACTION',
