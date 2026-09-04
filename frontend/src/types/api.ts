@@ -1282,3 +1282,46 @@ export interface SaudeIa {
   resumo: { ok: number; parcial: number; falta: number; total: number };
   grupos: GrupoSaude[];
 }
+
+/** Livro de resultados (GET /units/:id/resultados). */
+export interface ResumoResultados {
+  dias: number;
+  conversas: number;
+  comPaciente: number;
+  agendouIa: number;
+  agendouKommo: number;
+  agendouQualquer: number;
+  compareceu: number;
+  faltou: number;
+  cancelou: number;
+  agendadoFuturo: number;
+  semRegistro: number;
+  pendentes: number;
+  pgAntecipadoSim: number;
+  pgAntecipadoNao: number;
+  taxaMarcacao: number | null;
+  taxaComparecimento: number | null;
+  mediaHorariosOferecidosQuemMarcou: number | null;
+  mediaHorariosOferecidosQuemNao: number | null;
+  mediaFollowUpsQuemMarcou: number | null;
+  mediaFollowUpsQuemNao: number | null;
+}
+
+/** Contadores vivos por comportamento (GET /units/:id/funcionamento). */
+export interface Funcionamento {
+  dias: number;
+  rastros: { total: number; respondidos: number; pausados: number; etapaNaoPermitida: number; agrupados: number; encerramentoRepetido: number; foraDoHorario: number };
+  contadores: Record<string, number>;
+  sondagem: { consultas: number; sondados: number; recusados: number; oferecidos: number };
+  conversas: { total: number; handoffs: number; convertidas: number; reativacoes: number; followUps: number };
+  agenda: {
+    fuso: string;
+    hoje: string;
+    bloqueiosFuturos: number;
+    feriadosProximos: Array<{ data: string; nome: string }>;
+    janela: { dias: number[]; inicio: string; fim: string; almoco: Array<string | null>; porDia: Record<string, { start: string; end: string }> | null; slot: number };
+    coalesceMs: number;
+  };
+  llm: { chamadas: number; custoUsd: number };
+  resultados: ResumoResultados;
+}
