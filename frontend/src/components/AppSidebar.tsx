@@ -48,7 +48,7 @@ export function AppSidebar({
     <aside
       className={clsx(
         'shrink-0 h-full flex flex-col border-r border-zinc-800 bg-zinc-900/50 transition-[width] duration-200 ease-out',
-        collapsed ? 'w-16' : 'w-[248px]',
+        collapsed ? 'w-16' : 'w-62',
       )}
     >
       <div
@@ -56,7 +56,7 @@ export function AppSidebar({
           'h-14 shrink-0 flex items-center gap-2.5 border-b border-zinc-800',
           collapsed ? 'justify-center px-2' : 'px-3',
         )}
-      >
+      > 
         <button
           type="button"
           onClick={onBackToHub}
@@ -187,7 +187,7 @@ function NavLink({
       >
         <span
           className={clsx(
-            'absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-brand-400 transition-opacity',
+            'absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-brand-400 transition-opacity',
             active ? 'opacity-100' : 'opacity-0',
           )}
         />

@@ -32,9 +32,6 @@ const LlmCallsPanel = lazy(() =>
 const PromptsPanel = lazy(() =>
   import('./components/PromptsPanel').then((m) => ({ default: m.PromptsPanel })),
 );
-const IntegrationsPanel = lazy(() =>
-  import('./components/IntegrationsPanel').then((m) => ({ default: m.IntegrationsPanel })),
-);
 const WizardPanel = lazy(() =>
   import('./components/WizardPanel').then((m) => ({ default: m.WizardPanel })),
 );
@@ -50,7 +47,6 @@ const FontesPanel = lazy(() =>
 const AcoesPanel = lazy(() =>
   import('./components/AcoesPanel').then((m) => ({ default: m.AcoesPanel })),
 );
-const SocialCommentsPanel = lazy(() => import('./components/SocialCommentsPanel'));
 const AgendaPanel = lazy(() => import('./components/AgendaPanel'));
 const FollowUpPanel = lazy(() => import('./components/FollowUpPanel'));
 const CrmFranquiaPanel = lazy(() => import('./components/CrmFranquiaPanel'));
@@ -157,7 +153,6 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
             {tab === 'conversations' && <ConversationsPanel />}
             {tab === 'llm' && <LlmCallsPanel />}
             {tab === 'prompts' && <PromptsPanel />}
-            {tab === 'integrations' && <IntegrationsPanel />}
             {tab === 'wizard' && <WizardPanel />}
             {tab === 'playground' && <PlaygroundPanel />}
             {tab === 'training' && <TrainingPanel onNavigate={navigate} />}
@@ -168,8 +163,6 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
             {tab === 'reports' && <ReportsPanel />}
             {tab === 'whatsapp' && <WhatsappCostsPanel />}
             {tab === 'captures' && <CapturesPanel />}
-            {tab === 'instagram' && <SocialCommentsPanel platform="instagram" />}
-            {tab === 'facebook' && <SocialCommentsPanel platform="facebook" />}
             {tab === 'agenda' && <AgendaPanel />}
             {tab === 'follow-up' && <FollowUpPanel />}
             {tab === 'crm-franquia' && <CrmFranquiaPanel />}
