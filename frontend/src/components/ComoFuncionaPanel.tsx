@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowUpRight, ListChecks, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowUpRight, Loader2, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
@@ -14,6 +14,10 @@ import type { Funcionamento, Unit } from '../types/api';
  * aparece com o que faz, por que existe (o caso real que o motivou), onde se
  * controla, se está ligado nesta unidade, e quantas vezes aconteceu no período.
  * Comportamento sem número é comportamento que ninguém sabe se está acontecendo.
+ *
+ * Visual segue a tela "Saúde da IA" (mesma largura, mesmos cards, mesmos chips),
+ * a pedido: as duas telas são irmãs — uma diz o que está ligado, a outra o que
+ * cada coisa faz e quanto aconteceu.
  */
 
 type Estado = 'ligado' | 'desligado' | 'sempre';
@@ -39,7 +43,7 @@ const n = (v: number, um: string, varios: string) => `${v} ${v === 1 ? um : vari
 
 const GRUPOS: Grupo[] = [
   {
-    titulo: '1. Quando a mensagem chega',
+    titulo: '1 · Quando a mensagem chega',
     descricao: 'Antes de pensar em resposta, a IA decide se e quando responder.',
     itens: [
       {
@@ -82,12 +86,12 @@ const GRUPOS: Grupo[] = [
     ],
   },
   {
-    titulo: '2. Entendendo o paciente',
+    titulo: '2 · Entendendo o paciente',
     descricao: 'O que a IA sabe antes de escrever: data de hoje, quem é o paciente, o que ele já disse.',
     itens: [
       {
         titulo: 'Calendário com dia da semana e feriados',
-        oQueFaz: 'A IA recebe "hoje é sexta-feira, 04/09/2026" e os próximos 21 dias com o dia da semana calculado. Ferramentas devolvem "terça-feira, 08/09".',
+        oQueFaz: 'A IA recebe "hoje é sexta-feira, 04/09/2026" e os próximos 21 dias com o dia da semana calculado. As ferramentas devolvem "terça-feira, 08/09".',
         porQue: 'Serra, 02/09: confirmou "segunda-feira, 08/09". Era terça. O modelo usava o calendário de 2025.',
         estado: sempre,
         contador: (f) => `hoje ${f.agenda.hoje.slice(8, 10)}/${f.agenda.hoje.slice(5, 7)} no fuso ${f.agenda.fuso}`,
@@ -119,7 +123,7 @@ const GRUPOS: Grupo[] = [
     ],
   },
   {
-    titulo: '3. Respondendo',
+    titulo: '3 · Respondendo',
     descricao: 'Regras que valem em toda resposta, antes de ela sair.',
     itens: [
       {
@@ -132,7 +136,7 @@ const GRUPOS: Grupo[] = [
       },
       {
         titulo: 'Trava de preço',
-        oQueFaz: 'Preço que não está nas fontes é corrigido antes de sair. A confirmação de agendamento usa a linha de valor da unidade: "R$ X antecipado (pago antes) ou R$ Y no dia".',
+        oQueFaz: 'Preço que não está nas fontes é corrigido antes de sair. A confirmação usa a linha de valor da unidade: "R$ X antecipado (pago antes) ou R$ Y no dia".',
         porQue: 'Serra, 02/09: "R$ 220 no PIX à vista" para paciente particular. O modelo da mensagem tinha um valor fixo no código.',
         onde: { tab: 'sources', rotulo: 'Fontes › Produtos e valores' },
         estado: sempre,
@@ -149,7 +153,7 @@ const GRUPOS: Grupo[] = [
     ],
   },
   {
-    titulo: '4. Agendando na franquia',
+    titulo: '4 · Agendando na franquia',
     descricao: 'A parte que vira dinheiro: horários reais, confirmados com o sistema da clínica.',
     itens: [
       {
@@ -198,7 +202,7 @@ const GRUPOS: Grupo[] = [
     ],
   },
   {
-    titulo: '5. Depois da conversa',
+    titulo: '5 · Depois da conversa',
     descricao: 'O que acontece quando o paciente para de responder ou quando um humano entra.',
     itens: [
       {
@@ -258,7 +262,7 @@ const GRUPOS: Grupo[] = [
     ],
   },
   {
-    titulo: '6. Entregando a resposta',
+    titulo: '6 · Entregando a resposta',
     descricao: 'O caminho da resposta até o WhatsApp do paciente, e o que acontece quando o Kommo falha.',
     itens: [
       {
@@ -289,11 +293,43 @@ const GRUPOS: Grupo[] = [
   },
 ];
 
-const BADGE: Record<Estado, { rotulo: string; cls: string }> = {
-  ligado: { rotulo: 'ligado', cls: 'bg-emerald-400/10 text-emerald-300 ring-emerald-400/20' },
-  desligado: { rotulo: 'desligado', cls: 'bg-rose-400/10 text-rose-300 ring-rose-400/20' },
-  sempre: { rotulo: 'sempre ativo', cls: 'bg-sky-400/10 text-sky-300 ring-sky-400/20' },
+const BADGE: Record<Estado, { rotulo: string; cls: string; ponto: string }> = {
+  ligado: { rotulo: 'ligado', cls: 'bg-emerald-400/10 text-emerald-300 ring-emerald-400/20', ponto: 'bg-emerald-400' },
+  desligado: { rotulo: 'desligado', cls: 'bg-rose-400/10 text-rose-300 ring-rose-400/20', ponto: 'bg-rose-400' },
+  sempre: { rotulo: 'sempre ativo', cls: 'bg-sky-400/10 text-sky-300 ring-sky-400/20', ponto: 'bg-sky-400' },
 };
+
+function Cartao({ item, unit, f, onNavigate }: { item: Item; unit: Unit | null; f: Funcionamento | null; onNavigate: (tab: AppTab) => void }) {
+  const estado = unit ? item.estado(unit) : 'sempre';
+  const b = BADGE[estado];
+  const contador = f ? item.contador(f) : null;
+  return (
+    <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <h4 className="text-[13.5px] font-medium text-slate-100">{item.titulo}</h4>
+        <span className={clsx('shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em] ring-1 ring-inset', b.cls)}>
+          {b.rotulo}
+        </span>
+      </div>
+      <p className="mt-2 text-[12px] leading-relaxed text-slate-400">{item.oQueFaz}</p>
+      <p className="mt-2 text-[12px] leading-relaxed text-slate-500">
+        <span className="text-slate-400">Por que existe:</span> {item.porQue}
+      </p>
+      {contador ? (
+        <p className="mt-2.5 rounded-lg bg-white/[0.03] px-2.5 py-2 text-[11.5px] leading-relaxed text-slate-300 ring-1 ring-inset ring-white/[0.06] tabular-nums">
+          <span className="text-slate-500">Últimos {f?.dias} dias:</span> {contador}
+        </p>
+      ) : null}
+      {item.onde ? (
+        <button type="button" onClick={() => onNavigate(item.onde!.tab)} className="mt-2.5 inline-flex items-center gap-1 text-[11.5px] text-sky-300 transition hover:text-sky-200">
+          Controlar em {item.onde.rotulo} <ArrowUpRight className="h-3 w-3" />
+        </button>
+      ) : (
+        <p className="mt-2.5 font-mono text-[10.5px] text-slate-600">regra do código · igual em todas as unidades</p>
+      )}
+    </div>
+  );
+}
 
 export function ComoFuncionaPanel({ onNavigate }: { onNavigate: (tab: AppTab) => void }) {
   const { selectedUnit } = useUnit();
@@ -321,94 +357,92 @@ export function ComoFuncionaPanel({ onNavigate }: { onNavigate: (tab: AppTab) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unitId, dias]);
 
+  if (!unitId) {
+    return <div className="flex-1 overflow-y-auto p-6 text-[13px] text-slate-500">Escolha uma unidade para ver como a IA dela funciona.</div>;
+  }
+  if (carregando && !f) {
+    return (
+      <div className="flex flex-1 items-center justify-center py-20">
+        <Loader2 className="h-5 w-5 animate-spin text-white/30" />
+      </div>
+    );
+  }
+
+  const chips: Array<[string, number, string]> = f
+    ? [
+        ['recebidas', f.rastros.total, 'bg-slate-400'],
+        ['respondidas', f.rastros.respondidos, 'bg-emerald-400'],
+        ['com a IA pausada', f.rastros.pausados, 'bg-amber-400'],
+        ['fora das etapas dela', f.rastros.etapaNaoPermitida, 'bg-zinc-500'],
+        ['agrupadas em rajada', f.rastros.agrupados, 'bg-sky-400'],
+        ['sem eco de despedida', f.rastros.encerramentoRepetido, 'bg-violet-400'],
+      ]
+    : [];
+
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold text-zinc-100">
-            <ListChecks size={18} className="text-sky-300" /> Como a Sofia funciona
-          </h1>
-          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 pb-16">
+        <header>
+          <h2 className="text-[19px] font-semibold tracking-tight text-slate-100">Como a Sofia funciona</h2>
+          <p className="mt-1 max-w-[68ch] text-[12.5px] leading-relaxed text-slate-500">
             Cada comportamento da IA, do jeito que acontece de verdade: o que faz, por que existe, onde se controla e
-            quantas vezes aconteceu nesta unidade no período. O que está marcado como <span className="text-sky-300">sempre ativo</span> vive
+            quantas vezes aconteceu nesta unidade no período. O que está como <span className="text-sky-300">sempre ativo</span> vive
             no código e vale para todas as unidades.
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {[7, 30].map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => setDias(p)}
-              className={clsx(
-                'rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-colors',
-                dias === p ? 'bg-sky-500/10 text-sky-300 ring-sky-500/25' : 'text-zinc-500 ring-zinc-800 hover:text-zinc-300',
-              )}
-            >
-              {p} dias
-            </button>
-          ))}
-          <button type="button" onClick={() => void carregar()} className="ml-2 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-zinc-300 ring-1 ring-zinc-800 hover:text-zinc-100">
-            {carregando ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Atualizar
-          </button>
-        </div>
-      </header>
+        </header>
 
-      {erro ? <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{erro}</div> : null}
+        {erro ? <div className="rounded-xl border border-rose-400/20 bg-rose-400/[0.05] p-4 text-[12.5px] text-rose-200">{erro}</div> : null}
 
-      {f ? (
-        <section className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {[
-            ['Mensagens recebidas', f.rastros.total],
-            ['Respondidas pela IA', f.rastros.respondidos],
-            ['Com a IA pausada', f.rastros.pausados],
-            ['Fora das etapas dela', f.rastros.etapaNaoPermitida],
-            ['Agrupadas em rajada', f.rastros.agrupados],
-            ['Sem eco de despedida', f.rastros.encerramentoRepetido],
-          ].map(([r, v]) => (
-            <div key={String(r)} className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3">
-              <div className="text-[10.5px] uppercase tracking-[0.08em] text-slate-500">{r}</div>
-              <div className="mt-1 text-xl font-semibold tabular-nums text-slate-100">{v}</div>
+        <div className="flex flex-wrap items-center gap-3">
+          {chips.map(([rotulo, valor, ponto]) => (
+            <div key={rotulo} className="flex items-center gap-2 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2">
+              <span className={clsx('h-2 w-2 rounded-full', ponto)} />
+              <span className="font-mono text-[15px] tabular-nums text-slate-100">{valor}</span>
+              <span className="text-[11.5px] text-slate-500">{rotulo}</span>
             </div>
           ))}
-        </section>
-      ) : null}
-
-      {GRUPOS.map((g) => (
-        <section key={g.titulo} className="surface p-6">
-          <h2 className="text-sm font-semibold text-zinc-100">{g.titulo}</h2>
-          <p className="mt-1 text-[12.5px] text-zinc-500">{g.descricao}</p>
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {g.itens.map((it) => {
-              const estado = selectedUnit ? it.estado(selectedUnit) : 'sempre';
-              const b = BADGE[estado];
-              const contador = f ? it.contador(f) : null;
-              return (
-                <div key={it.titulo} className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <h4 className="text-[13.5px] font-medium text-slate-100">{it.titulo}</h4>
-                    <span className={clsx('shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em] ring-1 ring-inset', b.cls)}>{b.rotulo}</span>
-                  </div>
-                  <p className="mt-2 text-[12px] leading-relaxed text-slate-400">{it.oQueFaz}</p>
-                  <p className="mt-2 text-[11.5px] leading-relaxed text-slate-500"><span className="text-slate-400">Por que existe:</span> {it.porQue}</p>
-                  {contador ? (
-                    <p className="mt-2.5 rounded-lg bg-emerald-400/[0.07] px-2.5 py-2 text-[11.5px] leading-relaxed text-emerald-100 ring-1 ring-inset ring-emerald-400/15 tabular-nums">
-                      Nos últimos {f?.dias} dias: {contador}
-                    </p>
-                  ) : null}
-                  {it.onde ? (
-                    <button type="button" onClick={() => onNavigate(it.onde!.tab)} className="mt-2.5 inline-flex items-center gap-1 text-[11.5px] text-sky-300 hover:text-sky-200">
-                      Controlar em {it.onde.rotulo} <ArrowUpRight size={12} />
-                    </button>
-                  ) : (
-                    <p className="mt-2.5 text-[11px] text-slate-600">Regra do código, igual em todas as unidades.</p>
-                  )}
-                </div>
-              );
-            })}
+          <div className="ml-auto flex items-center gap-1.5">
+            {[7, 30].map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setDias(p)}
+                className={clsx(
+                  'rounded-md border px-2.5 py-1.5 text-[12px] transition',
+                  dias === p ? 'border-sky-400/30 bg-sky-400/10 text-sky-200' : 'border-white/[0.1] text-slate-300 hover:bg-white/[0.05]',
+                )}
+              >
+                {p} dias
+              </button>
+            ))}
+            <button
+              onClick={() => void carregar()}
+              disabled={carregando}
+              className="flex items-center gap-1.5 rounded-md border border-white/[0.1] px-2.5 py-1.5 text-[12px] text-slate-300 transition hover:bg-white/[0.05] disabled:opacity-40"
+            >
+              <RefreshCw className={clsx('h-3 w-3', carregando && 'animate-spin')} />
+              Atualizar
+            </button>
           </div>
-        </section>
-      ))}
+        </div>
+
+        {GRUPOS.map((g) => (
+          <section key={g.titulo}>
+            <h3 className="mb-1 text-[10.5px] font-medium uppercase tracking-[0.12em] text-slate-500">{g.titulo}</h3>
+            <p className="mb-3 text-[12px] text-slate-600">{g.descricao}</p>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {g.itens.map((it) => (
+                <Cartao key={it.titulo} item={it} unit={selectedUnit} f={f} onNavigate={onNavigate} />
+              ))}
+            </div>
+          </section>
+        ))}
+
+        <p className="border-t border-white/[0.06] pt-4 text-[11.5px] leading-relaxed text-slate-600">
+          Esta tela existe porque comportamento que só vive no código e no banco é comportamento que ninguém consegue
+          entender nem controlar. Quando a IA ganhar uma regra nova, ela entra aqui.
+        </p>
+      </div>
     </div>
   );
 }
