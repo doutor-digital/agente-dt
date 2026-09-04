@@ -1,6 +1,7 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
+import { ehFeriadoNacionalAgora } from './feriados.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 
@@ -51,6 +52,7 @@ function paraMinutos(hhmm: string | null | undefined): number | null {
  * unidade, com piso 08:00 e teto 20:00. Ninguém recebe mensagem de madrugada.
  */
 function dentroDoHorario(unit: Unit): boolean {
+  if (ehFeriadoNacionalAgora(new Date(), unit.spineTimezone ?? 'America/Sao_Paulo')) return false;
   const { minutos } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
   const abre = Math.max(paraMinutos(unit.spineAgendaStart) ?? 8 * 60, 8 * 60);
   const fecha = Math.min(paraMinutos(unit.spineAgendaEnd) ?? 20 * 60, 20 * 60);

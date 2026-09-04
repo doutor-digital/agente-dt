@@ -10,6 +10,7 @@ import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { AgendaService } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
+import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 
 const TZ_PADRAO = 'America/Sao_Paulo';
 
@@ -203,6 +204,7 @@ export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
       for (let i = 0; i <= LOOKAHEAD_DIAS; i++, cursor = somarDias(cursor, 1)) {
         const dow = new Date(`${cursor}T00:00:00Z`).getUTCDay();
         if (!fresca.spineAgendaDays.includes(dow)) continue;
+        if (feriadoNacional(cursor)) continue; // clínica fechada — nem consulta a grade
 
         const { erro, slots } = await gradeDoDia(fresca, cursor);
         if (erro) {
@@ -255,11 +257,12 @@ export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
 
         const mesmoDia = cursor === data;
         return (
-          `Horários CONFIRMADOS com a clínica em ${cursor}: ${oferecer.join(', ')}. ` +
+          `Horários CONFIRMADOS com a clínica em ${dataPorExtenso(cursor)} (${cursor}): ${oferecer.join(', ')}. ` +
           (mesmoDia
             ? ''
-            : `A data ${data} não tinha vaga (lotada ou sem atendimento) — ${cursor} é o PRÓXIMO dia com horário. Ofereça esta data ao paciente com naturalidade. `) +
-          'Ofereça no máximo 2 ou 3 deles. Não ofereça nenhum horário fora desta lista.'
+            : `A data ${dataPorExtenso(data)} não tinha vaga (lotada, feriado ou sem atendimento) — ${dataPorExtenso(cursor)} é o PRÓXIMO dia com horário. Ofereça esta data ao paciente com naturalidade. `) +
+          'Ofereça no máximo 2 ou 3 deles. Não ofereça nenhum horário fora desta lista. ' +
+          'Ao citar a data ao paciente, use EXATAMENTE o dia da semana informado aqui.'
         );
       }
 
@@ -848,6 +851,11 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       leadId?: number;
       telefone?: string;
     }) => {
+      const feriado = feriadoNacional(args.data);
+      if (feriado) {
+        return `${dataPorExtenso(args.data)} é feriado nacional (${feriado}) — a clínica não abre. NÃO marque nesse dia; consulte horários em outro dia útil.`;
+      }
+
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
 
       if (!fresca.spineEnabled || !fresca.spineToken) {
@@ -1070,9 +1078,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         })();
       }
 
-      return `Consulta marcada para ${args.data} às ${args.hora}.${
+      return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
         especialista ? ` Especialista: ${especialista}.` : ''
-      } Confirme ao paciente com dia e hora.`;
+      } Confirme ao paciente com EXATAMENTE este dia da semana e data.`;
     },
   });
 }
