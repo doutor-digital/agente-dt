@@ -30,6 +30,8 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   'follow-up': 'follow-up',
   'crm-franquia': 'crm-franquia',
   'saude-ia': 'saude-ia',
+  resultados: 'resultados',
+  'como-funciona': 'como-funciona',
 };
 
 const SLUG_TO_TAB = Object.fromEntries(
