@@ -1,7 +1,6 @@
 import {
   AlertOctagon,
   Building2,
-  Cable,
   Cpu,
   FileBarChart,
   Globe,
@@ -17,7 +16,6 @@ import {
   UserCog,
   Wand2,
 } from 'lucide-react';
-import { FaFacebookF, FaInstagram } from 'react-icons/fa6';
 import { PiCalendarBlankBold, PiPlugsConnectedBold, PiChatsCircleBold } from 'react-icons/pi';
 import type { ComponentType } from 'react';
 
@@ -34,7 +32,6 @@ export type AppTab =
   | 'conversations'
   | 'llm'
   | 'prompts'
-  | 'integrations'
   | 'wizard'
   | 'playground'
   | 'training'
@@ -50,8 +47,6 @@ export type AppTab =
   | 'errors'
   | 'delivery'
   | 'whatsapp'
-  | 'instagram'
-  | 'facebook'
   | 'agenda'
   | 'follow-up'
   | 'crm-franquia'
@@ -130,14 +125,6 @@ export const NAV_ITEMS: NavItem[] = [
     keywords: ['persona', 'prompt', 'fontes', 'acoes', 'playground', 'treinar'],
   },
   {
-    id: 'instagram',
-    label: 'Instagram',
-    hint: 'Comentários respondidos pelo agente e fila de aprovação.',
-    icon: FaInstagram,
-    section: 'agente',
-    keywords: ['comentarios', 'insta', 'direct', 'dm', 'post', 'reels'],
-  },
-  {
     id: 'agenda',
     label: 'Agenda',
     hint: 'Horários da franquia e o botão de pausa da IA.',
@@ -192,14 +179,6 @@ export const NAV_ITEMS: NavItem[] = [
     keywords: ['reengajamento', 'follow up', 'followup', 'perdido', 'retomar', 'lembrete'],
   },
   {
-    id: 'facebook',
-    label: 'Facebook',
-    hint: 'Comentários da Página respondidos pelo agente e fila de aprovação.',
-    icon: FaFacebookF,
-    section: 'agente',
-    keywords: ['comentarios', 'face', 'fb', 'pagina', 'post', 'inbox'],
-  },
-  {
     id: 'units',
     label: 'Agentes',
     hint: 'Todos os agentes e clínicas cadastrados.',
@@ -207,14 +186,6 @@ export const NAV_ITEMS: NavItem[] = [
     section: 'agente',
     superOnly: true,
     keywords: ['unidades', 'clinicas', 'tenants'],
-  },
-  {
-    id: 'integrations',
-    label: 'Integrações',
-    hint: 'Kommo, WhatsApp e provedores de IA.',
-    icon: Cable,
-    section: 'agente',
-    keywords: ['kommo', 'api', 'credenciais', 'tokens'],
   },
   {
     id: 'global-actions',
