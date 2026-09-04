@@ -1,7 +1,9 @@
 import { mascararPii } from './pii.js';
 import { logger } from './logger.js';
 
-const COALESCE_WINDOW_MS = 8_000;
+// Janela de espera por mais mensagens do mesmo paciente antes de responder.
+// Ajustável por ambiente (AGENT_COALESCE_MS) para testar sem redeploy.
+const COALESCE_WINDOW_MS = Number(process.env.AGENT_COALESCE_MS) || 8_000;
 const MAX_BURST_DURATION_MS = 30_000;
 const MAX_MESSAGES_PER_BURST = 20;
 

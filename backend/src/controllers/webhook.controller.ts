@@ -24,6 +24,7 @@ import { rememberIncomingAudio } from '../lib/pending-audio.js';
 import { enforceReplyGap } from '../lib/reply-gate.js';
 import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
+import { ehEncerramentoRepetido } from '../lib/encerramento.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { scheduleLeadMetrics } from '../services/lead-metrics.service.js';
@@ -573,6 +574,30 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       content: ctx.humanMessage,
       meta: { chatId: ctx.chatId, talkId: ctx.talkId, contactId: ctx.contactId },
     });
+
+    // "Ok obrigado" → despedida. "🙏" logo depois → silêncio. Sem isto cada
+    // agradecimento virava mais uma despedida (Carlos, Parauapebas, 04/09/2026).
+    const anteriores = await prisma.message.findMany({
+      where: { conversationId: conv.id, traceId: { not: trace.id } },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+      select: { role: true, content: true, createdAt: true },
+    });
+    if (ehEncerramentoRepetido(ctx.humanMessage, anteriores)) {
+      await recorder.step({
+        kind: 'COMPLETED',
+        title: 'Encerramento repetido — sem resposta, para não repetir a despedida',
+        payload: { mensagem: ctx.humanMessage.slice(0, 80) },
+      });
+      await recorder.finalize({
+        status: 'SUCCESS',
+        latencyMs: Date.now() - trace.createdAt.getTime(),
+        iaDecision: '__encerramento_repetido__',
+      });
+      logger.info({ unit: unit.slug, leadId, traceId: trace.id }, 'agente pulado (encerramento repetido)');
+      res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'encerramento_repetido' });
+      return;
+    }
   }
 
   res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
