@@ -23,6 +23,8 @@ import {
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 import { consumirNaoEntregue, renderEntregaFalha } from './entrega-falha.js';
+import { dataLocalISO, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
 import {
   consultaDoLead,
   porExtenso,
@@ -68,6 +70,10 @@ export function checkBusinessHours(unit: Unit, now: Date = new Date()): Business
     return { enabled: false, isOpen: true, outOfHoursMessage: unit.outOfHoursMessage };
   }
   const tz = fusoSeguro(unit.businessHoursTimezone);
+  // Feriado nacional: a clínica não abre, seja qual for o dia da semana.
+  if (ehFeriadoNacional(dataLocalISO(now, tz))) {
+    return { enabled: true, isOpen: false, outOfHoursMessage: unit.outOfHoursMessage };
+  }
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     weekday: 'short',
@@ -375,6 +381,39 @@ function renderEsperaRules(intents: Record<string, number>): string {
   4. Depois disso, não mande mais nada nesta conversa até a data. A retomada é automática.`;
 }
 
+/**
+ * Os dois valores da consulta (antecipado e no dia) lidos das fontes da unidade.
+ *
+ * Existe porque o modelo da mensagem de confirmação trazia "R$ 150 no PIX à vista
+ * (ou R$ 350)" chumbado no código — a Serra mandou "R$ 220 no PIX à vista" para um
+ * paciente em 02/09/2026, com o número trocado e a frase proibida mantida. Sem
+ * campo estruturado de preço, o jeito honesto é extrair das fontes e, se não
+ * achar os dois valores, mandar o modelo usar as fontes sem chutar número.
+ */
+export function precosDaConsulta(
+  unit: Pick<Unit, 'sourceProdutos' | 'systemPrompt'>,
+): { antecipado: number; noDia: number } | null {
+  const txt = [unit.sourceProdutos, unit.systemPrompt].filter(Boolean).join('\n');
+  const num = (s: string) => Number(s.replace(/\./g, '').replace(',', '.'));
+  const ant = txt.match(/R\$\s?(\d{2,4}(?:[.,]\d{2})?)[^\n.;()]{0,60}?antecipad/i);
+  const dia =
+    txt.match(/R\$\s?(\d{2,4}(?:[.,]\d{2})?)\s*(?:no dia|na hora|no local|sem antecip|presencial|na consulta)/i) ??
+    txt.match(/(?:ou|,)\s*R\$\s?(\d{2,4}(?:[.,]\d{2})?)\)?\s*(?:no dia|na hora)/i);
+  if (!ant || !dia) return null;
+  const a = num(ant[1]);
+  const d = num(dia[1]);
+  if (!Number.isFinite(a) || !Number.isFinite(d) || a <= 0 || d <= a) return null;
+  return { antecipado: a, noDia: d };
+}
+
+const fmtBRL = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ','));
+
+function linhaValorConsulta(unit: Unit): string {
+  const p = precosDaConsulta(unit);
+  if (p) return `✨ Valor: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes da consulta) ou R$ ${fmtBRL(p.noDia)} no dia`;
+  return '✨ Valor: {os valores DESTA unidade, no formato "R$ X antecipado (pago antes da consulta) ou R$ Y no dia" — estão nas fontes/produtos; se não houver valor cadastrado, omita a linha e diga que a equipe informa. NUNCA "à vista"}';
+}
+
 function renderAgenda(unit: Unit): string {
   if (!unit.spineEnabled) return '';
 
@@ -401,6 +440,8 @@ function renderAgenda(unit: Unit): string {
 
   const linhaAntecedencia = '⏳ Chegue 15 minutos antes.';
 
+  const linhaValor = linhaValorConsulta(unit);
+
   const linhaPix = pix
     ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
     : 'A equipe envia a chave do PIX para garantir a vaga.';
@@ -422,11 +463,11 @@ não um parágrafo corrido:
 
 ✅ Agendamento confirmado, {primeiro nome}!
 
-⭐ Data: {dia da semana}, {DD/MM}
+⭐ Data: {dia da semana e data EXATAMENTE como a ferramenta agendar_consulta devolveu — ex.: terça-feira, 08/09}
 ⏰ Horário: {HH:mm}
 ${linhaEndereco}
 ${linhaAntecedencia}
-✨ Valor: R$ 150 no PIX à vista (ou R$ 350)
+${linhaValor}
 ⭐ Especialista: {o nome que a tool devolveu — se não devolveu, omita esta linha}
 
 ${linhaPix}
@@ -440,8 +481,9 @@ REGRAS DESTA MENSAGEM:
   são 4 bytes, quebram no Kommo e cortam a mensagem no meio.
 - Não invente endereço, nome de especialista nem chave PIX. Linha sem dado
   confirmado sai da mensagem — o paciente pergunta, e a equipe responde certo.
-- R$ 150 é ANTECIPADO no PIX; sem antecipar, R$ 350. Não arredonde nem
-  ofereça desconto.`;
+- O valor menor é o ANTECIPADO (pago antes da consulta); o maior é o valor no dia.
+  NUNCA escreva "à vista". Não arredonde nem ofereça desconto.
+- O dia da semana vem da ferramenta ou do bloco <calendario> — nunca de cabeça.`;
 
   return xmlBlock(
     'agendamento',
@@ -1416,6 +1458,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
   if (sourcesBlock) blocks.push(sourcesBlock);
   if (customBase) blocks.push(xmlBlock('instrucoes_extras', customBase));
   blocks.push(renderRulesGlobal());
+  blocks.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
 
   const featureBlocks = [
     renderCollectName(unit),
@@ -1499,6 +1542,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   }
 
   blocks.push(renderRulesGlobal());
+  blocks.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
 
   const featureBlocks = [
     renderCollectName(unit),
@@ -1596,6 +1640,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   const customBase = escolherBase(unit, agentConfigPrompt);
 
   const dynamic: string[] = [];
+  dynamic.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
   const lessonsBlock = renderLessons(lessons);
   if (lessonsBlock) dynamic.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory);

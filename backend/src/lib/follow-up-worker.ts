@@ -2,6 +2,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { ehIntocavel } from './follow-up-presets.js';
+import { ehFeriadoNacionalAgora } from './feriados.js';
 import { carimbarContato } from '../services/lead-memory.service.js';
 
 const SWEEP_MS = 60_000;
@@ -208,6 +209,7 @@ export function dentroDoHorario(unit: {
   spineAgendaDays: number[];
 }): boolean {
   if (semJanelaDeHorario(unit.slug)) return true;
+  if (ehFeriadoNacionalAgora(new Date(), unit.spineTimezone ?? 'America/Sao_Paulo')) return false;
   const { minutos, diaSemana } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
   const dias = unit.spineAgendaDays?.length ? unit.spineAgendaDays : [1, 2, 3, 4, 5];
   if (!dias.includes(diaSemana)) return false;

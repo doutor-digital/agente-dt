@@ -109,3 +109,11 @@ test('bloqueio de outro dia não afeta este', () => {
   );
   assert.ok(horas(slots, 'livre').includes('08:00'));
 });
+
+test('feriado nacional bloqueia a grade inteira, com o motivo (07/09/2026 — Independência)', () => {
+  const FERIADO = '2026-09-07'; // segunda-feira
+  const slots = buildAgenda(CFG, [], { initialDate: FERIADO, endDate: FERIADO }, `${FERIADO}T00:01:00`);
+  assert.ok(slots.length > 0, 'o dia é útil na grade, então os slots existem');
+  assert.deepEqual(horas(slots, 'livre'), [], 'nenhum horário livre num feriado nacional');
+  assert.ok(slots.every((s) => s.status === 'bloqueado' && /feriado nacional — Independência/.test(String(s.motivo))));
+});
