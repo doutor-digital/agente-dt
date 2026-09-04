@@ -117,3 +117,20 @@ test('feriado nacional bloqueia a grade inteira, com o motivo (07/09/2026 — In
   assert.deepEqual(horas(slots, 'livre'), [], 'nenhum horário livre num feriado nacional');
   assert.ok(slots.every((s) => s.status === 'bloqueado' && /feriado nacional — Independência/.test(String(s.motivo))));
 });
+
+test('sábado com janela própria: 07h–13h sem almoço, enquanto a semana segue o padrão', () => {
+  const SAB = '2026-09-12'; // sábado
+  const cfg = { ...CFG, days: [1, 2, 3, 4, 5, 6], dayHours: { '6': { start: '07:00', end: '13:00' } } };
+  const sab = buildAgenda(cfg, [], { initialDate: SAB, endDate: SAB }, `${SAB}T00:01:00`);
+  assert.equal(horas(sab, 'livre')[0], '07:00');
+  assert.equal(horas(sab, 'livre').at(-1), '12:30');
+  assert.ok(horas(sab, 'livre').includes('10:00'), 'sábado não tem o almoço da semana');
+  const semana = buildAgenda(cfg, [], RANGE, CEDO);
+  assert.deepEqual(horas(semana, 'livre'), ['08:00', '08:30', '09:00', '09:30', '11:00', '11:30'], 'a semana não muda');
+});
+
+test('sábado ligado SEM janela própria usa o horário da semana (comportamento antigo)', () => {
+  const SAB = '2026-09-12';
+  const sab = buildAgenda({ ...CFG, days: [1, 2, 3, 4, 5, 6] }, [], { initialDate: SAB, endDate: SAB }, `${SAB}T00:01:00`);
+  assert.deepEqual(horas(sab, 'livre'), ['08:00', '08:30', '09:00', '09:30', '11:00', '11:30']);
+});

@@ -1,6 +1,13 @@
 import type { SpineSchedule } from './spine.service.js';
 import { feriadoNacional } from '../lib/feriados.js';
 
+export interface DayHours {
+  start: string;
+  end: string;
+  lunchStart?: string | null;
+  lunchEnd?: string | null;
+}
+
 export interface AgendaConfig {
   start: string;
   end: string;
@@ -8,6 +15,17 @@ export interface AgendaConfig {
   lunchEnd: string | null;
   days: number[];
   slotMinutes: number;
+  /** Horário específico por dia da semana ("6" = sábado). Dia ausente usa o padrão. */
+  dayHours?: Record<string, DayHours> | null;
+}
+
+/** Janela do dia: a específica do dia da semana, se houver; senão a padrão. */
+export function janelaDoDia(cfg: AgendaConfig, dow: number): DayHours {
+  const esp = cfg.dayHours?.[String(dow)];
+  if (esp && /^\d{2}:\d{2}$/.test(esp.start) && /^\d{2}:\d{2}$/.test(esp.end) && esp.end > esp.start) {
+    return { start: esp.start, end: esp.end, lunchStart: esp.lunchStart ?? null, lunchEnd: esp.lunchEnd ?? null };
+  }
+  return { start: cfg.start, end: cfg.end, lunchStart: cfg.lunchStart, lunchEnd: cfg.lunchEnd };
 }
 
 export type SlotStatus = 'livre' | 'ocupado' | 'incerto' | 'bloqueado';
@@ -57,14 +75,8 @@ export function buildAgenda(
   nowLocalIso: string,
   blocks: AgendaBlockInput[] = [],
 ): AgendaSlot[] {
-  const inicio = toMinutes(cfg.start);
-  const fim = toMinutes(cfg.end);
   const passo = Math.max(5, cfg.slotMinutes || 30);
-  if (!Number.isFinite(inicio) || !Number.isFinite(fim) || fim <= inicio) return [];
-
-  const almocoIni = cfg.lunchStart ? toMinutes(cfg.lunchStart) : NaN;
-  const almocoFim = cfg.lunchEnd ? toMinutes(cfg.lunchEnd) : NaN;
-  const temAlmoco = Number.isFinite(almocoIni) && Number.isFinite(almocoFim) && almocoFim > almocoIni;
+  if (!Number.isFinite(toMinutes(cfg.start)) || !Number.isFinite(toMinutes(cfg.end)) || toMinutes(cfg.end) <= toMinutes(cfg.start)) return [];
 
   const ocupado = new Map<string, SpineSchedule>();
   for (const s of schedules) {
@@ -79,6 +91,14 @@ export function buildAgenda(
   for (const dia of eachDay(range.initialDate, range.endDate)) {
     const dow = new Date(`${dia}T00:00:00Z`).getUTCDay();
     if (!cfg.days.includes(dow)) continue;
+    // Sábado costuma ter janela própria (07h–13h); a semana usa o padrão.
+    const janela = janelaDoDia(cfg, dow);
+    const inicio = toMinutes(janela.start);
+    const fim = toMinutes(janela.end);
+    if (!Number.isFinite(inicio) || !Number.isFinite(fim) || fim <= inicio) continue;
+    const almocoIni = janela.lunchStart ? toMinutes(janela.lunchStart) : NaN;
+    const almocoFim = janela.lunchEnd ? toMinutes(janela.lunchEnd) : NaN;
+    const temAlmoco = Number.isFinite(almocoIni) && Number.isFinite(almocoFim) && almocoFim > almocoIni;
     // Feriado nacional: a clínica não abre. Entra como 'bloqueado' (e não somem os
     // slots) para o motivo aparecer no rastro de quem consultou a agenda.
     const feriado = feriadoNacional(dia);
