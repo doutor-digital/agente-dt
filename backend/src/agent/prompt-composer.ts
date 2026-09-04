@@ -416,6 +416,24 @@ function linhaValorConsulta(unit: Unit): string {
   return '✨ Valor: {os valores DESTA unidade, no formato "R$ X antecipado (pago antes da consulta) ou R$ Y no dia" — estão nas fontes/produtos; se não houver valor cadastrado, omita a linha e diga que a equipe informa. NUNCA "à vista"}';
 }
 
+const NOME_DIA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+
+/** " Sábado: das 07:00 às 13:00 (sem almoço)." — só para dias com janela própria. */
+function renderHorariosPorDia(unit: Unit): string {
+  const mapa = (unit.spineDayHours ?? null) as Record<string, { start?: string; end?: string }> | null;
+  if (!mapa) return '';
+  const partes: string[] = [];
+  for (const [dia, h] of Object.entries(mapa)) {
+    const d = Number(dia);
+    if (!Number.isInteger(d) || d < 0 || d > 6 || !h?.start || !h?.end) continue;
+    if (!unit.spineAgendaDays.includes(d)) continue;
+    partes.push(`${NOME_DIA[d][0].toUpperCase()}${NOME_DIA[d].slice(1)}: das ${h.start} às ${h.end}`);
+  }
+  if (partes.length === 0) return '';
+  const dias = unit.spineAgendaDays.filter((d) => !mapa[String(d)]).map((d) => NOME_DIA[d]).join(', ');
+  return ` Esse horário vale para ${dias || 'os demais dias'}. ${partes.join('. ')}. Nunca ofereça horário fora da janela do dia.`;
+}
+
 function renderAgenda(unit: Unit): string {
   if (!unit.spineEnabled) return '';
 
@@ -489,7 +507,7 @@ REGRAS DESTA MENSAGEM:
 
   return xmlBlock(
     'agendamento',
-    `A clínica atende das ${unit.spineAgendaStart} às ${unit.spineAgendaEnd}.${almoco}
+    `A clínica atende das ${unit.spineAgendaStart} às ${unit.spineAgendaEnd}.${almoco}${renderHorariosPorDia(unit)}
 
 REAÇÃO A CLIQUES DE BOTÃO (o paciente respondeu tocando um botão do template).
 Trate o texto do botão como INTENÇÃO DIRETA e aja sobre a consulta que ele JÁ tem —
