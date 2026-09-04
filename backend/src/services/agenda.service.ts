@@ -1,4 +1,5 @@
 import type { SpineSchedule } from './spine.service.js';
+import { feriadoNacional } from '../lib/feriados.js';
 
 export interface AgendaConfig {
   start: string;
@@ -78,6 +79,9 @@ export function buildAgenda(
   for (const dia of eachDay(range.initialDate, range.endDate)) {
     const dow = new Date(`${dia}T00:00:00Z`).getUTCDay();
     if (!cfg.days.includes(dow)) continue;
+    // Feriado nacional: a clínica não abre. Entra como 'bloqueado' (e não somem os
+    // slots) para o motivo aparecer no rastro de quem consultou a agenda.
+    const feriado = feriadoNacional(dia);
 
     for (let m = inicio; m + passo <= fim; m += passo) {
       if (temAlmoco && m < almocoFim && m + passo > almocoIni) continue;
@@ -85,6 +89,11 @@ export function buildAgenda(
       const hhmm = fromMinutes(m);
       const quando = `${dia}T${hhmm}:00`;
       if (quando <= nowLocalIso) continue;
+
+      if (feriado) {
+        out.push({ day: dia, time: hhmm, status: 'bloqueado', motivo: `feriado nacional — ${feriado}` });
+        continue;
+      }
 
       const bloqueio = blocks.find(
         (b) => b.dayLocal === dia && hhmm >= b.startTime && hhmm < b.endTime,

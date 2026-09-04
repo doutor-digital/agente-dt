@@ -1,6 +1,7 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
+import { ehFeriadoNacionalAgora } from './feriados.js';
 import { createKommoClient } from '../services/kommo.service.js';
 
 const SWEEP_MS = 60_000;
@@ -41,6 +42,7 @@ function paraMinutos(hhmm: string | null | undefined): number | null {
 }
 
 function dentroDoHorario(unit: Unit): boolean {
+  if (ehFeriadoNacionalAgora(new Date(), unit.spineTimezone ?? 'America/Sao_Paulo')) return false;
   const { minutos, diaSemana } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
   const dias = unit.spineAgendaDays?.length ? unit.spineAgendaDays : [1, 2, 3, 4, 5];
   if (!dias.includes(diaSemana)) return false;

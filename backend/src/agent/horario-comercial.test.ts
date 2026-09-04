@@ -100,3 +100,14 @@ test('fusoSeguro devolve o fuso quando ele é válido', () => {
   assert.equal(fusoSeguro(null), 'America/Sao_Paulo');
   assert.equal(fusoSeguro('  '), 'America/Sao_Paulo');
 });
+
+
+// 07/09/2026 é segunda-feira e feriado nacional (Independência); 08/09 é terça, dia normal.
+test('feriado nacional fecha mesmo em dia e hora de atendimento (Porto Nacional disse "teremos atendimento" em 07/09)', () => {
+  const feriado10h = new Date('2026-09-07T10:00:00-03:00');
+  const r = checkBusinessHours(unidade({}), feriado10h);
+  assert.equal(r.enabled, true);
+  assert.equal(r.isOpen, false);
+  assert.equal(r.outOfHoursMessage, 'Estamos fechados.');
+  assert.equal(checkBusinessHours(unidade({}), new Date('2026-09-08T10:00:00-03:00')).isOpen, true);
+});
