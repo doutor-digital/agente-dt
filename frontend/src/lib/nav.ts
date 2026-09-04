@@ -6,10 +6,12 @@ import {
   FileBarChart,
   Globe,
   LayoutDashboard,
+  ListChecks,
   MessageCircle,
   MessagesSquare,
   Settings2,
   Sparkles,
+  Target,
   Terminal,
   Truck,
   UserCog,
@@ -53,7 +55,9 @@ export type AppTab =
   | 'agenda'
   | 'follow-up'
   | 'crm-franquia'
-  | 'saude-ia';
+  | 'saude-ia'
+  | 'resultados'
+  | 'como-funciona';
 
 export type NavSection = 'operacao' | 'agente' | 'analise' | 'plataforma';
 
@@ -140,6 +144,22 @@ export const NAV_ITEMS: NavItem[] = [
     icon: PiCalendarBlankBold,
     section: 'operacao',
     keywords: ['agendamento', 'spine', 'pausar', 'kill switch', 'recepcao', 'horarios'],
+  },
+  {
+    id: 'como-funciona',
+    label: 'Como a Sofia funciona',
+    hint: 'Cada comportamento da IA explicado: o que faz, por que existe, onde se controla e quantas vezes aconteceu esta semana.',
+    icon: ListChecks,
+    section: 'agente',
+    keywords: ['funcionamento', 'comportamentos', 'como funciona', 'catalogo', 'regras', 'feriado', 'sondagem', 'coalescer', 'encerramento', 'explicacao'],
+  },
+  {
+    id: 'resultados',
+    label: 'Resultados',
+    hint: 'O livro de resultados: de cada conversa, a IA marcou? o paciente compareceu? E o que quem marcou recebeu a mais.',
+    icon: Target,
+    section: 'analise',
+    keywords: ['resultados', 'comparecimento', 'no-show', 'faltou', 'agendou', 'taxa', 'recompensa', 'livro'],
   },
   {
     id: 'saude-ia',

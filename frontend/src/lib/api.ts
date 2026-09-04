@@ -68,6 +68,8 @@ import type {
   FollowUpRulesResponse,
   FollowUpStep,
   SaudeIa,
+  ResumoResultados,
+  Funcionamento,
 } from '../types/api';
 
 const apiBase = import.meta.env.VITE_API_URL
@@ -219,6 +221,18 @@ export const api = {
       `/units/${unitId}/lead-field-rules`,
     );
     return data.rules;
+  },
+  async resultados(unitId: string, days = 60): Promise<ResumoResultados> {
+    const { data } = await http.get<ResumoResultados>(`/units/${unitId}/resultados`, { params: { days } });
+    return data;
+  },
+  async recalcularResultados(unitId: string, days = 60): Promise<{ ok: boolean; calculadas: number; erros: number; resumo: ResumoResultados }> {
+    const { data } = await http.post(`/units/${unitId}/resultados/recalcular`, null, { params: { days, limit: 2000 } });
+    return data;
+  },
+  async funcionamento(unitId: string, days = 7): Promise<Funcionamento> {
+    const { data } = await http.get<Funcionamento>(`/units/${unitId}/funcionamento`, { params: { days } });
+    return data;
   },
   async saudeIa(unitId: string): Promise<SaudeIa> {
     const { data } = await http.get<SaudeIa>(`/units/${unitId}/saude-ia`);

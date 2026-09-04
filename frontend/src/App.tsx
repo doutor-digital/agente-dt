@@ -54,6 +54,12 @@ const SocialCommentsPanel = lazy(() => import('./components/SocialCommentsPanel'
 const AgendaPanel = lazy(() => import('./components/AgendaPanel'));
 const FollowUpPanel = lazy(() => import('./components/FollowUpPanel'));
 const CrmFranquiaPanel = lazy(() => import('./components/CrmFranquiaPanel'));
+const ResultadosPanel = lazy(() =>
+  import('./components/ResultadosPanel').then((m) => ({ default: m.ResultadosPanel })),
+);
+const ComoFuncionaPanel = lazy(() =>
+  import('./components/ComoFuncionaPanel').then((m) => ({ default: m.ComoFuncionaPanel })),
+);
 const SaudeIaPanel = lazy(() =>
   import('./components/SaudeIaPanel').then((m) => ({ default: m.SaudeIaPanel })),
 );
@@ -168,6 +174,8 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
             {tab === 'follow-up' && <FollowUpPanel />}
             {tab === 'crm-franquia' && <CrmFranquiaPanel />}
             {tab === 'saude-ia' && <SaudeIaPanel />}
+            {tab === 'resultados' && <ResultadosPanel />}
+            {tab === 'como-funciona' && <ComoFuncionaPanel onNavigate={navigate} />}
             {tab === 'config' && <AgentConfigPanel />}
             {tab === 'units' && <UnitsPanel />}
             {tab === 'users' && <UsersPanel />}

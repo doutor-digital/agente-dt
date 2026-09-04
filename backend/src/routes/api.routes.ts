@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { handleKommoWebhook } from '../controllers/webhook.controller.js';
 import { sessionStatsHandler } from '../controllers/session-stats.controller.js';
 import { resultadosHandler, recalcularResultadosHandler } from '../controllers/resultados.controller.js';
+import { funcionamentoHandler } from '../controllers/funcionamento.controller.js';
 import { slaReportHandler } from '../controllers/sla-report.controller.js';
 import { handleSalesbotWebhook } from '../controllers/salesbot.controller.js';
 import { handleWidgetRequest } from '../controllers/widget.controller.js';
@@ -248,6 +249,7 @@ apiRouter.get('/units/:id/stats', requireUnitAccess, unitStatsHandler);
 // Livro de resultados: o que a IA fez por conversa e o que aconteceu depois (Kommo + franquia).
 apiRouter.get('/units/:id/resultados', requireUnitAccess, resultadosHandler);
 apiRouter.post('/units/:id/resultados/recalcular', requireUnitAccess, recalcularResultadosHandler);
+apiRouter.get('/units/:id/funcionamento', requireUnitAccess, funcionamentoHandler);
 apiRouter.get('/units/:id/dashboard', requireUnitAccess, dashboardHandler);
 apiRouter.get('/units/:id/leads-bucket', requireUnitAccess, leadsBucketHandler);
 apiRouter.get('/units/:id/integrations', requireUnitAccess, getIntegrations);
