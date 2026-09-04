@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Loader2, RefreshCw, Target } from 'lucide-react';
+import { Loader2, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
@@ -13,28 +13,37 @@ import type { ResumoResultados } from '../types/api';
  * marcada? O paciente apareceu? Aqui cada conversa dos últimos N dias tem um
  * desfecho, lido do Kommo (marcou) e da franquia (compareceu), e dá para ver o que
  * quem marcou recebeu a mais do que quem não marcou.
+ *
+ * Visual segue a tela "Saúde da IA" (mesma largura, chips e cards), a pedido.
  */
 
 const PERIODOS = [30, 60, 90];
 
-const DESFECHOS: Array<{ chave: keyof ResumoResultados; rotulo: string; cor: string; explica: string }> = [
-  { chave: 'compareceu', rotulo: 'Compareceu', cor: 'bg-emerald-400', explica: 'A franquia registrou ATENDIDO (ou o Kommo diz "Compareceu").' },
-  { chave: 'faltou', rotulo: 'Faltou', cor: 'bg-rose-400', explica: 'A franquia registrou NÃO COMPARECEU.' },
-  { chave: 'cancelou', rotulo: 'Cancelou', cor: 'bg-amber-400', explica: 'Consulta desmarcada ou apagada depois de marcada.' },
-  { chave: 'agendadoFuturo', rotulo: 'Marcado, ainda vai acontecer', cor: 'bg-sky-400', explica: 'Consulta no futuro. Vira "compareceu" ou "faltou" quando a franquia registrar.' },
-  { chave: 'semRegistro', rotulo: 'Passou sem registro', cor: 'bg-zinc-500', explica: 'A consulta já passou e ninguém marcou o desfecho na franquia nem no Kommo.' },
-  { chave: 'pendentes', rotulo: 'Ainda em conversa', cor: 'bg-violet-400', explica: 'Sem marcação e com mensagem nos últimos 7 dias.' },
+const DESFECHOS: Array<{ chave: keyof ResumoResultados; rotulo: string; ponto: string; explica: string }> = [
+  { chave: 'compareceu', rotulo: 'Compareceu', ponto: 'bg-emerald-400', explica: 'A franquia registrou ATENDIDO (ou o Kommo diz "Compareceu").' },
+  { chave: 'faltou', rotulo: 'Faltou', ponto: 'bg-rose-400', explica: 'A franquia registrou NÃO COMPARECEU.' },
+  { chave: 'cancelou', rotulo: 'Cancelou', ponto: 'bg-amber-400', explica: 'Consulta desmarcada ou apagada depois de marcada.' },
+  { chave: 'agendadoFuturo', rotulo: 'Marcado, ainda vai acontecer', ponto: 'bg-sky-400', explica: 'Consulta no futuro. Vira "compareceu" ou "faltou" quando a franquia registrar.' },
+  { chave: 'semRegistro', rotulo: 'Passou sem registro', ponto: 'bg-zinc-500', explica: 'A consulta já passou e ninguém marcou o desfecho na franquia nem no Kommo.' },
+  { chave: 'pendentes', rotulo: 'Ainda em conversa', ponto: 'bg-violet-400', explica: 'Sem marcação e com mensagem nos últimos 7 dias.' },
 ];
 
-function Kpi({ rotulo, valor, sufixo, nota }: { rotulo: string; valor: string | number | null; sufixo?: string; nota?: string }) {
+function Chip({ valor, rotulo, ponto }: { valor: string | number; rotulo: string; ponto?: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2">
+      {ponto ? <span className={clsx('h-2 w-2 rounded-full', ponto)} /> : null}
+      <span className="font-mono text-[15px] tabular-nums text-slate-100">{valor}</span>
+      <span className="text-[11.5px] text-slate-500">{rotulo}</span>
+    </div>
+  );
+}
+
+function Cartao({ titulo, valor, nota }: { titulo: string; valor: string; nota: string }) {
   return (
     <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
-      <div className="text-[11px] uppercase tracking-[0.08em] text-slate-500">{rotulo}</div>
-      <div className="mt-1 text-2xl font-semibold text-slate-100 tabular-nums">
-        {valor === null || valor === undefined ? '—' : valor}
-        {valor !== null && valor !== undefined && sufixo ? <span className="ml-0.5 text-base text-slate-400">{sufixo}</span> : null}
-      </div>
-      {nota ? <div className="mt-1 text-[11.5px] leading-relaxed text-slate-500">{nota}</div> : null}
+      <h4 className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-slate-500">{titulo}</h4>
+      <div className="mt-1.5 font-mono text-[22px] tabular-nums text-slate-100">{valor}</div>
+      <p className="mt-1.5 text-[12px] leading-relaxed text-slate-400">{nota}</p>
     </div>
   );
 }
@@ -78,137 +87,170 @@ export function ResultadosPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unitId, dias]);
 
+  if (!unitId) {
+    return <div className="flex-1 overflow-y-auto p-6 text-[13px] text-slate-500">Escolha uma unidade para ver os resultados.</div>;
+  }
+  if (carregando && !data) {
+    return (
+      <div className="flex flex-1 items-center justify-center py-20">
+        <Loader2 className="h-5 w-5 animate-spin text-white/30" />
+      </div>
+    );
+  }
+
   const total = data ? Math.max(1, data.conversas) : 1;
+  const pct = (v: number | null) => (v === null ? '—' : `${v}%`);
+  const naoMarcou = data
+    ? data.conversas - data.compareceu - data.faltou - data.cancelou - data.agendadoFuturo - data.semRegistro - data.pendentes
+    : 0;
+  const pgTotal = data ? data.pgAntecipadoSim + data.pgAntecipadoNao : 0;
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold text-zinc-100">
-            <Target size={18} className="text-emerald-300" /> Resultados
-          </h1>
-          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-zinc-400">
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 pb-16">
+        <header>
+          <h2 className="text-[19px] font-semibold tracking-tight text-slate-100">Resultados</h2>
+          <p className="mt-1 max-w-[68ch] text-[12.5px] leading-relaxed text-slate-500">
             De cada conversa, duas perguntas: a IA marcou consulta? O paciente compareceu? A resposta vem do Kommo
-            (etapa e campos do cartão) e da franquia (status da consulta). A tabela é recalculada a cada 6 horas até
-            o desfecho ser definitivo.
+            (etapa e campos do cartão) e da franquia (status da consulta). Recalculado a cada 6 horas até o desfecho
+            ser definitivo.
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {PERIODOS.map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => setDias(p)}
-              className={clsx(
-                'rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-colors',
-                dias === p ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/25' : 'text-zinc-500 ring-zinc-800 hover:text-zinc-300',
-              )}
-            >
-              {p} dias
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => void recalcular()}
-            disabled={recalculando}
-            className="ml-2 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-300 ring-1 ring-zinc-800 hover:text-zinc-100 disabled:opacity-50"
-            title="Relê Kommo e franquia para todas as conversas do período (pode levar alguns minutos)"
-          >
-            {recalculando ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-            {recalculando ? 'Recalculando…' : 'Recalcular agora'}
-          </button>
-        </div>
-      </header>
+        </header>
 
-      {erro ? <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{erro}</div> : null}
+        {erro ? <div className="rounded-xl border border-rose-400/20 bg-rose-400/[0.05] p-4 text-[12.5px] text-rose-200">{erro}</div> : null}
 
-      {carregando && !data ? (
-        <div className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 size={14} className="animate-spin" /> Carregando…</div>
-      ) : data ? (
-        <>
-          {data.conversas === 0 ? (
-            <div className="surface p-6 text-sm text-zinc-400">
-              Nenhuma conversa calculada ainda para este período. Clique em <b className="text-zinc-200">Recalcular agora</b> para
-              montar o livro a partir das conversas existentes.
+        {data ? (
+          <>
+            <div className="flex flex-wrap items-center gap-3">
+              <Chip valor={data.comPaciente} rotulo="conversas com paciente" ponto="bg-slate-400" />
+              <Chip valor={data.agendouQualquer} rotulo="marcaram" ponto="bg-emerald-400" />
+              <Chip valor={data.compareceu} rotulo="compareceram" ponto="bg-emerald-300" />
+              <Chip valor={data.faltou} rotulo="faltaram" ponto="bg-rose-400" />
+              <div className="ml-auto flex items-center gap-1.5">
+                {PERIODOS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setDias(p)}
+                    className={clsx(
+                      'rounded-md border px-2.5 py-1.5 text-[12px] transition',
+                      dias === p ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'border-white/[0.1] text-slate-300 hover:bg-white/[0.05]',
+                    )}
+                  >
+                    {p} dias
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => void recalcular()}
+                  disabled={recalculando}
+                  title="Relê Kommo e franquia para todas as conversas do período (pode levar alguns minutos)"
+                  className="flex items-center gap-1.5 rounded-md border border-white/[0.1] px-2.5 py-1.5 text-[12px] text-slate-300 transition hover:bg-white/[0.05] disabled:opacity-40"
+                >
+                  <RefreshCw className={clsx('h-3 w-3', recalculando && 'animate-spin')} />
+                  {recalculando ? 'Recalculando…' : 'Recalcular agora'}
+                </button>
+              </div>
             </div>
-          ) : null}
 
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Kpi rotulo="Conversas com paciente" valor={data.comPaciente} nota={`${data.conversas} conversas no total, ${data.dias} dias`} />
-            <Kpi rotulo="Taxa de marcação" valor={data.taxaMarcacao} sufixo="%" nota={`${data.agendouQualquer} marcaram (${data.agendouIa} pela IA na agenda, ${data.agendouKommo} chegaram a AGENDADO no Kommo)`} />
-            <Kpi rotulo="Taxa de comparecimento" valor={data.taxaComparecimento} sufixo="%" nota={`${data.compareceu} compareceram, ${data.faltou} faltaram (só consultas já ocorridas e registradas)`} />
-            <Kpi rotulo="Pagamento antecipado" valor={data.pgAntecipadoSim + data.pgAntecipadoNao ? Math.round((data.pgAntecipadoSim / (data.pgAntecipadoSim + data.pgAntecipadoNao)) * 100) : null} sufixo="%" nota={`${data.pgAntecipadoSim} sim, ${data.pgAntecipadoNao} não — campo "Consulta pg antecipado" do Kommo`} />
-          </section>
+            {data.conversas === 0 ? (
+              <div className="rounded-xl border border-sky-400/20 bg-sky-400/[0.05] p-4 text-[12.5px] leading-relaxed text-sky-100">
+                Nenhuma conversa calculada ainda para este período. Clique em <span className="font-medium">Recalcular agora</span> para
+                montar o livro a partir das conversas existentes.
+              </div>
+            ) : null}
 
-          <section className="surface p-6">
-            <h2 className="text-sm font-semibold text-zinc-100">O que aconteceu com cada conversa</h2>
-            <div className="mt-4 flex h-3 w-full overflow-hidden rounded-full bg-zinc-800">
-              {DESFECHOS.map((d) => {
-                const v = Number(data[d.chave] ?? 0);
-                return v > 0 ? <div key={d.chave} className={clsx(d.cor)} style={{ width: `${(v / total) * 100}%` }} title={`${d.rotulo}: ${v}`} /> : null;
-              })}
-            </div>
-            <ul className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {DESFECHOS.map((d) => (
-                <li key={d.chave} className="flex items-start gap-2 text-[12.5px] text-zinc-400">
-                  <span className={clsx('mt-1.5 h-2 w-2 shrink-0 rounded-full', d.cor)} />
-                  <span>
-                    <b className="text-zinc-200 tabular-nums">{Number(data[d.chave] ?? 0)}</b> {d.rotulo}
-                    <span className="block text-[11.5px] text-zinc-500">{d.explica}</span>
-                  </span>
-                </li>
-              ))}
-              <li className="flex items-start gap-2 text-[12.5px] text-zinc-400">
-                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-zinc-700" />
-                <span>
-                  <b className="text-zinc-200 tabular-nums">{data.conversas - data.compareceu - data.faltou - data.cancelou - data.agendadoFuturo - data.semRegistro - data.pendentes}</b> Não marcou
-                  <span className="block text-[11.5px] text-zinc-500">Conversa encerrada sem consulta (7 dias sem mensagem).</span>
-                </span>
-              </li>
-            </ul>
-          </section>
+            <section>
+              <h3 className="mb-3 text-[10.5px] font-medium uppercase tracking-[0.12em] text-slate-500">As quatro taxas</h3>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Cartao titulo="Taxa de marcação" valor={pct(data.taxaMarcacao)} nota={`${data.agendouQualquer} de ${data.comPaciente} conversas viraram consulta marcada: ${data.agendouIa} pela IA direto na agenda, ${data.agendouKommo} chegaram a AGENDADO no Kommo (pela IA ou pela equipe depois dela).`} />
+                <Cartao titulo="Taxa de comparecimento" valor={pct(data.taxaComparecimento)} nota={`${data.compareceu} compareceram e ${data.faltou} faltaram, contando só consultas que já aconteceram e foram registradas. Onde a franquia não registra falta, esta taxa fica alta por falta de dado, não por presença.`} />
+                <Cartao titulo="Pagamento antecipado" valor={pgTotal ? `${Math.round((data.pgAntecipadoSim / pgTotal) * 100)}%` : '—'} nota={`${data.pgAntecipadoSim} pagaram antes e ${data.pgAntecipadoNao} não, pelo campo "✓ Consulta pg antecipado" do Kommo. Antecipado é o maior redutor de falta que conhecemos.`} />
+                <Cartao titulo="Marcados pela IA sozinha" valor={String(data.agendouIa)} nota={`Consultas criadas pela própria Sofia na agenda da franquia. O resto foi fechado pela equipe depois da conversa com ela. É este número que o motor de comparecimento e os experimentos vão subir.`} />
+              </div>
+            </section>
 
-          <section className="surface p-6">
-            <h2 className="text-sm font-semibold text-zinc-100">O que quem marcou recebeu a mais</h2>
-            <p className="mt-1 text-[12.5px] text-zinc-500">
-              Comparação entre conversas que marcaram e que não marcaram. É daqui que saem as hipóteses para os experimentos.
-            </p>
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full text-[12.5px]">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-[0.06em] text-zinc-500">
-                    <th className="py-2 pr-4 font-medium">Comportamento da IA</th>
-                    <th className="py-2 pr-4 font-medium">Quem marcou</th>
-                    <th className="py-2 pr-4 font-medium">Quem não marcou</th>
-                  </tr>
-                </thead>
-                <tbody className="text-zinc-300">
-                  <tr className="border-t border-zinc-800">
-                    <td className="py-2 pr-4">Horários oferecidos por conversa (média)</td>
-                    <td className="py-2 pr-4 tabular-nums">{data.mediaHorariosOferecidosQuemMarcou ?? '—'}</td>
-                    <td className="py-2 pr-4 tabular-nums">{data.mediaHorariosOferecidosQuemNao ?? '—'}</td>
-                  </tr>
-                  <tr className="border-t border-zinc-800">
-                    <td className="py-2 pr-4">Follow-ups enviados por conversa (média)</td>
-                    <td className="py-2 pr-4 tabular-nums">{data.mediaFollowUpsQuemMarcou ?? '—'}</td>
-                    <td className="py-2 pr-4 tabular-nums">{data.mediaFollowUpsQuemNao ?? '—'}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
+            <section>
+              <h3 className="mb-3 text-[10.5px] font-medium uppercase tracking-[0.12em] text-slate-500">O que aconteceu com cada conversa</h3>
+              <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
+                <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                  {DESFECHOS.map((d) => {
+                    const v = Number(data[d.chave] ?? 0);
+                    return v > 0 ? <div key={d.chave} className={d.ponto} style={{ width: `${(v / total) * 100}%` }} title={`${d.rotulo}: ${v}`} /> : null;
+                  })}
+                </div>
+                <ul className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-2">
+                  {DESFECHOS.map((d) => (
+                    <li key={d.chave} className="flex items-start gap-2.5">
+                      <span className={clsx('mt-[5px] h-2 w-2 shrink-0 rounded-full', d.ponto)} />
+                      <div className="text-[12.5px] leading-relaxed text-slate-300">
+                        <span className="font-mono tabular-nums text-slate-100">{Number(data[d.chave] ?? 0)}</span> {d.rotulo}
+                        <div className="text-[11.5px] text-slate-500">{d.explica}</div>
+                      </div>
+                    </li>
+                  ))}
+                  <li className="flex items-start gap-2.5">
+                    <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-white/20" />
+                    <div className="text-[12.5px] leading-relaxed text-slate-300">
+                      <span className="font-mono tabular-nums text-slate-100">{naoMarcou}</span> Não marcou
+                      <div className="text-[11.5px] text-slate-500">Conversa encerrada sem consulta (7 dias sem mensagem).</div>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </section>
 
-          <section className="surface p-6 text-[12.5px] leading-relaxed text-zinc-400">
-            <h2 className="text-sm font-semibold text-zinc-100">Como este livro é montado</h2>
-            <ol className="mt-3 list-decimal space-y-1.5 pl-5">
-              <li>Para cada conversa, a IA lê as mensagens e as ferramentas que usou: tempo até a primeira resposta, quantas vezes consultou a agenda, quantos horários ofereceu, em que mensagem falou de preço, quantos follow-ups mandou.</li>
-              <li>No Kommo, lê a etapa do lead e três campos do cartão: <b className="text-zinc-300">◷ Data da Consulta</b>, <b className="text-zinc-300">✓ Situação da consulta</b> e <b className="text-zinc-300">✓ Consulta pg antecipado</b>.</li>
-              <li>Na franquia, quando a consulta foi marcada pela IA, lê o status daquela consulta no cadastro do paciente: AGENDADO, CONFIRMADO, ATENDIDO, NÃO COMPARECEU, REMARCADO ou DESMARCADO. O que a franquia diz vale mais que o Kommo.</li>
-              <li>O desfecho fica "definitivo" quando não pode mais mudar: compareceu, faltou, cancelou, ou 7 dias sem nenhuma mensagem. Até lá é recalculado a cada 6 horas.</li>
-            </ol>
-          </section>
-        </>
-      ) : null}
+            <section>
+              <h3 className="mb-3 text-[10.5px] font-medium uppercase tracking-[0.12em] text-slate-500">O que quem marcou recebeu a mais</h3>
+              <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
+                <p className="text-[12px] leading-relaxed text-slate-500">
+                  Comparação entre conversas que marcaram e que não marcaram. É daqui que saem as hipóteses para os experimentos.
+                </p>
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full text-[12.5px]">
+                    <thead>
+                      <tr className="text-left text-[10.5px] uppercase tracking-[0.12em] text-slate-500">
+                        <th className="py-2 pr-4 font-medium">Comportamento da IA</th>
+                        <th className="py-2 pr-4 font-medium">Quem marcou</th>
+                        <th className="py-2 pr-4 font-medium">Quem não marcou</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-slate-300">
+                      <tr className="border-t border-white/[0.06]">
+                        <td className="py-2 pr-4">Horários oferecidos por conversa (média)</td>
+                        <td className="py-2 pr-4 font-mono tabular-nums">{data.mediaHorariosOferecidosQuemMarcou ?? '—'}</td>
+                        <td className="py-2 pr-4 font-mono tabular-nums">{data.mediaHorariosOferecidosQuemNao ?? '—'}</td>
+                      </tr>
+                      <tr className="border-t border-white/[0.06]">
+                        <td className="py-2 pr-4">Follow-ups enviados por conversa (média)</td>
+                        <td className="py-2 pr-4 font-mono tabular-nums">{data.mediaFollowUpsQuemMarcou ?? '—'}</td>
+                        <td className="py-2 pr-4 font-mono tabular-nums">{data.mediaFollowUpsQuemNao ?? '—'}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-3 text-[10.5px] font-medium uppercase tracking-[0.12em] text-slate-500">Como este livro é montado</h3>
+              <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
+                <ol className="list-decimal space-y-1.5 pl-5 text-[12px] leading-relaxed text-slate-400">
+                  <li>Para cada conversa, a IA lê as mensagens e as ferramentas que usou: tempo até a primeira resposta, quantas vezes consultou a agenda, quantos horários ofereceu, em que mensagem falou de preço, quantos follow-ups mandou.</li>
+                  <li>No Kommo, lê a etapa do lead e três campos do cartão: <span className="text-slate-300">◷ Data da Consulta</span>, <span className="text-slate-300">✓ Situação da consulta</span> e <span className="text-slate-300">✓ Consulta pg antecipado</span>.</li>
+                  <li>Na franquia, quando a consulta foi marcada pela IA, lê o status daquela consulta no cadastro do paciente: AGENDADO, CONFIRMADO, ATENDIDO, NÃO COMPARECEU, REMARCADO ou DESMARCADO. O que a franquia diz vale mais que o Kommo.</li>
+                  <li>O desfecho fica definitivo quando não pode mais mudar: compareceu, faltou, cancelou, ou 7 dias sem nenhuma mensagem. Até lá é recalculado a cada 6 horas.</li>
+                </ol>
+              </div>
+            </section>
+          </>
+        ) : null}
+
+        <p className="border-t border-white/[0.06] pt-4 text-[11.5px] leading-relaxed text-slate-600">
+          Nota de estilo não paga consulta. Comparecimento paga. Este livro é a recompensa pela qual a Sofia vai passar a
+          aprender.
+        </p>
+      </div>
     </div>
   );
 }
