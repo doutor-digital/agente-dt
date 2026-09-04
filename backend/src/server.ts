@@ -20,6 +20,7 @@ import { startTaxaErroWorker } from './lib/taxa-erro-worker.js';
 import { startCardValidationWorker } from './lib/card-validation-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 import { startJudgeWorker } from './lib/judge-worker.js';
+import { startResultadosWorker } from './lib/resultados-worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -96,6 +97,7 @@ async function main(): Promise<void> {
   startAgendamentoPerdidoWorker();
   startTaxaErroWorker();
   startCardValidationWorker();
+  startResultadosWorker();
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);
