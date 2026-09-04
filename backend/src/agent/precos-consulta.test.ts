@@ -30,3 +30,17 @@ test('sem fontes, nulo; antecipado maior que no dia é descartado', () => {
   assert.equal(precosDaConsulta({ sourceProdutos: null, systemPrompt: '' }), null);
   assert.equal(precosDaConsulta({ sourceProdutos: 'R$ 400 antecipado ou R$ 350 no dia', systemPrompt: '' }), null);
 });
+
+test('texto real da Serra (dois conjuntos, particular primeiro): pega 250/350, nunca o 220 do plano', () => {
+  const serra =
+    'A CONSULTA tem DOIS conjuntos de valores. PARTICULAR (padrão): R$ 350 no dia da avaliação, ou R$ 250 com pagamento antecipado por PIX. ' +
+    'COM PLANO DE SAÚDE (só quando o paciente disser que tem plano): R$ 250 no dia, ou R$ 220 com pagamento antecipado. O valor de R$ 220 NÃO existe para paciente particular.';
+  assert.deepEqual(precosDaConsulta({ sourceProdutos: serra, systemPrompt: '' }), { antecipado: 250, noDia: 350 });
+});
+
+test('"no ato da consulta" também conta como valor no dia', () => {
+  assert.deepEqual(
+    precosDaConsulta({ sourceProdutos: 'R$ 350,00 no ato da consulta, R$ 250,00 antecipado.', systemPrompt: '' }),
+    { antecipado: 250, noDia: 350 },
+  );
+});
