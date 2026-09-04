@@ -1075,6 +1075,27 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             .catch((err) =>
               logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao marcar conversão — segue'),
             );
+
+          // Avisa o grupo de que foi a IA que marcou. Sem esta tarefa a equipe
+          // só descobria abrindo o cartão: o único alerta com a palavra
+          // "AGENDADO" que chegava no grupo era o do vigia de cards ("card em
+          // AGENDADO com campo vazio") — que o roteador rotulava como "consulta
+          // agendada" e dizia à equipe o oposto do que tinha acontecido.
+          // O texto é fixo de propósito: é ele que o roteador reconhece como
+          // agendamento da IA, então não pode depender do que o LLM escrever.
+          try {
+            const quando = `${args.data.slice(8, 10)}/${args.data.slice(5, 7)} às ${args.hora}`;
+            await kommo.createTask({
+              leadId: args.leadId!,
+              text:
+                `ALERTA · ${unit.slug} · [Contato: ${leadAtual?.name ?? 'paciente'}] ` +
+                `🤖 CONSULTA AGENDADA PELA I.A Sofia — ${quando}` +
+                `${especialista ? ` com ${especialista}` : ''}. Confirmar com o paciente.`,
+              completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
+            });
+          } catch (err) {
+            logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao avisar o grupo — agendamento segue valendo');
+          }
         })();
       }
 
