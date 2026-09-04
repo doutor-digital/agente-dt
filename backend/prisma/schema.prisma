@@ -259,6 +259,12 @@ model Unit {
    */
   spineAgendaDays  Int[]   @default([1, 2, 3, 4, 5]) @map("spine_agenda_days")
   spineSlotMinutes Int     @default(30) @map("spine_slot_minutes")
+  /**
+   * Horário por dia da semana, quando difere do padrão: {"6": {"start":"07:00","end":"13:00","lunchStart":null,"lunchEnd":null}}.
+   * Chave = dia (0=domingo … 6=sábado). Dia ausente usa spineAgendaStart/End + almoço.
+   * Nasceu do sábado: todas as unidades atendem, com horário menor que o da semana.
+   */
+  spineDayHours    Json?   @map("spine_day_hours")
   /// Fuso IANA da clínica. Offset fixo no código quebraria em unidade de
   /// Manaus (UTC-4) ou Rio Branco (UTC-5) — e quebraria em silêncio: o
   /// horário pareceria plausível e o paciente chegaria na hora errada.

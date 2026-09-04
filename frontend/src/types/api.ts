@@ -264,6 +264,8 @@ export interface Unit {
   spineLunchEnd: string | null;
   spineAgendaDays: number[];
   spineSlotMinutes: number;
+  /** Horário por dia da semana ("6" = sábado); dia ausente usa o padrão. */
+  spineDayHours?: Record<string, { start: string; end: string; lunchStart?: string | null; lunchEnd?: string | null }> | null;
   spineAiPaused: boolean;
   spineSyncLeads: boolean;
   spineSyncPatients: boolean;

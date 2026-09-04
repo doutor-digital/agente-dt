@@ -78,6 +78,7 @@ async function gradeDoDia(unit: Unit, dia: string) {
       lunchEnd: unit.spineLunchEnd,
       days: unit.spineAgendaDays,
       slotMinutes: unit.spineSlotMinutes,
+      dayHours: (unit.spineDayHours as Record<string, { start: string; end: string; lunchStart?: string | null; lunchEnd?: string | null }> | null) ?? null,
     },
     r.data.schedules,
     { initialDate: dia, endDate: dia },

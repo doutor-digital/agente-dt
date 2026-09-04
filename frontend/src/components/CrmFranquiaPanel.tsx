@@ -53,6 +53,8 @@ interface Form {
   spineLunchEnd: string;
   spineAgendaDays: number[];
   spineSlotMinutes: number;
+  sabadoAbre: string;
+  sabadoFecha: string;
   spineSyncLeads: boolean;
   spineSyncPatients: boolean;
   spineDefaultSourceId: number;
@@ -72,6 +74,8 @@ function doServidor(u: Partial<Unit>): Form {
     spineLunchEnd: u.spineLunchEnd ?? '',
     spineAgendaDays: u.spineAgendaDays ?? [1, 2, 3, 4, 5],
     spineSlotMinutes: u.spineSlotMinutes ?? 30,
+    sabadoAbre: u.spineDayHours?.['6']?.start ?? '',
+    sabadoFecha: u.spineDayHours?.['6']?.end ?? '',
     spineSyncLeads: u.spineSyncLeads ?? false,
     spineSyncPatients: u.spineSyncPatients ?? false,
     spineDefaultSourceId: u.spineDefaultSourceId ?? 20,
@@ -128,8 +132,12 @@ export default function CrmFranquiaPanel() {
     setSalvando(true);
     setErroSalvar(null);
     try {
+      const { sabadoAbre, sabadoFecha, ...resto } = form;
+      const temSabado = form.spineAgendaDays.includes(6) && sabadoAbre && sabadoFecha;
       const payload: Record<string, unknown> = {
-        ...form,
+        ...resto,
+        // Sábado com janela própria (07h–13h na maioria). Vazio = mesmo horário da semana.
+        spineDayHours: temSabado ? { '6': { start: sabadoAbre, end: sabadoFecha, lunchStart: null, lunchEnd: null } } : null,
         spineLunchStart: form.spineLunchStart || null,
         spineLunchEnd: form.spineLunchEnd || null,
         clinicAddress: form.clinicAddress.trim() || null,
@@ -507,6 +515,19 @@ function Horarios({ form, setForm }: { form: Form; setForm: (f: Form) => void })
             })}
           </div>
         </div>
+
+        {form.spineAgendaDays.includes(6) && (
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+            <span className="text-xs font-medium text-amber-200">Sábado tem horário próprio</span>
+            <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+              Na rede o sábado costuma ir até 12h ou 13h. Deixe em branco para usar o mesmo horário da semana.
+            </p>
+            <div className="mt-3 grid gap-4 sm:grid-cols-2">
+              <Hora label="Sábado abre" v={form.sabadoAbre} on={(v) => setForm({ ...form, sabadoAbre: v })} />
+              <Hora label="Sábado fecha" v={form.sabadoFecha} on={(v) => setForm({ ...form, sabadoFecha: v })} />
+            </div>
+          </div>
+        )}
 
         <div className="grid gap-5 sm:grid-cols-2">
           <label className="block">

@@ -122,6 +122,19 @@ const unitInputBase = {
   spineLunchEnd: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
   spineAgendaDays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   spineSlotMinutes: z.number().int().min(5).max(240).optional(),
+  // Horário por dia da semana ("6" = sábado). Dia ausente usa o padrão.
+  spineDayHours: z
+    .record(
+      z.string().regex(/^[0-6]$/),
+      z.object({
+        start: z.string().regex(/^\d{2}:\d{2}$/),
+        end: z.string().regex(/^\d{2}:\d{2}$/),
+        lunchStart: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+        lunchEnd: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+      }),
+    )
+    .nullable()
+    .optional(),
 
   triageEnabled: z.boolean().optional(),
   triageInstructions: z.string().max(4000).nullable().optional(),
@@ -330,13 +343,14 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
 
     const newName = `${source.name} (cópia)`.slice(0, 120);
 
-    const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, ...rest } = source;
+    const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, spineDayHours, ...rest } = source;
     const cloned = await prisma.unit.create({
       data: {
         ...rest,
         slug: candidateSlug,
         name: newName,
         pipelineIntents: pipelineIntents === null ? Prisma.DbNull : (pipelineIntents as Prisma.InputJsonValue),
+        spineDayHours: spineDayHours === null ? Prisma.DbNull : (spineDayHours as Prisma.InputJsonValue),
       },
     });
 
@@ -1479,6 +1493,10 @@ const updateSchemaValidado = updateSchema.superRefine((v, ctx) => {
     if (v.spineAgendaEnd && v.spineLunchEnd > v.spineAgendaEnd) {
       erro('spineLunchEnd', 'o almoço termina depois de a clínica fechar');
     }
+  }
+  for (const [dia, h] of Object.entries(v.spineDayHours ?? {})) {
+    if (h.end <= h.start) erro('spineDayHours', `dia ${dia}: o fechamento tem que ser depois da abertura`);
+    if (h.lunchStart && h.lunchEnd && h.lunchEnd <= h.lunchStart) erro('spineDayHours', `dia ${dia}: o fim do almoço tem que ser depois do início`);
   }
   if (v.spineEnabled && v.spineAgendaDays && v.spineAgendaDays.length === 0) {
     erro('spineAgendaDays', 'escolha ao menos um dia de atendimento');
