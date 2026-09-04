@@ -395,9 +395,11 @@ export function precosDaConsulta(
 ): { antecipado: number; noDia: number } | null {
   const txt = [unit.sourceProdutos, unit.systemPrompt].filter(Boolean).join('\n');
   const num = (s: string) => Number(s.replace(/\./g, '').replace(',', '.'));
-  const ant = txt.match(/R\$\s?(\d{2,4}(?:[.,]\d{2})?)[^\n.;()]{0,60}?antecipad/i);
+  // O valor antecipado é o R$ mais PRÓXIMO antes de "antecipad" — sem outro R$ no meio.
+  // (Na Serra, "R$ 350 no dia, ou R$ 250 com pagamento antecipado" capturava 350.)
+  const ant = txt.match(/R\$\s?(\d{2,4}(?:[.,]\d{2})?)(?:(?!R\$)[^\n.;()]){0,60}?antecipad/i);
   const dia =
-    txt.match(/R\$\s?(\d{2,4}(?:[.,]\d{2})?)\s*(?:no dia|na hora|no local|sem antecip|presencial|na consulta)/i) ??
+    txt.match(/R\$\s?(\d{2,4}(?:[.,]\d{2})?)\s*(?:no dia|no ato|na hora|no local|sem antecip|presencial|na consulta)/i) ??
     txt.match(/(?:ou|,)\s*R\$\s?(\d{2,4}(?:[.,]\d{2})?)\)?\s*(?:no dia|na hora)/i);
   if (!ant || !dia) return null;
   const a = num(ant[1]);
