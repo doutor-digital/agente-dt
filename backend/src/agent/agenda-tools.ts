@@ -644,9 +644,16 @@ async function guardarPaciente(
   idClient: number | null | undefined,
 ): Promise<void> {
   if (!leadId || !idClient) return;
+  // upsert, não update: em unidade sem espelhamento de leads (Boa Vista) a linha nunca
+  // existia e o update era um no-op silencioso — sem vínculo, sem sondagem, sem
+  // reconciliação. 60 dias sem uma consulta marcada lá (achado de 04/09/2026).
   await prisma.spineLeadLink
-    .updateMany({ where: { unitId, kommoLeadId: leadId }, data: { spineIdClient: idClient } })
-    .catch(() => undefined);
+    .upsert({
+      where: { unitId_kommoLeadId: { unitId, kommoLeadId: leadId } },
+      update: { spineIdClient: idClient },
+      create: { unitId, kommoLeadId: leadId, spineIdClient: idClient },
+    })
+    .catch((err) => logger.warn({ err, unitId, leadId, idClient }, 'agenda: falha ao gravar vínculo lead↔paciente'));
   AgendaReconcileService.esqueceConsulta(unitId, leadId);
 }
 
@@ -703,7 +710,7 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
           where: { unitId: fresca.id, kommoLeadId: args.leadId },
           data: { spineIdSchedule: null, agendadoPara: null },
         })
-        .catch(() => undefined);
+        .catch((err) => logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao limpar vínculo após cancelar'));
       AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
 
       return `Consulta de ${porExtenso(atual.quando)} cancelada. Confirme ao paciente e pergunte se ele quer remarcar para outro dia.`;
@@ -1000,14 +1007,18 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
 
       if (args.leadId) {
         await prisma.spineLeadLink
-          .updateMany({
-            where: { unitId: fresca.id, kommoLeadId: args.leadId },
-            data: {
+          .upsert({
+            where: { unitId_kommoLeadId: { unitId: fresca.id, kommoLeadId: args.leadId } },
+            update: { spineIdSchedule: r.data?.idSchedule ?? null, agendadoPara: `${args.data}T${args.hora}`, spineIdClient: args.idClient },
+            create: {
+              unitId: fresca.id,
+              kommoLeadId: args.leadId,
+              spineIdClient: args.idClient,
               spineIdSchedule: r.data?.idSchedule ?? null,
               agendadoPara: `${args.data}T${args.hora}`,
             },
           })
-          .catch(() => undefined);
+          .catch((err) => logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao gravar vínculo após agendar'));
         AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
       }
 

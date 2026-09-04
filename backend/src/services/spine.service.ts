@@ -1,4 +1,5 @@
-import axios, { type AxiosInstance } from 'axios';
+import { randomUUID } from 'node:crypto';
+import axios, { type AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 
@@ -74,7 +75,7 @@ export type SpineUnit = Pick<Unit, 'spineBaseUrl' | 'spineToken' | 'spineTimezon
 
 function client(unit: SpineUnit): AxiosInstance | null {
   if (!unit.spineToken) return null;
-  return axios.create({
+  const http = axios.create({
     baseURL: (unit.spineBaseUrl || '').replace(/\/$/, ''),
     timeout: 30_000,
     headers: {
@@ -82,11 +83,29 @@ function client(unit: SpineUnit): AxiosInstance | null {
       'Content-Type': 'application/json',
     },
   });
+  // Guia da franquia §12: registrar request_id e retentar falhas transitórias.
+  http.interceptors.request.use((cfg) => {
+    cfg.headers.set('X-Request-Id', randomUUID());
+    return cfg;
+  });
+  http.interceptors.response.use(undefined, async (err: AxiosError) => {
+    const cfg = err.config as (InternalAxiosRequestConfig & { __retentou?: boolean }) | undefined;
+    const idempotente = !!cfg && (cfg.method?.toUpperCase() === 'GET' || /\/search$/.test(cfg.url ?? ''));
+    const transitorio = !!err.response && err.response.status >= 500;
+    if (cfg && idempotente && transitorio && !cfg.__retentou) {
+      cfg.__retentou = true;
+      await new Promise((r) => setTimeout(r, 400));
+      return http.request(cfg);
+    }
+    throw err;
+  });
+  return http;
 }
 
-function describe(err: unknown): { error: string; status?: number } {
+function describe(err: unknown): { error: string; status?: number; requestId?: string } {
   if (axios.isAxiosError(err)) {
     const status = err.response?.status;
+    const requestId = String(err.config?.headers?.['X-Request-Id'] ?? '') || undefined;
     const body = err.response?.data as { error?: string; errors?: string[] } | undefined;
     const msg = body?.errors?.join('; ') || body?.error || err.message;
     const humano =
@@ -97,7 +116,7 @@ function describe(err: unknown): { error: string; status?: number } {
           : status === 404
             ? 'endpoint não encontrado'
             : msg;
-    return { error: `${status ?? '?'}: ${humano}`, status };
+    return { error: `${status ?? '?'}: ${humano}`, status, requestId };
   }
   return { error: err instanceof Error ? err.message : String(err) };
 }
@@ -215,7 +234,7 @@ export async function searchSchedules(
     };
   } catch (err) {
     const d = describe(err);
-    logger.warn({ erro: d.error, ...params }, 'spine: falha ao buscar agendamentos');
+    logger.warn({ erro: d.error, requestId: d.requestId, ...params }, 'spine: falha ao buscar agendamentos');
     return { ok: false, ...d };
   }
 }
@@ -250,7 +269,7 @@ export async function createSchedule(
     return { ok: true, data: { idSchedule: data?.data?.idSchedule ?? data?.idSchedule } };
   } catch (err) {
     const d = describe(err);
-    logger.warn({ erro: d.error, input }, 'spine: falha ao criar agendamento');
+    logger.warn({ erro: d.error, requestId: d.requestId, input }, 'spine: falha ao criar agendamento');
     return { ok: false, ...d };
   }
 }
