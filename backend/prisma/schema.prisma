@@ -1573,3 +1573,47 @@ model MessageClaim {
   @@index([expiresAt])
   @@map("message_claims")
 }
+
+/// Livro de resultados: uma linha por conversa — o que a IA fez e o que aconteceu
+/// depois (Kommo e franquia). É a "recompensa" real: consulta marcada que virou
+/// paciente na cadeira. Recalculada pelo resultados-worker até ficar `final`.
+model ConversationOutcome {
+  id                  String    @id @default(cuid())
+  unitId              String    @map("unit_id")
+  conversationId      String    @unique @map("conversation_id")
+  kommoLeadId         Int       @map("kommo_lead_id")
+  inicioEm            DateTime  @map("inicio_em")
+  ultimaMsgEm         DateTime? @map("ultima_msg_em")
+  msgsPaciente        Int       @default(0) @map("msgs_paciente")
+  msgsIa              Int       @default(0) @map("msgs_ia")
+  /// Segundos entre a 1ª mensagem do paciente e a 1ª resposta da IA.
+  primeiraRespostaSeg Int?      @map("primeira_resposta_seg")
+  /// Quantas vezes a IA consultou a agenda e quantos horários ofereceu no total.
+  consultasAgenda     Int       @default(0) @map("consultas_agenda")
+  horariosOferecidos  Int       @default(0) @map("horarios_oferecidos")
+  /// Posição (1 = primeira) da mensagem da IA em que o preço apareceu. Nulo = nunca.
+  precoNaMsg          Int?      @map("preco_na_msg")
+  followUps           Int       @default(0) @map("follow_ups")
+  handoff             Boolean   @default(false)
+  agendouIa           Boolean   @default(false) @map("agendou_ia")
+  agendouIaEm         DateTime? @map("agendou_ia_em")
+  agendadoPara        String?   @map("agendado_para")
+  spineIdSchedule     Int?      @map("spine_id_schedule")
+  etapaKommo          String?   @map("etapa_kommo")
+  /// Lead chegou a AGENDADO (ou além) no Kommo — pela IA ou pela equipe depois dela.
+  agendouKommo        Boolean   @default(false) @map("agendou_kommo")
+  dataConsultaKommo   DateTime? @map("data_consulta_kommo")
+  situacaoKommo       String?   @map("situacao_kommo")
+  pgAntecipado        Boolean?  @map("pg_antecipado")
+  statusFranquia      String?   @map("status_franquia")
+  /// true = ATENDIDO · false = NÃO COMPARECEU · null = ainda não se sabe.
+  compareceu          Boolean?
+  /// em_conversa · nao_agendou · agendado_futuro · compareceu · faltou · cancelou · sem_registro
+  desfecho            String    @default("em_conversa")
+  final               Boolean   @default(false)
+  calculadoEm         DateTime  @default(now()) @updatedAt @map("calculado_em")
+
+  @@index([unitId, inicioEm])
+  @@index([unitId, desfecho])
+  @@map("conversation_outcomes")
+}
