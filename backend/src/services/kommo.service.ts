@@ -881,8 +881,21 @@ export class KommoClient {
         },
       });
       const eventos = data?._embedded?.events ?? [];
+      // Responder pelo chat NÃO gera evento com autor: o Kommo grava
+      // `outgoing_chat_message` com created_by=0, igual ao que o robô manda. Só
+      // com o filtro de autor, a equipe respondia e o alerta disparava mesmo
+      // assim ("ninguém respondeu" com o áudio da atendente na tela).
+      //
+      // Depois do handoff a IA está pausada, então mensagem que sai dali em
+      // diante é de gente. A folga cobre a própria despedida da IA, que sai
+      // no mesmo instante do handoff.
+      const FOLGA_S = 90;
       const humano = eventos
-        .filter((e) => Number(e.created_by ?? 0) > 0)
+        .filter(
+          (e) =>
+            Number(e.created_by ?? 0) > 0 ||
+            (e.type === 'outgoing_chat_message' && Number(e.created_at ?? 0) > desdeUnix + FOLGA_S),
+        )
         .sort((a, b) => Number(a.created_at ?? 0) - Number(b.created_at ?? 0))[0];
       if (!humano) return vazio;
       return {
