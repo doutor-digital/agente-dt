@@ -15,6 +15,9 @@ export interface SessionStats {
   sessoesRealizadas: number;
 }
 
+const FALHA_TTL_MS = 5 * 60_000;
+const falhasRecentes = new Map<string, number>();
+
 const VAZIO: SessionStats = {
   linked: false,
   proximaSessao: null,
@@ -56,8 +59,15 @@ export async function computeSessionStats(
 
   if (!idClient) return { ...VAZIO };
 
+  // 04/09/2026 08h: a franquia travou em 2 pacientes da Imperatriz e o painel chamou
+  // este endpoint 85× em uma hora, cada uma esperando 30 s. Falha recente = espera 5 min.
+  const chaveFalha = `${unit.id}:${idClient}`;
+  const falhouEm = falhasRecentes.get(chaveFalha);
+  if (falhouEm && Date.now() - falhouEm < FALHA_TTL_MS) return { ...VAZIO, linked: true };
+
   const r = await SpineService.getClient(unit, idClient);
   if (!r.ok || !r.data?.client) {
+    falhasRecentes.set(chaveFalha, Date.now());
     logger.warn(
       { unit: unit.slug, kommoLeadId, idClient, erro: r.ok ? 'sem cliente' : r.error },
       'session-stats: falha ao ler paciente na franquia',
