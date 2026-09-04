@@ -40,7 +40,8 @@ export async function funcionamentoHandler(req: Request, res: Response): Promise
       decisao('__stage_not_allowed__'),
       decisao('__encerramento_repetido__'),
       decisao('__out_of_hours__'),
-      prisma.executionTrace.count({ where: { unitId, createdAt: { gte: desde }, iaDecision: { string_starts_with: '__coalesced_into__' } } }),
+      // ia_decision é Json; o filtro por prefixo do Prisma não casa string JSON no Postgres — vai em SQL.
+      prisma.$queryRaw<Array<{ n: bigint }>>`select count(*)::bigint as n from execution_traces where unit_id = ${unitId} and created_at >= ${desde} and ia_decision::text like '"__coalesced_into__%'`.then((r) => Number(r[0]?.n ?? 0)),
       passo({ title: { startsWith: 'Burst coalescido' } }),
       passo({ kind: 'TOOL_RESULT', title: { startsWith: 'consultar_horarios' } }),
       passo({ kind: 'TOOL_RESULT', title: { startsWith: 'Consulta marcada:' } }),
