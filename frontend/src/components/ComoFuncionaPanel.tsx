@@ -303,6 +303,14 @@ const GRUPOS: Grupo[] = [
         contador: (f) => `${n(f.contadores.entregasSalesbot, 'resposta entregue', 'respostas entregues')} · ${f.contadores.entregasNota} viraram nota interna`,
       },
       {
+        titulo: 'Nota de voz (espelho)',
+        oQueFaz: 'Se o paciente mandou áudio e a resposta dá para ouvir, a Sofia responde em nota de voz pela conversa do WhatsApp. Chave Pix, link, confirmação em bloco e lista de horários ficam em texto. Qualquer falha cai em texto, e 20 s depois ela relê o chat: erro marcado pelo Kommo vira reenvio em texto.',
+        porQue: 'A API oficial do Kommo não manda mídia. O caminho é o serviço de chat interno com a sessão web (05/09/2026), então a validação e a queda para texto são obrigatórias.',
+        onde: { tab: 'units', rotulo: 'Unidades › Entrega' },
+        estado: flag('voiceReplyEnabled'),
+        contador: (f) => `${n(f.contadores.vozEnviadas ?? 0, 'áudio enviado', 'áudios enviados')} · ${f.contadores.vozCaiuEmTexto ?? 0} caíram em texto · ${f.contadores.vozReenviadaEmTexto ?? 0} reenviados após erro · ${f.contadores.vozFicouEmTexto ?? 0} ficaram em texto pela regra`,
+      },
+      {
         titulo: 'Leitura de confirmação e fallback',
         oQueFaz: 'Depois de gravar, relê o campo para conferir se o Kommo guardou o texto. Se a gravação falhar, a resposta vira nota interna e a equipe é avisada.',
         porQue: 'Emoji de 4 bytes cortava a mensagem no meio; o readback pegou.',
