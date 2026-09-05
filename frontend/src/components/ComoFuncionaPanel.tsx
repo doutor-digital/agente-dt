@@ -193,6 +193,14 @@ const GRUPOS: Grupo[] = [
         contador: (f) => `${n(f.contadores.consultasMarcadas, 'consulta marcada', 'consultas marcadas')} · ${f.contadores.agendarFalhou} recusadas pela franquia`,
       },
       {
+        titulo: 'Reserva só depois do pagamento',
+        oQueFaz: 'Onde a taxa antecipada é obrigatória, a ferramenta de agendar recusa marcar enquanto não houver comprovante lido nesta conversa ou o campo "✓ Consulta pg antecipado" marcado no cartão. A IA manda a chave PIX e espera o comprovante.',
+        porQue: 'Boa Vista, 05/09: Lindomar foi confirmado para 09/09 sem pagar os R$ 100. O manual da unidade já dizia "NÃO agende ainda" — só regra em código segura o modelo.',
+        onde: { tab: 'crm-franquia', rotulo: 'CRM da franquia › Reserva só com pagamento' },
+        estado: flag('spineBookingRequiresPayment'),
+        contador: (f) => n(f.contadores.reservasSemPagamento ?? 0, 'reserva barrada sem pagamento', 'reservas barradas sem pagamento'),
+      },
+      {
         titulo: 'Conferência de paciente',
         oQueFaz: 'Antes de marcar, remarcar ou cancelar, confere se o paciente é o desta conversa. Divergiu, não mexe.',
         porQue: 'O estrago de cancelar a consulta de outra pessoa é invisível: a resposta parece normal.',
@@ -212,6 +220,19 @@ const GRUPOS: Grupo[] = [
         onde: { tab: 'follow-up', rotulo: 'Follow-up' },
         estado: flag('followUpEnabled'),
         contador: (f) => n(f.conversas.followUps, 'follow-up enviado', 'follow-ups enviados'),
+      },
+      {
+        titulo: 'Um processo só para follow-up e alertas',
+        oQueFaz: 'Os robôs periódicos (follow-up, reativação, alertas, juiz, custos, resultados) rodam num único processo, eleito por um lease no banco renovado a cada 30 s. Réplica extra ou janela de deploy fica esperando. Cada degrau de follow-up também é reservado antes de sair.',
+        porQue: 'Lucilene, Araguaína, 05/09: duas cobranças de Pix com 3 s de diferença. Dois containers rodaram lado a lado por 18 h e 148 pacientes de 9 unidades receberam follow-up em dobro.',
+        estado: sempre,
+        contador: (f) => {
+          const w = f.workers;
+          if (!w) return 'sem informação de liderança';
+          const desde = w.desde ? ` desde ${w.desde.slice(11, 16)} UTC` : '';
+          if (w.lider) return `este processo lidera (${w.modo === 'lease' ? 'com lease' : 'sem lease — banco não respondeu'})${desde} · dono ${w.dono ?? '?'}`;
+          return `outro processo lidera: ${w.donoNoBanco ?? 'ninguém no banco'}${w.leaseVencido ? ' (lease vencido)' : ''}`;
+        },
       },
       {
         titulo: 'EM ESPERA em vez de PERDIDO',

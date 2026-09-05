@@ -57,6 +57,7 @@ interface Form {
   sabadoFecha: string;
   spineSyncLeads: boolean;
   spineSyncPatients: boolean;
+  spineBookingRequiresPayment: boolean;
   spineDefaultSourceId: number;
   clinicAddress: string;
   pixKey: string;
@@ -78,6 +79,7 @@ function doServidor(u: Partial<Unit>): Form {
     sabadoFecha: u.spineDayHours?.['6']?.end ?? '',
     spineSyncLeads: u.spineSyncLeads ?? false,
     spineSyncPatients: u.spineSyncPatients ?? false,
+    spineBookingRequiresPayment: u.spineBookingRequiresPayment ?? false,
     spineDefaultSourceId: u.spineDefaultSourceId ?? 20,
     clinicAddress: u.clinicAddress ?? '',
     pixKey: u.pixKey ?? '',
@@ -625,6 +627,26 @@ function Espelhamento({
             </li>
           </ul>
         </div>
+      </div>
+
+      <div className="mt-5 rounded-xl border border-zinc-800 p-4">
+        <Interruptor
+          ligado={form.spineBookingRequiresPayment}
+          desabilitado={!temToken}
+          onChange={(v) => setForm({ ...form, spineBookingRequiresPayment: v })}
+          titulo="Reserva só com pagamento antecipado"
+          ligadoTexto="Ligado — a IA não marca a consulta enquanto não houver comprovante lido na conversa ou o campo “✓ Consulta pg antecipado” marcado no cartão. Ela manda a chave PIX, pede o comprovante e só então reserva. A confirmação passa a dizer “R$ X no total — R$ Y antecipado + R$ Z no dia”."
+          desligadoTexto={
+            !temToken
+              ? 'Configure o token da franquia acima primeiro.'
+              : 'Desligado — a IA reserva o horário assim que o paciente escolhe, e o pagamento antecipado é cobrado depois (escada de follow-up da etapa AGENDADO).'
+          }
+        />
+        <p className="mt-3 border-t border-zinc-800 pt-3 text-xs leading-relaxed text-zinc-500">
+          Para unidades em que o antecipado é uma <span className="text-zinc-300">taxa de reserva</span> (Boa Vista: R$ 100 que
+          garantem o horário e abatem do total), não uma alternativa ao valor do dia. Em 05/09 a IA confirmou consulta sem
+          a taxa mesmo com o manual dizendo &quot;não agende ainda&quot; — regra em código segura, texto não.
+        </p>
       </div>
 
       <div className="mt-5 rounded-xl border border-zinc-800 p-4">

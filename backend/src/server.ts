@@ -9,18 +9,19 @@ import { prisma } from './lib/prisma.js';
 import { apiRouter } from './routes/api.routes.js';
 import { getCheckpointer } from './agent/graph.js';
 import { ensureDefaultUnit } from './services/units.service.js';
-import { startWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
-import { startDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
-import { startFollowUpWorker } from './lib/follow-up-worker.js';
-import { startReminderWorker } from './lib/reminder-worker.js';
-import { startReactivationWorker } from './lib/reactivation-worker.js';
-import { startSlaAlertWorker } from './lib/sla-alert-worker.js';
-import { startAgendamentoPerdidoWorker } from './lib/agendamento-perdido-worker.js';
-import { startTaxaErroWorker } from './lib/taxa-erro-worker.js';
-import { startCardValidationWorker } from './lib/card-validation-worker.js';
+import { startWhatsappCostScheduler, stopWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
+import { startDashboardMvRefresher, stopDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
+import { startFollowUpWorker, stopFollowUpWorker } from './lib/follow-up-worker.js';
+import { startReminderWorker, stopReminderWorker } from './lib/reminder-worker.js';
+import { startReactivationWorker, stopReactivationWorker } from './lib/reactivation-worker.js';
+import { startSlaAlertWorker, stopSlaAlertWorker } from './lib/sla-alert-worker.js';
+import { startAgendamentoPerdidoWorker, stopAgendamentoPerdidoWorker } from './lib/agendamento-perdido-worker.js';
+import { startTaxaErroWorker, stopTaxaErroWorker } from './lib/taxa-erro-worker.js';
+import { startCardValidationWorker, stopCardValidationWorker } from './lib/card-validation-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
-import { startJudgeWorker } from './lib/judge-worker.js';
-import { startResultadosWorker } from './lib/resultados-worker.js';
+import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
+import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
+import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,20 +85,40 @@ async function main(): Promise<void> {
     logger.warn({ err }, 'falha ao semear Unit default — webhooks legados podem falhar');
   }
 
-  startWhatsappCostScheduler();
-
-  startDashboardMvRefresher();
-
+  // Por processo: vigia respostas pendentes que ESTE processo prometeu entregar.
   startStaleReplyMonitor();
-  startJudgeWorker();
-  startFollowUpWorker();
-  startReminderWorker();
-  startReactivationWorker();
-  startSlaAlertWorker();
-  startAgendamentoPerdidoWorker();
-  startTaxaErroWorker();
-  startCardValidationWorker();
-  startResultadosWorker();
+
+  // Um líder só. Em 04/09/2026 dois containers rodaram lado a lado por 18 h e
+  // cada follow-up saiu duas vezes (148 pacientes). Quem detém o lease no banco
+  // roda os workers; o outro processo espera — inclusive na janela do deploy.
+  await iniciarSupervisorDosWorkers({
+    iniciar: () => {
+      startWhatsappCostScheduler();
+      startDashboardMvRefresher();
+      startJudgeWorker();
+      startFollowUpWorker();
+      startReminderWorker();
+      startReactivationWorker();
+      startSlaAlertWorker();
+      startAgendamentoPerdidoWorker();
+      startTaxaErroWorker();
+      startCardValidationWorker();
+      startResultadosWorker();
+    },
+    parar: () => {
+      stopWhatsappCostScheduler();
+      stopDashboardMvRefresher();
+      stopJudgeWorker();
+      stopFollowUpWorker();
+      stopReminderWorker();
+      stopReactivationWorker();
+      stopSlaAlertWorker();
+      stopAgendamentoPerdidoWorker();
+      stopTaxaErroWorker();
+      stopCardValidationWorker();
+      stopResultadosWorker();
+    },
+  });
 
   const server = app.listen(env.PORT, () => {
     logger.info(`Backend ouvindo em http://localhost:${env.PORT}`);
@@ -108,6 +129,8 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutdown iniciado');
     server.close();
+    // Solta o lease antes de desconectar: o container novo assume em ≤30 s.
+    await encerrarSupervisorDosWorkers();
     await prisma.$disconnect();
     process.exit(0);
   };
