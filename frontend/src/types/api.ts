@@ -275,6 +275,10 @@ export interface Unit {
   pixKey?: string | null;
   pixHolder?: string | null;
   spineDefaultSourceId: number;
+  /** Origem gravada pela Sofia no paciente que ela cadastra para agendar (10002 = IA SOFIA). */
+  spineIaSourceId: number | null;
+  /** Gravar a mesma origem também no lead espelhado. */
+  spineIaSourceLeads: boolean;
   triageEnabled: boolean;
   triageInstructions: string | null;
   metaMonthlyBudgetUsd: number | string;

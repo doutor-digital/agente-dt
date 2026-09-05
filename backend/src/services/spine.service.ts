@@ -336,8 +336,22 @@ export function nomeDaOrigem(id: number): string {
     22: 'Facebook',
     23: 'Instagram',
     10000: 'TikTok',
+    10002: 'IA SOFIA',
   };
   return rotulos[id] ?? `origem #${id}`;
+}
+
+/**
+ * Origem que a Sofia grava no paciente que ELA cadastra/converte para agendar.
+ *
+ * Pedido do João (05/09/2026), quando a franquia criou a origem "IA SOFIA":
+ * "vamos colocar essa origem para todos que a IA agendar". Paciente na franquia
+ * só nasce na hora de marcar (cadastrar_paciente exige o horário aceito), então
+ * marcar o paciente É marcar quem a IA agendou. Sem a configuração, segue a
+ * origem padrão da unidade.
+ */
+export function origemDaSofia(unit: { spineIaSourceId: number | null; spineDefaultSourceId: number }): number {
+  return unit.spineIaSourceId ?? unit.spineDefaultSourceId;
 }
 
 export interface SpineCreateLead {
@@ -727,6 +741,7 @@ export const SpineService = {
   searchLeads,
   resolverIdSource,
   nomeDaOrigem,
+  origemDaSofia,
   resolverUf,
   normalizarWhatsapp,
   searchClients,

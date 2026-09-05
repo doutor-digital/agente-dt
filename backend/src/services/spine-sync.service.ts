@@ -235,10 +235,16 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
       name: limparNome(titulo),
       whatsapp: whatsapp ? SpineService.normalizarWhatsapp(whatsapp) || null : null,
       description: valor(CAMPO_QUEIXA) ?? 'Lead vindo do atendimento por WhatsApp.',
-      idSource: SpineService.resolverIdSource(
-        valor(CAMPO_ORIGEM) ?? canalNoTitulo(titulo),
-        unit.spineDefaultSourceId,
-      ),
+      // Origem do LEAD espelhado: a de marketing traduzida do Kommo (Instagram, Google,
+      // WhatsApp…). "IA SOFIA" aqui só se a unidade pediu: o lead nasce antes de sabermos
+      // se vai agendar, e quem a recepção marcar depois também apareceria como IA.
+      idSource:
+        unit.spineIaSourceLeads && unit.spineIaSourceId
+          ? unit.spineIaSourceId
+          : SpineService.resolverIdSource(
+              valor(CAMPO_ORIGEM) ?? canalNoTitulo(titulo),
+              unit.spineDefaultSourceId,
+            ),
       addressCity: valor(CAMPO_CIDADE)?.toUpperCase() ?? null,
       addressUf: SpineService.resolverUf(valor(CAMPO_ESTADO)),
     },
