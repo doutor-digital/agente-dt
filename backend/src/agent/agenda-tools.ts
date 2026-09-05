@@ -537,12 +537,15 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
 
       let idClient: number | null = null;
       let via: 'convert' | 'create' = 'create';
+      // Quem a Sofia cadastra aqui vai agendar agora → origem "IA SOFIA" na franquia,
+      // quando a unidade tiver essa origem configurada.
+      const origem = SpineService.origemDaSofia(fresca);
 
       if (vinculo?.spineIdLead) {
         const c = await SpineService.convertLead(fresca, {
           idLead: vinculo.spineIdLead,
           name: args.nome.trim(),
-          idSource: fresca.spineDefaultSourceId,
+          idSource: origem,
           whatsapp: fone,
         });
         if (c.ok && c.data?.idClient) {
@@ -560,7 +563,7 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
         const r = await SpineService.createClient(fresca, {
           name: args.nome.trim(),
           whatsapp: fone,
-          idSource: fresca.spineDefaultSourceId,
+          idSource: origem,
           idLead: vinculo?.spineIdLead ?? null,
           addressCity: args.cidade?.trim().toUpperCase() ?? null,
           addressUf: SpineService.resolverUf(args.uf ?? null),
@@ -579,8 +582,8 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
 
       await recorder.step({
         kind: 'TOOL_RESULT',
-        title: `cadastrar_paciente "${args.nome}": ok via ${via} (idClient ${idClient})`,
-        payload: { nome: args.nome, telefone: fone, idClient, via, idLead: vinculo?.spineIdLead ?? null },
+        title: `cadastrar_paciente "${args.nome}": ok via ${via} (idClient ${idClient}, origem ${SpineService.nomeDaOrigem(origem)})`,
+        payload: { nome: args.nome, telefone: fone, idClient, via, idLead: vinculo?.spineIdLead ?? null, idSource: origem },
       });
       await guardarPaciente(fresca.id, args.leadId, idClient);
       return `Cadastrado. idClient ${idClient} — use este número em agendar_consulta.`;

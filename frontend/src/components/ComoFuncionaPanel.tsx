@@ -201,6 +201,14 @@ const GRUPOS: Grupo[] = [
         contador: (f) => n(f.contadores.reservasSemPagamento ?? 0, 'reserva barrada sem pagamento', 'reservas barradas sem pagamento'),
       },
       {
+        titulo: 'Origem "IA SOFIA" na franquia',
+        oQueFaz: 'O paciente que a Sofia cadastra ou converte para marcar nasce na franquia com a origem escolhida aqui (a franquia criou "IA SOFIA" em 05/09). O lead espelhado mantém a origem de marketing, salvo se a unidade pedir o contrário.',
+        porQue: 'A franquia quer ver no próprio sistema quantos pacientes vieram pela IA. A API não deixa mudar origem depois de criada, então só vale na criação.',
+        onde: { tab: 'crm-franquia', rotulo: 'CRM da franquia › Origem de quem a Sofia agenda' },
+        estado: (u) => (u.spineIaSourceId ? 'ligado' : 'desligado'),
+        contador: () => null,
+      },
+      {
         titulo: 'Conferência de paciente',
         oQueFaz: 'Antes de marcar, remarcar ou cancelar, confere se o paciente é o desta conversa. Divergiu, não mexe.',
         porQue: 'O estrago de cancelar a consulta de outra pessoa é invisível: a resposta parece normal.',
