@@ -69,6 +69,7 @@ const blankInput: UnitInput = {
   kommoBypassSalesbot: false,
   kommoWidgetReplyEnabled: false,
   kommoSalesbotExecuteEnabled: false,
+  voiceReplyEnabled: false,
   kommoWidgetSecret: '',
   kommoWidgetSalesbotId: null,
   llmProvider: 'openai',
@@ -109,6 +110,7 @@ function unitToInput(u: Unit): UnitInput {
     kommoBypassSalesbot: u.kommoBypassSalesbot ?? false,
     kommoWidgetReplyEnabled: u.kommoWidgetReplyEnabled ?? false,
     kommoSalesbotExecuteEnabled: u.kommoSalesbotExecuteEnabled ?? false,
+    voiceReplyEnabled: u.voiceReplyEnabled ?? false,
     kommoWidgetSecret: u.kommoWidgetSecret ?? '',
     kommoWidgetSalesbotId: u.kommoWidgetSalesbotId ?? null,
     llmProvider: u.llmProvider ?? 'openai',
@@ -632,6 +634,28 @@ export function UnitsPanel() {
                   <strong>Ao ligar, DESLIGUE no Kommo o gatilho "Quando o campo Resposta IA mudar → rodar Salesbot"</strong>{' '}
                   desta unidade, senão o bot dispara 2× e a mensagem duplica. Use junto com o "Intervalo mínimo entre
                   respostas" na aba Persona.
+                </div>
+              </div>
+            </label>
+
+            <label className="flex items-start gap-3 rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/5 p-3 mt-3 cursor-pointer hover:bg-fuchsia-500/10 transition-colors">
+              <input
+                type="checkbox"
+                checked={!!draft.voiceReplyEnabled}
+                onChange={(e) => setDraft({ ...draft, voiceReplyEnabled: e.target.checked })}
+                className="mt-0.5 accent-fuchsia-500"
+              />
+              <div className="flex-1">
+                <div className="text-sm font-semibold text-fuchsia-100">
+                  🔊 Responder em áudio quando o paciente mandar áudio
+                </div>
+                <div className="text-[11px] text-fuchsia-200/70 mt-1 leading-relaxed">
+                  Espelho: só quando a mensagem recebida foi um áudio, e só se a resposta der para ouvir (curta, sem chave
+                  Pix, sem link, sem confirmação em bloco ou lista de horários). A voz sai pela conversa do WhatsApp como
+                  nota de voz, em nome do usuário &quot;Doutor Digital&quot;. <strong>Qualquer falha cai em texto</strong> pelo
+                  caminho normal, e a Sofia relê o chat 20 s depois: se o Kommo marcar erro no áudio, reenvia o texto.
+                  Depende da sessão web do Kommo guardada na VPS; se ela cair, tudo segue em texto e o rastro mostra
+                  &quot;Áudio falhou&quot;.
                 </div>
               </div>
             </label>

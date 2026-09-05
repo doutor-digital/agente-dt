@@ -211,6 +211,8 @@ export interface Unit {
   kommoWidgetSecret: string | null;
   kommoWidgetSalesbotId: number | null;
   kommoSalesbotExecuteEnabled: boolean;
+  /** Responder em nota de voz quando o paciente mandou áudio (espelho); falha cai em texto. */
+  voiceReplyEnabled: boolean;
   llmProvider: string;
   anthropicApiKey: string | null;
   anthropicModel: string;

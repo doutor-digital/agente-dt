@@ -34,7 +34,8 @@ export async function funcionamentoHandler(req: Request, res: Response): Promise
       rastros, pausados, etapaNaoPermitida, encerramentoRepetido, foraDoHorario, agrupadosTrace,
       burstsAgrupados, consultasAgenda, consultasMarcadas, agendarFalhou, leadsMovidos, resumosSdr,
       handoffsCarimbados, iaPausada, tarefasCriadas, alertas, safetyNet, entregasSalesbot, entregasNota,
-      capturas, readbackDivergiu, patchFalhou, fallbackNota, reservasSemPagamento, conversas, llm,
+      capturas, readbackDivergiu, patchFalhou, fallbackNota, reservasSemPagamento,
+      vozEnviadas, vozCaiuEmTexto, vozReenviadaEmTexto, vozFicouEmTexto, conversas, llm,
     ] = await Promise.all([
       prisma.executionTrace.count({ where: { unitId, createdAt: { gte: desde } } }),
       decisao('__paused__'),
@@ -61,6 +62,10 @@ export async function funcionamentoHandler(req: Request, res: Response): Promise
       passo({ kind: 'ERROR', title: { contains: 'PATCH no campo "Resposta IA" falhou' } }),
       passo({ title: { startsWith: '📝 Caiu no fallback' } }),
       passo({ kind: 'ERROR', title: { startsWith: 'agendar_consulta recusado — reserva sem pagamento' } }),
+      passo({ title: { startsWith: '🔊 Resposta enviada em áudio' } }),
+      passo({ kind: 'ERROR', title: { startsWith: '🔊 Áudio falhou' } }),
+      passo({ kind: 'ERROR', title: { startsWith: '🔊 Áudio marcado com erro' } }),
+      passo({ title: { startsWith: '🔊 Resposta fica em texto' } }),
       prisma.conversation.aggregate({
         where: { unitId, createdAt: { gte: desde } },
         _count: { _all: true, handoffAt: true, convertedAt: true },
@@ -97,6 +102,7 @@ export async function funcionamentoHandler(req: Request, res: Response): Promise
         burstsAgrupados, consultasAgenda, consultasMarcadas, agendarFalhou, leadsMovidos, resumosSdr,
         handoffsCarimbados, iaPausada, tarefasCriadas, alertas, safetyNet, entregasSalesbot, entregasNota,
         capturas, readbackDivergiu, patchFalhou, fallbackNota, reservasSemPagamento,
+        vozEnviadas, vozCaiuEmTexto, vozReenviadaEmTexto, vozFicouEmTexto,
       },
       sondagem: {
         consultas: consultasAgenda,
