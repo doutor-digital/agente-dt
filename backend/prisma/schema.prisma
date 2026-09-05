@@ -124,6 +124,10 @@ model Unit {
   // do gatilho). ATENÇÃO: ao ligar, o gatilho de "campo mudou" do DP DEVE ser
   // DESLIGADO nesta unidade, senão dispara 2× e duplica a mensagem.
   kommoSalesbotExecuteEnabled Boolean @default(false) @map("kommo_salesbot_execute_enabled")
+  /// Responder em NOTA DE VOZ quando o paciente mandou áudio (espelho). Sai pelo serviço
+  /// de chat interno do Kommo com o token criado da sessão web (KOMMO_WEB_SESSION_ID);
+  /// qualquer falha na cadeia (TTS, Drive, chat, validação) cai em texto pelo caminho normal.
+  voiceReplyEnabled Boolean @default(false) @map("voice_reply_enabled")
 
   // PROVEDOR DE LLM DO CHAT — "openai" (padrão) ou "anthropic". Define qual
   // modelo o agente (graph.ts) usa. Embeddings (RAG) e transcrição de áudio
@@ -1584,6 +1588,23 @@ model MessageClaim {
 
   @@index([expiresAt])
   @@map("message_claims")
+}
+
+/// Token do serviço de chat interno do Kommo (amojo), por unidade. Criado com a sessão
+/// web do usuário (cookie), vale ~3 dias e é recriado sozinho. É o que permite mandar
+/// NOTA DE VOZ pela conversa do WhatsApp — a API oficial não tem mídia (05/09/2026).
+model KommoChatSession {
+  unitId         String   @id @map("unit_id")
+  subdomain      String
+  accessToken    String   @map("access_token")
+  refreshToken   String   @map("refresh_token")
+  expiresAt      DateTime @map("expires_at")
+  amojoAccountId String?  @map("amojo_account_id")
+  userName       String?  @map("user_name")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("kommo_chat_sessions")
 }
 
 /// Liderança dos workers periódicos (follow-up, reativação, alertas, juiz…):

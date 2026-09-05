@@ -16,6 +16,8 @@ export const UNIDADES = [
   { slug: 'parauapebas',   nome: 'Parauapebas',    subdominio: 'parauapebasdoutorhernia',  credencial: { id: 'uDAqF7NwhVpJaVS0', name: 'Kommo Parauapebas' }, trigger: { id: 'zJr1ho1dNLLOuAmM', name: 'WhatsApp Trigger · Parauapebas' } },
   { slug: 'porto',         nome: 'Porto Nacional', subdominio: 'doutorherniaporto',        credencial: { id: '0pmkejndWKuiPTZC', name: 'Kommo Porto Nacional' }, trigger: { id: 'ruVSzcd7DpD1xQ77', name: 'WhatsApp Trigger · Porto Nacional' } },
   { slug: 'serra',         nome: 'Serra',          subdominio: 'drherniaserra',            credencial: { id: 'q2R9WqjWa9HCGkH4', name: 'Kommo Serra' }, trigger: { id: 'q6f4vQ471pWZykAT', name: 'WhatsApp Trigger · Serra' } },
+  { slug: 'rioverde',      nome: 'Rio Verde',      subdominio: 'doutorherniarioverde2026', credencial: { id: 'gJav1pY0g503e5Qf', name: 'Kommo Rio Verde' }, trigger: { id: 'S4a5UQDddxV2XVlr', name: 'WhatsApp Trigger · Rio Verde' } },
+  { slug: 'taubate',       nome: 'Taubaté',        subdominio: 'doutorherniataubatedt',    credencial: { id: 'rmHbc6sqKSi9G0TG', name: 'Kommo Taubaté' }, trigger: { id: 'yPMGb4lDTckcfRt9', name: 'WhatsApp Trigger · Taubaté' } },
   { slug: 'trauma',        nome: 'Instituto Trauma', subdominio: 'institutotraumakommon',  credencial: { id: 'IDrv4gZyutIINGMw', name: 'Kommo Trauma' } },
 ];
 

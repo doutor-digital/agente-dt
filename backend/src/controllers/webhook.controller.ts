@@ -16,6 +16,7 @@ import { mascararPii } from '../lib/pii.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { describeImage } from '../services/vision.service.js';
+import { tentarNotaDeVoz } from '../lib/resposta-em-voz.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
@@ -71,6 +72,7 @@ const leadStatusSchema = z.object({
 });
 
 const webhookSchema = z.object({
+  account: z.object({ id: z.coerce.number().optional() }).partial().optional(),
   leads: z
     .object({
       add: z.array(z.object({ id: z.coerce.number() })).optional(),
@@ -167,11 +169,16 @@ interface ExtractedContext {
   talkId: string | null;
   contactId: string | null;
   contactName: string | null;
+  /** Id (amojo) do paciente — destinatário da nota de voz. */
+  authorId: string | null;
+  /** Id numérico da conta Kommo que mandou o webhook. */
+  accountId: number | null;
   isChatMessage: boolean;
 }
 
 function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext {
   const msg = getIncomingMessage(parsed);
+  const accountId = parsed.account?.id ?? null;
   if (msg) {
     return {
       humanMessage: msg.text ?? '',
@@ -181,6 +188,8 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
       talkId: msg.talk_id ?? null,
       contactId: msg.contact_id ?? null,
       contactName: msg.author?.name ?? null,
+      authorId: msg.author?.id ?? null,
+      accountId,
       isChatMessage: true,
     };
   }
@@ -192,6 +201,8 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
     talkId: null,
     contactId: null,
     contactName: null,
+    authorId: null,
+    accountId,
     isChatMessage: false,
   };
 }
@@ -632,6 +643,8 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         chatId: ctx.chatId,
         talkId: ctx.talkId,
         contactId: ctx.contactId,
+        authorId: ctx.authorId,
+        accountId: ctx.accountId,
         isChatMessage: ctx.isChatMessage,
         requestStart,
         burstSize: traceIds.length,
@@ -655,6 +668,8 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       chatId: ctx.chatId,
       talkId: ctx.talkId,
       contactId: ctx.contactId,
+      authorId: ctx.authorId,
+      accountId: ctx.accountId,
       isChatMessage: ctx.isChatMessage,
       requestStart,
     }).catch((err) => {
@@ -675,12 +690,16 @@ export async function processAgent(args: {
   chatId: string | null;
   talkId: string | null;
   contactId: string | null;
+  authorId?: string | null;
+  accountId?: number | null;
   isChatMessage: boolean;
   requestStart: number;
   burstSize?: number;
   deliver?: AgentDeliverFn;
 }): Promise<void> {
   const { unit, leadId, traceId, audioUrl, imageUrl, chatId, talkId, contactId, isChatMessage, requestStart, burstSize, deliver } = args;
+  const authorId = args.authorId ?? null;
+  const accountId = args.accountId ?? null;
   let { humanMessage } = args;
   let delivered = false;
   const finishWidgetSilently = async (): Promise<void> => {
@@ -989,7 +1008,14 @@ export async function processAgent(args: {
       const sendStart = performance.now();
       try {
         let sendResult: { via: string; detail?: unknown };
-        if (deliver) {
+        // Espelho: paciente mandou áudio → tenta nota de voz. `null` = siga em texto.
+        const voz = await tentarNotaDeVoz({
+          unit, leadId, reply, audioUrl, chatId, talkId, contactId, authorId, accountId,
+          modoWidget: !!deliver, recorder,
+        });
+        if (voz) {
+          sendResult = voz;
+        } else if (deliver) {
           delivered = true;
           sendResult = await deliver(reply);
         } else {

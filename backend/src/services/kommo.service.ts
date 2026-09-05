@@ -561,6 +561,18 @@ export class KommoClient {
    * o token já vai embutido na própria URL.
    */
   async uploadToDrive(bytes: Buffer, fileName: string, contentType: string): Promise<string> {
+    return (await this.uploadToDriveDetalhado(bytes, fileName, contentType)).uuid;
+  }
+
+  /**
+   * Igual ao `uploadToDrive`, mas devolve também o `version_uuid` — o serviço de chat
+   * do Kommo (amojo) exige os dois para anexar o arquivo a uma mensagem de voz.
+   */
+  async uploadToDriveDetalhado(
+    bytes: Buffer,
+    fileName: string,
+    contentType: string,
+  ): Promise<{ uuid: string; versionUuid: string | null; download: string | null; size: number }> {
     const t0 = performance.now();
     try {
       const driveUrl = await this.getDriveUrl();
@@ -572,7 +584,12 @@ export class KommoClient {
           timeout: 20_000,
         },
       );
-      const { data: file } = await axios.post<{ uuid?: string }>(session.upload_url, bytes, {
+      const { data: file } = await axios.post<{
+        uuid?: string;
+        version_uuid?: string;
+        size?: number;
+        _links?: { download?: { href?: string } };
+      }>(session.upload_url, bytes, {
         headers: { 'Content-Type': 'application/octet-stream' },
         timeout: 60_000,
         maxBodyLength: Infinity,
@@ -583,7 +600,12 @@ export class KommoClient {
         { fileName, bytes: bytes.length, uuid: file.uuid, ms: Math.round(performance.now() - t0) },
         'kommo drive: arquivo enviado',
       );
-      return file.uuid;
+      return {
+        uuid: file.uuid,
+        versionUuid: file.version_uuid ?? null,
+        download: file._links?.download?.href ?? null,
+        size: file.size ?? bytes.length,
+      };
     } catch (err) {
       wrapAxiosError(err, `uploadToDrive(${fileName})`);
     }

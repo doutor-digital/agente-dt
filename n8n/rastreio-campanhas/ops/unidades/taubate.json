@@ -1,0 +1,1380 @@
+{
+  "id": "4T4HALkkLJtcNAY1",
+  "name": "DD · Rastreio CTWA · Taubaté",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "id": "whatsapp-trigger-taubate",
+      "name": "On messages",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1120,
+        64
+      ],
+      "webhookId": "meta-ctwa-taubate",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "yPMGb4lDTckcfRt9",
+          "name": "WhatsApp Trigger · Taubaté"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## ⛔ NÃO clique em \"Listen for test event\"\n\nEsse botão **apaga a inscrição de produção** na Meta e tenta registrar a URL `/webhook-test/...`, que **não existe** nesta instância (modo fila → 404 nos dois hosts). A Meta recusa e o app fica **sem webhook nenhum** — rastreio cego.\n\nSintomas: `(#2200) Callback verification failed ... 404` ou\n`The WhatsApp App ID 1108510921356615 already has a webhook subscription`.\n\n**Conserto:** desativar e ativar o workflow (nessa ordem — só ativar não basta, o n8n acha que já registrou).\n\n**Para testar**, use os `curl` do README §10.3 na URL de produção.",
+        "height": 380,
+        "width": 420,
+        "color": 3
+      },
+      "id": "aviso-listen-test",
+      "name": "ATENÇÃO — teste",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1120,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// O WhatsApp Trigger entrega um item por \"change\", já desempacotado:\n// { ...change.value, field: 'messages' }. O envelope entry[] some — e com ele o\n// entry.id, que era o WABA ID. Aqui reembalamos no formato { corpo: { entry: [...] } }\n// que o resto do fluxo espera, para reaproveitar todos os nós seguintes sem tocar\n// em nenhum deles.\n//\n// O WABA ID vem de env var, com fallback fixo na WABA da Imperatriz (o valor real\n// que o webhook manual vinha gravando em ctwa_eventos.waba_id). Inventar entry.id a\n// partir do phone_number_id — como o fork antigo fazia — grava o número errado nessa\n// coluna e mente na análise multi-unidade. Outra unidade: defina META_WABA_ID.\nconst wabaId = '1036096599272746';\nconst saida = [];\n\nfor (const item of $input.all()) {\n  const v = item.json || {};\n\n  // Já no formato antigo (reprocesso manual, dado pinado): passa direto.\n  if (v.corpo && v.corpo.entry) { saida.push({ json: { corpo: v.corpo } }); continue; }\n  if (v.entry) { saida.push({ json: { corpo: v } }); continue; }\n\n  saida.push({ json: {\n    recebidoEm: new Date().toISOString(),\n    corpo: {\n      object: 'whatsapp_business_account',\n      entry: [{ id: wabaId, changes: [{ field: v.field || 'messages', value: v }] }],\n    },\n  }});\n}\n\nreturn saida;\n"
+      },
+      "id": "shim-formato-trigger",
+      "name": "Normalizar formato do Trigger",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -688,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ponto unico de configuracao. Tudo vem de variavel de ambiente do n8n —\n// nenhum ID/segredo fica hardcoded no workflow (que e versionado/exportado).\nconst inteiro = (v) => {\n  const n = Number(v);\n  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;\n};\nconst inteiroPadrao = (v, padrao) => inteiro(v) ?? padrao;\n\nconst cfg = {\n  kommoSubdomain: 'doutorherniataubatedt',\n  graphVersion: $env.META_GRAPH_VERSION || 'v23.0',\n  // Token de leitura de Ads (ads_read + business_management). Sem ele o nó do\n  // Graph responde erro e a atribuicao fica so com o id do anuncio — foi o que\n  // aconteceu por 712 execucoes, com a credencial apagada e ninguem vendo.\n  tokenAds: $env.META_ADS_TOKEN || '',\n\n  // Regra de criacao: por padrao NAO criamos nada no Kommo. A Kommo cria o\n  // lead sozinha ao receber a mensagem; criar em paralelo gera lead duplicado.\n  // So ligue depois de medir quantos \"orfaos\" sobram no log.\n  criarSeNaoExistir: String($env.KOMMO_CREATE_IF_MISSING || 'false').toLowerCase() === 'true',\n  pipelineId: inteiro($env.KOMMO_PIPELINE_ID),\n  statusId: inteiro($env.KOMMO_STATUS_ID),\n\n  tagOrigem: $env.KOMMO_TAG_ORIGEM || 'Origem: Anuncio pago',\n  // Reel/post organico NAO e anuncio pago. Marcar os dois com a mesma tag infla o\n  // numero de \"leads pagos\" no relatorio e distorce a avaliacao da verba.\n  tagOrganico: $env.KOMMO_TAG_ORGANICO || 'Origem: Organico',\n  maxTentativas: inteiroPadrao($env.CTWA_LOOKUP_MAX_TENTATIVAS, 4),\n  backoffSegundos: inteiroPadrao($env.CTWA_LOOKUP_BACKOFF_SEGUNDOS, 20),\n  alertaUrl: $env.ALERT_WEBHOOK_URL || '',\n\n  // IDs desta unidade, resolvidos pelo inventario (ops/build-inventario.mjs).\n  // Literal de proposito: $env e global no n8n e vazaria entre unidades.\n  campos: {\n    campanha:         216188,\n    conjunto:         216200,\n    anuncio:          216192,\n    anuncioId:        216194,\n    utmSource:        215636,\n    utmMedium:        215632,\n    utmCampaign:      215634,\n    utmContent:       215630,\n    utmTerm:          215638,\n    origemUrl:        216204,\n    ctwaClid:         216202,\n    origemTipo:       216186,\n    primeiroContato:  216078,\n    headline:         216196,\n    plataforma:       216190,\n    imagemAnuncio:    216198,\n    ultimoAnuncio:    216100,\n    cliques:          216206,\n  },\n};\n\ncfg.problemas = [];\nif (!cfg.kommoSubdomain) cfg.problemas.push('KOMMO_SUBDOMAIN vazio');\nif (!Object.values(cfg.campos).some(Boolean)) cfg.problemas.push('nenhum KOMMO_CF_* configurado');\n\n// Mantem o item original e pendura a config — os nos seguintes leem via\n// $('Config').first().json.cfg.\nreturn $input.all().map((item) => ({ json: { ...item.json, cfg } }));"
+      },
+      "id": "config",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Achata entry[].changes[].value.messages[] em um item por mensagem.\n// Eventos de \"statuses\" (entregue/lido) sao descartados aqui: nao carregam\n// atribuicao e so gerariam ruido no log.\nconst cfg = $('Config').first().json.cfg;\nconst saida = [];\n\nfor (const item of $input.all()) {\n  const corpo = item.json.corpo || {};\n  for (const entry of (corpo.entry || [])) {\n    for (const change of (entry.changes || [])) {\n      if (change.field !== 'messages') continue;\n      const value = change.value || {};\n      const perfil = (value.contacts || [])[0] || {};\n      const nomeContato = (perfil.profile && perfil.profile.name) || null;\n      const meta = value.metadata || {};\n\n      for (const msg of (value.messages || [])) {\n        const ref = msg.referral || null;\n        const ts = msg.timestamp ? Number(msg.timestamp) : null;\n        const digitos = String(msg.from || '').replace(/\\D/g, '');\n\n        saida.push({ json: {\n          wamid: msg.id || null,\n          telefone: msg.from || null,\n          telefoneDigits: digitos,\n          // Kommo casa por substring; os ultimos 8 digitos sobrevivem a\n          // variacoes de DDI, \"+\" e do nono digito do celular brasileiro.\n          telefoneBusca: digitos.slice(-8),\n          nomeContato,\n          tipoMensagem: msg.type || null,\n          primeiroContatoUnix: ts,\n          primeiroContatoIso: ts ? new Date(ts * 1000).toISOString() : null,\n          wabaId: entry.id || null,\n          phoneNumberId: meta.phone_number_id || null,\n          numeroExibicao: meta.display_phone_number || null,\n          temCampanha: !!(ref && (ref.source_id || ref.ctwa_clid)),\n          referral: ref ? {\n            ctwaClid: ref.ctwa_clid || null,\n            sourceId: ref.source_id || null,\n            sourceType: ref.source_type || null,\n            sourceUrl: ref.source_url || null,\n            headline: ref.headline || null,\n            corpoAnuncio: ref.body || null,\n            mediaType: ref.media_type || null,\n            thumbnailUrl: ref.thumbnail_url || null,\n          } : null,\n          payloadBruto: value,\n          cfg,\n        }});\n      }\n    }\n  }\n}\n\nreturn saida;"
+      },
+      "id": "extrair-mensagens-e-referral",
+      "name": "Extrair mensagens e referral",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.temCampanha }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "tem-dados-de-campanha",
+      "name": "Tem dados de campanha?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        208,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_logs (unidade, wamid, telefone, etapa, status, detalhe, payload) VALUES ('taubate', $1, $2, 'extracao', 'ignorado', 'mensagem sem referral de anuncio', $3::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [ $json.wamid, $json.telefone, JSON.stringify($json.payloadBruto || {}) ] }}"
+        }
+      },
+      "id": "log-mensagem-sem-campanha",
+      "name": "Log — mensagem sem campanha",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        432,
+        272
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {},
+      "id": "fim-sem-atribuicao",
+      "name": "Fim — sem atribuicao",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        640,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_eventos (unidade, wamid, telefone, telefone_digits, waba_id, phone_number_id, ad_id, ctwa_clid, primeiro_contato_em, payload)\nVALUES ('taubate', $1, $2, $3, $4, $5, $6, $7, to_timestamp($8::bigint), $9::jsonb)\nON CONFLICT (wamid) DO UPDATE SET repeticoes = ctwa_eventos.repeticoes + 1, ultima_repeticao_em = now()\nRETURNING wamid, (xmax = 0) AS inserido, repeticoes;",
+        "options": {
+          "queryReplacement": "={{ [ $json.wamid, $json.telefone, $json.telefoneDigits, $json.wabaId, $json.phoneNumberId, ($json.referral && $json.referral.sourceId) || null, ($json.referral && $json.referral.ctwaClid) || null, $json.primeiroContatoUnix, JSON.stringify($json.payloadBruto || {}) ] }}"
+        }
+      },
+      "id": "dedup-registrar-evento",
+      "name": "Dedup + registrar evento",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        432,
+        48
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.inserido }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "evento-novo",
+      "name": "Evento novo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_logs (unidade, wamid, etapa, status, detalhe) VALUES ('taubate', $1, 'dedup', 'duplicado', 'evento ja processado; reentrega da Meta')",
+        "options": {
+          "queryReplacement": "={{ [ $json.wamid ] }}"
+        }
+      },
+      "id": "log-evento-duplicado",
+      "name": "Log — evento duplicado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        864,
+        240
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {},
+      "id": "fim-duplicado",
+      "name": "Fim — duplicado",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1088,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// O no Postgres devolve so { inserido, wamid }. Reidrata o contexto completo\n// casando por wamid (chave, nao indice — indice quebra quando o dedup\n// descarta itens no meio do lote).\nconst mensagens = $('Extrair mensagens e referral').all();\nconst cfg = $('Config').first().json.cfg;\nconst porWamid = new Map(mensagens.map((m) => [m.json.wamid, m.json]));\n\nconst saida = [];\nfor (const item of $input.all()) {\n  const base = porWamid.get(item.json.wamid);\n  if (!base) continue;\n  const ref = base.referral || {};\n  const sourceId = ref.sourceId || null;\n  saida.push({ json: {\n    ...base,\n    sourceId,\n    ehAnuncio: !!sourceId && (!ref.sourceType || ref.sourceType === 'ad'),\n    // source_id de post organico nao resolve como anuncio; a chamada falha e\n    // o no seguinte esta com onError=continue justamente por isso.\n    urlGraph: 'https://graph.facebook.com/' + cfg.graphVersion + '/' + (sourceId || '0'),\n  }});\n}\nreturn saida;"
+      },
+      "id": "contexto-do-anuncio",
+      "name": "Contexto do anuncio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.urlGraph }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "id,name,campaign{id,name,objective},adset{id,name,targeting{publisher_platforms}},creative{id,name,url_tags,effective_object_story_id,thumbnail_url,image_url}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $json.cfg.tokenAds }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "resolver-anuncio-graph-api",
+      "name": "Resolver anuncio (Graph API)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1088,
+        32
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Junta referral (webhook) + metadados do anuncio (Graph) e resolve as UTMs.\n// Alinhamento por indice e seguro aqui: o no Graph roda com\n// onError=continueRegularOutput, entao emite exatamente 1 item por entrada.\nconst contexto = $('Contexto do anuncio').all();\n\nfunction parseQuery(url) {\n  const out = {};\n  if (!url) return out;\n  const i = String(url).indexOf('?');\n  const qs = i >= 0 ? String(url).slice(i + 1) : String(url);\n  for (const par of qs.split('&')) {\n    if (!par) continue;\n    const [k, ...resto] = par.split('=');\n    if (!k) continue;\n    try { out[decodeURIComponent(k)] = decodeURIComponent(resto.join('=').replace(/\\+/g, ' ')); }\n    catch (e) { out[k] = resto.join('='); }\n  }\n  return out;\n}\n\n// url_tags do criativo vem com macros da Meta ({{campaign.name}} etc).\nfunction resolverMacros(texto, vars) {\n  if (!texto) return '';\n  return String(texto).replace(/\\{\\{\\s*([a-z_.]+)\\s*\\}\\}/gi, (m, chave) => {\n    const v = vars[String(chave).toLowerCase()];\n    return v === undefined || v === null ? '' : String(v);\n  });\n}\n\nconst entradas = $input.all();\nconst saida = [];\n\nfor (let i = 0; i < entradas.length; i++) {\n  const g = entradas[i].json || {};\n  const base = (contexto[i] && contexto[i].json) || {};\n  const ref = base.referral || {};\n\n  // Post organico (source_type = 'post') nao tem campanha: perguntar `campaign` a\n  // Graph devolve \"(#100) Tried accessing nonexisting field (campaign)\". E esperado,\n  // nao e defeito — nao vira erroGraph e nao suja a nota do lead com falso alarme.\n  const ehAnuncio = (ref.sourceType || 'ad') === 'ad';\n  const erroBruto = g.error\n    ? String((g.error && (g.error.message || g.error.error_user_msg)) || g.error).slice(0, 500)\n    : null;\n  const erroGraph = ehAnuncio ? erroBruto : null;\n  const ad = erroBruto ? {} : g;\n\n  const campanha = ad.campaign || {};\n  const conjunto = ad.adset || {};\n  const criativo = ad.creative || {};\n  const plataformas = (conjunto.targeting && conjunto.targeting.publisher_platforms) || [];\n\n  const plataforma = plataformas.length\n    ? plataformas.join('+')\n    : (String(ref.sourceUrl || '').includes('instagram') ? 'instagram' : 'facebook');\n\n  const vars = {\n    'campaign.name': campanha.name || '',\n    'campaign.id': campanha.id || '',\n    'adset.name': conjunto.name || '',\n    'adset.id': conjunto.id || '',\n    'ad.name': ad.name || '',\n    'ad.id': ad.id || ref.sourceId || '',\n    'site_source_name': plataforma,\n    'placement': 'click_to_whatsapp',\n  };\n\n  const utmCriativo = parseQuery('?' + resolverMacros(criativo.url_tags || '', vars));\n  const utmUrl = parseQuery(ref.sourceUrl || '');\n  // Precedencia: o que veio na URL clicada > url_tags do criativo > derivado.\n  const escolher = (chave, derivado) => utmUrl[chave] || utmCriativo[chave] || derivado || null;\n\n  const atribuicao = {\n    campanhaNome: campanha.name || null,\n    campanhaId: campanha.id ? String(campanha.id) : null,\n    conjuntoNome: conjunto.name || null,\n    conjuntoId: conjunto.id ? String(conjunto.id) : null,\n    anuncioNome: ad.name || null,\n    anuncioId: ad.id ? String(ad.id) : (ref.sourceId || null),\n    objetivo: campanha.objective || null,\n\n    utmSource: escolher('utm_source', plataforma),\n    utmMedium: escolher('utm_medium', 'paid_social'),\n    utmCampaign: escolher('utm_campaign', campanha.name),\n    utmContent: escolher('utm_content', ad.name),\n    utmTerm: escolher('utm_term', conjunto.name),\n\n    origemUrl: ref.sourceUrl || null,\n    ctwaClid: ref.ctwaClid || null,\n    // origemTipo alimenta o campo SELECT \"⚑ Origem\" do Kommo, então precisa ser\n    // exatamente uma das opções cadastradas lá. Clique em anúncio pago vem com\n    // source_type 'ad'; Reel/post orgânico vem 'post' e sem ctwa_clid — são\n    // origens diferentes e o CRM tem de distinguir, senão orgânico vira \"pago\"\n    // no relatório e a verba é avaliada com número inflado.\n    origemTipo: (() => {\n      const pago = (ref.sourceType || 'ad') === 'ad';\n      const insta = /instagram/i.test(String(ref.sourceUrl || '') + ' ' + plataforma);\n      if (pago) return insta ? 'Meta-Instagram' : 'Meta-Facebook';\n      return insta ? 'Org-Instagram' : 'Org-Facebook';\n    })(),\n    // Guarda o tipo cru também, para auditoria na nota do lead.\n    tipoCru: ref.sourceType || 'ad',\n    pago: (ref.sourceType || 'ad') === 'ad',\n    headline: ref.headline || null,\n    // A Meta ja manda a miniatura do criativo no referral. Usar ela evita\n    // uma chamada a mais e funciona mesmo se o anuncio for pausado depois.\n    // A imagem do criativo vem em alta; a do referral e uma miniatura de 64px.\n    // Ordem de preferencia: alta > miniatura do criativo > miniatura do referral.\n    imagemAnuncio: criativo.image_url || criativo.thumbnail_url || ref.thumbnailUrl || null,\n    plataforma,\n    origemUtm: Object.keys(utmUrl).length ? 'source_url'\n             : (Object.keys(utmCriativo).length ? 'creative.url_tags' : 'derivado'),\n    erroGraph,\n  };\n\n  saida.push({ json: { ...base, atribuicao } });\n}\n\nreturn saida;"
+      },
+      "id": "normalizar-atribuicao",
+      "name": "Normalizar atribuicao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "loop-por-lead",
+      "name": "Loop por lead",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1520,
+        32
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "fim-lote-processado",
+      "name": "Fim — lote processado",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1744,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $('Config').first().json.cfg.kommoSubdomain }}.kommo.com/api/v4/contacts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.telefoneBusca }}"
+            },
+            {
+              "name": "with",
+              "value": "leads"
+            },
+            {
+              "name": "limit",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "buscar-contato-na-kommo",
+      "name": "Buscar contato na Kommo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1744,
+        64
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "rmHbc6sqKSi9G0TG",
+          "name": "Kommo Taubaté"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decide se achamos um lead utilizavel para este telefone.\n// Contato sem lead conta como \"nao achou\": normalmente significa que a Kommo\n// ainda esta criando o lead da mensagem que acabou de chegar — esperar e\n// tentar de novo e melhor que criar um lead paralelo.\nconst ctx = $('Loop por lead').first().json;\nconst cfg = $('Config').first().json.cfg;\n\n// A resposta do Kommo às vezes chega como TEXTO cru em .data (o nó HTTP não\n// parseia quando o content-type vem sem charset). Sem desembrulhar isso, o\n// _embedded fica indefinido e o lead existente é lido como inexistente.\nfunction corpoJson(j) {\n  if (!j) return {};\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j;\n}\nconst resp = corpoJson($input.first().json);\nconst contatos = (resp._embedded && resp._embedded.contacts) || [];\nconst alvo = ctx.telefoneDigits || '';\nconst sufixo = alvo.slice(-8);\n\nfunction digitosDoContato(c) {\n  const campos = c.custom_fields_values || [];\n  const fones = [];\n  for (const f of campos) {\n    if (f.field_code !== 'PHONE') continue;\n    for (const v of (f.values || [])) {\n      if (v && v.value) fones.push(String(v.value).replace(/\\D/g, ''));\n    }\n  }\n  return fones;\n}\n\nlet contato = null;\nfor (const c of contatos) {\n  const fones = digitosDoContato(c);\n  if (fones.some((f) => f.endsWith(sufixo) || alvo.endsWith(f.slice(-8)))) { contato = c; break; }\n}\n// Fallback: a busca do Kommo ja filtra por telefone; se so veio um contato e\n// nenhum campo PHONE bateu (campo customizado exotico), aceita o unico.\nif (!contato && contatos.length === 1) contato = contatos[0];\n\nconst leads = contato ? ((contato._embedded && contato._embedded.leads) || []) : [];\nconst leadId = leads.length ? Math.max(...leads.map((l) => Number(l.id))) : null;\n\n// Contador de tentativas por wamid, em static data (sobrevive ao no Wait).\nconst st = $getWorkflowStaticData('global');\nst.tentativas = st.tentativas || {};\nconst agora = Date.now();\nfor (const [k, v] of Object.entries(st.tentativas)) {\n  if (!v || !v.ts || agora - v.ts > 3600000) delete st.tentativas[k];\n}\nconst chave = ctx.wamid || (ctx.telefoneDigits + ':' + (ctx.primeiroContatoUnix || ''));\nconst anterior = st.tentativas[chave] ? st.tentativas[chave].n : 0;\nconst tentativa = anterior + 1;\nst.tentativas[chave] = { n: tentativa, ts: agora };\n\nconst encontrado = !!(contato && leadId);\nif (encontrado) delete st.tentativas[chave];\n\nreturn [{ json: {\n  ...ctx,\n  encontrado,\n  contatoId: contato ? contato.id : null,\n  contatoNome: contato ? contato.name : null,\n  leadId,\n  tentativa,\n  tentativasEsgotadas: tentativa >= cfg.maxTentativas,\n  // backoff progressivo: 20s, 40s, 60s...\n  esperaSegundos: Math.min(cfg.backoffSegundos * tentativa, 120),\n  contatosRetornados: contatos.length,\n}}];"
+      },
+      "id": "avaliar-busca",
+      "name": "Avaliar busca",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1968,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.encontrado }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "contato-com-lead",
+      "name": "Contato com lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2192,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $('Config').first().json.cfg.kommoSubdomain }}.kommo.com/api/v4/leads/{{ $json.leadId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "ler-lead-atual",
+      "name": "Ler lead atual",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        -80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "rmHbc6sqKSi9G0TG",
+          "name": "Kommo Taubaté"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Monta UM unico PATCH (campos + tag na mesma chamada).\n// Dois motivos para nao fatiar em varios PATCH: (1) a API do Kommo tem race\n// entre PATCHes concorrentes no mesmo lead — o ultimo a chegar pode apagar o\n// que o anterior gravou; (2) gasta rate limit a toa.\n//\n// Regra de first-touch: so grava campo que esta VAZIO. Uma atribuicao anterior\n// valida nunca e sobrescrita — o primeiro anuncio que trouxe o lead e o que\n// conta para analise de conversao.\n// Contexto vem de 'Avaliar busca', não de 'Loop por lead': é lá que leadId e\n// contatoId são descobertos. Lendo do Loop, o leadId chegava indefinido e o\n// PATCH ia para /leads/undefined — a Kommo responde 404 'resource not found'.\nconst ctx = { ...$('Loop por lead').first().json, ...$('Avaliar busca').first().json };\nconst cfg = $('Config').first().json.cfg;\n// A resposta do Kommo às vezes chega como TEXTO cru em .data (o nó HTTP não\n// parseia quando o content-type vem sem charset). Sem desembrulhar isso, o\n// _embedded fica indefinido e o lead existente é lido como inexistente.\nfunction corpoJson(j) {\n  if (!j) return {};\n  if (typeof j === 'string') { try { return JSON.parse(j); } catch (e) { return {}; } }\n  if (typeof j.data === 'string') { try { return JSON.parse(j.data); } catch (e) { return j; } }\n  return j;\n}\nconst lead = corpoJson($input.first().json);\nconst a = ctx.atribuicao || {};\n\nconst atuais = new Map();\nfor (const f of (lead.custom_fields_values || [])) {\n  const v = (f.values || [])[0];\n  const valor = v ? (v.value ?? null) : null;\n  atuais.set(Number(f.field_id), valor === '' ? null : valor);\n}\n\nconst mapa = [\n  ['campanha',        a.campanhaNome],\n  ['conjunto',        a.conjuntoNome],\n  ['anuncio',         a.anuncioNome],\n  ['anuncioId',       a.anuncioId],\n  ['utmSource',       a.utmSource],\n  ['utmMedium',       a.utmMedium],\n  ['utmCampaign',     a.utmCampaign],\n  ['utmContent',      a.utmContent],\n  ['utmTerm',         a.utmTerm],\n  ['origemUrl',       a.origemUrl],\n  ['ctwaClid',        a.ctwaClid],\n  ['origemTipo',      a.origemTipo],\n  ['headline',        a.headline],\n  ['plataforma',      a.plataforma],\n  ['imagemAnuncio',   a.imagemAnuncio],\n  // Campo \"Data e hora\" do Kommo recebe unix timestamp em segundos.\n  ['primeiroContato', ctx.primeiroContatoUnix],\n];\n\nconst custom = [];\nconst gravados = [];\nconst preservados = [];\n\nfor (const [chave, valor] of mapa) {\n  const fieldId = cfg.campos[chave];\n  if (!fieldId || valor === null || valor === undefined || valor === '') continue;\n  if (atuais.get(fieldId)) { preservados.push(chave); continue; }\n  custom.push({ field_id: fieldId, values: [{ value: valor }] });\n  gravados.push(chave);\n}\n\n// ⚑ ORIGEM — exceção deliberada ao first-touch, restrita ao erro que causa dano.\n// O que importa nesse campo é a FAMÍLIA: Meta-* = veio de anúncio pago, Org-* = veio\n// de post/Reel orgânico. Marcar orgânico como pago infla o resultado da verba; o\n// contrário esconde retorno de anúncio. O `referral` da Meta é evidência dura de\n// como ESTE lead chegou, então ele corrige conflito de família.\n//\n// Duas assimetrias de propósito:\n//  - orgânico -> pago sempre pode: referral de anúncio (source_type='ad') é prova.\n//  - pago -> orgânico SÓ se não houver campanha gravada. Campanha preenchida\n//    significa anúncio pago rastreado antes; um clique orgânico posterior não pode\n//    apagar esse first-touch.\n// Diferença dentro da mesma família (Meta-Facebook x Meta-Instagram) não é tocada:\n// não muda decisão de verba e first-touch continua mandando.\nconst corrigidos = [];\nif (cfg.campos.origemTipo && a.origemTipo && preservados.includes('origemTipo')) {\n  const origemAtual = String(atuais.get(cfg.campos.origemTipo) || '');\n  const familiaAtual = /^Meta-/.test(origemAtual) ? 'pago'\n                     : (/^Org-/.test(origemAtual) ? 'organico' : null);\n  const familiaReal = a.pago ? 'pago' : 'organico';\n  const temCampanha = !!atuais.get(cfg.campos.campanha);\n  const conflito = !!familiaAtual && familiaAtual !== familiaReal;\n\n  if (conflito && (familiaReal === 'pago' || !temCampanha)) {\n    custom.push({ field_id: cfg.campos.origemTipo, values: [{ value: a.origemTipo }] });\n    corrigidos.push('origem: ' + origemAtual + ' -> ' + a.origemTipo);\n    preservados.splice(preservados.indexOf('origemTipo'), 1);\n  }\n}\n\n// LAST-TOUCH — gravado em todo clique, por cima do valor anterior. Nao conflita\n// com o first-touch: sao campos proprios, e os campos de first-touch acima seguem\n// intocados. E o que responde \"de qual anuncio ele veio DESTA vez\".\nconst anuncioAtual = a.anuncioNome || a.anuncioId || null;\nconst cliquesAntes = Number(atuais.get(cfg.campos.cliques) || 0);\nconst cliquesAgora = (Number.isFinite(cliquesAntes) ? cliquesAntes : 0) + 1;\n\nif (cfg.campos.ultimoAnuncio && anuncioAtual) {\n  custom.push({ field_id: cfg.campos.ultimoAnuncio, values: [{ value: anuncioAtual }] });\n}\nif (cfg.campos.cliques) {\n  custom.push({ field_id: cfg.campos.cliques, values: [{ value: cliquesAgora }] });\n}\n\nconst patchBody = {};\nif (custom.length) patchBody.custom_fields_values = custom;\n// tags_to_add vai na RAIZ do body. Dentro de _embedded o Kommo aceita a\n// requisicao e ignora silenciosamente (200 OK, tag nao aplicada).\n// Pago e organico levam tags DIFERENTES — ver comentario em Config.\nconst tagEscolhida = a.pago ? cfg.tagOrigem : cfg.tagOrganico;\nif (tagEscolhida) patchBody.tags_to_add = [{ name: tagEscolhida }];\n\n// Com o last-touch sempre presente, o ramo \"nada a gravar\" deixa de existir:\n// todo clique atualiza contador e deixa nota. O que era preservado continua\n// preservado — e agora aparece no log (ver no 'Log — sucesso').\nconst temAlgoParaGravar = custom.length > 0;\n\nconst nota =\n  (cliquesAgora > 1 ? 'Clique nº ' + cliquesAgora + ' deste lead — ' : 'Primeiro clique — ') +\n  'Atribuicao de origem (CTWA) — ' + (a.pago ? 'ANUNCIO PAGO' : 'ORGANICO (' + (a.tipoCru || '-') + ')') + '\\n' +\n  'Campanha: ' + (a.campanhaNome || '-') + ' (' + (a.campanhaId || '-') + ')\\n' +\n  'Conjunto: ' + (a.conjuntoNome || '-') + ' (' + (a.conjuntoId || '-') + ')\\n' +\n  'Anuncio: ' + (a.anuncioNome || '-') + ' (' + (a.anuncioId || '-') + ')\\n' +\n  'UTM: source=' + (a.utmSource || '-') + ' medium=' + (a.utmMedium || '-') +\n  ' campaign=' + (a.utmCampaign || '-') + ' content=' + (a.utmContent || '-') +\n  ' term=' + (a.utmTerm || '-') + ' [' + (a.origemUtm || '-') + ']\\n' +\n  'ctwa_clid: ' + (a.ctwaClid || '-') + '\\n' +\n  'URL de origem: ' + (a.origemUrl || '-') + '\\n' +\n  'Primeiro contato: ' + (ctx.primeiroContatoIso || '-') + '\\n' +\n  'Telefone: ' + (ctx.telefone || '-') + '\\n' +\n  'Campos gravados: ' + (gravados.join(', ') || 'nenhum') +\n  (preservados.length ? ' | preservados: ' + preservados.join(', ') : '') +\n  (a.erroGraph ? '\\nFalha ao consultar a Graph API: ' + a.erroGraph : '');\n\nreturn [{ json: { ...ctx, patchBody, temAlgoParaGravar, gravados, preservados, corrigidos, cliquesAgora, nota } }];"
+      },
+      "id": "montar-patch-first-touch",
+      "name": "Montar PATCH (first-touch)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2624,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.temAlgoParaGravar }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "ha-algo-para-gravar",
+      "name": "Ha algo para gravar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2848,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_logs (unidade, wamid, telefone, etapa, status, kommo_lead_id, kommo_contact_id, detalhe) VALUES ('taubate', $1, $2, 'kommo', 'preservado', $3, $4, $5)",
+        "options": {
+          "queryReplacement": "={{ [ $json.wamid, $json.telefone, $json.leadId, $json.contatoId, \"lead ja tinha atribuicao: \" + ($json.preservados || []).join(\", \") ] }}"
+        }
+      },
+      "id": "log-atribuicao-preservada",
+      "name": "Log — atribuicao preservada",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3072,
+        48
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://{{ $('Config').first().json.cfg.kommoSubdomain }}.kommo.com/api/v4/leads/{{ $json.leadId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.patchBody) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "atualizar-lead-patch-unico",
+      "name": "Atualizar lead (PATCH unico)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3072,
+        -160
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "rmHbc6sqKSi9G0TG",
+          "name": "Kommo Taubaté"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $('Config').first().json.cfg.kommoSubdomain }}.kommo.com/api/v4/leads/{{ $('Montar PATCH (first-touch)').first().json.leadId }}/notes",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify([{ note_type: 'common', params: { text: $('Montar PATCH (first-touch)').first().json.nota } }]) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "nota-de-auditoria-no-lead",
+      "name": "Nota de auditoria no lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3280,
+        -224
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "rmHbc6sqKSi9G0TG",
+          "name": "Kommo Taubaté"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_logs (unidade, wamid, telefone, etapa, status, kommo_lead_id, kommo_contact_id, detalhe, payload) VALUES ('taubate', $1, $2, 'kommo', 'sucesso', $3, $4, $5, $6::jsonb)",
+        "options": {
+          "queryReplacement": "={{ (() => { const c = $('Montar PATCH (first-touch)').first().json; return [ c.wamid, c.telefone, c.leadId, c.contatoId, \"clique #\" + (c.cliquesAgora || 1) + \" | gravados: \" + (c.gravados || []).join(\", \") + \" | preservados: \" + ((c.preservados || []).join(\", \") || \"nenhum\") + ((c.corrigidos || []).length ? \" | CORRIGIDO: \" + c.corrigidos.join(\", \") : \"\"), JSON.stringify(c.atribuicao || {}) ]; })() }}"
+        }
+      },
+      "id": "log-sucesso",
+      "name": "Log — sucesso",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3504,
+        -224
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_logs (unidade, wamid, telefone, etapa, status, kommo_lead_id, detalhe, payload) VALUES ('taubate', $1, $2, 'kommo', 'falha', $3, $4, $5::jsonb)",
+        "options": {
+          "queryReplacement": "={{ (() => { const c = $('Montar PATCH (first-touch)').first().json; return [ c.wamid, c.telefone, c.leadId, String(($json.error && ($json.error.message || $json.error.description)) || $json.message || \"erro desconhecido\").slice(0, 500), JSON.stringify($json) ]; })() }}"
+        }
+      },
+      "id": "log-falha-na-kommo",
+      "name": "Log — falha na Kommo",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3280,
+        -64
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.cfg.alertaUrl || 'https://localhost/desativado' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ origem: 'n8n/rastreio-ctwa', nivel: 'erro', texto: 'Falha ao gravar atribuicao no Kommo — lead ' + ($('Montar PATCH (first-touch)').first().json.leadId || '?') }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "alertar-falha-persistente",
+      "name": "Alertar falha persistente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3504,
+        -64
+      ],
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.tentativasEsgotadas }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "tentativas-esgotadas",
+      "name": "Tentativas esgotadas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2400,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.esperaSegundos }}"
+      },
+      "id": "aguardar-kommo",
+      "name": "Aguardar a Kommo criar o lead",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2192,
+        384
+      ],
+      "webhookId": "ctwa-backoff"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('Config').first().json.cfg.criarSeNaoExistir }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "criar-lead-se-nao-existir",
+      "name": "Criar lead se nao existir?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2624,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Body do POST /leads/complex (cria contato + lead em UMA chamada).\n// So chega aqui com KOMMO_CREATE_IF_MISSING=true e depois de esgotar o\n// backoff — ou seja, a Kommo comprovadamente nao criou o lead sozinha.\n// Contexto vem de 'Avaliar busca', não de 'Loop por lead': é lá que leadId e\n// contatoId são descobertos. Lendo do Loop, o leadId chegava indefinido e o\n// PATCH ia para /leads/undefined — a Kommo responde 404 'resource not found'.\nconst ctx = { ...$('Loop por lead').first().json, ...$('Avaliar busca').first().json };\nconst cfg = $('Config').first().json.cfg;\nconst a = ctx.atribuicao || {};\n\nconst mapa = [\n  ['campanha', a.campanhaNome], ['conjunto', a.conjuntoNome], ['anuncio', a.anuncioNome],\n  ['anuncioId', a.anuncioId], ['utmSource', a.utmSource], ['utmMedium', a.utmMedium],\n  ['utmCampaign', a.utmCampaign], ['utmContent', a.utmContent], ['utmTerm', a.utmTerm],\n  ['origemUrl', a.origemUrl], ['ctwaClid', a.ctwaClid], ['origemTipo', a.origemTipo],\n  ['headline', a.headline], ['plataforma', a.plataforma],\n  ['primeiroContato', ctx.primeiroContatoUnix],\n];\n\nconst custom = [];\nfor (const [chave, valor] of mapa) {\n  const fieldId = cfg.campos[chave];\n  if (!fieldId || valor === null || valor === undefined || valor === '') continue;\n  custom.push({ field_id: fieldId, values: [{ value: valor }] });\n}\n\nconst lead = {\n  name: (ctx.nomeContato || ctx.telefone || 'Lead WhatsApp') + ' — anuncio',\n  _embedded: {\n    contacts: [{\n      first_name: ctx.nomeContato || ctx.telefone,\n      custom_fields_values: [{\n        field_code: 'PHONE',\n        values: [{ value: ctx.telefone, enum_code: 'WORK' }],\n      }],\n    }],\n    // Na criacao via /complex a tag vai em _embedded.tags (aqui nao existe\n    // lead anterior, entao nao ha risco de sobrescrever tags existentes).\n    tags: cfg.tagOrigem ? [{ name: cfg.tagOrigem }] : undefined,\n  },\n};\nif (custom.length) lead.custom_fields_values = custom;\nif (cfg.pipelineId) lead.pipeline_id = cfg.pipelineId;\nif (cfg.statusId) lead.status_id = cfg.statusId;\n\nreturn [{ json: { ...ctx, criarBody: [lead] } }];"
+      },
+      "id": "montar-criacao-complex",
+      "name": "Montar criacao (complex)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2848,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $('Config').first().json.cfg.kommoSubdomain }}.kommo.com/api/v4/leads/complex",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "kommoLongLivedApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.criarBody) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "criar-contato-lead-na-kommo",
+      "name": "Criar contato + lead na Kommo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3072,
+        192
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "kommoLongLivedApi": {
+          "id": "rmHbc6sqKSi9G0TG",
+          "name": "Kommo Taubaté"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_logs (unidade, wamid, telefone, etapa, status, kommo_lead_id, detalhe, payload) VALUES ('taubate', $1, $2, 'kommo', 'criado', $3, 'lead criado pelo rastreio (KOMMO_CREATE_IF_MISSING=true)', $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ (() => { const c = $('Montar criacao (complex)').first().json; const r = Array.isArray($json) ? $json[0] : $json; const id = (r && r._embedded && r._embedded.leads && r._embedded.leads[0] && r._embedded.leads[0].id) || (r && r.id) || null; return [ c.wamid, c.telefone, id, JSON.stringify(c.atribuicao || {}) ]; })() }}"
+        }
+      },
+      "id": "log-lead-criado",
+      "name": "Log — lead criado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3280,
+        192
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctwa_logs (unidade, wamid, telefone, etapa, status, detalhe, payload) VALUES ('taubate', $1, $2, 'kommo', 'orfao', $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [ $json.wamid, $json.telefone, \"nenhum lead encontrado apos \" + $json.tentativa + \" tentativas\", JSON.stringify($json.atribuicao || {}) ] }}"
+        }
+      },
+      "id": "log-orfao-aguardando-reconciliacao",
+      "name": "Log — orfao (aguardando reconciliacao)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2848,
+        352
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "y6Q1JmvPL4BodI9u",
+          "name": "Postgres - Rastreio CTWA"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## Taubaté — PARADO até ter app da Meta\n\nSubdomínio: `doutorherniataubatedt` · credencial: `Kommo Taubaté`\nCallback deste workflow (quando ativar):\n`/webhook/meta-ctwa-taubate/webhook`\n`verify_token` = id do nó = `whatsapp-trigger-taubate`\n\n**Falta, e sem isso não roda:**\n1. app próprio da Meta para esta unidade (um webhook por app — não dá para dividir o app da Imperatriz);\n2. credencial `WhatsApp Trigger · Taubaté` (App ID + App Secret) ligada no nó `On messages`;\n3. ativar aqui — o n8n registra o callback sozinho;\n4. `POST /{WABA_ID}/subscribed_apps` com token `whatsapp_business_management` da unidade.\n\n⛔ **Nunca** clique em \"Listen for test event\": apaga a inscrição de produção. Ver README §10.",
+        "height": 620,
+        "width": 260,
+        "color": 5
+      },
+      "id": "nota-1400-400",
+      "name": "Nota -1400,-400",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1536,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3. Dedup + auditoria\n\n`INSERT ... ON CONFLICT ... RETURNING (xmax = 0)` faz as duas coisas numa escrita só: grava o payload bruto e diz se o evento é novo.\n\nReentregas da Meta caem no ramo \"duplicado\" e param aqui.",
+        "height": 200,
+        "width": 420,
+        "color": 6
+      },
+      "id": "nota-380-440",
+      "name": "Nota 380,440",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        384,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 4. Enriquecimento na Graph API\n\nO webhook traz `source_id` (ID do anúncio) e `ctwa_clid`. Campanha, conjunto, nome do anúncio e `url_tags` (de onde saem as UTMs) vêm da Graph.\n\nFalha aqui **não** aborta: seguimos gravando o que veio do webhook (`onError: continue`).",
+        "height": 348,
+        "width": 420,
+        "color": 7
+      },
+      "id": "nota-1020-300",
+      "name": "Nota 1020,300",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 5. Casamento com a Kommo\n\nBusca por telefone (últimos 8 dígitos — imune a DDI/9º dígito).\n\n**Contato sem lead conta como \"não achou\"**: quase sempre significa que a Kommo ainda está criando o lead da mensagem que acabou de chegar. Espera com backoff (20s/40s/60s) em vez de criar um lead paralelo.\n\nSó cria registro se `KOMMO_CREATE_IF_MISSING=true`. Padrão: **não cria**, registra órfão.",
+        "height": 364,
+        "width": 460,
+        "color": 3
+      },
+      "id": "nota-1900-480",
+      "name": "Nota 1900,480",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1968,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 6. Gravação first-touch\n\nUm **único PATCH** com campos + tag. Dois PATCHes concorrentes no mesmo lead têm race na API do Kommo — o último pode apagar o anterior.\n\n`tags_to_add` vai na **raiz** do body. Dentro de `_embedded` o Kommo responde 200 e ignora em silêncio.\n\nSó grava campo **vazio**: atribuição anterior válida nunca é sobrescrita.",
+        "height": 300,
+        "width": 480,
+        "color": 4
+      },
+      "id": "nota-2800-420",
+      "name": "Nota 2800,-420",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2768,
+        -512
+      ]
+    }
+  ],
+  "connections": {
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Extrair mensagens e referral",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair mensagens e referral": {
+      "main": [
+        [
+          {
+            "node": "Tem dados de campanha?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem dados de campanha?": {
+      "main": [
+        [
+          {
+            "node": "Dedup + registrar evento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log — mensagem sem campanha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log — mensagem sem campanha": {
+      "main": [
+        [
+          {
+            "node": "Fim — sem atribuicao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup + registrar evento": {
+      "main": [
+        [
+          {
+            "node": "Evento novo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evento novo?": {
+      "main": [
+        [
+          {
+            "node": "Contexto do anuncio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log — evento duplicado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log — evento duplicado": {
+      "main": [
+        [
+          {
+            "node": "Fim — duplicado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contexto do anuncio": {
+      "main": [
+        [
+          {
+            "node": "Resolver anuncio (Graph API)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolver anuncio (Graph API)": {
+      "main": [
+        [
+          {
+            "node": "Normalizar atribuicao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar atribuicao": {
+      "main": [
+        [
+          {
+            "node": "Loop por lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop por lead": {
+      "main": [
+        [
+          {
+            "node": "Fim — lote processado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Buscar contato na Kommo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar contato na Kommo": {
+      "main": [
+        [
+          {
+            "node": "Avaliar busca",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avaliar busca": {
+      "main": [
+        [
+          {
+            "node": "Contato com lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contato com lead?": {
+      "main": [
+        [
+          {
+            "node": "Ler lead atual",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tentativas esgotadas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler lead atual": {
+      "main": [
+        [
+          {
+            "node": "Montar PATCH (first-touch)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar PATCH (first-touch)": {
+      "main": [
+        [
+          {
+            "node": "Ha algo para gravar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ha algo para gravar?": {
+      "main": [
+        [
+          {
+            "node": "Atualizar lead (PATCH unico)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log — atribuicao preservada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log — atribuicao preservada": {
+      "main": [
+        [
+          {
+            "node": "Loop por lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar lead (PATCH unico)": {
+      "main": [
+        [
+          {
+            "node": "Nota de auditoria no lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log — falha na Kommo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nota de auditoria no lead": {
+      "main": [
+        [
+          {
+            "node": "Log — sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log — sucesso": {
+      "main": [
+        [
+          {
+            "node": "Loop por lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log — falha na Kommo": {
+      "main": [
+        [
+          {
+            "node": "Alertar falha persistente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alertar falha persistente": {
+      "main": [
+        [
+          {
+            "node": "Loop por lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tentativas esgotadas?": {
+      "main": [
+        [
+          {
+            "node": "Criar lead se nao existir?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aguardar a Kommo criar o lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar a Kommo criar o lead": {
+      "main": [
+        [
+          {
+            "node": "Buscar contato na Kommo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar lead se nao existir?": {
+      "main": [
+        [
+          {
+            "node": "Montar criacao (complex)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log — orfao (aguardando reconciliacao)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar criacao (complex)": {
+      "main": [
+        [
+          {
+            "node": "Criar contato + lead na Kommo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar contato + lead na Kommo": {
+      "main": [
+        [
+          {
+            "node": "Log — lead criado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log — lead criado": {
+      "main": [
+        [
+          {
+            "node": "Loop por lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log — orfao (aguardando reconciliacao)": {
+      "main": [
+        [
+          {
+            "node": "Loop por lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On messages": {
+      "main": [
+        [
+          {
+            "node": "Normalizar formato do Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar formato do Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "executionTimeout": 900,
+    "timezone": "America/Sao_Paulo",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "active": false
+}

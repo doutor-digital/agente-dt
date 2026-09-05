@@ -29,7 +29,7 @@ const camposPorUnidade = JSON.parse(readFileSync(resolve(aqui, 'campos-por-unida
 
 /** WABA conhecida por unidade. Só a Imperatriz está descoberta — o resto entra quando
  *  o app da Meta daquela unidade for criado (o `entry.id` não vem no nó nativo). */
-const WABA = { imperatriz: '1558318502323307' };
+const WABA = { imperatriz: '1558318502323307', rioverde: '475739905626795', taubate: '1036096599272746' };
 
 const ORDEM_CAMPOS = [
   'campanha', 'conjunto', 'anuncio', 'anuncioId',
