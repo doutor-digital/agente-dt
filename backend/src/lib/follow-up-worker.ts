@@ -355,6 +355,17 @@ async function varrer(): Promise<void> {
           }
         }
 
+        // Reserva o degrau ANTES de gerar e enviar. O passo ficava gravado só depois
+        // do envio, então dois processos varrendo no mesmo minuto (segunda réplica,
+        // janela de deploy) viam os dois o degrau 0 e mandavam os dois — Lucilene,
+        // Araguaína, 05/09/2026, duas cobranças com 3 s de diferença. Com a reserva
+        // atômica, o segundo encontra o passo já avançado e não faz nada.
+        const reserva = await prisma.conversation.updateMany({
+          where: { id: conv.id, followUpStep: conv.followUpStep, followUpStoppedReason: null },
+          data: { followUpStep: alvo + 1, followUpLastAt: new Date() },
+        });
+        if (reserva.count !== 1) continue;
+
         await enviarDegrau(unit, conv, proximo, alvo, ESCADA_DA_REGRA.length);
       }
     }
@@ -365,15 +376,30 @@ async function varrer(): Promise<void> {
   }
 }
 
+/**
+ * Gera e envia um degrau. O degrau JÁ foi reservado na conversa (followUpStep
+ * avançado) por quem chamou; se não sair texto ou o envio falhar, devolve o passo
+ * ao que era, para a próxima varredura tentar de novo.
+ */
 async function enviarDegrau(
   unit: { id: string; slug: string },
-  conv: { id: string; leadId: string; followUpStep: number },
+  conv: { id: string; leadId: string; followUpStep: number; followUpLastAt: Date | null },
   degrau: Degrau,
   indice: number,
   totalDegraus: number,
 ): Promise<void> {
   const leadId = Number(conv.leadId);
-  if (!Number.isFinite(leadId)) return;
+  const devolver = () =>
+    prisma.conversation
+      .update({
+        where: { id: conv.id },
+        data: { followUpStep: conv.followUpStep, followUpLastAt: conv.followUpLastAt },
+      })
+      .catch(() => undefined);
+  if (!Number.isFinite(leadId)) {
+    await devolver();
+    return;
+  }
 
   try {
     const { runAgentFollowUp } = await import('../agent/follow-up.js');
@@ -384,21 +410,25 @@ async function enviarDegrau(
       intencao: degrau.intencao,
       ultimoDegrau: indice === totalDegraus - 1,
     });
-    if (!texto) return;
+    if (!texto) {
+      await devolver();
+      return;
+    }
 
     const unitCompleta = await prisma.unit.findUnique({ where: { id: unit.id } });
-    if (!unitCompleta) return;
+    if (!unitCompleta) {
+      await devolver();
+      return;
+    }
     const kommo = createKommoClient(unitCompleta);
     await kommo.sendChatReply({ leadId, text: texto, chatId: null, talkId: null, contactId: null });
 
-    await prisma.conversation.update({
-      where: { id: conv.id },
-      data: {
-        followUpStep: indice + 1,
-        followUpLastAt: new Date(),
-        ...(indice + 1 >= totalDegraus ? { followUpStoppedReason: 'escada concluída' } : {}),
-      },
-    });
+    if (indice + 1 >= totalDegraus) {
+      await prisma.conversation.update({
+        where: { id: conv.id },
+        data: { followUpStoppedReason: 'escada concluída' },
+      });
+    }
 
     await prisma.message.create({
       data: {
@@ -418,6 +448,7 @@ async function enviarDegrau(
       'follow-up: reengajamento enviado',
     );
   } catch (err) {
+    await devolver();
     logger.warn(
       { err: String(err), unit: unit.slug, leadId },
       'follow-up: falha ao enviar reengajamento',

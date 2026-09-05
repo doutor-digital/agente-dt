@@ -412,6 +412,12 @@ const fmtBRL = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2).re
 
 function linhaValorConsulta(unit: Unit): string {
   const p = precosDaConsulta(unit);
+  // Taxa de reserva obrigatória (Boa Vista): o antecipado NÃO é alternativa ao valor
+  // do dia, é uma parte dele. "R$ 100 antecipado ou R$ 250 no dia" fazia o paciente
+  // entender que a consulta inteira custava R$ 100 (Lindomar, 05/09/2026).
+  if (p && unit.spineBookingRequiresPayment) {
+    return `✨ Valor: R$ ${fmtBRL(p.antecipado + p.noDia)} no total — R$ ${fmtBRL(p.antecipado)} antecipado (já pago, garante o horário) + R$ ${fmtBRL(p.noDia)} no dia`;
+  }
   if (p) return `✨ Valor: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes da consulta) ou R$ ${fmtBRL(p.noDia)} no dia`;
   return '✨ Valor: {os valores DESTA unidade, no formato "R$ X antecipado (pago antes da consulta) ou R$ Y no dia" — estão nas fontes/produtos; se não houver valor cadastrado, omita a linha e diga que a equipe informa. NUNCA "à vista"}';
 }
@@ -462,9 +468,13 @@ function renderAgenda(unit: Unit): string {
 
   const linhaValor = linhaValorConsulta(unit);
 
-  const linhaPix = pix
-    ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
-    : 'A equipe envia a chave do PIX para garantir a vaga.';
+  // Onde a taxa antecipada é obrigatória, a confirmação só sai DEPOIS do pagamento —
+  // então não faz sentido "a vaga é garantida com o PIX": ele já pagou.
+  const linhaPix = unit.spineBookingRequiresPayment
+    ? 'Pagamento antecipado recebido — o horário está garantido. No dia, fica só o restante do valor.'
+    : pix
+      ? `A vaga é garantida com o pagamento antecipado no PIX: ${pix}${favorecido ? ` (${favorecido})` : ''}.`
+      : 'A equipe envia a chave do PIX para garantir a vaga.';
 
   const confirmacao = `
 CANCELAR E REMARCAR:

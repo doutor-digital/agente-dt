@@ -269,6 +269,8 @@ export interface Unit {
   spineAiPaused: boolean;
   spineSyncLeads: boolean;
   spineSyncPatients: boolean;
+  /** A vaga só é reservada depois do pagamento antecipado confirmado (Boa Vista). */
+  spineBookingRequiresPayment: boolean;
   clinicAddress?: string | null;
   pixKey?: string | null;
   pixHolder?: string | null;
@@ -1323,5 +1325,15 @@ export interface Funcionamento {
     coalesceMs: number;
   };
   llm: { chamadas: number; custoUsd: number };
+  /** Quem roda os workers periódicos (global, não por unidade). */
+  workers?: {
+    lider: boolean;
+    modo: 'lease' | 'sem-lease' | 'aguardando';
+    dono: string | null;
+    desde: string | null;
+    donoNoBanco: string | null;
+    expiraEm: string | null;
+    leaseVencido: boolean | null;
+  } | null;
   resultados: ResumoResultados;
 }
