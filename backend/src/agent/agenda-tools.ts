@@ -11,6 +11,7 @@ import { AgendaService } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
+import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
 
 const TZ_PADRAO = 'America/Sao_Paulo';
 
@@ -881,6 +882,34 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           'houve uma intercorrência na agenda e que a equipe confirma o horário em seguida. ' +
           'NÃO diga que está agendado.'
         );
+      }
+
+      // Unidade em que a vaga só existe depois da taxa antecipada (Boa Vista, R$ 100).
+      // O manual já dizia "NÃO agende ainda" e o modelo marcou mesmo assim (Lindomar,
+      // 05/09/2026). Remarcação passa: quem remarca já tem consulta, e pagou para tê-la.
+      if (fresca.spineBookingRequiresPayment && !args.remarcando) {
+        const prova = await provaDePagamentoAntecipado({ unitId: fresca.id, leadId: args.leadId, kommo });
+        if (!prova.ok) {
+          await recorder.step({
+            kind: 'ERROR',
+            title: 'agendar_consulta recusado — reserva sem pagamento confirmado',
+            payload: { ...args, motivo: prova.motivo },
+          });
+          return (
+            'RECUSADO: nesta unidade a vaga só é reservada DEPOIS do pagamento antecipado ' +
+            `confirmado, e ainda não há prova dele (${prova.motivo}). A consulta NÃO foi marcada. ` +
+            'NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste turno. ' +
+            'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: ' +
+            'PIX do valor antecipado desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ' +
+            'ou pagamento na clínica antes do dia. Quando o comprovante chegar (imagem), aí sim chame ' +
+            'agendar_consulta. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para a equipe acompanhar.'
+          );
+        }
+        await recorder.step({
+          kind: 'THINKING',
+          title: `Pagamento antecipado confirmado pelo ${prova.fonte === 'cartao' ? 'cartão do Kommo' : 'comprovante lido na conversa'} — pode reservar`,
+          payload: { leadId: args.leadId, fonte: prova.fonte },
+        });
       }
 
       const dono = await conferirPacienteDoLead(fresca.id, args.leadId, args.idClient);

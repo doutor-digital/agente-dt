@@ -5,6 +5,7 @@ import { logger } from '../lib/logger.js';
 import { feriadosNoIntervalo, dataLocalISO } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { resumoResultados } from '../services/resultados.service.js';
+import { estadoDosWorkers, quemLidera } from '../lib/worker-lease.js';
 
 /**
  * GET /units/:id/funcionamento?days=7
@@ -33,7 +34,7 @@ export async function funcionamentoHandler(req: Request, res: Response): Promise
       rastros, pausados, etapaNaoPermitida, encerramentoRepetido, foraDoHorario, agrupadosTrace,
       burstsAgrupados, consultasAgenda, consultasMarcadas, agendarFalhou, leadsMovidos, resumosSdr,
       handoffsCarimbados, iaPausada, tarefasCriadas, alertas, safetyNet, entregasSalesbot, entregasNota,
-      capturas, readbackDivergiu, patchFalhou, fallbackNota, conversas, llm,
+      capturas, readbackDivergiu, patchFalhou, fallbackNota, reservasSemPagamento, conversas, llm,
     ] = await Promise.all([
       prisma.executionTrace.count({ where: { unitId, createdAt: { gte: desde } } }),
       decisao('__paused__'),
@@ -59,6 +60,7 @@ export async function funcionamentoHandler(req: Request, res: Response): Promise
       passo({ title: { contains: 'Readback: divergência' } }),
       passo({ kind: 'ERROR', title: { contains: 'PATCH no campo "Resposta IA" falhou' } }),
       passo({ title: { startsWith: '📝 Caiu no fallback' } }),
+      passo({ kind: 'ERROR', title: { startsWith: 'agendar_consulta recusado — reserva sem pagamento' } }),
       prisma.conversation.aggregate({
         where: { unitId, createdAt: { gte: desde } },
         _count: { _all: true, handoffAt: true, convertedAt: true },
@@ -94,7 +96,7 @@ export async function funcionamentoHandler(req: Request, res: Response): Promise
       contadores: {
         burstsAgrupados, consultasAgenda, consultasMarcadas, agendarFalhou, leadsMovidos, resumosSdr,
         handoffsCarimbados, iaPausada, tarefasCriadas, alertas, safetyNet, entregasSalesbot, entregasNota,
-        capturas, readbackDivergiu, patchFalhou, fallbackNota,
+        capturas, readbackDivergiu, patchFalhou, fallbackNota, reservasSemPagamento,
       },
       sondagem: {
         consultas: consultasAgenda,
@@ -125,6 +127,22 @@ export async function funcionamentoHandler(req: Request, res: Response): Promise
         coalesceMs: Number(process.env.AGENT_COALESCE_MS) || 8000,
       },
       llm: { chamadas: llm._count._all, custoUsd: Number(llm._sum.costUsd ?? 0) },
+      // Quem está rodando os workers periódicos (follow-up, reativação, alertas…).
+      // Global, não por unidade: em 04/09/2026 dois processos rodaram ao mesmo tempo
+      // e cada follow-up saiu duas vezes; aqui dá para ver que há um líder só.
+      workers: await (async () => {
+        const local = estadoDosWorkers();
+        const banco = await quemLidera();
+        return {
+          lider: local?.lider ?? false,
+          modo: local?.modo ?? 'aguardando',
+          dono: local?.dono ?? null,
+          desde: local?.desde?.toISOString() ?? null,
+          donoNoBanco: banco?.owner ?? null,
+          expiraEm: banco?.expiresAt?.toISOString() ?? null,
+          leaseVencido: banco?.vencido ?? null,
+        };
+      })(),
       resultados: await resumoResultados(unitId, Math.max(dias, 30)),
     });
   } catch (err) {
