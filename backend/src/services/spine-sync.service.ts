@@ -3,11 +3,25 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { createKommoClient } from './kommo.service.js';
 import { SpineService } from './spine.service.js';
+import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 
-const CAMPO_ORIGEM = 2440801;
-const CAMPO_CIDADE = 2440803;
-const CAMPO_ESTADO = 2440807;
-const CAMPO_QUEIXA = 2440811;
+/**
+ * Campos do Kommo que o espelho lê — POR NOME, porque cada conta tem ids
+ * próprios e a replicação entre unidades não os preserva.
+ *
+ * Até 05/09/2026 eram quatro ids fixos, da conta da Imperatriz. Nas outras 9
+ * contas eles não existem, então a origem caía no padrão (WhatsApp), e cidade,
+ * estado e queixa iam vazios: Araguaína 86 de 100 leads como WhatsApp,
+ * Parauapebas 75 de 85, Serra 73 de 81 — contra Instagram 24 / Facebook 19 /
+ * WhatsApp 10 na Imperatriz, a única em que a atribuição chegava certa.
+ * Os ids antigos ficam só como reserva, para o caso de o nome mudar lá.
+ */
+const CAMPOS = {
+  origem: { nome: '⚑ Origem', reserva: 2440801 },
+  cidade: { nome: '⌂ Cidade', reserva: 2440803 },
+  estado: { nome: '⌂ Estado', reserva: 2440807 },
+  queixa: { nome: '✎ Queixa', reserva: 2440811 },
+} as const;
 
 // Partículas de sobrenome: entram no nome, mas não valem como sobrenome.
 const PARTICULAS = new Set([
@@ -196,6 +210,13 @@ export interface Preparo {
   spineIdLead?: number;
 }
 
+/** "Atendimento pela Sofia (IA Doutor Digital) via WhatsApp. Queixa: dor lombar há 2 anos" */
+export function descricaoDoLead(queixa: string | null): string {
+  const base = 'Atendimento pela Sofia (IA Doutor Digital) via WhatsApp.';
+  const q = queixa?.trim();
+  return q ? `${base} Queixa: ${q}`.slice(0, 1000) : base;
+}
+
 export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Preparo> {
   const kommo = createKommoClient(unit);
   let lead;
@@ -211,7 +232,14 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
     return { ok: false, etapa: 'nome', tituloKommo: titulo, motivo: avaliacao.motivo };
   }
 
-  const valor = (fieldId: number): string | null => {
+  // Ids desta conta, resolvidos pelo nome do campo. Sem esquema (Kommo fora do
+  // ar), cai nos ids de reserva — que só existem na Imperatriz.
+  const esquema = await esquemaDaUnidade(unit, kommo).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug }, 'spine-sync: sem esquema do Kommo — usando ids de reserva');
+    return null;
+  });
+  const valor = (campo: { nome: string; reserva: number }): string | null => {
+    const fieldId = esquema?.campoPorNome(campo.nome) ?? campo.reserva;
     const f = lead.custom_fields_values?.find((x) => x.field_id === fieldId);
     const v = f?.values?.[0]?.value;
     return typeof v === 'string' && v.trim() ? v.trim() : null;
@@ -234,7 +262,10 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
     payload: {
       name: limparNome(titulo),
       whatsapp: whatsapp ? SpineService.normalizarWhatsapp(whatsapp) || null : null,
-      description: valor(CAMPO_QUEIXA) ?? 'Lead vindo do atendimento por WhatsApp.',
+      // Quem criou este lead na franquia foi a Sofia — isso vai na DESCRIÇÃO, para a
+      // Origem continuar sendo o canal de marketing (decisão do João, 05/09/2026:
+      // "o lead continua com origem de marketing; a Sofia entra no paciente").
+      description: descricaoDoLead(valor(CAMPOS.queixa)),
       // Origem do LEAD espelhado: a de marketing traduzida do Kommo (Instagram, Google,
       // WhatsApp…). "IA SOFIA" aqui só se a unidade pediu: o lead nasce antes de sabermos
       // se vai agendar, e quem a recepção marcar depois também apareceria como IA.
@@ -242,11 +273,11 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
         unit.spineIaSourceLeads && unit.spineIaSourceId
           ? unit.spineIaSourceId
           : SpineService.resolverIdSource(
-              valor(CAMPO_ORIGEM) ?? canalNoTitulo(titulo),
+              valor(CAMPOS.origem) ?? canalNoTitulo(titulo),
               unit.spineDefaultSourceId,
             ),
-      addressCity: valor(CAMPO_CIDADE)?.toUpperCase() ?? null,
-      addressUf: SpineService.resolverUf(valor(CAMPO_ESTADO)),
+      addressCity: valor(CAMPOS.cidade)?.toUpperCase() ?? null,
+      addressUf: SpineService.resolverUf(valor(CAMPOS.estado)),
     },
   };
 }
