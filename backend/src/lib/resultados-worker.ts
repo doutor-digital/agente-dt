@@ -15,6 +15,7 @@ const SWEEP_MS = Number(process.env.RESULTADOS_SWEEP_MS) || 6 * 60 * 60_000;
 const ATRASO_INICIAL_MS = Number(process.env.RESULTADOS_DELAY_MS) || 5 * 60_000;
 
 let timer: NodeJS.Timeout | null = null;
+let primeiraVarredura: NodeJS.Timeout | null = null;
 let rodando = false;
 
 export async function varrerResultados(): Promise<void> {
@@ -42,7 +43,14 @@ export async function varrerResultados(): Promise<void> {
 
 export function startResultadosWorker(): void {
   if (timer) return;
-  setTimeout(() => void varrerResultados(), ATRASO_INICIAL_MS);
+  primeiraVarredura = setTimeout(() => void varrerResultados(), ATRASO_INICIAL_MS);
   timer = setInterval(() => void varrerResultados(), SWEEP_MS);
   logger.info({ sweepMs: SWEEP_MS }, 'livro de resultados ligado');
+}
+
+export function stopResultadosWorker(): void {
+  if (timer) clearInterval(timer);
+  if (primeiraVarredura) clearTimeout(primeiraVarredura);
+  timer = null;
+  primeiraVarredura = null;
 }

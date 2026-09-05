@@ -279,6 +279,11 @@ model Unit {
   /// Separado de spineSyncLeads: o lead é um contato, o paciente é o cadastro
   /// que a recepção usa — e nenhum dos dois pode ser apagado depois.
   spineSyncPatients    Boolean @default(false) @map("spine_sync_patients")
+  /// A vaga só é reservada DEPOIS do pagamento antecipado confirmado (comprovante lido na
+  /// conversa ou campo "✓ Consulta pg antecipado" marcado). Boa Vista: taxa de R$ 100 que
+  /// garante o horário. Em 05/09/2026 a IA confirmou consulta sem a taxa — o manual da
+  /// unidade já proibia; só regra em código segura o modelo.
+  spineBookingRequiresPayment Boolean @default(false) @map("spine_booking_requires_payment")
   /// Endereço da clínica, para a mensagem de confirmação. Vazio = a IA diz
   /// que a equipe confirma, em vez de inventar — paciente indo no lugar
   /// errado é pior que paciente perguntando onde é.
@@ -1572,6 +1577,20 @@ model MessageClaim {
 
   @@index([expiresAt])
   @@map("message_claims")
+}
+
+/// Liderança dos workers periódicos (follow-up, reativação, alertas, juiz…):
+/// só o processo que detém este lease os roda. Existe porque em 04/09/2026 o
+/// Swarm deixou um container que ele já dava como morto rodando ao lado do novo,
+/// e cada follow-up saiu duas vezes — 148 pacientes em 18 h. Todo deploy
+/// start-first abre a mesma janela por ~1 min. Renovado a cada 30 s, vence em 90 s.
+model WorkerLease {
+  name      String   @id
+  owner     String
+  expiresAt DateTime @map("expires_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
+
+  @@map("worker_leases")
 }
 
 /// Livro de resultados: uma linha por conversa — o que a IA fez e o que aconteceu
