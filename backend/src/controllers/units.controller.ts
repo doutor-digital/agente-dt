@@ -117,6 +117,8 @@ const unitInputBase = {
   pixKey: z.string().max(120).nullable().optional(),
   pixHolder: z.string().max(160).nullable().optional(),
   spineDefaultSourceId: z.coerce.number().int().positive().optional(),
+  spineIaSourceId: z.coerce.number().int().positive().nullable().optional(),
+  spineIaSourceLeads: z.boolean().optional(),
   spineAgendaStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   spineAgendaEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   spineLunchStart: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),

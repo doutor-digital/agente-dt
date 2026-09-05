@@ -41,6 +41,7 @@ const ORIGENS_FRANQUIA = [
   { id: 3, nome: 'INDICAÇÃO' },
   { id: 1, nome: 'GOOGLE' },
   { id: 9999, nome: 'IA2GO' },
+  { id: 10002, nome: 'IA SOFIA' },
 ];
 
 interface Form {
@@ -59,6 +60,8 @@ interface Form {
   spineSyncPatients: boolean;
   spineBookingRequiresPayment: boolean;
   spineDefaultSourceId: number;
+  spineIaSourceId: number | null;
+  spineIaSourceLeads: boolean;
   clinicAddress: string;
   pixKey: string;
   pixHolder: string;
@@ -81,6 +84,8 @@ function doServidor(u: Partial<Unit>): Form {
     spineSyncPatients: u.spineSyncPatients ?? false,
     spineBookingRequiresPayment: u.spineBookingRequiresPayment ?? false,
     spineDefaultSourceId: u.spineDefaultSourceId ?? 20,
+    spineIaSourceId: u.spineIaSourceId ?? null,
+    spineIaSourceLeads: u.spineIaSourceLeads ?? false,
     clinicAddress: u.clinicAddress ?? '',
     pixKey: u.pixKey ?? '',
     pixHolder: u.pixHolder ?? '',
@@ -692,6 +697,43 @@ function Espelhamento({
           o que não casar com nenhuma.
         </span>
       </label>
+
+      <div className="mt-5 rounded-xl border border-zinc-800 p-4">
+        <label className="block max-w-sm">
+          <span className="text-xs font-medium text-zinc-300">Origem de quem a Sofia agenda</span>
+          <select
+            className="field mt-1"
+            value={form.spineIaSourceId ?? 0}
+            onChange={(e) => setForm({ ...form, spineIaSourceId: Number(e.target.value) || null })}
+          >
+            <option value={0}>Igual à do lead (desligado)</option>
+            {ORIGENS_FRANQUIA.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.nome} · {o.id}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 block text-[11px] leading-relaxed text-zinc-500">
+            Gravada no <span className="text-zinc-300">paciente</span> que a Sofia cadastra ou converte na hora de
+            marcar. A franquia criou &quot;IA SOFIA&quot; (10002) em 05/09 para isso. A API não deixa mudar a origem
+            depois de criada, então vale só para o que nasce daqui em diante.
+          </span>
+        </label>
+        <div className="mt-4 border-t border-zinc-800 pt-4">
+          <Interruptor
+            ligado={form.spineIaSourceLeads}
+            desabilitado={!form.spineIaSourceId}
+            onChange={(v) => setForm({ ...form, spineIaSourceLeads: v })}
+            titulo="Também no lead espelhado"
+            ligadoTexto="Ligado — todo lead que a Sofia espelha na franquia já nasce com esta origem, antes de saber se vai marcar. Quem a recepção marcar depois também aparece como IA."
+            desligadoTexto={
+              !form.spineIaSourceId
+                ? 'Escolha a origem acima primeiro.'
+                : 'Desligado — o lead espelhado mantém a origem de marketing (Instagram, Google, WhatsApp); só o paciente que a Sofia agenda recebe a origem dela.'
+            }
+          />
+        </div>
+      </div>
     </section>
   );
 }

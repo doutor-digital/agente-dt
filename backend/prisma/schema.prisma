@@ -284,6 +284,13 @@ model Unit {
   /// garante o horário. Em 05/09/2026 a IA confirmou consulta sem a taxa — o manual da
   /// unidade já proibia; só regra em código segura o modelo.
   spineBookingRequiresPayment Boolean @default(false) @map("spine_booking_requires_payment")
+  /// Origem que a Sofia grava na franquia ao cadastrar/converter o paciente para agendar
+  /// ("IA SOFIA" = 10002 nas 10 unidades, criada pela franquia em 05/09/2026). Nulo = usa a
+  /// origem do lead. A API não tem rota de atualização, então só vale na criação.
+  spineIaSourceId    Int?    @map("spine_ia_source_id")
+  /// Marcar a mesma origem também no LEAD espelhado (nasce antes de saber se vai agendar;
+  /// quem a recepção marcar depois também aparece como IA — por isso desligado por padrão).
+  spineIaSourceLeads Boolean @default(false) @map("spine_ia_source_leads")
   /// Endereço da clínica, para a mensagem de confirmação. Vazio = a IA diz
   /// que a equipe confirma, em vez de inventar — paciente indo no lugar
   /// errado é pior que paciente perguntando onde é.
