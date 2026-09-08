@@ -111,3 +111,78 @@ test('feriado nacional fecha mesmo em dia e hora de atendimento (Porto Nacional 
   assert.equal(r.outOfHoursMessage, 'Estamos fechados.');
   assert.equal(checkBusinessHours(unidade({}), new Date('2026-09-08T10:00:00-03:00')).isOpen, true);
 });
+
+// ── Janela por dia da semana ────────────────────────────────────────────────
+// Taubaté (08/09/2026): a equipe humana atende o comercial e a IA cobre o resto
+// — 20h às 08h de segunda a sexta (a janela ATRAVESSA a meia-noite) e 8h às 20h
+// no sábado e no domingo. Nenhuma outra unidade usa isto.
+const TAUBATE: Partial<Unit> = {
+  businessHoursDays: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+  businessHoursStart: 20,
+  businessHoursEnd: 8, // fim menor que início = vira a noite
+  businessHoursByDay: { sat: { start: 8, end: 20 }, sun: { start: 8, end: 20 } } as never,
+};
+const dom = (h: number) => new Date(`2026-08-30T${String(h).padStart(2, '0')}:00:00-03:00`);
+const ter = (h: number) => new Date(`2026-09-01T${String(h).padStart(2, '0')}:00:00-03:00`);
+
+test('Taubaté: terça às 10h é hora da equipe — a IA fica calada', () => {
+  assert.equal(checkBusinessHours(unidade(TAUBATE), ter(10)).isOpen, false);
+});
+
+test('Taubaté: segunda às 20h a IA assume', () => {
+  assert.equal(checkBusinessHours(unidade(TAUBATE), seg(20)).isOpen, true);
+});
+
+test('Taubaté: segunda às 23h continua com a IA', () => {
+  assert.equal(checkBusinessHours(unidade(TAUBATE), seg(23)).isOpen, true);
+});
+
+test('Taubaté: 3h da manhã de terça ainda é a noite de segunda — responde', () => {
+  assert.equal(checkBusinessHours(unidade(TAUBATE), ter(3)).isOpen, true);
+});
+
+test('Taubaté: terça às 7h ainda responde; às 8h a equipe assume', () => {
+  assert.equal(checkBusinessHours(unidade(TAUBATE), ter(7)).isOpen, true);
+  assert.equal(checkBusinessHours(unidade(TAUBATE), ter(8)).isOpen, false);
+});
+
+test('Taubaté: sábado às 9h responde, mesmo com a janela geral começando 20h', () => {
+  assert.equal(checkBusinessHours(unidade(TAUBATE), sab(9)).isOpen, true);
+});
+
+test('Taubaté: sábado às 3h é a noite de sexta — responde', () => {
+  assert.equal(checkBusinessHours(unidade(TAUBATE), sab(3)).isOpen, true);
+});
+
+test('Taubaté: sábado às 21h já fechou — o dia dele acaba às 20h', () => {
+  assert.equal(checkBusinessHours(unidade(TAUBATE), sab(21)).isOpen, false);
+});
+
+test('Taubaté: domingo às 10h responde', () => {
+  assert.equal(checkBusinessHours(unidade(TAUBATE), dom(10)).isOpen, true);
+});
+
+test('dia fora de businessHoursDays continua fechado, mesmo com janela própria', () => {
+  const u = unidade({
+    businessHoursDays: ['mon'],
+    businessHoursByDay: { sat: { start: 8, end: 20 } } as never,
+  });
+  assert.equal(checkBusinessHours(u, sab(10)).isOpen, false);
+});
+
+test('hora inválida no mapa é ignorada e vale a janela geral', () => {
+  const u = unidade({ businessHoursByDay: { mon: { start: 99, end: 'x' } } as never });
+  assert.equal(checkBusinessHours(u, seg(10)).isOpen, true);
+});
+
+test('início igual ao fim cai na janela geral em vez de calar a IA', () => {
+  const u = unidade({ businessHoursByDay: { mon: { start: 9, end: 9 } } as never });
+  assert.equal(checkBusinessHours(u, seg(10)).isOpen, true);
+});
+
+test('sem mapa por dia, nada muda para as outras unidades', () => {
+  const u = unidade({ businessHoursByDay: null as never });
+  assert.equal(checkBusinessHours(u, seg(10)).isOpen, true);
+  assert.equal(checkBusinessHours(u, seg(20)).isOpen, false);
+  assert.equal(checkBusinessHours(u, sab(10)).isOpen, false);
+});

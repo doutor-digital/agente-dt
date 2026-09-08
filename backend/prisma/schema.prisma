@@ -409,6 +409,19 @@ model Unit {
   businessHoursDays     String[] @default(["mon", "tue", "wed", "thu", "fri"]) @map("business_hours_days")
   businessHoursTimezone String   @default("America/Sao_Paulo") @map("business_hours_timezone")
   outOfHoursMessage     String?  @map("out_of_hours_message")
+  /**
+   * Janela por dia da semana, quando ela MUDA de um dia para o outro —
+   * `{"mon":{"start":20,"end":22},"sat":{"start":8,"end":20}}`.
+   *
+   * Existe porque a janela única não descreve o caso de Taubaté: lá a equipe
+   * humana atende o horário comercial e a IA cobre o que sobra — noite durante
+   * a semana (20h–22h) e o dia inteiro no fim de semana (8h–20h). Com um só
+   * par início/fim, atender sábado às 9h obrigaria a atender terça às 9h também.
+   *
+   * Dia presente aqui manda; dia ausente cai em businessHoursStart/End. Dia que
+   * não está em businessHoursDays continua fechado, esteja aqui ou não.
+   */
+  businessHoursByDay    Json?    @map("business_hours_by_day")
 
   // FOLLOW-UP — instruções pra IA mencionar follow-up (real scheduling fica pra depois).
   followUpEnabled    Boolean @default(false) @map("follow_up_enabled")
