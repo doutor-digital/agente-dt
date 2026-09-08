@@ -186,3 +186,12 @@ test('sem mapa por dia, nada muda para as outras unidades', () => {
   assert.equal(checkBusinessHours(u, seg(20)).isOpen, false);
   assert.equal(checkBusinessHours(u, sab(10)).isOpen, false);
 });
+
+test('Taubaté não tem mensagem de fora-horário — e mesmo assim fica calada', () => {
+  // Antes a trava do webhook exigia outOfHoursMessage para valer. Sem texto, ela
+  // era pulada e a IA atendia no horário comercial. O horário manda; a mensagem
+  // é opcional.
+  const u = unidade({ ...TAUBATE, outOfHoursMessage: null });
+  assert.equal(checkBusinessHours(u, ter(10)).isOpen, false);
+  assert.equal(checkBusinessHours(u, ter(10)).outOfHoursMessage, null);
+});
