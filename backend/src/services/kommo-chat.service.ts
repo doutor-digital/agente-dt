@@ -35,10 +35,58 @@ const MARGEM_MS = 12 * 60 * 60_000;
 
 export class KommoChatIndisponivel extends Error {}
 
-function sessaoWeb(): string {
-  const s = (process.env.KOMMO_WEB_SESSION_ID ?? '').trim();
-  if (!s) throw new KommoChatIndisponivel('KOMMO_WEB_SESSION_ID não configurado — sem sessão web não há token de chat');
-  return s;
+/**
+ * Cookies da sessão web: o banco (versão mais nova, já rotacionada) manda; o env é
+ * a semente. O `refresh_token` é o que vale por 91 dias — com ele a Kommo emite
+ * sessão nova mesmo quando o `session_id` já caducou.
+ */
+async function cookiesDaSessao(): Promise<{ sessionId: string; refreshToken: string; cookie: string }> {
+  const row = await prisma.kommoWebSession.findUnique({ where: { id: 'default' } }).catch(() => null);
+  const sessionId = (row?.sessionId || process.env.KOMMO_WEB_SESSION_ID || '').trim();
+  const refreshToken = (row?.refreshToken || process.env.KOMMO_WEB_REFRESH_TOKEN || '').trim();
+  if (!sessionId && !refreshToken) {
+    throw new KommoChatIndisponivel('sem sessão web do Kommo (KOMMO_WEB_SESSION_ID / KOMMO_WEB_REFRESH_TOKEN) — não há token de chat');
+  }
+  const partes = [sessionId && `session_id=${sessionId}`, refreshToken && `refresh_token=${refreshToken}`].filter(Boolean);
+  return { sessionId, refreshToken, cookie: partes.join('; ') };
+}
+
+/** Guarda o que a Kommo mandou de volta em Set-Cookie (rotação de session_id/refresh_token). */
+async function guardarCookiesRotacionados(setCookie: string[] | undefined, userName?: string | null): Promise<void> {
+  const novos: Record<string, string> = {};
+  for (const linha of setCookie ?? []) {
+    const m = /^(session_id|refresh_token)=([^;]*)/.exec(linha);
+    if (m && m[2]) novos[m[1]] = m[2];
+  }
+  const agora = new Date();
+  await prisma.kommoWebSession
+    .upsert({
+      where: { id: 'default' },
+      update: {
+        ...(novos.session_id ? { sessionId: novos.session_id } : {}),
+        ...(novos.refresh_token ? { refreshToken: novos.refresh_token } : {}),
+        ...(userName ? { userName } : {}),
+        ultimoOk: agora,
+        ultimoErro: null,
+      },
+      create: {
+        id: 'default',
+        sessionId: novos.session_id || process.env.KOMMO_WEB_SESSION_ID || null,
+        refreshToken: novos.refresh_token || process.env.KOMMO_WEB_REFRESH_TOKEN || null,
+        userName: userName ?? null,
+        ultimoOk: agora,
+      },
+    })
+    .catch((err) => logger.warn({ err: String(err) }, 'kommo-chat: não consegui guardar cookies rotacionados'));
+  if (novos.session_id || novos.refresh_token) {
+    logger.info({ rotacionou: Object.keys(novos) }, 'kommo-chat: sessão web rotacionada e guardada');
+  }
+}
+
+async function registrarFalhaDeSessao(motivo: string): Promise<void> {
+  await prisma.kommoWebSession
+    .upsert({ where: { id: 'default' }, update: { ultimoErro: motivo.slice(0, 500) }, create: { id: 'default', ultimoErro: motivo.slice(0, 500) } })
+    .catch(() => undefined);
 }
 
 interface SessaoCriada {
@@ -48,34 +96,39 @@ interface SessaoCriada {
   user?: { name?: string };
 }
 
-/** `POST /ajax/v1/chats/session` com o cookie da sessão web (formato do site: form-urlencoded). */
+/** `POST /ajax/v1/chats/session` com os cookies da sessão web (formato do site: form-urlencoded). */
 async function criarTokenDeChat(subdomain: string): Promise<SessaoCriada> {
   const url = `https://${subdomain}.kommo.com/ajax/v1/chats/session`;
+  const { cookie } = await cookiesDaSessao();
   try {
-    const { data } = await axios.post<{ response?: { chats?: { session?: SessaoCriada } } }>(
+    const resp = await axios.post<{ response?: { chats?: { session?: SessaoCriada } } }>(
       url,
       'request%5Bchats%5D%5Bsession%5D%5Baction%5D=create',
       {
         headers: {
-          Cookie: `session_id=${sessaoWeb()}`,
+          Cookie: cookie,
           'X-Requested-With': 'XMLHttpRequest',
           'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36',
           Referer: `https://${subdomain}.kommo.com/`,
         },
         timeout: 20_000,
       },
     );
-    const s = data?.response?.chats?.session;
+    const s = resp.data?.response?.chats?.session;
     if (!s?.access_token || !s.refresh_token || !s.expired_at) {
-      throw new KommoChatIndisponivel(`resposta sem token de chat: ${JSON.stringify(data).slice(0, 200)}`);
+      throw new KommoChatIndisponivel(`resposta sem token de chat: ${JSON.stringify(resp.data).slice(0, 200)}`);
     }
+    await guardarCookiesRotacionados(resp.headers['set-cookie'] as string[] | undefined, s.user?.name ?? null);
     return s;
   } catch (err) {
     if (err instanceof KommoChatIndisponivel) throw err;
     const status = axios.isAxiosError(err) ? err.response?.status : undefined;
     const corpo = axios.isAxiosError(err) ? JSON.stringify(err.response?.data ?? '').slice(0, 200) : String(err);
+    const motivo = `sessão web recusada em ${subdomain} (HTTP ${status ?? '?'}): ${corpo}`;
     // 401/403/400 "código 103" = sessão web caiu ou não vale nesta conta.
-    throw new KommoChatIndisponivel(`sessão web recusada em ${subdomain} (HTTP ${status ?? '?'}): ${corpo}`);
+    await registrarFalhaDeSessao(motivo);
+    throw new KommoChatIndisponivel(motivo);
   }
 }
 
@@ -133,6 +186,39 @@ export async function obterTokenDeChat(
     'kommo-chat: token de chat criado a partir da sessão web',
   );
   return { token: salvo.accessToken, amojoAccountId: salvo.amojoAccountId };
+}
+
+export interface RenovacaoDeTokens {
+  verificadas: number;
+  renovadas: number;
+  falhas: Array<{ slug: string; erro: string }>;
+}
+
+/**
+ * Renova os tokens de chat das unidades com voz ligada que vencem em menos de
+ * `margemHoras`. É o que mantém a voz de pé sem ninguém abrir o Kommo: cada renovação
+ * usa (e rotaciona) o refresh_token da sessão web guardada no banco.
+ */
+export async function renovarTokensDeChat(margemHoras = 48): Promise<RenovacaoDeTokens> {
+  const units = await prisma.unit.findMany({
+    where: { voiceReplyEnabled: true, isActive: true, kommoAccessToken: { not: null } },
+    select: { id: true, slug: true, kommoSubdomain: true, kommoAccessToken: true },
+    orderBy: { slug: 'asc' },
+  });
+  const limite = Date.now() + margemHoras * 3_600_000;
+  const out: RenovacaoDeTokens = { verificadas: units.length, renovadas: 0, falhas: [] };
+  for (const u of units) {
+    const atual = await prisma.kommoChatSession.findUnique({ where: { unitId: u.id } });
+    if (atual && atual.expiresAt.getTime() > limite) continue;
+    try {
+      await obterTokenDeChat(u, { forcarNovo: true });
+      out.renovadas += 1;
+    } catch (err) {
+      out.falhas.push({ slug: u.slug, erro: err instanceof Error ? err.message : String(err) });
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return out;
 }
 
 export interface NotaDeVoz {
