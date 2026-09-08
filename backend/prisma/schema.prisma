@@ -1590,6 +1590,22 @@ model MessageClaim {
   @@map("message_claims")
 }
 
+/// Sessão WEB do Kommo que o servidor usa para criar tokens de chat (nota de voz).
+/// Linha única. O que vale por 91 dias é o `refresh_token`; a Kommo rotaciona os
+/// cookies a cada uso e o servidor guarda aqui a versão mais nova (cookie jar).
+/// Nasce do env (KOMMO_WEB_SESSION_ID / KOMMO_WEB_REFRESH_TOKEN) e depois vive aqui.
+model KommoWebSession {
+  id           String   @id @default("default")
+  sessionId    String?  @map("session_id")
+  refreshToken String?  @map("refresh_token")
+  userName     String?  @map("user_name")
+  ultimoOk     DateTime? @map("ultimo_ok")
+  ultimoErro   String?  @map("ultimo_erro")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("kommo_web_sessions")
+}
+
 /// Token do serviço de chat interno do Kommo (amojo), por unidade. Criado com a sessão
 /// web do usuário (cookie), vale ~3 dias e é recriado sozinho. É o que permite mandar
 /// NOTA DE VOZ pela conversa do WhatsApp — a API oficial não tem mídia (05/09/2026).
