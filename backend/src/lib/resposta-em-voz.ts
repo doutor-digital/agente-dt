@@ -3,6 +3,7 @@ import { logger } from './logger.js';
 import { createKommoClient, MIME_VOZ } from '../services/kommo.service.js';
 import { sintetizarFala } from '../services/tts.service.js';
 import { enviarNotaDeVoz, podeVirarAudio, verificarEntregaDaNota } from '../services/kommo-chat.service.js';
+import { avisarJoao } from './alerta-whatsapp.js';
 import type { TraceRecorder } from '../agent/trace-recorder.js';
 
 /**
@@ -102,6 +103,10 @@ export async function tentarNotaDeVoz(a: TentativaDeVoz): Promise<{ via: string;
               title: `🔊 Áudio marcado com erro pelo Kommo (${v.erro}) — reenviando em texto`,
               payload: { messageId: enviada.messageId, erro: v.erro, deliveryStatus: v.deliveryStatus },
             });
+            void avisarJoao(
+              `🔊 Áudio da Sofia em ${unit.slug} (lead ${leadId}) foi aceito e depois marcado com erro pelo Kommo: ${v.erro}. Reenviei em texto.`,
+              `voz-erro-kommo:${unit.slug}`,
+            );
             const r = await kommo.sendChatReply({
               leadId,
               chatId: a.chatId,
@@ -139,6 +144,14 @@ export async function tentarNotaDeVoz(a: TentativaDeVoz): Promise<{ via: string;
       title: `🔊 Áudio falhou — respondendo em texto: ${msg.slice(0, 120)}`,
       payload: { erro: msg, ms: Math.round(performance.now() - t0) },
     });
+    // Aviso ao João (uma vez a cada 30 min por unidade). Sessão web recusada é a causa
+    // que precisa de gente: alguém tem que logar de novo no Kommo.
+    const sessao = /sess[aã]o web|KOMMO_WEB_SESSION_ID/i.test(msg);
+    void avisarJoao(
+      `🔊 Áudio da Sofia falhou em ${unit.slug} (lead ${leadId}) e a resposta saiu em texto.\nMotivo: ${msg.slice(0, 300)}` +
+        (sessao ? '\n\n⚠️ A sessão web do Kommo não está valendo — toda resposta em áudio vai cair em texto até renovar a sessão.' : ''),
+      sessao ? 'voz-sessao' : `voz-falha:${unit.slug}`,
+    );
     return null;
   }
 }
