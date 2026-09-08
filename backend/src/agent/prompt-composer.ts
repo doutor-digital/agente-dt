@@ -65,6 +65,43 @@ export function fusoSeguro(tz: string | null | undefined, padrao = 'America/Sao_
   }
 }
 
+const DIAS_SEMANA = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+/**
+ * Início e fim do atendimento naquele dia da semana.
+ *
+ * `end <= start` NÃO é erro: é a janela que atravessa a meia-noite (20h→08h,
+ * o turno da noite). Só descartamos hora fora de 0–23, e aí o dia cai na janela
+ * geral — configuração torta não pode calar a IA sem ninguém notar.
+ */
+function janelaDoDia(unit: Unit, weekday: string): { start: number; end: number } {
+  const geral = { start: unit.businessHoursStart, end: unit.businessHoursEnd };
+  const mapa = unit.businessHoursByDay as Record<string, { start?: unknown; end?: unknown }> | null;
+  const dia = mapa?.[weekday];
+  if (!dia) return geral;
+  const start = Number(dia.start);
+  const end = Number(dia.end);
+  const valido = (h: number) => Number.isInteger(h) && h >= 0 && h <= 24;
+  if (!valido(start) || !valido(end) || start === end) return geral;
+  return { start, end };
+}
+
+/**
+ * A hora cai na janela do dia?
+ *
+ * Quando `end <= start` a janela vira noite: 20h→08h cobre das 20h à meia-noite
+ * NAQUELE dia, e da meia-noite às 08h no dia SEGUINTE. Por isso quem pergunta
+ * precisa olhar dois dias — ver `checkBusinessHours`.
+ */
+function dentroDaJanela(hour: number, start: number, end: number): boolean {
+  return end > start ? hour >= start && hour < end : hour >= start;
+}
+
+/** A parte da madrugada que sobrou da noite anterior (só quando a janela cruza). */
+function sobraDaNoiteAnterior(hour: number, start: number, end: number): boolean {
+  return end <= start && hour < end;
+}
+
 export function checkBusinessHours(unit: Unit, now: Date = new Date()): BusinessHoursStatus {
   if (!unit.businessHoursEnabled) {
     return { enabled: false, isOpen: true, outOfHoursMessage: unit.outOfHoursMessage };
@@ -84,11 +121,21 @@ export function checkBusinessHours(unit: Unit, now: Date = new Date()): Business
   const hourStr = parts.find((p) => p.type === 'hour')?.value ?? '0';
   const hour = Number(hourStr) % 24;
   const allowedDays = new Set(unit.businessHoursDays);
-  const isOpenDay = allowedDays.has(weekday);
-  const isOpenHour = hour >= unit.businessHoursStart && hour < unit.businessHoursEnd;
+
+  // Duas perguntas, porque o turno da noite não cabe num dia só:
+  //   1. a janela de HOJE já começou? (20h→08h de segunda começa na segunda)
+  //   2. estamos na madrugada que sobrou de ONTEM? (03h de terça é a noite de segunda)
+  const hoje = janelaDoDia(unit, weekday);
+  const abertoHoje = allowedDays.has(weekday) && dentroDaJanela(hour, hoje.start, hoje.end);
+
+  const idxOntem = (DIAS_SEMANA.indexOf(weekday) + 6) % 7;
+  const ontem = DIAS_SEMANA[idxOntem];
+  const jOntem = janelaDoDia(unit, ontem);
+  const abertoDeOntem = allowedDays.has(ontem) && sobraDaNoiteAnterior(hour, jOntem.start, jOntem.end);
+
   return {
     enabled: true,
-    isOpen: isOpenDay && isOpenHour,
+    isOpen: abertoHoje || abertoDeOntem,
     outOfHoursMessage: unit.outOfHoursMessage,
   };
 }
