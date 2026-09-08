@@ -22,6 +22,7 @@ import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
 import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
+import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -104,6 +105,7 @@ async function main(): Promise<void> {
       startTaxaErroWorker();
       startCardValidationWorker();
       startResultadosWorker();
+      startVozSessaoWorker();
     },
     parar: () => {
       stopWhatsappCostScheduler();
@@ -117,6 +119,7 @@ async function main(): Promise<void> {
       stopTaxaErroWorker();
       stopCardValidationWorker();
       stopResultadosWorker();
+      stopVozSessaoWorker();
     },
   });
 
