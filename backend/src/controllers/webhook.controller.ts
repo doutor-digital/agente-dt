@@ -780,10 +780,17 @@ export async function processAgent(args: {
   // aviso achando que é fala do paciente — 81 vezes em 7 dias.
   humanMessage = tratarMensagemNaoRenderizada(humanMessage);
 
+  // Fora do horário a IA não responde — com ou sem mensagem cadastrada.
+  // Antes a trava exigia `outOfHoursMessage`: sem texto, ela era pulada inteira e a
+  // IA seguia atendendo. Em Taubaté isso significava a Sofia falando no horário
+  // comercial, justamente quando a equipe humana está no WhatsApp. Quem quer que a
+  // unidade fique calada não deveria precisar inventar uma mensagem para isso.
   const hours = checkBusinessHours(unit);
-  if (hours.enabled && !hours.isOpen && hours.outOfHoursMessage) {
+  if (hours.enabled && !hours.isOpen) {
     try {
-      if (deliver) {
+      if (!hours.outOfHoursMessage) {
+        // silêncio proposital: quem atende nesse horário é gente
+      } else if (deliver) {
         delivered = true;
         await deliver(hours.outOfHoursMessage);
       } else if (unit.kommoSalesbotId && unit.kommoReplyFieldId) {
@@ -800,8 +807,10 @@ export async function processAgent(args: {
     }
     await recorder.step({
       kind: 'COMPLETED',
-      title: 'Fora do horário comercial — mensagem padrão enviada',
-      payload: { leadId, message: hours.outOfHoursMessage },
+      title: hours.outOfHoursMessage
+        ? 'Fora do horário comercial — mensagem padrão enviada'
+        : 'Fora do horário comercial — IA silenciada (quem atende agora é a equipe)',
+      payload: { leadId, message: hours.outOfHoursMessage ?? null },
     });
     await recorder.finalize({
       status: 'SUCCESS',
