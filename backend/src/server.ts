@@ -23,6 +23,7 @@ import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
 import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
+import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -106,8 +107,10 @@ async function main(): Promise<void> {
       startCardValidationWorker();
       startResultadosWorker();
       startVozSessaoWorker();
+      startCacheKeepaliveWorker();
     },
     parar: () => {
+      stopCacheKeepaliveWorker();
       stopWhatsappCostScheduler();
       stopDashboardMvRefresher();
       stopJudgeWorker();

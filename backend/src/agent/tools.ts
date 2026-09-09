@@ -1062,7 +1062,6 @@ export function leadFieldRuleSchema(rule: LeadFieldRule) {
 }
 
 export function leadFieldRuleDescription(rule: LeadFieldRule): string {
-  const fieldType = rule.kommoFieldType as KommoFieldType;
   const examplesBlock =
     rule.examples.length > 0
       ? ` Exemplos de quando chamar: ${rule.examples.slice(0, 5).map((e) => `"${e}"`).join('; ')}.`
@@ -1071,7 +1070,7 @@ export function leadFieldRuleDescription(rule: LeadFieldRule): string {
   const titleHint = rule.updatesLeadTitle
     ? ' TAMBÉM atualiza o título do card no Kommo com este valor (formato "<Valor> DD/MM/YYYY").'
     : '';
-  return `${rule.instruction.trim()} Salva no campo "${rule.kommoFieldName}" do lead no Kommo (tipo ${fieldType}).${titleHint}${examplesBlock} Chame em silêncio — não comente a captura na resposta ao paciente.`;
+  return `${rule.instruction.trim()} Salva em "${rule.kommoFieldName}".${titleHint}${examplesBlock}`;
 }
 
 function buildLeadFieldRuleTool({

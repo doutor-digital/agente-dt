@@ -252,6 +252,62 @@ async function entregarAoHumano(
   }
 }
 
+export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder) {
+  if (!(unit.llmProvider === 'anthropic' && unit.anthropicApiKey)) return null;
+  const config = await getActiveConfig(unit.id);
+  const toolConfigByName = new Map(config.tools.map((t) => [t.name, t]));
+  const descriptionOverrides: Record<string, string> = {};
+  for (const [name, cfg] of toolConfigByName) {
+    if (cfg.description) descriptionOverrides[name] = cfg.description;
+  }
+  let kommoClient: ReturnType<typeof createKommoClient> | null = null;
+  try {
+    kommoClient = createKommoClient(unit);
+  } catch {
+    kommoClient = null;
+  }
+  const leadFieldRules = await listEnabledLeadFieldRules(unit.id);
+  const allTools = kommoClient
+    ? buildTools({
+        recorder,
+        kommo: kommoClient,
+        descriptionOverrides,
+        pausedFieldId: unit.kommoPausedFieldId,
+        leadFieldRules,
+        unit,
+      })
+    : [];
+  const tools = allTools.filter((t) => {
+    const cfg = toolConfigByName.get(t.name);
+    return cfg ? cfg.enabled : true;
+  });
+  const modelName = unit.anthropicModel || 'claude-opus-4-8';
+  const baseModel = createChatModel(unit, { model: modelName, temperature: config.temperature, maxTokens: 1 });
+  if (strictToolsHabilitado()) aplicarStrictAnthropic(tools);
+  const convoCache = convoCacheHabilitado(unit.slug)
+    ? { cache_control: { type: 'ephemeral' as const } }
+    : undefined;
+  const model = (
+    tools.length > 0
+      ? (baseModel as unknown as { bindTools: (t: unknown[], kw?: object) => unknown }).bindTools(tools, convoCache)
+      : baseModel
+  ) as Parameters<typeof invokeChatModel>[0]['model'];
+  const { cacheable, dynamic } = await composeSystemPromptPartsForUnit({
+    unit,
+    agentConfigPrompt: config.systemPrompt,
+    userMessage: undefined,
+    isFirstTurn: false,
+    leadId: undefined,
+  });
+  const systemMessage = new SystemMessage({
+    content: [
+      { type: 'text', text: cacheable, cache_control: { type: 'ephemeral', ttl: '1h' } },
+      ...(dynamic ? [{ type: 'text', text: dynamic }] : []),
+    ],
+  } as never);
+  return { model, systemMessage, modelName, tools };
+}
+
 export async function buildAgentGraph(
   recorder: TraceRecorder,
   unit: Unit,
