@@ -1920,6 +1920,10 @@ async function loadComposeInput(input: {
   };
 }
 
+export function composeFollowUpSystemPrompt(unit: Unit): string {
+  return [renderPersona(unit), renderRulesGlobal()].join('\n\n');
+}
+
 export function previewComposedPrompt(unit: Unit): string {
   return composeSystemPrompt({ unit });
 }

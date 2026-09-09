@@ -135,6 +135,17 @@ export function resolveAnthropicEffort(v: string | null | undefined): 'low' | 'm
   return ANTHROPIC_EFFORTS.has(s) ? (s as 'low' | 'medium' | 'high') : null;
 }
 
+export function resolveModelName(unit: Unit | null, override?: string | null): string {
+  if (override) return override;
+  if (unit?.llmProvider === 'anthropic' && unit.anthropicApiKey) {
+    return unit.anthropicModel ?? 'claude-opus-4-8';
+  }
+  if (unit?.llmProvider === 'google' && unit.googleApiKey) {
+    return unit.googleModel ?? 'gemini-2.5-flash';
+  }
+  return unit?.openaiModel ?? env.OPENAI_MODEL;
+}
+
 export function createChatModel(
   unit: Unit | null,
   overrides: ChatOpenAIOverrides = {},
