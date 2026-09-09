@@ -1243,23 +1243,12 @@ ${lines.join('\n\n')}`);
 
 function renderLeadFieldRules(rules: LeadFieldRule[]): string {
   if (rules.length === 0) return '';
-  const lines = rules.map((r, i) => {
-    const enums = (r.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
-    const enumsLine =
-      enums.length > 0 ? `\n   Opções permitidas: ${enums.map((e) => `"${e.value}"`).join(', ')}` : '';
-    const hintLine = r.valueHint?.trim() ? `\n   Formato: ${r.valueHint.trim()}` : '';
-    const examplesLine =
-      r.examples.length > 0
-        ? `\n   Gatilhos: ${r.examples.slice(0, 5).map((e) => `"${e}"`).join('; ')}`
-        : '';
-    return `${i + 1}. ${r.toolName} → grava em "${r.kommoFieldName}" (${r.kommoFieldType})
-   Quando usar: ${r.instruction.trim()}${hintLine}${enumsLine}${examplesLine}`;
-  });
-  return xmlBlock('captura_dados', `- As tools abaixo gravam informações estruturadas no card do paciente no Kommo.
+  const lines = rules.map((r) => `- ${r.toolName} → "${r.kommoFieldName}"`);
+  return xmlBlock('captura_dados', `- As tools abaixo gravam informações estruturadas no card do paciente no Kommo. Quando usar cada uma, o formato e as opções válidas estão na descrição da própria tool.
 - Chame em SILÊNCIO assim que detectar a informação — NÃO anuncie ("anotei seu...").
 - Cada tool é idempotente; chamar duas vezes com o mesmo valor não duplica.
 
-${lines.join('\n\n')}`);
+${lines.join('\n')}`);
 }
 
 const DESFECHO_HUMANO: Record<string, string> = {
