@@ -26,13 +26,13 @@ export function deveAquecer(ociosoMin: number, hora: number): boolean {
 const recorderMudo = { step: async () => undefined } as unknown as TraceRecorder;
 
 async function aquecer(unit: Unit): Promise<void> {
-  const ultima = await prisma.llmCall.findFirst({
-    where: { unitId: unit.id, provider: 'anthropic', status: 'success' },
-    orderBy: { createdAt: 'desc' },
-    select: { createdAt: true },
-  });
+  const rows = await prisma.$queryRaw<{ ultima: Date | null }[]>`
+    select max(created_at) as ultima from llm_calls
+    where unit_id = ${unit.id} and provider = 'anthropic' and status = 'success'
+      and jsonb_array_length(coalesce(request_body->'toolNames', '[]'::jsonb)) > 0`;
+  const ultima = rows[0]?.ultima;
   if (!ultima) return;
-  const ociosoMin = (Date.now() - ultima.createdAt.getTime()) / 60_000;
+  const ociosoMin = (Date.now() - new Date(ultima).getTime()) / 60_000;
   if (!deveAquecer(ociosoMin, horaLocal(Date.now(), fusoDaUnidade(unit)))) return;
 
   const prefixo = await montarPrefixoAnthropic(unit, recorderMudo);
