@@ -1,8 +1,8 @@
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { createChatModel, invokeChatModel } from '../services/openai.service.js';
-import { composeSystemPromptForUnit } from './prompt-composer.js';
+import { createChatModel, invokeChatModel, resolveModelName } from '../services/openai.service.js';
+import { composeFollowUpSystemPrompt } from './prompt-composer.js';
 
 export interface FollowUpArgs {
   unitId: string;
@@ -32,8 +32,12 @@ export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | nul
   const conversa = await historico(args.conversationId);
   if (!conversa.trim()) return null;
 
-  const persona = await composeSystemPromptForUnit({ unit, isFirstTurn: false }).catch(() => null);
-  const base = typeof persona === 'string' ? persona : '';
+  let base = '';
+  try {
+    base = composeFollowUpSystemPrompt(unit);
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, 'follow-up: persona indisponível, usando genérica');
+  }
 
   const instrucao = `
 VOCÊ ESTÁ RETOMANDO UMA CONVERSA QUE PAROU. O paciente não respondeu sua última
@@ -64,7 +68,7 @@ ${conversa}`.trim();
       messages: [new SystemMessage(base || 'Você é uma atendente de clínica.'), new HumanMessage(instrucao)],
       unitId: unit.id,
       traceId: null,
-      modelName: unit.openaiModel ?? 'gpt-4o-mini',
+      modelName: resolveModelName(unit),
       provider: unit.llmProvider ?? 'openai',
     });
 
