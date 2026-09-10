@@ -40,10 +40,22 @@ export type ChaveCampo = keyof typeof NOMES_CAMPO;
 
 export interface ContextoUnidade {
   campos: Record<ChaveCampo, number[]>;
+  camposLigacao: Set<number>;
   pipeComercial: number | null;
   pipeTratamento: number | null;
   stAgendado: number | null;
   stCompareceu: number | null;
+}
+
+export function soMudancasIgnoradas(
+  eventos: Array<{ type?: string }>,
+  camposIgnorados: Set<number>,
+): boolean {
+  if (eventos.length === 0) return false;
+  return eventos.every((e) => {
+    const m = /^custom_field_(\d+)_value_changed$/.exec(e.type ?? '');
+    return !!m && camposIgnorados.has(Number(m[1]));
+  });
 }
 
 const GANHO = 142;
@@ -83,6 +95,7 @@ export function montarContexto(
 
   return {
     campos: resolvido,
+    camposLigacao: new Set(campos.filter((c) => c.name.trim().startsWith('☎')).map((c) => c.id)),
     pipeComercial: acharPipe('COMERCIAL'),
     pipeTratamento: acharPipe('TRATAMENTO'),
     stAgendado,
@@ -306,6 +319,13 @@ async function validarUnidade(unit: Unit): Promise<void> {
   for (const lead of leads) {
     const leadIdStr = String(lead.id);
     const achados = new Map(avaliarLead(lead, ctx).map((a) => [a.key, a.erro]));
+    let soLigacao: boolean | null = null;
+    const mexeuSoORastreioDeLigacao = async () => {
+      if (soLigacao === null) {
+        soLigacao = soMudancasIgnoradas(await kommo.eventosDoLead(lead.id, desde), ctx.camposLigacao);
+      }
+      return soLigacao;
+    };
 
     for (const regra of REGRAS_CARD) {
       if (!regra.aplica(lead, ctx)) continue;
@@ -323,6 +343,13 @@ async function validarUnidade(unit: Unit): Promise<void> {
       }
 
       if (jaAlertado.has(chave)) continue;
+      if (await mexeuSoORastreioDeLigacao()) {
+        logger.info(
+          { unit: unit.slug, leadId: lead.id, rule: regra.key },
+          'card-validation: só o rastreio de ligação mexeu no cartão — sem alerta',
+        );
+        continue;
+      }
 
       const nome = (lead.name ?? '').trim() || 'lead';
       const texto = `ALERTA · ${unit.slug} · [Contato: ${nome}] ⚠️ Card ${erro}. Revisar preenchimento no Kommo.`;
