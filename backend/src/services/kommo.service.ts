@@ -884,6 +884,27 @@ export class KommoClient {
     }
   }
 
+  async eventosDoLead(
+    leadId: number,
+    desdeUnix: number,
+  ): Promise<Array<{ type?: string; created_by?: number; created_at?: number }>> {
+    try {
+      const { data } = await this.http.get<{
+        _embedded?: { events?: Array<{ type?: string; created_by?: number; created_at?: number }> };
+      }>('/events', {
+        params: {
+          'filter[entity]': 'lead',
+          'filter[entity_id][]': leadId,
+          'filter[created_at][from]': desdeUnix,
+          limit: 100,
+        },
+      });
+      return data?._embedded?.events ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   async atividadeHumanaDesde(
     leadId: number,
     desdeUnix: number,
