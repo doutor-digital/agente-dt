@@ -3,6 +3,8 @@ export interface Degrau {
   intencao: string;
   /** Degrau sobre pagamento: não sai para quem já pagou o antecipado. */
   pularSePagou?: boolean;
+  /** Só sai para quem ESCOLHEU pagar por Pix antecipado ao marcar. Quem escolheu pagar na clínica não ouve falar de Pix. */
+  soPix?: boolean;
 }
 
 export interface Preset {
@@ -83,35 +85,32 @@ export const PRESETS: Preset[] = [
     lossReasonId: null,
     lossReasonName: null,
     notes:
-      'Marcou mas não pagou o antecipado. Vale dinheiro direto: R$ 150 garantido ' +
-      'contra R$ 350 que talvez não venha, e quem paga antes falta menos.',
+      'Marcou e escolheu Pix antecipado. Duas mensagens no máximo, sem pressão: cobrar três ' +
+      'vezes em poucas horas fazia o paciente ceder a vaga ("achei que era golpe"). Quem ' +
+      'escolheu pagar na clínica não recebe nada desta escada; a confirmação de véspera ' +
+      'sai pelo lembrete, com pergunta.',
     steps: [
       {
         aposMin: 5,
         pularSePagou: true,
+        soPix: true,
         intencao:
-          'Ele acabou de marcar e ainda não pagou. Uma mensagem curta, animada, ' +
-          'de quem quer garantir a vaga dele — não de quem cobra. Diga que as vagas ' +
-          'são concorridas e que o horário só fica reservado com o pagamento ' +
-          'antecipado; peça o COMPROVANTE para você travar a reserva agora. ' +
-          'Ofereça reenviar a chave Pix junto. NUNCA invente quantas vagas restam ' +
-          'nem prazo que ninguém definiu. NÃO repita o endereço nem o resumo do ' +
-          'agendamento — isso ele acabou de receber.',
+          'Ele acabou de marcar e ESCOLHEU pagar por Pix antecipado. UMA mensagem, curta e ' +
+          'tranquila, com três coisas: a chave Pix da unidade (das Fontes Oficiais, com o nome ' +
+          'do titular), o valor antecipado e até quando pagar (a véspera da consulta). Diga que ' +
+          'depois desse prazo vale o valor na clínica no dia, sem drama. NÃO fale em vagas ' +
+          'concorridas, NÃO peça comprovante agora, NÃO repita endereço nem o resumo do ' +
+          'agendamento — ele acabou de receber.',
       },
       {
-        aposMin: 240,
+        aposMin: 1440,
         pularSePagou: true,
+        soPix: true,
         intencao:
-          'Lembre da condição de PAGAMENTO ANTECIPADO como vantagem dele, não como ' +
-          'cobrança — e diga com todas as letras que é pagar ANTES do dia, nunca ' +
-          '"à vista", que o paciente entende como pagar no balcão. Use os valores ' +
-          'das Fontes Oficiais da SUA unidade. Pergunte se ficou alguma dúvida.',
-      },
-      {
-        aposMin: 1200,
-        intencao:
-          'Reforce dia, hora e que ele deve chegar 15 minutos antes. Sem pedir resposta ' +
-          'e sem falar de pagamento de novo — quem não pagou até aqui paga na hora.',
+          'Passou um dia e o Pix não chegou. UM lembrete só, leve: o prazo é a véspera da ' +
+          'consulta; se preferir pagar na clínica no dia, é só dizer que está tudo certo do ' +
+          'mesmo jeito. Sem cobrança, sem "sua vaga depende disso", sem repetir a chave a ' +
+          'não ser que ele peça.',
       },
     ],
   },

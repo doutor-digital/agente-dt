@@ -1,7 +1,7 @@
 {
   "name": "agente-dt-frontend",
   "private": true,
-  "version": "1.81.2",
+  "version": "1.82.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -26,6 +26,7 @@ import { enforceReplyGap } from '../lib/reply-gate.js';
 import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
 import { ehEncerramentoRepetido } from '../lib/encerramento.js';
+import { tratarRespostaD1 } from '../lib/confirmacao-d1.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { scheduleLeadMetrics } from '../services/lead-metrics.service.js';
@@ -585,6 +586,38 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       content: ctx.humanMessage,
       meta: { chatId: ctx.chatId, talkId: ctx.talkId, contactId: ctx.contactId },
     });
+
+    // Resposta à confirmação de véspera ("1" confirmo · "2" remarcar) é tratada
+    // em código: a IA não enxerga a consulta que a SDR marcou e respondia
+    // "não encontrei consulta" para quem só queria confirmar presença.
+    const respostaD1 = await tratarRespostaD1({
+      unit,
+      leadId,
+      texto: ctx.humanMessage,
+      conv,
+      kommo: createKommoClient(unit),
+    }).catch((err) => {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: falha ao tratar resposta (segue para a IA)');
+      return null;
+    });
+    if (respostaD1) {
+      await recorder.step({
+        kind: 'COMPLETED',
+        title:
+          respostaD1 === 'confirmou'
+            ? 'Paciente confirmou a consulta de amanhã — respondido em código, sem IA'
+            : 'Paciente pediu para remarcar — tarefa aberta para a equipe, sem IA',
+        payload: { mensagem: ctx.humanMessage.slice(0, 80) },
+      });
+      await recorder.finalize({
+        status: 'SUCCESS',
+        latencyMs: Date.now() - trace.createdAt.getTime(),
+        iaDecision: `__confirmacao_d1_${respostaD1}__`,
+      });
+      logger.info({ unit: unit.slug, leadId, traceId: trace.id, respostaD1 }, 'agente pulado (confirmação D-1)');
+      res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'confirmacao_d1' });
+      return;
+    }
 
     // "Ok obrigado" → despedida. "🙏" logo depois → silêncio. Sem isto cada
     // agradecimento virava mais uma despedida (Carlos, Parauapebas, 04/09/2026).
