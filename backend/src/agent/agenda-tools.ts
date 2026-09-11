@@ -817,14 +817,65 @@ export function buildRemarcarConsulta(ctx: Contexto) {
   });
 }
 
+export type FormaPagamento = 'pix_antecipado' | 'na_clinica';
+
+/**
+ * Porta do agendamento. Nas 60 desistências lidas em 11/09/2026 a IA marcava
+ * no primeiro "ok" (00:44, sem saber se o dia servia) e a régua de Pix vinha
+ * em cima de quem ia pagar na clínica. A reserva só sai com as duas respostas.
+ * Remarcação não passa por aqui: o paciente já escolheu tudo isso antes.
+ */
+export function porQueNaoReservar(args: {
+  remarcando?: boolean;
+  diaConfirmado?: boolean;
+  formaPagamento?: string;
+}): string | null {
+  if (args.remarcando) return null;
+  const faltaDia = args.diaConfirmado !== true;
+  const faltaPagamento = args.formaPagamento !== 'pix_antecipado' && args.formaPagamento !== 'na_clinica';
+  if (!faltaDia && !faltaPagamento) return null;
+  const pendencias: string[] = [];
+  if (faltaDia) {
+    pendencias.push(
+      'confirmar com o paciente que ele CONSEGUE ir nesse dia e horário (algo como "esse dia funciona pra você, sem imprevisto?")',
+    );
+  }
+  if (faltaPagamento) {
+    pendencias.push('perguntar como ele prefere pagar: Pix antecipado (valor antecipado) ou na clínica no dia');
+  }
+  return (
+    `Consulta NÃO marcada ainda. Antes de reservar falta: ${pendencias.map((p, i) => `${i + 1}) ${p}`).join('; ')}. ` +
+    'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true e formaPagamento preenchido.'
+  );
+}
+
+export function orientacaoDePagamento(forma: string | undefined): string {
+  if (forma === 'pix_antecipado') {
+    return (
+      ' Ele escolheu PIX ANTECIPADO: na mesma mensagem de confirmação, envie a chave Pix da unidade ' +
+      '(das Fontes Oficiais, com o nome do titular) e o valor antecipado, e diga que pode pagar até a ' +
+      'véspera — depois disso vale o valor na clínica. NÃO peça comprovante agora.'
+    );
+  }
+  if (forma === 'na_clinica') {
+    return (
+      ' Ele escolheu PAGAR NA CLÍNICA: NÃO mencione Pix nem valor antecipado daqui em diante. ' +
+      'Diga o valor na clínica só se ele perguntar.'
+    );
+  }
+  return '';
+}
+
 export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
   return new DynamicStructuredTool({
     name: 'agendar_consulta',
     description:
-      'Marca a consulta no sistema da clínica. Só use DEPOIS de consultar_horarios ' +
-      'e de o paciente escolher um horário da lista, e com o idClient obtido em ' +
-      'buscar_paciente. Se a tool recusar, NÃO tente outro horário por conta ' +
-      'própria: explique ao paciente e ofereça consultar de novo.',
+      'Marca a consulta no sistema da clínica. Só use DEPOIS de consultar_horarios, ' +
+      'de o paciente escolher um horário da lista, de ele confirmar que CONSEGUE ir ' +
+      'nesse dia e de escolher a forma de pagamento (Pix antecipado ou na clínica), ' +
+      'e com o idClient obtido em buscar_paciente. Sem diaConfirmado=true e ' +
+      'formaPagamento a tool recusa. Se a tool recusar, NÃO tente outro horário por ' +
+      'conta própria: explique ao paciente e ofereça consultar de novo.',
     schema: z.object({
       idClient: z.number().int().positive().describe('idClient do paciente (de buscar_paciente).'),
       remarcando: z
@@ -833,6 +884,20 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         .describe('Uso interno de remarcar_consulta. NÃO use — para trocar de horário chame remarcar_consulta.'),
       data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Data AAAA-MM-DD.'),
       hora: z.string().regex(/^\d{2}:\d{2}$/).describe('Hora HH:mm do fuso da clínica.'),
+      diaConfirmado: z
+        .boolean()
+        .optional()
+        .describe(
+          'true SOMENTE se o paciente disse, com as palavras dele, que consegue ir nesse dia e horário ' +
+          '(sem viagem, trabalho ou imprevisto). "ok" para o horário não conta.',
+        ),
+      formaPagamento: z
+        .enum(['pix_antecipado', 'na_clinica'])
+        .optional()
+        .describe(
+          'Como o paciente disse que prefere pagar: pix_antecipado (paga antes, valor antecipado) ' +
+          'ou na_clinica (paga no dia). Pergunte antes de marcar.',
+        ),
       idCategory: z
         .number()
         .int()
@@ -862,10 +927,22 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       idCategory?: number;
       leadId?: number;
       telefone?: string;
+      diaConfirmado?: boolean;
+      formaPagamento?: FormaPagamento;
     }) => {
       const feriado = feriadoNacional(args.data);
       if (feriado) {
         return `${dataPorExtenso(args.data)} é feriado nacional (${feriado}) — a clínica não abre. NÃO marque nesse dia; consulte horários em outro dia útil.`;
+      }
+
+      const pendencia = porQueNaoReservar(args);
+      if (pendencia) {
+        await recorder.step({
+          kind: 'ERROR',
+          title: 'agendar_consulta recusado — faltou confirmar o dia ou a forma de pagamento',
+          payload: { data: args.data, hora: args.hora, diaConfirmado: args.diaConfirmado ?? null, formaPagamento: args.formaPagamento ?? null },
+        });
+        return pendencia;
       }
 
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
@@ -1143,9 +1220,20 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         })();
       }
 
+      // A escolha de pagamento fica na conversa: a régua de Pix só sai para quem
+      // escolheu Pix, e quem vai pagar na clínica nunca mais ouve falar disso.
+      if (!args.remarcando && args.formaPagamento && args.leadId) {
+        await prisma.conversation
+          .updateMany({
+            where: { unitId: fresca.id, leadId: String(args.leadId) },
+            data: { pagamentoEscolhido: args.formaPagamento },
+          })
+          .catch(() => undefined);
+      }
+
       return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
         especialista ? ` Especialista: ${especialista}.` : ''
-      } Confirme ao paciente com EXATAMENTE este dia da semana e data.`;
+      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento)}`;
     },
   });
 }
