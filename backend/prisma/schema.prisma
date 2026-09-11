@@ -1091,6 +1091,10 @@ model Conversation {
   followUpLastAt        DateTime? @map("follow_up_last_at")
   followUpStoppedReason String?   @map("follow_up_stopped_reason")
 
+  pagamentoEscolhido     String?   @map("pagamento_escolhido")
+  confirmacaoD1EnviadaEm DateTime? @map("confirmacao_d1_enviada_em")
+  confirmacaoD1Resposta  String?   @map("confirmacao_d1_resposta")
+
   /**
    * REATIVAÇÃO PÓS-HANDOFF. `handoffAt` marca QUANDO a IA passou o lead pra um
    * humano (pausar_ia). O worker de reativação usa isso pra, 30min depois, se

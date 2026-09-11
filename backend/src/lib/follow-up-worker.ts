@@ -19,6 +19,8 @@ interface Degrau {
    * quem acabou de pagar, que e o pior erro possivel neste ponto da conversa.
    */
   pularSePagou?: boolean;
+  /** Só sai para quem ESCOLHEU Pix antecipado ao marcar (conversation.pagamentoEscolhido). */
+  soPix?: boolean;
 }
 
 const JANELA_WHATSAPP_MIN = 23 * 60;
@@ -158,6 +160,14 @@ function regraPara(
 
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
+
+export const COBRANCA_INICIO_MIN = 8 * 60;
+export const COBRANCA_FIM_MIN = 21 * 60;
+
+/** Régua de pagamento só entre 08:00 e 21:00 locais, mesmo onde o follow-up é 24 h. */
+export function foraDaJanelaDeCobranca(minutosLocais: number): boolean {
+  return minutosLocais < COBRANCA_INICIO_MIN || minutosLocais >= COBRANCA_FIM_MIN;
+}
 
 function agoraLocal(tz: string): { minutos: number; diaSemana: number } {
   const p = new Intl.DateTimeFormat('en-GB', {
@@ -305,6 +315,16 @@ async function varrer(): Promise<void> {
           continue;
         }
 
+        // Quem escolheu pagar na clínica não recebe a régua do Pix. Foi o que
+        // mais apareceu nas desistências de 11/09/2026: "nunca vi isso, só pago
+        // na hora" → cedeu a vaga.
+        if (proximo.soPix && conv.pagamentoEscolhido === 'na_clinica') {
+          await prisma.conversation
+            .update({ where: { id: conv.id }, data: { followUpStep: alvo + 1 } })
+            .catch(() => undefined);
+          continue;
+        }
+
         if (conv.followUpLastAt) {
           const desdeUltimo = (Date.now() - conv.followUpLastAt.getTime()) / 60_000;
           const intervaloNatural =
@@ -342,6 +362,11 @@ async function varrer(): Promise<void> {
         // que so existem depois do agendamento. Nessas, consulta marcada e a
         // premissa, nao o motivo de parar.
         const escadaDePagamento = ESCADA_DA_REGRA.some((d) => d.pularSePagou);
+        // Cobrança de madrugada ("Pix" às 02:10) não é lembrete, é susto. A
+        // régua de pagamento espera o horário comercial mesmo nas unidades 24h.
+        if (escadaDePagamento && foraDaJanelaDeCobranca(agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo').minutos)) {
+          continue;
+        }
         if (!escadaDePagamento) {
           const temConsulta = await prisma.spineLeadLink.findFirst({
             where: { unitId: unit.id, kommoLeadId: Number(conv.leadId), spineIdSchedule: { not: null } },
