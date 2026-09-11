@@ -103,6 +103,20 @@ export interface BuildToolsArgs {
 export const MOTIVO_ALEGA_FALTA_DE_VAGA =
   /sem vaga|sem hor[áa]ri|agenda (cheia|lotada|concorrid|sem)|n[ãa]o (h[áa]|tem|tenho|temos) (vaga|hor[áa]ri)|encaixe/i;
 
+/**
+ * Toda tarefa que a Sofia cria vira alerta no grupo de WhatsApp da unidade (roteador
+ * n8n), e o roteador só mostra "👤 nome" quando o texto traz "[Contato: nome]". As
+ * ações configuradas por unidade (ex.: sinal clínico grave) não trazem essa marca, e
+ * o alerta chegava sem dizer de quem era (Rio Verde, 11/09/2026). Aqui a marca entra
+ * sozinha; quem já veio com ela passa intacto.
+ */
+export function prefixarContato(text: string, nome: string | null | undefined): string {
+  const t = text.trim();
+  if (/\[Contato:/i.test(t)) return t;
+  const n = (nome ?? '').trim();
+  return n ? `[Contato: ${n}] ${t}` : t;
+}
+
 export function buildTools({
   recorder,
   kommo,
@@ -518,9 +532,26 @@ export function buildTools({
     name: 'criar_tarefa',
     description: desc('criar_tarefa'),
     schema: criarTarefaSchema,
-    func: async ({ leadId, text, deadlineMinutes, responsibleUserId }) => {
+    func: async ({ leadId, text: textoPedido, deadlineMinutes, responsibleUserId }) => {
       const t0 = performance.now();
       const completeAt = Math.floor(Date.now() / 1000) + deadlineMinutes * 60;
+      // Nome do contato para o alerta do grupo: primeiro a conversa (sem chamada
+      // externa), depois o cartão no Kommo. Sem nome, a tarefa sai como veio.
+      let nomeContato: string | null = null;
+      try {
+        const conv = unit
+          ? await prisma.conversation.findFirst({
+              where: { unitId: unit.id, leadId: String(leadId) },
+              orderBy: { lastMessageAt: 'desc' },
+              select: { contactName: true },
+            })
+          : null;
+        nomeContato = conv?.contactName?.trim() || null;
+        if (!nomeContato) nomeContato = (await kommo.getLead(leadId))?.name?.trim() || null;
+      } catch (err) {
+        logger.warn({ err: String(err), leadId }, 'criar_tarefa: sem nome do contato — tarefa sai sem [Contato]');
+      }
+      const text = prefixarContato(textoPedido, nomeContato);
       await recorder.step({
         kind: 'TOOL_CALL',
         title: `Decisão: criar tarefa pro lead ${leadId} ("${text.slice(0, 50)}")`,
