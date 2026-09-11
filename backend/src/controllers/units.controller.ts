@@ -36,6 +36,7 @@ const unitInputBase = {
   kommoWidgetSalesbotId: z.coerce.number().int().nullable().optional(),
   kommoSalesbotExecuteEnabled: z.boolean().optional(),
   voiceReplyEnabled: z.boolean().optional(),
+  audioHandoffEnabled: z.boolean().optional(),
   llmProvider: z.enum(['openai', 'anthropic', 'google']).optional(),
   anthropicApiKey: z.string().nullable().optional(),
   anthropicModel: z.string().min(1).max(60).optional(),
