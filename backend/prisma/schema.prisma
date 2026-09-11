@@ -128,6 +128,13 @@ model Unit {
   /// de chat interno do Kommo com o token criado da sessão web (KOMMO_WEB_SESSION_ID);
   /// qualquer falha na cadeia (TTS, Drive, chat, validação) cai em texto pelo caminho normal.
   voiceReplyEnabled Boolean @default(false) @map("voice_reply_enabled")
+  /// Áudio que não dá pra transcrever vira HANDOFF em vez de "escreve pra mim".
+  /// Boa Vista está na API NÃO OFICIAL do WhatsApp: o áudio nem chega em formato
+  /// que a gente consiga baixar, então a transcrição falha SEMPRE — e pedir pro
+  /// paciente digitar, toda vez, é empurrar pra ele um problema que é nosso.
+  /// Com isto ligado, a Sofia passa a conversa pra equipe, que ouve o áudio no
+  /// aparelho. Só faz sentido em unidade que não consegue transcrever.
+  audioHandoffEnabled Boolean @default(false) @map("audio_handoff_enabled")
 
   // PROVEDOR DE LLM DO CHAT — "openai" (padrão) ou "anthropic". Define qual
   // modelo o agente (graph.ts) usa. Embeddings (RAG) e transcrição de áudio

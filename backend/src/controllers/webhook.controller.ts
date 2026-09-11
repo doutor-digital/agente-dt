@@ -108,6 +108,32 @@ function getOutgoingMessages(parsed: ParsedWebhook): MessageEvent[] {
 const AUDIO_TYPES = new Set(['voice', 'audio']);
 const AUDIO_EXT_RE = /\.(ogg|opus|mp3|m4a|wav|aac)$/i;
 
+/**
+ * O que a Sofia "ouve" quando o áudio do paciente não pôde ser transcrito.
+ *
+ * Falha eventual (rede, áudio mudo) → pede pra repetir: é razoável, deve funcionar
+ * na segunda. Falha ESTRUTURAL → não adianta pedir. Boa Vista está na API não
+ * oficial do WhatsApp e o áudio nem chega num formato que a gente consiga baixar,
+ * então a transcrição falha sempre; pedir pro paciente digitar, toda vez, é
+ * empurrar pra ele um problema que é nosso. Nessa unidade a conversa vai pra
+ * equipe, que ouve o áudio no aparelho.
+ */
+export function instrucaoAudioNaoTranscrito(handoff: boolean): string {
+  if (handoff) {
+    return (
+      '[o paciente mandou um áudio e nesta unidade a gente não consegue ouvir áudio. ' +
+      'NÃO peça pra ele gravar de novo nem pra escrever — isso já falhou antes e vai ' +
+      'falhar de novo. Chame pausar_ia e responda apenas que alguém da equipe já vai ' +
+      'ouvir e continuar por aqui. Não siga a conversa depois disso.]'
+    );
+  }
+  return (
+    '[o paciente mandou um áudio que não deu pra entender. Peça com gentileza pra ele ' +
+    'gravar de novo ou escrever. NÃO diga que ele falou em outro idioma nem peça pra ' +
+    'ele falar em português — o problema foi na nossa captação do áudio.]'
+  );
+}
+
 function hasAudioAttachment(msg: MessageEvent): boolean {
   return !!getAudioUrl(msg);
 }
@@ -775,11 +801,7 @@ export async function processAgent(args: {
         title: `Falha ao transcrever áudio: ${msg}`,
         payload: { audioUrl, error: msg },
       });
-      humanMessage =
-        humanMessage ||
-        '[o paciente mandou um áudio que não deu pra entender. Peça com gentileza pra ele ' +
-          'gravar de novo ou escrever. NÃO diga que ele falou em outro idioma nem peça pra ' +
-          'ele falar em português — o problema foi na nossa captação do áudio.]';
+      humanMessage = humanMessage || instrucaoAudioNaoTranscrito(unit.audioHandoffEnabled);
     }
   }
 
