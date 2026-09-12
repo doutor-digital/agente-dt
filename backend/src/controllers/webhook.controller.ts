@@ -28,6 +28,9 @@ import { scheduleAgentRun } from '../lib/agent-coalescer.js';
 import { ehEncerramentoRepetido } from '../lib/encerramento.js';
 import { tratarRespostaD1 } from '../lib/confirmacao-d1.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
+import { extrairBotoes } from '../lib/botoes.js';
+import { tentarBotoes } from '../lib/resposta-com-botoes.js';
+import { consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { scheduleLeadMetrics } from '../services/lead-metrics.service.js';
@@ -1041,7 +1044,10 @@ export async function processAgent(args: {
       },
     );
 
-    const reply = (result.decision ?? '').toString().trim();
+    // A linha [[botoes: A | B]] sai do texto e vira botões na entrega (ou nada, se o
+    // canal não permitir). Daqui em diante `reply` é o texto limpo que o paciente vê.
+    const replyBruto = (result.decision ?? '').toString().trim();
+    const { texto: reply, botoes } = extrairBotoes(replyBruto);
 
     const respostaSemPalavra = reply.length > 0 && !temPalavra(reply);
     if (respostaSemPalavra) {
@@ -1092,12 +1098,21 @@ export async function processAgent(args: {
       const sendStart = performance.now();
       try {
         let sendResult: { via: string; detail?: unknown };
-        // Espelho: paciente mandou áudio → tenta nota de voz. `null` = siga em texto.
-        const voz = await tentarNotaDeVoz({
-          unit, leadId, reply, audioUrl, chatId, talkId, contactId, authorId, accountId,
+        // Pergunta fechada → botões pelo chat. Espelho de áudio → nota de voz.
+        // `null` em qualquer um = siga em texto pelo caminho normal.
+        const comBotoes = await tentarBotoes({
+          unit, leadId, reply, botoes, chatId, talkId, contactId, authorId, accountId,
           modoWidget: !!deliver, recorder,
         });
-        if (voz) {
+        const voz = comBotoes
+          ? null
+          : await tentarNotaDeVoz({
+              unit, leadId, reply, audioUrl, chatId, talkId, contactId, authorId, accountId,
+              modoWidget: !!deliver, recorder,
+            });
+        if (comBotoes) {
+          sendResult = comBotoes;
+        } else if (voz) {
           sendResult = voz;
         } else if (deliver) {
           delivered = true;
@@ -1162,8 +1177,15 @@ export async function processAgent(args: {
           traceId,
           role: 'assistant',
           content: reply,
-          meta: { via: sendResult.via },
+          meta: { via: sendResult.via, ...(botoes.length ? { botoes } : {}) },
         });
+        // Marcou consulta neste turno e a confirmação chegou → cartão de chegada
+        // (foto da fachada + endereço + mapa), numa mensagem à parte, sem segurar nada.
+        if (!naoChegou && consultaMarcadaNoTurno(traceId)) {
+          await enviarCartaoDeChegada({
+            unit, leadId, chatId, talkId, contactId, authorId, accountId, modoWidget: !!deliver, recorder,
+          }).catch((err) => logger.warn({ err: String(err), leadId, unit: unit.slug }, 'cartão de chegada falhou (segue)'));
+        }
       } catch (sendErr) {
         const msg = sendErr instanceof Error ? sendErr.message : String(sendErr);
         await recorder.step({
