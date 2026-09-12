@@ -238,36 +238,68 @@ export interface NotaEnviada {
   deliveryStatus: number | null;
 }
 
-/** `POST /v2/{chat_id}/sendMessage` com anexo de voz. Recria o token uma vez se ele for recusado. */
-export async function enviarNotaDeVoz(
+/**
+ * O que o chat do Kommo aceita numa mensagem nossa (provado em 12/09/2026 no chat
+ * do João, Araguaína): texto, anexo (`voice`, `picture`, `file`, `video`, sempre
+ * via Drive do Kommo) e botões de resposta rápida (`reply_markup` inline, máx. 3,
+ * até 20 caracteres, só texto — botão com link exige template aprovado, erro 3130).
+ * Localização não existe por este caminho (417/400; o site do Kommo só lê).
+ * O toque no botão volta como mensagem de texto normal com o rótulo.
+ */
+export const MAX_BOTOES = 3;
+export const MAX_CHARS_BOTAO = 20;
+
+export type TipoDeAnexo = 'voice' | 'picture' | 'file' | 'video';
+
+export interface MensagemDeChat {
+  chatId: string;
+  /** Id (amojo) do paciente — `author.id` da mensagem que ele mandou. */
+  recipientId: string;
+  /** talk_id do Kommo = dialog_id do amojo. Talk encerrada dá DIALOG_CLOSED; `null` abre outra. */
+  talkId: number | null;
+  contactId: number | null;
+  accountId: number | null;
+  texto?: string;
+  anexo?: { uuid: string; versionUuid: string; tipo: TipoDeAnexo };
+  botoes?: string[];
+}
+
+/** `POST /v2/{chat_id}/sendMessage`. Recria o token uma vez se ele for recusado. */
+export async function enviarMensagemDeChat(
   unit: Pick<Unit, 'id' | 'slug' | 'kommoSubdomain' | 'kommoAccessToken'>,
-  nota: NotaDeVoz,
+  m: MensagemDeChat,
 ): Promise<NotaEnviada> {
-  const corpo = {
-    text: '',
-    recipient_id: nota.recipientId,
-    group_id: null,
-    crm_dialog_id: nota.talkId,
-    crm_contact_id: nota.contactId,
-    crm_account_id: nota.accountId,
-    crm_entity: {},
-    attachments: [
-      {
-        file_id: randomUUID(),
-        external_file_id: nota.arquivo.uuid,
-        external_file_vers_id: nota.arquivo.versionUuid,
-        type: 'voice',
-      },
-    ],
-    skip_link_shortener: false,
-    set_personalization: false,
-    silent: false,
+  const montar = (talkId: number | null): Record<string, unknown> => {
+    const corpo: Record<string, unknown> = {
+      text: m.texto ?? '',
+      recipient_id: m.recipientId,
+      group_id: null,
+      crm_dialog_id: talkId,
+      crm_contact_id: m.contactId,
+      crm_account_id: m.accountId,
+      crm_entity: {},
+      skip_link_shortener: false,
+      set_personalization: false,
+      silent: false,
+    };
+    if (m.anexo) {
+      corpo.attachments = [
+        { file_id: randomUUID(), external_file_id: m.anexo.uuid, external_file_vers_id: m.anexo.versionUuid, type: m.anexo.tipo },
+      ];
+    }
+    if (m.botoes?.length) {
+      corpo.reply_markup = {
+        mode: 'inline',
+        buttons: m.botoes.slice(0, MAX_BOTOES).map((t) => [{ text: t.slice(0, MAX_CHARS_BOTAO) }]),
+      };
+    }
+    return corpo;
   };
 
-  const tentar = async (token: string) =>
+  const tentar = async (token: string, talkId: number | null) =>
     axios.post<Array<{ id?: string; delivery_status?: number; error_code?: number; error?: { code?: number; description?: string } }>>(
-      `${AMOJO}/v2/${nota.chatId}/sendMessage`,
-      corpo,
+      `${AMOJO}/v2/${m.chatId}/sendMessage`,
+      montar(talkId),
       {
         params: { stand: STAND },
         headers: {
@@ -284,20 +316,28 @@ export async function enviarNotaDeVoz(
   let { token } = await obterTokenDeChat(unit);
   let resposta;
   try {
-    resposta = await tentar(token);
+    resposta = await tentar(token, m.talkId);
   } catch (err) {
     const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+    const corpoErro = axios.isAxiosError(err) ? JSON.stringify(err.response?.data ?? '').slice(0, 200) : String(err);
     if (status === 401 || status === 403 || status === 404) {
       // Token vencido ou revogado: recria da sessão e tenta UMA vez.
       ({ token } = await obterTokenDeChat(unit, { forcarNovo: true }));
       try {
-        resposta = await tentar(token);
+        resposta = await tentar(token, m.talkId);
       } catch (err2) {
         const s2 = axios.isAxiosError(err2) ? err2.response?.status : undefined;
         throw new KommoChatIndisponivel(`amojo recusou o envio mesmo com token novo (HTTP ${s2 ?? '?'})`);
       }
+    } else if (status === 400 && m.talkId != null && /DIALOG_CLOSED/i.test(corpoErro)) {
+      // A talk fechou (auto-close do Kommo). Sem dialog o amojo abre outra e entrega.
+      try {
+        resposta = await tentar(token, null);
+      } catch (err3) {
+        const s3 = axios.isAxiosError(err3) ? err3.response?.status : undefined;
+        throw new KommoChatIndisponivel(`amojo recusou o envio sem dialog (HTTP ${s3 ?? '?'})`);
+      }
     } else {
-      const corpoErro = axios.isAxiosError(err) ? JSON.stringify(err.response?.data ?? '').slice(0, 200) : String(err);
       throw new KommoChatIndisponivel(`amojo recusou o envio (HTTP ${status ?? '?'}): ${corpoErro}`);
     }
   }
@@ -307,6 +347,22 @@ export async function enviarNotaDeVoz(
   const codigo = msg.error_code ?? msg.error?.code ?? 0;
   if (codigo) throw new KommoChatIndisponivel(`amojo aceitou mas marcou erro ${codigo}: ${msg.error?.description ?? ''}`);
   return { messageId: msg.id, deliveryStatus: msg.delivery_status ?? null };
+}
+
+/** Nota de voz = mensagem de chat sem texto e com anexo `voice`. */
+export async function enviarNotaDeVoz(
+  unit: Pick<Unit, 'id' | 'slug' | 'kommoSubdomain' | 'kommoAccessToken'>,
+  nota: NotaDeVoz,
+): Promise<NotaEnviada> {
+  return enviarMensagemDeChat(unit, {
+    chatId: nota.chatId,
+    recipientId: nota.recipientId,
+    talkId: nota.talkId,
+    contactId: nota.contactId,
+    accountId: nota.accountId,
+    texto: '',
+    anexo: { uuid: nota.arquivo.uuid, versionUuid: nota.arquivo.versionUuid, tipo: 'voice' },
+  });
 }
 
 export interface EntregaVerificada {

@@ -11,6 +11,7 @@ import { AgendaService } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
+import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
 import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
 
 const TZ_PADRAO = 'America/Sao_Paulo';
@@ -1219,6 +1220,10 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           }
         })();
       }
+
+      // Marca o turno: depois que a confirmação em texto chegar, sai o cartão de
+      // chegada (foto da fachada + endereço + mapa) numa mensagem à parte.
+      marcarConsultaNoTurno(recorder.traceId);
 
       // A escolha de pagamento fica na conversa: a régua de Pix só sai para quem
       // escolheu Pix, e quem vai pagar na clínica nunca mais ouve falar disso.
