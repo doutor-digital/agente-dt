@@ -265,7 +265,8 @@ export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
             ? ''
             : `A data ${dataPorExtenso(data)} não tinha vaga (lotada, feriado ou sem atendimento) — ${dataPorExtenso(cursor)} é o PRÓXIMO dia com horário. Ofereça esta data ao paciente com naturalidade. `) +
           'Ofereça no máximo 2 ou 3 deles. Não ofereça nenhum horário fora desta lista. ' +
-          'Ao citar a data ao paciente, use EXATAMENTE o dia da semana informado aqui.'
+          'Ao citar a data ao paciente, use EXATAMENTE o dia da semana informado aqui. ' +
+          'Termine a mensagem com a linha [[botoes: …]] com os horários oferecidos, um por opção, curtos (ex.: "Seg 14h | Seg 16h30").'
         );
       }
 
@@ -846,7 +847,8 @@ export function porQueNaoReservar(args: {
   }
   return (
     `Consulta NÃO marcada ainda. Antes de reservar falta: ${pendencias.map((p, i) => `${i + 1}) ${p}`).join('; ')}. ` +
-    'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true e formaPagamento preenchido.'
+    'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true e formaPagamento preenchido. ' +
+    'Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Pix antecipado | Na clínica]].'
   );
 }
 
