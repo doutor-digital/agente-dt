@@ -306,6 +306,10 @@ model Unit {
   /// que a equipe confirma, em vez de inventar — paciente indo no lugar
   /// errado é pior que paciente perguntando onde é.
   clinicAddress        String? @map("clinic_address")
+  /// Cartão de chegada após o agendamento: link do mapa e foto da fachada (Drive do Kommo).
+  clinicMapUrl            String? @map("clinic_map_url")
+  clinicPhotoDriveUuid    String? @map("clinic_photo_drive_uuid")
+  clinicPhotoDriveVersion String? @map("clinic_photo_drive_version")
   /// Chave PIX e favorecido, exibidos na confirmação do agendamento.
   pixKey               String? @map("pix_key")
   pixHolder            String? @map("pix_holder")
