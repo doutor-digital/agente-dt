@@ -27,6 +27,7 @@ import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.j
 import { scheduleAgentRun } from '../lib/agent-coalescer.js';
 import { ehEncerramentoRepetido } from '../lib/encerramento.js';
 import { tratarRespostaD1 } from '../lib/confirmacao-d1.js';
+import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { scheduleLeadMetrics } from '../services/lead-metrics.service.js';
@@ -698,6 +699,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         traceId: ownerTraceId,
         humanMessage: combinedMessage,
         audioUrl: audioUrls[0] ?? null,
+        audioUrls,
         imageUrl: imageUrls[0] ?? null,
         chatId: ctx.chatId,
         talkId: ctx.talkId,
@@ -745,6 +747,8 @@ export async function processAgent(args: {
   traceId: string;
   humanMessage: string;
   audioUrl: string | null;
+  /** Todos os áudios da rajada (o coalescer junta); `audioUrl` fica por compatibilidade. */
+  audioUrls?: string[];
   imageUrl: string | null;
   chatId: string | null;
   talkId: string | null;
@@ -782,28 +786,33 @@ export async function processAgent(args: {
     });
   }
 
-  if (audioUrl) {
+  // TODOS os áudios da rajada, não só o primeiro: em 7 dias 52 áudios ficaram sem
+  // transcrição porque o 2º da sequência era descartado (visto em 05/09/2026).
+  const audios = (args.audioUrls?.length ? args.audioUrls : audioUrl ? [audioUrl] : []).slice(0, 6);
+  let algumAudioFalhou = false;
+  for (const [i, url] of audios.entries()) {
     try {
-      const t = await transcribeAudio(unit, audioUrl);
+      const t = await transcribeAudio(unit, url);
       const transcript = t.text || '[áudio sem fala detectada]';
       humanMessage = humanMessage ? `${humanMessage}\n\n[áudio do cliente]: ${transcript}` : transcript;
       await recorder.step({
         kind: 'THINKING',
-        title: `Áudio transcrito (${t.durationMs}ms): "${transcript.slice(0, 80)}"`,
-        payload: { audioUrl, transcript, ms: t.durationMs },
+        title: `Áudio ${audios.length > 1 ? `${i + 1}/${audios.length} ` : ''}transcrito (${t.durationMs}ms): "${transcript.slice(0, 80)}"`,
+        payload: { audioUrl: url, transcript, ms: t.durationMs },
         latencyMs: t.durationMs,
       });
     } catch (err) {
+      algumAudioFalhou = true;
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ err, audioUrl, leadId }, 'falha ao transcrever áudio');
+      logger.warn({ err, audioUrl: url, leadId }, 'falha ao transcrever áudio');
       await recorder.step({
         kind: 'ERROR',
         title: `Falha ao transcrever áudio: ${msg}`,
-        payload: { audioUrl, error: msg },
+        payload: { audioUrl: url, error: msg },
       });
-      humanMessage = humanMessage || instrucaoAudioNaoTranscrito(unit.audioHandoffEnabled);
     }
   }
+  if (algumAudioFalhou && !humanMessage) humanMessage = instrucaoAudioNaoTranscrito(unit.audioHandoffEnabled);
 
   if (imageUrl) {
     try {
@@ -1009,11 +1018,22 @@ export async function processAgent(args: {
       ? `${avisoDeInjecao(injecao)}\n\n${humanMessage}`
       : humanMessage;
 
+    // A conversa como o WhatsApp a vê (rota oficial): resposta da equipe e mensagem
+    // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde
+    // a última fala da Sofia, e uma falha aqui nunca segura o atendimento.
+    const blocoOficial = isChatMessage
+      ? await blocoDaConversaOficial({ unit, leadId, humanMessage, recorder }).catch((err) => {
+          logger.warn({ err: String(err), leadId, unit: unit.slug }, 'conversa oficial: falha ao ler (segue sem)');
+          return '';
+        })
+      : '';
+    const entradaDoModelo = blocoOficial ? `${blocoOficial}\n\n${mensagemParaIa}` : mensagemParaIa;
+
     const result = await graph.invoke(
       {
         leadId,
         traceId,
-        messages: [new HumanMessage(mensagemParaIa)],
+        messages: [new HumanMessage(entradaDoModelo)],
       },
       {
         configurable: { thread_id: threadId },
