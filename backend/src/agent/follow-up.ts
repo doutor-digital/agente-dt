@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { createChatModel, invokeChatModel, resolveModelName } from '../services/openai.service.js';
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
+import { extrairBotoes } from '../lib/botoes.js';
 
 export interface FollowUpArgs {
   unitId: string;
@@ -77,7 +78,9 @@ ${conversa}`.trim();
       ? bruto.map((p) => (typeof p === 'string' ? p : ((p as { text?: string }).text ?? ''))).join('')
       : '';
 
-    const limpo = texto.trim().replace(/^["']|["']$/g, '');
+    // A régua sai pelo Salesbot, sem botões: a linha [[botoes: …]] da regra global
+    // vazou como texto em Taubaté (12/09/2026). Aqui ela só é removida.
+    const limpo = extrairBotoes(texto).texto.replace(/^["']|["']$/g, '');
     if (!limpo || limpo.length > 600) return null;
     return limpo;
   } catch (err) {
