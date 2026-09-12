@@ -60,10 +60,25 @@ test('lista vazia ou só vírgulas não libera ninguém sem querer', () => {
   }
 });
 
-test('com o interruptor ligado, domingo de madrugada passa', () => {
+test('com o interruptor ligado, domingo de DIA passa', () => {
   // É o caso que motivou tudo isto: o lead que escreve domingo e some.
   process.env.FOLLOW_UP_24H_SLUGS = 'doutor-hernia-parauapebas';
-  assert.equal(dentroDoHorario(unidade()), true);
+  const domingo10h = new Date('2026-09-13T13:00:00Z'); // 10:00 em Brasília
+  assert.equal(dentroDoHorario(unidade(), domingo10h), true);
+  const domingo8h = new Date('2026-09-13T11:00:00Z'); // 08:00 — abre
+  assert.equal(dentroDoHorario(unidade(), domingo8h), true);
+});
+
+test('com o interruptor ligado, madrugada e noite NÃO passam (silêncio 21h–8h)', () => {
+  // Porto 23:28, Parauapebas 03:01, Taubaté 04:01 (12/09/2026) — mensagens de
+  // Pix de madrugada alimentam o "achei que era golpe".
+  process.env.FOLLOW_UP_24H_SLUGS = 'doutor-hernia-parauapebas';
+  const madrugada3h = new Date('2026-09-13T06:00:00Z'); // 03:00 em Brasília
+  assert.equal(dentroDoHorario(unidade(), madrugada3h), false);
+  const noite21h30 = new Date('2026-09-13T00:30:00Z'); // 21:30 (sábado)
+  assert.equal(dentroDoHorario(unidade(), noite21h30), false);
+  const noite20h59 = new Date('2026-09-12T23:59:00Z'); // 20:59 — ainda passa
+  assert.equal(dentroDoHorario(unidade(), noite20h59), true);
 });
 
 test('sem o interruptor, a trava da agenda continua mandando', () => {
