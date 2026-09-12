@@ -1,6 +1,7 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
+import { decisaoDeCobrancaDoLead, MOTIVO_PARADA_LEITURA } from '../services/kommo-talks.service.js';
 import { ehIntocavel } from './follow-up-presets.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
 import { carimbarContato } from '../services/lead-memory.service.js';
@@ -365,6 +366,19 @@ async function varrer(): Promise<void> {
           select: { role: true },
         });
         if (!ultima || ultima.role !== 'assistant') continue;
+
+        // Só cobra quem LEU e não respondeu (rota oficial do WhatsApp). Equipe
+        // falou por último = a conversa é dela. Não entregue = janela fechada ou
+        // número errado — cobrar de novo só empilha erro. Se a rota falhar, a
+        // régua segue como antes.
+        const cobranca = await decisaoDeCobrancaDoLead(unit, Number(conv.leadId)).catch(() => 'cobrar' as const);
+        if (cobranca === 'esperar_leitura') continue;
+        if (cobranca !== 'cobrar') {
+          await prisma.conversation
+            .update({ where: { id: conv.id }, data: { followUpStoppedReason: MOTIVO_PARADA_LEITURA[cobranca] } })
+            .catch(() => undefined);
+          continue;
+        }
 
         // Ter consulta marcada encerra a perseguicao por RESPOSTA, nunca a
         // conversa sobre PAGAMENTO.

@@ -59,6 +59,28 @@ export const SUPPORTED_FIELD_TYPES: ReadonlySet<string> = new Set<KommoFieldType
   'radiobutton',
 ]);
 
+export interface KommoTalk {
+  talk_id: number;
+  chat_id?: string | null;
+  origin?: string | null;
+  is_read?: boolean;
+  is_in_work?: boolean;
+  created_at?: number;
+  updated_at?: number;
+  entity_id?: number;
+}
+
+export interface KommoTalkMessage {
+  id: string;
+  type: 'incoming' | 'outgoing' | string;
+  text?: string | null;
+  created_at: number;
+  author?: { type?: 'external' | 'internal' | 'bot' | string; id?: string | number; name?: string | null } | null;
+  attachment?: { type?: string | null; link?: string | null; file_name?: string | null } | null;
+  delivery_status?: string | null;
+  message_type?: string | null;
+}
+
 export interface KommoLeadCustomField {
   id: number;
   name: string;
@@ -635,6 +657,36 @@ export class KommoClient {
       return data;
     } catch (err) {
       wrapAxiosError(err, `getLead(${leadId})`);
+    }
+  }
+
+  /**
+   * Rota oficial das conversas: as "talks" do lead e as mensagens de cada uma,
+   * dos dois lados (paciente, Sofia via Salesbot, equipe humana), com anexo e
+   * status de entrega. É o que a Sofia NÃO enxergava: a resposta da SDR.
+   */
+  async listTalks(leadId: number): Promise<KommoTalk[]> {
+    try {
+      const { data, status } = await this.http.get<{ _embedded?: { talks?: KommoTalk[] } }>('/talks', {
+        params: { 'filter[entity_id][]': leadId, 'filter[entity_type]': 'lead' },
+      });
+      if (status === 204 || !data) return [];
+      return data._embedded?.talks ?? [];
+    } catch (err) {
+      wrapAxiosError(err, `listTalks(${leadId})`);
+    }
+  }
+
+  async listTalkMessages(talkId: number, limit = 40): Promise<KommoTalkMessage[]> {
+    try {
+      const { data, status } = await this.http.get<{ _embedded?: { messages?: KommoTalkMessage[] } }>(
+        `/talks/${talkId}/messages`,
+        { params: { limit } },
+      );
+      if (status === 204 || !data) return [];
+      return data._embedded?.messages ?? [];
+    } catch (err) {
+      wrapAxiosError(err, `listTalkMessages(${talkId})`);
     }
   }
 
