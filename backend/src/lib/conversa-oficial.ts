@@ -51,13 +51,21 @@ async function registrarNoHistorico(unit: Unit, leadId: number, itens: ItemOfici
   });
   if (!conv) return;
   for (const m of itens) {
+    const conteudo = m.transcricao ? `[áudio do cliente]: ${m.transcricao}` : m.texto || (m.anexo ? `[${m.anexo.tipo}]` : '');
+    if (!conteudo) continue;
+    // Já gravada por este caminho (id do Kommo) ou pelo webhook (mesmo texto, mesmo
+    // minuto): o webhook grava sem id, então a segunda checagem evita a linha dobrada.
     const existe = await prisma.message.findFirst({
-      where: { conversationId: conv.id, meta: { path: ['kommoMessageId'], equals: m.id } },
+      where: {
+        conversationId: conv.id,
+        OR: [
+          { meta: { path: ['kommoMessageId'], equals: m.id } },
+          { content: m.texto || conteudo, createdAt: { gte: new Date(m.em.getTime() - 120_000), lte: new Date(m.em.getTime() + 120_000) } },
+        ],
+      },
       select: { id: true },
     });
     if (existe) continue;
-    const conteudo = m.transcricao ? `[áudio do cliente]: ${m.transcricao}` : m.texto || (m.anexo ? `[${m.anexo.tipo}]` : '');
-    if (!conteudo) continue;
     await prisma.message.create({
       data: {
         conversationId: conv.id,
