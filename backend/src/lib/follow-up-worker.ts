@@ -169,14 +169,22 @@ export function foraDaJanelaDeCobranca(minutosLocais: number): boolean {
   return minutosLocais < COBRANCA_INICIO_MIN || minutosLocais >= COBRANCA_FIM_MIN;
 }
 
-function agoraLocal(tz: string): { minutos: number; diaSemana: number } {
+/** Silêncio noturno de TODA mensagem automática: nada sai entre 21:00 e 08:00 locais. */
+export const SILENCIO_INICIO_MIN = 21 * 60;
+export const SILENCIO_FIM_MIN = 8 * 60;
+
+export function emHorarioDeSilencio(minutosLocais: number): boolean {
+  return minutosLocais >= SILENCIO_INICIO_MIN || minutosLocais < SILENCIO_FIM_MIN;
+}
+
+function agoraLocal(tz: string, agora: Date = new Date()): { minutos: number; diaSemana: number } {
   const p = new Intl.DateTimeFormat('en-GB', {
     timeZone: tz || 'America/Sao_Paulo',
     hour: '2-digit',
     minute: '2-digit',
     weekday: 'short',
     hour12: false,
-  }).formatToParts(new Date());
+  }).formatToParts(agora);
   const h = Number(p.find((x) => x.type === 'hour')?.value ?? 0);
   const m = Number(p.find((x) => x.type === 'minute')?.value ?? 0);
   const dias: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
@@ -201,9 +209,14 @@ function paraMinutos(hhmm: string | null | undefined): number | null {
  * IA cumprimentou, o paciente não respondeu, e ninguém cobrou até segunda. O
  * dono ligou para eles na mão.
  *
- * Fica atrás de env por unidade porque cobrar às 3 da manhã é decisão de
- * negócio, não de código, e uma escolha errada aqui vira reclamação em 25
- * cidades ao mesmo tempo.
+ * Fica atrás de env por unidade porque cobrar fora do horário da clínica é
+ * decisão de negócio, não de código, e uma escolha errada aqui vira reclamação
+ * em 25 cidades ao mesmo tempo.
+ *
+ * "24 horas" NÃO é literal desde 12/09/2026: vale todo dia, fim de semana e
+ * feriado, mas nunca entre 21h e 8h. Porto cobrou às 23:28, Parauapebas às
+ * 03:01 e Taubaté às 04:01 falando de Pix — ninguém marca consulta às 3 da
+ * manhã, e isso alimenta o "achei que era golpe" das desistências.
  */
 export function semJanelaDeHorario(slug: string): boolean {
   const raw = process.env.FOLLOW_UP_24H_SLUGS ?? '';
@@ -211,16 +224,20 @@ export function semJanelaDeHorario(slug: string): boolean {
   return lista.has('*') || lista.has(slug);
 }
 
-export function dentroDoHorario(unit: {
-  slug: string;
-  spineAgendaStart: string | null;
-  spineAgendaEnd: string | null;
-  spineTimezone: string | null;
-  spineAgendaDays: number[];
-}): boolean {
-  if (semJanelaDeHorario(unit.slug)) return true;
-  if (ehFeriadoNacionalAgora(new Date(), unit.spineTimezone ?? 'America/Sao_Paulo')) return false;
-  const { minutos, diaSemana } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
+export function dentroDoHorario(
+  unit: {
+    slug: string;
+    spineAgendaStart: string | null;
+    spineAgendaEnd: string | null;
+    spineTimezone: string | null;
+    spineAgendaDays: number[];
+  },
+  agora: Date = new Date(),
+): boolean {
+  const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
+  if (semJanelaDeHorario(unit.slug)) return !emHorarioDeSilencio(agoraLocal(tz, agora).minutos);
+  if (ehFeriadoNacionalAgora(agora, tz)) return false;
+  const { minutos, diaSemana } = agoraLocal(tz, agora);
   const dias = unit.spineAgendaDays?.length ? unit.spineAgendaDays : [1, 2, 3, 4, 5];
   if (!dias.includes(diaSemana)) return false;
   const abre = Math.max(paraMinutos(unit.spineAgendaStart) ?? 8 * 60, 8 * 60);
