@@ -162,6 +162,14 @@ import {
 } from '../controllers/users.controller.js';
 import { KommoService } from '../services/kommo.service.js';
 import { requireAuth, requireSuperAdmin, requireUnitAccess } from '../middleware/auth.js';
+import {
+  publicPausarHandler,
+  publicRetomarHandler,
+  publicStatusHandler,
+  unitPausaGetHandler,
+  unitPausarHandler,
+  unitRetomarHandler,
+} from '../controllers/pausa.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
 import { apiReference } from '@scalar/express-api-reference';
 import { gerarOpenApi } from '../docs/openapi.js';
@@ -233,6 +241,11 @@ apiRouter.get('/health/ready', async (_req, res) => {
 
 apiRouter.post('/auth/login', loginHandler);
 
+// Recepção pausa a Sofia pela página /pausa/:slug com o código da unidade (sem sessão).
+apiRouter.get('/public/pausa/:slug', publicStatusHandler);
+apiRouter.post('/public/pausa/:slug', publicPausarHandler);
+apiRouter.delete('/public/pausa/:slug', publicRetomarHandler);
+
 apiRouter.use(requireAuth);
 
 apiRouter.get('/auth/me', meHandler);
@@ -250,6 +263,9 @@ apiRouter.get('/units/:id/stats', requireUnitAccess, unitStatsHandler);
 apiRouter.get('/units/:id/resultados', requireUnitAccess, resultadosHandler);
 apiRouter.post('/units/:id/resultados/recalcular', requireUnitAccess, recalcularResultadosHandler);
 apiRouter.get('/units/:id/funcionamento', requireUnitAccess, funcionamentoHandler);
+apiRouter.get('/units/:id/pausa', requireUnitAccess, unitPausaGetHandler);
+apiRouter.post('/units/:id/pausa', requireUnitAccess, unitPausarHandler);
+apiRouter.delete('/units/:id/pausa', requireUnitAccess, unitRetomarHandler);
 apiRouter.get('/units/:id/dashboard', requireUnitAccess, dashboardHandler);
 apiRouter.get('/units/:id/leads-bucket', requireUnitAccess, leadsBucketHandler);
 apiRouter.get('/units/:id/integrations', requireUnitAccess, getIntegrations);

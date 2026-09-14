@@ -306,6 +306,13 @@ model Unit {
   /// que a equipe confirma, em vez de inventar — paciente indo no lugar
   /// errado é pior que paciente perguntando onde é.
   clinicAddress        String? @map("clinic_address")
+  /// Pausa da IA por janela de tempo, ligada pela recepção (página /pausa/:slug com código).
+  pausaDesde  DateTime? @map("pausa_desde")
+  pausaAte    DateTime? @map("pausa_ate")
+  pausaMotivo String?   @map("pausa_motivo")
+  pausaPor    String?   @map("pausa_por")
+  pausaCodigo String?   @map("pausa_codigo")
+
   /// Cartão de chegada após o agendamento: link do mapa e foto da fachada (Drive do Kommo).
   clinicMapUrl            String? @map("clinic_map_url")
   clinicPhotoDriveUuid    String? @map("clinic_photo_drive_uuid")

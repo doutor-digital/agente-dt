@@ -2,6 +2,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { decisaoDeCobrancaDoLead, MOTIVO_PARADA_LEITURA } from '../services/kommo-talks.service.js';
+import { emPausa } from './pausa-unidade.js';
 import { ehIntocavel } from './follow-up-presets.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
 import { carimbarContato } from '../services/lead-memory.service.js';
@@ -250,7 +251,7 @@ async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const unidades = await prisma.unit.findMany({ where: { followUpEnabled: true } });
+    const unidades = (await prisma.unit.findMany({ where: { followUpEnabled: true } })).filter((u) => !emPausa(u));
     for (const unit of unidades) {
       if (!dentroDoHorario(unit)) continue;
 

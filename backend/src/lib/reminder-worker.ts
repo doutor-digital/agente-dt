@@ -7,6 +7,7 @@ import { addMessage } from '../services/conversations.service.js';
 import { mensagensOficiais } from '../services/kommo-talks.service.js';
 import { enviarMensagemDeChat } from '../services/kommo-chat.service.js';
 import { BOTOES_D1, contextoDeChatDoLead, janelaAberta, textoAlertaSemJanela, textoConfirmacaoD1 } from './confirmacao-d1.js';
+import { emPausa } from './pausa-unidade.js';
 import type { Unit } from '@prisma/client';
 
 /** Não repete a pergunta de véspera para a mesma consulta (o worker roda de hora em hora). */
@@ -160,7 +161,7 @@ async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const unidades = await prisma.unit.findMany({ where: { spineEnabled: true } });
+    const unidades = (await prisma.unit.findMany({ where: { spineEnabled: true } })).filter((u) => !emPausa(u));
     for (const unit of unidades) {
       await lembrarUnidade(unit).catch((err) => {
         logger.warn({ err: String(err), unit: unit.slug }, 'lembrete: erro na unidade (ignorado)');
