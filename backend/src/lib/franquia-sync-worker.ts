@@ -61,12 +61,28 @@ export function slugsLiberados(raw: string | undefined): (slug: string) => boole
 type CampoInfo = Pick<KommoLeadCustomField, 'id' | 'type' | 'enums'>;
 type MapaCampos = Partial<Record<CampoSync, CampoInfo>>;
 
-function mapearCampos(campos: KommoLeadCustomField[]): MapaCampos {
+export interface CampoBruto {
+  id: number;
+  name: string;
+  type: string;
+  enums?: Array<{ id: number; value: string }> | null;
+}
+
+/**
+ * Monta o mapa a partir da lista BRUTA do Kommo. "◷ Data da Consulta" e
+ * "◷ Agendado pela SDR em" são `date_time` na Imperatriz — tipo que a listagem
+ * tipada descarta (foi por isso que a 1ª varredura pulou a unidade); no PATCH o
+ * formato é o mesmo do `date` (unix em segundos), então gravamos como `date`.
+ */
+function mapearCampos(campos: CampoBruto[]): MapaCampos {
   const porNome = new Map(campos.map((c) => [normalizar(c.name), c]));
   const out: MapaCampos = {};
   for (const [chave, nome] of Object.entries(CAMPOS_SYNC) as Array<[CampoSync, string]>) {
     const c = porNome.get(normalizar(nome));
-    if (c) out[chave] = { id: c.id, type: c.type, enums: c.enums };
+    if (!c) continue;
+    const type = c.type === 'date_time' ? 'date' : c.type;
+    if (!['date', 'select', 'monetary', 'numeric', 'text', 'textarea', 'radiobutton'].includes(type)) continue;
+    out[chave] = { id: c.id, type: type as KommoLeadCustomField['type'], enums: (c.enums ?? []).map((e) => ({ id: e.id, value: e.value })) };
   }
   return out;
 }
@@ -147,8 +163,8 @@ function opcoes(mapa: MapaCampos) {
 async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [] };
   const kommo = createKommoClient(unit);
-  const campos = await kommo.listLeadCustomFieldsTyped();
-  const mapa = mapearCampos(campos);
+  const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: CampoBruto[] } } | undefined;
+  const mapa = mapearCampos(bruto?._embedded?.custom_fields ?? []);
   if (!mapa.DATA_CONSULTA || !mapa.SITUACAO) {
     logger.warn({ unit: unit.slug }, 'franquia-sync: conta sem os campos de consulta — pulando');
     return resumo;
