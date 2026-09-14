@@ -2,6 +2,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
+import { emPausa } from './pausa-unidade.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 
@@ -171,7 +172,7 @@ async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const unidades = await prisma.unit.findMany({ where: { reactivationEnabled: true } });
+    const unidades = (await prisma.unit.findMany({ where: { reactivationEnabled: true } })).filter((u) => !emPausa(u));
     for (const unit of unidades) {
       await reativarUnidade(unit).catch((err) =>
         logger.warn({ err: String(err), unit: unit.slug }, 'reativação: unidade falhou'),
