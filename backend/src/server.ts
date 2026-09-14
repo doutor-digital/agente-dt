@@ -7,6 +7,7 @@ import { env } from './lib/env.js';
 import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { apiRouter } from './routes/api.routes.js';
+import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { getCheckpointer } from './agent/graph.js';
 import { ensureDefaultUnit } from './services/units.service.js';
 import { startWhatsappCostScheduler, stopWhatsappCostScheduler } from './lib/whatsapp-cost-scheduler.js';
@@ -74,6 +75,8 @@ async function main(): Promise<void> {
     next();
   });
 
+  // Página da recepção para pausar a Sofia por um tempo (protegida por código da unidade).
+  app.get('/pausa/:slug', paginaPausaHandler);
   app.use('/api', apiRouter);
 
   app.use('/docs', express.static(DOCS_DIR, { extensions: ['html'] }));
