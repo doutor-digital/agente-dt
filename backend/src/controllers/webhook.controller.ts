@@ -614,7 +614,9 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       traceId: trace.id,
       role: 'user',
       content: ctx.humanMessage,
-      meta: { chatId: ctx.chatId, talkId: ctx.talkId, contactId: ctx.contactId },
+      // authorId/accountId ficam aqui para os envios proativos (confirmação de véspera)
+      // conseguirem usar o chat com botões, que exige os ids do amojo.
+      meta: { chatId: ctx.chatId, talkId: ctx.talkId, contactId: ctx.contactId, authorId: ctx.authorId, accountId: ctx.accountId },
     });
 
     // Resposta à confirmação de véspera ("1" confirmo · "2" remarcar) é tratada
