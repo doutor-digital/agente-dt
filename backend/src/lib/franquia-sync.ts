@@ -121,12 +121,31 @@ export function opcaoDoTratamento(t: Pick<TratamentoFranquia, 'category' | 'loca
 }
 
 /**
- * Qual consulta representa o lead no cartão: a mais recente que não foi
- * desmarcada; se todas foram desmarcadas, a mais recente delas (pra Situação
- * virar "Desmarcado" e não ficar "Agendado" pra sempre).
+ * Sessão de tratamento NÃO é consulta: o bloco CONSULTA do cartão (Data da
+ * Consulta, Situação, Agendado pela SDR em…) é da avaliação/retorno que a SDR
+ * marca. Na 1ª varredura (14/09/2026) a próxima sessão de pacientes antigos
+ * virou "a consulta" e carimbou "Agendado pela SDR em = agora" — o que inflaria
+ * o placar de agendamentos do dia. Só Avaliação e Retorno* contam aqui.
+ */
+export function ehConsulta(s: Pick<SpineSchedule, 'categoryName'>): boolean {
+  const c = normalizar(s.categoryName);
+  if (!c) return false;
+  if (c.includes('sessao')) return false;
+  return c.includes('avalia') || c.includes('retorno');
+}
+
+/** Avaliação = o agendamento que a SDR fez; só ela ganha carimbo de "quando/quem agendou". */
+export function ehAvaliacao(s: Pick<SpineSchedule, 'categoryName'>): boolean {
+  return normalizar(s.categoryName).includes('avalia');
+}
+
+/**
+ * Qual consulta representa o lead no cartão: a mais recente (avaliação ou
+ * retorno) que não foi desmarcada; se todas foram desmarcadas, a mais recente
+ * delas (pra Situação virar "Desmarcado" e não ficar "Agendado" pra sempre).
  */
 export function escolherConsulta(schedules: SpineSchedule[]): SpineSchedule | null {
-  const comData = schedules.filter((s) => s.dateAttendanceUtc);
+  const comData = schedules.filter((s) => s.dateAttendanceUtc && ehConsulta(s));
   if (comData.length === 0) return null;
   const ordem = [...comData].sort((a, b) => String(b.dateAttendanceUtc).localeCompare(String(a.dateAttendanceUtc)));
   return ordem.find((s) => s.idStatus !== SPINE_STATUS.DESMARCADO) ?? ordem[0];
@@ -187,13 +206,16 @@ export function planejarEscritas(e: Entrada): Escrita[] {
     if (categoria && !igual('CATEGORIA', categoria)) {
       out.push({ campo: 'CATEGORIA', nome: CAMPOS_SYNC.CATEGORIA, tipo: 'select', valor: categoria, motivo: atual('CATEGORIA') ? 'franquia diverge' : 'vazio' });
     }
-    // "quando agendou": só se vazio E a consulta ainda está por vir (senão viraria data inventada)
+    // "quando/quem agendou": só na AVALIAÇÃO (é o agendamento da SDR), só se vazio,
+    // e só se a consulta ainda está por vir (senão viraria data inventada)
     const futura = e.consultaEpoch !== null && e.consultaEpoch > e.agoraEpoch;
-    if (!atual('AGENDADO_SDR_EM') && futura && e.consulta.idStatus !== SPINE_STATUS.DESMARCADO) {
-      out.push({ campo: 'AGENDADO_SDR_EM', nome: CAMPOS_SYNC.AGENDADO_SDR_EM, tipo: 'date', valor: e.agoraEpoch, motivo: 'vazio (carimbo na 1ª detecção)' });
-    }
-    if (!atual('FEITO_POR')) {
-      out.push({ campo: 'FEITO_POR', nome: CAMPOS_SYNC.FEITO_POR, tipo: 'select', valor: e.feitoPelaIa ? 'IA' : 'Humano', motivo: 'vazio' });
+    if (ehAvaliacao(e.consulta)) {
+      if (!atual('AGENDADO_SDR_EM') && futura && e.consulta.idStatus !== SPINE_STATUS.DESMARCADO) {
+        out.push({ campo: 'AGENDADO_SDR_EM', nome: CAMPOS_SYNC.AGENDADO_SDR_EM, tipo: 'date', valor: e.agoraEpoch, motivo: 'vazio (carimbo na 1ª detecção)' });
+      }
+      if (!atual('FEITO_POR')) {
+        out.push({ campo: 'FEITO_POR', nome: CAMPOS_SYNC.FEITO_POR, tipo: 'select', valor: e.feitoPelaIa ? 'IA' : 'Humano', motivo: 'vazio' });
+      }
     }
   }
 

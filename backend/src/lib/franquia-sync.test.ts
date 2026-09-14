@@ -132,3 +132,21 @@ test('mapa de campos: aceita date_time como date e ignora tipos que não gravamo
   assert.deepEqual(mapa.SITUACAO?.enums, [{ id: 9, value: 'Agendado' }]);
   assert.equal(mapa.FISIO, undefined);
 });
+
+test('sessão de tratamento não é consulta: não entra na escolha nem carimba agendamento', () => {
+  const sessao = consulta({ idSchedule: 5, categoryName: 'SESSÃO', dateAttendanceUtc: '2026-09-30T13:00:00Z' });
+  const avaliacao = consulta({ idSchedule: 6, categoryName: 'AVALIAÇÃO', dateAttendanceUtc: '2026-09-01T13:00:00Z', idStatus: SPINE_STATUS.ATENDIDO });
+  assert.equal(escolherConsulta([sessao, avaliacao])?.idSchedule, 6, 'a avaliação antiga vence a sessão futura');
+  assert.equal(escolherConsulta([sessao]), null, 'só sessões: nada a espelhar no bloco CONSULTA');
+  const w = planejarEscritas({ valores: {}, consulta: null, consultaEpoch: null, tratamento: null, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES });
+  assert.deepEqual(w, []);
+});
+
+test('retorno: espelha data/situação/categoria mas não carimba "Agendado pela SDR em" nem "feito por"', () => {
+  const retorno = consulta({ categoryName: 'RETORNO', dateAttendanceUtc: '2026-09-20T13:00:00Z' });
+  const w = planejarEscritas({ valores: {}, consulta: retorno, consultaEpoch: EPOCH_CONSULTA, tratamento: null, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES });
+  const campos = w.map((x) => x.campo);
+  assert.ok(campos.includes('DATA_CONSULTA') && campos.includes('SITUACAO'));
+  assert.equal(w.find((x) => x.campo === 'CATEGORIA')?.valor, 'Retorno');
+  assert.ok(!campos.includes('AGENDADO_SDR_EM') && !campos.includes('FEITO_POR'));
+});
