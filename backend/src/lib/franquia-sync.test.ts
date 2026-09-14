@@ -118,3 +118,17 @@ test('tratamento em andamento: Fechou=Sim, opção do tratamento, valor e fisio 
   assert.equal(por.VALOR_TRAT, 2400);
   assert.equal(por.FISIO, 'DRA. BÁRBARA WIRTZBIKI');
 });
+
+test('mapa de campos: aceita date_time como date e ignora tipos que não gravamos', async () => {
+  const { _interno } = await import('./franquia-sync-worker.js');
+  const mapa = _interno.mapearCampos([
+    { id: 1, name: '◷ Data da Consulta', type: 'date_time' },
+    { id: 2, name: '✓ Situação da consulta', type: 'select', enums: [{ id: 9, value: 'Agendado' }] },
+    { id: 3, name: '◷ Agendado pela SDR em', type: 'date_time' },
+    { id: 4, name: '⚕ Fisioterapeuta', type: 'tracking_data' },
+  ]);
+  assert.equal(mapa.DATA_CONSULTA?.type, 'date');
+  assert.equal(mapa.AGENDADO_SDR_EM?.id, 3);
+  assert.deepEqual(mapa.SITUACAO?.enums, [{ id: 9, value: 'Agendado' }]);
+  assert.equal(mapa.FISIO, undefined);
+});
