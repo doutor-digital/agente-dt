@@ -25,6 +25,7 @@ import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-wo
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
+import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -111,8 +112,10 @@ async function main(): Promise<void> {
       startResultadosWorker();
       startVozSessaoWorker();
       startCacheKeepaliveWorker();
+      startFranquiaSyncWorker();
     },
     parar: () => {
+      stopFranquiaSyncWorker();
       stopCacheKeepaliveWorker();
       stopWhatsappCostScheduler();
       stopDashboardMvRefresher();
