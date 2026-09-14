@@ -4,7 +4,9 @@ import { createKommoClient } from '../services/kommo.service.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { addMessage } from '../services/conversations.service.js';
-import { textoConfirmacaoD1 } from './confirmacao-d1.js';
+import { mensagensOficiais } from '../services/kommo-talks.service.js';
+import { enviarMensagemDeChat } from '../services/kommo-chat.service.js';
+import { BOTOES_D1, contextoDeChatDoLead, janelaAberta, textoAlertaSemJanela, textoConfirmacaoD1 } from './confirmacao-d1.js';
 import type { Unit } from '@prisma/client';
 
 /** Não repete a pergunta de véspera para a mesma consulta (o worker roda de hora em hora). */
@@ -51,6 +53,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   const kommo = createKommoClient(unit);
   let enviados = 0;
   let pulados = 0;
+  let semJanela = 0;
 
   for (const link of links) {
     const consulta = await AgendaReconcileService.consultaDoLead(unit, link.kommoLeadId);
@@ -94,8 +97,48 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       endereco: unit.clinicAddress,
     });
     try {
-      await kommo.sendChatReply({ leadId: link.kommoLeadId, text: texto, chatId: null, talkId: null, contactId: null });
-      await addMessage({ conversationId: conv.id, role: 'assistant', content: texto, meta: { origem: 'confirmacao_d1' } });
+      // Texto livre só chega se o paciente escreveu nas últimas 24 h. Fora da janela,
+      // mandar é falhar em silêncio (o Kommo marca "Erro" e ninguém vê): a equipe é
+      // avisada no grupo para confirmar por telefone ou template.
+      const oficiais = await mensagensOficiais(kommo, link.kommoLeadId, 15).catch(() => null);
+      if (oficiais && !janelaAberta(oficiais)) {
+        await kommo.createTask({
+          leadId: link.kommoLeadId,
+          text: textoAlertaSemJanela({ slug: unit.slug, nome: conv.contactName, quando: consulta.quando }),
+          completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
+        });
+        await prisma.conversation.update({
+          where: { id: conv.id },
+          data: { confirmacaoD1EnviadaEm: new Date(), confirmacaoD1Resposta: 'sem_janela' },
+        });
+        semJanela++;
+        continue;
+      }
+
+      // Com os ids do chat, vai pelo chat do Kommo com botões (Confirmo · Preciso
+      // remarcar); sem eles, texto pelo caminho normal ("responda 1 ou 2").
+      const ctx = await contextoDeChatDoLead(unit.id, link.kommoLeadId).catch(() => null);
+      let via = 'salesbot';
+      if (ctx) {
+        try {
+          await enviarMensagemDeChat(unit, {
+            chatId: ctx.chatId,
+            recipientId: ctx.authorId,
+            talkId: ctx.talkId,
+            contactId: ctx.contactId,
+            accountId: ctx.accountId,
+            texto: texto.replace(/Responda \*1\* para confirmar ou \*2\* se precisar remarcar\. 😊/, 'Toca no botão aqui embaixo pra me avisar 😊'),
+            botoes: BOTOES_D1,
+          });
+          via = 'chat_botoes';
+        } catch (err) {
+          logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, err: String(err) }, 'confirmação D-1: botões falharam, indo em texto');
+        }
+      }
+      if (via !== 'chat_botoes') {
+        await kommo.sendChatReply({ leadId: link.kommoLeadId, text: texto, chatId: null, talkId: null, contactId: null });
+      }
+      await addMessage({ conversationId: conv.id, role: 'assistant', content: texto, meta: { origem: 'confirmacao_d1', via } });
       await prisma.conversation.update({
         where: { id: conv.id },
         data: { confirmacaoD1EnviadaEm: new Date(), confirmacaoD1Resposta: null },
@@ -108,7 +151,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
 
   ultimoEnvioPorUnidade.set(unit.id, dia);
   logger.info(
-    { unit: unit.slug, amanha, enviados, pulados, candidatos: links.length, via: salesbotId ? 'salesbot' : 'texto' },
+    { unit: unit.slug, amanha, enviados, pulados, semJanela, candidatos: links.length, via: salesbotId ? 'salesbot' : 'texto' },
     'lembrete de véspera: varredura concluída',
   );
 }

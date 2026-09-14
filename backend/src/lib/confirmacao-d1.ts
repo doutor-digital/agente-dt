@@ -44,6 +44,60 @@ export function textoConfirmacaoD1(args: {
   );
 }
 
+/** Rótulos dos botões da véspera — o classificador acima reconhece os dois. */
+export const BOTOES_D1 = ['Confirmo', 'Preciso remarcar'];
+
+/** Texto livre só chega no WhatsApp se o paciente escreveu nas últimas 24 h. Folga de 1 h. */
+export const JANELA_WHATSAPP_MS = 23 * 3600_000;
+
+export function janelaAberta(msgs: Array<{ direcao: 'entrada' | 'saida'; em: Date }>, agora: Date = new Date()): boolean {
+  let ultimaEntrada: Date | null = null;
+  for (const m of msgs) if (m.direcao === 'entrada' && (!ultimaEntrada || m.em > ultimaEntrada)) ultimaEntrada = m.em;
+  return !!ultimaEntrada && agora.getTime() - ultimaEntrada.getTime() < JANELA_WHATSAPP_MS;
+}
+
+export interface ContextoDeChat {
+  chatId: string;
+  talkId: number | null;
+  contactId: number | null;
+  authorId: string;
+  accountId: number | null;
+}
+
+/** Ids do chat (amojo) guardados na última mensagem do paciente — para mandar com botões. */
+export async function contextoDeChatDoLead(unitId: string, leadId: number): Promise<ContextoDeChat | null> {
+  const conv = await prisma.conversation.findFirst({ where: { unitId, leadId: String(leadId) }, orderBy: { lastMessageAt: 'desc' }, select: { id: true } });
+  if (!conv) return null;
+  const msgs = await prisma.message.findMany({
+    where: { conversationId: conv.id, role: 'user' },
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+    select: { meta: true },
+  });
+  for (const m of msgs) {
+    const meta = (m.meta ?? {}) as Record<string, unknown>;
+    const chatId = typeof meta.chatId === 'string' ? meta.chatId : null;
+    const authorId = typeof meta.authorId === 'string' ? meta.authorId : null;
+    if (!chatId || !authorId) continue;
+    return {
+      chatId,
+      authorId,
+      talkId: meta.talkId != null && Number.isFinite(Number(meta.talkId)) ? Number(meta.talkId) : null,
+      contactId: meta.contactId != null && Number.isFinite(Number(meta.contactId)) ? Number(meta.contactId) : null,
+      accountId: meta.accountId != null && Number.isFinite(Number(meta.accountId)) ? Number(meta.accountId) : null,
+    };
+  }
+  return null;
+}
+
+export function textoAlertaSemJanela(args: { slug: string; nome: string | null | undefined; quando: string }): string {
+  const hora = args.quando.slice(11, 16);
+  return (
+    `ALERTA · ${args.slug} · [Contato: ${args.nome ?? 'paciente'}] 📅 Consulta amanhã às ${hora} SEM confirmação: ` +
+    'o paciente está há mais de 24 h sem escrever e o WhatsApp não aceita mensagem livre. Confirmar por telefone ou template.'
+  );
+}
+
 async function marcarSituacaoConfirmada(kommo: KommoClient, leadId: number): Promise<boolean> {
   const campos = await kommo.listLeadCustomFieldsTyped();
   const alvo = normalizarNome('✓ Situação da consulta');
