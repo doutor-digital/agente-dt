@@ -735,7 +735,63 @@ export async function ping(unit: SpineUnit): Promise<SpineResult<{ total: number
   }
 }
 
+export interface SpineTreatment {
+  idTreatment: number | null;
+  idClient: number | null;
+  clientName: string | null;
+  category: string | null;
+  local: string | null;
+  degree: string | null;
+  staffName: string | null;
+  statusName: string | null;
+  price: number | null;
+}
+
+/**
+ * Tratamentos EM ANDAMENTO da unidade (a rota só devolve esses; medido em
+ * 25/08/2026). `rowsPerPage` máximo 100 — 200 dá HTTP 400. Telefone não vem
+ * aqui: buscar em `getClient(idClient)`.
+ */
+export async function searchTreatments(unit: SpineUnit): Promise<SpineResult<{ treatments: SpineTreatment[] }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  const todos: SpineTreatment[] = [];
+  let page = 1;
+  let totalPages = 1;
+  try {
+    do {
+      const { data } = await http.post<{
+        data?: { data?: Array<Record<string, unknown>>; totalPages?: number };
+      }>('/api/treatments/search', { pagination: { page, rowsPerPage: 100 } });
+      const corpo = data?.data;
+      for (const raw of corpo?.data ?? []) {
+        const num = (v: unknown) => (typeof v === 'number' ? v : Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : null);
+        const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+        todos.push({
+          idTreatment: num(raw.idTreatment),
+          idClient: num(raw.idClient),
+          clientName: str(raw.clientName),
+          category: str(raw.category),
+          local: str(raw.local),
+          degree: str(raw.degree),
+          staffName: str(raw.staffName),
+          statusName: str(raw.statusName),
+          price: num(raw.price),
+        });
+      }
+      totalPages = Math.max(1, Number(corpo?.totalPages) || 1);
+      page++;
+    } while (page <= totalPages && page <= MAX_PAGES);
+    return { ok: true, data: { treatments: todos } };
+  } catch (err) {
+    const d = describe(err);
+    logger.warn({ erro: d.error, requestId: d.requestId }, 'spine: falha ao buscar tratamentos');
+    return { ok: false, ...d };
+  }
+}
+
 export const SpineService = {
+  searchTreatments,
   createLead,
   createClient,
   searchLeads,

@@ -1131,6 +1131,26 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Leads cujo contato tem este telefone. O `query` do Kommo procura em
+   * telefone/e-mail/nome; mandamos só dígitos (sem o 55) e o chamador confere o
+   * número do contato quando houver mais de um candidato.
+   */
+  async listLeadsPorTelefone(telefone: string, limite = 50): Promise<KommoLead[]> {
+    let digitos = telefone.replace(/\D+/g, '');
+    if (digitos.length >= 12 && digitos.startsWith('55')) digitos = digitos.slice(2);
+    if (digitos.length < 8) return [];
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
+        params: { query: digitos, limit: Math.min(limite, 250), with: 'contacts' },
+      });
+      return data?._embedded?.leads ?? [];
+    } catch (err) {
+      wrapAxiosError(err, 'listLeadsPorTelefone');
+      return [];
+    }
+  }
+
   async listPipelines(): Promise<KommoPipeline[]> {
     try {
       const { data } = await this.http.get<{
