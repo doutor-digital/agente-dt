@@ -150,3 +150,7 @@ test('retorno: espelha data/situação/categoria mas não carimba "Agendado pela
   assert.equal(w.find((x) => x.campo === 'CATEGORIA')?.valor, 'Retorno');
   assert.ok(!campos.includes('AGENDADO_SDR_EM') && !campos.includes('FEITO_POR'));
 });
+
+test('tratamento: "PROTOCOLO 03 MESES" da franquia casa com "03 Meses — CERVICAL CRÔNICO" do cartão', () => {
+  assert.equal(opcaoDoTratamento({ category: 'PROTOCOLO 03 MESES', local: 'CERVICAL', degree: 'CRÔNICO' }, OPCOES.tratamento), '03 Meses — CERVICAL CRÔNICO');
+});
