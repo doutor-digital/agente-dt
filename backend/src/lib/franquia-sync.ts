@@ -109,9 +109,14 @@ export interface TratamentoFranquia {
   price: number | null;
 }
 
-/** "03 Meses" + "LOMBAR" + "CRÔNICO" → a opção do cartão que contém esses três pedaços. */
+/**
+ * "PROTOCOLO 03 MESES" + "CERVICAL" + "CRÔNICO" (franquia) → "03 Meses — CERVICAL CRÔNICO" (cartão):
+ * a opção que contém os três pedaços. "Protocolo" é só rótulo da franquia e sai da comparação.
+ */
 export function opcaoDoTratamento(t: Pick<TratamentoFranquia, 'category' | 'local' | 'degree'>, opcoes: string[]): string | null {
-  const pedacos = [t.category, t.local, t.degree].map(normalizar).filter(Boolean);
+  const pedacos = [t.category, t.local, t.degree]
+    .map((p) => normalizar(p).replace(/\bprotocolos?\b/g, '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
   if (pedacos.length === 0) return null;
   const candidatas = opcoes.filter((o) => {
     const n = normalizar(o);
