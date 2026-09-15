@@ -10,6 +10,7 @@ import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { AgendaService } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.js';
+import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente.js';
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
 import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
@@ -396,12 +397,36 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      if (batem.length === 1) await guardarPaciente(fresca.id, args.leadId, batem[0].idClient);
+      if (batem.length === 1) {
+        await guardarPaciente(fresca.id, args.leadId, batem[0].idClient);
+
+        // Achar o cadastro não basta: o texto antigo mandava agendar, e a Sofia
+        // agendava — inclusive para quem já tinha horário marcado (caso Wilson,
+        // 15/09/2026). Antes de liberar, olhar o que ele já tem.
+        const idClient = batem[0].idClient;
+        if (idClient !== null) {
+          const det = await SpineService.getClient(fresca, idClient);
+          const marcadas = consultasFuturas(det.data?.client?.schedules ?? [], new Date());
+          if (marcadas.length > 0) {
+            await recorder.step({
+              kind: 'TOOL_RESULT',
+              title: `${batem[0].name ?? args.nome} JÁ TEM ${marcadas.length} consulta(s) marcada(s) — confirmar/remarcar, não agendar`,
+              payload: { idClient, marcadas },
+            });
+            return avisoDeConsultaExistente(
+              batem[0].name ?? args.nome,
+              idClient,
+              marcadas,
+              fresca.spineTimezone ?? 'America/Sao_Paulo',
+            );
+          }
+        }
+      }
 
       return (
         `Confirmado pelo telefone: ${batem
           .map((c) => `idClient ${c.idClient} — ${c.name}`)
-          .join(' | ')}. Use este idClient em agendar_consulta.`
+          .join(' | ')}. Nenhuma consulta futura no cadastro dele. Use este idClient em agendar_consulta.`
       );
     },
   });
