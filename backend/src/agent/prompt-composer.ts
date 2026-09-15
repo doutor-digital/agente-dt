@@ -34,6 +34,7 @@ import {
   estadoEtapaDoLead,
   type EstadoEtapaLead,
 } from '../services/lead-stage.service.js';
+import { avisoDeCartaoDuplicado } from '../services/cadastro-duplicado.js';
 import { logger } from '../lib/logger.js';
 
 export interface BusinessHoursStatus {
@@ -1450,8 +1451,17 @@ function renderConsultaMarcada(c: ConsultaReconciliada | null | undefined): stri
   ].join('\n'));
 }
 
-function renderEtapaLead(e: EstadoEtapaLead | null | undefined): string {
+function renderEtapaLead(e: EstadoEtapaLead | null | undefined, timeZone?: string | null): string {
   if (!e || !e.jaAgendadoOuPaciente) return '';
+  // O sinal veio de OUTRO cartão do mesmo telefone: aí o texto precisa explicar
+  // que este cartão é novo por causa do formato do número, não porque a pessoa
+  // é nova — senão o modelo confia no cartão vazio que está vendo.
+  if (e.duplicidade) {
+    return xmlBlock(
+      'etapa_do_lead',
+      avisoDeCartaoDuplicado(e.duplicidade, timeZone || 'America/Sao_Paulo'),
+    );
+  }
   return xmlBlock('etapa_do_lead', [
     `Este paciente NÃO é um contato novo: ele já tem consulta marcada ou já é paciente`,
     `(etapa atual no sistema: "${e.nome}"). Ele pode existir de antes de você.`,
@@ -1613,7 +1623,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     if (knBlock) single.push(knBlock);
     const consultaBlockSingle = renderConsultaMarcada(consulta);
     if (consultaBlockSingle) single.push(consultaBlockSingle);
-    const etapaBlockSingle = renderEtapaLead(estadoEtapa);
+    const etapaBlockSingle = renderEtapaLead(estadoEtapa, unit.spineTimezone);
     if (etapaBlockSingle) single.push(etapaBlockSingle);
     return single.join('\n\n');
   }
@@ -1694,7 +1704,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   const consultaBlock = renderConsultaMarcada(consulta);
   if (consultaBlock) blocks.push(consultaBlock);
-  const etapaBlock = renderEtapaLead(estadoEtapa);
+  const etapaBlock = renderEtapaLead(estadoEtapa, unit.spineTimezone);
   if (etapaBlock) blocks.push(etapaBlock);
 
   const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
@@ -1750,7 +1760,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (knowledgeBlock) dynamic.push(knowledgeBlock);
   const consultaBlock = renderConsultaMarcada(consulta);
   if (consultaBlock) dynamic.push(consultaBlock);
-  const etapaBlock = renderEtapaLead(estadoEtapa);
+  const etapaBlock = renderEtapaLead(estadoEtapa, unit.spineTimezone);
   if (etapaBlock) dynamic.push(etapaBlock);
 
   if (unit.singlePromptMode) {
@@ -1915,6 +1925,16 @@ async function loadComposeInput(input: {
           .catch(() => null)
       : Promise.resolve(null),
   ]);
+
+  // O telefone só fica pronto agora (sai do mesmo Promise.all). Se o cartão desta
+  // conversa não deu sinal nenhum, ele pode ser um cartão NOVO criado porque o
+  // número está gravado em dois formatos — pergunta pelo telefone antes de
+  // tratar a pessoa como desconhecida. Caso Wilson, 15/09/2026.
+  const etapaFinal =
+    !estadoEtapa?.jaAgendadoOuPaciente && telefone && input.leadId
+      ? await estadoEtapaDoLead(input.unit, input.leadId, telefone).catch(() => estadoEtapa)
+      : estadoEtapa;
+
   return {
     ...input,
     templates,
@@ -1925,7 +1945,7 @@ async function loadComposeInput(input: {
     leadFieldRules,
     leadMemory,
     consulta,
-    estadoEtapa,
+    estadoEtapa: etapaFinal,
     lessons,
     telefone,
   };

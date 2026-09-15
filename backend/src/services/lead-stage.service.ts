@@ -2,11 +2,23 @@ import type { Unit } from '@prisma/client';
 import type { KommoLead, KommoPipeline } from './kommo.service.js';
 import { createKommoClient } from './kommo.service.js';
 import { logger } from '../lib/logger.js';
+import {
+  chaveTelefone,
+  escolherIrmao,
+  type CartaoIrmao,
+  type Duplicidade,
+} from './cadastro-duplicado.js';
 
 export interface EstadoEtapaLead {
   statusId: number;
   nome: string;
   jaAgendadoOuPaciente: boolean;
+  /**
+   * Preenchido quando o sinal NÃO veio deste cartão, e sim de outro cartão do
+   * mesmo telefone. O cartão da conversa pode ser novo e vazio só porque o
+   * telefone está gravado em dois formatos — caso Wilson, 15/09/2026.
+   */
+  duplicidade?: Duplicidade | null;
 }
 
 const ETAPA_TTL_MS = 90_000;
@@ -46,6 +58,62 @@ function temConsultaMarcadaNoCampo(lead: KommoLead): boolean {
   return false;
 }
 
+/**
+ * Procura OUTROS cartões com o mesmo telefone e devolve o que mostra que a
+ * pessoa já é paciente. Busca pelos últimos 8 dígitos, que é o que atravessa as
+ * duas formas do número. Nunca derruba o turno: falhou, segue sem o bloco.
+ */
+async function duplicidadePorTelefone(
+  unit: Unit,
+  leadAtual: number,
+  telefone: string,
+): Promise<Duplicidade | null> {
+  const chave = chaveTelefone(telefone);
+  if (chave.length < 8) return null;
+  try {
+    const kommo = createKommoClient(unit);
+    const contatos = await kommo.buscarContatosPorTexto(chave, 10);
+    const candidatos: CartaoIrmao[] = [];
+    for (const c of contatos) {
+      for (const l of c._embedded?.leads ?? []) {
+        if (l.id === leadAtual || candidatos.some((x) => x.leadId === l.id)) continue;
+        if (candidatos.length >= 6) break;
+        const lead = await kommo.getLead(l.id).catch(() => null);
+        if (!lead) continue;
+        const pipes = await pipelinesDaUnidade(unit);
+        const est = lead.status_id ? classificar(unit, pipes, lead.pipeline_id, lead.status_id) : null;
+        candidatos.push({
+          leadId: l.id,
+          contatoId: c.id,
+          nome: c.name?.trim() || null,
+          ehPaciente: Boolean(est?.jaAgendadoOuPaciente) || temConsultaMarcadaNoCampo(lead),
+          dataConsulta: dataDaConsulta(lead),
+          etapa: est?.nome ?? null,
+        });
+      }
+    }
+    return escolherIrmao(candidatos, leadAtual);
+  } catch (err) {
+    logger.warn(
+      { err: String(err), unit: unit.slug, leadAtual },
+      'duplicidadePorTelefone falhou — segue sem o aviso de cartão duplicado',
+    );
+    return null;
+  }
+}
+
+/** Epoch (s) da consulta gravada no cartão, se houver. */
+function dataDaConsulta(lead: KommoLead): number | null {
+  for (const f of lead.custom_fields_values ?? []) {
+    const nome = normalizar(f.field_name ?? '');
+    if (!(nome.includes('data') && (nome.includes('consulta') || nome.includes('agendamento')))) continue;
+    const raw = f.values?.[0]?.value;
+    const ts = typeof raw === 'number' ? raw : Number(raw);
+    if (Number.isFinite(ts) && ts > 0) return ts;
+  }
+  return null;
+}
+
 function classificar(
   unit: Unit,
   pipes: KommoPipeline[],
@@ -80,6 +148,7 @@ function classificar(
 export async function estadoEtapaDoLead(
   unit: Unit,
   leadId: number | undefined,
+  telefone?: string | null,
 ): Promise<EstadoEtapaLead | null> {
   if (!leadId || !Number.isFinite(leadId)) return null;
 
@@ -98,6 +167,22 @@ export async function estadoEtapaDoLead(
       valor = valor
         ? { ...valor, jaAgendadoOuPaciente: true }
         : { statusId: lead.status_id ?? 0, nome: 'com consulta marcada', jaAgendadoOuPaciente: true };
+    }
+
+    // O cartão desta conversa pode ser novo e vazio só porque o telefone está
+    // gravado em dois formatos — e aí ele não tem sinal nenhum para dar. Antes de
+    // desistir, pergunta pelo TELEFONE: outro cartão do mesmo número pode dizer
+    // que a pessoa já é paciente. Caso Wilson, 15/09/2026.
+    if (!valor?.jaAgendadoOuPaciente && telefone) {
+      const dup = await duplicidadePorTelefone(unit, leadId, telefone);
+      if (dup) {
+        valor = {
+          statusId: valor?.statusId ?? 0,
+          nome: dup.irmao.etapa ?? valor?.nome ?? 'já cadastrado nesta clínica',
+          jaAgendadoOuPaciente: true,
+          duplicidade: dup,
+        };
+      }
     }
   } catch (err) {
     logger.warn(

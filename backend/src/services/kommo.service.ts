@@ -649,6 +649,29 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Contatos que casam com um texto — usado para achar OUTROS cartões do mesmo
+   * telefone. Buscar pelos últimos 8 dígitos é o que atravessa as duas formas do
+   * número (com e sem o nono dígito): confirmado em Rio Verde, `query=92135721`
+   * devolve os dois cartões do mesmo paciente. Ver `cadastro-duplicado.ts`.
+   */
+  async buscarContatosPorTexto(
+    texto: string,
+    limite = 10,
+  ): Promise<Array<{ id: number; name?: string; _embedded?: { leads?: Array<{ id: number }> } }>> {
+    if (!texto.trim()) return [];
+    try {
+      const { data, status } = await this.http.get<{
+        _embedded?: { contacts?: Array<{ id: number; name?: string; _embedded?: { leads?: Array<{ id: number }> } }> };
+      }>('/contacts', { params: { query: texto, with: 'leads', limit: limite } });
+      // 204 = nenhum resultado; o Kommo devolve corpo vazio, não lista vazia
+      if (status === 204) return [];
+      return data?._embedded?.contacts ?? [];
+    } catch (err) {
+      wrapAxiosError(err, `buscarContatosPorTexto(${texto})`);
+    }
+  }
+
   async getLead(leadId: number): Promise<KommoLead> {
     try {
       const { data } = await this.http.get<KommoLead>(`/leads/${leadId}`, {
