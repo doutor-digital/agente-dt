@@ -1,6 +1,7 @@
 import { logger } from './logger.js';
-import { renovarTokensDeChat } from '../services/kommo-chat.service.js';
+import { renovarTokensDeChat, provarSessaoWeb } from '../services/kommo-chat.service.js';
 import { avisarJoao } from './alerta-whatsapp.js';
+import { avisoDeSessaoCaida } from './prova-de-sessao.js';
 
 /**
  * Guardião da voz: renova os tokens de chat do Kommo antes de vencerem.
@@ -10,6 +11,14 @@ import { avisarJoao } from './alerta-whatsapp.js';
  * perceber. Roda no líder (worker-lease), a cada 12 h, renovando o que vence em
  * menos de 48 h. Se a renovação falhar em alguma unidade, avisa o João no
  * WhatsApp — é o sinal de que a sessão caiu e alguém precisa logar de novo.
+ *
+ * 15/09/2026 — a PROVA semanal: renovar só acontece nas últimas 48 h do token, então
+ * entre uma renovação e outra ninguém testa a sessão e ninguém sabe se ela vale. Duas
+ * consequências apareceram no mesmo dia: a falha só seria descoberta com 48 h de
+ * margem, e o campo `ultimo_ok` ficava velho mesmo com tudo saudável — eu li aquele
+ * campo e dei alarme falso de "voz quebrada na rede inteira". Agora, quando a
+ * varredura não tem o que renovar e a última prova passou de 7 dias, o guardião emite
+ * um token de teste. Ver `prova-de-sessao.ts`.
  */
 
 const SWEEP_MS = Number(process.env.VOZ_SESSAO_SWEEP_MS) || 12 * 60 * 60_000;
@@ -25,6 +34,16 @@ export async function varrerSessaoDeVoz(): Promise<void> {
   try {
     const r = await renovarTokensDeChat(48);
     logger.info({ ...r, falhas: r.falhas.length }, 'voz-sessao: tokens de chat verificados');
+
+    // Uma varredura que não renovou nada NÃO provou que a sessão funciona: ela só
+    // constatou que ainda não era hora. Sem esta prova, a queda da sessão só
+    // aparece nas últimas 48 h — quando já não sobra margem pra alguém logar.
+    const prova = await provarSessaoWeb({ renovouAgora: r.renovadas > 0 });
+    if (prova.testou) logger.info({ ok: prova.ok, idadeDias: prova.idadeDias }, 'voz-sessao: prova da sessão web');
+    if (prova.testou && !prova.ok) {
+      void avisarJoao(avisoDeSessaoCaida(prova.erro ?? 'sem detalhe', prova.margemDias), 'voz-sessao', 6 * 60 * 60_000);
+    }
+
     if (r.falhas.length) {
       const lista = r.falhas.slice(0, 6).map((f) => `• ${f.slug}: ${f.erro.slice(0, 90)}`).join('\n');
       void avisarJoao(
