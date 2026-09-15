@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
+import { decidirProva } from '../lib/prova-de-sessao.js';
 
 /**
  * Serviço de chat interno do Kommo ("amojo") — o que o SITE usa para mandar nota de voz.
@@ -219,6 +220,58 @@ export async function renovarTokensDeChat(margemHoras = 48): Promise<RenovacaoDe
     await new Promise((r) => setTimeout(r, 400));
   }
   return out;
+}
+
+export interface ProvaDeSessao {
+  /** false = não era hora de provar (prova recente, ou a varredura já renovou) */
+  testou: boolean;
+  ok: boolean;
+  erro?: string;
+  /** dias até o primeiro token de chat vencer; null quando não há token */
+  margemDias: number | null;
+  idadeDias: number | null;
+}
+
+/**
+ * Emite um token de teste para PROVAR que a sessão web ainda funciona.
+ *
+ * Existe porque renovar só acontece nas últimas 48 h de vida do token: entre uma
+ * renovação e outra, ninguém toca na sessão e ninguém sabe se ela ainda vale. Se
+ * ela tiver caído, a descoberta vem tarde demais. Aqui a falha aparece com dias de
+ * antecedência — e `ultimo_ok` passa a significar "última vez que provamos que
+ * funciona", que é o que eu achei que ele significava quando dei alarme falso em
+ * 15/09/2026.
+ */
+export async function provarSessaoWeb(
+  opts: { renovouAgora?: boolean; diasSemProva?: number; agora?: Date } = {},
+): Promise<ProvaDeSessao> {
+  const agora = opts.agora ?? new Date();
+  const sessao = await prisma.kommoWebSession.findUnique({ where: { id: 'default' } });
+  const d = decidirProva(sessao?.ultimoOk ?? null, agora, opts);
+
+  const primeiro = await prisma.kommoChatSession.findFirst({ orderBy: { expiresAt: 'asc' }, select: { expiresAt: true } });
+  const margemDias = primeiro ? (primeiro.expiresAt.getTime() - agora.getTime()) / 86_400_000 : null;
+
+  if (!d.provar) return { testou: false, ok: true, margemDias, idadeDias: d.idadeDias };
+
+  const unit = await prisma.unit.findFirst({
+    where: { voiceReplyEnabled: true, isActive: true, kommoAccessToken: { not: null }, kommoSubdomain: { not: null } },
+    select: { id: true, slug: true, kommoSubdomain: true, kommoAccessToken: true },
+    orderBy: { slug: 'asc' },
+  });
+  // Sem unidade com voz ligada não há o que provar nem o que quebrar.
+  if (!unit) return { testou: false, ok: true, margemDias, idadeDias: d.idadeDias };
+
+  try {
+    await obterTokenDeChat(unit, { forcarNovo: true });
+    logger.info({ unidade: unit.slug, motivo: d.motivo }, 'voz-sessao: sessão web provada');
+    return { testou: true, ok: true, margemDias, idadeDias: d.idadeDias };
+  } catch (err) {
+    const erro = err instanceof Error ? err.message : String(err);
+    await registrarFalhaDeSessao(erro);
+    logger.warn({ unidade: unit.slug, erro }, 'voz-sessao: sessão web NÃO emite token novo');
+    return { testou: true, ok: false, erro, margemDias, idadeDias: d.idadeDias };
+  }
 }
 
 export interface NotaDeVoz {
