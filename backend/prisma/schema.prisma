@@ -95,7 +95,7 @@ model Unit {
   // terminais). Preenchida = SÓ nessas (ex: Entrada, Em Qualificação, Em
   // Negociação) — evita alertar lead Perdido/Ganho/Tratamento que ficou com
   // "Pausar IA" marcado. O worker cruza com lead.status_id.
-  slaAlertStatusIds     Int[]   @default([]) @map("sla_alert_status_ids")
+  slaAlertStatusIds Int[] @default([]) @map("sla_alert_status_ids")
 
   // Liga o validador de inconsistência do cartão (alerta erro de preenchimento).
   // OFF por padrão — sobe inofensivo até ser ligado (e revisado em dry-run).
@@ -127,14 +127,14 @@ model Unit {
   /// Responder em NOTA DE VOZ quando o paciente mandou áudio (espelho). Sai pelo serviço
   /// de chat interno do Kommo com o token criado da sessão web (KOMMO_WEB_SESSION_ID);
   /// qualquer falha na cadeia (TTS, Drive, chat, validação) cai em texto pelo caminho normal.
-  voiceReplyEnabled Boolean @default(false) @map("voice_reply_enabled")
+  voiceReplyEnabled           Boolean @default(false) @map("voice_reply_enabled")
   /// Áudio que não dá pra transcrever vira HANDOFF em vez de "escreve pra mim".
   /// Boa Vista está na API NÃO OFICIAL do WhatsApp: o áudio nem chega em formato
   /// que a gente consiga baixar, então a transcrição falha SEMPRE — e pedir pro
   /// paciente digitar, toda vez, é empurrar pra ele um problema que é nosso.
   /// Com isto ligado, a Sofia passa a conversa pra equipe, que ouve o áudio no
   /// aparelho. Só faz sentido em unidade que não consegue transcrever.
-  audioHandoffEnabled Boolean @default(false) @map("audio_handoff_enabled")
+  audioHandoffEnabled         Boolean @default(false) @map("audio_handoff_enabled")
 
   // PROVEDOR DE LLM DO CHAT — "openai" (padrão) ou "anthropic". Define qual
   // modelo o agente (graph.ts) usa. Embeddings (RAG) e transcrição de áudio
@@ -285,55 +285,55 @@ model Unit {
   /// propósito: consultar a agenda é leitura e não deixa rastro; criar lead é
   /// escrita PERMANENTE — a API da franquia não tem exclusão de lead. Ligar a
   /// agenda não pode significar, de tabela, começar a escrever no CRM deles.
-  spineSyncLeads       Boolean @default(false) @map("spine_sync_leads")
+  spineSyncLeads              Boolean   @default(false) @map("spine_sync_leads")
   /// Cadastra também o PACIENTE (client) na franquia, vinculado ao lead.
   /// Separado de spineSyncLeads: o lead é um contato, o paciente é o cadastro
   /// que a recepção usa — e nenhum dos dois pode ser apagado depois.
-  spineSyncPatients    Boolean @default(false) @map("spine_sync_patients")
+  spineSyncPatients           Boolean   @default(false) @map("spine_sync_patients")
   /// A vaga só é reservada DEPOIS do pagamento antecipado confirmado (comprovante lido na
   /// conversa ou campo "✓ Consulta pg antecipado" marcado). Boa Vista: taxa de R$ 100 que
   /// garante o horário. Em 05/09/2026 a IA confirmou consulta sem a taxa — o manual da
   /// unidade já proibia; só regra em código segura o modelo.
-  spineBookingRequiresPayment Boolean @default(false) @map("spine_booking_requires_payment")
+  spineBookingRequiresPayment Boolean   @default(false) @map("spine_booking_requires_payment")
   /// Origem que a Sofia grava na franquia ao cadastrar/converter o paciente para agendar
   /// ("IA SOFIA" = 10002 nas 10 unidades, criada pela franquia em 05/09/2026). Nulo = usa a
   /// origem do lead. A API não tem rota de atualização, então só vale na criação.
-  spineIaSourceId    Int?    @map("spine_ia_source_id")
+  spineIaSourceId             Int?      @map("spine_ia_source_id")
   /// Marcar a mesma origem também no LEAD espelhado (nasce antes de saber se vai agendar;
   /// quem a recepção marcar depois também aparece como IA — por isso desligado por padrão).
-  spineIaSourceLeads Boolean @default(false) @map("spine_ia_source_leads")
+  spineIaSourceLeads          Boolean   @default(false) @map("spine_ia_source_leads")
   /// Endereço da clínica, para a mensagem de confirmação. Vazio = a IA diz
   /// que a equipe confirma, em vez de inventar — paciente indo no lugar
   /// errado é pior que paciente perguntando onde é.
-  clinicAddress        String? @map("clinic_address")
+  clinicAddress               String?   @map("clinic_address")
   /// Pausa da IA por janela de tempo, ligada pela recepção (página /pausa/:slug com código).
-  pausaDesde  DateTime? @map("pausa_desde")
-  pausaAte    DateTime? @map("pausa_ate")
-  pausaMotivo String?   @map("pausa_motivo")
-  pausaPor    String?   @map("pausa_por")
-  pausaCodigo String?   @map("pausa_codigo")
+  pausaDesde                  DateTime? @map("pausa_desde")
+  pausaAte                    DateTime? @map("pausa_ate")
+  pausaMotivo                 String?   @map("pausa_motivo")
+  pausaPor                    String?   @map("pausa_por")
+  pausaCodigo                 String?   @map("pausa_codigo")
 
   /// Cartão de chegada após o agendamento: link do mapa e foto da fachada (Drive do Kommo).
   clinicMapUrl            String? @map("clinic_map_url")
   clinicPhotoDriveUuid    String? @map("clinic_photo_drive_uuid")
   clinicPhotoDriveVersion String? @map("clinic_photo_drive_version")
   /// Chave PIX e favorecido, exibidos na confirmação do agendamento.
-  pixKey               String? @map("pix_key")
-  pixHolder            String? @map("pix_holder")
+  pixKey                  String? @map("pix_key")
+  pixHolder               String? @map("pix_holder")
   /// Origem usada quando a do Kommo não tem correspondente (20 = WHATSAPP).
-  spineDefaultSourceId Int     @default(20) @map("spine_default_source_id")
+  spineDefaultSourceId    Int     @default(20) @map("spine_default_source_id")
 
   /// LEMBRETE DE VÉSPERA. Um dia antes da consulta, o worker aciona o Salesbot
   /// abaixo, que envia o TEMPLATE de lembrete (única coisa que atravessa a
   /// janela de 24h). Desligado até a unidade ter o template aprovado e o bot
   /// montado — o worker varre e não faz nada enquanto `reminderEnabled=false`
   /// ou `reminderSalesbotId` for nulo.
-  reminderEnabled     Boolean @default(false) @map("reminder_enabled")
+  reminderEnabled    Boolean @default(false) @map("reminder_enabled")
   /// Salesbot do Kommo cujo passo é "enviar template de lembrete". Difere do
   /// kommoSalesbotId (esse entrega a resposta da IA).
-  reminderSalesbotId  Int?    @map("reminder_salesbot_id")
+  reminderSalesbotId Int?    @map("reminder_salesbot_id")
   /// Hora local (0–23) em que o lembrete da véspera dispara. Padrão 9h.
-  reminderHourLocal   Int     @default(9) @map("reminder_hour_local")
+  reminderHourLocal  Int     @default(9) @map("reminder_hour_local")
 
   instagramComments InstagramComment[]
   agendaBlocks      AgendaBlock[]
@@ -386,9 +386,9 @@ model Unit {
   // O dono da clínica edita esses 3 campos como texto livre na aba "Fontes".
   // O composer renderiza cada um como uma seção (# FATOS, # PRODUTOS, # NEGÓCIO).
   // Coexistem com a tabela KnowledgeBaseEntry (RAG vetorizado pra FAQ).
-  sourcePapel    String? @map("source_papel") @db.Text // Fatos importantes / papel da IA / fluxo
-  sourceProdutos String? @map("source_produtos") @db.Text // Produtos, serviços, valores permitidos
-  sourceNegocio  String? @map("source_negocio") @db.Text // Visão geral do negócio, contatos, horários
+  sourcePapel      String? @map("source_papel") @db.Text // Fatos importantes / papel da IA / fluxo
+  sourceProdutos   String? @map("source_produtos") @db.Text // Produtos, serviços, valores permitidos
+  sourceNegocio    String? @map("source_negocio") @db.Text // Visão geral do negócio, contatos, horários
   sourceDemografia String? @map("source_demografia") @db.Text // Demografia da região/cidade — separada das outras fontes
 
   // AUTO-QUALIFICAÇÃO (Quente/Frio).
@@ -430,12 +430,10 @@ model Unit {
   /**
    * Janela por dia da semana, quando ela MUDA de um dia para o outro —
    * `{"mon":{"start":20,"end":22},"sat":{"start":8,"end":20}}`.
-   *
    * Existe porque a janela única não descreve o caso de Taubaté: lá a equipe
    * humana atende o horário comercial e a IA cobre o que sobra — noite durante
    * a semana (20h–22h) e o dia inteiro no fim de semana (8h–20h). Com um só
    * par início/fim, atender sábado às 9h obrigaria a atender terça às 9h também.
-   *
    * Dia presente aqui manda; dia ausente cai em businessHoursStart/End. Dia que
    * não está em businessHoursDays continua fechado, esteja aqui ou não.
    */
@@ -502,6 +500,7 @@ model Unit {
   leadFactEvents        LeadFactEvent[]
   whatsappCostDaily     WhatsappCostDaily[]
   whatsappTemplateDaily WhatsappTemplateDaily[]
+  altaCandidatos        AltaCandidato[]
 
   @@map("units")
 }
@@ -661,9 +660,9 @@ model LeadFactEvent {
   leadId String @map("lead_id")
 
   /// Chave do fato, no mesmo formato de `facts` (snake_case). Ex.: "qualificacao".
-  chave String
+  chave         String
   /// Valor novo. Guardado como texto — o dicionário de origem é sempre string.
-  valor String @db.Text
+  valor         String  @db.Text
   /// Valor que estava antes. Nulo quando o fato aparece pela primeira vez.
   valorAnterior String? @map("valor_anterior") @db.Text
 
@@ -692,17 +691,25 @@ model LeadFactEvent {
 // de auditoria pro cliente ver, por clínica, tudo que já foi feito no agente.
 // ---------------------------------------------------------------------------
 model UnitChangeLog {
-  id       String @id @default(cuid())
-  unitId   String @map("unit_id")
-  unit     Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
-  /** Tipo: treino | correcao | config | fix | feature. */
-  category String @default("treino")
-  /** Resumo curto (o que mudou), aparece na linha do tempo. */
+  /**
+   * Tipo: treino | correcao | config | fix | feature.
+   */
+  category String  @default("treino")
+  /**
+   * Resumo curto (o que mudou), aparece na linha do tempo.
+   */
   summary  String
-  /** Detalhe opcional (o antes/depois, o porquê). */
+  /**
+   * Detalhe opcional (o antes/depois, o porquê).
+   */
   details  String? @db.Text
-  /** Quem fez (ex: "IA · João", "sistema"). Livre. */
+  /**
+   * Quem fez (ex: "IA · João", "sistema"). Livre.
+   */
   author   String? @default("IA")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -718,15 +725,21 @@ model UnitChangeLog {
 // painel; podem ser criadas à mão (source=manual) ou pela reflexão (futuro).
 // ---------------------------------------------------------------------------
 model UnitLesson {
-  id      String @id @default(cuid())
-  unitId  String @map("unit_id")
-  unit    Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
-  /** A regra em si — curta e no imperativo. */
+  /**
+   * A regra em si — curta e no imperativo.
+   */
   content String  @db.Text
-  /** De onde veio: manual | reflexao. */
+  /**
+   * De onde veio: manual | reflexao.
+   */
   source  String  @default("manual")
-  /** Se está aplicada no prompt agora. */
+  /**
+   * Se está aplicada no prompt agora.
+   */
   enabled Boolean @default(true)
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -837,7 +850,7 @@ model FollowUpRule {
   unitId String @map("unit_id")
 
   /// status_id do Kommo (ex.: 108773004 = EM QUALIFICAÇÃO, 143 = PERDIDO).
-  statusId Int @map("status_id")
+  statusId       Int     @map("status_id")
   /// Motivo de perda. Só faz sentido com statusId=143; null = vale para
   /// qualquer motivo que não tenha regra própria.
   lossReasonId   Int?    @map("loss_reason_id")
@@ -1100,7 +1113,6 @@ model Conversation {
    * Reengajamento. `followUpStep` é qual degrau da escada já saiu (0 = nenhum),
    * e zera assim que o paciente responde — quem voltou a falar não é quem
    * sumiu.
-   *
    * `followUpStoppedReason` congela o envio de vez: consulta marcada, pedido
    * de parar, ou escada esgotada. Sem isso, um lead que agendou continuaria
    * recebendo "ainda está aí?" — que é o jeito mais rápido de virar spam.
@@ -1436,6 +1448,7 @@ model InstagramComment {
    * /**
    * /**
    * /**
+   * /**
    * /** "instagram" | "facebook" — de qual rede veio.
    */
   platform String @default("instagram")
@@ -1563,17 +1576,16 @@ model SpineLeadLink {
   /**
    * ID do lead no Kommo.
    */
-  kommoLeadId Int  @map("kommo_lead_id")
+  kommoLeadId     Int     @map("kommo_lead_id")
   /**
    * ID do lead criado na franquia. Nulo enquanto não foi criado.
    */
-  spineIdLead Int? @map("spine_id_lead")
+  spineIdLead     Int?    @map("spine_id_lead")
   /// Paciente criado na franquia a partir deste lead (idClient lá).
-  spineIdClient Int? @map("spine_id_client")
+  spineIdClient   Int?    @map("spine_id_client")
   /**
    * A consulta ATUAL deste lead na franquia. Um lead tem no máximo uma —
    * remarcar troca este valor, cancelar zera.
-   *
    * Guardar o id é o que torna cancelar e remarcar precisos. A busca da
    * franquia devolve `clientName` e não `idClient`, então sem isto só restaria
    * casar por nome — e cancelar a consulta do homônimo errado não tem desfazer.
@@ -1586,7 +1598,7 @@ model SpineLeadLink {
    * histórico e a tela de paciente viram lista de números, e ninguém confere
    * um cadastro permanente olhando "13012964 -> 5916621".
    */
-  nome String? @db.Text
+  nome            String? @db.Text
 
   /**
    * "ok" | "falhou" | "ignorado".
@@ -1630,13 +1642,13 @@ model MessageClaim {
 /// cookies a cada uso e o servidor guarda aqui a versão mais nova (cookie jar).
 /// Nasce do env (KOMMO_WEB_SESSION_ID / KOMMO_WEB_REFRESH_TOKEN) e depois vive aqui.
 model KommoWebSession {
-  id           String   @id @default("default")
-  sessionId    String?  @map("session_id")
-  refreshToken String?  @map("refresh_token")
-  userName     String?  @map("user_name")
+  id           String    @id @default("default")
+  sessionId    String?   @map("session_id")
+  refreshToken String?   @map("refresh_token")
+  userName     String?   @map("user_name")
   ultimoOk     DateTime? @map("ultimo_ok")
-  ultimoErro   String?  @map("ultimo_erro")
-  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+  ultimoErro   String?   @map("ultimo_erro")
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
 
   @@map("kommo_web_sessions")
 }
@@ -1714,4 +1726,43 @@ model ConversationOutcome {
   @@index([unitId, inicioEm])
   @@index([unitId, desfecho])
   @@map("conversation_outcomes")
+}
+
+/// Fila de decisões que a CLÍNICA toma sobre tratamento, alimentada pelo cruzamento
+/// com a API da franquia.
+///
+/// Existe porque ALTA é o "Ganho" nativo do funil de tratamento e o gatilho dela
+/// dispara um bot SEM nenhuma condição: mover em massa mandaria mensagem de
+/// conclusão para cada cartão, inclusive para quem terminou há um ano. A decisão
+/// é de gente — a recepção abre /alta/:slug, confere e aprova.
+///
+/// "Parou no meio" mora aqui pelo mesmo motivo oposto: ninguém olha essa lista
+/// hoje, e em Araguaína 28 dos 57 estavam a três sessões ou menos de concluir.
+model AltaCandidato {
+  id           String    @id @default(cuid())
+  unitId       String    @map("unit_id")
+  leadId       Int       @map("lead_id")
+  idClient     Int?      @map("id_client")
+  nome         String?
+  /// "ALTA" (terminou o protocolo) ou "PAROU" (sumiu no meio)
+  classe       String
+  realizadas   Int       @default(0)
+  previstas    Int       @default(0)
+  ultimaSessao DateTime? @map("ultima_sessao")
+  /// pendente | aprovado | recusado
+  estado       String    @default("pendente")
+  decididoPor  String?   @map("decidido_por")
+  decididoEm   DateTime? @map("decidido_em")
+  /// Assinatura do estado clínico quando a decisão foi tomada. Um "recusado" só
+  /// volta a aparecer se isto mudar — senão o mesmo nome reaparece a cada
+  /// varredura e a lista vira ruído que ninguém abre.
+  assinatura   String?
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @default(now()) @updatedAt @map("atualizado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, leadId, classe])
+  @@index([unitId, estado])
+  @@map("alta_candidatos")
 }
