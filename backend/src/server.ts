@@ -39,20 +39,25 @@ interface RawBodyRequest extends express.Request {
 async function main(): Promise<void> {
   const app = express();
 
+  // Widgets privados do Kommo rodam em https://<conta>.kommo.com e chamam SÓ as rotas /api/public/*
+  // (agenda da franquia com chave por unidade, pausa com código). Pra elas o CORS libera o Kommo
+  // SEM credenciais — o cookie de sessão do painel é SameSite=None e não pode viajar pra lá.
+  const ORIGEM_KOMMO = /^https:\/\/[a-z0-9-]+\.(kommo\.com|amocrm\.(com|ru))$/i;
   app.use(
-    cors({
-      origin: (origin, cb) => {
-        if (!origin) return cb(null, true);
-        const allowed = env.FRONTEND_ORIGIN.includes(origin);
-        if (!allowed) {
-          logger.warn(
-            { origin, allowedOrigins: env.FRONTEND_ORIGIN },
-            'CORS: origin bloqueado — verifique FRONTEND_ORIGIN no .env',
-          );
-        }
-        return cb(null, allowed);
-      },
-      credentials: true,
+    cors((req, cb) => {
+      const origin = req.header('Origin');
+      if (!origin) return cb(null, { origin: true, credentials: true });
+      if (req.path.startsWith('/api/public/') && ORIGEM_KOMMO.test(origin)) {
+        return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key', 'X-Requested-With'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
+      }
+      const allowed = env.FRONTEND_ORIGIN.includes(origin);
+      if (!allowed) {
+        logger.warn(
+          { origin, allowedOrigins: env.FRONTEND_ORIGIN },
+          'CORS: origin bloqueado — verifique FRONTEND_ORIGIN no .env',
+        );
+      }
+      return cb(null, { origin: allowed, credentials: true });
     }),
   );
 

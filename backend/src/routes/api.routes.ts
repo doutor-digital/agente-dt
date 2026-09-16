@@ -170,6 +170,7 @@ import {
   unitPausarHandler,
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
+import { widgetPacienteHandler, widgetPingHandler } from '../controllers/widget-franquia.controller.js';
 import { listarAltaHandler, decidirAltaHandler } from '../controllers/alta.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
 import { apiReference } from '@scalar/express-api-reference';
@@ -246,6 +247,10 @@ apiRouter.post('/auth/login', loginHandler);
 apiRouter.get('/public/pausa/:slug', publicStatusHandler);
 apiRouter.post('/public/pausa/:slug', publicPausarHandler);
 apiRouter.delete('/public/pausa/:slug', publicRetomarHandler);
+
+// Widgets privados do Kommo (coluna do cartão) leem a agenda da franquia com chave por unidade (sem sessão).
+apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);
+apiRouter.get('/public/widget/:slug/paciente', widgetPacienteHandler);
 
 // Recepção decide alta e recuperação pela página /alta/:slug (mesmo código da unidade).
 // ALTA nunca é automática: o gatilho dela dispara um bot sem nenhuma condição.
