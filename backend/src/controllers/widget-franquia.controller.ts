@@ -18,7 +18,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { SpineService, type SpineTreatment } from '../services/spine.service.js';
-import { chaveConfere, resumoDaAgenda } from '../lib/widget-agenda.js';
+import { chaveConfere, limparNome, resumoDaAgenda, termosDeBusca } from '../lib/widget-agenda.js';
 import { chaveTelefone, normalizar } from '../lib/franquia-sync.js';
 
 const chamadas = new Map<string, { n: number; desde: number }>();
@@ -74,29 +74,39 @@ async function tratamentosDaUnidade(unit: Unit): Promise<SpineTreatment[]> {
 
 interface PacienteAchado {
   idClient: number;
-  origem: 'vinculo' | 'nome+telefone';
+  origem: 'vinculo' | 'nome+telefone' | 'nome';
 }
 
-async function acharPaciente(unit: Unit, leadId: number | null, nome: string, telefone: string): Promise<PacienteAchado | null> {
+async function acharPaciente(unit: Unit, leadId: number | null, titulo: string, nome: string, telefone: string): Promise<PacienteAchado | null> {
   if (leadId) {
     const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
     if (link?.spineIdClient) return { idClient: link.spineIdClient, origem: 'vinculo' };
   }
   const chave = chaveTelefone(telefone);
-  if (!nome.trim() || !chave) return null;
-  // nome completo e, se não achar, só o primeiro nome (a franquia grava "MARIA DA SILVA", o Kommo "Maria")
-  const tentativas = [nome.trim(), nome.trim().split(/\s+/)[0]].filter((t, i, a) => t.length >= 3 && a.indexOf(t) === i);
-  for (const termo of tentativas) {
-    const r = await SpineService.searchClients(unit, termo);
+  const termos = termosDeBusca(titulo, nome);
+  if (!termos.length) return null;
+  const alvoNomes = new Set([normalizar(limparNome(titulo)), normalizar(limparNome(nome))].filter(Boolean));
+  let porNomeExato: PacienteAchado | null = null;
+  for (const termo of termos) {
+    // até 100 por página: "Sandra" sozinho passa fácil de 20 pacientes, e ela ficava de fora (caso real, 16/09)
+    const r = await SpineService.searchClients(unit, termo, 100);
     if (!r.ok) continue;
-    const casam = (r.data?.clients ?? []).filter((c) => c.idClient && c.whatsapp && chaveTelefone(c.whatsapp) === chave);
-    if (casam.length === 1) return { idClient: casam[0].idClient!, origem: 'nome+telefone' };
-    if (casam.length > 1) {
-      const exato = casam.find((c) => normalizar(c.name) === normalizar(nome));
-      return { idClient: (exato ?? casam[0]).idClient!, origem: 'nome+telefone' };
+    const lista = (r.data?.clients ?? []).filter((c) => c.idClient);
+    if (chave) {
+      const casam = lista.filter((c) => c.whatsapp && chaveTelefone(c.whatsapp) === chave);
+      if (casam.length === 1) return { idClient: casam[0].idClient!, origem: 'nome+telefone' };
+      if (casam.length > 1) {
+        const exato = casam.find((c) => alvoNomes.has(normalizar(c.name)));
+        return { idClient: (exato ?? casam[0]).idClient!, origem: 'nome+telefone' };
+      }
+    }
+    // sem telefone que case: aceita só se o nome completo bater exatamente e for um só
+    if (!porNomeExato) {
+      const exatos = lista.filter((c) => alvoNomes.has(normalizar(c.name)));
+      if (exatos.length === 1) porNomeExato = { idClient: exatos[0].idClient!, origem: 'nome' };
     }
   }
-  return null;
+  return porNomeExato;
 }
 
 export async function widgetPacienteHandler(req: Request, res: Response): Promise<void> {
@@ -108,11 +118,12 @@ export async function widgetPacienteHandler(req: Request, res: Response): Promis
   }
   const leadId = Number(req.query.lead) || null;
   const nome = typeof req.query.nome === 'string' ? req.query.nome.slice(0, 120) : '';
+  const titulo = typeof req.query.titulo === 'string' ? req.query.titulo.slice(0, 120) : '';   // título do cartão ("NOME 03/08/2026")
   const telefone = typeof req.query.telefone === 'string' ? req.query.telefone.slice(0, 40) : '';
   const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
 
   try {
-    const achado = await acharPaciente(unit, leadId, nome, telefone);
+    const achado = await acharPaciente(unit, leadId, titulo, nome, telefone);
     if (!achado) {
       res.json({ unidade: unit.name, franquia: true, tz, agora: new Date(), paciente: null });
       return;

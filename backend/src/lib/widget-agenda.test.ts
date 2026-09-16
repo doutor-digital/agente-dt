@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chaveConfere, chaveDoWidget, resumoDaAgenda } from './widget-agenda.js';
+import { chaveConfere, chaveDoWidget, limparNome, resumoDaAgenda, termosDeBusca } from './widget-agenda.js';
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 
 function ag(p: Partial<SpineSchedule> & { dateAttendanceUtc: string }): SpineSchedule {
@@ -32,6 +32,22 @@ describe('chaveDoWidget', () => {
     assert.ok(chaveConfere('doutor-hernia-imperatriz', 'segredo-de-teste-com-mais-de-32-caracteres', k));
     assert.ok(!chaveConfere('doutor-hernia-imperatriz', 'segredo-de-teste-com-mais-de-32-caracteres', k.slice(0, 23) + 'x'));
     assert.ok(!chaveConfere('doutor-hernia-imperatriz', 'segredo-de-teste-com-mais-de-32-caracteres', undefined));
+  });
+});
+
+describe('limparNome / termosDeBusca', () => {
+  it('tira a data do fim do nome (padrão da casa) e o "Lead #123"', () => {
+    assert.equal(limparNome('Sandra da Cruz 27/5/26'), 'Sandra da Cruz');
+    assert.equal(limparNome('Sandra Maria da Cruz Chaves 03/08/2026'), 'Sandra Maria da Cruz Chaves');
+    assert.equal(limparNome('ROSANGELA 04/09'), 'ROSANGELA');
+    assert.equal(limparNome('Lead #26180289'), '');
+    assert.equal(limparNome(null), '');
+  });
+  it('gera os termos do mais específico pro mais largo, sem repetir', () => {
+    assert.deepEqual(termosDeBusca('Sandra Maria da Cruz Chaves 03/08/2026', 'Sandra da Cruz 27/5/26'), [
+      'Sandra Maria da Cruz Chaves', 'Sandra da Cruz', 'Sandra Chaves', 'Sandra', 'Sandra Cruz',
+    ]);
+    assert.deepEqual(termosDeBusca('Lead #1', 'Jo'), [], 'nada com menos de 3 letras');
   });
 });
 
