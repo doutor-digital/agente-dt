@@ -175,7 +175,10 @@ const NUMEROS_TTL_MS = 120_000;
 function unitIdNoDashboard(unit: Unit): number | null {
   if (!env.DASHBOARD_UNIT_IDS || !unit.kommoSubdomain) return null;
   try {
-    const mapa = JSON.parse(env.DASHBOARD_UNIT_IDS) as Record<string, number>;
+    // o .env da VPS é lido pelo bash no deploy E pelo docker (env_file): o JSON vai entre aspas simples, e o docker
+    // pode entregar as aspas junto — tira antes de interpretar (16/09: deploy da v1.95.0 caiu por isso)
+    const bruto = env.DASHBOARD_UNIT_IDS.trim().replace(/^['"]|['"]$/g, '');
+    const mapa = JSON.parse(bruto) as Record<string, number>;
     const id = mapa[unit.kommoSubdomain];
     return Number.isInteger(id) && id > 0 ? id : null;
   } catch {
