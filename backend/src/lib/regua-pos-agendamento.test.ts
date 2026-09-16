@@ -60,3 +60,28 @@ test('orientacaoDePagamento: Pix manda chave e prazo; na clínica proíbe falar 
   assert.match(orientacaoDePagamento('na_clinica'), /NÃO mencione Pix/);
   assert.equal(orientacaoDePagamento(undefined), '');
 });
+
+const RIO_VERDE = {
+  pixKey: '68.896.219/0001-54',
+  pixHolder: 'Sousa e Magalhaes Clinica de Fisioterapia LTDA',
+  sourceProdutos: 'A CONSULTA: R$ 250 antecipado (pago antes da consulta) ou R$ 350 no dia.',
+  systemPrompt: '',
+};
+
+test('orientacaoDePagamento traz a chave e o valor DENTRO da instrução', () => {
+  // a versão que dizia "(das Fontes Oficiais)" fez a IA mandar "[chave das
+  // Fontes Oficiais]" e "R$ [valor]" pro Renilson, em Rio Verde, 16/09/2026
+  const t = orientacaoDePagamento('pix_antecipado', RIO_VERDE);
+  assert.match(t, /68\.896\.219\/0001-54/);
+  assert.match(t, /Sousa e Magalhaes/);
+  assert.match(t, /R\$ 250/);
+  assert.doesNotMatch(t, /Fontes Oficiais/);
+  assert.match(t, /PROIBIDO escrever colchete/);
+});
+
+test('sem chave cadastrada a instrução manda NÃO escrever a chave', () => {
+  const t = orientacaoDePagamento('pix_antecipado', { ...RIO_VERDE, pixKey: null });
+  assert.doesNotMatch(t, /68\.896\.219/);
+  assert.match(t, /NÃO manda/);
+  assert.match(t, /equipe te envia/);
+});

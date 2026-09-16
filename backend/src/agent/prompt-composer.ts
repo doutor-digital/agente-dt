@@ -478,7 +478,7 @@ export function precosDaConsulta(
   return { antecipado: a, noDia: d };
 }
 
-const fmtBRL = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ','));
+export const fmtBRL = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ','));
 
 function linhaValorConsulta(unit: Unit): string {
   const p = precosDaConsulta(unit);
@@ -1951,8 +1951,40 @@ async function loadComposeInput(input: {
   };
 }
 
+/**
+ * Os poucos fatos duros que a régua de follow-up precisa DIZER.
+ *
+ * O prompt do follow-up é enxuto de propósito (é o maior consumidor de token
+ * sem cache da rede), então ele não carrega as Fontes Oficiais inteiras. Só que
+ * o degrau de 5 min da escada AGENDADO manda "envie a chave Pix da unidade e o
+ * valor antecipado" — e até 16/09/2026 a chave não estava em lugar nenhum
+ * daquele prompt. O modelo não tinha como acertar: ou inventava, ou deixava
+ * "[chave]". Este bloco custa ~200 caracteres e fecha o buraco sem inchar nada.
+ */
+export function renderFatosDaUnidade(unit: Unit): string {
+  const linhas: string[] = [];
+  const chave = unit.pixKey?.trim();
+  const titular = unit.pixHolder?.trim();
+  if (chave) {
+    linhas.push(`- Chave Pix: ${chave}${titular ? ` (titular: ${titular})` : ''}`);
+  }
+  const p = precosDaConsulta(unit);
+  if (p) {
+    linhas.push(`- Consulta: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes) ou R$ ${fmtBRL(p.noDia)} no dia`);
+  }
+  if (linhas.length === 0) return '';
+  return xmlBlock(
+    'dados_da_clinica',
+    'Copie estes dados caractere por caractere quando precisar deles. ' +
+      'O que NÃO estiver aqui você não escreve — nunca deixe "[chave]" ou "R$ [valor]" na mensagem.\n' +
+      linhas.join('\n'),
+  );
+}
+
 export function composeFollowUpSystemPrompt(unit: Unit): string {
-  return [renderPersona(unit), renderRulesGlobal()].join('\n\n');
+  return [renderPersona(unit), renderFatosDaUnidade(unit), renderRulesGlobal()]
+    .filter((b) => b.trim())
+    .join('\n\n');
 }
 
 export function previewComposedPrompt(unit: Unit): string {

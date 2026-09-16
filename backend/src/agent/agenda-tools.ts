@@ -14,6 +14,7 @@ import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
 import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
+import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 
 const TZ_PADRAO = 'America/Sao_Paulo';
 
@@ -877,12 +878,50 @@ export function porQueNaoReservar(args: {
   );
 }
 
-export function orientacaoDePagamento(forma: string | undefined): string {
+/**
+ * O que a IA faz depois de marcar, conforme a forma de pagamento escolhida.
+ *
+ * A chave e o valor vêm INTERPOLADOS aqui, nunca por referência. Em 16/09/2026
+ * a versão que mandava "envie a chave Pix da unidade (das Fontes Oficiais, com
+ * o nome do titular) e o valor antecipado" fez a Sofia de Rio Verde escrever
+ * para o Renilson, letra por letra: "a chave Pix da clínica é [chave das Fontes
+ * Oficiais] ... O valor antecipado fica R$ [valor]". O modelo transcreveu a
+ * instrução em vez de procurar o dado — e esta instrução chega como observação
+ * de tool, o texto mais fresco do contexto, logo o mais copiável.
+ *
+ * Regra: instrução que aponta para outro lugar do prompt vira lacuna na
+ * mensagem; instrução que já traz o dado, não. Se o dado não existe na unidade,
+ * mandamos NÃO escrever nada — nunca inventar, nunca deixar colchete.
+ */
+export function orientacaoDePagamento(
+  forma: string | undefined,
+  unit?: Pick<Unit, 'pixKey' | 'pixHolder' | 'sourceProdutos' | 'systemPrompt'>,
+): string {
   if (forma === 'pix_antecipado') {
+    const chave = unit?.pixKey?.trim();
+    const titular = unit?.pixHolder?.trim();
+    const precos = unit ? precosDaConsulta(unit) : null;
+
+    const dados: string[] = [];
+    if (chave) {
+      dados.push(
+        `A chave Pix é ${chave} — copie caractere por caractere, sem reescrever nem formatar` +
+          (titular ? `, no nome de ${titular}` : '') +
+          '.',
+      );
+    }
+    if (precos) dados.push(`O valor antecipado é R$ ${fmtBRL(precos.antecipado)}.`);
+
+    const falta = !chave || !precos;
     return (
-      ' Ele escolheu PIX ANTECIPADO: na mesma mensagem de confirmação, envie a chave Pix da unidade ' +
-      '(das Fontes Oficiais, com o nome do titular) e o valor antecipado, e diga que pode pagar até a ' +
-      'véspera — depois disso vale o valor na clínica. NÃO peça comprovante agora.'
+      ' Ele escolheu PIX ANTECIPADO: na mesma mensagem de confirmação, envie a chave Pix e o valor ' +
+      'antecipado, e diga que pode pagar até a véspera — depois disso vale o valor na clínica. ' +
+      'NÃO peça comprovante agora.' +
+      (dados.length > 0 ? ' ' + dados.join(' ') : '') +
+      ' PROIBIDO escrever colchete, chave ou lacuna do tipo "[chave]", "R$ [valor]", "XXX": ' +
+      (falta
+        ? 'o dado que não estiver escrito nesta instrução você NÃO manda — diga que a equipe te envia em seguida.'
+        : 'use exatamente os dados escritos acima.')
     );
   }
   if (forma === 'na_clinica') {
@@ -1265,7 +1304,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
 
       return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
         especialista ? ` Especialista: ${especialista}.` : ''
-      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento)}`;
+      } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento, fresca)}`;
     },
   });
 }

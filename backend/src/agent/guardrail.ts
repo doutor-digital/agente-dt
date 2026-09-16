@@ -1,4 +1,6 @@
 import type { Unit } from '@prisma/client';
+import { preencherLacunas } from './lacunas.js';
+import { precosDaConsulta } from './prompt-composer.js';
 
 export interface GuardrailResult {
   text: string;
@@ -82,6 +84,15 @@ function corrigirValores(
   return { texto, trocas };
 }
 
+/**
+ * Sobrou lacuna que não deu pra preencher. É melhor prometer conferir do que
+ * mandar "[chave das Fontes Oficiais]" — o paciente que recebeu isso em Rio
+ * Verde entendeu que a clínica não sabia a própria chave Pix.
+ */
+const FALLBACK_LACUNA =
+  'Deixa eu confirmar esse dado certinho com a equipe pra não te passar nada errado 🙏 ' +
+  'Já te retorno por aqui, tá bem?';
+
 const FALLBACK_CLINICO =
   'Sobre o que você está sentindo, quem avalia com segurança é a nossa especialista, na consulta — ' +
   'por aqui eu não consigo dar um diagnóstico. Vamos garantir sua consulta? 😊';
@@ -112,6 +123,8 @@ const REGRAS_CLINICAS: { key: string; re: RegExp }[] = [
 export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
   if (!text || !text.trim()) return { text, triggered: [], rewritten: false };
   const triggered: string[] = [];
+  let texto = text;
+  let reescreveu = false;
 
   if (unit.category?.trim() === 'saude') {
     for (const regra of REGRAS_CLINICAS) {
@@ -122,13 +135,31 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
     }
   }
 
+  // Lacuna antes de preço: preencher "[chave]" e "R$ [valor]" com o dado real da
+  // unidade insere um valor que JÁ é do catálogo, então a checagem abaixo segue
+  // valendo sobre o texto preenchido. O que não dá pra preencher não sai.
+  const lac = preencherLacunas(texto, {
+    chavePix: unit.pixKey,
+    titularPix: unit.pixHolder,
+    valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null,
+  });
+  if (lac.trocas.length > 0) {
+    triggered.push('lacuna_preenchida:' + lac.trocas.join('/'));
+    texto = lac.texto;
+    reescreveu = true;
+  }
+  if (lac.restantes.length > 0) {
+    triggered.push('lacuna:' + lac.restantes.join('/'));
+    return { text: FALLBACK_LACUNA, triggered, rewritten: true };
+  }
+
   const aprovados = parseAmounts(unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio);
   if (aprovados.size > 0) {
-    const foraDoCatalogo = [...parseAmounts(text)].filter(
+    const foraDoCatalogo = [...parseAmounts(texto)].filter(
       (v) => v >= 20 && !amountApproved(v, aprovados),
     );
     if (foraDoCatalogo.length > 0) {
-      const corrigido = corrigirValores(text, aprovados, foraDoCatalogo);
+      const corrigido = corrigirValores(texto, aprovados, foraDoCatalogo);
       if (corrigido) {
         triggered.push('preco_corrigido:' + corrigido.trocas.join('/'));
         return { text: corrigido.texto, triggered, rewritten: true };
@@ -138,5 +169,5 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
     }
   }
 
-  return { text, triggered, rewritten: false };
+  return { text: texto, triggered, rewritten: reescreveu };
 }
