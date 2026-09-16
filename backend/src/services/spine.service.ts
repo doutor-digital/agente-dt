@@ -283,13 +283,14 @@ export interface SpineClient {
 export async function searchClients(
   unit: SpineUnit,
   name: string,
+  rowsPerPage = 20,
 ): Promise<SpineResult<{ clients: SpineClient[] }>> {
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
   try {
     const { data } = await http.post<{
       data?: { data?: Array<{ idClient?: number; name?: string; whatsapp?: string }> };
-    }>('/api/clients/search', { name, pagination: { page: 1, rowsPerPage: 20 } });
+    }>('/api/clients/search', { name, pagination: { page: 1, rowsPerPage: Math.min(100, Math.max(1, rowsPerPage)) } });
     const clients = (data?.data?.data ?? []).map((c) => ({
       idClient: c.idClient ?? null,
       name: c.name ?? null,

@@ -26,6 +26,33 @@ export function chaveConfere(slug: string, segredo: string, recebida: unknown): 
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** "Sandra da Cruz 27/5/26" / "SANDRA MARIA 03/08/2026" → "Sandra da Cruz": o padrão da casa põe a data do 1º contato no nome. */
+export function limparNome(s: string | null | undefined): string {
+  return String(s ?? '')
+    .replace(/\s+\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*$/g, '')
+    .replace(/^lead\s*#?\d+$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Termos pra buscar o paciente na franquia, do mais específico pro mais largo, sem repetição:
+ * título limpo, nome do contato limpo, "primeiro último" e só o primeiro nome. A busca da franquia é por
+ * nome; quem decide é o telefone (8 últimos dígitos) — medido em 16/09 com um paciente em tratamento que a
+ * busca por "Sandra da Cruz 27/5/26" não achava.
+ */
+export function termosDeBusca(titulo: string, nome: string): string[] {
+  const t = limparNome(titulo), n = limparNome(nome);
+  const partes = (s: string) => s.split(' ').filter(Boolean);
+  const cand = [t, n];
+  for (const s of [t, n]) {
+    const p = partes(s);
+    if (p.length >= 2) cand.push(`${p[0]} ${p[p.length - 1]}`);
+    if (p.length >= 1) cand.push(p[0]);
+  }
+  return cand.map((c) => c.trim()).filter((c, i, a) => c.length >= 3 && a.indexOf(c) === i);
+}
+
 export interface ConsultaResumo {
   idSchedule: number | null;
   quando: string | null;        // ISO UTC
