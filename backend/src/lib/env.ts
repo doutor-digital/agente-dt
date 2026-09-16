@@ -43,6 +43,14 @@ const schema = z.object({
     .string()
     .url()
     .default('https://doutor-digital-dash-production.up.railway.app/webhooks/agent'),
+
+  // Ponte do widget "Números da unidade" (Kommo) com o dashboard (.NET, api-vps): a rota
+  // `internal/audit/kpis` devolve número + conferência + lista nominal por card. Sem estes
+  // três, a rota do widget responde `dashboard:false` e o widget mostra só as pendências do Kommo.
+  DASHBOARD_API_URL: z.string().url().optional(),
+  DASHBOARD_ADMIN_KEY: z.string().min(8).optional(),
+  // JSON { "<subdomínio Kommo>": <unitId no dashboard> } — as duas bases não compartilham id nem slug (Porto: -porto × -porto-nacional)
+  DASHBOARD_UNIT_IDS: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
