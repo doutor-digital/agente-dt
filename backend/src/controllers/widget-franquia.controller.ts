@@ -18,7 +18,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { SpineService, type SpineTreatment } from '../services/spine.service.js';
-import { chaveConfere, janelaDoPeriodo, limparNome, resumirAuditoria, resumoDaAgenda, termosDeBusca } from '../lib/widget-agenda.js';
+import { chaveConfere, janelaDoPeriodo, janelaExplicita, limparNome, resumirAuditoria, resumoDaAgenda, termosDeBusca } from '../lib/widget-agenda.js';
 import { chaveTelefone, normalizar } from '../lib/franquia-sync.js';
 
 const chamadas = new Map<string, { n: number; desde: number }>();
@@ -191,7 +191,7 @@ export async function widgetNumerosHandler(req: Request, res: Response): Promise
   const unit = await unidadeDoWidget(req, res);
   if (!unit) return;
   const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
-  const janela = janelaDoPeriodo(typeof req.query.periodo === 'string' ? req.query.periodo : undefined, new Date(), tz);
+  const janela = janelaExplicita(req.query.de, req.query.ate) ?? janelaDoPeriodo(typeof req.query.periodo === 'string' ? req.query.periodo : undefined, new Date(), tz);
   const base = { unidade: unit.name, slug: unit.slug, tz, periodo: janela, agora: new Date() };
 
   const unitId = unitIdNoDashboard(unit);
