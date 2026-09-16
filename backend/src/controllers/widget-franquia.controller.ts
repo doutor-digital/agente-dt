@@ -18,7 +18,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { SpineService, type SpineTreatment } from '../services/spine.service.js';
-import { chaveConfere, limparNome, resumoDaAgenda, termosDeBusca } from '../lib/widget-agenda.js';
+import { chaveConfere, janelaDoPeriodo, limparNome, resumirAuditoria, resumoDaAgenda, termosDeBusca } from '../lib/widget-agenda.js';
 import { chaveTelefone, normalizar } from '../lib/franquia-sync.js';
 
 const chamadas = new Map<string, { n: number; desde: number }>();
@@ -162,5 +162,61 @@ export async function widgetPacienteHandler(req: Request, res: Response): Promis
   } catch (err) {
     logger.warn({ err, unit: unit.slug }, 'widget: falha ao montar a agenda do paciente');
     res.status(502).json({ error: 'franquia indisponível' });
+  }
+}
+
+// ── "Números da unidade" (16/09/2026, João: "se elas vissem os números na própria Kommo, iam ver o que está errado") ──
+// `GET /api/public/widget/:slug/numeros?periodo=hoje|semana|mes` → os cards do dashboard pra esta unidade, com a
+// conferência e a lista nominal de quem explica a diferença, vindos de `internal/audit/kpis` do dashboard (.NET).
+// Mesma fonte do dashboard, então o número que a SDR vê no Kommo é o que a gestora vê no painel. SÓ LEITURA.
+const cacheNumeros = new Map<string, { em: number; corpo: unknown }>();
+const NUMEROS_TTL_MS = 120_000;
+
+function unitIdNoDashboard(unit: Unit): number | null {
+  if (!env.DASHBOARD_UNIT_IDS || !unit.kommoSubdomain) return null;
+  try {
+    const mapa = JSON.parse(env.DASHBOARD_UNIT_IDS) as Record<string, number>;
+    const id = mapa[unit.kommoSubdomain];
+    return Number.isInteger(id) && id > 0 ? id : null;
+  } catch {
+    logger.warn('widget: DASHBOARD_UNIT_IDS não é JSON válido');
+    return null;
+  }
+}
+
+export async function widgetNumerosHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res);
+  if (!unit) return;
+  const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
+  const janela = janelaDoPeriodo(typeof req.query.periodo === 'string' ? req.query.periodo : undefined, new Date(), tz);
+  const base = { unidade: unit.name, slug: unit.slug, tz, periodo: janela, agora: new Date() };
+
+  const unitId = unitIdNoDashboard(unit);
+  if (!env.DASHBOARD_API_URL || !env.DASHBOARD_ADMIN_KEY || !unitId) {
+    res.json({ ...base, dashboard: false, motivo: !unitId ? 'unidade sem ligação com o dashboard' : 'ponte com o dashboard não configurada' });
+    return;
+  }
+  const chave = `${unitId}:${janela.de}:${janela.ate}`;
+  const c = cacheNumeros.get(chave);
+  if (c && Date.now() - c.em < NUMEROS_TTL_MS) {
+    res.json({ ...base, dashboard: true, cache: true, ...(c.corpo as object) });
+    return;
+  }
+  try {
+    const url = `${env.DASHBOARD_API_URL.replace(/\/$/, '')}/internal/audit/kpis?unitId=${unitId}&de=${janela.de}&ate=${janela.ate}`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 25_000);
+    const r = await fetch(url, { headers: { 'X-Admin-Key': env.DASHBOARD_ADMIN_KEY, Accept: 'application/json' }, signal: ctrl.signal }).finally(() => clearTimeout(t));
+    if (!r.ok) {
+      logger.warn({ unit: unit.slug, status: r.status }, 'widget: dashboard respondeu erro na auditoria de KPIs');
+      res.status(502).json({ ...base, dashboard: true, error: 'dashboard indisponível' });
+      return;
+    }
+    const corpo = { ...resumirAuditoria(await r.json()), lidoEm: new Date() };
+    cacheNumeros.set(chave, { em: Date.now(), corpo });
+    res.json({ ...base, dashboard: true, cache: false, ...corpo });
+  } catch (err) {
+    logger.warn({ err, unit: unit.slug }, 'widget: falha ao ler os números do dashboard');
+    res.status(502).json({ ...base, dashboard: true, error: 'dashboard indisponível' });
   }
 }
