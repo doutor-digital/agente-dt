@@ -96,8 +96,11 @@ export const PRESETS: Preset[] = [
         soPix: true,
         intencao:
           'Ele acabou de marcar e ESCOLHEU pagar por Pix antecipado. UMA mensagem, curta e ' +
-          'tranquila, com três coisas: a chave Pix da unidade (das Fontes Oficiais, com o nome ' +
-          'do titular), o valor antecipado e até quando pagar (a véspera da consulta). Diga que ' +
+          'tranquila, com três coisas: a chave Pix da unidade copiada caractere por caractere ' +
+          'das Fontes Oficiais (com o nome do titular), o valor antecipado e até quando pagar ' +
+          '(a véspera da consulta). Se a chave ou o valor não estiverem escritos nas Fontes ' +
+          'Oficiais, NÃO escreva colchete nem lacuna: diga que a equipe manda a chave em ' +
+          'seguida. Diga que ' +
           'depois desse prazo vale o valor na clínica no dia, sem drama. NÃO fale em vagas ' +
           'concorridas, NÃO peça comprovante agora, NÃO repita endereço nem o resumo do ' +
           'agendamento — ele acabou de receber.',
