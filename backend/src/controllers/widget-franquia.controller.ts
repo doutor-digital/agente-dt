@@ -77,11 +77,13 @@ interface PacienteAchado {
   origem: 'vinculo' | 'nome+telefone' | 'nome';
 }
 
-async function acharPaciente(unit: Unit, leadId: number | null, titulo: string, nome: string, telefone: string): Promise<PacienteAchado | null> {
-  if (leadId) {
-    const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
-    if (link?.spineIdClient) return { idClient: link.spineIdClient, origem: 'vinculo' };
-  }
+async function porVinculo(unit: Unit, leadId: number | null): Promise<PacienteAchado | null> {
+  if (!leadId) return null;
+  const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
+  return link?.spineIdClient ? { idClient: link.spineIdClient, origem: 'vinculo' } : null;
+}
+
+async function porNomeETelefone(unit: Unit, titulo: string, nome: string, telefone: string): Promise<PacienteAchado | null> {
   const chave = chaveTelefone(telefone);
   const termos = termosDeBusca(titulo, nome);
   if (!termos.length) return null;
@@ -123,17 +125,26 @@ export async function widgetPacienteHandler(req: Request, res: Response): Promis
   const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
 
   try {
-    const achado = await acharPaciente(unit, leadId, titulo, nome, telefone);
-    if (!achado) {
+    // Dois caminhos, sempre: o vínculo que a Sofia gravou E a busca por nome+telefone. Caso real (16/09): o vínculo
+    // apontava pra um cadastro sem agenda (343253) e a paciente de verdade, em tratamento, era outro cadastro (320555).
+    // Fica o cadastro que tem agenda; se os dois existem e são diferentes, a franquia tem paciente em dobro → avisar.
+    const [vinc, busca] = await Promise.all([porVinculo(unit, leadId), porNomeETelefone(unit, titulo, nome, telefone)]);
+    const candidatos = [vinc, busca].filter((c, i, a): c is PacienteAchado => !!c && a.findIndex((x) => x && x.idClient === c.idClient) === i);
+    if (!candidatos.length) {
       res.json({ unidade: unit.name, franquia: true, tz, agora: new Date(), paciente: null });
       return;
     }
-    const det = await SpineService.getClient(unit, achado.idClient);
-    if (!det.ok || !det.data?.client) {
-      res.json({ unidade: unit.name, franquia: true, tz, agora: new Date(), paciente: null, erro: det.ok ? undefined : 'franquia indisponível' });
+    const detalhes = await Promise.all(candidatos.map(async (c) => ({ c, det: await SpineService.getClient(unit, c.idClient) })));
+    const validos = detalhes.filter((d) => d.det.ok && d.det.data?.client);
+    if (!validos.length) {
+      res.json({ unidade: unit.name, franquia: true, tz, agora: new Date(), paciente: null, erro: detalhes.some((d) => !d.det.ok) ? 'franquia indisponível' : undefined });
       return;
     }
-    const cli = det.data.client;
+    validos.sort((a, b) => (b.det.data!.client!.schedules.length - a.det.data!.client!.schedules.length));
+    const achado = validos[0].c;
+    const cli = validos[0].det.data!.client!;
+    const duplicadoNaFranquia = validos.length > 1;
+    if (duplicadoNaFranquia) logger.info({ unit: unit.slug, leadId, ids: validos.map((v) => v.c.idClient) }, 'widget: paciente com dois cadastros na franquia');
     const agenda = resumoDaAgenda(cli.schedules, new Date());
     const trat = (await tratamentosDaUnidade(unit)).find((t) => (t.idClient && t.idClient === cli.idClient) || (t.clientName && cli.name && normalizar(t.clientName) === normalizar(cli.name))) ?? null;
     res.json({
@@ -142,6 +153,7 @@ export async function widgetPacienteHandler(req: Request, res: Response): Promis
       tz,
       agora: new Date(),
       paciente: { idClient: cli.idClient, nome: cli.name, whatsapp: cli.whatsapp ? `…${chaveTelefone(cli.whatsapp).slice(-4)}` : null, origem: achado.origem },
+      duplicadoNaFranquia,
       agenda,
       tratamento: trat
         ? { categoria: trat.category, fisioterapeuta: trat.staffName, status: trat.statusName, local: trat.local, grau: trat.degree, valor: trat.price }
