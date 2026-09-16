@@ -170,6 +170,7 @@ import {
   unitPausarHandler,
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
+import { listarAltaHandler, decidirAltaHandler } from '../controllers/alta.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
 import { apiReference } from '@scalar/express-api-reference';
 import { gerarOpenApi } from '../docs/openapi.js';
@@ -245,6 +246,11 @@ apiRouter.post('/auth/login', loginHandler);
 apiRouter.get('/public/pausa/:slug', publicStatusHandler);
 apiRouter.post('/public/pausa/:slug', publicPausarHandler);
 apiRouter.delete('/public/pausa/:slug', publicRetomarHandler);
+
+// Recepção decide alta e recuperação pela página /alta/:slug (mesmo código da unidade).
+// ALTA nunca é automática: o gatilho dela dispara um bot sem nenhuma condição.
+apiRouter.get('/public/alta/:slug', listarAltaHandler);
+apiRouter.post('/public/alta/:slug', decidirAltaHandler);
 
 apiRouter.use(requireAuth);
 
