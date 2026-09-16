@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chaveConfere, chaveDoWidget, janelaDoPeriodo, limparNome, resumirAuditoria, resumoDaAgenda, termosDeBusca } from './widget-agenda.js';
+import { chaveConfere, chaveDoWidget, janelaDoPeriodo, janelaExplicita, limparNome, resumirAuditoria, resumoDaAgenda, termosDeBusca } from './widget-agenda.js';
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 
 function ag(p: Partial<SpineSchedule> & { dateAttendanceUtc: string }): SpineSchedule {
@@ -65,6 +65,16 @@ describe('janelaDoPeriodo (Números da unidade)', () => {
     assert.equal(janelaDoPeriodo('xx', agora, TZ).tipo, 'hoje');
     // segunda-feira: a semana é só ela mesma
     assert.deepEqual(janelaDoPeriodo('semana', new Date('2026-09-14T15:00:00Z'), TZ), { tipo: 'semana', de: '2026-09-14', ate: '2026-09-14' });
+  });
+});
+
+describe('janelaExplicita', () => {
+  it('aceita de/ate válidos até 92 dias e recusa o resto', () => {
+    assert.deepEqual(janelaExplicita('2026-09-01', '2026-09-15'), { tipo: 'custom', de: '2026-09-01', ate: '2026-09-15' });
+    assert.equal(janelaExplicita('2026-09-15', '2026-09-01'), null, 'fim antes do começo');
+    assert.equal(janelaExplicita('2026-01-01', '2026-06-01'), null, 'mais de 92 dias');
+    assert.equal(janelaExplicita('16/09/2026', '16/09/2026'), null, 'formato errado');
+    assert.equal(janelaExplicita(undefined, undefined), null);
   });
 });
 

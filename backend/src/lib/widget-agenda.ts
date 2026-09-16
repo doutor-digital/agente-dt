@@ -54,7 +54,16 @@ export function termosDeBusca(titulo: string, nome: string): string[] {
 }
 
 // ── "Números da unidade": janela do período e resumo da auditoria do dashboard ──
-export type PeriodoWidget = 'hoje' | 'semana' | 'mes';
+export type PeriodoWidget = 'hoje' | 'semana' | 'mes' | 'custom';
+
+/** Janela explícita (`de`/`ate` em yyyy-mm-dd, até 92 dias) — o widget usa pra comparar com o período anterior. */
+export function janelaExplicita(de: unknown, ate: unknown): { tipo: 'custom'; de: string; ate: string } | null {
+  if (typeof de !== 'string' || typeof ate !== 'string') return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) return null;
+  const a = Date.parse(`${de}T00:00:00Z`), b = Date.parse(`${ate}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a || (b - a) / 86_400_000 > 92) return null;
+  return { tipo: 'custom', de, ate };
+}
 
 function dataLocal(agora: Date, tz: string): { ano: number; mes: number; dia: number; diaSemana: number } {
   const partes = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }).formatToParts(agora);
