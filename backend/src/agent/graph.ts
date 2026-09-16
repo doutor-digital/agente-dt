@@ -1,4 +1,4 @@
-import { AIMessage, type BaseMessage, SystemMessage } from '@langchain/core/messages';
+import { AIMessage, type BaseMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { END, START, StateGraph } from '@langchain/langgraph';
 import type { DynamicStructuredTool } from '@langchain/core/tools';
 import { ToolNode } from '@langchain/langgraph/prebuilt';
@@ -17,6 +17,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
+import { avaliarChamadaFinal, INSTRUCAO_REFAZER_CTA } from './cta-final.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
   'Deixa eu confirmar essa informação com a equipe pra não te passar nada errado 🙏 ' +
@@ -568,7 +569,49 @@ export async function buildAgentGraph(
         latencyMs: latency,
       });
 
-      const guard = aplicarGuardrail(text, unit);
+      // Juiz determinístico da pergunta final: resposta que só informa e para é refeita UMA vez, com a
+      // instrução na cara. Só quando nada mais mexeu no texto (guardrail limpo) — senão a reescrita brigaria
+      // com a correção de preço/lacuna. Se a segunda tentativa vier com tool call ou vazia, fica a original.
+      let textoFinal = text;
+      const cta = avaliarChamadaFinal(text);
+      if (cta.precisaRefazer && aplicarGuardrail(text, unit).triggered.length === 0) {
+        const t1 = performance.now();
+        try {
+          const refeita = (await withTimeout(
+            invokeChatModel({
+              model,
+              messages: [...finalMessages, response, new HumanMessage(INSTRUCAO_REFAZER_CTA)],
+              unitId: unit.id,
+              traceId: recorder.traceId,
+              modelName,
+              provider,
+              tools,
+              conversaId: idDaConversa,
+            }),
+            AGENT_NODE_TIMEOUT_MS,
+          )) as AIMessage;
+          const textoRefeito = (refeita.tool_calls ?? []).length === 0 ? aiTextFromContent(refeita.content).trim() : '';
+          if (textoRefeito && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
+            textoFinal = textoRefeito;
+            response.content = textoRefeito;
+          }
+          await recorder.step({
+            kind: 'THINKING',
+            title: textoFinal === text ? `🧭 Sem pergunta final (${cta.motivo}); a reescrita não melhorou — saiu a original` : `🧭 Sem pergunta final (${cta.motivo}) — refeita com chamada pra ação`,
+            payload: { original: text, refeita: textoRefeito || null },
+            latencyMs: Math.round(performance.now() - t1),
+          });
+        } catch (err) {
+          await recorder.step({
+            kind: 'THINKING',
+            title: '🧭 Sem pergunta final; a reescrita falhou — saiu a original',
+            payload: { erro: err instanceof Error ? err.message : String(err) },
+            latencyMs: Math.round(performance.now() - t1),
+          });
+        }
+      }
+
+      const guard = aplicarGuardrail(textoFinal, unit);
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';
@@ -578,7 +621,7 @@ export async function buildAgentGraph(
           await recorder.step({
             kind: 'ERROR',
             title: `🔁 Guardrail em LOOP (${guard.triggered.join(', ')}) — repetiria a mesma resposta; escalando`,
-            payload: { original: text, reescrito: guard.text, motivos: guard.triggered },
+            payload: { original: textoFinal, reescrito: guard.text, motivos: guard.triggered },
           });
           response.content = FALLBACK_LOOP_GUARDRAIL;
         } else {
@@ -586,7 +629,7 @@ export async function buildAgentGraph(
           await recorder.step({
             kind: 'THINKING',
             title: `🛡️ Guardrail reescreveu a resposta (${guard.triggered.join(', ')})`,
-            payload: { original: text, reescrito: guard.text, motivos: guard.triggered },
+            payload: { original: textoFinal, reescrito: guard.text, motivos: guard.triggered },
           });
         }
       }
