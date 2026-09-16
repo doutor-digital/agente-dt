@@ -53,6 +53,81 @@ export function termosDeBusca(titulo: string, nome: string): string[] {
   return cand.map((c) => c.trim()).filter((c, i, a) => c.length >= 3 && a.indexOf(c) === i);
 }
 
+// ── "Números da unidade": janela do período e resumo da auditoria do dashboard ──
+export type PeriodoWidget = 'hoje' | 'semana' | 'mes';
+
+function dataLocal(agora: Date, tz: string): { ano: number; mes: number; dia: number; diaSemana: number } {
+  const partes = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }).formatToParts(agora);
+  const pega = (t: string) => partes.find((p) => p.type === t)?.value ?? '';
+  const semana = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(pega('weekday'));
+  return { ano: Number(pega('year')), mes: Number(pega('month')), dia: Number(pega('day')), diaSemana: semana < 0 ? 0 : semana };
+}
+function iso(ano: number, mes: number, dia: number): string {
+  const d = new Date(Date.UTC(ano, mes - 1, dia));   // normaliza dia 0 / negativo (volta pro mês anterior)
+  return d.toISOString().slice(0, 10);
+}
+
+/** Janela em datas locais (yyyy-mm-dd) do período pedido: hoje, semana (segunda→hoje) ou mês (dia 1→hoje). */
+export function janelaDoPeriodo(periodo: string | undefined, agora: Date, tz: string): { tipo: PeriodoWidget; de: string; ate: string } {
+  const { ano, mes, dia, diaSemana } = dataLocal(agora, tz);
+  const hoje = iso(ano, mes, dia);
+  if (periodo === 'semana') {
+    const recuo = (diaSemana + 6) % 7;   // segunda = 0 dias de recuo
+    return { tipo: 'semana', de: iso(ano, mes, dia - recuo), ate: hoje };
+  }
+  if (periodo === 'mes') return { tipo: 'mes', de: iso(ano, mes, 1), ate: hoje };
+  return { tipo: 'hoje', de: hoje, ate: hoje };
+}
+
+const TITULOS_KPI: Record<string, string> = {
+  agendamentos: 'Agendamentos',
+  consultas: 'Consultas realizadas',
+  tratamentos: 'Tratamentos fechados',
+  receita: 'Receita (R$)',
+  leads_qualificados: 'Leads qualificados',
+  no_show: 'Faltas (no-show)',
+};
+
+export interface NumeroWidget {
+  kpi: string;
+  titulo: string;
+  fonte: string;
+  numero: number;
+  conferencia: number | null;
+  leitura: string | null;
+  cobertura: { percentual: number; nota: string } | null;
+  quebra: Array<{ rotulo: string; quantidade: number; valor: number | null }>;
+  divergentes: Array<{ nome: string; motivo: string }>;
+  maisDivergentes: number;   // quantos ficaram de fora do corte
+}
+
+/** Achata a resposta de `internal/audit/kpis` do dashboard no que o widget mostra (nomes, sem ids internos). */
+export function resumirAuditoria(json: unknown, maxDivergentes = 30): { totalDivergencias: number; numeros: NumeroWidget[] } {
+  const j = (json ?? {}) as { totalDivergencias?: number; blocos?: unknown[] };
+  const blocos = Array.isArray(j.blocos) ? j.blocos : [];
+  const numeros = blocos.map((raw) => {
+    const b = raw as Record<string, unknown>;
+    const div = Array.isArray(b.divergentes) ? (b.divergentes as Array<Record<string, unknown>>) : [];
+    const cob = b.cobertura as Record<string, unknown> | null | undefined;
+    const kpi = String(b.kpi ?? '');
+    return {
+      kpi,
+      titulo: TITULOS_KPI[kpi] ?? kpi,
+      fonte: String(b.fonte ?? ''),
+      numero: Number(b.numero ?? 0),
+      conferencia: typeof b.conferencia === 'number' ? b.conferencia : null,
+      leitura: typeof b.leitura === 'string' ? b.leitura : null,
+      cobertura: cob && typeof cob.percentual === 'number' ? { percentual: cob.percentual, nota: String(cob.nota ?? '') } : null,
+      quebra: (Array.isArray(b.quebra) ? (b.quebra as Array<Record<string, unknown>>) : []).map((q) => ({
+        rotulo: String(q.rotulo ?? ''), quantidade: Number(q.quantidade ?? 0), valor: typeof q.valor === 'number' ? q.valor : null,
+      })),
+      divergentes: div.slice(0, maxDivergentes).map((d) => ({ nome: String(d.nome ?? '(sem nome)'), motivo: String(d.motivo ?? '') })),
+      maisDivergentes: Math.max(0, div.length - maxDivergentes),
+    };
+  });
+  return { totalDivergencias: Number(j.totalDivergencias ?? numeros.reduce((s, n) => s + n.divergentes.length + n.maisDivergentes, 0)), numeros };
+}
+
 export interface ConsultaResumo {
   idSchedule: number | null;
   quando: string | null;        // ISO UTC

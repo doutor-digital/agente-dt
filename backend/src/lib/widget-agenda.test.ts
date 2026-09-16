@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chaveConfere, chaveDoWidget, limparNome, resumoDaAgenda, termosDeBusca } from './widget-agenda.js';
+import { chaveConfere, chaveDoWidget, janelaDoPeriodo, limparNome, resumirAuditoria, resumoDaAgenda, termosDeBusca } from './widget-agenda.js';
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 
 function ag(p: Partial<SpineSchedule> & { dateAttendanceUtc: string }): SpineSchedule {
@@ -48,6 +48,46 @@ describe('limparNome / termosDeBusca', () => {
       'Sandra Maria da Cruz Chaves', 'Sandra da Cruz', 'Sandra Chaves', 'Sandra', 'Sandra Cruz',
     ]);
     assert.deepEqual(termosDeBusca('Lead #1', 'Jo'), [], 'nada com menos de 3 letras');
+  });
+});
+
+describe('janelaDoPeriodo (Números da unidade)', () => {
+  const TZ = 'America/Sao_Paulo';
+  it('hoje = o dia local, mesmo quando em UTC já virou o dia seguinte', () => {
+    // 16/09 23:30 em São Paulo = 17/09 02:30 UTC
+    const j = janelaDoPeriodo('hoje', new Date('2026-09-17T02:30:00Z'), TZ);
+    assert.deepEqual(j, { tipo: 'hoje', de: '2026-09-16', ate: '2026-09-16' });
+  });
+  it('semana começa na segunda; mês começa no dia 1; período desconhecido vira hoje', () => {
+    const agora = new Date('2026-09-16T15:00:00Z');   // quarta-feira
+    assert.deepEqual(janelaDoPeriodo('semana', agora, TZ), { tipo: 'semana', de: '2026-09-14', ate: '2026-09-16' });
+    assert.deepEqual(janelaDoPeriodo('mes', agora, TZ), { tipo: 'mes', de: '2026-09-01', ate: '2026-09-16' });
+    assert.equal(janelaDoPeriodo('xx', agora, TZ).tipo, 'hoje');
+    // segunda-feira: a semana é só ela mesma
+    assert.deepEqual(janelaDoPeriodo('semana', new Date('2026-09-14T15:00:00Z'), TZ), { tipo: 'semana', de: '2026-09-14', ate: '2026-09-14' });
+  });
+});
+
+describe('resumirAuditoria', () => {
+  it('achata os blocos do dashboard, dá título em português e corta a lista nominal', () => {
+    const r = resumirAuditoria({
+      totalDivergencias: 3,
+      blocos: [{
+        kpi: 'agendamentos', fonte: 'CRM (Kommo)', numero: 89, conferencia: 9, leitura: '2 cartões sem carimbo',
+        cobertura: { total: 3, legiveis: 2, nota: 'x', percentual: 66 },
+        quebra: [{ rotulo: 'Com pagamento antecipado', quantidade: 0 }, { rotulo: 'Sem', quantidade: 89, valor: null }],
+        divergentes: [{ leadId: 1, nome: 'A', motivo: 'm1' }, { leadId: 2, nome: 'B', motivo: 'm2' }, { leadId: 3, nome: 'C', motivo: 'm3' }],
+      }],
+    }, 2);
+    assert.equal(r.totalDivergencias, 3);
+    assert.equal(r.numeros[0].titulo, 'Agendamentos');
+    assert.equal(r.numeros[0].cobertura?.percentual, 66);
+    assert.deepEqual(r.numeros[0].divergentes, [{ nome: 'A', motivo: 'm1' }, { nome: 'B', motivo: 'm2' }]);
+    assert.equal(r.numeros[0].maisDivergentes, 1);
+    assert.ok(!('leadId' in r.numeros[0].divergentes[0]), 'id interno do dashboard não vaza pro widget');
+  });
+  it('não quebra com resposta vazia', () => {
+    assert.deepEqual(resumirAuditoria(null), { totalDivergencias: 0, numeros: [] });
   });
 });
 
