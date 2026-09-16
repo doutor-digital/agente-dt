@@ -4,6 +4,7 @@ import { logger } from '../lib/logger.js';
 import { createChatModel, invokeChatModel, resolveModelName } from '../services/openai.service.js';
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
 import { extrairBotoes } from '../lib/botoes.js';
+import { aplicarGuardrail } from './guardrail.js';
 
 export interface FollowUpArgs {
   unitId: string;
@@ -54,6 +55,8 @@ REGRAS:
 - NÃO cobre resposta ("você sumiu", "ainda está aí?"). Cobrança afasta.
 - NÃO invente horário, preço, endereço nem disponibilidade. Se precisar falar de
   horário, fale no geral e ofereça verificar.
+- PROIBIDO deixar lacuna: nada de "[chave]", "R$ [valor]", "{endereço}", "XXX".
+  Ou você escreve o dado exato que está nas Fontes Oficiais, ou não fala dele.
 - Retome pelo que ELE contou: a queixa, a preferência, o que ficou pendente.
 ${args.ultimoDegrau ? '- ESTA É A ÚLTIMA. Despeça-se com a porta aberta e NÃO faça pergunta.' : ''}
 
@@ -82,7 +85,23 @@ ${conversa}`.trim();
     // vazou como texto em Taubaté (12/09/2026). Aqui ela só é removida.
     const limpo = extrairBotoes(texto).texto.replace(/^["']|["']$/g, '');
     if (!limpo || limpo.length > 600) return null;
-    return limpo;
+
+    // A régua não passava pelo guardrail: ia do modelo direto pro Kommo, sem
+    // checagem de preço nem de lacuna. Aqui ela passa — e com uma diferença do
+    // caminho da conversa: quando o guardrail precisa RECUSAR (preço fora do
+    // catálogo, lacuna que não deu pra preencher, regra clínica), a régua
+    // simplesmente não sai. Mensagem de reengajamento que diz "deixa eu
+    // confirmar" não reengaja ninguém — é melhor o silêncio e o próximo degrau.
+    const guard = aplicarGuardrail(limpo, unit);
+    const recusou = guard.triggered.some((t) => /^(lacuna|preco|clinico):/.test(t));
+    if (recusou) {
+      logger.warn(
+        { unit: unit.slug, leadId: args.leadId, motivos: guard.triggered, texto: limpo },
+        'follow-up: guardrail barrou o degrau — nada enviado',
+      );
+      return null;
+    }
+    return guard.rewritten ? guard.text : limpo;
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId: args.leadId }, 'follow-up: modelo falhou');
     return null;
