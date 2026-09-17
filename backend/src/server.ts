@@ -43,11 +43,17 @@ async function main(): Promise<void> {
   // (agenda da franquia com chave por unidade, pausa com código). Pra elas o CORS libera o Kommo
   // SEM credenciais — o cookie de sessão do painel é SameSite=None e não pode viajar pra lá.
   const ORIGEM_KOMMO = /^https:\/\/[a-z0-9-]+\.(kommo\.com|amocrm\.(com|ru))$/i;
+  // O dashboard (Vercel) também consome /api/public/*: a fila de alta mora aqui,
+  // mas quem decide é a recepção, e ela já abre o dashboard todo dia. Página solta
+  // é mais um endereço pra lembrar — em 2 dias no ar, 170 pacientes na fila e zero
+  // decisões. Segue SEM credenciais: a autorização é o código da unidade no corpo
+  // da chamada, não o cookie.
+  const ORIGEM_DASHBOARD = /^https:\/\/([a-z0-9-]+\.)*doutordigitalconsultoria\.com$/i;
   app.use(
     cors((req, cb) => {
       const origin = req.header('Origin');
       if (!origin) return cb(null, { origin: true, credentials: true });
-      if (req.path.startsWith('/api/public/') && ORIGEM_KOMMO.test(origin)) {
+      if (req.path.startsWith('/api/public/') && (ORIGEM_KOMMO.test(origin) || ORIGEM_DASHBOARD.test(origin))) {
         return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key', 'X-Requested-With'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }
       const allowed = env.FRONTEND_ORIGIN.includes(origin);
