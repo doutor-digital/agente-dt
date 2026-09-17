@@ -35,6 +35,7 @@ import {
   type EstadoEtapaLead,
 } from '../services/lead-stage.service.js';
 import { avisoDeCartaoDuplicado } from '../services/cadastro-duplicado.js';
+import { renderAnuncioDeOrigem } from './anuncio-de-origem.js';
 import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 
@@ -1643,7 +1644,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
     const consultaBlockSingle = renderConsultaMarcada(consulta);
     if (consultaBlockSingle) single.push(consultaBlockSingle);
     const etapaBlockSingle = renderEtapaLead(estadoEtapa, unit.spineTimezone);
+    const anuncioBlockSingle = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
     if (etapaBlockSingle) single.push(etapaBlockSingle);
+    if (anuncioBlockSingle) single.push(anuncioBlockSingle);
     return single.join('\n\n');
   }
 
@@ -1725,6 +1728,12 @@ export function composeSystemPrompt(input: ComposeInput): string {
   if (consultaBlock) blocks.push(consultaBlock);
   const etapaBlock = renderEtapaLead(estadoEtapa, unit.spineTimezone);
   if (etapaBlock) blocks.push(etapaBlock);
+
+  // DEPOIS de <coleta_origem> de propósito: quando o rastreio já sabe o anúncio,
+  // este bloco proíbe a pergunta "como você nos conheceu". O bloco de coleta vive
+  // no prefixo cacheado e não pode variar por lead sem derrubar o cache.
+  const anuncioBlock = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
+  if (anuncioBlock) blocks.push(anuncioBlock);
 
   const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
   if (firstTurnBlock) blocks.push(firstTurnBlock);

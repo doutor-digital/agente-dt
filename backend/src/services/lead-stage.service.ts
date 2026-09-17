@@ -1,7 +1,9 @@
 import type { Unit } from '@prisma/client';
-import type { KommoLead, KommoPipeline } from './kommo.service.js';
+import type { KommoClient, KommoLead, KommoPipeline } from './kommo.service.js';
 import { createKommoClient } from './kommo.service.js';
 import { logger } from '../lib/logger.js';
+import { esquemaDaUnidade } from '../lib/kommo-schema.js';
+import { lerAnuncioDoLead, type AnuncioDeOrigem } from '../agent/anuncio-de-origem.js';
 import {
   chaveTelefone,
   escolherIrmao,
@@ -19,6 +21,32 @@ export interface EstadoEtapaLead {
    * telefone está gravado em dois formatos — caso Wilson, 15/09/2026.
    */
   duplicidade?: Duplicidade | null;
+  /**
+   * O anúncio que trouxe o paciente, lido do cartão (o rastreio CTWA grava lá).
+   * Sem isto a IA pergunta "como você nos conheceu" para quem chegou por um
+   * anúncio que nós mesmos pagamos — e ela pergunta mal: 2 capturas em 1.052.
+   */
+  anuncio?: AnuncioDeOrigem | null;
+}
+
+/**
+ * Lê o anúncio do cartão resolvendo os campos PELO NOME (id de campo é por
+ * conta). Falha aqui nunca derruba o prompt: sem anúncio, a conversa segue como
+ * antes e a pergunta de origem continua valendo.
+ */
+async function lerAnuncio(
+  unit: Unit,
+  kommo: KommoClient,
+  campos: Parameters<typeof lerAnuncioDoLead>[0],
+): Promise<AnuncioDeOrigem | null> {
+  if (!campos?.length) return null;
+  try {
+    const esquema = await esquemaDaUnidade(unit, kommo);
+    return lerAnuncioDoLead(campos, (nome) => esquema.campoPorNome(nome));
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, 'anúncio de origem indisponível — seguindo sem');
+    return null;
+  }
 }
 
 const ETAPA_TTL_MS = 90_000;
@@ -158,10 +186,21 @@ export async function estadoEtapaDoLead(
 
   let valor: EstadoEtapaLead | null = null;
   try {
-    const lead = await createKommoClient(unit).getLead(leadId);
+    const kommo = createKommoClient(unit);
+    const lead = await kommo.getLead(leadId);
     if (lead?.status_id) {
       const pipes = await pipelinesDaUnidade(unit);
       valor = classificar(unit, pipes, lead.pipeline_id, lead.status_id);
+    }
+
+    // O anúncio que a pessoa clicou já está no cartão — o rastreio CTWA grava lá.
+    // Ler aqui custa nada (o lead já foi buscado) e evita a IA perguntar "como
+    // você nos conheceu" para quem chegou por um anúncio que a gente pagou.
+    const anuncio = await lerAnuncio(unit, kommo, lead?.custom_fields_values);
+    if (anuncio) {
+      valor = valor
+        ? { ...valor, anuncio }
+        : { statusId: lead?.status_id ?? 0, nome: '', jaAgendadoOuPaciente: false, anuncio };
     }
     if (lead && temConsultaMarcadaNoCampo(lead)) {
       valor = valor
