@@ -39,6 +39,32 @@ export interface AnuncioDeOrigem {
 type CampoDoLead = { field_id?: number; values?: Array<{ value?: unknown }> };
 
 /**
+ * O campo "Título do anúncio" guarda o BOTÃO do anúncio, não a promessa dele.
+ *
+ * Medido em 17/09/2026 sobre 554 leads de Rio Verde, Araguaína e Imperatriz:
+ * 7 títulos distintos, 86% genéricos — "Converse conosco" (435x), o nome da
+ * página (75x), "api.whatsapp.com" (29x). Nenhum descreve uma dor.
+ *
+ * Mandar "o anúncio dizia: Converse conosco" para o modelo é ruído: gasta token
+ * e convida a IA a falar do anúncio em vez de falar com a pessoa. Título que não
+ * diz nada é tratado como título ausente — a origem continua conhecida (isso
+ * ainda desliga a pergunta "como nos conheceu"), só não serve de gancho.
+ */
+const TITULO_GENERICO =
+  /^(converse|fale|clique|chame|saiba mais|agendar|agende|contato|entre em contato|enviar mensagem|send message|whats)/i;
+
+export function tituloUtil(bruto: string | null): string | null {
+  const t = bruto?.trim();
+  if (!t || t.length < 12) return null;
+  if (TITULO_GENERICO.test(t)) return null;
+  // nome de página ("Doutor Hérnia Unidade X") e URL não são promessa de anúncio
+  if (/^doutor h[ée]rnia\b/i.test(t)) return null;
+  if (/^(https?:\/\/|www\.|[a-z0-9.-]+\.(com|br|me)\b)/i.test(t)) return null;
+  // promessa de verdade tem frase, não duas palavras soltas
+  return t.split(/\s+/).length >= 3 ? t : null;
+}
+
+/**
  * Lê o anúncio do cartão. `idPorNome` vem do esquema da unidade (resolvido por
  * nome, cacheado) — nunca de id chumbado.
  */
@@ -59,7 +85,7 @@ export function lerAnuncioDoLead(
   };
 
   const a: AnuncioDeOrigem = {
-    titulo: pega(CAMPOS_DO_ANUNCIO.titulo),
+    titulo: tituloUtil(pega(CAMPOS_DO_ANUNCIO.titulo)),
     anuncio: pega(CAMPOS_DO_ANUNCIO.anuncio),
     campanha: pega(CAMPOS_DO_ANUNCIO.campanha),
     plataforma: pega(CAMPOS_DO_ANUNCIO.plataforma),

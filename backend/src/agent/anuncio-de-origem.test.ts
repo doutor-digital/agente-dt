@@ -5,6 +5,7 @@ import {
   origemJaConhecida,
   renderAnuncioDeOrigem,
   resumoDaOrigem,
+  tituloUtil,
   type AnuncioDeOrigem,
 } from './anuncio-de-origem.js';
 
@@ -105,4 +106,33 @@ test('resumo da origem junta o que existe', () => {
     resumoDaOrigem({ titulo: null, anuncio: null, campanha: null, plataforma: null, origem: 'Meta-Facebook' }),
     'Meta-Facebook',
   );
+});
+
+// --- o título só serve se for promessa de verdade (medido 17/09/2026) ---
+
+test('títulos genéricos NÃO viram gancho', () => {
+  // 86% dos 554 leads medidos tinham um destes
+  for (const t of ['Converse conosco', 'Converse Conosco', 'Fale com a gente', 'Clique aqui',
+                   'Doutor Hérnia Unidade Araguaína', 'api.whatsapp.com', 'AGENDAR CONSULTA']) {
+    assert.equal(tituloUtil(t), null, `"${t}" deveria ser descartado`);
+  }
+});
+
+test('promessa de verdade passa', () => {
+  assert.equal(tituloUtil('Dor ciática há anos? Tem tratamento sem cirurgia'), 'Dor ciática há anos? Tem tratamento sem cirurgia');
+  assert.equal(tituloUtil('Hérnia de disco sem cirurgia e sem medicação'), 'Hérnia de disco sem cirurgia e sem medicação');
+});
+
+test('duas palavras não é promessa', () => {
+  assert.equal(tituloUtil('Dor lombar'), null);
+});
+
+test('título genérico não derruba a origem — só o gancho', () => {
+  const a = lerAnuncioDoLead(campos({ 273014: 'Converse conosco', 273008: 'instagram', 273006: 'ENG | WPP' }), porNome);
+  assert.equal(a?.titulo, null, 'o título genérico foi descartado');
+  assert.equal(origemJaConhecida(a), true, 'mas ainda sabemos que veio de anúncio');
+  const t = renderAnuncioDeOrigem(a);
+  assert.doesNotMatch(t, /Converse conosco/, 'o ruído não entra no prompt');
+  assert.doesNotMatch(t, /JÁ NO ASSUNTO/, 'sem promessa, não promete abrir pelo assunto');
+  assert.match(t, /como você nos conheceu/i, 'mas segue proibindo a pergunta');
 });
