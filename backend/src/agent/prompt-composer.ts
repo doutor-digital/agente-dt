@@ -36,6 +36,7 @@ import {
 } from '../services/lead-stage.service.js';
 import { avisoDeCartaoDuplicado } from '../services/cadastro-duplicado.js';
 import { logger } from '../lib/logger.js';
+import { capturaUnificada } from './captura-unificada.js';
 
 export interface BusinessHoursStatus {
   enabled: boolean;
@@ -1273,8 +1274,17 @@ function renderGlobalActions(actions: GlobalAction[]): string {
 ${lines.join('\n\n')}`);
 }
 
-function renderLeadFieldRules(rules: LeadFieldRule[]): string {
+function renderLeadFieldRules(rules: LeadFieldRule[], unitSlug?: string | null): string {
   if (rules.length === 0) return '';
+  if (capturaUnificada(unitSlug)) {
+    // captura unificada: uma ferramenta só; o "quando" de cada campo está na descrição dela — aqui só o mapa campo → cartão
+    const lines = rules.map((r) => `- ${r.toolName} → "${r.kommoFieldName}"`);
+    return xmlBlock('captura_dados', `- Informações do paciente vão pro card do Kommo pela ferramenta registrar_campo(campo, valor). O "quando" e o formato de cada campo estão na descrição dela.
+- Chame em SILÊNCIO assim que detectar a informação — NÃO anuncie ("anotei seu...").
+- Uma chamada por campo; repetir o mesmo valor não duplica.
+
+${lines.join('\n')}`);
+  }
   const lines = rules.map((r) => `- ${r.toolName} → "${r.kommoFieldName}"`);
   return xmlBlock('captura_dados', `- As tools abaixo gravam informações estruturadas no card do paciente no Kommo. Quando usar cada uma, o formato e as opções válidas estão na descrição da própria tool.
 - Chame em SILÊNCIO assim que detectar a informação — NÃO anuncie ("anotei seu...").
@@ -1591,7 +1601,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
   if (globalActionsBlock) blocks.push(globalActionsBlock);
   const actionsBlock = renderActions(actions);
   if (actionsBlock) blocks.push(actionsBlock);
-  const leadFieldsBlock = renderLeadFieldRules(leadFieldRules);
+  const leadFieldsBlock = renderLeadFieldRules(leadFieldRules, unit.slug);
   if (leadFieldsBlock) blocks.push(leadFieldsBlock);
   const templatesBlock = renderTemplates(templates);
   if (templatesBlock) blocks.push(templatesBlock);
@@ -1699,7 +1709,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   const actionsBlock = renderActions(actions);
   if (actionsBlock) blocks.push(actionsBlock);
 
-  const leadFieldsBlock = renderLeadFieldRules(leadFieldRules);
+  const leadFieldsBlock = renderLeadFieldRules(leadFieldRules, unit.slug);
   if (leadFieldsBlock) blocks.push(leadFieldsBlock);
 
   const templatesBlock = renderTemplates(templates);
@@ -1807,7 +1817,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (globalActionsBlock) cache.push(globalActionsBlock);
   const actionsBlock = renderActions(actions);
   if (actionsBlock) cache.push(actionsBlock);
-  const leadFieldsBlock = renderLeadFieldRules(leadFieldRules);
+  const leadFieldsBlock = renderLeadFieldRules(leadFieldRules, unit.slug);
   if (leadFieldsBlock) cache.push(leadFieldsBlock);
   const templatesBlock = renderTemplates(templates);
   if (templatesBlock) cache.push(templatesBlock);
