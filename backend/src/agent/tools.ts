@@ -13,6 +13,7 @@ import { logger } from '../lib/logger.js';
 import { looksLikeName } from './name-capture.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captura-unificada.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
 const STATUS_GANHO = 142;
@@ -1013,7 +1014,11 @@ export function buildTools({
       })
     : null;
 
-  const dynamicTools = leadFieldRules.map((rule) =>
+  // Captura unificada (env por unidade): uma `registrar_campo` no lugar de uma tool por regra — o prefixo cacheado
+  // perde ~11 mil tokens de schema e o modelo continua sabendo quando gravar cada campo (descrição da tool).
+  const dynamicTools = capturaUnificada(unit?.slug) && leadFieldRules.length > 0
+    ? [buildRegistrarCampoTool({ rules: leadFieldRules, kommo, recorder, tz: fusoDaUnidade(unit) })]
+    : leadFieldRules.map((rule) =>
     buildLeadFieldRuleTool({ rule, kommo, recorder, tz: fusoDaUnidade(unit) }),
   );
 
@@ -1104,6 +1109,92 @@ export function leadFieldRuleDescription(rule: LeadFieldRule): string {
   return `${rule.instruction.trim()} Salva em "${rule.kommoFieldName}".${titleHint}${examplesBlock}`;
 }
 
+/** Grava o valor no campo da regra (e no título, se a regra manda). Usado pela tool por regra e pela `registrar_campo`. */
+async function gravarCampoDaRegra({
+  rule,
+  kommo,
+  recorder,
+  tz,
+  leadId,
+  value,
+}: {
+  rule: LeadFieldRule;
+  kommo: KommoClient;
+  recorder: TraceRecorder;
+  tz: string;
+  leadId: number;
+  value: string | number | string[];
+}): Promise<string> {
+  const fieldType = rule.kommoFieldType as KommoFieldType;
+  const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
+  const t0 = performance.now();
+
+  await recorder.step({
+    kind: 'TOOL_CALL',
+    title: `Decisão: ${rule.toolName}(leadId=${leadId}) → "${rule.kommoFieldName}"`,
+    payload: { leadId, fieldId: rule.kommoFieldId, fieldName: rule.kommoFieldName, fieldType, value },
+  });
+
+  try {
+    await kommo.setLeadCustomFieldValue(
+      leadId,
+      rule.kommoFieldId,
+      fieldType,
+      value as string | number | string[],
+      enums,
+    );
+    const latency = Math.round(performance.now() - t0);
+    await recorder.step({
+      kind: 'KOMMO_ACTION',
+      title: `"${rule.kommoFieldName}" gravado no lead ${leadId}`,
+      payload: { leadId, fieldId: rule.kommoFieldId, fieldType, value },
+      latencyMs: latency,
+    });
+
+    let titleNote = '';
+    if (rule.updatesLeadTitle && typeof value === 'string' && value.trim()) {
+      try {
+    const { previous, desired, changed } = await kommo.updateLeadTitleWithDate(
+      leadId,
+      value.trim(),
+      tz,
+    );
+    await recorder.step({
+      kind: 'KOMMO_ACTION',
+      title: changed
+        ? `Título atualizado: "${previous}" → "${desired}"`
+        : `Título já estava como "${desired}" — no-op`,
+      payload: { leadId, previous, desired, changed, via: rule.toolName },
+    });
+    titleNote = changed
+      ? ` + título do card atualizado pra "${desired}"`
+      : ` (título já estava em "${desired}")`;
+      } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await recorder.step({
+      kind: 'ERROR',
+      title: `Falha ao atualizar título (campo principal gravou ok): ${msg}`,
+      payload: { leadId, via: rule.toolName, error: msg },
+    });
+    titleNote = ' (atenção: título do card NÃO atualizou — campo gravou)';
+      }
+    }
+
+    return `OK — "${rule.kommoFieldName}" gravado (${latency}ms)${titleNote}.`;
+  } catch (err) {
+    const latency = Math.round(performance.now() - t0);
+    const msg = err instanceof Error ? err.message : String(err);
+    await recorder.step({
+      kind: 'ERROR',
+      title: `Falha em ${rule.toolName}: ${msg}`,
+      payload: { leadId, fieldId: rule.kommoFieldId, fieldType, value, error: msg },
+      latencyMs: latency,
+    });
+    return `ERRO ao gravar "${rule.kommoFieldName}": ${msg}`;
+  }
+
+}
+
 function buildLeadFieldRuleTool({
   rule,
   kommo,
@@ -1116,80 +1207,53 @@ function buildLeadFieldRuleTool({
   tz: string;
 }) {
   const fieldType = rule.kommoFieldType as KommoFieldType;
-  const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
-
   return new DynamicStructuredTool({
     name: rule.toolName,
     description: leadFieldRuleDescription(rule),
     schema: leadFieldRuleSchema(rule),
     func: async (args: Record<string, unknown>) => {
       const leadId = Number(args.leadId);
-      const value = fieldType === 'multiselect' ? args.values : args.value;
-      const t0 = performance.now();
+      const value = (fieldType === 'multiselect' ? args.values : args.value) as string | number | string[];
+      return gravarCampoDaRegra({ rule, kommo, recorder, tz, leadId, value });
+    },
+  });
+}
 
-      await recorder.step({
-        kind: 'TOOL_CALL',
-        title: `Decisão: ${rule.toolName}(leadId=${leadId}) → "${rule.kommoFieldName}"`,
-        payload: { leadId, fieldId: rule.kommoFieldId, fieldName: rule.kommoFieldName, fieldType, value },
-      });
-
-      try {
-        await kommo.setLeadCustomFieldValue(
-          leadId,
-          rule.kommoFieldId,
-          fieldType,
-          value as string | number | string[],
-          enums,
-        );
-        const latency = Math.round(performance.now() - t0);
-        await recorder.step({
-          kind: 'KOMMO_ACTION',
-          title: `"${rule.kommoFieldName}" gravado no lead ${leadId}`,
-          payload: { leadId, fieldId: rule.kommoFieldId, fieldType, value },
-          latencyMs: latency,
-        });
-
-        let titleNote = '';
-        if (rule.updatesLeadTitle && typeof value === 'string' && value.trim()) {
-          try {
-            const { previous, desired, changed } = await kommo.updateLeadTitleWithDate(
-              leadId,
-              value.trim(),
-              tz,
-            );
-            await recorder.step({
-              kind: 'KOMMO_ACTION',
-              title: changed
-                ? `Título atualizado: "${previous}" → "${desired}"`
-                : `Título já estava como "${desired}" — no-op`,
-              payload: { leadId, previous, desired, changed, via: rule.toolName },
-            });
-            titleNote = changed
-              ? ` + título do card atualizado pra "${desired}"`
-              : ` (título já estava em "${desired}")`;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            await recorder.step({
-              kind: 'ERROR',
-              title: `Falha ao atualizar título (campo principal gravou ok): ${msg}`,
-              payload: { leadId, via: rule.toolName, error: msg },
-            });
-            titleNote = ' (atenção: título do card NÃO atualizou — campo gravou)';
-          }
-        }
-
-        return `OK — "${rule.kommoFieldName}" gravado (${latency}ms)${titleNote}.`;
-      } catch (err) {
-        const latency = Math.round(performance.now() - t0);
-        const msg = err instanceof Error ? err.message : String(err);
-        await recorder.step({
-          kind: 'ERROR',
-          title: `Falha em ${rule.toolName}: ${msg}`,
-          payload: { leadId, fieldId: rule.kommoFieldId, fieldType, value, error: msg },
-          latencyMs: latency,
-        });
-        return `ERRO ao gravar "${rule.kommoFieldName}": ${msg}`;
+/**
+ * Captura unificada: uma ferramenta pra todos os campos da unidade. O modelo escolhe `campo` (o nome que a regra
+ * já tinha) e manda `valor` como texto; a coerção pro tipo do Kommo e a validação das opções ficam aqui, e um
+ * valor inválido volta pro modelo com a lista certa em vez de gravar lixo.
+ */
+function buildRegistrarCampoTool({
+  rules,
+  kommo,
+  recorder,
+  tz,
+}: {
+  rules: LeadFieldRule[];
+  kommo: KommoClient;
+  recorder: TraceRecorder;
+  tz: string;
+}) {
+  const nomes = rules.map((r) => r.toolName) as [string, ...string[]];
+  const porNome = new Map(rules.map((r) => [r.toolName, r]));
+  return new DynamicStructuredTool({
+    name: 'registrar_campo',
+    description: descricaoRegistrarCampo(rules),
+    schema: z.object({
+      leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+      campo: z.enum(nomes).describe('Qual informação gravar (um dos campos listados na descrição).'),
+      valor: z.string().min(1).max(2000).describe('O valor, como texto, no formato indicado pro campo (opções, número, data AAAA-MM-DD; várias opções separadas por ";").'),
+    }),
+    func: async (args: Record<string, unknown>) => {
+      const rule = porNome.get(String(args.campo));
+      if (!rule) return `ERRO: campo "${String(args.campo)}" não existe. Campos válidos: ${nomes.join(', ')}.`;
+      const coercao = coergirValor(rule, args.valor);
+      if (!coercao.ok) {
+        await recorder.step({ kind: 'ERROR', title: `registrar_campo(${rule.toolName}) recusado: ${coercao.erro}`, payload: { campo: rule.toolName, valor: args.valor } });
+        return `ERRO: ${coercao.erro}. Chame de novo com um valor válido.`;
       }
+      return gravarCampoDaRegra({ rule, kommo, recorder, tz, leadId: Number(args.leadId), value: coercao.valor });
     },
   });
 }
