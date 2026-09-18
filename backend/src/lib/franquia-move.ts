@@ -95,12 +95,32 @@ function ehSessao(s: SpineSchedule): boolean {
   return !!c && !ehConsulta(s);
 }
 
+export const TRATAMENTO_EM_ANDAMENTO = 45;
+
 function finalizado(t: TratamentoParaEtapa): boolean {
   return t.idStatus === TRATAMENTO_FINALIZADO || /finaliz|conclu|alta/.test(n(t.statusName ?? ''));
 }
 
-function ativo(t: TratamentoParaEtapa): boolean {
-  return !finalizado(t) && !/cancel/.test(n(t.statusName ?? ''));
+function cancelado(t: TratamentoParaEtapa): boolean {
+  return /cancel/.test(n(t.statusName ?? ''));
+}
+
+/**
+ * 45 EM ANDAMENTO (ou nome equivalente). Um tratamento só PENDENTE (44, proposta sem pagamento)
+ * não segura a ALTA. Sem id nem nome (veio do /treatments/search cru) assume em andamento, que é
+ * o que aquela rota devolve.
+ */
+function emAndamento(t: TratamentoParaEtapa): boolean {
+  if (finalizado(t) || cancelado(t)) return false;
+  const nome = n(t.statusName ?? '');
+  if (t.idStatus === TRATAMENTO_EM_ANDAMENTO) return true;
+  if (nome) return /andamento|ativo/.test(nome);
+  return t.idStatus === null;
+}
+
+/** Tratamento "aberto" na franquia (pendente ou em andamento): é o que leva o cartão pra GANHO. */
+function aberto(t: TratamentoParaEtapa): boolean {
+  return !finalizado(t) && !cancelado(t);
 }
 
 /** Puro: dado o cartão e o que a franquia sabe, pra onde o cartão vai (ou null = fica). */
@@ -116,16 +136,17 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const consultas = e.agendamentos.filter((s) => ehConsulta(s) && epoch(s) !== null);
   const sessoes = e.agendamentos.filter((s) => ehSessao(s) && epoch(s) !== null);
   const temFinalizado = e.tratamentos.some(finalizado);
-  const temAtivo = e.tratamentos.some(ativo);
+  const temAberto = e.tratamentos.some(aberto);
+  const temEmAndamento = e.tratamentos.some(emAndamento);
 
-  // ── funil TRATAMENTO: só a alta ──
+  // ── funil TRATAMENTO: só a alta (um tratamento pendente não segura; um em andamento segura) ──
   if (atual.funil === 'TRATAMENTO') {
-    if (eh(status, ETAPA.EM_TRATAMENTO) && temFinalizado && !temAtivo) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+    if (eh(status, ETAPA.EM_TRATAMENTO) && temFinalizado && !temEmAndamento) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
     return null;
   }
 
   // ── tratamento existe: GANHO, e depois EM TRATAMENTO na 1ª sessão atendida ──
-  if (temAtivo || temFinalizado) {
+  if (temAberto || temFinalizado) {
     const sessaoAtendida = sessoes.some((s) => s.idStatus === SPINE_STATUS.ATENDIDO && (epoch(s) ?? Infinity) <= e.agoraEpoch);
     if (eh(status, ETAPA.GANHO)) {
       if (sessaoAtendida) return ir('TRATAMENTO', ETAPA.EM_TRATAMENTO, 'primeira sessão atendida');

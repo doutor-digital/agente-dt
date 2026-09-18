@@ -70,6 +70,11 @@ test('tratamento finalizado leva EM TRATAMENTO pra ALTA; com outro em andamento,
   assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [], [{ idStatus: 46 }], 'TRATAMENTO'))?.para, ETAPA.ALTA);
   assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [], [{ idStatus: 46 }, { idStatus: 45 }], 'TRATAMENTO')), null);
   assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [], [{ idStatus: 45 }], 'TRATAMENTO')), null);
+  // proposta pendente (44) não segura a alta; tratamento vindo do /treatments/search (sem id, nome EM ANDAMENTO) segura
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [], [{ idStatus: 46 }, { idStatus: 44 }], 'TRATAMENTO'))?.para, ETAPA.ALTA);
+  assert.equal(planejarMovimento({ ...entrada(ETAPA.EM_TRATAMENTO, [], [], 'TRATAMENTO'), tratamentos: [{ idStatus: 46 }, { idStatus: null, statusName: 'EM ANDAMENTO' }] }), null);
+  // pendente sozinho ainda leva pra GANHO (abriu tratamento), mas só a 1ª sessão atendida leva pra EM TRATAMENTO
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -100, idStatus: 42 })], [{ idStatus: 44 }]))?.para, ETAPA.GANHO);
 });
 
 test('intocáveis: PERDIDO, RETORNO PÓS, ALTA e TRATAMENTO CANCELADO nunca se movem', () => {

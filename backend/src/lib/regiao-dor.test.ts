@@ -26,6 +26,12 @@ test('cervical vence quando a queixa cita pescoço e coluna', () => {
   assert.equal(classificarRegiao('dor na coluna cervical que desce pro braço'), 'Cervical');
 });
 
+test('duas regiões da coluna na mesma queixa = ambíguo, a Sofia pergunta', () => {
+  assert.equal(classificarRegiao('hérnia lombar forte que irradia pra perna, e formigamento no braço'), null);
+  assert.equal(classificarRegiao('dor lombar e no joelho'), 'Lombar', 'articulação não gera conflito');
+  assert.equal(classificarRegiao('doc12 abc34'), null, 'código não vira vértebra cervical');
+});
+
 test('reconhece os campos pelo nome, com símbolo na frente', () => {
   assert.equal(ehCampoRegiao('⚕ Região da dor'), true);
   assert.equal(ehCampoRegiao('Regiao da dor'), true);

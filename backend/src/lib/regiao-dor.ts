@@ -25,18 +25,24 @@ export function normalizarTexto(s: string | null | undefined): string {
 }
 
 const REGRAS: Array<[Regiao, RegExp]> = [
-  ['Cervical', /cervic|pescoc|nuca|torcicol|braco\w* (formig|dormen|adormec)|formig\w* (no|nos) braco|c[1-7]-?c?[1-7]\b/],
+  ['Cervical', /cervic|pescoc|nuca|torcicol|braco\w* (formig|dormen|adormec)|formig\w* (no|nos) braco|\bc[1-7]-?c?[1-7]\b/],
   ['Lombar', /lombar|lombalg|coluna (baixa|lombar)|parte (de )?baixo das costas|ciatic|nervo ciatico|perna\w* (formig|dormen|adormec)|formig\w* (na|nas) perna|hernia (de disco )?l[1-5]|\bl[1-5]-?[sl][1-5]\b|quadril|bacia|gluteo|bumbum|coccix/],
   ['Torácica', /torac|dorsal|meio das costas|entre as escapul|costas e (o )?peito/],
   ['Outra', /\bombro|joelho|cotovelo|punho|tornozelo|calcanhar|\bpe\b|\bmao\b/],
 ];
 
-/** Deduz a região a partir da queixa. `null` = a queixa não diz (só "coluna", "costas", ou nada). */
+/**
+ * Deduz a região a partir da queixa. `null` = a queixa não diz (só "coluna", "costas", ou nada)
+ * OU cita mais de uma região da coluna — aí quem decide é a Sofia perguntando, não o regex.
+ * ("Outra" não conta como conflito: joelho + lombar é lombar.)
+ */
 export function classificarRegiao(queixa: string | null | undefined): Regiao | null {
   const q = normalizarTexto(queixa).trim();
   if (!q) return null;
-  for (const [regiao, re] of REGRAS) if (re.test(q)) return regiao;
-  return null;
+  const casam = REGRAS.filter(([, re]) => re.test(q)).map(([r]) => r);
+  const coluna = casam.filter((r) => r !== 'Outra');
+  if (coluna.length > 1) return null;
+  return coluna[0] ?? casam[0] ?? null;
 }
 
 export function ehCampoRegiao(nomeCampo: string): boolean {

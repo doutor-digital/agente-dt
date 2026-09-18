@@ -1160,14 +1160,15 @@ export class KommoClient {
    * número do contato quando houver mais de um candidato.
    */
   /** Leads parados numa etapa (até `limite`, mais recentes primeiro). Usado pelo sincronizador pra regra das 48 h em COMPARECEU. */
-  async listLeadsPorEtapa(pipelineId: number, statusId: number, limite = 250): Promise<KommoLead[]> {
+  async listLeadsPorEtapa(pipelineId: number, statusId: number, limite = 250, page = 1): Promise<KommoLead[]> {
     try {
       const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
         params: {
           limit: Math.min(limite, 250),
+          page,
           'filter[statuses][0][pipeline_id]': pipelineId,
           'filter[statuses][0][status_id]': statusId,
-          'order[updated_at]': 'desc',
+          'order[id]': 'asc',
         },
       });
       return data?._embedded?.leads ?? [];
