@@ -16,6 +16,8 @@ import { fusoDaUnidade } from '../lib/fuso.js';
 import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captura-unificada.js';
 import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
 import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
+import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
+import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
 const STATUS_GANHO = 142;
@@ -1165,6 +1167,18 @@ async function gravarCampoDaRegra({
     if (unit && ehRegraDeQualificacao(rule.kommoFieldName)) {
       void gravarCampoDigital(unit, kommo, leadId, CAMPOS_DIGITAL.DATA_QUALIFICACAO, 'date', new Date().toISOString()).catch((err) =>
         logger.warn({ err: String(err), leadId }, 'captura: falha ao carimbar data da qualificação'),
+      );
+    }
+
+    // Região da dor (pedido da chefe da DH, 18/09/2026): etiqueta lombar/cervical pra disparo; e,
+    // quando a IA grava a Queixa sem ter gravado a região, deduz pela palavra-chave.
+    if (ehCampoRegiao(rule.kommoFieldName)) {
+      void espelharEtiquetaRegiao(kommo, leadId, value).catch((err) =>
+        logger.warn({ err: String(err), leadId }, 'captura: falha ao espelhar etiqueta da região'),
+      );
+    } else if (unit && ehCampoQueixa(rule.kommoFieldName) && typeof value === 'string') {
+      void deduzirRegiaoDaQueixa(unit, kommo, leadId, value).catch((err) =>
+        logger.warn({ err: String(err), leadId }, 'captura: falha ao deduzir região da queixa'),
       );
     }
 
