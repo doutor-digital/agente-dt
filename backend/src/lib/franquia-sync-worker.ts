@@ -1,23 +1,25 @@
 /**
- * Sincronizador franquia → Kommo (fase 1: só campos).
+ * Sincronizador franquia → Kommo.
  *
  * A cada 15 min, por unidade com token da franquia e slug liberado em
  * `FRANQUIA_SYNC_SLUGS` (lista separada por vírgula; `*` = todas; vazio = desligado):
  *   1. lê os agendamentos de D-3 a D+45 e os tratamentos em andamento;
  *   2. casa cada paciente com um lead do Kommo — primeiro pelo vínculo que a
  *      Sofia já gravou (spine_lead_links), senão pelo telefone do paciente;
- *   3. decide o que escrever com `planejarEscritas` (puro) e grava campo a campo.
+ *   3. fase 1: decide o que escrever com `planejarEscritas` (puro) e grava campo a campo;
+ *   4. fase 2 (só em `FRANQUIA_MOVE_SLUGS`): decide com `planejarMovimento` (puro) e MOVE a
+ *      etapa do cartão — mover dispara bots e o Purchase do n8n, por isso é por unidade.
  *
- * Nunca move etapa (mover dispara bot). Nunca sobrescreve texto livre da SDR:
- * só os campos listados em CAMPOS_SYNC. O que a franquia não sabe, fica como está.
+ * Nunca sobrescreve texto livre da SDR: só os campos listados em CAMPOS_SYNC.
+ * O que a franquia não sabe, fica como está.
  */
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
-import { SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { CAMPOS_SYNC, chaveTelefone, escolherConsulta, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, ehEtapaDeEntrada, horasAteNegociacao, moveLiberado, planejarMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
+import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
+import { ETAPA, TRATAMENTO_FINALIZADO, horasAteNegociacao, moveLiberado, planejarMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 
 const SWEEP_MS = 15 * 60_000;
@@ -245,20 +247,58 @@ async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, le
  * N horas e sem tratamento espelhado vai pra EM NEGOCIAÇÃO. Usa só o que a fase 1 já gravou no
  * cartão, então cobre também quem foi atendido antes da janela da agenda (D-3).
  */
+/** idClient do paciente na franquia: pelo vínculo que a Sofia gravou, senão pelo nome (só se for único). */
+async function idClientDoLead(unit: Unit, leadId: number, nome: string | null): Promise<number | null> {
+  const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
+  if (link?.spineIdClient) return link.spineIdClient;
+  if (!nome) return null;
+  const r = await SpineService.searchClients(unit, nome);
+  if (!r.ok || !r.data) return null;
+  const alvo = normalizar(nome);
+  const exatos = r.data.clients.filter((c) => normalizar(c.name) === alvo && c.idClient);
+  return exatos.length === 1 ? exatos[0].idClient : null;
+}
+
+/** O paciente tem consulta (avaliação/retorno) marcada pra frente? Quem tem retorno marcado não vai pra EM NEGOCIAÇÃO (decisão do João, 18/09). */
+function temConsultaFutura(schedules: SpineSchedule[], agoraEpoch: number): boolean {
+  return schedules.some((s) => {
+    if (!s.dateAttendanceUtc || !ehConsulta(s)) return false;
+    const t = Math.floor(Date.parse(s.dateAttendanceUtc) / 1000);
+    return Number.isFinite(t) && t > agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO);
+  });
+}
+
+/**
+ * Regra das 48 h vista pelo Kommo: quem está em COMPARECEU com a consulta atendida há mais de
+ * N horas e sem tratamento espelhado vai pra EM NEGOCIAÇÃO. Usa o que a fase 1 já gravou no
+ * cartão (cobre quem foi atendido antes da janela D-3) e, quando conhece o paciente na franquia,
+ * confere o histórico: retorno futuro marcado segura o cartão, mesmo além dos 45 dias da agenda.
+ */
 async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, mapa: MapaCampos, resumo: ResumoSync): Promise<void> {
   const compareceu = funis.idDe('COMERCIAL', ETAPA.COMPARECEU);
   if (!compareceu) return;
   const horas = horasAteNegociacao();
   const agora = Math.floor(Date.now() / 1000);
-  const leads = await kommo.listLeadsPorEtapa(compareceu.pipelineId, compareceu.statusId);
-  for (const lead of leads) {
-    const v = valoresDoLead(lead, mapa);
-    const dataConsulta = Number(v[CAMPOS_SYNC.DATA_CONSULTA] ?? NaN);
-    const situacao = normalizar(v[CAMPOS_SYNC.SITUACAO]);
-    const fechou = normalizar(v[CAMPOS_SYNC.FECHOU_TRAT]) === 'sim' || !!v[CAMPOS_SYNC.TRAT_FECHADO];
-    if (!Number.isFinite(dataConsulta) || situacao !== 'atendido' || fechou) continue;
-    if ((agora - dataConsulta) / 3600 < horas) continue;
-    await aplicarMovimento(unit, kommo, funis, lead.id, { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: `atendido há ${Math.floor((agora - dataConsulta) / 3600)} h sem tratamento (pelo cartão)` }, resumo);
+  for (let page = 1; page <= 20; page++) {
+    const leads = await kommo.listLeadsPorEtapa(compareceu.pipelineId, compareceu.statusId, 250, page);
+    if (leads.length === 0) break;
+    for (const lead of leads) {
+      const v = valoresDoLead(lead, mapa);
+      const dataConsulta = Number(v[CAMPOS_SYNC.DATA_CONSULTA] ?? NaN);
+      const situacao = normalizar(v[CAMPOS_SYNC.SITUACAO]);
+      const fechou = normalizar(v[CAMPOS_SYNC.FECHOU_TRAT]) === 'sim' || !!v[CAMPOS_SYNC.TRAT_FECHADO];
+      if (!Number.isFinite(dataConsulta) || situacao !== 'atendido' || fechou) continue;
+      if ((agora - dataConsulta) / 3600 < horas) continue;
+      try {
+        const idClient = await idClientDoLead(unit, lead.id, lead.name ?? null);
+        const hist = await historicoDoPaciente(unit, idClient);
+        if (hist && (temConsultaFutura(hist.schedules, agora) || hist.treatments.some((t) => t.idStatus !== null && t.idStatus !== TRATAMENTO_FINALIZADO))) continue;
+      } catch (err) {
+        logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-move: não consegui conferir a franquia antes das 48 h — seguindo pelo cartão');
+      }
+      await aplicarMovimento(unit, kommo, funis, lead.id, { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: `atendido há ${Math.floor((agora - dataConsulta) / 3600)} h sem tratamento (pelo cartão)` }, resumo);
+    }
+    if (leads.length < 250) break;
   }
 }
 
@@ -353,7 +393,10 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
           // GANHO e EM TRATAMENTO dependem do histórico inteiro (sessão antiga, tratamento de outro mês)
           const precisaHistorico = normalizarNome(atual.status) === normalizarNome(ETAPA.GANHO) || atual.funil === 'TRATAMENTO';
           if (precisaHistorico) {
-            const hist = await historicoDoPaciente(unit, p.idClient);
+            // a agenda não traz idClient e o /treatments/search só lista tratamento em andamento:
+            // quem finalizou some da lista — sem isto a ALTA nunca dispararia
+            const idClient = p.idClient ?? (await idClientDoLead(unit, leadId, p.nome));
+            const hist = await historicoDoPaciente(unit, idClient);
             if (hist) {
               const ids = new Set(agendamentos.map((s) => s.idSchedule));
               agendamentos = [...agendamentos, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))];
@@ -361,9 +404,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
             }
           }
           const mov = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() });
-          if (mov && !(ehEtapaDeEntrada(atual.status) && normalizarNome(mov.para) === normalizarNome(atual.status))) {
-            await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo);
-          }
+          if (mov) await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo);
         }
       }
     } catch (err) {
