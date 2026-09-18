@@ -295,7 +295,15 @@ export async function updateUnitHandler(req: Request, res: Response): Promise<vo
   const id = String(req.params.id ?? '');
   const parsed = updateSchemaValidado.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'invalid_input', issues: parsed.error.flatten() });
+    // O painel mostra "400" e mais nada, e o motivo só existia no corpo da
+    // resposta — que ninguém vê. Isso já custou meia hora de adivinhação em
+    // 18/09/2026 com Mossoró. O que barrou vai pro log, com nome do campo.
+    const issues = parsed.error.flatten();
+    logger.warn(
+      { id, fieldErrors: issues.fieldErrors, formErrors: issues.formErrors },
+      'unit PATCH recusado na validação',
+    );
+    res.status(400).json({ error: 'invalid_input', issues });
     return;
   }
   try {
