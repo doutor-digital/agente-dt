@@ -60,6 +60,8 @@ interface Contexto {
 
 const NOME_AGENDOU = '✓ Agendou';
 const NOME_DATA_AGENDAMENTO = '◷ Agendado pela SDR em';
+/** Bloco DIGITAL: quem marcou. A IA carimba "IA"; o sincronizador da franquia carimba "Humano" quando a SDR marcou. */
+const NOME_FEITO_POR = '⬢ Agendamento feito por';
 const NOME_DATA_CONSULTA = '◷ Data da Consulta';
 const NOME_RESPONSAVEL = '☻ Responsável agendamento';
 const RESPONSAVEL_IA = 'I.A Sofia';
@@ -1212,6 +1214,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           const carimbos: Array<{ campo: string; id: number | null; fn: (id: number) => Promise<void> }> = [
             { campo: NOME_AGENDOU, id: idDe(NOME_AGENDOU), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', 'Sim') },
             { campo: NOME_DATA_AGENDAMENTO, id: idDe(NOME_DATA_AGENDAMENTO), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'date', agendadoEm) },
+            { campo: NOME_FEITO_POR, id: idDe(NOME_FEITO_POR), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', 'IA') },
             { campo: NOME_DATA_CONSULTA, id: idDe(NOME_DATA_CONSULTA), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'date', consultaEm) },
             { campo: NOME_RESPONSAVEL, id: idDe(NOME_RESPONSAVEL), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', RESPONSAVEL_IA) },
             { campo: NOME_SITUACAO_CONSULTA, id: idDe(NOME_SITUACAO_CONSULTA), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', 'Agendado') },

@@ -9,6 +9,12 @@ export interface EsquemaKommo {
   camposPorNome: (nome: string) => number[];
   pipelinePorNome: (nome: string) => number | null;
   statusPorNome: (pipeline: string, status: string) => number | null;
+  /**
+   * Caminho inverso, pro webhook de mudança de etapa: (pipeline_id, status_id) → nomes.
+   * Precisa dos dois porque 142/143 (ganho/perdido) são os mesmos ids em todo funil
+   * e só o nome muda ("GANHO / CONCLUÍDO" no COMERCIAL, "ALTA" no TRATAMENTO).
+   */
+  nomeDoStatus: (pipelineId: number, statusId: number) => { pipeline: string; status: string } | null;
 }
 
 export function normalizarNome(s: string): string {
@@ -29,9 +35,13 @@ export function montarEsquema(
     porNome.set(k, [...(porNome.get(k) ?? []), c.id]);
   }
   const pipes = new Map<string, { id: number; statuses: Map<string, number> }>();
+  const nomes = new Map<string, { pipeline: string; status: string }>();
   for (const p of pipelines) {
     const sts = new Map<string, number>();
-    for (const s of p.statuses ?? []) sts.set(normalizarNome(s.name), s.id);
+    for (const s of p.statuses ?? []) {
+      sts.set(normalizarNome(s.name), s.id);
+      nomes.set(`${p.id}:${s.id}`, { pipeline: p.name, status: s.name });
+    }
     pipes.set(normalizarNome(p.name), { id: p.id, statuses: sts });
   }
 
@@ -42,6 +52,7 @@ export function montarEsquema(
     pipelinePorNome: (nome) => pipes.get(normalizarNome(nome))?.id ?? null,
     statusPorNome: (pipeline, status) =>
       pipes.get(normalizarNome(pipeline))?.statuses.get(normalizarNome(status)) ?? null,
+    nomeDoStatus: (pipelineId, statusId) => nomes.get(`${pipelineId}:${statusId}`) ?? null,
   };
 }
 

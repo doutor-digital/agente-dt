@@ -14,6 +14,8 @@ import { looksLikeName } from './name-capture.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captura-unificada.js';
+import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
+import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
 const STATUS_GANHO = 142;
@@ -400,14 +402,15 @@ export function buildTools({
             if (idData !== null) {
               await kommo.setLeadCustomFieldValue(leadId, idData, 'date', new Date().toISOString());
             }
-            if (idHumano !== null) {
-              await kommo.setLeadCustomFieldValue(leadId, idHumano, 'select', 'Sim');
-            }
+            // Bloco DIGITAL: assumido por humano = Sim, status = Respondendo e, quando o
+            // motivo livre da IA casa com uma opção, "⬢ Motivo do handoff".
+            const motivoOpcao = classificarMotivoHandoff(motivo);
+            await carimbarHumanoAssumiu(unit, kommo, leadId, motivoOpcao);
             if (idData !== null || idHumano !== null) {
               await recorder.step({
                 kind: 'KOMMO_ACTION',
-                title: `Handoff carimbado (data + assumido por humano) no lead ${leadId}`,
-                payload: { leadId, campoData: idData, campoHumano: idHumano },
+                title: `Handoff carimbado (data + assumido por humano${motivoOpcao ? ` + motivo "${motivoOpcao}"` : ''}) no lead ${leadId}`,
+                payload: { leadId, campoData: idData, campoHumano: idHumano, motivoOpcao },
               });
             }
           } catch (e) {
@@ -1017,9 +1020,9 @@ export function buildTools({
   // Captura unificada (env por unidade): uma `registrar_campo` no lugar de uma tool por regra — o prefixo cacheado
   // perde ~11 mil tokens de schema e o modelo continua sabendo quando gravar cada campo (descrição da tool).
   const dynamicTools = capturaUnificada(unit?.slug) && leadFieldRules.length > 0
-    ? [buildRegistrarCampoTool({ rules: leadFieldRules, kommo, recorder, tz: fusoDaUnidade(unit) })]
+    ? [buildRegistrarCampoTool({ rules: leadFieldRules, kommo, recorder, tz: fusoDaUnidade(unit), unit })]
     : leadFieldRules.map((rule) =>
-    buildLeadFieldRuleTool({ rule, kommo, recorder, tz: fusoDaUnidade(unit) }),
+    buildLeadFieldRuleTool({ rule, kommo, recorder, tz: fusoDaUnidade(unit), unit }),
   );
 
   const nativeTools: DynamicStructuredTool[] = [
@@ -1110,6 +1113,11 @@ export function leadFieldRuleDescription(rule: LeadFieldRule): string {
 }
 
 /** Grava o valor no campo da regra (e no título, se a regra manda). Usado pela tool por regra e pela `registrar_campo`. */
+/** A regra que grava a temperatura do lead (Quente/Morno/Frio) — não a data nem o resultado. */
+export function ehRegraDeQualificacao(nomeCampo: string): boolean {
+  return /qualifica/i.test(nomeCampo) && !/data|resultado|motivo/i.test(nomeCampo);
+}
+
 async function gravarCampoDaRegra({
   rule,
   kommo,
@@ -1117,6 +1125,7 @@ async function gravarCampoDaRegra({
   tz,
   leadId,
   value,
+  unit,
 }: {
   rule: LeadFieldRule;
   kommo: KommoClient;
@@ -1124,6 +1133,7 @@ async function gravarCampoDaRegra({
   tz: string;
   leadId: number;
   value: string | number | string[];
+  unit?: Unit;
 }): Promise<string> {
   const fieldType = rule.kommoFieldType as KommoFieldType;
   const enums = (rule.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [];
@@ -1150,6 +1160,13 @@ async function gravarCampoDaRegra({
       payload: { leadId, fieldId: rule.kommoFieldId, fieldType, value },
       latencyMs: latency,
     });
+
+    // Bloco DIGITAL: a hora em que a IA qualificou. Fora do caminho da resposta.
+    if (unit && ehRegraDeQualificacao(rule.kommoFieldName)) {
+      void gravarCampoDigital(unit, kommo, leadId, CAMPOS_DIGITAL.DATA_QUALIFICACAO, 'date', new Date().toISOString()).catch((err) =>
+        logger.warn({ err: String(err), leadId }, 'captura: falha ao carimbar data da qualificação'),
+      );
+    }
 
     let titleNote = '';
     if (rule.updatesLeadTitle && typeof value === 'string' && value.trim()) {
@@ -1200,11 +1217,13 @@ function buildLeadFieldRuleTool({
   kommo,
   recorder,
   tz,
+  unit,
 }: {
   rule: LeadFieldRule;
   kommo: KommoClient;
   recorder: TraceRecorder;
   tz: string;
+  unit?: Unit;
 }) {
   const fieldType = rule.kommoFieldType as KommoFieldType;
   return new DynamicStructuredTool({
@@ -1214,7 +1233,7 @@ function buildLeadFieldRuleTool({
     func: async (args: Record<string, unknown>) => {
       const leadId = Number(args.leadId);
       const value = (fieldType === 'multiselect' ? args.values : args.value) as string | number | string[];
-      return gravarCampoDaRegra({ rule, kommo, recorder, tz, leadId, value });
+      return gravarCampoDaRegra({ rule, kommo, recorder, tz, leadId, value, unit });
     },
   });
 }
@@ -1229,11 +1248,13 @@ function buildRegistrarCampoTool({
   kommo,
   recorder,
   tz,
+  unit,
 }: {
   rules: LeadFieldRule[];
   kommo: KommoClient;
   recorder: TraceRecorder;
   tz: string;
+  unit?: Unit;
 }) {
   const nomes = rules.map((r) => r.toolName) as [string, ...string[]];
   const porNome = new Map(rules.map((r) => [r.toolName, r]));
@@ -1253,7 +1274,7 @@ function buildRegistrarCampoTool({
         await recorder.step({ kind: 'ERROR', title: `registrar_campo(${rule.toolName}) recusado: ${coercao.erro}`, payload: { campo: rule.toolName, valor: args.valor } });
         return `ERRO: ${coercao.erro}. Chame de novo com um valor válido.`;
       }
-      return gravarCampoDaRegra({ rule, kommo, recorder, tz, leadId: Number(args.leadId), value: coercao.valor });
+      return gravarCampoDaRegra({ rule, kommo, recorder, tz, leadId: Number(args.leadId), value: coercao.valor, unit });
     },
   });
 }
