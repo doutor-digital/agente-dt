@@ -6,6 +6,7 @@ import { emPausa } from './pausa-unidade.js';
 import { ehIntocavel } from './follow-up-presets.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
 import { carimbarContato } from '../services/lead-memory.service.js';
+import { carimbarSemResposta } from '../services/lead-metrics.service.js';
 
 const SWEEP_MS = 60_000;
 
@@ -498,6 +499,8 @@ async function enviarDegrau(
 
     if (indice + 1 >= totalDegraus) {
       carimbarContato(unit.id, leadId, { desfecho: 'sumiu' });
+      // Bloco DIGITAL: escada inteira sem o paciente voltar → "⬢ Status da conversa" = Sem resposta.
+      void carimbarSemResposta(unitCompleta, leadId);
     }
 
     logger.info(
