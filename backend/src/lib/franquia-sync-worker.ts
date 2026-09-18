@@ -17,6 +17,8 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, escolherConsulta, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
+import { ETAPA, ehEtapaDeEntrada, horasAteNegociacao, moveLiberado, planejarMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import { normalizarNome } from './kommo-schema.js';
 
 const SWEEP_MS = 15 * 60_000;
 const PRIMEIRA_MS = 90_000;
@@ -41,6 +43,8 @@ export interface ResumoSync {
   escritas: number;
   erros: number;
   exemplosSemLead: string[];
+  /** fase 2: cartões movidos de etapa nesta varredura (0 quando a unidade não está em FRANQUIA_MOVE_SLUGS) */
+  movimentos: number;
 }
 const ultimoResumo = new Map<string, ResumoSync>();
 export function resumoDoSync(): ResumoSync[] {
@@ -160,8 +164,106 @@ function opcoes(mapa: MapaCampos) {
   return { fisio: vals('FISIO'), categoria: vals('CATEGORIA'), tratamento: vals('TRAT_FECHADO') };
 }
 
+// ── fase 2: mover etapa ──
+
+/** Funis e etapas da conta, pelo NOME: o principal é o COMERCIAL; o outro tem que se chamar TRATAMENTO. */
+interface Funis {
+  comercialId: number;
+  tratamentoId: number | null;
+  status: Map<string, { id: number; nome: string }>; // chave `${funil}:${nomeNormalizado}`
+  nomeDe: (pipelineId: number, statusId: number) => EtapaAtual | null;
+  idDe: (funil: Funil, etapa: string) => { pipelineId: number; statusId: number } | null;
+}
+
+async function carregarFunis(kommo: KommoClient): Promise<Funis | null> {
+  const pipes = await kommo.listPipelines();
+  const comercial = pipes.find((p) => p.is_main) ?? pipes.find((p) => normalizarNome(p.name) === normalizarNome('COMERCIAL'));
+  if (!comercial) return null;
+  const tratamento = pipes.find((p) => normalizarNome(p.name) === normalizarNome('TRATAMENTO')) ?? null;
+  const status = new Map<string, { id: number; nome: string }>();
+  const inverso = new Map<string, EtapaAtual>();
+  const registrar = (funil: Funil, p: { id: number; statuses?: Array<{ id: number; name: string }> }) => {
+    for (const s of p.statuses ?? []) {
+      status.set(`${funil}:${normalizarNome(s.name)}`, { id: s.id, nome: s.name });
+      inverso.set(`${p.id}:${s.id}`, { funil, status: s.name });
+    }
+  };
+  registrar('COMERCIAL', comercial);
+  if (tratamento) registrar('TRATAMENTO', tratamento);
+  return {
+    comercialId: comercial.id,
+    tratamentoId: tratamento?.id ?? null,
+    status,
+    nomeDe: (pipelineId, statusId) => inverso.get(`${pipelineId}:${statusId}`) ?? null,
+    idDe: (funil, etapa) => {
+      const s = status.get(`${funil}:${normalizarNome(etapa)}`);
+      const pipelineId = funil === 'COMERCIAL' ? comercial.id : tratamento?.id;
+      return s && pipelineId ? { pipelineId, statusId: s.id } : null;
+    },
+  };
+}
+
+const cacheDetalhe = new Map<string, { treatments: TratamentoParaEtapa[]; schedules: SpineSchedule[]; expiraEm: number }>();
+const CACHE_DETALHE_MS = 60 * 60_000;
+
+/**
+ * O `/treatments/search` só devolve o mês corrente e a agenda só D-3…D+45. Pra decidir
+ * GANHO → EM TRATAMENTO e EM TRATAMENTO → ALTA precisamos do histórico do paciente,
+ * que só o detalhe (`GET /clients/{id}`) traz. Uma chamada por paciente por hora.
+ */
+async function historicoDoPaciente(unit: Unit, idClient: number | null): Promise<{ treatments: TratamentoParaEtapa[]; schedules: SpineSchedule[] } | null> {
+  if (!idClient) return null;
+  const k = `${unit.id}:${idClient}`;
+  const hit = cacheDetalhe.get(k);
+  if (hit && hit.expiraEm > Date.now()) return hit;
+  const r = await SpineService.getClient(unit, idClient);
+  if (!r.ok || !r.data?.client) return null;
+  const out = { treatments: r.data.client.treatments, schedules: r.data.client.schedules, expiraEm: Date.now() + CACHE_DETALHE_MS };
+  cacheDetalhe.set(k, out);
+  return out;
+}
+
+async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync): Promise<void> {
+  const alvo = funis.idDe(mov.funil, mov.para);
+  if (!alvo) {
+    logger.warn({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil }, 'franquia-move: etapa não existe nesta conta — não movi');
+    return;
+  }
+  try {
+    await kommo.moveStage({ leadId, statusId: alvo.statusId, pipelineId: alvo.pipelineId });
+    resumo.movimentos++;
+    logger.info({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil, motivo: mov.motivo }, 'franquia-move: cartão movido');
+  } catch (err) {
+    resumo.erros++;
+    logger.warn({ err, unit: unit.slug, leadId, para: mov.para }, 'franquia-move: falha ao mover');
+  }
+  await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
+}
+
+/**
+ * Regra das 48 h vista pelo Kommo: quem está em COMPARECEU com a consulta atendida há mais de
+ * N horas e sem tratamento espelhado vai pra EM NEGOCIAÇÃO. Usa só o que a fase 1 já gravou no
+ * cartão, então cobre também quem foi atendido antes da janela da agenda (D-3).
+ */
+async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, mapa: MapaCampos, resumo: ResumoSync): Promise<void> {
+  const compareceu = funis.idDe('COMERCIAL', ETAPA.COMPARECEU);
+  if (!compareceu) return;
+  const horas = horasAteNegociacao();
+  const agora = Math.floor(Date.now() / 1000);
+  const leads = await kommo.listLeadsPorEtapa(compareceu.pipelineId, compareceu.statusId);
+  for (const lead of leads) {
+    const v = valoresDoLead(lead, mapa);
+    const dataConsulta = Number(v[CAMPOS_SYNC.DATA_CONSULTA] ?? NaN);
+    const situacao = normalizar(v[CAMPOS_SYNC.SITUACAO]);
+    const fechou = normalizar(v[CAMPOS_SYNC.FECHOU_TRAT]) === 'sim' || !!v[CAMPOS_SYNC.TRAT_FECHADO];
+    if (!Number.isFinite(dataConsulta) || situacao !== 'atendido' || fechou) continue;
+    if ((agora - dataConsulta) / 3600 < horas) continue;
+    await aplicarMovimento(unit, kommo, funis, lead.id, { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: `atendido há ${Math.floor((agora - dataConsulta) / 3600)} h sem tratamento (pelo cartão)` }, resumo);
+  }
+}
+
 async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
-  const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [] };
+  const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0 };
   const kommo = createKommoClient(unit);
   const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: CampoBruto[] } } | undefined;
   const mapa = mapearCampos(bruto?._embedded?.custom_fields ?? []);
@@ -169,6 +271,9 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
     logger.warn({ unit: unit.slug }, 'franquia-sync: conta sem os campos de consulta — pulando');
     return resumo;
   }
+  const mover = moveLiberado(unit.slug);
+  const funis = mover ? await carregarFunis(kommo) : null;
+  if (mover && !funis) logger.warn({ unit: unit.slug }, 'franquia-move: conta sem funil principal — só campos');
   const tz = unit.spineTimezone || 'America/Sao_Paulo';
   const hoje = instanteNoFuso(new Date(), tz).slice(0, 10);
   const somar = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -237,9 +342,42 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
         }
         await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
       }
+
+      // fase 2: a franquia move o cartão
+      if (funis) {
+        const atual = funis.nomeDe(lead.pipeline_id, lead.status_id);
+        if (atual) {
+          let agendamentos: SpineSchedule[] = p.consultas;
+          // o /treatments/search não traz idStatus; o nome do status basta ("EM ANDAMENTO", "FINALIZADO")
+          let tratamentos: TratamentoParaEtapa[] = p.tratamento ? [{ idStatus: null, statusName: p.tratamento.statusName ?? null }] : [];
+          // GANHO e EM TRATAMENTO dependem do histórico inteiro (sessão antiga, tratamento de outro mês)
+          const precisaHistorico = normalizarNome(atual.status) === normalizarNome(ETAPA.GANHO) || atual.funil === 'TRATAMENTO';
+          if (precisaHistorico) {
+            const hist = await historicoDoPaciente(unit, p.idClient);
+            if (hist) {
+              const ids = new Set(agendamentos.map((s) => s.idSchedule));
+              agendamentos = [...agendamentos, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))];
+              if (hist.treatments.length > 0) tratamentos = hist.treatments;
+            }
+          }
+          const mov = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() });
+          if (mov && !(ehEtapaDeEntrada(atual.status) && normalizarNome(mov.para) === normalizarNome(atual.status))) {
+            await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo);
+          }
+        }
+      }
     } catch (err) {
       resumo.erros++;
       logger.warn({ err, unit: unit.slug, paciente: p.nome }, 'franquia-sync: falha no paciente');
+    }
+  }
+
+  if (funis) {
+    try {
+      await passarNegociacao(unit, kommo, funis, mapa, resumo);
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug }, 'franquia-move: falha na passagem das 48 h');
     }
   }
   return resumo;
