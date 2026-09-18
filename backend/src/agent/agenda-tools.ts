@@ -18,6 +18,7 @@ import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
 import {
+  agendamentoDeuCerto,
   desfechoDaRemarcacao,
   escolherAlvo,
   recadoDaRemarcacao,
@@ -828,11 +829,20 @@ async function consultaParaRemarcar(
   leadId: number | undefined,
   idClient: number,
 ): Promise<{ tipo: 'achei'; idSchedule: number; quando: string | null } | SemAlvo> {
+  // Só aceito o vínculo local quando a franquia CONFIRMOU que ele ainda existe.
+  // `nao_confirmada` quer dizer que não achei o agendamento lá — pode ter sido
+  // movido ou cancelado pela recepção. `cancelar_consulta` já se recusa a agir
+  // nesse estado; remarcar cancelava assim mesmo, por um id que talvez nem valha.
   const local = await consultaAtual(unit, leadId);
-  if (local) return { tipo: 'achei', idSchedule: local.idSchedule, quando: local.quando };
+  if (local?.confirmada) {
+    return { tipo: 'achei', idSchedule: local.idSchedule, quando: local.quando };
+  }
 
   const det = await SpineService.getClient(unit, idClient).catch(() => null);
-  const escolha = escolherAlvo(consultasFuturas(det?.data?.client?.schedules ?? [], new Date()));
+  // Franquia fora do ar é "não sei", nunca "não tem".
+  if (!det?.ok) return { tipo: 'nao_sei' };
+
+  const escolha = escolherAlvo(consultasFuturas(det.data?.client?.schedules ?? [], new Date()));
   if (escolha.tipo !== 'achei') return escolha;
 
   const c = escolha.consulta;
@@ -840,9 +850,9 @@ async function consultaParaRemarcar(
   return {
     tipo: 'achei',
     idSchedule: c.idSchedule as number,
-    quando: Number.isFinite(c.quandoMs)
-      ? SpineService.instanteNoFuso(new Date(c.quandoMs), tz)
-      : null,
+    // Cortado em 16: `instanteNoFuso` devolve segundos e `porExtenso` só quebra no
+    // "T" — sem isto o paciente lia "remarcada para 25/09 às 08:00:00".
+    quando: SpineService.instanteNoFuso(new Date(c.quandoMs), tz).slice(0, 16),
   };
 }
 
@@ -863,6 +873,23 @@ export function buildRemarcarConsulta(ctx: Contexto) {
     }),
     func: async (args: { leadId: number; idClient: number; data: string; hora: string }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
+
+      // O idClient é o que o MODELO escreveu. Aqui ele passou a mandar numa busca
+      // na franquia cujo resultado vai ser CANCELADO no passo 2 — se vier o
+      // cadastro de outra pessoa, a gente cancela a consulta dela. `agendar` já
+      // confere; esta porta abriu antes dela.
+      const dono = await conferirPacienteDoLead(fresca.id, args.leadId, args.idClient);
+      if (!dono.ok) {
+        await recorder.step({
+          kind: 'ERROR',
+          title: `🛡 remarcar_consulta tentou mexer no paciente ${args.idClient} — este lead é do ${dono.idClientCerto}`,
+          payload: { ...args, idClientCerto: dono.idClientCerto },
+        });
+        return (
+          `RECUSADO: o idClient ${args.idClient} não é o paciente desta conversa. ` +
+          `Use ${dono.idClientCerto}, que é o cadastro confirmado deste lead.`
+        );
+      }
 
       // Passo 0 — QUAL consulta. Antes disso não existia: sem vínculo local a
       // ferramenta seguia em frente e criava a segunda.
@@ -886,7 +913,7 @@ export function buildRemarcarConsulta(ctx: Contexto) {
         hora: args.hora,
         remarcando: true,
       });
-      if (!/marcada/i.test(nova)) {
+      if (!agendamentoDeuCerto(nova)) {
         return `A consulta antiga CONTINUA valendo — não consegui marcar a nova. ${nova}`;
       }
 
@@ -918,6 +945,7 @@ export function buildRemarcarConsulta(ctx: Contexto) {
         // para ela; o aviso vai para o João porque vaga presa some da vista de todo
         // mundo — ninguém procura um horário que o sistema diz estar ocupado.
         const texto = tarefaDaVagaPresa({
+          slug: fresca.slug,
           antigaPorExtenso,
           novaPorExtenso,
           idSchedule: desfecho.idSchedule,
@@ -927,7 +955,7 @@ export function buildRemarcarConsulta(ctx: Contexto) {
           ?.createTask({
             leadId: args.leadId,
             text: texto,
-            completeAt: Math.floor(Date.now() / 1000),
+            completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
           })
           .catch((err) =>
             logger.warn({ err, leadId: args.leadId }, 'remarcar: falha ao abrir tarefa da vaga presa'),
@@ -1423,7 +1451,11 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
               remarcando: args.remarcando,
             }),
             chaveDoAviso(fresca.slug, args.leadId, args.data, args.hora),
-            0,
+            // A chave já carrega lead + dia + hora, então remarcar para outro
+            // horário avisa de novo. O que esta janela cala é a REPETIÇÃO do
+            // mesmo agendamento — retry da tool, reprocessamento do webhook —
+            // que chegava duas vezes no WhatsApp do João com debounce 0.
+            6 * 60 * 60_000,
           );
         })().catch(() => undefined);
       }
