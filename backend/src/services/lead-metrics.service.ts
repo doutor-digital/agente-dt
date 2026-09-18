@@ -76,8 +76,12 @@ async function atualizarMetricasDeTurno(unit: Unit, leadId: number): Promise<voi
     gravarCampoDigital(unit, kommo, leadId, nome, tipo, valor);
 
   await grava(CAMPOS_DIGITAL.NUM_MENSAGENS, 'numeric', msgs.length);
-  // A IA acabou de responder: a bola está com o paciente.
-  await grava(CAMPOS_DIGITAL.STATUS_CONVERSA, 'select', 'Aguardando lead');
+  // A IA acabou de responder: a bola está com o paciente — a não ser que o cartão tenha sido
+  // fechado neste mesmo turno (fechar_lead → GANHO/PERDIDO), aí o "Encerrada" do carimbo de
+  // etapa vale e não pode ser sobrescrito.
+  const lead = await kommo.getLead(leadId).catch(() => null);
+  const fechado = lead ? lead.status_id === 142 || lead.status_id === 143 : false;
+  if (!fechado) await grava(CAMPOS_DIGITAL.STATUS_CONVERSA, 'select', 'Aguardando lead');
 
   const assistants = msgs.filter((m) => m.role === 'assistant');
   if (assistants.length === 1) {

@@ -34,6 +34,9 @@ export async function deduzirRegiaoDaQueixa(unit: Unit, kommo: KommoClient, lead
   const esquema = await esquemaDaUnidade(unit, kommo);
   const fieldId = esquema.campoPorNome(NOME_CAMPO_REGIAO);
   if (fieldId === null) return null;
+  // A IA costuma gravar Região e Queixa no mesmo lote de tools; espera a escrita explícita
+  // pousar antes de olhar o cartão, senão a dedução sobrescreve o que ela mesma decidiu.
+  await new Promise((r) => setTimeout(r, 4000));
   const lead = await kommo.getLead(leadId);
   if (valorAtual(lead, fieldId)) return null;
   await kommo.setLeadCustomFieldValue(leadId, fieldId, 'select', regiao);
