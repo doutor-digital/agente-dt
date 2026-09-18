@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ETAPA, ehEtapaDeEntrada, horasAteNegociacao, moveLiberado, planejarMovimento, type EntradaMovimento } from './franquia-move.js';
+import { ETAPA, ehEtapaDeEntrada, horasAteNegociacao, moveLiberado, planejarMovimento, tratamentoAberto, type EntradaMovimento } from './franquia-move.js';
 import type { SpineSchedule } from '../services/spine.service.js';
 
 const AGORA = Date.parse('2026-09-18T15:00:00Z') / 1000;
@@ -89,6 +89,15 @@ test('intocáveis: PERDIDO, RETORNO PÓS, ALTA e TRATAMENTO CANCELADO nunca se m
 test('sessão não é consulta: sessão futura não leva pra AGENDADO, sessão atendida não leva pra COMPARECEU', () => {
   assert.equal(planejarMovimento(entrada(ETAPA.QUALIFICACAO, [ag({ h: 30, idStatus: 37, categoria: 'SESSÃO' })])), null);
   assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -2, idStatus: 42, categoria: 'SESSÃO' })])), null);
+});
+
+test('tratamento cancelado não conta como aberto (nem segura a regra das 48 h)', () => {
+  assert.equal(tratamentoAberto({ idStatus: 47, statusName: 'CANCELADO' }), false);
+  assert.equal(tratamentoAberto({ idStatus: 46, statusName: 'FINALIZADO' }), false);
+  assert.equal(tratamentoAberto({ idStatus: 44, statusName: 'PENDENTE' }), true);
+  assert.equal(tratamentoAberto({ idStatus: 45, statusName: 'EM ANDAMENTO' }), true);
+  // só cancelado no histórico: quem foi atendido há 50 h vai pra EM NEGOCIAÇÃO
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -50, idStatus: 42 })], [{ idStatus: 47, statusName: 'CANCELADO' } as { idStatus: number }]))?.para, ETAPA.NEGOCIACAO);
 });
 
 test('flags e prazo', () => {

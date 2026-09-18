@@ -118,10 +118,11 @@ function emAndamento(t: TratamentoParaEtapa): boolean {
   return t.idStatus === null;
 }
 
-/** Tratamento "aberto" na franquia (pendente ou em andamento): é o que leva o cartão pra GANHO. */
-function aberto(t: TratamentoParaEtapa): boolean {
+/** Tratamento "aberto" na franquia (pendente ou em andamento): é o que leva o cartão pra GANHO. Cancelado e finalizado não contam. */
+export function tratamentoAberto(t: TratamentoParaEtapa): boolean {
   return !finalizado(t) && !cancelado(t);
 }
+const aberto = tratamentoAberto;
 
 /** Puro: dado o cartão e o que a franquia sabe, pra onde o cartão vai (ou null = fica). */
 export function planejarMovimento(e: EntradaMovimento): Movimento | null {
