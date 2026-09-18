@@ -25,6 +25,7 @@ import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
 import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
+import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
 
@@ -128,8 +129,10 @@ async function main(): Promise<void> {
       startVozSessaoWorker();
       startCacheKeepaliveWorker();
       startFranquiaSyncWorker();
+      iniciarVigiaDeQualidade();
     },
     parar: () => {
+      pararVigiaDeQualidade();
       stopFranquiaSyncWorker();
       stopCacheKeepaliveWorker();
       stopWhatsappCostScheduler();

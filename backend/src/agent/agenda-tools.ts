@@ -15,6 +15,8 @@ import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
 import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
+import { avisarJoao } from '../lib/alerta-whatsapp.js';
+import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
 
 const TZ_PADRAO = 'America/Sao_Paulo';
 
@@ -1303,6 +1305,32 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             data: { pagamentoEscolhido: args.formaPagamento },
           })
           .catch(() => undefined);
+      }
+
+      // Aviso no WhatsApp do João, nas unidades da lista. Nos primeiros dias de
+      // uma unidade nova, saber que ela marcou vale mais que o relatório das 20h.
+      // Falha aqui NUNCA derruba o agendamento: a consulta já está na franquia.
+      if (avisoLigadoPara(fresca.slug)) {
+        // Fire-and-forget: o nome vem de uma busca a mais na franquia, e o
+        // agendamento não pode esperar por um aviso. Se falhar, o paciente já
+        // está marcado do mesmo jeito — o aviso é conveniência, não parte do fluxo.
+        void (async () => {
+          const det = await SpineService.getClient(fresca, args.idClient).catch(() => null);
+          const nome = det?.data?.client?.name ?? null;
+          await avisarJoao(
+            textoDoAviso({
+              unidade: fresca.name,
+              paciente: nome,
+              dia: dataPorExtenso(args.data),
+              hora: args.hora,
+              especialista,
+              formaPagamento: args.formaPagamento,
+              remarcando: args.remarcando,
+            }),
+            chaveDoAviso(fresca.slug, args.leadId, args.data, args.hora),
+            0,
+          );
+        })().catch(() => undefined);
       }
 
       return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
