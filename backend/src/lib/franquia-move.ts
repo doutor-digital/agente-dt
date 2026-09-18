@@ -146,6 +146,10 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   if (atendidas.length > 0) {
     const ultimaAtendida = atendidas[0];
     if (eh(status, ETAPA.COMPARECEU)) {
+      // Decisão do João (18/09): com retorno marcado, o paciente já tem próximo passo — fica em
+      // COMPARECEU e as 48 h só contam depois do retorno. Cobrar "decidiu?" de quem vai voltar
+      // soaria como se a clínica não soubesse o que ela mesma agendou.
+      if (futurasMarcadas.length > 0) return null;
       const horas = (e.agoraEpoch - (epoch(ultimaAtendida) ?? e.agoraEpoch)) / 3600;
       if (horas >= e.horasAteNegociacao) return ir('COMERCIAL', ETAPA.NEGOCIACAO, `atendido há ${Math.floor(horas)} h sem tratamento`);
       return null;

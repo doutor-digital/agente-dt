@@ -37,6 +37,9 @@ test('avaliação atendida leva pra COMPARECEU; 48 h depois sem tratamento vai p
   assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -20, idStatus: 42 })])), null, 'ainda dentro das 48 h');
   const m = planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -50, idStatus: 42 })]));
   assert.equal(m?.para, ETAPA.NEGOCIACAO);
+  // retorno marcado: fica em COMPARECEU, as 48 h só contam depois do retorno
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -50, idStatus: 42 }), ag({ h: 70, idStatus: 37, categoria: 'RETORNO COM EXAMES' })])), null, 'retorno futuro segura');
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -100, idStatus: 42 }), ag({ h: -50, idStatus: 57, categoria: 'RETORNO' })]))?.para, ETAPA.NEGOCIACAO, 'retorno desmarcado não segura');
   assert.equal(planejarMovimento(entrada(ETAPA.NEGOCIACAO, [ag({ h: -100, idStatus: 42 })])), null, 'fica em negociação até fechar ou a SDR decidir');
 });
 
