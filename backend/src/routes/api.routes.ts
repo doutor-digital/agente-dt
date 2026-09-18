@@ -172,6 +172,7 @@ import {
 } from '../controllers/pausa.controller.js';
 import { widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler } from '../controllers/widget-franquia.controller.js';
 import { listarAltaHandler, decidirAltaHandler } from '../controllers/alta.controller.js';
+import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
 import { apiReference } from '@scalar/express-api-reference';
 import { gerarOpenApi } from '../docs/openapi.js';
@@ -257,6 +258,10 @@ apiRouter.get('/public/widget/:slug/numeros', widgetNumerosHandler);
 // ALTA nunca é automática: o gatilho dela dispara um bot sem nenhuma condição.
 apiRouter.get('/public/alta/:slug', listarAltaHandler);
 apiRouter.post('/public/alta/:slug', decidirAltaHandler);
+
+// "Digitando…" + tique azul. Quem chama é o n8n do rastreio, que é quem tem o
+// `wamid` do webhook cru da Meta; a decisão de acender fica aqui.
+apiRouter.post('/public/whatsapp/:slug/digitando', digitandoHandler);
 
 apiRouter.use(requireAuth);
 
