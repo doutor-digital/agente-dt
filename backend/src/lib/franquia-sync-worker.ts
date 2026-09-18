@@ -17,8 +17,6 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, escolherConsulta, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, ehEtapaDeEntrada, horasAteNegociacao, moveLiberado, planejarMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
-import { normalizarNome } from './kommo-schema.js';
 
 const SWEEP_MS = 15 * 60_000;
 const PRIMEIRA_MS = 90_000;
@@ -43,8 +41,6 @@ export interface ResumoSync {
   escritas: number;
   erros: number;
   exemplosSemLead: string[];
-  /** fase 2: cartões movidos de etapa nesta varredura (0 quando a unidade não está em FRANQUIA_MOVE_SLUGS) */
-  movimentos: number;
 }
 const ultimoResumo = new Map<string, ResumoSync>();
 export function resumoDoSync(): ResumoSync[] {
