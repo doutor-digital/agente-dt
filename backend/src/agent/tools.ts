@@ -251,7 +251,7 @@ export function buildTools({
         });
         return (
           `RECUSADO: ${statusId} é a etapa de ${qual}, que não se move por aqui. ` +
-          `Use \`marcar_ganho_perdido\` com status="${qual === 'ganho' ? 'won' : 'lost'}"` +
+          `Use \`fechar_lead\` com status="${qual === 'ganho' ? 'won' : 'lost'}"` +
           (qual === 'perdido' ? ' e o lossReasonId do motivo — sem ele o Kommo recusa.' : '.')
         );
       }
