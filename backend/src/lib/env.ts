@@ -53,6 +53,10 @@ const schema = z.object({
   DASHBOARD_UNIT_IDS: z.string().optional(),
   /** Unidades onde a mudança de etapa carimba Início/Fim do tratamento e encerra a conversa (csv; `*` = todas). */
   CARIMBO_ETAPA_SLUGS: z.string().optional(),
+  /** Fase 2 do sincronizador: unidades onde a franquia MOVE a etapa do cartão (csv; `*` = todas). */
+  FRANQUIA_MOVE_SLUGS: z.string().optional(),
+  /** Horas em COMPARECEU sem tratamento até o cartão ir pra EM NEGOCIAÇÃO (padrão 48). */
+  FRANQUIA_NEGOCIACAO_HORAS: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
