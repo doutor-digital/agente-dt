@@ -1159,6 +1159,24 @@ export class KommoClient {
    * telefone/e-mail/nome; mandamos só dígitos (sem o 55) e o chamador confere o
    * número do contato quando houver mais de um candidato.
    */
+  /** Leads parados numa etapa (até `limite`, mais recentes primeiro). Usado pelo sincronizador pra regra das 48 h em COMPARECEU. */
+  async listLeadsPorEtapa(pipelineId: number, statusId: number, limite = 250): Promise<KommoLead[]> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
+        params: {
+          limit: Math.min(limite, 250),
+          'filter[statuses][0][pipeline_id]': pipelineId,
+          'filter[statuses][0][status_id]': statusId,
+          'order[updated_at]': 'desc',
+        },
+      });
+      return data?._embedded?.leads ?? [];
+    } catch (err) {
+      wrapAxiosError(err, `listLeadsPorEtapa(${pipelineId}, ${statusId})`);
+      return [];
+    }
+  }
+
   async listLeadsPorTelefone(telefone: string, limite = 50): Promise<KommoLead[]> {
     let digitos = telefone.replace(/\D+/g, '');
     if (digitos.length >= 12 && digitos.startsWith('55')) digitos = digitos.slice(2);

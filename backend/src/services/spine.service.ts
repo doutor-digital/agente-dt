@@ -447,6 +447,8 @@ export interface SpineClientDetail {
   name: string | null;
   whatsapp: string | null;
   schedules: SpineSchedule[];
+  /** histórico completo de tratamentos do paciente (o /treatments/search só devolve o período). 44 pendente · 45 em andamento · 46 finalizado */
+  treatments: Array<{ idTreatment: number | null; idStatus: number | null; statusName: string | null; typeName: string | null }>;
 }
 
 interface SpineRawClientDetail {
@@ -461,6 +463,7 @@ interface SpineRawClientDetail {
     idStatus?: number;
     statusName?: string;
   }>;
+  treatments?: Array<{ idTreatment?: number; idStatus?: number; statusName?: string; typeName?: string }>;
 }
 
 export async function getClient(
@@ -504,6 +507,12 @@ export async function getClient(
               tz,
             ),
           ),
+          treatments: (cru.treatments ?? []).map((t) => ({
+            idTreatment: t.idTreatment ?? null,
+            idStatus: t.idStatus ?? null,
+            statusName: t.statusName ?? null,
+            typeName: t.typeName ?? null,
+          })),
         },
       },
     };
