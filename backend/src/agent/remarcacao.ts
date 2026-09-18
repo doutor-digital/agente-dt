@@ -25,6 +25,24 @@
  * que cancelou, porque não cancelou.
  */
 
+/**
+ * O primeiro passo deu certo?
+ *
+ * `agendar_consulta` responde em prosa, para a IA ler. A versão anterior disto
+ * perguntava `/marcada/i` — que casa com "A consulta **NÃO** foi marcada.", a
+ * frase exata que a ferramenta devolve quando a recepção pausou a unidade ou o
+ * horário foi tomado no meio da conversa. Recusa lida como sucesso, e o passo 2
+ * ia em frente e CANCELAVA a consulta que o paciente tinha: ele pedia para mudar
+ * de dia e ficava sem consulta nenhuma — o desfecho que a ordem cria-depois-cancela
+ * existe justamente para impedir.
+ *
+ * Âncora positiva no começo da frase de sucesso, mais a negativa explícita.
+ */
+export function agendamentoDeuCerto(resposta: string): boolean {
+  if (/N[ÃA]O foi marcada/i.test(resposta)) return false;
+  return /^Consulta marcada para /i.test(resposta.trim());
+}
+
 /** O que sobrou depois do segundo passo. */
 export type Desfecho =
   /** Criou a nova e cancelou a antiga. O caminho feliz. */
@@ -85,35 +103,45 @@ export function recadoDaRemarcacao(a: {
       // A antiga já tinha passado: para o paciente, a remarcação aconteceu inteira.
       return `Remarcada para ${a.novaPorExtenso}. ${a.daNova}`;
     case 'vaga_presa':
+      // `daNova` carrega a régua de pagamento (chave Pix, valor) e o dia da semana
+      // que a IA precisa repetir. Descartar isso deixava quem escolheu Pix sem a
+      // chave — o paciente pagaria o preço de um problema que é da clínica.
       return (
-        `A CONSULTA NOVA ESTÁ MARCADA para ${a.novaPorExtenso} — pode confirmar isso ao paciente. ` +
+        `A CONSULTA NOVA ESTÁ MARCADA para ${a.novaPorExtenso} — pode confirmar isso ao paciente. ${a.daNova} ` +
         `MAS eu NÃO consegui cancelar a anterior, de ${a.antigaPorExtenso}. ` +
         'NÃO diga que a anterior foi cancelada nem que ela "não vale mais". ' +
-        'Diga que a nova ficou marcada e que a equipe da clínica vai desfazer a anterior. ' +
-        'Já abri um aviso para a recepção resolver.'
+        'Diga apenas que a nova ficou marcada e que a equipe da clínica cuida do resto.'
       );
   }
 }
 
-/** A tarefa que a recepção vê no Kommo. Só existe para `vaga_presa`. */
+/**
+ * A tarefa que a recepção vê no Kommo. Só existe para `vaga_presa`.
+ *
+ * O prefixo `ALERTA · slug ·` não é enfeite: é a chave que o roteador de alertas
+ * procura para encaminhar a tarefa ao grupo das SDRs. Sem ele a tarefa nasce no
+ * cartão e morre ali — que era o caso da primeira versão, enquanto a IA dizia ao
+ * paciente que já tinha avisado a recepção.
+ */
 export function tarefaDaVagaPresa(a: {
+  slug: string;
   antigaPorExtenso: string;
   novaPorExtenso: string;
   idSchedule: number;
   erro: string | null;
 }): string {
-  return [
-    '⚠️ VAGA PRESA NA AGENDA — cancelar na mão',
+  const linhas = [
+    `ALERTA · ${a.slug} · ⚠️ VAGA PRESA NA AGENDA — cancelar na mão`,
     '',
-    `Remarquei este paciente para ${a.novaPorExtenso}, mas não consegui cancelar a consulta`,
-    `anterior, de ${a.antigaPorExtenso} (idSchedule ${a.idSchedule}).`,
-    a.erro ? `Motivo: ${a.erro}` : '',
+    `Remarquei este paciente para ${a.novaPorExtenso}, mas não consegui cancelar a consulta anterior, de ${a.antigaPorExtenso} (idSchedule ${a.idSchedule}).`,
+  ];
+  if (a.erro) linhas.push(`Motivo: ${a.erro}`);
+  linhas.push(
     '',
     `A vaga de ${a.antigaPorExtenso} segue ocupada na franquia e ninguém consegue marcar nela.`,
     'Cancelar esse agendamento no sistema da clínica resolve.',
-  ]
-    .filter((l) => l !== '')
-    .join('\n');
+  );
+  return linhas.join('\n');
 }
 
 /**
@@ -129,7 +157,16 @@ export function tarefaDaVagaPresa(a: {
  * futuras eu não tenho como saber qual delas o paciente quer mudar, e chutar aqui
  * significa cancelar a consulta errada de alguém.
  */
-export type SemAlvo = { tipo: 'nenhuma' } | { tipo: 'varias'; quantas: number };
+export type SemAlvo =
+  | { tipo: 'nenhuma' }
+  | { tipo: 'varias'; quantas: number }
+  /**
+   * A franquia não respondeu. Precisa ser diferente de `nenhuma`: com as duas
+   * colapsadas, um timeout da API virava "este paciente não tem consulta" e a IA
+   * marcava uma SEGUNDA para quem já tinha uma — dizendo a ele que não tinha
+   * nenhuma. Não saber não é a mesma coisa que não existir.
+   */
+  | { tipo: 'nao_sei' };
 
 export function escolherAlvo<T extends { idSchedule: number | null }>(
   futuras: T[],
@@ -140,19 +177,24 @@ export function escolherAlvo<T extends { idSchedule: number | null }>(
   return { tipo: 'achei', consulta: comId[0] };
 }
 
+const NAO_SEI_AINDA =
+  'NÃO cite dia nem hora. Diga que vai confirmar o agendamento com a equipe e retornar em instantes.';
+
 export function recadoSemAlvo(alvo: SemAlvo): string {
-  if (alvo.tipo === 'nenhuma') {
-    return (
-      'Este paciente NÃO tem consulta marcada — não há o que remarcar. ' +
-      'Não invente que existia uma. Trate como agendamento novo: ofereça os horários ' +
-      'disponíveis e use agendar_consulta.'
-    );
+  switch (alvo.tipo) {
+    case 'nenhuma':
+      return (
+        'Este paciente NÃO tem consulta marcada — não há o que remarcar. ' +
+        'Não invente que existia uma. Trate como agendamento novo: ofereça os horários ' +
+        'disponíveis e use agendar_consulta.'
+      );
+    case 'varias':
+      // Chutar aqui é cancelar a consulta errada de alguém.
+      return (
+        `NÃO REMARQUEI: este paciente tem ${alvo.quantas} consultas marcadas e eu não sei qual delas ele quer mudar. ` +
+        `NÃO chute. ${NAO_SEI_AINDA}`
+      );
+    case 'nao_sei':
+      return `NÃO REMARQUEI: não consegui consultar a agenda da clínica agora. ${NAO_SEI_AINDA}`;
   }
-  if (alvo.tipo === 'varias') {
-    return (
-      `NÃO REMARQUEI: este paciente tem ${alvo.quantas} consultas marcadas e eu não sei qual delas ele quer mudar. ` +
-      'NÃO chute e NÃO cite datas. Diga que vai confirmar o agendamento com a equipe e retornar.'
-    );
-  }
-  return '';
 }
