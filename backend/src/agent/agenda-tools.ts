@@ -17,6 +17,14 @@ import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
+import {
+  desfechoDaRemarcacao,
+  escolherAlvo,
+  recadoDaRemarcacao,
+  recadoSemAlvo,
+  tarefaDaVagaPresa,
+  type SemAlvo,
+} from './remarcacao.js';
 
 const TZ_PADRAO = 'America/Sao_Paulo';
 
@@ -805,8 +813,41 @@ export function buildConfirmarPresenca({ unit, recorder }: Contexto) {
   });
 }
 
+/**
+ * Qual consulta o paciente quer mudar.
+ *
+ * Primeiro o vínculo local — rápido, e é o caso de quem a IA marcou. Se não houver,
+ * pergunta à franquia: é o caso de quem a RECEPÇÃO marcou, que é a maioria
+ * esmagadora. `spineIdSchedule` só é gravado por `agendar_consulta`, e existem 54
+ * leads com ele na rede inteira — nenhum em Mossoró. Sem essa segunda tentativa,
+ * `remarcar_consulta` virava "agendar de novo" e o paciente terminava com dois
+ * horários marcados.
+ */
+async function consultaParaRemarcar(
+  unit: Unit,
+  leadId: number | undefined,
+  idClient: number,
+): Promise<{ tipo: 'achei'; idSchedule: number; quando: string | null } | SemAlvo> {
+  const local = await consultaAtual(unit, leadId);
+  if (local) return { tipo: 'achei', idSchedule: local.idSchedule, quando: local.quando };
+
+  const det = await SpineService.getClient(unit, idClient).catch(() => null);
+  const escolha = escolherAlvo(consultasFuturas(det?.data?.client?.schedules ?? [], new Date()));
+  if (escolha.tipo !== 'achei') return escolha;
+
+  const c = escolha.consulta;
+  const tz = unit.spineTimezone || TZ_PADRAO;
+  return {
+    tipo: 'achei',
+    idSchedule: c.idSchedule as number,
+    quando: Number.isFinite(c.quandoMs)
+      ? SpineService.instanteNoFuso(new Date(c.quandoMs), tz)
+      : null,
+  };
+}
+
 export function buildRemarcarConsulta(ctx: Contexto) {
-  const { unit, recorder } = ctx;
+  const { unit, recorder, kommo } = ctx;
   const agendar = buildAgendarConsulta(ctx);
   return new DynamicStructuredTool({
     name: 'remarcar_consulta',
@@ -822,8 +863,22 @@ export function buildRemarcarConsulta(ctx: Contexto) {
     }),
     func: async (args: { leadId: number; idClient: number; data: string; hora: string }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
-      const atual = await consultaAtual(fresca, args.leadId);
 
+      // Passo 0 — QUAL consulta. Antes disso não existia: sem vínculo local a
+      // ferramenta seguia em frente e criava a segunda.
+      const alvo = await consultaParaRemarcar(fresca, args.leadId, args.idClient);
+      if (alvo.tipo !== 'achei') {
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title: `remarcar: recusado (${alvo.tipo})`,
+          payload: { leadId: args.leadId, idClient: args.idClient, alvo },
+        });
+        return recadoSemAlvo(alvo);
+      }
+
+      // Passo 1 — criar a nova. Nesta ordem de propósito: cancelar primeiro e falhar
+      // ao criar deixaria o paciente SEM consulta nenhuma por causa de um erro nosso.
+      // Errar para o lado de "duas" é recuperável; "nenhuma" não é.
       const nova = await (agendar as unknown as { func: (a: unknown) => Promise<string> }).func({
         leadId: args.leadId,
         idClient: args.idClient,
@@ -835,16 +890,56 @@ export function buildRemarcarConsulta(ctx: Contexto) {
         return `A consulta antiga CONTINUA valendo — não consegui marcar a nova. ${nova}`;
       }
 
-      if (atual) {
-        const c = await SpineService.cancelSchedule(fresca, atual.idSchedule);
-        await recorder.step({
-          kind: c.ok ? 'TOOL_RESULT' : 'ERROR',
-          title: `remarcar: antiga ${atual.idSchedule} ${c.ok ? 'cancelada' : 'NÃO cancelada'}`,
-          payload: { leadId: args.leadId, antiga: atual.idSchedule, nova: `${args.data} ${args.hora}` },
+      // Passo 2 — apagar a velha. É aqui que a remarcação pode parar no meio.
+      const c = await SpineService.cancelSchedule(fresca, alvo.idSchedule);
+      const desfecho = desfechoDaRemarcacao({
+        cancelou: c.ok,
+        idScheduleAntiga: alvo.idSchedule,
+        quandoAntiga: alvo.quando,
+        agoraNaClinica: agoraLocal(fresca),
+      });
+      await recorder.step({
+        kind: desfecho.tipo === 'vaga_presa' ? 'ERROR' : 'TOOL_RESULT',
+        title: `remarcar: ${desfecho.tipo} (antiga ${alvo.idSchedule})`,
+        payload: {
+          leadId: args.leadId,
+          antiga: alvo.idSchedule,
+          nova: `${args.data} ${args.hora}`,
+          erro: c.ok ? null : c.error,
+        },
+      });
+      AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
+
+      const antigaPorExtenso = porExtenso(alvo.quando);
+      const novaPorExtenso = porExtenso(`${args.data}T${args.hora}`);
+
+      if (desfecho.tipo === 'vaga_presa') {
+        // A recepção é quem consegue desfazer isso na tela da franquia. A tarefa vai
+        // para ela; o aviso vai para o João porque vaga presa some da vista de todo
+        // mundo — ninguém procura um horário que o sistema diz estar ocupado.
+        const texto = tarefaDaVagaPresa({
+          antigaPorExtenso,
+          novaPorExtenso,
+          idSchedule: desfecho.idSchedule,
+          erro: c.ok ? null : c.error ?? null,
         });
-        AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
+        await kommo
+          ?.createTask({
+            leadId: args.leadId,
+            text: texto,
+            completeAt: Math.floor(Date.now() / 1000),
+          })
+          .catch((err) =>
+            logger.warn({ err, leadId: args.leadId }, 'remarcar: falha ao abrir tarefa da vaga presa'),
+          );
+        void avisarJoao(
+          `⚠️ *${fresca.name}* — vaga presa na agenda\n\n${texto}`,
+          `vagapresa:${fresca.slug}:${desfecho.idSchedule}`,
+          24 * 60 * 60_000,
+        ).catch(() => undefined);
       }
-      return `Remarcada de ${porExtenso(atual?.quando)} para ${porExtenso(`${args.data}T${args.hora}`)}. ${nova}`;
+
+      return recadoDaRemarcacao({ desfecho, antigaPorExtenso, novaPorExtenso, daNova: nova });
     },
   });
 }
