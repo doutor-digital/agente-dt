@@ -34,7 +34,8 @@ import { consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-
 import { descreverPausa, emPausa } from '../lib/pausa-unidade.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
-import { scheduleLeadMetrics } from '../services/lead-metrics.service.js';
+import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
+import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { z } from 'zod';
 
@@ -443,6 +444,8 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
           { leadId: humanTakeoverLeadId, unit: unit.slug },
           'IA auto-pausada: atendente humano assumiu a conversa',
         );
+        // Bloco DIGITAL: a SDR respondeu pelo Kommo → assumido por humano = Sim, status = Respondendo.
+        void carimbarHumanoAssumiu(unit, kommo, humanTakeoverLeadId);
       }
     } catch (err) {
       logger.warn(
@@ -450,6 +453,17 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         'falha ao auto-pausar por takeover humano — seguindo',
       );
     }
+  }
+
+  // Mudança de etapa (webhook `status_lead`): Início/Fim do tratamento e Status da
+  // conversa = Encerrada, nas unidades liberadas em CARIMBO_ETAPA_SLUGS. Fora do
+  // caminho da resposta: falha aqui não atrasa nem derruba o atendimento.
+  const eventosDeEtapa = parsed.data.leads?.status ?? [];
+  if (eventosDeEtapa.length > 0) {
+    const unidade = unit;
+    void aplicarCarimbosDeEtapa(unidade, eventosDeEtapa).catch((err) =>
+      logger.warn({ err: String(err), unit: unidade.slug }, 'carimbo-etapa: falha inesperada (ignorada)'),
+    );
   }
 
   const conversion = await detectAndHandleConversion(unit, parsed.data);

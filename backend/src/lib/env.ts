@@ -51,6 +51,8 @@ const schema = z.object({
   DASHBOARD_ADMIN_KEY: z.string().min(8).optional(),
   // JSON { "<subdomínio Kommo>": <unitId no dashboard> } — as duas bases não compartilham id nem slug (Porto: -porto × -porto-nacional)
   DASHBOARD_UNIT_IDS: z.string().optional(),
+  /** Unidades onde a mudança de etapa carimba Início/Fim do tratamento e encerra a conversa (csv; `*` = todas). */
+  CARIMBO_ETAPA_SLUGS: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
