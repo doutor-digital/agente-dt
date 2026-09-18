@@ -143,7 +143,7 @@ const unitInputBase = {
 
   triageEnabled: z.boolean().optional(),
   triageInstructions: z.string().max(4000).nullable().optional(),
-  systemPrompt: z.string().max(20_000).optional(),
+  systemPrompt: z.string().max(40_000).optional(),
   singlePromptMode: z.boolean().optional(),
   category: z.string().max(60).nullable().optional(),
 
