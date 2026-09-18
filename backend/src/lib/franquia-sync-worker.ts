@@ -19,7 +19,7 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, TRATAMENTO_FINALIZADO, horasAteNegociacao, moveLiberado, planejarMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import { ETAPA, horasAteNegociacao, moveLiberado, planejarMovimento, tratamentoAberto, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 
 const SWEEP_MS = 15 * 60_000;
@@ -292,7 +292,8 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
       try {
         const idClient = await idClientDoLead(unit, lead.id, lead.name ?? null);
         const hist = await historicoDoPaciente(unit, idClient);
-        if (hist && (temConsultaFutura(hist.schedules, agora) || hist.treatments.some((t) => t.idStatus !== null && t.idStatus !== TRATAMENTO_FINALIZADO))) continue;
+        // retorno marcado OU tratamento ainda aberto (pendente/em andamento) segura; cancelado e finalizado não (achado do Codex, 18/09)
+        if (hist && (temConsultaFutura(hist.schedules, agora) || hist.treatments.some(tratamentoAberto))) continue;
       } catch (err) {
         logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-move: não consegui conferir a franquia antes das 48 h — seguindo pelo cartão');
       }
