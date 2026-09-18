@@ -334,6 +334,48 @@ function renderSources(unit: Unit): string {
   return xmlBlock('fontes', sections.join('\n\n'));
 }
 
+/**
+ * Nem toda mensagem curta é ruído, e nem todo elogio é só elogio.
+ *
+ * Medido em Mossoró (18/09/2026), nas 36 conversas que chegaram pelo Instagram:
+ * 22% eram LEAD (alguém falando da própria dor ou perguntando preço), 16% eram
+ * elogio de quem já é paciente, 59% era reação sem conteúdo. Eu quase tratei as
+ * 36 como descarte — e uma delas dizia "escreveram tudo o que eu sinto 😢", que
+ * é uma pessoa levantando a mão, e outra perguntava o valor para RETOMAR
+ * tratamento, que é venda pronta.
+ *
+ * A regra é pelo CONTEÚDO, não pelo canal: em Canaã e Marabá o Instagram é 1%
+ * do volume, mas gente falando da própria dor em uma linha chega por WhatsApp
+ * também.
+ *
+ * O terceiro caso diz "responda curto" e não "não responda" porque não existe
+ * caminho para a IA ficar calada — toda mensagem gera resposta. Melhor uma linha
+ * calorosa e sem oferta do que uma oferta fora de hora.
+ */
+function renderReacaoEElogio(): string {
+  return xmlBlock('reacao_e_elogio', `Mensagem curta ou reação NÃO é automaticamente descarte. Antes de responder, veja o que ela é:
+
+1) A PESSOA FALA DA PRÓPRIA DOR — mesmo em uma linha ("é isso que eu sinto", "tenho
+   isso", "sofro com isso", ou só "eu" respondendo a uma pergunta sua). ISSO É LEAD.
+   Acolha e pergunte o que ela sente, como faria com qualquer paciente novo.
+   NUNCA trate como reação sem valor.
+
+2) QUEM JÁ É PACIENTE ELOGIA ("a melhor fisio", "curou minha bursite", "são pessoas
+   maravilhosas"). Agradeça com carinho de verdade e, na MESMA mensagem, convide a
+   deixar essa avaliação no Google — uma vez só, sem insistir, e sem link se você
+   não tiver o link. Se ela não responder, deixe pra lá.
+
+3) REAÇÃO SEM CONTEÚDO (só emoji, "top", "❤") ou parabéns dirigido a OUTRA pessoa
+   ("parabéns pela alta, Décio"), como PRIMEIRO contato de alguém que nunca falou
+   com você: responda UMA linha curta e calorosa e pare.
+   (Emoji no MEIO de uma conversa que já existe é outra coisa: ali vale a regra da
+   persona — frase curta que retoma o próximo passo. A diferença é se já havia
+   conversa antes.)
+   NÃO ofereça consulta, NÃO pergunte a queixa, NÃO puxe assunto de venda — quem
+   só reagiu a um story não pediu nada, e oferta aqui afasta.
+   Esta é a ÚNICA situação em que sua resposta NÃO termina com pergunta.`);
+}
+
 function renderRulesGlobal(): string {
   return xmlBlock('regras_gerais', `- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,
   procedimentos, prazos, políticas, médicos, especialidades, endereços).
@@ -1576,6 +1618,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
   if (sourcesBlock) blocks.push(sourcesBlock);
   if (customBase) blocks.push(xmlBlock('instrucoes_extras', customBase));
   blocks.push(renderRulesGlobal());
+  blocks.push(renderReacaoEElogio());
   blocks.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
 
   const featureBlocks = [
@@ -1662,6 +1705,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   }
 
   blocks.push(renderRulesGlobal());
+  blocks.push(renderReacaoEElogio());
   blocks.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
 
   const featureBlocks = [
@@ -1801,6 +1845,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (sourcesBlock) cache.push(sourcesBlock);
   if (customBase) cache.push(xmlBlock('instrucoes_extras', customBase));
   cache.push(renderRulesGlobal());
+  cache.push(renderReacaoEElogio());
 
   const featureBlocks = [
     renderCollectName(unit),
