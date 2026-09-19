@@ -3,8 +3,9 @@ import { logger } from '../lib/logger.js';
 import { SpineService } from './spine.service.js';
 import { createKommoClient } from './kommo.service.js';
 import type { Unit } from '@prisma/client';
+import { proximaSessao } from './proxima-sessao.js';
 
-const { AGENDADO, CONFIRMADO, NAO_COMPARECEU, ATENDIDO } = SpineService.SPINE_STATUS;
+const { NAO_COMPARECEU, ATENDIDO } = SpineService.SPINE_STATUS;
 
 export interface SessionStats {
   linked: boolean;
@@ -81,11 +82,8 @@ export async function computeSessionStats(
   const passados = schedules
     .filter((s) => Date.parse(s.dateAttendanceUtc as string) <= agora)
     .sort((a, b) => Date.parse(b.dateAttendanceUtc as string) - Date.parse(a.dateAttendanceUtc as string));
-  const futuros = schedules
-    .filter((s) => Date.parse(s.dateAttendanceUtc as string) > agora)
-    .sort((a, b) => Date.parse(a.dateAttendanceUtc as string) - Date.parse(b.dateAttendanceUtc as string));
-
-  const proxima = futuros.find((s) => s.idStatus === AGENDADO || s.idStatus === CONFIRMADO) ?? null;
+  // REMARCADO também é sessão que vai acontecer — ver proxima-sessao.ts.
+  const proxima = proximaSessao(schedules, agora);
   const ultima = passados[0] ?? null;
 
   const compareceuUltima =
