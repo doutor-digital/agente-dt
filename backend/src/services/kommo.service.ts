@@ -3,6 +3,7 @@ import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { ESPERAS_MS, jaSaiu, valeRetentar } from '../lib/reenvio-salesbot.js';
+import { semCoracao } from '../lib/sem-coracao.js';
 
 export interface KommoCustomFieldValue {
   field_id: number;
@@ -183,9 +184,8 @@ const EMOJI_BMP_DOWNGRADE: ReadonlyMap<string, string> = new Map([
   ['🌞', '☀'], ['🌅', '☀'], ['🌄', '☀'],
   ['😊', '☺'], ['😀', '☺'], ['😃', '☺'], ['😄', '☺'], ['🙂', '☺'], ['😁', '☺'],
   ['😢', '☹'], ['😞', '☹'], ['😔', '☹'], ['🙁', '☹'], ['😟', '☹'],
-  ['❤', '♥'], ['💜', '♥'], ['💙', '♥'], ['💚', '♥'], ['💛', '♥'],
-  ['🤍', '♥'], ['🖤', '♥'], ['🤎', '♥'], ['💕', '♥'], ['💖', '♥'],
-  ['💗', '♥'], ['💓', '♥'], ['💝', '♥'],
+  // Coração saiu daqui: convertê-lo em ♥ era o motivo de a regra do prompt nunca
+  // pegar. Quem remove agora é semCoracao(), no fim de downgradeEmoji.
   ['📞', '☎'], ['📱', '☎'], ['📲', '☎'],
   ['🏥', '⚕'], ['💊', '⚕'], ['💉', '⚕'], ['🩺', '⚕'], ['🩹', '⚕'],
   ['🌟', '★'], ['🌠', '★'], ['💫', '★'],
@@ -224,7 +224,7 @@ export function paraNumero(value: string | number | string[]): number | null {
 }
 
 export function downgradeEmoji(text: string): string {
-  let out = text;
+  let out = semCoracao(text);
   for (const [from, to] of EMOJI_BMP_DOWNGRADE) {
     if (out.includes(from)) out = out.replaceAll(from, to);
   }

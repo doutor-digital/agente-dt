@@ -1811,6 +1811,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
 
   const dynamic: string[] = [];
   dynamic.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
+  const ondeFica = renderOndeFica(unit);
+  if (ondeFica) dynamic.push(ondeFica);
   const lessonsBlock = renderLessons(lessons);
   if (lessonsBlock) dynamic.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory);
@@ -2034,6 +2036,32 @@ async function loadComposeInput(input: {
  * daquele prompt. O modelo não tinha como acertar: ou inventava, ou deixava
  * "[chave]". Este bloco custa ~200 caracteres e fecha o buraco sem inchar nada.
  */
+/**
+ * Onde a clínica fica — para responder "qual o endereço?" NA HORA.
+ *
+ * O endereço já existia no cadastro, mas só era usado no card de confirmação,
+ * depois da consulta marcada. Quem perguntava antes ouvia "vou confirmar com a
+ * equipe", porque a Sofia é proibida de inventar endereço e não tinha o dado à
+ * mão. Em Imperatriz (19/09/2026, lead 26487093) o paciente pediu quatro vezes,
+ * nunca recebeu, e mandou um áudio dizendo que não passa dinheiro adiantado pra
+ * ninguém: uma clínica que não sabe dizer onde fica parece golpe.
+ *
+ * Bloco curto de propósito — entra em toda mensagem de todas as unidades, e
+ * token repetido 22 vezes por dia vira conta no fim do mês.
+ */
+export function renderOndeFica(unit: Unit): string {
+  const endereco = unit.clinicAddress?.trim();
+  if (!endereco) return '';
+  const mapa = unit.clinicMapUrl?.trim();
+  return xmlBlock(
+    'onde_fica',
+    `Endereço da clínica: ${endereco}${mapa ? `\nMapa: ${mapa}` : ''}\n` +
+      'Se o paciente perguntar onde fica, responda NA HORA com este endereço — ' +
+      'copiado exatamente, sem mudar nada. Nunca diga que vai confirmar com a equipe: ' +
+      'o dado está aqui.',
+  );
+}
+
 export function renderFatosDaUnidade(unit: Unit): string {
   const linhas: string[] = [];
   const chave = unit.pixKey?.trim();
@@ -2045,6 +2073,8 @@ export function renderFatosDaUnidade(unit: Unit): string {
   if (p) {
     linhas.push(`- Consulta: R$ ${fmtBRL(p.antecipado)} antecipado (pago antes) ou R$ ${fmtBRL(p.noDia)} no dia`);
   }
+  const onde = unit.clinicAddress?.trim();
+  if (onde) linhas.push(`- Endereço: ${onde}`);
   if (linhas.length === 0) return '';
   return xmlBlock(
     'dados_da_clinica',
