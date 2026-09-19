@@ -2,6 +2,7 @@ import axios, { AxiosError, type AxiosInstance } from 'axios';
 import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
+import { ESPERAS_MS, jaSaiu, valeRetentar } from '../lib/reenvio-salesbot.js';
 
 export interface KommoCustomFieldValue {
   field_id: number;
@@ -1306,12 +1307,15 @@ export class KommoClient {
     salesbotId,
     replyFieldId,
     text,
+    talkId,
     recorder,
   }: {
     leadId: number;
     salesbotId: number;
     replyFieldId: number;
     text: string;
+    /** Conversa oficial, usada pra conferir se a fala já saiu antes de retentar. */
+    talkId?: number;
     recorder?: KommoStepRecorder;
   }): Promise<unknown> {
     if (entregaDuplicada(leadId, text)) {
@@ -1439,13 +1443,50 @@ export class KommoClient {
     if (this.creds.salesbotExecuteEnabled) {
       const t0Run = performance.now();
       try {
-        await this.http.post(`/bots/${salesbotId}/run`, {
-          entity_id: leadId,
-          entity_type: 'leads',
-        });
+        // Retentativa só pra erro de rede. `socket hang up` derrubou a primeira
+        // conversa que a IA de Mossoró atendeu (19/09/2026) e o mesmo endpoint
+        // respondeu 202 na repetição manual. Antes de repetir, confiro se a fala
+        // já saiu — disparar o bot duas vezes manda a mensagem duas vezes.
+        let tentativa = 0;
+        for (;;) {
+          try {
+            await this.http.post(`/bots/${salesbotId}/run`, {
+              entity_id: leadId,
+              entity_type: 'leads',
+            });
+            break;
+          } catch (err) {
+            const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+            const code = axios.isAxiosError(err) ? err.code : undefined;
+            const msg = err instanceof Error ? err.message : String(err);
+            if (tentativa >= ESPERAS_MS.length || !valeRetentar({ status, code, message: msg })) throw err;
+
+            await new Promise((r) => setTimeout(r, ESPERAS_MS[tentativa]));
+            if (talkId) {
+              const vistas = await this.listTalkMessages(talkId, 15).catch(() => []);
+              if (jaSaiu(vistas, text, Math.floor(Date.now() / 1000))) {
+                logger.info(
+                  { leadId, salesbotId, tentativa },
+                  'runSalesbot: a fala já tinha saído — não disparo de novo',
+                );
+                await recorder?.step({
+                  kind: 'KOMMO_ACTION',
+                  title: `🤖 /execute: ${msg} na tentativa ${tentativa + 1}, mas a mensagem já tinha saído`,
+                  payload: { leadId, salesbotId, tentativa: tentativa + 1, erro: msg },
+                });
+                return { runApi: 'execute', triggeredBy: 'execute_api', salesbotId, jaEntregue: true };
+              }
+            }
+            tentativa += 1;
+            logger.warn(
+              { leadId, salesbotId, tentativa, erro: msg },
+              'runSalesbot: falha de rede no disparo — retentando',
+            );
+          }
+        }
         const runMs = Math.round(performance.now() - t0Run);
         logger.info(
-          { leadId, salesbotId, route: 'bots_run' },
+          { leadId, salesbotId, route: 'bots_run', tentativas: tentativa + 1 },
           'runSalesbot: POST /bots/{id}/run (modo /execute) enviado',
         );
         await recorder?.step({
@@ -1545,6 +1586,7 @@ export class KommoClient {
           salesbotId: this.creds.salesbotId,
           replyFieldId: this.creds.replyFieldId,
           text,
+          talkId: Number(talkId) || undefined,
           recorder,
         });
         logger.info(
