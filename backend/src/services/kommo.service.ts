@@ -1459,23 +1459,34 @@ export class KommoClient {
             const status = axios.isAxiosError(err) ? err.response?.status : undefined;
             const code = axios.isAxiosError(err) ? err.code : undefined;
             const msg = err instanceof Error ? err.message : String(err);
-            if (tentativa >= ESPERAS_MS.length || !valeRetentar({ status, code, message: msg })) throw err;
+            // Sem `talkId` não há como conferir se a fala já saiu, e aí a
+            // retentativa seria no escuro. O caminho de fora-do-horário
+            // (webhook.controller) chama daqui sem conversa em mãos: nele vale a
+            // regra antiga, uma tentativa só. Mandar a mesma mensagem duas vezes
+            // é pior do que não recuperar de um soluço de rede.
+            if (
+              tentativa >= ESPERAS_MS.length ||
+              !talkId ||
+              !valeRetentar({ status, code, message: msg })
+            ) {
+              throw err;
+            }
 
             await new Promise((r) => setTimeout(r, ESPERAS_MS[tentativa]));
-            if (talkId) {
-              const vistas = await this.listTalkMessages(talkId, 15).catch(() => []);
-              if (jaSaiu(vistas, text, Math.floor(Date.now() / 1000))) {
-                logger.info(
-                  { leadId, salesbotId, tentativa },
-                  'runSalesbot: a fala já tinha saído — não disparo de novo',
-                );
-                await recorder?.step({
-                  kind: 'KOMMO_ACTION',
-                  title: `🤖 /execute: ${msg} na tentativa ${tentativa + 1}, mas a mensagem já tinha saído`,
-                  payload: { leadId, salesbotId, tentativa: tentativa + 1, erro: msg },
-                });
-                return { runApi: 'execute', triggeredBy: 'execute_api', salesbotId, jaEntregue: true };
-              }
+            const vistas = await this.listTalkMessages(talkId, 15).catch(() => null);
+            // Leitura falhou: continuo sem saber se saiu, então não arrisco.
+            if (vistas === null) throw err;
+            if (jaSaiu(vistas, text, Math.floor(Date.now() / 1000))) {
+              logger.info(
+                { leadId, salesbotId, tentativa },
+                'runSalesbot: a fala já tinha saído — não disparo de novo',
+              );
+              await recorder?.step({
+                kind: 'KOMMO_ACTION',
+                title: `🤖 /execute: ${msg} na tentativa ${tentativa + 1}, mas a mensagem já tinha saído`,
+                payload: { leadId, salesbotId, tentativa: tentativa + 1, erro: msg },
+              });
+              return { runApi: 'execute', triggeredBy: 'execute_api', salesbotId, jaEntregue: true };
             }
             tentativa += 1;
             logger.warn(
