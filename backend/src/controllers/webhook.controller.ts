@@ -8,6 +8,7 @@ import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
+import { entraPelaMeta } from '../lib/canal-de-entrada.js';
 import { marcarNaoEntregue } from '../agent/entrega-falha.js';
 import { tratarMensagemNaoRenderizada } from '../lib/mensagem-nao-renderizada.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
@@ -303,7 +304,7 @@ async function resolveOwnerUnitByStage(entryUnit: Unit, leadId: number): Promise
 }
 
 function isMetaPrimary(unit: Unit): boolean {
-  return !!unit.metaPhoneNumberId && !!unit.metaAccessToken;
+  return entraPelaMeta(unit.slug);
 }
 
 async function detectAndHandleConversion(
