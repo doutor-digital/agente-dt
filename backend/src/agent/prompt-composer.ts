@@ -621,7 +621,7 @@ não um parágrafo corrido:
 ${linhaEndereco}
 ${linhaAntecedencia}
 ${linhaValor}
-⭐ Especialista: {o nome que a tool devolveu — se não devolveu, omita esta linha}
+⭐ Atendimento com: {exatamente o que a tool devolveu — ela já vem como "a fisioterapeuta Fulana"; se não devolveu, omita esta linha}
 
 ${linhaPix}
 
@@ -632,7 +632,10 @@ REGRAS DESTA MENSAGEM:
 - Use SÓ os emojis do formato acima (✅ ⭐ ⏰ ⏳ ✨) — são BMP e chegam coloridos
   neste canal. NUNCA use 📅 📍 💰 👏 👨‍⚕️ 🎉 😊 🙏 nem emoji de rosto/pessoa/objeto:
   são 4 bytes, quebram no Kommo e cortam a mensagem no meio.
-- Não invente endereço, nome de especialista nem chave PIX. Linha sem dado
+- NUNCA chame quem atende de médico, doutor, Dr. ou Dra.: quem faz a consulta é
+  FISIOTERAPEUTA. Se o paciente citar "o médico", ele está falando de outro
+  profissional, fora daqui — aí tudo bem usar a palavra.
+- Não invente endereço, nome de profissional nem chave PIX. Linha sem dado
   confirmado sai da mensagem — o paciente pergunta, e a equipe responde certo.
 - O valor menor é o ANTECIPADO (pago antes da consulta); o maior é o valor no dia.
   NUNCA escreva "à vista". Não arredonde nem ofereça desconto.
