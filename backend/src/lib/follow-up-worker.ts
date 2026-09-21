@@ -500,6 +500,8 @@ async function enviarDegrau(
     if (indice + 1 >= totalDegraus) {
       carimbarContato(unit.id, leadId, { desfecho: 'sumiu' });
       // Bloco DIGITAL: escada inteira sem o paciente voltar → "⬢ Status da conversa" = Sem resposta.
+      // O "Sem resposta" é o sinal que o worker de leads parados lê: 24 h depois, sem o paciente
+      // responder ao último toque, o cartão vai pra PERDIDO "Não interagiu" (parados-worker).
       void carimbarSemResposta(unitCompleta, leadId);
     }
 

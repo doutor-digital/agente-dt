@@ -26,7 +26,7 @@ export interface KommoLead {
   custom_fields_values?: KommoCustomFieldValue[] | null;
   _embedded?: {
     tags?: Array<{ id: number; name: string }>;
-    contacts?: Array<{ id: number }>;
+    contacts?: Array<{ id: number; is_main?: boolean }>;
   };
 }
 
@@ -1047,6 +1047,58 @@ export class KommoClient {
     }
   }
 
+  /**
+   * O CONTATO recebeu mensagem do paciente desde `desdeEpoch`? O chat mora no CONTATO: pedir
+   * `incoming_chat_message` por lead devolve 204. Pergunta com janela (filter created_at from) e
+   * limit 1: não depende da ordem que a API devolve. Erro de API LANÇA — quem decide prazo por
+   * isto não pode confundir "API caiu" com "paciente nunca escreveu".
+   */
+  async contatoEscreveuDesde(contactId: number, desdeEpoch: number): Promise<boolean> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ id?: string }> } }>('/events', {
+        params: {
+          'filter[entity]': 'contact',
+          'filter[entity_id][]': contactId,
+          'filter[type][]': 'incoming_chat_message',
+          'filter[created_at][from]': desdeEpoch,
+          limit: 1,
+        },
+      });
+      return (data?._embedded?.events ?? []).length > 0;
+    } catch (err) {
+      wrapAxiosError(err, `contatoEscreveuDesde(${contactId})`);
+    }
+  }
+
+  /** O cartão mudou de etapa desde `desdeEpoch`? (acabou de chegar onde está). Erro lança. */
+  async leadMudouEtapaDesde(leadId: number, desdeEpoch: number): Promise<boolean> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ id?: string }> } }>('/events', {
+        params: {
+          'filter[entity]': 'lead',
+          'filter[entity_id][]': leadId,
+          'filter[type][]': 'lead_status_changed',
+          'filter[created_at][from]': desdeEpoch,
+          limit: 1,
+        },
+      });
+      return (data?._embedded?.events ?? []).length > 0;
+    } catch (err) {
+      wrapAxiosError(err, `leadMudouEtapaDesde(${leadId})`);
+    }
+  }
+
+  async createLossReason(name: string): Promise<{ id: number; name: string } | null> {
+    try {
+      const { data } = await this.http.post<{
+        _embedded?: { loss_reasons?: Array<{ id: number; name: string }> };
+      }>('/leads/loss_reasons', [{ name }]);
+      return data?._embedded?.loss_reasons?.[0] ?? null;
+    } catch (err) {
+      wrapAxiosError(err, `createLossReason(${name})`);
+    }
+  }
+
   async listLossReasons(): Promise<Array<{ id: number; name: string }>> {
     try {
       const { data } = await this.http.get<{
@@ -1181,7 +1233,7 @@ export class KommoClient {
    * número do contato quando houver mais de um candidato.
    */
   /** Leads parados numa etapa (até `limite`, mais recentes primeiro). Usado pelo sincronizador pra regra das 48 h em COMPARECEU. */
-  async listLeadsPorEtapa(pipelineId: number, statusId: number, limite = 250, page = 1): Promise<KommoLead[]> {
+  async listLeadsPorEtapa(pipelineId: number, statusId: number, limite = 250, page = 1, comContatos = false): Promise<KommoLead[]> {
     try {
       const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
         params: {
@@ -1190,6 +1242,7 @@ export class KommoClient {
           'filter[statuses][0][pipeline_id]': pipelineId,
           'filter[statuses][0][status_id]': statusId,
           'order[id]': 'asc',
+          ...(comContatos ? { with: 'contacts' } : {}),
         },
       });
       return data?._embedded?.leads ?? [];

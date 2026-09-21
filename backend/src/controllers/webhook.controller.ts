@@ -35,6 +35,7 @@ import { tentarBotoes } from '../lib/resposta-com-botoes.js';
 import { consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
 import { descreverPausa, emPausa } from '../lib/pausa-unidade.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { voltarDaEsperaSeRespondeu } from '../lib/parados-worker.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
@@ -813,6 +814,12 @@ export async function processAgent(args: {
     logger.info({ traceId, leadId, unit: unit.slug, pausaAte: unit.pausaAte }, 'agente pulado (pausa da unidade)');
     return;
   }
+
+  // Decisão do João (18/09/2026): paciente em EM ESPERA que escreve DE VERDADE (não "ok, obrigado")
+  // volta pra EM QUALIFICAÇÃO na hora — ANTES das travas de horário/etapa, porque o cartão tem de
+  // andar mesmo quando a Sofia não vai responder (21h, IA fora da etapa). Esperado, pra este turno
+  // já ver a etapa nova. Nunca lança.
+  await voltarDaEsperaSeRespondeu(unit, leadId, humanMessage);
 
   if (burstSize && burstSize > 1) {
     await recorder.step({
