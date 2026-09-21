@@ -87,8 +87,8 @@ test('parados: régua esgotada só derruba entrada e qualificação, e só se o 
 });
 
 test('parados: "ok, obrigado 🙏" é cortesia; pergunta ou frase é o paciente voltando', () => {
-  for (const m of ['ok', 'Ok, obrigada!', 'tá bom 🙏', 'Beleza, valeu', 'Bom dia', 'sim', '👍', '']) assert.equal(ehRespostaDeCortesia(m), true, m);
-  for (const m of ['oi, consegui os exames', 'quanto custa a consulta?', 'quero agendar', 'ok mas tem horário amanhã?']) {
+  for (const m of ['ok', 'Ok, obrigada!', 'tá bom 🙏', 'Beleza, valeu', 'Bom dia', '👍', '']) assert.equal(ehRespostaDeCortesia(m), true, m);
+  for (const m of ['sim', 'pode ser', 'tudo bem, vamos marcar', 'oi, consegui os exames', 'quanto custa a consulta?', 'quero agendar', 'ok mas tem horário amanhã?']) {
     assert.equal(ehRespostaDeCortesia(m), false, m);
   }
 });

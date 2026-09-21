@@ -200,11 +200,13 @@ export function decidirReguaEsgotada(statusConversa: string | null | undefined, 
   };
 }
 
+// Só agradecimento, despedida e saudação. "sim", "pode ser", "tudo bem" ficam FORA: são resposta
+// afirmativa à retomada ("quer que eu já marque?") e têm de trazer o cartão de volta.
 const CORTESIA = new Set([
-  'ok', 'okay', 'oks', 'okk', 'ta', 'tá', 'tabom', 'blz', 'beleza', 'certo', 'combinado', 'fechado', 'valeu', 'vlw',
-  'obrigado', 'obrigada', 'obg', 'brigado', 'brigada', 'grato', 'grata', 'gratidao', 'show', 'perfeito', 'otimo', 'sim',
-  'bom', 'dia', 'tarde', 'noite', 'boa', 'ate', 'logo', 'mais', 'tudo', 'bem', 'entendi', 'entendido', 'pode', 'ser',
-  'amem', 'deus', 'abencoe', 'bjs', 'beijo', 'beijos', 'abraco', 'abracos', 'igualmente', 'pra', 'voce', 'tambem',
+  'ok', 'okay', 'oks', 'okk', 'ta', 'tabom', 'blz', 'beleza', 'certo', 'combinado', 'valeu', 'vlw',
+  'obrigado', 'obrigada', 'obg', 'brigado', 'brigada', 'grato', 'grata', 'gratidao', 'show', 'perfeito', 'otimo',
+  'bom', 'dia', 'tarde', 'noite', 'boa', 'ate', 'logo', 'mais', 'amem', 'deus', 'abencoe', 'bjs', 'beijo', 'beijos',
+  'abraco', 'abracos', 'igualmente', 'pra', 'voce', 'tambem',
 ]);
 
 /** "ok, obrigado 🙏" não é o paciente voltando: não cancela a espera. */

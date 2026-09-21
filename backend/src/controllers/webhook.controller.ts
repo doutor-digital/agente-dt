@@ -815,6 +815,12 @@ export async function processAgent(args: {
     return;
   }
 
+  // Decisão do João (18/09/2026): paciente em EM ESPERA que escreve DE VERDADE (não "ok, obrigado")
+  // volta pra EM QUALIFICAÇÃO na hora — ANTES das travas de horário/etapa, porque o cartão tem de
+  // andar mesmo quando a Sofia não vai responder (21h, IA fora da etapa). Esperado, pra este turno
+  // já ver a etapa nova. Nunca lança.
+  await voltarDaEsperaSeRespondeu(unit, leadId, humanMessage);
+
   if (burstSize && burstSize > 1) {
     await recorder.step({
       kind: 'THINKING',
@@ -1041,11 +1047,6 @@ export async function processAgent(args: {
   } catch (err) {
     logger.warn({ err, leadId, unit: unit.slug }, 'falha no guard de etapa (allowlist/pause_in_stages) — seguindo');
   }
-
-  // Decisão do João (18/09/2026): paciente em EM ESPERA que escreve DE VERDADE (não "ok, obrigado")
-  // volta pra EM QUALIFICAÇÃO antes de a Sofia responder — depois de todas as travas acima, e
-  // esperado, pra este turno já ver a etapa nova. Nunca lança.
-  await voltarDaEsperaSeRespondeu(unit, leadId, humanMessage);
 
   try {
     const graph = await buildAgentGraph(recorder, unit, leadId);

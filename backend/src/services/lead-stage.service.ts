@@ -55,6 +55,11 @@ const PIPE_TTL_MS = 10 * 60_000;
 const pipeCache = new Map<string, { em: number; pipes: KommoPipeline[] }>();
 const etapaCache = new Map<string, { em: number; valor: EstadoEtapaLead | null }>();
 
+/** Quem MOVE o cartão no meio de um turno (ex.: volta de EM ESPERA) chama isto, senão o prompt lê a etapa velha por até 90 s. */
+export function invalidarEtapa(unitId: string, leadId: number): void {
+  etapaCache.delete(`${unitId}:${leadId}`);
+}
+
 async function pipelinesDaUnidade(unit: Unit): Promise<KommoPipeline[]> {
   const hit = pipeCache.get(unit.id);
   if (hit && Date.now() - hit.em < PIPE_TTL_MS) return hit.pipes;
