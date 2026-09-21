@@ -4,6 +4,7 @@ import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { ESPERAS_MS, jaSaiu, valeRetentar } from '../lib/reenvio-salesbot.js';
 import { semCoracao } from '../lib/sem-coracao.js';
+import { semCarinha, semCarinhaLigado } from '../lib/carinha-antiga.js';
 
 export interface KommoCustomFieldValue {
   field_id: number;
@@ -223,14 +224,16 @@ export function paraNumero(value: string | number | string[]): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export function downgradeEmoji(text: string): string {
-  let out = semCoracao(text);
+export function downgradeEmoji(text: string, slug?: string | null): string {
+  // Onde a carinha antiga está desligada, o 😊 some em vez de virar ☺ — ver
+  // carinha-antiga.ts. Antes do mapa, senão o ☺ já teria sido criado.
+  let out = semCoracao(semCarinhaLigado(slug) ? semCarinha(text) : text);
   for (const [from, to] of EMOJI_BMP_DOWNGRADE) {
     if (out.includes(from)) out = out.replaceAll(from, to);
   }
   out = out.replace(/[\u{10000}-\u{10FFFF}]/gu, '');
   out = out.replace(/[︎️]/g, '');
-  return out;
+  return semCarinhaLigado(slug) ? semCarinha(out) : out;
 }
 
 /**
@@ -421,6 +424,8 @@ export function resolveEnumId(
 }
 
 interface KommoCreds {
+  /** Só pra decidir coisas por unidade na hora do envio (ex.: tirar a carinha ☺). */
+  slug: string | null;
   subdomain: string;
   accessToken: string;
   salesbotId: number | null;
@@ -430,20 +435,22 @@ interface KommoCreds {
 }
 
 function credsFromUnit(
-  unit: Pick<
-    Unit,
-    | 'kommoSubdomain'
-    | 'kommoAccessToken'
-    | 'kommoSalesbotId'
-    | 'kommoReplyFieldId'
-    | 'kommoBypassSalesbot'
-    | 'kommoSalesbotExecuteEnabled'
-  >,
+  unit: Partial<Pick<Unit, 'slug'>> &
+    Pick<
+      Unit,
+      | 'kommoSubdomain'
+      | 'kommoAccessToken'
+      | 'kommoSalesbotId'
+      | 'kommoReplyFieldId'
+      | 'kommoBypassSalesbot'
+      | 'kommoSalesbotExecuteEnabled'
+    >,
 ): KommoCreds {
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     throw new Error('Unit sem credenciais Kommo configuradas');
   }
   return {
+    slug: unit.slug ?? null,
     subdomain: unit.kommoSubdomain,
     accessToken: unit.kommoAccessToken,
     salesbotId: unit.kommoSalesbotId,
@@ -455,6 +462,7 @@ function credsFromUnit(
 
 function credsFromEnv(): KommoCreds {
   return {
+    slug: null,
     subdomain: env.KOMMO_SUBDOMAIN,
     accessToken: env.KOMMO_ACCESS_TOKEN,
     salesbotId: env.KOMMO_SALESBOT_ID ?? null,
@@ -1330,7 +1338,7 @@ export class KommoClient {
 
     const t0Patch = performance.now();
     try {
-      const safeText = downgradeEmoji(text);
+      const safeText = downgradeEmoji(text, this.creds.slug);
       const wasDowngraded = safeText !== text;
       const sentBytes = Buffer.byteLength(safeText, 'utf8');
       const hasEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(safeText);
@@ -1549,7 +1557,7 @@ export class KommoClient {
     if (this.creds.bypassSalesbot && this.creds.replyFieldId) {
       const t0 = performance.now();
       try {
-        const chunks = splitIntoChunks(text, 240);
+        const chunks = splitIntoChunks(downgradeEmoji(text, this.creds.slug), 240);
         for (let i = 0; i < chunks.length; i++) {
           await this.http.patch(`/leads/${leadId}`, {
             custom_fields_values: [
