@@ -4,6 +4,8 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
 import { montarPrefixoAnthropic } from '../agent/graph.js';
+import { emPausa } from './pausa-unidade.js';
+import { cortarSeEstourou } from '../agent/teto-mensal.js';
 import { invokeChatModel } from '../services/openai.service.js';
 import type { TraceRecorder } from '../agent/trace-recorder.js';
 
@@ -26,6 +28,9 @@ export function deveAquecer(ociosoMin: number, hora: number): boolean {
 const recorderMudo = { step: async () => undefined } as unknown as TraceRecorder;
 
 async function aquecer(unit: Unit): Promise<void> {
+  // Unidade em pausa (recepção ou teto mensal) não vai receber chamada nenhuma: manter o cache
+  // quente é jogar dinheiro.
+  if (emPausa(unit)) return;
   const rows = await prisma.$queryRaw<{ ultima: Date | null }[]>`
     select max(created_at) as ultima from llm_calls
     where unit_id = ${unit.id} and provider = 'anthropic' and status = 'success'
@@ -34,6 +39,8 @@ async function aquecer(unit: Unit): Promise<void> {
   if (!ultima) return;
   const ociosoMin = (Date.now() - new Date(ultima).getTime()) / 60_000;
   if (!deveAquecer(ociosoMin, horaLocal(Date.now(), fusoDaUnidade(unit)))) return;
+  // Só na hora de gastar: conta que estourou o teto (modo pausar) é pausada aqui e não aquece.
+  if (await cortarSeEstourou(unit)) return;
 
   const prefixo = await montarPrefixoAnthropic(unit, recorderMudo);
   if (!prefixo) return;

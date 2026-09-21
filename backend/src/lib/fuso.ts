@@ -40,3 +40,49 @@ export function dataBRNoFuso(ms: number, tz: string): string {
     year: 'numeric',
   }).format(new Date(ms));
 }
+
+function partesNoFuso(d: Date, tz: string): { ano: number; mes: number; dia: number; hora: number; min: number; seg: number } {
+  const partes = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(d);
+  const n = (tipo: string) => Number(partes.find((p) => p.type === tipo)?.value ?? '0');
+  return { ano: n('year'), mes: n('month'), dia: n('day'), hora: n('hour'), min: n('minute'), seg: n('second') };
+}
+
+/** Diferença (min) entre o relógio do fuso e o UTC naquele instante. São Paulo: -180; Manaus/Boa Vista: -240. */
+export function offsetMinutosNoFuso(d: Date, tz: string): number {
+  const p = partesNoFuso(d, tz);
+  const comoUtc = Date.UTC(p.ano, p.mes - 1, p.dia, p.hora, p.min, p.seg);
+  return Math.round((comoUtc - d.getTime()) / 60_000);
+}
+
+/** Meia-noite local de um dia 1º (ano/mês do calendário do fuso), como instante UTC. */
+function meiaNoiteDoDia1(ano: number, mes1a12: number, tz: string): Date {
+  const candidato = new Date(Date.UTC(ano, mes1a12 - 1, 1, 0, 0, 0));
+  return new Date(candidato.getTime() - offsetMinutosNoFuso(candidato, tz) * 60_000);
+}
+
+/** Meia-noite do dia 1º do mês corrente NO FUSO, como instante UTC. */
+export function inicioDoMesNoFuso(agora: Date, tz: string): Date {
+  const p = partesNoFuso(agora, tz);
+  return meiaNoiteDoDia1(p.ano, p.mes, tz);
+}
+
+/** Meia-noite do dia 1º do mês SEGUINTE no fuso (quando uma pausa "até o dia 1º" acaba). */
+export function inicioDoProximoMesNoFuso(agora: Date, tz: string): Date {
+  const p = partesNoFuso(agora, tz);
+  return p.mes === 12 ? meiaNoiteDoDia1(p.ano + 1, 1, tz) : meiaNoiteDoDia1(p.ano, p.mes + 1, tz);
+}
+
+/** "2026-09" — o mês corrente no fuso. */
+export function mesNoFuso(agora: Date, tz: string): string {
+  const p = partesNoFuso(agora, tz);
+  return `${p.ano}-${String(p.mes).padStart(2, '0')}`;
+}

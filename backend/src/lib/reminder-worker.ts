@@ -8,6 +8,7 @@ import { mensagensOficiais } from '../services/kommo-talks.service.js';
 import { enviarMensagemDeChat } from '../services/kommo-chat.service.js';
 import { BOTOES_D1, contextoDeChatDoLead, janelaAberta, textoAlertaSemJanela, textoConfirmacaoD1 } from './confirmacao-d1.js';
 import { emPausa } from './pausa-unidade.js';
+import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 
 /** Não repete a pergunta de véspera para a mesma consulta (o worker roda de hora em hora). */
@@ -161,7 +162,11 @@ async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const unidades = (await prisma.unit.findMany({ where: { spineEnabled: true } })).filter((u) => !emPausa(u));
+    // A pausa por TETO MENSAL corta o que gasta IA; o lembrete de véspera é template/Salesbot, não
+    // gasta token e evita falta — segue rodando. A pausa da recepção continua valendo.
+    const unidades = (await prisma.unit.findMany({ where: { spineEnabled: true } })).filter(
+      (u) => !emPausa(u) || u.pausaPor === PAUSA_POR,
+    );
     for (const unit of unidades) {
       await lembrarUnidade(unit).catch((err) => {
         logger.warn({ err: String(err), unit: unit.slug }, 'lembrete: erro na unidade (ignorado)');

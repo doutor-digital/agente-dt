@@ -14,10 +14,18 @@ test('sonnet-5 usa o preço permanente de $2/$10', () => {
   assert.equal(custo, 12);
 });
 
-test('cache anthropic: leitura a 0.1x e escrita a 2x', () => {
-  const custo = calculateCost('claude-sonnet-5', 1_000_000, 0, 500_000, 100_000);
-  const esperado = (400_000 / 1e6) * 2 + (500_000 / 1e6) * 2 * 0.1 + (100_000 / 1e6) * 2 * 2;
+test('cache anthropic: leitura a 0.1x, gravação de 5 min a 1.25x e de 1 h a 2x', () => {
+  const custo = calculateCost('claude-sonnet-5', 1_000_000, 0, 500_000, 100_000, 50_000);
+  const esperado =
+    (350_000 / 1e6) * 2 + (500_000 / 1e6) * 2 * 0.1 + (100_000 / 1e6) * 2 * 1.25 + (50_000 / 1e6) * 2 * 2;
   assert.equal(custo, Math.round(esperado * 1e6) / 1e6);
+});
+
+test('cache anthropic: sem o detalhe por TTL, a gravação vai toda como 1 h (erra pra cima)', () => {
+  const soUmaHora = calculateCost('claude-sonnet-5', 40_000, 0, 0, 0, 40_000);
+  const soCincoMin = calculateCost('claude-sonnet-5', 40_000, 0, 0, 40_000, 0);
+  assert.ok(soUmaHora > soCincoMin);
+  assert.equal(soUmaHora, Math.round((40_000 / 1e6) * 2 * 2 * 1e6) / 1e6);
 });
 
 test('cache openai: leitura a 0.5x e escrita sem custo extra', () => {
