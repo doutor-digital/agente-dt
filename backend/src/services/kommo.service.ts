@@ -26,7 +26,7 @@ export interface KommoLead {
   custom_fields_values?: KommoCustomFieldValue[] | null;
   _embedded?: {
     tags?: Array<{ id: number; name: string }>;
-    contacts?: Array<{ id: number }>;
+    contacts?: Array<{ id: number; is_main?: boolean }>;
   };
 }
 
@@ -1048,42 +1048,43 @@ export class KommoClient {
   }
 
   /**
-   * Última mensagem RECEBIDA do contato (epoch s). O chat mora no CONTATO: pedir
-   * `incoming_chat_message` por lead devolve 204. Erro de API LANÇA — quem decide prazo
-   * por isto não pode confundir "API caiu" com "paciente nunca escreveu".
+   * O CONTATO recebeu mensagem do paciente desde `desdeEpoch`? O chat mora no CONTATO: pedir
+   * `incoming_chat_message` por lead devolve 204. Pergunta com janela (filter created_at from) e
+   * limit 1: não depende da ordem que a API devolve. Erro de API LANÇA — quem decide prazo por
+   * isto não pode confundir "API caiu" com "paciente nunca escreveu".
    */
-  async ultimaMensagemRecebidaDoContato(contactId: number): Promise<number | null> {
+  async contatoEscreveuDesde(contactId: number, desdeEpoch: number): Promise<boolean> {
     try {
-      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ created_at?: number }> } }>('/events', {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ id?: string }> } }>('/events', {
         params: {
           'filter[entity]': 'contact',
           'filter[entity_id][]': contactId,
           'filter[type][]': 'incoming_chat_message',
-          limit: 50,
+          'filter[created_at][from]': desdeEpoch,
+          limit: 1,
         },
       });
-      const ts = (data?._embedded?.events ?? []).map((e) => Number(e.created_at ?? 0)).filter((t) => t > 0);
-      return ts.length ? Math.max(...ts) : null;
+      return (data?._embedded?.events ?? []).length > 0;
     } catch (err) {
-      wrapAxiosError(err, `ultimaMensagemRecebidaDoContato(${contactId})`);
+      wrapAxiosError(err, `contatoEscreveuDesde(${contactId})`);
     }
   }
 
-  /** Quando o cartão entrou na etapa atual (epoch s): o `lead_status_changed` mais recente. Erro lança. */
-  async entradaNaEtapaAtual(leadId: number): Promise<number | null> {
+  /** O cartão mudou de etapa desde `desdeEpoch`? (acabou de chegar onde está). Erro lança. */
+  async leadMudouEtapaDesde(leadId: number, desdeEpoch: number): Promise<boolean> {
     try {
-      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ created_at?: number }> } }>('/events', {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ id?: string }> } }>('/events', {
         params: {
           'filter[entity]': 'lead',
           'filter[entity_id][]': leadId,
           'filter[type][]': 'lead_status_changed',
-          limit: 20,
+          'filter[created_at][from]': desdeEpoch,
+          limit: 1,
         },
       });
-      const ts = (data?._embedded?.events ?? []).map((e) => Number(e.created_at ?? 0)).filter((t) => t > 0);
-      return ts.length ? Math.max(...ts) : null;
+      return (data?._embedded?.events ?? []).length > 0;
     } catch (err) {
-      wrapAxiosError(err, `entradaNaEtapaAtual(${leadId})`);
+      wrapAxiosError(err, `leadMudouEtapaDesde(${leadId})`);
     }
   }
 

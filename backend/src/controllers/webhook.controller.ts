@@ -815,10 +815,6 @@ export async function processAgent(args: {
     return;
   }
 
-  // Decisão do João (18/09/2026): paciente em EM ESPERA que escreve volta pra EM QUALIFICAÇÃO na
-  // hora. Solto: não atrasa a resposta; o cartão muda em ~1 s e a retomada automática é cancelada.
-  void voltarDaEsperaSeRespondeu(unit, leadId);
-
   if (burstSize && burstSize > 1) {
     await recorder.step({
       kind: 'THINKING',
@@ -1045,6 +1041,11 @@ export async function processAgent(args: {
   } catch (err) {
     logger.warn({ err, leadId, unit: unit.slug }, 'falha no guard de etapa (allowlist/pause_in_stages) — seguindo');
   }
+
+  // Decisão do João (18/09/2026): paciente em EM ESPERA que escreve DE VERDADE (não "ok, obrigado")
+  // volta pra EM QUALIFICAÇÃO antes de a Sofia responder — depois de todas as travas acima, e
+  // esperado, pra este turno já ver a etapa nova. Nunca lança.
+  await voltarDaEsperaSeRespondeu(unit, leadId, humanMessage);
 
   try {
     const graph = await buildAgentGraph(recorder, unit, leadId);
