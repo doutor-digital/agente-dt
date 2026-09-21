@@ -3,6 +3,15 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
+import { gravarCampoDigital, limparCampoDigital } from '../services/lead-metrics.service.js';
+
+/**
+ * Revisão dentro do próprio Kommo (decisão do João, 21/09/2026): em vez de tarefa ou lista no relatório,
+ * o lead com cartão errado ganha a etiqueta abaixo e o motivo no campo do bloco DIGITAL. A SDR filtra a
+ * lista pela etiqueta; o relatório das 20h leva só a contagem e o link. Quando corrige, tudo sai sozinho.
+ */
+export const TAG_REVISAR_CARTAO = '⚠ Revisar cartão';
+export const CAMPO_PENDENCIA_CARTAO = '⚠ Pendência do cartão';
 
 const SWEEP_MS = 5 * 60_000;
 const LOOKBACK_MIN = 12;
@@ -327,12 +336,14 @@ async function validarUnidade(unit: Unit): Promise<void> {
       return soLigacao;
     };
 
+    // 1) card_alert espelha o conjunto ATUAL de pendências. Regra que deixou de aplicar (lead mudou de
+    //    etapa/funil) também sai — antes ficava fantasma na contagem (review, 21/09).
     for (const regra of REGRAS_CARD) {
-      if (!regra.aplica(lead, ctx)) continue;
       const chave = `${leadIdStr}|${regra.key}`;
-      const erro = achados.get(regra.key);
+      const erro = regra.aplica(lead, ctx) ? achados.get(regra.key) : undefined;
 
       if (!erro) {
+        achados.delete(regra.key);
         if (jaAlertado.has(chave)) {
           await prisma.cardAlert
             .deleteMany({ where: { unitId: unit.id, leadId: leadIdStr, ruleKey: regra.key } })
@@ -348,31 +359,57 @@ async function validarUnidade(unit: Unit): Promise<void> {
           { unit: unit.slug, leadId: lead.id, rule: regra.key },
           'card-validation: só o rastreio de ligação mexeu no cartão — sem alerta',
         );
+        achados.delete(regra.key);
         continue;
       }
 
-      const nome = (lead.name ?? '').trim() || 'lead';
-      // Decisão do João (21/09/2026): campo vazio NÃO é tarefa — é NOTA no cartão. As tarefas do vigia
-      // eram a maior fonte de tarefa em Imperatriz e Parauapebas e tampavam o chat. A lista consolidada
-      // sai no relatório das 20h (tabela card_alert); a tarefa fica só pra o que exige ação com prazo.
-      const texto = `⚠️ Card ${erro}. Revisar preenchimento. [Contato: ${nome}]`;
+      // Decisão do João (21/09/2026): campo vazio NÃO é tarefa nem nota solta — o lead ganha a etiqueta
+      // "⚠ Revisar cartão" e o motivo no campo "⚠ Pendência do cartão" (reconciliado abaixo).
+      // Aqui só registramos a pendência por regra, que é o que a contagem do relatório usa.
       try {
-        const res = await kommo.addLeadNote(lead.id, texto);
-        if (res) {
-          await prisma.cardAlert.create({
-            data: { unitId: unit.id, leadId: leadIdStr, ruleKey: regra.key },
-          });
-          jaAlertado.add(chave);
-          logger.info({ unit: unit.slug, leadId: lead.id, rule: regra.key }, 'card-validation: alerta criado');
-        }
+        await prisma.cardAlert.create({
+          data: { unitId: unit.id, leadId: leadIdStr, ruleKey: regra.key },
+        });
+        jaAlertado.add(chave);
+        logger.info({ unit: unit.slug, leadId: lead.id, rule: regra.key }, 'card-validation: pendência registrada');
       } catch (err) {
+        achados.delete(regra.key);
         logger.warn(
           { err: String(err), unit: unit.slug, leadId: lead.id, rule: regra.key },
-          'card-validation: falha ao criar alerta',
+          'card-validation: falha ao registrar pendência',
         );
       }
     }
+
+    // 2) Etiqueta + motivo reconciliados com o estado REAL do cartão, toda passada: se a Kommo falhou na
+    //    anterior (429, incidente), aqui refaz; se o lead já está certo, não escreve nada.
+    const pendentes = REGRAS_CARD.map((r) => achados.get(r.key)).filter(Boolean) as string[];
+    const temTag = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_REVISAR_CARTAO);
+    const textoAtual = String(valorDoCampoPorNome(lead, CAMPO_PENDENCIA_CARTAO) ?? '').trim();
+    const textoDesejado = pendentes.join(' · ').slice(0, 250);
+    try {
+      if (pendentes.length > 0) {
+        if (!temTag) await kommo.addTag({ leadId: lead.id, tag: TAG_REVISAR_CARTAO });
+        if (textoAtual !== textoDesejado) {
+          await gravarCampoDigital(unit, kommo, lead.id, CAMPO_PENDENCIA_CARTAO, 'text', textoDesejado);
+        }
+        if (!temTag || textoAtual !== textoDesejado) {
+          logger.info({ unit: unit.slug, leadId: lead.id, pendencias: pendentes.length }, 'card-validation: etiqueta ⚠ Revisar cartão aplicada');
+        }
+      } else if (temTag || textoAtual) {
+        if (temTag) await kommo.removeTag(lead.id, TAG_REVISAR_CARTAO);
+        if (textoAtual) await limparCampoDigital(unit, kommo, lead.id, CAMPO_PENDENCIA_CARTAO);
+        logger.info({ unit: unit.slug, leadId: lead.id }, 'card-validation: cartão corrigido — etiqueta removida');
+      }
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'card-validation: falha ao marcar/desmarcar revisão no cartão');
+    }
   }
+}
+
+function valorDoCampoPorNome(lead: KommoLead, nome: string): unknown {
+  const campo = (lead.custom_fields_values ?? []).find((v) => v.field_name === nome);
+  return campo?.values?.[0]?.value ?? null;
 }
 
 async function varrer(): Promise<void> {

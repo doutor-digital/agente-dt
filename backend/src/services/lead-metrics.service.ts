@@ -50,6 +50,20 @@ export async function gravarCampoDigital(
   return true;
 }
 
+/** Esvazia um campo do bloco DIGITAL pelo nome (false se a conta não tem o campo). */
+export async function limparCampoDigital(
+  unit: Unit,
+  kommo: KommoClient,
+  leadId: number,
+  nome: string,
+): Promise<boolean> {
+  const esquema = await esquemaDaUnidade(unit, kommo);
+  const id = esquema.campoPorNome(nome);
+  if (id === null) return false;
+  await kommo.clearLeadCustomField(leadId, id);
+  return true;
+}
+
 export function scheduleLeadMetrics(unit: Unit, leadId: number): void {
   void atualizarMetricasDeTurno(unit, leadId).catch((err) => {
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'lead-metrics: falha ao atualizar (ignorada)');
