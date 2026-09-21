@@ -32,6 +32,14 @@ export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | nul
   const unit = await prisma.unit.findUnique({ where: { id: args.unitId } });
   if (!unit) return null;
 
+  // Conta no teto do mês (TETO_MENSAL_ACAO=pausar) não gasta nem com a régua — e já entra em pausa
+  // aqui, sem esperar uma mensagem chegar ao agente; na próxima varredura o worker pula a unidade.
+  // Antes de ler histórico e montar prompt: nada disso é preciso pra decidir.
+  if (await cortarSeEstourou(unit)) {
+    logger.warn({ unit: unit.slug, leadId: args.leadId }, 'follow-up: conta no teto do mês — degrau não gerado');
+    return null;
+  }
+
   const conversa = await historico(args.conversationId);
   if (!conversa.trim()) return null;
 
@@ -65,13 +73,6 @@ Responda APENAS com o texto da mensagem, sem aspas e sem explicação.
 
 CONVERSA ATÉ AGORA:
 ${conversa}`.trim();
-
-  // Conta no teto do mês (TETO_MENSAL_ACAO=pausar) não gasta nem com a régua — e já entra em pausa
-  // aqui, sem esperar uma mensagem chegar ao agente; na próxima varredura o worker pula a unidade.
-  if (await cortarSeEstourou(unit)) {
-    logger.warn({ unit: unit.slug, leadId: args.leadId }, 'follow-up: conta no teto do mês — degrau não gerado');
-    return null;
-  }
 
   try {
     const model = createChatModel(unit, { maxTokens: 300 });

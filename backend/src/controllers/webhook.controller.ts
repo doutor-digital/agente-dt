@@ -34,6 +34,7 @@ import { extrairBotoes } from '../lib/botoes.js';
 import { tentarBotoes } from '../lib/resposta-com-botoes.js';
 import { consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
 import { descreverPausa, emPausa } from '../lib/pausa-unidade.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
@@ -806,7 +807,7 @@ export async function processAgent(args: {
   if (emPausa(unit)) {
     await finishWidgetSilently();
     const totalLatency = Math.round(performance.now() - requestStart);
-    const desc = descreverPausa(unit, unit.spineTimezone ?? 'America/Sao_Paulo');
+    const desc = descreverPausa(unit, fusoDaUnidade(unit));
     await recorder.step({ kind: 'COMPLETED', title: `⏸️ ${desc} — quem atende agora é a equipe`, payload: { leadId, pausaAte: unit.pausaAte, pausaPor: unit.pausaPor }, latencyMs: totalLatency });
     await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paused_by_unit__' });
     logger.info({ traceId, leadId, unit: unit.slug, pausaAte: unit.pausaAte }, 'agente pulado (pausa da unidade)');

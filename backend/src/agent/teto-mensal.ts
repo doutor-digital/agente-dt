@@ -24,7 +24,7 @@
  * `TETO_MENSAL_SLUGS` restringe quais unidades CONFEREM o teto; a soma e a pausa são sempre da conta
  * inteira (as irmãs do mesmo subdomínio entram nas duas). Piloto por unidade = piloto por conta.
  */
-import type { Unit } from '@prisma/client';
+import { Prisma, type Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { opsAlert } from '../lib/ops-alert.js';
@@ -172,20 +172,27 @@ export async function pausarContaAteProximoMes(unit: Unit, v: VereditoMensal, ag
   const ate = inicioDoProximoMesNoFuso(agora, fusoDaUnidade(unit));
   const sub = subdominio(unit);
   const motivo = `teto mensal de IA: ${formatarBrl(v.brl)} de ${formatarBrl(v.teto)} em ${v.mes}`;
-  // Só ESTENDE a pausa: uma pausa da recepção que já vai além do dia 1º fica como está (motivo e
-  // autor dela também). Mesma normalização (lower/trim) da soma do gasto. Idempotente: chamada de
-  // novo com a conta já pausada até `ate` não toca em nada.
-  const n = sub
-    ? await prisma.$executeRaw`
-        update units set pausa_desde = null, pausa_ate = ${ate}, pausa_motivo = ${motivo}, pausa_por = ${PAUSA_POR}
-        where lower(trim(kommo_subdomain)) = ${sub} and (pausa_ate is null or pausa_ate < ${ate})`
-    : await prisma.$executeRaw`
-        update units set pausa_desde = null, pausa_ate = ${ate}, pausa_motivo = ${motivo}, pausa_por = ${PAUSA_POR}
-        where id = ${unit.id} and (pausa_ate is null or pausa_ate < ${ate})`;
+  const daConta = sub ? Prisma.sql`lower(trim(kommo_subdomain)) = ${sub}` : Prisma.sql`id = ${unit.id}`;
+  // Comparações de hora com o parâmetro `agora` (UTC, como o Prisma grava), nunca com now(): a
+  // sessão do banco está em America/Sao_Paulo e `timestamp` sem fuso × now() desloca 3 h.
+  const emCurso = Prisma.sql`(pausa_ate is not null and pausa_ate > ${agora} and (pausa_desde is null or pausa_desde <= ${agora}))`;
+  // Regras: (1) o fim só ESTENDE até o dia 1º (greatest) — pausa da recepção que já vai além fica;
+  // (2) pausa da recepção EM CURSO guarda autor e motivo (o lembrete de véspera respeita a dela);
+  // (3) pausa AGENDADA pro futuro vira pausa agora. Idempotente: conta já pausada até `ate` ou além
+  // e sem agendamento não muda linha nenhuma.
+  const n = await prisma.$executeRaw`
+    update units
+       set pausa_desde  = null,
+           pausa_ate    = greatest(pausa_ate, ${ate}),
+           pausa_motivo = case when ${emCurso} then pausa_motivo else ${motivo} end,
+           pausa_por    = case when ${emCurso} then pausa_por else ${PAUSA_POR} end
+     where ${daConta}
+       and (pausa_ate is null or pausa_ate < ${ate} or (pausa_desde is not null and pausa_desde > ${agora}))`;
   if (n > 0) {
     logger.warn({ conta: v.conta, unidades: n, ate: ate.toISOString(), brl: Number(v.brl.toFixed(2)) }, 'teto mensal: conta pausada até o dia 1º');
   }
-  // O aviso "IA pausada" só depois de a pausa estar gravada (uma vez por mês por conta).
+  // O aviso só depois de a pausa estar gravada (uma vez por mês por conta). Com n = 0 a conta já
+  // estava pausada além do dia 1º pela recepção — a IA está pausada de todo jeito.
   void avisar(unit, v);
   return ate;
 }
@@ -202,7 +209,8 @@ export function textoDoAviso(v: VereditoMensal, acao: AcaoTeto): { title: string
       title: `🛑 IA em ${v.conta} passou do teto do mês: ${brl} de ${teto}`,
       message:
         acao === 'pausar'
-          ? 'A IA foi pausada nesta conta até o dia 1º (aparece na página /pausa da unidade); a equipe assume pelo Kommo. ' +
+          ? 'A IA está pausada nesta conta até o dia 1º (aparece na página /pausa da unidade); a equipe assume pelo Kommo — ' +
+            'as conversas novas ficam na caixa de entrada, sem tarefa por lead. ' +
             'Pra liberar antes: subir TETO_MENSAL_BRL e despausar na página /pausa — só despausar não basta, ela pausa de novo na próxima mensagem.'
           : 'A IA continua respondendo (TETO_MENSAL_ACAO=avisar). Pra cortar de fato ao bater o teto: TETO_MENSAL_ACAO=pausar.',
     };
@@ -230,8 +238,10 @@ async function unidadeDonaDaMarca(unit: Pick<Unit, 'id' | 'kommoSubdomain'>): Pr
 }
 
 async function avisar(unit: Unit, v: VereditoMensal): Promise<void> {
-  // O teto entra na chave: se a chefe subir o teto no meio do mês, bater no novo teto avisa de novo.
-  const chave = `${v.nivel === 'estourou' ? 'teto_mensal_100' : 'teto_mensal_80'}:${v.teto}`;
+  // Teto e ação entram na chave: subir o teto no meio do mês e bater no novo avisa de novo; virar
+  // de avisar pra pausar depois do aviso de 100 % avisa "está pausada" (senão a conta pausaria em silêncio).
+  const acao = acaoAoEstourar();
+  const chave = `${v.nivel === 'estourou' ? 'teto_mensal_100' : 'teto_mensal_80'}:${v.teto}:${acao}`;
   const marca = `${v.conta}:${v.mes}:${chave}`;
   if (avisadosEmMemoria.has(marca)) return;
   const dona = await unidadeDonaDaMarca(unit);
@@ -240,7 +250,7 @@ async function avisar(unit: Unit, v: VereditoMensal): Promise<void> {
     avisadosEmMemoria.add(marca);
     return;
   }
-  const texto = textoDoAviso(v, acaoAoEstourar());
+  const texto = textoDoAviso(v, acao);
   // Marca SÓ depois de entregar: relay fora do ar na hora do estouro não pode calar o aviso do mês
   // inteiro. Se falhar, o próprio opsAlert segura 30 min e a próxima conferência tenta de novo.
   const entregue = await opsAlert({ chave: marca, ...texto });
