@@ -1403,16 +1403,15 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           // agendamento da IA, então não pode depender do que o LLM escrever.
           try {
             const quando = `${args.data.slice(8, 10)}/${args.data.slice(5, 7)} às ${args.hora}`;
-            await kommo.createTask({
-              leadId: args.leadId!,
-              text:
-                `ALERTA · ${unit.slug} · [Contato: ${leadAtual?.name ?? 'paciente'}] ` +
-                `🤖 CONSULTA AGENDADA PELA I.A Sofia — ${quando}` +
-                `${especialista ? ` com ${especialista}` : ''}. Confirmar com o paciente.`,
-              completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
-            });
+            // 21/09/2026: vira NOTA, não tarefa. O cartão já carrega Data da Consulta e
+            // "Agendamento feito por = IA"; a tarefa só duplicava informação e tampava o chat.
+            await kommo.addLeadNote(
+              args.leadId!,
+              `🤖 CONSULTA AGENDADA PELA I.A Sofia — ${quando}` +
+                `${especialista ? ` com ${especialista}` : ''}. [Contato: ${leadAtual?.name ?? 'paciente'}]`,
+            );
           } catch (err) {
-            logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao avisar o grupo — agendamento segue valendo');
+            logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao registrar a nota do agendamento — agendamento segue valendo');
           }
         })();
       }

@@ -352,13 +352,12 @@ async function validarUnidade(unit: Unit): Promise<void> {
       }
 
       const nome = (lead.name ?? '').trim() || 'lead';
-      const texto = `ALERTA · ${unit.slug} · [Contato: ${nome}] ⚠️ Card ${erro}. Revisar preenchimento no Kommo.`;
+      // Decisão do João (21/09/2026): campo vazio NÃO é tarefa — é NOTA no cartão. As tarefas do vigia
+      // eram a maior fonte de tarefa em Imperatriz e Parauapebas e tampavam o chat. A lista consolidada
+      // sai no relatório das 20h (tabela card_alert); a tarefa fica só pra o que exige ação com prazo.
+      const texto = `⚠️ Card ${erro}. Revisar preenchimento. [Contato: ${nome}]`;
       try {
-        const res = await kommo.createTask({
-          leadId: lead.id,
-          text: texto,
-          completeAt: Math.floor(Date.now() / 1000),
-        });
+        const res = await kommo.addLeadNote(lead.id, texto);
         if (res) {
           await prisma.cardAlert.create({
             data: { unitId: unit.id, leadId: leadIdStr, ruleKey: regra.key },
