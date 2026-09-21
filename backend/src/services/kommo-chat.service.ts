@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { randomUUID } from 'node:crypto';
 import type { Unit } from '@prisma/client';
+import { semCoracao } from '../lib/sem-coracao.js';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { decidirProva } from '../lib/prova-de-sessao.js';
@@ -322,9 +323,14 @@ export async function enviarMensagemDeChat(
   unit: Pick<Unit, 'id' | 'slug' | 'kommoSubdomain' | 'kommoAccessToken'>,
   m: MensagemDeChat,
 ): Promise<NotaEnviada> {
+  // Última porta antes do paciente por ESTE caminho. A trava de coração vivia só
+  // no cliente do Kommo (downgradeEmoji), e resposta com botão não passa por lá —
+  // achado do Codex em 21/09/2026, depois de eu dizer que o coração tinha acabado.
+  const texto = semCoracao(m.texto ?? '');
+
   const montar = (talkId: number | null): Record<string, unknown> => {
     const corpo: Record<string, unknown> = {
-      text: m.texto ?? '',
+      text: texto,
       recipient_id: m.recipientId,
       group_id: null,
       crm_dialog_id: talkId,
@@ -343,7 +349,7 @@ export async function enviarMensagemDeChat(
     if (m.botoes?.length) {
       corpo.reply_markup = {
         mode: 'inline',
-        buttons: m.botoes.slice(0, MAX_BOTOES).map((t) => [{ text: t.slice(0, MAX_CHARS_BOTAO) }]),
+        buttons: m.botoes.slice(0, MAX_BOTOES).map((t) => [{ text: semCoracao(t).slice(0, MAX_CHARS_BOTAO) }]),
       };
     }
     return corpo;
