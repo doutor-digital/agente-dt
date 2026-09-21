@@ -132,11 +132,8 @@ async function varrer(): Promise<void> {
           `a consulta não foi marcada. O paciente queria agendar: vale retomar antes que esfrie.`;
 
         try {
-          await kommo.createTask({
-            leadId,
-            text: texto,
-            completeAt: Math.floor(Date.now() / 1000) + 3600,
-          });
+          // 21/09/2026: nota no cartão em vez de tarefa (decisão do João: tarefa só pra ação com prazo).
+          await kommo.addLeadNote(leadId, texto);
           // Registrar no rastro é o que impede repetir o alerta amanhã.
           const idRastro = `perdido-${unitId}-${c.leadId}`;
           await prisma.executionStep

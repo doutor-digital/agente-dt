@@ -8,6 +8,7 @@ import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
+import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { entraPelaMeta } from '../lib/canal-de-entrada.js';
 import { marcarNaoEntregue } from '../agent/entrega-falha.js';
 import { tratarMensagemNaoRenderizada } from '../lib/mensagem-nao-renderizada.js';
@@ -925,17 +926,29 @@ export async function processAgent(args: {
     // O paciente continua escrevendo e a IA está desligada. Antes isso morria
     // aqui em silêncio; agora vira tarefa no cartão, que o fluxo de alertas
     // leva pro grupo. A IA segue pausada — quem assume é gente.
+    // Trava nova (21/09/2026), depois de Araguaína acumular 18 tarefas iguais num lead: UMA tarefa
+    // desse tipo por lead a cada 24 h, com marca persistente (sobrevive a deploy). Cogitei checar
+    // "algum humano mexeu nos últimos 15 min", mas `atividadeHumanaDesde` conta escrita do próprio
+    // agente pela API (created_by > 0) e a despedida da IA como gente — calaria o aviso justamente
+    // depois do handoff. Quem julga se a equipe já assumiu é o SLA worker, que parte do handoffAt.
     if (humanMessage.trim() && isChatMessage && devoAvisar(`${unit.id}:${leadId}`)) {
       try {
-        await createKommoClient(unit).createTask({
-          leadId,
-          text:
-            `ALERTA · ${unit.slug} · ` +
-            'O paciente continuou escrevendo com a IA pausada e ninguém respondeu. ' +
-            `Última mensagem: "${humanMessage.trim().slice(0, 120)}"`,
-          completeAt: Math.floor(Date.now() / 1000),
-        });
-        logger.info({ leadId, unit: unit.slug }, 'paciente insistiu com a IA pausada — equipe avisada');
+        const kommoCli = createKommoClient(unit);
+        if (await avisoRecente(unit.id, leadId, 'paciente_insistiu')) {
+          logger.info({ leadId, unit: unit.slug }, 'paciente insistiu — tarefa já aberta nas últimas 24 h, não repete');
+        } else {
+          const criada = await kommoCli.createTask({
+            leadId,
+            text:
+              `ALERTA · ${unit.slug} · ` +
+              'O paciente continuou escrevendo com a IA pausada e ninguém respondeu. ' +
+              `Última mensagem: "${humanMessage.trim().slice(0, 120)}"`,
+            completeAt: Math.floor(Date.now() / 1000) + 30 * 60,
+          });
+          // marca SÓ depois da Kommo confirmar — falha de rede não pode calar o aviso por 24 h
+          if (criada) await marcarAviso(unit.id, leadId, 'paciente_insistiu');
+          logger.info({ leadId, unit: unit.slug, criada: !!criada }, 'paciente insistiu com a IA pausada — equipe avisada');
+        }
       } catch (err) {
         logger.warn({ err: String(err), leadId, unit: unit.slug }, 'falha ao avisar que o paciente insistiu — segue');
       }
@@ -1175,17 +1188,23 @@ export async function processAgent(args: {
           // Pro próximo turno ela saber que o paciente não leu nada disso.
           marcarNaoEntregue(unit.id, leadId, reply);
         }
-        if (naoChegou && devoAvisar(`entrega:${unit.id}:${leadId}`)) {
+        if (
+          naoChegou &&
+          devoAvisar(`entrega:${unit.id}:${leadId}`) &&
+          // janela curta (2 h): uma 2ª falha independente no mesmo dia precisa avisar de novo
+          !(await avisoRecente(unit.id, leadId, 'entrega_falhou', 2 * 60 * 60 * 1000))
+        ) {
           try {
-            await createKommoClient(unit).createTask({
+            const criada = await createKommoClient(unit).createTask({
               leadId,
               text:
                 `ALERTA · ${unit.slug} · A resposta da IA NÃO chegou ao paciente ` +
                 '(virou nota interna). Responder por aqui e avisar o suporte. ' +
                 `Texto que ficou preso: "${reply.trim().slice(0, 110)}"`,
-              completeAt: Math.floor(Date.now() / 1000),
+              completeAt: Math.floor(Date.now() / 1000) + 30 * 60,
             });
-            logger.warn({ leadId, unit: unit.slug }, 'entrega falhou — equipe avisada');
+            if (criada) await marcarAviso(unit.id, leadId, 'entrega_falhou');
+            logger.warn({ leadId, unit: unit.slug, criada: !!criada }, 'entrega falhou — equipe avisada');
           } catch (err) {
             logger.warn(
               { err: String(err), leadId, unit: unit.slug },

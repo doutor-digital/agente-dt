@@ -6,9 +6,12 @@
  * as opções exatas do cartão e decidir o que escrever em cada lead. O worker
  * (`franquia-sync-worker.ts`) só busca dados, casa lead com paciente e aplica.
  *
- * Regras combinadas com o João em 14/09/2026:
+ * Regras combinadas com o João em 14/09/2026 (valor revisto em 19/09/2026):
  *  - campos que a franquia SABE (data, situação, fisioterapeuta, categoria,
- *    tratamento fechado, valor) espelham a franquia — se divergir, a franquia vence;
+ *    tratamento fechado) espelham a franquia — se divergir, a franquia vence;
+ *  - "¤ Valor do tratamento" NÃO é espelhado: a rede não lança valor na franquia
+ *    (price sempre 0,00), então o Kommo é a fonte (SDR digita / backfill da planilha
+ *    base do Drive) e este módulo nunca escreve nem sobrescreve esse campo;
  *  - campos de "quem/quando agendou" só são preenchidos se estiverem vazios;
  *  - nada de mover etapa nesta fase (mover dispara bot no Kommo).
  */
@@ -232,12 +235,8 @@ export function planejarEscritas(e: Entrada): Escrita[] {
     if (opcao && !igual('TRAT_FECHADO', opcao)) {
       out.push({ campo: 'TRAT_FECHADO', nome: CAMPOS_SYNC.TRAT_FECHADO, tipo: 'select', valor: opcao, motivo: atual('TRAT_FECHADO') ? 'franquia diverge' : 'vazio' });
     }
-    if (e.tratamento.price !== null && e.tratamento.price > 0) {
-      const noCartao = Number(atual('VALOR_TRAT'));
-      if (!Number.isFinite(noCartao) || Math.abs(noCartao - e.tratamento.price) >= 1) {
-        out.push({ campo: 'VALOR_TRAT', nome: CAMPOS_SYNC.VALOR_TRAT, tipo: 'monetary', valor: e.tratamento.price, motivo: atual('VALOR_TRAT') ? 'franquia diverge' : 'vazio' });
-      }
-    }
+    // "¤ Valor do tratamento" NÃO é escrito pela franquia (decisão de 19/09/2026): a rede não lança o valor lá,
+    // a SDR digita no Kommo (obrigatório em EM TRATAMENTO) e esse é o número da receita. O `price` da franquia é ignorado.
     if (!atual('FISIO')) {
       const fisio = casarFisioterapeuta(e.tratamento.staffName, e.opcoes.fisio);
       if (fisio && !out.some((w) => w.campo === 'FISIO')) {
