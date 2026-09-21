@@ -863,6 +863,17 @@ export class KommoClient {
     }
   }
 
+  /** Limpa um campo customizado do lead (a Kommo só esvazia com `values: null`). */
+  async clearLeadCustomField(leadId: number, fieldId: number): Promise<void> {
+    try {
+      await this.http.patch(`/leads/${leadId}`, {
+        custom_fields_values: [{ field_id: fieldId, values: null }],
+      });
+    } catch (err) {
+      wrapAxiosError(err, `clearLeadCustomField(${leadId}, ${fieldId})`);
+    }
+  }
+
   async removeTag(leadId: number, tag: string): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, {
@@ -1154,6 +1165,7 @@ export class KommoClient {
           limit: Math.min(limite, 250),
           'filter[updated_at][from]': desdeEpochSeg,
           order: { updated_at: 'desc' },
+          with: 'tags', // o vigia de cartão reconcilia a etiqueta "⚠ Revisar cartão" pelo estado real
         },
       });
       return data?._embedded?.leads ?? [];
