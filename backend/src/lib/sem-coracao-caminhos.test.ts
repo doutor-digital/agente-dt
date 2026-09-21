@@ -19,13 +19,15 @@ const arquivo = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8')
 test('o envio direto de chat (botões, cartão de chegada) limpa coração', () => {
   const src = arquivo('../services/kommo-chat.service.ts');
   assert.match(src, /import \{ semCoracao \}/, 'kommo-chat.service não importa semCoracao');
-  assert.match(src, /semCoracao\(m\.texto/, 'o texto da mensagem não passa por semCoracao');
-  assert.match(src, /semCoracao\(t\)/, 'o rótulo do botão não passa por semCoracao');
+  // o texto e o rótulo do botão passam por semCoracao antes de sair
+  assert.match(src, /const texto = semCoracao\(/, 'o texto da mensagem não passa por semCoracao');
+  assert.match(src, /text: semCoracao\(/, 'o rótulo do botão não passa por semCoracao');
 });
 
 test('o cliente do Kommo limpa coração antes de qualquer envio', () => {
   const src = arquivo('../services/kommo.service.ts');
-  assert.match(src, /semCoracao\(text\)/, 'downgradeEmoji não chama semCoracao');
+  const fn = src.slice(src.indexOf('export function downgradeEmoji'));
+  assert.match(fn.slice(0, 600), /semCoracao\(/, 'downgradeEmoji não chama semCoracao');
 });
 
 test('a tabela de downgrade não converte coração em ♥ de novo', () => {
