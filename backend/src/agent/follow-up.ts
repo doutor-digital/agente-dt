@@ -5,6 +5,7 @@ import { createChatModel, invokeChatModel, resolveModelName } from '../services/
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { aplicarGuardrail } from './guardrail.js';
+import { cortarSeEstourou } from './teto-mensal.js';
 
 export interface FollowUpArgs {
   unitId: string;
@@ -30,6 +31,14 @@ async function historico(conversationId: string, limite = 12): Promise<string> {
 export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | null> {
   const unit = await prisma.unit.findUnique({ where: { id: args.unitId } });
   if (!unit) return null;
+
+  // Conta no teto do mês (TETO_MENSAL_ACAO=pausar) não gasta nem com a régua — e já entra em pausa
+  // aqui, sem esperar uma mensagem chegar ao agente; na próxima varredura o worker pula a unidade.
+  // Antes de ler histórico e montar prompt: nada disso é preciso pra decidir.
+  if (await cortarSeEstourou(unit)) {
+    logger.warn({ unit: unit.slug, leadId: args.leadId }, 'follow-up: conta no teto do mês — degrau não gerado');
+    return null;
+  }
 
   const conversa = await historico(args.conversationId);
   if (!conversa.trim()) return null;
