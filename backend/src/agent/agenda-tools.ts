@@ -17,6 +17,7 @@ import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
+import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
 import {
   agendamentoDeuCerto,
   desfechoDaRemarcacao,
@@ -1297,7 +1298,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         const meu = (conf.data?.schedules ?? []).find(
           (x) => x.idSchedule === r.data?.idSchedule,
         );
-        especialista = meu?.physicalTherapist?.trim() || null;
+        // A franquia devolve "DR. FULANO"; quem atende é fisioterapeuta.
+        especialista = comQuemVaiSerAtendido(meu?.physicalTherapist);
       } catch {
         especialista = null;
       }
@@ -1461,7 +1463,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       }
 
       return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${
-        especialista ? ` Especialista: ${especialista}.` : ''
+        especialista ? ` Atendimento com ${especialista}.` : ''
       } Confirme ao paciente com EXATAMENTE este dia da semana e data.${orientacaoDePagamento(args.formaPagamento, fresca)}`;
     },
   });
