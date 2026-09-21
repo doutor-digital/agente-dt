@@ -1,5 +1,6 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
 import { logger } from '../lib/logger.js';
 import { SpineService } from './spine.service.js';
 
@@ -72,7 +73,9 @@ async function pelosAgendamentosDoPaciente(
     dia: s.dayLocal,
     hora: s.timeLocal,
     idStatus: s.idStatus,
-    especialista: s.physicalTherapist?.trim() || null,
+    // A franquia manda "DR. FULANO"; quem atende é fisioterapeuta. Normalizo aqui,
+    // na fonte, porque daqui esse nome vai pro lembrete de véspera do paciente.
+    especialista: comQuemVaiSerAtendido(s.physicalTherapist),
   };
 }
 
@@ -94,7 +97,7 @@ async function procurar(
     dia: achado.dayLocal,
     hora: achado.timeLocal,
     idStatus: achado.idStatus,
-    especialista: achado.physicalTherapist?.trim() || null,
+    especialista: comQuemVaiSerAtendido(achado.physicalTherapist),
   };
 }
 
