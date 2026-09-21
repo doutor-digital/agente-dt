@@ -1047,6 +1047,57 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Última mensagem RECEBIDA do contato (epoch s). O chat mora no CONTATO: pedir
+   * `incoming_chat_message` por lead devolve 204. Erro de API LANÇA — quem decide prazo
+   * por isto não pode confundir "API caiu" com "paciente nunca escreveu".
+   */
+  async ultimaMensagemRecebidaDoContato(contactId: number): Promise<number | null> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ created_at?: number }> } }>('/events', {
+        params: {
+          'filter[entity]': 'contact',
+          'filter[entity_id][]': contactId,
+          'filter[type][]': 'incoming_chat_message',
+          limit: 50,
+        },
+      });
+      const ts = (data?._embedded?.events ?? []).map((e) => Number(e.created_at ?? 0)).filter((t) => t > 0);
+      return ts.length ? Math.max(...ts) : null;
+    } catch (err) {
+      wrapAxiosError(err, `ultimaMensagemRecebidaDoContato(${contactId})`);
+    }
+  }
+
+  /** Quando o cartão entrou na etapa atual (epoch s): o `lead_status_changed` mais recente. Erro lança. */
+  async entradaNaEtapaAtual(leadId: number): Promise<number | null> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ created_at?: number }> } }>('/events', {
+        params: {
+          'filter[entity]': 'lead',
+          'filter[entity_id][]': leadId,
+          'filter[type][]': 'lead_status_changed',
+          limit: 20,
+        },
+      });
+      const ts = (data?._embedded?.events ?? []).map((e) => Number(e.created_at ?? 0)).filter((t) => t > 0);
+      return ts.length ? Math.max(...ts) : null;
+    } catch (err) {
+      wrapAxiosError(err, `entradaNaEtapaAtual(${leadId})`);
+    }
+  }
+
+  async createLossReason(name: string): Promise<{ id: number; name: string } | null> {
+    try {
+      const { data } = await this.http.post<{
+        _embedded?: { loss_reasons?: Array<{ id: number; name: string }> };
+      }>('/leads/loss_reasons', [{ name }]);
+      return data?._embedded?.loss_reasons?.[0] ?? null;
+    } catch (err) {
+      wrapAxiosError(err, `createLossReason(${name})`);
+    }
+  }
+
   async listLossReasons(): Promise<Array<{ id: number; name: string }>> {
     try {
       const { data } = await this.http.get<{
@@ -1181,7 +1232,7 @@ export class KommoClient {
    * número do contato quando houver mais de um candidato.
    */
   /** Leads parados numa etapa (até `limite`, mais recentes primeiro). Usado pelo sincronizador pra regra das 48 h em COMPARECEU. */
-  async listLeadsPorEtapa(pipelineId: number, statusId: number, limite = 250, page = 1): Promise<KommoLead[]> {
+  async listLeadsPorEtapa(pipelineId: number, statusId: number, limite = 250, page = 1, comContatos = false): Promise<KommoLead[]> {
     try {
       const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
         params: {
@@ -1190,6 +1241,7 @@ export class KommoClient {
           'filter[statuses][0][pipeline_id]': pipelineId,
           'filter[statuses][0][status_id]': statusId,
           'order[id]': 'asc',
+          ...(comContatos ? { with: 'contacts' } : {}),
         },
       });
       return data?._embedded?.leads ?? [];

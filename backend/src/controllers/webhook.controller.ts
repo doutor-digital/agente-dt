@@ -35,6 +35,7 @@ import { tentarBotoes } from '../lib/resposta-com-botoes.js';
 import { consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
 import { descreverPausa, emPausa } from '../lib/pausa-unidade.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { voltarDaEsperaSeRespondeu } from '../lib/parados-worker.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
@@ -813,6 +814,10 @@ export async function processAgent(args: {
     logger.info({ traceId, leadId, unit: unit.slug, pausaAte: unit.pausaAte }, 'agente pulado (pausa da unidade)');
     return;
   }
+
+  // Decisão do João (18/09/2026): paciente em EM ESPERA que escreve volta pra EM QUALIFICAÇÃO na
+  // hora. Solto: não atrasa a resposta; o cartão muda em ~1 s e a retomada automática é cancelada.
+  void voltarDaEsperaSeRespondeu(unit, leadId);
 
   if (burstSize && burstSize > 1) {
     await recorder.step({

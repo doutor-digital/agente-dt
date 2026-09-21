@@ -7,6 +7,7 @@ import { ehIntocavel } from './follow-up-presets.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
 import { carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarSemResposta } from '../services/lead-metrics.service.js';
+import { perderPorFollowUpEsgotado } from './parados-worker.js';
 
 const SWEEP_MS = 60_000;
 
@@ -501,6 +502,9 @@ async function enviarDegrau(
       carimbarContato(unit.id, leadId, { desfecho: 'sumiu' });
       // Bloco DIGITAL: escada inteira sem o paciente voltar → "⬢ Status da conversa" = Sem resposta.
       void carimbarSemResposta(unitCompleta, leadId);
+      // Decisão do João (18/09/2026): régua esgotada sem resposta, ainda antes da porta
+      // (entrada/EM QUALIFICAÇÃO/EM ESPERA) → PERDIDO "Não interagiu". Só onde PARADOS_SLUGS liga.
+      void perderPorFollowUpEsgotado(unitCompleta, kommo, leadId);
     }
 
     logger.info(
