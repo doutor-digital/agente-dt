@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
+import { USD_BRL } from '../lib/cambio.js';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
@@ -798,7 +799,7 @@ export async function dashboardHandler(req: Request, res: Response): Promise<voi
   const whatsappCostUsd = Number(whatsappCostRow[0]?.cost_usd ?? 0);
   const whatsappMsgVolume = Number(whatsappCostRow[0]?.volume ?? 0);
 
-  const usdToBrl = Number(process.env.USD_BRL ?? 5.4);
+  const usdToBrl = USD_BRL;
   const llmCostBrl = totalCost * usdToBrl;
   const whatsappCostBrl = whatsappCostUsd * usdToBrl;
   const totalCostBrl = llmCostBrl + whatsappCostBrl;

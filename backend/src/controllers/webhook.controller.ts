@@ -800,6 +800,19 @@ export async function processAgent(args: {
   const recorder = new TraceRecorder(traceId, unit.id);
   await syncRecorderSequence(recorder, traceId);
 
+  // Pausa ligada pela recepção ("das 8h às 18h") ou pelo teto mensal de IA: a IA fica quieta e
+  // volta sozinha no fim da janela. Quem escreve nesse período fica com a equipe. Conferido ANTES
+  // de transcrever áudio e ler imagem — mídia de mensagem que vai ser descartada não deve ser paga.
+  if (emPausa(unit)) {
+    await finishWidgetSilently();
+    const totalLatency = Math.round(performance.now() - requestStart);
+    const desc = descreverPausa(unit, unit.spineTimezone ?? 'America/Sao_Paulo');
+    await recorder.step({ kind: 'COMPLETED', title: `⏸️ ${desc} — quem atende agora é a equipe`, payload: { leadId, pausaAte: unit.pausaAte, pausaPor: unit.pausaPor }, latencyMs: totalLatency });
+    await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paused_by_unit__' });
+    logger.info({ traceId, leadId, unit: unit.slug, pausaAte: unit.pausaAte }, 'agente pulado (pausa da unidade)');
+    return;
+  }
+
   if (burstSize && burstSize > 1) {
     await recorder.step({
       kind: 'THINKING',
@@ -865,18 +878,6 @@ export async function processAgent(args: {
   // consegue exibir a mensagem (erro 131060). Sem trocar aqui, a IA responde ao
   // aviso achando que é fala do paciente — 81 vezes em 7 dias.
   humanMessage = tratarMensagemNaoRenderizada(humanMessage);
-
-  // Pausa ligada pela recepção ("das 8h às 18h"): a IA fica quieta e volta sozinha
-  // no fim da janela. Quem escreve nesse período fica com a equipe.
-  if (emPausa(unit)) {
-    await finishWidgetSilently();
-    const totalLatency = Math.round(performance.now() - requestStart);
-    const desc = descreverPausa(unit, unit.spineTimezone ?? 'America/Sao_Paulo');
-    await recorder.step({ kind: 'COMPLETED', title: `⏸️ ${desc} — quem atende agora é a equipe`, payload: { leadId, pausaAte: unit.pausaAte, pausaPor: unit.pausaPor }, latencyMs: totalLatency });
-    await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paused_by_unit__' });
-    logger.info({ traceId, leadId, unit: unit.slug, pausaAte: unit.pausaAte }, 'agente pulado (pausa da unidade)');
-    return;
-  }
 
   // Fora do horário a IA não responde — com ou sem mensagem cadastrada.
   // Antes a trava exigia `outOfHoursMessage`: sem texto, ela era pulada inteira e a

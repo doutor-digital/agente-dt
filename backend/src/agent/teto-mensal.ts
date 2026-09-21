@@ -20,6 +20,9 @@
  * DE ONDE VEM O NÚMERO: `llm_calls.cost_usd` (o que medimos, já com desconto de cache) vezes o
  * mesmo câmbio do painel (`USD_BRL`). A soma fica em cache 5 min por conta: tolerância de ~R$ 1
  * na borda em troca de não pesar o banco a cada turno. Falha de banco NUNCA trava o atendimento.
+ *
+ * `TETO_MENSAL_SLUGS` restringe quais unidades CONFEREM o teto; a soma e a pausa são sempre da conta
+ * inteira (as irmãs do mesmo subdomínio entram nas duas). Piloto por unidade = piloto por conta.
  */
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -27,11 +30,10 @@ import { logger } from '../lib/logger.js';
 import { opsAlert } from '../lib/ops-alert.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { fusoDaUnidade, inicioDoMesNoFuso, inicioDoProximoMesNoFuso, mesNoFuso } from '../lib/fuso.js';
+import { USD_BRL } from '../lib/cambio.js';
 
 /** Teto por conta Kommo por mês, em reais. */
 export const TETO_MENSAL_BRL = Number(process.env.TETO_MENSAL_BRL) || 300;
-/** O MESMO câmbio do painel (units.controller): alerta e tela têm de mostrar o mesmo número. */
-export const USD_BRL = Number(process.env.USD_BRL ?? 5.4) || 5.4;
 /** Fração do teto a partir da qual já avisa. */
 export const FRACAO_DE_AVISO = 0.8;
 const CACHE_MS = Number(process.env.TETO_MENSAL_CACHE_MS) || 5 * 60_000;
@@ -139,8 +141,26 @@ export async function conferirTetoMensal(unit: Unit, agora: Date = new Date()): 
     fracao: TETO_MENSAL_BRL > 0 ? brl / TETO_MENSAL_BRL : 0,
     nivel: avaliarNivel(brl),
   };
-  if (v.nivel !== 'ok') void avisar(unit, v);
+  // Em modo pausar, o aviso de 100 % sai de dentro de pausarContaAteProximoMes — DEPOIS de a pausa
+  // gravar de fato; dizer "a IA foi pausada" antes seria promessa.
+  if (v.nivel === 'aviso' || (v.nivel === 'estourou' && acaoAoEstourar() === 'avisar')) void avisar(unit, v);
   return v;
+}
+
+/**
+ * Pra caminhos que gastam LLM fora do agente (régua, keepalive): confere o teto e, em modo pausar,
+ * já pausa a conta — sem esperar uma mensagem chegar ao agente. Devolve true se a conta está cortada.
+ */
+export async function cortarSeEstourou(unit: Unit, agora: Date = new Date()): Promise<boolean> {
+  if (acaoAoEstourar() !== 'pausar') return false;
+  const v = await conferirTetoMensal(unit, agora);
+  if (v.nivel !== 'estourou') return false;
+  try {
+    await pausarContaAteProximoMes(unit, v, agora);
+  } catch (err) {
+    logger.error({ err: String(err), unit: unit.slug, conta: v.conta }, 'teto mensal: falhou ao pausar a conta');
+  }
+  return true;
 }
 
 /**
@@ -151,17 +171,22 @@ export async function conferirTetoMensal(unit: Unit, agora: Date = new Date()): 
 export async function pausarContaAteProximoMes(unit: Unit, v: VereditoMensal, agora: Date = new Date()): Promise<Date> {
   const ate = inicioDoProximoMesNoFuso(agora, fusoDaUnidade(unit));
   const sub = subdominio(unit);
-  const where = sub ? { kommoSubdomain: { equals: sub, mode: 'insensitive' as const } } : { id: unit.id };
-  const r = await prisma.unit.updateMany({
-    where,
-    data: {
-      pausaDesde: null,
-      pausaAte: ate,
-      pausaMotivo: `teto mensal de IA: ${formatarBrl(v.brl)} de ${formatarBrl(v.teto)} em ${v.mes}`,
-      pausaPor: PAUSA_POR,
-    },
-  });
-  logger.warn({ conta: v.conta, unidades: r.count, ate: ate.toISOString(), brl: Number(v.brl.toFixed(2)) }, 'teto mensal: conta pausada até o dia 1º');
+  const motivo = `teto mensal de IA: ${formatarBrl(v.brl)} de ${formatarBrl(v.teto)} em ${v.mes}`;
+  // Só ESTENDE a pausa: uma pausa da recepção que já vai além do dia 1º fica como está (motivo e
+  // autor dela também). Mesma normalização (lower/trim) da soma do gasto. Idempotente: chamada de
+  // novo com a conta já pausada até `ate` não toca em nada.
+  const n = sub
+    ? await prisma.$executeRaw`
+        update units set pausa_desde = null, pausa_ate = ${ate}, pausa_motivo = ${motivo}, pausa_por = ${PAUSA_POR}
+        where lower(trim(kommo_subdomain)) = ${sub} and (pausa_ate is null or pausa_ate < ${ate})`
+    : await prisma.$executeRaw`
+        update units set pausa_desde = null, pausa_ate = ${ate}, pausa_motivo = ${motivo}, pausa_por = ${PAUSA_POR}
+        where id = ${unit.id} and (pausa_ate is null or pausa_ate < ${ate})`;
+  if (n > 0) {
+    logger.warn({ conta: v.conta, unidades: n, ate: ate.toISOString(), brl: Number(v.brl.toFixed(2)) }, 'teto mensal: conta pausada até o dia 1º');
+  }
+  // O aviso "IA pausada" só depois de a pausa estar gravada (uma vez por mês por conta).
+  void avisar(unit, v);
   return ate;
 }
 
@@ -196,12 +221,9 @@ async function unidadeDonaDaMarca(unit: Pick<Unit, 'id' | 'kommoSubdomain'>): Pr
   const sub = subdominio(unit);
   if (!sub) return unit.id;
   try {
-    const dona = await prisma.unit.findFirst({
-      where: { kommoSubdomain: { equals: sub, mode: 'insensitive' } },
-      orderBy: { id: 'asc' },
-      select: { id: true },
-    });
-    return dona?.id ?? unit.id;
+    const rows = await prisma.$queryRaw<{ id: string }[]>`
+      select id from units where lower(trim(kommo_subdomain)) = ${sub} order by id asc limit 1`;
+    return rows[0]?.id ?? unit.id;
   } catch {
     return unit.id;
   }
