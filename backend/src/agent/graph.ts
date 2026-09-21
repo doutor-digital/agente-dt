@@ -35,6 +35,8 @@ import {
   type Provedor,
 } from './circuito.js';
 import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto-conversa.js';
+import { conferirTetoMensal, acaoAoEstourar, type VereditoMensal } from './teto-mensal.js';
+import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -255,6 +257,41 @@ async function entregarAoHumano(
   }
 }
 
+/**
+ * A CONTA passou do teto do mês (TETO_MENSAL_ACAO=pausar): mesma entrega do teto por conversa —
+ * pausa a IA no lead e deixa nota — mas uma vez por lead por dia, porque aqui todos os leads da
+ * conta caem nisto até o dia 1º.
+ */
+async function entregarAoHumanoPorTetoMensal(
+  unit: Unit,
+  kommo: ReturnType<typeof createKommoClient> | null,
+  leadId: number | undefined,
+  v: VereditoMensal,
+  recorder: TraceRecorder,
+): Promise<void> {
+  if (!kommo || !leadId) return;
+  try {
+    if (await avisoRecente(unit.id, leadId, 'teto_mensal_pausa')) return;
+    if (unit.kommoPausedFieldId) {
+      await kommo.setLeadFieldFlag(leadId, unit.kommoPausedFieldId, true);
+    }
+    await kommo.addLeadNote(
+      leadId,
+      `🛑 IA pausada nesta conta: o gasto do mês com IA passou do teto (R$ ${v.brl.toFixed(0)} de R$ ${v.teto}). ` +
+        `O paciente foi avisado de que uma pessoa continua — assumir por aqui. A IA não volta neste lead sozinha.`,
+    );
+    await marcarAviso(unit.id, leadId, 'teto_mensal_pausa');
+    logger.warn({ unit: unit.slug, leadId, conta: v.conta, brl: Number(v.brl.toFixed(2)) }, 'teto mensal: IA pausada no lead');
+    await recorder.step({
+      kind: 'KOMMO_ACTION',
+      title: `IA pausada por teto mensal da conta e nota registrada no lead ${leadId}`,
+      payload: { leadId, conta: v.conta, mes: v.mes, brl: v.brl, teto: v.teto },
+    });
+  } catch (err) {
+    logger.error({ err: String(err), unit: unit.slug, leadId }, 'teto mensal: falhou ao entregar a conversa ao humano');
+  }
+}
+
 export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder) {
   if (!(unit.llmProvider === 'anthropic' && unit.anthropicApiKey)) return null;
   const config = await getActiveConfig(unit.id);
@@ -458,6 +495,22 @@ export async function buildAgentGraph(
           decision: FALLBACK_TETO,
         } satisfies Partial<AgentStateType>;
       }
+    }
+
+    // Teto do MÊS da conta (chefe, 21/09/2026: R$ 300/clínica). O aviso de 80 %/100 % sai dentro de
+    // conferirTetoMensal; bloquear só com TETO_MENSAL_ACAO=pausar — e aí o paciente não fica no vácuo.
+    const mensal = await conferirTetoMensal(unit);
+    if (mensal.nivel === 'estourou' && acaoAoEstourar() === 'pausar') {
+      await recorder.step({
+        kind: 'ERROR',
+        title: `💸 Conta ${mensal.conta} passou do teto do mês (R$ ${mensal.brl.toFixed(0)} de R$ ${mensal.teto}) — IA pausada, humano assume`,
+        payload: { conta: mensal.conta, mes: mensal.mes, brl: mensal.brl, teto: mensal.teto },
+      });
+      void entregarAoHumanoPorTetoMensal(unit, kommoClient, leadIdDaConversa, mensal, recorder);
+      return {
+        messages: [new AIMessage(FALLBACK_TETO)],
+        decision: FALLBACK_TETO,
+      } satisfies Partial<AgentStateType>;
     }
 
     const t0 = performance.now();

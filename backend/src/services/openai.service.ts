@@ -38,10 +38,13 @@ const MODEL_PRICES: Record<string, ModelPrice> = {
   'gemini-2.0-flash': { inputPer1M: 0.1, outputPer1M: 0.4 },
 };
 
-const CACHE_MULTIPLIERS: Record<string, { read: number; write: number }> = {
-  anthropic: { read: 0.1, write: 2 },
-  openai: { read: 0.5, write: 0 },
-  google: { read: 0.25, write: 0 },
+// A Anthropic cobra a gravação de cache por TTL: 5 min a 1,25× e 1 h a 2× o preço de entrada. Até
+// 21/09/2026 tudo era cobrado a 2× — e o cache da conversa (5 min) é quase toda a gravação de uma
+// chamada normal, então o custo medido saía ~10 % acima do real.
+const CACHE_MULTIPLIERS: Record<string, { read: number; write5m: number; write1h: number }> = {
+  anthropic: { read: 0.1, write5m: 1.25, write1h: 2 },
+  openai: { read: 0.5, write5m: 0, write1h: 0 },
+  google: { read: 0.25, write5m: 0, write1h: 0 },
 };
 
 export function providerOfModel(model: string): 'anthropic' | 'openai' | 'google' {
@@ -55,16 +58,18 @@ export function calculateCost(
   promptTokens: number,
   completionTokens: number,
   cacheReadTokens = 0,
-  cacheWriteTokens = 0,
+  cacheWrite5mTokens = 0,
+  cacheWrite1hTokens = 0,
 ): number {
   const price = MODEL_PRICES[model];
   if (!price) return 0;
   const mult = CACHE_MULTIPLIERS[providerOfModel(model)];
-  const uncached = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
+  const uncached = Math.max(0, promptTokens - cacheReadTokens - cacheWrite5mTokens - cacheWrite1hTokens);
   const inputCost =
     (uncached / 1_000_000) * price.inputPer1M +
     (cacheReadTokens / 1_000_000) * price.inputPer1M * mult.read +
-    (cacheWriteTokens / 1_000_000) * price.inputPer1M * mult.write;
+    (cacheWrite5mTokens / 1_000_000) * price.inputPer1M * mult.write5m +
+    (cacheWrite1hTokens / 1_000_000) * price.inputPer1M * mult.write1h;
   const outputCost = (completionTokens / 1_000_000) * price.outputPer1M;
   return Math.round((inputCost + outputCost) * 1_000_000) / 1_000_000;
 }
@@ -190,7 +195,10 @@ export interface RecordLlmCallParams {
   completionTokens?: number;
   totalTokens?: number;
   cacheReadTokens?: number;
-  cacheWriteTokens?: number;
+  /** Gravação de cache de 5 min (a conversa). */
+  cacheWrite5mTokens?: number;
+  /** Gravação de cache de 1 h (o prefixo: ferramentas + prompt fixo). */
+  cacheWrite1hTokens?: number;
   latencyMs: number;
   status?: 'success' | 'error';
   errorMessage?: string;
@@ -207,7 +215,8 @@ export async function recordLlmCall(p: RecordLlmCallParams): Promise<void> {
     promptTokens,
     completionTokens,
     p.cacheReadTokens ?? 0,
-    p.cacheWriteTokens ?? 0,
+    p.cacheWrite5mTokens ?? 0,
+    p.cacheWrite1hTokens ?? 0,
   );
 
   try {
@@ -254,6 +263,12 @@ interface AnthropicUsageMetadata {
   input_token_details?: { cache_read?: number; cache_creation?: number };
 }
 
+/** Detalhe bruto da Anthropic (`usage.cache_creation`): quanto foi cache de 5 min e quanto de 1 h. */
+interface CacheCreationAnthropic {
+  ephemeral_5m_input_tokens?: number;
+  ephemeral_1h_input_tokens?: number;
+}
+
 export interface InvokeChatModelArgs {
   model: InvokableModel;
   messages: BaseMessage[];
@@ -274,13 +289,18 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
   const t0 = performance.now();
   let usage: TokenUsage | null = null;
   let rawResponse: unknown = null;
+  // Num objeto, não num `let`: o TS estreita `let x = null` pra `null` e não vê a atribuição no callback.
+  const captura: { cacheCreation: CacheCreationAnthropic | null } = { cacheCreation: null };
 
   try {
     const response = await args.model.invoke(args.messages, {
       callbacks: [
         {
-          handleLLMEnd: (output: { llmOutput?: { tokenUsage?: TokenUsage } }) => {
+          handleLLMEnd: (output: {
+            llmOutput?: { tokenUsage?: TokenUsage; usage?: { cache_creation?: CacheCreationAnthropic } };
+          }) => {
             usage = output.llmOutput?.tokenUsage ?? null;
+            captura.cacheCreation = output.llmOutput?.usage?.cache_creation ?? null;
             rawResponse = output;
           },
         },
@@ -300,14 +320,24 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
     const finalUsage: TokenUsage = usage ?? {};
     let { promptTokens, completionTokens, totalTokens } = finalUsage;
     let cacheReadTokens = 0;
-    let cacheWriteTokens = 0;
+    let cacheWrite5mTokens = 0;
+    let cacheWrite1hTokens = 0;
     const um = (response as { usage_metadata?: AnthropicUsageMetadata }).usage_metadata;
     if (promptTokens == null && um) {
       promptTokens = um.input_tokens;
       completionTokens = um.output_tokens;
       totalTokens = um.total_tokens;
       cacheReadTokens = um.input_token_details?.cache_read ?? 0;
-      cacheWriteTokens = um.input_token_details?.cache_creation ?? 0;
+      const gravado = um.input_token_details?.cache_creation ?? 0;
+      // A Anthropic separa quanto foi cache de 5 min e quanto de 1 h — e cobra diferente (1,25× vs 2×).
+      // Sem o detalhe, tudo vai como 1 h: erra pra cima, nunca pra baixo.
+      const bruto = captura.cacheCreation;
+      if (bruto && (bruto.ephemeral_5m_input_tokens != null || bruto.ephemeral_1h_input_tokens != null)) {
+        cacheWrite5mTokens = bruto.ephemeral_5m_input_tokens ?? 0;
+        cacheWrite1hTokens = bruto.ephemeral_1h_input_tokens ?? 0;
+      } else {
+        cacheWrite1hTokens = gravado;
+      }
     }
     if (args.conversaId) {
       registrarGasto(
@@ -317,7 +347,8 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
           promptTokens ?? 0,
           completionTokens ?? 0,
           cacheReadTokens,
-          cacheWriteTokens,
+          cacheWrite5mTokens,
+          cacheWrite1hTokens,
         ),
       );
     }
@@ -332,7 +363,8 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
       completionTokens,
       totalTokens,
       cacheReadTokens,
-      cacheWriteTokens,
+      cacheWrite5mTokens,
+      cacheWrite1hTokens,
       latencyMs,
       status: 'success',
       // A conversa fica guardada porque é o que permite investigar depois — mas
