@@ -214,8 +214,8 @@ export function fixarLeadDaConversa(
  *
  * Pausar sem avisar seria pior que não ter teto nenhum: o paciente ficaria
  * esperando uma resposta que não vem mais. Então são três coisas, nesta ordem de
- * importância — pausar a IA (senão ela volta a gastar no próximo turno), abrir a
- * tarefa no Kommo (que é onde a equipe olha, e o n8n leva pro grupo), e registrar.
+ * importância — pausar a IA (senão ela volta a gastar no próximo turno), deixar
+ * uma nota no cartão (decisão do João em 21/09/2026: tarefa só pra ação com prazo), e registrar.
  *
  * Roda solto, sem travar a resposta ao paciente: ele não pode esperar o Kommo.
  */
@@ -231,18 +231,20 @@ async function entregarAoHumano(
     if (unit.kommoPausedFieldId) {
       await kommo.setLeadFieldFlag(leadId, unit.kommoPausedFieldId, true);
     }
-    await kommo.createTask({
+    // 21/09/2026: nota + log, não tarefa (decisão do João: tarefa só pra ação com prazo). NÃO marcar
+    // handoffAt aqui: isso matricularia a conversa no reactivation-worker (que despausa em 30 min e
+    // entraria em loop com o teto) — achado do review. Se o paciente voltar a escrever com a IA
+    // pausada, o aviso "paciente insistiu" cobre.
+    await kommo.addLeadNote(
       leadId,
-      text:
-        `ALERTA · teto de gasto · ${unit.slug} · lead ${leadId} — a conversa passou de ` +
-        `US$ ${teto.teto.toFixed(2)} (US$ ${teto.usd.toFixed(2)} em ${teto.turnos} turnos). ` +
-        `A IA foi pausada e o paciente já foi avisado de que uma pessoa continua. ` +
-        `Conversa longa assim costuma ser lead quente: vale assumir agora.`,
-      completeAt: Math.floor(Date.now() / 1000) + 900,
-    });
+      `⛽ Teto de gasto da conversa: passou de US$ ${teto.teto.toFixed(2)} ` +
+        `(US$ ${teto.usd.toFixed(2)} em ${teto.turnos} turnos). A IA foi pausada e o paciente avisado ` +
+        `de que uma pessoa continua. Conversa longa assim costuma ser lead quente: vale assumir agora.`,
+    );
+    logger.warn({ unit: unit.slug, leadId, usd: teto.usd, turnos: teto.turnos }, 'teto de gasto: IA pausada');
     await recorder.step({
       kind: 'KOMMO_ACTION',
-      title: `IA pausada por teto de gasto e tarefa aberta no lead ${leadId}`,
+      title: `IA pausada por teto de gasto e nota registrada no lead ${leadId}`,
       payload: { leadId, usd: teto.usd, teto: teto.teto },
     });
   } catch (err) {

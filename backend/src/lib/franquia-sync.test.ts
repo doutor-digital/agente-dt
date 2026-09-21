@@ -109,14 +109,20 @@ test('consulta passada sem carimbo: não inventa "Agendado pela SDR em"', () => 
   assert.ok(!w.some((x) => x.campo === 'AGENDADO_SDR_EM'));
 });
 
-test('tratamento em andamento: Fechou=Sim, opção do tratamento, valor e fisio se vazio', () => {
+test('tratamento em andamento: Fechou=Sim, opção do tratamento e fisio se vazio; o valor é da SDR, não da franquia', () => {
   const t = { idTreatment: 1, idClient: 2, clientName: 'Maria', category: '03 Meses', local: 'LOMBAR', degree: 'CRÔNICO', staffName: 'Bárbara Wirtzbiki', statusName: 'EM ANDAMENTO', price: 2400 };
-  const w = planejarEscritas({ valores: { '¤ Valor do tratamento': '0' }, consulta: null, consultaEpoch: null, tratamento: t, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES });
+  const w = planejarEscritas({ valores: { '¤ Valor do tratamento': '1800' }, consulta: null, consultaEpoch: null, tratamento: t, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES });
   const por = Object.fromEntries(w.map((x) => [x.campo, x.valor]));
   assert.equal(por.FECHOU_TRAT, 'Sim');
   assert.equal(por.TRAT_FECHADO, '03 Meses — LOMBAR CRÔNICO');
-  assert.equal(por.VALOR_TRAT, 2400);
+  assert.ok(!('VALOR_TRAT' in por), 'a franquia não pode sobrescrever o valor digitado pela SDR');
   assert.equal(por.FISIO, 'DRA. BÁRBARA WIRTZBIKI');
+});
+
+test('tratamento com valor vazio no cartão: a franquia continua não escrevendo o valor', () => {
+  const t = { idTreatment: 1, idClient: 2, clientName: 'Maria', category: '03 Meses', local: 'LOMBAR', degree: 'CRÔNICO', staffName: null, statusName: 'EM ANDAMENTO', price: 2400 };
+  const w = planejarEscritas({ valores: {}, consulta: null, consultaEpoch: null, tratamento: t, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES });
+  assert.ok(!w.some((x) => x.campo === 'VALOR_TRAT'));
 });
 
 test('mapa de campos: aceita date_time como date e ignora tipos que não gravamos', async () => {
