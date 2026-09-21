@@ -169,7 +169,7 @@ function opcoes(mapa: MapaCampos) {
 // ── fase 2: mover etapa ──
 
 /** Funis e etapas da conta, pelo NOME: o principal é o COMERCIAL; o outro tem que se chamar TRATAMENTO. */
-interface Funis {
+export interface Funis {
   comercialId: number;
   tratamentoId: number | null;
   status: Map<string, { id: number; nome: string }>; // chave `${funil}:${nomeNormalizado}`
@@ -177,7 +177,7 @@ interface Funis {
   idDe: (funil: Funil, etapa: string) => { pipelineId: number; statusId: number } | null;
 }
 
-async function carregarFunis(kommo: KommoClient): Promise<Funis | null> {
+export async function carregarFunis(kommo: KommoClient): Promise<Funis | null> {
   const pipes = await kommo.listPipelines();
   const comercial = pipes.find((p) => p.is_main) ?? pipes.find((p) => normalizarNome(p.name) === normalizarNome('COMERCIAL'));
   if (!comercial) return null;
@@ -213,7 +213,7 @@ const CACHE_DETALHE_MS = 60 * 60_000;
  * GANHO → EM TRATAMENTO e EM TRATAMENTO → ALTA precisamos do histórico do paciente,
  * que só o detalhe (`GET /clients/{id}`) traz. Uma chamada por paciente por hora.
  */
-async function historicoDoPaciente(unit: Unit, idClient: number | null): Promise<{ treatments: TratamentoParaEtapa[]; schedules: SpineSchedule[] } | null> {
+export async function historicoDoPaciente(unit: Unit, idClient: number | null): Promise<{ treatments: TratamentoParaEtapa[]; schedules: SpineSchedule[] } | null> {
   if (!idClient) return null;
   const k = `${unit.id}:${idClient}`;
   const hit = cacheDetalhe.get(k);
@@ -248,7 +248,7 @@ async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, le
  * cartão, então cobre também quem foi atendido antes da janela da agenda (D-3).
  */
 /** idClient do paciente na franquia: pelo vínculo que a Sofia gravou, senão pelo nome (só se for único). */
-async function idClientDoLead(unit: Unit, leadId: number, nome: string | null): Promise<number | null> {
+export async function idClientDoLead(unit: Unit, leadId: number, nome: string | null): Promise<number | null> {
   const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
   if (link?.spineIdClient) return link.spineIdClient;
   if (!nome) return null;
@@ -260,7 +260,7 @@ async function idClientDoLead(unit: Unit, leadId: number, nome: string | null): 
 }
 
 /** O paciente tem consulta (avaliação/retorno) marcada pra frente? Quem tem retorno marcado não vai pra EM NEGOCIAÇÃO (decisão do João, 18/09). */
-function temConsultaFutura(schedules: SpineSchedule[], agoraEpoch: number): boolean {
+export function temConsultaFutura(schedules: SpineSchedule[], agoraEpoch: number): boolean {
   return schedules.some((s) => {
     if (!s.dateAttendanceUtc || !ehConsulta(s)) return false;
     const t = Math.floor(Date.parse(s.dateAttendanceUtc) / 1000);

@@ -27,6 +27,7 @@ import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
 import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
+import { startParadosWorker, stopParadosWorker } from './lib/parados-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -129,10 +130,12 @@ async function main(): Promise<void> {
       startVozSessaoWorker();
       startCacheKeepaliveWorker();
       startFranquiaSyncWorker();
+      startParadosWorker();
       iniciarVigiaDeQualidade();
     },
     parar: () => {
       pararVigiaDeQualidade();
+      stopParadosWorker();
       stopFranquiaSyncWorker();
       stopCacheKeepaliveWorker();
       stopWhatsappCostScheduler();
