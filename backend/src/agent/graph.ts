@@ -35,7 +35,7 @@ import {
   type Provedor,
 } from './circuito.js';
 import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto-conversa.js';
-import { conferirTetoMensal, acaoAoEstourar, type VereditoMensal } from './teto-mensal.js';
+import { conferirTetoMensal, acaoAoEstourar, pausarContaAteProximoMes, type VereditoMensal } from './teto-mensal.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import {
   withTimeout,
@@ -258,9 +258,10 @@ async function entregarAoHumano(
 }
 
 /**
- * A CONTA passou do teto do mês (TETO_MENSAL_ACAO=pausar): mesma entrega do teto por conversa —
- * pausa a IA no lead e deixa nota — mas uma vez por lead por dia, porque aqui todos os leads da
- * conta caem nisto até o dia 1º.
+ * A CONTA passou do teto do mês (TETO_MENSAL_ACAO=pausar): pausa a conta inteira até o dia 1º
+ * (a mesma pausa da recepção — webhook, régua, reativação e lembrete já a respeitam) e deixa nota
+ * no lead deste turno, uma vez por lead por dia (se a recepção despausar e o paciente voltar, a
+ * conta pausa de novo sem repetir a nota).
  */
 async function entregarAoHumanoPorTetoMensal(
   unit: Unit,
@@ -269,26 +270,32 @@ async function entregarAoHumanoPorTetoMensal(
   v: VereditoMensal,
   recorder: TraceRecorder,
 ): Promise<void> {
+  try {
+    const ate = await pausarContaAteProximoMes(unit, v);
+    await recorder.step({
+      kind: 'KOMMO_ACTION',
+      title: `Conta ${v.conta} pausada por teto mensal até ${ate.toISOString()}`,
+      payload: { conta: v.conta, mes: v.mes, brl: v.brl, teto: v.teto, ate: ate.toISOString() },
+    });
+  } catch (err) {
+    logger.error({ err: String(err), unit: unit.slug, conta: v.conta }, 'teto mensal: falhou ao pausar a conta — IA pode seguir gastando');
+  }
   if (!kommo || !leadId) return;
   try {
     if (await avisoRecente(unit.id, leadId, 'teto_mensal_pausa')) return;
-    if (unit.kommoPausedFieldId) {
-      await kommo.setLeadFieldFlag(leadId, unit.kommoPausedFieldId, true);
-    }
     await kommo.addLeadNote(
       leadId,
-      `🛑 IA pausada nesta conta: o gasto do mês com IA passou do teto (R$ ${v.brl.toFixed(0)} de R$ ${v.teto}). ` +
-        `O paciente foi avisado de que uma pessoa continua — assumir por aqui. A IA não volta neste lead sozinha.`,
+      `🛑 IA pausada nesta conta até o dia 1º: o gasto do mês com IA passou do teto (R$ ${v.brl.toFixed(0)} de R$ ${v.teto}). ` +
+        `O paciente foi avisado de que uma pessoa continua — assumir por aqui.`,
     );
     await marcarAviso(unit.id, leadId, 'teto_mensal_pausa');
-    logger.warn({ unit: unit.slug, leadId, conta: v.conta, brl: Number(v.brl.toFixed(2)) }, 'teto mensal: IA pausada no lead');
     await recorder.step({
       kind: 'KOMMO_ACTION',
-      title: `IA pausada por teto mensal da conta e nota registrada no lead ${leadId}`,
-      payload: { leadId, conta: v.conta, mes: v.mes, brl: v.brl, teto: v.teto },
+      title: `Nota de teto mensal registrada no lead ${leadId}`,
+      payload: { leadId, conta: v.conta },
     });
   } catch (err) {
-    logger.error({ err: String(err), unit: unit.slug, leadId }, 'teto mensal: falhou ao entregar a conversa ao humano');
+    logger.error({ err: String(err), unit: unit.slug, leadId }, 'teto mensal: falhou ao deixar a nota no lead');
   }
 }
 
@@ -442,6 +449,30 @@ export async function buildAgentGraph(
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;
 
+    // Teto do MÊS da conta (chefe, 21/09/2026: R$ 300/clínica). Conferido ANTES de montar o prompt,
+    // que é caro. O aviso de 80 %/100 % sai dentro de conferirTetoMensal; bloquear só com
+    // TETO_MENSAL_ACAO=pausar — e aí a CONTA inteira entra em pausa (a mesma da recepção, até o
+    // dia 1º): o paciente deste turno é avisado e os próximos nem chegam aqui, o webhook já pula
+    // unidade em pausa. No MEIO de um turno (depois de uma ferramenta rodar) não corta: a consulta
+    // que acabou de ser marcada precisa ser confirmada pro paciente.
+    const ultimaMsg = nonSystemMessages[nonSystemMessages.length - 1];
+    const meioDoTurno = ultimaMsg?.getType() === 'tool';
+    if (!meioDoTurno) {
+      const mensal = await conferirTetoMensal(unit);
+      if (mensal.nivel === 'estourou' && acaoAoEstourar() === 'pausar') {
+        await recorder.step({
+          kind: 'ERROR',
+          title: `💸 Conta ${mensal.conta} passou do teto do mês (R$ ${mensal.brl.toFixed(0)} de R$ ${mensal.teto}) — conta pausada até o dia 1º, equipe assume`,
+          payload: { conta: mensal.conta, mes: mensal.mes, brl: mensal.brl, teto: mensal.teto },
+        });
+        void entregarAoHumanoPorTetoMensal(unit, kommoClient, leadIdDaConversa, mensal, recorder);
+        return {
+          messages: [new AIMessage(FALLBACK_TETO)],
+          decision: FALLBACK_TETO,
+        } satisfies Partial<AgentStateType>;
+      }
+    }
+
     if (isFirstTurn && kommoClient && state.leadId && ENTRY_DATE_TAG_SLUGS.has(unit.slug)) {
       void maybeAddEntryDateTag({ recorder, kommo: kommoClient, leadId: state.leadId, tz: fusoDaUnidade(unit) });
     }
@@ -495,22 +526,6 @@ export async function buildAgentGraph(
           decision: FALLBACK_TETO,
         } satisfies Partial<AgentStateType>;
       }
-    }
-
-    // Teto do MÊS da conta (chefe, 21/09/2026: R$ 300/clínica). O aviso de 80 %/100 % sai dentro de
-    // conferirTetoMensal; bloquear só com TETO_MENSAL_ACAO=pausar — e aí o paciente não fica no vácuo.
-    const mensal = await conferirTetoMensal(unit);
-    if (mensal.nivel === 'estourou' && acaoAoEstourar() === 'pausar') {
-      await recorder.step({
-        kind: 'ERROR',
-        title: `💸 Conta ${mensal.conta} passou do teto do mês (R$ ${mensal.brl.toFixed(0)} de R$ ${mensal.teto}) — IA pausada, humano assume`,
-        payload: { conta: mensal.conta, mes: mensal.mes, brl: mensal.brl, teto: mensal.teto },
-      });
-      void entregarAoHumanoPorTetoMensal(unit, kommoClient, leadIdDaConversa, mensal, recorder);
-      return {
-        messages: [new AIMessage(FALLBACK_TETO)],
-        decision: FALLBACK_TETO,
-      } satisfies Partial<AgentStateType>;
     }
 
     const t0 = performance.now();

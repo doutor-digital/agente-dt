@@ -4,7 +4,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
 import { montarPrefixoAnthropic } from '../agent/graph.js';
-import { acaoAoEstourar, conferirTetoMensal } from '../agent/teto-mensal.js';
+import { emPausa } from './pausa-unidade.js';
 import { invokeChatModel } from '../services/openai.service.js';
 import type { TraceRecorder } from '../agent/trace-recorder.js';
 
@@ -27,8 +27,9 @@ export function deveAquecer(ociosoMin: number, hora: number): boolean {
 const recorderMudo = { step: async () => undefined } as unknown as TraceRecorder;
 
 async function aquecer(unit: Unit): Promise<void> {
-  // Conta pausada por teto do mês não vai receber chamada nenhuma: manter o cache quente é jogar dinheiro.
-  if (acaoAoEstourar() === 'pausar' && (await conferirTetoMensal(unit)).nivel === 'estourou') return;
+  // Unidade em pausa (recepção ou teto mensal) não vai receber chamada nenhuma: manter o cache
+  // quente é jogar dinheiro.
+  if (emPausa(unit)) return;
   const rows = await prisma.$queryRaw<{ ultima: Date | null }[]>`
     select max(created_at) as ultima from llm_calls
     where unit_id = ${unit.id} and provider = 'anthropic' and status = 'success'

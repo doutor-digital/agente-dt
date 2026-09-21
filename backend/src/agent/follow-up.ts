@@ -5,7 +5,6 @@ import { createChatModel, invokeChatModel, resolveModelName } from '../services/
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { aplicarGuardrail } from './guardrail.js';
-import { acaoAoEstourar, conferirTetoMensal } from './teto-mensal.js';
 
 export interface FollowUpArgs {
   unitId: string;
@@ -65,16 +64,6 @@ Responda APENAS com o texto da mensagem, sem aspas e sem explicação.
 
 CONVERSA ATÉ AGORA:
 ${conversa}`.trim();
-
-  // Conta que passou do teto do mês com TETO_MENSAL_ACAO=pausar não gasta nem com a régua.
-  const mensal = await conferirTetoMensal(unit);
-  if (mensal.nivel === 'estourou' && acaoAoEstourar() === 'pausar') {
-    logger.warn(
-      { unit: unit.slug, leadId: args.leadId, conta: mensal.conta },
-      'follow-up: conta no teto do mês — degrau não gerado',
-    );
-    return null;
-  }
 
   try {
     const model = createChatModel(unit, { maxTokens: 300 });
