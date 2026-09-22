@@ -57,6 +57,11 @@ const PALAVRAS_DE_CONVERSA = new Set([
   'whatsapp', 'whats', 'wpp', 'zap', 'instagram', 'insta', 'facebook', 'face',
   'fb', 'site', 'google', 'tiktok', 'indicacao', 'anuncio', 'ads', 'lead',
   'contato', 'cliente', 'doutor', 'doutora', 'dr', 'dra', 'clinica', 'unidade',
+  // recado que a pessoa põe no perfil do WhatsApp no lugar do nome. Vira "Oi, Ocupado!" na
+  // mensagem e "Ocupado" de paciente na franquia — visto em produção em 20/09/2026.
+  // 'sem' e 'tempo' ficam FORA de propósito: são genéricas demais e barrariam título que hoje passa.
+  'ocupado', 'ocupada', 'trabalhando', 'indisponivel', 'ausente',
+  'loja', 'empresa', 'comercial', 'vendas', 'suporte', 'teste', 'fly', 'link', 'status',
 ]);
 
 function semAcento(s: string): string {
@@ -124,6 +129,31 @@ export function avaliarNome(
 
 function pareceNomeAutomatico(titulo: string): boolean {
   return !avaliarNome(titulo).ok;
+}
+
+/** Emoji, coração e afins que vêm colados no nome do perfil ("Rosa❤️", "Irleide♥️♥️"). */
+const ENFEITE = /[\p{Extended_Pictographic}☀-➿️‍]/gu;
+
+/**
+ * O nome que vai para a franquia: primeiro o título do cartão, que é o que a pessoa disse na
+ * conversa; se ele ainda for automático ("Lead 22261987"), o nome do perfil do WhatsApp, limpo
+ * dos enfeites. O filtro de nome-lixo vale para os dois: "Ocupado", "😃" e "Fly link" continuam
+ * de fora, porque nome errado na franquia é pior que cadastro faltando.
+ */
+export function escolherNome(
+  titulo: string,
+  nomeDoContato: string | null | undefined,
+): { ok: true; nome: string; origem: 'titulo' | 'contato' } | { ok: false; motivo: string } {
+  const peloTitulo = avaliarNome(titulo);
+  if (peloTitulo.ok && peloTitulo.nome) return { ok: true, nome: peloTitulo.nome, origem: 'titulo' };
+  const motivoTitulo = peloTitulo.motivo ?? 'o título do card não serve como nome';
+
+  const limpo = String(nomeDoContato ?? '').replace(ENFEITE, ' ').replace(/\s+/g, ' ').trim();
+  if (!limpo) return { ok: false, motivo: motivoTitulo };
+
+  const peloContato = avaliarNome(limpo);
+  if (peloContato.ok && peloContato.nome) return { ok: true, nome: peloContato.nome, origem: 'contato' };
+  return { ok: false, motivo: `${motivoTitulo}; e o WhatsApp também não serve: ${peloContato.motivo ?? 'nome inválido'}` };
 }
 
 const SUFIXOS_DE_ETIQUETA = [
@@ -227,10 +257,18 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
   }
 
   const titulo = lead.name ?? '';
-  const avaliacao = avaliarNome(titulo);
-  if (!avaliacao.ok) {
-    return { ok: false, etapa: 'nome', tituloKommo: titulo, motivo: avaliacao.motivo };
+  const contatoId = lead._embedded?.contacts?.[0]?.id;
+  // O título do cartão só tem nome depois que o paciente se apresenta. Até lá ele é
+  // "Lead 22261987" e o cadastro na franquia era descartado — metade da rede parava aqui.
+  // O nome do perfil do WhatsApp, que já está no contato, resolve 8 de cada 10 desses casos.
+  let contato: { nome: string | null; telefone: string | null } = { nome: null, telefone: null };
+  if (contatoId) contato = await kommo.getContactBasico(contatoId).catch(() => contato);
+
+  const escolha = escolherNome(titulo, contato.nome);
+  if (!escolha.ok) {
+    return { ok: false, etapa: 'nome', tituloKommo: titulo, motivo: escolha.motivo };
   }
+  const nomeEscolhido = escolha.nome;
 
   // Ids desta conta, resolvidos pelo nome do campo. Sem esquema (Kommo fora do
   // ar), cai nos ids de reserva — que só existem na Imperatriz.
@@ -245,22 +283,14 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
     return typeof v === 'string' && v.trim() ? v.trim() : null;
   };
 
-  let whatsapp: string | null = null;
-  const contatoId = lead._embedded?.contacts?.[0]?.id;
-  if (contatoId) {
-    try {
-      whatsapp = await kommo.getContactPhone(contatoId);
-    } catch {
-      whatsapp = null;
-    }
-  }
+  const whatsapp = contato.telefone;
 
   return {
     ok: true,
     etapa: 'pronto',
     tituloKommo: titulo,
     payload: {
-      name: limparNome(titulo),
+      name: nomeEscolhido,
       whatsapp: whatsapp ? SpineService.normalizarWhatsapp(whatsapp) || null : null,
       // Quem criou este lead na franquia foi a Sofia — isso vai na DESCRIÇÃO, para a
       // Origem continuar sendo o canal de marketing (decisão do João, 05/09/2026:
