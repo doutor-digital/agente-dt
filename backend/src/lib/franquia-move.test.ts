@@ -77,7 +77,7 @@ test('tratamento finalizado leva EM TRATAMENTO pra ALTA; com outro em andamento,
   assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -100, idStatus: 42 })], [{ idStatus: 44 }]))?.para, ETAPA.GANHO);
 });
 
-test('intocáveis: PERDIDO, RETORNO PÓS, ALTA e TRATAMENTO CANCELADO nunca se movem', () => {
+test('intocáveis: PERDIDO e TRATAMENTO CANCELADO nunca se movem; ALTA e RETORNO PÓS só pelo retorno pós-tratamento (aqui não há)', () => {
   const tudo = [ag({ h: 30, idStatus: 37 }), ag({ h: -100, idStatus: 42 })];
   assert.equal(planejarMovimento(entrada(ETAPA.PERDIDO, tudo, [{ idStatus: 45 }])), null);
   assert.equal(planejarMovimento(entrada(ETAPA.RETORNO, tudo, [{ idStatus: 45 }])), null);
@@ -109,4 +109,78 @@ test('flags e prazo', () => {
   assert.equal(horasAteNegociacao('abc'), 48);
   assert.equal(ehEtapaDeEntrada('Incoming leads'), true);
   assert.equal(ehEtapaDeEntrada('EM QUALIFICAÇÃO'), false);
+});
+
+// ── 22/09/2026: cancelamento, retorno pós-tratamento e a volta do paciente de alta ──
+
+test('tratamento cancelado na franquia leva EM TRATAMENTO pra TRATAMENTO CANCELADO — mas outro aberto ou finalizado segura', () => {
+  const canc = { idStatus: 47, statusName: 'CANCELADO' } as { idStatus: number };
+  const m = planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [], [canc], 'TRATAMENTO'));
+  assert.equal(m?.para, ETAPA.CANCELADO);
+  assert.equal(m?.funil, 'TRATAMENTO');
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [], [canc, { idStatus: 45 }], 'TRATAMENTO')), null, 'outro em andamento segura');
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [], [canc, { idStatus: 44 }], 'TRATAMENTO')), null, 'proposta pendente segura');
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [], [canc, { idStatus: 46 }], 'TRATAMENTO'))?.para, ETAPA.ALTA, 'finalizado ganha do cancelado');
+  assert.equal(planejarMovimento(entrada(ETAPA.CANCELADO, [], [{ idStatus: 45 }], 'TRATAMENTO')), null, 'de CANCELADO ninguém sai sozinho');
+});
+
+test('paciente de ALTA com retorno pós-tratamento marcado vai pra RETORNO PÓS-TRATAMENTO (COMERCIAL); sem retorno, fica', () => {
+  const alta = [{ idStatus: 46 }];
+  const m = planejarMovimento(entrada(ETAPA.ALTA, [ag({ h: 72, idStatus: 37, categoria: 'Retorno após tratamento' })], alta, 'TRATAMENTO'));
+  assert.equal(m?.para, ETAPA.RETORNO);
+  assert.equal(m?.funil, 'COMERCIAL');
+  assert.equal(planejarMovimento(entrada(ETAPA.ALTA, [ag({ h: 72, idStatus: 37, categoria: 'RETORNO' })], alta, 'TRATAMENTO')), null, '"Retorno" simples não é retorno pós-tratamento');
+  assert.equal(planejarMovimento(entrada(ETAPA.ALTA, [ag({ h: 72, idStatus: 37 })], alta, 'TRATAMENTO')), null, 'avaliação nova não tira da alta');
+  assert.equal(planejarMovimento(entrada(ETAPA.ALTA, [ag({ h: -72, idStatus: 42, categoria: 'Retorno após tratamento' })], alta, 'TRATAMENTO'))?.para, ETAPA.COMPARECEU, 'retorno atendido há 3 dias: entre varreduras, vai direto pra COMPARECEU');
+  assert.equal(planejarMovimento(entrada(ETAPA.ALTA, [ag({ h: 72, idStatus: 57, categoria: 'Retorno após tratamento' })], alta, 'TRATAMENTO')), null, 'retorno desmarcado não move');
+});
+
+test('retorno pós-tratamento atendido tira de RETORNO pra COMPARECEU, e dali segue como avaliação normal', () => {
+  const alta = [{ idStatus: 46 }];
+  const retornoFeito = ag({ h: -3, idStatus: 42, categoria: 'Retorno após tratamento' });
+  const m = planejarMovimento(entrada(ETAPA.RETORNO, [retornoFeito], alta));
+  assert.equal(m?.para, ETAPA.COMPARECEU);
+  assert.equal(planejarMovimento(entrada(ETAPA.RETORNO, [ag({ h: 48, idStatus: 37, categoria: 'Retorno após tratamento' })], alta)), null, 'retorno ainda futuro: fica');
+  assert.equal(planejarMovimento(entrada(ETAPA.RETORNO, [ag({ h: -3, idStatus: 40, categoria: 'Retorno após tratamento' })], alta)), null, 'faltou ao retorno: fica, a equipe decide');
+  // o tratamento FINALIZADO do ciclo anterior não empurra de volta pra GANHO
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [retornoFeito], alta)), null, 'dentro das 48 h do retorno, fica em COMPARECEU');
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -50, idStatus: 42, categoria: 'Retorno após tratamento' })], alta))?.para, ETAPA.NEGOCIACAO, '48 h depois do retorno sem tratamento novo: NEGOCIAÇÃO');
+  // tratamento NOVO aberto depois do retorno é venda nova: GANHO
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [retornoFeito], [...alta, { idStatus: 45 }]))?.para, ETAPA.GANHO);
+});
+
+test('paciente que volta de alta: sessão e tratamento do ciclo VELHO não empurram GANHO → EM TRATAMENTO → ALTA', () => {
+  // ciclo velho: sessões atendidas há meses e tratamento finalizado; retorno pós atendido há 3 h; proposta NOVA pendente
+  const velho = [ag({ h: -2000, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: -1900, idStatus: 42, categoria: 'SESSÃO' })];
+  const retorno = ag({ h: -3, idStatus: 42, categoria: 'Retorno após tratamento' });
+  const trats = [{ idStatus: 46 }, { idStatus: 44 }];
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [...velho, retorno], trats))?.para, ETAPA.GANHO, 'proposta nova = venda nova');
+  assert.equal(planejarMovimento(entrada(ETAPA.GANHO, [...velho, retorno], trats)), null, 'sessão velha não leva pra EM TRATAMENTO');
+  // sessão NOVA (depois do retorno) atendida: aí sim
+  assert.equal(planejarMovimento(entrada(ETAPA.GANHO, [...velho, retorno, ag({ h: -1, idStatus: 42, categoria: 'SESSÃO' })], [{ idStatus: 46 }, { idStatus: 45 }]))?.para, ETAPA.EM_TRATAMENTO);
+  // em EM TRATAMENTO com o finalizado velho e o novo em andamento: fica
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [...velho, retorno], [{ idStatus: 46 }, { idStatus: 45 }], 'TRATAMENTO')), null);
+  // novo cancelado: CANCELADO, não ALTA (o finalizado é do ciclo velho)
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [...velho, retorno], [{ idStatus: 46 }, { idStatus: 47, statusName: 'CANCELADO' } as { idStatus: number }], 'TRATAMENTO'))?.para, ETAPA.CANCELADO);
+  // novo finalizado também: ALTA de novo
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [...velho, retorno], [{ idStatus: 46 }, { idStatus: 46 }], 'TRATAMENTO'))?.para, ETAPA.ALTA);
+});
+
+test('ALTA com retorno pós atendido entre duas varreduras vai direto pra COMPARECEU; retorno atendido há meses não move', () => {
+  const alta = [{ idStatus: 46 }];
+  assert.equal(planejarMovimento(entrada(ETAPA.ALTA, [ag({ h: -2, idStatus: 42, categoria: 'Retorno após tratamento' })], alta, 'TRATAMENTO'))?.para, ETAPA.COMPARECEU);
+  assert.equal(planejarMovimento(entrada(ETAPA.ALTA, [ag({ h: -24 * 30, idStatus: 42, categoria: 'Retorno após tratamento' })], alta, 'TRATAMENTO')), null, 'retorno velho: fica');
+  // o retorno MAIS RECENTE decide: um antigo atendido + um novo marcado → RETORNO
+  assert.equal(planejarMovimento(entrada(ETAPA.ALTA, [ag({ h: -24 * 30, idStatus: 42, categoria: 'Retorno após tratamento' }), ag({ h: 48, idStatus: 37, categoria: 'Retorno após tratamento' })], alta, 'TRATAMENTO'))?.para, ETAPA.RETORNO);
+  // em RETORNO, um retorno antigo atendido não empurra; só o mais recente
+  assert.equal(planejarMovimento(entrada(ETAPA.RETORNO, [ag({ h: -24 * 30, idStatus: 42, categoria: 'Retorno após tratamento' }), ag({ h: 48, idStatus: 37, categoria: 'Retorno após tratamento' })], alta)), null);
+});
+
+test('tratamento com status desconhecido e sem nome não é "aberto": não vira GANHO', () => {
+  assert.equal(tratamentoAberto({ idStatus: 47, statusName: null }), false);
+  assert.equal(tratamentoAberto({ idStatus: 99, statusName: null }), false);
+  assert.equal(tratamentoAberto({ idStatus: null, statusName: null }), true, 'do /treatments/search, sem id nem nome, é em andamento');
+  assert.equal(tratamentoAberto({ idStatus: 45, statusName: null }), true);
+  assert.equal(tratamentoAberto({ idStatus: 44, statusName: null }), true);
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -100, idStatus: 42 })], [{ idStatus: 47, statusName: null } as { idStatus: number }]))?.para, ETAPA.NEGOCIACAO, 'cancelado sem nome não abre venda');
 });

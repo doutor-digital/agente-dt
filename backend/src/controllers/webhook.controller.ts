@@ -40,6 +40,8 @@ import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
+import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
+import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { z } from 'zod';
 
@@ -977,11 +979,51 @@ export async function processAgent(args: {
   try {
     const allowedStatusIds = unit.kommoAllowedStatusIds ?? [];
     const pausedStages = await getPausedStagesGlobalSet();
-    if (allowedStatusIds.length > 0 || pausedStages.size > 0) {
+    const caladaAtiva = sofiaCaladaLiberada(unit.slug);
+    if (allowedStatusIds.length > 0 || pausedStages.size > 0 || caladaAtiva) {
       const kommo = createKommoClient(unit);
       const lead = await kommo.getLead(leadId);
       const sid = lead.status_id;
       const pid = lead.pipeline_id;
+
+      // GANHO / ALTA / TRATAMENTO CANCELADO, pelo NOME da etapa (142/143 se repetem nos dois funis):
+      // a Sofia não responde; deixa uma nota no cartão, uma vez por dia, e a equipe decide.
+      // Só mensagem de chat de verdade: webhook de campo/etapa traz um texto sintético que não é do paciente.
+      if (caladaAtiva && sid && pid && isChatMessage && humanMessage.trim()) {
+        // falha ao ler o esquema não pode derrubar as travas de allowlist/pausa logo abaixo: só deixa de calar
+        let posicao: { pipeline: string; status: string } | null = null;
+        try {
+          posicao = (await esquemaKommoDaUnidade(unit, kommo)).nomeDoStatus(pid, sid);
+        } catch (err) {
+          logger.warn({ err: String(err), traceId, leadId, unit: unit.slug }, 'sofia calada: não li o esquema da conta (segue sem calar)');
+        }
+        const etapa = posicao?.status ?? null;
+        if (posicao && etapaCalada(etapa, { statusId: sid, pipeline: posicao.pipeline })) {
+          await finishWidgetSilently();
+          let anotou = false;
+          if (!(await avisoRecente(unit.id, leadId, REGRA_NOTA_CALADA))) {
+            try {
+              const nota = await kommo.addLeadNote(leadId, notaSofiaCalada(etapa ?? 'etapa encerrada', humanMessage));
+              if (nota?.id) {
+                await marcarAviso(unit.id, leadId, REGRA_NOTA_CALADA);
+                anotou = true;
+              }
+            } catch (err) {
+              logger.warn({ err: String(err), traceId, leadId, unit: unit.slug }, 'sofia calada: falha ao deixar a nota (segue calada)');
+            }
+          }
+          const totalLatency = Math.round(performance.now() - requestStart);
+          await recorder.step({
+            kind: 'COMPLETED',
+            title: `Sofia calada — lead em ${etapa}${anotou ? ' (nota deixada no cartão)' : ''}`,
+            payload: { leadId, statusId: sid, pipelineId: pid, etapa, anotou, reason: 'stage_silent_by_name' },
+            latencyMs: totalLatency,
+          });
+          await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__stage_silent__' });
+          logger.info({ traceId, leadId, unit: unit.slug, etapa, anotou }, 'agente pulado (etapa calada pelo nome)');
+          return;
+        }
+      }
 
       if (allowedStatusIds.length > 0 && (!sid || !allowedStatusIds.includes(sid))) {
         await finishWidgetSilently();

@@ -57,6 +57,8 @@ const schema = z.object({
   FRANQUIA_MOVE_SLUGS: z.string().optional(),
   /** Horas em COMPARECEU sem tratamento até o cartão ir pra EM NEGOCIAÇÃO (padrão 48). */
   FRANQUIA_NEGOCIACAO_HORAS: z.string().optional(),
+  /** Unidades onde a Sofia fica calada em GANHO / ALTA / TRATAMENTO CANCELADO e só deixa nota (csv; `*` = todas). */
+  SOFIA_CALADA_SLUGS: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
