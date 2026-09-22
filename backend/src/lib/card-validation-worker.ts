@@ -47,6 +47,22 @@ export const NOMES_CAMPO = {
 
 export type ChaveCampo = keyof typeof NOMES_CAMPO;
 
+/**
+ * Cartão ENXUTO (laboratório `doutorherniakommo` e Petrópolis `doutorhernialvp`, 09/2026):
+ * quando o campo é o MESMO e só o nome mudou, aceitamos os dois nomes — a regra vale nas duas
+ * gerações de cartão sem precisar de flag por conta. Conferido pela API em 22/09/2026.
+ *
+ * O que NÃO entra aqui: campo que o cartão enxuto simplesmente não tem (✓ Agendou, ✓ Fechou
+ * tratamento, ◉ Semáforo, ⚕ Tratamento indicado, ◷ Data do cancelamento, ◷ Data de retorno…).
+ * Para esses vale o princípio do `lead-metrics.service`: campo que a conta não tem, a regra pula
+ * em silêncio — nunca vira alerta. E cuidado com falso parente: o "◷ Data solicitação de
+ * cancelamento" do enxuto é quando o paciente PEDE, não quando o cancelamento se efetiva
+ * (o "◷ Data do cancelamento" do cartão antigo), então não é alternativa dele.
+ */
+export const NOMES_ALTERNATIVOS: Partial<Record<ChaveCampo, readonly string[]>> = {
+  MOTIVO_NAO_FECH: ['⊘ Motivo de não fechamento'],
+};
+
 export interface ContextoUnidade {
   campos: Record<ChaveCampo, number[]>;
   camposLigacao: Set<number>;
@@ -91,7 +107,11 @@ export function montarContexto(
   }
   const resolvido = {} as Record<ChaveCampo, number[]>;
   for (const [chave, nome] of Object.entries(NOMES_CAMPO) as Array<[ChaveCampo, string]>) {
-    resolvido[chave] = porNome.get(normalizar(nome)) ?? [];
+    const ids = new Set(porNome.get(normalizar(nome)) ?? []);
+    for (const alternativo of NOMES_ALTERNATIVOS[chave] ?? []) {
+      for (const id of porNome.get(normalizar(alternativo)) ?? []) ids.add(id);
+    }
+    resolvido[chave] = [...ids];
   }
 
   const acharPipe = (nome: string) =>
@@ -144,6 +164,14 @@ function vals(lead: KommoLead, ids: number[]): string[] {
 }
 
 export interface Leitor {
+  /** O campo EXISTE nessa conta. Cartão antigo e cartão enxuto não têm os mesmos campos. */
+  existe: (c: ChaveCampo) => boolean;
+  /**
+   * O campo existe nessa conta E está vazio — é o único caso em que dá para cobrar alguém.
+   * `vazio` sozinho não serve para acusar: ele devolve true também quando o campo não existe,
+   * e aí a regra acusaria todo lead da conta por um campo que ninguém tem como preencher.
+   */
+  faltaPreencher: (c: ChaveCampo) => boolean;
   vazio: (c: ChaveCampo) => boolean;
   igual: (c: ChaveCampo, v: string) => boolean;
   contem: (c: ChaveCampo, v: string) => boolean;
@@ -152,7 +180,10 @@ export interface Leitor {
 
 function leitor(lead: KommoLead, ctx: ContextoUnidade): Leitor {
   const ler = (c: ChaveCampo) => vals(lead, ctx.campos[c]);
+  const existe = (c: ChaveCampo) => ctx.campos[c].length > 0;
   return {
+    existe,
+    faltaPreencher: (c) => existe(c) && ler(c).length === 0,
     vazio: (c) => ler(c).length === 0,
     igual: (c, v) => ler(c).some((x) => x.toLowerCase() === v.toLowerCase()),
     // O semáforo guarda a cor e a explicação juntas ("LARANJA — não fechou:
@@ -176,6 +207,12 @@ export interface Regra {
 const emComercial = (l: KommoLead, ctx: ContextoUnidade, status: number | null) =>
   ctx.pipeComercial !== null && l.pipeline_id === ctx.pipeComercial && l.status_id === status;
 
+/**
+ * REGRA DE OURO destas regras (21/09/2026, cartão enxuto): cobrança só existe onde há o que
+ * preencher. Toda acusação por campo vazio passa por `faltaPreencher` (existe na conta E vazio) e
+ * toda regra que depende de um campo só dela começa por `existe`. Campo que a conta não tem = a
+ * regra não se aplica, em silêncio — mesmo princípio do `lead-metrics.service`.
+ */
 export const REGRAS_CARD: Regra[] = [
   {
     key: 'A_agendado_incompleto',
@@ -183,8 +220,8 @@ export const REGRAS_CARD: Regra[] = [
     erro: (r) => {
       const p: string[] = [];
       if (r.igual('AGENDOU', 'Não')) p.push('"✓ Agendou" = Não');
-      if (r.vazio('TIPO_AGENDAMENTO')) p.push('"Tipo de agendamento" vazio');
-      if (r.vazio('SITUACAO_CONSULTA')) p.push('"Situação da consulta" vazia');
+      if (r.faltaPreencher('TIPO_AGENDAMENTO')) p.push('"Tipo de agendamento" vazio');
+      if (r.faltaPreencher('SITUACAO_CONSULTA')) p.push('"Situação da consulta" vazia');
       return p.length ? 'está em AGENDADO mas ' + p.join('; ') : null;
     },
   },
@@ -192,6 +229,8 @@ export const REGRAS_CARD: Regra[] = [
     key: 'A2_data_agendamento_invalida',
     aplica: (l, ctx) => emComercial(l, ctx, ctx.stAgendado),
     erro: (r) => {
+      // Conta sem "◷ Agendado pela SDR em" não tem como registrar quando a SDR agendou.
+      if (!r.existe('AGENDADO_SDR_EM')) return null;
       const agendadoEm = r.data('AGENDADO_SDR_EM');
       if (agendadoEm === null) {
         return 'está em AGENDADO mas "◷ Agendado pela SDR em" está vazio — o agendamento não entra no relatório do dia';
@@ -219,6 +258,9 @@ export const REGRAS_CARD: Regra[] = [
     // vieram, saíram com indicação, e cujo desfecho ninguém registrou.
     aplica: (l, ctx) => ctx.pipeComercial !== null,
     erro: (r) => {
+      // O cartão enxuto não tem "◉ Semáforo" nem "⚕ Tratamento indicado": lá não há desfecho a
+      // classificar por este caminho, então a regra nem começa.
+      if (!r.existe('SEMAFORO') || !r.existe('TRAT_INDICADO')) return null;
       if (!r.contem('SITUACAO_CONSULTA', 'atendido')) return null;
       if (r.vazio('TRAT_INDICADO')) return null;
       if (!r.vazio('SEMAFORO')) return null;
@@ -231,6 +273,9 @@ export const REGRAS_CARD: Regra[] = [
     key: 'H_fechou_sem_valor',
     aplica: (l, ctx) => ctx.pipeComercial !== null || ctx.pipeTratamento !== null,
     erro: (r) => {
+      // No cartão enxuto não há "✓ Fechou tratamento": a regra fica calada sozinha (nenhum valor
+      // é "Sim" num campo que não existe) e é a leitura certa — lá ninguém definiu ainda qual
+      // campo diz que fechou.
       if (!r.igual('FECHOU_TRAT', 'Sim')) return null;
       if (!r.vazio('VALOR_TRAT')) return null;
       return 'está com "✓ Fechou tratamento = Sim" mas sem "¤ Valor do tratamento" — o tratamento conta como vendido e o financeiro não fecha';
@@ -242,7 +287,7 @@ export const REGRAS_CARD: Regra[] = [
     key: 'I_laranja_sem_retorno',
     aplica: (l, ctx) => ctx.pipeComercial !== null,
     erro: (r) => {
-      if (r.vazio('SEMAFORO')) return null;
+      if (!r.existe('SEMAFORO') || r.vazio('SEMAFORO')) return null;
       const laranja = ['LARANJA', 'laranja'].some((v) => r.contem('SEMAFORO', v));
       if (!laranja) return null;
       if (!r.vazio('DATA_RETORNO') || !r.vazio('DATA_RETORNO_EXAMES')) return null;
@@ -261,15 +306,22 @@ export const REGRAS_CARD: Regra[] = [
     aplica: (l, ctx) => emComercial(l, ctx, GANHO),
     erro: (r) => {
       const p: string[] = [];
-      if (!r.igual('FECHOU_TRAT', 'Sim')) p.push('"Fechou tratamento" não está Sim');
-      if (r.vazio('TRAT_FECHADO')) p.push('"Tratamento fechado" vazio');
-      if (r.vazio('FORMA_PAGAMENTO')) p.push('"Forma de pagamento" vazia');
+      // "✓ Fechou tratamento" não existe no cartão enxuto — sem o campo, não há "não está Sim".
+      if (r.existe('FECHOU_TRAT') && !r.igual('FECHOU_TRAT', 'Sim')) {
+        p.push('"Fechou tratamento" não está Sim');
+      }
+      if (r.faltaPreencher('TRAT_FECHADO')) p.push('"Tratamento fechado" vazio');
+      if (r.faltaPreencher('FORMA_PAGAMENTO')) p.push('"Forma de pagamento" vazia');
       return p.length ? 'está em GANHO mas ' + p.join('; ') : null;
     },
   },
   {
     key: 'C_perdido_sem_motivo',
-    aplica: (l, ctx) => emComercial(l, ctx, PERDIDO),
+    // Sem nenhum dos dois campos de motivo na conta, sobraria só o motivo nativo do Kommo —
+    // cobrar isso seria cobrar um campo que não existe. Aí a regra não se aplica.
+    aplica: (l, ctx) =>
+      emComercial(l, ctx, PERDIDO) &&
+      (ctx.campos.MOTIVO_NAO_AGEND.length > 0 || ctx.campos.MOTIVO_NAO_FECH.length > 0),
     erro: (r, l) =>
       !l.loss_reason_id && r.vazio('MOTIVO_NAO_AGEND') && r.vazio('MOTIVO_NAO_FECH')
         ? 'está em PERDIDO sem motivo nenhum — nem o do Kommo, nem "Motivo do não agendamento", nem "Motivo de não fechamento"'
@@ -278,6 +330,9 @@ export const REGRAS_CARD: Regra[] = [
   {
     key: 'D_noshow_pago',
     aplica: () => true,
+    // Os dois testes são positivos ("Não" e "Sim"), então numa conta sem esses campos — o cartão
+    // enxuto tem "✓ Compareceu" e "¤ Pagamento antecipado", que são outros campos, não estes —
+    // a regra já fica calada sozinha.
     erro: (r) =>
       r.igual('COMPARECEU_ULT', 'Não') && r.igual('PG_ANTECIPADO', 'Sim')
         ? '"Compareceu à última sessão" = Não mas "Consulta pg antecipado" = Sim (no-show pago)'
@@ -289,8 +344,8 @@ export const REGRAS_CARD: Regra[] = [
       ctx.pipeTratamento !== null && l.pipeline_id === ctx.pipeTratamento && l.status_id === PERDIDO,
     erro: (r) => {
       const p: string[] = [];
-      if (r.vazio('DATA_CANCEL')) p.push('"Data do cancelamento" vazia');
-      if (r.vazio('MOTIVO_CANCEL_TRAT')) p.push('"Motivo do cancelamento" vazio');
+      if (r.faltaPreencher('DATA_CANCEL')) p.push('"Data do cancelamento" vazia');
+      if (r.faltaPreencher('MOTIVO_CANCEL_TRAT')) p.push('"Motivo do cancelamento" vazio');
       return p.length ? 'está em TRATAMENTO CANCELADO mas ' + p.join('; ') : null;
     },
   },
