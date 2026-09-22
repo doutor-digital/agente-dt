@@ -47,6 +47,16 @@ export function textoConfirmacaoD1(args: {
   );
 }
 
+/** "quinta, 24/09" — o dia da semana sai da própria data, nunca de cálculo do modelo. */
+export function diaCurto(quando: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(quando)) return quando.slice(0, 10);
+  const dt = new Date(quando.length <= 16 ? `${quando}:00` : quando);
+  if (Number.isNaN(dt.getTime())) return quando.slice(0, 10);
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  return `${DIAS[dt.getDay()]}, ${dd}/${mm}`;
+}
+
 /** Rótulos dos botões da véspera — o classificador acima reconhece os dois. */
 export const BOTOES_D1 = ['Confirmo', 'Preciso remarcar'];
 
@@ -128,6 +138,7 @@ export async function tratarRespostaD1(args: {
 
   const consulta = await consultaDoLead(unit, leadId).catch(() => null);
   const hora = consulta?.quando ? consulta.quando.slice(11, 16) : null;
+  const quandoCurto = consulta?.quando ? diaCurto(consulta.quando) : null;
   const primeiro = (conv.contactName ?? '').trim().split(/\s+/)[0];
   const nome = primeiro ? `, ${primeiro}` : '';
 
@@ -138,7 +149,8 @@ export async function tratarRespostaD1(args: {
     });
     await kommo.sendChatReply({
       leadId,
-      text: `Confirmado${nome}! 💙 Te esperamos amanhã${hora ? ` às ${hora}` : ''}. Chegue uns 15 minutinhos antes, tá? Qualquer coisa é só me chamar por aqui.`,
+      // Sem "amanhã": a mesma pergunta sai também dois dias antes (reforço D-2).
+      text: `Confirmado${nome}! 💙 Te esperamos${quandoCurto ? ` ${quandoCurto}` : ''}${hora ? ` às ${hora}` : ''}. Chegue uns 15 minutinhos antes, tá? Qualquer coisa é só me chamar por aqui.`,
       chatId: null,
       talkId: null,
       contactId: null,

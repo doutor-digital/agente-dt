@@ -386,10 +386,8 @@ function renderRulesGlobal(): string {
   ("sim, vou", "confirmado", "pode confirmar"). NÃO é confirmação: "confirmo depois", "confirmo
   com antecedência", "vou ver", "se der eu vou", "acho que sim" — nem um "ok"/"tá"/"pode ser" que
   veio depois de você insistir. Nesses casos NÃO mande o cartão: deixe o horário reservado e
-  pergunte UMA vez só — "Deixo reservado pra você. Pra eu fechar: você consegue vir [dia da
-  semana], [dd/mm], às [hora]?".
-- DATAS: escreva sempre dia da semana + dd/mm + hora ("quinta, 24/09, às 15h"), usando o dia da
-  semana que veio da agenda. Nunca calcule de cabeça.
+  pergunte UMA vez só, com o dia e a hora escritos por extenso, assim: "Deixo reservado pra você.
+  Pra eu fechar: você consegue vir quinta, 24/09, às 15h?".
 - PREÇO: definida a condição da pessoa, o valor NÃO muda mais — o mesmo em toda a conversa e no
   cartão. Não existe "valor especial" fora da tabela das Fontes Oficiais, nem arredondamento.
 - NOME: use só o nome que a pessoa escreveu na conversa. Se o cadastro trouxer algo que não é nome
@@ -468,7 +466,15 @@ function renderHandoff(unit: Unit): string {
   Não continue a conversa depois disso.`);
 }
 
-const PIPELINE_INTENT_CONFIG_KEYS = new Set(['spine_client_field_id', 'sla_alert_minutes']);
+// Chaves de CONFIGURAÇÃO que moram no mesmo JSON dos intents mas NÃO são etapa nenhuma. Sem esta
+// lista elas viram "chame mover_etapa({ statusId: <id do salesbot> })" no prompt — a IA moveria o
+// cartão para uma etapa que não existe.
+const PIPELINE_INTENT_CONFIG_KEYS = new Set([
+  'spine_client_field_id',
+  'sla_alert_minutes',
+  'confirmacao_salesbot_id',
+  'reforco_salesbot_id',
+]);
 
 function renderPipelineIntents(unit: Unit): string {
   const todos = unit.pipelineIntents as Record<string, number> | null;
@@ -1503,8 +1509,17 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
  */
 export function consultaNoPassado(quando: string | null | undefined, agoraLocalISO: string): boolean {
   if (!quando || !agoraLocalISO) return false;
-  return quando.slice(0, 16) < agoraLocalISO.slice(0, 16);
+  // Folga de 4 h depois da hora marcada: quem escreve "estou chegando, peguei trânsito" às 15h08 de
+  // uma consulta das 15h não pode ouvir que o horário dele não existe mais.
+  // O "Z" é de propósito: força a soma a acontecer no relógio de parede, sem o fuso da máquina
+  // entrar na conta. Os dois lados continuam sendo hora local da unidade.
+  const t = Date.parse(`${quando.slice(0, 16)}:00Z`);
+  const fim = Number.isNaN(t) ? quando.slice(0, 16) : new Date(t + FOLGA_CONSULTA_MS).toISOString().slice(0, 16);
+  return fim < agoraLocalISO.slice(0, 16);
 }
+
+/** Tempo depois da hora marcada em que a consulta ainda é tratada como "de hoje". */
+const FOLGA_CONSULTA_MS = 4 * 60 * 60_000;
 
 /** "2026-09-22T10:25" no fuso pedido. */
 export function agoraLocalISO(tz: string, agora: Date = new Date()): string {
@@ -1525,7 +1540,10 @@ function renderConsultaMarcada(
   // Antes de qualquer outra coisa: a data já passou? Em 21/09/2026 a IA disse a uma paciente
   // "sua vaga de sexta, 18/09 às 16h está reservada" — três dias DEPOIS da consulta. Quem lê isso
   // não entende mais nada, e o cartão fica preso num horário que não existe.
-  if (agoraLocal && consultaNoPassado(c.quando, agoraLocal)) {
+  // Só afirma "já passou" quando a agenda CONFIRMA o horário. Em `nao_confirmada` o `quando` é o
+  // valor salvo, que pode estar velho: dizer que passou faria a IA oferecer horário novo a quem tem
+  // consulta válida remarcada.
+  if (agoraLocal && c.estado === 'confirmada' && consultaNoPassado(c.quando, agoraLocal)) {
     return xmlBlock('consulta_do_paciente', [
       `A consulta deste paciente era ${porExtenso(c.quando)} e essa data JÁ PASSOU.`,
       '',

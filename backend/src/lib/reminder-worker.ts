@@ -62,6 +62,15 @@ export function toqueDoDia(diaDaConsulta: string, hoje: string): Toque | null {
   return null;
 }
 
+/**
+ * O reforço de D-2 é mensagem NOVA para o paciente: entra unidade por unidade, nunca na rede
+ * inteira de uma vez. Vazio = ninguém; `*` = todas.
+ */
+export function reforcoLiberado(slug: string, raw: string | undefined = process.env.CONFIRMACAO_D2_SLUGS): boolean {
+  const lista = (raw ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+  return lista.includes('*') || lista.includes(slug);
+}
+
 /** Ids dos Salesbots que carregam os templates aprovados, guardados em `pipeline_intents`. */
 export function botsDeConfirmacao(unit: Pick<Unit, 'pipelineIntents'>): { d1: number | null; d2: number | null } {
   const i = (unit.pipelineIntents ?? {}) as Record<string, unknown>;
@@ -93,10 +102,23 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
   const oficiais = await mensagensOficiais(kommo, leadId, 15).catch(() => null);
   const aberta = oficiais ? janelaAberta(oficiais) : true;
 
+  // Arma o tratador da resposta: sem isto, o "1" ou o toque no botão do paciente chega como texto
+  // solto no agente, que não sabe que perguntou nada.
+  const armar = async () => {
+    if (!conv) return;
+    await prisma.conversation.update({
+      where: { id: conv.id },
+      data: { confirmacaoD1EnviadaEm: new Date(), confirmacaoD1Resposta: null },
+    });
+  };
+
   if (!aberta) {
     if (botTemplate) {
       const r = await kommo.triggerSalesbot(botTemplate, leadId);
-      if (r.ok) return 'template';
+      if (r.ok) {
+        await armar();
+        return 'template';
+      }
       logger.warn({ unit: unit.slug, leadId, toque, erro: r.error }, 'confirmação: template falhou');
     }
     // Sem template configurado, a equipe precisa ligar — é a única confirmação que resta.
@@ -148,16 +170,17 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
     }
   }
   if (via !== 'chat_botoes') {
-    await kommo.sendChatReply({ leadId, text: texto, chatId: null, talkId: null, contactId: null });
+    // `sendChatReply` cai para NOTA no cartão quando o chat recusa — e nota o paciente não lê.
+    // Tratar isso como enviado faria o dedupe calar a próxima tentativa até depois da consulta.
+    const r = await kommo.sendChatReply({ leadId, text: texto, chatId: null, talkId: null, contactId: null });
+    if (r.via === 'lead_note') {
+      logger.warn({ unit: unit.slug, leadId, toque }, 'confirmação: virou nota interna, o paciente NÃO recebeu');
+      return 'nada';
+    }
   }
+  await armar();
   if (conv) {
     await addMessage({ conversationId: conv.id, role: 'assistant', content: texto, meta: { origem: `confirmacao_${toque}`, via } });
-    if (toque === 'd1') {
-      await prisma.conversation.update({
-        where: { id: conv.id },
-        data: { confirmacaoD1EnviadaEm: new Date(), confirmacaoD1Resposta: null },
-      });
-    }
   }
   return via;
 }
@@ -177,8 +200,17 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   // garantida"). Quem ainda não confirmou precisa da PERGUNTA, que é o caminho de baixo.
   const botLembrete = unit.reminderEnabled ? unit.reminderSalesbotId : null;
 
+  // Filtra no banco pelos dois dias que interessam: sem isto, uma unidade com 10 mil leads
+  // importados faz 10 mil chamadas à franquia antes de descartar quase todas.
+  const amanha = somarDias(dia, 1);
+  const depois = somarDias(dia, 2);
+  const diasAlvo = reforcoLiberado(unit.slug) ? [amanha, depois] : [amanha];
   const links = await prisma.spineLeadLink.findMany({
-    where: { unitId: unit.id, spineIdSchedule: { not: null } },
+    where: {
+      unitId: unit.id,
+      spineIdSchedule: { not: null },
+      OR: diasAlvo.map((d) => ({ agendadoPara: { startsWith: d } })),
+    },
   });
 
   const kommo = createKommoClient(unit);
@@ -186,24 +218,39 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
 
   for (const link of links) {
     const consulta = await AgendaReconcileService.consultaDoLead(unit, link.kommoLeadId);
-    if (!consulta || consulta.estado === 'cancelada' || !consulta.quando) {
+    // `nao_confirmada` significa que a franquia NÃO devolveu este horário agora: o `quando` é o
+    // valor salvo, que pode estar velho. Perguntar "confirma sua consulta de quinta às 15h" com
+    // data não verificada é pior que não perguntar.
+    if (!consulta || consulta.estado !== 'confirmada' || !consulta.quando) {
       conta.pulados++;
       continue;
     }
     const toque = toqueDoDia(consulta.quando.slice(0, 10), dia);
     if (!toque) continue;
+    if (toque === 'd2' && !reforcoLiberado(unit.slug)) continue;
 
+    const chave = toque === 'd1' ? 'confirmacao_d1' : 'reforco_d2';
+    const janela = toque === 'd1' ? REENVIO_D1_MS : REENVIO_D2_MS;
     try {
-      if (toque === 'd1' && consulta.estado === 'confirmada' && botLembrete) {
+      if (await avisoRecente(unit.id, link.kommoLeadId, chave, janela)) continue;
+
+      // O Salesbot de lembrete da unidade diz "sua consulta está garantida" — só serve para quem
+      // JÁ respondeu confirmando. Quem não respondeu precisa da pergunta.
+      const conv = await prisma.conversation.findFirst({
+        where: { unitId: unit.id, leadId: String(link.kommoLeadId) },
+        orderBy: { lastMessageAt: 'desc' },
+        select: { confirmacaoD1Resposta: true },
+      });
+      if (toque === 'd1' && botLembrete && conv?.confirmacaoD1Resposta === 'confirmou') {
         const r = await kommo.triggerSalesbot(botLembrete, link.kommoLeadId);
-        if (r.ok) conta.lembrete++;
-        else logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, erro: r.error }, 'lembrete: Salesbot falhou');
+        if (r.ok) {
+          conta.lembrete++;
+          await marcarAviso(unit.id, link.kommoLeadId, chave);
+        } else {
+          logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, erro: r.error }, 'lembrete: Salesbot falhou');
+        }
         continue;
       }
-
-      const chave = toque === 'd1' ? 'confirmacao_d1' : 'reforco_d2';
-      const janela = toque === 'd1' ? REENVIO_D1_MS : REENVIO_D2_MS;
-      if (await avisoRecente(unit.id, link.kommoLeadId, chave, janela)) continue;
 
       const via = await pedirConfirmacao({
         unit,
