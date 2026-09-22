@@ -932,34 +932,29 @@ export async function processAgent(args: {
     carimbarContato(unit.id, leadId, { desfecho: 'pediu_humano' });
     await finishWidgetSilently();
 
-    // O paciente continua escrevendo e a IA está desligada. Antes isso morria
-    // aqui em silêncio; agora vira tarefa no cartão, que o fluxo de alertas
-    // leva pro grupo. A IA segue pausada — quem assume é gente.
-    // Trava nova (21/09/2026), depois de Araguaína acumular 18 tarefas iguais num lead: UMA tarefa
-    // desse tipo por lead a cada 24 h, com marca persistente (sobrevive a deploy). Cogitei checar
-    // "algum humano mexeu nos últimos 15 min", mas `atividadeHumanaDesde` conta escrita do próprio
-    // agente pela API (created_by > 0) e a despedida da IA como gente — calaria o aviso justamente
-    // depois do handoff. Quem julga se a equipe já assumiu é o SLA worker, que parte do handoffAt.
+    // O paciente continua escrevendo e a IA está desligada. Isso vira NOTA no cartão, não tarefa
+    // (decisão do João, 22/09/2026): eram 1.390 das 3.831 tarefas abertas da rede — a tela de
+    // tarefas ficou impossível de ler e o aviso não dizia nada que o chat já não mostrasse (a
+    // conversa aparece com mensagem não lida, que é onde a equipe realmente olha). A nota fica no
+    // histórico do cartão pra quem for conferir depois por que ninguém respondeu.
+    // A trava de 24 h por lead continua (Araguaína acumulou 18 avisos iguais num lead só).
     if (humanMessage.trim() && isChatMessage && devoAvisar(`${unit.id}:${leadId}`)) {
       try {
         const kommoCli = createKommoClient(unit);
         if (await avisoRecente(unit.id, leadId, 'paciente_insistiu')) {
-          logger.info({ leadId, unit: unit.slug }, 'paciente insistiu — tarefa já aberta nas últimas 24 h, não repete');
+          logger.info({ leadId, unit: unit.slug }, 'paciente insistiu — nota já registrada nas últimas 24 h, não repete');
         } else {
-          const criada = await kommoCli.createTask({
+          const criada = await kommoCli.addLeadNote(
             leadId,
-            text:
-              `ALERTA · ${unit.slug} · ` +
-              'O paciente continuou escrevendo com a IA pausada e ninguém respondeu. ' +
+            '⏸ O paciente continuou escrevendo com a IA pausada e ninguém respondeu. ' +
               `Última mensagem: "${humanMessage.trim().slice(0, 120)}"`,
-            completeAt: Math.floor(Date.now() / 1000) + 30 * 60,
-          });
+          );
           // marca SÓ depois da Kommo confirmar — falha de rede não pode calar o aviso por 24 h
           if (criada) await marcarAviso(unit.id, leadId, 'paciente_insistiu');
-          logger.info({ leadId, unit: unit.slug, criada: !!criada }, 'paciente insistiu com a IA pausada — equipe avisada');
+          logger.info({ leadId, unit: unit.slug, criada: !!criada }, 'paciente insistiu com a IA pausada — nota no cartão');
         }
       } catch (err) {
-        logger.warn({ err: String(err), leadId, unit: unit.slug }, 'falha ao avisar que o paciente insistiu — segue');
+        logger.warn({ err: String(err), leadId, unit: unit.slug }, 'falha ao anotar que o paciente insistiu — segue');
       }
     }
 
