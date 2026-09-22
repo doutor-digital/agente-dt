@@ -28,6 +28,8 @@ export function textoConfirmacaoD1(args: {
   quando: string;
   especialista: string | null | undefined;
   endereco: string | null | undefined;
+  /** 'd1' = véspera ("sua consulta de amanhã"); 'd2' = reforço dois dias antes. */
+  antecedencia?: 'd1' | 'd2';
 }): string {
   const dt = new Date(args.quando.length <= 16 ? `${args.quando}:00` : args.quando);
   const valida = !Number.isNaN(dt.getTime());
@@ -38,8 +40,9 @@ export function textoConfirmacaoD1(args: {
   const oi = primeiro ? `Oi, ${primeiro}!` : 'Oi!';
   const quem = args.especialista ? ` com ${args.especialista}` : '';
   const onde = args.endereco ? `\n📍 ${args.endereco}` : '';
+  const quando = args.antecedencia === 'd2' ? '' : 'de amanhã, ';
   return (
-    `${oi} Passando para confirmar sua consulta de amanhã, ${diaSem ? diaSem + ', ' : ''}${dia} às ${hora}${quem}.${onde}\n\n` +
+    `${oi} Passando para confirmar sua consulta ${quando}${diaSem ? diaSem + ', ' : ''}${dia} às ${hora}${quem}.${onde}\n\n` +
     'Responda *1* para confirmar ou *2* se precisar remarcar. 😊'
   );
 }
