@@ -14,9 +14,15 @@
  *   primeira sessão atendida          → EM TRATAMENTO (funil TRATAMENTO)
  *   tratamento finalizado             → ALTA
  *
- * O que NUNCA faz: tirar cartão de PERDIDO, ALTA, TRATAMENTO CANCELADO ou RETORNO PÓS-TRATAMENTO
- * (decisão humana); mover pra PERDIDO ou EM ESPERA (é leitura da conversa, fica com a Sofia/SDR);
- * mexer em cartão que está em outro funil (resgate, financeiro…).
+ *   tratamento cancelado              → TRATAMENTO CANCELADO        (22/09/2026)
+ *   alta + retorno pós marcado        → RETORNO PÓS-TRATAMENTO      (22/09/2026, volta pro COMERCIAL)
+ *   retorno pós atendido              → COMPARECEU, como avaliação  (22/09/2026)
+ *
+ * O que NUNCA faz: tirar cartão de PERDIDO ou TRATAMENTO CANCELADO (decisão humana); tirar de ALTA
+ * ou RETORNO PÓS-TRATAMENTO por outro motivo que não o retorno acima; mover pra PERDIDO ou EM ESPERA
+ * (é leitura da conversa, fica com a Sofia/SDR); mexer em cartão que está em outro funil (resgate,
+ * financeiro…). Quem já teve alta tem tratamento FINALIZADO no histórico — isso não pode empurrar o
+ * cartão de volta pra GANHO quando ele volta pra um retorno.
  *
  * Só nas unidades em `FRANQUIA_MOVE_SLUGS` (csv; `*` = todas). Lab primeiro, depois Imperatriz.
  */
@@ -81,8 +87,14 @@ export function ehEtapaDeEntrada(status: string): boolean {
 }
 
 const PRE_AGENDADO = [ETAPA.QUALIFICACAO, ETAPA.ESPERA];
-const INTOCAVEIS_COMERCIAL = [ETAPA.PERDIDO, ETAPA.RETORNO];
-const INTOCAVEIS_TRATAMENTO = [ETAPA.ALTA, ETAPA.CANCELADO];
+const INTOCAVEIS_COMERCIAL = [ETAPA.PERDIDO];
+const INTOCAVEIS_TRATAMENTO = [ETAPA.CANCELADO];
+
+/** "Retorno após tratamento" na franquia: a consulta de quem já teve alta. Categoria ≠ "Retorno" simples (que é dentro da avaliação). */
+export function ehRetornoPosTratamento(s: Pick<SpineSchedule, 'categoryName'>): boolean {
+  const c = n(s.categoryName ?? '');
+  return c.includes('retorno') && c.includes('tratamento');
+}
 
 function epoch(s: SpineSchedule): number | null {
   if (!s.dateAttendanceUtc) return null;
@@ -118,11 +130,26 @@ function emAndamento(t: TratamentoParaEtapa): boolean {
   return t.idStatus === null;
 }
 
-/** Tratamento "aberto" na franquia (pendente ou em andamento): é o que leva o cartão pra GANHO. Cancelado e finalizado não contam. */
+export const TRATAMENTO_PENDENTE = 44;
+
+/**
+ * Tratamento "aberto" na franquia (pendente ou em andamento): é o que leva o cartão pra GANHO.
+ * Cancelado e finalizado não contam — e um status que a gente NÃO conhece (id fora de 44/45/46,
+ * sem nome) também não: um cancelado que chegue sem `statusName` não pode virar Purchase.
+ */
 export function tratamentoAberto(t: TratamentoParaEtapa): boolean {
-  return !finalizado(t) && !cancelado(t);
+  if (finalizado(t) || cancelado(t)) return false;
+  if (t.idStatus === null || t.idStatus === TRATAMENTO_PENDENTE || t.idStatus === TRATAMENTO_EM_ANDAMENTO) return true;
+  return /pendente|andamento|ativo/.test(n(t.statusName ?? ''));
 }
 const aberto = tratamentoAberto;
+
+function pendente(t: TratamentoParaEtapa): boolean {
+  return !finalizado(t) && !cancelado(t) && (t.idStatus === TRATAMENTO_PENDENTE || /pendente/.test(n(t.statusName ?? '')));
+}
+
+/** Retorno pós-tratamento atendido há pouco: entre uma varredura e outra, ou registrado depois do fato. */
+const RECENTE_S = 7 * 24 * 3600;
 
 /** Puro: dado o cartão e o que a franquia sabe, pra onde o cartão vai (ou null = fica). */
 export function planejarMovimento(e: EntradaMovimento): Movimento | null {
@@ -139,16 +166,55 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const temFinalizado = e.tratamentos.some(finalizado);
   const temAberto = e.tratamentos.some(aberto);
   const temEmAndamento = e.tratamentos.some(emAndamento);
+  const temCancelado = e.tratamentos.some(cancelado);
+  const temPendente = e.tratamentos.some(pendente);
+  const passou = (s: SpineSchedule) => (epoch(s) ?? Infinity) <= e.agoraEpoch;
+  const futura = (s: SpineSchedule) => (epoch(s) ?? 0) > e.agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO);
+  // quem já fez um ciclo inteiro (alta) volta como retorno pós-tratamento. O retorno mais recente marca o
+  // corte do ciclo atual: sessão e tratamento de antes dele são do ciclo velho e não valem pra GANHO/ALTA.
+  const retornosPos = consultas.filter(ehRetornoPosTratamento).sort((a, b) => (epoch(b) ?? 0) - (epoch(a) ?? 0));
+  const ultimoRetornoPos = retornosPos[0] ?? null;
+  const cicloAnterior = ultimoRetornoPos !== null;
+  const corteCiclo = ultimoRetornoPos ? (epoch(ultimoRetornoPos) ?? 0) : 0;
+  const retornoPosAtendido = !!ultimoRetornoPos && ultimoRetornoPos.idStatus === SPINE_STATUS.ATENDIDO && passou(ultimoRetornoPos);
+  const retornoPosAtendidoRecente = retornoPosAtendido && e.agoraEpoch - corteCiclo <= RECENTE_S;
+  const retornoPosMarcado = !!ultimoRetornoPos && futura(ultimoRetornoPos);
 
-  // ── funil TRATAMENTO: só a alta (um tratamento pendente não segura; um em andamento segura) ──
+  // ── RETORNO PÓS-TRATAMENTO (COMERCIAL): só sai quando o retorno é atendido, e aí segue como avaliação normal ──
+  if (atual.funil === 'COMERCIAL' && eh(status, ETAPA.RETORNO)) {
+    if (retornoPosAtendido) return ir('COMERCIAL', ETAPA.COMPARECEU, 'retorno pós-tratamento atendido na franquia');
+    return null;
+  }
+
+  // ── funil TRATAMENTO ──
   if (atual.funil === 'TRATAMENTO') {
-    if (eh(status, ETAPA.EM_TRATAMENTO) && temFinalizado && !temEmAndamento) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+    if (eh(status, ETAPA.ALTA)) {
+      // paciente de alta com retorno marcado: volta pro COMERCIAL, na etapa própria
+      if (retornoPosMarcado) return ir('COMERCIAL', ETAPA.RETORNO, 'retorno pós-tratamento marcado na franquia');
+      // retorno marcado e atendido entre duas varreduras (ou lançado depois): não pode ficar preso na ALTA
+      if (retornoPosAtendidoRecente) return ir('COMERCIAL', ETAPA.COMPARECEU, 'retorno pós-tratamento atendido na franquia');
+      return null;
+    }
+    if (eh(status, ETAPA.EM_TRATAMENTO)) {
+      if (cicloAnterior) {
+        // o FINALIZADO do ciclo velho é esperado aqui; o que decide é o tratamento novo
+        if (temCancelado && !temEmAndamento && !temPendente) return ir('TRATAMENTO', ETAPA.CANCELADO, 'tratamento cancelado na franquia');
+        if (temFinalizado && !temEmAndamento && !temPendente && !temCancelado) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+        return null;
+      }
+      // um tratamento pendente não segura a alta; um em andamento segura
+      if (temFinalizado && !temEmAndamento) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+      // cancelado na franquia, sem outro aberto (pendente ou em andamento) e sem finalizado: a clínica encerrou
+      if (temCancelado && !temAberto && !temFinalizado) return ir('TRATAMENTO', ETAPA.CANCELADO, 'tratamento cancelado na franquia');
+    }
     return null;
   }
 
   // ── tratamento existe: GANHO, e depois EM TRATAMENTO na 1ª sessão atendida ──
-  if (temAberto || temFinalizado) {
-    const sessaoAtendida = sessoes.some((s) => s.idStatus === SPINE_STATUS.ATENDIDO && (epoch(s) ?? Infinity) <= e.agoraEpoch);
+  // (finalizado só conta pra quem NÃO é retorno de um ciclo anterior)
+  if (temAberto || (temFinalizado && !cicloAnterior)) {
+    // sessão do ciclo velho (antes do retorno pós) não leva ninguém pra EM TRATAMENTO de novo
+    const sessaoAtendida = sessoes.some((s) => s.idStatus === SPINE_STATUS.ATENDIDO && passou(s) && (epoch(s) ?? 0) > corteCiclo);
     if (eh(status, ETAPA.GANHO)) {
       if (sessaoAtendida) return ir('TRATAMENTO', ETAPA.EM_TRATAMENTO, 'primeira sessão atendida');
       return null;

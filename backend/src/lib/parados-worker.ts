@@ -111,9 +111,14 @@ function contatoPrincipal(lead: KommoLead): number | null {
   return (cs.find((c) => c.is_main) ?? cs[0])?.id ?? null;
 }
 
+/** O mesmo campo tem nome curto no cartão enxuto e longo nas contas antigas (Serra: "…do tratamento"). */
+const NOMES_ALTERNATIVOS: Record<string, readonly string[]> = {
+  [CAMPO.MOTIVO_NAO_FECHAMENTO]: ['⊘ Motivo de não fechamento do tratamento'],
+};
+
 async function gravarSelect(unit: Unit, kommo: KommoClient, leadId: number, nome: string, opcao: string): Promise<void> {
   const esquema = await esquemaDaUnidade(unit, kommo);
-  const id = esquema.campoPorNome(nome);
+  const id = [nome, ...(NOMES_ALTERNATIVOS[nome] ?? [])].map((x) => esquema.campoPorNome(x)).find((x) => x !== null) ?? null;
   if (id === null) {
     logger.warn({ unit: unit.slug, leadId, campo: nome }, 'parados: campo não existe nesta conta — segui sem ele');
     return;
