@@ -643,18 +643,31 @@ export class KommoClient {
   }
 
   async getContactPhone(contactId: number): Promise<string | null> {
+    return (await this.getContactBasico(contactId)).telefone;
+  }
+
+  /**
+   * Nome e telefone do contato numa chamada só. O NOME aqui é o do perfil do WhatsApp, e é o que
+   * salva o cadastro na franquia quando o título do cartão ainda é "Lead 22261987": medido em
+   * 22/09/2026, 2.462 dos 3.083 leads barrados por falta de nome tinham nome de gente aqui.
+   */
+  async getContactBasico(contactId: number): Promise<{ nome: string | null; telefone: string | null }> {
     try {
       const { data } = await this.http.get<{
+        name?: string;
         custom_fields_values?: Array<{
           field_code?: string;
           values?: Array<{ value?: string }>;
         }>;
       }>(`/contacts/${contactId}`);
       const campo = data?.custom_fields_values?.find((f) => f.field_code === 'PHONE');
-      const v = campo?.values?.[0]?.value;
-      return typeof v === 'string' && v.trim() ? v.trim() : null;
+      const tel = campo?.values?.[0]?.value;
+      return {
+        nome: typeof data?.name === 'string' && data.name.trim() ? data.name.trim() : null,
+        telefone: typeof tel === 'string' && tel.trim() ? tel.trim() : null,
+      };
     } catch {
-      return null;
+      return { nome: null, telefone: null };
     }
   }
 
