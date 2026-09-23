@@ -18,7 +18,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
+import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
 import { ETAPA, horasAteNegociacao, moveLiberado, planejarMovimento, tratamentoAberto, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 
@@ -47,6 +47,8 @@ export interface ResumoSync {
   exemplosSemLead: string[];
   /** fase 2: cartões movidos de etapa nesta varredura (0 quando a unidade não está em FRANQUIA_MOVE_SLUGS) */
   movimentos: number;
+  /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
+  revisados: number;
 }
 const ultimoResumo = new Map<string, ResumoSync>();
 export function resumoDoSync(): ResumoSync[] {
@@ -247,16 +249,48 @@ async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, le
  * N horas e sem tratamento espelhado vai pra EM NEGOCIAÇÃO. Usa só o que a fase 1 já gravou no
  * cartão, então cobre também quem foi atendido antes da janela da agenda (D-3).
  */
-/** idClient do paciente na franquia: pelo vínculo que a Sofia gravou, senão pelo nome (só se for único). */
-export async function idClientDoLead(unit: Unit, leadId: number, nome: string | null): Promise<number | null> {
+/** lead → idClient resolvido por busca (positivo ou negativo), por unidade; evita repetir a busca a cada 15 min */
+const cacheIdClient = new Map<string, { idClient: number | null; expiraEm: number }>();
+
+async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo?: KommoClient; contatoId?: number | null }): Promise<number | null> {
+  const termo = nomeParaBusca(nome);
+  if (!termo) return null;
+  const r = await SpineService.searchClients(unit, termo, 50);
+  if (!r.ok || !r.data) return null;
+  const clientes = r.data.clients.filter((c) => c.idClient);
+  if (clientes.length === 0) return null;
+  // telefone do contato do Kommo × whatsapp da franquia: casa mesmo quando a SDR escreveu o nome diferente
+  let fone = '';
+  if (extra?.kommo && extra.contatoId) {
+    try {
+      fone = chaveTelefone(await extra.kommo.getContactPhone(extra.contatoId));
+    } catch {
+      fone = '';
+    }
+  }
+  if (fone) {
+    const porFone = clientes.filter((c) => chaveTelefone(c.whatsapp) === fone);
+    if (porFone.length > 0) return porFone[0].idClient;
+  }
+  const alvo = normalizar(termo);
+  const exatos = clientes.filter((c) => nomeDaFranquia(c.name) === alvo);
+  // dois homônimos: não arrisca
+  return exatos.length === 1 ? exatos[0].idClient : null;
+}
+
+/**
+ * idClient do paciente na franquia: pelo vínculo que a Sofia gravou; senão pelo nome do cartão sem a
+ * data que a SDR escreve, casando por telefone (quando o contato é conhecido) ou por nome exato único.
+ */
+export async function idClientDoLead(unit: Unit, leadId: number, nome: string | null, extra?: { kommo?: KommoClient; contatoId?: number | null }): Promise<number | null> {
   const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
   if (link?.spineIdClient) return link.spineIdClient;
-  if (!nome) return null;
-  const r = await SpineService.searchClients(unit, nome);
-  if (!r.ok || !r.data) return null;
-  const alvo = normalizar(nome);
-  const exatos = r.data.clients.filter((c) => normalizar(c.name) === alvo && c.idClient);
-  return exatos.length === 1 ? exatos[0].idClient : null;
+  const chave = `${unit.id}:${leadId}`;
+  const hit = cacheIdClient.get(chave);
+  if (hit && hit.expiraEm > Date.now()) return hit.idClient;
+  const idClient = await procurarPaciente(unit, nome, extra);
+  cacheIdClient.set(chave, { idClient, expiraEm: Date.now() + CACHE_LEAD_MS });
+  return idClient;
 }
 
 /** O paciente tem consulta (avaliação/retorno) marcada pra frente? Quem tem retorno marcado não vai pra EM NEGOCIAÇÃO (decisão do João, 18/09). */
@@ -303,8 +337,121 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
   }
 }
 
+interface CtxSync {
+  unit: Unit;
+  kommo: KommoClient;
+  funis: Funis | null;
+  mapa: MapaCampos;
+  ops: ReturnType<typeof opcoes>;
+  agoraEpoch: number;
+  resumo: ResumoSync;
+}
+
+type Historico = NonNullable<Awaited<ReturnType<typeof historicoDoPaciente>>>;
+
+interface PacienteDoCartao {
+  nome: string;
+  idClient: number | null;
+  consultas: SpineSchedule[];
+  tratamento: SpineTreatment | null;
+}
+
+/**
+ * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
+ * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
+ * quando a etapa exige — GANHO e funil TRATAMENTO).
+ */
+async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null = null): Promise<void> {
+  const { unit, kommo, funis, mapa, ops, agoraEpoch, resumo } = ctx;
+  const consulta = escolherConsulta(p.consultas);
+  const consultaEpoch = consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null;
+  const feitoPelaIa = consulta?.idSchedule
+    ? !!(await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdSchedule: consulta.idSchedule } }))
+    : false;
+  const escritas = planejarEscritas({ valores: valoresDoLead(lead, mapa), consulta, consultaEpoch: Number.isFinite(consultaEpoch as number) ? consultaEpoch : null, tratamento: p.tratamento, feitoPelaIa, agoraEpoch, opcoes: ops });
+  for (const w of escritas) {
+    const info = mapa[w.campo];
+    if (!info) continue;
+    try {
+      await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, w.valor, info.enums);
+      resumo.escritas++;
+      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.valor, motivo: w.motivo }, 'franquia-sync: campo gravado');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug, leadId, campo: w.nome }, 'franquia-sync: falha ao gravar campo');
+    }
+    await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
+  }
+
+  // fase 2: a franquia move o cartão
+  if (!funis) return;
+  const atual = funis.nomeDe(lead.pipeline_id, lead.status_id);
+  if (!atual) return;
+  let agendamentos: SpineSchedule[] = p.consultas;
+  // o /treatments/search não traz idStatus; o nome do status basta ("EM ANDAMENTO", "FINALIZADO")
+  let tratamentos: TratamentoParaEtapa[] = p.tratamento ? [{ idStatus: null, statusName: p.tratamento.statusName ?? null }] : [];
+  // GANHO e EM TRATAMENTO dependem do histórico inteiro (sessão antiga, tratamento de outro mês)
+  const precisaHistorico = historico !== null || normalizarNome(atual.status) === normalizarNome(ETAPA.GANHO) || atual.funil === 'TRATAMENTO';
+  if (precisaHistorico) {
+    // a agenda não traz idClient e o /treatments/search só lista tratamento em andamento:
+    // quem finalizou some da lista — sem isto a ALTA nunca dispararia
+    const hist = historico ?? (await historicoDoPaciente(unit, p.idClient ?? (await idClientDoLead(unit, leadId, p.nome))));
+    if (hist) {
+      const ids = new Set(agendamentos.map((s) => s.idSchedule));
+      agendamentos = [...agendamentos, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))];
+      if (hist.treatments.length > 0) tratamentos = hist.treatments;
+    }
+  }
+  const mov = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() });
+  if (mov) await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo);
+}
+
+const REVISAO_MAX_POR_VARREDURA = Number(process.env.FRANQUIA_REVISAO_MAX) || 60;
+
+/**
+ * Cartões parados em AGENDADO com «◷ Data da Consulta» mais velha que a janela da agenda (D-3): a
+ * varredura normal nunca os enxerga (achado do João, 23/09/2026 — 53 cartões da Serra assim, um deles
+ * desmarcado em fevereiro). Caminho inverso: cartão → paciente (vínculo, nome sem a data da SDR,
+ * telefone) → histórico do paciente (`GET /clients/{id}`, 1×/h) → mesma fase 1 e mesma máquina de etapas.
+ * Quem não é achado na franquia fica onde está — a Conferência do widget aponta pra SDR.
+ * Os gatilhos dessas etapas na Serra são relativos à «Data da Consulta»: hora no passado não dispara.
+ */
+async function revisarAgendadosPassados(ctx: CtxSync): Promise<void> {
+  const { unit, kommo, funis, mapa, agoraEpoch, resumo } = ctx;
+  if (!funis) return;
+  const agendado = funis.idDe('COMERCIAL', ETAPA.AGENDADO);
+  if (!agendado) return;
+  const corte = agoraEpoch - DIAS_ATRAS * 86_400;
+  let avaliados = 0;
+  for (let page = 1; page <= 20; page++) {
+    const leads = await kommo.listLeadsPorEtapa(agendado.pipelineId, agendado.statusId, 250, page, true);
+    if (leads.length === 0) break;
+    for (const lead of leads) {
+      const data = Number(valoresDoLead(lead, mapa)[CAMPOS_SYNC.DATA_CONSULTA] ?? NaN);
+      if (!Number.isFinite(data) || data >= corte) continue;
+      if (avaliados >= REVISAO_MAX_POR_VARREDURA) return;
+      avaliados++;
+      resumo.revisados++;
+      try {
+        const idClient = await idClientDoLead(unit, lead.id, lead.name ?? null, { kommo, contatoId: lead._embedded?.contacts?.[0]?.id ?? null });
+        if (!idClient) {
+          logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name }, 'franquia-move: AGENDADO antigo sem paciente na franquia — fica pra SDR');
+          continue;
+        }
+        const hist = await historicoDoPaciente(unit, idClient);
+        if (!hist) continue;
+        await processarCartao(ctx, lead.id, lead, { nome: lead.name ?? '', idClient, consultas: hist.schedules, tratamento: null }, hist);
+      } catch (err) {
+        resumo.erros++;
+        logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-move: falha na revisão de AGENDADO antigo');
+      }
+    }
+    if (leads.length < 250) break;
+  }
+}
+
 async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
-  const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0 };
+  const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
   const kommo = createKommoClient(unit);
   const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: CampoBruto[] } } | undefined;
   const mapa = mapearCampos(bruto?._embedded?.custom_fields ?? []);
@@ -350,6 +497,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   resumo.pacientes = porPaciente.size;
   const ops = opcoes(mapa);
   const agoraEpoch = Math.floor(Date.now() / 1000);
+  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo };
   let vistos = 0;
 
   for (const p of porPaciente.values()) {
@@ -364,50 +512,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
       }
       resumo.comLead++;
       const lead = await kommo.getLead(leadId);
-      const consulta = escolherConsulta(p.consultas);
-      const consultaEpoch = consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null;
-      const feitoPelaIa = consulta?.idSchedule
-        ? !!(await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdSchedule: consulta.idSchedule } }))
-        : false;
-      const escritas = planejarEscritas({ valores: valoresDoLead(lead, mapa), consulta, consultaEpoch: Number.isFinite(consultaEpoch as number) ? consultaEpoch : null, tratamento: p.tratamento, feitoPelaIa, agoraEpoch, opcoes: ops });
-      for (const w of escritas) {
-        const info = mapa[w.campo];
-        if (!info) continue;
-        try {
-          await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, w.valor, info.enums);
-          resumo.escritas++;
-          logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.valor, motivo: w.motivo }, 'franquia-sync: campo gravado');
-        } catch (err) {
-          resumo.erros++;
-          logger.warn({ err, unit: unit.slug, leadId, campo: w.nome }, 'franquia-sync: falha ao gravar campo');
-        }
-        await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
-      }
-
-      // fase 2: a franquia move o cartão
-      if (funis) {
-        const atual = funis.nomeDe(lead.pipeline_id, lead.status_id);
-        if (atual) {
-          let agendamentos: SpineSchedule[] = p.consultas;
-          // o /treatments/search não traz idStatus; o nome do status basta ("EM ANDAMENTO", "FINALIZADO")
-          let tratamentos: TratamentoParaEtapa[] = p.tratamento ? [{ idStatus: null, statusName: p.tratamento.statusName ?? null }] : [];
-          // GANHO e EM TRATAMENTO dependem do histórico inteiro (sessão antiga, tratamento de outro mês)
-          const precisaHistorico = normalizarNome(atual.status) === normalizarNome(ETAPA.GANHO) || atual.funil === 'TRATAMENTO';
-          if (precisaHistorico) {
-            // a agenda não traz idClient e o /treatments/search só lista tratamento em andamento:
-            // quem finalizou some da lista — sem isto a ALTA nunca dispararia
-            const idClient = p.idClient ?? (await idClientDoLead(unit, leadId, p.nome));
-            const hist = await historicoDoPaciente(unit, idClient);
-            if (hist) {
-              const ids = new Set(agendamentos.map((s) => s.idSchedule));
-              agendamentos = [...agendamentos, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))];
-              if (hist.treatments.length > 0) tratamentos = hist.treatments;
-            }
-          }
-          const mov = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() });
-          if (mov) await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo);
-        }
-      }
+      await processarCartao(ctx, leadId, lead, p);
     } catch (err) {
       resumo.erros++;
       logger.warn({ err, unit: unit.slug, paciente: p.nome }, 'franquia-sync: falha no paciente');
@@ -415,6 +520,12 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   }
 
   if (funis) {
+    try {
+      await revisarAgendadosPassados(ctx);
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug }, 'franquia-move: falha na revisão dos AGENDADO antigos');
+    }
     try {
       await passarNegociacao(unit, kommo, funis, mapa, resumo);
     } catch (err) {
@@ -425,7 +536,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   return resumo;
 }
 
-async function varrer(): Promise<void> {
+async function varrer(soSlug?: string): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
@@ -435,6 +546,7 @@ async function varrer(): Promise<void> {
     });
     for (const unit of units) {
       if (!liberado(unit.slug)) continue;
+      if (soSlug && unit.slug !== soSlug) continue;
       const t0 = Date.now();
       try {
         const r = await sincronizarUnidade(unit);
@@ -447,6 +559,17 @@ async function varrer(): Promise<void> {
   } finally {
     rodando = false;
   }
+}
+
+/**
+ * Varredura fora de hora (João, 23/09/2026: "pode rodar agora pra consertar esses cartões, depois segue
+ * de 15 em 15"). Dispara em segundo plano e responde na hora; se já há uma rodando, não empilha.
+ * O relógio de 15 min continua o mesmo.
+ */
+export function varrerAgora(soSlug?: string): { iniciado: boolean; motivo?: string } {
+  if (rodando) return { iniciado: false, motivo: 'já tem uma varredura rodando' };
+  void varrer(soSlug).catch((err) => logger.error({ err, soSlug }, 'franquia-sync: varredura manual falhou'));
+  return { iniciado: true };
 }
 
 export function startFranquiaSyncWorker(): void {

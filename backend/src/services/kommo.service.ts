@@ -1131,6 +1131,24 @@ export class KommoClient {
     }
   }
 
+  /** Leads criados no intervalo (epoch em segundos), até 4 páginas de 250 — o título padrão conta os "Lead N dd/mm/aaaa" do dia. */
+  async listLeadsCriadosEntre(deUnix: number, ateUnix: number): Promise<KommoLead[]> {
+    const all: KommoLead[] = [];
+    for (let page = 1; page <= 4; page++) {
+      try {
+        const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
+          params: { limit: 250, page, 'filter[created_at][from]': deUnix, 'filter[created_at][to]': ateUnix, 'order[created_at]': 'asc' },
+        });
+        const leads = data?._embedded?.leads ?? [];
+        all.push(...leads);
+        if (leads.length < 250) break;
+      } catch (err) {
+        wrapAxiosError(err, `listLeadsCriadosEntre(${deUnix}, ${ateUnix})`);
+      }
+    }
+    return all;
+  }
+
   async updateLeadTitleWithDate(
     leadId: number,
     nome: string,

@@ -184,3 +184,15 @@ test('tratamento com status desconhecido e sem nome não é "aberto": não vira 
   assert.equal(tratamentoAberto({ idStatus: 44, statusName: null }), true);
   assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -100, idStatus: 42 })], [{ idStatus: 47, statusName: null } as { idStatus: number }]))?.para, ETAPA.NEGOCIACAO, 'cancelado sem nome não abre venda');
 });
+
+test('consulta desmarcada sem remarcação tira o cartão de AGENDADO e leva pra EM ESPERA (23/09)', () => {
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -24 * 200, idStatus: 57 })]))?.para, ETAPA.ESPERA, 'desmarcada meses atrás (Lucas, Serra)');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: 30, idStatus: 57 })]))?.para, ETAPA.ESPERA, 'desmarcou antes da data');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -48, idStatus: 57 }), ag({ h: 30, idStatus: 37 })])), null, 'remarcou pra frente: fica em AGENDADO');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -48, idStatus: 57 }), ag({ h: -24, idStatus: 42 })]))?.para, ETAPA.COMPARECEU, 'atendida vale mais');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -48, idStatus: 57 }), ag({ h: -24, idStatus: 40 })]))?.para, ETAPA.NAO_COMPARECEU, 'falta vale mais');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -48, idStatus: 57 }), ag({ h: -24, idStatus: 37 })])), null, 'consulta passada ainda "agendada" na franquia: a clínica não registrou — fica');
+  assert.equal(planejarMovimento(entrada(ETAPA.QUALIFICACAO, [ag({ h: -48, idStatus: 57 })])), null, 'só sai de AGENDADO');
+  assert.equal(planejarMovimento(entrada(ETAPA.ESPERA, [ag({ h: -48, idStatus: 57 })])), null, 'já está em espera');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -48, idStatus: 57 })], [{ idStatus: 45 }]))?.para, ETAPA.GANHO, 'tratamento aberto vale mais que a consulta');
+});
