@@ -71,17 +71,36 @@ test('lê o desconto único da ficha de Bebedouro e Olímpia', () => {
     'VALOR: R$ 250 no dia, pago na clínica, OU R$ 200 com pagamento antecipado por Pix.\n' +
     'CONVÊNIO: a clínica NÃO atende plano de saúde.\n' +
     'Mas quem apresenta a carteirinha do plano paga R$ 150 na consulta.';
-  assert.equal(precoDoConvenio([ficha], 200), 150);
+  assert.equal(precoDoConvenio([ficha], { antecipado: 200, noDia: 250 }), 150);
 });
 
 test('unidade com TABELA de plano (Serra) fica de fora', () => {
   // Lá o plano tem o próprio antecipado: corrigir subiria o preço de quem tem plano.
   const serra =
     'NO DIA DA CONSULTA: R$ 350 — para qualquer pessoa, com ou sem plano de saúde.\n' +
+    '- Com plano de saúde: R$ 200.\n' +
     '- Com PLANO DE SAÚDE: R$ 250 · R$ 220 com pagamento antecipado.';
-  assert.equal(precoDoConvenio([serra], 280), null);
+  assert.equal(precoDoConvenio([serra], { antecipado: 280, noDia: 350 }), null);
+});
+
+test('a linha anti-alucinação da ficha não desliga a trava', () => {
+  // Quase toda ficha tem essa linha; ela cita PIX e convênio sem ser tabela de preço.
+  const ficha =
+    'VALOR: R$ 250 no dia, OU R$ 200 com pagamento antecipado por Pix.\n' +
+    'NUNCA invente preço, endereço, horário, chave PIX, vaga, convênio.\n' +
+    'Quem apresenta a carteirinha do plano paga R$ 150 na consulta.';
+  assert.equal(precoDoConvenio([ficha], { antecipado: 200, noDia: 250 }), 150);
 });
 
 test('sem convênio na ficha, não há valor e a trava fica inerte', () => {
-  assert.equal(precoDoConvenio(['VALOR: R$ 350 no dia, ou R$ 250 antecipado por Pix.'], 250), null);
+  assert.equal(precoDoConvenio(['VALOR: R$ 350 no dia, ou R$ 250 antecipado por Pix.'], { antecipado: 250, noDia: 350 }), null);
+});
+
+test('instrução da ficha que repete os preços particulares não conta como tabela', () => {
+  // Bebedouro: "sem a carteirinha fica R$ 250, ou R$ 200 pagando antes no Pix"
+  // — os valores são os particulares da própria unidade, é recado pra Sofia.
+  const ficha =
+    'Sem a carteirinha, fica R$ 250, ou R$ 200 pagando antes no Pix.\n' +
+    'Quem tem plano de saúde: desconto na consulta de R$ 250 por R$ 150, apresentando a carteirinha.';
+  assert.equal(precoDoConvenio([ficha], { antecipado: 200, noDia: 250 }), 150);
 });

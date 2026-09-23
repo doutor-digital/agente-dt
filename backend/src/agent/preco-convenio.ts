@@ -82,22 +82,35 @@ export function corrigirPrecoDoConvenio(texto: string, precos: PrecosDaUnidade):
  * "Com PLANO DE SAÚDE: R$ 250 · R$ 220 com pagamento antecipado" — lá o plano
  * tem o próprio antecipado, e uma frase solta com o valor do plano é legítima
  * mesmo falando de Pix. Corrigir ali SUBIRIA o preço de quem tem plano, que é
- * pior que o erro original. O sinal é a palavra "antecipado" dentro da própria
- * frase de convênio; quando ela aparece, não devolvo valor nenhum.
+ * pior que o erro original.
+ *
+ * O sinal é contar: um desconto de carteirinha é UM valor só, repetido. Uma
+ * tabela de plano traz vários. Junto todos os valores que aparecem em frase de
+ * convênio e ficam abaixo do antecipado; se sobrar exatamente um, é o desconto
+ * e a trava vale. Se sobrar mais de um, a unidade tem tabela e eu saio calado.
+ *
+ * Bebedouro e Olímpia sobram {150}. A Serra sobra {200, 250, 220} — "Com plano
+ * de saúde: R$ 200" numa linha, "Com PLANO DE SAÚDE: R$ 250 · R$ 220 com
+ * pagamento antecipado" noutra. Contar é mais firme que procurar palavra: a
+ * ficha de Bebedouro tem frases que citam carteirinha e Pix juntos ("sem a
+ * carteirinha fica R$ 250, ou R$ 200 pagando antes no Pix"), que são recado pra
+ * Sofia e não segunda tabela — qualquer heurística de palavra tropeçava nelas.
  */
-export function precoDoConvenio(textos: Array<string | null | undefined>, antecipado: number): number | null {
-  const frasesDoTexto = textos
-    .filter(Boolean)
-    .join('\n')
-    .split(/(?<=[.!?\n])\s*/)
-    .filter((f) => FALA_DE_CONVENIO.test(f));
+export function precoDoConvenio(
+  textos: Array<string | null | undefined>,
+  precos: { antecipado: number; noDia: number },
+): number | null {
+  const valores = (f: string) => [...f.matchAll(/R\$\s*(\d{2,4})/g)].map((m) => Number(m[1]));
 
-  if (frasesDoTexto.some((f) => FALA_DE_ANTECIPADO.test(f))) return null;
+  const candidatos = new Set(
+    textos
+      .filter(Boolean)
+      .join('\n')
+      .split(/(?<=[.!?\n])\s*/)
+      .filter((f) => FALA_DE_CONVENIO.test(f))
+      .flatMap(valores)
+      .filter((v) => Number.isFinite(v) && v < precos.antecipado && v !== precos.noDia),
+  );
 
-  for (const frase of frasesDoTexto) {
-    const achados = [...frase.matchAll(/R\$\s*(\d{2,4})/g)].map((m) => Number(m[1]));
-    const menor = achados.filter((v) => Number.isFinite(v) && v < antecipado).sort((a, b) => a - b)[0];
-    if (menor) return menor;
-  }
-  return null;
+  return candidatos.size === 1 ? [...candidatos][0] : null;
 }
