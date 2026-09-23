@@ -1,3 +1,6 @@
+import type { Unit } from '@prisma/client';
+import { fmtBRL } from './prompt-composer.js';
+
 /**
  * O desconto do convênio não pode virar o preço do Pix.
  *
@@ -12,13 +15,34 @@
  *
  * Três preços na mesma cabeça dão nisso. Instrução mais forte não resolve — o
  * modelo já tinha a instrução mais forte possível. Então a trava é aqui, no
- * texto pronto, antes de sair: se o desconto do convênio aparecer colado em
- * "antecipado" ou "Pix" SEM a carteirinha na mesma frase, o número está errado
- * e vira o antecipado de verdade.
+ * texto pronto, antes de sair.
  *
- * Erra pro lado seguro: na dúvida (frase que cita carteirinha/plano) não mexe,
- * porque ali o valor menor está certo.
+ * O ERRO QUE NÃO PODE ACONTECER é o contrário: cobrar MAIS de quem tem direito
+ * ao desconto. Esse é pior que o bug original — o paciente com plano ouvir
+ * R$ 200 em vez de R$ 150 é a clínica mentindo o preço pra cima. Por isso a
+ * trava é covarde de propósito e desiste em qualquer sinal de dúvida:
+ *
+ *  - a mensagem inteira cita plano/carteirinha/convênio em qualquer lugar? sai.
+ *    Não basta olhar a frase: o modelo estabelece o contexto numa frase e dá o
+ *    valor na seguinte ("Se você tiver plano, o valor muda. Pagando antes, fica
+ *    R$ 150.") — julgando frase a frase isso virava aumento de preço.
+ *  - a frase já traz o antecipado certo? sai. É comparação ou lista, não engano.
+ *  - a frase fala de parcela ("2x de R$ 150")? sai. Ali o número é aritmética.
+ *  - a unidade cobra taxa de reserva (Boa Vista)? sai. Lá o antecipado é PARTE
+ *    do valor do dia, não alternativa — trocar número ali recria o engano que o
+ *    prompt-composer já conserta.
  */
+
+/** Marca de que o texto fala do convênio — aí o valor menor pode estar certo. */
+const FALA_DE_CONVENIO =
+  /carteirinh|conv[êe]nio|plano de sa[úu]de|seguro sa[úu]de|(?:seu|teu|do|no|com|pelo|tem|tiver|possui) plano\b|cart[ãa]o do plano|unimed|hapvida|bradesco|amil|sulam[ée]rica|ipasgo|notredame|golden cross|porto seguro|cassi|geap|s[ãa]o francisco sa[úu]de/i;
+
+/** Marca de que a frase fala do pagamento antecipado. */
+const FALA_DE_ANTECIPADO =
+  /antecipad|adiantad|\bpix\b|pagar antes|pagando antes|pagamento antes|antes da consulta/i;
+
+/** Parcela: ali o número é conta, não preço de consulta. */
+const FALA_DE_PARCELA = /\d+\s*x\s*(?:de\s*)?R\$|parcel|dividir|divide|vezes de/i;
 
 export interface PrecosDaUnidade {
   /** O valor do Pix antecipado, o que a frase errada deveria ter dito. */
@@ -27,24 +51,20 @@ export interface PrecosDaUnidade {
   convenio: number;
 }
 
-/** Marca de que a frase fala do convênio — aí o valor menor é legítimo. */
-const FALA_DE_CONVENIO = /carteirinh|conv[êe]nio|plano de sa[úu]de|unimed|hapvida|bradesco sa[úu]de|amil|sulam[ée]rica/i;
-
-/** Marca de que a frase fala do pagamento antecipado. */
-const FALA_DE_ANTECIPADO = /antecipad|adiantad|pix|pagar antes|pagando antes|pagamento antes|antes da consulta/i;
-
 /**
- * Quebra o texto em frases para julgar cada uma sozinha.
+ * Quebra em frases SEM perder o que separa uma da outra.
  *
- * Julgar a mensagem inteira daria falso positivo: é comum e correto ela dizer os
- * três valores numa mesma mensagem, em frases separadas — o erro é os dois
- * conceitos na MESMA frase.
+ * A primeira versão juntava as partes com join('') e comia todo espaço e quebra
+ * de linha depois de ponto — a mensagem chegava ao paciente grudada, e o
+ * chunker do Kommo, que corta em "\n\n" e ". ", cortava no meio da frase.
+ * Por isso o separador anda junto com a frase.
  */
 function frases(texto: string): string[] {
-  return texto.split(/(?<=[.!?\n])\s*/).filter((f) => f.trim().length > 0);
+  return texto.split(/(?<=[.!?\n])/).filter((f) => f.length > 0);
 }
 
-const reValor = (v: number) => new RegExp(`R\\$\\s*${v}(?:,00)?\\b`, 'gi');
+const escapar = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const reValor = (v: number) => new RegExp(`R\\$\\s*${escapar(fmtBRL(v))}(?:,00)?(?!\\d)`, 'gi');
 
 export interface Correcao {
   texto: string;
@@ -57,60 +77,104 @@ export function corrigirPrecoDoConvenio(texto: string, precos: PrecosDaUnidade):
   }
   if (precos.convenio === precos.antecipado) return { texto, corrigiu: false };
 
+  // Falou de plano em QUALQUER ponto da mensagem? Não encosto. O valor menor
+  // provavelmente está certo, e errar aqui é cobrar mais caro de quem tem direito.
+  if (FALA_DE_CONVENIO.test(texto)) return { texto, corrigiu: false };
+
   let corrigiu = false;
   const partes = frases(texto).map((frase) => {
     if (!reValor(precos.convenio).test(frase)) return frase;
-    // A frase fala de carteirinha/plano? Então o valor menor está certo ali.
-    if (FALA_DE_CONVENIO.test(frase)) return frase;
     if (!FALA_DE_ANTECIPADO.test(frase)) return frase;
+    // Já tem o antecipado certo na frase: é comparação ou lista, não engano.
+    if (reValor(precos.antecipado).test(frase)) return frase;
+    if (FALA_DE_PARCELA.test(frase)) return frase;
     corrigiu = true;
-    return frase.replace(reValor(precos.convenio), `R$ ${precos.antecipado}`);
+    return frase.replace(reValor(precos.convenio), `R$ ${fmtBRL(precos.antecipado)}`);
   });
 
   return { texto: corrigiu ? partes.join('') : texto, corrigiu };
 }
 
 /**
- * Lê o desconto do convênio no texto da unidade.
+ * Lê o desconto do convênio na ficha da unidade.
  *
- * Não existe campo pra isso — como o preço da consulta, mora na prosa da ficha.
- * Procuro o R$ mais próximo de uma palavra de convênio, na mesma frase, e exijo
- * que seja MENOR que o antecipado: se for igual ou maior, não é desconto e eu
- * prefiro não ter valor a ter o errado.
+ * Não existe campo pra isso — como o preço da consulta, mora na prosa. O jeito
+ * de achar é contar: desconto de carteirinha é UM valor só, repetido; tabela de
+ * plano traz vários. Junto os valores que aparecem em frase de convênio e ficam
+ * abaixo do antecipado — um só é desconto, mais de um é tabela e eu saio calado.
  *
- * DESISTO da unidade que tem uma TABELA de plano, não um desconto. A Serra diz
- * "Com PLANO DE SAÚDE: R$ 250 · R$ 220 com pagamento antecipado" — lá o plano
- * tem o próprio antecipado, e uma frase solta com o valor do plano é legítima
- * mesmo falando de Pix. Corrigir ali SUBIRIA o preço de quem tem plano, que é
- * pior que o erro original.
+ * Medido nas fichas reais: Bebedouro 150, Olímpia 150, Serra fora ({200, 250,
+ * 220} — "Com plano: R$ 200" numa linha, "R$ 250 · R$ 220 antecipado" noutra).
  *
- * O sinal é contar: um desconto de carteirinha é UM valor só, repetido. Uma
- * tabela de plano traz vários. Junto todos os valores que aparecem em frase de
- * convênio e ficam abaixo do antecipado; se sobrar exatamente um, é o desconto
- * e a trava vale. Se sobrar mais de um, a unidade tem tabela e eu saio calado.
- *
- * Bebedouro e Olímpia sobram {150}. A Serra sobra {200, 250, 220} — "Com plano
- * de saúde: R$ 200" numa linha, "Com PLANO DE SAÚDE: R$ 250 · R$ 220 com
- * pagamento antecipado" noutra. Contar é mais firme que procurar palavra: a
- * ficha de Bebedouro tem frases que citam carteirinha e Pix juntos ("sem a
- * carteirinha fica R$ 250, ou R$ 200 pagando antes no Pix"), que são recado pra
- * Sofia e não segunda tabela — qualquer heurística de palavra tropeçava nelas.
+ * Tentei antes desconfiar da frase que junta convênio + "antecipado" + valor, e
+ * não dá: a ficha de Bebedouro pareia as duas coisas DE PROPÓSITO, instruindo a
+ * Sofia ("toda vez que citar o R$ 150, diga na mesma frase que é mediante
+ * carteirinha; sem ela fica R$ 250, ou R$ 200 pagando antes no Pix"). Por isso
+ * quem decide se a unidade entra é a lista do env, não o texto.
  */
 export function precoDoConvenio(
   textos: Array<string | null | undefined>,
-  precos: { antecipado: number; noDia: number },
+  precos: { antecipado: number },
 ): number | null {
-  const valores = (f: string) => [...f.matchAll(/R\$\s*(\d{2,4})/g)].map((m) => Number(m[1]));
+  const valores = (f: string) => [...f.matchAll(/R\$\s*(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{2}))?/g)]
+    .map((m) => Number(`${m[1].replace(/\./g, '')}.${m[2] ?? '0'}`));
 
   const candidatos = new Set(
     textos
       .filter(Boolean)
       .join('\n')
-      .split(/(?<=[.!?\n])\s*/)
+      .split(/(?<=[.!?\n])/)
       .filter((f) => FALA_DE_CONVENIO.test(f))
       .flatMap(valores)
-      .filter((v) => Number.isFinite(v) && v < precos.antecipado && v !== precos.noDia),
+      .filter((v) => v < precos.antecipado),
   );
 
   return candidatos.size === 1 ? [...candidatos][0] : null;
+}
+
+/**
+ * Quais unidades entram na trava.
+ *
+ * Ler a ficha decide o VALOR bem, mas não serve pra decidir se a unidade entra:
+ * qualquer edição de texto em qualquer clínica ligaria ou desligaria a trava
+ * sozinha, sem ninguém olhar. Como o pior erro daqui é cobrar mais caro de quem
+ * tem direito ao desconto, quem entra é declarado — no mesmo formato de lista
+ * por slug que o resto do sistema já usa (FRANQUIA_MOVE_SLUGS e companhia).
+ *
+ * Unidade nova com desconto de carteirinha: confira a ficha e acrescente aqui.
+ */
+const SLUGS_COM_CONVENIO = new Set(
+  (process.env.PRECO_CONVENIO_SLUGS ?? 'doutor-hernia-bebedouro,doutor-hernia-olimpia')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
+/**
+ * O valor do convênio da unidade, calculado uma vez só.
+ *
+ * É fato imutável da ficha, e varrer o system prompt inteiro com regex a cada
+ * mensagem (duas vezes por resposta, na verdade) não se paga.
+ */
+const cache = new Map<string, number | null>();
+
+export function convenioDaUnidade(
+  unit: Pick<Unit, 'id' | 'slug' | 'updatedAt' | 'sourceProdutos' | 'sourceNegocio' | 'sourcePapel' | 'systemPrompt' | 'spineBookingRequiresPayment'>,
+  precos: { antecipado: number },
+): number | null {
+  if (!SLUGS_COM_CONVENIO.has(unit.slug)) return null;
+  // Taxa de reserva (Boa Vista): o antecipado é parte do valor do dia, não alternativa.
+  if (unit.spineBookingRequiresPayment) return null;
+
+  const chave = `${unit.id}:${unit.updatedAt?.getTime() ?? 0}:${precos.antecipado}`;
+  const guardado = cache.get(chave);
+  if (guardado !== undefined) return guardado;
+
+  const valor = precoDoConvenio(
+    [unit.sourceProdutos, unit.sourceNegocio, unit.sourcePapel, unit.systemPrompt],
+    precos,
+  );
+  if (cache.size > 200) cache.clear();
+  cache.set(chave, valor);
+  return valor;
 }
