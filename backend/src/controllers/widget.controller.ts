@@ -17,6 +17,7 @@ import {
   type WidgetJwtStatus,
 } from '../lib/widget-connection-monitor.js';
 import { processAgent, type AgentDeliverFn } from './webhook.controller.js';
+import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import type { Unit } from '@prisma/client';
 
 const widgetBodySchema = z.object({
@@ -196,6 +197,10 @@ async function processWidget(args: {
     leadId: String(leadId),
     channel: 'kommo_chat',
   });
+  // MODO WIDGET não passa pelo webhook: lead sem nome ganha "Lead dd/mm/aaaa" por aqui também (TITULO_PADRAO_SLUGS)
+  void garantirTituloPadrao(unit, createKommoClient(unit), Number(leadId)).catch((err) =>
+    logger.warn({ err: String(err), leadId, unit: unit.slug }, 'titulo-padrao: falha ao renomear o lead (widget)'),
+  );
   await addMessage({
     conversationId: conv.id,
     traceId: trace.id,

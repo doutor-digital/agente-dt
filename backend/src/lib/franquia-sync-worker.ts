@@ -19,7 +19,7 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, horasAteNegociacao, moveLiberado, planejarMovimento, tratamentoAberto, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import { ETAPA, REVISAO_FOLGA_S, horasAteNegociacao, moveLiberado, planejarMovimento, recortarHistorico, tratamentoAberto, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 
 const SWEEP_MS = 15 * 60_000;
@@ -268,11 +268,16 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo
       fone = '';
     }
   }
+  const alvo = normalizar(termo);
   if (fone) {
     const porFone = clientes.filter((c) => chaveTelefone(c.whatsapp) === fone);
-    if (porFone.length > 0) return porFone[0].idClient;
+    if (porFone.length === 1) return porFone[0].idClient;
+    // mãe e filho com o mesmo WhatsApp: só o que também casa pelo nome
+    if (porFone.length > 1) {
+      const certo = porFone.filter((c) => nomeDaFranquia(c.name) === alvo);
+      return certo.length === 1 ? certo[0].idClient : null;
+    }
   }
-  const alvo = normalizar(termo);
   const exatos = clientes.filter((c) => nomeDaFranquia(c.name) === alvo);
   // dois homônimos: não arrisca
   return exatos.length === 1 ? exatos[0].idClient : null;
@@ -419,6 +424,7 @@ const REVISAO_MAX_POR_VARREDURA = Number(process.env.FRANQUIA_REVISAO_MAX) || 60
 async function revisarAgendadosPassados(ctx: CtxSync): Promise<void> {
   const { unit, kommo, funis, mapa, agoraEpoch, resumo } = ctx;
   if (!funis) return;
+  if (!slugsLiberados(process.env.FRANQUIA_REVISAO_SLUGS)(unit.slug)) return;
   const agendado = funis.idDe('COMERCIAL', ETAPA.AGENDADO);
   if (!agendado) return;
   const corte = agoraEpoch - DIAS_ATRAS * 86_400;
@@ -429,9 +435,11 @@ async function revisarAgendadosPassados(ctx: CtxSync): Promise<void> {
     for (const lead of leads) {
       const data = Number(valoresDoLead(lead, mapa)[CAMPOS_SYNC.DATA_CONSULTA] ?? NaN);
       if (!Number.isFinite(data) || data >= corte) continue;
+      // já procurei este e não achei na franquia (cache 6 h): não gasta a cota da varredura com ele
+      const lembrado = cacheIdClient.get(`${unit.id}:${lead.id}`);
+      if (lembrado && lembrado.idClient === null && lembrado.expiraEm > Date.now()) continue;
       if (avaliados >= REVISAO_MAX_POR_VARREDURA) return;
       avaliados++;
-      resumo.revisados++;
       try {
         const idClient = await idClientDoLead(unit, lead.id, lead.name ?? null, { kommo, contatoId: lead._embedded?.contacts?.[0]?.id ?? null });
         if (!idClient) {
@@ -440,7 +448,15 @@ async function revisarAgendadosPassados(ctx: CtxSync): Promise<void> {
         }
         const hist = await historicoDoPaciente(unit, idClient);
         if (!hist) continue;
-        await processarCartao(ctx, lead.id, lead, { nome: lead.name ?? '', idClient, consultas: hist.schedules, tratamento: null }, hist);
+        // só o ciclo deste cartão: nada de avaliação de 2025 nem tratamento finalizado de ciclo velho
+        const desde = Math.min(data, lead.created_at ?? data) - REVISAO_FOLGA_S;
+        const recorte = recortarHistorico(hist, desde);
+        if (recorte.schedules.length === 0 && recorte.treatments.length === 0) {
+          logger.info({ unit: unit.slug, leadId: lead.id, idClient }, 'franquia-move: AGENDADO antigo sem nada deste ciclo no histórico — fica');
+          continue;
+        }
+        resumo.revisados++;
+        await processarCartao(ctx, lead.id, lead, { nome: lead.name ?? '', idClient, consultas: recorte.schedules, tratamento: null }, recorte);
       } catch (err) {
         resumo.erros++;
         logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-move: falha na revisão de AGENDADO antigo');
