@@ -164,13 +164,14 @@ test('tratamento: "PROTOCOLO 03 MESES" da franquia casa com "03 Meses — CERVIC
   assert.equal(opcaoDoTratamento({ category: 'PROTOCOLO 03 MESES', local: 'CERVICAL', degree: 'CRÔNICO' }, OPCOES.tratamento), '03 Meses — CERVICAL CRÔNICO');
 });
 
-test('nomeParaBusca: tira a data da SDR, parênteses e segundo nome; "Lead" não serve', () => {
+test('nomeParaBusca: tira a data da SDR, parênteses e pontuação; NÃO separa os nomes; "Lead" não serve', () => {
   const casos: Array<[string | null, string]> = [
     ['Rosi 14/09/2026', 'Rosi'],
     ['Lucas Jofre Toda 10/02/26', 'Lucas Jofre Toda'],
     ['Ivair Diniz(Victoria Diniz)  25/02', 'Ivair Diniz'],
-    ['Dina Alves / Felipe Correia da Silva 19/03/26', 'Dina Alves'],
-    ['MARIA DA PENHA  - ALEXANDRO SANTANA', 'MARIA DA PENHA'],
+    ['Dina Alves / Felipe Correia da Silva 19/03/26', 'Dina Alves / Felipe Correia da Silva'],
+    ['MARIA DA PENHA  - ALEXANDRO SANTANA', 'MARIA DA PENHA - ALEXANDRO SANTANA'],
+    ['Elmir Ribeiro Gil. 26/03/26', 'Elmir Ribeiro Gil'],
     ['Jacileia fraga dias20/02/26', 'Jacileia fraga dias'],
     ['Lead #22647811', ''],
     ['Lead 23/09/2026', ''],

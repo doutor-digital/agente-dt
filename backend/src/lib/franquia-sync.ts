@@ -49,15 +49,15 @@ export function chaveTelefone(bruto: string | null | undefined): string {
 }
 
 /**
- * O que do título do cartão serve pra procurar na franquia: "Rosi 14/09/2026" → "Rosi";
- * "Ivair Diniz(Victoria Diniz) 25/02" → "Ivair Diniz"; "Dina Alves / Felipe Correia" → "Dina Alves";
- * "Lead #123" / "Lead 23/09/2026" → "" (não tem nome pra buscar).
+ * Limpa o título do cartão pra virar busca na franquia: tira a data que a SDR escreve, os parênteses
+ * e a pontuação. NÃO separa os nomes — quem faz isso é `termosDeBuscaDoNome`, porque num cartão
+ * "MARIA DA PENHA - ALEXANDRO SANT ANA" o paciente pode ser qualquer um dos dois (achado do João, 23/09/2026).
+ * "Lead #123" e "Lead 23/09/2026" viram "" (não têm nome pra buscar).
  */
 export function nomeParaBusca(nome: string | null | undefined): string {
   let s = String(nome ?? '').replace(/\(.*?\)/g, ' ');
   s = s.replace(/\s*\d{1,2}\/\d{1,2}(\/\d{2,4})?.*$/, '');
-  s = s.split(/\s+[/\-–]\s+/)[0] ?? '';
-  s = s.replace(/\s+/g, ' ').trim();
+  s = s.replace(/[.,;:!?]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (/^lead\b/i.test(s) || s.length < 3) return '';
   return s;
 }
