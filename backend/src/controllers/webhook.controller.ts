@@ -42,6 +42,7 @@ import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-met
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
+import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { z } from 'zod';
 
@@ -630,6 +631,10 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       channel: 'kommo_chat',
     });
     await guardarTelefoneDoContato(unit, conv, ctx.contactId);
+    // lead sem nome ganha "Lead dd/mm/aaaa" na 1ª mensagem (unidades em TITULO_PADRAO_SLUGS); nunca segura a resposta
+    void garantirTituloPadrao(unit, createKommoClient(unit), leadId).catch((err) =>
+      logger.warn({ err: String(err), traceId: trace.id, leadId, unit: unit.slug }, 'titulo-padrao: falha ao renomear o lead'),
+    );
     await addMessage({
       conversationId: conv.id,
       traceId: trace.id,

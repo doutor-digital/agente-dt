@@ -17,6 +17,7 @@
  *   tratamento cancelado              → TRATAMENTO CANCELADO        (22/09/2026)
  *   alta + retorno pós marcado        → RETORNO PÓS-TRATAMENTO      (22/09/2026, volta pro COMERCIAL)
  *   retorno pós atendido              → COMPARECEU, como avaliação  (22/09/2026)
+ *   consulta desmarcada, sem remarcar → EM ESPERA                   (23/09/2026, só a partir de AGENDADO)
  *
  * O que NUNCA faz: tirar cartão de PERDIDO ou TRATAMENTO CANCELADO (decisão humana); tirar de ALTA
  * ou RETORNO PÓS-TRATAMENTO por outro motivo que não o retorno acima; mover pra PERDIDO ou EM ESPERA
@@ -258,6 +259,14 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
 
   if (ultimaFalta && eh(status, ETAPA.AGENDADO)) {
     return ir('COMERCIAL', ETAPA.NAO_COMPARECEU, 'falta registrada na franquia');
+  }
+  // Consulta desmarcada e nada no lugar (nem futura, nem atendida, nem falta): AGENDADO mentiria.
+  // EM ESPERA é a etapa "recuperável" da estrutura nova — a Sofia/SDR tenta remarcar dali.
+  // Escolha de 23/09/2026 (a Serra tinha 33 cartões assim, um desmarcado em fevereiro); a confirmar com o João.
+  // Consulta PASSADA ainda "agendada/confirmada" na franquia = a clínica não registrou o desfecho: fica, a Conferência aponta.
+  if (eh(status, ETAPA.AGENDADO) && porData.some((s) => s.idStatus === SPINE_STATUS.DESMARCADO)) {
+    const semDesfecho = porData.some((s) => (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO) && passou(s));
+    if (!semDesfecho) return ir('COMERCIAL', ETAPA.ESPERA, 'consulta desmarcada na franquia, sem remarcação');
   }
   return null;
 }
