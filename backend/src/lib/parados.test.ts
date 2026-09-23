@@ -27,9 +27,11 @@ test('parados: liga por slug ou *, e vazio é ninguém', () => {
   assert.equal(paradosLiberado('doutor-hernia-imperatriz', '*'), true);
   assert.equal(paradosLiberado('laboratorio-kommo', '"laboratorio-kommo, doutor-hernia-imperatriz"'), true);
   assert.equal(paradosLiberado('doutor-hernia-serra', 'laboratorio-kommo'), false);
-  assert.equal(modoSeco('1'), true);
-  assert.equal(modoSeco('0'), false);
-  assert.equal(modoSeco(undefined), false);
+  assert.equal(modoSeco(undefined, '1'), true);
+  assert.equal(modoSeco('doutor-hernia-serra', '1', 'doutor-hernia-serra'), false, 'unidade ligada sai do seco');
+  assert.equal(modoSeco('doutor-hernia-imperatriz', '1', 'doutor-hernia-serra'), true);
+  assert.equal(modoSeco(undefined, '0'), false);
+  assert.equal(modoSeco(undefined, undefined), false);
 });
 
 test('parados: EM ESPERA quieta há 30 dias cai em PERDIDO sem régua; EM NEGOCIAÇÃO em 45', () => {
