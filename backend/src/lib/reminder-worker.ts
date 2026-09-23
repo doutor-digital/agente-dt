@@ -31,10 +31,24 @@ import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 
-/** Não repete a pergunta de véspera para a mesma consulta (o worker roda de hora em hora). */
+/**
+ * Janelas da chave ANTIGA, que não carregava o horário da consulta. Só servem à transição de
+ * deploy (ver `LEGADO_ATE`) — quem impede a repetição hoje é `POR_CONSULTA_MS`.
+ */
 const REENVIO_D1_MS = 36 * 3600_000;
-/** O reforço de D-2 sai uma vez só por consulta. */
 const REENVIO_D2_MS = 72 * 3600_000;
+
+/**
+ * Até quando ainda olhamos a chave antiga. Ela evita perguntar de novo, no dia do deploy, a quem
+ * já tinha sido perguntado; depois disso só atrapalha, porque cala consulta remarcada por 36 h.
+ */
+const LEGADO_ATE = Date.parse('2026-09-26T00:00:00Z');
+
+/**
+ * A marca de "já perguntei" vale pela CONSULTA, então não precisa de janela curta: uma vez
+ * perguntado aquele horário, não se pergunta de novo, e horário novo é chave nova.
+ */
+const POR_CONSULTA_MS = 30 * 24 * 3600_000;
 
 const SWEEP_MS = 60 * 60_000;
 let timer: NodeJS.Timeout | null = null;
@@ -71,6 +85,30 @@ export function reforcoLiberado(slug: string, raw: string | undefined = process.
   return lista.includes('*') || lista.includes(slug);
 }
 
+/**
+ * A marca de "já perguntei" carrega a CONSULTA, não só o lead.
+ *
+ * Antes a chave era só `confirmacao_d1`, e isso errava dos dois lados. Calava demais: consulta
+ * remarcada de quinta para sexta caía dentro da janela de 36 h da pergunta antiga, e o paciente
+ * do horário novo não recebia confirmação nenhuma. E calava de menos: qualquer varredura que
+ * entregasse a mensagem sem conseguir gravar a marca fazia a mesma pergunta sair de novo horas
+ * depois. Foi o que a Luciana levou na Serra em 23/09/2026 — respondeu "1" às 14h13, recebeu a
+ * mesma pergunta às 18h59, respondeu "1" outra vez, escreveu "Outra vez ?" e encerrou a conversa
+ * com "Vou bloquear".
+ *
+ * Com o horário na chave, perguntar duas vezes pela mesma consulta é impossível, e remarcar gera
+ * chave nova — a pergunta volta a sair, que é o certo.
+ */
+export function prefixoDoToque(toque: Toque): string {
+  return toque === 'd1' ? 'confirmacao_d1' : 'reforco_d2';
+}
+
+export function chaveDaConfirmacao(toque: Toque, quando: string): string {
+  // `quando` vem sempre como "AAAA-MM-DDTHH:mm" (schema.prisma) — o corte é só defesa contra
+  // segundos que a franquia às vezes acrescenta.
+  return `${prefixoDoToque(toque)}:${quando.slice(0, 16)}`;
+}
+
 /** Ids dos Salesbots que carregam os templates aprovados, guardados em `pipeline_intents`. */
 export function botsDeConfirmacao(unit: Pick<Unit, 'pipelineIntents'>): { d1: number | null; d2: number | null } {
   const i = (unit.pipelineIntents ?? {}) as Record<string, unknown>;
@@ -84,13 +122,25 @@ interface Envio {
   leadId: number;
   consulta: ConsultaReconciliada & { quando: string };
   toque: Toque;
+  /** Chave do dedupe, gravada aqui dentro assim que o canal aceita a mensagem. */
+  chave: string;
 }
 
 /** Manda a pergunta de confirmação pelo melhor canal disponível. Devolve por onde saiu. */
 async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'template' | 'tarefa' | 'nada'> {
-  const { unit, kommo, leadId, consulta, toque } = e;
+  const { unit, kommo, leadId, consulta, toque, chave } = e;
   const bots = botsDeConfirmacao(unit);
   const botTemplate = toque === 'd1' ? bots.d1 : bots.d2;
+
+  /**
+   * Grava a marca no instante em que o canal aceitou a mensagem.
+   *
+   * Antes isso era feito lá fora, depois de `armar()` e de `addMessage()` — dois writes no
+   * Postgres. Qualquer um deles falhando derrubava a execução para o catch do laço, e a marca
+   * nunca era gravada, apesar de o paciente JÁ ter recebido a mensagem. A varredura seguinte
+   * então perguntava de novo. É o caminho que produziu as duas perguntas idênticas da Luciana.
+   */
+  const marcar = () => marcarAviso(unit.id, leadId, chave);
 
   const conv = await prisma.conversation.findFirst({
     where: { unitId: unit.id, leadId: String(leadId) },
@@ -116,6 +166,7 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
     if (botTemplate) {
       const r = await kommo.triggerSalesbot(botTemplate, leadId);
       if (r.ok) {
+        await marcar();
         await armar();
         return 'template';
       }
@@ -128,6 +179,7 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
         text: textoAlertaSemJanela({ slug: unit.slug, nome: conv?.contactName, quando: consulta.quando }),
         completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
       });
+      await marcar();
       if (conv) {
         await prisma.conversation.update({
           where: { id: conv.id },
@@ -178,6 +230,8 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
       return 'nada';
     }
   }
+  // A mensagem já está com o paciente: marca ANTES dos writes abaixo, que podem falhar.
+  await marcar();
   await armar();
   if (conv) {
     await addMessage({ conversationId: conv.id, role: 'assistant', content: texto, meta: { origem: `confirmacao_${toque}`, via } });
@@ -214,7 +268,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   });
 
   const kommo = createKommoClient(unit);
-  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0 };
+  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0 };
 
   for (const link of links) {
     const consulta = await AgendaReconcileService.consultaDoLead(unit, link.kommoLeadId);
@@ -229,10 +283,14 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
     if (!toque) continue;
     if (toque === 'd2' && !reforcoLiberado(unit.slug)) continue;
 
-    const chave = toque === 'd1' ? 'confirmacao_d1' : 'reforco_d2';
+    const chave = chaveDaConfirmacao(toque, consulta.quando);
+    // Chave antiga (sem o horário): os avisos gravados antes desta versão ainda valem, senão o
+    // primeiro deploy perguntaria de novo a todo mundo que já tinha sido perguntado hoje.
+    const chaveAntiga = prefixoDoToque(toque);
     const janela = toque === 'd1' ? REENVIO_D1_MS : REENVIO_D2_MS;
     try {
-      if (await avisoRecente(unit.id, link.kommoLeadId, chave, janela)) continue;
+      if (await avisoRecente(unit.id, link.kommoLeadId, chave, POR_CONSULTA_MS)) continue;
+      if (Date.now() < LEGADO_ATE && (await avisoRecente(unit.id, link.kommoLeadId, chaveAntiga, janela))) continue;
 
       // O Salesbot de lembrete da unidade diz "sua consulta está garantida" — só serve para quem
       // JÁ respondeu confirmando. Quem não respondeu precisa da pergunta.
@@ -241,25 +299,60 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
         orderBy: { lastMessageAt: 'desc' },
         select: { confirmacaoD1Resposta: true },
       });
-      if (toque === 'd1' && botLembrete && conv?.confirmacaoD1Resposta === 'confirmou') {
-        const r = await kommo.triggerSalesbot(botLembrete, link.kommoLeadId);
-        if (r.ok) {
-          conta.lembrete++;
-          await marcarAviso(unit.id, link.kommoLeadId, chave);
+
+      /**
+       * O paciente já respondeu "confirmo" sobre ESTA consulta?
+       *
+       * `confirmacaoD1Resposta` sozinha não diz de qual consulta ela fala — pode ser de um horário
+       * antigo, já remarcado. Quem amarra é a marca do reforço: se o D-2 saiu para este mesmo
+       * horário e o paciente respondeu confirmando, a confirmação é desta consulta.
+       *
+       * Sem isso, quem confirmava no reforço era perguntado outra vez na véspera, porque as duas
+       * marcas são chaves diferentes. É a forma do caso da Luciana (Serra, 23/09/2026): respondeu
+       * "1", levou a mesma pergunta de novo, escreveu "Outra vez ?" e encerrou com "Vou bloquear".
+       */
+      const confirmouEstaConsulta =
+        toque === 'd1' &&
+        conv?.confirmacaoD1Resposta === 'confirmou' &&
+        (await avisoRecente(
+          unit.id,
+          link.kommoLeadId,
+          chaveDaConfirmacao('d2', consulta.quando),
+          POR_CONSULTA_MS,
+        ));
+
+      if (confirmouEstaConsulta) {
+        if (botLembrete) {
+          const r = await kommo.triggerSalesbot(botLembrete, link.kommoLeadId);
+          if (r.ok) {
+            conta.lembrete++;
+            await marcarAviso(unit.id, link.kommoLeadId, chave);
+          } else {
+            logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, erro: r.error }, 'lembrete: Salesbot falhou');
+          }
         } else {
-          logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, erro: r.error }, 'lembrete: Salesbot falhou');
+          // Sem Salesbot de lembrete não há o que dizer: a consulta já está confirmada. Repetir a
+          // pergunta é o que fez a paciente ameaçar bloquear o número.
+          conta.ja_confirmou++;
+          await marcarAviso(unit.id, link.kommoLeadId, chave);
+          logger.info(
+            { unit: unit.slug, kommoLeadId: link.kommoLeadId, quando: consulta.quando },
+            'confirmação: paciente já confirmou esta consulta, véspera não sai',
+          );
         }
         continue;
       }
 
+      // A marca agora é gravada DENTRO de pedirConfirmacao, no instante em que o canal aceita a
+      // mensagem — não aqui, depois de dois writes que podem falhar com o paciente já avisado.
       const via = await pedirConfirmacao({
         unit,
         kommo,
         leadId: link.kommoLeadId,
         consulta: consulta as ConsultaReconciliada & { quando: string },
         toque,
+        chave,
       });
-      if (via !== 'nada') await marcarAviso(unit.id, link.kommoLeadId, chave);
       conta[via]++;
       if (toque === 'd2') conta.d2++;
     } catch (err) {
