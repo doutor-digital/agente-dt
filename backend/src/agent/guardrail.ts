@@ -1,6 +1,6 @@
 import type { Unit } from '@prisma/client';
 import { preencherLacunas } from './lacunas.js';
-import { corrigirPrecoDoConvenio, precoDoConvenio } from './preco-convenio.js';
+import { convenioDaUnidade, corrigirPrecoDoConvenio } from './preco-convenio.js';
 import { precosDaConsulta } from './prompt-composer.js';
 
 export interface GuardrailResult {
@@ -157,7 +157,7 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
   // O desconto do convênio não pode sair como preço do Pix — ver preco-convenio.ts.
   const p = precosDaConsulta(unit);
   if (p) {
-    const conv = precoDoConvenio([unit.sourceProdutos, unit.sourceNegocio, unit.systemPrompt], p);
+    const conv = convenioDaUnidade(unit, p);
     if (conv != null) {
       const r = corrigirPrecoDoConvenio(texto, { antecipado: p.antecipado, convenio: conv });
       if (r.corrigiu) {
