@@ -59,6 +59,8 @@ const schema = z.object({
   FRANQUIA_NEGOCIACAO_HORAS: z.string().optional(),
   /** Unidades onde a Sofia fica calada em GANHO / ALTA / TRATAMENTO CANCELADO e só deixa nota (csv; `*` = todas). */
   SOFIA_CALADA_SLUGS: z.string().optional(),
+  /** Unidades onde lead sem nome vira "Lead dd/mm/aaaa" ("Lead 2 dd/mm/aaaa" pro segundo do dia) na 1ª mensagem (csv; `*` = todas). */
+  TITULO_PADRAO_SLUGS: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

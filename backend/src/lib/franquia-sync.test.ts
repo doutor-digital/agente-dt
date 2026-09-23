@@ -7,6 +7,9 @@ import {
   categoriaDaConsulta,
   chaveTelefone,
   escolherConsulta,
+  nomeDaFranquia,
+  nomeParaBusca,
+  normalizar,
   opcaoDoTratamento,
   planejarEscritas,
   situacaoDaConsulta,
@@ -159,4 +162,27 @@ test('retorno: espelha data/situação/categoria mas não carimba "Agendado pela
 
 test('tratamento: "PROTOCOLO 03 MESES" da franquia casa com "03 Meses — CERVICAL CRÔNICO" do cartão', () => {
   assert.equal(opcaoDoTratamento({ category: 'PROTOCOLO 03 MESES', local: 'CERVICAL', degree: 'CRÔNICO' }, OPCOES.tratamento), '03 Meses — CERVICAL CRÔNICO');
+});
+
+test('nomeParaBusca: tira a data da SDR, parênteses e segundo nome; "Lead" não serve', () => {
+  const casos: Array<[string | null, string]> = [
+    ['Rosi 14/09/2026', 'Rosi'],
+    ['Lucas Jofre Toda 10/02/26', 'Lucas Jofre Toda'],
+    ['Ivair Diniz(Victoria Diniz)  25/02', 'Ivair Diniz'],
+    ['Dina Alves / Felipe Correia da Silva 19/03/26', 'Dina Alves'],
+    ['MARIA DA PENHA  - ALEXANDRO SANTANA', 'MARIA DA PENHA'],
+    ['Jacileia fraga dias20/02/26', 'Jacileia fraga dias'],
+    ['Lead #22647811', ''],
+    ['Lead 23/09/2026', ''],
+    ['Lead 2 23/09/2026', ''],
+    ['Zé', ''],
+    [null, ''],
+  ];
+  for (const [de, para] of casos) assert.equal(nomeParaBusca(de), para, String(de));
+});
+
+test('nomeDaFranquia: ignora o prefixo IA-/N- e normaliza', () => {
+  assert.equal(nomeDaFranquia('IA-MARIA DA PENHA DA SILVA AUGUSTO'), normalizar('Maria da Penha da Silva Augusto'));
+  assert.equal(nomeDaFranquia('N-KELLY HELENA'), normalizar('Kelly Helena'));
+  assert.equal(nomeDaFranquia('NEILIANE ALVES'), normalizar('Neiliane Alves'));
 });

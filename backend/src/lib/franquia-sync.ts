@@ -48,6 +48,25 @@ export function chaveTelefone(bruto: string | null | undefined): string {
   return d.length > 8 ? d.slice(-8) : d;
 }
 
+/**
+ * O que do título do cartão serve pra procurar na franquia: "Rosi 14/09/2026" → "Rosi";
+ * "Ivair Diniz(Victoria Diniz) 25/02" → "Ivair Diniz"; "Dina Alves / Felipe Correia" → "Dina Alves";
+ * "Lead #123" / "Lead 23/09/2026" → "" (não tem nome pra buscar).
+ */
+export function nomeParaBusca(nome: string | null | undefined): string {
+  let s = String(nome ?? '').replace(/\(.*?\)/g, ' ');
+  s = s.replace(/\s*\d{1,2}\/\d{1,2}(\/\d{2,4})?.*$/, '');
+  s = s.split(/\s+[/\-–]\s+/)[0] ?? '';
+  s = s.replace(/\s+/g, ' ').trim();
+  if (/^lead\b/i.test(s) || s.length < 3) return '';
+  return s;
+}
+
+/** A franquia prefixa quem nasceu pela IA/n8n ("IA-MARIA DA PENHA", "N-KELLY"): não é parte do nome. Já normalizado. */
+export function nomeDaFranquia(n: string | null | undefined): string {
+  return normalizar(String(n ?? '').replace(/^(IA|N)-\s*/i, ''));
+}
+
 export function situacaoDaConsulta(idStatus: number | null): string | null {
   switch (idStatus) {
     case SPINE_STATUS.AGENDADO: return 'Agendado';

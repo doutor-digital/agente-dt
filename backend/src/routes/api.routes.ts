@@ -450,6 +450,18 @@ apiRouter.get('/admin/kommo-salesbots', requireSuperAdmin, async (_req, res) => 
   }
 });
 
+// Sincronizador franquia → Kommo (campos + etapas): último resumo por unidade e varredura fora de hora.
+// João, 23/09/2026: "pode rodar agora pra consertar esses cartões, depois segue de 15 em 15". `?slug=` limita a uma unidade.
+apiRouter.get('/admin/franquia-sync', requireSuperAdmin, async (_req, res) => {
+  const { resumoDoSync } = await import('../lib/franquia-sync-worker.js');
+  res.json({ ok: true, varreduras: resumoDoSync() });
+});
+apiRouter.post('/admin/franquia-sync/varrer', requireSuperAdmin, async (req, res) => {
+  const { varrerAgora } = await import('../lib/franquia-sync-worker.js');
+  const slug = typeof req.query.slug === 'string' && req.query.slug.trim() ? req.query.slug.trim() : undefined;
+  res.status(202).json({ ok: true, slug: slug ?? '*', ...varrerAgora(slug) });
+});
+
 apiRouter.post('/admin/clear-cache', requireAuth, async (_req, res) => {
   const { clearAllConfigCache } = await import('../agent/config.js');
   const { clearAllUnitCache } = await import('../services/units.service.js');
