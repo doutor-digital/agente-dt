@@ -77,11 +77,24 @@ export function corrigirPrecoDoConvenio(texto: string, precos: PrecosDaUnidade):
  * Procuro o R$ mais próximo de uma palavra de convênio, na mesma frase, e exijo
  * que seja MENOR que o antecipado: se for igual ou maior, não é desconto e eu
  * prefiro não ter valor a ter o errado.
+ *
+ * DESISTO da unidade que tem uma TABELA de plano, não um desconto. A Serra diz
+ * "Com PLANO DE SAÚDE: R$ 250 · R$ 220 com pagamento antecipado" — lá o plano
+ * tem o próprio antecipado, e uma frase solta com o valor do plano é legítima
+ * mesmo falando de Pix. Corrigir ali SUBIRIA o preço de quem tem plano, que é
+ * pior que o erro original. O sinal é a palavra "antecipado" dentro da própria
+ * frase de convênio; quando ela aparece, não devolvo valor nenhum.
  */
 export function precoDoConvenio(textos: Array<string | null | undefined>, antecipado: number): number | null {
-  const todo = textos.filter(Boolean).join('\n');
-  for (const frase of todo.split(/(?<=[.!?\n])\s*/)) {
-    if (!FALA_DE_CONVENIO.test(frase)) continue;
+  const frasesDoTexto = textos
+    .filter(Boolean)
+    .join('\n')
+    .split(/(?<=[.!?\n])\s*/)
+    .filter((f) => FALA_DE_CONVENIO.test(f));
+
+  if (frasesDoTexto.some((f) => FALA_DE_ANTECIPADO.test(f))) return null;
+
+  for (const frase of frasesDoTexto) {
     const achados = [...frase.matchAll(/R\$\s*(\d{2,4})/g)].map((m) => Number(m[1]));
     const menor = achados.filter((v) => Number.isFinite(v) && v < antecipado).sort((a, b) => a - b)[0];
     if (menor) return menor;

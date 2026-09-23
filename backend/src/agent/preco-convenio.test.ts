@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { corrigirPrecoDoConvenio } from './preco-convenio.js';
+import { corrigirPrecoDoConvenio, precoDoConvenio } from './preco-convenio.js';
 
 // Bebedouro: 250 na clínica, 200 no Pix antecipado, 150 só com carteirinha.
 const BEBEDOURO = { antecipado: 200, convenio: 150 };
@@ -64,4 +64,24 @@ test('unidade sem desconto de convênio nunca sofre correção', () => {
 
 test('texto vazio não quebra', () => {
   assert.equal(corrigirPrecoDoConvenio('', BEBEDOURO).texto, '');
+});
+
+test('lê o desconto único da ficha de Bebedouro e Olímpia', () => {
+  const ficha =
+    'VALOR: R$ 250 no dia, pago na clínica, OU R$ 200 com pagamento antecipado por Pix.\n' +
+    'CONVÊNIO: a clínica NÃO atende plano de saúde.\n' +
+    'Mas quem apresenta a carteirinha do plano paga R$ 150 na consulta.';
+  assert.equal(precoDoConvenio([ficha], 200), 150);
+});
+
+test('unidade com TABELA de plano (Serra) fica de fora', () => {
+  // Lá o plano tem o próprio antecipado: corrigir subiria o preço de quem tem plano.
+  const serra =
+    'NO DIA DA CONSULTA: R$ 350 — para qualquer pessoa, com ou sem plano de saúde.\n' +
+    '- Com PLANO DE SAÚDE: R$ 250 · R$ 220 com pagamento antecipado.';
+  assert.equal(precoDoConvenio([serra], 280), null);
+});
+
+test('sem convênio na ficha, não há valor e a trava fica inerte', () => {
+  assert.equal(precoDoConvenio(['VALOR: R$ 350 no dia, ou R$ 250 antecipado por Pix.'], 250), null);
 });
