@@ -186,7 +186,10 @@ test('tratamento com status desconhecido e sem nome não é "aberto": não vira 
 });
 
 test('consulta desmarcada sem remarcação tira o cartão de AGENDADO e leva pra EM ESPERA (23/09)', () => {
-  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -24 * 200, idStatus: 57 })]))?.para, ETAPA.ESPERA, 'desmarcada meses atrás (Lucas, Serra)');
+  const lucas = planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -24 * 200, idStatus: 57 })]));
+  assert.equal(lucas?.para, ETAPA.PERDIDO, 'desmarcada há 200 d (Lucas, Serra): pela jornada já é perdido');
+  assert.equal(lucas?.motivoPerda, 'Desmarcou ou faltou e não remarcou');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -24 * 10, idStatus: 57 })]))?.para, ETAPA.ESPERA, 'desmarcada há 10 d: recuperável');
   assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: 30, idStatus: 57 })]))?.para, ETAPA.ESPERA, 'desmarcou antes da data');
   assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -48, idStatus: 57 }), ag({ h: 30, idStatus: 37 })])), null, 'remarcou pra frente: fica em AGENDADO');
   assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -48, idStatus: 57 }), ag({ h: -24, idStatus: 42 })]))?.para, ETAPA.COMPARECEU, 'atendida vale mais');
@@ -212,4 +215,50 @@ test('recortarHistorico: só o ciclo atual e só tratamento aberto (review 23/09
   assert.equal(m?.para, ETAPA.ESPERA);
   const semRecorte = planejarMovimento(entrada(ETAPA.AGENDADO, hist.schedules.filter((s) => s.idStatus !== 37), [{ idStatus: 46 }]));
   assert.equal(semRecorte?.para, ETAPA.GANHO, 'sem o recorte o FINALIZADO velho levaria a GANHO — é o bug que o recorte evita');
+});
+
+// ── jornada pela idade do fato (23/09/2026) ──
+const D = 24;
+test('jornada: avaliação atendida — 48 h, 45 d, depois PERDIDO só de cartão parado', () => {
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -10, idStatus: 42 })]))?.para, ETAPA.COMPARECEU);
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -10 * D, idStatus: 42 })]))?.para, ETAPA.NEGOCIACAO, 'atendido há 10 d: pula COMPARECEU, vai direto pra negociação');
+  assert.equal(planejarMovimento(entrada(ETAPA.CONFERIR, [ag({ h: -10 * D, idStatus: 42 })]))?.para, ETAPA.NEGOCIACAO, 'saindo de CONFERIR também');
+  const velho = planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -400 * D, idStatus: 42 })]));
+  assert.equal(velho?.para, ETAPA.PERDIDO, 'atendido há 400 d sem tratamento: perdido');
+  assert.equal(velho?.motivoPerda, 'Não fechou após a avaliação');
+  assert.equal(velho?.semRegua, true, 'fato de mais de 90 d não recebe régua de reengajamento');
+  const recente = planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -60 * D, idStatus: 42 })]));
+  assert.equal(recente?.para, ETAPA.PERDIDO); assert.equal(recente?.semRegua, false, 'fato de 60 d ainda recebe a régua');
+  assert.equal(planejarMovimento(entrada(ETAPA.NEGOCIACAO, [ag({ h: -400 * D, idStatus: 42 })])), null, 'EM NEGOCIAÇÃO fica com o worker de parados');
+  assert.equal(planejarMovimento(entrada(ETAPA.QUALIFICACAO, [ag({ h: -400 * D, idStatus: 42 })]))?.para ?? null, null, 'EM QUALIFICAÇÃO nunca vira PERDIDO pela máquina');
+});
+
+test('jornada: falta — 7 d NÃO COMPARECEU, 30 d EM ESPERA, depois PERDIDO', () => {
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -2 * D, idStatus: 40 })]))?.para, ETAPA.NAO_COMPARECEU);
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -15 * D, idStatus: 40 })]))?.para, ETAPA.ESPERA);
+  assert.equal(planejarMovimento(entrada(ETAPA.NAO_COMPARECEU, [ag({ h: -15 * D, idStatus: 40 })]))?.para, ETAPA.ESPERA, 'falta de 15 d sem remarcar sai de NÃO COMPARECEU');
+  assert.equal(planejarMovimento(entrada(ETAPA.NAO_COMPARECEU, [ag({ h: -2 * D, idStatus: 40 })])), null, 'falta fresca fica em NÃO COMPARECEU');
+  const m = planejarMovimento(entrada(ETAPA.NAO_COMPARECEU, [ag({ h: -60 * D, idStatus: 40 })]));
+  assert.equal(m?.para, ETAPA.PERDIDO); assert.equal(m?.motivoPerda, 'Desmarcou ou faltou e não remarcou');
+  assert.equal(planejarMovimento(entrada(ETAPA.ESPERA, [ag({ h: -60 * D, idStatus: 40 })])), null, 'EM ESPERA não vira PERDIDO pela máquina');
+});
+
+test('jornada: desmarcou — 30 d EM ESPERA, depois PERDIDO; COMPARECEU sem prova cai junto', () => {
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -10 * D, idStatus: 57 })]))?.para, ETAPA.ESPERA, 'cartão diz que compareceu, franquia diz que desmarcou');
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -10 * D, idStatus: 40 })]))?.para, ETAPA.ESPERA, 'cartão diz que compareceu, franquia diz que faltou há 10 d (mais de 7): EM ESPERA');
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -2 * D, idStatus: 40 })]))?.para, ETAPA.NAO_COMPARECEU, 'falta de 2 d: NÃO COMPARECEU');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -60 * D, idStatus: 57 })]))?.para, ETAPA.PERDIDO);
+  assert.equal(planejarMovimento(entrada(ETAPA.QUALIFICACAO, [ag({ h: -60 * D, idStatus: 57 })])), null);
+});
+
+test('jornada: a última AVALIAÇÃO é a âncora — atendida em 2025 + desmarcada em 2026 não vai pra COMPARECEU', () => {
+  const m = planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -400 * D, idStatus: 42 }), ag({ h: -40 * D, idStatus: 57 })]));
+  assert.equal(m?.para, ETAPA.PERDIDO); assert.equal(m?.motivoPerda, 'Desmarcou ou faltou e não remarcou');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -400 * D, idStatus: 42 }), ag({ h: -10 * D, idStatus: 57 })]))?.para, ETAPA.ESPERA);
+  // retorno desmarcado NÃO apaga a avaliação atendida (regra antiga continua valendo)
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -100, idStatus: 42 }), ag({ h: -50, idStatus: 57, categoria: 'RETORNO' })]))?.para, ETAPA.NEGOCIACAO);
+  // consulta passada ainda "agendada" na franquia: a clínica não registrou — fica
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -20 * D, idStatus: 37 })])), null);
+  // futura marcada vence tudo, inclusive de COMPARECEU sem prova
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -20 * D, idStatus: 57 }), ag({ h: 3 * D, idStatus: 37 })]))?.para, ETAPA.AGENDADO);
 });
