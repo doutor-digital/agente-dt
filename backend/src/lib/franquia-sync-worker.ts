@@ -252,12 +252,43 @@ async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, le
 /** lead → idClient resolvido por busca (positivo ou negativo), por unidade; evita repetir a busca a cada 15 min */
 const cacheIdClient = new Map<string, { idClient: number | null; expiraEm: number }>();
 
+/**
+ * A busca da franquia é por TRECHO CONTÍGUO do nome: "Edvania Pardinho" não acha "EDVANIA MARIA PARDINHO",
+ * "Felipe Criste" não acha "FELIPE SANTANA CRISTE", ponto final e espaço duplo também derrubam. Por isso
+ * tentamos do mais específico ao mais largo e paramos no primeiro que devolve alguém (o telefone filtra depois).
+ */
+export function termosDeBuscaDoNome(nome: string | null | undefined): string[] {
+  const base = nomeParaBusca(nome).replace(/[.,;:!?]+$/g, '').replace(/\s+/g, ' ').trim();
+  if (!base) return [];
+  const partes = base.split(' ');
+  const termos = [base];
+  if (partes.length > 2) termos.push(partes.slice(0, 2).join(' '));
+  if (partes[0].length >= 3) termos.push(partes[0]);
+  return [...new Set(termos)];
+}
+
+/** Entre cadastros DUPLICADOS do mesmo paciente (mesmo nome e telefone), fica o que tem a consulta mais recente. */
+async function escolherEntreDuplicados(unit: Unit, cands: Array<{ idClient: number | null }>): Promise<number | null> {
+  let melhor: { idClient: number; epoch: number } | null = null;
+  for (const c of cands) {
+    if (!c.idClient) continue;
+    const hist = await historicoDoPaciente(unit, c.idClient);
+    const epoch = Math.max(0, ...(hist?.schedules ?? []).map((s) => (s.dateAttendanceUtc ? Date.parse(s.dateAttendanceUtc) : 0)));
+    if (!melhor || epoch > melhor.epoch || (epoch === melhor.epoch && c.idClient > melhor.idClient)) melhor = { idClient: c.idClient, epoch };
+  }
+  return melhor?.idClient ?? null;
+}
+
 async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo?: KommoClient; contatoId?: number | null }): Promise<number | null> {
-  const termo = nomeParaBusca(nome);
-  if (!termo) return null;
-  const r = await SpineService.searchClients(unit, termo, 50);
-  if (!r.ok || !r.data) return null;
-  const clientes = r.data.clients.filter((c) => c.idClient);
+  const termos = termosDeBuscaDoNome(nome);
+  if (termos.length === 0) return null;
+  let clientes: Array<{ idClient: number | null; name: string | null; whatsapp: string | null }> = [];
+  for (const termo of termos) {
+    const r = await SpineService.searchClients(unit, termo, 50);
+    if (!r.ok || !r.data) return null;
+    clientes = r.data.clients.filter((c) => c.idClient);
+    if (clientes.length > 0) break;
+  }
   if (clientes.length === 0) return null;
   // telefone do contato do Kommo × whatsapp da franquia: casa mesmo quando a SDR escreveu o nome diferente
   let fone = '';
@@ -268,19 +299,27 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo
       fone = '';
     }
   }
-  const alvo = normalizar(termo);
+  const alvo = normalizar(termos[0]);
   if (fone) {
     const porFone = clientes.filter((c) => chaveTelefone(c.whatsapp) === fone);
     if (porFone.length === 1) return porFone[0].idClient;
-    // mãe e filho com o mesmo WhatsApp: só o que também casa pelo nome
     if (porFone.length > 1) {
+      // mesmo nome e mesmo telefone = o mesmo paciente cadastrado duas vezes (comum na franquia)
+      const nomes = new Set(porFone.map((c) => nomeDaFranquia(c.name)));
+      if (nomes.size === 1) return escolherEntreDuplicados(unit, porFone);
+      // mãe e filho com o mesmo WhatsApp: só o que também casa pelo nome
       const certo = porFone.filter((c) => nomeDaFranquia(c.name) === alvo);
-      return certo.length === 1 ? certo[0].idClient : null;
+      if (certo.length === 1) return certo[0].idClient;
+      if (certo.length > 1) return escolherEntreDuplicados(unit, certo);
+      return null;
     }
   }
-  const exatos = clientes.filter((c) => nomeDaFranquia(c.name) === alvo);
-  // dois homônimos: não arrisca
-  return exatos.length === 1 ? exatos[0].idClient : null;
+  // nome exato e único — mas se conhecemos o telefone do lead e o cadastro tem OUTRO telefone, é outra pessoa
+  // ("MARIA DA PENHA" de 2019 não é a Maria da Penha do cartão de agosto)
+  const exatos = clientes.filter((c) => nomeDaFranquia(c.name) === alvo && (!fone || !chaveTelefone(c.whatsapp) || chaveTelefone(c.whatsapp) === fone));
+  if (exatos.length === 1) return exatos[0].idClient;
+  // homônimos sem telefone pra desempatar: não arrisca
+  return null;
 }
 
 /**
@@ -602,4 +641,4 @@ export function stopFranquiaSyncWorker(): void {
   timer = null;
 }
 
-export const _interno = { mapearCampos, valoresDoLead };
+export const _interno = { mapearCampos, valoresDoLead, procurarPaciente };
