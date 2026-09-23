@@ -173,6 +173,7 @@ test('nomeParaBusca: tira a data da SDR, parênteses e pontuação; NÃO separa 
     ['Lucas Jofre Toda 10/02/26', 'Lucas Jofre Toda'],
     // parêntese vira separador: a paciente era a de dentro (23/09/2026)
     ['Ivair Diniz(Victoria Diniz)  25/02', 'Ivair Diniz - Victoria Diniz'],
+    ['Elci Rocha (Jonas Lourenço) 09/03/26', 'Elci Rocha - Jonas Lourenço'],
     ['Dina Alves / Felipe Correia da Silva 19/03/26', 'Dina Alves / Felipe Correia da Silva'],
     ['MARIA DA PENHA  - ALEXANDRO SANTANA', 'MARIA DA PENHA - ALEXANDRO SANTANA'],
     ['Elmir Ribeiro Gil. 26/03/26', 'Elmir Ribeiro Gil'],
