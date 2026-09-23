@@ -55,9 +55,11 @@ export function chaveTelefone(bruto: string | null | undefined): string {
  * "Lead #123" e "Lead 23/09/2026" viram "" (não têm nome pra buscar).
  */
 export function nomeParaBusca(nome: string | null | undefined): string {
-  let s = String(nome ?? '').replace(/\(.*?\)/g, ' ');
+  // o que está entre parênteses é OUTRA PESSOA, não lixo: em "Ivair Diniz(Victoria Diniz)" a paciente
+  // na franquia é a Victoria (achado de 23/09/2026). Vira separador, pra `termosDeBuscaDoNome` tratar as duas.
+  let s = String(nome ?? '').replace(/[()]/g, ' - ');
   s = s.replace(/\s*\d{1,2}\/\d{1,2}(\/\d{2,4})?.*$/, '');
-  s = s.replace(/[.,;:!?]+/g, ' ').replace(/\s+/g, ' ').trim();
+  s = s.replace(/[.,;:!?]+/g, ' ').replace(/\s*-\s*$/, '').replace(/\s+/g, ' ').trim();
   if (/^lead\b/i.test(s) || s.length < 3) return '';
   return s;
 }
