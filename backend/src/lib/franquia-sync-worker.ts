@@ -587,6 +587,14 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
           if (!idClient) {
             if (emConferir) {
               const parado = (agoraEpoch - (lead.updated_at ?? agoraEpoch)) / 86_400;
+              // trava: cartão com consulta marcada PRA FRENTE nunca vira PERDIDO, mesmo sem paciente casado.
+              // A fase 1 escreve essa data quando a franquia acha o paciente pelo telefone (caminho inverso do
+              // nosso) — foi assim que dois cartões com consulta marcada foram fechados por engano em 23/09.
+              const dataCartao = Number(valoresDoLead(lead, mapa)[CAMPOS_SYNC.DATA_CONSULTA] ?? NaN);
+              if (Number.isFinite(dataCartao) && dataCartao > agoraEpoch) {
+                logger.info({ unit: unit.slug, leadId: lead.id, dataConsulta: dataCartao }, 'franquia-move: em CONFERIR mas com consulta marcada pra frente — não fecho');
+                continue;
+              }
               if (parado > JORNADA.CONFERIR_MAX_DIAS) {
                 const mov: Movimento = { funil: 'COMERCIAL', para: ETAPA.PERDIDO, motivo: `${Math.floor(parado)} d em ${ETAPA.CONFERIR} sem acerto do cadastro`, motivoPerda: MOTIVO_PERDA.SEM_CADASTRO, semRegua: true, dias: Math.floor(parado) };
                 if (seco) logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');

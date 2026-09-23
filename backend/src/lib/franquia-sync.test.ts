@@ -112,20 +112,23 @@ test('consulta passada sem carimbo: não inventa "Agendado pela SDR em"', () => 
   assert.ok(!w.some((x) => x.campo === 'AGENDADO_SDR_EM'));
 });
 
-test('tratamento em andamento: Fechou=Sim, opção do tratamento e fisio se vazio; o valor é da SDR, não da franquia', () => {
+test('tratamento em andamento: Fechou=Sim, opção do tratamento e fisio se vazio; o valor vem da franquia quando ela lança', () => {
   const t = { idTreatment: 1, idClient: 2, clientName: 'Maria', category: '03 Meses', local: 'LOMBAR', degree: 'CRÔNICO', staffName: 'Bárbara Wirtzbiki', statusName: 'EM ANDAMENTO', price: 2400 };
   const w = planejarEscritas({ valores: { '¤ Valor do tratamento': '1800' }, consulta: null, consultaEpoch: null, tratamento: t, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES });
   const por = Object.fromEntries(w.map((x) => [x.campo, x.valor]));
   assert.equal(por.FECHOU_TRAT, 'Sim');
   assert.equal(por.TRAT_FECHADO, '03 Meses — LOMBAR CRÔNICO');
-  assert.ok(!('VALOR_TRAT' in por), 'a franquia não pode sobrescrever o valor digitado pela SDR');
+  assert.equal(por.VALOR_TRAT, 2400, 'preço lançado na franquia vence o do cartão (revisto em 23/09/2026)');
   assert.equal(por.FISIO, 'DRA. BÁRBARA WIRTZBIKI');
 });
 
-test('tratamento com valor vazio no cartão: a franquia continua não escrevendo o valor', () => {
+test('tratamento com valor vazio no cartão: a franquia preenche quando lançou preço (23/09/2026)', () => {
   const t = { idTreatment: 1, idClient: 2, clientName: 'Maria', category: '03 Meses', local: 'LOMBAR', degree: 'CRÔNICO', staffName: null, statusName: 'EM ANDAMENTO', price: 2400 };
   const w = planejarEscritas({ valores: {}, consulta: null, consultaEpoch: null, tratamento: t, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES });
-  assert.ok(!w.some((x) => x.campo === 'VALOR_TRAT'));
+  assert.equal(w.find((x) => x.campo === 'VALOR_TRAT')?.valor, 2400);
+  // sem preço na franquia (Serra, Imperatriz…): o campo fica com a SDR
+  const semPreco = planejarEscritas({ valores: {}, consulta: null, consultaEpoch: null, tratamento: { ...t, price: 0 }, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES });
+  assert.ok(!semPreco.some((x) => x.campo === 'VALOR_TRAT'));
 });
 
 test('mapa de campos: aceita date_time como date e ignora tipos que não gravamos', async () => {
@@ -188,4 +191,21 @@ test('nomeDaFranquia: ignora o prefixo IA-/N- e normaliza', () => {
   assert.equal(nomeDaFranquia('IA-MARIA DA PENHA DA SILVA AUGUSTO'), normalizar('Maria da Penha da Silva Augusto'));
   assert.equal(nomeDaFranquia('N-KELLY HELENA'), normalizar('Kelly Helena'));
   assert.equal(nomeDaFranquia('NEILIANE ALVES'), normalizar('Neiliane Alves'));
+});
+
+test('valor do tratamento: a franquia manda quando lança preço; 0 nunca apaga o que a SDR digitou', () => {
+  const base = { consulta: null, consultaEpoch: null, feitoPelaIa: false, agoraEpoch: 1_790_000_000, opcoes: { fisio: [], categoria: [], tratamento: [] } };
+  const trat = (price: number | null) => ({ idTreatment: 1, idClient: 1, clientName: 'X', category: null, local: null, degree: null, staffName: null, statusName: 'EM ANDAMENTO', price });
+  const valor = (e: ReturnType<typeof planejarEscritas>) => e.find((x) => x.campo === 'VALOR_TRAT');
+
+  // franquia com preço e cartão vazio: grava
+  assert.equal(valor(planejarEscritas({ ...base, valores: {}, tratamento: trat(3500) }))?.valor, 3500);
+  // franquia com preço diferente: franquia vence
+  const d = valor(planejarEscritas({ ...base, valores: { '¤ Valor do tratamento': '3000' }, tratamento: trat(3500) }));
+  assert.equal(d?.valor, 3500); assert.equal(d?.motivo, 'franquia diverge');
+  // mesmo valor: não reescreve
+  assert.equal(valor(planejarEscritas({ ...base, valores: { '¤ Valor do tratamento': '3500' }, tratamento: trat(3500) })), undefined);
+  // franquia com 0 (o caso da Serra): não toca no campo, nem pra apagar
+  assert.equal(valor(planejarEscritas({ ...base, valores: { '¤ Valor do tratamento': '4200' }, tratamento: trat(0) })), undefined);
+  assert.equal(valor(planejarEscritas({ ...base, valores: {}, tratamento: trat(null) })), undefined);
 });
