@@ -55,6 +55,26 @@ async function unidadeDoWidget(req: Request, res: Response): Promise<Unit | null
   return unit;
 }
 
+/**
+ * "A franquia foi lida há quantos minutos?" — o relógio do sincronizador, pra aparecer no cartão e na
+ * Conferência. Sem isto a SDR registra na franquia e fica olhando o cartão sem saber se já passou a hora.
+ */
+export async function widgetSyncHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res);
+  if (!unit) return;
+  const { relogioDoSync } = await import('../lib/franquia-sync-worker.js');
+  const r = relogioDoSync(unit.slug);
+  const agora = Date.now();
+  const minutosAtras = r.ultimaEm ? Math.max(0, Math.round((agora - Date.parse(r.ultimaEm)) / 60_000)) : null;
+  res.json({
+    ...r,
+    minutosAtras,
+    proximaEmMin: minutosAtras === null ? r.intervaloMin : Math.max(0, r.intervaloMin - minutosAtras),
+    ligado: !!(unit.spineEnabled && unit.spineToken),
+    agora: new Date().toISOString(),
+  });
+}
+
 export async function widgetPingHandler(req: Request, res: Response): Promise<void> {
   const unit = await unidadeDoWidget(req, res);
   if (!unit) return;

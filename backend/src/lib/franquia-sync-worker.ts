@@ -57,6 +57,49 @@ export function resumoDoSync(): ResumoSync[] {
   return [...ultimoResumo.values()];
 }
 
+/**
+ * Relógio da varredura, por unidade — pedido do João (23/09/2026): "quero saber, dentro do Kommo,
+ * há quantos minutos rodou e quantas vezes já rodou hoje". Vive na memória do processo: reiniciou o
+ * serviço, a contagem do dia recomeça (e o widget diz isso com o `desde`).
+ */
+export interface RelogioSync {
+  /** fim da última varredura desta unidade */
+  ultimaEm: string | null;
+  /** quanto tempo ela levou */
+  ultimaMs: number | null;
+  /** cartões movidos e campos gravados na última */
+  ultimosMovimentos: number;
+  ultimasEscritas: number;
+  /** quantas varreduras desta unidade desde a virada do dia (fuso da unidade) */
+  vezesHoje: number;
+  /** de quantos em quantos minutos ela roda */
+  intervaloMin: number;
+  /** quando este processo começou a contar */
+  desde: string;
+}
+const relogio = new Map<string, { vezesHoje: number; dia: string; ultima: ResumoSync | null; ms: number | null }>();
+const processoDesde = new Date().toISOString();
+
+function anotarVarredura(unit: Unit, r: ResumoSync, ms: number): void {
+  const dia = instanteNoFuso(new Date(), unit.spineTimezone || 'America/Sao_Paulo').slice(0, 10);
+  const atual = relogio.get(unit.slug);
+  const vezesHoje = atual && atual.dia === dia ? atual.vezesHoje + 1 : 1;
+  relogio.set(unit.slug, { vezesHoje, dia, ultima: r, ms });
+}
+
+export function relogioDoSync(slug: string): RelogioSync {
+  const r = relogio.get(slug);
+  return {
+    ultimaEm: r?.ultima?.em ?? null,
+    ultimaMs: r?.ms ?? null,
+    ultimosMovimentos: r?.ultima?.movimentos ?? 0,
+    ultimasEscritas: r?.ultima?.escritas ?? 0,
+    vezesHoje: r?.vezesHoje ?? 0,
+    intervaloMin: Math.round(SWEEP_MS / 60_000),
+    desde: processoDesde,
+  };
+}
+
 /** paciente (nome normalizado) → lead do Kommo, por unidade; evita repetir a busca por telefone a cada 15 min */
 const cacheLead = new Map<string, { leadId: number | null; expiraEm: number }>();
 
@@ -735,6 +778,7 @@ async function varrer(soSlug?: string): Promise<void> {
       try {
         const r = await sincronizarUnidade(unit);
         ultimoResumo.set(unit.slug, r);
+        anotarVarredura(unit, r, Date.now() - t0);
         logger.info({ ...r, ms: Date.now() - t0 }, 'franquia-sync: varredura concluída');
       } catch (err) {
         logger.error({ err, unit: unit.slug }, 'franquia-sync: varredura falhou');
