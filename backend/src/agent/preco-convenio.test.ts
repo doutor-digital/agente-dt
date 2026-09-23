@@ -110,7 +110,7 @@ test('só entra na trava a unidade declarada no env', () => {
   const ficha = 'VALOR: R$ 250 no dia, OU R$ 200 antecipado por Pix.\nCom a carteirinha do plano paga R$ 150.';
   const base = {
     id: 'u1', updatedAt: new Date(0), sourceProdutos: ficha, sourceNegocio: null,
-    sourcePapel: null, systemPrompt: null, spineBookingRequiresPayment: false,
+    sourcePapel: null, systemPrompt: '', spineBookingRequiresPayment: false,
   };
   assert.equal(convenioDaUnidade({ ...base, slug: 'doutor-hernia-bebedouro' }, P), 150);
   assert.equal(convenioDaUnidade({ ...base, slug: 'doutor-hernia-serra' }, P), null);
@@ -121,7 +121,7 @@ test('unidade com taxa de reserva fica de fora (o antecipado lá é parte do val
   assert.equal(
     convenioDaUnidade(
       { id: 'u2', slug: 'doutor-hernia-bebedouro', updatedAt: new Date(0), sourceProdutos: ficha,
-        sourceNegocio: null, sourcePapel: null, systemPrompt: null, spineBookingRequiresPayment: true },
+        sourceNegocio: null, sourcePapel: null, systemPrompt: '', spineBookingRequiresPayment: true },
       P,
     ),
     null,
