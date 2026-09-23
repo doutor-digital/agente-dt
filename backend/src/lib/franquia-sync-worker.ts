@@ -291,6 +291,10 @@ export function termosDeBuscaDoNome(nome: string | null | undefined): string[] {
     if (w.length > 2) termos.push(w.slice(0, 2).join(' '));
     if (w.length >= 2) termos.push(w.slice(-2).join(' '));
     if (w[0] && w[0].length >= 3) termos.push(w[0]);
+    // o SOBRENOME sozinho: "LUVAS LINHARES" é erro de digitação de "LUCAS LINHARES" e só "LINHARES" acha.
+    // Partícula ("da", "de", "dos") não serve de busca.
+    const ult = w[w.length - 1];
+    if (w.length >= 2 && ult && ult.length >= 4) termos.push(ult);
   }
   return [...new Set(termos)].filter((t) => t.length >= 3).slice(0, MAX_TERMOS_DE_BUSCA);
 }
@@ -307,7 +311,40 @@ async function escolherEntreDuplicados(unit: Unit, cands: Array<{ idClient: numb
   return melhor?.idClient ?? null;
 }
 
-type ClienteFranquia = { idClient: number | null; name: string | null; whatsapp: string | null };
+export type ClienteFranquia = { idClient: number | null; name: string | null; whatsapp: string | null };
+
+export type EscolhaPaciente =
+  | { tipo: 'achou'; idClient: number; por: 'telefone' | 'nome' }
+  /** vários no mesmo telefone: quem decide é o histórico mais recente (precisa de rede) */
+  | { tipo: 'desempatar'; candidatos: ClienteFranquia[] }
+  | { tipo: 'nenhum'; motivo: 'sem candidatos' | 'homonimos' | 'nome nao casa' };
+
+/**
+ * PURA: dado o que a franquia devolveu, qual é o paciente deste cartão.
+ *
+ * Regra do João (23/09/2026): **o telefone é a medida padrão** — bateu o número, é ele, o nome não
+ * importa. Sem telefone conhecido, só nome exato e único vale. E nome exato com telefone DIFERENTE
+ * do que o cartão conhece é homônimo, nunca casa (a "MARIA DA PENHA" de 2019 não é a de agosto).
+ *
+ * `fone` e os telefones dos candidatos entram já normalizados por `chaveTelefone`; `alvos` são os
+ * termos do título já normalizados por `nomeDaFranquia`.
+ */
+export function escolherPaciente(candidatos: ClienteFranquia[], fone: string, alvos: Set<string>): EscolhaPaciente {
+  const vivos = candidatos.filter((c) => c.idClient);
+  if (vivos.length === 0) return { tipo: 'nenhum', motivo: 'sem candidatos' };
+  const casaNome = (c: ClienteFranquia) => alvos.has(nomeDaFranquia(c.name));
+  if (fone) {
+    const pf = vivos.filter((c) => chaveTelefone(c.whatsapp) === fone);
+    if (pf.length === 1) return { tipo: 'achou', idClient: pf[0].idClient as number, por: 'telefone' };
+    if (pf.length > 1) {
+      const certo = pf.filter(casaNome);
+      return { tipo: 'desempatar', candidatos: certo.length > 0 ? certo : pf };
+    }
+  }
+  const exatos = vivos.filter((c) => casaNome(c) && (!fone || !chaveTelefone(c.whatsapp) || chaveTelefone(c.whatsapp) === fone));
+  if (exatos.length === 1) return { tipo: 'achou', idClient: exatos[0].idClient as number, por: 'nome' };
+  return { tipo: 'nenhum', motivo: exatos.length > 1 ? 'homonimos' : 'nome nao casa' };
+}
 
 async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo?: KommoClient; contatoId?: number | null }): Promise<number | null> {
   const termos = termosDeBuscaDoNome(nome);
@@ -325,7 +362,8 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo
   // acumula os candidatos de TODOS os termos: parar no 1º que devolve alguém escondia o paciente
   // quando o cartão tinha dois nomes (o João achou isso no "MARIA DA PENHA - ALEXANDRO SANT ANA")
   const vistos = new Map<number, ClienteFranquia>();
-  const porFone = () => [...vistos.values()].filter((c) => fone && chaveTelefone(c.whatsapp) === fone);
+  // atalho: assim que UM candidato bate o telefone, é ele — não gasta as buscas restantes
+  const porFone = () => (fone ? [...vistos.values()].filter((c) => chaveTelefone(c.whatsapp) === fone) : []);
   for (const termo of termos) {
     const r = await SpineService.searchClients(unit, termo, 50);
     // erro da API não é "não achei": lança, pra ninguém guardar negativo nem mandar o cartão pra CONFERIR
@@ -334,21 +372,9 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo
     // achou pelo telefone: é ele, não precisa gastar mais chamada
     if (porFone().length === 1) return porFone()[0].idClient;
   }
-  if (vistos.size === 0) return null;
-  const casaPeloNome = (c: ClienteFranquia) => alvos.has(nomeDaFranquia(c.name));
-  const pf = porFone();
-  if (pf.length === 1) return pf[0].idClient;
-  if (pf.length > 1) {
-    // Telefone é a medida padrão (João, 23/09/2026: "batendo o número de telefone, pode movimentar,
-    // independente do nome"). Vários cadastros no mesmo número = o mesmo paciente repetido, ou a
-    // família usando um aparelho só; nos dois casos fica o do histórico mais recente. Quando um deles
-    // casa pelo nome do cartão, ele tem preferência.
-    const certo = pf.filter(casaPeloNome);
-    return escolherEntreDuplicados(unit, certo.length > 0 ? certo : pf);
-  }
-  // sem telefone pra confirmar: só nome exato e único vale — e se o cadastro tem OUTRO telefone conhecido, é homônimo
-  const exatos = [...vistos.values()].filter((c) => casaPeloNome(c) && (!fone || !chaveTelefone(c.whatsapp) || chaveTelefone(c.whatsapp) === fone));
-  if (exatos.length === 1) return exatos[0].idClient;
+  const escolha = escolherPaciente([...vistos.values()], fone, alvos);
+  if (escolha.tipo === 'achou') return escolha.idClient;
+  if (escolha.tipo === 'desempatar') return escolherEntreDuplicados(unit, escolha.candidatos);
   return null;
 }
 
@@ -497,7 +523,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
 
 const REVISAO_MAX_POR_VARREDURA = Number(process.env.FRANQUIA_REVISAO_MAX) || 60;
 /** teto de buscas na franquia por cartão: cada termo é uma chamada; 8 cobre dois nomes com sobrenome */
-const MAX_TERMOS_DE_BUSCA = Number(process.env.FRANQUIA_MAX_TERMOS) || 8;
+const MAX_TERMOS_DE_BUSCA = Number(process.env.FRANQUIA_MAX_TERMOS) || 10;
 
 /**
  * Quais cartões a revisão pelo histórico olha (23/09/2026, pedido do João: "tem que puxar tudo certinho"):
