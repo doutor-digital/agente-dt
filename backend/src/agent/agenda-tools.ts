@@ -149,6 +149,25 @@ async function horariosQueAFranquiaAceita(
   return { aceitos, recusados, sondados };
 }
 
+/**
+ * O horário que o paciente aceitou ainda está livre NA FRANQUIA? Marca e cancela na hora com o
+ * paciente de sondagem — mesma técnica do `consultar_horarios`. `null` = não deu pra sondar
+ * (sem paciente de sondagem); aí não bloqueia nada.
+ *
+ * Existe por causa do vazamento medido em 23/09/2026: em 30 dias a IA criou 226 pacientes na
+ * franquia que NUNCA viraram agendamento, contra 65 que viraram. O cadastro vinha antes da reserva,
+ * então toda reserva recusada deixava um paciente fantasma no sistema da clínica.
+ */
+export async function horarioAindaLivre(unit: Unit, dataHoraLocal: string): Promise<boolean | null> {
+  const sonda = await clienteDeSondagem(unit);
+  if (!sonda) return null;
+  const r = await SpineService.createSchedule(unit, { idClient: sonda, dateAttendanceLocal: dataHoraLocal, idCategory: 1 });
+  if (!r.ok || !r.data?.idSchedule) return false;
+  const c = await SpineService.cancelSchedule(unit, r.data.idSchedule);
+  if (!c.ok) logger.warn({ idSchedule: r.data.idSchedule, dataHoraLocal, unit: unit.slug }, 'sondagem do cadastro: NÃO consegui cancelar — agendamento fantasma na franquia');
+  return true;
+}
+
 let sondaCache: { unitId: string; idClient: number; em: number } | null = null;
 
 async function clienteDeSondagem(unit: Unit): Promise<number | null> {
@@ -553,6 +572,25 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
       const fone = SpineService.normalizarWhatsapp(args.telefone);
       if (!fone || fone.replace(/\D/g, '').length < 12) {
         return 'RECUSADO: telefone incompleto. Peça o número com DDD.';
+      }
+
+      // O horário aceito ainda está livre? Se a franquia recusar, o agendamento logo abaixo ia
+      // falhar e o paciente já teria sido criado — o fantasma que enche o CRM da clínica.
+      const dq = quando.quando;
+      const p2 = (n: number) => String(n).padStart(2, '0');
+      const diaEscolhido = `${dq.getFullYear()}-${p2(dq.getMonth() + 1)}-${p2(dq.getDate())}`;
+      const horaEscolhida = `${p2(dq.getHours())}:${p2(dq.getMinutes())}`;
+      const livre = await horarioAindaLivre(fresca, `${diaEscolhido}T${horaEscolhida}:00`).catch(() => null);
+      if (livre === false) {
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title: `cadastrar_paciente RECUSADO: a franquia não aceita ${diaEscolhido} ${horaEscolhida}`,
+          payload: { nome: args.nome, horarioEscolhido: args.horarioEscolhido },
+        });
+        return (
+          `RECUSADO: o horário ${horaEscolhida} de ${diaEscolhido} não está mais livre na clínica. ` +
+          'NÃO cadastrei o paciente. Chame consultar_horarios de novo e ofereça os horários que voltarem.'
+        );
       }
 
       const jaTem = await SpineService.searchClients(fresca, args.nome);
