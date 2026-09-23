@@ -18,7 +18,7 @@ function ag(partial: Partial<SpineSchedule> & { h: number; idStatus: number; cat
   } as unknown as SpineSchedule;
 }
 
-function entrada(status: string, agendamentos: SpineSchedule[], tratamentos: Array<{ idStatus: number }> = [], funil: 'COMERCIAL' | 'TRATAMENTO' = 'COMERCIAL'): EntradaMovimento {
+function entrada(status: string, agendamentos: SpineSchedule[], tratamentos: Array<{ idStatus: number | null; statusName?: string | null }> = [], funil: 'COMERCIAL' | 'TRATAMENTO' = 'COMERCIAL'): EntradaMovimento {
   return { atual: { funil, status }, agendamentos, tratamentos, agoraEpoch: AGORA, horasAteNegociacao: 48 };
 }
 
