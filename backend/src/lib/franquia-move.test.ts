@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ETAPA, ehEtapaDeEntrada, horasAteNegociacao, moveLiberado, planejarMovimento, tratamentoAberto, type EntradaMovimento } from './franquia-move.js';
+import { ETAPA, REVISAO_FOLGA_S, ehEtapaDeEntrada, horasAteNegociacao, moveLiberado, planejarMovimento, recortarHistorico, tratamentoAberto, type EntradaMovimento } from './franquia-move.js';
 import type { SpineSchedule } from '../services/spine.service.js';
 
 const AGORA = Date.parse('2026-09-18T15:00:00Z') / 1000;
@@ -195,4 +195,21 @@ test('consulta desmarcada sem remarcação tira o cartão de AGENDADO e leva pra
   assert.equal(planejarMovimento(entrada(ETAPA.QUALIFICACAO, [ag({ h: -48, idStatus: 57 })])), null, 'só sai de AGENDADO');
   assert.equal(planejarMovimento(entrada(ETAPA.ESPERA, [ag({ h: -48, idStatus: 57 })])), null, 'já está em espera');
   assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -48, idStatus: 57 })], [{ idStatus: 45 }]))?.para, ETAPA.GANHO, 'tratamento aberto vale mais que a consulta');
+});
+
+test('recortarHistorico: só o ciclo atual e só tratamento aberto (review 23/09)', () => {
+  const cartao = AGORA - 10 * 86_400; // consulta do cartão há 10 dias
+  const desde = cartao - REVISAO_FOLGA_S;
+  const hist = {
+    schedules: [ag({ h: -24 * 400, idStatus: 42 }), ag({ h: -24 * 10, idStatus: 57 }), ag({ h: 24 * 3, idStatus: 37 })],
+    treatments: [{ idStatus: 46, statusName: 'FINALIZADO' }, { idStatus: 45, statusName: 'EM ANDAMENTO' }, { idStatus: null, statusName: 'CANCELADO' }],
+  };
+  const r = recortarHistorico(hist, desde);
+  assert.equal(r.schedules.length, 2, 'a avaliação de 400 dias atrás sai');
+  assert.deepEqual(r.treatments.map((t) => t.statusName), ['EM ANDAMENTO']);
+  // com o recorte, paciente tratado em 2025 que voltou e desmarcou vai pra EM ESPERA, não pra GANHO nem COMPARECEU
+  const m = planejarMovimento(entrada(ETAPA.AGENDADO, r.schedules.filter((s) => s.idStatus !== 37), r.treatments.filter((t) => t.statusName !== 'EM ANDAMENTO')));
+  assert.equal(m?.para, ETAPA.ESPERA);
+  const semRecorte = planejarMovimento(entrada(ETAPA.AGENDADO, hist.schedules.filter((s) => s.idStatus !== 37), [{ idStatus: 46 }]));
+  assert.equal(semRecorte?.para, ETAPA.GANHO, 'sem o recorte o FINALIZADO velho levaria a GANHO — é o bug que o recorte evita');
 });

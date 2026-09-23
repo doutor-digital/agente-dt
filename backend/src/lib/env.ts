@@ -61,6 +61,8 @@ const schema = z.object({
   SOFIA_CALADA_SLUGS: z.string().optional(),
   /** Unidades onde lead sem nome vira "Lead dd/mm/aaaa" ("Lead 2 dd/mm/aaaa" pro segundo do dia) na 1ª mensagem (csv; `*` = todas). */
   TITULO_PADRAO_SLUGS: z.string().optional(),
+  /** Fase 2, revisão dos cartões em AGENDADO com consulta mais velha que D-3 pelo histórico do paciente (csv; `*` = todas; vazio = desligado). */
+  FRANQUIA_REVISAO_SLUGS: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

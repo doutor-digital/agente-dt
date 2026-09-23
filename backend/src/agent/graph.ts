@@ -47,6 +47,7 @@ import {
   FALLBACK_TETO,
 } from './llm-policy.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { ehSemNome, ehTituloPadrao } from '../lib/titulo-padrao.js';
 
 let checkpointerInstance: PostgresSaver | null = null;
 
@@ -784,9 +785,10 @@ async function maybeAutoUpdateLeadTitle({
   try {
     const lead = await kommo.getLead(leadId);
     const current = (lead.name ?? '').trim();
+    // "Lead #123" do Kommo e o nosso provisório "Lead 23/09/2026" são placeholders: o nome capturado vence
     const looksGeneric =
-      current.length === 0 ||
-      /^lead\s*#?\d+$/i.test(current) ||
+      ehSemNome(current) ||
+      ehTituloPadrao(current) ||
       current.toLowerCase().includes(display.toLowerCase());
     if (!looksGeneric) {
       await recorder.step({
