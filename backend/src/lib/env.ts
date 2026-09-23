@@ -63,6 +63,8 @@ const schema = z.object({
   TITULO_PADRAO_SLUGS: z.string().optional(),
   /** Fase 2, revisão dos cartões em AGENDADO com consulta mais velha que D-3 pelo histórico do paciente (csv; `*` = todas; vazio = desligado). */
   FRANQUIA_REVISAO_SLUGS: z.string().optional(),
+  /** `1` = a revisão pelo histórico só registra o que faria (rodada de prova em produção). */
+  FRANQUIA_REVISAO_SECO: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

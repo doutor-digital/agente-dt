@@ -19,8 +19,10 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, REVISAO_FOLGA_S, horasAteNegociacao, moveLiberado, planejarMovimento, recortarHistorico, tratamentoAberto, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, moveLiberado, planejarMovimento, recortarHistorico, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
+import { fecharComoPerdido } from './parados-worker.js';
+import type { DecisaoParado } from './parados.js';
 
 const SWEEP_MS = 15 * 60_000;
 const PRIMEIRA_MS = 90_000;
@@ -227,10 +229,26 @@ export async function historicoDoPaciente(unit: Unit, idClient: number | null): 
   return out;
 }
 
-async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync): Promise<void> {
+async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = ''): Promise<void> {
   const alvo = funis.idDe(mov.funil, mov.para);
   if (!alvo) {
     logger.warn({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil }, 'franquia-move: etapa não existe nesta conta — não movi');
+    return;
+  }
+  // PERDIDO pela jornada (fato velho na franquia): mesmo fecho do worker de parados — motivo de perda,
+  // etiqueta NO_FOLLOW_UP quando o fato é velho demais pra régua, nota no cartão, confere a etapa antes.
+  if (normalizarNome(mov.para) === normalizarNome(ETAPA.PERDIDO)) {
+    const d: DecisaoParado = { para: 'PERDIDO', regra: mov.motivo, dias: mov.dias ?? 0, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua === true };
+    try {
+      if (await fecharComoPerdido(unit, kommo, funis, leadId, deEtapa, d, false)) {
+        resumo.movimentos++;
+        logger.info({ unit: unit.slug, leadId, de: deEtapa, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: d.semRegua }, 'franquia-move: cartão fechado como PERDIDO pela jornada');
+      }
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug, leadId }, 'franquia-move: falha ao fechar como PERDIDO');
+    }
+    await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
     return;
   }
   try {
@@ -285,7 +303,8 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo
   let clientes: Array<{ idClient: number | null; name: string | null; whatsapp: string | null }> = [];
   for (const termo of termos) {
     const r = await SpineService.searchClients(unit, termo, 50);
-    if (!r.ok || !r.data) return null;
+    // erro da API não é "não achei": lança, pra ninguém guardar negativo nem mandar o cartão pra CONFERIR
+    if (!r.ok || !r.data) throw new Error(`franquia clients/search falhou: ${r.ok ? 'sem dados' : r.error}`);
     clientes = r.data.clients.filter((c) => c.idClient);
     if (clientes.length > 0) break;
   }
@@ -389,6 +408,12 @@ interface CtxSync {
   ops: ReturnType<typeof opcoes>;
   agoraEpoch: number;
   resumo: ResumoSync;
+  /** `FRANQUIA_REVISAO_SECO=1`: a revisão pelo histórico só registra o que faria (campos e etapa); a varredura normal não muda */
+  seco?: boolean;
+}
+
+function revisaoSeca(raw: string | undefined = process.env.FRANQUIA_REVISAO_SECO): boolean {
+  return /^(1|true|sim)$/i.test((raw ?? '').trim());
 }
 
 type Historico = NonNullable<Awaited<ReturnType<typeof historicoDoPaciente>>>;
@@ -406,7 +431,7 @@ interface PacienteDoCartao {
  * quando a etapa exige — GANHO e funil TRATAMENTO).
  */
 async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null = null): Promise<void> {
-  const { unit, kommo, funis, mapa, ops, agoraEpoch, resumo } = ctx;
+  const { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, seco } = ctx;
   const consulta = escolherConsulta(p.consultas);
   const consultaEpoch = consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null;
   const feitoPelaIa = consulta?.idSchedule
@@ -416,6 +441,10 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   for (const w of escritas) {
     const info = mapa[w.campo];
     if (!info) continue;
+    if (seco) {
+      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
+      continue;
+    }
     try {
       await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, w.valor, info.enums);
       resumo.escritas++;
@@ -447,61 +476,116 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     }
   }
   const mov = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() });
-  if (mov) await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo);
+  if (!mov) return;
+  if (seco) {
+    logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
+    return;
+  }
+  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
 }
 
 const REVISAO_MAX_POR_VARREDURA = Number(process.env.FRANQUIA_REVISAO_MAX) || 60;
 
 /**
- * Cartões parados em AGENDADO com «◷ Data da Consulta» mais velha que a janela da agenda (D-3): a
- * varredura normal nunca os enxerga (achado do João, 23/09/2026 — 53 cartões da Serra assim, um deles
- * desmarcado em fevereiro). Caminho inverso: cartão → paciente (vínculo, nome sem a data da SDR,
- * telefone) → histórico do paciente (`GET /clients/{id}`, 1×/h) → mesma fase 1 e mesma máquina de etapas.
- * Quem não é achado na franquia fica onde está — a Conferência do widget aponta pra SDR.
- * Os gatilhos dessas etapas na Serra são relativos à «Data da Consulta»: hora no passado não dispara.
+ * Quais cartões a revisão pelo histórico olha (23/09/2026, pedido do João: "tem que puxar tudo certinho"):
+ * - CONFERIR NA FRANQUIA: todos (achou o paciente? volta pra etapa certa; 30 d sem acerto → PERDIDO)
+ * - AGENDADO com «◷ Data da Consulta» mais velha que D-3 ou vazia (a agenda D-3…D+45 nunca os vê)
+ * - COMPARECEU / EM NEGOCIAÇÃO cuja Situação no cartão não é "Atendido" (a SDR moveu na mão, a franquia não confirmou)
  */
-async function revisarAgendadosPassados(ctx: CtxSync): Promise<void> {
+export function candidatoARevisao(etapa: string, valores: Record<string, string | null>, corteEpoch: number): boolean {
+  const n = normalizarNome(etapa);
+  const data = Number(valores[CAMPOS_SYNC.DATA_CONSULTA] ?? NaN);
+  if (n === normalizarNome(ETAPA.CONFERIR)) return true;
+  if (n === normalizarNome(ETAPA.AGENDADO)) return !Number.isFinite(data) || data < corteEpoch;
+  if (n === normalizarNome(ETAPA.COMPARECEU) || n === normalizarNome(ETAPA.NEGOCIACAO)) {
+    return normalizar(valores[CAMPOS_SYNC.SITUACAO]) !== 'atendido' || !Number.isFinite(data);
+  }
+  return false;
+}
+
+function notaConferir(nome: string): string {
+  return `🔎 A franquia não tem este paciente pelo nome «${nome.trim()}» nem pelo telefone do contato. Acerte o cadastro lá (nome e WhatsApp) ou o telefone aqui no cartão: corrigido, o cartão volta sozinho pra etapa certa em até 15 min. Sem acerto em ${JORNADA.CONFERIR_MAX_DIAS} dias vira PERDIDO ("${MOTIVO_PERDA.SEM_CADASTRO}").`;
+}
+
+/**
+ * Caminho inverso: cartão → paciente (vínculo, nome sem a data da SDR, telefone) → histórico do
+ * paciente (`GET /clients/{id}`, 1×/h) → mesma fase 1 e mesma máquina de etapas (jornada pela idade
+ * do fato). Quem a franquia não conhece vai pra CONFERIR NA FRANQUIA (fila da SDR) e, 30 d depois sem
+ * acerto, PERDIDO "sem cadastro". Erro da API da franquia não move nada (a busca lança).
+ * Ex-paciente (tratamento finalizado, nada aberto) que aparece em etapa comercial: só registro — a ALTA
+ * dispara templates de parabéns e não cabe meses depois.
+ */
+async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
+  const seco = revisaoSeca();
+  const ctx: CtxSync = { ...ctxBase, seco };
   const { unit, kommo, funis, mapa, agoraEpoch, resumo } = ctx;
   if (!funis) return;
   if (!slugsLiberados(process.env.FRANQUIA_REVISAO_SLUGS)(unit.slug)) return;
-  const agendado = funis.idDe('COMERCIAL', ETAPA.AGENDADO);
-  if (!agendado) return;
+  if (seco) logger.info({ unit: unit.slug }, 'franquia-move [seco]: revisão pelo histórico só registra, não mexe');
   const corte = agoraEpoch - DIAS_ATRAS * 86_400;
+  const conferir = funis.idDe('COMERCIAL', ETAPA.CONFERIR);
+  if (!conferir) logger.warn({ unit: unit.slug }, `franquia-move: conta sem a etapa "${ETAPA.CONFERIR}" — cartão sem paciente fica onde está`);
   let avaliados = 0;
-  for (let page = 1; page <= 20; page++) {
-    const leads = await kommo.listLeadsPorEtapa(agendado.pipelineId, agendado.statusId, 250, page, true);
-    if (leads.length === 0) break;
-    for (const lead of leads) {
-      const data = Number(valoresDoLead(lead, mapa)[CAMPOS_SYNC.DATA_CONSULTA] ?? NaN);
-      if (!Number.isFinite(data) || data >= corte) continue;
-      // já procurei este e não achei na franquia (cache 6 h): não gasta a cota da varredura com ele
-      const lembrado = cacheIdClient.get(`${unit.id}:${lead.id}`);
-      if (lembrado && lembrado.idClient === null && lembrado.expiraEm > Date.now()) continue;
-      if (avaliados >= REVISAO_MAX_POR_VARREDURA) return;
-      avaliados++;
-      try {
-        const idClient = await idClientDoLead(unit, lead.id, lead.name ?? null, { kommo, contatoId: lead._embedded?.contacts?.[0]?.id ?? null });
-        if (!idClient) {
-          logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name }, 'franquia-move: AGENDADO antigo sem paciente na franquia — fica pra SDR');
-          continue;
+  for (const etapa of [ETAPA.CONFERIR, ETAPA.AGENDADO, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO]) {
+    const alvo = funis.idDe('COMERCIAL', etapa);
+    if (!alvo) continue;
+    const emConferir = etapa === ETAPA.CONFERIR;
+    for (let page = 1; page <= 20; page++) {
+      const leads = await kommo.listLeadsPorEtapa(alvo.pipelineId, alvo.statusId, 250, page, true);
+      if (leads.length === 0) break;
+      for (const lead of leads) {
+        if (!candidatoARevisao(etapa, valoresDoLead(lead, mapa), corte)) continue;
+        // já procurei este e não achei (cache 6 h): não gasta cota nem chamada; em CONFERIR ainda vale a regra dos 30 d
+        const lembrado = cacheIdClient.get(`${unit.id}:${lead.id}`);
+        const negativoLembrado = !!lembrado && lembrado.idClient === null && lembrado.expiraEm > Date.now();
+        if (negativoLembrado && !emConferir) continue;
+        if (!negativoLembrado) {
+          if (avaliados >= REVISAO_MAX_POR_VARREDURA) return;
+          avaliados++;
         }
-        const hist = await historicoDoPaciente(unit, idClient);
-        if (!hist) continue;
-        // só o ciclo deste cartão: nada de avaliação de 2025 nem tratamento finalizado de ciclo velho
-        const desde = Math.min(data, lead.created_at ?? data) - REVISAO_FOLGA_S;
-        const recorte = recortarHistorico(hist, desde);
-        if (recorte.schedules.length === 0 && recorte.treatments.length === 0) {
-          logger.info({ unit: unit.slug, leadId: lead.id, idClient }, 'franquia-move: AGENDADO antigo sem nada deste ciclo no histórico — fica');
-          continue;
+        try {
+          const idClient = negativoLembrado ? null : await idClientDoLead(unit, lead.id, lead.name ?? null, { kommo, contatoId: lead._embedded?.contacts?.[0]?.id ?? null });
+          if (!idClient) {
+            if (emConferir) {
+              const parado = (agoraEpoch - (lead.updated_at ?? agoraEpoch)) / 86_400;
+              if (parado > JORNADA.CONFERIR_MAX_DIAS) {
+                const mov: Movimento = { funil: 'COMERCIAL', para: ETAPA.PERDIDO, motivo: `${Math.floor(parado)} d em ${ETAPA.CONFERIR} sem acerto do cadastro`, motivoPerda: MOTIVO_PERDA.SEM_CADASTRO, semRegua: true, dias: Math.floor(parado) };
+                if (seco) logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
+                else await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, etapa);
+              }
+              continue;
+            }
+            if (!conferir) continue;
+            if (seco) {
+              logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: ETAPA.CONFERIR }, 'franquia-move [seco]: moveria');
+              continue;
+            }
+            await kommo.moveStage({ leadId: lead.id, statusId: conferir.statusId, pipelineId: conferir.pipelineId });
+            resumo.movimentos++;
+            await kommo.addLeadNote(lead.id, notaConferir(lead.name ?? '')).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-move: nota de CONFERIR falhou'));
+            logger.info({ unit: unit.slug, leadId: lead.id, de: etapa, nome: lead.name }, `franquia-move: paciente não achado na franquia — cartão foi pra ${ETAPA.CONFERIR}`);
+            await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
+            continue;
+          }
+          const hist = await historicoDoPaciente(unit, idClient);
+          if (!hist) continue;
+          // consultas inteiras (a âncora é a última avaliação); tratamento só o aberto — finalizado de ciclo velho não leva a GANHO
+          const recorte = recortarHistorico(hist, 0);
+          const exPaciente = recorte.treatments.length === 0 && hist.treatments.some(tratamentoFinalizado);
+          if (recorte.schedules.length === 0 && recorte.treatments.length === 0) {
+            logger.info({ unit: unit.slug, leadId: lead.id, idClient, exPaciente }, 'franquia-move: paciente achado, mas sem consulta nem tratamento aberto no histórico — fica');
+            continue;
+          }
+          if (exPaciente) logger.info({ unit: unit.slug, leadId: lead.id, idClient, de: etapa }, 'franquia-move: ex-paciente (tratamento finalizado) em etapa comercial — não levo pra ALTA por aqui');
+          resumo.revisados++;
+          await processarCartao(ctx, lead.id, lead, { nome: lead.name ?? '', idClient, consultas: recorte.schedules, tratamento: null }, recorte);
+        } catch (err) {
+          resumo.erros++;
+          logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id, de: etapa }, 'franquia-move: falha na revisão pelo histórico');
         }
-        resumo.revisados++;
-        await processarCartao(ctx, lead.id, lead, { nome: lead.name ?? '', idClient, consultas: recorte.schedules, tratamento: null }, recorte);
-      } catch (err) {
-        resumo.erros++;
-        logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-move: falha na revisão de AGENDADO antigo');
       }
+      if (leads.length < 250) break;
     }
-    if (leads.length < 250) break;
   }
 }
 
@@ -576,10 +660,10 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
 
   if (funis) {
     try {
-      await revisarAgendadosPassados(ctx);
+      await revisarPeloHistorico(ctx);
     } catch (err) {
       resumo.erros++;
-      logger.warn({ err, unit: unit.slug }, 'franquia-move: falha na revisão dos AGENDADO antigos');
+      logger.warn({ err, unit: unit.slug }, 'franquia-move: falha na revisão pelo histórico');
     }
     try {
       await passarNegociacao(unit, kommo, funis, mapa, resumo);
