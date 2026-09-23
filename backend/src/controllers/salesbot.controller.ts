@@ -8,7 +8,8 @@ import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder } from '../agent/trace-recorder.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
-import { isLeadPaused } from '../services/kommo.service.js';
+import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
+import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 
 const payloadSchema = z
   .object({
@@ -102,6 +103,12 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     phone,
     channel: 'salesbot',
   });
+  // caminho do Salesbot também não passa pelo webhook: lead sem nome ganha "Lead dd/mm/aaaa" por aqui (TITULO_PADRAO_SLUGS)
+  if (Number.isFinite(Number(leadId))) {
+    void garantirTituloPadrao(unit, createKommoClient(unit), Number(leadId)).catch((err) =>
+      logger.warn({ err: String(err), leadId, unit: unit.slug }, 'titulo-padrao: falha ao renomear o lead (salesbot)'),
+    );
+  }
   await addMessage({
     conversationId: conv.id,
     traceId: trace.id,

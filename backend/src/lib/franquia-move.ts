@@ -271,6 +271,27 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   return null;
 }
 
+/** Quanto antes da consulta do cartão (ou da criação do lead) o histórico ainda é "deste ciclo". */
+export const REVISAO_FOLGA_S = 30 * 24 * 3600;
+
+/**
+ * Recorte do histórico do paciente pra revisar um cartão em AGENDADO (achados do review, 23/09/2026):
+ * a máquina de etapas foi desenhada pra janela D-3…D+45, não pro histórico inteiro. Só entram as
+ * consultas/sessões a partir de `desdeEpoch` (avaliação atendida em 2025 não pode reescrever a Data da
+ * Consulta nem levar pra COMPARECEU) e só tratamento ABERTO (finalizado/cancelado de ciclo velho levaria
+ * o cartão a GANHO e o n8n mandaria Purchase falso pra Meta).
+ */
+export function recortarHistorico<S extends Pick<SpineSchedule, 'dateAttendanceUtc'>, T extends TratamentoParaEtapa>(
+  hist: { schedules: S[]; treatments: T[] },
+  desdeEpoch: number,
+): { schedules: S[]; treatments: T[] } {
+  const schedules = hist.schedules.filter((s) => {
+    const t = s.dateAttendanceUtc ? Math.floor(Date.parse(s.dateAttendanceUtc) / 1000) : NaN;
+    return Number.isFinite(t) && t >= desdeEpoch;
+  });
+  return { schedules, treatments: hist.treatments.filter(tratamentoAberto) };
+}
+
 export function moveLiberado(slug: string, raw: string | undefined = process.env.FRANQUIA_MOVE_SLUGS): boolean {
   const lista = (raw ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
   if (lista.length === 0) return false;
