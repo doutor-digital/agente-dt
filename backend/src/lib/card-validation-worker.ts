@@ -362,7 +362,24 @@ export function avaliarLead(lead: KommoLead, ctx: ContextoUnidade): Array<{ key:
   return out;
 }
 
+/**
+ * Cartão enxuto (23/09/2026, decisão do João: "recalibrar pro cartão enxuto"): a franquia preenche e move,
+ * o widget (Conferência) aponta o que a franquia não sabe. O vigia só cobra o que continua humano — o
+ * Valor do tratamento. As outras regras são do cartão de 17 obrigatórios e marcavam 2.279 cartões na Serra.
+ */
+const REGRAS_ENXUTO = new Set<string>(['H_fechou_sem_valor']);
+export function cartaoEnxuto(slug: string, raw: string | undefined = process.env.CARTAO_ENXUTO_SLUGS): boolean {
+  const lista = (raw ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+  return lista.includes('*') || lista.includes(slug);
+}
+function regrasDaUnidade(unit: Unit): Regra[] {
+  if (!cartaoEnxuto(unit.slug)) return REGRAS_CARD;
+  // regra fora do enxuto "não se aplica": a reconciliação abaixo apaga a pendência antiga e tira a etiqueta
+  return REGRAS_CARD.map((r) => (REGRAS_ENXUTO.has(r.key) ? r : { ...r, aplica: () => false }));
+}
+
 async function validarUnidade(unit: Unit): Promise<void> {
+  const regras = regrasDaUnidade(unit);
   const desde = Math.floor((Date.now() - LOOKBACK_MIN * 60_000) / 1000);
   const kommo = createKommoClient(unit);
   const ctx = await contextoDaUnidade(unit, kommo);
@@ -393,7 +410,7 @@ async function validarUnidade(unit: Unit): Promise<void> {
 
     // 1) card_alert espelha o conjunto ATUAL de pendências. Regra que deixou de aplicar (lead mudou de
     //    etapa/funil) também sai — antes ficava fantasma na contagem (review, 21/09).
-    for (const regra of REGRAS_CARD) {
+    for (const regra of regras) {
       const chave = `${leadIdStr}|${regra.key}`;
       const erro = regra.aplica(lead, ctx) ? achados.get(regra.key) : undefined;
 
@@ -438,7 +455,7 @@ async function validarUnidade(unit: Unit): Promise<void> {
 
     // 2) Etiqueta + motivo reconciliados com o estado REAL do cartão, toda passada: se a Kommo falhou na
     //    anterior (429, incidente), aqui refaz; se o lead já está certo, não escreve nada.
-    const pendentes = REGRAS_CARD.map((r) => achados.get(r.key)).filter(Boolean) as string[];
+    const pendentes = regras.filter((r) => r.aplica(lead, ctx)).map((r) => achados.get(r.key)).filter(Boolean) as string[];
     const temTag = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_REVISAR_CARTAO);
     const textoAtual = String(valorDoCampoPorNome(lead, CAMPO_PENDENCIA_CARTAO) ?? '').trim();
     const textoDesejado = pendentes.join(' · ').slice(0, 250);

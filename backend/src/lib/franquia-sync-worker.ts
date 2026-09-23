@@ -19,10 +19,10 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, moveLiberado, planejarMovimento, recortarHistorico, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, moveLiberado, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
-import type { DecisaoParado } from './parados.js';
+import { TAG_SEM_REGUA, type DecisaoParado } from './parados.js';
 
 const SWEEP_MS = 15 * 60_000;
 const PRIMEIRA_MS = 90_000;
@@ -252,9 +252,11 @@ async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, le
     return;
   }
   try {
+    // sem régua (ex-paciente → ALTA): a etiqueta NO_FOLLOW_UP entra ANTES da mudança, é ela que os gatilhos da etapa leem
+    if (mov.semRegua) await kommo.addTag({ leadId, tags: [TAG_SEM_REGUA] }).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: não consegui etiquetar NO_FOLLOW_UP'));
     await kommo.moveStage({ leadId, statusId: alvo.statusId, pipelineId: alvo.pipelineId });
     resumo.movimentos++;
-    logger.info({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil, motivo: mov.motivo }, 'franquia-move: cartão movido');
+    logger.info({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil, motivo: mov.motivo, semRegua: mov.semRegua === true }, 'franquia-move: cartão movido');
   } catch (err) {
     resumo.erros++;
     logger.warn({ err, unit: unit.slug, leadId, para: mov.para }, 'franquia-move: falha ao mover');
@@ -569,16 +571,14 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
           }
           const hist = await historicoDoPaciente(unit, idClient);
           if (!hist) continue;
-          // consultas inteiras (a âncora é a última avaliação); tratamento só o aberto — finalizado de ciclo velho não leva a GANHO
-          const recorte = recortarHistorico(hist, 0);
-          const exPaciente = recorte.treatments.length === 0 && hist.treatments.some(tratamentoFinalizado);
-          if (recorte.schedules.length === 0 && recorte.treatments.length === 0) {
-            logger.info({ unit: unit.slug, leadId: lead.id, idClient, exPaciente }, 'franquia-move: paciente achado, mas sem consulta nem tratamento aberto no histórico — fica');
+          // histórico inteiro: a máquina decide pela última avaliação e trata finalizado velho como ex-paciente (ALTA sem mensagem)
+          if (hist.schedules.length === 0 && hist.treatments.length === 0) {
+            logger.info({ unit: unit.slug, leadId: lead.id, idClient }, 'franquia-move: paciente achado, mas sem consulta nem tratamento no histórico — fica');
             continue;
           }
-          if (exPaciente) logger.info({ unit: unit.slug, leadId: lead.id, idClient, de: etapa }, 'franquia-move: ex-paciente (tratamento finalizado) em etapa comercial — não levo pra ALTA por aqui');
+          if (hist.treatments.some(tratamentoFinalizado) && !hist.treatments.some(tratamentoAberto)) logger.info({ unit: unit.slug, leadId: lead.id, idClient, de: etapa }, 'franquia-move: ex-paciente (tratamento finalizado) em etapa comercial');
           resumo.revisados++;
-          await processarCartao(ctx, lead.id, lead, { nome: lead.name ?? '', idClient, consultas: recorte.schedules, tratamento: null }, recorte);
+          await processarCartao(ctx, lead.id, lead, { nome: lead.name ?? '', idClient, consultas: hist.schedules, tratamento: null }, hist);
         } catch (err) {
           resumo.erros++;
           logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id, de: etapa }, 'franquia-move: falha na revisão pelo histórico');

@@ -27,6 +27,7 @@
  *   EM QUALIFICAÇÃO, EM ESPERA e EM NEGOCIAÇÃO ficam com a Sofia/SDR e o worker de parados (alguém está trabalhando).
  *   Fato com mais de 90 d fecha SEM a régua de reengajamento de PERDIDO.
  *   paciente não achado na franquia    → CONFERIR NA FRANQUIA; 30 d sem acerto → PERDIDO "sem cadastro"
+ *   ex-paciente (finalizado, nada aberto, parado > 30 d) → ALTA sem mensagem (não passa por GANHO)
  *
  * O que NUNCA faz: tirar cartão de PERDIDO ou TRATAMENTO CANCELADO (decisão humana); tirar de ALTA
  * ou RETORNO PÓS-TRATAMENTO por outro motivo que não o retorno acima; mover pra PERDIDO ou EM ESPERA
@@ -107,6 +108,8 @@ export const JORNADA = {
   REGUA_PERDIDO_MAX_DIAS: 90,
   /** ninguém acertou o cadastro em CONFERIR NA FRANQUIA por este tempo: PERDIDO "sem cadastro" */
   CONFERIR_MAX_DIAS: 30,
+  /** tratamento finalizado e sem atividade há mais que isto = ex-paciente: ALTA sem mensagem, não GANHO */
+  EX_PACIENTE_DIAS: 30,
 } as const;
 
 export const MOTIVO_PERDA = {
@@ -251,6 +254,20 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
       if (temCancelado && !temAberto && !temFinalizado) return ir('TRATAMENTO', ETAPA.CANCELADO, 'tratamento cancelado na franquia');
     }
     return null;
+  }
+
+  // ── ex-paciente (decisão do João, 23/09/2026): tratamento FINALIZADO, nada aberto, nada marcado e sem
+  // atividade há mais de EX_PACIENTE_DIAS, com o cartão perdido numa etapa comercial parada → ALTA sem mensagem
+  // (etiqueta NO_FOLLOW_UP segura os gatilhos de ALTA). Não passa por GANHO: não é venda nova, não gera Purchase.
+  // Finalizado RECENTE segue o caminho normal (GANHO → EM TRATAMENTO → ALTA): ciclo rápido que a varredura perdeu.
+  if (atual.funil === 'COMERCIAL' && temFinalizado && !temAberto && !cicloAnterior) {
+    const temFutura = e.agendamentos.some((s) => (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO) && (epoch(s) ?? 0) > e.agoraEpoch);
+    const ultimaAtividade = Math.max(0, ...e.agendamentos.map((s) => epoch(s) ?? 0));
+    const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
+    const cartaoParado = emAlgum(status, [ETAPA.AGENDADO, ETAPA.NAO_COMPARECEU, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.CONFERIR]);
+    if (!temFutura && diasParado > JORNADA.EX_PACIENTE_DIAS && cartaoParado) {
+      return { funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: `ex-paciente: tratamento finalizado na franquia, sem atividade há ${Number.isFinite(diasParado) ? Math.floor(diasParado) : '+365'} d`, semRegua: true, dias: Number.isFinite(diasParado) ? Math.floor(diasParado) : 365 };
+    }
   }
 
   // ── tratamento existe: GANHO, e depois EM TRATAMENTO na 1ª sessão atendida ──
