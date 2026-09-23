@@ -273,7 +273,7 @@ export async function voltarDaEsperaSeRespondeu(unit: Unit, leadId: number, mens
     const funis = await funisDaUnidade(unit, kommo);
     const alvo = funis?.idDe('COMERCIAL', ETAPA.QUALIFICACAO);
     if (!alvo) return;
-    if (modoSeco()) {
+    if (modoSeco(unit.slug)) {
       logger.info({ unit: unit.slug, leadId }, 'parados [seco]: voltaria de EM ESPERA pra EM QUALIFICAÇÃO (paciente escreveu)');
       return;
     }
@@ -322,7 +322,7 @@ function cotaNova(seco: boolean) {
 }
 
 async function varrerConta(unit: Unit, unidadesDaConta: Unit[]): Promise<Resumo> {
-  const seco = modoSeco();
+  const seco = modoSeco(unit.slug);
   const conta = unit.kommoSubdomain ?? unit.slug;
   const resumo: Resumo = { unit: unit.slug, conta, seco, avaliados: 0, candidatos: 0, movidos: 0, segurosPelaFranquia: 0, erros: 0 };
   const agora = Math.floor(Date.now() / 1000);

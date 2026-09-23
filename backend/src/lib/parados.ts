@@ -68,10 +68,18 @@ export function paradosLiberado(slug: string, raw: string | undefined = process.
   return lista.includes('*') || lista.includes(slug);
 }
 
-/** `PARADOS_SECO=1`: decide e registra no log, mas não toca no Kommo. */
-export function modoSeco(raw: string | undefined = process.env.PARADOS_SECO): boolean {
+/**
+ * `PARADOS_SECO=1`: decide e registra no log, mas não toca no Kommo. `PARADOS_LIGADO_SLUGS` (csv) tira do
+ * seco unidade por unidade — 23/09/2026: Serra liga primeiro (cartão enxuto e gatilhos auditados), Imperatriz
+ * e laboratório seguem secos até migrar o cartão.
+ */
+export function modoSeco(slug?: string, raw: string | undefined = process.env.PARADOS_SECO, ligados: string | undefined = process.env.PARADOS_LIGADO_SLUGS): boolean {
   const v = (raw ?? '').trim().toLowerCase();
-  return v === '1' || v === 'true' || v === 'sim';
+  const seco = v === '1' || v === 'true' || v === 'sim';
+  if (!seco) return false;
+  if (!slug) return true;
+  const lista = (ligados ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+  return !(lista.includes('*') || lista.includes(slug));
 }
 
 const eh = (a: string, b: string) => normalizarNome(a) === normalizarNome(b);

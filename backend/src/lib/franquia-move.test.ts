@@ -262,3 +262,13 @@ test('jornada: a última AVALIAÇÃO é a âncora — atendida em 2025 + desmarc
   // futura marcada vence tudo, inclusive de COMPARECEU sem prova
   assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -20 * D, idStatus: 57 }), ag({ h: 3 * D, idStatus: 37 })]))?.para, ETAPA.AGENDADO);
 });
+
+test('ex-paciente: finalizado, nada aberto e parado há mais de 30 d vai pra ALTA sem mensagem, não pra GANHO', () => {
+  const m = planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -400 * D, idStatus: 42 })], [{ idStatus: 46, statusName: 'FINALIZADO' }]));
+  assert.equal(m?.funil, 'TRATAMENTO'); assert.equal(m?.para, ETAPA.ALTA); assert.equal(m?.semRegua, true);
+  assert.equal(planejarMovimento(entrada(ETAPA.CONFERIR, [ag({ h: -100 * D, idStatus: 42 })], [{ idStatus: 46 }]))?.para, ETAPA.ALTA, 'de CONFERIR também');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -10 * D, idStatus: 42 })], [{ idStatus: 46 }]))?.para, ETAPA.GANHO, 'finalizado recente: ciclo rápido, segue GANHO → EM TRATAMENTO → ALTA');
+  assert.equal(planejarMovimento(entrada(ETAPA.QUALIFICACAO, [ag({ h: -400 * D, idStatus: 42 })], [{ idStatus: 46 }]))?.para, ETAPA.GANHO, 'em EM QUALIFICAÇÃO não é cartão parado: regra antiga');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -400 * D, idStatus: 42 })], [{ idStatus: 46 }, { idStatus: 45 }]))?.para, ETAPA.GANHO, 'tratamento aberto vale mais');
+  assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -400 * D, idStatus: 42 }), ag({ h: 3 * D, idStatus: 37 })], [{ idStatus: 46 }]))?.para, ETAPA.GANHO, 'consulta futura marcada: não é ex-paciente parado');
+});
