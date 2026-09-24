@@ -18,7 +18,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
+import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
 import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, moveLiberado, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
@@ -717,7 +717,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
     if (!t.clientName) continue;
     const k = normalizar(t.clientName);
     const p = porPaciente.get(k) ?? { nome: t.clientName, idClient: t.idClient, consultas: [], tratamento: null };
-    p.tratamento = p.tratamento ?? t;
+    p.tratamento = melhorTratamento(p.tratamento, t);
     p.idClient = p.idClient ?? t.idClient;
     porPaciente.set(k, p);
   }

@@ -7,6 +7,7 @@ import {
   categoriaDaConsulta,
   chaveTelefone,
   escolherConsulta,
+  melhorTratamento,
   nomeDaFranquia,
   nomeParaBusca,
   normalizar,
@@ -208,4 +209,33 @@ test('valor do tratamento: a franquia manda quando lança preço; 0 nunca apaga 
   // franquia com 0 (o caso da Serra): não toca no campo, nem pra apagar
   assert.equal(valor(planejarEscritas({ ...base, valores: { '¤ Valor do tratamento': '4200' }, tratamento: trat(0) })), undefined);
   assert.equal(valor(planejarEscritas({ ...base, valores: {}, tratamento: trat(null) })), undefined);
+});
+
+test('melhorTratamento: aberto ganha de fechado; entre iguais, o mais novo', () => {
+  const t = (id: number, statusName: string | null, created: string | null) => ({
+    idTreatment: id, idClient: 1, clientName: 'X', category: null, local: null,
+    degree: null, staffName: null, statusName, price: null, created,
+  });
+
+  // o caso que motivou a função: janela de 12 meses traz o ciclo velho primeiro
+  const velhoFechado = t(1, 'FINALIZADO', '2026-04-10T10:00:00.000Z');
+  const novoAberto = t(2, 'EM ANDAMENTO', '2026-09-02T10:00:00.000Z');
+  assert.equal(melhorTratamento(velhoFechado, novoAberto)?.idTreatment, 2);
+  assert.equal(melhorTratamento(novoAberto, velhoFechado)?.idTreatment, 2, 'a ordem de chegada não muda o resultado');
+
+  // "NÃO INICIADO" (44) também é aberto
+  assert.equal(melhorTratamento(velhoFechado, t(3, 'NÃO INICIADO', '2026-05-01T10:00:00.000Z'))?.idTreatment, 3);
+
+  // dois abertos: vence o mais recente
+  assert.equal(melhorTratamento(novoAberto, t(4, 'EM ANDAMENTO', '2026-09-20T10:00:00.000Z'))?.idTreatment, 4);
+  // dois fechados: vence o mais recente
+  assert.equal(melhorTratamento(velhoFechado, t(5, 'FINALIZADO', '2026-08-01T10:00:00.000Z'))?.idTreatment, 5);
+  // sem statusName conta como aberto (mesma regra da máquina de etapas)
+  assert.equal(melhorTratamento(velhoFechado, t(6, null, '2026-01-01T10:00:00.000Z'))?.idTreatment, 6);
+  // sem data não derruba quem tem data
+  assert.equal(melhorTratamento(novoAberto, t(7, 'EM ANDAMENTO', null))?.idTreatment, 2);
+  // nulos
+  assert.equal(melhorTratamento(null, novoAberto)?.idTreatment, 2);
+  assert.equal(melhorTratamento(novoAberto, null)?.idTreatment, 2);
+  assert.equal(melhorTratamento(null, null), null);
 });

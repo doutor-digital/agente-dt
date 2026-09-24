@@ -16,7 +16,7 @@
  *  - campos de "quem/quando agendou" só são preenchidos se estiverem vazios;
  *  - nada de mover etapa nesta fase (mover dispara bot no Kommo).
  */
-import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
+import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 
 export const CAMPOS_SYNC = {
   DATA_CONSULTA: '◷ Data da Consulta',
@@ -66,6 +66,35 @@ export function nomeParaBusca(nome: string | null | undefined): string {
 }
 
 /** A franquia prefixa quem nasceu pela IA/n8n ("IA-MARIA DA PENHA", "N-KELLY"): não é parte do nome. Já normalizado. */
+/**
+ * Qual tratamento vale pro cartão quando a franquia devolve vários ciclos do mesmo paciente.
+ *
+ * Existe desde 24/09/2026, quando a busca passou a pedir 12 meses em vez do mês corrente
+ * (sem data, a rota devolve só o mês). Antes só havia um candidato e "o primeiro" bastava;
+ * agora o primeiro seria o mais VELHO — um FINALIZADO de abril apagaria o EM ANDAMENTO de hoje
+ * e levaria o cartão pra GANHO/ALTA errado.
+ *
+ * Regra: tratamento ABERTO ganha de fechado; entre dois do mesmo tipo, o mais recente.
+ * Sem `statusName` conta como aberto, igual ao `tratamentoAberto` da máquina de etapas.
+ */
+export function melhorTratamento(
+  atual: SpineTreatment | null,
+  novo: SpineTreatment | null,
+): SpineTreatment | null {
+  if (!atual) return novo;
+  if (!novo) return atual;
+  const aberto = (t: SpineTreatment) => {
+    const n = normalizar(t.statusName);
+    return !n || n.includes('andamento') || n.includes('nao iniciado') || n.includes('pendente');
+  };
+  if (aberto(atual) !== aberto(novo)) return aberto(atual) ? atual : novo;
+  const quando = (t: SpineTreatment) => {
+    const ms = Date.parse(t.created ?? '');
+    return Number.isFinite(ms) ? ms : 0;
+  };
+  return quando(novo) > quando(atual) ? novo : atual;
+}
+
 export function nomeDaFranquia(n: string | null | undefined): string {
   return normalizar(String(n ?? '').replace(/^(IA|N)-\s*/i, ''));
 }
