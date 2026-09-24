@@ -22,7 +22,7 @@ import {
 } from '../services/lead-memory.service.js';
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
-import { consumirNaoEntregue, renderEntregaFalha } from './entrega-falha.js';
+import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import {
@@ -1830,7 +1830,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
   // senão continua como se tivesse falado, e o paciente não viu nada.
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
-    const entregaBlock = renderEntregaFalha(consumirNaoEntregue(unit.id, leadId));
+    const presa = consumirNaoEntregueDetalhe(unit.id, leadId);
+    const entregaBlock = renderEntregaFalha(presa?.texto ?? null, presa?.motivo);
     if (entregaBlock) blocks.push(entregaBlock);
   }
 
@@ -1912,7 +1913,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
   // senão continua como se tivesse falado, e o paciente não viu nada.
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
-    const entregaBlock = renderEntregaFalha(consumirNaoEntregue(unit.id, leadId));
+    const presa = consumirNaoEntregueDetalhe(unit.id, leadId);
+    const entregaBlock = renderEntregaFalha(presa?.texto ?? null, presa?.motivo);
     if (entregaBlock) dynamic.push(entregaBlock);
   }
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
