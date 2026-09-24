@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, LogOut, Pause, Play } from 'lucide-react';
+import { Loader2, LogOut, Pause, Play, ThumbsDown } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
@@ -39,6 +39,69 @@ function quando(iso: string): string {
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} h`;
   const d = Math.floor(diff / 86_400_000);
   return d === 1 ? 'ontem' : `${d} dias`;
+}
+
+function reais(n: number): string {
+  return n >= 1000 ? `R$ ${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace('.', ',')} mil` : `R$ ${n}`;
+}
+
+/** Seta de comparação com o período anterior. Sem base, não inventa: não mostra nada. */
+function Delta({ agora, antes }: { agora: number; antes: number | null | undefined }) {
+  if (antes == null || antes === 0) return null;
+  const p = Math.round(((agora - antes) / antes) * 100);
+  if (p === 0) return <span className="text-[11px] text-[var(--bruma)]">igual ao mês passado</span>;
+  const subiu = p > 0;
+  return (
+    <span
+      className={clsx(
+        'text-[11px] font-semibold tabular-nums',
+        subiu ? 'text-[var(--carne)]' : 'text-[var(--alerta)]',
+      )}
+    >
+      {subiu ? '▲' : '▼'} {Math.abs(p)}% vs. mês passado
+    </span>
+  );
+}
+
+/** As 24 horas do dia. Responde "preciso de gente à noite?" sem ninguém perguntar. */
+function FaixaDeHoras({ horas }: { horas: number[] }) {
+  const topo = Math.max(...horas, 1);
+  const forte = horas.indexOf(topo);
+  const foraDoExpediente = horas.reduce((s, q, h) => (h < 8 || h >= 18 ? s + q : s), 0);
+  const total = horas.reduce((s, q) => s + q, 0);
+  const pct = total > 0 ? Math.round((foraDoExpediente / total) * 100) : 0;
+
+  return (
+    <div>
+      <div className="flex h-[52px] items-end gap-[2px]">
+        {horas.map((q, h) => (
+          <div
+            key={h}
+            title={`${h}h — ${q} mensagem(ns)`}
+            className={clsx(
+              'flex-1 rounded-t-[2px] transition-colors',
+              h < 8 || h >= 18 ? 'bg-[var(--vida)]/35' : 'bg-[var(--vida)]',
+              h === forte && 'bg-[var(--osso)]',
+            )}
+            style={{ height: `${Math.max(3, (q / topo) * 100)}%` }}
+          />
+        ))}
+      </div>
+      <div className="mt-2 flex justify-between text-[10.5px] text-[var(--bruma)]">
+        <span>0h</span>
+        <span>6h</span>
+        <span>12h</span>
+        <span>18h</span>
+        <span>23h</span>
+      </div>
+      {total > 0 && (
+        <p className="mt-3 text-[12.5px] leading-snug text-[var(--bruma)]">
+          Pico às <strong className="text-[var(--osso)]">{forte}h</strong>. {pct}% das mensagens
+          chegam fora do expediente — {pct >= 25 ? 'é aí que a Sofia paga o próprio custo.' : 'a maior parte cai no horário da equipe.'}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function espera(min: number): string {
@@ -81,7 +144,13 @@ function SinalVital({ viva }: { viva: boolean }) {
   );
 }
 
-function Coluna({ vertebras }: { vertebras: Vertebra[] }) {
+function Coluna({
+  vertebras,
+  anterior,
+}: {
+  vertebras: Vertebra[];
+  anterior: { chegaram: number; conversou: number } | null;
+}) {
   const topo = Math.max(...vertebras.map((v) => v.valor), 1);
 
   // onde a coluna mais afina — é a informação que o dono procura sem saber que procura
@@ -120,6 +189,16 @@ function Coluna({ vertebras }: { vertebras: Vertebra[] }) {
             <div className="group flex items-center gap-4">
               <span className="w-[152px] shrink-0 text-right text-[12.5px] leading-tight text-[var(--bruma)]">
                 {v.rotulo}
+                {i === 0 && anterior && (
+                  <span className="mt-0.5 block">
+                    <Delta agora={v.valor} antes={anterior.chegaram} />
+                  </span>
+                )}
+                {i === 1 && anterior && (
+                  <span className="mt-0.5 block">
+                    <Delta agora={v.valor} antes={anterior.conversou} />
+                  </span>
+                )}
               </span>
               <div className="flex flex-1 justify-center">
                 <div
@@ -163,12 +242,19 @@ export function MinhaIaPanel() {
   );
   const { data: estadoPausa } = usePolling(pausa, 30_000, [selectedUnitId]);
 
+  const extra = useMemo(
+    () => () => (selectedUnitId ? api.painelUnidade(selectedUnitId, DIAS) : Promise.resolve(null)),
+    [selectedUnitId],
+  );
+  const { data: mais } = usePolling(extra, 120_000, [selectedUnitId]);
+
   const conversas = useMemo(() => () => api.listConversations(selectedUnitId), [selectedUnitId]);
   const { data: listaConversas } = usePolling(conversas, 15_000, [selectedUnitId]);
 
   const [abertaId, setAbertaId] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<ConversationDetail | null>(null);
   const [mexendo, setMexendo] = useState(false);
+  const [marcadas, setMarcadas] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!abertaId) {
@@ -184,6 +270,23 @@ export function MinhaIaPanel() {
       vivo = false;
     };
   }, [abertaId]);
+
+  /**
+   * "Isso está errado" numa resposta da Sofia. Não é só desabafo: a mensagem marcada
+   * entra no prompt dela como exemplo a evitar, então o dono da clínica está ensinando
+   * a IA dele. Por isso o texto do botão fala de ensinar, não de reclamar.
+   */
+  async function marcarErrada(id: string, atual: boolean) {
+    const novo = !atual;
+    setMarcadas((m) => ({ ...m, [id]: novo }));
+    try {
+      await api.flagMessage(id, novo);
+      toast.success(novo ? 'Anotado. A Sofia aprende a não responder assim.' : 'Marca removida.');
+    } catch {
+      setMarcadas((m) => ({ ...m, [id]: atual }));
+      toast.error('Não consegui marcar agora.');
+    }
+  }
 
   async function mudarPausa(acao: 'hoje' | 'amanha' | 'retomar') {
     if (!selectedUnitId) return;
@@ -331,12 +434,38 @@ export function MinhaIaPanel() {
               </div>
             ) : (
               <div className="rounded-2xl border border-[var(--linha)] bg-[var(--placa)] px-6 py-7">
-                <Coluna vertebras={vertebras} />
+                <Coluna vertebras={vertebras} anterior={mais?.anterior ?? null} />
                 {(k?.aiAindaNoFuturo ?? 0) > 0 && (
                   <p className="mt-6 border-t border-[var(--linha)] pt-4 text-[12.5px] text-[var(--bruma)]">
                     Mais {k?.aiAindaNoFuturo} com consulta marcada para os próximos dias — ainda
                     podem virar tratamento.
                   </p>
+                )}
+                {(mais?.naMesa.length ?? 0) > 0 && (
+                  <div className="mt-6 border-t border-[var(--linha)] pt-5">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="font-display text-[26px] font-bold text-[var(--alerta)]">
+                        {reais((mais!.naMesa.length) * (mais!.ticketEstimadoBrl || 0))}
+                      </span>
+                      <span className="text-[13px] text-[var(--osso)]">
+                        parados na mesa — {mais!.naMesa.length}{' '}
+                        {mais!.naMesa.length === 1 ? 'pessoa avaliou' : 'pessoas avaliaram'} e não
+                        fechou tratamento
+                      </span>
+                    </div>
+                    <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+                      {mais!.naMesa.slice(0, 8).map((p) => (
+                        <li key={p.nome + p.quando} className="text-[12.5px] text-[var(--bruma)]">
+                          <span className="text-[var(--osso)]">{p.nome}</span>
+                          {p.quando && ` · ${p.quando.slice(8, 10)}/${p.quando.slice(5, 7)}`}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-3 text-[11.5px] text-[var(--bruma)]/70">
+                      Estimado pelo ticket mais comum da rede (R$ {mais!.ticketEstimadoBrl}). O valor
+                      real de cada caso está na ficha do paciente.
+                    </p>
+                  </div>
                 )}
               </div>
             )}
@@ -378,9 +507,51 @@ export function MinhaIaPanel() {
               </div>
             </section>
 
+            {/* sumindo do tratamento — receita já vendida escorrendo */}
+            {(mais?.sumindo.length ?? 0) > 0 && (
+              <section className="sobe" style={{ animationDelay: '120ms' }}>
+                <h2 className="font-display mb-1 text-[19px] font-bold">Sumindo do tratamento</h2>
+                <p className="mb-4 text-[12.5px] leading-snug text-[var(--bruma)]">
+                  Já pagaram e estão faltando às sessões seguidas. Uma ligação ainda traz de volta.
+                </p>
+                <div className="overflow-hidden rounded-2xl border border-[var(--linha)] bg-[var(--placa)]">
+                  {mais!.sumindo.map((p) => (
+                    <div
+                      key={p.nome}
+                      className="flex items-center gap-3 border-b border-[var(--linha)] px-4 py-3 last:border-b-0"
+                    >
+                      <span className="font-display w-7 shrink-0 text-center text-[17px] font-bold leading-none text-[var(--alerta)] tabular-nums">
+                        {p.faltasSeguidas}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[13.5px] font-semibold">{p.nome}</div>
+                        <div className="text-[12px] text-[var(--bruma)]">
+                          faltas seguidas · fez {p.feitas} de {p.total} sessões
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* a que horas eles chamam */}
+            {mais && mais.porHora.some((q) => q > 0) && (
+              <section className="sobe" style={{ animationDelay: '140ms' }}>
+                <h2 className="font-display mb-4 text-[19px] font-bold">A que horas eles chamam</h2>
+                <div className="rounded-2xl border border-[var(--linha)] bg-[var(--placa)] px-5 py-5">
+                  <FaixaDeHoras horas={mais.porHora} />
+                </div>
+              </section>
+            )}
+
             {/* o que ela falou */}
             <section className="sobe flex min-h-0 flex-1 flex-col" style={{ animationDelay: '160ms' }}>
-              <h2 className="font-display mb-4 text-[19px] font-bold">O que ela falou</h2>
+              <h2 className="font-display mb-1 text-[19px] font-bold">O que ela falou</h2>
+              <p className="mb-4 text-[12.5px] leading-snug text-[var(--bruma)]">
+                Achou uma resposta ruim? Passe o mouse nela e marque — a Sofia aprende a não
+                responder assim.
+              </p>
               <div className="overflow-hidden rounded-2xl border border-[var(--linha)] bg-[var(--placa)]">
                 <div className="max-h-[210px] overflow-auto">
                   {(listaConversas ?? []).slice(0, 30).map((c) => (
@@ -422,16 +593,32 @@ export function MinhaIaPanel() {
                         <div
                           key={m.id}
                           className={clsx(
-                            'flex',
+                            'group flex items-end gap-1.5',
                             m.role === 'assistant' ? 'justify-end' : 'justify-start',
                           )}
                         >
+                          {m.role === 'assistant' && (
+                            <button
+                              onClick={() => void marcarErrada(m.id, marcadas[m.id] ?? m.flagged ?? false)}
+                              title="Isso está errado — ensina a Sofia a não responder assim"
+                              className={clsx(
+                                'shrink-0 rounded-md p-1 transition',
+                                (marcadas[m.id] ?? m.flagged)
+                                  ? 'text-[var(--alerta)]'
+                                  : 'text-[var(--bruma)]/0 group-hover:text-[var(--bruma)] hover:!text-[var(--alerta)]',
+                              )}
+                            >
+                              <ThumbsDown size={13} />
+                            </button>
+                          )}
                           <div
                             className={clsx(
                               'max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-[12.5px] leading-relaxed',
                               m.role === 'assistant'
                                 ? 'bg-[var(--vida)]/15 text-[var(--osso)]'
                                 : 'bg-white/[0.06] text-[var(--osso)]',
+                              (marcadas[m.id] ?? m.flagged) &&
+                                'ring-1 ring-[var(--alerta)]/60',
                             )}
                           >
                             {m.content}

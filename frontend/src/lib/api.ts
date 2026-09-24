@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   PausaEstado,
+  PainelUnidade,
   AdminUser,
   AdminUserInput,
   AgentConfig,
@@ -603,6 +604,14 @@ export const api = {
   async getLlmCall(id: string): Promise<LlmCallDetail> {
     const { data } = await http.get<{ call: LlmCallDetail }>(`/llm-calls/${id}`);
     return data.call;
+  },
+
+  async painelUnidade(unitId: string, days = 30): Promise<PainelUnidade> {
+    const { data } = await http.get<PainelUnidade>(`/units/${unitId}/painel-unidade`, {
+      params: { days },
+      timeout: 30_000,
+    });
+    return data;
   },
 
   // Pausa da unidade — o franqueado liga e desliga a IA pela tela dele.

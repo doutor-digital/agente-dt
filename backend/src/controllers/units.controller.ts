@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { getWidgetConnection } from '../lib/widget-connection-monitor.js';
+import { painelDaUnidade } from '../services/painel-unidade.service.js';
 import { createKommoClient, KommoApiError } from '../services/kommo.service.js';
 import { funilDaIA } from '../services/funil-da-ia.service.js';
 import {
@@ -1758,4 +1759,31 @@ export async function widgetStatusHandler(req: Request, res: Response): Promise<
     message,
     lastEvent: last,
   });
+}
+
+/**
+ * GET /units/:id/painel-unidade — o extra da tela da unidade.
+ *
+ * Fica separado do /dashboard de propósito: aquele é do operador e já é pesado;
+ * este responde as quatro perguntas do dono da clínica e pode falhar sozinho sem
+ * derrubar o resto da tela.
+ */
+export async function painelUnidadeHandler(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id ?? '');
+  const days = Math.min(Math.max(Number(req.query.days ?? 30), 1), 120);
+  const unit = await prisma.unit.findUnique({
+    where: { id },
+    select: { id: true, slug: true, spineBaseUrl: true, spineToken: true, spineTimezone: true },
+  });
+  if (!unit) {
+    res.status(404).json({ error: 'unit_not_found' });
+    return;
+  }
+  const desde = new Date(Date.now() - days * 86_400_000);
+  try {
+    res.json(await painelDaUnidade(unit, desde));
+  } catch (err) {
+    logger.warn({ err, unit: unit.slug }, 'painel da unidade falhou');
+    res.json({ naMesa: [], ticketEstimadoBrl: 0, sumindo: [], porHora: Array.from({ length: 24 }, () => 0), anterior: null });
+  }
 }

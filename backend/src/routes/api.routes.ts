@@ -29,6 +29,7 @@ import {
   widgetStatusHandler,
   previewPromptHandler,
   dashboardHandler,
+  painelUnidadeHandler,
   dashboardAggregateHandler,
   leadsBucketHandler,
   metaValidateHandler,
@@ -285,6 +286,7 @@ apiRouter.get('/units/:id/pausa', requireUnitAccess, unitPausaGetHandler);
 apiRouter.post('/units/:id/pausa', requireUnitAccess, unitPausarHandler);
 apiRouter.delete('/units/:id/pausa', requireUnitAccess, unitRetomarHandler);
 apiRouter.get('/units/:id/dashboard', requireUnitAccess, dashboardHandler);
+apiRouter.get('/units/:id/painel-unidade', requireUnitAccess, painelUnidadeHandler);
 apiRouter.get('/units/:id/leads-bucket', requireUnitAccess, leadsBucketHandler);
 apiRouter.get('/units/:id/integrations', requireUnitAccess, getIntegrations);
 apiRouter.get('/units/:id/whatsapp-costs', requireUnitAccess, getWhatsappCostsHandler);
