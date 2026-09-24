@@ -519,8 +519,12 @@ function renderEsperaRules(intents: Record<string, number>): string {
   if (!statusId) return '';
   return `
 - EM ESPERA (statusId ${statusId}) — regras:
-  1. Só quando o paciente QUER e adia por um motivo concreto. "Não tenho interesse",
-     "não quero", "já resolvi" NÃO é espera: não mova; a equipe decide PERDIDO.
+  1. Só quando o paciente QUER e adia. "Não tenho interesse", "não quero", "já resolvi"
+     NÃO é espera: não mova; a equipe decide PERDIDO.
+     ADIAR NÃO PRECISA DE MOTIVO DETALHADO — estas frases JÁ SÃO espera, mova na hora:
+     "vou ver e te falo", "depois eu te falo", "vou pensar", "te retorno", "amanhã eu vejo",
+     "vou conversar com meu marido/minha esposa/minha filha", "esse mês não dá", "quando eu
+     receber", "estou viajando", "vou fazer os exames antes". Sem motivo claro, use "Vai decidir".
   2. ANTES de mover, salve os dois campos com as ferramentas de captura:
      ⊘ Motivo da espera (Exames · Vai decidir · Viajando · Financeiro agora não · Outro) e
      ◷ Retomar em. Use a data que o paciente disser; se não disser, conte a partir de hoje:
