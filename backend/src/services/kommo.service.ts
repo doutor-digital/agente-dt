@@ -204,6 +204,32 @@ const EMOJI_BMP_DOWNGRADE: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
+ * Converte o que a IA manda num campo `date`/`birthday` do Kommo pro epoch em segundos.
+ *
+ * BUG QUE ISTO CONSERTA (24/09/2026, caso da Cátia na Serra): a paciente pediu pra ser
+ * chamada "depois do dia 05 de outubro", a IA gravou certinho `2026-10-05`, e o cartão
+ * mostrou **04/10**. Motivo: `new Date('2026-10-05')` é meia-noite **UTC**, que em São Paulo
+ * ainda é dia 4 às 21h — e o Kommo trunca pro início do dia no fuso da conta. Toda data que
+ * a IA escrevia caía um dia antes: "Retomar em", "Data de alta", aniversário. O follow-up
+ * saía um dia antes do combinado.
+ *
+ * Conserto: data pura (`YYYY-MM-DD`) vira **meio-dia UTC**. De UTC-11 a UTC+11 o meio-dia cai
+ * sempre no mesmo dia do calendário, então o truncamento do Kommo devolve a data certa sem
+ * precisar saber o fuso da unidade. Quem manda data COM hora (ISO completo) segue como antes:
+ * ali a hora é informação, não ruído.
+ */
+export function epochDeCampoData(valor: string): number | null {
+  const puro = valor.trim();
+  // Só ISO. `Date.parse('05/10/2026')` não falha: devolve 01/05/2001 em silêncio, e aí o
+  // cartão fica com uma data inventada — pior que campo vazio. Formato brasileiro cai fora.
+  const soData = /^\d{4}-\d{2}-\d{2}$/.test(puro);
+  const comHora = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(puro);
+  if (!soData && !comHora) return null;
+  const ms = Date.parse(soData ? `${puro}T12:00:00Z` : puro);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+/**
  * Lê um valor em dinheiro do jeito que o modelo escreve.
  *
  * A IA transcreve o valor do comprovante como o paciente mandou: às vezes
@@ -801,11 +827,11 @@ export class KommoClient {
       if (typeof value === 'number') {
         unixSec = value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
       } else if (typeof value === 'string') {
-        const parsed = new Date(value).getTime();
-        if (!Number.isFinite(parsed)) {
+        const parsed = epochDeCampoData(value);
+        if (parsed == null) {
           throw new Error(`field ${fieldId} (${fieldType}) ISO inválido: ${value}`);
         }
-        unixSec = Math.floor(parsed / 1000);
+        unixSec = parsed;
       } else {
         throw new Error(`field ${fieldId} (${fieldType}) requer ISO string ou number`);
       }
