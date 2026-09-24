@@ -229,7 +229,7 @@ export function fixarLeadDaConversa(
  * Some também a chance de ele alucinar um lead alheio — o parâmetro que não
  * existe é o que não se erra.
  */
-function esconderLeadIdDoModelo(tool: DynamicStructuredTool): void {
+export function esconderLeadIdDoModelo(tool: DynamicStructuredTool): void {
   const schema = tool.schema as unknown as {
     shape?: Record<string, unknown>;
     omit?: (mask: Record<string, true>) => unknown;
@@ -355,6 +355,11 @@ export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder
     const cfg = toolConfigByName.get(t.name);
     return cfg ? cfg.enabled : true;
   });
+  // O prefixo aquecido tem que ser IDÊNTICO ao que o atendimento manda, senão o
+  // keepalive grava uma entrada de cache que ninguém lê — gasto pelo gasto. No
+  // atendimento quem tira o leadId do schema é o fixarLeadDaConversa; aqui não há
+  // lead, então a mesma poda entra na mão.
+  for (const t of tools) esconderLeadIdDoModelo(t);
   const modelName = unit.anthropicModel || 'claude-opus-4-8';
   const baseModel = createChatModel(unit, { model: modelName, temperature: config.temperature, maxTokens: 1 });
   if (strictToolsHabilitado()) aplicarStrictAnthropic(tools);

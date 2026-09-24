@@ -1167,14 +1167,14 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
         '(ex: "Posso te conectar com a equipe?").',
         'Se ele aceitar:',
         inc
-          ? '(1) PRIMEIRO chame resumir_lead_para_sdr({ leadId }) — gera resumo e grava em nota + campo custom; (2) DEPOIS chame pausar_ia. Sequência obrigatória nessa ordem; não pule o resumo.'
+          ? '(1) PRIMEIRO chame resumir_lead_para_sdr — gera resumo e grava em nota + campo custom; (2) DEPOIS chame pausar_ia. Sequência obrigatória nessa ordem; não pule o resumo.'
           : 'chame pausar_ia.',
       ].join(' ');
     }
     case 'transfer_without_permission': {
       const inc = params.includeSummary !== false;
       return inc
-        ? '(1) PRIMEIRO chame resumir_lead_para_sdr({ leadId }) — gera resumo e grava em nota + campo custom; (2) DEPOIS chame pausar_ia imediatamente (sem pedir confirmação). Sequência obrigatória nessa ordem; não pule o resumo.'
+        ? '(1) PRIMEIRO chame resumir_lead_para_sdr — gera resumo e grava em nota + campo custom; (2) DEPOIS chame pausar_ia imediatamente (sem pedir confirmação). Sequência obrigatória nessa ordem; não pule o resumo.'
         : 'chame pausar_ia imediatamente (sem pedir confirmação).';
     }
     case 'summarize_to_note': {
@@ -1633,22 +1633,21 @@ function renderEtapaLead(e: EstadoEtapaLead | null | undefined, timeZone?: strin
  * "me manda o pix que eu pago agora" virava "preciso do seu telefone com DDD".
  * O número já é conhecido: é o WhatsApp de onde a mensagem veio.
  */
-export function renderConversationContext(leadId: number, telefone?: string | null): string {
-  const linhas = [
-    `- leadId desta conversa: **${leadId}**`,
-    '- Ao chamar QUALQUER tool, use ESTE número EXATAMENTE como o argumento `leadId`.',
-    '- NUNCA passe 0, NUNCA passe a string "leadId", NUNCA invente outro número.',
-    `- Exemplo correto: aplicar_tag({ leadId: ${leadId}, tag: "..." }).`,
-  ];
+export function renderConversationContext(_leadId: number, telefone?: string | null): string {
+  // O leadId saiu daqui em 24/09/2026: ele não é mais argumento de ferramenta
+  // nenhuma — o código injeta o lead da conversa sozinho (esconderLeadIdDoModelo
+  // em graph.ts). Ensinar a passar um parâmetro que não existe só gastava token,
+  // na entrada e na saída.
   const fone = telefone?.trim();
-  if (fone) {
-    linhas.push(
+  if (!fone) return '';
+  return xmlBlock(
+    'contexto_conversa',
+    [
       `- Telefone do WhatsApp deste paciente: **${fone}**`,
       '- Use ESTE número em `cadastrar_paciente` e `agendar_consulta`. NÃO peça o telefone a ele — você já tem.',
       '- Só peça outro número se ELE disser que prefere ser contatado em um diferente.',
-    );
-  }
-  return xmlBlock('contexto_conversa', linhas.join('\n'));
+    ].join('\n'),
+  );
 }
 
 /**
