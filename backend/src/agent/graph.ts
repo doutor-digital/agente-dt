@@ -17,6 +17,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
+import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { avaliarChamadaFinal, INSTRUCAO_REFAZER_CTA } from './cta-final.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
@@ -682,7 +683,13 @@ export async function buildAgentGraph(
         }
       }
 
-      const guard = aplicarGuardrail(textoFinal, unit);
+      // Diminutivo sai aqui, no ÚNICO ponto onde a resposta ao paciente é finalizada — antes de
+      // qualquer caminho de entrega (chat com botões, Salesbot legado, MODO WIDGET). Ficava nos
+      // serviços de entrega e era errado por dois motivos: o modo widget escapava, e o
+      // sanitizador do cliente Kommo também escreve CAMPO, NOTA e TAREFA — ou seja, uma
+      // observação do paciente ("sente uma dorzinha ao levantar") era reescrita no cartão,
+      // mudando o que ele disse. Aqui só passa mensagem que vai para o paciente.
+      const guard = aplicarGuardrail(semDiminutivo(textoFinal), unit);
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';

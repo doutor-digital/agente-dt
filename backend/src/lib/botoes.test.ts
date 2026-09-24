@@ -35,6 +35,6 @@ test('legendaDoCartao: endereço + mapa + recado; sem nada, null', () => {
   const l = legendaDoCartao({ clinicAddress: 'Rua X, 10 — Centro', clinicMapUrl: 'https://maps.app.goo.gl/abc' });
   assert.match(l!, /📍 Rua X, 10 — Centro/);
   assert.match(l!, /🗺️ Como chegar: https:\/\/maps\.app\.goo\.gl\/abc/);
-  assert.match(l!, /15 minutinhos/);
+  assert.match(l!, /15 minutos/);
   assert.equal(legendaDoCartao({ clinicAddress: null, clinicMapUrl: null }), null);
 });

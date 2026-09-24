@@ -34,7 +34,7 @@ function amountApproved(v: number, approved: Set<number>): boolean {
 }
 
 const FALLBACK_PRECO =
-  'Sobre o valor, deixa eu confirmar certinho pra não te passar informação errada 🙏 ' +
+  'Sobre o valor, deixa eu confirmar direito pra não te passar informação errada 🙏 ' +
   'Já te falo por aqui, tá bem?';
 
 /**
@@ -91,7 +91,7 @@ function corrigirValores(
  * Verde entendeu que a clínica não sabia a própria chave Pix.
  */
 const FALLBACK_LACUNA =
-  'Deixa eu confirmar esse dado certinho com a equipe pra não te passar nada errado 🙏 ' +
+  'Deixa eu confirmar esse dado com a equipe pra não te passar nada errado 🙏 ' +
   'Já te retorno por aqui, tá bem?';
 
 const FALLBACK_CLINICO =

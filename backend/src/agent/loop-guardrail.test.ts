@@ -9,8 +9,8 @@ const repetiria = (ultima: string, nova: string) =>
   normalizarResposta(ultima) === normalizarResposta(nova);
 
 const FALLBACK_PRECO =
-  'Sobre o valor, deixa eu confirmar certinho pra não te passar informação errada 🙏 ' +
-  'Me conta rapidinho: qual é o seu incômodo e onde está doendo? Aí já te oriento sobre a consulta.';
+  'Sobre o valor, deixa eu confirmar direito pra não te passar informação errada 🙏 ' +
+  'Me conta: qual é o seu incômodo e onde está doendo? Aí já te oriento sobre a consulta.';
 
 test('caso real de Marabá: 2ª vez seguida do mesmo fallback é loop', () => {
   assert.equal(repetiria(FALLBACK_PRECO, FALLBACK_PRECO), true);
