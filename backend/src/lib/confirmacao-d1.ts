@@ -150,7 +150,7 @@ export async function tratarRespostaD1(args: {
     await kommo.sendChatReply({
       leadId,
       // Sem "amanhã": a mesma pergunta sai também dois dias antes (reforço D-2).
-      text: `Confirmado${nome}! 💙 Te esperamos${quandoCurto ? ` ${quandoCurto}` : ''}${hora ? ` às ${hora}` : ''}. Chegue uns 15 minutinhos antes, tá? Qualquer coisa é só me chamar por aqui.`,
+      text: `Confirmado${nome}! 💙 Te esperamos${quandoCurto ? ` ${quandoCurto}` : ''}${hora ? ` às ${hora}` : ''}. Chegue uns 15 minutos antes, tá? Qualquer coisa é só me chamar por aqui.`,
       chatId: null,
       talkId: null,
       contactId: null,

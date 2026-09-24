@@ -35,7 +35,7 @@ export function legendaDoCartao(unit: Pick<Unit, 'clinicAddress' | 'clinicMapUrl
   if (endereco) linhas.push(`📍 ${endereco}`);
   if (mapa) linhas.push(`🗺️ Como chegar: ${mapa}`);
   linhas.push('');
-  linhas.push('Chega uns 15 minutinhos antes, tá? Te esperamos! 💙');
+  linhas.push('Chega uns 15 minutos antes, tá? Te esperamos! 💙');
   return linhas.join('\n');
 }
 

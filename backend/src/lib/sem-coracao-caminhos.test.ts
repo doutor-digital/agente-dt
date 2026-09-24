@@ -24,6 +24,33 @@ test('o envio direto de chat (botões, cartão de chegada) limpa coração', () 
   assert.match(src, /text: semCoracao\(/, 'o rótulo do botão não passa por semCoracao');
 });
 
+/**
+ * Mesmo vigia, para o diminutivo (23/09/2026).
+ *
+ * Aqui a medição foi de ~11 mil diminutivos em 30 dias, em todas as unidades. A trava vale pelo
+ * mesmo motivo do coração: enquanto o exemplo ensina, a regra do prompt não pega — e caminho de
+ * envio novo sem a trava é o jeito de o problema voltar.
+ */
+test('a trava de diminutivo fica no ponto único, antes de qualquer entrega', () => {
+  const graph = arquivo('../agent/graph.ts');
+  assert.match(graph, /import \{ semDiminutivo \}/, 'graph.ts não importa semDiminutivo');
+  assert.match(
+    graph,
+    /aplicarGuardrail\(semDiminutivo\(textoFinal\)/,
+    'a resposta final não passa por semDiminutivo',
+  );
+});
+
+test('a trava de diminutivo NÃO fica no cliente do Kommo — lá ela reescreveria o CRM', () => {
+  // `downgradeEmoji` não é porta de saída: é o sanitizador do cliente, usado também para gravar
+  // campo, nota e tarefa. Uma observação do paciente ("sente uma dorzinha") não pode ser
+  // reescrita no cartão — isso muda o que ele disse.
+  const kommo = arquivo('../services/kommo.service.ts');
+  assert.doesNotMatch(kommo, /semDiminutivo/, 'semDiminutivo voltou para o cliente do Kommo');
+  const chat = arquivo('../services/kommo-chat.service.ts');
+  assert.doesNotMatch(chat, /semDiminutivo/, 'semDiminutivo voltou para o serviço de chat');
+});
+
 test('o cliente do Kommo limpa coração antes de qualquer envio', () => {
   const src = arquivo('../services/kommo.service.ts');
   const fn = src.slice(src.indexOf('export function downgradeEmoji'));
