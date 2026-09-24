@@ -11,6 +11,9 @@ import { Login } from './components/Login';
 import { Splash } from './components/Splash';
 import { useRoute } from './hooks/useRoute';
 
+const MinhaIaPanel = lazy(() =>
+  import('./components/MinhaIaPanel').then((m) => ({ default: m.MinhaIaPanel })),
+);
 const DashboardPanel = lazy(() =>
   import('./components/DashboardPanel').then((m) => ({ default: m.DashboardPanel })),
 );
@@ -109,6 +112,18 @@ function AppEntry() {
   const { user } = useAuth();
   const { selectedUnitId, setSelectedUnitId } = useUnit();
   const [viewAll, setViewAll] = useState(false);
+
+  // A unidade não entra no painel de operação: ela tem uma tela só, com o que precisa
+  // pra confiar na IA — está no ar, o que fez, o que falou e o que travou.
+  if (user?.role === 'UNIT_ADMIN') {
+    return (
+      <Suspense fallback={<PanelSkeleton />}>
+        <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+          <MinhaIaPanel />
+        </div>
+      </Suspense>
+    );
+  }
 
   const showHub = user?.role === 'SUPER_ADMIN' && !selectedUnitId && !viewAll;
   if (showHub) {

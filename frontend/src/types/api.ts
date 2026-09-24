@@ -1343,3 +1343,18 @@ export interface Funcionamento {
   } | null;
   resultados: ResumoResultados;
 }
+
+/** Estado da pausa da unidade (GET/POST/DELETE /units/:id/pausa). */
+export interface PausaEstado {
+  unidade: string;
+  slug: string;
+  tz: string;
+  emPausa: boolean;
+  agendada: boolean;
+  pausaDesde: string | null;
+  pausaAte: string | null;
+  motivo: string | null;
+  por: string | null;
+  descricao: string;
+  agora: string;
+}

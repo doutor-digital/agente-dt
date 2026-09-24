@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type {
+  PausaEstado,
   AdminUser,
   AdminUserInput,
   AgentConfig,
@@ -602,6 +603,21 @@ export const api = {
   async getLlmCall(id: string): Promise<LlmCallDetail> {
     const { data } = await http.get<{ call: LlmCallDetail }>(`/llm-calls/${id}`);
     return data.call;
+  },
+
+  // Pausa da unidade — o franqueado liga e desliga a IA pela tela dele.
+  // Mesmas rotas que a página pública /pausa/:slug usa, mas autenticadas.
+  async pausaEstado(unitId: string): Promise<PausaEstado> {
+    const { data } = await http.get<PausaEstado>(`/units/${unitId}/pausa`);
+    return data;
+  },
+  async pausar(unitId: string, ate: string, motivo?: string): Promise<PausaEstado> {
+    const { data } = await http.post<PausaEstado>(`/units/${unitId}/pausa`, { ate, motivo });
+    return data;
+  },
+  async retomar(unitId: string): Promise<PausaEstado> {
+    const { data } = await http.delete<PausaEstado>(`/units/${unitId}/pausa`);
+    return data;
   },
 
   async listConversations(unitId: string | null = null): Promise<ConversationSummary[]> {
