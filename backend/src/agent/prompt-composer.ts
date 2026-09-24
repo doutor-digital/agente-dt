@@ -525,6 +525,11 @@ function renderEsperaRules(intents: Record<string, number>): string {
      "vou ver e te falo", "depois eu te falo", "vou pensar", "te retorno", "amanhã eu vejo",
      "vou conversar com meu marido/minha esposa/minha filha", "esse mês não dá", "quando eu
      receber", "estou viajando", "vou fazer os exames antes". Sem motivo claro, use "Vai decidir".
+     **DATA EXPLÍCITA É O CASO MAIS FORTE DE TODOS.** "depois do dia 05 de outubro", "só no mês
+     que vem", "a partir da semana que vem", "depois do carnaval" — aí não há dúvida nenhuma:
+     mova para EM ESPERA e ponha ESSA data em ◷ Retomar em. Prometer a volta e NÃO mover é o
+     pior erro desta regra: a paciente Cátia, na Serra, pediu "depois do dia 05 de outubro",
+     ouviu "te procuro depois do dia 05/10" e foi cobrada três vezes nos 23 minutos seguintes.
   2. ANTES de mover, salve os dois campos com as ferramentas de captura:
      ⊘ Motivo da espera (Exames · Vai decidir · Viajando · Financeiro agora não · Outro) e
      ◷ Retomar em. Use a data que o paciente disser; se não disser, conte a partir de hoje:
@@ -2167,10 +2172,44 @@ export function renderFatosDaUnidade(unit: Unit): string {
   );
 }
 
-export function composeFollowUpSystemPrompt(unit: Unit): string {
-  return [renderPersona(unit), renderFatosDaUnidade(unit), renderRulesGlobal()]
+/**
+ * O prompt do follow-up precisa do calendário tanto quanto a conversa normal.
+ *
+ * Sem ele a Sofia não sabe que dia é hoje e inventa. Em 24/09/2026, na Serra, a paciente
+ * Cátia disse "me procure depois do dia 05 de outubro" e o follow-up respondeu, no mesmo
+ * dia, "passando o dia 05/10 aqui está" e depois "o dia 05/10 já passou!" — duas vezes
+ * afirmando que uma data futura tinha passado. A conversa normal acerta isso desde a
+ * v1.68.0 porque recebe `<calendario>`; este caminho montava só persona + fatos + regras.
+ */
+export function composeFollowUpSystemPrompt(unit: Unit, agora: Date = new Date()): string {
+  return [
+    renderPersona(unit),
+    renderFatosDaUnidade(unit),
+    renderHojeCurto(unit, agora),
+    renderRulesGlobal(),
+  ]
     .filter((b) => b.trim())
     .join('\n\n');
+}
+
+/**
+ * A data de hoje em uma linha — não o bloco <calendario> inteiro.
+ *
+ * O prompt do follow-up é enxuto de propósito, por causa do custo por mensagem, e o
+ * `<calendario>` traz mês e feriados que aqui não servem. O que faltava era só saber o
+ * dia, e isso cabe numa linha: sem ela o modelo compara datas de cabeça e erra.
+ */
+function renderHojeCurto(unit: Unit, agora: Date): string {
+  const iso = dataLocalISO(agora, fusoDaUnidade(unit));
+  const [a, m, d] = iso.split('-');
+  const semana = new Intl.DateTimeFormat('pt-BR', {
+    weekday: 'long',
+    timeZone: fusoDaUnidade(unit),
+  }).format(agora);
+  return (
+    `HOJE é ${semana}, ${d}/${m}/${a}. Toda conta de data sai daqui — nunca de cabeça. ` +
+    `Data depois desta AINDA NÃO chegou; antes dela já passou.`
+  );
 }
 
 export function previewComposedPrompt(unit: Unit): string {
