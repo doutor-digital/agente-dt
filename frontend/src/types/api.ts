@@ -1358,3 +1358,18 @@ export interface PausaEstado {
   descricao: string;
   agora: string;
 }
+
+/** Extra da tela da unidade (GET /units/:id/painel-unidade). */
+export interface PainelUnidade {
+  naMesa: Array<{ nome: string; quando: string | null }>;
+  ticketEstimadoBrl: number;
+  sumindo: Array<{
+    nome: string;
+    faltasSeguidas: number;
+    feitas: number;
+    total: number;
+    ultimaFalta: string | null;
+  }>;
+  porHora: number[];
+  anterior: { chegaram: number; conversou: number } | null;
+}
