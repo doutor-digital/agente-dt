@@ -1,15 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  AlertTriangle,
-  Bot,
-  CalendarCheck,
-  CheckCircle2,
-  Loader2,
-  MessageCircle,
-  Pause,
-  Play,
-  User2,
-} from 'lucide-react';
+import { Loader2, LogOut, Pause, Play } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import { useUnit } from '../context/UnitContext';
@@ -19,22 +9,40 @@ import { usePolling } from '../hooks/usePolling';
 import type { ConversationDetail, PausaEstado } from '../types/api';
 
 /**
- * A tela da UNIDADE (papel UNIT_ADMIN). O painel completo é do operador; aqui o
- * franqueado precisa de quatro respostas e nada mais:
- *   1. minha IA está no ar?  2. o que ela fez?  3. o que ela falou?  4. onde travou?
+ * A tela da UNIDADE (papel UNIT_ADMIN).
  *
- * Nada de configuração, prompt, custo ou ferramenta — quem mexe nisso é a Doutor Digital.
+ * O console é do operador; aqui quem lê é o dono de uma clínica de coluna, que não abre
+ * CRM e tem 30 segundos. A tela responde uma pergunta: a Sofia está trazendo paciente?
+ *
+ * Duas decisões de desenho, as duas tiradas do mundo da clínica e não de um kit de gráfico:
+ *  · o funil é uma COLUNA — vértebras empilhadas, largura proporcional ao número. É o
+ *    emblema da marca fazendo o trabalho do gráfico, e mostra onde a coluna "afina".
+ *  · o status é um SINAL VITAL — linha que pulsa quando ela está no ar e para quando
+ *    está pausada. O dono lê isso sem legenda.
+ *
+ * O resto é deliberadamente quieto: um lugar só pra ousadia.
  */
 
 const DIAS = 30;
 
+type Vertebra = {
+  rotulo: string;
+  valor: number;
+  tom: 'vida' | 'carne';
+  nota?: string;
+};
+
 function quando(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   if (diff < 60_000) return 'agora';
-  if (diff < 3_600_000) return `há ${Math.floor(diff / 60_000)} min`;
-  if (diff < 86_400_000) return `há ${Math.floor(diff / 3_600_000)} h`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} h`;
   const d = Math.floor(diff / 86_400_000);
-  return d === 1 ? 'ontem' : `há ${d} dias`;
+  return d === 1 ? 'ontem' : `${d} dias`;
+}
+
+function espera(min: number): string {
+  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h`;
 }
 
 function fimDoDia(): string {
@@ -50,32 +58,90 @@ function amanhaDeManha(): string {
   return d.toISOString();
 }
 
-function Cartao({
-  titulo,
-  valor,
-  detalhe,
-  icone,
-  destaque,
-}: {
-  titulo: string;
-  valor: string | number;
-  detalhe?: string;
-  icone: React.ReactNode;
-  destaque?: boolean;
-}) {
+/** Linha de sinal vital: pulsa no ar, para quando pausada. */
+function SinalVital({ viva }: { viva: boolean }) {
   return (
-    <div
-      className={clsx(
-        'rounded-xl border p-4 flex flex-col gap-1',
-        destaque ? 'border-emerald-700/50 bg-emerald-950/30' : 'border-zinc-800 bg-zinc-900/60',
-      )}
+    <svg
+      viewBox="0 0 240 40"
+      className="h-10 w-[240px] overflow-visible"
+      aria-hidden="true"
+      preserveAspectRatio="none"
     >
-      <div className="flex items-center gap-2 text-zinc-400 text-xs uppercase tracking-wide">
-        {icone}
-        {titulo}
-      </div>
-      <div className="text-3xl font-semibold tabular-nums text-zinc-100">{valor}</div>
-      {detalhe && <div className="text-xs text-zinc-500">{detalhe}</div>}
+      <path
+        d="M0 20 H62 l7 -13 l8 26 l7 -13 H124 l6 -7 l6 14 l6 -7 H240"
+        fill="none"
+        stroke={viva ? 'var(--vida)' : 'var(--linha)'}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={viva ? undefined : '4 7'}
+        className={viva ? 'sinal-vivo' : undefined}
+      />
+    </svg>
+  );
+}
+
+function Coluna({ vertebras }: { vertebras: Vertebra[] }) {
+  const topo = Math.max(...vertebras.map((v) => v.valor), 1);
+
+  // onde a coluna mais afina — é a informação que o dono procura sem saber que procura
+  let piorQueda = -1;
+  let piorPerda = 0;
+  for (let i = 1; i < vertebras.length; i++) {
+    const de = vertebras[i - 1].valor;
+    const para = vertebras[i].valor;
+    if (de <= 0) continue;
+    const perda = 1 - para / de;
+    if (perda > piorPerda) {
+      piorPerda = perda;
+      piorQueda = i;
+    }
+  }
+
+  return (
+    <div className="relative flex flex-col items-center gap-[5px]">
+      {/* o eixo: sem ele as vértebras viram barra de gráfico */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-[4px] z-0 w-px -translate-x-1/2 bg-gradient-to-b from-transparent via-[var(--linha)] to-transparent"
+        style={{ left: 'calc(50% + 84px)' }}
+      />
+      {vertebras.map((v, i) => {
+        const largura = Math.max(11, (v.valor / topo) * 100);
+        return (
+          <div key={v.rotulo} className="w-full">
+            {i === piorQueda && piorPerda > 0.4 && (
+              <div className="mb-[7px] flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--alerta)]">
+                <span className="h-px flex-1 bg-[var(--alerta)]/30" />
+                perde {Math.round(piorPerda * 100)}% aqui
+                <span className="h-px flex-1 bg-[var(--alerta)]/30" />
+              </div>
+            )}
+            <div className="group flex items-center gap-4">
+              <span className="w-[152px] shrink-0 text-right text-[12.5px] leading-tight text-[var(--bruma)]">
+                {v.rotulo}
+              </span>
+              <div className="flex flex-1 justify-center">
+                <div
+                  className="vertebra relative z-10 flex h-[34px] items-center justify-center rounded-[14px] transition-[filter] duration-200 group-hover:brightness-110"
+                  style={{
+                    width: `${largura}%`,
+                    background:
+                      v.tom === 'carne'
+                        ? 'linear-gradient(180deg, var(--carne) 0%, color-mix(in srgb, var(--carne) 72%, #000) 100%)'
+                        : 'linear-gradient(180deg, var(--vida) 0%, color-mix(in srgb, var(--vida) 70%, #000) 100%)',
+                    animationDelay: `${i * 70}ms`,
+                  }}
+                >
+                  <span className="font-display text-[19px] font-bold leading-none text-[#06101f] tabular-nums">
+                    {v.valor}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -89,7 +155,7 @@ export function MinhaIaPanel() {
     () => () => (selectedUnitId ? api.unitDashboard(selectedUnitId, DIAS) : Promise.resolve(null)),
     [selectedUnitId],
   );
-  const { data: dash, loading: carregandoPainel } = usePolling(painel, 60_000, [selectedUnitId]);
+  const { data: dash, loading } = usePolling(painel, 60_000, [selectedUnitId]);
 
   const pausa = useMemo(
     () => () => (selectedUnitId ? api.pausaEstado(selectedUnitId) : Promise.resolve(null)),
@@ -97,15 +163,12 @@ export function MinhaIaPanel() {
   );
   const { data: estadoPausa } = usePolling(pausa, 30_000, [selectedUnitId]);
 
-  const conversas = useMemo(
-    () => () => api.listConversations(selectedUnitId),
-    [selectedUnitId],
-  );
+  const conversas = useMemo(() => () => api.listConversations(selectedUnitId), [selectedUnitId]);
   const { data: listaConversas } = usePolling(conversas, 15_000, [selectedUnitId]);
 
   const [abertaId, setAbertaId] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<ConversationDetail | null>(null);
-  const [mexendoNaPausa, setMexendoNaPausa] = useState(false);
+  const [mexendo, setMexendo] = useState(false);
 
   useEffect(() => {
     if (!abertaId) {
@@ -124,242 +187,264 @@ export function MinhaIaPanel() {
 
   async function mudarPausa(acao: 'hoje' | 'amanha' | 'retomar') {
     if (!selectedUnitId) return;
-    setMexendoNaPausa(true);
+    setMexendo(true);
     try {
-      let r: PausaEstado;
-      if (acao === 'retomar') r = await api.retomar(selectedUnitId);
-      else r = await api.pausar(selectedUnitId, acao === 'hoje' ? fimDoDia() : amanhaDeManha());
-      toast.success(r.emPausa ? 'IA pausada.' : 'IA de volta ao ar.');
+      const r: PausaEstado =
+        acao === 'retomar'
+          ? await api.retomar(selectedUnitId)
+          : await api.pausar(selectedUnitId, acao === 'hoje' ? fimDoDia() : amanhaDeManha());
+      toast.success(r.emPausa ? 'Sofia pausada.' : 'Sofia de volta ao ar.');
     } catch {
       toast.error('Não consegui mudar agora. Tente de novo em instantes.');
     } finally {
-      setMexendoNaPausa(false);
+      setMexendo(false);
     }
   }
 
   const k = dash?.kpis;
-  const noAr = estadoPausa ? !estadoPausa.emPausa : true;
+  const viva = estadoPausa ? !estadoPausa.emPausa : true;
+
+  const vertebras: Vertebra[] = [
+    { rotulo: 'chegaram', valor: k?.uniqueLeads ?? 0, tom: 'vida' },
+    { rotulo: 'ela conversou', valor: k?.answeredConversations ?? 0, tom: 'vida' },
+    { rotulo: 'marcaram consulta', valor: k?.aiScheduledConsults ?? 0, tom: 'vida' },
+    { rotulo: 'compareceram', valor: k?.aiCompareceu ?? 0, tom: 'carne' },
+    { rotulo: 'fecharam tratamento', valor: k?.aiFechouTratamento ?? 0, tom: 'carne' },
+  ];
 
   return (
-    <div className="flex-1 overflow-auto p-6 space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-zinc-100">Sua assistente</h1>
-          <p className="text-sm text-zinc-500">
-            {estadoPausa?.unidade ?? 'Carregando…'} · últimos {DIAS} dias
-          </p>
-        </div>
-        <button
-          onClick={() => void logout()}
-          className="text-xs text-zinc-500 hover:text-zinc-300 underline underline-offset-4"
-        >
-          sair ({user?.email})
-        </button>
-      </header>
+    <div className="tela-unidade min-h-screen overflow-auto">
+      <style>{`
+        .tela-unidade{
+          --noite:#0A1120; --placa:#101C33; --linha:#1D2B47;
+          --osso:#E9EFF8; --bruma:#8BA0C0;
+          --vida:#4C9EFF; --carne:#2FBF71; --alerta:#E4572E;
+          background:
+            radial-gradient(900px 420px at 18% -8%, rgba(76,158,255,.10), transparent 60%),
+            var(--noite);
+          color: var(--osso);
+          font-family: "Public Sans", var(--font-body), system-ui, sans-serif;
+        }
+        .tela-unidade .font-display{
+          font-family: "Bricolage Grotesque", var(--font-display), system-ui, sans-serif;
+          letter-spacing:-.02em;
+        }
+        .tela-unidade .vertebra{
+          transform-origin:center;
+          animation: encaixa .5s cubic-bezier(.16,1,.3,1) both;
+        }
+        @keyframes encaixa{
+          from{ opacity:0; transform:translateY(-9px) scaleX(.86); }
+          to{ opacity:1; transform:none; }
+        }
+        .tela-unidade .sinal-vivo{
+          stroke-dasharray: 26 300;
+          animation: batida 2.4s linear infinite;
+        }
+        @keyframes batida{ from{ stroke-dashoffset:326; } to{ stroke-dashoffset:0; } }
+        .tela-unidade .sobe{ animation: sobe .5s cubic-bezier(.16,1,.3,1) both; }
+        @keyframes sobe{ from{ opacity:0; transform:translateY(8px);} to{ opacity:1; transform:none;} }
+        @media (prefers-reduced-motion: reduce){
+          .tela-unidade .vertebra, .tela-unidade .sobe{ animation:none; }
+          .tela-unidade .sinal-vivo{ animation:none; stroke-dasharray:none; }
+        }
+      `}</style>
 
-      {/* 1. está no ar? */}
-      <section
-        className={clsx(
-          'rounded-xl border p-5 flex flex-wrap items-center justify-between gap-4',
-          noAr ? 'border-emerald-700/50 bg-emerald-950/25' : 'border-amber-700/50 bg-amber-950/25',
-        )}
-      >
-        <div className="flex items-center gap-3">
-          <span
-            className={clsx(
-              'h-3.5 w-3.5 rounded-full',
-              noAr ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400',
-            )}
-          />
+      <div className="mx-auto w-full max-w-[1180px] px-6 py-8 lg:px-10">
+        {/* cabeçalho: quem é, e o sinal vital */}
+        <header className="flex flex-wrap items-end justify-between gap-6 border-b border-[var(--linha)] pb-7">
           <div>
-            <div className="text-lg font-semibold text-zinc-100">
-              {noAr ? 'No ar, atendendo' : 'Pausada'}
-            </div>
-            <div className="text-sm text-zinc-400">
-              {estadoPausa?.descricao ?? 'Respondendo os pacientes no WhatsApp.'}
-            </div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--bruma)]">
+              {estadoPausa?.unidade ?? 'Carregando'}
+            </p>
+            <h1 className="font-display mt-1 text-[40px] font-bold leading-none">Sofia</h1>
+            <p className="mt-2 max-w-[42ch] text-[13.5px] leading-snug text-[var(--bruma)]">
+              {viva
+                ? 'Está respondendo os pacientes no WhatsApp agora.'
+                : (estadoPausa?.descricao ?? 'Está pausada — ninguém está sendo respondido.')}
+            </p>
           </div>
-        </div>
 
-        <div className="flex flex-wrap gap-2">
-          {noAr ? (
-            <>
-              <button
-                disabled={mexendoNaPausa}
-                onClick={() => void mudarPausa('hoje')}
-                className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-200 hover:border-amber-600 hover:bg-amber-950/40 disabled:opacity-50"
-              >
-                <Pause size={15} /> Pausar até o fim do dia
-              </button>
-              <button
-                disabled={mexendoNaPausa}
-                onClick={() => void mudarPausa('amanha')}
-                className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-200 hover:border-amber-600 hover:bg-amber-950/40 disabled:opacity-50"
-              >
-                <Pause size={15} /> Até amanhã de manhã
-              </button>
-            </>
-          ) : (
-            <button
-              disabled={mexendoNaPausa}
-              onClick={() => void mudarPausa('retomar')}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-            >
-              <Play size={15} /> Voltar ao ar agora
-            </button>
-          )}
-        </div>
-      </section>
-
-      {/* 2. o que ela fez */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
-          O que ela fez
-        </h2>
-        {carregandoPainel && !k ? (
-          <div className="flex items-center gap-2 text-sm text-zinc-500">
-            <Loader2 size={15} className="animate-spin" /> carregando…
-          </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Cartao
-              titulo="Pessoas atendidas"
-              valor={k?.uniqueLeads ?? 0}
-              detalhe={`${k?.answeredConversations ?? 0} conversas respondidas`}
-              icone={<MessageCircle size={13} />}
-            />
-            <Cartao
-              titulo="Consultas marcadas"
-              valor={k?.aiScheduledConsults ?? 0}
-              detalhe="pela assistente"
-              icone={<CalendarCheck size={13} />}
-              destaque
-            />
-            <Cartao
-              titulo="Compareceram"
-              valor={k?.aiCompareceu ?? 0}
-              detalhe="confirmado pela clínica"
-              icone={<CheckCircle2 size={13} />}
-            />
-            <Cartao
-              titulo="Fecharam tratamento"
-              valor={k?.aiFechouTratamento ?? 0}
-              detalhe={
-                k?.aiAindaNoFuturo ? `${k.aiAindaNoFuturo} com consulta ainda por vir` : undefined
-              }
-              icone={<CheckCircle2 size={13} />}
-            />
-          </div>
-        )}
-      </section>
-
-      {/* 4. onde travou (antes das conversas: é o que pede ação) */}
-      {dash && (dash.hotQueue.length > 0 || (k?.unansweredQuestions ?? 0) > 0) && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
-            Precisa de gente
-          </h2>
-          <div className="rounded-xl border border-amber-800/40 bg-amber-950/15 divide-y divide-amber-900/30">
-            {dash.hotQueue.slice(0, 8).map((h) => (
-              <div key={h.leadId} className="flex items-center justify-between gap-3 px-4 py-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-zinc-100">
-                    {h.contactName || h.phone || `Lead ${h.leadId}`}
-                  </div>
-                  <div className="text-xs text-zinc-500">
-                    aguardando há{' '}
-                    {h.waitingMinutes < 60
-                      ? `${h.waitingMinutes} min`
-                      : `${Math.floor(h.waitingMinutes / 60)} h`}
-                    {h.reactivations > 0 && ` · ${h.reactivations} tentativa(s) de retomar`}
-                  </div>
-                </div>
-                <AlertTriangle size={16} className="shrink-0 text-amber-500" />
-              </div>
-            ))}
-            {dash.hotQueue.length === 0 && (
-              <div className="px-4 py-3 text-sm text-zinc-400">
-                Ninguém esperando. {k?.unansweredQuestions} pergunta(s) que a assistente não soube
-                responder no período — a Doutor Digital revisa e ensina.
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* 3. o que ela falou */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
-          O que ela falou
-        </h2>
-        <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 divide-y divide-zinc-800 max-h-[460px] overflow-auto">
-            {(listaConversas ?? []).slice(0, 40).map((c) => (
-              <button
-                key={c.id}
-                onClick={() => setAbertaId(c.id)}
+          <div className="flex flex-col items-end gap-3">
+            <div className="flex items-center gap-3">
+              <SinalVital viva={viva} />
+              <span
                 className={clsx(
-                  'w-full text-left px-4 py-3 hover:bg-zinc-800/60',
-                  abertaId === c.id && 'bg-zinc-800',
+                  'font-display text-[13px] font-bold uppercase tracking-[0.14em]',
+                  viva ? 'text-[var(--vida)]' : 'text-[var(--bruma)]',
                 )}
               >
-                <div className="truncate text-sm font-medium text-zinc-100">
-                  {c.contactName || c.phone || 'Sem nome'}
-                </div>
-                <div className="text-xs text-zinc-500">
-                  {quando(c.lastMessageAt)} · {c._count.messages} mensagens
-                </div>
+                {viva ? 'no ar' : 'pausada'}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {viva ? (
+                <>
+                  <button
+                    disabled={mexendo}
+                    onClick={() => void mudarPausa('hoje')}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--linha)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--bruma)] transition hover:border-[var(--alerta)] hover:text-[var(--osso)] disabled:opacity-40"
+                  >
+                    <Pause size={13} /> pausar hoje
+                  </button>
+                  <button
+                    disabled={mexendo}
+                    onClick={() => void mudarPausa('amanha')}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--linha)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--bruma)] transition hover:border-[var(--alerta)] hover:text-[var(--osso)] disabled:opacity-40"
+                  >
+                    até amanhã 8h
+                  </button>
+                </>
+              ) : (
+                <button
+                  disabled={mexendo}
+                  onClick={() => void mudarPausa('retomar')}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--vida)] px-4 py-2 text-[13px] font-bold text-[#06101f] transition hover:brightness-110 disabled:opacity-40"
+                >
+                  <Play size={14} /> voltar ao ar
+                </button>
+              )}
+              <button
+                onClick={() => void logout()}
+                title={user?.email ?? undefined}
+                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[12.5px] text-[var(--bruma)] transition hover:text-[var(--osso)]"
+              >
+                <LogOut size={13} /> sair
               </button>
-            ))}
-            {(listaConversas ?? []).length === 0 && (
-              <div className="px-4 py-6 text-sm text-zinc-500">Nenhuma conversa ainda.</div>
-            )}
+            </div>
           </div>
+        </header>
 
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 max-h-[460px] overflow-auto">
-            {!abertaId && (
-              <p className="text-sm text-zinc-500">
-                Escolha uma conversa à esquerda para ler o que a assistente respondeu.
-              </p>
-            )}
-            {abertaId && !detalhe && (
-              <div className="flex items-center gap-2 text-sm text-zinc-500">
-                <Loader2 size={15} className="animate-spin" /> abrindo…
+        <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_400px]">
+          {/* a coluna — o funil como vértebras */}
+          <section className="sobe">
+            <div className="mb-5 flex items-baseline justify-between">
+              <h2 className="font-display text-[19px] font-bold">A coluna dos últimos 30 dias</h2>
+              <span className="text-[12px] text-[var(--bruma)]">
+                de cima pra baixo, quem sobrou em cada passo
+              </span>
+            </div>
+
+            {loading && !k ? (
+              <div className="flex items-center gap-2 py-16 text-[13px] text-[var(--bruma)]">
+                <Loader2 size={15} className="animate-spin" /> montando…
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-[var(--linha)] bg-[var(--placa)] px-6 py-7">
+                <Coluna vertebras={vertebras} />
+                {(k?.aiAindaNoFuturo ?? 0) > 0 && (
+                  <p className="mt-6 border-t border-[var(--linha)] pt-4 text-[12.5px] text-[var(--bruma)]">
+                    Mais {k?.aiAindaNoFuturo} com consulta marcada para os próximos dias — ainda
+                    podem virar tratamento.
+                  </p>
+                )}
               </div>
             )}
-            {detalhe && (
-              <div className="space-y-3">
-                {detalhe.messages
-                  .filter((m) => m.role !== 'system')
-                  .map((m) => (
-                    <div
-                      key={m.id}
+          </section>
+
+          <div className="flex flex-col gap-8">
+            {/* precisa de você */}
+            <section className="sobe" style={{ animationDelay: '80ms' }}>
+              <h2 className="font-display mb-4 text-[19px] font-bold">
+                Precisa de você{' '}
+                {dash && dash.hotQueue.length > 0 && (
+                  <span className="text-[var(--alerta)]">({dash.hotQueue.length})</span>
+                )}
+              </h2>
+              <div className="overflow-hidden rounded-2xl border border-[var(--linha)] bg-[var(--placa)]">
+                {(dash?.hotQueue ?? []).slice(0, 5).map((h) => (
+                  <div
+                    key={h.leadId}
+                    className="flex items-center gap-3 border-b border-[var(--linha)] px-4 py-3 last:border-b-0"
+                  >
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--alerta)]" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13.5px] font-semibold">
+                        {h.contactName || h.phone || `Lead ${h.leadId}`}
+                      </div>
+                      <div className="text-[12px] text-[var(--bruma)]">
+                        esperando há {espera(h.waitingMinutes)}
+                        {h.reactivations > 0 && ` · ${h.reactivations} tentativa(s) de retomar`}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {dash && dash.hotQueue.length === 0 && (
+                  <p className="px-4 py-6 text-[13px] leading-relaxed text-[var(--bruma)]">
+                    Ninguém esperando. Quando a Sofia não der conta de alguém, o nome aparece aqui
+                    pra sua equipe assumir.
+                  </p>
+                )}
+              </div>
+            </section>
+
+            {/* o que ela falou */}
+            <section className="sobe flex min-h-0 flex-1 flex-col" style={{ animationDelay: '160ms' }}>
+              <h2 className="font-display mb-4 text-[19px] font-bold">O que ela falou</h2>
+              <div className="overflow-hidden rounded-2xl border border-[var(--linha)] bg-[var(--placa)]">
+                <div className="max-h-[210px] overflow-auto">
+                  {(listaConversas ?? []).slice(0, 30).map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => setAbertaId(c.id === abertaId ? null : c.id)}
                       className={clsx(
-                        'flex gap-2',
-                        m.role === 'assistant' ? 'justify-end' : 'justify-start',
+                        'flex w-full items-center gap-3 border-b border-[var(--linha)] px-4 py-2.5 text-left transition last:border-b-0 hover:bg-white/[0.03]',
+                        abertaId === c.id && 'bg-white/[0.05]',
                       )}
                     >
-                      {m.role === 'user' && <User2 size={15} className="mt-1 shrink-0 text-zinc-500" />}
-                      <div
-                        className={clsx(
-                          'max-w-[80%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap',
-                          m.role === 'assistant'
-                            ? 'bg-emerald-900/40 text-emerald-50'
-                            : 'bg-zinc-800 text-zinc-100',
-                        )}
-                      >
-                        {m.content}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[13px] font-semibold">
+                          {c.contactName || c.phone || 'Sem nome'}
+                        </div>
+                        <div className="text-[11.5px] text-[var(--bruma)]">
+                          {quando(c.lastMessageAt)} · {c._count.messages} mensagens
+                        </div>
                       </div>
-                      {m.role === 'assistant' && (
-                        <Bot size={15} className="mt-1 shrink-0 text-emerald-500" />
-                      )}
-                    </div>
+                    </button>
                   ))}
+                  {(listaConversas ?? []).length === 0 && (
+                    <p className="px-4 py-6 text-[13px] text-[var(--bruma)]">
+                      Nenhuma conversa ainda.
+                    </p>
+                  )}
+                </div>
+
+                {abertaId && (
+                  <div className="max-h-[300px] space-y-2.5 overflow-auto border-t border-[var(--linha)] bg-[var(--noite)]/60 px-4 py-4">
+                    {!detalhe && (
+                      <div className="flex items-center gap-2 text-[12.5px] text-[var(--bruma)]">
+                        <Loader2 size={13} className="animate-spin" /> abrindo…
+                      </div>
+                    )}
+                    {detalhe?.messages
+                      .filter((m) => m.role !== 'system')
+                      .map((m) => (
+                        <div
+                          key={m.id}
+                          className={clsx(
+                            'flex',
+                            m.role === 'assistant' ? 'justify-end' : 'justify-start',
+                          )}
+                        >
+                          <div
+                            className={clsx(
+                              'max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-[12.5px] leading-relaxed',
+                              m.role === 'assistant'
+                                ? 'bg-[var(--vida)]/15 text-[var(--osso)]'
+                                : 'bg-white/[0.06] text-[var(--osso)]',
+                            )}
+                          >
+                            {m.content}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
               </div>
-            )}
+            </section>
           </div>
         </div>
-      </section>
+      </div>
     </div>
   );
 }
