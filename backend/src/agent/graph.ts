@@ -205,12 +205,37 @@ export function fixarLeadDaConversa(
             payload: { tool: tool.name, leadPedido: pedido, leadReal: leadIdDaConversa },
           });
         }
-        args = { ...(args as Record<string, unknown>), leadId: leadIdDaConversa };
       }
+      // Sempre o lead da conversa, venha o que vier (ou não venha nada: com o
+      // parâmetro fora do schema, o normal é não vir).
+      args = { ...(args as Record<string, unknown>), leadId: leadIdDaConversa };
       return original(args as never, ...(resto as never[]));
     };
+    esconderLeadIdDoModelo(tool);
   }
   return tools;
+}
+
+/**
+ * Tira `leadId` do schema que o modelo enxerga.
+ *
+ * O valor já é ignorado — a função acima o sobrescreve com o lead da conversa
+ * antes de qualquer ferramenta rodar. Enquanto o parâmetro ficava no schema, o
+ * modelo pagava por ele duas vezes: ~25 tokens de declaração em cada uma das 18
+ * ferramentas que o pediam (prefixo lido em TODA chamada) e mais uns 12 tokens
+ * de saída por chamada, escrevendo um número que o código jogava fora. Medido em
+ * 24/09/2026: 16,2 mil chamadas de ferramenta em 30 dias.
+ *
+ * Some também a chance de ele alucinar um lead alheio — o parâmetro que não
+ * existe é o que não se erra.
+ */
+function esconderLeadIdDoModelo(tool: DynamicStructuredTool): void {
+  const schema = tool.schema as unknown as {
+    shape?: Record<string, unknown>;
+    omit?: (mask: Record<string, true>) => unknown;
+  };
+  if (typeof schema?.omit !== 'function' || !schema.shape || !('leadId' in schema.shape)) return;
+  tool.schema = schema.omit({ leadId: true }) as typeof tool.schema;
 }
 
 /**

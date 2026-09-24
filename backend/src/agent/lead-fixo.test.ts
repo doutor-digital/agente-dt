@@ -89,6 +89,40 @@ test('ferramenta sem leadId passa intacta', async () => {
   assert.equal(await tool.func({ data: '2026-09-01' } as never), 'ok');
 });
 
+/**
+ * O parâmetro que não existe é o que não se erra — e o que não se paga: `leadId`
+ * ia declarado em 18 das 19 ferramentas do prefixo, lido em toda chamada, e
+ * escrito de novo na saída a cada uso, só pra ser sobrescrito aqui.
+ */
+test('o modelo não vê mais o leadId — o schema sai sem ele', () => {
+  const { recorder } = recorderFalso();
+  const [tool] = fixarLeadDaConversa([toolQueRegistra([])], LEAD_DA_CONVERSA, recorder as never, unidade);
+
+  const shape = (tool.schema as unknown as { shape: Record<string, unknown> }).shape;
+  assert.ok(!('leadId' in shape), 'leadId não pode aparecer no schema que vai pro modelo');
+  assert.ok('tag' in shape, 'o resto dos parâmetros continua');
+});
+
+test('sem o modelo mandar leadId, a ferramenta recebe o lead da conversa mesmo assim', async () => {
+  const recebidos: Array<Record<string, unknown>> = [];
+  const { passos, recorder } = recorderFalso();
+  const [tool] = fixarLeadDaConversa([toolQueRegistra(recebidos)], LEAD_DA_CONVERSA, recorder as never, unidade);
+
+  await tool.func({ tag: 'Quente' } as never);
+
+  assert.equal(recebidos[0].leadId, LEAD_DA_CONVERSA, 'o código injeta o lead certo');
+  assert.equal(recebidos[0].tag, 'Quente');
+  assert.equal(passos.length, 0, 'não mandar leadId é o caminho normal agora — não é erro');
+});
+
+test('ferramenta sem leadId no schema não ganha um do nada', () => {
+  const { recorder } = recorderFalso();
+  const [tool] = fixarLeadDaConversa([toolSemLead()], LEAD_DA_CONVERSA, recorder as never, unidade);
+
+  const shape = (tool.schema as unknown as { shape: Record<string, unknown> }).shape;
+  assert.deepEqual(Object.keys(shape), ['data']);
+});
+
 test('sem lead conhecido, a lista volta como estava', () => {
   const recebidos: Array<Record<string, unknown>> = [];
   const { recorder } = recorderFalso();

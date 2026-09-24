@@ -11,10 +11,13 @@ process.env.CAPTURA_UNIFICADA_SLUGS ??= '*';
 process.env.PROMPT_DA_UNIDADE_SLUGS ??= '';
 
 const S = '/tmp/claude-1000/-home-joaoof-agente-dt/d95912f5-9607-4619-a45e-835830e741f5/scratchpad';
+/** Um lead qualquer: só precisa ser >0 pra o caminho de produção rodar inteiro. */
+const LEAD_DE_MEDICAO = 1;
 const slugs = process.argv.slice(2).length ? process.argv.slice(2) : ['doutor-hernia-serra', 'doutor-hernia-imperatriz', 'doutor-hernia-bebedouro'];
 
 const { composeSystemPromptParts } = await import('../agent/prompt-composer.js');
 const { buildTools } = await import('../agent/tools.js');
+const { fixarLeadDaConversa } = await import('../agent/graph.js');
 
 mkdirSync(`${S}/composed`, { recursive: true });
 const recorder = new Proxy({}, { get: () => async () => {} });
@@ -43,8 +46,15 @@ for (const slug of slugs) {
   const overrides: Record<string, string> = {};
   for (const t of d.toolConfigs ?? []) if (t.description) overrides[t.name] = t.description;
   const on = new Map<string, boolean>((d.toolConfigs ?? []).map((t: { name: string; enabled: boolean }) => [t.name, t.enabled]));
-  const tools = buildTools({ recorder: recorder as never, kommo: kommo as never, descriptionOverrides: overrides, pausedFieldId: unit.kommoPausedFieldId, leadFieldRules: d.leadFieldRules, unit })
-    .filter((t) => on.get(t.name) ?? true);
+  // Mesmo caminho do buildAgentGraph: montar → filtrar pelo config → fixar o lead
+  // (que é quem tira o leadId do schema). Medir sem isto mede um prompt que não existe.
+  const tools = fixarLeadDaConversa(
+    buildTools({ recorder: recorder as never, kommo: kommo as never, descriptionOverrides: overrides, pausedFieldId: unit.kommoPausedFieldId, leadFieldRules: d.leadFieldRules, unit })
+      .filter((t) => on.get(t.name) ?? true) as never,
+    LEAD_DE_MEDICAO,
+    recorder as never,
+    unit,
+  );
   const anth = tools.map((t) => { const o = convertToOpenAITool(t as never); return { name: o.function.name, description: o.function.description, input_schema: o.function.parameters }; });
   writeFileSync(`${S}/composed/${slug}.json`, JSON.stringify({ model: d.anthropicModel || 'claude-sonnet-5', cacheable: p.cacheable, dynamic: p.dynamic, tools: anth }));
   const tk = (s: string) => Math.round((s || '').length / 2.6);
