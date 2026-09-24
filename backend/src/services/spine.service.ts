@@ -755,30 +755,59 @@ export interface SpineTreatment {
   staffName: string | null;
   statusName: string | null;
   price: number | null;
+  /** quando o tratamento foi criado na franquia (ISO). Serve pra escolher o ciclo certo. */
+  created: string | null;
 }
 
 /**
- * Tratamentos EM ANDAMENTO da unidade (a rota só devolve esses; medido em
- * 25/08/2026). `rowsPerPage` máximo 100 — 200 dá HTTP 400. Telefone não vem
+ * Tratamentos da unidade. `rowsPerPage` máximo 100 — 200 dá HTTP 400. Telefone não vem
  * aqui: buscar em `getClient(idClient)`.
+ *
+ * ATENÇÃO (24/09/2026): **sem data, a rota devolve só o MÊS CORRENTE** — é o "filtro padrão"
+ * do guia §10.4. Era isso que fazia parecer que "a rota só devolve tratamento em andamento"
+ * e que a Serra tinha 3 tratamentos (tem 42 desde maio). Consequência real: quem fechou
+ * tratamento em mês passado nunca chegava no cartão, então o «¤ Valor do tratamento» e o
+ * «✓ Fechou tratamento» só apareciam pra quem fechou no mês. Por isso mandamos a janela.
+ *
+ * E o filtro vai na RAIZ do corpo, não dentro de `filters` — dentro de `filters` a API
+ * ignora em silêncio (mesma pegadinha do `initialDate`/`endDate` do schedules/search).
  */
-export async function searchTreatments(unit: SpineUnit): Promise<SpineResult<{ treatments: SpineTreatment[] }>> {
+export const TRATAMENTOS_MESES_PADRAO = 12;
+
+export async function searchTreatments(
+  unit: SpineUnit,
+  opts: { meses?: number } = {},
+): Promise<SpineResult<{ treatments: SpineTreatment[] }>> {
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  const meses = Math.max(1, opts.meses ?? TRATAMENTOS_MESES_PADRAO);
+  const hoje = new Date();
+  const inicio = new Date(hoje);
+  inicio.setMonth(inicio.getMonth() - meses);
+  const dia = (d: Date) => d.toISOString().slice(0, 10);
   const todos: SpineTreatment[] = [];
+  const vistos = new Set<number>();
   let page = 1;
   let totalPages = 1;
   try {
     do {
       const { data } = await http.post<{
         data?: { data?: Array<Record<string, unknown>>; totalPages?: number };
-      }>('/api/treatments/search', { pagination: { page, rowsPerPage: 100 } });
+      }>('/api/treatments/search', {
+        initialCreatedDate: dia(inicio),
+        endCreatedDate: dia(hoje),
+        pagination: { page, rowsPerPage: 100 },
+      });
       const corpo = data?.data;
       for (const raw of corpo?.data ?? []) {
         const num = (v: unknown) => (typeof v === 'number' ? v : Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : null);
         const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+        const id = num(raw.idTreatment);
+        // a janela é maior que o mês, então a mesma página pode repetir registro entre chamadas
+        if (id !== null && vistos.has(id)) continue;
+        if (id !== null) vistos.add(id);
         todos.push({
-          idTreatment: num(raw.idTreatment),
+          idTreatment: id,
           idClient: num(raw.idClient),
           clientName: str(raw.clientName),
           category: str(raw.category),
@@ -787,6 +816,7 @@ export async function searchTreatments(unit: SpineUnit): Promise<SpineResult<{ t
           staffName: str(raw.staffName),
           statusName: str(raw.statusName),
           price: num(raw.price),
+          created: str(raw.created),
         });
       }
       totalPages = Math.max(1, Number(corpo?.totalPages) || 1);
