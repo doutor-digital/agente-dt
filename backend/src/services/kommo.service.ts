@@ -673,6 +673,53 @@ export class KommoClient {
   }
 
   /**
+   * Contatos que a busca do Kommo devolve para um texto, com os leads deles junto.
+   *
+   * ATENÇÃO a quem for usar isto para casar paciente: o `query` do Kommo é busca TEXTUAL
+   * e difusa — ela casa pedaço de nome, de telefone, de e-mail, e devolve gente que só
+   * se parece com o que você pediu. Ela SUGERE; ela não confirma. Quem chama precisa
+   * conferir o telefone devolvido contra o que procurava antes de tratar como a mesma
+   * pessoa. Apontar o cartão errado é pior do que não achar cartão nenhum.
+   *
+   * Devolve lista vazia no 204 (o Kommo responde assim quando não achou nada) e em
+   * qualquer erro — esta é uma consulta de conferência, não pode derrubar quem chamou.
+   */
+  async buscarContatos(
+    texto: string,
+    limite = 10,
+  ): Promise<Array<{ id: number; nome: string | null; telefone: string | null; leadIds: number[] }>> {
+    const termo = texto.trim();
+    if (!termo) return [];
+    try {
+      const { data } = await this.http.get<{
+        _embedded?: {
+          contacts?: Array<{
+            id?: number;
+            name?: string;
+            custom_fields_values?: Array<{ field_code?: string; values?: Array<{ value?: string }> }>;
+            _embedded?: { leads?: Array<{ id?: number }> };
+          }>;
+        };
+      }>('/contacts', { params: { query: termo, limit: Math.min(50, Math.max(1, limite)), with: 'leads' } });
+      return (data?._embedded?.contacts ?? []).flatMap((c) => {
+        if (typeof c.id !== 'number') return [];
+        const campo = c.custom_fields_values?.find((f) => f.field_code === 'PHONE');
+        const tel = campo?.values?.[0]?.value;
+        return [
+          {
+            id: c.id,
+            nome: typeof c.name === 'string' && c.name.trim() ? c.name.trim() : null,
+            telefone: typeof tel === 'string' && tel.trim() ? tel.trim() : null,
+            leadIds: (c._embedded?.leads ?? []).map((l) => l.id).filter((id): id is number => typeof id === 'number'),
+          },
+        ];
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Nome e telefone do contato numa chamada só. O NOME aqui é o do perfil do WhatsApp, e é o que
    * salva o cadastro na franquia quando o título do cartão ainda é "Lead 22261987": medido em
    * 22/09/2026, 2.462 dos 3.083 leads barrados por falta de nome tinham nome de gente aqui.
