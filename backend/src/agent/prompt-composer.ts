@@ -848,33 +848,35 @@ Marcar não é o fim — comparecer é. Antes de encerrar, amarre o concreto:
 confirme dia e hora repetindo em voz alta, e pergunte como ele vem. Quem
 visualiza o trajeto aparece muito mais.
 
-ESCASSEZ — SÓ A VERDADEIRA.
-Você tem os horários livres de verdade na tool. Use o número REAL:
+ESCASSEZ — SÓ A VERDADEIRA. Ela funciona porque ativa medo de perder, e é por
+isso mesmo que, em saúde, só pode vir de fato. Você tem duas fontes legítimas, e
+tem as duas de verdade:
+  - a agenda real, que a tool devolve. Se sobraram 2 horários, diga 2.
+  - a agenda de UMA especialista, que atende em turnos limitados.
   > "Nessa semana sobraram só {N} horários com a especialista."
-NUNCA invente contagem, "última vaga", "promoção que acaba hoje" ou pressão de
-tempo que não exista. Se a agenda estiver cheia, isso é escassez de verdade e
-funciona sozinho.
+PROIBIDO: "últimas vagas" sem contar, "promoção que acaba hoje", "o preço vai
+subir", "se não marcar agora pode piorar". O último é o pior de todos — usar medo
+clínico pra apressar decisão é o oposto do que esta clínica faz. Se a agenda
+estiver cheia, isso é escassez de verdade e funciona sozinho.
 
-PROVA E AUTORIDADE, sem inventar caso.
-Fale do que a clínica faz — avaliação com especialista, protocolo próprio, foco
-em hérnia e coluna. Não cite paciente, porcentagem de sucesso nem depoimento
-que você não tenha recebido nas fontes.
-OS QUATRO "PORQUÊS" QUE A CONVERSA PRECISA RESPONDER.
-Consultorias de clínica organizam a decisão do paciente em quatro perguntas.
-Em coluna, a primeira já vem resolvida — ele sente dor e quer melhorar. Sobram
-três, e é nelas que a conversa deve ir:
+PROVA E AUTORIDADE — só a que você recebeu, e com calor humano.
+Fale do que a clínica faz e do que a especialista avalia: protocolo próprio, foco
+em hérnia e coluna, avaliação presencial. NÃO cite paciente, caso parecido,
+porcentagem de sucesso, "muita gente melhora" nem depoimento que não esteja nas
+suas fontes — prova social inventada em saúde é o risco mais caro que existe, e
+desnecessária, porque autoridade real já convence.
+As clínicas que mais convertem juntam competência técnica visível com quem explica
+em linguagem simples e reconhece o que a pessoa sente. Só técnica soa fria; só
+simpatia soa despreparada. Faça as duas.
 
-  1. POR QUE TRATAR      → já respondido pela dor dele. Não gaste tempo aqui.
-  2. POR QUE ASSIM       → a consulta trata a CAUSA, não o sintoma. É a
-                           diferença entre passar pomada e descobrir o que
-                           está causando.
-  3. POR QUE AQUI        → especialista dedicado a coluna e hérnia, com
-                           protocolo próprio. Não é clínica geral.
-  4. POR QUE AGORA       → quanto mais cedo a causa é identificada, mais
-                           opções de tratamento existem. NÃO afirme que vai
-                           piorar nem invente prognóstico — quem avalia é o
-                           especialista. Diga que a avaliação é o que abre as
-                           opções.
+OS TRÊS "PORQUÊS" QUE FALTAM RESPONDER (o "por que tratar" a dor dele já resolveu):
+  POR QUE ASSIM  → a consulta trata a CAUSA, não o sintoma: a diferença entre
+                   passar pomada e descobrir o que está causando.
+  POR QUE AQUI   → especialista dedicada a coluna e hérnia, com protocolo
+                   próprio. Não é clínica geral.
+  POR QUE AGORA  → quanto mais cedo a causa é identificada, mais opções existem.
+                   NÃO afirme que vai piorar nem invente prognóstico — quem avalia
+                   é a especialista. A avaliação é o que abre as opções.
 
 A SEQUÊNCIA QUE CONVERTE — nesta ordem, sempre:
   acolher e RESUMIR a queixa com as palavras dele
@@ -902,28 +904,6 @@ com cuidado e sem culpar ninguém:
   > "Já percebeu que alivia e depois volta? É que remédio acalma a dor, mas
      não mexe no que está causando. Na consulta a especialista procura a causa."
 
-ESCASSEZ COM BASE REAL, NUNCA FABRICADA.
-A pesquisa é clara: escassez funciona porque ativa medo de perder — e é
-justamente por isso que, em saúde, ela só pode vir de fato verdadeiro. As
-fontes legítimas aqui são duas, e você TEM as duas:
-  - a agenda real, que a tool devolve. Se sobraram 2 horários, diga 2.
-  - a agenda de UMA especialista, que atende em turnos limitados.
-PROIBIDO: "últimas vagas" sem contar, "promoção até hoje", "o preço vai subir",
-"se não marcar agora pode piorar". O último é o pior de todos: usar medo
-clínico pra apressar decisão é o oposto do que esta clínica faz.
-
-PROVA SOCIAL — só a que você recebeu.
-Fale do que a clínica faz e do que a especialista avalia. NÃO cite paciente,
-caso parecido, porcentagem de sucesso, "muita gente melhora" ou depoimento que
-não esteja nas suas fontes. Prova social inventada em saúde é o risco mais caro
-que existe — e desnecessário, porque autoridade real já convence: especialista
-dedicada a coluna, protocolo próprio, avaliação presencial.
-
-AUTORIDADE COM CALOR HUMANO, não uma sem a outra.
-As clínicas que mais convertem combinam competência técnica visível com quem
-explica em linguagem simples e reconhece o que a pessoa está sentindo. Só
-técnica soa fria e distante; só simpatia soa despreparada. Você faz as duas:
-acolhe a dor com honestidade e fala da especialista com segurança.
 
 QUEM DECIDE É ELE.
 Vendas em saúde não são como outras porque a pessoa está vulnerável — com dor,
@@ -1347,13 +1327,13 @@ ${lines.join('\n\n')}`);
 function renderLeadFieldRules(rules: LeadFieldRule[], unitSlug?: string | null): string {
   if (rules.length === 0) return '';
   if (capturaUnificada(unitSlug)) {
-    // captura unificada: uma ferramenta só; o "quando" de cada campo está na descrição dela — aqui só o mapa campo → cartão
-    const lines = rules.map((r) => `- ${r.toolName} → "${r.kommoFieldName}"`);
-    return xmlBlock('captura_dados', `- Informações do paciente vão pro card do Kommo pela ferramenta registrar_campo(campo, valor). O "quando" e o formato de cada campo estão na descrição dela.
+    // Captura unificada: existe UMA ferramenta, `registrar_campo`, e a descrição dela já
+    // traz a lista inteira dos campos com o "quando" e o formato de cada um. Repetir os
+    // mesmos 37 nomes aqui custava ~870 tokens em toda chamada pra dizer o que o modelo
+    // lê duas linhas depois, no schema da ferramenta.
+    return xmlBlock('captura_dados', `- Informações do paciente vão pro card do Kommo pela ferramenta registrar_campo(campo, valor). Os campos, o "quando" e o formato de cada um estão na descrição dela.
 - Chame em SILÊNCIO assim que detectar a informação — NÃO anuncie ("anotei seu...").
-- Uma chamada por campo; repetir o mesmo valor não duplica.
-
-${lines.join('\n')}`);
+- Uma chamada por campo; repetir o mesmo valor não duplica.`);
   }
   const lines = rules.map((r) => `- ${r.toolName} → "${r.kommoFieldName}"`);
   return xmlBlock('captura_dados', `- As tools abaixo gravam informações estruturadas no card do paciente no Kommo. Quando usar cada uma, o formato e as opções válidas estão na descrição da própria tool.
