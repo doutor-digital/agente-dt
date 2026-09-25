@@ -758,41 +758,11 @@ function valoresAprovados(unit: Unit): number[] {
   return [...achados].sort((a, b) => a - b);
 }
 
-/**
- * Os dois preços que este bloco usa nos exemplos.
- *
- * Vinham do MENOR e do MAIOR "R$" achados no cadastro, sem saber a que condição cada
- * número pertencia. Medido em 24/09/2026, nos prompts reais de produção:
- *   Serra      — "R$ 350, ou R$ 220 no PIX". R$ 220 é o antecipado de CONVÊNIO; o
- *                particular antecipado é R$ 250. Trinta reais de desconto por conversa.
- *   Boa Vista  — "R$ 450, ou R$ 100". O real é R$ 350 no total (R$ 100 de sinal +
- *                R$ 250 no dia), e o 450 foi pescado da frase "se o paciente perguntar
- *                se paga R$ 450, responda que não" — um número dentro de uma negação.
- *   Olímpia e Bebedouro — R$ 150 da carteirinha de convênio virava o preço do Pix.
- *
- * `precosDaConsulta` já lê o par certo (casa o número com "antecipado"/"no dia" pela
- * proximidade, sem outro R$ no meio) e é quem manda no cartão de confirmação desde
- * sempre. Aqui o bloco passa a usar a MESMA fonte — dois lugares do prompt dizendo
- * preços diferentes é o que o paciente vê como clínica que não sabe quanto cobra.
- */
-function precosDoBloco(unit: Unit): { ancora: string; pix: string } | null {
-  const p = precosDaConsulta(unit);
-  if (p) {
-    // Taxa de reserva (Boa Vista): o antecipado é PARTE do valor, não alternativa a ele.
-    // A âncora é o total; o "antecipado" é o que garante o horário.
-    const ancora = unit.spineBookingRequiresPayment ? p.antecipado + p.noDia : p.noDia;
-    return { ancora: `R$ ${fmtBRL(ancora)}`, pix: `R$ ${fmtBRL(p.antecipado)}` };
-  }
-  // Sem par legível no cadastro, o velho palpite (menor/maior) é pior que o silêncio:
-  // o bloco sai sem exemplo numérico e a IA busca o valor nas Fontes Oficiais.
-  return null;
-}
-
 function renderConversao(unit: Unit): string {
-  const p = precosDoBloco(unit);
-  if (!p) return '';
-  const precoAncora = p.ancora;
-  const precoPix = p.pix;
+  const valores = valoresAprovados(unit);
+  if (valores.length === 0) return '';
+  const precoAncora = `R$ ${valores[valores.length - 1]}`;
+  const precoPix = `R$ ${valores[0]}`;
 
   return xmlBlock(
     'conversao',
@@ -825,8 +795,8 @@ direito, e faça UMA pergunta sobre a dor. Uma só.
 DEPOIS QUE ELE CONTAR A QUEIXA, aí sim diga o valor — e diga inteiro, sem
 rodeio, ancorado no que ele acabou de contar:
   > "Entendi, {tempo} com essa dor não é pouco. A consulta com o especialista é
-     ${precoAncora} no dia, ou ${precoPix} pagando antes por PIX. É nela que se
-     descobre a causa, em vez de continuar tratando o sintoma."
+     ${precoAncora}, ou ${precoPix} à vista no PIX. É nela que se descobre a
+     causa, em vez de continuar tratando o sintoma."
 
 SE ELE INSISTIR, RESPONDA NA HORA. "Só me diz o valor", "não quero contar
 nada", perguntou duas vezes — acabou o adiamento. Enrolar de novo destrói mais
