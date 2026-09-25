@@ -70,31 +70,37 @@ async function api<T>(caminho: string, tentou = false): Promise<T> {
   return JSON.parse(corpo) as T;
 }
 
-interface Unidade { id: string; slug: string; name?: string | null }
+interface Unidade { slug: string; nome?: string | null; franquiaLigada?: boolean }
 let cacheUnidades: Unidade[] | null = null;
 
 /**
- * Atenção: `GET /api/units` devolve `{ units: [...] }`, não a lista crua — é o envelope
- * que o console inteiro usa. Ler como array direto fazia toda ferramenta morrer no
- * primeiro uso com "us.find is not a function". Aceitamos as duas formas para o dia em
- * que o envelope mudar.
+ * Lê `/cerebro/unidades`, não `/units`.
+ *
+ * `/units` fica atrás do login do console e devolve a unidade inteira, credencial
+ * incluída — a chave de serviço não abre aquilo, e não deve mesmo. A lista do cérebro
+ * devolve só slug, nome e se a franquia está ligada, que é tudo de que aqui se precisa.
  */
 async function unidades(): Promise<Unidade[]> {
   if (!cacheUnidades) {
-    const corpo = await api<{ units?: Unidade[] } | Unidade[]>('/units');
-    const lista = Array.isArray(corpo) ? corpo : corpo?.units;
-    if (!Array.isArray(lista)) throw new Error('GET /api/units não devolveu lista de unidades');
+    const corpo = await api<{ unidades?: Unidade[] } | Unidade[]>('/cerebro/unidades');
+    const lista = Array.isArray(corpo) ? corpo : corpo?.unidades;
+    if (!Array.isArray(lista)) throw new Error('GET /api/cerebro/unidades não devolveu lista de unidades');
     cacheUnidades = lista;
   }
   return cacheUnidades;
 }
 
-/** Aceita slug ou id: quem usa escreve "doutor-hernia-maraba", não um cuid. */
-async function idDaUnidade(slugOuId: string): Promise<string> {
+/**
+ * As rotas do cérebro aceitam o slug no lugar do id, então não há id pra resolver. O que
+ * resta é conferir que a unidade existe, pra o erro dizer "não existe, conhecidas: …" em
+ * vez de um 404 seco vindo do servidor.
+ */
+async function alvo(slug: string): Promise<string> {
   const us = await unidades();
-  const achada = us.find((u) => u.slug === slugOuId || u.id === slugOuId);
-  if (!achada) throw new Error(`unidade "${slugOuId}" não existe. Conhecidas: ${us.map((u) => u.slug).join(', ')}`);
-  return achada.id;
+  if (!us.some((u) => u.slug === slug)) {
+    throw new Error(`unidade "${slug}" não existe. Conhecidas: ${us.map((u) => u.slug).join(', ')}`);
+  }
+  return encodeURIComponent(slug);
 }
 
 // Tipado como Tool[] de propósito: o `as unknown as []` de antes desligava a checagem
@@ -151,18 +157,18 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   try {
     switch (req.params.name) {
       case 'cerebro_unidades':
-        return texto((await unidades()).map((u) => ({ slug: u.slug, nome: u.name ?? null })));
+        return texto(await unidades());
       case 'cerebro_panorama': {
-        const id = await idDaUnidade(String(a.unidade ?? ''));
+        const u = await alvo(String(a.unidade ?? ''));
         const q = new URLSearchParams();
         if (a.dias) q.set('dias', String(a.dias));
         if (a.meses) q.set('meses', String(a.meses));
-        return texto(await api(`/units/${id}/cerebro/panorama?${q}`));
+        return texto(await api(`/units/${u}/cerebro/panorama?${q}`));
       }
       case 'cerebro_paciente': {
-        const id = await idDaUnidade(String(a.unidade ?? ''));
+        const u = await alvo(String(a.unidade ?? ''));
         const q = new URLSearchParams({ busca: String(a.busca ?? '') });
-        return texto(await api(`/units/${id}/cerebro/paciente?${q}`));
+        return texto(await api(`/units/${u}/cerebro/paciente?${q}`));
       }
       default:
         throw new Error(`ferramenta desconhecida: ${req.params.name}`);

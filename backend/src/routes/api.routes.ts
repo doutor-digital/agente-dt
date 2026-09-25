@@ -172,7 +172,12 @@ import {
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
 import { widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
-import { cerebroPanoramaHandler, cerebroPacienteHandler, chaveDeServicoOuSessao } from '../controllers/cerebro.controller.js';
+import {
+  cerebroPanoramaHandler,
+  cerebroPacienteHandler,
+  cerebroUnidadesHandler,
+  chaveDeServicoOuSessao,
+} from '../controllers/cerebro.controller.js';
 import { listarAltaHandler, decidirAltaHandler } from '../controllers/alta.controller.js';
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
@@ -265,6 +270,26 @@ apiRouter.post('/public/alta/:slug', decidirAltaHandler);
 // "Digitando…" + tique azul. Quem chama é o n8n do rastreio, que é quem tem o
 // `wamid` do webhook cru da Meta; a decisão de acender fica aqui.
 apiRouter.post('/public/whatsapp/:slug/digitando', digitandoHandler);
+
+// O cérebro (produto de organização de CRM, sem IA atendendo): lê a franquia e o Kommo
+// lado a lado e devolve o que não bate. Só leitura — quem escreve campo é outra rota,
+// que ainda não existe, e mover etapa nunca vai ser daqui.
+//
+// Fica ACIMA do `requireAuth` de propósito: a rotina das 17h entra por chave de serviço,
+// e o `requireAuth` global responderia 401 antes de alguém olhar a chave. Quem entra sem
+// chave passa pela mesma cadeia de sempre — `requireAuth` e depois o acesso à unidade —,
+// então pelo navegador nada muda.
+apiRouter.get('/cerebro/unidades', chaveDeServicoOuSessao(requireAuth), cerebroUnidadesHandler);
+apiRouter.get(
+  '/units/:id/cerebro/panorama',
+  chaveDeServicoOuSessao(requireAuth, requireUnitAccess),
+  cerebroPanoramaHandler,
+);
+apiRouter.get(
+  '/units/:id/cerebro/paciente',
+  chaveDeServicoOuSessao(requireAuth, requireUnitAccess),
+  cerebroPacienteHandler,
+);
 
 apiRouter.use(requireAuth);
 
@@ -382,12 +407,6 @@ apiRouter.get('/units/:id/spine/schedules', requireUnitAccess, spineSchedulesHan
 apiRouter.post('/units/:id/spine/ping', requireUnitAccess, spinePingHandler);
 apiRouter.post('/units/:id/spine/sync-lead', requireUnitAccess, syncLeadHandler);
 
-// O cérebro (produto de organização de CRM, sem IA atendendo): lê a franquia e o Kommo
-// lado a lado e devolve o que não bate. Só leitura — quem escreve campo é outra rota,
-// que ainda não existe, e mover etapa nunca vai ser daqui.
-// A rotina das 17h entra pela chave de serviço; pessoa continua entrando pela sessão.
-apiRouter.get('/units/:id/cerebro/panorama', chaveDeServicoOuSessao(requireUnitAccess), cerebroPanoramaHandler);
-apiRouter.get('/units/:id/cerebro/paciente', chaveDeServicoOuSessao(requireUnitAccess), cerebroPacienteHandler);
 apiRouter.get('/units/:id/spine/lead-links', requireUnitAccess, listLeadLinksHandler);
 apiRouter.post('/units/:id/spine/lead-preview', requireUnitAccess, previewLeadHandler);
 apiRouter.get('/units/:id/spine/prontidao', requireUnitAccess, prontidaoHandler);
