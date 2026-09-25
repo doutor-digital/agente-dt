@@ -22,7 +22,7 @@ import {
 } from '../services/lead-memory.service.js';
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
-import { consumirNaoEntregue, renderEntregaFalha } from './entrega-falha.js';
+import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import {
@@ -1162,26 +1162,19 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
     }
     case 'transfer_with_permission': {
       const inc = params.includeSummary !== false;
-      return [
-        'pergunte ao cliente se ele aceita ser transferido pra um humano',
-        '(ex: "Posso te conectar com a equipe?").',
-        'Se ele aceitar:',
-        inc
-          ? '(1) PRIMEIRO chame resumir_lead_para_sdr({ leadId }) — gera resumo e grava em nota + campo custom; (2) DEPOIS chame pausar_ia. Sequência obrigatória nessa ordem; não pule o resumo.'
-          : 'chame pausar_ia.',
-      ].join(' ');
+      return inc
+        ? 'pergunte se ele aceita falar com a equipe e, se aceitar, TRANSFIRA'
+        : 'pergunte se ele aceita falar com a equipe e, se aceitar, chame pausar_ia';
     }
     case 'transfer_without_permission': {
       const inc = params.includeSummary !== false;
-      return inc
-        ? '(1) PRIMEIRO chame resumir_lead_para_sdr({ leadId }) — gera resumo e grava em nota + campo custom; (2) DEPOIS chame pausar_ia imediatamente (sem pedir confirmação). Sequência obrigatória nessa ordem; não pule o resumo.'
-        : 'chame pausar_ia imediatamente (sem pedir confirmação).';
+      return inc ? 'TRANSFIRA' : 'chame pausar_ia';
     }
     case 'summarize_to_note': {
       const hint = typeof params.focusHint === 'string' && params.focusHint.trim()
-        ? ` Foco: ${params.focusHint.trim()}.`
+        ? ` (foco: ${params.focusHint.trim()})`
         : '';
-      return `chame resumir_lead_para_sdr — gera um resumo do contexto e posta como NOTA INTERNA no Kommo pro SDR humano ver.${hint} A nota fica visível só pros operadores; o paciente não vê.`;
+      return `chame resumir_lead_para_sdr${hint}`;
     }
     case 'send_message': {
       const text = typeof params.text === 'string' ? params.text.trim() : '';
@@ -1191,11 +1184,7 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
     case 'respond_with_intent': {
       const instruction = typeof params.instruction === 'string' ? params.instruction.trim() : '';
       if (!instruction) return 'orientar resposta (orientação não configurada)';
-      return [
-        `SUA RESPOSTA NESTE TURNO DEVE SEGUIR A ORIENTAÇÃO ABAIXO. Use SUAS PRÓPRIAS PALAVRAS — NÃO copie literalmente. Respeite a intenção, o conteúdo e qualquer lógica condicional ("se X então Y") que a orientação trouxer. Mantenha o tom da persona configurada (não fique formal demais nem robótico):`,
-        '',
-        `Orientação: ${instruction}`,
-      ].join('\n');
+      return `ORIENTE: ${instruction}`;
     }
     case 'create_task': {
       const text = typeof params.text === 'string' ? params.text.trim() : '';
@@ -1206,9 +1195,8 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
       const userName = typeof params.responsibleUserName === 'string' ? params.responsibleUserName : null;
       if (!text || !deadlineMinutes) return 'criar tarefa (não configurada)';
       const userPart = userId ? `, responsibleUserId: ${userId}` : '';
-      const deadlineHuman = formatDeadline(deadlineMinutes);
-      const userHuman = userName ? ` — atribuída a ${userName}` : '';
-      return `chame criar_tarefa({ text: "${text}", deadlineMinutes: ${deadlineMinutes}${userPart} }) — cria tarefa pro SDR no Kommo com prazo de ${deadlineHuman}${userHuman}. Silencioso pro paciente.`;
+      const userHuman = userName ? ` (pra ${userName})` : '';
+      return `chame criar_tarefa({ text: "${text}", deadlineMinutes: ${deadlineMinutes}${userPart} })${userHuman}`;
     }
     case 'assign_responsible': {
       const userId = typeof params.userId === 'number' ? params.userId : null;
@@ -1260,14 +1248,10 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
         typeof params.moveToPipelineId === 'number' ? params.moveToPipelineId : null;
       const stageLabel =
         typeof params.moveToStageLabel === 'string' ? params.moveToStageLabel : null;
-      const parts = ['chame pausar_ia — desliga a IA pra esse lead, Salesbot do Kommo para de disparar'];
-      if (stageId && stageId > 0) {
-        const pipelinePart = pipelineId ? `, pipelineId: ${pipelineId}` : '';
-        const labelHuman = stageLabel ? ` (etapa "${stageLabel}")` : '';
-        parts.push(`e DEPOIS chame mover_etapa({ statusId: ${stageId}${pipelinePart} })${labelHuman} — pra o SDR encontrar o lead no funil`);
-      }
-      parts.push('Ação silenciosa — não anuncie ao paciente que a IA foi pausada.');
-      return parts.join('. ') + '.';
+      if (!stageId || stageId <= 0) return 'chame pausar_ia';
+      const pipelinePart = pipelineId ? `, pipelineId: ${pipelineId}` : '';
+      const labelHuman = stageLabel ? ` — "${stageLabel}"` : '';
+      return `chame pausar_ia e DEPOIS mover_etapa({ statusId: ${stageId}${pipelinePart} })${labelHuman}`;
     }
     case 'pause_in_stages': {
       const stages = Array.isArray(params.stages) ? (params.stages as Array<{ statusLabel?: string; statusId: number }>) : [];
@@ -1320,34 +1304,39 @@ function isPureGuardRule(action: ActionLike): boolean {
   return arr.every((s) => s.kind === 'pause_in_stages');
 }
 
+/**
+ * A moldura das regras, dita UMA vez.
+ *
+ * Cada regra repetia o mesmo parágrafo: como seguir uma orientação, em que ordem
+ * transferir, que a ação é silenciosa. Na Serra são 35 regras — 19 delas com o
+ * bloco de orientação inteiro e 7 com a sequência de transferência. Medido em
+ * 25/09/2026: a moldura repetida custava mais que o conteúdo das regras.
+ *
+ * O que está aqui é exatamente o que saiu de lá; nenhuma regra perdeu instrução.
+ */
+const MOLDURA_DAS_ACOES = `- Detecte a situação e dispare TODAS as ações da regra (via tools), juntas no mesmo turno.
+- Ações silenciosas — não anuncie (tag, etapa, transferência, resumo, tarefa, pausa).
+- "ORIENTE: X" — escreva a resposta DESTE turno seguindo X. Use SUAS palavras, não copie
+  literalmente; respeite a intenção, o conteúdo e qualquer lógica condicional ("se X então Y")
+  que a orientação trouxer; mantenha o tom da persona (sem ficar formal demais nem robótico).
+- "TRANSFIRA" — chame resumir_lead_para_sdr e SÓ DEPOIS pausar_ia, nessa ordem e sem pedir
+  confirmação. Nunca pule o resumo: é ele que entrega o contexto pra pessoa que vai assumir.
+- Itens numerados dentro de uma regra: dispare na ordem escrita.`;
+
 function renderActions(actions: UnitAction[]): string {
   const visible = actions.filter((a) => !isPureGuardRule(a));
   if (visible.length === 0) return '';
-  const lines = visible.map((a, i) => {
-    const cond = a.conditionDescription.trim();
-    const act = humanizeAction(a);
-    const notes = a.notes?.trim();
-    const lineParts = [`${i + 1}. Quando ${cond}, ${act}`];
-    if (notes) lineParts.push(`   Detalhes: ${notes}`);
-    return lineParts.join('\n');
-  });
-  return xmlBlock('acoes', `- Detecte a situação e dispare TODAS as ações da regra (via tools), juntas no mesmo turno.
-- Ações silenciosas — não anuncie (tag, etapa, transferência, resumo). Exceção: transferência COM permissão pergunta antes.
-
-${lines.join('\n\n')}`);
+  // `notes` é recado de operador pra operador ("Objeção preço.", "RED FLAG: urgência
+  // + transferência.") — repete a condição que já está na linha e não diz nada novo
+  // ao modelo. Continua no banco, para quem edita a regra no console.
+  const lines = visible.map((a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}`);
+  return xmlBlock('acoes', `${MOLDURA_DAS_ACOES}\n\n${lines.join('\n\n')}`);
 }
 
 function renderGlobalActions(actions: GlobalAction[]): string {
   const visible = actions.filter((a) => !isPureGuardRule(a));
   if (visible.length === 0) return '';
-  const lines = visible.map((a, i) => {
-    const cond = a.conditionDescription.trim();
-    const act = humanizeAction(a);
-    const notes = a.notes?.trim();
-    const lineParts = [`${i + 1}. Quando ${cond}, ${act}`];
-    if (notes) lineParts.push(`   Detalhes: ${notes}`);
-    return lineParts.join('\n');
-  });
+  const lines = visible.map((a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}`);
   return xmlBlock('regras_globais', `(prioridade máxima)
 - Valem pra TODAS as unidades e ganham das regras da unit (não-negociáveis).
 - Dispare todas as ações da regra, em silêncio.
@@ -1633,22 +1622,21 @@ function renderEtapaLead(e: EstadoEtapaLead | null | undefined, timeZone?: strin
  * "me manda o pix que eu pago agora" virava "preciso do seu telefone com DDD".
  * O número já é conhecido: é o WhatsApp de onde a mensagem veio.
  */
-export function renderConversationContext(leadId: number, telefone?: string | null): string {
-  const linhas = [
-    `- leadId desta conversa: **${leadId}**`,
-    '- Ao chamar QUALQUER tool, use ESTE número EXATAMENTE como o argumento `leadId`.',
-    '- NUNCA passe 0, NUNCA passe a string "leadId", NUNCA invente outro número.',
-    `- Exemplo correto: aplicar_tag({ leadId: ${leadId}, tag: "..." }).`,
-  ];
+export function renderConversationContext(_leadId: number, telefone?: string | null): string {
+  // O leadId saiu daqui em 24/09/2026: ele não é mais argumento de ferramenta
+  // nenhuma — o código injeta o lead da conversa sozinho (esconderLeadIdDoModelo
+  // em graph.ts). Ensinar a passar um parâmetro que não existe só gastava token,
+  // na entrada e na saída.
   const fone = telefone?.trim();
-  if (fone) {
-    linhas.push(
+  if (!fone) return '';
+  return xmlBlock(
+    'contexto_conversa',
+    [
       `- Telefone do WhatsApp deste paciente: **${fone}**`,
       '- Use ESTE número em `cadastrar_paciente` e `agendar_consulta`. NÃO peça o telefone a ele — você já tem.',
       '- Só peça outro número se ELE disser que prefere ser contatado em um diferente.',
-    );
-  }
-  return xmlBlock('contexto_conversa', linhas.join('\n'));
+    ].join('\n'),
+  );
 }
 
 /**
@@ -1830,7 +1818,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
   // senão continua como se tivesse falado, e o paciente não viu nada.
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
-    const entregaBlock = renderEntregaFalha(consumirNaoEntregue(unit.id, leadId));
+    const presa = consumirNaoEntregueDetalhe(unit.id, leadId);
+    const entregaBlock = renderEntregaFalha(presa?.texto ?? null, presa?.motivo);
     if (entregaBlock) blocks.push(entregaBlock);
   }
 
@@ -1897,12 +1886,20 @@ export function composeSystemPromptParts(input: ComposeInput): {
 
   const customBase = escolherBase(unit, agentConfigPrompt);
 
-  const dynamic: string[] = [];
-  dynamic.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
+  // Estes três mudam POR UNIDADE, não por paciente: o calendário vira uma vez
+  // por dia (renderCalendario recebe a data sem hora, de propósito), o endereço
+  // praticamente nunca, e os aprendizados quando alguém liga ou desliga uma lição
+  // no console — medido: em lote, ~1× por semana. Ficavam fora do bloco cacheado
+  // e eram cobrados de novo em TODA chamada. Vão pro fim do bloco de 1h: o preço
+  // é uma invalidação por dia, contra ~200 releituras por dia na Serra.
+  const porUnidade: string[] = [];
+  porUnidade.push(xmlBlock('calendario', renderCalendario(new Date(), fusoDaUnidade(unit))));
   const ondeFica = renderOndeFica(unit);
-  if (ondeFica) dynamic.push(ondeFica);
+  if (ondeFica) porUnidade.push(ondeFica);
   const lessonsBlock = renderLessons(lessons);
-  if (lessonsBlock) dynamic.push(lessonsBlock);
+  if (lessonsBlock) porUnidade.push(lessonsBlock);
+
+  const dynamic: string[] = [];
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) dynamic.push(memoryBlock);
   const faltaBlock = renderFaltaParaAgendar(
@@ -1912,7 +1909,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
   // senão continua como se tivesse falado, e o paciente não viu nada.
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
-    const entregaBlock = renderEntregaFalha(consumirNaoEntregue(unit.id, leadId));
+    const presa = consumirNaoEntregueDetalhe(unit.id, leadId);
+    const entregaBlock = renderEntregaFalha(presa?.texto ?? null, presa?.motivo);
     if (entregaBlock) dynamic.push(entregaBlock);
   }
   if (leadId && Number.isFinite(leadId) && leadId > 0) {
@@ -1926,7 +1924,12 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (etapaBlock) dynamic.push(etapaBlock);
 
   if (unit.singlePromptMode) {
-    return { cacheable: (customBase ?? '').trim(), dynamic: dynamic.join('\n\n') };
+    // Sem prompt montado por nós, não há bloco estável onde encaixar: os três
+    // voltam pra parte viva, como era antes.
+    return {
+      cacheable: (customBase ?? '').trim(),
+      dynamic: [...porUnidade, ...dynamic].join('\n\n'),
+    };
   }
 
   const cache: string[] = [];
@@ -1967,6 +1970,11 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (templatesBlock) cache.push(templatesBlock);
   const flaggedBlock = renderFlaggedExamples(flaggedExamples);
   if (flaggedBlock) cache.push(flaggedBlock);
+
+  // Por último dentro do cache: é o que muda mais cedo (o calendário vira à
+  // meia-noite). O que quase nunca muda fica na frente, pra aproveitar o cache
+  // parcial quando o dia vira.
+  cache.push(...porUnidade);
 
   const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
   if (firstTurnBlock) dynamic.push(firstTurnBlock);
