@@ -71,6 +71,8 @@ export interface KommoTalk {
   created_at?: number;
   updated_at?: number;
   entity_id?: number;
+  entity_type?: string | null;
+  status?: string | null;
 }
 
 export interface KommoTalkMessage {
@@ -803,6 +805,46 @@ export class KommoClient {
       return data._embedded?.talks ?? [];
     } catch (err) {
       wrapAxiosError(err, `listTalks(${leadId})`);
+    }
+  }
+
+  /**
+   * Todas as conversas EM ABERTO da conta, paginadas.
+   *
+   * O teto de páginas existe porque `/talks` não tem filtro de "aberta" na API — vem
+   * tudo e a separação é nossa. Numa conta como a de Divinópolis (827 abertas dentro de
+   * um histórico bem maior) sem teto isto varreria a conta inteira a cada rodada.
+   */
+  async listarConversasAbertas(maxPaginas = 20): Promise<KommoTalk[]> {
+    const todas: KommoTalk[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      const { data, status } = await this.http.get<{ _embedded?: { talks?: KommoTalk[] } }>('/talks', {
+        params: { limit: 250, page },
+      });
+      if (status === 204 || !data) break;
+      const lote = data._embedded?.talks ?? [];
+      if (!lote.length) break;
+      for (const t of lote) if (t.is_in_work) todas.push(t);
+      if (lote.length < 250) break;
+    }
+    return todas;
+  }
+
+  /**
+   * Fecha uma conversa — o mesmo "concluir" do botão da tela.
+   *
+   * Devolve `false` em vez de lançar: a faxina roda sobre centenas de conversas e uma
+   * que já foi fechada por uma pessoa no meio do caminho não pode derrubar a rodada.
+   * Quem chama conta as falhas e relata.
+   */
+  async fecharConversa(talkId: number): Promise<boolean> {
+    try {
+      await this.http.post(`/talks/${talkId}/close`, { force_close: true });
+      return true;
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status ?? null;
+      logger.warn({ talkId, status, subdominio: this.creds.subdomain }, 'kommo: não consegui fechar a conversa');
+      return false;
     }
   }
 
