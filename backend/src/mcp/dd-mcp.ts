@@ -2,8 +2,13 @@
  * dd-mcp — as ferramentas do cérebro, pro Claude Code na máquina do João.
  *
  * Roda local (stdio) e fala com o backend de produção por HTTPS. NÃO guarda token de
- * franquia nem de Kommo: quem tem essas chaves é o servidor. Aqui só mora o login do
- * console, e a sessão é trocada por um cookie que vive em memória.
+ * franquia nem de Kommo: quem tem essas chaves é o servidor.
+ *
+ * Entra com CHAVE DE SERVIÇO (`DD_CHAVE` → header `x-internal-key`). A rotina das 17h
+ * roda sem ninguém na frente, e senha de pessoa em cron é ruim: vale pra tudo no
+ * console, morre quando a pessoa troca de senha, e fica escrita em arquivo. A chave é só
+ * pra isto e gira sozinha. Se `DD_CHAVE` não estiver definida, cai no login por e-mail e
+ * senha, que continua servindo pra uso manual.
  *
  * Só leitura, nesta versão. As ferramentas de escrever campo entram depois que o
  * relatório rodar alguns dias e a recepção confirmar que o que ele diz é verdade;
@@ -12,7 +17,7 @@
  * Configuração (no ~/.claude.json ou via `claude mcp add`):
  *   command: node
  *   args:    ["<repo>/backend/dist/mcp/dd-mcp.js"]
- *   env:     DD_API_URL, DD_EMAIL, DD_SENHA
+ *   env:     DD_API_URL + DD_CHAVE   (ou DD_EMAIL + DD_SENHA)
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -20,13 +25,16 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 const API = (process.env.DD_API_URL ?? 'https://agente-vps.doutordigitalconsultoria.com').replace(/\/$/, '');
+const CHAVE = process.env.DD_CHAVE ?? '';
 const EMAIL = process.env.DD_EMAIL ?? '';
 const SENHA = process.env.DD_SENHA ?? '';
 
 let cookie: string | null = null;
 
 async function entrar(): Promise<void> {
-  if (!EMAIL || !SENHA) throw new Error('faltam DD_EMAIL e DD_SENHA no ambiente do MCP');
+  if (!EMAIL || !SENHA) {
+    throw new Error('sem credencial: defina DD_CHAVE (recomendado) ou DD_EMAIL + DD_SENHA');
+  }
   const r = await fetch(`${API}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -43,9 +51,17 @@ async function entrar(): Promise<void> {
 
 /** Uma tentativa de reentrar quando a sessão cai — senão a rotina das 17h morre sozinha. */
 async function api<T>(caminho: string, tentou = false): Promise<T> {
-  if (!cookie) await entrar();
-  const r = await fetch(`${API}/api${caminho}`, { headers: { cookie: cookie! } });
-  if ((r.status === 401 || r.status === 403) && !tentou) {
+  const cabecalhos: Record<string, string> = {};
+  if (CHAVE) {
+    cabecalhos['x-internal-key'] = CHAVE;
+  } else {
+    if (!cookie) await entrar();
+    cabecalhos.cookie = cookie!;
+  }
+  const r = await fetch(`${API}/api${caminho}`, { headers: cabecalhos });
+  // Com chave de serviço não há sessão pra renovar: 401 aqui é chave errada, e repetir
+  // só gastaria tempo.
+  if (!CHAVE && (r.status === 401 || r.status === 403) && !tentou) {
     cookie = null;
     return api<T>(caminho, true);
   }
