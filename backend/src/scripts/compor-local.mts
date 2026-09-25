@@ -4,7 +4,7 @@
  *
  * Roda de dentro do worktree: `npx tsx <este arquivo> [slug]`. Env igual à produção nas flags que mudam o prompt.
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 
 process.env.CAPTURA_UNIFICADA_SLUGS ??= '*';
@@ -13,11 +13,11 @@ process.env.PROMPT_DA_UNIDADE_SLUGS ??= '';
 const S = '/tmp/claude-1000/-home-joaoof-agente-dt/d95912f5-9607-4619-a45e-835830e741f5/scratchpad';
 /** Um lead qualquer: só precisa ser >0 pra o caminho de produção rodar inteiro. */
 const LEAD_DE_MEDICAO = 1;
-const slugs = process.argv.slice(2).length ? process.argv.slice(2) : ['doutor-hernia-serra', 'doutor-hernia-imperatriz', 'doutor-hernia-bebedouro'];
+const slugs = process.argv.slice(2).length ? process.argv.slice(2) : readdirSync(`${S}/input`).filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, ''));
 
 const { composeSystemPromptParts } = await import('../agent/prompt-composer.js');
 const { buildTools } = await import('../agent/tools.js');
-const { fixarLeadDaConversa } = await import('../agent/graph.js');
+const { fixarLeadDaConversa, limparSchemaDoModelo } = await import('../agent/graph.js');
 
 mkdirSync(`${S}/composed`, { recursive: true });
 const recorder = new Proxy({}, { get: () => async () => {} });
@@ -55,7 +55,16 @@ for (const slug of slugs) {
     recorder as never,
     unit,
   );
-  const anth = tools.map((t) => { const o = convertToOpenAITool(t as never); return { name: o.function.name, description: o.function.description, input_schema: o.function.parameters }; });
+  limparSchemaDoModelo(tools as never);
+  // Espelha a escolha do LangChain (chat_models.js:698): quando a ferramenta traz
+  // `extras.providerToolDefinition`, é ELE que vai no pedido — o schema do Zod
+  // nem é convertido. Medir pelo Zod aqui mediria um prompt que não existe.
+  const anth = tools.map((t) => {
+    const pronta = (t as unknown as { extras?: { providerToolDefinition?: unknown } }).extras?.providerToolDefinition;
+    if (pronta) return pronta as { name: string; description: string; input_schema: unknown };
+    const o = convertToOpenAITool(t as never);
+    return { name: o.function.name, description: o.function.description, input_schema: o.function.parameters };
+  });
   writeFileSync(`${S}/composed/${slug}.json`, JSON.stringify({ model: d.anthropicModel || 'claude-sonnet-5', cacheable: p.cacheable, dynamic: p.dynamic, tools: anth }));
   const tk = (s: string) => Math.round((s || '').length / 2.6);
   console.log(`${slug.padEnd(28)} fixo ~${tk(p.cacheable)} tk · vivo ~${tk(p.dynamic)} tk · ${anth.length} tools ~${tk(JSON.stringify(anth))} tk (estimativa; o exato vem do container)`);

@@ -239,6 +239,64 @@ export function esconderLeadIdDoModelo(tool: DynamicStructuredTool): void {
 }
 
 /**
+ * Palavras do JSON Schema que a Anthropic não usa e o modelo paga pra ler.
+ *
+ * `$schema` é a URL do dialeto (draft-07) — endereço de especificação, zero
+ * instrução. `additionalProperties: false` só valeria com `strict: true`, que
+ * está desligado (`ANTHROPIC_STRICT_TOOLS`), e de todo jeito o Zod descarta
+ * chave desconhecida quando valida do lado de cá.
+ *
+ * O resto do metadado FICA de propósito, mesmo custando: `pattern` ensina o
+ * formato da data ("^\d{4}-\d{2}-\d{2}$"), `maxLength` e `exclusiveMinimum`
+ * evitam o argumento absurdo. Isso é instrução, não enfeite — medido em
+ * 25/09/2026: 1.277 tokens de metadado no total, dos quais só 697 são inúteis.
+ */
+const METADADO_INUTIL = new Set(['$schema', 'additionalProperties']);
+
+function limparMetadado(node: unknown): void {
+  if (Array.isArray(node)) {
+    node.forEach(limparMetadado);
+    return;
+  }
+  if (node && typeof node === 'object') {
+    const obj = node as Record<string, unknown>;
+    for (const k of Object.keys(obj)) {
+      if (METADADO_INUTIL.has(k)) delete obj[k];
+      else limparMetadado(obj[k]);
+    }
+  }
+}
+
+/**
+ * Congela a definição que vai pro modelo, já sem o metadado inútil.
+ *
+ * O LangChain converte `tool.schema` na hora de montar o pedido, mas dá
+ * precedência a `extras.providerToolDefinition` quando ele existe
+ * (chat_models.js:698). É por aí que a limpeza entra, sem tocar no Zod que
+ * valida a chamada de volta.
+ *
+ * Não faz nada quando o modo estrito está ligado: lá o `additionalProperties`
+ * é obrigatório, e quem monta a definição é o `aplicarStrictAnthropic`.
+ */
+export function limparSchemaDoModelo(tools: DynamicStructuredTool[]): void {
+  if (strictToolsHabilitado()) return;
+  for (const t of tools) {
+    try {
+      const js = zodToJsonSchema(t.schema as never, { $refStrategy: 'none' }) as Record<string, unknown>;
+      limparMetadado(js);
+      (t as { extras?: Record<string, unknown> }).extras = {
+        ...((t as { extras?: Record<string, unknown> }).extras ?? {}),
+        providerToolDefinition: { name: t.name, description: t.description, input_schema: js },
+      };
+    } catch (err) {
+      // Schema que não converte segue pelo caminho normal do LangChain: o preço
+      // de não limpar uma ferramenta é menor que o de derrubar o atendimento.
+      logger.warn({ err: String(err), tool: t.name }, 'limpeza de schema falhou — segue com o schema cheio');
+    }
+  }
+}
+
+/**
  * Entrega a conversa a uma pessoa quando o gasto passou do teto.
  *
  * Pausar sem avisar seria pior que não ter teto nenhum: o paciente ficaria
@@ -360,6 +418,7 @@ export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder
   // atendimento quem tira o leadId do schema é o fixarLeadDaConversa; aqui não há
   // lead, então a mesma poda entra na mão.
   for (const t of tools) esconderLeadIdDoModelo(t);
+  limparSchemaDoModelo(tools);
   const modelName = unit.anthropicModel || 'claude-opus-4-8';
   const baseModel = createChatModel(unit, { model: modelName, temperature: config.temperature, maxTokens: 1 });
   if (strictToolsHabilitado()) aplicarStrictAnthropic(tools);
@@ -445,6 +504,8 @@ export async function buildAgentGraph(
   });
   if (useAnthropic && strictToolsHabilitado()) {
     aplicarStrictAnthropic(tools);
+  } else if (useAnthropic) {
+    limparSchemaDoModelo(tools);
   }
   const toolsParaModelo = useGoogle ? toolsParaGemini(tools) : tools;
   const convoCache =
