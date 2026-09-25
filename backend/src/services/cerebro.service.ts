@@ -1,0 +1,275 @@
+/**
+ * O panorama que o cérebro lê: a franquia e o Kommo contados lado a lado.
+ *
+ * A divisão de trabalho aqui é a razão de existir do produto. O servidor faz o
+ * casamento DURO — telefone, que é a medida padrão — e só ele. O que não casa por
+ * telefone volta marcado como ambíguo, com os candidatos, pro agente julgar lendo o
+ * contexto. Regra fixa nunca vai decidir se "EDSON DO VALESOUSA" é o "Edson do Vale
+ * Sousa" do cartão; e IA nunca deveria estar adivinhando o que um telefone resolve.
+ *
+ * Só leitura. Nada aqui escreve no Kommo nem na franquia.
+ */
+import type { Unit } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
+import { searchClients, searchSchedules, searchTreatments, type SpineUnit } from './spine.service.js';
+
+/** Dígitos do telefone, sem DDI e sem o 9 que ora está ora não está. */
+export function chaveTelefone(bruto: string | null | undefined): string | null {
+  const so = String(bruto ?? '').replace(/\D/g, '');
+  if (so.length < 10) return null;
+  const semDdi = so.startsWith('55') && so.length > 11 ? so.slice(2) : so;
+  if (semDdi.length < 10) return null;
+  const ddd = semDdi.slice(0, 2);
+  let resto = semDdi.slice(2);
+  // Celular brasileiro escrito com e sem o 9 é a mesma linha.
+  if (resto.length === 9 && resto.startsWith('9')) resto = resto.slice(1);
+  return `${ddd}${resto}`;
+}
+
+export function normalizarNome(s: string | null | undefined): string {
+  return String(s ?? '')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Dois nomes que provavelmente são a mesma pessoa, sem afirmar que são.
+ * Devolve 0..1. Compara conjunto de pedaços: pega sobrenome faltando e ordem trocada,
+ * mas NÃO resolve "Valesousa" × "Vale Sousa" — esse é o caso que vai pro agente.
+ */
+export function parecencaDeNome(a: string, b: string): number {
+  const pa = new Set(normalizarNome(a).split(' ').filter((p) => p.length > 2));
+  const pb = new Set(normalizarNome(b).split(' ').filter((p) => p.length > 2));
+  if (!pa.size || !pb.size) return 0;
+  let comuns = 0;
+  for (const p of pa) if (pb.has(p)) comuns++;
+  return comuns / Math.min(pa.size, pb.size);
+}
+
+export interface Sessao {
+  dia: string;
+  hora: string;
+  status: string;
+  idTreatment: number | null;
+  profissional: string | null;
+}
+
+export interface PacienteDoCerebro {
+  nome: string;
+  telefone: string | null;
+  sessoes: Sessao[];
+  tratamentos: Array<{ categoria: string; status: string; preco: number | null; criado: string | null }>;
+  /** `etapa` fica nulo aqui: o vínculo não guarda a etapa do cartão — quem quiser lê no Kommo. */
+  cartao: { leadId: number; etapa: string | null; nome: string | null } | null;
+  /** Como o cartão foi encontrado. `null` = não encontrado. */
+  casadoPor: 'vinculo' | 'telefone' | null;
+  /** Cartões que PODEM ser esta pessoa, pro agente decidir. Só quando não casou duro. */
+  candidatos: Array<{ leadId: number; nome: string | null; parecenca: number }>;
+}
+
+export interface Panorama {
+  unidade: string;
+  geradoEm: string;
+  janela: { dias: number; meses: number };
+  contagens: {
+    sessoes: number;
+    tratamentos: number;
+    pacientesNaFranquia: number;
+    cartoesVinculados: number;
+    casadosPorVinculo: number;
+    casadosPorTelefone: number;
+    semCartao: number;
+    ambiguos: number;
+  };
+  /** Só quem tem algo a resolver: sem cartão, ambíguo, ou sumindo. */
+  paraOlhar: PacienteDoCerebro[];
+  avisos: string[];
+}
+
+const dia = (d: Date) => d.toISOString().slice(0, 10);
+const FALTOU = /DESMARC|FALT|NAO COMPARE|NÃO COMPARE/i;
+
+export async function panoramaDaUnidade(
+  unit: Unit,
+  opts: { dias?: number; meses?: number } = {},
+): Promise<Panorama> {
+  const dias = Math.min(Math.max(opts.dias ?? 60, 1), 180);
+  const meses = Math.min(Math.max(opts.meses ?? 6, 1), 12);
+  const hoje = dia(new Date());
+  const avisos: string[] = [];
+
+  const [agenda, tratamentos] = await Promise.all([
+    searchSchedules(unit as SpineUnit, {
+      initialDate: dia(new Date(Date.now() - dias * 864e5)),
+      endDate: hoje,
+      rowsPerPage: 100,
+    }),
+    searchTreatments(unit as SpineUnit, { meses }),
+  ]);
+  if (!agenda.ok) avisos.push(`agenda da franquia indisponível: ${agenda.error}`);
+  if (!tratamentos.ok) avisos.push(`tratamentos indisponíveis: ${tratamentos.error}`);
+  const sessoes = agenda.ok ? (agenda.data?.schedules ?? []) : [];
+  const trats = tratamentos.ok ? (tratamentos.data?.treatments ?? []) : [];
+
+  // O lado do Kommo: o vínculo duro e o telefone da conversa.
+  const [vinculos, conversas] = await Promise.all([
+    prisma.spineLeadLink.findMany({
+      where: { unitId: unit.id },
+      select: { kommoLeadId: true, nome: true, spineIdClient: true, spineIdSchedule: true, agendadoPara: true },
+    }),
+    prisma.conversation.findMany({
+      where: { unitId: unit.id, phone: { not: null } },
+      select: { leadId: true, phone: true },
+    }),
+  ]);
+
+  const cartaoPorTelefone = new Map<string, { leadId: number; etapa: string | null; nome: string | null }>();
+  for (const c of conversas) {
+    const k = chaveTelefone(c.phone);
+    const id = Number(c.leadId);
+    if (!k || !Number.isFinite(id)) continue;
+    if (!cartaoPorTelefone.has(k)) cartaoPorTelefone.set(k, { leadId: id, etapa: null, nome: null });
+  }
+  const vinculoPorNome = new Map<string, (typeof vinculos)[number]>();
+  for (const v of vinculos) if (v.nome) vinculoPorNome.set(normalizarNome(v.nome), v);
+
+  // Junta a franquia por paciente.
+  const pacientes = new Map<string, PacienteDoCerebro>();
+  const pega = (nome: string): PacienteDoCerebro => {
+    const k = normalizarNome(nome);
+    let p = pacientes.get(k);
+    if (!p) {
+      p = { nome, telefone: null, sessoes: [], tratamentos: [], cartao: null, casadoPor: null, candidatos: [] };
+      pacientes.set(k, p);
+    }
+    return p;
+  };
+  for (const s of sessoes) {
+    if (!s.clientName) continue;
+    pega(s.clientName).sessoes.push({
+      dia: s.dayLocal ?? '',
+      hora: s.timeLocal ?? '',
+      status: s.statusName ?? '',
+      idTreatment: s.idTreatment ?? null,
+      profissional: s.physicalTherapist ?? null,
+    });
+  }
+  for (const t of trats) {
+    if (!t.clientName) continue;
+    pega(t.clientName).tratamentos.push({
+      categoria: t.category ?? '',
+      status: t.statusName ?? '',
+      preco: typeof t.price === 'number' ? t.price : null,
+      criado: t.created ?? null,
+    });
+  }
+
+  let porVinculo = 0;
+  let porTelefone = 0;
+  for (const [chave, p] of pacientes) {
+    const v = vinculoPorNome.get(chave);
+    if (v) {
+      p.cartao = { leadId: v.kommoLeadId, etapa: null, nome: v.nome };
+      p.casadoPor = 'vinculo';
+      porVinculo++;
+      continue;
+    }
+    // O telefone é a medida padrão: casa duro quando a franquia traz o número.
+    const tel = chaveTelefone(p.telefone);
+    const porTel = tel ? cartaoPorTelefone.get(tel) : undefined;
+    if (porTel) {
+      p.cartao = porTel;
+      p.casadoPor = 'telefone';
+      porTelefone++;
+      continue;
+    }
+    // Sem vínculo: o agente vai precisar decidir. Oferece os candidatos por nome,
+    // com a parecença medida — nunca escolhe por ele.
+    const cands = vinculos
+      .filter((x) => x.nome)
+      .map((x) => ({ leadId: x.kommoLeadId, nome: x.nome, parecenca: parecencaDeNome(p.nome, x.nome!) }))
+      .filter((x) => x.parecenca >= 0.5)
+      .sort((a, b) => b.parecenca - a.parecenca)
+      .slice(0, 3);
+    p.candidatos = cands;
+  }
+
+  const sumindo = (p: PacienteDoCerebro): number => {
+    let n = 0;
+    for (const s of [...p.sessoes].sort((a, b) => a.dia.localeCompare(b.dia)).reverse()) {
+      if (/REMARC/i.test(s.status)) continue;
+      if (FALTOU.test(s.status)) n++;
+      else break;
+    }
+    return n;
+  };
+
+  const paraOlhar = [...pacientes.values()]
+    .filter((p) => !p.cartao || p.candidatos.length > 0 || sumindo(p) >= 2)
+    .sort((a, b) => sumindo(b) - sumindo(a))
+    .slice(0, 120);
+
+  // Só agora vamos atrás do telefone, e só de quem vai aparecer no relatório: a franquia
+  // não manda o número na agenda, e buscar o cadastro de todo paciente seria uma chamada
+  // por pessoa — desnecessário pra quem já casou pelo vínculo. Com o número em mãos, boa
+  // parte do "sem cartão" vira casamento duro e sai da lista de julgamento do agente.
+  const semCartao = paraOlhar.filter((p) => !p.cartao);
+  for (let i = 0; i < semCartao.length; i += 5) {
+    const lote = semCartao.slice(i, i + 5);
+    await Promise.all(
+      lote.map(async (p) => {
+        const r = await searchClients(unit as SpineUnit, p.nome, 5).catch(() => null);
+        if (!r?.ok) return;
+        const exato = (r.data?.clients ?? []).find((c) => normalizarNome(c.name) === normalizarNome(p.nome));
+        p.telefone = exato?.whatsapp ?? null;
+        const tel = chaveTelefone(p.telefone);
+        const achado = tel ? cartaoPorTelefone.get(tel) : undefined;
+        if (achado) {
+          p.cartao = achado;
+          p.casadoPor = 'telefone';
+          p.candidatos = [];
+          porTelefone++;
+        }
+      }),
+    );
+  }
+
+  return {
+    unidade: unit.slug,
+    geradoEm: new Date().toISOString(),
+    janela: { dias, meses },
+    contagens: {
+      sessoes: sessoes.length,
+      tratamentos: trats.length,
+      pacientesNaFranquia: pacientes.size,
+      cartoesVinculados: vinculos.length,
+      casadosPorVinculo: porVinculo,
+      casadosPorTelefone: porTelefone,
+      semCartao: paraOlhar.filter((p) => !p.cartao).length,
+      ambiguos: paraOlhar.filter((p) => !p.cartao && p.candidatos.length > 0).length,
+    },
+    paraOlhar,
+    avisos,
+  };
+}
+
+/** A ficha de um paciente, pro agente aprofundar num caso que o panorama marcou. */
+export async function pacienteDoCerebro(
+  unit: Unit,
+  busca: string,
+  opts: { dias?: number; meses?: number } = {},
+): Promise<PacienteDoCerebro | null> {
+  const pano = await panoramaDaUnidade(unit, opts);
+  const alvo = normalizarNome(busca);
+  const tel = chaveTelefone(busca);
+  return (
+    pano.paraOlhar.find((p) => normalizarNome(p.nome) === alvo) ??
+    pano.paraOlhar.find((p) => (tel ? chaveTelefone(p.telefone) === tel : false)) ??
+    pano.paraOlhar.find((p) => parecencaDeNome(p.nome, busca) >= 0.6) ??
+    null
+  );
+}
