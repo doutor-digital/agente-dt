@@ -154,3 +154,48 @@ test('o código continua sem casar por nome — nem depois de perguntar ao Kommo
     'cartaoDoContato não pode olhar nome: quem decide é o telefone',
   );
 });
+
+/**
+ * "Não achei" e "não consegui perguntar" são coisas diferentes.
+ *
+ * O bug de 25/09 nasceu de tratar as duas como a mesma: o código não perguntava ao Kommo
+ * e afirmava "sem cartão". A correção pergunta — e criaria o mesmo bug de novo se
+ * engolisse a falha da pergunta e seguisse afirmando. Estes testes são estruturais: leem
+ * o fonte, porque a alternativa seria simular Prisma, franquia e Kommo inteiros para
+ * provar uma regra que cabe em três linhas.
+ */
+
+const FONTE = readFileSync(new URL('./cerebro.service.ts', import.meta.url), 'utf8');
+
+test('a falha da consulta ao Kommo interrompe, em vez de virar "sem cartão"', () => {
+  assert.ok(
+    /if\s*\(\s*contatos\s*===\s*null\s*\)/.test(FONTE),
+    'tem de existir o desvio explícito para a consulta que falhou',
+  );
+  const trecho = FONTE.slice(FONTE.indexOf('contatos === null'));
+  assert.ok(
+    trecho.slice(0, 500).includes('avisos.push'),
+    'a falha tem de virar aviso no relatório — silêncio aqui é o bug de volta',
+  );
+  assert.ok(trecho.slice(0, 500).includes('break'), 'tem de parar: as próximas vão falhar igual');
+});
+
+test('"sem cartão" só conta quem foi conferido no Kommo', () => {
+  assert.ok(
+    /semCartao:\s*paraOlhar\.filter\(\(p\) => !p\.cartao && p\.conferidoNoKommo\)/.test(FONTE),
+    'quem não foi conferido não pode entrar na conta de "sem cartão"',
+  );
+  assert.ok(FONTE.includes('naoConferidos:'), 'quem não foi conferido precisa aparecer em algum lugar');
+});
+
+test('unidade sem credencial do Kommo não derruba o panorama', () => {
+  assert.ok(
+    /!unit\.kommoAccessToken/.test(FONTE),
+    'createKommoClient lança sem credencial: o desvio tem de vir antes',
+  );
+});
+
+test('a conferência tem teto de tempo', () => {
+  assert.ok(/ORCAMENTO_KOMMO_MS/.test(FONTE), 'sem teto, 120 pacientes × 15 s travam o request meia hora');
+  assert.ok(/Date\.now\(\)\s*>\s*limite/.test(FONTE), 'o teto precisa ser checado dentro do laço');
+});
