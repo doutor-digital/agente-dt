@@ -681,13 +681,16 @@ export class KommoClient {
    * conferir o telefone devolvido contra o que procurava antes de tratar como a mesma
    * pessoa. Apontar o cartão errado é pior do que não achar cartão nenhum.
    *
-   * Devolve lista vazia no 204 (o Kommo responde assim quando não achou nada) e em
-   * qualquer erro — esta é uma consulta de conferência, não pode derrubar quem chamou.
+   * Devolve `[]` quando o Kommo respondeu e não achou nada (204), e **`null` quando a
+   * consulta falhou** — token vencido, 429, rede. A diferença importa: quem chama usa
+   * isto pra dizer "este paciente não tem cartão", e confundir "o Kommo disse que não
+   * existe" com "não consegui perguntar" é como se afirma com confiança uma coisa que
+   * ninguém verificou. Foi exatamente esse erro que criou o bug de 25/09.
    */
   async buscarContatos(
     texto: string,
     limite = 10,
-  ): Promise<Array<{ id: number; nome: string | null; telefone: string | null; leadIds: number[] }>> {
+  ): Promise<Array<{ id: number; nome: string | null; telefone: string | null; leadIds: number[] }> | null> {
     const termo = texto.trim();
     if (!termo) return [];
     try {
@@ -714,8 +717,16 @@ export class KommoClient {
           },
         ];
       });
-    } catch {
-      return [];
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status ?? null;
+      // 204 é "procurei e não achei", e o axios não trata como erro — se chegar aqui
+      // como erro em alguma versão, continua sendo resposta, não falha.
+      if (status === 204) return [];
+      logger.warn(
+        { status, subdominio: this.creds.subdomain },
+        'kommo: busca de contatos falhou — quem chamou não pode concluir "sem cartão"',
+      );
+      return null;
     }
   }
 
