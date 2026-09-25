@@ -5,10 +5,37 @@
  * entra depois, quando o relatório tiver rodado alguns dias e a recepção tiver conferido
  * que o que ele diz é verdade. Mover etapa nunca entra.
  */
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
+import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { panoramaDaUnidade, pacienteDoCerebro } from '../services/cerebro.service.js';
+
+/**
+ * Deixa a rotina das 17h entrar com CHAVE DE SERVIÇO, não com a senha de uma pessoa.
+ *
+ * O cérebro roda desatendido, de madrugada ou no fim da tarde, sem ninguém na frente.
+ * Guardar a senha do console num cron é ruim por três motivos: ela vale pra tudo no
+ * console, some junto quando a pessoa troca de senha, e fica escrita em arquivo. A
+ * chave de serviço é só pra isso, dá pra girar sozinha e não abre mais nada.
+ *
+ * Mesmo padrão de `sla-report` e `session-stats`. Sem chave válida, a requisição
+ * simplesmente segue pro caminho de sempre (sessão do console) — quem abre a rota pelo
+ * navegador continua entrando logado, como antes.
+ */
+export function chaveDeServicoOuSessao(
+  adiante: (req: Request, res: Response, next: NextFunction) => void,
+) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const bearer = req.header('authorization')?.replace(/^Bearer\s+/i, '').trim();
+    const dada = req.header('x-internal-key') ?? bearer;
+    if (env.INTERNAL_API_KEY && dada === env.INTERNAL_API_KEY) {
+      next();
+      return;
+    }
+    adiante(req, res, next);
+  };
+}
 
 async function unidade(req: Request, res: Response) {
   const id = String(req.params.id ?? '');
