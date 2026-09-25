@@ -25,30 +25,26 @@ test('com telefone, o prompt manda usar o número e proíbe pedir', () => {
   assert.match(bloco, /NÃO peça o telefone/i);
 });
 
-test('sem telefone, nenhuma linha sobre telefone entra no prompt', () => {
+test('sem telefone, o bloco inteiro some do prompt', () => {
   // Silêncio é melhor que "telefone: null": um campo vazio no prompt convida
-  // o modelo a preencher com o que ele achar.
-  const bloco = renderConversationContext(24917886, null);
-  assert.ok(!/telefone/i.test(bloco), 'não deve falar de telefone quando não há');
-  assert.ok(bloco.includes('24917886'), 'o leadId continua lá');
+  // o modelo a preencher com o que ele achar. E desde 24/09/2026 não sobra mais
+  // nada neste bloco sem o telefone — o leadId saiu (o código injeta sozinho).
+  assert.equal(renderConversationContext(24917886, null), '');
 });
 
 test('telefone em branco conta como ausente', () => {
   for (const vazio of ['', '   ', undefined]) {
-    const bloco = renderConversationContext(1, vazio as string | undefined);
-    assert.ok(!/telefone/i.test(bloco), `"${String(vazio)}" não deveria virar bloco de telefone`);
+    assert.equal(renderConversationContext(1, vazio as string | undefined), '', `"${String(vazio)}" não deveria virar bloco`);
   }
 });
 
-test('o leadId continua sendo a instrução principal', () => {
-  // A trava de lead alheio vem antes: com ou sem telefone, o bloco existe pra
-  // dizer qual lead é o desta conversa.
-  const comFone = renderConversationContext(777, '63991021043');
-  const semFone = renderConversationContext(777, null);
-  for (const bloco of [comFone, semFone]) {
-    assert.ok(bloco.includes('777'));
-    assert.match(bloco, /NUNCA passe 0/);
-  }
+test('o leadId não é mais ensinado ao modelo', () => {
+  // Ele não é argumento de ferramenta nenhuma: o código põe o lead da conversa
+  // em toda chamada. Mandar o modelo escrever o número era token pago duas vezes
+  // (no prefixo e na saída) por um valor que ia ser sobrescrito de todo jeito.
+  const bloco = renderConversationContext(777, '63991021043');
+  assert.ok(!bloco.includes('777'), 'o leadId não deve aparecer no prompt');
+  assert.doesNotMatch(bloco, /leadId/);
 });
 
 /**

@@ -26,7 +26,7 @@ import { claimMessageId } from '../lib/dedup-cache.js';
 import { rememberIncomingAudio } from '../lib/pending-audio.js';
 import { enforceReplyGap } from '../lib/reply-gate.js';
 import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
-import { scheduleAgentRun } from '../lib/agent-coalescer.js';
+import { scheduleAgentRun, temPendentes } from '../lib/agent-coalescer.js';
 import { ehEncerramentoRepetido } from '../lib/encerramento.js';
 import { tratarRespostaD1 } from '../lib/confirmacao-d1.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
@@ -1176,7 +1176,23 @@ export async function processAgent(args: {
 
     const podeEnviar = !respostaSemPalavra && !vazamento;
 
-    if (isChatMessage && reply && podeEnviar) {
+    // O paciente mandou outra mensagem enquanto esta resposta nascia (14% das
+    // chamadas em 24/09/2026; 1.824 respostas/semana saíam assim). Entregar mesmo
+    // assim é responder a pergunta velha embaixo da nova. Melhor segurar esta e
+    // deixar o próximo turno — que já está na fila do coalescer — responder as
+    // duas de uma vez, sabendo pelo <entrega_falhou> o que ficou sem sair.
+    const segurada = isChatMessage && !!reply && podeEnviar && temPendentes(unit.slug, leadId);
+    if (segurada) {
+      marcarNaoEntregue(unit.id, leadId, reply, Date.now(), 'atropelada');
+      await recorder.step({
+        kind: 'THINKING',
+        title: '⏭ Resposta segurada — o paciente mandou outra mensagem enquanto eu respondia; o próximo turno responde as duas',
+        payload: { leadId, reply, motivo: 'atropelada' },
+      });
+      await finishWidgetSilently();
+    }
+
+    if (isChatMessage && reply && podeEnviar && !segurada) {
       const conv = await upsertConversation({
         unitId: unit.id,
         leadId: String(leadId),
@@ -1338,7 +1354,7 @@ export async function processAgent(args: {
       leadId,
       recentTurns: [
         { role: 'user', content: humanMessage },
-        ...(reply && podeEnviar ? [{ role: 'assistant' as const, content: reply }] : []),
+        ...(reply && podeEnviar && !segurada ? [{ role: 'assistant' as const, content: reply }] : []),
       ],
     });
 
