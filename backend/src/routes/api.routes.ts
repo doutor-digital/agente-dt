@@ -172,7 +172,7 @@ import {
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
 import { widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
-import { cerebroPanoramaHandler, cerebroPacienteHandler } from '../controllers/cerebro.controller.js';
+import { cerebroPanoramaHandler, cerebroPacienteHandler, chaveDeServicoOuSessao } from '../controllers/cerebro.controller.js';
 import { listarAltaHandler, decidirAltaHandler } from '../controllers/alta.controller.js';
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
@@ -385,8 +385,9 @@ apiRouter.post('/units/:id/spine/sync-lead', requireUnitAccess, syncLeadHandler)
 // O cérebro (produto de organização de CRM, sem IA atendendo): lê a franquia e o Kommo
 // lado a lado e devolve o que não bate. Só leitura — quem escreve campo é outra rota,
 // que ainda não existe, e mover etapa nunca vai ser daqui.
-apiRouter.get('/units/:id/cerebro/panorama', requireUnitAccess, cerebroPanoramaHandler);
-apiRouter.get('/units/:id/cerebro/paciente', requireUnitAccess, cerebroPacienteHandler);
+// A rotina das 17h entra pela chave de serviço; pessoa continua entrando pela sessão.
+apiRouter.get('/units/:id/cerebro/panorama', chaveDeServicoOuSessao(requireUnitAccess), cerebroPanoramaHandler);
+apiRouter.get('/units/:id/cerebro/paciente', chaveDeServicoOuSessao(requireUnitAccess), cerebroPacienteHandler);
 apiRouter.get('/units/:id/spine/lead-links', requireUnitAccess, listLeadLinksHandler);
 apiRouter.post('/units/:id/spine/lead-preview', requireUnitAccess, previewLeadHandler);
 apiRouter.get('/units/:id/spine/prontidao', requireUnitAccess, prontidaoHandler);
