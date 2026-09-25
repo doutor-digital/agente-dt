@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   marcarNaoEntregue,
   consumirNaoEntregue,
+  consumirNaoEntregueDetalhe,
   limparNaoEntregues,
   renderEntregaFalha,
   VALIDADE_MS,
@@ -52,6 +53,24 @@ test('o bloco proíbe o "como eu falei"', () => {
 
 test('sem falha, nenhum bloco', () => {
   assert.equal(renderEntregaFalha(null), '');
+});
+
+test('resposta atropelada guarda o motivo, e o bloco pede pra responder as duas mensagens', () => {
+  limparNaoEntregues();
+  marcarNaoEntregue('u1', 100, 'Que dia prefere?', Date.now(), 'atropelada');
+  const p = consumirNaoEntregueDetalhe('u1', 100);
+  assert.equal(p?.motivo, 'atropelada');
+  const b = renderEntregaFalha(p!.texto, p!.motivo);
+  assert.match(b, /NÃO foi enviada/);
+  assert.match(b, /duas mensagens/);
+  assert.match(b, /Que dia prefere\?/);
+  assert.doesNotMatch(b, /falha técnica/, 'atropelar não é falha técnica — o texto não pode culpar o sistema');
+});
+
+test('sem motivo, continua sendo a falha técnica de antes', () => {
+  limparNaoEntregues();
+  marcarNaoEntregue('u1', 100, 'texto');
+  assert.equal(consumirNaoEntregueDetalhe('u1', 100)?.motivo, 'falha');
 });
 
 test('texto longo é cortado pra não inchar o prompt', () => {

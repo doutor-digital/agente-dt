@@ -148,6 +148,20 @@ function fire(key: string): void {
     });
 }
 
+/**
+ * Chegou mensagem nova deste paciente ENQUANTO o turno atual ainda roda?
+ *
+ * Medido em 24/09/2026: 14% das chamadas à IA nasciam assim, e 1.824 respostas
+ * por semana saíam pro paciente depois de ele já ter mandado outra mensagem —
+ * ele lia a resposta da pergunta velha embaixo da nova. Quem pergunta isto é o
+ * envio: se há pendente, a resposta atual é segurada e o próximo turno (já na
+ * fila) responde as duas de uma vez.
+ */
+export function temPendentes(unitSlug: string, leadId: number | string): boolean {
+  const entry = buffers.get(bufferKey(unitSlug, leadId));
+  return !!entry && entry.running && entry.pending.length > 0;
+}
+
 export function _coalescerStats(): { activeBursts: number } {
   return { activeBursts: buffers.size };
 }
