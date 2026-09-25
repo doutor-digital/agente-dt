@@ -15,6 +15,12 @@ import { searchClients, searchSchedules, searchTreatments, type SpineUnit } from
 import { createKommoClient } from './kommo.service.js';
 
 /**
+ * Quanto tempo a conferência no Kommo pode tomar do request. O timeout do Kommo é de
+ * 15 s por chamada, então isto é ~2 chamadas travadas antes de desistir e avisar.
+ */
+const ORCAMENTO_KOMMO_MS = 30_000;
+
+/**
  * O cartão que um contato do Kommo representa, se e só se o telefone bater.
  *
  * Isolada e exportada de propósito: é aqui que mora a decisão de aceitar ou recusar um
@@ -30,10 +36,10 @@ export function cartaoDoContato(
   for (const c of contatos) {
     if (chaveTelefone(c.telefone) !== alvo) continue;
     // Contato sem lead é contato solto na agenda do Kommo: existe, mas não é cartão.
+    const ids = c.leadIds.filter((n) => Number.isFinite(n) && n > 0);
+    if (!ids.length) continue;
     // O maior id é o cartão mais novo — é o que a recepção está olhando hoje.
-    const leadId = Math.max(...c.leadIds.filter((n) => Number.isFinite(n)));
-    if (!Number.isFinite(leadId) || leadId <= 0) continue;
-    return { leadId, etapa: null, nome: c.nome };
+    return { leadId: Math.max(...ids), etapa: null, nome: c.nome };
   }
   return null;
 }
@@ -92,6 +98,11 @@ export interface PacienteDoCerebro {
   cartao: { leadId: number; etapa: string | null; nome: string | null } | null;
   /** Como o cartão foi encontrado. `null` = não encontrado. */
   casadoPor: 'vinculo' | 'telefone' | 'telefone-kommo' | null;
+  /**
+   * Se o Kommo chegou a ser consultado sobre esta pessoa. `false` com `cartao: null`
+   * NÃO quer dizer que ela não tem cartão — quer dizer que ninguém perguntou.
+   */
+  conferidoNoKommo: boolean;
   /** Cartões que PODEM ser esta pessoa, pro agente decidir. Só quando não casou duro. */
   candidatos: Array<{ leadId: number; nome: string | null; parecenca: number }>;
 }
@@ -109,7 +120,10 @@ export interface Panorama {
     casadosPorTelefone: number;
     /** Casados perguntando ao Kommo — gente com cartão que nunca conversou com a IA. */
     casadosPorTelefoneNoKommo: number;
+    /** Sem cartão de verdade: conferido no Kommo e não achado. */
     semCartao: number;
+    /** Ficaram sem conferir (sem telefone, sem credencial, ou a conferência parou). */
+    naoConferidos: number;
     ambiguos: number;
   };
   /** Só quem tem algo a resolver: sem cartão, ambíguo, ou sumindo. */
@@ -170,7 +184,10 @@ export async function panoramaDaUnidade(
     const k = normalizarNome(nome);
     let p = pacientes.get(k);
     if (!p) {
-      p = { nome, telefone: null, sessoes: [], tratamentos: [], cartao: null, casadoPor: null, candidatos: [] };
+      p = {
+        nome, telefone: null, sessoes: [], tratamentos: [],
+        cartao: null, casadoPor: null, conferidoNoKommo: false, candidatos: [],
+      };
       pacientes.set(k, p);
     }
     return p;
@@ -278,12 +295,41 @@ export async function panoramaDaUnidade(
   // Só entra quem sobrou E tem telefone. O resto continua indo pro julgamento humano,
   // que é o certo: sem telefone não existe casamento duro.
   const aindaSemCartao = paraOlhar.filter((p) => !p.cartao && chaveTelefone(p.telefone));
-  if (aindaSemCartao.length) {
+  if (aindaSemCartao.length && !unit.kommoAccessToken) {
+    // Unidade sem Kommo configurado existe (cidade nova, token ainda não colado). Sem
+    // este desvio, `createKommoClient` lança e o panorama inteiro morre — o relatório
+    // do dia não sai por causa de uma etapa opcional.
+    avisos.push('unidade sem credencial do Kommo: não deu pra conferir quem está sem cartão');
+  } else if (aindaSemCartao.length) {
     const kommo = createKommoClient(unit);
+    // Teto de tempo, não de quantidade. O que trava aqui é o Kommo lento, e o timeout
+    // dele é de 15 s: 120 pacientes em série no pior caso seriam 30 minutos segurando o
+    // request de quem chamou. Estourou o orçamento, para e diz que parou.
+    const limite = Date.now() + ORCAMENTO_KOMMO_MS;
+    let conferidos = 0;
     for (const p of aindaSemCartao) {
+      if (Date.now() > limite) {
+        avisos.push(
+          `conferência no Kommo parou no tempo: ${conferidos} de ${aindaSemCartao.length} conferidos — ` +
+            'os demais podem ter cartão',
+        );
+        break;
+      }
       // Em série de propósito: são poucas dezenas por rodada, uma vez por dia, e o
       // Kommo derruba rajada. Paralelizar aqui compraria segundos e pagaria em 429.
-      const contatos = await kommo.buscarContatos(chaveTelefone(p.telefone)!, 10).catch(() => []);
+      const contatos = await kommo.buscarContatos(chaveTelefone(p.telefone)!, 10).catch(() => null);
+      if (contatos === null) {
+        // Falhou a consulta, não é "não achou". Para na primeira: se o token venceu ou
+        // estamos em 429, as próximas 119 vão falhar igual, devagar, e o relatório sairia
+        // dizendo "sem cartão" para gente que tem cartão. Era esse o bug.
+        avisos.push(
+          `Kommo não respondeu a conferência: ${conferidos} de ${aindaSemCartao.length} conferidos — ` +
+            'os demais podem ter cartão',
+        );
+        break;
+      }
+      conferidos++;
+      p.conferidoNoKommo = true;
       const cartao = cartaoDoContato(p.telefone, contatos);
       if (!cartao) continue;
       p.cartao = cartao;
@@ -305,7 +351,10 @@ export async function panoramaDaUnidade(
       casadosPorVinculo: porVinculo,
       casadosPorTelefone: porTelefone,
       casadosPorTelefoneNoKommo: porKommo,
-      semCartao: paraOlhar.filter((p) => !p.cartao).length,
+      // Só conta como "sem cartão" quem foi conferido no Kommo e mesmo assim não tem.
+      // Quem não foi conferido entra em `naoConferidos` — são coisas diferentes.
+      semCartao: paraOlhar.filter((p) => !p.cartao && p.conferidoNoKommo).length,
+      naoConferidos: paraOlhar.filter((p) => !p.cartao && !p.conferidoNoKommo).length,
       ambiguos: paraOlhar.filter((p) => !p.cartao && p.candidatos.length > 0).length,
     },
     paraOlhar,
