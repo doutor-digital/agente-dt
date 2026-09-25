@@ -12,6 +12,31 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { searchClients, searchSchedules, searchTreatments, type SpineUnit } from './spine.service.js';
+import { createKommoClient } from './kommo.service.js';
+
+/**
+ * O cartão que um contato do Kommo representa, se e só se o telefone bater.
+ *
+ * Isolada e exportada de propósito: é aqui que mora a decisão de aceitar ou recusar um
+ * casamento, e é o que o teste prende. A busca do Kommo é textual — ela devolve quem
+ * *parece* com o que pedimos. Esta função ignora a sugestão e olha só os dígitos.
+ */
+export function cartaoDoContato(
+  procurado: string | null,
+  contatos: Array<{ id: number; nome: string | null; telefone: string | null; leadIds: number[] }>,
+): { leadId: number; etapa: string | null; nome: string | null } | null {
+  const alvo = chaveTelefone(procurado);
+  if (!alvo) return null;
+  for (const c of contatos) {
+    if (chaveTelefone(c.telefone) !== alvo) continue;
+    // Contato sem lead é contato solto na agenda do Kommo: existe, mas não é cartão.
+    // O maior id é o cartão mais novo — é o que a recepção está olhando hoje.
+    const leadId = Math.max(...c.leadIds.filter((n) => Number.isFinite(n)));
+    if (!Number.isFinite(leadId) || leadId <= 0) continue;
+    return { leadId, etapa: null, nome: c.nome };
+  }
+  return null;
+}
 
 /** Dígitos do telefone, sem DDI e sem o 9 que ora está ora não está. */
 export function chaveTelefone(bruto: string | null | undefined): string | null {
@@ -66,7 +91,7 @@ export interface PacienteDoCerebro {
   /** `etapa` fica nulo aqui: o vínculo não guarda a etapa do cartão — quem quiser lê no Kommo. */
   cartao: { leadId: number; etapa: string | null; nome: string | null } | null;
   /** Como o cartão foi encontrado. `null` = não encontrado. */
-  casadoPor: 'vinculo' | 'telefone' | null;
+  casadoPor: 'vinculo' | 'telefone' | 'telefone-kommo' | null;
   /** Cartões que PODEM ser esta pessoa, pro agente decidir. Só quando não casou duro. */
   candidatos: Array<{ leadId: number; nome: string | null; parecenca: number }>;
 }
@@ -82,6 +107,8 @@ export interface Panorama {
     cartoesVinculados: number;
     casadosPorVinculo: number;
     casadosPorTelefone: number;
+    /** Casados perguntando ao Kommo — gente com cartão que nunca conversou com a IA. */
+    casadosPorTelefoneNoKommo: number;
     semCartao: number;
     ambiguos: number;
   };
@@ -170,6 +197,7 @@ export async function panoramaDaUnidade(
 
   let porVinculo = 0;
   let porTelefone = 0;
+  let porKommo = 0;
   for (const [chave, p] of pacientes) {
     const v = vinculoPorNome.get(chave);
     if (v) {
@@ -238,6 +266,33 @@ export async function panoramaDaUnidade(
     );
   }
 
+  // Última parada: perguntar ao próprio Kommo.
+  //
+  // Até aqui só olhamos o NOSSO banco — o vínculo e o telefone de quem conversou com a
+  // IA. Quem tem cartão no Kommo mas nunca falou com ela (entrou por ligação, veio na
+  // recepção, ou é anterior à IA) ficava marcado como "sem cartão". Medido em Marabá,
+  // 25/09/2026: os NOVE que o relatório apontou como sem cartão tinham cartão, todos
+  // achados pelo telefone. Era o furo inteiro do produto — ele comparava a franquia
+  // contra o nosso espelho, não contra a fonte.
+  //
+  // Só entra quem sobrou E tem telefone. O resto continua indo pro julgamento humano,
+  // que é o certo: sem telefone não existe casamento duro.
+  const aindaSemCartao = paraOlhar.filter((p) => !p.cartao && chaveTelefone(p.telefone));
+  if (aindaSemCartao.length) {
+    const kommo = createKommoClient(unit);
+    for (const p of aindaSemCartao) {
+      // Em série de propósito: são poucas dezenas por rodada, uma vez por dia, e o
+      // Kommo derruba rajada. Paralelizar aqui compraria segundos e pagaria em 429.
+      const contatos = await kommo.buscarContatos(chaveTelefone(p.telefone)!, 10).catch(() => []);
+      const cartao = cartaoDoContato(p.telefone, contatos);
+      if (!cartao) continue;
+      p.cartao = cartao;
+      p.casadoPor = 'telefone-kommo';
+      p.candidatos = [];
+      porKommo++;
+    }
+  }
+
   return {
     unidade: unit.slug,
     geradoEm: new Date().toISOString(),
@@ -249,6 +304,7 @@ export async function panoramaDaUnidade(
       cartoesVinculados: vinculos.length,
       casadosPorVinculo: porVinculo,
       casadosPorTelefone: porTelefone,
+      casadosPorTelefoneNoKommo: porKommo,
       semCartao: paraOlhar.filter((p) => !p.cartao).length,
       ambiguos: paraOlhar.filter((p) => !p.cartao && p.candidatos.length > 0).length,
     },
