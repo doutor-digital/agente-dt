@@ -12,6 +12,9 @@ import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { fecharConversasLidas, type ResultadoFaxina } from '../lib/fechar-conversas.js';
+import { levantarNaoLidas } from '../lib/nao-lidas-worker.js';
+import { montarAviso } from '../lib/nao-lidas.js';
+import { avisarJoao } from '../lib/alerta-whatsapp.js';
 
 export async function faxinaConversasHandler(req: Request, res: Response): Promise<void> {
   const corpo = (req.body ?? {}) as {
@@ -67,4 +70,20 @@ export async function faxinaConversasHandler(req: Request, res: Response): Promi
 
   logger.info({ simular, contas: porConta.size, ...total }, 'faxina do inbox');
   res.json({ simulado: simular, contas: porConta.size, total, porConta: resultados });
+}
+
+/**
+ * O aviso das não lidas, sob demanda — pra conferir o texto sem esperar as 8h.
+ *
+ * Simula por padrão, igual à faxina: devolve o texto e não manda. Só `enviar: true`
+ * dispara de verdade, e ainda assim só pro número do João.
+ */
+export async function avisoNaoLidasHandler(req: Request, res: Response): Promise<void> {
+  const enviar = (req.body as { enviar?: unknown } | undefined)?.enviar === true;
+  const contas = await levantarNaoLidas();
+  const texto = montarAviso(contas);
+  let enviado: boolean | null = null;
+  if (enviar && texto) enviado = await avisarJoao(texto, `nao-lidas-manual-${Date.now()}`, 0);
+  logger.info({ enviar, enviado, contas: contas.length }, 'aviso de não lidas sob demanda');
+  res.json({ enviado, texto, contas });
 }

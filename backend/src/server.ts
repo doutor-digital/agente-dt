@@ -28,6 +28,7 @@ import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-work
 import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
 import { startParadosWorker, stopParadosWorker } from './lib/parados-worker.js';
+import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -131,11 +132,13 @@ async function main(): Promise<void> {
       startCacheKeepaliveWorker();
       startFranquiaSyncWorker();
       startParadosWorker();
+      startNaoLidasWorker();
       iniciarVigiaDeQualidade();
     },
     parar: () => {
       pararVigiaDeQualidade();
       stopParadosWorker();
+      stopNaoLidasWorker();
       stopFranquiaSyncWorker();
       stopCacheKeepaliveWorker();
       stopWhatsappCostScheduler();
