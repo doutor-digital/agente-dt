@@ -172,7 +172,7 @@ import {
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
 import { widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
-import { faxinaConversasHandler, avisoNaoLidasHandler } from '../controllers/faxina.controller.js';
+import { faxinaConversasHandler, avisoNaoLidasHandler, preencheCamposHandler } from '../controllers/faxina.controller.js';
 import {
   cerebroPanoramaHandler,
   cerebroPacienteHandler,
@@ -297,6 +297,7 @@ apiRouter.get(
 // chave. Simula por padrão; só fecha de verdade com `simular: false` no corpo.
 apiRouter.post('/faxina/conversas', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), faxinaConversasHandler);
 apiRouter.post('/alertas/nao-lidas', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), avisoNaoLidasHandler);
+apiRouter.post('/campos/preencher', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), preencheCamposHandler);
 
 apiRouter.use(requireAuth);
 
