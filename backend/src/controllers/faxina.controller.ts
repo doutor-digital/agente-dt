@@ -15,6 +15,7 @@ import { fecharConversasLidas, type ResultadoFaxina } from '../lib/fechar-conver
 import { levantarNaoLidas } from '../lib/nao-lidas-worker.js';
 import { montarAviso } from '../lib/nao-lidas.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
+import { preencherDaUnidade } from '../lib/preenche-campos-worker.js';
 
 export async function faxinaConversasHandler(req: Request, res: Response): Promise<void> {
   const corpo = (req.body ?? {}) as {
@@ -86,4 +87,29 @@ export async function avisoNaoLidasHandler(req: Request, res: Response): Promise
   if (enviar && texto) enviado = await avisarJoao(texto, `nao-lidas-manual-${Date.now()}`, 0);
   logger.info({ enviar, enviado, contas: contas.length }, 'aviso de não lidas sob demanda');
   res.json({ enviado, texto, contas });
+}
+
+/**
+ * Preenchimento de campo sob demanda. Simula por padrão, igual às outras rotas daqui:
+ * devolve o que GRAVARIA e não grava. Só `simular: false` escreve no Kommo.
+ */
+export async function preencheCamposHandler(req: Request, res: Response): Promise<void> {
+  const corpo = (req.body ?? {}) as { unidades?: unknown; simular?: unknown; limite?: unknown };
+  const pedidas = Array.isArray(corpo.unidades) ? corpo.unidades.map(String).filter(Boolean) : [];
+  if (!pedidas.length) {
+    res.status(400).json({ error: 'diga as unidades', comoUsar: '{ "unidades": ["doutor-hernia-serra"] }' });
+    return;
+  }
+  const unidades = await prisma.unit.findMany({ where: { slug: { in: pedidas } } });
+  if (unidades.length !== pedidas.length) {
+    const achadas = new Set(unidades.map((u) => u.slug));
+    res.status(404).json({ error: 'unidade_desconhecida', quais: pedidas.filter((s) => !achadas.has(s)) });
+    return;
+  }
+  const simular = corpo.simular !== false;
+  const limite = Number.isFinite(Number(corpo.limite)) ? Number(corpo.limite) : undefined;
+  const out = [];
+  for (const u of unidades) out.push(await preencherDaUnidade(u, { simular, limite }));
+  logger.info({ simular, unidades: pedidas }, 'preenche-campos sob demanda');
+  res.json({ simulado: simular, resultados: out });
 }
