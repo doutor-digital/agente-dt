@@ -2,10 +2,18 @@ import { prisma } from '../lib/prisma.js';
 import { createKnowledge, listKnowledge } from '../services/knowledge.service.js';
 
 const SLUG = 'advocacia-magalhaes';
-const KOMMO_SUBDOMAIN = 'magalhaesadv2025';
+const KOMMO_SUBDOMAIN = process.env.SEED_KOMMO_SUBDOMAIN ?? 'magalhaesadv2025';
 
-const KOMMO_ACCESS_TOKEN =
-  'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6ImIxY2M2MGMwNDBmYmUxZTZkZjMxYThiYTcwZjdkN2FlMTdiNWY0NmUyNjY2NzhmMDUyOWM3M2U1ZGFiYzk4YjJkODMwZjE5ZDg4MzI3Njg2In0.eyJhdWQiOiJmNTNkMDA0ZC1iMDNmLTQ0ZGMtOGU0NS1lOTJmMjRjNjU1NDkiLCJqdGkiOiJiMWNjNjBjMDQwZmJlMWU2ZGYzMWE4YmE3MGY3ZDdhZTE3YjVmNDZlMjY2Njc4ZjA1MjljNzNlNWRhYmM5OGIyZDgzMGYxOWQ4ODMyNzY4NiIsImlhdCI6MTc4Mjg1NTM1OCwibmJmIjoxNzgyODU1MzU4LCJleHAiOjE5Mjc1ODQwMDAsInN1YiI6IjEyNTg2MzYzIiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjM2NjMzMDQ3LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJwdXNoX25vdGlmaWNhdGlvbnMiLCJmaWxlcyIsImNybSIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiXSwiaGFzaF91dWlkIjoiZmYzNmY0ZGUtMDkzNy00ODYzLWE0MjQtNTZmYzc5ZWMxYTc3IiwiYXBpX2RvbWFpbiI6ImFwaS1jLmtvbW1vLmNvbSJ9.jj0zZLA2DsMeiE1dxmu4Pgw9VX6W0dQdmUU3fO5HXCr3tWXRq14jp2o9SsimjKBeZlTGoIQQfuJRPVcUmlxO-PW7GE5Yqh4WnAoVgYHKj2_8SfBY-uHXsOyB4WuicPfWrIWlvyuOSjY_JkdjmX1Qa7Mt0wpODEQ4WxVQqyLSEgBPiq7YAcQqI-mrMH5d36OH1RWsWKTm2wGYDANHOmWNsSEL4-u2arJSejrWrbUUO__BeZvRnsg7McOLgu1PLXjOwi6T2EmskFuRKjQPWifjP900VWwy82GXZoMUVQxiFX4cmR4lDj5WjmSA_K40ILnT_fWKzZZ6ED9mp_MBVJhJ5w';
+// Auditoria 26/09/2026: este token do Kommo (escopo CRM completo, válido até 2031)
+// estava CHUMBADO aqui e foi para o histórico do git. Agora vem do ambiente.
+// ATENÇÃO: remover daqui NÃO limpa o histórico — o token antigo tem de ser GIRADO
+// no Kommo (ação do dono). Rode com: SEED_KOMMO_ACCESS_TOKEN=... tsx <script>.
+const KOMMO_ACCESS_TOKEN = process.env.SEED_KOMMO_ACCESS_TOKEN ?? '';
+if (!KOMMO_ACCESS_TOKEN) {
+  throw new Error(
+    'SEED_KOMMO_ACCESS_TOKEN ausente — passe o token do Kommo pelo ambiente, não no código.',
+  );
+}
 
 const PIPELINE_COMERCIAL = 13964971;
 const ST_ENTRADA = 107774379;

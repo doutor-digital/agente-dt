@@ -18,6 +18,7 @@ import {
 } from '../lib/widget-connection-monitor.js';
 import { processAgent, type AgentDeliverFn } from './webhook.controller.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
+import { ehHostDoKommo } from '../lib/kommo-host.js';
 import type { Unit } from '@prisma/client';
 
 const widgetBodySchema = z.object({
@@ -74,6 +75,18 @@ export async function handleWidgetRequest(req: Request, res: Response): Promise<
     return;
   }
   const { token, data, return_url: returnUrl } = parsed.data;
+
+  // SEGURANÇA (auditoria 26/09/2026): esta rota é pública e o servidor faz POST no
+  // `return_url` COM o `Authorization: Bearer <token do Kommo da unidade>`. Enquanto
+  // o JWT do widget for "permissivo no piloto", qualquer POST anônimo com um
+  // `return_url` para um host do atacante entregava o token do CRM da clínica. O
+  // `return_url` legítimo é SEMPRE o próprio Kommo da unidade — qualquer outro host
+  // é recusado antes de qualquer chamada que carregue o token.
+  if (!ehHostDoKommo(returnUrl, unit.kommoSubdomain)) {
+    logger.warn({ unit: unit.slug, returnUrl }, 'widget: return_url fora do host do Kommo — recusado');
+    res.status(400).json({ ok: false, error: 'return_url_invalido' });
+    return;
+  }
 
   const jwtStatus = verifyWidgetToken(token, unit.kommoWidgetSecret, unit.slug);
 

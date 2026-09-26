@@ -3,6 +3,7 @@ import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { resolveOpenAIApiKey } from './openai.service.js';
+import { ehHostDoKommo } from '../lib/kommo-host.js';
 
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -50,7 +51,10 @@ export async function describeImage(
     buf = Buffer.from(r.data);
   } catch (err) {
     const status = axios.isAxiosError(err) ? err.response?.status : undefined;
-    if ((status === 401 || status === 403) && unit.kommoAccessToken) {
+    // SEGURANÇA (auditoria 26/09/2026): mesmo motivo do transcription.service — o
+    // `imageUrl` vem do webhook público do Kommo. Só reenvia com o token se o host
+    // for do próprio Kommo, para não vazar o Bearer a um anexo do atacante.
+    if ((status === 401 || status === 403) && unit.kommoAccessToken && ehHostDoKommo(imageUrl)) {
       logger.debug({ imageUrl, status }, 'image download sem auth falhou, tentando com token Kommo');
       const r2 = await axios.get<ArrayBuffer>(imageUrl, {
         responseType: 'arraybuffer',

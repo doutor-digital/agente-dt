@@ -4,6 +4,7 @@ import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { resolveOpenAIApiKey } from './openai.service.js';
+import { ehHostDoKommo } from '../lib/kommo-host.js';
 
 const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
 
@@ -38,7 +39,11 @@ export async function transcribeAudio(
     audioBuf = Buffer.from(r.data);
   } catch (err) {
     const status = axios.isAxiosError(err) ? err.response?.status : undefined;
-    if ((status === 401 || status === 403) && unit.kommoAccessToken) {
+    // SEGURANÇA (auditoria 26/09/2026): o `audioUrl` vem do webhook público do Kommo
+    // (sem assinatura verificada). Só reenviar COM o token do Kommo se o host for do
+    // próprio Kommo — senão um anexo apontando pro atacante, que responde 401 de
+    // propósito, colhia o `Authorization: Bearer <token>` no reenvio.
+    if ((status === 401 || status === 403) && unit.kommoAccessToken && ehHostDoKommo(audioUrl)) {
       logger.debug({ audioUrl, status }, 'audio download sem auth falhou, tentando com token Kommo');
       const r2 = await axios.get<ArrayBuffer>(audioUrl, {
         responseType: 'arraybuffer',
