@@ -581,6 +581,20 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
     const info = porNome.get(normalizar(e.campo));
     if (!info) continue;
     if (!e.sobrescreve && valorAtual(e.campo) !== null) continue;
+    // Campo de lista só aceita opção que EXISTE naquela conta. A franquia manda o nome do
+    // fisioterapeuta que atendeu, e cada clínica tem a sua equipe — em Divinópolis isso
+    // virou 400 NotSupportedChoice em série. Mesmo contrato do backfill-campos: não
+    // inventa opção, pula e registra.
+    if (['select', 'multiselect', 'radiobutton'].includes(info.type) && info.enums.length) {
+      const existe = info.enums.some((x) => normalizar(x.value) === normalizar(String(e.valor)));
+      if (!existe) {
+        logger.info(
+          { unit: unit.slug, leadId, campo: e.campo, valor: e.valor },
+          'franquia-sync: opção não existe nesta conta — não gravei',
+        );
+        continue;
+      }
+    }
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria campo da pessoa');
       continue;
