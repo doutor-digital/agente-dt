@@ -15,6 +15,8 @@
  */
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
+import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
+import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
@@ -488,6 +490,12 @@ interface CtxSync {
   ops: ReturnType<typeof opcoes>;
   agoraEpoch: number;
   resumo: ResumoSync;
+  /**
+   * Todos os campos de lead da conta, indexados pelo nome normalizado. O `mapa` acima só
+   * conhece os campos da CONSULTA; o espelho da PESSOA precisa de outros sete, e criar uma
+   * segunda constante só pra eles duplicaria a mesma lista em dois lugares.
+   */
+  camposPorNome?: Array<[string, { id: number; type: KommoLeadCustomField['type']; enums: Array<{ id: number; value: string }> }]>;
   /** `FRANQUIA_REVISAO_SECO=1`: a revisão pelo histórico só registra o que faria (campos e etapa); a varredura normal não muda */
   seco?: boolean;
 }
@@ -503,6 +511,75 @@ interface PacienteDoCartao {
   idClient: number | null;
   consultas: SpineSchedule[];
   tratamento: SpineTreatment | null;
+}
+
+/** Os campos do cartão que descrevem a PESSOA — preenchidos pela ficha da franquia. */
+const CAMPOS_PESSOA = [
+  '⚥ Sexo', '◷ Data de nascimento', '# Idade', '⌂ Endereço',
+  '⌂ Cidade', '⌂ Estado', '⚑ Origem na franquia', '✓ Status do paciente',
+] as const;
+
+/**
+ * Espelha a PESSOA da franquia no cartão: sexo, nascimento, endereço, origem e status.
+ *
+ * A ficha completa custa UMA chamada por paciente (`/api/clients/{id}`), então só vale a
+ * pena buscá-la quando há buraco pra preencher. Se os sete campos já estiverem cheios, o
+ * cartão é pulado sem gastar chamada nenhuma.
+ *
+ * O preço dessa economia, dito na cara: enquanto tudo estiver preenchido, uma correção
+ * feita na franquia (sexo trocado, endereço atualizado) não chega aqui. Quem pega esse
+ * caso é o validador de cartão, não este caminho.
+ */
+async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, idClient: number): Promise<void> {
+  const { unit, kommo, resumo, seco } = ctx;
+  const bruto = (lead.custom_fields_values ?? []);
+  const porNome = new Map(ctx.camposPorNome ?? []);
+  const valorAtual = (campo: string): string | null => {
+    const info = porNome.get(normalizar(campo));
+    if (!info) return null;
+    const cf = bruto.find((f) => f.field_id === info.id);
+    const v = cf?.values?.[0]?.value;
+    return v === undefined || v === null || String(v).trim() === '' ? null : String(v);
+  };
+
+  // A idade primeiro, e de graça: ela se corrige a partir da data que já está no cartão,
+  // sem consultar a franquia. É o que impede "45" de continuar lá depois do aniversário.
+  const idade = idadeADesencalhar(valorAtual);
+  if (idade) {
+    const info = porNome.get(normalizar(idade.campo));
+    if (info && !seco) {
+      await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, idade.valor, info.enums)
+        .then(() => { resumo.escritas++; logger.info({ unit: unit.slug, leadId, valor: idade.valor }, 'franquia-sync: idade recalculada'); })
+        .catch((err) => { resumo.erros++; logger.warn({ err, unit: unit.slug, leadId }, 'franquia-sync: falha ao recalcular idade'); });
+    } else if (info && seco) {
+      logger.info({ unit: unit.slug, leadId, valor: idade.valor }, 'franquia-sync [seco]: recalcularia idade');
+    }
+  }
+
+  const temBuraco = CAMPOS_PESSOA.some((c) => porNome.has(normalizar(c)) && valorAtual(c) === null);
+  if (!temBuraco) return;
+
+  const r = await fichaDoPaciente(unit as never, idClient).catch(() => null);
+  if (!r?.ok || !r.data?.ficha) return;
+
+  for (const e of escritasDoPaciente(r.data.ficha, valorAtual)) {
+    const info = porNome.get(normalizar(e.campo));
+    if (!info) continue;
+    if (!e.sobrescreve && valorAtual(e.campo) !== null) continue;
+    if (seco) {
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria campo da pessoa');
+      continue;
+    }
+    try {
+      await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, e.valor, info.enums);
+      resumo.escritas++;
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-sync: campo da pessoa gravado');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug, leadId, campo: e.campo }, 'franquia-sync: falha ao gravar campo da pessoa');
+    }
+    await new Promise((r2) => setTimeout(r2, PAUSA_ENTRE_ESCRITAS_MS));
+  }
 }
 
 /**
@@ -534,6 +611,13 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
       logger.warn({ err, unit: unit.slug, leadId, campo: w.nome }, 'franquia-sync: falha ao gravar campo');
     }
     await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
+  }
+
+  // fase 1b: a PESSOA (sexo, nascimento, endereço, origem, status)
+  if (p.idClient) {
+    await espelharPaciente(ctx, leadId, lead, p.idClient).catch((err) =>
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho da pessoa falhou'),
+    );
   }
 
   // fase 2: a franquia move o cartão
@@ -681,7 +765,15 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
   const kommo = createKommoClient(unit);
   const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: CampoBruto[] } } | undefined;
-  const mapa = mapearCampos(bruto?._embedded?.custom_fields ?? []);
+  const camposBrutos = bruto?._embedded?.custom_fields ?? [];
+  const mapa = mapearCampos(camposBrutos);
+  const camposPorNome: NonNullable<CtxSync['camposPorNome']> = camposBrutos
+    .filter((c) => ['date', 'date_time', 'select', 'monetary', 'numeric', 'text', 'textarea', 'radiobutton'].includes(c.type))
+    .map((c) => [normalizar(c.name), {
+      id: c.id,
+      type: (c.type === 'date_time' ? 'date' : c.type) as KommoLeadCustomField['type'],
+      enums: (c.enums ?? []).map((e) => ({ id: e.id, value: e.value })),
+    }]);
   if (!mapa.DATA_CONSULTA || !mapa.SITUACAO) {
     logger.warn({ unit: unit.slug }, 'franquia-sync: conta sem os campos de consulta — pulando');
     return resumo;
@@ -724,7 +816,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   resumo.pacientes = porPaciente.size;
   const ops = opcoes(mapa);
   const agoraEpoch = Math.floor(Date.now() / 1000);
-  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo };
+  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome };
   let vistos = 0;
 
   for (const p of porPaciente.values()) {

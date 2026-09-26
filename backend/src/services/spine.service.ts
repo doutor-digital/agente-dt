@@ -302,6 +302,69 @@ export async function searchClients(
   }
 }
 
+
+/**
+ * A ficha COMPLETA do paciente — o que a busca por nome não devolve.
+ *
+ * `/api/clients/search` é resumo: idClient, name, whatsapp e pouco mais. A ficha traz o
+ * que interessa pra espelhar a pessoa no cartão: `gender`, `birthdate`, endereço, origem
+ * e status. Medido em 26/09/2026 na Serra.
+ *
+ * É uma chamada por paciente, então quem usa deve chamar só quando for gravar algo —
+ * não em varredura.
+ */
+export interface SpineFicha {
+  idClient: number | null;
+  name: string | null;
+  /** "M" / "F" / "Masculino" / "Feminino" — a franquia não é consistente; normalize. */
+  gender: string | null;
+  birthdate: string | null;
+  addressCity: string | null;
+  addressUf: string | null;
+  address: string | null;
+  email: string | null;
+  source: string | null;
+  status: string | null;
+}
+
+export async function fichaDoPaciente(
+  unit: SpineUnit,
+  idClient: number,
+): Promise<SpineResult<{ ficha: SpineFicha }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  try {
+    const { data } = await http.get<{ data?: { data?: Record<string, unknown> } | Record<string, unknown> }>(
+      `/api/clients/${idClient}`,
+    );
+    // A franquia embrulha em `data.data` aqui e em `data` noutros lugares. Aceita os dois.
+    const raw = ((data as { data?: { data?: unknown } })?.data?.data ?? (data as { data?: unknown })?.data ?? data) as Record<string, unknown>;
+    const txt = (v: unknown) => {
+      const s = typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim();
+      return s === '' ? null : s;
+    };
+    return {
+      ok: true,
+      data: {
+        ficha: {
+          idClient: Number(raw?.idClient) || null,
+          name: txt(raw?.name),
+          gender: txt(raw?.gender),
+          birthdate: txt(raw?.birthdate),
+          addressCity: txt(raw?.addressCity),
+          addressUf: txt(raw?.addressUf),
+          address: txt(raw?.address),
+          email: txt(raw?.email),
+          source: txt(raw?.source),
+          status: txt(raw?.status),
+        },
+      },
+    };
+  } catch (err) {
+    return { ok: false, ...describe(err) };
+  }
+}
+
 export const SPINE_LEAD_CATEGORY_CONTATO = 3;
 
 const MAPA_ORIGEM: Record<string, number> = {
