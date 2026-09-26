@@ -7,6 +7,27 @@ import { logger } from '../lib/logger.js';
 
 const KNOWN_TOOLS = ['aplicar_tag', 'mover_etapa', 'pausar_ia', 'atualizar_titulo_lead'];
 
+/**
+ * Resolve qual unidade a chamada pode tocar — o mesmo desenho de reports.controller.
+ *
+ * As rotas `/config*` só tinham `requireAuth`: aceitavam `unitId` do query/corpo e
+ * NÃO conferiam a unidade. Um UNIT_ADMIN da clínica A mandava `?unitId=<clínica B>`
+ * e lia (GET) ou SOBRESCREVIA (PUT) o system_prompt de outra clínica — o cérebro da
+ * IA que fala com paciente. `unitId: null` é a config GLOBAL (vale pra todas): só o
+ * SUPER_ADMIN mexe nela.
+ *
+ * SUPER_ADMIN: qualquer unitId, inclusive null (global). UNIT_ADMIN: travado na
+ * própria unidade, o `unitId` recebido é ignorado. `null` de unitId de usuário
+ * (não deveria acontecer com UNIT_ADMIN) cai em sentinela que não casa com nada.
+ */
+export function resolveConfigUnitId(req: Request, pedido: string | null | undefined): string | null {
+  const user = req.user!;
+  if (user.role === 'SUPER_ADMIN') {
+    return pedido ?? null;
+  }
+  return user.unitId ?? '__never_match__';
+}
+
 const toolSchema = z.object({
   name: z.string().min(1),
   enabled: z.boolean(),
@@ -24,7 +45,7 @@ const saveSchema = z.object({
 });
 
 export async function getConfig(req: Request, res: Response): Promise<void> {
-  const unitId = (req.query.unitId as string | undefined) ?? null;
+  const unitId = resolveConfigUnitId(req, (req.query.unitId as string | undefined) ?? null);
   const config = await getActiveConfig(unitId);
 
   res.json({
@@ -38,7 +59,7 @@ export async function getConfig(req: Request, res: Response): Promise<void> {
 }
 
 export async function getFlattenedPrompt(req: Request, res: Response): Promise<void> {
-  const unitId = (req.query.unitId as string | undefined) ?? null;
+  const unitId = resolveConfigUnitId(req, (req.query.unitId as string | undefined) ?? null);
   if (!unitId) {
     res.status(400).json({ error: 'unitId_required' });
     return;
@@ -71,9 +92,18 @@ export async function putConfig(req: Request, res: Response): Promise<void> {
 
   const tools = parsed.data.tools.filter((t) => KNOWN_TOOLS.includes(t.name));
 
+  // Trava a escrita na unidade que o usuário pode tocar: UNIT_ADMIN nunca grava
+  // config de outra clínica nem a global (null). O `unitId` do corpo é ignorado
+  // pra quem não é SUPER_ADMIN.
+  const unitId = resolveConfigUnitId(req, parsed.data.unitId ?? null);
+  if (unitId === '__never_match__') {
+    res.status(403).json({ error: 'forbidden' });
+    return;
+  }
+
   try {
     const saved = await saveConfig({
-      unitId: parsed.data.unitId ?? null,
+      unitId,
       systemPrompt: parsed.data.systemPrompt,
       tools,
       model: parsed.data.model,

@@ -163,6 +163,7 @@ import {
 } from '../controllers/users.controller.js';
 import { KommoService } from '../services/kommo.service.js';
 import { requireAuth, requireSuperAdmin, requireUnitAccess } from '../middleware/auth.js';
+import { loginRateLimit } from '../middleware/rate-limit-login.js';
 import {
   publicPausarHandler,
   publicRetomarHandler,
@@ -250,7 +251,7 @@ apiRouter.get('/health/ready', async (_req, res) => {
   }
 });
 
-apiRouter.post('/auth/login', loginHandler);
+apiRouter.post('/auth/login', loginRateLimit, loginHandler);
 
 // Recepção pausa a Sofia pela página /pausa/:slug com o código da unidade (sem sessão).
 apiRouter.get('/public/pausa/:slug', publicStatusHandler);
