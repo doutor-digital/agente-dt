@@ -325,6 +325,9 @@ export interface SpineFicha {
   email: string | null;
   source: string | null;
   status: string | null;
+  /** As sessões e os tratamentos vêm na ficha e são o bloco TRATAMENTO do cartão. */
+  schedules: Array<Record<string, unknown>>;
+  treatments: Array<Record<string, unknown>>;
 }
 
 export async function fichaDoPaciente(
@@ -357,6 +360,8 @@ export async function fichaDoPaciente(
           email: txt(raw?.email),
           source: txt(raw?.source),
           status: txt(raw?.status),
+          schedules: Array.isArray(raw?.schedules) ? (raw.schedules as Array<Record<string, unknown>>) : [],
+          treatments: Array.isArray(raw?.treatments) ? (raw.treatments as Array<Record<string, unknown>>) : [],
         },
       },
     };
