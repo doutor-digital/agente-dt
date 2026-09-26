@@ -16,6 +16,7 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
+import { escritasDoTratamento } from './tratamento-para-cartao.js';
 import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
@@ -517,6 +518,10 @@ interface PacienteDoCartao {
 const CAMPOS_PESSOA = [
   '⚥ Sexo', '◷ Data de nascimento', '# Idade', '⌂ Endereço',
   '⌂ Cidade', '⌂ Estado', '⚑ Origem na franquia', '✓ Status do paciente',
+  // O bloco TRATAMENTO vem da mesma ficha — se algum destes está vazio, vale a chamada.
+  '✎ Queixa', '¤ Valor do tratamento', '⚕ Tratamento fechado', '⚕ Fisioterapeuta',
+  '# Sessões previstas', '◷ Última sessão marcada', '✓ Compareceu à última sessão marcada',
+  '# Nº de faltas em sessão',
 ] as const;
 
 /**
@@ -562,7 +567,17 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
   const r = await fichaDoPaciente(unit as never, idClient).catch(() => null);
   if (!r?.ok || !r.data?.ficha) return;
 
-  for (const e of escritasDoPaciente(r.data.ficha, valorAtual)) {
+  const opcoesProtocolo = (porNome.get(normalizar('⚕ Tratamento fechado'))?.enums ?? []).map((x) => x.value);
+  const planejadas = [
+    ...escritasDoPaciente(r.data.ficha, valorAtual),
+    ...escritasDoTratamento({
+      sessoes: r.data.ficha.schedules as never,
+      tratamento: (r.data.ficha.treatments?.[0] ?? null) as never,
+      opcoesProtocolo,
+      valorAtual,
+    }),
+  ];
+  for (const e of planejadas) {
     const info = porNome.get(normalizar(e.campo));
     if (!info) continue;
     if (!e.sobrescreve && valorAtual(e.campo) !== null) continue;
