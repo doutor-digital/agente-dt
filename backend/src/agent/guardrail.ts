@@ -1,6 +1,7 @@
 import type { Unit } from '@prisma/client';
 import { preencherLacunas } from './lacunas.js';
 import { convenioDaUnidade, corrigirPrecoDoConvenio } from './preco-convenio.js';
+import { corrigirValorAntecipado } from './valor-antecipado.js';
 import { precosDaConsulta } from './prompt-composer.js';
 
 export interface GuardrailResult {
@@ -165,6 +166,20 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
         texto = r.texto;
         reescreveu = true;
       }
+    }
+
+    // O número no SLOT do antecipado tem de ser o antecipado desta unidade. A checagem de
+    // catálogo logo abaixo não pega isto: ela pergunta "esse valor existe na ficha?", e o
+    // valor errado costuma existir — na Serra, R$ 250 é o preço de quem tem plano pagando no
+    // dia, então "R$ 250 antecipado" passava limpo. Ver valor-antecipado.ts.
+    const va = corrigirValorAntecipado(texto, {
+      antecipado: p.antecipado,
+      taxaDeReserva: unit.spineBookingRequiresPayment ?? false,
+    });
+    if (va.corrigiu.length > 0) {
+      triggered.push(`antecipado_corrigido:${va.corrigiu.join('/')}->${p.antecipado}`);
+      texto = va.texto;
+      reescreveu = true;
     }
   }
 
