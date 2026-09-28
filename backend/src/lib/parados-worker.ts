@@ -45,6 +45,8 @@ import {
   ehRespostaDeCortesia,
   modoSeco,
   paradosLiberado,
+  voltaDaEsperaLiberada,
+  voltaDaEsperaSeca,
   prazoDaEtapa,
   reguaEsgotadaDerruba,
   textoDaNota,
@@ -262,9 +264,13 @@ export async function moverParaEspera(
  * e a retomada automática é cancelada (limpa "Retomar em"). Chamado pelo webhook, esperado. Lê a
  * etapa pelo cache de 90 s do prompt (`estadoEtapaDoLead`): fora de EM ESPERA não custa chamada
  * nenhuma a mais. Nunca lança.
+ *
+ * Liga por `VOLTA_ESPERA_SLUGS`, não por `PARADOS_SLUGS`: é a única regra do worker que não move
+ * ninguém por prazo — só reage ao paciente escrever — então serve de rede para SDR que estaciona
+ * cartão cedo demais sem trazer junto a régua de PERDIDO. Ver `voltaDaEsperaLiberada`.
  */
 export async function voltarDaEsperaSeRespondeu(unit: Unit, leadId: number, mensagem: string | null | undefined): Promise<void> {
-  if (!paradosLiberado(unit.slug) || !unit.kommoAccessToken) return;
+  if (!voltaDaEsperaLiberada(unit.slug) || !unit.kommoAccessToken) return;
   if (ehRespostaDeCortesia(mensagem)) return;
   try {
     const est = await estadoEtapaDoLead(unit, leadId);
@@ -273,7 +279,7 @@ export async function voltarDaEsperaSeRespondeu(unit: Unit, leadId: number, mens
     const funis = await funisDaUnidade(unit, kommo);
     const alvo = funis?.idDe('COMERCIAL', ETAPA.QUALIFICACAO);
     if (!alvo) return;
-    if (modoSeco(unit.slug)) {
+    if (voltaDaEsperaSeca(unit.slug)) {
       logger.info({ unit: unit.slug, leadId }, 'parados [seco]: voltaria de EM ESPERA pra EM QUALIFICAÇÃO (paciente escreveu)');
       return;
     }
