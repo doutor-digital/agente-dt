@@ -19,6 +19,7 @@ import type { Unit } from '@prisma/client';
 import { createKommoClient, type KommoLead } from '../services/kommo.service.js';
 import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
 import { logger } from './logger.js';
+import { automacaoLigada } from './automacoes-estado.js';
 
 export const CAMPOS_CARIMBO = {
   INICIO_TRAT: '◷ Início do tratamento',
@@ -60,9 +61,7 @@ export function carimbosDaEtapa(nomeEtapa: string, agoraEpoch: number): CarimboE
 }
 
 export function carimboEtapaLiberado(slug: string, raw: string | undefined = process.env.CARIMBO_ETAPA_SLUGS): boolean {
-  const lista = (raw ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (lista.length === 0) return false;
-  return lista.includes('*') || lista.includes(slug);
+  return automacaoLigada(slug, 'carimbo-etapa', raw);
 }
 
 export interface EventoEtapa {

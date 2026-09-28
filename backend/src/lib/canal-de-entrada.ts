@@ -1,3 +1,4 @@
+import { automacaoLigada } from './automacoes-estado.js';
 /**
  * Por onde a mensagem do paciente ENTRA: Kommo ou Meta.
  *
@@ -28,8 +29,5 @@
  */
 
 export function entraPelaMeta(slug: string, lista = process.env.META_INBOUND_SLUGS): boolean {
-  const raw = (lista ?? '').trim();
-  if (!raw) return false;
-  const itens = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  return itens.has('*') || itens.has(slug);
+  return automacaoLigada(slug, 'meta-inbound', lista);
 }

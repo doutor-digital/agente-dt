@@ -30,6 +30,7 @@ import { emPausa } from './pausa-unidade.js';
 import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
+import { automacaoLigada } from './automacoes-estado.js';
 
 /**
  * Janelas da chave ANTIGA, que não carregava o horário da consulta. Só servem à transição de
@@ -81,8 +82,7 @@ export function toqueDoDia(diaDaConsulta: string, hoje: string): Toque | null {
  * inteira de uma vez. Vazio = ninguém; `*` = todas.
  */
 export function reforcoLiberado(slug: string, raw: string | undefined = process.env.CONFIRMACAO_D2_SLUGS): boolean {
-  const lista = (raw ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
-  return lista.includes('*') || lista.includes(slug);
+  return automacaoLigada(slug, 'confirmacao-d2', raw);
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { Unit } from '@prisma/client';
 
 import { TETO_CONVERSA_USD } from '../agent/teto-conversa.js';
+import { automacaoLigada } from '../lib/automacoes-estado.js';
 
 /**
  * Retrato do que a IA tem, do que está ligado e do que falta.
@@ -44,10 +45,7 @@ function ligado(nome: string, padrao = '0'): boolean {
 }
 
 function convoCacheLigado(slug: string): boolean {
-  const raw = process.env.ANTHROPIC_CONVO_CACHE_SLUGS ?? '';
-  if (!raw.trim()) return false;
-  const set = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  return set.has('*') || set.has(slug);
+  return automacaoLigada(slug, 'cache-conversa', process.env.ANTHROPIC_CONVO_CACHE_SLUGS);
 }
 
 export function montarSaudeIA(unit: Unit): GrupoSaude[] {

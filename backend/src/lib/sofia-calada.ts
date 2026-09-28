@@ -13,6 +13,7 @@
  * Só nas unidades em `SOFIA_CALADA_SLUGS` (csv; `*` = todas). Serra primeiro.
  */
 import { normalizarNome } from './kommo-schema.js';
+import { automacaoLigada } from './automacoes-estado.js';
 
 export const REGRA_NOTA_CALADA = 'sofia-calada';
 
@@ -40,9 +41,7 @@ export function etapaCalada(nomeEtapa: string | null | undefined, pos: PosicaoDo
 }
 
 export function sofiaCaladaLiberada(slug: string, raw: string | undefined = process.env.SOFIA_CALADA_SLUGS): boolean {
-  const lista = (raw ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (lista.length === 0) return false;
-  return lista.includes('*') || lista.includes(slug);
+  return automacaoLigada(slug, 'sofia-calada', raw);
 }
 
 /** A nota que fica no cartão. Curta: a equipe lê no celular. */

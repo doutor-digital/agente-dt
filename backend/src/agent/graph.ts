@@ -51,6 +51,7 @@ import {
 } from './llm-policy.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { ehSemNome, ehTituloPadrao } from '../lib/titulo-padrao.js';
+import { automacaoLigada } from '../lib/automacoes-estado.js';
 
 let checkpointerInstance: PostgresSaver | null = null;
 
@@ -120,10 +121,7 @@ function toolsParaGemini(tools: ReturnType<typeof buildTools>): unknown[] {
 }
 
 function convoCacheHabilitado(slug: string): boolean {
-  const raw = process.env.ANTHROPIC_CONVO_CACHE_SLUGS ?? '';
-  if (!raw.trim()) return false;
-  const set = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  return set.has('*') || set.has(slug);
+  return automacaoLigada(slug, 'cache-conversa', process.env.ANTHROPIC_CONVO_CACHE_SLUGS);
 }
 
 function strictToolsHabilitado(): boolean {

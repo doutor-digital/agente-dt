@@ -1,3 +1,4 @@
+import { automacaoLigada } from './automacoes-estado.js';
 /**
  * Aviso no WhatsApp do João toda vez que a IA marca uma consulta.
  *
@@ -13,10 +14,7 @@
 
 /** Unidades que avisam. Vazio = nenhuma; `*` = todas (não recomendado). */
 export function avisoLigadoPara(slug: string, lista = process.env.AVISO_AGENDAMENTO_SLUGS): boolean {
-  const raw = (lista ?? '').trim();
-  if (!raw) return false;
-  const itens = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  return itens.has('*') || itens.has(slug);
+  return automacaoLigada(slug, 'aviso-agendamento', lista);
 }
 
 export interface AgendamentoParaAvisar {

@@ -7,6 +7,7 @@ import { ehIntocavel } from './follow-up-presets.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
 import { carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarSemResposta } from '../services/lead-metrics.service.js';
+import { automacaoLigada } from './automacoes-estado.js';
 
 const SWEEP_MS = 60_000;
 
@@ -231,9 +232,7 @@ function paraMinutos(hhmm: string | null | undefined): number | null {
  * manhã, e isso alimenta o "achei que era golpe" das desistências.
  */
 export function semJanelaDeHorario(slug: string): boolean {
-  const raw = process.env.FOLLOW_UP_24H_SLUGS ?? '';
-  const lista = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  return lista.has('*') || lista.has(slug);
+  return automacaoLigada(slug, 'follow-up-24h', process.env.FOLLOW_UP_24H_SLUGS);
 }
 
 export function dentroDoHorario(

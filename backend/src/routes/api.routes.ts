@@ -181,6 +181,12 @@ import {
 } from '../controllers/cerebro.controller.js';
 import { listarAltaHandler, decidirAltaHandler } from '../controllers/alta.controller.js';
 import { previaCargaHandler, aplicarCargaHandler } from '../controllers/franquia-carga.controller.js';
+import {
+  listarAutomacoesHandler,
+  definirAutomacaoHandler,
+  limparAutomacaoHandler,
+  redeAutomacoesHandler,
+} from '../controllers/automacoes.controller.js';
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
 import { apiReference } from '@scalar/express-api-reference';
@@ -428,6 +434,12 @@ apiRouter.post('/units/:id/spine/sync-patient', requireUnitAccess, syncPatientHa
 // não do dia a dia da unidade. O POST só escreve com `aplicar: true` no corpo.
 apiRouter.get('/units/:id/implantacao/carga', requireSuperAdmin, previaCargaHandler);
 apiRouter.post('/units/:id/implantacao/carga', requireSuperAdmin, aplicarCargaHandler);
+
+// Automações por unidade. Super admin porque metade delas move cartão.
+apiRouter.get('/automacoes/rede', requireSuperAdmin, redeAutomacoesHandler);
+apiRouter.get('/units/:id/automacoes', requireSuperAdmin, listarAutomacoesHandler);
+apiRouter.put('/units/:id/automacoes/:automacao', requireSuperAdmin, definirAutomacaoHandler);
+apiRouter.delete('/units/:id/automacoes/:automacao', requireSuperAdmin, limparAutomacaoHandler);
 apiRouter.post('/units/:id/spine/cancel-schedule', requireUnitAccess, cancelScheduleHandler);
 apiRouter.post('/units/:id/spine/confirm-schedule', requireUnitAccess, confirmScheduleHandler);
 apiRouter.get('/units/:id/spine/bi/leads-sources', requireUnitAccess, biLeadsSourcesHandler);

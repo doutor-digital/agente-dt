@@ -80,6 +80,37 @@ const apiBase = import.meta.env.VITE_API_URL
 
 
 /** O que a carga de implantação faria, sem escrever nada. */
+/** Uma automação do catálogo, com o estado desta unidade. Espelha `backend/src/lib/automacoes.ts`. */
+export type EstadoAutomacao = 'ligado' | 'seco' | 'desligado';
+export type RiscoAutomacao = 'move-cartao' | 'manda-mensagem' | 'escreve-campo' | 'comportamento';
+
+export interface Automacao {
+  id: string;
+  chave: string;
+  nome: string;
+  oQueFaz: string;
+  pegadinha?: string;
+  risco: RiscoAutomacao;
+  temSeco: boolean;
+  quandoVazio: 'desligado' | 'todas';
+  arquivo: string;
+  estado: EstadoAutomacao;
+  /** `true` = ninguém mexeu na tela e o valor ainda vem da variável de ambiente. */
+  vemDoAmbiente: boolean;
+  /** O csv cru da variável, pra conferir sem abrir o Docker. */
+  ambiente: string;
+}
+
+export interface PanoramaAutomacoes {
+  unidade: { id: string; slug: string; nome: string };
+  automacoes: Automacao[];
+}
+
+export interface RedeAutomacoes {
+  unidades: Array<{ id: string; slug: string; nome: string; estados: Record<string, EstadoAutomacao> }>;
+  automacoes: Automacao[];
+}
+
 export interface CargaPrevia {
   unidade: string;
   pacientesNaFranquia: number;
@@ -304,6 +335,29 @@ export const api = {
       { aplicar: true, ...(meses ? { meses } : {}) },
       { timeout: 600_000 }, // criar 180 cartões leva minutos, com pausa entre cada um
     );
+    return data;
+  },
+  // ── automações: o que está ligado em cada unidade (a tela que substitui abrir o .env da VPS) ──
+  async automacoes(unitId: string): Promise<PanoramaAutomacoes> {
+    const { data } = await http.get<PanoramaAutomacoes>(`/units/${unitId}/automacoes`);
+    return data;
+  },
+  async definirAutomacao(unitId: string, automacao: string, estado: EstadoAutomacao): Promise<{ automacoes: Automacao[] }> {
+    const { data } = await http.put<{ automacoes: Automacao[] }>(
+      `/units/${unitId}/automacoes/${automacao}`,
+      { estado },
+    );
+    return data;
+  },
+  /** Apaga a decisão da tela e devolve a unidade ao que o `.env` diz — não é o mesmo que desligar. */
+  async limparAutomacao(unitId: string, automacao: string): Promise<{ automacoes: Automacao[] }> {
+    const { data } = await http.delete<{ automacoes: Automacao[] }>(
+      `/units/${unitId}/automacoes/${automacao}`,
+    );
+    return data;
+  },
+  async automacoesDaRede(): Promise<RedeAutomacoes> {
+    const { data } = await http.get<RedeAutomacoes>('/automacoes/rede');
     return data;
   },
   async spinePing(unitId: string): Promise<{ ok: boolean; error?: string }> {
