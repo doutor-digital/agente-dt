@@ -19,6 +19,7 @@
  *      marido Vagner). A função nunca corrige a IA; só preenche o buraco.
  *   3. Desligado por padrão. Só roda nas unidades listadas em `PREENCHE_CAMPOS_SLUGS`.
  */
+import { automacaoLigada } from './automacoes-estado.js';
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
@@ -188,11 +189,11 @@ export async function preencherDaUnidade(
 
 async function varrer(): Promise<void> {
   if (rodando) return;
-  const slugs = unidadesLigadas();
-  if (!slugs.length) return;
   rodando = true;
   try {
-    const unidades = await prisma.unit.findMany({ where: { slug: { in: slugs } } });
+    const todas = await prisma.unit.findMany({ where: { isActive: true } });
+    const unidades = todas.filter((u) => automacaoLigada(u.slug, 'preenche-campos', process.env.PREENCHE_CAMPOS_SLUGS));
+    if (!unidades.length) return;
     for (const u of unidades) {
       const r = await preencherDaUnidade(u, { simular: false });
       if (r.qualificacao || r.sexo || r.erro) {

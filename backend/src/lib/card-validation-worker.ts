@@ -4,6 +4,7 @@ import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import { gravarCampoDigital, limparCampoDigital } from '../services/lead-metrics.service.js';
+import { automacaoLigada } from './automacoes-estado.js';
 
 /**
  * Revisão dentro do próprio Kommo (decisão do João, 21/09/2026): em vez de tarefa ou lista no relatório,
@@ -369,8 +370,7 @@ export function avaliarLead(lead: KommoLead, ctx: ContextoUnidade): Array<{ key:
  */
 const REGRAS_ENXUTO = new Set<string>(['H_fechou_sem_valor']);
 export function cartaoEnxuto(slug: string, raw: string | undefined = process.env.CARTAO_ENXUTO_SLUGS): boolean {
-  const lista = (raw ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
-  return lista.includes('*') || lista.includes(slug);
+  return automacaoLigada(slug, 'cartao-enxuto', raw);
 }
 function regrasDaUnidade(unit: Unit): Regra[] {
   if (!cartaoEnxuto(unit.slug)) return REGRAS_CARD;

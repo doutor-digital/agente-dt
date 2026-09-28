@@ -340,6 +340,7 @@ model Unit {
   spineLeadLinks    SpineLeadLink[]
   changeLog         UnitChangeLog[]
   lessons           UnitLesson[]
+  automacoes        UnitAutomacao[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -1765,4 +1766,39 @@ model AltaCandidato {
   @@unique([unitId, leadId, classe])
   @@index([unitId, estado])
   @@map("alta_candidatos")
+}
+
+/// Qual automação está ligada em qual unidade — a tela "Automações" do console escreve aqui.
+///
+/// Antes disto cada automação era uma variável de ambiente csv no `.env` da VPS
+/// (`PARADOS_SLUGS=serra,imperatriz`), e mudar uma exigia editar o arquivo e redeployar. Ninguém
+/// lembra de 24 variáveis, e o que ninguém lembra ninguém opera: em 28/09/2026 o João não sabia
+/// que o worker de parados estava ligado na Serra.
+///
+/// A linha aqui VENCE a variável de ambiente; sem linha, vale a variável de sempre. Por isso a
+/// migração não liga nem desliga nada sozinha — a tabela nasce vazia e o comportamento continua o
+/// de hoje até alguém mexer na tela. O catálogo (o que cada automação faz, o risco, se tem modo
+/// seco) mora em `src/lib/automacoes.ts`, não no banco: é código, muda com deploy, e assim uma
+/// automação nova não pode existir sem descrição.
+model UnitAutomacao {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+
+  /// `id` do catálogo em `automacoes.ts` — nunca a variável de ambiente, que pode ser renomeada.
+  automacao String
+
+  /// "ligado" | "seco" | "desligado". "seco" só vale em automação que tem modo seco no catálogo;
+  /// nas outras é tratado como desligado, pra uma renomeação no catálogo nunca ligar nada sozinha.
+  estado String
+
+  /// Quem mexeu e quando — sem isto, "por que a Serra parou de mover?" não tem resposta.
+  atualizadoPor String?  @map("atualizado_por")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, automacao])
+  @@index([automacao])
+  @@map("unit_automacoes")
 }

@@ -23,6 +23,7 @@ import { startCardValidationWorker, stopCardValidationWorker } from './lib/card-
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
 import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
+import { iniciarAutomacoes } from './lib/automacoes-estado.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
 import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
@@ -108,6 +109,15 @@ async function main(): Promise<void> {
     logger.info({ id: def.id, slug: def.slug }, 'Unit default disponível');
   } catch (err) {
     logger.warn({ err }, 'falha ao semear Unit default — webhooks legados podem falhar');
+  }
+
+  // Antes de qualquer worker: sem isto, a primeira pergunta "esta automação está ligada?" cairia na
+  // variável de ambiente e ignoraria o que a tela gravou. Em TODO processo, não só no líder — quem
+  // atende webhook também pergunta.
+  try {
+    await iniciarAutomacoes();
+  } catch (err) {
+    logger.warn({ err }, 'falha ao carregar as automações — vale o .env até a próxima releitura');
   }
 
   // Por processo: vigia respostas pendentes que ESTE processo prometeu entregar.

@@ -25,6 +25,7 @@
  */
 import { ehEtapaDeEntrada } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
+import { estadoGravado } from './automacoes-estado.js';
 
 export const PRAZOS = {
   esperaDias: Number(process.env.PARADOS_ESPERA_DIAS) || 30,
@@ -71,6 +72,8 @@ function naLista(slug: string, raw: string | undefined): boolean {
 }
 
 export function paradosLiberado(slug: string, raw: string | undefined = process.env.PARADOS_SLUGS): boolean {
+  const daTela = estadoGravado(slug, 'parados');
+  if (daTela) return daTela !== 'desligado'; // "seco" também roda — só não escreve
   return naLista(slug, raw);
 }
 
@@ -87,6 +90,9 @@ export function voltaDaEsperaLiberada(
   proprio: string | undefined = process.env.VOLTA_ESPERA_SLUGS,
   paradas: string | undefined = process.env.PARADOS_SLUGS,
 ): boolean {
+  const daTela = estadoGravado(slug, 'volta-espera');
+  if (daTela) return daTela !== 'desligado';
+  // Sem nada na tela, a herança de sempre: quem tem o worker inteiro também tem a volta.
   return naLista(slug, proprio) || naLista(slug, paradas);
 }
 
@@ -101,6 +107,8 @@ export function voltaDaEsperaSeca(
   seco: string | undefined = process.env.PARADOS_SECO,
   ligados: string | undefined = process.env.PARADOS_LIGADO_SLUGS,
 ): boolean {
+  const daTela = estadoGravado(slug, 'volta-espera');
+  if (daTela) return daTela === 'seco';
   if (naLista(slug, proprio)) return false;
   return modoSeco(slug, seco, ligados);
 }
@@ -111,6 +119,10 @@ export function voltaDaEsperaSeca(
  * e laboratório seguem secos até migrar o cartão.
  */
 export function modoSeco(slug?: string, raw: string | undefined = process.env.PARADOS_SECO, ligados: string | undefined = process.env.PARADOS_LIGADO_SLUGS): boolean {
+  if (slug) {
+    const daTela = estadoGravado(slug, 'parados');
+    if (daTela) return daTela === 'seco';
+  }
   const v = (raw ?? '').trim().toLowerCase();
   const seco = v === '1' || v === 'true' || v === 'sim';
   if (!seco) return false;

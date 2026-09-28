@@ -16,7 +16,13 @@ import {
   UserCog,
   Wand2,
 } from 'lucide-react';
-import { PiCalendarBlankBold, PiPlugsConnectedBold, PiChatsCircleBold, PiUsersThreeBold } from 'react-icons/pi';
+import {
+  PiCalendarBlankBold,
+  PiPlugsConnectedBold,
+  PiChatsCircleBold,
+  PiUsersThreeBold,
+  PiGearSixBold,
+} from 'react-icons/pi';
 import type { ComponentType } from 'react';
 
 export type IconComponent = ComponentType<{
@@ -51,6 +57,7 @@ export type AppTab =
   | 'follow-up'
   | 'crm-franquia'
   | 'implantacao'
+  | 'automacoes'
   | 'saude-ia'
   | 'resultados'
   | 'como-funciona';
@@ -180,6 +187,17 @@ export const NAV_ITEMS: NavItem[] = [
     keywords: [
       'implantacao', 'implantação', 'carga', 'povoar', 'importar', 'pacientes',
       'unidade nova', 'consultoria', 'franquia', 'cartoes', 'leads', 'etapas',
+    ],
+  },
+  {
+    id: 'automacoes',
+    label: 'Automações',
+    hint: 'O que roda sozinho nesta unidade — e o botão que liga e desliga cada coisa.',
+    icon: PiGearSixBold,
+    section: 'agente',
+    keywords: [
+      'automacao', 'automações', 'worker', 'ligar', 'desligar', 'habilitar', 'flag',
+      'parados', 'espera', 'sincronizador', 'franquia', 'teto', 'follow up', 'seco',
     ],
   },
   {

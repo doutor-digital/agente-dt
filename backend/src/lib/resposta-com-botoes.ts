@@ -4,6 +4,7 @@ import { createKommoClient } from '../services/kommo.service.js';
 import { enviarMensagemDeChat, verificarEntregaDaNota } from '../services/kommo-chat.service.js';
 import { avisarJoao } from './alerta-whatsapp.js';
 import type { TraceRecorder } from '../agent/trace-recorder.js';
+import { automacaoLigada } from './automacoes-estado.js';
 
 /**
  * Resposta com BOTÕES pelo chat do Kommo (mesmo caminho da nota de voz).
@@ -18,10 +19,7 @@ import type { TraceRecorder } from '../agent/trace-recorder.js';
 const VERIFICAR_APOS_MS = Number(process.env.VOICE_VERIFY_AFTER_MS) || 20_000;
 
 export function botoesLigadosPara(slug: string): boolean {
-  const raw = (process.env.CHAT_BOTOES_SLUGS ?? '*').trim();
-  if (!raw) return false;
-  const lista = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  return lista.has('*') || lista.has(slug);
+  return automacaoLigada(slug, 'chat-botoes', process.env.CHAT_BOTOES_SLUGS);
 }
 
 export interface TentativaDeBotoes {

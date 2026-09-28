@@ -11,11 +11,11 @@
  * A parte pura (coerção de valor, descrição) fica aqui pra ser testada sem Kommo.
  */
 import type { LeadFieldRule } from '@prisma/client';
+import { automacaoLigada } from '../lib/automacoes-estado.js';
 
 export function capturaUnificada(slug: string | null | undefined): boolean {
-  const raw = process.env.CAPTURA_UNIFICADA_SLUGS ?? '';
-  const lista = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  return lista.has('*') || (!!slug && lista.has(slug));
+  if (!slug) return false;
+  return automacaoLigada(slug, 'captura-unificada', process.env.CAPTURA_UNIFICADA_SLUGS);
 }
 
 type Enum = { id: number; value: string };

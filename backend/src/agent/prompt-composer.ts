@@ -39,6 +39,7 @@ import { renderAnuncioDeOrigem } from './anuncio-de-origem.js';
 import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
+import { automacaoLigada } from '../lib/automacoes-estado.js';
 
 export interface BusinessHoursStatus {
   enabled: boolean;
@@ -1679,9 +1680,7 @@ export function escolherBase(
 ): string | undefined {
   const daUnidade = unit.systemPrompt?.trim();
   const doConfig = agentConfigPrompt?.trim();
-  const raw = process.env.PROMPT_DA_UNIDADE_SLUGS ?? '';
-  const lista = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  const ligado = lista.has('*') || lista.has(unit.slug);
+  const ligado = automacaoLigada(unit.slug, 'prompt-da-unidade', process.env.PROMPT_DA_UNIDADE_SLUGS);
 
   // Fora do piloto, nada muda. Dentro dele, o manual da unidade ganha — e se
   // ela não tiver manual nenhum, cai no config em vez de ficar sem instrução.

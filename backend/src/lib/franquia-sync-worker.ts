@@ -26,6 +26,7 @@ import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, moveLiberado, planeja
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, type DecisaoParado } from './parados.js';
+import { automacaoLigada, estadoDaAutomacao } from './automacoes-estado.js';
 
 const SWEEP_MS = 15 * 60_000;
 const PRIMEIRA_MS = 90_000;
@@ -716,11 +717,13 @@ function notaConferir(nome: string): string {
  * dispara templates de parabéns e não cabe meses depois.
  */
 async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
-  const seco = revisaoSeca();
+  // A tela pode pôr ESTA unidade em seco sem mexer na variável global — por isso a pergunta vem
+  // antes de montar o ctx, que é quem carrega o `seco` pro resto da revisão.
+  const seco = estadoDaAutomacao(ctxBase.unit.slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS) === 'seco' || revisaoSeca();
   const ctx: CtxSync = { ...ctxBase, seco };
   const { unit, kommo, funis, mapa, agoraEpoch, resumo } = ctx;
   if (!funis) return;
-  if (!slugsLiberados(process.env.FRANQUIA_REVISAO_SLUGS)(unit.slug)) return;
+  if (!automacaoLigada(unit.slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS)) return;
   if (seco) logger.info({ unit: unit.slug }, 'franquia-move [seco]: revisão pelo histórico só registra, não mexe');
   const corte = agoraEpoch - DIAS_ATRAS * 86_400;
   const conferir = funis.idDe('COMERCIAL', ETAPA.CONFERIR);
@@ -898,7 +901,7 @@ async function varrer(soSlug?: string): Promise<void> {
       where: { spineEnabled: true, spineToken: { not: null }, kommoAccessToken: { not: null } },
     });
     for (const unit of units) {
-      if (!liberado(unit.slug)) continue;
+      if (!automacaoLigada(unit.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS)) continue;
       if (soSlug && unit.slug !== soSlug) continue;
       const t0 = Date.now();
       try {

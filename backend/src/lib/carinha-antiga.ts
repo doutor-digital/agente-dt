@@ -1,3 +1,4 @@
+import { automacaoLigada } from './automacoes-estado.js';
 /**
  * A carinha `☺` que entrega o robô.
  *
@@ -20,10 +21,8 @@
  */
 
 export function semCarinhaLigado(slug: string | null | undefined, lista = process.env.SEM_CARINHA_SLUGS): boolean {
-  const raw = (lista ?? '').trim();
-  if (!raw || !slug) return false;
-  const itens = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  return itens.has('*') || itens.has(slug);
+  if (!slug) return false;
+  return automacaoLigada(slug, 'sem-carinha', lista);
 }
 
 /** Os emoji que o rebaixamento transformava em `☺`/`☹`, mais os próprios glifos. */

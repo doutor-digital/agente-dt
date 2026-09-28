@@ -54,6 +54,7 @@ const AgendaPanel = lazy(() => import('./components/AgendaPanel'));
 const FollowUpPanel = lazy(() => import('./components/FollowUpPanel'));
 const CrmFranquiaPanel = lazy(() => import('./components/CrmFranquiaPanel'));
 const ImplantacaoPanel = lazy(() => import('./components/ImplantacaoPanel'));
+const AutomacoesPanel = lazy(() => import('./components/AutomacoesPanel'));
 const ResultadosPanel = lazy(() =>
   import('./components/ResultadosPanel').then((m) => ({ default: m.ResultadosPanel })),
 );
@@ -183,6 +184,7 @@ function Shell({ onBackToHub }: { onBackToHub?: () => void }) {
             {tab === 'follow-up' && <FollowUpPanel />}
             {tab === 'crm-franquia' && <CrmFranquiaPanel />}
             {tab === 'implantacao' && <ImplantacaoPanel />}
+            {tab === 'automacoes' && <AutomacoesPanel />}
             {tab === 'saude-ia' && <SaudeIaPanel />}
             {tab === 'resultados' && <ResultadosPanel />}
             {tab === 'como-funciona' && <ComoFuncionaPanel onNavigate={navigate} />}

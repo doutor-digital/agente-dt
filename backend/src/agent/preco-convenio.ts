@@ -1,5 +1,6 @@
 import type { Unit } from '@prisma/client';
 import { fmtBRL } from './prompt-composer.js';
+import { automacaoLigada } from '../lib/automacoes-estado.js';
 
 /**
  * O desconto do convênio não pode virar o preço do Pix.
@@ -143,12 +144,12 @@ export function precoDoConvenio(
  *
  * Unidade nova com desconto de carteirinha: confira a ficha e acrescente aqui.
  */
-const SLUGS_COM_CONVENIO = new Set(
-  (process.env.PRECO_CONVENIO_SLUGS ?? 'doutor-hernia-bebedouro,doutor-hernia-olimpia')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean),
-);
+/** Quem já vinha ligado antes de existir a tela — a variável vazia continua significando estes dois. */
+const PADRAO_CONVENIO = 'doutor-hernia-bebedouro,doutor-hernia-olimpia';
+
+function temConvenio(slug: string): boolean {
+  return automacaoLigada(slug, 'preco-convenio', process.env.PRECO_CONVENIO_SLUGS ?? PADRAO_CONVENIO);
+}
 
 /**
  * O valor do convênio da unidade, calculado uma vez só.
@@ -162,7 +163,7 @@ export function convenioDaUnidade(
   unit: Pick<Unit, 'id' | 'slug' | 'updatedAt' | 'sourceProdutos' | 'sourceNegocio' | 'sourcePapel' | 'systemPrompt' | 'spineBookingRequiresPayment'>,
   precos: { antecipado: number },
 ): number | null {
-  if (!SLUGS_COM_CONVENIO.has(unit.slug)) return null;
+  if (!temConvenio(unit.slug)) return null;
   // Taxa de reserva (Boa Vista): o antecipado é parte do valor do dia, não alternativa.
   if (unit.spineBookingRequiresPayment) return null;
 

@@ -31,6 +31,7 @@ import { opsAlert } from '../lib/ops-alert.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { fusoDaUnidade, inicioDoMesNoFuso, inicioDoProximoMesNoFuso, mesNoFuso } from '../lib/fuso.js';
 import { USD_BRL } from '../lib/cambio.js';
+import { automacaoLigada } from '../lib/automacoes-estado.js';
 
 /** Teto por conta Kommo por mês, em reais. */
 export const TETO_MENSAL_BRL = Number(process.env.TETO_MENSAL_BRL) || 300;
@@ -51,13 +52,7 @@ export function acaoAoEstourar(raw: string | undefined = process.env.TETO_MENSAL
 
 /** `TETO_MENSAL_SLUGS`: csv de slugs ou `*`. Ausente OU em branco = todas (linha vazia no env não desliga a régua). */
 export function tetoHabilitado(slug: string, raw: string | undefined = process.env.TETO_MENSAL_SLUGS): boolean {
-  const texto = (raw ?? '').trim();
-  if (!texto) return true;
-  const lista = texto
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return lista.includes('*') || lista.includes(slug);
+  return automacaoLigada(slug, 'teto-mensal', raw);
 }
 
 export function avaliarNivel(brl: number, teto = TETO_MENSAL_BRL, fracaoAviso = FRACAO_DE_AVISO): NivelTeto {

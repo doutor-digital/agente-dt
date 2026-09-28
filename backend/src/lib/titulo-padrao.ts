@@ -14,11 +14,10 @@
 import type { Unit } from '@prisma/client';
 import type { KommoClient } from '../services/kommo.service.js';
 import { logger } from './logger.js';
+import { automacaoLigada } from './automacoes-estado.js';
 
 export function tituloPadraoLiberado(slug: string, raw: string | undefined = process.env.TITULO_PADRAO_SLUGS): boolean {
-  const lista = (raw ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (lista.length === 0) return false;
-  return lista.includes('*') || lista.includes(slug);
+  return automacaoLigada(slug, 'titulo-padrao', raw);
 }
 
 /** "Lead #123", "Lead 123", "Lead", vazio → sem nome. "Lead 23/09/2026" (o nosso) e "Maria" NÃO. */

@@ -40,6 +40,7 @@
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 import { ehAvaliacao, ehConsulta } from './franquia-sync.js';
 import { normalizarNome } from './kommo-schema.js';
+import { automacaoLigada } from './automacoes-estado.js';
 
 export const ETAPA = {
   INC: 'Etapa de leads de entrada',
@@ -370,9 +371,7 @@ export function recortarHistorico<S extends Pick<SpineSchedule, 'dateAttendanceU
 }
 
 export function moveLiberado(slug: string, raw: string | undefined = process.env.FRANQUIA_MOVE_SLUGS): boolean {
-  const lista = (raw ?? '').replace(/^['"]|['"]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (lista.length === 0) return false;
-  return lista.includes('*') || lista.includes(slug);
+  return automacaoLigada(slug, 'franquia-move', raw);
 }
 
 export function horasAteNegociacao(raw: string | undefined = process.env.FRANQUIA_NEGOCIACAO_HORAS): number {
