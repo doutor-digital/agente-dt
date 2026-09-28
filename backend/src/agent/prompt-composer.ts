@@ -38,6 +38,7 @@ import { avisoDeCartaoDuplicado } from '../services/cadastro-duplicado.js';
 import { renderAnuncioDeOrigem } from './anuncio-de-origem.js';
 import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
+import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 
 export interface BusinessHoursStatus {
   enabled: boolean;
@@ -361,7 +362,7 @@ function renderReacaoEElogio(): string {
    NUNCA trate como reação sem valor.
 
 2) QUEM JÁ É PACIENTE ELOGIA ("a melhor fisio", "curou minha bursite", "são pessoas
-   maravilhosas"). Agradeça com carinho de verdade e, na MESMA mensagem, convide a
+   maravilhosas"). Agradeça de verdade, com simpatia e sem melosidade, e na MESMA mensagem convide a
    deixar essa avaliação no Google — uma vez só, sem insistir, e sem link se você
    não tiver o link. Se ela não responder, deixe pra lá.
 
@@ -1432,6 +1433,38 @@ export interface ComposeInput {
   isFirstTurn?: boolean;
   consulta?: ConsultaReconciliada | null;
   estadoEtapa?: EstadoEtapaLead | null;
+  /** A fala deste turno. Usada para as regras que dependem do que ele acabou de dizer. */
+  userMessage?: string;
+}
+
+/**
+ * A pessoa só disse "Bom dia". Responda o bom dia e deixe ela conduzir.
+ *
+ * Caso Glória, lead 22584955 da Serra, 24/09/2026: ela havia dito "estou analisando, retorno".
+ * Dois dias depois mandou só "Bom dia" — foi ELA quem procurou a gente. A IA respondeu "Que bom
+ * te ver por aqui de novo! Conseguiu pensar sobre a consulta?" e ela encerrou com "não gosto de
+ * insistência... estarei procurando outro profissional".
+ *
+ * Tecnicamente a IA não insistiu: respondeu a uma mensagem dela. Mas emendar a venda num "bom
+ * dia" foi, na leitura dela, a terceira cobrança. E cumprimento sem assunto é 6,68% de tudo que
+ * os pacientes escrevem — 3.217 mensagens em 30 dias.
+ *
+ * Isto é instrução, não trava de saída: aqui a IA ainda precisa escrever uma frase natural, e
+ * cortar pedaço de resposta por regex foi o erro que a trava de intimidade cometeu na primeira
+ * versão. Mas é instrução CONDICIONAL — vale só no turno em que o caso acontece, e por isso
+ * pega muito melhor que uma regra solta na ficha.
+ */
+function renderSoCumprimento(userMessage?: string): string {
+  if (!userMessage || !ehSoCumprimento(userMessage)) return '';
+  return xmlBlock(
+    'so_um_cumprimento',
+    'A mensagem deste turno é SÓ um cumprimento, sem assunto nenhum.\n' +
+      '- Responda o cumprimento, diga que está à disposição e PARE.\n' +
+      '- NÃO pergunte sobre a consulta, NÃO retome a negociação, NÃO ofereça horário, NÃO ' +
+      'pergunte se ele pensou, decidiu ou conseguiu resolver algo.\n' +
+      '- Quem puxa o assunto agora é ELE. Foi ele quem chamou: deixe espaço para dizer o que quer.\n' +
+      '- Duas linhas no máximo.',
+  );
 }
 
 function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
@@ -1862,6 +1895,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     telefone = null,
     consulta = null,
     estadoEtapa = null,
+    userMessage,
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
@@ -1880,6 +1914,10 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (lessonsBlock) porUnidade.push(lessonsBlock);
 
   const dynamic: string[] = [];
+  // Depende da fala DESTE turno, então é dinâmico de verdade: não pode entrar no bloco
+  // por unidade, que fica uma hora em cache.
+  const soCumprimento = renderSoCumprimento(userMessage);
+  if (soCumprimento) dynamic.push(soCumprimento);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) dynamic.push(memoryBlock);
   const faltaBlock = renderFaltaParaAgendar(

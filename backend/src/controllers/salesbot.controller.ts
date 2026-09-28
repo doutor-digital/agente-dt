@@ -10,6 +10,7 @@ import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js'
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
+import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 
 const payloadSchema = z
   .object({
@@ -139,11 +140,42 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     const graph = await buildAgentGraph(recorder, unit, Number(leadId));
     const threadId = buildThreadId(unit.slug, leadId);
 
+    // A conversa como o WhatsApp a vê (rota oficial): a resposta da SDR e a mensagem do
+    // paciente que este caminho não trouxe.
+    //
+    // ISTO SÓ EXISTIA NO WEBHOOK, e o salesbot é por onde falam 16 unidades — Serra, Bebedouro,
+    // Rio Verde, Boa Vista, Taubaté e mais. Enquanto ficou de fora, a Sofia respondia sem ver o
+    // que a SDR já havia combinado. Foi o que aconteceu com o lead 22828271 da Serra em
+    // 25/09/2026: a SDR atendeu e marcou, a Sofia viu cinco mensagens do paciente sem nenhuma
+    // resposta, e quando ele pediu a chave Pix ela disse "vou confirmar com a equipe" — com a
+    // chave correta no prompt e a ficha proibindo essa frase com todas as letras. Ela não
+    // confiava no próprio contexto porque o contexto estava furado.
+    //
+    // Passamos `message` cru, e não `humanMessage`: o dedupe compara o texto com o que está no
+    // Kommo, e a etiqueta de hora no começo faria a linha nunca casar.
+    //
+    // Custo: o bloco volta vazio quando não há nada novo desde a última fala dela, e quando vem
+    // entra no HumanMessage — cauda dinâmica, não estoura o prefixo em cache. Uma falha aqui
+    // nunca segura o atendimento.
+    const blocoOficial = await blocoDaConversaOficial({
+      unit,
+      leadId: Number(leadId),
+      humanMessage: message,
+      recorder,
+    }).catch((err) => {
+      logger.warn(
+        { err: String(err), leadId, unit: unit.slug },
+        'conversa oficial (salesbot): falha ao ler (segue sem)',
+      );
+      return '';
+    });
+    const entradaDoModelo = blocoOficial ? `${blocoOficial}\n\n${humanMessage}` : humanMessage;
+
     const result = await graph.invoke(
       {
         leadId: Number(leadId),
         traceId: trace.id,
-        messages: [new HumanMessage(humanMessage)],
+        messages: [new HumanMessage(entradaDoModelo)],
       },
       {
         configurable: { thread_id: threadId },

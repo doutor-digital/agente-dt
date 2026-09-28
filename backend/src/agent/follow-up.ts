@@ -5,6 +5,8 @@ import { createChatModel, invokeChatModel, resolveModelName } from '../services/
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { aplicarGuardrail } from './guardrail.js';
+import { semDiminutivo } from '../lib/sem-diminutivo.js';
+import { semIntimidade } from '../lib/sem-intimidade.js';
 import { cortarSeEstourou } from './teto-mensal.js';
 
 export interface FollowUpArgs {
@@ -101,16 +103,20 @@ ${conversa}`.trim();
     // catálogo, lacuna que não deu pra preencher, regra clínica), a régua
     // simplesmente não sai. Mensagem de reengajamento que diz "deixa eu
     // confirmar" não reengaja ninguém — é melhor o silêncio e o próximo degrau.
-    const guard = aplicarGuardrail(limpo, unit);
+    // As travas de tom (diminutivo, intimidade) valem aqui igual à conversa: a régua é
+    // justamente onde mora a despedida, que é onde o tom escorrega. `tratado` tem de ser
+    // o que retorna no fim — devolver `limpo` traria o texto cru de volta e anularia tudo.
+    const tratado = semIntimidade(semDiminutivo(limpo));
+    const guard = aplicarGuardrail(tratado, unit);
     const recusou = guard.triggered.some((t) => /^(lacuna|preco|clinico):/.test(t));
     if (recusou) {
       logger.warn(
-        { unit: unit.slug, leadId: args.leadId, motivos: guard.triggered, texto: limpo },
+        { unit: unit.slug, leadId: args.leadId, motivos: guard.triggered, texto: tratado },
         'follow-up: guardrail barrou o degrau — nada enviado',
       );
       return null;
     }
-    return guard.rewritten ? guard.text : limpo;
+    return guard.rewritten ? guard.text : tratado;
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId: args.leadId }, 'follow-up: modelo falhou');
     return null;

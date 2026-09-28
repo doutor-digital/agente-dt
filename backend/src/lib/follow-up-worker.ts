@@ -173,6 +173,15 @@ export function foraDaJanelaDeCobranca(minutosLocais: number): boolean {
 }
 
 /** Silêncio noturno de TODA mensagem automática: nada sai entre 21:00 e 08:00 locais. */
+/**
+ * Depois de o paciente pedir tempo, só degrau a partir daqui (12 h).
+ *
+ * Escolhido para cair no último degrau da escada de qualificação (1200 min = 20 h), que é o
+ * "encerramento educado, SEM pedir resposta". Não é um número redondo por gosto: é o corte que
+ * deixa passar o toque que não cobra e barra os quatro que cobram.
+ */
+export const APOS_MIN_DEPOIS_DE_PEDIR_TEMPO = 12 * 60;
+
 export const SILENCIO_INICIO_MIN = 21 * 60;
 export const SILENCIO_FIM_MIN = 8 * 60;
 
@@ -291,6 +300,16 @@ async function varrer(): Promise<void> {
         },
         orderBy: { lastMessageAt: 'asc' },
         take: 60,
+        // A última fala do paciente vem junto para sabermos se ele pediu tempo ("vou falar com
+        // meu marido e te aviso"). Quem pede tempo não pode tomar o degrau de 5 minutos.
+        include: {
+          messages: {
+            where: { role: 'user' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { meta: true },
+          },
+        },
       });
 
       for (const conv of candidatas) {
@@ -318,8 +337,21 @@ async function varrer(): Promise<void> {
 
         const paradoMin = (Date.now() - conv.lastMessageAt.getTime()) / 60_000;
 
+        // "Vou analisar e te aviso", "vou falar com meu marido", "qualquer coisa eu retorno":
+        // 532 pacientes disseram isso em 30 dias. Hoje a régua zera o contador e cobra em 5
+        // minutos — foi o que a Glória (Serra, 22584955) recebeu antes de escrever "não gosto
+        // de insistência" e ir procurar outro profissional.
+        //
+        // Quem pede tempo não perde a régua, só perde os degraus curtos: na escada de
+        // qualificação sobra o de 20 h, que é justamente o "encerramento educado, SEM pedir
+        // resposta". Um toque, longo e sem cobrança, em vez de quatro.
+        const pediuTempo =
+          (conv.messages[0]?.meta as { pediuTempo?: boolean } | null)?.pediuTempo === true;
+        const minimoApos = pediuTempo ? APOS_MIN_DEPOIS_DE_PEDIR_TEMPO : 0;
+
         let alvo = -1;
         for (let i = conv.followUpStep; i < ESCADA_DA_REGRA.length; i++) {
+          if (ESCADA_DA_REGRA[i].aposMin < minimoApos) continue;
           if (paradoMin >= ESCADA_DA_REGRA[i].aposMin) alvo = i;
         }
         if (alvo < 0) continue;
