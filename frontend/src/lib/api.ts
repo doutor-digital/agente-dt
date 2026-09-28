@@ -288,17 +288,22 @@ export const api = {
   },
   // ── carga de implantação: traz pro Kommo os pacientes que só existem na franquia ──
   async implantacaoPrevia(unitId: string, meses?: number): Promise<CargaPrevia> {
+    // A prévia conversa com a franquia paciente por paciente: leva minutos numa unidade cheia.
+    // O timeout padrão de 15 s do console derrubava a chamada e a tela dizia "não consegui falar
+    // com a franquia" — o erro era nosso, não dela.
     const { data } = await http.get<CargaPrevia>(`/units/${unitId}/implantacao/carga`, {
       params: meses ? { meses } : undefined,
+      timeout: 300_000,
     });
     return data;
   },
   /** Sem `aplicar: true` o backend devolve a prévia — o padrão nunca escreve. */
   async implantacaoAplicar(unitId: string, meses?: number): Promise<CargaResultado> {
-    const { data } = await http.post<CargaResultado>(`/units/${unitId}/implantacao/carga`, {
-      aplicar: true,
-      ...(meses ? { meses } : {}),
-    });
+    const { data } = await http.post<CargaResultado>(
+      `/units/${unitId}/implantacao/carga`,
+      { aplicar: true, ...(meses ? { meses } : {}) },
+      { timeout: 600_000 }, // criar 180 cartões leva minutos, com pausa entre cada um
+    );
     return data;
   },
   async spinePing(unitId: string): Promise<{ ok: boolean; error?: string }> {

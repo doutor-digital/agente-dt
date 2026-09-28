@@ -44,6 +44,19 @@ const DIAS_PARA_FRENTE = 45;
 /** Pausa entre criações: o Kommo derruba a conexão em rajada. */
 const PAUSA_MS = 120;
 
+
+/**
+ * Roda em lotes concorrentes. A prévia fazia 2 chamadas por paciente EM SÉRIE — em Petrópolis,
+ * 360 idas à franquia uma atrás da outra. O console desiste em 15 s e o próprio ssh caiu esperando.
+ * Seis de cada vez é o que a franquia aguenta sem começar a recusar (ela já derruba conexão em rajada).
+ */
+const CONCORRENCIA = 6;
+async function emLotes<T>(itens: T[], fn: (item: T) => Promise<void>): Promise<void> {
+  for (let i = 0; i < itens.length; i += CONCORRENCIA) {
+    await Promise.all(itens.slice(i, i + CONCORRENCIA).map((x) => fn(x).catch(() => undefined)));
+  }
+}
+
 const diaDe = (base: Date, delta: number): string => {
   const d = new Date(base);
   d.setDate(d.getDate() + delta);
@@ -121,20 +134,20 @@ async function coletarDaFranquia(unit: Unit, meses: number): Promise<{ porPacien
 
 /** Busca o cadastro de cada paciente para pegar o WhatsApp — a agenda não traz telefone. */
 async function completarContatos(unit: Unit, pacientes: Map<string, PacienteDaFranquia>): Promise<void> {
-  for (const [chave, p] of pacientes) {
+  await emLotes([...pacientes.entries()], async ([chave, p]) => {
     try {
       const r = await searchClients(unit, p.nome, 10);
       const achados = r?.data?.clients ?? [];
       // só nome idêntico. O fallback "se veio um só, é ele" grava o telefone de OUTRO paciente
       // num cartão que não dá pra apagar depois.
       const exato = achados.find((c) => normalizar(c.name) === chave);
-      if (!exato) continue;
+      if (!exato) return;
       p.idClient = p.idClient ?? exato.idClient ?? null;
       p.telefone = exato.whatsapp ?? null;
     } catch {
       // paciente sem cadastro encontrável cai em 'sem-telefone' e aparece na prévia
     }
-  }
+  });
 }
 
 /** Nenhum bot pode estar ativo: mover ou criar cartão em etapa com gatilho manda template a paciente real. */
@@ -156,7 +169,7 @@ async function montarPlano(unit: Unit, kommo: KommoClient, meses: number): Promi
 
   const lista = [...porPaciente.values()];
   const temCartaoDe = new Map<string, boolean>();
-  for (const p of lista) {
+  await emLotes(lista, async (p) => {
     const ids = p.agendamentos.map((c) => c.idSchedule).filter((x): x is number => typeof x === 'number');
     // O cache do resolverLead guarda "não achei" por 6 h. Se a carga rodar duas vezes dentro desse
     // prazo, ele repetiria o "não achei" e criaria tudo de novo — e lead não se apaga por API. O
@@ -166,7 +179,7 @@ async function montarPlano(unit: Unit, kommo: KommoClient, meses: number): Promi
       : false;
     const leadId = temVinculo ? 1 : await resolverLead(unit, kommo, p.nome, p.idClient, ids);
     temCartaoDe.set(normalizar(p.nome), leadId !== null);
-  }
+  });
 
   const plano = planejarCarga({
     pacientes: lista,
