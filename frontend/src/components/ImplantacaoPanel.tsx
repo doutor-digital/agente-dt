@@ -122,7 +122,10 @@ export default function ImplantacaoPanel() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-zinc-100">O que seria criado</p>
-              <p className="mt-0.5 text-xs text-zinc-500">Só olha. Não escreve nada no Kommo.</p>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                Só olha, não escreve nada no Kommo — mas conversa com a franquia paciente por
+                paciente, então leva alguns minutos numa unidade cheia.
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs text-zinc-500">
@@ -140,7 +143,7 @@ export default function ImplantacaoPanel() {
               </label>
               <button className="btn-primary" onClick={verPrevia} disabled={carregando || semFranquia || aplicando}>
                 {carregando ? <PiSpinnerGapBold size={14} className="animate-spin" /> : <PiArrowClockwiseBold size={14} />}
-                {carregando ? 'Perguntando à franquia…' : 'Ver o que seria criado'}
+                {carregando ? 'Perguntando à franquia… (pode levar minutos)' : 'Ver o que seria criado'}
               </button>
             </div>
           </div>
