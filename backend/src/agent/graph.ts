@@ -18,6 +18,7 @@ import { createChatModel, invokeChatModel } from '../services/openai.service.js'
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
+import { semIntimidade } from '../lib/sem-intimidade.js';
 import { avaliarChamadaFinal, INSTRUCAO_REFAZER_CTA } from './cta-final.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
@@ -780,7 +781,7 @@ export async function buildAgentGraph(
       // sanitizador do cliente Kommo também escreve CAMPO, NOTA e TAREFA — ou seja, uma
       // observação do paciente ("sente uma dorzinha ao levantar") era reescrita no cartão,
       // mudando o que ele disse. Aqui só passa mensagem que vai para o paciente.
-      const guard = aplicarGuardrail(semDiminutivo(textoFinal), unit);
+      const guard = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit);
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';
