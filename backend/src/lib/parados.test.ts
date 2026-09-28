@@ -14,6 +14,8 @@ import {
   paradosLiberado,
   reguaEsgotadaDerruba,
   textoDaNota,
+  voltaDaEsperaLiberada,
+  voltaDaEsperaSeca,
 } from './parados.js';
 
 const AGORA = Date.parse('2026-09-21T15:00:00Z') / 1000;
@@ -32,6 +34,25 @@ test('parados: liga por slug ou *, e vazio é ninguém', () => {
   assert.equal(modoSeco('doutor-hernia-imperatriz', '1', 'doutor-hernia-serra'), true);
   assert.equal(modoSeco(undefined, '0'), false);
   assert.equal(modoSeco(undefined, undefined), false);
+});
+
+test('volta de EM ESPERA: chave própria liga sem trazer as regras de prazo junto', () => {
+  const PARADAS = 'laboratorio-kommo,doutor-hernia-serra';
+
+  // Taubaté só na chave nova: a volta vale e move de verdade, mas o worker de prazo continua fora.
+  assert.equal(voltaDaEsperaLiberada('doutor-hernia-taubate', 'doutor-hernia-taubate', PARADAS), true);
+  assert.equal(voltaDaEsperaSeca('doutor-hernia-taubate', 'doutor-hernia-taubate', '1', 'doutor-hernia-serra'), false, 'opt-in explícito ignora PARADOS_SECO');
+  assert.equal(paradosLiberado('doutor-hernia-taubate', PARADAS), false, 'as regras de prazo NÃO ligam junto');
+
+  // Quem já vinha por PARADOS_SLUGS segue igual, seco inclusive — nada muda pra Serra/Imperatriz.
+  assert.equal(voltaDaEsperaLiberada('doutor-hernia-serra', undefined, PARADAS), true);
+  assert.equal(voltaDaEsperaSeca('doutor-hernia-serra', undefined, '1', 'doutor-hernia-serra'), false);
+  assert.equal(voltaDaEsperaSeca('laboratorio-kommo', undefined, '1', 'doutor-hernia-serra'), true, 'herdado de PARADOS_SLUGS respeita o seco');
+
+  // Quem não está em lista nenhuma continua de fora.
+  assert.equal(voltaDaEsperaLiberada('doutor-hernia-petropolis', undefined, PARADAS), false);
+  assert.equal(voltaDaEsperaLiberada('doutor-hernia-petropolis', '', ''), false);
+  assert.equal(voltaDaEsperaLiberada('doutor-hernia-petropolis', '*', ''), true);
 });
 
 test('parados: EM ESPERA quieta há 30 dias cai em PERDIDO sem régua; EM NEGOCIAÇÃO em 45', () => {

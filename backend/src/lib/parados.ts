@@ -18,8 +18,10 @@
  *    na hora (webhook) e a retomada automática é cancelada.
  *
  * Liga por unidade (`PARADOS_SLUGS`, csv ou `*`; vazio = ninguém). `PARADOS_SECO=1` só registra o
- * que faria — é assim que se prova na Imperatriz antes de mover de verdade. Este arquivo é a parte
- * PURA (decisão e textos), testável sem Kommo; quem lê e move está em `parados-worker.ts`.
+ * que faria — é assim que se prova na Imperatriz antes de mover de verdade. A volta de EM ESPERA tem
+ * chave separada (`VOLTA_ESPERA_SLUGS`): é a única regra que não move por prazo, então liga sozinha
+ * em quem não quer o resto do worker. Este arquivo é a parte PURA (decisão e textos), testável sem
+ * Kommo; quem lê e move está em `parados-worker.ts`.
  */
 import { ehEtapaDeEntrada } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
@@ -59,13 +61,48 @@ export const TAG_SEM_REGUA = 'NO_FOLLOW_UP';
 
 export const DIA_S = 24 * 60 * 60;
 
-export function paradosLiberado(slug: string, raw: string | undefined = process.env.PARADOS_SLUGS): boolean {
+function naLista(slug: string, raw: string | undefined): boolean {
   const lista = (raw ?? '')
     .replace(/^['"]|['"]$/g, '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
   return lista.includes('*') || lista.includes(slug);
+}
+
+export function paradosLiberado(slug: string, raw: string | undefined = process.env.PARADOS_SLUGS): boolean {
+  return naLista(slug, raw);
+}
+
+/**
+ * A volta de EM ESPERA (regra 8) tem chave PRÓPRIA, `VOLTA_ESPERA_SLUGS`, porque é a única regra do
+ * worker que não move ninguém por prazo: ela só reage ao paciente escrever. Isso deixa ligá-la numa
+ * unidade que ainda não quer as regras de prazo — em Taubaté (28/09/2026) a SDR estacionou em EM
+ * ESPERA um lead de 6 minutos de conversa, e ligar `PARADOS_SLUGS` lá jogaria 399 cartões em espera
+ * na régua de PERDIDO de uma vez. Quem está em `PARADOS_SLUGS` continua valendo, então nada muda
+ * para Serra/Imperatriz/laboratório.
+ */
+export function voltaDaEsperaLiberada(
+  slug: string,
+  proprio: string | undefined = process.env.VOLTA_ESPERA_SLUGS,
+  paradas: string | undefined = process.env.PARADOS_SLUGS,
+): boolean {
+  return naLista(slug, proprio) || naLista(slug, paradas);
+}
+
+/**
+ * Modo seco da volta de EM ESPERA. Estar em `VOLTA_ESPERA_SLUGS` é opt-in explícito NESTA regra, então
+ * move de verdade mesmo com `PARADOS_SECO=1` — senão ligar a chave não faria nada e pareceria ligado.
+ * Quem chega pela herança de `PARADOS_SLUGS` segue o seco de sempre.
+ */
+export function voltaDaEsperaSeca(
+  slug: string,
+  proprio: string | undefined = process.env.VOLTA_ESPERA_SLUGS,
+  seco: string | undefined = process.env.PARADOS_SECO,
+  ligados: string | undefined = process.env.PARADOS_LIGADO_SLUGS,
+): boolean {
+  if (naLista(slug, proprio)) return false;
+  return modoSeco(slug, seco, ligados);
 }
 
 /**
