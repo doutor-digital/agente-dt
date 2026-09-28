@@ -186,7 +186,12 @@ async function leadPorTelefone(kommo: KommoClient, telefone: string): Promise<nu
   return ordenados[0].id;
 }
 
-async function resolverLead(unit: Unit, kommo: KommoClient, nome: string, idClient: number | null, idsSchedule: number[]): Promise<number | null> {
+/**
+ * Acha o cartão do paciente: primeiro pelo vínculo que a Sofia gravou, depois pelo telefone/nome.
+ * Exportada porque a carga de implantação (`franquia-carga.service`) precisa da MESMA resposta para
+ * saber quem ainda não tem cartão — duplicar esse casamento seria criar cartão em cima de quem já tem.
+ */
+export async function resolverLead(unit: Unit, kommo: KommoClient, nome: string, idClient: number | null, idsSchedule: number[]): Promise<number | null> {
   const chaveCache = `${unit.id}:${normalizar(nome)}`;
   const hit = cacheLead.get(chaveCache);
   if (hit && hit.expiraEm > Date.now()) return hit.leadId;

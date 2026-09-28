@@ -1,4 +1,5 @@
 import { AIMessage, type BaseMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { semBlocoOficial } from '../lib/conversa-oficial.js';
 import { END, START, StateGraph } from '@langchain/langgraph';
 import type { DynamicStructuredTool } from '@langchain/core/tools';
 import { ToolNode } from '@langchain/langgraph/prebuilt';
@@ -534,11 +535,16 @@ export async function buildAgentGraph(
 
     const nonSystemMessages = state.messages.filter((m) => m.getType() !== 'system');
     const lastHuman = [...nonSystemMessages].reverse().find((m) => m.getType() === 'human');
-    const userMessage = lastHuman
-      ? typeof lastHuman.content === 'string'
-        ? lastHuman.content
-        : JSON.stringify(lastHuman.content)
-      : undefined;
+    // O HumanMessage carrega o bloco <conversa_oficial> pregado na frente (webhook e salesbot).
+    // Tudo que decide sobre O QUE O PACIENTE ESCREVEU — só um cumprimento, busca no RAG, nome —
+    // precisa da mensagem crua, senão lê o bloco como se fosse fala dele.
+    const userMessage = semBlocoOficial(
+      lastHuman
+        ? typeof lastHuman.content === 'string'
+          ? lastHuman.content
+          : JSON.stringify(lastHuman.content)
+        : undefined,
+    );
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;

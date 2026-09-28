@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { pediuParaParar, ehSoCumprimento } from './pediu-para-parar.js';
+import { semBlocoOficial } from './conversa-oficial.js';
 
 /**
  * Todas as frases abaixo são mensagens REAIS de pacientes, tiradas do banco em 26/09/2026.
@@ -129,4 +130,51 @@ test('a mensagem que anuncia o bloqueio é o caso mais grave', () => {
     ),
     'irritacao',
   );
+});
+
+// ── falsos positivos achados pelo review (28/09/2026), antes de subir ──
+
+test('"meu retorno" é quem quer AGENDAR — não pode calar a régua dela', () => {
+  // Os pronomes de "(eu) (te) retorno" eram opcionais, então o substantivo casava. Em clínica de
+  // coluna "retorno" é a consulta de volta antes de ser verbo, e essa paciente está pedindo horário.
+  for (const frase of [
+    'quero marcar meu retorno',
+    'Preciso agendar o retorno com a doutora',
+    'quando é o meu retorno?',
+    'oi, gostaria de remarcar o retorno',
+  ]) {
+    assert.equal(pediuParaParar(frase), null, frase);
+  }
+});
+
+test('"eu te retorno" continua sendo adiamento — o verbo não se perdeu na correção', () => {
+  for (const frase of ['depois eu te retorno', 'eu retorno amanhã', 'te retorno mais tarde']) {
+    assert.equal(pediuParaParar(frase), 'adiamento', frase);
+  }
+});
+
+test('"dor insistente" é sintoma, não irritação', () => {
+  for (const frase of [
+    'minha dor está insistente',
+    'é uma dor insistente na lombar',
+    'a dor anda insistente esses dias',
+  ]) {
+    assert.equal(pediuParaParar(frase), null, frase);
+  }
+});
+
+test('mas "vocês são insistentes" continua sendo irritação', () => {
+  for (const frase of ['vocês são muito insistentes', 'vcs tão insistentes demais']) {
+    assert.equal(pediuParaParar(frase), 'irritacao', frase);
+  }
+});
+
+test('o bloco da conversa oficial não pode esconder o cumprimento da Glória', () => {
+  // O HumanMessage chega com <conversa_oficial> pregado na frente. Se `ehSoCumprimento` receber a
+  // string inteira, ela nunca reconhece "bom dia" — e a regra morre no caso que a criou.
+  const bloco =
+    '<conversa_oficial>\nO que aconteceu no WhatsApp desde a sua última mensagem:\n' +
+    '- 09:12 · Equipe (Júlia): "bom dia, conseguiu ver os horários?"\n</conversa_oficial>';
+  assert.equal(ehSoCumprimento(`${bloco}\n\nbom dia`), false, 'com o bloco grudado, some o cumprimento');
+  assert.equal(ehSoCumprimento(semBlocoOficial(`${bloco}\n\nbom dia`)!), true, 'sem o bloco, reconhece');
 });
