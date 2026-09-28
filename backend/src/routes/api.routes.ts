@@ -180,6 +180,7 @@ import {
   chaveDeServicoOuSessao,
 } from '../controllers/cerebro.controller.js';
 import { listarAltaHandler, decidirAltaHandler } from '../controllers/alta.controller.js';
+import { previaCargaHandler, aplicarCargaHandler } from '../controllers/franquia-carga.controller.js';
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
 import { apiReference } from '@scalar/express-api-reference';
@@ -421,6 +422,12 @@ apiRouter.get('/units/:id/spine/prontidao', requireUnitAccess, prontidaoHandler)
 apiRouter.get('/units/:id/spine/pendentes', requireUnitAccess, pendentesHandler);
 apiRouter.post('/units/:id/spine/patient-preview', requireUnitAccess, previewPatientHandler);
 apiRouter.post('/units/:id/spine/sync-patient', requireUnitAccess, syncPatientHandler);
+
+// Carga de implantação (equipe DD): traz pro Kommo os pacientes que só existem na franquia.
+// Fica ABAIXO do requireAuth de propósito, e com requireSuperAdmin: é operação de implantação,
+// não do dia a dia da unidade. O POST só escreve com `aplicar: true` no corpo.
+apiRouter.get('/units/:id/implantacao/carga', requireSuperAdmin, previaCargaHandler);
+apiRouter.post('/units/:id/implantacao/carga', requireSuperAdmin, aplicarCargaHandler);
 apiRouter.post('/units/:id/spine/cancel-schedule', requireUnitAccess, cancelScheduleHandler);
 apiRouter.post('/units/:id/spine/confirm-schedule', requireUnitAccess, confirmScheduleHandler);
 apiRouter.get('/units/:id/spine/bi/leads-sources', requireUnitAccess, biLeadsSourcesHandler);

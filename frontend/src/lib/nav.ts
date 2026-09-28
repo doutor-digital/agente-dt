@@ -16,7 +16,7 @@ import {
   UserCog,
   Wand2,
 } from 'lucide-react';
-import { PiCalendarBlankBold, PiPlugsConnectedBold, PiChatsCircleBold } from 'react-icons/pi';
+import { PiCalendarBlankBold, PiPlugsConnectedBold, PiChatsCircleBold, PiUsersThreeBold } from 'react-icons/pi';
 import type { ComponentType } from 'react';
 
 export type IconComponent = ComponentType<{
@@ -50,6 +50,7 @@ export type AppTab =
   | 'agenda'
   | 'follow-up'
   | 'crm-franquia'
+  | 'implantacao'
   | 'saude-ia'
   | 'resultados'
   | 'como-funciona';
@@ -168,6 +169,17 @@ export const NAV_ITEMS: NavItem[] = [
     keywords: [
       'spine', 'franquia', 'doutor hernia', 'token', 'integracao', 'crm',
       'espelhar', 'leads', 'horario', 'almoco', 'fuso',
+    ],
+  },
+  {
+    id: 'implantacao',
+    label: 'Implantação',
+    hint: 'Unidade nova: traz pro Kommo os pacientes que só existem na franquia, já na etapa certa.',
+    icon: PiUsersThreeBold,
+    section: 'agente',
+    keywords: [
+      'implantacao', 'implantação', 'carga', 'povoar', 'importar', 'pacientes',
+      'unidade nova', 'consultoria', 'franquia', 'cartoes', 'leads', 'etapas',
     ],
   },
   {
