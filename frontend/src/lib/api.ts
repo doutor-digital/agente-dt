@@ -78,6 +78,31 @@ const apiBase = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL.replace(/\/$/, '')}/api`
   : '/api';
 
+
+/** O que a carga de implantação faria, sem escrever nada. */
+export interface CargaPrevia {
+  unidade: string;
+  pacientesNaFranquia: number;
+  criaria: number;
+  porEtapa: Record<string, number>;
+  fora: { jaTemCartao: number; semTelefone: number; semFato: number };
+  janelasComFalha: string[];
+  exemplos: Array<{ nome: string; etapa: string; porque: string }>;
+  /** quando vem preenchido, a tela mostra o motivo no lugar do botão */
+  bloqueio: string | null;
+}
+
+export interface CargaResultado {
+  simulado?: boolean;
+  unidade?: string;
+  criados?: number;
+  falhas?: number;
+  porEtapa?: Record<string, number>;
+  erros?: string[];
+  error?: string;
+  detalhe?: string;
+}
+
 export const apiOrigin = import.meta.env.VITE_API_URL
   ? String(import.meta.env.VITE_API_URL).replace(/\/$/, '')
   : window.location.origin;
@@ -259,6 +284,21 @@ export const api = {
       `/units/${unitId}/spine/schedules`,
       { params },
     );
+    return data;
+  },
+  // ── carga de implantação: traz pro Kommo os pacientes que só existem na franquia ──
+  async implantacaoPrevia(unitId: string, meses?: number): Promise<CargaPrevia> {
+    const { data } = await http.get<CargaPrevia>(`/units/${unitId}/implantacao/carga`, {
+      params: meses ? { meses } : undefined,
+    });
+    return data;
+  },
+  /** Sem `aplicar: true` o backend devolve a prévia — o padrão nunca escreve. */
+  async implantacaoAplicar(unitId: string, meses?: number): Promise<CargaResultado> {
+    const { data } = await http.post<CargaResultado>(`/units/${unitId}/implantacao/carga`, {
+      aplicar: true,
+      ...(meses ? { meses } : {}),
+    });
     return data;
   },
   async spinePing(unitId: string): Promise<{ ok: boolean; error?: string }> {

@@ -116,3 +116,19 @@ export async function blocoDaConversaOficial(args: {
   );
   return renderConversaOficial(itens, unit.spineTimezone ?? 'America/Sao_Paulo');
 }
+
+/**
+ * A mensagem crua do paciente, sem o bloco `<conversa_oficial>` que o controller prega na frente.
+ *
+ * O bloco entra no HumanMessage de propósito (cauda dinâmica, não estoura o prefixo em cache), mas
+ * quem decide COISAS SOBRE O QUE O PACIENTE ESCREVEU tem de ver só o que ele escreveu. Sem isto,
+ * `ehSoCumprimento` recebe "<conversa_oficial>…</conversa_oficial>\n\nbom dia" e nunca reconhece o
+ * cumprimento — justamente o caso da Glória, que foi o motivo de a regra existir. Vale igual para
+ * a busca no RAG e para a detecção de nome.
+ */
+export function semBlocoOficial(texto: string | undefined): string | undefined {
+  if (!texto) return texto;
+  const limpo = texto.replace(/<conversa_oficial>[\s\S]*?<\/conversa_oficial>\s*/g, '').trim();
+  // bloco sem fechamento (truncado): não dá pra separar com segurança, devolve como veio
+  return limpo || texto;
+}

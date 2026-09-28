@@ -38,7 +38,10 @@
 /** Pedido explícito de parar. Vocabulário estreito de propósito: o custo do falso positivo
  *  aqui é calar a régua de um lead bom, então só entra o que não tem outra leitura. */
 const IRRITACAO: RegExp[] = [
-  /\binsist[êe]ncia\b|\binsistindo\b|\binsistente\b/i,
+  // "insistente" sozinho é sintoma — "minha dor está insistente" é a queixa, não o pedido de parar.
+  // A irritação de verdade nomeia quem insiste, então o adjetivo só conta com sujeito de 2ª pessoa.
+  /\binsist[êe]ncia\b|\binsistindo\b/i,
+  /\b(?:voc[êe]s?|vcs)\s+(?:s[ãa]o|est[ãa]o?|t[aã]o)\s+(?:muito\s+|bem\s+)?insistentes?\b/i,
   /\bench(?:e|er|endo)\s+o\s+saco\b/i,
   /\bme\s+deix[ae]\s+em\s+paz\b/i,
   // Exige o "me" e um verbo de contato: é o que separa de "não para de doer".
@@ -58,7 +61,12 @@ const IRRITACAO: RegExp[] = [
 /** Adiamento: "me chama depois", dito de mil jeitos. */
 const ADIAMENTO: RegExp[] = [
   /\bvou\s+analisar\b|\bestou\s+analisando\b|\bvou\s+pensar\b/i,
-  /\b(?:eu\s+)?(?:te\s+)?retorno\b|\bvolto\s+a\s+falar\b|\bentro\s+em\s+contato\b/i,
+  // Os pronomes eram OPCIONAIS, então "quero marcar meu retorno" — a frase de quem quer AGENDAR —
+  // caía como adiamento e calava a régua desse paciente. Em clínica, "retorno" é substantivo antes
+  // de ser verbo: agora exige o pronome, ou um advérbio de tempo que só cabe no sentido de verbo.
+  /\b(?:eu\s+(?:te\s+)?|te\s+)retorno\b/i,
+  /\bretorno\s+(?:depois|mais\s+tarde|amanh[ãa]|em\s+breve|assim\s+que)\b/i,
+  /\bvolto\s+a\s+falar\b|\bentro\s+em\s+contato\b/i,
   /\bqualquer\s+coisa\s+eu\s+(?:te\s+)?(?:chamo|aviso|falo|procuro)\b/i,
   /\bvou\s+(?:conversar|falar)\s+com\s+(?:meu|minha|o|a|ele|ela|eles)\b/i,
   /\bquando\s+(?:eu\s+)?(?:decidir|puder|resolver|conseguir)\b/i,

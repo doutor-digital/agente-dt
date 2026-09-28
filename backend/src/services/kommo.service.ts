@@ -1034,6 +1034,49 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Cria lead e contato de uma vez, já na etapa final.
+   *
+   * O sistema nunca criou lead — eles sempre chegaram do WhatsApp e do anúncio. Isto existe para a
+   * carga de implantação, que traz para o Kommo os pacientes que só existem na franquia.
+   *
+   * `/leads/complex` é o único jeito de nascer com contato junto; criar o lead e depois o contato
+   * deixa uma janela em que o cartão existe sem telefone. E a etapa vai no corpo de propósito: cartão
+   * que nasce na etapa certa nunca passa por uma intermediária, e é isso que impede o gatilho de
+   * disparar mensagem para paciente antigo.
+   */
+  async criarLeadComContato(args: {
+    nome: string;
+    telefone: string;
+    pipelineId: number;
+    statusId: number;
+    customFields?: Array<{ field_id: number; values: Array<{ value: string | number }> }>;
+  }): Promise<number | null> {
+    const lead: Record<string, unknown> = {
+      name: args.nome,
+      pipeline_id: args.pipelineId,
+      status_id: args.statusId,
+      _embedded: {
+        contacts: [
+          {
+            first_name: args.nome,
+            custom_fields_values: [{ field_code: 'PHONE', values: [{ value: args.telefone, enum_code: 'WORK' }] }],
+          },
+        ],
+      },
+    };
+    if (args.customFields?.length) lead.custom_fields_values = args.customFields;
+    try {
+      const { data } = await this.http.post('/leads/complex', [lead]);
+      const criado = Array.isArray(data) ? data[0] : data?._embedded?.leads?.[0];
+      const id = Number(criado?.id);
+      return Number.isFinite(id) && id > 0 ? id : null;
+    } catch (err) {
+      wrapAxiosError(err, `criarLeadComContato(${args.nome})`);
+      return null;
+    }
+  }
+
   async setLeadResponsible(leadId: number, userId: number): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, { responsible_user_id: userId });
