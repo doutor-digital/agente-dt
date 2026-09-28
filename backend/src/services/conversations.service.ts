@@ -1,6 +1,11 @@
 import type { Conversation, Message } from '@prisma/client';
 import { notifyDashboard } from '../lib/dashboard-webhook.js';
 import { prisma } from '../lib/prisma.js';
+import { logger } from '../lib/logger.js';
+import { pediuParaParar } from '../lib/pediu-para-parar.js';
+
+/** Motivo gravado quando o paciente pede para não ser mais procurado. */
+export const MOTIVO_PEDIU_PARA_PARAR = 'paciente pediu para não insistir';
 
 export interface UpsertConversationParams {
   unitId: string;
@@ -38,13 +43,23 @@ export interface AddMessageParams {
 }
 
 export async function addMessage(p: AddMessageParams): Promise<Message> {
+  // Pedido de parar / de tempo. Fica AQUI porque `addMessage` é o ponto por onde passam as três
+  // portas de entrada (salesbot, meta, widget): trava pendurada num controller só é como o
+  // problema volta, e foi exatamente o que aconteceu com a leitura da conversa oficial.
+  const pedido = p.role === 'user' ? pediuParaParar(p.content) : null;
+
   const message = await prisma.message.create({
     data: {
       conversationId: p.conversationId,
       traceId: p.traceId ?? null,
       role: p.role,
       content: p.content,
-      meta: p.meta as object | undefined,
+      // O "pediu tempo" viaja na mensagem que o disse, e é de lá que a régua o lê para pular
+      // os degraus curtos. Não cabe na conversa: `followUpStoppedReason` a tiraria da fila de
+      // vez, e adiar não é desistir.
+      meta: (pedido === 'adiamento' ? { ...(p.meta ?? {}), pediuTempo: true } : p.meta) as
+        | object
+        | undefined,
     },
   });
   await prisma.conversation.update({
@@ -52,8 +67,20 @@ export async function addMessage(p: AddMessageParams): Promise<Message> {
     data: {
       lastMessageAt: new Date(),
       ...(p.role === 'user' ? { followUpStep: 0, followUpLastAt: null } : {}),
+      // Irritação cala a régua para sempre: é gente a um toque de bloquear o número — uma
+      // paciente escreveu "insistência chata. Bloqueando em 3,2,1". Nada re-arma isso
+      // sozinho depois; quem reabre é uma pessoa, de propósito.
+      ...(pedido === 'irritacao' ? { followUpStoppedReason: MOTIVO_PEDIU_PARA_PARAR } : {}),
     },
   });
+  if (pedido) {
+    logger.info(
+      { conversationId: p.conversationId, pedido },
+      pedido === 'irritacao'
+        ? 'régua calada: paciente pediu para não insistir'
+        : 'régua adiada: paciente pediu tempo',
+    );
+  }
 
   void notifyDashboard(p.conversationId);
 
