@@ -38,7 +38,28 @@ const CACHE_LEAD_MS = 6 * 60 * 60_000;
 
 let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
-let rodando = false;
+
+/**
+ * Quem está sendo varrido AGORA → quando começou (epoch ms).
+ *
+ * Era uma flag booleana única (`rodando`) para a varredura inteira, e isso fazia três estragos ao
+ * mesmo tempo (diagnosticados pelo João em 28/09/2026): enquanto UMA unidade era varrida, toda
+ * outra tentativa morria — inclusive a batida automática de 15 em 15 min —, e morria em silêncio.
+ * Como cada unidade leva ~15 min e são 6, a volta completa dava ~1h30 e quem caísse no fim da fila
+ * ficava sem vez. E o `soSlug` do "forçar agora" só era aplicado DENTRO do laço, depois da trava:
+ * forçar Taubaté esperava a varredura inteira de outra unidade — ou seja, quase nunca funcionava.
+ *
+ * Sendo por unidade, duas unidades diferentes varrem em paralelo sem se atrapalhar, e o que a trava
+ * impede passa a ser só o que ela sempre devia impedir: varrer a MESMA unidade duas vezes ao mesmo
+ * tempo, que duplicaria escrita no Kommo.
+ */
+const emVoo = new Map<string, number>();
+
+/** Quem está em voo agora, para a tela de operação dizer por que a fila não andou. */
+export function varredurasEmVoo(): Array<{ unit: string; desdeMs: number }> {
+  const agora = Date.now();
+  return [...emVoo.entries()].map(([unit, desde]) => ({ unit, desdeMs: agora - desde }));
+}
 
 export interface ResumoSync {
   unit: string;
@@ -81,14 +102,42 @@ export interface RelogioSync {
   /** quando este processo começou a contar */
   desde: string;
 }
-const relogio = new Map<string, { vezesHoje: number; dia: string; ultima: ResumoSync | null; ms: number | null }>();
+interface EntradaRelogio {
+  vezesHoje: number;
+  dia: string;
+  ultima: ResumoSync | null;
+  ms: number | null;
+  /**
+   * Quando esta unidade foi TENTADA pela última vez — deu certo ou não. É por aqui que a fila
+   * ordena, e a distinção importa: se ordenasse pela última varredura BEM-SUCEDIDA, uma unidade com
+   * credencial vencida nunca registraria sucesso, voltaria ao topo a cada 15 min e passaria a vida
+   * na frente de quem está só esperando a vez.
+   */
+  tentativaEpoch: number;
+}
+const relogio = new Map<string, EntradaRelogio>();
 const processoDesde = new Date().toISOString();
 
 function anotarVarredura(unit: Unit, r: ResumoSync, ms: number): void {
   const dia = instanteNoFuso(new Date(), unit.spineTimezone || 'America/Sao_Paulo').slice(0, 10);
   const atual = relogio.get(unit.slug);
   const vezesHoje = atual && atual.dia === dia ? atual.vezesHoje + 1 : 1;
-  relogio.set(unit.slug, { vezesHoje, dia, ultima: r, ms });
+  relogio.set(unit.slug, { vezesHoje, dia, ultima: r, ms, tentativaEpoch: Date.now() });
+}
+
+/** Carimba a tentativa mesmo quando a varredura estourou — ver `tentativaEpoch`. */
+function anotarTentativa(slug: string): void {
+  const atual = relogio.get(slug);
+  if (atual) atual.tentativaEpoch = Date.now();
+  else relogio.set(slug, { vezesHoje: 0, dia: '', ultima: null, ms: null, tentativaEpoch: Date.now() });
+}
+
+/**
+ * Quando esta unidade foi tentada pela última vez. Quem nunca foi tentada devolve 0 e por isso vai
+ * para a FRENTE da fila — é o que acaba com o "a última nunca chega a vez".
+ */
+function ultimaTentativa(slug: string): number {
+  return relogio.get(slug)?.tentativaEpoch ?? 0;
 }
 
 export function relogioDoSync(slug: string): RelogioSync {
@@ -107,13 +156,6 @@ export function relogioDoSync(slug: string): RelogioSync {
 /** paciente (nome normalizado) → lead do Kommo, por unidade; evita repetir a busca por telefone a cada 15 min */
 const cacheLead = new Map<string, { leadId: number | null; expiraEm: number }>();
 
-export function slugsLiberados(raw: string | undefined): (slug: string) => boolean {
-  const lista = (raw ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (lista.length === 0) return () => false;
-  if (lista.includes('*')) return () => true;
-  const set = new Set(lista);
-  return (slug) => set.has(slug);
-}
 
 type CampoInfo = Pick<KommoLeadCustomField, 'id' | 'type' | 'enums'>;
 type MapaCampos = Partial<Record<CampoSync, CampoInfo>>;
@@ -893,38 +935,57 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
 }
 
 async function varrer(soSlug?: string): Promise<void> {
-  if (rodando) return;
-  rodando = true;
-  try {
-    const liberado = slugsLiberados(process.env.FRANQUIA_SYNC_SLUGS);
-    const units = await prisma.unit.findMany({
-      where: { spineEnabled: true, spineToken: { not: null }, kommoAccessToken: { not: null } },
-    });
-    for (const unit of units) {
-      if (!automacaoLigada(unit.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS)) continue;
-      if (soSlug && unit.slug !== soSlug) continue;
-      const t0 = Date.now();
-      try {
-        const r = await sincronizarUnidade(unit);
-        ultimoResumo.set(unit.slug, r);
-        anotarVarredura(unit, r, Date.now() - t0);
-        logger.info({ ...r, ms: Date.now() - t0 }, 'franquia-sync: varredura concluída');
-      } catch (err) {
-        logger.error({ err, unit: unit.slug }, 'franquia-sync: varredura falhou');
-      }
+  const units = await prisma.unit.findMany({
+    where: { spineEnabled: true, spineToken: { not: null }, kommoAccessToken: { not: null } },
+  });
+  // A MAIS ATRASADA NA FRENTE. Antes a ordem era a que o Postgres devolvesse (`findMany` sem
+  // `orderBy`), então com ~15 min por unidade a última da lista podia passar horas sem vez.
+  const fila = units
+    .filter((u) => automacaoLigada(u.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS))
+    .filter((u) => !soSlug || u.slug === soSlug)
+    .sort((a, b) => ultimaTentativa(a.slug) - ultimaTentativa(b.slug));
+
+  for (const unit of fila) {
+    const desde = emVoo.get(unit.slug);
+    if (desde !== undefined) {
+      // LOGAR A BATIDA DESCARTADA. Antes isto era um `return` mudo, e o atraso era invisível: o
+      // ciclo estourava e ninguém ficava sabendo até alguém reparar num cartão velho.
+      logger.warn(
+        { unit: unit.slug, haMin: Math.round((Date.now() - desde) / 60_000), forcada: Boolean(soSlug) },
+        'franquia-sync: batida descartada — esta unidade já está sendo varrida',
+      );
+      continue;
     }
-  } finally {
-    rodando = false;
+    emVoo.set(unit.slug, Date.now());
+    const t0 = Date.now();
+    try {
+      const r = await sincronizarUnidade(unit);
+      ultimoResumo.set(unit.slug, r);
+      anotarVarredura(unit, r, Date.now() - t0);
+      logger.info({ ...r, ms: Date.now() - t0 }, 'franquia-sync: varredura concluída');
+    } catch (err) {
+      logger.error({ err, unit: unit.slug }, 'franquia-sync: varredura falhou');
+    } finally {
+      // No finally, as duas: unidade que estourou não pode ficar travada para sempre, nem voltar
+      // pro topo da fila a cada 15 min porque nunca registrou sucesso.
+      anotarTentativa(unit.slug);
+      emVoo.delete(unit.slug);
+    }
   }
 }
 
 /**
  * Varredura fora de hora (João, 23/09/2026: "pode rodar agora pra consertar esses cartões, depois segue
- * de 15 em 15"). Dispara em segundo plano e responde na hora; se já há uma rodando, não empilha.
- * O relógio de 15 min continua o mesmo.
+ * de 15 em 15"). Dispara em segundo plano e responde na hora. O relógio de 15 min continua o mesmo.
+ *
+ * Forçar UMA unidade agora funciona mesmo com outra em voo — antes não funcionava, porque a trava
+ * era global e o filtro de unidade vinha depois dela.
  */
 export function varrerAgora(soSlug?: string): { iniciado: boolean; motivo?: string } {
-  if (rodando) return { iniciado: false, motivo: 'já tem uma varredura rodando' };
+  if (soSlug && emVoo.has(soSlug)) {
+    const haMin = Math.round((Date.now() - (emVoo.get(soSlug) ?? Date.now())) / 60_000);
+    return { iniciado: false, motivo: `${soSlug} já está sendo varrida há ${haMin} min` };
+  }
   void varrer(soSlug).catch((err) => logger.error({ err, soSlug }, 'franquia-sync: varredura manual falhou'));
   return { iniciado: true };
 }

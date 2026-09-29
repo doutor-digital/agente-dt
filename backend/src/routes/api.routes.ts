@@ -510,8 +510,10 @@ apiRouter.get('/admin/kommo-salesbots', requireSuperAdmin, async (_req, res) => 
 // Sincronizador franquia → Kommo (campos + etapas): último resumo por unidade e varredura fora de hora.
 // João, 23/09/2026: "pode rodar agora pra consertar esses cartões, depois segue de 15 em 15". `?slug=` limita a uma unidade.
 apiRouter.get('/admin/franquia-sync', requireSuperAdmin, async (_req, res) => {
-  const { resumoDoSync } = await import('../lib/franquia-sync-worker.js');
-  res.json({ ok: true, varreduras: resumoDoSync() });
+  const { resumoDoSync, varredurasEmVoo } = await import('../lib/franquia-sync-worker.js');
+  // `emVoo` é o que explica por que a fila não andou — sem ele, a tela só mostra o passado e a
+  // pergunta "por que forçar não pegou?" continua sem resposta.
+  res.json({ ok: true, varreduras: resumoDoSync(), emVoo: varredurasEmVoo() });
 });
 apiRouter.post('/admin/franquia-sync/varrer', requireSuperAdmin, async (req, res) => {
   const { varrerAgora } = await import('../lib/franquia-sync-worker.js');
