@@ -341,6 +341,7 @@ model Unit {
   changeLog         UnitChangeLog[]
   lessons           UnitLesson[]
   automacoes        UnitAutomacao[]
+  passosWidget      WidgetPasso[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -1801,4 +1802,34 @@ model UnitAutomacao {
   @@unique([unitId, automacao])
   @@index([automacao])
   @@map("unit_automacoes")
+}
+
+
+/// "Entendi" de cada passo que o widget ensina dentro do cartão, por PESSOA.
+///
+/// Decisão do João (29/09/2026): "elas precisam de um widget que ensine elas a mexerem, ao ponto de
+/// não precisarem de mim para ensiná-las". O professor só funciona se souber parar: cada passo
+/// aparece até a pessoa marcar que entendeu, e some para sempre. Em duas semanas o painel dela fica
+/// quase vazio — a tela encolhe sozinha, sem ninguém decidir o que cortar.
+///
+/// A chave é o usuário do KOMMO (`amouser_id`), não o navegador: a mesma pessoa em outro computador
+/// não recomeça do zero, e duas pessoas no mesmo computador não herdam o progresso uma da outra.
+/// Esse id chega do widget e não dá acesso a nada — só agrupa progresso; a autorização é a chave da
+/// unidade no header, como nas outras rotas públicas do widget.
+model WidgetPasso {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+
+  /// `amouser_id` de quem clicou "entendi" no Kommo.
+  kommoUserId Int @map("kommo_user_id")
+  /// `id` do passo em `passos.doutor-hernia.json`.
+  passo String
+
+  criadoEm DateTime @default(now()) @map("criado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, kommoUserId, passo])
+  @@index([unitId, criadoEm])
+  @@map("widget_passos")
 }
