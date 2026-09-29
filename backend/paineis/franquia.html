@@ -113,7 +113,7 @@
     </header>
     <p class="sub">
       O sincronizador copia da franquia para o cartão do Kommo o que aconteceu na janela de D-3 a
-      D+45. Cada unidade leva alguns minutos; a fila anda pela mais atrasada.
+      D+45. Cada unidade tem o próprio relógio de 15 minutos — o atraso de uma não empurra as outras.
     </p>
 
     <div class="aviso" id="aviso" hidden></div>
@@ -141,8 +141,8 @@
     <p class="rodape">
       <strong>Hoje</strong> zera quando o processo reinicia, porque a contagem vive na memória dele.
       <strong>Sem cartão</strong> é paciente que existe na franquia e não tem cartão no Kommo.<br>
-      Forçar uma unidade funciona mesmo com outra rodando — a trava é por unidade desde 29/09/2026.
-      A página se atualiza sozinha a cada 15 segundos.
+      Forçar uma unidade funciona mesmo com outra rodando, e o relógio de cada uma conta 15 minutos
+      a partir do fim da varredura dela — não da volta inteira. A página se atualiza a cada 15 s.
     </p>
   </main>
 </div>
@@ -210,8 +210,10 @@ function situacao(l) {
   if (l.emVooHaMs != null) {
     return `<span class="selo voando"><span class="pulso"></span>rodando há ${faz(l.emVooHaMs)}</span>`;
   }
-  if (l.posicaoNaFila === 1) return '<span class="selo fila">próxima da fila</span>';
-  return `<span class="selo off">${l.posicaoNaFila ? `${l.posicaoNaFila}ª na fila` : 'aguardando'}</span>`;
+  // Cada unidade tem o próprio relógio desde 29/09/2026 — não existe mais fila para mostrar.
+  if (l.proximaEmMs == null) return '<span class="selo off">sem relógio</span>';
+  if (l.proximaEmMs < 60000) return '<span class="selo fila">começa agora</span>';
+  return `<span class="selo off">daqui a ${faz(l.proximaEmMs)}</span>`;
 }
 
 async function forcar(slug, botao) {
