@@ -36,6 +36,8 @@ import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DOCS_DIR = path.resolve(__dirname, '../../docs');
+/** Páginas soltas dos painéis de operação — ver o handler de hostname mais abaixo. */
+const PAINEIS_DIR = path.resolve(__dirname, '../paineis');
 
 interface RawBodyRequest extends express.Request {
   rawBody?: Buffer;
@@ -101,6 +103,31 @@ async function main(): Promise<void> {
   app.use('/api', apiRouter);
 
   app.use('/docs', express.static(DOCS_DIR, { extensions: ['html'] }));
+
+  /**
+   * Painéis de operação em endereço próprio (João, 29/09/2026: "eu não quero que esse front esteja
+   * no agente dt... eu queria automacao. e franquia. ponto doutordigitalconsultoria.com").
+   *
+   * Servidos por ESTE backend, escolhidos pelo hostname. Isso mantém a API na mesma origem do
+   * painel, o que dispensa CORS e dispensa alargar o cookie de sessão para
+   * `*.doutordigitalconsultoria.com` — alargar faria checklist. e treinamento., que são outros
+   * apps, enxergarem o cookie do console. O preço é um login por endereço.
+   *
+   * Fica DEPOIS de `/api` de propósito: a raiz do painel nunca pode sombrear uma rota da API.
+   */
+  // Map, não objeto literal: com objeto, um Host começando por `constructor.` ou `__proto__.`
+  // acharia um valor herdado do protótipo e cairia num `sendFile` com lixo. Map só devolve o que foi
+  // posto nele.
+  const PAINEL_POR_HOST = new Map([
+    ['automacao', 'automacao.html'],
+    ['franquia', 'franquia.html'],
+  ]);
+  app.get('/', (req, res, next) => {
+    const arquivo = PAINEL_POR_HOST.get(String(req.hostname).split('.')[0] ?? '');
+    if (!arquivo) return next();
+    res.sendFile(path.join(PAINEIS_DIR, arquivo));
+  });
+
 
   await getCheckpointer();
 

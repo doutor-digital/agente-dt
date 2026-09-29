@@ -70,7 +70,13 @@ services:
       labels:
         - traefik.enable=true
         - traefik.docker.network=portainer-next
-        - traefik.http.routers.ddagent.rule=Host(`${AGENT_DOMAIN}`)
+        # Os painéis de operação (automacao. e franquia.) são servidos por ESTE serviço, escolhidos
+        # pelo hostname no Express. Entram na mesma regra de propósito: painel e API na mesma
+        # origem é o que dispensa CORS e dispensa alargar o cookie de sessão para o domínio inteiro.
+        # Os domínios dos painéis vão LITERAIS, não por variável: se a variável faltasse no `.env`
+        # da VPS, a regra viraria Host(``) e o Traefik derrubaria o roteamento do serviço inteiro —
+        # a API junto. Domínio fixo não some.
+        - traefik.http.routers.ddagent.rule=Host(`${AGENT_DOMAIN}`) || Host(`automacao.doutordigitalconsultoria.com`) || Host(`franquia.doutordigitalconsultoria.com`)
         - traefik.http.routers.ddagent.entrypoints=websecure
         - traefik.http.routers.ddagent.tls.certresolver=letsencryptresolver
         - traefik.http.routers.ddagent.service=ddagent

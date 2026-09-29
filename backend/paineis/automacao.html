@@ -1,0 +1,344 @@
+<!doctype html>
+<!--
+  automacao.doutordigitalconsultoria.com — o que roda sozinho em cada unidade.
+
+  Pedido do João (28/09/2026): "tem coisas que eu nem sei que funcionam na prática, aí eu fico
+  perdido... unidade X, habilitar worker de espera, check, salvar". No dia seguinte ele pediu que
+  isso saísse do console do agente-dt e tivesse endereço próprio.
+
+  Servida pelo MESMO backend, em outro hostname: a API fica na mesma origem, o que dispensa CORS e
+  dispensa alargar o cookie de sessão para *.doutordigitalconsultoria.com — alargar faria checklist.
+  e treinamento. enxergarem o cookie do console também. O preço é um login por endereço.
+
+  Sem build e sem bundler de propósito: é uma tela de operação, tem que dar para mudar uma linha e
+  subir junto com o backend.
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Automações por unidade</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --fundo: #0b0d0f;
+    --carta: #14181c;
+    --borda: #232a31;
+    --texto: #e7ecf1;
+    --fraco: #8b97a3;
+    --apagado: #5b6672;
+    --on: #35c88f;
+    --seco: #e0a94a;
+    --ruim: #e0685f;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--fundo); color: var(--texto);
+    font: 15px/1.55 var(--sans);
+    padding: max(20px, env(safe-area-inset-top)) 16px calc(48px + env(safe-area-inset-bottom));
+  }
+  .folha { max-width: 860px; margin: 0 auto; }
+
+  header { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; }
+  h1 { font-size: 1.35rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  select {
+    font: 500 .9rem var(--sans); color: var(--texto); background: var(--carta);
+    border: 1px solid var(--borda); border-radius: 8px; padding: 8px 11px; margin-left: auto;
+    max-width: 100%;
+  }
+  .sub { color: var(--fraco); font-size: .9rem; margin: 10px 0 24px; max-width: 64ch; }
+  .sub b { color: var(--texto); font-weight: 600; }
+
+  .aviso {
+    border: 1px solid var(--borda); border-left: 3px solid var(--ruim);
+    background: #1d1413; color: #f3c9c5; border-radius: 0 8px 8px 0;
+    padding: 12px 14px; margin-bottom: 18px; font-size: .88rem;
+  }
+
+  section { margin-bottom: 26px; }
+  .grupo { display: flex; gap: 9px; align-items: baseline; margin: 0 2px 8px; }
+  .grupo h2 {
+    font: 600 .72rem/1 var(--sans); text-transform: uppercase; letter-spacing: .1em;
+    color: var(--fraco); margin: 0;
+  }
+  .grupo p { margin: 0; font-size: .78rem; color: var(--apagado); }
+
+  .caixa { border: 1px solid var(--borda); border-radius: 12px; background: var(--carta); overflow: hidden; }
+  .linha { display: flex; flex-wrap: wrap; gap: 12px; padding: 14px; border-bottom: 1px solid #1b2127; }
+  .linha:last-child { border-bottom: 0; }
+  .txt { flex: 1 1 15rem; min-width: 0; }
+  .nome { font-weight: 500; }
+  .faz { color: var(--fraco); font-size: .86rem; margin: 3px 0 0; }
+  .env {
+    display: inline-block; margin-left: 7px; vertical-align: 1px;
+    font: 600 .62rem/1 var(--sans); text-transform: uppercase; letter-spacing: .08em;
+    color: var(--apagado); border: 1px solid var(--borda); border-radius: 4px; padding: 3px 5px;
+  }
+  .mais {
+    background: none; border: 0; padding: 4px 0 0; cursor: pointer;
+    color: var(--apagado); font: .78rem var(--sans); text-decoration: underline; text-underline-offset: 3px;
+  }
+  .conta {
+    margin: 8px 0 0; padding: 9px 12px; border-left: 2px solid var(--borda);
+    background: #10141880; border-radius: 0 6px 6px 0; font-size: .81rem; color: var(--fraco);
+  }
+  .conta code { font: .9em var(--mono); color: var(--apagado); display: block; margin-top: 6px; }
+
+  .botoes { display: flex; gap: 3px; align-self: flex-start; background: #10141a; border: 1px solid var(--borda); border-radius: 9px; padding: 3px; }
+  .botoes button {
+    font: 500 .78rem/1 var(--sans); color: var(--apagado); background: none;
+    border: 0; border-radius: 6px; padding: 7px 10px; cursor: pointer; white-space: nowrap;
+  }
+  .botoes button:hover:not(:disabled):not(.sel) { color: var(--texto); background: #1b2127; }
+  .botoes button.sel { color: var(--texto); background: #232a31; }
+  .botoes button.sel[data-e="ligado"] { color: var(--on); box-shadow: inset 0 0 0 1px #1d5741; }
+  .botoes button.sel[data-e="seco"] { color: var(--seco); box-shadow: inset 0 0 0 1px #4d3c18; }
+  .botoes button:disabled { opacity: .45; cursor: default; }
+  .devolver { background: none; border: 0; color: var(--apagado); cursor: pointer; font-size: 1rem; padding: 0 4px; align-self: flex-start; }
+  .devolver:hover { color: var(--texto); }
+
+  .confirma {
+    flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    border: 1px solid #4d3c18; background: #1a1611; color: #f0dcb8;
+    border-radius: 9px; padding: 11px 13px; font-size: .84rem;
+  }
+  .confirma p { margin: 0; flex: 1 1 16rem; }
+  .confirma button { font: 500 .8rem var(--sans); border-radius: 6px; padding: 7px 11px; cursor: pointer; border: 1px solid transparent; }
+  .confirma .sim { background: #3a2d10; color: #f0dcb8; border-color: #4d3c18; }
+  .confirma .nao { background: none; color: var(--fraco); }
+
+  form.entrar { max-width: 320px; margin: 60px auto; display: grid; gap: 10px; }
+  form.entrar input {
+    font: 15px var(--sans); color: var(--texto); background: var(--carta);
+    border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; width: 100%;
+  }
+  form.entrar button { font: 500 .9rem var(--sans); color: var(--texto); background: #1b2127; border: 1px solid var(--borda); border-radius: 8px; padding: 10px; cursor: pointer; }
+  .rodape { color: var(--apagado); font-size: .8rem; line-height: 1.65; margin-top: 6px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="folha">
+  <form class="entrar" id="entrar" hidden>
+    <h1>Automações</h1>
+    <p class="sub" style="margin:0">Entre com a mesma conta do console.</p>
+    <input id="email" type="email" placeholder="e-mail" autocomplete="username" required>
+    <input id="senha" type="password" placeholder="senha" autocomplete="current-password" required>
+    <button type="submit">Entrar</button>
+    <p class="aviso" id="erroLogin" hidden></p>
+  </form>
+
+  <main id="painel" hidden>
+    <header>
+      <h1>Automações</h1>
+      <select id="unidade"></select>
+    </header>
+    <p class="sub">
+      O que roda sozinho nesta unidade, sem ninguém clicar. Estão aqui <b id="quantas">todas</b>,
+      ligadas e desligadas — o problema nunca foi o interruptor, foi não saber que a coisa existia.
+    </p>
+    <div class="aviso" id="aviso" hidden></div>
+    <div id="grupos"></div>
+    <p class="rodape">
+      Mudança aqui vale em segundos, sem deploy. O que está marcado <b>vem do .env</b> nunca foi
+      tocado por esta tela e segue a configuração antiga do servidor — mexer uma vez traz a decisão
+      pra cá, e a setinha devolve.
+    </p>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+const GRUPOS = [
+  ['move-cartao', 'Movem cartão sozinhas', 'Mudam a etapa do lead sem ninguém arrastar.'],
+  ['manda-mensagem', 'Falam com alguém', 'Mandam mensagem pro paciente ou aviso pro time.'],
+  ['escreve-campo', 'Preenchem o cartão', 'Escrevem campo. Erro aqui é dado errado, corrigível.'],
+  ['comportamento', 'Mudam o jeito da IA (ou o custo)', 'Não movem nem escrevem: mexem em como ela responde ou em quanto gasta.'],
+];
+const ROTULO = { desligado: 'Desligado', seco: 'Só no papel', ligado: 'Ligado' };
+
+let unidades = [];
+let atual = null;
+let lista = [];
+let abertas = new Set();
+
+async function api(caminho, opcoes = {}) {
+  const r = await fetch(`/api${caminho}`, {
+    credentials: 'include',
+    headers: opcoes.body ? { 'content-type': 'application/json' } : undefined,
+    ...opcoes,
+  });
+  if (r.status === 401) { mostrarLogin(); throw new Error('sem sessão'); }
+  if (!r.ok) throw new Error((await r.text().catch(() => '')).slice(0, 200) || String(r.status));
+  return r.json();
+}
+
+function mostrarLogin(erro) {
+  $('painel').hidden = true;
+  $('entrar').hidden = false;
+  $('erroLogin').hidden = !erro;
+  $('erroLogin').textContent = erro ?? '';
+}
+
+$('entrar').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const r = await fetch('/api/auth/login', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: $('email').value, password: $('senha').value }),
+  }).catch(() => null);
+  if (!r || !r.ok) return mostrarLogin(r ? 'e-mail ou senha não conferem' : 'não consegui falar com o servidor');
+  $('entrar').hidden = true;
+  $('painel').hidden = false;
+  comecar();
+});
+
+function avisar(texto) {
+  $('aviso').hidden = !texto;
+  $('aviso').textContent = texto ?? '';
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function desenhar() {
+  $('quantas').textContent = `as ${lista.length}`;
+  $('grupos').innerHTML = GRUPOS.map(([risco, titulo, explica]) => {
+    const doGrupo = lista.filter((a) => a.risco === risco);
+    if (!doGrupo.length) return '';
+    return `<section>
+      <div class="grupo"><h2>${titulo}</h2><p>${explica}</p></div>
+      <div class="caixa">${doGrupo.map(linha).join('')}</div>
+    </section>`;
+  }).join('');
+  ligarEventos();
+}
+
+function linha(a) {
+  const estados = a.temSeco ? ['desligado', 'seco', 'ligado'] : ['desligado', 'ligado'];
+  const aberta = abertas.has(a.id);
+  return `<div class="linha" data-id="${a.id}">
+    <div class="txt">
+      <span class="nome">${esc(a.nome)}</span>${a.vemDoAmbiente ? '<span class="env">vem do .env</span>' : ''}
+      <p class="faz">${esc(a.oQueFaz)}</p>
+      ${a.pegadinha ? `<button class="mais" data-mais="${a.id}">${aberta ? 'menos' : 'o que ninguém te conta'}</button>` : ''}
+      ${aberta && a.pegadinha ? `<p class="conta">${esc(a.pegadinha)}<code>${esc(a.chave)} · ${esc(a.arquivo)}</code></p>` : ''}
+    </div>
+    ${a.vemDoAmbiente ? '' : `<button class="devolver" data-devolver="${a.id}" title="Devolver a decisão ao .env — não é o mesmo que desligar">↺</button>`}
+    <div class="botoes">
+      ${estados
+        .map(
+          (e) =>
+            `<button data-e="${e}" data-set="${a.id}" class="${a.estado === e ? 'sel' : ''}"${
+              e === 'seco' ? ' title="Decide e registra no log, mas não toca no Kommo"' : ''
+            }>${ROTULO[e]}</button>`,
+        )
+        .join('')}
+    </div>
+  </div>`;
+}
+
+function ligarEventos() {
+  for (const b of document.querySelectorAll('[data-mais]')) {
+    b.onclick = () => {
+      const id = b.dataset.mais;
+      abertas.has(id) ? abertas.delete(id) : abertas.add(id);
+      desenhar();
+    };
+  }
+  for (const b of document.querySelectorAll('[data-set]')) {
+    b.onclick = () => pedir(b.dataset.set, b.dataset.e);
+  }
+  for (const b of document.querySelectorAll('[data-devolver]')) {
+    b.onclick = () => gravar(b.dataset.devolver, null);
+  }
+}
+
+/** Desligar nunca confirma: parar de mexer no CRM é sempre o lado seguro. */
+function pedir(id, estado) {
+  const a = lista.find((x) => x.id === id);
+  if (!a || a.estado === estado) return;
+  if (a.risco !== 'move-cartao' || estado === 'desligado') return gravar(id, estado);
+
+  const caixa = document.querySelector(`.linha[data-id="${id}"]`);
+  caixa.querySelector('.confirma')?.remove();
+  const el = document.createElement('div');
+  el.className = 'confirma';
+  el.innerHTML = `<p>${
+    estado === 'seco'
+      ? `Em <b>só no papel</b>, <b>${esc(a.nome)}</b> decide e registra no log, mas não toca em cartão nenhum.`
+      : `<b>${esc(a.nome)}</b> passa a mover cartão de etapa sozinha nesta unidade, a partir de agora. O Kommo não tem desfazer.`
+  }</p>
+  <button class="nao">Cancelar</button>
+  <button class="sim">${estado === 'seco' ? 'Pôr em só no papel' : 'Ligar mesmo assim'}</button>`;
+  el.querySelector('.nao').onclick = () => el.remove();
+  el.querySelector('.sim').onclick = () => { el.remove(); gravar(id, estado); };
+  caixa.appendChild(el);
+}
+
+async function gravar(id, estado) {
+  // A unidade é fixada AQUI, não lida depois do await: trocar de unidade no select enquanto a
+  // gravação está em voo faria o PUT cair na unidade errada, e ninguém perceberia.
+  const unidade = atual;
+  avisar(null);
+  for (const b of document.querySelectorAll(`.linha[data-id="${id}"] button`)) b.disabled = true;
+  try {
+    const r = estado
+      ? await api(`/units/${unidade}/automacoes/${id}`, { method: 'PUT', body: JSON.stringify({ estado }) })
+      : await api(`/units/${unidade}/automacoes/${id}`, { method: 'DELETE' });
+    // E a resposta só pinta a tela se ela ainda estiver mostrando essa unidade.
+    if (unidade !== atual) return;
+    lista = r.automacoes;
+    desenhar();
+  } catch (e) {
+    if (e.message !== 'sem sessão') {
+      avisar(`Não consegui salvar: ${e.message}. Nada foi alterado.`);
+      await carregar();
+    }
+  }
+}
+
+async function carregar() {
+  if (!atual) return;
+  const unidade = atual;
+  try {
+    const r = await api(`/units/${unidade}/automacoes`);
+    if (unidade !== atual) return; // trocou de unidade enquanto isto voltava
+    lista = r.automacoes;
+    desenhar();
+  } catch (e) {
+    if (e.message !== 'sem sessão') avisar(`Não consegui ler as automações: ${e.message}`);
+  }
+}
+
+async function comecar() {
+  try {
+    const r = await api('/units');
+    unidades = (Array.isArray(r) ? r : r.units ?? []).filter((u) => u.isActive !== false);
+    unidades.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'));
+    $('unidade').innerHTML = unidades.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
+    const guardada = localStorage.getItem('unidade');
+    atual = unidades.some((u) => u.id === guardada) ? guardada : unidades[0]?.id;
+    $('unidade').value = atual ?? '';
+    await carregar();
+  } catch (e) {
+    if (e.message !== 'sem sessão') avisar(`Não consegui listar as unidades: ${e.message}`);
+  }
+}
+
+$('unidade').onchange = () => {
+  atual = $('unidade').value;
+  abertas = new Set();
+  try { localStorage.setItem('unidade', atual); } catch {}
+  void carregar();
+};
+
+api('/auth/me')
+  .then(() => { $('painel').hidden = false; comecar(); })
+  .catch(() => {});
+</script>
+</body>
+</html>

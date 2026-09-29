@@ -61,6 +61,66 @@ export function varredurasEmVoo(): Array<{ unit: string; desdeMs: number }> {
   return [...emVoo.entries()].map(([unit, desde]) => ({ unit, desdeMs: agora - desde }));
 }
 
+export interface LinhaDoPanorama {
+  slug: string;
+  nome: string;
+  ligado: boolean;
+  /** há quantos ms esta unidade está sendo varrida AGORA, ou null se não está */
+  emVooHaMs: number | null;
+  /** posição na fila da próxima varredura — 1 é a mais atrasada, a que vai primeiro */
+  posicaoNaFila: number | null;
+  vezesHoje: number;
+  ultimaEm: string | null;
+  ultimaMs: number | null;
+  escritas: number | null;
+  movimentos: number | null;
+  semLead: number | null;
+  erros: number | null;
+}
+
+/**
+ * Tudo que a tela de operação da franquia precisa, numa chamada só: quem está rodando agora, quem
+ * é o próximo, quantas vezes cada unidade já rodou hoje e o que a última passada fez.
+ *
+ * A `posicaoNaFila` usa a MESMA ordenação de `varrer` — se as duas divergirem, a tela mente sobre
+ * quem vai primeiro, que é justamente a pergunta que ela existe para responder.
+ */
+export async function panoramaDoSync(): Promise<LinhaDoPanorama[]> {
+  const units = await prisma.unit.findMany({
+    where: { spineEnabled: true, spineToken: { not: null }, kommoAccessToken: { not: null } },
+    select: { slug: true, name: true },
+  });
+  const agora = Date.now();
+  const ligadas = units.filter((u) => automacaoLigada(u.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS));
+  const fila = [...ligadas]
+    .filter((u) => !emVoo.has(u.slug))
+    .sort((a, b) => ultimaTentativa(a.slug) - ultimaTentativa(b.slug))
+    .map((u) => u.slug);
+
+  return units
+    .map((u) => {
+      const r = relogio.get(u.slug);
+      const ligado = ligadas.some((l) => l.slug === u.slug);
+      const desde = emVoo.get(u.slug);
+      const pos = fila.indexOf(u.slug);
+      return {
+        slug: u.slug,
+        nome: u.name,
+        ligado,
+        emVooHaMs: desde === undefined ? null : agora - desde,
+        posicaoNaFila: ligado && pos >= 0 ? pos + 1 : null,
+        vezesHoje: r?.vezesHoje ?? 0,
+        ultimaEm: r?.ultima?.em ?? null,
+        ultimaMs: r?.ms ?? null,
+        escritas: r?.ultima?.escritas ?? null,
+        movimentos: r?.ultima?.movimentos ?? null,
+        semLead: r?.ultima?.semLead ?? null,
+        erros: r?.ultima?.erros ?? null,
+      };
+    })
+    .sort((a, b) => Number(b.ligado) - Number(a.ligado) || a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
 export interface ResumoSync {
   unit: string;
   em: string;
