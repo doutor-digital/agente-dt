@@ -1,0 +1,280 @@
+<!doctype html>
+<!--
+  franquia.doutordigitalconsultoria.com — a operação da varredura da franquia.
+
+  Pedido do João (28/09/2026): "essa outra parte aí de ver os cartões que estão rodando e quantas
+  vezes já rodaram em cada unidade". Ele não quis isso dentro do console do agente-dt, então mora
+  num endereço próprio — servido pelo MESMO backend, o que mantém a chamada de API na mesma origem
+  e dispensa CORS e cookie compartilhado entre subdomínios.
+
+  Página solta de propósito: sem build, sem bundler, sem dependência externa. Ela existe para ser
+  aberta às pressas quando alguém pergunta "por que a unidade X não atualizou?", e uma página que
+  precisa de deploy de front pra mudar uma linha não serve pra isso.
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Varredura da franquia</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --fundo: #0b0d0f;
+    --carta: #14181c;
+    --borda: #232a31;
+    --texto: #e7ecf1;
+    --fraco: #8b97a3;
+    --apagado: #5b6672;
+    --voando: #35c88f;
+    --espera: #e0a94a;
+    --ruim: #e0685f;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--fundo); color: var(--texto);
+    font: 15px/1.55 var(--sans);
+    padding: max(20px, env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));
+  }
+  .folha { max-width: 1000px; margin: 0 auto; }
+
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 16px; margin-bottom: 4px; }
+  h1 { font-size: 1.35rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--fraco); font-size: .9rem; margin: 0 0 22px; max-width: 62ch; }
+  .agora { margin-left: auto; font: 500 .78rem/1 var(--mono); color: var(--apagado); }
+
+  .aviso {
+    border: 1px solid var(--borda); border-left: 3px solid var(--espera);
+    background: #1a1611; border-radius: 0 8px 8px 0;
+    padding: 12px 14px; margin-bottom: 18px; font-size: .88rem; color: #f0dcb8;
+  }
+  .erro { border-left-color: var(--ruim); background: #1d1413; color: #f3c9c5; }
+
+  table { width: 100%; border-collapse: collapse; }
+  .rolo { overflow-x: auto; border: 1px solid var(--borda); border-radius: 12px; background: var(--carta); }
+  th, td { padding: 11px 14px; text-align: left; white-space: nowrap; }
+  th {
+    font: 600 .7rem/1 var(--sans); text-transform: uppercase; letter-spacing: .09em;
+    color: var(--apagado); border-bottom: 1px solid var(--borda);
+  }
+  td { border-bottom: 1px solid #1b2127; font-size: .89rem; }
+  tr:last-child td { border-bottom: 0; }
+  .num { text-align: right; font-family: var(--mono); font-size: .85rem; }
+  .unidade { font-weight: 500; }
+  .slug { display: block; font: .72rem/1.4 var(--mono); color: var(--apagado); }
+  .desligada .unidade, .desligada .num { color: var(--apagado); }
+
+  .selo {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: 600 .72rem/1 var(--sans); padding: 5px 9px; border-radius: 999px;
+    border: 1px solid transparent; white-space: nowrap;
+  }
+  .selo.voando { color: var(--voando); background: #0f2a21; border-color: #1d5741; }
+  .selo.fila   { color: var(--espera); background: #241d10; border-color: #4d3c18; }
+  .selo.off    { color: var(--apagado); background: #171b1f; border-color: var(--borda); }
+  .pulso { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .selo.voando .pulso { animation: bate 1.4s ease-in-out infinite; }
+  @keyframes bate { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+  @media (prefers-reduced-motion: reduce) { .selo.voando .pulso { animation: none } }
+
+  button {
+    font: 500 .8rem/1 var(--sans); color: var(--texto);
+    background: #1b2127; border: 1px solid var(--borda); border-radius: 7px;
+    padding: 7px 11px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #232a31; }
+  button:disabled { opacity: .4; cursor: default; }
+
+  form.entrar { max-width: 320px; margin: 60px auto; display: grid; gap: 10px; }
+  form.entrar input {
+    font: 15px var(--sans); color: var(--texto); background: var(--carta);
+    border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; width: 100%;
+  }
+  .rodape { color: var(--apagado); font-size: .8rem; margin-top: 18px; line-height: 1.6; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="folha">
+  <form class="entrar" id="entrar" hidden>
+    <h1>Varredura da franquia</h1>
+    <p class="sub" style="margin:0">Entre com a mesma conta do console.</p>
+    <input id="email" type="email" placeholder="e-mail" autocomplete="username" required>
+    <input id="senha" type="password" placeholder="senha" autocomplete="current-password" required>
+    <button type="submit">Entrar</button>
+    <p class="aviso erro" id="erroLogin" hidden></p>
+  </form>
+
+  <main id="painel" hidden>
+    <header>
+      <h1>Varredura da franquia</h1>
+      <span class="agora" id="agora"></span>
+    </header>
+    <p class="sub">
+      O sincronizador copia da franquia para o cartão do Kommo o que aconteceu na janela de D-3 a
+      D+45. Cada unidade leva alguns minutos; a fila anda pela mais atrasada.
+    </p>
+
+    <div class="aviso" id="aviso" hidden></div>
+
+    <div class="rolo">
+      <table>
+        <thead>
+          <tr>
+            <th>Unidade</th>
+            <th>Situação</th>
+            <th class="num">Hoje</th>
+            <th>Última</th>
+            <th class="num">Durou</th>
+            <th class="num">Campos</th>
+            <th class="num">Movidos</th>
+            <th class="num">Sem cartão</th>
+            <th class="num">Erros</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="linhas"></tbody>
+      </table>
+    </div>
+
+    <p class="rodape">
+      <strong>Hoje</strong> zera quando o processo reinicia, porque a contagem vive na memória dele.
+      <strong>Sem cartão</strong> é paciente que existe na franquia e não tem cartão no Kommo.<br>
+      Forçar uma unidade funciona mesmo com outra rodando — a trava é por unidade desde 29/09/2026.
+      A página se atualiza sozinha a cada 15 segundos.
+    </p>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let timer = null;
+
+/** Nome e slug da unidade vêm do banco e entram em innerHTML — sem isto, um nome com `<img onerror>` roda script aqui. */
+const esc = (s) =>
+  String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function api(caminho, opcoes = {}) {
+  const r = await fetch(`/api${caminho}`, { credentials: 'include', ...opcoes });
+  if (r.status === 401) { mostrarLogin(); throw new Error('sem sessão'); }
+  if (!r.ok) throw new Error(`${r.status} ${await r.text().catch(() => '')}`.slice(0, 200));
+  return r.json();
+}
+
+function mostrarLogin(erro) {
+  clearInterval(timer);
+  $('painel').hidden = true;
+  $('entrar').hidden = false;
+  $('erroLogin').hidden = !erro;
+  $('erroLogin').textContent = erro ?? '';
+}
+
+$('entrar').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: $('email').value, password: $('senha').value }),
+    });
+    if (!r.ok) return mostrarLogin('e-mail ou senha não conferem');
+    $('entrar').hidden = true;
+    $('painel').hidden = false;
+    iniciar();
+  } catch {
+    mostrarLogin('não consegui falar com o servidor');
+  }
+});
+
+/** "há 3 min", "há 2 h" — quem lê quer a distância, não o relógio. */
+function faz(ms) {
+  if (ms == null) return '—';
+  const min = Math.round(ms / 60000);
+  if (min < 1) return 'agora';
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  return `${h} h ${min % 60} min`;
+}
+const horaDe = (iso) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+};
+const dur = (ms) => (ms == null ? '—' : ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}min`);
+const n = (v) => (v == null ? '—' : String(v));
+
+function situacao(l) {
+  if (!l.ligado) return '<span class="selo off">desligada</span>';
+  if (l.emVooHaMs != null) {
+    return `<span class="selo voando"><span class="pulso"></span>rodando há ${faz(l.emVooHaMs)}</span>`;
+  }
+  if (l.posicaoNaFila === 1) return '<span class="selo fila">próxima da fila</span>';
+  return `<span class="selo off">${l.posicaoNaFila ? `${l.posicaoNaFila}ª na fila` : 'aguardando'}</span>`;
+}
+
+async function forcar(slug, botao) {
+  botao.disabled = true;
+  botao.textContent = '...';
+  try {
+    const r = await api(`/admin/franquia-sync/varrer?slug=${encodeURIComponent(slug)}`, { method: 'POST' });
+    avisar(r.iniciado ? `Varredura de ${slug} começou.` : `Não começou: ${r.motivo}`, !r.iniciado);
+  } catch (e) {
+    avisar(`Falhou: ${e.message}`, true);
+  }
+  await pintar();
+}
+
+function avisar(texto, ruim) {
+  const el = $('aviso');
+  el.hidden = false;
+  el.textContent = texto;
+  el.classList.toggle('erro', Boolean(ruim));
+}
+
+async function pintar() {
+  let dados;
+  try {
+    dados = await api('/admin/franquia-sync');
+  } catch (e) {
+    if (e.message !== 'sem sessão') avisar(`Não consegui ler: ${e.message}`, true);
+    return;
+  }
+  const linhas = dados.panorama ?? [];
+  $('agora').textContent = new Date().toLocaleTimeString('pt-BR');
+  $('linhas').innerHTML = linhas
+    .map(
+      (l) => `
+      <tr class="${l.ligado ? '' : 'desligada'}">
+        <td><span class="unidade">${esc(l.nome)}</span><span class="slug">${esc(l.slug)}</span></td>
+        <td>${situacao(l)}</td>
+        <td class="num">${l.vezesHoje || '—'}</td>
+        <td>${horaDe(l.ultimaEm)}</td>
+        <td class="num">${dur(l.ultimaMs)}</td>
+        <td class="num">${n(l.escritas)}</td>
+        <td class="num">${n(l.movimentos)}</td>
+        <td class="num">${n(l.semLead)}</td>
+        <td class="num">${n(l.erros)}</td>
+        <td>${l.ligado ? `<button data-slug="${esc(l.slug)}">forçar</button>` : ''}</td>
+      </tr>`,
+    )
+    .join('');
+  for (const b of $('linhas').querySelectorAll('button[data-slug]')) {
+    b.addEventListener('click', () => forcar(b.dataset.slug, b));
+  }
+}
+
+function iniciar() {
+  clearInterval(timer);
+  void pintar();
+  timer = setInterval(pintar, 15000);
+}
+
+// Se já há sessão, entra direto; se não, o 401 do primeiro fetch mostra o login.
+api('/auth/me')
+  .then(() => { $('painel').hidden = false; iniciar(); })
+  .catch(() => {});
+</script>
+</body>
+</html>
