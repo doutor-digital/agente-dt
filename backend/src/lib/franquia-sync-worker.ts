@@ -67,8 +67,11 @@ export interface LinhaDoPanorama {
   ligado: boolean;
   /** há quantos ms esta unidade está sendo varrida AGORA, ou null se não está */
   emVooHaMs: number | null;
-  /** posição na fila da próxima varredura — 1 é a mais atrasada, a que vai primeiro */
-  posicaoNaFila: number | null;
+  /**
+   * Em quantos ms o relógio DESTA unidade dispara. Substituiu a "posição na fila": desde 29/09/2026
+   * cada unidade tem o próprio relógio, então fila não existe mais e mostrá-la seria mentira.
+   */
+  proximaEmMs: number | null;
   vezesHoje: number;
   ultimaEm: string | null;
   ultimaMs: number | null;
@@ -92,23 +95,19 @@ export async function panoramaDoSync(): Promise<LinhaDoPanorama[]> {
   });
   const agora = Date.now();
   const ligadas = units.filter((u) => automacaoLigada(u.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS));
-  const fila = [...ligadas]
-    .filter((u) => !emVoo.has(u.slug))
-    .sort((a, b) => ultimaTentativa(a.slug) - ultimaTentativa(b.slug))
-    .map((u) => u.slug);
 
   return units
     .map((u) => {
       const r = relogio.get(u.slug);
       const ligado = ligadas.some((l) => l.slug === u.slug);
       const desde = emVoo.get(u.slug);
-      const pos = fila.indexOf(u.slug);
+      const proxima = proximaEm.get(u.slug);
       return {
         slug: u.slug,
         nome: u.name,
         ligado,
         emVooHaMs: desde === undefined ? null : agora - desde,
-        posicaoNaFila: ligado && pos >= 0 ? pos + 1 : null,
+        proximaEmMs: proxima === undefined ? null : Math.max(0, proxima - agora),
         vezesHoje: r?.vezesHoje ?? 0,
         ultimaEm: r?.ultima?.em ?? null,
         ultimaMs: r?.ms ?? null,
@@ -994,44 +993,81 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   return resumo;
 }
 
-async function varrer(soSlug?: string): Promise<void> {
+/** As unidades que o sincronizador atende agora — ligadas na tela e com credencial dos dois lados. */
+async function unidadesDoSync(): Promise<Unit[]> {
   const units = await prisma.unit.findMany({
     where: { spineEnabled: true, spineToken: { not: null }, kommoAccessToken: { not: null } },
   });
-  // A MAIS ATRASADA NA FRENTE. Antes a ordem era a que o Postgres devolvesse (`findMany` sem
-  // `orderBy`), então com ~15 min por unidade a última da lista podia passar horas sem vez.
-  const fila = units
-    .filter((u) => automacaoLigada(u.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS))
+  return units.filter((u) => automacaoLigada(u.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS));
+}
+
+/**
+ * Teto de varreduras ao mesmo tempo. Não é a trava velha disfarçada: aquela era 1 e valia para o
+ * processo inteiro; esta existe só para não bater na franquia com N requisições paralelas quando
+ * alguém ligar o sincronizador em vinte unidades de uma vez. Com o padrão em 6 — o número de
+ * unidades ligadas hoje — ninguém espera.
+ */
+const MAX_PARALELO = Number(process.env.FRANQUIA_SYNC_PARALELO) || 6;
+let rodandoAgora = 0;
+const esperandoVaga: Array<() => void> = [];
+
+async function comVaga<T>(fn: () => Promise<T>): Promise<T> {
+  if (rodandoAgora >= MAX_PARALELO) {
+    // Quem esperava NÃO incrementa ao acordar: o slot foi entregue já contado, no `finally` abaixo.
+    await new Promise<void>((libera) => esperandoVaga.push(libera));
+  } else {
+    rodandoAgora++;
+  }
+  try {
+    return await fn();
+  } finally {
+    // O slot passa DIRETO para quem espera, em vez de ser devolvido e retomado. Decrementar e só
+    // depois acordar deixaria a vaga livre por um microtask, e um chamador novo — síncrono — a
+    // tomaria antes de quem estava na fila; aí os dois entrariam e o teto seria furado por um.
+    const proximo = esperandoVaga.shift();
+    if (proximo) proximo();
+    else rodandoAgora--;
+  }
+}
+
+/** Varre UMA unidade. É aqui que a trava por unidade e o relógio dela se encontram. */
+async function varrerUnidade(unit: Unit, forcada = false): Promise<void> {
+  const desde = emVoo.get(unit.slug);
+  if (desde !== undefined) {
+    // LOGAR A BATIDA DESCARTADA. Antes isto era um `return` mudo, e o atraso era invisível: o ciclo
+    // estourava e ninguém ficava sabendo até alguém reparar num cartão velho.
+    logger.warn(
+      { unit: unit.slug, haMin: Math.round((Date.now() - desde) / 60_000), forcada },
+      'franquia-sync: batida descartada — esta unidade já está sendo varrida',
+    );
+    return;
+  }
+  emVoo.set(unit.slug, Date.now());
+  const t0 = Date.now();
+  try {
+    const r = await sincronizarUnidade(unit);
+    ultimoResumo.set(unit.slug, r);
+    anotarVarredura(unit, r, Date.now() - t0);
+    logger.info({ ...r, ms: Date.now() - t0 }, 'franquia-sync: varredura concluída');
+  } catch (err) {
+    logger.error({ err, unit: unit.slug }, 'franquia-sync: varredura falhou');
+  } finally {
+    // No finally, as duas: unidade que estourou não pode ficar travada para sempre, nem voltar
+    // pro topo da fila a cada 15 min porque nunca registrou sucesso.
+    anotarTentativa(unit.slug);
+    emVoo.delete(unit.slug);
+  }
+}
+
+/**
+ * Varredura avulsa — o "forçar agora" da tela, e o caminho que o worker NÃO usa mais para a rotina.
+ * Sem `soSlug` varre todas, agora em paralelo (respeitando `MAX_PARALELO`) em vez de uma de cada vez.
+ */
+async function varrer(soSlug?: string): Promise<void> {
+  const fila = (await unidadesDoSync())
     .filter((u) => !soSlug || u.slug === soSlug)
     .sort((a, b) => ultimaTentativa(a.slug) - ultimaTentativa(b.slug));
-
-  for (const unit of fila) {
-    const desde = emVoo.get(unit.slug);
-    if (desde !== undefined) {
-      // LOGAR A BATIDA DESCARTADA. Antes isto era um `return` mudo, e o atraso era invisível: o
-      // ciclo estourava e ninguém ficava sabendo até alguém reparar num cartão velho.
-      logger.warn(
-        { unit: unit.slug, haMin: Math.round((Date.now() - desde) / 60_000), forcada: Boolean(soSlug) },
-        'franquia-sync: batida descartada — esta unidade já está sendo varrida',
-      );
-      continue;
-    }
-    emVoo.set(unit.slug, Date.now());
-    const t0 = Date.now();
-    try {
-      const r = await sincronizarUnidade(unit);
-      ultimoResumo.set(unit.slug, r);
-      anotarVarredura(unit, r, Date.now() - t0);
-      logger.info({ ...r, ms: Date.now() - t0 }, 'franquia-sync: varredura concluída');
-    } catch (err) {
-      logger.error({ err, unit: unit.slug }, 'franquia-sync: varredura falhou');
-    } finally {
-      // No finally, as duas: unidade que estourou não pode ficar travada para sempre, nem voltar
-      // pro topo da fila a cada 15 min porque nunca registrou sucesso.
-      anotarTentativa(unit.slug);
-      emVoo.delete(unit.slug);
-    }
-  }
+  await Promise.all(fila.map((u) => comVaga(() => varrerUnidade(u, true))));
 }
 
 /**
@@ -1050,11 +1086,84 @@ export function varrerAgora(soSlug?: string): { iniciado: boolean; motivo?: stri
   return { iniciado: true };
 }
 
+/**
+ * CADA UNIDADE COM SEU PRÓPRIO RELÓGIO (João, 29/09/2026: "vamos isolar para cada uma, não precisar
+ * desse atraso global").
+ *
+ * Antes havia UM `setInterval` que, a cada 15 min, percorria todas as unidades com `await` — uma de
+ * cada vez. Tirar a trava global (feito mais cedo hoje) consertou o "forçar agora", mas não isto:
+ * com ~15 min por unidade e 6 unidades, a rotina continuava levando ~1h30 para dar a volta, e a
+ * unidade no fim da fila via seus cartões 1h30 atrasados.
+ *
+ * Agora cada unidade tem um `setTimeout` próprio, que se reagenda 15 min DEPOIS de a varredura dela
+ * terminar. O intervalo de uma não depende do tempo das outras, e unidade lenta atrasa só a si
+ * mesma. Reagendar no fim — e não a cada 15 min fixos — é de propósito: se a varredura demorar 20
+ * min, a próxima sai 15 min depois do fim, em vez de nascer já atrasada e empilhar.
+ *
+ * `MAX_PARALELO` é o único limite que sobrou, e existe para não bater na franquia com vinte
+ * requisições ao mesmo tempo — não para serializar.
+ */
+const agendadas = new Map<string, NodeJS.Timeout | null>();
+/** Quando o relógio de cada unidade dispara (epoch ms) — é o que a tela mostra como "próxima". */
+const proximaEm = new Map<string, number>();
+/** Espaçamento entre os primeiros disparos: vinte unidades não devem acordar no mesmo segundo. */
+const ESCALONAR_MS = 20_000;
+/** De quanto em quanto tempo o supervisor procura unidade nova (ou unidade que saiu). */
+const RECONCILIAR_MS = 60_000;
+
+function agendarUnidade(unit: Unit, emMs: number): void {
+  proximaEm.set(unit.slug, Date.now() + emMs);
+  agendadas.set(
+    unit.slug,
+    setTimeout(() => {
+      agendadas.set(unit.slug, null); // gerenciada, mas sem timer: está rodando agora
+      proximaEm.delete(unit.slug);
+      void comVaga(() => varrerUnidade(unit)).finally(() => {
+        // Só reagenda se ainda for gerenciada — `stop` e o supervisor apagam a entrada de quem saiu.
+        if (agendadas.has(unit.slug)) agendarUnidade(unit, SWEEP_MS);
+      });
+    }, emMs),
+  );
+}
+
+/** Liga o relógio de quem entrou e desliga o de quem saiu — é o que faz unidade nova começar sozinha. */
+async function reconciliar(): Promise<void> {
+  let units: Unit[];
+  try {
+    units = await unidadesDoSync();
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'franquia-sync: não consegui reler as unidades — mantendo os relógios atuais');
+    return;
+  }
+  const vivas = new Set(units.map((u) => u.slug));
+  for (const [slug, t] of agendadas) {
+    if (vivas.has(slug)) continue;
+    if (t) clearTimeout(t);
+    agendadas.delete(slug);
+    proximaEm.delete(slug);
+    logger.info({ unit: slug }, 'franquia-sync: unidade saiu do sincronizador — relógio desligado');
+  }
+  let novas = 0;
+  for (const u of units) {
+    if (agendadas.has(u.slug)) continue;
+    agendarUnidade(u, PRIMEIRA_MS + novas * ESCALONAR_MS);
+    novas++;
+  }
+  if (novas) logger.info({ novas, total: agendadas.size }, 'franquia-sync: relógios ligados');
+}
+
 export function startFranquiaSyncWorker(): void {
   if (timer) return;
-  primeira = setTimeout(() => void varrer(), PRIMEIRA_MS);
-  timer = setInterval(() => void varrer(), SWEEP_MS);
-  logger.info({ slugs: process.env.FRANQUIA_SYNC_SLUGS ?? '(vazio = desligado)' }, 'franquia-sync: worker iniciado');
+  void reconciliar();
+  timer = setInterval(() => void reconciliar(), RECONCILIAR_MS);
+  logger.info(
+    {
+      slugs: process.env.FRANQUIA_SYNC_SLUGS ?? '(vazio = desligado)',
+      intervaloMin: SWEEP_MS / 60_000,
+      maxParalelo: MAX_PARALELO,
+    },
+    'franquia-sync: worker iniciado — um relógio por unidade',
+  );
 }
 
 export function stopFranquiaSyncWorker(): void {
@@ -1062,6 +1171,11 @@ export function stopFranquiaSyncWorker(): void {
   if (timer) clearInterval(timer);
   primeira = null;
   timer = null;
+  // Os relógios por unidade também: sem isto, parar o worker deixaria N timeouts vivos segurando o
+  // processo no deploy, e o `finally` de cada um reagendaria o próximo.
+  for (const t of agendadas.values()) if (t) clearTimeout(t);
+  agendadas.clear();
+  proximaEm.clear();
 }
 
 export const _interno = { mapearCampos, valoresDoLead, procurarPaciente };
