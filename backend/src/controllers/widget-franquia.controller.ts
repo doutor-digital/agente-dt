@@ -292,3 +292,40 @@ export async function widgetMarcarHandler(req: Request, res: Response): Promise<
   });
   res.status(r.ok ? 200 : 409).json(r);
 }
+
+
+// ── Os passos que o widget ENSINA no cartão, e o "entendi" de cada pessoa ──
+//
+// O professor só serve se souber parar: o widget pergunta o que esta pessoa já entendeu e esconde
+// esses passos para sempre. Chave = usuário do Kommo (`amouser_id`), não navegador, para a mesma
+// pessoa não recomeçar em outro computador.
+
+/** GET /public/widget/:slug/passos?u=<amouser_id> → ids já marcados por essa pessoa. */
+export async function widgetPassosHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res);
+  if (!unit) return;
+  const u = Number(req.query.u);
+  if (!Number.isInteger(u) || u <= 0) { res.json({ entendidos: [] }); return; }
+  const linhas = await prisma.widgetPasso.findMany({
+    where: { unitId: unit.id, kommoUserId: u },
+    select: { passo: true },
+  });
+  res.json({ entendidos: linhas.map((l) => l.passo) });
+}
+
+/** POST /public/widget/:slug/passos {u, passo} — idempotente: clicar duas vezes não é erro. */
+export async function widgetPassoEntendiHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res);
+  if (!unit) return;
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const u = Number(b.u);
+  const passo = typeof b.passo === 'string' ? b.passo.slice(0, 60) : '';
+  if (!Number.isInteger(u) || u <= 0 || !/^[\w.-]+$/.test(passo)) {
+    res.status(400).json({ error: 'u (usuário do Kommo) e passo são obrigatórios' });
+    return;
+  }
+  await prisma.widgetPasso
+    .create({ data: { unitId: unit.id, kommoUserId: u, passo } })
+    .catch(() => undefined);   // unique: já tinha marcado, e isso é sucesso
+  res.json({ ok: true });
+}
