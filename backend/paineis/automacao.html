@@ -191,11 +191,26 @@ $('entrar').addEventListener('submit', async (e) => {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: $('email').value, password: $('senha').value }),
   }).catch(() => null);
-  if (!r || !r.ok) return mostrarLogin(r ? 'e-mail ou senha não conferem' : 'não consegui falar com o servidor');
+  if (!r || !r.ok) return mostrarLogin(r ? await motivoDoErro(r) : 'não consegui falar com o servidor');
   $('entrar').hidden = true;
   $('painel').hidden = false;
   comecar();
 });
+
+/**
+ * Dizer o que de fato aconteceu. A primeira versão respondia "e-mail ou senha não conferem" para
+ * QUALQUER falha — inclusive servidor fora do ar e conta desativada —, e aí a pessoa fica tentando
+ * a senha achando que errou. Foi o que aconteceu com o João em 29/09/2026.
+ */
+async function motivoDoErro(r) {
+  const codigo = await r.json().then((d) => d?.error).catch(() => null);
+  if (codigo === 'account_disabled') return 'esta conta está desativada';
+  if (codigo === 'no_password_set') return 'esta conta não tem senha definida — entre pelo console';
+  if (codigo === 'invalid_credentials') return 'e-mail ou senha não conferem';
+  if (codigo === 'invalid_input') return 'e-mail em formato inválido';
+  if (r.status >= 500) return `o servidor falhou (${r.status}) — não é a sua senha`;
+  return `não consegui entrar (${r.status}${codigo ? `: ${codigo}` : ''})`;
+}
 
 function avisar(texto) {
   $('aviso').hidden = !texto;

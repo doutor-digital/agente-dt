@@ -191,7 +191,12 @@ async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
-    const todas = await prisma.unit.findMany({ where: { isActive: true } });
+    // SEM filtrar por `isActive`: quem decide é a automação, e só ela. Ao migrar este worker para a
+    // tela de automações eu pus um `isActive: true` aqui, achando que era melhoria — mas Divinópolis
+    // está `isActive: false` no banco do agente e mesmo assim é sincronizada com a franquia todo dia
+    // (medido em 29/09/2026). O filtro faria essa unidade ser pulada em silêncio no dia em que
+    // alguém a ligasse nesta automação, e "está ligado na tela mas não roda" é o pior tipo de bug.
+    const todas = await prisma.unit.findMany();
     const unidades = todas.filter((u) => automacaoLigada(u.slug, 'preenche-campos', process.env.PREENCHE_CAMPOS_SLUGS));
     if (!unidades.length) return;
     for (const u of unidades) {
