@@ -171,7 +171,7 @@ import {
   unitPausarHandler,
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
-import { widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
+import { widgetHorariosHandler, widgetMarcarHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
 import { faxinaConversasHandler, avisoNaoLidasHandler, preencheCamposHandler } from '../controllers/faxina.controller.js';
 import {
   cerebroPanoramaHandler,
@@ -269,6 +269,9 @@ apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);
 apiRouter.get('/public/widget/:slug/sync', widgetSyncHandler);
 apiRouter.get('/public/widget/:slug/paciente', widgetPacienteHandler);
 apiRouter.get('/public/widget/:slug/numeros', widgetNumerosHandler);
+// Marcar consulta de dentro do cartão (unidade sem Sofia): mesma chave por unidade, limite próprio de escrita.
+apiRouter.get('/public/widget/:slug/horarios', widgetHorariosHandler);
+apiRouter.post('/public/widget/:slug/marcar', widgetMarcarHandler);
 
 // Recepção decide alta e recuperação pela página /alta/:slug (mesmo código da unidade).
 // ALTA nunca é automática: o gatilho dela dispara um bot sem nenhuma condição.

@@ -40,7 +40,7 @@ function somarDias(dia: string, n: number): string {
   return new Date(t + n * 86_400_000).toISOString().slice(0, 10);
 }
 
-async function unidadeFresca(unitId: string): Promise<Unit | null> {
+export async function unidadeFresca(unitId: string): Promise<Unit | null> {
   return prisma.unit.findUnique({ where: { id: unitId } });
 }
 
@@ -81,7 +81,7 @@ const NOME_SITUACAO_CONSULTA = '✓ Situação da consulta';
 const NOME_PAGAMENTO_ANTECIPADO = '¤ Pagamento antecipado';
 const NOME_ST_RETORNO = 'RETORNO PÓS-TRATAMENTO';
 
-async function gradeDoDia(unit: Unit, dia: string) {
+export async function gradeDoDia(unit: Unit, dia: string) {
   const [r, blocks] = await Promise.all([
     SpineService.searchSchedules(unit, { initialDate: dia, endDate: dia }),
     prisma.agendaBlock.findMany({ where: { unitId: unit.id, dayLocal: dia } }),
@@ -321,7 +321,7 @@ function fim8(fone: string | null | undefined): string | null {
   return d.length >= 8 ? d.slice(-8) : null;
 }
 
-async function telefoneDoLead(
+export async function telefoneDoLead(
   kommo: KommoClient | undefined,
   leadId: number | undefined,
 ): Promise<string | null> {
@@ -671,7 +671,7 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
   });
 }
 
-async function consultaAtual(unit: Unit, leadId: number | undefined) {
+export async function consultaAtual(unit: Unit, leadId: number | undefined) {
   const c = await AgendaReconcileService.consultaDoLead(unit, leadId);
   if (!c || !c.idSchedule || c.estado === 'cancelada') return null;
   return { idSchedule: c.idSchedule, quando: c.quando, confirmada: c.estado === 'confirmada' };

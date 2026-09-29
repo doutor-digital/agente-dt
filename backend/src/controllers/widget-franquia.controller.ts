@@ -18,6 +18,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { SpineService, type SpineTreatment } from '../services/spine.service.js';
+import { horariosParaWidget, marcarPeloWidget } from '../lib/marcacao-widget.js';
 import { chaveConfere, janelaDoPeriodo, janelaExplicita, limparNome, resumirAuditoria, resumoDaAgenda, termosDeBusca } from '../lib/widget-agenda.js';
 import { chaveTelefone, normalizar } from '../lib/franquia-sync.js';
 
@@ -242,4 +243,52 @@ export async function widgetNumerosHandler(req: Request, res: Response): Promise
     logger.warn({ err, unit: unit.slug }, 'widget: falha ao ler os números do dashboard');
     res.status(502).json({ ...base, dashboard: true, error: 'dashboard indisponível' });
   }
+}
+
+
+// ── "Marcar consulta" de dentro do cartão (unidade sem Sofia) — ver lib/marcacao-widget.ts ──
+
+/** Escritas contam à parte e bem mais apertado que as leituras: 10 marcações por minuto por ip+unidade. */
+const marcacoes = new Map<string, { n: number; desde: number }>();
+function excedeuMarcacao(chave: string): boolean {
+  const agora = Date.now();
+  const t = marcacoes.get(chave);
+  if (!t || agora - t.desde > JANELA_MS) { marcacoes.set(chave, { n: 1, desde: agora }); return false; }
+  t.n += 1;
+  return t.n > 10;
+}
+
+/** GET /public/widget/:slug/horarios?de=AAAA-MM-DD&dias=7 → a grade livre que a Sofia também vê. */
+export async function widgetHorariosHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res);
+  if (!unit) return;
+  const hoje = new Date().toLocaleDateString('en-CA', { timeZone: unit.spineTimezone || 'America/Sao_Paulo' });
+  const pedido = typeof req.query.de === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.de) ? req.query.de : hoje;
+  const de = pedido < hoje ? hoje : pedido; // agenda no passado não existe
+  const dias = Math.min(Math.max(Number(req.query.dias) || 7, 1), 14);
+  if (!unit.spineEnabled || !unit.spineToken) { res.status(409).json({ error: 'franquia não conectada nesta unidade' }); return; }
+  res.json({ de, dias: await horariosParaWidget(unit, de, dias), fuso: unit.spineTimezone || 'America/Sao_Paulo' });
+}
+
+/** POST /public/widget/:slug/marcar {leadId, nome, telefone, data, hora, cidade?, uf?, responsavel?} */
+export async function widgetMarcarHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res);
+  if (!unit) return;
+  if (excedeuMarcacao(`${req.ip}:${unit.slug}`)) { res.status(429).json({ error: 'muitas marcações seguidas — aguarde um minuto' }); return; }
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const leadId = Number(b.leadId);
+  if (!Number.isInteger(leadId) || leadId <= 0) { res.status(400).json({ error: 'leadId inválido' }); return; }
+  const texto = (k: string, max = 120) => (typeof b[k] === 'string' ? (b[k] as string).slice(0, max) : '');
+  const r = await marcarPeloWidget(unit, {
+    leadId,
+    nome: texto('nome'),
+    telefone: texto('telefone', 30),
+    data: texto('data', 10),
+    hora: texto('hora', 5),
+    cidade: texto('cidade', 80) || null,
+    uf: texto('uf', 30) || null,
+    responsavel: texto('responsavel', 60) || null,
+    idCategory: Number.isInteger(Number(b.idCategory)) && Number(b.idCategory) > 0 ? Number(b.idCategory) : null,
+  });
+  res.status(r.ok ? 200 : 409).json(r);
 }
