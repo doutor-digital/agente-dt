@@ -113,6 +113,7 @@ add({
     campo('destinoChefe', '<<PREENCHER: número com 55+DDD, ou JID do grupo terminado em @g.us>>'),
     campo('destinoAlerta', '5563991021043'),
     campo('instanciaEvolution', 'alertas2'),
+    campo('porUnidade', 'sim'),   // 'sim' = uma mensagem por unidade; 'nao' = placar da rede + análise
   ]}, options: {} },
   id: 'config', name: 'Config', type: 'n8n-nodes-base.set', typeVersion: 3.4, position: [-40, 200],
 });
@@ -120,7 +121,7 @@ add({
 add({
   parameters: {
     method: 'GET',
-    url: "={{ $('Config').first().json.backendUrl }}/api/relatorios/rede-diaria",
+    url: "={{ $('Config').first().json.backendUrl }}/api/relatorios/rede-diaria{{ $('Config').first().json.porUnidade === 'sim' ? '?porUnidade=1' : '' }}",
     authentication: 'genericCredentialType',
     genericAuthType: 'httpHeaderAuth',
     options: { timeout: 900000 },   // 15 min: pior caso = 120 s × 14 unidades ÷ 2

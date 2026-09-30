@@ -153,7 +153,7 @@ Nada aqui manda mensagem à chefe. Os passos 1 a 3 não mandam mensagem a ningu�
 | Passo | O que fazer | O que você deve ver |
 |---|---|---|
 | **0** | Swagger local (seção 5A): clique nos casos de erro e no relatório incompleto | Você vê o formato e o contrato sem depender de nada |
-| **1** | No repo: `cd backend && npx tsx --test src/lib/relatorio-rede.test.ts` | `pass 37 · fail 0` |
+| **1** | No repo: `cd backend && npx tsx --test src/lib/relatorio-rede.test.ts` | `pass 38 · fail 0` |
 | **2** | Com a chave em mãos, da VPS ou de qualquer lugar: `curl -s -H "x-internal-key: $CHAVE" https://agente-vps.doutordigitalconsultoria.com/api/cerebro/unidades` | A lista de unidades com `franquiaLigada`. **Esta é a lista que define quem entra no relatório** |
 | **3** | **Uma unidade só**, texto puro: `curl -s -H "x-internal-key: $CHAVE" "…/api/relatorios/rede-diaria?unidades=doutor-hernia-serra&formato=texto"` | O bloco de uma unidade |
 | **4** | **Confira na mão:** abra a agenda da franquia da mesma unidade (`/agendamentos`, filtrando hoje) e compare **atendidas, faltas e marcadas** com o texto do passo 3 | Os números batem. **Se não bater, pare aqui.** É o teste que importa |

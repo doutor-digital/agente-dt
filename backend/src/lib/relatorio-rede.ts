@@ -367,6 +367,26 @@ export interface EntradaDasMensagens extends EntradaDoTexto {
   inicioJanela: string;
 }
 
+/**
+ * Uma mensagem por unidade (pedido do João, 30/09): placar do dia + análise de 7 dias só daquela
+ * unidade, com o nome dela no título. Ordem alfabética.
+ */
+export function montarPorUnidade(e: EntradaDasMensagens): string[] {
+  return [...e.unidades]
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+    .map((u) => {
+      const so = { ...e, unidades: [u], semFranquia: [] };
+      const placar = montarPlacar(so)
+        .replace('*RELATÓRIO DA REDE ·', `*${u.nome.toUpperCase()} ·`)
+        .replace(/\*REDE · 1 unidade\*\n/, '*HOJE*\n')
+        .replace(/\n\*POR UNIDADE\*\n[^\n]*\n/, '\n');
+      const junto = u.analise
+        ? `${placar}\n\n${montarAnalise(so).replace(/\n\*POR UNIDADE · 7 DIAS\*\n[^\n]*\n/, '\n')}`
+        : placar;
+      return junto.replace(/\n{3,}/g, '\n\n');
+    });
+}
+
 /** As mensagens na ordem de envio: placar do dia e, se houver dado do Kommo, a análise. */
 export function montarMensagens(e: EntradaDasMensagens): string[] {
   const msgs = [montarPlacar(e)];
@@ -401,9 +421,10 @@ export interface RespostaDoRelatorio {
  * o servidor de teste local (scripts/relatorio-rede-mock.ts) montem a resposta pelo MESMO código —
  * quem testa no Swagger local vê o contrato real, não uma imitação dele.
  */
-export function montarResposta(e: { data: string; inicioJanela: string; unidades: UnidadeRelatada[]; semFranquia: string[]; inicioMs: number }): RespostaDoRelatorio {
+export function montarResposta(e: { data: string; inicioJanela: string; unidades: UnidadeRelatada[]; semFranquia: string[]; inicioMs: number; porUnidade?: boolean }): RespostaDoRelatorio {
   const falhas = e.unidades.reduce((n, u) => n + u.falhas.length, 0);
-  const mensagens = montarMensagens({ data: e.data, inicioJanela: e.inicioJanela, unidades: e.unidades, semFranquia: e.semFranquia });
+  const entrada = { data: e.data, inicioJanela: e.inicioJanela, unidades: e.unidades, semFranquia: e.semFranquia };
+  const mensagens = e.porUnidade ? montarPorUnidade(entrada) : montarMensagens(entrada);
   return {
     data: e.data,
     geradoEm: new Date().toISOString(),

@@ -142,7 +142,7 @@ export async function relatorioRedeDiariaHandler(req: Request, res: Response): P
     });
     // a data do cabeçalho é a da primeira unidade: todas estão no mesmo fuso, salvo exceção
     const cal = fontesReais.calendario(escolhidas[0] as unknown as UnidadeParaColeta, data);
-    const resposta = montarResposta({ data: cal.hoje, inicioJanela: cal.inicioJanela, unidades, semFranquia: pedidas ? [] : semFranquia, inicioMs: inicio });
+    const resposta = montarResposta({ data: cal.hoje, inicioJanela: cal.inicioJanela, unidades, semFranquia: pedidas ? [] : semFranquia, inicioMs: inicio, porUnidade: req.query.porUnidade === '1' || req.query.porUnidade === 'true' });
 
     logger.info(
       { unidades: unidades.length, falhas: resposta.saude.falhas, semFranquia: semFranquia.length, ms: resposta.duracaoMs },
