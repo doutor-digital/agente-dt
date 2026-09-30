@@ -1,0 +1,537 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "Relat\u00f3rio da rede \u00b7 18h",
+        "version": "1.0.0",
+        "description": "Contrato da rota que alimenta o relat\u00f3rio das 18h da chefe. **S\u00f3 leitura**: nada aqui envia mensagem ou grava dado.\n\nAutentica\u00e7\u00e3o: cabe\u00e7alho `x-internal-key` com a `INTERNAL_API_KEY` do backend. Em **Authentication**, escolha `ChaveDeServico` e cole a chave."
+    },
+    "servers": [
+        {
+            "url": "http://localhost:3999/api",
+            "description": "Servidor de teste local (dados fict\u00edcios)"
+        },
+        {
+            "url": "https://agente-vps.doutordigitalconsultoria.com/api",
+            "description": "Produ\u00e7\u00e3o (a rota s\u00f3 existe depois do deploy)"
+        }
+    ],
+    "tags": [
+        {
+            "name": "Relat\u00f3rios",
+            "description": "Leitura. Entram com a chave de servi\u00e7o."
+        }
+    ],
+    "paths": {
+        "/relatorios/rede-diaria": {
+            "get": {
+                "tags": [
+                    "Relat\u00f3rios"
+                ],
+                "operationId": "relatorioRedeDiaria",
+                "summary": "Relat\u00f3rio das 18h da rede (franquia + Kommo)",
+                "description": "Duas partes: o **placar do dia** (agenda e tratamentos da franquia + leads novos do Kommo) e a **an\u00e1lise dos \u00faltimos 7 dias** (leads quentes e qualifica\u00e7\u00e3o, obje\u00e7\u00e3o principal, faltas e seus motivos, pagamento antecipado \u00d7 comparecimento, dos campos do cart\u00e3o no Kommo).\n\n**S\u00f3 leitura.** N\u00e3o envia mensagem, n\u00e3o grava campo, n\u00e3o move cart\u00e3o \u2014 pode chamar \u00e0 vontade.\n\nPode levar de 1 a alguns minutos na rede inteira (2 unidades por vez, teto de 75 s por unidade). Para testar r\u00e1pido, use `unidades=` com um slug s\u00f3.\n\n**Acesso:** chave de servi\u00e7o no cabe\u00e7alho `x-internal-key`, ou sess\u00e3o de super admin.",
+                "security": [
+                    {
+                        "ChaveDeServico": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "data",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                            "example": "2026-09-30"
+                        },
+                        "description": "Dia a relatar, AAAA-MM-DD. Padr\u00e3o: hoje no fuso da cl\u00ednica. Use para conferir um dia passado."
+                    },
+                    {
+                        "name": "unidades",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "example": "doutor-hernia-serra,doutor-hernia-maraba"
+                        },
+                        "description": "Slugs separados por v\u00edrgula. Padr\u00e3o: toda unidade ativa com a franquia ligada. Com este filtro o bloco \"sem franquia\" n\u00e3o aparece."
+                    },
+                    {
+                        "name": "formato",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "json",
+                                "texto"
+                            ],
+                            "default": "json"
+                        },
+                        "description": "`texto` devolve s\u00f3 a mensagem, em texto puro \u2014 bom para ler no navegador."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "O relat\u00f3rio. Com `formato=texto` vem `text/plain`.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RelatorioRede"
+                                }
+                            },
+                            "text/plain": {
+                                "schema": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "`data` fora do formato AAAA-MM-DD",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErroSimples"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Sem chave de servi\u00e7o v\u00e1lida e sem sess\u00e3o de super admin"
+                    },
+                    "404": {
+                        "description": "Nenhuma unidade eleg\u00edvel (slug errado, ou nenhuma com franquia ligada)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErroSimples"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Falha inesperada ao montar o relat\u00f3rio",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErroSimples"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cerebro/unidades": {
+            "get": {
+                "tags": [
+                    "Relat\u00f3rios"
+                ],
+                "operationId": "cerebroUnidades",
+                "summary": "Lista m\u00ednima de unidades e se a franquia est\u00e1 ligada",
+                "description": "Serve para conferir **quem entra no relat\u00f3rio** antes de rod\u00e1-lo: entra quem est\u00e1 com `franquiaLigada = true`.\n\nDevolve s\u00f3 slug, nome e se h\u00e1 token da franquia \u2014 nunca a credencial.\n\n**Acesso:** chave de servi\u00e7o ou sess\u00e3o logada.",
+                "security": [
+                    {
+                        "ChaveDeServico": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Lista de unidades",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "unidades": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "slug": {
+                                                        "type": "string"
+                                                    },
+                                                    "nome": {
+                                                        "type": "string"
+                                                    },
+                                                    "franquiaLigada": {
+                                                        "type": "boolean"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Sem chave de servi\u00e7o v\u00e1lida e sem sess\u00e3o de super admin"
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Contagem": {
+                "type": "object",
+                "description": "Agendamentos de uma categoria no dia. `marcadas` j\u00e1 desconta desmarcadas e remarcadas.",
+                "properties": {
+                    "marcadas": {
+                        "type": "integer",
+                        "example": 4
+                    },
+                    "atendidas": {
+                        "type": "integer",
+                        "example": 3
+                    },
+                    "faltas": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "abertas": {
+                        "type": "integer",
+                        "description": "Marcado ou confirmado, sem desfecho at\u00e9 agora",
+                        "example": 0
+                    },
+                    "desmarcadas": {
+                        "type": "integer",
+                        "example": 0
+                    }
+                }
+            },
+            "ResumoAgenda": {
+                "type": "object",
+                "properties": {
+                    "avaliacao": {
+                        "$ref": "#/components/schemas/Contagem"
+                    },
+                    "sessao": {
+                        "$ref": "#/components/schemas/Contagem"
+                    },
+                    "retorno": {
+                        "$ref": "#/components/schemas/Contagem"
+                    },
+                    "amanha": {
+                        "type": "object",
+                        "description": "Marcados para amanh\u00e3, sem os desmarcados",
+                        "properties": {
+                            "avaliacao": {
+                                "type": "integer"
+                            },
+                            "sessao": {
+                                "type": "integer"
+                            },
+                            "retorno": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "semCategoria": {
+                        "type": "integer",
+                        "description": "Agendamentos de hoje/amanh\u00e3 cuja categoria o relat\u00f3rio n\u00e3o reconhece. Ficam fora da conta."
+                    }
+                }
+            },
+            "UnidadeRelatada": {
+                "type": "object",
+                "properties": {
+                    "slug": {
+                        "type": "string",
+                        "example": "doutor-hernia-serra"
+                    },
+                    "nome": {
+                        "type": "string",
+                        "example": "Serra"
+                    },
+                    "leadsNovos": {
+                        "type": "integer",
+                        "nullable": true,
+                        "description": "null = o Kommo n\u00e3o respondeu (veja `falhas`)"
+                    },
+                    "agenda": {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/ResumoAgenda"
+                            }
+                        ],
+                        "nullable": true,
+                        "description": "null = a franquia n\u00e3o respondeu"
+                    },
+                    "tratamentos": {
+                        "type": "object",
+                        "nullable": true,
+                        "properties": {
+                            "fechadosHoje": {
+                                "type": "integer"
+                            },
+                            "valorHoje": {
+                                "type": "number",
+                                "description": "Soma do `price` dos tratamentos criados hoje e n\u00e3o cancelados"
+                            }
+                        }
+                    },
+                    "analise": {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/AnaliseUnidade"
+                            }
+                        ],
+                        "nullable": true,
+                        "description": "\u00daltimos 7 dias, dos campos do cart\u00e3o. null = o Kommo n\u00e3o respondeu"
+                    },
+                    "falhas": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "O que deu errado nesta unidade, em palavras de gente"
+                    }
+                }
+            },
+            "AnaliseUnidade": {
+                "type": "object",
+                "description": "Campos do cart\u00e3o no Kommo, janela de 7 dias. Todo motivo vem com `registradas` (quantos casos tinham o campo preenchido).",
+                "properties": {
+                    "leads": {
+                        "type": "object",
+                        "description": "Leads criados na janela, por \u2605 Qualifica\u00e7\u00e3o",
+                        "properties": {
+                            "total": {
+                                "type": "integer"
+                            },
+                            "quente": {
+                                "type": "integer"
+                            },
+                            "morno": {
+                                "type": "integer"
+                            },
+                            "frio": {
+                                "type": "integer"
+                            },
+                            "semQualificacao": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "objecoes": {
+                        "$ref": "#/components/schemas/Motivos"
+                    },
+                    "consultas": {
+                        "type": "object",
+                        "description": "Cart\u00f5es com \u25f7 Data da Consulta na janela, por \u2713 Situa\u00e7\u00e3o da consulta",
+                        "properties": {
+                            "total": {
+                                "type": "integer"
+                            },
+                            "atendidas": {
+                                "type": "integer"
+                            },
+                            "faltas": {
+                                "type": "integer"
+                            },
+                            "desmarcadas": {
+                                "type": "integer"
+                            },
+                            "abertas": {
+                                "type": "integer"
+                            },
+                            "semSituacao": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "antecipado": {
+                        "type": "object",
+                        "description": "`comprovante` = \u2713 Consulta pg antecipado; `disseQueIaPagar` = \u00a4 Pagamento antecipado. `pagou`/`naoPagou` cruzam o comprovante com a situa\u00e7\u00e3o.",
+                        "properties": {
+                            "comprovante": {
+                                "type": "integer"
+                            },
+                            "disseQueIaPagar": {
+                                "type": "integer"
+                            },
+                            "pagou": {
+                                "type": "object",
+                                "properties": {
+                                    "atendidas": {
+                                        "type": "integer"
+                                    },
+                                    "faltas": {
+                                        "type": "integer"
+                                    }
+                                }
+                            },
+                            "naoPagou": {
+                                "type": "object",
+                                "properties": {
+                                    "atendidas": {
+                                        "type": "integer"
+                                    },
+                                    "faltas": {
+                                        "type": "integer"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "faltas": {
+                        "$ref": "#/components/schemas/Motivos"
+                    },
+                    "naoFechou": {
+                        "$ref": "#/components/schemas/Motivos"
+                    },
+                    "camposAusentes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Campos que esta conta do Kommo n\u00e3o tem"
+                    },
+                    "truncado": {
+                        "type": "boolean",
+                        "description": "A lista do Kommo bateu no teto de p\u00e1ginas: os n\u00fameros s\u00e3o um piso"
+                    }
+                }
+            },
+            "Motivos": {
+                "type": "object",
+                "properties": {
+                    "registradas": {
+                        "type": "integer",
+                        "description": "Quantos casos tinham o motivo preenchido"
+                    },
+                    "ranking": {
+                        "type": "array",
+                        "items": {
+                            "type": "array",
+                            "prefixItems": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "example": [
+                            [
+                                "Sem condi\u00e7\u00f5es financeira",
+                                15
+                            ],
+                            [
+                                "Vai se organizar",
+                                5
+                            ]
+                        ]
+                    }
+                }
+            },
+            "RelatorioRede": {
+                "type": "object",
+                "required": [
+                    "data",
+                    "texto",
+                    "saude"
+                ],
+                "properties": {
+                    "data": {
+                        "type": "string",
+                        "example": "2026-09-30"
+                    },
+                    "geradoEm": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "duracaoMs": {
+                        "type": "integer",
+                        "example": 48211
+                    },
+                    "texto": {
+                        "type": "string",
+                        "description": "As mensagens juntas numa string s\u00f3. S\u00f3 negrito com `*`."
+                    },
+                    "mensagens": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Uma mensagem de WhatsApp por item: [placar do dia (franquia), an\u00e1lise dos 7 dias (Kommo)]. \u00c9 o que o n8n envia."
+                    },
+                    "janela": {
+                        "type": "object",
+                        "description": "Per\u00edodo da an\u00e1lise",
+                        "properties": {
+                            "de": {
+                                "type": "string",
+                                "example": "2026-09-24"
+                            },
+                            "ate": {
+                                "type": "string",
+                                "example": "2026-09-30"
+                            }
+                        }
+                    },
+                    "totaisAnalise": {
+                        "$ref": "#/components/schemas/AnaliseUnidade"
+                    },
+                    "totais": {
+                        "type": "object",
+                        "description": "Soma da rede: leads, avaliacao, sessao, retorno, amanha, tratamentos"
+                    },
+                    "unidades": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/UnidadeRelatada"
+                        }
+                    },
+                    "semFranquia": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Unidades ativas que ficaram de fora por n\u00e3o terem a franquia ligada"
+                    },
+                    "saude": {
+                        "type": "object",
+                        "description": "O n8n olha `completo`: se for false, avisa o Jo\u00e3o \u00e0 parte",
+                        "properties": {
+                            "unidades": {
+                                "type": "integer"
+                            },
+                            "falhas": {
+                                "type": "integer"
+                            },
+                            "completo": {
+                                "type": "boolean"
+                            }
+                        }
+                    }
+                }
+            },
+            "ErroSimples": {
+                "type": "object",
+                "properties": {
+                    "error": {
+                        "type": "string",
+                        "example": "data_invalida"
+                    },
+                    "detalhe": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "securitySchemes": {
+            "ChaveDeServico": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "x-internal-key",
+                "description": "A `INTERNAL_API_KEY` do backend."
+            }
+        }
+    }
+}

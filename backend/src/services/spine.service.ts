@@ -844,7 +844,7 @@ export const TRATAMENTOS_MESES_PADRAO = 12;
 
 export async function searchTreatments(
   unit: SpineUnit,
-  opts: { meses?: number } = {},
+  opts: { meses?: number; de?: string; ate?: string } = {},
 ): Promise<SpineResult<{ treatments: SpineTreatment[] }>> {
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
@@ -862,8 +862,10 @@ export async function searchTreatments(
       const { data } = await http.post<{
         data?: { data?: Array<Record<string, unknown>>; totalPages?: number };
       }>('/api/treatments/search', {
-        initialCreatedDate: dia(inicio),
-        endCreatedDate: dia(hoje),
+        // `de`/`ate` (AAAA-MM-DD) mandam quando vêm: o relatório da rede pede o dia exato e manda o fim
+        // como dia seguinte, porque não sabemos se este fim é exclusivo como o da agenda.
+        initialCreatedDate: opts.de ?? dia(inicio),
+        endCreatedDate: opts.ate ? somarDias(opts.ate, 1) : dia(hoje),
         pagination: { page, rowsPerPage: 100 },
       });
       const corpo = data?.data;

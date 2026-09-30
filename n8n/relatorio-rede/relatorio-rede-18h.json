@@ -1,0 +1,276 @@
+{
+  "name": "DD · Relatório da rede (18h)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## DD · Relatório da rede (18h)\n\n**NASCE DESLIGADO e em modo TESTE.** O texto vai só para o número do João.\n\nPara a chefe receber: nó *Config* → `modo` = `producao` e `destinoChefe` preenchido; depois ative o workflow.\n\nCredenciais a criar no n8n: ver README.md (2 do tipo Header Auth).",
+        "height": 240,
+        "width": 460
+      },
+      "id": "nota",
+      "name": "Leia antes de ativar",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -300,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 1-6"
+            }
+          ]
+        }
+      },
+      "id": "seg-a-sab-as-18h",
+      "name": "Seg a sáb às 18h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -300,
+        100
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "rodar-agora",
+      "name": "Rodar agora (teste)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "modo",
+              "name": "modo",
+              "value": "teste",
+              "type": "string"
+            },
+            {
+              "id": "backendurl",
+              "name": "backendUrl",
+              "value": "https://agente-vps.doutordigitalconsultoria.com",
+              "type": "string"
+            },
+            {
+              "id": "destinoteste",
+              "name": "destinoTeste",
+              "value": "5563991021043",
+              "type": "string"
+            },
+            {
+              "id": "destinochefe",
+              "name": "destinoChefe",
+              "value": "<<PREENCHER: número com 55+DDD, ou JID do grupo terminado em @g.us>>",
+              "type": "string"
+            },
+            {
+              "id": "destinoalerta",
+              "name": "destinoAlerta",
+              "value": "5563991021043",
+              "type": "string"
+            },
+            {
+              "id": "instanciaevolution",
+              "name": "instanciaEvolution",
+              "value": "alertas2",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -40,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.backendUrl }}/api/relatorios/rede-diaria",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PREENCHER",
+          "name": "Agente · chave de serviço (x-internal-key)"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "id": "gerar",
+      "name": "Gerar relatório",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Escolhe o destino e prepara a(s) mensagem(ns). NÃO envia nada: o envio é o nó seguinte.\nconst cfg = $('Config').first().json;\nconst r = $input.first().json;\n\nif (!r || typeof r.texto !== 'string' || !r.texto.trim()) {\n  throw new Error('O backend respondeu sem texto. Resposta: ' + JSON.stringify(r).slice(0, 300));\n}\n\nconst producao = cfg.modo === 'producao';\nconst destino = producao ? cfg.destinoChefe : cfg.destinoTeste;\n\n// Trava: em produção, recusa mandar se o destino da chefe ainda é o marcador.\nif (!destino || /PREENCHER/i.test(String(destino))) {\n  throw new Error('Destino vazio ou ainda como marcador (' + (producao ? 'destinoChefe' : 'destinoTeste') + '). Preencha no nó Config.');\n}\n\n// Uma mensagem de WhatsApp por item: [placar do dia, análise dos 7 dias]. Backend antigo sem\n// `mensagens` cai no `texto` inteiro.\nconst msgs = Array.isArray(r.mensagens) && r.mensagens.length ? r.mensagens : [r.texto];\nconst saida = msgs.map((m, i) => ({ json: {\n  numero: String(destino),\n  texto: (producao || i > 0 ? '' : '🧪 *TESTE* — este texto iria para a chefe. Nada foi enviado a ela.\\n\\n') + m,\n  tipo: i === 0 ? 'relatorio' : 'analise',\n}}));\n\n// Saiu incompleto (alguma fonte falhou)? O texto já traz o bloco ATENÇÃO para a chefe; o João\n// recebe à parte o detalhe, para consertar antes da próxima vez.\nconst s = r.saude || {};\nif (s.completo === false) {\n  const falhas = [];\n  // o João recebe o erro técnico (detalhes); a chefe só vê a versão em palavras de gente\n  for (const u of (r.unidades || [])) for (const f of (u.detalhes && u.detalhes.length ? u.detalhes : (u.falhas || []))) falhas.push('• ' + u.nome + ': ' + f);\n  saida.push({ json: {\n    numero: String(cfg.destinoAlerta),\n    texto: '⚠️ *Relatório das 18h saiu INCOMPLETO* (' + s.falhas + ' falha(s) em ' + s.unidades + ' unidades)\\n\\n' + falhas.join('\\n').slice(0, 1500),\n    tipo: 'aviso-incompleto',\n  }});\n}\nreturn saida;\n"
+      },
+      "id": "montar-envio",
+      "name": "Montar envio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// A chamada ao backend falhou (rede, 401, 500, timeout). A chefe NÃO recebe nada; o João é avisado.\nconst cfg = $('Config').first().json;\nconst e = $input.first().json;\nconst detalhe = (e.error && (e.error.message || e.error.description)) || e.message || JSON.stringify(e).slice(0, 300);\nreturn [{ json: {\n  numero: String(cfg.destinoAlerta),\n  texto: '❌ *Relatório das 18h FALHOU* e não foi enviado à chefe.\\n\\nMotivo: ' + String(detalhe).slice(0, 400) +\n         '\\n\\nRode de novo pelo nó \"Rodar agora (teste)\" depois de conferir o backend.',\n  tipo: 'aviso-falha',\n}}];\n"
+      },
+      "id": "aviso-falha",
+      "name": "Montar aviso de falha",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://evolution_api:8080/message/sendText/{{ $('Config').first().json.instanciaEvolution }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: $json.numero, text: $json.texto, linkPreview: false }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1500
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PREENCHER",
+          "name": "Evolution · alertas2 (apikey)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000,
+      "id": "enviar",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        760,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Seg a sáb às 18h": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rodar agora (teste)": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Gerar relatório",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar relatório": {
+      "main": [
+        [
+          {
+            "node": "Montar envio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Montar aviso de falha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar envio": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar aviso de falha": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "pinData": {},
+  "meta": {
+    "gerado": "node n8n/relatorio-rede/build-workflow.mjs"
+  }
+}
