@@ -173,6 +173,7 @@ import {
 } from '../controllers/pausa.controller.js';
 import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
 import { faxinaConversasHandler, avisoNaoLidasHandler, preencheCamposHandler } from '../controllers/faxina.controller.js';
+import { relatorioRedeDiariaHandler } from '../controllers/relatorio-rede.controller.js';
 import {
   cerebroPanoramaHandler,
   cerebroPacienteHandler,
@@ -310,6 +311,11 @@ apiRouter.get(
 // chave. Simula por padrão; só fecha de verdade com `simular: false` no corpo.
 apiRouter.post('/faxina/conversas', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), faxinaConversasHandler);
 apiRouter.post('/alertas/nao-lidas', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), avisoNaoLidasHandler);
+
+// O relatório das 18h da rede (chefe). SÓ LEITURA: devolve texto e números, não envia nada — o n8n
+// é quem manda, depois de o texto ser aprovado. Acima do requireAuth pelo mesmo motivo das rotas
+// de cima: com chave de serviço, o 401 global viria antes de alguém olhar a chave.
+apiRouter.get('/relatorios/rede-diaria', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), relatorioRedeDiariaHandler);
 apiRouter.post('/campos/preencher', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), preencheCamposHandler);
 
 apiRouter.use(requireAuth);

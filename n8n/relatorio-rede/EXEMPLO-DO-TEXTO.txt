@@ -1,0 +1,51 @@
+# DADOS FICTÍCIOS — só para ver o formato. Nenhum número abaixo é real.
+
+📊 *RELATÓRIO DA REDE · 30/09 · 18h*
+
+*REDE · 6 unidades*
+Leads novos: 32
+Avaliações: 25 marcadas · 17 atendidas · 6 faltas · 2 em aberto · 0 desmarcadas
+Comparecimento: 74% (17 de 23)
+Sessões: 84 atendidas · 7 faltas · 0 em aberto
+Tratamentos fechados hoje: 4 · R$ 10.000
+Amanhã: 23 avaliações · 0 sessões
+
+*POR UNIDADE*
+*Balsas* · 4 leads · aval. 2/3 (1 falta) · sessões 12/12 · amanhã 3 aval.
+*Canaã* · franquia indisponível · 3 leads
+*Imperatriz* · 11 leads · aval. 5/8 (2 faltas) · sessões 31/34 · trat. 2 (R$ 5.200) · amanhã 7 aval.
+*Marabá* · 8 leads · aval. 4/4 · sessões 18/19 · trat. 1 (R$ 2.400) · amanhã 5 aval.
+*Serra* · 6 leads · aval. 3/4 (1 falta) · sessões 14/16 · trat. 1 (R$ 2.400) · amanhã 4 aval.
+*Taubaté* · aval. 3/6 (2 faltas) · sessões 9/10 · amanhã 4 aval.
+
+*ATENÇÃO*
+• Canaã: agenda da franquia não respondeu (acesso recusado)
+• Canaã: tratamentos da franquia não responderam (acesso recusado)
+• Taubaté: Kommo não respondeu (acesso recusado)
+• Sem franquia conectada, fora deste relatório: Petrópolis, Divinópolis
+
+Como ler: "aval. 3/4" = 3 atendidas de 4 marcadas. Em aberto = marcado ou confirmado, sem desfecho até as 18h.
+Fonte: agenda e tratamentos da franquia; leads do Kommo.
+
+🔎 *ANÁLISE · ÚLTIMOS 7 DIAS (24/09 a 30/09)*
+
+*Leads:* 320 · quentes 66 (21%) · mornos 125 · frios 94 · sem qualificação 35
+*Consultas do período:* 93 · atendidas 60 · faltaram 19 · desmarcaram 10 · em aberto 4
+*Pagamento antecipado:* 32 com comprovante (34% das consultas) · 45 disseram que iam pagar
+*Comparecimento:* quem pagou antes 97% (31 de 32) · quem não pagou 62% (29 de 47)
+*Principal objeção (não agendou):* Sem condições financeira 15 · Vai se organizar 5 · Outra cidade 4 · registrado em 30 de 320 leads sem consulta
+*Por que faltaram:* Esqueceu 6 · Trabalho 5 · registrado em 11 de 19 faltas
+*Por que não fecharam tratamento:* Achou caro 10 · registrado em 10 de 60 atendidos que não fecharam
+
+*POR UNIDADE · 7 DIAS*
+*Balsas* · 34 leads, 8 quentes · 12 consultas: 9 atend., 3 faltas, 0 desm. · 0 com comprovante · objeção sem registro (0 de 34)
+*Canaã* · 17 leads, 5 quentes · 5 consultas: 4 atend., 1 falta, 0 desm. · 4 com comprovante · objeção: Plano de Saúde (2 de 17 registradas)
+*Imperatriz* · 84 leads, 22 quentes · 35 consultas: 22 atend., 9 faltas, 0 desm. · 13 com comprovante · objeção: Sem condições financeira (16 de 84 registradas)
+*Marabá* · 53 leads, 18 quentes · 32 consultas: 24 atend., 6 faltas, 2 desm. · 15 com comprovante · objeção: Sem condições financeira (11 de 53 registradas)
+*Serra* · 132 leads, 13 quentes · 9 consultas: 1 atend., 0 faltas, 8 desm. · 0 com comprovante · objeção: Sem interesse (1 de 132 registradas)
+*Taubaté* · Kommo indisponível
+
+*ATENÇÃO*
+• Balsas: a conta não tem ⊘ Motivo do no-show
+
+Fonte: campos do cartão no Kommo. Situação da consulta copiada da franquia pelo sincronizador. Pagou antes = comprovante marcado; "disseram que iam pagar" não conta como pago.

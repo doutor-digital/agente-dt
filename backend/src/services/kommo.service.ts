@@ -1318,6 +1318,36 @@ export class KommoClient {
     return all;
   }
 
+  /**
+   * Leads criados OU mexidos numa janela (epoch em segundos), com os campos. Diferente de
+   * `listLeadsCriadosEntre`, avisa quando bateu no teto de páginas (`truncado`), porque quem soma
+   * precisa saber que a lista veio cortada — senão o número sai menor e parece resultado.
+   * O Kommo não filtra por campo personalizado (testado: `filter[custom_fields_values]` dá 400);
+   * por isso "consulta nos últimos 7 dias" vem de "mexido nos últimos 7 dias" + filtro local.
+   */
+  async listLeadsNaJanela(
+    campo: 'created_at' | 'updated_at',
+    deUnix: number,
+    ateUnix: number,
+    maxPaginas = 8,
+  ): Promise<{ leads: KommoLead[]; truncado: boolean }> {
+    const leads: KommoLead[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } } | ''>('/leads', {
+          // mais recente primeiro: se bater no teto, o corte leva o mais antigo, nunca o de hoje
+          params: { limit: 250, page, [`filter[${campo}][from]`]: deUnix, [`filter[${campo}][to]`]: ateUnix, [`order[${campo}]`]: 'desc' },
+        });
+        const lote = (data && data._embedded?.leads) || [];
+        leads.push(...lote);
+        if (lote.length < 250) return { leads, truncado: false };
+      } catch (err) {
+        wrapAxiosError(err, `listLeadsNaJanela(${campo}, ${deUnix}, ${ateUnix}, p${page})`);
+      }
+    }
+    return { leads, truncado: true };
+  }
+
   async updateLeadTitleWithDate(
     leadId: number,
     nome: string,

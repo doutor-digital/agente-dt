@@ -38,6 +38,8 @@ function paraOpenApi(path: string): { path: string; params: string[] } {
 
 function areaDe(path: string): string {
   const regras: Array<[RegExp, string]> = [
+    [/^\/relatorios/, 'Relatórios'],
+    [/^\/cerebro/, 'Relatórios'],
     [/^\/webhooks/, 'Webhooks'],
     [/^\/auth/, 'Autenticação'],
     [/^\/(debug|health)/, 'Diagnóstico'],
@@ -55,6 +57,7 @@ function areaDe(path: string): string {
 function acessoDe(path: string): string {
   if (path.startsWith('/webhooks')) return 'Aberto (assinatura do serviço externo)';
   if (path === '/health') return 'Aberto';
+  if (path.startsWith('/relatorios') || path === '/cerebro/unidades') return 'Chave de serviço (x-internal-key) ou super admin';
   if (path.startsWith('/debug') || path.startsWith('/users') || path.startsWith('/global-actions')) {
     return 'Super admin';
   }
@@ -88,15 +91,179 @@ const DESCRICOES: Record<string, string> = {
   'GET /webhooks/:unitSlug/meta': 'Verificação do webhook exigida pela Meta.',
 };
 
+
+/* ───────────── rotas com contrato detalhado ─────────────
+ * O gerador acima lê o Express e só sabe "existe esta rota". Para as que o n8n chama com chave de
+ * serviço isso não basta: quem testa precisa ver os parâmetros, o cabeçalho e o formato da resposta.
+ * Cada entrada aqui SOBREPÕE a genérica da mesma rota. */
+
+const CHAVE = [{ ChaveDeServico: [] }];
+
+const CONTAGEM = {
+  type: 'object',
+  description: 'Agendamentos de uma categoria no dia. `marcadas` já desconta desmarcadas e remarcadas.',
+  properties: {
+    marcadas: { type: 'integer', example: 4 },
+    atendidas: { type: 'integer', example: 3 },
+    faltas: { type: 'integer', example: 1 },
+    abertas: { type: 'integer', description: 'Marcado ou confirmado, sem desfecho até agora', example: 0 },
+    desmarcadas: { type: 'integer', example: 0 },
+  },
+};
+
+export const SCHEMAS_RELATORIO = {
+  Contagem: CONTAGEM,
+  ResumoAgenda: {
+    type: 'object',
+    properties: {
+      avaliacao: { $ref: '#/components/schemas/Contagem' },
+      sessao: { $ref: '#/components/schemas/Contagem' },
+      retorno: { $ref: '#/components/schemas/Contagem' },
+      amanha: {
+        type: 'object',
+        description: 'Marcados para amanhã, sem os desmarcados',
+        properties: { avaliacao: { type: 'integer' }, sessao: { type: 'integer' }, retorno: { type: 'integer' } },
+      },
+      semCategoria: { type: 'integer', description: 'Agendamentos de hoje/amanhã cuja categoria o relatório não reconhece. Ficam fora da conta.' },
+    },
+  },
+  UnidadeRelatada: {
+    type: 'object',
+    properties: {
+      slug: { type: 'string', example: 'doutor-hernia-serra' },
+      nome: { type: 'string', example: 'Serra' },
+      leadsNovos: { type: 'integer', nullable: true, description: 'null = o Kommo não respondeu (veja `falhas`)' },
+      agenda: { allOf: [{ $ref: '#/components/schemas/ResumoAgenda' }], nullable: true, description: 'null = a franquia não respondeu' },
+      tratamentos: {
+        type: 'object', nullable: true,
+        properties: { fechadosHoje: { type: 'integer' }, valorHoje: { type: 'number', description: 'Soma do `price` dos tratamentos criados hoje e não cancelados' } },
+      },
+      analise: { allOf: [{ $ref: '#/components/schemas/AnaliseUnidade' }], nullable: true, description: 'Últimos 7 dias, dos campos do cartão. null = o Kommo não respondeu' },
+      falhas: { type: 'array', items: { type: 'string' }, description: 'O que deu errado nesta unidade, em palavras de gente' },
+    },
+  },
+  AnaliseUnidade: {
+    type: 'object',
+    description: 'Campos do cartão no Kommo, janela de 7 dias. Todo motivo vem com `registradas` (quantos casos tinham o campo preenchido).',
+    properties: {
+      leads: { type: 'object', description: 'Leads criados na janela, por ★ Qualificação', properties: { total: { type: 'integer' }, quente: { type: 'integer' }, morno: { type: 'integer' }, frio: { type: 'integer' }, semQualificacao: { type: 'integer' } } },
+      objecoes: { $ref: '#/components/schemas/Motivos' },
+      consultas: { type: 'object', description: 'Cartões com ◷ Data da Consulta na janela, por ✓ Situação da consulta', properties: { total: { type: 'integer' }, atendidas: { type: 'integer' }, faltas: { type: 'integer' }, desmarcadas: { type: 'integer' }, abertas: { type: 'integer' }, semSituacao: { type: 'integer' } } },
+      antecipado: { type: 'object', description: '`comprovante` = ✓ Consulta pg antecipado; `disseQueIaPagar` = ¤ Pagamento antecipado. `pagou`/`naoPagou` cruzam o comprovante com a situação.', properties: {
+        comprovante: { type: 'integer' }, disseQueIaPagar: { type: 'integer' },
+        pagou: { type: 'object', properties: { atendidas: { type: 'integer' }, faltas: { type: 'integer' } } },
+        naoPagou: { type: 'object', properties: { atendidas: { type: 'integer' }, faltas: { type: 'integer' } } } } },
+      faltas: { $ref: '#/components/schemas/Motivos' },
+      naoFechou: { $ref: '#/components/schemas/Motivos' },
+      camposAusentes: { type: 'array', items: { type: 'string' }, description: 'Campos que esta conta do Kommo não tem' },
+      truncado: { type: 'boolean', description: 'A lista do Kommo bateu no teto de páginas: os números são um piso' },
+    },
+  },
+  Motivos: {
+    type: 'object',
+    properties: {
+      registradas: { type: 'integer', description: 'Quantos casos tinham o motivo preenchido' },
+      ranking: { type: 'array', items: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'integer' }] }, example: [['Sem condições financeira', 15], ['Vai se organizar', 5]] },
+    },
+  },
+  RelatorioRede: {
+    type: 'object',
+    required: ['data', 'texto', 'saude'],
+    properties: {
+      data: { type: 'string', example: '2026-09-30' },
+      geradoEm: { type: 'string', format: 'date-time' },
+      duracaoMs: { type: 'integer', example: 48211 },
+      texto: { type: 'string', description: 'As mensagens juntas numa string só. Só negrito com `*`.' },
+      mensagens: { type: 'array', items: { type: 'string' }, description: 'Uma mensagem de WhatsApp por item: [placar do dia (franquia), análise dos 7 dias (Kommo)]. É o que o n8n envia.' },
+      janela: { type: 'object', description: 'Período da análise', properties: { de: { type: 'string', example: '2026-09-24' }, ate: { type: 'string', example: '2026-09-30' } } },
+      totaisAnalise: { $ref: '#/components/schemas/AnaliseUnidade' },
+      totais: { type: 'object', description: 'Soma da rede: leads, avaliacao, sessao, retorno, amanha, tratamentos' },
+      unidades: { type: 'array', items: { $ref: '#/components/schemas/UnidadeRelatada' } },
+      semFranquia: { type: 'array', items: { type: 'string' }, description: 'Unidades ativas que ficaram de fora por não terem a franquia ligada' },
+      saude: {
+        type: 'object',
+        description: 'O n8n olha `completo`: se for false, avisa o João à parte',
+        properties: { unidades: { type: 'integer' }, falhas: { type: 'integer' }, completo: { type: 'boolean' } },
+      },
+    },
+  },
+  ErroSimples: {
+    type: 'object',
+    properties: { error: { type: 'string', example: 'data_invalida' }, detalhe: { type: 'string' } },
+  },
+};
+
+const R401 = { description: 'Sem chave de serviço válida e sem sessão de super admin' };
+
+export const ROTAS_DETALHADAS: Record<string, Record<string, unknown>> = {
+  '/relatorios/rede-diaria': {
+    get: {
+      tags: ['Relatórios'],
+      operationId: 'relatorioRedeDiaria',
+      summary: 'Relatório das 18h da rede (franquia + Kommo)',
+      description:
+        'Duas partes: o **placar do dia** (agenda e tratamentos da franquia + leads novos do Kommo) e a **análise dos últimos 7 dias** ' +
+        '(leads quentes e qualificação, objeção principal, faltas e seus motivos, pagamento antecipado × comparecimento, dos campos do cartão no Kommo).\n\n' +
+        '**Só leitura.** Não envia mensagem, não grava campo, não move cartão — pode chamar à vontade.\n\n' +
+        'Pode levar de 1 a alguns minutos na rede inteira (2 unidades por vez, teto de 75 s por unidade). ' +
+        'Para testar rápido, use `unidades=` com um slug só.\n\n' +
+        '**Acesso:** chave de serviço no cabeçalho `x-internal-key`, ou sessão de super admin.',
+      security: CHAVE,
+      parameters: [
+        { name: 'data', in: 'query', required: false, schema: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', example: '2026-09-30' },
+          description: 'Dia a relatar, AAAA-MM-DD. Padrão: hoje no fuso da clínica. Use para conferir um dia passado.' },
+        { name: 'unidades', in: 'query', required: false, schema: { type: 'string', example: 'doutor-hernia-serra,doutor-hernia-maraba' },
+          description: 'Slugs separados por vírgula. Padrão: toda unidade ativa com a franquia ligada. Com este filtro o bloco "sem franquia" não aparece.' },
+        { name: 'formato', in: 'query', required: false, schema: { type: 'string', enum: ['json', 'texto'], default: 'json' },
+          description: '`texto` devolve só a mensagem, em texto puro — bom para ler no navegador.' },
+      ],
+      responses: {
+        '200': {
+          description: 'O relatório. Com `formato=texto` vem `text/plain`.',
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/RelatorioRede' } },
+            'text/plain': { schema: { type: 'string' } },
+          },
+        },
+        '400': { description: '`data` fora do formato AAAA-MM-DD', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErroSimples' } } } },
+        '401': R401,
+        '404': { description: 'Nenhuma unidade elegível (slug errado, ou nenhuma com franquia ligada)', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErroSimples' } } } },
+        '500': { description: 'Falha inesperada ao montar o relatório', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErroSimples' } } } },
+      },
+    },
+  },
+  '/cerebro/unidades': {
+    get: {
+      tags: ['Relatórios'],
+      operationId: 'cerebroUnidades',
+      summary: 'Lista mínima de unidades e se a franquia está ligada',
+      description:
+        'Serve para conferir **quem entra no relatório** antes de rodá-lo: entra quem está com `franquiaLigada = true`.\n\n' +
+        'Devolve só slug, nome e se há token da franquia — nunca a credencial.\n\n**Acesso:** chave de serviço ou sessão logada.',
+      security: CHAVE,
+      responses: {
+        '200': {
+          description: 'Lista de unidades',
+          content: { 'application/json': { schema: { type: 'object', properties: { unidades: { type: 'array', items: {
+            type: 'object', properties: { slug: { type: 'string' }, nome: { type: 'string' }, franquiaLigada: { type: 'boolean' } } } } } } } },
+        },
+        '401': R401,
+      },
+    },
+  },
+};
+
 export interface OpenApiDoc {
   openapi: string;
   info: Record<string, unknown>;
   servers: Array<{ url: string; description?: string }>;
   tags: Array<{ name: string; description?: string }>;
   paths: Record<string, Record<string, unknown>>;
+  components?: Record<string, unknown>;
 }
 
 const AREAS_DESC: Record<string, string> = {
+  Relatórios: 'Relatórios para a gestão e a lista de conferência. Todas de leitura. Entram com a chave de serviço (`x-internal-key`).',
   Webhooks: 'Portas de entrada. Quem chama é o Kommo, a Meta e o Instagram — não você.',
   Autenticação: 'Entrar e sair do painel.',
   Diagnóstico: 'Use quando algo "não funciona" e você não sabe por quê.',
@@ -142,6 +309,11 @@ export function gerarOpenApi(router: Router, baseUrl: string): OpenApiDoc {
     };
   }
 
+  for (const [caminho, ops] of Object.entries(ROTAS_DETALHADAS)) {
+    paths[caminho] = { ...(paths[caminho] ?? {}), ...ops };
+    areasUsadas.add('Relatórios');
+  }
+
   return {
     openapi: '3.1.0',
     info: {
@@ -150,7 +322,7 @@ export function gerarOpenApi(router: Router, baseUrl: string): OpenApiDoc {
       description:
         'API do sistema que atende os pacientes no WhatsApp, conecta ao Kommo e à agenda da franquia.\n\n' +
         '**Autenticação:** o painel entra em `POST /auth/login` e recebe um cookie de sessão assinado. ' +
-        'Toda chamada seguinte envia esse cookie — não há token no cabeçalho.\n\n' +
+        'Toda chamada seguinte envia esse cookie. **Exceção:** as rotas da área *Relatórios* e as do cérebro/faxina aceitam, no lugar do cookie, a chave de serviço no cabeçalho `x-internal-key`.\n\n' +
         '**Segredos** (chaves de API, tokens) sempre voltam mascarados, com um mapa `_hasSecrets` ' +
         'dizendo apenas se cada um está preenchido.\n\n' +
         '_Esta página é gerada a partir das rotas reais do servidor — se a rota existe, ela aparece aqui._',
@@ -158,5 +330,40 @@ export function gerarOpenApi(router: Router, baseUrl: string): OpenApiDoc {
     servers: [{ url: baseUrl, description: 'Produção' }],
     tags: [...areasUsadas].sort().map((name) => ({ name, description: AREAS_DESC[name] })),
     paths,
+    components: {
+      schemas: SCHEMAS_RELATORIO,
+      securitySchemes: {
+        ChaveDeServico: {
+          type: 'apiKey', in: 'header', name: 'x-internal-key',
+          description: 'A `INTERNAL_API_KEY` do backend. É a mesma que o n8n usa na faxina das 20h.',
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Só o contrato dos Relatórios, sem ler o Express. Serve ao servidor de teste local e ao arquivo
+ * exportado para Postman/Insomnia/Bruno — lugares que não têm (nem devem ter) o backend inteiro de pé.
+ */
+export function gerarOpenApiRelatorios(servers: Array<{ url: string; description?: string }>): OpenApiDoc {
+  return {
+    openapi: '3.1.0',
+    info: {
+      title: 'Relatório da rede · 18h',
+      version: '1.0.0',
+      description:
+        'Contrato da rota que alimenta o relatório das 18h da chefe. **Só leitura**: nada aqui envia mensagem ou grava dado.\n\n' +
+        'Autenticação: cabeçalho `x-internal-key` com a `INTERNAL_API_KEY` do backend. Em **Authentication**, escolha `ChaveDeServico` e cole a chave.',
+    },
+    servers,
+    tags: [{ name: 'Relatórios', description: 'Leitura. Entram com a chave de serviço.' }],
+    paths: ROTAS_DETALHADAS as OpenApiDoc['paths'],
+    components: {
+      schemas: SCHEMAS_RELATORIO,
+      securitySchemes: {
+        ChaveDeServico: { type: 'apiKey', in: 'header', name: 'x-internal-key', description: 'A `INTERNAL_API_KEY` do backend.' },
+      },
+    },
   };
 }
