@@ -33,10 +33,10 @@ import {
 const TZ_PADRAO = 'America/Sao_Paulo';
 
 /** Conta de teste e unidade que não é Doutor Hérnia: nunca entram no relatório da chefe. */
-const SEMPRE_FORA = new Set(['default', 'laboratorio-kommo']);
+export const SEMPRE_FORA = new Set(['default', 'laboratorio-kommo']);
 
 /** `imperatriz-resgate` e cia. dividem a conta da `doutor-hernia-imperatriz`: contar os dois dobraria. */
-const SUFIXO_DE_CONTA_COMPARTILHADA = /-(resgate|tratamento|financeiro)$/;
+export const SUFIXO_DE_CONTA_COMPARTILHADA = /-(resgate|tratamento|financeiro)$/;
 
 const somarDias = (aaaammdd: string, n: number) => new Date(Date.parse(`${aaaammdd}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
