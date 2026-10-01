@@ -86,6 +86,12 @@
               "name": "instanciaEvolution",
               "value": "alertas2",
               "type": "string"
+            },
+            {
+              "id": "porunidade",
+              "name": "porUnidade",
+              "value": "sim",
+              "type": "string"
             }
           ]
         },
@@ -103,7 +109,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ $('Config').first().json.backendUrl }}/api/relatorios/rede-diaria",
+        "url": "={{ $('Config').first().json.backendUrl }}/api/relatorios/rede-diaria{{ $('Config').first().json.porUnidade === 'sim' ? '?porUnidade=1' : '' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {

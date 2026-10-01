@@ -159,7 +159,7 @@ app.get('/api/relatorios/rede-diaria', guarda, async (req, res) => {
 
   const unidades = await coletarRede(escolhidas as unknown as UnidadeParaColeta[], fontes, { data, simultaneas: 2, pausaMs: 0 });
   const cal = fontes.calendario(escolhidas[0] as unknown as UnidadeParaColeta, data);
-  const resposta = montarResposta({ data: cal.hoje, inicioJanela: cal.inicioJanela, unidades, semFranquia: pedidas ? [] : SEM_FRANQUIA, inicioMs: inicio });
+  const resposta = montarResposta({ data: cal.hoje, inicioJanela: cal.inicioJanela, unidades, semFranquia: pedidas ? [] : SEM_FRANQUIA, inicioMs: inicio, porUnidade: req.query.porUnidade === '1' || req.query.porUnidade === 'true' });
   if (req.query.formato === 'texto') { res.type('text/plain; charset=utf-8').send(resposta.texto); return; }
   res.json(resposta);
 });

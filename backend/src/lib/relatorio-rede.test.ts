@@ -8,6 +8,7 @@ import {
   categoriaDe,
   dataValida,
   montarMensagens,
+  montarPorUnidade,
   motivoLegivel,
   coletarRede,
   coletarUnidade,
@@ -176,6 +177,15 @@ test('texto: 17 unidades — cada mensagem fica abaixo de 4.000 caracteres', () 
   const msgs = montarMensagens({ data: HOJE, inicioJanela: '2026-09-24', unidades: muitas, semFranquia: [] });
   assert.equal(msgs.length, 2);
   for (const m of msgs) assert.ok(m.length < 4000, `mensagem com ${m.length} caracteres`);
+});
+
+test('por unidade: uma mensagem por unidade, com o nome dela no título e sem a linha da rede', () => {
+  const msgs = montarPorUnidade({ data: HOJE, inicioJanela: '2026-09-24', unidades: [unidade('Serra', { analise: ANALISE_CHEIA }), unidade('Balsas')], semFranquia: [] });
+  assert.equal(msgs.length, 2);
+  assert.ok(msgs[0]!.startsWith('📊 *BALSAS · 30/09 · 18h*'));
+  assert.ok(msgs[1]!.startsWith('📊 *SERRA · 30/09 · 18h*'));
+  assert.ok(msgs[1]!.includes('ÚLTIMOS 7 DIAS'), 'a análise vai junto');
+  assert.ok(!msgs[1]!.includes('POR UNIDADE'), 'sem o bloco por unidade');
 });
 
 test('mensagens: sem dado do Kommo em nenhuma unidade, sai só o placar', () => {

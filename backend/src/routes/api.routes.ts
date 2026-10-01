@@ -174,6 +174,7 @@ import {
 import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
 import { faxinaConversasHandler, avisoNaoLidasHandler, preencheCamposHandler } from '../controllers/faxina.controller.js';
 import { relatorioRedeDiariaHandler } from '../controllers/relatorio-rede.controller.js';
+import { relatorioMensalRedeHandler } from '../controllers/relatorio-mensal-rede.controller.js';
 import {
   cerebroPanoramaHandler,
   cerebroPacienteHandler,
@@ -316,6 +317,8 @@ apiRouter.post('/alertas/nao-lidas', chaveDeServicoOuSessao(requireAuth, require
 // é quem manda, depois de o texto ser aprovado. Acima do requireAuth pelo mesmo motivo das rotas
 // de cima: com chave de serviço, o 401 global viria antes de alguém olhar a chave.
 apiRouter.get('/relatorios/rede-diaria', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), relatorioRedeDiariaHandler);
+// Franquia + custo de WhatsApp do mês (alimenta o relatório mensal de CRM). SÓ LEITURA, mesma chave de serviço.
+apiRouter.get('/relatorios/mensal-rede', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), relatorioMensalRedeHandler);
 apiRouter.post('/campos/preencher', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), preencheCamposHandler);
 
 apiRouter.use(requireAuth);
