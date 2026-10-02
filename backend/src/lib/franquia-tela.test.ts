@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SessaoTela, abrirSessaoTela, dataDaTela, ehTelaDeEdicao, ehTelaDeLogin, lerAtendimentoDaTela } from './franquia-tela.js';
+import { SessaoTela, abrirSessaoTela, montarAvisoDaTela, dataDaTela, ehTelaDeEdicao, ehTelaDeLogin, lerAtendimentoDaTela } from './franquia-tela.js';
 
 const OPCOES_PAGAMENTO = ['Selecione', 'DINHEIRO', 'CARTÃO DE DÉBITO', 'CRÉDITO 2X', 'PIX'];
 function opcoes(lista: string[], marcada: string | null): string {
@@ -131,4 +131,13 @@ test('abrirSessaoTela: sem login no ambiente ou unidade fora do mapa não faz re
 test('abrirSessaoTela: login que não abre a agenda dá null', async () => {
   const falso = (async () => respostaFalsa('<html>senha errada</html>')) as unknown as typeof fetch;
   assert.equal(await abrirSessaoTela('doutor-hernia-serra', { FRANQUIA_TELA_USER: 'u', FRANQUIA_TELA_PASS: 'p' }, falso), null);
+});
+
+test('aviso do WhatsApp: título com a unidade, causa, efeito e o que fazer — e cada problema tem o seu texto', () => {
+  const sessao = montarAvisoDaTela('Açailândia', 'sessao');
+  assert.match(sessao, /^🚨 \*Robô da franquia perdeu a sessão\* — Açailândia/);
+  for (const trecho of ['*O que houve:*', '*Provável causa:*', '*Efeito agora:*', '*O que fazer:*', 'FRANQUIA_TELA_PASS']) assert.ok(sessao.includes(trecho), trecho);
+  assert.notEqual(sessao, montarAvisoDaTela('Açailândia', 'layout'));
+  assert.notEqual(sessao, montarAvisoDaTela('Açailândia', 'entrar'));
+  assert.ok(montarAvisoDaTela('Serra', 'layout').includes('franquia-tela.ts'));
 });

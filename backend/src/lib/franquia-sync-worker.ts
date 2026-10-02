@@ -19,7 +19,7 @@ import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
 import { acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
 import { planejarAtendimento, type CampoCandidato } from './atendimento-para-cartao.js';
-import { abrirSessaoTela, type AtendimentoTela, type SessaoTela } from './franquia-tela.js';
+import { abrirSessaoTela, montarAvisoDaTela, type AtendimentoTela, type ProblemaDaTela, type SessaoTela } from './franquia-tela.js';
 import { avisarJoao } from './alerta-whatsapp.js';
 import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
@@ -50,12 +50,8 @@ const cacheTela = new Map<string, { em: number; atendimento: AtendimentoTela }>(
 /** O mesmo problema só vira WhatsApp de novo depois de 6 h — a causa costuma ser uma só (senha vencida, tela mudou). */
 const AVISO_TELA_INTERVALO_MS = 6 * 60 * 60_000;
 
-async function avisarProblemaDaTela(slug: string, tipo: 'entrar' | 'sessao' | 'layout', texto: string): Promise<void> {
-  await avisarJoao(
-    `⚠️ Robô da tela da franquia (${slug}): ${texto}\nEnquanto isso, forma de pagamento, retorno e motivo NÃO chegam no cartão do Kommo. O resto do sincronizador segue normal.`,
-    `franquia-tela:${slug}:${tipo}`,
-    AVISO_TELA_INTERVALO_MS,
-  ).catch(() => undefined);
+async function avisarProblemaDaTela(unit: Pick<Unit, 'slug' | 'name'>, tipo: ProblemaDaTela): Promise<void> {
+  await avisarJoao(montarAvisoDaTela(unit.name || unit.slug, tipo), `franquia-tela:${unit.slug}:${tipo}`, AVISO_TELA_INTERVALO_MS).catch(() => undefined);
 }
 
 let timer: NodeJS.Timeout | null = null;
@@ -831,13 +827,13 @@ async function espelharAtendimento(ctx: CtxSync, leadId: number, lead: KommoLead
     if (!ctx.tela.aberta) {
       ctx.tela.aberta = true;
       ctx.tela.sessao = await abrirSessaoTela(unit.slug);
-      if (!ctx.tela.sessao) await avisarProblemaDaTela(unit.slug, 'entrar', 'não consegui entrar na tela da franquia (senha vencida, login ausente no servidor ou site fora do ar).');
+      if (!ctx.tela.sessao) await avisarProblemaDaTela(unit, 'entrar');
     }
     if (!ctx.tela.sessao || ctx.tela.sessao.quebrada || ctx.tela.sessao.layoutMudou) return;
     const lido = await ctx.tela.sessao.lerAtendimento(consulta.idSchedule);
     if (!lido) {
-      if (ctx.tela.sessao.quebrada) await avisarProblemaDaTela(unit.slug, 'sessao', 'a sessão caiu (3 telas de login seguidas) — provável senha vencida ou trocada.');
-      else if (ctx.tela.sessao.layoutMudou) await avisarProblemaDaTela(unit.slug, 'layout', 'a tela de edição do atendimento mudou (5 páginas seguidas sem os campos esperados) — o leitor precisa de ajuste.');
+      if (ctx.tela.sessao.quebrada) await avisarProblemaDaTela(unit, 'sessao');
+      else if (ctx.tela.sessao.layoutMudou) await avisarProblemaDaTela(unit, 'layout');
       return;
     }
     resumo.tela = (resumo.tela ?? 0) + 1;

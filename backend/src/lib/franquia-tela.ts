@@ -129,6 +129,48 @@ export function lerAtendimentoDaTela(html: string): AtendimentoTela | null {
   };
 }
 
+export type ProblemaDaTela = 'entrar' | 'sessao' | 'layout';
+
+const AVISOS: Record<ProblemaDaTela, { titulo: string; houve: string; causa: string; fazer: string }> = {
+  entrar: {
+    titulo: 'Robô da franquia não conseguiu entrar',
+    houve: 'o login na tela da franquia não passou.',
+    causa: 'senha vencida, login ausente no servidor ou site fora do ar.',
+    fazer: 'conferir FRANQUIA_TELA_USER e FRANQUIA_TELA_PASS no servidor e se app.doutorhernia.com.br abre.',
+  },
+  sessao: {
+    titulo: 'Robô da franquia perdeu a sessão',
+    houve: 'a franquia devolveu a tela de login 3 vezes seguidas.',
+    causa: 'senha vencida ou trocada.',
+    fazer: 'atualizar FRANQUIA_TELA_PASS no servidor.',
+  },
+  layout: {
+    titulo: 'Robô da franquia não reconhece mais a tela',
+    houve: 'a tela de edição do atendimento abriu 5 vezes seguidas sem os campos esperados.',
+    causa: 'a franquia mudou a página.',
+    fazer: 'chamar o Claude para ajustar o leitor (franquia-tela.ts).',
+  },
+};
+
+/** Texto do aviso no WhatsApp (formatação do próprio WhatsApp: *negrito*, _itálico_). Puro, para poder testar. */
+export function montarAvisoDaTela(unidade: string, tipo: ProblemaDaTela): string {
+  const a = AVISOS[tipo];
+  return [
+    `🚨 *${a.titulo}* — ${unidade}`,
+    '',
+    `*O que houve:* ${a.houve}`,
+    `*Provável causa:* ${a.causa}`,
+    '',
+    '*Efeito agora:*',
+    '• Forma de pagamento, retorno e motivo *não chegam* no cartão do Kommo',
+    '• O resto do sincronizador segue normal',
+    '',
+    `*O que fazer:* ${a.fazer}`,
+    '',
+    '_Aviso automático. Se o problema continuar, repito em 6 h._',
+  ].join('\n');
+}
+
 type Buscar = typeof fetch;
 
 export class SessaoTela {
