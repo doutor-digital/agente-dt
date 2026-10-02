@@ -23,7 +23,7 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, moveLiberado, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, type DecisaoParado } from './parados.js';
@@ -140,6 +140,8 @@ export interface ResumoSync {
   sessoes?: number;
   /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
   revisados: number;
+  /** move em seco: "DE → PARA" → quantos cartões se moveriam nesta varredura (só aparece quando há) */
+  simulados?: Record<string, number>;
 }
 const ultimoResumo = new Map<string, ResumoSync>();
 export function resumoDoSync(): ResumoSync[] {
@@ -387,10 +389,23 @@ export async function historicoDoPaciente(unit: Unit, idClient: number | null): 
   return out;
 }
 
-async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = ''): Promise<void> {
+/** Todo "moveria" do seco (do move ou da revisão) conta aqui, pra o `simulados` do resumo nunca subestimar o volume. */
+function contarSimulado(resumo: ResumoSync, de: string, para: string): void {
+  const chave = `${de || '?'} → ${para}`;
+  resumo.simulados = { ...resumo.simulados, [chave]: (resumo.simulados?.[chave] ?? 0) + 1 };
+}
+
+export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = ''): Promise<void> {
   const alvo = funis.idDe(mov.funil, mov.para);
   if (!alvo) {
     logger.warn({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil }, 'franquia-move: etapa não existe nesta conta — não movi');
+    return;
+  }
+  // Move em seco (tela de Automações): é o ÚNICO portão por onde todo movimento passa — cartão normal,
+  // passagem das 48 h e revisão do histórico —, então nenhum caminho novo escapa dele.
+  if (estadoDoMove(unit.slug) === 'seco') {
+    contarSimulado(resumo, deEtapa, mov.para);
+    logger.info({ unit: unit.slug, leadId, de: deEtapa, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     return;
   }
   // PERDIDO pela jornada (fato velho na franquia): mesmo fecho do worker de parados — motivo de perda,
@@ -589,7 +604,7 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
       } catch (err) {
         logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-move: não consegui conferir a franquia antes das 48 h — seguindo pelo cartão');
       }
-      await aplicarMovimento(unit, kommo, funis, lead.id, { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: `atendido há ${Math.floor((agora - dataConsulta) / 3600)} h sem tratamento (pelo cartão)` }, resumo);
+      await aplicarMovimento(unit, kommo, funis, lead.id, { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: `atendido há ${Math.floor((agora - dataConsulta) / 3600)} h sem tratamento (pelo cartão)` }, resumo, ETAPA.COMPARECEU);
     }
     if (leads.length < 250) break;
   }
@@ -850,6 +865,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   const mov = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() });
   if (!mov) return;
   if (seco) {
+    contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     return;
   }
@@ -934,13 +950,17 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
               }
               if (parado > JORNADA.CONFERIR_MAX_DIAS) {
                 const mov: Movimento = { funil: 'COMERCIAL', para: ETAPA.PERDIDO, motivo: `${Math.floor(parado)} d em ${ETAPA.CONFERIR} sem acerto do cadastro`, motivoPerda: MOTIVO_PERDA.SEM_CADASTRO, semRegua: true, dias: Math.floor(parado) };
-                if (seco) logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
+                if (seco) {
+                  contarSimulado(resumo, etapa, mov.para);
+                  logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
+                }
                 else await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, etapa);
               }
               continue;
             }
             if (!conferir) continue;
-            if (seco) {
+            if (seco || estadoDoMove(unit.slug) === 'seco') {
+              contarSimulado(resumo, etapa, ETAPA.CONFERIR);
               logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: ETAPA.CONFERIR }, 'franquia-move [seco]: moveria');
               continue;
             }
@@ -989,7 +1009,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
     logger.warn({ unit: unit.slug }, 'franquia-sync: conta sem os campos de consulta — pulando');
     return resumo;
   }
-  const mover = moveLiberado(unit.slug);
+  const mover = estadoDoMove(unit.slug) !== 'desligado';
   const funis = mover ? await carregarFunis(kommo) : null;
   if (mover && !funis) logger.warn({ unit: unit.slug }, 'franquia-move: conta sem funil principal — só campos');
   const tz = unit.spineTimezone || 'America/Sao_Paulo';

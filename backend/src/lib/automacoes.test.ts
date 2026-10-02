@@ -67,10 +67,15 @@ test('"seco" só existe onde o catálogo diz que existe — renomear id não pod
   _semearParaTeste([
     { slug: SERRA, automacao: 'parados', estado: 'seco' },
     { slug: SERRA, automacao: 'sofia-calada', estado: 'seco' },
+    { slug: SERRA, automacao: 'franquia-move', estado: 'seco' },
   ]);
 
   assert.equal(automacaoPorId('parados')?.temSeco, true);
   assert.equal(estadoDaAutomacao(SERRA, 'parados', undefined), 'seco');
+
+  // o move da franquia tem seco (era só liga/desliga): a tela pode gravá-lo e ele vale
+  assert.equal(automacaoPorId('franquia-move')?.temSeco, true);
+  assert.equal(estadoDaAutomacao(SERRA, 'franquia-move', 'doutor-hernia-serra'), 'seco');
 
   // sofia-calada não tem modo seco: o estado inválido cai pro lado seguro, não pro ligado
   assert.equal(automacaoPorId('sofia-calada')?.temSeco, false);
