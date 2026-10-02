@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SessaoTela, abrirSessaoTela, dataDaTela, ehTelaDeEdicao, ehTelaDeLogin, lerAtendimentoDaTela } from './franquia-tela.js';
+import { SessaoTela, abrirSessaoTela, montarAvisoDaTela, dataDaTela, ehTelaDeEdicao, ehTelaDeLogin, lerAtendimentoDaTela } from './franquia-tela.js';
 
 const OPCOES_PAGAMENTO = ['Selecione', 'DINHEIRO', 'CARTÃO DE DÉBITO', 'CRÉDITO 2X', 'PIX'];
 function opcoes(lista: string[], marcada: string | null): string {
@@ -103,6 +103,14 @@ test('sessão: atendimento que não abre (404, apagado, de outra unidade) NÃO d
   assert.equal(s.quebrada, false);
 });
 
+test('sessão: 5 páginas que abrem mas não têm o formulário = layout mudou (e é diferente de sessão caída)', async () => {
+  const falso = (async () => respostaFalsa('<html>' + 'x'.repeat(100) + '</html>')) as unknown as typeof fetch;
+  const s = new SessaoTela('u', 'p', falso);
+  for (let i = 0; i < 5; i++) assert.equal(await s.lerAtendimento(i), null);
+  assert.equal(s.layoutMudou, true);
+  assert.equal(s.quebrada, false, 'não é login: a sessão está boa');
+});
+
 test('sessão: leitura boa zera a contagem de falhas', async () => {
   let n = 0;
   const falso = (async () => respostaFalsa(n++ === 0 ? PAGINA_DE_LOGIN : tela({ pagamento: 'PIX' }))) as unknown as typeof fetch;
@@ -123,4 +131,25 @@ test('abrirSessaoTela: sem login no ambiente ou unidade fora do mapa não faz re
 test('abrirSessaoTela: login que não abre a agenda dá null', async () => {
   const falso = (async () => respostaFalsa('<html>senha errada</html>')) as unknown as typeof fetch;
   assert.equal(await abrirSessaoTela('doutor-hernia-serra', { FRANQUIA_TELA_USER: 'u', FRANQUIA_TELA_PASS: 'p' }, falso), null);
+});
+
+test('aviso do WhatsApp: título com a unidade, causa, efeito e o que fazer — e cada problema tem o seu texto', () => {
+  const sessao = montarAvisoDaTela('Açailândia', 'sessao');
+  assert.match(sessao, /^🚨 \*Robô da franquia perdeu a sessão\* — Açailândia/);
+  for (const trecho of ['*O que houve:*', '*Provável causa:*', '*Efeito agora:*', '*O que fazer:*', 'FRANQUIA_TELA_PASS']) assert.ok(sessao.includes(trecho), trecho);
+  assert.notEqual(sessao, montarAvisoDaTela('Açailândia', 'layout'));
+  assert.notEqual(sessao, montarAvisoDaTela('Açailândia', 'entrar'));
+  assert.ok(montarAvisoDaTela('Serra', 'layout').includes('franquia-tela.ts'));
+});
+
+test('a página real tem DOIS selects id_form_payment: o 1º quebrado (erros de PHP, nada marcado), o 2º com o valor — lê o 2º', () => {
+  const quebrado = '<select class="form-control select2" name="id_form_payment"><option value="NULL">Selecione</option>'
+    + '<option value="1" \n<div style="border:1px solid #990000"><h4>A PHP Error was encountered</h4><p>Message: Trying to get property \'id_form_payment\' of non-object</p></div>>DINHEIRO</option></select>';
+  const limpo = '<select class="form-control select2" name="id_form_payment"><option value="NULL">Selecione</option><option value="1" >DINHEIRO</option><option value="15" selected>CRÉDITO 12X</option></select>';
+  const html = tela().replace(/<select class="form-select" name="id_form_payment"[\s\S]*?<\/select>/, quebrado + limpo);
+  assert.equal(lerAtendimentoDaTela(html)!.formaPagamento, 'CRÉDITO 12X');
+  // e na ordem inversa também
+  assert.equal(lerAtendimentoDaTela(tela().replace(/<select class="form-select" name="id_form_payment"[\s\S]*?<\/select>/, limpo + quebrado))!.formaPagamento, 'CRÉDITO 12X');
+  // nenhum marcado em nenhum dos dois: continua vazio
+  assert.equal(lerAtendimentoDaTela(tela().replace(/<select class="form-select" name="id_form_payment"[\s\S]*?<\/select>/, quebrado + quebrado))!.formaPagamento, null);
 });

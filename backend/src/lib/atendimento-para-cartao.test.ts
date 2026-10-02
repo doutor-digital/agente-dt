@@ -88,14 +88,16 @@ test('motivo: campo "text" do Kommo aceita no máximo 256 caracteres — corta a
   assert.equal(String(p.escritas[0].valor).length, 250);
 });
 
-test('retorno: 15/10 14:30 em São Paulo é 17:30 UTC; só grava se o "Retomar em" estiver VAZIO (não briga com a SDR)', () => {
+test('retorno: 15/10 14:30 em São Paulo é 17:30 UTC; a franquia vence, mas o mesmo dia não regrava', () => {
   const epoch = Date.parse('2026-10-15T17:30:00Z') / 1000;
   const campo = (valor: string | null): CampoCandidato => ({ id: 13, tipo: 'date', valor, opcoes: [] });
-  const vazio = planejarAtendimento({ atendimento: { ...VAZIO, retornoLocal: '2026-10-15T14:30' }, campos: conta({ [CAMPOS_ATENDIMENTO.RETOMAR_EM]: [campo(null)] }), fuso: FUSO });
-  assert.deepEqual(vazio.escritas.map((e) => [e.id, e.tipo, e.valor]), [[13, 'date', epoch]]);
-  // a SDR já marcou outra data: a franquia NÃO sobrescreve, nem a cada varredura
-  const jaTem = planejarAtendimento({ atendimento: { ...VAZIO, retornoLocal: '2026-10-15T14:30' }, campos: conta({ [CAMPOS_ATENDIMENTO.RETOMAR_EM]: [campo('1790000000')] }), fuso: FUSO });
-  assert.equal(jaTem.escritas.length, 0);
+  const plano = (valor: string | null) => planejarAtendimento({ atendimento: { ...VAZIO, retornoLocal: '2026-10-15T14:30' }, campos: conta({ [CAMPOS_ATENDIMENTO.RETOMAR_EM]: [campo(valor)] }), fuso: FUSO });
+  // vazio: grava
+  assert.deepEqual(plano(null).escritas.map((e) => [e.id, e.tipo, e.valor]), [[13, 'date', epoch]]);
+  // a SDR digitou outra data no Kommo: a franquia (ponto central) sobrescreve
+  assert.deepEqual(plano('1790000000').escritas.map((e) => e.valor), [epoch]);
+  // o Kommo guarda `date` como o dia à meia-noite do fuso: até ~24 h de diferença é o mesmo dia — não regrava
+  assert.equal(plano(String(Date.parse('2026-10-15T03:00:00Z') / 1000)).escritas.length, 0);
 });
 
 test('conta sem os campos novos: pula em silêncio', () => {

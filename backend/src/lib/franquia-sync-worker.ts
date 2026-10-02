@@ -19,7 +19,8 @@ import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
 import { acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
 import { planejarAtendimento, type CampoCandidato } from './atendimento-para-cartao.js';
-import { abrirSessaoTela, type AtendimentoTela, type SessaoTela } from './franquia-tela.js';
+import { abrirSessaoTela, montarAvisoDaTela, type AtendimentoTela, type ProblemaDaTela, type SessaoTela } from './franquia-tela.js';
+import { avisarJoao } from './alerta-whatsapp.js';
 import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
@@ -46,6 +47,12 @@ const CACHE_LEAD_MS = 6 * 60 * 60_000;
 const MAX_TELA_POR_VARREDURA = Number(process.env.FRANQUIA_TELA_MAX) || 80;
 const CACHE_TELA_MS = 3 * 60 * 60_000;
 const cacheTela = new Map<string, { em: number; atendimento: AtendimentoTela }>();
+/** O mesmo problema só vira WhatsApp de novo depois de 6 h — a causa costuma ser uma só (senha vencida, tela mudou). */
+const AVISO_TELA_INTERVALO_MS = 6 * 60 * 60_000;
+
+async function avisarProblemaDaTela(unit: Pick<Unit, 'slug' | 'name'>, tipo: ProblemaDaTela): Promise<void> {
+  await avisarJoao(montarAvisoDaTela(unit.name || unit.slug, tipo), `franquia-tela:${unit.slug}:${tipo}`, AVISO_TELA_INTERVALO_MS).catch(() => undefined);
+}
 
 let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
@@ -820,10 +827,15 @@ async function espelharAtendimento(ctx: CtxSync, leadId: number, lead: KommoLead
     if (!ctx.tela.aberta) {
       ctx.tela.aberta = true;
       ctx.tela.sessao = await abrirSessaoTela(unit.slug);
+      if (!ctx.tela.sessao) await avisarProblemaDaTela(unit, 'entrar');
     }
-    if (!ctx.tela.sessao || ctx.tela.sessao.quebrada) return;
+    if (!ctx.tela.sessao || ctx.tela.sessao.quebrada || ctx.tela.sessao.layoutMudou) return;
     const lido = await ctx.tela.sessao.lerAtendimento(consulta.idSchedule);
-    if (!lido) return;
+    if (!lido) {
+      if (ctx.tela.sessao.quebrada) await avisarProblemaDaTela(unit, 'sessao');
+      else if (ctx.tela.sessao.layoutMudou) await avisarProblemaDaTela(unit, 'layout');
+      return;
+    }
     resumo.tela = (resumo.tela ?? 0) + 1;
     atendimento = { em: Date.now(), atendimento: lido };
     if (cacheTela.size > 500) for (const [k, v] of cacheTela) if (Date.now() - v.em > CACHE_TELA_MS) cacheTela.delete(k);
