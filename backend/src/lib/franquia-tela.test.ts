@@ -103,6 +103,14 @@ test('sessão: atendimento que não abre (404, apagado, de outra unidade) NÃO d
   assert.equal(s.quebrada, false);
 });
 
+test('sessão: 5 páginas que abrem mas não têm o formulário = layout mudou (e é diferente de sessão caída)', async () => {
+  const falso = (async () => respostaFalsa('<html>' + 'x'.repeat(100) + '</html>')) as unknown as typeof fetch;
+  const s = new SessaoTela('u', 'p', falso);
+  for (let i = 0; i < 5; i++) assert.equal(await s.lerAtendimento(i), null);
+  assert.equal(s.layoutMudou, true);
+  assert.equal(s.quebrada, false, 'não é login: a sessão está boa');
+});
+
 test('sessão: leitura boa zera a contagem de falhas', async () => {
   let n = 0;
   const falso = (async () => respostaFalsa(n++ === 0 ? PAGINA_DE_LOGIN : tela({ pagamento: 'PIX' }))) as unknown as typeof fetch;

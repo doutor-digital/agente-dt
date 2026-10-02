@@ -135,6 +135,8 @@ export class SessaoTela {
   private cookies = new Map<string, string>();
   /** leituras seguidas que deram tela de login ou erro de rede — 3, e a sessão caiu: a varredura desiste desta unidade. */
   private falhasSeguidas = 0;
+  /** páginas seguidas que abriram (200), não eram login e também não eram a tela de edição — o layout da franquia pode ter mudado. */
+  private telasInesperadas = 0;
 
   constructor(
     private readonly user: string,
@@ -144,6 +146,11 @@ export class SessaoTela {
 
   get quebrada(): boolean {
     return this.falhasSeguidas >= 3;
+  }
+
+  /** 5 telas seguidas que abrem mas não têm o formulário: a franquia mudou a página, e o parser precisa de ajuste. */
+  get layoutMudou(): boolean {
+    return this.telasInesperadas >= 5;
   }
 
   private guardar(res: Response): void {
@@ -181,13 +188,20 @@ export class SessaoTela {
 
   /** Lê a tela de edição de um atendimento. null = não consegui (não é "vazio": vazio vem com campos null). */
   async lerAtendimento(idSchedule: number): Promise<AtendimentoTela | null> {
-    if (this.quebrada) return null;
+    if (this.quebrada || this.layoutMudou) return null;
     try {
       const { status, html } = await this.pedir(`/agendamentos/editar/${idSchedule}`);
       const a = status === 200 ? lerAtendimentoDaTela(html) : null;
-      if (a) this.falhasSeguidas = 0;
-      else if (ehTelaDeLogin(html)) this.falhasSeguidas++;
-      // outra página qualquer (404, atendimento apagado, id de outra unidade): este atendimento não abre, a sessão está boa
+      if (a) {
+        this.falhasSeguidas = 0;
+        this.telasInesperadas = 0;
+      } else if (ehTelaDeLogin(html)) {
+        this.falhasSeguidas++;
+        this.telasInesperadas = 0;
+      } else if (status === 200) {
+        this.telasInesperadas++;
+      }
+      // 404, atendimento apagado, id de outra unidade: este atendimento não abre, a sessão está boa
       return a;
     } catch (err) {
       this.falhasSeguidas++;
