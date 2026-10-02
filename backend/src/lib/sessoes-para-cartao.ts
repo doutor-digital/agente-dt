@@ -139,25 +139,32 @@ export function escritasDeSessoes(e: EntradaSessoes): EscritaDeSessao[] {
   const t = e.tratamento;
   if (!t?.idTreatment) return out;
 
+  // Cada clínica nasceu de uma versão do cartão: o mesmo nome pode ser número numa conta e seleção
+  // noutra. Gravar o tipo errado dá 400 do Kommo a cada varredura, então campo de tipo incompatível
+  // é pulado — como o campo que a conta não tem.
   const numerico = (nome: string, valor: number, motivo: string) => {
     const c = e.campo(nome);
-    if (!c) return;
+    if (!c || c.tipo !== 'numeric') return;
     if (num(c.valor) === valor) return;
     out.push({ campo: nome, tipo: 'numeric', valor, motivo });
   };
   const data = (nome: string, epoch: number, motivo: string) => {
     const c = e.campo(nome);
-    if (!c) return;
+    if (!c || (c.tipo !== 'date' && c.tipo !== 'date_time')) return;
     const atual = num(c.valor);
-    if (atual !== null && Math.abs(atual - epoch) <= 60) return;
+    // `date_time` guarda a hora; `date` guarda só o dia (meia-noite do fuso da conta), então a mesma
+    // sessão volta do Kommo até ~24 h diferente do epoch exato — comparar em 60 s regravaria o cartão
+    // inteiro a cada varredura.
+    const tolerancia = c.tipo === 'date' ? 86_399 : 60;
+    if (atual !== null && Math.abs(atual - epoch) <= tolerancia) return;
     out.push({ campo: nome, tipo: 'date', valor: epoch, motivo });
   };
   const texto = (nome: string, valor: string | null | undefined, motivo: string) => {
     const v = String(valor ?? '').trim();
     const c = e.campo(nome);
-    if (!c || !v) return;
+    if (!c || !v || (c.tipo !== 'text' && c.tipo !== 'textarea')) return;
     if (normalizar(c.valor) === normalizar(v)) return;
-    out.push({ campo: nome, tipo: c.tipo === 'textarea' ? 'textarea' : 'text', valor: v, motivo });
+    out.push({ campo: nome, tipo: c.tipo, valor: v, motivo });
   };
 
   numerico(CAMPOS_SESSOES.ID_TRAT, t.idTreatment, 'tratamento na franquia');
@@ -178,7 +185,7 @@ export function escritasDeSessoes(e: EntradaSessoes): EscritaDeSessao[] {
   } else {
     // a data que estava lá passou (ou a sessão foi desmarcada): deixar seria mostrar uma "próxima" no passado
     const c = e.campo(CAMPOS_SESSOES.PROXIMA);
-    if (c && num(c.valor) !== null) out.push({ campo: CAMPOS_SESSOES.PROXIMA, limpar: true, motivo: 'não há sessão marcada por vir' });
+    if (c && (c.tipo === 'date' || c.tipo === 'date_time') && num(c.valor) !== null) out.push({ campo: CAMPOS_SESSOES.PROXIMA, limpar: true, motivo: 'não há sessão marcada por vir' });
   }
 
   if (r.ultima) {

@@ -262,3 +262,19 @@ test('✓ Compareceu: grava Sim quando atendeu e Não quando faltou; igual não 
   assert.equal(plano(SPINE_STATUS.AGENDADO), undefined);
   assert.equal(plano(SPINE_STATUS.DESMARCADO), undefined);
 });
+
+test('✓ Compareceu: consulta nova (remarcada, retorno marcado) esvazia o desfecho da anterior', () => {
+  const plano = (idStatus: number, valores: Record<string, string | null>) => planejarEscritas({
+    valores, consulta: consulta({ idStatus }), consultaEpoch: AGORA + 86_400, tratamento: null, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES,
+  }).find((w) => w.campo === 'COMPARECEU');
+
+  // faltou, remarcou: a consulta que vale é a nova, ainda AGENDADA — o "Não" da falta sai
+  const limpa = plano(SPINE_STATUS.AGENDADO, { '✓ Compareceu': 'Não' });
+  assert.equal(limpa?.limpar, true);
+  assert.equal(plano(SPINE_STATUS.CONFIRMADO, { '✓ Compareceu': 'Sim' })?.limpar, true);
+  // nada a esvaziar: não gera escrita
+  assert.equal(plano(SPINE_STATUS.AGENDADO, { '✓ Compareceu': null }), undefined);
+  assert.equal(plano(SPINE_STATUS.AGENDADO, {}), undefined);
+  // desfecho vale e já está certo: também não
+  assert.equal(plano(SPINE_STATUS.ATENDIDO, { '✓ Compareceu': 'Sim' }), undefined);
+});

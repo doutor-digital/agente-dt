@@ -186,6 +186,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/preenche-campos-worker.ts',
   },
   {
+    id: 'franquia-sessoes',
+    chave: 'FRANQUIA_SESSOES_SLUGS',
+    nome: 'Sessões e tratamento no cartão',
+    oQueFaz:
+      'Atualiza no cartão, a cada varredura, as sessões realizadas, faltas, marcadas e previstas, a próxima e a última sessão, e o local, grau, status e id do tratamento da franquia.',
+    pegadinha:
+      'Sobrescreve o que está no cartão: a franquia vence. Só funciona onde o campo existe com o tipo certo (número, data, texto); campo de outro tipo é pulado. Ligue em seco primeiro e confira no log o que gravaria.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/franquia-sync-worker.ts',
+  },
+  {
     id: 'carimbo-etapa',
     chave: 'CARIMBO_ETAPA_SLUGS',
     nome: 'Carimbo de início e fim do tratamento',

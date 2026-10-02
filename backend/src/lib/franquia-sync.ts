@@ -233,6 +233,8 @@ export interface Escrita {
   tipo: 'date' | 'select' | 'monetary';
   valor: string | number;
   motivo: string;
+  /** true = esvaziar o campo (o `valor` é só um marcador). Hoje só o "✓ Compareceu" de uma consulta sem desfecho. */
+  limpar?: boolean;
 }
 
 export interface Entrada {
@@ -272,6 +274,10 @@ export function planejarEscritas(e: Entrada): Escrita[] {
     const compareceu = compareceuDaConsulta(e.consulta.idStatus);
     if (compareceu && !igual('COMPARECEU', compareceu)) {
       out.push({ campo: 'COMPARECEU', nome: CAMPOS_SYNC.COMPARECEU, tipo: 'select', valor: compareceu, motivo: atual('COMPARECEU') ? 'franquia diverge' : 'vazio' });
+    } else if (!compareceu && atual('COMPARECEU')) {
+      // A consulta que vale agora (remarcada, retorno marcado) ainda não tem desfecho: o "Não" da falta
+      // anterior ficaria ali dizendo que quem tem consulta marcada já faltou.
+      out.push({ campo: 'COMPARECEU', nome: CAMPOS_SYNC.COMPARECEU, tipo: 'select', valor: '', limpar: true, motivo: 'consulta atual ainda sem desfecho' });
     }
     const fisio = casarFisioterapeuta(e.consulta.physicalTherapist, e.opcoes.fisio);
     if (fisio && !igual('FISIO', fisio)) {

@@ -111,7 +111,8 @@ export function escritasDoTratamento(e: EntradaTratamento): EscritaDoPaciente[] 
 
   const sessoes = (e.sessoes ?? []).filter((s) => s?.dateAttendance);
   if (sessoes.length) {
-    sePuder('# Sessões previstas', sessoes.length, 'contadas na agenda da franquia', 'numeric');
+    // `# Sessões previstas` (e os demais contadores) saíram daqui: o escritor único é `sessoes-para-cartao.ts`,
+    // que conta só sessão do tratamento e atualiza. Aqui ele contava a agenda inteira e só preenchia uma vez.
 
     const ordenadas = [...sessoes].sort((a, b) =>
       String(a.dateAttendance).localeCompare(String(b.dateAttendance)),

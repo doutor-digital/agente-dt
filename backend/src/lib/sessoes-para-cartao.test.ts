@@ -180,3 +180,30 @@ test('onde "Última sessão" é campo de DATA, grava a data e não o texto', () 
   assert.equal(u.tipo, 'date');
   assert.equal(u.valor, Date.parse('2026-09-24T13:00:00Z') / 1000);
 });
+
+test('campo de tipo incompatível é pulado, em vez de dar 400 do Kommo a cada varredura', () => {
+  // Grau virou seleção, Próxima virou texto, Realizadas virou seleção: nada disso aceita o que mandaríamos
+  const w = escritasDeSessoes({
+    schedules: AGENDA, tratamento: TRATAMENTO, agoraEpoch: AGORA,
+    campo: conta({}, { [CAMPOS_SESSOES.GRAU]: 'select', [CAMPOS_SESSOES.PROXIMA]: 'text', [CAMPOS_SESSOES.REALIZADAS]: 'select' }),
+  });
+  assert.equal(acha(w, CAMPOS_SESSOES.GRAU), undefined);
+  assert.equal(acha(w, CAMPOS_SESSOES.PROXIMA), undefined);
+  assert.equal(acha(w, CAMPOS_SESSOES.REALIZADAS), undefined);
+  // o resto, que tem tipo certo, continua saindo
+  assert.ok(acha(w, CAMPOS_SESSOES.FALTAS));
+  assert.ok(acha(w, CAMPOS_SESSOES.LOCAL));
+});
+
+test('campo só de DIA não é regravado a cada varredura; campo com hora, sim, se a hora mudou', () => {
+  const sessao13h = Date.parse('2026-10-06T13:00:00Z') / 1000;
+  const meiaNoiteDoDia = Date.parse('2026-10-06T03:00:00Z') / 1000; // 00:00 em Brasília: como o Kommo guarda um `date`
+  const soDia = escritasDeSessoes({ schedules: AGENDA, tratamento: TRATAMENTO, agoraEpoch: AGORA, campo: conta({ [CAMPOS_SESSOES.PROXIMA]: String(meiaNoiteDoDia) }, { [CAMPOS_SESSOES.PROXIMA]: 'date' }) });
+  assert.equal(acha(soDia, CAMPOS_SESSOES.PROXIMA), undefined);
+  // o dia seguinte é outra sessão, mesmo no campo só de dia
+  const diaErrado = escritasDeSessoes({ schedules: AGENDA, tratamento: TRATAMENTO, agoraEpoch: AGORA, campo: conta({ [CAMPOS_SESSOES.PROXIMA]: String(meiaNoiteDoDia - 86_400) }, { [CAMPOS_SESSOES.PROXIMA]: 'date' }) });
+  assert.equal((acha(diaErrado, CAMPOS_SESSOES.PROXIMA) as { valor: number }).valor, sessao13h);
+  // com hora (date_time), 10 h de diferença é remarcação
+  const comHora = escritasDeSessoes({ schedules: AGENDA, tratamento: TRATAMENTO, agoraEpoch: AGORA, campo: conta({ [CAMPOS_SESSOES.PROXIMA]: String(sessao13h - 36_000) }, { [CAMPOS_SESSOES.PROXIMA]: 'date_time' }) });
+  assert.equal((acha(comHora, CAMPOS_SESSOES.PROXIMA) as { valor: number }).valor, sessao13h);
+});
