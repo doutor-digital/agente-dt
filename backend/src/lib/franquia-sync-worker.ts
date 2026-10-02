@@ -17,6 +17,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
+import { acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
 import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
@@ -34,6 +35,8 @@ const DIAS_ATRAS = 3;
 const DIAS_FRENTE = 45;
 const MAX_PACIENTES_POR_VARREDURA = 400;
 const PAUSA_ENTRE_ESCRITAS_MS = 150;
+/** Cada cartão com sessão a atualizar custa até ~10 PATCH; o teto espalha a 1ª varredura de uma unidade grande por várias. */
+const MAX_SESSOES_POR_VARREDURA = Number(process.env.FRANQUIA_SESSOES_MAX) || 60;
 const CACHE_LEAD_MS = 6 * 60 * 60_000;
 
 let timer: NodeJS.Timeout | null = null;
@@ -133,6 +136,8 @@ export interface ResumoSync {
   exemplosSemLead: string[];
   /** fase 2: cartões movidos de etapa nesta varredura (0 quando a unidade não está em FRANQUIA_MOVE_SLUGS) */
   movimentos: number;
+  /** fase 1c: cartões cujas sessões/tratamento foram atualizados nesta varredura (teto `MAX_SESSOES_POR_VARREDURA`) */
+  sessoes?: number;
   /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
   revisados: number;
 }
@@ -603,7 +608,7 @@ interface CtxSync {
    * conhece os campos da CONSULTA; o espelho da PESSOA precisa de outros sete, e criar uma
    * segunda constante só pra eles duplicaria a mesma lista em dois lugares.
    */
-  camposPorNome?: Array<[string, { id: number; type: KommoLeadCustomField['type']; enums: Array<{ id: number; value: string }> }]>;
+  camposPorNome?: Array<[string, { id: number; type: KommoLeadCustomField['type']; /** tipo como o Kommo diz (date_time continua date_time; `type` o mapeia pra date) */ rawType?: string; enums: Array<{ id: number; value: string }> }]>;
   /** `FRANQUIA_REVISAO_SECO=1`: a revisão pelo histórico só registra o que faria (campos e etapa); a varredura normal não muda */
   seco?: boolean;
 }
@@ -719,6 +724,67 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
 }
 
 /**
+ * Sessões e tratamento no cartão (fase 1c), ATUALIZADOS a cada varredura — o `espelharPaciente` só
+ * preenche buraco, o que é certo para queixa e errado para contador (ver `sessoes-para-cartao.ts`).
+ *
+ * Os contadores só saem do histórico COMPLETO do paciente (`GET /clients/{id}`, cache de 1 h): a
+ * agenda da varredura cobre D-3…D+45 e contar só ela diria "2 realizadas" para quem fez 14 sessões.
+ * Sem o histórico em mãos grava apenas o que é do tratamento (id, local, grau, status).
+ */
+async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null): Promise<void> {
+  const { unit, kommo, resumo, agoraEpoch } = ctx;
+  if (!p.tratamento?.idTreatment) return;
+  // Chave por unidade (tela de Automações): desligado = não faz nada; seco = só registra o que gravaria.
+  const estado = estadoDaAutomacao(unit.slug, 'franquia-sessoes', process.env.FRANQUIA_SESSOES_SLUGS);
+  if (estado === 'desligado') return;
+  const seco = estado === 'seco' || ctx.seco === true;
+  if ((resumo.sessoes ?? 0) >= MAX_SESSOES_POR_VARREDURA) return;
+  const hist = historico ?? (p.idClient ? await historicoDoPaciente(unit, p.idClient) : null);
+  const ids = new Set(p.consultas.map((s) => s.idSchedule));
+  const schedules = hist ? [...p.consultas, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))] : [];
+
+  if (seco && hist) {
+    // Prova em produção de uma dúvida em aberto: a ficha do paciente manda o id do tratamento em cada sessão?
+    // Se `comIdTratamento` vier 0, a separação de ciclos cai na data de criação do tratamento.
+    const doHistorico = hist.schedules.filter((s) => !ehConsulta(s));
+    logger.info(
+      { unit: unit.slug, leadId, sessoesNoHistorico: doHistorico.length, comIdTratamento: doHistorico.filter((s) => s.idTreatment !== null).length },
+      'franquia-sync [seco]: sessões do histórico do paciente',
+    );
+  }
+
+  const porNome = new Map(ctx.camposPorNome ?? []);
+  const bruto = lead.custom_fields_values ?? [];
+  const campo = (nome: string) => {
+    const info = acharCampoDeSessao(porNome, nome, normalizar);
+    if (!info) return null;
+    const v = bruto.find((f) => f.field_id === info.id)?.values?.[0]?.value;
+    return { tipo: info.rawType ?? (info.type as string), valor: v === undefined || v === null || String(v).trim() === '' ? null : String(v) };
+  };
+
+  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, agoraEpoch, campo });
+  if (planejadas.length > 0) resumo.sessoes = (resumo.sessoes ?? 0) + 1;
+  for (const e of planejadas) {
+    const info = acharCampoDeSessao(porNome, e.campo, normalizar);
+    if (!info) continue;
+    if (seco) {
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria sessão/tratamento');
+      continue;
+    }
+    try {
+      if (e.limpar) await kommo.clearLeadCustomField(leadId, info.id);
+      else await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, e.valor, info.enums);
+      resumo.escritas++;
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync: sessão/tratamento gravado');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug, leadId, campo: e.campo }, 'franquia-sync: falha ao gravar sessão/tratamento');
+    }
+    await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
+  }
+}
+
+/**
  * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
  * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
  * quando a etapa exige — GANHO e funil TRATAMENTO).
@@ -735,13 +801,14 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     const info = mapa[w.campo];
     if (!info) continue;
     if (seco) {
-      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
+      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
       continue;
     }
     try {
-      await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, w.valor, info.enums);
+      if (w.limpar) await kommo.clearLeadCustomField(leadId, info.id);
+      else await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, w.valor, info.enums);
       resumo.escritas++;
-      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.valor, motivo: w.motivo }, 'franquia-sync: campo gravado');
+      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync: campo gravado');
     } catch (err) {
       resumo.erros++;
       logger.warn({ err, unit: unit.slug, leadId, campo: w.nome }, 'franquia-sync: falha ao gravar campo');
@@ -755,6 +822,11 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho da pessoa falhou'),
     );
   }
+
+  // fase 1c: sessões e tratamento, atualizados
+  await espelharSessoes(ctx, leadId, lead, p, historico).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho das sessões falhou'),
+  );
 
   // fase 2: a franquia move o cartão
   if (!funis) return;
@@ -909,6 +981,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
     .filter((c) => ['date', 'date_time', 'select', 'monetary', 'numeric', 'text', 'textarea', 'radiobutton'].includes(c.type))
     .map((c) => [normalizar(c.name), {
       id: c.id,
+      rawType: c.type,
       type: (c.type === 'date_time' ? 'date' : c.type) as KommoLeadCustomField['type'],
       enums: (c.enums ?? []).map((e) => ({ id: e.id, value: e.value })),
     }]);

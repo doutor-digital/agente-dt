@@ -55,7 +55,8 @@ test('conta as sessões e acha a última', () => {
     { dateAttendance: '2026-09-20 10:00', statusName: 'NÃO COMPARECEU' },
   ];
   const l = escritasDoTratamento({ sessoes, tratamento: null, opcoesProtocolo: OPCOES, valorAtual: vazio });
-  assert.equal(acha(l, '# Sessões previstas')?.valor, 3);
+  // o contador de sessões não é mais daqui: o escritor único é sessoes-para-cartao.ts (conta só o tratamento e atualiza)
+  assert.equal(acha(l, '# Sessões previstas'), undefined);
   assert.equal(acha(l, '✓ Compareceu à última sessão marcada')?.valor, 'Não');
   assert.ok(acha(l, '◷ Última sessão marcada'));
 });
