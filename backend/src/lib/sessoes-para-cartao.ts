@@ -25,9 +25,9 @@ import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../servic
 import { ehConsulta, normalizar } from './franquia-sync.js';
 
 export const CAMPOS_SESSOES = {
-  PREVISTAS: '# Sessões previstas',
+  PREVISTAS: '# Sessões no histórico',
   REALIZADAS: '# Sessões realizadas',
-  MARCADAS: '# Sessões marcadas',
+  MARCADAS: '# Sessões agendadas (por vir)',
   FALTAS: '# Nº de faltas',
   PROXIMA: '◷ Próxima sessão',
   ULTIMA: '◷ Última sessão',
@@ -36,6 +36,25 @@ export const CAMPOS_SESSOES = {
   STATUS_TRAT: '⚕ Status do tratamento',
   ID_TRAT: '⚙ idTreatment (franquia)',
 } as const;
+
+/**
+ * Nomes antigos dos dois campos que foram renomeados em 02/10/2026 ("previstas" era lido como o total
+ * do plano e "marcadas" como o que se marcou no mês — nenhum dos dois é o que o número mostra).
+ * As contas que ainda não renomearam seguem funcionando: o nome novo vence, o antigo é o plano B.
+ */
+export const NOMES_ANTIGOS_SESSOES: Record<string, string[]> = {
+  [CAMPOS_SESSOES.PREVISTAS]: ['# Sessões previstas'],
+  [CAMPOS_SESSOES.MARCADAS]: ['# Sessões marcadas'],
+};
+
+/** Acha o campo da conta pelo nome novo ou, na falta, por um nome antigo. `chave` normaliza o nome (igual ao do mapa). */
+export function acharCampoDeSessao<T>(porNome: Map<string, T>, nome: string, chave: (n: string) => string): T | undefined {
+  for (const n of [nome, ...(NOMES_ANTIGOS_SESSOES[nome] ?? [])]) {
+    const achou = porNome.get(chave(n));
+    if (achou !== undefined) return achou;
+  }
+  return undefined;
+}
 
 export interface ResumoDeSessoes {
   realizadas: number;

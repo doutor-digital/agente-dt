@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
-import { CAMPOS_SESSOES, diaParaTexto, escritasDeSessoes, resumirSessoes, type CampoDoCartao } from './sessoes-para-cartao.js';
+import { CAMPOS_SESSOES, acharCampoDeSessao, diaParaTexto, escritasDeSessoes, resumirSessoes, type CampoDoCartao } from './sessoes-para-cartao.js';
 
 const TRAT = 777;
 const AGORA = Date.parse('2026-10-02T12:00:00Z') / 1000;
@@ -206,4 +206,15 @@ test('campo só de DIA não é regravado a cada varredura; campo com hora, sim, 
   // com hora (date_time), 10 h de diferença é remarcação
   const comHora = escritasDeSessoes({ schedules: AGENDA, tratamento: TRATAMENTO, agoraEpoch: AGORA, campo: conta({ [CAMPOS_SESSOES.PROXIMA]: String(sessao13h - 36_000) }, { [CAMPOS_SESSOES.PROXIMA]: 'date_time' }) });
   assert.equal((acha(comHora, CAMPOS_SESSOES.PROXIMA) as { valor: number }).valor, sessao13h);
+});
+
+test('os dois campos renomeados são achados pelo nome novo ou pelo antigo; o novo vence', () => {
+  const chave = (n: string) => n.toLowerCase();
+  const soAntigo = new Map([['# sessões marcadas', 'antigo'], ['# sessões previstas', 'antigo']]);
+  assert.equal(acharCampoDeSessao(soAntigo, CAMPOS_SESSOES.MARCADAS, chave), 'antigo');
+  assert.equal(acharCampoDeSessao(soAntigo, CAMPOS_SESSOES.PREVISTAS, chave), 'antigo');
+  const ambos = new Map([['# sessões agendadas (por vir)', 'novo'], ['# sessões marcadas', 'antigo']]);
+  assert.equal(acharCampoDeSessao(ambos, CAMPOS_SESSOES.MARCADAS, chave), 'novo');
+  // campo sem nome antigo não ganha plano B, e conta sem nenhum dos dois devolve nada
+  assert.equal(acharCampoDeSessao(new Map([['# sessões realizadas', 'x']]), CAMPOS_SESSOES.MARCADAS, chave), undefined);
 });

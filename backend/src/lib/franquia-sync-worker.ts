@@ -17,7 +17,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
-import { escritasDeSessoes } from './sessoes-para-cartao.js';
+import { acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
 import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
@@ -756,7 +756,7 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   const porNome = new Map(ctx.camposPorNome ?? []);
   const bruto = lead.custom_fields_values ?? [];
   const campo = (nome: string) => {
-    const info = porNome.get(normalizar(nome));
+    const info = acharCampoDeSessao(porNome, nome, normalizar);
     if (!info) return null;
     const v = bruto.find((f) => f.field_id === info.id)?.values?.[0]?.value;
     return { tipo: info.rawType ?? (info.type as string), valor: v === undefined || v === null || String(v).trim() === '' ? null : String(v) };
@@ -765,7 +765,7 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, agoraEpoch, campo });
   if (planejadas.length > 0) resumo.sessoes = (resumo.sessoes ?? 0) + 1;
   for (const e of planejadas) {
-    const info = porNome.get(normalizar(e.campo));
+    const info = acharCampoDeSessao(porNome, e.campo, normalizar);
     if (!info) continue;
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria sessão/tratamento');
