@@ -743,6 +743,16 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   const ids = new Set(p.consultas.map((s) => s.idSchedule));
   const schedules = hist ? [...p.consultas, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))] : [];
 
+  if (seco && hist) {
+    // Prova em produção de uma dúvida em aberto: a ficha do paciente manda o id do tratamento em cada sessão?
+    // Se `comIdTratamento` vier 0, a separação de ciclos cai na data de criação do tratamento.
+    const doHistorico = hist.schedules.filter((s) => !ehConsulta(s));
+    logger.info(
+      { unit: unit.slug, leadId, sessoesNoHistorico: doHistorico.length, comIdTratamento: doHistorico.filter((s) => s.idTreatment !== null).length },
+      'franquia-sync [seco]: sessões do histórico do paciente',
+    );
+  }
+
   const porNome = new Map(ctx.camposPorNome ?? []);
   const bruto = lead.custom_fields_values ?? [];
   const campo = (nome: string) => {

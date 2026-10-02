@@ -525,6 +525,8 @@ interface SpineRawClientDetail {
   whatsapp?: string;
   schedules?: Array<{
     idSchedule?: number;
+    /** A que tratamento a sessão pertence. Não confirmado que a ficha manda; se não vier, fica null. */
+    idTreatment?: number;
     dateAttendance?: string;
     category?: string;
     physicalTherapist?: string;
@@ -566,6 +568,7 @@ export async function getClient(
             normalize(
               {
                 idSchedule: s.idSchedule,
+                idTreatment: s.idTreatment,
                 dateAttendance: s.dateAttendance,
                 idStatus: s.idStatus,
                 statusName: s.statusName,
