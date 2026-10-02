@@ -85,9 +85,9 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'O que acontece na franquia manda o cartão andar sozinho: marcou vira AGENDADO, foi atendido vira COMPARECEU, começou as sessões vai pra EM TRATAMENTO. Ninguém arrasta cartão na mão.',
     pegadinha:
-      'A franquia nunca escreve atendido, valor nem alta por conta própria — esses três continuam vindo da tela. E a máquina se recusa a declarar falta ou perda a partir da etapa de entrada: esse cartão é da Sofia, que pode estar no meio de uma conversa.',
+      'A franquia nunca escreve atendido, valor nem alta por conta própria — esses três continuam vindo da tela. E a máquina se recusa a declarar falta ou perda a partir da etapa de entrada: esse cartão é da Sofia, que pode estar no meio de uma conversa. Mover dispara os bots da etapa de destino: ligue em seco primeiro e leia no log (franquia-move [seco]: moveria) e no resumo da varredura (simulados) quantos cartões iriam pra onde.',
     risco: 'move-cartao',
-    temSeco: false,
+    temSeco: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/franquia-move.ts',
   },
@@ -184,6 +184,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     temSeco: false,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/preenche-campos-worker.ts',
+  },
+  {
+    id: 'franquia-sessoes',
+    chave: 'FRANQUIA_SESSOES_SLUGS',
+    nome: 'Sessões e tratamento no cartão',
+    oQueFaz:
+      'Atualiza no cartão, a cada varredura, as sessões realizadas, faltas, marcadas e previstas, a próxima e a última sessão, e o local, grau, status e id do tratamento da franquia.',
+    pegadinha:
+      'Sobrescreve o que está no cartão: a franquia vence. Só funciona onde o campo existe com o tipo certo (número, data, texto); campo de outro tipo é pulado. Ligue em seco primeiro e confira no log o que gravaria.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/franquia-sync-worker.ts',
   },
   {
     id: 'carimbo-etapa',

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ETAPA, REVISAO_FOLGA_S, ehEtapaDeEntrada, horasAteNegociacao, moveLiberado, planejarMovimento, recortarHistorico, tratamentoAberto, type EntradaMovimento } from './franquia-move.js';
+import { ETAPA, REVISAO_FOLGA_S, ehEtapaDeEntrada, horasAteNegociacao, estadoDoMove, moveLiberado, planejarMovimento, recortarHistorico, tratamentoAberto, type EntradaMovimento } from './franquia-move.js';
 import type { SpineSchedule } from '../services/spine.service.js';
 
 const AGORA = Date.parse('2026-09-18T15:00:00Z') / 1000;
@@ -104,6 +104,8 @@ test('flags e prazo', () => {
   assert.equal(moveLiberado('laboratorio-kommo', undefined), false);
   assert.equal(moveLiberado('laboratorio-kommo', "'laboratorio-kommo'"), true);
   assert.equal(moveLiberado('x', '*'), true);
+  assert.equal(estadoDoMove('x', '*'), 'ligado');
+  assert.equal(estadoDoMove('x', undefined), 'desligado');
   assert.equal(horasAteNegociacao(undefined), 48);
   assert.equal(horasAteNegociacao('72'), 72);
   assert.equal(horasAteNegociacao('abc'), 48);

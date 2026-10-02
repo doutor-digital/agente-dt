@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { candidatoARevisao, escolherPaciente, termosDeBuscaDoNome, type ClienteFranquia } from './franquia-sync-worker.js';
+import { aplicarMovimento, candidatoARevisao, type ResumoSync, escolherPaciente, termosDeBuscaDoNome, type ClienteFranquia } from './franquia-sync-worker.js';
 import { CAMPOS_SYNC, chaveTelefone, nomeDaFranquia } from './franquia-sync.js';
 import { ETAPA } from './franquia-move.js';
+import { _semearParaTeste } from './automacoes-estado.js';
 
 // ── quais termos o cartão gera ─────────────────────────────────────────────────
 test('termosDeBuscaDoNome: cada pessoa do título vira termos, do específico ao largo, com sobrenome', () => {
@@ -113,4 +114,25 @@ test('candidatoARevisao: etapa que a revisão não olha', () => {
   for (const etapa of [ETAPA.QUALIFICACAO, ETAPA.ESPERA, ETAPA.NAO_COMPARECEU, ETAPA.GANHO, ETAPA.PERDIDO, ETAPA.RETORNO, ETAPA.INC]) {
     assert.equal(candidatoARevisao(etapa, val(), CORTE), false, etapa);
   }
+});
+
+// ── move em seco ───────────────────────────────────────────────────────────────
+test('aplicarMovimento: com o move em seco NADA toca no Kommo e o resumo conta por transição', async () => {
+  const chamadas: string[] = [];
+  const kommo = new Proxy({}, { get: (_t, nome) => async () => { chamadas.push(String(nome)); } }) as never;
+  const funis = { idDe: () => ({ pipelineId: 1, statusId: 2 }) } as never;
+  const unit = { slug: 'doutor-hernia-acailandia' } as never;
+  const resumo: ResumoSync = { unit: 'x', em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
+
+  _semearParaTeste([{ slug: 'doutor-hernia-acailandia', automacao: 'franquia-move', estado: 'seco' }]);
+  try {
+    for (const lead of [1, 2]) await aplicarMovimento(unit, kommo, funis, lead, { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: 't' }, resumo, ETAPA.COMPARECEU);
+    // PERDIDO também passa pelo portão: sem ele, fecharComoPerdido escreveria no Kommo
+    await aplicarMovimento(unit, kommo, funis, 3, { funil: 'COMERCIAL', para: ETAPA.PERDIDO, motivo: 't' }, resumo, ETAPA.COMPARECEU);
+  } finally {
+    _semearParaTeste([]);
+  }
+  assert.deepEqual(chamadas, [], 'seco não pode chamar o Kommo');
+  assert.equal(resumo.movimentos, 0);
+  assert.deepEqual(resumo.simulados, { 'COMPARECEU → EM NEGOCIAÇÃO': 2, 'COMPARECEU → PERDIDO': 1 });
 });

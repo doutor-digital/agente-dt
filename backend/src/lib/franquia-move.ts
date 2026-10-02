@@ -40,7 +40,7 @@
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 import { ehAvaliacao, ehConsulta } from './franquia-sync.js';
 import { normalizarNome } from './kommo-schema.js';
-import { automacaoLigada } from './automacoes-estado.js';
+import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 
 export const ETAPA = {
   INC: 'Etapa de leads de entrada',
@@ -372,6 +372,14 @@ export function recortarHistorico<S extends Pick<SpineSchedule, 'dateAttendanceU
 
 export function moveLiberado(slug: string, raw: string | undefined = process.env.FRANQUIA_MOVE_SLUGS): boolean {
   return automacaoLigada(slug, 'franquia-move', raw);
+}
+
+/**
+ * ligado = move; seco = decide e registra "moveria" sem tocar no Kommo (só a tela grava "seco");
+ * desligado = nem decide. O `.env` só sabe ligado/desligado.
+ */
+export function estadoDoMove(slug: string, raw: string | undefined = process.env.FRANQUIA_MOVE_SLUGS): Estado {
+  return estadoDaAutomacao(slug, 'franquia-move', raw);
 }
 
 export function horasAteNegociacao(raw: string | undefined = process.env.FRANQUIA_NEGOCIACAO_HORAS): number {

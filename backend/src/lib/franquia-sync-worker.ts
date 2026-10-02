@@ -17,12 +17,13 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
+import { acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
 import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, moveLiberado, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, type DecisaoParado } from './parados.js';
@@ -34,6 +35,8 @@ const DIAS_ATRAS = 3;
 const DIAS_FRENTE = 45;
 const MAX_PACIENTES_POR_VARREDURA = 400;
 const PAUSA_ENTRE_ESCRITAS_MS = 150;
+/** Cada cartão com sessão a atualizar custa até ~10 PATCH; o teto espalha a 1ª varredura de uma unidade grande por várias. */
+const MAX_SESSOES_POR_VARREDURA = Number(process.env.FRANQUIA_SESSOES_MAX) || 60;
 const CACHE_LEAD_MS = 6 * 60 * 60_000;
 
 let timer: NodeJS.Timeout | null = null;
@@ -133,8 +136,12 @@ export interface ResumoSync {
   exemplosSemLead: string[];
   /** fase 2: cartões movidos de etapa nesta varredura (0 quando a unidade não está em FRANQUIA_MOVE_SLUGS) */
   movimentos: number;
+  /** fase 1c: cartões cujas sessões/tratamento foram atualizados nesta varredura (teto `MAX_SESSOES_POR_VARREDURA`) */
+  sessoes?: number;
   /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
   revisados: number;
+  /** move em seco: "DE → PARA" → quantos cartões se moveriam nesta varredura (só aparece quando há) */
+  simulados?: Record<string, number>;
 }
 const ultimoResumo = new Map<string, ResumoSync>();
 export function resumoDoSync(): ResumoSync[] {
@@ -382,10 +389,23 @@ export async function historicoDoPaciente(unit: Unit, idClient: number | null): 
   return out;
 }
 
-async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = ''): Promise<void> {
+/** Todo "moveria" do seco (do move ou da revisão) conta aqui, pra o `simulados` do resumo nunca subestimar o volume. */
+function contarSimulado(resumo: ResumoSync, de: string, para: string): void {
+  const chave = `${de || '?'} → ${para}`;
+  resumo.simulados = { ...resumo.simulados, [chave]: (resumo.simulados?.[chave] ?? 0) + 1 };
+}
+
+export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = ''): Promise<void> {
   const alvo = funis.idDe(mov.funil, mov.para);
   if (!alvo) {
     logger.warn({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil }, 'franquia-move: etapa não existe nesta conta — não movi');
+    return;
+  }
+  // Move em seco (tela de Automações): é o ÚNICO portão por onde todo movimento passa — cartão normal,
+  // passagem das 48 h e revisão do histórico —, então nenhum caminho novo escapa dele.
+  if (estadoDoMove(unit.slug) === 'seco') {
+    contarSimulado(resumo, deEtapa, mov.para);
+    logger.info({ unit: unit.slug, leadId, de: deEtapa, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     return;
   }
   // PERDIDO pela jornada (fato velho na franquia): mesmo fecho do worker de parados — motivo de perda,
@@ -584,7 +604,7 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
       } catch (err) {
         logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-move: não consegui conferir a franquia antes das 48 h — seguindo pelo cartão');
       }
-      await aplicarMovimento(unit, kommo, funis, lead.id, { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: `atendido há ${Math.floor((agora - dataConsulta) / 3600)} h sem tratamento (pelo cartão)` }, resumo);
+      await aplicarMovimento(unit, kommo, funis, lead.id, { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: `atendido há ${Math.floor((agora - dataConsulta) / 3600)} h sem tratamento (pelo cartão)` }, resumo, ETAPA.COMPARECEU);
     }
     if (leads.length < 250) break;
   }
@@ -603,7 +623,7 @@ interface CtxSync {
    * conhece os campos da CONSULTA; o espelho da PESSOA precisa de outros sete, e criar uma
    * segunda constante só pra eles duplicaria a mesma lista em dois lugares.
    */
-  camposPorNome?: Array<[string, { id: number; type: KommoLeadCustomField['type']; enums: Array<{ id: number; value: string }> }]>;
+  camposPorNome?: Array<[string, { id: number; type: KommoLeadCustomField['type']; /** tipo como o Kommo diz (date_time continua date_time; `type` o mapeia pra date) */ rawType?: string; enums: Array<{ id: number; value: string }> }]>;
   /** `FRANQUIA_REVISAO_SECO=1`: a revisão pelo histórico só registra o que faria (campos e etapa); a varredura normal não muda */
   seco?: boolean;
 }
@@ -719,6 +739,67 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
 }
 
 /**
+ * Sessões e tratamento no cartão (fase 1c), ATUALIZADOS a cada varredura — o `espelharPaciente` só
+ * preenche buraco, o que é certo para queixa e errado para contador (ver `sessoes-para-cartao.ts`).
+ *
+ * Os contadores só saem do histórico COMPLETO do paciente (`GET /clients/{id}`, cache de 1 h): a
+ * agenda da varredura cobre D-3…D+45 e contar só ela diria "2 realizadas" para quem fez 14 sessões.
+ * Sem o histórico em mãos grava apenas o que é do tratamento (id, local, grau, status).
+ */
+async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null): Promise<void> {
+  const { unit, kommo, resumo, agoraEpoch } = ctx;
+  if (!p.tratamento?.idTreatment) return;
+  // Chave por unidade (tela de Automações): desligado = não faz nada; seco = só registra o que gravaria.
+  const estado = estadoDaAutomacao(unit.slug, 'franquia-sessoes', process.env.FRANQUIA_SESSOES_SLUGS);
+  if (estado === 'desligado') return;
+  const seco = estado === 'seco' || ctx.seco === true;
+  if ((resumo.sessoes ?? 0) >= MAX_SESSOES_POR_VARREDURA) return;
+  const hist = historico ?? (p.idClient ? await historicoDoPaciente(unit, p.idClient) : null);
+  const ids = new Set(p.consultas.map((s) => s.idSchedule));
+  const schedules = hist ? [...p.consultas, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))] : [];
+
+  if (seco && hist) {
+    // Prova em produção de uma dúvida em aberto: a ficha do paciente manda o id do tratamento em cada sessão?
+    // Se `comIdTratamento` vier 0, a separação de ciclos cai na data de criação do tratamento.
+    const doHistorico = hist.schedules.filter((s) => !ehConsulta(s));
+    logger.info(
+      { unit: unit.slug, leadId, sessoesNoHistorico: doHistorico.length, comIdTratamento: doHistorico.filter((s) => s.idTreatment !== null).length },
+      'franquia-sync [seco]: sessões do histórico do paciente',
+    );
+  }
+
+  const porNome = new Map(ctx.camposPorNome ?? []);
+  const bruto = lead.custom_fields_values ?? [];
+  const campo = (nome: string) => {
+    const info = acharCampoDeSessao(porNome, nome, normalizar);
+    if (!info) return null;
+    const v = bruto.find((f) => f.field_id === info.id)?.values?.[0]?.value;
+    return { tipo: info.rawType ?? (info.type as string), valor: v === undefined || v === null || String(v).trim() === '' ? null : String(v) };
+  };
+
+  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, agoraEpoch, campo });
+  if (planejadas.length > 0) resumo.sessoes = (resumo.sessoes ?? 0) + 1;
+  for (const e of planejadas) {
+    const info = acharCampoDeSessao(porNome, e.campo, normalizar);
+    if (!info) continue;
+    if (seco) {
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria sessão/tratamento');
+      continue;
+    }
+    try {
+      if (e.limpar) await kommo.clearLeadCustomField(leadId, info.id);
+      else await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, e.valor, info.enums);
+      resumo.escritas++;
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync: sessão/tratamento gravado');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug, leadId, campo: e.campo }, 'franquia-sync: falha ao gravar sessão/tratamento');
+    }
+    await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
+  }
+}
+
+/**
  * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
  * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
  * quando a etapa exige — GANHO e funil TRATAMENTO).
@@ -735,13 +816,14 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     const info = mapa[w.campo];
     if (!info) continue;
     if (seco) {
-      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
+      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
       continue;
     }
     try {
-      await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, w.valor, info.enums);
+      if (w.limpar) await kommo.clearLeadCustomField(leadId, info.id);
+      else await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, w.valor, info.enums);
       resumo.escritas++;
-      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.valor, motivo: w.motivo }, 'franquia-sync: campo gravado');
+      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync: campo gravado');
     } catch (err) {
       resumo.erros++;
       logger.warn({ err, unit: unit.slug, leadId, campo: w.nome }, 'franquia-sync: falha ao gravar campo');
@@ -755,6 +837,11 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho da pessoa falhou'),
     );
   }
+
+  // fase 1c: sessões e tratamento, atualizados
+  await espelharSessoes(ctx, leadId, lead, p, historico).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho das sessões falhou'),
+  );
 
   // fase 2: a franquia move o cartão
   if (!funis) return;
@@ -778,6 +865,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   const mov = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() });
   if (!mov) return;
   if (seco) {
+    contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     return;
   }
@@ -862,13 +950,17 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
               }
               if (parado > JORNADA.CONFERIR_MAX_DIAS) {
                 const mov: Movimento = { funil: 'COMERCIAL', para: ETAPA.PERDIDO, motivo: `${Math.floor(parado)} d em ${ETAPA.CONFERIR} sem acerto do cadastro`, motivoPerda: MOTIVO_PERDA.SEM_CADASTRO, semRegua: true, dias: Math.floor(parado) };
-                if (seco) logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
+                if (seco) {
+                  contarSimulado(resumo, etapa, mov.para);
+                  logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
+                }
                 else await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, etapa);
               }
               continue;
             }
             if (!conferir) continue;
-            if (seco) {
+            if (seco || estadoDoMove(unit.slug) === 'seco') {
+              contarSimulado(resumo, etapa, ETAPA.CONFERIR);
               logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: ETAPA.CONFERIR }, 'franquia-move [seco]: moveria');
               continue;
             }
@@ -909,6 +1001,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
     .filter((c) => ['date', 'date_time', 'select', 'monetary', 'numeric', 'text', 'textarea', 'radiobutton'].includes(c.type))
     .map((c) => [normalizar(c.name), {
       id: c.id,
+      rawType: c.type,
       type: (c.type === 'date_time' ? 'date' : c.type) as KommoLeadCustomField['type'],
       enums: (c.enums ?? []).map((e) => ({ id: e.id, value: e.value })),
     }]);
@@ -916,7 +1009,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
     logger.warn({ unit: unit.slug }, 'franquia-sync: conta sem os campos de consulta — pulando');
     return resumo;
   }
-  const mover = moveLiberado(unit.slug);
+  const mover = estadoDoMove(unit.slug) !== 'desligado';
   const funis = mover ? await carregarFunis(kommo) : null;
   if (mover && !funis) logger.warn({ unit: unit.slug }, 'franquia-move: conta sem funil principal — só campos');
   const tz = unit.spineTimezone || 'America/Sao_Paulo';
