@@ -16,6 +16,7 @@ import { startDashboardMvRefresher, stopDashboardMvRefresher } from './lib/dashb
 import { startFollowUpWorker, stopFollowUpWorker } from './lib/follow-up-worker.js';
 import { startReminderWorker, stopReminderWorker } from './lib/reminder-worker.js';
 import { startReactivationWorker, stopReactivationWorker } from './lib/reactivation-worker.js';
+import { startLeadPausaWorker, stopLeadPausaWorker } from './lib/lead-pausa-worker.js';
 import { startSlaAlertWorker, stopSlaAlertWorker } from './lib/sla-alert-worker.js';
 import { startAgendamentoPerdidoWorker, stopAgendamentoPerdidoWorker } from './lib/agendamento-perdido-worker.js';
 import { startTaxaErroWorker, stopTaxaErroWorker } from './lib/taxa-erro-worker.js';
@@ -161,6 +162,7 @@ async function main(): Promise<void> {
       startFollowUpWorker();
       startReminderWorker();
       startReactivationWorker();
+      startLeadPausaWorker();
       startSlaAlertWorker();
       startAgendamentoPerdidoWorker();
       startTaxaErroWorker();
@@ -187,6 +189,7 @@ async function main(): Promise<void> {
       stopFollowUpWorker();
       stopReminderWorker();
       stopReactivationWorker();
+      stopLeadPausaWorker();
       stopSlaAlertWorker();
       stopAgendamentoPerdidoWorker();
       stopTaxaErroWorker();

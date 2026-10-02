@@ -12,6 +12,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { descreverPausa, emPausa, pausaAgendada, validarPedidoDePausa } from '../lib/pausa-unidade.js';
+import { estadoDaPausaDoLead, pausarLead, retomarLead, validarPausaDoLead, type EstadoDaPausaDoLead } from '../lib/pausa-lead.js';
 
 // ── proteção da rota pública: 12 tentativas por ip+unidade a cada 10 min ─────
 const tentativas = new Map<string, { n: number; desde: number }>();
@@ -132,6 +133,64 @@ export async function publicRetomarHandler(req: Request, res: Response): Promise
   if (!unit) return;
   const por = typeof (req.body as { por?: unknown })?.por === 'string' ? String((req.body as { por: string }).por).trim() : null;
   res.json(estado(await retomar(unit, por || 'recepção')));
+}
+
+// ── pausa de UM lead, com data para voltar (widget "Pausar a Sofia") ─────────────────────────────
+// Mesmo código de 6 dígitos e mesmo limite de tentativas da unidade: quem sabe o código pausa.
+const pedidoLeadSchema = z.object({
+  ate: z.string().min(10),
+  motivo: z.string().trim().max(200).nullable().optional(),
+  por: z.string().trim().max(80).nullable().optional(),
+});
+
+function leadIdDe(req: Request, res: Response): number | null {
+  const id = Number(req.params.leadId);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: 'lead inválido' });
+    return null;
+  }
+  return id;
+}
+
+function estadoDoLead(e: EstadoDaPausaDoLead, tz: string) {
+  return { ...e, tz, descricao: e.emPausa && e.ate ? `Sofia pausada neste lead até ${new Intl.DateTimeFormat('pt-BR', { timeZone: tz, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(e.ate)}` : 'Sofia ativa neste lead', agora: new Date() };
+}
+
+export async function publicLeadStatusHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadePublica(req, res);
+  if (!unit) return;
+  const leadId = leadIdDe(req, res);
+  if (!leadId) return;
+  res.json(estadoDoLead(await estadoDaPausaDoLead(unit.id, leadId), unit.spineTimezone ?? 'America/Sao_Paulo'));
+}
+
+export async function publicLeadPausarHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadePublica(req, res);
+  if (!unit) return;
+  const leadId = leadIdDe(req, res);
+  if (!leadId) return;
+  const parsed = pedidoLeadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'pedido inválido' });
+    return;
+  }
+  const ate = new Date(parsed.data.ate);
+  const erro = validarPausaDoLead(ate);
+  if (erro) {
+    res.status(400).json({ error: erro });
+    return;
+  }
+  const estadoNovo = await pausarLead(unit, leadId, { ate, motivo: parsed.data.motivo, por: parsed.data.por || 'recepção' });
+  res.json(estadoDoLead(estadoNovo, unit.spineTimezone ?? 'America/Sao_Paulo'));
+}
+
+export async function publicLeadRetomarHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadePublica(req, res);
+  if (!unit) return;
+  const leadId = leadIdDe(req, res);
+  if (!leadId) return;
+  const por = typeof (req.body as { por?: unknown })?.por === 'string' ? String((req.body as { por: string }).por).trim() : null;
+  res.json(estadoDoLead(await retomarLead(unit, leadId, por || 'recepção'), unit.spineTimezone ?? 'America/Sao_Paulo'));
 }
 
 // ── rotas do painel (sessão) ─────────────────────────────────────────────────
