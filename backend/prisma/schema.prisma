@@ -337,6 +337,7 @@ model Unit {
 
   instagramComments InstagramComment[]
   agendaBlocks      AgendaBlock[]
+  leadPausas        LeadPausa[]
   spineLeadLinks    SpineLeadLink[]
   changeLog         UnitChangeLog[]
   lessons           UnitLesson[]
@@ -1529,6 +1530,28 @@ model InstagramComment {
 // criaria uma chance a mais de erro de fuso entre o que se digita e o que se
 // vê.
 // ===========================================================================
+/// Pausa da IA para UM lead, com data para voltar (widget "Pausar a Sofia", 02/10/2026).
+/// A pausa da unidade inteira continua nas colunas `pausa_*` de `units`.
+model LeadPausa {
+  id          String   @id @default(cuid())
+  unitId      String   @map("unit_id")
+  kommoLeadId Int      @map("kommo_lead_id")
+  /// A Sofia só volta a agir depois deste instante.
+  ate         DateTime
+  motivo      String?
+  por         String?
+  /// Verdadeiro quando FOMOS nós que marcamos "Pausar IA" no cartão: só nesse caso o worker
+  /// desmarca ao vencer. Se a SDR já tinha marcado à mão, a marca é dela e não mexemos.
+  marcouCampo Boolean  @default(false) @map("marcou_campo")
+  criadoEm    DateTime @default(now()) @map("criado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, kommoLeadId])
+  @@index([ate])
+  @@map("lead_pausas")
+}
+
 model AgendaBlock {
   id     String @id @default(cuid())
   unitId String @map("unit_id")

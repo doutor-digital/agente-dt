@@ -8,6 +8,7 @@ import { ehFeriadoNacionalAgora } from './feriados.js';
 import { carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarSemResposta } from '../services/lead-metrics.service.js';
 import { automacaoLigada } from './automacoes-estado.js';
+import { leadPausadoPorJanela } from './pausa-lead.js';
 
 const SWEEP_MS = 60_000;
 
@@ -318,7 +319,8 @@ async function varrer(): Promise<void> {
         // Pausada = um humano assumiu. Cobrar aqui e falar por cima da SDR no
         // meio do atendimento dela. Nao marca motivo de parada de proposito: a
         // pausa e temporaria, e quando ela sair o lead volta para a fila.
-        if (estado.pausada) continue;
+        // Pausa por janela do widget (com data de volta): vale mesmo que a caixinha não tenha sido marcada.
+        if (estado.pausada || (await leadPausadoPorJanela(unit.id, Number(conv.leadId)))) continue;
 
         if (ehIntocavel(estado.lossReasonId)) {
           await prisma.conversation

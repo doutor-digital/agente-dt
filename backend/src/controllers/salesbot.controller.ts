@@ -9,6 +9,7 @@ import { TraceRecorder } from '../agent/trace-recorder.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
+import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 
@@ -117,7 +118,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     content: message,
   });
 
-  if (await isLeadPaused(unit, Number(leadId))) {
+  if ((await isLeadPaused(unit, Number(leadId))) || (await leadPausadoPorJanela(unit.id, Number(leadId)))) {
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({
       kind: 'COMPLETED',
