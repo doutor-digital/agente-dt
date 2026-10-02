@@ -72,12 +72,21 @@ function escapar(nome: string): string {
   return nome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Texto da opção marcada de um <select name="...">; null se não há select, ou nenhuma opção real marcada. */
+/**
+ * Texto da opção marcada de um <select name="...">. A página real tem DOIS selects com o mesmo nome
+ * (`id_form_payment`): o primeiro vem quebrado, com erros de PHP dentro das opções e nenhuma marcada; o segundo
+ * é o que carrega o valor salvo. Por isso vale a primeira opção marcada entre TODOS os selects de mesmo nome.
+ * null se não há select, ou nenhuma opção real marcada em nenhum.
+ */
 function selecionado(html: string, nome: string): string | null {
-  const m = new RegExp(`<select\\b[^>]*\\bname="${escapar(nome)}"[^>]*>([\\s\\S]*?)</select>`, 'i').exec(html);
-  if (!m) return null;
-  const opcoes = m[1].matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/gi);
-  for (const o of opcoes) if (/\bselected\b/i.test(o[1])) return vazioParaNull(o[2].replace(/<[^>]+>/g, ''));
+  const selects = html.matchAll(new RegExp(`<select\\b[^>]*\\bname="${escapar(nome)}"[^>]*>([\\s\\S]*?)</select>`, 'gi'));
+  for (const m of selects) {
+    for (const o of m[1].matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/gi)) {
+      if (!/\bselected\b/i.test(o[1])) continue;
+      const texto = vazioParaNull(o[2].replace(/<[^>]+>/g, ''));
+      if (texto) return texto;
+    }
+  }
   return null;
 }
 

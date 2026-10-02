@@ -141,3 +141,15 @@ test('aviso do WhatsApp: título com a unidade, causa, efeito e o que fazer — 
   assert.notEqual(sessao, montarAvisoDaTela('Açailândia', 'entrar'));
   assert.ok(montarAvisoDaTela('Serra', 'layout').includes('franquia-tela.ts'));
 });
+
+test('a página real tem DOIS selects id_form_payment: o 1º quebrado (erros de PHP, nada marcado), o 2º com o valor — lê o 2º', () => {
+  const quebrado = '<select class="form-control select2" name="id_form_payment"><option value="NULL">Selecione</option>'
+    + '<option value="1" \n<div style="border:1px solid #990000"><h4>A PHP Error was encountered</h4><p>Message: Trying to get property \'id_form_payment\' of non-object</p></div>>DINHEIRO</option></select>';
+  const limpo = '<select class="form-control select2" name="id_form_payment"><option value="NULL">Selecione</option><option value="1" >DINHEIRO</option><option value="15" selected>CRÉDITO 12X</option></select>';
+  const html = tela().replace(/<select class="form-select" name="id_form_payment"[\s\S]*?<\/select>/, quebrado + limpo);
+  assert.equal(lerAtendimentoDaTela(html)!.formaPagamento, 'CRÉDITO 12X');
+  // e na ordem inversa também
+  assert.equal(lerAtendimentoDaTela(tela().replace(/<select class="form-select" name="id_form_payment"[\s\S]*?<\/select>/, limpo + quebrado))!.formaPagamento, 'CRÉDITO 12X');
+  // nenhum marcado em nenhum dos dois: continua vazio
+  assert.equal(lerAtendimentoDaTela(tela().replace(/<select class="form-select" name="id_form_payment"[\s\S]*?<\/select>/, quebrado + quebrado))!.formaPagamento, null);
+});
