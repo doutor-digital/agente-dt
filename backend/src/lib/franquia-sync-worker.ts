@@ -18,6 +18,8 @@ import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
 import { acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
+import { planejarAtendimento, type CampoCandidato } from './atendimento-para-cartao.js';
+import { abrirSessaoTela, type AtendimentoTela, type SessaoTela } from './franquia-tela.js';
 import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
@@ -35,9 +37,15 @@ const DIAS_ATRAS = 3;
 const DIAS_FRENTE = 45;
 const MAX_PACIENTES_POR_VARREDURA = 400;
 const PAUSA_ENTRE_ESCRITAS_MS = 150;
+/** Gentileza com o servidor da franquia (o PHP deles é lento): uma página a cada 1,5 s. */
+const PAUSA_ENTRE_LEITURAS_TELA_MS = 1500;
 /** Cada cartão com sessão a atualizar custa até ~10 PATCH; o teto espalha a 1ª varredura de uma unidade grande por várias. */
 const MAX_SESSOES_POR_VARREDURA = Number(process.env.FRANQUIA_SESSOES_MAX) || 60;
 const CACHE_LEAD_MS = 6 * 60 * 60_000;
+/** Cada atendimento lido da tela da franquia é 1 página (~300 KB): o teto espalha a 1ª varredura por várias e o cache evita reler o mesmo. */
+const MAX_TELA_POR_VARREDURA = Number(process.env.FRANQUIA_TELA_MAX) || 80;
+const CACHE_TELA_MS = 3 * 60 * 60_000;
+const cacheTela = new Map<string, { em: number; atendimento: AtendimentoTela }>();
 
 let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
@@ -138,6 +146,8 @@ export interface ResumoSync {
   movimentos: number;
   /** fase 1c: cartões cujas sessões/tratamento foram atualizados nesta varredura (teto `MAX_SESSOES_POR_VARREDURA`) */
   sessoes?: number;
+  /** fase 1d: atendimentos lidos da TELA da franquia (forma de pagamento, retorno, motivo) nesta varredura */
+  tela?: number;
   /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
   revisados: number;
 }
@@ -609,6 +619,8 @@ interface CtxSync {
    * segunda constante só pra eles duplicaria a mesma lista em dois lugares.
    */
   camposPorNome?: Array<[string, { id: number; type: KommoLeadCustomField['type']; /** tipo como o Kommo diz (date_time continua date_time; `type` o mapeia pra date) */ rawType?: string; enums: Array<{ id: number; value: string }> }]>;
+  /** Sessão na tela da franquia, aberta na primeira vez que um cartão precisa dela (login por varredura, por unidade). */
+  tela?: { sessao: SessaoTela | null; aberta: boolean };
   /** `FRANQUIA_REVISAO_SECO=1`: a revisão pelo histórico só registra o que faria (campos e etapa); a varredura normal não muda */
   seco?: boolean;
 }
@@ -785,6 +797,77 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
 }
 
 /**
+ * Atendimento da franquia no cartão (fase 1d): forma de pagamento, data do retorno e motivo para não realizar o
+ * tratamento, lidos da TELA de edição do atendimento — a API não os devolve. Só para quem já foi atendido
+ * (avaliação ou retorno com desfecho ATENDIDO). Detalhes e regras em `atendimento-para-cartao.ts`.
+ *
+ * Chave `franquia-tela` (tela de Automações): desligado não faz nada; seco registra o que gravaria. O login vem de
+ * FRANQUIA_TELA_USER/FRANQUIA_TELA_PASS; sem ele a fase inteira é pulada com um aviso.
+ */
+async function espelharAtendimento(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao): Promise<void> {
+  const { unit, kommo, resumo } = ctx;
+  const estado = estadoDaAutomacao(unit.slug, 'franquia-tela', process.env.FRANQUIA_TELA_SLUGS);
+  if (estado === 'desligado' || !ctx.tela) return;
+  const seco = estado === 'seco' || ctx.seco === true;
+
+  const consulta = escolherConsulta(p.consultas);
+  if (!consulta?.idSchedule || consulta.idStatus !== SPINE_STATUS.ATENDIDO) return;
+
+  const chave = `${unit.slug}:${consulta.idSchedule}`;
+  let atendimento = cacheTela.get(chave);
+  if (!atendimento || Date.now() - atendimento.em > CACHE_TELA_MS) {
+    if ((resumo.tela ?? 0) >= MAX_TELA_POR_VARREDURA) return;
+    if (!ctx.tela.aberta) {
+      ctx.tela.aberta = true;
+      ctx.tela.sessao = await abrirSessaoTela(unit.slug);
+    }
+    if (!ctx.tela.sessao || ctx.tela.sessao.quebrada) return;
+    const lido = await ctx.tela.sessao.lerAtendimento(consulta.idSchedule);
+    if (!lido) return;
+    resumo.tela = (resumo.tela ?? 0) + 1;
+    atendimento = { em: Date.now(), atendimento: lido };
+    if (cacheTela.size > 500) for (const [k, v] of cacheTela) if (Date.now() - v.em > CACHE_TELA_MS) cacheTela.delete(k);
+    cacheTela.set(chave, atendimento);
+    await new Promise((r) => setTimeout(r, PAUSA_ENTRE_LEITURAS_TELA_MS));
+  }
+
+  const bruto = lead.custom_fields_values ?? [];
+  const campos = (nome: string): CampoCandidato[] =>
+    (ctx.camposPorNome ?? [])
+      .filter(([chaveNome]) => chaveNome === normalizar(nome))
+      .map(([, info]) => {
+        const v = bruto.find((f) => f.field_id === info.id)?.values?.[0]?.value;
+        return {
+          id: info.id,
+          tipo: info.rawType ?? (info.type as string),
+          valor: v === undefined || v === null || String(v).trim() === '' ? null : String(v),
+          opcoes: info.enums.map((x) => x.value),
+        };
+      });
+
+  const plano = planejarAtendimento({ atendimento: atendimento.atendimento, campos, fuso: unit.spineTimezone || 'America/Sao_Paulo' });
+  for (const aviso of plano.avisos) logger.info({ unit: unit.slug, leadId, aviso }, 'franquia-tela: não gravei');
+
+  for (const e of plano.escritas) {
+    if (seco) {
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-tela [seco]: gravaria atendimento');
+      continue;
+    }
+    const info = (ctx.camposPorNome ?? []).map(([, i]) => i).find((i) => i.id === e.id);
+    if (!info) continue;
+    try {
+      await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, e.valor, info.enums);
+      resumo.escritas++;
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-tela: atendimento gravado');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug, leadId, campo: e.campo }, 'franquia-tela: falha ao gravar atendimento');
+    }
+    await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
+  }
+}
+
+/**
  * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
  * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
  * quando a etapa exige — GANHO e funil TRATAMENTO).
@@ -826,6 +909,11 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   // fase 1c: sessões e tratamento, atualizados
   await espelharSessoes(ctx, leadId, lead, p, historico).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho das sessões falhou'),
+  );
+
+  // fase 1d: forma de pagamento, retorno e motivo, lidos da tela do atendimento
+  await espelharAtendimento(ctx, leadId, lead, p).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho do atendimento falhou'),
   );
 
   // fase 2: a franquia move o cartão
@@ -1027,7 +1115,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   resumo.pacientes = porPaciente.size;
   const ops = opcoes(mapa);
   const agoraEpoch = Math.floor(Date.now() / 1000);
-  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome };
+  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false } };
   let vistos = 0;
 
   for (const p of porPaciente.values()) {
