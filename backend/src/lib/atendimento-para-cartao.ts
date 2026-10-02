@@ -3,7 +3,7 @@
  *
  * Decisão do João (02/10/2026): a SDR digita UMA vez, na franquia; o Kommo reflete. Três campos:
  *  - Forma de Pagamento (franquia) → `⬢ Forma de pagamento`  (a lista do Kommo tem as 20 opções da franquia, na mesma grafia);
- *  - Data do retorno               → `◷ Retomar em` (SÓ SE ESTIVER VAZIO: a SDR, o widget e a régua de espera também mexem nele; sobrescrever a cada 15 min brigaria com eles);
+ *  - Data do retorno               → `◷ Retomar em` (a franquia vence; decisão do João em 02/10/2026: "franquia é o ponto central". A SDR digita a data só na franquia — digitar no Kommo é desfeito na varredura seguinte);
  *  - Motivo para não realizar      → `⊘ Motivo para não realizar o tratamento` (texto livre nos dois lados).
  * "Tratamento a ser realizado" NÃO é espelhado: a franquia só tem 3 protocolos (1, 2 ou 3 meses) e o
  * `⚕ Tratamento indicado` do Kommo tem 18 tipos — mapear perderia a região e o tipo. "Perfil" não tem par no Kommo.
@@ -32,6 +32,8 @@ export interface CampoCandidato {
   /** opções (campo de lista); vazio nos demais */
   opcoes: string[];
 }
+
+const TOLERANCIA_DIA = 86_399;
 
 export interface EntradaAtendimento {
   atendimento: AtendimentoTela;
@@ -83,8 +85,11 @@ export function planejarAtendimento(e: EntradaAtendimento): PlanoDeAtendimento {
     const c = e.campos(CAMPOS_ATENDIMENTO.RETOMAR_EM).find((x) => x.tipo === 'date' || x.tipo === 'date_time');
     if (epoch !== null && c) {
       const atual = c.valor === null || c.valor.trim() === '' ? null : Number(c.valor);
-      const vazio = atual === null || !Number.isFinite(atual);
-      if (vazio) escritas.push({ id: c.id, campo: CAMPOS_ATENDIMENTO.RETOMAR_EM, tipo: 'date', valor: epoch, motivo: 'data do retorno na franquia' });
+      // `date` guarda só o dia (meia-noite do fuso da conta), então a mesma data volta do Kommo até ~24 h diferente
+      // do epoch exato — comparar em 60 s regravaria o cartão a cada varredura.
+      const tolerancia = c.tipo === 'date' ? TOLERANCIA_DIA : 60;
+      const igual = atual !== null && Number.isFinite(atual) && Math.abs(atual - epoch) <= tolerancia;
+      if (!igual) escritas.push({ id: c.id, campo: CAMPOS_ATENDIMENTO.RETOMAR_EM, tipo: 'date', valor: epoch, motivo: 'data do retorno na franquia' });
     }
   }
 
