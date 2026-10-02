@@ -21,6 +21,7 @@ import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../servic
 export const CAMPOS_SYNC = {
   DATA_CONSULTA: '◷ Data da Consulta',
   SITUACAO: '✓ Situação da consulta',
+  COMPARECEU: '✓ Compareceu',
   FISIO: '⚕ Fisioterapeuta',
   CATEGORIA: '⌂ Categoria da consulta',
   AGENDADO_SDR_EM: '◷ Agendado pela SDR em',
@@ -109,6 +110,17 @@ export function situacaoDaConsulta(idStatus: number | null): string | null {
     case SPINE_STATUS.DESMARCADO: return 'Desmarcado';
     default: return null;
   }
+}
+
+/**
+ * "✓ Compareceu" (Sim/Não) a partir do desfecho da consulta na franquia. Só os dois desfechos que
+ * decidem: atendido = Sim, falta = Não. Agendado, confirmado, remarcado e desmarcado não decidem
+ * nada, então devolvem null e o campo fica como está.
+ */
+export function compareceuDaConsulta(idStatus: number | null): 'Sim' | 'Não' | null {
+  if (idStatus === SPINE_STATUS.ATENDIDO) return 'Sim';
+  if (idStatus === SPINE_STATUS.NAO_COMPARECEU) return 'Não';
+  return null;
 }
 
 /** Categoria da franquia ("AVALIAÇÃO", "Sessão", "Retorno c/ exames"…) → opção do cartão. */
@@ -256,6 +268,10 @@ export function planejarEscritas(e: Entrada): Escrita[] {
     const situacao = situacaoDaConsulta(e.consulta.idStatus);
     if (situacao && !igual('SITUACAO', situacao)) {
       out.push({ campo: 'SITUACAO', nome: CAMPOS_SYNC.SITUACAO, tipo: 'select', valor: situacao, motivo: atual('SITUACAO') ? 'franquia diverge' : 'vazio' });
+    }
+    const compareceu = compareceuDaConsulta(e.consulta.idStatus);
+    if (compareceu && !igual('COMPARECEU', compareceu)) {
+      out.push({ campo: 'COMPARECEU', nome: CAMPOS_SYNC.COMPARECEU, tipo: 'select', valor: compareceu, motivo: atual('COMPARECEU') ? 'franquia diverge' : 'vazio' });
     }
     const fisio = casarFisioterapeuta(e.consulta.physicalTherapist, e.opcoes.fisio);
     if (fisio && !igual('FISIO', fisio)) {

@@ -17,6 +17,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
+import { escritasDeSessoes } from './sessoes-para-cartao.js';
 import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
@@ -719,6 +720,50 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
 }
 
 /**
+ * Sessões e tratamento no cartão (fase 1c), ATUALIZADOS a cada varredura — o `espelharPaciente` só
+ * preenche buraco, o que é certo para queixa e errado para contador (ver `sessoes-para-cartao.ts`).
+ *
+ * Os contadores só saem do histórico COMPLETO do paciente (`GET /clients/{id}`, cache de 1 h): a
+ * agenda da varredura cobre D-3…D+45 e contar só ela diria "2 realizadas" para quem fez 14 sessões.
+ * Sem o histórico em mãos grava apenas o que é do tratamento (id, local, grau, status).
+ */
+async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null): Promise<void> {
+  const { unit, kommo, resumo, seco, agoraEpoch } = ctx;
+  if (!p.tratamento?.idTreatment) return;
+  const hist = historico ?? (p.idClient ? await historicoDoPaciente(unit, p.idClient) : null);
+  const ids = new Set(p.consultas.map((s) => s.idSchedule));
+  const schedules = hist ? [...p.consultas, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))] : [];
+
+  const porNome = new Map(ctx.camposPorNome ?? []);
+  const bruto = lead.custom_fields_values ?? [];
+  const campo = (nome: string) => {
+    const info = porNome.get(normalizar(nome));
+    if (!info) return null;
+    const v = bruto.find((f) => f.field_id === info.id)?.values?.[0]?.value;
+    return { tipo: info.type as string, valor: v === undefined || v === null || String(v).trim() === '' ? null : String(v) };
+  };
+
+  for (const e of escritasDeSessoes({ schedules, tratamento: p.tratamento, agoraEpoch, campo })) {
+    const info = porNome.get(normalizar(e.campo));
+    if (!info) continue;
+    if (seco) {
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria sessão/tratamento');
+      continue;
+    }
+    try {
+      if (e.limpar) await kommo.clearLeadCustomField(leadId, info.id);
+      else await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, e.valor, info.enums);
+      resumo.escritas++;
+      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync: sessão/tratamento gravado');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug, leadId, campo: e.campo }, 'franquia-sync: falha ao gravar sessão/tratamento');
+    }
+    await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
+  }
+}
+
+/**
  * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
  * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
  * quando a etapa exige — GANHO e funil TRATAMENTO).
@@ -755,6 +800,11 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho da pessoa falhou'),
     );
   }
+
+  // fase 1c: sessões e tratamento, atualizados
+  await espelharSessoes(ctx, leadId, lead, p, historico).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho das sessões falhou'),
+  );
 
   // fase 2: a franquia move o cartão
   if (!funis) return;

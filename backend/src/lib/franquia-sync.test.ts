@@ -6,6 +6,7 @@ import {
   casarFisioterapeuta,
   categoriaDaConsulta,
   chaveTelefone,
+  compareceuDaConsulta,
   escolherConsulta,
   melhorTratamento,
   nomeDaFranquia,
@@ -238,4 +239,26 @@ test('melhorTratamento: aberto ganha de fechado; entre iguais, o mais novo', () 
   assert.equal(melhorTratamento(null, novoAberto)?.idTreatment, 2);
   assert.equal(melhorTratamento(novoAberto, null)?.idTreatment, 2);
   assert.equal(melhorTratamento(null, null), null);
+});
+
+test('✓ Compareceu: atendido = Sim, falta = Não; os outros status não decidem nada', () => {
+  assert.equal(compareceuDaConsulta(SPINE_STATUS.ATENDIDO), 'Sim');
+  assert.equal(compareceuDaConsulta(SPINE_STATUS.NAO_COMPARECEU), 'Não');
+  for (const s of [SPINE_STATUS.AGENDADO, SPINE_STATUS.CONFIRMADO, SPINE_STATUS.REMARCADO, SPINE_STATUS.DESMARCADO, null, 999]) {
+    assert.equal(compareceuDaConsulta(s), null);
+  }
+});
+
+test('✓ Compareceu: grava Sim quando atendeu e Não quando faltou; igual não reescreve; remarcada não mexe', () => {
+  const plano = (idStatus: number, valores: Record<string, string | null> = {}) => planejarEscritas({
+    valores, consulta: consulta({ idStatus }), consultaEpoch: AGORA - 86_400, tratamento: null, feitoPelaIa: false, agoraEpoch: AGORA, opcoes: OPCOES,
+  }).find((w) => w.campo === 'COMPARECEU');
+
+  assert.equal(plano(SPINE_STATUS.ATENDIDO)?.valor, 'Sim');
+  assert.equal(plano(SPINE_STATUS.NAO_COMPARECEU)?.valor, 'Não');
+  assert.equal(plano(SPINE_STATUS.ATENDIDO, { '✓ Compareceu': 'Sim' }), undefined);
+  // a franquia vence: a SDR marcou Não e a clínica atendeu
+  assert.equal(plano(SPINE_STATUS.ATENDIDO, { '✓ Compareceu': 'Não' })?.motivo, 'franquia diverge');
+  assert.equal(plano(SPINE_STATUS.AGENDADO), undefined);
+  assert.equal(plano(SPINE_STATUS.DESMARCADO), undefined);
 });
