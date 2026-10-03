@@ -21,6 +21,7 @@ import { acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js'
 import { planejarAtendimento, type CampoCandidato } from './atendimento-para-cartao.js';
 import { abrirSessaoTela, montarAvisoDaTela, type AtendimentoTela, type ProblemaDaTela, type SessaoTela } from './franquia-tela.js';
 import { avisarJoao } from './alerta-whatsapp.js';
+import { planejarCamposSdr, type CampoAtual } from './campos-sdr.js';
 import { fichaDoPaciente } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
@@ -155,6 +156,8 @@ export interface ResumoSync {
   sessoes?: number;
   /** fase 1d: atendimentos lidos da TELA da franquia (forma de pagamento, retorno, motivo) nesta varredura */
   tela?: number;
+  /** fase 1e (teste): campos da SDR calculados — quantos gravaria, quantos conferem e quantos divergem do que a SDR pôs */
+  camposSdr?: { gravaria: number; confere: number; diverge: number };
   /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
   revisados: number;
   /** move em seco: "DE → PARA" → quantos cartões se moveriam nesta varredura (só aparece quando há) */
@@ -894,6 +897,78 @@ async function espelharAtendimento(ctx: CtxSync, leadId: number, lead: KommoLead
   }
 }
 
+/** Comparação já registrada neste processo: o mesmo "confere/diverge" não se repete a cada 15 min no log. */
+const comparacoesVistas = new Set<string>();
+
+/**
+ * Campos que a SDR preenchia à mão (fase 1e, em TESTE): Tipo de lead, Responsável agendamento e Data de
+ * solicitação de cancelamento. Regras e decisões em `campos-sdr.ts`.
+ *
+ * Chave `campos-sdr` (tela de Automações): desligado não faz nada; seco registra o que gravaria; ligado grava SÓ
+ * em campo vazio. Nos dois modos registra se o calculado CONFERE ou DIVERGE do que a SDR já pôs — é o teste em
+ * produção antes de aprovar.
+ */
+async function espelharCamposSdr(
+  ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, consulta: SpineSchedule | null, feitoPelaIa: boolean,
+): Promise<void> {
+  const { unit, kommo, resumo } = ctx;
+  const estado = estadoDaAutomacao(unit.slug, 'campos-sdr', process.env.CAMPOS_SDR_SLUGS);
+  if (estado === 'desligado') return;
+  const seco = estado === 'seco' || ctx.seco === true;
+
+  const bruto = lead.custom_fields_values ?? [];
+  const porNome = ctx.camposPorNome ?? [];
+  const info = (nome: string) => porNome.find(([k]) => k === normalizar(nome))?.[1] ?? null;
+  const campo = (nome: string): CampoAtual | null => {
+    const i = info(nome);
+    if (!i) return null;
+    const v = bruto.find((f) => f.field_id === i.id)?.values?.[0]?.value;
+    return { valor: v === undefined || v === null || String(v).trim() === '' ? null : String(v), opcoes: i.enums.map((x) => x.value) };
+  };
+  const agendadoEm = Number(campo('◷ Agendado pela SDR em')?.valor);
+
+  const plano = planejarCamposSdr({
+    campo,
+    tags: lead._embedded?.tags,
+    criadoEmEpoch: lead.created_at ?? null,
+    referenciaEpoch: Number.isFinite(agendadoEm) && agendadoEm > 0 ? agendadoEm : ctx.agoraEpoch,
+    consulta,
+    feitoPelaIa,
+    tratamento: p.tratamento,
+  });
+  if (plano.length === 0) return;
+  resumo.camposSdr ??= { gravaria: 0, confere: 0, diverge: 0 };
+
+  for (const r of plano) {
+    if (r.acao !== 'gravar') {
+      resumo.camposSdr[r.acao]++;
+      const chave = `${unit.slug}:${leadId}:${r.campo}:${r.valor}:${r.noCartao}`;
+      if (!comparacoesVistas.has(chave)) {
+        comparacoesVistas.add(chave);
+        if (comparacoesVistas.size > 20_000) comparacoesVistas.clear();
+        logger.info({ unit: unit.slug, leadId, campo: r.campo, calculado: r.valor, noCartao: r.noCartao, motivo: r.motivo }, `campos-sdr: ${r.acao}`);
+      }
+      continue;
+    }
+    resumo.camposSdr.gravaria++;
+    if (seco) {
+      logger.info({ unit: unit.slug, leadId, campo: r.campo, valor: r.valor, motivo: r.motivo }, 'campos-sdr [seco]: gravaria');
+      continue;
+    }
+    const i = info(r.campo);
+    if (!i) continue;
+    try {
+      await kommo.setLeadCustomFieldValue(leadId, i.id, i.type, r.valor, i.enums);
+      resumo.escritas++;
+      logger.info({ unit: unit.slug, leadId, campo: r.campo, valor: r.valor, motivo: r.motivo }, 'campos-sdr: gravado');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug, leadId, campo: r.campo }, 'campos-sdr: falha ao gravar');
+    }
+    await new Promise((res) => setTimeout(res, PAUSA_ENTRE_ESCRITAS_MS));
+  }
+}
+
 /**
  * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
  * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
@@ -941,6 +1016,11 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   // fase 1d: forma de pagamento, retorno e motivo, lidos da tela do atendimento
   await espelharAtendimento(ctx, leadId, lead, p).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: espelho do atendimento falhou'),
+  );
+
+  // fase 1e (teste em seco): campos que a SDR preenchia — tipo de lead, responsável, data do cancelamento
+  await espelharCamposSdr(ctx, leadId, lead, p, consulta, feitoPelaIa).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: campos da SDR falharam'),
   );
 
   // fase 2: a franquia move o cartão

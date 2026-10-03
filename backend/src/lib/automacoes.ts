@@ -212,6 +212,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/franquia-sync-worker.ts',
   },
   {
+    id: 'campos-sdr',
+    chave: 'CAMPOS_SDR_SLUGS',
+    nome: 'Campos que a SDR preenchia (teste)',
+    oQueFaz:
+      'Calcula Tipo de lead (Resgate = já estava na base; Cadastro = novo), Responsável agendamento (quem marcou na franquia, ou a Sofia) e Data de solicitação de cancelamento (desistência na franquia). Grava só em campo vazio.',
+    pegadinha:
+      'Em seco não grava nada: registra no log o que gravaria e, onde a SDR já preencheu, se o calculado CONFERE ou DIVERGE — é o teste antes de aprovar. O responsável só é conhecido enquanto a avaliação está AGENDADO (depois a recepção dá baixa e a franquia troca o nome). "Transferido de outra unidade" continua manual.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/campos-sdr.ts',
+  },
+  {
     id: 'carimbo-etapa',
     chave: 'CARIMBO_ETAPA_SLUGS',
     nome: 'Carimbo de início e fim do tratamento',
