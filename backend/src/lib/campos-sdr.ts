@@ -36,16 +36,17 @@ export function veioDaBaseAntiga(tags: ReadonlyArray<{ name: string }> | undefin
 
 /**
  * Resgate ou Cadastro. `referenciaEpoch` = quando o lead chegou ao agendamento (o carimbo "Agendado pela SDR
- * em", ou agora). Sem data de criação do cartão, só a etiqueta decide.
+ * em" ou, sem ele, a data da consulta). NUNCA "agora": um cartão de maio que agendou em maio e é varrido em
+ * outubro viraria "Resgate" só por estar velho hoje. Sem referência e sem etiqueta, não decide (null).
  */
 export function tipoDoLead(e: {
   tags: ReadonlyArray<{ name: string }> | undefined;
   criadoEmEpoch: number | null | undefined;
-  referenciaEpoch: number;
-}): 'Resgate' | 'Cadastro' {
+  referenciaEpoch: number | null;
+}): 'Resgate' | 'Cadastro' | null {
   if (veioDaBaseAntiga(e.tags)) return 'Resgate';
-  if (e.criadoEmEpoch && e.referenciaEpoch - e.criadoEmEpoch > DIAS_PARA_RESGATE * DIA_S) return 'Resgate';
-  return 'Cadastro';
+  if (!e.criadoEmEpoch || !e.referenciaEpoch) return null;
+  return e.referenciaEpoch - e.criadoEmEpoch > DIAS_PARA_RESGATE * DIA_S ? 'Resgate' : 'Cadastro';
 }
 
 /**
@@ -56,21 +57,22 @@ export function responsavelDoAgendamento(e: {
   consulta: Pick<SpineSchedule, 'categoryName' | 'idStatus' | 'modifiedBy'> | null;
   feitoPelaIa: boolean;
   opcoes: string[];
+  /**
+   * true = é a PRIMEIRA vez que o sincronizador vê este agendamento (ainda sem o carimbo "Agendado pela SDR
+   * em"). Só nessa hora "quem mexeu por último" é quem marcou: uma remarcação continua AGENDADO e troca o nome.
+   */
+  primeiraVez: boolean;
 }): string | null {
   const c = e.consulta;
   if (!c || !ehAvaliacao(c)) return null;
   if (e.feitoPelaIa) return e.opcoes.find((o) => normalizar(o).includes('sofia')) ?? null;
-  // Só AGENDADO: confirmado, atendido, falta e desmarcado já passaram pela mão de outra pessoa.
-  if (c.idStatus !== SPINE_STATUS.AGENDADO) return null;
+  // Só AGENDADO e só na primeira vez: depois disso o nome pode ser de quem confirmou, remarcou ou deu baixa.
+  if (!e.primeiraVez || c.idStatus !== SPINE_STATUS.AGENDADO) return null;
   const quem = normalizar(c.modifiedBy);
   if (!quem) return null;
   const primeiro = quem.split(' ')[0];
-  // nome inteiro igual vence; depois o primeiro nome (as opções são "TAMIRES", "NEIA", "DOUTOR DIGITAL"…)
-  return (
-    e.opcoes.find((o) => normalizar(o) === quem) ??
-    e.opcoes.find((o) => normalizar(o).split(' ')[0] === primeiro && !normalizar(o).includes(' ')) ??
-    null
-  );
+  // nome inteiro igual, ou o primeiro nome igual a uma opção de UMA palavra ("TAMIRES", "NEIA")
+  return e.opcoes.find((o) => normalizar(o) === quem || normalizar(o) === primeiro) ?? null;
 }
 
 /** Tratamento que o paciente largou: desistência (o nome real da franquia) ou cancelado. */
@@ -78,9 +80,23 @@ export function tratamentoDesistido(t: Pick<SpineTreatment, 'statusName'> | null
   return !!t && /desist|cancel/.test(normalizar(t.statusName));
 }
 
-/** Epoch (s) do dia em que o tratamento virou desistência; null se não virou ou se a franquia não disse quando. */
-export function dataDoCancelamento(t: Pick<SpineTreatment, 'statusName' | 'modified'> | null): number | null {
+/**
+ * Epoch (s) do dia em que o tratamento virou desistência; null se não virou, se a franquia não disse quando,
+ * ou se o tratamento é de um ciclo ANTERIOR a este cartão (paciente que desistiu há meses e voltou como lead
+ * novo não pode levar a data velha para o cartão novo).
+ *
+ * Limite conhecido: a franquia só dá `modified` (última alteração de qualquer coisa), não "quando virou
+ * desistência". Uma edição posterior no tratamento muda a data — por isso este campo fica em teste.
+ */
+export function dataDoCancelamento(
+  t: Pick<SpineTreatment, 'statusName' | 'modified' | 'created'> | null,
+  cartaoCriadoEmEpoch?: number | null,
+): number | null {
   if (!tratamentoDesistido(t)) return null;
+  if (cartaoCriadoEmEpoch) {
+    const criado = Date.parse(t!.created ?? '');
+    if (!Number.isFinite(criado) || criado / 1000 < cartaoCriadoEmEpoch - 7 * DIA_S) return null;
+  }
   const ms = Date.parse(t!.modified ?? '');
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
 }
@@ -107,16 +123,25 @@ export function planejarCamposSdr(e: {
   campo: (nome: string) => CampoAtual | null;
   tags: ReadonlyArray<{ name: string }> | undefined;
   criadoEmEpoch: number | null | undefined;
-  referenciaEpoch: number;
+  referenciaEpoch: number | null;
+  /** primeira vez que o sincronizador vê o agendamento (sem o carimbo "Agendado pela SDR em") */
+  primeiraVez: boolean;
   consulta: Pick<SpineSchedule, 'categoryName' | 'idStatus' | 'modifiedBy'> | null;
   feitoPelaIa: boolean;
-  tratamento: Pick<SpineTreatment, 'statusName' | 'modified'> | null;
+  tratamento: Pick<SpineTreatment, 'statusName' | 'modified' | 'created'> | null;
 }): ResultadoCampoSdr[] {
   const out: ResultadoCampoSdr[] = [];
   const avaliar = (nome: string, valor: string | number | null, motivo: string, igual: (noCartao: string) => boolean) => {
     if (valor === null) return;
     const c = e.campo(nome);
     if (!c) return;
+    // Campo de lista: só vale opção que EXISTE na conta, e na grafia dela (senão o Kommo devolve 400 a cada varredura).
+    if (typeof valor === 'string' && c.opcoes.length > 0) {
+      const alvo = normalizar(valor);
+      const opcao = c.opcoes.find((o) => normalizar(o) === alvo);
+      if (!opcao) return;
+      valor = opcao;
+    }
     if (c.valor === null) out.push({ campo: nome, acao: 'gravar', valor, motivo });
     else out.push({ campo: nome, acao: igual(c.valor) ? 'confere' : 'diverge', valor, noCartao: c.valor, motivo });
   };
@@ -127,17 +152,17 @@ export function planejarCamposSdr(e: {
     const c = e.campo(CAMPOS_SDR.TIPO_LEAD);
     // "Transferido de outra unidade" é decisão humana: não compara nem sobrescreve.
     if (!c || !/transferid/.test(normalizar(c.valor))) {
-      avaliar(CAMPOS_SDR.TIPO_LEAD, tipo, veioDaBaseAntiga(e.tags) ? 'veio da base antiga (importação)' : tipo === 'Resgate' ? `cartão com mais de ${DIAS_PARA_RESGATE} dias ao agendar` : 'lead novo', (v) => normalizar(v) === normalizar(tipo));
+      if (tipo) avaliar(CAMPOS_SDR.TIPO_LEAD, tipo, veioDaBaseAntiga(e.tags) ? 'veio da base antiga (importação)' : tipo === 'Resgate' ? `cartão com mais de ${DIAS_PARA_RESGATE} dias ao agendar` : 'lead novo', (v) => normalizar(v) === normalizar(tipo));
     }
   }
 
   const resp = e.campo(CAMPOS_SDR.RESPONSAVEL);
   if (resp) {
-    const quem = responsavelDoAgendamento({ consulta: e.consulta, feitoPelaIa: e.feitoPelaIa, opcoes: resp.opcoes });
+    const quem = responsavelDoAgendamento({ consulta: e.consulta, feitoPelaIa: e.feitoPelaIa, opcoes: resp.opcoes, primeiraVez: e.primeiraVez });
     avaliar(CAMPOS_SDR.RESPONSAVEL, quem, e.feitoPelaIa ? 'agendado pela Sofia' : 'quem marcou na franquia', (v) => normalizar(v) === normalizar(quem));
   }
 
-  const quando = dataDoCancelamento(e.tratamento);
+  const quando = dataDoCancelamento(e.tratamento, e.criadoEmEpoch);
   avaliar(CAMPOS_SDR.DATA_CANCELAMENTO, quando, 'desistência registrada na franquia', (v) => quando !== null && mesmaData(quando, v));
 
   return out;
