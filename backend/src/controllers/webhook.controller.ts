@@ -8,6 +8,7 @@ import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
+import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { entraPelaMeta } from '../lib/canal-de-entrada.js';
@@ -936,7 +937,7 @@ export async function processAgent(args: {
     return;
   }
 
-  if (await isLeadPaused(unit, leadId)) {
+  if ((await isLeadPaused(unit, leadId)) || (await leadPausadoPorJanela(unit.id, leadId))) {
     carimbarContato(unit.id, leadId, { desfecho: 'pediu_humano' });
     await finishWidgetSilently();
 

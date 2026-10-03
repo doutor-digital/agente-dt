@@ -26,6 +26,8 @@ const TAB_TO_SLUG: Record<AppTab, string> = {
   agenda: 'agenda',
   'follow-up': 'follow-up',
   'crm-franquia': 'crm-franquia',
+  implantacao: 'implantacao',
+  automacoes: 'automacoes',
   'saude-ia': 'saude-ia',
   resultados: 'resultados',
   'como-funciona': 'como-funciona',

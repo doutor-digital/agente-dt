@@ -167,6 +167,9 @@ import {
   publicPausarHandler,
   publicRetomarHandler,
   publicStatusHandler,
+  publicLeadPausarHandler,
+  publicLeadRetomarHandler,
+  publicLeadStatusHandler,
   unitPausaGetHandler,
   unitPausarHandler,
   unitRetomarHandler,
@@ -265,6 +268,10 @@ apiRouter.post('/auth/login', loginHandler);
 apiRouter.get('/public/pausa/:slug', publicStatusHandler);
 apiRouter.post('/public/pausa/:slug', publicPausarHandler);
 apiRouter.delete('/public/pausa/:slug', publicRetomarHandler);
+// Pausa de UM lead, com data de volta (mesmo código da unidade).
+apiRouter.get('/public/pausa/:slug/lead/:leadId', publicLeadStatusHandler);
+apiRouter.post('/public/pausa/:slug/lead/:leadId', publicLeadPausarHandler);
+apiRouter.delete('/public/pausa/:slug/lead/:leadId', publicLeadRetomarHandler);
 
 // Widgets privados do Kommo (coluna do cartão) leem a agenda da franquia com chave por unidade (sem sessão).
 apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);

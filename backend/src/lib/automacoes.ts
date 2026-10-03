@@ -199,6 +199,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/franquia-sync-worker.ts',
   },
   {
+    id: 'franquia-tela',
+    chave: 'FRANQUIA_TELA_SLUGS',
+    nome: 'Dados do atendimento da franquia no cartão',
+    oQueFaz:
+      'Lê a tela de edição do atendimento na franquia e copia pro cartão a forma de pagamento, a data do retorno (Retomar em) e o motivo para não realizar o tratamento. A SDR digita uma vez, só na franquia.',
+    pegadinha:
+      'A API da franquia não devolve esses campos, então o robô entra na TELA com o login FRANQUIA_TELA_USER/FRANQUIA_TELA_PASS (se a tela mudar ou a senha vencer, ele para e avisa no log). Só lê; nunca grava na franquia. A franquia vence quando tem valor, e vazia nunca apaga o cartão. Precisa dos campos novos no Kommo (forma de pagamento com as 20 opções da franquia e o texto do motivo). Ligue em seco primeiro.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/franquia-sync-worker.ts',
+  },
+  {
     id: 'carimbo-etapa',
     chave: 'CARIMBO_ETAPA_SLUGS',
     nome: 'Carimbo de início e fim do tratamento',

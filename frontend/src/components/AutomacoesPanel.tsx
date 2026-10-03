@@ -246,65 +246,67 @@ export default function AutomacoesPanel() {
   if (!unit) return <div className="p-6 text-sm text-zinc-500">Escolha uma unidade.</div>;
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
-      <header className="mb-6">
-        <h1 className="text-xl font-semibold text-zinc-100">Automações</h1>
-        <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-zinc-400">
-          O que roda sozinho em <strong className="text-zinc-200">{unit.name}</strong> — sem ninguém clicar, todo dia.
-          Estão aqui as {lista.length || 24}, ligadas e desligadas, porque o problema nunca foi o interruptor: foi não
-          saber que a coisa existia.
-        </p>
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6">
+        <header className="mb-6">
+          <h1 className="text-xl font-semibold text-zinc-100">Automações</h1>
+          <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-zinc-400">
+            O que roda sozinho em <strong className="text-zinc-200">{unit.name}</strong> — sem ninguém clicar, todo dia.
+            Estão aqui as {lista.length || 24}, ligadas e desligadas, porque o problema nunca foi o interruptor: foi não
+            saber que a coisa existia.
+          </p>
+          {!carregando && lista.length > 0 && (
+            <p className="mt-2 text-xs text-zinc-500">
+              {ligadas} de {lista.length} em funcionamento nesta unidade.
+            </p>
+          )}
+        </header>
+
+        {erro && (
+          <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/5 px-4 py-3 text-sm text-rose-200">{erro}</div>
+        )}
+
+        {carregando && (
+          <div className="flex items-center gap-2 px-4 py-10 text-sm text-zinc-500">
+            <PiSpinnerGapBold className="animate-spin" /> lendo o que está ligado…
+          </div>
+        )}
+
+        {!carregando &&
+          GRUPOS.map(({ risco, titulo, explica, Icone }) => {
+            const doGrupo = lista.filter((a) => a.risco === risco);
+            if (!doGrupo.length) return null;
+            return (
+              <section key={risco} className="mb-6">
+                <div className="mb-2 flex items-start gap-2.5 px-1">
+                  <Icone className="mt-0.5 shrink-0 text-zinc-500" />
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-300">{titulo}</h2>
+                    <p className="mt-0.5 text-xs leading-relaxed text-zinc-500">{explica}</p>
+                  </div>
+                </div>
+                <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40">
+                  {doGrupo.map((a) => (
+                    <Linha
+                      key={a.id}
+                      a={a}
+                      salvando={salvando === a.id}
+                      onEstado={(estado) => void mexer(a.id, () => api.definirAutomacao(unit.id, a.id, estado))}
+                      onDevolver={() => void mexer(a.id, () => api.limparAutomacao(unit.id, a.id))}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+
         {!carregando && lista.length > 0 && (
-          <p className="mt-2 text-xs text-zinc-500">
-            {ligadas} de {lista.length} em funcionamento nesta unidade.
+          <p className="px-1 pb-2 text-xs leading-relaxed text-zinc-600">
+            Mudança aqui vale em segundos, sem deploy. O que está marcado <em>vem do .env</em> nunca foi tocado por esta
+            tela e segue a configuração antiga do servidor — mexer uma vez passa a decisão pra cá, e a seta devolve.
           </p>
         )}
-      </header>
-
-      {erro && (
-        <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/5 px-4 py-3 text-sm text-rose-200">{erro}</div>
-      )}
-
-      {carregando && (
-        <div className="flex items-center gap-2 px-4 py-10 text-sm text-zinc-500">
-          <PiSpinnerGapBold className="animate-spin" /> lendo o que está ligado…
-        </div>
-      )}
-
-      {!carregando &&
-        GRUPOS.map(({ risco, titulo, explica, Icone }) => {
-          const doGrupo = lista.filter((a) => a.risco === risco);
-          if (!doGrupo.length) return null;
-          return (
-            <section key={risco} className="mb-6">
-              <div className="mb-2 flex items-start gap-2.5 px-1">
-                <Icone className="mt-0.5 shrink-0 text-zinc-500" />
-                <div>
-                  <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-300">{titulo}</h2>
-                  <p className="mt-0.5 text-xs leading-relaxed text-zinc-500">{explica}</p>
-                </div>
-              </div>
-              <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40">
-                {doGrupo.map((a) => (
-                  <Linha
-                    key={a.id}
-                    a={a}
-                    salvando={salvando === a.id}
-                    onEstado={(estado) => void mexer(a.id, () => api.definirAutomacao(unit.id, a.id, estado))}
-                    onDevolver={() => void mexer(a.id, () => api.limparAutomacao(unit.id, a.id))}
-                  />
-                ))}
-              </div>
-            </section>
-          );
-        })}
-
-      {!carregando && lista.length > 0 && (
-        <p className="px-1 pb-2 text-xs leading-relaxed text-zinc-600">
-          Mudança aqui vale em segundos, sem deploy. O que está marcado <em>vem do .env</em> nunca foi tocado por esta
-          tela e segue a configuração antiga do servidor — mexer uma vez passa a decisão pra cá, e a seta devolve.
-        </p>
-      )}
+    </div>
     </div>
   );
 }
