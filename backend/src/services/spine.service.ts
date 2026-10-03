@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import axios, { type AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
+import { profissionalDoHorario } from '../lib/profissional-por-turno.js';
 
 const DEFAULT_TZ = 'America/Sao_Paulo';
 
@@ -71,7 +72,10 @@ export interface SpineResult<T> {
   status?: number;
 }
 
-export type SpineUnit = Pick<Unit, 'spineBaseUrl' | 'spineToken' | 'spineTimezone'>;
+export type SpineUnit = Pick<Unit, 'spineBaseUrl' | 'spineToken' | 'spineTimezone'> & {
+  /** Escala de profissionais por turno (`units.spine_staff_por_turno`); só o createSchedule usa. */
+  spineStaffPorTurno?: unknown;
+};
 
 function client(unit: SpineUnit): AxiosInstance | null {
   if (!unit.spineToken) return null;
@@ -258,13 +262,15 @@ export async function createSchedule(
     return { ok: false, error: 'dateAttendanceLocal inválida (use AAAA-MM-DDTHH:mm:ss, sem fuso)' };
   }
   const dateAttendance = local.length === 16 ? `${local}:00` : local;
+  // Sem idStaff a franquia põe a PRIMEIRA profissional da lista. Com escala por turno, manda a do horário.
+  const idStaff = input.idStaff ?? profissionalDoHorario(unit.spineStaffPorTurno, local.slice(11, 16))?.idStaff;
 
   try {
     const { data } = await http.post<{ idSchedule?: number; data?: { idSchedule?: number } }>('/api/schedules', {
       idClient: input.idClient,
       dateAttendance,
       idCategory: input.idCategory,
-      ...(input.idStaff !== undefined ? { idStaff: input.idStaff } : {}),
+      ...(idStaff !== undefined ? { idStaff } : {}),
     });
     return { ok: true, data: { idSchedule: data?.data?.idSchedule ?? data?.idSchedule } };
   } catch (err) {

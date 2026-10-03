@@ -424,3 +424,30 @@ test('401 vira mensagem em português, não "Request failed"', async () => {
   assert.equal(r.ok, false);
   assert.match(String(r.error), /404|endpoint/);
 });
+
+// ── Profissional por turno (Taubaté, 03/10/2026) ──────────────────────────
+// Sem idStaff a franquia põe a PRIMEIRA profissional da lista (lá, a dona, que não atende) e a confirmação
+// chega ao paciente com o nome errado. Com escala na unidade, o createSchedule manda a do horário.
+
+const ESCALA_TAUBATE = [
+  { inicio: '08:00', fim: '13:30', idStaff: 536, nome: 'Dra. Juliana Santos' },
+  { inicio: '14:00', fim: '19:30', idStaff: 704, nome: 'Dra. Mariane Gomes' },
+];
+
+test('escala por turno: manhã vai com a profissional da manhã, tarde com a da tarde', async () => {
+  await SpineService.createSchedule({ ...unidade(), spineStaffPorTurno: ESCALA_TAUBATE }, { idClient: 991, dateAttendanceLocal: amanha('09:00:00'), idCategory: 1 });
+  assert.equal(ultima().corpo.idStaff, 536);
+  await SpineService.createSchedule({ ...unidade(), spineStaffPorTurno: ESCALA_TAUBATE }, { idClient: 991, dateAttendanceLocal: amanha('17:30:00'), idCategory: 1 });
+  assert.equal(ultima().corpo.idStaff, 704);
+});
+
+test('escala por turno: fora de qualquer turno, sem escala, ou idStaff explícito — comportamento de antes', async () => {
+  await SpineService.createSchedule({ ...unidade(), spineStaffPorTurno: ESCALA_TAUBATE }, { idClient: 991, dateAttendanceLocal: amanha('13:30:00'), idCategory: 1 });
+  assert.equal(ultima().corpo.idStaff, undefined, '13:30 não é manhã (o turno acaba antes) nem tarde');
+  await SpineService.createSchedule(unidade(), { idClient: 991, dateAttendanceLocal: amanha('09:00:00'), idCategory: 1 });
+  assert.equal(ultima().corpo.idStaff, undefined, 'sem escala na unidade, a franquia continua escolhendo');
+  await SpineService.createSchedule({ ...unidade(), spineStaffPorTurno: ESCALA_TAUBATE }, { idClient: 991, dateAttendanceLocal: amanha('09:00:00'), idCategory: 1, idStaff: 510 });
+  assert.equal(ultima().corpo.idStaff, 510, 'quem chama com idStaff decide');
+  await SpineService.createSchedule({ ...unidade(), spineStaffPorTurno: 'lixo' }, { idClient: 991, dateAttendanceLocal: amanha('09:00:00'), idCategory: 1 });
+  assert.equal(ultima().corpo.idStaff, undefined, 'configuração inválida não quebra o agendamento');
+});
