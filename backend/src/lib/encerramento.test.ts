@@ -45,3 +45,14 @@ test('sem histórico ou com a última mensagem sendo do paciente, não bloqueia'
   assert.equal(ehEncerramentoRepetido('obrigado', [], seg(0)), false);
   assert.equal(ehEncerramentoRepetido('🙏', carlos.slice(0, 5), seg(65)), false, 'a IA ainda não respondeu ao "Ok obrigado"');
 });
+
+test('resposta a uma PERGUNTA da Sofia nunca é despedida (teste gravado da Açailândia, 05/10/2026)', () => {
+  // "Sim" duas vezes seguidas: a 2ª era a confirmação do horário e foi engolida como "despedida repetida"
+  const conversa = [
+    { role: 'assistant' as const, content: 'Consegui pra sexta-feira, 09/10, às 7h da manhã — funciona pra você?', createdAt: seg(0) },
+    { role: 'user' as const, content: 'Sim', createdAt: seg(28) },
+    { role: 'assistant' as const, content: 'Pra fechar, você consegue confirmar que vem mesmo sexta-feira, 09/10, às 7h da manhã? É só pra eu garantir seu horário certo 😊', createdAt: seg(52) },
+  ];
+  assert.equal(ehEncerramentoRepetido('Sim', conversa, seg(63)), false);
+  assert.equal(ehEncerramentoRepetido('não', conversa, seg(63)), false);
+});

@@ -64,6 +64,9 @@ export function ehEncerramentoRepetido(
   const ultima = ordenado.at(-1);
   if (!ultima || ultima.role !== 'assistant') return false;
   if (agora.getTime() - ultima.createdAt.getTime() > JANELA_ENCERRAMENTO_MS) return false;
+  // A Sofia perguntou: "Sim"/"Não"/"Certo" é RESPOSTA, não despedida. Teste gravado na Açailândia
+  // (05/10/2026): o 2º "Sim" confirmava o horário e foi engolido — a consulta não foi marcada.
+  if (ultima.content.includes('?')) return false;
   // O TURNO do paciente logo antes da nossa última resposta (mensagens seguidas dele,
   // que o coalescer juntou num pedido só) também era só encerramento? Se uma delas
   // tinha conteúdo ("Irei verificar aí aviso vcs" + "Obrigado"), a resposta da IA
