@@ -29,6 +29,7 @@ import { estadoEtapaDoLead, invalidarEtapa } from '../services/lead-stage.servic
 import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
 import { ETAPA, TRATAMENTO_EM_ANDAMENTO } from './franquia-move.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
+import { registrarSimulacao } from './so-no-papel.js';
 import { carregarFunis, idClientDoLead, temConsultaFutura, type Funis } from './franquia-sync-worker.js';
 import {
   CAMPO,
@@ -196,6 +197,7 @@ export async function fecharComoPerdido(
   const base = { unit: unit.slug, leadId, de: etapaAtual, regra: d.regra, motivo: d.motivoPerda };
   if (seco) {
     logger.info(base, 'parados [seco]: moveria pra PERDIDO');
+    registrarSimulacao(unit, 'parados', { leadId, acao: 'moveria', alvo: ETAPA.PERDIDO, deEtapa: etapaAtual, valor: d.motivoPerda, motivo: d.regra });
     return false;
   }
   if (!(await aindaNaEtapa(kommo, funis, leadId, etapaAtual))) {
@@ -235,6 +237,7 @@ export async function moverParaEspera(
   }
   if (seco) {
     logger.info(base, 'parados [seco]: moveria pra EM ESPERA');
+    registrarSimulacao(unit, 'parados', { leadId, acao: 'moveria', alvo: ETAPA.ESPERA, deEtapa: etapaAtual, motivo: d.regra });
     return false;
   }
   if (!(await aindaNaEtapa(kommo, funis, leadId, etapaAtual))) {
@@ -281,6 +284,7 @@ export async function voltarDaEsperaSeRespondeu(unit: Unit, leadId: number, mens
     if (!alvo) return;
     if (voltaDaEsperaSeca(unit.slug)) {
       logger.info({ unit: unit.slug, leadId }, 'parados [seco]: voltaria de EM ESPERA pra EM QUALIFICAÇÃO (paciente escreveu)');
+      registrarSimulacao(unit, 'volta-espera', { leadId, acao: 'moveria', alvo: ETAPA.QUALIFICACAO, deEtapa: est.nome, motivo: 'paciente voltou a escrever', valor: mensagem?.slice(0, 200) });
       return;
     }
     await kommo.moveStage({ leadId, statusId: alvo.statusId, pipelineId: alvo.pipelineId });

@@ -32,6 +32,7 @@ import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao } from './automacoes-estado.js';
+import { registrarSimulacao } from './so-no-papel.js';
 
 const SWEEP_MS = 15 * 60_000;
 const PRIMEIRA_MS = 90_000;
@@ -428,6 +429,7 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
   if (estadoDoMove(unit.slug) === 'seco') {
     contarSimulado(resumo, deEtapa, mov.para);
     logger.info({ unit: unit.slug, leadId, de: deEtapa, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
+    registrarSimulacao(unit, 'franquia-move', { leadId, acao: 'moveria', alvo: mov.para, deEtapa, valor: mov.motivoPerda, motivo: mov.motivo });
     return;
   }
   // PERDIDO pela jornada (fato velho na franquia): mesmo fecho do worker de parados — motivo de perda,
@@ -709,6 +711,7 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
         .catch((err) => { resumo.erros++; logger.warn({ err, unit: unit.slug, leadId }, 'franquia-sync: falha ao recalcular idade'); });
     } else if (info && seco) {
       logger.info({ unit: unit.slug, leadId, valor: idade.valor }, 'franquia-sync [seco]: recalcularia idade');
+      registrarSimulacao(unit, 'franquia-revisao', { leadId, acao: 'gravaria', alvo: idade.campo, valor: idade.valor, motivo: 'idade pela data de nascimento' });
     }
   }
 
@@ -748,6 +751,7 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
     }
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria campo da pessoa');
+      registrarSimulacao(unit, 'franquia-revisao', { leadId, acao: 'gravaria', alvo: e.campo, valor: e.valor, motivo: e.motivo });
       continue;
     }
     try {
@@ -808,6 +812,7 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     if (!info) continue;
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria sessão/tratamento');
+      registrarSimulacao(unit, estado === 'seco' ? 'franquia-sessoes' : 'franquia-revisao', { leadId, acao: 'gravaria', alvo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, noCartao: campo(e.campo)?.valor, motivo: e.motivo });
       continue;
     }
     try {
@@ -883,6 +888,7 @@ async function espelharAtendimento(ctx: CtxSync, leadId: number, lead: KommoLead
   for (const e of plano.escritas) {
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-tela [seco]: gravaria atendimento');
+      registrarSimulacao(unit, estado === 'seco' ? 'franquia-tela' : 'franquia-revisao', { leadId, acao: 'gravaria', alvo: e.campo, valor: e.valor, motivo: e.motivo });
       continue;
     }
     const info = (ctx.camposPorNome ?? []).map(([, i]) => i).find((i) => i.id === e.id);
@@ -976,6 +982,7 @@ async function espelharCamposSdr(
       resumo.camposSdr[r.acao]++;
       if (!jaRegistrou(`${unit.slug}:${leadId}:${r.campo}:${r.acao}:${r.noCartao}`)) {
         logger.info({ unit: unit.slug, leadId, campo: r.campo, calculado: r.valor, noCartao: r.noCartao, motivo: r.motivo }, `${rotulo}: ${r.acao}`);
+        registrarSimulacao(unit, rotulo, { leadId, acao: r.acao, alvo: r.campo, valor: r.valor, noCartao: r.noCartao, motivo: r.motivo });
       }
       continue;
     }
@@ -983,6 +990,7 @@ async function espelharCamposSdr(
     if (secoDe(r)) {
       if (!jaRegistrou(`${unit.slug}:${leadId}:${r.campo}:gravaria:${r.valor}`)) {
         logger.info({ unit: unit.slug, leadId, campo: r.campo, valor: r.valor, motivo: r.motivo }, `${rotulo} [seco]: gravaria`);
+        registrarSimulacao(unit, rotulo, { leadId, acao: 'gravaria', alvo: r.campo, valor: r.valor, motivo: r.motivo });
       }
       continue;
     }
@@ -1018,6 +1026,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     if (!info) continue;
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
+      registrarSimulacao(unit, 'franquia-revisao', { leadId, acao: 'gravaria', alvo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo });
       continue;
     }
     try {
@@ -1078,6 +1087,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   if (seco) {
     contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
+    registrarSimulacao(unit, 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
     return;
   }
   await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
@@ -1164,6 +1174,7 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
                 if (seco) {
                   contarSimulado(resumo, etapa, mov.para);
                   logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
+                  registrarSimulacao(unit, 'franquia-revisao', { leadId: lead.id, acao: 'moveria', alvo: mov.para, deEtapa: etapa, valor: mov.motivoPerda, motivo: mov.motivo });
                 }
                 else await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, etapa);
               }
@@ -1173,6 +1184,7 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
             if (seco || estadoDoMove(unit.slug) === 'seco') {
               contarSimulado(resumo, etapa, ETAPA.CONFERIR);
               logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: ETAPA.CONFERIR }, 'franquia-move [seco]: moveria');
+              registrarSimulacao(unit, seco ? 'franquia-revisao' : 'franquia-move', { leadId: lead.id, acao: 'moveria', alvo: ETAPA.CONFERIR, deEtapa: etapa, motivo: 'paciente não achado na franquia' });
               continue;
             }
             await kommo.moveStage({ leadId: lead.id, statusId: conferir.statusId, pipelineId: conferir.pipelineId });
