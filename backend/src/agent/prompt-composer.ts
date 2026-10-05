@@ -8,6 +8,7 @@ import type {
   UnitAction,
   UnitLesson,
 } from '@prisma/client';
+import { conversaComOutraSofia, renderConversaComOutraSofia, renderSemAgenda, type FalaDeOutraSofia } from './conversa-entre-sofias.js';
 import { prisma } from '../lib/prisma.js';
 import { searchKnowledge } from '../services/knowledge.service.js';
 import {
@@ -1436,6 +1437,8 @@ export interface ComposeInput {
   estadoEtapa?: EstadoEtapaLead | null;
   /** A fala deste turno. Usada para as regras que dependem do que ele acabou de dizer. */
   userMessage?: string;
+  /** O que o mesmo cartão conversou com OUTRA Sofia da conta (resgate → comercial), últimas 72 h. */
+  outraSofia?: FalaDeOutraSofia[];
 }
 
 /**
@@ -1720,6 +1723,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderAgenda(unit),
+    renderSemAgenda(unit),
     renderContactCollection(unit),
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
@@ -1758,6 +1762,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     telefone = null,
     consulta = null,
     estadoEtapa = null,
+    outraSofia = [],
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
@@ -1767,6 +1772,10 @@ export function composeSystemPrompt(input: ComposeInput): string {
     if (customBase) single.push(customBase);
     const memBlock = renderLeadMemory(leadMemory);
     if (memBlock) single.push(memBlock);
+    const outraBlockSingle = renderConversaComOutraSofia(outraSofia);
+    if (outraBlockSingle) single.push(outraBlockSingle);
+    const semAgendaSingle = renderSemAgenda(unit);
+    if (semAgendaSingle) single.push(semAgendaSingle);
     if (leadId && Number.isFinite(leadId) && leadId > 0) {
       single.push(renderConversationContext(leadId, telefone));
     }
@@ -1807,6 +1816,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderAgenda(unit),
+    renderSemAgenda(unit),
     renderContactCollection(unit),
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
@@ -1826,6 +1836,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
   if (lessonsBlock) blocks.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) blocks.push(memoryBlock);
+  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia);
+  if (outraSofiaBlock) blocks.push(outraSofiaBlock);
   if (faltaBlock) blocks.push(faltaBlock);
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
   // senão continua como se tivesse falado, e o paciente não viu nada.
@@ -1894,6 +1906,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     telefone = null,
     consulta = null,
     estadoEtapa = null,
+    outraSofia = [],
     userMessage,
   } = input;
 
@@ -1919,6 +1932,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (soCumprimento) dynamic.push(soCumprimento);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) dynamic.push(memoryBlock);
+  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia);
+  if (outraSofiaBlock) dynamic.push(outraSofiaBlock);
   const faltaBlock = renderFaltaParaAgendar(
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
   );
@@ -1943,9 +1958,10 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (unit.singlePromptMode) {
     // Sem prompt montado por nós, não há bloco estável onde encaixar: os três
     // voltam pra parte viva, como era antes.
+    const semAgenda = renderSemAgenda(unit);
     return {
       cacheable: (customBase ?? '').trim(),
-      dynamic: [...porUnidade, ...dynamic].join('\n\n'),
+      dynamic: [...porUnidade, ...(semAgenda ? [semAgenda] : []), ...dynamic].join('\n\n'),
     };
   }
 
@@ -1968,6 +1984,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderAgenda(unit),
+    renderSemAgenda(unit),
     renderContactCollection(unit),
     renderWelcomeCoupon(unit),
     renderBusinessHours(unit),
@@ -2044,7 +2061,7 @@ async function loadComposeInput(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, telefone] = await Promise.all([
+  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, telefone, outraSofia] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -2112,6 +2129,12 @@ async function loadComposeInput(input: {
           .then((c) => c?.phone ?? null)
           .catch(() => null)
       : Promise.resolve(null),
+    input.leadId
+      ? conversaComOutraSofia(input.unit, input.leadId).catch((err) => {
+          logger.warn({ err, leadId: input.leadId }, 'conversaComOutraSofia falhou — sem a conversa da outra Sofia no prompt');
+          return [] as FalaDeOutraSofia[];
+        })
+      : Promise.resolve([] as FalaDeOutraSofia[]),
   ]);
 
   // O telefone só fica pronto agora (sai do mesmo Promise.all). Se o cartão desta
@@ -2136,6 +2159,7 @@ async function loadComposeInput(input: {
     estadoEtapa: etapaFinal,
     lessons,
     telefone,
+    outraSofia,
   };
 }
 
