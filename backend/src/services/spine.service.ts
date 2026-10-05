@@ -63,6 +63,8 @@ export interface SpineSchedule {
   timeLocal: string | null;
   isBusy: boolean;
   requiresManualValidation: boolean;
+  /** Quem mexeu por último no agendamento na franquia. Enquanto está AGENDADO e ninguém deu baixa, é quem marcou. */
+  modifiedBy?: string | null;
 }
 
 export interface SpineResult<T> {
@@ -173,6 +175,7 @@ function normalize(raw: SpineRawSchedule, tz: string): SpineSchedule {
     idTreatment: raw.idTreatment ?? null,
     idStatus,
     statusName: raw.statusName ?? null,
+    modifiedBy: raw.modifiedBy?.trim() || null,
     clientName: raw.clientName ?? null,
     categoryName: raw.categoryName ?? null,
     physicalTherapist: raw.physicalTherapist ?? null,
@@ -839,6 +842,8 @@ export interface SpineTreatment {
   price: number | null;
   /** quando o tratamento foi criado na franquia (ISO). Serve pra escolher o ciclo certo. */
   created: string | null;
+  /** última alteração na franquia (ISO). Na desistência, é o dia em que o status mudou. */
+  modified?: string | null;
 }
 
 /**
@@ -901,6 +906,7 @@ export async function searchTreatments(
           statusName: str(raw.statusName),
           price: num(raw.price),
           created: str(raw.created),
+          modified: str(raw.modified),
         });
       }
       totalPages = Math.max(1, Number(corpo?.totalPages) || 1);
