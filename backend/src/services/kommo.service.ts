@@ -839,8 +839,9 @@ export class KommoClient {
   async listarConversas(maxPaginas = 4): Promise<KommoTalk[]> {
     const todas: KommoTalk[] = [];
     for (let page = 1; page <= maxPaginas; page++) {
+      // a ordem é pedida explícita: sem ela, o teto de páginas pode pegar sempre as MAIS ANTIGAS
       const { data, status } = await this.http.get<{ _embedded?: { talks?: KommoTalk[] } }>('/talks', {
-        params: { limit: 250, page },
+        params: { limit: 250, page, 'order[updated_at]': 'desc' },
       });
       if (status === 204 || !data) break;
       const lote = data._embedded?.talks ?? [];

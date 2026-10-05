@@ -63,13 +63,19 @@ async function varrerUnidade(slug: string, mapa: Record<number, string>): Promis
   const resumo = { gravados: 0, confere: 0, diverge: 0, erros: 0 };
   for (const lead of leads) {
     const atual = lead.custom_fields_values?.find((f) => f.field_id === campo.id)?.values?.[0]?.value;
-    const plano = planejarUnidade({
-      conversas: (porCartao.get(lead.id) ?? []).map((t) => ({ sourceId: t.source_id, criadaEm: t.created_at })),
-      mapa,
-      noCartao: atual === undefined || atual === null || String(atual).trim() === '' ? null : String(atual),
-      etiquetas: (lead._embedded?.tags ?? []).map((t) => t.name),
-    });
+    const noCartao = atual === undefined || atual === null || String(atual).trim() === '' ? null : String(atual);
+    const etiquetas = (lead._embedded?.tags ?? []).map((t) => t.name);
+    const planejar = (ts: KommoTalk[]) =>
+      planejarUnidade({ conversas: ts.map((t) => ({ sourceId: t.source_id, criadaEm: t.created_at })), mapa, noCartao, etiquetas });
+    let plano = planejar(porCartao.get(lead.id) ?? []);
     if (!plano) continue;
+    // Vai gravar: confirma a PRIMEIRA conversa com o histórico inteiro do cartão. A janela da varredura
+    // (as conversas mais recentes da conta) pode não alcançar a conversa antiga de quem voltou pelo outro número.
+    if (plano.acao === 'gravar') {
+      const todas = await kommo.listTalks(lead.id).catch(() => null);
+      if (todas?.length) plano = planejar(todas);
+      if (!plano) continue;
+    }
 
     if (plano.acao !== 'gravar') {
       resumo[plano.acao]++;
