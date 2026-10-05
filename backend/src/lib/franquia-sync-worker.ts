@@ -948,10 +948,12 @@ async function espelharCamposSdr(
   const temCarimbo = Number.isFinite(carimbo) && carimbo > 0;
   const dataConsulta = consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : NaN;
 
+  const primeiroContato = Number(campo('◷ Data do primeiro contato')?.valor);
   const plano = planejarCamposSdr({
     campo,
-    tags: lead._embedded?.tags,
+    nome: lead.name,
     criadoEmEpoch: lead.created_at ?? null,
+    primeiroContatoEpoch: Number.isFinite(primeiroContato) && primeiroContato > 0 ? primeiroContato : null,
     // quando chegou ao agendamento: o carimbo; sem ele, a data da consulta. Nunca "agora".
     referenciaEpoch: temCarimbo ? carimbo : Number.isFinite(dataConsulta) ? dataConsulta : null,
     primeiraVez: !temCarimbo,

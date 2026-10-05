@@ -3,9 +3,12 @@
  *
  * Decisões do João (03/10/2026):
  *  - ⬢ Tipo de lead: "Resgate" = quem JÁ estava na base, mesmo que volte agora clicando num anúncio;
- *    "Cadastro" = quem não existia. Sinal medido (86% de concordância com as SDRs na Açailândia, 97% na Serra):
- *    a etiqueta `importar_…` (leads trazidos da base antiga na implantação) ou cartão com mais de 90 dias
- *    quando chegou ao agendamento. "TRANSFERIDO DE OUTRA UNIDADE" continua manual.
+ *    "Cadastro" = quem não existia. Regra (05/10): Resgate se agendou mais de 90 dias depois do 1º contato,
+ *    e o 1º contato é a data mais antiga entre a criação do cartão, o campo "Data do primeiro contato" e a
+ *    data que a SDR escreve no nome ("Rosimar 14/5/2026"). Medido na base inteira contra o que as SDRs
+ *    puseram: Açailândia 90% (n=272), Serra 93% (n=28). A etiqueta `importar_…` NÃO decide mais: a
+ *    importação de 28/05 trouxe junto quem tinha chegado em abril/maio, e ela marcava esses como Resgate
+ *    (a regra antiga dava 70% na Açailândia). "TRANSFERIDO DE OUTRA UNIDADE" continua manual.
  *  - ☻ Responsável agendamento: quem marcou a avaliação NA FRANQUIA. O dono do cartão no Kommo não serve
  *    (as SDRs dividem um login só). A franquia só guarda "quem mexeu por último", então o nome só vale
  *    enquanto o agendamento ainda está AGENDADO — depois a recepção dá baixa e o nome passa a ser o dela.
@@ -29,24 +32,56 @@ export const CAMPOS_SDR = {
 export const DIAS_PARA_RESGATE = 90;
 const DIA_S = 86_400;
 
-/** Leads trazidos da base antiga na implantação carregam esta etiqueta (ex.: `importar_28052026_1600`). */
-export function veioDaBaseAntiga(tags: ReadonlyArray<{ name: string }> | undefined): boolean {
-  return (tags ?? []).some((t) => /^importar_/i.test(t.name.trim()));
+/** Meio-dia em Brasília: a data do nome não tem hora, e um dia a mais ou a menos não muda a regra dos 90 dias. */
+const HORA_UTC = 15;
+/** Data no nome mais velha que isso é digitação ("26/06/06") ou nascimento, não 1º contato. */
+const MAX_ANOS_NO_NOME = 3;
+
+/**
+ * Datas que a SDR escreveu no nome do cartão ("Rosimar 14/5/2026", "ELANE 26/1", "Nivas 09/12/25 19/5/2026"),
+ * em epoch (s). Os cartões importados guardam ali o dia do 1º contato — a criação do cartão é o dia da importação.
+ *
+ * Sem ano: o mais recente que não passe da referência. Fica de fora: data colada em outros dígitos ou barras
+ * ("25/02/26/02/26" — não dá para saber onde uma termina), data impossível (31/02) e data DEPOIS da
+ * referência (ninguém faz o 1º contato depois de agendar) ou mais de 3 anos antes dela (digitação/nascimento).
+ */
+export function datasNoNome(nome: string | null | undefined, referenciaEpoch: number): number[] {
+  const ref = new Date(referenciaEpoch * 1000);
+  const out: number[] = [];
+  for (const m of (nome ?? '').matchAll(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?(?![\d/])/g)) {
+    const dia = Number(m[1]);
+    const mes = Number(m[2]);
+    let ano = m[3] ? Number(m[3].length === 2 ? `20${m[3]}` : m[3]) : ref.getUTCFullYear();
+    const epoch = (a: number) => {
+      const d = new Date(Date.UTC(a, mes - 1, dia, HORA_UTC));
+      // o Date "conserta" 31/02 para 03/03; se mudou, a data não existe
+      return d.getUTCMonth() === mes - 1 && d.getUTCDate() === dia ? d.getTime() / 1000 : null;
+    };
+    let e = epoch(ano);
+    if (e !== null && !m[3] && e > referenciaEpoch + DIA_S) e = epoch(--ano);
+    if (e === null || e > referenciaEpoch + DIA_S || e < referenciaEpoch - MAX_ANOS_NO_NOME * 365 * DIA_S) continue;
+    out.push(e);
+  }
+  return out;
 }
 
 /**
- * Resgate ou Cadastro. `referenciaEpoch` = quando o lead chegou ao agendamento (o carimbo "Agendado pela SDR
- * em" ou, sem ele, a data da consulta). NUNCA "agora": um cartão de maio que agendou em maio e é varrido em
- * outubro viraria "Resgate" só por estar velho hoje. Sem referência e sem etiqueta, não decide (null).
+ * Resgate ou Cadastro. O 1º contato é a data mais antiga entre a criação do cartão, o campo "Data do primeiro
+ * contato" e as datas escritas no nome. `referenciaEpoch` = quando o lead chegou ao agendamento (o carimbo
+ * "Agendado pela SDR em" ou, sem ele, a data da consulta). NUNCA "agora": um cartão de maio que agendou em maio
+ * e é varrido em outubro viraria "Resgate" só por estar velho hoje. Sem referência ou sem nenhuma data, não decide.
  */
 export function tipoDoLead(e: {
-  tags: ReadonlyArray<{ name: string }> | undefined;
+  nome: string | null | undefined;
   criadoEmEpoch: number | null | undefined;
+  primeiroContatoEpoch: number | null | undefined;
   referenciaEpoch: number | null;
 }): 'Resgate' | 'Cadastro' | null {
-  if (veioDaBaseAntiga(e.tags)) return 'Resgate';
-  if (!e.criadoEmEpoch || !e.referenciaEpoch) return null;
-  return e.referenciaEpoch - e.criadoEmEpoch > DIAS_PARA_RESGATE * DIA_S ? 'Resgate' : 'Cadastro';
+  if (!e.referenciaEpoch) return null;
+  const candidatas = [e.criadoEmEpoch, e.primeiroContatoEpoch, ...datasNoNome(e.nome, e.referenciaEpoch)]
+    .filter((x): x is number => typeof x === 'number' && Number.isFinite(x) && x > 0);
+  if (candidatas.length === 0) return null;
+  return e.referenciaEpoch - Math.min(...candidatas) > DIAS_PARA_RESGATE * DIA_S ? 'Resgate' : 'Cadastro';
 }
 
 /**
@@ -121,8 +156,11 @@ const mesmaData = (a: number, b: string) => Number.isFinite(Number(b)) && Math.a
  */
 export function planejarCamposSdr(e: {
   campo: (nome: string) => CampoAtual | null;
-  tags: ReadonlyArray<{ name: string }> | undefined;
+  /** nome do cartão (a SDR escreve ali o dia do 1º contato) */
+  nome: string | null | undefined;
   criadoEmEpoch: number | null | undefined;
+  /** campo "◷ Data do primeiro contato", se preenchido */
+  primeiroContatoEpoch: number | null | undefined;
   referenciaEpoch: number | null;
   /** primeira vez que o sincronizador vê o agendamento (sem o carimbo "Agendado pela SDR em") */
   primeiraVez: boolean;
@@ -152,7 +190,7 @@ export function planejarCamposSdr(e: {
     const c = e.campo(CAMPOS_SDR.TIPO_LEAD);
     // "Transferido de outra unidade" é decisão humana: não compara nem sobrescreve.
     if (!c || !/transferid/.test(normalizar(c.valor))) {
-      if (tipo) avaliar(CAMPOS_SDR.TIPO_LEAD, tipo, veioDaBaseAntiga(e.tags) ? 'veio da base antiga (importação)' : tipo === 'Resgate' ? `cartão com mais de ${DIAS_PARA_RESGATE} dias ao agendar` : 'lead novo', (v) => normalizar(v) === normalizar(tipo));
+      if (tipo) avaliar(CAMPOS_SDR.TIPO_LEAD, tipo, tipo === 'Resgate' ? `agendou mais de ${DIAS_PARA_RESGATE} dias depois do 1º contato` : 'lead novo', (v) => normalizar(v) === normalizar(tipo));
     }
   }
 
