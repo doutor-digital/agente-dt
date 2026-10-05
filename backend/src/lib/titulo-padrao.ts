@@ -61,9 +61,12 @@ function naFilaDaUnidade<T>(unitId: string, fn: () => Promise<T>): Promise<T> {
   const anterior = filas.get(unitId) ?? Promise.resolve();
   const atual = anterior.catch(() => undefined).then(fn);
   filas.set(unitId, atual);
-  void atual.finally(() => {
+  // limpa a fila nos DOIS desfechos sem criar promessa nova que rejeita: `void atual.finally(...)` repassava
+  // a falha do Kommo para uma promessa que ninguém tratava, e em 05/10/2026 isso derrubou o agente inteiro
+  const limpar = () => {
     if (filas.get(unitId) === atual) filas.delete(unitId);
-  });
+  };
+  atual.then(limpar, limpar);
   return atual;
 }
 
