@@ -13,6 +13,12 @@
  *    (as SDRs dividem um login só). A franquia só guarda "quem mexeu por último", então o nome só vale
  *    enquanto o agendamento ainda está AGENDADO — depois a recepção dá baixa e o nome passa a ser o dela.
  *    Marcado pela Sofia → a opção da IA.
+ *  - ⬢ Tipo de agendamento e ⬢ Tipo de fechamento de tratamento (05/10, chave própria `campos-sdr-tipos`):
+ *    repetem o Tipo de lead — o João decidiu que a SDR não preenche mais. O robô copia o Tipo de lead QUE
+ *    ESTÁ NO CARTÃO (nunca o calculado: um palpite não pode travar antes da SDR ou do campos-sdr decidir)
+ *    porque o dashboard ainda lê o de agendamento (quebra dos Agendados e nota de qualidade) e a Pendência
+ *    do cartão cobra ele. Agendamento só com consulta; fechamento só com "✓ Fechou tratamento" = Sim (que o
+ *    sincronizador grava olhando o ciclo deste cartão). "Transferido" não tem par nessas listas.
  *  - ◷ Data solicitação de cancelamento: o dia em que o tratamento virou desistência/cancelado na franquia.
  *    O status real da franquia é "DESISTÊNCIA A PEDIDO DO PACIENTE" (id 54), não "cancelado".
  *
@@ -20,12 +26,14 @@
  * se confere ou diverge, que é o teste em produção que o João pediu antes de aprovar.
  */
 import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { ehAvaliacao, normalizar } from './franquia-sync.js';
+import { CAMPOS_SYNC, ehAvaliacao, normalizar } from './franquia-sync.js';
 
 export const CAMPOS_SDR = {
   TIPO_LEAD: '⬢ Tipo de lead',
   RESPONSAVEL: '☻ Responsável agendamento',
   DATA_CANCELAMENTO: '◷ Data solicitação de cancelamento',
+  TIPO_AGENDAMENTO: '⬢ Tipo de agendamento',
+  TIPO_FECHAMENTO: '⬢ Tipo de fechamento de tratamento',
 } as const;
 
 /** Cartão com mais que isso quando chegou ao agendamento já estava na base. */
@@ -145,9 +153,10 @@ export interface CampoAtual {
   opcoes: string[];
 }
 
+/** `copia` = item da chave `campos-sdr-tipos` (cópia do Tipo de lead), que tem estado próprio na tela de Automações. */
 export type ResultadoCampoSdr =
-  | { campo: string; acao: 'gravar'; valor: string | number; motivo: string }
-  | { campo: string; acao: 'confere' | 'diverge'; valor: string | number; noCartao: string; motivo: string };
+  | { campo: string; acao: 'gravar'; valor: string | number; motivo: string; copia?: true }
+  | { campo: string; acao: 'confere' | 'diverge'; valor: string | number; noCartao: string; motivo: string; copia?: true };
 
 /** Datas valem iguais dentro de um dia (o campo pode ser date ou date_time). */
 const mesmaData = (a: number, b: string) => Number.isFinite(Number(b)) && Math.abs(Number(b) - a) <= DIA_S;
@@ -169,9 +178,11 @@ export function planejarCamposSdr(e: {
   consulta: Pick<SpineSchedule, 'categoryName' | 'idStatus' | 'modifiedBy'> | null;
   feitoPelaIa: boolean;
   tratamento: Pick<SpineTreatment, 'statusName' | 'modified' | 'created'> | null;
+  /** chave `campos-sdr-tipos` não desligada: também copia o Tipo de lead para Tipo de agendamento/fechamento */
+  copiarTipos?: boolean;
 }): ResultadoCampoSdr[] {
   const out: ResultadoCampoSdr[] = [];
-  const avaliar = (nome: string, valor: string | number | null, motivo: string, igual: (noCartao: string) => boolean) => {
+  const avaliar = (nome: string, valor: string | number | null, motivo: string, igual: (noCartao: string) => boolean, copia = false) => {
     if (valor === null) return;
     const c = e.campo(nome);
     if (!c) return;
@@ -182,8 +193,9 @@ export function planejarCamposSdr(e: {
       if (!opcao) return;
       valor = opcao;
     }
-    if (c.valor === null) out.push({ campo: nome, acao: 'gravar', valor, motivo });
-    else out.push({ campo: nome, acao: igual(c.valor) ? 'confere' : 'diverge', valor, noCartao: c.valor, motivo });
+    const marca = copia ? { copia: true as const } : {};
+    if (c.valor === null) out.push({ campo: nome, acao: 'gravar', valor, motivo, ...marca });
+    else out.push({ campo: nome, acao: igual(c.valor) ? 'confere' : 'diverge', valor, noCartao: c.valor, motivo, ...marca });
   };
 
   // Tipo de lead: só depois que existe consulta (o lead chegou ao agendamento) — antes disso ninguém decide.
@@ -193,6 +205,19 @@ export function planejarCamposSdr(e: {
     // "Transferido de outra unidade" é decisão humana: não compara nem sobrescreve.
     if (!c || !/transferid/.test(normalizar(c.valor))) {
       if (tipo) avaliar(CAMPOS_SDR.TIPO_LEAD, tipo, tipo === 'Resgate' ? `agendou mais de ${DIAS_PARA_RESGATE} dias depois do 1º contato` : 'lead novo', (v) => normalizar(v) === normalizar(tipo));
+    }
+  }
+
+  // Cópia: só do Tipo de lead que JÁ está no cartão. "Transferido" não existe nas listas de destino, e o
+  // `avaliar` descarta opção que a conta não tem.
+  if (e.copiarTipos) {
+    const fonte = e.campo(CAMPOS_SDR.TIPO_LEAD)?.valor ?? null;
+    if (fonte) {
+      const igual = (v: string) => normalizar(v) === normalizar(fonte);
+      if (e.consulta) avaliar(CAMPOS_SDR.TIPO_AGENDAMENTO, fonte, 'cópia do Tipo de lead', igual, true);
+      if (normalizar(e.campo(CAMPOS_SYNC.FECHOU_TRAT)?.valor) === 'sim') {
+        avaliar(CAMPOS_SDR.TIPO_FECHAMENTO, fonte, 'cópia do Tipo de lead', igual, true);
+      }
     }
   }
 

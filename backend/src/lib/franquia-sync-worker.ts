@@ -928,8 +928,10 @@ async function espelharCamposSdr(
 ): Promise<void> {
   const { unit, kommo, resumo } = ctx;
   const estado = estadoDaAutomacao(unit.slug, 'campos-sdr', process.env.CAMPOS_SDR_SLUGS);
-  if (estado === 'desligado') return;
-  const seco = estado === 'seco' || ctx.seco === true;
+  // a cópia do Tipo de lead (Tipo de agendamento/fechamento) tem chave própria: liga/testa sem mexer nas outras
+  const estadoTipos = estadoDaAutomacao(unit.slug, 'campos-sdr-tipos', process.env.CAMPOS_SDR_TIPOS_SLUGS);
+  if (estado === 'desligado' && estadoTipos === 'desligado') return;
+  const secoDe = (r: { copia?: true }) => (r.copia ? estadoTipos : estado) === 'seco' || ctx.seco === true;
 
   const bruto = lead.custom_fields_values ?? [];
   const porNome = ctx.camposPorNome ?? [];
@@ -960,25 +962,27 @@ async function espelharCamposSdr(
     consulta,
     feitoPelaIa,
     tratamento: p.tratamento,
-  });
+    copiarTipos: estadoTipos !== 'desligado',
+  }).filter((r) => (r.copia ? estadoTipos : estado) !== 'desligado');
   if (plano.length === 0) return;
   resumo.camposSdr ??= { gravaria: 0, confere: 0, diverge: 0 };
-  const vaiEscrever = !seco && plano.some((r) => r.acao === 'gravar');
+  const vaiEscrever = plano.some((r) => r.acao === 'gravar' && !secoDe(r));
   if (vaiEscrever && (resumo.camposSdrCartoes ?? 0) >= MAX_CAMPOS_SDR_POR_VARREDURA) return;
   if (vaiEscrever) resumo.camposSdrCartoes = (resumo.camposSdrCartoes ?? 0) + 1;
 
   for (const r of plano) {
+    const rotulo = r.copia ? 'campos-sdr-tipos' : 'campos-sdr';
     if (r.acao !== 'gravar') {
       resumo.camposSdr[r.acao]++;
       if (!jaRegistrou(`${unit.slug}:${leadId}:${r.campo}:${r.acao}:${r.noCartao}`)) {
-        logger.info({ unit: unit.slug, leadId, campo: r.campo, calculado: r.valor, noCartao: r.noCartao, motivo: r.motivo }, `campos-sdr: ${r.acao}`);
+        logger.info({ unit: unit.slug, leadId, campo: r.campo, calculado: r.valor, noCartao: r.noCartao, motivo: r.motivo }, `${rotulo}: ${r.acao}`);
       }
       continue;
     }
     resumo.camposSdr.gravaria++;
-    if (seco) {
+    if (secoDe(r)) {
       if (!jaRegistrou(`${unit.slug}:${leadId}:${r.campo}:gravaria:${r.valor}`)) {
-        logger.info({ unit: unit.slug, leadId, campo: r.campo, valor: r.valor, motivo: r.motivo }, 'campos-sdr [seco]: gravaria');
+        logger.info({ unit: unit.slug, leadId, campo: r.campo, valor: r.valor, motivo: r.motivo }, `${rotulo} [seco]: gravaria`);
       }
       continue;
     }
@@ -987,10 +991,10 @@ async function espelharCamposSdr(
     try {
       await kommo.setLeadCustomFieldValue(leadId, i.id, i.type, r.valor, i.enums);
       resumo.escritas++;
-      logger.info({ unit: unit.slug, leadId, campo: r.campo, valor: r.valor, motivo: r.motivo }, 'campos-sdr: gravado');
+      logger.info({ unit: unit.slug, leadId, campo: r.campo, valor: r.valor, motivo: r.motivo }, `${rotulo}: gravado`);
     } catch (err) {
       resumo.erros++;
-      logger.warn({ err, unit: unit.slug, leadId, campo: r.campo }, 'campos-sdr: falha ao gravar');
+      logger.warn({ err, unit: unit.slug, leadId, campo: r.campo }, `${rotulo}: falha ao gravar`);
     }
     await new Promise((res) => setTimeout(res, PAUSA_ENTRE_ESCRITAS_MS));
   }
