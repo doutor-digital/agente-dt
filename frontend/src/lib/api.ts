@@ -367,8 +367,10 @@ export const api = {
     const { data } = await http.get<PanoramaAutomacoes>(`/units/${unitId}/automacoes`);
     return data;
   },
-  async simulacoes(unitId: string, automacao: string, dias = 7): Promise<Simulacoes> {
-    const { data } = await http.get<Simulacoes>(`/units/${unitId}/automacoes/${automacao}/simulacoes`, { params: { dias } });
+  async simulacoes(unitId: string, automacao: string, dias = 7, acao: AcaoSimulada | null = null): Promise<Simulacoes> {
+    const { data } = await http.get<Simulacoes>(`/units/${unitId}/automacoes/${automacao}/simulacoes`, {
+      params: acao ? { dias, acao } : { dias },
+    });
     return data;
   },
   async definirAutomacao(unitId: string, automacao: string, estado: EstadoAutomacao): Promise<{ automacoes: Automacao[] }> {

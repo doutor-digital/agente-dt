@@ -982,16 +982,16 @@ async function espelharCamposSdr(
       resumo.camposSdr[r.acao]++;
       if (!jaRegistrou(`${unit.slug}:${leadId}:${r.campo}:${r.acao}:${r.noCartao}`)) {
         logger.info({ unit: unit.slug, leadId, campo: r.campo, calculado: r.valor, noCartao: r.noCartao, motivo: r.motivo }, `${rotulo}: ${r.acao}`);
-        registrarSimulacao(unit, rotulo, { leadId, acao: r.acao, alvo: r.campo, valor: r.valor, noCartao: r.noCartao, motivo: r.motivo });
       }
+      registrarSimulacao(unit, rotulo, { leadId, acao: r.acao, alvo: r.campo, valor: r.valor, noCartao: r.noCartao, motivo: r.motivo });
       continue;
     }
     resumo.camposSdr.gravaria++;
     if (secoDe(r)) {
       if (!jaRegistrou(`${unit.slug}:${leadId}:${r.campo}:gravaria:${r.valor}`)) {
         logger.info({ unit: unit.slug, leadId, campo: r.campo, valor: r.valor, motivo: r.motivo }, `${rotulo} [seco]: gravaria`);
-        registrarSimulacao(unit, rotulo, { leadId, acao: 'gravaria', alvo: r.campo, valor: r.valor, motivo: r.motivo });
       }
+      registrarSimulacao(unit, rotulo, { leadId, acao: 'gravaria', alvo: r.campo, valor: r.valor, motivo: r.motivo });
       continue;
     }
     const i = info(r.campo);

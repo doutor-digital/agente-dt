@@ -95,13 +95,13 @@ function OQueFaria({ unitId, automacao }: { unitId: string; automacao: string })
     setDados(null);
     setErro(null);
     api
-      .simulacoes(unitId, automacao, dias)
+      .simulacoes(unitId, automacao, dias, filtro)
       .then((r) => vivo && setDados(r))
       .catch(() => vivo && setErro('não consegui ler o que ela faria'));
     return () => {
       vivo = false;
     };
-  }, [unitId, automacao, dias]);
+  }, [unitId, automacao, dias, filtro]);
 
   if (erro) return <p className="px-4 pb-3.5 text-xs text-rose-300">{erro}</p>;
   if (!dados)
@@ -111,7 +111,8 @@ function OQueFaria({ unitId, automacao }: { unitId: string; automacao: string })
       </p>
     );
 
-  const itens = filtro ? dados.itens.filter((i) => i.acao === filtro) : dados.itens;
+  // o filtro é aplicado no servidor: a lista e o "mostrando X de Y" já vêm só com a ação escolhida
+  const itens = dados.itens;
   const link = (id: number) => (dados.kommoSubdomain ? `https://${dados.kommoSubdomain}.kommo.com/leads/detail/${id}` : null);
 
   return (
@@ -122,7 +123,10 @@ function OQueFaria({ unitId, automacao }: { unitId: string; automacao: string })
         </span>
         <select
           value={dias}
-          onChange={(e) => setDias(Number(e.target.value))}
+          onChange={(e) => {
+            setDias(Number(e.target.value));
+            setFiltro(null); // o período novo pode não ter a ação filtrada — não deixa a lista presa em "nada"
+          }}
           className="rounded bg-zinc-900 px-1.5 py-0.5 text-zinc-300 ring-1 ring-zinc-700"
         >
           <option value={1}>1 dia</option>
@@ -131,7 +135,7 @@ function OQueFaria({ unitId, automacao }: { unitId: string; automacao: string })
         </select>
         <span className="mx-1 text-zinc-700">·</span>
         {(Object.keys(ACAO) as AcaoSimulada[])
-          .filter((k) => dados.resumo[k] > 0)
+          .filter((k) => dados.resumo[k] > 0 || filtro === k)
           .map((k) => (
             <button
               key={k}
@@ -193,7 +197,9 @@ function OQueFaria({ unitId, automacao }: { unitId: string; automacao: string })
                     <td className="px-3 py-2 text-zinc-400">{i.noCartao ?? (i.acao === 'gravaria' ? <em className="text-zinc-600">vazio</em> : '')}</td>
                     <td className="px-3 py-2 text-zinc-400">
                       {i.motivo}
-                      {i.acao === 'moveria' && i.valor && <span className="block text-zinc-500">motivo de perda: {i.valor}</span>}
+                      {i.acao === 'moveria' && i.valor && /perdido/i.test(i.alvo) && (
+                        <span className="block text-zinc-500">motivo de perda: {i.valor}</span>
+                      )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-zinc-500" title={`primeira vez: ${quando(i.primeiraEm)}`}>
                       {quando(i.ultimaEm)}

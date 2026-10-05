@@ -1862,8 +1862,8 @@ model WidgetPasso {
   @@map("widget_passos")
 }
 
-/// O que uma automação em "Só no papel" (seco) FARIA — uma linha por cartão e decisão, para conferir na
-/// tela de Automações antes de ligar. A mesma decisão repetida em outra varredura só atualiza `ultimaEm`.
+/// O que uma automação em "Só no papel" (seco) FARIA — uma linha por cartão e alvo (campo ou etapa), para
+/// conferir na tela de Automações antes de ligar. A mesma decisão repetida em outra varredura só atualiza `ultimaEm`.
 model AutomacaoSimulacao {
   id          String   @id @default(cuid())
   unitId      String   @map("unit_id")
@@ -1882,7 +1882,8 @@ model AutomacaoSimulacao {
 
   unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
-  @@unique([unitId, automacao, kommoLeadId, acao, alvo], map: "automacao_simulacoes_chave_key")
+  /// sem a ação na chave: "diverge" que vira "confere" atualiza a mesma linha em vez de deixar a velha na tela
+  @@unique([unitId, automacao, kommoLeadId, alvo], map: "automacao_simulacoes_chave_key")
   @@index([unitId, automacao, ultimaEm(sort: Desc)], map: "automacao_simulacoes_lista_idx")
   @@map("automacao_simulacoes")
 }

@@ -6,9 +6,10 @@
  * `automacao_simulacoes`: qual cartão, o que faria (mover para tal etapa, gravar tal campo) e, nos robôs
  * de campo, se o calculado CONFERE ou DIVERGE do que a SDR já pôs. A tela lê dessa tabela.
  *
- * Uma linha por (unidade, automação, cartão, ação, alvo): a mesma decisão repetida a cada varredura só
- * atualiza `ultimaEm` — a lista mostra cartões, não o número de varreduras. Nunca derruba a automação:
- * gravar aqui é melhor-esforço.
+ * Uma linha por (unidade, automação, cartão, alvo): a mesma decisão repetida a cada varredura só
+ * atualiza `ultimaEm` (no máximo de hora em hora, para não martelar o banco) — a lista mostra cartões, não o
+ * número de varreduras. A ação fica fora da chave: um "diverge" que a SDR corrige vira "confere" na mesma
+ * linha. Nunca derruba a automação: gravar aqui é melhor-esforço.
  */
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
@@ -30,6 +31,9 @@ export interface Simulacao {
 const DIAS_GUARDADOS = 30;
 const LIMPEZA_A_CADA_MS = 6 * 3600_000;
 let ultimaLimpeza = 0;
+/** Mesma decisão (mesmo valor) dentro desta janela não vai de novo ao banco. */
+const REGRAVAR_A_CADA_MS = 3600_000;
+const vistas = new Map<string, number>();
 
 const texto = (v: unknown, max = 500): string | null => {
   if (v === undefined || v === null) return null;
@@ -40,7 +44,13 @@ const texto = (v: unknown, max = 500): string | null => {
 /** Grava a decisão para a tela. Não espera nem lança: a automação segue igual se o banco falhar. */
 export function registrarSimulacao(unit: { id: string; slug: string }, automacao: string, s: Simulacao): void {
   if (!Number.isFinite(s.leadId) || s.leadId <= 0) return;
+  const chave = [unit.id, automacao, s.leadId, s.alvo, s.acao, texto(s.valor), texto(s.noCartao)].join('|');
+  const agora = Date.now();
+  if (agora - (vistas.get(chave) ?? 0) < REGRAVAR_A_CADA_MS) return;
+  vistas.set(chave, agora);
+  if (vistas.size > 50_000) for (const [k, t] of vistas) if (agora - t > REGRAVAR_A_CADA_MS) vistas.delete(k);
   const dados = {
+    acao: s.acao,
     valor: texto(s.valor),
     noCartao: texto(s.noCartao),
     deEtapa: texto(s.deEtapa, 120),
@@ -49,8 +59,8 @@ export function registrarSimulacao(unit: { id: string; slug: string }, automacao
   };
   void prisma.automacaoSimulacao
     .upsert({
-      where: { unitId_automacao_kommoLeadId_acao_alvo: { unitId: unit.id, automacao, kommoLeadId: s.leadId, acao: s.acao, alvo: s.alvo } },
-      create: { unitId: unit.id, automacao, kommoLeadId: s.leadId, acao: s.acao, alvo: s.alvo, ...dados },
+      where: { unitId_automacao_kommoLeadId_alvo: { unitId: unit.id, automacao, kommoLeadId: s.leadId, alvo: s.alvo } },
+      create: { unitId: unit.id, automacao, kommoLeadId: s.leadId, alvo: s.alvo, ...dados },
       update: dados,
     })
     .catch((err) => logger.warn({ err: String(err), unit: unit.slug, automacao }, 'so-no-papel: não gravei a simulação'));

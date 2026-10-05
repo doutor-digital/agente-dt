@@ -17,7 +17,7 @@ CREATE TABLE "automacao_simulacoes" (
     CONSTRAINT "automacao_simulacoes_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "automacao_simulacoes_chave_key" ON "automacao_simulacoes"("unit_id", "automacao", "kommo_lead_id", "acao", "alvo");
+CREATE UNIQUE INDEX "automacao_simulacoes_chave_key" ON "automacao_simulacoes"("unit_id", "automacao", "kommo_lead_id", "alvo");
 CREATE INDEX "automacao_simulacoes_lista_idx" ON "automacao_simulacoes"("unit_id", "automacao", "ultima_em" DESC);
 
 ALTER TABLE "automacao_simulacoes" ADD CONSTRAINT "automacao_simulacoes_unit_id_fkey"

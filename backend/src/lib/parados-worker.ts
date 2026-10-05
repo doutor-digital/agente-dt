@@ -284,7 +284,7 @@ export async function voltarDaEsperaSeRespondeu(unit: Unit, leadId: number, mens
     if (!alvo) return;
     if (voltaDaEsperaSeca(unit.slug)) {
       logger.info({ unit: unit.slug, leadId }, 'parados [seco]: voltaria de EM ESPERA pra EM QUALIFICAÇÃO (paciente escreveu)');
-      registrarSimulacao(unit, 'volta-espera', { leadId, acao: 'moveria', alvo: ETAPA.QUALIFICACAO, deEtapa: est.nome, motivo: 'paciente voltou a escrever', valor: mensagem?.slice(0, 200) });
+      registrarSimulacao(unit, 'volta-espera', { leadId, acao: 'moveria', alvo: ETAPA.QUALIFICACAO, deEtapa: est.nome, motivo: 'paciente voltou a escrever' });
       return;
     }
     await kommo.moveStage({ leadId, statusId: alvo.statusId, pipelineId: alvo.pipelineId });

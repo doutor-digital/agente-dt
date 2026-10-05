@@ -128,7 +128,7 @@ export async function redeAutomacoesHandler(_req: Request, res: Response): Promi
 }
 
 /**
- * GET /units/:id/automacoes/:automacao/simulacoes?dias=7 — o que a automação fez "só no papel": uma linha
+ * GET /units/:id/automacoes/:automacao/simulacoes?dias=7&acao=diverge — o que a automação fez "só no papel": uma linha
  * por cartão e decisão (moveria/gravaria; nos robôs de campo, confere/diverge do que a SDR pôs). É o que
  * a tela mostra para conferir antes de ligar. Ver `lib/so-no-papel.ts`.
  */
@@ -146,16 +146,19 @@ export async function simulacoesHandler(req: Request, res: Response): Promise<vo
   const dias = Math.min(30, Math.max(1, Number(req.query.dias) || 7));
   const desde = new Date(Date.now() - dias * 86_400_000);
   const where = { unitId: unit.id, automacao: idAutomacao, ultimaEm: { gte: desde } };
+  // o filtro vale para a lista E para o "mostrando X de Y" — o placar continua mostrando todas as ações
+  const acao = typeof req.query.acao === 'string' && ['moveria', 'gravaria', 'confere', 'diverge'].includes(req.query.acao) ? req.query.acao : null;
+  const daLista = acao ? { ...where, acao } : where;
   const [todos, itens] = await Promise.all([
     prisma.automacaoSimulacao.findMany({ where, select: { acao: true, kommoLeadId: true } }),
-    prisma.automacaoSimulacao.findMany({ where, orderBy: { ultimaEm: 'desc' }, take: 300 }),
+    prisma.automacaoSimulacao.findMany({ where: daLista, orderBy: { ultimaEm: 'desc' }, take: 300 }),
   ]);
   res.json({
     automacao: idAutomacao,
     dias,
     kommoSubdomain: unit.kommoSubdomain,
     resumo: resumirSimulacoes(todos),
-    total: todos.length,
+    total: acao ? todos.filter((t) => t.acao === acao).length : todos.length,
     itens: itens.map((i) => ({
       leadId: i.kommoLeadId,
       acao: i.acao,
