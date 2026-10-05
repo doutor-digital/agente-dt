@@ -225,6 +225,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/campos-sdr.ts',
   },
   {
+    id: 'sugestao-motivo',
+    chave: 'SUGESTAO_MOTIVO_SLUGS',
+    nome: 'IA sugere o motivo do não agendamento (widget)',
+    oQueFaz:
+      'No widget do cartão, o botão "Sugerir motivo" lê a conversa oficial (com áudio transcrito) e sugere o ⊘ Motivo do não agendamento. A SDR confirma com "Usar" ou escolhe outro.',
+    pegadinha:
+      'Só gasta IA no clique. Nunca grava sozinha. Medido contra o gabarito do João: ~70% de acerto (SDR 90%) — por isso é sugestão. Cada uso registra sugerido × escolhido no log (sugestao-motivo: usada).',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/sugestao-motivo.ts',
+  },
+  {
     id: 'carimbo-etapa',
     chave: 'CARIMBO_ETAPA_SLUGS',
     nome: 'Carimbo de início e fim do tratamento',

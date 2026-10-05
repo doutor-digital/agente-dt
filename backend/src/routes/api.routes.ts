@@ -174,7 +174,9 @@ import {
   unitPausarHandler,
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
-import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
+import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler,
+  widgetSugestaoMotivoHandler,
+  widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
 import { faxinaConversasHandler, avisoNaoLidasHandler, preencheCamposHandler } from '../controllers/faxina.controller.js';
 import { relatorioRedeDiariaHandler } from '../controllers/relatorio-rede.controller.js';
 import { relatorioMensalRedeHandler } from '../controllers/relatorio-mensal-rede.controller.js';
@@ -281,6 +283,8 @@ apiRouter.get('/public/widget/:slug/numeros', widgetNumerosHandler);
 // Marcar consulta de dentro do cartão (unidade sem Sofia): mesma chave por unidade, limite próprio de escrita.
 apiRouter.get('/public/widget/:slug/horarios', widgetHorariosHandler);
 apiRouter.post('/public/widget/:slug/marcar', widgetMarcarHandler);
+apiRouter.get('/public/widget/:slug/sugestao-motivo', widgetSugestaoMotivoHandler);
+apiRouter.post('/public/widget/:slug/sugestao-motivo/usar', widgetUsarMotivoHandler);
 // O que o widget ensina no cartão: o que esta pessoa já entendeu, e o "entendi".
 apiRouter.get('/public/widget/:slug/passos', widgetPassosHandler);
 apiRouter.post('/public/widget/:slug/passos', widgetPassoEntendiHandler);

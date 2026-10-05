@@ -21,6 +21,10 @@ import { SpineService, type SpineTreatment } from '../services/spine.service.js'
 import { horariosParaWidget, marcarPeloWidget } from '../lib/marcacao-widget.js';
 import { chaveConfere, janelaDoPeriodo, janelaExplicita, limparNome, resumirAuditoria, resumoDaAgenda, termosDeBusca } from '../lib/widget-agenda.js';
 import { chaveTelefone, normalizar } from '../lib/franquia-sync.js';
+import { createKommoClient, type KommoTalkMessage } from '../services/kommo.service.js';
+import { transcribeAudio } from '../services/transcription.service.js';
+import { automacaoLigada } from '../lib/automacoes-estado.js';
+import { CAMPO_MOTIVO_NAO_AGENDAMENTO, autorDaMensagem, interpretarResposta, montarPrompt, type FalaDaConversa } from '../lib/sugestao-motivo.js';
 
 const chamadas = new Map<string, { n: number; desde: number }>();
 const JANELA_MS = 60_000;
@@ -328,4 +332,111 @@ export async function widgetPassoEntendiHandler(req: Request, res: Response): Pr
     .create({ data: { unitId: unit.id, kommoUserId: u, passo } })
     .catch(() => undefined);   // unique: já tinha marcado, e isso é sucesso
   res.json({ ok: true });
+}
+
+
+// ── Sugestão do motivo do não agendamento pela IA (05/10/2026) ──
+//
+// A IA SUGERE, a SDR CONFIRMA (decisão do João). Só gasta IA quando a SDR clica em "Sugerir motivo". "Usar" grava
+// o campo e registra sugerido × escolhido no log — é assim que se mede se a IA está ajudando. Regras e medição em
+// `lib/sugestao-motivo.ts`.
+
+const MODELO_SUGESTAO = 'claude-sonnet-5';
+const CACHE_SUGESTAO_MS = 30 * 60_000;
+const cacheSugestao = new Map<string, { em: number; corpo: unknown }>();
+const cacheOpcoes = new Map<string, { em: number; campo: { id: number; enums: Array<{ id: number; value: string }> } | null }>();
+
+async function campoDoMotivo(unit: Unit) {
+  const c = cacheOpcoes.get(unit.id);
+  if (c && Date.now() - c.em < 10 * 60_000) return c.campo;
+  const campos = await createKommoClient(unit).listLeadCustomFieldsTyped();
+  const f = campos.find((x) => x.name.trim() === CAMPO_MOTIVO_NAO_AGENDAMENTO) ?? null;
+  const campo = f && f.enums.length ? { id: f.id, enums: f.enums } : null;
+  cacheOpcoes.set(unit.id, { em: Date.now(), campo });
+  return campo;
+}
+
+async function conversaOficial(unit: Unit, leadId: number): Promise<{ falas: FalaDaConversa[]; ultimaId: string }> {
+  const kommo = createKommoClient(unit);
+  const talks = (await kommo.listTalks(leadId)).slice(0, 5);
+  const msgs: KommoTalkMessage[] = [];
+  for (const t of talks) msgs.push(...(await kommo.listTalkMessages(Number((t as { talk_id?: number; id?: number }).talk_id ?? (t as { id?: number }).id), 100)));
+  msgs.sort((a, b) => a.created_at - b.created_at);
+  const falas: FalaDaConversa[] = [];
+  let audios = 0;
+  for (const m of msgs) {
+    let texto = (m.text ?? '').replace(/\s+/g, ' ').trim();
+    const anexo = m.attachment?.type;
+    if (anexo === 'voice' && m.attachment?.link && audios < 6) {
+      audios++;
+      const t = await transcribeAudio(unit, m.attachment.link).catch(() => null);
+      if (t?.text) texto = `${texto} (áudio) ${t.text}`.trim();
+      else texto = `${texto} [áudio]`.trim();
+    } else if (anexo) {
+      texto = `${texto} [${anexo === 'picture' ? 'imagem' : anexo === 'file' ? 'arquivo' : anexo}]`.trim();
+    }
+    if (texto) falas.push({ autor: autorDaMensagem(m.author), texto: texto.slice(0, 600) });
+  }
+  return { falas, ultimaId: msgs.length ? String(msgs[msgs.length - 1].id) : 'vazia' };
+}
+
+/** GET /public/widget/:slug/sugestao-motivo?lead=<id> → { motivo, frase, travado, opcoes } */
+export async function widgetSugestaoMotivoHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res);
+  if (!unit) return;
+  if (!automacaoLigada(unit.slug, 'sugestao-motivo', process.env.SUGESTAO_MOTIVO_SLUGS)) { res.status(404).json({ error: 'desligada nesta unidade' }); return; }
+  const leadId = Number(req.query.lead);
+  if (!Number.isInteger(leadId) || leadId <= 0) { res.status(400).json({ error: 'lead inválido' }); return; }
+  const chave = unit.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY;
+  if (!chave) { res.status(503).json({ error: 'unidade sem chave da IA' }); return; }
+  try {
+    const campo = await campoDoMotivo(unit);
+    if (!campo) { res.status(404).json({ error: `a conta não tem o campo "${CAMPO_MOTIVO_NAO_AGENDAMENTO}"` }); return; }
+    const opcoes = campo.enums.map((e) => e.value);
+    const { falas, ultimaId } = await conversaOficial(unit, leadId);
+    const k = `${unit.id}:${leadId}:${ultimaId}`;
+    const c = cacheSugestao.get(k);
+    if (c && Date.now() - c.em < CACHE_SUGESTAO_MS) { res.json(c.corpo); return; }
+    if (cacheSugestao.size > 2_000) cacheSugestao.clear();
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: MODELO_SUGESTAO, max_tokens: 200, thinking: { type: 'disabled' }, messages: [{ role: 'user', content: montarPrompt(falas, opcoes) }] }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    const data = (await resp.json()) as { content?: Array<{ text?: string }>; error?: unknown };
+    if (data.error) throw new Error(`Anthropic: ${JSON.stringify(data.error).slice(0, 160)}`);
+    const sug = interpretarResposta((data.content ?? []).map((x) => x.text ?? '').join(''), falas, opcoes);
+    const corpo = sug ? { ...sug, opcoes } : { motivo: null, frase: '', travado: false, opcoes };
+    cacheSugestao.set(k, { em: Date.now(), corpo });
+    logger.info({ unit: unit.slug, leadId, sugerido: sug?.motivo ?? null, travado: sug?.travado ?? false, falas: falas.length }, 'sugestao-motivo: sugerida');
+    res.json(corpo);
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'sugestao-motivo: falhou');
+    res.status(502).json({ error: 'não consegui sugerir agora' });
+  }
+}
+
+/** POST /public/widget/:slug/sugestao-motivo/usar { leadId, motivo, sugerido } → grava o campo e registra a escolha */
+export async function widgetUsarMotivoHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res);
+  if (!unit) return;
+  if (!automacaoLigada(unit.slug, 'sugestao-motivo', process.env.SUGESTAO_MOTIVO_SLUGS)) { res.status(404).json({ error: 'desligada nesta unidade' }); return; }
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const leadId = Number(b.leadId);
+  if (!Number.isInteger(leadId) || leadId <= 0) { res.status(400).json({ error: 'leadId inválido' }); return; }
+  try {
+    const campo = await campoDoMotivo(unit);
+    if (!campo) { res.status(404).json({ error: 'campo não encontrado' }); return; }
+    const opcao = campo.enums.find((e) => normalizar(e.value) === normalizar(String(b.motivo ?? '')));
+    if (!opcao) { res.status(400).json({ error: 'motivo fora da lista da conta' }); return; }
+    await createKommoClient(unit).setLeadCustomFieldValue(leadId, campo.id, 'select', opcao.value, campo.enums);
+    const sugerido = typeof b.sugerido === 'string' ? b.sugerido.slice(0, 120) : null;
+    logger.info({ unit: unit.slug, leadId, sugerido, escolhido: opcao.value, aceitou: !!sugerido && normalizar(sugerido) === normalizar(opcao.value) }, 'sugestao-motivo: usada');
+    res.json({ ok: true, motivo: opcao.value });
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'sugestao-motivo: falha ao gravar');
+    res.status(502).json({ error: 'não consegui gravar no cartão' });
+  }
 }
