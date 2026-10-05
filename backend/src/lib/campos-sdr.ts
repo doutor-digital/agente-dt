@@ -41,7 +41,7 @@ const MAX_ANOS_NO_NOME = 3;
  * Datas que a SDR escreveu no nome do cartão ("Rosimar 14/5/2026", "ELANE 26/1", "Nivas 09/12/25 19/5/2026"),
  * em epoch (s). Os cartões importados guardam ali o dia do 1º contato — a criação do cartão é o dia da importação.
  *
- * Sem ano: o mais recente que não passe da referência. Fica de fora: data colada em outros dígitos ou barras
+ * Sem ano: o ano da referência, ou o anterior quando a data cairia mais de meio ano à frente (virada de ano). Fica de fora: data colada em outros dígitos ou barras
  * ("25/02/26/02/26" — não dá para saber onde uma termina), data impossível (31/02) e data DEPOIS da
  * referência (ninguém faz o 1º contato depois de agendar) ou mais de 3 anos antes dela (digitação/nascimento).
  */
@@ -58,7 +58,9 @@ export function datasNoNome(nome: string | null | undefined, referenciaEpoch: nu
       return d.getUTCMonth() === mes - 1 && d.getUTCDate() === dia ? d.getTime() / 1000 : null;
     };
     let e = epoch(ano);
-    if (e !== null && !m[3] && e > referenciaEpoch + DIA_S) e = epoch(--ano);
+    // sem ano e mais de meio ano à frente = virada de ano ("20/12" lido em janeiro); pouco à frente é outra
+    // data (ex.: o dia da consulta) e cai na regra "depois da referência" logo abaixo
+    if (e !== null && !m[3] && e > referenciaEpoch + 180 * DIA_S) e = epoch(--ano);
     if (e === null || e > referenciaEpoch + DIA_S || e < referenciaEpoch - MAX_ANOS_NO_NOME * 365 * DIA_S) continue;
     out.push(e);
   }

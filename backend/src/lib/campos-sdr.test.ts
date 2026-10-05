@@ -28,11 +28,13 @@ const dia = (iso: string) => Date.parse(`${iso}T15:00:00Z`) / 1000;
 const DATA = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const lidas = (nome: string, ref: number) => datasNoNome(nome, ref).map((e) => DATA(e * 1000));
 
-test('datas no nome: com ano de 4 e de 2 dígitos, e sem ano (o mais recente que não passe do agendamento)', () => {
+test('datas no nome: com ano de 4 e de 2 dígitos, e sem ano (o ano anterior só na virada de ano)', () => {
   assert.deepEqual(lidas('Rosimar 14/5/2026', dia('2026-06-02')), ['2026-05-14']);
   assert.deepEqual(lidas('Eurides Paiva dos Santos 21/01/26', dia('2026-02-02')), ['2026-01-21']);
   assert.deepEqual(lidas('ELANE DA SILVA NOGUEIRA 26/1', dia('2026-09-30')), ['2026-01-26']);
   assert.deepEqual(lidas('Maria 20/12', dia('2026-01-10')), ['2025-12-20']);
+  // sem ano e só um pouco à frente do agendamento não é virada de ano: é outra data, fica de fora
+  assert.deepEqual(lidas('Maria 26/1', dia('2026-01-10')), []);
 });
 
 test('datas no nome: duas datas voltam as duas (a regra pega a mais antiga)', () => {
