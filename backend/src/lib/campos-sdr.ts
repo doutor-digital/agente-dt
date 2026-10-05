@@ -14,10 +14,11 @@
  *    enquanto o agendamento ainda está AGENDADO — depois a recepção dá baixa e o nome passa a ser o dela.
  *    Marcado pela Sofia → a opção da IA.
  *  - ⬢ Tipo de agendamento e ⬢ Tipo de fechamento de tratamento (05/10, chave própria `campos-sdr-tipos`):
- *    repetem o Tipo de lead — o João decidiu que a SDR não preenche mais. O robô copia o Tipo de lead do
- *    cartão (o que a SDR pôs vence o calculado) porque o dashboard ainda lê o de agendamento (quebra dos
- *    Agendados e nota de qualidade) e a Pendência do cartão cobra ele. Agendamento só com consulta;
- *    fechamento só com tratamento fechado. "Transferido" não tem par nessas listas e não é copiado.
+ *    repetem o Tipo de lead — o João decidiu que a SDR não preenche mais. O robô copia o Tipo de lead QUE
+ *    ESTÁ NO CARTÃO (nunca o calculado: um palpite não pode travar antes da SDR ou do campos-sdr decidir)
+ *    porque o dashboard ainda lê o de agendamento (quebra dos Agendados e nota de qualidade) e a Pendência
+ *    do cartão cobra ele. Agendamento só com consulta; fechamento só com "✓ Fechou tratamento" = Sim (que o
+ *    sincronizador grava olhando o ciclo deste cartão). "Transferido" não tem par nessas listas.
  *  - ◷ Data solicitação de cancelamento: o dia em que o tratamento virou desistência/cancelado na franquia.
  *    O status real da franquia é "DESISTÊNCIA A PEDIDO DO PACIENTE" (id 54), não "cancelado".
  *
@@ -25,7 +26,7 @@
  * se confere ou diverge, que é o teste em produção que o João pediu antes de aprovar.
  */
 import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { ehAvaliacao, normalizar } from './franquia-sync.js';
+import { CAMPOS_SYNC, ehAvaliacao, normalizar } from './franquia-sync.js';
 
 export const CAMPOS_SDR = {
   TIPO_LEAD: '⬢ Tipo de lead',
@@ -198,8 +199,8 @@ export function planejarCamposSdr(e: {
   };
 
   // Tipo de lead: só depois que existe consulta (o lead chegou ao agendamento) — antes disso ninguém decide.
-  const tipo = tipoDoLead(e);
   if (e.consulta) {
+    const tipo = tipoDoLead(e);
     const c = e.campo(CAMPOS_SDR.TIPO_LEAD);
     // "Transferido de outra unidade" é decisão humana: não compara nem sobrescreve.
     if (!c || !/transferid/.test(normalizar(c.valor))) {
@@ -207,14 +208,16 @@ export function planejarCamposSdr(e: {
     }
   }
 
-  // Cópia: o Tipo de lead do cartão (decisão da SDR) vence o calculado. "Transferido" não existe nas listas
-  // de destino, e o `avaliar` descarta opção que a conta não tem.
+  // Cópia: só do Tipo de lead que JÁ está no cartão. "Transferido" não existe nas listas de destino, e o
+  // `avaliar` descarta opção que a conta não tem.
   if (e.copiarTipos) {
-    const fonte = e.campo(CAMPOS_SDR.TIPO_LEAD)?.valor ?? tipo;
+    const fonte = e.campo(CAMPOS_SDR.TIPO_LEAD)?.valor ?? null;
     if (fonte) {
       const igual = (v: string) => normalizar(v) === normalizar(fonte);
       if (e.consulta) avaliar(CAMPOS_SDR.TIPO_AGENDAMENTO, fonte, 'cópia do Tipo de lead', igual, true);
-      if (e.tratamento) avaliar(CAMPOS_SDR.TIPO_FECHAMENTO, fonte, 'cópia do Tipo de lead', igual, true);
+      if (normalizar(e.campo(CAMPOS_SYNC.FECHOU_TRAT)?.valor) === 'sim') {
+        avaliar(CAMPOS_SDR.TIPO_FECHAMENTO, fonte, 'cópia do Tipo de lead', igual, true);
+      }
     }
   }
 
