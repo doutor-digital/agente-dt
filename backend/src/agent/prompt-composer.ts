@@ -1772,7 +1772,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     if (customBase) single.push(customBase);
     const memBlock = renderLeadMemory(leadMemory);
     if (memBlock) single.push(memBlock);
-    const outraBlockSingle = renderConversaComOutraSofia(outraSofia);
+    const outraBlockSingle = renderConversaComOutraSofia(outraSofia, unit.spineEnabled);
     if (outraBlockSingle) single.push(outraBlockSingle);
     const semAgendaSingle = renderSemAgenda(unit);
     if (semAgendaSingle) single.push(semAgendaSingle);
@@ -1836,7 +1836,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   if (lessonsBlock) blocks.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) blocks.push(memoryBlock);
-  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia);
+  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia, unit.spineEnabled);
   if (outraSofiaBlock) blocks.push(outraSofiaBlock);
   if (faltaBlock) blocks.push(faltaBlock);
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
@@ -1932,7 +1932,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (soCumprimento) dynamic.push(soCumprimento);
   const memoryBlock = renderLeadMemory(leadMemory);
   if (memoryBlock) dynamic.push(memoryBlock);
-  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia);
+  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia, unit.spineEnabled);
   if (outraSofiaBlock) dynamic.push(outraSofiaBlock);
   const faltaBlock = renderFaltaParaAgendar(
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,

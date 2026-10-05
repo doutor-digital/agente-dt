@@ -48,13 +48,17 @@ test('sem agenda: entra no prompt da Sofia de resgate e não no de quem tem agen
 });
 
 test('outra Sofia: o bloco traz a conversa e manda não se reapresentar nem confiar em "reservado"', () => {
-  const b = renderConversaComOutraSofia(CONVERSA)!;
+  const b = renderConversaComOutraSofia(CONVERSA, true)!;
   assert.match(b, /<conversa_com_outra_sofia>/);
   assert.match(b, /NÃO se apresente de novo/);
   assert.match(b, /isso NÃO foi marcado/);
   assert.match(b, /Paciente: Teste Doutor Digital/);
   assert.match(b, /Sofia: Prazer, Teste!/);
-  assert.equal(renderConversaComOutraSofia([]), null);
+  assert.equal(renderConversaComOutraSofia([], true), null);
+  // Sofia sem agenda que assume não recebe ordem de oferecer horário
+  const semAgenda = renderConversaComOutraSofia(CONVERSA, false)!;
+  assert.doesNotMatch(semAgenda, /vá direto para os horários|consulte a agenda/);
+  assert.match(semAgenda, /sem oferecer horário/);
 });
 
 test('outra Sofia: entra na parte variável do prompt da Sofia comercial', () => {

@@ -36,16 +36,25 @@ export interface FalaDeOutraSofia {
   em: Date;
 }
 
-/** Puro: o bloco do prompt. null quando não há o que mostrar. */
-export function renderConversaComOutraSofia(falas: ReadonlyArray<FalaDeOutraSofia>): string | null {
+/**
+ * Puro: o bloco do prompt. null quando não há o que mostrar. `temAgenda` = a Sofia que assume tem agenda:
+ * só ela recebe "vá para os horários"; a sem agenda não pode receber ordem de oferecer horário.
+ */
+export function renderConversaComOutraSofia(falas: ReadonlyArray<FalaDeOutraSofia>, temAgenda: boolean): string | null {
   if (falas.length === 0) return null;
   const linhas = falas.map((f) => `${f.papel === 'paciente' ? 'Paciente' : 'Sofia'}: ${f.texto.replace(/\s+/g, ' ').trim().slice(0, 600)}`);
   return [
     '<conversa_com_outra_sofia>',
     'Este paciente acabou de conversar com outra Sofia da mesma clínica (outra etapa do atendimento). Para ele, é a MESMA conversa:',
     '- NÃO se apresente de novo e NÃO pergunte o que ele já respondeu abaixo (nome, onde dói, há quanto tempo, se é de onde…).',
-    '- Continue de onde parou. Se ele já disse que quer marcar, vá direto para os horários.',
-    '- Se a outra Sofia disse que "reservou" ou citou um horário, isso NÃO foi marcado: consulte a agenda de verdade antes de confirmar qualquer coisa, e se o horário citado não existir, explique com naturalidade e ofereça os reais.',
+    ...(temAgenda
+      ? [
+          '- Continue de onde parou. Se ele já disse que quer marcar, vá direto para os horários.',
+          '- Se a outra Sofia disse que "reservou" ou citou um horário, isso NÃO foi marcado: consulte a agenda de verdade antes de confirmar qualquer coisa, e se o horário citado não existir, explique com naturalidade e ofereça os reais.',
+        ]
+      : [
+          '- Continue de onde parou, sem oferecer horário (você não tem agenda): se ele quer marcar, diga que vai passar para quem cuida da agenda.',
+        ]),
     '',
     ...linhas,
     '</conversa_com_outra_sofia>',
@@ -53,8 +62,10 @@ export function renderConversaComOutraSofia(falas: ReadonlyArray<FalaDeOutraSofi
 }
 
 /**
- * As falas do mesmo cartão com as OUTRAS Sofias da mesma conta Kommo (últimas 72 h, até 16). Só entra o
- * que é mais novo que a última fala desta Sofia — o que ela já viu na própria conversa não se repete.
+ * As falas do mesmo cartão com as OUTRAS Sofias da mesma conta Kommo (últimas 72 h, até 16), em TODO turno.
+ * Sem corte pela própria conversa de propósito: essas falas nunca estão no histórico desta Sofia, então
+ * não duplicam; e cortar pela última resposta dela fazia a conversa sumir do prompt a partir do 2º turno
+ * (e cortar pela última mensagem pegava a do paciente que acabou de chegar — o bloco nunca aparecia).
  */
 export async function conversaComOutraSofia(
   unit: { id: string; kommoSubdomain: string | null },
@@ -67,17 +78,10 @@ export async function conversaComOutraSofia(
     select: { id: true },
   });
   if (irmas.length === 0) return [];
-  const desde = new Date(agora.getTime() - JANELA_MS);
-  const minhaUltima = await prisma.message.findFirst({
-    where: { conversation: { unitId: unit.id, leadId: String(leadId) } },
-    orderBy: { createdAt: 'desc' },
-    select: { createdAt: true },
-  });
-  const corte = minhaUltima && minhaUltima.createdAt > desde ? minhaUltima.createdAt : desde;
   const msgs = await prisma.message.findMany({
     where: {
       conversation: { unitId: { in: irmas.map((u) => u.id) }, leadId: String(leadId) },
-      createdAt: { gt: corte },
+      createdAt: { gt: new Date(agora.getTime() - JANELA_MS) },
       role: { in: ['user', 'assistant'] },
     },
     orderBy: { createdAt: 'desc' },
