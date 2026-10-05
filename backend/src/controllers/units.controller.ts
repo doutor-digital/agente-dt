@@ -358,7 +358,7 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
 
     const newName = `${source.name} (cópia)`.slice(0, 120);
 
-    const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, spineDayHours, businessHoursByDay, ...rest } = source;
+    const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, spineDayHours, businessHoursByDay, spineStaffPorTurno, ...rest } = source;
     const cloned = await prisma.unit.create({
       data: {
         ...rest,
@@ -368,6 +368,8 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
         spineDayHours: spineDayHours === null ? Prisma.DbNull : (spineDayHours as Prisma.InputJsonValue),
         businessHoursByDay:
           businessHoursByDay === null ? Prisma.DbNull : (businessHoursByDay as Prisma.InputJsonValue),
+        spineStaffPorTurno:
+          spineStaffPorTurno === null ? Prisma.DbNull : (spineStaffPorTurno as Prisma.InputJsonValue),
       },
     });
 
