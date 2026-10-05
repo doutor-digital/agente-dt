@@ -225,6 +225,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/campos-sdr.ts',
   },
   {
+    id: 'campos-sdr-tipos',
+    chave: 'CAMPOS_SDR_TIPOS_SLUGS',
+    nome: 'Tipo de agendamento e de fechamento = Tipo de lead',
+    oQueFaz:
+      'Copia o ⬢ Tipo de lead do cartão para o ⬢ Tipo de agendamento (quando há consulta) e o ⬢ Tipo de fechamento de tratamento (quando há tratamento fechado). Grava só em campo vazio. Feito para a SDR não preencher mais esses dois.',
+    pegadinha:
+      'O Tipo de lead que a SDR pôs vence o calculado. "Transferido de outra unidade" não existe nessas listas e não é copiado. O dashboard ainda lê o Tipo de agendamento (quebra dos Agendados e nota de qualidade) — por isso copiar em vez de só esconder.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/campos-sdr.ts',
+  },
+  {
     id: 'sugestao-motivo',
     chave: 'SUGESTAO_MOTIVO_SLUGS',
     nome: 'IA sugere o motivo do não agendamento (widget)',

@@ -168,3 +168,55 @@ test('plano: opção que a conta não tem não é proposta (evita 400 a cada var
   const caixaAlta = planejarCamposSdr({ ...base, campo: conta({ [CAMPOS_SDR.TIPO_LEAD]: { valor: null, opcoes: ['RESGATE', 'CADASTRO'] } }) });
   assert.equal(caixaAlta[0].valor, 'RESGATE');
 });
+
+// ── Cópia do Tipo de lead para Tipo de agendamento e Tipo de fechamento (chave campos-sdr-tipos) ──
+const TIPOS = ['Resgate', 'Cadastro'];
+const baseCopia = {
+  nome: 'Lead', criadoEmEpoch: AGORA - 2 * DIA, primeiroContatoEpoch: null, referenciaEpoch: AGORA, primeiraVez: false,
+  consulta: avaliacao(SPINE_STATUS.ATENDIDO, 'RECEPÇÃO'), feitoPelaIa: false,
+};
+
+test('cópia dos tipos: só com copiarTipos; marca o item como cópia; o Tipo de lead que a SDR pôs vence o calculado', () => {
+  const campos = conta({
+    [CAMPOS_SDR.TIPO_LEAD]: { valor: 'Resgate', opcoes: [...TIPOS, 'TRANSFERIDO DE OUTRA UNIDADE'] },   // calculado seria Cadastro
+    [CAMPOS_SDR.TIPO_AGENDAMENTO]: { valor: null, opcoes: TIPOS },
+    [CAMPOS_SDR.TIPO_FECHAMENTO]: { valor: 'Cadastro', opcoes: TIPOS },
+  });
+  const sem = planejarCamposSdr({ ...baseCopia, campo: campos, tratamento: { statusName: 'EM TRATAMENTO', created: null, modified: null } });
+  assert.equal(sem.filter((x) => x.copia).length, 0);
+
+  const r = planejarCamposSdr({ ...baseCopia, campo: campos, copiarTipos: true, tratamento: { statusName: 'EM TRATAMENTO', created: null, modified: null } });
+  const por = Object.fromEntries(r.map((x) => [x.campo, x]));
+  assert.equal(por[CAMPOS_SDR.TIPO_LEAD].copia, undefined);
+  assert.equal(por[CAMPOS_SDR.TIPO_AGENDAMENTO].acao, 'gravar');
+  assert.equal(por[CAMPOS_SDR.TIPO_AGENDAMENTO].valor, 'Resgate');
+  assert.equal(por[CAMPOS_SDR.TIPO_AGENDAMENTO].copia, true);
+  assert.equal(por[CAMPOS_SDR.TIPO_FECHAMENTO].acao, 'diverge');     // nunca sobrescreve
+});
+
+test('cópia dos tipos: Tipo de lead vazio usa o calculado; agendamento pede consulta, fechamento pede tratamento', () => {
+  const campos = conta({
+    [CAMPOS_SDR.TIPO_LEAD]: { valor: null, opcoes: TIPOS },
+    [CAMPOS_SDR.TIPO_AGENDAMENTO]: { valor: null, opcoes: TIPOS },
+    [CAMPOS_SDR.TIPO_FECHAMENTO]: { valor: null, opcoes: TIPOS },
+  });
+  const comConsulta = planejarCamposSdr({ ...baseCopia, campo: campos, copiarTipos: true, tratamento: null });
+  const por = Object.fromEntries(comConsulta.map((x) => [x.campo, x]));
+  assert.equal(por[CAMPOS_SDR.TIPO_AGENDAMENTO].valor, 'Cadastro');
+  assert.equal(por[CAMPOS_SDR.TIPO_FECHAMENTO], undefined);           // sem tratamento fechado
+  const semConsulta = planejarCamposSdr({ ...baseCopia, campo: campos, copiarTipos: true, consulta: null, tratamento: null });
+  assert.equal(semConsulta.length, 0);
+});
+
+test('cópia dos tipos: "Transferido de outra unidade" não tem par nas listas — não copia nada', () => {
+  const r = planejarCamposSdr({
+    ...baseCopia, copiarTipos: true, tratamento: { statusName: 'EM TRATAMENTO', created: null, modified: null },
+    campo: conta({
+      [CAMPOS_SDR.TIPO_LEAD]: { valor: 'TRANSFERIDO DE OUTRA UNIDADE', opcoes: [...TIPOS, 'TRANSFERIDO DE OUTRA UNIDADE'] },
+      [CAMPOS_SDR.TIPO_AGENDAMENTO]: { valor: null, opcoes: TIPOS },
+      [CAMPOS_SDR.TIPO_FECHAMENTO]: { valor: null, opcoes: TIPOS },
+    }),
+  });
+  assert.equal(r.length, 0);
+});
+
