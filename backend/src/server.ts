@@ -33,6 +33,7 @@ import { startParadosWorker, stopParadosWorker } from './lib/parados-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
+import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -172,6 +173,7 @@ async function main(): Promise<void> {
       startCacheKeepaliveWorker();
       startFranquiaSyncWorker();
       startParadosWorker();
+      startUnidadePorCanalWorker();
       startNaoLidasWorker();
       startPreencheCamposWorker();
       iniciarVigiaDeQualidade();
@@ -179,6 +181,7 @@ async function main(): Promise<void> {
     parar: () => {
       pararVigiaDeQualidade();
       stopParadosWorker();
+      stopUnidadePorCanalWorker();
       stopNaoLidasWorker();
       stopPreencheCamposWorker();
       stopFranquiaSyncWorker();

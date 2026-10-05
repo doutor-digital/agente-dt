@@ -238,6 +238,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/campos-sdr.ts',
   },
   {
+    id: 'unidade-por-canal',
+    chave: 'UNIDADE_POR_CANAL_SLUGS',
+    nome: 'Unidade pelo número de WhatsApp',
+    oQueFaz:
+      'Para conta com dois números (Petrópolis e Caxias no mesmo Kommo): pelo número em que o paciente escreveu primeiro, marca o ⌂ Unidade de atendimento e a etiqueta da cidade. Grava só em campo vazio.',
+    pegadinha:
+      'Vale a PRIMEIRA conversa do cartão. Se a SDR corrigir o campo, a correção fica e a etiqueta passa a seguir o campo. Número novo conectado na conta não decide nada até entrar no mapa do código (aparece aviso no log).',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/unidade-por-canal.ts',
+  },
+  {
     id: 'sugestao-motivo',
     chave: 'SUGESTAO_MOTIVO_SLUGS',
     nome: 'IA sugere o motivo do não agendamento (widget)',
