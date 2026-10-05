@@ -276,6 +276,10 @@ model Unit {
    * Nasceu do sábado: todas as unidades atendem, com horário menor que o da semana.
    */
   spineDayHours    Json?   @map("spine_day_hours")
+  /// Profissional da franquia por turno: [{ "inicio": "08:00", "fim": "13:30", "idStaff": 536, "nome": "Dra. Juliana Santos" }, …].
+  /// Sem isto o createSchedule vai sem idStaff e a franquia põe a primeira profissional da lista (em Taubaté, a
+  /// dona — que não atende). Horário fora de qualquer turno também vai sem idStaff.
+  spineStaffPorTurno Json?  @map("spine_staff_por_turno")
   /// Fuso IANA da clínica. Offset fixo no código quebraria em unidade de
   /// Manaus (UTC-4) ou Rio Branco (UTC-5) — e quebraria em silêncio: o
   /// horário pareceria plausível e o paciente chegaria na hora errada.
