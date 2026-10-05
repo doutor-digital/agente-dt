@@ -66,6 +66,8 @@ export interface KommoTalk {
   talk_id: number;
   chat_id?: string | null;
   origin?: string | null;
+  /** canal de entrada no Kommo (cada número de WhatsApp conectado tem o seu) */
+  source_id?: number | null;
   is_read?: boolean;
   is_in_work?: boolean;
   created_at?: number;
@@ -828,6 +830,42 @@ export class KommoClient {
       if (lote.length < 250) break;
     }
     return todas;
+  }
+
+  /**
+   * As conversas da conta, das mais novas para as mais antigas (todas, abertas ou não), até `maxPaginas`
+   * páginas de 250. Usado para saber por qual número de WhatsApp cada cartão entrou.
+   */
+  async listarConversas(maxPaginas = 4): Promise<KommoTalk[]> {
+    const todas: KommoTalk[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      // a ordem é pedida explícita: sem ela, o teto de páginas pode pegar sempre as MAIS ANTIGAS
+      const { data, status } = await this.http.get<{ _embedded?: { talks?: KommoTalk[] } }>('/talks', {
+        params: { limit: 250, page, 'order[updated_at]': 'desc' },
+      });
+      if (status === 204 || !data) break;
+      const lote = data._embedded?.talks ?? [];
+      todas.push(...lote);
+      if (lote.length < 250) break;
+    }
+    return todas;
+  }
+
+  /** Cartões por id, com campos e etiquetas (lotes de 50 — o filtro vai na URL). */
+  async listLeadsPorIds(ids: number[]): Promise<KommoLead[]> {
+    const out: KommoLead[] = [];
+    for (let i = 0; i < ids.length; i += 50) {
+      const lote = ids.slice(i, i + 50);
+      try {
+        const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
+          params: { limit: 250, with: 'tags', 'filter[id]': lote },
+        });
+        out.push(...(data?._embedded?.leads ?? []));
+      } catch (err) {
+        wrapAxiosError(err, `listLeadsPorIds(${lote.length})`);
+      }
+    }
+    return out;
   }
 
   /**
