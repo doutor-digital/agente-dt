@@ -10,6 +10,7 @@ import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { automacaoPorId } from '../lib/automacoes.js';
+import { resumirSimulacoes } from '../lib/so-no-papel.js';
 import {
   ehEstado,
   invalidarAutomacoes,
@@ -125,3 +126,50 @@ export async function redeAutomacoesHandler(_req: Request, res: Response): Promi
   }));
   res.json({ unidades, automacoes: panoramaDaUnidade(units[0]?.slug ?? '') });
 }
+
+/**
+ * GET /units/:id/automacoes/:automacao/simulacoes?dias=7&acao=diverge — o que a automação fez "só no papel": uma linha
+ * por cartão e decisão (moveria/gravaria; nos robôs de campo, confere/diverge do que a SDR pôs). É o que
+ * a tela mostra para conferir antes de ligar. Ver `lib/so-no-papel.ts`.
+ */
+export async function simulacoesHandler(req: Request, res: Response): Promise<void> {
+  const idAutomacao = String(req.params.automacao);
+  if (!automacaoPorId(idAutomacao)) {
+    res.status(404).json({ erro: `automação desconhecida: ${idAutomacao}` });
+    return;
+  }
+  const unit = await prisma.unit.findUnique({ where: { id: String(req.params.id) }, select: { id: true, kommoSubdomain: true } });
+  if (!unit) {
+    res.status(404).json({ erro: 'unidade não encontrada' });
+    return;
+  }
+  const dias = Math.min(30, Math.max(1, Number(req.query.dias) || 7));
+  const desde = new Date(Date.now() - dias * 86_400_000);
+  const where = { unitId: unit.id, automacao: idAutomacao, ultimaEm: { gte: desde } };
+  // o filtro vale para a lista E para o "mostrando X de Y" — o placar continua mostrando todas as ações
+  const acao = typeof req.query.acao === 'string' && ['moveria', 'gravaria', 'confere', 'diverge'].includes(req.query.acao) ? req.query.acao : null;
+  const daLista = acao ? { ...where, acao } : where;
+  const [todos, itens] = await Promise.all([
+    prisma.automacaoSimulacao.findMany({ where, select: { acao: true, kommoLeadId: true } }),
+    prisma.automacaoSimulacao.findMany({ where: daLista, orderBy: { ultimaEm: 'desc' }, take: 300 }),
+  ]);
+  res.json({
+    automacao: idAutomacao,
+    dias,
+    kommoSubdomain: unit.kommoSubdomain,
+    resumo: resumirSimulacoes(todos),
+    total: acao ? todos.filter((t) => t.acao === acao).length : todos.length,
+    itens: itens.map((i) => ({
+      leadId: i.kommoLeadId,
+      acao: i.acao,
+      alvo: i.alvo,
+      valor: i.valor,
+      noCartao: i.noCartao,
+      deEtapa: i.deEtapa,
+      motivo: i.motivo,
+      primeiraEm: i.primeiraEm,
+      ultimaEm: i.ultimaEm,
+    })),
+  });
+}
+

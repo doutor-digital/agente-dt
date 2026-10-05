@@ -193,6 +193,7 @@ import {
   definirAutomacaoHandler,
   limparAutomacaoHandler,
   redeAutomacoesHandler,
+  simulacoesHandler,
 } from '../controllers/automacoes.controller.js';
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
@@ -464,6 +465,7 @@ apiRouter.post('/units/:id/implantacao/carga', requireSuperAdmin, aplicarCargaHa
 // Automações por unidade. Super admin porque metade delas move cartão.
 apiRouter.get('/automacoes/rede', requireSuperAdmin, redeAutomacoesHandler);
 apiRouter.get('/units/:id/automacoes', requireSuperAdmin, listarAutomacoesHandler);
+apiRouter.get('/units/:id/automacoes/:automacao/simulacoes', requireSuperAdmin, simulacoesHandler);
 apiRouter.put('/units/:id/automacoes/:automacao', requireSuperAdmin, definirAutomacaoHandler);
 apiRouter.delete('/units/:id/automacoes/:automacao', requireSuperAdmin, limparAutomacaoHandler);
 apiRouter.post('/units/:id/spine/cancel-schedule', requireUnitAccess, cancelScheduleHandler);

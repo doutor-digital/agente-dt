@@ -106,6 +106,31 @@ export interface PanoramaAutomacoes {
   automacoes: Automacao[];
 }
 
+/** O que uma automação em "Só no papel" faria — uma linha por cartão e decisão. Ver `backend/src/lib/so-no-papel.ts`. */
+export type AcaoSimulada = 'moveria' | 'gravaria' | 'confere' | 'diverge';
+
+export interface SimulacaoItem {
+  leadId: number;
+  acao: AcaoSimulada;
+  /** campo que gravaria, ou a etapa para onde moveria */
+  alvo: string;
+  valor: string | null;
+  noCartao: string | null;
+  deEtapa: string | null;
+  motivo: string | null;
+  primeiraEm: string;
+  ultimaEm: string;
+}
+
+export interface Simulacoes {
+  automacao: string;
+  dias: number;
+  kommoSubdomain: string | null;
+  resumo: { moveria: number; gravaria: number; confere: number; diverge: number; cartoes: number };
+  total: number;
+  itens: SimulacaoItem[];
+}
+
 export interface RedeAutomacoes {
   unidades: Array<{ id: string; slug: string; nome: string; estados: Record<string, EstadoAutomacao> }>;
   automacoes: Automacao[];
@@ -340,6 +365,12 @@ export const api = {
   // ── automações: o que está ligado em cada unidade (a tela que substitui abrir o .env da VPS) ──
   async automacoes(unitId: string): Promise<PanoramaAutomacoes> {
     const { data } = await http.get<PanoramaAutomacoes>(`/units/${unitId}/automacoes`);
+    return data;
+  },
+  async simulacoes(unitId: string, automacao: string, dias = 7, acao: AcaoSimulada | null = null): Promise<Simulacoes> {
+    const { data } = await http.get<Simulacoes>(`/units/${unitId}/automacoes/${automacao}/simulacoes`, {
+      params: acao ? { dias, acao } : { dias },
+    });
     return data;
   },
   async definirAutomacao(unitId: string, automacao: string, estado: EstadoAutomacao): Promise<{ automacoes: Automacao[] }> {
