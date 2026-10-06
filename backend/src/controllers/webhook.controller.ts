@@ -24,7 +24,7 @@ import { tentarNotaDeVoz } from '../lib/resposta-em-voz.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
-import { claimMessageId } from '../lib/dedup-cache.js';
+import { claimMessageId, TTL_REENTREGA_KOMMO_MS } from '../lib/dedup-cache.js';
 import { rememberIncomingAudio } from '../lib/pending-audio.js';
 import { enforceReplyGap } from '../lib/reply-gate.js';
 import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
@@ -528,7 +528,9 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       const unidade = unit;
       const leadDoBot = msgEntrando.entity_id;
       const chaveDedup = msgEntrando.id ?? `${leadDoBot}:${msgEntrando.text ?? ''}`;
-      if (await claimMessageId('widget-run', chaveDedup)) {
+      // Com o id da mensagem, o prazo cobre os reenvios do Kommo; sem ele a chave é o texto, e
+      // 2 h calaria o paciente que repete "ok" — fica nos 10 min de sempre.
+      if (await claimMessageId('widget-run', chaveDedup, msgEntrando.id ? TTL_REENTREGA_KOMMO_MS : undefined)) {
         // Tem que ser pelo CONTATO. Com `leads` o Kommo roda o bot como
         // marketingbot, sem conversa — o `show` é aceito e jogado fora.
         const doWebhook = Number(msgEntrando.contact_id);
@@ -571,7 +573,8 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   const hasIncomingMessage = !!incomingMsg;
   const hasManualTestInput = !!parsed.data.leadId && !!parsed.data.text;
 
-  if (incomingMsg?.id && !(await claimMessageId('kommo', incomingMsg.id))) {
+  // 2 h e não 10 min: cobre os reenvios do Kommo (5 + 15 + 15 + 60 min) — ver TTL_REENTREGA_KOMMO_MS.
+  if (incomingMsg?.id && !(await claimMessageId('kommo', incomingMsg.id, TTL_REENTREGA_KOMMO_MS))) {
     logger.info(
       { unit: unit.slug, msgId: incomingMsg.id },
       'kommo webhook duplicado (retry) — ignorando',
