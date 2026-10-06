@@ -21,7 +21,7 @@ import { emParalelo } from '../franquia-mcp/ritmo.js';
 import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
 import { compareceu, cruzarFunil, type AgendamentoDaFranquia, type LeadDoFunil } from './funil.js';
-import { type ContextoKommo, leadsDoPeriodo, origemDoLead, telefonesDosLeads as telefonesDoKommo } from './kommo.js';
+import { type ContextoKommo, grupoDoLead, leadsDoPeriodo, telefonesDosLeads as telefonesDoKommo } from './kommo.js';
 import { hojeNoFuso } from './tempo.js';
 import { diasNoPeriodo, somarDias } from '../franquia-mcp/travas.js';
 import { acharSlug } from './unidades.js';
@@ -58,7 +58,7 @@ function itensDe(r: Res, slug: string): { itens: Res[]; truncado: boolean; erro?
   return { itens: u.itens as Res[], truncado: !!u.truncado };
 }
 
-async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim: string): Promise<Res> {
+async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim: string, agruparPor: string): Promise<Res> {
   const ku = deps.kommo.unidades.get(slug);
   const fu = deps.franquia.unidades.get(slug);
   if (!ku) throw new Error('unidade sem Kommo conectado: não há leads pra cruzar');
@@ -80,7 +80,7 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
   const leadsDoFunil: LeadDoFunil[] = leads.map((l) => ({
     id: l.id,
     criadoEm: diaLocal(new Date((l.created_at ?? 0) * 1000).toISOString(), ku.fuso) ?? inicio,
-    origem: origemDoLead(l),
+    origem: grupoDoLead(l, agruparPor),
     telefones: [doKommo.get(l.id), daConversa.get(l.id)].filter((t): t is string => !!t),
     idClientVinculo: vinculos.get(l.id) ?? null,
   }));
@@ -152,7 +152,7 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
 
 const CAMPOS_SOMAVEIS = ['leads', 'viraramPaciente', 'agendaram', 'compareceram', 'fecharamTratamento', 'valorDosTratamentos'] as const;
 
-export async function relatorioFunil(deps: DepsRelatorio, a: { unidade: string | string[]; inicio: string; fim: string }) {
+export async function relatorioFunil(deps: DepsRelatorio, a: { unidade: string | string[]; inicio: string; fim: string; agruparPor?: string }) {
   validarData(a.inicio, 'inicio');
   validarData(a.fim, 'fim');
   if (a.inicio > a.fim) throw new ErroDeEntrada('inicio é depois do fim');
@@ -176,7 +176,7 @@ export async function relatorioFunil(deps: DepsRelatorio, a: { unidade: string |
 
   const pares = await emParalelo(slugs, 2, async (slug) => {
     try {
-      return [slug, { ok: true, ...(await umaUnidade(deps, slug, a.inicio, a.fim)) }] as const;
+      return [slug, { ok: true, ...(await umaUnidade(deps, slug, a.inicio, a.fim, a.agruparPor ?? 'origem')) }] as const;
     } catch (e) {
       return [slug, { ok: false, erro: e instanceof Error ? e.message : String(e) }] as const;
     }
@@ -186,6 +186,7 @@ export async function relatorioFunil(deps: DepsRelatorio, a: { unidade: string |
   const r: Res = {
     consultadoEm: new Date().toISOString(),
     periodo: { inicio: a.inicio, fim: a.fim },
+    agrupadoPor: a.agruparPor ?? 'origem',
     comoLer:
       'funil = leads do Kommo criados no período e o que aconteceu com ELES na franquia (até hoje). "cobertura.semCasamento" são leads ' +
       'que não deu pra ligar a um paciente (sem telefone, ou telefone fora do cadastro): não quer dizer que não agendaram. ' +
@@ -212,7 +213,9 @@ export function registrarRelatorio(server: McpServer, deps: DepsRelatorio, audit
       title: 'Relatório cruzado: Kommo → franquia',
       description:
         'O funil cruzado de verdade, calculado em código: leads do Kommo criados no período → viraram paciente na franquia → agendaram → ' +
-        'compareceram → fecharam tratamento (com valor), por origem do lead, com taxas e COBERTURA do casamento (telefone ou vínculo). ' +
+        'compareceram → fecharam tratamento (com valor), com taxas e COBERTURA do casamento (telefone ou vínculo). O detalhamento ' +
+        '("porOrigem") é pela origem do lead, ou pelo que vier em agruparPor: "campanha", "conjunto" ou "anuncio" usam os campos que o ' +
+        'rastreio de anúncios do WhatsApp grava no cartão ("Origem – Campanha"…) e casam com os nomes de campanha do Meta/Metricool. ' +
         'Traz também o que a franquia registrou no período (agendamentos por status, tratamentos novos). ' +
         `Até ${MAX_UNIDADES_POR_RELATORIO} unidades e ${MAX_DIAS_PERIODO} dias por chamada, nos últimos ${MAX_DIAS_ATRAS} dias; pra rede inteira, chame em lotes e some. ` +
         'Para alcance, cliques e gasto de anúncio, use o conector do Metricool e cruze com a "origem" daqui.',
@@ -220,6 +223,10 @@ export function registrarRelatorio(server: McpServer, deps: DepsRelatorio, audit
         unidade: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).describe('slug ou nome curto ("serra"), ou lista de até 4'),
         inicio: z.string().describe('início do período (criação do lead), AAAA-MM-DD'),
         fim: z.string().describe('fim do período, incluso, AAAA-MM-DD'),
+        agruparPor: z
+          .string()
+          .optional()
+          .describe('"origem" (padrão), "campanha", "conjunto", "anuncio", "plataforma", "utm_campaign" ou o nome de um campo do cartão'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
