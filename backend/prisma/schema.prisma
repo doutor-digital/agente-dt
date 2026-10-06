@@ -1887,3 +1887,71 @@ model AutomacaoSimulacao {
   @@index([unitId, automacao, ultimaEm(sort: Desc)], map: "automacao_simulacoes_lista_idx")
   @@map("automacao_simulacoes")
 }
+
+// ── Conector remoto (claude.ai) — OAuth 2.1 do MCP ─────────────────────────
+// Códigos e tokens guardados só como SHA-256: quem lê o banco não consegue usá-los.
+
+/// Clientes OAuth registrados automaticamente (DCR, RFC 7591) pelo claude.ai ou Claude Code. Sempre públicos (sem segredo).
+model McpOauthClient {
+  clientId  String   @id @map("client_id")
+  dados     Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("mcp_oauth_clients")
+}
+
+/// Código de autorização: vale 5 min e uma vez só.
+model McpOauthCodigo {
+  codigoHash    String    @id @map("codigo_hash")
+  clientId      String    @map("client_id")
+  userId        String    @map("user_id")
+  redirectUri   String    @map("redirect_uri")
+  codeChallenge String    @map("code_challenge")
+  escopos       String[]
+  recurso       String?
+  concessaoId   String    @map("concessao_id")
+  expiraEm      DateTime  @map("expira_em")
+  usadoEm       DateTime? @map("usado_em")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([expiraEm])
+  @@map("mcp_oauth_codigos")
+}
+
+/// Tokens de acesso (1 h) e de renovação (30 dias, trocado a cada uso). `concessaoId` liga a família
+/// inteira: reuso de um token de renovação revoga todos.
+model McpOauthToken {
+  tokenHash     String    @id @map("token_hash")
+  tipo          String // "acesso" | "renovacao"
+  concessaoId   String    @map("concessao_id")
+  clientId      String    @map("client_id")
+  userId        String    @map("user_id")
+  escopos       String[]
+  recurso       String?
+  expiraEm      DateTime  @map("expira_em")
+  revogadoEm    DateTime? @map("revogado_em")
+  /// renovação já trocada por um par novo (vale só como retry por 60 s)
+  substituidoEm DateTime? @map("substituido_em")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([concessaoId])
+  @@index([expiraEm])
+  @@map("mcp_oauth_tokens")
+}
+
+/// Toda chamada de ferramenta do conector remoto: quem, o quê, quando. São dados de paciente (LGPD).
+model McpAuditoria {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  clientId   String   @map("client_id")
+  ferramenta String
+  argumentos Json
+  ok         Boolean
+  duracaoMs  Int      @map("duracao_ms")
+  erro       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@map("mcp_auditoria")
+}
