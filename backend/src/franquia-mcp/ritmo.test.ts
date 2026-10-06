@@ -100,3 +100,19 @@ test('emParalelo: respeita o limite e devolve na ordem da entrada', async () => 
   assert.equal(max, 3);
   assert.deepEqual(saida, [50, 10, 40, 20, 30, 0, 60]);
 });
+
+test('Cache: teto de entradas — vencidas saem primeiro, depois as mais antigas', () => {
+  let agora = 0;
+  const cache = new Cache(() => agora, 3);
+  cache.guardar('vence', 1, 10);
+  cache.guardar('a', 1, 1000);
+  cache.guardar('b', 1, 1000);
+  agora = 20;
+  cache.guardar('c', 1, 1000); // passou do teto: sai a vencida
+  assert.equal(cache.pegar('vence'), undefined);
+  assert.equal(cache.tamanho, 3);
+  cache.guardar('d', 1, 1000); // nenhuma vencida: sai a mais antiga (a)
+  assert.equal(cache.pegar('a'), undefined);
+  assert.equal(cache.pegar('d'), 1);
+  assert.equal(cache.tamanho, 3);
+});

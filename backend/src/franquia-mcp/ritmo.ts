@@ -55,10 +55,21 @@ export class Orcamento {
   }
 }
 
+/**
+ * Cache em memória com TETO de entradas: no conector remoto ele vive no mesmo processo do agente,
+ * e cada período diferente é uma chave nova. Sem teto, semanas de consultas viram falta de memória.
+ */
 export class Cache {
   private itens = new Map<string, { valor: unknown; expira: number }>();
 
-  constructor(private agora: () => number = Date.now) {}
+  constructor(
+    private agora: () => number = Date.now,
+    private maxEntradas = 300,
+  ) {}
+
+  get tamanho(): number {
+    return this.itens.size;
+  }
 
   pegar<T>(chave: string): T | undefined {
     const item = this.itens.get(chave);
@@ -71,7 +82,16 @@ export class Cache {
   }
 
   guardar(chave: string, valor: unknown, ttlMs: number): void {
+    this.itens.delete(chave); // reinsere no fim: a ordem do Map vira "mais recente por último"
     this.itens.set(chave, { valor, expira: this.agora() + ttlMs });
+    if (this.itens.size <= this.maxEntradas) return;
+    const agora = this.agora();
+    for (const [k, v] of this.itens) if (v.expira <= agora) this.itens.delete(k);
+    // ainda cheio: sai o mais antigo
+    for (const k of this.itens.keys()) {
+      if (this.itens.size <= this.maxEntradas) break;
+      this.itens.delete(k);
+    }
   }
 }
 

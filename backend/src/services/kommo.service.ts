@@ -672,6 +672,32 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Telefone de vários contatos de uma vez (`filter[id][]`), em vez de um GET por contato: o limitador
+   * do Kommo é um só pro processo, e cada chamada a mais atrasa a Sofia. Lotes de 50 porque o filtro
+   * vai na URL (250 ids passam de 7 mil caracteres; proxy recusa) — mesmo motivo do `listLeadsPorIds`.
+   * Contato sem telefone simplesmente não aparece no mapa.
+   */
+  async telefonesDosContatos(ids: number[]): Promise<Map<number, string>> {
+    const m = new Map<number, string>();
+    const unicos = [...new Set(ids.filter((n) => Number.isFinite(n) && n > 0))];
+    for (let i = 0; i < unicos.length; i += 50) {
+      const lote = unicos.slice(i, i + 50);
+      try {
+        const { data } = await this.http.get<
+          { _embedded?: { contacts?: Array<{ id: number; custom_fields_values?: Array<{ field_code?: string; values?: Array<{ value?: string }> }> | null }> } } | ''
+        >('/contacts', { params: { 'filter[id]': lote, limit: 50 } });
+        for (const c of (data && data._embedded?.contacts) || []) {
+          const tel = c.custom_fields_values?.find((f) => f.field_code === 'PHONE')?.values?.[0]?.value;
+          if (typeof tel === 'string' && tel.trim()) m.set(c.id, tel.trim());
+        }
+      } catch (err) {
+        wrapAxiosError(err, `telefonesDosContatos(${lote.length})`);
+      }
+    }
+    return m;
+  }
+
   async getContactPhone(contactId: number): Promise<string | null> {
     return (await this.getContactBasico(contactId)).telefone;
   }
@@ -1368,13 +1394,22 @@ export class KommoClient {
     deUnix: number,
     ateUnix: number,
     maxPaginas = 8,
+    /** traz os ids dos contatos de cada lead (`with=contacts`), pra buscar o telefone em lote depois */
+    comContatos = false,
   ): Promise<{ leads: KommoLead[]; truncado: boolean }> {
     const leads: KommoLead[] = [];
     for (let page = 1; page <= maxPaginas; page++) {
       try {
         const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } } | ''>('/leads', {
           // mais recente primeiro: se bater no teto, o corte leva o mais antigo, nunca o de hoje
-          params: { limit: 250, page, [`filter[${campo}][from]`]: deUnix, [`filter[${campo}][to]`]: ateUnix, [`order[${campo}]`]: 'desc' },
+          params: {
+            limit: 250,
+            page,
+            [`filter[${campo}][from]`]: deUnix,
+            [`filter[${campo}][to]`]: ateUnix,
+            [`order[${campo}]`]: 'desc',
+            ...(comContatos ? { with: 'contacts' } : {}),
+          },
         });
         const lote = (data && data._embedded?.leads) || [];
         leads.push(...lote);

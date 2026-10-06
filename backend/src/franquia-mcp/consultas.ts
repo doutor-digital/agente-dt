@@ -248,22 +248,35 @@ export function buscarLeads(
 
 export async function buscarPacientes(
   ctx: Contexto,
-  args: { unidade: Alvo; nome?: string; idClient?: number; idStatus?: number } & Saida,
+  args: { unidade: Alvo; nome?: string; idClient?: number; idStatus?: number; criadosDesde?: string } & Saida,
 ) {
   const filtros = semIndefinidos({ name: validarTexto(args.nome, 'nome'), idClient: args.idClient, idStatus: args.idStatus });
+  if (args.criadosDesde !== undefined) validarData(args.criadosDesde, 'criadosDesde');
   const unidades = resolverUnidades(ctx, args.unidade);
   const cotas = conferirTamanho(ctx, unidades.length, 1);
   const padrao = unidades.length === 1 ? MAX_ITENS_PADRAO_UMA : 0;
 
   const res = await porUnidade(ctx, unidades, async (u, cliente) => {
     const orcamento = cotas.nova();
-    const { valor, doCache } = await comCache(ctx, chaveCache('pacientes', u.slug, filtros), TTL.busca, async (): Promise<Lista> => {
+    // O guia (§6) diz "ordenação fixa: created DESC". Com `criadosDesde`, a leitura para na primeira
+    // página que já passou da data — o cadastro inteiro de uma unidade grande não cabe no teto. Mas
+    // só para se a PÁGINA confirma a ordem: se a franquia mudar a ordenação, lê tudo em vez de cortar calado.
+    const criado = (item: unknown) => diaLocal((item as Record<string, unknown>)?.created, u.fuso);
+    const antigo = (item: unknown) => {
+      const dia = criado(item);
+      return !!args.criadosDesde && dia !== null && dia < args.criadosDesde;
+    };
+    const emOrdemDecrescente = (pagina: unknown[]) =>
+      pagina.every((it, i) => i === 0 || (criado(pagina[i - 1]) ?? '') >= (criado(it) ?? ''));
+    const chave = chaveCache('pacientes', u.slug, { ...filtros, desde: args.criadosDesde });
+    const { valor, doCache } = await comCache(ctx, chave, TTL.busca, async (): Promise<Lista> => {
       const lidos = await lerTudo(
         (page) => cliente.chamar('POST', '/api/clients/search', { ...filtros, pagination: { page, rowsPerPage: LINHAS_POR_PAGINA } }, orcamento),
         ctx.tetoPaginas,
         LINHAS_POR_PAGINA,
+        args.criadosDesde ? (pagina) => pagina.length > 0 && emOrdemDecrescente(pagina) && antigo(pagina[pagina.length - 1]) : undefined,
       );
-      return { ...lidos, itens: lidos.itens.map((i) => normalizarItem(i, u.fuso)) };
+      return { ...lidos, itens: lidos.itens.filter((i) => !antigo(i)).map((i) => normalizarItem(i, u.fuso)) };
     });
     return { ...formatarLista(valor, args, padrao, 'created', u.fuso), ...(doCache ? { doCache: true } : {}) };
   });

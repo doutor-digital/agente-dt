@@ -16,7 +16,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { createOAuthMetadata, getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { criarContexto, type Contexto, type OpcoesContexto, trocarUnidades } from '../franquia-mcp/contexto.js';
-import { registrarFerramentas } from '../franquia-mcp/ferramentas.js';
+import { type Auditar, registrarFerramentas } from '../franquia-mcp/ferramentas.js';
 import type { Unidade } from '../franquia-mcp/unidade.js';
 import type { ArmazemOAuth } from './armazem.js';
 import { enviarPagina, ProvedorOAuth, type Usuario } from './provedor.js';
@@ -42,17 +42,22 @@ export interface OpcoesConector {
   tentarDeNovoMs?: number;
   /** ferramentas rodando ao mesmo tempo, somando todos os usuários */
   ferramentasSimultaneas?: number;
+  /** ferramentas além das da franquia (Kommo, cérebro, relatório cruzado), registradas a cada requisição */
+  extras?: (server: McpServer, auditar: Auditar) => void;
   cimd?: BuscadorCimd;
   agora?: () => number;
   log?: { info(o: object, m?: string): void; warn(o: object, m?: string): void };
 }
 
 const INSTRUCOES = [
-  'Dados da franquia Doutor Hérnia (CRM "Spine"), só leitura, de todas as unidades da Doutor Digital.',
-  'Comece por listar_unidades. Para relatório da rede use unidade="todas" e leia "rede": ela soma só as unidades',
-  'que responderam e lista as que ficaram de fora (unidadesForaDoTotal) ou incompletas (unidadesIncompletas).',
-  'Nunca apresente um total sem dizer quais unidades faltaram. Agendamentos são filtrados pela data da consulta;',
-  'tratamentos e leads, pela data de criação. Use agruparPor (ex. "statusName") para contar em vez de listar.',
+  'Dados da Doutor Digital, só leitura: o CRM da franquia Doutor Hérnia (ferramentas sem prefixo: pacientes, agenda, tratamentos, BI),',
+  'o CRM comercial Kommo (kommo_*), o cérebro que confere um contra o outro (cerebro_*) e o relatório cruzado (relatorio_funil).',
+  'Para "quantos leads viraram consulta/tratamento", use relatorio_funil: o cruzamento Kommo → franquia é feito em código, por telefone,',
+  'e vem com a cobertura — não some números de ferramentas diferentes por conta própria. Unidade aceita nome curto ("serra").',
+  'Para relatório da rede use unidade="todas" onde houver e leia "rede": ela soma só as unidades que responderam e lista as que',
+  'ficaram de fora (unidadesForaDoTotal) ou incompletas (unidadesIncompletas). Nunca apresente um total sem dizer quais faltaram.',
+  'Agendamentos são filtrados pela data da consulta; tratamentos e leads, pela data de criação. Use agruparPor para contar em vez de listar.',
+  'Alcance, cliques e gasto de anúncio vêm do conector do Metricool (se estiver ligado): cruze com a "origem" do relatorio_funil.',
 ].join(' ');
 
 const ERRO_METODO = { jsonrpc: '2.0', error: { code: -32000, message: 'Use POST: este servidor não mantém sessão.' }, id: null };
@@ -155,14 +160,14 @@ export async function montarConectorRemoto(
     const clientId = auth?.clientId ?? '';
     // Sem sessão: um servidor por requisição. Barato (só registra ferramentas) e não guarda estado entre chamadas.
     const server = new McpServer({ name: 'doutor-digital', version: '1.0.0' }, { instructions: INSTRUCOES });
-    registrarFerramentas(server, contexto, {
-      auditar: (r) => {
-        o.armazem
-          .auditar({ userId, clientId, ferramenta: r.ferramenta, argumentos: r.argumentos, ok: r.ok, duracaoMs: r.ms, erro: r.erro })
-          .catch((err) => o.log?.warn({ err }, 'mcp-remoto: auditoria não gravou'));
-        o.log?.info({ userId, ferramenta: r.ferramenta, ok: r.ok, ms: r.ms }, 'mcp-remoto: ferramenta');
-      },
-    });
+    const auditar: Auditar = (r) => {
+      o.armazem
+        .auditar({ userId, clientId, ferramenta: r.ferramenta, argumentos: r.argumentos, ok: r.ok, duracaoMs: r.ms, erro: r.erro })
+        .catch((err) => o.log?.warn({ err }, 'mcp-remoto: auditoria não gravou'));
+      o.log?.info({ userId, ferramenta: r.ferramenta, ok: r.ok, ms: r.ms }, 'mcp-remoto: ferramenta');
+    };
+    registrarFerramentas(server, contexto, { auditar });
+    o.extras?.(server, auditar);
     const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transporte.close();
