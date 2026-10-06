@@ -294,3 +294,25 @@ test('pacientes criadosDesde: para de paginar ao passar da data e só devolve os
     await outra.fechar();
   }
 });
+
+test('pacientes criadosDesde: se a franquia NÃO devolver em ordem decrescente, lê tudo em vez de cortar calado', async () => {
+  const fora = Array.from({ length: 150 }, (_, i) => ({
+    idClient: i + 1,
+    name: `P${i}`,
+    // ordem crescente: o contrário do guia
+    created: new Date(Date.parse('2026-01-01T15:00:00Z') + i * 86_400_000).toISOString(),
+  }));
+  const outra = await subirFranquiaFalsa({ [T_SERRA]: { pacientes: fora } });
+  try {
+    const unidades = new Map<string, Unidade>([['serra', { slug: 'serra', nome: 'Serra', token: T_SERRA, fuso: 'America/Sao_Paulo', baseUrl: outra.url }]]);
+    const r = (await c.buscarPacientes(criarContexto(unidades, { intervaloMs: 0, cliente: { log: () => {} } }), {
+      unidade: 'serra',
+      criadosDesde: '2026-05-01',
+      maxItens: 1000,
+    })) as R;
+    assert.equal(outra.pedidos.length, 2); // leu as duas páginas
+    assert.equal(r.porUnidade.serra.total, 150 - 120); // de 01/05 em diante: os 30 últimos
+  } finally {
+    await outra.fechar();
+  }
+});

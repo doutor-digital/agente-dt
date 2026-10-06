@@ -6,7 +6,7 @@ const lead = (id: number, telefone: string | null, extra: Partial<LeadDoFunil> =
   id,
   criadoEm: '2026-09-01',
   origem: 'Instagram',
-  telefone,
+  telefones: telefone ? [telefone] : [],
   idClientVinculo: null,
   ...extra,
 });
@@ -123,5 +123,45 @@ test('homônimos: dois pacientes com o mesmo nome não herdam a agenda um do out
   assert.equal(f.viraramPaciente, 1);
   assert.equal(f.compareceram, 0); // não dá pra saber de qual Maria é a consulta
   assert.equal(f.fecharamTratamento, 1); // tratamento é pelo idClient: esse dá
+  assert.equal(f.homonimosSemAgenda, 1);
+});
+
+test('lead com dois números (contato fixo + WhatsApp da conversa) casa por qualquer um', () => {
+  const f = cruzarFunil({
+    leads: [lead(1, null, { telefones: ['4133334444', '41999998888'] })],
+    pacientes: [{ idClient: 10, nome: 'Ana', telefone: '41999998888' }],
+    agenda: [],
+    tratamentos: [],
+  });
+  assert.equal(f.viraramPaciente, 1);
+});
+
+test('mesmo nome com o MESMO telefone é cadastro duplicado, não homônimo: a agenda conta', () => {
+  const f = cruzarFunil({
+    leads: [lead(1, '41999998888')],
+    pacientes: [
+      { idClient: 10, nome: 'Ana Souza', telefone: '41999998888' },
+      { idClient: 11, nome: 'ANA SOUZA', telefone: '+55 41 99999-8888' },
+    ],
+    agenda: [{ nomePaciente: 'Ana Souza', dia: '2026-09-05', status: 'Atendido' }],
+    tratamentos: [{ idClient: 11, criado: '2026-09-06', preco: 700 }], // no OUTRO cadastro dela
+  });
+  assert.equal(f.viraramPaciente, 1);
+  assert.equal(f.compareceram, 1);
+  assert.equal(f.fecharamTratamento, 1);
+  assert.equal(f.homonimosSemAgenda, 0);
+});
+
+test('homônimo antigo (fora da lista de pacientes) é pego pela agenda anterior ao cadastro', () => {
+  const f = cruzarFunil({
+    leads: [lead(1, '41999998888', { criadoEm: '2026-09-01' })],
+    pacientes: [{ idClient: 10, nome: 'Maria da Silva', telefone: '41999998888', criadoEm: '2026-09-02' }],
+    agenda: [
+      { nomePaciente: 'Maria da Silva', dia: '2026-03-10', status: 'Atendido' }, // outra Maria, de março
+      { nomePaciente: 'Maria da Silva', dia: '2026-09-05', status: 'Atendido' },
+    ],
+    tratamentos: [],
+  });
+  assert.equal(f.compareceram, 0);
   assert.equal(f.homonimosSemAgenda, 1);
 });

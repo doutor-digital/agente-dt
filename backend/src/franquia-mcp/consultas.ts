@@ -258,19 +258,23 @@ export async function buscarPacientes(
 
   const res = await porUnidade(ctx, unidades, async (u, cliente) => {
     const orcamento = cotas.nova();
-    // A franquia ordena por criação, mais novo primeiro (§6): com `criadosDesde`, a leitura para na
-    // primeira página que já passou da data — o cadastro inteiro de uma unidade grande não cabe no teto.
+    // O guia (§6) diz "ordenação fixa: created DESC". Com `criadosDesde`, a leitura para na primeira
+    // página que já passou da data — o cadastro inteiro de uma unidade grande não cabe no teto. Mas
+    // só para se a PÁGINA confirma a ordem: se a franquia mudar a ordenação, lê tudo em vez de cortar calado.
+    const criado = (item: unknown) => diaLocal((item as Record<string, unknown>)?.created, u.fuso);
     const antigo = (item: unknown) => {
-      const dia = diaLocal((item as Record<string, unknown>)?.created, u.fuso);
+      const dia = criado(item);
       return !!args.criadosDesde && dia !== null && dia < args.criadosDesde;
     };
+    const emOrdemDecrescente = (pagina: unknown[]) =>
+      pagina.every((it, i) => i === 0 || (criado(pagina[i - 1]) ?? '') >= (criado(it) ?? ''));
     const chave = chaveCache('pacientes', u.slug, { ...filtros, desde: args.criadosDesde });
     const { valor, doCache } = await comCache(ctx, chave, TTL.busca, async (): Promise<Lista> => {
       const lidos = await lerTudo(
         (page) => cliente.chamar('POST', '/api/clients/search', { ...filtros, pagination: { page, rowsPerPage: LINHAS_POR_PAGINA } }, orcamento),
         ctx.tetoPaginas,
         LINHAS_POR_PAGINA,
-        args.criadosDesde ? (pagina) => pagina.length > 0 && antigo(pagina[pagina.length - 1]) : undefined,
+        args.criadosDesde ? (pagina) => pagina.length > 0 && emOrdemDecrescente(pagina) && antigo(pagina[pagina.length - 1]) : undefined,
       );
       return { ...lidos, itens: lidos.itens.filter((i) => !antigo(i)).map((i) => normalizarItem(i, u.fuso)) };
     });

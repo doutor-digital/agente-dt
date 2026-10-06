@@ -16,7 +16,10 @@
  * da mesma pessoa = um paciente). Quando há dois, vale o lead MAIS ANTIGO (primeiro contato): é
  * dele a origem e é da criação dele que a agenda começa a contar.
  * Dois pacientes com o mesmo nome (homônimos) não herdam a agenda um do outro: a agenda só tem
- * nome, então o casamento paciente → agenda fica em aberto pra eles (`homonimosSemAgenda`).
+ * nome, então o casamento paciente → agenda fica em aberto pra eles (`homonimosSemAgenda`). Mas
+ * mesmo nome com o MESMO telefone é cadastro duplicado da mesma pessoa (comum na franquia), não
+ * homônimo. E quem foi cadastrado antes da data de corte não está na lista de pacientes: se a agenda
+ * tem consulta com aquele nome ANTES do cadastro do paciente casado, é outra pessoa — homônimo também.
  */
 
 export interface LeadDoFunil {
@@ -24,7 +27,8 @@ export interface LeadDoFunil {
   /** dia de criação no fuso da unidade, AAAA-MM-DD */
   criadoEm: string;
   origem: string;
-  telefone: string | null;
+  /** todos os números conhecidos do lead (contato do Kommo, conversa com a IA): casa por qualquer um */
+  telefones: string[];
   idClientVinculo: number | null;
 }
 
@@ -32,6 +36,8 @@ export interface PacienteDaFranquia {
   idClient: number;
   nome: string;
   telefone: string | null;
+  /** dia do cadastro na franquia, AAAA-MM-DD (quando a franquia manda) */
+  criadoEm?: string | null;
 }
 
 export interface AgendamentoDaFranquia {
@@ -110,21 +116,37 @@ export function cruzarFunil(e: {
   const pacientePorTelefone = new Map<string, PacienteDaFranquia>();
   const telefonesAmbiguos = new Set<string>();
   const pacientePorId = new Map<number, PacienteDaFranquia>();
+  /** cadastros duplicados da mesma pessoa (mesmo nome E mesmo telefone): todos os idClient dela */
+  const idsDaPessoa = new Map<number, number[]>();
   for (const p of e.pacientes) {
     pacientePorId.set(p.idClient, p);
+    idsDaPessoa.set(p.idClient, [p.idClient]);
     const k = chaveTelefone(p.telefone);
     if (!k) continue;
-    // telefone repetido entre pacientes (mãe e filha no mesmo número) é ambíguo: não casa ninguém por ele
-    if (pacientePorTelefone.has(k)) telefonesAmbiguos.add(k);
-    pacientePorTelefone.set(k, p);
+    const ja = pacientePorTelefone.get(k);
+    if (!ja) {
+      pacientePorTelefone.set(k, p);
+    } else if (normalizarNome(ja.nome) === normalizarNome(p.nome)) {
+      // mesma pessoa cadastrada duas vezes: junta os ids (o tratamento pode estar em qualquer um)
+      const grupo = [...(idsDaPessoa.get(ja.idClient) ?? [ja.idClient]), p.idClient];
+      for (const id of grupo) idsDaPessoa.set(id, grupo);
+    } else {
+      // pessoas diferentes no mesmo número (mãe e filha): ambíguo, não casa ninguém por ele
+      telefonesAmbiguos.add(k);
+    }
   }
   for (const k of telefonesAmbiguos) pacientePorTelefone.delete(k);
+  // homônimo = mesmo nome com telefones DIFERENTES; mesmo telefone (ou sem telefone) é cadastro duplicado
   const nomesRepetidos = new Set<string>();
-  const vistosPorNome = new Set<string>();
+  const telefonesPorNome = new Map<string, Set<string>>();
   for (const p of e.pacientes) {
     const k = normalizarNome(p.nome);
-    if (vistosPorNome.has(k)) nomesRepetidos.add(k);
-    vistosPorNome.add(k);
+    const tel = chaveTelefone(p.telefone);
+    if (!tel) continue;
+    const tels = telefonesPorNome.get(k) ?? new Set<string>();
+    tels.add(tel);
+    telefonesPorNome.set(k, tels);
+    if (tels.size > 1) nomesRepetidos.add(k);
   }
   const agendaPorNome = new Map<string, AgendamentoDaFranquia[]>();
   for (const a of e.agenda) {
@@ -153,9 +175,13 @@ export function cruzarFunil(e: {
     total.leads++;
     o.leads++;
 
-    const k = chaveTelefone(lead.telefone);
-    if (k || lead.idClientVinculo) comChave++;
-    let paciente = k ? pacientePorTelefone.get(k) : undefined;
+    const chaves = [...new Set(lead.telefones.map(chaveTelefone).filter((x): x is string => !!x))];
+    if (chaves.length || lead.idClientVinculo) comChave++;
+    let paciente: PacienteDaFranquia | undefined;
+    for (const k of chaves) {
+      paciente = pacientePorTelefone.get(k);
+      if (paciente) break;
+    }
     if (paciente) casadoPor.telefone++;
     else if (lead.idClientVinculo && pacientePorId.has(lead.idClientVinculo)) {
       paciente = pacientePorId.get(lead.idClientVinculo);
@@ -169,14 +195,18 @@ export function cruzarFunil(e: {
       repetidos++;
       continue;
     }
-    contados.add(paciente.idClient);
+    for (const id of idsDaPessoa.get(paciente.idClient) ?? [paciente.idClient]) contados.add(id);
 
     total.viraramPaciente++;
     o.viraramPaciente++;
     // só o que aconteceu A PARTIR da criação do lead: consulta antiga é de outro ciclo
     const nome = normalizarNome(paciente.nome);
-    if (nomesRepetidos.has(nome)) homonimos++;
-    const agenda = nomesRepetidos.has(nome) ? [] : (agendaPorNome.get(nome) ?? []).filter((a) => a.dia >= lead.criadoEm);
+    const agendaDoNome = agendaPorNome.get(nome) ?? [];
+    const cadastro = paciente.criadoEm;
+    // consulta com esse nome antes do cadastro deste paciente: é de um homônimo mais antigo
+    const homonimo = nomesRepetidos.has(nome) || (!!cadastro && agendaDoNome.some((a) => a.dia < cadastro));
+    if (homonimo) homonimos++;
+    const agenda = homonimo ? [] : agendaDoNome.filter((a) => a.dia >= lead.criadoEm);
     if (agenda.length) {
       total.agendaram++;
       o.agendaram++;
@@ -185,7 +215,9 @@ export function cruzarFunil(e: {
       total.compareceram++;
       o.compareceram++;
     }
-    const trats = (tratamentosPorId.get(paciente.idClient) ?? []).filter((t) => t.criado >= lead.criadoEm);
+    const trats = (idsDaPessoa.get(paciente.idClient) ?? [paciente.idClient])
+      .flatMap((id) => tratamentosPorId.get(id) ?? [])
+      .filter((t) => t.criado >= lead.criadoEm);
     if (trats.length) {
       total.fecharamTratamento++;
       o.fecharamTratamento++;

@@ -81,7 +81,7 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
     id: l.id,
     criadoEm: diaLocal(new Date((l.created_at ?? 0) * 1000).toISOString(), ku.fuso) ?? inicio,
     origem: origemDoLead(l),
-    telefone: doKommo.get(l.id) ?? daConversa.get(l.id) ?? null,
+    telefones: [doKommo.get(l.id), daConversa.get(l.id)].filter((t): t is string => !!t),
     idClientVinculo: vinculos.get(l.id) ?? null,
   }));
 
@@ -113,7 +113,12 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
   }));
   const funil = cruzarFunil({
     leads: leadsDoFunil,
-    pacientes: pacientes.itens.map((p) => ({ idClient: Number(p.idClient), nome: String(p.name ?? ''), telefone: (p.whatsapp as string) ?? null })),
+    pacientes: pacientes.itens.map((p) => ({
+      idClient: Number(p.idClient),
+      nome: String(p.name ?? ''),
+      telefone: (p.whatsapp as string) ?? null,
+      criadoEm: diaDoItem(p, 'created') || null,
+    })),
     agenda: agendaDoFunil,
     tratamentos: tratamentos.itens.map((t) => ({
       idClient: typeof t.idClient === 'number' ? t.idClient : null,
