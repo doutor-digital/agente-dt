@@ -13,6 +13,11 @@ export interface ConsultaReconciliada {
   estado: EstadoConsulta;
   mudou: boolean;
   especialista: string | null;
+  /**
+   * Status do agendamento na franquia (`SPINE_STATUS`: 37 agendado, 38 confirmado, 42 atendido…),
+   * quando ela devolveu a consulta. Opcional: quem não achou a consulta não sabe o status.
+   */
+  idStatus?: number | null;
 }
 
 const JANELA_DIAS = 90;
@@ -164,7 +169,7 @@ async function reconciliar(unit: Unit, kommoLeadId: number): Promise<ConsultaRec
         { unit: unit.slug, kommoLeadId, idSchedule: link.spineIdSchedule, salvo: link.agendadoPara },
         'agenda: consulta desmarcada na franquia — vínculo limpo',
       );
-      return { ...base, estado: 'cancelada', quando: null, mudou: true, especialista: achado.especialista };
+      return { ...base, estado: 'cancelada', quando: null, mudou: true, especialista: achado.especialista, idStatus: achado.idStatus };
     }
 
     if (!achado.dia || !achado.hora) return base;
@@ -188,6 +193,7 @@ async function reconciliar(unit: Unit, kommoLeadId: number): Promise<ConsultaRec
       estado: 'confirmada',
       mudou,
       especialista: achado.especialista,
+      idStatus: achado.idStatus,
     };
   } catch (err) {
     logger.warn(
