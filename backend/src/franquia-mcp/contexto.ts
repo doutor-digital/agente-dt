@@ -68,13 +68,31 @@ export function resolverUnidades(ctx: Contexto, alvo: string | string[]): Unidad
   }
   const pedidos = (Array.isArray(alvo) ? alvo : [alvo]).map((s) => s.trim().toLowerCase());
   if (pedidos.includes('todas')) return [...ctx.unidades.values()];
-  const desconhecidas = pedidos.filter((s) => !ctx.unidades.has(s));
+  const achadas = new Map<string, Unidade>();
+  const desconhecidas: string[] = [];
+  for (const pedido of pedidos) {
+    const u = acharUnidade(ctx, pedido);
+    if (u) achadas.set(u.slug, u);
+    else desconhecidas.push(pedido);
+  }
   if (desconhecidas.length) {
     throw new ErroDeEntrada(
-      `unidade desconhecida: ${desconhecidas.join(', ')}. Válidas: ${[...ctx.unidades.keys()].join(', ')}, ou "todas"`,
+      `unidade desconhecida ou ambígua: ${desconhecidas.join(', ')}. Válidas: ${[...ctx.unidades.keys()].join(', ')}, ou "todas"`,
     );
   }
-  return [...new Set(pedidos)].map((s) => ctx.unidades.get(s) as Unidade);
+  return [...achadas.values()];
+}
+
+/**
+ * Slug exato, ou nome curto: "serra" acha "doutor-hernia-serra" (slug que termina em "-serra").
+ * Só vale se UMA unidade casar — "dois resultados" é pergunta, não resposta.
+ */
+function acharUnidade(ctx: Contexto, pedido: string): Unidade | undefined {
+  const exata = ctx.unidades.get(pedido);
+  if (exata) return exata;
+  if (!pedido) return undefined;
+  const candidatas = [...ctx.unidades.values()].filter((u) => u.slug.endsWith(`-${pedido}`));
+  return candidatas.length === 1 ? candidatas[0] : undefined;
 }
 
 /**

@@ -13,6 +13,7 @@ import type { Unidade } from '../franquia-mcp/unidade.js';
 import { armazemPrisma } from './armazem-prisma.js';
 import type { Usuario } from './provedor.js';
 import { montarConectorRemoto } from './servidor.js';
+import { umaPorToken } from './unidades.js';
 
 const BASE_URL_FRANQUIA = 'https://app-api-prod.doutorhernia.com.br';
 
@@ -20,18 +21,21 @@ function comoUsuario(u: User): Usuario {
   return { id: u.id, email: u.email, nome: u.name, papel: u.role, ativo: u.isActive };
 }
 
-/** Unidades ativas com token da franquia. O token fica neste processo: nunca sai em resposta. */
+/**
+ * Unidades ativas com token da franquia, UMA por franquia (ver `umaPorToken`). O token fica neste
+ * processo: nunca sai em resposta.
+ */
 async function unidadesDoBanco(): Promise<Map<string, Unidade>> {
   const linhas = await prisma.unit.findMany({
     where: { isActive: true, spineToken: { not: null } },
     select: { slug: true, name: true, spineToken: true, spineBaseUrl: true, spineTimezone: true },
     orderBy: { slug: 'asc' },
   });
-  const unidades = new Map<string, Unidade>();
+  const todas: Unidade[] = [];
   for (const u of linhas) {
     const token = u.spineToken?.trim();
     if (!token) continue;
-    unidades.set(u.slug, {
+    todas.push({
       slug: u.slug,
       nome: u.name,
       token,
@@ -39,7 +43,9 @@ async function unidadesDoBanco(): Promise<Map<string, Unidade>> {
       baseUrl: (u.spineBaseUrl || BASE_URL_FRANQUIA).replace(/\/+$/, ''),
     });
   }
-  return unidades;
+  const { ficam, descartadas } = umaPorToken(todas);
+  logger.info({ franquias: ficam.size, mesmaFranquia: descartadas }, 'mcp-remoto: unidades carregadas (uma por token)');
+  return ficam;
 }
 
 /** Falha ao subir o conector vira log, nunca derruba o agente: a Sofia atendendo vale mais que o conector. */

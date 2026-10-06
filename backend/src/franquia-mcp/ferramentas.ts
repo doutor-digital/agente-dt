@@ -11,7 +11,7 @@ import { ErroDeEntrada } from './travas.js';
 
 const unidade = z
   .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
-  .describe('slug da unidade (ex. "serra"), lista de slugs, ou "todas". Veja listar_unidades.');
+  .describe('unidade: slug inteiro ou nome curto ("serra" acha "doutor-hernia-serra"), uma lista deles, ou "todas". Veja listar_unidades.');
 const data = (o: string) => z.string().describe(`${o}, AAAA-MM-DD, no dia local da unidade`);
 const id = (o: string) => z.number().int().positive().describe(o);
 const saida = {
