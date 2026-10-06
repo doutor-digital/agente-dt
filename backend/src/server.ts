@@ -7,6 +7,7 @@ import { env } from './lib/env.js';
 import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { apiRouter } from './routes/api.routes.js';
+import { ligarConectorRemoto } from './mcp-remoto/producao.js';
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAltaHandler } from './controllers/alta.controller.js';
 import { getCheckpointer } from './agent/graph.js';
@@ -96,6 +97,9 @@ async function main(): Promise<void> {
     logger.debug({ method: req.method, url: req.url }, 'http');
     next();
   });
+
+  // Conector remoto do claude.ai (/mcp + OAuth). Desligado sem MCP_URL_PUBLICA no .env.
+  await ligarConectorRemoto(app);
 
   // Página da recepção para pausar a Sofia por um tempo (protegida por código da unidade).
   app.get('/pausa/:slug', paginaPausaHandler);

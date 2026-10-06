@@ -39,6 +39,20 @@ const schema = z.object({
 
   INTERNAL_API_KEY: z.string().min(16).optional(),
 
+  // Conector remoto do claude.ai (MCP com OAuth em /mcp). Sem esta variável, NADA do conector sobe.
+  // Valor: a origem pública deste backend, ex. https://agente-vps.doutordigitalconsultoria.com
+  MCP_URL_PUBLICA: z.string().url().optional(),
+  // Hosts aceitos como destino do login do conector (e dono de documento de cliente CIMD).
+  MCP_HOSTS_CONFIAVEIS: z
+    .string()
+    .default('claude.ai,claude.com')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((h) => h.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+
   DASHBOARD_WEBHOOK_BASE_URL: z
     .string()
     .url()
