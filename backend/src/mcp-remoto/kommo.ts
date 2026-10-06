@@ -170,22 +170,36 @@ export function origemDoLead(lead: KommoLead): string {
   return '(sem origem)';
 }
 
-/** Atalhos pros campos do rastreio de campanha (n8n `rastreio-campanhas`, "Origem – Campanha"…). */
-const ATALHOS: Record<string, string> = {
-  campanha: 'Origem – Campanha',
-  conjunto: 'Origem – Conjunto',
-  anuncio: 'Origem – Anúncio',
-  plataforma: 'Origem – Plataforma',
-  utm_source: 'Origem – utm_source',
-  utm_campaign: 'Origem – utm_campaign',
+/**
+ * Atalhos pros campos do rastreio de anúncios do WhatsApp (n8n `rastreio-campanhas`). Os nomes REAIS
+ * nas contas da Doutor Hérnia têm o prefixo "⌂" (lidos num cartão de Açailândia em 06/10/2026); o
+ * README do rastreio ainda fala "Origem – Campanha", então os dois entram, nessa ordem.
+ * `anuncio` é o ID do anúncio no Meta: é ele que liga o lead ao gasto (Meta/Metricool). Campanha e
+ * conjunto ficam VAZIOS em anúncio feito a partir de post (o Meta não devolve campanha pra post).
+ */
+const ATALHOS: Record<string, string[]> = {
+  campanha: ['⌂ Campanha', 'Origem – Campanha'],
+  conjunto: ['⌂ Conjunto', 'Origem – Conjunto'],
+  anuncio: ['⌂ ID do anúncio', 'Origem – ID do anúncio'],
+  titulo_do_anuncio: ['⌂ Título do anúncio', 'Origem – Headline'],
+  plataforma: ['⌂ Plataforma de origem', 'Origem – Plataforma'],
+  url: ['⌂ URL de origem do clique', 'Origem – URL'],
 };
+
+function candidatos(por: string): string[] {
+  const p = semMarcas(por).replace(/ /g, '_');
+  return ATALHOS[p] ?? [por];
+}
 
 /** Em que grupo o lead cai: `origem`, um atalho do rastreio (`campanha`, `anuncio`…) ou o nome de um campo. */
 export function grupoDoLead(lead: KommoLead, por: string): string {
   const p = semMarcas(por);
   if (p === 'origem') return origemDoLead(lead);
-  const campo = ATALHOS[p.replace(/ /g, '_')] ?? por;
-  return campoChamado(lead, campo) || `(sem ${p})`;
+  for (const nome of candidatos(por)) {
+    const v = campoChamado(lead, nome);
+    if (v) return v;
+  }
+  return `(sem ${p})`;
 }
 
 export function situacaoDoLead(lead: KommoLead): 'ganho' | 'perdido' | 'aberto' {
@@ -234,9 +248,12 @@ function chaveDeAgrupamento(l: Legivel, por: string): string[] {
     default: {
       // atalho do rastreio ("campanha", "anuncio"…) ou nome de campo personalizado, em qualquer grafia
       const p = semMarcas(por);
-      const alvo = semMarcas(ATALHOS[p.replace(/ /g, '_')] ?? por);
-      const [, valor] = Object.entries(l.campos ?? {}).find(([k]) => semMarcas(k) === alvo) ?? [];
-      return [valor || `(sem ${p})`];
+      for (const nome of candidatos(por)) {
+        const alvo = semMarcas(nome);
+        const [, valor] = Object.entries(l.campos ?? {}).find(([k]) => semMarcas(k) === alvo) ?? [];
+        if (valor) return [valor];
+      }
+      return [`(sem ${p})`];
     }
   }
 }
