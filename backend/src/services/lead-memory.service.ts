@@ -6,6 +6,8 @@ import { createChatOpenAI, invokeChatModel } from './openai.service.js';
 import { createKommoClient } from './kommo.service.js';
 import { HumanMessage, SystemMessage, type AIMessage } from '@langchain/core/messages';
 import { canonizarFatos } from './fatos-canonicos.js';
+import { dataLocalISO, dataPorExtenso } from '../lib/feriados.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
 
 const CAMPOS_IMPORTANTES: Array<{ chave: string; casa: RegExp }> = [
   { chave: 'queixa', casa: /queixa/i },
@@ -159,6 +161,30 @@ export async function bumpLeadMemoryTurn(
   });
 }
 
+/**
+ * A linha que o resumidor recebe sobre a consulta que a IA marcou. Procura também nas unidades que
+ * dividem o mesmo Kommo (Petrópolis/Caxias, resgate/comercial): a memória é lida delas também.
+ */
+async function consultaDaIaParaOResumo(unit: Unit, leadId: number, hojeISO: string): Promise<string> {
+  try {
+    const irmas = unit.kommoSubdomain
+      ? (await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
+      : [];
+    const link = await prisma.spineLeadLink.findFirst({
+      where: { unitId: { in: [...new Set([unit.id, ...irmas])] }, kommoLeadId: leadId, spineIdSchedule: { not: null } },
+      orderBy: { updatedAt: 'desc' },
+      select: { agendadoPara: true },
+    });
+    if (!link) return 'nenhuma — a equipe pode ter marcado por fora; não afirme nem negue';
+    if (link.agendadoPara && link.agendadoPara.slice(0, 10) < hojeISO) {
+      return 'houve uma, e a data já passou — não escreva que ele tem consulta marcada';
+    }
+    return 'sim';
+  } catch {
+    return 'desconhecida — não afirme nem negue consulta marcada';
+  }
+}
+
 export function scheduleLeadMemoryUpdate(args: {
   unit: Unit;
   leadId: number;
@@ -207,6 +233,9 @@ async function runLeadMemoryUpdate(args: {
   }
 
   const factsCurrent = (after.facts as LeadMemoryFacts) ?? {};
+  const hojeISO = dataLocalISO(new Date(), fusoDaUnidade(unit));
+  const hoje = dataPorExtenso(hojeISO);
+  const consultaNoSistema = await consultaDaIaParaOResumo(unit, leadId, hojeISO);
   const sysPrompt = [
     'Você é um assistente de CRM que mantém memória de longo prazo dos pacientes.',
     'A cada N turnos recebe a memória atual + as últimas mensagens da conversa.',
@@ -221,6 +250,10 @@ async function runLeadMemoryUpdate(args: {
     'O QUE CAPTURAR (quando o paciente disser — nunca invente):',
     '- Queixa e histórico: dor, há quanto tempo, tratamentos que já tentou.',
     '- Etapa: se já foi qualificado, se tem consulta marcada, se desistiu antes.',
+    '  "Tem consulta marcada" SÓ quando a linha CONSULTA NO SISTEMA disser que sim. Combinar um',
+    '  horário na conversa não é marcar: aí escreva "escolheu horário, mas a marcação não foi',
+    '  concluída". (Caso real: o resumo dizia "agendou para amanhã, 06/10, às 7h", nada tinha sido',
+    '  marcado, e no dia seguinte a IA pediu ao paciente para confirmar esse horário inexistente.)',
     '- Preferências: turno que prefere, se pediu pra não insistir, se já recebeu o preço.',
     '- Objeções e sensibilidades: reclamou de preço, medo de cirurgia, desconfia de plano,',
     '  algo que já irritou. Serve pra NÃO repetir o que afastou o paciente.',
@@ -236,11 +269,18 @@ async function runLeadMemoryUpdate(args: {
     '- Mantenha facts enxuto (≤ 12 chaves). Remova chaves obsoletas.',
     '- Use snake_case nas chaves. Valores curtos (palavras-chave).',
     '- summary deve caber em ≤ 600 chars. Sem floreio.',
+    '- NUNCA escreva dia ou hora de consulta no summary/facts, nem a combinada nem a marcada: isso',
+    '  envelhece e o horário certo vem do sistema da clínica a cada conversa.',
+    '- NUNCA use datas relativas ("hoje", "amanhã", "ontem", "semana que vem"): o resumo é lido em',
+    '  outro dia. Se precisar de data, escreva DD/MM.',
     '- Se NADA mudou substancialmente, devolva summary/facts iguais à entrada.',
     '- Saída deve ser JSON parseável puro — nada de ```json, sem comentários.',
   ].join('\n');
 
   const userPrompt = [
+    `HOJE: ${hoje}`,
+    `CONSULTA NO SISTEMA (marcada pela IA): ${consultaNoSistema}`,
+    '',
     '# MEMÓRIA ATUAL',
     `summary: ${after.summary || '(vazio)'}`,
     `facts: ${JSON.stringify(factsCurrent)}`,

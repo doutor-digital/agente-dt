@@ -543,18 +543,33 @@ export function escolherPaciente(candidatos: ClienteFranquia[], fone: string, al
   return { tipo: 'nenhum', motivo: exatos.length > 1 ? 'homonimos' : 'nome nao casa' };
 }
 
-async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo?: KommoClient; contatoId?: number | null }): Promise<number | null> {
-  const termos = termosDeBuscaDoNome(nome);
+/**
+ * `fone`: telefone já conhecido (a Sofia tem o da conversa) — dispensa ir ao Kommo buscar o do contato.
+ * `soPorTelefone` (a Sofia): só aceita quem bate o telefone, ignora o "não achei" do cache e nunca grava
+ * negativo nele — o nome do WhatsApp ("Maria") é largo demais para casar por nome, e um negativo dela
+ * travaria por 6 h o casamento por nome do sincronizador. `maxTermos` corta as buscas.
+ */
+export interface ExtraDaBusca {
+  kommo?: KommoClient;
+  contatoId?: number | null;
+  fone?: string | null;
+  soPorTelefone?: boolean;
+  maxTermos?: number;
+}
+
+async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDaBusca): Promise<number | null> {
+  const termos = termosDeBuscaDoNome(nome).slice(0, extra?.maxTermos ?? MAX_TERMOS_DE_BUSCA);
   if (termos.length === 0) return null;
   // telefone do contato do Kommo × whatsapp da franquia: casa mesmo quando a SDR escreveu o nome diferente
-  let fone = '';
-  if (extra?.kommo && extra.contatoId) {
+  let fone = chaveTelefone(extra?.fone);
+  if (!fone && extra?.kommo && extra.contatoId) {
     try {
       fone = chaveTelefone(await extra.kommo.getContactPhone(extra.contatoId));
     } catch {
       fone = '';
     }
   }
+  if (extra?.soPorTelefone && !fone) return null;
   const alvos = new Set(termosDeBuscaDoNome(nome).map(normalizar));
   // acumula os candidatos de TODOS os termos: parar no 1º que devolve alguém escondia o paciente
   // quando o cartão tinha dois nomes (o João achou isso no "MARIA DA PENHA - ALEXANDRO SANT ANA")
@@ -570,6 +585,7 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo
     if (porFone().length === 1) return porFone()[0].idClient;
   }
   const escolha = escolherPaciente([...vistos.values()], fone, alvos);
+  if (extra?.soPorTelefone && escolha.tipo === 'achou' && escolha.por !== 'telefone') return null;
   if (escolha.tipo === 'achou') return escolha.idClient;
   if (escolha.tipo === 'desempatar') return escolherEntreDuplicados(unit, escolha.candidatos);
   return null;
@@ -579,14 +595,14 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo
  * idClient do paciente na franquia: pelo vínculo que a Sofia gravou; senão pelo nome do cartão sem a
  * data que a SDR escreve, casando por telefone (quando o contato é conhecido) ou por nome exato único.
  */
-export async function idClientDoLead(unit: Unit, leadId: number, nome: string | null, extra?: { kommo?: KommoClient; contatoId?: number | null }): Promise<number | null> {
+export async function idClientDoLead(unit: Unit, leadId: number, nome: string | null, extra?: ExtraDaBusca): Promise<number | null> {
   const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
   if (link?.spineIdClient) return link.spineIdClient;
   const chave = `${unit.id}:${leadId}`;
   const hit = cacheIdClient.get(chave);
-  if (hit && hit.expiraEm > Date.now()) return hit.idClient;
+  if (hit && hit.expiraEm > Date.now() && !(extra?.soPorTelefone && hit.idClient === null)) return hit.idClient;
   const idClient = await procurarPaciente(unit, nome, extra);
-  cacheIdClient.set(chave, { idClient, expiraEm: Date.now() + CACHE_LEAD_MS });
+  if (idClient !== null || !extra?.soPorTelefone) cacheIdClient.set(chave, { idClient, expiraEm: Date.now() + CACHE_LEAD_MS });
   return idClient;
 }
 
