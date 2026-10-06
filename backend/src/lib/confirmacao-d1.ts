@@ -21,6 +21,32 @@ export function classificarRespostaD1(texto: string): RespostaD1 | null {
   return null;
 }
 
+export type Toque = 'd1' | 'd2';
+
+/**
+ * A marca de "já perguntei" carrega a CONSULTA, não só o lead.
+ *
+ * Antes a chave era só `confirmacao_d1`, e isso errava dos dois lados. Calava demais: consulta
+ * remarcada de quinta para sexta caía dentro da janela de 36 h da pergunta antiga, e o paciente
+ * do horário novo não recebia confirmação nenhuma. E calava de menos: qualquer varredura que
+ * entregasse a mensagem sem conseguir gravar a marca fazia a mesma pergunta sair de novo horas
+ * depois. Foi o que a Luciana levou na Serra em 23/09/2026 — respondeu "1" às 14h13, recebeu a
+ * mesma pergunta às 18h59, respondeu "1" outra vez, escreveu "Outra vez ?" e encerrou a conversa
+ * com "Vou bloquear".
+ *
+ * Com o horário na chave, perguntar duas vezes pela mesma consulta é impossível, e remarcar gera
+ * chave nova — a pergunta volta a sair, que é o certo.
+ */
+export function prefixoDoToque(toque: Toque): string {
+  return toque === 'd1' ? 'confirmacao_d1' : 'reforco_d2';
+}
+
+export function chaveDaConfirmacao(toque: Toque, quando: string): string {
+  // `quando` vem sempre como "AAAA-MM-DDTHH:mm" (schema.prisma) — o corte é só defesa contra
+  // segundos que a franquia às vezes acrescenta.
+  return `${prefixoDoToque(toque)}:${quando.slice(0, 16)}`;
+}
+
 const DIAS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
 
 export function textoConfirmacaoD1(args: {

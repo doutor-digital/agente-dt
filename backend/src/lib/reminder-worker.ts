@@ -25,7 +25,20 @@ import { AgendaReconcileService, type ConsultaReconciliada } from '../services/a
 import { addMessage } from '../services/conversations.service.js';
 import { mensagensOficiais } from '../services/kommo-talks.service.js';
 import { enviarMensagemDeChat } from '../services/kommo-chat.service.js';
-import { BOTOES_D1, contextoDeChatDoLead, janelaAberta, textoAlertaSemJanela, textoConfirmacaoD1 } from './confirmacao-d1.js';
+import {
+  BOTOES_D1,
+  chaveDaConfirmacao,
+  contextoDeChatDoLead,
+  janelaAberta,
+  prefixoDoToque,
+  textoAlertaSemJanela,
+  textoConfirmacaoD1,
+  type Toque,
+} from './confirmacao-d1.js';
+
+// A chave mora em confirmacao-d1.ts porque a RESPOSTA do paciente também precisa dela (para saber
+// de qual consulta ele está falando). Reexportada aqui para quem já importava deste módulo.
+export { chaveDaConfirmacao, prefixoDoToque, type Toque };
 import { emPausa } from './pausa-unidade.js';
 import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
@@ -57,7 +70,6 @@ let rodando = false;
 
 const ultimoEnvioPorUnidade = new Map<string, string>();
 
-export type Toque = 'd1' | 'd2';
 
 function agoraLocal(tz: string): { dia: string; hora: number } {
   const iso = SpineService.instanteNoFuso(new Date(), tz || 'America/Sao_Paulo');
@@ -83,30 +95,6 @@ export function toqueDoDia(diaDaConsulta: string, hoje: string): Toque | null {
  */
 export function reforcoLiberado(slug: string, raw: string | undefined = process.env.CONFIRMACAO_D2_SLUGS): boolean {
   return automacaoLigada(slug, 'confirmacao-d2', raw);
-}
-
-/**
- * A marca de "já perguntei" carrega a CONSULTA, não só o lead.
- *
- * Antes a chave era só `confirmacao_d1`, e isso errava dos dois lados. Calava demais: consulta
- * remarcada de quinta para sexta caía dentro da janela de 36 h da pergunta antiga, e o paciente
- * do horário novo não recebia confirmação nenhuma. E calava de menos: qualquer varredura que
- * entregasse a mensagem sem conseguir gravar a marca fazia a mesma pergunta sair de novo horas
- * depois. Foi o que a Luciana levou na Serra em 23/09/2026 — respondeu "1" às 14h13, recebeu a
- * mesma pergunta às 18h59, respondeu "1" outra vez, escreveu "Outra vez ?" e encerrou a conversa
- * com "Vou bloquear".
- *
- * Com o horário na chave, perguntar duas vezes pela mesma consulta é impossível, e remarcar gera
- * chave nova — a pergunta volta a sair, que é o certo.
- */
-export function prefixoDoToque(toque: Toque): string {
-  return toque === 'd1' ? 'confirmacao_d1' : 'reforco_d2';
-}
-
-export function chaveDaConfirmacao(toque: Toque, quando: string): string {
-  // `quando` vem sempre como "AAAA-MM-DDTHH:mm" (schema.prisma) — o corte é só defesa contra
-  // segundos que a franquia às vezes acrescenta.
-  return `${prefixoDoToque(toque)}:${quando.slice(0, 16)}`;
 }
 
 /** Ids dos Salesbots que carregam os templates aprovados, guardados em `pipeline_intents`. */
