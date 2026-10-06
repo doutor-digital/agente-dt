@@ -543,12 +543,24 @@ export function escolherPaciente(candidatos: ClienteFranquia[], fone: string, al
   return { tipo: 'nenhum', motivo: exatos.length > 1 ? 'homonimos' : 'nome nao casa' };
 }
 
-async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo?: KommoClient; contatoId?: number | null }): Promise<number | null> {
+/**
+ * `fone`: telefone já conhecido (a Sofia tem o da conversa) — dispensa ir ao Kommo buscar o do contato.
+ * `ignorarNegativo`: refaz a busca mesmo com "não achei" no cache; a Sofia precisa ver o cadastro que a
+ * recepção acabou de fazer, e o negativo daqui vale 6 h.
+ */
+export interface ExtraDaBusca {
+  kommo?: KommoClient;
+  contatoId?: number | null;
+  fone?: string | null;
+  ignorarNegativo?: boolean;
+}
+
+async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDaBusca): Promise<number | null> {
   const termos = termosDeBuscaDoNome(nome);
   if (termos.length === 0) return null;
   // telefone do contato do Kommo × whatsapp da franquia: casa mesmo quando a SDR escreveu o nome diferente
-  let fone = '';
-  if (extra?.kommo && extra.contatoId) {
+  let fone = chaveTelefone(extra?.fone);
+  if (!fone && extra?.kommo && extra.contatoId) {
     try {
       fone = chaveTelefone(await extra.kommo.getContactPhone(extra.contatoId));
     } catch {
@@ -579,12 +591,12 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: { kommo
  * idClient do paciente na franquia: pelo vínculo que a Sofia gravou; senão pelo nome do cartão sem a
  * data que a SDR escreve, casando por telefone (quando o contato é conhecido) ou por nome exato único.
  */
-export async function idClientDoLead(unit: Unit, leadId: number, nome: string | null, extra?: { kommo?: KommoClient; contatoId?: number | null }): Promise<number | null> {
+export async function idClientDoLead(unit: Unit, leadId: number, nome: string | null, extra?: ExtraDaBusca): Promise<number | null> {
   const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
   if (link?.spineIdClient) return link.spineIdClient;
   const chave = `${unit.id}:${leadId}`;
   const hit = cacheIdClient.get(chave);
-  if (hit && hit.expiraEm > Date.now()) return hit.idClient;
+  if (hit && hit.expiraEm > Date.now() && !(extra?.ignorarNegativo && hit.idClient === null)) return hit.idClient;
   const idClient = await procurarPaciente(unit, nome, extra);
   cacheIdClient.set(chave, { idClient, expiraEm: Date.now() + CACHE_LEAD_MS });
   return idClient;

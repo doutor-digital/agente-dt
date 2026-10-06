@@ -27,6 +27,11 @@ export interface EstadoEtapaLead {
    * anúncio que nós mesmos pagamos — e ela pergunta mal: 2 capturas em 1.052.
    */
   anuncio?: AnuncioDeOrigem | null;
+  /**
+   * O título do cartão. A recepção costuma escrever ali o nome completo — é por ele que se acha o
+   * paciente na franquia quando a consulta foi marcada por humano (ver paciente-na-franquia.ts).
+   */
+  tituloDoCartao?: string | null;
 }
 
 /**
@@ -228,6 +233,7 @@ export async function estadoEtapaDoLead(
         };
       }
     }
+    if (valor && lead?.name) valor = { ...valor, tituloDoCartao: lead.name };
   } catch (err) {
     logger.warn(
       { err: String(err), unit: unit.slug, leadId },
