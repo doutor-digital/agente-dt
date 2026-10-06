@@ -1,5 +1,5 @@
 -- Conector remoto do claude.ai (MCP com OAuth 2.1). Quatro tabelas novas e vazias:
--- nada muda no comportamento de hoje. Códigos e tokens só como SHA-256.
+-- nada muda no comportamento de hoje. Códigos e tokens só como SHA-256; clientes sem segredo.
 
 CREATE TABLE "mcp_oauth_clients" (
     "client_id" TEXT NOT NULL,
@@ -35,12 +35,16 @@ CREATE TABLE "mcp_oauth_tokens" (
     "recurso" TEXT,
     "expira_em" TIMESTAMP(3) NOT NULL,
     "revogado_em" TIMESTAMP(3),
+    "substituido_em" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "mcp_oauth_tokens_pkey" PRIMARY KEY ("token_hash")
 );
 
+CREATE INDEX "mcp_oauth_codigos_expira_em_idx" ON "mcp_oauth_codigos"("expira_em");
+
 CREATE INDEX "mcp_oauth_tokens_concessao_id_idx" ON "mcp_oauth_tokens"("concessao_id");
+CREATE INDEX "mcp_oauth_tokens_expira_em_idx" ON "mcp_oauth_tokens"("expira_em");
 
 CREATE TABLE "mcp_auditoria" (
     "id" TEXT NOT NULL,

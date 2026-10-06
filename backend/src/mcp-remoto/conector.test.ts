@@ -35,6 +35,8 @@ let falsa: FranquiaFalsa;
 let http: Server;
 let base: string;
 let parar: () => void;
+/** relógio do servidor de autorização: os testes avançam o tempo sem esperar */
+let desloc = 0;
 
 /** "claude.ai" publica o documento de cliente (CIMD) aqui. */
 const DOC_CIMD = 'https://claude.ai/oauth/mcp-client-metadata.json';
@@ -61,7 +63,9 @@ before(async () => {
     urlPublica: new URL(base),
     armazem,
     segredo: 'segredo-de-teste-com-mais-de-32-caracteres',
-    hostsConfiaveis: ['claude.ai', 'claude.com'],
+    retornosPermitidos: ['https://claude.ai/api/mcp/auth_callback', 'https://claude.com/api/mcp/auth_callback'],
+    hostsCimd: ['claude.ai', 'claude.com'],
+    agora: () => Date.now() + desloc,
     autenticar: async (email, senha) => {
       const u = usuarios.get(email);
       if (!u || u.senha !== senha) throw new Error('credenciais');
@@ -89,11 +93,13 @@ function pkce() {
   return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') };
 }
 
-async function registrar(redirect = RETORNO): Promise<Response> {
+let ipsUsados = 0;
+/** O SDK limita o cadastro a 20 por hora POR IP: cada cadastro do teste vem de um IP diferente. */
+async function registrar(redirect = RETORNO, metodo = 'none', ip = `10.1.${Math.floor(++ipsUsados / 250)}.${ipsUsados % 250}`): Promise<Response> {
   return fetch(`${base}/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ client_name: 'Claude', redirect_uris: [redirect], token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'] }),
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+    body: JSON.stringify({ client_name: 'Claude', redirect_uris: [redirect], token_endpoint_auth_method: metodo, grant_types: ['authorization_code', 'refresh_token'] }),
   });
 }
 
@@ -113,10 +119,10 @@ async function abrirLogin(clientId: string, challenge: string) {
   return { r, html, pedido };
 }
 
-async function entrar(pedido: string, email: string, senha: string): Promise<Response> {
+async function entrar(pedido: string, email: string, senha: string, ip?: string): Promise<Response> {
   return fetch(`${base}/oauth/entrar`, {
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...(ip ? { 'x-forwarded-for': `1.1.1.1, ${ip}` } : {}) },
     body: new URLSearchParams({ pedido, email, senha }),
     redirect: 'manual',
   });
@@ -208,12 +214,35 @@ test('CIMD: client_id que é a URL do documento publicado pelo claude.ai funcion
 
 // ── os ataques ──
 
-test('registro com retorno pra site de fora é recusado (golpe do link de login)', async () => {
-  for (const ruim of ['https://evil.com/cb', 'https://claude.ai.evil.com/cb', 'http://claude.ai/cb', 'javascript:alert(1)']) {
-    const r = await registrar(ruim);
-    assert.equal(r.status, 400, ruim);
+test('registro: só o retorno EXATO do Claude (ou loopback); o resto é recusado', async () => {
+  for (const ruim of [
+    'https://evil.com/cb',
+    'https://claude.ai.evil.com/api/mcp/auth_callback',
+    'https://www.claude.ai/api/mcp/auth_callback', // subdomínio: host inteiro não basta
+    'https://claude.ai/outra/pagina', // caminho com redirect aberto
+    'http://claude.ai/api/mcp/auth_callback',
+    'javascript:alert(1)',
+  ]) {
+    assert.equal((await registrar(ruim)).status, 400, ruim);
   }
   assert.equal((await registrar('https://claude.ai/api/mcp/auth_callback')).status, 201);
+  assert.equal((await registrar('http://localhost:33418/callback')).status, 201);
+});
+
+test('limite do SDK conta por IP real: um IP abusando não trava os outros', async () => {
+  const abusado = '203.0.113.7';
+  let ultimo = 0;
+  for (let i = 0; i < 21; i++) ultimo = (await registrar(RETORNO, 'none', abusado)).status;
+  assert.equal(ultimo, 429);
+  assert.equal((await registrar(RETORNO, 'none', '203.0.113.8')).status, 201);
+});
+
+test('registro: todo cliente sai PÚBLICO, sem segredo guardado', async () => {
+  const r = await registrar(RETORNO, 'client_secret_post');
+  const c = (await r.json()) as Record<string, unknown>;
+  assert.equal(r.status, 201);
+  assert.equal(c.client_secret, undefined);
+  assert.equal(c.token_endpoint_auth_method, 'none');
 });
 
 test('CIMD de host não confiável é cliente inválido', async () => {
@@ -239,17 +268,49 @@ test('código usado duas vezes: a 2ª falha e derruba o token da 1ª', async () 
   assert.equal(r.status, 401);
 });
 
-test('renovação: troca o par; reusar a antiga derruba a concessão inteira', async () => {
+const statusMcp = async (acesso: unknown) =>
+  (
+    await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${acesso}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    })
+  ).status;
+
+test('renovação: troca o par; retry em até 60 s recebe outro par sem derrubar ninguém', async () => {
   const c = await conectar();
-  const nova = await token({ grant_type: 'refresh_token', refresh_token: String(c.json.refresh_token), client_id: c.clientId });
+  const renovar = () => token({ grant_type: 'refresh_token', refresh_token: String(c.json.refresh_token), client_id: c.clientId });
+  const nova = await renovar();
   assert.equal(nova.status, 200, JSON.stringify(nova.json));
   assert.notEqual(nova.json.access_token, c.json.access_token);
+  // a resposta "se perdeu" e o claude.ai tenta de novo com a mesma renovação
+  const retry = await renovar();
+  assert.equal(retry.status, 200, JSON.stringify(retry.json));
+  assert.equal(await statusMcp(nova.json.access_token), 200);
+  assert.equal(await statusMcp(retry.json.access_token), 200);
+});
 
-  const reuso = await token({ grant_type: 'refresh_token', refresh_token: String(c.json.refresh_token), client_id: c.clientId });
-  assert.equal(reuso.status, 400);
-  // o par novo também caiu: quem tinha a cópia não continua
-  const r = await fetch(`${base}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${nova.json.access_token}`, 'content-type': 'application/json' }, body: '{}' });
-  assert.equal(r.status, 401);
+test('renovação reusada DEPOIS de 60 s: é cópia — derruba a concessão inteira', async () => {
+  const c = await conectar();
+  const renovar = () => token({ grant_type: 'refresh_token', refresh_token: String(c.json.refresh_token), client_id: c.clientId });
+  const nova = await renovar();
+  desloc = 61_000;
+  try {
+    const reuso = await renovar();
+    assert.equal(reuso.status, 400);
+    assert.equal(await statusMcp(nova.json.access_token), 401); // quem tinha a cópia não continua
+  } finally {
+    desloc = 0;
+  }
+});
+
+test('renovação com escopo inválido é recusada SEM queimar o token', async () => {
+  const c = await conectar();
+  const ruim = await token({ grant_type: 'refresh_token', refresh_token: String(c.json.refresh_token), client_id: c.clientId, scope: 'admin' });
+  assert.equal(ruim.status, 400);
+  assert.equal(ruim.json.error, 'invalid_scope');
+  const boa = await token({ grant_type: 'refresh_token', refresh_token: String(c.json.refresh_token), client_id: c.clientId });
+  assert.equal(boa.status, 200, JSON.stringify(boa.json));
 });
 
 test('quem não é SUPER_ADMIN não recebe código', async () => {
@@ -270,6 +331,8 @@ test('senha errada: mensagem genérica, e 8 erros travam o e-mail', async () => 
   for (let i = 0; i < 7; i++) await entrar(pedido!, 'alvo@dd.com', 'errada');
   const travado = await entrar(pedido!, 'alvo@dd.com', 'errada');
   assert.equal(travado.status, 429);
+  // a trava é daquele lugar: a mesma pessoa, de outro IP, ainda consegue tentar
+  assert.equal((await entrar(pedido!, 'alvo@dd.com', 'errada', '10.0.0.9')).status, 401);
 });
 
 test('pedido de login adulterado não passa', async () => {
@@ -312,4 +375,36 @@ test('revogar pelo /revoke corta o acesso', async () => {
 
 test('GET /mcp é 405 (servidor sem sessão)', async () => {
   assert.equal((await fetch(`${base}/mcp`)).status, 405);
+});
+
+test('unidades carregam em segundo plano: falha no banco na subida não deixa o conector pela metade', async () => {
+  const app = express();
+  const outro = app.listen(0, '127.0.0.1');
+  await new Promise((r) => outro.once('listening', r));
+  let tentativas = 0;
+  const r = await montarConectorRemoto(app, {
+    urlPublica: new URL(`http://127.0.0.1:${(outro.address() as AddressInfo).port}`),
+    armazem: armazemEmMemoria(),
+    segredo: 'segredo-de-teste-com-mais-de-32-caracteres',
+    retornosPermitidos: [],
+    hostsCimd: [],
+    autenticar: async () => {
+      throw new Error('x');
+    },
+    buscarUsuario: async () => null,
+    carregarUnidades: async () => {
+      if (++tentativas < 3) throw new Error('banco fora');
+      return new Map([['serra', { slug: 'serra', nome: 'Serra', token: TOKEN_FRANQUIA, fuso: 'America/Sao_Paulo', baseUrl: falsa.url }]]);
+    },
+    tentarDeNovoMs: 10,
+  });
+  try {
+    for (let i = 0; i < 50 && r.contexto.unidades.size === 0; i++) await new Promise((ok) => setTimeout(ok, 10));
+    assert.equal(tentativas, 3);
+    assert.deepEqual([...r.contexto.unidades.keys()], ['serra']);
+  } finally {
+    r.parar();
+    outro.closeAllConnections();
+    await new Promise((ok) => outro.close(ok));
+  }
 });

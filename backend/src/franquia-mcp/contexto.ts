@@ -63,6 +63,9 @@ export function trocarUnidades(ctx: Contexto, unidades: Map<string, Unidade>): v
 
 /** `"serra"`, `["serra","taubate"]` ou `"todas"`. Slug desconhecido é erro, com a lista dos válidos. */
 export function resolverUnidades(ctx: Contexto, alvo: string | string[]): Unidade[] {
+  if (ctx.unidades.size === 0) {
+    throw new ErroDeEntrada('nenhuma unidade disponível agora (a lista ainda está carregando, ou nenhuma tem token). Tente em instantes.');
+  }
   const pedidos = (Array.isArray(alvo) ? alvo : [alvo]).map((s) => s.trim().toLowerCase());
   if (pedidos.includes('todas')) return [...ctx.unidades.values()];
   const desconhecidas = pedidos.filter((s) => !ctx.unidades.has(s));

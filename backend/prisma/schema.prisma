@@ -1891,7 +1891,7 @@ model AutomacaoSimulacao {
 // ── Conector remoto (claude.ai) — OAuth 2.1 do MCP ─────────────────────────
 // Códigos e tokens guardados só como SHA-256: quem lê o banco não consegue usá-los.
 
-/// Clientes OAuth registrados automaticamente (DCR, RFC 7591) pelo claude.ai ou Claude Code.
+/// Clientes OAuth registrados automaticamente (DCR, RFC 7591) pelo claude.ai ou Claude Code. Sempre públicos (sem segredo).
 model McpOauthClient {
   clientId  String   @id @map("client_id")
   dados     Json
@@ -1914,24 +1914,28 @@ model McpOauthCodigo {
   usadoEm       DateTime? @map("usado_em")
   createdAt     DateTime  @default(now()) @map("created_at")
 
+  @@index([expiraEm])
   @@map("mcp_oauth_codigos")
 }
 
 /// Tokens de acesso (1 h) e de renovação (30 dias, trocado a cada uso). `concessaoId` liga a família
 /// inteira: reuso de um token de renovação revoga todos.
 model McpOauthToken {
-  tokenHash   String    @id @map("token_hash")
-  tipo        String // "acesso" | "renovacao"
-  concessaoId String    @map("concessao_id")
-  clientId    String    @map("client_id")
-  userId      String    @map("user_id")
-  escopos     String[]
-  recurso     String?
-  expiraEm    DateTime  @map("expira_em")
-  revogadoEm  DateTime? @map("revogado_em")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  tokenHash     String    @id @map("token_hash")
+  tipo          String // "acesso" | "renovacao"
+  concessaoId   String    @map("concessao_id")
+  clientId      String    @map("client_id")
+  userId        String    @map("user_id")
+  escopos       String[]
+  recurso       String?
+  expiraEm      DateTime  @map("expira_em")
+  revogadoEm    DateTime? @map("revogado_em")
+  /// renovação já trocada por um par novo (vale só como retry por 60 s)
+  substituidoEm DateTime? @map("substituido_em")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   @@index([concessaoId])
+  @@index([expiraEm])
   @@map("mcp_oauth_tokens")
 }
 

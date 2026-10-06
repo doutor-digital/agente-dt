@@ -256,3 +256,8 @@ test('trocarUnidades mantém cache e contador', async () => {
   assert.equal(contexto.contador.resumo().total, antes);
   await assert.rejects(c.buscarPacientes(contexto, { unidade: 'taubate' }), /desconhecida/);
 });
+
+test('sem unidade nenhuma (carregando, ou nenhuma com token): erro claro, não "unidade desconhecida"', async () => {
+  const vazio = criarContexto(new Map(), { intervaloMs: 0 });
+  await assert.rejects(c.buscarPacientes(vazio, { unidade: 'todas' }), /nenhuma unidade disponível agora/);
+});

@@ -42,8 +42,18 @@ const schema = z.object({
   // Conector remoto do claude.ai (MCP com OAuth em /mcp). Sem esta variável, NADA do conector sobe.
   // Valor: a origem pública deste backend, ex. https://agente-vps.doutordigitalconsultoria.com
   MCP_URL_PUBLICA: z.string().url().optional(),
-  // Hosts aceitos como destino do login do conector (e dono de documento de cliente CIMD).
-  MCP_HOSTS_CONFIAVEIS: z
+  // Endereços EXATOS pra onde o login do conector pode devolver o código (além de loopback, do Claude Code).
+  MCP_RETORNOS_PERMITIDOS: z
+    .string()
+    .default('https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((u) => u.trim())
+        .filter(Boolean),
+    ),
+  // Hosts que podem publicar o documento de cliente (CIMD) — o claude.ai publica o dele.
+  MCP_HOSTS_CIMD: z
     .string()
     .default('claude.ai,claude.com')
     .transform((v) =>

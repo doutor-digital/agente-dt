@@ -53,12 +53,13 @@ export async function ligarConectorRemoto(app: Express): Promise<void> {
 }
 
 async function montar(app: Express, urlPublica: string): Promise<void> {
-  const { urlMcp, contexto } = await montarConectorRemoto(app, {
+  const { urlMcp } = await montarConectorRemoto(app, {
     urlPublica: new URL(urlPublica),
     armazem: armazemPrisma,
     // derivado, não o mesmo: um vazamento do pedido de login não vira sessão do console
     segredo: createHmac('sha256', env.SESSION_JWT_SECRET).update('mcp-remoto:pedido-de-login').digest('hex'),
-    hostsConfiaveis: env.MCP_HOSTS_CONFIAVEIS,
+    retornosPermitidos: env.MCP_RETORNOS_PERMITIDOS,
+    hostsCimd: env.MCP_HOSTS_CIMD,
     autenticar: async (email, senha) => comoUsuario(await login(email, senha)),
     buscarUsuario: async (id) => {
       const u = await prisma.user.findUnique({ where: { id } });
@@ -68,5 +69,5 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     franquia: { cliente: { log: (linha) => logger.info({ franquia: linha }, 'mcp-remoto: franquia') } },
     log: logger,
   });
-  logger.info({ url: urlMcp.href, unidades: [...contexto.unidades.keys()] }, 'mcp-remoto: conector no ar');
+  logger.info({ url: urlMcp.href }, 'mcp-remoto: conector no ar (unidades carregando em segundo plano)');
 }

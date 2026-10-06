@@ -34,12 +34,20 @@ export const armazemPrisma: ArmazemOAuth = {
     const t = await prisma.mcpOauthToken.findUnique({ where: { tokenHash } });
     return t ? { ...t, tipo: t.tipo as TokenGuardado['tipo'] } : undefined;
   },
-  async revogarSeAtivo(tokenHash, agora) {
-    const r = await prisma.mcpOauthToken.updateMany({ where: { tokenHash, revogadoEm: null }, data: { revogadoEm: agora } });
+  async substituirSeAtivo(tokenHash, agora) {
+    const r = await prisma.mcpOauthToken.updateMany({
+      where: { tokenHash, revogadoEm: null, substituidoEm: null },
+      data: { substituidoEm: agora },
+    });
     return r.count === 1;
   },
   async revogarConcessao(concessaoId, agora) {
     await prisma.mcpOauthToken.updateMany({ where: { concessaoId, revogadoEm: null }, data: { revogadoEm: agora } });
+  },
+  async limparVencidos(agora) {
+    const DIA = 86_400_000;
+    await prisma.mcpOauthCodigo.deleteMany({ where: { expiraEm: { lt: new Date(agora.getTime() - DIA) } } });
+    await prisma.mcpOauthToken.deleteMany({ where: { expiraEm: { lt: new Date(agora.getTime() - 7 * DIA) } } });
   },
   async auditar(r) {
     await prisma.mcpAuditoria.create({

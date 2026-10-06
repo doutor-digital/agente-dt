@@ -4,6 +4,8 @@
  */
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 
+const DIA = 86_400_000;
+
 export interface CodigoGuardado {
   codigoHash: string;
   clientId: string;
@@ -27,6 +29,8 @@ export interface TokenGuardado {
   recurso: string | null;
   expiraEm: Date;
   revogadoEm: Date | null;
+  /** renovação já trocada por um par novo: vale só como retry por alguns segundos */
+  substituidoEm: Date | null;
 }
 
 export interface RegistroAuditoria {
@@ -48,9 +52,11 @@ export interface ArmazemOAuth {
   usarCodigo(codigoHash: string, agora: Date): Promise<boolean>;
   salvarToken(token: TokenGuardado): Promise<void>;
   lerToken(tokenHash: string): Promise<TokenGuardado | undefined>;
-  /** Revoga SÓ se ainda está ativo. `true` = esta chamada revogou. Atômico (duas trocas simultâneas: uma perde). */
-  revogarSeAtivo(tokenHash: string, agora: Date): Promise<boolean>;
+  /** Marca a renovação como trocada SÓ se ainda estava ativa. `true` = esta chamada trocou. Atômico (duas trocas: uma perde). */
+  substituirSeAtivo(tokenHash: string, agora: Date): Promise<boolean>;
   revogarConcessao(concessaoId: string, agora: Date): Promise<void>;
+  /** Apaga códigos e tokens vencidos há tempo: senão as tabelas crescem pra sempre (2 linhas por hora por usuário). */
+  limparVencidos(agora: Date): Promise<void>;
   auditar(registro: RegistroAuditoria): Promise<void>;
 }
 
@@ -89,14 +95,18 @@ export function armazemEmMemoria(): ArmazemOAuth & { auditoria: RegistroAuditori
       const t = tokens.get(h);
       return t ? { ...t } : undefined;
     },
-    async revogarSeAtivo(h, agora) {
+    async substituirSeAtivo(h, agora) {
       const t = tokens.get(h);
-      if (!t || t.revogadoEm) return false;
-      t.revogadoEm = agora;
+      if (!t || t.revogadoEm || t.substituidoEm) return false;
+      t.substituidoEm = agora;
       return true;
     },
     async revogarConcessao(id, agora) {
       for (const t of tokens.values()) if (t.concessaoId === id && !t.revogadoEm) t.revogadoEm = agora;
+    },
+    async limparVencidos(agora) {
+      for (const [h, c] of codigos) if (c.expiraEm.getTime() < agora.getTime() - DIA) codigos.delete(h);
+      for (const [h, t] of tokens) if (t.expiraEm.getTime() < agora.getTime() - 7 * DIA) tokens.delete(h);
     },
     async auditar(r) {
       auditoria.push(r);

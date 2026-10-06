@@ -1,13 +1,18 @@
 /**
  * O servidor de autorização (OAuth 2.1) do conector remoto. O SDK do MCP cuida do protocolo
- * (rotas, PKCE S256, limite de tentativas); aqui fica o que é nosso:
+ * (rotas, PKCE S256); aqui fica o que é nosso:
  *
  *  - QUEM entra: usuário ativo do console com papel SUPER_ADMIN (v1: só a diretoria);
- *  - PRA ONDE o código volta: só claude.ai / claude.com, ou loopback (Claude Code na máquina).
- *    Sem isso, qualquer um registraria um "cliente" com retorno no próprio site e mandaria o
- *    link de login pra diretoria — o golpe clássico de consentimento;
- *  - códigos (5 min, uso único) e tokens (acesso 1 h, renovação 30 dias trocada a cada uso)
- *    guardados só como SHA-256. Reuso de código ou de renovação derruba a concessão inteira.
+ *  - PRA ONDE o código volta: só os endereços de retorno EXATOS do Claude, ou loopback (Claude
+ *    Code na máquina). Host inteiro não basta: qualquer página em *.claude.ai com redirect
+ *    aberto viraria destino. Sem essa trava, qualquer um registraria um "cliente" com retorno
+ *    no próprio site e mandaria o link de login pra diretoria — o golpe clássico;
+ *  - códigos (5 min, uso único) e tokens (acesso 1 h; renovação 30 dias, trocada a cada uso)
+ *    guardados só como SHA-256. Reuso de código ou de renovação derruba a concessão inteira —
+ *    menos o retry legítimo: a mesma renovação reapresentada em até 60 s (resposta perdida,
+ *    duas chamadas ao mesmo tempo) recebe um par novo em vez de desconectar a diretoria;
+ *  - login com freio por IP+e-mail, por IP e global ANTES do bcrypt, que é caro e roda no
+ *    mesmo processo da Sofia.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Response } from 'express';
@@ -26,11 +31,14 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { ArmazemOAuth, TokenGuardado } from './armazem.js';
 import { BuscadorCimd } from './cimd.js';
+import { JanelaDeContagem } from './limites.js';
 import { paginaDeLogin } from './pagina.js';
 
 export const TTL_CODIGO_MS = 5 * 60_000;
 export const TTL_ACESSO_MS = 60 * 60_000;
 export const TTL_RENOVACAO_MS = 30 * 24 * 60 * 60_000;
+/** quanto tempo a renovação recém-trocada ainda vale como retry (resposta perdida, corrida) */
+export const GRACA_RENOVACAO_MS = 60_000;
 const TTL_PEDIDO = '10m';
 const AUDIENCIA_PEDIDO = 'mcp-pedido-de-login';
 
@@ -51,8 +59,10 @@ export interface DependenciasOAuth {
   segredo: string;
   /** endereço público do MCP (ex. https://agente-vps…/mcp): é o "recurso" dos tokens */
   urlMcp: URL;
-  /** hosts aceitos como destino do código e como dono de documento de cliente (CIMD) */
-  hostsConfiaveis: string[];
+  /** endereços de retorno aceitos, EXATOS (além de loopback) */
+  retornosPermitidos: string[];
+  /** hosts que podem publicar documento de cliente (CIMD) */
+  hostsCimd: string[];
   cimd?: BuscadorCimd;
   agora?: () => number;
 }
@@ -71,18 +81,17 @@ export function podeUsarOConector(u: Usuario | null): u is Usuario {
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-/** Retorno aceito: https num host confiável (ou subdomínio dele), ou http em loopback. */
-export function retornoAceito(uri: string, hostsConfiaveis: string[]): boolean {
+/** Retorno aceito: um dos endereços exatos, ou http em loopback (qualquer porta, RFC 8252). */
+export function retornoAceito(uri: string, permitidos: string[]): boolean {
   let u: URL;
   try {
     u = new URL(uri);
   } catch {
     return false;
   }
-  if (u.hash) return false;
+  if (u.hash || u.username || u.password) return false;
   if (u.protocol === 'http:') return LOOPBACK.has(u.hostname);
-  if (u.protocol !== 'https:') return false;
-  return hostsConfiaveis.some((h) => u.hostname === h || u.hostname.endsWith(`.${h}`));
+  return permitidos.includes(uri);
 }
 
 /** Compara recursos ignorando a barra final: `…/mcp` e `…/mcp/` são o mesmo. */
@@ -100,32 +109,46 @@ interface Pedido {
   rs?: string;
 }
 
+export type ResultadoLogin = { redirecionar: string } | { status: number; html: string; retorno?: string };
+
 export class ProvedorOAuth implements OAuthServerProvider {
   readonly clientsStore: OAuthRegisteredClientsStore;
-  readonly limitador = new Limitador();
+  /** 8 erros por IP+e-mail em 15 min: trava a tentativa daquele lugar, sem travar a diretora no escritório */
+  readonly errosPorIpEmail = new JanelaDeContagem(8, 15 * 60_000);
+  /** 30 erros por IP em 15 min: e-mail aleatório a cada tentativa não escapa */
+  readonly errosPorIp = new JanelaDeContagem(30, 15 * 60_000);
+  /** 60 tentativas por minuto no total: teto do bcrypt, de qualquer origem */
+  readonly tentativasGlobais = new JanelaDeContagem(60, 60_000);
   private agora: () => number;
   private cimd: BuscadorCimd;
 
   constructor(private d: DependenciasOAuth) {
     this.agora = d.agora ?? Date.now;
-    this.cimd = d.cimd ?? new BuscadorCimd(d.hostsConfiaveis);
+    this.cimd = d.cimd ?? new BuscadorCimd(d.hostsCimd);
     this.clientsStore = {
       getClient: async (clientId) => {
-        // CIMD: o client_id é a URL de um documento publicado pelo próprio cliente (o claude.ai publica o seu)
+        // CIMD: o client_id é a URL de um documento publicado pelo próprio cliente (o claude.ai publica o seu).
+        // Fica só com os retornos que aceitamos; sem nenhum, o cliente não existe pra nós.
         if (clientId.startsWith('https://')) {
           const c = await this.cimd.buscar(clientId);
-          return c && c.redirect_uris.every((r) => retornoAceito(r, d.hostsConfiaveis)) ? c : undefined;
+          const aceitos = c?.redirect_uris.filter((r) => retornoAceito(r, d.retornosPermitidos)) ?? [];
+          return c && aceitos.length ? { ...c, redirect_uris: aceitos } : undefined;
         }
         return d.armazem.pegarCliente(clientId);
       },
       registerClient: async (metadados) => {
         // o SDK gera o client_id antes de chamar aqui (clientIdGeneration, padrão ligado); o tipo é que não sabe
-        const cliente = metadados as OAuthClientInformationFull;
-        if (!cliente.client_id) throw new InvalidClientMetadataError('cliente sem client_id');
-        const recusados = cliente.redirect_uris.filter((r) => !retornoAceito(r, d.hostsConfiaveis));
+        const pedido = metadados as OAuthClientInformationFull;
+        if (!pedido.client_id) throw new InvalidClientMetadataError('cliente sem client_id');
+        const recusados = pedido.redirect_uris.filter((r) => !retornoAceito(r, d.retornosPermitidos));
         if (recusados.length) {
           throw new InvalidClientMetadataError(`redirect_uri não permitido neste servidor: ${recusados.join(', ')}`);
         }
+        // Todo cliente vira PÚBLICO (só PKCE, sem segredo): o SDK compara segredo em texto puro, então
+        // guardá-lo seria deixar uma credencial legível no banco. A RFC 7591 permite o servidor ajustar
+        // os metadados; o cliente usa o que voltar.
+        const { client_secret: _s, client_secret_expires_at: _e, ...semSegredo } = pedido;
+        const cliente: OAuthClientInformationFull = { ...semSegredo, token_endpoint_auth_method: 'none' };
         await d.armazem.salvarCliente(cliente);
         return cliente;
       },
@@ -154,9 +177,7 @@ export class ProvedorOAuth implements OAuthServerProvider {
    * O POST da tela. Devolve o que o handler HTTP deve fazer: redirecionar pro cliente com o código,
    * ou mostrar a tela de novo com um erro. Separado do Express pra ser testado direto.
    */
-  async concluirLogin(
-    corpo: { pedido?: unknown; email?: unknown; senha?: unknown },
-  ): Promise<{ redirecionar: string } | { status: number; html: string; retorno?: string }> {
+  async concluirLogin(corpo: { pedido?: unknown; email?: unknown; senha?: unknown }, ip: string): Promise<ResultadoLogin> {
     let p: Pedido;
     try {
       p = jwt.verify(String(corpo.pedido ?? ''), this.d.segredo, { audience: AUDIENCIA_PEDIDO }) as Pedido;
@@ -167,24 +188,31 @@ export class ProvedorOAuth implements OAuthServerProvider {
     if (!cliente || !cliente.redirect_uris.some((r) => redirectUriMatches(p.ru, r))) {
       return { status: 400, html: paginaDeLogin({ erro: 'Cliente desconhecido. Volte ao Claude e conecte de novo.' }) };
     }
-    const tela = (erro: string, status = 401) => ({
+    const tela = (erro: string, status = 401): ResultadoLogin => ({
       status,
       retorno: p.ru,
       html: paginaDeLogin({ pedido: String(corpo.pedido), cliente: cliente.client_name, retorno: p.ru, erro, email: String(corpo.email ?? '') }),
     });
 
     const email = String(corpo.email ?? '').trim().toLowerCase();
-    if (this.limitador.bloqueado(email, this.agora())) return tela('Muitas tentativas. Espere 15 minutos e tente de novo.', 429);
+    const agora = this.agora();
+    const chave = `${ip}|${email}`;
+    // os freios vêm ANTES do bcrypt: é ele que custa CPU
+    if (this.errosPorIpEmail.excedido(chave, agora) || this.errosPorIp.excedido(ip, agora) || this.tentativasGlobais.excedido('*', agora)) {
+      return tela('Muitas tentativas. Espere alguns minutos e tente de novo.', 429);
+    }
+    this.tentativasGlobais.registrar('*', agora);
 
     let usuario: Usuario;
     try {
       usuario = await this.d.autenticar(email, String(corpo.senha ?? ''));
     } catch {
-      this.limitador.falhou(email, this.agora());
+      this.errosPorIpEmail.registrar(chave, agora);
+      this.errosPorIp.registrar(ip, agora);
       return tela('E-mail ou senha incorretos.');
     }
     if (!podeUsarOConector(usuario)) return tela('Este conector é só para a diretoria da Doutor Digital.', 403);
-    this.limitador.limpar(email);
+    this.errosPorIpEmail.limpar(chave);
 
     const codigo = gerar('ddc_');
     await this.d.armazem.salvarCodigo({
@@ -196,7 +224,7 @@ export class ProvedorOAuth implements OAuthServerProvider {
       escopos: p.sc,
       recurso: p.rs ?? null,
       concessaoId: randomUUID(),
-      expiraEm: new Date(this.agora() + TTL_CODIGO_MS),
+      expiraEm: new Date(agora + TTL_CODIGO_MS),
       usadoEm: null,
     });
     const volta = new URL(p.ru);
@@ -223,14 +251,15 @@ export class ProvedorOAuth implements OAuthServerProvider {
     const h = hash(codigo);
     const c = await this.d.armazem.lerCodigo(h);
     if (!c || c.clientId !== client.client_id) throw new InvalidGrantError('código inválido');
-    const agora = new Date(this.agora());
-    if (!(await this.d.armazem.usarCodigo(h, agora))) {
-      // usado de novo: alguém copiou o código. Derruba o que ele já tenha gerado (RFC 6749 §4.1.2)
-      if (c.usadoEm) await this.d.armazem.revogarConcessao(c.concessaoId, agora);
-      throw new InvalidGrantError('código vencido ou já usado');
-    }
+    // confere tudo ANTES de gastar o código: pedido malformado não queima o código bom
     if (redirectUri !== undefined && redirectUri !== c.redirectUri) throw new InvalidGrantError('redirect_uri não confere');
     if (resource && !mesmoRecurso(resource, c.recurso ?? this.d.urlMcp)) throw new InvalidTargetError('recurso não confere');
+    const agora = new Date(this.agora());
+    if (!(await this.d.armazem.usarCodigo(h, agora))) {
+      // relê: se alguém usou (mesmo agora, em paralelo), é cópia do código — derruba o que ele gerou (RFC 6749 §4.1.2)
+      if ((await this.d.armazem.lerCodigo(h))?.usadoEm) await this.d.armazem.revogarConcessao(c.concessaoId, agora);
+      throw new InvalidGrantError('código vencido ou já usado');
+    }
     if (!podeUsarOConector(await this.d.buscarUsuario(c.userId))) throw new InvalidGrantError('usuário sem acesso');
     return this.emitir(c.concessaoId, c.clientId, c.userId, c.escopos, c.recurso);
   }
@@ -246,25 +275,41 @@ export class ProvedorOAuth implements OAuthServerProvider {
     if (!t || t.tipo !== 'renovacao' || t.clientId !== client.client_id) throw new InvalidGrantError('token de renovação inválido');
     const agora = new Date(this.agora());
     if (t.expiraEm <= agora) throw new InvalidGrantError('token de renovação vencido');
-    if (!(await this.d.armazem.revogarSeAtivo(h, agora))) {
-      // já tinha sido trocado: reuso. Quem tem a cópia não pode continuar (OAuth 2.1 §4.3.1)
-      await this.d.armazem.revogarConcessao(t.concessaoId, agora);
-      throw new InvalidGrantError('token de renovação já usado');
-    }
+    // pedido malformado é recusado SEM gastar a renovação
     if (escopos?.some((e) => !t.escopos.includes(e))) throw new InvalidScopeError('escopo maior que o concedido');
     if (resource && !mesmoRecurso(resource, t.recurso ?? this.d.urlMcp)) throw new InvalidTargetError('recurso não confere');
+    const novosEscopos = escopos?.length ? escopos : t.escopos;
+
+    if (t.revogadoEm) {
+      await this.d.armazem.revogarConcessao(t.concessaoId, agora);
+      throw new InvalidGrantError('token de renovação revogado');
+    }
+    if (!t.substituidoEm && (await this.d.armazem.substituirSeAtivo(h, agora))) {
+      return this.renovarPara(t, novosEscopos, agora);
+    }
+    // já tinha sido trocada (agora há pouco, por outra chamada, ou antes)
+    const atual = t.substituidoEm ? t : await this.d.armazem.lerToken(h);
+    if (atual?.substituidoEm && !atual.revogadoEm && agora.getTime() - atual.substituidoEm.getTime() <= GRACA_RENOVACAO_MS) {
+      return this.renovarPara(t, novosEscopos, agora); // retry legítimo
+    }
+    // reuso fora da janela: quem tem a cópia não pode continuar (OAuth 2.1 §4.3.1)
+    await this.d.armazem.revogarConcessao(t.concessaoId, agora);
+    throw new InvalidGrantError('token de renovação já usado');
+  }
+
+  private async renovarPara(t: TokenGuardado, escopos: string[], agora: Date): Promise<OAuthTokens> {
     if (!podeUsarOConector(await this.d.buscarUsuario(t.userId))) {
       await this.d.armazem.revogarConcessao(t.concessaoId, agora);
       throw new InvalidGrantError('usuário sem acesso');
     }
-    return this.emitir(t.concessaoId, t.clientId, t.userId, escopos?.length ? escopos : t.escopos, t.recurso);
+    return this.emitir(t.concessaoId, t.clientId, t.userId, escopos, t.recurso);
   }
 
   private async emitir(concessaoId: string, clientId: string, userId: string, escopos: string[], recurso: string | null): Promise<OAuthTokens> {
     const acesso = gerar('dda_');
     const renovacao = gerar('ddr_');
     const agora = this.agora();
-    const base = { concessaoId, clientId, userId, escopos, recurso, revogadoEm: null };
+    const base = { concessaoId, clientId, userId, escopos, recurso, revogadoEm: null, substituidoEm: null };
     await this.d.armazem.salvarToken({ ...base, tokenHash: hash(acesso), tipo: 'acesso', expiraEm: new Date(agora + TTL_ACESSO_MS) });
     await this.d.armazem.salvarToken({ ...base, tokenHash: hash(renovacao), tipo: 'renovacao', expiraEm: new Date(agora + TTL_RENOVACAO_MS) });
     return {
@@ -279,7 +324,7 @@ export class ProvedorOAuth implements OAuthServerProvider {
   // ── 3. cada chamada ao /mcp ─────────────────────────────────────
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const t: TokenGuardado | undefined = await this.d.armazem.lerToken(hash(token));
+    const t = await this.d.armazem.lerToken(hash(token));
     if (!t || t.tipo !== 'acesso' || t.revogadoEm || t.expiraEm.getTime() <= this.agora()) {
       throw new InvalidTokenError('token inválido ou vencido');
     }
@@ -302,29 +347,6 @@ export class ProvedorOAuth implements OAuthServerProvider {
     // RFC 7009: token de outro cliente ou inexistente → responde ok e não faz nada
     if (!t || t.clientId !== client.client_id) return;
     await this.d.armazem.revogarConcessao(t.concessaoId, new Date(this.agora()));
-  }
-}
-
-/** Erros de login por e-mail: 8 falhas em 15 min travam aquele e-mail por 15 min. */
-class Limitador {
-  private falhas = new Map<string, number[]>();
-  constructor(
-    private max = 8,
-    private janelaMs = 15 * 60_000,
-  ) {}
-  private recentes(email: string, agora: number): number[] {
-    const r = (this.falhas.get(email) ?? []).filter((t) => agora - t < this.janelaMs);
-    this.falhas.set(email, r);
-    return r;
-  }
-  bloqueado(email: string, agora: number): boolean {
-    return this.recentes(email, agora).length >= this.max;
-  }
-  falhou(email: string, agora: number): void {
-    this.recentes(email, agora).push(agora);
-  }
-  limpar(email: string): void {
-    this.falhas.delete(email);
   }
 }
 
@@ -351,4 +373,3 @@ export function enviarPagina(res: Response, status: number, retorno: string | un
     })
     .send(html);
 }
-
