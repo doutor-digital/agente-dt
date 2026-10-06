@@ -145,6 +145,10 @@ describe('decidirPagamentoAntecipado', () => {
     assert.equal(decidirPagamentoAntecipado({ ...base, valorAtual: '  ' }).valor, 'Não');
   });
 
+  it('sem sinal e sem conseguir ler o cartão: não mexe', () => {
+    assert.equal(decidirPagamentoAntecipado({ ...base, valorAtual: undefined }).valor, null);
+  });
+
   it('"¤ Pagamento antecipado" continua sem contar como prova para o follow-up', () => {
     // O campo que este módulo escreve NÃO é o que a régua lê como pagamento feito.
     assert.equal(pagouOAntecipado([{ field_name: '¤ Pagamento antecipado', values: [{ value: 'Sim' }] }]), false);

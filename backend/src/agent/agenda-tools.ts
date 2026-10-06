@@ -1392,7 +1392,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             pagamentoComprovado: Boolean(fresca.spineBookingRequiresPayment) && !args.remarcando,
             formaPagamento: args.formaPagamento,
             escolhaSalva,
-            valorAtual: valorDoCampo(leadAtual, idPagamento),
+            valorAtual: leadAtual ? valorDoCampo(leadAtual, idPagamento) : undefined,
           });
 
           const carimbos: Array<{ campo: string; id: number | null; fn: (id: number) => Promise<void> }> = [

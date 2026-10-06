@@ -159,15 +159,23 @@ export async function carimbarQuenteAoAgendar(args: {
     gravouQuente = true;
   }
 
+  // A data é secundária: se ela falhar, o Quente já gravado não vira "falha".
   let carimbouData = false;
+  try {
+    carimbouData = await carimbarDataDaQualificacao(unit, kommo, leadId, lead);
+  } catch {
+    return { campo: campo.nome, gravouQuente, carimbouData: false, motivo: 'falhou ao carimbar a Data da qualificação' };
+  }
+  return { campo: campo.nome, gravouQuente, carimbouData };
+}
+
+async function carimbarDataDaQualificacao(unit: Unit, kommo: KommoClient, leadId: number, lead: KommoLead | null): Promise<boolean> {
   const esquema = await esquemaDaUnidade(unit, kommo);
   const idData = esquema.campoPorNome(CAMPOS_DIGITAL.DATA_QUALIFICACAO);
-  if (idData !== null && primeiroValor(lead?.custom_fields_values, idData) === null) {
-    await kommo.setLeadCustomFieldValue(leadId, idData, 'date', new Date().toISOString());
-    carimbouData = true;
-  }
-
-  return { campo: campo.nome, gravouQuente, carimbouData };
+  // Sem o cartão lido não dá pra saber se já tem data — não arrisca sobrescrever.
+  if (idData === null || !lead || primeiroValor(lead.custom_fields_values, idData) !== null) return false;
+  await kommo.setLeadCustomFieldValue(leadId, idData, 'date', new Date().toISOString());
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,8 +205,9 @@ export interface DecisaoPagamento {
  *  3. A forma que o paciente escolheu — `formaPagamento` da própria chamada, ou, na
  *     remarcação (que não traz a forma), a escolha guardada na conversa:
  *     pix_antecipado → Sim; na_clinica → Não.
- *  4. Sem sinal: se o cartão já tem valor, não mexe (remarcação não apaga o que a
- *     SDR/IA gravou); se está vazio, Não. Errar para Não é o lado seguro: Sim sem
+ *  4. Sem sinal: se o cartão já tem valor — ou não deu pra ler o cartão
+ *     (`valorAtual` undefined) — não mexe (remarcação não apaga o que a SDR/IA
+ *     gravou); se está vazio (null), Não. Errar para Não é o lado seguro: Sim sem
  *     pagamento é o que infla o "pagamento antecipado" do relatório.
  */
 export function decidirPagamentoAntecipado(s: {
@@ -206,6 +215,7 @@ export function decidirPagamentoAntecipado(s: {
   pagamentoComprovado: boolean;
   formaPagamento?: string | null;
   escolhaSalva?: string | null;
+  /** Valor no cartão: null = vazio; undefined = não deu pra ler o cartão. */
   valorAtual?: unknown;
 }): DecisaoPagamento {
   if (s.ehRetorno) return { valor: 'Não', porque: 'retorno pós-tratamento' };
@@ -215,7 +225,8 @@ export function decidirPagamentoAntecipado(s: {
   if (forma === 'pix_antecipado') return { valor: 'Sim', porque: 'paciente escolheu Pix antecipado' };
   if (forma === 'na_clinica') return { valor: 'Não', porque: 'paciente escolheu pagar na clínica' };
 
-  const temValor = s.valorAtual !== undefined && s.valorAtual !== null && String(s.valorAtual).trim() !== '';
+  if (s.valorAtual === undefined) return { valor: null, porque: 'sem escolha registrada e cartão não lido; não mexe' };
+  const temValor = s.valorAtual !== null && String(s.valorAtual).trim() !== '';
   if (temValor) return { valor: null, porque: 'sem escolha registrada; mantém o que já está no cartão' };
   return { valor: 'Não', porque: 'sem sinal de pagamento antecipado' };
 }
