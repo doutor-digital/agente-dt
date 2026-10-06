@@ -545,18 +545,20 @@ export function escolherPaciente(candidatos: ClienteFranquia[], fone: string, al
 
 /**
  * `fone`: telefone já conhecido (a Sofia tem o da conversa) — dispensa ir ao Kommo buscar o do contato.
- * `ignorarNegativo`: refaz a busca mesmo com "não achei" no cache; a Sofia precisa ver o cadastro que a
- * recepção acabou de fazer, e o negativo daqui vale 6 h.
+ * `soPorTelefone` (a Sofia): só aceita quem bate o telefone, ignora o "não achei" do cache e nunca grava
+ * negativo nele — o nome do WhatsApp ("Maria") é largo demais para casar por nome, e um negativo dela
+ * travaria por 6 h o casamento por nome do sincronizador. `maxTermos` corta as buscas.
  */
 export interface ExtraDaBusca {
   kommo?: KommoClient;
   contatoId?: number | null;
   fone?: string | null;
-  ignorarNegativo?: boolean;
+  soPorTelefone?: boolean;
+  maxTermos?: number;
 }
 
 async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDaBusca): Promise<number | null> {
-  const termos = termosDeBuscaDoNome(nome);
+  const termos = termosDeBuscaDoNome(nome).slice(0, extra?.maxTermos ?? MAX_TERMOS_DE_BUSCA);
   if (termos.length === 0) return null;
   // telefone do contato do Kommo × whatsapp da franquia: casa mesmo quando a SDR escreveu o nome diferente
   let fone = chaveTelefone(extra?.fone);
@@ -567,6 +569,7 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDa
       fone = '';
     }
   }
+  if (extra?.soPorTelefone && !fone) return null;
   const alvos = new Set(termosDeBuscaDoNome(nome).map(normalizar));
   // acumula os candidatos de TODOS os termos: parar no 1º que devolve alguém escondia o paciente
   // quando o cartão tinha dois nomes (o João achou isso no "MARIA DA PENHA - ALEXANDRO SANT ANA")
@@ -582,6 +585,7 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDa
     if (porFone().length === 1) return porFone()[0].idClient;
   }
   const escolha = escolherPaciente([...vistos.values()], fone, alvos);
+  if (extra?.soPorTelefone && escolha.tipo === 'achou' && escolha.por !== 'telefone') return null;
   if (escolha.tipo === 'achou') return escolha.idClient;
   if (escolha.tipo === 'desempatar') return escolherEntreDuplicados(unit, escolha.candidatos);
   return null;
@@ -596,9 +600,9 @@ export async function idClientDoLead(unit: Unit, leadId: number, nome: string | 
   if (link?.spineIdClient) return link.spineIdClient;
   const chave = `${unit.id}:${leadId}`;
   const hit = cacheIdClient.get(chave);
-  if (hit && hit.expiraEm > Date.now() && !(extra?.ignorarNegativo && hit.idClient === null)) return hit.idClient;
+  if (hit && hit.expiraEm > Date.now() && !(extra?.soPorTelefone && hit.idClient === null)) return hit.idClient;
   const idClient = await procurarPaciente(unit, nome, extra);
-  cacheIdClient.set(chave, { idClient, expiraEm: Date.now() + CACHE_LEAD_MS });
+  if (idClient !== null || !extra?.soPorTelefone) cacheIdClient.set(chave, { idClient, expiraEm: Date.now() + CACHE_LEAD_MS });
   return idClient;
 }
 

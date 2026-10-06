@@ -161,6 +161,30 @@ export async function bumpLeadMemoryTurn(
   });
 }
 
+/**
+ * A linha que o resumidor recebe sobre a consulta que a IA marcou. Procura também nas unidades que
+ * dividem o mesmo Kommo (Petrópolis/Caxias, resgate/comercial): a memória é lida delas também.
+ */
+async function consultaDaIaParaOResumo(unit: Unit, leadId: number, hojeISO: string): Promise<string> {
+  try {
+    const irmas = unit.kommoSubdomain
+      ? (await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
+      : [];
+    const link = await prisma.spineLeadLink.findFirst({
+      where: { unitId: { in: [...new Set([unit.id, ...irmas])] }, kommoLeadId: leadId, spineIdSchedule: { not: null } },
+      orderBy: { updatedAt: 'desc' },
+      select: { agendadoPara: true },
+    });
+    if (!link) return 'nenhuma — a equipe pode ter marcado por fora; não afirme nem negue';
+    if (link.agendadoPara && link.agendadoPara.slice(0, 10) < hojeISO) {
+      return 'houve uma, e a data já passou — não escreva que ele tem consulta marcada';
+    }
+    return 'sim';
+  } catch {
+    return 'desconhecida — não afirme nem negue consulta marcada';
+  }
+}
+
 export function scheduleLeadMemoryUpdate(args: {
   unit: Unit;
   leadId: number;
@@ -209,10 +233,9 @@ async function runLeadMemoryUpdate(args: {
   }
 
   const factsCurrent = (after.facts as LeadMemoryFacts) ?? {};
-  const hoje = dataPorExtenso(dataLocalISO(new Date(), fusoDaUnidade(unit)));
-  const link = await prisma.spineLeadLink
-    .findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdSchedule: { not: null } }, select: { id: true } })
-    .catch(() => null);
+  const hojeISO = dataLocalISO(new Date(), fusoDaUnidade(unit));
+  const hoje = dataPorExtenso(hojeISO);
+  const consultaNoSistema = await consultaDaIaParaOResumo(unit, leadId, hojeISO);
   const sysPrompt = [
     'Você é um assistente de CRM que mantém memória de longo prazo dos pacientes.',
     'A cada N turnos recebe a memória atual + as últimas mensagens da conversa.',
@@ -256,7 +279,7 @@ async function runLeadMemoryUpdate(args: {
 
   const userPrompt = [
     `HOJE: ${hoje}`,
-    `CONSULTA NO SISTEMA (marcada pela IA): ${link ? 'sim' : 'nenhuma — a equipe pode ter marcado por fora; não afirme nem negue'}`,
+    `CONSULTA NO SISTEMA (marcada pela IA): ${consultaNoSistema}`,
     '',
     '# MEMÓRIA ATUAL',
     `summary: ${after.summary || '(vazio)'}`,

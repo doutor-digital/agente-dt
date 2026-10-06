@@ -45,7 +45,7 @@ test('paciente na franquia: o bloco do Paulo proíbe oferecer avaliação e repe
   const p = resumirPaciente(365001, HISTORICO_PAULO, [{ idStatus: 45, statusName: 'Em andamento' }], AGORA_PAULO);
   const bloco = renderPacienteNaFranquia(p);
   assert.match(bloco, /<consulta_do_paciente>/);
-  assert.match(bloco, /JÁ ESTÁ EM TRATAMENTO/);
+  assert.match(bloco, /JÁ TEM TRATAMENTO/);
   assert.match(bloco, /avaliação em 05\/10\/2026 às 19:30/);
   assert.match(bloco, /sessão de tratamento em \*\*08\/10\/2026 às 18:00\*\*/);
   assert.match(bloco, /NÃO ofereça avaliação/);
@@ -88,4 +88,12 @@ test('paciente na franquia: sem nada a dizer, sem bloco', () => {
 test('paciente na franquia: tratamento finalizado não é "em tratamento"', () => {
   const p = resumirPaciente(1, [], [{ idStatus: 46, statusName: 'Finalizado' }], AGORA_PAULO);
   assert.equal(p.emTratamento, false);
+});
+
+test('paciente na franquia: avaliação atendida há mais de 90 dias não trava a avaliação nova', () => {
+  const antiga = resumirPaciente(1, [ag('2024-05-10', '10:00', SPINE_STATUS.ATENDIDO, 'AVALIACAO')], [{ idStatus: 46, statusName: 'Finalizado' }], AGORA_PAULO);
+  assert.equal(antiga.ultimaConsultaAtendida, null, 'ex-paciente de 2024 com dor nova é lead de novo');
+  assert.equal(renderPacienteNaFranquia(antiga), '');
+  const recente = resumirPaciente(1, [ag('2026-07-10', '10:00', SPINE_STATUS.ATENDIDO, 'AVALIACAO')], [], AGORA_PAULO);
+  assert.equal(recente.ultimaConsultaAtendida?.quando, '2026-07-10T10:00', '88 dias atrás ainda conta');
 });
