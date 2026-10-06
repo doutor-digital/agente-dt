@@ -320,14 +320,105 @@ export async function confirmarNaFranquia(
   }
 }
 
+/**
+ * REENTREGA DO KOMMO: o mesmo "1" chegando de novo, minutos depois.
+ *
+ * Caso de 06/10/2026 (Açailândia, lead 28088906): o paciente respondeu "1" às 10:43, a confirmação
+ * foi tratada em código, e às 11:06 a Sofia mandou "Não entendi muito bem — você quis dizer alguma
+ * coisa sobre a consulta…?" sem nenhuma mensagem nova no chat. O contador de mensagens provou que
+ * entrou mais uma mensagem do paciente às ~11:05. Como `confirmacaoD1Resposta` já estava
+ * preenchido, a repetição não era mais "resposta à véspera" e caía na IA, que não tinha contexto.
+ *
+ * O Kommo reenvia o webhook que não respondeu em 2 s (5 min, +15, +15, +1 h). Além de responder
+ * cedo e de segurar o id da mensagem por mais tempo (dedup-cache), aqui fica a última defesa: a
+ * MESMA resposta, idêntica, repetida pouco depois de já ter sido tratada, não vai para a IA.
+ */
+export const JANELA_REPETICAO_D1_MS = 2 * 3600_000;
+
+function normalizarResposta(texto: string): string {
+  return texto.trim().toLowerCase().replace(/[!.…\s]+$/g, '').replace(/\s+/g, ' ');
+}
+
+/**
+ * A mensagem é a repetição exata de uma resposta à véspera que já foi tratada?
+ *
+ * Exige as três coisas: a véspera já foi respondida (confirmou/remarcar), o texto novo tem o mesmo
+ * sentido dessa resposta, e existe mensagem ANTERIOR do paciente com o mesmo texto, depois da
+ * pergunta e há menos de `JANELA_REPETICAO_D1_MS`. Qualquer texto diferente ("qual o endereço?",
+ * "1, mas posso chegar 13h30?") segue para a IA normalmente.
+ */
+export function ehRepeticaoDaRespostaD1(args: {
+  conv: Pick<Conversation, 'confirmacaoD1EnviadaEm' | 'confirmacaoD1Resposta'>;
+  texto: string;
+  /** Mensagens do PACIENTE anteriores a esta (sem a atual). */
+  anteriores: Array<{ content: string; createdAt: Date }>;
+  agora?: Date;
+}): boolean {
+  const { conv, texto, anteriores } = args;
+  const agora = args.agora ?? new Date();
+  const ja = conv.confirmacaoD1Resposta;
+  if (!conv.confirmacaoD1EnviadaEm || (ja !== 'confirmou' && ja !== 'remarcar')) return false;
+  if (classificarRespostaD1(texto) !== ja) return false;
+  const alvo = normalizarResposta(texto);
+  if (!alvo) return false;
+  const desde = conv.confirmacaoD1EnviadaEm.getTime();
+  return anteriores.some(
+    (m) =>
+      m.createdAt.getTime() >= desde &&
+      agora.getTime() - m.createdAt.getTime() <= JANELA_REPETICAO_D1_MS &&
+      normalizarResposta(m.content) === alvo,
+  );
+}
+
+/**
+ * Teste barato e SÍNCRONO: esta mensagem pode ser tratada pela confirmação de véspera (resposta
+ * nova ou repetição)? Serve para o webhook responder 200 ao Kommo ANTES do trabalho pesado — o
+ * Kommo dá 2 s e reenvia quem passa disso.
+ */
+export function podeSerRespostaD1(
+  conv: Pick<Conversation, 'confirmacaoD1EnviadaEm' | 'confirmacaoD1Resposta'>,
+  texto: string,
+  agora: Date = new Date(),
+): boolean {
+  if (!conv.confirmacaoD1EnviadaEm) return false;
+  const idade = agora.getTime() - conv.confirmacaoD1EnviadaEm.getTime();
+  if (idade > JANELA_RESPOSTA_D1_MS + JANELA_REPETICAO_D1_MS) return false;
+  const resposta = classificarRespostaD1(texto);
+  if (!resposta) return false;
+  if (!conv.confirmacaoD1Resposta) return idade <= JANELA_RESPOSTA_D1_MS;
+  return conv.confirmacaoD1Resposta === resposta;
+}
+
+export type ResultadoRespostaD1 = RespostaD1 | 'repetida';
+
 export async function tratarRespostaD1(args: {
   unit: Unit;
   leadId: number;
   texto: string;
   conv: Conversation;
   kommo: KommoClient;
-}): Promise<RespostaD1 | null> {
-  const { unit, leadId, texto, conv, kommo } = args;
+  /** Trace desta mensagem: a mensagem atual já foi gravada com ele e não conta como "anterior". */
+  traceId?: string;
+}): Promise<ResultadoRespostaD1 | null> {
+  const { unit, leadId, texto, conv, kommo, traceId } = args;
+  if (conv.confirmacaoD1Resposta && traceId && conv.confirmacaoD1EnviadaEm) {
+    const anteriores = await prisma.message.findMany({
+      where: {
+        conversationId: conv.id,
+        role: 'user',
+        OR: [{ traceId: null }, { traceId: { not: traceId } }],
+        createdAt: { gte: conv.confirmacaoD1EnviadaEm },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      select: { content: true, createdAt: true },
+    });
+    if (ehRepeticaoDaRespostaD1({ conv, texto, anteriores })) {
+      logger.info({ unit: unit.slug, leadId, resposta: conv.confirmacaoD1Resposta }, 'confirmação D-1: repetição da resposta já tratada — sem IA');
+      return 'repetida';
+    }
+    return null;
+  }
   if (!conv.confirmacaoD1EnviadaEm || conv.confirmacaoD1Resposta) return null;
   if (Date.now() - conv.confirmacaoD1EnviadaEm.getTime() > JANELA_RESPOSTA_D1_MS) return null;
   const resposta = classificarRespostaD1(texto);
