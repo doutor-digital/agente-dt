@@ -6,7 +6,7 @@ import { ErroSpine } from './cliente.js';
 import { type Contexto, type Cotas, comCache, conferirTamanho, porUnidade, resolverUnidades } from './contexto.js';
 import type { Unidade } from './unidade.js';
 import { diaLocal, normalizarItem } from './normalizar.js';
-import { lerPagina, lerTudo } from './paginar.js';
+import { type Lidos, lerPagina, lerTudo } from './paginar.js';
 import { OrcamentoEsgotado, TTL } from './ritmo.js';
 import { ErroDeEntrada, type Fatia, LINHAS_POR_PAGINA, fatiarPeriodo, somarDias, validarData, validarTexto } from './travas.js';
 
@@ -246,6 +246,67 @@ export function buscarLeads(
 
 // ───────────────────────── pacientes ─────────────────────────
 
+/**
+ * Pacientes cadastrados a partir de `desde`, sem ler o cadastro inteiro (não cabe no teto numa
+ * unidade grande). O guia (§6) diz "ordenação fixa: created DESC" — MAS a API real devolve do mais
+ * ANTIGO pro mais novo (medido em Marabá, 06/10/2026: o relatório leu as 20 páginas do teto, todas
+ * de cadastros antigos, e nenhum lead de setembro casou). Por isso a ordem é DESCOBERTA na 1ª
+ * página, e a leitura vai pelo lado certo:
+ *  - decrescente: da 1ª página pra frente, até passar da data;
+ *  - crescente: da ÚLTIMA página pra trás, até passar da data.
+ * Sem ordem reconhecível (página com 1 item, datas faltando), lê pra frente até o teto e avisa.
+ */
+async function lerPacientesDesde(
+  buscar: (pagina: number) => Promise<unknown>,
+  criado: (item: unknown) => string | null,
+  desde: string,
+  tetoPaginas: number,
+): Promise<Lidos> {
+  const primeira = lerPagina(await buscar(1));
+  const total = primeira.totalPaginas ?? (primeira.total !== null ? Math.max(1, Math.ceil(primeira.total / LINHAS_POR_PAGINA)) : null);
+  const datas = primeira.itens.map(criado).filter((d): d is string => d !== null);
+  const crescente = datas.length >= 2 && datas[0]! < datas[datas.length - 1]!;
+  const decrescente = datas.length >= 2 && datas[0]! > datas[datas.length - 1]!;
+  const passou = (itens: unknown[], oMaisAntigo: unknown) => itens.length > 0 && (criado(oMaisAntigo) ?? '9999') < desde;
+
+  if (total === null || total <= 1 || (!crescente && !decrescente)) {
+    // uma página só, ou ordem que não dá pra afirmar: lê pra frente (o teto avisa se cortar)
+    if (total !== null && total <= 1) return { itens: primeira.itens, totalInformado: primeira.total, paginas: 1, truncado: false };
+    return lerTudo(async (p) => (p === 1 ? { data: { data: primeira.itens, total: primeira.total, totalPages: total } } : buscar(p)), tetoPaginas, LINHAS_POR_PAGINA);
+  }
+
+  if (decrescente) {
+    if (passou(primeira.itens, primeira.itens[primeira.itens.length - 1])) return { itens: primeira.itens, totalInformado: primeira.total, paginas: 1, truncado: false };
+    return lerTudo(
+      async (p) => (p === 1 ? { data: { data: primeira.itens, total: primeira.total, totalPages: total } } : buscar(p)),
+      tetoPaginas,
+      LINHAS_POR_PAGINA,
+      (itens) => passou(itens, itens[itens.length - 1]),
+    );
+  }
+
+  // crescente: os mais novos estão no fim
+  const itens: unknown[] = [];
+  let lidas = 1;
+  for (let p = total; p >= 2; p--) {
+    if (lidas >= tetoPaginas) {
+      return { itens, totalInformado: primeira.total, paginas: lidas, truncado: true, motivoTruncado: `parou no teto de ${tetoPaginas} páginas lendo de trás pra frente (cadastros desde ${desde})` };
+    }
+    let lida;
+    try {
+      lida = lerPagina(await buscar(p));
+    } catch (e) {
+      if (e instanceof OrcamentoEsgotado) return { itens, totalInformado: primeira.total, paginas: lidas, truncado: true, motivoTruncado: e.message };
+      throw e;
+    }
+    lidas++;
+    itens.push(...lida.itens);
+    if (passou(lida.itens, lida.itens[0])) return { itens, totalInformado: primeira.total, paginas: lidas, truncado: false };
+  }
+  // chegou na 1ª página: ela também entra
+  return { itens: [...itens, ...primeira.itens], totalInformado: primeira.total, paginas: lidas, truncado: false };
+}
+
 export async function buscarPacientes(
   ctx: Contexto,
   args: { unidade: Alvo; nome?: string; idClient?: number; idStatus?: number; criadosDesde?: string } & Saida,
@@ -258,24 +319,18 @@ export async function buscarPacientes(
 
   const res = await porUnidade(ctx, unidades, async (u, cliente) => {
     const orcamento = cotas.nova();
-    // O guia (§6) diz "ordenação fixa: created DESC". Com `criadosDesde`, a leitura para na primeira
-    // página que já passou da data — o cadastro inteiro de uma unidade grande não cabe no teto. Mas
-    // só para se a PÁGINA confirma a ordem: se a franquia mudar a ordenação, lê tudo em vez de cortar calado.
     const criado = (item: unknown) => diaLocal((item as Record<string, unknown>)?.created, u.fuso);
     const antigo = (item: unknown) => {
       const dia = criado(item);
       return !!args.criadosDesde && dia !== null && dia < args.criadosDesde;
     };
-    const emOrdemDecrescente = (pagina: unknown[]) =>
-      pagina.every((it, i) => i === 0 || (criado(pagina[i - 1]) ?? '') >= (criado(it) ?? ''));
+    const pagina = (page: number) =>
+      cliente.chamar('POST', '/api/clients/search', { ...filtros, pagination: { page, rowsPerPage: LINHAS_POR_PAGINA } }, orcamento);
     const chave = chaveCache('pacientes', u.slug, { ...filtros, desde: args.criadosDesde });
     const { valor, doCache } = await comCache(ctx, chave, TTL.busca, async (): Promise<Lista> => {
-      const lidos = await lerTudo(
-        (page) => cliente.chamar('POST', '/api/clients/search', { ...filtros, pagination: { page, rowsPerPage: LINHAS_POR_PAGINA } }, orcamento),
-        ctx.tetoPaginas,
-        LINHAS_POR_PAGINA,
-        args.criadosDesde ? (pagina) => pagina.length > 0 && emOrdemDecrescente(pagina) && antigo(pagina[pagina.length - 1]) : undefined,
-      );
+      const lidos = args.criadosDesde
+        ? await lerPacientesDesde(pagina, criado, args.criadosDesde, ctx.tetoPaginas)
+        : await lerTudo(pagina, ctx.tetoPaginas, LINHAS_POR_PAGINA);
       return { ...lidos, itens: lidos.itens.filter((i) => !antigo(i)).map((i) => normalizarItem(i, u.fuso)) };
     });
     return { ...formatarLista(valor, args, padrao, 'created', u.fuso), ...(doCache ? { doCache: true } : {}) };

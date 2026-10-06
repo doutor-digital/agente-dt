@@ -18,8 +18,8 @@ export function paginaDeLogin(o: { pedido?: string; cliente?: string; retorno?: 
   const quem = esc(o.cliente || 'Um aplicativo');
   const formulario = o.pedido
     ? `
-      <p class="pedido"><strong>${quem}</strong> quer ler, em seu nome, os dados da franquia: pacientes,
-      agenda, tratamentos e indicadores das unidades. Nada é alterado.</p>
+      <p class="pedido"><strong>${quem}</strong> quer ler, em seu nome, os dados das unidades: o CRM da
+      franquia (pacientes, agenda, tratamentos, indicadores) e o Kommo (leads e funis). Nada é alterado.</p>
       ${host ? `<p class="destino">O acesso será entregue a <strong>${esc(host)}</strong></p>` : ''}
       <form method="post" action="/oauth/entrar" autocomplete="on">
         <input type="hidden" name="pedido" value="${esc(o.pedido)}">

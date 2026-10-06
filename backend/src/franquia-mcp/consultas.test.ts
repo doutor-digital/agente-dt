@@ -295,7 +295,7 @@ test('pacientes criadosDesde: para de paginar ao passar da data e só devolve os
   }
 });
 
-test('pacientes criadosDesde: se a franquia NÃO devolver em ordem decrescente, lê tudo em vez de cortar calado', async () => {
+test('pacientes criadosDesde: em ordem CRESCENTE (a API real, ao contrário do guia), lê da última página pra trás', async () => {
   const fora = Array.from({ length: 150 }, (_, i) => ({
     idClient: i + 1,
     name: `P${i}`,
@@ -310,8 +310,32 @@ test('pacientes criadosDesde: se a franquia NÃO devolver em ordem decrescente, 
       criadosDesde: '2026-05-01',
       maxItens: 1000,
     })) as R;
-    assert.equal(outra.pedidos.length, 2); // leu as duas páginas
+    assert.equal(outra.pedidos.length, 2); // a 1ª (pra descobrir a ordem) e a última
     assert.equal(r.porUnidade.serra.total, 150 - 120); // de 01/05 em diante: os 30 últimos
+  } finally {
+    await outra.fechar();
+  }
+});
+
+test('pacientes criadosDesde, caso Marabá: 2.500 cadastros em ordem crescente — acha os novos sem ler o cadastro inteiro', async () => {
+  // um cadastro por dia desde 2019: os de setembro/2026 estão nas ÚLTIMAS páginas
+  const base = Date.parse('2019-09-01T15:00:00Z');
+  const cadastro = Array.from({ length: 2500 }, (_, i) => ({ idClient: i + 1, name: `P${i}`, created: new Date(base + i * 86_400_000).toISOString() }));
+  const outra = await subirFranquiaFalsa({ [T_SERRA]: { pacientes: cadastro } });
+  try {
+    const unidades = new Map<string, Unidade>([['serra', { slug: 'serra', nome: 'Serra', token: T_SERRA, fuso: 'America/Sao_Paulo', baseUrl: outra.url }]]);
+    const desde = '2026-03-05';
+    const esperado = cadastro.filter((p) => p.created.slice(0, 10) >= desde).length;
+    const r = (await c.buscarPacientes(criarContexto(unidades, { intervaloMs: 0, cliente: { log: () => {} } }), {
+      unidade: 'serra',
+      criadosDesde: desde,
+      maxItens: 100000,
+    })) as R;
+    assert.equal(r.porUnidade.serra.total, esperado);
+    assert.equal(r.porUnidade.serra.truncado, undefined);
+    const paginas = outra.pedidos.map((p) => (p.corpo.pagination as { page: number }).page);
+    assert.deepEqual(paginas.slice(0, 2), [1, 25]); // descobre a ordem na 1ª e pula pra última
+    assert.ok(paginas.length <= 5, `leu ${paginas.length} páginas`);
   } finally {
     await outra.fechar();
   }
