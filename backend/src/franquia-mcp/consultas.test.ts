@@ -232,7 +232,7 @@ test('dados gerais, listar_unidades sem token, e unidade desconhecida', async ()
   const r = (await c.dadosGerais(ctx(), { unidade: 'serra', lista: 'sources' })) as R;
   assert.equal(r.porUnidade.serra.total, 2);
   assert.ok(!JSON.stringify(c.listarUnidades(ctx())).includes('token-'));
-  await assert.rejects(c.buscarPacientes(ctx(), { unidade: 'xpto' }), /unidade desconhecida: xpto.*Válidas: serra/);
+  await assert.rejects(c.buscarPacientes(ctx(), { unidade: 'xpto' }), /unidade desconhecida ou ambígua: xpto.*Válidas: serra/);
 });
 
 test('checar_conexao: token por unidade e consumo medido', async () => {
@@ -260,4 +260,14 @@ test('trocarUnidades mantém cache e contador', async () => {
 test('sem unidade nenhuma (carregando, ou nenhuma com token): erro claro, não "unidade desconhecida"', async () => {
   const vazio = criarContexto(new Map(), { intervaloMs: 0 });
   await assert.rejects(c.buscarPacientes(vazio, { unidade: 'todas' }), /nenhuma unidade disponível agora/);
+});
+
+test('nome curto acha o slug longo; ambíguo é recusado', async () => {
+  const unidades = new Map<string, Unidade>(
+    ['doutor-hernia-serra', 'doutor-hernia-canaa', 'lab-canaa', 'canaa-resgate'].map((slug) => [slug, { slug, nome: slug, token: T_SERRA, fuso: 'America/Sao_Paulo', baseUrl: falsa.url }]),
+  );
+  const contexto = criarContexto(unidades, { intervaloMs: 0, cliente: { log: () => {} } });
+  const r = (await c.buscarPacientes(contexto, { unidade: ['serra', 'doutor-hernia-serra'] })) as R;
+  assert.deepEqual(Object.keys(r.porUnidade), ['doutor-hernia-serra']); // o mesmo pedido duas vezes conta uma
+  await assert.rejects(c.buscarPacientes(contexto, { unidade: 'canaa' }), /ambígua: canaa/); // doutor-hernia-canaa E lab-canaa
 });
