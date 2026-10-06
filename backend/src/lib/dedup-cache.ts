@@ -26,24 +26,71 @@ import { logger } from './logger.js';
 const TTL_MS = 10 * 60 * 1000;
 const MAX_MEMORIA = 10_000;
 
+/**
+ * Prazo para mensagens que chegam pelo webhook de CONTA do Kommo.
+ *
+ * O Kommo dá 2 s para o webhook responder e reenvia quem passa disso: 5 min, +15, +15 e +1 h
+ * (≈ 95 min depois da primeira tentativa). Com os 10 min de sempre, a reentrega de 20 min já não
+ * era reconhecida e a mesma mensagem era processada de novo — foi o "1" da confirmação de véspera
+ * que voltou como mensagem nova e fez a Sofia mandar "Não entendi…" (Açailândia, 06/10/2026).
+ *
+ * Custo: uma linha de ~60 bytes por mensagem recebida em `message_claims`, que agora é limpa
+ * periodicamente (ver `limparSeVencido`); e no máximo `MAX_MEMORIA` chaves no atalho em memória.
+ */
+export const TTL_REENTREGA_KOMMO_MS = 2 * 60 * 60 * 1000;
+
+/** De quanto em quanto tempo apagar do banco as marcas vencidas. */
+const LIMPEZA_MS = 10 * 60 * 1000;
+let ultimaLimpeza = 0;
+
 /** Atalho por processo. Só diz "já vi" — a autoridade é o banco. */
 const memoria = new Map<string, number>();
 
 function limparMemoria(agora: number): void {
-  for (const [k, vence] of memoria) {
-    if (vence <= agora) memoria.delete(k);
+  podarMemoria(memoria, agora, MAX_MEMORIA);
+}
+
+/**
+ * Tira o que venceu e, se ainda sobrar demais, as chaves mais antigas (o Map guarda a ordem de
+ * inserção). Esquecer aqui é seguro: a memória só responde "já vi"; quem não está nela vai ao banco.
+ */
+export function podarMemoria(mapa: Map<string, number>, agora: number, max: number): void {
+  for (const [k, vence] of mapa) {
+    if (vence <= agora) mapa.delete(k);
   }
+  if (mapa.size < max) return;
+  let sobrando = mapa.size - Math.floor(max / 2);
+  for (const k of mapa.keys()) {
+    if (sobrando-- <= 0) break;
+    mapa.delete(k);
+  }
+}
+
+/** Limpeza do banco em segundo plano, no máximo uma vez a cada `LIMPEZA_MS`. Nunca bloqueia. */
+export function deveLimpar(agora: number, ultima: number, intervalo: number = LIMPEZA_MS): boolean {
+  return agora - ultima >= intervalo;
+}
+
+function limparSeVencido(agora: number): void {
+  if (!deveLimpar(agora, ultimaLimpeza)) return;
+  ultimaLimpeza = agora;
+  void limparClaimsVencidos();
 }
 
 /**
  * Reivindica a mensagem. `true` = é a primeira vez, pode processar.
  * `false` = alguém já pegou, ignore.
  */
-export async function claimMessageId(scope: string, messageId: string): Promise<boolean> {
+export async function claimMessageId(
+  scope: string,
+  messageId: string,
+  ttlMs: number = TTL_MS,
+): Promise<boolean> {
   if (!messageId) return true;
 
   const key = `${scope}:${messageId}`;
   const agora = Date.now();
+  limparSeVencido(agora);
 
   const jaVista = memoria.get(key);
   if (jaVista && jaVista > agora) return false;
@@ -51,7 +98,7 @@ export async function claimMessageId(scope: string, messageId: string): Promise<
   if (memoria.size >= MAX_MEMORIA) limparMemoria(agora);
 
   try {
-    const vencimento = new Date(agora + TTL_MS);
+    const vencimento = new Date(agora + ttlMs);
     // ON CONFLICT DO NOTHING: o banco resolve a corrida. Quem inseriu, processa.
     const inseridas = await prisma.$executeRaw`
       INSERT INTO "message_claims" ("key", "expires_at")
@@ -61,12 +108,12 @@ export async function claimMessageId(scope: string, messageId: string): Promise<
         WHERE "message_claims"."expires_at" <= NOW()
     `;
     const primeiraVez = inseridas > 0;
-    if (primeiraVez) memoria.set(key, agora + TTL_MS);
+    if (primeiraVez) memoria.set(key, agora + ttlMs);
     return primeiraVez;
   } catch (err) {
     // Banco fora não pode calar a IA: melhor arriscar duplicata que perder lead.
     logger.warn({ err: String(err), key }, 'dedup: banco indisponível — deixando a mensagem passar');
-    memoria.set(key, agora + TTL_MS);
+    memoria.set(key, agora + ttlMs);
     return true;
   }
 }

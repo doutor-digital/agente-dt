@@ -24,13 +24,13 @@ import { tentarNotaDeVoz } from '../lib/resposta-em-voz.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { judgeConversation } from '../services/conversation-judge.service.js';
-import { claimMessageId } from '../lib/dedup-cache.js';
+import { claimMessageId, TTL_REENTREGA_KOMMO_MS } from '../lib/dedup-cache.js';
 import { rememberIncomingAudio } from '../lib/pending-audio.js';
 import { enforceReplyGap } from '../lib/reply-gate.js';
 import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.js';
 import { scheduleAgentRun, temPendentes } from '../lib/agent-coalescer.js';
 import { ehEncerramentoRepetido } from '../lib/encerramento.js';
-import { tratarRespostaD1 } from '../lib/confirmacao-d1.js';
+import { podeSerRespostaD1, tratarRespostaD1 } from '../lib/confirmacao-d1.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { tentarBotoes } from '../lib/resposta-com-botoes.js';
@@ -528,7 +528,9 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       const unidade = unit;
       const leadDoBot = msgEntrando.entity_id;
       const chaveDedup = msgEntrando.id ?? `${leadDoBot}:${msgEntrando.text ?? ''}`;
-      if (await claimMessageId('widget-run', chaveDedup)) {
+      // Com o id da mensagem, o prazo cobre os reenvios do Kommo; sem ele a chave é o texto, e
+      // 2 h calaria o paciente que repete "ok" — fica nos 10 min de sempre.
+      if (await claimMessageId('widget-run', chaveDedup, msgEntrando.id ? TTL_REENTREGA_KOMMO_MS : undefined)) {
         // Tem que ser pelo CONTATO. Com `leads` o Kommo roda o bot como
         // marketingbot, sem conversa — o `show` é aceito e jogado fora.
         const doWebhook = Number(msgEntrando.contact_id);
@@ -571,7 +573,8 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   const hasIncomingMessage = !!incomingMsg;
   const hasManualTestInput = !!parsed.data.leadId && !!parsed.data.text;
 
-  if (incomingMsg?.id && !(await claimMessageId('kommo', incomingMsg.id))) {
+  // 2 h e não 10 min: cobre os reenvios do Kommo (5 + 15 + 15 + 60 min) — ver TTL_REENTREGA_KOMMO_MS.
+  if (incomingMsg?.id && !(await claimMessageId('kommo', incomingMsg.id, TTL_REENTREGA_KOMMO_MS))) {
     logger.info(
       { unit: unit.slug, msgId: incomingMsg.id },
       'kommo webhook duplicado (retry) — ignorando',
@@ -650,12 +653,22 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     // Resposta à confirmação de véspera ("1" confirmo · "2" remarcar) é tratada
     // em código: a IA não enxerga a consulta que a SDR marcou e respondia
     // "não encontrei consulta" para quem só queria confirmar presença.
+    //
+    // O Kommo dá 2 s para o webhook responder e REENVIA quem passa disso (5 min, +15, +15, +1 h).
+    // O tratamento da véspera consulta a franquia e faz 3–4 chamadas ao Kommo antes de terminar,
+    // então o 200 sai ANTES dele — o mesmo padrão do caminho da IA, que responde e segue
+    // processando. Foi a reentrega do "1" que fez a Sofia mandar "Não entendi…" 23 min depois
+    // (Açailândia, 06/10/2026).
+    if (podeSerRespostaD1(conv, ctx.humanMessage)) {
+      res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
+    }
     const respostaD1 = await tratarRespostaD1({
       unit,
       leadId,
       texto: ctx.humanMessage,
       conv,
       kommo: createKommoClient(unit),
+      traceId: trace.id,
     }).catch((err) => {
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: falha ao tratar resposta (segue para a IA)');
       return null;
@@ -666,7 +679,9 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         title:
           respostaD1 === 'confirmou'
             ? 'Paciente confirmou a consulta de amanhã — respondido em código, sem IA'
-            : 'Paciente pediu para remarcar — tarefa aberta para a equipe, sem IA',
+            : respostaD1 === 'repetida'
+              ? 'Repetição exata da resposta à confirmação já tratada (provável reenvio do Kommo) — sem IA'
+              : 'Paciente pediu para remarcar — tarefa aberta para a equipe, sem IA',
         payload: { mensagem: ctx.humanMessage.slice(0, 80) },
       });
       await recorder.finalize({
@@ -675,7 +690,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         iaDecision: `__confirmacao_d1_${respostaD1}__`,
       });
       logger.info({ unit: unit.slug, leadId, traceId: trace.id, respostaD1 }, 'agente pulado (confirmação D-1)');
-      res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'confirmacao_d1' });
+      if (!res.headersSent) res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'confirmacao_d1' });
       return;
     }
 
@@ -699,12 +714,13 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         iaDecision: '__encerramento_repetido__',
       });
       logger.info({ unit: unit.slug, leadId, traceId: trace.id }, 'agente pulado (encerramento repetido)');
-      res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'encerramento_repetido' });
+      if (!res.headersSent) res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'encerramento_repetido' });
       return;
     }
   }
 
-  res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
+  // Pode já ter saído acima (resposta à véspera que, no fim, não era — segue para a IA).
+  if (!res.headersSent) res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
 
   const status = scheduleAgentRun({
     unitSlug: unit.slug,
