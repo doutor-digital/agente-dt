@@ -14,6 +14,7 @@ import { looksLikeName } from './name-capture.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captura-unificada.js';
+import { ehRegraDeQualificacao } from './carimbos-do-agendamento.js';
 import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
 import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
 import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
@@ -1114,12 +1115,10 @@ export function leadFieldRuleDescription(rule: LeadFieldRule): string {
   return `${rule.instruction.trim()} Salva em "${rule.kommoFieldName}".${titleHint}${examplesBlock}`;
 }
 
-/** Grava o valor no campo da regra (e no título, se a regra manda). Usado pela tool por regra e pela `registrar_campo`. */
-/** A regra que grava a temperatura do lead (Quente/Morno/Frio) — não a data nem o resultado. */
-export function ehRegraDeQualificacao(nomeCampo: string): boolean {
-  return /qualifica/i.test(nomeCampo) && !/data|resultado|motivo/i.test(nomeCampo);
-}
+// Mora em carimbos-do-agendamento: `agendar_consulta` também precisa achar o campo de qualificação.
+export { ehRegraDeQualificacao };
 
+/** Grava o valor no campo da regra (e no título, se a regra manda). Usado pela tool por regra e pela `registrar_campo`. */
 async function gravarCampoDaRegra({
   rule,
   kommo,
