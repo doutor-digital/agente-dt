@@ -100,3 +100,18 @@ test('origem é o campo chamado EXATAMENTE "Origem" — não "Origem – URL" do
   assert.equal(grupoDoLead(comRastreio, 'anuncio'), '(sem anuncio)');
   assert.equal(grupoDoLead(leadFalso(10, '2026-09-10T12:00:00Z'), 'campanha'), '(sem campanha)');
 });
+
+test('atalhos com os nomes REAIS das contas (cartão de Açailândia, 06/10): ⌂ ID do anúncio, ⌂ URL de origem do clique', () => {
+  const real = leadFalso(11, '2026-10-06T12:00:00Z', {
+    custom_fields_values: [
+      { field_id: 2450006, field_name: '⌂ ID do anúncio', values: [{ value: '120234623594490436' }] },
+      { field_id: 2450016, field_name: '⌂ URL de origem do clique', values: [{ value: 'https://www.instagram.com/p/DRznmViDIB-/' }] },
+      { field_id: 2449998, field_name: '⚑ Origem', values: [{ value: 'Meta-Instagram' }] },
+      { field_id: 2450002, field_name: '⌂ Plataforma de origem', values: [{ value: 'instagram' }] },
+    ],
+  });
+  assert.equal(origemDoLead(real), 'Meta-Instagram'); // o "contém origem" antigo pegava a URL, que vem antes
+  assert.equal(grupoDoLead(real, 'anuncio'), '120234623594490436');
+  assert.equal(grupoDoLead(real, 'plataforma'), 'instagram');
+  assert.equal(grupoDoLead(real, 'campanha'), '(sem campanha)'); // anúncio de post: Meta não devolve campanha
+});

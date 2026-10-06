@@ -214,8 +214,9 @@ export function registrarRelatorio(server: McpServer, deps: DepsRelatorio, audit
       description:
         'O funil cruzado de verdade, calculado em código: leads do Kommo criados no período → viraram paciente na franquia → agendaram → ' +
         'compareceram → fecharam tratamento (com valor), com taxas e COBERTURA do casamento (telefone ou vínculo). O detalhamento ' +
-        '("porOrigem") é pela origem do lead, ou pelo que vier em agruparPor: "campanha", "conjunto" ou "anuncio" usam os campos que o ' +
-        'rastreio de anúncios do WhatsApp grava no cartão ("Origem – Campanha"…) e casam com os nomes de campanha do Meta/Metricool. ' +
+        '("porOrigem") é pela origem do lead ("⚑ Origem"), ou pelo que vier em agruparPor. "anuncio" agrupa pelo ID DO ANÚNCIO do Meta ' +
+        'que o rastreio de WhatsApp grava no cartão — é a chave pra ligar ao gasto por anúncio do Meta/Metricool. "campanha" e "conjunto" ' +
+        'usam os nomes gravados no cartão (vazios em anúncio feito a partir de post). ' +
         'Traz também o que a franquia registrou no período (agendamentos por status, tratamentos novos). ' +
         `Até ${MAX_UNIDADES_POR_RELATORIO} unidades e ${MAX_DIAS_PERIODO} dias por chamada, nos últimos ${MAX_DIAS_ATRAS} dias; pra rede inteira, chame em lotes e some. ` +
         'Para alcance, cliques e gasto de anúncio, use o conector do Metricool e cruze com a "origem" daqui.',
@@ -226,7 +227,7 @@ export function registrarRelatorio(server: McpServer, deps: DepsRelatorio, audit
         agruparPor: z
           .string()
           .optional()
-          .describe('"origem" (padrão), "campanha", "conjunto", "anuncio", "plataforma", "utm_campaign" ou o nome de um campo do cartão'),
+          .describe('"origem" (padrão), "anuncio" (ID do anúncio no Meta), "campanha", "conjunto", "titulo_do_anuncio", "plataforma", "url" ou o nome de um campo do cartão'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },

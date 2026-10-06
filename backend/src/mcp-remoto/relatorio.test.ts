@@ -40,13 +40,13 @@ before(async () => {
     leadFalso(1, '2026-09-01T12:00:00Z', {
       custom_fields_values: [
         { field_id: 5, field_name: 'Origem', values: [{ value: 'Instagram' }] },
-        { field_id: 6, field_name: 'Origem – Campanha', values: [{ value: 'LEADS | WPP' }] },
+        { field_id: 6, field_name: '⌂ Campanha', values: [{ value: 'LEADS | WPP' }] },
       ],
     }),
     leadFalso(2, '2026-09-01T13:00:00Z', {
       custom_fields_values: [
         { field_id: 5, field_name: 'Origem', values: [{ value: 'Instagram' }] },
-        { field_id: 6, field_name: 'Origem – Campanha', values: [{ value: 'TRÁFEGO | WPP' }] },
+        { field_id: 6, field_name: '⌂ Campanha', values: [{ value: 'TRÁFEGO | WPP' }] },
       ],
     }),
     leadFalso(3, '2026-09-02T12:00:00Z'), // sem telefone nem vínculo
