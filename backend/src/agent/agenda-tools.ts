@@ -18,6 +18,7 @@ import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
 import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
+import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } from './carimbos-do-agendamento.js';
 import {
   agendamentoDeuCerto,
   desfechoDaRemarcacao,
@@ -1376,6 +1377,24 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
           const consultaEm = `${args.data}T${args.hora}:00`;
           const agendadoEm = Math.floor(Date.now() / 1000);
 
+          // "¤ Pagamento antecipado" sai do sinal real (forma escolhida / pagamento comprovado),
+          // não mais "Sim" fixo — 06/10/2026, lead 28088906 pagava no dia e ficou Sim.
+          const idPagamento = idDe(NOME_PAGAMENTO_ANTECIPADO);
+          const escolhaSalva = args.formaPagamento
+            ? null
+            : await prisma.conversation
+                .findFirst({ where: { unitId: fresca.id, leadId: String(args.leadId) }, select: { pagamentoEscolhido: true } })
+                .then((c) => c?.pagamentoEscolhido ?? null)
+                .catch(() => null);
+          const pagamento = decidirPagamentoAntecipado({
+            ehRetorno,
+            // Chegou até aqui numa unidade com taxa de reserva = a trava acima achou a prova.
+            pagamentoComprovado: Boolean(fresca.spineBookingRequiresPayment) && !args.remarcando,
+            formaPagamento: args.formaPagamento,
+            escolhaSalva,
+            valorAtual: valorDoCampo(leadAtual, idPagamento),
+          });
+
           const carimbos: Array<{ campo: string; id: number | null; fn: (id: number) => Promise<void> }> = [
             { campo: NOME_AGENDOU, id: idDe(NOME_AGENDOU), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', 'Sim') },
             { campo: NOME_DATA_AGENDAMENTO, id: idDe(NOME_DATA_AGENDAMENTO), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'date', agendadoEm) },
@@ -1383,8 +1402,11 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             { campo: NOME_DATA_CONSULTA, id: idDe(NOME_DATA_CONSULTA), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'date', consultaEm) },
             { campo: NOME_RESPONSAVEL, id: idDe(NOME_RESPONSAVEL), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', RESPONSAVEL_IA) },
             { campo: NOME_SITUACAO_CONSULTA, id: idDe(NOME_SITUACAO_CONSULTA), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', 'Agendado') },
-            { campo: NOME_PAGAMENTO_ANTECIPADO, id: idDe(NOME_PAGAMENTO_ANTECIPADO), fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', ehRetorno ? 'Não' : 'Sim') },
           ];
+          const valorPagamento = pagamento.valor;
+          if (valorPagamento !== null) {
+            carimbos.push({ campo: NOME_PAGAMENTO_ANTECIPADO, id: idPagamento, fn: (id) => kommo.setLeadCustomFieldValue(args.leadId!, id, 'select', valorPagamento) });
+          }
 
           const falhas: string[] = [];
           for (const c of carimbos) {
@@ -1401,13 +1423,27 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             }
           }
 
+          // Quem agenda é QUENTE (regra do João, 06/10/2026). Sem isso o campo ficava vazio,
+          // o evento Lead do CAPI não saía e o alerta "Agendou sem qualificação" disparava.
+          let qualificacao: Awaited<ReturnType<typeof carimbarQuenteAoAgendar>> | null = null;
+          try {
+            qualificacao = await carimbarQuenteAoAgendar({ unit: fresca, kommo, leadId: args.leadId!, lead: leadAtual });
+            if (qualificacao.motivo) {
+              falhas.push(`Qualificação (${qualificacao.motivo})`);
+              logger.warn({ leadId: args.leadId, unit: unit.slug, motivo: qualificacao.motivo }, 'agenda: não deu pra marcar Quente');
+            }
+          } catch (err) {
+            falhas.push(qualificacao?.campo ?? 'Qualificação');
+            logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao marcar Qualificação = Quente');
+          }
+
           await recorder.step({
             kind: falhas.length > 0 ? 'ERROR' : 'KOMMO_ACTION',
             title:
               falhas.length > 0
                 ? `⚠️ Agendamento gravado com ${falhas.length} campo(s) em branco: ${falhas.join(', ')}`
-                : `Campos de agendamento preenchidos (Agendou, Agendado em, Data da Consulta, Responsável, Situação=Agendado, Pré-pag=${ehRetorno ? 'Não' : 'Sim'})`,
-            payload: { leadId: args.leadId, consultaEm, agendadoEm, falhas, responsavel: RESPONSAVEL_IA },
+                : `Campos de agendamento preenchidos (Agendou, Agendado em, Data da Consulta, Responsável, Situação=Agendado, Pré-pag=${pagamento.valor ?? 'mantido'}, Qualificação=Quente)`,
+            payload: { leadId: args.leadId, consultaEm, agendadoEm, falhas, responsavel: RESPONSAVEL_IA, pagamento, qualificacao },
           });
 
           await registrarTempoAteAgendamento(fresca, kommo, args.leadId!).catch((err) =>
