@@ -150,14 +150,42 @@ function valorDoCampo(c: NonNullable<KommoLead['custom_fields_values']>[number])
   return c.values.map((v) => String(v.value ?? '')).filter(Boolean).join(', ');
 }
 
-/** Campo "Origem" (qualquer grafia: "⚑ Origem", "ORIGEM") ou etiqueta ORIGEM_*; senão "(sem origem)". */
+/** Valor do campo cujo nome, sem acento/símbolo, é EXATAMENTE `nome` ("⚑ Origem" = "origem"). */
+function campoChamado(lead: KommoLead, nome: string): string {
+  const alvo = semMarcas(nome);
+  const c = (lead.custom_fields_values ?? []).find((f) => semMarcas(f.field_name ?? '') === alvo);
+  return c ? valorDoCampo(c) : '';
+}
+
+/**
+ * O campo "Origem" (qualquer grafia: "⚑ Origem", "ORIGEM") ou etiqueta ORIGEM_*; senão "(sem origem)".
+ * Nome EXATO, não "contém": o rastreio de campanha grava 15 campos "Origem – Campanha", "Origem – URL"…
+ * e o "contém" pegava a URL do post como se fosse a origem (Marabá, 06/10: "70 origens" de fb.me).
+ */
 export function origemDoLead(lead: KommoLead): string {
-  const campo = (lead.custom_fields_values ?? []).find((c) => semMarcas(c.field_name ?? '').includes('origem'));
-  const doCampo = campo ? valorDoCampo(campo) : '';
+  const doCampo = campoChamado(lead, 'origem');
   if (doCampo) return doCampo;
   const tag = (lead._embedded?.tags ?? []).find((t) => /^origem[\s_-]/i.test(t.name));
   if (tag) return tag.name.replace(/^origem[\s_-]+/i, '').replace(/_/g, ' ');
   return '(sem origem)';
+}
+
+/** Atalhos pros campos do rastreio de campanha (n8n `rastreio-campanhas`, "Origem – Campanha"…). */
+const ATALHOS: Record<string, string> = {
+  campanha: 'Origem – Campanha',
+  conjunto: 'Origem – Conjunto',
+  anuncio: 'Origem – Anúncio',
+  plataforma: 'Origem – Plataforma',
+  utm_source: 'Origem – utm_source',
+  utm_campaign: 'Origem – utm_campaign',
+};
+
+/** Em que grupo o lead cai: `origem`, um atalho do rastreio (`campanha`, `anuncio`…) ou o nome de um campo. */
+export function grupoDoLead(lead: KommoLead, por: string): string {
+  const p = semMarcas(por);
+  if (p === 'origem') return origemDoLead(lead);
+  const campo = ATALHOS[p.replace(/ /g, '_')] ?? por;
+  return campoChamado(lead, campo) || `(sem ${p})`;
 }
 
 export function situacaoDoLead(lead: KommoLead): 'ganho' | 'perdido' | 'aberto' {
@@ -204,10 +232,11 @@ function chaveDeAgrupamento(l: Legivel, por: string): string[] {
     case 'tag':
       return l.tags.length ? l.tags : ['(sem tag)'];
     default: {
-      // nome de campo personalizado, em qualquer grafia
-      const alvo = semMarcas(por);
+      // atalho do rastreio ("campanha", "anuncio"…) ou nome de campo personalizado, em qualquer grafia
+      const p = semMarcas(por);
+      const alvo = semMarcas(ATALHOS[p.replace(/ /g, '_')] ?? por);
       const [, valor] = Object.entries(l.campos ?? {}).find(([k]) => semMarcas(k) === alvo) ?? [];
-      return [valor || '(vazio)'];
+      return [valor || `(sem ${p})`];
     }
   }
 }

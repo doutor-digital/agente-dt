@@ -37,8 +37,18 @@ before(async () => {
     { intervaloMs: 0, cliente: { log: () => {} } },
   );
   const leads = [
-    leadFalso(1, '2026-09-01T12:00:00Z', { custom_fields_values: [{ field_id: 5, field_name: 'Origem', values: [{ value: 'Instagram' }] }] }),
-    leadFalso(2, '2026-09-01T13:00:00Z', { custom_fields_values: [{ field_id: 5, field_name: 'Origem', values: [{ value: 'Instagram' }] }] }),
+    leadFalso(1, '2026-09-01T12:00:00Z', {
+      custom_fields_values: [
+        { field_id: 5, field_name: 'Origem', values: [{ value: 'Instagram' }] },
+        { field_id: 6, field_name: 'Origem – Campanha', values: [{ value: 'LEADS | WPP' }] },
+      ],
+    }),
+    leadFalso(2, '2026-09-01T13:00:00Z', {
+      custom_fields_values: [
+        { field_id: 5, field_name: 'Origem', values: [{ value: 'Instagram' }] },
+        { field_id: 6, field_name: 'Origem – Campanha', values: [{ value: 'TRÁFEGO | WPP' }] },
+      ],
+    }),
     leadFalso(3, '2026-09-02T12:00:00Z'), // sem telefone nem vínculo
     leadFalso(4, '2026-09-02T13:00:00Z'), // telefone fora do cadastro
   ];
@@ -108,4 +118,13 @@ test('"todas" e mais de 4 unidades são recusados ANTES de ler qualquer coisa', 
   await assert.rejects(relatorioFunil(deps, { unidade: 'todas', inicio: '2026-09-01', fim: '2026-09-30' }), (e: Error) => e instanceof ErroDeEntrada && /até 4/.test(e.message));
   await assert.rejects(relatorioFunil(deps, { unidade: 'xpto', inicio: '2026-09-01', fim: '2026-09-30' }), /desconhecida/);
   assert.equal(falsa.pedidos.length, antes);
+});
+
+test('funil por CAMPANHA (campos do rastreio de anúncios no cartão)', async () => {
+  const r = (await relatorioFunil(deps, { unidade: 'serra', inicio: '2026-09-01', fim: '2026-09-30', agruparPor: 'campanha' })) as R;
+  const g = r.porUnidade['doutor-hernia-serra'].funil.porOrigem;
+  assert.equal(r.agrupadoPor, 'campanha');
+  assert.equal(g['LEADS | WPP'].compareceram, 1); // Ana
+  assert.equal(g['TRÁFEGO | WPP'].compareceram, 0); // Bruno faltou
+  assert.equal(g['(sem campanha)'].leads, 3);
 });

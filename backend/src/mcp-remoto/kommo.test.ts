@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
-import { criarContextoKommo, type FonteKommo, kommoBuscarTelefone, kommoLead, kommoLeads, origemDoLead, registrarFerramentasKommo } from './kommo.js';
+import { criarContextoKommo, type FonteKommo, grupoDoLead, kommoBuscarTelefone, kommoLead, kommoLeads, origemDoLead, registrarFerramentasKommo } from './kommo.js';
 import { fonteFalsa, leadFalso, unidadeKommo } from './kommo-falso.js';
 
 const leads = [
@@ -85,4 +85,18 @@ test('kommo_leads: "todas" com mais de 4 contas é recusado (fila da Sofia); cam
   assert.equal(um.porUnidade['doutor-hernia-a'].agrupado.Instagram, 1);
   const com = (await kommoLeads(ctx, { unidade: 'a', inicio: '2026-09-01', fim: '2026-09-30', comCampos: true })) as Record<string, any>;
   assert.ok('campos' in com.porUnidade['doutor-hernia-a'].itens[0]);
+});
+
+test('origem é o campo chamado EXATAMENTE "Origem" — não "Origem – URL" do rastreio (bug de Marabá)', () => {
+  const comRastreio = leadFalso(9, '2026-09-10T12:00:00Z', {
+    custom_fields_values: [
+      { field_id: 1, field_name: 'Origem – URL', values: [{ value: 'https://fb.me/abc123' }] },
+      { field_id: 2, field_name: 'Origem – Campanha', values: [{ value: 'LEADS | WPP' }] },
+      { field_id: 3, field_name: '⚑ Origem', values: [{ value: 'Meta-Facebook' }] },
+    ],
+  });
+  assert.equal(origemDoLead(comRastreio), 'Meta-Facebook');
+  assert.equal(grupoDoLead(comRastreio, 'campanha'), 'LEADS | WPP');
+  assert.equal(grupoDoLead(comRastreio, 'anuncio'), '(sem anuncio)');
+  assert.equal(grupoDoLead(leadFalso(10, '2026-09-10T12:00:00Z'), 'campanha'), '(sem campanha)');
 });
