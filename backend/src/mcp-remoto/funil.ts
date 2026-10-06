@@ -11,6 +11,12 @@
  *  - paciente → tratamento: pelo idClient (o tratamento traz).
  * Quem não casou NÃO conta como "não agendou": entra em `semCasamento`. O relatório mostra a
  * cobertura junto com as taxas, pra ninguém ler furo de dado como resultado.
+ *
+ * Contagem: `leads` e `casadoPor` contam LEADS; as etapas da franquia contam PACIENTES (dois leads
+ * da mesma pessoa = um paciente). Quando há dois, vale o lead MAIS ANTIGO (primeiro contato): é
+ * dele a origem e é da criação dele que a agenda começa a contar.
+ * Dois pacientes com o mesmo nome (homônimos) não herdam a agenda um do outro: a agenda só tem
+ * nome, então o casamento paciente → agenda fica em aberto pra eles (`homonimosSemAgenda`).
  */
 
 export interface LeadDoFunil {
@@ -53,6 +59,8 @@ interface Etapas {
 
 export interface Funil extends Etapas {
   valorDosTratamentos: number;
+  pacientesComMaisDeUmLead: number;
+  homonimosSemAgenda: number;
   cobertura: { comTelefoneOuVinculo: number; semTelefoneNemVinculo: number; semCasamento: number };
   casadoPor: { telefone: number; vinculo: number };
   taxas: { pacientePorLead: number | null; agendouPorLead: number | null; compareceuPorAgendou: number | null; tratamentoPorCompareceu: number | null };
@@ -111,6 +119,13 @@ export function cruzarFunil(e: {
     pacientePorTelefone.set(k, p);
   }
   for (const k of telefonesAmbiguos) pacientePorTelefone.delete(k);
+  const nomesRepetidos = new Set<string>();
+  const vistosPorNome = new Set<string>();
+  for (const p of e.pacientes) {
+    const k = normalizarNome(p.nome);
+    if (vistosPorNome.has(k)) nomesRepetidos.add(k);
+    vistosPorNome.add(k);
+  }
   const agendaPorNome = new Map<string, AgendamentoDaFranquia[]>();
   for (const a of e.agenda) {
     const k = normalizarNome(a.nomePaciente);
@@ -127,9 +142,13 @@ export function cruzarFunil(e: {
   let comChave = 0;
   let semCasamento = 0;
   let valor = 0;
+  let repetidos = 0;
+  let homonimos = 0;
   const contados = new Set<number>(); // um paciente com dois leads conta uma vez nas etapas da franquia
+  // o mais antigo primeiro: com dois leads da mesma pessoa, a origem e o ponto de partida são do primeiro contato
+  const emOrdem = [...e.leads].sort((a, b) => a.criadoEm.localeCompare(b.criadoEm) || a.id - b.id);
 
-  for (const lead of e.leads) {
+  for (const lead of emOrdem) {
     const o = (porOrigem[lead.origem] ??= zerado());
     total.leads++;
     o.leads++;
@@ -146,13 +165,18 @@ export function cruzarFunil(e: {
       semCasamento++;
       continue;
     }
-    if (contados.has(paciente.idClient)) continue;
+    if (contados.has(paciente.idClient)) {
+      repetidos++;
+      continue;
+    }
     contados.add(paciente.idClient);
 
     total.viraramPaciente++;
     o.viraramPaciente++;
     // só o que aconteceu A PARTIR da criação do lead: consulta antiga é de outro ciclo
-    const agenda = (agendaPorNome.get(normalizarNome(paciente.nome)) ?? []).filter((a) => a.dia >= lead.criadoEm);
+    const nome = normalizarNome(paciente.nome);
+    if (nomesRepetidos.has(nome)) homonimos++;
+    const agenda = nomesRepetidos.has(nome) ? [] : (agendaPorNome.get(nome) ?? []).filter((a) => a.dia >= lead.criadoEm);
     if (agenda.length) {
       total.agendaram++;
       o.agendaram++;
@@ -172,6 +196,8 @@ export function cruzarFunil(e: {
   return {
     ...total,
     valorDosTratamentos: Math.round(valor * 100) / 100,
+    pacientesComMaisDeUmLead: repetidos,
+    homonimosSemAgenda: homonimos,
     cobertura: { comTelefoneOuVinculo: comChave, semTelefoneNemVinculo: total.leads - comChave, semCasamento },
     casadoPor,
     taxas: {

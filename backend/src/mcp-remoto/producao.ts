@@ -11,7 +11,7 @@ import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { login } from '../services/auth.service.js';
-import { pacienteDoCerebro, panoramaDaUnidade } from '../services/cerebro.service.js';
+import { chaveTelefone, normalizarNome, panoramaDaUnidade, parecencaDeNome, type Panorama } from '../services/cerebro.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import type { Contexto } from '../franquia-mcp/contexto.js';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
@@ -71,7 +71,8 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
       fuso: u.spineTimezone || FUSO,
       slugsDaFranquia: u.slugsDaFranquia,
       fonte: {
-        leadsNaJanela: (campo, de, ate, maxPaginas) => cliente.listLeadsNaJanela(campo, de, ate, maxPaginas),
+        leadsNaJanela: (campo, de, ate, maxPaginas) => cliente.listLeadsNaJanela(campo, de, ate, maxPaginas, true),
+        telefonesDosContatos: (ids) => cliente.telefonesDosContatos(ids),
         funis: () => cliente.listPipelines(),
         lead: (id) => cliente.getLead(id),
         leadsPorTelefone: (tel) => cliente.listLeadsPorTelefone(tel, 50),
@@ -149,6 +150,15 @@ function registrarCerebro(server: McpServer, slugs: () => string[], cache: Cache
     if (!u) throw new ErroDeEntrada(`unidade ${slug} não encontrada`);
     return u;
   };
+  // a mesma leitura serve o panorama e as fichas: abrir 10 fichas não pode virar 10 panoramas na franquia
+  const panorama = async (u: Awaited<ReturnType<typeof unidadeDoBanco>>, dias = 60, meses = 6): Promise<{ pano: Panorama; doCache: boolean }> => {
+    const chave = `panorama|${u.slug}|${dias}|${meses}`;
+    const guardado = cache.pegar<Panorama>(chave);
+    if (guardado) return { pano: guardado, doCache: true };
+    const pano = await panoramaDaUnidade(u, { dias, meses });
+    cache.guardar(chave, pano, 3_600_000);
+    return { pano, doCache: false };
+  };
   const ro = { readOnlyHint: true, openWorldHint: true };
   server.registerTool(
     'cerebro_panorama',
@@ -167,13 +177,8 @@ function registrarCerebro(server: McpServer, slugs: () => string[], cache: Cache
     },
     (args) =>
       executar('cerebro_panorama', args, auditar, async () => {
-        const u = await unidadeDoBanco(args.unidade);
-        const chave = `panorama|${u.slug}|${args.dias ?? 60}|${args.meses ?? 6}`;
-        const guardado = cache.pegar<object>(chave);
-        if (guardado) return { ...guardado, doCache: true };
-        const pano = await panoramaDaUnidade(u, { dias: args.dias, meses: args.meses });
-        cache.guardar(chave, pano, 3_600_000);
-        return pano;
+        const { pano, doCache } = await panorama(await unidadeDoBanco(args.unidade), args.dias, args.meses);
+        return doCache ? { ...pano, doCache } : pano;
       }),
   );
   server.registerTool(
@@ -182,17 +187,27 @@ function registrarCerebro(server: McpServer, slugs: () => string[], cache: Cache
       title: 'Cérebro: ficha de um paciente marcado',
       description:
         'A ficha de um paciente que o cerebro_panorama marcou (sem cartão, ambíguo ou sumindo): sessões, tratamentos, cartão no Kommo ' +
-        'e como foi casado. Aceita nome ou telefone. Quem NÃO está na lista do panorama não aparece aqui — use buscar_pacientes e ' +
-        'kommo_buscar_telefone pra esses.',
+        'e como foi casado. Aceita o nome COMPLETO ou o telefone; nome parecido devolve só os nomes candidatos, nunca a ficha de outra ' +
+        'pessoa. Quem NÃO está na lista do panorama não aparece aqui — use buscar_pacientes e kommo_buscar_telefone pra esses.',
       inputSchema: { unidade: z.string().min(1), busca: z.string().min(2).describe('nome do paciente ou telefone') },
       annotations: ro,
     },
     (args) =>
       executar('cerebro_paciente', args, auditar, async () => {
         const u = await unidadeDoBanco(args.unidade);
-        const p = await pacienteDoCerebro(u, args.busca);
-        if (!p) throw new ErroDeEntrada(`"${args.busca}" não está entre os pacientes que o panorama de ${u.slug} marcou`);
-        return p;
+        const { pano } = await panorama(u);
+        const alvo = normalizarNome(args.busca);
+        const tel = chaveTelefone(args.busca);
+        const achado =
+          pano.paraOlhar.find((p) => normalizarNome(p.nome) === alvo) ?? (tel ? pano.paraOlhar.find((p) => chaveTelefone(p.telefone) === tel) : undefined);
+        if (achado) return achado;
+        const parecidos = pano.paraOlhar
+          .map((p) => ({ nome: p.nome, parecenca: parecencaDeNome(p.nome, args.busca) }))
+          .filter((p) => p.parecenca >= 0.6)
+          .sort((a, b) => b.parecenca - a.parecenca)
+          .slice(0, 5);
+        if (parecidos.length) return { naoAchado: args.busca, talvezSeja: parecidos, comoUsar: 'chame de novo com o nome completo de um destes' };
+        throw new ErroDeEntrada(`"${args.busca}" não está entre os pacientes que o panorama de ${u.slug} marcou`);
       }),
   );
 }

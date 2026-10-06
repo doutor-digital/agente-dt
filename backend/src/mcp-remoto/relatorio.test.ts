@@ -42,9 +42,11 @@ before(async () => {
     leadFalso(3, '2026-09-02T12:00:00Z'), // sem telefone nem vínculo
     leadFalso(4, '2026-09-02T13:00:00Z'), // telefone fora do cadastro
   ];
+  // Carla nunca falou com a IA (veio por ligação): o telefone dela só existe no CONTATO do Kommo
+  const leadsComCarla = [...leads, leadFalso(5, '2026-09-03T12:00:00Z', { _embedded: { contacts: [{ id: 500, is_main: true }] } })];
   const kommo = criarContextoKommo(
     new Map([
-      ['doutor-hernia-serra', unidadeKommo('doutor-hernia-serra', fonteFalsa(leads))],
+      ['doutor-hernia-serra', unidadeKommo('doutor-hernia-serra', fonteFalsa(leadsComCarla, [], { 500: '+55 41 95555-4444' }))],
       ['doutor-hernia-boituva', unidadeKommo('doutor-hernia-boituva', fonteFalsa(leads))], // tem Kommo, não tem franquia
     ]),
   );
@@ -65,13 +67,13 @@ test('funil cruzado: leads → paciente → agendou → compareceu → tratament
   const u = r.porUnidade['doutor-hernia-serra'];
   assert.equal(u.ok, true, u.erro);
   const f = u.funil;
-  assert.equal(f.leads, 4);
-  assert.equal(f.viraramPaciente, 2);
-  assert.equal(f.agendaram, 2);
-  assert.equal(f.compareceram, 1);
+  assert.equal(f.leads, 5);
+  assert.equal(f.viraramPaciente, 3); // Ana e Bruno pela conversa, Carla pelo contato do Kommo
+  assert.equal(f.agendaram, 3);
+  assert.equal(f.compareceram, 2);
   assert.equal(f.fecharamTratamento, 1);
   assert.equal(f.valorDosTratamentos, 1800);
-  assert.deepEqual(f.cobertura, { comTelefoneOuVinculo: 3, semTelefoneNemVinculo: 1, semCasamento: 2 });
+  assert.deepEqual(f.cobertura, { comTelefoneOuVinculo: 4, semTelefoneNemVinculo: 1, semCasamento: 2 });
   assert.equal(f.porOrigem.Instagram.compareceram, 1);
   // a franquia no período inclui a Carla, que não passou pelo Kommo
   assert.equal(u.naFranquiaNoPeriodo.agendamentos, 3);
@@ -90,8 +92,15 @@ test('unidade só com Kommo: devolve os leads e avisa que não dá pra cruzar', 
 
 test('várias unidades: a rede soma só as que cruzaram e diz quem ficou de fora', async () => {
   const r = (await relatorioFunil(deps, { unidade: ['serra', 'boituva'], inicio: '2026-09-01', fim: '2026-09-30' })) as R;
-  assert.equal(r.rede.leads, 4);
+  assert.equal(r.rede.leads, 5);
   assert.deepEqual(r.rede.unidadesForaDoTotal, ['doutor-hernia-boituva']);
+});
+
+test('período: no máximo 92 dias e só os últimos 180 — recusado antes de ler', async () => {
+  const antes = falsa.pedidos.length;
+  await assert.rejects(relatorioFunil(deps, { unidade: 'serra', inicio: '2026-06-01', fim: '2026-09-30' }), /92 dias/);
+  await assert.rejects(relatorioFunil(deps, { unidade: 'serra', inicio: '2026-03-01', fim: '2026-03-31' }), /últimos 180 dias/);
+  assert.equal(falsa.pedidos.length, antes);
 });
 
 test('"todas" e mais de 4 unidades são recusados ANTES de ler qualquer coisa', async () => {

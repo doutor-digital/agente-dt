@@ -1,6 +1,10 @@
 /**
  * Kommo no conector: só leitura, uma conta por franquia, o mesmo parâmetro `unidade` da franquia.
  * A fonte é injetada (`FonteKommo`): em produção é o KommoClient do agente; nos testes, um falso.
+ *
+ * CUIDADO COM A SOFIA: o limitador do Kommo é UM só pro processo (uma chamada a cada 180 ms, todas
+ * as contas). Cada chamada daqui entra na mesma fila das respostas dela. Por isso: no máximo
+ * MAX_UNIDADES_KOMMO contas por chamada, 4 páginas (1.000 leads) por conta, telefones em lote e cache.
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -14,7 +18,9 @@ import { epochDoDiaLocal } from './tempo.js';
 import { acharSlug } from './unidades.js';
 
 export interface FonteKommo {
+  /** leads com os ids dos contatos (`_embedded.contacts`) */
   leadsNaJanela(campo: 'created_at' | 'updated_at', de: number, ate: number, maxPaginas: number): Promise<{ leads: KommoLead[]; truncado: boolean }>;
+  telefonesDosContatos(ids: number[]): Promise<Map<number, string>>;
   funis(): Promise<KommoPipeline[]>;
   lead(id: number): Promise<KommoLead>;
   leadsPorTelefone(telefone: string): Promise<KommoLead[]>;
@@ -39,13 +45,23 @@ export interface ContextoKommo {
 }
 
 export function criarContextoKommo(unidades: Map<string, UnidadeKommo>, op: { paralelo?: number; maxPaginas?: number; agora?: () => number } = {}): ContextoKommo {
-  return { unidades, cache: new Cache(op.agora), paralelo: op.paralelo ?? 3, maxPaginas: op.maxPaginas ?? 8 };
+  return { unidades, cache: new Cache(op.agora), paralelo: op.paralelo ?? 2, maxPaginas: op.maxPaginas ?? 4 };
 }
 
-export function resolverUnidadesKommo(ctx: ContextoKommo, alvo: string | string[]): UnidadeKommo[] {
+export const MAX_UNIDADES_KOMMO = 4;
+
+export function resolverUnidadesKommo(ctx: ContextoKommo, alvo: string | string[], max = Infinity): UnidadeKommo[] {
   if (ctx.unidades.size === 0) throw new ErroDeEntrada('nenhuma conta do Kommo disponível agora (carregando). Tente em instantes.');
   const pedidos = Array.isArray(alvo) ? alvo : [alvo];
-  if (pedidos.some((p) => p.trim().toLowerCase() === 'todas')) return [...ctx.unidades.values()];
+  if (pedidos.some((p) => p.trim().toLowerCase() === 'todas')) {
+    if (ctx.unidades.size > max) {
+      throw new ErroDeEntrada(
+        `o Kommo divide a fila de chamadas com o atendimento da Sofia: peça até ${max} unidades por vez (chame de novo para as próximas). ` +
+          `Com Kommo: ${[...ctx.unidades.keys()].join(', ')}`,
+      );
+    }
+    return [...ctx.unidades.values()];
+  }
   const achadas = new Map<string, UnidadeKommo>();
   const faltam: string[] = [];
   for (const p of pedidos) {
@@ -56,16 +72,18 @@ export function resolverUnidadesKommo(ctx: ContextoKommo, alvo: string | string[
   if (faltam.length) {
     throw new ErroDeEntrada(`unidade sem Kommo, desconhecida ou ambígua: ${faltam.join(', ')}. Com Kommo: ${[...ctx.unidades.keys()].join(', ')}`);
   }
+  if (achadas.size > max) throw new ErroDeEntrada(`no máximo ${max} unidades por chamada (pediu ${achadas.size})`);
   return [...achadas.values()];
 }
 
 // ── leitura com cache ──
 
+/** Leitura incompleta (`truncado`) não entra no cache: senão vira a resposta por 10 minutos. */
 async function comCache<T>(ctx: ContextoKommo, chave: string, ttl: number, fn: () => Promise<T>): Promise<T> {
   const g = ctx.cache.pegar<T>(chave);
   if (g !== undefined) return g;
   const v = await fn();
-  ctx.cache.guardar(chave, v, ttl);
+  if (!(v as { truncado?: unknown })?.truncado) ctx.cache.guardar(chave, v, ttl);
   return v;
 }
 
@@ -94,6 +112,27 @@ export async function leadsDoPeriodo(
   const de = epochDoDiaLocal(inicio, u.fuso);
   const ate = epochDoDiaLocal(fim, u.fuso, true);
   return comCache(ctx, `leads|${u.slug}|${campo}|${inicio}|${fim}`, TTL.busca, () => u.fonte.leadsNaJanela(campo, de, ate, ctx.maxPaginas));
+}
+
+/**
+ * Telefone de cada lead pelo CONTATO do Kommo (a fonte), em lote. Pega quem nunca falou com a IA
+ * (ligação, recepção, formulário) — o telefone da conversa sozinho deixava esses de fora do funil.
+ */
+export async function telefonesDosLeads(ctx: ContextoKommo, u: UnidadeKommo, leads: KommoLead[]): Promise<Map<number, string>> {
+  const contatoDoLead = new Map<number, number>();
+  for (const l of leads) {
+    const cs = l._embedded?.contacts ?? [];
+    const principal = cs.find((c) => c.is_main) ?? cs[0];
+    if (principal) contatoDoLead.set(l.id, principal.id);
+  }
+  const chave = `tels|${u.slug}|${[...contatoDoLead.values()].sort((a, b) => a - b).join(',')}`;
+  const porContato = await comCache(ctx, chave, TTL.busca, () => u.fonte.telefonesDosContatos([...contatoDoLead.values()]));
+  const m = new Map<number, string>();
+  for (const [lead, contato] of contatoDoLead) {
+    const tel = porContato.get(contato);
+    if (tel) m.set(lead, tel);
+  }
+  return m;
 }
 
 // ── o lead do jeito que o relatório lê ──
@@ -125,7 +164,7 @@ export function situacaoDoLead(lead: KommoLead): 'ganho' | 'perdido' | 'aberto' 
   return lead.status_id === 142 ? 'ganho' : lead.status_id === 143 ? 'perdido' : 'aberto';
 }
 
-function legivel(lead: KommoLead, fuso: string, etapas: Map<string, { funil: string; etapa: string }>, usuarios: Map<number, string>) {
+function legivel(lead: KommoLead, fuso: string, etapas: Map<string, { funil: string; etapa: string }>, usuarios: Map<number, string>, comCampos = true) {
   const e = etapas.get(`${lead.pipeline_id}:${lead.status_id}`);
   const quando = (s?: number) => (s ? instanteNoFuso(new Date(s * 1000), fuso) : null);
   const responsavel = (lead as KommoLead & { responsible_user_id?: number }).responsible_user_id;
@@ -141,7 +180,8 @@ function legivel(lead: KommoLead, fuso: string, etapas: Map<string, { funil: str
     atualizado: quando(lead.updated_at),
     responsavel: responsavel ? (usuarios.get(responsavel) ?? String(responsavel)) : null,
     tags: (lead._embedded?.tags ?? []).map((t) => t.name),
-    campos: Object.fromEntries((lead.custom_fields_values ?? []).map((c) => [c.field_name ?? String(c.field_id), valorDoCampo(c)])),
+    // os campos do cartão têm queixa, resumo da IA, às vezes CPF: só vão quando pedidos
+    ...(comCampos ? { campos: Object.fromEntries((lead.custom_fields_values ?? []).map((c) => [c.field_name ?? String(c.field_id), valorDoCampo(c)])) } : {}),
   };
 }
 
@@ -166,7 +206,7 @@ function chaveDeAgrupamento(l: Legivel, por: string): string[] {
     default: {
       // nome de campo personalizado, em qualquer grafia
       const alvo = semMarcas(por);
-      const [, valor] = Object.entries(l.campos).find(([k]) => semMarcas(k) === alvo) ?? [];
+      const [, valor] = Object.entries(l.campos ?? {}).find(([k]) => semMarcas(k) === alvo) ?? [];
       return [valor || '(vazio)'];
     }
   }
@@ -193,12 +233,12 @@ async function porUnidade<T>(ctx: ContextoKommo, us: UnidadeKommo[], fn: (u: Uni
 
 export async function kommoLeads(
   ctx: ContextoKommo,
-  a: { unidade: string | string[]; inicio: string; fim: string; data?: 'criacao' | 'atualizacao'; agruparPor?: string; maxItens?: number },
+  a: { unidade: string | string[]; inicio: string; fim: string; data?: 'criacao' | 'atualizacao'; agruparPor?: string; maxItens?: number; comCampos?: boolean },
 ) {
   validarData(a.inicio, 'inicio');
   validarData(a.fim, 'fim');
   if (a.inicio > a.fim) throw new ErroDeEntrada('inicio é depois do fim');
-  const us = resolverUnidadesKommo(ctx, a.unidade);
+  const us = resolverUnidadesKommo(ctx, a.unidade, MAX_UNIDADES_KOMMO);
   const max = a.maxItens ?? (us.length === 1 ? 30 : 0);
   const res = await porUnidade(ctx, us, async (u) => {
     const [{ leads, truncado }, etapas, usuarios] = await Promise.all([
@@ -206,12 +246,14 @@ export async function kommoLeads(
       nomesDasEtapas(ctx, u),
       nomesDosUsuarios(ctx, u),
     ]);
-    const itens = leads.map((l) => legivel(l, u.fuso, etapas, usuarios));
+    // agrupar por campo do cartão precisa dos campos; a resposta só os leva com comCampos
+    const completos = leads.map((l) => legivel(l, u.fuso, etapas, usuarios, true));
+    const itens = a.comCampos ? completos : leads.map((l) => legivel(l, u.fuso, etapas, usuarios, false));
     return {
       total: itens.length,
       ...(truncado ? { truncado: true, aviso: `INCOMPLETO: parou em ${ctx.maxPaginas * 250} leads. O total é um mínimo.` } : {}),
-      porSituacao: contar(itens, 'situacao'),
-      ...(a.agruparPor ? { agrupado: contar(itens, a.agruparPor) } : {}),
+      porSituacao: contar(completos, 'situacao'),
+      ...(a.agruparPor ? { agrupado: contar(completos, a.agruparPor) } : {}),
       itens: itens.slice(0, max),
       ...(itens.length > max ? { itensOmitidos: itens.length - max } : {}),
     };
@@ -278,14 +320,16 @@ export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo,
         'Leads do CRM Kommo (o comercial da unidade) criados — ou mexidos, com data="atualizacao" — no período. Cada lead vem com ' +
         'funil, etapa, situação (aberto/ganho/perdido), origem, responsável, etiquetas e campos. Use agruparPor pra contar: ' +
         '"etapa", "funil", "situacao", "origem", "responsavel", "tag", "dia" ou o nome de um campo do cartão. ' +
-        'Com várias unidades, "rede" soma só as que responderam. "truncado" = passou de 2.000 leads, o total é um mínimo.',
+        `Até ${MAX_UNIDADES_KOMMO} unidades por chamada (o Kommo divide a fila com o atendimento da Sofia). "rede" soma só as que responderam. ` +
+        '"truncado" = passou de 1.000 leads na unidade, o total é um mínimo. Os campos do cartão (queixa, resumo…) só vêm com comCampos=true.',
       inputSchema: {
         unidade,
         inicio: data('início do período'),
         fim: data('fim do período, incluso'),
         data: z.enum(['criacao', 'atualizacao']).optional().describe('qual data filtra (padrão: criacao)'),
         agruparPor: z.string().optional(),
-        maxItens: z.number().int().min(0).max(300).optional().describe('leads devolvidos por unidade (padrão 30 com uma unidade, 0 com várias)'),
+        maxItens: z.number().int().min(0).max(100).optional().describe('leads devolvidos por unidade (padrão 30 com uma unidade, 0 com várias)'),
+        comCampos: z.boolean().optional().describe('inclui os campos do cartão em cada lead (padrão: não)'),
       },
       annotations: ro,
     },

@@ -73,3 +73,16 @@ test('ferramentas registradas, só leitura, e erro de pedido volta legível', as
   assert.deepEqual(auditoria, ['kommo_leads:false']);
   await c.close();
 });
+
+test('kommo_leads: "todas" com mais de 4 contas é recusado (fila da Sofia); campos do cartão só com comCampos', async () => {
+  const contas = new Map(['a', 'b', 'c', 'd', 'e'].map((x) => [`doutor-hernia-${x}`, unidadeKommo(`doutor-hernia-${x}`, fonteFalsa(leads))]));
+  const ctx = criarContextoKommo(contas);
+  await assert.rejects(kommoLeads(ctx, { unidade: 'todas', inicio: '2026-09-01', fim: '2026-09-30' }), /até 4 unidades/);
+  const um = (await kommoLeads(ctx, { unidade: 'a', inicio: '2026-09-01', fim: '2026-09-30', agruparPor: 'Origem' })) as Record<string, any>;
+  const item = um.porUnidade['doutor-hernia-a'].itens[0];
+  assert.equal('campos' in item, false);
+  // agrupar por um campo do cartão funciona mesmo sem devolver os campos na resposta
+  assert.equal(um.porUnidade['doutor-hernia-a'].agrupado.Instagram, 1);
+  const com = (await kommoLeads(ctx, { unidade: 'a', inicio: '2026-09-01', fim: '2026-09-30', comCampos: true })) as Record<string, any>;
+  assert.ok('campos' in com.porUnidade['doutor-hernia-a'].itens[0]);
+});

@@ -8,8 +8,11 @@ export function leadFalso(id: number, criado: string, extra: Partial<KommoLead> 
   return { id, name: `Lead ${id}`, pipeline_id: 1, status_id: 11, created_at: t(criado), updated_at: t(criado), ...extra };
 }
 
-export function fonteFalsa(leads: KommoLead[], chamadas: Array<[number, number]> = []): FonteKommo {
+export function fonteFalsa(leads: KommoLead[], chamadas: Array<[number, number]> = [], telefones: Record<number, string> = {}): FonteKommo {
   return {
+    async telefonesDosContatos(ids) {
+      return new Map(ids.filter((id) => telefones[id]).map((id) => [id, telefones[id] as string]));
+    },
     async leadsNaJanela(_campo, de, ate) {
       chamadas.push([de, ate]);
       return { leads: leads.filter((l) => (l.created_at ?? 0) >= de && (l.created_at ?? 0) <= ate), truncado: false };

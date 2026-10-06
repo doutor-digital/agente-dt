@@ -62,6 +62,8 @@ export async function lerTudo(
   buscar: (pagina: number) => Promise<unknown>,
   tetoPaginas: number,
   linhasPorPagina: number,
+  /** `true` = o que interessa acabou nesta página (ex.: lista em ordem de criação passou da data de corte) */
+  bastaApos?: (itensDaPagina: unknown[]) => boolean,
 ): Promise<Lidos> {
   const itens: unknown[] = [];
   let totalInformado: number | null = null;
@@ -87,7 +89,7 @@ export async function lerTudo(
         : totalInformado !== null
           ? itens.length < totalInformado && lida.itens.length > 0
           : lida.itens.length >= linhasPorPagina;
-    if (!haMais) return { itens, totalInformado, paginas: pagina, truncado: false };
+    if (!haMais || bastaApos?.(lida.itens)) return { itens, totalInformado, paginas: pagina, truncado: false };
     if (pagina >= tetoPaginas) {
       const tem = lida.totalPaginas !== null ? ` (a franquia tem ${lida.totalPaginas})` : '';
       return { itens, totalInformado, paginas: pagina, truncado: true, motivoTruncado: `parou no teto de ${tetoPaginas} páginas${tem}` };

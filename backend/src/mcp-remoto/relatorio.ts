@@ -4,8 +4,10 @@
  *
  * Por unidade e período:
  *  1. Kommo: leads criados no período, com origem;
- *  2. banco do agente: telefone de cada lead (conversa) e vínculo com a franquia;
- *  3. franquia: pacientes (WhatsApp), agenda e tratamentos do início do período até hoje;
+ *  2. telefone de cada lead: o do CONTATO no Kommo (a fonte; pega quem nunca falou com a IA) e,
+ *     na falta, o da conversa com a IA; mais o vínculo do sincronizador com a franquia;
+ *  3. franquia: pacientes cadastrados desde 180 dias antes do período (WhatsApp), agenda e
+ *     tratamentos do início do período até hoje;
  *  4. cruzarFunil → leads → viraram paciente → agendaram → compareceram → fecharam tratamento.
  * E, separado, o que a franquia registrou NO período, venha de onde vier (recepção, indicação…).
  */
@@ -19,18 +21,29 @@ import { emParalelo } from '../franquia-mcp/ritmo.js';
 import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
 import { compareceu, cruzarFunil, type AgendamentoDaFranquia, type LeadDoFunil } from './funil.js';
-import { type ContextoKommo, leadsDoPeriodo, origemDoLead } from './kommo.js';
+import { type ContextoKommo, leadsDoPeriodo, origemDoLead, telefonesDosLeads as telefonesDoKommo } from './kommo.js';
 import { hojeNoFuso } from './tempo.js';
+import { diasNoPeriodo, somarDias } from '../franquia-mcp/travas.js';
 import { acharSlug } from './unidades.js';
 
 /** Cada unidade lê pacientes + agenda + tratamentos da franquia: limite por chamada pra não pesar nela. */
 export const MAX_UNIDADES_POR_RELATORIO = 4;
+/** período de até ~3 meses, começando nos últimos 6: cada relatório lê a franquia do início até hoje */
+export const MAX_DIAS_PERIODO = 92;
+export const MAX_DIAS_ATRAS = 180;
+/** pacientes cadastrados até esta antecedência do período entram no casamento (quem volta depois de anos fica de fora) */
+const DIAS_DE_CADASTRO_ANTES = 180;
 const TUDO = 1_000_000;
+
+/** dia local de um item da franquia: o campo `…Local` quando houver hora; senão a data crua */
+function diaDoItem(item: Res, campo: string): string {
+  return String(item[`${campo}Local`] ?? item[campo] ?? '').slice(0, 10);
+}
 
 export interface DepsRelatorio {
   franquia: Contexto;
   kommo: ContextoKommo;
-  /** telefone de cada lead, pelas conversas (`slugs`: todos os slugs da franquia — principal, resgate…) */
+  /** telefone de cada lead pelas conversas com a IA (`slugs`: todos os slugs da franquia — principal, resgate…). Reserva do telefone do contato. */
   telefonesDosLeads(slugs: string[], leadIds: number[]): Promise<Map<number, string>>;
   /** idClient da franquia de cada lead, pelo vínculo do sincronizador */
   vinculosDosLeads(slugs: string[], leadIds: number[]): Promise<Map<number, number>>;
@@ -56,12 +69,19 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
   const { leads, truncado } = await leadsDoPeriodo(deps.kommo, ku, inicio, fim, 'created_at');
   if (truncado) avisos.push(`o Kommo tem mais de ${deps.kommo.maxPaginas * 250} leads no período: o funil considera só esses`);
   const ids = leads.map((l) => l.id);
-  const [telefones, vinculos] = await Promise.all([deps.telefonesDosLeads(ku.slugsDaFranquia, ids), deps.vinculosDosLeads(ku.slugsDaFranquia, ids)]);
+  const [doKommo, daConversa, vinculos] = await Promise.all([
+    telefonesDoKommo(deps.kommo, ku, leads).catch((e: unknown) => {
+      avisos.push(`telefones dos contatos do Kommo não vieram (${e instanceof Error ? e.message : String(e)}): usei só o das conversas com a IA`);
+      return new Map<number, string>();
+    }),
+    deps.telefonesDosLeads(ku.slugsDaFranquia, ids),
+    deps.vinculosDosLeads(ku.slugsDaFranquia, ids),
+  ]);
   const leadsDoFunil: LeadDoFunil[] = leads.map((l) => ({
     id: l.id,
     criadoEm: diaLocal(new Date((l.created_at ?? 0) * 1000).toISOString(), ku.fuso) ?? inicio,
     origem: origemDoLead(l),
-    telefone: telefones.get(l.id) ?? null,
+    telefone: doKommo.get(l.id) ?? daConversa.get(l.id) ?? null,
     idClientVinculo: vinculos.get(l.id) ?? null,
   }));
 
@@ -73,7 +93,7 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
   // 3. franquia — do início do período até hoje (quem virou lead em setembro pode ter consultado em outubro)
   const ate = hoje > fim ? hoje : fim;
   const [pac, ag, tr] = await Promise.all([
-    franquia.buscarPacientes(deps.franquia, { unidade: slug, maxItens: TUDO }),
+    franquia.buscarPacientes(deps.franquia, { unidade: slug, maxItens: TUDO, criadosDesde: somarDias(inicio, -DIAS_DE_CADASTRO_ANTES) }),
     franquia.buscarAgendamentos(deps.franquia, { unidade: slug, inicio, fim: ate, maxItens: TUDO }),
     franquia.buscarTratamentos(deps.franquia, { unidade: slug, inicio, fim: ate, maxItens: TUDO }),
   ]);
@@ -87,7 +107,7 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
 
   const agendaDoFunil: AgendamentoDaFranquia[] = agenda.itens.map((a) => ({
     nomePaciente: String(a.clientName ?? ''),
-    dia: String(a.dateAttendanceLocal ?? '').slice(0, 10),
+    dia: diaDoItem(a, 'dateAttendance'),
     status: String(a.statusName ?? ''),
     idStatus: typeof a.idStatus === 'number' ? a.idStatus : null,
   }));
@@ -97,7 +117,7 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
     agenda: agendaDoFunil,
     tratamentos: tratamentos.itens.map((t) => ({
       idClient: typeof t.idClient === 'number' ? t.idClient : null,
-      criado: String(t.createdLocal ?? '').slice(0, 10),
+      criado: diaDoItem(t, 'created'),
       preco: typeof t.price === 'number' ? t.price : null,
     })),
   });
@@ -107,9 +127,10 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
   const porStatus: Record<string, number> = {};
   for (const a of noPeriodo) porStatus[a.status || '(sem status)'] = (porStatus[a.status || '(sem status)'] ?? 0) + 1;
   const tratNoPeriodo = tratamentos.itens.filter((t) => {
-    const d = String(t.createdLocal ?? '').slice(0, 10);
+    const d = diaDoItem(t, 'created');
     return d >= inicio && d <= fim;
   });
+  if (funil.homonimosSemAgenda) avisos.push(`${funil.homonimosSemAgenda} paciente(s) com nome repetido no cadastro: a agenda deles não entrou (a agenda da franquia só tem o nome)`);
 
   return {
     funil,
@@ -130,6 +151,11 @@ export async function relatorioFunil(deps: DepsRelatorio, a: { unidade: string |
   validarData(a.inicio, 'inicio');
   validarData(a.fim, 'fim');
   if (a.inicio > a.fim) throw new ErroDeEntrada('inicio é depois do fim');
+  if (diasNoPeriodo(a.inicio, a.fim) > MAX_DIAS_PERIODO) throw new ErroDeEntrada(`período de no máximo ${MAX_DIAS_PERIODO} dias por relatório (um trimestre); faça um por trimestre`);
+  const hoje = hojeNoFuso('America/Sao_Paulo', deps.agora?.());
+  if (a.inicio < somarDias(hoje, -MAX_DIAS_ATRAS)) {
+    throw new ErroDeEntrada(`o relatório cruzado cobre os últimos ${MAX_DIAS_ATRAS} dias (a partir de ${somarDias(hoje, -MAX_DIAS_ATRAS)}): ele lê a franquia do início do período até hoje`);
+  }
   const pedidos = Array.isArray(a.unidade) ? a.unidade : [a.unidade];
   const todosSlugs = new Set([...deps.kommo.unidades.keys(), ...deps.franquia.unidades.keys()]);
   if (pedidos.some((p) => p.trim().toLowerCase() === 'todas')) {
@@ -183,7 +209,7 @@ export function registrarRelatorio(server: McpServer, deps: DepsRelatorio, audit
         'O funil cruzado de verdade, calculado em código: leads do Kommo criados no período → viraram paciente na franquia → agendaram → ' +
         'compareceram → fecharam tratamento (com valor), por origem do lead, com taxas e COBERTURA do casamento (telefone ou vínculo). ' +
         'Traz também o que a franquia registrou no período (agendamentos por status, tratamentos novos). ' +
-        `Até ${MAX_UNIDADES_POR_RELATORIO} unidades por chamada; pra rede inteira, chame em lotes e some. ` +
+        `Até ${MAX_UNIDADES_POR_RELATORIO} unidades e ${MAX_DIAS_PERIODO} dias por chamada, nos últimos ${MAX_DIAS_ATRAS} dias; pra rede inteira, chame em lotes e some. ` +
         'Para alcance, cliques e gasto de anúncio, use o conector do Metricool e cruze com a "origem" daqui.',
       inputSchema: {
         unidade: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).describe('slug ou nome curto ("serra"), ou lista de até 4'),

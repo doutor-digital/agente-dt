@@ -95,3 +95,33 @@ test('dois leads da mesma pessoa contam UMA vez nas etapas da franquia', () => {
   assert.equal(f.leads, 2);
   assert.equal(f.compareceram, 1);
 });
+
+test('dois leads da mesma pessoa: vale o MAIS ANTIGO (origem e início da contagem), mesmo vindo fora de ordem', () => {
+  const f = cruzarFunil({
+    // o Kommo devolve o mais novo primeiro
+    leads: [lead(2, '41999998888', { criadoEm: '2026-09-20', origem: 'Indicação' }), lead(1, '41999998888', { criadoEm: '2026-09-02', origem: 'Meta' })],
+    pacientes: [{ idClient: 10, nome: 'Ana', telefone: '41999998888' }],
+    agenda: [{ nomePaciente: 'Ana', dia: '2026-09-05', status: 'Atendido' }],
+    tratamentos: [],
+  });
+  assert.equal(f.compareceram, 1); // a consulta de 05/09 conta, a partir do lead de 02/09
+  assert.equal(f.porOrigem.Meta?.compareceram, 1);
+  assert.equal(f.porOrigem['Indicação']?.compareceram, 0);
+  assert.equal(f.pacientesComMaisDeUmLead, 1);
+});
+
+test('homônimos: dois pacientes com o mesmo nome não herdam a agenda um do outro', () => {
+  const f = cruzarFunil({
+    leads: [lead(1, '41999998888')],
+    pacientes: [
+      { idClient: 10, nome: 'Maria da Silva', telefone: '41999998888' },
+      { idClient: 11, nome: 'MARIA DA SILVA', telefone: '41911112222' },
+    ],
+    agenda: [{ nomePaciente: 'Maria da Silva', dia: '2026-09-05', status: 'Atendido' }],
+    tratamentos: [{ idClient: 10, criado: '2026-09-06', preco: 500 }],
+  });
+  assert.equal(f.viraramPaciente, 1);
+  assert.equal(f.compareceram, 0); // não dá pra saber de qual Maria é a consulta
+  assert.equal(f.fecharamTratamento, 1); // tratamento é pelo idClient: esse dá
+  assert.equal(f.homonimosSemAgenda, 1);
+});

@@ -271,3 +271,26 @@ test('nome curto acha o slug longo; ambíguo é recusado', async () => {
   assert.deepEqual(Object.keys(r.porUnidade), ['doutor-hernia-serra']); // o mesmo pedido duas vezes conta uma
   await assert.rejects(c.buscarPacientes(contexto, { unidade: 'canaa' }), /ambígua: canaa/); // doutor-hernia-canaa E lab-canaa
 });
+
+test('pacientes criadosDesde: para de paginar ao passar da data e só devolve os novos', async () => {
+  const muitos = Array.from({ length: 250 }, (_, i) => ({
+    idClient: i + 1,
+    name: `P${i}`,
+    // mais novo primeiro, como a franquia ordena: 1 por dia, de 2026-09-30 pra trás
+    created: new Date(Date.parse('2026-09-30T15:00:00Z') - i * 86_400_000).toISOString(),
+  }));
+  const outra = await subirFranquiaFalsa({ [T_SERRA]: { pacientes: muitos } });
+  try {
+    const unidades = new Map<string, Unidade>([['serra', { slug: 'serra', nome: 'Serra', token: T_SERRA, fuso: 'America/Sao_Paulo', baseUrl: outra.url }]]);
+    const r = (await c.buscarPacientes(criarContexto(unidades, { intervaloMs: 0, cliente: { log: () => {} } }), {
+      unidade: 'serra',
+      criadosDesde: '2026-08-01',
+      maxItens: 1000,
+    })) as R;
+    assert.equal(r.porUnidade.serra.total, 61); // 30/09 a 01/08
+    assert.equal(r.porUnidade.serra.truncado, undefined);
+    assert.equal(outra.pedidos.length, 1); // a 1ª página (100) já passou de 01/08: não pede a 2ª
+  } finally {
+    await outra.fechar();
+  }
+});
