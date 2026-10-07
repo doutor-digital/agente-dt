@@ -37,6 +37,33 @@ export const CAMPO = {
   OPT_OUT: '✓ Opt-out WhatsApp',
 } as const;
 
+/**
+ * Lista de TESTE da unidade (`pipelineIntents.etiquetas_teste_leads`, ids de cartão). Com a automação
+ * LIGADA e a lista preenchida, só esses cartões recebem a etiqueta de verdade — o resto continua só no
+ * papel. Pedido do João (07/10/2026): "só no meu contato pra teste". `null` = sem lista = vale pra todos.
+ * Lista malformada vira lista VAZIA (ninguém recebe), nunca "todos": o erro fica do lado de não mandar.
+ */
+export function leadsDeTeste(pipelineIntents: unknown): Set<number> | null {
+  const bruto = (pipelineIntents as Record<string, unknown> | null | undefined)?.[CHAVE_LISTA_TESTE];
+  if (bruto === undefined || bruto === null) return null;
+  // Só dígitos: "0x1A", "2.8e7" ou `true` não podem virar um id de cartão por acaso.
+  const itens = Array.isArray(bruto) ? bruto : String(bruto).split(',');
+  return new Set(itens.map((x) => String(x).trim()).filter((x) => /^\d+$/.test(x)).map(Number).filter((n) => n > 0));
+}
+
+/**
+ * A tela de unidade valida `pipelineIntents` como {chave: inteiro positivo}: a lista de teste vai como UM
+ * id (número). Array ou texto com vírgula só por banco — e aí a tela recusa salvar a unidade.
+ */
+export const CHAVE_LISTA_TESTE = 'etiquetas_teste_leads';
+
+/** Ao clonar unidade a lista de teste NÃO vai junto: os ids são cartões da conta de origem. */
+export function semListaDeTeste<T>(pipelineIntents: T): T {
+  if (!pipelineIntents || typeof pipelineIntents !== 'object' || Array.isArray(pipelineIntents)) return pipelineIntents;
+  const { [CHAVE_LISTA_TESTE]: _fora, ...resto } = pipelineIntents as Record<string, unknown>;
+  return resto as T;
+}
+
 /** Etiquetas que dizem "não mande nada pra este paciente". */
 const NAO_CONTATAR = ['NO_FOLLOW_UP', 'NAO_PERTURBAR', 'BLOQUEADO_WHATSAPP', 'Fluxo · Opt-out WhatsApp'];
 /** Perdido por não ser caso nosso: reativar seria insistir com quem a SDR já descartou. */

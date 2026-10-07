@@ -12,6 +12,7 @@ import {
   decidirBoasVindas,
   decidirConfirmarRetorno,
   decidirReativacao,
+  leadsDeTeste,
   modelosV2,
   type ModelosV2,
   type Decisao,
@@ -205,20 +206,29 @@ async function varrerUnidade(unit: Unit, estado: Estado): Promise<void> {
     return;
   }
   const decisoes = await decisoesDaUnidade(unit, kommo);
-
-  if (estado === 'seco') {
-    for (const { lead, d } of decisoes) {
-      registrarSimulacao(unit, ID, {
-        leadId: lead.id,
-        acao: d.tipo === 'coloca' ? 'etiquetaria' : 'pularia',
-        alvo: d.etiqueta,
-        motivo: d.motivo,
-      });
-    }
-    return;
+  // Ligado com lista de teste: só os cartões da lista vão de verdade; o resto segue no papel.
+  const teste = estado === 'ligado' ? leadsDeTeste(unit.pipelineIntents) : null;
+  if (teste && teste.size === 0) {
+    logger.warn({ unit: unit.slug, bruto: (unit.pipelineIntents as Record<string, unknown> | null)?.etiquetas_teste_leads }, 'etiquetas: lista de teste ilegível — LIGADO mas ninguém recebe');
+  } else if (teste) {
+    logger.info({ unit: unit.slug, leads: [...teste] }, 'etiquetas: ligado só para a lista de teste');
   }
 
-  const aPor = decisoes.filter((x) => x.d.tipo === 'coloca');
+  const aPor: Array<{ lead: KommoLead; d: Decisao }> = [];
+  for (const x of decisoes) {
+    const soNoPapel = estado === 'seco' || (teste !== null && !teste.has(x.lead.id));
+    if (soNoPapel) {
+      registrarSimulacao(unit, ID, {
+        leadId: x.lead.id,
+        acao: x.d.tipo === 'coloca' ? 'etiquetaria' : 'pularia',
+        alvo: x.d.etiqueta,
+        motivo: x.d.motivo,
+      });
+    } else if (x.d.tipo === 'coloca') {
+      aPor.push(x);
+    }
+  }
+
   const feitas = await jaFeitas(unit.id, aPor.map((x) => x.d));
   let postas = 0;
   for (const { lead, d } of aPor) {
