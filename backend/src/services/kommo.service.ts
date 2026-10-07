@@ -23,6 +23,8 @@ export interface KommoLead {
   price?: number;
   created_at?: number;
   updated_at?: number;
+  /** Quando entrou em GANHO/PERDIDO (142/143). Some se o cartão sai de lá. */
+  closed_at?: number | null;
   custom_fields_values?: KommoCustomFieldValue[] | null;
   _embedded?: {
     tags?: Array<{ id: number; name: string }>;
@@ -1416,6 +1418,41 @@ export class KommoClient {
         if (lote.length < 250) return { leads, truncado: false };
       } catch (err) {
         wrapAxiosError(err, `listLeadsNaJanela(${campo}, ${deUnix}, ${ateUnix}, p${page})`);
+      }
+    }
+    return { leads, truncado: true };
+  }
+
+  /**
+   * Cartões que FECHARAM (GANHO 142 / PERDIDO 143) numa etapa dentro de uma janela de `closed_at`.
+   * É como se acha "entrou em GANHO agora" ou "faz 30 dias em PERDIDO" sem varrer a etapa inteira.
+   */
+  async listLeadsFechadosEntre(
+    pipelineId: number,
+    statusId: number,
+    deUnix: number,
+    ateUnix: number,
+    maxPaginas = 4,
+  ): Promise<{ leads: KommoLead[]; truncado: boolean }> {
+    const leads: KommoLead[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } } | ''>('/leads', {
+          params: {
+            limit: 250,
+            page,
+            'filter[statuses][0][pipeline_id]': pipelineId,
+            'filter[statuses][0][status_id]': statusId,
+            'filter[closed_at][from]': deUnix,
+            'filter[closed_at][to]': ateUnix,
+            'order[id]': 'asc',
+          },
+        });
+        const lote = (data && data._embedded?.leads) || [];
+        leads.push(...lote);
+        if (lote.length < 250) return { leads, truncado: false };
+      } catch (err) {
+        wrapAxiosError(err, `listLeadsFechadosEntre(${pipelineId}, ${statusId}, ${deUnix}, ${ateUnix}, p${page})`);
       }
     }
     return { leads, truncado: true };
