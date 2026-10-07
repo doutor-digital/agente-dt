@@ -8,6 +8,7 @@ import {
   epochSeg,
   temModeloV2,
   modelosV2,
+  leadsDeTeste,
 } from './etiquetas-auto.js';
 
 const H = 3600;
@@ -213,4 +214,14 @@ test('modelosV2 devolve as três respostas de uma vez', () => {
   const lista = [ok('acai_sdr_boas_vindas_programa'), ok('acai_sdr_boas_vindas_programa_v2'), ok('acai_sdr_confirmacao_retorno'), ok('acai_sdr_reativacao_lead_frio')];
   assert.deepEqual(modelosV2(lista), { boasVindas: true, retorno: false, reativacao: false });
   assert.deepEqual(modelosV2(null), { boasVindas: false, retorno: false, reativacao: false });
+});
+
+test('lista de teste: sem lista = todos; lista = só ela; lixo = ninguém (nunca todos)', () => {
+  assert.equal(leadsDeTeste(null), null);
+  assert.equal(leadsDeTeste({}), null);
+  assert.equal(leadsDeTeste({ sla_alert_minutes: 15 }), null);
+  assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: [28088906] })!], [28088906]);
+  assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: '28088906, 123' })!], [28088906, 123]);
+  assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: 'abc' })!], []);
+  assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: [] })!], []);
 });

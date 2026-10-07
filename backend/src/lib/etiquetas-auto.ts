@@ -37,6 +37,19 @@ export const CAMPO = {
   OPT_OUT: '✓ Opt-out WhatsApp',
 } as const;
 
+/**
+ * Lista de TESTE da unidade (`pipelineIntents.etiquetas_teste_leads`, ids de cartão). Com a automação
+ * LIGADA e a lista preenchida, só esses cartões recebem a etiqueta de verdade — o resto continua só no
+ * papel. Pedido do João (07/10/2026): "só no meu contato pra teste". `null` = sem lista = vale pra todos.
+ * Lista malformada vira lista VAZIA (ninguém recebe), nunca "todos": o erro fica do lado de não mandar.
+ */
+export function leadsDeTeste(pipelineIntents: unknown): Set<number> | null {
+  const bruto = (pipelineIntents as Record<string, unknown> | null | undefined)?.etiquetas_teste_leads;
+  if (bruto === undefined || bruto === null) return null;
+  const itens = Array.isArray(bruto) ? bruto : String(bruto).split(',');
+  return new Set(itens.map((x) => Number(String(x).trim())).filter((n) => Number.isInteger(n) && n > 0));
+}
+
 /** Etiquetas que dizem "não mande nada pra este paciente". */
 const NAO_CONTATAR = ['NO_FOLLOW_UP', 'NAO_PERTURBAR', 'BLOQUEADO_WHATSAPP', 'Fluxo · Opt-out WhatsApp'];
 /** Perdido por não ser caso nosso: reativar seria insistir com quem a SDR já descartou. */
