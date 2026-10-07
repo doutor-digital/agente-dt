@@ -74,6 +74,9 @@ export function cartaoTemConsulta(
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 
+/** Leads cujo cartão já mostrou consulta → até quando não precisa reler (ms). */
+const comConsulta = new Map<string, number>();
+
 interface Candidato {
   unitId: string;
   slug: string;
@@ -134,6 +137,9 @@ async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
+    const agora = Date.now();
+    for (const [chave, ate] of comConsulta) if (ate <= agora) comConsulta.delete(chave);
+
     const lista = await candidatos();
     if (lista.length === 0) return;
 
@@ -158,9 +164,16 @@ async function varrer(): Promise<void> {
         if (!Number.isFinite(leadId) || leadId <= 0) continue;
         if (await jaAvisado(unitId, c.leadId)) continue;
 
+        const chave = `${unitId}:${c.leadId}`;
+        if ((comConsulta.get(chave) ?? 0) > Date.now()) continue;
         // Sem ler o cartão não dá pra saber se a recepção marcou; tenta na próxima varredura.
         const lead = await kommo.getLead(leadId).catch(() => null);
-        if (!lead || cartaoTemConsulta(lead, new Date(c.ofereceuEm))) continue;
+        if (!lead) continue;
+        if (cartaoTemConsulta(lead, new Date(c.ofereceuEm))) {
+          // Some da janela em JANELA_HORAS; até lá não relê o cartão a cada varredura.
+          comConsulta.set(chave, Date.now() + JANELA_HORAS * 60 * 60_000);
+          continue;
+        }
 
         const texto =
           `${MARCA} · ${unit.slug} · lead ${leadId} — a IA ofereceu horário e ` +
