@@ -38,3 +38,16 @@ test('folga de fuso: rastro gravado 3 h adiantado não vira alerta', () => {
   const ofertaComFusoErrado = new Date('2026-10-06T16:14:09Z');
   assert.equal(cartaoTemConsulta(comData(Date.parse('2026-10-06T15:00:00Z') / 1000), ofertaComFusoErrado), true);
 });
+
+test('faltou de manhã e a IA ofereceu de tarde: consulta velha não cala o alerta', () => {
+  // consulta 08:00 BRT, oferta 15:00 BRT do mesmo dia — 7 h antes, fora da folga de 4 h
+  const ofertaTarde = new Date('2026-10-06T18:00:00Z');
+  assert.equal(cartaoTemConsulta(comData(Date.parse('2026-10-06T11:00:00Z') / 1000), ofertaTarde), false);
+});
+
+test('aceita a data em ms, em ISO e o nome do campo sem o símbolo', () => {
+  const quarta = Date.parse('2026-10-07T16:00:00Z');
+  assert.equal(cartaoTemConsulta(comData(quarta), oferta), true);
+  assert.equal(cartaoTemConsulta(comData('2026-10-07T13:00:00-03:00'), oferta), true);
+  assert.equal(cartaoTemConsulta(comData(quarta / 1000, 'Data da Consulta'), oferta), true);
+});
