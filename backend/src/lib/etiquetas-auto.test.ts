@@ -56,22 +56,40 @@ test('boas-vindas: opt-out pula', () => {
 
 // ── ▶ Confirmar retorno ───────────────────────────────────────────────────────────────────────
 
-test('retorno: próxima sessão daqui a 20 h → coloca, com chave por data', () => {
+const retornoEm = (quando: number, mostrada: number | null = quando) => ({
+  '◷ Data da Consulta': quando,
+  ...(mostrada ? { '◷ Próxima sessão': mostrada } : {}),
+});
+
+test('retorno: Data da Consulta daqui a 20 h e o modelo mostra a mesma data → coloca, chave por data', () => {
   const quando = AGORA + 20 * H;
-  const d = decidirConfirmarRetorno(cartao({ campos: { '◷ Próxima sessão': quando } }), AGORA);
+  const d = decidirConfirmarRetorno(cartao({ campos: retornoEm(quando) }), AGORA);
   assert.equal(d?.tipo, 'coloca');
   assert.equal(d?.chave, `retorno:1:${quando}`);
   assert.equal(d?.tipo === 'coloca' && d.reaplica, false);
 });
 
-test('retorno: daqui a 3 dias ainda não; já passou também não', () => {
-  assert.equal(decidirConfirmarRetorno(cartao({ campos: { '◷ Próxima sessão': AGORA + 3 * D } }), AGORA), null);
-  assert.equal(decidirConfirmarRetorno(cartao({ campos: { '◷ Próxima sessão': AGORA - H } }), AGORA), null);
+test('retorno: o modelo mostra Próxima sessão vazia ou outra data → pula e manda trocar o modelo', () => {
+  const quando = AGORA + 20 * H;
+  for (const mostrada of [null, AGORA + 5 * D]) {
+    const d = decidirConfirmarRetorno(cartao({ campos: retornoEm(quando, mostrada) }), AGORA);
+    assert.equal(d?.tipo, 'pula');
+    assert.match(d!.motivo, /trocar o modelo/);
+  }
+});
+
+test('retorno: daqui a 3 dias ainda não; já passou também não; sem data nada', () => {
+  assert.equal(decidirConfirmarRetorno(cartao({ campos: retornoEm(AGORA + 3 * D) }), AGORA), null);
+  assert.equal(decidirConfirmarRetorno(cartao({ campos: retornoEm(AGORA - H) }), AGORA), null);
   assert.equal(decidirConfirmarRetorno(cartao(), AGORA), null);
 });
 
+test('retorno: só Próxima sessão (sessão de tratamento) não conta como retorno', () => {
+  assert.equal(decidirConfirmarRetorno(cartao({ campos: { '◷ Próxima sessão': AGORA + 5 * H } }), AGORA), null);
+});
+
 test('retorno: etiqueta de um retorno anterior ainda no cartão → reaplica (tira e põe)', () => {
-  const d = decidirConfirmarRetorno(cartao({ campos: { '◷ Próxima sessão': AGORA + 5 * H }, tags: [ETIQUETA.CONFIRMAR_RETORNO] }), AGORA);
+  const d = decidirConfirmarRetorno(cartao({ campos: retornoEm(AGORA + 5 * H), tags: [ETIQUETA.CONFIRMAR_RETORNO] }), AGORA);
   assert.equal(d?.tipo === 'coloca' && d.reaplica, true);
 });
 
@@ -104,11 +122,25 @@ test('reativação: responsável vazio sairia "Aqui é , da" → pula e explica'
   assert.match(d!.motivo, /Aqui é , da/);
 });
 
-test('reativação: NO_FOLLOW_UP ou opt-out → pula', () => {
-  for (const tags of [['NO_FOLLOW_UP'], ['Fluxo · Opt-out WhatsApp']]) {
+test('reativação: NO_FOLLOW_UP, NAO_PERTURBAR, bloqueado, opt-out ou fora do escopo → pula', () => {
+  for (const tags of [['NO_FOLLOW_UP'], ['NAO_PERTURBAR'], ['BLOQUEADO_WHATSAPP'], ['Fluxo · Opt-out WhatsApp'], ['Fora do escopo']]) {
     const d = decidirReativacao(cartao({ closed_at: AGORA - 30 * D - H, campos: RESP, tags }), AGORA, null);
     assert.equal(d?.tipo, 'pula');
   }
+});
+
+test('reativação: responsável que não é gente (DOUTOR DIGITAL, I.A SOFIA) → pula', () => {
+  for (const r of ['DOUTOR DIGITAL', 'I.A SOFIA']) {
+    const d = decidirReativacao(cartao({ closed_at: AGORA - 30 * D - H, campos: { '☻ Responsável agendamento': r } }), AGORA, null);
+    assert.equal(d?.tipo, 'pula', r);
+  }
+});
+
+test('reativação: cartão que nasceu em PERDIDO (importação) não conta os 30 dias', () => {
+  const perdeu = AGORA - 30 * D - H;
+  const d = decidirReativacao({ ...cartao({ closed_at: perdeu, campos: RESP }), created_at: perdeu - 60 }, AGORA, null);
+  assert.equal(d?.tipo, 'pula');
+  assert.match(d!.motivo, /nasceu em PERDIDO/);
 });
 
 test('reativação: quem já tem a etiqueta não ganha de novo', () => {

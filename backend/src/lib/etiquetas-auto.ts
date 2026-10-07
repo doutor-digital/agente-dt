@@ -9,8 +9,9 @@
  * As três regras aprovadas:
  *  - ▶ Boas-vindas     — o cartão entrou em GANHO (COMERCIAL). Espera o programa e a próxima sessão
  *                         estarem no cartão, porque o modelo cita os dois.
- *  - ▶ Confirmar retorno — RETORNO PÓS-TRATAMENTO com "◷ Próxima sessão" nas próximas 24 h.
- *                         Em EM TRATAMENTO não: ali a véspera da sessão já tem bot próprio.
+ *  - ▶ Confirmar retorno — RETORNO PÓS-TRATAMENTO com o retorno ("◷ Data da Consulta", que é onde o
+ *                         sincronizador da franquia grava) nas próximas 24 h. Em EM TRATAMENTO não:
+ *                         ali a véspera da sessão já tem bot próprio.
  *  - ▶ Reativação      — 30 dias em PERDIDO sem conversa. Só quem CRUZA os 30 dias agora
  *                         (janela curta): nunca varre o estoque antigo de uma vez.
  * A ▶ Retomada (ligação não atendida) fica de fora: depende do robô da 3C, parado desde 25/08.
@@ -29,13 +30,23 @@ export type Etiqueta = (typeof ETIQUETA)[keyof typeof ETIQUETA];
 
 export const CAMPO = {
   PROXIMA_SESSAO: '◷ Próxima sessão',
+  DATA_CONSULTA: '◷ Data da Consulta',
   TRATAMENTO_FECHADO: '⚕ Tratamento fechado',
   RESPONSAVEL: '☻ Responsável agendamento',
   OPT_OUT: '✓ Opt-out WhatsApp',
 } as const;
 
 /** Etiquetas que dizem "não mande nada pra este paciente". */
-const NAO_CONTATAR = ['NO_FOLLOW_UP', 'Fluxo · Opt-out WhatsApp'];
+const NAO_CONTATAR = ['NO_FOLLOW_UP', 'NAO_PERTURBAR', 'BLOQUEADO_WHATSAPP', 'Fluxo · Opt-out WhatsApp'];
+/** Perdido por não ser caso nosso: reativar seria insistir com quem a SDR já descartou. */
+const DESQUALIFICADO = ['Fora do escopo'];
+/**
+ * "☻ Responsável agendamento" que não é gente: o modelo da Reativação diz "Aqui é {responsável}",
+ * e "Aqui é DOUTOR DIGITAL" ou "Aqui é I.A SOFIA" é o mesmo tipo de mensagem quebrada que o vazio.
+ */
+const RESPONSAVEL_QUE_NAO_E_GENTE = /doutor\s*digital|sofia|^\s*i\.?\s*a\.?\s*$/i;
+/** Os dois campos de data que deveriam bater no retorno (tolerância de fuso/arredondamento). */
+const TOLERANCIA_DATA_S = 2 * 3600;
 
 const HORA = 3600;
 const DIA = 24 * HORA;
@@ -50,7 +61,7 @@ export type Decisao =
   | { tipo: 'coloca'; etiqueta: Etiqueta; chave: string; motivo: string; reaplica?: boolean }
   | { tipo: 'pula'; etiqueta: Etiqueta; chave: string; motivo: string };
 
-type Cartao = Pick<KommoLead, 'id' | 'custom_fields_values' | '_embedded'> & { closed_at?: number | null };
+type Cartao = Pick<KommoLead, 'id' | 'custom_fields_values' | '_embedded' | 'created_at'> & { closed_at?: number | null };
 
 function valor(lead: Cartao, nome: string): unknown {
   const alvo = normalizarNome(nome);
@@ -105,12 +116,25 @@ export function decidirBoasVindas(lead: Cartao, agora: number): Decisao | null {
   return { tipo: 'coloca', etiqueta: ETIQUETA.BOAS_VINDAS, chave, motivo: `entrou em GANHO em ${dataBR(fechou)}` };
 }
 
-/** Cartão em RETORNO PÓS-TRATAMENTO. */
+/**
+ * Cartão em RETORNO PÓS-TRATAMENTO. A data vem de "◷ Data da Consulta" (onde a franquia grava o
+ * retorno), mas o modelo acai_sdr_confirmacao_retorno MOSTRA "◷ Próxima sessão": só põe a etiqueta
+ * quando os dois batem, senão o paciente lê uma data errada ou um buraco.
+ */
 export function decidirConfirmarRetorno(lead: Cartao, agora: number): Decisao | null {
-  const quando = epochSeg(valor(lead, CAMPO.PROXIMA_SESSAO));
+  const quando = epochSeg(valor(lead, CAMPO.DATA_CONSULTA));
   if (!quando || quando <= agora || quando - agora > ANTECEDENCIA_RETORNO_S) return null;
   const chave = `retorno:${lead.id}:${quando}`;
   if (optOut(lead)) return { tipo: 'pula', etiqueta: ETIQUETA.CONFIRMAR_RETORNO, chave, motivo: 'paciente pediu para não receber mensagens' };
+  const mostrada = epochSeg(valor(lead, CAMPO.PROXIMA_SESSAO));
+  if (!mostrada || Math.abs(mostrada - quando) > TOLERANCIA_DATA_S) {
+    return {
+      tipo: 'pula',
+      etiqueta: ETIQUETA.CONFIRMAR_RETORNO,
+      chave,
+      motivo: `retorno em ${dataBR(quando)}, mas o modelo mostra ${CAMPO.PROXIMA_SESSAO} (${mostrada ? dataBR(mostrada) : 'vazio'}) — trocar o modelo para ${CAMPO.DATA_CONSULTA}`,
+    };
+  }
   return {
     tipo: 'coloca',
     etiqueta: ETIQUETA.CONFIRMAR_RETORNO,
@@ -134,11 +158,20 @@ export function decidirReativacao(lead: Cartao, agora: number, ultimaConversa: n
   if (temEtiqueta(lead, ETIQUETA.REATIVACAO)) return null;
   const chave = `reativacao:${lead.id}:${perdeu}`;
   if (optOut(lead)) return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: 'paciente pediu para não receber mensagens' };
+  if (temEtiqueta(lead, ...DESQUALIFICADO)) return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: 'perdido como fora do escopo' };
+  const criado = epochSeg(lead.created_at);
+  if (criado && perdeu - criado < HORA) {
+    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: 'o cartão nasceu em PERDIDO (importação/carga) — os 30 dias não são do paciente' };
+  }
   if (ultimaConversa && agora - ultimaConversa < limite) {
     return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `conversou em ${dataBR(ultimaConversa)}, menos de ${DIAS_REATIVACAO} dias` };
   }
-  if (!preenchido(lead, CAMPO.RESPONSAVEL)) {
+  const responsavel = String(valor(lead, CAMPO.RESPONSAVEL) ?? '').trim();
+  if (!responsavel) {
     return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} vazio — o modelo sairia "Aqui é , da Doutor Hérnia"` };
+  }
+  if (RESPONSAVEL_QUE_NAO_E_GENTE.test(responsavel)) {
+    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} = ${responsavel} — o modelo sairia "Aqui é ${responsavel}, da Doutor Hérnia"` };
   }
   return { tipo: 'coloca', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${DIAS_REATIVACAO} dias em PERDIDO (desde ${dataBR(perdeu)}) sem conversa` };
 }

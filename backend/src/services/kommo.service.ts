@@ -700,6 +700,18 @@ export class KommoClient {
     return m;
   }
 
+  /** Ids de todos os cartões de um contato. `null` = não consegui perguntar (não é "nenhum"). */
+  async leadsDoContato(contactId: number): Promise<number[] | null> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: Array<{ id?: number }> } } | ''>(`/contacts/${contactId}`, {
+        params: { with: 'leads' },
+      });
+      return ((data && data._embedded?.leads) || []).map((l) => l.id).filter((id): id is number => typeof id === 'number');
+    } catch {
+      return null;
+    }
+  }
+
   async getContactPhone(contactId: number): Promise<string | null> {
     return (await this.getContactBasico(contactId)).telefone;
   }
@@ -1392,14 +1404,19 @@ export class KommoClient {
    * por isso "consulta nos últimos 7 dias" vem de "mexido nos últimos 7 dias" + filtro local.
    */
   async listLeadsNaJanela(
-    campo: 'created_at' | 'updated_at',
+    /** `closed_at` = quando entrou em GANHO/PERDIDO (142/143) — use com `etapa` */
+    campo: 'created_at' | 'updated_at' | 'closed_at',
     deUnix: number,
     ateUnix: number,
     maxPaginas = 8,
     /** traz os ids dos contatos de cada lead (`with=contacts`), pra buscar o telefone em lote depois */
     comContatos = false,
+    /** só cartões nesta etapa (ex.: COMERCIAL/142 pra "entrou em GANHO") */
+    etapa?: { pipelineId: number; statusId: number },
   ): Promise<{ leads: KommoLead[]; truncado: boolean }> {
     const leads: KommoLead[] = [];
+    // A API só ordena por id, created_at e updated_at; por closed_at, o id mais novo vem primeiro.
+    const ordem = campo === 'closed_at' ? 'id' : campo;
     for (let page = 1; page <= maxPaginas; page++) {
       try {
         const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } } | ''>('/leads', {
@@ -1409,7 +1426,10 @@ export class KommoClient {
             page,
             [`filter[${campo}][from]`]: deUnix,
             [`filter[${campo}][to]`]: ateUnix,
-            [`order[${campo}]`]: 'desc',
+            [`order[${ordem}]`]: 'desc',
+            ...(etapa
+              ? { 'filter[statuses][0][pipeline_id]': etapa.pipelineId, 'filter[statuses][0][status_id]': etapa.statusId }
+              : {}),
             ...(comContatos ? { with: 'contacts' } : {}),
           },
         });
@@ -1418,41 +1438,6 @@ export class KommoClient {
         if (lote.length < 250) return { leads, truncado: false };
       } catch (err) {
         wrapAxiosError(err, `listLeadsNaJanela(${campo}, ${deUnix}, ${ateUnix}, p${page})`);
-      }
-    }
-    return { leads, truncado: true };
-  }
-
-  /**
-   * Cartões que FECHARAM (GANHO 142 / PERDIDO 143) numa etapa dentro de uma janela de `closed_at`.
-   * É como se acha "entrou em GANHO agora" ou "faz 30 dias em PERDIDO" sem varrer a etapa inteira.
-   */
-  async listLeadsFechadosEntre(
-    pipelineId: number,
-    statusId: number,
-    deUnix: number,
-    ateUnix: number,
-    maxPaginas = 4,
-  ): Promise<{ leads: KommoLead[]; truncado: boolean }> {
-    const leads: KommoLead[] = [];
-    for (let page = 1; page <= maxPaginas; page++) {
-      try {
-        const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } } | ''>('/leads', {
-          params: {
-            limit: 250,
-            page,
-            'filter[statuses][0][pipeline_id]': pipelineId,
-            'filter[statuses][0][status_id]': statusId,
-            'filter[closed_at][from]': deUnix,
-            'filter[closed_at][to]': ateUnix,
-            'order[id]': 'asc',
-          },
-        });
-        const lote = (data && data._embedded?.leads) || [];
-        leads.push(...lote);
-        if (lote.length < 250) return { leads, truncado: false };
-      } catch (err) {
-        wrapAxiosError(err, `listLeadsFechadosEntre(${pipelineId}, ${statusId}, ${deUnix}, ${ateUnix}, p${page})`);
       }
     }
     return { leads, truncado: true };
