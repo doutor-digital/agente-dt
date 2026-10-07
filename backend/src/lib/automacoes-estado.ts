@@ -96,7 +96,17 @@ export function estadoGravado(slug: string, id: string): Estado | null {
  * continua sendo o padrão quando a tela nunca falou nada sobre essa unidade.
  */
 export function estadoDaAutomacao(slug: string, id: string, raw: string | undefined): Estado {
-  return estadoGravado(slug, id) ?? (naListaDoAmbiente(slug, raw, id) ? 'ligado' : 'desligado');
+  return estadoGravado(slug, id) ?? estadoDoAmbiente(slug, raw, id);
+}
+
+/**
+ * O estado quando a tela nunca falou nada: na lista do `.env` = ligado; fora dela, o padrão do catálogo —
+ * desligado, ou "só no papel" para quem nasce em seco (`quandoVazio: 'seco'`).
+ */
+export function estadoDoAmbiente(slug: string, raw: string | undefined, id?: string): Estado {
+  if (naListaDoAmbiente(slug, raw, id)) return 'ligado';
+  const a = id ? automacaoPorId(id) : undefined;
+  return a?.quandoVazio === 'seco' && a.temSeco ? 'seco' : 'desligado';
 }
 
 /** Atalho para as portas que só querem saber se roda. */
@@ -135,7 +145,7 @@ export function panoramaDaUnidade(slug: string, ambiente: NodeJS.ProcessEnv = pr
     const gravado = estadoGravado(slug, a.id);
     return {
       ...a,
-      estado: gravado ?? (naListaDoAmbiente(slug, raw, a.id) ? 'ligado' : 'desligado'),
+      estado: gravado ?? estadoDoAmbiente(slug, raw, a.id),
       vemDoAmbiente: gravado === null,
       ambiente: (raw ?? '').trim(),
     };
