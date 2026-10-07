@@ -1,7 +1,7 @@
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { createKommoClient, type KommoClient, type KommoLead } from '../services/kommo.service.js';
+import { createKommoClient, type KommoChatTemplate, type KommoClient, type KommoLead } from '../services/kommo.service.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
@@ -12,7 +12,7 @@ import {
   decidirBoasVindas,
   decidirConfirmarRetorno,
   decidirReativacao,
-  reativacaoCitaResponsavel,
+  temModeloV2,
   type Decisao,
 } from './etiquetas-auto.js';
 
@@ -125,20 +125,34 @@ async function voltouEmOutroCartao(
 
 /** Modelos mudam de aprovação raramente: uma leitura por unidade a cada hora basta. */
 const MODELOS_VALIDADE_MS = 3600_000;
-const modelosCache = new Map<string, { em: number; cita: boolean }>();
+const modelosCache = new Map<string, { em: number; lista: KommoChatTemplate[] | null }>();
 
-async function citaResponsavel(unit: Unit, kommo: KommoClient): Promise<boolean> {
+async function modelosDaUnidade(unit: Unit, kommo: KommoClient): Promise<KommoChatTemplate[] | null> {
   const c = modelosCache.get(unit.id);
-  if (c && Date.now() - c.em < MODELOS_VALIDADE_MS) return c.cita;
-  let cita = true;
+  if (c && Date.now() - c.em < MODELOS_VALIDADE_MS) return c.lista;
+  let lista: KommoChatTemplate[] | null = null;
   try {
-    cita = reativacaoCitaResponsavel(await kommo.listChatTemplates());
+    lista = await kommo.listChatTemplates();
   } catch (err) {
     // Sem a lista, vale o modelo original (pula): mas avisa, senão "pularia" parece regra e é falha.
-    logger.warn({ err: String(err), unit: unit.slug }, 'etiquetas: não li os modelos — Reativação segue exigindo o responsável');
+    logger.warn({ err: String(err), unit: unit.slug }, 'etiquetas: não li os modelos — segue valendo o modelo original');
   }
-  modelosCache.set(unit.id, { em: Date.now(), cita });
-  return cita;
+  modelosCache.set(unit.id, { em: Date.now(), lista });
+  return lista;
+}
+
+/**
+ * Pulou só por causa do texto do modelo? Se a `_v2` dele estiver aprovada, decide de novo com ela.
+ * A lista de modelos só é lida quando algum cartão depende disso.
+ */
+async function comModeloV2(
+  unit: Unit,
+  kommo: KommoClient,
+  d: Decisao | null,
+  deNovo: (modeloV2: boolean) => Decisao | null,
+): Promise<Decisao | null> {
+  if (d?.tipo !== 'pula' || !d.porModelo) return d;
+  return temModeloV2(await modelosDaUnidade(unit, kommo), d.porModelo) ? deNovo(true) : d;
 }
 
 async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<{ lead: KommoLead; d: Decisao }>> {
@@ -158,13 +172,17 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
     pipelineId: comercial,
     statusId: 142,
   });
-  for (const l of ganhos.leads) junta(l, decidirBoasVindas(l, agora));
+  for (const l of ganhos.leads) {
+    junta(l, await comModeloV2(unit, kommo, decidirBoasVindas(l, agora), (v2) => decidirBoasVindas(l, agora, v2)));
+  }
 
   const retorno = esquema.statusPorNome('COMERCIAL', 'RETORNO PÓS-TRATAMENTO');
   if (retorno) {
     for (let page = 1; page <= PAGINAS_RETORNO; page++) {
       const lote = await kommo.listLeadsPorEtapa(comercial, retorno, 250, page);
-      for (const l of lote) junta(l, decidirConfirmarRetorno(l, agora));
+      for (const l of lote) {
+        junta(l, await comModeloV2(unit, kommo, decidirConfirmarRetorno(l, agora), (v2) => decidirConfirmarRetorno(l, agora, v2)));
+      }
       if (lote.length < 250) break;
     }
   }
@@ -176,11 +194,8 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
   });
   const conversas = await ultimasConversas(unit.id, perdidos.leads.map((l) => l.id));
   for (const l of perdidos.leads) {
-    let d = decidirReativacao(l, agora, conversas.get(l.id) ?? null);
-    // Só pergunta pelos modelos quando o responsável é o que segura o cartão.
-    if (d?.tipo === 'pula' && d.porResponsavel && !(await citaResponsavel(unit, kommo))) {
-      d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, false);
-    }
+    const ultima = conversas.get(l.id) ?? null;
+    const d = await comModeloV2(unit, kommo, decidirReativacao(l, agora, ultima), (v2) => decidirReativacao(l, agora, ultima, v2));
     if (d?.tipo === 'coloca') {
       const motivo = await voltouEmOutroCartao(unit.id, kommo, l, l.closed_at ?? 0, agora);
       if (motivo) {

@@ -6,7 +6,7 @@ import {
   decidirConfirmarRetorno,
   decidirReativacao,
   epochSeg,
-  reativacaoCitaResponsavel,
+  temModeloV2,
 } from './etiquetas-auto.js';
 
 const H = 3600;
@@ -157,7 +157,7 @@ test('epochSeg aceita segundos, ms e ISO', () => {
 });
 
 test('reativação: com o modelo v2 (nome fixo) o responsável vazio não trava', () => {
-  const d = decidirReativacao(cartao({ closed_at: AGORA - 30 * D - H }), AGORA, null, false);
+  const d = decidirReativacao(cartao({ closed_at: AGORA - 30 * D - H }), AGORA, null, true);
   assert.equal(d?.tipo, 'coloca');
 });
 
@@ -167,18 +167,35 @@ test('modelo v2 só vale aprovado, em todos os números, e com o prefixo da unid
     { name: 'acai_consulta_confirmada', reviews: [{ status: 'approved' }] },
   ];
   const com = (name: string, ...status: string[]) => [...base, { name, reviews: status.map((s) => ({ status: s })) }];
-  assert.equal(reativacaoCitaResponsavel(com('acai_sdr_reativacao_lead_frio_v2', 'approved')), false);
-  assert.equal(reativacaoCitaResponsavel(com('acai_sdr_reativacao_lead_frio_v2', 'review')), true);
-  assert.equal(reativacaoCitaResponsavel(com('acai_sdr_reativacao_lead_frio_v2', 'approved', 'review')), true);
-  assert.equal(reativacaoCitaResponsavel(com('acai_sdr_reativacao_lead_frio_v2')), true);
+  const R = 'sdr_reativacao_lead_frio' as const;
+  assert.equal(temModeloV2(com('acai_sdr_reativacao_lead_frio_v2', 'approved'), R), true);
+  assert.equal(temModeloV2(com('acai_sdr_reativacao_lead_frio_v2', 'review'), R), false);
+  assert.equal(temModeloV2(com('acai_sdr_reativacao_lead_frio_v2', 'approved', 'review'), R), false);
+  assert.equal(temModeloV2(com('acai_sdr_reativacao_lead_frio_v2'), R), false);
   // v2 de outra unidade na mesma conta não vale aqui
-  assert.equal(reativacaoCitaResponsavel(com('imp_sdr_reativacao_lead_frio_v2', 'approved')), true);
-  assert.equal(reativacaoCitaResponsavel(base), true);
-  assert.equal(reativacaoCitaResponsavel(null), true);
-  assert.equal(reativacaoCitaResponsavel([]), true);
+  assert.equal(temModeloV2(com('imp_sdr_reativacao_lead_frio_v2', 'approved'), R), false);
+  // v2 de OUTRO modelo não vale pra este
+  assert.equal(temModeloV2(com('acai_sdr_boas_vindas_programa_v2', 'approved'), R), false);
+  assert.equal(temModeloV2(com('acai_sdr_boas_vindas_programa_v2', 'approved'), 'sdr_boas_vindas_programa'), true);
+  assert.equal(temModeloV2(base, R), false);
+  assert.equal(temModeloV2(null, R), false);
+  assert.equal(temModeloV2([], R), false);
   // formato da API pública: _embedded.reviews
-  assert.equal(
-    reativacaoCitaResponsavel([...base, { name: 'acai_sdr_reativacao_lead_frio_v2', _embedded: { reviews: [{ status: 'approved' }] } }]),
-    false,
-  );
+  assert.equal(temModeloV2([...base, { name: 'acai_sdr_reativacao_lead_frio_v2', _embedded: { reviews: [{ status: 'approved' }] } }], R), true);
+});
+
+test('pulou pelo texto do modelo → diz qual v2 resolveria', () => {
+  const bv = decidirBoasVindas(cartao({ closed_at: AGORA - H }), AGORA);
+  assert.equal(bv?.tipo === 'pula' && bv.porModelo, 'sdr_boas_vindas_programa');
+  const rt = decidirConfirmarRetorno(cartao({ campos: { '◷ Data da Consulta': AGORA + 5 * H } }), AGORA);
+  assert.equal(rt?.tipo === 'pula' && rt.porModelo, 'sdr_confirmacao_retorno');
+  const op = decidirBoasVindas(cartao({ closed_at: AGORA - H, tags: ['NO_FOLLOW_UP'] }), AGORA);
+  assert.equal(op?.tipo === 'pula' && op.porModelo, undefined, 'opt-out não se resolve com modelo');
+});
+
+test('com a v2: boas-vindas sem programa/sessão e retorno sem Próxima sessão → coloca', () => {
+  assert.equal(decidirBoasVindas(cartao({ closed_at: AGORA - H }), AGORA, true)?.tipo, 'coloca');
+  assert.equal(decidirConfirmarRetorno(cartao({ campos: { '◷ Data da Consulta': AGORA + 5 * H } }), AGORA, true)?.tipo, 'coloca');
+  // opt-out continua pulando mesmo com a v2
+  assert.equal(decidirBoasVindas(cartao({ closed_at: AGORA - H, tags: ['NO_FOLLOW_UP'] }), AGORA, true)?.tipo, 'pula');
 });
