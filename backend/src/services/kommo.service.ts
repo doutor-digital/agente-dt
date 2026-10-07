@@ -32,6 +32,16 @@ export interface KommoLead {
   };
 }
 
+/** Modelo de mensagem (WABA ou rápida), com o status na Meta quando pedido `with=reviews`. */
+export interface KommoChatTemplate {
+  id: number;
+  name: string;
+  content?: string;
+  /** A API pública devolve em `_embedded.reviews` (conferido 07/10/2026); a rota /ajax, em `reviews`. */
+  reviews?: Array<{ status?: string; source_id?: number }> | null;
+  _embedded?: { reviews?: Array<{ status?: string; source_id?: number }> | null };
+}
+
 export interface KommoPipelineStatus {
   id: number;
   name: string;
@@ -698,6 +708,24 @@ export class KommoClient {
       }
     }
     return m;
+  }
+
+  /** Modelos de mensagem da conta, com o status de aprovação na Meta. */
+  async listChatTemplates(maxPaginas = 4): Promise<KommoChatTemplate[]> {
+    const out: KommoChatTemplate[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data } = await this.http.get<
+          { _embedded?: { chat_templates?: KommoChatTemplate[] }; _links?: { next?: unknown } } | ''
+        >('/chats/templates', { params: { limit: 250, page, with: 'reviews' } });
+        out.push(...((data && data._embedded?.chat_templates) || []));
+        // O tamanho da página é do Kommo, não nosso: só para quando ele disser que não há próxima.
+        if (!data || !data._links?.next) break;
+      } catch (err) {
+        wrapAxiosError(err, `listChatTemplates(p${page})`);
+      }
+    }
+    return out;
   }
 
   /** Ids de todos os cartões de um contato. `null` = não consegui perguntar (não é "nenhum"). */

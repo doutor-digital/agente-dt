@@ -12,6 +12,7 @@ import {
   decidirBoasVindas,
   decidirConfirmarRetorno,
   decidirReativacao,
+  reativacaoCitaResponsavel,
   type Decisao,
 } from './etiquetas-auto.js';
 
@@ -122,6 +123,24 @@ async function voltouEmOutroCartao(
   return recente ? 'conversou em outro cartão nos últimos 30 dias' : null;
 }
 
+/** Modelos mudam de aprovação raramente: uma leitura por unidade a cada hora basta. */
+const MODELOS_VALIDADE_MS = 3600_000;
+const modelosCache = new Map<string, { em: number; cita: boolean }>();
+
+async function citaResponsavel(unit: Unit, kommo: KommoClient): Promise<boolean> {
+  const c = modelosCache.get(unit.id);
+  if (c && Date.now() - c.em < MODELOS_VALIDADE_MS) return c.cita;
+  let cita = true;
+  try {
+    cita = reativacaoCitaResponsavel(await kommo.listChatTemplates());
+  } catch (err) {
+    // Sem a lista, vale o modelo original (pula): mas avisa, senão "pularia" parece regra e é falha.
+    logger.warn({ err: String(err), unit: unit.slug }, 'etiquetas: não li os modelos — Reativação segue exigindo o responsável');
+  }
+  modelosCache.set(unit.id, { em: Date.now(), cita });
+  return cita;
+}
+
 async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<{ lead: KommoLead; d: Decisao }>> {
   const esquema = await esquemaDaUnidade(unit, kommo);
   const comercial = esquema.pipelinePorNome('COMERCIAL');
@@ -157,7 +176,11 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
   });
   const conversas = await ultimasConversas(unit.id, perdidos.leads.map((l) => l.id));
   for (const l of perdidos.leads) {
-    const d = decidirReativacao(l, agora, conversas.get(l.id) ?? null);
+    let d = decidirReativacao(l, agora, conversas.get(l.id) ?? null);
+    // Só pergunta pelos modelos quando o responsável é o que segura o cartão.
+    if (d?.tipo === 'pula' && d.porResponsavel && !(await citaResponsavel(unit, kommo))) {
+      d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, false);
+    }
     if (d?.tipo === 'coloca') {
       const motivo = await voltouEmOutroCartao(unit.id, kommo, l, l.closed_at ?? 0, agora);
       if (motivo) {
