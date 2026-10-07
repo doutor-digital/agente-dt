@@ -1,6 +1,6 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { createKommoClient } from '../services/kommo.service.js';
+import { createKommoClient, type KommoLead } from '../services/kommo.service.js';
 
 /**
  * Avisa quando a IA chegou a oferecer horário e não fechou.
@@ -42,6 +42,35 @@ const JANELA_HORAS = Number(process.env.AGENDAMENTO_PERDIDO_JANELA_H) || 24;
 
 const MARCA = 'ALERTA · agendamento perdido';
 
+/** Campo que a Sofia e a recepção preenchem quando a consulta existe. */
+const CAMPO_DATA_CONSULTA = '◷ Data da Consulta';
+
+/** Folga contra fuso: `created_at` do rastro e a data do Kommo podem vir com 3 h de diferença. */
+const FOLGA_FUSO_MS = 12 * 60 * 60_000;
+
+/**
+ * O cartão já diz que existe consulta marcada depois da oferta?
+ *
+ * Cobre quem não foi a IA a marcar — recepção, SDR, franquia. Sem isto o vigia
+ * só enxergava o rastro da própria IA e avisava "não foi marcada" de consulta
+ * marcada (06/10/2026, Açailândia, lead 28088906, consulta #3738045).
+ *
+ * Data de consulta ANTERIOR à oferta é de outro ciclo (o paciente voltou) e não
+ * conta: aí o alerta é verdadeiro.
+ */
+export function cartaoTemConsulta(
+  lead: Pick<KommoLead, 'custom_fields_values'> | null | undefined,
+  ofereceuEm: Date,
+): boolean {
+  const campo = lead?.custom_fields_values?.find((c) => (c.field_name ?? '').trim() === CAMPO_DATA_CONSULTA);
+  const bruto = campo?.values?.[0]?.value;
+  const segundos = typeof bruto === 'number' ? bruto : Number(bruto);
+  if (!Number.isFinite(segundos) || segundos <= 0) return false;
+  const oferta = ofereceuEm instanceof Date ? ofereceuEm.getTime() : new Date(ofereceuEm).getTime();
+  if (!Number.isFinite(oferta)) return false;
+  return segundos * 1000 >= oferta - FOLGA_FUSO_MS;
+}
+
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 
@@ -75,7 +104,9 @@ async function candidatos(): Promise<Candidato[]> {
                from execution_steps s2
                join execution_traces t2 on t2.id = s2.trace_id
               where t2.lead_id = t.lead_id
-                and s2.title ilike '%agendar_consulta%'
+                -- O sucesso é gravado como "Consulta marcada: …", sem o nome da tool:
+                -- sem esta linha, marcar de primeira virava alerta de perdido.
+                and (s2.title ilike '%agendar_consulta%' or s2.title like 'Consulta marcada:%')
                 and s2.created_at > now() - ($1 || ' hours')::interval
            )
      group by t.unit_id, u.slug, t.lead_id
@@ -126,6 +157,10 @@ async function varrer(): Promise<void> {
         const leadId = Number(c.leadId);
         if (!Number.isFinite(leadId) || leadId <= 0) continue;
         if (await jaAvisado(unitId, c.leadId)) continue;
+
+        // Sem ler o cartão não dá pra saber se a recepção marcou; tenta na próxima varredura.
+        const lead = await kommo.getLead(leadId).catch(() => null);
+        if (!lead || cartaoTemConsulta(lead, new Date(c.ofereceuEm))) continue;
 
         const texto =
           `${MARCA} · ${unit.slug} · lead ${leadId} — a IA ofereceu horário e ` +
