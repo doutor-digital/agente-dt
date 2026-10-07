@@ -1,6 +1,8 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { createKommoClient } from '../services/kommo.service.js';
+import { createKommoClient, type KommoLead } from '../services/kommo.service.js';
+import { normalizarNome } from './kommo-schema.js';
+import { CAMPOS_SYNC } from './franquia-sync.js';
 
 /**
  * Avisa quando a IA chegou a oferecer horário e não fechou.
@@ -42,8 +44,49 @@ const JANELA_HORAS = Number(process.env.AGENDAMENTO_PERDIDO_JANELA_H) || 24;
 
 const MARCA = 'ALERTA · agendamento perdido';
 
+/**
+ * Folga contra fuso: o `created_at` do rastro pode chegar 3 h adiantado ou
+ * atrasado conforme o TZ do processo. Mais que isso esconde consulta antiga
+ * (faltou às 8h, nova oferta às 15h) e cala o alerta verdadeiro.
+ */
+const FOLGA_FUSO_MS = 4 * 60 * 60_000;
+
+/** Data de campo do Kommo: epoch em segundos — aceita ms e ISO por segurança. */
+function epochSegundos(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(v);
+  if (Number.isFinite(n) && n > 0) return n > 1e11 ? Math.floor(n / 1000) : n;
+  const t = Date.parse(String(v));
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+}
+
+/**
+ * O cartão já diz que existe consulta marcada depois da oferta?
+ *
+ * Cobre quem não foi a IA a marcar — recepção, SDR, franquia. Sem isto o vigia
+ * só enxergava o rastro da própria IA e avisava "não foi marcada" de consulta
+ * marcada (06/10/2026, Açailândia, lead 28088906, consulta #3738045).
+ *
+ * Data de consulta ANTERIOR à oferta é de outro ciclo (o paciente voltou) e não
+ * conta: aí o alerta é verdadeiro.
+ */
+export function cartaoTemConsulta(
+  lead: Pick<KommoLead, 'custom_fields_values'> | null | undefined,
+  ofereceuEm: Date,
+): boolean {
+  const alvo = normalizarNome(CAMPOS_SYNC.DATA_CONSULTA);
+  const campo = lead?.custom_fields_values?.find((c) => normalizarNome(c.field_name ?? '') === alvo);
+  const segundos = epochSegundos(campo?.values?.[0]?.value);
+  const oferta = ofereceuEm.getTime();
+  if (segundos === null || !Number.isFinite(oferta)) return false;
+  return segundos * 1000 >= oferta - FOLGA_FUSO_MS;
+}
+
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
+
+/** Leads cujo cartão já mostrou consulta → até quando não precisa reler (ms). */
+const comConsulta = new Map<string, number>();
 
 interface Candidato {
   unitId: string;
@@ -70,12 +113,16 @@ async function candidatos(): Promise<Candidato[]> {
       join units u            on u.id = t.unit_id
      where s.created_at > now() - ($1 || ' hours')::interval
        and s.title ilike '%consultar_horarios%'
+       -- "consultar_horarios bloqueado — IA pausada pela recepção" não é oferta: quem conversa é humano.
+       and s.title not ilike '%bloqueado%'
        and not exists (
              select 1
                from execution_steps s2
                join execution_traces t2 on t2.id = s2.trace_id
               where t2.lead_id = t.lead_id
-                and s2.title ilike '%agendar_consulta%'
+                -- O sucesso é gravado como "Consulta marcada: …", sem o nome da tool:
+                -- sem esta linha, marcar de primeira virava alerta de perdido.
+                and (s2.title ilike '%agendar_consulta%' or s2.title like 'Consulta marcada:%')
                 and s2.created_at > now() - ($1 || ' hours')::interval
            )
      group by t.unit_id, u.slug, t.lead_id
@@ -85,7 +132,8 @@ async function candidatos(): Promise<Candidato[]> {
     String(JANELA_HORAS),
     String(CARENCIA_MIN),
   );
-  return linhas;
+  // O driver devolve timestamp; normaliza aqui pra quem consome não ter de adivinhar.
+  return linhas.map((l) => ({ ...l, ofereceuEm: new Date(l.ofereceuEm) }));
 }
 
 /** Já avisamos deste lead? Um alerta por lead, sempre. */
@@ -103,6 +151,9 @@ async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
+    const agora = Date.now();
+    for (const [chave, ate] of comConsulta) if (ate <= agora) comConsulta.delete(chave);
+
     const lista = await candidatos();
     if (lista.length === 0) return;
 
@@ -122,10 +173,37 @@ async function varrer(): Promise<void> {
         continue;
       }
 
+      // Um lote por unidade (50 cartões por chamada) em vez de um GET por candidato.
+      const aChecar: Array<{ c: Candidato; leadId: number; chave: string }> = [];
       for (const c of itens) {
         const leadId = Number(c.leadId);
         if (!Number.isFinite(leadId) || leadId <= 0) continue;
+        // A chave leva a hora da oferta: oferta nova no mesmo lead é relida.
+        const chave = `${unitId}:${c.leadId}:${c.ofereceuEm.getTime()}`;
+        if (comConsulta.has(chave)) continue;
         if (await jaAvisado(unitId, c.leadId)) continue;
+        aChecar.push({ c, leadId, chave });
+      }
+      if (aChecar.length === 0) continue;
+
+      let cartoes: KommoLead[];
+      try {
+        cartoes = await kommo.listLeadsPorIds(aChecar.map((x) => x.leadId));
+      } catch (err) {
+        // Sem ler o cartão não dá pra saber se a recepção marcou; tenta na próxima varredura.
+        logger.warn({ err: String(err), unit: unit.slug, n: aChecar.length }, 'agendamento perdido: não li os cartões, fica pra próxima');
+        continue;
+      }
+      const porId = new Map(cartoes.map((l) => [l.id, l]));
+
+      for (const { c, leadId, chave } of aChecar) {
+        const lead = porId.get(leadId);
+        if (!lead) continue; // cartão apagado ou de outra conta: não há a quem avisar
+        if (cartaoTemConsulta(lead, c.ofereceuEm)) {
+          // Some da janela em JANELA_HORAS; até lá não relê o cartão a cada varredura.
+          comConsulta.set(chave, Date.now() + JANELA_HORAS * 60 * 60_000);
+          continue;
+        }
 
         const texto =
           `${MARCA} · ${unit.slug} · lead ${leadId} — a IA ofereceu horário e ` +
@@ -155,7 +233,7 @@ async function varrer(): Promise<void> {
                 sequence: 0,
                 kind: 'ERROR',
                 title: `${MARCA} — lead ${leadId}`,
-                payload: { leadId, ofereceuEm: c.ofereceuEm?.toISOString?.() ?? String(c.ofereceuEm) },
+                payload: { leadId, ofereceuEm: c.ofereceuEm.toISOString() },
               },
             })
             .catch(() => undefined);
