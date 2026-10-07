@@ -7,8 +7,9 @@
  * vai sair inteiro: etiqueta posta com o campo vazio manda "Aqui é , da Doutor Hérnia" pro paciente.
  *
  * As três regras aprovadas:
- *  - ▶ Boas-vindas     — o cartão entrou em GANHO (COMERCIAL). Espera o programa e a próxima sessão
- *                         estarem no cartão, porque o modelo cita os dois.
+ *  - ▶ Boas-vindas     — o cartão entrou em GANHO (COMERCIAL). Com o modelo original, espera o
+ *                         programa e a próxima sessão estarem no cartão (ele cita os dois); com a
+ *                         `_v2` aprovada (sem campo nenhum), põe na hora.
  *  - ▶ Confirmar retorno — RETORNO PÓS-TRATAMENTO com o retorno ("◷ Data da Consulta", que é onde o
  *                         sincronizador da franquia grava) nas próximas 24 h. Em EM TRATAMENTO não:
  *                         ali a véspera da sessão já tem bot próprio.
@@ -59,7 +60,15 @@ export const JANELA_REATIVACAO_S = 2 * DIA;
 
 export type Decisao =
   | { tipo: 'coloca'; etiqueta: Etiqueta; chave: string; motivo: string; reaplica?: boolean }
-  | { tipo: 'pula'; etiqueta: Etiqueta; chave: string; motivo: string; porResponsavel?: true };
+  | {
+      tipo: 'pula';
+      etiqueta: Etiqueta;
+      chave: string;
+      motivo: string;
+    };
+
+/** Os modelos das etiquetas ▶ que ganharam uma `_v2` sem buraco (07/10/2026, Açailândia). */
+export type ModeloSdr = 'sdr_boas_vindas_programa' | 'sdr_confirmacao_retorno' | 'sdr_reativacao_lead_frio';
 
 type Cartao = Pick<KommoLead, 'id' | 'custom_fields_values' | '_embedded' | 'created_at'> & { closed_at?: number | null };
 
@@ -102,32 +111,41 @@ const dataBR = (seg: number) =>
     minute: '2-digit',
   });
 
-/** Cartão que está em GANHO (COMERCIAL). `null` = não é com esta regra. */
-export function decidirBoasVindas(lead: Cartao, agora: number): Decisao | null {
+/**
+ * Cartão que está em GANHO (COMERCIAL). `null` = não é com esta regra. O modelo original cita o
+ * programa e a próxima sessão; a `_v2` ("Sua vaga no programa de tratamento… está confirmada", com a
+ * cartilha) não cita campo nenhum.
+ */
+export function decidirBoasVindas(lead: Cartao, agora: number, modeloV2 = false): Decisao | null {
   const fechou = epochSeg(lead.closed_at);
   if (!fechou || agora - fechou > JANELA_GANHO_S || fechou > agora + HORA) return null;
   if (temEtiqueta(lead, ETIQUETA.BOAS_VINDAS, 'Fluxo · Boas-vindas enviadas')) return null;
   const chave = `boas-vindas:${lead.id}:${fechou}`;
   if (optOut(lead)) return { tipo: 'pula', etiqueta: ETIQUETA.BOAS_VINDAS, chave, motivo: 'paciente pediu para não receber mensagens' };
-  const faltam = [CAMPO.TRATAMENTO_FECHADO, CAMPO.PROXIMA_SESSAO].filter((c) => !preenchido(lead, c));
+  const faltam = modeloV2 ? [] : [CAMPO.TRATAMENTO_FECHADO, CAMPO.PROXIMA_SESSAO].filter((c) => !preenchido(lead, c));
   if (faltam.length) {
-    return { tipo: 'pula', etiqueta: ETIQUETA.BOAS_VINDAS, chave, motivo: `falta ${faltam.join(' e ')} — o modelo sairia com buraco (tenta de novo até 48 h depois do GANHO)` };
+    return {
+      tipo: 'pula',
+      etiqueta: ETIQUETA.BOAS_VINDAS,
+      chave,
+      motivo: `falta ${faltam.join(' e ')} — o modelo sairia com buraco (tenta de novo até 48 h depois do GANHO)`,
+    };
   }
   return { tipo: 'coloca', etiqueta: ETIQUETA.BOAS_VINDAS, chave, motivo: `entrou em GANHO em ${dataBR(fechou)}` };
 }
 
 /**
  * Cartão em RETORNO PÓS-TRATAMENTO. A data vem de "◷ Data da Consulta" (onde a franquia grava o
- * retorno), mas o modelo acai_sdr_confirmacao_retorno MOSTRA "◷ Próxima sessão": só põe a etiqueta
- * quando os dois batem, senão o paciente lê uma data errada ou um buraco.
+ * retorno). O modelo original MOSTRA "◷ Próxima sessão": com ele, só põe a etiqueta quando os dois
+ * batem, senão o paciente lê uma data errada ou um buraco. A `_v2` mostra a própria Data da Consulta.
  */
-export function decidirConfirmarRetorno(lead: Cartao, agora: number): Decisao | null {
+export function decidirConfirmarRetorno(lead: Cartao, agora: number, modeloV2 = false): Decisao | null {
   const quando = epochSeg(valor(lead, CAMPO.DATA_CONSULTA));
   if (!quando || quando <= agora || quando - agora > ANTECEDENCIA_RETORNO_S) return null;
   const chave = `retorno:${lead.id}:${quando}`;
   if (optOut(lead)) return { tipo: 'pula', etiqueta: ETIQUETA.CONFIRMAR_RETORNO, chave, motivo: 'paciente pediu para não receber mensagens' };
   const mostrada = epochSeg(valor(lead, CAMPO.PROXIMA_SESSAO));
-  if (!mostrada || Math.abs(mostrada - quando) > TOLERANCIA_DATA_S) {
+  if (!modeloV2 && (!mostrada || Math.abs(mostrada - quando) > TOLERANCIA_DATA_S)) {
     return {
       tipo: 'pula',
       etiqueta: ETIQUETA.CONFIRMAR_RETORNO,
@@ -145,40 +163,51 @@ export function decidirConfirmarRetorno(lead: Cartao, agora: number): Decisao | 
   };
 }
 
+type ModeloComStatus = {
+  name: string;
+  reviews?: ReadonlyArray<{ status?: string }> | null;
+  _embedded?: { reviews?: ReadonlyArray<{ status?: string }> | null };
+};
+
 /**
- * O modelo da Reativação desta unidade cita "☻ Responsável agendamento"?
+ * A unidade já tem a `_v2` deste modelo aprovada na Meta?
  *
- * O original (`<prefixo>sdr_reativacao_lead_frio`) diz "Aqui é {responsável}"; em PERDIDO o campo
- * quase sempre está vazio (Açailândia 07/10: 15 de 15). A versão `_v2` traz o nome fixo da equipe
- * ("Aqui é a equipe Doutor Digital", decisão do João 07/10) e não depende do cartão. Com uma `_v2`
- * APROVADA na Meta, assume-se que o bot da etiqueta aponta pra ela — quem cria a v2 numa unidade
- * troca o modelo do bot no mesmo passo. Na dúvida (sem lista), cita: o lado seguro é pular.
+ * As `_v2` (07/10/2026) tiram o buraco dos originais: a Reativação diz "a equipe Doutor Digital" em vez
+ * de "{responsável}" (decisão do João), a Boas-vindas não cita programa nem data, o retorno mostra a
+ * ◷ Data da Consulta. Com a `_v2` APROVADA, assume-se que o bot da etiqueta aponta pra ela — quem cria
+ * a v2 numa unidade troca o modelo do bot no mesmo passo. Na dúvida (sem lista), `false`: o lado seguro
+ * é pular.
  */
-export function reativacaoCitaResponsavel(
-  modelos: ReadonlyArray<{
-    name: string;
-    reviews?: ReadonlyArray<{ status?: string }> | null;
-    _embedded?: { reviews?: ReadonlyArray<{ status?: string }> | null };
-  }> | null,
-): boolean {
-  if (!modelos || modelos.length === 0) return true;
-  // O prefixo da unidade é o mais comum entre os modelos da conta (acai_, serra_…). Sem isso, uma v2
-  // de outra unidade na mesma conta (Petrópolis × Caxias, resto da Imperatriz) valeria aqui.
-  const conta = new Map<string, number>();
-  for (const m of modelos) {
-    const p = /^([a-z]+_)/i.exec(m.name)?.[1]?.toLowerCase();
-    if (p) conta.set(p, (conta.get(p) ?? 0) + 1);
-  }
-  const prefixo = [...conta.entries()].sort((x, y) => y[1] - x[1])[0]?.[0];
-  if (!prefixo) return true;
-  const alvo = new RegExp(`^${prefixo}sdr_reativacao_lead_frio_v\\d+$`, 'i');
+export function temModeloV2(modelos: ReadonlyArray<ModeloComStatus> | null, base: ModeloSdr): boolean {
+  if (!modelos || modelos.length === 0) return false;
+  // O prefixo é o do ORIGINAL deste modelo na conta (acai_sdr_…). Conta com dois originais (Petrópolis ×
+  // Caxias, resto da Imperatriz) é ambígua: não dá pra saber qual bot é desta unidade — pula.
+  const original = new RegExp(`^([a-z]+_)${base}$`, 'i');
+  const prefixos = [...new Set(modelos.map((m) => original.exec(m.name)?.[1]?.toLowerCase()).filter((p): p is string => !!p))];
+  if (prefixos.length !== 1) return false;
+  const v2 = new RegExp(`^${prefixos[0]}${base}_v\\d+$`, 'i');
   // Aprovado em TODOS os números da conta: aprovado num e pendente noutro = o bot pode cair no errado.
   // Formato conferido na API real em 07/10/2026: `_embedded.reviews[].status` = "approved" | "review" | …
-  const aprovado = (m: (typeof modelos)[number]) => {
+  const aprovado = (m: ModeloComStatus) => {
     const rs = m._embedded?.reviews ?? m.reviews ?? [];
     return rs.length > 0 && rs.every((r) => String(r.status ?? '').toLowerCase() === 'approved');
   };
-  return !modelos.some((m) => alvo.test(m.name) && aprovado(m));
+  return modelos.some((m) => v2.test(m.name) && aprovado(m));
+}
+
+/** As três respostas de uma vez — é isso que o worker guarda, não a lista de modelos. */
+export interface ModelosV2 {
+  boasVindas: boolean;
+  retorno: boolean;
+  reativacao: boolean;
+}
+
+export function modelosV2(modelos: ReadonlyArray<ModeloComStatus> | null): ModelosV2 {
+  return {
+    boasVindas: temModeloV2(modelos, 'sdr_boas_vindas_programa'),
+    retorno: temModeloV2(modelos, 'sdr_confirmacao_retorno'),
+    reativacao: temModeloV2(modelos, 'sdr_reativacao_lead_frio'),
+  };
 }
 
 /**
@@ -189,8 +218,8 @@ export function decidirReativacao(
   lead: Cartao,
   agora: number,
   ultimaConversa: number | null,
-  /** `false` quando a unidade usa o modelo com o nome fixo (ver `reativacaoCitaResponsavel`) */
-  citaResponsavel = true,
+  /** a unidade usa a `_v2` com o nome fixo (ver `temModeloV2`) */
+  modeloV2 = false,
 ): Decisao | null {
   const perdeu = epochSeg(lead.closed_at);
   if (!perdeu) return null;
@@ -209,11 +238,11 @@ export function decidirReativacao(
     return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `conversou em ${dataBR(ultimaConversa)}, menos de ${DIAS_REATIVACAO} dias` };
   }
   const responsavel = String(valor(lead, CAMPO.RESPONSAVEL) ?? '').trim();
-  if (citaResponsavel && !responsavel) {
-    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} vazio — o modelo sairia "Aqui é , da Doutor Hérnia"`, porResponsavel: true };
+  if (!modeloV2 && !responsavel) {
+    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} vazio — o modelo sairia "Aqui é , da Doutor Hérnia"`};
   }
-  if (citaResponsavel && RESPONSAVEL_QUE_NAO_E_GENTE.test(responsavel)) {
-    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} = ${responsavel} — o modelo sairia "Aqui é ${responsavel}, da Doutor Hérnia"`, porResponsavel: true };
+  if (!modeloV2 && RESPONSAVEL_QUE_NAO_E_GENTE.test(responsavel)) {
+    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} = ${responsavel} — o modelo sairia "Aqui é ${responsavel}, da Doutor Hérnia"`};
   }
   return { tipo: 'coloca', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${DIAS_REATIVACAO} dias em PERDIDO (desde ${dataBR(perdeu)}) sem conversa` };
 }
