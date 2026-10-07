@@ -37,6 +37,7 @@ import {
   ehFalhaDeInfra,
   type Provedor,
 } from './circuito.js';
+import { comChaveReserva, PROVEDOR_RESERVA } from './chave-reserva.js';
 import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto-conversa.js';
 import { conferirTetoMensal, acaoAoEstourar, pausarContaAteProximoMes, type VereditoMensal } from './teto-mensal.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
@@ -497,11 +498,6 @@ export async function buildAgentGraph(
     : useGoogle
       ? unit.googleModel || 'gemini-2.5-flash'
       : config.model || unit.openaiModel || env.OPENAI_MODEL;
-  const baseModel = createChatModel(unit, {
-    model: modelName,
-    temperature: config.temperature,
-    maxTokens: config.maxTokens,
-  });
   if (useAnthropic && strictToolsHabilitado()) {
     aplicarStrictAnthropic(tools);
   } else if (useAnthropic) {
@@ -512,13 +508,23 @@ export async function buildAgentGraph(
     useAnthropic && convoCacheHabilitado(unit.slug)
       ? { cache_control: { type: 'ephemeral' as const } }
       : undefined;
-  const model = (
-    tools.length > 0
-      ? (
-          baseModel as unknown as { bindTools: (t: unknown[], kw?: object) => unknown }
-        ).bindTools(toolsParaModelo, convoCache)
-      : baseModel
-  ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
+  // Uma função só pra montar o modelo: a chave reserva (chave-reserva.ts) precisa do MESMO modelo,
+  // com os mesmos parâmetros e ferramentas — só a chave muda.
+  const montarModelo = (u: Unit) => {
+    const baseModel = createChatModel(u, {
+      model: modelName,
+      temperature: config.temperature,
+      maxTokens: config.maxTokens,
+    });
+    return (
+      tools.length > 0
+        ? (
+            baseModel as unknown as { bindTools: (t: unknown[], kw?: object) => unknown }
+          ).bindTools(toolsParaModelo, convoCache)
+        : baseModel
+    ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
+  };
+  const model = montarModelo(unit);
 
   // A conversa é a unidade que o teto de gasto vigia — não a mensagem, não a
   // execução. É dentro de UMA conversa que o custo foge do controle.
@@ -628,25 +634,58 @@ export async function buildAgentGraph(
 
     const t0 = performance.now();
     let response: AIMessage;
+    // Quem respondeu este turno. Muda só quando a chave reserva assume — aí a reescrita da
+    // pergunta final (mais abaixo) também sai pela reserva, em vez de bater de novo na chave morta.
+    let modeloAtivo = model;
+    let provedorAtivo: string = provider;
     try {
       // Provedor comprovadamente fora não ganha mais 35 segundos de espera por
       // mensagem: pula direto pro plano B, e volta sozinho quando se recuperar.
       if (circuitoAberto(provider as Provedor)) {
         throw new LlmTimeoutError(0);
       }
-      response = (await withTimeout(
-        invokeChatModel({
-          model,
-          messages: finalMessages,
-          unitId: unit.id,
-          traceId: recorder.traceId,
-          modelName,
-          provider,
-          tools,
-          conversaId: idDaConversa,
-        }),
-        AGENT_NODE_TIMEOUT_MS,
-      )) as AIMessage;
+      let modeloReserva: typeof model | null = null;
+      response = (await comChaveReserva({
+        unidade: unit,
+        provedor: provider,
+        chamar: (chaveReserva) => {
+          const modeloDaVez = chaveReserva ? montarModelo({ ...unit, anthropicApiKey: chaveReserva }) : model;
+          if (chaveReserva) modeloReserva = modeloDaVez;
+          return withTimeout(
+            invokeChatModel({
+              model: modeloDaVez,
+              messages: finalMessages,
+              unitId: unit.id,
+              traceId: recorder.traceId,
+              modelName,
+              provider: chaveReserva ? PROVEDOR_RESERVA : provider,
+              tools,
+              conversaId: idDaConversa,
+            }),
+            AGENT_NODE_TIMEOUT_MS,
+          );
+        },
+        aoUsarReserva: async (falha) => {
+          if (modeloReserva) {
+            modeloAtivo = modeloReserva;
+            provedorAtivo = PROVEDOR_RESERVA;
+          }
+          await recorder.step({
+            kind: 'THINKING',
+            title: `🔑 Chave da unidade recusada (${falha.status ?? '?'}/${falha.tipo}) — a chave reserva respondeu`,
+            payload: { falha, modelo: modelName },
+            latencyMs: Math.round(performance.now() - t0),
+          });
+        },
+        aoFalharReserva: async (falha, erroReserva) => {
+          await recorder.step({
+            kind: 'ERROR',
+            title: `🔑 Chave da unidade recusada (${falha.status ?? '?'}/${falha.tipo}) e a chave reserva também falhou — seguindo pro plano B`,
+            payload: { falha, erroReserva: erroReserva instanceof Error ? erroReserva.message : String(erroReserva) },
+            latencyMs: Math.round(performance.now() - t0),
+          });
+        },
+      })) as AIMessage;
       registrarSucesso(provider as Provedor);
     } catch (err) {
       const erroPrincipal = err instanceof Error ? err.message : String(err);
@@ -747,12 +786,12 @@ export async function buildAgentGraph(
         try {
           const refeita = (await withTimeout(
             invokeChatModel({
-              model,
+              model: modeloAtivo,
               messages: [...finalMessages, response, new HumanMessage(INSTRUCAO_REFAZER_CTA)],
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName,
-              provider,
+              provider: provedorAtivo,
               tools,
               conversaId: idDaConversa,
             }),

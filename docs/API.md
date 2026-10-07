@@ -351,6 +351,7 @@ Falhas do **agente** (erro do Claude, erro de rede com Kommo) não viram `500` �
 | `KOMMO_ACCESS_TOKEN` | sim | — | Long-Lived Access Token. |
 | `ANTHROPIC_API_KEY` | sim | — | Chave Anthropic. |
 | `ANTHROPIC_MODEL` | não | `claude-opus-4-7` | Modelo Claude. |
+| `ANTHROPIC_RESERVE_API_KEY` | não | — | Chave reserva. Se a chave Anthropic da unidade for recusada (401/402/403, sem crédito), o turno é refeito UMA vez com esta chave — mesmo modelo e parâmetros. Sem ela, nada muda. Use chave SEM validade. Ver `backend/src/agent/chave-reserva.ts`. |
 | `PORT` | não | `3001` | Porta HTTP. |
 | `LOG_LEVEL` | não | `info` | `fatal`…`trace`. |
 | `FRONTEND_ORIGIN` | não | `http://localhost:5173` | Origem permitida no CORS. |
