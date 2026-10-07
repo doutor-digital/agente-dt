@@ -23,6 +23,8 @@ export interface KommoLead {
   price?: number;
   created_at?: number;
   updated_at?: number;
+  /** Quando entrou em GANHO/PERDIDO (142/143). Some se o cartão sai de lá. */
+  closed_at?: number | null;
   custom_fields_values?: KommoCustomFieldValue[] | null;
   _embedded?: {
     tags?: Array<{ id: number; name: string }>;
@@ -696,6 +698,18 @@ export class KommoClient {
       }
     }
     return m;
+  }
+
+  /** Ids de todos os cartões de um contato. `null` = não consegui perguntar (não é "nenhum"). */
+  async leadsDoContato(contactId: number): Promise<number[] | null> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: Array<{ id?: number }> } } | ''>(`/contacts/${contactId}`, {
+        params: { with: 'leads' },
+      });
+      return ((data && data._embedded?.leads) || []).map((l) => l.id).filter((id): id is number => typeof id === 'number');
+    } catch {
+      return null;
+    }
   }
 
   async getContactPhone(contactId: number): Promise<string | null> {
@@ -1390,14 +1404,19 @@ export class KommoClient {
    * por isso "consulta nos últimos 7 dias" vem de "mexido nos últimos 7 dias" + filtro local.
    */
   async listLeadsNaJanela(
-    campo: 'created_at' | 'updated_at',
+    /** `closed_at` = quando entrou em GANHO/PERDIDO (142/143) — use com `etapa` */
+    campo: 'created_at' | 'updated_at' | 'closed_at',
     deUnix: number,
     ateUnix: number,
     maxPaginas = 8,
     /** traz os ids dos contatos de cada lead (`with=contacts`), pra buscar o telefone em lote depois */
     comContatos = false,
+    /** só cartões nesta etapa (ex.: COMERCIAL/142 pra "entrou em GANHO") */
+    etapa?: { pipelineId: number; statusId: number },
   ): Promise<{ leads: KommoLead[]; truncado: boolean }> {
     const leads: KommoLead[] = [];
+    // A API só ordena por id, created_at e updated_at; por closed_at, o id mais novo vem primeiro.
+    const ordem = campo === 'closed_at' ? 'id' : campo;
     for (let page = 1; page <= maxPaginas; page++) {
       try {
         const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } } | ''>('/leads', {
@@ -1407,7 +1426,10 @@ export class KommoClient {
             page,
             [`filter[${campo}][from]`]: deUnix,
             [`filter[${campo}][to]`]: ateUnix,
-            [`order[${campo}]`]: 'desc',
+            [`order[${ordem}]`]: 'desc',
+            ...(etapa
+              ? { 'filter[statuses][0][pipeline_id]': etapa.pipelineId, 'filter[statuses][0][status_id]': etapa.statusId }
+              : {}),
             ...(comContatos ? { with: 'contacts' } : {}),
           },
         });

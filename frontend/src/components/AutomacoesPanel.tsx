@@ -78,6 +78,8 @@ const ACAO: Record<AcaoSimulada, { rotulo: string; cor: string; explica: string 
   gravaria: { rotulo: 'gravaria', cor: 'text-violet-300 bg-violet-500/10 ring-violet-500/30', explica: 'preencheria um campo vazio' },
   confere: { rotulo: 'confere', cor: 'text-emerald-300 bg-emerald-500/10 ring-emerald-500/30', explica: 'calculou o mesmo que já está no cartão' },
   diverge: { rotulo: 'diverge', cor: 'text-rose-300 bg-rose-500/10 ring-rose-500/30', explica: 'calculou diferente do que está no cartão (não mexe)' },
+  etiquetaria: { rotulo: 'etiquetaria', cor: 'text-amber-300 bg-amber-500/10 ring-amber-500/30', explica: 'poria a etiqueta ▶ (e o bot dela mandaria a mensagem)' },
+  pularia: { rotulo: 'pularia', cor: 'text-zinc-300 bg-zinc-500/10 ring-zinc-500/30', explica: 'não poria a etiqueta — o motivo diz por quê' },
 };
 
 const quando = (iso: string) =>

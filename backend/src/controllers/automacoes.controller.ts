@@ -10,7 +10,7 @@ import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { automacaoPorId } from '../lib/automacoes.js';
-import { resumirSimulacoes } from '../lib/so-no-papel.js';
+import { ACOES_SIMULADAS, resumirSimulacoes } from '../lib/so-no-papel.js';
 import {
   ehEstado,
   invalidarAutomacoes,
@@ -147,7 +147,7 @@ export async function simulacoesHandler(req: Request, res: Response): Promise<vo
   const desde = new Date(Date.now() - dias * 86_400_000);
   const where = { unitId: unit.id, automacao: idAutomacao, ultimaEm: { gte: desde } };
   // o filtro vale para a lista E para o "mostrando X de Y" — o placar continua mostrando todas as ações
-  const acao = typeof req.query.acao === 'string' && ['moveria', 'gravaria', 'confere', 'diverge'].includes(req.query.acao) ? req.query.acao : null;
+  const acao = typeof req.query.acao === 'string' && (ACOES_SIMULADAS as readonly string[]).includes(req.query.acao) ? req.query.acao : null;
   const daLista = acao ? { ...where, acao } : where;
   const [todos, itens] = await Promise.all([
     prisma.automacaoSimulacao.findMany({ where, select: { acao: true, kommoLeadId: true } }),

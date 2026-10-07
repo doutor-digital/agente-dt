@@ -146,6 +146,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/aviso-de-agendamento.ts',
   },
   {
+    id: 'etiquetas-auto',
+    chave: 'ETIQUETAS_AUTO_SLUGS',
+    nome: 'Etiquetas ▶ automáticas',
+    oQueFaz:
+      'Põe sozinho as etiquetas que a SDR punha à mão: ▶ Boas-vindas quando o cartão entra em GANHO, ▶ Confirmar retorno 24 h antes do retorno (RETORNO PÓS-TRATAMENTO) e ▶ Reativação depois de 30 dias em PERDIDO sem conversa. A etiqueta aciona o bot do Kommo, que manda a mensagem.',
+    pegadinha:
+      'Só funciona se a etiqueta tiver gatilho no Kommo daquela unidade. Não põe se o modelo for sair com buraco (programa, próxima sessão ou responsável vazios) nem pra quem pediu pra não receber — em "só no papel" isso aparece como "pularia" com o motivo. A Reativação só pega quem cruza os 30 dias agora: o estoque antigo de PERDIDO nunca entra de uma vez. A ▶ Retomada não está aqui: depende do robô da 3C.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/etiquetas-auto-worker.ts',
+  },
+  {
     id: 'chat-botoes',
     chave: 'CHAT_BOTOES_SLUGS',
     nome: 'Resposta com botões',
