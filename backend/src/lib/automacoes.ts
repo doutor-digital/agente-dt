@@ -43,9 +43,10 @@ export interface Automacao {
   /**
    * O que vale quando a variável de ambiente está VAZIA. Quase tudo é `desligado`, mas duas
    * automações nasceram ligadas pra todo mundo — e isso é exatamente o tipo de coisa que ninguém
-   * lembra.
+   * lembra. `seco` = nasce em "só no papel" pra rede toda: a variável lista quem está LIGADO e quem
+   * não está nela fica no papel (desligar, só pela tela). Só faz sentido com `temSeco`.
    */
-  quandoVazio: 'desligado' | 'todas';
+  quandoVazio: 'desligado' | 'todas' | 'seco';
   /** Onde a regra mora, pra quem for ler o código depois. */
   arquivo: string;
 }
@@ -144,6 +145,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     temSeco: false,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/aviso-de-agendamento.ts',
+  },
+  {
+    id: 'prometeu-sem-marcar',
+    chave: 'PROMETEU_SEM_MARCAR_SLUGS',
+    nome: 'Alerta: a IA disse que marcou e não marcou',
+    oQueFaz:
+      'Quando a IA diz ao paciente que a consulta está marcada, reservada ou confirmada ("fica reservado sexta às 9h", "te espero amanhã às 8h") e a consulta não existe — nem no rastro da IA, nem no cartão (◷ Data da Consulta), nem na franquia pelo telefone —, abre uma tarefa ALERTA no cartão pra SDR ligar e marcar.',
+    pegadinha:
+      'Nasce em "só no papel" na rede toda: a lista "o que faria" mostra "alertaria" (a IA prometeu e não há consulta) e "confere" (prometeu e a consulta existe), sem criar tarefa. Só confere depois que a conversa fica 10 min parada — se o paciente responde e a IA marca, não avisa. Um alerta por cartão a cada 24 h. Pergunta, oferta e condição ("quer que eu reserve?", "se quiser, deixo reservado", "o Pix garante seu horário reservado") não contam. Medido em 30 dias (set–out/2026): ~640 afirmações, ~280 sem agendamento da IA, ~200 cartões; conferindo cartão e franquia, cerca de metade some (era a recepção que tinha marcado, ou é paciente em tratamento falando da sessão).',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/prometeu-sem-marcar-worker.ts',
   },
   {
     id: 'etiquetas-auto',
@@ -429,6 +443,7 @@ export function verificarCatalogo(lista: readonly Automacao[] = AUTOMACOES): str
     if (!/^[a-z0-9-]+$/.test(a.id)) problemas.push(`id fora do formato kebab: ${a.id}`);
     if (!/^[A-Z0-9_]+$/.test(a.chave)) problemas.push(`chave não parece variável de ambiente: ${a.chave}`);
     if (!a.oQueFaz.trim()) problemas.push(`${a.id} sem descrição`);
+    if (a.quandoVazio === 'seco' && !a.temSeco) problemas.push(`${a.id} nasce em seco mas não tem modo seco`);
   }
   return problemas;
 }

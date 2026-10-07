@@ -20,6 +20,7 @@ import { startReactivationWorker, stopReactivationWorker } from './lib/reactivat
 import { startLeadPausaWorker, stopLeadPausaWorker } from './lib/lead-pausa-worker.js';
 import { startSlaAlertWorker, stopSlaAlertWorker } from './lib/sla-alert-worker.js';
 import { startAgendamentoPerdidoWorker, stopAgendamentoPerdidoWorker } from './lib/agendamento-perdido-worker.js';
+import { startPrometeuSemMarcarWorker, stopPrometeuSemMarcarWorker } from './lib/prometeu-sem-marcar-worker.js';
 import { startEtiquetasAutoWorker, stopEtiquetasAutoWorker } from './lib/etiquetas-auto-worker.js';
 import { startTaxaErroWorker, stopTaxaErroWorker } from './lib/taxa-erro-worker.js';
 import { startCardValidationWorker, stopCardValidationWorker } from './lib/card-validation-worker.js';
@@ -171,6 +172,7 @@ async function main(): Promise<void> {
       startLeadPausaWorker();
       startSlaAlertWorker();
       startAgendamentoPerdidoWorker();
+      startPrometeuSemMarcarWorker();
       startEtiquetasAutoWorker();
       startTaxaErroWorker();
       startCardValidationWorker();
@@ -201,6 +203,7 @@ async function main(): Promise<void> {
       stopLeadPausaWorker();
       stopSlaAlertWorker();
       stopAgendamentoPerdidoWorker();
+      stopPrometeuSemMarcarWorker();
       stopEtiquetasAutoWorker();
       stopTaxaErroWorker();
       stopCardValidationWorker();

@@ -92,7 +92,7 @@ export interface Automacao {
   pegadinha?: string;
   risco: RiscoAutomacao;
   temSeco: boolean;
-  quandoVazio: 'desligado' | 'todas';
+  quandoVazio: 'desligado' | 'todas' | 'seco';
   arquivo: string;
   estado: EstadoAutomacao;
   /** `true` = ninguém mexeu na tela e o valor ainda vem da variável de ambiente. */
@@ -107,7 +107,7 @@ export interface PanoramaAutomacoes {
 }
 
 /** O que uma automação em "Só no papel" faria — uma linha por cartão e decisão. Ver `backend/src/lib/so-no-papel.ts`. */
-export type AcaoSimulada = 'moveria' | 'gravaria' | 'confere' | 'diverge' | 'etiquetaria' | 'pularia';
+export type AcaoSimulada = 'moveria' | 'gravaria' | 'confere' | 'diverge' | 'etiquetaria' | 'pularia' | 'alertaria';
 
 export interface SimulacaoItem {
   leadId: number;
@@ -126,7 +126,7 @@ export interface Simulacoes {
   automacao: string;
   dias: number;
   kommoSubdomain: string | null;
-  resumo: { moveria: number; gravaria: number; confere: number; diverge: number; etiquetaria: number; pularia: number; cartoes: number };
+  resumo: { moveria: number; gravaria: number; confere: number; diverge: number; etiquetaria: number; pularia: number; alertaria: number; cartoes: number };
   total: number;
   itens: SimulacaoItem[];
 }

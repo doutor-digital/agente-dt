@@ -118,3 +118,32 @@ test('naListaDoAmbiente reproduz o csv que as portas liam antes', () => {
   assert.equal(naListaDoAmbiente('a', ''), false);
   assert.equal(naListaDoAmbiente('a', undefined), false);
 });
+
+test('"prometeu e não marcou" nasce em só no papel na rede toda; a lista do .env diz quem está LIGADO', () => {
+  _semearParaTeste([]);
+  const a = automacaoPorId('prometeu-sem-marcar');
+  assert.equal(a?.chave, 'PROMETEU_SEM_MARCAR_SLUGS');
+  assert.equal(a?.temSeco, true);
+  assert.equal(a?.quandoVazio, 'seco');
+
+  assert.equal(estadoDaAutomacao(SERRA, 'prometeu-sem-marcar', undefined), 'seco', 'variável vazia = no papel, não desligado');
+  assert.equal(estadoDaAutomacao(SERRA, 'prometeu-sem-marcar', ''), 'seco');
+  assert.equal(estadoDaAutomacao(SERRA, 'prometeu-sem-marcar', 'doutor-hernia-serra'), 'ligado');
+  assert.equal(estadoDaAutomacao(TAUBATE, 'prometeu-sem-marcar', 'doutor-hernia-serra'), 'seco', 'fora da lista segue no papel');
+
+  // a tela manda: desliga mesmo estando na lista
+  _semearParaTeste([{ slug: SERRA, automacao: 'prometeu-sem-marcar', estado: 'desligado' }]);
+  assert.equal(estadoDaAutomacao(SERRA, 'prometeu-sem-marcar', 'doutor-hernia-serra'), 'desligado');
+
+  // e o panorama mostra o mesmo que o worker vai ler
+  _semearParaTeste([]);
+  const linha = panoramaDaUnidade(TAUBATE, {} as NodeJS.ProcessEnv).find((l) => l.id === 'prometeu-sem-marcar');
+  assert.equal(linha?.estado, 'seco');
+  assert.equal(linha?.vemDoAmbiente, true);
+});
+
+test('nascer em seco sem ter modo seco é erro de catálogo', () => {
+  const base = AUTOMACOES[0];
+  const problemas = verificarCatalogo([{ ...base, id: 'x-teste', chave: 'X_TESTE_SLUGS', temSeco: false, quandoVazio: 'seco' }]);
+  assert.deepEqual(problemas, ['x-teste nasce em seco mas não tem modo seco']);
+});

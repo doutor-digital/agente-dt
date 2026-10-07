@@ -14,13 +14,13 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 
-export type AcaoSimulada = 'moveria' | 'gravaria' | 'confere' | 'diverge' | 'etiquetaria' | 'pularia';
-export const ACOES_SIMULADAS: readonly AcaoSimulada[] = ['moveria', 'gravaria', 'confere', 'diverge', 'etiquetaria', 'pularia'];
+export type AcaoSimulada = 'moveria' | 'gravaria' | 'confere' | 'diverge' | 'etiquetaria' | 'pularia' | 'alertaria';
+export const ACOES_SIMULADAS: readonly AcaoSimulada[] = ['moveria', 'gravaria', 'confere', 'diverge', 'etiquetaria', 'pularia', 'alertaria'];
 
 export interface Simulacao {
   leadId: number;
   acao: AcaoSimulada;
-  /** campo que gravaria, a etapa para onde moveria, ou a etiqueta que poria */
+  /** campo que gravaria, a etapa para onde moveria, a etiqueta que poria, ou a promessa que alertaria */
   alvo: string;
   valor?: unknown;
   noCartao?: unknown;
@@ -82,13 +82,15 @@ export interface ResumoSimulacoes {
   etiquetaria: number;
   /** decidiu NÃO pôr a etiqueta (campo vazio, opt-out…) — o motivo diz por quê */
   pularia: number;
+  /** abriria a tarefa ALERTA pra SDR (ex.: a IA prometeu consulta que não existe) */
+  alertaria: number;
   /** cartões distintos com alguma decisão */
   cartoes: number;
 }
 
 /** Placar do topo da lista. Puro, para testar sem banco. */
 export function resumirSimulacoes(itens: ReadonlyArray<{ acao: string; kommoLeadId: number }>): ResumoSimulacoes {
-  const r: ResumoSimulacoes = { moveria: 0, gravaria: 0, confere: 0, diverge: 0, etiquetaria: 0, pularia: 0, cartoes: 0 };
+  const r: ResumoSimulacoes = { moveria: 0, gravaria: 0, confere: 0, diverge: 0, etiquetaria: 0, pularia: 0, alertaria: 0, cartoes: 0 };
   const cartoes = new Set<number>();
   for (const i of itens) {
     if ((ACOES_SIMULADAS as readonly string[]).includes(i.acao)) r[i.acao as AcaoSimulada]++;
