@@ -8,11 +8,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { cartaoTemConsulta } from './agendamento-perdido-worker.js';
 import {
   Lembranca,
+  PALAVRAS_DO_FILTRO,
   UM_POR_LEAD_MS,
   algumaDesde,
   consultaDoRastro,
+  consultasVivasDoRastro,
   decidir,
   detectarPromessa,
   mensagemDaIA,
@@ -80,6 +83,16 @@ const AFIRMA: string[] = [
   'Seu horário de terça, 29/09 às 15h está garantido.',
   'Então ele remarcou a dele pro dia 7 😊 Perfeito, 14h30 de sexta fica reservado pra você!',
   'Deixo reservado o horário de sexta, 02/10 às 16h mesmo, e quando puder confirmar é só me avisar, tá bem?',
+  // "ou" que não é escolha de horário não vira oferta
+  'Sua consulta está marcada para sexta, 09/10, às 9h, chegando uns 10 ou 15 minutinhos antes.',
+  // a negação, a condição e a oferta de OUTRA oração não calam a afirmação (revisão de 07/10)
+  'Não se preocupe, sua consulta está marcada para sexta às 9h.',
+  'Fique tranquila, não vai perder: sua consulta está garantida sexta às 9h.',
+  'Sua consulta está marcada para sexta às 9h, qualquer dúvida me chama.',
+  'Tenho uma ótima notícia: sua consulta está marcada para sexta às 9h.',
+  // sem particípio nenhum ("sua consulta é/fica pra") e o "lhe esperamos"
+  'Combinado! Sua avaliação ficou pra segunda, 12/10, às 14h.',
+  'Perfeito, Dona Maria, lhe esperamos amanhã às 8h.',
 ];
 
 for (const frase of AFIRMA) {
@@ -126,6 +139,22 @@ const NAO_AFIRMA: string[] = [
   'Sua próxima sessão está marcada para terça-feira, 15/09, às 08:00.',
   // hérnia "confirmada" não é consulta
   'Já que sua hérnia está confirmada por exame, vale a pena aproveitar pra marcar sua consulta com o especialista.',
+  // outro sujeito antes do verbo, mesmo com data no trecho ou no vizinho (revisão de 07/10)
+  'Pelo seu laudo, a hérnia foi confirmada na ressonância de 12/09.',
+  'O valor de R$ 250 fica garantido até sexta.',
+  'A agenda de sexta já está toda marcada 😕',
+  'Seu Pix foi confirmado! Sexta às 9h então.',
+  // "com horário marcado" é como a clínica atende (FAQ), não uma consulta
+  'Atendemos somente com horário marcado, de segunda a sexta, das 7h às 19h.',
+  'O atendimento é com horário agendado, de segunda a sexta das 7h às 19h.',
+  // duração não é horário
+  'Sua consulta é feita em 1h, com calma.',
+  // explicação de preço, "confirmei a agenda", e a condição depois da vírgula que não é cortesia
+  'Só uma coisa: pra eu conseguir segurar um horário pra você, não precisa pagar antes não — a vaga fica reservada e você paga só no dia da consulta (R$ 220) ou, se preferir, pagando antes por Pix o valor fica R$ 200.',
+  'Olha, André, confirmei aqui e na segunda-feira, 28/09, o único horário livre mesmo é às 11h 🙏',
+  'Fico com o horário reservadinho, é só me chamar quando quiser aproveitar a consulta particular.',
+  // a cortesia sai só até a vírgula: a condição depois dela continua valendo
+  'Fico por aqui, mas se quiser garantir sua vaga é só me chamar que eu já deixo reservada 💜',
 ];
 
 for (const frase of NAO_AFIRMA) {
@@ -133,6 +162,11 @@ for (const frase of NAO_AFIRMA) {
     assert.equal(detectarPromessa(frase), null, `não deveria pegar: ${frase}`);
   });
 }
+
+test('filtro do banco: toda afirmação real tem uma palavra do ILIKE (sem tirar acento) — senão o vigia nem a vê', () => {
+  const ilike = (frase: string) => PALAVRAS_DO_FILTRO.some((p) => frase.toLowerCase().includes(p.toLowerCase()));
+  for (const frase of AFIRMA) assert.ok(ilike(frase), `o filtro do banco perderia: ${frase}`);
+});
 
 test('mensagem vazia ou nula não quebra', () => {
   assert.equal(detectarPromessa(''), null);
@@ -181,6 +215,31 @@ test('consultaDoRastro lê os dois títulos de sucesso e só eles', () => {
   assert.equal(consultaDoRastro('agendar_consulta recusado — 07:00 está ocupado'), null);
 });
 
+test('consultasVivasDoRastro: consulta cancelada ou trocada pela remarcação não conta mais', () => {
+  const titulos = [
+    'Consulta marcada: 2026-10-09 07:00 (idSchedule 100)',
+    'cancelar_consulta 100: cancelada',
+    'Consulta marcada: 2026-10-12 10:00 (idSchedule 200)',
+    'Consulta marcada: 2026-10-13 10:00 (idSchedule 300)',
+    'remarcar: trocada (antiga 200)',
+    'Consulta marcada: 2026-10-14 08:00 (idSchedule 400)',
+    'cancelar_consulta 400: Erro 500 da franquia',
+    'remarcar: vaga_presa (antiga 300)',
+  ];
+  assert.deepEqual(consultasVivasDoRastro(titulos), ['2026-10-13T10:00', '2026-10-14T08:00']);
+  assert.deepEqual(consultasVivasDoRastro([]), []);
+});
+
+test('cartão: folga de 1 h — "faltou às 8h, às 10h30 prometeu amanhã" não se esconde atrás da consulta velha', () => {
+  const cartao = (iso: string) => ({ custom_fields_values: [{ field_id: 1, field_name: '◷ Data da Consulta', values: [{ value: Date.parse(iso) / 1000 }] }] });
+  const promessa = new Date('2026-10-07T13:30:00Z'); // 10:30 BRT
+  const hora = 60 * 60_000;
+  assert.equal(cartaoTemConsulta(cartao('2026-10-07T11:00:00Z'), promessa, hora), false, 'consulta das 8h BRT já passou');
+  assert.equal(cartaoTemConsulta(cartao('2026-10-07T11:00:00Z'), promessa), true, 'o vigia de agendamento perdido segue com 4 h');
+  assert.equal(cartaoTemConsulta(cartao('2026-10-07T13:00:00Z'), promessa, hora), true, '"te espero às 10h" dito às 10h30 ainda conta');
+  assert.equal(cartaoTemConsulta(cartao('2026-10-08T11:00:00Z'), promessa, hora), true);
+});
+
 test('algumaDesde: consulta de outro ciclo (antes da promessa) não conta', () => {
   const desde = '2026-10-05T14:30';
   assert.equal(algumaDesde(['2026-10-09T07:00'], desde), true);
@@ -204,7 +263,7 @@ test('decidir: nenhuma fonte com consulta = avisa (franquia sem resposta não se
   assert.equal(decidir(nada).avisar, true);
   const semFranquia = decidir({ ...nada, franquiaComConsulta: null });
   assert.equal(semFranquia.avisar, true);
-  assert.match(semFranquia.motivo, /franquia não consultada/);
+  assert.match(semFranquia.motivo, /paciente não achado pelo telefone/);
 });
 
 test('decidir: cartão ilegível adia em vez de avisar no escuro', () => {

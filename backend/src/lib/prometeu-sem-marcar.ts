@@ -32,8 +32,8 @@
  * Errar para o lado de NÃO avisar é de propósito: alarme que grita à toa vira ruído e ninguém olha.
  * Parte do que escapa daqui o vigia de agendamento perdido pega (a IA consultou horário e não marcou).
  *
- * Medido em 30 dias de mensagens reais (39.972 falas da IA): 644 afirmações; 367 com o agendar_consulta
- * no rastro (verdadeiras); 277 sem — 207 alertas depois do "um por cartão a cada 24 h". Numa amostra
+ * Medido em 30 dias de mensagens reais (39.972 falas da IA): 642 afirmações; 369 com o agendar_consulta
+ * no rastro (verdadeiras); 273 sem — 204 alertas depois do "um por cartão a cada 24 h". Numa amostra
  * de 13 desses conferida no Kommo, 7 não tinham consulta nenhuma e 6 tinham (marcada pela recepção, ou
  * paciente em tratamento) — é o que as checagens do cartão e da franquia no worker removem.
  */
@@ -71,9 +71,11 @@ const TEM_QUANDO =
 /**
  * O sujeito é UMA consulta definida — "sua consulta", "esse horário", "no seu nome" — e não o pagamento,
  * o exame, a hérnia "já confirmada", nem o vago "fico com um horário reservado pra você" do follow-up.
+ * "A vaga"/"o horário" sem dono ficam de fora: é como a IA explica o preço ("não precisa pagar antes — a
+ * vaga fica reservada e você paga no dia").
  */
 const FALA_DA_CONSULTA =
-  /\b(?:sua|seu|esse|essa|este|o|a|nossa|nosso)\s+(?:\S+\s+)?(?:consulta|consultinha|avaliacao|agendamento|horario|vaga|reserva|presenca|retorno)\b|\b(?:no|pro|para o|pra o|em) (?:seu|teu) nome\b/;
+  /\b(?:sua|seu|esse|essa|este|nossa|nosso)\s+(?:\S+\s+)?(?:consulta|consultinha|avaliacao|agendamento|horario|vaga|reserva|presenca|retorno)\b|\b(?:a|o)\s+(?:consulta|consultinha|avaliacao|agendamento|reserva|presenca)\b|\b(?:no|pro|para o|pra o|em) (?:seu|teu) nome\b/;
 
 const PARTICIPIO = '(?:marcad|agendad|reservad|confirmad|garantid|remarcad)(?:inh)?[oa]s?';
 
@@ -99,7 +101,8 @@ const AFIRMACOES: ReadonlyArray<{ nome: string; re: RegExp; sujeito: 'antes' | '
     sujeito: 'qualquer',
   },
   // "marquei sua consulta", "já reservei sexta às 9h"
-  { nome: 'primeira-pessoa', re: /\b(?:marquei|agendei|reservei|remarquei|confirmei)\b/g, sujeito: 'qualquer' },
+  // ("confirmei" fica de fora: é "confirmei aqui na agenda e o único horário livre é às 11h")
+  { nome: 'primeira-pessoa', re: /\b(?:marquei|agendei|reservei|remarquei)\b/g, sujeito: 'qualquer' },
   // "✅ Agendamento confirmado", "sua consulta já está certinha marcada", "Presença confirmada"
   {
     nome: 'consulta-marcada',
@@ -113,7 +116,7 @@ const AFIRMACOES: ReadonlyArray<{ nome: string; re: RegExp; sujeito: 'antes' | '
   // "sua consulta é hoje, às 8h", "sua avaliação fica pra quinta"
   {
     nome: 'sua-consulta-e',
-    re: /\b(?:sua|seu|a sua|o seu)\s+(?:consulta|avaliacao|agendamento|horario|retorno)\b(?:\s+\S+){0,3}?\s+(?:e|sera|vai ser|fica|ficou|esta|ta|continua|segue)\s+(?:\S+\s+){0,2}?(?:para|pra|no dia|dia|na|no|amanha|hoje|em|as)\b/g,
+    re: /\b(?:sua|seu|a sua|o seu)\s+(?:consulta|avaliacao|agendamento|horario|retorno)\b(?:\s+\S+){0,3}?\s+(?:e|sera|vai ser|fica|ficou|esta|ta|continua|segue)\s+(?:\S+\s+){0,2}?(?:para|pra|no dia|dia|na|no|amanha|hoje|as)\b/g,
     sujeito: 'qualquer',
   },
 ];
@@ -131,7 +134,7 @@ function ehPergunta(n: string): boolean {
 
 /** Oferta ou pergunta disfarçada: a IA está propondo, não afirmando ("tenho às 9h ou às 10h", "os horários de quinta"). */
 const OFERTA =
-  /\b(quer que|quer|posso|podemos|pode ser|consigo|consegue|prefere|preferencia|qual|quais|que tal|gostaria|deseja|tenho|temos|disponive(l|is)|opcao|opcoes|alguma dessas?|horarios|vagas)\b|\bou (?:na |no |a |as |pra |para )?(?:segunda|terca|quarta|quinta|sexta|sabado|domingo|amanha|\d)/;
+  /\b(quer que|quer|posso|podemos|pode ser|consigo|consegue|prefere|preferencia|qual|quais|que tal|gostaria|deseja|tenho|temos|disponive(l|is)|livres?|opcao|opcoes|alguma dessas?|horarios|vagas)\b|\bou (?:na |no |a |as |pra |para )?(?:segunda|terca|quarta|quinta|sexta|sabado|domingo|amanha|\d{1,2}(?:h|:\d{2}|\/\d{1,2}))/;
 
 /**
  * Condição: só vale se algo acontecer — "se quiser", "assim que o Pix cair", "quando puder", "é só me
@@ -167,13 +170,42 @@ const NEGA_OU_PASSADO =
  * a sessão de tratamento (quem marca é a clínica, nunca a IA — e o paciente já é da casa) e o "reservada,
  * porém ainda não confirmada", que avisa em vez de prometer.
  */
-const NAO_E_PROMESSA =
-  /\b(?:movi|retomada|em espera|follow|esperar|pronto[- ]atendimento|pronto[- ]socorro|upa|hospital|emergencia|cada|consultas|sessao|sessoes|tratamento)\b|\bainda nao\b/;
+const NAO_E_PROMESSA = new RegExp(
+  [
+    String.raw`\b(?:movi|retomada|em espera|follow|esperar|pronto[- ]atendimento|pronto[- ]socorro|upa|hospital|emergencia|cada|consultas|sessao|sessoes|tratamento)\b`,
+    String.raw`\bainda nao\b`,
+    // "atendemos somente com horário marcado" é como a clínica funciona, não uma consulta
+    String.raw`\bcom (?:hora|horario) (?:marcad|agendad)\w*|\bhora marcada\b`,
+    // "o valor fica garantido até sexta", "a agenda de sexta está toda marcada", "agenda lotada"
+    String.raw`\bgarantid\w* (?:so )?ate\b|\btoda (?:marcad|reservad|agendad)\w*|\blotad\w*`,
+  ].join('|'),
+);
+
+/**
+ * Sujeito que não é consulta logo antes do verbo: "seu Pix foi confirmado", "a hérnia foi confirmada na
+ * ressonância de 12/09", "o desconto está garantido". Sem isto, qualquer data no trecho ou no vizinho
+ * transformava esses em promessa.
+ */
+const SUJEITO_ALHEIO =
+  /\b(?:hernia|hernias|exame|exames|ressonancia|laudo|diagnostico|valor|preco|desconto|pix|pagamento|comprovante|agenda|condicao|promocao|beneficio|taxa|cadastro|dados)\b/;
 
 /** Reserva de "um horário" qualquer, sem dizer qual. */
 const UM_HORARIO_QUALQUER = new RegExp(
   `\\b(?:um|uma) (?:\\S+ )?(?:horario|horariozinho|vaga|espaco|espacinho)\\s+(?:\\S+\\s+){0,3}?${PARTICIPIO}`,
 );
+
+/** Onde começa a oração do verbo: vírgula, ponto e vírgula e dois-pontos separam. */
+function inicioDaOracao(n: string, pos: number): number {
+  const antes = n.slice(0, pos);
+  return Math.max(antes.lastIndexOf(','), antes.lastIndexOf(';'), antes.lastIndexOf(':')) + 1;
+}
+
+/**
+ * Cortesia no fim da frase ("…, qualquer dúvida me chama", "fico à disposição") não é condição da
+ * consulta — sai antes de procurar condição.
+ */
+const CORTESIA =
+  /\b(?:qualquer (?:duvida|coisa|problema|imprevisto)|se precisar(?: de)? (?:algo|alguma coisa|mais alguma coisa|remarcar)|(?:estou|fico) (?:a disposicao|por aqui))\b[^.!?,;]*/g;
 
 /** "Te espero dia 23 pra sua resposta" espera a resposta, não o paciente na clínica. */
 const ESPERA_RESPOSTA = /\b(?:resposta|retorno|decisao|comprovante|contato)\b/;
@@ -205,13 +237,21 @@ export function quandoCitado(texto: string): string | null {
   return partes.length ? partes.join(' ') : null;
 }
 
-/** O trecho afirma consulta marcada? Devolve a forma que casou, ou null. */
+/**
+ * O trecho afirma consulta marcada? Devolve a forma que casou, ou null.
+ *
+ * Cada filtro olha só o pedaço que importa (achado da revisão de 07/10): a negação, a oração do verbo
+ * ("Não se preocupe, sua consulta está marcada pra sexta" afirma); a condição, o trecho todo menos a
+ * cortesia do fim ("Fico com o horário, é só me chamar quando quiser" não afirma; "…marcada pra sexta,
+ * qualquer dúvida me chama" afirma); a oferta, da oração do verbo em diante ("Tenho uma ótima notícia:
+ * sua consulta está marcada" afirma, "deixo reservado amanhã: posso às 7h30 ou às 16h30" não).
+ */
 export function afirma(trecho: string, seguinte: string | null): string | null {
   const n = normalizar(trecho);
-  if (!n || ehPergunta(n)) return null;
-  if (OFERTA.test(n) || CONDICAO.test(n) || NAO_E_PROMESSA.test(n)) return null;
+  if (!n || ehPergunta(n) || NAO_E_PROMESSA.test(n)) return null;
 
   const quandoAqui = TEM_QUANDO.test(n);
+  const semCortesia = n.replace(CORTESIA, ' ');
   // "fico com UM horário reservadinho pra sua avaliação" sem dia nenhum é o tique do follow-up, não uma
   // consulta: o paciente não sai dali achando que tem hora marcada.
   if (!quandoAqui && UM_HORARIO_QUALQUER.test(n)) return null;
@@ -222,11 +262,17 @@ export function afirma(trecho: string, seguinte: string | null): string | null {
   const quandoAoLado = vizinho !== '' && TEM_QUANDO.test(vizinho) && !ehPergunta(vizinho) && !OFERTA.test(vizinho);
 
   for (const { nome, re, sujeito } of AFIRMACOES) {
+    let fimAnterior = 0;
     for (const m of n.matchAll(re)) {
-      const ate = (m.index ?? 0) + m[0].length;
-      // negação/passado ANTES da afirmação; depois dela é outra oração ("está marcada pra sexta, não
-      // precisa pagar agora").
-      if (NEGA_OU_PASSADO.test(n.slice(0, ate))) continue;
+      const inicio = m.index ?? 0;
+      const ate = inicio + m[0].length;
+      const oracao = inicioDaOracao(n, inicio);
+      const antesDoVerbo = n.slice(Math.max(oracao, fimAnterior), inicio);
+      fimAnterior = ate;
+      if (NEGA_OU_PASSADO.test(n.slice(oracao, ate))) continue;
+      if (CONDICAO.test(semCortesia)) continue;
+      if (OFERTA.test(n.slice(oracao))) continue;
+      if ((nome === 'estado' || nome === 'deixar') && SUJEITO_ALHEIO.test(`${antesDoVerbo} ${m[0]}`)) continue;
       if (SO_COM_QUANDO_NO_TRECHO.has(nome)) {
         if (!quandoAqui) continue;
         if (nome === 'te-espero' && ESPERA_RESPOSTA.test(n)) continue;
@@ -291,6 +337,40 @@ export function algumaDesde(quandos: ReadonlyArray<string | null | undefined>, d
   return quandos.some((q) => typeof q === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(q) && q.slice(0, 16) >= desde);
 }
 
+/**
+ * Consultas que o rastro marcou e que o próprio rastro não desmarcou depois, em hora local. Cancelar
+ * ("cancelar_consulta 123: cancelada") e remarcar trocando ("remarcar: trocada (antiga 123)") tiram a
+ * consulta da conta — senão uma sexta cancelada calava o alerta da promessa de segunda.
+ */
+export function consultasVivasDoRastro(titulos: ReadonlyArray<string>): string[] {
+  const canceladas = new Set<string>();
+  for (const t of titulos) {
+    const c = /^cancelar_consulta (\d+): cancelada\b/.exec(t) ?? /^remarcar: trocada \(antiga (\d+)\)/.exec(t);
+    if (c) canceladas.add(c[1]);
+  }
+  const vivas: string[] = [];
+  for (const t of titulos) {
+    const quando = consultaDoRastro(t);
+    if (!quando) continue;
+    const id = /\(idSchedule (\d+)\)/.exec(t)?.[1];
+    if (id && canceladas.has(id)) continue;
+    vivas.push(quando);
+  }
+  return vivas;
+}
+
+/**
+ * Palavras que toda afirmação tem — o filtro barato no banco (ILIKE, sem tirar acento) antes do detector.
+ * Se uma forma nova entrar em `AFIRMACOES`, a palavra dela entra aqui (o teste confere com as frases reais).
+ */
+export const PALAVRAS_DO_FILTRO: readonly string[] = [
+  'marcad', 'agendad', 'reservad', 'confirmad', 'garantid',
+  'marquei', 'agendei', 'reservei', 'remarquei', 'confirmei',
+  'te espero', 'te esperamos', 'te aguardo', 'te aguardamos',
+  'lhe espero', 'lhe esperamos', 'lhe aguardo', 'lhe aguardamos', 'nos vemos',
+  'sua consulta', 'sua avalia', 'seu agendamento', 'seu horário', 'seu horario', 'seu retorno',
+];
+
 /** O que se sabe da agenda deste lead, de cada fonte. `null` = não deu para saber. */
 export interface Evidencias {
   /** `agendar_consulta`/`remarcar` deu certo para este lead (rastro), em qualquer unidade da mesma conta. */
@@ -299,7 +379,10 @@ export interface Evidencias {
   vinculoFuturo: boolean;
   /** ◷ Data da Consulta do cartão é de agora em diante (recepção, SDR ou sincronizador). */
   cartaoComConsulta: boolean | null;
-  /** A franquia tem consulta futura para o telefone do paciente. */
+  /**
+   * A franquia tem consulta por vir para o paciente. `null` = não deu para saber: unidade sem franquia,
+   * paciente não achado pelo telefone, ou a franquia não respondeu.
+   */
   franquiaComConsulta: boolean | null;
 }
 
@@ -322,7 +405,7 @@ export function decidir(e: Evidencias): Decisao {
     avisar: true,
     motivo:
       e.franquiaComConsulta === null
-        ? 'sem consulta no rastro, no vínculo e no cartão (franquia não consultada)'
+        ? 'sem consulta no rastro, no vínculo e no cartão (na franquia: paciente não achado pelo telefone, ou sem franquia)'
         : 'sem consulta no rastro, no vínculo, no cartão e na franquia',
   };
 }

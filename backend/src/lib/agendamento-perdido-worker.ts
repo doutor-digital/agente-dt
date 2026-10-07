@@ -73,13 +73,15 @@ function epochSegundos(v: unknown): number | null {
 export function cartaoTemConsulta(
   lead: Pick<KommoLead, 'custom_fields_values'> | null | undefined,
   ofereceuEm: Date,
+  /** O vigia "prometeu e não marcou" compara instantes certos (sem SQL cru) e usa uma folga menor. */
+  folgaMs: number = FOLGA_FUSO_MS,
 ): boolean {
   const alvo = normalizarNome(CAMPOS_SYNC.DATA_CONSULTA);
   const campo = lead?.custom_fields_values?.find((c) => normalizarNome(c.field_name ?? '') === alvo);
   const segundos = epochSegundos(campo?.values?.[0]?.value);
   const oferta = ofereceuEm.getTime();
   if (segundos === null || !Number.isFinite(oferta)) return false;
-  return segundos * 1000 >= oferta - FOLGA_FUSO_MS;
+  return segundos * 1000 >= oferta - folgaMs;
 }
 
 let timer: NodeJS.Timeout | null = null;

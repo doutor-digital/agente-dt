@@ -11,9 +11,10 @@ import { fusoDaUnidade } from './fuso.js';
 import {
   Lembranca,
   MARCA,
+  PALAVRAS_DO_FILTRO,
   UM_POR_LEAD_MS,
   algumaDesde,
-  consultaDoRastro,
+  consultasVivasDoRastro,
   cortar,
   decidir,
   detectarPromessa,
@@ -55,17 +56,17 @@ const JANELA_H = Number(process.env.PROMETEU_SEM_MARCAR_JANELA_H) || 6;
 const MAX_ALERTAS = Number(process.env.PROMETEU_SEM_MARCAR_MAX) || 15;
 /** Rastro de sucesso do agendar_consulta: olhar até aqui pra trás (consulta marcada semana passada pra hoje). */
 const RASTRO_DIAS = 45;
-/** Mesma folga do vigia de agendamento perdido: consulta até 4 h antes da promessa ainda conta. */
-const FOLGA_MS = 4 * 60 * 60_000;
+/**
+ * Consulta até 1 h antes da promessa ainda conta (a IA fala "te espero às 10h" às 10h05). Menor que as
+ * 4 h do vigia de agendamento perdido de propósito: aqui todo instante é comparado certo (Prisma, sem SQL
+ * cru), e 4 h escondiam o caso "faltou às 8h, às 10h30 a IA prometeu amanhã sem marcar".
+ */
+const FOLGA_MS = 60 * 60_000;
+/** Tentativas de criar a tarefa antes de desistir daquela mensagem (Kommo recusando sempre). */
+const MAX_TENTATIVAS = 3;
 const PRAZO_TAREFA_S = 30 * 60;
 const PREFIXO_RASTRO = 'prometeu-';
 
-/** Palavras que toda afirmação tem: filtro barato no banco antes do detector. */
-const PALAVRAS = [
-  'marcad', 'agendad', 'reservad', 'confirmad', 'garantid',
-  'marquei', 'agendei', 'reservei', 'remarquei', 'confirmei',
-  'te espero', 'te esperamos', 'te aguardo', 'te aguardamos', 'lhe espero', 'nos vemos',
-];
 
 /** Um aviso de falha por chave a cada hora: todo `warn` vira linha no painel de erros. */
 const FALHA_AVISADA_MS = 60 * 60_000;
@@ -86,6 +87,8 @@ const decididas = new Lembranca();
  * rastro no banco: duas promessas do mesmo cartão na mesma varredura, ou o rastro que não gravou.
  */
 const cartoesAvisados = new Lembranca();
+/** Falhas ao criar a tarefa, por mensagem. */
+const tentativas = new Map<string, number>();
 
 export function estadoDoPrometeu(slug: string, raw: string | undefined = process.env.PROMETEU_SEM_MARCAR_SLUGS): Estado {
   return estadoDaAutomacao(slug, ID, raw);
@@ -116,7 +119,7 @@ async function candidatas(agora = new Date()): Promise<Candidata[]> {
     where: {
       role: 'assistant',
       createdAt: { gte: desde, lt: ate },
-      OR: PALAVRAS.map((p) => ({ content: { contains: p, mode: 'insensitive' as const } })),
+      OR: PALAVRAS_DO_FILTRO.map((p) => ({ content: { contains: p, mode: 'insensitive' as const } })),
     },
     select: {
       id: true,
@@ -126,7 +129,9 @@ async function candidatas(agora = new Date()): Promise<Candidata[]> {
       createdAt: true,
       conversation: { select: { unitId: true, leadId: true, phone: true, contactName: true, unit: { select: { kommoSubdomain: true } } } },
     },
-    orderBy: { createdAt: 'asc' },
+    // Mais novas primeiro: se um dia a janela tiver mais de 500, quem fica de fora é o mais velho, não o
+    // que acabou de ser dito (as decididas só saem do lote em memória).
+    orderBy: { createdAt: 'desc' },
     take: 500,
   });
 
@@ -192,10 +197,16 @@ async function evidenciaDoBanco(unidades: string[], c: Candidata, desdeLocal: st
       where: {
         trace: { leadId: String(c.leadId), unitId: { in: unidades } },
         createdAt: { gte: new Date(c.criadaEm.getTime() - RASTRO_DIAS * 86_400_000) },
-        OR: [{ title: { startsWith: 'Consulta marcada:' } }, { title: { startsWith: 'Consulta marcada na franquia:' } }],
+        OR: [
+          { title: { startsWith: 'Consulta marcada:' } },
+          { title: { startsWith: 'Consulta marcada na franquia:' } },
+          { title: { startsWith: 'cancelar_consulta ' } },
+          { title: { startsWith: 'remarcar: trocada' } },
+        ],
       },
       select: { title: true },
-      take: 20,
+      orderBy: { createdAt: 'desc' },
+      take: 100,
     }),
     prisma.spineLeadLink.findMany({
       where: { kommoLeadId: c.leadId, unitId: { in: unidades }, spineIdSchedule: { not: null } },
@@ -203,7 +214,7 @@ async function evidenciaDoBanco(unidades: string[], c: Candidata, desdeLocal: st
     }),
   ]);
   return {
-    marcouNoRastro: algumaDesde(passos.map((p) => consultaDoRastro(p.title)), desdeLocal),
+    marcouNoRastro: algumaDesde(consultasVivasDoRastro(passos.map((p) => p.title)), desdeLocal),
     vinculoFuturo: algumaDesde(vinculos.map((v) => v.agendadoPara), desdeLocal),
   };
 }
@@ -243,7 +254,8 @@ async function registrarAlerta(unit: Unit, c: Candidata, motivo: string, tarefaI
           create: [
             {
               sequence: 0,
-              kind: 'ERROR',
+              // ação tomada, não falha do agente: ERROR entraria na taxa de erro do diagnóstico
+              kind: 'KOMMO_ACTION',
               title: `${MARCA} — lead ${c.leadId}`,
               payload: {
                 trecho: c.promessa.trecho,
@@ -291,13 +303,14 @@ async function tratarUnidade(unit: Unit, itens: Candidata[], estado: Estado, orc
     const ev: Evidencias = {
       ...banco,
       // lote que falhou = não sei (`decidir` adia)
-      cartaoComConsulta: cartao === undefined ? null : cartaoTemConsulta(cartao, c.criadaEm),
+      cartaoComConsulta: cartao === undefined ? null : cartaoTemConsulta(cartao, c.criadaEm, FOLGA_MS),
       franquiaComConsulta: null,
     };
     // A franquia é a fonte cara: só pergunta quando todo o resto disse "não tem".
     if (!ev.marcouNoRastro && !ev.vinculoFuturo && ev.cartaoComConsulta === false && unit.spineEnabled) {
+      // null = não achou o paciente pelo telefone, ou a franquia não respondeu (a busca engole o erro)
       const p = await pacienteNaFranquia(unit, c.leadId, [cartao?.name, c.contato], c.telefone).catch(() => null);
-      ev.franquiaComConsulta = !!p?.proximo;
+      ev.franquiaComConsulta = p ? !!p.proximo : null;
     }
 
     const decisao = decidir(ev);
@@ -334,20 +347,28 @@ async function tratarUnidade(unit: Unit, itens: Candidata[], estado: Estado, orc
     if (orcamento.alertas <= 0) return; // teto da varredura: o resto fica pra próxima
     try {
       const nome = cartao?.name?.trim() || c.contato;
+      // O POST que não lançou criou a tarefa, mesmo se a resposta veio sem id: tratar como falha e repetir
+      // duplicaria a tarefa no cartão.
       const tarefa = await kommo.createTask({
         leadId: c.leadId,
         text: textoDoAlerta({ slug: unit.slug, nome, trecho: c.promessa.trecho, quando: c.promessa.quando }),
         completeAt: Math.floor(Date.now() / 1000) + PRAZO_TAREFA_S,
       });
-      if (!tarefa) throw new Error('o Kommo não devolveu a tarefa');
       orcamento.alertas--;
       decidida(c.id);
+      tentativas.delete(c.id);
       cartoesAvisados.lembrar(chaveCartao, UM_POR_LEAD_MS);
-      await registrarAlerta(unit, c, decisao.motivo, tarefa.id ?? null);
-      logger.warn({ unit: unit.slug, leadId: c.leadId, tarefa: tarefa.id }, 'prometeu-sem-marcar: a IA prometeu consulta que não existe — SDR avisada');
+      await registrarAlerta(unit, c, decisao.motivo, tarefa?.id ?? null);
+      logger.warn({ unit: unit.slug, leadId: c.leadId, tarefa: tarefa?.id ?? null }, 'prometeu-sem-marcar: a IA prometeu consulta que não existe — SDR avisada');
     } catch (err) {
-      // Sem marca: a mensagem segue na janela e a próxima varredura tenta de novo.
-      avisarFalha(`tarefa:${unit.id}:${c.leadId}`, { err: String(err), unit: unit.slug, leadId: c.leadId }, 'prometeu-sem-marcar: falhei ao criar a tarefa');
+      // Sem marca: a mensagem segue na janela e a próxima varredura tenta de novo — até MAX_TENTATIVAS.
+      const n = (tentativas.get(c.id) ?? 0) + 1;
+      tentativas.set(c.id, n);
+      if (n >= MAX_TENTATIVAS) {
+        decidida(c.id);
+        tentativas.delete(c.id);
+      }
+      avisarFalha(`tarefa:${unit.id}:${c.leadId}`, { err: String(err), unit: unit.slug, leadId: c.leadId, tentativa: n }, 'prometeu-sem-marcar: falhei ao criar a tarefa');
     }
   }
 }
@@ -359,6 +380,7 @@ async function varrer(): Promise<void> {
     decididas.esquecerVencidas();
     cartoesAvisados.esquecerVencidas();
     falhasAvisadas.esquecerVencidas();
+    if (tentativas.size > 1_000) tentativas.clear();
 
     const lista = await candidatas();
     if (lista.length === 0) return;
@@ -375,18 +397,30 @@ async function varrer(): Promise<void> {
       try {
         await tratarUnidade(unit, itens, estado, orcamento);
       } catch (err) {
-        logger.warn({ err: String(err), unit: unit.slug }, 'prometeu-sem-marcar: unidade falhou, segue a próxima');
+        avisarFalha(`unidade:${unit.id}`, { err: String(err), unit: unit.slug }, 'prometeu-sem-marcar: unidade falhou, segue a próxima');
       }
     }
   } catch (err) {
-    logger.warn({ err: String(err) }, 'prometeu-sem-marcar: varredura falhou');
+    avisarFalha('varredura', { err: String(err) }, 'prometeu-sem-marcar: varredura falhou');
   } finally {
     rodando = false;
   }
 }
 
+/**
+ * Chave de emergência da rede toda: `PROMETEU_SEM_MARCAR_DESLIGADO=1` nem sobe o vigia (nem no papel —
+ * ele lê cartões do Kommo e, quando vai avisar, a franquia). Por unidade, quem desliga é a tela.
+ */
+function desligadoNaRede(): boolean {
+  return ['1', 'true', 'sim'].includes((process.env.PROMETEU_SEM_MARCAR_DESLIGADO ?? '').trim().toLowerCase());
+}
+
 export function startPrometeuSemMarcarWorker(): void {
   if (timer) return;
+  if (desligadoNaRede()) {
+    logger.info('vigia "prometeu e não marcou" desligado na rede (PROMETEU_SEM_MARCAR_DESLIGADO)');
+    return;
+  }
   timer = setInterval(() => void varrer(), SWEEP_MS);
   timer.unref?.();
   logger.info({ sweepMs: SWEEP_MS, carenciaMin: CARENCIA_MIN, janelaH: JANELA_H }, 'vigia "prometeu e não marcou" ligado');
