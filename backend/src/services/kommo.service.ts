@@ -32,6 +32,14 @@ export interface KommoLead {
   };
 }
 
+/** Modelo de mensagem (WABA ou rápida), com o status na Meta quando pedido `with=reviews`. */
+export interface KommoChatTemplate {
+  id: number;
+  name: string;
+  content?: string;
+  reviews?: Array<{ status?: string; source_id?: number }> | null;
+}
+
 export interface KommoPipelineStatus {
   id: number;
   name: string;
@@ -698,6 +706,24 @@ export class KommoClient {
       }
     }
     return m;
+  }
+
+  /** Modelos de mensagem da conta, com o status de aprovação na Meta. */
+  async listChatTemplates(maxPaginas = 4): Promise<KommoChatTemplate[]> {
+    const out: KommoChatTemplate[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data } = await this.http.get<{ _embedded?: { chat_templates?: KommoChatTemplate[] } } | ''>('/chats/templates', {
+          params: { limit: 250, page, with: 'reviews' },
+        });
+        const lote = (data && data._embedded?.chat_templates) || [];
+        out.push(...lote);
+        if (lote.length < 250) break;
+      } catch (err) {
+        wrapAxiosError(err, `listChatTemplates(p${page})`);
+      }
+    }
+    return out;
   }
 
   /** Ids de todos os cartões de um contato. `null` = não consegui perguntar (não é "nenhum"). */

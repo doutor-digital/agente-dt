@@ -152,7 +152,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'Põe sozinho as etiquetas que a SDR punha à mão: ▶ Boas-vindas quando o cartão entra em GANHO, ▶ Confirmar retorno 24 h antes do retorno (RETORNO PÓS-TRATAMENTO) e ▶ Reativação depois de 30 dias em PERDIDO sem conversa. A etiqueta aciona o bot do Kommo, que manda a mensagem.',
     pegadinha:
-      'Só funciona se a etiqueta tiver gatilho no Kommo daquela unidade. Não põe se o modelo for sair com buraco (programa, próxima sessão ou responsável vazios) nem pra quem pediu pra não receber — em "só no papel" isso aparece como "pularia" com o motivo. A Reativação só pega quem cruza os 30 dias agora: o estoque antigo de PERDIDO nunca entra de uma vez. A ▶ Retomada não está aqui: depende do robô da 3C.',
+      'Só funciona se a etiqueta tiver gatilho no Kommo daquela unidade. Não põe se o modelo for sair com buraco (programa, próxima sessão ou responsável vazios — a Reativação deixa de olhar o responsável quando a unidade tem o modelo `…sdr_reativacao_lead_frio_v2` aprovado, com "a equipe Doutor Digital" fixo; quem cria a v2 troca o modelo do bot no mesmo passo) nem pra quem pediu pra não receber — em "só no papel" isso aparece como "pularia" com o motivo. A Reativação só pega quem cruza os 30 dias agora: o estoque antigo de PERDIDO nunca entra de uma vez. A ▶ Retomada não está aqui: depende do robô da 3C.',
     risco: 'manda-mensagem',
     temSeco: true,
     quandoVazio: 'desligado',

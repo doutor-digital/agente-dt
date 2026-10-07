@@ -6,6 +6,7 @@ import {
   decidirConfirmarRetorno,
   decidirReativacao,
   epochSeg,
+  reativacaoCitaResponsavel,
 } from './etiquetas-auto.js';
 
 const H = 3600;
@@ -153,4 +154,17 @@ test('epochSeg aceita segundos, ms e ISO', () => {
   assert.equal(epochSeg('2026-10-07T15:00:00Z'), AGORA);
   assert.equal(epochSeg(''), null);
   assert.equal(epochSeg(null), null);
+});
+
+test('reativação: com o modelo v2 (nome fixo) o responsável vazio não trava', () => {
+  const d = decidirReativacao(cartao({ closed_at: AGORA - 30 * D - H }), AGORA, null, false);
+  assert.equal(d?.tipo, 'coloca');
+});
+
+test('modelo v2 só vale aprovado; sem lista, assume o original (pula)', () => {
+  const v2 = (status: string) => [{ name: 'acai_sdr_reativacao_lead_frio' }, { name: 'acai_sdr_reativacao_lead_frio_v2', reviews: [{ status }] }];
+  assert.equal(reativacaoCitaResponsavel(v2('approved')), false);
+  assert.equal(reativacaoCitaResponsavel(v2('review')), true);
+  assert.equal(reativacaoCitaResponsavel([{ name: 'acai_sdr_reativacao_lead_frio', reviews: [{ status: 'approved' }] }]), true);
+  assert.equal(reativacaoCitaResponsavel(null), true);
 });

@@ -146,10 +146,30 @@ export function decidirConfirmarRetorno(lead: Cartao, agora: number): Decisao | 
 }
 
 /**
+ * O modelo da Reativação desta unidade cita "☻ Responsável agendamento"?
+ *
+ * O original (`<prefixo>sdr_reativacao_lead_frio`) diz "Aqui é {responsável}"; em PERDIDO o campo
+ * quase sempre está vazio (Açailândia 07/10: 15 de 15). A versão `_v2` traz o nome fixo da equipe
+ * ("Aqui é a equipe Doutor Digital", decisão do João 07/10) e não depende do cartão. Com uma `_v2`
+ * APROVADA na Meta, assume-se que o bot da etiqueta aponta pra ela — quem cria a v2 numa unidade
+ * troca o modelo do bot no mesmo passo. Na dúvida (sem lista), cita: o lado seguro é pular.
+ */
+export function reativacaoCitaResponsavel(modelos: ReadonlyArray<{ name: string; reviews?: ReadonlyArray<{ status?: string }> | null }> | null): boolean {
+  if (!modelos) return true;
+  return !modelos.some((m) => /sdr_reativacao_lead_frio_v\d+$/.test(m.name) && (m.reviews ?? []).some((r) => r.status === 'approved'));
+}
+
+/**
  * Cartão em PERDIDO (COMERCIAL). `ultimaConversa` = última mensagem que o sistema viu com este
  * paciente (epoch s), ou null quando nunca houve conversa pela IA.
  */
-export function decidirReativacao(lead: Cartao, agora: number, ultimaConversa: number | null): Decisao | null {
+export function decidirReativacao(
+  lead: Cartao,
+  agora: number,
+  ultimaConversa: number | null,
+  /** `false` quando a unidade usa o modelo com o nome fixo (ver `reativacaoCitaResponsavel`) */
+  citaResponsavel = true,
+): Decisao | null {
   const perdeu = epochSeg(lead.closed_at);
   if (!perdeu) return null;
   const desde = agora - perdeu;
@@ -167,10 +187,10 @@ export function decidirReativacao(lead: Cartao, agora: number, ultimaConversa: n
     return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `conversou em ${dataBR(ultimaConversa)}, menos de ${DIAS_REATIVACAO} dias` };
   }
   const responsavel = String(valor(lead, CAMPO.RESPONSAVEL) ?? '').trim();
-  if (!responsavel) {
+  if (citaResponsavel && !responsavel) {
     return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} vazio — o modelo sairia "Aqui é , da Doutor Hérnia"` };
   }
-  if (RESPONSAVEL_QUE_NAO_E_GENTE.test(responsavel)) {
+  if (citaResponsavel && RESPONSAVEL_QUE_NAO_E_GENTE.test(responsavel)) {
     return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} = ${responsavel} — o modelo sairia "Aqui é ${responsavel}, da Doutor Hérnia"` };
   }
   return { tipo: 'coloca', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${DIAS_REATIVACAO} dias em PERDIDO (desde ${dataBR(perdeu)}) sem conversa` };

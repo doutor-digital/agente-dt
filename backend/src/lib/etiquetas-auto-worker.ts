@@ -12,6 +12,7 @@ import {
   decidirBoasVindas,
   decidirConfirmarRetorno,
   decidirReativacao,
+  reativacaoCitaResponsavel,
   type Decisao,
 } from './etiquetas-auto.js';
 
@@ -156,8 +157,10 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
     statusId: 143,
   });
   const conversas = await ultimasConversas(unit.id, perdidos.leads.map((l) => l.id));
+  const citaResponsavel =
+    perdidos.leads.length === 0 ? true : reativacaoCitaResponsavel(await kommo.listChatTemplates().catch(() => null));
   for (const l of perdidos.leads) {
-    const d = decidirReativacao(l, agora, conversas.get(l.id) ?? null);
+    const d = decidirReativacao(l, agora, conversas.get(l.id) ?? null, citaResponsavel);
     if (d?.tipo === 'coloca') {
       const motivo = await voltouEmOutroCartao(unit.id, kommo, l, l.closed_at ?? 0, agora);
       if (motivo) {
