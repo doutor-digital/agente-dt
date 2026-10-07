@@ -44,10 +44,24 @@ export const CAMPO = {
  * Lista malformada vira lista VAZIA (ninguém recebe), nunca "todos": o erro fica do lado de não mandar.
  */
 export function leadsDeTeste(pipelineIntents: unknown): Set<number> | null {
-  const bruto = (pipelineIntents as Record<string, unknown> | null | undefined)?.etiquetas_teste_leads;
+  const bruto = (pipelineIntents as Record<string, unknown> | null | undefined)?.[CHAVE_LISTA_TESTE];
   if (bruto === undefined || bruto === null) return null;
+  // Só dígitos: "0x1A", "2.8e7" ou `true` não podem virar um id de cartão por acaso.
   const itens = Array.isArray(bruto) ? bruto : String(bruto).split(',');
-  return new Set(itens.map((x) => Number(String(x).trim())).filter((n) => Number.isInteger(n) && n > 0));
+  return new Set(itens.map((x) => String(x).trim()).filter((x) => /^\d+$/.test(x)).map(Number).filter((n) => n > 0));
+}
+
+/**
+ * A tela de unidade valida `pipelineIntents` como {chave: inteiro positivo}: a lista de teste vai como UM
+ * id (número). Array ou texto com vírgula só por banco — e aí a tela recusa salvar a unidade.
+ */
+export const CHAVE_LISTA_TESTE = 'etiquetas_teste_leads';
+
+/** Ao clonar unidade a lista de teste NÃO vai junto: os ids são cartões da conta de origem. */
+export function semListaDeTeste<T>(pipelineIntents: T): T {
+  if (!pipelineIntents || typeof pipelineIntents !== 'object' || Array.isArray(pipelineIntents)) return pipelineIntents;
+  const { [CHAVE_LISTA_TESTE]: _fora, ...resto } = pipelineIntents as Record<string, unknown>;
+  return resto as T;
 }
 
 /** Etiquetas que dizem "não mande nada pra este paciente". */

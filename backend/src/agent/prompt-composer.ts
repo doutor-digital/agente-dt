@@ -488,6 +488,8 @@ const PIPELINE_INTENT_CONFIG_KEYS = new Set([
   'sla_alert_minutes',
   'confirmacao_salesbot_id',
   'reforco_salesbot_id',
+  // lista de teste das etiquetas ▶ (ids de CARTÃO) — sem isto virava "mover para a etapa 28088906" no prompt
+  'etiquetas_teste_leads',
 ]);
 
 function renderPipelineIntents(unit: Unit): string {

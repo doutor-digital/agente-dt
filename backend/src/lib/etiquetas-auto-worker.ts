@@ -208,7 +208,11 @@ async function varrerUnidade(unit: Unit, estado: Estado): Promise<void> {
   const decisoes = await decisoesDaUnidade(unit, kommo);
   // Ligado com lista de teste: só os cartões da lista vão de verdade; o resto segue no papel.
   const teste = estado === 'ligado' ? leadsDeTeste(unit.pipelineIntents) : null;
-  if (teste) logger.info({ unit: unit.slug, leads: [...teste] }, 'etiquetas: ligado só para a lista de teste');
+  if (teste && teste.size === 0) {
+    logger.warn({ unit: unit.slug, bruto: (unit.pipelineIntents as Record<string, unknown> | null)?.etiquetas_teste_leads }, 'etiquetas: lista de teste ilegível — LIGADO mas ninguém recebe');
+  } else if (teste) {
+    logger.info({ unit: unit.slug, leads: [...teste] }, 'etiquetas: ligado só para a lista de teste');
+  }
 
   const aPor: Array<{ lead: KommoLead; d: Decisao }> = [];
   for (const x of decisoes) {

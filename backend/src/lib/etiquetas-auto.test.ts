@@ -9,6 +9,7 @@ import {
   temModeloV2,
   modelosV2,
   leadsDeTeste,
+  semListaDeTeste,
 } from './etiquetas-auto.js';
 
 const H = 3600;
@@ -224,4 +225,16 @@ test('lista de teste: sem lista = todos; lista = só ela; lixo = ninguém (nunca
   assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: '28088906, 123' })!], [28088906, 123]);
   assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: 'abc' })!], []);
   assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: [] })!], []);
+});
+
+test('lista de teste: um número só (o que a tela aceita) e nada de id por acaso', () => {
+  assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: 28088906 })!], [28088906]);
+  assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: '0x1A' })!], []);
+  assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: '2.8088906e7' })!], []);
+  assert.deepEqual([...leadsDeTeste({ etiquetas_teste_leads: [true] })!], []);
+});
+
+test('clonar unidade não leva a lista de teste', () => {
+  assert.deepEqual(semListaDeTeste({ sla_alert_minutes: 15, etiquetas_teste_leads: 28088906 }), { sla_alert_minutes: 15 });
+  assert.equal(semListaDeTeste(null), null);
 });

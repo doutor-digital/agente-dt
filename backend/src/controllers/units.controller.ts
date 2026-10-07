@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { USD_BRL } from '../lib/cambio.js';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { semListaDeTeste } from '../lib/etiquetas-auto.js';
 import { logger } from '../lib/logger.js';
 import { getWidgetConnection } from '../lib/widget-connection-monitor.js';
 import { painelDaUnidade } from '../services/painel-unidade.service.js';
@@ -364,7 +365,7 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
         ...rest,
         slug: candidateSlug,
         name: newName,
-        pipelineIntents: pipelineIntents === null ? Prisma.DbNull : (pipelineIntents as Prisma.InputJsonValue),
+        pipelineIntents: pipelineIntents === null ? Prisma.DbNull : (semListaDeTeste(pipelineIntents) as Prisma.InputJsonValue),
         spineDayHours: spineDayHours === null ? Prisma.DbNull : (spineDayHours as Prisma.InputJsonValue),
         businessHoursByDay:
           businessHoursByDay === null ? Prisma.DbNull : (businessHoursByDay as Prisma.InputJsonValue),
