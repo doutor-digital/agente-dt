@@ -161,10 +161,24 @@ test('reativação: com o modelo v2 (nome fixo) o responsável vazio não trava'
   assert.equal(d?.tipo, 'coloca');
 });
 
-test('modelo v2 só vale aprovado; sem lista, assume o original (pula)', () => {
-  const v2 = (status: string) => [{ name: 'acai_sdr_reativacao_lead_frio' }, { name: 'acai_sdr_reativacao_lead_frio_v2', reviews: [{ status }] }];
-  assert.equal(reativacaoCitaResponsavel(v2('approved')), false);
-  assert.equal(reativacaoCitaResponsavel(v2('review')), true);
-  assert.equal(reativacaoCitaResponsavel([{ name: 'acai_sdr_reativacao_lead_frio', reviews: [{ status: 'approved' }] }]), true);
+test('modelo v2 só vale aprovado, em todos os números, e com o prefixo da unidade', () => {
+  const base = [
+    { name: 'acai_sdr_reativacao_lead_frio', reviews: [{ status: 'approved' }] },
+    { name: 'acai_consulta_confirmada', reviews: [{ status: 'approved' }] },
+  ];
+  const com = (name: string, ...status: string[]) => [...base, { name, reviews: status.map((s) => ({ status: s })) }];
+  assert.equal(reativacaoCitaResponsavel(com('acai_sdr_reativacao_lead_frio_v2', 'approved')), false);
+  assert.equal(reativacaoCitaResponsavel(com('acai_sdr_reativacao_lead_frio_v2', 'review')), true);
+  assert.equal(reativacaoCitaResponsavel(com('acai_sdr_reativacao_lead_frio_v2', 'approved', 'review')), true);
+  assert.equal(reativacaoCitaResponsavel(com('acai_sdr_reativacao_lead_frio_v2')), true);
+  // v2 de outra unidade na mesma conta não vale aqui
+  assert.equal(reativacaoCitaResponsavel(com('imp_sdr_reativacao_lead_frio_v2', 'approved')), true);
+  assert.equal(reativacaoCitaResponsavel(base), true);
   assert.equal(reativacaoCitaResponsavel(null), true);
+  assert.equal(reativacaoCitaResponsavel([]), true);
+  // formato da API pública: _embedded.reviews
+  assert.equal(
+    reativacaoCitaResponsavel([...base, { name: 'acai_sdr_reativacao_lead_frio_v2', _embedded: { reviews: [{ status: 'approved' }] } }]),
+    false,
+  );
 });

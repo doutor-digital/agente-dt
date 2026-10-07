@@ -37,7 +37,9 @@ export interface KommoChatTemplate {
   id: number;
   name: string;
   content?: string;
+  /** A API pública devolve em `_embedded.reviews` (conferido 07/10/2026); a rota /ajax, em `reviews`. */
   reviews?: Array<{ status?: string; source_id?: number }> | null;
+  _embedded?: { reviews?: Array<{ status?: string; source_id?: number }> | null };
 }
 
 export interface KommoPipelineStatus {
@@ -713,12 +715,12 @@ export class KommoClient {
     const out: KommoChatTemplate[] = [];
     for (let page = 1; page <= maxPaginas; page++) {
       try {
-        const { data } = await this.http.get<{ _embedded?: { chat_templates?: KommoChatTemplate[] } } | ''>('/chats/templates', {
-          params: { limit: 250, page, with: 'reviews' },
-        });
-        const lote = (data && data._embedded?.chat_templates) || [];
-        out.push(...lote);
-        if (lote.length < 250) break;
+        const { data } = await this.http.get<
+          { _embedded?: { chat_templates?: KommoChatTemplate[] }; _links?: { next?: unknown } } | ''
+        >('/chats/templates', { params: { limit: 250, page, with: 'reviews' } });
+        out.push(...((data && data._embedded?.chat_templates) || []));
+        // O tamanho da página é do Kommo, não nosso: só para quando ele disser que não há próxima.
+        if (!data || !data._links?.next) break;
       } catch (err) {
         wrapAxiosError(err, `listChatTemplates(p${page})`);
       }
