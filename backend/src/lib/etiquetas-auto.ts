@@ -7,8 +7,9 @@
  * vai sair inteiro: etiqueta posta com o campo vazio manda "Aqui é , da Doutor Hérnia" pro paciente.
  *
  * As três regras aprovadas:
- *  - ▶ Boas-vindas     — o cartão entrou em GANHO (COMERCIAL). Espera o programa e a próxima sessão
- *                         estarem no cartão, porque o modelo cita os dois.
+ *  - ▶ Boas-vindas     — o cartão entrou em GANHO (COMERCIAL). Com o modelo original, espera o
+ *                         programa e a próxima sessão estarem no cartão (ele cita os dois); com a
+ *                         `_v2` aprovada (sem campo nenhum), põe na hora.
  *  - ▶ Confirmar retorno — RETORNO PÓS-TRATAMENTO com o retorno ("◷ Data da Consulta", que é onde o
  *                         sincronizador da franquia grava) nas próximas 24 h. Em EM TRATAMENTO não:
  *                         ali a véspera da sessão já tem bot próprio.
@@ -64,8 +65,6 @@ export type Decisao =
       etiqueta: Etiqueta;
       chave: string;
       motivo: string;
-      /** Pulou por causa do TEXTO do modelo: com a `_v2` deste modelo aprovada, decide de novo. */
-      porModelo?: ModeloSdr;
     };
 
 /** Os modelos das etiquetas ▶ que ganharam uma `_v2` sem buraco (07/10/2026, Açailândia). */
@@ -130,7 +129,6 @@ export function decidirBoasVindas(lead: Cartao, agora: number, modeloV2 = false)
       etiqueta: ETIQUETA.BOAS_VINDAS,
       chave,
       motivo: `falta ${faltam.join(' e ')} — o modelo sairia com buraco (tenta de novo até 48 h depois do GANHO)`,
-      porModelo: 'sdr_boas_vindas_programa',
     };
   }
   return { tipo: 'coloca', etiqueta: ETIQUETA.BOAS_VINDAS, chave, motivo: `entrou em GANHO em ${dataBR(fechou)}` };
@@ -153,7 +151,6 @@ export function decidirConfirmarRetorno(lead: Cartao, agora: number, modeloV2 = 
       etiqueta: ETIQUETA.CONFIRMAR_RETORNO,
       chave,
       motivo: `retorno em ${dataBR(quando)}, mas o modelo mostra ${CAMPO.PROXIMA_SESSAO} (${mostrada ? dataBR(mostrada) : 'vazio'}) — trocar o modelo para ${CAMPO.DATA_CONSULTA}`,
-      porModelo: 'sdr_confirmacao_retorno',
     };
   }
   return {
@@ -183,23 +180,34 @@ type ModeloComStatus = {
  */
 export function temModeloV2(modelos: ReadonlyArray<ModeloComStatus> | null, base: ModeloSdr): boolean {
   if (!modelos || modelos.length === 0) return false;
-  // O prefixo da unidade é o mais comum entre os modelos da conta (acai_, serra_…). Sem isso, uma v2
-  // de outra unidade na mesma conta (Petrópolis × Caxias, resto da Imperatriz) valeria aqui.
-  const conta = new Map<string, number>();
-  for (const m of modelos) {
-    const p = /^([a-z]+_)/i.exec(m.name)?.[1]?.toLowerCase();
-    if (p) conta.set(p, (conta.get(p) ?? 0) + 1);
-  }
-  const prefixo = [...conta.entries()].sort((x, y) => y[1] - x[1])[0]?.[0];
-  if (!prefixo) return false;
-  const alvo = new RegExp(`^${prefixo}${base}_v\\d+$`, 'i');
+  // O prefixo é o do ORIGINAL deste modelo na conta (acai_sdr_…). Conta com dois originais (Petrópolis ×
+  // Caxias, resto da Imperatriz) é ambígua: não dá pra saber qual bot é desta unidade — pula.
+  const original = new RegExp(`^([a-z]+_)${base}$`, 'i');
+  const prefixos = [...new Set(modelos.map((m) => original.exec(m.name)?.[1]?.toLowerCase()).filter((p): p is string => !!p))];
+  if (prefixos.length !== 1) return false;
+  const v2 = new RegExp(`^${prefixos[0]}${base}_v\\d+$`, 'i');
   // Aprovado em TODOS os números da conta: aprovado num e pendente noutro = o bot pode cair no errado.
   // Formato conferido na API real em 07/10/2026: `_embedded.reviews[].status` = "approved" | "review" | …
   const aprovado = (m: ModeloComStatus) => {
     const rs = m._embedded?.reviews ?? m.reviews ?? [];
     return rs.length > 0 && rs.every((r) => String(r.status ?? '').toLowerCase() === 'approved');
   };
-  return modelos.some((m) => alvo.test(m.name) && aprovado(m));
+  return modelos.some((m) => v2.test(m.name) && aprovado(m));
+}
+
+/** As três respostas de uma vez — é isso que o worker guarda, não a lista de modelos. */
+export interface ModelosV2 {
+  boasVindas: boolean;
+  retorno: boolean;
+  reativacao: boolean;
+}
+
+export function modelosV2(modelos: ReadonlyArray<ModeloComStatus> | null): ModelosV2 {
+  return {
+    boasVindas: temModeloV2(modelos, 'sdr_boas_vindas_programa'),
+    retorno: temModeloV2(modelos, 'sdr_confirmacao_retorno'),
+    reativacao: temModeloV2(modelos, 'sdr_reativacao_lead_frio'),
+  };
 }
 
 /**
@@ -231,10 +239,10 @@ export function decidirReativacao(
   }
   const responsavel = String(valor(lead, CAMPO.RESPONSAVEL) ?? '').trim();
   if (!modeloV2 && !responsavel) {
-    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} vazio — o modelo sairia "Aqui é , da Doutor Hérnia"`, porModelo: 'sdr_reativacao_lead_frio' };
+    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} vazio — o modelo sairia "Aqui é , da Doutor Hérnia"`};
   }
   if (!modeloV2 && RESPONSAVEL_QUE_NAO_E_GENTE.test(responsavel)) {
-    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} = ${responsavel} — o modelo sairia "Aqui é ${responsavel}, da Doutor Hérnia"`, porModelo: 'sdr_reativacao_lead_frio' };
+    return { tipo: 'pula', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${CAMPO.RESPONSAVEL} = ${responsavel} — o modelo sairia "Aqui é ${responsavel}, da Doutor Hérnia"`};
   }
   return { tipo: 'coloca', etiqueta: ETIQUETA.REATIVACAO, chave, motivo: `${DIAS_REATIVACAO} dias em PERDIDO (desde ${dataBR(perdeu)}) sem conversa` };
 }

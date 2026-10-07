@@ -7,6 +7,7 @@ import {
   decidirReativacao,
   epochSeg,
   temModeloV2,
+  modelosV2,
 } from './etiquetas-auto.js';
 
 const H = 3600;
@@ -174,9 +175,19 @@ test('modelo v2 só vale aprovado, em todos os números, e com o prefixo da unid
   assert.equal(temModeloV2(com('acai_sdr_reativacao_lead_frio_v2'), R), false);
   // v2 de outra unidade na mesma conta não vale aqui
   assert.equal(temModeloV2(com('imp_sdr_reativacao_lead_frio_v2', 'approved'), R), false);
+  // conta com dois originais (duas unidades) é ambígua: não reconhece v2 nenhuma
+  assert.equal(
+    temModeloV2([...com('acai_sdr_reativacao_lead_frio_v2', 'approved'), { name: 'caxias_sdr_reativacao_lead_frio', reviews: [{ status: 'approved' }] }], R),
+    false,
+  );
   // v2 de OUTRO modelo não vale pra este
   assert.equal(temModeloV2(com('acai_sdr_boas_vindas_programa_v2', 'approved'), R), false);
-  assert.equal(temModeloV2(com('acai_sdr_boas_vindas_programa_v2', 'approved'), 'sdr_boas_vindas_programa'), true);
+  // sem o original na conta não há como saber o prefixo: não reconhece
+  assert.equal(temModeloV2(com('acai_sdr_boas_vindas_programa_v2', 'approved'), 'sdr_boas_vindas_programa'), false);
+  assert.equal(
+    temModeloV2([...com('acai_sdr_boas_vindas_programa_v2', 'approved'), { name: 'acai_sdr_boas_vindas_programa' }], 'sdr_boas_vindas_programa'),
+    true,
+  );
   assert.equal(temModeloV2(base, R), false);
   assert.equal(temModeloV2(null, R), false);
   assert.equal(temModeloV2([], R), false);
@@ -184,18 +195,22 @@ test('modelo v2 só vale aprovado, em todos os números, e com o prefixo da unid
   assert.equal(temModeloV2([...base, { name: 'acai_sdr_reativacao_lead_frio_v2', _embedded: { reviews: [{ status: 'approved' }] } }], R), true);
 });
 
-test('pulou pelo texto do modelo → diz qual v2 resolveria', () => {
-  const bv = decidirBoasVindas(cartao({ closed_at: AGORA - H }), AGORA);
-  assert.equal(bv?.tipo === 'pula' && bv.porModelo, 'sdr_boas_vindas_programa');
-  const rt = decidirConfirmarRetorno(cartao({ campos: { '◷ Data da Consulta': AGORA + 5 * H } }), AGORA);
-  assert.equal(rt?.tipo === 'pula' && rt.porModelo, 'sdr_confirmacao_retorno');
-  const op = decidirBoasVindas(cartao({ closed_at: AGORA - H, tags: ['NO_FOLLOW_UP'] }), AGORA);
-  assert.equal(op?.tipo === 'pula' && op.porModelo, undefined, 'opt-out não se resolve com modelo');
-});
-
 test('com a v2: boas-vindas sem programa/sessão e retorno sem Próxima sessão → coloca', () => {
   assert.equal(decidirBoasVindas(cartao({ closed_at: AGORA - H }), AGORA, true)?.tipo, 'coloca');
   assert.equal(decidirConfirmarRetorno(cartao({ campos: { '◷ Data da Consulta': AGORA + 5 * H } }), AGORA, true)?.tipo, 'coloca');
   // opt-out continua pulando mesmo com a v2
   assert.equal(decidirBoasVindas(cartao({ closed_at: AGORA - H, tags: ['NO_FOLLOW_UP'] }), AGORA, true)?.tipo, 'pula');
+});
+
+test('retorno: Próxima sessão com OUTRA data — original pula, v2 coloca', () => {
+  const lead = cartao({ campos: { '◷ Data da Consulta': AGORA + 5 * H, '◷ Próxima sessão': AGORA + 6 * D } });
+  assert.equal(decidirConfirmarRetorno(lead, AGORA)?.tipo, 'pula');
+  assert.equal(decidirConfirmarRetorno(lead, AGORA, true)?.tipo, 'coloca');
+});
+
+test('modelosV2 devolve as três respostas de uma vez', () => {
+  const ok = (name: string) => ({ name, reviews: [{ status: 'approved' }] });
+  const lista = [ok('acai_sdr_boas_vindas_programa'), ok('acai_sdr_boas_vindas_programa_v2'), ok('acai_sdr_confirmacao_retorno'), ok('acai_sdr_reativacao_lead_frio')];
+  assert.deepEqual(modelosV2(lista), { boasVindas: true, retorno: false, reativacao: false });
+  assert.deepEqual(modelosV2(null), { boasVindas: false, retorno: false, reativacao: false });
 });
