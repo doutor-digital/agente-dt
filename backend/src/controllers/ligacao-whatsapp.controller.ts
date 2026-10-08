@@ -66,11 +66,12 @@ function kommoDaUnidade(unit: Unit): KommoLigacoes {
       if (v.telefone) cacheContato.set(chave, { em: Date.now(), v });
       return v;
     },
-    async ultimaMensagemDesde(contatoId, desde) {
-      // 20 s de memória: o painel de várias SDRs relê junto, e o portão do Kommo é o mesmo da Sofia
+    async ultimaMensagemDesde(contatoId, desde, fresco) {
+      // 20 s de memória para o PAINEL (várias SDRs relendo, e o portão do Kommo é o mesmo da Sofia).
+      // Na hora de ligar (`fresco`) sempre pergunta de novo.
       const chave = `${unit.id}:${contatoId}:${desde}`;
       const c = cacheMensagens.get(chave);
-      if (c && Date.now() - c.em < 20_000) return c.v;
+      if (!fresco && c && Date.now() - c.em < 20_000) return c.v;
       const v = await k.ultimaMensagemDoContatoDesde(contatoId, desde);
       if (cacheMensagens.size > 5_000) cacheMensagens.clear();
       cacheMensagens.set(chave, { em: Date.now(), v });

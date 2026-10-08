@@ -43,7 +43,7 @@ function repoFalso() {
     async salvarPaciente(unitId, chave, dados) {
       const atual = pacientes.get(chave) ?? {
         unitId, chaveTelefone: chave, telefone: dados.telefone, leadId: null, nome: null, permissao: 'sem', permissaoAte: null, permanente: false,
-        respondeuEm: null, pedidosEm: [], conferidaEm: null, perguntouEm: null, naoAtendidasSeguidas: 0, ultimaNaoAtendidaEm: null, ultimaLigacaoEm: null, ultimoResultado: null,
+        respondeuEm: null, pedidosEm: [], conferidaEm: null, perguntouEm: null, naoAtendidasSeguidas: 0, ultimaNaoAtendidaEm: null, ultimaLigacaoEm: null, ultimoResultado: null, ultimaContada: null,
       };
       const novo = { ...atual, ...dados } as LinhaPaciente;
       pacientes.set(chave, novo);
@@ -71,6 +71,12 @@ function repoFalso() {
       const l = ligacoes.get(id);
       if (!l || l.registradaEm) return false;
       ligacoes.set(id, { ...l, registradaEm: quando });
+      return true;
+    },
+    async marcarEncerrando(id, quando) {
+      const l = ligacoes.get(id);
+      if (!l || l.registradaEm || !['iniciando', 'chamando', 'tocando', 'em_ligacao'].includes(l.status)) return false;
+      ligacoes.set(id, { ...l, status: 'encerrando', encerradaEm: quando, atualizadaEm: relogio.agora });
       return true;
     },
     async liberarFinalizacao(id) {
@@ -451,4 +457,29 @@ test('a SDR desliga uma ligação atendida e o "terminate" se perde: o vigia fec
   assert.equal(l.resultado, 'atendida');
   assert.equal(l.duracaoSeg, 120, 'duração até a SDR desligar, não até o vigia passar');
   assert.equal(t.registros[0].call_status, 4);
+});
+
+test('reenvio depois de falha no meio não conta o "sem atender" duas vezes', async () => {
+  const t = montar();
+  const r = await iniciarLigacao(t.ctx, { leadId: 1, sdp: SDP, kommoUserId: 77, nomeSdr: 'Giulia', origem: 'cartao', confirmouSemCombinar: true });
+  const id = (r as { ligacaoId: string }).ligacaoId;
+  const callId = (await t.repo.ligacao(id))!.waCallId!;
+  await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, statuses: [{ id: callId, type: 'call', status: 'RINGING' }] } }] }] }));
+  const fim = lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, calls: [{ id: callId, event: 'terminate', status: 'FAILED' }] } }] }] });
+  t.falha.proxima = true; // o paciente já foi contado; quem falha é o "encerrada"
+  await assert.rejects(() => receberEventos(t.ctx, fim));
+  await receberEventos(t.ctx, fim);
+  assert.equal((await t.repo.ligacao(id))!.resultado, 'nao_atendida');
+  assert.equal(t.pacientes.get('6391021043')!.naoAtendidasSeguidas, 1, 'uma ligação, uma contagem');
+});
+
+test('webhook fecha primeiro e a SDR desliga depois: não reabre a ligação', async () => {
+  const t = montar();
+  await combinar(t);
+  const r = await iniciarLigacao(t.ctx, { leadId: 1, sdp: SDP, kommoUserId: 77, nomeSdr: 'Giulia', origem: 'cartao', confirmouSemCombinar: false });
+  const id = (r as { ligacaoId: string }).ligacaoId;
+  const callId = (await t.repo.ligacao(id))!.waCallId!;
+  await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, calls: [{ id: callId, event: 'terminate', status: 'COMPLETED', duration: 12 }] } }] }] }));
+  await encerrarLigacao(t.ctx, id);
+  assert.equal((await t.repo.ligacao(id))!.status, 'encerrada');
 });

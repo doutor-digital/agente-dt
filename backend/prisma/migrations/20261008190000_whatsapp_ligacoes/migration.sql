@@ -48,6 +48,7 @@ CREATE TABLE "whatsapp_ligacao_pacientes" (
     "nao_atendidas_seguidas" INTEGER NOT NULL DEFAULT 0,
     "ultima_nao_atendida_em" TIMESTAMP(3),
     "ultima_ligacao_em" TIMESTAMP(3),
+    "ultima_contada" TEXT,
     "ultimo_resultado" TEXT,
     "criado_em" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "atualizado_em" TIMESTAMP(3) NOT NULL,

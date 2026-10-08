@@ -87,7 +87,6 @@ export function telefoneParaMeta(bruto: string | null | undefined): string | nul
   return d.length === 12 || d.length === 13 ? d : null;
 }
 
-/** 8 últimos dígitos: o mesmo casamento do resto do sistema (cobre o nono dígito que o `wa_id` às vezes não tem). */
 /**
  * A chave do paciente: DDD + 8 últimos dígitos. Cobre o nono dígito que o `wa_id` da Meta às vezes não traz
  * ("556391021043" × "5563991021043") sem misturar dois pacientes de DDDs diferentes com o mesmo final.

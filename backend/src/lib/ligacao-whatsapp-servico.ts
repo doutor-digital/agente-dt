@@ -88,6 +88,7 @@ export interface LinhaPaciente {
   ultimaNaoAtendidaEm: Date | null;
   ultimaLigacaoEm: Date | null;
   ultimoResultado: string | null;
+  ultimaContada: string | null;
 }
 
 export interface LinhaConfig {
@@ -110,6 +111,8 @@ export interface Repositorio {
   atualizarLigacao(id: string, dados: Partial<LinhaLigacao>): Promise<LinhaLigacao>;
   /** Marca `registradaEm` SÓ se ainda vazio. true = esta chamada ganhou o direito de finalizar (idempotência). */
   reservarFinalizacao(id: string, quando: Date): Promise<boolean>;
+  /** "A SDR desligou": só muda ligação ainda aberta (nunca reabre uma que o webhook acabou de fechar). */
+  marcarEncerrando(id: string, quando: Date): Promise<boolean>;
   /** Devolve a reserva (a finalização falhou no meio) para o reenvio do webhook ou o vigia tentarem de novo. */
   liberarFinalizacao(id: string): Promise<void>;
   /** Ligação ainda aberta para este paciente, criada desde `desde`. */
@@ -148,7 +151,7 @@ export interface ContatoDoLead {
 export interface KommoLigacoes {
   contatoDoLead(leadId: number): Promise<ContatoDoLead>;
   /** epoch s da última mensagem do paciente desde `desdeEpoch`, ou null. */
-  ultimaMensagemDesde(contatoId: number, desdeEpoch: number): Promise<number | null>;
+  ultimaMensagemDesde(contatoId: number, desdeEpoch: number, fresco?: boolean): Promise<number | null>;
   registrarChamada(corpo: Record<string, unknown>): Promise<{ ids: number[]; erros: unknown[] }>;
   nota(leadId: number, texto: string): Promise<void>;
   tarefa(leadId: number, texto: string, responsavel: number | null): Promise<void>;
@@ -224,7 +227,8 @@ async function conferirPermissao(ctx: Contexto, p: LinhaPaciente, forcar = false
   const dados: Partial<LinhaPaciente> & { telefone: string } = { telefone: p.telefone, conferidaEm: agora };
   if (m.estado === 'aceita') {
     dados.permissao = 'aceita';
-    dados.permissaoAte = m.ate;
+    // temporária sem data na resposta: vale os 7 dias da doc, contados UMA vez (a data já gravada não anda)
+    dados.permissaoAte = m.permanente ? null : m.ate ?? (p.permissao === 'aceita' && p.permissaoAte ? p.permissaoAte : new Date(agora.getTime() + 7 * 24 * 60 * MIN));
     dados.permanente = m.permanente;
     if (p.permissao !== 'aceita') {
       dados.respondeuEm = p.respondeuEm ?? agora;
@@ -254,23 +258,24 @@ async function garantirPaciente(ctx: Contexto, leadId: number, telefone: string,
  * Última mensagem do paciente desde `desde`. Cada pergunta é uma ida ao Kommo, cujo portão de velocidade é
  * dividido com a Sofia — por isso `recente`: para o "Posso te ligar agora?" só interessa pergunta das últimas 24 h.
  */
-async function respondeuDepois(ctx: Contexto, contatoId: number | null, desde: Date | null, recente: boolean): Promise<Date | null> {
+async function respondeuDepois(ctx: Contexto, contatoId: number | null, desde: Date | null, recente: boolean, fresco = false): Promise<Date | null> {
   if (!contatoId || !desde) return null;
   if (recente && ctx.agora().getTime() - desde.getTime() > 24 * 60 * MIN) return null;
-  const t = await ctx.kommo.ultimaMensagemDesde(contatoId, Math.floor(desde.getTime() / 1000)).catch(() => null);
+  const t = await ctx.kommo.ultimaMensagemDesde(contatoId, Math.floor(desde.getTime() / 1000), fresco).catch(() => null);
   return t ? new Date(t * 1000) : null;
 }
 
 /** Travas 1 e 2 do paciente agora: o combinado e o "sem atender" (com as duas saídas: escreveu / combinou). */
-async function travasDoPaciente(ctx: Contexto, p: LinhaPaciente | null, contatoId: number | null, aj: Ajustes, agora: Date) {
+async function travasDoPaciente(ctx: Contexto, p: LinhaPaciente | null, contatoId: number | null, aj: Ajustes, agora: Date, fresco = false) {
   const perguntouEm = p?.perguntouEm ?? null;
-  const respondeuEm = await respondeuDepois(ctx, contatoId, perguntouEm, true);
+  // `fresco` na hora de LIGAR: a decisão não pode usar o "ainda não respondeu" guardado de segundos atrás
+  const respondeuEm = await respondeuDepois(ctx, contatoId, perguntouEm, true, fresco);
   const combinado = estadoDoCombinado(perguntouEm, respondeuEm, agora);
   const n = p?.naoAtendidasSeguidas ?? 0;
   const ultimaSem = p?.ultimaNaoAtendidaEm ?? null;
   // só no limite importa saber se ele escreveu depois (é o que libera uma tentativa) — e sem corte de 24 h:
   // ele pode responder dias depois
-  const escreveuDepois = n >= aj.maxSemAtender && n < aj.tetoSemAtender && !!(await respondeuDepois(ctx, contatoId, ultimaSem, false));
+  const escreveuDepois = n >= aj.maxSemAtender && n < aj.tetoSemAtender && !!(await respondeuDepois(ctx, contatoId, ultimaSem, false, fresco));
   const combinouDepois = n >= aj.tetoSemAtender && combinado === 'respondeu' && !!perguntouEm && !!ultimaSem && perguntouEm.getTime() > ultimaSem.getTime();
   const trava = travaDoPaciente({ naoAtendidasSeguidas: n, ultimaNaoAtendidaEm: ultimaSem, escreveuDepois, combinouDepois }, aj);
   return { respondeuEm, combinado, trava };
@@ -431,7 +436,7 @@ export async function iniciarLigacao(ctx: Contexto, l: PedidoDeLigar): Promise<R
   }
   const perm = permissaoAgora(p, agora);
   const [{ combinado, trava }, aberta] = await Promise.all([
-    travasDoPaciente(ctx, p, contato.contatoId, aj, agora),
+    travasDoPaciente(ctx, p, contato.contatoId, aj, agora, true),
     chave ? ctx.repo.aberta(ctx.unit.id, chave, new Date(agora.getTime() - PADROES.semRetornoEmLigacaoMin * MIN)) : Promise.resolve(null),
   ]);
   const d = decidirLigacao({
@@ -525,7 +530,7 @@ export async function encerrarLigacao(ctx: Contexto, id: string): Promise<{ ok: 
   }
   // Guarda a hora em que a SDR desligou: se o "terminate" da Meta se perder, o vigia fecha em 3 min com a
   // duração certa (até aqui), e o paciente não fica 2 h preso em "ligação em andamento".
-  await ctx.repo.atualizarLigacao(l.id, { status: 'encerrando', encerradaEm: l.encerradaEm ?? ctx.agora() });
+  if (!(await ctx.repo.marcarEncerrando(l.id, ctx.agora()))) return { ok: true }; // o webhook fechou primeiro
   const r = await ctx.meta.encerrar(l.waCallId).catch(() => ({ ok: false }) as ResultadoMeta);
   if (!r.ok) {
     // A Meta pode já ter encerrado do lado dela (o paciente desligou junto). O vigia fecha se o webhook não vier.
@@ -576,7 +581,11 @@ export async function receberEventos(ctx: Contexto, eventos: EventoDeLigacao[]):
       const s = e.status.toUpperCase();
       const saindo = l.status === 'encerrando'; // a SDR já desligou: o status não volta atrás
       if (s === 'RINGING') await ctx.repo.atualizarLigacao(l.id, { tocouEm: l.tocouEm ?? e.quando, ...(saindo || l.atendidaEm ? {} : { status: 'tocando' }) });
-      else if (s === 'ACCEPTED') await ctx.repo.atualizarLigacao(l.id, { atendidaEm: l.atendidaEm ?? e.quando, ...(saindo ? {} : { status: 'em_ligacao' }) });
+      else if (s === 'ACCEPTED') {
+        // atendeu DEPOIS de a SDR desligar não é ligação atendida (seria "atendida com 0 s" e zeraria a trava)
+        const depoisDoDesligar = saindo && !!l.encerradaEm && e.quando.getTime() >= l.encerradaEm.getTime();
+        if (!depoisDoDesligar) await ctx.repo.atualizarLigacao(l.id, { atendidaEm: l.atendidaEm ?? e.quando, ...(saindo ? {} : { status: 'em_ligacao' }) });
+      }
       else if (s === 'REJECTED') await ctx.repo.atualizarLigacao(l.id, { resultado: 'recusada' });
     } else if (e.tipo === 'terminate') {
       await finalizar(ctx, l.id, { duracaoSeg: e.duracaoSeg, falhaTecnica: e.status.toUpperCase() === 'FAILED' && !l.tocouEm && !l.atendidaEm, inicio: e.inicio });
@@ -623,7 +632,21 @@ async function fecharConta(
   const resultado = resultadoDaLigacao({ atendidaEm, duracaoSeg, recusada: l.resultado === 'recusada', falhaTecnica: !!info.falhaTecnica });
   const { aj, cfg } = await ajustes(ctx);
 
-  // Primeiro fecha a ligação (é o que impede um reenvio de contar duas vezes), depois o paciente.
+  // 1º o paciente, contado UMA vez por ligação (`ultimaContada`): se algo falhar depois, a reserva volta, o reenvio
+  // refaz tudo e este passo não soma de novo. 2º a ligação vira "encerrada" — daí em diante nada mais lança.
+  const p = await ctx.repo.paciente(ctx.unit.id, l.chaveTelefone);
+  const jaContada = p?.ultimaContada === l.id;
+  const seguidas = jaContada ? p!.naoAtendidasSeguidas : proximoContador(p?.naoAtendidasSeguidas ?? 0, resultado);
+  if (p && !jaContada) {
+    await ctx.repo.salvarPaciente(ctx.unit.id, l.chaveTelefone, {
+      telefone: p.telefone,
+      naoAtendidasSeguidas: seguidas,
+      ultimaLigacaoEm: l.criadaEm,
+      ultimoResultado: resultado,
+      ultimaContada: l.id,
+      ...(resultado === 'nao_atendida' || resultado === 'recusada' ? { ultimaNaoAtendidaEm: fim } : {}),
+    });
+  }
   await ctx.repo.atualizarLigacao(l.id, {
     status: 'encerrada',
     resultado,
@@ -633,17 +656,24 @@ async function fecharConta(
     sdpResposta: null,
     ...(info.semRetorno ? { erro: (l.erro ? `${l.erro} · ` : '') + 'encerrada pelo vigia: a Meta não avisou o fim' } : {}),
   });
-  const p = await ctx.repo.paciente(ctx.unit.id, l.chaveTelefone);
-  const seguidas = proximoContador(p?.naoAtendidasSeguidas ?? 0, resultado);
-  if (p) {
-    await ctx.repo.salvarPaciente(ctx.unit.id, l.chaveTelefone, {
-      telefone: p.telefone,
-      naoAtendidasSeguidas: seguidas,
-      ultimaLigacaoEm: l.criadaEm,
-      ultimoResultado: resultado,
-      ...(resultado === 'nao_atendida' || resultado === 'recusada' ? { ultimaNaoAtendidaEm: fim } : {}),
-    });
+  try {
+    await depoisDeEncerrar(ctx, l, resultado, duracaoSeg, seguidas, aj, cfg, agora);
+  } catch (err) {
+    // a ligação já está fechada e contada; registro/vigia que falham ficam no log (não reabrem nada)
+    ctx.log('warn', { unit: ctx.unit.slug, ligacao: l.id, err: String(err) }, 'ligacao-whatsapp: falha depois de encerrar (registro ou vigia)');
   }
+}
+
+async function depoisDeEncerrar(
+  ctx: Contexto,
+  l: LinhaLigacao,
+  resultado: Resultado,
+  duracaoSeg: number | null,
+  seguidas: number,
+  aj: Ajustes,
+  cfg: LinhaConfig | null,
+  agora: Date,
+): Promise<void> {
   const texto = textoDoResultado(resultado, {
     duracaoSeg,
     seguidas: resultado === 'nao_atendida' || resultado === 'recusada' ? seguidas : undefined,

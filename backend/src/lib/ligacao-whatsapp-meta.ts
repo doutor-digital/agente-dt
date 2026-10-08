@@ -126,7 +126,8 @@ export function lerPermissao(bruto: unknown): PermissaoNaMeta {
   };
   return {
     estado: aceita ? 'aceita' : 'sem',
-    ate: !aceita || permanente ? null : Number.isFinite(exp) && exp > 0 ? new Date(exp * 1000) : new Date(Date.now() + SETE_DIAS_MS),
+    // sem data: null — quem grava decide (conta os 7 dias UMA vez, sem empurrar a cada leitura)
+    ate: !aceita || permanente ? null : Number.isFinite(exp) && exp > 0 ? new Date(exp * 1000) : null,
     permanente: aceita && permanente,
     podeLigar: acao('start_call'),
     podePedir: acao('send_call_permission_request'),

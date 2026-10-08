@@ -251,7 +251,7 @@ test('GET call_permissions: concedida temporária com data, ações', () => {
   assert.equal(lerPermissao({ permission: { status: 'permanent' } }).permanente, true);
   const semData = lerPermissao({ permission: { status: 'temporary' } });
   assert.equal(semData.permanente, false, 'temporária sem data NÃO vira permanente');
-  assert.ok(semData.ate && semData.ate.getTime() > Date.now(), 'vale os 7 dias da doc');
+  assert.equal(semData.ate, null, 'sem data a leitura não inventa uma (quem grava conta os 7 dias uma vez só)');
 });
 
 const webhook = (value: Record<string, unknown>) => ({

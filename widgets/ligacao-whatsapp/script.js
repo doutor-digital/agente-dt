@@ -149,10 +149,10 @@ define(['jquery'], function ($) {
     // ligação desenha passa pelo widget VIVO (G.render / G.recarregar), nunca pelo que a iniciou.
     function redesenhar() { (G.render || desenhar)(); }
     function recarregarVivo() { (G.recarregar || carregar)(); }
-    // Veio da fila "Ligar próximo"? A marca vale 30 min e é deste cartão: com a fila pausada pelo vigia, ligação
-    // que veio da fila é barrada no servidor.
+    // Veio da fila "Ligar próximo"? Com a fila pausada pelo vigia, ligação que veio da fila é barrada no servidor.
     function origemDoCartao() {
-      try { var m = JSON.parse(sessionStorage.getItem(P + ':fila') || 'null'); if (m && m.lead === st.lead && Date.now() - m.em < 1800000) return 'fila'; } catch (e) {}
+      // a marca é de UMA ligação: lida, apaga; e só vale 10 min depois de sair da fila
+      try { var m = JSON.parse(sessionStorage.getItem(P + ':fila') || 'null'); sessionStorage.removeItem(P + ':fila'); if (m && m.lead === st.lead && Date.now() - m.em < 600000) return 'fila'; } catch (e) {}
       return 'cartao';
     }
     function marcarFila(lead) { try { sessionStorage.setItem(P + ':fila', JSON.stringify({ lead: lead, em: Date.now() })); } catch (e) {} }
@@ -182,8 +182,11 @@ define(['jquery'], function ($) {
         medirNivel(stream);
         ch.status = 'conectando'; redesenhar();
         return pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).then(function () { return esperarCandidatos(pc, 2500); }).then(function () {
+          // desligou enquanto o navegador preparava o áudio: nem chega a pedir a ligação à Meta
+          if (ch.fim) return { cancelada: true };
           return ponte('POST', '/ligacao/ligar', { leadId: ch.lead, sdp: pc.localDescription.sdp, u: u.id, nome: u.nome, origem: origem || 'cartao', confirmouSemCombinar: !!confirmouSemCombinar });
         }).then(function (r) {
+          if (r.cancelada) { limparMidia(ch); if (G.chamada === ch) G.chamada = null; recarregarVivo(); return; }
           if (!r.ok || !r.j.ligacaoId) {
             var precisa = r.j && r.j.precisaConfirmar;
             limparMidia(ch); G.chamada = null;

@@ -48,6 +48,14 @@ export const repositorioPrisma: Repositorio = {
     return r.count === 1;
   },
 
+  async marcarEncerrando(id, quando) {
+    const r = await prisma.whatsappLigacao.updateMany({
+      where: { id, status: { in: ['iniciando', 'chamando', 'tocando', 'em_ligacao'] }, registradaEm: null },
+      data: { status: 'encerrando', encerradaEm: quando },
+    });
+    return r.count === 1;
+  },
+
   async liberarFinalizacao(id) {
     await prisma.whatsappLigacao.updateMany({ where: { id, status: { not: 'encerrada' } }, data: { registradaEm: null } });
   },

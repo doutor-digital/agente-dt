@@ -2048,6 +2048,8 @@ model WhatsappLigacaoPaciente {
   naoAtendidasSeguidas Int       @default(0) @map("nao_atendidas_seguidas")
   ultimaNaoAtendidaEm  DateTime? @map("ultima_nao_atendida_em")
   ultimaLigacaoEm      DateTime? @map("ultima_ligacao_em")
+  /// id da última ligação já contada no "sem atender" — reenvio do webhook não conta duas vezes
+  ultimaContada        String?   @map("ultima_contada")
   ultimoResultado      String?   @map("ultimo_resultado")
 
   criadoEm     DateTime @default(now()) @map("criado_em")
