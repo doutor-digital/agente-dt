@@ -75,6 +75,9 @@ function repoFalso() {
       return [...ligacoes.values()].filter((l) => l.chaveTelefone === chave && l.status !== 'encerrada' && l.criadaEm >= desde).pop() ?? null;
     },
     async ultima(_u, chave) { return [...ligacoes.values()].filter((l) => l.chaveTelefone === chave).pop() ?? null; },
+    async esperandoIdDaMeta(_u, chaves, desde) {
+      return [...ligacoes.values()].filter((l) => chaves.includes(l.chaveTelefone) && !l.waCallId && l.status === 'iniciando' && l.criadaEm >= desde).pop() ?? null;
+    },
     async resultadosEntre(_u, de, ate) {
       return [...ligacoes.values()].filter((l) => l.status === 'encerrada' && l.criadaEm >= de && l.criadaEm < ate).map((l) => l.resultado);
     },
@@ -389,4 +392,15 @@ test('webhook de outra unidade ou ligação desconhecida é ignorado', async () 
   const t = montar();
   const r = await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, calls: [{ id: 'wacid.nao-existe', event: 'terminate', status: 'COMPLETED' }] } }] }] }));
   assert.deepEqual(r, { tratados: 0, ignorados: 1 });
+});
+
+test('corrida: o "connect" da Meta chega antes de gravarmos o id dela — casa pelo telefone e não perde a resposta SDP', async () => {
+  const t = montar();
+  const l = await t.repo.criarLigacao({ unitId: UNIT.id, leadId: 1, telefone: TEL_JOAO, chaveTelefone: '91021043', kommoUserId: 77, kommoUserNome: 'Giulia', origem: 'cartao', semCombinar: false, modo: 'ligado' });
+  // a doc da Meta traz `to`/`from` trocados no exemplo: o telefone do paciente pode vir em qualquer um
+  await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, calls: [{ id: 'wacid.novo', to: '5599991063655', from: '556391021043', event: 'connect', direction: 'BUSINESS_INITIATED', session: { sdp_type: 'answer', sdp: 'v=0\r\nresposta' } }] } }] }] }));
+  const depois = (await t.repo.ligacao(l.id))!;
+  assert.equal(depois.sdpResposta, 'v=0\r\nresposta');
+  assert.equal(depois.waCallId, 'wacid.novo');
+  assert.equal(depois.status, 'chamando');
 });

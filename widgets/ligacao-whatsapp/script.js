@@ -145,6 +145,10 @@ define(['jquery'], function ($) {
     }
 
     // ── a ligação (WebRTC) ──
+    // A ligação pode atravessar cartões: o widget que começou pode já ter sido destruído pelo Kommo. Tudo que a
+    // ligação desenha passa pelo widget VIVO (G.render / G.recarregar), nunca pelo que a iniciou.
+    function redesenhar() { (G.render || desenhar)(); }
+    function recarregarVivo() { (G.recarregar || carregar)(); }
     function suportaLigacao() { return !!(window.RTCPeerConnection && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.isSecureContext !== false); }
     function esperarCandidatos(pc, ms) {
       // A Meta quer a oferta COMPLETA (sem trickle): espera juntar os caminhos de rede, com teto de tempo.
@@ -156,10 +160,10 @@ define(['jquery'], function ($) {
     }
     function ligar(confirmouSemCombinar, origem) {
       if (G.chamada) return;
-      if (!suportaLigacao()) { st.aviso = { tipo: 'erro', texto: 'Este navegador não faz ligação. Use o Chrome atualizado.' }; desenhar(); return; }
+      if (!suportaLigacao()) { st.aviso = { tipo: 'erro', texto: 'Este navegador não faz ligação. Use o Chrome atualizado.' }; redesenhar(); return; }
       var u = usuario(); var p = st.painel || {}; var pac = p.paciente || {};
       var ch = G.chamada = { id: null, lead: st.lead, nome: nomeLimpo(pac.nome), tel: pac.telefone || '', status: 'preparando', inicio: Date.now(), atendida: null, mudo: false, pc: null, stream: null, audio: null, sdpAplicada: false, poll: null, fim: null, resultado: null, texto: null, registrada: false, erro: null, nivel: 0 };
-      st.confirmar = false; st.aviso = null; desenhar();
+      st.confirmar = false; st.aviso = null; redesenhar();
       navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function (stream) {
         ch.stream = stream;
         var pc = ch.pc = new RTCPeerConnection({ iceServers: STUN });
@@ -168,7 +172,7 @@ define(['jquery'], function ($) {
         pc.ontrack = function (ev) { ch.audio.srcObject = ev.streams[0]; var pr = ch.audio.play(); if (pr && pr.catch) pr.catch(function () {}); };
         pc.onconnectionstatechange = function () { if (pc.connectionState === 'failed' && ch.status !== 'encerrada') { ch.erro = 'A conexão de áudio caiu.'; desligar(); } };
         medirNivel(stream);
-        ch.status = 'conectando'; desenhar();
+        ch.status = 'conectando'; redesenhar();
         return pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).then(function () { return esperarCandidatos(pc, 2500); }).then(function () {
           return ponte('POST', '/ligacao/ligar', { leadId: ch.lead, sdp: pc.localDescription.sdp, u: u.id, nome: u.nome, origem: origem || 'cartao', confirmouSemCombinar: !!confirmouSemCombinar });
         }).then(function (r) {
@@ -176,15 +180,15 @@ define(['jquery'], function ($) {
             var precisa = r.j && r.j.precisaConfirmar;
             limparMidia(ch); G.chamada = null;
             if (precisa) { st.confirmar = true; st.aviso = { tipo: 'alerta', texto: r.j.motivo }; } else st.aviso = { tipo: 'erro', texto: mensagemDeErro(r) };
-            carregar(); return;
+            recarregarVivo(); return;
           }
-          ch.id = r.j.ligacaoId; ch.status = 'chamando'; desenhar(); acompanhar();
+          ch.id = r.j.ligacaoId; ch.status = 'chamando'; redesenhar(); acompanhar();
         });
       }, function (err) {
         G.chamada = null;
         st.aviso = { tipo: 'erro', texto: err && err.name === 'NotAllowedError' ? 'O navegador bloqueou o microfone. Clique no cadeado ao lado do endereço do Kommo e permita o microfone.' : 'Não consegui usar o microfone deste computador.' };
-        desenhar();
-      }).catch(function () { limparMidia(ch); G.chamada = null; st.aviso = { tipo: 'erro', texto: 'Não consegui preparar a ligação. Recarregue a página e tente de novo.' }; desenhar(); });
+        redesenhar();
+      }).catch(function () { limparMidia(ch); G.chamada = null; st.aviso = { tipo: 'erro', texto: 'Não consegui preparar a ligação. Recarregue a página e tente de novo.' }; redesenhar(); });
     }
     function acompanhar() {
       var ch = G.chamada; if (!ch || ch.poll) return;
@@ -206,13 +210,13 @@ define(['jquery'], function ($) {
           // a Meta não documenta quanto tempo toca: depois de 60 s sem atender, desliga (e conta como sem atender)
           if (!ch.atendida && Date.now() - ch.inicio > 65000 && !ch.fim) { ch.erro = 'Tocou por 1 minuto e ninguém atendeu.'; desligar(); return; }
           // redesenha só quando muda: redesenhar a cada segundo engoliria o clique em Desligar
-          if (ch.status !== antes) desenhar();
+          if (ch.status !== antes) redesenhar();
         });
       }, 1000);
     }
     function desligar() {
       var ch = G.chamada; if (!ch || ch.fim) return;
-      ch.fim = Date.now(); ch.status = 'encerrando'; limparMidia(ch); desenhar();
+      ch.fim = Date.now(); ch.status = 'encerrando'; limparMidia(ch); redesenhar();
       if (ch.id) ponte('POST', '/ligacao/chamada/' + encodeURIComponent(ch.id) + '/desligar', {});
       // o resultado chega pelo acompanhamento; se a Meta demorar a avisar, fecha a tela mesmo assim
       setTimeout(function () { if (G.chamada === ch) encerrarLocal(ch, null); }, 20000);
@@ -221,7 +225,7 @@ define(['jquery'], function ($) {
       if (ch.poll) clearInterval(ch.poll); ch.poll = null; limparMidia(ch);
       ch.status = 'encerrada'; ch.resultado = e ? e.resultado : null; ch.texto = e ? e.texto : null; ch.registrada = !!(e && e.registrada);
       ch.duracao = e && e.duracaoSeg != null ? e.duracaoSeg : (ch.atendida ? (Date.now() - ch.atendida) / 1000 : 0);
-      st.ultimaChamada = ch; G.chamada = null; carregar();
+      G.ultimaChamada = ch; G.chamada = null; recarregarVivo();
     }
     function limparMidia(ch) {
       try { if (ch.stream) ch.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
@@ -232,7 +236,7 @@ define(['jquery'], function ($) {
     }
     function alternarMudo() {
       var ch = G.chamada; if (!ch || !ch.stream) return;
-      ch.mudo = !ch.mudo; ch.stream.getAudioTracks().forEach(function (t) { t.enabled = !ch.mudo; }); desenhar();
+      ch.mudo = !ch.mudo; ch.stream.getAudioTracks().forEach(function (t) { t.enabled = !ch.mudo; }); redesenhar();
     }
     function medirNivel(stream) {
       // barrinhas do microfone: a SDR vê que a voz dela está saindo
@@ -250,7 +254,7 @@ define(['jquery'], function ($) {
         })();
       } catch (e) {}
     }
-    window.addEventListener('beforeunload', function () {
+    if (!G.saida) G.saida = true, window.addEventListener('beforeunload', function () {
       var ch = G.chamada; var c = cfg();
       if (ch && ch.id && !ch.fim && c.slug) { try { fetch(BASE + '/api/public/widget/' + encodeURIComponent(c.slug) + '/ligacao/chamada/' + encodeURIComponent(ch.id) + '/desligar', { method: 'POST', keepalive: true, headers: { 'X-Widget-Key': c.chave, 'Content-Type': 'application/json' }, body: '{}' }); } catch (e) {} }
     });
@@ -387,7 +391,7 @@ define(['jquery'], function ($) {
     function html() {
       if (st.erro === 'config') return '<div class="' + P + '-card"><div class="' + P + '-card__tit">Falta configurar</div><p>Preencha o <b>código da unidade</b> e a <b>chave</b> nas configurações do widget (Configurações → Integrações → Ligar pelo WhatsApp).</p></div>' + rodape();
       if (G.chamada) return telaChamada(G.chamada);
-      if (st.ultimaChamada) return telaResultado(st.ultimaChamada) + rodape();
+      if (G.ultimaChamada) return telaResultado(G.ultimaChamada) + rodape();
       var p = st.painel;
       if (st.erro && !p) return '<div class="' + P + '-card ' + P + '-card--erro"><p>' + esc(st.erro) + '</p></div>' + rodape();
       if (!p) return '<div class="' + P + '-vazio"><i></i>Lendo o paciente…</div>';
@@ -417,7 +421,7 @@ define(['jquery'], function ($) {
       $p.find('.' + P + '-cancelar').on('click', function () { st.confirmar = false; st.aviso = null; desenhar(); });
       $p.find('.' + P + '-desligar').on('click', desligar);
       $p.find('.' + P + '-mudo').on('click', alternarMudo);
-      $p.find('.' + P + '-fecharres').on('click', function () { st.ultimaChamada = null; desenhar(); });
+      $p.find('.' + P + '-fecharres').on('click', function () { G.ultimaChamada = null; desenhar(); });
       $p.find('.' + P + '-abrefila').on('click', function () { st.abrirFila = !st.abrirFila; if (st.abrirFila) carregarFila(); desenhar(); });
       $p.find('.' + P + '-proximo').on('click', function () {
         var it = ((st.fila && st.fila.itens) || []).filter(function (x) { return x.leadId !== st.lead; })[0];
@@ -425,6 +429,7 @@ define(['jquery'], function ($) {
       });
     }
     G.render = desenhar;
+    G.recarregar = carregar;
 
     function carregarCss() { var id = P + '-css'; if (document.getElementById(id) || !CSS) return; $('<style>', { id: id, type: 'text/css' }).text(CSS).appendTo('head'); }
     function ajustarLogo() {
@@ -445,21 +450,27 @@ define(['jquery'], function ($) {
         carregarCss();
         var area = (self.system && self.system().area) || '';
         if (area !== 'lcard') return true;
-        if (st.timer) clearInterval(st.timer);
-        st.ultimaChamada = null; carregar();
+        if (st.timer) clearTimeout(st.timer);
+        G.render = desenhar; G.recarregar = carregar;
+        G.ultimaChamada = null; carregar();
         if (G.chamada) acompanhar();
         // o painel relê sozinho: a resposta do paciente ao "Posso te ligar?" e a permissão chegam enquanto a SDR olha
-        st.timer = setInterval(function () {
-          if (G.chamada) return;                             // durante a ligação quem anda é o cronômetro
-          if (!st.confirmar && !st.ocupado && !st.ultimaChamada && document.visibilityState !== 'hidden') carregar();
-        }, 15000);
+        // 15 s enquanto espera o paciente (resposta ao "Posso te ligar?" ou à permissão); 60 s no resto
+        var ciclo = function () {
+          var p = st.painel || {}; var esperando = (p.combinado && p.combinado.estado === 'esperando') || (p.permissao && p.permissao.estado === 'pedida');
+          st.timer = setTimeout(function () {
+            if (!G.chamada && !st.confirmar && !st.ocupado && !G.ultimaChamada && document.visibilityState !== 'hidden') carregar();
+            ciclo();
+          }, esperando ? 15000 : 60000);
+        };
+        ciclo();
         // durante a ligação o cronômetro anda a cada segundo
         if (!G.relogio) G.relogio = setInterval(function () { if (G.chamada && G.chamada.status === 'em_ligacao' && G.render) { var $c = $('.' + P + '-cron'); if ($c.length) $c.text(cron((Date.now() - G.chamada.atendida) / 1000)); } }, 1000);
         return true;
       },
       settings: function () {},
       onSave: function () { return true; },
-      destroy: function () { if (st.timer) { clearInterval(st.timer); st.timer = null; } }
+      destroy: function () { if (st.timer) { clearTimeout(st.timer); st.timer = null; } }
     };
     return this;
   };

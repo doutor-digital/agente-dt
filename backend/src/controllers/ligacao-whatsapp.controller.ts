@@ -56,15 +56,22 @@ export function numerosDeTeste(raw = process.env.LIGACAO_TESTE_TELEFONES): strin
   return bruto.split(',').map((s) => chaveDoTelefone(s)).filter((s) => s.length === 8);
 }
 
+/** Telefone e nome do contato mudam raramente; o painel relê a cada poucos segundos. 2 min de memória poupa o
+ * portão de velocidade do Kommo, que é o mesmo da Sofia. */
+const cacheContato = new Map<string, { em: number; v: Awaited<ReturnType<KommoLigacoes['contatoDoLead']>> }>();
+const CONTATO_TTL_MS = 2 * 60_000;
+
 function kommoDaUnidade(unit: Unit): KommoLigacoes {
   const k = createKommoClient(unit);
   return {
     async contatoDoLead(leadId) {
-      const lead = await k.getLead(leadId);
-      const contatoId = (lead as { _embedded?: { contacts?: Array<{ id?: number }> } })._embedded?.contacts?.find((c) => typeof c.id === 'number')?.id ?? null;
-      if (!contatoId) return { contatoId: null, telefone: null, nome: lead?.name ?? null };
-      const c = await k.getContactBasico(contatoId);
-      return { contatoId, telefone: c.telefone, nome: c.nome ?? lead?.name ?? null };
+      const chave = `${unit.id}:${leadId}`;
+      const c = cacheContato.get(chave);
+      if (c && Date.now() - c.em < CONTATO_TTL_MS) return c.v;
+      const v = await lerContato(leadId);
+      if (cacheContato.size > 2_000) cacheContato.clear();
+      if (v.telefone) cacheContato.set(chave, { em: Date.now(), v });
+      return v;
     },
     ultimaMensagemDesde: (contatoId, desde) => k.ultimaMensagemDoContatoDesde(contatoId, desde),
     registrarChamada: (corpo) => k.registrarChamadas([corpo]),
@@ -75,6 +82,14 @@ function kommoDaUnidade(unit: Unit): KommoLigacoes {
       await k.createTask({ leadId, text: texto, completeAt: Math.floor(Date.now() / 1000) + 30 * 60, responsibleUserId: responsavel ?? undefined });
     },
   };
+
+  async function lerContato(leadId: number) {
+    const lead = await k.getLead(leadId);
+    const contatoId = (lead as { _embedded?: { contacts?: Array<{ id?: number }> } })._embedded?.contacts?.find((c) => typeof c.id === 'number')?.id ?? null;
+    if (!contatoId) return { contatoId: null, telefone: null, nome: lead?.name ?? null };
+    const c = await k.getContactBasico(contatoId);
+    return { contatoId, telefone: c.telefone, nome: c.nome ?? lead?.name ?? null };
+  }
 }
 
 export function contextoDaUnidade(unit: Unit): Contexto {
@@ -96,7 +111,7 @@ export function contextoDaUnidade(unit: Unit): Contexto {
 
 const chamadas = new Map<string, { n: number; desde: number }>();
 /** O navegador acompanha a ligação a cada segundo: o limite daqui é mais largo que o dos outros widgets. */
-const MAX_POR_MINUTO = 240;
+const MAX_POR_MINUTO = 600; // a clínica inteira sai pelo mesmo IP: várias SDRs, cada ligação lê 60 vezes por minuto
 const ESCRITAS_POR_MINUTO = 20;
 
 function excedeu(chave: string, max: number): boolean {

@@ -59,6 +59,13 @@ export const repositorioPrisma: Repositorio = {
     return prisma.whatsappLigacao.findFirst({ where: { unitId, chaveTelefone: chave }, orderBy: { criadaEm: 'desc' } });
   },
 
+  async esperandoIdDaMeta(unitId, chaves, desde) {
+    return prisma.whatsappLigacao.findFirst({
+      where: { unitId, chaveTelefone: { in: chaves }, waCallId: null, status: 'iniciando', criadaEm: { gte: desde } },
+      orderBy: { criadaEm: 'desc' },
+    });
+  },
+
   async resultadosEntre(unitId, de, ate) {
     const linhas = await prisma.whatsappLigacao.findMany({
       where: { unitId, criadaEm: { gte: de, lt: ate }, status: 'encerrada' },

@@ -133,7 +133,8 @@ export function lerPermissao(bruto: unknown): PermissaoNaMeta {
 // ── webhook ──────────────────────────────────────────────────────────────────────────────────────
 
 export type EventoDeLigacao =
-  | { tipo: 'connect'; phoneNumberId: string; callId: string; opaco: string | null; telefone: string; sdp: string | null; sdpTipo: string | null; quando: Date }
+  /** `numeros`: o `to` e o `from` do evento — a doc da Meta troca os dois no exemplo, então guardamos ambos. */
+  | { tipo: 'connect'; phoneNumberId: string; callId: string; opaco: string | null; telefone: string; numeros: string[]; sdp: string | null; sdpTipo: string | null; quando: Date }
   | { tipo: 'status'; phoneNumberId: string; callId: string; opaco: string | null; telefone: string; status: string; quando: Date }
   | { tipo: 'terminate'; phoneNumberId: string; callId: string; opaco: string | null; telefone: string; status: string; duracaoSeg: number | null; inicio: Date | null; quando: Date }
   | { tipo: 'permissao'; phoneNumberId: string; telefone: string; resposta: 'aceita' | 'recusada'; ate: Date | null; permanente: boolean; quando: Date };
@@ -169,7 +170,8 @@ export function lerWebhookDeLigacoes(payload: unknown, agora = new Date()): Even
         const quando = quandoDe(c.timestamp, agora);
         if (evento === 'connect') {
           const s = (c.session ?? {}) as { sdp?: string; sdp_type?: string };
-          out.push({ tipo: 'connect', phoneNumberId, callId, opaco, telefone, sdp: typeof s.sdp === 'string' ? s.sdp : null, sdpTipo: s.sdp_type ?? null, quando });
+          const numeros = [c.to, c.from].filter((x): x is string => typeof x === 'string' && !!x);
+          out.push({ tipo: 'connect', phoneNumberId, callId, opaco, telefone, numeros, sdp: typeof s.sdp === 'string' ? s.sdp : null, sdpTipo: s.sdp_type ?? null, quando });
         } else if (evento === 'terminate') {
           const dur = Number(c.duration);
           out.push({

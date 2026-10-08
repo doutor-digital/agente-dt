@@ -113,6 +113,8 @@ export interface Repositorio {
   /** Ligação ainda aberta para este paciente, criada desde `desde`. */
   aberta(unitId: string, chave: string, desde: Date): Promise<LinhaLigacao | null>;
   ultima(unitId: string, chave: string): Promise<LinhaLigacao | null>;
+  /** Ligação que ainda espera o id da Meta, para um destes telefones (chaves), criada desde `desde`. */
+  esperandoIdDaMeta(unitId: string, chaves: string[], desde: Date): Promise<LinhaLigacao | null>;
   resultadosEntre(unitId: string, de: Date, ate: Date): Promise<Array<string | null>>;
   /** Pausa a fila até `ate`. true = pausou AGORA (não estava pausada) — só aí sai o alerta. */
   pausarFila(unitId: string, ate: Date, motivo: string, agora: Date): Promise<boolean>;
@@ -247,9 +249,17 @@ async function garantirPaciente(ctx: Contexto, leadId: number, telefone: string,
 }
 
 async function respondeuDepois(ctx: Contexto, contatoId: number | null, desde: Date | null): Promise<Date | null> {
-  if (!contatoId || !desde) return null;
+  // Cada pergunta é uma ida ao Kommo, que tem um portão de velocidade dividido com a Sofia: só pergunta o que
+  // ainda pode mudar a decisão (pergunta/ligação das últimas 24 h).
+  if (!contatoId || !desde || ctx.agora().getTime() - desde.getTime() > 24 * 60 * MIN) return null;
   const t = await ctx.kommo.ultimaMensagemDesde(contatoId, Math.floor(desde.getTime() / 1000)).catch(() => null);
   return t ? new Date(t * 1000) : null;
+}
+
+/** Só no limite de "sem atender" importa saber se ele escreveu depois (é o que libera uma tentativa). */
+function precisaSaberSeEscreveu(p: LinhaPaciente | null, aj: Ajustes): boolean {
+  const n = p?.naoAtendidasSeguidas ?? 0;
+  return n >= aj.maxSemAtender && n < aj.tetoSemAtender;
 }
 
 export async function montarPainel(ctx: Contexto, leadId: number): Promise<Painel> {
@@ -273,7 +283,7 @@ export async function montarPainel(ctx: Contexto, leadId: number): Promise<Paine
   const pode = podePedirPermissao(p?.pedidosEm ?? [], agora, perm.estado, metaPodePedir);
   const respondeuEm = await respondeuDepois(ctx, contato.contatoId, p?.perguntouEm ?? null);
   const combinado = estadoDoCombinado(p?.perguntouEm ?? null, respondeuEm, agora);
-  const escreveuDepois = !!(await respondeuDepois(ctx, contato.contatoId, p?.ultimaNaoAtendidaEm ?? null));
+  const escreveuDepois = precisaSaberSeEscreveu(p, aj) && !!(await respondeuDepois(ctx, contato.contatoId, p?.ultimaNaoAtendidaEm ?? null));
   const trava = travaDoPaciente({ naoAtendidasSeguidas: p?.naoAtendidasSeguidas ?? 0, ultimaNaoAtendidaEm: p?.ultimaNaoAtendidaEm ?? null, escreveuDepois }, aj);
   const ultima = chave ? await ctx.repo.ultima(ctx.unit.id, chave) : null;
   const aberta = chave ? await ctx.repo.aberta(ctx.unit.id, chave, new Date(agora.getTime() - PADROES.semRetornoEmLigacaoMin * MIN)) : null;
@@ -407,7 +417,7 @@ export async function iniciarLigacao(ctx: Contexto, l: PedidoDeLigar): Promise<R
   }
   const perm = permissaoAgora(p, agora);
   const respondeuEm = await respondeuDepois(ctx, contato.contatoId, p?.perguntouEm ?? null);
-  const escreveuDepois = !!(await respondeuDepois(ctx, contato.contatoId, p?.ultimaNaoAtendidaEm ?? null));
+  const escreveuDepois = precisaSaberSeEscreveu(p, aj) && !!(await respondeuDepois(ctx, contato.contatoId, p?.ultimaNaoAtendidaEm ?? null));
   const trava = travaDoPaciente({ naoAtendidasSeguidas: p?.naoAtendidasSeguidas ?? 0, ultimaNaoAtendidaEm: p?.ultimaNaoAtendidaEm ?? null, escreveuDepois }, aj);
   const aberta = chave ? await ctx.repo.aberta(ctx.unit.id, chave, new Date(agora.getTime() - PADROES.semRetornoEmLigacaoMin * MIN)) : null;
   const d = decidirLigacao({
@@ -448,7 +458,10 @@ export async function iniciarLigacao(ctx: Contexto, l: PedidoDeLigar): Promise<R
     ctx.log('warn', { unit: ctx.unit.slug, leadId: l.leadId, codigo: r.codigo }, 'ligacao-whatsapp: a Meta recusou a ligação');
     return { ok: false, codigo: 'meta', motivo, ligacaoId: lig.id };
   }
-  await ctx.repo.atualizarLigacao(lig.id, { waCallId: r.dado.callId, status: 'chamando' });
+  // O webhook "connect" pode ter chegado ANTES desta linha (ele não traz o nosso id de volta) e já ter avançado o
+  // status — então só passa de "iniciando" para "chamando", nunca volta atrás.
+  const atual = await ctx.repo.ligacao(lig.id);
+  await ctx.repo.atualizarLigacao(lig.id, { waCallId: r.dado.callId, ...(atual?.status === 'iniciando' ? { status: 'chamando' } : {}) });
   await ctx.repo.salvarPaciente(ctx.unit.id, chave, { telefone: telefone!, ultimaLigacaoEm: agora });
   ctx.log('info', { unit: ctx.unit.slug, leadId: l.leadId, ligacao: lig.id, semCombinar: d.semCombinar, origem: l.origem }, 'ligacao-whatsapp: ligação saiu');
   return { ok: true, ligacaoId: lig.id, semCombinar: d.semCombinar };
@@ -527,7 +540,13 @@ export async function receberEventos(ctx: Contexto, eventos: EventoDeLigacao[]):
       tratados++;
       continue;
     }
-    const l = (e.callId ? await ctx.repo.ligacaoPorWaId(e.callId) : null) ?? (e.opaco ? await ctx.repo.ligacao(e.opaco) : null);
+    let l = (e.callId ? await ctx.repo.ligacaoPorWaId(e.callId) : null) ?? (e.opaco ? await ctx.repo.ligacao(e.opaco) : null);
+    if (!l && e.tipo === 'connect') {
+      // Corrida: a Meta mandou o "connect" (com a resposta SDP) antes de gravarmos o id que ela devolveu no POST, e
+      // esse evento não traz o nosso id de volta. Casa pelo telefone com a ligação que acabou de sair.
+      const chaves = e.numeros.map((n) => chaveDoTelefone(n)).filter((c) => c.length === 8);
+      l = chaves.length ? await ctx.repo.esperandoIdDaMeta(ctx.unit.id, chaves, new Date(ctx.agora().getTime() - 2 * MIN)) : null;
+    }
     if (!l || l.unitId !== ctx.unit.id) { ignorados++; continue; }
     if (l.status === 'encerrada') { ignorados++; continue; }
     if (e.tipo === 'connect') {
