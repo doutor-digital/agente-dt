@@ -20,6 +20,7 @@ import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from
 import { aplicarGuardrail } from './guardrail.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
+import { semNomeForaDaAgenda } from './nome-na-resposta.js';
 import { avaliarChamadaFinal, INSTRUCAO_REFAZER_CTA } from './cta-final.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
@@ -582,6 +583,9 @@ export async function buildAgentGraph(
     }
 
     let systemMessage: SystemMessage;
+    // O prompt deste turno em texto: a guarda do nome do profissional (lá embaixo) só deixa sair
+    // nome que esteja aqui ou no que as ferramentas devolveram agora.
+    let promptDoTurno = '';
     if (useAnthropic) {
       const { cacheable, dynamic } = await composeSystemPromptPartsForUnit({
         unit,
@@ -590,6 +594,7 @@ export async function buildAgentGraph(
         isFirstTurn,
         leadId: state.leadId,
       });
+      promptDoTurno = `${cacheable}\n${dynamic ?? ''}`;
       systemMessage = new SystemMessage({
         content: [
           { type: 'text', text: cacheable, cache_control: { type: 'ephemeral', ttl: '1h' } },
@@ -604,6 +609,7 @@ export async function buildAgentGraph(
         isFirstTurn,
         leadId: state.leadId,
       });
+      promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
     }
     const janela = podarHistorico(nonSystemMessages);
@@ -824,6 +830,18 @@ export async function buildAgentGraph(
       // sanitizador do cliente Kommo também escreve CAMPO, NOTA e TAREFA — ou seja, uma
       // observação do paciente ("sente uma dorzinha ao levantar") era reescrita no cartão,
       // mudando o que ele disse. Aqui só passa mensagem que vai para o paciente.
+      // Nome de profissional que não veio da agenda AGORA sai da resposta (ver nome-na-resposta.ts).
+      // Antes das travas de tom, para elas continuarem envolvendo textoFinal no guardrail.
+      const comNomeChecado = semNomeForaDaAgenda(textoFinal, promptDoTurno, nonSystemMessages);
+      if (comNomeChecado.removidos.length > 0) {
+        await recorder.step({
+          kind: 'THINKING',
+          title: `🪪 Nome de profissional que não veio da agenda agora saiu da resposta (${comNomeChecado.removidos.join(', ')})`,
+          payload: { original: textoFinal, reescrito: comNomeChecado.texto, removidos: comNomeChecado.removidos },
+        });
+        textoFinal = comNomeChecado.texto;
+        response.content = textoFinal;
+      }
       const guard = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit);
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');

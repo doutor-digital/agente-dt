@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { comQuemVaiSerAtendido, nomeDoProfissional } from './nome-do-profissional.js';
+import { comQuemVaiSerAtendido, nomeDoProfissional, nomeEstaNaFonte, semNomeDeProfissional } from './nome-do-profissional.js';
 
 // Os nomes são os que a franquia de Araguaína devolve de verdade.
 test('tira o DR. que a própria franquia cola no nome', () => {
@@ -36,4 +36,25 @@ test('sem nome, sem linha — não invento profissional', () => {
 test('"médico" nunca sobra no texto entregue', () => {
   const saida = comQuemVaiSerAtendido('DR. PAULO HENRIQUE');
   assert.doesNotMatch(String(saida), /\bDr\.?\b|\bdoutor\b|\bm[ée]dic/i);
+});
+
+// 08/10/2026, Açailândia (cartão 28088906): o nome veio de uma confirmação antiga.
+test('semNomeDeProfissional: tira o nome e deixa a profissão, sem engolir a linha de baixo', () => {
+  const r = semNomeDeProfissional('⭐ Atendimento com: a fisioterapeuta Aylana Silva Mendes\nQualquer dúvida, é só chamar.');
+  assert.equal(r.texto, '⭐ Atendimento com: a fisioterapeuta\nQualquer dúvida, é só chamar.');
+  assert.deepEqual(r.removidos, ['Aylana Silva Mendes']);
+  assert.equal(semNomeDeProfissional('com fisioterapeuta PAULO HENRIQUE DE SOUSA.').texto, 'com fisioterapeuta.');
+  assert.equal(semNomeDeProfissional('Fisioterapeuta Regiane Duarte te atende').texto, 'Fisioterapeuta te atende');
+});
+
+test('semNomeDeProfissional: "manter" decide o que fica', () => {
+  const manter = nomeEstaNaFonte('Especialista: fisioterapeuta Aylana Silva Mendes');
+  assert.equal(semNomeDeProfissional('com a fisioterapeuta Aylana', manter).texto, 'com a fisioterapeuta Aylana');
+  assert.equal(semNomeDeProfissional('com a fisioterapeuta Juliana', manter).texto, 'com a fisioterapeuta');
+});
+
+test('nomeEstaNaFonte: palavra inteira, sem acento — "Ana" não casa com "semana"', () => {
+  assert.equal(nomeEstaNaFonte('na semana que vem')('Ana'), false);
+  assert.equal(nomeEstaNaFonte('com fisioterapeuta ANA PAULA')('Ana Paula'), true);
+  assert.equal(nomeEstaNaFonte('fisioterapeuta Jonnã Sousa')('Jonna'), true);
 });
