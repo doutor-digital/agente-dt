@@ -24,8 +24,16 @@ import {
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
-import { dataLocalISO, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
+import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { semNomeDeProfissional } from '../lib/nome-do-profissional.js';
+import {
+  agoraLocalISO,
+  avisoDeConsultaQuePassou,
+  consultaNoPassado,
+  consultaPassouHaPouco,
+  consultasQueJaPassaram,
+} from './consulta-que-passou.js';
 import {
   consultaDoLead,
   porExtenso,
@@ -1367,11 +1375,31 @@ const DESFECHO_HUMANO: Record<string, string> = {
   so_duvida: 'era só uma dúvida, não seguiu',
 };
 
-function renderLeadMemory(mem: LeadMemory | null, tz: string = 'America/Sao_Paulo'): string {
+/**
+ * Dia, hora e profissional de consulta não entram na memória que vai ao modelo. O resumidor tem ordem
+ * de não gravar isso e grava assim mesmo (`data_consulta`, `horario_consulta`) — e o dado envelhece:
+ * em 08/10/2026 a Sofia de resgate leu "data_consulta: 07/10/2026" e confirmou a consulta de ONTEM
+ * (cartão 28088906). O horário certo vem a cada turno do bloco <consulta_do_paciente>.
+ */
+export function fatoDeConsulta(chave: string): boolean {
+  const k = chave.toLowerCase();
+  const ehQuando = /(^|_)(data|dia|hora|horario)(_|$)/.test(k);
+  const deConsulta = /consulta|agend|avalia|retorno|sessao/.test(k);
+  return (ehQuando && deConsulta) || /fisioterapeuta|profissional|especialista/.test(k);
+}
+
+export function renderLeadMemory(
+  mem: LeadMemory | null,
+  tz: string = 'America/Sao_Paulo',
+  agoraLocal?: string,
+): string {
   if (!mem) return '';
-  const summary = (mem.summary ?? '').trim();
+  // O nome do profissional sai do resumo: é de uma consulta que pode já ter passado (ver nome-do-profissional.ts).
+  const summary = semNomeDeProfissional((mem.summary ?? '').trim()).texto;
   const facts = (mem.facts as LeadMemoryFacts | null) ?? {};
-  const factsEntries = Object.entries(facts).filter(([, v]) => v !== null && v !== undefined && v !== '');
+  const factsEntries = Object.entries(facts).filter(
+    ([k, v]) => v !== null && v !== undefined && v !== '' && !fatoDeConsulta(k),
+  );
   if (!summary && factsEntries.length === 0) return '';
 
   const lines: string[] = [];
@@ -1384,6 +1412,12 @@ function renderLeadMemory(mem: LeadMemory | null, tz: string = 'America/Sao_Paul
     const escritoEm = mem.lastSummarizedAt ? ` (escrito em ${dataLocalISO(mem.lastSummarizedAt, tz).split('-').reverse().slice(0, 2).join('/')})` : '';
     lines.push('');
     lines.push(`**Resumo${escritoEm}:** ${summary}`);
+    // O resumo de ontem diz "tem consulta marcada para 07/10 às 13h". Hoje é 08/10: avisa na cara.
+    if (agoraLocal) {
+      const escritoNoDia = mem.lastSummarizedAt ? dataLocalISO(mem.lastSummarizedAt, tz) : agoraLocal.slice(0, 10);
+      const passadas = consultasQueJaPassaram([{ texto: summary, escritoEm: escritoNoDia }], agoraLocal);
+      if (passadas.length > 0) lines.push(...avisoDeConsultaQuePassou(passadas, agoraLocal));
+    }
   }
   const quando = typeof facts.ultimo_contato === 'string' ? formatarQuandoFoi(facts.ultimo_contato) : '';
   const desfecho = typeof facts.ultimo_desfecho === 'string' ? facts.ultimo_desfecho : '';
@@ -1405,7 +1439,7 @@ function renderLeadMemory(mem: LeadMemory | null, tz: string = 'America/Sao_Paul
     lines.push('');
     lines.push('**Dados estruturados:**');
     for (const [k, v] of outros) {
-      lines.push(`  - ${k}: ${String(v)}`);
+      lines.push(`  - ${k}: ${semNomeDeProfissional(String(v)).texto}`);
     }
   }
   return xmlBlock('memoria_paciente', lines.join('\n'));
@@ -1535,34 +1569,9 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
   return xmlBlock('primeiro_turno', lines.join('\n'));
 }
 
-/**
- * A consulta é anterior ao agora? Compara texto com texto: os dois lados são ISO LOCAL
- * ("2026-09-18T16:00") no fuso da unidade, então a ordem alfabética é a ordem do tempo —
- * sem conversão de fuso, que é onde esse tipo de comparação costuma errar.
- */
-export function consultaNoPassado(quando: string | null | undefined, agoraLocalISO: string): boolean {
-  if (!quando || !agoraLocalISO) return false;
-  // Folga de 4 h depois da hora marcada: quem escreve "estou chegando, peguei trânsito" às 15h08 de
-  // uma consulta das 15h não pode ouvir que o horário dele não existe mais.
-  // O "Z" é de propósito: força a soma a acontecer no relógio de parede, sem o fuso da máquina
-  // entrar na conta. Os dois lados continuam sendo hora local da unidade.
-  const t = Date.parse(`${quando.slice(0, 16)}:00Z`);
-  const fim = Number.isNaN(t) ? quando.slice(0, 16) : new Date(t + FOLGA_CONSULTA_MS).toISOString().slice(0, 16);
-  return fim < agoraLocalISO.slice(0, 16);
-}
-
-/** Tempo depois da hora marcada em que a consulta ainda é tratada como "de hoje". */
-const FOLGA_CONSULTA_MS = 4 * 60 * 60_000;
-
-/** "2026-09-22T10:25" no fuso pedido. */
-export function agoraLocalISO(tz: string, agora: Date = new Date()): string {
-  const p = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz, hourCycle: 'h23',
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  }).formatToParts(agora);
-  const v = (t: string) => p.find((x) => x.type === t)?.value ?? '00';
-  return `${v('year')}-${v('month')}-${v('day')}T${v('hour')}:${v('minute')}`;
-}
+// `consultaNoPassado` e `agoraLocalISO` moram em consulta-que-passou.ts (o bloco do cartão e a
+// conversa com a outra Sofia também precisam deles); seguem exportados daqui para quem já importava.
+export { consultaNoPassado, agoraLocalISO };
 
 const ROTULO_CATEGORIA: Array<[RegExp, string]> = [
   [/avalia/i, 'avaliação'],
@@ -1634,13 +1643,15 @@ function renderConsultaMarcada(
   // consulta válida remarcada.
   if (agoraLocal && c.estado === 'confirmada' && consultaNoPassado(c.quando, agoraLocal)) {
     return xmlBlock('consulta_do_paciente', [
-      `A consulta deste paciente era ${porExtenso(c.quando)} e essa data JÁ PASSOU.`,
+      `A consulta deste paciente era ${porExtenso(c.quando)} e essa data JÁ PASSOU (hoje é ${dataPorExtenso(agoraLocal.slice(0, 10))}).`,
       '',
-      'Ele NÃO tem horário reservado agora. Nunca fale dessa consulta como se fosse futura,',
-      'nem peça comprovante para "garantir" esse horário — ele não existe mais.',
-      'Diga que a data passou e ofereça um horário novo, usando consultar_horarios.',
-      'Ex.: "Vi que sua consulta era sexta, 18/09, às 16h, e essa data já passou.',
-      'Quer que eu veja um novo horário?"',
+      'Ele NÃO tem horário reservado agora. Nunca fale dessa consulta como se fosse futura — não a',
+      'confirme, não diga "te espero" nem com quem era o atendimento — e não peça comprovante para',
+      '"garantir" esse horário: ele não existe mais.',
+      'Se fizer sentido, pergunte com naturalidade como foi ou se ele precisa remarcar; para remarcar,',
+      'use consultar_horarios.',
+      'Ex.: "Vi que sua consulta era sexta, 18/09, às 16h. Conseguiu vir? Se precisar remarcar,',
+      'já vejo um novo horário pra você."',
     ].join('\n'));
   }
 
@@ -1681,7 +1692,44 @@ function renderConsultaMarcada(
   ].join('\n'));
 }
 
-function renderEtapaLead(e: EstadoEtapaLead | null | undefined, timeZone?: string | null): string {
+/** O relógio da unidade que os blocos dinâmicos usam para saber o que já passou. */
+function relogioDaUnidade(unit: Unit): { agoraLocal: string; tz: string } {
+  const tz = fusoDaUnidade(unit);
+  return { agoraLocal: agoraLocalISO(tz), tz };
+}
+
+/** ◷ Data da Consulta do cartão, se já passou (com a folga de 4 h) e é recente. */
+function consultaDoCartaoQuePassou(e: EstadoEtapaLead | null | undefined, agoraLocal?: string): string | null {
+  const quando = e?.consultaNoCartao;
+  return quando && agoraLocal && consultaPassouHaPouco(quando, agoraLocal) ? quando : null;
+}
+
+/**
+ * A consulta gravada no cartão (◷ Data da Consulta) JÁ PASSOU, e nenhum dado vivo da agenda disse isso.
+ *
+ * É o caso da Sofia de resgate (08/10/2026, cartão 28088906): ela não tem agenda nem o vínculo da
+ * consulta, então <consulta_do_paciente> nunca existe no prompt dela — e a conversa da outra Sofia e
+ * a memória falavam da consulta de ontem como marcada. O cartão é a fonte que as duas Sofias leem: a IA
+ * carimba o campo ao marcar e o sincronizador da franquia o corrige quando a recepção mexe.
+ * Só entra quando o bloco <consulta_do_paciente> está vazio — com ele, vale o que a agenda diz agora.
+ */
+export function renderConsultaDoCartaoQuePassou(
+  e: EstadoEtapaLead | null | undefined,
+  agoraLocal?: string,
+): string {
+  const passou = consultaDoCartaoQuePassou(e, agoraLocal);
+  if (!passou || !agoraLocal) return '';
+  return xmlBlock('consulta_que_ja_passou', [
+    'Lido AGORA no cartão do paciente (◷ Data da Consulta). Vale acima do histórico, da memória e da conversa com a outra Sofia:',
+    ...avisoDeConsultaQuePassou([passou], agoraLocal),
+  ].join('\n'));
+}
+
+export function renderEtapaLead(
+  e: EstadoEtapaLead | null | undefined,
+  timeZone?: string | null,
+  agoraLocal?: string,
+): string {
   if (!e || !e.jaAgendadoOuPaciente) return '';
   // O sinal veio de OUTRO cartão do mesmo telefone: aí o texto precisa explicar
   // que este cartão é novo por causa do formato do número, não porque a pessoa
@@ -1692,8 +1740,13 @@ function renderEtapaLead(e: EstadoEtapaLead | null | undefined, timeZone?: strin
       avisoDeCartaoDuplicado(e.duplicidade, timeZone || 'America/Sao_Paulo'),
     );
   }
+  // A consulta do cartão já passou: "ele já tem consulta marcada" seria mentira — e foi a frase que,
+  // somada à conversa da outra Sofia, fez a de resgate confirmar a consulta de ontem (08/10/2026).
+  const situacao = consultaDoCartaoQuePassou(e, agoraLocal)
+    ? 'ele já teve consulta marcada nesta clínica (a data já passou) ou já é paciente'
+    : 'ele já tem consulta marcada ou já é paciente';
   return xmlBlock('etapa_do_lead', [
-    `Este paciente NÃO é um contato novo: ele já tem consulta marcada ou já é paciente`,
+    `Este paciente NÃO é um contato novo: ${situacao}`,
     `(etapa atual no sistema: "${e.nome}"). Ele pode existir de antes de você.`,
     '',
     'REGRAS (valem acima de qualquer coisa escrita no histórico):',
@@ -1844,9 +1897,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
   if (unit.singlePromptMode) {
     const single: string[] = [];
     if (customBase) single.push(customBase);
-    const memBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit));
+    const memBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
     if (memBlock) single.push(memBlock);
-    const outraBlockSingle = renderConversaComOutraSofia(outraSofia, unit.spineEnabled);
+    const outraBlockSingle = renderConversaComOutraSofia(outraSofia, unit.spineEnabled, relogioDaUnidade(unit));
     if (outraBlockSingle) single.push(outraBlockSingle);
     const semAgendaSingle = renderSemAgenda(unit);
     if (semAgendaSingle) single.push(semAgendaSingle);
@@ -1857,7 +1910,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
     if (knBlock) single.push(knBlock);
     const consultaBlockSingle = renderConsultaMarcada(consulta, agoraLocalISO(fusoDaUnidade(unit)), input.pacienteFranquia);
     if (consultaBlockSingle) single.push(consultaBlockSingle);
-    const etapaBlockSingle = renderEtapaLead(estadoEtapa, unit.spineTimezone);
+    const etapaBlockSingle = renderEtapaLead(estadoEtapa, unit.spineTimezone, agoraLocalISO(fusoDaUnidade(unit)));
+    const cartaoBlockSingle = consultaBlockSingle ? '' : renderConsultaDoCartaoQuePassou(estadoEtapa, agoraLocalISO(fusoDaUnidade(unit)));
+    if (cartaoBlockSingle) single.push(cartaoBlockSingle);
     const anuncioBlockSingle = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
     if (etapaBlockSingle) single.push(etapaBlockSingle);
     if (anuncioBlockSingle) single.push(anuncioBlockSingle);
@@ -1908,9 +1963,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
   );
   if (lessonsBlock) blocks.push(lessonsBlock);
-  const memoryBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit));
+  const memoryBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
   if (memoryBlock) blocks.push(memoryBlock);
-  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia, unit.spineEnabled);
+  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia, unit.spineEnabled, relogioDaUnidade(unit));
   if (outraSofiaBlock) blocks.push(outraSofiaBlock);
   if (faltaBlock) blocks.push(faltaBlock);
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
@@ -1945,7 +2000,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   const consultaBlock = renderConsultaMarcada(consulta, agoraLocalISO(fusoDaUnidade(unit)), input.pacienteFranquia);
   if (consultaBlock) blocks.push(consultaBlock);
-  const etapaBlock = renderEtapaLead(estadoEtapa, unit.spineTimezone);
+  const cartaoBlock = consultaBlock ? '' : renderConsultaDoCartaoQuePassou(estadoEtapa, agoraLocalISO(fusoDaUnidade(unit)));
+  if (cartaoBlock) blocks.push(cartaoBlock);
+  const etapaBlock = renderEtapaLead(estadoEtapa, unit.spineTimezone, agoraLocalISO(fusoDaUnidade(unit)));
   if (etapaBlock) blocks.push(etapaBlock);
 
   // DEPOIS de <coleta_origem> de propósito: quando o rastreio já sabe o anúncio,
@@ -2004,9 +2061,9 @@ export function composeSystemPromptParts(input: ComposeInput): {
   // por unidade, que fica uma hora em cache.
   const soCumprimento = renderSoCumprimento(userMessage);
   if (soCumprimento) dynamic.push(soCumprimento);
-  const memoryBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit));
+  const memoryBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
   if (memoryBlock) dynamic.push(memoryBlock);
-  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia, unit.spineEnabled);
+  const outraSofiaBlock = renderConversaComOutraSofia(outraSofia, unit.spineEnabled, relogioDaUnidade(unit));
   if (outraSofiaBlock) dynamic.push(outraSofiaBlock);
   const faltaBlock = renderFaltaParaAgendar(
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
@@ -2026,7 +2083,9 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (knowledgeBlock) dynamic.push(knowledgeBlock);
   const consultaBlock = renderConsultaMarcada(consulta, agoraLocalISO(fusoDaUnidade(unit)), input.pacienteFranquia);
   if (consultaBlock) dynamic.push(consultaBlock);
-  const etapaBlock = renderEtapaLead(estadoEtapa, unit.spineTimezone);
+  const cartaoBlock = consultaBlock ? '' : renderConsultaDoCartaoQuePassou(estadoEtapa, agoraLocalISO(fusoDaUnidade(unit)));
+  if (cartaoBlock) dynamic.push(cartaoBlock);
+  const etapaBlock = renderEtapaLead(estadoEtapa, unit.spineTimezone, agoraLocalISO(fusoDaUnidade(unit)));
   if (etapaBlock) dynamic.push(etapaBlock);
 
   if (unit.singlePromptMode) {

@@ -52,3 +52,64 @@ export function comQuemVaiSerAtendido(bruto: string | null | undefined): string 
   const nome = nomeDoProfissional(bruto);
   return nome ? `fisioterapeuta ${nome}` : null;
 }
+
+/**
+ * Palavras com maiúscula que aparecem logo depois de "fisioterapeuta" e não são nome de gente
+ * ("fisioterapeuta Doutor Hérnia"…). Comparadas sem acento e em minúscula.
+ */
+const NAO_E_NOME = new Set(['doutor', 'doutora', 'hernia', 'digital', 'sofia', 'especialista', 'especializado', 'especializada', 'responsavel']);
+
+const PALAVRA_DE_NOME = String.raw`\p{Lu}[\p{L}'’-]*`;
+/**
+ * "fisioterapeuta Aylana Silva Mendes" → grupo 1 = profissão, grupo 2 = nome (até 5 palavras, com
+ * "de/da/do/dos/das/e" no meio). Só espaço entre as palavras, nunca quebra de linha: na confirmação a
+ * linha seguinte começa com maiúscula ("Qualquer dúvida…") e seria engolida como sobrenome.
+ */
+const NOME_DEPOIS_DA_PROFISSAO = new RegExp(
+  String.raw`(?<!\p{L})([Ff]isioterapeuta|FISIOTERAPEUTA)[ \t]+(${PALAVRA_DE_NOME}(?:[ \t]+(?:(?:de|da|do|dos|das|e)[ \t]+)?${PALAVRA_DE_NOME}){0,4})`,
+  'gu',
+);
+
+function semAcento(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+/**
+ * Tira o NOME do profissional e deixa a profissão: "com a fisioterapeuta Aylana Silva Mendes" →
+ * "com a fisioterapeuta".
+ *
+ * Por quê (Açailândia, 08/10/2026, cartão 28088906): a Sofia de resgate disse "sua consulta de quarta,
+ * 07/10 às 13h com a fisioterapeuta Aylana" — a consulta tinha sido ontem, e o nome veio de mensagens
+ * antigas (a confirmação de 06/10 que a outra Sofia mandou). Nome de profissional só vale quando a
+ * agenda acabou de devolvê-lo: a escala muda por turno (ver profissional-por-turno.ts) e repetir um
+ * nome velho é afirmar quem vai atender sem saber.
+ *
+ * `manter(nome)` decide o que pode ficar — quem chama passa o nome que a agenda devolveu AGORA.
+ */
+export function semNomeDeProfissional(
+  texto: string,
+  manter: (nome: string) => boolean = () => false,
+): { texto: string; removidos: string[] } {
+  if (!texto) return { texto, removidos: [] };
+  const removidos: string[] = [];
+  const limpo = texto.replace(NOME_DEPOIS_DA_PROFISSAO, (inteiro: string, profissao: string, nome: string) => {
+    const primeira = semAcento(nome.split(/[ \t]+/)[0] ?? '');
+    if (NAO_E_NOME.has(primeira) || manter(nome)) return inteiro;
+    removidos.push(nome);
+    return profissao;
+  });
+  return { texto: limpo, removidos };
+}
+
+/**
+ * `manter` para `semNomeDeProfissional`: o nome fica só se o PRIMEIRO nome aparece, como palavra
+ * inteira, em `fonteViva` (o que a agenda devolveu agora). "Aylana" basta para manter "Aylana Silva
+ * Mendes" — o modelo encurta o nome que a ferramenta devolveu, e isso é legítimo.
+ */
+export function nomeEstaNaFonte(fonteViva: string): (nome: string) => boolean {
+  const fonte = ` ${semAcento(fonteViva).replace(/[^a-z0-9]+/g, ' ')} `;
+  return (nome) => {
+    const primeiro = semAcento(nome.split(/[ \t]+/)[0] ?? '').replace(/[^a-z0-9]+/g, '');
+    return primeiro.length > 0 && fonte.includes(` ${primeiro} `);
+  };
+}

@@ -2,6 +2,8 @@ import type { Unit } from '@prisma/client';
 import type { KommoClient, KommoLead, KommoPipeline } from './kommo.service.js';
 import { createKommoClient } from './kommo.service.js';
 import { logger } from '../lib/logger.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
+import { agoraLocalISO } from '../agent/consulta-que-passou.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { lerAnuncioDoLead, type AnuncioDeOrigem } from '../agent/anuncio-de-origem.js';
 import {
@@ -32,6 +34,12 @@ export interface EstadoEtapaLead {
    * paciente na franquia quando a consulta foi marcada por humano (ver paciente-na-franquia.ts).
    */
   tituloDoCartao?: string | null;
+  /**
+   * ◷ Data da Consulta do cartão, em hora local da unidade ("2026-10-07T13:00"). Vai junto mesmo
+   * quando a data já passou: é por ela que o prompt avisa "essa consulta JÁ PASSOU" à Sofia que não
+   * tem agenda (resgate) — caso do cartão 28088906, 08/10/2026.
+   */
+  consultaNoCartao?: string | null;
 }
 
 /**
@@ -234,6 +242,13 @@ export async function estadoEtapaDoLead(
       }
     }
     if (valor && lead?.name) valor = { ...valor, tituloDoCartao: lead.name };
+    const consultaEpoch = lead ? dataDaConsulta(lead) : null;
+    if (lead && consultaEpoch) {
+      const consultaNoCartao = agoraLocalISO(fusoDaUnidade(unit), new Date(consultaEpoch * 1000));
+      valor = valor
+        ? { ...valor, consultaNoCartao }
+        : { statusId: lead.status_id ?? 0, nome: '', jaAgendadoOuPaciente: false, consultaNoCartao };
+    }
   } catch (err) {
     logger.warn(
       { err: String(err), unit: unit.slug, leadId },

@@ -7,6 +7,7 @@ import { extrairBotoes } from '../lib/botoes.js';
 import { aplicarGuardrail } from './guardrail.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
+import { nomeEstaNaFonte, semNomeDeProfissional } from '../lib/nome-do-profissional.js';
 import { cortarSeEstourou } from './teto-mensal.js';
 
 export interface FollowUpArgs {
@@ -106,7 +107,10 @@ ${conversa}`.trim();
     // As travas de tom (diminutivo, intimidade) valem aqui igual à conversa: a régua é
     // justamente onde mora a despedida, que é onde o tom escorrega. `tratado` tem de ser
     // o que retorna no fim — devolver `limpo` traria o texto cru de volta e anularia tudo.
-    const tratado = semIntimidade(semDiminutivo(limpo));
+    // A régua não tem agenda: nome de profissional aqui só pode ter vindo do histórico, de uma
+    // consulta que talvez já tenha passado (08/10/2026, cartão 28088906). Sai — a não ser que a
+    // própria ficha da unidade o cite.
+    const tratado = semNomeDeProfissional(semIntimidade(semDiminutivo(limpo)), nomeEstaNaFonte(base)).texto;
     const guard = aplicarGuardrail(tratado, unit);
     const recusou = guard.triggered.some((t) => /^(lacuna|preco|clinico):/.test(t));
     if (recusou) {

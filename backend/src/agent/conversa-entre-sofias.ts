@@ -14,6 +14,9 @@
  *    cartão nos últimos 3 dias.
  */
 import { prisma } from '../lib/prisma.js';
+import { dataLocalISO } from '../lib/feriados.js';
+import { semNomeDeProfissional } from '../lib/nome-do-profissional.js';
+import { agoraLocalISO, avisoDeConsultaQuePassou, consultasQueJaPassaram } from './consulta-que-passou.js';
 
 /** Fixa por unidade (entra na parte do prompt que fica em cache). Vazia para quem tem agenda. */
 export function renderSemAgenda(unit: { spineEnabled: boolean }): string {
@@ -36,13 +39,45 @@ export interface FalaDeOutraSofia {
   em: Date;
 }
 
+/** O relógio da unidade, para datar as falas e saber o que já passou. */
+export interface RelogioDaUnidade {
+  /** "2026-10-08T11:16" no fuso da unidade. */
+  agoraLocal: string;
+  tz: string;
+}
+
+/** "(06/10 13:17)" — sem isso, "sua consulta de amanhã" da outra Sofia vira amanhã de hoje. */
+function quandoFoi(em: Date, tz: string): string {
+  const [dia, hora] = agoraLocalISO(tz, em).split('T');
+  const [, m, d] = dia.split('-');
+  return `(${d}/${m} ${hora})`;
+}
+
 /**
  * Puro: o bloco do prompt. null quando não há o que mostrar. `temAgenda` = a Sofia que assume tem agenda:
  * só ela recebe "vá para os horários"; a sem agenda não pode receber ordem de oferecer horário.
+ *
+ * Com `relogio` (08/10/2026, cartão 28088906): cada fala sai com dia e hora em que foi dita, e consulta
+ * citada que já passou ganha um aviso no topo. O nome do profissional sai sempre — é de uma consulta
+ * que esta Sofia não marcou e que pode nem existir mais.
  */
-export function renderConversaComOutraSofia(falas: ReadonlyArray<FalaDeOutraSofia>, temAgenda: boolean): string | null {
+export function renderConversaComOutraSofia(
+  falas: ReadonlyArray<FalaDeOutraSofia>,
+  temAgenda: boolean,
+  relogio?: RelogioDaUnidade,
+): string | null {
   if (falas.length === 0) return null;
-  const linhas = falas.map((f) => `${f.papel === 'paciente' ? 'Paciente' : 'Sofia'}: ${f.texto.replace(/\s+/g, ' ').trim().slice(0, 600)}`);
+  const linhas = falas.map((f) => {
+    const texto = semNomeDeProfissional(f.texto).texto.replace(/\s+/g, ' ').trim().slice(0, 600);
+    const quando = relogio ? `${quandoFoi(f.em, relogio.tz)} ` : '';
+    return `${quando}${f.papel === 'paciente' ? 'Paciente' : 'Sofia'}: ${texto}`;
+  });
+  const passadas = relogio
+    ? consultasQueJaPassaram(
+        falas.map((f) => ({ texto: f.texto, escritoEm: dataLocalISO(f.em, relogio.tz) })),
+        relogio.agoraLocal,
+      )
+    : [];
   return [
     '<conversa_com_outra_sofia>',
     'Este paciente acabou de conversar com outra Sofia da mesma clínica (outra etapa do atendimento). Para ele, é a MESMA conversa:',
@@ -55,6 +90,8 @@ export function renderConversaComOutraSofia(falas: ReadonlyArray<FalaDeOutraSofi
       : [
           '- Continue de onde parou, sem oferecer horário (você não tem agenda): se ele quer marcar, diga que vai passar para quem cuida da agenda.',
         ]),
+    ...(relogio ? ['- Cada fala tem o dia e a hora em que foi dita: "amanhã" e "hoje" ali são relativos àquele dia, não a hoje.'] : []),
+    ...(passadas.length > 0 ? ['', ...avisoDeConsultaQuePassou(passadas, relogio!.agoraLocal)] : []),
     '',
     ...linhas,
     '</conversa_com_outra_sofia>',
