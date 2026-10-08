@@ -36,6 +36,7 @@ function repoFalso() {
   const pacientes = new Map<string, LinhaPaciente>();
   let config: LinhaConfig | null = null;
   let seq = 0;
+  const falha = { proxima: false };
   const repo: Repositorio = {
     async config() { return config; },
     async paciente(_u, chave) { return pacientes.get(chave) ?? null; },
@@ -61,6 +62,7 @@ function repoFalso() {
     async ligacao(id) { return ligacoes.get(id) ?? null; },
     async ligacaoPorWaId(w) { return [...ligacoes.values()].find((l) => l.waCallId === w) ?? null; },
     async atualizarLigacao(id, dados) {
+      if (falha.proxima && dados.status === 'encerrada') { falha.proxima = false; throw new Error('banco caiu'); }
       const l = { ...ligacoes.get(id)!, ...dados, atualizadaEm: relogio.agora };
       ligacoes.set(id, l);
       return l;
@@ -70,6 +72,10 @@ function repoFalso() {
       if (!l || l.registradaEm) return false;
       ligacoes.set(id, { ...l, registradaEm: quando });
       return true;
+    },
+    async liberarFinalizacao(id) {
+      const l = ligacoes.get(id);
+      if (l && l.status !== 'encerrada') ligacoes.set(id, { ...l, registradaEm: null });
     },
     async aberta(_u, chave, desde) {
       return [...ligacoes.values()].filter((l) => l.chaveTelefone === chave && l.status !== 'encerrada' && l.criadaEm >= desde).pop() ?? null;
@@ -89,7 +95,7 @@ function repoFalso() {
     async comPermissao() { return [...pacientes.values()].filter((p) => p.permissao === 'aceita' && p.leadId); },
     async abertasParadas(antes) { return [...ligacoes.values()].filter((l) => l.status !== 'encerrada' && l.atualizadaEm < antes); },
   };
-  return { repo, ligacoes, pacientes, setConfig: (c: Partial<LinhaConfig>) => { config = { taxaMinima: null, amostraMinima: null, maxSemAtender: null, textoPermissao: null, modeloPermissao: null, filaPausadaAte: null, filaPausadaMotivo: null, ...c }; } };
+  return { repo, ligacoes, pacientes, falha, setConfig: (c: Partial<LinhaConfig>) => { config = { taxaMinima: null, amostraMinima: null, maxSemAtender: null, textoPermissao: null, modeloPermissao: null, filaPausadaAte: null, filaPausadaMotivo: null, ...c }; } };
 }
 
 const relogio = { agora: new Date('2026-10-08T14:00:00Z') };
@@ -150,7 +156,7 @@ function montar(opts: { modo?: Contexto['modo']; permissao?: PermissaoNaMeta; te
   const k = kommoFalso(opts.telefone);
   const ctx: Contexto = {
     unit: UNIT, modo: opts.modo ?? 'ligado', meta: m.meta, kommo: k.kommo, repo: b.repo,
-    numerosDeTeste: opts.teste ?? ['91021043'], gravar: false, agora: () => relogio.agora, log: () => undefined,
+    numerosDeTeste: opts.teste ?? ['6391021043'], gravar: false, agora: () => relogio.agora, log: () => undefined,
   };
   return { ctx, ...b, ...m, ...k };
 }
@@ -182,7 +188,7 @@ test('pedir permissão: manda a interativa, guarda o horário, nota no cartão e
   assert.equal(r.ok, true, r.motivo);
   assert.equal(t.chamadas.filter((c) => c.op === 'pedir').length, 1);
   assert.equal(t.chamadas.find((c) => c.op === 'pedir')!.args[0], TEL_JOAO, 'telefone vem do contato do cartão, no formato da Meta');
-  assert.equal(t.pacientes.get('91021043')!.permissao, 'pedida');
+  assert.equal(t.pacientes.get('6391021043')!.permissao, 'pedida');
   assert.equal(t.notas.length, 1, 'a mensagem da Meta não aparece no chat do Kommo: vira nota');
   const r2 = await pedirPermissao(t.ctx, { leadId: 1, kommoUserId: 77, nomeSdr: 'Giulia' });
   assert.equal(r2.ok, false);
@@ -251,12 +257,12 @@ test('ligação atendida: resposta SDP chega ao navegador, registra no Kommo com
   await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, calls: [{ id: callId, event: 'terminate', status: 'COMPLETED', duration: 30 }] } }] }] }));
   assert.equal((await t.repo.ligacao(id))!.resultado, 'atendida', 'duração > 0 = atendeu, mesmo sem o ACCEPTED');
 
-  t.pacientes.get('91021043')!.naoAtendidasSeguidas = 1;
+  t.pacientes.get('6391021043')!.naoAtendidasSeguidas = 1;
   const l = await ligarEAcabar(t, 'atende');
   assert.equal(l.resultado, 'atendida');
   assert.equal(l.duracaoSeg, 95);
   assert.equal(l.sdpResposta, null, 'SDP apagado no fim');
-  assert.equal(t.pacientes.get('91021043')!.naoAtendidasSeguidas, 0);
+  assert.equal(t.pacientes.get('6391021043')!.naoAtendidasSeguidas, 0);
   const reg = t.registros[t.registros.length - 1];
   assert.equal(reg.call_status, 4);
   assert.equal(reg.duration, 95);
@@ -273,7 +279,7 @@ test('trava 2: duas sem atender travam o paciente; ele escrever libera uma; a 3�
   avancar(10);
   const l2 = await ligarEAcabar(t, 'recusa');
   assert.equal(l2.resultado, 'recusada');
-  assert.equal(t.pacientes.get('91021043')!.naoAtendidasSeguidas, 2);
+  assert.equal(t.pacientes.get('6391021043')!.naoAtendidasSeguidas, 2);
 
   avancar(10);
   const travado = await iniciarLigacao(t.ctx, { leadId: 1, sdp: SDP, kommoUserId: 77, nomeSdr: 'Giulia', origem: 'cartao', confirmouSemCombinar: true });
@@ -282,18 +288,23 @@ test('trava 2: duas sem atender travam o paciente; ele escrever libera uma; a 3�
   assert.equal(painel.trava.travado, true);
 
   avancar(5);
-  await combinar(t); // paciente escreveu depois da última sem atender
+  t.estado.ultimaMsg = Math.floor(relogio.agora.getTime() / 1000); // paciente escreveu depois da última sem atender
+  assert.equal((await montarPainel(t.ctx, 1)).trava.travado, false, 'ele escreveu: libera UMA');
   const l3 = await ligarEAcabar(t, 'nao-atende');
   assert.equal(l3.resultado, 'nao_atendida');
   avancar(5);
-  await combinar(t);
+  t.estado.ultimaMsg = Math.floor(relogio.agora.getTime() / 1000); // escreveu de novo, mas sem combinar
   const firme = await iniciarLigacao(t.ctx, { leadId: 1, sdp: SDP, kommoUserId: 77, nomeSdr: 'Giulia', origem: 'cartao', confirmouSemCombinar: true });
   assert.equal(!firme.ok && firme.codigo, 'travado');
   assert.equal((await montarPainel(t.ctx, 1)).trava.firme, true);
+  avancar(1);
+  await combinar(t); // respondeu ao "Posso te ligar agora?" feito depois da 3ª
+  const liberou = await montarPainel(t.ctx, 1);
+  assert.equal(liberou.trava.travado, false, 'com permissão permanente esta é a única saída da trava firme');
 
   // permissão nova (o paciente aceitou de novo) recomeça a conta
   await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, messages: [{ from: TEL_JOAO, timestamp: '9', type: 'interactive', interactive: { type: 'call_permission_reply', call_permission_reply: { response: 'accept', expiration_timestamp: 1999999999 } } }] } }] }] }));
-  assert.equal(t.pacientes.get('91021043')!.naoAtendidasSeguidas, 0);
+  assert.equal(t.pacientes.get('6391021043')!.naoAtendidasSeguidas, 0);
 });
 
 test('a Meta recusa a ligação: vira "falhou", não conta como sem atender e não vai pro histórico', async () => {
@@ -305,7 +316,7 @@ test('a Meta recusa a ligação: vira "falhou", não conta como sem atender e n�
   const l = [...t.ligacoes.values()][0];
   assert.equal(l.resultado, 'falhou');
   assert.equal(t.registros.length, 0);
-  assert.equal(t.pacientes.get('91021043')!.naoAtendidasSeguidas, 0);
+  assert.equal(t.pacientes.get('6391021043')!.naoAtendidasSeguidas, 0);
 });
 
 test('sem permissão na Meta: não liga, mesmo que o banco diga aceita', async () => {
@@ -316,7 +327,7 @@ test('sem permissão na Meta: não liga, mesmo que o banco diga aceita', async (
   avancar(2);
   const r = await iniciarLigacao(t.ctx, { leadId: 1, sdp: SDP, kommoUserId: 77, nomeSdr: 'Giulia', origem: 'cartao', confirmouSemCombinar: false });
   assert.equal(!r.ok && r.codigo, 'sem-permissao');
-  assert.equal(t.pacientes.get('91021043')!.permissao, 'caiu');
+  assert.equal(t.pacientes.get('6391021043')!.permissao, 'caiu');
 });
 
 test('registro no Kommo: telefone que não casa vira nota no cartão; webhook repetido não registra duas vezes', async () => {
@@ -334,7 +345,7 @@ test('trava 3: taxa do dia abaixo de 50% em 6 ligações pausa a fila e abre UMA
   for (const como of ['atende', 'nao-atende', 'atende', 'nao-atende', 'nao-atende'] as const) {
     await combinar(t);
     await ligarEAcabar(t, como);
-    t.pacientes.get('91021043')!.naoAtendidasSeguidas = 0; // isola a trava 2 deste teste
+    t.pacientes.get('6391021043')!.naoAtendidasSeguidas = 0; // isola a trava 2 deste teste
     avancar(3);
   }
   assert.equal(t.tarefas.length, 0, '5 ligações ainda não é amostra');
@@ -344,7 +355,7 @@ test('trava 3: taxa do dia abaixo de 50% em 6 ligações pausa a fila e abre UMA
   assert.match(t.tarefas[0], /^ALERTA · doutor-hernia-acailandia · ☎ Hoje só 2 de 6/);
   const fila = await montarFila(t.ctx);
   assert.equal(fila.pausada, true);
-  t.pacientes.get('91021043')!.naoAtendidasSeguidas = 0;
+  t.pacientes.get('6391021043')!.naoAtendidasSeguidas = 0;
   avancar(3);
   await combinar(t);
   const daFila = await iniciarLigacao(t.ctx, { leadId: 1, sdp: SDP, kommoUserId: 77, nomeSdr: 'Giulia', origem: 'fila', confirmouSemCombinar: false });
@@ -375,7 +386,7 @@ test('desligar antes de a Meta responder fecha a conta; ligação esquecida é f
   const id = (r as { ligacaoId: string }).ligacaoId;
   await encerrarLigacao(t.ctx, id);
   assert.equal(t.chamadas.filter((c) => c.op === 'encerrar').length, 1, 'pede à Meta para encerrar');
-  assert.equal((await t.repo.ligacao(id))!.status, 'chamando', 'quem fecha é o webhook terminate');
+  assert.equal((await t.repo.ligacao(id))!.status, 'encerrando', 'quem fecha a conta é o webhook terminate');
   avancar(1);
   const cedo = await fecharSemRetorno(t.ctx, (await t.repo.ligacao(id))!);
   assert.equal(cedo, false);
@@ -396,11 +407,48 @@ test('webhook de outra unidade ou ligação desconhecida é ignorado', async () 
 
 test('corrida: o "connect" da Meta chega antes de gravarmos o id dela — casa pelo telefone e não perde a resposta SDP', async () => {
   const t = montar();
-  const l = await t.repo.criarLigacao({ unitId: UNIT.id, leadId: 1, telefone: TEL_JOAO, chaveTelefone: '91021043', kommoUserId: 77, kommoUserNome: 'Giulia', origem: 'cartao', semCombinar: false, modo: 'ligado' });
+  const l = await t.repo.criarLigacao({ unitId: UNIT.id, leadId: 1, telefone: TEL_JOAO, chaveTelefone: '6391021043', kommoUserId: 77, kommoUserNome: 'Giulia', origem: 'cartao', semCombinar: false, modo: 'ligado' });
   // a doc da Meta traz `to`/`from` trocados no exemplo: o telefone do paciente pode vir em qualquer um
   await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, calls: [{ id: 'wacid.novo', to: '5599991063655', from: '556391021043', event: 'connect', direction: 'BUSINESS_INITIATED', session: { sdp_type: 'answer', sdp: 'v=0\r\nresposta' } }] } }] }] }));
   const depois = (await t.repo.ligacao(l.id))!;
   assert.equal(depois.sdpResposta, 'v=0\r\nresposta');
   assert.equal(depois.waCallId, 'wacid.novo');
   assert.equal(depois.status, 'chamando');
+});
+
+test('falha de banco no meio do fechamento devolve a reserva: o reenvio do webhook fecha a conta', async () => {
+  const t = montar();
+  await combinar(t);
+  const r = await iniciarLigacao(t.ctx, { leadId: 1, sdp: SDP, kommoUserId: 77, nomeSdr: 'Giulia', origem: 'cartao', confirmouSemCombinar: false });
+  const id = (r as { ligacaoId: string }).ligacaoId;
+  const callId = (await t.repo.ligacao(id))!.waCallId!;
+  const fim = lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, calls: [{ id: callId, event: 'terminate', status: 'COMPLETED', duration: 40 }] } }] }] });
+  t.falha.proxima = true;
+  await assert.rejects(() => receberEventos(t.ctx, fim), /banco caiu/, 'o erro sobe: o webhook responde 500 e a Meta/n8n reenvia');
+  assert.equal((await t.repo.ligacao(id))!.registradaEm, null, 'reserva devolvida');
+  await receberEventos(t.ctx, fim);
+  const l = (await t.repo.ligacao(id))!;
+  assert.equal(l.status, 'encerrada');
+  assert.equal(l.resultado, 'atendida');
+  assert.equal(t.registros.length, 1);
+});
+
+test('a SDR desliga uma ligação atendida e o "terminate" se perde: o vigia fecha em minutos com a duração até o desligar', async () => {
+  const t = montar();
+  await combinar(t);
+  const r = await iniciarLigacao(t.ctx, { leadId: 1, sdp: SDP, kommoUserId: 77, nomeSdr: 'Giulia', origem: 'cartao', confirmouSemCombinar: false });
+  const id = (r as { ligacaoId: string }).ligacaoId;
+  const callId = (await t.repo.ligacao(id))!.waCallId!;
+  await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, statuses: [{ id: callId, type: 'call', status: 'ACCEPTED', timestamp: String(relogio.agora.getTime() / 1000) }] } }] }] }));
+  avancar(2);
+  await encerrarLigacao(t.ctx, id);
+  // um ACCEPTED atrasado não pode "reabrir" a ligação
+  await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, statuses: [{ id: callId, type: 'call', status: 'ACCEPTED' }] } }] }] }));
+  assert.equal((await t.repo.ligacao(id))!.status, 'encerrando');
+  avancar(4);
+  assert.equal(await fecharSemRetorno(t.ctx, (await t.repo.ligacao(id))!), true);
+  const l = (await t.repo.ligacao(id))!;
+  assert.equal(l.resultado, 'atendida');
+  assert.equal(l.duracaoSeg, 120, 'duração até a SDR desligar, não até o vigia passar');
+  assert.equal(t.registros[0].call_status, 4);
 });

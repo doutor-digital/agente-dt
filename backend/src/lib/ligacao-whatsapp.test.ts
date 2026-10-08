@@ -13,6 +13,7 @@ import {
   decidirLigacao,
   diaNoFuso,
   estadoDoCombinado,
+  numerosDeTeste,
   permissaoAgora,
   podePedirPermissao,
   proximoContador,
@@ -42,9 +43,13 @@ test('telefone: formato da Meta com 55, chave de 8 dígitos e máscara', () => {
   assert.equal(telefoneParaMeta('063 99102-1043'), '5563991021043', 'DDD com o zero na frente');
   assert.equal(telefoneParaMeta('123'), null);
   assert.equal(telefoneParaMeta(''), null);
-  assert.equal(chaveDoTelefone('5563991021043'), '91021043');
-  assert.equal(chaveDoTelefone('556391021043'), '91021043', 'com e sem o nono dígito casam');
+  assert.equal(chaveDoTelefone('5563991021043'), '6391021043');
+  assert.equal(chaveDoTelefone('556391021043'), '6391021043', 'com e sem o nono dígito casam');
+  assert.notEqual(chaveDoTelefone('5511991021043'), chaveDoTelefone('5563991021043'), 'mesmo final em DDD diferente = outro paciente');
   assert.equal(telefoneMascarado('5563991021043'), '…1043');
+  assert.deepEqual(numerosDeTeste(undefined), ['6391021043'], 'sem variável: o número do João');
+  assert.deepEqual(numerosDeTeste('"5563991021043, (11) 98888-7777"'), ['6391021043', '1198887777']);
+  assert.ok(numerosDeTeste(undefined).includes(chaveDoTelefone('+55 63 99102-1043')), 'o contato do João casa com a lista de teste');
 });
 
 // ── ajustes ──
@@ -116,7 +121,9 @@ test('trava 2: a 2ª seguida sem atender trava; ele escrever libera UMA; a 3ª t
   assert.equal(t2b.travado, false, 'paciente escreveu depois: libera uma tentativa');
   const t3 = travaDoPaciente({ naoAtendidasSeguidas: 3, ultimaNaoAtendidaEm: agora, escreveuDepois: true }, aj);
   assert.equal(t3.travado, true);
-  assert.equal(t3.firme, true, 'na 3ª nem mensagem libera — a 4ª a Meta corta a permissão');
+  assert.equal(t3.firme, true, 'na 3ª mensagem solta não libera — a 4ª a Meta corta a permissão');
+  const t3ok = travaDoPaciente({ naoAtendidasSeguidas: 3, ultimaNaoAtendidaEm: agora, escreveuDepois: true, combinouDepois: true }, aj);
+  assert.equal(t3ok.travado, false, 'respondeu ao "Posso te ligar agora?" depois da 3ª: libera (com permissão permanente não há outra saída)');
 });
 
 test('contador: atendeu zera, não atendeu e recusou somam, falha técnica não mexe', () => {
@@ -163,6 +170,7 @@ test('decidir: a ordem dos "não" — desligada, teste, permissão, Meta, trava,
   assert.equal(cod({ emAndamento: true }), 'em-andamento');
   assert.equal(cod({ origem: 'fila', filaPausada: true }), 'fila-pausada');
   assert.equal(cod({ origem: 'cartao', filaPausada: true }), 'ok', 'a pausa do vigia é da FILA; pelo cartão segue com as travas');
+  assert.equal(cod({ origem: 'cartao', filaPausada: true, combinado: 'esperando', confirmouSemCombinar: true }), 'combinar-obrigatorio', 'com a fila pausada, sem combinar não sai nem pelo cartão');
   assert.equal(cod({ trava: travaDoPaciente({ naoAtendidasSeguidas: 2, ultimaNaoAtendidaEm: agora, escreveuDepois: false }, aj), combinado: 'esperando', confirmouSemCombinar: true }), 'travado', 'confirmar o aviso não fura a trava');
 });
 
@@ -241,6 +249,9 @@ test('GET call_permissions: concedida temporária com data, ações', () => {
   assert.equal(p.podePedir, false);
   assert.equal(lerPermissao({ permission: { status: 'no_permission' } }).estado, 'sem');
   assert.equal(lerPermissao({ permission: { status: 'permanent' } }).permanente, true);
+  const semData = lerPermissao({ permission: { status: 'temporary' } });
+  assert.equal(semData.permanente, false, 'temporária sem data NÃO vira permanente');
+  assert.ok(semData.ate && semData.ate.getTime() > Date.now(), 'vale os 7 dias da doc');
 });
 
 const webhook = (value: Record<string, unknown>) => ({

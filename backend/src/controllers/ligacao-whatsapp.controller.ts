@@ -31,7 +31,7 @@ import { credenciaisDaUnidade } from '../lib/whatsapp-meta.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { MetaService } from '../services/meta.service.js';
 import { segredoConfere } from './whatsapp-meta.controller.js';
-import { chaveDoTelefone } from '../lib/ligacao-whatsapp.js';
+import { numerosDeTeste } from '../lib/ligacao-whatsapp.js';
 import { lerWebhookDeLigacoes, metaDaUnidade, numerosDoWebhook } from '../lib/ligacao-whatsapp-meta.js';
 import { repositorioPrisma } from '../lib/ligacao-whatsapp-prisma.js';
 import {
@@ -48,18 +48,11 @@ import {
   type KommoLigacoes,
 } from '../lib/ligacao-whatsapp-servico.js';
 
-/** O número de teste do protocolo do João (alertas e ligações testam primeiro no número dele). */
-const TESTE_PADRAO = '5563991021043';
-
-export function numerosDeTeste(raw = process.env.LIGACAO_TESTE_TELEFONES): string[] {
-  const bruto = (raw ?? TESTE_PADRAO).replace(/^['"]|['"]$/g, '');
-  return bruto.split(',').map((s) => chaveDoTelefone(s)).filter((s) => s.length === 8);
-}
-
 /** Telefone e nome do contato mudam raramente; o painel relê a cada poucos segundos. 2 min de memória poupa o
  * portão de velocidade do Kommo, que é o mesmo da Sofia. */
 const cacheContato = new Map<string, { em: number; v: Awaited<ReturnType<KommoLigacoes['contatoDoLead']>> }>();
 const CONTATO_TTL_MS = 2 * 60_000;
+const cacheMensagens = new Map<string, { em: number; v: number | null }>();
 
 function kommoDaUnidade(unit: Unit): KommoLigacoes {
   const k = createKommoClient(unit);
@@ -73,7 +66,16 @@ function kommoDaUnidade(unit: Unit): KommoLigacoes {
       if (v.telefone) cacheContato.set(chave, { em: Date.now(), v });
       return v;
     },
-    ultimaMensagemDesde: (contatoId, desde) => k.ultimaMensagemDoContatoDesde(contatoId, desde),
+    async ultimaMensagemDesde(contatoId, desde) {
+      // 20 s de memória: o painel de várias SDRs relê junto, e o portão do Kommo é o mesmo da Sofia
+      const chave = `${unit.id}:${contatoId}:${desde}`;
+      const c = cacheMensagens.get(chave);
+      if (c && Date.now() - c.em < 20_000) return c.v;
+      const v = await k.ultimaMensagemDoContatoDesde(contatoId, desde);
+      if (cacheMensagens.size > 5_000) cacheMensagens.clear();
+      cacheMensagens.set(chave, { em: Date.now(), v });
+      return v;
+    },
     registrarChamada: (corpo) => k.registrarChamadas([corpo]),
     async nota(leadId, texto) {
       await k.addLeadNote(leadId, texto);
@@ -85,7 +87,9 @@ function kommoDaUnidade(unit: Unit): KommoLigacoes {
 
   async function lerContato(leadId: number) {
     const lead = await k.getLead(leadId);
-    const contatoId = (lead as { _embedded?: { contacts?: Array<{ id?: number }> } })._embedded?.contacts?.find((c) => typeof c.id === 'number')?.id ?? null;
+    // o contato PRINCIPAL do cartão — um acompanhante cadastrado como 2º contato não pode receber a ligação
+    const contatos = ((lead as { _embedded?: { contacts?: Array<{ id?: number; is_main?: boolean }> } })._embedded?.contacts ?? []).filter((c) => typeof c.id === 'number');
+    const contatoId = (contatos.find((c) => c.is_main) ?? contatos[0])?.id ?? null;
     if (!contatoId) return { contatoId: null, telefone: null, nome: lead?.name ?? null };
     const c = await k.getContactBasico(contatoId);
     return { contatoId, telefone: c.telefone, nome: c.nome ?? lead?.name ?? null };

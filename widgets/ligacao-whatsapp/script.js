@@ -149,6 +149,13 @@ define(['jquery'], function ($) {
     // ligação desenha passa pelo widget VIVO (G.render / G.recarregar), nunca pelo que a iniciou.
     function redesenhar() { (G.render || desenhar)(); }
     function recarregarVivo() { (G.recarregar || carregar)(); }
+    // Veio da fila "Ligar próximo"? A marca vale 30 min e é deste cartão: com a fila pausada pelo vigia, ligação
+    // que veio da fila é barrada no servidor.
+    function origemDoCartao() {
+      try { var m = JSON.parse(sessionStorage.getItem(P + ':fila') || 'null'); if (m && m.lead === st.lead && Date.now() - m.em < 1800000) return 'fila'; } catch (e) {}
+      return 'cartao';
+    }
+    function marcarFila(lead) { try { sessionStorage.setItem(P + ':fila', JSON.stringify({ lead: lead, em: Date.now() })); } catch (e) {} }
     function suportaLigacao() { return !!(window.RTCPeerConnection && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.isSecureContext !== false); }
     function esperarCandidatos(pc, ms) {
       // A Meta quer a oferta COMPLETA (sem trickle): espera juntar os caminhos de rede, com teto de tempo.
@@ -162,6 +169,7 @@ define(['jquery'], function ($) {
       if (G.chamada) return;
       if (!suportaLigacao()) { st.aviso = { tipo: 'erro', texto: 'Este navegador não faz ligação. Use o Chrome atualizado.' }; redesenhar(); return; }
       var u = usuario(); var p = st.painel || {}; var pac = p.paciente || {};
+      origem = origem || origemDoCartao();
       var ch = G.chamada = { id: null, lead: st.lead, nome: nomeLimpo(pac.nome), tel: pac.telefone || '', status: 'preparando', inicio: Date.now(), atendida: null, mudo: false, pc: null, stream: null, audio: null, sdpAplicada: false, poll: null, fim: null, resultado: null, texto: null, registrada: false, erro: null, nivel: 0 };
       st.confirmar = false; st.aviso = null; redesenhar();
       navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function (stream) {
@@ -182,7 +190,13 @@ define(['jquery'], function ($) {
             if (precisa) { st.confirmar = true; st.aviso = { tipo: 'alerta', texto: r.j.motivo }; } else st.aviso = { tipo: 'erro', texto: mensagemDeErro(r) };
             recarregarVivo(); return;
           }
-          ch.id = r.j.ligacaoId; ch.status = 'chamando'; redesenhar(); acompanhar();
+          ch.id = r.j.ligacaoId;
+          if (ch.fim) {
+            // a SDR desligou enquanto o pedido ia para a Meta: cancela já, senão o celular dele tocaria sozinho
+            ponte('POST', '/ligacao/chamada/' + encodeURIComponent(ch.id) + '/desligar', {});
+            acompanhar(); return;
+          }
+          ch.status = 'chamando'; redesenhar(); acompanhar();
         });
       }, function (err) {
         G.chamada = null;
@@ -423,9 +437,10 @@ define(['jquery'], function ($) {
       $p.find('.' + P + '-mudo').on('click', alternarMudo);
       $p.find('.' + P + '-fecharres').on('click', function () { G.ultimaChamada = null; desenhar(); });
       $p.find('.' + P + '-abrefila').on('click', function () { st.abrirFila = !st.abrirFila; if (st.abrirFila) carregarFila(); desenhar(); });
+      $p.find('.' + P + '-lista a').on('click', function () { var m = /(\d+)$/.exec($(this).attr('href') || ''); if (m) marcarFila(Number(m[1])); });
       $p.find('.' + P + '-proximo').on('click', function () {
         var it = ((st.fila && st.fila.itens) || []).filter(function (x) { return x.leadId !== st.lead; })[0];
-        if (it) location.href = '/leads/detail/' + it.leadId;
+        if (it) { marcarFila(it.leadId); location.href = '/leads/detail/' + it.leadId; }
       });
     }
     G.render = desenhar;

@@ -88,9 +88,24 @@ export function telefoneParaMeta(bruto: string | null | undefined): string | nul
 }
 
 /** 8 últimos dígitos: o mesmo casamento do resto do sistema (cobre o nono dígito que o `wa_id` às vezes não tem). */
+/**
+ * A chave do paciente: DDD + 8 últimos dígitos. Cobre o nono dígito que o `wa_id` da Meta às vezes não traz
+ * ("556391021043" × "5563991021043") sem misturar dois pacientes de DDDs diferentes com o mesmo final.
+ * Número estrangeiro: os 10 últimos dígitos.
+ */
 export function chaveDoTelefone(bruto: string | null | undefined): string {
-  const d = String(bruto ?? '').replace(/\D+/g, '');
-  return d.length > 8 ? d.slice(-8) : d;
+  const d = telefoneParaMeta(bruto) ?? String(bruto ?? '').replace(/\D+/g, '');
+  if (d.startsWith('55') && (d.length === 12 || d.length === 13)) return d.slice(2, 4) + d.slice(-8);
+  return d.length > 10 ? d.slice(-10) : d;
+}
+
+/** O número de teste do protocolo do João: alerta e ligação novos testam primeiro no número dele. */
+const TESTE_PADRAO = '5563991021043';
+
+/** `LIGACAO_TESTE_TELEFONES` (csv) → chaves. Sem a variável, vale o número do João. */
+export function numerosDeTeste(raw: string | undefined = process.env.LIGACAO_TESTE_TELEFONES): string[] {
+  const bruto = (raw ?? TESTE_PADRAO).replace(/^['"]|['"]$/g, '');
+  return bruto.split(',').map((x) => chaveDoTelefone(x.trim())).filter((x) => x.length >= 8);
 }
 
 /** "…4321" — o que aparece na tela e no log. Telefone inteiro não sai do servidor. */
@@ -201,16 +216,30 @@ export interface Trava {
 }
 
 export function travaDoPaciente(
-  a: { naoAtendidasSeguidas: number; ultimaNaoAtendidaEm: Date | null; escreveuDepois: boolean },
+  a: {
+    naoAtendidasSeguidas: number;
+    ultimaNaoAtendidaEm: Date | null;
+    /** O paciente escreveu no chat depois da última ligação sem atender. */
+    escreveuDepois: boolean;
+    /** E respondeu a um "Posso te ligar agora?" feito DEPOIS dessa ligação — o único jeito de sair da trava firme. */
+    combinouDepois?: boolean;
+  },
   aj: Ajustes,
 ): Trava {
   const seguidas = Math.max(0, a.naoAtendidasSeguidas | 0);
   const limite = aj.maxSemAtender;
   const rotulo = seguidas > 0 ? `${Math.min(seguidas, limite)} de ${limite} sem atender` : '';
   if (seguidas >= aj.tetoSemAtender) {
+    // Com permissão permanente, "esperar permissão nova" nunca acontece: a saída é o paciente topar no chat.
+    if (a.combinouDepois) {
+      return {
+        travado: false, firme: true, seguidas, limite, rotulo: `${seguidas} seguidas sem atender`,
+        explicacao: 'Ele respondeu ao "Posso te ligar agora?" — libera esta tentativa. Se não atender de novo, o WhatsApp corta a permissão dele.',
+      };
+    }
     return {
       travado: true, firme: true, seguidas, limite, rotulo: `${seguidas} seguidas sem atender`,
-      explicacao: `Travado: ${seguidas} ligações seguidas sem atender. Mais uma e o WhatsApp corta a permissão. Mande mensagem; só volta quando ele der permissão de novo.`,
+      explicacao: `Travado: ${seguidas} ligações seguidas sem atender. Mais uma e o WhatsApp corta a permissão. Pergunte no chat "Posso te ligar agora?" — só libera quando ele responder.`,
     };
   }
   if (seguidas >= limite) {
@@ -277,6 +306,10 @@ export function decidirLigacao(p: PedidoDeLigacao): DecisaoDeLigacao {
   if (p.trava.travado) return { ok: false, codigo: 'travado', motivo: p.trava.explicacao };
   if (p.origem === 'fila' && p.filaPausada) return { ok: false, codigo: 'fila-pausada', motivo: 'A fila está pausada hoje: muitas ligações sem atender. Ligue só combinando antes, pelo cartão.' };
   if (p.combinado !== 'respondeu') {
+    if (p.filaPausada) {
+      // o vigia pausou: o número está levando ligação sem atender demais hoje — sem combinar, não sai
+      return { ok: false, codigo: 'combinar-obrigatorio', motivo: 'Hoje muitas ligações ficaram sem atender e a fila pausou. Até amanhã, só liga depois que ele responder ao "Posso te ligar agora?".' };
+    }
     if (!p.confirmouSemCombinar) {
       const quando = p.combinado === 'esperando' ? 'Ele ainda não respondeu ao "Posso te ligar agora?".' : 'Você não combinou a ligação antes.';
       return {

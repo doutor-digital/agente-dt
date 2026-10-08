@@ -1988,7 +1988,7 @@ model WhatsappLigacao {
   /// "cartao" (botão Ligar no cartão) | "fila" (veio do "Ligar próximo")
   origem        String  @default("cartao")
 
-  /// iniciando | chamando | tocando | em_ligacao | encerrada
+  /// iniciando | chamando | tocando | em_ligacao | encerrando (a SDR desligou, falta o aviso da Meta) | encerrada
   status    String  @default("iniciando")
   /// atendida | nao_atendida | recusada | falhou — nulo até encerrar
   resultado String?

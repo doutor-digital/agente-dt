@@ -5,7 +5,7 @@
 import { prisma } from './prisma.js';
 import type { LinhaLigacao, LinhaPaciente, Repositorio } from './ligacao-whatsapp-servico.js';
 
-const ABERTAS = ['iniciando', 'chamando', 'tocando', 'em_ligacao'];
+const ABERTAS = ['iniciando', 'chamando', 'tocando', 'em_ligacao', 'encerrando'];
 
 export const repositorioPrisma: Repositorio = {
   async config(unitId) {
@@ -46,6 +46,10 @@ export const repositorioPrisma: Repositorio = {
   async reservarFinalizacao(id, quando) {
     const r = await prisma.whatsappLigacao.updateMany({ where: { id, registradaEm: null }, data: { registradaEm: quando } });
     return r.count === 1;
+  },
+
+  async liberarFinalizacao(id) {
+    await prisma.whatsappLigacao.updateMany({ where: { id, status: { not: 'encerrada' } }, data: { registradaEm: null } });
   },
 
   async aberta(unitId, chave, desde) {
@@ -98,6 +102,6 @@ export const repositorioPrisma: Repositorio = {
   },
 
   async abertasParadas(antesDe) {
-    return prisma.whatsappLigacao.findMany({ where: { status: { in: ABERTAS }, atualizadaEm: { lt: antesDe } }, take: 100 });
+    return prisma.whatsappLigacao.findMany({ where: { status: { in: ABERTAS }, atualizadaEm: { lt: antesDe } }, orderBy: { atualizadaEm: 'asc' }, take: 100 });
   },
 };

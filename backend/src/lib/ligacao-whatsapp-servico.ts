@@ -110,6 +110,8 @@ export interface Repositorio {
   atualizarLigacao(id: string, dados: Partial<LinhaLigacao>): Promise<LinhaLigacao>;
   /** Marca `registradaEm` SÓ se ainda vazio. true = esta chamada ganhou o direito de finalizar (idempotência). */
   reservarFinalizacao(id: string, quando: Date): Promise<boolean>;
+  /** Devolve a reserva (a finalização falhou no meio) para o reenvio do webhook ou o vigia tentarem de novo. */
+  liberarFinalizacao(id: string): Promise<void>;
   /** Ligação ainda aberta para este paciente, criada desde `desde`. */
   aberta(unitId: string, chave: string, desde: Date): Promise<LinhaLigacao | null>;
   ultima(unitId: string, chave: string): Promise<LinhaLigacao | null>;
@@ -248,18 +250,30 @@ async function garantirPaciente(ctx: Contexto, leadId: number, telefone: string,
   return ctx.repo.salvarPaciente(ctx.unit.id, chave, { telefone, leadId, nome: nome ?? p?.nome ?? null });
 }
 
-async function respondeuDepois(ctx: Contexto, contatoId: number | null, desde: Date | null): Promise<Date | null> {
-  // Cada pergunta é uma ida ao Kommo, que tem um portão de velocidade dividido com a Sofia: só pergunta o que
-  // ainda pode mudar a decisão (pergunta/ligação das últimas 24 h).
-  if (!contatoId || !desde || ctx.agora().getTime() - desde.getTime() > 24 * 60 * MIN) return null;
+/**
+ * Última mensagem do paciente desde `desde`. Cada pergunta é uma ida ao Kommo, cujo portão de velocidade é
+ * dividido com a Sofia — por isso `recente`: para o "Posso te ligar agora?" só interessa pergunta das últimas 24 h.
+ */
+async function respondeuDepois(ctx: Contexto, contatoId: number | null, desde: Date | null, recente: boolean): Promise<Date | null> {
+  if (!contatoId || !desde) return null;
+  if (recente && ctx.agora().getTime() - desde.getTime() > 24 * 60 * MIN) return null;
   const t = await ctx.kommo.ultimaMensagemDesde(contatoId, Math.floor(desde.getTime() / 1000)).catch(() => null);
   return t ? new Date(t * 1000) : null;
 }
 
-/** Só no limite de "sem atender" importa saber se ele escreveu depois (é o que libera uma tentativa). */
-function precisaSaberSeEscreveu(p: LinhaPaciente | null, aj: Ajustes): boolean {
+/** Travas 1 e 2 do paciente agora: o combinado e o "sem atender" (com as duas saídas: escreveu / combinou). */
+async function travasDoPaciente(ctx: Contexto, p: LinhaPaciente | null, contatoId: number | null, aj: Ajustes, agora: Date) {
+  const perguntouEm = p?.perguntouEm ?? null;
+  const respondeuEm = await respondeuDepois(ctx, contatoId, perguntouEm, true);
+  const combinado = estadoDoCombinado(perguntouEm, respondeuEm, agora);
   const n = p?.naoAtendidasSeguidas ?? 0;
-  return n >= aj.maxSemAtender && n < aj.tetoSemAtender;
+  const ultimaSem = p?.ultimaNaoAtendidaEm ?? null;
+  // só no limite importa saber se ele escreveu depois (é o que libera uma tentativa) — e sem corte de 24 h:
+  // ele pode responder dias depois
+  const escreveuDepois = n >= aj.maxSemAtender && n < aj.tetoSemAtender && !!(await respondeuDepois(ctx, contatoId, ultimaSem, false));
+  const combinouDepois = n >= aj.tetoSemAtender && combinado === 'respondeu' && !!perguntouEm && !!ultimaSem && perguntouEm.getTime() > ultimaSem.getTime();
+  const trava = travaDoPaciente({ naoAtendidasSeguidas: n, ultimaNaoAtendidaEm: ultimaSem, escreveuDepois, combinouDepois }, aj);
+  return { respondeuEm, combinado, trava };
 }
 
 export async function montarPainel(ctx: Contexto, leadId: number): Promise<Painel> {
@@ -281,14 +295,14 @@ export async function montarPainel(ctx: Contexto, leadId: number): Promise<Paine
   }
   const perm = permissaoAgora(p, agora);
   const pode = podePedirPermissao(p?.pedidosEm ?? [], agora, perm.estado, metaPodePedir);
-  const respondeuEm = await respondeuDepois(ctx, contato.contatoId, p?.perguntouEm ?? null);
-  const combinado = estadoDoCombinado(p?.perguntouEm ?? null, respondeuEm, agora);
-  const escreveuDepois = precisaSaberSeEscreveu(p, aj) && !!(await respondeuDepois(ctx, contato.contatoId, p?.ultimaNaoAtendidaEm ?? null));
-  const trava = travaDoPaciente({ naoAtendidasSeguidas: p?.naoAtendidasSeguidas ?? 0, ultimaNaoAtendidaEm: p?.ultimaNaoAtendidaEm ?? null, escreveuDepois }, aj);
-  const ultima = chave ? await ctx.repo.ultima(ctx.unit.id, chave) : null;
-  const aberta = chave ? await ctx.repo.aberta(ctx.unit.id, chave, new Date(agora.getTime() - PADROES.semRetornoEmLigacaoMin * MIN)) : null;
   const dia = diaNoFuso(agora, ctx.unit.tz);
-  const hoje = taxaDeAtendimento(await ctx.repo.resultadosEntre(ctx.unit.id, dia.inicio, dia.fim));
+  const [{ respondeuEm, combinado, trava }, ultima, aberta, resultadosHoje] = await Promise.all([
+    travasDoPaciente(ctx, p, contato.contatoId, aj, agora),
+    chave ? ctx.repo.ultima(ctx.unit.id, chave) : Promise.resolve(null),
+    chave ? ctx.repo.aberta(ctx.unit.id, chave, new Date(agora.getTime() - PADROES.semRetornoEmLigacaoMin * MIN)) : Promise.resolve(null),
+    ctx.repo.resultadosEntre(ctx.unit.id, dia.inicio, dia.fim),
+  ]);
+  const hoje = taxaDeAtendimento(resultadosHoje);
   const pausada = filaPausada(cfg, agora);
   const d = decidirLigacao({
     modo: ctx.modo,
@@ -416,10 +430,10 @@ export async function iniciarLigacao(ctx: Contexto, l: PedidoDeLigar): Promise<R
     metaDeixa = c.metaDeixa;
   }
   const perm = permissaoAgora(p, agora);
-  const respondeuEm = await respondeuDepois(ctx, contato.contatoId, p?.perguntouEm ?? null);
-  const escreveuDepois = precisaSaberSeEscreveu(p, aj) && !!(await respondeuDepois(ctx, contato.contatoId, p?.ultimaNaoAtendidaEm ?? null));
-  const trava = travaDoPaciente({ naoAtendidasSeguidas: p?.naoAtendidasSeguidas ?? 0, ultimaNaoAtendidaEm: p?.ultimaNaoAtendidaEm ?? null, escreveuDepois }, aj);
-  const aberta = chave ? await ctx.repo.aberta(ctx.unit.id, chave, new Date(agora.getTime() - PADROES.semRetornoEmLigacaoMin * MIN)) : null;
+  const [{ combinado, trava }, aberta] = await Promise.all([
+    travasDoPaciente(ctx, p, contato.contatoId, aj, agora),
+    chave ? ctx.repo.aberta(ctx.unit.id, chave, new Date(agora.getTime() - PADROES.semRetornoEmLigacaoMin * MIN)) : Promise.resolve(null),
+  ]);
   const d = decidirLigacao({
     modo: ctx.modo,
     numeroDeTeste,
@@ -428,7 +442,7 @@ export async function iniciarLigacao(ctx: Contexto, l: PedidoDeLigar): Promise<R
     permissao: perm.estado,
     metaDeixa,
     trava,
-    combinado: estadoDoCombinado(p?.perguntouEm ?? null, respondeuEm, agora),
+    combinado,
     confirmouSemCombinar: l.confirmouSemCombinar,
     origem: l.origem,
     filaPausada: filaPausada(cfg, agora),
@@ -509,6 +523,9 @@ export async function encerrarLigacao(ctx: Contexto, id: string): Promise<{ ok: 
     await finalizar(ctx, l.id, { falhaTecnica: !l.waCallId });
     return { ok: true };
   }
+  // Guarda a hora em que a SDR desligou: se o "terminate" da Meta se perder, o vigia fecha em 3 min com a
+  // duração certa (até aqui), e o paciente não fica 2 h preso em "ligação em andamento".
+  await ctx.repo.atualizarLigacao(l.id, { status: 'encerrando', encerradaEm: l.encerradaEm ?? ctx.agora() });
   const r = await ctx.meta.encerrar(l.waCallId).catch(() => ({ ok: false }) as ResultadoMeta);
   if (!r.ok) {
     // A Meta pode já ter encerrado do lado dela (o paciente desligou junto). O vigia fecha se o webhook não vier.
@@ -546,7 +563,7 @@ export async function receberEventos(ctx: Contexto, eventos: EventoDeLigacao[]):
     if (!l && e.tipo === 'connect') {
       // Corrida: a Meta mandou o "connect" (com a resposta SDP) antes de gravarmos o id que ela devolveu no POST, e
       // esse evento não traz o nosso id de volta. Casa pelo telefone com a ligação que acabou de sair.
-      const chaves = e.numeros.map((n) => chaveDoTelefone(n)).filter((c) => c.length === 8);
+      const chaves = e.numeros.map((n) => chaveDoTelefone(n)).filter((c) => c.length >= 8);
       l = chaves.length ? await ctx.repo.esperandoIdDaMeta(ctx.unit.id, chaves, new Date(ctx.agora().getTime() - 2 * MIN)) : null;
     }
     if (!l || l.unitId !== ctx.unit.id) { ignorados++; continue; }
@@ -557,8 +574,9 @@ export async function receberEventos(ctx: Contexto, eventos: EventoDeLigacao[]):
       }
     } else if (e.tipo === 'status') {
       const s = e.status.toUpperCase();
-      if (s === 'RINGING') await ctx.repo.atualizarLigacao(l.id, { tocouEm: l.tocouEm ?? e.quando, status: l.atendidaEm ? l.status : 'tocando' });
-      else if (s === 'ACCEPTED') await ctx.repo.atualizarLigacao(l.id, { atendidaEm: l.atendidaEm ?? e.quando, status: 'em_ligacao' });
+      const saindo = l.status === 'encerrando'; // a SDR já desligou: o status não volta atrás
+      if (s === 'RINGING') await ctx.repo.atualizarLigacao(l.id, { tocouEm: l.tocouEm ?? e.quando, ...(saindo || l.atendidaEm ? {} : { status: 'tocando' }) });
+      else if (s === 'ACCEPTED') await ctx.repo.atualizarLigacao(l.id, { atendidaEm: l.atendidaEm ?? e.quando, ...(saindo ? {} : { status: 'em_ligacao' }) });
       else if (s === 'REJECTED') await ctx.repo.atualizarLigacao(l.id, { resultado: 'recusada' });
     } else if (e.tipo === 'terminate') {
       await finalizar(ctx, l.id, { duracaoSeg: e.duracaoSeg, falhaTecnica: e.status.toUpperCase() === 'FAILED' && !l.tocouEm && !l.atendidaEm, inicio: e.inicio });
@@ -580,12 +598,41 @@ export async function finalizar(
   if (!(await ctx.repo.reservarFinalizacao(id, agora))) return;
   const l = await ctx.repo.ligacao(id);
   if (!l) return;
-  const atendidaEm = l.atendidaEm ?? (info.duracaoSeg && info.duracaoSeg > 0 ? info.inicio ?? agora : null);
+  try {
+    await fecharConta(ctx, l, info, agora);
+  } catch (err) {
+    // Sem isto, uma falha de banco no meio deixava a ligação "aberta" para sempre: a reserva já estava tomada e
+    // ninguém mais conseguia fechar. Devolve a reserva; o webhook (reenvio) ou o vigia tentam de novo.
+    await ctx.repo.liberarFinalizacao(id).catch(() => undefined);
+    ctx.log('warn', { unit: ctx.unit.slug, ligacao: id, err: String(err) }, 'ligacao-whatsapp: falha ao fechar a ligação — reserva devolvida');
+    throw err;
+  }
+}
+
+async function fecharConta(
+  ctx: Contexto,
+  l: LinhaLigacao,
+  info: { duracaoSeg?: number | null; falhaTecnica?: boolean; inicio?: Date | null; semRetorno?: boolean },
+  agora: Date,
+): Promise<void> {
+  // a duração termina quando a SDR desligou (se desligou), não quando o vigia passou
+  const fim = l.encerradaEm ?? agora;
+  const atendidaEm = l.atendidaEm ?? (info.duracaoSeg && info.duracaoSeg > 0 ? info.inicio ?? fim : null);
   let duracaoSeg = info.duracaoSeg ?? null;
-  if (duracaoSeg === null && l.atendidaEm) duracaoSeg = Math.max(0, Math.round((agora.getTime() - l.atendidaEm.getTime()) / 1000));
+  if (duracaoSeg === null && l.atendidaEm) duracaoSeg = Math.max(0, Math.round((fim.getTime() - l.atendidaEm.getTime()) / 1000));
   const resultado = resultadoDaLigacao({ atendidaEm, duracaoSeg, recusada: l.resultado === 'recusada', falhaTecnica: !!info.falhaTecnica });
   const { aj, cfg } = await ajustes(ctx);
 
+  // Primeiro fecha a ligação (é o que impede um reenvio de contar duas vezes), depois o paciente.
+  await ctx.repo.atualizarLigacao(l.id, {
+    status: 'encerrada',
+    resultado,
+    duracaoSeg,
+    atendidaEm,
+    encerradaEm: fim,
+    sdpResposta: null,
+    ...(info.semRetorno ? { erro: (l.erro ? `${l.erro} · ` : '') + 'encerrada pelo vigia: a Meta não avisou o fim' } : {}),
+  });
   const p = await ctx.repo.paciente(ctx.unit.id, l.chaveTelefone);
   const seguidas = proximoContador(p?.naoAtendidasSeguidas ?? 0, resultado);
   if (p) {
@@ -594,7 +641,7 @@ export async function finalizar(
       naoAtendidasSeguidas: seguidas,
       ultimaLigacaoEm: l.criadaEm,
       ultimoResultado: resultado,
-      ...(resultado === 'nao_atendida' || resultado === 'recusada' ? { ultimaNaoAtendidaEm: agora } : {}),
+      ...(resultado === 'nao_atendida' || resultado === 'recusada' ? { ultimaNaoAtendidaEm: fim } : {}),
     });
   }
   const texto = textoDoResultado(resultado, {
@@ -603,15 +650,6 @@ export async function finalizar(
     limite: aj.maxSemAtender,
     semCombinar: l.semCombinar,
     erro: l.erro,
-  });
-  await ctx.repo.atualizarLigacao(l.id, {
-    status: 'encerrada',
-    resultado,
-    duracaoSeg,
-    atendidaEm,
-    encerradaEm: agora,
-    sdpResposta: null,
-    ...(info.semRetorno ? { erro: (l.erro ? `${l.erro} · ` : '') + 'encerrada pelo vigia: a Meta não avisou o fim' } : {}),
   });
 
   // Registro no cartão — falha técnica (nem saiu) não vira ligação no histórico.

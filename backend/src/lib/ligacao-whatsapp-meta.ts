@@ -107,6 +107,8 @@ export function metaDaUnidade(cred: CredencialMeta, buscar: Buscar = fetch as un
   };
 }
 
+const SETE_DIAS_MS = 7 * 24 * 60 * 60_000;
+
 /** `GET /call_permissions` → o que interessa. Formato da doc: `permission.status` + `actions[]`. */
 export function lerPermissao(bruto: unknown): PermissaoNaMeta {
   const j = (bruto ?? {}) as {
@@ -116,14 +118,15 @@ export function lerPermissao(bruto: unknown): PermissaoNaMeta {
   const status = String(j.permission?.status ?? '').toLowerCase();
   const exp = Number(j.permission?.expiration_time);
   const aceita = status === 'granted' || status === 'temporary' || status === 'permanent';
-  const permanente = status === 'permanent' || j.permission?.is_permanent === true || (aceita && !Number.isFinite(exp));
+  // permanente só quando a Meta DIZ; temporária sem data vale os 7 dias da doc (nunca "para sempre" por omissão)
+  const permanente = status === 'permanent' || j.permission?.is_permanent === true;
   const acao = (nome: string) => {
     const a = (j.actions ?? []).find((x) => x.action_name === nome);
     return typeof a?.can_perform_action === 'boolean' ? a.can_perform_action : null;
   };
   return {
     estado: aceita ? 'aceita' : 'sem',
-    ate: aceita && Number.isFinite(exp) && exp > 0 ? new Date(exp * 1000) : null,
+    ate: !aceita || permanente ? null : Number.isFinite(exp) && exp > 0 ? new Date(exp * 1000) : new Date(Date.now() + SETE_DIAS_MS),
     permanente: aceita && permanente,
     podeLigar: acao('start_call'),
     podePedir: acao('send_call_permission_request'),
@@ -204,7 +207,7 @@ export function lerWebhookDeLigacoes(payload: unknown, agora = new Date()): Even
           tipo: 'permissao', phoneNumberId,
           telefone: String(m.from ?? ''),
           resposta: String(r.response ?? '').toLowerCase() === 'accept' ? 'aceita' : 'recusada',
-          ate: Number.isFinite(exp) && exp > 0 ? new Date(exp * 1000) : null,
+          ate: r.is_permanent === true ? null : Number.isFinite(exp) && exp > 0 ? new Date(exp * 1000) : new Date(quandoDe(m.timestamp, agora).getTime() + SETE_DIAS_MS),
           permanente: r.is_permanent === true,
           quando: quandoDe(m.timestamp, agora),
         });
