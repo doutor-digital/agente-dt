@@ -39,6 +39,7 @@ test('telefone: formato da Meta com 55, chave de 8 dígitos e máscara', () => {
   assert.equal(telefoneParaMeta('(63) 99102-1043'), '5563991021043');
   assert.equal(telefoneParaMeta('+55 63 99102-1043'), '5563991021043');
   assert.equal(telefoneParaMeta('63 9102-1043'), '556391021043');
+  assert.equal(telefoneParaMeta('063 99102-1043'), '5563991021043', 'DDD com o zero na frente');
   assert.equal(telefoneParaMeta('123'), null);
   assert.equal(telefoneParaMeta(''), null);
   assert.equal(chaveDoTelefone('5563991021043'), '91021043');

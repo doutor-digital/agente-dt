@@ -525,10 +525,12 @@ export async function receberEventos(ctx: Contexto, eventos: EventoDeLigacao[]):
   for (const e of eventos) {
     if (e.tipo === 'permissao') {
       const chave = chaveDoTelefone(e.telefone);
+      // Só quem esta unidade conhece (o pedido saiu daqui). Unidades irmãs podem dividir o mesmo número da Meta,
+      // e a resposta não pode criar paciente em quem nunca pediu.
       const p = await ctx.repo.paciente(ctx.unit.id, chave);
-      if (!p && e.resposta !== 'aceita') { ignorados++; continue; }
+      if (!p) { ignorados++; continue; }
       await ctx.repo.salvarPaciente(ctx.unit.id, chave, {
-        telefone: p?.telefone ?? (telefoneParaMeta(e.telefone) || e.telefone),
+        telefone: p.telefone,
         permissao: e.resposta === 'aceita' ? 'aceita' : 'recusada',
         permissaoAte: e.ate,
         permanente: e.permanente,

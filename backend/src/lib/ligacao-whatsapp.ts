@@ -81,6 +81,7 @@ export function telefoneParaMeta(bruto: string | null | undefined): string | nul
   let d = String(bruto ?? '').replace(/\D+/g, '');
   if (!d) return null;
   if (d.startsWith('00')) d = d.slice(2);
+  else if (/^0[1-9]/.test(d) && (d.length === 11 || d.length === 12)) d = d.slice(1); // "0 63 99102-1043" (DDD com o zero)
   if (d.length === 10 || d.length === 11) d = `55${d}`;
   if (!d.startsWith('55')) return d.length >= 10 && d.length <= 15 ? d : null; // estrangeiro: deixa a Meta decidir
   return d.length === 12 || d.length === 13 ? d : null;
