@@ -37,6 +37,7 @@ import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
 import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
+import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
       limit: '1mb',
       verify: (req, _res, buf) => {
         const url = (req as express.Request).url ?? '';
-        if (url.includes('/webhooks/') && url.endsWith('/meta')) {
+        if (url.includes('/webhooks/') && (url.endsWith('/meta') || url.split('?')[0].endsWith('/whatsapp/ligacoes'))) {
           (req as RawBodyRequest).rawBody = Buffer.from(buf);
         }
       },
@@ -182,6 +183,7 @@ async function main(): Promise<void> {
       startFranquiaSyncWorker();
       startParadosWorker();
       startUnidadePorCanalWorker();
+      startLigacaoWhatsappWorker();
       startNaoLidasWorker();
       startPreencheCamposWorker();
       iniciarVigiaDeQualidade();
@@ -190,6 +192,7 @@ async function main(): Promise<void> {
       pararVigiaDeQualidade();
       stopParadosWorker();
       stopUnidadePorCanalWorker();
+      stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
       stopPreencheCamposWorker();
       stopFranquiaSyncWorker();

@@ -147,6 +147,32 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/aviso-de-agendamento.ts',
   },
   {
+    id: 'ligacao-whatsapp',
+    chave: 'LIGACAO_WHATSAPP_SLUGS',
+    nome: 'Ligação pelo WhatsApp no cartão',
+    oQueFaz:
+      'Liga o painel "Ligar pelo WhatsApp" do widget no cartão: a SDR pede a permissão do paciente, combina pelo chat ("Posso te ligar agora?") e liga do navegador pelo número oficial. Toda ligação fica registrada no cartão com duração e resultado.',
+    pegadinha:
+      'A Meta só deixa ligar para quem deu permissão e corta a permissão de quem não atende — por isso há três travas: o botão só fica verde depois que o paciente responde no chat; 2 ligações seguidas sem atender travam aquele paciente; e se no dia menos da metade das ligações for atendida, a fila "Ligar próximo" pausa até amanhã e abre uma tarefa ALERTA. Em "só no papel" o painel aparece e mostra tudo, mas só liga e só pede permissão para o número de teste (LIGACAO_TESTE_TELEFONES — o do João). Precisa do campo "calls" assinado no webhook do app da Meta e encaminhado pra cá.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/ligacao-whatsapp-servico.ts',
+  },
+  {
+    id: 'ligacao-gravar',
+    chave: 'LIGACAO_GRAVAR_SLUGS',
+    nome: 'Gravar as ligações pelo WhatsApp',
+    oQueFaz:
+      'Marca que esta unidade quer as ligações pelo WhatsApp gravadas. Hoje só muda o aviso no painel do widget — a gravação em si ainda não está montada (decisão do João pendente).',
+    pegadinha:
+      'Gravar exige avisar o paciente (LGPD) e guardar o áudio com cuidado. Deixe desligado até a decisão: com isto ligado o widget mostra "esta ligação pode ser gravada" para a SDR avisar no começo da conversa.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/controllers/ligacao-whatsapp.controller.ts',
+  },
+  {
     id: 'prometeu-sem-marcar',
     chave: 'PROMETEU_SEM_MARCAR_SLUGS',
     nome: 'Alerta: a IA disse que marcou e não marcou',

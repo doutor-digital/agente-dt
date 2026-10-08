@@ -196,6 +196,17 @@ import {
   simulacoesHandler,
 } from '../controllers/automacoes.controller.js';
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
+import {
+  ligacaoCombinarHandler,
+  ligacaoDesligarHandler,
+  ligacaoEstadoHandler,
+  ligacaoFilaHandler,
+  ligacaoLigarHandler,
+  ligacaoPainelHandler,
+  ligacaoPermissaoHandler,
+  webhookLigacoesHandler,
+  webhookLigacoesVerifyHandler,
+} from '../controllers/ligacao-whatsapp.controller.js';
 import { rodarDiagnostico } from '../services/diagnostics.service.js';
 import { apiReference } from '@scalar/express-api-reference';
 import { gerarOpenApi } from '../docs/openapi.js';
@@ -213,6 +224,9 @@ apiRouter.get('/webhooks/:unitSlug/facebook', handleInstagramVerify);
 apiRouter.post('/webhooks/:unitSlug/facebook', handleInstagramWebhook);
 apiRouter.post('/webhooks/kommo', handleKommoWebhook);
 apiRouter.post('/webhooks/salesbot', handleSalesbotWebhook);
+// Ligação pelo WhatsApp: webhook `calls` da Meta (repassado pelo n8n com X-DD-Token, ou direto com a assinatura).
+apiRouter.get('/webhooks/whatsapp/ligacoes', webhookLigacoesVerifyHandler);
+apiRouter.post('/webhooks/whatsapp/ligacoes', webhookLigacoesHandler);
 
 apiRouter.get('/integrations/:unitSlug/session-stats/:leadId', sessionStatsHandler);
 apiRouter.get('/integrations/sla-report', slaReportHandler);
@@ -289,6 +303,14 @@ apiRouter.post('/public/widget/:slug/sugestao-motivo/usar', widgetUsarMotivoHand
 // O que o widget ensina no cartão: o que esta pessoa já entendeu, e o "entendi".
 apiRouter.get('/public/widget/:slug/passos', widgetPassosHandler);
 apiRouter.post('/public/widget/:slug/passos', widgetPassoEntendiHandler);
+// Ligação pelo WhatsApp de dentro do cartão (Calling API da Meta) — ver controllers/ligacao-whatsapp.controller.ts.
+apiRouter.get('/public/widget/:slug/ligacao/painel', ligacaoPainelHandler);
+apiRouter.get('/public/widget/:slug/ligacao/fila', ligacaoFilaHandler);
+apiRouter.post('/public/widget/:slug/ligacao/permissao', ligacaoPermissaoHandler);
+apiRouter.post('/public/widget/:slug/ligacao/combinar', ligacaoCombinarHandler);
+apiRouter.post('/public/widget/:slug/ligacao/ligar', ligacaoLigarHandler);
+apiRouter.get('/public/widget/:slug/ligacao/chamada/:id', ligacaoEstadoHandler);
+apiRouter.post('/public/widget/:slug/ligacao/chamada/:id/desligar', ligacaoDesligarHandler);
 
 // Recepção decide alta e recuperação pela página /alta/:slug (mesmo código da unidade).
 // ALTA nunca é automática: o gatilho dela dispara um bot sem nenhuma condição.
