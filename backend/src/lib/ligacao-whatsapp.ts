@@ -128,11 +128,18 @@ export function podePedirPermissao(
   pedidosEm: Date[],
   agora: Date,
   estado: Permissao,
+  /** O que a Meta diz (`call_permissions` → send_call_permission_request). Ela zera a conta quando uma
+   * ligação conecta, coisa que a nossa conta não enxerga — então, quando ela responde, ela manda. */
+  metaPodePedir: boolean | null = null,
 ): { ok: true; usados7d: number } | { ok: false; motivo: string; liberaEm: Date | null; usados7d: number } {
   const t = agora.getTime();
   const semana = pedidosEm.map((d) => d.getTime()).filter((x) => t - x < 7 * DIA).sort((a, b) => a - b);
   const usados7d = semana.length;
   if (estado === 'aceita') return { ok: false, motivo: 'O paciente já deu permissão — pode ligar.', liberaEm: null, usados7d };
+  if (metaPodePedir === true) return { ok: true, usados7d };
+  if (metaPodePedir === false) {
+    return { ok: false, motivo: 'A Meta não deixa pedir de novo agora (1 pedido por dia e 2 por semana). Combine pelo chat.', liberaEm: null, usados7d };
+  }
   const ultimo = semana[semana.length - 1];
   if (ultimo !== undefined && t - ultimo < DIA / PADROES.pedidosPor24h) {
     return { ok: false, motivo: 'Já foi pedido nas últimas 24 h. A Meta só deixa pedir 1 vez por dia.', liberaEm: new Date(ultimo + DIA), usados7d };
@@ -441,24 +448,40 @@ export function diaNoFuso(agora: Date, tz: string): { inicio: Date; fim: Date } 
 /** O que a SDR lê quando a Meta recusa. Código desconhecido devolve a frase genérica + o código. */
 export function erroDaMetaEmPortugues(codigo: number | null | undefined, mensagem?: string | null): string {
   const c = Number(codigo);
+  // Tabela da doc oficial (calling/troubleshooting, lida em 08/10/2026). 138024 vem do Health Status da Meta;
+  // 138038 não está na doc oficial — definição de SDK de terceiros (roteamento de conversas).
   const mapa: Record<number, string> = {
-    138000: 'O paciente não deu permissão para receber ligação (ou a permissão acabou). Peça de novo.',
-    138001: 'O WhatsApp do paciente não aceita ligação agora.',
-    138002: 'Já tem uma ligação acontecendo com este paciente.',
-    138003: 'Ligação duplicada — espere a anterior terminar.',
-    138005: 'Muitas ligações para este paciente hoje. Tente amanhã ou fale por mensagem.',
-    138006: 'A ligação não foi aceita pela Meta — confira se a permissão ainda vale.',
+    138000: 'As ligações não estão ligadas neste número na Meta. Precisa ativar nas configurações de chamada.',
+    138001: 'O WhatsApp deste paciente não recebe ligação (app antigo ou número fora do WhatsApp).',
+    138002: 'Limite de ligações ao mesmo tempo atingido. Tente em instantes.',
+    138003: 'Já tem uma ligação acontecendo com este paciente — espere terminar.',
+    138004: 'Erro de conexão com a Meta. Tente de novo.',
+    138005: 'Muitas ligações em pouco tempo. Espere um pouco.',
+    138006: 'O paciente não deu permissão para receber ligação (ou a permissão acabou). Peça de novo.',
     138007: 'A conexão de áudio não fechou a tempo. Tente de novo.',
-    138012: 'Muitas ligações em pouco tempo. Espere um pouco.',
-    138013: 'Limite de pedidos de permissão atingido para este paciente.',
+    138009: 'Limite de pedidos de permissão atingido para este paciente (1 por dia, 2 por semana).',
+    138012: 'Limite de ligações para este paciente nas últimas 24 h.',
+    138013: 'Ligação da empresa indisponível para este número ou país.',
+    138014: 'A Meta suspendeu as ligações deste número por um tempo (denúncias ou bloqueios). Fale só por mensagem.',
+    138015: 'O número ainda não pode ligar: a Meta exige limite de 2.000 conversas por dia.',
+    138017: 'O paciente já deu permissão permanente.',
+    138018: 'Falta a configuração técnica do número (webhook de ligações).',
+    138019: 'A ligação não conseguiu começar. Tente de novo.',
+    138020: 'A ligação não conseguiu começar. Tente de novo.',
+    138021: 'O áudio não chegou. Confira o microfone e a internet.',
+    138022: 'O áudio não saiu. Confira o microfone e a internet.',
+    138023: 'A ligação ficou sem áudio depois de atendida.',
     138024: 'Configuração de chamada do número incompleta.',
-    138038: 'Este número está com as ligações ligadas a outro aplicativo (roteamento novo da Meta). Precisa escolher o app responsável pelas ligações.',
-    131047: 'A janela de 24 h está fechada: o paciente não escreve há mais de 24 h. Peça a permissão quando ele responder, ou use o modelo aprovado.',
+    138038: 'Outro aplicativo está como responsável pelas ligações deste número (roteamento de conversas da Meta).',
+    131047: 'A janela de 24 h está fechada: o paciente não escreve há mais de 24 h. Peça a permissão quando ele responder, ou cadastre o modelo aprovado.',
     131026: 'Este número não recebe mensagem do WhatsApp.',
+    131044: 'A conta do WhatsApp está sem forma de pagamento na Meta.',
     131056: 'Muitas mensagens para este paciente em pouco tempo.',
     141006: 'A conta do WhatsApp está bloqueada por pagamento na Meta.',
+    613: 'Muitas consultas seguidas na Meta. Espere um minuto.',
     190: 'O token da Meta desta unidade venceu ou foi trocado.',
   };
+
   if (mapa[c]) return mapa[c];
   return `A Meta recusou${c ? ` (código ${c})` : ''}${mensagem ? `: ${String(mensagem).slice(0, 140)}` : '.'}`;
 }

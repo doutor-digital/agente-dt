@@ -210,12 +210,12 @@ const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() 
  * Confere a permissão na Meta (fonte da verdade) e espelha no banco. No máximo 1 vez por minuto por paciente:
  * o widget recarrega o painel a cada poucos segundos e a Meta não precisa ver isso.
  */
-async function conferirPermissao(ctx: Contexto, p: LinhaPaciente, forcar = false): Promise<{ p: LinhaPaciente; metaDeixa: boolean | null; conferida: boolean }> {
+async function conferirPermissao(ctx: Contexto, p: LinhaPaciente, forcar = false): Promise<{ p: LinhaPaciente; metaDeixa: boolean | null; metaPodePedir: boolean | null; conferida: boolean }> {
   const agora = ctx.agora();
-  if (!ctx.meta || ctx.modo === 'desligado') return { p, metaDeixa: null, conferida: false };
-  if (!forcar && p.conferidaEm && agora.getTime() - p.conferidaEm.getTime() < MIN) return { p, metaDeixa: null, conferida: true };
+  if (!ctx.meta || ctx.modo === 'desligado') return { p, metaDeixa: null, metaPodePedir: null, conferida: false };
+  if (!forcar && p.conferidaEm && agora.getTime() - p.conferidaEm.getTime() < MIN) return { p, metaDeixa: null, metaPodePedir: null, conferida: true };
   const r = await ctx.meta.permissao(p.telefone).catch(() => ({ ok: false }) as ResultadoMeta<PermissaoNaMeta>);
-  if (!r.ok || !r.dado) return { p, metaDeixa: null, conferida: false };
+  if (!r.ok || !r.dado) return { p, metaDeixa: null, metaPodePedir: null, conferida: false };
   const m = r.dado;
   const dados: Partial<LinhaPaciente> & { telefone: string } = { telefone: p.telefone, conferidaEm: agora };
   if (m.estado === 'aceita') {
@@ -230,7 +230,7 @@ async function conferirPermissao(ctx: Contexto, p: LinhaPaciente, forcar = false
     dados.permissao = 'caiu'; // a nossa dizia aceita e a Meta diz que não: venceu ou o paciente retirou
   }
   const atual = await ctx.repo.salvarPaciente(ctx.unit.id, p.chaveTelefone, dados);
-  return { p: atual, metaDeixa: m.podeLigar, conferida: true };
+  return { p: atual, metaDeixa: m.podeLigar, metaPodePedir: m.podePedir, conferida: true };
 }
 
 async function pacienteDoLead(ctx: Contexto, leadId: number): Promise<{ contato: ContatoDoLead; telefone: string | null; chave: string; p: LinhaPaciente | null }> {
@@ -259,16 +259,18 @@ export async function montarPainel(ctx: Contexto, leadId: number): Promise<Paine
   const numeroDeTeste = !!chave && ctx.numerosDeTeste.includes(chave);
   let p = p0;
   let metaDeixa: boolean | null = null;
+  let metaPodePedir: boolean | null = null;
   let conferida = false;
   if (telefone && chave) {
     p = await garantirPaciente(ctx, leadId, telefone, chave, contato.nome, p0);
     const c = await conferirPermissao(ctx, p);
     p = c.p;
     metaDeixa = c.metaDeixa;
+    metaPodePedir = c.metaPodePedir;
     conferida = c.conferida;
   }
   const perm = permissaoAgora(p, agora);
-  const pode = podePedirPermissao(p?.pedidosEm ?? [], agora, perm.estado);
+  const pode = podePedirPermissao(p?.pedidosEm ?? [], agora, perm.estado, metaPodePedir);
   const respondeuEm = await respondeuDepois(ctx, contato.contatoId, p?.perguntouEm ?? null);
   const combinado = estadoDoCombinado(p?.perguntouEm ?? null, respondeuEm, agora);
   const escreveuDepois = !!(await respondeuDepois(ctx, contato.contatoId, p?.ultimaNaoAtendidaEm ?? null));
@@ -335,10 +337,10 @@ export async function pedirPermissao(ctx: Contexto, q: QuemPede): Promise<{ ok: 
   if (ctx.modo === 'seco' && !ctx.numerosDeTeste.includes(chave)) {
     return { ok: false, motivo: 'Modo teste: o pedido de permissão só sai para o número de teste. Nada foi enviado.' };
   }
-  let p = await garantirPaciente(ctx, q.leadId, telefone, chave, contato.nome, p0);
-  p = (await conferirPermissao(ctx, p, true)).p;
+  const c = await conferirPermissao(ctx, await garantirPaciente(ctx, q.leadId, telefone, chave, contato.nome, p0), true);
+  const p = c.p;
   const perm = permissaoAgora(p, agora);
-  const pode = podePedirPermissao(p.pedidosEm, agora, perm.estado);
+  const pode = podePedirPermissao(p.pedidosEm, agora, perm.estado, c.metaPodePedir);
   if (!pode.ok) return { ok: false, motivo: pode.motivo };
 
   const { cfg } = await ajustes(ctx);

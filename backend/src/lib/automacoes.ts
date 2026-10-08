@@ -164,9 +164,9 @@ export const AUTOMACOES: readonly Automacao[] = [
     chave: 'LIGACAO_GRAVAR_SLUGS',
     nome: 'Gravar as ligações pelo WhatsApp',
     oQueFaz:
-      'Marca que esta unidade quer as ligações pelo WhatsApp gravadas. Hoje só muda o aviso no painel do widget — a gravação em si ainda não está montada (decisão do João pendente).',
+      'Marca que esta unidade quer as ligações pelo WhatsApp gravadas. Hoje só muda o aviso no painel do widget ("esta ligação pode ser gravada: avise o paciente") — a gravação em si ainda não está montada (decisão do João pendente).',
     pegadinha:
-      'Gravar exige avisar o paciente (LGPD) e guardar o áudio com cuidado. Deixe desligado até a decisão: com isto ligado o widget mostra "esta ligação pode ser gravada" para a SDR avisar no começo da conversa.',
+      'A Meta NÃO grava ligação (a doc de 08/10/2026 não tem gravação; só correio de voz em teste, para ligação recebida). Gravar seria o navegador da SDR gravar os dois lados e subir o áudio para o nosso servidor — exige avisar o paciente no começo (LGPD), lugar seguro para guardar e prazo para apagar. Deixe desligado até a decisão.',
     risco: 'comportamento',
     temSeco: false,
     quandoVazio: 'desligado',

@@ -110,7 +110,9 @@ function metaFalsa(permissao: PermissaoNaMeta) {
     async permissao(para) { chamadas.push({ op: 'permissao', args: [para] }); return { ok: true, dado: meta.permissaoAtual }; },
     async pedirPermissao(para, texto) {
       chamadas.push({ op: 'pedir', args: [para, texto] });
-      return meta.recusarPedido ? { ok: false, codigo: meta.recusarPedido } : { ok: true };
+      if (meta.recusarPedido) return { ok: false, codigo: meta.recusarPedido };
+      meta.permissaoAtual = { ...meta.permissaoAtual, podePedir: false }; // a Meta conta o pedido do lado dela
+      return { ok: true };
     },
     async pedirPermissaoPorModelo(para, modelo) { chamadas.push({ op: 'modelo', args: [para, modelo] }); return { ok: true }; },
   };
@@ -181,7 +183,7 @@ test('pedir permissão: manda a interativa, guarda o horário, nota no cartão e
   assert.equal(t.notas.length, 1, 'a mensagem da Meta não aparece no chat do Kommo: vira nota');
   const r2 = await pedirPermissao(t.ctx, { leadId: 1, kommoUserId: 77, nomeSdr: 'Giulia' });
   assert.equal(r2.ok, false);
-  assert.match(r2.motivo, /24 h/);
+  assert.match(r2.motivo, /1 pedido por dia/);
   assert.equal(t.chamadas.filter((c) => c.op === 'pedir').length, 1, 'o 2º pedido nem chega na Meta');
 });
 

@@ -77,6 +77,9 @@ test('pedido de permissão: 1 a cada 24 h e 2 a cada 7 dias', () => {
   const r3 = podePedirPermissao([new Date(agora.getTime() - 8 * 24 * H), new Date(agora.getTime() - 2 * 24 * H)], agora, 'caiu');
   assert.equal(r3.ok, true, 'pedido de 8 dias atrás já não conta');
   assert.equal(podePedirPermissao([], agora, 'aceita').ok, false, 'quem já deu permissão não recebe outro pedido');
+  // a Meta zera a conta quando uma ligação conecta: quando ela responde, ela manda
+  assert.equal(podePedirPermissao([ontemCedo], agora, 'caiu', true).ok, true);
+  assert.equal(podePedirPermissao([], agora, 'sem', false).ok, false);
 });
 
 // ── trava 1: combinar ──

@@ -1,7 +1,7 @@
 /**
  * Ligação pelo WhatsApp — a conversa com a Meta (Graph API, Calling API) e a leitura do webhook `calls`.
  *
- * Endpoints usados (doc oficial lida em 08/10/2026 — ver o PR):
+ * Endpoints usados (doc oficial lida em 08/10/2026, developers.facebook.com/documentation/business-messaging/whatsapp/calling):
  *   POST /{phone_number_id}/calls            action "connect" (oferta SDP do navegador) e "terminate"
  *   GET  /{phone_number_id}/call_permissions ?user_wa_id=  — o paciente deixa ligar? até quando?
  *   POST /{phone_number_id}/messages         interativa `call_permission_request` (pedido de permissão)
@@ -15,7 +15,7 @@ import type { MetaLigacoes, ResultadoMeta } from './ligacao-whatsapp-servico.js'
 
 const GRAPH = process.env.META_GRAPH_URL || 'https://graph.facebook.com';
 /** A Calling API exige versão recente da Graph API; dá pra trocar sem deploy de código. */
-const VERSAO = process.env.META_CALLING_GRAPH_VERSION || 'v23.0';
+const VERSAO = process.env.META_CALLING_GRAPH_VERSION || 'v25.0';
 
 export interface CredencialMeta {
   phoneNumberId: string;
