@@ -1358,6 +1358,50 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Hora (epoch s) da mensagem MAIS RECENTE do paciente no chat desde `desdeEpoch`, ou null se ele não
+   * escreveu. É o "ele respondeu ao 'Posso te ligar agora?'" da ligação pelo WhatsApp. Mesma consulta de
+   * `contatoEscreveuDesde` (o chat mora no CONTATO). Erro lança: "não consegui ler" não é "não escreveu".
+   */
+  async ultimaMensagemDoContatoDesde(contactId: number, desdeEpoch: number): Promise<number | null> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ created_at?: number }> } } | ''>('/events', {
+        params: {
+          'filter[entity]': 'contact',
+          'filter[entity_id][]': contactId,
+          'filter[type][]': 'incoming_chat_message',
+          'filter[created_at][from]': desdeEpoch,
+          limit: 50,
+        },
+      });
+      const quando = ((data && data._embedded?.events) || [])
+        .map((e) => Number(e.created_at ?? 0))
+        .filter((t) => t >= desdeEpoch);
+      return quando.length ? Math.max(...quando) : null;
+    } catch (err) {
+      wrapAxiosError(err, `ultimaMensagemDoContatoDesde(${contactId})`);
+    }
+  }
+
+  /**
+   * Registra ligações no histórico (`POST /api/v4/calls`) — o mesmo caminho da 3C. O Kommo acha o contato
+   * pelo TELEFONE e põe a ligação lá (nota de ligação no contato e no cartão). Devolve os ids criados e os
+   * erros que o Kommo listou (telefone que não casou com ninguém aparece em `errors`, com 200).
+   */
+  async registrarChamadas(chamadas: Array<Record<string, unknown>>): Promise<{ ids: number[]; erros: unknown[] }> {
+    try {
+      const { data } = await this.http.post<{
+        errors?: unknown[];
+        _embedded?: { calls?: Array<{ id?: number }>; errors?: unknown[] };
+      }>('/calls', chamadas);
+      const ids = (data?._embedded?.calls ?? []).map((c) => Number(c.id)).filter((n) => Number.isFinite(n) && n > 0);
+      const erros = [...(data?.errors ?? []), ...(data?._embedded?.errors ?? [])];
+      return { ids, erros };
+    } catch (err) {
+      wrapAxiosError(err, 'registrarChamadas');
+    }
+  }
+
   /** O cartão mudou de etapa desde `desdeEpoch`? (acabou de chegar onde está). Erro lança. */
   async leadMudouEtapaDesde(leadId: number, desdeEpoch: number): Promise<boolean> {
     try {
