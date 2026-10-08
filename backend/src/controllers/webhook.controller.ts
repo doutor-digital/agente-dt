@@ -43,6 +43,7 @@ import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memo
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
+import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
@@ -288,10 +289,13 @@ async function resolveOwnerUnitByStage(entryUnit: Unit, leadId: number): Promise
   if (!hasSiblingAllow) return entryUnit;
 
   let sid: number | undefined;
+  let pid: number | undefined;
+  let kommo: ReturnType<typeof createKommoClient>;
   try {
-    const kommo = createKommoClient(entryUnit);
+    kommo = createKommoClient(entryUnit);
     const lead = await kommo.getLead(leadId);
     sid = lead.status_id ?? undefined;
+    pid = lead.pipeline_id ?? undefined;
   } catch (err) {
     logger.warn(
       { err, leadId, unit: entryUnit.slug },
@@ -301,10 +305,23 @@ async function resolveOwnerUnitByStage(entryUnit: Unit, leadId: number): Promise
   }
   if (!sid) return entryUnit;
 
-  const owner = account.find((u) => (u.kommoAllowedStatusIds ?? []).includes(sid!));
+  // 142/143 existem em TODO funil: o 143 do TRATAMENTO (CANCELADO) não é o PERDIDO do COMERCIAL
+  // que a IA de resgate atende. Só nesse caso o esquema da conta é lido (cache de 30 min).
+  let funis: FunisDaConta | null = null;
+  if (account.some((u) => precisaDoFunil(u.kommoAllowedStatusIds ?? [], sid))) {
+    try {
+      funis = await esquemaKommoDaUnidade(entryUnit, kommo);
+    } catch (err) {
+      logger.warn(
+        { err: String(err), leadId, unit: entryUnit.slug, statusId: sid },
+        'router: não li os funis da conta — 142/143 seguem pelo id, sem olhar o funil',
+      );
+    }
+  }
+  const owner = account.find((u) => etapaPermitida(u.kommoAllowedStatusIds ?? [], sid, pid, funis));
   if (owner && owner.id !== entryUnit.id) {
     logger.info(
-      { leadId, from: entryUnit.slug, to: owner.slug, statusId: sid },
+      { leadId, from: entryUnit.slug, to: owner.slug, statusId: sid, pipelineId: pid },
       'router: lead roteado por etapa pra IA dona',
     );
   }
@@ -1048,7 +1065,17 @@ export async function processAgent(args: {
         }
       }
 
-      if (allowedStatusIds.length > 0 && (!sid || !allowedStatusIds.includes(sid))) {
+      // 142/143 na allowlist só valem no funil desta unidade (ver etapa-permitida.ts): o 143 do
+      // TRATAMENTO é TRATAMENTO CANCELADO, onde a IA de resgate oferecia consulta (08/10/2026).
+      let funis: FunisDaConta | null = null;
+      if (precisaDoFunil(allowedStatusIds, sid)) {
+        try {
+          funis = await esquemaKommoDaUnidade(unit, kommo);
+        } catch (err) {
+          logger.warn({ err: String(err), traceId, leadId, unit: unit.slug }, 'allowlist: não li os funis da conta (142/143 seguem pelo id)');
+        }
+      }
+      if (allowedStatusIds.length > 0 && !etapaPermitida(allowedStatusIds, sid, pid, funis)) {
         await finishWidgetSilently();
         const totalLatency = Math.round(performance.now() - requestStart);
         await recorder.step({

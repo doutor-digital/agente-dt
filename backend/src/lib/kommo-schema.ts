@@ -15,6 +15,13 @@ export interface EsquemaKommo {
    * e só o nome muda ("GANHO / CONCLUÍDO" no COMERCIAL, "ALTA" no TRATAMENTO).
    */
   nomeDoStatus: (pipelineId: number, statusId: number) => { pipeline: string; status: string } | null;
+  /**
+   * O funil de um status. Só responde para id que existe em UM funil: 142/143 (e qualquer id
+   * repetido) devolvem null — de propósito, porque ali o id sozinho não diz de que funil é.
+   */
+  pipelineDoStatus: (statusId: number) => number | null;
+  /** Nome do funil pelo id ("COMERCIAL", "TRATAMENTO"…). */
+  nomeDoFunil: (pipelineId: number) => string | null;
 }
 
 export function normalizarNome(s: string): string {
@@ -36,11 +43,16 @@ export function montarEsquema(
   }
   const pipes = new Map<string, { id: number; statuses: Map<string, number> }>();
   const nomes = new Map<string, { pipeline: string; status: string }>();
+  const nomeDoFunil = new Map<number, string>();
+  /** status → funis onde aparece; mais de um = id que não diz o funil (142/143). */
+  const funisDoStatus = new Map<number, Set<number>>();
   for (const p of pipelines) {
     const sts = new Map<string, number>();
+    nomeDoFunil.set(p.id, p.name);
     for (const s of p.statuses ?? []) {
       sts.set(normalizarNome(s.name), s.id);
       nomes.set(`${p.id}:${s.id}`, { pipeline: p.name, status: s.name });
+      funisDoStatus.set(s.id, (funisDoStatus.get(s.id) ?? new Set<number>()).add(p.id));
     }
     pipes.set(normalizarNome(p.name), { id: p.id, statuses: sts });
   }
@@ -53,6 +65,11 @@ export function montarEsquema(
     statusPorNome: (pipeline, status) =>
       pipes.get(normalizarNome(pipeline))?.statuses.get(normalizarNome(status)) ?? null,
     nomeDoStatus: (pipelineId, statusId) => nomes.get(`${pipelineId}:${statusId}`) ?? null,
+    pipelineDoStatus: (statusId) => {
+      const funis = funisDoStatus.get(statusId);
+      return funis && funis.size === 1 ? [...funis][0] : null;
+    },
+    nomeDoFunil: (pipelineId) => nomeDoFunil.get(pipelineId) ?? null,
   };
 }
 
