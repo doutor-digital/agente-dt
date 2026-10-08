@@ -243,6 +243,10 @@ test('ligação atendida: resposta SDP chega ao navegador, registra no Kommo com
   await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, calls: [{ id: callId, event: 'connect', session: { sdp_type: 'answer', sdp: 'v=0\r\nresposta' } }] } }] }] }));
   const durante = await estadoDaLigacao(t.ctx, id);
   assert.equal(durante?.sdpResposta, 'v=0\r\nresposta', 'o navegador pega a resposta SDP pelo estado');
+  const outra = await iniciarLigacao(t.ctx, { leadId: 1, sdp: SDP, kommoUserId: 77, nomeSdr: 'Giulia', origem: 'cartao', confirmouSemCombinar: true });
+  assert.equal(!outra.ok && outra.codigo, 'em-andamento', 'uma ligação por paciente de cada vez');
+  await receberEventos(t.ctx, lerWebhookDeLigacoes({ entry: [{ changes: [{ value: { metadata: { phone_number_id: 'P' }, calls: [{ id: callId, event: 'terminate', status: 'COMPLETED', duration: 30 }] } }] }] }));
+  assert.equal((await t.repo.ligacao(id))!.resultado, 'atendida', 'duração > 0 = atendeu, mesmo sem o ACCEPTED');
 
   t.pacientes.get('91021043')!.naoAtendidasSeguidas = 1;
   const l = await ligarEAcabar(t, 'atende');
