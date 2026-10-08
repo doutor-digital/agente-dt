@@ -1,0 +1,22 @@
+{
+  "widget": {
+    "name": "widget.name",
+    "description": "widget.description",
+    "short_description": "widget.short_description",
+    "version": "__VERSAO__",
+    "interface_version": 2,
+    "init_once": false,
+    "locale": ["pt", "en"],
+    "installation": true,
+    "support": {
+      "link": "https://doutordigitalconsultoria.com",
+      "email": "doutordigitalconsultoria@gmail.com"
+    }
+  },
+  "locations": ["lcard-1", "settings"],
+  "settings": {
+    "slug": { "name": "settings.slug", "type": "text", "required": true },
+    "chave": { "name": "settings.chave", "type": "pass", "required": true }
+  },
+  "tour": { "is_tour": true }
+}

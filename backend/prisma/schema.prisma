@@ -509,6 +509,9 @@ model Unit {
   whatsappCostDaily     WhatsappCostDaily[]
   whatsappTemplateDaily WhatsappTemplateDaily[]
   altaCandidatos        AltaCandidato[]
+  // Ligação pelo WhatsApp no widget do Kommo (Calling API da Meta) — ver lib/ligacao-whatsapp.ts
+  whatsappLigacoes      WhatsappLigacao[]
+  whatsappLigPacientes  WhatsappLigacaoPaciente[]
 
   @@map("units")
 }
@@ -1954,4 +1957,128 @@ model McpAuditoria {
   @@index([createdAt])
   @@index([userId, createdAt])
   @@map("mcp_auditoria")
+}
+
+// ============================================================================
+// LIGAÇÃO PELO WHATSAPP (widget do Kommo, Calling API da Meta) — 08/10/2026
+// ============================================================================
+//
+// A SDR liga do navegador (WebRTC) para o WhatsApp do paciente, de dentro do cartão. A Meta só deixa a
+// empresa ligar para quem DEU PERMISSÃO, e corta a permissão de quem não atende. As três tabelas abaixo
+// são o que sustenta as travas: o que aconteceu em cada ligação, o que sabemos de cada paciente
+// (permissão, "posso te ligar agora?", tentativas sem atender) e os ajustes por unidade.
+// Regras e números padrão em `src/lib/ligacao-whatsapp.ts`.
+
+/// Uma ligação feita pelo widget. Nasce antes de a Meta responder (status "iniciando").
+model WhatsappLigacao {
+  id     String @id @default(cuid())
+  unitId String @map("unit_id")
+  leadId Int    @map("lead_id")
+
+  /// Telefone do paciente só com dígitos, como foi mandado à Meta (55 + DDD + número).
+  telefone      String
+  /// 8 últimos dígitos: casa com o `wa_id` da Meta com ou sem o nono dígito.
+  chaveTelefone String @map("chave_telefone")
+
+  /// id da chamada na Meta (`wacid.…`). Nulo enquanto a Meta não aceitou o pedido.
+  waCallId String? @unique @map("wa_call_id")
+
+  kommoUserId   Int?    @map("kommo_user_id")
+  kommoUserNome String? @map("kommo_user_nome")
+  /// "cartao" (botão Ligar no cartão) | "fila" (veio do "Ligar próximo")
+  origem        String  @default("cartao")
+
+  /// iniciando | chamando | tocando | em_ligacao | encerrando (a SDR desligou, falta o aviso da Meta) | encerrada
+  status    String  @default("iniciando")
+  /// atendida | nao_atendida | recusada | falhou — nulo até encerrar
+  resultado String?
+  /// Ligou sem o paciente ter respondido ao "Posso te ligar agora?" (a SDR confirmou o aviso).
+  semCombinar Boolean @default(false) @map("sem_combinar")
+  /// Modo da chave na hora da ligação: "ligado" ou "seco" (seco = só número de teste).
+  modo        String  @default("ligado")
+
+  /// Resposta SDP da Meta (answer) que o navegador aplica. Apagada quando a ligação acaba.
+  sdpResposta String? @map("sdp_resposta")
+
+  tocouEm     DateTime? @map("tocou_em")
+  atendidaEm  DateTime? @map("atendida_em")
+  encerradaEm DateTime? @map("encerrada_em")
+  duracaoSeg  Int?      @map("duracao_seg")
+  erro        String?
+
+  /// Registro no Kommo (`POST /api/v4/calls`): preenchido uma vez só — guarda contra registro em dobro.
+  registradaEm  DateTime? @map("registrada_em")
+  kommoRegistro String?   @map("kommo_registro")
+
+  criadaEm     DateTime @default(now()) @map("criada_em")
+  atualizadaEm DateTime @updatedAt @map("atualizada_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@index([unitId, criadaEm])
+  @@index([unitId, chaveTelefone, criadaEm])
+  @@index([status, atualizadaEm])
+  @@map("whatsapp_ligacoes")
+}
+
+/// O que sabemos de cada paciente para ligar. Uma linha por unidade + telefone.
+model WhatsappLigacaoPaciente {
+  id            String @id @default(cuid())
+  unitId        String @map("unit_id")
+  chaveTelefone String @map("chave_telefone")
+  telefone      String
+  leadId        Int?   @map("lead_id")
+  nome          String?
+
+  /// sem | pedida | aceita | recusada | caiu — espelho do que a Meta diz (`call_permissions`)
+  permissao     String    @default("sem")
+  permissaoAte  DateTime? @map("permissao_ate")
+  permanente    Boolean   @default(false)
+  /// Quando o paciente respondeu ao pedido (aceitou ou recusou).
+  respondeuEm   DateTime? @map("respondeu_em")
+  /// Quando cada pedido de permissão saiu — para respeitar o limite da Meta (1 por 24 h, 2 por 7 dias).
+  pedidosEm     DateTime[] @default([]) @map("pedidos_em")
+  /// Última conferência com a Meta (`GET /call_permissions`).
+  conferidaEm   DateTime? @map("conferida_em")
+
+  /// "Posso te ligar agora?" — quando a SDR copiou a pergunta para o chat.
+  perguntouEm   DateTime? @map("perguntou_em")
+
+  /// Ligações seguidas sem atender. Zera quando ele atende ou quando dá permissão de novo.
+  naoAtendidasSeguidas Int       @default(0) @map("nao_atendidas_seguidas")
+  ultimaNaoAtendidaEm  DateTime? @map("ultima_nao_atendida_em")
+  ultimaLigacaoEm      DateTime? @map("ultima_ligacao_em")
+  /// id da última ligação já contada no "sem atender" — reenvio do webhook não conta duas vezes
+  ultimaContada        String?   @map("ultima_contada")
+  ultimoResultado      String?   @map("ultimo_resultado")
+
+  criadoEm     DateTime @default(now()) @map("criado_em")
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, chaveTelefone])
+  @@index([unitId, permissao])
+  @@map("whatsapp_ligacao_pacientes")
+}
+
+/// Ajustes por unidade. Sem linha = os números padrão do código (`PADROES` em lib/ligacao-whatsapp.ts).
+/// Também guarda a pausa da fila "Ligar próximo" que o vigia liga sozinho.
+model WhatsappLigacaoConfig {
+  unitId            String    @id @map("unit_id")
+  /// % mínimo de ligações atendidas no dia antes de a fila pausar.
+  taxaMinima        Int?      @map("taxa_minima")
+  /// Quantas ligações no dia antes de o vigia julgar a taxa.
+  amostraMinima     Int?      @map("amostra_minima")
+  /// Ligações seguidas sem atender que travam o paciente.
+  maxSemAtender     Int?      @map("max_sem_atender")
+  /// Texto do pedido de permissão (vazio = o padrão com o nome da unidade).
+  textoPermissao    String?   @map("texto_permissao")
+  /// Modelo aprovado na Meta com botão de permissão, para pedir fora da janela de 24 h.
+  modeloPermissao   String?   @map("modelo_permissao")
+  filaPausadaAte    DateTime? @map("fila_pausada_ate")
+  filaPausadaMotivo String?   @map("fila_pausada_motivo")
+  atualizadoEm      DateTime  @updatedAt @map("atualizado_em")
+
+  @@map("whatsapp_ligacao_config")
 }
