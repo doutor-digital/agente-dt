@@ -36,7 +36,7 @@ const aj = ajustesDaUnidade(null);
 
 // ── telefone ──
 
-test('telefone: formato da Meta com 55, chave de 8 dígitos e máscara', () => {
+test('telefone: formato da Meta com 55, chave DDD + 8 dígitos e máscara', () => {
   assert.equal(telefoneParaMeta('(63) 99102-1043'), '5563991021043');
   assert.equal(telefoneParaMeta('+55 63 99102-1043'), '5563991021043');
   assert.equal(telefoneParaMeta('63 9102-1043'), '556391021043');
@@ -48,7 +48,7 @@ test('telefone: formato da Meta com 55, chave de 8 dígitos e máscara', () => {
   assert.notEqual(chaveDoTelefone('5511991021043'), chaveDoTelefone('5563991021043'), 'mesmo final em DDD diferente = outro paciente');
   assert.equal(telefoneMascarado('5563991021043'), '…1043');
   assert.deepEqual(numerosDeTeste(undefined), ['6391021043'], 'sem variável: o número do João');
-  assert.deepEqual(numerosDeTeste('"5563991021043, (11) 98888-7777"'), ['6391021043', '1198887777']);
+  assert.deepEqual(numerosDeTeste('"5563991021043, (11) 98888-7777"'), ['6391021043', '1188887777']);
   assert.ok(numerosDeTeste(undefined).includes(chaveDoTelefone('+55 63 99102-1043')), 'o contato do João casa com a lista de teste');
 });
 
