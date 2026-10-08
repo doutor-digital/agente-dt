@@ -1,0 +1,11 @@
+{
+  "widget": {
+    "name": "DD · Ligar pelo WhatsApp",
+    "description": "Ligue para o paciente pelo WhatsApp oficial da unidade, direto do cartão e pelo navegador. O widget pede a permissão do paciente, ajuda a combinar a ligação antes (\"Posso te ligar agora?\"), trava o paciente depois de 2 ligações seguidas sem atender e registra cada ligação no cartão com duração e resultado.",
+    "short_description": "Ligar pelo WhatsApp de dentro do cartão, com travas contra ligação não atendida."
+  },
+  "settings": {
+    "slug": "Código da unidade (ex.: doutor-hernia-acailandia)",
+    "chave": "Chave do widget da unidade (a mesma do Assistente)"
+  }
+}

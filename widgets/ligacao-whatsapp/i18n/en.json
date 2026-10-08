@@ -1,0 +1,11 @@
+{
+  "widget": {
+    "name": "DD · WhatsApp Call",
+    "description": "Call the patient through the clinic's official WhatsApp number, right from the lead card, in the browser. The widget asks for the patient's call permission, helps agree on the call first (\"Can I call you now?\"), locks the patient after 2 unanswered calls in a row and logs every call on the card with duration and result.",
+    "short_description": "WhatsApp calls from the lead card, with safeguards against unanswered calls."
+  },
+  "settings": {
+    "slug": "Clinic code (e.g. doutor-hernia-acailandia)",
+    "chave": "Clinic widget key (same as the Assistant)"
+  }
+}
