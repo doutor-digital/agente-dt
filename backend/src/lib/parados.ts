@@ -62,19 +62,22 @@ export function nomesDoCampo(nome: string): string[] {
   return [nome, ...(NOMES_ALTERNATIVOS[nome] ?? [])];
 }
 
+/** Os motivos genéricos que os robôs escrevem: velhos no cartão (de um PERDIDO anterior), podem ser trocados. */
+const MOTIVOS_DO_ROBO = new Set<string>(Object.values(MOTIVO_PERDA).map(normalizarNome));
+
 /**
- * O motivo que já está no cartão (por qualquer nome do campo), ou null. O robô não escreve por cima:
- * "Decidir com a família", que a SDR ouviu do paciente, diz mais que o genérico do prazo.
+ * O motivo que a SDR já escreveu num dos campos ⊘ do PERDIDO (por qualquer nome do campo), ou null. O robô
+ * não escreve por cima nem põe um segundo motivo no outro campo: "Decidir com a família", que a SDR ouviu do
+ * paciente, diz mais que o genérico do prazo. Motivo genérico de robô não conta — é sobra de um fecho antigo.
  */
-export function motivoJaNoCartao(
+export function motivoDaSdrNoCartao(
   campos: ReadonlyArray<{ field_name?: string; values?: ReadonlyArray<{ value?: unknown }> }> | null | undefined,
-  nome: string,
 ): string | null {
-  const alvos = new Set(nomesDoCampo(nome).map(normalizarNome));
+  const alvos = new Set([CAMPO.MOTIVO_NAO_AGENDAMENTO, CAMPO.MOTIVO_NAO_FECHAMENTO].flatMap(nomesDoCampo).map(normalizarNome));
   for (const c of campos ?? []) {
     if (!alvos.has(normalizarNome(c.field_name ?? ''))) continue;
-    const v = c.values?.[0]?.value;
-    if (v != null && String(v).trim() !== '') return String(v);
+    const v = String(c.values?.[0]?.value ?? '').trim();
+    if (v && !MOTIVOS_DO_ROBO.has(normalizarNome(v))) return v;
   }
   return null;
 }

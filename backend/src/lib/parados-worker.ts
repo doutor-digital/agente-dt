@@ -45,7 +45,7 @@ import {
   ehEspera,
   ehRespostaDeCortesia,
   modoSeco,
-  motivoJaNoCartao,
+  motivoDaSdrNoCartao,
   nomesDoCampo,
   paradosLiberado,
   voltaDaEsperaLiberada,
@@ -205,7 +205,7 @@ export async function fecharComoPerdido(
   const lossId = d.motivoPerda ? await idDoMotivoDePerda(unit, kommo, d.motivoPerda).catch(() => null) : null;
   // Etiqueta ANTES de mudar o status: o gatilho de PERDIDO (not_equal NO_FOLLOW_UP) lê a condição no evento.
   await etiquetar(unit, kommo, leadId, d.semRegua === true);
-  const motivoDaSdr = d.campo ? motivoJaNoCartao(lead.custom_fields_values, d.campo.nome) : null;
+  const motivoDaSdr = d.campo ? motivoDaSdrNoCartao(lead.custom_fields_values) : null;
   if (motivoDaSdr) {
     logger.info({ ...base, campo: d.campo?.nome, valor: motivoDaSdr }, 'parados: o cartão já tinha motivo — mantive o da SDR');
   } else if (d.campo) {
