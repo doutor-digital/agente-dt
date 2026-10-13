@@ -5,13 +5,13 @@
  *  - a conta de anúncios do anúncio decide primeiro (pela Meta ou pela lista conferida à mão);
  *  - sem anúncio conhecido, o DDD decide (21 = Caxias, 24 = Petrópolis); sem os dois, ninguém decide;
  *  - o paciente de DDD 21 que veio do anúncio de Petrópolis é Petrópolis (o anúncio vem antes do DDD);
- *  - campo preenchido pela SDR nunca é trocado; o que o robô pôs, ele corrige;
+ *  - campo preenchido pela SDR nunca é trocado; o que o robô pôs, ele corrige — mas só quando o ANÚNCIO decide;
  *  - a etiqueta segue o que está no campo.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { REGRAS_POR_UNIDADE, dddDe, decidirUnidade, etiquetaDe, planejarUnidade, roboCorrige } from './unidade-por-canal.js';
+import { REGRAS_POR_UNIDADE, dddDe, decidirUnidade, etiquetaDe, etiquetasSobrando, planejarUnidade, roboCorrige } from './unidade-por-canal.js';
 
 const REGRAS = REGRAS_POR_UNIDADE['doutor-hernia-petropolis'];
 const AN_CAXIAS = '120250266913310207'; // "AGENDAR AVALIAÇÃO", conta de Caxias
@@ -49,28 +49,38 @@ test('anúncio de conta desconhecida ou sem anúncio: cai no DDD; sem DDD conhec
 });
 
 test('campo vazio: grava a unidade e a etiqueta da cidade', () => {
-  const decisao = { unidade: 'Caxias', motivo: 'DDD 21' };
+  const decisao = { unidade: 'Caxias', motivo: 'DDD 21', fonte: 'ddd' as const };
   assert.deepEqual(planejarUnidade({ decisao, noCartao: null, etiquetas: [] }), { acao: 'gravar', unidade: 'Caxias', etiqueta: 'CAXIAS', motivo: 'DDD 21' });
   assert.equal(planejarUnidade({ decisao: null, noCartao: null, etiquetas: [] }), null);
 });
 
 test('campo preenchido: confere ou diverge; a etiqueta segue o campo e só quando falta', () => {
-  const petro = { unidade: 'Petrópolis', motivo: 'x' };
+  const petro = { unidade: 'Petrópolis', motivo: 'x', fonte: 'anuncio' as const };
   const confere = planejarUnidade({ decisao: petro, noCartao: 'Petrópolis', etiquetas: ['PETRÓPOLIS'] });
   assert.deepEqual(confere, { acao: 'confere', unidade: 'Petrópolis', noCartao: 'Petrópolis', etiqueta: null, motivo: 'x' });
-  const diverge = planejarUnidade({ decisao: { unidade: 'Caxias', motivo: 'y' }, noCartao: 'Petrópolis', etiquetas: [] });
+  const diverge = planejarUnidade({ decisao: { unidade: 'Caxias', motivo: 'y', fonte: 'anuncio' }, noCartao: 'Petrópolis', etiquetas: [] });
   assert.equal(diverge?.acao, 'diverge');
   assert.equal(diverge?.etiqueta, 'PETRÓPOLIS');
 });
 
-test('o robô corrige só o que ele mesmo pôs (created_by 0); a SDR e o "não sei" ficam', () => {
-  const diverge = planejarUnidade({ decisao: { unidade: 'Caxias', motivo: 'y' }, noCartao: 'Petrópolis', etiquetas: ['PETRÓPOLIS'] });
-  assert.equal(roboCorrige(diverge, 0), true);
-  assert.equal(roboCorrige(diverge, 15314243), false); // uma SDR
-  assert.equal(roboCorrige(diverge, undefined), false); // não deu pra saber
-  const confere = planejarUnidade({ decisao: { unidade: 'Caxias', motivo: 'y' }, noCartao: 'Caxias', etiquetas: [] });
-  assert.equal(roboCorrige(confere, 0), false);
-  assert.equal(roboCorrige(null, 0), false);
+test('o robô corrige só o que ele mesmo pôs (created_by 0), e só quando o anúncio decide', () => {
+  const pelaConta = { unidade: 'Caxias', motivo: 'y', fonte: 'anuncio' as const };
+  const pelaDdd = { unidade: 'Caxias', motivo: 'DDD 21', fonte: 'ddd' as const };
+  const diverge = planejarUnidade({ decisao: pelaConta, noCartao: 'Petrópolis', etiquetas: ['PETRÓPOLIS'] });
+  assert.equal(roboCorrige(diverge, pelaConta, 0), true);
+  assert.equal(roboCorrige(diverge, pelaConta, 15314243), false); // uma SDR
+  assert.equal(roboCorrige(diverge, pelaConta, undefined), false); // não deu pra saber
+  // o DDD sozinho não desfaz o que o robô antigo marcou pelo número (QR de Caxias antes de 10/10)
+  const divergeDdd = planejarUnidade({ decisao: pelaDdd, noCartao: 'Petrópolis', etiquetas: [] });
+  assert.equal(roboCorrige(divergeDdd, pelaDdd, 0), false);
+  const confere = planejarUnidade({ decisao: pelaConta, noCartao: 'Caxias', etiquetas: [] });
+  assert.equal(roboCorrige(confere, pelaConta, 0), false);
+  assert.equal(roboCorrige(null, null, 0), false);
+});
+
+test('etiqueta da outra cidade sai; a da cidade do campo e as outras etiquetas ficam', () => {
+  assert.deepEqual(etiquetasSobrando('Caxias', ['PETRÓPOLIS', 'CAXIAS', 'Quente', 'FACEBOOK'], REGRAS), ['PETRÓPOLIS']);
+  assert.deepEqual(etiquetasSobrando('Petrópolis', ['petrópolis', 'Origem: Anuncio pago'], REGRAS), []);
 });
 
 test('etiqueta: caixa alta com acento', () => {

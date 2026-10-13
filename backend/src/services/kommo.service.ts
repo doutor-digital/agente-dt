@@ -1289,6 +1289,26 @@ export class KommoClient {
   }
 
   /**
+   * Troca, num PATCH só, um campo select (pelo id da opção) e as etiquetas — ou tudo grava, ou nada:
+   * em três PATCHes separados, uma falha no meio deixava duas cidades etiquetadas no mesmo cartão.
+   */
+  async atualizarCampoEEtiquetas(
+    leadId: number,
+    args: { campo?: { fieldId: number; enumId: number }; adicionar?: string[]; remover?: string[] },
+  ): Promise<void> {
+    const corpo: Record<string, unknown> = {};
+    if (args.campo) corpo.custom_fields_values = [{ field_id: args.campo.fieldId, values: [{ enum_id: args.campo.enumId }] }];
+    if (args.adicionar?.length) corpo.tags_to_add = args.adicionar.map((name) => ({ name }));
+    if (args.remover?.length) corpo.tags_to_delete = args.remover.map((name) => ({ name }));
+    if (Object.keys(corpo).length === 0) return;
+    try {
+      await this.http.patch(`/leads/${leadId}`, corpo);
+    } catch (err) {
+      wrapAxiosError(err, `atualizarCampoEEtiquetas(${leadId})`);
+    }
+  }
+
+  /**
    * Quem mudou por último um campo do cartão: o `created_by` do evento mais recente (0 = API, ou seja, um robô).
    * `undefined` = nenhuma mudança registrada ou não consegui perguntar — quem chama não deve tratar como robô.
    */

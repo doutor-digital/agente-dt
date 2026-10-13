@@ -13,8 +13,10 @@
  *
  * Regras que continuam:
  *  - Campo preenchido pela SDR nunca é trocado — só compara (confere/diverge).
- *  - O robô corrige a SI MESMO: se a regra discorda do campo e quem pôs o valor foi o robô (evento do Kommo
- *    com `created_by` 0), ele troca. Foi assim que os 104 cartões de 13/10 se corrigem sem ninguém mexer.
+ *  - O robô corrige a SI MESMO, e só com prova forte: se o ANÚNCIO diz outra unidade e quem pôs o valor foi o
+ *    robô (evento do Kommo com `created_by` 0), ele troca. O DDD só preenche campo vazio — ele não desfaz o que
+ *    o robô antigo marcou pelo número (quem escreveu no QR de Caxias antes de 10/10 é de Caxias, seja qual for
+ *    o DDD). É assim que os 93 cartões dos anúncios de Caxias se corrigem depois do deploy.
  *  - A etiqueta segue o CAMPO (o que está no cartão): se a SDR corrigiu para Petrópolis, a etiqueta é PETRÓPOLIS.
  *
  * O nome do arquivo e o id da automação (`unidade-por-canal`) ficaram os antigos: a tela de Automações guarda o
@@ -77,6 +79,8 @@ export function dddDe(telefone: string | null | undefined): string | null {
 export interface Decisao {
   unidade: string;
   motivo: string;
+  /** de onde veio: o anúncio é prova forte (corrige o robô); o DDD só preenche vazio */
+  fonte: 'anuncio' | 'ddd';
 }
 
 /**
@@ -92,12 +96,12 @@ export function decidirUnidade(e: {
   if (e.anuncio) {
     const conta = e.contaDoAnuncio ?? e.regras.anunciosConhecidos[e.anuncio] ?? null;
     const pelaConta = conta ? e.regras.contasDeAnuncio[conta] : undefined;
-    if (pelaConta) return { unidade: pelaConta, motivo: `anúncio ${e.anuncio} é da conta de anúncios de ${pelaConta}` };
+    if (pelaConta) return { unidade: pelaConta, motivo: `anúncio ${e.anuncio} é da conta de anúncios de ${pelaConta}`, fonte: 'anuncio' };
   }
   const peloDdd = e.ddd ? e.regras.ddd[e.ddd] : undefined;
   if (peloDdd) {
     const sobra = e.anuncio ? ` (anúncio ${e.anuncio} de conta desconhecida)` : '';
-    return { unidade: peloDdd, motivo: `DDD ${e.ddd}${sobra}` };
+    return { unidade: peloDdd, motivo: `DDD ${e.ddd}${sobra}`, fonte: 'ddd' };
   }
   return null;
 }
@@ -126,7 +130,17 @@ export function planejarUnidade(e: {
   return { acao: igual ? 'confere' : 'diverge', unidade, noCartao: e.noCartao, etiqueta: falta(e.noCartao), motivo };
 }
 
-/** Diverge e quem pôs o valor foi o próprio robô (`created_by` 0 no Kommo): ele corrige a si mesmo. A SDR, nunca. */
-export function roboCorrige(plano: PlanoUnidade | null, autorDoCampo: number | undefined): boolean {
-  return plano?.acao === 'diverge' && autorDoCampo === 0;
+/**
+ * Diverge, o ANÚNCIO decidiu e quem pôs o valor foi o próprio robô (`created_by` 0 no Kommo): ele corrige a si
+ * mesmo. A SDR, nunca; e o DDD sozinho, nunca.
+ */
+export function roboCorrige(plano: PlanoUnidade | null, decisao: Decisao | null, autorDoCampo: number | undefined): boolean {
+  return plano?.acao === 'diverge' && decisao?.fonte === 'anuncio' && autorDoCampo === 0;
+}
+
+/** As etiquetas de OUTRA cidade que sobraram no cartão (a etiqueta segue o campo; a velha sai). */
+export function etiquetasSobrando(noCartao: string, etiquetas: ReadonlyArray<string>, regras: RegrasDaUnidade): string[] {
+  const cidades = new Set([...Object.values(regras.contasDeAnuncio), ...Object.values(regras.ddd)].map(etiquetaDe));
+  const minha = etiquetaDe(noCartao.trim());
+  return etiquetas.map((t) => t.trim().toLocaleUpperCase('pt-BR')).filter((t) => t !== minha && cidades.has(t));
 }
