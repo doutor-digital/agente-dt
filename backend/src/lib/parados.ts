@@ -23,7 +23,7 @@
  * em quem não quer o resto do worker. Este arquivo é a parte PURA (decisão e textos), testável sem
  * Kommo; quem lê e move está em `parados-worker.ts`.
  */
-import { ehEtapaDeEntrada } from './franquia-move.js';
+import { MOTIVO_PERDA as MOTIVO_PERDA_FRANQUIA, ehEtapaDeEntrada } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { estadoGravado } from './automacoes-estado.js';
 
@@ -52,6 +52,44 @@ export const CAMPO = {
   RETOMAR_EM: '◷ Retomar em',
   STATUS_CONVERSA: '⬢ Status da conversa',
 } as const;
+
+/** O mesmo campo tem nome curto no cartão enxuto e longo nas contas antigas (Serra: "…do tratamento"). */
+const NOMES_ALTERNATIVOS: Record<string, readonly string[]> = {
+  [CAMPO.MOTIVO_NAO_FECHAMENTO]: ['⊘ Motivo de não fechamento do tratamento'],
+};
+
+export function nomesDoCampo(nome: string): string[] {
+  return [nome, ...(NOMES_ALTERNATIVOS[nome] ?? [])];
+}
+
+/**
+ * O motivo que já está no cartão (por qualquer nome do campo), ou null. O robô não escreve por cima:
+ * "Decidir com a família", que a SDR ouviu do paciente, diz mais que o genérico do prazo.
+ */
+export function motivoJaNoCartao(
+  campos: ReadonlyArray<{ field_name?: string; values?: ReadonlyArray<{ value?: unknown }> }> | null | undefined,
+  nome: string,
+): string | null {
+  const alvos = new Set(nomesDoCampo(nome).map(normalizarNome));
+  for (const c of campos ?? []) {
+    if (!alvos.has(normalizarNome(c.field_name ?? ''))) continue;
+    const v = c.values?.[0]?.value;
+    if (v != null && String(v).trim() !== '') return String(v);
+  }
+  return null;
+}
+
+/**
+ * O campo ⊘ que acompanha o PERDIDO da jornada da franquia (franquia-move). O motivo de perda do Kommo
+ * fica no cabeçalho do cartão, mas é o campo que a SDR lê — sem ele o cartão aparece "sem motivo"
+ * (253 cartões na Açailândia entre 02 e 11/10/2026). Opções que já existem no cartão-molde da Serra.
+ * "Sem cadastro na franquia" não é motivo do paciente: fica sem campo.
+ */
+export function campoDoPerdidoDaFranquia(motivoPerda: string | undefined): DecisaoParado['campo'] {
+  if (motivoPerda === MOTIVO_PERDA_FRANQUIA.NAO_REMARCOU) return { nome: CAMPO.MOTIVO_NAO_AGENDAMENTO, opcao: MOTIVO_PERDA.ESPERA };
+  if (motivoPerda === MOTIVO_PERDA_FRANQUIA.NAO_FECHOU) return { nome: CAMPO.MOTIVO_NAO_FECHAMENTO, opcao: MOTIVO_PERDA.NEGOCIACAO };
+  return undefined;
+}
 
 export const OPCAO_ESPERA_FALTA = 'Outro';
 export const STATUS_SEM_RESPOSTA = 'Sem resposta';

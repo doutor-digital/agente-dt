@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   CAMPO,
   DIA_S,
+  campoDoPerdidoDaFranquia,
+  motivoJaNoCartao,
   MOTIVO_PERDA,
   candidatoPeloCartao,
   decidirFalta,
@@ -17,6 +19,7 @@ import {
   voltaDaEsperaLiberada,
   voltaDaEsperaSeca,
 } from './parados.js';
+import { MOTIVO_PERDA as MOTIVO_PERDA_FRANQUIA } from './franquia-move.js';
 
 const AGORA = Date.parse('2026-09-21T15:00:00Z') / 1000;
 const dias = (d: number) => AGORA - d * DIA_S;
@@ -124,4 +127,31 @@ test('parados: a nota diz de onde veio, por que e o que acontece se o paciente v
   assert.match(t, /Não deu continuidade ao atendimento/);
   const espera = decidirFalta(dias(8), false, AGORA, 7)!;
   assert.match(textoDaNota(espera, 'NÃO COMPARECEU'), /NÃO COMPARECEU para EM ESPERA/);
+});
+
+test('parados: o PERDIDO da franquia leva o campo ⊘ que a SDR lê (Açailândia 08/10: 253 cartões "sem motivo")', () => {
+  assert.deepEqual(campoDoPerdidoDaFranquia(MOTIVO_PERDA_FRANQUIA.NAO_REMARCOU), {
+    nome: CAMPO.MOTIVO_NAO_AGENDAMENTO,
+    opcao: MOTIVO_PERDA.ESPERA,
+  });
+  assert.deepEqual(campoDoPerdidoDaFranquia(MOTIVO_PERDA_FRANQUIA.NAO_FECHOU), {
+    nome: CAMPO.MOTIVO_NAO_FECHAMENTO,
+    opcao: MOTIVO_PERDA.NEGOCIACAO,
+  });
+  // sem cadastro não é motivo do paciente
+  assert.equal(campoDoPerdidoDaFranquia(MOTIVO_PERDA_FRANQUIA.SEM_CADASTRO), undefined);
+  assert.equal(campoDoPerdidoDaFranquia(undefined), undefined);
+});
+
+test('parados: o motivo que a SDR já escreveu fica — por qualquer nome do campo', () => {
+  const longo = [{ field_name: '⊘ Motivo de não fechamento do tratamento', values: [{ value: 'Decidir com a familia' }] }];
+  assert.equal(motivoJaNoCartao(longo, CAMPO.MOTIVO_NAO_FECHAMENTO), 'Decidir com a familia');
+  const curto = [{ field_name: '⊘ Motivo do não agendamento', values: [{ value: 'Está viajando' }] }];
+  assert.equal(motivoJaNoCartao(curto, CAMPO.MOTIVO_NAO_AGENDAMENTO), 'Está viajando');
+  // campo de outro motivo não conta
+  assert.equal(motivoJaNoCartao(curto, CAMPO.MOTIVO_NAO_FECHAMENTO), null);
+  // vazio, branco ou sem campos: grava
+  assert.equal(motivoJaNoCartao([{ field_name: '⊘ Motivo do não agendamento', values: [{ value: '  ' }] }], CAMPO.MOTIVO_NAO_AGENDAMENTO), null);
+  assert.equal(motivoJaNoCartao([{ field_name: '⊘ Motivo do não agendamento', values: [] }], CAMPO.MOTIVO_NAO_AGENDAMENTO), null);
+  assert.equal(motivoJaNoCartao(null, CAMPO.MOTIVO_NAO_AGENDAMENTO), null);
 });

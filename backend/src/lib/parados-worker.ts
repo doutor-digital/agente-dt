@@ -45,6 +45,8 @@ import {
   ehEspera,
   ehRespostaDeCortesia,
   modoSeco,
+  motivoJaNoCartao,
+  nomesDoCampo,
   paradosLiberado,
   voltaDaEsperaLiberada,
   voltaDaEsperaSeca,
@@ -114,14 +116,9 @@ function contatoPrincipal(lead: KommoLead): number | null {
   return (cs.find((c) => c.is_main) ?? cs[0])?.id ?? null;
 }
 
-/** O mesmo campo tem nome curto no cartão enxuto e longo nas contas antigas (Serra: "…do tratamento"). */
-const NOMES_ALTERNATIVOS: Record<string, readonly string[]> = {
-  [CAMPO.MOTIVO_NAO_FECHAMENTO]: ['⊘ Motivo de não fechamento do tratamento'],
-};
-
 async function gravarSelect(unit: Unit, kommo: KommoClient, leadId: number, nome: string, opcao: string): Promise<void> {
   const esquema = await esquemaDaUnidade(unit, kommo);
-  const id = [nome, ...(NOMES_ALTERNATIVOS[nome] ?? [])].map((x) => esquema.campoPorNome(x)).find((x) => x !== null) ?? null;
+  const id = nomesDoCampo(nome).map((x) => esquema.campoPorNome(x)).find((x) => x !== null) ?? null;
   if (id === null) {
     logger.warn({ unit: unit.slug, leadId, campo: nome }, 'parados: campo não existe nesta conta — segui sem ele');
     return;
@@ -159,11 +156,11 @@ async function anotar(unit: Unit, kommo: KommoClient, leadId: number, texto: str
   }
 }
 
-/** Relê o cartão logo antes de escrever: se mudou de etapa nesse meio tempo, não mexe. */
-async function aindaNaEtapa(kommo: KommoClient, funis: Funis, leadId: number, etapa: string): Promise<boolean> {
+/** Relê o cartão logo antes de escrever: se mudou de etapa nesse meio tempo, não mexe (null). */
+async function aindaNaEtapa(kommo: KommoClient, funis: Funis, leadId: number, etapa: string): Promise<KommoLead | null> {
   const lead = await kommo.getLead(leadId);
   const atual = funis.nomeDe(lead.pipeline_id, lead.status_id);
-  return !!atual && atual.funil === 'COMERCIAL' && normalizarNome(atual.status) === normalizarNome(etapa);
+  return atual && atual.funil === 'COMERCIAL' && normalizarNome(atual.status) === normalizarNome(etapa) ? lead : null;
 }
 
 /**
@@ -200,16 +197,20 @@ export async function fecharComoPerdido(
     registrarSimulacao(unit, 'parados', { leadId, acao: 'moveria', alvo: ETAPA.PERDIDO, deEtapa: etapaAtual, valor: d.motivoPerda, motivo: d.regra });
     return false;
   }
-  if (!(await aindaNaEtapa(kommo, funis, leadId, etapaAtual))) {
+  const lead = await aindaNaEtapa(kommo, funis, leadId, etapaAtual);
+  if (!lead) {
     logger.info(base, 'parados: cartão mudou de etapa enquanto eu decidia — não mexi');
     return false;
   }
   const lossId = d.motivoPerda ? await idDoMotivoDePerda(unit, kommo, d.motivoPerda).catch(() => null) : null;
   // Etiqueta ANTES de mudar o status: o gatilho de PERDIDO (not_equal NO_FOLLOW_UP) lê a condição no evento.
   await etiquetar(unit, kommo, leadId, d.semRegua === true);
-  if (d.campo) {
+  const motivoDaSdr = d.campo ? motivoJaNoCartao(lead.custom_fields_values, d.campo.nome) : null;
+  if (motivoDaSdr) {
+    logger.info({ ...base, campo: d.campo?.nome, valor: motivoDaSdr }, 'parados: o cartão já tinha motivo — mantive o da SDR');
+  } else if (d.campo) {
     await gravarSelect(unit, kommo, leadId, d.campo.nome, d.campo.opcao).catch((err) =>
-      logger.warn({ err: String(err), ...base, campo: d.campo?.nome }, 'parados: falha ao gravar o motivo no cartão'),
+      logger.warn({ err: String(err), ...base, campo: d.campo?.nome, opcao: d.campo?.opcao }, 'parados: falha ao gravar o motivo no cartão (a opção existe no campo desta conta?)'),
     );
   }
   await kommo.setLeadStatus(leadId, { won: false, lossReasonId: lossId ?? undefined });
