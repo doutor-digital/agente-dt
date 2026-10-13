@@ -65,7 +65,8 @@ async function main(): Promise<void> {
   // A extensão "Ponte" (painel lateral do Chrome no WhatsApp Web) chama só /api/public/widget/*, com a
   // chave da unidade no header. Com `host_permissions` o Chrome já dispensa o CORS para ela; liberar aqui
   // é para não encher o log de "origin bloqueado" a cada troca de conversa. Sem credenciais, como o Kommo.
-  const ORIGEM_EXTENSAO = /^chrome-extension:\/\/[a-p]{32}$/;
+  // Chrome: id de 32 letras a–p; Firefox (versão em extensao-ponte/firefox/): uuid da instalação.
+  const ORIGEM_EXTENSAO = /^(chrome-extension:\/\/[a-p]{32}|moz-extension:\/\/[0-9a-f-]{36})$/;
   app.use(
     cors((req, cb) => {
       const origin = req.header('Origin');

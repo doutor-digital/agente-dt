@@ -111,3 +111,15 @@ npm test            # node --test 'testes/*.test.js'
 
 O backend confere o mesmo contrato em `backend/src/lib/ponte-impressao.test.ts`, que carrega o `impressao.js`
 daqui, e em `ponte-cartao.test.ts`.
+
+## Firefox
+
+O Firefox não tem o painel lateral do Chrome; a versão dele usa a **barra lateral** (`sidebar_action`). Os
+arquivos são os mesmos, só trocam o `manifest.json` e o `fundo.js` (em `firefox/`). Para montar:
+`bash firefox/montar.sh ~/Downloads/extensao-ponte-firefox`.
+
+Instalar para testar: `about:debugging` → **Este Firefox** → **Carregar extensão temporária…** → escolha o
+`manifest.json` da pasta montada. A extensão temporária some quando o Firefox fecha; para ficar instalada de
+vez, precisa ser assinada pela Mozilla (envio "não listado" no addons.mozilla.org). Depois de carregar, em
+`about:addons` → Ponte → **Permissões**, ligue o acesso a `web.whatsapp.com` e ao servidor da Doutor Digital
+(no Firefox, com Manifest V3, o acesso a sites não vem ligado sozinho).
