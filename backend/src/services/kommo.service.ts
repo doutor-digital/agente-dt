@@ -919,14 +919,14 @@ export class KommoClient {
     return todas;
   }
 
-  /** Cartões por id, com campos e etiquetas (lotes de 50 — o filtro vai na URL). */
-  async listLeadsPorIds(ids: number[]): Promise<KommoLead[]> {
+  /** Cartões por id, com campos e etiquetas (lotes de 50 — o filtro vai na URL). `contatos` traz os ids dos contatos. */
+  async listLeadsPorIds(ids: number[], opcoes: { contatos?: boolean } = {}): Promise<KommoLead[]> {
     const out: KommoLead[] = [];
     for (let i = 0; i < ids.length; i += 50) {
       const lote = ids.slice(i, i + 50);
       try {
         const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
-          params: { limit: 250, with: 'tags', 'filter[id]': lote },
+          params: { limit: 250, with: opcoes.contatos ? 'tags,contacts' : 'tags', 'filter[id]': lote },
         });
         out.push(...(data?._embedded?.leads ?? []));
       } catch (err) {
@@ -1285,6 +1285,49 @@ export class KommoClient {
       return data?._embedded?.events ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Troca, num PATCH só, um campo select (pelo id da opção) e as etiquetas — ou tudo grava, ou nada:
+   * em três PATCHes separados, uma falha no meio deixava duas cidades etiquetadas no mesmo cartão.
+   */
+  async atualizarCampoEEtiquetas(
+    leadId: number,
+    args: { campo?: { fieldId: number; enumId: number }; adicionar?: string[]; remover?: string[] },
+  ): Promise<void> {
+    const corpo: Record<string, unknown> = {};
+    if (args.campo) corpo.custom_fields_values = [{ field_id: args.campo.fieldId, values: [{ enum_id: args.campo.enumId }] }];
+    if (args.adicionar?.length) corpo.tags_to_add = args.adicionar.map((name) => ({ name }));
+    if (args.remover?.length) corpo.tags_to_delete = args.remover.map((name) => ({ name }));
+    if (Object.keys(corpo).length === 0) return;
+    try {
+      await this.http.patch(`/leads/${leadId}`, corpo);
+    } catch (err) {
+      wrapAxiosError(err, `atualizarCampoEEtiquetas(${leadId})`);
+    }
+  }
+
+  /**
+   * Quem mudou por último um campo do cartão: o `created_by` do evento mais recente (0 = API, ou seja, um robô).
+   * `undefined` = nenhuma mudança registrada ou não consegui perguntar — quem chama não deve tratar como robô.
+   */
+  async autorDaUltimaMudancaDoCampo(leadId: number, fieldId: number): Promise<number | undefined> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ created_by?: number; created_at?: number }> } } | ''>('/events', {
+        params: {
+          'filter[entity]': 'lead',
+          'filter[entity_id][]': leadId,
+          'filter[type][]': `custom_field_${fieldId}_value_changed`,
+          limit: 100,
+        },
+      });
+      const eventos = (data && data._embedded?.events) || [];
+      if (eventos.length === 0) return undefined;
+      const ultimo = eventos.reduce((a, b) => ((b.created_at ?? 0) > (a.created_at ?? 0) ? b : a));
+      return typeof ultimo.created_by === 'number' ? ultimo.created_by : undefined;
+    } catch {
+      return undefined;
     }
   }
 
