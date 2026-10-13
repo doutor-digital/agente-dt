@@ -21,6 +21,7 @@ export interface KommoLead {
   pipeline_id: number;
   loss_reason_id?: number | null;
   price?: number;
+  responsible_user_id?: number;
   created_at?: number;
   updated_at?: number;
   /** Quando entrou em GANHO/PERDIDO (142/143). Some se o cartão sai de lá. */
@@ -243,6 +244,17 @@ export function epochDeCampoData(valor: string): number | null {
   if (!soData && !comHora) return null;
   const ms = Date.parse(soData ? `${puro}T12:00:00Z` : puro);
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+/**
+ * Caixinha (checkbox) do Kommo marcada? A API devolve `true`, `"1"`, `1` ou `"true"` conforme a conta.
+ * Regra única: a Sofia (`isLeadFieldChecked`) e o painel da Ponte decidem "IA pausada" pela mesma função.
+ */
+export function caixinhaMarcada(raw: unknown): boolean {
+  if (raw === true) return true;
+  if (typeof raw === 'string') return raw === 'true' || raw === '1';
+  if (typeof raw === 'number') return raw === 1;
+  return false;
 }
 
 /**
@@ -762,7 +774,7 @@ export class KommoClient {
   async buscarContatos(
     texto: string,
     limite = 10,
-  ): Promise<Array<{ id: number; nome: string | null; telefone: string | null; leadIds: number[] }> | null> {
+  ): Promise<Array<{ id: number; nome: string | null; telefone: string | null; telefones: string[]; leadIds: number[] }> | null> {
     const termo = texto.trim();
     if (!termo) return [];
     try {
@@ -780,11 +792,16 @@ export class KommoClient {
         if (typeof c.id !== 'number') return [];
         const campo = c.custom_fields_values?.find((f) => f.field_code === 'PHONE');
         const tel = campo?.values?.[0]?.value;
+        // todos os números do contato: quem confere o telefone (Ponte) não pode olhar só o primeiro
+        const telefones = (campo?.values ?? [])
+          .map((v) => (typeof v.value === 'string' ? v.value.trim() : ''))
+          .filter(Boolean);
         return [
           {
             id: c.id,
             nome: typeof c.name === 'string' && c.name.trim() ? c.name.trim() : null,
             telefone: typeof tel === 'string' && tel.trim() ? tel.trim() : null,
+            telefones,
             leadIds: (c._embedded?.leads ?? []).map((l) => l.id).filter((id): id is number => typeof id === 'number'),
           },
         ];
@@ -1742,13 +1759,7 @@ export class KommoClient {
     } catch (err) {
       wrapAxiosError(err, `isLeadFieldChecked:getLead(${leadId})`);
     }
-    const fv = lead.custom_fields_values?.find((f) => f.field_id === fieldId);
-    if (!fv) return false;
-    const raw = fv.values?.[0]?.value;
-    if (raw === true) return true;
-    if (typeof raw === 'string') return raw === 'true' || raw === '1';
-    if (typeof raw === 'number') return raw === 1;
-    return false;
+    return caixinhaMarcada(lead.custom_fields_values?.find((f) => f.field_id === fieldId)?.values?.[0]?.value);
   }
 
   async setLeadFieldFlag(leadId: number, fieldId: number, value: boolean): Promise<void> {

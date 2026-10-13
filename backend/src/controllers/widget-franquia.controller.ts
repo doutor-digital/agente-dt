@@ -6,8 +6,7 @@
  *   consulta marcada (data, hora, status, fisioterapeuta), última consulta, sessões e
  *   tratamento em andamento. SÓ LEITURA: nada aqui escreve na franquia nem no Kommo.
  *
- * Como casa o paciente: 1) `lead` → vínculo `spine_lead_links` (o que a Sofia gravou);
- * 2) `nome` → busca por nome na franquia e confere os 8 últimos dígitos do `telefone`.
+ * Como casa o paciente: ver `lib/paciente-na-franquia.ts` (a mesma regra serve a extensão Ponte).
  *
  * Chave: header `X-Widget-Key` (ou `?chave=`), HMAC do slug com SESSION_JWT_SECRET
  * (ver `lib/widget-agenda.ts`). Sem chave certa: 403. 60 chamadas por ip+unidade a cada minuto.
@@ -17,10 +16,10 @@ import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
-import { SpineService, type SpineTreatment } from '../services/spine.service.js';
 import { horariosParaWidget, marcarPeloWidget } from '../lib/marcacao-widget.js';
-import { chaveConfere, janelaDoPeriodo, janelaExplicita, limparNome, resumirAuditoria, resumoDaAgenda, termosDeBusca } from '../lib/widget-agenda.js';
-import { chaveTelefone, normalizar } from '../lib/franquia-sync.js';
+import { chaveConfere, janelaDoPeriodo, janelaExplicita, resumirAuditoria } from '../lib/widget-agenda.js';
+import { normalizar } from '../lib/franquia-sync.js';
+import { resumoDoPacienteNaFranquia } from '../lib/paciente-na-franquia.js';
 import { createKommoClient, type KommoTalkMessage } from '../services/kommo.service.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
@@ -30,7 +29,7 @@ const chamadas = new Map<string, { n: number; desde: number }>();
 const JANELA_MS = 60_000;
 const MAX_POR_MINUTO = 60;
 
-function excedeu(chave: string): boolean {
+function excedeu(chave: string, max = MAX_POR_MINUTO): boolean {
   const agora = Date.now();
   const t = chamadas.get(chave);
   if (!t || agora - t.desde > JANELA_MS) {
@@ -38,12 +37,17 @@ function excedeu(chave: string): boolean {
     return false;
   }
   t.n += 1;
-  return t.n > MAX_POR_MINUTO;
+  return t.n > max;
 }
 
-async function unidadeDoWidget(req: Request, res: Response): Promise<Unit | null> {
+/**
+ * Chave por unidade + limite por ip+unidade. Exportada: a rota da extensão Ponte usa a mesma porta, mas com
+ * `balde` próprio — a Ponte consulta a cada troca de conversa, e várias atendentes atrás do mesmo IP da
+ * clínica não podem esgotar o limite dos widgets do cartão no Kommo (nem o contrário).
+ */
+export async function unidadeDoWidget(req: Request, res: Response, limite?: { balde: string; max: number }): Promise<Unit | null> {
   const slug = String(req.params.slug ?? '');
-  if (excedeu(`${req.ip}:${slug}`)) {
+  if (excedeu(limite ? `${req.ip}:${slug}:${limite.balde}` : `${req.ip}:${slug}`, limite?.max)) {
     res.status(429).json({ error: 'muitas chamadas — aguarde um minuto' });
     return null;
   }
@@ -86,104 +90,18 @@ export async function widgetPingHandler(req: Request, res: Response): Promise<vo
   res.json({ ok: true, unidade: unit.name, slug: unit.slug, franquia: !!(unit.spineEnabled && unit.spineToken), agora: new Date() });
 }
 
-// ── tratamentos EM ANDAMENTO: a rota da franquia devolve a unidade inteira; guarda 5 min por unidade ──
-const cacheTratamentos = new Map<string, { em: number; lista: SpineTreatment[] }>();
-async function tratamentosDaUnidade(unit: Unit): Promise<SpineTreatment[]> {
-  const c = cacheTratamentos.get(unit.id);
-  if (c && Date.now() - c.em < 5 * 60_000) return c.lista;
-  const r = await SpineService.searchTreatments(unit);
-  const lista = r.ok ? (r.data?.treatments ?? []) : c?.lista ?? [];
-  cacheTratamentos.set(unit.id, { em: Date.now(), lista });
-  return lista;
-}
-
-interface PacienteAchado {
-  idClient: number;
-  origem: 'vinculo' | 'nome+telefone' | 'nome';
-}
-
-async function porVinculo(unit: Unit, leadId: number | null): Promise<PacienteAchado | null> {
-  if (!leadId) return null;
-  const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
-  return link?.spineIdClient ? { idClient: link.spineIdClient, origem: 'vinculo' } : null;
-}
-
-async function porNomeETelefone(unit: Unit, titulo: string, nome: string, telefone: string): Promise<PacienteAchado | null> {
-  const chave = chaveTelefone(telefone);
-  const termos = termosDeBusca(titulo, nome);
-  if (!termos.length) return null;
-  const alvoNomes = new Set([normalizar(limparNome(titulo)), normalizar(limparNome(nome))].filter(Boolean));
-  let porNomeExato: PacienteAchado | null = null;
-  for (const termo of termos) {
-    // até 100 por página: "Sandra" sozinho passa fácil de 20 pacientes, e ela ficava de fora (caso real, 16/09)
-    const r = await SpineService.searchClients(unit, termo, 100);
-    if (!r.ok) continue;
-    const lista = (r.data?.clients ?? []).filter((c) => c.idClient);
-    if (chave) {
-      const casam = lista.filter((c) => c.whatsapp && chaveTelefone(c.whatsapp) === chave);
-      if (casam.length === 1) return { idClient: casam[0].idClient!, origem: 'nome+telefone' };
-      if (casam.length > 1) {
-        const exato = casam.find((c) => alvoNomes.has(normalizar(c.name)));
-        return { idClient: (exato ?? casam[0]).idClient!, origem: 'nome+telefone' };
-      }
-    }
-    // sem telefone que case: aceita só se o nome completo bater exatamente e for um só
-    if (!porNomeExato) {
-      const exatos = lista.filter((c) => alvoNomes.has(normalizar(c.name)));
-      if (exatos.length === 1) porNomeExato = { idClient: exatos[0].idClient!, origem: 'nome' };
-    }
-  }
-  return porNomeExato;
-}
-
 export async function widgetPacienteHandler(req: Request, res: Response): Promise<void> {
   const unit = await unidadeDoWidget(req, res);
   if (!unit) return;
-  if (!unit.spineEnabled || !unit.spineToken) {
-    res.json({ unidade: unit.name, franquia: false, paciente: null });
-    return;
-  }
-  const leadId = Number(req.query.lead) || null;
-  const nome = typeof req.query.nome === 'string' ? req.query.nome.slice(0, 120) : '';
-  const titulo = typeof req.query.titulo === 'string' ? req.query.titulo.slice(0, 120) : '';   // título do cartão ("NOME 03/08/2026")
-  const telefone = typeof req.query.telefone === 'string' ? req.query.telefone.slice(0, 40) : '';
-  const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
-
   try {
-    // Dois caminhos, sempre: o vínculo que a Sofia gravou E a busca por nome+telefone. Caso real (16/09): o vínculo
-    // apontava pra um cadastro sem agenda (343253) e a paciente de verdade, em tratamento, era outro cadastro (320555).
-    // Fica o cadastro que tem agenda; se os dois existem e são diferentes, a franquia tem paciente em dobro → avisar.
-    const [vinc, busca] = await Promise.all([porVinculo(unit, leadId), porNomeETelefone(unit, titulo, nome, telefone)]);
-    const candidatos = [vinc, busca].filter((c, i, a): c is PacienteAchado => !!c && a.findIndex((x) => x && x.idClient === c.idClient) === i);
-    if (!candidatos.length) {
-      res.json({ unidade: unit.name, franquia: true, tz, agora: new Date(), paciente: null });
-      return;
-    }
-    const detalhes = await Promise.all(candidatos.map(async (c) => ({ c, det: await SpineService.getClient(unit, c.idClient) })));
-    const validos = detalhes.filter((d) => d.det.ok && d.det.data?.client);
-    if (!validos.length) {
-      res.json({ unidade: unit.name, franquia: true, tz, agora: new Date(), paciente: null, erro: detalhes.some((d) => !d.det.ok) ? 'franquia indisponível' : undefined });
-      return;
-    }
-    validos.sort((a, b) => (b.det.data!.client!.schedules.length - a.det.data!.client!.schedules.length));
-    const achado = validos[0].c;
-    const cli = validos[0].det.data!.client!;
-    const duplicadoNaFranquia = validos.length > 1;
-    if (duplicadoNaFranquia) logger.info({ unit: unit.slug, leadId, ids: validos.map((v) => v.c.idClient) }, 'widget: paciente com dois cadastros na franquia');
-    const agenda = resumoDaAgenda(cli.schedules, new Date());
-    const trat = (await tratamentosDaUnidade(unit)).find((t) => (t.idClient && t.idClient === cli.idClient) || (t.clientName && cli.name && normalizar(t.clientName) === normalizar(cli.name))) ?? null;
-    res.json({
-      unidade: unit.name,
-      franquia: true,
-      tz,
-      agora: new Date(),
-      paciente: { idClient: cli.idClient, nome: cli.name, whatsapp: cli.whatsapp ? `…${chaveTelefone(cli.whatsapp).slice(-4)}` : null, origem: achado.origem },
-      duplicadoNaFranquia,
-      agenda,
-      tratamento: trat
-        ? { categoria: trat.category, fisioterapeuta: trat.staffName, status: trat.statusName, local: trat.local, grau: trat.degree, valor: trat.price }
-        : null,
-    });
+    res.json(
+      await resumoDoPacienteNaFranquia(unit, {
+        leadId: Number(req.query.lead) || null,
+        nome: typeof req.query.nome === 'string' ? req.query.nome.slice(0, 120) : '',
+        titulo: typeof req.query.titulo === 'string' ? req.query.titulo.slice(0, 120) : '',   // título do cartão ("NOME 03/08/2026")
+        telefone: typeof req.query.telefone === 'string' ? req.query.telefone.slice(0, 40) : '',
+      }),
+    );
   } catch (err) {
     logger.warn({ err, unit: unit.slug }, 'widget: falha ao montar a agenda do paciente');
     res.status(502).json({ error: 'franquia indisponível' });

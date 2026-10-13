@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Ponte — cartão do Kommo no WhatsApp Web",
+  "short_name": "Ponte",
+  "version": "0.1.0",
+  "description": "Mostra num painel lateral o cartão do Kommo do paciente da conversa aberta no WhatsApp Web. Só leitura.",
+  "minimum_chrome_version": "116",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": ["https://agente-vps.doutordigitalconsultoria.com/*"],
+  "background": { "service_worker": "fundo.js" },
+  "action": { "default_title": "Abrir a Ponte" },
+  "side_panel": { "default_path": "painel.html" },
+  "options_page": "opcoes.html",
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["seletores.js", "impressao.js", "leitor.js", "conteudo.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED",
+      "all_frames": false
+    }
+  ]
+}

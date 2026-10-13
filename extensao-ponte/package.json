@@ -1,0 +1,13 @@
+{
+  "name": "extensao-ponte",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ponte — cartão do Kommo ao lado da conversa no WhatsApp Web (extensão do Chrome, fase 1, só leitura). Este package.json existe só para os testes; a extensão em si não tem build.",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test 'testes/*.test.js'"
+  },
+  "devDependencies": {
+    "jsdom": "24.1.3"
+  }
+}

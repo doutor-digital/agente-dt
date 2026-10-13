@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ponte — opções</title>
+    <link rel="stylesheet" href="painel.css" />
+    <style>
+      main { max-width: 440px; }
+      label { display: block; margin: 12px 0 4px; font-weight: 600; }
+      input { width: 100%; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--linha); background: var(--cartao); color: var(--texto); font: inherit; }
+      .dica { color: var(--suave); font-size: 12px; margin: 4px 0 0; }
+      #resultado { margin-top: 12px; }
+      .ok { color: var(--ok); font-weight: 600; }
+      .erro { color: var(--alerta); font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <header class="topo"><span class="topo__marca">Ponte — opções</span></header>
+    <main>
+      <form id="form" class="aviso">
+        <p class="aviso__titulo">Unidade</p>
+        <p class="aviso__texto">Os mesmos dados do widget do cartão no Kommo desta unidade.</p>
+        <label for="slug">Slug da unidade</label>
+        <input id="slug" name="slug" autocomplete="off" spellcheck="false" placeholder="doutor-hernia-acailandia" required />
+        <label for="chave">Chave</label>
+        <input id="chave" name="chave" autocomplete="off" spellcheck="false" required />
+        <p class="dica">A chave fica só neste computador (armazenamento local da extensão).</p>
+        <p><button class="botao botao--primario" type="submit">Salvar e testar</button></p>
+        <p id="resultado" aria-live="polite"></p>
+      </form>
+    </main>
+    <script src="config.js"></script>
+    <script src="opcoes.js"></script>
+  </body>
+</html>
