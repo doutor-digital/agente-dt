@@ -30,7 +30,7 @@ import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, melhorTratame
 import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
-import { TAG_SEM_REGUA, type DecisaoParado } from './parados.js';
+import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 
@@ -432,10 +432,11 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
     registrarSimulacao(unit, 'franquia-move', { leadId, acao: 'moveria', alvo: mov.para, deEtapa, valor: mov.motivoPerda, motivo: mov.motivo });
     return;
   }
-  // PERDIDO pela jornada (fato velho na franquia): mesmo fecho do worker de parados — motivo de perda,
+  // PERDIDO pela jornada (fato velho na franquia): mesmo fecho do worker de parados — motivo de perda + o campo ⊘
+  // que a SDR lê (sem ele o cartão aparece "sem motivo"),
   // etiqueta NO_FOLLOW_UP quando o fato é velho demais pra régua, nota no cartão, confere a etapa antes.
   if (normalizarNome(mov.para) === normalizarNome(ETAPA.PERDIDO)) {
-    const d: DecisaoParado = { para: 'PERDIDO', regra: mov.motivo, dias: mov.dias ?? 0, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua === true };
+    const d: DecisaoParado = { para: 'PERDIDO', regra: mov.motivo, dias: mov.dias ?? 0, motivoPerda: mov.motivoPerda, campo: campoDoPerdidoDaFranquia(mov.motivoPerda), semRegua: mov.semRegua === true };
     try {
       if (await fecharComoPerdido(unit, kommo, funis, leadId, deEtapa, d, false)) {
         resumo.movimentos++;
