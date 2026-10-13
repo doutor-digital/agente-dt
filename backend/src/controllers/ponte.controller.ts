@@ -1,5 +1,6 @@
 /**
- * Rota pública da extensão "Ponte" (WhatsApp Web, fase 1 — SÓ LEITURA, 13/10/2026).
+ * Rotas públicas da extensão "Ponte" (WhatsApp Web). Fase 1 (só leitura) e fase 2 (13/10/2026): pausar a Sofia
+ * neste paciente, o resumo do lead (com o botão "Resumir com IA") e — em `ponte-fila.controller.ts` — a fila do dia.
  *
  * `POST /api/public/widget/:slug/ponte/cartao` → o cartão do Kommo do paciente da conversa aberta no
  * WhatsApp Web, para o painel lateral. Mesma chave por unidade dos widgets do cartão (`X-Widget-Key`, ver
@@ -17,7 +18,14 @@
  *   - `lead`       — a atendente escolheu um cartão da lista de candidatos.
  *
  * Casamento em 4 passos (telefone → impressão → nome → nada), em `lib/ponte-cartao.ts`.
- * Nada aqui escreve no Kommo, na franquia ou no banco; nome, telefone e impressões não vão para o log.
+ * A rota do cartão não escreve nada; nome, telefone e impressões não vão para o log.
+ *
+ * Fase 2:
+ *   - `POST/DELETE /api/public/widget/:slug/ponte/pausa` `{ leadId, ate, motivo, por }` → a MESMA pausa do widget
+ *     "Pausar a Sofia" (`lib/pausa-lead.ts`): linha em `lead_pausas` + caixinha "Pausar IA"; o worker solta no fim.
+ *     É a única escrita da Ponte, e vai no Kommo pela chave da unidade — nunca no WhatsApp;
+ *   - `POST /api/public/widget/:slug/ponte/resumo-ia` `{ leadId }` → o resumo do lead escrito pela IA, só quando a
+ *     atendente clica. Modelo barato, chave da unidade, cache de 6 h por lead (`lib/ponte-resumo.ts`).
  */
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
@@ -26,12 +34,13 @@ import { logger } from '../lib/logger.js';
 import { unidadeDoWidget } from './widget-franquia.controller.js';
 import { KommoApiError, createKommoClient, type KommoClient, type KommoLead, type KommoPipeline } from '../services/kommo.service.js';
 import { chaveTelefone } from '../lib/franquia-sync.js';
-import { termosDeBusca } from '../lib/widget-agenda.js';
+import { limparNome, termosDeBusca } from '../lib/widget-agenda.js';
 import { JANELA_DA_IMPRESSAO_MS, casarPorImpressoes, impressoesValidas } from '../lib/ponte-impressao.js';
 import {
   GANHO,
   PERDIDO,
   barraDoFunil,
+  caixinhaDaSdr,
   caixinhaMarcada,
   casarCartao,
   estadoDaSofia,
@@ -43,21 +52,37 @@ import {
   type Casamento,
   type ContatoAchado,
 } from '../lib/ponte-cartao.js';
-import { estadoDaPausaDoLead } from '../lib/pausa-lead.js';
+import { estadoDaPausaDoLead, pausarLead, retomarLead, type EstadoDaPausaDoLead } from '../lib/pausa-lead.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { lerAnuncioDoLead } from '../agent/anuncio-de-origem.js';
 import { resumoDoPacienteNaFranquia, type ResumoDoPaciente } from '../lib/paciente-na-franquia.js';
+import { POR_PADRAO, leadIdDoPedido, lerPedidoDePausa, lerPedidoDeRetomada } from '../lib/ponte-pausa.js';
+import {
+  CACHE_RESUMO_IA_MS,
+  MAX_TOKENS_RESUMO_IA,
+  MODELO_RESUMO_IA,
+  camposDoQuemE,
+  interpretarResumoDaIa,
+  montarPromptDoResumoIa,
+  montarResumo,
+  type MemoriaDoLead,
+  type ResumoDoLead,
+} from '../lib/ponte-resumo.js';
+import { getLeadMemoryForAgent } from '../services/lead-memory.service.js';
+import { mensagensOficiais } from '../services/kommo-talks.service.js';
+import { recordLlmCall } from '../services/openai.service.js';
 
 // ── funis e usuários da conta: mudam pouco, e a Ponte chama a cada troca de conversa ──
 const CONTA_TTL_MS = 10 * 60_000;
-interface DadosDaConta {
+export interface DadosDaConta {
   em: number;
   funis: KommoPipeline[];
   usuarios: Map<number, string>;
 }
 const cacheConta = new Map<string, DadosDaConta>();
 
-async function dadosDaConta(unit: Unit, kommo: KommoClient): Promise<DadosDaConta> {
+/** Funis e usuários da conta, com cache de 10 min por unidade. A fila da Ponte usa o mesmo cache. */
+export async function dadosDaConta(unit: Unit, kommo: KommoClient): Promise<DadosDaConta> {
   const c = cacheConta.get(unit.id);
   if (c && Date.now() - c.em < CONTA_TTL_MS) return c;
   const [funis, usuarios] = await Promise.all([kommo.listPipelines().catch(() => null), kommo.listUsers().catch(() => null)]);
@@ -130,6 +155,98 @@ async function contatosPorNome(kommo: KommoClient, nome: string): Promise<number
   return [];
 }
 
+// ── o que o cartão e o resumo dividem ──
+
+function contatoPrincipalDe(lead: KommoLead): number | null {
+  return lead._embedded?.contacts?.find((c) => c.is_main)?.id ?? lead._embedded?.contacts?.[0]?.id ?? null;
+}
+
+/** Nome e telefone do contato principal — só quando a franquia está ligada (é para casar o paciente lá). */
+async function contatoParaFranquia(unit: Unit, kommo: KommoClient, lead: KommoLead): Promise<{ nome: string | null; telefone: string | null } | null> {
+  if (!unit.spineEnabled || !unit.spineToken) return null;
+  const contatoId = contatoPrincipalDe(lead);
+  return contatoId ? kommo.getContactBasico(contatoId) : { nome: null, telefone: null };
+}
+
+async function franquiaDoCartao(
+  unit: Unit,
+  lead: KommoLead,
+  contato: { nome: string | null; telefone: string | null } | null,
+  telefone: string | null,
+): Promise<ResumoDoPaciente | null> {
+  if (!unit.spineEnabled || !unit.spineToken) return null;
+  return resumoDoPacienteNaFranquia(unit, {
+    leadId: lead.id,
+    nome: (contato?.nome ?? '').slice(0, 120),
+    titulo: (lead.name ?? '').slice(0, 120),
+    telefone: contato?.telefone ?? telefone ?? '',
+  }).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'ponte: franquia indisponível');
+    return { unidade: unit.name, franquia: true, paciente: null, erro: 'franquia indisponível' };
+  });
+}
+
+const textoOuNulo = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+/** A memória que a Sofia guarda do lead (resumo + fatos), também das unidades irmãs da mesma conta. */
+async function memoriaDoLead(unit: Unit, leadId: number): Promise<(MemoriaDoLead & { queixa: string | null; cidade: string | null }) | null> {
+  const m = await getLeadMemoryForAgent(unit, leadId).catch(() => null);
+  if (!m) return null;
+  const f = (m.facts && typeof m.facts === 'object' ? m.facts : {}) as Record<string, unknown>;
+  return {
+    resumo: textoOuNulo(m.summary),
+    desfecho: textoOuNulo(f.ultimo_desfecho),
+    travouEm: textoOuNulo(f.travou_em),
+    ultimoContato: textoOuNulo(f.ultimo_contato),
+    queixa: textoOuNulo(f.queixa),
+    cidade: textoOuNulo(f.cidade),
+  };
+}
+
+interface ContextoDoResumo {
+  /** Epoch (s) da última mudança de etapa, ou null. */
+  desde: number | null;
+  memoria: (MemoriaDoLead & { queixa: string | null; cidade: string | null }) | null;
+}
+
+/**
+ * O que o resumo precisa além do cartão e da franquia: o evento de etapa (Kommo) e a memória da Sofia (banco).
+ * Começa JUNTO com a franquia (quem chama só espera no fim). Nunca lança: sem isso, o resumo só fica mais curto.
+ */
+function contextoDoResumo(unit: Unit, kommo: KommoClient, lead: KommoLead): Promise<ContextoDoResumo> {
+  return Promise.all([kommo.ultimaMudancaDeEtapa(lead.id), memoriaDoLead(unit, lead.id)]).then(
+    ([desde, memoria]) => ({ desde, memoria }),
+    () => ({ desde: null, memoria: null }),
+  );
+}
+
+/** O resumo sem IA: campos do cartão, memória da Sofia, franquia e há quanto tempo está na etapa. */
+function resumoDoCartao(
+  lead: KommoLead,
+  conta: DadosDaConta,
+  franquia: ResumoDoPaciente | null,
+  nomeDoContato: string | null,
+  { desde, memoria }: ContextoDoResumo,
+): ResumoDoLead {
+  const doCartao = camposDoQuemE(lead.custom_fields_values);
+  const { funil, etapa } = nomesDaEtapa(conta, lead);
+  return montarResumo({
+    nome: limparNome(lead.name) || nomeDoContato,
+    cidade: doCartao.cidade ?? memoria?.cidade ?? null,
+    queixa: doCartao.queixa ?? memoria?.queixa ?? null,
+    regiao: doCartao.regiao,
+    funil,
+    etapa,
+    naEtapaDesde: desde ?? lead.created_at ?? null,
+    franquia,
+    memoria,
+  });
+}
+
+function pausaParaOPainel(p: EstadoDaPausaDoLead | null): { ate: string; motivo: string | null; por: string | null } | null {
+  return p?.emPausa && p.ate ? { ate: p.ate.toISOString(), motivo: p.motivo, por: p.por } : null;
+}
+
 // ── a rota ──
 
 /** A Ponte consulta a cada troca de conversa; várias atendentes dividem o IP da clínica. Balde próprio. */
@@ -200,25 +317,22 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
     const caixinha = unit.kommoPausedFieldId
       ? caixinhaMarcada(campos.find((f) => f.field_id === unit.kommoPausedFieldId)?.values?.[0]?.value)
       : false;
-    const janelaAte = await estadoDaPausaDoLead(unit.id, lead.id).then((p) => p.ate).catch(() => null);
+    const pausa = await estadoDaPausaDoLead(unit.id, lead.id).catch(() => null);
     const horario = checkBusinessHours(unit);
     const comercial = funilComercial(conta.funis);
     const anuncio = lerAnuncioDoLead(campos, (n) => campos.find((f) => (f.field_name ?? '').trim() === n)?.field_id ?? null);
 
+    // resumo: sem IA (cartão + memória da Sofia + franquia). O que ele lê a mais começa já, junto da franquia.
+    const contexto = contextoDoResumo(unit, kommo, lead);
     // franquia: a mesma resposta do widget "Agenda da franquia". Cair aqui não derruba o cartão.
-    let franquia: ResumoDoPaciente | null = null;
-    if (unit.spineEnabled && unit.spineToken) {
-      const contatoId = lead._embedded?.contacts?.find((c) => c.is_main)?.id ?? lead._embedded?.contacts?.[0]?.id ?? null;
-      const contato = contatoId ? await kommo.getContactBasico(contatoId) : { nome: null, telefone: null };
-      franquia = await resumoDoPacienteNaFranquia(unit, {
-        leadId: lead.id,
-        nome: (contato.nome ?? '').slice(0, 120),
-        titulo: (lead.name ?? '').slice(0, 120),
-        telefone: contato.telefone ?? telefone ?? '',
-      }).catch((err) => {
-        logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'ponte: franquia indisponível');
-        return { unidade: unit.name, franquia: true, paciente: null, erro: 'franquia indisponível' };
-      });
+    const contato = await contatoParaFranquia(unit, kommo, lead);
+    const franquia = await franquiaDoCartao(unit, lead, contato, telefone);
+    let resumo: ResumoDoLead | null = null;
+    try {
+      resumo = resumoDoCartao(lead, conta, franquia, contato?.nome ?? null, await contexto);
+    } catch (err) {
+      // cair aqui também não derruba o cartão
+      logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'ponte: resumo do lead falhou');
     }
 
     logger.info({ unit: unit.slug, como: casamento.como, leadId: lead.id, outros: Math.max(0, ordenados.length - 1) }, 'ponte: cartão achado');
@@ -239,16 +353,206 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
         },
         responsavel: (lead.responsible_user_id && conta.usuarios.get(lead.responsible_user_id)) || null,
         etiquetas: (lead._embedded?.tags ?? []).map((t) => t.name).filter(Boolean),
-        sofia: estadoDaSofia({ unidade: unit, foraDoHorario: horario.enabled && !horario.isOpen, caixinha, janelaAte }),
+        sofia: estadoDaSofia({
+          unidade: unit,
+          foraDoHorario: horario.enabled && !horario.isOpen,
+          caixinha: caixinhaDaSdr(caixinha, pausa),
+          janelaAte: pausa?.ate ?? null,
+        }),
+        pausaDoLead: pausaParaOPainel(pausa),
         anuncio,
         atualizadoEm: lead.updated_at ? new Date(lead.updated_at * 1000).toISOString() : null,
       },
       outrosCartoes: ordenados.filter((l) => l.id !== lead.id).slice(0, 5).map((l) => resumoCurto(conta, l)),
       franquia,
+      resumo,
+      // o botão "Resumir com IA" só aparece com a chave da PRÓPRIA unidade (é ela quem paga)
+      iaDisponivel: !!unit.anthropicApiKey,
       agora: new Date(),
     });
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug }, 'ponte: falha ao montar o cartão');
     res.status(502).json({ error: 'kommo indisponível' });
+  }
+}
+
+// ── fase 2: pausar a Sofia neste paciente (a MESMA pausa do widget "Pausar a Sofia") ──
+
+/** Escrita: balde próprio e baixo. Uma atendente pausa poucos pacientes por dia. */
+const LIMITE_DA_PAUSA = { balde: 'ponte-pausa', max: 30 };
+
+function respostaDaPausa(e: EstadoDaPausaDoLead) {
+  return { leadId: e.leadId, pausaDoLead: pausaParaOPainel(e), campoMarcado: e.campoMarcado, agora: new Date() };
+}
+
+/** `POST /api/public/widget/:slug/ponte/pausa` `{ leadId, ate, motivo?, por? }` */
+export async function pontePausarHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res, LIMITE_DA_PAUSA);
+  if (!unit) return;
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(409).json({ error: 'unidade sem Kommo conectado' });
+    return;
+  }
+  const lido = lerPedidoDePausa(req.body);
+  if (!lido.ok) {
+    res.status(400).json({ error: lido.erro });
+    return;
+  }
+  const { leadId, ate, motivo, por } = lido.pedido;
+  try {
+    const estado = await pausarLead(unit, leadId, { ate, motivo, por: por ?? POR_PADRAO });
+    logger.info({ unit: unit.slug, leadId, ate, origem: 'ponte' }, 'ponte: Sofia pausada neste paciente');
+    res.json(respostaDaPausa(estado));
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'ponte: falha ao pausar a Sofia');
+    res.status(502).json({ error: 'não consegui pausar agora' });
+  }
+}
+
+/** `DELETE /api/public/widget/:slug/ponte/pausa` `{ leadId, por? }` */
+export async function ponteRetomarHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res, LIMITE_DA_PAUSA);
+  if (!unit) return;
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(409).json({ error: 'unidade sem Kommo conectado' });
+    return;
+  }
+  const lido = lerPedidoDeRetomada(req.body);
+  if (!lido.ok) {
+    res.status(400).json({ error: lido.erro });
+    return;
+  }
+  try {
+    const estado = await retomarLead(unit, lido.pedido.leadId, lido.pedido.por ?? POR_PADRAO);
+    res.json(respostaDaPausa(estado));
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId: lido.pedido.leadId }, 'ponte: falha ao retomar a Sofia');
+    res.status(502).json({ error: 'não consegui retomar agora' });
+  }
+}
+
+// ── fase 2: "Resumir com IA" — só quando a atendente clica ──
+
+const LIMITE_DA_IA = { balde: 'ponte-ia', max: 20 };
+
+interface RespostaDoResumoIa {
+  leadId: number;
+  linhas: string[];
+  geradoEm: string;
+  /** falso = não havia conversa para a IA ler, e as linhas são o resumo do cartão (sem custo). */
+  ia: boolean;
+  aviso?: string;
+}
+
+const cacheResumoIa = new Map<string, { em: number; corpo: RespostaDoResumoIa }>();
+const resumoIaEmAndamento = new Map<string, Promise<RespostaDoResumoIa>>();
+
+const ANEXO: Record<string, string> = { voice: 'áudio', audio: 'áudio', picture: 'imagem', video: 'vídeo', file: 'arquivo', sticker: 'figurinha' };
+
+async function gerarResumoIa(unit: Unit, chave: string, leadId: number): Promise<RespostaDoResumoIa> {
+  const kommo = createKommoClient(unit);
+  // A conversa oficial do Kommo (paciente, Sofia e equipe) só precisa do id: começa já, junto com o resto.
+  // Áudio entra como "[áudio]": transcrever custa.
+  const conversa = mensagensOficiais(kommo, leadId, 40).catch(() => []);
+  const [lead, conta] = await Promise.all([kommo.getLead(leadId), dadosDaConta(unit, kommo)]);
+  const contexto = contextoDoResumo(unit, kommo, lead);
+  const contato = await contatoParaFranquia(unit, kommo, lead).catch(() => null);
+  const franquia = await franquiaDoCartao(unit, lead, contato, null);
+  const ctx = await contexto;
+  const base = resumoDoCartao(lead, conta, franquia, contato?.nome ?? null, ctx);
+  const memoria = ctx.memoria;
+  const falas = (await conversa)
+    .map((m) => ({ autor: m.autor, texto: m.texto || (m.anexo ? `[${ANEXO[m.anexo.tipo] ?? 'anexo'}]` : '') }))
+    .filter((f) => f.texto);
+  const geradoEm = new Date().toISOString();
+
+  if (!falas.length && !memoria?.resumo) {
+    // nada para a IA ler além do que o cartão já disse: não gasta
+    return {
+      leadId,
+      linhas: [...base.linhas, ...(base.proximoPasso ? [`Próximo passo: ${base.proximoPasso}`] : [])],
+      geradoEm,
+      ia: false,
+      aviso: 'Não há conversa no Kommo para a IA ler: este é o resumo do cartão.',
+    };
+  }
+
+  const inicio = performance.now();
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': chave, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: MODELO_RESUMO_IA,
+      max_tokens: MAX_TOKENS_RESUMO_IA,
+      messages: [{ role: 'user', content: montarPromptDoResumoIa(base, memoria?.resumo ?? null, falas) }],
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const data = (await resp.json().catch(() => ({}))) as {
+    content?: Array<{ type?: string; text?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
+    error?: unknown;
+  };
+  // o custo entra na mesma conta da IA da unidade (tela de custo), como toda chamada de modelo
+  void recordLlmCall({
+    unitId: unit.id,
+    traceId: null,
+    provider: 'anthropic',
+    model: MODELO_RESUMO_IA,
+    promptTokens: data.usage?.input_tokens ?? 0,
+    completionTokens: data.usage?.output_tokens ?? 0,
+    latencyMs: Math.round(performance.now() - inicio),
+    status: resp.ok && !data.error ? 'success' : 'error',
+    errorMessage: data.error ? JSON.stringify(data.error).slice(0, 300) : undefined,
+  });
+  if (!resp.ok || data.error) throw new Error(`Anthropic ${resp.status}: ${JSON.stringify(data.error ?? '').slice(0, 160)}`);
+  const linhas = interpretarResumoDaIa((data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n'));
+  if (!linhas.length) throw new Error('a IA devolveu um resumo vazio');
+  return { leadId, linhas, geradoEm, ia: true };
+}
+
+/** `POST /api/public/widget/:slug/ponte/resumo-ia` `{ leadId }` */
+export async function ponteResumoIaHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res, LIMITE_DA_IA);
+  if (!unit) return;
+  const chave = unit.anthropicApiKey;
+  if (!chave) {
+    res.status(404).json({ error: 'unidade sem chave da IA' });
+    return;
+  }
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(409).json({ error: 'unidade sem Kommo conectado' });
+    return;
+  }
+  const leadId = leadIdDoPedido((req.body as { leadId?: unknown } | undefined)?.leadId);
+  if (!leadId) {
+    res.status(400).json({ error: 'lead inválido' });
+    return;
+  }
+  const k = `${unit.id}:${leadId}`;
+  const guardado = cacheResumoIa.get(k);
+  if (guardado && Date.now() - guardado.em < CACHE_RESUMO_IA_MS) {
+    res.json({ ...guardado.corpo, cache: true });
+    return;
+  }
+  try {
+    // dois cliques seguidos (ou duas atendentes no mesmo paciente) viram UMA chamada à IA
+    let p = resumoIaEmAndamento.get(k);
+    if (!p) {
+      p = gerarResumoIa(unit, chave, leadId).finally(() => resumoIaEmAndamento.delete(k));
+      resumoIaEmAndamento.set(k, p);
+    }
+    const corpo = await p;
+    // só guarda o que a IA escreveu: o "sem conversa para ler" não custou nada e precisa valer assim que o
+    // paciente escrever, não daqui a 6 h
+    if (corpo.ia) {
+      if (cacheResumoIa.size > 2_000) cacheResumoIa.clear();
+      cacheResumoIa.set(k, { em: Date.now(), corpo });
+    }
+    logger.info({ unit: unit.slug, leadId, ia: corpo.ia, linhas: corpo.linhas.length }, 'ponte: resumo do lead gerado');
+    res.json({ ...corpo, cache: false });
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'ponte: resumo com IA falhou');
+    res.status(502).json({ error: 'não consegui resumir agora' });
   }
 }

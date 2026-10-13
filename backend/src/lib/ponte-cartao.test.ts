@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   barraDoFunil,
+  caixinhaDaSdr,
   caixinhaMarcada,
   casarCartao,
   dddBrasileiro,
@@ -191,6 +192,21 @@ describe('estadoDaSofia', () => {
   it('caixinha "Pausar IA" em todos os formatos que o Kommo devolve', () => {
     for (const v of [true, 1, '1', 'true']) assert.ok(caixinhaMarcada(v), String(v));
     for (const v of [false, 0, '0', '', null, undefined, 'false']) assert.equal(caixinhaMarcada(v), false, String(v));
+  });
+  it('fase 2: a caixinha que a pausa com data marcou não esconde a data (o painel mostra "até …")', () => {
+    const ate = new Date('2026-10-14T11:00:00Z');
+    const nossa = { emPausa: true, campoMarcado: true };
+    assert.equal(caixinhaDaSdr(true, nossa), false);
+    assert.deepEqual(
+      estadoDaSofia({ unidade: semPausa, foraDoHorario: false, caixinha: caixinhaDaSdr(true, nossa), janelaAte: ate }, agora),
+      { pausada: true, por: 'janela', ate: ate.toISOString() },
+    );
+    // a SDR tinha marcado à mão antes: a caixinha é dela e continua valendo (sem data)
+    assert.equal(caixinhaDaSdr(true, { emPausa: true, campoMarcado: false }), true);
+    // pausa já vencida (o worker ainda não limpou): a caixinha volta a contar
+    assert.equal(caixinhaDaSdr(true, { emPausa: false, campoMarcado: true }), true);
+    assert.equal(caixinhaDaSdr(true, null), true);
+    assert.equal(caixinhaDaSdr(false, nossa), false);
   });
 });
 

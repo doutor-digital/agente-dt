@@ -65,7 +65,8 @@ async function main(): Promise<void> {
   // A extensão "Ponte" (painel lateral do Chrome no WhatsApp Web) chama só /api/public/widget/*, com a
   // chave da unidade no header. Com `host_permissions` o Chrome já dispensa o CORS para ela; liberar aqui
   // é para não encher o log de "origin bloqueado" a cada troca de conversa. Sem credenciais, como o Kommo.
-  const ORIGEM_EXTENSAO = /^chrome-extension:\/\/[a-p]{32}$/;
+  // Chrome: id de 32 letras a–p; Firefox (versão em extensao-ponte/firefox/): uuid da instalação.
+  const ORIGEM_EXTENSAO = /^(chrome-extension:\/\/[a-p]{32}|moz-extension:\/\/[0-9a-f-]{36})$/;
   app.use(
     cors((req, cb) => {
       const origin = req.header('Origin');
@@ -74,7 +75,8 @@ async function main(): Promise<void> {
         return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key', 'X-Requested-With'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }
       if (req.path.startsWith('/api/public/widget/') && ORIGEM_EXTENSAO.test(origin)) {
-        return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key'], methods: ['GET', 'POST', 'OPTIONS'] });
+        // DELETE: a fase 2 retoma a Sofia num paciente (`DELETE …/ponte/pausa`)
+        return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }
       const allowed = env.FRONTEND_ORIGIN.includes(origin);
       if (!allowed) {

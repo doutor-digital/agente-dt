@@ -177,7 +177,8 @@ import {
 import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler,
   widgetSugestaoMotivoHandler,
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
-import { ponteCartaoHandler } from '../controllers/ponte.controller.js';
+import { ponteCartaoHandler, pontePausarHandler, ponteResumoIaHandler, ponteRetomarHandler } from '../controllers/ponte.controller.js';
+import { ponteFilaHandler } from '../controllers/ponte-fila.controller.js';
 import { faxinaConversasHandler, avisoNaoLidasHandler, preencheCamposHandler } from '../controllers/faxina.controller.js';
 import { relatorioRedeDiariaHandler } from '../controllers/relatorio-rede.controller.js';
 import { relatorioMensalRedeHandler } from '../controllers/relatorio-mensal-rede.controller.js';
@@ -300,6 +301,12 @@ apiRouter.get('/public/widget/:slug/numeros', widgetNumerosHandler);
 // Fica ACIMA do requireAuth global, como toda /public: abaixo dele a chave nunca seria lida.
 // POST para nome e telefone irem no corpo, fora da URL (log de acesso); não escreve nada.
 apiRouter.post('/public/widget/:slug/ponte/cartao', ponteCartaoHandler);
+// Fase 2 da Ponte: a fila do dia (só leitura, cache por conta), pausar/retomar a Sofia num paciente (a mesma
+// pausa do widget "Pausar a Sofia", única escrita da Ponte — no Kommo, nunca no WhatsApp) e o "Resumir com IA".
+apiRouter.get('/public/widget/:slug/ponte/fila', ponteFilaHandler);
+apiRouter.post('/public/widget/:slug/ponte/pausa', pontePausarHandler);
+apiRouter.delete('/public/widget/:slug/ponte/pausa', ponteRetomarHandler);
+apiRouter.post('/public/widget/:slug/ponte/resumo-ia', ponteResumoIaHandler);
 // Marcar consulta de dentro do cartão (unidade sem Sofia): mesma chave por unidade, limite próprio de escrita.
 apiRouter.get('/public/widget/:slug/horarios', widgetHorariosHandler);
 apiRouter.post('/public/widget/:slug/marcar', widgetMarcarHandler);
