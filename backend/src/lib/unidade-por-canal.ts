@@ -1,36 +1,105 @@
 /**
- * Unidade de atendimento pelo número de WhatsApp (05/10/2026, pedido do João).
+ * Unidade de atendimento do cartão — Petrópolis × Caxias no mesmo Kommo (05/10/2026; regra trocada em 13/10/2026).
  *
- * Petrópolis atende duas cidades num Kommo só: o número oficial (WhatsApp API) é Petrópolis e o número
- * conectado por QR code é Caxias. O Kommo sabe por qual canal cada conversa entrou (`source_id` da talk);
- * a SDR não sabe olhando o cartão. Este módulo decide, para cada cartão, a unidade pelo canal da PRIMEIRA
- * conversa e marca o campo "⌂ Unidade de atendimento" e a etiqueta da cidade.
+ * Até 13/10 a unidade saía do número de WhatsApp em que o paciente escreveu primeiro (oficial = Petrópolis,
+ * QR code = Caxias). O QR caiu em 10/10 e os anúncios de Caxias passaram a cair no número oficial: o robô
+ * marcou 104 pacientes de Caxias como Petrópolis. E a conta passa a ter UM número para as duas cidades — o
+ * número deixou de dizer de onde o paciente é. Decisão do João (13/10), nesta ordem:
+ *  1. o ANÚNCIO de origem (`⌂ ID do anúncio`), pela CONTA DE ANÚNCIOS a que ele pertence (Petrópolis
+ *     1055937202829106, Caxias 650695850658904). O robô pergunta a conta à Meta quando a unidade tem token com
+ *     acesso; sem token, vale a lista de anúncios conferidos à mão;
+ *  2. sem anúncio conhecido, o DDD do telefone (21 = Caxias, 24 = Petrópolis);
+ *  3. sem nenhum dos dois, o campo fica vazio e a SDR escolhe.
  *
- * Regras:
- *  - Preenche buraco: campo já preenchido (pela SDR ou por nós) nunca é trocado — só compara (confere/diverge).
- *  - Vale a primeira conversa do cartão: quem começou por Caxias e depois escreveu no número de Petrópolis
- *    continua Caxias (a SDR corrige à mão se for o caso).
- *  - A etiqueta segue o CAMPO (o que está no cartão), não o canal: se a SDR corrigiu para Petrópolis, a
- *    etiqueta é PETRÓPOLIS.
- *  - Canal fora do mapa não decide nada (número novo conectado amanhã não vira "Petrópolis" por engano).
+ * Regras que continuam:
+ *  - Campo preenchido pela SDR nunca é trocado — só compara (confere/diverge).
+ *  - O robô corrige a SI MESMO: se a regra discorda do campo e quem pôs o valor foi o robô (evento do Kommo
+ *    com `created_by` 0), ele troca. Foi assim que os 104 cartões de 13/10 se corrigem sem ninguém mexer.
+ *  - A etiqueta segue o CAMPO (o que está no cartão): se a SDR corrigiu para Petrópolis, a etiqueta é PETRÓPOLIS.
+ *
+ * O nome do arquivo e o id da automação (`unidade-por-canal`) ficaram os antigos: a tela de Automações guarda o
+ * estado por esse id.
  */
 
 export const CAMPO_UNIDADE = '⌂ Unidade de atendimento';
+/** O anúncio que trouxe o paciente (o rastreio de anúncio grava). O último vale quando o primeiro falta. */
+export const CAMPOS_ANUNCIO = ['⌂ ID do anúncio', '⌂ Último anúncio'] as const;
 
-/** Por unidade do agente: `source_id` do canal no Kommo → nome da unidade (igual à opção do campo). */
-export const CANAIS_POR_UNIDADE: Record<string, Record<number, string>> = {
+export interface RegrasDaUnidade {
+  /** conta de anúncios (sem o "act_") → unidade. */
+  contasDeAnuncio: Record<string, string>;
+  /** anúncio → conta de anúncios, conferido à mão: vale quando a unidade não tem token para perguntar à Meta. */
+  anunciosConhecidos: Record<string, string>;
+  /** DDD do telefone → unidade, para quem chegou sem anúncio conhecido. */
+  ddd: Record<string, string>;
+}
+
+const CONTA_PETROPOLIS = '1055937202829106';
+const CONTA_CAXIAS = '650695850658904';
+
+/** Por unidade do agente (slug). */
+export const REGRAS_POR_UNIDADE: Record<string, RegrasDaUnidade> = {
   'doutor-hernia-petropolis': {
-    5332: 'Petrópolis', // WhatsApp API oficial (waba)
-    15410: 'Caxias', // WhatsApp por QR code (com.amocrm.amocrmwa), conectado em 05/10/2026
+    contasDeAnuncio: { [CONTA_PETROPOLIS]: 'Petrópolis', [CONTA_CAXIAS]: 'Caxias' },
+    anunciosConhecidos: {
+      // Campanha 120248238857890289 "ENG | WPP | VÍDEO | RMKT | 3205" — conferida na Meta em 13/10.
+      '120248238857800289': CONTA_PETROPOLIS,
+      '120248238857810289': CONTA_PETROPOLIS,
+      '120248238857840289': CONTA_PETROPOLIS,
+      '120248238857880289': CONTA_PETROPOLIS,
+      '120248238857900289': CONTA_PETROPOLIS,
+      // Campanha "ENG | WPP | ABERTO | RMKT - 3205" ("AGENDAR AVALIAÇÃO") — conferida na Meta em 13/10.
+      '120250266913240207': CONTA_CAXIAS,
+      '120250266913260207': CONTA_CAXIAS,
+      '120250266913290207': CONTA_CAXIAS,
+      '120250266913310207': CONTA_CAXIAS,
+      '120250266913320207': CONTA_CAXIAS,
+      '120250266913330207': CONTA_CAXIAS,
+      '120250266913410207': CONTA_CAXIAS,
+      '120250266913420207': CONTA_CAXIAS,
+      '120250266913430207': CONTA_CAXIAS,
+    },
+    ddd: { '21': 'Caxias', '24': 'Petrópolis' },
   },
 };
 
 /** A etiqueta da cidade: o nome em caixa alta ("Caxias" → "CAXIAS"). */
 export const etiquetaDe = (unidade: string): string => unidade.toLocaleUpperCase('pt-BR');
 
-export interface ConversaDoCartao {
-  sourceId: number | null | undefined;
-  criadaEm: number | null | undefined;
+/** DDD de um telefone brasileiro, com ou sem o 55 na frente. null se não parecer telefone brasileiro. */
+export function dddDe(telefone: string | null | undefined): string | null {
+  let d = String(telefone ?? '').replace(/\D/g, '');
+  if (d.startsWith('55') && (d.length === 12 || d.length === 13)) d = d.slice(2);
+  if (d.length !== 10 && d.length !== 11) return null;
+  return d.slice(0, 2);
+}
+
+export interface Decisao {
+  unidade: string;
+  motivo: string;
+}
+
+/**
+ * Puro. `contaDoAnuncio` = a conta que a Meta devolveu para o anúncio (null se não perguntou ou se a Meta não
+ * deixou ver). Devolve null quando nada decide — a SDR escolhe.
+ */
+export function decidirUnidade(e: {
+  anuncio: string | null;
+  contaDoAnuncio: string | null;
+  ddd: string | null;
+  regras: RegrasDaUnidade;
+}): Decisao | null {
+  if (e.anuncio) {
+    const conta = e.contaDoAnuncio ?? e.regras.anunciosConhecidos[e.anuncio] ?? null;
+    const pelaConta = conta ? e.regras.contasDeAnuncio[conta] : undefined;
+    if (pelaConta) return { unidade: pelaConta, motivo: `anúncio ${e.anuncio} é da conta de anúncios de ${pelaConta}` };
+  }
+  const peloDdd = e.ddd ? e.regras.ddd[e.ddd] : undefined;
+  if (peloDdd) {
+    const sobra = e.anuncio ? ` (anúncio ${e.anuncio} de conta desconhecida)` : '';
+    return { unidade: peloDdd, motivo: `DDD ${e.ddd}${sobra}` };
+  }
+  return null;
 }
 
 export type PlanoUnidade =
@@ -39,27 +108,25 @@ export type PlanoUnidade =
 
 /**
  * Puro. `noCartao` = valor atual do campo (null se vazio); `etiquetas` = as do cartão hoje.
- * Devolve null quando não há o que fazer (nenhuma conversa por canal conhecido).
- * `etiqueta` vem preenchida só quando falta no cartão.
+ * Devolve null quando não há o que fazer (nada decidiu). `etiqueta` vem preenchida só quando falta no cartão.
  */
 export function planejarUnidade(e: {
-  conversas: ReadonlyArray<ConversaDoCartao>;
-  mapa: Record<number, string>;
+  decisao: Decisao | null;
   noCartao: string | null;
   etiquetas: ReadonlyArray<string>;
 }): PlanoUnidade | null {
-  const conhecidas = e.conversas
-    .filter((c) => typeof c.sourceId === 'number' && e.mapa[c.sourceId] !== undefined)
-    .sort((a, b) => (a.criadaEm ?? Number.MAX_SAFE_INTEGER) - (b.criadaEm ?? Number.MAX_SAFE_INTEGER));
-  if (conhecidas.length === 0) return null;
-  const unidade = e.mapa[conhecidas[0].sourceId as number];
-  const motivo = `primeira conversa pelo número de ${unidade}`;
-
+  if (!e.decisao) return null;
+  const { unidade, motivo } = e.decisao;
   const tem = new Set(e.etiquetas.map((t) => t.trim().toLocaleUpperCase('pt-BR')));
   const falta = (u: string) => (tem.has(etiquetaDe(u)) ? null : etiquetaDe(u));
 
   if (!e.noCartao) return { acao: 'gravar', unidade, etiqueta: etiquetaDe(unidade), motivo };
   const igual = e.noCartao.trim().toLocaleLowerCase('pt-BR') === unidade.toLocaleLowerCase('pt-BR');
-  // a etiqueta acompanha o que está no cartão (a correção da SDR vence o canal)
+  // a etiqueta acompanha o que está no cartão (a correção da SDR vence a regra)
   return { acao: igual ? 'confere' : 'diverge', unidade, noCartao: e.noCartao, etiqueta: falta(e.noCartao), motivo };
+}
+
+/** Diverge e quem pôs o valor foi o próprio robô (`created_by` 0 no Kommo): ele corrige a si mesmo. A SDR, nunca. */
+export function roboCorrige(plano: PlanoUnidade | null, autorDoCampo: number | undefined): boolean {
+  return plano?.acao === 'diverge' && autorDoCampo === 0;
 }

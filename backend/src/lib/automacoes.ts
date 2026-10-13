@@ -293,11 +293,11 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'unidade-por-canal',
     chave: 'UNIDADE_POR_CANAL_SLUGS',
-    nome: 'Unidade pelo número de WhatsApp',
+    nome: 'Unidade de atendimento (Petrópolis × Caxias)',
     oQueFaz:
-      'Para conta com dois números (Petrópolis e Caxias no mesmo Kommo): pelo número em que o paciente escreveu primeiro, marca o ⌂ Unidade de atendimento e a etiqueta da cidade. Grava só em campo vazio.',
+      'Para conta que atende duas cidades no mesmo número (Petrópolis e Caxias): marca o ⌂ Unidade de atendimento e a etiqueta da cidade pela conta de anúncios do anúncio que trouxe o paciente; sem anúncio conhecido, pelo DDD (21 = Caxias, 24 = Petrópolis); sem os dois, deixa vazio para a SDR escolher.',
     pegadinha:
-      'Vale a PRIMEIRA conversa do cartão. Se a SDR corrigir o campo, a correção fica e a etiqueta passa a seguir o campo. Número novo conectado na conta não decide nada até entrar no mapa do código (aparece aviso no log).',
+      'Nunca troca o que a SDR marcou. Troca o que o PRÓPRIO robô marcou se a regra discordar (é assim que os 104 pacientes de Caxias marcados como Petrópolis até 13/10 se corrigem). Anúncio novo entra sozinho quando a unidade tem o token da Meta com acesso às duas contas de anúncio; sem token vale a lista conferida no código, e anúncio fora dela cai no DDD.',
     risco: 'escreve-campo',
     temSeco: true,
     quandoVazio: 'desligado',
