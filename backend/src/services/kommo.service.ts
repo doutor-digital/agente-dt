@@ -936,6 +936,92 @@ export class KommoClient {
     return todas;
   }
 
+  /**
+   * As conversas da conta mexidas desde `desdeEpoch`, das mais novas para as mais antigas, até `maxPaginas`
+   * páginas de 250 — para a fila da Ponte ("sem resposta" e "negociação parada"). Para assim que a página
+   * passa de `desdeEpoch`: numa conta movimentada, 7 dias cabem em 1–3 páginas. `completa` = chegou até
+   * `desdeEpoch` (falso = parou no teto de páginas e pode faltar conversa). Erro de API lança.
+   */
+  async listarConversasDesde(desdeEpoch: number, maxPaginas = 4): Promise<{ conversas: KommoTalk[]; completa: boolean }> {
+    const conversas: KommoTalk[] = [];
+    try {
+      for (let page = 1; page <= maxPaginas; page++) {
+        const { data, status } = await this.http.get<{ _embedded?: { talks?: KommoTalk[] } }>('/talks', {
+          params: { limit: 250, page, 'order[updated_at]': 'desc' },
+        });
+        if (status === 204 || !data) return { conversas, completa: true };
+        const lote = data._embedded?.talks ?? [];
+        for (const t of lote) if ((t.updated_at ?? 0) >= desdeEpoch) conversas.push(t);
+        if (lote.length < 250 || (lote[lote.length - 1]?.updated_at ?? 0) < desdeEpoch) return { conversas, completa: true };
+      }
+    } catch (err) {
+      wrapAxiosError(err, 'listarConversasDesde');
+    }
+    return { conversas, completa: false };
+  }
+
+  /**
+   * Cartões que ENTRARAM numa etapa desde `desdeEpoch` (evento `lead_status_changed` com `value_after` na
+   * etapa), para a conta toda, numa consulta paginada — em vez de um `leadMudouEtapaDesde` por cartão. É o
+   * "acabou de chegar na etapa" da fila da Ponte. `completa` falso = parou no teto de páginas. Erro lança.
+   */
+  async cartoesQueEntraramNaEtapaDesde(
+    desdeEpoch: number,
+    para: { pipelineId: number; statusId: number },
+    maxPaginas = 3,
+  ): Promise<{ ids: Set<number>; completa: boolean }> {
+    const ids = new Set<number>();
+    try {
+      for (let page = 1; page <= maxPaginas; page++) {
+        const { data, status } = await this.http.get<
+          { _embedded?: { events?: Array<{ entity_id?: number }> }; _links?: { next?: unknown } } | ''
+        >('/events', {
+          params: {
+            'filter[entity]': 'lead',
+            'filter[type][]': 'lead_status_changed',
+            'filter[created_at][from]': desdeEpoch,
+            'filter[value_after][leads_statuses][0][pipeline_id]': para.pipelineId,
+            'filter[value_after][leads_statuses][0][status_id]': para.statusId,
+            limit: 100,
+            page,
+          },
+        });
+        if (status === 204 || !data) return { ids, completa: true };
+        const lote = data._embedded?.events ?? [];
+        for (const e of lote) {
+          const id = Number(e.entity_id);
+          if (Number.isInteger(id) && id > 0) ids.add(id);
+        }
+        if (lote.length < 100 || !data._links?.next) return { ids, completa: true };
+      }
+    } catch (err) {
+      wrapAxiosError(err, 'cartoesQueEntraramNaEtapaDesde');
+    }
+    return { ids, completa: false };
+  }
+
+  /**
+   * Quando (epoch s) o cartão mudou de etapa pela última vez — o "há quanto tempo nesta etapa" do resumo da
+   * Ponte. `null` = nunca mudou (ou não deu para ler: o resumo só não mostra o tempo). Pega o maior
+   * `created_at` em vez de confiar na ordem da lista, que a API não garante.
+   */
+  async ultimaMudancaDeEtapa(leadId: number): Promise<number | null> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ created_at?: number }> } } | ''>('/events', {
+        params: {
+          'filter[entity]': 'lead',
+          'filter[entity_id][]': leadId,
+          'filter[type][]': 'lead_status_changed',
+          limit: 100,
+        },
+      });
+      const quando = ((data && data._embedded?.events) || []).map((e) => Number(e.created_at ?? 0)).filter((t) => t > 0);
+      return quando.length ? Math.max(...quando) : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Cartões por id, com campos e etiquetas (lotes de 50 — o filtro vai na URL). `contatos` traz os ids dos contatos. */
   async listLeadsPorIds(ids: number[], opcoes: { contatos?: boolean } = {}): Promise<KommoLead[]> {
     const out: KommoLead[] = [];
@@ -1690,7 +1776,15 @@ export class KommoClient {
    * número do contato quando houver mais de um candidato.
    */
   /** Leads parados numa etapa (até `limite`, mais recentes primeiro). Usado pelo sincronizador pra regra das 48 h em COMPARECEU. */
-  async listLeadsPorEtapa(pipelineId: number, statusId: number, limite = 250, page = 1, comContatos = false): Promise<KommoLead[]> {
+  async listLeadsPorEtapa(
+    pipelineId: number,
+    statusId: number,
+    limite = 250,
+    page = 1,
+    comContatos = false,
+    /** `desc` = os cartões mais novos primeiro (a fila da Ponte: com teto de páginas, corta os mais velhos). */
+    ordem: 'asc' | 'desc' = 'asc',
+  ): Promise<KommoLead[]> {
     try {
       const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
         params: {
@@ -1698,7 +1792,7 @@ export class KommoClient {
           page,
           'filter[statuses][0][pipeline_id]': pipelineId,
           'filter[statuses][0][status_id]': statusId,
-          'order[id]': 'asc',
+          'order[id]': ordem,
           ...(comContatos ? { with: 'contacts' } : {}),
         },
       });

@@ -75,7 +75,8 @@ async function main(): Promise<void> {
         return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key', 'X-Requested-With'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }
       if (req.path.startsWith('/api/public/widget/') && ORIGEM_EXTENSAO.test(origin)) {
-        return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key'], methods: ['GET', 'POST', 'OPTIONS'] });
+        // DELETE: a fase 2 retoma a Sofia num paciente (`DELETE …/ponte/pausa`)
+        return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }
       const allowed = env.FRONTEND_ORIGIN.includes(origin);
       if (!allowed) {

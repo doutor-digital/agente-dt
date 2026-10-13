@@ -169,3 +169,75 @@ main { padding: 12px 14px; }
 .aprendiz__dica { display: flex; flex-direction: column; }
 .aprendiz__titulo { font-weight: 600; font-size: 13px; }
 .aprendiz__onde { color: var(--suave); font-size: 12px; }
+
+/* ── fase 2 ── */
+[hidden] { display: none !important; }
+.nota:empty { display: none; }
+button:disabled { opacity: 0.55; cursor: default; }
+.botao--pequeno { padding: 4px 9px; font-size: 12px; }
+.botao--alerta { background: var(--alerta); border-color: var(--alerta); color: #fff; font-weight: 600; }
+
+/* abas: Conversa | Fila de hoje */
+.abas { display: flex; gap: 4px; padding: 8px 14px 0; background: var(--cartao); border-bottom: 1px solid var(--linha); }
+.abas__botao {
+  flex: 1;
+  padding: 7px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--suave);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.abas__botao[aria-selected="true"] { color: var(--texto); border-bottom-color: var(--destaque); }
+
+/* resumo do lead */
+.bloco--resumo { background: var(--fundo); border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; }
+.resumo__linhas { margin: 0; padding-left: 16px; display: grid; gap: 3px; }
+.resumo__passo { margin: 6px 0 0; }
+.bloco--resumo .botao--pequeno { margin-top: 6px; }
+
+/* pausar a Sofia neste paciente */
+.pausa__estado { margin: 0 0 6px; color: var(--alerta); font-weight: 600; }
+.pausa__form { display: grid; gap: 8px; margin-top: 6px; }
+.pausa__opcoes { border: 1px solid var(--linha); border-radius: 7px; margin: 0; padding: 6px 10px; display: grid; gap: 4px; }
+.pausa__opcoes legend { padding: 0 4px; color: var(--suave); font-size: 12px; }
+.pausa__opcao { cursor: pointer; }
+.pausa__data, .pausa__motivo {
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--linha);
+  background: var(--fundo);
+  color: var(--texto);
+  font: inherit;
+}
+.pausa__botoes { display: flex; gap: 6px; }
+
+/* fila de hoje */
+.painel-fila { padding: 12px 14px; }
+.fila { display: grid; gap: 10px; }
+.fila__topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.fila__topo .nota { margin: 0; }
+.fila__grupo { background: var(--cartao); border: 1px solid var(--linha); border-radius: 10px; padding: 10px 12px; }
+.fila__titulo { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin: 0 0 6px; font-size: 13px; }
+.fila__etapa { font-weight: 700; }
+.fila__motivo { color: var(--suave); font-weight: 400; }
+.fila__contador {
+  margin-left: auto;
+  min-width: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--destaque);
+  color: var(--destaque-texto);
+  font-size: 12px;
+  text-align: center;
+}
+.fila__lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.fila__item { border-top: 1px solid var(--linha); padding-top: 6px; }
+.fila__item:first-child { border-top: 0; padding-top: 0; }
+.fila__linha { display: flex; justify-content: space-between; gap: 8px; }
+.fila__nome { font-weight: 600; word-break: break-word; }
+.fila__tempo { color: var(--suave); font-size: 12px; white-space: nowrap; }
+.fila__detalhe, .fila__telefone { margin: 1px 0; color: var(--suave); font-size: 12px; }
+.fila__botoes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }

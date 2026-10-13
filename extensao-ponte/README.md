@@ -1,18 +1,72 @@
 # Ponte — o cartão do Kommo ao lado da conversa no WhatsApp Web
 
-Extensão do Chrome, **fase 1: só leitura**. Com uma conversa aberta no WhatsApp Web, o painel lateral do
-Chrome mostra o cartão do Kommo daquele paciente:
+Extensão do Chrome (e do Firefox), **versão 0.2.0 — fase 2**. Com uma conversa aberta no WhatsApp Web, o
+painel lateral mostra o cartão do Kommo daquele paciente:
 
+- **Resumo** (novo na fase 2), no topo: quem é, onde está e há quanto tempo, o que já aconteceu na franquia, a
+  última conversa e o próximo passo sugerido para a etapa;
 - nome do cartão, funil e etapa, com uma barrinha do funil COMERCIAL;
 - responsável, etiquetas e se a Sofia está ativa ou quieta (pausa da unidade, fora do horário, caixinha
   "Pausar IA" ou pausa com data);
+- **Pausar a Sofia neste paciente** (novo na fase 2);
 - de que anúncio o paciente veio;
 - o que a franquia sabe: consulta marcada ou não, última consulta, tratamento;
 - como o cartão foi achado (pelo telefone, pelas mensagens, pelo nome — "confira" — ou escolhido por você);
 - o botão **Abrir no Kommo**.
 
-Também tem um bloco "Modo aprendiz", que diz onde cada coisa fica dentro do Kommo. Na fase 1 ele é fixo; a
+E uma segunda aba, **Fila de hoje** (nova na fase 2): quem chamar ou ligar hoje, por etapa.
+
+Também tem um bloco "Modo aprendiz", que diz onde cada coisa fica dentro do Kommo. Por enquanto ele é fixo; a
 fase 3 vai escolher qual dica mostrar e quando.
+
+## O que há de novo na 0.2.0 (fase 2)
+
+### Pausar a Sofia neste paciente
+
+No cartão, o botão **Pausar a Sofia neste paciente** abre as opções: **até amanhã às 8h**, **3 dias**,
+**1 semana** ou **escolher a data** (a Sofia volta às 8h do dia escolhido; no máximo 30 dias), e um motivo
+opcional. Pausada, o painel mostra "Sofia pausada até 14/10 08:00 · motivo · por Ana" e o botão
+**Retomar agora**.
+
+É a **mesma pausa** do widget "Pausar a Sofia" do Kommo (`backend/src/lib/pausa-lead.ts`): a linha em
+`lead_pausas` manda na Sofia, a caixinha "Pausar IA" é marcada junto (os Salesbots leem a caixinha) e o worker
+de vencimento solta sozinho na data. Rotas: `POST` e `DELETE /api/public/widget/:slug/ponte/pausa`, com
+`{ leadId, ate, motivo, por }`. O `por` é o **Seu nome** das opções da extensão (campo novo, opcional).
+
+Se a SDR marcou a caixinha "Pausar IA" à mão (sem data), o painel só avisa — a caixinha é dela, e a Sofia só
+volta quando alguém desmarcar no Kommo.
+
+### Fila de hoje ("ligações por etapa")
+
+O João pediu "ligações por etapa". A leitura: uma aba com quem a atendente precisa **chamar ou ligar hoje**,
+separada por etapa do funil COMERCIAL, cada grupo com contador:
+
+| Etapa | Entra na fila quando | Motivo |
+| --- | --- | --- |
+| entrada / EM QUALIFICAÇÃO | a conversa do Kommo está aberta e **não lida** há mais de 2 h, e a última fala não foi a Sofia | sem resposta |
+| EM ESPERA | o "◷ Retomar em" é hoje ou já passou | retomar contato |
+| AGENDADO | a "◷ Data da Consulta" é amanhã e a "✓ Situação da consulta" não diz confirmada | confirmar presença |
+| NÃO COMPARECEU | sempre (menos quem já tem consulta nova no futuro) | faltou: remarcar |
+| EM NEGOCIAÇÃO | o cartão não mudou de etapa e a conversa não mexeu há 3 dias (o "parado" do worker de parados) | retomar negociação |
+
+Cada paciente mostra nome, etapa, o motivo, há quanto tempo, e três botões: **Abrir conversa** (troca a URL da
+aba do WhatsApp Web para `https://web.whatsapp.com/send?phone=<dígitos>` — é navegação, como clicar num link;
+nada é digitado nem enviado), **Copiar telefone** (para ligar) e **Abrir no Kommo**.
+
+Rota: `GET /api/public/widget/:slug/ponte/fila`, só leitura, com cache de 2 min por conta do Kommo. Os prazos
+(amanhã, 3 dias, 2 h…) ficam todos em `PRAZOS_DA_FILA` (`backend/src/lib/ponte-fila.ts`), cada um com variável
+de ambiente (`PONTE_FILA_CONFIRMAR_DIAS`, `PONTE_FILA_NEGOCIACAO_DIAS`, `PONTE_FILA_SEM_RESPOSTA_HORAS`…).
+
+### Resumo do lead
+
+3 a 5 linhas no topo do cartão, **sem gastar IA**: os campos do cartão (cidade, queixa, região da dor), a
+memória que a Sofia já guarda do paciente (desfecho e onde travou), a franquia (consultas, faltas, tratamento)
+e há quanto tempo o cartão está na etapa. Por último, o próximo passo sugerido para a etapa.
+
+O botão **Resumir com IA** só aparece quando a unidade tem chave da Anthropic. Ele lê a conversa do Kommo e
+pede o resumo ao modelo mais barato que o projeto já usa em tarefa auxiliar (Haiku 4.5), com a chave da
+própria unidade; o custo entra na tela de custo da IA. Fica guardado 6 h por paciente. Sem conversa para ler,
+devolve o resumo do cartão sem chamar a IA. Rota: `POST /api/public/widget/:slug/ponte/resumo-ia`.
 
 ## Instalar (modo desenvolvedor)
 
@@ -21,9 +75,13 @@ fase 3 vai escolher qual dica mostrar e quando.
 3. A página de opções abre sozinha. Preencha:
    - o **slug da unidade** (ex.: `doutor-hernia-acailandia`);
    - a **chave**: a mesma do widget do cartão no Kommo daquela unidade (o HMAC do slug, ver
-     `backend/src/lib/widget-agenda.ts`).
+     `backend/src/lib/widget-agenda.ts`);
+   - **seu nome** (opcional): aparece como "por Ana" quando você pausa a Sofia num paciente.
 
    Depois clique em **Salvar e testar**. Deve aparecer "Conectado: <unidade>".
+
+   Já tinha a 0.1.0 instalada? Em `chrome://extensions`, clique no ↻ da Ponte e recarregue a aba do WhatsApp
+   Web (F5).
 4. Abra `https://web.whatsapp.com` e clique no ícone da Ponte na barra do Chrome. O painel lateral abre.
 
 A chave fica só no computador, em `chrome.storage.local`. O servidor é o mesmo dos widgets do Kommo
@@ -73,9 +131,13 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
 - guarda texto de conversa, nem no `storage` da extensão nem no servidor. O texto vira hash dentro do content
   script, e o painel só recebe nome, telefone e hashes;
 - trata o id `@lid` como telefone;
-- escreve no Kommo ou na franquia. A fase 1 é só leitura.
+- monta link do WhatsApp com texto (`text=`): "Abrir conversa" leva só o telefone, e quem escreve é a atendente;
+- escreve na franquia. No Kommo, a única escrita é pausar e retomar a Sofia num paciente, quando a atendente
+  clica, e ela vai pelo NOSSO servidor com a chave da unidade — nunca pelo WhatsApp.
 
-Permissões: `sidePanel` e `storage`, mais `host_permissions` apenas para o servidor da Doutor Digital.
+Permissões: `sidePanel` e `storage`, mais `host_permissions` apenas para o servidor da Doutor Digital. O
+"Abrir conversa" usa `chrome.tabs.update` na aba do WhatsApp Web que a Ponte já lê, que não pede permissão a
+mais; o "Copiar telefone" usa a área de transferência só no clique.
 
 ## ⚠ Os seletores são uma SUPOSIÇÃO
 
@@ -107,7 +169,24 @@ npm test            # node --test 'testes/*.test.js'
   de que a leitura não clica, não foca, não dispara evento e não muda o DOM;
 - `conteudo.test.js`: o content script inteiro no jsdom. Só nome, telefone e hashes saem para o painel, e a
   troca de conversa é percebida;
-- `desenho.test.js`: o painel (cartão, candidatos, busca manual e dado do servidor tratado como texto).
+- `desenho.test.js`: o painel (cartão, candidatos, busca manual e dado do servidor tratado como texto) e, na
+  fase 2, o resumo e o "Resumir com IA", o bloco da pausa, a fila (grupos, contadores e os três botões) e a
+  prova de que "Abrir conversa" é só o link com o telefone;
+- `pausa.test.js`: as datas de cada opção da pausa, o limite de 30 dias e o estado da Sofia depois de pausar.
+
+No backend: `ponte-fila.test.ts` (cada regra da fila e os prazos), `ponte-resumo.test.ts` (o resumo sem IA, o
+pedido e a leitura da resposta da IA) e `ponte-pausa.test.ts` (o pedido, as regras de sempre e o próprio
+`pausa.js` daqui passando pela regra do servidor).
+
+### A conferir no dia de teste (fase 2)
+
+- [ ] a fila "sem resposta": o `is_read` das conversas do Kommo fica falso quando só a Sofia respondeu? (a
+      regra já ignora conversa em que a última fala é da Sofia, mas só nas unidades com a Sofia);
+- [ ] a fila "EM NEGOCIAÇÃO": o Kommo aceita o filtro `value_after` nos eventos de mudança de etapa? (se não
+      aceitar, o grupo avisa e usa a última alteração do cartão, que robô também mexe);
+- [ ] "Abrir conversa" recarrega o WhatsApp Web e abre o chat certo; contato sem WhatsApp mostra o aviso do
+      próprio WhatsApp;
+- [ ] "Copiar telefone" funciona no painel lateral do Chrome e na barra lateral do Firefox.
 
 O backend confere o mesmo contrato em `backend/src/lib/ponte-impressao.test.ts`, que carrega o `impressao.js`
 daqui, e em `ponte-cartao.test.ts`.

@@ -193,6 +193,16 @@ export function estadoDaSofia(
   return { pausada: false, por: null, ate: null };
 }
 
+/**
+ * A caixinha "Pausar IA" é da SDR, ou é a marca que a pausa com data pôs? `pausarLead` marca a caixinha junto
+ * (os Salesbots leem a caixinha) e guarda `campoMarcado`. Sem esta conta, o painel diria "caixinha" — sem
+ * data — logo depois da atendente pausar até amanhã, porque a caixinha vem antes da janela em `estadoDaSofia`.
+ * Se a SDR já tinha marcado à mão (`campoMarcado` falso), a caixinha é dela e continua valendo depois da data.
+ */
+export function caixinhaDaSdr(caixinha: boolean, pausa: { emPausa: boolean; campoMarcado: boolean } | null | undefined): boolean {
+  return caixinha && !(pausa?.emPausa && pausa.campoMarcado);
+}
+
 export interface EtapaDaBarra {
   id: number;
   nome: string;
