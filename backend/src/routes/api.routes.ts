@@ -177,6 +177,7 @@ import {
 import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler,
   widgetSugestaoMotivoHandler,
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
+import { ponteCartaoHandler } from '../controllers/ponte.controller.js';
 import { faxinaConversasHandler, avisoNaoLidasHandler, preencheCamposHandler } from '../controllers/faxina.controller.js';
 import { relatorioRedeDiariaHandler } from '../controllers/relatorio-rede.controller.js';
 import { relatorioMensalRedeHandler } from '../controllers/relatorio-mensal-rede.controller.js';
@@ -295,6 +296,10 @@ apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);
 apiRouter.get('/public/widget/:slug/sync', widgetSyncHandler);
 apiRouter.get('/public/widget/:slug/paciente', widgetPacienteHandler);
 apiRouter.get('/public/widget/:slug/numeros', widgetNumerosHandler);
+// Extensão "Ponte" do WhatsApp Web: o cartão do Kommo da conversa aberta. Mesma chave por unidade, SÓ LEITURA.
+// Fica ACIMA do requireAuth global, como toda /public: abaixo dele a chave nunca seria lida.
+// POST para nome e telefone irem no corpo, fora da URL (log de acesso); não escreve nada.
+apiRouter.post('/public/widget/:slug/ponte/cartao', ponteCartaoHandler);
 // Marcar consulta de dentro do cartão (unidade sem Sofia): mesma chave por unidade, limite próprio de escrita.
 apiRouter.get('/public/widget/:slug/horarios', widgetHorariosHandler);
 apiRouter.post('/public/widget/:slug/marcar', widgetMarcarHandler);

@@ -1,0 +1,59 @@
+{
+  "_leia": "Vetores fixos da impressão: SHA-256 de (texto normalizado + '|' + HH:MM). Calculados por uma 3ª implementação (Python, fora do repo) para a extensão (impressao.js) e o servidor (ponte-impressao.ts) terem de bater com algo que não é nenhum dos dois.",
+  "vetores": [
+    {
+      "texto": "Bom dia",
+      "minuto": "09:58",
+      "normalizado": "bom dia",
+      "impressao": "c598bb67d8603ff45f396339079b23894218ba8c490d97e257867ea04cdf8f92"
+    },
+    {
+      "texto": "*Quero* marcar uma avaliação 🙏",
+      "minuto": "10:01",
+      "normalizado": "quero marcar uma avaliacao",
+      "impressao": "709aa86410c8ffe00fe03e2bcb525c2965a8a1b987292b315d9e51214e501efc"
+    },
+    {
+      "texto": "  Olá,\n tudo   bem? ",
+      "minuto": "00:00",
+      "normalizado": "ola tudo bem",
+      "impressao": "23793c558cd0d03f522e3f7820515cbf1019ee130cbf6b35a62429d0e8743976"
+    },
+    {
+      "texto": "Ç ÃÉÍÕÚ àèìòù â ê ô ü",
+      "minuto": "23:59",
+      "normalizado": "c aeiou aeiou a e o u",
+      "impressao": "8fee5e805729ec1a477c15dd4aa35941b5bd6f6a88ec1f0bb38c0a411e03c722"
+    },
+    {
+      "texto": "R$ 250,00 no pix?",
+      "minuto": "14:30",
+      "normalizado": "r 250 00 no pix",
+      "impressao": "b57dcc811c49831b9c79d02c2c8a446d6499d815fed1415956e83350a8da0625"
+    },
+    {
+      "texto": "Tenho HÉRNIA de disco L4-L5, dói muito!!!",
+      "minuto": "07:05",
+      "normalizado": "tenho hernia de disco l4 l5 doi muito",
+      "impressao": "2f9ecb59e51b6df20962db71d3e9d28c9ec5ab3a9e193f61838d64dc989c5ec5"
+    },
+    {
+      "texto": "👍",
+      "minuto": "12:00",
+      "normalizado": "",
+      "impressao": null
+    },
+    {
+      "texto": "oi",
+      "minuto": "24:00",
+      "normalizado": "oi",
+      "impressao": null
+    },
+    {
+      "texto": "oi",
+      "minuto": "9:05",
+      "normalizado": "oi",
+      "impressao": null
+    }
+  ]
+}

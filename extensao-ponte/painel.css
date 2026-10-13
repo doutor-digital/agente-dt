@@ -1,0 +1,171 @@
+/* Ponte — painel lateral. Sem fonte de fora, sem framework, sem logo de terceiros. */
+:root {
+  --fundo: #f6f7f9;
+  --cartao: #ffffff;
+  --texto: #1d2330;
+  --suave: #5d6677;
+  --linha: #e1e5ec;
+  --destaque: #1f6feb;
+  --destaque-texto: #ffffff;
+  --ok: #1a7f4b;
+  --alerta: #b54708;
+  --fraco: #8a5a00;
+  --fraco-fundo: #fff4d6;
+  --forte-fundo: #e5f3ec;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fundo: #14171c;
+    --cartao: #1c2027;
+    --texto: #e6e9ef;
+    --suave: #9aa3b2;
+    --linha: #2c323c;
+    --destaque: #4c8dff;
+    --ok: #4cc38a;
+    --alerta: #f0a35e;
+    --fraco: #f2c94c;
+    --fraco-fundo: #3a3220;
+    --forte-fundo: #1d3328;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--fundo);
+  color: var(--texto);
+}
+.topo {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--linha);
+  background: var(--cartao);
+}
+.topo__marca { font-weight: 700; letter-spacing: 0.02em; }
+.topo__unidade { color: var(--suave); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+main { padding: 12px 14px; }
+.rodape { padding: 10px 14px 16px; color: var(--suave); font-size: 12px; }
+
+/* avisos e estados */
+.aviso, .nada, .candidatos, .cartao {
+  background: var(--cartao);
+  border: 1px solid var(--linha);
+  border-radius: 10px;
+  padding: 14px;
+}
+.aviso__titulo { margin: 0 0 4px; font-weight: 600; font-size: 15px; }
+.aviso__texto { margin: 0 0 10px; color: var(--suave); }
+.aviso--procurando .aviso__titulo::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--destaque);
+  border-right-color: transparent;
+  animation: girar 0.8s linear infinite;
+}
+@keyframes girar { to { transform: rotate(360deg); } }
+.aviso--erro .aviso__titulo { color: var(--alerta); }
+
+/* cartão */
+.cartao__topo { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.cartao__nome { margin: 0; font-size: 18px; line-height: 1.25; word-break: break-word; }
+.cartao__etapa { margin: 2px 0 12px; color: var(--suave); }
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.chip--forte { background: var(--forte-fundo); color: var(--ok); }
+.chip--fraco { background: var(--fraco-fundo); color: var(--fraco); }
+.chip--fechado { background: var(--linha); color: var(--suave); }
+
+.bloco { margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--linha); }
+.bloco__rotulo { margin: 0 0 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--suave); }
+.nota { margin: 6px 0 0; color: var(--suave); font-size: 12px; }
+.nota--alerta { color: var(--alerta); }
+
+/* barrinha do funil */
+.barra { display: flex; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.barra__etapa {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--linha);
+  position: relative;
+}
+.barra__etapa--feita { background: color-mix(in srgb, var(--destaque) 40%, var(--linha)); }
+.barra__etapa--atual { background: var(--destaque); height: 12px; margin-top: -2px; }
+.barra__nome { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+.linha { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.linha__rotulo { color: var(--suave); flex: 0 0 auto; }
+.linha__valor { text-align: right; word-break: break-word; }
+.linha--ok .linha__valor { color: var(--ok); }
+.linha--alerta .linha__valor { color: var(--alerta); font-weight: 600; }
+
+.etiquetas { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.etiqueta { padding: 1px 7px; border-radius: 4px; background: var(--fundo); border: 1px solid var(--linha); font-size: 12px; }
+
+/* botões, busca e listas */
+.botao {
+  display: inline-block;
+  padding: 7px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--linha);
+  background: var(--cartao);
+  color: var(--texto);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+.botao:hover { border-color: var(--destaque); }
+.botao--primario { display: block; text-align: center; background: var(--destaque); border-color: var(--destaque); color: var(--destaque-texto); font-weight: 600; margin-top: 12px; }
+.busca { display: flex; gap: 6px; margin-top: 8px; }
+.busca__campo {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--linha);
+  background: var(--fundo);
+  color: var(--texto);
+  font: inherit;
+}
+.lista { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
+.lista__botao {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--linha);
+  background: var(--fundo);
+  color: var(--texto);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.lista__botao:hover { border-color: var(--destaque); }
+.lista__nome { font-weight: 600; }
+.lista__etapa { color: var(--suave); font-size: 12px; }
+
+/* modo aprendiz */
+#aprendiz { padding: 0 14px; }
+.aprendiz { background: var(--cartao); border: 1px dashed var(--linha); border-radius: 10px; padding: 10px 14px; }
+.aprendiz summary { cursor: pointer; font-weight: 600; }
+.aprendiz__lista { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.aprendiz__dica { display: flex; flex-direction: column; }
+.aprendiz__titulo { font-weight: 600; font-size: 13px; }
+.aprendiz__onde { color: var(--suave); font-size: 12px; }
