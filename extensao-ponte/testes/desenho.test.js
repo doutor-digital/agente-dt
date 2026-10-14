@@ -442,7 +442,7 @@ describe('aviso de cartão duplicado (fase 3)', () => {
     ...ACHADO,
     cartao: { ...ACHADO.cartao, origem: 'Meta-Instagram' },
     duplicados: [
-      { id: 456, nome: 'MARIA SOUZA 10/10/2026', funil: 'COMERCIAL', etapa: 'EM QUALIFICAÇÃO', origem: null, link: 'https://x.kommo.com/leads/detail/456' },
+      { id: 456, nome: 'MARIA SOUZA 10/10/2026', funil: 'COMERCIAL', etapa: 'EM QUALIFICAÇÃO', origem: null, link: 'https://x.kommo.com/leads/detail/456', via: 'contato' },
     ],
   };
 
@@ -460,7 +460,28 @@ describe('aviso de cartão duplicado (fase 3)', () => {
     assert.match(linhas[1].textContent, /COMERCIAL › EM QUALIFICAÇÃO/);
     assert.doesNotMatch(linhas[1].textContent, /Origem/);
     assert.equal(linhas[1].querySelector('a').href, 'https://x.kommo.com/leads/detail/456');
-    assert.match(faixa.textContent, /Fica o que veio do anúncio; o outro é juntado \(Mesclar\) no Kommo, nunca apagado\./);
+    assert.match(faixa.textContent, /Confira se é a mesma pessoa antes de juntar\. Fica o que veio do anúncio; o outro é juntado \(Mesclar\) no Kommo, nunca apagado\./);
+    assert.equal(faixa.querySelector('[data-grupo="mesmo-numero"]'), null);
+  });
+
+  it('outro contato com o mesmo número: grupo separado, com a cautela da família', () => {
+    const doc = novoDoc();
+    const r = JSON.parse(JSON.stringify(COM_DUPLICADO));
+    r.duplicados.push({ id: 900, nome: 'JOÃO SOUZA', funil: 'COMERCIAL', etapa: 'EM ESPERA', origem: null, link: 'https://x.kommo.com/leads/detail/900', via: 'telefone' });
+    const faixa = D.cartao(doc, r, {}).querySelector('[data-bloco="duplicados"]');
+    assert.match(faixa.querySelector('.faixa__titulo').textContent, /Este paciente tem 2 cartões abertos/, 'o do número não conta como do paciente');
+    const grupo = faixa.querySelector('[data-grupo="mesmo-numero"]');
+    assert.match(grupo.textContent, /pode ser da família — confira se é a mesma pessoa antes de juntar/);
+    assert.deepEqual([...grupo.querySelectorAll('[data-lead]')].map((l) => l.getAttribute('data-lead')), ['900']);
+  });
+
+  it('só outro contato com o mesmo número: o título não diz que é o mesmo paciente', () => {
+    const doc = novoDoc();
+    const r = JSON.parse(JSON.stringify(COM_DUPLICADO));
+    r.duplicados = [{ id: 900, nome: 'JOÃO SOUZA', funil: 'COMERCIAL', etapa: 'EM ESPERA', origem: null, link: 'https://x.kommo.com/leads/detail/900', via: 'telefone' }];
+    const faixa = D.cartao(doc, r, {}).querySelector('[data-bloco="duplicados"]');
+    assert.equal(faixa.querySelector('.faixa__titulo').textContent, 'Há outro cartão aberto com o mesmo número');
+    assert.match(faixa.textContent, /Confira se é a mesma pessoa antes de juntar/);
   });
 
   it('sem duplicado (lista vazia ou não conferida) não há faixa', () => {
@@ -474,7 +495,7 @@ describe('aviso de cartão duplicado (fase 3)', () => {
     const doc = novoDoc();
     const r = JSON.parse(JSON.stringify(COM_DUPLICADO));
     r.cartao.fechado = true;
-    r.duplicados.push({ id: 789, nome: 'Maria', funil: 'TRATAMENTO', etapa: 'EM TRATAMENTO', origem: 'Indicação', link: 'https://x.kommo.com/leads/detail/789' });
+    r.duplicados.push({ id: 789, nome: 'Maria', funil: 'TRATAMENTO', etapa: 'EM TRATAMENTO', origem: 'Indicação', link: 'https://x.kommo.com/leads/detail/789', via: 'contato' });
     const faixa = D.cartao(doc, r, {}).querySelector('[data-bloco="duplicados"]');
     assert.match(faixa.textContent, /tem 2 cartões abertos/);
     assert.deepEqual([...faixa.querySelectorAll('[data-lead]')].map((l) => l.getAttribute('data-lead')), ['456', '789']);

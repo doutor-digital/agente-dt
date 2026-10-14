@@ -33,7 +33,7 @@ const FILA = {
   atualizadoEm: '2026-10-14T13:00:00.000Z',
   ritmo: { intervaloS: 40, tetoPorHora: 2 },
   grupos: [
-    { id: 'sem-resposta', etapa: 'entrada', rotulo: 'sem resposta', total: 2, itens: [item(1), item(2, { telefone: null, telefoneVisivel: null })] },
+    { id: 'sem-resposta', etapa: 'entrada', rotulo: 'sem resposta', total: 2, itens: [item(1), item(2, { telefone: null, telefoneVisivel: null, semTelefone: true })] },
     { id: 'retomar', etapa: 'EM ESPERA', rotulo: 'retomar contato', total: 2, itens: [item(3), item(4)] },
   ],
 };
@@ -133,7 +133,9 @@ describe('painel — "Começar a ligar" (fase 3)', () => {
       await esperar();
       await esperar();
       const gravou = p.pedidos.find((x) => x.caminho === '/ponte/ligacao');
-      assert.deepEqual(gravou.corpo, { leadId: 1, resultado: 'nao-atendeu', por: 'Ana' });
+      const { tentativa, ...semTentativa } = gravou.corpo;
+      assert.deepEqual(semTentativa, { leadId: 1, resultado: 'nao-atendeu', por: 'Ana' });
+      assert.match(tentativa, /^[A-Za-z0-9_-]{8,64}$/, 'o resultado leva o id da tentativa');
       assert.equal(gravou.chave, 'k');
 
       // o 2 não tem telefone: pulado com aviso; o 3 espera os 40 s do ritmo
@@ -159,7 +161,7 @@ describe('painel — "Começar a ligar" (fase 3)', () => {
       assert.equal(p.atualizacoes.length, 3);
       assert.equal(p.atualizacoes[2].url, 'https://web.whatsapp.com/send?phone=5599900000004');
 
-      // o que ficou guardado: só ids e horas
+      // o que ficou guardado: só ids, horas e o id da tentativa
       const guardado = JSON.stringify(p.armazenado.ligacao);
       assert.deepEqual(p.armazenado.ligacao.feitos, [1, 2, 3]);
       assert.equal(p.armazenado.ligacao.atual, 4);
@@ -260,6 +262,73 @@ describe('painel — etiquetas e respostas prontas (fase 3)', () => {
       p.doc.getElementById('respostas').querySelector('[data-acao="copiar-resposta"]').click();
       await esperar();
       assert.equal(p.copiados[2], 'Bom dia, João!');
+    } finally {
+      p.w.close();
+    }
+  });
+});
+
+describe('painel — revisão: gravação dupla e telefone não lido', () => {
+  it('resultado pendente: trocar de aba e voltar NÃO destrava os botões, e o segundo clique não manda nada', async () => {
+    let soltar;
+    const pendente = new Promise((r) => { soltar = r; });
+    const p = montar({
+      rotas: {
+        'GET /ponte/fila': FILA,
+        'POST /ponte/ligacao': () => pendente,
+      },
+    });
+    // a rota devolve uma promessa pendente: o json() do fetch falso só resolve quando ela soltar
+    try {
+      await esperar(10);
+      p.doc.getElementById('aba-fila').click();
+      await esperar(10);
+      p.doc.querySelector('[data-acao="comecar-ligar"]').click();
+      await esperar();
+      await esperar();
+      p.doc.querySelector('[data-resultado="atendeu"]').click();
+      await esperar();
+      // redesenho pela aba
+      p.doc.getElementById('aba-conversa').click();
+      p.doc.getElementById('aba-fila').click();
+      await esperar();
+      const botoes = [...p.doc.querySelectorAll('[data-acao="resultado"]')];
+      assert.ok(botoes.length && botoes.every((b) => b.disabled), 'continuam travados');
+      botoes[1].click();
+      await esperar();
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ponte/ligacao').length, 1, 'um pedido só');
+      soltar({ leadId: 1, resultado: 'atendeu', campos: true, nota: false, tentativas: 1, avisos: [] });
+      await esperar();
+      await esperar();
+      assert.match(p.doc.getElementById('fila').textContent, /Gravado no Kommo: Paciente 1 · atendeu/);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('o Kommo não deu os telefones: ninguém é marcado como feito e a tela não diz que acabou', async () => {
+    const semLeitura = {
+      ...FILA,
+      avisoTelefones: 'Não consegui ler os telefones agora: tente de novo (Atualizar).',
+      grupos: [{ id: 'retomar', etapa: 'EM ESPERA', rotulo: 'retomar contato', total: 2, itens: [
+        item(3, { telefone: null, telefoneVisivel: null, semTelefone: false }),
+        item(4, { telefone: null, telefoneVisivel: null, semTelefone: false }),
+      ] }],
+    };
+    const p = montar({ rotas: { 'GET /ponte/fila': semLeitura } });
+    try {
+      await esperar(10);
+      p.doc.getElementById('aba-fila').click();
+      await esperar(10);
+      const fila = p.doc.getElementById('fila');
+      assert.match(fila.querySelector('[data-papel="aviso-telefones"]').textContent, /Não consegui ler os telefones/);
+      assert.match(fila.textContent, /telefone não lido agora/);
+      fila.querySelector('[data-acao="comecar-ligar"]').click();
+      await esperar();
+      assert.doesNotMatch(fila.textContent, /Acabou a fila de hoje/);
+      assert.match(fila.textContent, /2 pacientes ficaram sem o telefone lido/);
+      assert.deepEqual(p.armazenado.ligacao.feitos, [], 'nada marcado como feito');
+      assert.equal(p.atualizacoes.length, 0);
     } finally {
       p.w.close();
     }

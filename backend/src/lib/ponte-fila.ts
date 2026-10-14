@@ -313,6 +313,15 @@ export function telefoneParaWhatsapp(bruto: string | null | undefined): string |
   return null;
 }
 
+/**
+ * O Kommo AFIRMA que este paciente não tem telefone? Só quando o cartão não tem contato, ou quando os telefones
+ * foram lidos e o dele não serve. Falha ao ler (`lidos` falso) NÃO é "sem telefone": é "não sei agora" — senão a
+ * fila de ligações pularia todo mundo e marcaria como feito.
+ */
+export function semTelefoneConfirmado(telefone: string | null, contatoId: number | null, lidos: boolean): boolean {
+  return !telefone && (contatoId === null || lidos);
+}
+
 /** Como a atendente lê (e copia para ligar): "(99) 90000-0043"; de fora do Brasil, "+<dígitos>". */
 export function telefoneParaMostrar(digitos: string): string {
   if (digitos.startsWith('55') && (digitos.length === 12 || digitos.length === 13)) {

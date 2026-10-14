@@ -27,7 +27,7 @@ const item = (leadId, extra = {}) => ({
 const FILA = {
   ritmo: { intervaloS: 40, tetoPorHora: 40 },
   grupos: [
-    { id: 'sem-resposta', itens: [item(1), item(2, { telefone: null, telefoneVisivel: null })] },
+    { id: 'sem-resposta', itens: [item(1), item(2, { telefone: null, telefoneVisivel: null, semTelefone: true })] },
     { id: 'retomar', itens: [item(3), item(1)] },
     { id: 'confirmar', itens: [] },
     { id: 'faltou', itens: [item(4)] },
@@ -79,8 +79,34 @@ describe('ligação — a fila e o estado guardado', () => {
     e = L.marcarFeito(e, 1);
     e = L.registrarAbertura(e, 3, T0 + 41 * S);
     const json = JSON.stringify(e);
-    assert.deepEqual(Object.keys(e).sort(), ['aberturas', 'atual', 'dia', 'feitos', 'slug', 'v']);
+    assert.deepEqual(Object.keys(e).sort(), ['aberturas', 'atual', 'dia', 'feitos', 'slug', 'tentativa', 'v']);
     for (const t of ['Paciente', '559990000', '(99)']) assert.ok(!json.includes(t), `vazou "${t}"`);
+  });
+});
+
+describe('ligação — tentativa e telefone não lido (revisão)', () => {
+  it('cada abertura começa uma tentativa com id; o resultado gravado (feito) encerra a tentativa', () => {
+    let e = L.estadoDoDia(null, '2026-10-14', 'acai', T0);
+    e = L.registrarAbertura(e, 1, T0);
+    assert.match(e.tentativa, /^[A-Za-z0-9_-]{8,64}$/);
+    const primeira = e.tentativa;
+    // o painel fechou e abriu: a mesma tentativa continua (o servidor não grava duas vezes)
+    assert.equal(L.estadoDoDia(JSON.parse(JSON.stringify(e)), '2026-10-14', 'acai', T0 + 5000).tentativa, primeira);
+    e = L.marcarFeito(e, 1);
+    assert.equal(e.tentativa, null);
+    e = L.registrarAbertura(e, 3, T0 + 41_000);
+    assert.notEqual(e.tentativa, primeira);
+    assert.equal(L.registrarAbertura(e, 4, T0 + 90_000, 'tentativa-fixa-1').tentativa, 'tentativa-fixa-1');
+  });
+
+  it('"sem telefone" só quando o servidor afirma; "deixar" pula agora sem marcar como feito', () => {
+    assert.equal(L.semTelefoneConfirmado({ telefone: null, semTelefone: true }), true);
+    assert.equal(L.semTelefoneConfirmado({ telefone: null, semTelefone: false }), false);
+    assert.equal(L.semTelefoneConfirmado({ telefone: null }), false, 'servidor antigo: não sabe — não marca');
+    const itens = L.filaDeLigacao(FILA);
+    const e = L.estadoDoDia(null, '2026-10-14', 'acai', T0);
+    assert.equal(L.proximo(itens, e, [1, 2]).leadId, 3);
+    assert.deepEqual(e.feitos, []);
   });
 });
 
@@ -200,6 +226,26 @@ describe('ligação — a tela', () => {
     assert.match(n.textContent, /Acabou a fila de hoje/);
     n.querySelector('[data-acao="recomecar-ligacao"]').click();
     assert.equal(recomecou, 1);
+  });
+
+  it('gravando: os resultados e o Pular vêm travados (redesenhar não destrava)', () => {
+    const doc = novoDoc();
+    const n = D.modoLigacao(doc, { ...base, fase: 'aberto', gravando: true }, { resultado: () => Promise.resolve() }, new Date(T0));
+    assert.ok([...n.querySelectorAll('[data-acao="resultado"]')].every((b) => b.disabled));
+    assert.equal(n.querySelector('.ligacao__resultados [data-acao="pular-ligacao"]').disabled, true);
+    assert.match(n.querySelector('[data-papel="gravando"]').textContent, /Gravando no Kommo/);
+  });
+
+  it('telefone não lido: fica "para depois", sem dizer que acabou a fila', () => {
+    const doc = novoDoc();
+    const n = D.modoLigacao(doc, {
+      ...base, item: null, fase: 'fim', aviso: 'Não consegui ler os telefones agora: tente de novo (Atualizar).',
+      naoLidos: [{ leadId: 5, nome: 'Paciente 5' }, { leadId: 6, nome: 'Paciente 6' }],
+    }, {}, new Date(T0));
+    assert.doesNotMatch(n.textContent, /Acabou a fila de hoje/);
+    assert.match(n.textContent, /2 pacientes ficaram sem o telefone lido/);
+    assert.match(n.querySelector('[data-bloco="nao-lidos"]').textContent, /não consegui ler os telefones, tente de novo/i);
+    assert.match(n.querySelector('[data-papel="aviso-ligacao"]').textContent, /tente de novo/);
   });
 
   it('pausado: "Continuar" no lugar de "Pausar"', () => {

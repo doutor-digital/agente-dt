@@ -2,8 +2,10 @@
  * Ponte — etiquetas do cartão (fase 3). Pura: sem chrome.* e sem DOM, para o teste da extensão e o do servidor
  * (`backend/src/lib/ponte-etiquetas.test.ts`) carregarem este mesmo arquivo.
  *
- * A atendente só ESCOLHE entre as etiquetas que já existem na conta (a Ponte não cria etiqueta). As que começam
- * com ▶ fazem um robô do Kommo mandar uma mensagem de WhatsApp para o paciente: pôr uma delas pede confirmação.
+ * A atendente só ESCOLHE entre as etiquetas que já existem na conta (a Ponte não cria etiqueta). As "de robô" fazem
+ * um robô do Kommo mandar uma mensagem de WhatsApp para o paciente: pôr uma delas pede confirmação. Quem decide
+ * quais são é o SERVIDOR (▶ + a lista da unidade, como "Aderência meio"): a lista da conta vem com `robo`, o cartão
+ * com `etiquetasRobo`, e o servidor recusa sem confirmação. Esta regra local é só a de reserva (▶).
  */
 (function (raiz, fabrica) {
   var api = fabrica();
@@ -14,9 +16,14 @@
 
   var PERGUNTA_DO_ROBO = 'Esta etiqueta faz o robô mandar uma mensagem para o paciente. Pôr mesmo assim?';
 
-  /** A mesma regra do servidor (`ehEtiquetaDeRobo`): começa com ▶ (ou ►, que na tela parece igual). */
-  function ehDeRobo(nome) {
-    return /^\s*[▶►]/.test(String(nome == null ? '' : nome));
+  /**
+   * A regra do servidor (`ehEtiquetaDeRobo`): começa com ▶ (ou ►, que na tela parece igual), ou está na `lista`
+   * (sem diferença de maiúscula, espaço ou acento).
+   */
+  function ehDeRobo(nome, lista) {
+    if (/^\s*[▶►]/.test(String(nome == null ? '' : nome))) return true;
+    var k = paraBusca(nome);
+    return !!k && (lista || []).some(function (t) { return paraBusca(t) === k; });
   }
 
   /** Para buscar: sem acento, sem maiúscula, só letras e números ("retomada" acha "▶ RETOMADA"). */

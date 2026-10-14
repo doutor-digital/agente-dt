@@ -13,8 +13,13 @@
  *   - o RESULTADO de cada ligação (`POST …/ponte/ligacao`), gravado nos campos ☎ do cartão, ACHADOS PELO NOME
  *     na conta (nunca id fixo): ☎ Última ligação = agora, ☎ Resultado = a opção do select, ☎ Tentativas + 1,
  *     ☎ Agente = "Ponte · <nome>", e ☎ Campanha 3C VAZIO — é assim que se separa a ligação da SDR da discadora
- *     3C. Sempre com uma nota curta "☎ Ligação pela Ponte: <resultado> · por <nome>". Conta sem os campos ☎:
- *     só a nota.
+ *     3C. A nota curta "☎ Ligação pela Ponte: <resultado> · por <nome>" só entra quando os campos ☎ NÃO foram
+ *     gravados (conta sem os campos, ou o Kommo recusou): o ☎ Agente já diz quem ligou, o histórico do Kommo
+ *     guarda cada mudança dos campos, e uma nota a cada ligação quebraria a isenção do `card-validation-worker`
+ *     (que só deixa passar cartão em que TODA mudança foi em campo ☎ — senão cada cartão ligado ganharia
+ *     "⚠ Revisar cartão"). Estender a isenção a notas exigiria ler o texto da nota, que os eventos não trazem;
+ *   - a mesma TENTATIVA (o id que o painel gera ao abrir a conversa) só grava UMA vez em 10 min: clique duplo,
+ *     redesenho da tela ou o painel reaberto não somam duas ligações nem duas tentativas.
  *
  * Não põe ▶ Retomada nem etiqueta nenhuma depois da ligação (decisão do João).
  */
@@ -160,15 +165,18 @@ export interface PedidoDeLigacao {
   leadId: number;
   resultado: ResultadoDaLigacao;
   por: string | null;
+  /** O id da tentativa (gerado pelo painel ao abrir a conversa): a mesma tentativa só grava uma vez. */
+  tentativa?: string | null;
 }
 
-/** `POST …/ponte/ligacao` → `{ leadId, resultado, por? }`. */
+/** `POST …/ponte/ligacao` → `{ leadId, resultado, por?, tentativa? }`. Tentativa fora do formato é ignorada. */
 export function lerPedidoDeLigacao(corpo: unknown): Lido<PedidoDeLigacao> {
   const b = (corpo && typeof corpo === 'object' ? corpo : {}) as Record<string, unknown>;
   const leadId = leadIdDoPedido(b.leadId);
   if (!leadId) return { ok: false, erro: 'lead inválido' };
   if (!ehResultadoDaLigacao(b.resultado)) return { ok: false, erro: 'resultado inválido' };
-  return { ok: true, pedido: { leadId, resultado: b.resultado, por: textoCurto(b.por, 80) } };
+  const tentativa = typeof b.tentativa === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(b.tentativa) ? b.tentativa : null;
+  return { ok: true, pedido: { leadId, resultado: b.resultado, por: textoCurto(b.por, 80), tentativa } };
 }
 
 // ── com o Kommo ──
@@ -232,11 +240,56 @@ export async function registrarLigacao(conta: string, kommo: KommoDaLigacao, ped
     );
     if (!campos) avisos.push('O Kommo não aceitou os campos ☎ agora: a ligação ficou só na nota.');
   }
-  const nota = await kommo.addLeadNote(pedido.leadId, notaDaLigacao(pedido.resultado, pedido.por)).then(
-    () => true,
-    () => false,
-  );
-  if (!campos && !nota) return { ok: false, status: 502, erro: 'não consegui gravar a ligação no Kommo agora' };
-  if (!nota) avisos.push('A nota da ligação não entrou no cartão.');
+  // a nota só quando os campos ☎ não guardaram a ligação (ver o topo: a isenção do card-validation-worker)
+  let nota = false;
+  if (!campos) {
+    nota = await kommo.addLeadNote(pedido.leadId, notaDaLigacao(pedido.resultado, pedido.por)).then(
+      () => true,
+      () => false,
+    );
+    if (!nota) return { ok: false, status: 502, erro: 'não consegui gravar a ligação no Kommo agora' };
+  }
   return { ok: true, leadId: pedido.leadId, resultado: pedido.resultado, campos, nota, tentativas: campos ? g.tentativas : null, avisos };
+}
+
+// ── a mesma tentativa só grava uma vez ──
+
+/** Por quanto tempo a tentativa gravada é lembrada (cobre clique duplo, redesenho e o painel reaberto). */
+export const JANELA_DA_TENTATIVA_MS = 10 * 60_000;
+
+const tentativas = new Map<string, { em: number; resultado: Promise<ResultadoDoRegistro> }>();
+
+export function limparTentativas(): void {
+  tentativas.clear();
+}
+
+/**
+ * `registrarLigacao`, mas a MESMA tentativa (conta + cartão + id do painel) grava uma vez só: o segundo pedido
+ * espera o primeiro e recebe a mesma resposta com `repetido: true`, sem tocar no Kommo (as ☎ Tentativas não
+ * pulam de N para N+2). Se o primeiro não gravou nada (erro), a tentativa fica livre para tentar de novo.
+ * Sem id de tentativa (painel antigo), grava como antes.
+ */
+export async function registrarLigacaoUmaVez(
+  conta: string,
+  kommo: KommoDaLigacao,
+  pedido: PedidoDeLigacao,
+  agora = new Date(),
+): Promise<ResultadoDoRegistro & { repetido?: boolean }> {
+  if (!pedido.tentativa) return registrarLigacao(conta, kommo, pedido, agora);
+  const ms = Date.now();
+  for (const [k, t] of tentativas) if (ms - t.em > JANELA_DA_TENTATIVA_MS) tentativas.delete(k);
+  const chave = `${conta}:${pedido.leadId}:${pedido.tentativa}`;
+  const ja = tentativas.get(chave);
+  if (ja) {
+    const r = await ja.resultado;
+    return r.ok ? { ...r, repetido: true } : r;
+  }
+  const resultado = registrarLigacao(conta, kommo, pedido, agora);
+  if (tentativas.size > 5_000) tentativas.clear();
+  tentativas.set(chave, { em: ms, resultado });
+  resultado.then(
+    (r) => { if (!r.ok) tentativas.delete(chave); },
+    () => tentativas.delete(chave),
+  );
+  return resultado;
 }

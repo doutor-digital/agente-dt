@@ -4,7 +4,7 @@
  *
  * `POST /api/public/widget/:slug/ponte/cartao` → o cartão do Kommo do paciente da conversa aberta no
  * WhatsApp Web, para o painel lateral. Mesma chave por unidade dos widgets do cartão (`X-Widget-Key`, ver
- * `widget-franquia.controller.ts` → `unidadeDoWidget`), com limite próprio.
+ * `widget-franquia.controller.ts` → `unidadeDaPonte`), com limite próprio.
  *
  * É POST só para nome e telefone do paciente irem no CORPO: na URL de um GET eles ficariam no log de acesso
  * do proxy e no log de debug (`req.url`) a cada troca de conversa. Não escreve nada.
@@ -36,7 +36,7 @@ import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { unidadeDoWidget } from './widget-franquia.controller.js';
+import { unidadeDaPonte } from './widget-franquia.controller.js';
 import { KommoApiError, createKommoClient, type KommoClient, type KommoLead, type KommoPipeline } from '../services/kommo.service.js';
 import { chaveTelefone } from '../lib/franquia-sync.js';
 import { limparNome, termosDeBusca } from '../lib/widget-agenda.js';
@@ -76,6 +76,7 @@ import {
 import { getLeadMemoryForAgent } from '../services/lead-memory.service.js';
 import { MAX_CARTOES_DUPLICADOS, cartoesDuplicados, mesmoTelefoneCompleto, origemDoCartao, telefoneCompleto, type CartaoDuplicado } from '../lib/ponte-duplicados.js';
 import { primeiroNomeDoPaciente } from '../lib/ponte-respostas.js';
+import { ehEtiquetaDeRobo, etiquetasDeRoboDaUnidade } from '../lib/ponte-etiquetas.js';
 import { mensagensOficiais } from '../services/kommo-talks.service.js';
 import { recordLlmCall } from '../services/openai.service.js';
 
@@ -272,9 +273,9 @@ function resumoDoCartao(
 type ContatoComCartoes = NonNullable<Awaited<ReturnType<KommoClient['contatoComCartoes']>>>;
 
 /**
- * Fase 3: os OUTROS cartões abertos do paciente — do mesmo contato e de outros contatos com o MESMO telefone
- * completo. `null` = não deu para saber (contato não lido, Kommo fora): o painel só não mostra a faixa. Nunca lança.
- * `jaLidos` são os cartões que o casamento já trouxe (não pede de novo).
+ * Fase 3: os OUTROS cartões abertos do paciente — em que ele é o contato PRINCIPAL (`via: 'contato'`), ou em que o
+ * principal é outro contato com o MESMO telefone completo (`via: 'telefone'`, pode ser da família). `null` = não deu
+ * para saber (contato não lido, Kommo fora): o painel só não mostra a faixa. Nunca lança.
  */
 async function duplicadosDoCartao(
   unit: Unit,
@@ -283,12 +284,12 @@ async function duplicadosDoCartao(
   lead: KommoLead,
   contato: ContatoComCartoes | null,
   buscar: BuscaPorTelefone,
-  jaLidos: ReadonlyMap<number, KommoLead>,
 ): Promise<CartaoDuplicado[] | null> {
   try {
     if (!contatoPrincipalDe(lead)) return [];
     if (!contato) return null;
     const ids = new Set<number>(contato.leadIds);
+    const doMesmoTelefone = new Set<number>();
     // os dois primeiros números do contato bastam (contato com 5 telefones é raro, e cada um é uma busca)
     for (const tel of contato.telefones.slice(0, 2)) {
       if (!telefoneCompleto(tel)) continue; // número sem DDD não diz "mesma pessoa"
@@ -296,16 +297,22 @@ async function duplicadosDoCartao(
       if (achados === null) return null;
       for (const c of achados) {
         if (c.id === contato.id || !c.telefones.some((t) => mesmoTelefoneCompleto(tel, t))) continue;
+        doMesmoTelefone.add(c.id);
         for (const id of c.leadIds) ids.add(id);
       }
     }
     ids.delete(lead.id);
     const lista = [...ids].slice(0, MAX_CARTOES_DUPLICADOS);
     if (!lista.length) return [];
-    const faltam = lista.filter((id) => !jaLidos.has(id));
-    const lidos = faltam.length ? await kommo.listLeadsPorIds(faltam) : [];
-    const cartoes = [...lista.map((id) => jaLidos.get(id)).filter((l): l is KommoLead => !!l), ...lidos];
-    return cartoesDuplicados(lead, cartoes, (l) => nomesDaEtapa(conta, l), (id) => `https://${unit.kommoSubdomain}.kommo.com/leads/detail/${id}`);
+    // com os contatos (is_main): quem só aparece como contato secundário não conta
+    const cartoes = await kommo.listLeadsPorIds(lista, { contatos: true });
+    return cartoesDuplicados(
+      lead,
+      cartoes,
+      { contato: contato.id, doMesmoTelefone },
+      (l) => nomesDaEtapa(conta, l),
+      (id) => `https://${unit.kommoSubdomain}.kommo.com/leads/detail/${id}`,
+    );
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'ponte: não consegui conferir cartões duplicados');
     return null;
@@ -322,7 +329,7 @@ function pausaParaOPainel(p: EstadoDaPausaDoLead | null): { ate: string; motivo:
 const LIMITE_DA_PONTE = { balde: 'ponte', max: 150 };
 
 export async function ponteCartaoHandler(req: Request, res: Response): Promise<void> {
-  const unit = await unidadeDoWidget(req, res, LIMITE_DA_PONTE);
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_PONTE);
   if (!unit) return;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     res.status(409).json({ error: 'unidade sem Kommo conectado' });
@@ -397,7 +404,7 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
     // o contato principal, com os cartões dele (fase 3): franquia, primeiro nome e o aviso de duplicado
     const contatoId = contatoPrincipalDe(lead);
     const contatoLido = contatoId ? await kommo.contatoComCartoes(contatoId) : null;
-    const duplicados = duplicadosDoCartao(unit, kommo, conta, lead, contatoLido, buscarTelefone, new Map(ordenados.map((l) => [l.id, l])));
+    const duplicados = duplicadosDoCartao(unit, kommo, conta, lead, contatoLido, buscarTelefone);
     // franquia: a mesma resposta do widget "Agenda da franquia". Cair aqui não derruba o cartão.
     const contato = unit.spineEnabled && unit.spineToken ? { nome: contatoLido?.nome ?? null, telefone: contatoLido?.telefone ?? null } : null;
     const franquia = await franquiaDoCartao(unit, lead, contato, telefone);
@@ -428,6 +435,8 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
         },
         responsavel: (lead.responsible_user_id && conta.usuarios.get(lead.responsible_user_id)) || null,
         etiquetas: (lead._embedded?.tags ?? []).map((t) => t.name).filter(Boolean),
+        // fase 3: as que disparam robô que manda mensagem (▶ + a lista da unidade, ex.: "Aderência meio")
+        etiquetasRobo: (lead._embedded?.tags ?? []).map((t) => t.name).filter((n) => n && ehEtiquetaDeRobo(n, etiquetasDeRoboDaUnidade(unit.slug))),
         // fase 3: as respostas prontas trocam o marcador de nome por este
         primeiroNome: primeiroNomeDoPaciente(lead.name, contatoLido?.nome ?? null),
         origem: origemDoCartao(lead),
@@ -467,7 +476,7 @@ function respostaDaPausa(e: EstadoDaPausaDoLead) {
 
 /** `POST /api/public/widget/:slug/ponte/pausa` `{ leadId, ate, motivo?, por? }` */
 export async function pontePausarHandler(req: Request, res: Response): Promise<void> {
-  const unit = await unidadeDoWidget(req, res, LIMITE_DA_PAUSA);
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_PAUSA);
   if (!unit) return;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     res.status(409).json({ error: 'unidade sem Kommo conectado' });
@@ -491,7 +500,7 @@ export async function pontePausarHandler(req: Request, res: Response): Promise<v
 
 /** `DELETE /api/public/widget/:slug/ponte/pausa` `{ leadId, por? }` */
 export async function ponteRetomarHandler(req: Request, res: Response): Promise<void> {
-  const unit = await unidadeDoWidget(req, res, LIMITE_DA_PAUSA);
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_PAUSA);
   if (!unit) return;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     res.status(409).json({ error: 'unidade sem Kommo conectado' });
@@ -593,7 +602,7 @@ async function gerarResumoIa(unit: Unit, chave: string, leadId: number): Promise
 
 /** `POST /api/public/widget/:slug/ponte/resumo-ia` `{ leadId }` */
 export async function ponteResumoIaHandler(req: Request, res: Response): Promise<void> {
-  const unit = await unidadeDoWidget(req, res, LIMITE_DA_IA);
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_IA);
   if (!unit) return;
   const chave = unit.anthropicApiKey;
   if (!chave) {

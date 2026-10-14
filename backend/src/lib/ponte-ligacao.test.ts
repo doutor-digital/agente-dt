@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import type { AxiosInstance } from 'axios';
 import { KommoApiError, KommoClient } from '../services/kommo.service.js';
+import { soMudancasIgnoradas } from './card-validation-worker.js';
 import {
   CAMPOS_DA_LIGACAO,
   RESULTADOS_DA_LIGACAO,
@@ -11,9 +12,11 @@ import {
   camposDaLigacaoNaConta,
   lerPedidoDeLigacao,
   limparCacheDosCampos,
+  limparTentativas,
   montarGravacaoDaLigacao,
   notaDaLigacao,
   registrarLigacao,
+  registrarLigacaoUmaVez,
   type DefinicaoDeCampo,
   type KommoDaLigacao,
 } from './ponte-ligacao.js';
@@ -64,7 +67,10 @@ const LIGADO_PELA_3C = [
   { field_id: 2448900, values: [{ value: 'https://exemplo/gravacao' }] },
 ];
 
-beforeEach(() => limparCacheDosCampos());
+beforeEach(() => {
+  limparCacheDosCampos();
+  limparTentativas();
+});
 
 describe('ligação pela Ponte — o ritmo', () => {
   it('padrão 40 s e 40 por hora — o mesmo da extensão — com piso e teto', () => {
@@ -148,7 +154,10 @@ describe('ligação pela Ponte — os campos ☎ (pelo nome)', () => {
   });
 
   it('o pedido: lead, um dos 4 resultados e quem ("pular" não existe no servidor)', () => {
-    assert.deepEqual(lerPedidoDeLigacao({ leadId: 5, resultado: 'caixa-postal', por: ' Ana ' }), { ok: true, pedido: { leadId: 5, resultado: 'caixa-postal', por: 'Ana' } });
+    assert.deepEqual(lerPedidoDeLigacao({ leadId: 5, resultado: 'caixa-postal', por: ' Ana ' }), { ok: true, pedido: { leadId: 5, resultado: 'caixa-postal', por: 'Ana', tentativa: null } });
+    assert.equal((lerPedidoDeLigacao({ leadId: 5, resultado: 'atendeu', tentativa: 'lk3x9a-2f8q1z' }) as { pedido: { tentativa: string } }).pedido.tentativa, 'lk3x9a-2f8q1z');
+    assert.equal((lerPedidoDeLigacao({ leadId: 5, resultado: 'atendeu', tentativa: 'x' }) as { pedido: { tentativa: null } }).pedido.tentativa, null);
+    assert.equal((lerPedidoDeLigacao({ leadId: 5, resultado: 'atendeu', tentativa: '<script>alert(1)</script>' }) as { pedido: { tentativa: null } }).pedido.tentativa, null);
     assert.deepEqual(lerPedidoDeLigacao({ leadId: 5, resultado: 'pular' }), { ok: false, erro: 'resultado inválido' });
     assert.deepEqual(lerPedidoDeLigacao({ leadId: 5, resultado: 'toString' }), { ok: false, erro: 'resultado inválido' });
     assert.deepEqual(lerPedidoDeLigacao({ resultado: 'atendeu' }), { ok: false, erro: 'lead inválido' });
@@ -173,11 +182,18 @@ describe('ligação pela Ponte — gravar no Kommo', () => {
   }
   const pedido = { leadId: 123, resultado: 'nao-atendeu' as const, por: 'Ana' };
 
-  it('campos num PATCH só + nota', async () => {
+  it('campos num PATCH só — e SEM nota (o ☎ Agente já diz quem ligou; nota quebraria a isenção da revisão de cartão)', async () => {
     const k = kommoFalso();
     const r = await registrarLigacao('acai', k, pedido, agora);
-    assert.deepEqual(r, { ok: true, leadId: 123, resultado: 'nao-atendeu', campos: true, nota: true, tentativas: 2, avisos: [] });
-    assert.deepEqual(k.chamadas, [['ler', 123], ['campos'], ['gravar', 123, 5], ['nota', 123, '☎ Ligação pela Ponte: não atendeu · por Ana']]);
+    assert.deepEqual(r, { ok: true, leadId: 123, resultado: 'nao-atendeu', campos: true, nota: false, tentativas: 2, avisos: [] });
+    assert.deepEqual(k.chamadas, [['ler', 123], ['campos'], ['gravar', 123, 5]]);
+  });
+
+  it('o que a Ponte grava fica TODO em campo ☎: a revisão de cartão continua isentando', () => {
+    const g = montarGravacaoDaLigacao({ defs: ACAILANDIA, atuais: LIGADO_PELA_3C, resultado: 'atendeu', por: 'Ana', agora });
+    const camposLigacao = new Set(ACAILANDIA.filter((d) => d.name.trim().startsWith('☎')).map((d) => d.id));
+    const eventos = g.campos.map((c) => ({ type: `custom_field_${c.field_id}_value_changed` }));
+    assert.equal(soMudancasIgnoradas(eventos, camposLigacao), true);
   });
 
   it('os campos da conta ficam em cache por conta (a 2ª ligação não relê)', async () => {
@@ -187,7 +203,7 @@ describe('ligação pela Ponte — gravar no Kommo', () => {
     assert.equal(k.chamadas.filter((c) => c[0] === 'campos').length, 1);
   });
 
-  it('os campos falharam: a nota ainda vai (a ligação não some) e avisa', async () => {
+  it('os campos falharam: aí sim a nota vai (a ligação não some) e avisa', async () => {
     const r = await registrarLigacao('acai', kommoFalso({ camposFalham: true }), pedido, agora);
     assert.equal(r.ok && r.campos, false);
     assert.equal(r.ok && r.nota, true);
@@ -204,6 +220,8 @@ describe('ligação pela Ponte — gravar no Kommo', () => {
     const k = kommoFalso({ defs: [{ id: 1, name: 'Cidade', type: 'text' }] });
     const r = await registrarLigacao('outra', k, pedido, agora);
     assert.equal(r.ok && r.campos, false);
+    assert.equal(r.ok && r.nota, true);
+    assert.deepEqual(k.chamadas.at(-1), ['nota', 123, '☎ Ligação pela Ponte: não atendeu · por Ana']);
     assert.ok(!k.chamadas.some((c) => c[0] === 'gravar'));
     assert.match((r as { avisos: string[] }).avisos[0], /não tem os campos ☎/);
   });
@@ -212,6 +230,31 @@ describe('ligação pela Ponte — gravar no Kommo', () => {
     const k = kommoFalso({ semCartao: true });
     assert.deepEqual(await registrarLigacao('acai', k, pedido, agora), { ok: false, status: 404, erro: 'cartão não encontrado no Kommo' });
     assert.ok(!k.chamadas.some((c) => c[0] === 'gravar' || c[0] === 'nota'));
+  });
+
+  it('a MESMA tentativa grava uma vez só, mesmo com os dois pedidos juntos; as ☎ Tentativas não pulam', async () => {
+    const k = kommoFalso();
+    const com = { ...pedido, tentativa: 'tentativa-abc123' };
+    const [a, b] = await Promise.all([registrarLigacaoUmaVez('acai', k, com, agora), registrarLigacaoUmaVez('acai', k, com, agora)]);
+    const c = await registrarLigacaoUmaVez('acai', k, { ...com, resultado: 'atendeu' }, agora);
+    assert.equal(k.chamadas.filter((x) => x[0] === 'gravar').length, 1);
+    assert.equal(a.ok && a.tentativas, 2);
+    assert.equal(b.ok && b.repetido, true);
+    assert.equal(c.ok && c.repetido, true);
+    assert.equal(c.ok && c.resultado, 'nao-atendeu', 'volta o que foi gravado da primeira vez');
+    // outra tentativa (outra ligação) grava normalmente
+    await registrarLigacaoUmaVez('acai', k, { ...pedido, tentativa: 'tentativa-def456' }, agora);
+    assert.equal(k.chamadas.filter((x) => x[0] === 'gravar').length, 2);
+  });
+
+  it('tentativa que falhou fica livre para tentar de novo', async () => {
+    const com = { ...pedido, tentativa: 'tentativa-falha1' };
+    const r1 = await registrarLigacaoUmaVez('acai', kommoFalso({ camposFalham: true, notaFalha: true }), com, agora);
+    assert.equal(r1.ok, false);
+    const k = kommoFalso();
+    const r2 = await registrarLigacaoUmaVez('acai', k, com, agora);
+    assert.equal(r2.ok && !r2.repetido, true);
+    assert.equal(k.chamadas.filter((x) => x[0] === 'gravar').length, 1);
   });
 
   it('o PATCH de verdade: `custom_fields_values` na raiz, com `null` para esvaziar', async () => {

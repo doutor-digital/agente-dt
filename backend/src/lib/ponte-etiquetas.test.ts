@@ -4,9 +4,11 @@ import { createRequire } from 'node:module';
 import type { AxiosInstance } from 'axios';
 import { KommoApiError, KommoClient } from '../services/kommo.service.js';
 import {
+  ETIQUETAS_DE_ROBO_SEM_SETA,
   TETO_DE_ROBO_POR_HORA,
   acharNaConta,
   cabeEtiquetaDeRobo,
+  etiquetasDeRoboDaUnidade,
   chaveDaEtiqueta,
   ehEtiquetaDeRobo,
   etiquetaNoCartao,
@@ -21,14 +23,14 @@ import {
 // O mesmo `etiquetas.js` que a extensão carrega: a regra do ▶ tem de ser a mesma dos dois lados.
 const EXTENSAO = new URL('../../../extensao-ponte/', import.meta.url);
 const daExtensao = createRequire(import.meta.url)(new URL('etiquetas.js', EXTENSAO).pathname) as {
-  ehDeRobo(nome: string): boolean;
+  ehDeRobo(nome: string, lista?: string[]): boolean;
   PERGUNTA_DO_ROBO: string;
 };
 
-const DA_CONTA = ['LOMBAR', 'CERVICAL', 'META', '▶ Retomada', '▶ Confirmação'];
+const DA_CONTA = ['LOMBAR', 'CERVICAL', 'META', '▶ Retomada', '▶ Confirmação', 'Aderência meio'];
 
 /** Um Kommo falso: as etiquetas da conta, as do cartão, e tudo que foi pedido. */
-function kommoFalso(opcoes: { conta?: string[]; cartao?: string[]; semCartao?: boolean; naoGrava?: boolean; notaFalha?: boolean } = {}) {
+function kommoFalso(opcoes: { conta?: string[]; cartao?: string[]; semCartao?: boolean; naoGrava?: boolean; notaFalha?: boolean; addFalha?: boolean } = {}) {
   let conta = opcoes.conta ?? DA_CONTA;
   let cartao = [...(opcoes.cartao ?? ['LOMBAR'])];
   const chamadas: unknown[][] = [];
@@ -41,7 +43,11 @@ function kommoFalso(opcoes: { conta?: string[]; cartao?: string[]; semCartao?: b
       if (opcoes.semCartao) throw new KommoApiError('getLead: 404', 404, {});
       return { id, _embedded: { tags: cartao.map((name) => ({ name })) } };
     },
-    addTag: async ({ leadId, tag }) => { chamadas.push(['por', leadId, tag]); if (!opcoes.naoGrava) cartao.push(tag); },
+    addTag: async ({ leadId, tag }) => {
+      chamadas.push(['por', leadId, tag]);
+      if (opcoes.addFalha) throw new KommoApiError('addTag: 502', 502, {});
+      if (!opcoes.naoGrava) cartao.push(tag);
+    },
     removeTag: async (leadId, tag) => { chamadas.push(['tirar', leadId, tag]); if (!opcoes.naoGrava) cartao = cartao.filter((t) => t !== tag); },
     addLeadNote: async (leadId, texto) => { chamadas.push(['nota', leadId, texto]); if (opcoes.notaFalha) throw new Error('kommo fora'); return { id: 1 }; },
   };
@@ -53,13 +59,30 @@ const pedido = (nome: string, extra: Partial<{ confirmado: boolean; por: string 
 beforeEach(() => limparCacheDasEtiquetas());
 
 describe('etiquetas da Ponte — as regras', () => {
-  it('▶ é etiqueta de robô (e ►); a regra é a MESMA da extensão', () => {
+  it('▶ é etiqueta de robô (e ►); para as ▶ a regra é a MESMA da extensão', () => {
     for (const nome of ['▶ Retomada', ' ▶Retomada', '► Retomada', 'LOMBAR', 'Retomada ▶', '', '▶️ Retomada']) {
-      assert.equal(ehEtiquetaDeRobo(nome), daExtensao.ehDeRobo(nome), nome);
+      assert.equal(ehEtiquetaDeRobo(nome, []), daExtensao.ehDeRobo(nome), nome);
     }
     assert.equal(ehEtiquetaDeRobo('▶ Retomada'), true);
     assert.equal(ehEtiquetaDeRobo('LOMBAR'), false);
     assert.equal(daExtensao.PERGUNTA_DO_ROBO, 'Esta etiqueta faz o robô mandar uma mensagem para o paciente. Pôr mesmo assim?');
+  });
+
+  it('"Aderência meio" dispara bot sem ter ▶: é de robô (sem diferença de maiúscula ou acento), aqui e na extensão', () => {
+    assert.deepEqual([...ETIQUETAS_DE_ROBO_SEM_SETA], ['Aderência meio']);
+    for (const nome of ['Aderência meio', 'ADERENCIA MEIO', ' aderência  meio ']) {
+      assert.equal(ehEtiquetaDeRobo(nome), true, nome);
+      assert.equal(daExtensao.ehDeRobo(nome, [...ETIQUETAS_DE_ROBO_SEM_SETA]), true, `extensão: ${nome}`);
+    }
+    assert.equal(ehEtiquetaDeRobo('Aderência'), false);
+  });
+
+  it('a lista da unidade: a fixa + PONTE_ETIQUETAS_DE_ROBO (todas) + PONTE_ETIQUETAS_DE_ROBO_<SLUG> (só ela)', () => {
+    const amb = { PONTE_ETIQUETAS_DE_ROBO: 'Lembrete sessão; NPS', PONTE_ETIQUETAS_DE_ROBO_DOUTOR_HERNIA_ACAILANDIA: 'Pesquisa Google,Aderência meio' };
+    assert.deepEqual(etiquetasDeRoboDaUnidade('doutor-hernia-acailandia', amb), ['Aderência meio', 'Lembrete sessão', 'NPS', 'Pesquisa Google']);
+    assert.deepEqual(etiquetasDeRoboDaUnidade('doutor-hernia-serra', amb), ['Aderência meio', 'Lembrete sessão', 'NPS']);
+    assert.deepEqual(etiquetasDeRoboDaUnidade('x', {}), ['Aderência meio']);
+    assert.equal(ehEtiquetaDeRobo('nps', etiquetasDeRoboDaUnidade('x', amb)), true);
   });
 
   it('acha o nome EXATO da conta; sem diferença de maiúscula/espaço só se for uma; o ▶ conta', () => {
@@ -131,6 +154,36 @@ describe('etiquetas da Ponte — pôr', () => {
     const r = await porEtiqueta('acai', k, pedido('▶ Retomada', { confirmado: true }));
     assert.deepEqual(r, { ok: true, leadId: 123, nome: '▶ Retomada', robo: true, mudou: true, etiquetas: ['LOMBAR', '▶ Retomada'], nota: true });
     assert.deepEqual(k.chamadas.at(-1), ['nota', 123, 'Etiqueta ▶ Retomada posta pela Ponte · por Ana']);
+  });
+
+  it('"Aderência meio" (sem ▶) também pede confirmação, deixa nota e conta no teto', async () => {
+    const sem = await porEtiqueta('acai', kommoFalso(), pedido('Aderência meio'));
+    assert.equal((sem as { status: number }).status, 409);
+    assert.equal((sem as { precisaConfirmar?: boolean }).precisaConfirmar, true);
+    const k = kommoFalso();
+    const r = await porEtiqueta('acai', k, pedido('aderência meio', { confirmado: true }), { teto: 1 });
+    assert.equal(r.ok && r.robo, true);
+    assert.deepEqual(k.chamadas.at(-1), ['nota', 123, 'Etiqueta Aderência meio posta pela Ponte · por Ana']);
+    const segunda = await porEtiqueta('acai', kommoFalso({ cartao: [] }), { ...pedido('Aderência meio', { confirmado: true }), leadId: 9 }, { teto: 1 });
+    assert.equal((segunda as { status: number }).status, 429);
+  });
+
+  it('teto com pedidos SIMULTÂNEOS: 10 juntos com teto 3 põem exatamente 3', async () => {
+    const kommos = Array.from({ length: 10 }, () => kommoFalso({ cartao: [] }));
+    const rs = await Promise.all(kommos.map((k, i) => porEtiqueta('conta-simultanea', k, { ...pedido('▶ Retomada', { confirmado: true }), leadId: 500 + i }, { teto: 3 })));
+    assert.equal(rs.filter((r) => r.ok).length, 3);
+    assert.equal(rs.filter((r) => !r.ok && r.status === 429).length, 7);
+    assert.equal(kommos.filter((k) => k.chamadas.some((c) => c[0] === 'por')).length, 3, 'só 3 chegaram a gravar');
+  });
+
+  it('a vaga volta quando nada foi gravado (Kommo falhou, cartão apagado, já tinha a etiqueta)', async () => {
+    await assert.rejects(porEtiqueta('conta-vaga', kommoFalso({ addFalha: true, cartao: [] }), pedido('▶ Retomada', { confirmado: true }), { teto: 1 }));
+    assert.equal((await porEtiqueta('conta-vaga', kommoFalso({ semCartao: true }), pedido('▶ Retomada', { confirmado: true }), { teto: 1 })).ok, false);
+    assert.equal((await porEtiqueta('conta-vaga', kommoFalso({ cartao: ['▶ Retomada'] }), pedido('▶ Retomada', { confirmado: true }), { teto: 1 })).ok, true);
+    // as três não gastaram a vaga: esta ainda cabe
+    const r = await porEtiqueta('conta-vaga', kommoFalso({ cartao: [] }), pedido('▶ Retomada', { confirmado: true }), { teto: 1 });
+    assert.equal(r.ok && r.mudou, true);
+    assert.equal(cabeEtiquetaDeRobo('conta-vaga', Date.now(), 1), false);
   });
 
   it('▶ que já estava no cartão: não grava de novo nem deixa nota', async () => {

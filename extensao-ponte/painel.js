@@ -130,6 +130,12 @@
         // 429 com motivo (o teto de etiquetas ▶ por hora) mostra o motivo; o do limitador é o genérico
         if (resp.status === 429 && !/^muitas chamadas/i.test(e) && e) throw new Error(e.charAt(0).toUpperCase() + e.slice(1) + '.');
         if (resp.status === 429) throw new Error('Muitas ações seguidas: aguarde um minuto.');
+        if (j && j.precisaConfirmar) {
+          // etiqueta que manda mensagem: o painel pergunta e tenta de novo com a confirmação
+          var pede = new Error(e ? e.charAt(0).toUpperCase() + e.slice(1) + '.' : 'Confirme antes.');
+          pede.precisaConfirmar = true;
+          throw pede;
+        }
         throw new Error(e ? e.charAt(0).toUpperCase() + e.slice(1) + '.' : 'Não consegui falar com o servidor.');
       });
     }, function () {
@@ -419,6 +425,9 @@
       posicao: Math.min(lig.itens.length, feitos + 1),
       total: lig.itens.length,
       pulados: lig.pulados,
+      naoLidos: lig.naoLidos,
+      aviso: lig.aviso,
+      gravando: lig.gravando,
       ritmo: lig.ritmo,
       msg: lig.msg,
       ultimo: lig.ultimo,
@@ -438,7 +447,8 @@
     desenharLigacao();
     abrirConversa(it.telefone, true).then(function () {
       if (!lig || lig.item !== it) return;
-      lig.estado = L.registrarAbertura(lig.estado, it.leadId, Date.now());
+      // conta no ritmo e começa uma TENTATIVA nova: o id vai junto do resultado e o servidor grava uma vez só
+      lig.estado = L.registrarAbertura(lig.estado, it.leadId, Date.now(), L.novaTentativa());
       salvarLigacao();
       lig.fase = 'aberto';
       desenharLigacao();
@@ -471,11 +481,14 @@
     }, 1000);
   }
 
-  /** O próximo da fila: pula (com aviso) quem não tem telefone; o que já está aberto não abre de novo. */
+  /**
+   * O próximo da fila. Sem telefone: se o servidor AFIRMA que não tem, pula de vez (com aviso e marcado como
+   * feito); se só não deu para ler agora, deixa para depois SEM marcar nada. O que já está aberto não abre de novo.
+   */
   function avancar() {
     pararRelogio();
     for (;;) {
-      var it = L.proximo(lig.itens, lig.estado);
+      var it = L.proximo(lig.itens, lig.estado, lig.naoLidos.map(function (p) { return p.leadId; }));
       if (!it) {
         lig.item = null;
         lig.fase = 'fim';
@@ -486,12 +499,18 @@
         lig.item = it;
         break;
       }
-      lig.pulados.push({ leadId: it.leadId, nome: it.nome, link: it.link });
-      lig.estado = L.marcarFeito(lig.estado, it.leadId);
+      if (L.semTelefoneConfirmado(it)) {
+        lig.pulados.push({ leadId: it.leadId, nome: it.nome, link: it.link });
+        lig.estado = L.marcarFeito(lig.estado, it.leadId);
+      } else {
+        lig.naoLidos.push({ leadId: it.leadId, nome: it.nome, link: it.link });
+      }
     }
     salvarLigacao();
     if (lig.estado.atual === lig.item.leadId) {
-      // o painel foi fechado com esta conversa aberta: não abre de novo nem conta no ritmo
+      // o painel foi fechado com esta conversa aberta: não abre de novo nem conta no ritmo (e a tentativa segue a mesma)
+      if (!lig.estado.tentativa) lig.estado.tentativa = L.novaTentativa();
+      salvarLigacao();
       lig.fase = 'aberto';
       return desenharLigacao();
     }
@@ -511,6 +530,9 @@
       item: null,
       fase: 'esperando',
       pulados: [],
+      naoLidos: [],
+      aviso: filaGuardada.f.avisoTelefones || '',
+      gravando: false,
       msg: '',
       ultimo: '',
       relogio: null,
@@ -526,19 +548,30 @@
 
   var acoesDaLigacao = {
     resultado: function (leadId, resultado) {
-      var it = lig && lig.item;
-      return chamar('POST', '/ponte/ligacao', { leadId: leadId, resultado: resultado, por: quem() }).then(function (j) {
+      // uma gravação por vez: os botões ficam travados até o servidor responder, mesmo se a tela for redesenhada
+      if (!lig || lig.gravando) return Promise.resolve();
+      var it = lig.item;
+      lig.gravando = true;
+      lig.msg = '';
+      desenharLigacao();
+      return chamar('POST', '/ponte/ligacao', { leadId: leadId, resultado: resultado, por: quem(), tentativa: lig.estado.tentativa || null }).then(function (j) {
         if (!lig) return;
-        var rotulo = (L.RESULTADOS.filter(function (r) { return r.id === resultado; })[0] || {}).rotulo || resultado;
+        lig.gravando = false;
+        var gravado = (j && j.resultado) || resultado;
+        var rotulo = (L.RESULTADOS.filter(function (r) { return r.id === gravado; })[0] || {}).rotulo || gravado;
         lig.ultimo = 'Gravado no Kommo: ' + ((it && it.nome) || 'cartão ' + leadId) + ' · ' + rotulo.toLowerCase() +
           (j && j.avisos && j.avisos.length ? ' (' + j.avisos.join(' ') + ')' : '');
-        lig.msg = '';
         lig.estado = L.marcarFeito(lig.estado, leadId);
         avancar();
+      }, function (e) {
+        if (!lig) return;
+        lig.gravando = false;
+        lig.msg = (e && e.message) || 'Não consegui gravar a ligação agora. Tente de novo.';
+        desenharLigacao();
       });
     },
     pular: function () {
-      if (!lig || !lig.item) return;
+      if (!lig || !lig.item || lig.gravando) return;
       lig.ultimo = 'Pulado (nada gravado): ' + (lig.item.nome || 'cartão ' + lig.item.leadId);
       lig.msg = '';
       lig.estado = L.marcarFeito(lig.estado, lig.item.leadId);
@@ -567,8 +600,9 @@
     },
     recomecar: function () {
       if (!lig) return;
-      lig.estado = { v: 1, dia: lig.estado.dia, slug: lig.estado.slug, feitos: [], atual: null, aberturas: lig.estado.aberturas };
+      lig.estado = { v: 1, dia: lig.estado.dia, slug: lig.estado.slug, feitos: [], atual: null, tentativa: null, aberturas: lig.estado.aberturas };
       lig.pulados = [];
+      lig.naoLidos = [];
       lig.ultimo = '';
       avancar();
     },

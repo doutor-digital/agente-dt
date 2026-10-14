@@ -14,11 +14,19 @@
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
-import { unidadeDoWidget } from './widget-franquia.controller.js';
+import { unidadeDaPonte } from './widget-franquia.controller.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { contaDaUnidade } from '../lib/ponte-cache.js';
-import { ehEtiquetaDeRobo, etiquetasDaConta, lerPedidoDeEtiqueta, porEtiqueta, tirarEtiqueta, type ResultadoDaEtiqueta } from '../lib/ponte-etiquetas.js';
-import { camposDaConta, lerPedidoDeLigacao, registrarLigacao } from '../lib/ponte-ligacao.js';
+import {
+  ehEtiquetaDeRobo,
+  etiquetasDaConta,
+  etiquetasDeRoboDaUnidade,
+  lerPedidoDeEtiqueta,
+  porEtiqueta,
+  tirarEtiqueta,
+  type ResultadoDaEtiqueta,
+} from '../lib/ponte-etiquetas.js';
+import { camposDaConta, lerPedidoDeLigacao, registrarLigacaoUmaVez } from '../lib/ponte-ligacao.js';
 import { ONDE_CADASTRAR_RESPOSTAS, respostasDaConta } from '../lib/ponte-respostas.js';
 
 /** Leitura (listas da conta): o painel pede ao abrir o "+ etiqueta" e a aba Respostas. */
@@ -29,7 +37,7 @@ const LIMITE_DA_ETIQUETA = { balde: 'ponte-etiqueta', max: 30 };
 const LIMITE_DA_LIGACAO = { balde: 'ponte-ligacao', max: 30 };
 
 async function unidadeComKommo(req: Request, res: Response, limite: { balde: string; max: number }): Promise<Unit | null> {
-  const unit = await unidadeDoWidget(req, res, limite);
+  const unit = await unidadeDaPonte(req, res, limite);
   if (!unit) return null;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     res.status(409).json({ error: 'unidade sem Kommo conectado' });
@@ -46,7 +54,9 @@ export async function ponteEtiquetasDaContaHandler(req: Request, res: Response):
   if (!unit) return;
   try {
     const nomes = await etiquetasDaConta(contaDaUnidade(unit), createKommoClient(unit));
-    res.json({ etiquetas: nomes.map((nome) => ({ nome, robo: ehEtiquetaDeRobo(nome) })), agora: new Date() });
+    // `robo` é a regra do servidor (▶ + a lista da unidade): o painel pede confirmação por ela
+    const robos = etiquetasDeRoboDaUnidade(unit.slug);
+    res.json({ etiquetas: nomes.map((nome) => ({ nome, robo: ehEtiquetaDeRobo(nome, robos) })), agora: new Date() });
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug }, 'ponte: não li as etiquetas da conta');
     res.status(502).json({ error: 'não consegui ler as etiquetas do Kommo agora' });
@@ -70,12 +80,13 @@ async function mexerNaEtiqueta(req: Request, res: Response, acao: 'por' | 'tirar
     return;
   }
   const { leadId, nome } = lido.pedido;
+  const robos = etiquetasDeRoboDaUnidade(unit.slug);
   try {
     const kommo = createKommoClient(unit);
-    const r = acao === 'por' ? await porEtiqueta(contaDaUnidade(unit), kommo, lido.pedido) : await tirarEtiqueta(kommo, lido.pedido);
+    const r = acao === 'por' ? await porEtiqueta(contaDaUnidade(unit), kommo, lido.pedido, { robos }) : await tirarEtiqueta(kommo, lido.pedido, { robos });
     // o nome da etiqueta não é dado de paciente ("LOMBAR", "▶ Retomada"); quem pôs fica na nota, não no log
     logger.info(
-      { unit: unit.slug, leadId, etiqueta: r.ok ? r.nome : nome, acao, ok: r.ok, mudou: r.ok ? r.mudou : false, robo: ehEtiquetaDeRobo(r.ok ? r.nome : nome) },
+      { unit: unit.slug, leadId, etiqueta: r.ok ? r.nome : nome, acao, ok: r.ok, mudou: r.ok ? r.mudou : false, robo: ehEtiquetaDeRobo(r.ok ? r.nome : nome, robos) },
       'ponte: etiqueta',
     );
     responderEtiqueta(res, r);
@@ -108,14 +119,15 @@ export async function ponteLigacaoHandler(req: Request, res: Response): Promise<
   }
   const { leadId, resultado } = lido.pedido;
   try {
-    const r = await registrarLigacao(contaDaUnidade(unit), createKommoClient(unit), lido.pedido);
+    const r = await registrarLigacaoUmaVez(contaDaUnidade(unit), createKommoClient(unit), lido.pedido);
     if (!r.ok) {
       logger.warn({ unit: unit.slug, leadId, resultado, status: r.status }, 'ponte: ligação não registrada');
       res.status(r.status).json({ error: r.erro });
       return;
     }
-    logger.info({ unit: unit.slug, leadId, resultado, campos: r.campos, nota: r.nota, origem: 'ponte' }, 'ponte: ligação registrada');
-    res.json({ leadId, resultado, campos: r.campos, nota: r.nota, tentativas: r.tentativas, avisos: r.avisos, agora: new Date() });
+    logger.info({ unit: unit.slug, leadId, resultado: r.resultado, campos: r.campos, nota: r.nota, repetido: !!r.repetido, origem: 'ponte' }, 'ponte: ligação registrada');
+    // repetido: a mesma tentativa já tinha gravado — volta o que foi gravado da primeira vez
+    res.json({ leadId, resultado: r.resultado, campos: r.campos, nota: r.nota, tentativas: r.tentativas, avisos: r.avisos, repetido: !!r.repetido, agora: new Date() });
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId, resultado }, 'ponte: falha ao registrar a ligação');
     res.status(502).json({ error: 'não consegui gravar a ligação no Kommo agora' });

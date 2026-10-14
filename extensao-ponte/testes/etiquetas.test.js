@@ -17,6 +17,8 @@ const DA_CONTA = [
   { nome: '▶ Retomada', robo: true },
   { nome: '▶ Confirmação', robo: true },
   { nome: 'Retomada manual', robo: false },
+  // sem ▶, mas dispara bot que manda modelo (o servidor diz `robo: true`)
+  { nome: 'Aderência meio', robo: true },
 ];
 
 const CARTAO = {
@@ -42,6 +44,12 @@ describe('etiquetas — as regras (etiquetas.js)', () => {
     assert.equal(E.ehDeRobo('Retomada ▶'), false);
     assert.equal(E.ehDeRobo('LOMBAR'), false);
     assert.equal(E.ehDeRobo(null), false);
+  });
+
+  it('a lista da unidade (vinda do servidor) também é de robô, sem diferença de maiúscula ou acento', () => {
+    assert.equal(E.ehDeRobo('Aderência meio', ['Aderência meio']), true);
+    assert.equal(E.ehDeRobo('ADERENCIA MEIO', ['Aderência meio']), true);
+    assert.equal(E.ehDeRobo('Aderência meio'), false, 'sem a lista, só o ▶ vale aqui — por isso o painel usa o que o servidor diz');
   });
 
   it('a busca acha sem acento e sem maiúscula, e o que começa com o texto vem primeiro', () => {
@@ -137,6 +145,59 @@ describe('etiquetas — o bloco do cartão', () => {
     caixa.querySelector('[data-acao="confirmar-robo"]').click();
     await tique();
     assert.deepEqual(reg.slice(1), [['por', 123, '▶ Retomada', true]]);
+  });
+
+  it('"Aderência meio" (sem ▶, mas o servidor diz que é de robô): também pergunta antes de pôr', async () => {
+    const doc = novoDoc();
+    const reg = [];
+    const n = D.cartao(doc, CARTAO, acoesFalsas(reg));
+    n.querySelector('[data-acao="abrir-etiquetas"]').click();
+    await tique();
+    const opcao = n.querySelector('[data-papel="opcoes-etiqueta"] [data-etiqueta="Aderência meio"]');
+    assert.match(opcao.textContent, /manda mensagem/);
+    opcao.click();
+    await tique();
+    assert.deepEqual(reg.slice(1), []);
+    assert.equal(n.querySelector('[data-papel="confirmar-etiqueta"]').hidden, false);
+    n.querySelector('[data-acao="confirmar-robo"]').click();
+    await tique();
+    assert.deepEqual(reg.slice(1), [['por', 123, 'Aderência meio', true]]);
+  });
+
+  it('o servidor recusou pedindo confirmação (robô que o painel não sabia): o painel pergunta e manda de novo confirmado', async () => {
+    const doc = novoDoc();
+    const reg = [];
+    const acoes = {
+      listarEtiquetas: () => Promise.resolve([{ nome: 'Lembrete novo', robo: false }]),
+      porEtiqueta: (id, nome, confirmado) => {
+        reg.push([id, nome, confirmado]);
+        if (confirmado) return Promise.resolve();
+        const e = new Error('Esta etiqueta faz o robô mandar uma mensagem para o paciente: confirme antes.');
+        e.precisaConfirmar = true;
+        return Promise.reject(e);
+      },
+      tirarEtiqueta: () => Promise.resolve(),
+    };
+    const n = D.cartao(doc, CARTAO, acoes);
+    n.querySelector('[data-acao="abrir-etiquetas"]').click();
+    await tique();
+    n.querySelector('[data-papel="opcoes-etiqueta"] [data-etiqueta="Lembrete novo"]').click();
+    await tique();
+    await tique();
+    assert.equal(n.querySelector('[data-papel="confirmar-etiqueta"]').hidden, false);
+    assert.equal(n.querySelector('[data-papel="msg-etiqueta"]').textContent, '');
+    n.querySelector('[data-acao="confirmar-robo"]').click();
+    await tique();
+    assert.deepEqual(reg, [[123, 'Lembrete novo', false], [123, 'Lembrete novo', true]]);
+  });
+
+  it('chip de robô no cartão segue o servidor (`etiquetasRobo`)', () => {
+    const doc = novoDoc();
+    const r = JSON.parse(JSON.stringify(CARTAO));
+    r.cartao.etiquetas = ['Aderência meio', 'LOMBAR'];
+    r.cartao.etiquetasRobo = ['Aderência meio'];
+    const chips = [...D.cartao(doc, r, acoesFalsas([])).querySelectorAll('[data-bloco="etiquetas"] .etiqueta')];
+    assert.deepEqual(chips.map((c) => c.classList.contains('etiqueta--robo')), [true, false]);
   });
 
   it('etiqueta ▶: "Cancelar" não põe nada e volta para a lista', async () => {

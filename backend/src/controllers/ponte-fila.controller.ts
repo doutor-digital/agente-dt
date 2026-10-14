@@ -17,7 +17,7 @@ import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { unidadeDoWidget } from './widget-franquia.controller.js';
+import { unidadeDaPonte } from './widget-franquia.controller.js';
 import { dadosDaConta } from './ponte.controller.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoTalk } from '../services/kommo.service.js';
 import { funilComercial } from '../lib/ponte-cartao.js';
@@ -35,6 +35,7 @@ import {
   regraNegociacao,
   regraRetomar,
   regraSemResposta,
+  semTelefoneConfirmado,
   telefoneParaMostrar,
   telefoneParaWhatsapp,
   type CandidatoDaFila,
@@ -69,6 +70,11 @@ interface ItemDaResposta {
   telefone: string | null;
   /** Como mostrar e copiar: "(99) 90000-0043". */
   telefoneVisivel: string | null;
+  /**
+   * O Kommo AFIRMA que não há telefone (cartão sem contato, ou contato lido sem número válido). Falso com
+   * `telefone: null` = não deu para ler agora — o painel não pode tratar como "sem telefone".
+   */
+  semTelefone: boolean;
   link: string;
 }
 
@@ -88,6 +94,8 @@ interface RespostaDaFila {
   tz: string;
   prazos: { confirmarDiasAntes: number; negociacaoParadaDias: number; semRespostaHoras: number };
   grupos: GrupoDaResposta[];
+  /** Os telefones não puderam ser lidos agora: a fila sai assim mesmo, mas NÃO fica em cache. */
+  avisoTelefones?: string;
 }
 
 const cache = new Map<string, { em: number; corpo: RespostaDaFila }>();
@@ -282,7 +290,10 @@ async function montarFila(unit: Unit): Promise<RespostaDaFila> {
 
   // ── telefones só de quem aparece (lotes de 50) ──
   const contatos = grupos.flatMap((g) => g.itens.map((i) => i.cartao.contatoId)).filter((id): id is number => id !== null);
+  // falha ao ler NÃO é "sem telefone": marca, avisa, e a fila não entra no cache
+  let telefonesLidos = true;
   const telefones = await kommo.telefonesDosContatos(contatos).catch((err) => {
+    telefonesLidos = false;
     logger.warn({ err: String(err), unit: unit.slug }, 'ponte fila: sem os telefones agora');
     return new Map<number, string>();
   });
@@ -315,12 +326,14 @@ async function montarFila(unit: Unit): Promise<RespostaDaFila> {
             passado: pista.quando <= agoraEpoch && !pista.semTempo,
             telefone: tel,
             telefoneVisivel: tel ? telefoneParaMostrar(tel) : null,
+            semTelefone: semTelefoneConfirmado(tel, c.contatoId, telefonesLidos),
             link: `https://${unit.kommoSubdomain}.kommo.com/leads/detail/${c.id}`,
           };
         }),
         ...(aviso ? { aviso } : {}),
       };
     }),
+    ...(telefonesLidos ? {} : { avisoTelefones: 'Não consegui ler os telefones agora: tente de novo (Atualizar).' }),
   };
   logger.info(
     { unit: unit.slug, grupos: Object.fromEntries(corpo.grupos.map((g) => [g.id, g.total])), conversasCompletas },
@@ -330,7 +343,7 @@ async function montarFila(unit: Unit): Promise<RespostaDaFila> {
 }
 
 export async function ponteFilaHandler(req: Request, res: Response): Promise<void> {
-  const unit = await unidadeDoWidget(req, res, LIMITE_DA_FILA);
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_FILA);
   if (!unit) return;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     res.status(409).json({ error: 'unidade sem Kommo conectado' });
@@ -348,7 +361,8 @@ export async function ponteFilaHandler(req: Request, res: Response): Promise<voi
     if (!p) {
       p = montarFila(unit)
         .then((corpo) => {
-          cache.set(conta, { em: Date.now(), corpo });
+          // sem os telefones a fila sai, mas não fica 2 min em cache: o próximo "Atualizar" tenta de novo
+          if (!corpo.avisoTelefones) cache.set(conta, { em: Date.now(), corpo });
           return corpo;
         })
         .finally(() => emAndamento.delete(conta));

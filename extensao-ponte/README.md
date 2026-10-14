@@ -29,12 +29,27 @@ No cartão, cada etiqueta vira um chip com **✕** para tirar, e o botão **+ et
 etiquetas que **já existem** na conta do Kommo. A atendente não cria etiqueta nova (decisão A3 da trilha): se o
 nome não existe na conta, o servidor recusa — o `tags_to_add` do Kommo criaria a etiqueta sozinho.
 
-Etiqueta que começa com **▶** faz um robô (Salesbot) do Kommo **mandar um modelo de WhatsApp para o paciente**.
-Ao escolher uma ▶, o painel pergunta: "Esta etiqueta faz o robô mandar uma mensagem para o paciente. Pôr mesmo
-assim?" — e só põe depois de **Pôr mesmo assim**. O servidor também recusa uma ▶ sem essa confirmação, deixa uma
-nota no cartão ("Etiqueta ▶ Retomada posta pela Ponte · por Ana") e põe no máximo 30 ▶ por hora em cada conta
-(`PONTE_ETIQUETA_ROBO_POR_HORA`): se a chave da unidade vazar, ela não vira um disparador. Tirar não pede
-confirmação.
+Algumas etiquetas fazem um robô (Salesbot) do Kommo **mandar um modelo de WhatsApp para o paciente** — as
+"etiquetas de robô". São as que começam com **▶** e as de uma **lista**, porque nem toda etiqueta de robô tem ▶:
+"**Aderência meio**" dispara o BOT_…_sessao_aderencia_meio (modelo de WhatsApp) em Açailândia, Serra e
+Imperatriz (gatilhos conferidos em 07/10/2026). A lista fica em `ETIQUETAS_DE_ROBO_SEM_SETA`
+(`backend/src/lib/ponte-etiquetas.ts`), e dá para acrescentar sem mexer no código:
+
+- `PONTE_ETIQUETAS_DE_ROBO="Lembrete; Outra"` — vale para todas as unidades;
+- `PONTE_ETIQUETAS_DE_ROBO_<SLUG>` — só uma unidade (slug em maiúsculas, `-` vira `_`; ex.:
+  `PONTE_ETIQUETAS_DE_ROBO_DOUTOR_HERNIA_ACAILANDIA`).
+
+Por que lista e não "ler os gatilhos do Kommo": os gatilhos de bot só saem pela rota `/ajax/v4/triggers/bots`,
+que pede o cookie de sessão de um usuário; o token da API, que o servidor tem, não lê. **Etiqueta nova que
+dispara robô precisa entrar na lista.** Na dúvida, a regra pede confirmação a mais, nunca a menos.
+
+Quem decide é o **servidor**: a lista da conta vem com `robo` e o cartão com `etiquetasRobo`. Ao escolher uma
+etiqueta de robô, o painel pergunta: "Esta etiqueta faz o robô mandar uma mensagem para o paciente. Pôr mesmo
+assim?" — e só põe depois de **Pôr mesmo assim**. O servidor recusa sem essa confirmação (e o painel então
+pergunta), deixa uma nota no cartão ("Etiqueta ▶ Retomada posta pela Ponte · por Ana") e põe no máximo 30
+etiquetas de robô por hora em cada conta (`PONTE_ETIQUETA_ROBO_POR_HORA`): se a chave da unidade vazar, ela não
+vira um disparador. A vaga do teto é reservada no mesmo passo em que é conferida (pedidos chegando juntos não
+passam do teto) e devolvida se nada for gravado. Tirar não pede confirmação.
 
 Depois de pôr ou tirar, o servidor **relê o cartão** e o painel mostra a lista que o Kommo devolveu. Rotas:
 `GET` (as etiquetas da conta, cache de 10 min), `POST` e `DELETE /api/public/widget/:slug/ponte/etiquetas`, com
@@ -58,14 +73,25 @@ Pular**.
   é gravado nos campos ☎ do cartão, **achados pelo nome** (nunca id fixo): ☎ Última ligação = agora; ☎ Resultado
   = a opção (Atendida, Não atendida, Caixa postal, Número inválido); ☎ Tentativas + 1; ☎ Agente = "Ponte · Ana";
   e ☎ Campanha 3C **vazio** (é assim que se separa a ligação da SDR da discadora 3C: se o cartão tinha a campanha
-  de uma ligação antiga da 3C, ela é esvaziada; gravação e duração da 3C não são tocadas). Sempre com a nota
-  "☎ Ligação pela Ponte: não atendeu · por Ana". Conta sem os campos ☎: só a nota.
+  de uma ligação antiga da 3C, ela é esvaziada; gravação e duração da 3C não são tocadas).
+- **Nota só quando os campos ☎ não gravaram** (conta sem os campos, ou o Kommo recusou): "☎ Ligação pela Ponte:
+  não atendeu · por Ana". Com os campos gravados não há nota: o ☎ Agente já diz quem ligou, o histórico do Kommo
+  guarda cada mudança dos campos, e uma nota a cada ligação quebraria a isenção do `card-validation-worker` (ele só
+  deixa passar o cartão em que TODA mudança foi em campo ☎ — com a nota, cada cartão ligado ganharia "⚠ Revisar
+  cartão"). Estender a isenção a notas exigiria ler o texto da nota, que os eventos do Kommo não trazem.
+- **Uma gravação por tentativa.** Ao abrir a conversa, o painel cria o id da tentativa (guardado junto da posição)
+  e manda com o resultado; o servidor grava cada tentativa uma vez só por 10 min (clique duplo, tela redesenhada
+  ou o painel reaberto não somam duas ligações nem pulam as ☎ Tentativas). Enquanto o resultado vai para o
+  servidor, os botões ficam travados, mesmo se a tela for redesenhada.
 - Depois do resultado, avança sozinho. **Ritmo**, para não parecer spam: no mínimo 40 s entre abrir uma conversa
   e a próxima, e no máximo 40 por hora (janela corrida), com contagem regressiva na tela ("próximo em 25 s").
   Os números ficam em `RITMO_DAS_LIGACOES` (`backend/src/lib/ponte-ligacao.ts`), no estilo de `PRAZOS_DA_FILA`:
   `PONTE_LIGACAO_INTERVALO_S` (mínimo 15) e `PONTE_LIGACAO_TETO_HORA` (máximo 120). Vão para a extensão junto da
   fila.
-- Paciente sem telefone (só @lid ou nome de usuário) é pulado com o aviso "sem telefone — abra pelo Kommo".
+- Paciente sem telefone (só @lid ou nome de usuário) é pulado com o aviso "sem telefone — abra pelo Kommo" — mas
+  só quando o servidor **afirma** que não há telefone (`semTelefone: true`). Se o Kommo não respondeu na leitura
+  dos telefones, a fila avisa "Não consegui ler os telefones agora: tente de novo (Atualizar)", não fica em cache,
+  e o painel deixa esses pacientes "para depois" **sem marcar como feitos** (nem diz que a fila acabou).
   Pular não grava nada. **Pausar** segura a contagem; **Sair** volta para a fila.
 - A posição sobrevive a fechar o painel: fica em `chrome.storage.local` só o dia, a unidade, os ids dos cartões
   feitos e as horas das aberturas — **nunca nome nem telefone**. Reabrindo, o botão vira "Continuar a ligar".
@@ -85,11 +111,30 @@ Modelos gerais › Adicionar um novo modelo** (só administrador; caminho da aju
 
 ### Aviso de cartão duplicado
 
-A resposta do cartão traz `duplicados`: os outros cartões **abertos** (fora de GANHO e PERDIDO, em qualquer funil)
-do mesmo contato, ou de outros contatos com o **mesmo telefone completo** (DDD + número). Com dois ou mais
-abertos, o painel mostra a faixa amarela "Este paciente tem 2 cartões abertos", cada um com nome, funil/etapa,
-⚑ Origem e **Abrir no Kommo**, e a regra: "Fica o que veio do anúncio; o outro é juntado (Mesclar) no Kommo,
+A resposta do cartão traz `duplicados`: os outros cartões **abertos** do paciente, cada um com `via`:
+
+- `contato` — o paciente é o contato **principal** do outro cartão (aparecer como contato secundário, como a mãe
+  que acompanha a filha, não conta);
+- `telefone` — o principal do outro cartão é **outro contato com o mesmo telefone completo** (DDD + número). Pode
+  ser da família dividindo o WhatsApp: o painel mostra num grupo separado, com "pode ser da família — confira se
+  é a mesma pessoa antes de juntar".
+
+"Aberto" é fora de GANHO e PERDIDO e fora das etapas finais pelo nome (ALTA, CANCELADO, CONCLUÍDO, FINALIZADO,
+ENCERRADO — o funil TRATAMENTO tem "ALTA"). Com dois ou mais abertos, o painel mostra a faixa amarela ("Este
+paciente tem 2 cartões abertos"), cada um com nome, funil/etapa, ⚑ Origem e **Abrir no Kommo**, e a regra:
+"Confira se é a mesma pessoa antes de juntar. Fica o que veio do anúncio; o outro é juntado (Mesclar) no Kommo,
 nunca apagado". A Ponte não junta nem apaga nada.
+
+### A chave antes do limitador
+
+As rotas da Ponte conferem a chave da unidade **antes** do limitador de pedidos (`unidadeDaPonte`, em
+`widget-franquia.controller.ts`): sem a chave, a resposta é 403 e não gasta o limite da unidade. Antes, quem
+soubesse só o slug travava as rotas da unidade com 31 pedidos por minuto. As outras rotas de widget continuam
+como eram. A chave só vale no header `X-Widget-Key` (nunca na URL, que fica no log de acesso).
+
+Fica documentado, sem mexer: o Express não tem `trust proxy`, então atrás do Traefik o `req.ip` é o do proxy e o
+limite é, na prática, por unidade (todas as atendentes dividem o mesmo balde). Ligar o `trust proxy` muda o
+limitador de todas as rotas e precisa ser conferido com a configuração do Traefik — fica para outra vez.
 
 ## O que há de novo na 0.2.0 (fase 2)
 
@@ -209,12 +254,13 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
   script, e o painel só recebe nome, telefone e hashes;
 - trata o id `@lid` como telefone;
 - monta link do WhatsApp com texto (`text=`): "Abrir conversa" leva só o telefone, e quem escreve é a atendente;
-- cria etiqueta nova no Kommo, põe etiqueta ▶ sem a atendente confirmar, ou põe ▶ Retomada sozinha depois de uma
-  ligação;
+- cria etiqueta nova no Kommo, põe etiqueta de robô (▶ ou da lista, como "Aderência meio") sem a atendente
+  confirmar, ou põe ▶ Retomada sozinha depois de uma ligação;
+- marca como "sem telefone" quem só não teve o telefone lido agora;
 - junta (mescla) ou apaga cartão: o aviso de duplicado só avisa;
 - guarda nome ou telefone de paciente no `storage` (a fila de ligações guarda só ids e horas);
 - escreve na franquia. No Kommo, só escreve quando a atendente clica: pausar e retomar a Sofia num paciente, pôr e
-  tirar etiqueta, e o resultado da ligação (campos ☎ + nota). Tudo vai pelo NOSSO servidor com a chave da
+  tirar etiqueta, e o resultado da ligação (campos ☎; nota só sem eles). Tudo vai pelo NOSSO servidor com a chave da
   unidade — nunca pelo WhatsApp.
 
 Permissões: `sidePanel` e `storage`, mais `host_permissions` apenas para o servidor da Doutor Digital. O
@@ -257,21 +303,26 @@ npm test            # node --test 'testes/*.test.js'
 - `pausa.test.js`: as datas de cada opção da pausa, o limite de 30 dias e o estado da Sofia depois de pausar;
 - `etiquetas.test.js` (0.3.0): a regra do ▶, a busca entre as etiquetas da conta e o bloco do cartão (✕, "+
   etiqueta", a pergunta da ▶ — só põe depois de confirmar —, o erro e o dado tratado como texto);
-- `ligacao.test.js` (0.3.0): a ordem da fila de ligações, o ritmo (40 s, teto por hora), o estado guardado (só ids
-  e horas) e a tela do modo ligação;
+- `ligacao.test.js` (0.3.0): a ordem da fila de ligações, o ritmo (40 s, teto por hora), o estado guardado (só ids,
+  horas e o id da tentativa), o telefone não lido (fica para depois, sem marcar) e a tela do modo ligação (botões
+  travados enquanto grava);
 - `respostas.test.js` (0.3.0): o nome no lugar do marcador ("[nome]" quando não se sabe), a busca e a aba;
 - `painel.test.js` (0.3.0): o `painel.js` inteiro com `chrome`, `fetch` e relógio falsos — "Começar a ligar"
   abre só pela URL com o telefone, espera o ritmo, grava o resultado, pula quem não tem telefone, respeita o teto
-  e continua de onde parou; a etiqueta vai com quem pôs; e a resposta copiada nunca sai com o nome do paciente
+  e continua de onde parou; o resultado pendente não destrava com o redesenho nem manda duas vezes; telefone não
+  lido não vira "feito"; a etiqueta vai com quem pôs; e a resposta copiada nunca sai com o nome do paciente
   anterior.
 
 No backend: `ponte-fila.test.ts` (cada regra da fila e os prazos), `ponte-resumo.test.ts` (o resumo sem IA, o
 pedido e a leitura da resposta da IA), `ponte-pausa.test.ts` (o pedido, as regras de sempre e o próprio
 `pausa.js` daqui passando pela regra do servidor) e, na 0.3.0, `ponte-etiquetas.test.ts` (só etiqueta que existe,
-▶ só confirmada e com nota, teto de ▶ por hora, releitura, e o PATCH com `tags_to_add` na raiz),
-`ponte-ligacao.test.ts` (os campos ☎ pelo nome com os ids reais de Açailândia, tentativas + 1, campanha 3C
-esvaziada, só a nota quando falta campo), `ponte-respostas.test.ts` (só os modelos gerais, os marcadores e o
-primeiro nome) e `ponte-duplicados.test.ts` (o mesmo telefone completo e quando avisar).
+de robô — ▶ e "Aderência meio" — só confirmada e com nota, teto por hora inclusive com 10 pedidos juntos, a vaga
+devolvida quando nada grava, releitura, e o PATCH com `tags_to_add` na raiz), `ponte-ligacao.test.ts` (os campos ☎
+pelo nome com os ids reais de Açailândia, tentativas + 1, campanha 3C esvaziada, nota só sem os campos, a isenção
+da revisão de cartão mantida, e a mesma tentativa gravando uma vez), `ponte-respostas.test.ts` (só os modelos
+gerais, os marcadores e o primeiro nome), `ponte-duplicados.test.ts` (o mesmo telefone completo, contato
+principal, etapas finais e quando avisar), `ponte-fila.test.ts` ("sem telefone" só quando o Kommo afirma) e
+`controllers/ponte-porta.test.ts` (a chave antes do limitador).
 
 ### A conferir no dia de teste (fase 2)
 
@@ -287,6 +338,8 @@ primeiro nome) e `ponte-duplicados.test.ts` (o mesmo telefone completo e quando 
 
 - [ ] pôr uma etiqueta ▶ pela Ponte dispara o robô (o gatilho do Kommo vale para etiqueta posta pela API? — é a
       mesma dúvida das "Etiquetas ▶ automáticas"); testar num cartão de teste;
+- [ ] conferir nos gatilhos de cada conta se há outra etiqueta de robô SEM ▶ além de "Aderência meio" e, se houver,
+      pôr na lista (`PONTE_ETIQUETAS_DE_ROBO`);
 - [ ] "Começar a ligar": depois que a conversa abre, o 📞 aparece e liga; contato sem WhatsApp mostra o aviso do
       próprio WhatsApp (marcar "Número errado");
 - [ ] os campos ☎ aparecem certos no cartão (data, resultado, tentativas, "Ponte · <nome>") e a campanha 3C fica

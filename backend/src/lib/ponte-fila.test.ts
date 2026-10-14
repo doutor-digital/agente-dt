@@ -13,6 +13,7 @@ import {
   regraNegociacao,
   regraRetomar,
   regraSemResposta,
+  semTelefoneConfirmado,
   situacaoConfirmada,
   somarDias,
   telefoneParaMostrar,
@@ -322,5 +323,14 @@ describe('fila — os grupos', () => {
     const g = montarGrupos([cand('sem-resposta', 1, 1), cand('retomar', 1, 1), cand('retomar', 1, 2)]);
     assert.equal(g.reduce((s, x) => s + x.total, 0), 1);
     assert.equal(g[0].total, 1);
+  });
+});
+
+describe('fase 3 — "sem telefone" só quando o Kommo afirma', () => {
+  it('falha ao ler os telefones não vira "sem telefone"', () => {
+    assert.equal(semTelefoneConfirmado(null, 10, false), false, 'não leu: não sabe');
+    assert.equal(semTelefoneConfirmado(null, 10, true), true, 'leu e não tem');
+    assert.equal(semTelefoneConfirmado(null, null, false), true, 'cartão sem contato: não tem mesmo');
+    assert.equal(semTelefoneConfirmado('5599900000043', 10, true), false);
   });
 });
