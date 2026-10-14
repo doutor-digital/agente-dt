@@ -313,7 +313,7 @@ export function telefoneParaWhatsapp(bruto: string | null | undefined): string |
   return null;
 }
 
-/** Como a atendente lê (e copia para ligar): "(63) 99102-1043"; de fora do Brasil, "+<dígitos>". */
+/** Como a atendente lê (e copia para ligar): "(99) 90000-0043"; de fora do Brasil, "+<dígitos>". */
 export function telefoneParaMostrar(digitos: string): string {
   if (digitos.startsWith('55') && (digitos.length === 12 || digitos.length === 13)) {
     const n = digitos.slice(2);

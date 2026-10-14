@@ -67,7 +67,7 @@ describe('respostas prontas — o primeiro nome do paciente', () => {
   });
 
   it('nada que pareça nome: null (o painel deixa "[nome]")', () => {
-    assert.equal(primeiroNomeDoPaciente('Lead 22261987', '+55 63 99102-1043'), null);
+    assert.equal(primeiroNomeDoPaciente('Lead 22261987', '+55 99 90000-0043'), null);
     assert.equal(primeiroNomeDoPaciente(null, null), null);
     assert.equal(primeiroNomeDoPaciente('', '🙂'), null);
   });

@@ -18,8 +18,8 @@ const item = (leadId, extra = {}) => ({
   etapa: 'EM ESPERA',
   motivo: 'retomar contato',
   detalhe: 'retomar hoje',
-  telefone: '55639910210' + String(leadId).padStart(2, '0'),
-  telefoneVisivel: '(63) 99102-10' + String(leadId).padStart(2, '0'),
+  telefone: '55999000000' + String(leadId).padStart(2, '0'),
+  telefoneVisivel: '(99) 90000-00' + String(leadId).padStart(2, '0'),
   link: 'https://x.kommo.com/leads/detail/' + leadId,
   ...extra,
 });
@@ -80,7 +80,7 @@ describe('ligação — a fila e o estado guardado', () => {
     e = L.registrarAbertura(e, 3, T0 + 41 * S);
     const json = JSON.stringify(e);
     assert.deepEqual(Object.keys(e).sort(), ['aberturas', 'atual', 'dia', 'feitos', 'slug', 'v']);
-    for (const t of ['Paciente', '5563', '99102']) assert.ok(!json.includes(t), `vazou "${t}"`);
+    for (const t of ['Paciente', '559990000', '(99)']) assert.ok(!json.includes(t), `vazou "${t}"`);
   });
 });
 

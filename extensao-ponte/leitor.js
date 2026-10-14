@@ -72,7 +72,7 @@
     return (h < 10 ? '0' : '') + h + ':' + (mi < 10 ? '0' : '') + mi;
   }
 
-  /** O número que aparece no cabeçalho de contato não salvo ("+55 63 99102-1043") → só dígitos. */
+  /** O número que aparece no cabeçalho de contato não salvo ("+55 99 90000-0043") → só dígitos. */
   function telefoneDoCabecalho(nome) {
     var s = String(nome || '').trim();
     if (!S.TELEFONE_NO_CABECALHO.test(s)) return null;

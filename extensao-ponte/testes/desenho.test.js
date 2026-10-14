@@ -315,7 +315,7 @@ const FILA = {
       total: 1,
       itens: [{
         leadId: 1, nome: 'João Lima', etapa: 'EM QUALIFICAÇÃO', motivo: 'sem resposta', detalhe: 'escreveu às 09:00',
-        quando: '2026-10-13T12:00:00.000Z', passado: true, telefone: '5563991021043', telefoneVisivel: '(63) 99102-1043',
+        quando: '2026-10-13T12:00:00.000Z', passado: true, telefone: '5599900000043', telefoneVisivel: '(99) 90000-0043',
         link: 'https://x.kommo.com/leads/detail/1',
       }],
     },
@@ -355,7 +355,7 @@ describe('fila de hoje (fase 2)', () => {
     assert.match(item.textContent, /João Lima/);
     assert.match(item.textContent, /EM QUALIFICAÇÃO · escreveu às 09:00/);
     assert.match(item.querySelector('.fila__tempo').textContent, /há 3 h/);
-    assert.match(item.textContent, /\(63\) 99102-1043/);
+    assert.match(item.textContent, /\(99\) 90000-0043/);
     assert.ok(item.querySelector('[data-acao="abrir-conversa"]'));
     assert.ok(item.querySelector('[data-acao="copiar"]'));
     const k = item.querySelector('a');
@@ -374,8 +374,8 @@ describe('fila de hoje (fase 2)', () => {
     item.querySelector('[data-acao="abrir-conversa"]').click();
     item.querySelector('[data-acao="copiar"]').click();
     await tique();
-    assert.deepEqual(abertos, ['5563991021043']);
-    assert.deepEqual(copiados, ['(63) 99102-1043']);
+    assert.deepEqual(abertos, ['5599900000043']);
+    assert.deepEqual(copiados, ['(99) 90000-0043']);
     assert.equal(item.querySelector('[data-acao="copiar"]').textContent, 'Copiado');
   });
 
@@ -415,12 +415,12 @@ describe('fila de hoje (fase 2)', () => {
 
 describe('abrir conversa = só navegação (fase 2)', () => {
   it('o link é o do WhatsApp Web com o telefone, e mais nada (nem texto)', () => {
-    assert.equal(D.urlDaConversa('5563991021043'), 'https://web.whatsapp.com/send?phone=5563991021043');
-    assert.ok(!D.urlDaConversa('5563991021043').includes('text='));
+    assert.equal(D.urlDaConversa('5599900000043'), 'https://web.whatsapp.com/send?phone=5599900000043');
+    assert.ok(!D.urlDaConversa('5599900000043').includes('text='));
   });
 
   it('só dígitos, de 10 a 15: nada de JID, sinal, espaço ou injeção na URL', () => {
-    for (const ruim of ['204567890123456@lid', '+5563991021043', '55 63 99102-1043', '123', '5563991021043&text=oi', '', null, undefined]) {
+    for (const ruim of ['204567890123456@lid', '+5599900000043', '55 99 90000-0043', '123', '5599900000043&text=oi', '', null, undefined]) {
       assert.equal(D.urlDaConversa(ruim), null, String(ruim));
     }
   });

@@ -17,14 +17,14 @@ import {
 
 describe('telefoneDaPonte', () => {
   it('aceita só número de verdade, em dígitos', () => {
-    assert.equal(telefoneDaPonte('5563991021043'), '5563991021043');
-    assert.equal(telefoneDaPonte('+55 (63) 99102-1043'), '5563991021043');
-    assert.equal(telefoneDaPonte('6391021043'), '6391021043');
+    assert.equal(telefoneDaPonte('5599900000043'), '5599900000043');
+    assert.equal(telefoneDaPonte('+55 (99) 90000-0043'), '5599900000043');
+    assert.equal(telefoneDaPonte('9900000043'), '9900000043');
   });
 
   it('o JID @lid NÃO vira telefone — nem qualquer coisa com @', () => {
     assert.equal(telefoneDaPonte('204567890123456@lid'), null);
-    assert.equal(telefoneDaPonte('5563991021043@c.us'), null);
+    assert.equal(telefoneDaPonte('5599900000043@c.us'), null);
     assert.equal(telefoneDaPonte('120363012345678901@g.us'), null);
   });
 
@@ -33,34 +33,34 @@ describe('telefoneDaPonte', () => {
     assert.equal(telefoneDaPonte('1234567890123456'), null);
     assert.equal(telefoneDaPonte('Maria Souza'), null);
     assert.equal(telefoneDaPonte(''), null);
-    assert.equal(telefoneDaPonte(5563991021043), null);
+    assert.equal(telefoneDaPonte(5599900000043), null);
     assert.equal(telefoneDaPonte(undefined), null);
   });
 });
 
 describe('telefoneConfere — o número completo, não só o final', () => {
   it('mesmo número com e sem 55 e com e sem o nono dígito', () => {
-    assert.ok(telefoneConfere('5563991021043', '+55 63 99102-1043'));
-    assert.ok(telefoneConfere('5563991021043', '(63) 9102-1043'));
-    assert.ok(telefoneConfere('556391021043', '63991021043'));
+    assert.ok(telefoneConfere('5599900000043', '+55 99 90000-0043'));
+    assert.ok(telefoneConfere('5599900000043', '(99) 0000-0043'));
+    assert.ok(telefoneConfere('559900000043', '99900000043'));
   });
 
   it('mesmo final em OUTRO DDD é outra pessoa (a busca do Kommo devolveria os dois)', () => {
-    assert.equal(telefoneConfere('5563991021043', '+55 11 99102-1043'), false);
-    assert.equal(telefoneConfere('5599991021043', '5563991021043'), false);
+    assert.equal(telefoneConfere('5599900000043', '+55 11 90000-0043'), false);
+    assert.equal(telefoneConfere('5511900000043', '5599900000043'), false);
   });
 
   it('final diferente não confere; contato sem DDD confere pelos 8 últimos', () => {
-    assert.equal(telefoneConfere('5563991021043', '5563991021044'), false);
-    assert.ok(telefoneConfere('5563991021043', '9102-1043'));
-    assert.equal(telefoneConfere('5563991021043', null), false);
+    assert.equal(telefoneConfere('5599900000043', '5599900000044'), false);
+    assert.ok(telefoneConfere('5599900000043', '0000-0043'));
+    assert.equal(telefoneConfere('5599900000043', null), false);
     assert.equal(telefoneConfere('1043', '1043'), false);
   });
 
   it('DDD só de número brasileiro', () => {
-    assert.equal(dddBrasileiro('5563991021043'), '63');
-    assert.equal(dddBrasileiro('6391021043'), '63');
-    assert.equal(dddBrasileiro('91021043'), null);
+    assert.equal(dddBrasileiro('5599900000043'), '99');
+    assert.equal(dddBrasileiro('9900000043'), '99');
+    assert.equal(dddBrasileiro('00000043'), null);
     assert.equal(dddBrasileiro('14155552671'), '14'); // 11 dígitos sem 55: tratado como brasileiro (DDD 14)
   });
 });
@@ -103,7 +103,7 @@ describe('casarCartao — os 4 passos, nesta ordem, parando no primeiro que acha
     };
     return { p, chamados };
   }
-  const entrada = { telefone: '5563991021043', impressoes: ['a'.repeat(64)], nome: 'Maria Souza', manual: false };
+  const entrada = { telefone: '5599900000043', impressoes: ['a'.repeat(64)], nome: 'Maria Souza', manual: false };
 
   it('1. telefone achou: nem olha impressão nem nome', async () => {
     const { p, chamados } = passos({ tel: [{ nome: 'Maria Souza', leadIds: [10, 11, 10] }], imp: 20, nome: [[30]] });

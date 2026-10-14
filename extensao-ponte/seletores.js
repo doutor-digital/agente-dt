@@ -39,7 +39,7 @@
     /**
      * Cada mensagem tem um elemento com `data-id` no formato
      *   `<deMim>_<jidDaConversa>_<idDaMensagem>[_<jidDoParticipante>]`
-     * ex.: `false_5563991021043@c.us_3EB0A1B2C3D4` (recebida, conversa com um número)
+     * ex.: `false_5599900000043@c.us_3EB0A1B2C3D4` (recebida, conversa com um número)
      *      `true_123456789012345@lid_3EB0FF00`      (enviada, conversa com id opaco — NÃO é telefone)
      *      `false_120363000000000000@g.us_3EB0AA_5511999990000@c.us` (grupo: o participante NÃO é a conversa)
      */
@@ -58,7 +58,7 @@
 
     /**
      * Contato que não está salvo no celular da clínica aparece com o NÚMERO no cabeçalho
-     * ("+55 63 99102-1043"). Esse número está na tela — não é o id `@lid` —, então vale como telefone.
+     * ("+55 99 90000-0043"). Esse número está na tela — não é o id `@lid` —, então vale como telefone.
      */
     TELEFONE_NO_CABECALHO: /^\+\d[\d\s().-]{8,}$/,
   });

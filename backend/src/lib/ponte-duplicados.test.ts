@@ -17,16 +17,16 @@ const cartao = (id: number, status_id: number, extra: Partial<CartaoDoPaciente> 
 
 describe('duplicado — o mesmo telefone completo', () => {
   it('com e sem o 55, com e sem o nono dígito: é o mesmo', () => {
-    assert.ok(mesmoTelefoneCompleto('+55 63 99102-1043', '63991021043'));
-    assert.ok(mesmoTelefoneCompleto('5563991021043', '(63) 9102-1043'));
+    assert.ok(mesmoTelefoneCompleto('+55 99 90000-0043', '99900000043'));
+    assert.ok(mesmoTelefoneCompleto('5599900000043', '(99) 0000-0043'));
   });
 
   it('mesmo final em outro DDD não é; número sem DDD não diz "mesma pessoa"', () => {
-    assert.equal(mesmoTelefoneCompleto('63991021043', '11991021043'), false);
-    assert.equal(mesmoTelefoneCompleto('63991021043', '991021043'), false);
-    assert.equal(mesmoTelefoneCompleto('91021043', '91021043'), false);
-    assert.equal(telefoneCompleto('991021043'), false);
-    assert.equal(telefoneCompleto('+55 63 99102-1043'), true);
+    assert.equal(mesmoTelefoneCompleto('99900000043', '11900000043'), false);
+    assert.equal(mesmoTelefoneCompleto('99900000043', '900000043'), false);
+    assert.equal(mesmoTelefoneCompleto('00000043', '00000043'), false);
+    assert.equal(telefoneCompleto('900000043'), false);
+    assert.equal(telefoneCompleto('+55 99 90000-0043'), true);
     assert.equal(mesmoTelefoneCompleto(null, null), false);
   });
 });
@@ -75,14 +75,14 @@ describe('duplicado — o contato com os cartões (uma chamada)', () => {
           data: {
             id: 9,
             name: ' Maria Souza ',
-            custom_fields_values: [{ field_code: 'PHONE', values: [{ value: '+5563991021043' }, { value: ' 6391021043 ' }] }],
+            custom_fields_values: [{ field_code: 'PHONE', values: [{ value: '+5599900000043' }, { value: ' 9900000043 ' }] }],
             _embedded: { leads: [{ id: 123 }, { id: 456 }] },
           },
         };
       },
     } as unknown as AxiosInstance;
     const c = await new KommoClient({ subdomain: 't', accessToken: 't' } as never, http).contatoComCartoes(9);
-    assert.deepEqual(c, { id: 9, nome: 'Maria Souza', telefone: '+5563991021043', telefones: ['+5563991021043', '6391021043'], leadIds: [123, 456] });
+    assert.deepEqual(c, { id: 9, nome: 'Maria Souza', telefone: '+5599900000043', telefones: ['+5599900000043', '9900000043'], leadIds: [123, 456] });
     assert.deepEqual(pedidos, [{ url: '/contacts/9', params: { with: 'leads' } }]);
     const falha = { get: async () => { throw new Error('429'); } } as unknown as AxiosInstance;
     assert.equal(await new KommoClient({ subdomain: 't', accessToken: 't' } as never, falha).contatoComCartoes(9), null);

@@ -268,11 +268,11 @@ describe('fila — o cartão do Kommo lido pelo nome dos campos', () => {
 
 describe('fila — telefone para "Abrir conversa" e "Copiar telefone"', () => {
   it('vira dígitos com o país', () => {
-    assert.equal(telefoneParaWhatsapp('+55 (63) 99102-1043'), '5563991021043');
-    assert.equal(telefoneParaWhatsapp('63991021043'), '5563991021043');
-    assert.equal(telefoneParaWhatsapp('(63) 9102-1043'), '556391021043');
-    assert.equal(telefoneParaWhatsapp('063991021043'), '5563991021043', 'zero de discagem sai');
-    assert.equal(telefoneParaWhatsapp('5563991021043'), '5563991021043');
+    assert.equal(telefoneParaWhatsapp('+55 (99) 90000-0043'), '5599900000043');
+    assert.equal(telefoneParaWhatsapp('99900000043'), '5599900000043');
+    assert.equal(telefoneParaWhatsapp('(99) 0000-0043'), '559900000043');
+    assert.equal(telefoneParaWhatsapp('099900000043'), '5599900000043', 'zero de discagem sai');
+    assert.equal(telefoneParaWhatsapp('5599900000043'), '5599900000043');
     assert.equal(telefoneParaWhatsapp('+1 415 555 2671'), '14155552671', 'de fora do Brasil fica como está');
   });
 
@@ -283,8 +283,8 @@ describe('fila — telefone para "Abrir conversa" e "Copiar telefone"', () => {
   });
 
   it('para mostrar e copiar', () => {
-    assert.equal(telefoneParaMostrar('5563991021043'), '(63) 99102-1043');
-    assert.equal(telefoneParaMostrar('556391021043'), '(63) 9102-1043');
+    assert.equal(telefoneParaMostrar('5599900000043'), '(99) 90000-0043');
+    assert.equal(telefoneParaMostrar('559900000043'), '(99) 0000-0043');
     assert.equal(telefoneParaMostrar('14155552671'), '+14155552671');
   });
 });

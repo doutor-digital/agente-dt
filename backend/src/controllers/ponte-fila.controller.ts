@@ -67,7 +67,7 @@ interface ItemDaResposta {
   passado: boolean;
   /** Só dígitos, com o país (para o link do WhatsApp). */
   telefone: string | null;
-  /** Como mostrar e copiar: "(63) 99102-1043". */
+  /** Como mostrar e copiar: "(99) 90000-0043". */
   telefoneVisivel: string | null;
   link: string;
 }

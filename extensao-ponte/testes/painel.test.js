@@ -20,8 +20,8 @@ const item = (leadId, extra = {}) => ({
   etapa: 'EM ESPERA',
   motivo: 'retomar contato',
   detalhe: 'retomar hoje',
-  telefone: '55639910210' + String(leadId).padStart(2, '0'),
-  telefoneVisivel: '(63) 99102-10' + String(leadId).padStart(2, '0'),
+  telefone: '55999000000' + String(leadId).padStart(2, '0'),
+  telefoneVisivel: '(99) 90000-00' + String(leadId).padStart(2, '0'),
   link: 'https://x.kommo.com/leads/detail/' + leadId,
   passado: false,
   quando: '2026-10-14T12:00:00.000Z',
@@ -124,7 +124,7 @@ describe('painel — "Começar a ligar" (fase 3)', () => {
       await esperar();
 
       // 1º: abre na hora, só com o telefone (navegação), e o painel fica na fila
-      assert.deepEqual(p.atualizacoes, [{ id: 7, url: 'https://web.whatsapp.com/send?phone=5563991021001', active: true }]);
+      assert.deepEqual(p.atualizacoes, [{ id: 7, url: 'https://web.whatsapp.com/send?phone=5599900000001', active: true }]);
       assert.equal(p.doc.getElementById('fila').hidden, false);
       assert.match(p.doc.getElementById('fila').textContent, /Clique no 📞 do WhatsApp para ligar/);
 
@@ -146,7 +146,7 @@ describe('painel — "Começar a ligar" (fase 3)', () => {
       assert.equal(fila.querySelector('[data-papel="espera"]').textContent, 'próximo em 25 s');
       await p.tempo(25_000);
       assert.equal(p.atualizacoes.length, 2);
-      assert.equal(p.atualizacoes[1].url, 'https://web.whatsapp.com/send?phone=5563991021003');
+      assert.equal(p.atualizacoes[1].url, 'https://web.whatsapp.com/send?phone=5599900000003');
 
       // "Pular" não grava nada; o teto (2 por hora) segura o 4 até a 1ª abertura sair da janela
       fila.querySelector('.ligacao__resultados [data-acao="pular-ligacao"]').click();
@@ -157,13 +157,13 @@ describe('painel — "Começar a ligar" (fase 3)', () => {
       assert.equal(p.atualizacoes.length, 2, 'o teto ainda segura');
       await p.tempo(60 * 60_000);
       assert.equal(p.atualizacoes.length, 3);
-      assert.equal(p.atualizacoes[2].url, 'https://web.whatsapp.com/send?phone=5563991021004');
+      assert.equal(p.atualizacoes[2].url, 'https://web.whatsapp.com/send?phone=5599900000004');
 
       // o que ficou guardado: só ids e horas
       const guardado = JSON.stringify(p.armazenado.ligacao);
       assert.deepEqual(p.armazenado.ligacao.feitos, [1, 2, 3]);
       assert.equal(p.armazenado.ligacao.atual, 4);
-      for (const t of ['Paciente', '5563', '99102']) assert.ok(!guardado.includes(t), `vazou "${t}" no storage`);
+      for (const t of ['Paciente', '559990000', '(99)']) assert.ok(!guardado.includes(t), `vazou "${t}" no storage`);
       // nenhuma URL com texto
       assert.ok(p.atualizacoes.every((a) => !/text=/.test(a.url)));
     } finally {
@@ -202,7 +202,7 @@ describe('painel — "Começar a ligar" (fase 3)', () => {
 
 describe('painel — etiquetas e respostas prontas (fase 3)', () => {
   it('pôr etiqueta manda quem pôs e redesenha com a lista RELIDA do servidor', async () => {
-    const conversa = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5563991021043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
+    const conversa = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5599900000043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
     const p = montar({
       conversa,
       rotas: {
@@ -230,7 +230,7 @@ describe('painel — etiquetas e respostas prontas (fase 3)', () => {
   });
 
   it('a resposta copiada sai com o nome do paciente da tela; trocando de conversa, nunca com o nome do anterior', async () => {
-    const conversa = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5563991021043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
+    const conversa = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5599900000043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
     let cartaoAtual = cartaoDe(123, 'Maria');
     const p = montar({
       conversa,
@@ -252,7 +252,7 @@ describe('painel — etiquetas e respostas prontas (fase 3)', () => {
 
       // a atendente troca de conversa: enquanto o cartão novo não chega, o nome some
       cartaoAtual = cartaoDe(456, 'João');
-      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, chave: 'c2', telefone: '5563991021044', nome: 'João Lima' } }, { tab: { id: 7 } });
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, chave: 'c2', telefone: '5599900000044', nome: 'João Lima' } }, { tab: { id: 7 } });
       p.doc.getElementById('respostas').querySelector('[data-acao="copiar-resposta"]').click();
       await esperar();
       assert.equal(p.copiados[1], 'Bom dia, [nome]!');
