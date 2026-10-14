@@ -5,6 +5,8 @@ import { prisma } from '../lib/prisma.js';
 import { env } from '../lib/env.js';
 import { chaveDoWidget } from '../lib/widget-agenda.js';
 import { unidadeDaPonte } from './widget-franquia.controller.js';
+import { ponteCamposHandler, ponteGuiaHandler, ponteMoverHandler } from './ponte-guia.controller.js';
+import { ponteContadorHandler } from './ponte-fila.controller.js';
 
 // A unidade "do banco" sem banco: a porta só precisa do findUnique.
 Object.defineProperty(prisma, 'unit', {
@@ -54,5 +56,20 @@ describe('a porta das rotas da Ponte (chave ANTES do limitador)', () => {
     const res = resposta();
     assert.equal(await unidadeDaPonte(pedido('unidade-porta-c', chaveDoWidget('outra', env.SESSION_JWT_SECRET)), res as unknown as Response, { balde: 'c', max: 5 }), null);
     assert.equal(res.codigo, 403);
+  });
+
+  it('0.4.0: o guia, os campos, o mover e o contador passam pela mesma porta (sem a chave: 403, nada no Kommo)', async () => {
+    const rotas: Array<[string, (req: Request, res: Response) => Promise<void>, Record<string, unknown>]> = [
+      ['guia', ponteGuiaHandler, {}],
+      ['campos', ponteCamposHandler, { leadId: 1, campos: [{ id: 2, valor: 'x' }] }],
+      ['mover', ponteMoverHandler, { leadId: 1, de: 2, para: 143, confirmado: true }],
+      ['contador', ponteContadorHandler, {}],
+    ];
+    for (const [nome, handler, corpo] of rotas) {
+      const req = { ...pedido('unidade-porta-d', 'chave-errada', '10.0.0.4', { leadId: '1' }), body: corpo } as unknown as Request;
+      const res = resposta();
+      await handler(req, res as unknown as Response);
+      assert.equal(res.codigo, 403, nome);
+    }
   });
 });

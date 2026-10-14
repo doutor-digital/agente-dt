@@ -75,6 +75,11 @@ export interface DefinicaoDeCampo {
   name: string;
   type: string;
   enums?: ReadonlyArray<{ id: number; value: string }>;
+  /** Ponte 0.4.0 (o guia): a posição, "Apenas API", e onde é obrigatório e escondido, como (funil, etapa). */
+  sort?: number;
+  is_api_only?: boolean;
+  required_statuses?: ReadonlyArray<{ pipeline_id: number; status_id: number }>;
+  hidden_statuses?: ReadonlyArray<{ pipeline_id: number; status_id: number }>;
 }
 
 /**
