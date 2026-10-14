@@ -22,11 +22,11 @@ import { planejarAtendimento, type CampoCandidato } from './atendimento-para-car
 import { abrirSessaoTela, montarAvisoDaTela, type AtendimentoTela, type ProblemaDaTela, type SessaoTela } from './franquia-tela.js';
 import { avisarJoao } from './alerta-whatsapp.js';
 import { planejarCamposSdr, type CampoAtual } from './campos-sdr.js';
-import { fichaDoPaciente } from '../services/spine.service.js';
+import { fichaDoPaciente, type SpineFicha } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { CAMPOS_SYNC, chaveTelefone, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
+import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
 import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
@@ -165,6 +165,9 @@ export interface ResumoSync {
   revisados: number;
   /** move em seco: "DE → PARA" → quantos cartões se moveriam nesta varredura (só aparece quando há) */
   simulados?: Record<string, number>;
+  /** cartões recusados porque o `⚙ idClient` deles é de OUTRO paciente (só os ids dos cartões, sem dado pessoal) */
+  conflitos?: number;
+  exemplosConflito?: number[];
 }
 const ultimoResumo = new Map<string, ResumoSync>();
 export function resumoDoSync(): ResumoSync[] {
@@ -242,8 +245,12 @@ export function relogioDoSync(slug: string): RelogioSync {
   };
 }
 
-/** paciente (nome normalizado) → lead do Kommo, por unidade; evita repetir a busca por telefone a cada 15 min */
-const cacheLead = new Map<string, { leadId: number | null; expiraEm: number }>();
+/**
+ * paciente (nome normalizado) → lead do Kommo, por unidade; evita repetir a busca por telefone a cada 15 min.
+ * `idsClient`: quem a busca mostrou ser este paciente na franquia (vazio = não se sabe) — é o que permite recusar
+ * o cartão que já pertence a OUTRO paciente (`cartaoDeOutroPaciente`).
+ */
+const cacheLead = new Map<string, { leadId: number | null; idsClient: number[]; expiraEm: number }>();
 
 
 type CampoInfo = Pick<KommoLeadCustomField, 'id' | 'type' | 'enums'>;
@@ -263,10 +270,12 @@ export interface CampoBruto {
  * formato é o mesmo do `date` (unix em segundos), então gravamos como `date`.
  */
 function mapearCampos(campos: CampoBruto[]): MapaCampos {
-  const porNome = new Map(campos.map((c) => [normalizar(c.name), c]));
+  const dados = campos.filter((c) => !ehCabecalhoDeGrupo(c.name));
+  const porNome = new Map(dados.map((c) => [normalizar(c.name), c]));
   const out: MapaCampos = {};
   for (const [chave, nome] of Object.entries(CAMPOS_SYNC) as Array<[CampoSync, string]>) {
-    const c = porNome.get(normalizar(nome));
+    // nome exato (com o símbolo) antes do normalizado
+    const c = dados.find((x) => x.name.trim() === nome) ?? porNome.get(normalizar(nome));
     if (!c) continue;
     const type = c.type === 'date_time' ? 'date' : c.type;
     if (!['date', 'select', 'monetary', 'numeric', 'text', 'textarea', 'radiobutton'].includes(type)) continue;
@@ -287,10 +296,10 @@ function valoresDoLead(lead: KommoLead, mapa: MapaCampos): Record<string, string
   return out;
 }
 
-async function telefoneDoPaciente(unit: Unit, nome: string, idClient: number | null): Promise<string | null> {
+async function telefoneDoPaciente(unit: Unit, nome: string, idClient: number | null): Promise<{ fone: string; idsClient: number[] } | null> {
   if (idClient) {
     const r = await SpineService.getClient(unit, idClient);
-    if (r.ok && r.data?.client?.whatsapp) return r.data.client.whatsapp;
+    if (r.ok && r.data?.client?.whatsapp) return { fone: r.data.client.whatsapp, idsClient: [idClient] };
   }
   const r = await SpineService.searchClients(unit, nome);
   if (!r.ok || !r.data) return null;
@@ -298,7 +307,10 @@ async function telefoneDoPaciente(unit: Unit, nome: string, idClient: number | n
   const exatos = r.data.clients.filter((c) => normalizar(c.name) === alvo && c.whatsapp);
   const fones = [...new Set(exatos.map((c) => chaveTelefone(c.whatsapp)))];
   // dois pacientes homônimos com telefones diferentes: não arrisca
-  return fones.length === 1 ? exatos[0].whatsapp : null;
+  if (fones.length !== 1) return null;
+  // mesmo nome e mesmo telefone = o mesmo paciente (cadastro duplicado conta como ele)
+  const idsClient = idClient ? [idClient] : exatos.map((c) => c.idClient).filter((x): x is number => !!x);
+  return { fone: exatos[0].whatsapp as string, idsClient };
 }
 
 async function leadPorTelefone(kommo: KommoClient, telefone: string): Promise<number | null> {
@@ -324,28 +336,64 @@ async function leadPorTelefone(kommo: KommoClient, telefone: string): Promise<nu
  * saber quem ainda não tem cartão — duplicar esse casamento seria criar cartão em cima de quem já tem.
  */
 export async function resolverLead(unit: Unit, kommo: KommoClient, nome: string, idClient: number | null, idsSchedule: number[]): Promise<number | null> {
+  return (await resolverPaciente(unit, kommo, nome, idClient, idsSchedule)).leadId;
+}
+
+/** O cartão do paciente e quem ele é na franquia (`idsClient`, vazio quando o caminho não diz). */
+async function resolverPaciente(
+  unit: Unit, kommo: KommoClient, nome: string, idClient: number | null, idsSchedule: number[],
+): Promise<{ leadId: number | null; idsClient: number[] }> {
   const chaveCache = `${unit.id}:${normalizar(nome)}`;
   const hit = cacheLead.get(chaveCache);
-  if (hit && hit.expiraEm > Date.now()) return hit.leadId;
+  if (hit && hit.expiraEm > Date.now()) return hit;
 
   let leadId: number | null = null;
+  let idsClient: number[] = idClient ? [idClient] : [];
   if (idsSchedule.length > 0) {
     const link = await prisma.spineLeadLink.findFirst({
       where: { unitId: unit.id, spineIdSchedule: { in: idsSchedule } },
       orderBy: { updatedAt: 'desc' },
     });
-    if (link) leadId = link.kommoLeadId;
+    if (link) {
+      leadId = link.kommoLeadId;
+      if (!idClient && link.spineIdClient) idsClient = [link.spineIdClient];
+    }
   }
   if (leadId === null && idClient) {
     const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, spineIdClient: idClient }, orderBy: { updatedAt: 'desc' } });
     if (link) leadId = link.kommoLeadId;
   }
   if (leadId === null) {
-    const fone = await telefoneDoPaciente(unit, nome, idClient);
-    if (fone) leadId = await leadPorTelefone(kommo, fone);
+    const achado = await telefoneDoPaciente(unit, nome, idClient);
+    if (achado) {
+      leadId = await leadPorTelefone(kommo, achado.fone);
+      idsClient = achado.idsClient;
+    }
   }
-  cacheLead.set(chaveCache, { leadId, expiraEm: Date.now() + CACHE_LEAD_MS });
-  return leadId;
+  const out = { leadId, idsClient, expiraEm: Date.now() + CACHE_LEAD_MS };
+  cacheLead.set(chaveCache, out);
+  return out;
+}
+
+/** O `⚙ idClient (franquia)` gravado no cartão (pela carga de implantação ou pela marcação do widget), ou null. */
+export function idClientDoCartao(
+  lead: Pick<KommoLead, 'custom_fields_values'>,
+  campos: ReadonlyArray<readonly [string, { id: number; nome?: string }]>,
+): number | null {
+  const info = campoDaConta(campos, '⚙ idClient (franquia)') ?? campos.find(([k]) => k.includes('idclient'))?.[1];
+  if (!info) return null;
+  const v = Number((lead.custom_fields_values ?? []).find((f) => f.field_id === info.id)?.values?.[0]?.value);
+  return Number.isInteger(v) && v > 0 ? v : null;
+}
+
+/**
+ * O cartão já é de OUTRO paciente? Regra (14/10/2026, cartão 1292772 de Petrópolis recebia dois pacientes que
+ * dividem o WhatsApp — idade 51↔81 e idTreatment 97775↔125923 alternando a cada varredura): cartão com
+ * `⚙ idClient` só aceita esse paciente. Sem `⚙` no cartão, ou sem saber quem o paciente é, não há como
+ * provar o conflito e vale o casamento de sempre.
+ */
+export function cartaoDeOutroPaciente(idDoCartao: number | null, idsDoPaciente: number[]): boolean {
+  return idDoCartao !== null && idsDoPaciente.length > 0 && !idsDoPaciente.includes(idDoCartao);
 }
 
 function opcoes(mapa: MapaCampos) {
@@ -651,6 +699,8 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
   }
 }
 
+export type CampoDaConta = [string, { id: number; /** nome cru, com o símbolo */ nome?: string; type: KommoLeadCustomField['type']; /** tipo como o Kommo diz (date_time continua date_time; `type` o mapeia pra date) */ rawType?: string; enums: Array<{ id: number; value: string }> }];
+
 interface CtxSync {
   unit: Unit;
   kommo: KommoClient;
@@ -664,11 +714,13 @@ interface CtxSync {
    * conhece os campos da CONSULTA; o espelho da PESSOA precisa de outros sete, e criar uma
    * segunda constante só pra eles duplicaria a mesma lista em dois lugares.
    */
-  camposPorNome?: Array<[string, { id: number; /** nome cru, com o símbolo */ nome?: string; type: KommoLeadCustomField['type']; /** tipo como o Kommo diz (date_time continua date_time; `type` o mapeia pra date) */ rawType?: string; enums: Array<{ id: number; value: string }> }]>;
+  camposPorNome?: CampoDaConta[];
   /** Sessão na tela da franquia, aberta na primeira vez que um cartão precisa dela (login por varredura, por unidade). */
   tela?: { sessao: SessaoTela | null; aberta: boolean };
   /** `FRANQUIA_REVISAO_SECO=1`: a revisão pelo histórico só registra o que faria (campos e etapa); a varredura normal não muda */
   seco?: boolean;
+  /** Ficha (`GET /api/clients/{id}`) já lida NESTA varredura, por idClient: o mesmo paciente não custa duas chamadas. */
+  fichas?: Map<number, Promise<SpineFicha | null>>;
 }
 
 function revisaoSeca(raw: string | undefined = process.env.FRANQUIA_REVISAO_SECO): boolean {
@@ -684,22 +736,60 @@ interface PacienteDoCartao {
   tratamento: SpineTreatment | null;
 }
 
-/** Os campos do cartão que descrevem a PESSOA — preenchidos pela ficha da franquia. */
+/**
+ * Os campos do cartão que a ficha da franquia preenche — e cujo BURACO justifica ler a ficha.
+ *
+ * Saíram três (14/10/2026), porque mantinham o "tem buraco" verdadeiro para sempre e a ficha era relida a
+ * cada 15 min (~400 GET/h só em Petrópolis): `# Sessões previstas` (quem grava é `sessoes-para-cartao`, não
+ * este caminho), `# Nº de faltas em sessão` (vazio é o normal — quem nunca faltou não ganha "0") e
+ * `⚕ Tratamento fechado` (a fase 1 o espelha a cada varredura; onde é texto, como em Petrópolis, a ficha não
+ * tem opção para casar). Quando a ficha é lida por outro buraco, os três continuam sendo preenchidos.
+ */
 const CAMPOS_PESSOA = [
   '⚥ Sexo', '◷ Data de nascimento', '# Idade', '⌂ Endereço',
   '⌂ Cidade', '⌂ Estado', '⚑ Origem na franquia', '✓ Status do paciente',
   // O bloco TRATAMENTO vem da mesma ficha — se algum destes está vazio, vale a chamada.
-  '✎ Queixa', '¤ Valor do tratamento', '⚕ Tratamento fechado', '⚕ Fisioterapeuta',
-  '# Sessões previstas', '◷ Última sessão marcada', '✓ Compareceu à última sessão marcada',
-  '# Nº de faltas em sessão',
+  '✎ Queixa', '¤ Valor do tratamento', '⚕ Fisioterapeuta',
+  '◷ Última sessão marcada', '✓ Compareceu à última sessão marcada',
 ] as const;
+
+/**
+ * Buracos que a ficha lida NÃO tapou, por cartão + paciente: a franquia não tem o dado (sem endereço, preço 0,
+ * sem avaliação) ou a conta não aceita o valor. Reler a cada 15 min não muda isso — volta a valer a leitura
+ * depois de `CACHE_SEM_DADO_MS`, ou na hora se aparecer buraco NOVO (a SDR apagou um campo).
+ */
+const semDadoNaFicha = new Map<string, { campos: Set<string>; expiraEm: number }>();
+const CACHE_SEM_DADO_MS = 6 * 60 * 60_000;
+
+type InfoCampo = CampoDaConta[1];
+
+/** Campo da conta pelo nome: o EXATO (com o símbolo) primeiro; o normalizado só quando não há exato. */
+export function campoDaConta<T extends { nome?: string }>(campos: ReadonlyArray<readonly [string, T]>, nome: string): T | undefined {
+  const exato = campos.find(([, i]) => i.nome?.trim() === nome);
+  if (exato) return exato[1];
+  const chave = normalizar(nome);
+  return campos.find(([k]) => k === chave)?.[1];
+}
+
+/** A ficha do paciente, lida no máximo UMA vez por varredura (o erro também fica guardado: não insiste). */
+function fichaDaVarredura(ctx: CtxSync, idClient: number): Promise<SpineFicha | null> {
+  ctx.fichas ??= new Map();
+  let lida = ctx.fichas.get(idClient);
+  if (!lida) {
+    lida = fichaDoPaciente(ctx.unit as never, idClient)
+      .then((r) => (r.ok && r.data?.ficha ? r.data.ficha : null))
+      .catch(() => null);
+    ctx.fichas.set(idClient, lida);
+  }
+  return lida;
+}
 
 /**
  * Espelha a PESSOA da franquia no cartão: sexo, nascimento, endereço, origem e status.
  *
  * A ficha completa custa UMA chamada por paciente (`/api/clients/{id}`), então só vale a
- * pena buscá-la quando há buraco pra preencher. Se os sete campos já estiverem cheios, o
- * cartão é pulado sem gastar chamada nenhuma.
+ * pena buscá-la quando há buraco que ela ainda possa tapar. Cartão cheio — ou com buraco que
+ * a franquia já mostrou não ter como tapar (`semDadoNaFicha`) — é pulado sem chamada nenhuma.
  *
  * O preço dessa economia, dito na cara: enquanto tudo estiver preenchido, uma correção
  * feita na franquia (sexo trocado, endereço atualizado) não chega aqui. Quem pega esse
@@ -708,9 +798,10 @@ const CAMPOS_PESSOA = [
 async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, idClient: number): Promise<void> {
   const { unit, kommo, resumo, seco } = ctx;
   const bruto = (lead.custom_fields_values ?? []);
-  const porNome = new Map(ctx.camposPorNome ?? []);
+  const campos = ctx.camposPorNome ?? [];
+  const achar = (campo: string): InfoCampo | undefined => campoDaConta(campos, campo);
   const valorAtual = (campo: string): string | null => {
-    const info = porNome.get(normalizar(campo));
+    const info = achar(campo);
     if (!info) return null;
     const cf = bruto.find((f) => f.field_id === info.id);
     const v = cf?.values?.[0]?.value;
@@ -721,7 +812,7 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
   // sem consultar a franquia. É o que impede "45" de continuar lá depois do aniversário.
   const idade = idadeADesencalhar(valorAtual);
   if (idade) {
-    const info = porNome.get(normalizar(idade.campo));
+    const info = achar(idade.campo);
     if (info && !seco) {
       await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, idade.valor, info.enums)
         .then(() => { resumo.escritas++; logger.info({ unit: unit.slug, leadId, valor: idade.valor }, 'franquia-sync: idade recalculada'); })
@@ -732,24 +823,34 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
     }
   }
 
-  const temBuraco = CAMPOS_PESSOA.some((c) => porNome.has(normalizar(c)) && valorAtual(c) === null);
-  if (!temBuraco) return;
+  const chaveSemDado = `${unit.id}:${leadId}:${idClient}`;
+  const lembrado = semDadoNaFicha.get(chaveSemDado);
+  const semDado = lembrado && lembrado.expiraEm > Date.now() ? lembrado.campos : null;
+  const buracos = CAMPOS_PESSOA.filter((c) => achar(c) && valorAtual(c) === null);
+  if (!buracos.some((c) => !semDado?.has(c))) return;
 
-  const r = await fichaDoPaciente(unit as never, idClient).catch(() => null);
-  if (!r?.ok || !r.data?.ficha) return;
+  const ficha = await fichaDaVarredura(ctx, idClient);
+  if (!ficha) return;
 
-  const opcoesProtocolo = (porNome.get(normalizar('⚕ Tratamento fechado'))?.enums ?? []).map((x) => x.value);
+  /** O que ficou gravado nesta passada; o resto dos buracos vira "sem dado" e não pede a ficha de novo tão cedo. */
+  const gravados = new Set<string>();
+  const lembrarSemDado = () => {
+    if (semDadoNaFicha.size > 20_000) for (const [k, v] of semDadoNaFicha) if (v.expiraEm <= Date.now()) semDadoNaFicha.delete(k);
+    semDadoNaFicha.set(chaveSemDado, { campos: new Set(buracos.filter((c) => !gravados.has(c))), expiraEm: Date.now() + CACHE_SEM_DADO_MS });
+  };
+
+  const opcoesProtocolo = (achar('⚕ Tratamento fechado')?.enums ?? []).map((x) => x.value);
   const planejadas = [
-    ...escritasDoPaciente(r.data.ficha, valorAtual),
+    ...escritasDoPaciente(ficha, valorAtual),
     ...escritasDoTratamento({
-      sessoes: r.data.ficha.schedules as never,
-      tratamento: (r.data.ficha.treatments?.[0] ?? null) as never,
+      sessoes: ficha.schedules as never,
+      tratamento: (ficha.treatments?.[0] ?? null) as never,
       opcoesProtocolo,
       valorAtual,
     }),
   ];
   for (const e of planejadas) {
-    const info = porNome.get(normalizar(e.campo));
+    const info = achar(e.campo);
     if (!info) continue;
     if (!e.sobrescreve && valorAtual(e.campo) !== null) continue;
     // Campo de lista só aceita opção que EXISTE naquela conta. A franquia manda o nome do
@@ -774,6 +875,7 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
     try {
       await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, e.valor, info.enums);
       resumo.escritas++;
+      gravados.add(e.campo);
       logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-sync: campo da pessoa gravado');
     } catch (err) {
       resumo.erros++;
@@ -781,6 +883,7 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
     }
     await new Promise((r2) => setTimeout(r2, PAUSA_ENTRE_ESCRITAS_MS));
   }
+  lembrarSemDado();
 }
 
 /**
@@ -1025,6 +1128,45 @@ async function espelharCamposSdr(
   }
 }
 
+/** Etiqueta que a SDR filtra no Kommo: o cartão tem um paciente no `⚙ idClient` e a franquia casou OUTRO com ele. */
+export const TAG_CONFLITO = 'CONFLITO_FRANQUIA';
+
+function notaConflito(idDoCartao: number, idsDoPaciente: number[]): string {
+  return `⚠ Conflito de cadastro: este cartão é do paciente idClient ${idDoCartao} da franquia (campo ⚙ idClient), mas outro paciente da franquia (idClient ${idsDoPaciente.join('/')}) casou com ele — em geral, por dividir o mesmo WhatsApp. O sincronizador NÃO grava os dados do outro paciente aqui. Se o cartão é mesmo do ${idDoCartao}, nada a fazer neste cartão (o outro paciente precisa do cartão dele). Se é do outro, corrija o ⚙ idClient. A etiqueta ${TAG_CONFLITO} volta sozinha enquanto o conflito existir.`;
+}
+
+/**
+ * Recusa o cartão quando o `⚙ idClient` dele é de outro paciente: nada é gravado (campos, pessoa, sessões, etapa).
+ * Fica registrado para a SDR — etiqueta + uma nota, só quando a etiqueta ainda não está no cartão (não repete a
+ * cada 15 min nem a cada deploy) — e no resumo/log só com ids, sem nome nem telefone.
+ */
+async function recusarOutroPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, idsDoPaciente: number[]): Promise<boolean> {
+  const { unit, kommo, resumo } = ctx;
+  const idDoCartao = idClientDoCartao(lead, ctx.camposPorNome ?? []);
+  if (idDoCartao === null || !cartaoDeOutroPaciente(idDoCartao, idsDoPaciente)) return false;
+  resumo.conflitos = (resumo.conflitos ?? 0) + 1;
+  resumo.exemplosConflito ??= [];
+  if (resumo.exemplosConflito.length < 8 && !resumo.exemplosConflito.includes(leadId)) resumo.exemplosConflito.push(leadId);
+  if (!jaRegistrou(`conflito:${unit.slug}:${leadId}:${idsDoPaciente.join(',')}`)) {
+    logger.warn({ unit: unit.slug, leadId, idClientDoCartao: idDoCartao, idClientDaFranquia: idsDoPaciente }, 'franquia-sync: conflito — o cartão é de outro paciente da franquia; não gravei');
+  }
+  const jaMarcado = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO);
+  if (jaMarcado) return true;
+  if (ctx.seco) {
+    registrarSimulacao(unit, 'franquia-revisao', { leadId, acao: 'gravaria', alvo: TAG_CONFLITO, motivo: 'cartão de outro paciente da franquia' });
+    return true;
+  }
+  try {
+    await kommo.addTag({ leadId, tags: [TAG_CONFLITO] });
+    await kommo.addLeadNote(leadId, notaConflito(idDoCartao, idsDoPaciente));
+    // a mesma varredura pode trazer o paciente de novo (agenda + revisão): o objeto do cartão já sabe da etiqueta
+    lead._embedded = { ...lead._embedded, tags: [...(lead._embedded?.tags ?? []), { id: 0, name: TAG_CONFLITO }] };
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: não consegui marcar o conflito no cartão');
+  }
+  return true;
+}
+
 /**
  * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
  * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
@@ -1211,6 +1353,7 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
             await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
             continue;
           }
+          if (await recusarOutroPaciente(ctx, lead.id, lead, [idClient])) continue;
           const hist = await historicoDoPaciente(unit, idClient);
           if (!hist) continue;
           // histórico inteiro: a máquina decide pela última avaliação e trata finalizado velho como ex-paciente (ALTA sem mensagem)
@@ -1231,13 +1374,13 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
   }
 }
 
-async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
-  const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
-  const kommo = createKommoClient(unit);
-  const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: CampoBruto[] } } | undefined;
-  const camposBrutos = bruto?._embedded?.custom_fields ?? [];
-  const mapa = mapearCampos(camposBrutos);
-  const camposPorNome: NonNullable<CtxSync['camposPorNome']> = camposBrutos
+/**
+ * Os campos de lead da conta que o sincronizador pode escrever, indexados pelo nome normalizado.
+ * Cabeçalho do agrupamento (`## ENDEREÇO`, `*TRATAMENTO*`) nunca é alvo: sai antes de qualquer casamento por nome.
+ */
+export function camposDaConta(camposBrutos: CampoBruto[]): CampoDaConta[] {
+  return camposBrutos
+    .filter((c) => !ehCabecalhoDeGrupo(c.name))
     .filter((c) => ['date', 'date_time', 'select', 'monetary', 'numeric', 'text', 'textarea', 'radiobutton'].includes(c.type))
     .map((c) => [normalizar(c.name), {
       id: c.id,
@@ -1246,6 +1389,15 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
       type: (c.type === 'date_time' ? 'date' : c.type) as KommoLeadCustomField['type'],
       enums: (c.enums ?? []).map((e) => ({ id: e.id, value: e.value })),
     }]);
+}
+
+async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
+  const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
+  const kommo = createKommoClient(unit);
+  const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: CampoBruto[] } } | undefined;
+  const camposBrutos = bruto?._embedded?.custom_fields ?? [];
+  const mapa = mapearCampos(camposBrutos);
+  const camposPorNome = camposDaConta(camposBrutos);
   if (!mapa.DATA_CONSULTA || !mapa.SITUACAO) {
     logger.warn({ unit: unit.slug }, 'franquia-sync: conta sem os campos de consulta — pulando');
     return resumo;
@@ -1295,7 +1447,8 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
     if (vistos++ >= MAX_PACIENTES_POR_VARREDURA) break;
     try {
       const idsSchedule = p.consultas.map((c) => c.idSchedule).filter((x): x is number => typeof x === 'number');
-      const leadId = await resolverLead(unit, kommo, p.nome, p.idClient, idsSchedule);
+      const casado = await resolverPaciente(unit, kommo, p.nome, p.idClient, idsSchedule);
+      const leadId = casado.leadId;
       if (!leadId) {
         resumo.semLead++;
         if (resumo.exemplosSemLead.length < 8) resumo.exemplosSemLead.push(p.nome);
@@ -1303,6 +1456,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
       }
       resumo.comLead++;
       const lead = await kommo.getLead(leadId);
+      if (await recusarOutroPaciente(ctx, leadId, lead, p.idClient ? [p.idClient] : casado.idsClient)) continue;
       await processarCartao(ctx, leadId, lead, p);
     } catch (err) {
       resumo.erros++;
@@ -1512,4 +1666,4 @@ export function stopFranquiaSyncWorker(): void {
   proximaEm.clear();
 }
 
-export const _interno = { mapearCampos, valoresDoLead, procurarPaciente };
+export const _interno = { mapearCampos, valoresDoLead, procurarPaciente, espelharPaciente, recusarOutroPaciente, resolverPaciente };

@@ -76,3 +76,15 @@ test('conta vazia não quebra', () => {
   assert.equal(vazio.pipelinePorNome('COMERCIAL'), null);
   assert.equal(vazio.statusPorNome('COMERCIAL', 'AGENDADO'), null);
 });
+
+test('cabeçalho do agrupamento nunca é a resposta de "qual é o campo" (## ENDEREÇO × ⌂ Endereço, 14/10/2026)', () => {
+  // em Petrópolis o separador vem antes ou depois conforme a conta — nos dois casos a resposta é o campo de verdade
+  for (const ordem of [[356004, 355944], [355944, 356004]]) {
+    const nomes: Record<number, string> = { 356004: '## ENDEREÇO', 355944: '⌂ Endereço' };
+    const e = montarEsquema(ordem.map((id) => ({ id, name: nomes[id] })), []);
+    assert.equal(e.campoPorNome('⌂ Endereço'), 355944);
+    assert.deepEqual(e.camposPorNome('Endereço'), [355944]);
+  }
+  const grupos = montarEsquema([{ id: 1, name: '*TRATAMENTO*' }, { id: 2, name: '##^Tratamento' }], []);
+  assert.equal(grupos.campoPorNome('tratamento'), null);
+});

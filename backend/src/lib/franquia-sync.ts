@@ -42,6 +42,8 @@ export function normalizar(s: string | null | undefined): string {
     .trim();
 }
 
+export { ehCabecalhoDeGrupo } from './kommo-schema.js';
+
 /** Só os dígitos, sem o 55 do país — bom pra comparar telefone Kommo × franquia. */
 export function chaveTelefone(bruto: string | null | undefined): string {
   let d = String(bruto ?? '').replace(/\D+/g, '');

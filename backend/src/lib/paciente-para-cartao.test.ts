@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  escritasDoPaciente, idadeADesencalhar, idadeHoje, nascimentoEmEpoch, sexoDaFranquia,
+  epochDoCartao, escritasDoPaciente, idadeADesencalhar, idadeHoje, mesmoNascimento, nascimentoEmEpoch, sexoDaFranquia,
 } from './paciente-para-cartao.js';
 
 const vazio = () => null;
@@ -121,4 +121,72 @@ test('toda escrita diz o porquê — sem isso ninguém confere o campo', () => {
   );
   assert.ok(l.length >= 5);
   for (const e of l) assert.ok(e.motivo.length > 4, `${e.campo} sem motivo`);
+});
+
+// ── 14/10/2026: a mesma data de nascimento era regravada a cada 15 min (3.577× em 10 h em Petrópolis) ──
+const epoch = (iso: string) => String(Date.parse(iso) / 1000);
+
+test('nascimento igual em formatos diferentes NÃO regrava', () => {
+  // o que o cartão pode ter: o nosso meio-dia UTC, a meia-noite de Brasília da tela do Kommo, meia-noite UTC,
+  // texto ISO e dd/mm/aaaa de gravação antiga
+  const noCartao = [
+    epoch('1980-05-10T12:00:00Z'), epoch('1980-05-10T03:00:00Z'), epoch('1980-05-10T00:00:00Z'),
+    epoch('1980-05-10T23:59:00Z'), '1980-05-10', '10/05/1980', ` ${epoch('1980-05-10T12:00:00Z')} `,
+  ];
+  // o que a franquia pode mandar
+  const daFranquia = ['1980-05-10', '10/05/1980', '1980-05-10T00:00:00', '1980-05-10 00:00:00', '1980-05-10T03:00:00.000Z'];
+  for (const cartao of noCartao) {
+    for (const franquia of daFranquia) {
+      const l = escritasDoPaciente({ birthdate: franquia }, (c) => (c === '◷ Data de nascimento' ? cartao : null));
+      assert.equal(acha(l, '◷ Data de nascimento'), undefined, `cartão ${cartao} × franquia ${franquia}`);
+    }
+  }
+});
+
+test('nascimento de outro dia É regravado — a franquia continua mandando', () => {
+  const l = escritasDoPaciente({ birthdate: '1980-05-10' }, (c) => (c === '◷ Data de nascimento' ? epoch('1980-05-11T12:00:00Z') : null));
+  assert.equal(acha(l, '◷ Data de nascimento')?.valor, nascimentoEmEpoch('1980-05-10'));
+  assert.equal(acha(l, '◷ Data de nascimento')?.motivo, 'a franquia é o cadastro');
+});
+
+test('quem nasceu antes de 1970 (epoch negativo no Kommo) também não regrava', () => {
+  const cartao = epoch('1945-03-02T03:00:00Z');
+  assert.ok(Number(cartao) < 0);
+  assert.equal(mesmoNascimento(cartao, nascimentoEmEpoch('02/03/1945')!), true);
+  const l = escritasDoPaciente({ birthdate: '1945-03-02' }, (c) => (c === '◷ Data de nascimento' ? cartao : null));
+  assert.equal(acha(l, '◷ Data de nascimento'), undefined);
+});
+
+test('a idade de quem nasceu antes de 1970 também se corrige pela data do cartão', () => {
+  const e = idadeADesencalhar(
+    (c) => (c === '◷ Data de nascimento' ? epoch('1945-03-02T12:00:00Z') : c === '# Idade' ? '80' : null),
+    new Date('2026-10-14T12:00:00Z'),
+  );
+  assert.equal(e?.valor, 81);
+});
+
+test('epochDoCartao: vazio, zero e lixo não viram data', () => {
+  for (const v of [null, undefined, '', '   ', '0', 'abc']) assert.equal(epochDoCartao(v), null, JSON.stringify(v));
+  assert.equal(epochDoCartao('326721600'), 326721600);
+  assert.equal(epochDoCartao('326721600.0'), 326721600);
+  assert.equal(epochDoCartao('10/05/1980'), nascimentoEmEpoch('1980-05-10'));
+});
+
+test('sexo igual escrito de outro jeito no cartão não regrava', () => {
+  for (const noCartao of ['Feminino', 'FEMININO', 'feminino', 'F']) {
+    const l = escritasDoPaciente({ gender: 'F' }, (c) => (c === '⚥ Sexo' ? noCartao : null));
+    assert.equal(acha(l, '⚥ Sexo'), undefined, noCartao);
+  }
+  const trocado = escritasDoPaciente({ gender: 'F' }, (c) => (c === '⚥ Sexo' ? 'Masculino' : null));
+  assert.equal(acha(trocado, '⚥ Sexo')?.valor, 'Feminino');
+});
+
+test('cartão em dia com a ficha: nenhuma escrita de sexo, nascimento ou idade', () => {
+  const agora = new Date();
+  const idade = idadeHoje(nascimentoEmEpoch('1980-05-10'), agora);
+  const cartao: Record<string, string> = {
+    '⚥ Sexo': 'Masculino', '◷ Data de nascimento': epoch('1980-05-10T03:00:00Z'), '# Idade': String(idade),
+  };
+  const l = escritasDoPaciente({ gender: 'M', birthdate: '10/05/1980' }, (c) => cartao[c] ?? null);
+  assert.deepEqual(l, []);
 });
