@@ -198,3 +198,24 @@ test('campo vazio sem idClient que confira: lista sem sugestão; entrada vencida
   assert.equal(cartoesSemUnidade(PETRO, agora + 25 * 3600_000).length, 0, 'depois de 24 h sem casar de novo, sai da lista');
   assert.equal(cartoesSemUnidade(ITZ).length, 0, 'a lista é por conta do Kommo');
 });
+
+// ── a trava do #56 vira RESERVA: vale sem a divisão gravada, sai do caminho com ela ──────────────────────────
+test('trava da unidade de atendimento (#56): sem divisão recusa Caxias e vazio; com a divisão, quem decide é o roteamento', async () => {
+  const { travaDaUnidadeDeAtendimento } = await import('./trava-unidade-atendimento.js');
+  const petro = unidade(PETRO, { slug: 'doutor-hernia-petropolis' });
+  const kommoCom = (valor: string | null) => ({ getLead: async () => cartao(valor) as never });
+
+  _semearCrmParaTeste([]); // conta SEM linha em unit_crm_compartilhado: o estado de hoje
+  assert.equal((await travaDaUnidadeDeAtendimento(petro, 101, kommoCom('Caxias')))?.codigo, 'unidade_de_outra_cidade');
+  assert.equal((await travaDaUnidadeDeAtendimento(petro, 101, kommoCom(null)))?.codigo, 'unidade_vazia');
+  assert.equal(await travaDaUnidadeDeAtendimento(petro, 101, kommoCom('Petrópolis')), null);
+
+  _semearCrmParaTeste(MEMBROS); // divisão gravada: a trava sai do caminho (o roteamento e a trava de escrita assumem)
+  assert.equal(await travaDaUnidadeDeAtendimento(petro, 101, kommoCom('Caxias')), null);
+  assert.equal(await travaDaUnidadeDeAtendimento(petro, 101, kommoCom(null)), null);
+  // …e o roteamento continua recusando o vazio e mandando Caxias para o token de Caxias
+  const vazio = await unidadeDoCartao(petro, cartao(null), deps({}));
+  assert.equal(vazio.tipo, 'recusa');
+  const cax = await unidadeDoCartao(petro, cartao('Caxias'), deps({ [CAXIAS]: unidade(CAXIAS) }));
+  assert.equal(cax.tipo === 'unidade' && cax.unit.spineToken, 'token-u-caxias');
+});
