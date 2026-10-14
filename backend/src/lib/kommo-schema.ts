@@ -32,12 +32,26 @@ export function normalizarNome(s: string): string {
     .toLowerCase();
 }
 
+/**
+ * Cabeçalho do agrupamento NOVA do cartão — título visual, não campo de dado: `*NOME*` (grupo de 1º nível),
+ * `##NOME` / `## NOME` (2º nível), `^` = aberto (`*^KOMMO CRM*`, `##^Sessões`) e os separadores `##!`, `**!`, `*!`.
+ * NUNCA é alvo de escrita. `normalizar()` tira o símbolo e transformava `## ENDEREÇO` e `⌂ Endereço` no mesmo
+ * "endereco": 105 cartões de Petrópolis ficaram com a rua no título do bloco (14/10/2026).
+ * Campo numérico usa UM `#` (`# Idade`) — esse é dado e não entra aqui.
+ */
+export function ehCabecalhoDeGrupo(nome: string | null | undefined): boolean {
+  const s = String(nome ?? '').trim();
+  return s.startsWith('##') || s.startsWith('*');
+}
+
 export function montarEsquema(
   campos: Array<{ id: number; name: string }>,
   pipelines: Array<{ id: number; name: string; statuses: Array<{ id: number; name: string }> }>,
 ): EsquemaKommo {
   const porNome = new Map<string, number[]>();
   for (const c of campos) {
+    // `## ENDEREÇO` e `⌂ Endereço` normalizam igual; cabeçalho de grupo nunca pode ser a resposta de "qual é o campo"
+    if (ehCabecalhoDeGrupo(c.name)) continue;
     const k = normalizarNome(c.name);
     porNome.set(k, [...(porNome.get(k) ?? []), c.id]);
   }

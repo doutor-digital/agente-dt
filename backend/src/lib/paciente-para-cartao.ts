@@ -74,6 +74,37 @@ export function nascimentoEmEpoch(bruto: string | null | undefined): number | nu
   return Math.floor(d.getTime() / 1000);
 }
 
+/**
+ * A data como o CARTÃO a devolve, em epoch (segundos). O Kommo manda o campo `date` como epoch em
+ * texto — NEGATIVO para quem nasceu antes de 1970 —, mas gravação antiga ou de outra integração deixa
+ * ISO e dd/mm/aaaa. `null` quando vazio ou ilegível.
+ */
+export function epochDoCartao(bruto: string | null | undefined): number | null {
+  const s = String(bruto ?? '').trim();
+  if (!s) return null;
+  if (/^-?\d+(\.\d+)?$/.test(s)) {
+    const n = Math.floor(Number(s));
+    return Number.isFinite(n) && n !== 0 ? n : null;
+  }
+  return nascimentoEmEpoch(s);
+}
+
+/** O dia (AAAA-MM-DD, em UTC) de um epoch em segundos. */
+function diaUtc(epoch: number): string {
+  return new Date(epoch * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * Mesma data de nascimento? Compara o DIA, nunca o instante: o sincronizador grava meio-dia UTC, a tela
+ * do Kommo grava a meia-noite do fuso da conta (03:00 UTC em Brasília) e uma gravação antiga pode ter
+ * vindo à meia-noite UTC — os três caem no mesmo dia UTC. Comparar o instante regravava a mesma data a
+ * cada 15 min (14/10/2026: 3.577 gravações em 10 h só em Petrópolis, até 35× no mesmo cartão).
+ */
+export function mesmoNascimento(noCartao: string | null | undefined, epochDaFranquia: number): boolean {
+  const atual = epochDoCartao(noCartao);
+  return atual !== null && diaUtc(atual) === diaUtc(epochDaFranquia);
+}
+
 /** Idade hoje, a partir da data de nascimento. Calculada na hora — nunca gravada. */
 export function idadeHoje(epochNascimento: number | null, agora = new Date()): number | null {
   if (!epochNascimento) return null;
@@ -101,19 +132,22 @@ export function escritasDoPaciente(
   };
 
   // --- os dois em que a franquia manda, mesmo com valor no cartão ---
+  // "Manda" quer dizer gravar quando DIVERGE: valor igual não se regrava (cada regravação é um PATCH no Kommo).
   const sexo = sexoDaFranquia(ficha.gender);
-  if (sexo && valorAtual('⚥ Sexo') !== sexo) {
+  if (sexo && sexoDaFranquia(valorAtual('⚥ Sexo')) !== sexo) {
     out.push({
       campo: '⚥ Sexo', tipo: 'select', valor: sexo, sobrescreve: true,
       motivo: vazio('⚥ Sexo') ? 'vazio no cartão' : 'a franquia é o cadastro',
     });
   }
   const nasc = nascimentoEmEpoch(ficha.birthdate);
-  if (nasc) {
-    out.push({
-      campo: '◷ Data de nascimento', tipo: 'date', valor: nasc, sobrescreve: true,
-      motivo: vazio('◷ Data de nascimento') ? 'vazio no cartão' : 'a franquia é o cadastro',
-    });
+  if (nasc !== null) {
+    if (!mesmoNascimento(valorAtual('◷ Data de nascimento'), nasc)) {
+      out.push({
+        campo: '◷ Data de nascimento', tipo: 'date', valor: nasc, sobrescreve: true,
+        motivo: vazio('◷ Data de nascimento') ? 'vazio no cartão' : 'a franquia é o cadastro',
+      });
+    }
     const idade = idadeHoje(nasc);
     if (idade !== null && String(valorAtual('# Idade') ?? '') !== String(idade)) {
       out.push({
@@ -155,11 +189,9 @@ export function idadeADesencalhar(
   valorAtual: (campo: string) => string | null,
   agora = new Date(),
 ): EscritaDoPaciente | null {
-  const bruto = valorAtual('◷ Data de nascimento');
-  if (!bruto) return null;
-  // O Kommo devolve o campo `date` como epoch em segundos, em texto.
-  const epoch = Number(bruto);
-  const nasc = Number.isFinite(epoch) && epoch > 0 ? epoch : nascimentoEmEpoch(bruto);
+  // O Kommo devolve o campo `date` como epoch em segundos, em texto — negativo antes de 1970. Aceitar só
+  // positivo deixava a idade de quem tem 56+ anos congelada (a ficha deixou de ser relida a cada 15 min).
+  const nasc = epochDoCartao(valorAtual('◷ Data de nascimento'));
   const idade = idadeHoje(nasc, agora);
   if (idade === null) return null;
   if (String(valorAtual('# Idade') ?? '') === String(idade)) return null;
