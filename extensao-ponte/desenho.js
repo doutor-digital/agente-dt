@@ -8,6 +8,10 @@
  *
  * Fase 3: as etiquetas do cartão (chips com ✕ e "+ etiqueta"), a faixa de cartão duplicado, o modo
  * "Começar a ligar" da fila e a aba "Respostas" (só copiar).
+ *
+ * Fase 4 (0.4.0): o botão "O que eu faço agora?" no cartão e o GUIA (`guia`): a unidade (Petrópolis × Caxias) primeiro,
+ * a ⚠ Pendência, o que falta nesta etapa (com os campos para preencher e a prévia antes de gravar) e as saídas da
+ * etapa (com o que falta em cada uma, o aviso dos robôs e a confirmação antes de mover).
  */
 (function (raiz, fabrica) {
   var cjs = typeof module === 'object' && module.exports;
@@ -16,10 +20,11 @@
     cjs ? require('./etiquetas.js') : raiz.PonteEtiquetas,
     cjs ? require('./ligacao.js') : raiz.PonteLigacao,
     cjs ? require('./respostas.js') : raiz.PonteRespostas,
+    cjs ? require('./guia.js') : raiz.PonteGuia,
   );
   if (cjs) module.exports = api;
   else raiz.PonteDesenho = api;
-})(typeof self !== 'undefined' ? self : this, function (P, E, L, R) {
+})(typeof self !== 'undefined' ? self : this, function (P, E, L, R, G) {
   'use strict';
 
   var COMO = {
@@ -526,12 +531,20 @@
     var sofia = c.sofia || {};
     var textoSofia = sofia.pausada ? (PAUSA_POR[sofia.por] || 'pausada') + (sofia.ate ? ' até ' + quando(sofia.ate) : '') : 'ativa';
 
+    // 0.4.0: o guia da etapa — um botão grande, logo abaixo da etapa
+    var abrirGuia = null;
+    if (acoes && acoes.abrirGuia) {
+      abrirGuia = el(doc, 'button', { classe: 'botao botao--primario botao--guia', tipo: 'button', dados: { acao: 'abrir-guia' } }, 'O que eu faço agora?');
+      abrirGuia.addEventListener('click', function () { acoes.abrirGuia(c.id); });
+    }
+
     return el(doc, 'section', { classe: 'cartao', dados: { estado: 'achado', lead: String(c.id) } },
       el(doc, 'div', { classe: 'cartao__topo' },
         el(doc, 'span', { classe: 'chip chip--' + como.nivel, dados: { como: r.como } }, como.rotulo),
         c.fechado ? el(doc, 'span', { classe: 'chip chip--fechado' }, 'fechado') : null),
       el(doc, 'h1', { classe: 'cartao__nome' }, c.nome || 'Cartão ' + c.id),
       el(doc, 'p', { classe: 'cartao__etapa' }, [c.funil, c.etapa].filter(Boolean).join(' › ')),
+      abrirGuia,
       faixaDeDuplicados(doc, r),
       resumo(doc, r, acoes),
       barra(doc, c.barra),
@@ -816,6 +829,258 @@
       el(doc, 'p', { classe: 'nota' }, 'A Ponte só copia: você cola na conversa e envia. Ela nunca escreve no WhatsApp.'));
   }
 
+  // ── fase 4 (0.4.0): o guia "O que eu faço agora?" ──
+
+  function opcao(doc, valor, texto) {
+    var o = doc.createElement('option');
+    o.value = valor;
+    o.textContent = texto;
+    return o;
+  }
+
+  /**
+   * Um campo do guia com a entrada do tipo dele (texto, lista, data, número). O que a atendente digita fica em
+   * `valores[id]` (sobrevive ao redesenho). Campo que a Ponte não grava (da franquia, de robô) mostra só o porquê.
+   */
+  function entradaDoCampo(doc, c, valores, marca, onde) {
+    var rotulo = el(doc, 'label', { classe: 'guia__rotulo' }, c.nome, marca ? el(doc, 'span', { classe: 'guia__marca' }, marca) : null);
+    if (!c.editavel) {
+      return el(doc, 'div', { classe: 'guia__campo guia__campo--preso', dados: { campo: String(c.id) } },
+        rotulo,
+        el(doc, 'p', { classe: 'nota', dados: { papel: 'dica-campo' } }, c.dica || 'Preencha este campo no Kommo.'));
+    }
+    var campo;
+    if (c.tipo === 'lista') {
+      campo = doc.createElement('select');
+      campo.appendChild(opcao(doc, '', 'Escolha…'));
+      (c.opcoes || []).forEach(function (o) { campo.appendChild(opcao(doc, String(o.id), o.valor)); });
+    } else if (c.tipo === 'texto-longo') {
+      campo = doc.createElement('textarea');
+      campo.rows = 2;
+      campo.maxLength = 4000;
+    } else {
+      campo = doc.createElement('input');
+      campo.type = c.tipo === 'data' ? 'date' : 'text';
+      if (c.tipo === 'texto') campo.maxLength = 250;
+      if (c.tipo === 'numero' || c.tipo === 'dinheiro') {
+        campo.inputMode = 'decimal';
+        campo.placeholder = c.tipo === 'dinheiro' ? 'R$ 0,00' : '0';
+      }
+    }
+    campo.className = 'guia__entrada';
+    // o mesmo campo pode aparecer em dois lugares (obrigatório aqui e no destino): o id da tela é por lugar; o valor, por campo
+    campo.id = 'ponte-guia-' + (onde || 'etapa') + '-' + c.id;
+    campo.setAttribute('data-campo', String(c.id));
+    rotulo.htmlFor = campo.id;
+    if (valores[c.id] != null) campo.value = valores[c.id];
+    var guardar = function () { valores[c.id] = campo.value; };
+    campo.addEventListener('input', guardar);
+    campo.addEventListener('change', guardar);
+    return el(doc, 'div', { classe: 'guia__campo', dados: { campo: String(c.id) } }, rotulo, campo);
+  }
+
+  /**
+   * A PRÉVIA antes de gravar ou mover: o que vai para o Kommo, linha por linha, e os botões. Só depois do clique em
+   * confirmar a Ponte grava. `msg` recebe o erro do servidor.
+   */
+  function previa(doc, titulo, linhas, extra, textoConfirmar, classeConfirmar, aoConfirmar, aoVoltar, msg) {
+    var sim = el(doc, 'button', { classe: 'botao ' + classeConfirmar, tipo: 'button', dados: { acao: 'confirmar' } }, textoConfirmar);
+    var nao = botaoAcao(doc, 'Voltar e corrigir', 'voltar-previa');
+    nao.addEventListener('click', aoVoltar);
+    aoClicar(sim, msg, aoConfirmar);
+    return el(doc, 'div', { classe: 'guia__previa', dados: { papel: 'previa' } },
+      el(doc, 'p', { classe: 'guia__previa-titulo' }, titulo),
+      el(doc, 'ul', { classe: 'guia__linhas' }, ...linhas.map(function (l) { return el(doc, 'li', null, l); })),
+      ...(extra || []),
+      el(doc, 'div', { classe: 'pausa__botoes' }, sim, nao));
+  }
+
+  /** O 1º passo na conta de duas unidades (Petrópolis × Caxias) com o campo vazio: escolher a unidade. */
+  function passoDaUnidade(doc, g, a, est) {
+    var u = g.unidade;
+    var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-unidade' } });
+    var opcoes = el(doc, 'fieldset', { classe: 'pausa__opcoes' }, el(doc, 'legend', null, 'Unidade de atendimento'));
+    (u.opcoes || []).forEach(function (o) {
+      var r = el(doc, 'input', { tipo: 'radio', dados: { unidade: String(o.id) } });
+      r.name = 'ponte-guia-unidade';
+      r.value = String(o.id);
+      r.checked = String(est.valores[u.campoId] || '') === String(o.id);
+      r.addEventListener('change', function () { est.valores[u.campoId] = String(o.id); });
+      opcoes.appendChild(el(doc, 'label', { classe: 'pausa__opcao' }, r, ' ' + o.valor));
+    });
+    var area = el(doc, 'div', { dados: { papel: 'area-unidade' } });
+    var revisar = el(doc, 'button', { classe: 'botao botao--primario', tipo: 'button', dados: { acao: 'revisar-unidade' } }, 'Revisar');
+    revisar.addEventListener('click', function () {
+      msg.textContent = '';
+      var alt = G.alteracoes([{ id: u.campoId, nome: u.nome, tipo: 'lista', editavel: true, opcoes: u.opcoes }], est.valores);
+      if (!alt.campos.length) {
+        msg.textContent = 'Escolha a unidade do paciente.';
+        return;
+      }
+      revisar.hidden = true;
+      opcoes.disabled = true;
+      area.replaceChildren(previa(doc, 'Vai gravar no Kommo:', G.linhasDaPrevia(alt.previa), [], 'Gravar no Kommo', 'botao--primario',
+        function () { return a.gravarCampos(g.leadId, alt.campos); },
+        function () { area.replaceChildren(); revisar.hidden = false; opcoes.disabled = false; msg.textContent = ''; },
+        msg));
+    });
+    return el(doc, 'section', { classe: 'guia__passo guia__passo--unidade', dados: { passo: 'unidade' } },
+      el(doc, 'h2', { classe: 'guia__titulo' }, 'Primeiro: de qual unidade é este paciente?'),
+      el(doc, 'p', { classe: 'nota' }, 'Esta conta do Kommo atende mais de uma unidade, e o campo ' + u.nome +
+        ' está vazio. Enquanto ele estiver vazio, a Ponte não grava nem muda a etapa deste cartão.'),
+      opcoes, revisar, area, msg);
+  }
+
+  /** A ⚠ Pendência do cartão: o campo fica escondido no Kommo (quem escreve é o robô de revisão). */
+  function blocoDaPendencia(doc, g) {
+    if (!g.pendencia) return null;
+    return el(doc, 'section', { classe: 'faixa faixa--amarela', dados: { bloco: 'pendencia' } },
+      el(doc, 'p', { classe: 'faixa__titulo' }, '⚠ Pendência do cartão'),
+      el(doc, 'p', { classe: 'guia__pendencia' }, g.pendencia),
+      el(doc, 'p', { classe: 'faixa__regra' }, 'Este aviso fica escondido no Kommo: quem escreve é o robô de revisão. Corrija o que ele diz e o aviso sai sozinho.'));
+  }
+
+  /** O que falta nesta etapa: os campos para preencher ali mesmo e a prévia antes de gravar. */
+  function blocoDoQueFalta(doc, g, a, est) {
+    var lista = g.faltam || [];
+    var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-faltam' } });
+    var caixa = el(doc, 'section', { classe: 'guia__passo', dados: { passo: 'faltam' } },
+      el(doc, 'h2', { classe: 'guia__titulo' }, 'Falta nesta etapa' + (g.etapa ? ' (' + g.etapa + ')' : '')));
+    if (!lista.length) {
+      caixa.appendChild(el(doc, 'p', { classe: 'nota nota--ok', dados: { papel: 'nada-falta' } }, 'Nada faltando nesta etapa.'));
+      return caixa;
+    }
+    lista.forEach(function (c) { caixa.appendChild(entradaDoCampo(doc, c, est.valores, c.obrigatorio ? ' · obrigatório' : '')); });
+    var editaveis = lista.filter(function (c) { return c.editavel; });
+    if (!editaveis.length) return caixa;
+    var area = el(doc, 'div', { dados: { papel: 'area-faltam' } });
+    var revisar = el(doc, 'button', { classe: 'botao', tipo: 'button', dados: { acao: 'revisar-campos' } }, 'Revisar o que vou gravar');
+    revisar.addEventListener('click', function () {
+      msg.textContent = '';
+      var alt = G.alteracoes(editaveis, est.valores);
+      if (alt.erros.length) {
+        msg.textContent = alt.erros.join(' ');
+        return;
+      }
+      if (!alt.campos.length) {
+        msg.textContent = 'Preencha pelo menos um campo.';
+        return;
+      }
+      revisar.hidden = true;
+      area.replaceChildren(previa(doc, 'Vai gravar no Kommo:', G.linhasDaPrevia(alt.previa), [], 'Gravar no Kommo', 'botao--primario',
+        function () { return a.gravarCampos(g.leadId, alt.campos); },
+        function () { area.replaceChildren(); revisar.hidden = false; msg.textContent = ''; },
+        msg));
+    });
+    caixa.appendChild(revisar);
+    caixa.appendChild(area);
+    caixa.appendChild(msg);
+    return caixa;
+  }
+
+  /** Uma saída escolhida: o que falta para mover, o aviso dos robôs, as mensagens conhecidas e a confirmação. */
+  function detalheDaSaida(doc, g, s, a, est) {
+    var aviso = '⚠ ' + (g.avisoDosRobos || G.AVISO_DOS_ROBOS);
+    var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-mover' } });
+    var partes = [el(doc, 'h3', { classe: 'guia__titulo' }, 'Mover para ' + s.nome)];
+    if (s.bloqueio) partes.push(el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'bloqueio' } }, s.bloqueio));
+    (s.faltam || []).forEach(function (c) { partes.push(entradaDoCampo(doc, c, est.valores, ' · obrigatório para mover', 'saida-' + s.statusId)); });
+    (s.sugere || []).forEach(function (c) { partes.push(entradaDoCampo(doc, c, est.valores, ' · opcional', 'saida-' + s.statusId)); });
+    partes.push(el(doc, 'p', { classe: 'guia__robos', dados: { papel: 'aviso-robos' } }, aviso));
+    if (s.mensagens && s.mensagens.length) {
+      partes.push(el(doc, 'div', { classe: 'guia__mensagens', dados: { papel: 'mensagens' } },
+        el(doc, 'p', { classe: 'bloco__rotulo' }, 'O que os robôs desta etapa mandam'),
+        el(doc, 'ul', { classe: 'guia__linhas' }, ...s.mensagens.map(function (m) { return el(doc, 'li', null, m); }))));
+    }
+    (s.dicas || []).forEach(function (d) { partes.push(el(doc, 'p', { classe: 'nota', dados: { papel: 'dica' } }, d)); });
+    var area = el(doc, 'div', { dados: { papel: 'area-mover' } });
+    var revisar = el(doc, 'button', { classe: 'botao botao--primario', tipo: 'button', dados: { acao: 'revisar-mover' }, desligado: !!s.bloqueio }, 'Revisar e mover');
+    revisar.addEventListener('click', function () {
+      if (revisar.disabled) return;
+      msg.textContent = '';
+      var p = G.podeMover(s, est.valores);
+      if (p.bloqueio) {
+        msg.textContent = p.bloqueio;
+        return;
+      }
+      if (p.erros.length) {
+        msg.textContent = p.erros.join(' ');
+        return;
+      }
+      if (p.falta.length) {
+        msg.textContent = 'Falta preencher: ' + p.falta.join(', ') + '.';
+        return;
+      }
+      revisar.hidden = true;
+      var linhas = G.linhasDaPrevia(p.alteracoes.previa).concat(['Etapa: ' + (g.etapa || '?') + ' → ' + s.nome]);
+      area.replaceChildren(previa(doc, 'Confira antes de mover:', linhas, [el(doc, 'p', { classe: 'guia__robos' }, aviso)], 'Mover agora', 'botao--alerta',
+        function () { return a.mover(g.leadId, g.statusId, s.statusId, p.alteracoes.campos); },
+        function () { area.replaceChildren(); revisar.hidden = false; msg.textContent = ''; },
+        msg));
+    });
+    partes.push(revisar, area, msg);
+    return el(doc, 'div', { classe: 'guia__detalhe', dados: { saida: String(s.statusId) } }, ...partes);
+  }
+
+  /** "Para onde vai o paciente?": um botão por saída; a escolhida abre o detalhe. */
+  function blocoDasSaidas(doc, g, a, est) {
+    var caixa = el(doc, 'section', { classe: 'guia__passo', dados: { passo: 'saidas' } },
+      el(doc, 'h2', { classe: 'guia__titulo' }, 'Para onde vai o paciente?'));
+    var saidas = g.saidas || [];
+    if (!saidas.length) {
+      caixa.appendChild(el(doc, 'p', { classe: 'nota', dados: { papel: 'sem-saidas' } }, g.semSaidas || 'A Ponte não muda a etapa deste cartão.'));
+      return caixa;
+    }
+    var botoes = el(doc, 'div', { classe: 'guia__saidas' });
+    var detalhe = el(doc, 'div', { dados: { papel: 'saida' } });
+    saidas.forEach(function (s) {
+      var b = el(doc, 'button', { classe: 'guia__saida' + (est.saida === s.statusId ? ' guia__saida--escolhida' : ''), tipo: 'button', dados: { saida: String(s.statusId) } },
+        el(doc, 'span', { classe: 'guia__saida-nome' }, s.nome),
+        el(doc, 'span', { classe: 'guia__saida-rotulo' }, s.rotulo));
+      b.addEventListener('click', function () {
+        est.saida = s.statusId;
+        [].forEach.call(botoes.children, function (x) { x.classList.toggle('guia__saida--escolhida', x === b); });
+        detalhe.replaceChildren(detalheDaSaida(doc, g, s, a, est));
+      });
+      botoes.appendChild(b);
+    });
+    var escolhida = saidas.filter(function (s) { return s.statusId === est.saida; })[0];
+    if (escolhida) detalhe.appendChild(detalheDaSaida(doc, g, escolhida, a, est));
+    caixa.appendChild(botoes);
+    caixa.appendChild(detalhe);
+    return caixa;
+  }
+
+  /**
+   * O guia "O que eu faço agora?" (`g` = a resposta de `GET …/ponte/guia`). `estado` = { valores, saida, ok } — fica com o
+   * painel para o redesenho não perder o que foi digitado. `acoes`: voltar, atualizar, gravarCampos, mover (as duas
+   * últimas devolvem promessa; o painel redesenha com o guia novo que o servidor devolve).
+   * Na conta de duas unidades com a unidade vazia, SÓ o passo da unidade aparece.
+   */
+  function guia(doc, g, acoes, estado) {
+    var a = acoes || {};
+    var est = estado || {};
+    est.valores = est.valores || {};
+    var voltar = botaoAcao(doc, '← Voltar ao cartão', 'voltar-guia');
+    voltar.addEventListener('click', function () { if (a.voltar) a.voltar(); });
+    var atualizar = botaoAcao(doc, 'Atualizar', 'atualizar-guia');
+    atualizar.addEventListener('click', function () { if (a.atualizar) a.atualizar(); });
+    var partes = [
+      el(doc, 'div', { classe: 'guia__topo' }, voltar, atualizar),
+      el(doc, 'h1', { classe: 'cartao__nome' }, 'O que eu faço agora?'),
+      el(doc, 'p', { classe: 'cartao__etapa' }, [g.nome, [g.funil, g.etapa].filter(Boolean).join(' › ')].filter(Boolean).join(' · ')),
+      est.ok ? el(doc, 'p', { classe: 'nota nota--ok', dados: { papel: 'guia-ok' } }, est.ok) : null,
+    ];
+    if (g.unidade && g.unidade.precisa) {
+      partes.push(passoDaUnidade(doc, g, a, est));
+    } else {
+      partes.push(blocoDaPendencia(doc, g), blocoDoQueFalta(doc, g, a, est), blocoDasSaidas(doc, g, a, est));
+    }
+    partes.push(el(doc, 'p', { classe: 'nota' }, 'A Ponte grava no Kommo pela chave da unidade, só quando você confirma. Ela nunca escreve no WhatsApp nem na franquia.'));
+    if (g.link) partes.push(el(doc, 'a', { classe: 'botao botao--pequeno', href: g.link }, 'Abrir no Kommo'));
+    return el(doc, 'section', { classe: 'cartao guia', dados: { estado: 'guia', lead: String(g.leadId) } }, ...partes);
+  }
+
   /** O bloco "Modo aprendiz" — estático na fase 1; a fase 3 decide qual dica mostrar e quando. */
   function aprendiz(doc, dicas) {
     if (!dicas || !dicas.length) return null;
@@ -837,6 +1102,7 @@
     fila: fila,
     modoLigacao: modoLigacao,
     respostas: respostas,
+    guia: guia,
     urlDaConversa: urlDaConversa,
     relativo: relativo,
     textoDaPausa: textoDaPausa,

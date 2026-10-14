@@ -21,6 +21,12 @@
  *     fica em `chrome.storage.local` — só ids e horas, nunca nome nem telefone;
  *   - aba "Respostas" (`GET …/ponte/respostas`): copiar, nunca colar nem enviar;
  *   - a faixa de cartão duplicado vem pronta na resposta do cartão.
+ *
+ * Fase 4 (0.4.0):
+ *   - o botão "O que eu faço agora?" abre o GUIA da etapa no lugar do cartão (`GET …/ponte/guia`): a unidade primeiro
+ *     (conta de duas unidades), a ⚠ Pendência, o que falta nesta etapa e as saídas. Gravar (`POST …/ponte/campos`) e
+ *     mover (`POST …/ponte/mover`) só depois da prévia e da confirmação; o servidor devolve o guia relido do Kommo;
+ *   - o número no ícone (pacientes esperando resposta) é do script de fundo (`contador.js`), não deste painel.
  */
 (function () {
   'use strict';
@@ -67,6 +73,15 @@
   /** Fase 3: o modo "Começar a ligar" (null = fora dele) e o que ficou guardado do dia. */
   var lig = null;
   var estadoGuardado = null;
+  /**
+   * 0.4.0: o guia aberto (null = o cartão está na tela). `estado` guarda o que a atendente digitou e a saída escolhida
+   * (o redesenho não perde); `mudou` = algo foi gravado, e ao voltar o cartão é lido de novo.
+   */
+  var guiaAberto = null;
+  var pedidoGuia = 0;
+  /** O que foi digitado no guia de cada cartão (só na memória, 30 min): trocar de aba e voltar não perde. */
+  var rascunhos = new Map();
+  var RASCUNHO_MS = 30 * 60 * 1000;
 
   function trocar(no) {
     raiz.replaceChildren(no);
@@ -152,6 +167,8 @@
   }
 
   function redesenharSeNaTela(leadId) {
+    // com o guia aberto, o cartão não volta para a tela por cima dele (a pausa ou a etiqueta terminou depois)
+    if (guiaAberto) return;
     if (naTela && naTela.cartao && naTela.cartao.id === leadId) trocar(D.cartao(document, naTela, acoes));
   }
 
@@ -174,6 +191,90 @@
   function quem() {
     return (config && config.nome) || null;
   }
+
+  /** Esquece o cartão guardado (ele mudou no Kommo): a próxima vez que aparecer, é lido de novo. */
+  function esquecerCartao(leadId) {
+    cache.forEach(function (g, k) { if (g.r && g.r.cartao && g.r.cartao.id === leadId) cache.delete(k); });
+  }
+
+  // ── 0.4.0: o guia "O que eu faço agora?" ──
+
+  function desenharGuia() {
+    if (!guiaAberto || !guiaAberto.g) return;
+    trocar(D.guia(document, guiaAberto.g, acoesDoGuia, guiaAberto.estado));
+  }
+
+  /** Abre (ou relê) o guia do cartão. Trocar de conversa no meio descarta a resposta. */
+  function abrirGuia(leadId) {
+    var id = ++pedidoGuia;
+    var daConversa = pedido;
+    var mesmo = guiaAberto && guiaAberto.leadId === leadId;
+    var r = rascunhos.get(leadId);
+    var estado = mesmo ? guiaAberto.estado : r && Date.now() - r.em < RASCUNHO_MS ? r.estado : { valores: {}, saida: null };
+    if (rascunhos.size > 50) rascunhos.clear();
+    rascunhos.set(leadId, { em: Date.now(), estado: estado });
+    guiaAberto = { leadId: leadId, g: null, estado: estado, mudou: mesmo ? guiaAberto.mudou : false, como: mesmo ? guiaAberto.como : (naTela && naTela.como) || null };
+    trocar(D.aviso(document, 'procurando', 'Abrindo o guia…'));
+    chamar('GET', '/ponte/guia?leadId=' + encodeURIComponent(leadId)).then(function (g) {
+      if (id !== pedidoGuia || daConversa !== pedido || !guiaAberto || guiaAberto.leadId !== leadId) return;
+      guiaAberto.g = g;
+      guiaAberto.estado.ok = '';
+      desenharGuia();
+    }, function (e) {
+      if (id !== pedidoGuia || daConversa !== pedido || !guiaAberto) return;
+      var a = D.aviso(document, 'erro', 'Não consegui abrir o guia', e && e.message);
+      a.appendChild(botao('Tentar de novo', function () { abrirGuia(leadId); }));
+      a.appendChild(botao('Voltar ao cartão', voltarDoGuia));
+      trocar(a);
+    });
+  }
+
+  /** Volta ao cartão. Se algo foi gravado, o cartão é lido de novo (a etapa e o resumo mudaram). */
+  function voltarDoGuia() {
+    var g = guiaAberto;
+    guiaAberto = null;
+    if (g && g.mudou) {
+      esquecerCartao(g.leadId);
+      // achado pela busca (ou escolhido na lista): relê o MESMO cartão; senão, a conversa procura de novo
+      if (g.como === 'manual' || !conversa) return buscar({ lead: g.leadId }, conversa && conversa.chave, true);
+      return receber(conversa, true);
+    }
+    if (naTela) return trocar(D.cartao(document, naTela, acoes));
+    if (conversa) receber(conversa, true);
+  }
+
+  /** O servidor gravou: o guia novo (relido do Kommo) entra na tela, com o que foi feito no topo. */
+  function depoisDeGravar(leadId, j, texto) {
+    esquecerCartao(leadId);
+    if (!guiaAberto || guiaAberto.leadId !== leadId) return;
+    guiaAberto.mudou = true;
+    if (j && j.guia) guiaAberto.g = j.guia;
+    guiaAberto.estado = { valores: {}, saida: null, ok: texto };
+    rascunhos.set(leadId, { em: Date.now(), estado: guiaAberto.estado });
+    desenharGuia();
+  }
+
+  function listaGravada(j) {
+    return ((j && j.gravados) || []).map(function (x) { return x.nome + ': ' + x.texto; }).join('; ');
+  }
+
+  var acoesDoGuia = {
+    voltar: function () { voltarDoGuia(); },
+    atualizar: function () { if (guiaAberto) abrirGuia(guiaAberto.leadId); },
+    gravarCampos: function (leadId, campos) {
+      return chamar('POST', '/ponte/campos', { leadId: leadId, campos: campos, por: quem() }).then(function (j) {
+        var feito = listaGravada(j);
+        depoisDeGravar(leadId, j, feito ? 'Gravado no Kommo: ' + feito + '.' : 'Nada mudou: o cartão já estava assim.');
+      });
+    },
+    mover: function (leadId, de, para, campos) {
+      // só chega aqui depois da prévia e do "Mover agora": é a confirmação explícita que o servidor exige
+      return chamar('POST', '/ponte/mover', { leadId: leadId, de: de, para: para, campos: campos || [], por: quem(), confirmado: true }).then(function (j) {
+        var feito = listaGravada(j);
+        depoisDeGravar(leadId, j, 'Movido para ' + ((j && j.para) || 'a nova etapa') + '.' + (feito ? ' Gravado junto: ' + feito + '.' : ''));
+      });
+    },
+  };
 
   var acoes = {
     escolher: function (leadId) {
@@ -202,6 +303,8 @@
     semNome: function () {
       return !(config && config.nome);
     },
+    // 0.4.0: o guia da etapa
+    abrirGuia: function (leadId) { abrirGuia(leadId); },
     // fase 3: etiquetas
     listarEtiquetas: function () {
       if (etiquetasGuardadas && Date.now() - etiquetasGuardadas.em < LISTAS_CACHE_MS) return Promise.resolve(etiquetasGuardadas.lista);
@@ -221,6 +324,7 @@
   };
 
   function desenhar(r) {
+    guiaAberto = null;
     naTela = r && r.achado && r.cartao ? r : null;
     if (naTela) trocar(D.cartao(document, r, acoes));
     else if (r && r.candidatos && r.candidatos.length) trocar(D.candidatos(document, r, acoes));
@@ -285,6 +389,7 @@
     clearTimeout(espera);
     pedido++; // qualquer resposta pendente é de outra conversa
     naTela = null;
+    guiaAberto = null; // outra conversa: o guia do paciente anterior fecha
     // outra conversa: a resposta pronta não pode sair com o nome do paciente anterior
     atualizarNomeDasRespostas();
     if (!config) return trocar(mostrarConfigurar());
@@ -672,6 +777,11 @@
     var estado = msg.estado;
     // mesma conversa, só chegou mensagem e o cartão já está na tela: não pisca o "procurando"
     if (estado && antes && estado.chave === antes) {
+      // o guia aberto não fecha com uma mensagem nova na MESMA conversa (a atendente pode estar digitando nele)
+      if (guiaAberto) {
+        conversa = estado;
+        return;
+      }
       var g = cache.get(antes);
       if (g && g.r.achado && Date.now() - g.em < CACHE_MS) {
         conversa = estado;

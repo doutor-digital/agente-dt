@@ -1,5 +1,5 @@
-// Fase 3 — o painel.js inteiro (os scripts na ordem do painel.html) no jsdom, com `chrome`, `fetch` e relógio
-// falsos. Prova o caminho de verdade: "Começar a ligar" abre a conversa só pela URL com o telefone, espera o ritmo,
+// Fase 3 (e o guia da 0.4.0) — o painel.js inteiro (os scripts na ordem do painel.html) no jsdom, com `chrome`,
+// `fetch` e relógio falsos. Prova o caminho de verdade: "Começar a ligar" abre a conversa só pela URL com o telefone, espera o ritmo,
 // grava o resultado, pula quem não tem telefone e guarda só ids e horas; as etiquetas vão com quem pôs; e a
 // resposta pronta copiada sai com o nome do paciente DA TELA (nunca o do anterior).
 const { describe, it } = require('node:test');
@@ -89,7 +89,7 @@ function montar({ conversa = { aberta: false }, rotas = {}, guardado = {} } = {}
     const caminho = u.pathname.replace('/api/public/widget/doutor-hernia-acailandia', '');
     const metodo = init.method || 'GET';
     const corpo = init.body ? JSON.parse(init.body) : null;
-    pedidos.push({ metodo, caminho, corpo, chave: init.headers && init.headers['X-Widget-Key'] });
+    pedidos.push({ metodo, caminho, busca: u.search, corpo, chave: init.headers && init.headers['X-Widget-Key'] });
     const r = rotas[metodo + ' ' + caminho];
     const resposta = typeof r === 'function' ? r(corpo) : r;
     return Promise.resolve({ ok: !!resposta, status: resposta ? 200 : 500, json: () => Promise.resolve(resposta || { error: 'falhou' }) });
@@ -329,6 +329,163 @@ describe('painel — revisão: gravação dupla e telefone não lido', () => {
       assert.match(fila.textContent, /2 pacientes ficaram sem o telefone lido/);
       assert.deepEqual(p.armazenado.ligacao.feitos, [], 'nada marcado como feito');
       assert.equal(p.atualizacoes.length, 0);
+    } finally {
+      p.w.close();
+    }
+  });
+});
+
+// ── 0.4.0: o guia "O que eu faço agora?" no painel de verdade ──
+
+const CAMPO_ESPERA = { id: 2454156, nome: '⊘ Motivo da espera', tipo: 'lista', opcoes: [{ id: 1852306, valor: 'Viajando' }], obrigatorio: true, editavel: true, quem: 'sdr', valor: null };
+const CAMPO_RETOMAR = { id: 2454154, nome: '◷ Retomar em', tipo: 'data', obrigatorio: true, editavel: true, quem: 'sdr', valor: null };
+const CAMPO_OBS = { id: 2449924, nome: '✎ Observações', tipo: 'texto-longo', obrigatorio: false, editavel: true, quem: 'sdr', valor: null };
+const guiaDe = (leadId, extra = {}) => ({
+  leadId,
+  nome: 'MARIA SOUZA 03/10/2026',
+  funil: 'COMERCIAL',
+  etapa: 'EM QUALIFICAÇÃO',
+  statusId: 106809907,
+  pipelineId: 13795975,
+  noComercial: true,
+  pendencia: null,
+  unidade: null,
+  faltam: [CAMPO_OBS],
+  saidas: [{ statusId: 111237819, nome: 'EM ESPERA', rotulo: 'Quer, mas depois', faltam: [CAMPO_ESPERA, CAMPO_RETOMAR], sugere: [], bloqueio: null, mensagens: [], dicas: [] }],
+  semSaidas: null,
+  avisoDosRobos: 'Ao mover, os robôs desta etapa podem mandar mensagem ao paciente.',
+  link: 'https://x.kommo.com/leads/detail/' + leadId,
+  ...extra,
+});
+
+function digitarNoPainel(doc, id, valor) {
+  const c = doc.querySelector(`.guia__entrada[data-campo="${id}"]`);
+  assert.ok(c, `campo ${id}`);
+  c.value = valor;
+  c.dispatchEvent(new doc.defaultView.Event('input'));
+  c.dispatchEvent(new doc.defaultView.Event('change'));
+}
+
+describe('painel — o guia "O que eu faço agora?" (0.4.0)', () => {
+  const conversa = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5599900000043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
+
+  it('abre o guia do cartão, grava os campos e move a etapa só com confirmação; ao voltar, relê o cartão', async () => {
+    let cartaoAtual = cartaoDe(123, 'Maria');
+    const p = montar({
+      conversa,
+      rotas: {
+        'POST /ponte/cartao': () => cartaoAtual,
+        'GET /ponte/guia': guiaDe(123),
+        'POST /ponte/campos': (c) => ({ leadId: c.leadId, gravados: [{ nome: '✎ Observações', texto: 'ligar à tarde' }], iguais: [], nota: true, guia: guiaDe(123, { faltam: [] }) }),
+        'POST /ponte/mover': (c) => ({ leadId: c.leadId, de: 'EM QUALIFICAÇÃO', para: 'EM ESPERA', gravados: [{ nome: '⊘ Motivo da espera', texto: 'Viajando' }, { nome: '◷ Retomar em', texto: '20/10/2026' }], nota: true, guia: guiaDe(123, { etapa: 'EM ESPERA', statusId: 111237819, faltam: [], saidas: [] }) }),
+      },
+    });
+    try {
+      await esperar(600);
+      const tela = p.doc.getElementById('conteudo');
+      tela.querySelector('[data-acao="abrir-guia"]').click();
+      await esperar();
+      await esperar();
+      const pedidoGuia = p.pedidos.find((x) => x.caminho === '/ponte/guia');
+      assert.equal(pedidoGuia.busca, '?leadId=123');
+      assert.equal(pedidoGuia.chave, 'k');
+      assert.ok(tela.querySelector('[data-estado="guia"]'), 'o guia toma o lugar do cartão');
+
+      // campos desta etapa: prévia → gravar, com quem
+      digitarNoPainel(p.doc, CAMPO_OBS.id, 'ligar à tarde');
+      tela.querySelector('[data-acao="revisar-campos"]').click();
+      tela.querySelector('[data-passo="faltam"] [data-acao="confirmar"]').click();
+      await esperar();
+      await esperar();
+      const gravou = p.pedidos.find((x) => x.caminho === '/ponte/campos');
+      assert.deepEqual(gravou.corpo, { leadId: 123, campos: [{ id: CAMPO_OBS.id, valor: 'ligar à tarde' }], por: 'Ana' });
+      assert.match(tela.querySelector('[data-papel="guia-ok"]').textContent, /Gravado no Kommo: ✎ Observações: ligar à tarde/);
+
+      // mover: escolher a saída, preencher, revisar, confirmar
+      tela.querySelector('[data-saida="111237819"]').click();
+      digitarNoPainel(p.doc, CAMPO_ESPERA.id, '1852306');
+      digitarNoPainel(p.doc, CAMPO_RETOMAR.id, '2026-10-20');
+      tela.querySelector('[data-acao="revisar-mover"]').click();
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ponte/mover').length, 0, 'revisar não move');
+      tela.querySelector('[data-papel="area-mover"] [data-acao="confirmar"]').click();
+      await esperar();
+      await esperar();
+      const moveu = p.pedidos.find((x) => x.caminho === '/ponte/mover');
+      assert.deepEqual(moveu.corpo, {
+        leadId: 123,
+        de: 106809907,
+        para: 111237819,
+        campos: [{ id: CAMPO_ESPERA.id, valor: 1852306 }, { id: CAMPO_RETOMAR.id, valor: '2026-10-20' }],
+        por: 'Ana',
+        confirmado: true,
+      });
+      assert.match(tela.querySelector('[data-papel="guia-ok"]').textContent, /Movido para EM ESPERA\. Gravado junto: ⊘ Motivo da espera: Viajando; ◷ Retomar em: 20\/10\/2026/);
+
+      // voltar ao cartão: o cartão mudou no Kommo, então é lido de novo (não sai do cache velho)
+      const antes = p.pedidos.filter((x) => x.caminho === '/ponte/cartao').length;
+      cartaoAtual = { ...cartaoDe(123, 'Maria'), cartao: { ...cartaoDe(123, 'Maria').cartao, etapa: 'EM ESPERA' } };
+      tela.querySelector('[data-acao="voltar-guia"]').click();
+      await esperar(600);
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ponte/cartao').length, antes + 1);
+      assert.match(tela.querySelector('.cartao__etapa').textContent, /EM ESPERA/);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('mensagem nova na MESMA conversa não fecha o guia; trocar de conversa fecha, e a resposta atrasada do guia não volta', async () => {
+    let responderGuia;
+    const p = montar({
+      conversa,
+      rotas: {
+        'POST /ponte/cartao': (c) => (c.telefone === '5599900000044' ? cartaoDe(456, 'João') : cartaoDe(123, 'Maria')),
+        'GET /ponte/guia': guiaDe(123),
+      },
+    });
+    try {
+      await esperar(600);
+      const tela = p.doc.getElementById('conteudo');
+      tela.querySelector('[data-acao="abrir-guia"]').click();
+      await esperar();
+      await esperar();
+      digitarNoPainel(p.doc, CAMPO_OBS.id, 'rascunho');
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, impressoes: ['h1'] } }, { tab: { id: 7 } });
+      await esperar(600);
+      assert.ok(tela.querySelector('[data-estado="guia"]'), 'o guia continua aberto');
+      assert.equal(tela.querySelector(`.guia__entrada[data-campo="${CAMPO_OBS.id}"]`).value, 'rascunho');
+
+      // a resposta do guia vai demorar; a atendente troca de conversa no meio
+      p.w.fetch = ((orig) => (url, init) => (String(url).includes('/ponte/guia') ? new Promise((r) => { responderGuia = () => r({ ok: true, status: 200, json: () => Promise.resolve(guiaDe(123)) }); }) : orig(url, init)))(p.w.fetch);
+      tela.querySelector('[data-acao="atualizar-guia"]').click();
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, chave: 'c2', telefone: '5599900000044', nome: 'João Lima' } }, { tab: { id: 7 } });
+      await esperar(600);
+      responderGuia();
+      await esperar();
+      await esperar();
+      assert.equal(tela.querySelector('[data-estado="guia"]'), null, 'o guia do paciente anterior não volta');
+      assert.match(tela.textContent, /JOÃO SOUZA/);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('trocar de aba e voltar: o que foi digitado no guia volta junto quando ele é reaberto', async () => {
+    const p = montar({ conversa, rotas: { 'POST /ponte/cartao': cartaoDe(123, 'Maria'), 'GET /ponte/guia': guiaDe(123) } });
+    try {
+      await esperar(600);
+      const tela = p.doc.getElementById('conteudo');
+      tela.querySelector('[data-acao="abrir-guia"]').click();
+      await esperar();
+      await esperar();
+      digitarNoPainel(p.doc, CAMPO_OBS.id, 'ligar depois das 17h');
+      // outra conversa e de volta para a mesma
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, chave: 'c2', telefone: '5599900000044' } }, { tab: { id: 7 } });
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: conversa }, { tab: { id: 7 } });
+      await esperar(600);
+      tela.querySelector('[data-acao="abrir-guia"]').click();
+      await esperar();
+      await esperar();
+      assert.equal(tela.querySelector(`.guia__entrada[data-campo="${CAMPO_OBS.id}"]`).value, 'ligar depois das 17h');
     } finally {
       p.w.close();
     }
