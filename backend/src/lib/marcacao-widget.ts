@@ -21,12 +21,13 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
-import { createKommoClient } from '../services/kommo.service.js';
+import { createKommoClient, type KommoClient } from '../services/kommo.service.js';
 import { esquemaDaUnidade } from './kommo-schema.js';
 import { carregarFunis } from './franquia-sync-worker.js';
 import { ETAPA } from './franquia-move.js';
 import { TraceRecorder } from '../agent/trace-recorder.js';
 import { consultaAtual, gradeDoDia, hojeLocal, telefoneDoLead, unidadeFresca } from '../agent/agenda-tools.js';
+import { travaDaUnidadeDeAtendimento, type CodigoTrava } from './trava-unidade-atendimento.js';
 
 export type CodigoRecusa =
   | 'sem_franquia'
@@ -43,7 +44,8 @@ export type CodigoRecusa =
   | 'lead_invalido'
   | 'lead_sem_telefone'
   | 'data_passada'
-  | 'em_andamento';
+  | 'em_andamento'
+  | CodigoTrava;
 
 export interface Recusa {
   ok: false;
@@ -147,20 +149,25 @@ export async function horariosParaWidget(unit: Unit, de: string, dias: number): 
  */
 const emAndamento = new Set<string>();
 
-export async function marcarPeloWidget(unitBase: Unit, entrada: EntradaMarcacao): Promise<Marcada | Recusa> {
+/** `opcoes.kommo` só existe para o teste trocar o cliente do Kommo; em produção ele nasce do token da unidade. */
+export async function marcarPeloWidget(
+  unitBase: Unit,
+  entrada: EntradaMarcacao,
+  opcoes: { kommo?: KommoClient } = {},
+): Promise<Marcada | Recusa> {
   const chave = `${unitBase.id}:${entrada.leadId}`;
   if (emAndamento.has(chave)) {
     return { ok: false, codigo: 'em_andamento', motivo: 'Já estou marcando para este cartão. Aguarde a resposta.' };
   }
   emAndamento.add(chave);
   try {
-    return await marcarInterno(unitBase, entrada);
+    return await marcarInterno(unitBase, entrada, opcoes);
   } finally {
     emAndamento.delete(chave);
   }
 }
 
-async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao): Promise<Marcada | Recusa> {
+async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: { kommo?: KommoClient }): Promise<Marcada | Recusa> {
   const t0 = Date.now();
   const unit = (await unidadeFresca(unitBase.id)) ?? unitBase;
   const recorder = new TraceRecorder(randomUUID(), unit.id);
@@ -179,6 +186,11 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao): Promise<
   if (!unit.spineEnabled || !unit.spineToken) {
     return recusar({ ok: false, codigo: 'sem_franquia', motivo: 'A franquia não está conectada nesta unidade.' });
   }
+  const kommo = opcoes.kommo ?? (unit.kommoAccessToken ? createKommoClient(unit) : undefined);
+  // Conta com duas cidades e o token da franquia de uma só (Petrópolis × Caxias): cartão que não é da cidade da
+  // franquia, ou sem cidade, não marca por aqui. Antes de tudo, para a SDR ler isto primeiro (14/10/2026).
+  const trava = await travaDaUnidadeDeAtendimento(unit, entrada.leadId, kommo);
+  if (trava) return recusar({ ok: false, codigo: trava.codigo, motivo: trava.motivo });
   const vn = validarNome(entrada.nome);
   if (!vn.ok) return recusar(vn);
   const vt = validarTelefone(entrada.telefone);
@@ -190,7 +202,6 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao): Promise<
 
   // O telefone digitado tem de ser o do contato do cartão: senão a consulta vai parar no prontuário
   // de outra pessoa — a mesma recusa que a Sofia faz.
-  const kommo = unit.kommoAccessToken ? createKommoClient(unit) : undefined;
   if (kommo) {
     // O cartão tem de existir NESTA conta do Kommo e ter telefone. É o telefone que amarra a marcação à
     // pessoa certa; sem ele, qualquer número digitado viraria cadastro em nome de ninguém (review, 29/09).
