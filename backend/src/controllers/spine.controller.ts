@@ -416,7 +416,9 @@ export async function cancelScheduleHandler(req: Request, res: Response): Promis
     return;
   }
 
-  const r = await SpineService.cancelSchedule(unit, vinculo.spineIdSchedule);
+  // O vínculo é DESTA unidade (gravado com o token dela): o agendamento é da franquia dela — escrita conferida,
+  // inclusive quando a unidade divide o Kommo com outra (trava-escrita-franquia.ts).
+  const r = await SpineService.cancelSchedule({ ...unit, escritaConferida: true }, vinculo.spineIdSchedule);
   if (!r.ok) {
     res.status(502).json({ ok: false, motivo: r.error ?? 'a franquia recusou o cancelamento' });
     return;
@@ -454,7 +456,9 @@ export async function confirmScheduleHandler(req: Request, res: Response): Promi
     return;
   }
 
-  const r = await SpineService.confirmSchedule(unit, vinculo.spineIdSchedule);
+  // O vínculo é DESTA unidade (gravado com o token dela): o agendamento é da franquia dela — escrita conferida,
+  // inclusive quando a unidade divide o Kommo com outra (trava-escrita-franquia.ts).
+  const r = await SpineService.confirmSchedule({ ...unit, escritaConferida: true }, vinculo.spineIdSchedule);
   if (!r.ok) {
     res.status(502).json({ ok: false, motivo: r.error ?? 'a franquia recusou a confirmação' });
     return;

@@ -348,6 +348,10 @@ model Unit {
   lessons           UnitLesson[]
   automacoes        UnitAutomacao[]
   passosWidget      WidgetPasso[]
+  /// Esta unidade divide o Kommo de outra (Caxias usa o de Petrópolis) — ver `UnitCrmCompartilhado`.
+  crmCompartilhado  UnitCrmCompartilhado? @relation("CrmCompartilhadoUnidade")
+  /// Unidades que usam o Kommo DESTA (a dona da conta lista as irmãs aqui, inclusive ela mesma).
+  crmMembros        UnitCrmCompartilhado[] @relation("CrmCompartilhadoConta")
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -1812,6 +1816,34 @@ model AltaCandidato {
 /// de hoje até alguém mexer na tela. O catálogo (o que cada automação faz, o risco, se tem modo
 /// seco) mora em `src/lib/automacoes.ts`, não no banco: é código, muda com deploy, e assim uma
 /// automação nova não pode existir sem descrição.
+/// DUAS UNIDADES NUM KOMMO SÓ (Petrópolis + Caxias, 14/10/2026). Cada linha diz: esta unidade (`unitId`)
+/// usa o Kommo da unidade `contaUnitId`, e os cartões DELA são os que têm «⌂ Unidade de atendimento» = `rotulo`.
+///
+/// Sem linha nenhuma, a unidade usa o próprio Kommo e todo cartão da conta é dela — como sempre foi; é o caso de
+/// todas as outras unidades. Com linhas, cada unidade só mexe nos cartões do seu rótulo, com o SEU token da
+/// franquia; cartão com o campo vazio (ou com um valor que não está aqui) não é de ninguém: nenhuma escrita na
+/// franquia e nenhum robô de franquia → Kommo mexe nele. A dona da conta também tem a sua linha (contaUnitId =
+/// ela mesma); sem ela, a dona fica sem rótulo e não mexe em cartão nenhum (o lado seguro de uma configuração pela
+/// metade). `ativo=false` desfaz a divisão sem apagar nada. Ver `lib/crm-compartilhado.ts`.
+model UnitCrmCompartilhado {
+  unitId      String  @id @map("unit_id")
+  /// A unidade dona do Kommo (a que tem as credenciais). A irmã não guarda credencial de Kommo nenhuma.
+  contaUnitId String  @map("conta_unit_id")
+  /// Texto da opção no campo «⌂ Unidade de atendimento» (ex.: "Caxias"). Comparado sem acento e sem caixa.
+  rotulo      String
+  ativo       Boolean @default(true)
+
+  atualizadoPor String?  @map("atualizado_por")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+  atualizadoEm  DateTime @updatedAt @map("atualizado_em")
+
+  unit  Unit @relation("CrmCompartilhadoUnidade", fields: [unitId], references: [id], onDelete: Cascade)
+  conta Unit @relation("CrmCompartilhadoConta", fields: [contaUnitId], references: [id], onDelete: Cascade)
+
+  @@unique([contaUnitId, rotulo])
+  @@map("unit_crm_compartilhado")
+}
+
 model UnitAutomacao {
   id     String @id @default(cuid())
   unitId String @map("unit_id")
