@@ -241,3 +241,80 @@ button:disabled { opacity: 0.55; cursor: default; }
 .fila__tempo { color: var(--suave); font-size: 12px; white-space: nowrap; }
 .fila__detalhe, .fila__telefone { margin: 1px 0; color: var(--suave); font-size: 12px; }
 .fila__botoes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+
+/* ── fase 3 ── */
+.nota--ok { color: var(--ok); }
+
+/* etiquetas: chips com ✕ e "+ etiqueta" */
+.etiqueta { display: inline-flex; align-items: center; gap: 4px; }
+.etiqueta--robo { border-color: var(--alerta); color: var(--alerta); font-weight: 600; }
+.etiqueta__tirar {
+  padding: 0 3px;
+  border: 0;
+  background: none;
+  color: var(--suave);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.etiqueta__tirar:hover { color: var(--alerta); }
+.etiquetas .botao--pequeno { padding: 1px 8px; }
+.etiquetas__escolher { margin-top: 6px; }
+.etiquetas__escolher .busca { margin-top: 0; }
+.etiquetas__opcoes { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow-y: auto; }
+.etiquetas__opcao {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--linha);
+  background: var(--fundo);
+  color: var(--texto);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.etiquetas__opcao:hover { border-color: var(--destaque); }
+.etiquetas__opcao--robo { border-color: var(--alerta); }
+.etiquetas__aviso { color: var(--alerta); font-size: 12px; }
+.confirmar { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--alerta); border-radius: 7px; background: var(--fraco-fundo); }
+.confirmar__pergunta { margin: 0 0 4px; font-weight: 600; }
+.confirmar__etiqueta { margin: 0 0 6px; color: var(--alerta); font-weight: 600; }
+
+/* aviso de cartão duplicado */
+.faixa { margin: 10px 0; padding: 10px 12px; border-radius: 8px; }
+.faixa--amarela { background: var(--fraco-fundo); border: 1px solid var(--fraco); color: var(--texto); }
+.faixa__titulo { margin: 0 0 6px; font-weight: 700; color: var(--fraco); }
+.faixa__regra { margin: 6px 0 0; font-size: 12px; }
+.duplicados__lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.duplicado { display: flex; flex-direction: column; gap: 1px; }
+.duplicado__nome { font-weight: 600; }
+.duplicado__etapa, .duplicado__origem { font-size: 12px; color: var(--suave); }
+.duplicado .botao--pequeno { align-self: flex-start; margin-top: 2px; }
+
+/* "Começar a ligar" */
+.botao--ligar { margin-top: 0; }
+.botao--primario:disabled { opacity: 0.5; }
+.ligacao__paciente { display: grid; gap: 2px; }
+.ligacao__nome { margin: 0; font-size: 16px; font-weight: 700; word-break: break-word; }
+.ligacao__paciente .botao--pequeno { justify-self: start; margin-top: 4px; }
+.ligacao__espera { margin: 10px 0 6px; font-size: 15px; font-weight: 600; color: var(--destaque); }
+.ligacao__instrucao { margin: 10px 0 6px; font-size: 15px; font-weight: 700; }
+.ligacao__resultados { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ligacao__fim { margin: 0 0 8px; font-weight: 600; }
+
+/* respostas prontas */
+.respostas .busca { margin-top: 0; }
+.resposta { border-top: 1px solid var(--linha); padding-top: 6px; }
+.resposta:first-child { border-top: 0; padding-top: 0; }
+.resposta__texto {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

@@ -434,3 +434,55 @@ describe('abrir conversa = só navegação (fase 2)', () => {
     }
   });
 });
+
+// ── fase 3 ──
+
+describe('aviso de cartão duplicado (fase 3)', () => {
+  const COM_DUPLICADO = {
+    ...ACHADO,
+    cartao: { ...ACHADO.cartao, origem: 'Meta-Instagram' },
+    duplicados: [
+      { id: 456, nome: 'MARIA SOUZA 10/10/2026', funil: 'COMERCIAL', etapa: 'EM QUALIFICAÇÃO', origem: null, link: 'https://x.kommo.com/leads/detail/456' },
+    ],
+  };
+
+  it('faixa amarela: quantos abertos, cada um com funil/etapa e ⚑ Origem, "Abrir no Kommo" e a regra', () => {
+    const doc = novoDoc();
+    const faixa = D.cartao(doc, COM_DUPLICADO, {}).querySelector('[data-bloco="duplicados"]');
+    assert.ok(faixa);
+    assert.ok(faixa.classList.contains('faixa--amarela'));
+    assert.match(faixa.textContent, /Este paciente tem 2 cartões abertos/);
+    const linhas = [...faixa.querySelectorAll('[data-lead]')];
+    assert.deepEqual(linhas.map((l) => l.getAttribute('data-lead')), ['123', '456']);
+    assert.match(linhas[0].textContent, /^Este: MARIA SOUZA 03\/10\/2026/);
+    assert.match(linhas[0].textContent, /⚑ Origem: Meta-Instagram/);
+    assert.equal(linhas[0].querySelector('a'), null, 'o cartão da tela não precisa de link');
+    assert.match(linhas[1].textContent, /COMERCIAL › EM QUALIFICAÇÃO/);
+    assert.doesNotMatch(linhas[1].textContent, /Origem/);
+    assert.equal(linhas[1].querySelector('a').href, 'https://x.kommo.com/leads/detail/456');
+    assert.match(faixa.textContent, /Fica o que veio do anúncio; o outro é juntado \(Mesclar\) no Kommo, nunca apagado\./);
+  });
+
+  it('sem duplicado (lista vazia ou não conferida) não há faixa', () => {
+    const doc = novoDoc();
+    assert.equal(D.cartao(doc, { ...COM_DUPLICADO, duplicados: [] }, {}).querySelector('[data-bloco="duplicados"]'), null);
+    assert.equal(D.cartao(doc, { ...COM_DUPLICADO, duplicados: null }, {}).querySelector('[data-bloco="duplicados"]'), null);
+    assert.equal(D.cartao(doc, ACHADO, {}).querySelector('[data-bloco="duplicados"]'), null);
+  });
+
+  it('cartão da tela fechado: conta só os abertos, e ele não entra na lista', () => {
+    const doc = novoDoc();
+    const r = JSON.parse(JSON.stringify(COM_DUPLICADO));
+    r.cartao.fechado = true;
+    r.duplicados.push({ id: 789, nome: 'Maria', funil: 'TRATAMENTO', etapa: 'EM TRATAMENTO', origem: 'Indicação', link: 'https://x.kommo.com/leads/detail/789' });
+    const faixa = D.cartao(doc, r, {}).querySelector('[data-bloco="duplicados"]');
+    assert.match(faixa.textContent, /tem 2 cartões abertos/);
+    assert.deepEqual([...faixa.querySelectorAll('[data-lead]')].map((l) => l.getAttribute('data-lead')), ['456', '789']);
+  });
+
+  it('a Ponte só avisa: não há botão de juntar nem de apagar', () => {
+    const doc = novoDoc();
+    const faixa = D.cartao(doc, COM_DUPLICADO, {}).querySelector('[data-bloco="duplicados"]');
+    assert.equal(faixa.querySelector('button'), null);
+  });
+});

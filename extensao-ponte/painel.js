@@ -12,22 +12,39 @@
  *     é NAVEGAÇÃO, como clicar num link. A Ponte não digita, não clica e não envia nada no WhatsApp;
  *   - pausar e retomar a Sofia neste paciente (`POST/DELETE …/ponte/pausa`) — no Kommo, pela chave da unidade;
  *   - "Resumir com IA" (`POST …/ponte/resumo-ia`), só quando a atendente clica.
+ *
+ * Fase 3 (14/10/2026):
+ *   - etiquetas do cartão: ver, pôr (só as que já existem na conta; ▶ pede confirmação) e tirar
+ *     (`GET/POST/DELETE …/ponte/etiquetas`);
+ *   - "Começar a ligar" na Fila de hoje: um paciente por vez, a Ponte abre a conversa (navegação) e a atendente
+ *     clica no 📞 do WhatsApp; o resultado vai para os campos ☎ do cartão (`POST …/ponte/ligacao`). A posição
+ *     fica em `chrome.storage.local` — só ids e horas, nunca nome nem telefone;
+ *   - aba "Respostas" (`GET …/ponte/respostas`): copiar, nunca colar nem enviar;
+ *   - a faixa de cartão duplicado vem pronta na resposta do cartão.
  */
 (function () {
   'use strict';
   var D = self.PonteDesenho;
   var A = self.PonteAprendiz;
   var P = self.PontePausa;
+  var L = self.PonteLigacao;
   var BASE = self.PONTE_CONFIG.BASE;
   var CACHE_MS = 2 * 60 * 1000;
   var FILA_CACHE_MS = 60 * 1000;
+  var LISTAS_CACHE_MS = 10 * 60 * 1000;
   var ESPERA_MS = 400;
+  var CHAVE_DA_LIGACAO = 'ligacao';
 
   var raiz = document.getElementById('conteudo');
   var raizFila = document.getElementById('fila');
+  var raizRespostas = document.getElementById('respostas');
   var blocoAprendizRaiz = document.getElementById('aprendiz');
   var rotuloUnidade = document.getElementById('unidade');
-  var botoesAba = { conversa: document.getElementById('aba-conversa'), fila: document.getElementById('aba-fila') };
+  var botoesAba = {
+    conversa: document.getElementById('aba-conversa'),
+    fila: document.getElementById('aba-fila'),
+    respostas: document.getElementById('aba-respostas'),
+  };
   var config = null;
   var abaId = null;
   /** A aba do WhatsApp Web que respondeu por último (para "Abrir conversa"). */
@@ -41,6 +58,15 @@
   var secao = 'conversa';
   var filaGuardada = null;
   var pedidoFila = 0;
+  /** Fase 3: as etiquetas da conta e as respostas prontas (10 min, como no servidor). */
+  var etiquetasGuardadas = null;
+  var respostasGuardadas = null;
+  var pedidoRespostas = 0;
+  var buscaDasRespostas = '';
+  var nomeDasRespostas;
+  /** Fase 3: o modo "Começar a ligar" (null = fora dele) e o que ficou guardado do dia. */
+  var lig = null;
+  var estadoGuardado = null;
 
   function trocar(no) {
     raiz.replaceChildren(no);
@@ -100,8 +126,10 @@
       return resp.json().catch(function () { return {}; }).then(function (j) {
         if (resp.ok) return j;
         if (resp.status === 403) throw new Error('A chave da unidade não confere. Confira nas opções.');
-        if (resp.status === 429) throw new Error('Muitas ações seguidas: aguarde um minuto.');
         var e = j && typeof j.error === 'string' ? j.error : '';
+        // 429 com motivo (o teto de etiquetas ▶ por hora) mostra o motivo; o do limitador é o genérico
+        if (resp.status === 429 && !/^muitas chamadas/i.test(e) && e) throw new Error(e.charAt(0).toUpperCase() + e.slice(1) + '.');
+        if (resp.status === 429) throw new Error('Muitas ações seguidas: aguarde um minuto.');
         throw new Error(e ? e.charAt(0).toUpperCase() + e.slice(1) + '.' : 'Não consegui falar com o servidor.');
       });
     }, function () {
@@ -109,16 +137,36 @@
     });
   }
 
+  /** As respostas do cartão `leadId` guardadas (cache e tela), para atualizar sem perguntar o cartão de novo. */
+  function respostasDoCartao(leadId) {
+    var lista = [];
+    cache.forEach(function (g) { if (g.r && g.r.cartao && g.r.cartao.id === leadId) lista.push(g.r); });
+    if (naTela && naTela.cartao && naTela.cartao.id === leadId && lista.indexOf(naTela) < 0) lista.push(naTela);
+    return lista;
+  }
+
+  function redesenharSeNaTela(leadId) {
+    if (naTela && naTela.cartao && naTela.cartao.id === leadId) trocar(D.cartao(document, naTela, acoes));
+  }
+
   /** Atualiza a pausa no cartão guardado (e na tela) sem perguntar o cartão de novo. */
   function aplicarPausa(leadId, pausaDoLead) {
-    var respostas = [];
-    cache.forEach(function (g) { if (g.r && g.r.cartao && g.r.cartao.id === leadId) respostas.push(g.r); });
-    if (naTela && naTela.cartao && naTela.cartao.id === leadId && respostas.indexOf(naTela) < 0) respostas.push(naTela);
-    respostas.forEach(function (r) {
+    respostasDoCartao(leadId).forEach(function (r) {
       r.cartao.pausaDoLead = pausaDoLead || null;
       r.cartao.sofia = P.sofiaDepois(r.cartao.sofia, pausaDoLead);
     });
-    if (naTela && naTela.cartao && naTela.cartao.id === leadId) trocar(D.cartao(document, naTela, acoes));
+    redesenharSeNaTela(leadId);
+  }
+
+  /** As etiquetas RELIDAS do Kommo (o servidor devolve a lista depois de gravar) no cartão guardado e na tela. */
+  function aplicarEtiquetas(leadId, etiquetas) {
+    // sem a lista relida, não inventa: deixa como está (o cartão é relido na próxima troca de conversa)
+    if (Array.isArray(etiquetas)) respostasDoCartao(leadId).forEach(function (r) { r.cartao.etiquetas = etiquetas.slice(); });
+    redesenharSeNaTela(leadId);
+  }
+
+  function quem() {
+    return (config && config.nome) || null;
   }
 
   var acoes = {
@@ -148,6 +196,22 @@
     semNome: function () {
       return !(config && config.nome);
     },
+    // fase 3: etiquetas
+    listarEtiquetas: function () {
+      if (etiquetasGuardadas && Date.now() - etiquetasGuardadas.em < LISTAS_CACHE_MS) return Promise.resolve(etiquetasGuardadas.lista);
+      return chamar('GET', '/ponte/etiquetas').then(function (j) {
+        etiquetasGuardadas = { em: Date.now(), lista: j.etiquetas || [] };
+        return etiquetasGuardadas.lista;
+      });
+    },
+    porEtiqueta: function (leadId, nome, confirmado) {
+      return chamar('POST', '/ponte/etiquetas', { leadId: leadId, nome: nome, por: quem(), confirmado: !!confirmado })
+        .then(function (j) { aplicarEtiquetas(leadId, j.etiquetas); });
+    },
+    tirarEtiqueta: function (leadId, nome) {
+      return chamar('DELETE', '/ponte/etiquetas', { leadId: leadId, nome: nome, por: quem() })
+        .then(function (j) { aplicarEtiquetas(leadId, j.etiquetas); });
+    },
   };
 
   function desenhar(r) {
@@ -155,6 +219,7 @@
     if (naTela) trocar(D.cartao(document, r, acoes));
     else if (r && r.candidatos && r.candidatos.length) trocar(D.candidatos(document, r, acoes));
     else trocar(D.nada(document, r, acoes, conversa && conversa.fonteTelefone !== 'cabecalho' ? conversa.nome : ''));
+    atualizarNomeDasRespostas();
   }
 
   function corpoDaConversa(c) {
@@ -183,6 +248,7 @@
     }
     if (!config) return trocar(mostrarConfigurar());
     naTela = null;
+    atualizarNomeDasRespostas();
     trocar(D.aviso(document, 'procurando', 'Procurando o cartão…'));
     var url = BASE + '/api/public/widget/' + encodeURIComponent(config.slug) + '/ponte/cartao';
     fetch(url, {
@@ -213,6 +279,8 @@
     clearTimeout(espera);
     pedido++; // qualquer resposta pendente é de outra conversa
     naTela = null;
+    // outra conversa: a resposta pronta não pode sair com o nome do paciente anterior
+    atualizarNomeDasRespostas();
     if (!config) return trocar(mostrarConfigurar());
     if (!c) {
       return trocar(D.aviso(document, 'sem-whatsapp', 'Abra o WhatsApp Web nesta janela',
@@ -248,8 +316,9 @@
   /**
    * "Abrir conversa": troca a URL da aba do WhatsApp Web para o chat do telefone. NAVEGAÇÃO — o mesmo que clicar
    * num link do WhatsApp; nada é digitado nem enviado. O WhatsApp Web recarrega e abre a conversa.
+   * `ficar`: no modo "Começar a ligar" o painel fica na fila (é lá que estão os botões de resultado).
    */
-  function abrirConversa(telefone) {
+  function abrirConversa(telefone, ficar) {
     var url = D.urlDaConversa(telefone);
     if (!url) return Promise.reject(new Error('Telefone inválido.'));
     var aba = abaWhatsapp;
@@ -258,7 +327,7 @@
     // abriu outra coisa nela (o Kommo, por exemplo), a Ponte não pode trocar a página dela.
     return chrome.tabs.sendMessage(aba, { tipo: 'ponte:qual-conversa' }).then(
       function () {
-        return chrome.tabs.update(aba, { url: url, active: true }).then(function () { mostrarSecao('conversa'); });
+        return chrome.tabs.update(aba, { url: url, active: true }).then(function () { if (!ficar) mostrarSecao('conversa'); });
       },
       function () {
         if (abaWhatsapp === aba) abaWhatsapp = null;
@@ -294,11 +363,18 @@
 
   var acoesDaFila = {
     atualizar: function () { carregarFila(true); },
-    abrirConversa: abrirConversa,
+    abrirConversa: function (telefone) { return abrirConversa(telefone, false); },
     copiar: copiar,
+    comecarLigacao: function () { comecarLigacao(); },
+    feitosHoje: function () {
+      if (!estadoGuardado || !filaGuardada || !config) return 0;
+      var e = L.estadoDoDia(estadoGuardado, L.diaLocal(new Date(Date.now())), config.slug, Date.now());
+      return L.feitosNaFila(L.filaDeLigacao(filaGuardada.f), e);
+    },
   };
 
   function carregarFila(forcar) {
+    if (lig) return desenharLigacao();
     if (!config) return raizFila.replaceChildren(mostrarConfigurar());
     if (!forcar && filaGuardada && Date.now() - filaGuardada.em < FILA_CACHE_MS) {
       return raizFila.replaceChildren(D.fila(document, filaGuardada.f, acoesDaFila, new Date()));
@@ -306,7 +382,7 @@
     var id = ++pedidoFila;
     raizFila.replaceChildren(D.aviso(document, 'procurando', 'Montando a fila de hoje…'));
     chamar('GET', '/ponte/fila').then(function (f) {
-      if (id !== pedidoFila) return;
+      if (id !== pedidoFila || lig) return;
       filaGuardada = { em: Date.now(), f: f };
       raizFila.replaceChildren(D.fila(document, f, acoesDaFila, new Date()));
     }, function (e) {
@@ -317,17 +393,241 @@
     });
   }
 
+  // ── fase 3: "Começar a ligar" ──
+  // A Ponte abre a conversa (navegação) e a atendente clica no 📞 do WhatsApp. Ela nunca clica, digita nem envia.
+
+  function salvarLigacao() {
+    if (!lig) return;
+    estadoGuardado = lig.estado;
+    var o = {};
+    o[CHAVE_DA_LIGACAO] = lig.estado; // só ids e horas — nunca nome nem telefone
+    chrome.storage.local.set(o).catch(function () {});
+  }
+
+  function pararRelogio() {
+    if (lig && lig.relogio) clearInterval(lig.relogio);
+    if (lig) lig.relogio = null;
+  }
+
+  function vistaDaLigacao() {
+    var feitos = L.feitosNaFila(lig.itens, lig.estado);
+    return {
+      item: lig.item,
+      fase: lig.fase,
+      esperaAte: lig.esperaAte,
+      motivoEspera: lig.motivoEspera,
+      posicao: Math.min(lig.itens.length, feitos + 1),
+      total: lig.itens.length,
+      pulados: lig.pulados,
+      ritmo: lig.ritmo,
+      msg: lig.msg,
+      ultimo: lig.ultimo,
+    };
+  }
+
+  function desenharLigacao() {
+    if (!lig) return;
+    raizFila.replaceChildren(D.modoLigacao(document, vistaDaLigacao(), acoesDaLigacao, new Date(Date.now())));
+  }
+
+  /** Abre a conversa do paciente da vez. Só conta no ritmo se abriu de verdade. */
+  function abrirDaVez() {
+    var it = lig.item;
+    lig.fase = 'abrindo';
+    lig.msg = '';
+    desenharLigacao();
+    abrirConversa(it.telefone, true).then(function () {
+      if (!lig || lig.item !== it) return;
+      lig.estado = L.registrarAbertura(lig.estado, it.leadId, Date.now());
+      salvarLigacao();
+      lig.fase = 'aberto';
+      desenharLigacao();
+    }, function (e) {
+      if (!lig || lig.item !== it) return;
+      lig.fase = 'erro';
+      lig.msg = (e && e.message) || 'Não consegui abrir a conversa.';
+      desenharLigacao();
+    });
+  }
+
+  /** Espera o ritmo (intervalo e teto por hora) e abre. A contagem aparece na tela. */
+  function agendarAbertura() {
+    pararRelogio();
+    var q = L.quandoPodeAbrir(lig.estado, Date.now(), lig.ritmo);
+    if (q.em <= Date.now()) return abrirDaVez();
+    lig.fase = 'esperando';
+    lig.esperaAte = q.em;
+    lig.motivoEspera = q.motivo;
+    desenharLigacao();
+    lig.relogio = setInterval(function () {
+      if (!lig || lig.fase !== 'esperando') return pararRelogio();
+      var falta = lig.esperaAte - Date.now();
+      if (falta <= 0) {
+        pararRelogio();
+        return abrirDaVez();
+      }
+      var n = raizFila.querySelector('[data-papel="espera"]');
+      if (n) n.textContent = L.textoDaEspera(falta);
+    }, 1000);
+  }
+
+  /** O próximo da fila: pula (com aviso) quem não tem telefone; o que já está aberto não abre de novo. */
+  function avancar() {
+    pararRelogio();
+    for (;;) {
+      var it = L.proximo(lig.itens, lig.estado);
+      if (!it) {
+        lig.item = null;
+        lig.fase = 'fim';
+        salvarLigacao();
+        return desenharLigacao();
+      }
+      if (L.temTelefone(it)) {
+        lig.item = it;
+        break;
+      }
+      lig.pulados.push({ leadId: it.leadId, nome: it.nome, link: it.link });
+      lig.estado = L.marcarFeito(lig.estado, it.leadId);
+    }
+    salvarLigacao();
+    if (lig.estado.atual === lig.item.leadId) {
+      // o painel foi fechado com esta conversa aberta: não abre de novo nem conta no ritmo
+      lig.fase = 'aberto';
+      return desenharLigacao();
+    }
+    // pausada, a fila não abre ninguém sozinha (o "Pular este" só passa para o próximo)
+    if (lig.fase === 'pausado') return desenharLigacao();
+    agendarAbertura();
+  }
+
+  function comecarLigacao() {
+    if (!config || !filaGuardada) return;
+    var itens = L.filaDeLigacao(filaGuardada.f);
+    if (!itens.length) return;
+    lig = {
+      itens: itens,
+      ritmo: L.ritmoDe(filaGuardada.f.ritmo),
+      estado: L.estadoDoDia(estadoGuardado, L.diaLocal(new Date(Date.now())), config.slug, Date.now()),
+      item: null,
+      fase: 'esperando',
+      pulados: [],
+      msg: '',
+      ultimo: '',
+      relogio: null,
+    };
+    avancar();
+  }
+
+  function sairDaLigacao() {
+    pararRelogio();
+    lig = null;
+    carregarFila(false);
+  }
+
+  var acoesDaLigacao = {
+    resultado: function (leadId, resultado) {
+      var it = lig && lig.item;
+      return chamar('POST', '/ponte/ligacao', { leadId: leadId, resultado: resultado, por: quem() }).then(function (j) {
+        if (!lig) return;
+        var rotulo = (L.RESULTADOS.filter(function (r) { return r.id === resultado; })[0] || {}).rotulo || resultado;
+        lig.ultimo = 'Gravado no Kommo: ' + ((it && it.nome) || 'cartão ' + leadId) + ' · ' + rotulo.toLowerCase() +
+          (j && j.avisos && j.avisos.length ? ' (' + j.avisos.join(' ') + ')' : '');
+        lig.msg = '';
+        lig.estado = L.marcarFeito(lig.estado, leadId);
+        avancar();
+      });
+    },
+    pular: function () {
+      if (!lig || !lig.item) return;
+      lig.ultimo = 'Pulado (nada gravado): ' + (lig.item.nome || 'cartão ' + lig.item.leadId);
+      lig.msg = '';
+      lig.estado = L.marcarFeito(lig.estado, lig.item.leadId);
+      avancar();
+    },
+    pausar: function () {
+      if (!lig || lig.fase !== 'esperando') return;
+      pararRelogio();
+      lig.fase = 'pausado';
+      desenharLigacao();
+    },
+    continuar: function () {
+      if (!lig) return;
+      lig.fase = 'esperando';
+      avancar();
+    },
+    reabrir: function () {
+      if (!lig || !lig.item) return;
+      if (lig.fase === 'erro') return abrirDaVez();
+      // a mesma conversa de novo: não conta no ritmo
+      abrirConversa(lig.item.telefone, true).catch(function (e) {
+        if (!lig) return;
+        lig.msg = (e && e.message) || 'Não consegui abrir a conversa.';
+        desenharLigacao();
+      });
+    },
+    recomecar: function () {
+      if (!lig) return;
+      lig.estado = { v: 1, dia: lig.estado.dia, slug: lig.estado.slug, feitos: [], atual: null, aberturas: lig.estado.aberturas };
+      lig.pulados = [];
+      lig.ultimo = '';
+      avancar();
+    },
+    sair: sairDaLigacao,
+  };
+
+  // ── fase 3: respostas prontas (só copiar) ──
+
+  function primeiroNomeNaTela() {
+    return (naTela && naTela.cartao && naTela.cartao.primeiroNome) || null;
+  }
+
+  var acoesDasRespostas = {
+    atualizar: function () { carregarRespostas(true); },
+    copiar: copiar,
+    aoBuscar: function (t) { buscaDasRespostas = t; },
+  };
+
+  function desenharRespostas() {
+    nomeDasRespostas = primeiroNomeNaTela();
+    raizRespostas.replaceChildren(D.respostas(document, respostasGuardadas.r, acoesDasRespostas, nomeDasRespostas, buscaDasRespostas));
+  }
+
+  /** O paciente da tela mudou: a lista é redesenhada com o nome novo (ou sem nome, enquanto procura). */
+  function atualizarNomeDasRespostas() {
+    if (secao === 'respostas' && respostasGuardadas && primeiroNomeNaTela() !== nomeDasRespostas) desenharRespostas();
+  }
+
+  function carregarRespostas(forcar) {
+    if (!config) return raizRespostas.replaceChildren(mostrarConfigurar());
+    if (!forcar && respostasGuardadas && Date.now() - respostasGuardadas.em < LISTAS_CACHE_MS) return desenharRespostas();
+    var id = ++pedidoRespostas;
+    raizRespostas.replaceChildren(D.aviso(document, 'procurando', 'Lendo as respostas prontas…'));
+    chamar('GET', '/ponte/respostas').then(function (r) {
+      if (id !== pedidoRespostas) return;
+      respostasGuardadas = { em: Date.now(), r: r };
+      desenharRespostas();
+    }, function (e) {
+      if (id !== pedidoRespostas) return;
+      var a = D.aviso(document, 'erro', 'Não consegui ler as respostas prontas', e && e.message);
+      a.appendChild(botao('Tentar de novo', function () { carregarRespostas(true); }));
+      raizRespostas.replaceChildren(a);
+    });
+  }
+
   function mostrarSecao(nome) {
-    secao = nome === 'fila' ? 'fila' : 'conversa';
+    secao = nome === 'fila' || nome === 'respostas' ? nome : 'conversa';
     raiz.hidden = secao !== 'conversa';
     blocoAprendizRaiz.hidden = secao !== 'conversa';
     raizFila.hidden = secao !== 'fila';
+    raizRespostas.hidden = secao !== 'respostas';
     Object.keys(botoesAba).forEach(function (k) { botoesAba[k].setAttribute('aria-selected', String(k === secao)); });
     if (secao === 'fila') carregarFila(false);
+    if (secao === 'respostas') carregarRespostas(false);
   }
 
   botoesAba.conversa.addEventListener('click', function () { mostrarSecao('conversa'); });
   botoesAba.fila.addEventListener('click', function () { mostrarSecao('fila'); });
+  botoesAba.respostas.addEventListener('click', function () { mostrarSecao('respostas'); });
 
   chrome.runtime.onMessage.addListener(function (msg, remetente) {
     if (!msg || msg.tipo !== 'ponte:conversa') return;
@@ -352,9 +652,16 @@
     if (mudou.slug || mudou.chave) {
       cache.clear();
       filaGuardada = null;
+      etiquetasGuardadas = null;
+      respostasGuardadas = null;
+      if (lig) {
+        pararRelogio();
+        lig = null;
+      }
       lerConfig().then(function () {
         pedirConversaAtual();
         if (secao === 'fila') carregarFila(true);
+        if (secao === 'respostas') carregarRespostas(true);
       });
     } else if (mudou.nome) {
       lerConfig();
@@ -363,5 +670,9 @@
 
   var blocoAprendiz = D.aprendiz(document, A.DICAS);
   if (blocoAprendiz) blocoAprendizRaiz.appendChild(blocoAprendiz);
+  // a posição da fila de ligações do dia (fechar o painel não perde)
+  chrome.storage.local.get([CHAVE_DA_LIGACAO]).then(function (c) {
+    estadoGuardado = (c && c[CHAVE_DA_LIGACAO]) || null;
+  }, function () {});
   lerConfig().then(pedirConversaAtual);
 })();

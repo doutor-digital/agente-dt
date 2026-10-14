@@ -14,13 +14,18 @@
     <nav class="abas" role="tablist" aria-label="Seções da Ponte">
       <button type="button" class="abas__botao" id="aba-conversa" role="tab" aria-selected="true" aria-controls="conteudo">Conversa</button>
       <button type="button" class="abas__botao" id="aba-fila" role="tab" aria-selected="false" aria-controls="fila">Fila de hoje</button>
+      <button type="button" class="abas__botao" id="aba-respostas" role="tab" aria-selected="false" aria-controls="respostas">Respostas</button>
     </nav>
     <main id="conteudo" role="tabpanel" aria-live="polite"></main>
     <section id="fila" class="painel-fila" role="tabpanel" aria-live="polite" hidden></section>
+    <section id="respostas" class="painel-fila" role="tabpanel" aria-live="polite" hidden></section>
     <div id="aprendiz"></div>
-    <footer class="rodape">A Ponte nunca escreve no WhatsApp. No Kommo, só pausa e retoma a Sofia quando você pede.</footer>
+    <footer class="rodape">A Ponte nunca escreve, envia nem liga no WhatsApp. No Kommo, só mexe quando você pede: pausa da Sofia, etiquetas e o resultado da ligação.</footer>
     <script src="config.js"></script>
     <script src="pausa.js"></script>
+    <script src="etiquetas.js"></script>
+    <script src="ligacao.js"></script>
+    <script src="respostas.js"></script>
     <script src="desenho.js"></script>
     <script src="aprendiz.js"></script>
     <script src="painel.js"></script>

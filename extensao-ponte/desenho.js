@@ -5,13 +5,21 @@
  * Fase 2: o bloco "Resumo" no topo do cartão (com "Resumir com IA"), o bloco "Pausar a Sofia neste paciente"
  * e a aba "Fila de hoje". Toda ação (pausar, retomar, resumir, abrir conversa, copiar) é uma função de
  * `acoes` que devolve uma promessa: quem fala com o servidor e com as abas é o `painel.js`.
+ *
+ * Fase 3: as etiquetas do cartão (chips com ✕ e "+ etiqueta"), a faixa de cartão duplicado, o modo
+ * "Começar a ligar" da fila e a aba "Respostas" (só copiar).
  */
 (function (raiz, fabrica) {
-  var pausa = typeof module === 'object' && module.exports ? require('./pausa.js') : raiz.PontePausa;
-  var api = fabrica(pausa);
-  if (typeof module === 'object' && module.exports) module.exports = api;
+  var cjs = typeof module === 'object' && module.exports;
+  var api = fabrica(
+    cjs ? require('./pausa.js') : raiz.PontePausa,
+    cjs ? require('./etiquetas.js') : raiz.PonteEtiquetas,
+    cjs ? require('./ligacao.js') : raiz.PonteLigacao,
+    cjs ? require('./respostas.js') : raiz.PonteRespostas,
+  );
+  if (cjs) module.exports = api;
   else raiz.PonteDesenho = api;
-})(typeof self !== 'undefined' ? self : this, function (P) {
+})(typeof self !== 'undefined' ? self : this, function (P, E, L, R) {
   'use strict';
 
   var COMO = {
@@ -329,6 +337,163 @@
     return bloco;
   }
 
+  // ── fase 3: etiquetas do cartão ──
+
+  function chipDeEtiqueta(doc, nome, aoTirar) {
+    var robo = E.ehDeRobo(nome);
+    var chip = el(doc, 'span', { classe: 'etiqueta' + (robo ? ' etiqueta--robo' : ''), titulo: robo ? 'Etiqueta que faz o robô mandar mensagem' : null, dados: { etiqueta: nome } },
+      el(doc, 'span', { classe: 'etiqueta__nome' }, nome));
+    if (aoTirar) {
+      var x = el(doc, 'button', { classe: 'etiqueta__tirar', tipo: 'button', titulo: 'Tirar a etiqueta', dados: { acao: 'tirar-etiqueta' } }, '✕');
+      x.setAttribute('aria-label', 'Tirar a etiqueta ' + nome);
+      aoTirar(x);
+      chip.appendChild(x);
+    }
+    return chip;
+  }
+
+  /**
+   * As etiquetas do cartão: chips com ✕ para tirar, e "+ etiqueta" com busca entre as etiquetas que JÁ EXISTEM
+   * na conta (a Ponte não cria etiqueta). Etiqueta ▶ pede confirmação antes de pôr; tirar não pede.
+   * Sem `acoes.porEtiqueta` (teste antigo), só os chips.
+   */
+  function blocoDeEtiquetas(doc, r, acoes) {
+    var c = r.cartao;
+    var lista = c.etiquetas || [];
+    var podeMexer = !!(acoes && acoes.porEtiqueta && acoes.tirarEtiqueta && acoes.listarEtiquetas);
+    if (!podeMexer) {
+      return lista.length ? el(doc, 'div', { classe: 'etiquetas' }, ...lista.map(function (t) { return chipDeEtiqueta(doc, t, null); })) : null;
+    }
+    var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-etiqueta' } });
+    var chips = el(doc, 'div', { classe: 'etiquetas', dados: { papel: 'chips' } });
+    lista.forEach(function (t) {
+      chips.appendChild(chipDeEtiqueta(doc, t, function (x) {
+        aoClicar(x, msg, function () { return acoes.tirarEtiqueta(c.id, t); });
+      }));
+    });
+    var abrir = botaoAcao(doc, '+ etiqueta', 'abrir-etiquetas');
+    chips.appendChild(abrir);
+
+    var busca = el(doc, 'input', { classe: 'busca__campo', tipo: 'search' });
+    busca.placeholder = 'Buscar etiqueta da conta';
+    busca.setAttribute('aria-label', 'Buscar etiqueta da conta');
+    var opcoes = el(doc, 'ul', { classe: 'etiquetas__opcoes', dados: { papel: 'opcoes-etiqueta' } });
+    var confirmar = el(doc, 'div', { classe: 'confirmar', dados: { papel: 'confirmar-etiqueta' } });
+    confirmar.hidden = true;
+    var fechar = botaoAcao(doc, 'Cancelar', 'fechar-etiquetas');
+    var escolher = el(doc, 'div', { classe: 'etiquetas__escolher', dados: { papel: 'escolher-etiqueta' } },
+      el(doc, 'div', { classe: 'busca' }, busca, fechar), opcoes, confirmar);
+    escolher.hidden = true;
+    var daConta = null;
+
+    function por(nome, confirmado) {
+      msg.textContent = '';
+      return Promise.resolve(acoes.porEtiqueta(c.id, nome, confirmado)).catch(function (e) {
+        msg.textContent = (e && e.message) || 'Não consegui pôr a etiqueta agora.';
+      });
+    }
+
+    function pedirConfirmacao(nome) {
+      var sim = el(doc, 'button', { classe: 'botao botao--alerta botao--pequeno', tipo: 'button', dados: { acao: 'confirmar-robo' } }, 'Pôr mesmo assim');
+      var nao = botaoAcao(doc, 'Cancelar', 'cancelar-robo');
+      confirmar.replaceChildren(
+        el(doc, 'p', { classe: 'confirmar__pergunta' }, E.PERGUNTA_DO_ROBO),
+        el(doc, 'p', { classe: 'confirmar__etiqueta' }, nome),
+        el(doc, 'div', { classe: 'pausa__botoes' }, sim, nao));
+      confirmar.hidden = false;
+      opcoes.hidden = true;
+      sim.addEventListener('click', function () {
+        if (sim.disabled) return;
+        sim.disabled = true;
+        nao.disabled = true;
+        por(nome, true).then(function () { sim.disabled = false; nao.disabled = false; });
+      });
+      nao.addEventListener('click', function () {
+        confirmar.hidden = true;
+        opcoes.hidden = false;
+      });
+    }
+
+    function desenharOpcoes() {
+      opcoes.replaceChildren();
+      if (!daConta) return;
+      var achadas = E.filtrar(daConta, busca.value, lista, 30);
+      if (!achadas.length) {
+        opcoes.appendChild(el(doc, 'li', { classe: 'nota' }, busca.value.trim()
+          ? 'Nenhuma etiqueta da conta com esse nome. A Ponte não cria etiqueta nova.'
+          : 'Este cartão já tem todas as etiquetas da conta.'));
+        return;
+      }
+      achadas.forEach(function (e) {
+        var b = el(doc, 'button', { classe: 'etiquetas__opcao' + (e.robo ? ' etiquetas__opcao--robo' : ''), tipo: 'button', dados: { etiqueta: e.nome } },
+          e.nome, e.robo ? el(doc, 'span', { classe: 'etiquetas__aviso' }, ' · manda mensagem') : null);
+        b.addEventListener('click', function () {
+          if (b.disabled) return;
+          if (E.ehDeRobo(e.nome)) return pedirConfirmacao(e.nome);
+          b.disabled = true;
+          por(e.nome, false).then(function () { b.disabled = false; });
+        });
+        opcoes.appendChild(el(doc, 'li', null, b));
+      });
+    }
+
+    busca.addEventListener('input', function () {
+      confirmar.hidden = true;
+      opcoes.hidden = false;
+      desenharOpcoes();
+    });
+    fechar.addEventListener('click', function () {
+      escolher.hidden = true;
+      abrir.hidden = false;
+      msg.textContent = '';
+    });
+    abrir.addEventListener('click', function () {
+      abrir.hidden = true;
+      escolher.hidden = false;
+      confirmar.hidden = true;
+      opcoes.hidden = false;
+      if (daConta) return desenharOpcoes();
+      opcoes.replaceChildren(el(doc, 'li', { classe: 'nota' }, 'Carregando as etiquetas da conta…'));
+      Promise.resolve(acoes.listarEtiquetas()).then(function (l) {
+        daConta = l || [];
+        desenharOpcoes();
+      }, function (e) {
+        opcoes.replaceChildren();
+        msg.textContent = (e && e.message) || 'Não consegui ler as etiquetas da conta.';
+      });
+    });
+
+    return el(doc, 'div', { classe: 'bloco-etiquetas', dados: { bloco: 'etiquetas' } }, chips, escolher, msg);
+  }
+
+  // ── fase 3: aviso de cartão duplicado ──
+
+  function linhaDoDuplicado(doc, d, este) {
+    return el(doc, 'li', { classe: 'duplicado', dados: { lead: String(d.id) } },
+      el(doc, 'span', { classe: 'duplicado__nome' }, (este ? 'Este: ' : '') + (d.nome || 'Cartão ' + d.id)),
+      el(doc, 'span', { classe: 'duplicado__etapa' }, [d.funil, d.etapa].filter(Boolean).join(' › ')),
+      d.origem ? el(doc, 'span', { classe: 'duplicado__origem' }, '⚑ Origem: ' + d.origem) : null,
+      !este && d.link ? el(doc, 'a', { classe: 'botao botao--pequeno', href: d.link }, 'Abrir no Kommo') : null);
+  }
+
+  /**
+   * "Este paciente tem 2 cartões abertos": cada um com nome, funil/etapa e ⚑ Origem, e a regra da casa. A Ponte
+   * só avisa — juntar (Mesclar) é no Kommo, e nada é apagado.
+   */
+  function faixaDeDuplicados(doc, r) {
+    var lista = r.duplicados;
+    if (!lista || !lista.length) return null;
+    var c = r.cartao;
+    var total = lista.length + (c.fechado ? 0 : 1);
+    var ul = el(doc, 'ul', { classe: 'duplicados__lista' });
+    if (!c.fechado) ul.appendChild(linhaDoDuplicado(doc, { id: c.id, nome: c.nome, funil: c.funil, etapa: c.etapa, origem: c.origem || (c.anuncio && c.anuncio.origem) || null }, true));
+    lista.forEach(function (d) { ul.appendChild(linhaDoDuplicado(doc, d, false)); });
+    return el(doc, 'section', { classe: 'faixa faixa--amarela', dados: { bloco: 'duplicados' } },
+      el(doc, 'p', { classe: 'faixa__titulo' }, 'Este paciente tem ' + total + ' cartões abertos'),
+      ul,
+      el(doc, 'p', { classe: 'faixa__regra' }, 'Fica o que veio do anúncio; o outro é juntado (Mesclar) no Kommo, nunca apagado.'));
+  }
+
   /** Cartão achado. */
   function cartao(doc, r, acoes) {
     var c = r.cartao;
@@ -342,15 +507,14 @@
         c.fechado ? el(doc, 'span', { classe: 'chip chip--fechado' }, 'fechado') : null),
       el(doc, 'h1', { classe: 'cartao__nome' }, c.nome || 'Cartão ' + c.id),
       el(doc, 'p', { classe: 'cartao__etapa' }, [c.funil, c.etapa].filter(Boolean).join(' › ')),
+      faixaDeDuplicados(doc, r),
       resumo(doc, r, acoes),
       barra(doc, c.barra),
       el(doc, 'div', { classe: 'bloco' },
         linha(doc, 'Responsável', c.responsavel || 'ninguém'),
         linha(doc, 'Sofia', textoSofia, sofia.pausada ? 'linha--alerta' : 'linha--ok'),
         origem(doc, c.anuncio),
-        c.etiquetas && c.etiquetas.length
-          ? el(doc, 'div', { classe: 'etiquetas' }, ...c.etiquetas.map(function (t) { return el(doc, 'span', { classe: 'etiqueta' }, t); }))
-          : null),
+        blocoDeEtiquetas(doc, r, acoes)),
       blocoDaPausa(doc, r, acoes),
       franquia(doc, r.franquia),
       el(doc, 'a', { classe: 'botao botao--primario', href: c.link }, 'Abrir no Kommo'),
@@ -428,13 +592,23 @@
     var total = grupos.reduce(function (s, g) { return s + (g.total || 0); }, 0);
     var atualizar = botaoAcao(doc, 'Atualizar', 'atualizar-fila');
     atualizar.addEventListener('click', function () { if (acoes && acoes.atualizar) acoes.atualizar(); });
+    // fase 3: "Começar a ligar" — um paciente por vez; a Ponte abre a conversa, a atendente clica no 📞
+    var ligar = null;
+    if (acoes && acoes.comecarLigacao) {
+      var feitos = acoes.feitosHoje ? acoes.feitosHoje() : 0;
+      var temQuem = L.filaDeLigacao(f).length > 0;
+      ligar = el(doc, 'button', { classe: 'botao botao--primario botao--ligar', tipo: 'button', dados: { acao: 'comecar-ligar' }, desligado: !temQuem },
+        feitos ? 'Continuar a ligar (' + feitos + ' feitos hoje)' : 'Começar a ligar');
+      ligar.addEventListener('click', function () { if (!ligar.disabled) acoes.comecarLigacao(); });
+    }
     var secao = el(doc, 'section', { classe: 'fila', dados: { estado: 'fila' } },
       el(doc, 'div', { classe: 'fila__topo' },
         el(doc, 'div', null,
           el(doc, 'p', { classe: 'aviso__titulo' }, 'Fila de hoje'),
           el(doc, 'p', { classe: 'nota' }, (total ? total + (total === 1 ? ' paciente' : ' pacientes') : 'Ninguém na fila') +
             (f && f.atualizadoEm ? ' · atualizada às ' + hora(f.atualizadoEm) : ''))),
-        atualizar));
+        atualizar),
+      ligar);
     grupos.forEach(function (g) {
       var itens = g.itens || [];
       var lista = el(doc, 'ul', { classe: 'fila__lista' });
@@ -449,6 +623,154 @@
         g.total > itens.length ? el(doc, 'p', { classe: 'nota' }, 'Mostrando ' + itens.length + ' de ' + g.total + '. Os outros estão no Kommo.') : null));
     });
     return secao;
+  }
+
+  // ── fase 3: o modo "Começar a ligar" ──
+
+  /**
+   * Um paciente por vez. `v` (montado pelo painel):
+   *   - `item`: o paciente da vez (da Fila de hoje), ou null quando acabou;
+   *   - `fase`: 'esperando' (contagem regressiva até abrir), 'aberto' (conversa aberta: clique no 📞),
+   *     'abrindo', 'erro' (não abriu), 'pausado' ou 'fim';
+   *   - `esperaAte` / `motivoEspera` ('intervalo' | 'teto'), `posicao`, `total`, `pulados` (sem telefone),
+   *     `ritmo`, `msg` (erro) e `ultimo` (o que acabou de ser gravado ou pulado).
+   * A contagem regressiva fica em `[data-papel="espera"]`: o painel troca só o texto a cada segundo.
+   */
+  function modoLigacao(doc, v, acoes, agora) {
+    var a = acoes || {};
+    var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-ligacao' } }, v.msg || '');
+    var it = v.item;
+    var topo = el(doc, 'div', { classe: 'fila__topo' },
+      el(doc, 'div', null,
+        el(doc, 'p', { classe: 'aviso__titulo' }, v.fase === 'fim' ? 'Fila de ligações' : 'Ligando · ' + v.posicao + ' de ' + v.total),
+        el(doc, 'p', { classe: 'nota' }, 'Uma conversa a cada ' + v.ritmo.intervaloS + ' s, no máximo ' + v.ritmo.tetoPorHora + ' por hora.')),
+      v.fase === 'pausado' ? botaoAcao(doc, 'Continuar', 'continuar-ligacao') : null,
+      v.fase === 'esperando' ? botaoAcao(doc, 'Pausar', 'pausar-ligacao') : null,
+      botaoAcao(doc, 'Sair', 'sair-ligacao'));
+    var corpo = [];
+    if (v.ultimo) corpo.push(el(doc, 'p', { classe: 'nota nota--ok', dados: { papel: 'ultimo' } }, v.ultimo));
+    if (v.fase === 'fim' || !it) {
+      corpo.push(el(doc, 'p', { classe: 'ligacao__fim' }, 'Acabou a fila de hoje.'));
+      corpo.push(el(doc, 'div', { classe: 'fila__botoes' }, botaoAcao(doc, 'Recomeçar a lista', 'recomecar-ligacao'), botaoAcao(doc, 'Voltar à fila', 'sair-ligacao')));
+    } else {
+      corpo.push(el(doc, 'div', { classe: 'ligacao__paciente', dados: { lead: String(it.leadId) } },
+        el(doc, 'p', { classe: 'ligacao__nome' }, it.nome || 'Cartão ' + it.leadId),
+        el(doc, 'p', { classe: 'fila__detalhe' }, [it.etapa, it.motivo, it.detalhe].filter(Boolean).join(' · ')),
+        el(doc, 'p', { classe: 'fila__telefone' }, it.telefoneVisivel || ''),
+        it.link ? el(doc, 'a', { classe: 'botao botao--pequeno', href: it.link }, 'Abrir no Kommo') : null));
+      if (v.fase === 'esperando' || v.fase === 'pausado') {
+        var espera = v.fase === 'pausado' ? 'Pausado. Clique em Continuar para seguir.' : L.textoDaEspera((v.esperaAte || 0) - (agora || new Date()).getTime());
+        corpo.push(el(doc, 'p', { classe: 'ligacao__espera', dados: { papel: 'espera' } }, espera));
+        if (v.fase === 'esperando' && v.motivoEspera === 'teto') {
+          corpo.push(el(doc, 'p', { classe: 'nota' }, 'Chegou ao teto de ' + v.ritmo.tetoPorHora + ' conversas na última hora: a Ponte espera para não parecer spam.'));
+        }
+        corpo.push(el(doc, 'div', { classe: 'fila__botoes' }, botaoAcao(doc, 'Pular este', 'pular-ligacao')));
+      } else if (v.fase === 'abrindo') {
+        corpo.push(el(doc, 'p', { classe: 'ligacao__espera', dados: { papel: 'espera' } }, 'Abrindo a conversa…'));
+      } else if (v.fase === 'erro') {
+        corpo.push(el(doc, 'div', { classe: 'fila__botoes' }, botaoAcao(doc, 'Tentar abrir de novo', 'reabrir-ligacao'), botaoAcao(doc, 'Pular este', 'pular-ligacao')));
+      } else {
+        corpo.push(el(doc, 'p', { classe: 'ligacao__instrucao' }, 'Clique no 📞 do WhatsApp para ligar.'));
+        var resultados = el(doc, 'div', { classe: 'ligacao__resultados' });
+        L.RESULTADOS.forEach(function (rs) {
+          var b = el(doc, 'button', { classe: 'botao', tipo: 'button', dados: { acao: 'resultado', resultado: rs.id } }, rs.rotulo);
+          aoClicar(b, msg, function () {
+            [].forEach.call(resultados.querySelectorAll('button'), function (x) { x.disabled = true; });
+            return Promise.resolve(a.resultado ? a.resultado(it.leadId, rs.id) : null).then(function (x) {
+              [].forEach.call(resultados.querySelectorAll('button'), function (y) { y.disabled = false; });
+              return x;
+            }, function (e) {
+              [].forEach.call(resultados.querySelectorAll('button'), function (y) { y.disabled = false; });
+              throw e;
+            });
+          });
+          resultados.appendChild(b);
+        });
+        resultados.appendChild(botaoAcao(doc, 'Pular', 'pular-ligacao'));
+        corpo.push(resultados);
+        corpo.push(el(doc, 'div', { classe: 'fila__botoes' }, botaoAcao(doc, 'Abrir a conversa de novo', 'reabrir-ligacao')));
+      }
+    }
+    var pulados = (v.pulados || []).length
+      ? el(doc, 'div', { classe: 'bloco', dados: { bloco: 'pulados' } },
+        el(doc, 'p', { classe: 'bloco__rotulo' }, 'Pulados: sem telefone — abra pelo Kommo'),
+        el(doc, 'ul', { classe: 'fila__lista' }, ...v.pulados.map(function (p) {
+          return el(doc, 'li', { classe: 'fila__item', dados: { lead: String(p.leadId) } },
+            el(doc, 'span', { classe: 'fila__nome' }, p.nome || 'Cartão ' + p.leadId), ' ',
+            p.link ? el(doc, 'a', { classe: 'botao botao--pequeno', href: p.link }, 'Abrir no Kommo') : null);
+        })))
+      : null;
+    var secao = el(doc, 'section', { classe: 'fila ligacao', dados: { estado: 'ligacao', fase: v.fase } },
+      topo, el(doc, 'div', { classe: 'fila__grupo' }, ...corpo, msg), pulados,
+      el(doc, 'p', { classe: 'nota' }, 'A Ponte abre a conversa e grava o resultado no Kommo. Quem liga é você: ela nunca clica no WhatsApp.'));
+    // os botões simples (sem promessa) vão direto para o painel
+    [].forEach.call(secao.querySelectorAll('[data-acao]'), function (b) {
+      var acao = b.getAttribute('data-acao');
+      var f = { 'pausar-ligacao': a.pausar, 'continuar-ligacao': a.continuar, 'sair-ligacao': a.sair, 'pular-ligacao': a.pular, 'reabrir-ligacao': a.reabrir, 'recomecar-ligacao': a.recomecar }[acao];
+      if (f) b.addEventListener('click', function () { if (!b.disabled) f(); });
+    });
+    return secao;
+  }
+
+  // ── fase 3: respostas prontas (só copiar) ──
+
+  function itemDeResposta(doc, rp, primeiroNome, acoes) {
+    var texto = R.preencherNome(rp.texto, primeiroNome);
+    var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-resposta' } });
+    var copiar = botaoAcao(doc, 'Copiar', 'copiar-resposta');
+    aoClicar(copiar, msg, function () { return acoes.copiar(texto); }, function () {
+      copiar.textContent = 'Copiado';
+      setTimeout(function () { copiar.textContent = 'Copiar'; }, 1500);
+    });
+    return el(doc, 'li', { classe: 'resposta', dados: { resposta: String(rp.id) } },
+      el(doc, 'div', { classe: 'fila__linha' }, el(doc, 'span', { classe: 'fila__nome' }, rp.nome), copiar),
+      el(doc, 'p', { classe: 'resposta__texto' }, texto),
+      R.temLacuna(texto) ? el(doc, 'p', { classe: 'nota nota--alerta' }, 'Complete o que está entre colchetes antes de enviar.') : null,
+      rp.temAnexo ? el(doc, 'p', { classe: 'nota' }, 'Este modelo tem anexo no Kommo: a Ponte copia só o texto.') : null,
+      msg);
+  }
+
+  /**
+   * A aba "Respostas": os modelos gerais do Kommo (texto livre), com busca e "Copiar". O nome do paciente da
+   * conversa aberta entra no lugar do marcador de nome. A Ponte só COPIA: a atendente cola e envia.
+   */
+  function respostas(doc, r, acoes, primeiroNome, buscaInicial) {
+    var lista = (r && r.respostas) || [];
+    var atualizar = botaoAcao(doc, 'Atualizar', 'atualizar-respostas');
+    atualizar.addEventListener('click', function () { if (acoes && acoes.atualizar) acoes.atualizar(); });
+    var topo = el(doc, 'div', { classe: 'fila__topo' },
+      el(doc, 'div', null,
+        el(doc, 'p', { classe: 'aviso__titulo' }, 'Respostas prontas'),
+        el(doc, 'p', { classe: 'nota', dados: { papel: 'para-quem' } }, primeiroNome
+          ? 'O nome entra como "' + primeiroNome + '".'
+          : 'Abra a conversa do paciente para o nome entrar sozinho.')),
+      atualizar);
+    if (!lista.length) {
+      return el(doc, 'section', { classe: 'fila respostas', dados: { estado: 'respostas-vazio' } }, topo,
+        el(doc, 'div', { classe: 'aviso' },
+          el(doc, 'p', { classe: 'aviso__titulo' }, 'Nenhuma resposta pronta cadastrada no Kommo'),
+          el(doc, 'p', { classe: 'aviso__texto' }, (r && r.ondeCadastrar) || 'No Kommo: Configurações › Modelos › Modelos gerais.')));
+    }
+    var campo = el(doc, 'input', { classe: 'busca__campo', tipo: 'search' });
+    campo.placeholder = 'Buscar resposta';
+    campo.value = buscaInicial || '';
+    campo.setAttribute('aria-label', 'Buscar resposta pronta');
+    var ul = el(doc, 'ul', { classe: 'fila__lista respostas__lista' });
+    function desenhar() {
+      ul.replaceChildren();
+      var achadas = R.filtrar(lista, campo.value);
+      if (!achadas.length) ul.appendChild(el(doc, 'li', { classe: 'nota' }, 'Nenhuma resposta com esse texto.'));
+      achadas.forEach(function (rp) { ul.appendChild(itemDeResposta(doc, rp, primeiroNome, acoes || {})); });
+    }
+    campo.addEventListener('input', function () {
+      if (acoes && acoes.aoBuscar) acoes.aoBuscar(campo.value);
+      desenhar();
+    });
+    desenhar();
+    return el(doc, 'section', { classe: 'fila respostas', dados: { estado: 'respostas' } }, topo,
+      el(doc, 'div', { classe: 'busca' }, campo),
+      el(doc, 'div', { classe: 'fila__grupo' }, ul),
+      el(doc, 'p', { classe: 'nota' }, 'A Ponte só copia: você cola na conversa e envia. Ela nunca escreve no WhatsApp.'));
   }
 
   /** O bloco "Modo aprendiz" — estático na fase 1; a fase 3 decide qual dica mostrar e quando. */
@@ -470,6 +792,8 @@
     nada: nada,
     aprendiz: aprendiz,
     fila: fila,
+    modoLigacao: modoLigacao,
+    respostas: respostas,
     urlDaConversa: urlDaConversa,
     relativo: relativo,
     textoDaPausa: textoDaPausa,
