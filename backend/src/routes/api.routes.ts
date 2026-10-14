@@ -178,7 +178,8 @@ import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, 
   widgetSugestaoMotivoHandler,
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
 import { ponteCartaoHandler, pontePausarHandler, ponteResumoIaHandler, ponteRetomarHandler } from '../controllers/ponte.controller.js';
-import { ponteFilaHandler } from '../controllers/ponte-fila.controller.js';
+import { ponteContadorHandler, ponteFilaHandler } from '../controllers/ponte-fila.controller.js';
+import { ponteCamposHandler, ponteGuiaHandler, ponteMoverHandler } from '../controllers/ponte-guia.controller.js';
 import {
   ponteEtiquetasDaContaHandler,
   ponteLigacaoHandler,
@@ -321,6 +322,13 @@ apiRouter.post('/public/widget/:slug/ponte/etiquetas', pontePorEtiquetaHandler);
 apiRouter.delete('/public/widget/:slug/ponte/etiquetas', ponteTirarEtiquetaHandler);
 apiRouter.post('/public/widget/:slug/ponte/ligacao', ponteLigacaoHandler);
 apiRouter.get('/public/widget/:slug/ponte/respostas', ponteRespostasHandler);
+// Fase 4 da Ponte (0.4.0): "O que eu faço agora?" — o guia da etapa (só leitura), gravar os campos que faltam e
+// mudar a etapa (só as do COMERCIAL que são da SDR; nunca GANHO nem TRATAMENTO; confirmação explícita, porque mover
+// dispara os robôs da etapa). E o contador do ícone: pacientes esperando resposta (só leitura, cache por conta).
+apiRouter.get('/public/widget/:slug/ponte/guia', ponteGuiaHandler);
+apiRouter.post('/public/widget/:slug/ponte/campos', ponteCamposHandler);
+apiRouter.post('/public/widget/:slug/ponte/mover', ponteMoverHandler);
+apiRouter.get('/public/widget/:slug/ponte/contador', ponteContadorHandler);
 // Marcar consulta de dentro do cartão (unidade sem Sofia): mesma chave por unidade, limite próprio de escrita.
 apiRouter.get('/public/widget/:slug/horarios', widgetHorariosHandler);
 apiRouter.post('/public/widget/:slug/marcar', widgetMarcarHandler);

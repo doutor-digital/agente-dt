@@ -12,6 +12,10 @@
  *     (1–3). ~9 a 18 chamadas, no ritmo do limitador.
  *
  * Nome e telefone dos pacientes saem na resposta (é para ligar), mas não vão para o log.
+ *
+ * 0.4.0: `GET /api/public/widget/:slug/ponte/contador` — o número no ícone da extensão (pacientes esperando resposta):
+ * a MESMA conta do grupo "sem resposta" (`candidatosSemResposta`), cache de 90 s por conta, e a fila guardada serve
+ * quando é recente. Só leitura; falha do Kommo = `total: null` (a extensão mostra "?", nunca 0).
  */
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
@@ -26,35 +30,35 @@ import { ETAPA } from '../lib/franquia-move.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import {
   DIA_S,
+  MAX_NAO_LIDAS,
   PRAZOS_DA_FILA,
+  candidatosSemResposta,
   cartaoDaFila,
-  etapaDoSemResposta,
+  contarSemResposta,
+  conversaPorCartao,
+  janelaDeConversasDias,
   montarGrupos,
   regraConfirmar,
   regraFaltou,
   regraNegociacao,
   regraRetomar,
-  regraSemResposta,
   semTelefoneConfirmado,
   telefoneParaMostrar,
   telefoneParaWhatsapp,
   type CandidatoDaFila,
   type CartaoDaFila,
+  type ContagemSemResposta,
   type IdDoGrupo,
+  type LeitoresDoSemResposta,
   type Pista,
 } from '../lib/ponte-fila.js';
 import { RITMO_DAS_LIGACOES } from '../lib/ponte-ligacao.js';
+import { contaDaUnidade } from '../lib/ponte-cache.js';
 
 /** Páginas de 250 cartões por etapa, dos mais novos para os mais velhos. 4 = 1.000 cartões; passou disso, avisa. */
 const MAX_PAGINAS_POR_ETAPA = 4;
 /** Páginas de 250 conversas, das mais novas para as mais antigas, até a janela de conversas. */
 const MAX_PAGINAS_DE_CONVERSAS = 4;
-/**
- * Cartões das conversas não lidas que vale buscar (5 lotes de 50), antes de saber a etapa. Medido em 25/09: a
- * conta com mais conversas não lidas tinha 92 (Bebedouro) — o teto só corta numa pilha bem maior, e avisa.
- */
-const MAX_NAO_LIDAS = 250;
-
 const LIMITE_DA_FILA = { balde: 'ponte-fila', max: 60 };
 
 interface ItemDaResposta {
@@ -126,19 +130,6 @@ async function leadsDaEtapa(kommo: KommoClient, pipelineId: number, statusId: nu
   return { leads, completa: false };
 }
 
-/** A conversa mais recente de cada cartão (as conversas do Kommo apontam para o cartão em `entity_id`). */
-function conversaPorCartao(conversas: KommoTalk[]): Map<number, KommoTalk> {
-  const m = new Map<number, KommoTalk>();
-  for (const t of conversas) {
-    if (t.entity_type && t.entity_type !== 'lead') continue;
-    const id = Number(t.entity_id);
-    if (!Number.isInteger(id) || id <= 0) continue;
-    const atual = m.get(id);
-    if (!atual || (t.updated_at ?? 0) > (atual.updated_at ?? 0)) m.set(id, t);
-  }
-  return m;
-}
-
 /** Quando a Sofia falou por último com cada cartão (epoch s), nesta unidade e nas irmãs da mesma conta. */
 async function ultimaFalaDaSofia(unit: Unit, leadIds: number[]): Promise<Map<number, number>> {
   const m = new Map<number, number>();
@@ -160,6 +151,14 @@ async function ultimaFalaDaSofia(unit: Unit, leadIds: number[]): Promise<Map<num
   return m;
 }
 
+/** Os leitores do "sem resposta" (fila e contador): os cartões no Kommo e a última fala da Sofia no banco. */
+function leitoresDoSemResposta(unit: Unit, kommo: KommoClient): LeitoresDoSemResposta {
+  return {
+    cartoes: (ids) => kommo.listLeadsPorIds(ids, { contatos: true }),
+    falaDaSofia: (ids) => ultimaFalaDaSofia(unit, ids),
+  };
+}
+
 async function montarFila(unit: Unit): Promise<RespostaDaFila> {
   const kommo = createKommoClient(unit);
   const tz = fusoDaUnidade(unit);
@@ -167,13 +166,12 @@ async function montarFila(unit: Unit): Promise<RespostaDaFila> {
   const agoraEpoch = Math.floor(agora.getTime() / 1000);
   const prazos = PRAZOS_DA_FILA;
   // a janela de conversas cobre pelo menos o prazo da negociação (senão "sem conversa na janela" não diria nada)
-  const janelaDias = Math.max(prazos.janelaConversasDias, prazos.negociacaoParadaDias + 1);
+  const janelaDias = janelaDeConversasDias(prazos);
 
   const conta = await dadosDaConta(unit, kommo);
   const comercial = funilComercial(conta.funis);
   if (!comercial) throw new Error('a conta não tem o funil COMERCIAL');
   const statusPorNome = new Map(comercial.statuses.map((s) => [normalizarNome(s.name), s]));
-  const statusPorId = new Map(comercial.statuses.map((s) => [s.id, s]));
   const avisos = new Avisos();
   const candidatos: CandidatoDaFila[] = [];
 
@@ -252,35 +250,12 @@ async function montarFila(unit: Unit): Promise<RespostaDaFila> {
     }
   }
 
-  // ── sem resposta: conversa não lida há mais de N horas, cartão na entrada ou em EM QUALIFICAÇÃO ──
+  // ── sem resposta: conversa não lida há mais de N horas, cartão na entrada ou em EM QUALIFICAÇÃO (a mesma conta
+  // do contador do ícone — `candidatosSemResposta`) ──
   try {
-    const limite = agoraEpoch - prazos.semRespostaHoras * 3600;
-    const todas = [...conversas.entries()]
-      .filter(([, t]) => t.is_read === false && t.is_in_work !== false && (t.updated_at ?? 0) <= limite)
-      .sort((a, b) => (a[1].updated_at ?? 0) - (b[1].updated_at ?? 0));
-    if (todas.length > MAX_NAO_LIDAS) {
-      avisos.add('sem-resposta', `Há mais de ${MAX_NAO_LIDAS} conversas não lidas na conta: olhei as que esperam há mais tempo.`);
-    }
-    const naoLidas = todas.slice(0, MAX_NAO_LIDAS);
-    if (naoLidas.length) {
-      const ids = naoLidas.map(([id]) => id);
-      const [leads, sofia] = await Promise.all([kommo.listLeadsPorIds(ids, { contatos: true }), ultimaFalaDaSofia(unit, ids)]);
-      const porId = new Map(leads.map((l) => [l.id, l]));
-      for (const [id, t] of naoLidas) {
-        const lead = porId.get(id);
-        if (!lead || lead.pipeline_id !== comercial.id) continue;
-        const status = statusPorId.get(lead.status_id);
-        if (!status || !etapaDoSemResposta(status.name, status.type)) continue;
-        const pista = regraSemResposta(
-          { lida: t.is_read === true, aberta: t.is_in_work !== false, atualizadaEpoch: t.updated_at ?? 0 },
-          sofia.get(id) ?? null,
-          agora,
-          tz,
-          prazos,
-        );
-        if (pista) candidatos.push({ grupo: 'sem-resposta', cartao: cartaoDaFila(lead, status.name), pista });
-      }
-    }
+    const r = await candidatosSemResposta(conversas, comercial, leitoresDoSemResposta(unit, kommo), agora, tz, prazos);
+    if (r.cortado) avisos.add('sem-resposta', `Há mais de ${MAX_NAO_LIDAS} conversas não lidas na conta: olhei as que esperam há mais tempo.`);
+    candidatos.push(...r.candidatos);
   } catch (err) {
     avisos.add('sem-resposta', 'O Kommo não respondeu as conversas agora.');
     logger.warn({ err: String(err), unit: unit.slug }, 'ponte fila: falha no "sem resposta"');
@@ -373,5 +348,78 @@ export async function ponteFilaHandler(req: Request, res: Response): Promise<voi
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug }, 'ponte fila: falha ao montar');
     res.status(502).json({ error: 'kommo indisponível' });
+  }
+}
+
+// ── 0.4.0: o contador do ícone da extensão ──
+
+/** Cada atendente pergunta a cada ~5 min (`chrome.alarms`); várias atendentes dividem a conta. */
+const LIMITE_DO_CONTADOR = { balde: 'ponte-contador', max: 30 };
+/** O contador de uma conta é contado no máximo uma vez a cada 90 s (as unidades da mesma conta dividem). */
+export const CACHE_DO_CONTADOR_MS = 90_000;
+const cacheDoContador = new Map<string, { em: number; corpo: ContagemSemResposta }>();
+const contadorEmAndamento = new Map<string, Promise<ContagemSemResposta>>();
+
+/**
+ * A Fila de hoje montada há pouco já contou o "sem resposta": usa o total dela (é a mesma regra) e não pergunta ao
+ * Kommo de novo. Só quando o grupo não tem aviso — aviso é leitura incompleta ou falha, e aí o contador conta sozinho.
+ */
+function contagemDaFilaGuardada(conta: string): { em: number; corpo: ContagemSemResposta } | null {
+  const g = cache.get(conta);
+  if (!g || Date.now() - g.em >= CACHE_DO_CONTADOR_MS) return null;
+  const grupo = g.corpo.grupos.find((x) => x.id === 'sem-resposta');
+  if (!grupo || grupo.aviso) return null;
+  return { em: g.em, corpo: { total: grupo.total, completo: true } };
+}
+
+async function contarAgora(unit: Unit): Promise<ContagemSemResposta> {
+  const kommo = createKommoClient(unit);
+  const conta = await dadosDaConta(unit, kommo);
+  return contarSemResposta(
+    { ...leitoresDoSemResposta(unit, kommo), conversas: (desde) => kommo.listarConversasDesde(desde, MAX_PAGINAS_DE_CONVERSAS) },
+    funilComercial(conta.funis),
+    new Date(),
+    fusoDaUnidade(unit),
+  );
+}
+
+/**
+ * `GET /api/public/widget/:slug/ponte/contador` → `{ total, completo, atualizadoEm, cache }`: quantos pacientes esperam
+ * resposta (o grupo "sem resposta" da Fila de hoje), para o número no ícone da extensão. SÓ LEITURA. `total: null`
+ * = o Kommo não respondeu — a extensão mostra "?", nunca um 0 que diria "ninguém esperando". Falha não fica em cache.
+ */
+export async function ponteContadorHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDaPonte(req, res, LIMITE_DO_CONTADOR);
+  if (!unit) return;
+  if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+    res.status(409).json({ error: 'unidade sem Kommo conectado' });
+    return;
+  }
+  const conta = contaDaUnidade(unit);
+  const guardado = contagemDaFilaGuardada(conta) ?? cacheDoContador.get(conta) ?? null;
+  if (guardado && Date.now() - guardado.em < CACHE_DO_CONTADOR_MS) {
+    res.json({ ...guardado.corpo, atualizadoEm: new Date(guardado.em).toISOString(), cache: true });
+    return;
+  }
+  try {
+    let p = contadorEmAndamento.get(conta);
+    if (!p) {
+      p = contarAgora(unit)
+        .then((corpo) => {
+          if (corpo.total !== null) {
+            if (cacheDoContador.size > 500) cacheDoContador.clear();
+            cacheDoContador.set(conta, { em: Date.now(), corpo });
+          }
+          return corpo;
+        })
+        .finally(() => contadorEmAndamento.delete(conta));
+      contadorEmAndamento.set(conta, p);
+    }
+    const corpo = await p;
+    if (corpo.total === null) logger.warn({ unit: unit.slug }, 'ponte contador: o Kommo não respondeu');
+    res.json({ ...corpo, atualizadoEm: new Date().toISOString(), cache: false });
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, 'ponte contador: falha');
+    res.json({ total: null, completo: false, atualizadoEm: new Date().toISOString(), cache: false });
   }
 }

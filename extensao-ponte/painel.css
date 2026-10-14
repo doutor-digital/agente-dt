@@ -320,3 +320,53 @@ button:disabled { opacity: 0.55; cursor: default; }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* 0.4.0 — o guia "O que eu faço agora?" */
+.botao--guia { width: 100%; margin: 4px 0 12px; padding: 11px 12px; font-size: 15px; }
+.guia__topo { display: flex; justify-content: space-between; gap: 6px; margin-bottom: 10px; }
+.guia__passo { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--linha); }
+.guia__passo--unidade { border: 2px solid var(--destaque); border-radius: 8px; padding: 10px 12px; }
+.guia__titulo { margin: 0 0 8px; font-size: 15px; font-weight: 700; }
+h3.guia__titulo { font-size: 14px; margin-top: 10px; }
+.guia__campo { display: grid; gap: 3px; margin: 8px 0; }
+.guia__rotulo { font-weight: 600; font-size: 13px; }
+.guia__marca { font-weight: 400; color: var(--suave); font-size: 12px; }
+.guia__campo--preso .nota { margin-top: 0; }
+.guia__entrada {
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--linha);
+  background: var(--cartao);
+  color: var(--texto);
+  font: inherit;
+}
+.guia__pendencia { margin: 0; font-weight: 600; white-space: pre-wrap; word-break: break-word; }
+.guia__saidas { display: grid; gap: 6px; }
+.guia__saida {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 8px 10px;
+  border: 1px solid var(--linha);
+  border-radius: 8px;
+  background: var(--cartao);
+  color: var(--texto);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.guia__saida:hover { border-color: var(--destaque); }
+.guia__saida--escolhida { border: 2px solid var(--destaque); }
+.guia__saida-nome { font-weight: 700; }
+.guia__saida-rotulo { font-size: 12px; color: var(--suave); }
+.guia__detalhe { margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--linha); border-radius: 8px; }
+.guia__robos { margin: 10px 0 6px; padding: 6px 8px; border-radius: 6px; background: var(--fraco-fundo); color: var(--texto); font-weight: 600; font-size: 13px; }
+.guia__mensagens { margin: 6px 0; }
+.guia__linhas { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+.guia__linhas li { margin: 2px 0; word-break: break-word; }
+.guia__previa { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--destaque); border-radius: 8px; }
+.guia__previa-titulo { margin: 0 0 4px; font-weight: 700; }
+.guia__previa .pausa__botoes { margin-top: 8px; }
+.guia__previa .botao--primario { margin-top: 0; display: inline-block; }

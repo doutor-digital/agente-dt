@@ -1,7 +1,10 @@
 # Ponte — o cartão do Kommo ao lado da conversa no WhatsApp Web
 
-Extensão do Chrome (e do Firefox), **versão 0.3.0 — fase 3**. Com uma conversa aberta no WhatsApp Web, o
+Extensão do Chrome (e do Firefox), **versão 0.4.0 — fase 4**. Com uma conversa aberta no WhatsApp Web, o
 painel lateral mostra o cartão do Kommo daquele paciente:
+
+- o botão **O que eu faço agora?** (novo na 0.4.0): o guia da etapa — o que falta preencher, a ⚠ Pendência do
+  cartão e para onde o paciente pode ir, com a mudança de etapa ali mesmo;
 
 - **Resumo** (novo na fase 2), no topo: quem é, onde está e há quanto tempo, o que já aconteceu na franquia, a
   última conversa e o próximo passo sugerido para a etapa;
@@ -18,8 +21,111 @@ painel lateral mostra o cartão do Kommo daquele paciente:
 E mais duas abas: **Fila de hoje** (nova na fase 2): quem chamar ou ligar hoje, por etapa, agora com o botão
 **Começar a ligar** (0.3.0); e **Respostas** (nova na 0.3.0): as respostas prontas do Kommo para copiar.
 
+E, no ícone da extensão, **quantos pacientes estão esperando resposta** (novo na 0.4.0).
+
 Também tem um bloco "Modo aprendiz", que diz onde cada coisa fica dentro do Kommo. Por enquanto ele é fixo; uma
 fase futura vai escolher qual dica mostrar e quando.
+
+## O que há de novo na 0.4.0 (fase 4)
+
+### "O que eu faço agora?"
+
+No cartão, logo abaixo da etapa, um botão grande abre o **guia** no lugar do cartão (o **← Voltar ao cartão** volta).
+O guia vem pronto do servidor (`GET /api/public/widget/:slug/ponte/guia?leadId=`) e mostra, em ordem:
+
+1. **A unidade, primeiro** — só nas contas do Kommo que atendem duas unidades (a de Petrópolis atende Petrópolis e
+   Caxias; o campo é o `⌂ Unidade de atendimento`). Com o campo vazio, o guia mostra só este passo: escolher a
+   unidade. Enquanto ele estiver vazio, o servidor recusa gravar qualquer outro campo e mudar a etapa (cadastrar o
+   paciente na unidade errada "dá BO" na franquia). A Ponte só preenche a unidade vazia; trocar é no Kommo.
+2. **⚠ Pendência do cartão** — o campo que o robô de revisão escreve e que fica **escondido** no Kommo (a SDR só
+   achava o motivo no histórico; decisão D13). Corrigido o que ele diz, o aviso sai sozinho.
+3. **Falta nesta etapa** — os campos vazios que o Kommo exige para estar nesta etapa e os que são **da SDR** nela
+   (os de preencher à mão, do molde da Serra e da Açailândia: na qualificação, ★ Qualificação, ⚕ Região da dor, ✎
+   Queixa e ✎ Observações; em EM ESPERA, ⊘ Motivo da espera e ◷ Retomar em; e assim por etapa — a lista fica em
+   `CAMPOS_DA_SDR_POR_ETAPA`, `backend/src/lib/ponte-guia.ts`). Campo escondido na etapa não aparece. Os que o
+   robô, a Sofia ou a franquia preenchem não aparecem — a não ser que o Kommo os exija, e aí aparecem **sem caixa
+   para digitar**, dizendo quem preenche ("Marque a consulta primeiro: a data entra sozinha no cartão"). Dá para
+   preencher ali mesmo: texto, lista, data (calendário) e número.
+4. **Para onde vai o paciente?** — as saídas da etapa, cada uma com o que aconteceu, do jeito que a SDR fala
+   ("Quer, mas depois", "Faltou à consulta"…). Escolhida a saída, aparecem o que falta para mover (e campos
+   opcionais), o aviso **"Ao mover, os robôs desta etapa podem mandar mensagem ao paciente."** (sempre), as
+   mensagens conhecidas dos robôs daquela etapa e as dicas (ex.: a etiqueta NO_FOLLOW_UP antes do PERDIDO).
+
+**Antes de gravar, a Ponte mostra o que vai gravar.** "Revisar o que vou gravar" e "Revisar e mover" abrem a prévia
+("⊘ Motivo da espera: Viajando · ◷ Retomar em: 20/10/2026 · Etapa: EM QUALIFICAÇÃO → EM ESPERA" + o aviso dos robôs),
+e só **Gravar no Kommo** / **Mover agora** gravam. O que foi digitado fica guardado na memória do painel por 30 min
+(trocar de aba e voltar não perde); nada vai para o `storage`.
+
+As saídas, por etapa do funil COMERCIAL (`SAIDAS_POR_ETAPA`; o que cada uma exige além dos obrigatórios do Kommo):
+
+| Etapa atual | Saídas |
+| --- | --- |
+| entrada | EM QUALIFICAÇÃO, AGENDADO, EM ESPERA, PERDIDO |
+| EM QUALIFICAÇÃO | AGENDADO (◷ Data da Consulta), EM ESPERA (⊘ Motivo da espera + ◷ Retomar em), PERDIDO (⊘ Motivo do não agendamento) |
+| EM ESPERA | EM QUALIFICAÇÃO, AGENDADO, PERDIDO |
+| CONFERIR NA FRANQUIA | AGENDADO, PERDIDO |
+| AGENDADO | COMPARECEU, NÃO COMPARECEU (sugere ⊘ Motivo da falta), EM ESPERA, PERDIDO — as duas últimas lembram de desmarcar na franquia |
+| NÃO COMPARECEU | AGENDADO, EM ESPERA, PERDIDO |
+| COMPARECEU | EM NEGOCIAÇÃO, PERDIDO (⊘ Motivo de não fechamento do tratamento) |
+| EM NEGOCIAÇÃO | AGENDADO (nova consulta), PERDIDO |
+| PERDIDO | EM QUALIFICAÇÃO (voltou a conversar), EM ESPERA |
+| RETORNO PÓS-TRATAMENTO, GANHO, funil TRATAMENTO | nenhuma: são da franquia e dos robôs |
+
+**Regras do mover** (`POST /api/public/widget/:slug/ponte/mover` `{ leadId, de, para, campos, por, confirmado }`):
+
+- **Obrigatório é CUMULATIVO**, como na tela do Kommo (provado na Marabá em 26/08): entrar numa etapa exige os
+  obrigatórios dela **e de todas as etapas antes dela** no funil. GANHO exige os do funil inteiro; PERDIDO só os dele
+  (o João testou na Serra em 02/10 que mover para PERDIDO não pede os de GANHO). Os obrigatórios vêm da API
+  (`required_statuses` de cada campo, como **(funil, etapa)** — 142/143 se repetem em todo funil). A API do Kommo
+  não confere obrigatório nenhum: quem segura é a Ponte. Faltou algum → 422 com a lista, e nada vai para o Kommo.
+- **AGENDADO só com a consulta marcada**: a ◷ Data da Consulta tem que estar no cartão e ser de hoje em diante (a
+  Ponte não escreve na franquia nem inventa consulta — ela entra pela franquia, pelo widget "Marcar" ou pela Sofia).
+- Só as etapas do COMERCIAL que são da SDR, e só as saídas da etapa atual: **nunca GANHO nem o funil TRATAMENTO**.
+- Confirmação explícita (`confirmado: true`, que o painel só manda depois de **Mover agora**); se o cartão mudou de
+  etapa desde que o guia abriu (`de`), recusa e pede para abrir de novo.
+- Os campos que faltavam e a etapa vão **num PATCH só** (o Kommo recusou um valor → o cartão não anda sem ele). Depois,
+  o servidor **relê o cartão**, confere que andou e devolve o guia novo.
+- No PERDIDO, vai junto o **motivo de perda do Kommo** (o do cabeçalho) que tiver o MESMO nome do ⊘ escolhido —
+  "Sem interesse", por exemplo, é dos que calam o acompanhamento da Sofia. Sem nome igual, vai sem.
+- Teto de **60 cartões movidos por hora** em cada conta (`PONTE_MOVER_POR_HORA`): mover dispara robôs, e uma chave
+  vazada não vira um disparador. A vaga volta se o cartão não andar.
+- Nota no cartão: "➜ Etapa mudada pela Ponte: EM QUALIFICAÇÃO → EM ESPERA · por Ana" (e o que foi preenchido junto).
+
+**Regras do gravar** (`POST /api/public/widget/:slug/ponte/campos` `{ leadId, campos: [{ id, valor }], por }`): só
+grava campo **da SDR** (o das listas por etapa e das saídas, o ⌂ Unidade de atendimento vazio, ou um que a conta
+exige em alguma etapa); recusa campo da franquia, de robô, "Apenas API", ☎ (tem rota própria) e **cabeçalho** —
+campo cujo nome começa com `##` ou `*` (`## CONSULTA`, `*AGENDADO*`) é título visual e nunca é alvo. Manda só o que
+mudou, num PATCH, relê o cartão (o valor não aparece → erro, para a SDR não achar que gravou) e deixa a nota
+"✎ Preenchido pela Ponte · por Ana: …". Data vai como meia-noite do fuso da unidade (como o Kommo guarda: é dela que o
+robô conta "9 h depois do ◷ Retomar em").
+
+**As mensagens dos robôs.** O servidor não lê os gatilhos do Kommo (a rota `/ajax/v4/triggers/bots` pede o cookie de
+sessão de um usuário; o token da API não lê), então o painel **avisa sempre**. As mensagens conhecidas de cada etapa
+ficam em `MENSAGENS_DA_ETAPA` (`backend/src/lib/ponte-guia.ts`), por conta do Kommo — hoje a Açailândia, a régua no ar
+desde 07/10 (`video-tutorial/v3/mensagens_por_etapa.json` e `gatilhos_por_etapa.json`): ex., AGENDADO → "Ao entrar, se
+¤ Pagamento antecipado = Sim e ainda não pagou: «A sua consulta está pré-agendada…»; 3 h antes da consulta…".
+Conta nova, sem mexer no código: `PONTE_MENSAGENS_DA_ETAPA_<SLUG>` (slug em maiúsculas, `-` vira `_`) com um JSON
+`{"AGENDADO": ["…"], "PERDIDO": ["…"]}`, que substitui as etapas que listar.
+
+**A Ponte NÃO escreve na franquia nesta versão** (nada de marcar consulta).
+
+### O número no ícone
+
+O ícone da extensão mostra **quantos pacientes da unidade estão esperando resposta**, com a dica ao passar o mouse:
+"3 pacientes esperando resposta". A conta é a do grupo "sem resposta" da Fila de hoje — conversa não lida há mais de
+2 h e a última fala não foi da Sofia, cartão na entrada ou em EM QUALIFICAÇÃO — e a regra é a mesma função dos dois
+lados (`candidatosSemResposta`, `backend/src/lib/ponte-fila.ts`).
+
+- O script de fundo pergunta a cada **5 min** (`chrome.alarms`, permissão nova `alarms`) em
+  `GET /api/public/widget/:slug/ponte/contador`. O servidor guarda **90 s por conta** (e, se a Fila de hoje foi
+  montada há menos de 90 s sem aviso, usa o total dela), então várias atendentes não multiplicam as chamadas ao
+  Kommo (o limitador do processo segura os 7 pedidos por segundo).
+- **Subiu** desde a última leitura: vermelho. Tem gente mas não subiu: laranja. **Zerou**: ícone sem número.
+- **Falha** (servidor, Kommo ou internet): **"?"**, nunca um 0 falso, que diria "ninguém esperando". Leitura cortada
+  (conversas demais) com 0 também é "?"; com algum número, "3+".
+- No Firefox é o mesmo `action.setBadgeText`, com o `config.js` e o `contador.js` carregados antes do `fundo.js`
+  (`background.scripts` do `firefox/manifest.json`).
+- Sem notificação do sistema nesta versão. Guarda em `storage.local` só o último total e o slug (para saber se subiu).
 
 ## O que há de novo na 0.3.0 (fase 3)
 
@@ -193,7 +299,8 @@ devolve o resumo do cartão sem chamar a IA. Rota: `POST /api/public/widget/:slu
    - o **slug da unidade** (ex.: `doutor-hernia-acailandia`);
    - a **chave**: a mesma do widget do cartão no Kommo daquela unidade (o HMAC do slug, ver
      `backend/src/lib/widget-agenda.ts`);
-   - **seu nome** (opcional): aparece como "por Ana" quando você pausa a Sofia num paciente.
+   - **seu nome** (opcional): aparece como "por Ana" quando você pausa a Sofia num paciente, põe etiqueta, grava
+     a ligação, preenche campos pelo guia ou muda a etapa.
 
    Depois clique em **Salvar e testar**. Deve aparecer "Conectado: <unidade>".
 
@@ -240,7 +347,10 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
 - mostra o painel com `chrome.sidePanel`, uma página da própria extensão;
 - abre a conversa de um telefone trocando a URL da aba do WhatsApp Web (navegação, sem texto), no "Abrir conversa"
   e no modo "Começar a ligar" (este no ritmo: 40 s entre uma e outra, no máximo 40 por hora);
-- copia texto para a área de transferência quando a atendente clica em Copiar.
+- copia texto para a área de transferência quando a atendente clica em Copiar;
+- mostra no ícone quantos pacientes esperam resposta (pergunta ao NOSSO servidor a cada 5 min);
+- no guia "O que eu faço agora?", grava no Kommo os campos da SDR e muda a etapa — só depois da prévia e da
+  confirmação da atendente, e só no funil COMERCIAL.
 
 **Nunca faz:**
 
@@ -258,12 +368,20 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
   confirmar, ou põe ▶ Retomada sozinha depois de uma ligação;
 - marca como "sem telefone" quem só não teve o telefone lido agora;
 - junta (mescla) ou apaga cartão: o aviso de duplicado só avisa;
-- guarda nome ou telefone de paciente no `storage` (a fila de ligações guarda só ids e horas);
-- escreve na franquia. No Kommo, só escreve quando a atendente clica: pausar e retomar a Sofia num paciente, pôr e
-  tirar etiqueta, e o resultado da ligação (campos ☎; nota só sem eles). Tudo vai pelo NOSSO servidor com a chave da
-  unidade — nunca pelo WhatsApp.
+- guarda nome ou telefone de paciente no `storage` (a fila de ligações guarda só ids e horas; o contador, só o último
+  total e o slug; o que foi digitado no guia fica só na memória do painel);
+- muda a etapa sem a atendente confirmar, com um obrigatório do destino vazio, para GANHO, para o funil TRATAMENTO,
+  para uma etapa que não é saída da etapa atual, ou com a unidade de atendimento vazia (na conta de duas unidades);
+- grava campo da franquia, de robô, "Apenas API" ou cabeçalho (`##…`, `*…*`), ou troca a unidade de atendimento já
+  escolhida;
+- mostra notificação do sistema;
+- escreve na franquia (nem marca consulta). No Kommo, só escreve quando a atendente clica: pausar e retomar a Sofia
+  num paciente, pôr e tirar etiqueta, o resultado da ligação (campos ☎; nota só sem eles), e — na 0.4.0 — os campos
+  do guia e a mudança de etapa (com nota de quem fez). Tudo vai pelo NOSSO servidor com a chave da unidade — nunca
+  pelo WhatsApp.
 
-Permissões: `sidePanel` e `storage`, mais `host_permissions` apenas para o servidor da Doutor Digital. O
+Permissões: `sidePanel`, `storage` e (0.4.0) `alarms` — só para o relógio de 5 min do número no ícone —, mais
+`host_permissions` apenas para o servidor da Doutor Digital. O
 "Abrir conversa" usa `chrome.tabs.update` na aba do WhatsApp Web que a Ponte já lê, que não pede permissão a
 mais; o "Copiar telefone" e o "Copiar" das respostas usam a área de transferência só no clique.
 
@@ -311,7 +429,16 @@ npm test            # node --test 'testes/*.test.js'
   abre só pela URL com o telefone, espera o ritmo, grava o resultado, pula quem não tem telefone, respeita o teto
   e continua de onde parou; o resultado pendente não destrava com o redesenho nem manda duas vezes; telefone não
   lido não vira "feito"; a etiqueta vai com quem pôs; e a resposta copiada nunca sai com o nome do paciente
-  anterior.
+  anterior. Na 0.4.0: o guia abre pelo botão, grava e move com quem fez e `confirmado: true` só depois da prévia,
+  relê o cartão ao voltar, não fecha com mensagem nova na mesma conversa, fecha ao trocar de conversa (e a resposta
+  atrasada não volta) e guarda o que foi digitado ao trocar de aba;
+- `guia.test.js` (0.4.0): a leitura do que a atendente digita (número com R$, data do calendário, opção da lista) e o
+  desenho do guia — pendência, campos com a entrada certa, prévia antes de gravar, saída com o aviso dos robôs e a
+  confirmação, campo da franquia sem caixa e com o mover travado, a unidade primeiro (e só ela) na conta de duas
+  unidades, e o dado do servidor como texto;
+- `contador.test.js` (0.4.0): o número, a cor (subiu / não subiu), a dica, o "?" na falha (nunca 0), o alarme de
+  5 min, os scripts de fundo do Chrome (com `importScripts`) e do Firefox, e os manifests (0.4.0, `alarms`, sem
+  notificação).
 
 No backend: `ponte-fila.test.ts` (cada regra da fila e os prazos), `ponte-resumo.test.ts` (o resumo sem IA, o
 pedido e a leitura da resposta da IA), `ponte-pausa.test.ts` (o pedido, as regras de sempre e o próprio
@@ -322,7 +449,14 @@ pelo nome com os ids reais de Açailândia, tentativas + 1, campanha 3C esvaziad
 da revisão de cartão mantida, e a mesma tentativa gravando uma vez), `ponte-respostas.test.ts` (só os modelos
 gerais, os marcadores e o primeiro nome), `ponte-duplicados.test.ts` (o mesmo telefone completo, contato
 principal, etapas finais e quando avisar), `ponte-fila.test.ts` ("sem telefone" só quando o Kommo afirma) e
-`controllers/ponte-porta.test.ts` (a chave antes do limitador).
+`controllers/ponte-porta.test.ts` (a chave antes do limitador — na 0.4.0, também nas rotas do guia e do contador).
+Na 0.4.0: `ponte-guia.test.ts` (obrigatório cumulativo — inclusive o 142 do TRATAMENTO, que não conta para o GANHO
+do COMERCIAL —, obrigatório faltando trava o mover e nada vai ao Kommo, um PATCH só com campos + etapa, releitura,
+nota com quem, cabeçalho `##`/`*…*` nunca é alvo, campo da franquia/robô recusado, GANHO e TRATAMENTO nunca, sem
+confirmação nada, etapa que mudou no meio, consulta que já passou não volta para AGENDADO, motivo de perda casado
+pelo nome, teto por hora e a vaga devolvida, a unidade vazia pedida antes de tudo, data à meia-noite do fuso com o
+valor real de um cartão da Açailândia, e as mensagens por etapa com a variável de ambiente) e `ponte-contador.test.ts`
+(a mesma conta do grupo "sem resposta", e falha do Kommo = `total: null`, que a extensão mostra como "?").
 
 ### A conferir no dia de teste (fase 2)
 
@@ -348,14 +482,30 @@ principal, etapas finais e quando avisar), `ponte-fila.test.ts` ("sem telefone" 
       com o nome certo;
 - [ ] a faixa de duplicado aparece num paciente com dois cartões abertos (e não aparece num GANHO + um aberto).
 
+### A conferir no dia de teste (0.4.0)
+
+- [ ] o guia de um cartão de teste em cada etapa: o que falta bate com o que o Kommo cobra ao arrastar o cartão na
+      tela (o cumulativo) e com os campos que a SDR vê na etapa;
+- [ ] mover pela Ponte um cartão de teste (sem conversa, como no teste da Marabá) e ver os robôs da etapa: a lista de
+      mensagens da Açailândia bate com o que sai?
+- [ ] PERDIDO pela Ponte com "Sem interesse": o motivo de perda do cabeçalho do Kommo vem junto, e a Sofia não manda
+      o acompanhamento;
+- [ ] em Petrópolis, um cartão com o ⌂ Unidade de atendimento vazio: o guia pede a unidade antes de tudo, e a etiqueta
+      PETRÓPOLIS/CAXIAS aparece depois da varredura do robô de unidade;
+- [ ] o número no ícone bate com o grupo "sem resposta" da Fila de hoje e some quando a fila zera; desligar a
+      internet mostra "?";
+- [ ] no Firefox, o número aparece no ícone da barra (com o acesso ao servidor ligado em about:addons → Permissões).
+
 O backend confere o mesmo contrato em `backend/src/lib/ponte-impressao.test.ts`, que carrega o `impressao.js`
-daqui, e em `ponte-cartao.test.ts`.
+daqui, e em `ponte-cartao.test.ts`. O `ponte-guia.test.ts` carrega o `guia.js` (o aviso dos robôs e a leitura do número)
+e o `ponte-contador.test.ts`, o `contador.js` (o "?" na falha).
 
 ## Firefox
 
 O Firefox não tem o painel lateral do Chrome; a versão dele usa a **barra lateral** (`sidebar_action`). Os
 arquivos são os mesmos, só trocam o `manifest.json` e o `fundo.js` (em `firefox/`). Para montar:
-`bash firefox/montar.sh ~/Downloads/extensao-ponte-firefox`.
+`bash firefox/montar.sh ~/Downloads/extensao-ponte-firefox`. Na 0.4.0 o Firefox carrega `config.js`, `contador.js` e
+`fundo.js` no script de fundo (o número no ícone), e a extensão pede a permissão `alarms`.
 
 Instalar para testar: `about:debugging` → **Este Firefox** → **Carregar extensão temporária…** → escolha o
 `manifest.json` da pasta montada. A extensão temporária some quando o Firefox fecha; para ficar instalada de

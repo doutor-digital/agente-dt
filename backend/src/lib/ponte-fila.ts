@@ -361,3 +361,122 @@ export function montarGrupos(candidatos: CandidatoDaFila[], prazos: PrazosDaFila
     return { def, total: doGrupo.length, itens: doGrupo.slice(0, prazos.maxPorGrupo) };
   });
 }
+
+// ── "sem resposta": o grupo da fila E o contador do ícone (0.4.0) usam a MESMA conta ──
+
+/** O pedaço da conversa do Kommo que a fila lê (`/api/v4/talks`). */
+export interface ConversaDoKommo {
+  entity_id?: number | null;
+  entity_type?: string | null;
+  is_read?: boolean;
+  is_in_work?: boolean;
+  updated_at?: number;
+}
+
+/** A conversa mais recente de cada cartão (as conversas do Kommo apontam para o cartão em `entity_id`). */
+export function conversaPorCartao<T extends ConversaDoKommo>(conversas: ReadonlyArray<T>): Map<number, T> {
+  const m = new Map<number, T>();
+  for (const t of conversas) {
+    if (t.entity_type && t.entity_type !== 'lead') continue;
+    const id = Number(t.entity_id);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    const atual = m.get(id);
+    if (!atual || (t.updated_at ?? 0) > (atual.updated_at ?? 0)) m.set(id, t);
+  }
+  return m;
+}
+
+/**
+ * Cartões das conversas não lidas que vale buscar (5 lotes de 50), antes de saber a etapa. Medido em 25/09: a
+ * conta com mais conversas não lidas tinha 92 (Bebedouro) — o teto só corta numa pilha bem maior, e avisa.
+ */
+export const MAX_NAO_LIDAS = 250;
+
+/** O cartão como a fila precisa (o `listLeadsPorIds` do Kommo, com os contatos). */
+export type CartaoDoKommoNaFila = Parameters<typeof cartaoDaFila>[0] & { pipeline_id: number; status_id: number };
+
+export interface LeitoresDoSemResposta {
+  /** Os cartões destes ids (lotes de 50 no Kommo). Lança se o Kommo não respondeu. */
+  cartoes(ids: number[]): Promise<CartaoDoKommoNaFila[]>;
+  /** Quando a Sofia falou por último com cada cartão (epoch s), do nosso banco. */
+  falaDaSofia(ids: number[]): Promise<Map<number, number>>;
+}
+
+/**
+ * Quem entra em "sem resposta": conversa aberta, NÃO LIDA, parada há mais de `semRespostaHoras`, a última fala não
+ * foi a Sofia, e o cartão está na entrada ou em EM QUALIFICAÇÃO do COMERCIAL. As que esperam há mais tempo primeiro;
+ * acima de `MAX_NAO_LIDAS`, corta (e `cortado` avisa). Lança se o Kommo ou o banco não responderam.
+ */
+export async function candidatosSemResposta(
+  conversas: ReadonlyMap<number, ConversaDoKommo>,
+  comercial: { id: number; statuses: ReadonlyArray<{ id: number; name: string; type?: number }> },
+  leitores: LeitoresDoSemResposta,
+  agora: Date,
+  tz: string,
+  prazos: PrazosDaFila = PRAZOS_DA_FILA,
+): Promise<{ candidatos: CandidatoDaFila[]; cortado: boolean }> {
+  const agoraEpoch = Math.floor(agora.getTime() / 1000);
+  const limite = agoraEpoch - prazos.semRespostaHoras * 3600;
+  const todas = [...conversas.entries()]
+    .filter(([, t]) => t.is_read === false && t.is_in_work !== false && (t.updated_at ?? 0) <= limite)
+    .sort((a, b) => (a[1].updated_at ?? 0) - (b[1].updated_at ?? 0));
+  const naoLidas = todas.slice(0, MAX_NAO_LIDAS);
+  const candidatos: CandidatoDaFila[] = [];
+  if (!naoLidas.length) return { candidatos, cortado: false };
+  const statusPorId = new Map(comercial.statuses.map((s) => [s.id, s]));
+  const ids = naoLidas.map(([id]) => id);
+  const [leads, sofia] = await Promise.all([leitores.cartoes(ids), leitores.falaDaSofia(ids)]);
+  const porId = new Map(leads.map((l) => [l.id, l]));
+  for (const [id, t] of naoLidas) {
+    const lead = porId.get(id);
+    if (!lead || lead.pipeline_id !== comercial.id) continue;
+    const status = statusPorId.get(lead.status_id);
+    if (!status || !etapaDoSemResposta(status.name, status.type)) continue;
+    const pista = regraSemResposta(
+      { lida: t.is_read === true, aberta: t.is_in_work !== false, atualizadaEpoch: t.updated_at ?? 0 },
+      sofia.get(id) ?? null,
+      agora,
+      tz,
+      prazos,
+    );
+    if (pista) candidatos.push({ grupo: 'sem-resposta', cartao: cartaoDaFila(lead, status.name), pista });
+  }
+  return { candidatos, cortado: todas.length > MAX_NAO_LIDAS };
+}
+
+/** A janela de conversas lida pela fila (cobre pelo menos o prazo da negociação). */
+export function janelaDeConversasDias(prazos: PrazosDaFila = PRAZOS_DA_FILA): number {
+  return Math.max(prazos.janelaConversasDias, prazos.negociacaoParadaDias + 1);
+}
+
+export interface ContagemSemResposta {
+  /** Quantos pacientes esperam resposta. `null` = o Kommo (ou o banco) não respondeu: NÃO é zero. */
+  total: number | null;
+  /** Tudo foi lido (nada cortado pelo teto de páginas): sem isto, o total pode ser maior. */
+  completo: boolean;
+}
+
+/**
+ * O contador do ícone da extensão (0.4.0): o MESMO critério do grupo "sem resposta" da Fila de hoje. Falha do
+ * Kommo vira `total: null` — nunca um 0 falso, que diria à atendente que ninguém está esperando.
+ */
+export async function contarSemResposta(
+  leitores: LeitoresDoSemResposta & {
+    /** As conversas mexidas desde `desdeEpoch` (até o teto de páginas). Lança se o Kommo não respondeu. */
+    conversas(desdeEpoch: number): Promise<{ conversas: ConversaDoKommo[]; completa: boolean }>;
+  },
+  comercial: { id: number; statuses: ReadonlyArray<{ id: number; name: string; type?: number }> } | null,
+  agora: Date,
+  tz: string,
+  prazos: PrazosDaFila = PRAZOS_DA_FILA,
+): Promise<ContagemSemResposta> {
+  if (!comercial) return { total: null, completo: false };
+  try {
+    const desde = Math.floor(agora.getTime() / 1000) - janelaDeConversasDias(prazos) * DIA_S;
+    const r = await leitores.conversas(desde);
+    const { candidatos, cortado } = await candidatosSemResposta(conversaPorCartao(r.conversas), comercial, leitores, agora, tz, prazos);
+    return { total: new Set(candidatos.map((c) => c.cartao.id)).size, completo: r.completa && !cortado };
+  } catch {
+    return { total: null, completo: false };
+  }
+}

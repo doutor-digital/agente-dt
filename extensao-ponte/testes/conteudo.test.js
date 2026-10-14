@@ -109,7 +109,8 @@ describe('content script (conteudo.js + leitor + impressão)', () => {
 describe('manifest', () => {
   it('permissões mínimas, content script só no WhatsApp Web, mundo isolado, painel lateral', () => {
     assert.equal(manifest.manifest_version, 3);
-    assert.deepEqual(manifest.permissions.slice().sort(), ['sidePanel', 'storage']);
+    // 0.4.0: `alarms` para o número no ícone (pacientes esperando resposta, a cada 5 min) — nada de tabs, scripting nem notifications
+    assert.deepEqual(manifest.permissions.slice().sort(), ['alarms', 'sidePanel', 'storage']);
     assert.deepEqual(manifest.host_permissions, ['https://agente-vps.doutordigitalconsultoria.com/*']);
     assert.equal(manifest.content_scripts.length, 1);
     assert.deepEqual(manifest.content_scripts[0].matches, ['https://web.whatsapp.com/*']);
