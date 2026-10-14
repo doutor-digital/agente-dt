@@ -12,6 +12,12 @@
  * Fase 4 (0.4.0): o botão "O que eu faço agora?" no cartão e o GUIA (`guia`): a unidade (Petrópolis × Caxias) primeiro,
  * a ⚠ Pendência, o que falta nesta etapa (com os campos para preencher e a prévia antes de gravar) e as saídas da
  * etapa (com o que falta em cada uma, o aviso dos robôs e a confirmação antes de mover).
+ *
+ * 0.5.0 (visual novo): o cartão vira um painel de leitura rápida — cabeçalho (paciente, telefone, selo da UNIDADE,
+ * qualificação e como foi achado), a TRILHA do funil com a etapa acesa e o tempo nela (azul = é sua; dourado = anda
+ * sozinha pela franquia, as duas cores do logo da Doutor Digital), "O que é seu agora" × "O que é da franquia", o
+ * cartão "Na franquia" (consulta, última consulta, tratamento, sessões e alta) e, na aba Respostas, as sugeridas para a
+ * etapa. Ícones em SVG desenhado aqui (`icones.js`); as regras da etapa ficam em `trilha.js`.
  */
 (function (raiz, fabrica) {
   var cjs = typeof module === 'object' && module.exports;
@@ -21,17 +27,19 @@
     cjs ? require('./ligacao.js') : raiz.PonteLigacao,
     cjs ? require('./respostas.js') : raiz.PonteRespostas,
     cjs ? require('./guia.js') : raiz.PonteGuia,
+    cjs ? require('./trilha.js') : raiz.PonteTrilha,
+    cjs ? require('./icones.js') : raiz.PonteIcones,
   );
   if (cjs) module.exports = api;
   else raiz.PonteDesenho = api;
-})(typeof self !== 'undefined' ? self : this, function (P, E, L, R, G) {
+})(typeof self !== 'undefined' ? self : this, function (P, E, L, R, G, T, Ic) {
   'use strict';
 
   var COMO = {
-    telefone: { rotulo: 'achei pelo telefone', nivel: 'forte' },
-    impressao: { rotulo: 'achei pelas mensagens', nivel: 'forte' },
-    nome: { rotulo: 'achei pelo nome — confira', nivel: 'fraco' },
-    manual: { rotulo: 'escolhido por você', nivel: 'forte' },
+    telefone: { rotulo: 'achei pelo telefone', nivel: 'forte', icone: 'telefone' },
+    impressao: { rotulo: 'achei pelas mensagens', nivel: 'forte', icone: 'mensagem' },
+    nome: { rotulo: 'achei pelo nome — confira', nivel: 'fraco', icone: 'lupa' },
+    manual: { rotulo: 'escolhido por você', nivel: 'forte', icone: 'escolhido' },
   };
 
   var PAUSA_POR = {
@@ -98,8 +106,32 @@
 
   function botaoAcao(doc, texto, acao, extra) {
     var a = { classe: 'botao botao--pequeno', tipo: 'button', dados: { acao: acao } };
-    if (extra) Object.keys(extra).forEach(function (k) { a[k] = extra[k]; });
-    return el(doc, 'button', a, texto);
+    var icone = extra && extra.icone;
+    if (extra) Object.keys(extra).forEach(function (k) { if (k !== 'icone') a[k] = extra[k]; });
+    return el(doc, 'button', a, icone ? ic(doc, icone) : null, texto);
+  }
+
+  /** O ícone (SVG decorativo). */
+  function ic(doc, nome, classe) {
+    return Ic.icone(doc, nome, classe);
+  }
+
+  /** O rótulo pequeno em caixa alta que abre cada bloco, com o ícone dele. */
+  function rotulo(doc, icone, texto, classe) {
+    return el(doc, 'p', { classe: 'rotulo' + (classe ? ' ' + classe : '') }, icone ? ic(doc, icone) : null, el(doc, 'span', null, texto));
+  }
+
+  /** "MARIA SOUZA 03/10/2026" → "MS" (as iniciais do avatar; só letras). */
+  function iniciais(nome) {
+    var p = String(nome == null ? '' : nome).replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s]/g, ' ').trim().split(/\s+/).filter(Boolean);
+    if (!p.length) return '?';
+    return (p[0].charAt(0) + (p.length > 1 ? p[p.length - 1].charAt(0) : '')).toUpperCase();
+  }
+
+  function avatar(doc, nome, classe) {
+    var a = el(doc, 'span', { classe: 'avatar' + (classe ? ' ' + classe : '') }, iniciais(nome));
+    a.setAttribute('aria-hidden', 'true');
+    return a;
   }
 
   /** Liga um botão a uma ação que devolve promessa: trava enquanto roda, e o erro vai para `msg`. */
@@ -124,70 +156,328 @@
     });
   }
 
+  var ICONE_DO_AVISO = { erro: 'alerta', configurar: 'cadeado', 'sem-whatsapp': 'mensagem', 'sem-conversa': 'mensagem', grupo: 'pessoa' };
+
   /** Caixa de aviso simples: procurando, sem conversa, grupo, erro, configurar. */
   function aviso(doc, tipo, titulo, texto) {
+    var icone = ICONE_DO_AVISO[tipo];
     return el(doc, 'section', { classe: 'aviso aviso--' + tipo, dados: { estado: tipo } },
+      icone ? el(doc, 'span', { classe: 'aviso__icone' }, ic(doc, icone)) : null,
       el(doc, 'p', { classe: 'aviso__titulo' }, titulo),
       texto ? el(doc, 'p', { classe: 'aviso__texto' }, texto) : null);
   }
 
-  // GANHO e PERDIDO: as duas saídas do funil, iguais em toda conta do Kommo
-  var GANHO = 142, PERDIDO = 143;
-
-  function barra(doc, b) {
-    if (!b || !b.etapas || !b.etapas.length) return null;
-    var atual = -1;
-    b.etapas.forEach(function (e, i) { if (e.atual) atual = i; });
-    // "Feita" é só etapa do caminho antes da atual. As saídas (GANHO/PERDIDO) nunca são "feitas", e um cartão
-    // PERDIDO não diz até onde chegou — nada se pinta como feito.
-    var perdido = atual >= 0 && b.etapas[atual].id === PERDIDO;
-    var trilho = el(doc, 'ol', { classe: 'barra', titulo: 'Funil ' + (b.funil || '') });
-    b.etapas.forEach(function (e, i) {
-      var saida = e.id === GANHO || e.id === PERDIDO;
-      var feita = !perdido && !saida && i < atual;
-      var classe = 'barra__etapa' + (i === atual ? ' barra__etapa--atual' : feita ? ' barra__etapa--feita' : '');
-      trilho.appendChild(el(doc, 'li', { classe: classe, titulo: e.nome }, el(doc, 'span', { classe: 'barra__nome' }, e.nome)));
-    });
-    return el(doc, 'div', { classe: 'bloco' },
-      el(doc, 'p', { classe: 'bloco__rotulo' }, 'Funil ' + (b.funil || 'COMERCIAL')),
-      trilho,
-      b.noFunil ? null : el(doc, 'p', { classe: 'nota' }, 'Este cartão não está no funil ' + (b.funil || 'COMERCIAL') + '.'));
-  }
-
-  function linha(doc, rotulo, valor, classe) {
+  function linha(doc, rotuloTexto, valor, classe, icone) {
     if (!valor) return null;
     return el(doc, 'div', { classe: 'linha' + (classe ? ' ' + classe : '') },
-      el(doc, 'span', { classe: 'linha__rotulo' }, rotulo),
+      el(doc, 'span', { classe: 'linha__rotulo' }, icone ? ic(doc, icone) : null, rotuloTexto),
       el(doc, 'span', { classe: 'linha__valor' }, valor));
   }
 
-  function franquia(doc, f) {
+  /** Pílula de estado: bom (verde), ruim (vermelho), atencao (âmbar), info (azul), neutro (cinza). */
+  function pilula(doc, texto, nivel, icone) {
+    return el(doc, 'span', { classe: 'pilula pilula--' + (nivel || 'neutro') }, icone ? ic(doc, icone) : null, texto);
+  }
+
+  // ── 0.5.0: o cabeçalho do paciente ──
+
+  /**
+   * Nome, telefone, o selo da UNIDADE (o ⌂ Unidade de atendimento; vazio na conta de duas unidades = "Escolha a
+   * unidade", que abre o guia — é o 1º passo dele), a qualificação e como o cartão foi achado.
+   */
+  function cabecalho(doc, r, acoes) {
+    var c = r.cartao;
+    var como = COMO[r.como] || { rotulo: r.como, nivel: 'fraco', icone: 'lupa' };
+    var u = T.unidadeDoCartao(c, r.franquia);
+    var q = T.qualificacao(c.qualificacao);
+    var selos = el(doc, 'div', { classe: 'selos' });
+    if (u && u.vazia) {
+      var escolher = el(doc, 'button', { classe: 'selo selo--vazia', tipo: 'button', dados: { acao: 'escolher-unidade', papel: 'unidade' }, titulo: 'O campo ⌂ Unidade de atendimento está vazio' },
+        ic(doc, 'casa'), 'Escolha a unidade');
+      if (acoes && acoes.abrirGuia) escolher.addEventListener('click', function () { acoes.abrirGuia(c.id); });
+      else escolher.disabled = true;
+      selos.appendChild(escolher);
+    } else if (u && u.nome) {
+      selos.appendChild(el(doc, 'span', { classe: 'selo selo--unidade selo--' + u.cor, dados: { papel: 'unidade' }, titulo: u.compartilhada ? '⌂ Unidade de atendimento' : 'Unidade' },
+        ic(doc, 'casa'), u.nome));
+    }
+    if (q) selos.appendChild(el(doc, 'span', { classe: 'selo selo--' + q.nivel, dados: { papel: 'qualificacao' }, titulo: '★ Qualificação' }, ic(doc, q.icone), q.rotulo));
+    selos.appendChild(el(doc, 'span', { classe: 'chip chip--' + como.nivel, dados: { como: r.como }, titulo: 'Como a Ponte achou este cartão' }, ic(doc, como.icone), como.rotulo));
+    if (c.fechado) selos.appendChild(el(doc, 'span', { classe: 'chip chip--fechado' }, 'fechado'));
+    return el(doc, 'header', { classe: 'paciente', dados: { bloco: 'paciente' } },
+      el(doc, 'div', { classe: 'paciente__topo' },
+        avatar(doc, c.nome),
+        el(doc, 'div', { classe: 'paciente__quem' },
+          el(doc, 'h1', { classe: 'cartao__nome' }, c.nome || 'Cartão ' + c.id),
+          c.telefone ? el(doc, 'p', { classe: 'paciente__telefone', dados: { papel: 'telefone' } }, ic(doc, 'telefone'), c.telefone) : null)),
+      selos);
+  }
+
+  // ── 0.5.0: a trilha do funil (a etapa acesa, o tempo nela e quem faz o cartão andar) ──
+
+  function marcaDoDono(doc, dono) {
+    var m = el(doc, 'span', { classe: 'marca marca--' + (dono || 'neutra') });
+    m.setAttribute('aria-hidden', 'true');
+    return m;
+  }
+
+  /** Como se lê o dono da etapa no título e para o leitor de tela. */
+  function textoDoDono(dono, semRobo) {
+    if (dono === 'franquia') return semRobo ? 'a recepção atualiza pela franquia' : 'anda sozinha pela franquia';
+    return dono === 'voce' ? 'é sua' : '';
+  }
+
+  /** A linha de estações. `lista` = `T.estacoes(barra)`. */
+  function linhaDeEstacoes(doc, lista, funil, semRobo) {
+    // funil curto (o TRATAMENTO tem 3 etapas): cabe o nome embaixo de cada estação
+    var rotulada = lista.length <= 4;
+    var ol = el(doc, 'ol', { classe: 'trilha__linha' + (rotulada ? ' trilha__linha--rotulada' : ''), dados: { papel: 'linha' } });
+    ol.setAttribute('aria-label', 'Etapas do funil ' + (funil || ''));
+    var antes = null;
+    lista.forEach(function (e) {
+      var classe = 'estacao estacao--' + (e.dono || 'neutra') + ' estacao--' + e.estado +
+        (e.saida ? ' estacao--saida' : '') + (e.saida && antes && !antes.saida ? ' estacao--primeira-saida' : '');
+      var dono = textoDoDono(e.dono, semRobo);
+      ol.appendChild(el(doc, 'li', { classe: classe, titulo: e.nome + (dono ? ' · ' + dono : ''), dados: { etapa: String(e.id) } },
+        el(doc, 'span', { classe: 'estacao__marca' }),
+        rotulada ? el(doc, 'span', { classe: 'estacao__nome' }, e.nome) : null,
+        el(doc, 'span', { classe: 'sr' }, e.nome + (e.estado === 'atual' ? ' (etapa atual)' : '') + (dono ? ', ' + dono : ''))));
+      antes = e;
+    });
+    return ol;
+  }
+
+  /** "Ver as 10 etapas": a lista com o nome de cada uma e de quem é. */
+  function todasAsEtapas(doc, lista, funil) {
+    var ol = el(doc, 'ol', { classe: 'todas' });
+    lista.forEach(function (e) {
+      ol.appendChild(el(doc, 'li', { classe: 'todas__item todas__item--' + e.estado },
+        marcaDoDono(doc, e.dono),
+        el(doc, 'span', { classe: 'todas__nome' }, e.nome),
+        e.estado === 'atual' ? el(doc, 'span', { classe: 'todas__aqui' }, 'está aqui') : null,
+        el(doc, 'span', { classe: 'todas__dono' }, e.dono === 'franquia' ? 'franquia' : e.dono === 'voce' ? 'sua' : '')));
+    });
+    return el(doc, 'details', { classe: 'trilha__todas' },
+      el(doc, 'summary', null, 'Ver as ' + lista.length + ' etapas', ic(doc, 'abaixo')),
+      ol);
+  }
+
+  /** O nome e o dono da etapa atual: da trilha, ou (cartão fora dela) do próprio cartão. */
+  function etapaAtual(c) {
+    var b = c.barraTratamento && c.barraTratamento.noFunil ? c.barraTratamento : c.barra;
+    var atual = ((b && b.etapas) || []).filter(function (e) { return e.atual; })[0];
+    return atual ? atual.nome : c.etapa || null;
+  }
+
+  /**
+   * A trilha: a linha do funil (COMERCIAL; no TRATAMENTO, a do TRATAMENTO — `c.barraTratamento`), a etapa atual em
+   * destaque com o tempo nela (`c.naEtapaDesde`) e de quem ela é, o que vem depois, a legenda e a lista completa.
+   */
+  function trilha(doc, r, agora) {
+    var c = r.cartao;
+    var trat = c.barraTratamento && c.barraTratamento.etapas && c.barraTratamento.etapas.length ? c.barraTratamento : null;
+    var noTratamento = !!(trat && trat.noFunil);
+    // servidor de hoje (sem a trilha do TRATAMENTO) com o cartão no TRATAMENTO: a linha do COMERCIAL não diz nada
+    var tratamentoSemTrilha = !noTratamento && c.barra && c.barra.noFunil === false && /tratamento/.test(T.normalizar(c.funil));
+    var b = noTratamento ? trat : tratamentoSemTrilha ? null : c.barra;
+    var lista = T.estacoes(b);
+    var funil = tratamentoSemTrilha ? c.funil : (b && b.funil) || c.funil || 'COMERCIAL';
+    var nome = etapaAtual(c);
+    var dono = T.donoDaEtapa(nome);
+    var tempo = T.tempoNaEtapa(c.naEtapaDesde, agora);
+    var atrasado = T.relogioAtrasado(nome, c.naEtapaDesde, agora);
+    // 0.5.0: unidade com a movimentação pela franquia desligada — nada de prometer que o cartão anda sozinho
+    var semRobo = r.franquiaAndaSozinha === false;
+    var depois = T.depoisDaEtapa(nome, semRobo);
+    var fora = !noTratamento && !tratamentoSemTrilha && b && b.noFunil === false;
+
+    var aqui = el(doc, 'div', { classe: 'aqui aqui--' + (dono || 'neutra'), dados: { papel: 'etapa-atual', dono: dono || '' } },
+      el(doc, 'div', { classe: 'aqui__topo' },
+        dono ? el(doc, 'span', { classe: 'aqui__dono' }, ic(doc, dono === 'franquia' ? 'franquia' : 'pessoa'), T.rotuloDoDono(dono, semRobo)) : el(doc, 'span', { classe: 'aqui__dono' }, 'Etapa atual'),
+        tempo ? el(doc, 'span', { classe: 'aqui__tempo' + (atrasado ? ' aqui__tempo--atrasado' : ''), titulo: 'Há quanto tempo o cartão está nesta etapa', dados: { papel: 'tempo-na-etapa' } }, ic(doc, 'relogio'), tempo) : null),
+      el(doc, 'p', { classe: 'aqui__etapa' }, nome || 'Etapa desconhecida'),
+      fora ? el(doc, 'p', { classe: 'aqui__depois' }, 'Este cartão não está no funil ' + (c.barra.funil || 'COMERCIAL') + ' (está em ' + [c.funil, c.etapa].filter(Boolean).join(' › ') + ').') : null,
+      depois ? el(doc, 'p', { classe: 'aqui__depois' }, ic(doc, 'seta'), el(doc, 'span', null, depois)) : null);
+
+    return el(doc, 'section', { classe: 'bloco-cartao trilha', dados: { bloco: 'trilha' } },
+      el(doc, 'div', { classe: 'trilha__cab' },
+        rotulo(doc, null, 'Onde está o cartão'),
+        el(doc, 'span', { classe: 'trilha__funil' }, 'Funil ' + funil)),
+      noTratamento || tratamentoSemTrilha ? el(doc, 'p', { classe: 'trilha__antes' }, ic(doc, 'check'), 'COMERCIAL concluído: o paciente fechou o tratamento') : null,
+      lista.length ? linhaDeEstacoes(doc, lista, funil, semRobo) : null,
+      aqui,
+      el(doc, 'div', { classe: 'trilha__pe' },
+        el(doc, 'div', { classe: 'legenda' },
+          el(doc, 'span', { classe: 'legenda__item' }, marcaDoDono(doc, 'voce'), 'É sua'),
+          el(doc, 'span', { classe: 'legenda__item' }, marcaDoDono(doc, 'franquia'), semRobo ? 'A recepção atualiza pela franquia' : 'Anda sozinha pela franquia')),
+        lista.length ? todasAsEtapas(doc, lista, funil) : null));
+  }
+
+  // ── 0.5.0: "O que é seu agora" × "O que é da franquia" ──
+
+  function blocoDoAgora(doc, r, acoes) {
+    var c = r.cartao;
+    var ag = r.franquia && r.franquia.agenda;
+    var u = T.unidadeDoCartao(c, r.franquia);
+    var semRobo = r.franquiaAndaSozinha === false;
+    var lista = T.acoesDaEtapa(etapaAtual(c), {
+      proximoPasso: r.resumo && r.resumo.proximoPasso,
+      qualificacao: c.qualificacao,
+      proximaSessao: ag && ag.proximaSessao,
+      semRobo: semRobo,
+    });
+    // conta de duas unidades com o campo vazio: escolher a unidade vem antes de tudo (o guia trava o resto)
+    if (u && u.vazia) lista = ['Escolher a unidade do paciente: sem ela, a Ponte não grava nem muda a etapa.'].concat(lista).slice(0, 3);
+    var ul = el(doc, 'ul', { classe: 'agora__lista' });
+    lista.forEach(function (t) { ul.appendChild(el(doc, 'li', { classe: 'agora__item' }, ic(doc, 'seta'), el(doc, 'span', null, t))); });
+    var abrirGuia = null;
+    if (acoes && acoes.abrirGuia) {
+      abrirGuia = el(doc, 'button', { classe: 'botao botao--primario botao--guia', tipo: 'button', dados: { acao: 'abrir-guia' } },
+        ic(doc, 'guia'), el(doc, 'span', null, 'O que eu faço agora?'), ic(doc, 'seta', 'icone--fim'));
+      abrirGuia.addEventListener('click', function () { acoes.abrirGuia(c.id); });
+    }
+    // o que NÃO se faz no Kommo: a faixa dourada no pé do mesmo cartão (azul = seu; dourado = da franquia)
+    return el(doc, 'section', { classe: 'bloco-cartao agora', dados: { bloco: 'agora' } },
+      el(doc, 'div', { classe: 'agora__seu', dados: { bloco: 'seu-agora' } },
+        rotulo(doc, 'pessoa', 'O que é seu agora', 'rotulo--voce'),
+        lista.length ? ul : el(doc, 'p', { classe: 'nota' }, 'Nada pendente nesta etapa.'),
+        abrirGuia),
+      el(doc, 'div', { classe: 'agora__franquia', dados: { bloco: 'da-franquia' } },
+        rotulo(doc, 'cadeado', 'O que é da franquia', 'rotulo--franquia'),
+        el(doc, 'p', { classe: 'agora__regra' }, T.regraDaFranquia(semRobo))));
+  }
+
+  // ── 0.5.0: o cartão "Na franquia" ──
+
+  function nivelDoTratamento(status) {
+    var n = T.normalizar(status);
+    if (/finaliz|conclu|alta/.test(n)) return 'bom';
+    if (/cancel/.test(n)) return 'ruim';
+    if (/pendent|aguard/.test(n)) return 'atencao';
+    return 'info';
+  }
+
+  function blocoDaConsulta(doc, p, tz, agora) {
+    var s = T.situacaoDaConsulta(p.status);
+    var semana = T.diaDaSemana(p.quando, tz);
+    var falta = T.diasAte(p.quando, agora, tz);
+    return el(doc, 'div', { classe: 'consulta', dados: { papel: 'proxima-consulta' } },
+      el(doc, 'div', { classe: 'consulta__data' },
+        semana ? el(doc, 'span', { classe: 'consulta__semana' }, semana) : null,
+        el(doc, 'span', { classe: 'consulta__dia' }, p.dia || '—')),
+      el(doc, 'div', { classe: 'consulta__info' },
+        el(doc, 'p', { classe: 'consulta__titulo' }, 'Próxima consulta', falta ? el(doc, 'span', { classe: 'consulta__falta' }, falta) : null),
+        el(doc, 'p', { classe: 'consulta__hora' }, [p.hora, p.categoria].filter(Boolean).join(' · ') || 'Horário não informado'),
+        el(doc, 'p', { classe: 'consulta__quem' },
+          p.fisioterapeuta ? el(doc, 'span', null, p.fisioterapeuta) : null,
+          s ? pilula(doc, s.rotulo, s.nivel) : null)));
+  }
+
+  /** As sessões do tratamento: feitas, faltas e marcadas numa barra só, e a próxima. */
+  function blocoDasSessoes(doc, ag, tz, agora) {
+    var s = (ag && ag.sessoes) || { realizadas: 0, faltas: 0, futuras: 0 };
+    var total = (s.realizadas || 0) + (s.faltas || 0) + (s.futuras || 0);
+    var barra = el(doc, 'div', { classe: 'sessoes__barra' });
+    barra.setAttribute('role', 'img');
+    barra.setAttribute('aria-label', s.realizadas + ' sessões feitas, ' + s.faltas + ' faltas, ' + s.futuras + ' marcadas');
+    [['feita', s.realizadas], ['falta', s.faltas], ['marcada', s.futuras]].forEach(function (x) {
+      if (!x[1]) return;
+      var seg = el(doc, 'span', { classe: 'sessoes__seg sessoes__seg--' + x[0] });
+      seg.style.flexGrow = String(x[1]);
+      barra.appendChild(seg);
+    });
+    var ps = ag && ag.proximaSessao;
+    var quando = ps ? [T.diaDaSemana(ps.quando, tz), ps.dia, ps.hora && 'às ' + ps.hora].filter(Boolean).join(' ') : null;
+    var falta = ps ? T.diasAte(ps.quando, agora, tz) : null;
+    return el(doc, 'div', { classe: 'sessoes', dados: { papel: 'sessoes' } },
+      el(doc, 'div', { classe: 'sessoes__cab' },
+        el(doc, 'span', { classe: 'sessoes__titulo' }, ic(doc, 'sessao'), 'Sessões'),
+        el(doc, 'span', { classe: 'sessoes__total' }, total ? total + (total === 1 ? ' no tratamento' : ' no tratamento') : 'nenhuma ainda')),
+      total ? barra : null,
+      el(doc, 'p', { classe: 'sessoes__numeros' },
+        el(doc, 'span', { classe: 'n n--feita' }, el(doc, 'b', null, String(s.realizadas || 0)), (s.realizadas === 1 ? ' feita' : ' feitas')),
+        el(doc, 'span', { classe: 'n n--falta' }, el(doc, 'b', null, String(s.faltas || 0)), (s.faltas === 1 ? ' falta' : ' faltas')),
+        el(doc, 'span', { classe: 'n n--marcada' }, el(doc, 'b', null, String(s.futuras || 0)), (s.futuras === 1 ? ' marcada' : ' marcadas'))),
+      quando ? el(doc, 'p', { classe: 'sessoes__proxima', dados: { papel: 'proxima-sessao' } },
+        ic(doc, 'calendario'), el(doc, 'span', null, 'Próxima sessão: ', el(doc, 'b', null, quando)), falta ? el(doc, 'span', { classe: 'consulta__falta' }, falta) : null) : null);
+  }
+
+  /**
+   * "Na franquia": o que o CRM da franquia da unidade DO CARTÃO sabe (a mesma leitura do widget "Agenda da franquia"),
+   * mastigado: próxima consulta, última consulta (veio ou faltou), tratamento, sessões e alta. Sem cadastro, diz com
+   * clareza; na conta de duas unidades com o campo vazio, pede a unidade (cada uma tem a sua franquia).
+   */
+  function franquia(doc, r, acoes, agora) {
+    var f = r.franquia;
     if (!f || f.franquia === false) return null;
+    var c = r.cartao || {};
+    var tz = f.tz;
+    var u = T.unidadeDoCartao(c, f);
     var corpo = [];
-    if (f.erro) corpo.push(el(doc, 'p', { classe: 'nota' }, 'A franquia não respondeu agora.'));
-    else if (!f.paciente) corpo.push(el(doc, 'p', { classe: 'nota' }, 'Paciente não encontrado na franquia.'));
-    else {
+    if ((u && u.vazia) || T.franquiaPedeUnidade(f)) {
+      var b = acoes && acoes.abrirGuia ? botaoAcao(doc, 'Escolher a unidade', 'escolher-unidade', { icone: 'casa' }) : null;
+      if (b) b.addEventListener('click', function () { acoes.abrirGuia(c.id); });
+      corpo.push(el(doc, 'div', { classe: 'fq__vazio fq__vazio--unidade', dados: { papel: 'franquia-sem-unidade' } },
+        el(doc, 'span', { classe: 'fq__vazio-icone' }, ic(doc, 'casa')),
+        el(doc, 'p', { classe: 'fq__vazio-titulo' }, 'Escolha a unidade para ver a franquia'),
+        el(doc, 'p', { classe: 'fq__vazio-texto' }, 'Esta conta do Kommo atende mais de uma unidade, e cada uma tem a sua franquia. Com a unidade escolhida, a consulta e as sessões aparecem aqui.'),
+        b));
+    } else if (f.erro && !f.paciente) {
+      corpo.push(el(doc, 'div', { classe: 'fq__vazio', dados: { papel: 'franquia-erro' } },
+        el(doc, 'span', { classe: 'fq__vazio-icone fq__vazio-icone--alerta' }, ic(doc, 'alerta')),
+        el(doc, 'p', { classe: 'fq__vazio-titulo' }, f.erro === 'franquia indisponível' ? 'A franquia não respondeu agora' : 'Não deu para ler a franquia'),
+        el(doc, 'p', { classe: 'fq__vazio-texto' }, f.erro === 'franquia indisponível' ? 'Troque de conversa e volte em um minuto.' : String(f.erro))));
+    } else if (!f.paciente) {
+      corpo.push(el(doc, 'div', { classe: 'fq__vazio', dados: { papel: 'sem-cadastro' } },
+        el(doc, 'span', { classe: 'fq__vazio-icone' }, ic(doc, 'franquia')),
+        el(doc, 'p', { classe: 'fq__vazio-titulo' }, 'Sem cadastro na franquia'),
+        el(doc, 'p', { classe: 'fq__vazio-texto' }, 'Este paciente ainda não tem cadastro na franquia. Quando a consulta for marcada lá, ela aparece aqui' +
+          (r.franquiaAndaSozinha === false ? '.' : ' e o cartão anda sozinho para AGENDADO.'))));
+    } else {
       var ag = f.agenda || {};
       var p = ag.proximaConsulta;
-      if (p) {
-        corpo.push(linha(doc, 'Consulta marcada', [p.dia, p.hora && 'às ' + p.hora].filter(Boolean).join(' ') +
-          (p.status ? ' · ' + p.status : '') + (p.fisioterapeuta ? ' · ' + p.fisioterapeuta : ''), 'linha--ok'));
-      } else {
-        corpo.push(linha(doc, 'Consulta marcada', 'nenhuma', 'linha--alerta'));
+      var t = f.tratamento;
+      var noTrat = T.chaveDaEtapa(etapaAtual(c)) === 'em-tratamento' || T.chaveDaEtapa(etapaAtual(c)) === 'alta';
+      // em tratamento, "nenhuma consulta" não é alerta: a agenda dele são as sessões
+      if (p) corpo.push(blocoDaConsulta(doc, p, tz, agora));
+      else if (!t && !noTrat) corpo.push(el(doc, 'div', { classe: 'fq__linha fq__linha--alerta', dados: { papel: 'sem-consulta' } }, ic(doc, 'calendario'), el(doc, 'span', null, 'Nenhuma consulta marcada')));
+      var ult = ag.ultimaConsulta;
+      if (ult) {
+        var su = T.situacaoDaConsulta(ult.status);
+        corpo.push(el(doc, 'div', { classe: 'fq__linha', dados: { papel: 'ultima-consulta' } },
+          el(doc, 'span', { classe: 'fq__rotulo' }, 'Última consulta'),
+          el(doc, 'span', { classe: 'fq__valor' }, ult.dia || '—', su ? pilula(doc, su.rotulo, su.nivel, su.nivel === 'bom' ? 'check' : su.nivel === 'ruim' ? 'x' : null) : null)));
       }
-      var u = ag.ultimaConsulta;
-      if (u) corpo.push(linha(doc, 'Última consulta', [u.dia, u.status].filter(Boolean).join(' · ')));
-      if (ag.proximaSessao) corpo.push(linha(doc, 'Próxima sessão', [ag.proximaSessao.dia, ag.proximaSessao.hora].filter(Boolean).join(' às ')));
-      if (f.tratamento) corpo.push(linha(doc, 'Tratamento', [f.tratamento.status, f.tratamento.categoria].filter(Boolean).join(' · ')));
-      if (f.duplicadoNaFranquia) corpo.push(el(doc, 'p', { classe: 'nota nota--alerta' }, 'A franquia tem este paciente em dois cadastros.'));
+      if (t) {
+        corpo.push(el(doc, 'div', { classe: 'fq__linha', dados: { papel: 'tratamento' } },
+          el(doc, 'span', { classe: 'fq__rotulo' }, 'Tratamento'),
+          el(doc, 'span', { classe: 'fq__valor' }, t.categoria ? el(doc, 'span', { classe: 'fq__fraco' }, t.categoria) : null, t.status ? pilula(doc, t.status, nivelDoTratamento(t.status)) : null)));
+      } else if (!noTrat) {
+        corpo.push(el(doc, 'div', { classe: 'fq__linha', dados: { papel: 'tratamento' } },
+          el(doc, 'span', { classe: 'fq__rotulo' }, 'Tratamento'),
+          el(doc, 'span', { classe: 'fq__valor fq__fraco' }, 'nenhum aberto')));
+      }
+      var s = ag.sessoes;
+      if (t || noTrat || (s && (s.realizadas || s.futuras || s.faltas))) corpo.push(blocoDasSessoes(doc, ag, tz, agora));
+      if (t || noTrat) {
+        var alta = T.teveAlta(t, etapaAtual(c));
+        corpo.push(el(doc, 'div', { classe: 'fq__linha', dados: { papel: 'alta' } },
+          el(doc, 'span', { classe: 'fq__rotulo' }, 'Alta'),
+          el(doc, 'span', { classe: 'fq__valor' }, alta ? pilula(doc, 'Recebeu alta', 'bom', 'alta') : el(doc, 'span', { classe: 'fq__fraco' }, 'ainda não'))));
+      }
+      if (f.duplicadoNaFranquia) corpo.push(el(doc, 'p', { classe: 'nota nota--alerta' }, ic(doc, 'duplicado'), 'A franquia tem este paciente em dois cadastros.'));
     }
-    return el(doc, 'div', { classe: 'bloco', dados: { bloco: 'franquia' } }, el(doc, 'p', { classe: 'bloco__rotulo' }, 'Franquia'), ...corpo.filter(Boolean));
+    return el(doc, 'section', { classe: 'bloco-cartao fq', dados: { bloco: 'franquia' } },
+      el(doc, 'div', { classe: 'fq__cab' },
+        rotulo(doc, 'franquia', 'Na franquia', 'rotulo--franquia'),
+        f.unidade ? el(doc, 'span', { classe: 'fq__unidade' }, f.unidade) : null),
+      ...corpo);
   }
 
   function origem(doc, a) {
     if (!a) return null;
     var partes = [a.titulo && '"' + a.titulo + '"', a.campanha, a.plataforma].filter(Boolean);
-    return linha(doc, 'Veio de', partes.length ? partes.join(' · ') : a.origem || a.anuncio);
+    return linha(doc, 'Veio de', partes.length ? partes.join(' · ') : a.origem || a.anuncio, null, 'anuncio');
   }
 
   function listaDeCartoes(doc, lista, acoes, classe) {
@@ -220,32 +510,32 @@
     var base = r.resumo;
     var ia = r.resumoIa;
     if (!base && !ia && !r.iaDisponivel) return null;
-    var rotulo = el(doc, 'p', { classe: 'bloco__rotulo' }, ia && ia.ia ? 'Resumo (IA)' : 'Resumo');
+    // 0.5.0: o próximo passo do resumo virou a 1ª linha de "O que é seu agora"; aqui ficam só os fatos
+    var titulo = el(doc, 'span', null, ia && ia.ia ? 'Resumo (IA)' : 'Resumo');
     var lista = el(doc, 'ul', { classe: 'resumo__linhas' });
     preencherResumo(doc, lista, ia ? ia.linhas : base ? base.linhas : []);
-    var passo = !ia && base && base.proximoPasso
-      ? el(doc, 'p', { classe: 'resumo__passo' }, el(doc, 'strong', null, 'Próximo passo: '), base.proximoPasso)
-      : null;
     var nota = el(doc, 'p', { classe: 'nota', dados: { papel: 'nota-resumo' } }, ia ? ia.aviso || (ia.ia ? NOTA_DA_IA : '') : '');
     var botaoIa = null;
     if (r.iaDisponivel && !ia && acoes && acoes.resumirComIa) {
-      botaoIa = botaoAcao(doc, 'Resumir com IA', 'resumir-ia');
+      botaoIa = botaoAcao(doc, 'Resumir com IA', 'resumir-ia', { icone: 'brilho' });
+      var textoIa = botaoIa.lastChild;
       aoClicar(botaoIa, nota, function () {
-        botaoIa.textContent = 'Resumindo…';
+        textoIa.textContent = 'Resumindo…';
         return Promise.resolve(acoes.resumirComIa(r.cartao.id)).catch(function (e) {
-          botaoIa.textContent = 'Resumir com IA';
+          textoIa.textContent = 'Resumir com IA';
           throw e;
         });
       }, function (res) {
         if (!res || !res.linhas) return;
         preencherResumo(doc, lista, res.linhas);
-        if (passo) passo.remove();
-        rotulo.textContent = res.ia ? 'Resumo (IA)' : 'Resumo';
+        titulo.textContent = res.ia ? 'Resumo (IA)' : 'Resumo';
         nota.textContent = res.aviso || (res.ia ? NOTA_DA_IA : '');
         botaoIa.remove();
       });
     }
-    return el(doc, 'div', { classe: 'bloco bloco--resumo', dados: { bloco: 'resumo' } }, rotulo, lista, passo, nota, botaoIa);
+    return el(doc, 'section', { classe: 'bloco-cartao resumo', dados: { bloco: 'resumo' } },
+      el(doc, 'div', { classe: 'resumo__cab' }, el(doc, 'p', { classe: 'rotulo' }, ic(doc, 'lista'), titulo), botaoIa),
+      lista, nota);
   }
 
   // ── fase 2: pausar a Sofia neste paciente ──
@@ -311,9 +601,9 @@
     var sofia = c.sofia || {};
     var p = c.pausaDoLead;
     var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-pausa' } });
-    var bloco = el(doc, 'div', { classe: 'bloco bloco--pausa', dados: { bloco: 'pausa' } });
+    var bloco = el(doc, 'div', { classe: 'pausa', dados: { bloco: 'pausa' } });
     if (p && p.ate) {
-      var retomar = botaoAcao(doc, 'Retomar agora', 'retomar');
+      var retomar = botaoAcao(doc, 'Retomar agora', 'retomar', { icone: 'atualizar' });
       aoClicar(retomar, msg, function () { return acoes.retomar(c.id); });
       bloco.appendChild(el(doc, 'p', { classe: 'pausa__estado', dados: { papel: 'estado-pausa' } }, textoDaPausa(p)));
       bloco.appendChild(retomar);
@@ -321,7 +611,7 @@
       bloco.appendChild(el(doc, 'p', { classe: 'nota' },
         'A caixinha "Pausar IA" está marcada no cartão, sem data para voltar. Para a Sofia voltar, desmarque no Kommo.'));
     } else {
-      var abrir = botaoAcao(doc, 'Pausar a Sofia neste paciente', 'abrir-pausa');
+      var abrir = botaoAcao(doc, 'Pausar a Sofia neste paciente', 'abrir-pausa', { icone: 'pausa' });
       var form = formularioDePausa(doc, c.id, acoes, msg, function () {
         form.hidden = true;
         abrir.hidden = false;
@@ -517,47 +807,58 @@
         el(doc, 'p', { classe: 'duplicados__cautela' }, 'Outro contato com o mesmo número: pode ser da família — confira se é a mesma pessoa antes de juntar.'),
         ul2);
     }
+    // 0.5.0: recolhida (uma linha no topo, não empurra a trilha); abre no clique
     return el(doc, 'section', { classe: 'faixa faixa--amarela', dados: { bloco: 'duplicados' } },
-      el(doc, 'p', { classe: 'faixa__titulo' }, titulo),
-      ul,
-      numero,
-      el(doc, 'p', { classe: 'faixa__regra' }, 'Confira se é a mesma pessoa antes de juntar. Fica o que veio do anúncio; o outro é juntado (Mesclar) no Kommo, nunca apagado.'));
+      el(doc, 'details', { classe: 'faixa__abre' },
+        el(doc, 'summary', { classe: 'faixa__cab' }, ic(doc, 'duplicado'), el(doc, 'span', { classe: 'faixa__titulo' }, titulo), el(doc, 'span', { classe: 'faixa__ver' }, 'ver', ic(doc, 'abaixo'))),
+        ul,
+        numero,
+        el(doc, 'p', { classe: 'faixa__regra' }, 'Confira se é a mesma pessoa antes de juntar. Fica o que veio do anúncio; o outro é juntado (Mesclar) no Kommo, nunca apagado.')));
   }
 
-  /** Cartão achado. */
-  function cartao(doc, r, acoes) {
+  /**
+   * A Sofia neste cartão: o estado (ativa, pausada e por quê) e "Pausar a Sofia neste paciente". Some quando a unidade
+   * não tem a IA (`r.sofiaNaUnidade === false`).
+   */
+  function blocoDaSofia(doc, r, acoes) {
+    if (r.sofiaNaUnidade === false) return null;
     var c = r.cartao;
-    var como = COMO[r.como] || { rotulo: r.como, nivel: 'fraco' };
     var sofia = c.sofia || {};
-    var textoSofia = sofia.pausada ? (PAUSA_POR[sofia.por] || 'pausada') + (sofia.ate ? ' até ' + quando(sofia.ate) : '') : 'ativa';
+    var texto = sofia.pausada ? (PAUSA_POR[sofia.por] || 'pausada') + (sofia.ate ? ' até ' + quando(sofia.ate) : '') : 'ativa: ela responde este paciente';
+    return el(doc, 'section', { classe: 'bloco-cartao sofia' + (sofia.pausada ? ' sofia--pausada' : ''), dados: { bloco: 'sofia' } },
+      el(doc, 'div', { classe: 'sofia__cab' },
+        rotulo(doc, 'robo', 'Sofia (IA)'),
+        sofia.pausada ? pilula(doc, 'Pausada', 'atencao', 'pausa') : pilula(doc, 'Ativa', 'bom')),
+      el(doc, 'p', { classe: 'sofia__estado', dados: { papel: 'estado-sofia' } }, 'Sofia ' + texto),
+      blocoDaPausa(doc, r, acoes));
+  }
 
-    // 0.4.0: o guia da etapa — um botão grande, logo abaixo da etapa
-    var abrirGuia = null;
-    if (acoes && acoes.abrirGuia) {
-      abrirGuia = el(doc, 'button', { classe: 'botao botao--primario botao--guia', tipo: 'button', dados: { acao: 'abrir-guia' } }, 'O que eu faço agora?');
-      abrirGuia.addEventListener('click', function () { acoes.abrirGuia(c.id); });
-    }
+  /** O que o Kommo guarda do cartão: responsável, de onde veio, etiquetas e o link. */
+  function blocoDoKommo(doc, r, acoes) {
+    var c = r.cartao;
+    return el(doc, 'section', { classe: 'bloco-cartao kommo', dados: { bloco: 'kommo' } },
+      rotulo(doc, 'etiqueta', 'No Kommo'),
+      linha(doc, 'Responsável', c.responsavel || 'ninguém', null, 'pessoa'),
+      origem(doc, c.anuncio),
+      el(doc, 'div', { classe: 'kommo__etiquetas' }, el(doc, 'span', { classe: 'linha__rotulo' }, ic(doc, 'etiqueta'), 'Etiquetas'), blocoDeEtiquetas(doc, r, acoes)),
+      el(doc, 'a', { classe: 'botao botao--kommo', href: c.link }, ic(doc, 'externo'), 'Abrir no Kommo'));
+  }
 
+  /** Cartão achado. `agora` só para o teste (o tempo na etapa e "amanhã"). */
+  function cartao(doc, r, acoes, agora) {
+    var c = r.cartao;
+    var hoje = agora || new Date();
     return el(doc, 'section', { classe: 'cartao', dados: { estado: 'achado', lead: String(c.id) } },
-      el(doc, 'div', { classe: 'cartao__topo' },
-        el(doc, 'span', { classe: 'chip chip--' + como.nivel, dados: { como: r.como } }, como.rotulo),
-        c.fechado ? el(doc, 'span', { classe: 'chip chip--fechado' }, 'fechado') : null),
-      el(doc, 'h1', { classe: 'cartao__nome' }, c.nome || 'Cartão ' + c.id),
-      el(doc, 'p', { classe: 'cartao__etapa' }, [c.funil, c.etapa].filter(Boolean).join(' › ')),
-      abrirGuia,
+      cabecalho(doc, r, acoes),
       faixaDeDuplicados(doc, r),
+      trilha(doc, r, hoje),
+      blocoDoAgora(doc, r, acoes),
+      franquia(doc, r, acoes, hoje),
       resumo(doc, r, acoes),
-      barra(doc, c.barra),
-      el(doc, 'div', { classe: 'bloco' },
-        linha(doc, 'Responsável', c.responsavel || 'ninguém'),
-        linha(doc, 'Sofia', textoSofia, sofia.pausada ? 'linha--alerta' : 'linha--ok'),
-        origem(doc, c.anuncio),
-        blocoDeEtiquetas(doc, r, acoes)),
-      blocoDaPausa(doc, r, acoes),
-      franquia(doc, r.franquia),
-      el(doc, 'a', { classe: 'botao botao--primario', href: c.link }, 'Abrir no Kommo'),
+      blocoDaSofia(doc, r, acoes),
+      blocoDoKommo(doc, r, acoes),
       r.outrosCartoes && r.outrosCartoes.length
-        ? el(doc, 'div', { classe: 'bloco' }, el(doc, 'p', { classe: 'bloco__rotulo' }, 'Outros cartões deste paciente'), listaDeCartoes(doc, r.outrosCartoes, acoes))
+        ? el(doc, 'section', { classe: 'bloco-cartao outros', dados: { bloco: 'outros' } }, rotulo(doc, 'duplicado', 'Outros cartões deste paciente'), listaDeCartoes(doc, r.outrosCartoes, acoes))
         : null);
   }
 
@@ -604,32 +905,41 @@
     var abrir = botaoAcao(doc, 'Abrir conversa', 'abrir-conversa', {
       desligado: !temTelefone,
       titulo: temTelefone ? 'Abre esta conversa no WhatsApp Web (não envia nada)' : 'Sem telefone no Kommo',
+      icone: 'mensagem',
     });
-    var copiar = botaoAcao(doc, 'Copiar telefone', 'copiar', { desligado: !temTelefone });
+    abrir.className += ' botao--cheio';
+    var copiar = botaoAcao(doc, 'Copiar telefone', 'copiar', { desligado: !temTelefone, icone: 'copiar' });
+    var textoCopiar = copiar.lastChild;
     if (temTelefone) {
       aoClicar(abrir, msg, function () { return acoes.abrirConversa(it.telefone); });
       aoClicar(copiar, msg, function () { return acoes.copiar(it.telefoneVisivel || it.telefone); }, function () {
-        copiar.textContent = 'Copiado';
-        setTimeout(function () { copiar.textContent = 'Copiar telefone'; }, 1500);
+        textoCopiar.textContent = 'Copiado';
+        setTimeout(function () { textoCopiar.textContent = 'Copiar telefone'; }, 1500);
       });
     }
     return el(doc, 'li', { classe: 'fila__item', dados: { lead: String(it.leadId) } },
-      el(doc, 'div', { classe: 'fila__linha' },
-        el(doc, 'span', { classe: 'fila__nome' }, it.nome || 'Cartão ' + it.leadId),
-        it.passado ? el(doc, 'span', { classe: 'fila__tempo' }, relativo(it.quando, agora)) : null),
-      el(doc, 'p', { classe: 'fila__detalhe' }, [it.etapa, it.detalhe].filter(Boolean).join(' · ')),
-      el(doc, 'p', { classe: 'fila__telefone' }, it.telefoneVisivel ||
-        (it.semTelefone === false ? 'telefone não lido agora — clique em Atualizar' : 'sem telefone no Kommo')),
-      el(doc, 'div', { classe: 'fila__botoes' }, abrir, copiar,
-        it.link ? el(doc, 'a', { classe: 'botao botao--pequeno', href: it.link }, 'Abrir no Kommo') : null),
-      msg);
+      avatar(doc, it.nome, 'avatar--pequeno'),
+      el(doc, 'div', { classe: 'fila__corpo' },
+        el(doc, 'div', { classe: 'fila__linha' },
+          el(doc, 'span', { classe: 'fila__nome' }, it.nome || 'Cartão ' + it.leadId),
+          it.passado ? el(doc, 'span', { classe: 'fila__tempo' }, ic(doc, 'relogio'), relativo(it.quando, agora)) : null),
+        el(doc, 'p', { classe: 'fila__detalhe' }, [it.etapa, it.detalhe].filter(Boolean).join(' · ')),
+        el(doc, 'p', { classe: 'fila__telefone' + (it.telefoneVisivel ? '' : ' fila__telefone--sem') }, it.telefoneVisivel ||
+          (it.semTelefone === false ? 'telefone não lido agora — clique em Atualizar' : 'sem telefone no Kommo')),
+        el(doc, 'div', { classe: 'fila__botoes' }, abrir, copiar,
+          it.link ? el(doc, 'a', { classe: 'botao botao--pequeno botao--icone', href: it.link, titulo: 'Abrir no Kommo' }, ic(doc, 'externo'), el(doc, 'span', { classe: 'sr' }, 'Abrir no Kommo')) : null),
+        msg));
   }
 
-  /** A aba "Fila de hoje": um grupo por etapa do COMERCIAL, com contador, e os itens com os três botões. */
+  /** A cor de cada grupo da fila (o mesmo grupo, a mesma cor nos números e na lista). */
+  var COR_DO_GRUPO = { 'sem-resposta': 'vermelho', retomar: 'ambar', confirmar: 'azul', faltou: 'magenta', negociacao: 'teal' };
+  var ICONE_DO_GRUPO = { 'sem-resposta': 'mensagem', retomar: 'relogio', confirmar: 'calendario', faltou: 'x', negociacao: 'sessao' };
+
+  /** A aba "Fila de hoje": os números por grupo no topo, e um grupo por etapa do COMERCIAL com os três botões. */
   function fila(doc, f, acoes, agora) {
     var grupos = (f && f.grupos) || [];
     var total = grupos.reduce(function (s, g) { return s + (g.total || 0); }, 0);
-    var atualizar = botaoAcao(doc, 'Atualizar', 'atualizar-fila');
+    var atualizar = botaoAcao(doc, 'Atualizar', 'atualizar-fila', { icone: 'atualizar' });
     atualizar.addEventListener('click', function () { if (acoes && acoes.atualizar) acoes.atualizar(); });
     // fase 3: "Começar a ligar" — um paciente por vez; a Ponte abre a conversa, a atendente clica no 📞
     var ligar = null;
@@ -637,29 +947,45 @@
       var feitos = acoes.feitosHoje ? acoes.feitosHoje() : 0;
       var temQuem = L.filaDeLigacao(f).length > 0;
       ligar = el(doc, 'button', { classe: 'botao botao--primario botao--ligar', tipo: 'button', dados: { acao: 'comecar-ligar' }, desligado: !temQuem },
-        feitos ? 'Continuar a ligar (' + feitos + ' feitos hoje)' : 'Começar a ligar');
+        ic(doc, 'telefone'), el(doc, 'span', null, feitos ? 'Continuar a ligar (' + feitos + ' feitos hoje)' : 'Começar a ligar'));
       ligar.addEventListener('click', function () { if (!ligar.disabled) acoes.comecarLigacao(); });
     }
+    var placar = el(doc, 'div', { classe: 'placar', dados: { papel: 'placar' } });
+    grupos.forEach(function (g) {
+      var cor = COR_DO_GRUPO[g.id] || 'azul';
+      var t = el(doc, 'button', { classe: 'placar__item placar__item--' + cor + (g.total ? '' : ' placar__item--zero'), tipo: 'button', dados: { ir: g.id }, titulo: g.etapa + ': ' + g.rotulo },
+        el(doc, 'span', { classe: 'placar__numero' }, String(g.total || 0)),
+        el(doc, 'span', { classe: 'placar__rotulo' }, ic(doc, ICONE_DO_GRUPO[g.id] || 'lista'), g.rotulo));
+      t.addEventListener('click', function () {
+        var alvo = secao.querySelector('[data-grupo="' + g.id + '"]');
+        if (alvo && alvo.scrollIntoView) alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      placar.appendChild(t);
+    });
     var secao = el(doc, 'section', { classe: 'fila', dados: { estado: 'fila' } },
       el(doc, 'div', { classe: 'fila__topo' },
         el(doc, 'div', null,
-          el(doc, 'p', { classe: 'aviso__titulo' }, 'Fila de hoje'),
+          el(doc, 'p', { classe: 'aba__titulo' }, 'Fila de hoje'),
           el(doc, 'p', { classe: 'nota' }, (total ? total + (total === 1 ? ' paciente' : ' pacientes') : 'Ninguém na fila') +
             (f && f.atualizadoEm ? ' · atualizada às ' + hora(f.atualizadoEm) : ''))),
         atualizar),
+      grupos.length ? placar : null,
       f && f.avisoTelefones ? el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'aviso-telefones' } }, f.avisoTelefones) : null,
       ligar);
     grupos.forEach(function (g) {
       var itens = g.itens || [];
       var lista = el(doc, 'ul', { classe: 'fila__lista' });
       itens.forEach(function (it) { lista.appendChild(itemDaFila(doc, it, acoes, agora)); });
-      secao.appendChild(el(doc, 'section', { classe: 'fila__grupo', dados: { grupo: g.id } },
+      var cor = COR_DO_GRUPO[g.id] || 'azul';
+      secao.appendChild(el(doc, 'section', { classe: 'fila__grupo fila__grupo--' + cor, dados: { grupo: g.id } },
         el(doc, 'h2', { classe: 'fila__titulo' },
-          el(doc, 'span', { classe: 'fila__etapa' }, g.etapa),
-          el(doc, 'span', { classe: 'fila__motivo' }, g.rotulo),
+          el(doc, 'span', { classe: 'fila__icone' }, ic(doc, ICONE_DO_GRUPO[g.id] || 'lista')),
+          el(doc, 'span', { classe: 'fila__nomes' },
+            el(doc, 'span', { classe: 'fila__motivo' }, g.rotulo),
+            el(doc, 'span', { classe: 'fila__etapa' }, g.etapa)),
           el(doc, 'span', { classe: 'fila__contador', dados: { contador: g.id } }, String(g.total || 0))),
         g.aviso ? el(doc, 'p', { classe: 'nota nota--alerta' }, g.aviso) : null,
-        itens.length ? lista : el(doc, 'p', { classe: 'nota' }, 'Ninguém agora.'),
+        itens.length ? lista : el(doc, 'p', { classe: 'nota fila__vazio' }, 'Ninguém agora.'),
         g.total > itens.length ? el(doc, 'p', { classe: 'nota' }, 'Mostrando ' + itens.length + ' de ' + g.total + '. Os outros estão no Kommo.') : null));
     });
     return secao;
@@ -770,18 +1096,26 @@
 
   // ── fase 3: respostas prontas (só copiar) ──
 
-  function itemDeResposta(doc, rp, primeiroNome, acoes) {
+  function itemDeResposta(doc, rp, primeiroNome, acoes, unidades, sugerida) {
     var texto = R.preencherNome(rp.texto, primeiroNome);
     var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-resposta' } });
-    var copiar = botaoAcao(doc, 'Copiar', 'copiar-resposta');
+    var copiar = botaoAcao(doc, 'Copiar', 'copiar-resposta', { icone: 'copiar' });
+    var textoCopiar = copiar.lastChild;
     aoClicar(copiar, msg, function () { return acoes.copiar(texto); }, function () {
-      copiar.textContent = 'Copiado';
-      setTimeout(function () { copiar.textContent = 'Copiar'; }, 1500);
+      textoCopiar.textContent = 'Copiado';
+      copiar.classList.add('botao--copiado');
+      setTimeout(function () { textoCopiar.textContent = 'Copiar'; copiar.classList.remove('botao--copiado'); }, 1500);
     });
-    return el(doc, 'li', { classe: 'resposta', dados: { resposta: String(rp.id) } },
-      el(doc, 'div', { classe: 'fila__linha' }, el(doc, 'span', { classe: 'fila__nome' }, rp.nome), copiar),
+    var daUnidade = R.unidadeDoModelo(rp.nome, unidades);
+    // o nome com acento ("Petrópolis") para a etiqueta; a cor é a mesma do selo da unidade no cartão
+    var nomeDaUnidade = daUnidade ? ((unidades || ['Petrópolis', 'Caxias']).filter(function (u) { return R.chaveDoModelo(u) === daUnidade; })[0] || daUnidade) : null;
+    return el(doc, 'li', { classe: 'resposta' + (sugerida ? ' resposta--sugerida' : ''), dados: { resposta: String(rp.id) } },
+      el(doc, 'div', { classe: 'resposta__cab' },
+        el(doc, 'span', { classe: 'resposta__nome' }, rp.nome),
+        nomeDaUnidade ? el(doc, 'span', { classe: 'selo selo--mini selo--' + T.corDaUnidade(nomeDaUnidade), titulo: 'Só para pacientes de ' + nomeDaUnidade }, ic(doc, 'casa'), nomeDaUnidade) : null,
+        copiar),
       el(doc, 'p', { classe: 'resposta__texto' }, texto),
-      R.temLacuna(texto) ? el(doc, 'p', { classe: 'nota nota--alerta' }, 'Complete o que está entre colchetes antes de enviar.') : null,
+      R.temLacuna(texto) ? el(doc, 'p', { classe: 'nota nota--alerta' }, ic(doc, 'alerta'), 'Complete o que está entre colchetes antes de enviar.') : null,
       rp.temAnexo ? el(doc, 'p', { classe: 'nota' }, 'Este modelo tem anexo no Kommo: a Ponte copia só o texto.') : null,
       msg);
   }
@@ -789,19 +1123,27 @@
   /**
    * A aba "Respostas": os modelos gerais do Kommo (texto livre), com busca e "Copiar". O nome do paciente da
    * conversa aberta entra no lugar do marcador de nome. A Ponte só COPIA: a atendente cola e envia.
+   *
+   * 0.5.0: `contexto` = { etapa, unidade, unidades } do cartão na tela. No topo, as SUGERIDAS para a etapa (casadas pelo
+   * nome do modelo: `consulta_` em AGENDADO, `espera_` em EM ESPERA…); os modelos de outra unidade (`caxias_` num
+   * cartão de Petrópolis) saem da lista.
    */
-  function respostas(doc, r, acoes, primeiroNome, buscaInicial) {
-    var lista = (r && r.respostas) || [];
-    var atualizar = botaoAcao(doc, 'Atualizar', 'atualizar-respostas');
+  function respostas(doc, r, acoes, primeiroNome, buscaInicial, contexto) {
+    var ctx = contexto || {};
+    var todas = (r && r.respostas) || [];
+    var visiveis = R.daUnidade(todas, ctx.unidade, ctx.unidades);
+    var lista = visiveis.lista;
+    var chave = T.chaveDaEtapa(ctx.etapa);
+    var atualizar = botaoAcao(doc, 'Atualizar', 'atualizar-respostas', { icone: 'atualizar' });
     atualizar.addEventListener('click', function () { if (acoes && acoes.atualizar) acoes.atualizar(); });
     var topo = el(doc, 'div', { classe: 'fila__topo' },
       el(doc, 'div', null,
-        el(doc, 'p', { classe: 'aviso__titulo' }, 'Respostas prontas'),
+        el(doc, 'p', { classe: 'aba__titulo' }, 'Respostas prontas'),
         el(doc, 'p', { classe: 'nota', dados: { papel: 'para-quem' } }, primeiroNome
           ? 'O nome entra como "' + primeiroNome + '".'
           : 'Abra a conversa do paciente para o nome entrar sozinho.')),
       atualizar);
-    if (!lista.length) {
+    if (!todas.length) {
       return el(doc, 'section', { classe: 'fila respostas', dados: { estado: 'respostas-vazio' } }, topo,
         el(doc, 'div', { classe: 'aviso' },
           el(doc, 'p', { classe: 'aviso__titulo' }, 'Nenhuma resposta pronta cadastrada no Kommo'),
@@ -811,12 +1153,42 @@
     campo.placeholder = 'Buscar resposta';
     campo.value = buscaInicial || '';
     campo.setAttribute('aria-label', 'Buscar resposta pronta');
-    var ul = el(doc, 'ul', { classe: 'fila__lista respostas__lista' });
+    var corpo = el(doc, 'div', { classe: 'respostas__corpo' });
+    var a = acoes || {};
+
+    function grupo(classe, papel, cab, itens, sugerida) {
+      var ul = el(doc, 'ul', { classe: 'respostas__lista' });
+      itens.forEach(function (rp) { ul.appendChild(itemDeResposta(doc, rp, primeiroNome, a, ctx.unidades, sugerida)); });
+      return el(doc, 'section', { classe: 'respostas__grupo ' + classe, dados: { papel: papel } }, cab, ul);
+    }
+
     function desenhar() {
-      ul.replaceChildren();
-      var achadas = R.filtrar(lista, campo.value);
-      if (!achadas.length) ul.appendChild(el(doc, 'li', { classe: 'nota' }, 'Nenhuma resposta com esse texto.'));
-      achadas.forEach(function (rp) { ul.appendChild(itemDeResposta(doc, rp, primeiroNome, acoes || {})); });
+      corpo.replaceChildren();
+      var busca = campo.value.trim();
+      if (busca) {
+        var achadas = R.filtrar(lista, campo.value);
+        if (!achadas.length) corpo.appendChild(el(doc, 'p', { classe: 'nota respostas__nada' }, 'Nenhuma resposta com esse texto.'));
+        else corpo.appendChild(grupo('', 'achadas', el(doc, 'p', { classe: 'rotulo' }, ic(doc, 'lupa'), el(doc, 'span', null, achadas.length + (achadas.length === 1 ? ' resposta' : ' respostas'))), achadas, false));
+        return;
+      }
+      var sug = R.sugeridas(lista, chave, ctx.unidade, ctx.unidades);
+      var resto = lista.filter(function (rp) { return sug.indexOf(rp) < 0; });
+      if (sug.length) {
+        var dono = T.donoDaEtapa(ctx.etapa);
+        corpo.appendChild(grupo('respostas__grupo--sugeridas', 'sugeridas',
+          el(doc, 'div', { classe: 'respostas__cab' },
+            el(doc, 'p', { classe: 'rotulo rotulo--voce' }, ic(doc, 'brilho'), el(doc, 'span', null, 'Sugeridas para esta etapa')),
+            el(doc, 'span', { classe: 'etapa-chip etapa-chip--' + (dono || 'neutra') }, marcaDoDono(doc, dono), ctx.etapa)),
+          sug, true));
+      }
+      if (resto.length) {
+        corpo.appendChild(grupo('', 'todas', el(doc, 'p', { classe: 'rotulo' }, ic(doc, 'lista'), el(doc, 'span', null, sug.length ? 'Outras respostas' : 'Todas as respostas')), resto, false));
+      }
+      if (visiveis.escondidas && ctx.unidade) {
+        corpo.appendChild(el(doc, 'p', { classe: 'nota', dados: { papel: 'escondidas' } }, ic(doc, 'casa'),
+          visiveis.escondidas + (visiveis.escondidas === 1 ? ' resposta de outra unidade ficou de fora' : ' respostas de outra unidade ficaram de fora') +
+          ': este paciente é de ' + ctx.unidade + '.'));
+      }
     }
     campo.addEventListener('input', function () {
       if (acoes && acoes.aoBuscar) acoes.aoBuscar(campo.value);
@@ -824,9 +1196,9 @@
     });
     desenhar();
     return el(doc, 'section', { classe: 'fila respostas', dados: { estado: 'respostas' } }, topo,
-      el(doc, 'div', { classe: 'busca' }, campo),
-      el(doc, 'div', { classe: 'fila__grupo' }, ul),
-      el(doc, 'p', { classe: 'nota' }, 'A Ponte só copia: você cola na conversa e envia. Ela nunca escreve no WhatsApp.'));
+      el(doc, 'div', { classe: 'busca busca--icone' }, ic(doc, 'lupa'), campo),
+      corpo,
+      el(doc, 'p', { classe: 'nota respostas__regra' }, ic(doc, 'cadeado'), 'A Ponte só copia: você cola na conversa e envia. Ela nunca escreve no WhatsApp.'));
   }
 
   // ── fase 4 (0.4.0): o guia "O que eu faço agora?" ──

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Ponte — cartão do Kommo no WhatsApp Web",
   "short_name": "Ponte",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Cartão do Kommo ao lado da conversa no WhatsApp Web, guia da etapa, fila do dia e quem espera resposta. Nunca envia nem liga.",
   "browser_specific_settings": { "gecko": { "id": "ponte@doutordigital.local", "strict_min_version": "128.0" } },
   "permissions": ["storage", "alarms"],
@@ -14,7 +14,7 @@
   "content_scripts": [
     {
       "matches": ["https://web.whatsapp.com/*"],
-      "js": ["seletores.js", "impressao.js", "leitor.js", "conteudo.js"],
+      "js": ["seletores.js", "impressao.js", "leitor.js", "abrir.js", "conteudo.js"],
       "run_at": "document_idle",
       "all_frames": false
     }

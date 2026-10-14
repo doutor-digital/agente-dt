@@ -112,3 +112,36 @@ describe('respostas — a aba', () => {
     }
   });
 });
+
+describe('respostas sugeridas para a etapa (0.5.0)', () => {
+  const R2 = require('../respostas.js');
+  const L = [
+    { id: 1, nome: 'consulta_confirmar_presenca' },
+    { id: 2, nome: 'Petropolis_Consulta_Endereco' },
+    { id: 3, nome: 'caxias_consulta_endereco' },
+    { id: 4, nome: 'espera_retomar' },
+    { id: 5, nome: '⚡ Lead boas-vindas' },
+    { id: 6, nome: 'primeiro_contato' },
+    { id: 7, nome: 'consultas antigas' },
+    { id: 8, nome: 'Bom dia' },
+  ];
+  const ids = (l) => l.map((r) => r.id);
+
+  it('casa pelo começo do nome do modelo, sem acento nem caixa, depois do prefixo da unidade', () => {
+    assert.deepEqual(ids(R2.sugeridas(L, 'agendado', 'Petrópolis')), [1, 2]);
+    assert.deepEqual(ids(R2.sugeridas(L, 'agendado', 'Caxias')), [1, 3]);
+    assert.deepEqual(ids(R2.sugeridas(L, 'espera', null)), [4]);
+    assert.deepEqual(ids(R2.sugeridas(L, 'qualificacao', null)), [5, 6]);
+    assert.deepEqual(R2.sugeridas(L, null, null), []);
+    assert.ok(!ids(R2.sugeridas(L, 'agendado', null)).includes(7), '"consultas" não é "consulta_"');
+  });
+
+  it('modelo de unidade: só no cartão da MESMA unidade; sem unidade conhecida, fica na lista e fora das sugeridas', () => {
+    assert.equal(R2.unidadeDoModelo('caxias_consulta_endereco'), 'caxias');
+    assert.equal(R2.unidadeDoModelo('consulta_caxias'), null, 'o prefixo é que manda');
+    assert.deepEqual(R2.daUnidade(L, 'Petrópolis'), { lista: L.filter((r) => r.id !== 3), escondidas: 1 });
+    assert.deepEqual(R2.daUnidade(L, null), { lista: L, escondidas: 0 });
+    assert.deepEqual(ids(R2.sugeridas(L, 'agendado', null)), [1]);
+    assert.equal(R2.unidadeDoModelo('serra_x', ['Serra']), 'serra', 'a conta pode mandar as suas unidades');
+  });
+});

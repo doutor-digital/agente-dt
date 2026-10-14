@@ -196,16 +196,45 @@ describe('contador — os scripts de fundo e os manifests', () => {
     assert.equal(api.icone.texto, '7');
   });
 
-  it('manifests: 0.4.0, permissão de alarmes, e o Firefox carrega config e contador antes do fundo', () => {
+  it('manifests: 0.5.0, permissão de alarmes, e o Firefox carrega config e contador antes do fundo', () => {
     const chrome = JSON.parse(fs.readFileSync(path.join(raiz, 'manifest.json'), 'utf8'));
     const firefox = JSON.parse(fs.readFileSync(path.join(raiz, 'firefox/manifest.json'), 'utf8'));
     for (const m of [chrome, firefox]) {
-      assert.equal(m.version, '0.4.0');
+      assert.equal(m.version, '0.5.0');
       assert.ok(m.permissions.includes('alarms'));
       assert.ok(!m.permissions.includes('notifications'), 'sem notificação do sistema nesta versão');
       assert.ok(m.description.length <= 132, 'o Chrome limita a descrição a 132 letras');
     }
     assert.deepEqual(firefox.background.scripts, ['config.js', 'contador.js', 'fundo.js']);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(raiz, 'package.json'), 'utf8')).version, '0.4.0');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(raiz, 'package.json'), 'utf8')).version, '0.5.0');
+  });
+});
+
+describe('Firefox: a pasta montada (0.5.0)', () => {
+  it('montar.sh leva a fonte do painel, o abrir.js e o manifest do Firefox', () => {
+    const os = require('node:os');
+    const { execFileSync } = require('node:child_process');
+    const saida = fs.mkdtempSync(path.join(os.tmpdir(), 'ponte-ff-'));
+    try {
+      execFileSync('bash', [path.join(raiz, 'firefox', 'montar.sh'), saida], { stdio: 'ignore' });
+      assert.ok(fs.existsSync(path.join(saida, 'fontes', 'PlusJakartaSans-latin.woff2')));
+      assert.ok(fs.existsSync(path.join(saida, 'fontes', 'OFL.txt')), 'a licença vai junto da fonte');
+      for (const a of ['abrir.js', 'trilha.js', 'icones.js', 'painel.css']) assert.ok(fs.existsSync(path.join(saida, a)), a);
+      const m = JSON.parse(fs.readFileSync(path.join(saida, 'manifest.json'), 'utf8'));
+      assert.ok(m.browser_specific_settings, 'é o manifest do Firefox');
+      assert.equal(m.version, '0.5.0');
+      assert.ok(!fs.existsSync(path.join(saida, 'testes')), 'sem os testes');
+    } finally {
+      fs.rmSync(saida, { recursive: true, force: true });
+    }
+  });
+
+  it('os dois manifests carregam o abrir.js antes do conteudo.js e não pedem permissão nova', () => {
+    for (const arq of ['manifest.json', 'firefox/manifest.json']) {
+      const m = JSON.parse(fs.readFileSync(path.join(raiz, arq), 'utf8'));
+      const js = m.content_scripts[0].js;
+      assert.deepEqual(js, ['seletores.js', 'impressao.js', 'leitor.js', 'abrir.js', 'conteudo.js'], arq);
+      for (const p of ['tabs', 'scripting', 'webNavigation', 'clipboardRead']) assert.ok(!m.permissions.includes(p), `${arq} sem ${p}`);
+    }
   });
 });

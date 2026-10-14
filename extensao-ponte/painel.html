@@ -8,25 +8,45 @@
   </head>
   <body>
     <header class="topo">
-      <span class="topo__marca">Ponte</span>
+      <span class="topo__marca">
+        <svg class="topo__logo" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M13.5 3H9.5a6.5 6.5 0 0 0-3 12.3" fill="none" stroke="#0086F7" stroke-width="3.2" />
+          <path d="M13.5 1.4v12.4" fill="none" stroke="#0086F7" stroke-width="3.2" />
+          <path d="M10.5 21h4a6.5 6.5 0 0 0 3-12.3" fill="none" stroke="#FFB500" stroke-width="3.2" />
+          <path d="M10.5 22.6V10.2" fill="none" stroke="#FFB500" stroke-width="3.2" />
+        </svg>
+        <span class="topo__nome">Ponte</span>
+      </span>
       <span class="topo__unidade" id="unidade"></span>
     </header>
     <nav class="abas" role="tablist" aria-label="Seções da Ponte">
-      <button type="button" class="abas__botao" id="aba-conversa" role="tab" aria-selected="true" aria-controls="conteudo">Conversa</button>
-      <button type="button" class="abas__botao" id="aba-fila" role="tab" aria-selected="false" aria-controls="fila">Fila de hoje</button>
-      <button type="button" class="abas__botao" id="aba-respostas" role="tab" aria-selected="false" aria-controls="respostas">Respostas</button>
+      <button type="button" class="abas__botao" id="aba-conversa" role="tab" aria-selected="true" aria-controls="conteudo">
+        <svg class="icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+        Conversa
+      </button>
+      <button type="button" class="abas__botao" id="aba-fila" role="tab" aria-selected="false" aria-controls="fila">
+        <svg class="icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 6h13" /><path d="M8 12h13" /><path d="M8 18h13" /><path d="M3 6h.01" /><path d="M3 12h.01" /><path d="M3 18h.01" /></svg>
+        Fila de hoje
+        <span class="abas__total" id="aba-fila-total" hidden></span>
+      </button>
+      <button type="button" class="abas__botao" id="aba-respostas" role="tab" aria-selected="false" aria-controls="respostas">
+        <svg class="icone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M11 9h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+        Respostas
+      </button>
     </nav>
     <main id="conteudo" role="tabpanel" aria-live="polite"></main>
     <section id="fila" class="painel-fila" role="tabpanel" aria-live="polite" hidden></section>
     <section id="respostas" class="painel-fila" role="tabpanel" aria-live="polite" hidden></section>
     <div id="aprendiz"></div>
-    <footer class="rodape">A Ponte nunca escreve, envia nem liga no WhatsApp, e não mexe na franquia. No Kommo, só mexe quando você pede e confirma: pausa da Sofia, etiquetas, o resultado da ligação, os campos do guia e a mudança de etapa.</footer>
+    <footer class="rodape">A Ponte nunca escreve, envia nem liga no WhatsApp, e não mexe na franquia. No Kommo, só grava quando você pede e confirma: pausa da Sofia, etiquetas, o resultado da ligação, os campos do guia e a mudança de etapa.</footer>
     <script src="config.js"></script>
     <script src="pausa.js"></script>
     <script src="etiquetas.js"></script>
     <script src="ligacao.js"></script>
     <script src="respostas.js"></script>
     <script src="guia.js"></script>
+    <script src="icones.js"></script>
+    <script src="trilha.js"></script>
     <script src="desenho.js"></script>
     <script src="aprendiz.js"></script>
     <script src="painel.js"></script>

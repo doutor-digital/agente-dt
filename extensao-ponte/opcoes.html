@@ -13,6 +13,9 @@
       #resultado { margin-top: 12px; }
       .ok { color: var(--ok); font-weight: 600; }
       .erro { color: var(--alerta); font-weight: 600; }
+      label.caixa { display: flex; align-items: center; gap: 8px; margin-top: 16px; cursor: pointer; }
+      label.caixa input { width: auto; margin: 0; }
+      main { padding: 16px; }
     </style>
   </head>
   <body>
@@ -29,6 +32,8 @@
         <label for="nome">Seu nome</label>
         <input id="nome" name="nome" autocomplete="off" maxlength="80" placeholder="Ex.: Ana" />
         <p class="dica">Aparece como "por Ana" no Kommo quando você pausa a Sofia, põe etiqueta, grava uma ligação, preenche um campo ou muda a etapa pela Ponte. Opcional.</p>
+        <label class="caixa" for="sem-recarregar"><input id="sem-recarregar" name="sem-recarregar" type="checkbox" checked /> Abrir conversa sem recarregar</label>
+        <p class="dica">Ligada: "Abrir conversa" e "Começar a ligar" abrem a conversa pelo link wa.me, sem recarregar o WhatsApp Web. Se não abrir em 4 segundos, a Ponte abre do jeito antigo (com recarga). Desligue só se der problema.</p>
         <p><button class="botao botao--primario" type="submit">Salvar e testar</button></p>
         <p id="resultado" aria-live="polite"></p>
       </form>

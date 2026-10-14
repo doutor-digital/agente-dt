@@ -55,7 +55,9 @@ const cartaoDe = (id, primeiroNome, etiquetas = []) => ({
   duplicados: [],
 });
 
-function montar({ conversa = { aberta: false }, rotas = {}, guardado = {} } = {}) {
+// 0.5.0: o que o content script responde ao "abrir sem recarregar". Padrão: o WhatsApp não tratou o link (os testes
+// antigos continuam provando o jeito antigo, pela URL). 'rejeita' = aba com o script de uma versão antiga.
+function montar({ conversa = { aberta: false }, rotas = {}, guardado = {}, abrir = { aberta: false, motivo: 'nao-tratou' } } = {}) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/painel.html' });
   const w = dom.window;
   const relogio = { agora: T0, intervalos: new Map(), proximo: 1 };
@@ -67,6 +69,7 @@ function montar({ conversa = { aberta: false }, rotas = {}, guardado = {} } = {}
   const pedidos = [];
   const copiados = [];
   const ouvintes = {};
+  const mensagens = [];
   Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: (t) => { copiados.push(t); return Promise.resolve(); } }, configurable: true });
   w.chrome = {
     storage: {
@@ -78,7 +81,11 @@ function montar({ conversa = { aberta: false }, rotas = {}, guardado = {} } = {}
     },
     tabs: {
       query: () => Promise.resolve([{ id: 7 }]),
-      sendMessage: () => Promise.resolve(conversa),
+      sendMessage: (id, m) => {
+        mensagens.push({ id, ...m });
+        if (m && m.tipo === 'ponte:abrir-conversa') return abrir === 'rejeita' ? Promise.reject(new Error('Could not establish connection')) : Promise.resolve(abrir);
+        return Promise.resolve(conversa);
+      },
       update: (id, p) => { atualizacoes.push({ id, ...p }); return Promise.resolve({}); },
       onActivated: { addListener: () => {} },
     },
@@ -102,8 +109,57 @@ function montar({ conversa = { aberta: false }, rotas = {}, guardado = {} } = {}
     await esperar();
   };
   const doc = w.document;
-  return { w, doc, armazenado, atualizacoes, pedidos, copiados, ouvintes, tempo };
+  return { w, doc, armazenado, atualizacoes, pedidos, copiados, ouvintes, tempo, mensagens };
 }
+
+describe('painel — abrir a conversa sem recarregar (0.5.0)', () => {
+  async function comecar(p) {
+    await esperar(10);
+    p.doc.getElementById('aba-fila').click();
+    await esperar(10);
+    p.doc.querySelector('[data-acao="comecar-ligar"]').click();
+    for (let i = 0; i < 6; i++) await esperar();
+  }
+
+  it('o link wa.me da Ponte abriu: a aba só vem para a frente, sem trocar a URL (não recarrega)', async () => {
+    const p = montar({ rotas: { 'GET /ponte/fila': FILA }, abrir: { aberta: true } });
+    try {
+      await comecar(p);
+      const pedidos = p.mensagens.filter((m) => m.tipo === 'ponte:abrir-conversa');
+      assert.deepEqual(pedidos, [{ id: 7, tipo: 'ponte:abrir-conversa', telefone: '5599900000001' }]);
+      assert.deepEqual(p.atualizacoes, [{ id: 7, active: true }], 'nenhuma URL: o WhatsApp Web não recarrega');
+      assert.match(p.doc.getElementById('fila').textContent, /Clique no 📞 do WhatsApp para ligar/);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('não abriu pelo link (ou a aba tem o script antigo): cai para o jeito antigo, pela URL, e registra no console', async () => {
+    for (const abrir of [{ aberta: false, motivo: 'nao-abriu' }, 'rejeita']) {
+      const p = montar({ rotas: { 'GET /ponte/fila': FILA }, abrir });
+      const avisos = [];
+      p.w.console.info = (t) => avisos.push(String(t));
+      try {
+        await comecar(p);
+        assert.deepEqual(p.atualizacoes, [{ id: 7, url: 'https://web.whatsapp.com/send?phone=5599900000001', active: true }]);
+        assert.match(avisos.join(' '), /jeito antigo, com recarga/);
+      } finally {
+        p.w.close();
+      }
+    }
+  });
+
+  it('com a chave "Abrir conversa sem recarregar" desligada nas opções, vai direto pela URL', async () => {
+    const p = montar({ rotas: { 'GET /ponte/fila': FILA }, guardado: { semRecarregar: false }, abrir: { aberta: true } });
+    try {
+      await comecar(p);
+      assert.equal(p.mensagens.filter((m) => m.tipo === 'ponte:abrir-conversa').length, 0);
+      assert.deepEqual(p.atualizacoes, [{ id: 7, url: 'https://web.whatsapp.com/send?phone=5599900000001', active: true }]);
+    } finally {
+      p.w.close();
+    }
+  });
+});
 
 describe('painel — "Começar a ligar" (fase 3)', () => {
   it('abre a conversa pela URL, espera o ritmo, grava o resultado, pula sem telefone e respeita o teto', async () => {
@@ -427,7 +483,7 @@ describe('painel — o guia "O que eu faço agora?" (0.4.0)', () => {
       tela.querySelector('[data-acao="voltar-guia"]').click();
       await esperar(600);
       assert.equal(p.pedidos.filter((x) => x.caminho === '/ponte/cartao').length, antes + 1);
-      assert.match(tela.querySelector('.cartao__etapa').textContent, /EM ESPERA/);
+      assert.match(tela.querySelector('[data-papel="etapa-atual"]').textContent, /EM ESPERA/);
     } finally {
       p.w.close();
     }
