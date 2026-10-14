@@ -34,6 +34,11 @@ export interface RegrasDaUnidade {
   anunciosConhecidos: Record<string, string>;
   /** DDD do telefone → unidade, para quem chegou sem anúncio conhecido. */
   ddd: Record<string, string>;
+  /**
+   * A cidade cuja agenda esta unidade do agente tem (o token da franquia cadastrado é o dela). Cartão de outra
+   * cidade, ou sem cidade, não escreve na franquia — ver `lib/trava-unidade-atendimento.ts` (14/10/2026).
+   */
+  cidadeDaFranquia: string;
 }
 
 const CONTA_PETROPOLIS = '1055937202829106';
@@ -62,6 +67,8 @@ export const REGRAS_POR_UNIDADE: Record<string, RegrasDaUnidade> = {
       '120250266913430207': CONTA_CAXIAS,
     },
     ddd: { '21': 'Caxias', '24': 'Petrópolis' },
+    // Só o token da franquia de PETRÓPOLIS está cadastrado: cartão de Caxias marcaria na agenda errada.
+    cidadeDaFranquia: 'Petrópolis',
   },
 };
 

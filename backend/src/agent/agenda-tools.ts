@@ -6,6 +6,7 @@ import { logger } from '../lib/logger.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import { SpineService } from '../services/spine.service.js';
+import { travaDaUnidadeDeAtendimento } from '../lib/trava-unidade-atendimento.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { AgendaService } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
@@ -43,6 +44,26 @@ function somarDias(dia: string, n: number): string {
 
 export async function unidadeFresca(unitId: string): Promise<Unit | null> {
   return prisma.unit.findUnique({ where: { id: unitId } });
+}
+
+/**
+ * Conta com duas cidades e o token da franquia de uma só (Petrópolis × Caxias, 14/10/2026): cartão de outra
+ * cidade, ou sem cidade, não escreve na franquia. Devolve o texto de recusa para a IA, ou null para seguir.
+ * Nas outras unidades é null na hora, sem ler o Kommo. Ver `lib/trava-unidade-atendimento.ts`.
+ */
+async function travaParaIa(
+  ferramenta: string,
+  unit: Unit,
+  leadId: number | undefined,
+  kommo: KommoClient | undefined,
+  recorder: TraceRecorder,
+): Promise<string | null> {
+  const trava = await travaDaUnidadeDeAtendimento(unit, leadId, kommo);
+  if (!trava) return null;
+  await recorder
+    .step({ kind: 'ERROR', title: `🛡 ${ferramenta} travado (${trava.codigo}): ${trava.motivo}`, payload: { leadId: leadId ?? null, codigo: trava.codigo } })
+    .catch(() => undefined);
+  return trava.paraIa;
 }
 
 /**
@@ -184,7 +205,7 @@ async function clienteDeSondagem(unit: Unit): Promise<number | null> {
   return id;
 }
 
-export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
+export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contexto) {
   return new DynamicStructuredTool({
     name: 'consultar_horarios',
     description:
@@ -210,7 +231,9 @@ export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
           'Sem isso a consulta gasta a verificação em horários que ele não quer.',
         ),
     }),
-    func: async ({ data, turno }: { data: string; turno?: 'manha' | 'tarde' }) => {
+    // `leadId` não está no schema: chega pelo `fixarLeadDaConversa` (graph.ts), que injeta o lead da conversa em
+    // toda ferramenta. Só a trava da unidade de atendimento usa.
+    func: async ({ data, turno, leadId }: { data: string; turno?: 'manha' | 'tarde'; leadId?: number }) => {
       // Marca ANTES de qualquer saída: o que interessa ao safety-net é se a agenda
       // chegou a ser olhada, mesmo que a resposta tenha sido "não há vaga".
       if (estado) estado.consultou = true;
@@ -232,6 +255,9 @@ export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
           'na agenda e que você retorna em instantes com os horários — sem prometer dia nem hora.'
         );
       }
+      // A sondagem marca e desmarca na franquia, e oferecer a agenda de Petrópolis a paciente de Caxias já é o erro.
+      const travado = await travaParaIa('consultar_horarios', fresca, leadId, kommo, recorder);
+      if (travado) return travado;
 
       const LOOKAHEAD_DIAS = 30;
       const MAX_DIAS_SONDADOS = 3;
@@ -511,7 +537,7 @@ export function interpretarHorarioEscolhido(
   return { ok: true, quando };
 }
 
-export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
+export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
   return new DynamicStructuredTool({
     name: 'cadastrar_paciente',
     description:
@@ -549,6 +575,8 @@ export function buildCadastrarPaciente({ unit, recorder }: Contexto) {
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'Sistema da clínica não conectado. Transfira para a equipe.';
       }
+      const travado = await travaParaIa('cadastrar_paciente', fresca, args.leadId, kommo, recorder);
+      if (travado) return travado;
 
       const partes = args.nome.trim().split(/\s+/).filter((x) => x.length >= 2);
       if (partes.length < 2) {
@@ -913,6 +941,8 @@ export function buildRemarcarConsulta(ctx: Contexto) {
     }),
     func: async (args: { leadId: number; idClient: number; data: string; hora: string }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      const travado = await travaParaIa('remarcar_consulta', fresca, args.leadId, kommo, recorder);
+      if (travado) return travado;
 
       // O idClient é o que o MODELO escreveu. Aqui ele passou a mandar numa busca
       // na franquia cujo resultado vai ser CANCELADO no passo 2 — se vier o
@@ -1184,6 +1214,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'Agenda não conectada. NÃO confirme nada — diga que a equipe conclui o agendamento.';
       }
+      const travado = await travaParaIa('agendar_consulta', fresca, args.leadId, kommo, recorder);
+      if (travado) return travado;
 
       if (fresca.spineAiPaused) {
         await recorder.step({

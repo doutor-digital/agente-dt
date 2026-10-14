@@ -4,6 +4,7 @@ import { logger } from '../lib/logger.js';
 import { createKommoClient } from './kommo.service.js';
 import { SpineService } from './spine.service.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
+import { travaDaUnidadeDeAtendimento } from '../lib/trava-unidade-atendimento.js';
 
 /**
  * Campos do Kommo que o espelho lê — POR NOME, porque cada conta tem ids
@@ -418,6 +419,9 @@ export async function syncPatientToSpine(
   kommoLeadId: number,
 ): Promise<{ ok: boolean; motivo?: string; spineIdClient?: number; jaExistia?: boolean }> {
   if (!unit.spineToken) return { ok: false, motivo: 'franquia não conectada nesta unidade' };
+  // Conta com duas cidades e o token de uma só (Petrópolis × Caxias): cartão de outra cidade ou sem cidade não entra.
+  const trava = await travaDaUnidadeDeAtendimento(unit, kommoLeadId);
+  if (trava) return { ok: false, motivo: trava.motivo };
 
   const p = await prepararPaciente(unit, kommoLeadId);
   if (p.etapa === 'ja-cadastrado') {
@@ -453,6 +457,9 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
   if (!unit.spineSyncLeads) {
     return { ok: false, motivo: 'espelhamento de leads desligado nesta unidade' };
   }
+  // Conta com duas cidades e o token de uma só (Petrópolis × Caxias): cartão de outra cidade ou sem cidade não entra.
+  const trava = await travaDaUnidadeDeAtendimento(unit, kommoLeadId);
+  if (trava) return { ok: false, motivo: trava.motivo };
 
   const preparo = await prepararLead(unit, kommoLeadId);
   if (preparo.etapa === 'ja-enviado') {
