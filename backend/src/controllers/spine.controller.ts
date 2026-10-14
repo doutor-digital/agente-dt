@@ -6,7 +6,6 @@ import { SpineService } from '../services/spine.service.js';
 import { AgendaService } from '../services/agenda.service.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
-import { travaDaUnidadeDeAtendimento } from '../lib/trava-unidade-atendimento.js';
 
 function agoraLocalIso(tz: string): string {
   return SpineService.instanteNoFuso(new Date(), tz || 'America/Sao_Paulo');
@@ -408,11 +407,6 @@ export async function cancelScheduleHandler(req: Request, res: Response): Promis
     res.status(400).json({ error: 'kommoLeadId_obrigatorio' });
     return;
   }
-  const trava = await travaDaUnidadeDeAtendimento(unit, kommoLeadId);
-  if (trava) {
-    res.status(409).json({ ok: false, codigo: trava.codigo, motivo: trava.motivo });
-    return;
-  }
 
   const vinculo = await prisma.spineLeadLink.findUnique({
     where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
@@ -449,11 +443,6 @@ export async function confirmScheduleHandler(req: Request, res: Response): Promi
   const kommoLeadId = Number(req.body?.kommoLeadId);
   if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
     res.status(400).json({ error: 'kommoLeadId_obrigatorio' });
-    return;
-  }
-  const trava = await travaDaUnidadeDeAtendimento(unit, kommoLeadId);
-  if (trava) {
-    res.status(409).json({ ok: false, codigo: trava.codigo, motivo: trava.motivo });
     return;
   }
 

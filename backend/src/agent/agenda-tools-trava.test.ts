@@ -1,27 +1,22 @@
 /**
  * Ferramentas da Sofia e o espelho na franquia × trava da unidade de atendimento (14/10/2026).
  *
- * Conta de Petrópolis, cartão de Caxias (ou sem cidade): cadastrar, agendar, remarcar, cancelar e confirmar
- * devolvem RECUSADO para a IA sem tocar na franquia; o cadastro/espelho pelo servidor também não entra.
+ * Conta de Petrópolis, cartão de Caxias (ou sem cidade): consultar horários (a sondagem marca e desmarca),
+ * cadastrar, agendar e remarcar devolvem RECUSADO para a IA sem tocar na franquia; o espelho de lead e o cadastro
+ * de paciente pelo servidor também não entram. Cancelar e confirmar uma consulta que JÁ está na agenda não travam.
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { SpineService } from '../services/spine.service.js';
+import { SpineService, SPINE_STATUS } from '../services/spine.service.js';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
+import type { ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
-import {
-  buildAgendarConsulta,
-  buildCadastrarPaciente,
-  buildCancelarConsulta,
-  buildConfirmarPresenca,
-  buildRemarcarConsulta,
-} from './agenda-tools.js';
+import { buildAgendarConsulta, buildCadastrarPaciente, buildConsultarHorarios, buildRemarcarConsulta } from './agenda-tools.js';
+import { fixarLeadDaConversa } from './graph.js';
 import { syncLeadToSpine, syncPatientToSpine } from '../services/spine-sync.service.js';
 import { confirmarNaFranquia } from '../lib/confirmacao-d1.js';
-import { SPINE_STATUS } from '../services/spine.service.js';
-import type { ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 
 const PETRO = 'doutor-hernia-petropolis';
 
@@ -58,6 +53,7 @@ function unidade(over: Partial<Unit> = {}): Unit {
 }
 
 function kommoFalso(unidadeDeAtendimento: string | null) {
+  const lidos: number[] = [];
   const lead = (id: number): KommoLead => ({
     id,
     name: 'Maria Teste',
@@ -66,34 +62,55 @@ function kommoFalso(unidadeDeAtendimento: string | null) {
     custom_fields_values:
       unidadeDeAtendimento === null ? [] : [{ field_id: 479786, field_name: '⌂ Unidade de atendimento', values: [{ value: unidadeDeAtendimento }] }],
   });
-  return { getLead: async (id: number) => lead(id) } as unknown as KommoClient;
+  const kommo = {
+    getLead: async (id: number) => {
+      lidos.push(id);
+      return lead(id);
+    },
+  } as unknown as KommoClient;
+  return { kommo, lidos };
 }
 
 const recorder = { step: async () => undefined } as unknown as TraceRecorder;
 
-test('Sofia: cartão de Caxias — as 5 ferramentas que escrevem na franquia recusam sem chamar a franquia', async () => {
+test('Sofia: cartão de Caxias — consultar, cadastrar, agendar e remarcar recusam sem chamar a franquia', async () => {
   unidadeAtual = unidade();
-  const ctx = { unit: unidadeAtual, recorder, kommo: kommoFalso('Caxias') };
+  const { kommo, lidos } = kommoFalso('Caxias');
+  const ctx = { unit: unidadeAtual, recorder, kommo, estado: { consultou: false } };
+  // como no grafo: o lead da conversa entra em toda ferramenta, inclusive na que não tem `leadId` no schema
+  const [consultar] = fixarLeadDaConversa([buildConsultarHorarios(ctx)], 5, recorder, unidadeAtual);
   const chamadas: Array<[string, Promise<unknown>]> = [
+    ['consultar_horarios', consultar.invoke({ data: '2026-12-01' })],
     ['cadastrar_paciente', buildCadastrarPaciente(ctx).invoke({ nome: 'Maria Teste', telefone: '24999990000', leadId: 5, horarioEscolhido: '2026-12-01 09:00' })],
     ['agendar_consulta', buildAgendarConsulta(ctx).invoke({ idClient: 9, data: '2026-12-01', hora: '09:00', leadId: 5, diaConfirmado: true, formaPagamento: 'na_clinica' })],
     ['remarcar_consulta', buildRemarcarConsulta(ctx).invoke({ leadId: 5, idClient: 9, data: '2026-12-01', hora: '09:00' })],
-    ['cancelar_consulta', buildCancelarConsulta(ctx).invoke({ leadId: 5, confirmado: true })],
-    ['confirmar_presenca', buildConfirmarPresenca(ctx).invoke({ leadId: 5 })],
   ];
   for (const [nome, p] of chamadas) {
-    const texto = String(await p);
-    assert.match(texto, /^RECUSADO: este paciente é de Caxias/, nome);
+    assert.match(String(await p), /^RECUSADO: este paciente é de Caxias/, nome);
   }
   assert.deepEqual(naFranquia, [], 'nenhuma chamada à franquia');
+  assert.ok(lidos.every((id) => id === 5), 'leu o cartão da conversa');
 });
 
 test('Sofia: cartão sem unidade de atendimento também recusa', async () => {
   unidadeAtual = unidade();
-  const ctx = { unit: unidadeAtual, recorder, kommo: kommoFalso(null) };
+  const ctx = { unit: unidadeAtual, recorder, kommo: kommoFalso(null).kommo };
   const texto = String(await buildAgendarConsulta(ctx).invoke({ idClient: 9, data: '2026-12-01', hora: '09:00', leadId: 5, diaConfirmado: true, formaPagamento: 'na_clinica' }));
   assert.match(texto, /^RECUSADO: o cartão ainda não diz a unidade de atendimento \(Petrópolis ou Caxias\)/);
   assert.deepEqual(naFranquia, []);
+});
+
+test('Sofia: unidade comum não lê o cartão para consultar horários', async () => {
+  unidadeAtual = unidade({ slug: 'doutor-hernia-serra', spineAgendaDays: [1, 2, 3, 4, 5] });
+  const { kommo, lidos } = kommoFalso('Caxias');
+  const ctx = { unit: unidadeAtual, recorder, kommo, estado: { consultou: false } };
+  const [consultar] = fixarLeadDaConversa([buildConsultarHorarios(ctx)], 5, recorder, unidadeAtual);
+  Object.defineProperty(prisma, 'spineLeadLink', { value: { findFirst: async () => null }, configurable: true });
+  Object.defineProperty(prisma, 'agendaBlock', { value: { findMany: async () => [] }, configurable: true });
+  const texto = String(await consultar.invoke({ data: '2026-12-01' }));
+  assert.doesNotMatch(texto, /RECUSADO/);
+  assert.deepEqual(lidos, [], 'nenhuma leitura a mais do cartão');
+  assert.ok(naFranquia.includes('searchSchedules'), 'seguiu para a agenda como sempre');
 });
 
 test('espelho e cadastro pelo servidor: conta de Petrópolis sem conseguir ler o cartão não escreve na franquia', async () => {
@@ -107,30 +124,20 @@ test('espelho e cadastro pelo servidor: conta de Petrópolis sem conseguir ler o
   assert.deepEqual(naFranquia, []);
 });
 
-test('confirmação D-1: cartão de Caxias não confirma na franquia e avisa a equipe; outra unidade confirma', async () => {
+test('confirmação D-1 de consulta que já está na agenda de Petrópolis não trava (só criar trava)', async () => {
   const consulta = { idSchedule: 1, quando: '2026-12-01T09:00', salvo: '2026-12-01T09:00', estado: 'confirmada', mudou: false, especialista: null, idStatus: SPINE_STATUS.AGENDADO } as ConsultaReconciliada;
-  const tarefas: string[] = [];
-  const kommo = { createTask: async (a: { text: string }) => { tarefas.push(a.text); return {} as never; } };
   const confirmadas: number[] = [];
-  const deps = (cidade: string | null) => ({
-    confirmSchedule: async (_u: Unit, id: number) => { confirmadas.push(id); return { ok: true }; },
-    perguntou: async () => true,
-    esquecerConsulta: () => undefined,
-    travaDaUnidade: async (u: Unit, leadId: number) => {
-      const { travaDaUnidadeDeAtendimento } = await import('../lib/trava-unidade-atendimento.js');
-      return travaDaUnidadeDeAtendimento(u, leadId, kommoFalso(cidade));
+  const r = await confirmarNaFranquia(
+    { unit: unidade(), leadId: 5, consulta, contactName: 'Maria', kommo: { createTask: async () => ({}) as never } },
+    {
+      confirmSchedule: async (_u, id) => {
+        confirmadas.push(id);
+        return { ok: true };
+      },
+      perguntou: async () => true,
+      esquecerConsulta: () => undefined,
     },
-  });
-
-  const r = await confirmarNaFranquia({ unit: unidade(), leadId: 5, consulta, contactName: 'Maria', kommo }, deps('Caxias'));
-  assert.equal(r, 'unidade_de_atendimento');
-  assert.deepEqual(confirmadas, []);
-  assert.match(tarefas[0] ?? '', /cartão de Caxias/);
-
-  const ok = await confirmarNaFranquia(
-    { unit: unidade({ slug: 'doutor-hernia-acailandia' }), leadId: 5, consulta, contactName: 'Maria', kommo },
-    deps('Caxias'),
   );
-  assert.equal(ok, 'confirmada', 'nas outras unidades nada muda');
+  assert.equal(r, 'confirmada');
   assert.deepEqual(confirmadas, [1]);
 });

@@ -6,7 +6,6 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { consultaDoLead, esqueceConsulta, type ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 import { SpineService, SPINE_STATUS } from '../services/spine.service.js';
 import { avisoRecente } from './aviso-dedupe.js';
-import { travaDaUnidadeDeAtendimento, type TravaDaFranquia } from './trava-unidade-atendimento.js';
 
 export type RespostaD1 = 'confirmou' | 'remarcar';
 
@@ -218,16 +217,13 @@ export function decidirConfirmacaoNaFranquia(args: {
   return { acao: 'confirmar', idSchedule: consulta.idSchedule };
 }
 
-/** `unidade_de_atendimento` = a conta tem duas cidades e o cartão não é da cidade da franquia (ou está sem cidade). */
-export type ResultadoFranquia = 'confirmada' | 'falhou' | 'unidade_de_atendimento' | MotivoSemConfirmarNaFranquia;
+export type ResultadoFranquia = 'confirmada' | 'falhou' | MotivoSemConfirmarNaFranquia;
 
 /** O que `confirmarNaFranquia` usa de fora — injetável para teste. */
 export interface DepsConfirmarNaFranquia {
   confirmSchedule: (unit: Unit, idSchedule: number) => Promise<{ ok: boolean; error?: string }>;
   perguntou: (unitId: string, leadId: number, quando: string) => Promise<boolean>;
   esquecerConsulta: (unitId: string, leadId: number) => void;
-  /** Trava da unidade de atendimento (Petrópolis × Caxias). Ausente = a de verdade, que é null na hora nas outras unidades. */
-  travaDaUnidade?: (unit: Unit, leadId: number) => Promise<TravaDaFranquia | null>;
 }
 
 /** A pergunta saiu para este horário, na véspera OU no reforço de dois dias? */
@@ -306,15 +302,6 @@ export async function confirmarNaFranquia(
       logger.info({ ...log, motivo: decisao.motivo, idStatus: consulta?.idStatus ?? null }, 'confirmação D-1: não confirmei na franquia');
       if (decisao.avisarEquipe) await alertar(decisao.motivo.replace(/_/g, ' '));
       return decisao.motivo;
-    }
-
-    // Conta com duas cidades e o token da franquia de uma só: cartão de outra cidade, ou sem cidade, não escreve
-    // na franquia (14/10/2026). A equipe recebe a tarefa e confirma na agenda certa.
-    const trava = await (deps.travaDaUnidade ?? travaDaUnidadeDeAtendimento)(unit, leadId);
-    if (trava) {
-      logger.info({ ...log, codigo: trava.codigo }, 'confirmação D-1: não confirmei na franquia (unidade de atendimento)');
-      await alertar(trava.resumo);
-      return 'unidade_de_atendimento';
     }
 
     const r = await deps.confirmSchedule(unit, decisao.idSchedule);

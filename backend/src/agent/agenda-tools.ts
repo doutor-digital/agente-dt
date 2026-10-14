@@ -205,7 +205,7 @@ async function clienteDeSondagem(unit: Unit): Promise<number | null> {
   return id;
 }
 
-export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
+export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contexto) {
   return new DynamicStructuredTool({
     name: 'consultar_horarios',
     description:
@@ -231,7 +231,9 @@ export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
           'Sem isso a consulta gasta a verificação em horários que ele não quer.',
         ),
     }),
-    func: async ({ data, turno }: { data: string; turno?: 'manha' | 'tarde' }) => {
+    // `leadId` não está no schema: chega pelo `fixarLeadDaConversa` (graph.ts), que injeta o lead da conversa em
+    // toda ferramenta. Só a trava da unidade de atendimento usa.
+    func: async ({ data, turno, leadId }: { data: string; turno?: 'manha' | 'tarde'; leadId?: number }) => {
       // Marca ANTES de qualquer saída: o que interessa ao safety-net é se a agenda
       // chegou a ser olhada, mesmo que a resposta tenha sido "não há vaga".
       if (estado) estado.consultou = true;
@@ -253,6 +255,9 @@ export function buildConsultarHorarios({ unit, recorder, estado }: Contexto) {
           'na agenda e que você retorna em instantes com os horários — sem prometer dia nem hora.'
         );
       }
+      // A sondagem marca e desmarca na franquia, e oferecer a agenda de Petrópolis a paciente de Caxias já é o erro.
+      const travado = await travaParaIa('consultar_horarios', fresca, leadId, kommo, recorder);
+      if (travado) return travado;
 
       const LOOKAHEAD_DIAS = 30;
       const MAX_DIAS_SONDADOS = 3;
@@ -765,7 +770,7 @@ async function guardarPaciente(
   AgendaReconcileService.esqueceConsulta(unitId, leadId);
 }
 
-export function buildCancelarConsulta({ unit, recorder, kommo }: Contexto) {
+export function buildCancelarConsulta({ unit, recorder }: Contexto) {
   return new DynamicStructuredTool({
     name: 'cancelar_consulta',
     description:
@@ -781,8 +786,6 @@ export function buildCancelarConsulta({ unit, recorder, kommo }: Contexto) {
     }),
     func: async (args: { leadId: number; confirmado?: boolean }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
-      const travado = await travaParaIa('cancelar_consulta', fresca, args.leadId, kommo, recorder);
-      if (travado) return travado;
       const atual = await consultaAtual(fresca, args.leadId);
       if (!atual) return 'Este paciente não tem consulta marcada por aqui. Não há o que cancelar.';
 
@@ -828,7 +831,7 @@ export function buildCancelarConsulta({ unit, recorder, kommo }: Contexto) {
   });
 }
 
-export function buildConfirmarPresenca({ unit, recorder, kommo }: Contexto) {
+export function buildConfirmarPresenca({ unit, recorder }: Contexto) {
   return new DynamicStructuredTool({
     name: 'confirmar_presenca',
     description:
@@ -843,8 +846,6 @@ export function buildConfirmarPresenca({ unit, recorder, kommo }: Contexto) {
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'Agenda não conectada. Agradeça a confirmação e diga que a equipe registra.';
       }
-      const travado = await travaParaIa('confirmar_presenca', fresca, args.leadId, kommo, recorder);
-      if (travado) return travado;
 
       const atual = await consultaAtual(fresca, args.leadId);
       if (!atual) {

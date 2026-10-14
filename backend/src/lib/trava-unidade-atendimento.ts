@@ -1,10 +1,15 @@
 /**
- * Trava da unidade de atendimento — nada escreve na franquia a partir de um cartão que não é da cidade dela.
+ * Trava da unidade de atendimento — nada é criado na franquia a partir de um cartão que não é da cidade dela.
  *
  * Por quê (14/10/2026): a conta Kommo de Petrópolis (`doutorhernialvp`) atende DUAS clínicas, Petrópolis e Caxias
  * (campo `⌂ Unidade de atendimento` no cartão), mas a unidade do agente só tem o token da franquia de PETRÓPOLIS.
  * Marcar, remarcar ou cadastrar um paciente de Caxias por aqui o põe na agenda e na base de Petrópolis. Regra do
  * João (14/10): "marcar a consulta ou cadastrar o lead tem que ser de acordo com a unidade correta".
+ *
+ * Vale para toda escrita que CRIA algo na franquia a partir de um cartão: marcar pelo widget; consultar horários
+ * (a sondagem marca e desmarca), cadastrar, agendar e remarcar da Sofia; espelho de lead e cadastro de paciente
+ * (webhook e painel). Cancelar e confirmar uma consulta que JÁ está na agenda desta franquia não travam: não criam
+ * nada no lugar errado, e travar impediria desfazer uma marcação errada.
  *
  * Na conta com unidade de atendimento (as de `REGRAS_POR_UNIDADE`, hoje só Petrópolis):
  *  - cartão da cidade da franquia (`cidadeDaFranquia`) → segue normal;
@@ -52,10 +57,16 @@ function cidadesDa(regras: RegrasDaUnidade): string[] {
   return saida;
 }
 
-/** O valor do `⌂ Unidade de atendimento` no cartão (pelo nome do campo, sem id fixo); null se vazio. */
+/**
+ * O valor do `⌂ Unidade de atendimento` no cartão (pelo nome do campo, sem id fixo); null se vazio. Nome exato
+ * primeiro, como o robô `unidade-por-canal` acha o campo; sem acento/símbolo só se o exato não vier.
+ */
 export function unidadeNoCartao(lead: Pick<KommoLead, 'custom_fields_values'>): string | null {
+  const campos = lead.custom_fields_values ?? [];
   const alvo = normalizarNome(CAMPO_UNIDADE);
-  const v = lead.custom_fields_values?.find((f) => normalizarNome(f.field_name ?? '') === alvo)?.values?.[0]?.value;
+  const campo =
+    campos.find((f) => (f.field_name ?? '').trim() === CAMPO_UNIDADE) ?? campos.find((f) => normalizarNome(f.field_name ?? '') === alvo);
+  const v = campo?.values?.[0]?.value;
   return v === undefined || v === null || String(v).trim() === '' ? null : String(v).trim();
 }
 
@@ -87,8 +98,7 @@ export function travaPeloCampo(regras: RegrasDaUnidade | null, noCartao: string 
     motivo: `Este paciente é de ${valor}. Marque na agenda de ${valor}. A marcação pelo widget para ${valor} chega na próxima atualização.`,
     paraIa:
       `RECUSADO: este paciente é de ${valor} e por aqui só dá para mexer na agenda de ${regras.cidadeDaFranquia}. ` +
-      `Não cadastre, não marque, não remarque, não cancele e não ofereça horário: transfira para a equipe cuidar ` +
-      `na agenda de ${valor}.`,
+      `Não cadastre, não marque, não remarque e não ofereça horário: transfira para a equipe cuidar na agenda de ${valor}.`,
     resumo: `cartão de ${valor}; esta unidade só tem a agenda de ${regras.cidadeDaFranquia}`,
   };
 }
