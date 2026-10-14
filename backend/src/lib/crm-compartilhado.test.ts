@@ -7,7 +7,6 @@ import {
   _zerarSemUnidadeParaTeste,
   cartoesSemUnidade,
   grupoDe,
-  idClientNoCartao,
   pularCartao,
   unidadeDoCartao,
   unidadeParaOCartao,
@@ -62,12 +61,6 @@ test('valorDaUnidadeNoCartao: lê o «⌂ Unidade de atendimento» pelo nome, n�
   assert.equal(valorDaUnidadeNoCartao(cartao('   ')), null);
   assert.equal(valorDaUnidadeNoCartao({ custom_fields_values: null }), null);
   assert.equal(valorDaUnidadeNoCartao(null), null);
-});
-
-test('idClientNoCartao: o ⚙ idClient (franquia) do cartão', () => {
-  assert.equal(idClientNoCartao(cartao(null, [{ field_name: '⚙ idClient (franquia)', value: '133558' }])), 133558);
-  assert.equal(idClientNoCartao(cartao(null)), null);
-  assert.equal(idClientNoCartao(cartao(null, [{ field_name: '⚙ idClient (franquia)', value: 'abc' }])), null);
 });
 
 // ── de quem é o cartão ───────────────────────────────────────────────────────────────────────────────────────
@@ -171,8 +164,9 @@ test('pularCartao: cada unidade só mexe no seu cartão; a de um token só nunca
 
 test('campo vazio: ninguém mexe e o cartão vai para a lista; casou só com Petrópolis pela origem = sugestão', () => {
   const resumo: { semUnidade?: number } = {};
-  const lead = cartao(null, [{ field_name: '⚙ idClient (franquia)', value: 115714 }], 555);
-  assert.equal(pularCartao(GRUPO, PETRO, lead, resumo, { idClient: 115714 }), true);
+  const lead = cartao(null, [], 555);
+  // o ⚙ idClient do cartão (115714) é um dos ids do paciente que a franquia de Petrópolis casou
+  assert.equal(pularCartao(GRUPO, PETRO, lead, resumo, { idsClient: [115714], idDoCartao: 115714 }), true);
   assert.equal(resumo.semUnidade, 1);
   const lista = cartoesSemUnidade(PETRO);
   assert.equal(lista.length, 1);
@@ -180,9 +174,9 @@ test('campo vazio: ninguém mexe e o cartão vai para a lista; casou só com Pet
 });
 
 test('campo vazio e paciente nas DUAS franquias: lista "nas duas", sem sugestão — a SDR decide', () => {
-  const lead = cartao(null, [{ field_name: '⚙ idClient (franquia)', value: 115714 }], 777);
-  assert.equal(pularCartao(GRUPO, PETRO, lead, {}, { idClient: 115714 }), true);
-  assert.equal(pularCartao(GRUPO, CAXIAS, lead, {}, { idClient: 133558 }), true);
+  const lead = cartao(null, [], 777);
+  assert.equal(pularCartao(GRUPO, PETRO, lead, {}, { idsClient: [115714], idDoCartao: 115714 }), true);
+  assert.equal(pularCartao(GRUPO, CAXIAS, lead, {}, { idsClient: [133558], idDoCartao: 115714 }), true);
   const [e] = cartoesSemUnidade(PETRO);
   assert.equal(e.leadId, 777);
   assert.deepEqual(e.casouCom, ['Caxias', 'Petrópolis']);
@@ -199,7 +193,7 @@ test('revisão, 48 h e parados (sem casar paciente) pulam o cartão vazio mas N�
 
 test('campo vazio sem idClient que confira: lista sem sugestão; entrada vencida some', () => {
   const agora = Date.now();
-  pularCartao(GRUPO, CAXIAS, cartao(null, [], 888), {}, { idClient: null });
+  pularCartao(GRUPO, CAXIAS, cartao(null, [], 888), {}, { idsClient: [133558], idDoCartao: null });
   assert.equal(cartoesSemUnidade(PETRO, agora)[0].sugestao, null);
   assert.equal(cartoesSemUnidade(PETRO, agora + 25 * 3600_000).length, 0, 'depois de 24 h sem casar de novo, sai da lista');
   assert.equal(cartoesSemUnidade(ITZ).length, 0, 'a lista é por conta do Kommo');

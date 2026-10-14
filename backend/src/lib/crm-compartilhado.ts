@@ -118,14 +118,6 @@ export function valorDaUnidadeNoCartao(lead: Pick<KommoLead, 'custom_fields_valu
   return null;
 }
 
-/** O «⚙ idClient (franquia)» gravado no cartão (pela Sofia, pelo widget ou pela carga de implantação). */
-export function idClientNoCartao(lead: Pick<KommoLead, 'custom_fields_values'> | null | undefined): number | null {
-  const alvo = normalizar('⚙ idClient (franquia)');
-  const f = (lead?.custom_fields_values ?? []).find((c) => normalizar(c.field_name) === alvo);
-  const n = Number(f?.values?.[0]?.value);
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
-
 export type Veredicto =
   /** Kommo de uma unidade só: o cartão é dela, como sempre foi. */
   | { tipo: 'sem-divisao' }
@@ -358,7 +350,8 @@ export function cartoesSemUnidade(contaUnitId: string, agora = Date.now()): Cart
 /**
  * O portão dos robôs franquia → Kommo numa conta dividida: `true` = PULE este cartão. Conta o motivo no resumo.
  * `casouCom` só vem do sincronizador, quando a franquia DESTA unidade casou um paciente com o cartão: aí, se o campo
- * está vazio, o cartão entra na lista da SDR (com a sugestão pela origem, se o ⚙ idClient bater). Quem só lista
+ * está vazio, o cartão entra na lista da SDR — com a sugestão pela origem quando o ⚙ idClient do cartão
+ * (`idClientDoCartao`, a regra do #57: o idClient do cartão manda) é um dos ids do paciente casado. Quem só lista
  * cartões por etapa (revisão, 48 h, parados) não casou ninguém e não anota.
  * `grupo` null (Kommo de uma unidade só) = nunca pula: comportamento de sempre.
  */
@@ -367,7 +360,7 @@ export function pularCartao(
   unitId: string,
   lead: Pick<KommoLead, 'id' | 'name' | 'custom_fields_values'>,
   resumo: { deOutraUnidade?: number; semUnidade?: number },
-  casouCom?: { idClient: number | null },
+  casouCom?: { idsClient: number[]; idDoCartao: number | null },
 ): boolean {
   if (!grupo) return false;
   const v = veredictoDoCartao(grupo, unitId, valorDaUnidadeNoCartao(lead));
@@ -376,8 +369,8 @@ export function pularCartao(
     resumo.semUnidade = (resumo.semUnidade ?? 0) + 1;
     const rotulo = grupo.membros.find((m) => m.unitId === unitId)?.rotulo;
     if (casouCom && rotulo) {
-      const doCartao = idClientNoCartao(lead);
-      anotarCartaoSemUnidade(grupo.contaUnitId, lead.id, lead.name ?? '', rotulo, !!casouCom.idClient && doCartao === casouCom.idClient);
+      const confere = casouCom.idDoCartao !== null && casouCom.idsClient.includes(casouCom.idDoCartao);
+      anotarCartaoSemUnidade(grupo.contaUnitId, lead.id, lead.name ?? '', rotulo, confere);
     }
   } else {
     resumo.deOutraUnidade = (resumo.deOutraUnidade ?? 0) + 1;

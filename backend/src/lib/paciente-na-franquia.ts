@@ -14,6 +14,7 @@ import { logger } from './logger.js';
 import { SpineService, type SpineTreatment } from '../services/spine.service.js';
 import { limparNome, resumoDaAgenda, termosDeBusca, type ResumoAgenda } from './widget-agenda.js';
 import { chaveTelefone, normalizar } from './franquia-sync.js';
+import { unidadeParaOCartao } from './crm-compartilhado.js';
 
 // ── tratamentos EM ANDAMENTO: a rota da franquia devolve a unidade inteira; guarda 5 min por unidade ──
 const cacheTratamentos = new Map<string, { em: number; lista: SpineTreatment[] }>();
@@ -90,8 +91,12 @@ export interface ResumoDoPaciente {
  * A resposta do widget "Agenda da franquia". LANÇA quando a franquia cai no meio — quem chama decide o que
  * mostrar (o widget responde 502; a Ponte mostra o cartão sem o bloco da franquia).
  */
-export async function resumoDoPacienteNaFranquia(unit: Unit, q: PedidoDoPaciente): Promise<ResumoDoPaciente> {
-  if (!unit.spineEnabled || !unit.spineToken) return { unidade: unit.name, franquia: false, paciente: null };
+export async function resumoDoPacienteNaFranquia(unitDoPedido: Unit, q: PedidoDoPaciente): Promise<ResumoDoPaciente> {
+  if (!unitDoPedido.spineEnabled || !unitDoPedido.spineToken) return { unidade: unitDoPedido.name, franquia: false, paciente: null };
+  // Kommo dividido (Petrópolis + Caxias): mostra a franquia da unidade do CARTÃO; campo vazio não escolhe por ninguém.
+  const dono = await unidadeParaOCartao(unitDoPedido, q.leadId);
+  if (dono.tipo === 'recusa') return { unidade: unitDoPedido.name, franquia: true, paciente: null, erro: dono.motivo };
+  const unit = dono.unit;
   const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
 
   // Dois caminhos, sempre: o vínculo que a Sofia gravou E a busca por nome+telefone. Caso real (16/09): o vínculo

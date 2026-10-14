@@ -18,13 +18,18 @@
  *  - cartão que não deu para ler (sem lead, Kommo fora) → recusa. Trava que falha aberta não é trava.
  * Nas outras unidades nada muda: a função devolve null na hora, sem nem ler o Kommo.
  *
- * PROVISÓRIA: sai quando a unidade tiver os dois tokens (branch feat/petropolis-caxias-dois-tokens).
+ * RESERVA (14/10/2026, PR #58): quando a conta tem a divisão gravada em `unit_crm_compartilhado` — Petrópolis e
+ * Caxias como duas unidades, cada uma com o seu token —, quem decide é o roteamento (`crm-compartilhado.ts`:
+ * Caxias escreve com o token de Caxias, vazio recusa) com a trava de escrita (`trava-escrita-franquia.ts`) por
+ * trás, e esta função sai do caminho. Sem a divisão gravada, ela vale como sempre. Assim o deploy é seguro antes
+ * e depois do script de ligar, em qualquer ordem.
  */
 import type { Unit } from '@prisma/client';
 import { createKommoClient, type KommoClient, type KommoLead } from '../services/kommo.service.js';
 import { logger } from './logger.js';
 import { normalizarNome } from './kommo-schema.js';
 import { CAMPO_UNIDADE, REGRAS_POR_UNIDADE, type RegrasDaUnidade } from './unidade-por-canal.js';
+import { grupoDaUnidade } from './crm-compartilhado.js';
 
 export type CodigoTrava = 'unidade_de_outra_cidade' | 'unidade_vazia' | 'unidade_ilegivel';
 
@@ -114,6 +119,8 @@ export async function travaDaUnidadeDeAtendimento(
 ): Promise<TravaDaFranquia | null> {
   const regras = regrasDaUnidade(unit.slug);
   if (!regras) return null;
+  // Divisão gravada: o roteamento por unidade do cartão decide (ver o cabeçalho). Sem ela, a trava vale.
+  if (await grupoDaUnidade(unit.id)) return null;
 
   let trava: TravaDaFranquia | null = ILEGIVEL;
   if (leadId && Number.isInteger(leadId) && leadId > 0) {
