@@ -66,6 +66,31 @@ export async function unidadeDoWidget(req: Request, res: Response, limite?: { ba
 }
 
 /**
+ * A porta das rotas da extensão Ponte: confere a CHAVE antes do limitador. No `unidadeDoWidget` o limitador vem
+ * primeiro e é por `req.ip` — sem `trust proxy`, atrás do Traefik, o ip é o do proxy, igual para todo mundo —, então
+ * quem soubesse só o slug, sem chave, travava as rotas da unidade com 31 pedidos por minuto. Aqui pedido sem chave
+ * leva 403 e não conta. Só o header `X-Widget-Key` (a Ponte nunca manda a chave na URL, que fica no log de acesso).
+ * As outras rotas de widget continuam com `unidadeDoWidget`, como sempre.
+ */
+export async function unidadeDaPonte(req: Request, res: Response, limite: { balde: string; max: number }): Promise<Unit | null> {
+  const slug = String(req.params.slug ?? '');
+  if (!chaveConfere(slug, env.SESSION_JWT_SECRET, req.header('x-widget-key') ?? undefined)) {
+    res.status(403).json({ error: 'chave inválida' });
+    return null;
+  }
+  if (excedeu(`${req.ip}:${slug}:${limite.balde}`, limite.max)) {
+    res.status(429).json({ error: 'muitas chamadas — aguarde um minuto' });
+    return null;
+  }
+  const unit = await prisma.unit.findUnique({ where: { slug } });
+  if (!unit || !unit.isActive) {
+    res.status(404).json({ error: 'unidade não encontrada' });
+    return null;
+  }
+  return unit;
+}
+
+/**
  * "A franquia foi lida há quantos minutos?" — o relógio do sincronizador, pra aparecer no cartão e na
  * Conferência. Sem isto a SDR registra na franquia e fica olhando o cartão sem saber se já passou a hora.
  */

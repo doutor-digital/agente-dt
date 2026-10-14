@@ -4,7 +4,7 @@
  *
  * `POST /api/public/widget/:slug/ponte/cartao` → o cartão do Kommo do paciente da conversa aberta no
  * WhatsApp Web, para o painel lateral. Mesma chave por unidade dos widgets do cartão (`X-Widget-Key`, ver
- * `widget-franquia.controller.ts` → `unidadeDoWidget`), com limite próprio.
+ * `widget-franquia.controller.ts` → `unidadeDaPonte`), com limite próprio.
  *
  * É POST só para nome e telefone do paciente irem no CORPO: na URL de um GET eles ficariam no log de acesso
  * do proxy e no log de debug (`req.url`) a cada troca de conversa. Não escreve nada.
@@ -26,12 +26,17 @@
  *     É a única escrita da Ponte, e vai no Kommo pela chave da unidade — nunca no WhatsApp;
  *   - `POST /api/public/widget/:slug/ponte/resumo-ia` `{ leadId }` → o resumo do lead escrito pela IA, só quando a
  *     atendente clica. Modelo barato, chave da unidade, cache de 6 h por lead (`lib/ponte-resumo.ts`).
+ *
+ * Fase 3 (14/10/2026): a resposta do cartão ganha `duplicados` (os outros cartões ABERTOS do mesmo paciente — do
+ * mesmo contato ou de outro contato com o mesmo telefone completo; ver `lib/ponte-duplicados.ts`), `primeiroNome`
+ * (para as respostas prontas) e `origem` (⚑ Origem). As ações novas (etiquetas, ligação, respostas) estão em
+ * `ponte-acoes.controller.ts`.
  */
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { unidadeDoWidget } from './widget-franquia.controller.js';
+import { unidadeDaPonte } from './widget-franquia.controller.js';
 import { KommoApiError, createKommoClient, type KommoClient, type KommoLead, type KommoPipeline } from '../services/kommo.service.js';
 import { chaveTelefone } from '../lib/franquia-sync.js';
 import { limparNome, termosDeBusca } from '../lib/widget-agenda.js';
@@ -69,6 +74,9 @@ import {
   type ResumoDoLead,
 } from '../lib/ponte-resumo.js';
 import { getLeadMemoryForAgent } from '../services/lead-memory.service.js';
+import { MAX_CARTOES_DUPLICADOS, cartoesDuplicados, mesmoTelefoneCompleto, origemDoCartao, telefoneCompleto, type CartaoDuplicado } from '../lib/ponte-duplicados.js';
+import { primeiroNomeDoPaciente } from '../lib/ponte-respostas.js';
+import { ehEtiquetaDeRobo, etiquetasDeRoboDaUnidade } from '../lib/ponte-etiquetas.js';
 import { mensagensOficiais } from '../services/kommo-talks.service.js';
 import { recordLlmCall } from '../services/openai.service.js';
 
@@ -107,9 +115,28 @@ function resumoCurto(conta: DadosDaConta, l: KommoLead) {
 
 // ── os três passos com acesso ao mundo ──
 
+type BuscaPorTelefone = (telefone: string) => ReturnType<KommoClient['buscarContatos']>;
+
+/**
+ * A busca de contatos por telefone, UMA vez por número na mesma requisição: o passo 1 do casamento e o aviso de
+ * cartão duplicado procuram quase sempre o mesmo número (o da conversa é o do contato).
+ */
+function buscaPorTelefoneDaRequisicao(kommo: KommoClient): BuscaPorTelefone {
+  const feitas = new Map<string, ReturnType<KommoClient['buscarContatos']>>();
+  return (telefone) => {
+    const chave = chaveTelefone(telefone);
+    let p = feitas.get(chave);
+    if (!p) {
+      p = kommo.buscarContatos(chave, 25);
+      feitas.set(chave, p);
+    }
+    return p;
+  };
+}
+
 /** Passo 1: contatos cujo telefone CONFERE (a busca do Kommo só sugere — casa pelos últimos dígitos). */
-async function contatosPorTelefone(kommo: KommoClient, telefone: string): Promise<ContatoAchado[]> {
-  const contatos = await kommo.buscarContatos(chaveTelefone(telefone), 25);
+async function contatosPorTelefone(buscar: BuscaPorTelefone, telefone: string): Promise<ContatoAchado[]> {
+  const contatos = await buscar(telefone);
   if (contatos === null) throw new Error('busca de contatos por telefone falhou');
   return contatos.filter((c) => c.telefones.some((t) => telefoneConfere(telefone, t))).map((c) => ({ nome: c.nome, leadIds: c.leadIds }));
 }
@@ -243,6 +270,55 @@ function resumoDoCartao(
   });
 }
 
+type ContatoComCartoes = NonNullable<Awaited<ReturnType<KommoClient['contatoComCartoes']>>>;
+
+/**
+ * Fase 3: os OUTROS cartões abertos do paciente — em que ele é o contato PRINCIPAL (`via: 'contato'`), ou em que o
+ * principal é outro contato com o MESMO telefone completo (`via: 'telefone'`, pode ser da família). `null` = não deu
+ * para saber (contato não lido, Kommo fora): o painel só não mostra a faixa. Nunca lança.
+ */
+async function duplicadosDoCartao(
+  unit: Unit,
+  kommo: KommoClient,
+  conta: DadosDaConta,
+  lead: KommoLead,
+  contato: ContatoComCartoes | null,
+  buscar: BuscaPorTelefone,
+): Promise<CartaoDuplicado[] | null> {
+  try {
+    if (!contatoPrincipalDe(lead)) return [];
+    if (!contato) return null;
+    const ids = new Set<number>(contato.leadIds);
+    const doMesmoTelefone = new Set<number>();
+    // os dois primeiros números do contato bastam (contato com 5 telefones é raro, e cada um é uma busca)
+    for (const tel of contato.telefones.slice(0, 2)) {
+      if (!telefoneCompleto(tel)) continue; // número sem DDD não diz "mesma pessoa"
+      const achados = await buscar(tel);
+      if (achados === null) return null;
+      for (const c of achados) {
+        if (c.id === contato.id || !c.telefones.some((t) => mesmoTelefoneCompleto(tel, t))) continue;
+        doMesmoTelefone.add(c.id);
+        for (const id of c.leadIds) ids.add(id);
+      }
+    }
+    ids.delete(lead.id);
+    const lista = [...ids].slice(0, MAX_CARTOES_DUPLICADOS);
+    if (!lista.length) return [];
+    // com os contatos (is_main): quem só aparece como contato secundário não conta
+    const cartoes = await kommo.listLeadsPorIds(lista, { contatos: true });
+    return cartoesDuplicados(
+      lead,
+      cartoes,
+      { contato: contato.id, doMesmoTelefone },
+      (l) => nomesDaEtapa(conta, l),
+      (id) => `https://${unit.kommoSubdomain}.kommo.com/leads/detail/${id}`,
+    );
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'ponte: não consegui conferir cartões duplicados');
+    return null;
+  }
+}
+
 function pausaParaOPainel(p: EstadoDaPausaDoLead | null): { ate: string; motivo: string | null; por: string | null } | null {
   return p?.emPausa && p.ate ? { ate: p.ate.toISOString(), motivo: p.motivo, por: p.por } : null;
 }
@@ -253,13 +329,14 @@ function pausaParaOPainel(p: EstadoDaPausaDoLead | null): { ate: string; motivo:
 const LIMITE_DA_PONTE = { balde: 'ponte', max: 150 };
 
 export async function ponteCartaoHandler(req: Request, res: Response): Promise<void> {
-  const unit = await unidadeDoWidget(req, res, LIMITE_DA_PONTE);
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_PONTE);
   if (!unit) return;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     res.status(409).json({ error: 'unidade sem Kommo conectado' });
     return;
   }
   const kommo = createKommoClient(unit);
+  const buscarTelefone = buscaPorTelefoneDaRequisicao(kommo);
   const b = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
   const leadDireto = Number(b.lead);
   const telefone = telefoneDaPonte(b.telefone);
@@ -273,7 +350,7 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
         : await casarCartao(
             { telefone, impressoes: impressoesValidas(b.impressoes, 8), nome: nome || null, manual },
             {
-              porTelefone: (t) => contatosPorTelefone(kommo, t),
+              porTelefone: (t) => contatosPorTelefone(buscarTelefone, t),
               porImpressao: (h) => cartaoPorImpressao(unit, h),
               porNome: (n) => contatosPorNome(kommo, n),
             },
@@ -324,8 +401,12 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
 
     // resumo: sem IA (cartão + memória da Sofia + franquia). O que ele lê a mais começa já, junto da franquia.
     const contexto = contextoDoResumo(unit, kommo, lead);
+    // o contato principal, com os cartões dele (fase 3): franquia, primeiro nome e o aviso de duplicado
+    const contatoId = contatoPrincipalDe(lead);
+    const contatoLido = contatoId ? await kommo.contatoComCartoes(contatoId) : null;
+    const duplicados = duplicadosDoCartao(unit, kommo, conta, lead, contatoLido, buscarTelefone);
     // franquia: a mesma resposta do widget "Agenda da franquia". Cair aqui não derruba o cartão.
-    const contato = await contatoParaFranquia(unit, kommo, lead);
+    const contato = unit.spineEnabled && unit.spineToken ? { nome: contatoLido?.nome ?? null, telefone: contatoLido?.telefone ?? null } : null;
     const franquia = await franquiaDoCartao(unit, lead, contato, telefone);
     let resumo: ResumoDoLead | null = null;
     try {
@@ -336,6 +417,7 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
     }
 
     logger.info({ unit: unit.slug, como: casamento.como, leadId: lead.id, outros: Math.max(0, ordenados.length - 1) }, 'ponte: cartão achado');
+    const listaDeDuplicados = await duplicados;
     res.json({
       achado: true,
       como: casamento.como,
@@ -353,6 +435,11 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
         },
         responsavel: (lead.responsible_user_id && conta.usuarios.get(lead.responsible_user_id)) || null,
         etiquetas: (lead._embedded?.tags ?? []).map((t) => t.name).filter(Boolean),
+        // fase 3: as que disparam robô que manda mensagem (▶ + a lista da unidade, ex.: "Aderência meio")
+        etiquetasRobo: (lead._embedded?.tags ?? []).map((t) => t.name).filter((n) => n && ehEtiquetaDeRobo(n, etiquetasDeRoboDaUnidade(unit.slug))),
+        // fase 3: as respostas prontas trocam o marcador de nome por este
+        primeiroNome: primeiroNomeDoPaciente(lead.name, contatoLido?.nome ?? null),
+        origem: origemDoCartao(lead),
         sofia: estadoDaSofia({
           unidade: unit,
           foraDoHorario: horario.enabled && !horario.isOpen,
@@ -364,6 +451,8 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
         atualizadoEm: lead.updated_at ? new Date(lead.updated_at * 1000).toISOString() : null,
       },
       outrosCartoes: ordenados.filter((l) => l.id !== lead.id).slice(0, 5).map((l) => resumoCurto(conta, l)),
+      // fase 3: outros cartões ABERTOS do mesmo paciente (null = não deu para conferir agora)
+      duplicados: listaDeDuplicados,
       franquia,
       resumo,
       // o botão "Resumir com IA" só aparece com a chave da PRÓPRIA unidade (é ela quem paga)
@@ -387,7 +476,7 @@ function respostaDaPausa(e: EstadoDaPausaDoLead) {
 
 /** `POST /api/public/widget/:slug/ponte/pausa` `{ leadId, ate, motivo?, por? }` */
 export async function pontePausarHandler(req: Request, res: Response): Promise<void> {
-  const unit = await unidadeDoWidget(req, res, LIMITE_DA_PAUSA);
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_PAUSA);
   if (!unit) return;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     res.status(409).json({ error: 'unidade sem Kommo conectado' });
@@ -411,7 +500,7 @@ export async function pontePausarHandler(req: Request, res: Response): Promise<v
 
 /** `DELETE /api/public/widget/:slug/ponte/pausa` `{ leadId, por? }` */
 export async function ponteRetomarHandler(req: Request, res: Response): Promise<void> {
-  const unit = await unidadeDoWidget(req, res, LIMITE_DA_PAUSA);
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_PAUSA);
   if (!unit) return;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
     res.status(409).json({ error: 'unidade sem Kommo conectado' });
@@ -513,7 +602,7 @@ async function gerarResumoIa(unit: Unit, chave: string, leadId: number): Promise
 
 /** `POST /api/public/widget/:slug/ponte/resumo-ia` `{ leadId }` */
 export async function ponteResumoIaHandler(req: Request, res: Response): Promise<void> {
-  const unit = await unidadeDoWidget(req, res, LIMITE_DA_IA);
+  const unit = await unidadeDaPonte(req, res, LIMITE_DA_IA);
   if (!unit) return;
   const chave = unit.anthropicApiKey;
   if (!chave) {

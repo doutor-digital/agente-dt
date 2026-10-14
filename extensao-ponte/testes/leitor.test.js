@@ -22,11 +22,11 @@ describe('leitor — conversa com @c.us (número de telefone)', () => {
   });
 
   it('o telefone vem do data-id @c.us da conversa aberta (não da lista lateral)', () => {
-    assert.equal(c.telefone, '5563991021043');
+    assert.equal(c.telefone, '5599900000043');
     assert.equal(c.fonteTelefone, 'c.us');
     assert.equal(c.tipo, 'contato');
     assert.equal(c.lid, false);
-    assert.equal(c.chave, '5563991021043@c.us');
+    assert.equal(c.chave, '5599900000043@c.us');
   });
 
   it('pega só as RECEBIDAS com texto, as 5 últimas, na ordem da tela', () => {
@@ -66,7 +66,7 @@ describe('leitor — conversa com @lid (id opaco, NÃO é telefone)', () => {
 
   it('contato não salvo: o número que está NO CABEÇALHO vale como telefone', () => {
     const d = L.lerConversa(abrir('whatsapp-lid-numero.html'), 5);
-    assert.equal(d.telefone, '5563991021043');
+    assert.equal(d.telefone, '5599900000043');
     assert.equal(d.fonteTelefone, 'cabecalho');
     assert.equal(d.lid, true);
     assert.notEqual(d.telefone, '998877665544332');

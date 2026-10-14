@@ -76,7 +76,7 @@ async function main(): Promise<void> {
         return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key', 'X-Requested-With'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }
       if (req.path.startsWith('/api/public/widget/') && ORIGEM_EXTENSAO.test(origin)) {
-        // DELETE: a fase 2 retoma a Sofia num paciente (`DELETE …/ponte/pausa`)
+        // DELETE: a fase 2 retoma a Sofia num paciente (`DELETE …/ponte/pausa`); a fase 3 tira etiqueta (`DELETE …/ponte/etiquetas`)
         return cb(null, { origin: true, credentials: false, allowedHeaders: ['Content-Type', 'X-Widget-Key'], methods: ['GET', 'POST', 'DELETE', 'OPTIONS'] });
       }
       const allowed = env.FRONTEND_ORIGIN.includes(origin);

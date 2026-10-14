@@ -38,6 +38,13 @@ export interface KommoChatTemplate {
   id: number;
   name: string;
   content?: string;
+  /**
+   * `waba` = modelo do WhatsApp (aprovado pela Meta); `amocrm` = modelo geral, texto livre (a "resposta pronta"
+   * da Ponte). Conferido no dump de Açailândia de 07/10/2026: 47 `waba` + 40 `amocrm`.
+   */
+  type?: string | null;
+  attachment?: unknown;
+  buttons?: unknown[] | null;
   /** A API pública devolve em `_embedded.reviews` (conferido 07/10/2026); a rota /ajax, em `reviews`. */
   reviews?: Array<{ status?: string; source_id?: number }> | null;
   _embedded?: { reviews?: Array<{ status?: string; source_id?: number }> | null };
@@ -123,6 +130,27 @@ export interface KommoCustomField {
   name: string;
   type: string;
   code?: string | null;
+}
+
+/** Uma etapa de um funil: 142/143 se repetem em todo funil, então a chave é SEMPRE o par. */
+export interface EtapaDoFunil {
+  pipeline_id: number;
+  status_id: number;
+}
+
+/** Um campo de cartão da conta, como `listarCamposDoCartao` devolve (a Ponte usa). */
+export interface CampoDoCartaoDaConta {
+  id: number;
+  name: string;
+  type: string;
+  enums: Array<{ id: number; value: string }>;
+  sort?: number;
+  /** "Apenas API": quem está na tela não vê nem preenche. */
+  is_api_only?: boolean;
+  /** Onde o Kommo exige o campo para ENTRAR na etapa pela tela (cumulativo: ver `ponte-guia.ts`). */
+  required_statuses?: EtapaDoFunil[];
+  /** Onde o campo fica escondido no cartão. */
+  hidden_statuses?: EtapaDoFunil[];
 }
 
 export interface KommoSalesbot {
@@ -740,6 +768,39 @@ export class KommoClient {
     return out;
   }
 
+  /**
+   * Nome, telefones e cartões de um contato numa chamada só (`with=leads`) — para a Ponte: a franquia (nome e
+   * telefone), o primeiro nome das respostas prontas e o aviso de cartão duplicado. `null` = não consegui
+   * perguntar (não é "contato sem nada").
+   */
+  async contatoComCartoes(
+    contactId: number,
+  ): Promise<{ id: number; nome: string | null; telefone: string | null; telefones: string[]; leadIds: number[] } | null> {
+    try {
+      const { data } = await this.http.get<
+        | {
+            id?: number;
+            name?: string;
+            custom_fields_values?: Array<{ field_code?: string; values?: Array<{ value?: string }> }> | null;
+            _embedded?: { leads?: Array<{ id?: number }> };
+          }
+        | ''
+      >(`/contacts/${contactId}`, { params: { with: 'leads' } });
+      if (!data) return null;
+      const campo = data.custom_fields_values?.find((f) => f.field_code === 'PHONE');
+      const telefones = (campo?.values ?? []).map((v) => (typeof v.value === 'string' ? v.value.trim() : '')).filter(Boolean);
+      return {
+        id: contactId,
+        nome: typeof data.name === 'string' && data.name.trim() ? data.name.trim() : null,
+        telefone: telefones[0] ?? null,
+        telefones,
+        leadIds: (data._embedded?.leads ?? []).map((l) => l.id).filter((id): id is number => typeof id === 'number'),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** Ids de todos os cartões de um contato. `null` = não consegui perguntar (não é "nenhum"). */
   async leadsDoContato(contactId: number): Promise<number[] | null> {
     try {
@@ -1079,6 +1140,74 @@ export class KommoClient {
     }
   }
 
+  /**
+   * TODOS os campos de cartão da conta, de TODOS os tipos (inclusive `date_time`, `url`, `checkbox`), com as
+   * opções dos selects — paginado (a conta de Açailândia tinha 217 campos em 07/10/2026, perto da página de
+   * 250 do `listLeadCustomFields`). Para a Ponte achar os campos ☎ pelo NOME. Erro lança.
+   *
+   * Ponte 0.4.0: vem também onde cada campo é OBRIGATÓRIO (`required_statuses`) e ESCONDIDO (`hidden_statuses`),
+   * os dois como (funil, etapa), e se é "Apenas API" (`is_api_only`) — o guia "O que eu faço agora?" usa.
+   */
+  async listarCamposDoCartao(maxPaginas = 4): Promise<CampoDoCartaoDaConta[]> {
+    const out: CampoDoCartaoDaConta[] = [];
+    const etapas = (l: Array<{ pipeline_id?: number; status_id?: number }> | null | undefined) =>
+      (l ?? [])
+        .filter((r) => Number.isInteger(r?.pipeline_id) && Number.isInteger(r?.status_id))
+        .map((r) => ({ pipeline_id: Number(r.pipeline_id), status_id: Number(r.status_id) }));
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data } = await this.http.get<
+          | {
+              _embedded?: {
+                custom_fields?: Array<{
+                  id: number;
+                  name: string;
+                  type: string;
+                  sort?: number;
+                  is_api_only?: boolean;
+                  enums?: Array<{ id: number; value: string }> | null;
+                  required_statuses?: Array<{ pipeline_id?: number; status_id?: number }> | null;
+                  hidden_statuses?: Array<{ pipeline_id?: number; status_id?: number }> | null;
+                }>;
+              };
+              _links?: { next?: unknown };
+            }
+          | ''
+        >('/leads/custom_fields', { params: { limit: 250, page } });
+        const lote = (data && data._embedded?.custom_fields) || [];
+        for (const f of lote) {
+          out.push({
+            id: f.id,
+            name: f.name,
+            type: f.type,
+            enums: (f.enums ?? []).map((e) => ({ id: e.id, value: e.value })),
+            sort: typeof f.sort === 'number' ? f.sort : undefined,
+            is_api_only: f.is_api_only === true,
+            required_statuses: etapas(f.required_statuses),
+            hidden_statuses: etapas(f.hidden_statuses),
+          });
+        }
+        if (!data || !data._links?.next || lote.length === 0) break;
+      } catch (err) {
+        wrapAxiosError(err, `listarCamposDoCartao(p${page})`);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Grava vários campos do cartão num PATCH só, com os `values` já no formato do Kommo (`[{ value }]`,
+   * `[{ enum_id }]`, ou `null` para esvaziar). Quem chama monta os valores — aqui não há conversão.
+   */
+  async gravarCamposDoLead(leadId: number, campos: Array<{ field_id: number; values: Array<Record<string, unknown>> | null }>): Promise<void> {
+    if (!campos.length) return;
+    try {
+      await this.http.patch(`/leads/${leadId}`, { custom_fields_values: campos });
+    } catch (err) {
+      wrapAxiosError(err, `gravarCamposDoLead(${leadId}, ${campos.length} campos)`);
+    }
+  }
+
   async listLeadCustomFieldsTyped(): Promise<KommoLeadCustomField[]> {
     const raw = (await this.listLeadCustomFields()) as {
       _embedded?: {
@@ -1240,6 +1369,25 @@ export class KommoClient {
       });
     } catch (err) {
       wrapAxiosError(err, `moveStage(${leadId}, status=${statusId})`);
+    }
+  }
+
+  /**
+   * Ponte 0.4.0: muda a etapa e grava os campos que faltavam NUM PATCH só — se o Kommo recusar um valor, o cartão
+   * não anda sem o campo. `lossReasonId` só no PERDIDO (o motivo de perda do cabeçalho do Kommo). Os `campos` vão no
+   * formato do Kommo, já montados por quem chama (como em `gravarCamposDoLead`).
+   */
+  async moverCartao(
+    leadId: number,
+    p: { statusId: number; pipelineId: number; campos?: Array<{ field_id: number; values: Array<Record<string, unknown>> | null }>; lossReasonId?: number | null },
+  ): Promise<void> {
+    const corpo: Record<string, unknown> = { status_id: p.statusId, pipeline_id: p.pipelineId };
+    if (p.campos?.length) corpo.custom_fields_values = p.campos;
+    if (p.lossReasonId) corpo.loss_reason_id = p.lossReasonId;
+    try {
+      await this.http.patch(`/leads/${leadId}`, corpo);
+    } catch (err) {
+      wrapAxiosError(err, `moverCartao(${leadId}, status=${p.statusId}, ${p.campos?.length ?? 0} campos)`);
     }
   }
 

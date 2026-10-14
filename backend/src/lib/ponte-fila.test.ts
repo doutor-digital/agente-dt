@@ -13,6 +13,7 @@ import {
   regraNegociacao,
   regraRetomar,
   regraSemResposta,
+  semTelefoneConfirmado,
   situacaoConfirmada,
   somarDias,
   telefoneParaMostrar,
@@ -268,11 +269,11 @@ describe('fila — o cartão do Kommo lido pelo nome dos campos', () => {
 
 describe('fila — telefone para "Abrir conversa" e "Copiar telefone"', () => {
   it('vira dígitos com o país', () => {
-    assert.equal(telefoneParaWhatsapp('+55 (63) 99102-1043'), '5563991021043');
-    assert.equal(telefoneParaWhatsapp('63991021043'), '5563991021043');
-    assert.equal(telefoneParaWhatsapp('(63) 9102-1043'), '556391021043');
-    assert.equal(telefoneParaWhatsapp('063991021043'), '5563991021043', 'zero de discagem sai');
-    assert.equal(telefoneParaWhatsapp('5563991021043'), '5563991021043');
+    assert.equal(telefoneParaWhatsapp('+55 (99) 90000-0043'), '5599900000043');
+    assert.equal(telefoneParaWhatsapp('99900000043'), '5599900000043');
+    assert.equal(telefoneParaWhatsapp('(99) 0000-0043'), '559900000043');
+    assert.equal(telefoneParaWhatsapp('099900000043'), '5599900000043', 'zero de discagem sai');
+    assert.equal(telefoneParaWhatsapp('5599900000043'), '5599900000043');
     assert.equal(telefoneParaWhatsapp('+1 415 555 2671'), '14155552671', 'de fora do Brasil fica como está');
   });
 
@@ -283,8 +284,8 @@ describe('fila — telefone para "Abrir conversa" e "Copiar telefone"', () => {
   });
 
   it('para mostrar e copiar', () => {
-    assert.equal(telefoneParaMostrar('5563991021043'), '(63) 99102-1043');
-    assert.equal(telefoneParaMostrar('556391021043'), '(63) 9102-1043');
+    assert.equal(telefoneParaMostrar('5599900000043'), '(99) 90000-0043');
+    assert.equal(telefoneParaMostrar('559900000043'), '(99) 0000-0043');
     assert.equal(telefoneParaMostrar('14155552671'), '+14155552671');
   });
 });
@@ -322,5 +323,14 @@ describe('fila — os grupos', () => {
     const g = montarGrupos([cand('sem-resposta', 1, 1), cand('retomar', 1, 1), cand('retomar', 1, 2)]);
     assert.equal(g.reduce((s, x) => s + x.total, 0), 1);
     assert.equal(g[0].total, 1);
+  });
+});
+
+describe('fase 3 — "sem telefone" só quando o Kommo afirma', () => {
+  it('falha ao ler os telefones não vira "sem telefone"', () => {
+    assert.equal(semTelefoneConfirmado(null, 10, false), false, 'não leu: não sabe');
+    assert.equal(semTelefoneConfirmado(null, 10, true), true, 'leu e não tem');
+    assert.equal(semTelefoneConfirmado(null, null, false), true, 'cartão sem contato: não tem mesmo');
+    assert.equal(semTelefoneConfirmado('5599900000043', 10, true), false);
   });
 });

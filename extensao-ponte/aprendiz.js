@@ -17,6 +17,7 @@
     { id: 'etiquetas', quando: 'sempre', titulo: 'Etiquetas', onde: 'Cartão › embaixo do nome, o "#"' },
     { id: 'pausa', quando: 'sempre', titulo: 'Pausar a Sofia', onde: 'Cartão › campo "Pausar IA" (ou o widget "Pausar a Sofia")' },
     { id: 'franquia', quando: 'sempre', titulo: 'Agenda da franquia', onde: 'Cartão › coluna da direita › widget "Agenda da franquia"' },
+    { id: 'respostas', quando: 'sempre', titulo: 'Respostas prontas', onde: 'Configurações › Modelos › Modelos gerais (no chat: o raio ⚡ ou "/")' },
   ];
   return Object.freeze({ DICAS: Object.freeze(DICAS.map(Object.freeze)) });
 });

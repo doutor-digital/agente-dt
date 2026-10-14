@@ -44,7 +44,7 @@ describe('content script (conteudo.js + leitor + impressão)', () => {
       const e = await perguntar();
       assert.deepEqual(Object.keys(e).sort(), ['aberta', 'chave', 'fonteTelefone', 'impressoes', 'lid', 'nome', 'telefone', 'tipo']);
       assert.equal(e.nome, 'Maria Souza');
-      assert.equal(e.telefone, '5563991021043');
+      assert.equal(e.telefone, '5599900000043');
       assert.equal(e.impressoes.length, 5);
       for (const h of e.impressoes) assert.match(h, /^[0-9a-f]{64}$/);
       const json = JSON.stringify(e);
@@ -62,7 +62,7 @@ describe('content script (conteudo.js + leitor + impressão)', () => {
       await esperar(900);
       assert.equal(enviadas.length, 1);
       assert.equal(enviadas[0].tipo, 'ponte:conversa');
-      assert.equal(enviadas[0].estado.telefone, '5563991021043');
+      assert.equal(enviadas[0].estado.telefone, '5599900000043');
 
       // a atendente clica em outra conversa: o WhatsApp troca o #main inteiro e a URL fica igual
       const outra = new JSDOM(html('whatsapp-lid.html')).window.document.querySelector('#main');
@@ -109,7 +109,8 @@ describe('content script (conteudo.js + leitor + impressão)', () => {
 describe('manifest', () => {
   it('permissões mínimas, content script só no WhatsApp Web, mundo isolado, painel lateral', () => {
     assert.equal(manifest.manifest_version, 3);
-    assert.deepEqual(manifest.permissions.slice().sort(), ['sidePanel', 'storage']);
+    // 0.4.0: `alarms` para o número no ícone (pacientes esperando resposta, a cada 5 min) — nada de tabs, scripting nem notifications
+    assert.deepEqual(manifest.permissions.slice().sort(), ['alarms', 'sidePanel', 'storage']);
     assert.deepEqual(manifest.host_permissions, ['https://agente-vps.doutordigitalconsultoria.com/*']);
     assert.equal(manifest.content_scripts.length, 1);
     assert.deepEqual(manifest.content_scripts[0].matches, ['https://web.whatsapp.com/*']);

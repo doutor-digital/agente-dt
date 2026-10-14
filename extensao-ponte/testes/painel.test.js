@@ -1,0 +1,493 @@
+// Fase 3 (e o guia da 0.4.0) — o painel.js inteiro (os scripts na ordem do painel.html) no jsdom, com `chrome`,
+// `fetch` e relógio falsos. Prova o caminho de verdade: "Começar a ligar" abre a conversa só pela URL com o telefone, espera o ritmo,
+// grava o resultado, pula quem não tem telefone e guarda só ids e horas; as etiquetas vão com quem pôs; e a
+// resposta pronta copiada sai com o nome do paciente DA TELA (nunca o do anterior).
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { JSDOM } = require('jsdom');
+
+const raiz = path.join(__dirname, '..');
+const html = fs.readFileSync(path.join(raiz, 'painel.html'), 'utf8');
+const scripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
+const esperar = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+const T0 = Date.parse('2026-10-14T13:00:00.000Z');
+
+const item = (leadId, extra = {}) => ({
+  leadId,
+  nome: 'Paciente ' + leadId,
+  etapa: 'EM ESPERA',
+  motivo: 'retomar contato',
+  detalhe: 'retomar hoje',
+  telefone: '55999000000' + String(leadId).padStart(2, '0'),
+  telefoneVisivel: '(99) 90000-00' + String(leadId).padStart(2, '0'),
+  link: 'https://x.kommo.com/leads/detail/' + leadId,
+  passado: false,
+  quando: '2026-10-14T12:00:00.000Z',
+  ...extra,
+});
+
+const FILA = {
+  unidade: 'Açailândia',
+  atualizadoEm: '2026-10-14T13:00:00.000Z',
+  ritmo: { intervaloS: 40, tetoPorHora: 2 },
+  grupos: [
+    { id: 'sem-resposta', etapa: 'entrada', rotulo: 'sem resposta', total: 2, itens: [item(1), item(2, { telefone: null, telefoneVisivel: null, semTelefone: true })] },
+    { id: 'retomar', etapa: 'EM ESPERA', rotulo: 'retomar contato', total: 2, itens: [item(3), item(4)] },
+  ],
+};
+
+const cartaoDe = (id, primeiroNome, etiquetas = []) => ({
+  achado: true,
+  como: 'telefone',
+  cartao: {
+    id,
+    nome: primeiroNome.toUpperCase() + ' SOUZA 03/10/2026',
+    primeiroNome,
+    link: 'https://x.kommo.com/leads/detail/' + id,
+    funil: 'COMERCIAL',
+    etapa: 'EM ESPERA',
+    fechado: false,
+    etiquetas,
+    sofia: { pausada: false, por: null, ate: null },
+  },
+  duplicados: [],
+});
+
+function montar({ conversa = { aberta: false }, rotas = {}, guardado = {} } = {}) {
+  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/painel.html' });
+  const w = dom.window;
+  const relogio = { agora: T0, intervalos: new Map(), proximo: 1 };
+  w.Date.now = () => relogio.agora;
+  w.setInterval = (f) => { const id = relogio.proximo++; relogio.intervalos.set(id, f); return id; };
+  w.clearInterval = (id) => { relogio.intervalos.delete(id); };
+  const armazenado = { slug: 'doutor-hernia-acailandia', chave: 'k', nome: 'Ana', ...guardado };
+  const atualizacoes = [];
+  const pedidos = [];
+  const copiados = [];
+  const ouvintes = {};
+  Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: (t) => { copiados.push(t); return Promise.resolve(); } }, configurable: true });
+  w.chrome = {
+    storage: {
+      local: {
+        get: (chaves) => Promise.resolve(Object.fromEntries((Array.isArray(chaves) ? chaves : [chaves]).filter((k) => k in armazenado).map((k) => [k, JSON.parse(JSON.stringify(armazenado[k]))]))),
+        set: (o) => { Object.assign(armazenado, JSON.parse(JSON.stringify(o))); return Promise.resolve(); },
+      },
+      onChanged: { addListener: () => {} },
+    },
+    tabs: {
+      query: () => Promise.resolve([{ id: 7 }]),
+      sendMessage: () => Promise.resolve(conversa),
+      update: (id, p) => { atualizacoes.push({ id, ...p }); return Promise.resolve({}); },
+      onActivated: { addListener: () => {} },
+    },
+    runtime: { onMessage: { addListener: (f) => { ouvintes.mensagem = f; } }, openOptionsPage: () => {} },
+  };
+  w.fetch = (url, init = {}) => {
+    const u = new URL(url);
+    const caminho = u.pathname.replace('/api/public/widget/doutor-hernia-acailandia', '');
+    const metodo = init.method || 'GET';
+    const corpo = init.body ? JSON.parse(init.body) : null;
+    pedidos.push({ metodo, caminho, busca: u.search, corpo, chave: init.headers && init.headers['X-Widget-Key'] });
+    const r = rotas[metodo + ' ' + caminho];
+    const resposta = typeof r === 'function' ? r(corpo) : r;
+    return Promise.resolve({ ok: !!resposta, status: resposta ? 200 : 500, json: () => Promise.resolve(resposta || { error: 'falhou' }) });
+  };
+  for (const s of scripts) w.eval(fs.readFileSync(path.join(raiz, s), 'utf8'));
+  const tempo = async (ms) => {
+    relogio.agora += ms;
+    for (const f of [...relogio.intervalos.values()]) f();
+    await esperar();
+    await esperar();
+  };
+  const doc = w.document;
+  return { w, doc, armazenado, atualizacoes, pedidos, copiados, ouvintes, tempo };
+}
+
+describe('painel — "Começar a ligar" (fase 3)', () => {
+  it('abre a conversa pela URL, espera o ritmo, grava o resultado, pula sem telefone e respeita o teto', async () => {
+    const p = montar({
+      rotas: {
+        'GET /ponte/fila': FILA,
+        'POST /ponte/ligacao': (c) => ({ leadId: c.leadId, resultado: c.resultado, campos: true, nota: true, tentativas: 1, avisos: [] }),
+      },
+    });
+    try {
+      await esperar(10);
+      p.doc.getElementById('aba-fila').click();
+      await esperar(10);
+      const comecar = p.doc.querySelector('[data-acao="comecar-ligar"]');
+      assert.equal(comecar.textContent, 'Começar a ligar');
+      comecar.click();
+      await esperar();
+      await esperar();
+
+      // 1º: abre na hora, só com o telefone (navegação), e o painel fica na fila
+      assert.deepEqual(p.atualizacoes, [{ id: 7, url: 'https://web.whatsapp.com/send?phone=5599900000001', active: true }]);
+      assert.equal(p.doc.getElementById('fila').hidden, false);
+      assert.match(p.doc.getElementById('fila').textContent, /Clique no 📞 do WhatsApp para ligar/);
+
+      // resultado → POST com o cartão, o resultado e quem
+      p.doc.querySelector('[data-resultado="nao-atendeu"]').click();
+      await esperar();
+      await esperar();
+      const gravou = p.pedidos.find((x) => x.caminho === '/ponte/ligacao');
+      const { tentativa, ...semTentativa } = gravou.corpo;
+      assert.deepEqual(semTentativa, { leadId: 1, resultado: 'nao-atendeu', por: 'Ana' });
+      assert.match(tentativa, /^[A-Za-z0-9_-]{8,64}$/, 'o resultado leva o id da tentativa');
+      assert.equal(gravou.chave, 'k');
+
+      // o 2 não tem telefone: pulado com aviso; o 3 espera os 40 s do ritmo
+      const fila = p.doc.getElementById('fila');
+      assert.match(fila.querySelector('[data-bloco="pulados"]').textContent, /Paciente 2/);
+      assert.match(fila.querySelector('.ligacao__nome').textContent, /Paciente 3/);
+      assert.equal(fila.querySelector('[data-papel="espera"]').textContent, 'próximo em 40 s');
+      assert.equal(p.atualizacoes.length, 1, 'não abre antes do intervalo');
+      await p.tempo(15_000);
+      assert.equal(fila.querySelector('[data-papel="espera"]').textContent, 'próximo em 25 s');
+      await p.tempo(25_000);
+      assert.equal(p.atualizacoes.length, 2);
+      assert.equal(p.atualizacoes[1].url, 'https://web.whatsapp.com/send?phone=5599900000003');
+
+      // "Pular" não grava nada; o teto (2 por hora) segura o 4 até a 1ª abertura sair da janela
+      fila.querySelector('.ligacao__resultados [data-acao="pular-ligacao"]').click();
+      await esperar();
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ponte/ligacao').length, 1);
+      assert.match(fila.textContent, /teto de 2 conversas na última hora/);
+      await p.tempo(60_000);
+      assert.equal(p.atualizacoes.length, 2, 'o teto ainda segura');
+      await p.tempo(60 * 60_000);
+      assert.equal(p.atualizacoes.length, 3);
+      assert.equal(p.atualizacoes[2].url, 'https://web.whatsapp.com/send?phone=5599900000004');
+
+      // o que ficou guardado: só ids, horas e o id da tentativa
+      const guardado = JSON.stringify(p.armazenado.ligacao);
+      assert.deepEqual(p.armazenado.ligacao.feitos, [1, 2, 3]);
+      assert.equal(p.armazenado.ligacao.atual, 4);
+      for (const t of ['Paciente', '559990000', '(99)']) assert.ok(!guardado.includes(t), `vazou "${t}" no storage`);
+      // nenhuma URL com texto
+      assert.ok(p.atualizacoes.every((a) => !/text=/.test(a.url)));
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('fechar e reabrir o painel: continua do mesmo paciente, sem abrir a conversa de novo', async () => {
+    // o storage como ficou quando o painel fechou: 1 e 2 feitos, a conversa do 3 aberta há 10 s
+    const p = montar({
+      rotas: { 'GET /ponte/fila': FILA },
+      guardado: { ligacao: { v: 1, dia: '2026-10-14', slug: 'doutor-hernia-acailandia', feitos: [1, 2], atual: 3, aberturas: [T0 - 10_000] } },
+    });
+    try {
+      await esperar(10);
+      p.doc.getElementById('aba-fila').click();
+      await esperar(10);
+      const b = p.doc.querySelector('[data-acao="comecar-ligar"]');
+      assert.equal(b.textContent, 'Continuar a ligar (2 feitos hoje)');
+      b.click();
+      await esperar();
+      assert.match(p.doc.getElementById('fila').textContent, /Clique no 📞 do WhatsApp para ligar/);
+      assert.match(p.doc.querySelector('.ligacao__nome').textContent, /Paciente 3/);
+      assert.equal(p.atualizacoes.length, 0, 'a conversa já estava aberta');
+      // "Abrir a conversa de novo" é a mesma conversa: abre na hora, sem contar no ritmo
+      p.doc.querySelector('[data-acao="reabrir-ligacao"]').click();
+      await esperar();
+      await esperar();
+      assert.equal(p.atualizacoes.length, 1);
+      assert.deepEqual(p.armazenado.ligacao.aberturas, [T0 - 10_000]);
+    } finally {
+      p.w.close();
+    }
+  });
+});
+
+describe('painel — etiquetas e respostas prontas (fase 3)', () => {
+  it('pôr etiqueta manda quem pôs e redesenha com a lista RELIDA do servidor', async () => {
+    const conversa = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5599900000043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
+    const p = montar({
+      conversa,
+      rotas: {
+        'POST /ponte/cartao': cartaoDe(123, 'Maria', ['LOMBAR']),
+        'GET /ponte/etiquetas': { etiquetas: [{ nome: 'LOMBAR', robo: false }, { nome: 'META', robo: false }] },
+        'POST /ponte/etiquetas': (c) => ({ leadId: c.leadId, nome: c.nome, mudou: true, etiquetas: ['LOMBAR', 'META'] }),
+      },
+    });
+    try {
+      await esperar(600); // a espera de 400 ms do painel antes de procurar o cartão
+      const cart = p.doc.getElementById('conteudo');
+      assert.match(cart.textContent, /MARIA SOUZA/);
+      cart.querySelector('[data-acao="abrir-etiquetas"]').click();
+      await esperar();
+      await esperar();
+      cart.querySelector('[data-papel="opcoes-etiqueta"] [data-etiqueta="META"]').click();
+      await esperar();
+      await esperar();
+      const pos = p.pedidos.find((x) => x.metodo === 'POST' && x.caminho === '/ponte/etiquetas');
+      assert.deepEqual(pos.corpo, { leadId: 123, nome: 'META', por: 'Ana', confirmado: false });
+      assert.deepEqual([...p.doc.querySelectorAll('[data-bloco="etiquetas"] .etiqueta')].map((c) => c.getAttribute('data-etiqueta')), ['LOMBAR', 'META']);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('a resposta copiada sai com o nome do paciente da tela; trocando de conversa, nunca com o nome do anterior', async () => {
+    const conversa = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5599900000043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
+    let cartaoAtual = cartaoDe(123, 'Maria');
+    const p = montar({
+      conversa,
+      rotas: {
+        'POST /ponte/cartao': () => cartaoAtual,
+        'GET /ponte/respostas': { respostas: [{ id: 1, nome: 'Bom dia', texto: 'Bom dia, {{contact.name}}!', temAnexo: false }], ondeCadastrar: 'x' },
+      },
+    });
+    try {
+      await esperar(600);
+      p.doc.getElementById('aba-respostas').click();
+      await esperar();
+      await esperar();
+      const aba = p.doc.getElementById('respostas');
+      assert.equal(aba.hidden, false);
+      aba.querySelector('[data-acao="copiar-resposta"]').click();
+      await esperar();
+      assert.deepEqual(p.copiados, ['Bom dia, Maria!']);
+
+      // a atendente troca de conversa: enquanto o cartão novo não chega, o nome some
+      cartaoAtual = cartaoDe(456, 'João');
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, chave: 'c2', telefone: '5599900000044', nome: 'João Lima' } }, { tab: { id: 7 } });
+      p.doc.getElementById('respostas').querySelector('[data-acao="copiar-resposta"]').click();
+      await esperar();
+      assert.equal(p.copiados[1], 'Bom dia, [nome]!');
+      await esperar(600);
+      p.doc.getElementById('respostas').querySelector('[data-acao="copiar-resposta"]').click();
+      await esperar();
+      assert.equal(p.copiados[2], 'Bom dia, João!');
+    } finally {
+      p.w.close();
+    }
+  });
+});
+
+describe('painel — revisão: gravação dupla e telefone não lido', () => {
+  it('resultado pendente: trocar de aba e voltar NÃO destrava os botões, e o segundo clique não manda nada', async () => {
+    let soltar;
+    const pendente = new Promise((r) => { soltar = r; });
+    const p = montar({
+      rotas: {
+        'GET /ponte/fila': FILA,
+        'POST /ponte/ligacao': () => pendente,
+      },
+    });
+    // a rota devolve uma promessa pendente: o json() do fetch falso só resolve quando ela soltar
+    try {
+      await esperar(10);
+      p.doc.getElementById('aba-fila').click();
+      await esperar(10);
+      p.doc.querySelector('[data-acao="comecar-ligar"]').click();
+      await esperar();
+      await esperar();
+      p.doc.querySelector('[data-resultado="atendeu"]').click();
+      await esperar();
+      // redesenho pela aba
+      p.doc.getElementById('aba-conversa').click();
+      p.doc.getElementById('aba-fila').click();
+      await esperar();
+      const botoes = [...p.doc.querySelectorAll('[data-acao="resultado"]')];
+      assert.ok(botoes.length && botoes.every((b) => b.disabled), 'continuam travados');
+      botoes[1].click();
+      await esperar();
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ponte/ligacao').length, 1, 'um pedido só');
+      soltar({ leadId: 1, resultado: 'atendeu', campos: true, nota: false, tentativas: 1, avisos: [] });
+      await esperar();
+      await esperar();
+      assert.match(p.doc.getElementById('fila').textContent, /Gravado no Kommo: Paciente 1 · atendeu/);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('o Kommo não deu os telefones: ninguém é marcado como feito e a tela não diz que acabou', async () => {
+    const semLeitura = {
+      ...FILA,
+      avisoTelefones: 'Não consegui ler os telefones agora: tente de novo (Atualizar).',
+      grupos: [{ id: 'retomar', etapa: 'EM ESPERA', rotulo: 'retomar contato', total: 2, itens: [
+        item(3, { telefone: null, telefoneVisivel: null, semTelefone: false }),
+        item(4, { telefone: null, telefoneVisivel: null, semTelefone: false }),
+      ] }],
+    };
+    const p = montar({ rotas: { 'GET /ponte/fila': semLeitura } });
+    try {
+      await esperar(10);
+      p.doc.getElementById('aba-fila').click();
+      await esperar(10);
+      const fila = p.doc.getElementById('fila');
+      assert.match(fila.querySelector('[data-papel="aviso-telefones"]').textContent, /Não consegui ler os telefones/);
+      assert.match(fila.textContent, /telefone não lido agora/);
+      fila.querySelector('[data-acao="comecar-ligar"]').click();
+      await esperar();
+      assert.doesNotMatch(fila.textContent, /Acabou a fila de hoje/);
+      assert.match(fila.textContent, /2 pacientes ficaram sem o telefone lido/);
+      assert.deepEqual(p.armazenado.ligacao.feitos, [], 'nada marcado como feito');
+      assert.equal(p.atualizacoes.length, 0);
+    } finally {
+      p.w.close();
+    }
+  });
+});
+
+// ── 0.4.0: o guia "O que eu faço agora?" no painel de verdade ──
+
+const CAMPO_ESPERA = { id: 2454156, nome: '⊘ Motivo da espera', tipo: 'lista', opcoes: [{ id: 1852306, valor: 'Viajando' }], obrigatorio: true, editavel: true, quem: 'sdr', valor: null };
+const CAMPO_RETOMAR = { id: 2454154, nome: '◷ Retomar em', tipo: 'data', obrigatorio: true, editavel: true, quem: 'sdr', valor: null };
+const CAMPO_OBS = { id: 2449924, nome: '✎ Observações', tipo: 'texto-longo', obrigatorio: false, editavel: true, quem: 'sdr', valor: null };
+const guiaDe = (leadId, extra = {}) => ({
+  leadId,
+  nome: 'MARIA SOUZA 03/10/2026',
+  funil: 'COMERCIAL',
+  etapa: 'EM QUALIFICAÇÃO',
+  statusId: 106809907,
+  pipelineId: 13795975,
+  noComercial: true,
+  pendencia: null,
+  unidade: null,
+  faltam: [CAMPO_OBS],
+  saidas: [{ statusId: 111237819, nome: 'EM ESPERA', rotulo: 'Quer, mas depois', faltam: [CAMPO_ESPERA, CAMPO_RETOMAR], sugere: [], bloqueio: null, mensagens: [], dicas: [] }],
+  semSaidas: null,
+  avisoDosRobos: 'Ao mover, os robôs desta etapa podem mandar mensagem ao paciente.',
+  link: 'https://x.kommo.com/leads/detail/' + leadId,
+  ...extra,
+});
+
+function digitarNoPainel(doc, id, valor) {
+  const c = doc.querySelector(`.guia__entrada[data-campo="${id}"]`);
+  assert.ok(c, `campo ${id}`);
+  c.value = valor;
+  c.dispatchEvent(new doc.defaultView.Event('input'));
+  c.dispatchEvent(new doc.defaultView.Event('change'));
+}
+
+describe('painel — o guia "O que eu faço agora?" (0.4.0)', () => {
+  const conversa = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5599900000043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
+
+  it('abre o guia do cartão, grava os campos e move a etapa só com confirmação; ao voltar, relê o cartão', async () => {
+    let cartaoAtual = cartaoDe(123, 'Maria');
+    const p = montar({
+      conversa,
+      rotas: {
+        'POST /ponte/cartao': () => cartaoAtual,
+        'GET /ponte/guia': guiaDe(123),
+        'POST /ponte/campos': (c) => ({ leadId: c.leadId, gravados: [{ nome: '✎ Observações', texto: 'ligar à tarde' }], iguais: [], nota: true, guia: guiaDe(123, { faltam: [] }) }),
+        'POST /ponte/mover': (c) => ({ leadId: c.leadId, de: 'EM QUALIFICAÇÃO', para: 'EM ESPERA', gravados: [{ nome: '⊘ Motivo da espera', texto: 'Viajando' }, { nome: '◷ Retomar em', texto: '20/10/2026' }], nota: true, guia: guiaDe(123, { etapa: 'EM ESPERA', statusId: 111237819, faltam: [], saidas: [] }) }),
+      },
+    });
+    try {
+      await esperar(600);
+      const tela = p.doc.getElementById('conteudo');
+      tela.querySelector('[data-acao="abrir-guia"]').click();
+      await esperar();
+      await esperar();
+      const pedidoGuia = p.pedidos.find((x) => x.caminho === '/ponte/guia');
+      assert.equal(pedidoGuia.busca, '?leadId=123');
+      assert.equal(pedidoGuia.chave, 'k');
+      assert.ok(tela.querySelector('[data-estado="guia"]'), 'o guia toma o lugar do cartão');
+
+      // campos desta etapa: prévia → gravar, com quem
+      digitarNoPainel(p.doc, CAMPO_OBS.id, 'ligar à tarde');
+      tela.querySelector('[data-acao="revisar-campos"]').click();
+      tela.querySelector('[data-passo="faltam"] [data-acao="confirmar"]').click();
+      await esperar();
+      await esperar();
+      const gravou = p.pedidos.find((x) => x.caminho === '/ponte/campos');
+      assert.deepEqual(gravou.corpo, { leadId: 123, campos: [{ id: CAMPO_OBS.id, valor: 'ligar à tarde' }], por: 'Ana' });
+      assert.match(tela.querySelector('[data-papel="guia-ok"]').textContent, /Gravado no Kommo: ✎ Observações: ligar à tarde/);
+
+      // mover: escolher a saída, preencher, revisar, confirmar
+      tela.querySelector('[data-saida="111237819"]').click();
+      digitarNoPainel(p.doc, CAMPO_ESPERA.id, '1852306');
+      digitarNoPainel(p.doc, CAMPO_RETOMAR.id, '2026-10-20');
+      tela.querySelector('[data-acao="revisar-mover"]').click();
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ponte/mover').length, 0, 'revisar não move');
+      tela.querySelector('[data-papel="area-mover"] [data-acao="confirmar"]').click();
+      await esperar();
+      await esperar();
+      const moveu = p.pedidos.find((x) => x.caminho === '/ponte/mover');
+      assert.deepEqual(moveu.corpo, {
+        leadId: 123,
+        de: 106809907,
+        para: 111237819,
+        campos: [{ id: CAMPO_ESPERA.id, valor: 1852306 }, { id: CAMPO_RETOMAR.id, valor: '2026-10-20' }],
+        por: 'Ana',
+        confirmado: true,
+      });
+      assert.match(tela.querySelector('[data-papel="guia-ok"]').textContent, /Movido para EM ESPERA\. Gravado junto: ⊘ Motivo da espera: Viajando; ◷ Retomar em: 20\/10\/2026/);
+
+      // voltar ao cartão: o cartão mudou no Kommo, então é lido de novo (não sai do cache velho)
+      const antes = p.pedidos.filter((x) => x.caminho === '/ponte/cartao').length;
+      cartaoAtual = { ...cartaoDe(123, 'Maria'), cartao: { ...cartaoDe(123, 'Maria').cartao, etapa: 'EM ESPERA' } };
+      tela.querySelector('[data-acao="voltar-guia"]').click();
+      await esperar(600);
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ponte/cartao').length, antes + 1);
+      assert.match(tela.querySelector('.cartao__etapa').textContent, /EM ESPERA/);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('mensagem nova na MESMA conversa não fecha o guia; trocar de conversa fecha, e a resposta atrasada do guia não volta', async () => {
+    let responderGuia;
+    const p = montar({
+      conversa,
+      rotas: {
+        'POST /ponte/cartao': (c) => (c.telefone === '5599900000044' ? cartaoDe(456, 'João') : cartaoDe(123, 'Maria')),
+        'GET /ponte/guia': guiaDe(123),
+      },
+    });
+    try {
+      await esperar(600);
+      const tela = p.doc.getElementById('conteudo');
+      tela.querySelector('[data-acao="abrir-guia"]').click();
+      await esperar();
+      await esperar();
+      digitarNoPainel(p.doc, CAMPO_OBS.id, 'rascunho');
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, impressoes: ['h1'] } }, { tab: { id: 7 } });
+      await esperar(600);
+      assert.ok(tela.querySelector('[data-estado="guia"]'), 'o guia continua aberto');
+      assert.equal(tela.querySelector(`.guia__entrada[data-campo="${CAMPO_OBS.id}"]`).value, 'rascunho');
+
+      // a resposta do guia vai demorar; a atendente troca de conversa no meio
+      p.w.fetch = ((orig) => (url, init) => (String(url).includes('/ponte/guia') ? new Promise((r) => { responderGuia = () => r({ ok: true, status: 200, json: () => Promise.resolve(guiaDe(123)) }); }) : orig(url, init)))(p.w.fetch);
+      tela.querySelector('[data-acao="atualizar-guia"]').click();
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, chave: 'c2', telefone: '5599900000044', nome: 'João Lima' } }, { tab: { id: 7 } });
+      await esperar(600);
+      responderGuia();
+      await esperar();
+      await esperar();
+      assert.equal(tela.querySelector('[data-estado="guia"]'), null, 'o guia do paciente anterior não volta');
+      assert.match(tela.textContent, /JOÃO SOUZA/);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('trocar de aba e voltar: o que foi digitado no guia volta junto quando ele é reaberto', async () => {
+    const p = montar({ conversa, rotas: { 'POST /ponte/cartao': cartaoDe(123, 'Maria'), 'GET /ponte/guia': guiaDe(123) } });
+    try {
+      await esperar(600);
+      const tela = p.doc.getElementById('conteudo');
+      tela.querySelector('[data-acao="abrir-guia"]').click();
+      await esperar();
+      await esperar();
+      digitarNoPainel(p.doc, CAMPO_OBS.id, 'ligar depois das 17h');
+      // outra conversa e de volta para a mesma
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, chave: 'c2', telefone: '5599900000044' } }, { tab: { id: 7 } });
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: conversa }, { tab: { id: 7 } });
+      await esperar(600);
+      tela.querySelector('[data-acao="abrir-guia"]').click();
+      await esperar();
+      await esperar();
+      assert.equal(tela.querySelector(`.guia__entrada[data-campo="${CAMPO_OBS.id}"]`).value, 'ligar depois das 17h');
+    } finally {
+      p.w.close();
+    }
+  });
+});

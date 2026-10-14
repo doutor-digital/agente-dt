@@ -315,7 +315,7 @@ const FILA = {
       total: 1,
       itens: [{
         leadId: 1, nome: 'João Lima', etapa: 'EM QUALIFICAÇÃO', motivo: 'sem resposta', detalhe: 'escreveu às 09:00',
-        quando: '2026-10-13T12:00:00.000Z', passado: true, telefone: '5563991021043', telefoneVisivel: '(63) 99102-1043',
+        quando: '2026-10-13T12:00:00.000Z', passado: true, telefone: '5599900000043', telefoneVisivel: '(99) 90000-0043',
         link: 'https://x.kommo.com/leads/detail/1',
       }],
     },
@@ -355,7 +355,7 @@ describe('fila de hoje (fase 2)', () => {
     assert.match(item.textContent, /João Lima/);
     assert.match(item.textContent, /EM QUALIFICAÇÃO · escreveu às 09:00/);
     assert.match(item.querySelector('.fila__tempo').textContent, /há 3 h/);
-    assert.match(item.textContent, /\(63\) 99102-1043/);
+    assert.match(item.textContent, /\(99\) 90000-0043/);
     assert.ok(item.querySelector('[data-acao="abrir-conversa"]'));
     assert.ok(item.querySelector('[data-acao="copiar"]'));
     const k = item.querySelector('a');
@@ -374,8 +374,8 @@ describe('fila de hoje (fase 2)', () => {
     item.querySelector('[data-acao="abrir-conversa"]').click();
     item.querySelector('[data-acao="copiar"]').click();
     await tique();
-    assert.deepEqual(abertos, ['5563991021043']);
-    assert.deepEqual(copiados, ['(63) 99102-1043']);
+    assert.deepEqual(abertos, ['5599900000043']);
+    assert.deepEqual(copiados, ['(99) 90000-0043']);
     assert.equal(item.querySelector('[data-acao="copiar"]').textContent, 'Copiado');
   });
 
@@ -415,12 +415,12 @@ describe('fila de hoje (fase 2)', () => {
 
 describe('abrir conversa = só navegação (fase 2)', () => {
   it('o link é o do WhatsApp Web com o telefone, e mais nada (nem texto)', () => {
-    assert.equal(D.urlDaConversa('5563991021043'), 'https://web.whatsapp.com/send?phone=5563991021043');
-    assert.ok(!D.urlDaConversa('5563991021043').includes('text='));
+    assert.equal(D.urlDaConversa('5599900000043'), 'https://web.whatsapp.com/send?phone=5599900000043');
+    assert.ok(!D.urlDaConversa('5599900000043').includes('text='));
   });
 
   it('só dígitos, de 10 a 15: nada de JID, sinal, espaço ou injeção na URL', () => {
-    for (const ruim of ['204567890123456@lid', '+5563991021043', '55 63 99102-1043', '123', '5563991021043&text=oi', '', null, undefined]) {
+    for (const ruim of ['204567890123456@lid', '+5599900000043', '55 99 90000-0043', '123', '5599900000043&text=oi', '', null, undefined]) {
       assert.equal(D.urlDaConversa(ruim), null, String(ruim));
     }
   });
@@ -432,5 +432,78 @@ describe('abrir conversa = só navegação (fase 2)', () => {
       const codigo = fs.readFileSync(path.join(__dirname, '..', arq), 'utf8');
       assert.ok(!/[?&]text=/.test(codigo), `${arq} não pode montar link com texto`);
     }
+  });
+});
+
+// ── fase 3 ──
+
+describe('aviso de cartão duplicado (fase 3)', () => {
+  const COM_DUPLICADO = {
+    ...ACHADO,
+    cartao: { ...ACHADO.cartao, origem: 'Meta-Instagram' },
+    duplicados: [
+      { id: 456, nome: 'MARIA SOUZA 10/10/2026', funil: 'COMERCIAL', etapa: 'EM QUALIFICAÇÃO', origem: null, link: 'https://x.kommo.com/leads/detail/456', via: 'contato' },
+    ],
+  };
+
+  it('faixa amarela: quantos abertos, cada um com funil/etapa e ⚑ Origem, "Abrir no Kommo" e a regra', () => {
+    const doc = novoDoc();
+    const faixa = D.cartao(doc, COM_DUPLICADO, {}).querySelector('[data-bloco="duplicados"]');
+    assert.ok(faixa);
+    assert.ok(faixa.classList.contains('faixa--amarela'));
+    assert.match(faixa.textContent, /Este paciente tem 2 cartões abertos/);
+    const linhas = [...faixa.querySelectorAll('[data-lead]')];
+    assert.deepEqual(linhas.map((l) => l.getAttribute('data-lead')), ['123', '456']);
+    assert.match(linhas[0].textContent, /^Este: MARIA SOUZA 03\/10\/2026/);
+    assert.match(linhas[0].textContent, /⚑ Origem: Meta-Instagram/);
+    assert.equal(linhas[0].querySelector('a'), null, 'o cartão da tela não precisa de link');
+    assert.match(linhas[1].textContent, /COMERCIAL › EM QUALIFICAÇÃO/);
+    assert.doesNotMatch(linhas[1].textContent, /Origem/);
+    assert.equal(linhas[1].querySelector('a').href, 'https://x.kommo.com/leads/detail/456');
+    assert.match(faixa.textContent, /Confira se é a mesma pessoa antes de juntar\. Fica o que veio do anúncio; o outro é juntado \(Mesclar\) no Kommo, nunca apagado\./);
+    assert.equal(faixa.querySelector('[data-grupo="mesmo-numero"]'), null);
+  });
+
+  it('outro contato com o mesmo número: grupo separado, com a cautela da família', () => {
+    const doc = novoDoc();
+    const r = JSON.parse(JSON.stringify(COM_DUPLICADO));
+    r.duplicados.push({ id: 900, nome: 'JOÃO SOUZA', funil: 'COMERCIAL', etapa: 'EM ESPERA', origem: null, link: 'https://x.kommo.com/leads/detail/900', via: 'telefone' });
+    const faixa = D.cartao(doc, r, {}).querySelector('[data-bloco="duplicados"]');
+    assert.match(faixa.querySelector('.faixa__titulo').textContent, /Este paciente tem 2 cartões abertos/, 'o do número não conta como do paciente');
+    const grupo = faixa.querySelector('[data-grupo="mesmo-numero"]');
+    assert.match(grupo.textContent, /pode ser da família — confira se é a mesma pessoa antes de juntar/);
+    assert.deepEqual([...grupo.querySelectorAll('[data-lead]')].map((l) => l.getAttribute('data-lead')), ['900']);
+  });
+
+  it('só outro contato com o mesmo número: o título não diz que é o mesmo paciente', () => {
+    const doc = novoDoc();
+    const r = JSON.parse(JSON.stringify(COM_DUPLICADO));
+    r.duplicados = [{ id: 900, nome: 'JOÃO SOUZA', funil: 'COMERCIAL', etapa: 'EM ESPERA', origem: null, link: 'https://x.kommo.com/leads/detail/900', via: 'telefone' }];
+    const faixa = D.cartao(doc, r, {}).querySelector('[data-bloco="duplicados"]');
+    assert.equal(faixa.querySelector('.faixa__titulo').textContent, 'Há outro cartão aberto com o mesmo número');
+    assert.match(faixa.textContent, /Confira se é a mesma pessoa antes de juntar/);
+  });
+
+  it('sem duplicado (lista vazia ou não conferida) não há faixa', () => {
+    const doc = novoDoc();
+    assert.equal(D.cartao(doc, { ...COM_DUPLICADO, duplicados: [] }, {}).querySelector('[data-bloco="duplicados"]'), null);
+    assert.equal(D.cartao(doc, { ...COM_DUPLICADO, duplicados: null }, {}).querySelector('[data-bloco="duplicados"]'), null);
+    assert.equal(D.cartao(doc, ACHADO, {}).querySelector('[data-bloco="duplicados"]'), null);
+  });
+
+  it('cartão da tela fechado: conta só os abertos, e ele não entra na lista', () => {
+    const doc = novoDoc();
+    const r = JSON.parse(JSON.stringify(COM_DUPLICADO));
+    r.cartao.fechado = true;
+    r.duplicados.push({ id: 789, nome: 'Maria', funil: 'TRATAMENTO', etapa: 'EM TRATAMENTO', origem: 'Indicação', link: 'https://x.kommo.com/leads/detail/789', via: 'contato' });
+    const faixa = D.cartao(doc, r, {}).querySelector('[data-bloco="duplicados"]');
+    assert.match(faixa.textContent, /tem 2 cartões abertos/);
+    assert.deepEqual([...faixa.querySelectorAll('[data-lead]')].map((l) => l.getAttribute('data-lead')), ['456', '789']);
+  });
+
+  it('a Ponte só avisa: não há botão de juntar nem de apagar', () => {
+    const doc = novoDoc();
+    const faixa = D.cartao(doc, COM_DUPLICADO, {}).querySelector('[data-bloco="duplicados"]');
+    assert.equal(faixa.querySelector('button'), null);
   });
 });

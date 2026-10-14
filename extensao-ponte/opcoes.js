@@ -1,6 +1,7 @@
 /**
  * Ponte — opções: slug + chave da unidade e o nome da atendente em `chrome.storage.local`, e um teste no
- * `/ping` dos widgets. O nome só serve para a pausa da Sofia dizer quem pausou ("por Ana").
+ * `/ping` dos widgets. O nome só serve para dizer no Kommo quem fez ("por Ana"): pausa, etiqueta, ligação, campos e
+ * etapa. Salvar a unidade também atualiza o número no ícone (o script de fundo ouve a troca).
  */
 (function () {
   'use strict';

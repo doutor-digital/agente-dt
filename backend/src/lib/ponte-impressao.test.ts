@@ -34,7 +34,7 @@ describe('impressão: servidor = vetores = extensão', () => {
     const extras = [
       'Olá! Gostaria de saber o valor da consulta 😊',
       'SIM', 'ok', 'Bom dia, Dra.', 'Árvore — ação; pão & café', 'tô com dor nas costas\nfaz 3 meses',
-      '1️⃣', 'https://wa.me/5563991021043', 'Não posso amanhã às 8h, só depois das 14:30',
+      '1️⃣', 'https://wa.me/5599900000043', 'Não posso amanhã às 8h, só depois das 14:30',
     ];
     const casos = [...vetores.map((v) => [v.texto, v.minuto] as const), ...extras.map((t) => [t, '08:15'] as const)];
     for (const [texto, minuto] of casos) {
