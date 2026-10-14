@@ -42,6 +42,7 @@ import {
   type IdDoGrupo,
   type Pista,
 } from '../lib/ponte-fila.js';
+import { RITMO_DAS_LIGACOES } from '../lib/ponte-ligacao.js';
 
 /** Páginas de 250 cartões por etapa, dos mais novos para os mais velhos. 4 = 1.000 cartões; passou disso, avisa. */
 const MAX_PAGINAS_POR_ETAPA = 4;
@@ -339,7 +340,7 @@ export async function ponteFilaHandler(req: Request, res: Response): Promise<voi
   const conta = unit.kommoSubdomain.trim().toLowerCase();
   const guardada = cache.get(conta);
   if (guardada && Date.now() - guardada.em < PRAZOS_DA_FILA.cacheMs) {
-    res.json({ ...guardada.corpo, unidade: unit.name, cache: true });
+    res.json({ ...guardada.corpo, unidade: unit.name, ritmo: RITMO_DAS_LIGACOES, cache: true });
     return;
   }
   try {
@@ -353,7 +354,8 @@ export async function ponteFilaHandler(req: Request, res: Response): Promise<voi
         .finally(() => emAndamento.delete(conta));
       emAndamento.set(conta, p);
     }
-    res.json({ ...(await p), unidade: unit.name, cache: false });
+    // fase 3: o ritmo da fila de ligações ("Começar a ligar") vai junto — quem conta é a extensão
+    res.json({ ...(await p), unidade: unit.name, ritmo: RITMO_DAS_LIGACOES, cache: false });
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug }, 'ponte fila: falha ao montar');
     res.status(502).json({ error: 'kommo indisponível' });

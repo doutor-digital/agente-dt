@@ -25,7 +25,8 @@ import { CAMPOS_SYNC } from './franquia-sync.js';
 import { CAMPO } from './parados.js';
 import { dataLocalISO } from './feriados.js';
 
-const numeroDoAmbiente = (bruto: string | undefined, padrao: number): number => {
+/** Número positivo da variável de ambiente, ou o padrão. A fila e o ritmo das ligações (`ponte-ligacao.ts`) usam. */
+export const numeroDoAmbiente = (bruto: string | undefined, padrao: number): number => {
   const n = Number(bruto);
   return Number.isFinite(n) && n > 0 ? n : padrao;
 };

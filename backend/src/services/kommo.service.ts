@@ -38,6 +38,13 @@ export interface KommoChatTemplate {
   id: number;
   name: string;
   content?: string;
+  /**
+   * `waba` = modelo do WhatsApp (aprovado pela Meta); `amocrm` = modelo geral, texto livre (a "resposta pronta"
+   * da Ponte). Conferido no dump de Açailândia de 07/10/2026: 47 `waba` + 40 `amocrm`.
+   */
+  type?: string | null;
+  attachment?: unknown;
+  buttons?: unknown[] | null;
   /** A API pública devolve em `_embedded.reviews` (conferido 07/10/2026); a rota /ajax, em `reviews`. */
   reviews?: Array<{ status?: string; source_id?: number }> | null;
   _embedded?: { reviews?: Array<{ status?: string; source_id?: number }> | null };
@@ -740,6 +747,39 @@ export class KommoClient {
     return out;
   }
 
+  /**
+   * Nome, telefones e cartões de um contato numa chamada só (`with=leads`) — para a Ponte: a franquia (nome e
+   * telefone), o primeiro nome das respostas prontas e o aviso de cartão duplicado. `null` = não consegui
+   * perguntar (não é "contato sem nada").
+   */
+  async contatoComCartoes(
+    contactId: number,
+  ): Promise<{ id: number; nome: string | null; telefone: string | null; telefones: string[]; leadIds: number[] } | null> {
+    try {
+      const { data } = await this.http.get<
+        | {
+            id?: number;
+            name?: string;
+            custom_fields_values?: Array<{ field_code?: string; values?: Array<{ value?: string }> }> | null;
+            _embedded?: { leads?: Array<{ id?: number }> };
+          }
+        | ''
+      >(`/contacts/${contactId}`, { params: { with: 'leads' } });
+      if (!data) return null;
+      const campo = data.custom_fields_values?.find((f) => f.field_code === 'PHONE');
+      const telefones = (campo?.values ?? []).map((v) => (typeof v.value === 'string' ? v.value.trim() : '')).filter(Boolean);
+      return {
+        id: contactId,
+        nome: typeof data.name === 'string' && data.name.trim() ? data.name.trim() : null,
+        telefone: telefones[0] ?? null,
+        telefones,
+        leadIds: (data._embedded?.leads ?? []).map((l) => l.id).filter((id): id is number => typeof id === 'number'),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** Ids de todos os cartões de um contato. `null` = não consegui perguntar (não é "nenhum"). */
   async leadsDoContato(contactId: number): Promise<number[] | null> {
     try {
@@ -1076,6 +1116,47 @@ export class KommoClient {
       return data;
     } catch (err) {
       wrapAxiosError(err, 'listLeadCustomFields');
+    }
+  }
+
+  /**
+   * TODOS os campos de cartão da conta, de TODOS os tipos (inclusive `date_time`, `url`, `checkbox`), com as
+   * opções dos selects — paginado (a conta de Açailândia tinha 217 campos em 07/10/2026, perto da página de
+   * 250 do `listLeadCustomFields`). Para a Ponte achar os campos ☎ pelo NOME. Erro lança.
+   */
+  async listarCamposDoCartao(
+    maxPaginas = 4,
+  ): Promise<Array<{ id: number; name: string; type: string; enums: Array<{ id: number; value: string }> }>> {
+    const out: Array<{ id: number; name: string; type: string; enums: Array<{ id: number; value: string }> }> = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data } = await this.http.get<
+          | {
+              _embedded?: { custom_fields?: Array<{ id: number; name: string; type: string; enums?: Array<{ id: number; value: string }> | null }> };
+              _links?: { next?: unknown };
+            }
+          | ''
+        >('/leads/custom_fields', { params: { limit: 250, page } });
+        const lote = (data && data._embedded?.custom_fields) || [];
+        for (const f of lote) out.push({ id: f.id, name: f.name, type: f.type, enums: (f.enums ?? []).map((e) => ({ id: e.id, value: e.value })) });
+        if (!data || !data._links?.next || lote.length === 0) break;
+      } catch (err) {
+        wrapAxiosError(err, `listarCamposDoCartao(p${page})`);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Grava vários campos do cartão num PATCH só, com os `values` já no formato do Kommo (`[{ value }]`,
+   * `[{ enum_id }]`, ou `null` para esvaziar). Quem chama monta os valores — aqui não há conversão.
+   */
+  async gravarCamposDoLead(leadId: number, campos: Array<{ field_id: number; values: Array<Record<string, unknown>> | null }>): Promise<void> {
+    if (!campos.length) return;
+    try {
+      await this.http.patch(`/leads/${leadId}`, { custom_fields_values: campos });
+    } catch (err) {
+      wrapAxiosError(err, `gravarCamposDoLead(${leadId}, ${campos.length} campos)`);
     }
   }
 

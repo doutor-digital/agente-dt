@@ -179,6 +179,13 @@ import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, 
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
 import { ponteCartaoHandler, pontePausarHandler, ponteResumoIaHandler, ponteRetomarHandler } from '../controllers/ponte.controller.js';
 import { ponteFilaHandler } from '../controllers/ponte-fila.controller.js';
+import {
+  ponteEtiquetasDaContaHandler,
+  ponteLigacaoHandler,
+  pontePorEtiquetaHandler,
+  ponteRespostasHandler,
+  ponteTirarEtiquetaHandler,
+} from '../controllers/ponte-acoes.controller.js';
 import { faxinaConversasHandler, avisoNaoLidasHandler, preencheCamposHandler } from '../controllers/faxina.controller.js';
 import { relatorioRedeDiariaHandler } from '../controllers/relatorio-rede.controller.js';
 import { relatorioMensalRedeHandler } from '../controllers/relatorio-mensal-rede.controller.js';
@@ -307,6 +314,13 @@ apiRouter.get('/public/widget/:slug/ponte/fila', ponteFilaHandler);
 apiRouter.post('/public/widget/:slug/ponte/pausa', pontePausarHandler);
 apiRouter.delete('/public/widget/:slug/ponte/pausa', ponteRetomarHandler);
 apiRouter.post('/public/widget/:slug/ponte/resumo-ia', ponteResumoIaHandler);
+// Fase 3 da Ponte: etiquetas (ver as da conta, pôr e tirar — ▶ só com confirmação), o resultado da ligação da
+// fila "Começar a ligar" (campos ☎ + nota) e as respostas prontas para COPIAR. Tudo no Kommo, nunca no WhatsApp.
+apiRouter.get('/public/widget/:slug/ponte/etiquetas', ponteEtiquetasDaContaHandler);
+apiRouter.post('/public/widget/:slug/ponte/etiquetas', pontePorEtiquetaHandler);
+apiRouter.delete('/public/widget/:slug/ponte/etiquetas', ponteTirarEtiquetaHandler);
+apiRouter.post('/public/widget/:slug/ponte/ligacao', ponteLigacaoHandler);
+apiRouter.get('/public/widget/:slug/ponte/respostas', ponteRespostasHandler);
 // Marcar consulta de dentro do cartão (unidade sem Sofia): mesma chave por unidade, limite próprio de escrita.
 apiRouter.get('/public/widget/:slug/horarios', widgetHorariosHandler);
 apiRouter.post('/public/widget/:slug/marcar', widgetMarcarHandler);
