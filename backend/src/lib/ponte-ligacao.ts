@@ -37,11 +37,13 @@ export interface RitmoDasLigacoes {
 }
 
 /**
- * O ritmo da fila de ligações. Piso de 15 s no intervalo e teto de 120 por hora: uma variável de ambiente
- * errada não pode transformar a Ponte num disparador.
+ * O ritmo da fila de ligações. Sem espera entre uma ligação e a próxima por padrão (pedido do João em 14/10:
+ * "não pode ter nenhum tempo de espera, tem que ser rápido") — quem liga é a atendente, um clique por vez.
+ * O que segura spam é o teto por hora (no máximo 120): uma variável de ambiente errada não pode transformar a
+ * Ponte num disparador. `PONTE_LIGACAO_INTERVALO_S` continua existindo para quem quiser um intervalo.
  */
 export const RITMO_DAS_LIGACOES: Readonly<RitmoDasLigacoes> = Object.freeze({
-  intervaloS: Math.max(15, numeroDoAmbiente(process.env.PONTE_LIGACAO_INTERVALO_S, 40)),
+  intervaloS: Math.max(0, numeroDoAmbiente(process.env.PONTE_LIGACAO_INTERVALO_S, 0)),
   tetoPorHora: Math.min(120, Math.floor(numeroDoAmbiente(process.env.PONTE_LIGACAO_TETO_HORA, 40))),
 });
 

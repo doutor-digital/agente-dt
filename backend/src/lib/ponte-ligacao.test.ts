@@ -73,10 +73,10 @@ beforeEach(() => {
 });
 
 describe('ligação pela Ponte — o ritmo', () => {
-  it('padrão 40 s e 40 por hora — o mesmo da extensão — com piso e teto', () => {
-    assert.deepEqual({ ...RITMO_DAS_LIGACOES }, { intervaloS: 40, tetoPorHora: 40 });
-    assert.deepEqual(daExtensao.RITMO_PADRAO, { intervaloS: 40, tetoPorHora: 40 });
-    assert.deepEqual(daExtensao.ritmoDe(RITMO_DAS_LIGACOES), { intervaloS: 40, tetoPorHora: 40 });
+  it('padrão sem espera e 40 por hora — o mesmo da extensão — com teto', () => {
+    assert.deepEqual({ ...RITMO_DAS_LIGACOES }, { intervaloS: 0, tetoPorHora: 40 });
+    assert.deepEqual(daExtensao.RITMO_PADRAO, { intervaloS: 0, tetoPorHora: 40 });
+    assert.deepEqual(daExtensao.ritmoDe(RITMO_DAS_LIGACOES), { intervaloS: 0, tetoPorHora: 40 });
   });
 
   it('os resultados da extensão são os que o servidor aceita', () => {

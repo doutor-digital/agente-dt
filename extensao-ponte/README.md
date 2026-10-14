@@ -96,7 +96,7 @@ internos, que a Ponte não usa). Por isso, duas travas, e na dúvida o **jeito a
 Toda queda para o jeito antigo fica no console (`[Ponte] a conversa não abriu pelo link wa.me (…)`). Aba com o
 content script de uma versão antiga (WhatsApp aberto antes de atualizar a Ponte) também cai no jeito antigo. Nas
 opções, a chave **Abrir conversa sem recarregar** vem **ligada**; desligada, volta ao jeito antigo sempre. O ritmo do
-"Começar a ligar" (40 s, 40 por hora) não muda.
+"Começar a ligar" passa a não ter espera entre uma ligação e a próxima (antes eram 40 s); o teto de 40 por hora continua.
 
 ### Os campos novos do cartão (backend)
 
@@ -292,10 +292,10 @@ Pular**.
   e manda com o resultado; o servidor grava cada tentativa uma vez só por 10 min (clique duplo, tela redesenhada
   ou o painel reaberto não somam duas ligações nem pulam as ☎ Tentativas). Enquanto o resultado vai para o
   servidor, os botões ficam travados, mesmo se a tela for redesenhada.
-- Depois do resultado, avança sozinho. **Ritmo**, para não parecer spam: no mínimo 40 s entre abrir uma conversa
-  e a próxima, e no máximo 40 por hora (janela corrida), com contagem regressiva na tela ("próximo em 25 s").
+- Depois do resultado, avança sozinho, **sem espera** (desde a 0.5.0; pedido do João em 14/10 — antes eram 40 s). O que
+  segura spam é o teto de 40 aberturas por hora (janela corrida); passando dele, aparece a contagem regressiva.
   Os números ficam em `RITMO_DAS_LIGACOES` (`backend/src/lib/ponte-ligacao.ts`), no estilo de `PRAZOS_DA_FILA`:
-  `PONTE_LIGACAO_INTERVALO_S` (mínimo 15) e `PONTE_LIGACAO_TETO_HORA` (máximo 120). Vão para a extensão junto da
+  `PONTE_LIGACAO_INTERVALO_S` (padrão 0 = sem espera) e `PONTE_LIGACAO_TETO_HORA` (máximo 120). Vão para a extensão junto da
   fila.
 - Paciente sem telefone (só @lid ou nome de usuário) é pulado com o aviso "sem telefone — abra pelo Kommo" — mas
   só quando o servidor **afirma** que não há telefone (`semTelefone: true`). Se o Kommo não respondeu na leitura
@@ -450,7 +450,7 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
   isolado: o nome do cabeçalho, o `data-id` das mensagens, e o texto e a hora das últimas mensagens recebidas;
 - percebe a troca de conversa com um `MutationObserver`, porque a URL não muda;
 - mostra o painel com `chrome.sidePanel`, uma página da própria extensão;
-- abre a conversa de um telefone no "Abrir conversa" e no modo "Começar a ligar" (este no ritmo: 40 s entre uma e
+- abre a conversa de um telefone no "Abrir conversa" e no modo "Começar a ligar" (este sem espera entre uma e
   outra, no máximo 40 por hora). Na 0.5.0, **aciona o próprio link wa.me para abrir a conversa; nada além disso**: o
   content script cria um `<a href="https://wa.me/<dígitos>">` da Ponte, clica NESSE link e o tira da página na hora.
   Se o WhatsApp não abrir, troca a URL da aba (o jeito antigo, com recarga). Nunca leva texto;
@@ -532,7 +532,7 @@ npm test            # node --test 'testes/*.test.js'
 - `pausa.test.js`: as datas de cada opção da pausa, o limite de 30 dias e o estado da Sofia depois de pausar;
 - `etiquetas.test.js` (0.3.0): a regra do ▶, a busca entre as etiquetas da conta e o bloco do cartão (✕, "+
   etiqueta", a pergunta da ▶ — só põe depois de confirmar —, o erro e o dado tratado como texto);
-- `ligacao.test.js` (0.3.0): a ordem da fila de ligações, o ritmo (40 s, teto por hora), o estado guardado (só ids,
+- `ligacao.test.js` (0.3.0): a ordem da fila de ligações, o ritmo (sem espera por padrão, teto por hora), o estado guardado (só ids,
   horas e o id da tentativa), o telefone não lido (fica para depois, sem marcar) e a tela do modo ligação (botões
   travados enquanto grava);
 - `respostas.test.js` (0.3.0): o nome no lugar do marcador ("[nome]" quando não se sabe), a busca e a aba;
