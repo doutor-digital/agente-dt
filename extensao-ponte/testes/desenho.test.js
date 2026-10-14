@@ -46,23 +46,40 @@ const ACHADO = {
 };
 
 describe('desenho do painel', () => {
-  it('cartão achado: nome, chip de "como achei", barrinha com a etapa atual, Sofia, franquia e link', () => {
+  it('cartão achado (resposta do servidor de HOJE, sem os campos da 0.5.0): nome, como achei, trilha, Sofia, franquia e link', () => {
     const doc = novoDoc();
     const n = D.cartao(doc, ACHADO, {});
     const t = n.textContent;
     assert.equal(n.getAttribute('data-estado'), 'achado');
     assert.match(t, /MARIA SOUZA 03\/10\/2026/);
-    assert.match(t, /COMERCIAL › AGENDADO/);
     assert.equal(n.querySelector('[data-como]').textContent, 'achei pelo telefone');
-    const etapas = [...n.querySelectorAll('.barra__etapa')];
-    assert.equal(etapas.length, 5);
-    assert.ok(etapas[2].classList.contains('barra__etapa--atual'));
-    assert.ok(etapas[0].classList.contains('barra__etapa--feita'));
+    // a trilha: a etapa atual acesa, as de antes feitas, e de quem é a etapa (AGENDADO anda sozinha pela franquia)
+    const estacoes = [...n.querySelectorAll('.estacao')];
+    assert.equal(estacoes.length, 5);
+    assert.ok(estacoes[2].classList.contains('estacao--atual'));
+    assert.ok(estacoes[0].classList.contains('estacao--feita'));
+    assert.ok(estacoes[2].classList.contains('estacao--franquia'));
+    assert.ok(estacoes[0].classList.contains('estacao--voce'));
+    const aqui = n.querySelector('[data-papel="etapa-atual"]');
+    assert.equal(aqui.getAttribute('data-dono'), 'franquia');
+    assert.match(aqui.textContent, /AGENDADO/);
+    assert.match(aqui.textContent, /Anda sozinha pela franquia/);
+    assert.match(aqui.textContent, /COMPARECEU ou NÃO COMPARECEU quando a franquia der baixa/);
+    // campo que o servidor de hoje não manda: não aparece, e nada quebra
+    assert.equal(n.querySelector('[data-papel="telefone"]'), null);
+    assert.equal(n.querySelector('[data-papel="qualificacao"]'), null);
+    assert.equal(n.querySelector('[data-papel="tempo-na-etapa"]'), null);
+    assert.equal(n.querySelector('[data-papel="unidade"]').textContent, 'Açailândia', 'sem cartao.unidade: o nome da unidade da franquia');
     assert.match(t, /Giulia/);
     assert.match(t, /pausada neste cartão/);
-    assert.match(t, /Consulta marcada15\/10 às 08:00 · AGENDADO · Dra\. Ana/);
+    // a consulta da franquia, mastigada
+    const consulta = n.querySelector('[data-papel="proxima-consulta"]');
+    assert.match(consulta.textContent, /15\/10/);
+    assert.match(consulta.textContent, /08:00/);
+    assert.match(consulta.textContent, /Dra\. Ana/);
+    assert.match(consulta.textContent, /Agendada/);
     assert.match(t, /Dor ciática tem tratamento sem cirurgia/);
-    const link = n.querySelector('a.botao--primario');
+    const link = n.querySelector('a.botao--kommo');
     assert.equal(link.href, 'https://doutorherniaacailandia.kommo.com/leads/detail/123');
     assert.equal(link.target, '_blank');
     assert.match(link.rel, /noopener/);
@@ -83,21 +100,21 @@ describe('desenho do painel', () => {
     r.cartao.barra.noFunil = false;
     r.cartao.barra.etapas.forEach((e) => { e.atual = false; });
     r.franquia.agenda.proximaConsulta = null;
-    const t = D.cartao(doc, r, {}).textContent;
-    assert.match(t, /não está no funil COMERCIAL/);
-    assert.match(t, /Consulta marcadanenhuma/);
+    const n = D.cartao(doc, r, {});
+    assert.match(n.textContent, /não está no funil COMERCIAL/);
+    assert.match(n.querySelector('[data-papel="sem-consulta"]').textContent, /Nenhuma consulta marcada/);
   });
 
-  it('barrinha: cartão PERDIDO não pinta nada como feito, e GANHO nunca aparece como "feito"', () => {
+  it('trilha: cartão PERDIDO não pinta nada como feito, e GANHO nunca aparece como "feito"', () => {
     const doc = novoDoc();
     const r = JSON.parse(JSON.stringify(ACHADO));
     r.cartao.barra.etapas.forEach((e) => { e.atual = e.id === 143; });
-    let etapas = [...D.cartao(doc, r, {}).querySelectorAll('.barra__etapa')];
-    assert.equal(etapas.filter((e) => e.classList.contains('barra__etapa--feita')).length, 0);
-    assert.ok(etapas[4].classList.contains('barra__etapa--atual'));
+    let estacoes = [...D.cartao(doc, r, {}).querySelectorAll('.estacao')];
+    assert.equal(estacoes.filter((e) => e.classList.contains('estacao--feita')).length, 0);
+    assert.ok(estacoes[4].classList.contains('estacao--atual'));
     r.cartao.barra.etapas.forEach((e) => { e.atual = e.id === 142; }); // GANHO: o caminho todo foi feito
-    etapas = [...D.cartao(doc, r, {}).querySelectorAll('.barra__etapa')];
-    assert.deepEqual(etapas.map((e) => e.classList.contains('barra__etapa--feita')), [true, true, true, false, false]);
+    estacoes = [...D.cartao(doc, r, {}).querySelectorAll('.estacao')];
+    assert.deepEqual(estacoes.map((e) => e.classList.contains('estacao--feita')), [true, true, true, false, false]);
   });
 
   it('Sofia quieta por horário aparece como tal', () => {
@@ -169,15 +186,15 @@ const COM_RESUMO = {
 };
 
 describe('resumo do lead (fase 2)', () => {
-  it('fica no topo do cartão, com as linhas e o próximo passo', () => {
+  it('o resumo traz as linhas; o próximo passo dele vira a 1ª ação de "O que é seu agora"', () => {
     const doc = novoDoc();
     const n = D.cartao(doc, COM_RESUMO, {});
     const bloco = n.querySelector('[data-bloco="resumo"]');
     assert.ok(bloco);
-    const blocos = [...n.querySelectorAll('.bloco')];
-    assert.equal(blocos[0], bloco, 'o resumo é o primeiro bloco do cartão');
     assert.deepEqual([...bloco.querySelectorAll('li')].map((li) => li.textContent), COM_RESUMO.resumo.linhas);
-    assert.match(bloco.textContent, /Próximo passo: Confirmar a presença na consulta de 15\/10/);
+    assert.doesNotMatch(bloco.textContent, /Próximo passo/);
+    const seu = n.querySelector('[data-bloco="seu-agora"]');
+    assert.equal(seu.querySelector('li').textContent, 'Confirmar a presença na consulta de 15/10 às 08:00.');
   });
 
   it('"Resumir com IA" só aparece com chave da IA na unidade', () => {
@@ -505,5 +522,328 @@ describe('aviso de cartão duplicado (fase 3)', () => {
     const doc = novoDoc();
     const faixa = D.cartao(doc, COM_DUPLICADO, {}).querySelector('[data-bloco="duplicados"]');
     assert.equal(faixa.querySelector('button'), null);
+  });
+});
+
+// ── 0.5.0: o visual novo ──
+
+const AGORA = new Date('2026-10-14T13:00:00.000Z'); // qua 14/10, 10:00 em São Paulo
+
+/** A resposta do cartão com os campos novos da 0.5.0 (o servidor passa a mandar). */
+function novo(extra = {}) {
+  const r = JSON.parse(JSON.stringify(ACHADO));
+  r.cartao.telefone = '(99) 90000-0043';
+  r.cartao.unidade = { nome: 'Açailândia', compartilhada: false };
+  r.cartao.qualificacao = 'Quente';
+  r.cartao.naEtapaDesde = '2026-10-12T13:00:00.000Z';
+  r.cartao.sofia = { pausada: false, por: null, ate: null };
+  r.sofiaNaUnidade = true;
+  r.resumo = { linhas: ['Maria, de Açailândia.'], proximoPasso: 'Confirmar a presença na consulta de 15/10 às 08:00.' };
+  r.franquia.tz = 'America/Sao_Paulo';
+  r.franquia.agenda.proximaConsulta.quando = '2026-10-15T11:00:00.000Z';
+  return Object.assign(r, extra);
+}
+
+const etapas = (nomes, atual) => nomes.map(([nome, id]) => ({ id, nome, atual: nome === atual }));
+const COMERCIAL = [['EM QUALIFICAÇÃO', 1], ['EM ESPERA', 2], ['AGENDADO', 3], ['COMPARECEU', 4], ['GANHO / CONCLUIDO', 142], ['PERDIDO', 143]];
+
+describe('0.5.0 — o cabeçalho', () => {
+  it('telefone, selo da unidade com cor, qualificação e como achei', () => {
+    const doc = novoDoc();
+    const n = D.cartao(doc, novo(), {}, AGORA);
+    assert.equal(n.querySelector('[data-papel="telefone"]').textContent, '(99) 90000-0043');
+    const u = n.querySelector('[data-papel="unidade"]');
+    assert.equal(u.textContent, 'Açailândia');
+    assert.match(u.className, /selo--(indigo|teal|magenta|verde|laranja|azul)/);
+    const q = n.querySelector('[data-papel="qualificacao"]');
+    assert.equal(q.textContent, 'Quente');
+    assert.match(q.className, /selo--quente/);
+    assert.equal(n.querySelector('[data-como]').textContent, 'achei pelo telefone');
+    assert.equal(n.querySelector('.avatar').textContent, 'MS');
+  });
+
+  it('qualificação vazia aparece como "Sem qualificação"; conta sem o campo, não aparece', () => {
+    const doc = novoDoc();
+    assert.equal(D.cartao(doc, novo({ cartao: { ...novo().cartao, qualificacao: null } }), {}, AGORA).querySelector('[data-papel="qualificacao"]').textContent, 'Sem qualificação');
+    const semCampo = novo();
+    delete semCampo.cartao.qualificacao;
+    assert.equal(D.cartao(doc, semCampo, {}, AGORA).querySelector('[data-papel="qualificacao"]'), null);
+  });
+
+  it('conta de duas unidades com o campo vazio: "Escolha a unidade" abre o guia; a franquia pede a unidade', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.cartao.unidade = { nome: null, compartilhada: true, opcoes: ['Petrópolis', 'Caxias'] };
+    r.franquia = { unidade: 'Petrópolis', franquia: true, paciente: null, codigo: 'sem_unidade', erro: 'Escolha a ⌂ Unidade de atendimento do cartão.' };
+    const abertos = [];
+    const n = D.cartao(doc, r, { abrirGuia: (id) => abertos.push(id) }, AGORA);
+    const selo = n.querySelector('[data-papel="unidade"]');
+    assert.equal(selo.tagName, 'BUTTON');
+    assert.equal(selo.textContent, 'Escolha a unidade');
+    selo.click();
+    assert.deepEqual(abertos, [123]);
+    assert.match(n.querySelector('[data-papel="franquia-sem-unidade"]').textContent, /Escolha a unidade para ver a franquia/);
+    assert.match(n.querySelector('[data-bloco="seu-agora"] li').textContent, /^Escolher a unidade do paciente/);
+  });
+
+  it('Petrópolis e Caxias nunca têm a mesma cor de selo', () => {
+    const T = require('../trilha.js');
+    assert.notEqual(T.corDaUnidade('Petrópolis'), T.corDaUnidade('Caxias'));
+  });
+});
+
+describe('0.5.0 — a trilha do funil', () => {
+  it('a etapa atual acesa, o tempo nela, de quem é e o que vem depois', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.cartao.barra.etapas = etapas(COMERCIAL, 'AGENDADO');
+    const n = D.cartao(doc, r, {}, AGORA);
+    assert.equal(n.querySelector('[data-papel="tempo-na-etapa"]').textContent, 'há 2 dias');
+    const estacoes = [...n.querySelectorAll('.estacao')];
+    assert.deepEqual(estacoes.map((e) => (e.className.match(/estacao--(voce|franquia|neutra)/) || [])[1]), ['voce', 'voce', 'franquia', 'franquia', 'franquia', 'voce']);
+    assert.ok(estacoes[4].classList.contains('estacao--saida') && estacoes[4].classList.contains('estacao--primeira-saida'));
+    const todas = n.querySelector('.trilha__todas');
+    assert.match(todas.querySelector('summary').textContent, /Ver as 6 etapas/);
+    assert.match(todas.textContent, /AGENDADOestá aquifranquia/);
+    assert.match(n.querySelector('.legenda').textContent, /É sua.*Anda sozinha pela franquia/);
+  });
+
+  it('etapa da atendente parada há tempo demais: o relógio fica em alerta', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.cartao.barra.etapas = etapas(COMERCIAL, 'EM QUALIFICAÇÃO');
+    r.cartao.naEtapaDesde = '2026-10-11T13:00:00.000Z';
+    const n = D.cartao(doc, r, {}, AGORA);
+    const aqui = n.querySelector('[data-papel="etapa-atual"]');
+    assert.equal(aqui.getAttribute('data-dono'), 'voce');
+    assert.match(aqui.textContent, /É sua: você trabalha esta etapa/);
+    assert.ok(n.querySelector('[data-papel="tempo-na-etapa"]').classList.contains('aqui__tempo--atrasado'));
+  });
+
+  it('no funil TRATAMENTO: a trilha do TRATAMENTO, com os nomes, e o COMERCIAL concluído', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.cartao.funil = 'TRATAMENTO';
+    r.cartao.etapa = 'EM TRATAMENTO';
+    r.cartao.barra.noFunil = false;
+    r.cartao.barra.etapas.forEach((e) => { e.atual = false; });
+    r.cartao.barraTratamento = { funil: 'TRATAMENTO', noFunil: true, etapas: etapas([['EM TRATAMENTO', 9], ['ALTA', 142], ['TRATAMENTO CANCELADO', 143]], 'EM TRATAMENTO') };
+    const n = D.cartao(doc, r, {}, AGORA);
+    assert.match(n.querySelector('.trilha__antes').textContent, /COMERCIAL concluído/);
+    assert.deepEqual([...n.querySelectorAll('.estacao__nome')].map((x) => x.textContent), ['EM TRATAMENTO', 'ALTA', 'TRATAMENTO CANCELADO']);
+    assert.doesNotMatch(n.querySelector('[data-bloco="trilha"]').textContent, /não está no funil/);
+    assert.match(n.querySelector('[data-papel="etapa-atual"]').textContent, /Vai sozinho para ALTA/);
+  });
+});
+
+describe('0.5.0 — "O que é seu agora" e "O que é da franquia"', () => {
+  it('as ações da etapa, o guia e a regra da franquia', () => {
+    const doc = novoDoc();
+    const abertos = [];
+    const r = novo();
+    r.cartao.barra.etapas = etapas(COMERCIAL, 'AGENDADO');
+    const n = D.cartao(doc, r, { abrirGuia: (id) => abertos.push(id) }, AGORA);
+    const itens = [...n.querySelectorAll('[data-bloco="seu-agora"] li')].map((li) => li.textContent);
+    assert.ok(itens.length >= 1 && itens.length <= 3);
+    assert.equal(itens[0], 'Confirmar a presença na consulta de 15/10 às 08:00.');
+    n.querySelector('[data-acao="abrir-guia"]').click();
+    assert.deepEqual(abertos, [123]);
+    assert.equal(n.querySelector('[data-bloco="da-franquia"] .agora__regra').textContent,
+      'Agendar, dar baixa e lançar sessão se faz NA FRANQUIA; o cartão anda sozinho aqui.');
+  });
+});
+
+describe('0.5.0 — o cartão "Na franquia"', () => {
+  it('a próxima consulta mastigada: dia da semana, dia, hora, quem e "amanhã"', () => {
+    const doc = novoDoc();
+    const c = D.cartao(doc, novo(), {}, AGORA).querySelector('[data-papel="proxima-consulta"]');
+    assert.match(c.textContent, /qui/);
+    assert.match(c.textContent, /15\/10/);
+    assert.match(c.textContent, /amanhã/);
+    assert.match(c.textContent, /08:00/);
+    assert.match(c.textContent, /Dra\. Ana/);
+  });
+
+  it('sem cadastro na franquia: diz com clareza', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.franquia = { unidade: 'Açailândia', franquia: true, paciente: null };
+    assert.match(D.cartao(doc, r, {}, AGORA).querySelector('[data-papel="sem-cadastro"]').textContent, /Sem cadastro na franquia/);
+  });
+
+  it('franquia fora do ar: avisa, sem inventar nada', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.franquia = { unidade: 'Açailândia', franquia: true, paciente: null, erro: 'franquia indisponível' };
+    assert.match(D.cartao(doc, r, {}, AGORA).querySelector('[data-papel="franquia-erro"]').textContent, /A franquia não respondeu agora/);
+  });
+
+  it('em tratamento: última consulta (veio), tratamento, sessões (feitas, faltas, marcadas), a próxima e a alta', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.cartao.funil = 'TRATAMENTO';
+    r.cartao.etapa = 'EM TRATAMENTO';
+    r.franquia.agenda = {
+      proximaConsulta: null,
+      ultimaConsulta: { dia: '25/09', status: 'ATENDIDO' },
+      proximaSessao: { dia: '16/10', hora: '17:30', quando: '2026-10-16T20:30:00.000Z' },
+      sessoes: { realizadas: 6, faltas: 1, futuras: 3 },
+    };
+    r.franquia.tratamento = { categoria: 'Coluna lombar', status: 'Em andamento' };
+    const n = D.cartao(doc, r, {}, AGORA);
+    assert.equal(n.querySelector('[data-papel="sem-consulta"]'), null, 'em tratamento, "nenhuma consulta" não é alerta');
+    assert.match(n.querySelector('[data-papel="ultima-consulta"]').textContent, /25\/09.*Compareceu/);
+    assert.match(n.querySelector('[data-papel="tratamento"]').textContent, /Coluna lombar.*Em andamento/);
+    const ses = n.querySelector('[data-papel="sessoes"]');
+    assert.match(ses.textContent, /6 feitas/);
+    assert.match(ses.textContent, /1 falta/);
+    assert.match(ses.textContent, /3 marcadas/);
+    assert.equal(ses.querySelectorAll('.sessoes__seg').length, 3);
+    assert.match(n.querySelector('[data-papel="proxima-sessao"]').textContent, /sex 16\/10 às 17:30/);
+    assert.match(n.querySelector('[data-papel="alta"]').textContent, /ainda não/);
+  });
+
+  it('unidade sem franquia ligada: não há cartão "Na franquia"', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.franquia = { unidade: 'Açailândia', franquia: false, paciente: null };
+    assert.equal(D.cartao(doc, r, {}, AGORA).querySelector('[data-bloco="franquia"]'), null);
+  });
+});
+
+describe('0.5.0 — Sofia e o resto', () => {
+  it('unidade sem a IA: nem o estado da Sofia nem a pausa aparecem', () => {
+    const doc = novoDoc();
+    const n = D.cartao(doc, novo({ sofiaNaUnidade: false }), { pausar: () => Promise.resolve(), retomar: () => Promise.resolve() }, AGORA);
+    assert.equal(n.querySelector('[data-bloco="sofia"]'), null);
+    assert.equal(n.querySelector('[data-bloco="pausa"]'), null);
+    assert.ok(n.querySelector('[data-bloco="kommo"]'), 'o resto do cartão continua');
+  });
+
+  it('dado do servidor nos campos novos entra como texto, nunca como HTML', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.cartao.telefone = '<img src=x onerror=alert(1)>';
+    r.cartao.unidade = { nome: '<b>Caxias</b>', compartilhada: true };
+    r.cartao.qualificacao = '<i>Quente</i>';
+    const n = D.cartao(doc, r, {}, AGORA);
+    assert.equal(n.querySelector('img'), null);
+    assert.equal(n.querySelector('b'), null);
+    assert.equal(n.querySelector('i'), null);
+    assert.match(n.textContent, /<b>Caxias<\/b>/);
+  });
+
+  it('os ícones são SVG decorativos (aria-hidden), sem nada de fora', () => {
+    const doc = novoDoc();
+    const n = D.cartao(doc, novo(), {}, AGORA);
+    const svgs = [...n.querySelectorAll('svg')];
+    assert.ok(svgs.length > 5);
+    assert.ok(svgs.every((s) => s.getAttribute('aria-hidden') === 'true'));
+    assert.ok(svgs.every((s) => !s.querySelector('image, use, foreignObject')));
+  });
+});
+
+describe('0.5.0 — respostas sugeridas para a etapa', () => {
+  const LISTA = {
+    respostas: [
+      { id: 1, nome: 'consulta_confirmar_presenca', texto: 'Oi, {{contact.name}}! Confirma amanhã?' },
+      { id: 2, nome: 'petropolis_consulta_endereco', texto: 'Rua de Petrópolis.' },
+      { id: 3, nome: 'caxias_consulta_endereco', texto: 'Rua de Caxias.' },
+      { id: 4, nome: 'lead_boas_vindas', texto: 'Oi, {{contact.name}}!' },
+      { id: 5, nome: 'Bom dia', texto: 'Bom dia!' },
+    ],
+  };
+  const ids = (n, papel) => [...n.querySelectorAll(`[data-papel="${papel}"] [data-resposta]`)].map((x) => Number(x.getAttribute('data-resposta')));
+
+  it('Petrópolis em AGENDADO: consulta_ no topo (com a da unidade), os de Caxias saem da lista', () => {
+    const doc = novoDoc();
+    const n = D.respostas(doc, LISTA, { copiar: () => Promise.resolve() }, 'Maria', '', { etapa: 'AGENDADO', unidade: 'Petrópolis', unidades: ['Petrópolis', 'Caxias'] });
+    assert.deepEqual(ids(n, 'sugeridas'), [1, 2]);
+    assert.deepEqual(ids(n, 'todas'), [4, 5]);
+    assert.equal(n.querySelector('[data-resposta="3"]'), null);
+    assert.match(n.querySelector('[data-papel="escondidas"]').textContent, /1 resposta de outra unidade ficou de fora: este paciente é de Petrópolis/);
+    assert.match(n.querySelector('[data-papel="sugeridas"]').textContent, /AGENDADO/);
+    assert.match(n.querySelector('[data-resposta="2"]').textContent, /Petrópolis/, 'a etiqueta da unidade com acento');
+  });
+
+  it('sem unidade escolhida: nada de modelo de unidade nas sugeridas, e todos na lista', () => {
+    const doc = novoDoc();
+    const n = D.respostas(doc, LISTA, { copiar: () => Promise.resolve() }, 'Maria', '', { etapa: 'AGENDADO', unidade: null, unidades: ['Petrópolis', 'Caxias'] });
+    assert.deepEqual(ids(n, 'sugeridas'), [1]);
+    assert.deepEqual(ids(n, 'todas'), [2, 3, 4, 5]);
+  });
+
+  it('sem cartão na tela (sem etapa): a lista inteira, sem sugeridas', () => {
+    const doc = novoDoc();
+    const n = D.respostas(doc, LISTA, { copiar: () => Promise.resolve() }, null, '', {});
+    assert.equal(n.querySelector('[data-papel="sugeridas"]'), null);
+    assert.deepEqual(ids(n, 'todas'), [1, 2, 3, 4, 5]);
+  });
+
+  it('a sugerida continua só COPIAR, com o nome do paciente da tela', async () => {
+    const doc = novoDoc();
+    const copiados = [];
+    const n = D.respostas(doc, LISTA, { copiar: (t) => { copiados.push(t); return Promise.resolve(); } }, 'Maria', '', { etapa: 'EM QUALIFICAÇÃO' });
+    n.querySelector('[data-papel="sugeridas"] [data-acao="copiar-resposta"]').click();
+    await tique();
+    assert.deepEqual(copiados, ['Oi, Maria!']);
+  });
+});
+
+describe('0.5.0 — com o servidor de HOJE', () => {
+  it('conta de duas unidades com o campo vazio: a recusa da franquia vira "Escolha a unidade" (nunca o nome da conta)', () => {
+    const doc = novoDoc();
+    const r = JSON.parse(JSON.stringify(ACHADO));
+    r.franquia = { unidade: 'Petrópolis', franquia: true, paciente: null, erro: 'Escolha a ⌂ Unidade de atendimento do cartão (Petrópolis ou Caxias) antes de marcar: esta conta do Kommo atende 2 unidades, cada uma com a sua agenda na franquia. Nada foi marcado.' };
+    const n = D.cartao(doc, r, { abrirGuia: () => {} });
+    assert.equal(n.querySelector('[data-papel="unidade"]').textContent, 'Escolha a unidade');
+    assert.ok(n.querySelector('[data-papel="franquia-sem-unidade"]'));
+    assert.doesNotMatch(n.textContent, /Nada foi marcado/);
+  });
+
+  it('cartão no TRATAMENTO sem a trilha do TRATAMENTO: "COMERCIAL concluído", sem a linha nem o aviso de fora do funil', () => {
+    const doc = novoDoc();
+    const r = JSON.parse(JSON.stringify(ACHADO));
+    r.cartao.funil = 'TRATAMENTO';
+    r.cartao.etapa = 'EM TRATAMENTO';
+    r.cartao.barra.noFunil = false;
+    r.cartao.barra.etapas.forEach((e) => { e.atual = false; });
+    const n = D.cartao(doc, r, {});
+    assert.ok(n.querySelector('.trilha__antes'));
+    assert.equal(n.querySelector('.trilha__linha'), null);
+    assert.doesNotMatch(n.textContent, /não está no funil/);
+    assert.match(n.querySelector('[data-papel="etapa-atual"]').textContent, /EM TRATAMENTO/);
+  });
+});
+
+describe('0.5.0 — unidade em que o cartão NÃO anda sozinho (franquiaAndaSozinha: false)', () => {
+  it('a etapa da franquia vira "a recepção atualiza pela franquia", e nada promete movimento automático', () => {
+    const doc = novoDoc();
+    const r = novo({ franquiaAndaSozinha: false });
+    r.cartao.barra.etapas = etapas(COMERCIAL, 'AGENDADO');
+    const n = D.cartao(doc, r, {}, AGORA);
+    const aqui = n.querySelector('[data-papel="etapa-atual"]');
+    assert.match(aqui.textContent, /A recepção atualiza pela franquia/);
+    assert.match(aqui.textContent, /quando a recepção der baixa na consulta/);
+    assert.match(n.querySelector('.legenda').textContent, /A recepção atualiza pela franquia/);
+    assert.equal(n.querySelector('[data-bloco="da-franquia"] .agora__regra').textContent,
+      'Agendar, dar baixa e lançar sessão se faz NA FRANQUIA; nesta unidade, a recepção atualiza o cartão pela franquia.');
+    assert.ok([...n.querySelectorAll('.estacao')].some((e) => /a recepção atualiza pela franquia/.test(e.title)));
+    // em lugar nenhum do cartão: "anda sozinh(o|a)" nem "vai sozinho"
+    assert.doesNotMatch(n.textContent, /anda sozinh|vai sozinho|volta sozinho/i);
+  });
+
+  it('sem cadastro: não promete o AGENDADO sozinho', () => {
+    const doc = novoDoc();
+    const r = novo({ franquiaAndaSozinha: false });
+    r.franquia = { unidade: 'Açailândia', franquia: true, paciente: null };
+    const t = D.cartao(doc, r, {}, AGORA).querySelector('[data-papel="sem-cadastro"]').textContent;
+    assert.doesNotMatch(t, /anda sozinho/);
+  });
+
+  it('servidor de hoje (sem o campo): o texto de sempre ("anda sozinha")', () => {
+    const doc = novoDoc();
+    const n = D.cartao(doc, ACHADO, {});
+    assert.match(n.querySelector('[data-papel="etapa-atual"]').textContent, /Anda sozinha pela franquia/);
   });
 });

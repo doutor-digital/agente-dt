@@ -48,9 +48,90 @@
     });
   }
 
+  // ── 0.5.0: as sugeridas para a etapa e os modelos de cada unidade ──
+
+  /** O nome do modelo como chave: "⚡ Consulta dados pix" → "consulta_dados_pix". */
+  function chaveDoModelo(nome) {
+    return paraBusca(nome).replace(/ /g, '_');
+  }
+
+  /**
+   * Os prefixos de nome que combinam com cada etapa (a chave da etapa é a de `trilha.js`). Casa pelo COMEÇO do nome
+   * do modelo, depois de tirar o prefixo da unidade ("petropolis_consulta_endereco" → "consulta_endereco").
+   */
+  var PREFIXOS_DA_ETAPA = {
+    entrada: ['lead', 'primeiro_contato', 'boas_vindas', 'qualificacao'],
+    qualificacao: ['lead', 'primeiro_contato', 'boas_vindas', 'qualificacao'],
+    espera: ['espera', 'retomada', 'retomar'],
+    conferir: ['conferir'],
+    agendado: ['consulta', 'agendado', 'confirmacao', 'confirmar', 'endereco'],
+    'nao-compareceu': ['falta', 'faltou', 'nao_compareceu', 'remarcar'],
+    compareceu: ['negociacao', 'plano', 'proposta', 'tratamento'],
+    negociacao: ['negociacao', 'plano', 'proposta', 'tratamento'],
+    ganho: ['tratamento', 'sessao'],
+    'em-tratamento': ['sessao', 'tratamento'],
+    alta: ['alta', 'retorno', 'pos_tratamento'],
+    retorno: ['retorno', 'pos_tratamento'],
+    perdido: ['perdido', 'reativacao', 'reativar'],
+  };
+
+  /** As unidades que têm modelos com prefixo próprio. A conta pode mandar as dela (`unidades`). */
+  var UNIDADES_COM_PREFIXO = ['petropolis', 'caxias'];
+
+  function prefixosDeUnidade(unidades) {
+    var l = (unidades && unidades.length ? unidades : UNIDADES_COM_PREFIXO).map(function (u) { return chaveDoModelo(u); }).filter(Boolean);
+    return l.sort(function (a, b) { return b.length - a.length; });
+  }
+
+  /** De qual unidade é o modelo ("caxias_endereco" → "caxias"), ou null (vale para todas). */
+  function unidadeDoModelo(nome, unidades) {
+    var k = chaveDoModelo(nome);
+    var achou = prefixosDeUnidade(unidades).filter(function (u) { return k === u || k.indexOf(u + '_') === 0; })[0];
+    return achou || null;
+  }
+
+  /**
+   * As respostas que podem ir para ESTE cartão: os modelos de outra unidade saem quando a unidade do cartão é
+   * conhecida (o endereço de Caxias não pode ir para um paciente de Petrópolis). Sem unidade, ficam todos.
+   * Devolve `{ lista, escondidas }`.
+   */
+  function daUnidade(lista, unidade, unidades) {
+    var minha = unidade ? chaveDoModelo(unidade) : null;
+    var escondidas = 0;
+    var ok = (lista || []).filter(function (r) {
+      var u = unidadeDoModelo(r && r.nome, unidades);
+      if (!u || !minha || u === minha) return true;
+      escondidas++;
+      return false;
+    });
+    return { lista: ok, escondidas: escondidas };
+  }
+
+  /**
+   * As sugeridas para a etapa, na ordem da conta: o nome (sem o prefixo da unidade) começa com um prefixo da etapa.
+   * Modelo de unidade só entra quando é da unidade do cartão; sem unidade conhecida, só os que valem para todas.
+   */
+  function sugeridas(lista, chaveDaEtapa, unidade, unidades) {
+    var prefixos = PREFIXOS_DA_ETAPA[chaveDaEtapa];
+    if (!prefixos) return [];
+    var minha = unidade ? chaveDoModelo(unidade) : null;
+    return (lista || []).filter(function (r) {
+      var k = chaveDoModelo(r && r.nome);
+      var u = unidadeDoModelo(r && r.nome, unidades);
+      if (u && u !== minha) return false;
+      if (u) k = k.slice(u.length).replace(/^_/, '');
+      return prefixos.some(function (p) { return k === p || k.indexOf(p + '_') === 0; });
+    });
+  }
+
   return Object.freeze({
     preencherNome: preencherNome,
     temLacuna: temLacuna,
     filtrar: filtrar,
+    chaveDoModelo: chaveDoModelo,
+    unidadeDoModelo: unidadeDoModelo,
+    daUnidade: daUnidade,
+    sugeridas: sugeridas,
+    PREFIXOS_DA_ETAPA: PREFIXOS_DA_ETAPA,
   });
 });

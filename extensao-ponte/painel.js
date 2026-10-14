@@ -27,6 +27,12 @@
  *     (conta de duas unidades), a ⚠ Pendência, o que falta nesta etapa e as saídas. Gravar (`POST …/ponte/campos`) e
  *     mover (`POST …/ponte/mover`) só depois da prévia e da confirmação; o servidor devolve o guia relido do Kommo;
  *   - o número no ícone (pacientes esperando resposta) é do script de fundo (`contador.js`), não deste painel.
+ *
+ * 0.5.0 (visual novo):
+ *   - o cartão novo (`desenho.js` + `trilha.js`) entra com uma animação curta só quando o paciente muda;
+ *   - a aba Respostas recebe a etapa e a unidade do cartão da tela (as sugeridas e os modelos de outra unidade);
+ *   - "Abrir conversa" e "Começar a ligar" abrem pelo link wa.me da Ponte, sem recarregar (`abrir.js`, no content
+ *     script); se não abrir, o jeito antigo (troca a URL). A chave fica nas opções (`semRecarregar`, ligada).
  */
 (function () {
   'use strict';
@@ -97,12 +103,25 @@
   }
 
   function lerConfig() {
-    return chrome.storage.local.get(['slug', 'chave', 'nome']).then(function (c) {
+    return chrome.storage.local.get(['slug', 'chave', 'nome', 'semRecarregar']).then(function (c) {
       config = c && c.slug && c.chave
-        ? { slug: String(c.slug), chave: String(c.chave), nome: String(c.nome || '').trim().slice(0, 80) }
+        // 0.5.0: "Abrir conversa sem recarregar" vem ligada; só a atendente desliga (nas opções)
+        ? { slug: String(c.slug), chave: String(c.chave), nome: String(c.nome || '').trim().slice(0, 80), semRecarregar: c.semRecarregar !== false }
         : null;
-      rotuloUnidade.textContent = config ? config.slug : '';
+      rotuloUnidade.textContent = config ? nomeDoSlug(config.slug) : '';
+      rotuloUnidade.title = config ? config.slug : '';
     });
+  }
+
+  /** "doutor-hernia-acailandia" → "Acailandia" (até o servidor dizer o nome de verdade, com acento). */
+  function nomeDoSlug(slug) {
+    return String(slug || '').replace(/^doutor-hernia-/, '').split('-').filter(Boolean)
+      .map(function (p) { return p.charAt(0).toUpperCase() + p.slice(1); }).join(' ');
+  }
+
+  /** O nome da unidade que o servidor devolveu (`unidadeDaConta` no cartão, `unidade` na fila). */
+  function nomeDaUnidade(nome) {
+    if (config && typeof nome === 'string' && nome.trim()) rotuloUnidade.textContent = nome.trim().slice(0, 60);
   }
 
   function mostrarConfigurar() {
@@ -323,10 +342,19 @@
     },
   };
 
+  /** 0.5.0: o cartão entra com uma animação curta só quando o PACIENTE muda (pausar ou pôr etiqueta não pisca). */
+  var ultimoNaTela = null;
+
   function desenhar(r) {
     guiaAberto = null;
     naTela = r && r.achado && r.cartao ? r : null;
-    if (naTela) trocar(D.cartao(document, r, acoes));
+    if (r && r.unidadeDaConta) nomeDaUnidade(r.unidadeDaConta);
+    if (naTela) {
+      var no = D.cartao(document, r, acoes);
+      if (ultimoNaTela !== r.cartao.id) no.classList.add('entra');
+      ultimoNaTela = r.cartao.id;
+      trocar(no);
+    }
     else if (r && r.candidatos && r.candidatos.length) trocar(D.candidatos(document, r, acoes));
     else trocar(D.nada(document, r, acoes, conversa && conversa.fonteTelefone !== 'cabecalho' ? conversa.nome : ''));
     atualizarNomeDasRespostas();
@@ -425,8 +453,26 @@
   // ── fase 2: a fila do dia ──
 
   /**
-   * "Abrir conversa": troca a URL da aba do WhatsApp Web para o chat do telefone. NAVEGAÇÃO — o mesmo que clicar
-   * num link do WhatsApp; nada é digitado nem enviado. O WhatsApp Web recarrega e abre a conversa.
+   * 0.5.0: pede ao content script para abrir a conversa pelo link wa.me da Ponte (sem recarregar). Resolve `true` se
+   * abriu; `false` se não (o WhatsApp não tratou o link, a conversa não apareceu em ~4 s, ou a aba tem o script de uma
+   * versão antiga) — e aí quem chamou usa o jeito antigo.
+   */
+  function abrirSemRecarregar(aba, telefone) {
+    return chrome.tabs.sendMessage(aba, { tipo: 'ponte:abrir-conversa', telefone: String(telefone) }).then(function (r) {
+      if (r && r.aberta) return true;
+      console.info('[Ponte] a conversa não abriu pelo link wa.me (' + ((r && r.motivo) || 'sem resposta') + '): abrindo pelo jeito antigo, com recarga.');
+      return false;
+    }, function (e) {
+      console.info('[Ponte] o WhatsApp Web não respondeu ao link wa.me (' + ((e && e.message) || 'sem resposta') + '): abrindo pelo jeito antigo, com recarga.');
+      return false;
+    });
+  }
+
+  /**
+   * "Abrir conversa": abre o chat do telefone na aba do WhatsApp Web. NAVEGAÇÃO — nada é digitado nem enviado.
+   * 0.5.0: primeiro pelo link wa.me da própria Ponte, sem recarregar (`abrir.js`, no content script); se não abrir,
+   * o jeito antigo: troca a URL da aba para `web.whatsapp.com/send?phone=…` (o WhatsApp Web recarrega). Com a chave
+   * "Abrir conversa sem recarregar" desligada nas opções, vai direto pelo jeito antigo.
    * `ficar`: no modo "Começar a ligar" o painel fica na fila (é lá que estão os botões de resultado).
    */
   function abrirConversa(telefone, ficar) {
@@ -438,7 +484,11 @@
     // abriu outra coisa nela (o Kommo, por exemplo), a Ponte não pode trocar a página dela.
     return chrome.tabs.sendMessage(aba, { tipo: 'ponte:qual-conversa' }).then(
       function () {
-        return chrome.tabs.update(aba, { url: url, active: true }).then(function () { if (!ficar) mostrarSecao('conversa'); });
+        var link = config && config.semRecarregar !== false ? abrirSemRecarregar(aba, telefone) : Promise.resolve(false);
+        return link.then(function (abriu) {
+          // abriu sem recarregar: só traz a aba para a frente (sem trocar a URL, não recarrega)
+          return abriu ? chrome.tabs.update(aba, { active: true }) : chrome.tabs.update(aba, { url: url, active: true });
+        }).then(function () { if (!ficar) mostrarSecao('conversa'); });
       },
       function () {
         if (abaWhatsapp === aba) abaWhatsapp = null;
@@ -484,6 +534,15 @@
     },
   };
 
+  /** 0.5.0: o total da fila no botão da aba (depois da 1ª leitura). */
+  function mostrarTotalDaFila(f) {
+    var n = document.getElementById('aba-fila-total');
+    if (!n) return;
+    var total = ((f && f.grupos) || []).reduce(function (s, g) { return s + (g.total || 0); }, 0);
+    n.textContent = total ? String(total) : '';
+    n.hidden = !total;
+  }
+
   function carregarFila(forcar) {
     if (lig) return desenharLigacao();
     if (!config) return raizFila.replaceChildren(mostrarConfigurar());
@@ -495,6 +554,8 @@
     chamar('GET', '/ponte/fila').then(function (f) {
       if (id !== pedidoFila || lig) return;
       filaGuardada = { em: Date.now(), f: f };
+      mostrarTotalDaFila(f);
+      nomeDaUnidade(f && f.unidade);
       raizFila.replaceChildren(D.fila(document, f, acoesDaFila, new Date()));
     }, function (e) {
       if (id !== pedidoFila) return;
@@ -720,6 +781,30 @@
     return (naTela && naTela.cartao && naTela.cartao.primeiroNome) || null;
   }
 
+  /**
+   * 0.5.0: a etapa e a unidade do cartão na tela, para as respostas sugeridas (e para esconder os modelos de outra
+   * unidade). Sem cartão na tela: nada sugerido, todos os modelos.
+   */
+  function contextoDasRespostas() {
+    var c = naTela && naTela.cartao;
+    if (!c) return {};
+    var b = c.barraTratamento && c.barraTratamento.noFunil ? c.barraTratamento : c.barra;
+    var atual = ((b && b.etapas) || []).filter(function (e) { return e.atual; })[0];
+    // a unidade do cartão (o campo, na 0.5.0; no servidor de antes, a da franquia — e nada se ela pediu a unidade)
+    var u = self.PonteTrilha.unidadeDoCartao(c, naTela.franquia);
+    var opcoes = c.unidade && typeof c.unidade === 'object' && Array.isArray(c.unidade.opcoes) ? c.unidade.opcoes : null;
+    return {
+      etapa: (atual && atual.nome) || c.etapa || null,
+      unidade: u && u.nome ? u.nome : null,
+      unidades: opcoes,
+    };
+  }
+
+  function chaveDasRespostas() {
+    var x = contextoDasRespostas();
+    return [primeiroNomeNaTela() || '', x.etapa || '', x.unidade || ''].join('|');
+  }
+
   var acoesDasRespostas = {
     atualizar: function () { carregarRespostas(true); },
     copiar: copiar,
@@ -727,13 +812,13 @@
   };
 
   function desenharRespostas() {
-    nomeDasRespostas = primeiroNomeNaTela();
-    raizRespostas.replaceChildren(D.respostas(document, respostasGuardadas.r, acoesDasRespostas, nomeDasRespostas, buscaDasRespostas));
+    nomeDasRespostas = chaveDasRespostas();
+    raizRespostas.replaceChildren(D.respostas(document, respostasGuardadas.r, acoesDasRespostas, primeiroNomeNaTela(), buscaDasRespostas, contextoDasRespostas()));
   }
 
-  /** O paciente da tela mudou: a lista é redesenhada com o nome novo (ou sem nome, enquanto procura). */
+  /** O paciente da tela mudou: a lista é redesenhada com o nome, a etapa e a unidade novos (ou sem, enquanto procura). */
   function atualizarNomeDasRespostas() {
-    if (secao === 'respostas' && respostasGuardadas && primeiroNomeNaTela() !== nomeDasRespostas) desenharRespostas();
+    if (secao === 'respostas' && respostasGuardadas && chaveDasRespostas() !== nomeDasRespostas) desenharRespostas();
   }
 
   function carregarRespostas(forcar) {
@@ -807,7 +892,7 @@
         if (secao === 'fila') carregarFila(true);
         if (secao === 'respostas') carregarRespostas(true);
       });
-    } else if (mudou.nome) {
+    } else if (mudou.nome || mudou.semRecarregar) {
       lerConfig();
     }
   });

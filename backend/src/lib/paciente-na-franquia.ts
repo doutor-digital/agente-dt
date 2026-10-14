@@ -82,6 +82,8 @@ export interface ResumoDoPaciente {
   agora?: Date;
   paciente: { idClient: number | null; nome: string | null; whatsapp: string | null; origem: PacienteAchado['origem'] } | null;
   erro?: string;
+  /** 0.5.0: por que a franquia recusou (`sem_unidade`: a conta é de duas unidades e o cartão está sem o campo). */
+  codigo?: 'sem_unidade' | 'unidade_sem_franquia';
   duplicadoNaFranquia?: boolean;
   agenda?: ResumoAgenda;
   tratamento?: { categoria: string | null; fisioterapeuta: string | null; status: string | null; local: string | null; grau: string | null; valor: number | null } | null;
@@ -95,7 +97,7 @@ export async function resumoDoPacienteNaFranquia(unitDoPedido: Unit, q: PedidoDo
   if (!unitDoPedido.spineEnabled || !unitDoPedido.spineToken) return { unidade: unitDoPedido.name, franquia: false, paciente: null };
   // Kommo dividido (Petrópolis + Caxias): mostra a franquia da unidade do CARTÃO; campo vazio não escolhe por ninguém.
   const dono = await unidadeParaOCartao(unitDoPedido, q.leadId);
-  if (dono.tipo === 'recusa') return { unidade: unitDoPedido.name, franquia: true, paciente: null, erro: dono.motivo };
+  if (dono.tipo === 'recusa') return { unidade: unitDoPedido.name, franquia: true, paciente: null, erro: dono.motivo, codigo: dono.codigo };
   const unit = dono.unit;
   const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
 

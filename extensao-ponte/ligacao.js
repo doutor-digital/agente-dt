@@ -6,7 +6,7 @@
  * "Abrir conversa") e a atendente dá o ÚNICO clique, no 📞 do próprio WhatsApp Web. A Ponte nunca clica, digita
  * nem envia nada no WhatsApp.
  *
- * O ritmo, para não parecer spam: no mínimo `intervaloS` entre abrir uma ligação e a próxima, e no máximo
+ * O ritmo: sem espera entre uma ligação e a próxima por padrão (`intervaloS` = 0, pedido do João em 14/10), e no máximo
  * `tetoPorHora` aberturas numa janela corrida de 60 min. Os números vêm do servidor (`RITMO_DAS_LIGACOES`).
  *
  * O que fica guardado (chrome.storage, para a posição sobreviver a fechar o painel): o dia, a unidade, os ids dos
@@ -34,14 +34,14 @@
   ];
 
   /** O mesmo padrão do servidor; vale quando a fila veio sem `ritmo` (servidor antigo). */
-  var RITMO_PADRAO = { intervaloS: 40, tetoPorHora: 40 };
+  var RITMO_PADRAO = { intervaloS: 0, tetoPorHora: 40 };
 
   /** O ritmo que vale: o do servidor, com as mesmas travas (intervalo ≥ 15 s, teto entre 1 e 120 por hora). */
   function ritmoDe(r) {
     var i = Number(r && r.intervaloS);
     var t = Number(r && r.tetoPorHora);
     return {
-      intervaloS: Number.isFinite(i) && i > 0 ? Math.max(15, i) : RITMO_PADRAO.intervaloS,
+      intervaloS: Number.isFinite(i) && i >= 0 ? i : RITMO_PADRAO.intervaloS,
       tetoPorHora: Number.isFinite(t) && t >= 1 ? Math.min(120, Math.floor(t)) : RITMO_PADRAO.tetoPorHora,
     };
   }

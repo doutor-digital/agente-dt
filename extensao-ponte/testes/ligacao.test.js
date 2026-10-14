@@ -111,9 +111,11 @@ describe('ligação — tentativa e telefone não lido (revisão)', () => {
 });
 
 describe('ligação — o ritmo', () => {
-  it('o padrão é o do servidor (40 s, 40 por hora), com as mesmas travas', () => {
-    assert.deepEqual(L.ritmoDe(undefined), { intervaloS: 40, tetoPorHora: 40 });
-    assert.deepEqual(L.ritmoDe({ intervaloS: 5, tetoPorHora: 999 }), { intervaloS: 15, tetoPorHora: 120 });
+  it('o padrão é o do servidor (sem espera, 40 por hora), com as mesmas travas', () => {
+    assert.deepEqual(L.ritmoDe(undefined), { intervaloS: 0, tetoPorHora: 40 });
+    assert.deepEqual(L.ritmoDe({ intervaloS: 0, tetoPorHora: 40 }), { intervaloS: 0, tetoPorHora: 40 });
+    assert.deepEqual(L.ritmoDe({ intervaloS: -3, tetoPorHora: 40 }), { intervaloS: 0, tetoPorHora: 40 });
+    assert.deepEqual(L.ritmoDe({ intervaloS: 5, tetoPorHora: 999 }), { intervaloS: 5, tetoPorHora: 120 });
     assert.deepEqual(L.ritmoDe({ intervaloS: 60, tetoPorHora: 20 }), { intervaloS: 60, tetoPorHora: 20 });
   });
 

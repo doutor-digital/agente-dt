@@ -1,30 +1,133 @@
 # Ponte — o cartão do Kommo ao lado da conversa no WhatsApp Web
 
-Extensão do Chrome (e do Firefox), **versão 0.4.0 — fase 4**. Com uma conversa aberta no WhatsApp Web, o
-painel lateral mostra o cartão do Kommo daquele paciente:
+Extensão do Chrome (e do Firefox), **versão 0.5.0 — visual novo**. Com uma conversa aberta no WhatsApp Web, o
+painel lateral mostra o cartão do Kommo daquele paciente, mastigado para quem não conhece o Kommo:
 
-- o botão **O que eu faço agora?** (novo na 0.4.0): o guia da etapa — o que falta preencher, a ⚠ Pendência do
-  cartão e para onde o paciente pode ir, com a mudança de etapa ali mesmo;
+- **quem é**: nome, telefone, o selo colorido da **unidade** (o `⌂ Unidade de atendimento`; vazio na conta de duas
+  unidades = "Escolha a unidade"), a **qualificação** (Quente, Morno, Frio) e como o cartão foi achado (pelo telefone,
+  pelas mensagens, pelo nome — "confira" — ou escolhido por você);
+- **onde está o cartão** (novo na 0.5.0): a **trilha do funil**, com a etapa atual acesa, há quanto tempo ele está nela
+  e de quem é a etapa — **azul = é sua**, **dourado = anda sozinha pela franquia** —, e o que vem depois;
+- **O que é seu agora** (0.5.0): de 1 a 3 ações para a etapa e o botão **O que eu faço agora?** (o guia da 0.4.0); e,
+  logo abaixo, **O que é da franquia**: "Agendar, dar baixa e lançar sessão se faz NA FRANQUIA; o cartão anda sozinho
+  aqui";
+- **Na franquia** (0.5.0): próxima consulta (dia da semana, data, hora, fisioterapeuta, "amanhã"), última consulta
+  (veio ou faltou), tratamento, **sessões** (feitas, faltas, marcadas e a próxima) e alta — ou "Sem cadastro na
+  franquia", com clareza;
+- **Resumo** (fase 2), **Sofia** (estado e "Pausar a Sofia neste paciente"; some na unidade sem a IA), **aviso de
+  cartão duplicado** (0.3.0, agora recolhido numa linha), responsável, de que anúncio veio, **etiquetas** (pôr e tirar)
+  e **Abrir no Kommo**.
 
-- **Resumo** (novo na fase 2), no topo: quem é, onde está e há quanto tempo, o que já aconteceu na franquia, a
-  última conversa e o próximo passo sugerido para a etapa;
-- nome do cartão, funil e etapa, com uma barrinha do funil COMERCIAL;
-- **aviso de cartão duplicado** (novo na 0.3.0): "Este paciente tem 2 cartões abertos";
-- responsável, **etiquetas** (na 0.3.0: pôr e tirar daqui) e se a Sofia está ativa ou quieta (pausa da unidade,
-  fora do horário, caixinha "Pausar IA" ou pausa com data);
-- **Pausar a Sofia neste paciente** (novo na fase 2);
-- de que anúncio o paciente veio;
-- o que a franquia sabe: consulta marcada ou não, última consulta, tratamento;
-- como o cartão foi achado (pelo telefone, pelas mensagens, pelo nome — "confira" — ou escolhido por você);
-- o botão **Abrir no Kommo**.
+E mais duas abas: **Fila de hoje** (fase 2): os números por grupo no topo e quem chamar ou ligar hoje, com **Começar a
+ligar** (0.3.0); e **Respostas** (0.3.0): as respostas prontas do Kommo para copiar — na 0.5.0, com as **sugeridas
+para a etapa** no topo.
 
-E mais duas abas: **Fila de hoje** (nova na fase 2): quem chamar ou ligar hoje, por etapa, agora com o botão
-**Começar a ligar** (0.3.0); e **Respostas** (nova na 0.3.0): as respostas prontas do Kommo para copiar.
-
-E, no ícone da extensão, **quantos pacientes estão esperando resposta** (novo na 0.4.0).
+E, no ícone da extensão, **quantos pacientes estão esperando resposta** (0.4.0).
 
 Também tem um bloco "Modo aprendiz", que diz onde cada coisa fica dentro do Kommo. Por enquanto ele é fixo; uma
 fase futura vai escolher qual dica mostrar e quando.
+
+## O que há de novo na 0.5.0 (visual novo)
+
+O João pediu "um front lindo, mais limpo, colorido, profissional, tipo um dashboard avançado, com tudo mastigado para
+quem não tem familiaridade com o Kommo". Três coisas que a atendente precisa ver de cara: **em qual etapa o lead
+está**, **o que ela NÃO pode fazer** (é da franquia) e **as respostas prontas**.
+
+### O desenho
+
+- **As cores vêm do logo da Doutor Digital**, que são duas metades que se encaixam: **azul DD** (`#0086F7`) é o que é
+  da atendente; **ouro DD** (`#FFB500`) é o que é da franquia. Estados: verde (deu certo), âmbar (atenção), vermelho
+  (faltou/erro), cinza (nada ainda). Contraste conferido (≥ 4,5 no texto). Tema claro.
+- **Fonte**: Plus Jakarta Sans, dentro da extensão (`fontes/`, 27 KB, licença OFL em `fontes/OFL.txt`). **Ícones**: SVG
+  desenhado em `icones.js` (traço, `currentColor`, `aria-hidden`). Nada vem de fora: sem CDN, sem fonte de ícones.
+- Cartões arredondados, foco visível no teclado, animação curta só quando o PACIENTE muda (pausar ou pôr etiqueta não
+  pisca) e nenhuma para quem pede menos movimento. Funciona de 320 a 500 px de largura.
+
+### A trilha do funil (`trilha.js`)
+
+As etapas do COMERCIAL (e, com o cartão no TRATAMENTO, as do TRATAMENTO, com o nome embaixo de cada uma e "COMERCIAL
+concluído") numa linha: a atual acesa, as de antes feitas, GANHO e PERDIDO separados como saídas. Cada etapa tem um
+**dono**, reconhecido pelo NOME (cada conta tem os seus ids), pela regra da franquia (`backend/src/lib/franquia-move.ts`,
+18/09/2026: "a franquia é onde a clínica registra; o cartão anda sozinho atrás do fato"):
+
+| Dono | Etapas | Marca |
+| --- | --- | --- |
+| Anda sozinha pela franquia | AGENDADO, COMPARECEU, NÃO COMPARECEU, GANHO, EM TRATAMENTO, ALTA, RETORNO PÓS-TRATAMENTO | losango dourado |
+| É sua | entrada, EM QUALIFICAÇÃO, EM ESPERA, CONFERIR NA FRANQUIA, EM NEGOCIAÇÃO, PERDIDO, TRATAMENTO CANCELADO | bolinha azul |
+
+Embaixo da linha, a etapa atual em destaque: o nome grande, de quem é, há quanto tempo (o relógio fica âmbar quando a
+etapa da atendente está parada demais: entrada 1 dia, qualificação 2, NÃO COMPARECEU 3…) e o que vem depois ("Vai
+sozinho para COMPARECEU ou NÃO COMPARECEU quando a franquia der baixa na consulta"). "Ver as 10 etapas" abre a lista
+com o dono de cada uma.
+
+### "O que é seu agora" × "O que é da franquia"
+
+De 1 a 3 ações claras por etapa (`acoesDaEtapa`); a primeira é o próximo passo que o servidor já monta (com a data da
+consulta). Na conta de duas unidades com o campo vazio, a primeira é escolher a unidade. O botão **O que eu faço
+agora?** abre o guia. Embaixo, em dourado, o que NÃO se faz no Kommo: agendar, dar baixa e lançar sessão — é na
+franquia, e o cartão anda sozinho.
+
+### Respostas sugeridas para a etapa
+
+No topo da aba Respostas, as que combinam com a etapa do cartão da tela, pelo **começo do nome do modelo** (sem acento
+nem caixa; `PREFIXOS_DA_ETAPA` em `respostas.js`): `lead_`, `primeiro_contato`, `boas_vindas` em entrada/EM
+QUALIFICAÇÃO; `espera_`, `retomada_` em EM ESPERA; `consulta_`, `confirmacao_`, `endereco_` em AGENDADO; `falta_`,
+`remarcar_` em NÃO COMPARECEU; `sessao_`, `tratamento_` em EM TRATAMENTO… Modelo com prefixo de unidade (`caxias_…`,
+`petropolis_…`) só aparece para cartão DAQUELA unidade: num cartão de Petrópolis, os `caxias_` saem da lista (com o
+aviso "1 resposta de outra unidade ficou de fora"); sem unidade escolhida, ficam na lista, mas fora das sugeridas.
+Continua só **copiar**, nunca enviar.
+
+### Abrir a conversa sem recarregar o WhatsApp Web
+
+Até a 0.4.0, "Abrir conversa" e "Começar a ligar" trocavam a URL da aba (`web.whatsapp.com/send?phone=…`): o WhatsApp
+Web recarregava inteiro a cada paciente. Agora o painel pede ao content script, e `abrir.js` cria **um link da própria
+Ponte**, `<a href="https://wa.me/<dígitos>">`, escondido, aciona `.click()` **nesse elemento** e o tira da página na
+hora. O WhatsApp Web trata link wa.me dentro dele mesmo e abre a conversa sem recarregar.
+
+Isso não está documentado pelo WhatsApp (é o que acontece quando se clica num link wa.me dentro do WhatsApp Web; não
+achamos fonte oficial nem extensão conhecida que documente o truque — as que abrem conversa sem recarregar usam módulos
+internos, que a Ponte não usa). Por isso, duas travas, e na dúvida o **jeito antigo**:
+
+1. se o WhatsApp **não tratar** o clique (ninguém chamou `preventDefault`), a Ponte **cancela a navegação** — a aba não
+   sai do WhatsApp para a página do wa.me — e o painel abre na hora pelo jeito antigo;
+2. se tratou, a Ponte espera até **4 s** a conversa daquele número aparecer no cabeçalho (pelos 8 últimos dígitos; em
+   conversa `@lid`, que não mostra o número, vale a troca de conversa). Não apareceu → jeito antigo.
+
+Toda queda para o jeito antigo fica no console (`[Ponte] a conversa não abriu pelo link wa.me (…)`). Aba com o
+content script de uma versão antiga (WhatsApp aberto antes de atualizar a Ponte) também cai no jeito antigo. Nas
+opções, a chave **Abrir conversa sem recarregar** vem **ligada**; desligada, volta ao jeito antigo sempre. O ritmo do
+"Começar a ligar" passa a não ter espera entre uma ligação e a próxima (antes eram 40 s); o teto de 40 por hora continua.
+
+### Os campos novos do cartão (backend)
+
+`POST /api/public/widget/:slug/ponte/cartao` passa a mandar, além do que já mandava (montados em
+`backend/src/lib/ponte-painel.ts`, sem chamada a mais no Kommo — os campos da conta vêm do cache de 10 min do guia):
+
+| Campo | O que é |
+| --- | --- |
+| `cartao.telefone` | o número do contato do Kommo (ou o da conversa), como se lê: "(99) 90000-0001" |
+| `cartao.unidade` | `{ nome, compartilhada, opcoes }`: na conta de duas unidades, o `⌂ Unidade de atendimento` (`nome: null` = vazio) e as unidades da conta; na de uma só, o nome curto da unidade ("Açailândia", sem "Doutor Hérnia") |
+| `cartao.qualificacao` | o ★ Qualificação: o texto, `null` (a conta tem o campo e ele está vazio) ou ausente (a conta não tem o campo) |
+| `cartao.naEtapaDesde` | desde quando está na etapa (o mesmo do resumo) |
+| `cartao.barraTratamento` | a trilha do funil TRATAMENTO (EM TRATAMENTO, ALTA, TRATAMENTO CANCELADO), só com o cartão nele |
+| `sofiaNaUnidade` | a unidade tem a Sofia (caminho de entrega + chave do modelo)? Sem ela, o painel esconde o estado da Sofia e a pausa |
+| `unidadeDaConta` | o nome curto da unidade da conta, para o topo do painel |
+| `franquiaAndaSozinha` | "A franquia move a etapa" **e** o "Sincronizador da franquia" estão **ligados** (tela de Automações, `unit_automacoes`, ou o `.env`) para a unidade DO CARTÃO? |
+| `franquia.codigo` | `sem_unidade` quando a franquia recusa porque o cartão está sem a unidade (conta de duas unidades) |
+
+**A decisão do `franquiaAndaSozinha`** (recomendação aceita pelo João, 14/10/2026): onde as duas automações não estão
+ligadas — "só no papel" não conta —, o cartão NÃO anda sozinho. O painel então troca "Anda sozinha pela franquia" por
+**"A recepção atualiza pela franquia"** (na etapa atual, na legenda e nas estações), tira o "sozinho" do que vem depois
+("Vai para COMPARECEU ou NÃO COMPARECEU quando a recepção der baixa na consulta, na franquia") e a regra dourada vira
+"Agendar, dar baixa e lançar sessão se faz NA FRANQUIA; nesta unidade, a recepção atualiza o cartão pela franquia". Na
+conta de duas unidades, vale a automação da unidade do cartão; com o campo vazio, nenhuma automação mexe nele, e o
+painel diz que é a recepção.
+
+**Com o servidor de antes** (a 0.4.0) o painel também funciona: o campo que não vier não aparece, e nada quebra. O selo
+da unidade usa o nome da franquia (e pede a unidade quando a franquia recusa por falta dela); o cartão no TRATAMENTO
+mostra "COMERCIAL concluído"; e, sem `franquiaAndaSozinha`, vale o texto de sempre ("anda sozinha"). As sessões já
+vinham (`franquia.agenda.sessoes`, `proximaSessao`), pela mesma leitura do widget "Agenda da franquia", que lê a
+franquia da unidade DO CARTÃO.
 
 ## O que há de novo na 0.4.0 (fase 4)
 
@@ -189,10 +292,10 @@ Pular**.
   e manda com o resultado; o servidor grava cada tentativa uma vez só por 10 min (clique duplo, tela redesenhada
   ou o painel reaberto não somam duas ligações nem pulam as ☎ Tentativas). Enquanto o resultado vai para o
   servidor, os botões ficam travados, mesmo se a tela for redesenhada.
-- Depois do resultado, avança sozinho. **Ritmo**, para não parecer spam: no mínimo 40 s entre abrir uma conversa
-  e a próxima, e no máximo 40 por hora (janela corrida), com contagem regressiva na tela ("próximo em 25 s").
+- Depois do resultado, avança sozinho, **sem espera** (desde a 0.5.0; pedido do João em 14/10 — antes eram 40 s). O que
+  segura spam é o teto de 40 aberturas por hora (janela corrida); passando dele, aparece a contagem regressiva.
   Os números ficam em `RITMO_DAS_LIGACOES` (`backend/src/lib/ponte-ligacao.ts`), no estilo de `PRAZOS_DA_FILA`:
-  `PONTE_LIGACAO_INTERVALO_S` (mínimo 15) e `PONTE_LIGACAO_TETO_HORA` (máximo 120). Vão para a extensão junto da
+  `PONTE_LIGACAO_INTERVALO_S` (padrão 0 = sem espera) e `PONTE_LIGACAO_TETO_HORA` (máximo 120). Vão para a extensão junto da
   fila.
 - Paciente sem telefone (só @lid ou nome de usuário) é pulado com o aviso "sem telefone — abra pelo Kommo" — mas
   só quando o servidor **afirma** que não há telefone (`semTelefone: true`). Se o Kommo não respondeu na leitura
@@ -300,7 +403,9 @@ devolve o resumo do cartão sem chamar a IA. Rota: `POST /api/public/widget/:slu
    - a **chave**: a mesma do widget do cartão no Kommo daquela unidade (o HMAC do slug, ver
      `backend/src/lib/widget-agenda.ts`);
    - **seu nome** (opcional): aparece como "por Ana" quando você pausa a Sofia num paciente, põe etiqueta, grava
-     a ligação, preenche campos pelo guia ou muda a etapa.
+     a ligação, preenche campos pelo guia ou muda a etapa;
+   - **Abrir conversa sem recarregar** (0.5.0, já vem ligada): abre a conversa pelo link wa.me, sem recarregar o
+     WhatsApp Web. Desligue só se der problema (volta ao jeito antigo, com recarga).
 
    Depois clique em **Salvar e testar**. Deve aparecer "Conectado: <unidade>".
 
@@ -345,8 +450,10 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
   isolado: o nome do cabeçalho, o `data-id` das mensagens, e o texto e a hora das últimas mensagens recebidas;
 - percebe a troca de conversa com um `MutationObserver`, porque a URL não muda;
 - mostra o painel com `chrome.sidePanel`, uma página da própria extensão;
-- abre a conversa de um telefone trocando a URL da aba do WhatsApp Web (navegação, sem texto), no "Abrir conversa"
-  e no modo "Começar a ligar" (este no ritmo: 40 s entre uma e outra, no máximo 40 por hora);
+- abre a conversa de um telefone no "Abrir conversa" e no modo "Começar a ligar" (este sem espera entre uma e
+  outra, no máximo 40 por hora). Na 0.5.0, **aciona o próprio link wa.me para abrir a conversa; nada além disso**: o
+  content script cria um `<a href="https://wa.me/<dígitos>">` da Ponte, clica NESSE link e o tira da página na hora.
+  Se o WhatsApp não abrir, troca a URL da aba (o jeito antigo, com recarga). Nunca leva texto;
 - copia texto para a área de transferência quando a atendente clica em Copiar;
 - mostra no ícone quantos pacientes esperam resposta (pergunta ao NOSSO servidor a cada 5 min);
 - no guia "O que eu faço agora?", grava no Kommo os campos da SDR e muda a etapa — só depois da prévia e da
@@ -354,16 +461,19 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
 
 **Nunca faz:**
 
-- envia, responde ou apaga mensagem; marca como lida; clica, digita, foca ou rola qualquer coisa no WhatsApp;
+- envia, responde ou apaga mensagem; marca como lida; clica, digita, foca ou rola qualquer coisa do WhatsApp (o único
+  clique da Ponte na página é no link wa.me que ela mesma criou, e só para abrir a conversa);
 - **liga**: no modo "Começar a ligar" ela só abre a conversa; o clique no 📞 é sempre da atendente;
 - põe texto na caixa de mensagem: as respostas prontas só vão para a área de transferência, no clique em Copiar;
-- injeta qualquer coisa na página do WhatsApp (nem botão, nem CSS, nem `web_accessible_resources`);
+- injeta qualquer coisa na página do WhatsApp (nem botão, nem CSS, nem `web_accessible_resources`) — a não ser o link
+  wa.me escondido, que entra e sai no mesmo instante;
 - usa WA-JS, wppconnect, whatsapp-web.js, "Store" ou qualquer módulo interno do WhatsApp;
 - lê a lista de contatos ou de grupos (a coluna da esquerda é ignorada);
 - guarda texto de conversa, nem no `storage` da extensão nem no servidor. O texto vira hash dentro do content
   script, e o painel só recebe nome, telefone e hashes;
 - trata o id `@lid` como telefone;
-- monta link do WhatsApp com texto (`text=`): "Abrir conversa" leva só o telefone, e quem escreve é a atendente;
+- monta link do WhatsApp com texto (`text=`): "Abrir conversa" (o wa.me e o jeito antigo) leva só o telefone, e quem
+  escreve é a atendente;
 - cria etiqueta nova no Kommo, põe etiqueta de robô (▶ ou da lista, como "Aderência meio") sem a atendente
   confirmar, ou põe ▶ Retomada sozinha depois de uma ligação;
 - marca como "sem telefone" quem só não teve o telefone lido agora;
@@ -381,9 +491,10 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
   pelo WhatsApp.
 
 Permissões: `sidePanel`, `storage` e (0.4.0) `alarms` — só para o relógio de 5 min do número no ícone —, mais
-`host_permissions` apenas para o servidor da Doutor Digital. O
-"Abrir conversa" usa `chrome.tabs.update` na aba do WhatsApp Web que a Ponte já lê, que não pede permissão a
-mais; o "Copiar telefone" e o "Copiar" das respostas usam a área de transferência só no clique.
+`host_permissions` apenas para o servidor da Doutor Digital. A 0.5.0 não pede permissão nova. O
+"Abrir conversa" usa o content script que já roda no WhatsApp Web (o link wa.me) e, no jeito antigo,
+`chrome.tabs.update` na aba que a Ponte já lê — nenhum dos dois pede permissão a mais; o "Copiar telefone" e o
+"Copiar" das respostas usam a área de transferência só no clique.
 
 ## ⚠ Os seletores são uma SUPOSIÇÃO
 
@@ -421,7 +532,7 @@ npm test            # node --test 'testes/*.test.js'
 - `pausa.test.js`: as datas de cada opção da pausa, o limite de 30 dias e o estado da Sofia depois de pausar;
 - `etiquetas.test.js` (0.3.0): a regra do ▶, a busca entre as etiquetas da conta e o bloco do cartão (✕, "+
   etiqueta", a pergunta da ▶ — só põe depois de confirmar —, o erro e o dado tratado como texto);
-- `ligacao.test.js` (0.3.0): a ordem da fila de ligações, o ritmo (40 s, teto por hora), o estado guardado (só ids,
+- `ligacao.test.js` (0.3.0): a ordem da fila de ligações, o ritmo (sem espera por padrão, teto por hora), o estado guardado (só ids,
   horas e o id da tentativa), o telefone não lido (fica para depois, sem marcar) e a tela do modo ligação (botões
   travados enquanto grava);
 - `respostas.test.js` (0.3.0): o nome no lugar do marcador ("[nome]" quando não se sabe), a busca e a aba;
@@ -437,8 +548,27 @@ npm test            # node --test 'testes/*.test.js'
   confirmação, campo da franquia sem caixa e com o mover travado, a unidade primeiro (e só ela) na conta de duas
   unidades, e o dado do servidor como texto;
 - `contador.test.js` (0.4.0): o número, a cor (subiu / não subiu), a dica, o "?" na falha (nunca 0), o alarme de
-  5 min, os scripts de fundo do Chrome (com `importScripts`) e do Firefox, e os manifests (0.4.0, `alarms`, sem
-  notificação).
+  5 min, os scripts de fundo do Chrome (com `importScripts`) e do Firefox, e os manifests (0.5.0, `alarms`, sem
+  notificação, `abrir.js` antes do `conteudo.js`, nenhuma permissão nova) e a pasta montada do Firefox (com a fonte e
+  a licença);
+- `abrir.test.js` (0.5.0): o link é wa.me só com os dígitos; nas fixtures, o ÚNICO clique é no link da Ponte, que sai
+  da página na hora, e nada do WhatsApp muda; WhatsApp que não trata o link → a navegação é cancelada e a resposta vem
+  na hora; trata mas não abre em tempo → "nao-abriu"; conversa já aberta → nenhum clique; `@lid` e grupo; e o content
+  script inteiro respondendo "ponte:abrir-conversa";
+- `trilha.test.js` (0.5.0): o dono de cada etapa (com e sem acento), o que vem depois, de 1 a 3 ações por etapa, as
+  estações (PERDIDO não pinta nada), o tempo e o relógio de alerta, qualificação, situação da consulta, "amanhã" no
+  fuso da unidade e o selo da unidade (Petrópolis e Caxias nunca com a mesma cor);
+- na 0.5.0, `desenho.test.js` ganhou o visual novo — a resposta do servidor de HOJE (sem os campos novos) desenha sem
+  quebrar —, o cabeçalho, a unidade vazia que abre o guia, a trilha (inclusive a do TRATAMENTO), "O que é seu agora",
+  o cartão "Na franquia" (consulta, sem cadastro, franquia fora do ar, sessões e alta), a Sofia que some sem a IA, o
+  dado do servidor como texto nos campos novos e as respostas sugeridas; `respostas.test.js`, o casamento pelo nome e
+  os modelos de unidade; e `painel.test.js`, o "abrir sem recarregar" (abriu: só traz a aba para a frente, sem URL;
+  não abriu ou script antigo: o jeito antigo, com o aviso no console; chave desligada: direto pelo jeito antigo).
+
+Na 0.5.0, no backend: `ponte-painel.test.ts` (o selo da unidade nas contas de uma e de duas unidades, o nome curto —
+"Comercial" cai no slug —, o `franquiaAndaSozinha` com as duas automações pela tela e pelo `.env`, da unidade do cartão
+e nunca com o campo vazio, a qualificação com e sem os campos da conta, o telefone, a Sofia na unidade e a trilha do
+TRATAMENTO).
 
 No backend: `ponte-fila.test.ts` (cada regra da fila e os prazos), `ponte-resumo.test.ts` (o resumo sem IA, o
 pedido e a leitura da resposta da IA), `ponte-pausa.test.ts` (o pedido, as regras de sempre e o próprio
@@ -496,6 +626,19 @@ valor real de um cartão da Açailândia, e as mensagens por etapa com a variáv
       internet mostra "?";
 - [ ] no Firefox, o número aparece no ícone da barra (com o acesso ao servidor ligado em about:addons → Permissões).
 
+### A conferir no dia de teste (0.5.0)
+
+- [ ] **"Abrir conversa" sem recarregar**: abrir um paciente da Fila de hoje e ver se a conversa abre SEM o WhatsApp
+      Web recarregar. Se recarregar, abrir o console da aba do WhatsApp (F12) e ler o motivo (`[Ponte] … (nao-tratou)`
+      ou `(nao-abriu)`). Conferir também que nenhuma aba nova do wa.me se abre;
+- [ ] o mesmo num contato que nunca conversou com a clínica, e num número sem WhatsApp (o aviso do próprio WhatsApp);
+- [ ] "Começar a ligar" com 3 pacientes seguidos: a conversa troca sem recarregar e o 📞 aparece;
+- [ ] desligar "Abrir conversa sem recarregar" nas opções: volta a recarregar (o jeito antigo);
+- [ ] o visual no computador da atendente (Windows): a fonte carrega, a trilha cabe na largura do painel, e as cores
+      da etapa batem com o que ela entende ("é sua" × "da franquia");
+- [ ] as respostas sugeridas: os nomes dos modelos gerais de cada conta seguem os prefixos (`consulta_`, `espera_`,
+      `lead_`…)? Se não, acrescentar o prefixo da conta em `PREFIXOS_DA_ETAPA`.
+
 O backend confere o mesmo contrato em `backend/src/lib/ponte-impressao.test.ts`, que carrega o `impressao.js`
 daqui, e em `ponte-cartao.test.ts`. O `ponte-guia.test.ts` carrega o `guia.js` (o aviso dos robôs e a leitura do número)
 e o `ponte-contador.test.ts`, o `contador.js` (o "?" na falha).
@@ -505,7 +648,8 @@ e o `ponte-contador.test.ts`, o `contador.js` (o "?" na falha).
 O Firefox não tem o painel lateral do Chrome; a versão dele usa a **barra lateral** (`sidebar_action`). Os
 arquivos são os mesmos, só trocam o `manifest.json` e o `fundo.js` (em `firefox/`). Para montar:
 `bash firefox/montar.sh ~/Downloads/extensao-ponte-firefox`. Na 0.4.0 o Firefox carrega `config.js`, `contador.js` e
-`fundo.js` no script de fundo (o número no ícone), e a extensão pede a permissão `alarms`.
+`fundo.js` no script de fundo (o número no ícone), e a extensão pede a permissão `alarms`. Na 0.5.0 o `montar.sh` leva
+também a pasta `fontes/` (a fonte do painel e a licença).
 
 Instalar para testar: `about:debugging` → **Este Firefox** → **Carregar extensão temporária…** → escolha o
 `manifest.json` da pasta montada. A extensão temporária some quando o Firefox fecha; para ficar instalada de

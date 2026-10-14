@@ -8,12 +8,17 @@
  *
  * Nada aqui clica, digita, foca, rola ou marca como lida. Não há UI injetada na página: o painel é o
  * `chrome.sidePanel`, uma página da própria extensão.
+ *
+ * 0.5.0 — a ÚNICA exceção, a pedido do painel ("Abrir conversa" e "Começar a ligar"): `abrir.js` cria um link
+ * `https://wa.me/<dígitos>` da própria Ponte, aciona o clique NESSE link (nunca num elemento do WhatsApp) e o tira da
+ * página na hora. Se o WhatsApp não abrir a conversa, o painel volta ao jeito antigo (troca a URL, com recarga).
  */
 (function () {
   'use strict';
   var S = self.PonteSeletores;
   var L = self.PonteLeitor;
   var I = self.PonteImpressao;
+  var A = self.PonteAbrir;
   var MAX_MENSAGENS = 5;
   var ESPERA_MS = 700;
 
@@ -123,6 +128,18 @@
 
   // o painel acabou de abrir (ou trocou de aba) e pergunta qual é a conversa agora
   chrome.runtime.onMessage.addListener(function (msg, _remetente, responder) {
+    // 0.5.0: abrir a conversa de um telefone pelo link wa.me da Ponte, sem recarregar
+    if (msg && msg.tipo === 'ponte:abrir-conversa') {
+      if (!A) {
+        responder({ aberta: false, motivo: 'sem-abrir' });
+        return false;
+      }
+      A.abrirPorLink(document, window, msg.telefone, { lerConversa: function () { return L.lerConversa(document, 1); } }).then(function (r) {
+        if (!r.aberta) console.info('[Ponte] a conversa não abriu pelo link wa.me (' + r.motivo + '): o painel abre pelo jeito antigo, com recarga.');
+        responder(r);
+      }, function () { responder({ aberta: false, motivo: 'erro' }); });
+      return true; // resposta assíncrona
+    }
     if (!msg || msg.tipo !== 'ponte:qual-conversa') return false;
     montarEstado().then(function (estado) {
       ultimaAssinatura = JSON.stringify(estado);

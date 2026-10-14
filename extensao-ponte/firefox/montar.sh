@@ -6,5 +6,7 @@ cd "$(dirname "$0")/.."
 saida="${1:?informe a pasta de saída}"
 rm -rf "$saida" && mkdir -p "$saida"
 for f in *.js *.html *.css README.md; do cp "$f" "$saida/"; done
+# 0.5.0: a fonte do painel (Plus Jakarta Sans, licença OFL) vai junto
+cp -r fontes "$saida/"
 cp firefox/manifest.json firefox/fundo.js "$saida/"
 echo "versão Firefox em $saida"

@@ -79,6 +79,20 @@ import { primeiroNomeDoPaciente } from '../lib/ponte-respostas.js';
 import { ehEtiquetaDeRobo, etiquetasDeRoboDaUnidade } from '../lib/ponte-etiquetas.js';
 import { mensagensOficiais } from '../services/kommo-talks.service.js';
 import { recordLlmCall } from '../services/openai.service.js';
+import { camposDaConta, type DefinicaoDeCampo } from '../lib/ponte-ligacao.js';
+import { contaDaUnidade } from '../lib/ponte-cache.js';
+import { grupoDaUnidade, valorDaUnidadeNoCartao, type GrupoDoCrm } from '../lib/crm-compartilhado.js';
+import {
+  barraDoTratamento,
+  desdeEmIso,
+  franquiaAndaSozinha,
+  nomeCurtoDaUnidade,
+  qualificacaoDoCartao,
+  slugDaUnidadeDoCartao,
+  sofiaNaUnidade,
+  telefoneDoPainel,
+  unidadeDoPainel,
+} from '../lib/ponte-painel.js';
 
 // ── funis e usuários da conta: mudam pouco, e a Ponte chama a cada troca de conversa ──
 const CONTA_TTL_MS = 10 * 60_000;
@@ -401,6 +415,10 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
 
     // resumo: sem IA (cartão + memória da Sofia + franquia). O que ele lê a mais começa já, junto da franquia.
     const contexto = contextoDoResumo(unit, kommo, lead);
+    // 0.5.0 (visual novo): os campos da conta (a qualificação; cache de 10 min, o mesmo do guia e da ligação) e o grupo
+    // de unidades (Petrópolis + Caxias; em memória). Começam já; nenhum dos dois derruba o cartão.
+    const defsDaConta = camposDaConta(contaDaUnidade(unit), kommo).catch(() => [] as DefinicaoDeCampo[]);
+    const grupoDaConta = grupoDaUnidade(unit.id).catch(() => null as GrupoDoCrm | null);
     // o contato principal, com os cartões dele (fase 3): franquia, primeiro nome e o aviso de duplicado
     const contatoId = contatoPrincipalDe(lead);
     const contatoLido = contatoId ? await kommo.contatoComCartoes(contatoId) : null;
@@ -409,8 +427,9 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
     const contato = unit.spineEnabled && unit.spineToken ? { nome: contatoLido?.nome ?? null, telefone: contatoLido?.telefone ?? null } : null;
     const franquia = await franquiaDoCartao(unit, lead, contato, telefone);
     let resumo: ResumoDoLead | null = null;
+    const ctxDoResumo = await contexto;
     try {
-      resumo = resumoDoCartao(lead, conta, franquia, contato?.nome ?? null, await contexto);
+      resumo = resumoDoCartao(lead, conta, franquia, contato?.nome ?? null, ctxDoResumo);
     } catch (err) {
       // cair aqui também não derruba o cartão
       logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'ponte: resumo do lead falhou');
@@ -418,6 +437,9 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
 
     logger.info({ unit: unit.slug, como: casamento.como, leadId: lead.id, outros: Math.max(0, ordenados.length - 1) }, 'ponte: cartão achado');
     const listaDeDuplicados = await duplicados;
+    const [defs, grupo] = await Promise.all([defsDaConta, grupoDaConta]);
+    const valorDaUnidade = valorDaUnidadeNoCartao(lead);
+    const qualificacao = qualificacaoDoCartao(defs, campos);
     res.json({
       achado: true,
       como: casamento.como,
@@ -449,6 +471,13 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
         pausaDoLead: pausaParaOPainel(pausa),
         anuncio,
         atualizadoEm: lead.updated_at ? new Date(lead.updated_at * 1000).toISOString() : null,
+        // 0.5.0 (visual novo): o cabeçalho e a trilha
+        telefone: telefoneDoPainel(contatoLido?.telefone, telefone),
+        unidade: unidadeDoPainel(grupo, nomeCurtoDaUnidade(unit.name, unit.slug), valorDaUnidade),
+        // `undefined` (a conta não tem o campo) fica fora do JSON; `null` = tem e está vazio
+        ...(qualificacao === undefined ? {} : { qualificacao }),
+        naEtapaDesde: desdeEmIso(ctxDoResumo.desde ?? lead.created_at ?? null),
+        barraTratamento: barraDoTratamento(conta.funis, lead),
       },
       outrosCartoes: ordenados.filter((l) => l.id !== lead.id).slice(0, 5).map((l) => resumoCurto(conta, l)),
       // fase 3: outros cartões ABERTOS do mesmo paciente (null = não deu para conferir agora)
@@ -457,6 +486,12 @@ export async function ponteCartaoHandler(req: Request, res: Response): Promise<v
       resumo,
       // o botão "Resumir com IA" só aparece com a chave da PRÓPRIA unidade (é ela quem paga)
       iaDisponivel: !!unit.anthropicApiKey,
+      // 0.5.0: sem a Sofia na unidade, o painel esconde o estado dela e a pausa
+      sofiaNaUnidade: sofiaNaUnidade(unit),
+      unidadeDaConta: nomeCurtoDaUnidade(unit.name, unit.slug),
+      // 0.5.0: o cartão anda sozinho atrás da franquia (franquia-move E franquia-sync ligados para a unidade DO CARTÃO)?
+      // Senão o painel diz "a recepção atualiza pela franquia" e não promete movimento automático.
+      franquiaAndaSozinha: franquiaAndaSozinha(slugDaUnidadeDoCartao(grupo, unit, valorDaUnidade)),
       agora: new Date(),
     });
   } catch (err) {
