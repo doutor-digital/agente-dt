@@ -219,9 +219,9 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'A cada 15 minutos copia da franquia pro cartão o que aconteceu: data da consulta, situação, fisioterapeuta, sessões, faltas, tratamento, dados da pessoa.',
     pegadinha:
-      'Só enxerga a janela de D-3 a D+45, de propósito — ele roda 96 vezes por dia e alargar seria reler um passado que não muda. Por isso o histórico antigo nunca entra sozinho.',
+      'Só enxerga a janela de D-3 a D+45, de propósito — ele roda 96 vezes por dia e alargar seria reler um passado que não muda. Por isso o histórico antigo nunca entra sozinho. Em "Só no papel" lê a franquia e registra o que gravaria, sem tocar no Kommo (útil para conferir uma unidade nova, como Caxias no Kommo de Petrópolis). Numa conta dividida entre duas unidades, cada uma só mexe nos cartões com a sua ⌂ Unidade de atendimento; cartão com o campo vazio não é de ninguém.',
     risco: 'escreve-campo',
-    temSeco: false,
+    temSeco: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/franquia-sync-worker.ts',
   },

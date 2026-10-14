@@ -28,6 +28,7 @@ import { ETAPA } from './franquia-move.js';
 import { TraceRecorder } from '../agent/trace-recorder.js';
 import { consultaAtual, gradeDoDia, hojeLocal, telefoneDoLead, unidadeFresca } from '../agent/agenda-tools.js';
 import { travaDaUnidadeDeAtendimento, type CodigoTrava } from './trava-unidade-atendimento.js';
+import { contaDoKommo, unidadeDoCartao, unidadeParaOCartao } from './crm-compartilhado.js';
 
 export type CodigoRecusa =
   | 'sem_franquia'
@@ -45,7 +46,11 @@ export type CodigoRecusa =
   | 'lead_sem_telefone'
   | 'data_passada'
   | 'em_andamento'
-  | CodigoTrava;
+  | CodigoTrava
+  /** Kommo dividido (Petrópolis + Caxias): a ⌂ Unidade de atendimento do cartão está vazia */
+  | 'sem_unidade'
+  /** Kommo dividido: a unidade do cartão não tem franquia conectada aqui */
+  | 'unidade_sem_franquia';
 
 export interface Recusa {
   ok: false;
@@ -169,8 +174,11 @@ export async function marcarPeloWidget(
 
 async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: { kommo?: KommoClient }): Promise<Marcada | Recusa> {
   const t0 = Date.now();
-  const unit = (await unidadeFresca(unitBase.id)) ?? unitBase;
-  const recorder = new TraceRecorder(randomUUID(), unit.id);
+  // A unidade pela qual o pedido chegou (onde o widget está instalado). Num Kommo dividido (Petrópolis + Caxias) a
+  // franquia — token, agenda, vínculo — passa a ser a da ⌂ Unidade de atendimento do CARTÃO, logo abaixo.
+  const unitDoPedido = (await unidadeFresca(unitBase.id)) ?? unitBase;
+  let unit: Unit = unitDoPedido;
+  const recorder = new TraceRecorder(randomUUID(), unitDoPedido.id);
   const passo = (kind: 'THINKING' | 'TOOL_RESULT' | 'ERROR' | 'KOMMO_ACTION', title: string, payload?: unknown) =>
     recorder.step({ kind, title, payload }).catch(() => undefined);
   const recusar = async (r: Recusa): Promise<Recusa> => {
@@ -186,9 +194,12 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
   if (!unit.spineEnabled || !unit.spineToken) {
     return recusar({ ok: false, codigo: 'sem_franquia', motivo: 'A franquia não está conectada nesta unidade.' });
   }
-  const kommo = opcoes.kommo ?? (unit.kommoAccessToken ? createKommoClient(unit) : undefined);
+  // Kommo da CONTA: a irmã de um Kommo dividido (Caxias) não tem credencial própria e usa o da dona.
+  const contaKommo = await contaDoKommo(unitDoPedido);
+  const kommo = opcoes.kommo ?? (contaKommo.kommoAccessToken ? createKommoClient(contaKommo) : undefined);
   // Conta com duas cidades e o token da franquia de uma só (Petrópolis × Caxias): cartão que não é da cidade da
   // franquia, ou sem cidade, não marca por aqui. Antes de tudo, para a SDR ler isto primeiro (14/10/2026).
+  // Com a divisão gravada (unit_crm_compartilhado) esta trava sai do caminho e quem decide é `unidadeDoCartao`.
   const trava = await travaDaUnidadeDeAtendimento(unit, entrada.leadId, kommo);
   if (trava) return recusar({ ok: false, codigo: trava.codigo, motivo: trava.motivo });
   const vn = validarNome(entrada.nome);
@@ -207,6 +218,12 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
     // pessoa certa; sem ele, qualquer número digitado viraria cadastro em nome de ninguém (review, 29/09).
     const lead = await kommo.getLead(entrada.leadId).catch(() => null);
     if (!lead) return recusar({ ok: false, codigo: 'lead_invalido', motivo: 'Este cartão não existe nesta conta do Kommo.' });
+    // Kommo dividido (Petrópolis + Caxias): toda escrita na franquia segue a unidade do cartão (regra do João,
+    // 14/10/2026). Campo vazio ou unidade sem franquia = recusa; cartão de Caxias = token, agenda e vínculo de Caxias.
+    const dono = await unidadeDoCartao(unitDoPedido, lead);
+    if (dono.tipo === 'recusa') return recusar({ ok: false, codigo: dono.codigo, motivo: dono.motivo });
+    unit = dono.unit;
+    if (dono.tipo === 'unidade') await passo('THINKING', `Conta dividida: o cartão é de ${dono.rotulo} — marcação na franquia de ${dono.rotulo}`, { unidade: unit.slug });
     const foneLead = await telefoneDoLead(kommo, entrada.leadId);
     if (!fim8(foneLead)) {
       return recusar({ ok: false, codigo: 'lead_sem_telefone', motivo: 'O contato deste cartão não tem telefone. Coloque o telefone no contato antes de marcar — é ele que liga o cartão ao paciente.' });
@@ -217,6 +234,12 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
         motivo: `O telefone digitado não é o do contato deste cartão (…${fim8(foneLead)}). Corrija o contato ou o número antes de marcar.`,
       });
     }
+  }
+
+  if (!kommo) {
+    // sem Kommo não dá para ler a ⌂ Unidade de atendimento: numa conta dividida, nada é escrito
+    const dono = await unidadeParaOCartao(unitDoPedido, entrada.leadId, async () => null);
+    if (dono.tipo === 'recusa') return recusar({ ok: false, codigo: dono.codigo, motivo: dono.motivo });
   }
 
   // Horário: precisa existir na grade e estar livre. Nada é criado antes disto — cadastrar e depois
@@ -286,7 +309,7 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
   const cartao = { movido: false, camposEmBranco: [] as string[] };
   if (kommo) {
     try {
-      const esquema = await esquemaDaUnidade(unit, kommo);
+      const esquema = await esquemaDaUnidade(contaKommo, kommo); // os campos são da CONTA do Kommo
       const idDe = (n: string) => esquema.campoPorNome(n);
       const agora = Math.floor(Date.now() / 1000);
       const carimbos: Array<[string, (id: number) => Promise<unknown>]> = [

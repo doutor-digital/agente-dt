@@ -3,6 +3,7 @@ import axios, { type AxiosError, type AxiosInstance, type InternalAxiosRequestCo
 import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import { lerTurnos, profissionalDoHorario } from '../lib/profissional-por-turno.js';
+import { motivoParaNaoEscrever } from '../lib/trava-escrita-franquia.js';
 
 const DEFAULT_TZ = 'America/Sao_Paulo';
 
@@ -77,6 +78,11 @@ export interface SpineResult<T> {
 export type SpineUnit = Pick<Unit, 'spineBaseUrl' | 'spineToken' | 'spineTimezone'> & {
   /** Escala de profissionais por turno (`units.spine_staff_por_turno`); só o createSchedule usa. */
   spineStaffPorTurno?: unknown;
+  /**
+   * Quem escreve conferiu a «⌂ Unidade de atendimento» do cartão (`unidadeDoCartao`). Só importa nas unidades que
+   * dividem um Kommo (Petrópolis + Caxias): lá, escrita sem esta marca é recusada — ver `trava-escrita-franquia.ts`.
+   */
+  escritaConferida?: boolean;
 };
 
 function client(unit: SpineUnit): AxiosInstance | null {
@@ -257,6 +263,9 @@ export async function createSchedule(
   unit: SpineUnit,
   input: SpineCreateSchedule,
 ): Promise<SpineResult<{ idSchedule?: number }>> {
+  // conta do Kommo dividida entre duas unidades: sem conferir o cartão, não escreve (trava-escrita-franquia.ts)
+  const trava = await motivoParaNaoEscrever(unit);
+  if (trava) return { ok: false, error: trava };
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
 
@@ -451,6 +460,9 @@ export async function createLead(
   unit: SpineUnit,
   input: SpineCreateLead,
 ): Promise<SpineResult<{ idLead?: number }>> {
+  // conta do Kommo dividida entre duas unidades: sem conferir o cartão, não escreve (trava-escrita-franquia.ts)
+  const trava = await motivoParaNaoEscrever(unit);
+  if (trava) return { ok: false, error: trava };
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
 
@@ -493,6 +505,9 @@ export async function createClient(
   unit: SpineUnit,
   input: SpineCreateClient,
 ): Promise<SpineResult<{ idClient?: number }>> {
+  // conta do Kommo dividida entre duas unidades: sem conferir o cartão, não escreve (trava-escrita-franquia.ts)
+  const trava = await motivoParaNaoEscrever(unit);
+  if (trava) return { ok: false, error: trava };
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
 
@@ -621,6 +636,9 @@ export async function convertLead(
   unit: SpineUnit,
   input: SpineConvertLead,
 ): Promise<SpineResult<{ idClient?: number }>> {
+  // conta do Kommo dividida entre duas unidades: sem conferir o cartão, não escreve (trava-escrita-franquia.ts)
+  const trava = await motivoParaNaoEscrever(unit);
+  if (trava) return { ok: false, error: trava };
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
 
@@ -655,6 +673,9 @@ export async function cancelSchedule(
   unit: SpineUnit,
   idSchedule: number,
 ): Promise<SpineResult<{ idSchedule?: number }>> {
+  // conta do Kommo dividida entre duas unidades: sem conferir o cartão, não escreve (trava-escrita-franquia.ts)
+  const trava = await motivoParaNaoEscrever(unit);
+  if (trava) return { ok: false, error: trava };
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
   try {
@@ -674,6 +695,9 @@ export async function confirmSchedule(
   unit: SpineUnit,
   idSchedule: number,
 ): Promise<SpineResult<{ idSchedule?: number }>> {
+  // conta do Kommo dividida entre duas unidades: sem conferir o cartão, não escreve (trava-escrita-franquia.ts)
+  const trava = await motivoParaNaoEscrever(unit);
+  if (trava) return { ok: false, error: trava };
   const http = client(unit);
   if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
   try {

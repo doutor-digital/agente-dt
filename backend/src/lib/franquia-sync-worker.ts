@@ -33,6 +33,7 @@ import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
+import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, pularCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 
 const SWEEP_MS = 15 * 60_000;
 const PRIMEIRA_MS = 90_000;
@@ -109,12 +110,9 @@ export interface LinhaDoPanorama {
  * quem vai primeiro, que é justamente a pergunta que ela existe para responder.
  */
 export async function panoramaDoSync(): Promise<LinhaDoPanorama[]> {
-  const units = await prisma.unit.findMany({
-    where: { spineEnabled: true, spineToken: { not: null }, kommoAccessToken: { not: null } },
-    select: { slug: true, name: true },
-  });
+  const units = await prisma.unit.findMany({ where: await ondeTemSync(), select: { slug: true, name: true } });
   const agora = Date.now();
-  const ligadas = units.filter((u) => automacaoLigada(u.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS));
+  const ligadas = units.filter((u) => estadoDaAutomacao(u.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS) !== 'desligado');
 
   return units
     .map((u) => {
@@ -168,6 +166,10 @@ export interface ResumoSync {
   /** cartões recusados porque o `⚙ idClient` deles é de OUTRO paciente (só os ids dos cartões, sem dado pessoal) */
   conflitos?: number;
   exemplosConflito?: number[];
+  /** Kommo dividido (Petrópolis + Caxias): cartões que a franquia DESTA unidade casou, mas que são da outra */
+  deOutraUnidade?: number;
+  /** Kommo dividido: cartões com «⌂ Unidade de atendimento» vazio — ninguém mexe, vão para a lista da SDR */
+  semUnidade?: number;
 }
 const ultimoResumo = new Map<string, ResumoSync>();
 export function resumoDoSync(): ResumoSync[] {
@@ -670,7 +672,7 @@ export function temConsultaFutura(schedules: SpineSchedule[], agoraEpoch: number
  * cartão (cobre quem foi atendido antes da janela D-3) e, quando conhece o paciente na franquia,
  * confere o histórico: retorno futuro marcado segura o cartão, mesmo além dos 45 dias da agenda.
  */
-async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, mapa: MapaCampos, resumo: ResumoSync): Promise<void> {
+async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, mapa: MapaCampos, resumo: ResumoSync, extra: { grupo?: GrupoDoCrm | null; seco?: boolean } = {}): Promise<void> {
   const compareceu = funis.idDe('COMERCIAL', ETAPA.COMPARECEU);
   if (!compareceu) return;
   const horas = horasAteNegociacao();
@@ -685,6 +687,7 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
       const fechou = normalizar(v[CAMPOS_SYNC.FECHOU_TRAT]) === 'sim' || !!v[CAMPOS_SYNC.TRAT_FECHADO];
       if (!Number.isFinite(dataConsulta) || situacao !== 'atendido' || fechou) continue;
       if ((agora - dataConsulta) / 3600 < horas) continue;
+      if (pularCartao(extra.grupo ?? null, unit.id, lead, resumo)) continue;
       try {
         const idClient = await idClientDoLead(unit, lead.id, lead.name ?? null);
         const hist = await historicoDoPaciente(unit, idClient);
@@ -693,7 +696,14 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
       } catch (err) {
         logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-move: não consegui conferir a franquia antes das 48 h — seguindo pelo cartão');
       }
-      await aplicarMovimento(unit, kommo, funis, lead.id, { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: `atendido há ${Math.floor((agora - dataConsulta) / 3600)} h sem tratamento (pelo cartão)` }, resumo, ETAPA.COMPARECEU);
+      const mov: Movimento = { funil: 'COMERCIAL', para: ETAPA.NEGOCIACAO, motivo: `atendido há ${Math.floor((agora - dataConsulta) / 3600)} h sem tratamento (pelo cartão)` };
+      if (extra.seco) {
+        contarSimulado(resumo, ETAPA.COMPARECEU, mov.para);
+        logger.info({ unit: unit.slug, leadId: lead.id, de: ETAPA.COMPARECEU, para: mov.para, motivo: mov.motivo }, 'franquia-sync [seco]: moveria');
+        registrarSimulacao(unit, 'franquia-sync', { leadId: lead.id, acao: 'moveria', alvo: mov.para, deEtapa: ETAPA.COMPARECEU, motivo: mov.motivo });
+        continue;
+      }
+      await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, ETAPA.COMPARECEU);
     }
     if (leads.length < 250) break;
   }
@@ -721,6 +731,10 @@ interface CtxSync {
   seco?: boolean;
   /** Ficha (`GET /api/clients/{id}`) já lida NESTA varredura, por idClient: o mesmo paciente não custa duas chamadas. */
   fichas?: Map<number, Promise<SpineFicha | null>>;
+  /** Em que automação o "gravaria" do seco aparece na tela: o sincronizador em seco usa a dele; a revisão, a dela. */
+  automacaoDoSeco?: 'franquia-sync' | 'franquia-revisao';
+  /** Kommo dividido com outra unidade (Petrópolis + Caxias): só mexe nos cartões do rótulo desta. `null` = Kommo só dela. */
+  grupo?: GrupoDoCrm | null;
 }
 
 function revisaoSeca(raw: string | undefined = process.env.FRANQUIA_REVISAO_SECO): boolean {
@@ -932,7 +946,7 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     if (!info) continue;
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria sessão/tratamento');
-      registrarSimulacao(unit, estado === 'seco' ? 'franquia-sessoes' : 'franquia-revisao', { leadId, acao: 'gravaria', alvo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, noCartao: campo(e.campo)?.valor, motivo: e.motivo });
+      registrarSimulacao(unit, estado === 'seco' ? 'franquia-sessoes' : (ctx.automacaoDoSeco ?? 'franquia-revisao'), { leadId, acao: 'gravaria', alvo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, noCartao: campo(e.campo)?.valor, motivo: e.motivo });
       continue;
     }
     try {
@@ -1008,7 +1022,7 @@ async function espelharAtendimento(ctx: CtxSync, leadId: number, lead: KommoLead
   for (const e of plano.escritas) {
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-tela [seco]: gravaria atendimento');
-      registrarSimulacao(unit, estado === 'seco' ? 'franquia-tela' : 'franquia-revisao', { leadId, acao: 'gravaria', alvo: e.campo, valor: e.valor, motivo: e.motivo });
+      registrarSimulacao(unit, estado === 'seco' ? 'franquia-tela' : (ctx.automacaoDoSeco ?? 'franquia-revisao'), { leadId, acao: 'gravaria', alvo: e.campo, valor: e.valor, motivo: e.motivo });
       continue;
     }
     const info = (ctx.camposPorNome ?? []).map(([, i]) => i).find((i) => i.id === e.id);
@@ -1153,7 +1167,7 @@ async function recusarOutroPaciente(ctx: CtxSync, leadId: number, lead: KommoLea
   const jaMarcado = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO);
   if (jaMarcado) return true;
   if (ctx.seco) {
-    registrarSimulacao(unit, 'franquia-revisao', { leadId, acao: 'gravaria', alvo: TAG_CONFLITO, motivo: 'cartão de outro paciente da franquia' });
+    registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'gravaria', alvo: TAG_CONFLITO, motivo: 'cartão de outro paciente da franquia' });
     return true;
   }
   try {
@@ -1185,7 +1199,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     if (!info) continue;
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
-      registrarSimulacao(unit, 'franquia-revisao', { leadId, acao: 'gravaria', alvo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo });
+      registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'gravaria', alvo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo });
       continue;
     }
     try {
@@ -1246,7 +1260,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   if (seco) {
     contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
-    registrarSimulacao(unit, 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
+    registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
     return;
   }
   await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
@@ -1288,8 +1302,10 @@ function notaConferir(nome: string): string {
 async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
   // A tela pode pôr ESTA unidade em seco sem mexer na variável global — por isso a pergunta vem
   // antes de montar o ctx, que é quem carrega o `seco` pro resto da revisão.
-  const seco = estadoDaAutomacao(ctxBase.unit.slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS) === 'seco' || revisaoSeca();
-  const ctx: CtxSync = { ...ctxBase, seco };
+  const secoDaRevisao = estadoDaAutomacao(ctxBase.unit.slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS) === 'seco' || revisaoSeca();
+  // o sincronizador inteiro em "Só no papel" segura a revisão também — senão ela gravaria com o resto em seco
+  const seco = secoDaRevisao || ctxBase.seco === true;
+  const ctx: CtxSync = { ...ctxBase, seco, automacaoDoSeco: secoDaRevisao ? 'franquia-revisao' : ctxBase.automacaoDoSeco };
   const { unit, kommo, funis, mapa, agoraEpoch, resumo } = ctx;
   if (!funis) return;
   if (!automacaoLigada(unit.slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS)) return;
@@ -1307,6 +1323,8 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
       if (leads.length === 0) break;
       for (const lead of leads) {
         if (!candidatoARevisao(etapa, valoresDoLead(lead, mapa), corte)) continue;
+        // Kommo dividido: cartão de outra unidade, ou sem unidade, não é revisado por esta (nem gasta chamada)
+        if (pularCartao(ctx.grupo ?? null, unit.id, lead, resumo)) continue;
         // já procurei este e não achei (cache 6 h): não gasta cota nem chamada; em CONFERIR ainda vale a regra dos 30 d
         const lembrado = cacheIdClient.get(`${unit.id}:${lead.id}`);
         const negativoLembrado = !!lembrado && lembrado.idClient === null && lembrado.expiraEm > Date.now();
@@ -1393,7 +1411,11 @@ export function camposDaConta(camposBrutos: CampoBruto[]): CampoDaConta[] {
 
 async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
-  const kommo = createKommoClient(unit);
+  // Kommo dividido (Caxias usa o de Petrópolis): o cliente do Kommo é o da DONA da conta; a franquia é a DESTA unidade.
+  const grupo = await grupoDaUnidade(unit.id);
+  const kommo = createKommoClient(await contaDoKommo(unit));
+  // "Só no papel" na tela de Automações: lê a franquia e registra o que gravaria, sem tocar no Kommo.
+  const seco = estadoDaAutomacao(unit.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS) === 'seco';
   const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: CampoBruto[] } } | undefined;
   const camposBrutos = bruto?._embedded?.custom_fields ?? [];
   const mapa = mapearCampos(camposBrutos);
@@ -1440,7 +1462,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   resumo.pacientes = porPaciente.size;
   const ops = opcoes(mapa);
   const agoraEpoch = Math.floor(Date.now() / 1000);
-  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false } };
+  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false }, seco, automacaoDoSeco: seco ? 'franquia-sync' : undefined, grupo };
   let vistos = 0;
 
   for (const p of porPaciente.values()) {
@@ -1454,9 +1476,13 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
         if (resumo.exemplosSemLead.length < 8) resumo.exemplosSemLead.push(p.nome);
         continue;
       }
-      resumo.comLead++;
       const lead = await kommo.getLead(leadId);
-      if (await recusarOutroPaciente(ctx, leadId, lead, p.idClient ? [p.idClient] : casado.idsClient)) continue;
+      // Kommo dividido: só o cartão desta unidade; campo vazio vai para a lista da SDR, sem atribuir. Vem ANTES do
+      // conflito de paciente: cartão de outra unidade não é desta varredura nem para ganhar CONFLITO_FRANQUIA.
+      const idsDoPaciente = p.idClient ? [p.idClient] : casado.idsClient;
+      if (pularCartao(grupo, unit.id, lead, resumo, { idsClient: idsDoPaciente, idDoCartao: idClientDoCartao(lead, camposPorNome) })) continue;
+      resumo.comLead++;
+      if (await recusarOutroPaciente(ctx, leadId, lead, idsDoPaciente)) continue;
       await processarCartao(ctx, leadId, lead, p);
     } catch (err) {
       resumo.erros++;
@@ -1472,7 +1498,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
       logger.warn({ err, unit: unit.slug }, 'franquia-move: falha na revisão pelo histórico');
     }
     try {
-      await passarNegociacao(unit, kommo, funis, mapa, resumo);
+      await passarNegociacao(unit, kommo, funis, mapa, resumo, { grupo, seco });
     } catch (err) {
       resumo.erros++;
       logger.warn({ err, unit: unit.slug }, 'franquia-move: falha na passagem das 48 h');
@@ -1483,10 +1509,22 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
 
 /** As unidades que o sincronizador atende agora — ligadas na tela e com credencial dos dois lados. */
 async function unidadesDoSync(): Promise<Unit[]> {
-  const units = await prisma.unit.findMany({
-    where: { spineEnabled: true, spineToken: { not: null }, kommoAccessToken: { not: null } },
-  });
-  return units.filter((u) => automacaoLigada(u.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS));
+  const units = await prisma.unit.findMany({ where: await ondeTemSync() });
+  // "Só no papel" também varre (lê a franquia e registra) — só "desligado" fica de fora
+  return units.filter((u) => estadoDaAutomacao(u.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS) !== 'desligado');
+}
+
+/**
+ * Quem tem franquia e Kommo. A irmã de uma conta dividida (Caxias usa o Kommo de Petrópolis) não guarda
+ * credencial de Kommo própria — de propósito, para nenhum worker antigo varrer a conta duas vezes — e entra pelo id.
+ */
+async function ondeTemSync() {
+  const irmas = await irmasSemKommoProprio();
+  return {
+    spineEnabled: true,
+    spineToken: { not: null },
+    OR: [{ kommoAccessToken: { not: null } }, ...(irmas.length ? [{ id: { in: irmas } }] : [])],
+  };
 }
 
 /**

@@ -28,6 +28,7 @@ import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
 import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-worker.js';
 import { iniciarAutomacoes } from './lib/automacoes-estado.js';
+import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
 import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
@@ -164,6 +165,9 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.warn({ err }, 'falha ao carregar as automações — vale o .env até a próxima releitura');
   }
+  // Kommo dividido entre duas unidades (Petrópolis + Caxias): carrega antes de qualquer escrita na franquia e
+  // registra o carregador da trava de escrita. Não lança: se o banco falhar, a trava tenta de novo na 1ª escrita.
+  await iniciarCrmCompartilhado();
 
   // Por processo: vigia respostas pendentes que ESTE processo prometeu entregar.
   startStaleReplyMonitor();

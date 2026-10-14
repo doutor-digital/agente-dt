@@ -23,6 +23,7 @@ import { resumoDoPacienteNaFranquia } from '../lib/paciente-na-franquia.js';
 import { createKommoClient, type KommoTalkMessage } from '../services/kommo.service.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
+import { unidadeParaOCartao } from '../lib/crm-compartilhado.js';
 import { CAMPO_MOTIVO_NAO_AGENDAMENTO, autorDaMensagem, interpretarResposta, montarPrompt, type FalaDaConversa } from '../lib/sugestao-motivo.js';
 
 const chamadas = new Map<string, { n: number; desde: number }>();
@@ -180,7 +181,10 @@ function excedeuMarcacao(chave: string): boolean {
   return t.n > 10;
 }
 
-/** GET /public/widget/:slug/horarios?de=AAAA-MM-DD&dias=7 → a grade livre que a Sofia também vê. */
+/**
+ * GET /public/widget/:slug/horarios?de=AAAA-MM-DD&dias=7[&lead=ID] → a grade livre que a Sofia também vê.
+ * Kommo dividido (Petrópolis + Caxias): a grade é a da unidade do CARTÃO, então `lead` é obrigatório lá.
+ */
 export async function widgetHorariosHandler(req: Request, res: Response): Promise<void> {
   const unit = await unidadeDoWidget(req, res);
   if (!unit) return;
@@ -189,7 +193,15 @@ export async function widgetHorariosHandler(req: Request, res: Response): Promis
   const de = pedido < hoje ? hoje : pedido; // agenda no passado não existe
   const dias = Math.min(Math.max(Number(req.query.dias) || 7, 1), 14);
   if (!unit.spineEnabled || !unit.spineToken) { res.status(409).json({ error: 'franquia não conectada nesta unidade' }); return; }
-  res.json({ de, dias: await horariosParaWidget(unit, de, dias), fuso: unit.spineTimezone || 'America/Sao_Paulo' });
+  const dono = await unidadeParaOCartao(unit, Number(req.query.lead) || null);
+  if (dono.tipo === 'recusa') { res.status(409).json({ ok: false, codigo: dono.codigo, motivo: dono.motivo, error: dono.motivo }); return; }
+  const daGrade = dono.unit;
+  res.json({
+    de,
+    dias: await horariosParaWidget(daGrade, de, dias),
+    fuso: daGrade.spineTimezone || 'America/Sao_Paulo',
+    ...(dono.tipo === 'unidade' ? { unidade: dono.rotulo } : {}),
+  });
 }
 
 /** POST /public/widget/:slug/marcar {leadId, nome, telefone, data, hora, cidade?, uf?, responsavel?} */

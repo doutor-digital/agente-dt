@@ -30,6 +30,7 @@ import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
 import { ETAPA, TRATAMENTO_EM_ANDAMENTO } from './franquia-move.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { registrarSimulacao } from './so-no-papel.js';
+import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { carregarFunis, idClientDoLead, temConsultaFutura, type Funis } from './franquia-sync-worker.js';
 import {
   CAMPO,
@@ -274,18 +275,27 @@ export async function moverParaEspera(
  * cartão cedo demais sem trazer junto a régua de PERDIDO. Ver `voltaDaEsperaLiberada`.
  */
 export async function voltarDaEsperaSeRespondeu(unit: Unit, leadId: number, mensagem: string | null | undefined): Promise<void> {
-  if (!voltaDaEsperaLiberada(unit.slug) || !unit.kommoAccessToken) return;
+  if (!unit.kommoAccessToken) return;
+  // Kommo dividido (Petrópolis + Caxias): a mensagem chega pela dona da conta, mas a chave que vale é a da unidade
+  // do CARTÃO. Kommo de uma unidade só: o portão barato de sempre, sem chamada nenhuma.
+  const grupo = await grupoDaUnidade(unit.id);
+  const dividido = !!grupo;
+  if (!dividido && !voltaDaEsperaLiberada(unit.slug)) return;
+  // dividido: só gasta chamada se a chave de alguma unidade do grupo estiver ligada (ou em seco)
+  if (grupo && !grupo.membros.some((m) => m.slug && voltaDaEsperaLiberada(m.slug))) return;
   if (ehRespostaDeCortesia(mensagem)) return;
   try {
     const est = await estadoEtapaDoLead(unit, leadId);
     if (!est?.nome || !ehEspera(est.nome)) return;
     const kommo = createKommoClient(unit);
+    const dona = dividido ? await unidadeDonaDoCartao(unit, await kommo.getLead(leadId)) : unit;
+    if (!dona || !voltaDaEsperaLiberada(dona.slug)) return; // cartão sem unidade: ninguém mexe
     const funis = await funisDaUnidade(unit, kommo);
     const alvo = funis?.idDe('COMERCIAL', ETAPA.QUALIFICACAO);
     if (!alvo) return;
-    if (voltaDaEsperaSeca(unit.slug)) {
-      logger.info({ unit: unit.slug, leadId }, 'parados [seco]: voltaria de EM ESPERA pra EM QUALIFICAÇÃO (paciente escreveu)');
-      registrarSimulacao(unit, 'volta-espera', { leadId, acao: 'moveria', alvo: ETAPA.QUALIFICACAO, deEtapa: est.nome, motivo: 'paciente voltou a escrever' });
+    if (voltaDaEsperaSeca(dona.slug)) {
+      logger.info({ unit: dona.slug, leadId }, 'parados [seco]: voltaria de EM ESPERA pra EM QUALIFICAÇÃO (paciente escreveu)');
+      registrarSimulacao(dona, 'volta-espera', { leadId, acao: 'moveria', alvo: ETAPA.QUALIFICACAO, deEtapa: est.nome, motivo: 'paciente voltou a escrever' });
       return;
     }
     await kommo.moveStage({ leadId, statusId: alvo.statusId, pipelineId: alvo.pipelineId });
@@ -309,6 +319,10 @@ interface Resumo {
   movidos: number;
   segurosPelaFranquia: number;
   erros: number;
+  /** Kommo dividido: cartões da outra unidade (não são desta varredura) */
+  deOutraUnidade?: number;
+  /** Kommo dividido: cartões sem «⌂ Unidade de atendimento» — ninguém mexe */
+  semUnidade?: number;
 }
 
 async function leadsDaEtapa(kommo: KommoClient, pipelineId: number, statusId: number): Promise<KommoLead[]> {
@@ -332,12 +346,14 @@ function cotaNova(seco: boolean) {
   };
 }
 
-async function varrerConta(unit: Unit, unidadesDaConta: Unit[]): Promise<Resumo> {
+async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kommoDe: Unit; grupo: GrupoDoCrm }): Promise<Resumo> {
   const seco = modoSeco(unit.slug);
-  const conta = unit.kommoSubdomain ?? unit.slug;
+  const conta = dividida?.kommoDe.kommoSubdomain ?? unit.kommoSubdomain ?? unit.slug;
   const resumo: Resumo = { unit: unit.slug, conta, seco, avaliados: 0, candidatos: 0, movidos: 0, segurosPelaFranquia: 0, erros: 0 };
   const agora = Math.floor(Date.now() / 1000);
-  const kommo = createKommoClient(unit);
+  // Kommo dividido: o cliente é o da dona da conta; a chave, o token da franquia e os cartões são DESTA unidade.
+  const kommo = createKommoClient(dividida?.kommoDe ?? unit);
+  const grupo = dividida?.grupo ?? null;
   const funis = await funisDaUnidade(unit, kommo);
   if (!funis) {
     logger.warn({ unit: unit.slug }, 'parados: não achei o funil COMERCIAL — pulei a conta');
@@ -361,6 +377,7 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[]): Promise<Resumo>
     for (const lead of await leadsDaEtapa(kommo, alvo.pipelineId, alvo.statusId)) {
       const cartao = { retomarEmEpoch: epochDoCampoData(lead, CAMPO.RETOMAR_EM), criadoEpoch: lead.created_at ?? null };
       if (!candidatoPeloCartao(etapa, cartao, agora)) continue; // barato: sem chamada nenhuma
+      if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
       if (!cota.podeAvaliar()) break;
       cota.avaliou();
       resumo.avaliados++;
@@ -392,6 +409,7 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[]): Promise<Resumo>
     for (const lead of alvo ? await leadsDaEtapa(kommo, alvo.pipelineId, alvo.statusId) : []) {
       const situacao = normalizarNome(String(valorDoCampo(lead, CAMPOS_SYNC.SITUACAO) ?? ''));
       if (!situacao.includes(normalizarNome('não compareceu'))) continue;
+      if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
       const dataFalta = epochDoCampoData(lead, CAMPOS_SYNC.DATA_CONSULTA);
       if (!decidirFalta(dataFalta, false, agora)) continue; // ainda dentro do prazo: nem consulta a franquia
       if (!cota.podeAvaliar()) break;
@@ -440,6 +458,7 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[]): Promise<Resumo>
       resumo.avaliados++;
       try {
         const lead = await kommo.getLead(leadId);
+        if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
         const atual = funis.nomeDe(lead.pipeline_id, lead.status_id);
         if (!atual || atual.funil !== 'COMERCIAL' || !reguaEsgotadaDerruba(atual.status)) continue;
         const status = valorDoCampo(lead, CAMPO.STATUS_CONVERSA);
@@ -484,6 +503,17 @@ async function varrer(): Promise<void> {
       porConta.set(conta, grupo);
     }
     for (const { dona, todas } of porConta.values()) {
+      // Kommo dividido (Petrópolis + Caxias): cada unidade varre a conta com a SUA chave e o SEU token e só mexe nos
+      // cartões do seu rótulo. A irmã não tem Kommo próprio (nem subdomínio), por isso entra por aqui e não acima.
+      const dividida = await contaDividida(todas);
+      if (dividida) {
+        if (!dividida.conta.kommoAccessToken) continue;
+        for (const m of dividida.membros) {
+          if (!paradosLiberado(m.slug)) continue;
+          await varrerConta(m, todas, { kommoDe: dividida.conta, grupo: dividida.grupo }).catch((err) => logger.warn({ err: String(err), unit: m.slug }, 'parados: conta falhou'));
+        }
+        continue;
+      }
       if (!paradosLiberado(dona.slug) || !dona.kommoAccessToken) continue;
       await varrerConta(dona, todas).catch((err) => logger.warn({ err: String(err), unit: dona.slug }, 'parados: conta falhou'));
     }

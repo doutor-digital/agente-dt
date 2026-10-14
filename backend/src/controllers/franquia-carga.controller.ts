@@ -12,6 +12,7 @@
 import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { aplicarCarga, previaDaCarga } from '../services/franquia-carga.service.js';
+import { grupoDaUnidade, rotulosDoGrupo } from '../lib/crm-compartilhado.js';
 
 async function carregarUnidade(req: Request) {
   const id = String(req.params.id ?? '');
@@ -28,6 +29,21 @@ function mesesDe(v: unknown): number | undefined {
   return Math.min(Math.max(Math.trunc(n), 1), 12);
 }
 
+/**
+ * Kommo dividido (Petrópolis + Caxias): a carga cria cartão a partir da franquia, e cartão novo sem a ⌂ Unidade de
+ * atendimento não é de ninguém (foi assim que nasceram os 180 cartões sem unidade). Até a carga aprender a preencher o
+ * campo, ela não roda nessas contas — nem a prévia, que lê o Kommo da unidade (a irmã não tem Kommo próprio).
+ */
+async function cargaBarrada(unitId: string, res: Response): Promise<boolean> {
+  const grupo = await grupoDaUnidade(unitId);
+  if (!grupo) return false;
+  res.status(409).json({
+    error: 'crm_compartilhado',
+    detalhe: `Esta unidade divide o Kommo com outra (${rotulosDoGrupo(grupo)}) e a carga ainda não preenche a ⌂ Unidade de atendimento dos cartões que cria.`,
+  });
+  return true;
+}
+
 export async function previaCargaHandler(req: Request, res: Response): Promise<void> {
   const unit = await carregarUnidade(req);
   if (!unit) {
@@ -38,6 +54,7 @@ export async function previaCargaHandler(req: Request, res: Response): Promise<v
     res.status(422).json({ error: 'franquia_nao_ligada', detalhe: 'a unidade precisa de spineEnabled e token da franquia' });
     return;
   }
+  if (await cargaBarrada(unit.id, res)) return;
   const previa = await previaDaCarga(unit, { meses: mesesDe(req.query.meses) });
   res.json(previa);
 }
@@ -52,6 +69,7 @@ export async function aplicarCargaHandler(req: Request, res: Response): Promise<
     res.status(422).json({ error: 'franquia_nao_ligada' });
     return;
   }
+  if (await cargaBarrada(unit.id, res)) return;
   const opts = { meses: mesesDe(req.body?.meses) };
 
   // sem `aplicar: true` explícito, o POST devolve a prévia — o padrão nunca escreve

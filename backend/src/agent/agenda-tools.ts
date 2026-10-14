@@ -19,6 +19,7 @@ import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
 import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
+import { travaDaAgendaDaIa } from '../lib/crm-compartilhado.js';
 import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } from './carimbos-do-agendamento.js';
 import {
   agendamentoDeuCerto,
@@ -238,6 +239,9 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
       // chegou a ser olhada, mesmo que a resposta tenha sido "não há vaga".
       if (estado) estado.consultou = true;
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
+      const contaDividida = await travaDaAgendaDaIa(fresca);
+      if (contaDividida) return contaDividida;
 
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'A agenda da clínica não está conectada. NÃO ofereça horários — diga que a equipe entra em contato para marcar.';
@@ -394,6 +398,9 @@ export function buildBuscarPaciente({ unit, recorder, kommo }: Contexto) {
     }),
     func: async (args: { nome: string; telefone?: string; leadId?: number }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
+      const contaDividida = await travaDaAgendaDaIa(fresca);
+      if (contaDividida) return contaDividida;
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'Sistema da clínica não conectado. Transfira para a equipe.';
       }
@@ -572,6 +579,9 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
       horarioEscolhido: string;
     }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
+      const contaDividida = await travaDaAgendaDaIa(fresca);
+      if (contaDividida) return contaDividida;
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'Sistema da clínica não conectado. Transfira para a equipe.';
       }
@@ -786,6 +796,9 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
     }),
     func: async (args: { leadId: number; confirmado?: boolean }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
+      const contaDividida = await travaDaAgendaDaIa(fresca);
+      if (contaDividida) return contaDividida;
       const atual = await consultaAtual(fresca, args.leadId);
       if (!atual) return 'Este paciente não tem consulta marcada por aqui. Não há o que cancelar.';
 
@@ -843,6 +856,9 @@ export function buildConfirmarPresenca({ unit, recorder }: Contexto) {
     }),
     func: async (args: { leadId: number }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
+      const contaDividida = await travaDaAgendaDaIa(fresca);
+      if (contaDividida) return contaDividida;
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'Agenda não conectada. Agradeça a confirmação e diga que a equipe registra.';
       }
@@ -941,6 +957,10 @@ export function buildRemarcarConsulta(ctx: Contexto) {
     }),
     func: async (args: { leadId: number; idClient: number; data: string; hora: string }) => {
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
+      const contaDividida = await travaDaAgendaDaIa(fresca);
+      if (contaDividida) return contaDividida;
+      // Sem a divisão gravada: a trava da unidade de atendimento (#56) — Caxias e cartão sem unidade recusam.
       const travado = await travaParaIa('remarcar_consulta', fresca, args.leadId, kommo, recorder);
       if (travado) return travado;
 
@@ -1210,6 +1230,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       }
 
       const fresca = (await unidadeFresca(unit.id)) ?? unit;
+      // Kommo dividido (Petrópolis + Caxias): a agenda pela IA ainda não separa as unidades — não lê nem escreve.
+      const contaDividida = await travaDaAgendaDaIa(fresca);
+      if (contaDividida) return contaDividida;
 
       if (!fresca.spineEnabled || !fresca.spineToken) {
         return 'Agenda não conectada. NÃO confirme nada — diga que a equipe conclui o agendamento.';
