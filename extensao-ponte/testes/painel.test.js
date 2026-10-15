@@ -755,6 +755,21 @@ describe('painel — 0.5.1: Observações', () => {
     }
   });
 
+  it('um 401 que NÃO é o do login (um proxy, por exemplo) mostra o erro de verdade, não "atualização do servidor"', async () => {
+    const p = montar({ conversa, rotas: { 'POST /ponte/cartao': cartaoDe(123, 'Maria'), 'POST /ponte/nota': { __status: 401, corpo: { error: 'token do proxy expirou' } } } });
+    try {
+      await esperar(600);
+      const tela = p.doc.getElementById('conteudo');
+      escrever(p, 'x');
+      tela.querySelector('[data-acao="salvar-observacao"]').click();
+      tela.querySelector('[data-bloco="observacao"] [data-acao="confirmar"]').click();
+      await esperar(10);
+      assert.equal(tela.querySelector('[data-papel="msg-observacao"]').textContent, 'Token do proxy expirou.');
+    } finally {
+      p.w.close();
+    }
+  });
+
   it('erro do servidor com mensagem da Ponte: aparece legível (ex.: cartão de outra conta)', async () => {
     const p = montar({ conversa, rotas: { 'POST /ponte/cartao': cartaoDe(123, 'Maria'), 'POST /ponte/nota': { __status: 404, corpo: { ok: false, error: 'cartão não encontrado no Kommo desta unidade' } } } });
     try {

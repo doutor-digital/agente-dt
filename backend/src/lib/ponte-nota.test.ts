@@ -21,7 +21,7 @@ import {
 const AGORA = new Date('2026-10-15T18:42:00.000Z');
 
 /** Um Kommo falso: só o cartão `existe` é desta conta; guarda tudo que foi pedido. */
-function kommoFalso(opcoes: { existe?: number; semId?: boolean; notaFalha?: boolean; lerFalha?: boolean } = {}) {
+function kommoFalso(opcoes: { existe?: number; semId?: boolean; notaFalha?: number | 'tempo'; lerFalha?: boolean } = {}) {
   const existe = opcoes.existe ?? 123;
   const chamadas: unknown[][] = [];
   let proximo = 900;
@@ -37,7 +37,8 @@ function kommoFalso(opcoes: { existe?: number; semId?: boolean; notaFalha?: bool
     },
     addLeadNote: async (id, texto) => {
       chamadas.push(['nota', id, texto]);
-      if (opcoes.notaFalha) throw new KommoApiError('addLeadNote: 502', 502, {});
+      // 'tempo' = sem resposta (o axios desistiu): o KommoApiError vem sem status
+      if (opcoes.notaFalha) throw new KommoApiError('addLeadNote: falhou', opcoes.notaFalha === 'tempo' ? undefined : opcoes.notaFalha, {});
       return opcoes.semId ? null : { id: proximo++ };
     },
   };
@@ -68,8 +69,12 @@ describe('observação — o pedido', () => {
     }
   });
 
-  it('HTML é tag de verdade: "dor < 5 e > 2" e "a<b" não são', () => {
+  it('HTML é tag de verdade: "dor < 5 e > 2", "a<b", "<L4 e L5>" e "pressão <alta>" não são', () => {
     assert.equal(temHtml('dor < 5 e > 2'), false);
+    assert.equal(temHtml('Dor entre <L4 e L5> há 2 meses'), false);
+    assert.equal(temHtml('pressão <alta>'), false);
+    assert.equal(temHtml('<a href="x">y</a>'), true);
+    assert.equal(temHtml('<B>grito</B>'), true);
     assert.equal(temHtml('a<b'), false);
     assert.equal(temHtml('3 <> 4'), false);
     assert.equal(temHtml('<p>'), true);
@@ -124,9 +129,16 @@ describe('observação — com o Kommo', () => {
     assert.deepEqual(k.notas(), []);
   });
 
-  it('o Kommo não devolveu o id da nota: erro que manda conferir antes de tentar de novo', async () => {
-    const r = await gravarObservacao(kommoFalso({ semId: true }), pedido(), AGORA);
-    assert.ok(!r.ok && r.status === 502 && /confira no cartão antes de tentar de novo/.test(r.erro));
+  it('o Kommo não devolveu o id da nota, não respondeu a tempo ou deu 5xx: INCERTO, e manda conferir antes de tentar de novo', async () => {
+    for (const k of [kommoFalso({ semId: true }), kommoFalso({ notaFalha: 'tempo' }), kommoFalso({ notaFalha: 504 })]) {
+      const r = await gravarObservacao(k, pedido(), AGORA);
+      assert.ok(!r.ok && r.status === 502 && r.incerto === true && /confira no histórico do cartão antes de tentar de novo/.test(r.erro), JSON.stringify(r));
+    }
+  });
+
+  it('o Kommo RECUSOU (4xx): erro claro, nada gravado', async () => {
+    const r = await gravarObservacao(kommoFalso({ notaFalha: 400 }), pedido(), AGORA);
+    assert.deepEqual(r, { ok: false, status: 502, erro: 'o Kommo recusou a nota agora: tente de novo' });
   });
 
   it('a nota vai pelo `addLeadNote` de sempre: POST /leads/{id}/notes, nota comum', async () => {
@@ -160,12 +172,27 @@ describe('observação — uma nota por observação', () => {
     assert.equal(k.notas().length, 3);
   });
 
-  it('a primeira falhou: a próxima tenta de verdade', async () => {
-    const falha = kommoFalso({ notaFalha: true });
-    await assert.rejects(gravarObservacaoUmaVez('conta', falha, pedido(), AGORA));
+  it('recusa clara (o Kommo deu 4xx, ou o cartão não foi lido): a próxima tenta de verdade', async () => {
+    const recusou = kommoFalso({ notaFalha: 400 });
+    assert.equal((await gravarObservacaoUmaVez('conta', recusou, pedido(), AGORA)).ok, false);
+    const foraNaLeitura = kommoFalso({ lerFalha: true });
+    await assert.rejects(gravarObservacaoUmaVez('conta', foraNaLeitura, pedido(), AGORA));
     const ok = kommoFalso();
     const r = await gravarObservacaoUmaVez('conta', ok, pedido(), AGORA);
     assert.ok(r.ok && !r.repetido);
+    assert.equal(ok.notas().length, 1);
+  });
+
+  it('resultado INCERTO (pode ter gravado): o clique de novo na janela NÃO grava a segunda; passada a janela, grava', async () => {
+    const incerto = kommoFalso({ notaFalha: 'tempo' });
+    const a = await gravarObservacaoUmaVez('conta', incerto, pedido(), AGORA);
+    assert.ok(!a.ok && a.incerto);
+    const ok = kommoFalso();
+    const b = await gravarObservacaoUmaVez('conta', ok, pedido(), new Date(AGORA.getTime() + 60_000));
+    assert.ok(!b.ok && b.incerto, 'devolve o mesmo aviso');
+    assert.equal(ok.notas().length, 0, 'não gravou a segunda');
+    const c = await gravarObservacaoUmaVez('conta', ok, pedido(), new Date(AGORA.getTime() + JANELA_DE_REPETICAO_MS + 1));
+    assert.ok(c.ok);
     assert.equal(ok.notas().length, 1);
   });
 });

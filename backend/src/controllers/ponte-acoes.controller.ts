@@ -154,7 +154,7 @@ export async function ponteNotaHandler(req: Request, res: Response): Promise<voi
   try {
     const r = await gravarObservacaoUmaVez(contaDaUnidade(unit), createKommoClient(unit), lido.pedido);
     if (!r.ok) {
-      logger.warn({ unit: unit.slug, leadId, status: r.status }, 'ponte: observação não gravada');
+      logger.warn({ unit: unit.slug, leadId, status: r.status, incerto: !!r.incerto }, 'ponte: observação não gravada');
       res.status(r.status).json({ ok: false, error: r.erro });
       return;
     }

@@ -6,14 +6,17 @@
  * hora é a de Brasília, carimbada AQUI (o relógio do computador da atendente não vale).
  *
  * As regras:
- *   - o texto não pode ser vazio, passar de `MAX_OBSERVACAO` letras nem ter HTML (tag ou comentário): o pedido volta
- *     400, e nada vai para o Kommo. Quebras de linha ficam; o resto do controle sai;
+ *   - o texto não pode ser vazio, passar de `MAX_OBSERVACAO` letras nem ter HTML (uma tag de HTML de verdade ou um
+ *     comentário — "<L4 e L5>" e "dor < 5" passam): o pedido volta 400, e nada vai para o Kommo. Quebras de linha
+ *     ficam; o resto do controle sai (`limparObservacao`, a mesma conta da extensão, para a prévia ser o que grava);
  *   - o cartão tem de ser DESTA conta: ele é lido com o token da unidade da chave (como nas etiquetas e na ligação) —
  *     cartão de outra conta, ou apagado, não aparece (404) e nada é gravado;
  *   - UMA nota por observação: o mesmo texto no mesmo cartão em menos de `JANELA_DE_REPETICAO_MS` (clique duplo, ou a
  *     resposta que se perdeu e a atendente clicou de novo) devolve a nota da primeira vez, sem gravar outra;
- *   - o Kommo não devolveu o id da nota: erro, dizendo para conferir no cartão ANTES de tentar de novo (senão ela
- *     grava duas).
+ *   - não dá para saber se gravou (o Kommo não respondeu a tempo, respondeu 5xx, ou disse OK sem o id da nota): erro
+ *     `incerto`, dizendo para conferir no cartão ANTES de tentar de novo — e a vaga da "uma nota por observação"
+ *     CONTINUA reservada pela janela (o clique de novo não grava a segunda). Só a recusa clara (o Kommo respondeu 4xx,
+ *     ou o cartão não foi lido) libera a vaga.
  *
  * Nunca escreve no WhatsApp. Log sem dado de paciente: id do cartão, id da nota e o tamanho do texto, nunca o texto.
  */
@@ -38,9 +41,18 @@ export interface PedidoDeNota {
   por: string | null;
 }
 
-/** Tem HTML? Uma tag (`<b>`, `</p>`, `<img src=x>`, `<br/>`) ou um comentário (`<!--`). "dor < 5" não é tag. */
+/**
+ * As tags de HTML que contam (as de texto, as de mídia e as perigosas). Só elas: "<L4 e L5>" e "<alta>" são texto da
+ * atendente, não HTML. A extensão usa a mesma lista (`desenho.js`, `problemaDaObservacao`).
+ */
+export const TAGS_DE_HTML =
+  'a|abbr|audio|b|big|blockquote|body|br|button|center|code|del|div|em|embed|font|form|h[1-6]|head|hr|html|i|iframe|img|input|ins|label|li|link|mark|meta|object|ol|option|p|pre|s|script|select|small|source|span|strike|strong|style|sub|sup|svg|table|tbody|td|textarea|th|thead|title|tr|u|ul|video';
+
+const TAG_DE_HTML = new RegExp(`<\\/?(?:${TAGS_DE_HTML})(?:\\s[^<>]*)?\\/?>`, 'i');
+
+/** Tem HTML? Uma tag de verdade (`<b>`, `</p>`, `<img src=x>`, `<br/>`) ou um comentário (`<!--`). */
 export function temHtml(texto: string): boolean {
-  return /<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/i.test(texto) || /<!--/.test(texto);
+  return TAG_DE_HTML.test(texto) || /<!--/.test(texto);
 }
 
 /**
@@ -108,7 +120,10 @@ export interface KommoDaNota {
 
 export type ResultadoDaNota =
   | { ok: true; leadId: number; notaId: number; repetido?: boolean }
-  | { ok: false; status: number; erro: string };
+  /** `incerto`: pode ter gravado — a vaga da janela continua reservada (o clique de novo não grava outra). */
+  | { ok: false; status: number; erro: string; incerto?: boolean };
+
+const INCERTO = 'não sei se a observação foi gravada (o Kommo não confirmou): confira no histórico do cartão antes de tentar de novo';
 
 const naoAchou = (err: unknown) => err instanceof KommoApiError && (err.status === 404 || err.status === 204);
 
@@ -125,11 +140,20 @@ export async function gravarObservacao(kommo: KommoDaNota, pedido: PedidoDeNota,
   if (!lead || typeof lead !== 'object' || lead.id !== pedido.leadId) {
     return { ok: false, status: 404, erro: 'cartão não encontrado no Kommo desta unidade' };
   }
-  const r = await kommo.addLeadNote(pedido.leadId, textoDaNota(pedido, agora));
-  const notaId = r && typeof r === 'object' && typeof r.id === 'number' && r.id > 0 ? r.id : null;
-  if (!notaId) {
-    return { ok: false, status: 502, erro: 'o Kommo não confirmou a nota: confira no cartão antes de tentar de novo' };
+  let r: { id?: number } | null;
+  try {
+    r = await kommo.addLeadNote(pedido.leadId, textoDaNota(pedido, agora));
+  } catch (err) {
+    // o Kommo RESPONDEU com recusa (4xx): nada gravado. Sem resposta (tempo esgotado) ou 5xx: pode ter gravado
+    const status = err instanceof KommoApiError ? err.status : undefined;
+    if (typeof status === 'number' && status >= 400 && status < 500) {
+      return { ok: false, status: 502, erro: 'o Kommo recusou a nota agora: tente de novo' };
+    }
+    return { ok: false, status: 502, erro: INCERTO, incerto: true };
   }
+  const notaId = r && typeof r === 'object' && typeof r.id === 'number' && r.id > 0 ? r.id : null;
+  // disse OK sem o id: provavelmente gravou — não deixa gravar a segunda
+  if (!notaId) return { ok: false, status: 502, erro: INCERTO, incerto: true };
   return { ok: true, leadId: pedido.leadId, notaId };
 }
 
@@ -143,7 +167,8 @@ export function limparObservacoesRecentes(): void {
 /**
  * `gravarObservacao`, uma vez só por observação: a mesma (conta, cartão, texto) dentro de `JANELA_DE_REPETICAO_MS`
  * espera a primeira e devolve a nota dela (`repetido: true`). A vaga é reservada ANTES do primeiro `await`, então dois
- * pedidos juntos também viram uma nota só. Se a primeira falhou, a próxima tenta de verdade.
+ * pedidos juntos também viram uma nota só. Recusa clara (nada gravado) libera a vaga e a próxima tenta de verdade; o
+ * resultado INCERTO (pode ter gravado) segura a vaga até o fim da janela e devolve o mesmo aviso.
  */
 export async function gravarObservacaoUmaVez(
   conta: string,
@@ -164,7 +189,7 @@ export async function gravarObservacaoUmaVez(
   recentes.set(chave, { em: agoraMs, p });
   try {
     const r = await p;
-    if (!r.ok) recentes.delete(chave);
+    if (!r.ok && !r.incerto) recentes.delete(chave);
     return r;
   } catch (err) {
     recentes.delete(chave);

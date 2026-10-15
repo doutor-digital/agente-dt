@@ -855,15 +855,34 @@
 
   // ── 0.5.1: Observações (uma nota comum no cartão do Kommo) ──
 
-  /** O mesmo limite e a mesma regra do servidor (`backend/src/lib/ponte-nota.ts`). */
+  /** O mesmo limite e as mesmas regras do servidor (`backend/src/lib/ponte-nota.ts`: `MAX_OBSERVACAO`, `TAGS_DE_HTML`). */
   var MAX_OBSERVACAO = 2000;
+  var TAGS_DE_HTML = 'a|abbr|audio|b|big|blockquote|body|br|button|center|code|del|div|em|embed|font|form|h[1-6]|head|hr|html|i|iframe|img|input|ins|label|li|link|mark|meta|object|ol|option|p|pre|s|script|select|small|source|span|strike|strong|style|sub|sup|svg|table|tbody|td|textarea|th|thead|title|tr|u|ul|video';
+  var TAG_DE_HTML = new RegExp('<\\/?(?:' + TAGS_DE_HTML + ')(?:\\s[^<>]*)?\\/?>', 'i');
 
-  /** O que impede salvar a observação (vazia, longa demais, com HTML), ou `null`. */
+  /**
+   * O texto como o servidor grava (`limparObservacao` de lá): as quebras de linha ficam (no máximo uma linha em branco
+   * seguida), tab vira espaço, o resto do controle sai, sem espaço no fim da linha e nas pontas. A prévia mostra ISTO.
+   */
+  function limparObservacao(bruto) {
+    return String(bruto == null ? '' : bruto)
+      .replace(/\r\n?/g, '\n')
+      .replace(/\t/g, ' ')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, '')
+      .split('\n')
+      .map(function (l) { return l.replace(/\s+$/, ''); })
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  /** O que impede salvar a observação (vazia, longa demais, com HTML de verdade), ou `null`. "<L4 e L5>" passa. */
   function problemaDaObservacao(texto) {
-    var t = String(texto == null ? '' : texto).trim();
+    var t = limparObservacao(texto);
     if (!t) return 'Escreva a observação.';
     if (t.length > MAX_OBSERVACAO) return 'A observação passa de ' + MAX_OBSERVACAO + ' letras: encurte antes de salvar.';
-    if (/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/i.test(t) || /<!--/.test(t)) return 'A observação não pode ter HTML (tags como <b> ou <br>).';
+    if (TAG_DE_HTML.test(t) || /<!--/.test(t)) return 'A observação não pode ter HTML (tags como <b> ou <br>).';
     return null;
   }
 
@@ -904,11 +923,13 @@
       area.replaceChildren();
       salvar.hidden = false;
       campo.disabled = false;
+      msg.textContent = '';
     }
     salvar.addEventListener('click', function () {
       msg.textContent = '';
       feito.textContent = '';
-      var texto = campo.value.trim();
+      // a prévia e o pedido levam o texto JÁ limpo, como o servidor grava: o que ela confirma é o que fica
+      var texto = limparObservacao(campo.value);
       var problema = problemaDaObservacao(texto);
       if (problema) {
         msg.textContent = problema;
@@ -922,10 +943,16 @@
         [el(doc, 'p', { classe: 'nota' }, 'Fica no histórico do cartão. Nada vai para o WhatsApp.')],
         'Gravar no Kommo', 'botao--primario',
         function () {
+          // gravando: "Voltar e corrigir" trava (voltar no meio deixaria editar um texto que já está indo para o Kommo)
+          var nao = area.querySelector('[data-acao="voltar-previa"]');
+          if (nao) nao.disabled = true;
           return Promise.resolve(acoes.salvarObservacao(c.id, texto)).then(function () {
             campo.value = '';
             voltar();
             feito.textContent = 'Salvo no cartão.';
+          }, function (e) {
+            if (nao) nao.disabled = false;
+            throw e;
           });
         },
         voltar, msg));
@@ -1607,6 +1634,7 @@
     urlDaConversa: urlDaConversa,
     telefoneDaBusca: telefoneDaBusca,
     problemaDaObservacao: problemaDaObservacao,
+    limparObservacao: limparObservacao,
     MAX_OBSERVACAO: MAX_OBSERVACAO,
     relativo: relativo,
     textoDaPausa: textoDaPausa,

@@ -75,16 +75,22 @@ textos errados para essas unidades. O que mudou (o resto funciona igual):
      no `ponte-acoes.controller.ts`), com a mesma porta das outras que gravam (`X-Widget-Key` + slug, chave antes do
      limitador; balde `ponte-nota`, 30 por minuto). Responde `{ ok: true, leadId, notaId, repetido }` ou
      `{ ok: false, error }`.
-   - O texto: não vazio, até 2000 letras, **sem HTML** (tag ou comentário; "dor < 5" passa) — senão 400 e nada vai ao
-     Kommo. Quebras de linha ficam. A hora é a de Brasília, carimbada no servidor.
+   - O texto: não vazio, até 2000 letras, **sem HTML** (uma tag de HTML de verdade — `<b>`, `<br>`, `<img …>`,
+     `<script>`… — ou um comentário; "dor < 5", "<L4 e L5>" e "pressão <alta>" passam) — senão 400 e nada vai ao
+     Kommo. Quebras de linha ficam (no máximo uma linha em branco seguida); a prévia já mostra o texto limpo do mesmo
+     jeito que o servidor grava. A hora é a de Brasília, carimbada no servidor (também nas unidades de outro fuso, como
+     Boa Vista: foi o pedido).
    - O cartão é lido com o token da unidade da chave (o mesmo das etiquetas e da ligação): cartão de outra conta, ou
      apagado, dá 404 e nada é gravado. Na conta de duas unidades, vale qualquer cartão da conta.
    - Uma nota por observação: o mesmo texto no mesmo cartão em menos de 2 min (clique duplo, resposta perdida) devolve
-     a nota da primeira vez. Se o Kommo não devolver o id da nota, o erro manda conferir o cartão antes de tentar de
-     novo. No log, só o id do cartão, o da nota e o tamanho do texto — nunca o texto.
+     a nota da primeira vez. Quando não dá para saber se gravou (o Kommo não respondeu a tempo, deu 5xx, ou disse OK
+     sem o id da nota), o erro manda **conferir o histórico do cartão antes de tentar de novo**, e o mesmo texto não
+     grava outra vez nesses 2 min; recusa clara (o Kommo respondeu 4xx) libera na hora. Enquanto grava, "Voltar e
+     corrigir" fica travado. No log, só o id do cartão, o da nota e o tamanho do texto — nunca o texto.
    - **Só funciona depois do deploy do servidor.** Com o servidor de antes, a rota não existe: a `/public` cai no login
-     (401, não 404) — o painel mostra **"Disponível depois da atualização do servidor."** (também num 404 sem a
-     mensagem da Ponte) e o texto fica na caixa.
+     (401 "unauthenticated", não 404) — o painel mostra **"Disponível depois da atualização do servidor."** (também num
+     404 sem a mensagem da Ponte) e o texto fica na caixa. Outro 401 (de um proxy) mostra o erro de verdade.
+   - O cartão também tem o campo **✎ Observações** (o do guia, da SDR): esta caixa NÃO mexe nele — grava uma nota.
    - Como qualquer nota escrita no Kommo, ela conta como mexida no cartão: se ele tiver pendência de preenchimento, o
      robô de revisão pode marcar "⚠ Revisar cartão" (o mesmo de hoje quando a SDR escreve uma nota lá).
 

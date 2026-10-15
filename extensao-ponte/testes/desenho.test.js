@@ -947,6 +947,8 @@ describe('0.5.1 — Observações (vira nota no cartão)', () => {
     }
     assert.deepEqual(salvas, []);
     assert.equal(D.problemaDaObservacao('dor < 5 e > 2'), null, 'sinal de menor não é HTML');
+    assert.equal(D.problemaDaObservacao('Dor entre <L4 e L5> há 2 meses'), null, 'texto entre < > que não é tag de HTML passa');
+    assert.equal(D.problemaDaObservacao('pressão <alta>'), null);
     assert.ok(doc);
   });
 
@@ -968,6 +970,40 @@ describe('0.5.1 — Observações (vira nota no cartão)', () => {
     assert.equal(n.querySelector('[data-papel="observacao-ok"]').textContent, 'Salvo no cartão.');
     assert.equal(campo.value, '');
     assert.equal(campo.disabled, false);
+  });
+
+  it('a prévia mostra o texto JÁ limpo, como o servidor grava, e é esse que vai', async () => {
+    const salvas = [];
+    const { n } = montarCartao({ salvarObservacao: (id, t) => { salvas.push(t); return Promise.resolve(); } });
+    const campo = n.querySelector('[data-papel="observacao"]');
+    campo.value = 'Mãe acompanha.\r\n\r\n\r\n\tPrefere tarde.   ';
+    n.querySelector('[data-acao="salvar-observacao"]').click();
+    const linhas = [...n.querySelectorAll('[data-bloco="observacao"] [data-papel="previa"] li')].map((li) => li.textContent);
+    assert.equal(linhas[1], 'Mãe acompanha.\n\n Prefere tarde.');
+    n.querySelector('[data-bloco="observacao"] [data-acao="confirmar"]').click();
+    await tique();
+    assert.deepEqual(salvas, ['Mãe acompanha.\n\n Prefere tarde.']);
+    assert.equal(D.limparObservacao('a\n\n\n\nb'), 'a\n\nb');
+  });
+
+  it('gravando: "Voltar e corrigir" trava; voltou depois de um erro: o aviso velho sai', async () => {
+    let terminar;
+    const { n } = montarCartao({ salvarObservacao: () => new Promise((ok, falha) => { terminar = falha; }) });
+    const campo = n.querySelector('[data-papel="observacao"]');
+    campo.value = 'Prefere tarde.';
+    n.querySelector('[data-acao="salvar-observacao"]').click();
+    n.querySelector('[data-bloco="observacao"] [data-acao="confirmar"]').click();
+    await tique();
+    const voltar = n.querySelector('[data-acao="voltar-previa"]');
+    assert.equal(voltar.disabled, true, 'não dá para voltar enquanto grava');
+    terminar(new Error('O Kommo recusou a nota agora: tente de novo.'));
+    await tique();
+    await tique();
+    assert.equal(voltar.disabled, false, 'falhou: dá para voltar e corrigir');
+    assert.match(n.querySelector('[data-papel="msg-observacao"]').textContent, /recusou/);
+    voltar.click();
+    assert.equal(n.querySelector('[data-papel="msg-observacao"]').textContent, '');
+    assert.equal(campo.value, 'Prefere tarde.');
   });
 
   it('"Voltar e corrigir" não grava; erro do servidor aparece e o texto fica', async () => {

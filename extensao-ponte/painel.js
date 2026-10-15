@@ -249,6 +249,7 @@
         // 0.5.1: quem chamou sabe o status e se a mensagem veio da Ponte (rota que não existe não manda a nossa)
         falha.status = resp.status;
         falha.doServidor = !!e;
+        falha.codigo = e;
         throw falha;
       });
     }, function () {
@@ -423,8 +424,9 @@
         rascunhosDeObservacao.delete(leadId);
         return j;
       }, function (e) {
-        // servidor de antes da 0.5.1: a rota não existe — a /public cai no login (401) ou num 404 sem a mensagem da Ponte
-        if (e && (e.status === 401 || (e.status === 404 && !e.doServidor))) throw new Error(SEM_A_ROTA);
+        // servidor de antes da 0.5.1: a rota não existe — a /public cai no login (401 "unauthenticated") ou num 404 sem
+        // a mensagem da Ponte. Outro 401 (de um proxy, por exemplo) mostra o erro de verdade.
+        if (e && ((e.status === 401 && e.codigo === 'unauthenticated') || (e.status === 404 && !e.doServidor))) throw new Error(SEM_A_ROTA);
         throw e;
       });
     },
