@@ -33,6 +33,25 @@ export interface KommoLead {
   };
 }
 
+/** Transmissão do WhatsApp (tela "Transmissões"). `filter.tag` traz os ids das etiquetas do segmento. */
+export interface KommoTransmissao {
+  id: number;
+  name: string;
+  status: string;
+  scheduled_at?: number | null;
+  chat_template_id?: number | null;
+  filter?: { tag?: Array<string | number> } | null;
+  stats?: {
+    total_count?: number;
+    sent?: number;
+    delivered?: number;
+    read?: number;
+    responded?: number;
+    failed?: number;
+    cost?: number;
+  } | null;
+}
+
 /** Modelo de mensagem (WABA ou rápida), com o status na Meta quando pedido `with=reviews`. */
 export interface KommoChatTemplate {
   id: number;
@@ -748,6 +767,116 @@ export class KommoClient {
       }
     }
     return m;
+  }
+
+  /** Nome e telefone de vários contatos de uma vez — mesmos lotes de 50 do `telefonesDosContatos`. */
+  async contatosBasicos(ids: number[]): Promise<Map<number, { nome: string | null; telefone: string | null }>> {
+    const m = new Map<number, { nome: string | null; telefone: string | null }>();
+    const unicos = [...new Set(ids.filter((n) => Number.isFinite(n) && n > 0))];
+    for (let i = 0; i < unicos.length; i += 50) {
+      const lote = unicos.slice(i, i + 50);
+      try {
+        const { data } = await this.http.get<
+          | {
+              _embedded?: {
+                contacts?: Array<{ id: number; name?: string; custom_fields_values?: Array<{ field_code?: string; values?: Array<{ value?: string }> }> | null }>;
+              };
+            }
+          | ''
+        >('/contacts', { params: { 'filter[id]': lote, limit: 50 } });
+        for (const c of (data && data._embedded?.contacts) || []) {
+          const tel = c.custom_fields_values?.find((f) => f.field_code === 'PHONE')?.values?.[0]?.value;
+          m.set(c.id, {
+            nome: typeof c.name === 'string' && c.name.trim() ? c.name.trim() : null,
+            telefone: typeof tel === 'string' && tel.trim() ? tel.trim() : null,
+          });
+        }
+      } catch (err) {
+        wrapAxiosError(err, `contatosBasicos(${lote.length})`);
+      }
+    }
+    return m;
+  }
+
+  /**
+   * Cartões com uma etiqueta, com os contatos. A v4 ignora `filter[tags]`, então a busca vai por `query` (que
+   * acha o nome da etiqueta) e o filtro exato é feito aqui — `query` também casa nome e campo de texto.
+   */
+  async listLeadsComEtiqueta(etiqueta: string, maxPaginas = 10): Promise<KommoLead[]> {
+    const out: KommoLead[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } } | ''>('/leads', {
+          params: { query: etiqueta, limit: 250, page, with: 'contacts' },
+        });
+        const lote = (data && data._embedded?.leads) || [];
+        out.push(...lote.filter((l) => (l._embedded?.tags ?? []).some((t) => t.name === etiqueta)));
+        if (lote.length < 250) break;
+      } catch (err) {
+        wrapAxiosError(err, `listLeadsComEtiqueta(${etiqueta}, p${page})`);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * As transmissões (envio em massa pelo WhatsApp) — a mesma lista da tela "Transmissões", com o relatório
+   * que a Meta devolve (enviadas, entregues, lidas, respondidas, falhas, custo em US$). Devolve null quando a
+   * conta não deixa ler com o token: aí quem chama usa outra fonte, em vez de mostrar zero.
+   */
+  async listTransmissoes(): Promise<KommoTransmissao[] | null> {
+    const out: KommoTransmissao[] = [];
+    for (const status of ['completed', 'in_progress', 'scheduled', 'stopped']) {
+      try {
+        const { data } = await this.http.get<{ _embedded?: { broadcasting?: KommoTransmissao[] } } | ''>('/broadcasting', {
+          params: { status, limit: 250 },
+        });
+        out.push(...((data && data._embedded?.broadcasting) || []));
+      } catch (err) {
+        const st = axios.isAxiosError(err) ? err.response?.status : undefined;
+        if (st === 401 || st === 403 || st === 404) return null;
+        wrapAxiosError(err, `listTransmissoes(${status})`);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Mensagens de chat (entrada e saída) de vários contatos desde `desdeUnix`. O chat mora no CONTATO — por
+   * lead a API devolve 204 —, mas cada evento volta com o `entity_id` do CARTÃO. `por` = id do usuário do
+   * Kommo que escreveu; 0 = robô, Sofia ou transmissão.
+   */
+  async eventosDeChat(contatos: number[], desdeUnix: number): Promise<Array<{ leadId: number; tipo: 'entrada' | 'saida'; em: number; por: number }>> {
+    const out: Array<{ leadId: number; tipo: 'entrada' | 'saida'; em: number; por: number }> = [];
+    const unicos = [...new Set(contatos.filter((n) => Number.isFinite(n) && n > 0))];
+    for (let i = 0; i < unicos.length; i += 10) {
+      const lote = unicos.slice(i, i + 10);
+      for (let page = 1; page <= 20; page++) {
+        try {
+          const { data } = await this.http.get<
+            { _embedded?: { events?: Array<{ type?: string; entity_id?: number; created_at?: number; created_by?: number }> } } | ''
+          >('/events', {
+            params: {
+              'filter[entity]': 'contact',
+              'filter[entity_id]': lote,
+              'filter[type]': ['incoming_chat_message', 'outgoing_chat_message'],
+              'filter[created_at][from]': desdeUnix,
+              limit: 100,
+              page,
+            },
+          });
+          const evs = (data && data._embedded?.events) || [];
+          for (const e of evs) {
+            if (typeof e.entity_id !== 'number' || typeof e.created_at !== 'number') continue;
+            out.push({ leadId: e.entity_id, tipo: e.type === 'incoming_chat_message' ? 'entrada' : 'saida', em: e.created_at, por: e.created_by ?? 0 });
+          }
+          if (evs.length < 100) break;
+        } catch (err) {
+          wrapAxiosError(err, `eventosDeChat(${lote.length}, p${page})`);
+        }
+      }
+    }
+    return out;
   }
 
   /** Modelos de mensagem da conta, com o status de aprovação na Meta. */
@@ -2023,9 +2152,30 @@ export class KommoClient {
     }
   }
 
-  async listLeadTags(): Promise<KommoTag[]> {
+  /**
+   * Etiquetas cujo nome contém `texto`. Listar todas não serve em conta com milhares de etiquetas de
+   * importação: em Imperatriz (4 unidades num Kommo só) as da campanha nem chegavam nas 12 primeiras páginas.
+   */
+  async buscarEtiquetas(texto: string, maxPaginas = 4): Promise<KommoTag[]> {
+    const out: KommoTag[] = [];
+    for (let page = 1; page <= maxPaginas; page++) {
+      try {
+        const { data } = await this.http.get<{ _embedded?: { tags?: KommoTag[] }; _links?: { next?: unknown } } | ''>('/leads/tags', {
+          params: { query: texto, page, limit: 250 },
+        });
+        const tags = (data && data._embedded?.tags) || [];
+        out.push(...tags);
+        if (!data || !data._links?.next || tags.length === 0) break;
+      } catch (err) {
+        wrapAxiosError(err, `buscarEtiquetas(${texto}, p${page})`);
+      }
+    }
+    return out;
+  }
+
+  async listLeadTags(maxPaginas = 4): Promise<KommoTag[]> {
     const all: KommoTag[] = [];
-    for (let page = 1; page <= 4; page++) {
+    for (let page = 1; page <= maxPaginas; page++) {
       try {
         const { data } = await this.http.get<{
           _embedded?: { tags?: KommoTag[] };

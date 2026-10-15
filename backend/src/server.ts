@@ -35,6 +35,7 @@ import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
 import { startParadosWorker, stopParadosWorker } from './lib/parados-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
+import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
 import { startBlingRenovacaoWorker, stopBlingRenovacaoWorker } from './lib/bling-renovacao-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
@@ -199,6 +200,7 @@ async function main(): Promise<void> {
       startUnidadePorCanalWorker();
       startLigacaoWhatsappWorker();
       startNaoLidasWorker();
+      startCampanhaWorker();
       startPreencheCamposWorker();
       startBlingRenovacaoWorker();
       iniciarVigiaDeQualidade();
@@ -209,6 +211,7 @@ async function main(): Promise<void> {
       stopUnidadePorCanalWorker();
       stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
+      stopCampanhaWorker();
       stopPreencheCamposWorker();
       stopBlingRenovacaoWorker();
       stopFranquiaSyncWorker();

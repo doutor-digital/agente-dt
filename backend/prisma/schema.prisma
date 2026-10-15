@@ -2148,3 +2148,21 @@ model BlingConexao {
 
   @@map("bling_conexoes")
 }
+
+/// Placar diário de campanha de disparo (Outubro Rosa…): uma foto por unidade por dia, com o placar de cada
+/// grupo de envio (1ª rodada, Dia 1, Dia 2…), as conversas de quem respondeu e a saúde do número. O `dados`
+/// guarda o que a página mostra; refazer a coleta no mesmo dia sobrescreve a foto.
+model CampanhaPlacar {
+  id           String   @id @default(cuid())
+  campanha     String
+  unidade      String
+  /// YYYY-MM-DD no fuso de São Paulo
+  dia          String
+  dados        Json
+  criadoEm     DateTime @default(now()) @map("criado_em")
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  @@unique([campanha, unidade, dia])
+  @@index([campanha, dia])
+  @@map("campanha_placar")
+}

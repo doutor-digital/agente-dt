@@ -175,6 +175,7 @@ import {
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
 import { blingAppHandler, blingAutorizarHandler, blingCallbackHandler, blingStatusHandler, blingTesteHandler } from '../controllers/bling.controller.js';
+import { campanhaColetarHandler, campanhaPainelHandler, campanhaPlacarHandler, campanhaTelaHandler } from '../controllers/campanha.controller.js';
 import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler,
   widgetSugestaoMotivoHandler,
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
@@ -398,6 +399,13 @@ apiRouter.put('/bling/:slug/app', requireAuth, requireSuperAdmin, blingAppHandle
 apiRouter.post('/bling/:slug/autorizar', requireAuth, requireSuperAdmin, blingAutorizarHandler);
 apiRouter.get('/bling/:slug/status', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), blingStatusHandler);
 apiRouter.get('/bling/:slug/teste', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), blingTesteHandler);
+
+// Placar das campanhas de disparo (Outubro Rosa…). Mostra primeiro nome de paciente: só chave de serviço ou
+// super-admin. Acima do requireAuth global, senão a chave nunca é lida.
+apiRouter.get('/campanhas/:id', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaPlacarHandler);
+apiRouter.get('/campanhas/:id/painel', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaPainelHandler);
+apiRouter.post('/campanhas/:id/coletar', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaColetarHandler);
+apiRouter.put('/campanhas/:id/tela', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaTelaHandler);
 
 apiRouter.use(requireAuth);
 
