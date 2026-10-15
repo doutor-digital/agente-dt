@@ -174,6 +174,7 @@ import {
   unitPausarHandler,
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
+import { blingAppHandler, blingAutorizarHandler, blingCallbackHandler, blingStatusHandler, blingTesteHandler } from '../controllers/bling.controller.js';
 import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler,
   widgetSugestaoMotivoHandler,
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
@@ -388,6 +389,14 @@ apiRouter.get('/relatorios/rede-diaria', chaveDeServicoOuSessao(requireAuth, req
 // Franquia + custo de WhatsApp do mês (alimenta o relatório mensal de CRM). SÓ LEITURA, mesma chave de serviço.
 apiRouter.get('/relatorios/mensal-rede', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), relatorioMensalRedeHandler);
 apiRouter.post('/campos/preencher', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), preencheCamposHandler);
+// Bling (ERP) da HM Tecnologia. O retorno da autorização é PÚBLICO (quem chega é o navegador do
+// administrador do Bling, com `code` e `state`); o resto é só SUPER_ADMIN, por sessão ou chave de serviço
+// — por isso tudo fica acima do requireAuth global.
+apiRouter.get('/bling/callback', blingCallbackHandler);
+apiRouter.put('/bling/:slug/app', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), blingAppHandler);
+apiRouter.post('/bling/:slug/autorizar', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), blingAutorizarHandler);
+apiRouter.get('/bling/:slug/status', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), blingStatusHandler);
+apiRouter.get('/bling/:slug/teste', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), blingTesteHandler);
 
 apiRouter.use(requireAuth);
 

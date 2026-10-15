@@ -36,6 +36,7 @@ import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache
 import { startParadosWorker, stopParadosWorker } from './lib/parados-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
+import { startBlingRenovacaoWorker, stopBlingRenovacaoWorker } from './lib/bling-renovacao-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
 import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
@@ -199,6 +200,7 @@ async function main(): Promise<void> {
       startLigacaoWhatsappWorker();
       startNaoLidasWorker();
       startPreencheCamposWorker();
+      startBlingRenovacaoWorker();
       iniciarVigiaDeQualidade();
     },
     parar: () => {
@@ -208,6 +210,7 @@ async function main(): Promise<void> {
       stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
       stopPreencheCamposWorker();
+      stopBlingRenovacaoWorker();
       stopFranquiaSyncWorker();
       stopCacheKeepaliveWorker();
       stopWhatsappCostScheduler();

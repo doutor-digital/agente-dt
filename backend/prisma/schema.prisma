@@ -352,6 +352,8 @@ model Unit {
   crmCompartilhado  UnitCrmCompartilhado? @relation("CrmCompartilhadoUnidade")
   /// Unidades que usam o Kommo DESTA (a dona da conta lista as irmãs aqui, inclusive ela mesma).
   crmMembros        UnitCrmCompartilhado[] @relation("CrmCompartilhadoConta")
+  /// Conexão com o Bling (ERP) — só a unidade que vende pelo Bling tem (HM Tecnologia). Ver `BlingConexao`.
+  blingConexao      BlingConexao?
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -2113,4 +2115,36 @@ model WhatsappLigacaoConfig {
   atualizadoEm      DateTime  @updatedAt @map("atualizado_em")
 
   @@map("whatsapp_ligacao_config")
+}
+
+/// Conexão de uma unidade com o Bling (ERP), pela API v3 com OAuth 2.0 — HM Tecnologia, 15/10/2026.
+///
+/// O aplicativo é criado no Bling da própria empresa (Área do Integrador); o Client ID e o Client Secret
+/// ficam aqui, nunca no código. Quem autoriza é um administrador do Bling, uma vez: o retorno cai em
+/// `/api/bling/callback`, que troca o código (vale 1 minuto) pelos tokens. O access token dura ~6 h e o
+/// refresh token 30 dias; o worker de renovação troca o par antes de vencer, então a conexão não cai.
+model BlingConexao {
+  unitId       String    @id @map("unit_id")
+  clientId     String    @map("client_id")
+  clientSecret String    @map("client_secret")
+  accessToken  String?   @map("access_token")
+  refreshToken String?   @map("refresh_token")
+  /// Quando o access token vence.
+  expiraEm     DateTime? @map("expira_em")
+  /// Quando o refresh token atual foi emitido (ele vale 30 dias a partir daqui).
+  refreshEm    DateTime? @map("refresh_em")
+  escopos      String?
+  /// `state` do OAuth em andamento (protege o retorno contra pedido forjado) e quando foi gerado.
+  estado       String?   @unique
+  estadoEm     DateTime? @map("estado_em")
+  conectadoEm  DateTime? @map("conectado_em")
+  conectadoPor String?   @map("conectado_por")
+  /// Último erro de troca/renovação, legível. Vazio = tudo certo.
+  ultimoErro   String?   @map("ultimo_erro")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @updatedAt @map("atualizado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@map("bling_conexoes")
 }
