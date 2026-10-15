@@ -96,3 +96,27 @@ describe('trilha.js — sem a movimentação pela franquia (0.5.0)', () => {
     assert.match(T.regraDaFranquia(false), /anda sozinho/);
   });
 });
+
+describe('trilha.js — 0.5.1: marcar pelo widget e o nome da unidade com acento', () => {
+  it('a regra da franquia ensina: paciente novo pelo widget, nunca direto na franquia; já cadastrado, os dois', () => {
+    for (const semRobo of [true, false]) {
+      const r = T.regraDaFranquia(semRobo);
+      assert.match(r, /^Paciente novo: cadastre e marque pelo widget "Assistente do cartão" do Kommo \(Cadastrar e marcar na franquia\), nunca direto na franquia\./);
+      assert.match(r, /Já cadastrado: marque na franquia ou pelo widget\./);
+      assert.match(r, /Dar baixa e lançar sessão se faz NA FRANQUIA/);
+    }
+    assert.match(T.acoesDaEtapa('EM ESPERA').join(' '), /widget "Assistente do cartão"/);
+  });
+
+  it('o nome da unidade: o mesmo texto, com acento, venha do cartão, da fila ou do /ping', () => {
+    const slug = 'doutor-hernia-petropolis';
+    for (const n of ['Petrópolis', 'Doutor Hérnia Petrópolis', 'Doutor Hernia - Petrópolis', '  Doutor Hérnia Petrópolis ']) {
+      assert.equal(T.nomeCurtoDaUnidade(n, slug), 'Petrópolis', n);
+    }
+    assert.equal(T.nomeCurtoDaUnidade('Doutor Hérnia Açailândia', 'doutor-hernia-acailandia'), 'Açailândia');
+    // nome que não diz a cidade (Imperatriz é "Comercial" no banco) ou vazio: o do slug, como o servidor faz
+    assert.equal(T.nomeCurtoDaUnidade('Comercial', 'doutor-hernia-imperatriz'), 'Imperatriz');
+    assert.equal(T.nomeCurtoDaUnidade('', 'doutor-hernia-petropolis'), 'Petropolis');
+    assert.equal(T.nomeDoSlug('doutor-hernia-rio-verde'), 'Rio Verde');
+  });
+});

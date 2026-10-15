@@ -77,7 +77,7 @@ function montar({ conversa = { aberta: false }, rotas = {}, guardado = {}, abrir
         get: (chaves) => Promise.resolve(Object.fromEntries((Array.isArray(chaves) ? chaves : [chaves]).filter((k) => k in armazenado).map((k) => [k, JSON.parse(JSON.stringify(armazenado[k]))]))),
         set: (o) => { Object.assign(armazenado, JSON.parse(JSON.stringify(o))); return Promise.resolve(); },
       },
-      onChanged: { addListener: () => {} },
+      onChanged: { addListener: (f) => { ouvintes.storage = f; } },
     },
     tabs: {
       query: () => Promise.resolve([{ id: 7 }]),
@@ -542,6 +542,151 @@ describe('painel — o guia "O que eu faço agora?" (0.4.0)', () => {
       await esperar();
       await esperar();
       assert.equal(tela.querySelector(`.guia__entrada[data-campo="${CAMPO_OBS.id}"]`).value, 'ligar depois das 17h');
+    } finally {
+      p.w.close();
+    }
+  });
+});
+
+// ── 0.5.1: o que o vídeo de Petrópolis e Caxias (unidades sem a Sofia) mostrou errado ──
+
+describe('painel — 0.5.1: nome da unidade, Sofia só com a IA e busca pelo telefone', () => {
+  const comTelefone = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5599900000043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
+  const soNome = { aberta: true, tipo: 'individual', chave: 'c1', nome: 'Maria Souza', impressoes: [] };
+
+  it('o nome da unidade vem do servidor, curto e com acento — nunca o do slug —, fica guardado, e a fila não o troca', async () => {
+    const p = montar({ rotas: { 'GET /ping': { ok: true, unidade: 'Doutor Hérnia Açailândia' }, 'GET /ponte/fila': { ...FILA, unidade: 'Doutor Hérnia Açailândia' } } });
+    try {
+      await esperar(10);
+      const topo = p.doc.getElementById('unidade');
+      assert.equal(topo.textContent, 'Açailândia');
+      assert.deepEqual(p.armazenado.unidadeVista, { slug: 'doutor-hernia-acailandia', nome: 'Açailândia' }, 'só o nome da unidade: nada de paciente');
+      p.doc.getElementById('aba-fila').click();
+      await esperar(10);
+      assert.equal(topo.textContent, 'Açailândia', 'a fila manda o nome inteiro, e o topo continua igual');
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('com o nome já guardado, o topo abre com ele e não pergunta de novo', async () => {
+    const p = montar({ guardado: { unidadeVista: { slug: 'doutor-hernia-acailandia', nome: 'Açailândia' } } });
+    try {
+      await esperar(10);
+      assert.equal(p.doc.getElementById('unidade').textContent, 'Açailândia');
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ping').length, 0);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('nome guardado de OUTRA unidade não vale; e o do slug (sem acento) só quando o servidor não responde', async () => {
+    const p = montar({ guardado: { unidadeVista: { slug: 'doutor-hernia-serra', nome: 'Serra' } } });
+    try {
+      await esperar(10);
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ping').length, 1);
+      assert.equal(p.doc.getElementById('unidade').textContent, 'Acailandia');
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('unidade SEM a IA: nem o rodapé, nem o modo aprendiz, nem o cartão falam da Sofia', async () => {
+    const p = montar({ conversa: comTelefone, rotas: { 'POST /ponte/cartao': { ...cartaoDe(123, 'Maria'), sofiaNaUnidade: false } } });
+    try {
+      await esperar(600);
+      assert.equal(p.doc.getElementById('rodape-pausa').hidden, true);
+      assert.doesNotMatch(p.doc.getElementById('aprendiz').textContent, /Sofia/);
+      assert.doesNotMatch(p.doc.getElementById('conteudo').textContent, /Sofia/);
+      assert.equal(p.armazenado.unidadeVista.sofia, false);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('antes de saber (nenhum cartão ainda): sem Sofia; unidade COM a IA: o rodapé e a dica da pausa aparecem', async () => {
+    const p = montar({ conversa: comTelefone, rotas: { 'POST /ponte/cartao': { ...cartaoDe(123, 'Maria'), sofiaNaUnidade: true } } });
+    try {
+      await esperar(10);
+      assert.equal(p.doc.getElementById('rodape-pausa').hidden, true, 'ainda não sei se a unidade tem a IA');
+      await esperar(600);
+      assert.equal(p.doc.getElementById('rodape-pausa').hidden, false);
+      assert.match(p.doc.getElementById('aprendiz').textContent, /Pausar a Sofia/);
+      assert.equal(p.armazenado.unidadeVista.sofia, true);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('a busca manual: nome vai como nome; telefone com DDD vai como telefone; e o cartão achado assim é relido pelo id', async () => {
+    const p = montar({
+      conversa: soNome,
+      rotas: {
+        'POST /ponte/cartao': (c) => (c.telefone === '24999991234' || c.lead === 123 ? cartaoDe(123, 'Maria') : { achado: false }),
+        'GET /ponte/guia': guiaDe(123),
+        'POST /ponte/campos': (c) => ({ leadId: c.leadId, gravados: [{ nome: '✎ Observações', texto: 'x' }], iguais: [], nota: true, guia: guiaDe(123, { faltam: [] }) }),
+      },
+    });
+    const buscar = (texto) => {
+      const tela = p.doc.getElementById('conteudo');
+      tela.querySelector('.busca__campo').value = texto;
+      tela.querySelector('form.busca').dispatchEvent(new p.w.Event('submit', { cancelable: true }));
+    };
+    const ultimaBusca = () => p.pedidos.filter((x) => x.caminho === '/ponte/cartao').pop().corpo;
+    try {
+      await esperar(600);
+      buscar('Maria Souza');
+      await esperar(10);
+      assert.deepEqual(ultimaBusca(), { nome: 'Maria Souza', manual: true });
+      // não achou: o número digitado volta na caixa (para corrigir, não redigitar)
+      buscar('(24) 99999-0000');
+      await esperar(10);
+      assert.deepEqual(ultimaBusca(), { telefone: '24999990000' });
+      assert.equal(p.doc.querySelector('#conteudo .busca__campo').value, '(24) 99999-0000');
+      buscar('(24) 99999-1234');
+      await esperar(10);
+      assert.deepEqual(ultimaBusca(), { telefone: '24999991234' });
+      const tela = p.doc.getElementById('conteudo');
+      assert.match(tela.textContent, /MARIA SOUZA/);
+
+      // gravou pelo guia e voltou: relê o MESMO cartão pelo id (a conversa só tem o nome, que não acha)
+      tela.querySelector('[data-acao="abrir-guia"]').click();
+      await esperar(10);
+      digitarNoPainel(p.doc, CAMPO_OBS.id, 'x');
+      tela.querySelector('[data-acao="revisar-campos"]').click();
+      tela.querySelector('[data-passo="faltam"] [data-acao="confirmar"]').click();
+      await esperar(10);
+      tela.querySelector('[data-acao="voltar-guia"]').click();
+      await esperar(10);
+      assert.deepEqual(ultimaBusca(), { lead: 123 });
+      assert.match(tela.textContent, /MARIA SOUZA/);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('a resposta que chega DEPOIS de trocar a unidade nas opções não vale para a nova (nem o nome, nem a Sofia)', async () => {
+    const p = montar({ conversa: comTelefone });
+    const pendentes = [];
+    const orig = p.w.fetch;
+    p.w.fetch = (url, init) => (String(url).includes('/ponte/cartao')
+      ? new Promise((r) => pendentes.push(() => r({ ok: true, status: 200, json: () => Promise.resolve({ ...cartaoDe(123, 'Maria'), sofiaNaUnidade: true, unidadeDaConta: 'Açailândia' }) })))
+      : orig(url, init));
+    try {
+      await esperar(600);
+      assert.equal(pendentes.length, 1, 'o cartão da Açailândia está a caminho');
+      // a atendente troca a unidade nas opções antes de ele chegar; a aba do WhatsApp demora a responder (a janela
+      // entre a configuração nova e a conversa ser perguntada de novo)
+      p.w.chrome.tabs.query = () => new Promise((r) => setTimeout(() => r([{ id: 7 }]), 80));
+      p.armazenado.slug = 'doutor-hernia-petropolis';
+      p.ouvintes.storage({ slug: { newValue: 'doutor-hernia-petropolis' } }, 'local');
+      await esperar(10);
+      pendentes[0]();
+      await esperar(10);
+      assert.notEqual(p.doc.getElementById('unidade').textContent, 'Açailândia');
+      assert.equal(p.doc.getElementById('rodape-pausa').hidden, true);
+      const vista = p.armazenado.unidadeVista;
+      assert.ok(!vista || vista.slug !== 'doutor-hernia-petropolis' || (vista.nome !== 'Açailândia' && vista.sofia !== true), JSON.stringify(vista));
     } finally {
       p.w.close();
     }

@@ -1,6 +1,6 @@
 # Ponte — o cartão do Kommo ao lado da conversa no WhatsApp Web
 
-Extensão do Chrome (e do Firefox), **versão 0.5.0 — visual novo**. Com uma conversa aberta no WhatsApp Web, o
+Extensão do Chrome (e do Firefox), **versão 0.5.1 — textos da unidade sem IA** (sobre a 0.5.0, visual novo). Com uma conversa aberta no WhatsApp Web, o
 painel lateral mostra o cartão do Kommo daquele paciente, mastigado para quem não conhece o Kommo:
 
 - **quem é**: nome, telefone, o selo colorido da **unidade** (o `⌂ Unidade de atendimento`; vazio na conta de duas
@@ -9,8 +9,8 @@ painel lateral mostra o cartão do Kommo daquele paciente, mastigado para quem n
 - **onde está o cartão** (novo na 0.5.0): a **trilha do funil**, com a etapa atual acesa, há quanto tempo ele está nela
   e de quem é a etapa — **azul = é sua**, **dourado = anda sozinha pela franquia** —, e o que vem depois;
 - **O que é seu agora** (0.5.0): de 1 a 3 ações para a etapa e o botão **O que eu faço agora?** (o guia da 0.4.0); e,
-  logo abaixo, **O que é da franquia**: "Agendar, dar baixa e lançar sessão se faz NA FRANQUIA; o cartão anda sozinho
-  aqui";
+  logo abaixo, **O que é da franquia**: como marcar a consulta (0.5.1: paciente novo pelo widget "Assistente do cartão",
+  nunca direto na franquia) e "Dar baixa e lançar sessão se faz NA FRANQUIA; o cartão anda sozinho aqui";
 - **Na franquia** (0.5.0): próxima consulta (dia da semana, data, hora, fisioterapeuta, "amanhã"), última consulta
   (veio ou faltou), tratamento, **sessões** (feitas, faltas, marcadas e a próxima) e alta — ou "Sem cadastro na
   franquia", com clareza;
@@ -26,6 +26,73 @@ E, no ícone da extensão, **quantos pacientes estão esperando resposta** (0.4.
 
 Também tem um bloco "Modo aprendiz", que diz onde cada coisa fica dentro do Kommo. Por enquanto ele é fixo; uma
 fase futura vai escolher qual dica mostrar e quando.
+
+## O que há de novo na 0.5.1 (textos da unidade sem IA)
+
+A Ponte vai aparecer no vídeo de treinamento de **Petrópolis e Caxias**, que não têm a Sofia. As telas da 0.5.0 mostraram
+textos errados para essas unidades. O que mudou (o resto funciona igual):
+
+1. **Sofia só onde há Sofia.** O rodapé fixo dizia "pausa da Sofia" em toda unidade; agora o trecho só aparece quando o
+   servidor diz que a unidade tem a IA (`sofiaNaUnidade: true`, a mesma marca que já escondia o bloco da Sofia). Sem
+   saber ainda (antes do 1º cartão), não aparece. A dica "Pausar a Sofia" do modo aprendiz segue a mesma regra
+   (`quando: 'com-ia'`, `dicasPara` em `aprendiz.js`), e a página de opções ficou neutra ("…etiqueta, ligação, campo,
+   mudança de etapa ou pausa"). No guia (servidor), a dica da ◷ Data da Consulta não fala mais "pela Sofia".
+2. **Fila de ligações sem espera.** O cabeçalho dizia "Uma conversa a cada 0 s" (desde a 0.5.0 não há espera). Agora:
+   "Sem espera entre uma ligação e outra · no máximo 40 por hora, para o número não parecer spam e ficar protegido."
+   Com um intervalo configurado no servidor (`PONTE_LIGACAO_INTERVALO_S`), volta a dizer "Uma conversa a cada N s"
+   (`textoDoRitmo`, em `ligacao.js`).
+3. **O nome da unidade com acento, sem piscar.** O topo abria com o nome tirado do slug ("Petropolis") e trocava para
+   o do servidor ("Petrópolis") quando o cartão chegava — e de novo a cada mudança nas opções; a fila mandava o nome
+   inteiro do banco. Agora o nome vem sempre do servidor (cartão, fila ou `/ping`), passa pelo mesmo
+   `nomeCurtoDaUnidade` (`trilha.js`, igual ao do servidor) e fica guardado. O do slug só aparece se o servidor não
+   responder.
+4. **Fila de hoje com Petrópolis e Caxias misturadas: NÃO mudou nesta versão** (precisa de decisão; ver "Em aberto",
+   abaixo).
+5. **Marcar consulta pelo widget.** A regra dourada ("O que é da franquia"), o "Sem cadastro na franquia", a ação de EM
+   ESPERA, a dica do guia e o modo aprendiz agora dizem: paciente **novo** se cadastra e marca pelo widget
+   **"Assistente do cartão"** do Kommo (**Cadastrar e marcar na franquia**), **nunca direto na franquia**; paciente já
+   cadastrado marca na franquia ou pelo widget. Dar baixa e lançar sessão continuam sendo NA FRANQUIA. O "Sem cadastro na
+   franquia" diz "A franquia não achou este paciente" e pede para conferir antes quem pode ter cadastro com outro nome ou
+   telefone (não achar não é não existir: cadastrar de novo duplicaria o paciente).
+6. **Busca pelo telefone.** Sem a Sofia, a Ponte só achava o cartão pelo nome: o passo do telefone só roda quando o
+   WhatsApp mostra o número (conversa `@c.us` ou contato não salvo) — e a maioria hoje é `@lid`, que esconde o número —,
+   e o passo das mensagens depende do que a Sofia guardou. A busca manual mandava tudo como nome (e o servidor pula o
+   telefone na busca manual). Agora, se a atendente digitar um **telefone com DDD** (10 a 15 dígitos, com ou sem
+   `+55`, parênteses, espaço, hífen), a busca vai pelo telefone — o mesmo passo da conversa com número, que confere o
+   final e o DDD — sem mudar nada no servidor. Número do Brasil: fixo com 10 dígitos ou celular com 11 e o 9 depois do
+   DDD (um CPF não passa por telefone); com `+` de fora, de 10 a 15. Sem o DDD (8 ou 9 dígitos), o painel pede o DDD em
+   vez de buscar pelo nome (que nunca acharia). Não achou: o que foi digitado volta na caixa. O cartão achado pelo
+   telefone digitado é relido pelo id ao voltar do guia, como o achado pelo nome.
+
+**O que fica guardado a mais** (`chrome.storage.local`, chave `unidadeVista`): o slug, o nome da unidade e se ela tem a
+Sofia. Nada de paciente.
+
+### Em aberto: a Fila de hoje da conta de duas unidades
+
+A fila é montada **por conta do Kommo** (cache de 2 min por conta), e Petrópolis e Caxias dividem a conta
+`doutorhernialvp`. Caxias não tem credencial do Kommo (pede a conta da dona, `contaDoKommo`), então a Ponte das duas é
+configurada com o slug de **Petrópolis**: o painel não sabe de qual unidade é a atendente. Separar pede:
+
+- **decidir de onde vem "a minha unidade"**: uma opção nova na extensão (Petrópolis / Caxias / as duas) ou aceitar o
+  slug de Caxias na Ponte (as rotas usariam a conta da dona);
+- **decidir o que fazer com o cartão de ⌂ Unidade de atendimento VAZIO**: aparece para as duas, num grupo "sem
+  unidade", ou para ninguém;
+- no servidor: ler o ⌂ de cada cartão da fila (`valorDaUnidadeNoCartao`), filtrar **antes** de cortar cada grupo em 30
+  (`montarGrupos`), guardar o cache por unidade (não só por conta) e aplicar o mesmo filtro ao número do ícone
+  (`contarSemResposta`), para os dois baterem.
+
+Não é um conserto pequeno: ficou para o João decidir.
+
+### A conferir no dia de teste (0.5.1)
+
+- [ ] em Petrópolis: o rodapé, o cartão, o guia e o modo aprendiz sem "Sofia"; numa unidade com a Sofia (Açailândia),
+      o rodapé volta a dizer "a pausa da Sofia" depois do 1º cartão;
+- [ ] o topo mostra "Petrópolis" desde a abertura do painel (e não "Petropolis");
+- [ ] "Começar a ligar": o cabeçalho diz "Sem espera entre uma ligação e outra · no máximo 40 por hora…";
+- [ ] a busca manual com o telefone de um paciente de teste (com DDD) acha o cartão;
+- [ ] se o bloco da Sofia ainda aparecer em Petrópolis: o servidor diz `sofiaNaUnidade: true` para ela (a conta é
+      "tem campo de entrega + chave do modelo"; com o provedor padrão `openai`, a chave do `.env` conta) — conferir a
+      configuração da unidade.
 
 ## O que há de novo na 0.5.0 (visual novo)
 
@@ -433,7 +500,7 @@ passos, nesta ordem, parando no primeiro que achar:
    ninguém. Só funciona em unidade com a Sofia.
 3. **Nome do cabeçalho.** Busca por texto no Kommo. Se mais de um contato casar, o painel mostra a lista e a
    atendente escolhe.
-4. **Nada.** O painel mostra a busca manual por nome.
+4. **Nada.** O painel mostra a busca manual, por nome ou (0.5.1) por telefone com DDD.
 
 ### A impressão (o texto não sai do navegador)
 
@@ -479,7 +546,8 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
 - marca como "sem telefone" quem só não teve o telefone lido agora;
 - junta (mescla) ou apaga cartão: o aviso de duplicado só avisa;
 - guarda nome ou telefone de paciente no `storage` (a fila de ligações guarda só ids e horas; o contador, só o último
-  total e o slug; o que foi digitado no guia fica só na memória do painel);
+  total e o slug; na 0.5.1, o nome da unidade e se ela tem a Sofia; o que foi digitado no guia fica só na memória do
+  painel);
 - muda a etapa sem a atendente confirmar, com um obrigatório do destino vazio, para GANHO, para o funil TRATAMENTO,
   para uma etapa que não é saída da etapa atual, ou com a unidade de atendimento vazia (na conta de duas unidades);
 - grava campo da franquia, de robô, "Apenas API" ou cabeçalho (`##…`, `*…*`), ou troca a unidade de atendimento já
@@ -564,6 +632,12 @@ npm test            # node --test 'testes/*.test.js'
   dado do servidor como texto nos campos novos e as respostas sugeridas; `respostas.test.js`, o casamento pelo nome e
   os modelos de unidade; e `painel.test.js`, o "abrir sem recarregar" (abriu: só traz a aba para a frente, sem URL;
   não abriu ou script antigo: o jeito antigo, com o aviso no console; chave desligada: direto pelo jeito antigo).
+- na 0.5.1: `desenho.test.js` — nada de "Sofia" no cartão da unidade sem IA, o modo aprendiz com e sem a IA, a regra
+  dourada e o "Sem cadastro" com o widget, o cabeçalho "Sem espera…" e a busca que reconhece o telefone;
+  `ligacao.test.js` — `textoDoRitmo` sem e com intervalo; `trilha.test.js` — a regra do widget e `nomeCurtoDaUnidade`;
+  `painel.test.js` — o topo com o nome do servidor (e guardado; o do slug só sem resposta), a fila que não troca o nome,
+  o rodapé e o modo aprendiz só com a IA, e a busca manual por nome × por telefone (relida pelo id ao voltar do guia).
+  No backend, `ponte-guia.test.ts` confere a dica da ◷ Data da Consulta (widget, sem Sofia).
 
 Na 0.5.0, no backend: `ponte-painel.test.ts` (o selo da unidade nas contas de uma e de duas unidades, o nome curto —
 "Comercial" cai no slug —, o `franquiaAndaSozinha` com as duas automações pela tela e pelo `.env`, da unidade do cartão

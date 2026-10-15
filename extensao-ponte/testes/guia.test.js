@@ -13,7 +13,7 @@ const ESPERA = { id: 2454156, nome: '⊘ Motivo da espera', tipo: 'lista', opcoe
 const RETOMAR = { id: 2454154, nome: '◷ Retomar em', tipo: 'data', obrigatorio: true, editavel: true, quem: 'sdr', valor: null };
 const OBS = { id: 2449924, nome: '✎ Observações', tipo: 'texto-longo', obrigatorio: false, editavel: true, quem: 'sdr', valor: null };
 const QUALI = { id: 2449912, nome: '★ Qualificação (Quente/Morno/Frio)', tipo: 'lista', opcoes: [{ id: 1845412, valor: 'Quente' }, { id: 1845414, valor: 'Morno' }], obrigatorio: false, editavel: true, quem: 'sdr', valor: null };
-const DATA_CONSULTA = { id: 2449934, nome: '◷ Data da Consulta', tipo: 'data', obrigatorio: true, editavel: false, quem: 'franquia', dica: 'Marque a consulta primeiro (na franquia, no widget do Kommo ou pela Sofia): a data entra sozinha no cartão.', valor: null };
+const DATA_CONSULTA = { id: 2449934, nome: '◷ Data da Consulta', tipo: 'data', obrigatorio: true, editavel: false, quem: 'franquia', dica: 'Marque a consulta primeiro: a data entra sozinha no cartão. Paciente novo: pelo widget "Assistente do cartão" do Kommo, em "Cadastrar e marcar na franquia" — nunca direto na franquia. Já cadastrado: na franquia ou pelo widget.', valor: null };
 const MOTIVO = { id: 2449942, nome: '⊘ Motivo do não agendamento', tipo: 'lista', opcoes: [{ id: 1845472, valor: 'Sem interesse' }], obrigatorio: true, editavel: true, quem: 'sdr', valor: null };
 const VALOR = { id: 2449930, nome: '¤ Valor da Consulta', tipo: 'dinheiro', obrigatorio: false, editavel: true, quem: 'sdr', valor: null };
 

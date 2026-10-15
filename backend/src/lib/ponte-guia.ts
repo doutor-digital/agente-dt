@@ -503,8 +503,17 @@ export interface GuiaDoCartao {
   avisoDosRobos: string;
 }
 
+/**
+ * Como marcar a consulta (0.5.1, a regra do João): paciente NOVO se cadastra e marca pelo widget "Assistente do cartão"
+ * do Kommo ("Cadastrar e marcar na franquia"), NUNCA direto na franquia; paciente já cadastrado marca na franquia ou pelo
+ * widget. Sem falar da Sofia: a dica é do que a ATENDENTE faz, e o mesmo guia serve à unidade sem IA (Petrópolis, Caxias).
+ */
+export const COMO_MARCAR_A_CONSULTA =
+  'Paciente novo: pelo widget "Assistente do cartão" do Kommo, em "Cadastrar e marcar na franquia" — nunca direto na franquia. ' +
+  'Já cadastrado: na franquia ou pelo widget.';
+
 const DICA_DA_FRANQUIA: Readonly<Record<string, string>> = Object.freeze({
-  [normalizarNome(CAMPOS_SYNC.DATA_CONSULTA)]: 'Marque a consulta primeiro (na franquia, no widget do Kommo ou pela Sofia): a data entra sozinha no cartão.',
+  [normalizarNome(CAMPOS_SYNC.DATA_CONSULTA)]: `Marque a consulta primeiro: a data entra sozinha no cartão. ${COMO_MARCAR_A_CONSULTA}`,
 });
 
 function campoDoGuia(d: DefinicaoDeCampo, lead: CartaoDoGuia, tz: string, obrigatorio: boolean, dicaFixa?: string): CampoDoGuia {
@@ -588,7 +597,7 @@ function dataNoPassado(defs: ReadonlyArray<DefinicaoDeCampo>, saida: SaidaDaEtap
 }
 
 function dicaDaDataNoPassado(d: DefinicaoDeCampo, lead: CartaoDoGuia, tz: string): string {
-  return `A data do cartão (${textoDoValor(d, valoresDe(lead, d.id), tz) ?? '?'}) já passou: marque a nova consulta primeiro (na franquia, no widget do Kommo ou pela Sofia) e a data nova entra sozinha.`;
+  return `A data do cartão (${textoDoValor(d, valoresDe(lead, d.id), tz) ?? '?'}) já passou: marque a nova consulta primeiro, e a data nova entra sozinha. ${COMO_MARCAR_A_CONSULTA}`;
 }
 
 /** Os dois campos ⊘ em que fica o motivo do PERDIDO (antes e depois da consulta). */

@@ -150,6 +150,18 @@ describe('ligação — o ritmo', () => {
   });
 });
 
+describe('ligação — 0.5.1: o texto do ritmo', () => {
+  it('sem espera (o padrão): diz que não há espera, e o teto por hora vem com o porquê', () => {
+    assert.equal(L.textoDoRitmo({ intervaloS: 0, tetoPorHora: 40 }), 'Sem espera entre uma ligação e outra · no máximo 40 por hora, para o número não parecer spam e ficar protegido.');
+    assert.equal(L.textoDoRitmo(undefined), L.textoDoRitmo(L.RITMO_PADRAO), 'servidor antigo: o padrão');
+    assert.doesNotMatch(L.textoDoRitmo(L.RITMO_PADRAO), /a cada 0 s/);
+  });
+
+  it('com intervalo no servidor (PONTE_LIGACAO_INTERVALO_S): o intervalo e o teto', () => {
+    assert.equal(L.textoDoRitmo({ intervaloS: 40, tetoPorHora: 30 }), 'Uma conversa a cada 40 s · no máximo 30 por hora, para o número não parecer spam e ficar protegido.');
+  });
+});
+
 describe('ligação — a tela', () => {
   const RITMO = { intervaloS: 40, tetoPorHora: 40 };
   const base = { item: item(3), posicao: 2, total: 4, pulados: [], ritmo: RITMO, msg: '' };

@@ -256,6 +256,10 @@ describe('guia da Ponte — campo obrigatório faltando bloqueia o mover', () =>
     const data = agendado.faltam.find((c) => c.nome === '◷ Data da Consulta')!;
     assert.equal(data.editavel, false);
     assert.match(data.dica ?? '', /Marque a consulta primeiro/);
+    // 0.5.1: paciente novo pelo widget, nunca direto na franquia — e sem falar da Sofia (o guia serve à unidade sem IA)
+    assert.match(data.dica ?? '', /Paciente novo: pelo widget "Assistente do cartão" do Kommo, em "Cadastrar e marcar na franquia" — nunca direto na franquia\./);
+    assert.match(data.dica ?? '', /Já cadastrado: na franquia ou pelo widget\./);
+    assert.doesNotMatch(data.dica ?? '', /Sofia/);
     assert.match(agendado.bloqueio ?? '', /Ainda não dá para mover: ◷ Data da Consulta/);
 
     const k = kommoFalso(cartao(ST.qualificacao));
@@ -276,6 +280,8 @@ describe('guia da Ponte — consulta que já passou não serve para AGENDADO', (
     const remarcou = g.saidas.find((x) => x.nome === 'AGENDADO')!;
     assert.equal(remarcou.rotulo, 'Remarcou a consulta');
     assert.match(remarcou.bloqueio ?? '', /\(13\/10\/2026\) já passou: marque a nova consulta primeiro/);
+    assert.match(remarcou.bloqueio ?? '', /pelo widget "Assistente do cartão"/);
+    assert.doesNotMatch(remarcou.bloqueio ?? '', /Sofia/);
     const k = kommoFalso(lead);
     const r = await moverPelaPonte(conta({ agora: AGORA }), k, mover(ST.naoCompareceu, ST.agendado));
     assert.ok(!r.ok && r.status === 422);

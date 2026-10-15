@@ -36,7 +36,7 @@
   /** O mesmo padrão do servidor; vale quando a fila veio sem `ritmo` (servidor antigo). */
   var RITMO_PADRAO = { intervaloS: 0, tetoPorHora: 40 };
 
-  /** O ritmo que vale: o do servidor, com as mesmas travas (intervalo ≥ 15 s, teto entre 1 e 120 por hora). */
+  /** O ritmo que vale: o do servidor, com as mesmas travas (intervalo ≥ 0 s, teto entre 1 e 120 por hora). */
   function ritmoDe(r) {
     var i = Number(r && r.intervaloS);
     var t = Number(r && r.tetoPorHora);
@@ -169,6 +169,18 @@
     return { em: em, motivo: motivo };
   }
 
+  /**
+   * 0.5.1: o cabeçalho do modo ligação. Sem espera (o padrão desde a 0.5.0), "Uma conversa a cada 0 s" parecia defeito:
+   * diz que não há espera. O teto por hora continua explicado — é ele que protege o número de parecer spam.
+   */
+  function textoDoRitmo(ritmo) {
+    var r = ritmoDe(ritmo);
+    var porque = 'no máximo ' + r.tetoPorHora + ' por hora, para o número não parecer spam e ficar protegido.';
+    return r.intervaloS > 0
+      ? 'Uma conversa a cada ' + r.intervaloS + ' s · ' + porque
+      : 'Sem espera entre uma ligação e outra · ' + porque;
+  }
+
   /** "próximo em 25 s", "próximo em 3 min". */
   function textoDaEspera(ms) {
     var s = Math.max(0, Math.ceil(ms / 1000));
@@ -193,5 +205,6 @@
     registrarAbertura: registrarAbertura,
     quandoPodeAbrir: quandoPodeAbrir,
     textoDaEspera: textoDaEspera,
+    textoDoRitmo: textoDoRitmo,
   });
 });

@@ -18,6 +18,10 @@
  * sozinha pela franquia, as duas cores do logo da Doutor Digital), "O que é seu agora" × "O que é da franquia", o
  * cartão "Na franquia" (consulta, última consulta, tratamento, sessões e alta) e, na aba Respostas, as sugeridas para a
  * etapa. Ícones em SVG desenhado aqui (`icones.js`); as regras da etapa ficam em `trilha.js`.
+ *
+ * 0.5.1: "Sem cadastro na franquia" ensina a marcar pelo widget "Assistente do cartão"; o cabeçalho do modo ligação diz
+ * "Sem espera entre uma ligação e outra" (`L.textoDoRitmo`); e a busca manual aceita o TELEFONE com DDD
+ * (`telefoneDaBusca`), além do nome — na unidade sem a Sofia, a conversa `@lid` só achava o cartão pelo nome.
  */
 (function (raiz, fabrica) {
   var cjs = typeof module === 'object' && module.exports;
@@ -431,7 +435,10 @@
       corpo.push(el(doc, 'div', { classe: 'fq__vazio', dados: { papel: 'sem-cadastro' } },
         el(doc, 'span', { classe: 'fq__vazio-icone' }, ic(doc, 'franquia')),
         el(doc, 'p', { classe: 'fq__vazio-titulo' }, 'Sem cadastro na franquia'),
-        el(doc, 'p', { classe: 'fq__vazio-texto' }, 'Este paciente ainda não tem cadastro na franquia. Quando a consulta for marcada lá, ela aparece aqui' +
+        // 0.5.1: "não achou" não é "não existe" (cadastro com outro nome ou telefone): confere antes de cadastrar de novo
+        el(doc, 'p', { classe: 'fq__vazio-texto' }, 'A franquia não achou este paciente. Paciente novo: cadastre e marque pelo widget "Assistente do cartão" do Kommo ' +
+          '(Cadastrar e marcar na franquia), nunca direto na franquia. Se ele já tem cadastro com outro nome ou telefone, confira na franquia antes. ' +
+          'Marcada a consulta, ela aparece aqui' +
           (r.franquiaAndaSozinha === false ? '.' : ' e o cartão anda sozinho para AGENDADO.'))));
     } else {
       var ag = f.agenda || {};
@@ -873,18 +880,52 @@
       buscaManual(doc, acoes));
   }
 
+  /** Só dígitos e os sinais de telefone (+, espaço, parênteses, hífen, ponto)? */
+  function soSinaisDeTelefone(texto) {
+    return /^\+?[\d\s().-]+$/.test(String(texto == null ? '' : texto).trim());
+  }
+
+  /**
+   * 0.5.1: o que a atendente digitou na busca é um TELEFONE com DDD? Devolve só os dígitos (o servidor confere o final e
+   * o DDD, como no passo do telefone da conversa), ou `null` — e aí a busca é pelo nome, como sempre. Número do Brasil
+   * (com ou sem o 55): fixo com 10 dígitos, ou celular com 11 e o 9 depois do DDD (um CPF de 11 dígitos não passa por
+   * telefone). Com "+" na frente (de fora): de 10 a 15 dígitos.
+   */
+  function telefoneDaBusca(texto) {
+    var t = String(texto == null ? '' : texto).trim();
+    if (!soSinaisDeTelefone(t)) return null;
+    var d = t.replace(/\D+/g, '');
+    if (t.charAt(0) === '+' && !/^55/.test(d)) return d.length >= 10 && d.length <= 15 ? d : null;
+    var n = (d.length === 12 || d.length === 13) && /^55/.test(d) ? d.slice(2) : d;
+    if (!/^[1-9][1-9]/.test(n)) return null; // DDD não tem zero
+    if (n.length === 10 || (n.length === 11 && n.charAt(2) === '9')) return d;
+    return null;
+  }
+
+  /** Parece telefone, mas sem o DDD (8 ou 9 dígitos)? A busca pelo nome nunca acharia: o painel pede o DDD. */
+  function telefoneSemDdd(texto) {
+    var d = String(texto == null ? '' : texto).replace(/\D+/g, '');
+    return soSinaisDeTelefone(texto) && (d.length === 8 || d.length === 9);
+  }
+
   function buscaManual(doc, acoes, valorInicial) {
     var campo = el(doc, 'input', { classe: 'busca__campo', tipo: 'search' });
-    campo.placeholder = 'Nome do paciente no Kommo';
+    campo.placeholder = 'Nome ou telefone (com DDD)';
     campo.value = valorInicial || '';
-    campo.setAttribute('aria-label', 'Nome do paciente no Kommo');
+    campo.setAttribute('aria-label', 'Nome ou telefone do paciente no Kommo');
+    var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-busca' } });
     var form = el(doc, 'form', { classe: 'busca' }, campo, el(doc, 'button', { classe: 'botao', tipo: 'submit' }, 'Buscar'));
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
       var t = campo.value.trim();
+      msg.textContent = '';
+      if (t && telefoneSemDdd(t)) {
+        msg.textContent = 'Digite o telefone com o DDD (ex.: 24 99999-1234).';
+        return;
+      }
       if (t && acoes && acoes.buscar) acoes.buscar(t);
     });
-    return form;
+    return el(doc, 'div', { classe: 'busca__bloco' }, form, msg);
   }
 
   /** Nada achado: a busca manual. */
@@ -892,8 +933,8 @@
     return el(doc, 'section', { classe: 'nada', dados: { estado: 'nada' } },
       el(doc, 'p', { classe: 'aviso__titulo' }, 'Não achei o cartão desta conversa'),
       el(doc, 'p', { classe: 'aviso__texto' }, r && r.incompleto
-        ? 'O Kommo não respondeu a tudo agora. Tente buscar pelo nome:'
-        : 'Busque pelo nome do paciente:'),
+        ? 'O Kommo não respondeu a tudo agora. Tente buscar pelo nome ou pelo telefone:'
+        : 'Busque pelo nome ou pelo telefone (com DDD) do paciente:'),
       buscaManual(doc, acoes, nomeDaConversa));
   }
 
@@ -1010,7 +1051,7 @@
     var topo = el(doc, 'div', { classe: 'fila__topo' },
       el(doc, 'div', null,
         el(doc, 'p', { classe: 'aviso__titulo' }, v.fase === 'fim' ? 'Fila de ligações' : 'Ligando · ' + v.posicao + ' de ' + v.total),
-        el(doc, 'p', { classe: 'nota' }, 'Uma conversa a cada ' + v.ritmo.intervaloS + ' s, no máximo ' + v.ritmo.tetoPorHora + ' por hora.')),
+        el(doc, 'p', { classe: 'nota', dados: { papel: 'ritmo' } }, L.textoDoRitmo(v.ritmo))),
       v.fase === 'pausado' ? botaoAcao(doc, 'Continuar', 'continuar-ligacao') : null,
       v.fase === 'esperando' ? botaoAcao(doc, 'Pausar', 'pausar-ligacao') : null,
       botaoAcao(doc, 'Sair', 'sair-ligacao'));
@@ -1476,6 +1517,7 @@
     respostas: respostas,
     guia: guia,
     urlDaConversa: urlDaConversa,
+    telefoneDaBusca: telefoneDaBusca,
     relativo: relativo,
     textoDaPausa: textoDaPausa,
     COMO: COMO,

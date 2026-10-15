@@ -33,11 +33,19 @@
  *   - a aba Respostas recebe a etapa e a unidade do cartão da tela (as sugeridas e os modelos de outra unidade);
  *   - "Abrir conversa" e "Começar a ligar" abrem pelo link wa.me da Ponte, sem recarregar (`abrir.js`, no content
  *     script); se não abrir, o jeito antigo (troca a URL). A chave fica nas opções (`semRecarregar`, ligada).
+ *
+ * 0.5.1 (textos da unidade sem IA):
+ *   - o nome da unidade no topo vem SEMPRE do servidor, curto e com acento ("Petrópolis"): o do cartão, o da fila e o do
+ *     `/ping` passam pelo mesmo `nomeCurtoDaUnidade`, e o último fica guardado (`unidadeVista`: slug, nome e se a unidade
+ *     tem a Sofia — nada de paciente). O nome tirado do slug ("Petropolis") só aparece se o servidor não responder;
+ *   - a Sofia só aparece no rodapé e no modo aprendiz quando o servidor disse que a unidade tem a IA (`sofiaNaUnidade`);
+ *   - a busca manual com um telefone (com DDD) procura pelo telefone; o resto, pelo nome.
  */
 (function () {
   'use strict';
   var D = self.PonteDesenho;
   var A = self.PonteAprendiz;
+  var T = self.PonteTrilha;
   var P = self.PontePausa;
   var L = self.PonteLigacao;
   var BASE = self.PONTE_CONFIG.BASE;
@@ -52,12 +60,18 @@
   var raizRespostas = document.getElementById('respostas');
   var blocoAprendizRaiz = document.getElementById('aprendiz');
   var rotuloUnidade = document.getElementById('unidade');
+  var rodapePausa = document.getElementById('rodape-pausa');
   var botoesAba = {
     conversa: document.getElementById('aba-conversa'),
     fila: document.getElementById('aba-fila'),
     respostas: document.getElementById('aba-respostas'),
   };
   var config = null;
+  /**
+   * 0.5.1: o que o servidor disse da unidade configurada — `{ slug, nome, sofia }` (o nome com acento e se ela tem a
+   * Sofia). Fica no `chrome.storage.local` para o topo não abrir com o nome do slug, sem acento.
+   */
+  var unidadeVista = null;
   var abaId = null;
   /** A aba do WhatsApp Web que respondeu por último (para "Abrir conversa"). */
   var abaWhatsapp = null;
@@ -103,25 +117,80 @@
   }
 
   function lerConfig() {
-    return chrome.storage.local.get(['slug', 'chave', 'nome', 'semRecarregar']).then(function (c) {
+    return chrome.storage.local.get(['slug', 'chave', 'nome', 'semRecarregar', 'unidadeVista']).then(function (c) {
+      var slugAntes = config && config.slug;
       config = c && c.slug && c.chave
         // 0.5.0: "Abrir conversa sem recarregar" vem ligada; só a atendente desliga (nas opções)
         ? { slug: String(c.slug), chave: String(c.chave), nome: String(c.nome || '').trim().slice(0, 80), semRecarregar: c.semRecarregar !== false }
         : null;
-      rotuloUnidade.textContent = config ? nomeDoSlug(config.slug) : '';
-      rotuloUnidade.title = config ? config.slug : '';
+      var vista = c && c.unidadeVista;
+      unidadeVista = config && vista && typeof vista === 'object' && vista.slug === config.slug ? vista : null;
+      if (!config) {
+        rotuloUnidade.textContent = '';
+        rotuloUnidade.title = '';
+      } else {
+        rotuloUnidade.title = config.slug;
+        if (unidadeVista && typeof unidadeVista.nome === 'string' && unidadeVista.nome.trim()) {
+          rotuloUnidade.textContent = T.nomeCurtoDaUnidade(unidadeVista.nome, config.slug);
+        } else if (slugAntes !== config.slug) {
+          // 0.5.1: ainda não sei o nome com acento — pergunto ao servidor em vez de mostrar o do slug
+          rotuloUnidade.textContent = '';
+          perguntarNomeDaUnidade();
+        }
+      }
+      mostrarSofia();
     });
   }
 
-  /** "doutor-hernia-acailandia" → "Acailandia" (até o servidor dizer o nome de verdade, com acento). */
-  function nomeDoSlug(slug) {
-    return String(slug || '').replace(/^doutor-hernia-/, '').split('-').filter(Boolean)
-      .map(function (p) { return p.charAt(0).toUpperCase() + p.slice(1); }).join(' ');
+  /** O nome da unidade pelo `/ping` (o mesmo das opções). Sem resposta, o do slug (sem acento) é melhor que nada. */
+  function perguntarNomeDaUnidade() {
+    var slug = config.slug;
+    chamar('GET', '/ping').then(function (j) {
+      if (config && config.slug === slug) nomeDaUnidade(j && j.unidade);
+    }).catch(function () {}).then(function () {
+      if (config && config.slug === slug && !rotuloUnidade.textContent) rotuloUnidade.textContent = T.nomeDoSlug(slug);
+    });
   }
 
-  /** O nome da unidade que o servidor devolveu (`unidadeDaConta` no cartão, `unidade` na fila). */
+  /** Guarda o que o servidor disse da unidade (o nome e/ou a Sofia) — só quando muda, e nunca dado de paciente. */
+  function guardarUnidade(mudou) {
+    if (!config) return;
+    var atual = unidadeVista && unidadeVista.slug === config.slug ? unidadeVista : { slug: config.slug };
+    var novo = Object.assign({}, atual, mudou, { slug: config.slug });
+    if (JSON.stringify(novo) === JSON.stringify(atual)) return;
+    unidadeVista = novo;
+    chrome.storage.local.set({ unidadeVista: novo }).catch(function () {});
+  }
+
+  /**
+   * O nome da unidade que o servidor devolveu (`unidadeDaConta` no cartão, `unidade` na fila e no `/ping`). 0.5.1: os
+   * três passam pelo MESMO `nomeCurtoDaUnidade` — "Doutor Hérnia Petrópolis" e "Petrópolis" viram "Petrópolis" — e o
+   * topo não pisca entre um e outro.
+   */
   function nomeDaUnidade(nome) {
-    if (config && typeof nome === 'string' && nome.trim()) rotuloUnidade.textContent = nome.trim().slice(0, 60);
+    if (!config || typeof nome !== 'string' || !nome.trim()) return;
+    var curto = T.nomeCurtoDaUnidade(nome, config.slug);
+    rotuloUnidade.textContent = curto;
+    guardarUnidade({ nome: curto });
+  }
+
+  /** O modo aprendiz desenhado por último: com ou sem as dicas da Sofia (`null` = ainda não desenhado). */
+  var aprendizComIa = null;
+
+  /**
+   * 0.5.1: a Sofia só aparece no rodapé ("a pausa da Sofia") e no modo aprendiz quando o servidor DISSE que a unidade
+   * tem a IA (`sofiaNaUnidade: true`). Sem saber ainda, nada de Sofia.
+   */
+  function mostrarSofia() {
+    var comIa = !!(unidadeVista && unidadeVista.sofia === true);
+    if (rodapePausa) rodapePausa.hidden = !comIa;
+    if (aprendizComIa === comIa) return;
+    aprendizComIa = comIa;
+    var antes = blocoAprendizRaiz.querySelector('details');
+    var bloco = D.aprendiz(document, A.dicasPara(comIa));
+    if (bloco && antes && antes.open) bloco.open = true; // aberto pela atendente: continua aberto
+    blocoAprendizRaiz.replaceChildren();
+    if (bloco) blocoAprendizRaiz.appendChild(bloco);
   }
 
   function mostrarConfigurar() {
@@ -232,7 +301,9 @@
     var estado = mesmo ? guiaAberto.estado : r && Date.now() - r.em < RASCUNHO_MS ? r.estado : { valores: {}, saida: null };
     if (rascunhos.size > 50) rascunhos.clear();
     rascunhos.set(leadId, { em: Date.now(), estado: estado });
-    guiaAberto = { leadId: leadId, g: null, estado: estado, mudou: mesmo ? guiaAberto.mudou : false, como: mesmo ? guiaAberto.como : (naTela && naTela.como) || null };
+    // o cartão achado pela busca manual (também pelo telefone digitado) é relido pelo id ao voltar do guia
+    var como = naTela ? (naTela.buscaManual ? 'manual' : naTela.como) : null;
+    guiaAberto = { leadId: leadId, g: null, estado: estado, mudou: mesmo ? guiaAberto.mudou : false, como: mesmo ? guiaAberto.como : como || null };
     trocar(D.aviso(document, 'procurando', 'Abrindo o guia…'));
     chamar('GET', '/ponte/guia?leadId=' + encodeURIComponent(leadId)).then(function (g) {
       if (id !== pedidoGuia || daConversa !== pedido || !guiaAberto || guiaAberto.leadId !== leadId) return;
@@ -299,8 +370,10 @@
     escolher: function (leadId) {
       buscar({ lead: leadId }, conversa && conversa.chave, true);
     },
-    buscar: function (nome) {
-      buscar({ nome: nome, manual: true }, conversa && conversa.chave, true);
+    buscar: function (texto) {
+      // 0.5.1: um telefone com DDD procura pelo telefone (o mesmo passo da conversa com número); o resto, pelo nome
+      var telefone = D.telefoneDaBusca(texto);
+      buscar(telefone ? { telefone: telefone } : { nome: texto, manual: true }, conversa && conversa.chave, true, texto);
     },
     pausar: function (leadId, p) {
       return chamar('POST', '/ponte/pausa', { leadId: leadId, ate: p.ate, motivo: p.motivo || null, por: (config && config.nome) || null })
@@ -345,10 +418,16 @@
   /** 0.5.0: o cartão entra com uma animação curta só quando o PACIENTE muda (pausar ou pôr etiqueta não pisca). */
   var ultimoNaTela = null;
 
-  function desenhar(r) {
+  /** `digitado`: o que a atendente buscou à mão — se não achou, volta na caixa da busca (para corrigir, não redigitar). */
+  function desenhar(r, digitado) {
     guiaAberto = null;
     naTela = r && r.achado && r.cartao ? r : null;
     if (r && r.unidadeDaConta) nomeDaUnidade(r.unidadeDaConta);
+    // 0.5.1: a unidade tem a Sofia? (o rodapé e o modo aprendiz só falam dela quando tem)
+    if (r && typeof r.sofiaNaUnidade === 'boolean') {
+      guardarUnidade({ sofia: r.sofiaNaUnidade });
+      mostrarSofia();
+    }
     if (naTela) {
       var no = D.cartao(document, r, acoes);
       if (ultimoNaTela !== r.cartao.id) no.classList.add('entra');
@@ -356,7 +435,7 @@
       trocar(no);
     }
     else if (r && r.candidatos && r.candidatos.length) trocar(D.candidatos(document, r, acoes));
-    else trocar(D.nada(document, r, acoes, conversa && conversa.fonteTelefone !== 'cabecalho' ? conversa.nome : ''));
+    else trocar(D.nada(document, r, acoes, typeof digitado === 'string' ? digitado : conversa && conversa.fonteTelefone !== 'cabecalho' ? conversa.nome : ''));
     atualizarNomeDasRespostas();
   }
 
@@ -376,7 +455,7 @@
    *
    * POST com corpo JSON: nome e telefone do paciente não vão na URL (que fica em log de acesso).
    */
-  function buscar(corpo, chaveDaConversa, manual) {
+  function buscar(corpo, chaveDaConversa, manual, digitado) {
     var id = ++pedido;
     var assinatura = JSON.stringify(corpo);
     var guardado = chaveDaConversa ? cache.get(chaveDaConversa) : null;
@@ -403,8 +482,10 @@
       })
       .then(function (r) {
         if (id !== pedido) return; // a atendente já trocou de conversa
+        // a busca manual pelo telefone volta como "achei pelo telefone": marca que foi a atendente quem buscou
+        if (manual && corpo.telefone && r && r.achado) r.buscaManual = true;
         if (chaveDaConversa && (r.achado || !manual)) cache.set(chaveDaConversa, { em: Date.now(), r: r, assinatura: manual ? null : assinatura });
-        desenhar(r);
+        desenhar(r, manual ? digitado : undefined);
       })
       .catch(function (e) {
         if (id !== pedido) return;
@@ -879,6 +960,11 @@
   chrome.storage.onChanged.addListener(function (mudou, area) {
     if (area !== 'local') return;
     if (mudou.slug || mudou.chave) {
+      // 0.5.1: resposta que já vinha a caminho é da unidade ANTERIOR — não desenha nem guarda o nome dela na nova
+      pedido++;
+      pedidoFila++;
+      pedidoRespostas++;
+      pedidoGuia++;
       cache.clear();
       filaGuardada = null;
       etiquetasGuardadas = null;
@@ -892,13 +978,14 @@
         if (secao === 'fila') carregarFila(true);
         if (secao === 'respostas') carregarRespostas(true);
       });
-    } else if (mudou.nome || mudou.semRecarregar) {
+    } else if (mudou.nome || mudou.semRecarregar || (mudou.unidadeVista && JSON.stringify(mudou.unidadeVista.newValue) !== JSON.stringify(unidadeVista))) {
+      // (a própria escrita deste painel em `unidadeVista` já está na memória: não relê)
       lerConfig();
     }
   });
 
-  var blocoAprendiz = D.aprendiz(document, A.DICAS);
-  if (blocoAprendiz) blocoAprendizRaiz.appendChild(blocoAprendiz);
+  // o modo aprendiz começa sem as dicas da Sofia; `lerConfig` põe se a unidade guardada tem a IA
+  mostrarSofia();
   // a posição da fila de ligações do dia (fechar o painel não perde)
   chrome.storage.local.get([CHAVE_DA_LIGACAO]).then(function (c) {
     estadoGuardado = (c && c[CHAVE_DA_LIGACAO]) || null;

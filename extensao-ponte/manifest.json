@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Ponte — cartão do Kommo no WhatsApp Web",
   "short_name": "Ponte",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Cartão do Kommo ao lado da conversa no WhatsApp Web, guia da etapa, fila do dia e quem espera resposta. Nunca envia nem liga.",
   "minimum_chrome_version": "116",
   "permissions": ["sidePanel", "storage", "alarms"],

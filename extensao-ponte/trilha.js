@@ -9,6 +9,11 @@
  *   - 'voce' — é a atendente quem trabalha e decide: entrada, EM QUALIFICAÇÃO, EM ESPERA, CONFERIR NA FRANQUIA,
  *     EM NEGOCIAÇÃO, PERDIDO e TRATAMENTO CANCELADO.
  * As etapas são reconhecidas pelo NOME (cada conta do Kommo tem os seus ids).
+ *
+ * 0.5.1: marcar consulta — paciente NOVO se cadastra e marca pelo widget "Assistente do cartão" do Kommo ("Cadastrar e
+ * marcar na franquia"), NUNCA direto na franquia (é na redigitação que nascem os cadastros com nome e telefone errados,
+ * `backend/src/lib/marcacao-widget.ts`); paciente já cadastrado marca na franquia ou pelo widget. E o nome da unidade do
+ * topo do painel sai sempre do servidor, com acento (`nomeCurtoDaUnidade`), nunca do slug.
  */
 (function (raiz, fabrica) {
   var api = fabrica();
@@ -189,7 +194,7 @@
         lista.push('Não quer marcar agora? Mova para EM ESPERA, com a data de retomar.');
         break;
       case 'espera':
-        lista = ['Retomar o contato no dia do ◷ Retomar em.', 'Oferecer um horário de novo. Marcou? A consulta entra pela franquia.'];
+        lista = ['Retomar o contato no dia do ◷ Retomar em.', 'Oferecer um horário de novo. Paciente novo se cadastra e marca pelo widget "Assistente do cartão".'];
         break;
       case 'conferir':
         lista = ['Procurar o paciente na franquia pelo nome e pelo telefone.', 'Não marcou de verdade? Mova pelo guia (EM QUALIFICAÇÃO ou PERDIDO).'];
@@ -237,9 +242,15 @@
     return lista.slice(0, 3);
   }
 
-  /** O que NÃO se faz no Kommo: é da franquia, e o cartão anda sozinho atrás. */
-  var DA_FRANQUIA = 'Agendar, dar baixa e lançar sessão se faz NA FRANQUIA; o cartão anda sozinho aqui.';
-  var DA_FRANQUIA_SEM_ROBO = 'Agendar, dar baixa e lançar sessão se faz NA FRANQUIA; nesta unidade, a recepção atualiza o cartão pela franquia.';
+  /**
+   * O que NÃO se faz à mão no Kommo: é da franquia, e o cartão anda sozinho atrás. 0.5.1: marcar consulta tem regra
+   * própria — paciente NOVO, só pelo widget "Assistente do cartão" ("Cadastrar e marcar na franquia"), nunca direto na
+   * franquia; paciente já cadastrado, na franquia ou pelo widget.
+   */
+  var COMO_MARCAR = 'Paciente novo: cadastre e marque pelo widget "Assistente do cartão" do Kommo (Cadastrar e marcar na franquia), nunca direto na franquia. ' +
+    'Já cadastrado: marque na franquia ou pelo widget.';
+  var DA_FRANQUIA = COMO_MARCAR + ' Dar baixa e lançar sessão se faz NA FRANQUIA; o cartão anda sozinho aqui.';
+  var DA_FRANQUIA_SEM_ROBO = COMO_MARCAR + ' Dar baixa e lançar sessão se faz NA FRANQUIA; nesta unidade, a recepção atualiza o cartão pela franquia.';
 
   function regraDaFranquia(semRobo) {
     return semRobo ? DA_FRANQUIA_SEM_ROBO : DA_FRANQUIA;
@@ -288,6 +299,26 @@
     if (franquiaPedeUnidade(franquia)) return { nome: null, vazia: true, compartilhada: true, cor: null };
     var daFranquia = franquia && franquia.unidade ? String(franquia.unidade) : null;
     return daFranquia ? { nome: daFranquia, vazia: false, compartilhada: false, cor: corDaUnidade(daFranquia) } : null;
+  }
+
+  /** "doutor-hernia-petropolis" → "Petropolis": só quando o servidor não disse o nome (sem acento — último recurso). */
+  function nomeDoSlug(slug) {
+    return String(slug || '').replace(/^doutor-hernia-/, '').split('-').filter(Boolean)
+      .map(function (p) { return p.charAt(0).toUpperCase() + p.slice(1); }).join(' ');
+  }
+
+  /** Nome que não diz a cidade (a unidade de Imperatriz se chama "Comercial" no banco). */
+  var NOMES_GENERICOS = ['comercial', 'unidade', 'clinica'];
+
+  /**
+   * 0.5.1: o nome da unidade para o topo do painel, do jeito do servidor (`nomeCurtoDaUnidade`, em
+   * `backend/src/lib/ponte-painel.ts`): "Doutor Hérnia Petrópolis" → "Petrópolis". O cartão já manda o curto; a fila e o
+   * `/ping` mandam o nome inteiro — os três viram o MESMO texto, com acento. Nome genérico cai no slug.
+   */
+  function nomeCurtoDaUnidade(nome, slug) {
+    var curto = String(nome == null ? '' : nome).replace(/^\s*doutor\s+h[eé]rnia\s*[-–·:]?\s*/i, '').trim();
+    if (curto && NOMES_GENERICOS.indexOf(normalizar(curto)) < 0) return curto.slice(0, 60);
+    return nomeDoSlug(slug);
   }
 
   /** A franquia recusou porque o cartão está sem o ⌂ Unidade de atendimento (conta de duas unidades)? */
@@ -353,6 +384,9 @@
     relogioAtrasado: relogioAtrasado,
     acoesDaEtapa: acoesDaEtapa,
     DA_FRANQUIA: DA_FRANQUIA,
+    COMO_MARCAR: COMO_MARCAR,
+    nomeDoSlug: nomeDoSlug,
+    nomeCurtoDaUnidade: nomeCurtoDaUnidade,
     qualificacao: qualificacao,
     corDaUnidade: corDaUnidade,
     unidadeDoCartao: unidadeDoCartao,

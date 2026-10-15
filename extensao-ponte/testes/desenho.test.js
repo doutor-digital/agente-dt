@@ -649,7 +649,8 @@ describe('0.5.0 — "O que é seu agora" e "O que é da franquia"', () => {
     n.querySelector('[data-acao="abrir-guia"]').click();
     assert.deepEqual(abertos, [123]);
     assert.equal(n.querySelector('[data-bloco="da-franquia"] .agora__regra').textContent,
-      'Agendar, dar baixa e lançar sessão se faz NA FRANQUIA; o cartão anda sozinho aqui.');
+      'Paciente novo: cadastre e marque pelo widget "Assistente do cartão" do Kommo (Cadastrar e marcar na franquia), nunca direto na franquia. ' +
+      'Já cadastrado: marque na franquia ou pelo widget. Dar baixa e lançar sessão se faz NA FRANQUIA; o cartão anda sozinho aqui.');
   });
 });
 
@@ -668,7 +669,12 @@ describe('0.5.0 — o cartão "Na franquia"', () => {
     const doc = novoDoc();
     const r = novo();
     r.franquia = { unidade: 'Açailândia', franquia: true, paciente: null };
-    assert.match(D.cartao(doc, r, {}, AGORA).querySelector('[data-papel="sem-cadastro"]').textContent, /Sem cadastro na franquia/);
+    const t = D.cartao(doc, r, {}, AGORA).querySelector('[data-papel="sem-cadastro"]').textContent;
+    assert.match(t, /Sem cadastro na franquia/);
+    // 0.5.1: paciente novo se cadastra e marca pelo widget, nunca direto na franquia
+    assert.match(t, /widget "Assistente do cartão"/);
+    assert.match(t, /Cadastrar e marcar na franquia/);
+    assert.match(t, /nunca direto na franquia/);
   });
 
   it('franquia fora do ar: avisa, sem inventar nada', () => {
@@ -718,6 +724,18 @@ describe('0.5.0 — Sofia e o resto', () => {
     assert.equal(n.querySelector('[data-bloco="sofia"]'), null);
     assert.equal(n.querySelector('[data-bloco="pausa"]'), null);
     assert.ok(n.querySelector('[data-bloco="kommo"]'), 'o resto do cartão continua');
+    // 0.5.1: em lugar nenhum do cartão (o vídeo de Petrópolis e Caxias mostrou a Sofia)
+    assert.doesNotMatch(n.textContent, /Sofia/);
+  });
+
+  it('0.5.1 — o modo aprendiz só fala da Sofia quando a unidade tem a IA', () => {
+    const doc = novoDoc();
+    const sem = D.aprendiz(doc, A.dicasPara(false));
+    assert.doesNotMatch(sem.textContent, /Sofia/);
+    assert.equal(sem.querySelector('[data-dica="pausa"]'), null);
+    assert.match(sem.querySelector('[data-dica="marcar"]').textContent, /widget "Assistente do cartão".*Cadastrar e marcar na franquia/);
+    assert.equal(D.aprendiz(doc, A.dicasPara(undefined)).querySelector('[data-dica="pausa"]'), null, 'sem saber, sem Sofia');
+    assert.match(D.aprendiz(doc, A.dicasPara(true)).querySelector('[data-dica="pausa"]').textContent, /Pausar a Sofia/);
   });
 
   it('dado do servidor nos campos novos entra como texto, nunca como HTML', () => {
@@ -827,7 +845,8 @@ describe('0.5.0 — unidade em que o cartão NÃO anda sozinho (franquiaAndaSozi
     assert.match(aqui.textContent, /quando a recepção der baixa na consulta/);
     assert.match(n.querySelector('.legenda').textContent, /A recepção atualiza pela franquia/);
     assert.equal(n.querySelector('[data-bloco="da-franquia"] .agora__regra').textContent,
-      'Agendar, dar baixa e lançar sessão se faz NA FRANQUIA; nesta unidade, a recepção atualiza o cartão pela franquia.');
+      'Paciente novo: cadastre e marque pelo widget "Assistente do cartão" do Kommo (Cadastrar e marcar na franquia), nunca direto na franquia. ' +
+      'Já cadastrado: marque na franquia ou pelo widget. Dar baixa e lançar sessão se faz NA FRANQUIA; nesta unidade, a recepção atualiza o cartão pela franquia.');
     assert.ok([...n.querySelectorAll('.estacao')].some((e) => /a recepção atualiza pela franquia/.test(e.title)));
     // em lugar nenhum do cartão: "anda sozinh(o|a)" nem "vai sozinho"
     assert.doesNotMatch(n.textContent, /anda sozinh|vai sozinho|volta sozinho/i);
@@ -845,5 +864,60 @@ describe('0.5.0 — unidade em que o cartão NÃO anda sozinho (franquiaAndaSozi
     const doc = novoDoc();
     const n = D.cartao(doc, ACHADO, {});
     assert.match(n.querySelector('[data-papel="etapa-atual"]').textContent, /Anda sozinha pela franquia/);
+  });
+});
+
+describe('0.5.1 — textos da unidade sem IA', () => {
+  const vista = (ritmo) => ({ item: { leadId: 1, nome: 'Paciente 1', etapa: 'EM ESPERA', telefone: '5599900000001', telefoneVisivel: '(99) 90000-0001' }, fase: 'aberto', posicao: 1, total: 3, pulados: [], naoLidos: [], ritmo });
+
+  it('modo ligação sem espera: "Sem espera entre uma ligação e outra", com o teto e o porquê — nunca "a cada 0 s"', () => {
+    const doc = novoDoc();
+    const t = D.modoLigacao(doc, vista({ intervaloS: 0, tetoPorHora: 40 }), {}).querySelector('[data-papel="ritmo"]').textContent;
+    assert.equal(t, 'Sem espera entre uma ligação e outra · no máximo 40 por hora, para o número não parecer spam e ficar protegido.');
+    assert.doesNotMatch(t, /a cada 0 s/);
+  });
+
+  it('modo ligação com espera configurada no servidor: o intervalo continua dito', () => {
+    const doc = novoDoc();
+    const t = D.modoLigacao(doc, vista({ intervaloS: 40, tetoPorHora: 30 }), {}).querySelector('[data-papel="ritmo"]').textContent;
+    assert.equal(t, 'Uma conversa a cada 40 s · no máximo 30 por hora, para o número não parecer spam e ficar protegido.');
+  });
+
+  it('a busca manual aceita o telefone com DDD (só dígitos para o servidor); nome continua nome', () => {
+    assert.equal(D.telefoneDaBusca('(24) 99999-1234'), '24999991234');
+    assert.equal(D.telefoneDaBusca('+55 24 99999-1234'), '5524999991234');
+    assert.equal(D.telefoneDaBusca('24 3333.1234'), '2433331234');
+    assert.equal(D.telefoneDaBusca('99999-1234'), null, 'sem DDD não é telefone que dê para conferir');
+    assert.equal(D.telefoneDaBusca('123.456.789-09'), null, 'CPF não é celular (o 3º dígito não é 9)');
+    assert.equal(D.telefoneDaBusca('12345678909'), null);
+    assert.equal(D.telefoneDaBusca('(02) 99999-1234'), null, 'DDD não tem zero');
+    assert.equal(D.telefoneDaBusca('+1 555 123 4567'), '15551234567', 'de fora, com +');
+    assert.equal(D.telefoneDaBusca('Maria 2024'), null);
+    assert.equal(D.telefoneDaBusca('Maria Souza'), null);
+    assert.equal(D.telefoneDaBusca(''), null);
+    const doc = novoDoc();
+    const buscas = [];
+    const n = D.nada(doc, { achado: false }, { buscar: (t) => buscas.push(t) }, '');
+    const campo = n.querySelector('.busca__campo');
+    assert.match(campo.placeholder, /telefone/);
+    assert.match(n.textContent, /nome ou pelo telefone/);
+    campo.value = ' (24) 99999-1234 ';
+    n.querySelector('form').dispatchEvent(new doc.defaultView.Event('submit', { cancelable: true }));
+    assert.deepEqual(buscas, ['(24) 99999-1234'], 'o painel decide: telefone ou nome');
+
+    // sem o DDD: a busca pelo nome nunca acharia — pede o DDD e não busca
+    campo.value = '99999-1234';
+    n.querySelector('form').dispatchEvent(new doc.defaultView.Event('submit', { cancelable: true }));
+    assert.deepEqual(buscas, ['(24) 99999-1234'], 'não buscou');
+    assert.match(n.querySelector('[data-papel="msg-busca"]').textContent, /com o DDD/);
+  });
+
+  it('"Sem cadastro na franquia": não achar não é não existir — confere antes de cadastrar de novo', () => {
+    const doc = novoDoc();
+    const r = novo();
+    r.franquia = { unidade: 'Açailândia', franquia: true, paciente: null };
+    const t = D.cartao(doc, r, {}, AGORA).querySelector('[data-papel="sem-cadastro"]').textContent;
+    assert.match(t, /A franquia não achou este paciente/);
+    assert.match(t, /Se ele já tem cadastro com outro nome ou telefone, confira na franquia antes/);
   });
 });
