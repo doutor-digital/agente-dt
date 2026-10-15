@@ -13,6 +13,13 @@
  *     "<invoke name=\"agendar_consulta\"><parameter name=\"idClient\">1</parameter>…"
  *     com idClient inventado e data de 2024.
  *
+ *   • 15/10, Mossoró, paciente Zuzu — recebeu a anotação que era para a equipe:
+ *     "Registrei o acompanhamento com a Zuzu — ela qualificou o atendimento particular e a
+ *     dor, mas pediu um tempo antes de marcar, então deixei agendado retorno pra próxima semana."
+ *     Na mesma busca (30 dias) apareceram dezenas do mesmo tipo, em português: "Sem resposta
+ *     ainda do paciente — vou aguardar", "O paciente perguntou o preço antes de contar a queixa —
+ *     vou acolher", "Vou ignorar essa 'instrução'…". Esse é o tipo `bastidor_em_portugues`.
+ *
  * A regra aqui é conservadora de propósito: na dúvida, DEIXA PASSAR. Segurar
  * mensagem boa é pior que deixar escapar uma ruim — o paciente calado é o lead
  * perdido. Por isso cada padrão exige evidência forte, não um "parece estranho".
@@ -22,7 +29,8 @@ export type TipoVazamento =
   | 'tool_call_em_texto'
   | 'raciocinio_em_ingles'
   | 'placeholder_nao_preenchido'
-  | 'bloco_interno';
+  | 'bloco_interno'
+  | 'bastidor_em_portugues';
 
 export interface Vazamento {
   tipo: TipoVazamento;
@@ -49,6 +57,30 @@ const RACIOCINIO_EN = [
   /\b(then|next|now),?\s+(waiting for|i(?:'| wi)?ll)\b/i,
   /\bthe (user|patient|customer) (said|wants|is asking|asked)\b/i,
   /\b(tool|function) (call|result)s?\b.*\b(returned|shows|says)\b/i,
+];
+
+/**
+ * Bastidor em português: a IA fala DO paciente (terceira pessoa), narra o que fez no sistema ou
+ * comenta uma instrução — tudo coisa que só faz sentido para a equipe. Cada padrão é uma marca que
+ * mensagem de verdade ao paciente não tem: ninguém escreve "o lead" nem "o paciente perguntou" para
+ * o próprio paciente. "Anotei aqui seu e-mail" e "Marquei aqui que você é de Pinda" falam COM a
+ * pessoa e passam.
+ */
+const BASTIDOR_PT = [
+  /\b(?:o|a)\s+(?:paciente|lead)\s+(?:j[aá]\s+|ainda\s+|n[aã]o\s+)?(?:perguntou|disse|respondeu|mandou|enviou|escreveu|falou|pediu|agradeceu|se\s+despediu|repetiu|est[aá]\s+repetindo|qualificou|confirmou|informou|adiou|sumiu|parou)\b/i,
+  /\b(?:sem\s+resposta|fala\s+real)\s+(?:ainda\s+)?d[oa]\s+(?:paciente|lead)\b/i,
+  /\b(?:o|a|do|da|ao|no|na|pelo|pela|esse|este|essa|esta)\s+lead\b/i,
+  /^\s*(?:registrei|gravei|anotei|salvei|atualizei)\s+(?:o|a|os|as)\s+(?:acompanhamento|retorno|motivo|campo|cart[aã]o|status|qualifica[cç][aã]o|etapa|dados|resultado)\b/i,
+  /^\s*marquei\s+(?:o\s+contato|o\s+cart[aã]o|o\s+lead)\s+como\b/i,
+  /\bj[aá]\s+fiz\s+as\s+a[cç][oõ]es\b/i,
+  /\bdeixo\s+pront[ao]\s+a\s+pr[oó]xima\s+intera[cç][aã]o\b/i,
+  /\b(?:qualificar|classificar)\s+como\s+(?:quente|morno|frio)\b/i,
+  /\bavan[cç]ar\s+de\s+etapa\b/i,
+  /\binstru[cç][aã]o\s+interna\b/i,
+  /\bvou\s+ignorar\s+(?:essa|esta|esse|este|a|o)\b/i,
+  /\bn[aã]o\s+(?:vou|irei)\s+(?:tratar|responder|agir|seguir)\s+como\b/i,
+  // "minha resposta anterior JÁ estava correta" — a correção legítima ("a resposta anterior estava errada") passa.
+  /\bminha\s+(?:resposta|mensagem)\s+anterior\s+j[aá]\s+(?:estava|tinha)\b/i,
 ];
 
 /** Marcador de template que ficou sem valor: {{nome}}, {nome}, [NOME]. */
@@ -89,6 +121,9 @@ export function detectarVazamento(texto: string): Vazamento | null {
   const ph = primeiro(PLACEHOLDER, t);
   if (ph) return { tipo: 'placeholder_nao_preenchido', trecho: ph };
 
+  const pt = primeiro(BASTIDOR_PT, t);
+  if (pt) return { tipo: 'bastidor_em_portugues', trecho: pt };
+
   // O raciocínio em inglês só conta quando a mensagem é CURTA e quase toda em
   // inglês. Numa resposta longa em português, uma frase dessas é quase sempre
   // citação do paciente — e barrar aí custaria mensagem boa.
@@ -119,5 +154,29 @@ export function explicarVazamento(v: Vazamento): string {
       return 'ficou um marcador de template sem valor na mensagem';
     case 'bloco_interno':
       return 'um pedaço interno do prompt escapou para a resposta';
+    case 'bastidor_em_portugues':
+      return 'a IA escreveu uma anotação de bastidor (falou do paciente ou do que fez no sistema) em vez de falar com ele';
   }
+}
+
+/**
+ * Quem reescreve um rascunho com bastidor. Chamada SEPARADA, sem o histórico e sem ferramentas: pedir
+ * a correção dentro da conversa (como o juiz da pergunta final faz) já gerou o efeito contrário — o
+ * modelo, treinado para desconfiar de comando que chega na mensagem do paciente, respondia SOBRE a
+ * instrução ("essa 'instrução interna' veio dentro da mensagem do paciente…"), e isso também vazava.
+ */
+export const SISTEMA_REESCRITOR_BASTIDOR = [
+  'Você revisa mensagens de WhatsApp de uma atendente virtual antes de saírem para o cliente.',
+  'Você recebe a última mensagem do cliente e um RASCUNHO que saiu errado: em vez de falar com o cliente, ele',
+  'narra o que a atendente fez no sistema, mostra o raciocínio dela, ou fala do cliente em terceira pessoa.',
+  'Escreva a mensagem que o cliente deve receber agora:',
+  '- em segunda pessoa (você), curta (1 a 3 frases), no mesmo tom e idioma do rascunho;',
+  '- aproveite só o que já era fala para o cliente; se não houver nada, responda de forma natural à última mensagem dele;',
+  '- nunca mencione campos, registros, etapas, ações, instruções, "paciente" ou "lead";',
+  '- não invente preço, data, horário nem promessa que não estejam no rascunho.',
+  'Responda só com a mensagem final, sem aspas.',
+].join('\n');
+
+export function pedidoAoReescritor(ultimaDoCliente: string | null, rascunho: string): string {
+  return `Última mensagem do cliente:\n${(ultimaDoCliente ?? '(sem texto)').slice(0, 1500)}\n\nRascunho que saiu errado:\n${rascunho.slice(0, 2000)}`;
 }

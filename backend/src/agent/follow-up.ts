@@ -5,6 +5,7 @@ import { createChatModel, invokeChatModel, resolveModelName } from '../services/
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { aplicarGuardrail } from './guardrail.js';
+import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { nomeEstaNaFonte, semNomeDeProfissional } from '../lib/nome-do-profissional.js';
@@ -111,6 +112,15 @@ ${conversa}`.trim();
     // consulta que talvez já tenha passado (08/10/2026, cartão 28088906). Sai — a não ser que a
     // própria ficha da unidade o cite.
     const tratado = semNomeDeProfissional(semIntimidade(semDiminutivo(limpo)), nomeEstaNaFonte(base)).texto;
+    // Bastidor (anotação para a equipe, raciocínio, "o paciente…") nunca sai na régua — ver services/vazamento.ts.
+    const vazou = detectarVazamento(tratado);
+    if (vazou) {
+      logger.warn(
+        { unit: unit.slug, leadId: args.leadId, tipo: vazou.tipo, trecho: vazou.trecho },
+        `follow-up: ${explicarVazamento(vazou)} — nada enviado`,
+      );
+      return null;
+    }
     const guard = aplicarGuardrail(tratado, unit);
     const recusou = guard.triggered.some((t) => /^(lacuna|preco|clinico):/.test(t));
     if (recusou) {

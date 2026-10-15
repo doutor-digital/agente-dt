@@ -22,6 +22,7 @@ import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { semNomeForaDaAgenda } from './nome-na-resposta.js';
 import { avaliarChamadaFinal, INSTRUCAO_REFAZER_CTA } from './cta-final.js';
+import { detectarVazamento, explicarVazamento, pedidoAoReescritor, SISTEMA_REESCRITOR_BASTIDOR } from '../services/vazamento.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
   'Deixa eu confirmar essa informação com a equipe pra não te passar nada errado 🙏 ' +
@@ -786,8 +787,52 @@ export async function buildAgentGraph(
       // instrução na cara. Só quando nada mais mexeu no texto (guardrail limpo) — senão a reescrita brigaria
       // com a correção de preço/lacuna. Se a segunda tentativa vier com tool call ou vazia, fica a original.
       let textoFinal = text;
-      const cta = avaliarChamadaFinal(text);
-      if (cta.precisaRefazer && aplicarGuardrail(text, unit).triggered.length === 0) {
+
+      // Bastidor na resposta (15/10/2026, Mossoró: a paciente recebeu "Registrei o acompanhamento com a
+      // Zuzu — ela qualificou…"). Reescreve numa chamada SEPARADA — sem histórico e sem ferramentas — só
+      // transformando o rascunho em mensagem para o paciente. Se ainda vazar, fica a original, e a barreira
+      // da entrega (webhook.controller) não deixa sair: melhor o paciente sem resposta neste turno.
+      const vazou = detectarVazamento(text);
+      if (vazou) {
+        const t1 = performance.now();
+        let reescrito = '';
+        let erroReescrita: string | null = null;
+        try {
+          const revisor = createChatModel(unit, { model: modelName, temperature: 0, maxTokens: 400 });
+          const r = (await withTimeout(
+            invokeChatModel({
+              model: revisor as unknown as Parameters<typeof invokeChatModel>[0]['model'],
+              messages: [new SystemMessage(SISTEMA_REESCRITOR_BASTIDOR), new HumanMessage(pedidoAoReescritor(userMessage ?? null, text))],
+              unitId: unit.id,
+              traceId: recorder.traceId,
+              modelName,
+              provider: provedorAtivo,
+              tools: [],
+              conversaId: idDaConversa,
+            }),
+            AGENT_NODE_TIMEOUT_MS,
+          )) as AIMessage;
+          reescrito = aiTextFromContent(r.content).trim().replace(/^["“]|["”]$/g, '');
+        } catch (err) {
+          erroReescrita = err instanceof Error ? err.message : String(err);
+        }
+        const limpo = !!reescrito && !detectarVazamento(reescrito);
+        if (limpo) {
+          textoFinal = reescrito;
+          response.content = reescrito;
+        }
+        await recorder.step({
+          kind: limpo ? 'THINKING' : 'ERROR',
+          title: limpo
+            ? `🙈 Bastidor na resposta — reescrita só com a mensagem pro paciente (${explicarVazamento(vazou)})`
+            : `🙈 Bastidor na resposta e a reescrita não resolveu — o envio será bloqueado (${explicarVazamento(vazou)})`,
+          payload: { original: text, reescrita: reescrito || null, trecho: vazou.trecho, erro: erroReescrita },
+          latencyMs: Math.round(performance.now() - t1),
+        });
+      }
+
+      const cta = avaliarChamadaFinal(textoFinal);
+      if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
@@ -804,13 +849,15 @@ export async function buildAgentGraph(
             AGENT_NODE_TIMEOUT_MS,
           )) as AIMessage;
           const textoRefeito = (refeita.tool_calls ?? []).length === 0 ? aiTextFromContent(refeita.content).trim() : '';
-          if (textoRefeito && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
+          // A reescrita pode vir falando SOBRE a instrução ("essa 'instrução interna' veio na mensagem do
+          // paciente…") — já foi entregue assim em Araguaína, Parauapebas e Rio Verde. Nesse caso fica a original.
+          if (textoRefeito && !detectarVazamento(textoRefeito) && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
             textoFinal = textoRefeito;
             response.content = textoRefeito;
           }
           await recorder.step({
             kind: 'THINKING',
-            title: textoFinal === text ? `🧭 Sem pergunta final (${cta.motivo}); a reescrita não melhorou — saiu a original` : `🧭 Sem pergunta final (${cta.motivo}) — refeita com chamada pra ação`,
+            title: textoFinal !== textoRefeito ? `🧭 Sem pergunta final (${cta.motivo}); a reescrita não serviu — saiu a original` : `🧭 Sem pergunta final (${cta.motivo}) — refeita com chamada pra ação`,
             payload: { original: text, refeita: textoRefeito || null },
             latencyMs: Math.round(performance.now() - t1),
           });
