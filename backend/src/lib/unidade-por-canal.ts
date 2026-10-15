@@ -8,7 +8,10 @@
  *  1. o ANÚNCIO de origem (`⌂ ID do anúncio`), pela CONTA DE ANÚNCIOS a que ele pertence (Petrópolis
  *     1055937202829106, Caxias 650695850658904). O robô pergunta a conta à Meta quando a unidade tem token com
  *     acesso; sem token, vale a lista de anúncios conferidos à mão;
- *  2. sem anúncio conhecido, o DDD do telefone (21 = Caxias, 24 = Petrópolis);
+ *  2. sem anúncio conhecido, o DDD do telefone — só o 24 (Petrópolis). O 21 NÃO decide (15/10/2026): o anúncio
+ *     de Petrópolis traz tanto DDD 21 quanto 24 (37 × 31 em out/2026), então sem anúncio o 21 é cara ou coroa, e
+ *     cartão de Petrópolis marcado Caxias vai para a agenda errada. Fica vazio e a SDR escolhe (lead 3469615:
+ *     anúncio de Petrópolis, rastreio não gravou o anúncio, o DDD 21 marcou Caxias);
  *  3. sem nenhum dos dois, o campo fica vazio e a SDR escolhe.
  *
  * Regras que continuam:
@@ -66,7 +69,8 @@ export const REGRAS_POR_UNIDADE: Record<string, RegrasDaUnidade> = {
       '120250266913420207': CONTA_CAXIAS,
       '120250266913430207': CONTA_CAXIAS,
     },
-    ddd: { '21': 'Caxias', '24': 'Petrópolis' },
+    // Só o 24 decide. O 21 fica vazio para a SDR: o anúncio de Petrópolis também traz DDD 21 (ver o cabeçalho).
+    ddd: { '24': 'Petrópolis' },
     // Só o token da franquia de PETRÓPOLIS está cadastrado: cartão de Caxias marcaria na agenda errada.
     cidadeDaFranquia: 'Petrópolis',
   },

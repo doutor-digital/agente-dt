@@ -3,7 +3,7 @@
  *
  * O que estes testes prendem:
  *  - a conta de anúncios do anúncio decide primeiro (pela Meta ou pela lista conferida à mão);
- *  - sem anúncio conhecido, o DDD decide (21 = Caxias, 24 = Petrópolis); sem os dois, ninguém decide;
+ *  - sem anúncio conhecido, só o DDD 24 decide (Petrópolis); o 21 fica vazio para a SDR (15/10); sem nada, ninguém decide;
  *  - o paciente de DDD 21 que veio do anúncio de Petrópolis é Petrópolis (o anúncio vem antes do DDD);
  *  - campo preenchido pela SDR nunca é trocado; o que o robô pôs, ele corrige — mas só quando o ANÚNCIO decide;
  *  - a etiqueta segue o que está no campo.
@@ -40,12 +40,19 @@ test('anúncio novo: a conta que a Meta devolveu decide', () => {
 });
 
 test('anúncio de conta desconhecida ou sem anúncio: cai no DDD; sem DDD conhecido, ninguém decide', () => {
-  const r = decidirUnidade({ anuncio: '999', contaDoAnuncio: null, ddd: '21', regras: REGRAS });
-  assert.equal(r?.unidade, 'Caxias');
+  const r = decidirUnidade({ anuncio: '999', contaDoAnuncio: null, ddd: '24', regras: REGRAS });
+  assert.equal(r?.unidade, 'Petrópolis');
   assert.match(r!.motivo, /conta desconhecida/);
   assert.equal(decidirUnidade({ anuncio: null, contaDoAnuncio: null, ddd: '24', regras: REGRAS })?.unidade, 'Petrópolis');
   assert.equal(decidirUnidade({ anuncio: '999', contaDoAnuncio: '123', ddd: '11', regras: REGRAS }), null);
   assert.equal(decidirUnidade({ anuncio: null, contaDoAnuncio: null, ddd: null, regras: REGRAS }), null);
+});
+
+test('sem anúncio, DDD 21 NÃO decide: fica vazio para a SDR (15/10 — lead 3469615 era de Petrópolis)', () => {
+  assert.equal(decidirUnidade({ anuncio: null, contaDoAnuncio: null, ddd: '21', regras: REGRAS }), null);
+  assert.equal(decidirUnidade({ anuncio: '999', contaDoAnuncio: null, ddd: '21', regras: REGRAS }), null);
+  // com o anúncio de Caxias, o 21 continua indo para Caxias — quem decide é o anúncio
+  assert.equal(decidirUnidade({ anuncio: AN_CAXIAS, contaDoAnuncio: null, ddd: '21', regras: REGRAS })?.unidade, 'Caxias');
 });
 
 test('campo vazio: grava a unidade e a etiqueta da cidade', () => {
