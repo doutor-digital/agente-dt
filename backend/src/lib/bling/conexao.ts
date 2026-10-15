@@ -17,7 +17,7 @@ import {
   type TokensBling,
 } from './oauth.js';
 
-async function unidadePorSlug(slug: string): Promise<{ id: string; name: string }> {
+export async function unidadePorSlug(slug: string): Promise<{ id: string; name: string }> {
   const u = await prisma.unit.findUnique({ where: { slug }, select: { id: true, name: true } });
   if (!u) throw new ErroBling(`unidade "${slug}" não existe`, null);
   return u;
@@ -36,17 +36,18 @@ export async function salvarAppDoBling(slug: string, clientId: string, clientSec
     create: { unitId: u.id, clientId: id, clientSecret: segredo },
     update: mesmoApp
       ? { clientSecret: segredo }
-      : { clientId: id, clientSecret: segredo, accessToken: null, refreshToken: null, expiraEm: null, refreshEm: null, escopos: null, conectadoEm: null, ultimoErro: null },
+      // App novo: tokens e qualquer link de autorização pendente eram do app antigo.
+      : { clientId: id, clientSecret: segredo, accessToken: null, refreshToken: null, expiraEm: null, refreshEm: null, escopos: null, conectadoEm: null, conectadoPor: null, estado: null, estadoEm: null, ultimoErro: null },
   });
 }
 
-/** Gera um `state` novo e devolve o link que o administrador do Bling deve abrir. */
-export async function iniciarAutorizacao(slug: string): Promise<{ link: string; unidade: string }> {
+/** Gera um `state` novo e devolve o link que o administrador do Bling deve abrir. `quem` = quem pediu o link. */
+export async function iniciarAutorizacao(slug: string, quem: string): Promise<{ link: string; unidade: string }> {
   const u = await unidadePorSlug(slug);
   const c = await prisma.blingConexao.findUnique({ where: { unitId: u.id }, select: { clientId: true } });
   if (!c) throw new ErroBling(`a unidade "${slug}" ainda não tem o aplicativo do Bling gravado`, null);
   const estado = randomBytes(24).toString('base64url');
-  await prisma.blingConexao.update({ where: { unitId: u.id }, data: { estado, estadoEm: new Date() } });
+  await prisma.blingConexao.update({ where: { unitId: u.id }, data: { estado, estadoEm: new Date(), conectadoPor: quem.slice(0, 120) } });
   return { link: linkDeAutorizacao(c.clientId, estado), unidade: u.name };
 }
 
@@ -62,18 +63,19 @@ export async function concluirAutorizacao(estado: string, code: string, fetcher:
   if (!estado || !code) throw new ErroBling('o retorno do Bling veio sem código ou sem state', null);
   const c = await prisma.blingConexao.findUnique({ where: { estado }, include: { unit: { select: { name: true, slug: true } } } });
   if (!c) throw new ErroBling('este link de autorização não é nosso ou já foi usado — gere um novo', null);
-  if (!estadoValido(c.estadoEm)) {
-    await prisma.blingConexao.update({ where: { unitId: c.unitId }, data: { estado: null, estadoEm: null } });
-    throw new ErroBling('o link de autorização venceu (10 min) — gere um novo', null);
-  }
+  // Reserva o `state` ANTES de ir ao Bling: um segundo retorno com o mesmo link (aba recarregada,
+  // pré-carregamento do navegador) não passa daqui nem estraga o status de quem conectou.
+  const reservado = await prisma.blingConexao.updateMany({ where: { unitId: c.unitId, estado }, data: { estado: null, estadoEm: null } });
+  if (reservado.count === 0) throw new ErroBling('este link de autorização já foi usado — se a conexão não aparecer, gere um novo', null);
+  if (!estadoValido(c.estadoEm)) throw new ErroBling('o link de autorização venceu (10 min) — gere um novo', null);
   try {
     const t = await pedirTokens({ clientId: c.clientId, clientSecret: c.clientSecret }, { grant_type: 'authorization_code', code }, fetcher);
-    await gravarTokens(c.unitId, t, { estado: null, estadoEm: null, conectadoEm: new Date() });
+    await gravarTokens(c.unitId, t, { conectadoEm: new Date() });
     logger.info({ unit: c.unit.slug, escopos: t.escopos?.split(/\s+/).length ?? 0 }, 'bling: unidade conectada');
     return c.unit.name;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await prisma.blingConexao.update({ where: { unitId: c.unitId }, data: { estado: null, estadoEm: null, ultimoErro: msg } });
+    await prisma.blingConexao.update({ where: { unitId: c.unitId }, data: { ultimoErro: msg } });
     throw err;
   }
 }
@@ -105,11 +107,23 @@ export function renovar(unitId: string, fetcher: Fetcher = fetch): Promise<strin
       }
       return t.accessToken;
     } catch (err) {
-      // Outro processo pode ter renovado com este mesmo refresh token: se o do banco mudou, vale o dele.
+      const morto = err instanceof ErroBling && err.precisaReautorizar;
+      // Outro processo pode ter renovado com este mesmo refresh token (o Bling troca o par e recusa o
+      // antigo). Se for isso, o banco muda em instantes: espera um pouco e usa o que ele gravou.
+      if (morto) await new Promise((r) => setTimeout(r, 1500));
       const agora = await prisma.blingConexao.findUnique({ where: { unitId }, select: { refreshToken: true, accessToken: true } });
       if (agora?.refreshToken && agora.refreshToken !== usado && agora.accessToken) return agora.accessToken;
       const msg = err instanceof Error ? err.message : String(err);
-      await prisma.blingConexao.update({ where: { unitId }, data: { ultimoErro: msg } });
+      if (morto) {
+        // Refresh token vencido ou revogado: não serve mais. Limpa (o worker para de insistir e o status
+        // mostra "precisa autorizar de novo") — só se ainda for o mesmo que falhou.
+        await prisma.blingConexao.updateMany({
+          where: { unitId, refreshToken: usado },
+          data: { accessToken: null, refreshToken: null, expiraEm: null, ultimoErro: `precisa autorizar de novo: ${msg}` },
+        });
+      } else {
+        await prisma.blingConexao.update({ where: { unitId }, data: { ultimoErro: msg } });
+      }
       throw err;
     }
   })().finally(() => renovando.delete(unitId));
@@ -122,13 +136,26 @@ export async function tokenDeAcesso(unitId: string, fetcher: Fetcher = fetch): P
   const c = await prisma.blingConexao.findUnique({ where: { unitId }, select: { accessToken: true, expiraEm: true, refreshToken: true } });
   if (!c?.refreshToken) throw new ErroBling('Bling não autorizado nesta unidade', null, true);
   if (c.accessToken && !precisaRenovar(c.expiraEm, new Date(), 5)) return c.accessToken;
-  return renovar(unitId, fetcher);
+  try {
+    return await renovar(unitId, fetcher);
+  } catch (err) {
+    // Falha passageira na renovação (Bling fora, rede): o token atual ainda vale por alguns minutos — usa.
+    const vale = c.accessToken && c.expiraEm && c.expiraEm.getTime() - Date.now() > 30_000;
+    if (vale && !(err instanceof ErroBling && err.precisaReautorizar)) {
+      logger.warn({ unitId, err: String(err) }, 'bling: renovação falhou, uso o token atual enquanto vale');
+      return c.accessToken as string;
+    }
+    throw err;
+  }
 }
 
 export interface StatusBling {
   unidade: string;
   temApp: boolean;
   conectado: boolean;
+  /** Já foi conectado e caiu (token vencido ou revogado): um administrador do Bling precisa autorizar de novo. */
+  precisaReautorizar: boolean;
+  conectadoPor: string | null;
   conectadoEm: Date | null;
   tokenVenceEm: Date | null;
   reautorizarAte: Date | null;
@@ -144,6 +171,8 @@ export async function statusDoBling(slug: string): Promise<StatusBling> {
     unidade: u.name,
     temApp: !!c,
     conectado: !!c?.refreshToken,
+    precisaReautorizar: !!c && !c.refreshToken && !!c.conectadoEm,
+    conectadoPor: c?.conectadoPor ?? null,
     conectadoEm: c?.conectadoEm ?? null,
     tokenVenceEm: c?.expiraEm ?? null,
     reautorizarAte: c?.refreshEm ? refreshVenceEm(c.refreshEm) : null,

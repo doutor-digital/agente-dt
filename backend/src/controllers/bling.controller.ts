@@ -3,17 +3,16 @@
  *
  * - GET /api/bling/callback (PÚBLICO, fica acima do requireAuth): o Bling devolve o navegador do
  *   administrador para cá com `code` e `state`; trocamos pelo token e mostramos "conectado".
- * - As demais são do painel, só SUPER_ADMIN: gravar o aplicativo, gerar o link de autorização,
- *   ver a situação e testar a conexão (lê o nome da empresa no Bling).
+ * - As demais são do painel, só SUPER_ADMIN: gravar o aplicativo e gerar o link de autorização (só
+ *   com sessão — escrevem), ver a situação e testar a conexão (leitura; aceitam também a chave de serviço).
  *
  * Nenhuma resposta e nenhum log carrega token ou Client Secret.
  */
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { logger } from '../lib/logger.js';
-import { prisma } from '../lib/prisma.js';
 import { concluirAutorizacao, iniciarAutorizacao, salvarAppDoBling, statusDoBling } from '../lib/bling/conexao.js';
-import { blingGet } from '../lib/bling/cliente.js';
+import { testarConexao } from '../lib/bling/cliente.js';
 import { ErroBling } from '../lib/bling/oauth.js';
 
 function esc(s: string): string {
@@ -80,7 +79,7 @@ export async function blingAppHandler(req: Request, res: Response): Promise<void
 /** POST /api/bling/:slug/autorizar — link que o administrador do Bling abre (vale 10 min). */
 export async function blingAutorizarHandler(req: Request, res: Response): Promise<void> {
   try {
-    res.json(await iniciarAutorizacao(String(req.params.slug)));
+    res.json(await iniciarAutorizacao(String(req.params.slug), req.user?.email ?? 'painel'));
   } catch (err) { responderErro(res, err); }
 }
 
@@ -94,9 +93,6 @@ export async function blingStatusHandler(req: Request, res: Response): Promise<v
 /** GET /api/bling/:slug/teste — prova que a conexão funciona: lê os dados básicos da empresa no Bling. */
 export async function blingTesteHandler(req: Request, res: Response): Promise<void> {
   try {
-    const u = await prisma.unit.findUnique({ where: { slug: String(req.params.slug) }, select: { id: true } });
-    if (!u) { res.status(404).json({ error: 'unidade não existe' }); return; }
-    const r = await blingGet<{ data?: { nome?: string; fantasia?: string; cnpj?: string } }>(u.id, '/empresas/me/dados-basicos');
-    res.json({ ok: true, empresa: r?.data?.fantasia || r?.data?.nome || null });
+    res.json({ ok: true, empresa: await testarConexao(String(req.params.slug)) });
   } catch (err) { responderErro(res, err); }
 }

@@ -4,7 +4,7 @@
  * chamadas. 429 espera e tenta de novo; 401 renova o token uma vez e tenta de novo.
  */
 import { BLING_API, ErroBling, type Fetcher } from './oauth.js';
-import { renovar, tokenDeAcesso } from './conexao.js';
+import { renovar, tokenDeAcesso, unidadePorSlug } from './conexao.js';
 import { Ritmo } from './ritmo.js';
 
 /** 3/s = uma a cada 334 ms; folga pra não encostar no limite. */
@@ -41,7 +41,12 @@ export async function blingGet<T = unknown>(
       if (tentativa < 3) { await dormir(1000 * (tentativa + 1)); continue; }
       throw new ErroBling(`sem resposta do Bling em ${caminho}: ${String(err).slice(0, 200)}`, null);
     }
-    if (resp.status === 429) { await dormir(1100 * (tentativa + 1)); continue; }
+    if (resp.status === 429) {
+      // Respeita o Retry-After do Bling (segundos); sem ele, espera crescente. Teto de 30 s por espera.
+      const ra = Number(resp.headers.get('retry-after'));
+      await dormir(Math.min(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 1100 * (tentativa + 1), 30_000));
+      continue;
+    }
     if (resp.status === 401 && !renovou) { renovou = true; token = await renovar(unitId, fetcher); continue; }
     const texto = await resp.text();
     if (!resp.ok) {
@@ -51,4 +56,11 @@ export async function blingGet<T = unknown>(
     return (texto ? JSON.parse(texto) : null) as T;
   }
   throw new ErroBling(`Bling não respondeu em ${caminho} depois de 4 tentativas (limite de requisições?)`, 429);
+}
+
+/** Prova que a conexão funciona: lê os dados básicos da empresa no Bling e devolve o nome. */
+export async function testarConexao(slug: string, fetcher: Fetcher = fetch): Promise<string | null> {
+  const u = await unidadePorSlug(slug);
+  const r = await blingGet<{ data?: { nome?: string; fantasia?: string } }>(u.id, '/empresas/me/dados-basicos', {}, fetcher);
+  return r?.data?.fantasia || r?.data?.nome || null;
 }
