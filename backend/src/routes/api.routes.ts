@@ -184,6 +184,7 @@ import { ponteCamposHandler, ponteGuiaHandler, ponteMoverHandler } from '../cont
 import {
   ponteEtiquetasDaContaHandler,
   ponteLigacaoHandler,
+  ponteNotaHandler,
   pontePorEtiquetaHandler,
   ponteRespostasHandler,
   ponteTirarEtiquetaHandler,
@@ -330,6 +331,8 @@ apiRouter.get('/public/widget/:slug/ponte/guia', ponteGuiaHandler);
 apiRouter.post('/public/widget/:slug/ponte/campos', ponteCamposHandler);
 apiRouter.post('/public/widget/:slug/ponte/mover', ponteMoverHandler);
 apiRouter.get('/public/widget/:slug/ponte/contador', ponteContadorHandler);
+// 0.5.1 da Ponte: a observação da atendente vira uma NOTA comum no cartão (no Kommo, nunca no WhatsApp).
+apiRouter.post('/public/widget/:slug/ponte/nota', ponteNotaHandler);
 // Marcar consulta de dentro do cartão (unidade sem Sofia): mesma chave por unidade, limite próprio de escrita.
 apiRouter.get('/public/widget/:slug/horarios', widgetHorariosHandler);
 apiRouter.post('/public/widget/:slug/marcar', widgetMarcarHandler);

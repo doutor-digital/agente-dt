@@ -921,3 +921,82 @@ describe('0.5.1 — textos da unidade sem IA', () => {
     assert.match(t, /Se ele já tem cadastro com outro nome ou telefone, confira na franquia antes/);
   });
 });
+
+describe('0.5.1 — Observações (vira nota no cartão)', () => {
+  const montarCartao = (acoes) => {
+    const doc = novoDoc();
+    return { doc, n: D.cartao(doc, novo(), acoes, AGORA) };
+  };
+
+  it('sem a ação de salvar (painel antigo): a caixa não aparece', () => {
+    assert.equal(montarCartao({}).n.querySelector('[data-bloco="observacao"]'), null);
+  });
+
+  it('vazia, longa demais ou com HTML: não salva, e diz por quê', () => {
+    const salvas = [];
+    const { doc, n } = montarCartao({ salvarObservacao: (id, t) => { salvas.push(t); return Promise.resolve(); } });
+    const campo = n.querySelector('[data-papel="observacao"]');
+    assert.equal(campo.maxLength, D.MAX_OBSERVACAO);
+    const botao = n.querySelector('[data-acao="salvar-observacao"]');
+    const msg = n.querySelector('[data-papel="msg-observacao"]');
+    for (const [texto, erro] of [['   ', /Escreva a observação/], ['a'.repeat(2001), /passa de 2000 letras/], ['<b>urgente</b>', /HTML/]]) {
+      campo.value = texto;
+      botao.click();
+      assert.match(msg.textContent, erro, texto.slice(0, 20));
+      assert.equal(n.querySelector('[data-bloco="observacao"] [data-papel="previa"]'), null);
+    }
+    assert.deepEqual(salvas, []);
+    assert.equal(D.problemaDaObservacao('dor < 5 e > 2'), null, 'sinal de menor não é HTML');
+    assert.ok(doc);
+  });
+
+  it('prévia com o prefixo e quem escreve; só "Gravar no Kommo" grava; deu certo: "Salvo no cartão." e caixa limpa', async () => {
+    const salvas = [];
+    const { n } = montarCartao({ quem: () => 'Ana', salvarObservacao: (id, t) => { salvas.push([id, t]); return Promise.resolve({ ok: true }); } });
+    const campo = n.querySelector('[data-papel="observacao"]');
+    campo.value = '  A filha acompanha.  ';
+    n.querySelector('[data-acao="salvar-observacao"]').click();
+    const previa = n.querySelector('[data-bloco="observacao"] [data-papel="previa"]');
+    assert.match(previa.textContent, /^Vai gravar no cartão do Kommo \(uma nota\):Observação pela Ponte · Ana · \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:A filha acompanha\./);
+    assert.match(previa.textContent, /Nada vai para o WhatsApp/);
+    assert.equal(campo.disabled, true, 'a caixa trava durante a prévia');
+    assert.deepEqual(salvas, []);
+    previa.querySelector('[data-acao="confirmar"]').click();
+    await tique();
+    await tique();
+    assert.deepEqual(salvas, [[123, 'A filha acompanha.']]);
+    assert.equal(n.querySelector('[data-papel="observacao-ok"]').textContent, 'Salvo no cartão.');
+    assert.equal(campo.value, '');
+    assert.equal(campo.disabled, false);
+  });
+
+  it('"Voltar e corrigir" não grava; erro do servidor aparece e o texto fica', async () => {
+    let falhar = true;
+    const { n } = montarCartao({ salvarObservacao: () => (falhar ? Promise.reject(new Error('Disponível depois da atualização do servidor.')) : Promise.resolve()) });
+    const campo = n.querySelector('[data-papel="observacao"]');
+    campo.value = 'Prefere tarde.';
+    n.querySelector('[data-acao="salvar-observacao"]').click();
+    n.querySelector('[data-acao="voltar-previa"]').click();
+    assert.equal(n.querySelector('[data-bloco="observacao"] [data-papel="previa"]'), null);
+    assert.equal(campo.disabled, false);
+    n.querySelector('[data-acao="salvar-observacao"]').click();
+    n.querySelector('[data-bloco="observacao"] [data-acao="confirmar"]').click();
+    await tique();
+    await tique();
+    assert.equal(n.querySelector('[data-papel="msg-observacao"]').textContent, 'Disponível depois da atualização do servidor.');
+    assert.equal(campo.value, 'Prefere tarde.');
+    falhar = false;
+  });
+
+  it('o rascunho guardado volta na caixa; o dado entra como texto, nunca como HTML', () => {
+    const guardados = [];
+    const { n } = montarCartao({ salvarObservacao: () => Promise.resolve(), lerObservacao: (id) => (id === 123 ? 'rascunho <img src=x>' : ''), guardarObservacao: (id, t) => guardados.push([id, t]) });
+    const campo = n.querySelector('[data-papel="observacao"]');
+    assert.equal(campo.value, 'rascunho <img src=x>');
+    campo.value = 'novo';
+    campo.dispatchEvent(new campo.ownerDocument.defaultView.Event('input'));
+    assert.deepEqual(guardados, [[123, 'novo']]);
+    assert.equal(n.querySelector('img'), null);
+  });
+});
+

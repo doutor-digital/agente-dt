@@ -6,7 +6,9 @@
  *   - `POST   /api/public/widget/:slug/ponte/etiquetas` `{ leadId, nome, por, confirmado? }` → põe (▶ exige `confirmado`);
  *   - `DELETE /api/public/widget/:slug/ponte/etiquetas` `{ leadId, nome, por }` → tira;
  *   - `POST   /api/public/widget/:slug/ponte/ligacao` `{ leadId, resultado, por }` → campos ☎ + nota;
- *   - `GET    /api/public/widget/:slug/ponte/respostas` → os modelos gerais (texto livre) da conta, para COPIAR.
+ *   - `GET    /api/public/widget/:slug/ponte/respostas` → os modelos gerais (texto livre) da conta, para COPIAR;
+ *   - `POST   /api/public/widget/:slug/ponte/nota` `{ leadId, texto, por }` → 0.5.1: a OBSERVAÇÃO da atendente vira uma
+ *     nota comum no cartão ("Observação pela Ponte · Ana · 15/10/2026 15:42:"; ver `lib/ponte-nota.ts`).
  *
  * Tudo vai no Kommo pela chave da unidade — nunca no WhatsApp. A Ponte não envia, não liga e não digita nada lá.
  * Log sem dado de paciente: id do cartão, nome da etiqueta e o resultado, nada de nome nem telefone.
@@ -28,6 +30,7 @@ import {
 } from '../lib/ponte-etiquetas.js';
 import { camposDaConta, lerPedidoDeLigacao, registrarLigacaoUmaVez } from '../lib/ponte-ligacao.js';
 import { ONDE_CADASTRAR_RESPOSTAS, respostasDaConta } from '../lib/ponte-respostas.js';
+import { gravarObservacaoUmaVez, lerPedidoDeNota } from '../lib/ponte-nota.js';
 
 /** Leitura (listas da conta): o painel pede ao abrir o "+ etiqueta" e a aba Respostas. */
 const LIMITE_DE_LEITURA = { balde: 'ponte-listas', max: 60 };
@@ -35,6 +38,8 @@ const LIMITE_DE_LEITURA = { balde: 'ponte-listas', max: 60 };
 const LIMITE_DA_ETIQUETA = { balde: 'ponte-etiqueta', max: 30 };
 /** Resultado de ligação: o ritmo da fila já segura (1 a cada 40 s); o limite é só a trava de cima. */
 const LIMITE_DA_LIGACAO = { balde: 'ponte-ligacao', max: 30 };
+/** Observação: escrita, uma atendente escreve poucas por minuto. */
+const LIMITE_DA_NOTA = { balde: 'ponte-nota', max: 30 };
 
 async function unidadeComKommo(req: Request, res: Response, limite: { balde: string; max: number }): Promise<Unit | null> {
   const unit = await unidadeDaPonte(req, res, limite);
@@ -131,6 +136,34 @@ export async function ponteLigacaoHandler(req: Request, res: Response): Promise<
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId, resultado }, 'ponte: falha ao registrar a ligação');
     res.status(502).json({ error: 'não consegui gravar a ligação no Kommo agora' });
+  }
+}
+
+// ── 0.5.1: observação (nota comum no cartão) ──
+
+/** `POST …/ponte/nota` `{ leadId, texto, por? }` → `{ ok: true, leadId, notaId, repetido }` ou `{ ok: false, error }`. */
+export async function ponteNotaHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeComKommo(req, res, LIMITE_DA_NOTA);
+  if (!unit) return;
+  const lido = lerPedidoDeNota(req.body);
+  if (!lido.ok) {
+    res.status(400).json({ ok: false, error: lido.erro });
+    return;
+  }
+  const { leadId, texto } = lido.pedido;
+  try {
+    const r = await gravarObservacaoUmaVez(contaDaUnidade(unit), createKommoClient(unit), lido.pedido);
+    if (!r.ok) {
+      logger.warn({ unit: unit.slug, leadId, status: r.status }, 'ponte: observação não gravada');
+      res.status(r.status).json({ ok: false, error: r.erro });
+      return;
+    }
+    // o texto é do paciente: no log, só o tamanho
+    logger.info({ unit: unit.slug, leadId, notaId: r.notaId, letras: texto.length, repetido: !!r.repetido, origem: 'ponte' }, 'ponte: observação gravada');
+    res.json({ ok: true, leadId, notaId: r.notaId, repetido: !!r.repetido, agora: new Date() });
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'ponte: falha ao gravar a observação');
+    res.status(502).json({ ok: false, error: 'não consegui gravar a observação no Kommo agora' });
   }
 }
 

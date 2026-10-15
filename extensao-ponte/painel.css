@@ -958,6 +958,10 @@ h3.guia__titulo { font-size: 14px; margin-top: 10px; }
 .guia__previa-titulo { margin: 0 0 4px; font-weight: 800; }
 .guia__previa .pausa__botoes { margin-top: 8px; }
 .guia__previa .botao--primario { display: inline-flex; width: auto; }
+/* 0.5.1: Observações (vira nota no cartão do Kommo) */
+.observacao__campo { resize: vertical; min-height: 64px; }
+.observacao__botoes { margin-top: 8px; }
+.observacao .guia__linhas li { white-space: pre-wrap; }
 .guia .botao--primario { margin-top: 10px; }
 
 /* ── animação ao trocar de paciente (curta; quem prefere menos movimento não vê) ── */

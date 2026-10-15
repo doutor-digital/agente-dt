@@ -39,7 +39,10 @@
  *     `/ping` passam pelo mesmo `nomeCurtoDaUnidade`, e o último fica guardado (`unidadeVista`: slug, nome e se a unidade
  *     tem a Sofia — nada de paciente). O nome tirado do slug ("Petropolis") só aparece se o servidor não responder;
  *   - a Sofia só aparece no rodapé e no modo aprendiz quando o servidor disse que a unidade tem a IA (`sofiaNaUnidade`);
- *   - a busca manual com um telefone (com DDD) procura pelo telefone; o resto, pelo nome.
+ *   - a busca manual com um telefone (com DDD) procura pelo telefone; o resto, pelo nome;
+ *   - "Observações": o texto vira uma NOTA comum no cartão (`POST …/ponte/nota`), depois da prévia e da confirmação. O
+ *     que foi digitado fica só na memória do painel (30 min), por cartão. Servidor de antes da 0.5.1 (a rota não existe:
+ *     cai no 401 do login, ou 404 sem a mensagem da Ponte) → "Disponível depois da atualização do servidor."
  */
 (function () {
   'use strict';
@@ -102,6 +105,9 @@
   /** O que foi digitado no guia de cada cartão (só na memória, 30 min): trocar de aba e voltar não perde. */
   var rascunhos = new Map();
   var RASCUNHO_MS = 30 * 60 * 1000;
+  /** 0.5.1: o que foi digitado em "Observações" de cada cartão (só na memória, 30 min): redesenhar o cartão não perde. */
+  var rascunhosDeObservacao = new Map();
+  var SEM_A_ROTA = 'Disponível depois da atualização do servidor.';
 
   function trocar(no) {
     raiz.replaceChildren(no);
@@ -239,7 +245,11 @@
           pede.precisaConfirmar = true;
           throw pede;
         }
-        throw new Error(e ? e.charAt(0).toUpperCase() + e.slice(1) + '.' : 'Não consegui falar com o servidor.');
+        var falha = new Error(e ? e.charAt(0).toUpperCase() + e.slice(1) + '.' : 'Não consegui falar com o servidor.');
+        // 0.5.1: quem chamou sabe o status e se a mensagem veio da Ponte (rota que não existe não manda a nossa)
+        falha.status = resp.status;
+        falha.doServidor = !!e;
+        throw falha;
       });
     }, function () {
       throw new Error('Não consegui falar com o servidor.');
@@ -397,6 +407,27 @@
     },
     // 0.4.0: o guia da etapa
     abrirGuia: function (leadId) { abrirGuia(leadId); },
+    // 0.5.1: Observações — vira uma nota comum no cartão; nunca vai para o WhatsApp
+    quem: function () { return quem(); },
+    lerObservacao: function (leadId) {
+      var r = rascunhosDeObservacao.get(leadId);
+      return r && Date.now() - r.em < RASCUNHO_MS ? r.texto : '';
+    },
+    guardarObservacao: function (leadId, texto) {
+      if (rascunhosDeObservacao.size > 50) rascunhosDeObservacao.clear();
+      if (texto) rascunhosDeObservacao.set(leadId, { em: Date.now(), texto: String(texto).slice(0, 4000) });
+      else rascunhosDeObservacao.delete(leadId);
+    },
+    salvarObservacao: function (leadId, texto) {
+      return chamar('POST', '/ponte/nota', { leadId: leadId, texto: texto, por: quem() }).then(function (j) {
+        rascunhosDeObservacao.delete(leadId);
+        return j;
+      }, function (e) {
+        // servidor de antes da 0.5.1: a rota não existe — a /public cai no login (401) ou num 404 sem a mensagem da Ponte
+        if (e && (e.status === 401 || (e.status === 404 && !e.doServidor))) throw new Error(SEM_A_ROTA);
+        throw e;
+      });
+    },
     // fase 3: etiquetas
     listarEtiquetas: function () {
       if (etiquetasGuardadas && Date.now() - etiquetasGuardadas.em < LISTAS_CACHE_MS) return Promise.resolve(etiquetasGuardadas.lista);

@@ -64,6 +64,30 @@ textos errados para essas unidades. O que mudou (o resto funciona igual):
    vez de buscar pelo nome (que nunca acharia). Não achou: o que foi digitado volta na caixa. O cartão achado pelo
    telefone digitado é relido pelo id ao voltar do guia, como o achado pelo nome.
 
+7. **Observações** (pedido do João, 15/10: "vamos colocar o campo de observações"). No cartão, a caixa **Observações**
+   (até 2000 letras) e o botão **Salvar no cartão**. A atendente escreve, vê a prévia ("Vai gravar no cartão do Kommo
+   (uma nota): Observação pela Ponte · Ana · 15/10/2026 15:42:" e o texto) e só grava em **Gravar no Kommo**. O texto
+   vira uma **nota comum** no cartão (a nota de texto do lead), com o prefixo **"Observação pela Ponte · <Seu nome das
+   opções> · <data e hora de Brasília>:"** e o texto na linha de baixo. Deu certo: "Salvo no cartão." e a caixa limpa.
+   O que foi digitado volta se o cartão for redesenhado ou se a atendente trocar de conversa e voltar (só na memória do
+   painel, 30 min; nunca no `storage`). Nunca vai para o WhatsApp.
+   - Rota nova: `POST /api/public/widget/:slug/ponte/nota` `{ leadId, texto, por }` (`backend/src/lib/ponte-nota.ts`,
+     no `ponte-acoes.controller.ts`), com a mesma porta das outras que gravam (`X-Widget-Key` + slug, chave antes do
+     limitador; balde `ponte-nota`, 30 por minuto). Responde `{ ok: true, leadId, notaId, repetido }` ou
+     `{ ok: false, error }`.
+   - O texto: não vazio, até 2000 letras, **sem HTML** (tag ou comentário; "dor < 5" passa) — senão 400 e nada vai ao
+     Kommo. Quebras de linha ficam. A hora é a de Brasília, carimbada no servidor.
+   - O cartão é lido com o token da unidade da chave (o mesmo das etiquetas e da ligação): cartão de outra conta, ou
+     apagado, dá 404 e nada é gravado. Na conta de duas unidades, vale qualquer cartão da conta.
+   - Uma nota por observação: o mesmo texto no mesmo cartão em menos de 2 min (clique duplo, resposta perdida) devolve
+     a nota da primeira vez. Se o Kommo não devolver o id da nota, o erro manda conferir o cartão antes de tentar de
+     novo. No log, só o id do cartão, o da nota e o tamanho do texto — nunca o texto.
+   - **Só funciona depois do deploy do servidor.** Com o servidor de antes, a rota não existe: a `/public` cai no login
+     (401, não 404) — o painel mostra **"Disponível depois da atualização do servidor."** (também num 404 sem a
+     mensagem da Ponte) e o texto fica na caixa.
+   - Como qualquer nota escrita no Kommo, ela conta como mexida no cartão: se ele tiver pendência de preenchimento, o
+     robô de revisão pode marcar "⚠ Revisar cartão" (o mesmo de hoje quando a SDR escreve uma nota lá).
+
 **O que fica guardado a mais** (`chrome.storage.local`, chave `unidadeVista`): o slug, o nome da unidade e se ela tem a
 Sofia. Nada de paciente.
 
@@ -90,6 +114,9 @@ Não é um conserto pequeno: ficou para o João decidir.
 - [ ] o topo mostra "Petrópolis" desde a abertura do painel (e não "Petropolis");
 - [ ] "Começar a ligar": o cabeçalho diz "Sem espera entre uma ligação e outra · no máximo 40 por hora…";
 - [ ] a busca manual com o telefone de um paciente de teste (com DDD) acha o cartão;
+- [ ] depois do deploy do servidor: salvar uma observação num cartão de teste e ver a nota no histórico do cartão
+      ("Observação pela Ponte · <nome> · <hora de Brasília>:"); antes do deploy, o painel diz "Disponível depois da
+      atualização do servidor.";
 - [ ] se o bloco da Sofia ainda aparecer em Petrópolis: o servidor diz `sofiaNaUnidade: true` para ela (a conta é
       "tem campo de entrega + chave do modelo"; com o provedor padrão `openai`, a chave do `.env` conta) — conferir a
       configuração da unidade.
@@ -555,7 +582,7 @@ contra os mesmos vetores fixos (`testes/vetores-impressao.json`).
 - mostra notificação do sistema;
 - escreve na franquia (nem marca consulta). No Kommo, só escreve quando a atendente clica: pausar e retomar a Sofia
   num paciente, pôr e tirar etiqueta, o resultado da ligação (campos ☎; nota só sem eles), e — na 0.4.0 — os campos
-  do guia e a mudança de etapa (com nota de quem fez). Tudo vai pelo NOSSO servidor com a chave da unidade — nunca
+  do guia e a mudança de etapa (com nota de quem fez); na 0.5.1, a observação (uma nota comum, depois da prévia). Tudo vai pelo NOSSO servidor com a chave da unidade — nunca
   pelo WhatsApp.
 
 Permissões: `sidePanel`, `storage` e (0.4.0) `alarms` — só para o relógio de 5 min do número no ícone —, mais
@@ -637,7 +664,12 @@ npm test            # node --test 'testes/*.test.js'
   `ligacao.test.js` — `textoDoRitmo` sem e com intervalo; `trilha.test.js` — a regra do widget e `nomeCurtoDaUnidade`;
   `painel.test.js` — o topo com o nome do servidor (e guardado; o do slug só sem resposta), a fila que não troca o nome,
   o rodapé e o modo aprendiz só com a IA, e a busca manual por nome × por telefone (relida pelo id ao voltar do guia).
-  No backend, `ponte-guia.test.ts` confere a dica da ◷ Data da Consulta (widget, sem Sofia).
+  No backend, `ponte-guia.test.ts` confere a dica da ◷ Data da Consulta (widget, sem Sofia). As Observações:
+  `desenho.test.js` (vazia, longa, HTML, prévia, só grava no confirmar, "Salvo no cartão.", erro e rascunho),
+  `painel.test.js` (o pedido com quem escreveu, nada no WhatsApp, o servidor sem a rota — 401 e 404 —, o erro da Ponte
+  legível e o rascunho que volta) e, no backend, `ponte-nota.test.ts` (o pedido, o HTML, o texto da nota com a hora de
+  Brasília, o cartão de outra conta, o id que não veio, o POST de nota comum e uma nota por observação) e
+  `ponte-porta.test.ts` (a nota passa pela mesma porta).
 
 Na 0.5.0, no backend: `ponte-painel.test.ts` (o selo da unidade nas contas de uma e de duas unidades, o nome curto —
 "Comercial" cai no slug —, o `franquiaAndaSozinha` com as duas automações pela tela e pelo `.env`, da unidade do cartão

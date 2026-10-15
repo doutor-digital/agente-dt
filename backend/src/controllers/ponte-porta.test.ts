@@ -7,6 +7,7 @@ import { chaveDoWidget } from '../lib/widget-agenda.js';
 import { unidadeDaPonte } from './widget-franquia.controller.js';
 import { ponteCamposHandler, ponteGuiaHandler, ponteMoverHandler } from './ponte-guia.controller.js';
 import { ponteContadorHandler } from './ponte-fila.controller.js';
+import { ponteNotaHandler } from './ponte-acoes.controller.js';
 
 // A unidade "do banco" sem banco: a porta só precisa do findUnique.
 Object.defineProperty(prisma, 'unit', {
@@ -71,5 +72,16 @@ describe('a porta das rotas da Ponte (chave ANTES do limitador)', () => {
       await handler(req, res as unknown as Response);
       assert.equal(res.codigo, 403, nome);
     }
+  });
+
+  it('0.5.1: a observação (nota) passa pela mesma porta — sem a chave: 403; com a chave e sem Kommo: 409; nada gravado', async () => {
+    const corpo = { leadId: 1, texto: 'Prefere tarde.', por: 'Ana' };
+    const sem = resposta();
+    await ponteNotaHandler({ ...pedido('unidade-porta-e', 'chave-errada', '10.0.0.5'), body: corpo } as unknown as Request, sem as unknown as Response);
+    assert.equal(sem.codigo, 403);
+    const com = resposta();
+    const slug = 'unidade-porta-f';
+    await ponteNotaHandler({ ...pedido(slug, chaveDoWidget(slug, env.SESSION_JWT_SECRET), '10.0.0.6'), body: corpo } as unknown as Request, com as unknown as Response);
+    assert.equal(com.codigo, 409, 'a unidade falsa não tem Kommo: nem chega a ler o cartão');
   });
 });

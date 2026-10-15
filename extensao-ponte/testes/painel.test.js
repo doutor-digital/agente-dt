@@ -99,6 +99,10 @@ function montar({ conversa = { aberta: false }, rotas = {}, guardado = {}, abrir
     pedidos.push({ metodo, caminho, busca: u.search, corpo, chave: init.headers && init.headers['X-Widget-Key'] });
     const r = rotas[metodo + ' ' + caminho];
     const resposta = typeof r === 'function' ? r(corpo) : r;
+    // 0.5.1: `{ __status, corpo }` responde com outro status (o servidor de antes, sem a rota da nota)
+    if (resposta && resposta.__status) {
+      return Promise.resolve({ ok: resposta.__status < 400, status: resposta.__status, json: () => (resposta.corpo === undefined ? Promise.reject(new Error('não é JSON')) : Promise.resolve(resposta.corpo)) });
+    }
     return Promise.resolve({ ok: !!resposta, status: resposta ? 200 : 500, json: () => Promise.resolve(resposta || { error: 'falhou' }) });
   };
   for (const s of scripts) w.eval(fs.readFileSync(path.join(raiz, s), 'utf8'));
@@ -692,3 +696,98 @@ describe('painel — 0.5.1: nome da unidade, Sofia só com a IA e busca pelo tel
     }
   });
 });
+
+// ── 0.5.1: Observações — vira uma nota comum no cartão (nunca no WhatsApp) ──
+
+describe('painel — 0.5.1: Observações', () => {
+  const conversa = { aberta: true, tipo: 'individual', chave: 'c1', telefone: '5599900000043', nome: 'Maria Souza', fonteTelefone: 'jid', impressoes: [] };
+
+  function escrever(p, texto) {
+    const campo = p.doc.querySelector('#conteudo [data-papel="observacao"]');
+    assert.ok(campo, 'a caixa Observações está no cartão');
+    campo.value = texto;
+    campo.dispatchEvent(new p.w.Event('input'));
+    return campo;
+  }
+
+  it('escreve, revisa a prévia, confirma: vai para POST /ponte/nota com quem escreveu; "Salvo no cartão." e a caixa limpa', async () => {
+    const p = montar({ conversa, rotas: { 'POST /ponte/cartao': cartaoDe(123, 'Maria'), 'POST /ponte/nota': (c) => ({ ok: true, leadId: c.leadId, notaId: 900, repetido: false }) } });
+    try {
+      await esperar(600);
+      const tela = p.doc.getElementById('conteudo');
+      const campo = escrever(p, 'Prefere ligação depois das 17h.');
+      tela.querySelector('[data-acao="salvar-observacao"]').click();
+      assert.equal(p.pedidos.filter((x) => x.caminho === '/ponte/nota').length, 0, 'a prévia vem antes: nada gravado ainda');
+      const previa = tela.querySelector('[data-bloco="observacao"] [data-papel="previa"]');
+      assert.match(previa.textContent, /Observação pela Ponte · Ana · \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:/);
+      assert.match(previa.textContent, /Prefere ligação depois das 17h\./);
+      previa.querySelector('[data-acao="confirmar"]').click();
+      await esperar(10);
+      const gravou = p.pedidos.filter((x) => x.caminho === '/ponte/nota');
+      assert.equal(gravou.length, 1);
+      assert.deepEqual(gravou[0].corpo, { leadId: 123, texto: 'Prefere ligação depois das 17h.', por: 'Ana' });
+      assert.equal(gravou[0].chave, 'k');
+      assert.match(tela.querySelector('[data-papel="observacao-ok"]').textContent, /Salvo no cartão/);
+      assert.equal(campo.value, '');
+      // nunca escreve no WhatsApp: nenhuma mensagem para a aba além de "qual conversa", nenhuma troca de URL
+      assert.deepEqual(p.mensagens.filter((m) => m.tipo !== 'ponte:qual-conversa'), []);
+      assert.deepEqual(p.atualizacoes, []);
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('servidor de antes da 0.5.1 (a rota não existe: 401 do login, ou 404 sem a mensagem da Ponte): "Disponível depois da atualização do servidor."', async () => {
+    for (const semRota of [{ __status: 401, corpo: { error: 'unauthenticated' } }, { __status: 404 }]) {
+      const p = montar({ conversa, rotas: { 'POST /ponte/cartao': cartaoDe(123, 'Maria'), 'POST /ponte/nota': semRota } });
+      try {
+        await esperar(600);
+        const tela = p.doc.getElementById('conteudo');
+        const campo = escrever(p, 'Prefere tarde.');
+        tela.querySelector('[data-acao="salvar-observacao"]').click();
+        tela.querySelector('[data-bloco="observacao"] [data-acao="confirmar"]').click();
+        await esperar(10);
+        assert.equal(tela.querySelector('[data-papel="msg-observacao"]').textContent, 'Disponível depois da atualização do servidor.', String(semRota.__status));
+        assert.equal(campo.value, 'Prefere tarde.', 'o texto não se perde');
+      } finally {
+        p.w.close();
+      }
+    }
+  });
+
+  it('erro do servidor com mensagem da Ponte: aparece legível (ex.: cartão de outra conta)', async () => {
+    const p = montar({ conversa, rotas: { 'POST /ponte/cartao': cartaoDe(123, 'Maria'), 'POST /ponte/nota': { __status: 404, corpo: { ok: false, error: 'cartão não encontrado no Kommo desta unidade' } } } });
+    try {
+      await esperar(600);
+      const tela = p.doc.getElementById('conteudo');
+      escrever(p, 'x');
+      tela.querySelector('[data-acao="salvar-observacao"]').click();
+      tela.querySelector('[data-bloco="observacao"] [data-acao="confirmar"]').click();
+      await esperar(10);
+      assert.equal(tela.querySelector('[data-papel="msg-observacao"]').textContent, 'Cartão não encontrado no Kommo desta unidade.');
+    } finally {
+      p.w.close();
+    }
+  });
+
+  it('o que foi digitado volta depois de trocar de conversa e voltar (só na memória do painel, nunca no storage)', async () => {
+    const p = montar({
+      conversa,
+      rotas: { 'POST /ponte/cartao': (c) => (c.telefone === '5599900000044' ? cartaoDe(456, 'João') : cartaoDe(123, 'Maria')) },
+    });
+    try {
+      await esperar(600);
+      escrever(p, 'rascunho da observação');
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: { ...conversa, chave: 'c2', telefone: '5599900000044' } }, { tab: { id: 7 } });
+      await esperar(600);
+      assert.equal(p.doc.querySelector('#conteudo [data-papel="observacao"]').value, '', 'outro paciente: caixa vazia');
+      p.ouvintes.mensagem({ tipo: 'ponte:conversa', estado: conversa }, { tab: { id: 7 } });
+      await esperar(600);
+      assert.equal(p.doc.querySelector('#conteudo [data-papel="observacao"]').value, 'rascunho da observação');
+      assert.doesNotMatch(JSON.stringify(p.armazenado), /rascunho da observação/);
+    } finally {
+      p.w.close();
+    }
+  });
+});
+

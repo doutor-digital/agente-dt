@@ -22,6 +22,8 @@
  * 0.5.1: "Sem cadastro na franquia" ensina a marcar pelo widget "Assistente do cartão"; o cabeçalho do modo ligação diz
  * "Sem espera entre uma ligação e outra" (`L.textoDoRitmo`); e a busca manual aceita o TELEFONE com DDD
  * (`telefoneDaBusca`), além do nome — na unidade sem a Sofia, a conversa `@lid` só achava o cartão pelo nome.
+ * E a caixa "Observações" (`blocoDaObservacao`): o texto vira uma NOTA comum no cartão do Kommo, depois da prévia e
+ * da confirmação — nunca vai para o WhatsApp.
  */
 (function (raiz, fabrica) {
   var cjs = typeof module === 'object' && module.exports;
@@ -851,6 +853,91 @@
       el(doc, 'a', { classe: 'botao botao--kommo', href: c.link }, ic(doc, 'externo'), 'Abrir no Kommo'));
   }
 
+  // ── 0.5.1: Observações (uma nota comum no cartão do Kommo) ──
+
+  /** O mesmo limite e a mesma regra do servidor (`backend/src/lib/ponte-nota.ts`). */
+  var MAX_OBSERVACAO = 2000;
+
+  /** O que impede salvar a observação (vazia, longa demais, com HTML), ou `null`. */
+  function problemaDaObservacao(texto) {
+    var t = String(texto == null ? '' : texto).trim();
+    if (!t) return 'Escreva a observação.';
+    if (t.length > MAX_OBSERVACAO) return 'A observação passa de ' + MAX_OBSERVACAO + ' letras: encurte antes de salvar.';
+    if (/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/i.test(t) || /<!--/.test(t)) return 'A observação não pode ter HTML (tags como <b> ou <br>).';
+    return null;
+  }
+
+  /** "15/10/2026 15:42" em Brasília — só para a prévia: quem carimba a hora na nota é o servidor. */
+  function agoraEmBrasilia(agora) {
+    var p = {};
+    new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .formatToParts(agora).forEach(function (x) { p[x.type] = x.value; });
+    return p.day + '/' + p.month + '/' + p.year + ' ' + p.hour + ':' + p.minute;
+  }
+
+  /**
+   * A caixa "Observações": a atendente escreve, revisa a prévia ("Observação pela Ponte · Ana · 15/10/2026 15:42:" e o
+   * texto) e só grava no "Gravar no Kommo" — vira uma nota comum no cartão. Deu certo: "Salvo no cartão." e a caixa
+   * limpa. O que foi digitado volta se o cartão for redesenhado (`acoes.lerObservacao`/`guardarObservacao`, só na
+   * memória do painel). Sem `acoes.salvarObservacao` (teste antigo), a caixa não aparece.
+   */
+  function blocoDaObservacao(doc, r, acoes) {
+    if (!acoes || !acoes.salvarObservacao) return null;
+    var c = r.cartao;
+    var campo = doc.createElement('textarea');
+    campo.className = 'guia__entrada observacao__campo';
+    campo.rows = 3;
+    campo.maxLength = MAX_OBSERVACAO;
+    campo.placeholder = 'Ex.: prefere ligação depois das 17h; a filha acompanha.';
+    campo.setAttribute('aria-label', 'Observações sobre o paciente');
+    campo.setAttribute('data-papel', 'observacao');
+    campo.value = (acoes.lerObservacao && acoes.lerObservacao(c.id)) || '';
+    var msg = el(doc, 'p', { classe: 'nota nota--alerta', dados: { papel: 'msg-observacao' } });
+    var feito = el(doc, 'p', { classe: 'nota nota--ok', dados: { papel: 'observacao-ok' } });
+    var salvar = el(doc, 'button', { classe: 'botao botao--primario botao--pequeno', tipo: 'button', dados: { acao: 'salvar-observacao' } }, 'Salvar no cartão');
+    var area = el(doc, 'div', { dados: { papel: 'area-observacao' } });
+    campo.addEventListener('input', function () {
+      feito.textContent = '';
+      if (acoes.guardarObservacao) acoes.guardarObservacao(c.id, campo.value);
+    });
+    function voltar() {
+      area.replaceChildren();
+      salvar.hidden = false;
+      campo.disabled = false;
+    }
+    salvar.addEventListener('click', function () {
+      msg.textContent = '';
+      feito.textContent = '';
+      var texto = campo.value.trim();
+      var problema = problemaDaObservacao(texto);
+      if (problema) {
+        msg.textContent = problema;
+        return;
+      }
+      salvar.hidden = true;
+      campo.disabled = true;
+      var quem = (acoes.quem && acoes.quem()) || 'extensão Ponte';
+      area.replaceChildren(previa(doc, 'Vai gravar no cartão do Kommo (uma nota):',
+        ['Observação pela Ponte · ' + quem + ' · ' + agoraEmBrasilia(new Date()) + ':', texto],
+        [el(doc, 'p', { classe: 'nota' }, 'Fica no histórico do cartão. Nada vai para o WhatsApp.')],
+        'Gravar no Kommo', 'botao--primario',
+        function () {
+          return Promise.resolve(acoes.salvarObservacao(c.id, texto)).then(function () {
+            campo.value = '';
+            voltar();
+            feito.textContent = 'Salvo no cartão.';
+          });
+        },
+        voltar, msg));
+    });
+    return el(doc, 'section', { classe: 'bloco-cartao observacao', dados: { bloco: 'observacao' } },
+      rotulo(doc, 'lista', 'Observações'),
+      campo,
+      el(doc, 'p', { classe: 'nota' }, 'Vira uma nota no cartão do Kommo, com o seu nome e a hora. Até ' + MAX_OBSERVACAO + ' letras.'),
+      el(doc, 'div', { classe: 'observacao__botoes' }, salvar),
+      area, msg, feito);
+  }
+
   /** Cartão achado. `agora` só para o teste (o tempo na etapa e "amanhã"). */
   function cartao(doc, r, acoes, agora) {
     var c = r.cartao;
@@ -864,6 +951,7 @@
       resumo(doc, r, acoes),
       blocoDaSofia(doc, r, acoes),
       blocoDoKommo(doc, r, acoes),
+      blocoDaObservacao(doc, r, acoes),
       r.outrosCartoes && r.outrosCartoes.length
         ? el(doc, 'section', { classe: 'bloco-cartao outros', dados: { bloco: 'outros' } }, rotulo(doc, 'duplicado', 'Outros cartões deste paciente'), listaDeCartoes(doc, r.outrosCartoes, acoes))
         : null);
@@ -1518,6 +1606,8 @@
     guia: guia,
     urlDaConversa: urlDaConversa,
     telefoneDaBusca: telefoneDaBusca,
+    problemaDaObservacao: problemaDaObservacao,
+    MAX_OBSERVACAO: MAX_OBSERVACAO,
     relativo: relativo,
     textoDaPausa: textoDaPausa,
     COMO: COMO,
