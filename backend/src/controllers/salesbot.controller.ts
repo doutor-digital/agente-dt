@@ -12,6 +12,7 @@ import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
+import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 
 const payloadSchema = z
   .object({
@@ -184,9 +185,24 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       },
     );
 
-    const reply =
-      (result.decision ?? '').trim() ||
-      'Recebi sua mensagem, tô só verificando com a equipe um instante 🙏';
+    const decisao = (result.decision ?? '').trim();
+    // Mesma barreira do webhook: bastidor que a reescrita do grafo não limpou não sai — resposta vazia,
+    // como no lead pausado.
+    const vazou = decisao ? detectarVazamento(decisao) : null;
+    if (vazou) {
+      logger.error(
+        { traceId: trace.id, leadId, unit: unit.slug, tipo: vazou.tipo, trecho: vazou.trecho },
+        `salesbot: resposta bloqueada — ${explicarVazamento(vazou)}`,
+      );
+      await recorder.step({
+        kind: 'ERROR',
+        title: `🚫 Resposta bloqueada — ${explicarVazamento(vazou)} ("${vazou.trecho.slice(0, 40)}")`,
+        payload: { leadId, tipo: vazou.tipo, trecho: vazou.trecho, reply: decisao },
+      });
+    }
+    const reply = vazou
+      ? ''
+      : decisao || 'Recebi sua mensagem, tô só verificando com a equipe um instante 🙏';
     const totalLatency = Math.round(performance.now() - requestStart);
 
     await recorder.step({
@@ -201,13 +217,15 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       iaDecision: reply,
     });
 
-    await addMessage({
-      conversationId: conv.id,
-      traceId: trace.id,
-      role: 'assistant',
-      content: reply,
-      meta: { via: 'salesbot' },
-    });
+    if (reply) {
+      await addMessage({
+        conversationId: conv.id,
+        traceId: trace.id,
+        role: 'assistant',
+        content: reply,
+        meta: { via: 'salesbot' },
+      });
+    }
 
     res.json({ ok: true, reply, traceId: trace.id, unit: unit.slug });
     logger.info({ traceId: trace.id, leadId, ms: totalLatency, unit: unit.slug }, 'salesbot concluído');
