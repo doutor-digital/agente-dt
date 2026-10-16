@@ -56,3 +56,48 @@ test('kommo_conversa recusa mais de uma unidade e "todas"', async () => {
   const ctx = criarContextoKommo(new Map([['a-x', unidadeKommo('a-x', fonte)], ['b-y', unidadeKommo('b-y', fonte)]]));
   await assert.rejects(() => kommoConversa(ctx, { unidade: 'todas', leadId: 1 }));
 });
+
+test('histórico: lê a 2ª página de uma conversa longa e para se a API repetir a página', async () => {
+  const pagina1 = Array.from({ length: 250 }, (_, i) => msg(1000 + i, `2026-10-01T10:${String(i % 60).padStart(2, '0')}:00Z`, { type: 'incoming', author: { type: 'external' }, text: 'x' } as never));
+  const pagina2 = Array.from({ length: 10 }, (_, i) => msg(2000 + i, '2026-10-02T10:00:00Z', { type: 'incoming', author: { type: 'external' }, text: 'y' } as never));
+  const longa = { async listTalks() { return [{ talk_id: 1, updated_at: T('2026-10-02T10:00:00Z') }] as never; },
+    async listTalkMessages(_t: number, _l: number, p?: number) { return p === 2 ? pagina2 : pagina1; } };
+  const r = await historicoOficial(longa as never, 1, 500);
+  assert.equal(r.total, 260);
+  assert.equal(r.truncado, false);
+  let chamadas = 0;
+  const repete = { async listTalks() { return [{ talk_id: 1 }] as never; }, async listTalkMessages() { chamadas++; return pagina1; } };
+  const r2 = await historicoOficial(repete as never, 1, 500);
+  assert.equal(r2.total, 250);
+  assert.equal(chamadas, 2);
+});
+
+test('histórico por período: pula a conversa antiga e filtra as mensagens', async () => {
+  let lidas: number[] = [];
+  const k = {
+    async listTalks() { return [{ talk_id: 1, created_at: T('2026-08-01T00:00:00Z'), updated_at: T('2026-08-05T00:00:00Z') }, { talk_id: 2, created_at: T('2026-10-01T00:00:00Z'), updated_at: T('2026-10-14T00:00:00Z') }] as never; },
+    async listTalkMessages(t: number) {
+      lidas.push(t);
+      return [msg(1, '2026-10-02T12:00:00Z', { type: 'incoming', author: { type: 'external' }, text: 'a' } as never), msg(2, '2026-10-14T12:00:00Z', { type: 'incoming', author: { type: 'external' }, text: 'b' } as never)];
+    },
+  };
+  const r = await historicoOficial(k as never, 1, 500, { desde: T('2026-10-10T03:00:00Z'), ate: T('2026-10-16T02:59:59Z') });
+  assert.deepEqual(lidas, [2]);
+  assert.deepEqual(r.mensagens.map((m) => m.id), ['2']);
+});
+
+test('kommo_conversa: "todas" pede o teto de 500, período vira desde/ate no fuso e o corte é avisado', async () => {
+  const pedidos: Array<[number, unknown]> = [];
+  const fonte = fonteFalsa([leadFalso(7, '2026-10-01')]);
+  fonte.conversa = async (_id, limite, periodo) => { pedidos.push([limite, periodo]); return { conversas: 3, mensagens: [], total: 800, truncado: true }; };
+  const ctx = criarContextoKommo(new Map([['doutor-hernia-serra', unidadeKommo('doutor-hernia-serra', fonte)]]));
+  const r = await kommoConversa(ctx, { unidade: 'serra', leadId: 7, todas: true });
+  assert.equal(pedidos[0]![0], 500);
+  assert.match(String(r.ficaramDeFora), /mais antigas/);
+  await kommoConversa(ctx, { unidade: 'serra', leadId: 7, inicio: '2026-10-01', fim: '2026-10-16' });
+  assert.equal(pedidos[1]![0], 500);
+  assert.deepEqual(pedidos[1]![1], { desde: T('2026-10-01T03:00:00Z'), ate: T('2026-10-17T02:59:59Z') });
+  await kommoConversa(ctx, { unidade: 'serra', leadId: 7 });
+  assert.equal(pedidos[2]![0], 30);
+  await assert.rejects(() => kommoConversa(ctx, { unidade: 'serra', leadId: 7, inicio: '2026-10-16', fim: '2026-10-01' }));
+});
