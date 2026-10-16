@@ -390,3 +390,120 @@ test('decisão 2 — ligado recusa a Sofia levar cartão do TRATAMENTO pro COMER
   chaves('desligado');
   assert.equal(await recusaDoFunilTratamento(unit, kommo, 60, { tipo: 'funil', pipelineId: 10 }), null);
 });
+
+// ── resposta do João (16/10, à tarde): tira de PERDIDO/ALTA UMA vez; a equipe pôs de volta = fica + tarefa ──
+
+async function cenarioDevolucao(cartao: Partial<Cartao>, p: { idClient: number | null; consultas: SpineSchedule[] }, ficha?: Record<string, unknown>) {
+  const unit = unidade();
+  if (ficha) fichasFalsas.set(Number(ficha.idClient), ficha);
+  const { kommo, reg } = kommoFalso([{ id: 70, name: 'PACIENTE TESTE', pipeline_id: 10, status_id: 143, campos: {}, tags: [], contato: 70, fone: FONE, ...cartao }]);
+  const funis = await carregarFunis(kommo);
+  const resumo: ResumoSync = { unit: SLUG, em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
+  const ctx = {
+    unit, kommo, funis, mapa: _interno.mapearCampos(CAMPOS_BRUTOS), ops: { fisio: [], categoria: [], tratamento: [] }, agoraEpoch: Math.floor(Date.now() / 1000),
+    resumo, camposPorNome: CAMPOS, jornada: undefined as Estado | undefined,
+  } as Parameters<typeof _interno.processarCartao>[0];
+  const rodar = async () => _interno.processarCartao(ctx, 70, await kommo.getLead(70), { nome: 'PACIENTE TESTE', idClient: p.idClient, consultas: p.consultas, tratamento: null });
+  return { ctx, reg, rodar, kommo };
+}
+
+function marcada(idSchedule: number, categoria: string, dias: number): SpineSchedule {
+  return {
+    idSchedule, idTreatment: null, idStatus: 37, statusName: 'Agendado', clientName: 'PACIENTE TESTE', categoryName: categoria, physicalTherapist: null,
+    dateAttendanceUtc: diaLocal(dias), dateAttendanceLocal: null, dayLocal: null, timeLocal: null, isBusy: true, requiresManualValidation: false,
+  };
+}
+
+test('decisão 7 — PERDIDO com avaliação marcada: sai UMA vez (com nota); a SDR pôs de volta → fica e abre UMA tarefa', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  const { ctx, reg, rodar, kommo } = await cenarioDevolucao({}, { idClient: null, consultas: [marcada(9101, 'AVALIAÇÃO', 3)] });
+  ctx.jornada = 'ligado';
+  await rodar();
+  assert.deepEqual(reg.movidos.map((m) => m.statusId), [105], 'PERDIDO → AGENDADO');
+  assert.equal(reg.notas.length, 1);
+  assert.match(reg.notas[0].texto, /a franquia manda/);
+  assert.ok(alertas.some((a) => a.leadId === '70' && a.ruleKey === 'franquia-manda:PERDIDO:consulta:9101'), 'a marca fica no banco');
+
+  // a SDR põe de volta em PERDIDO, com a mesma consulta de pé na franquia
+  await kommo.moveStage({ leadId: 70, statusId: 143, pipelineId: 10 });
+  reg.movidos.length = 0;
+  await rodar();
+  await rodar();
+  assert.deepEqual(reg.movidos, [], 'não insiste: os robôs da etapa não disparam de novo');
+  assert.equal(reg.tarefas.length, 1, 'uma tarefa só, mesmo com duas varreduras');
+  assert.match(reg.tarefas[0].text, /Conferir/);
+  assert.equal(reg.notas.length, 1, 'sem nota nova');
+});
+
+test('decisão 7 — consulta NOVA (outro fato) tira do PERDIDO de novo', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  const unitAntes = seqUnidade + 1;
+  const { ctx, reg, rodar } = await cenarioDevolucao({}, { idClient: null, consultas: [marcada(9201, 'AVALIAÇÃO', 3)] });
+  ctx.jornada = 'ligado';
+  alertas.push({ unitId: `u1610-${unitAntes}`, leadId: '70', ruleKey: 'franquia-manda:PERDIDO:consulta:9100', createdAt: new Date() });
+  await rodar();
+  assert.deepEqual(reg.movidos.map((m) => m.statusId), [105]);
+});
+
+test('decisão 7 — ALTA com sessão marcada: vai pra EM TRATAMENTO uma vez; de volta na ALTA → tarefa, sem mover', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  const ficha = { idClient: 4321, name: 'PACIENTE TESTE', whatsapp: FONE, treatments: [{ idTreatment: 1, idStatus: 46, statusName: 'FINALIZADO' }], schedules: [
+    { idSchedule: 1, idStatus: 42, statusName: 'Atendido', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(-20) },
+    { idSchedule: 2, idStatus: 37, statusName: 'Agendado', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(2) },
+  ] };
+  const { ctx, reg, rodar, kommo } = await cenarioDevolucao({ pipeline_id: 20, status_id: 142 }, { idClient: 4321, consultas: [] }, ficha);
+  ctx.jornada = 'ligado';
+  await rodar();
+  assert.deepEqual(reg.movidos.map((m) => [m.pipelineId, m.statusId]), [[20, 202]], 'ALTA → EM TRATAMENTO');
+  assert.equal(reg.notas.length, 1);
+  await kommo.moveStage({ leadId: 70, statusId: 142, pipelineId: 20 });
+  reg.movidos.length = 0;
+  await rodar();
+  assert.deepEqual(reg.movidos, []);
+  assert.equal(reg.tarefas.length, 1);
+});
+
+test('decisão 7 — desligado: PERDIDO e ALTA continuam intocáveis', async () => {
+  chaves('desligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  const { ctx, reg, rodar } = await cenarioDevolucao({}, { idClient: null, consultas: [marcada(9301, 'AVALIAÇÃO', 3)] });
+  ctx.jornada = 'desligado';
+  await rodar();
+  assert.deepEqual(reg.movidos, []);
+  assert.deepEqual(reg.tarefas, []);
+});
+
+// ── resposta do João: mesmo nome + mesmo telefone em dois cadastros → o robô escolhe e deixa UMA nota ──
+
+function duplicadoNaFranquia() {
+  clientesFalsos = [
+    { idClient: 11, name: 'ANA LIMA', whatsapp: FONE },
+    { idClient: 12, name: 'ANA LIMA', whatsapp: '(99) 99123-4567' },
+  ];
+  agendaFalsa = [{ idSchedule: 9401, idStatus: 37, statusName: 'Agendado', clientName: 'ANA LIMA', categoryName: 'AVALIAÇÃO', dateAttendance: diaLocal(2) }];
+  return kommoFalso([{ id: 556, name: 'ANA LIMA', pipeline_id: 10, status_id: 105, campos: {}, tags: [], contato: 56, fone: FONE }]);
+}
+
+test('cadastro duplicado — ligado: o robô segue gravando e deixa UMA nota pedindo para juntar os cadastros', async () => {
+  chaves('ligado');
+  const unit = unidade();
+  const { kommo, reg } = duplicadoNaFranquia();
+  await _interno.sincronizarUnidade(unit, { kommo });
+  await _interno.sincronizarUnidade(unit, { kommo });
+  const notas = reg.notas.filter((n) => /juntar os cadastros/.test(n.texto));
+  assert.equal(notas.length, 1, 'uma vez só, mesmo com duas varreduras');
+  assert.match(notas[0].texto, /11 e 12/);
+  assert.deepEqual(reg.etiquetas, [], 'não é conflito: é a mesma pessoa');
+  assert.ok(reg.gravacoes.some((g) => g.leadId === 556 && g.campo === ID.DATA), 'o cartão continua sendo atualizado');
+});
+
+test('cadastro duplicado — desligado não deixa nota; só no papel registra que deixaria', async () => {
+  chaves('desligado');
+  const a = duplicadoNaFranquia();
+  await _interno.sincronizarUnidade(unidade(), { kommo: a.kommo });
+  assert.equal(a.reg.notas.length, 0);
+  chaves('seco');
+  const b = duplicadoNaFranquia();
+  await _interno.sincronizarUnidade(unidade(), { kommo: b.kommo });
+  assert.equal(b.reg.notas.length, 0);
+  assert.ok(simulacoes.some((s) => s.alvo === 'nota: cadastros duplicados na franquia'));
+});

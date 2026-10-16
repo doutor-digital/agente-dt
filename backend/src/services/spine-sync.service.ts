@@ -499,6 +499,7 @@ export async function syncLeadToSpine(unit: Unit, kommoLeadId: number): Promise<
       idDoCartao: preparo.idClientNoCartao ?? null,
       kommo: createKommoClient(unit),
       contatoId: preparo.contatoId ?? null,
+      avisarDuplicado: { seco: estado === 'seco' },
     }).catch((err) => {
       logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: não consegui procurar o paciente existente');
       return 'erro' as const;

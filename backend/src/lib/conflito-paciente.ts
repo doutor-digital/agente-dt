@@ -12,7 +12,10 @@
  */
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { PREFIXO_CONFLITO, PREFIXO_ESCOLHA, chaveDoConflito, idsDoConflito } from './casamento-jornada.js';
+import { ID_AUTOMACAO, PREFIXO_CONFLITO, PREFIXO_ESCOLHA, chaveDoConflito, chaveDoDuplicado, idsDoConflito, notaCadastroDuplicado } from './casamento-jornada.js';
+import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
+import { registrarSimulacao } from './so-no-papel.js';
+import type { KommoClient } from '../services/kommo.service.js';
 
 /** Todos os idClient que o robô já viu em conflito neste cartão. */
 export async function candidatosGuardados(unitId: string, leadId: number): Promise<number[]> {
@@ -71,4 +74,31 @@ export async function gravarEscolhaDaSdr(unitId: string, leadId: number, idClien
     create: { unitId, leadId: String(leadId), ruleKey: chave },
     update: { createdAt: new Date() },
   });
+}
+
+/** "Uma vez só" de verdade: a marca em `card_alert` vale por dez anos. */
+export const PARA_SEMPRE_MS = 10 * 365 * 24 * 3600_000;
+
+/**
+ * Mesmo nome e mesmo telefone em dois (ou mais) cadastros da franquia: o robô escolhe sozinho (o de agenda mais recente) e
+ * deixa no cartão, UMA vez, a nota pedindo para a unidade juntar os cadastros (decisão do João, 16/10/2026). Em "só no papel"
+ * só registra que gravaria. Falha de rede ou banco não derruba ninguém.
+ */
+export async function avisarCadastroDuplicado(
+  unit: { id: string; slug: string }, kommo: KommoClient, leadId: number, ids: number[], escolhido: number | null, seco: boolean,
+): Promise<void> {
+  const unicos = [...new Set(ids.filter((n) => Number.isInteger(n) && n > 0))];
+  if (unicos.length < 2) return;
+  const chave = chaveDoDuplicado(unicos);
+  if (seco) {
+    registrarSimulacao(unit, ID_AUTOMACAO, { leadId, acao: 'gravaria', alvo: 'nota: cadastros duplicados na franquia', valor: unicos.join(', ') });
+    return;
+  }
+  try {
+    if (await avisoRecente(unit.id, leadId, chave, PARA_SEMPRE_MS)) return;
+    await kommo.addLeadNote(leadId, notaCadastroDuplicado(unicos, escolhido));
+    await marcarAviso(unit.id, leadId, chave);
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'conflito-paciente: não consegui avisar o cadastro duplicado');
+  }
 }

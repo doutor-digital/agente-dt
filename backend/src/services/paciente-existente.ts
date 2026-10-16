@@ -20,7 +20,11 @@ export type PacienteExistente =
 export async function pacienteQueJaExiste(
   unit: Unit,
   kommoLeadId: number,
-  p: { nome: string | null; telefone: string | null; idDoCartao?: number | null; kommo?: KommoClient; contatoId?: number | null },
+  p: {
+    nome: string | null; telefone: string | null; idDoCartao?: number | null; kommo?: KommoClient; contatoId?: number | null;
+    /** Cadastro duplicado (mesmo nome e telefone): deixa a nota "juntar os cadastros" no cartão, uma vez (ou só registra, em seco). */
+    avisarDuplicado?: { seco: boolean };
+  },
 ): Promise<PacienteExistente | null> {
   // import dinâmico: o sincronizador puxa o Kommo, a franquia e os workers — e este arquivo é importado no turno da IA
   const { casarPacienteDoCartao, escolherEntreDuplicados } = await import('../lib/franquia-sync-worker.js');
@@ -34,6 +38,10 @@ export async function pacienteQueJaExiste(
   if (esc.tipo === 'desempatar') {
     // o mesmo nome e o mesmo telefone em dois cadastros: é a mesma pessoa — fica o de agenda mais recente
     const id = await escolherEntreDuplicados(unit, esc.candidatos);
+    if (p.avisarDuplicado && p.kommo) {
+      const { avisarCadastroDuplicado } = await import('../lib/conflito-paciente.js');
+      await avisarCadastroDuplicado(unit, p.kommo, kommoLeadId, esc.candidatos.map((c) => c.idClient).filter((x): x is number => !!x), id, p.avisarDuplicado.seco);
+    }
     return id ? { tipo: 'achou', idClient: id, por: 'telefone' } : null;
   }
   if (esc.tipo === 'conflito') return { tipo: 'conflito', ids: esc.candidatos.map((c) => c.idClient).filter((x): x is number => !!x) };

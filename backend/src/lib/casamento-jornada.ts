@@ -200,3 +200,39 @@ export function notaDaFalta(f: { s: SpineSchedule; tipo: TipoDeFalta }): string 
 export function tarefaDaFalta(f: { s: SpineSchedule; tipo: TipoDeFalta }): string {
   return `Faltou ${f.tipo === 'sessão' ? 'à sessão' : 'ao retorno'} de ${quando(f.s)}: ligar, entender o motivo e remarcar na franquia.`;
 }
+
+// ── decisão 7: "a franquia manda" no PERDIDO e na ALTA, uma vez por fato ─────────────────────────
+
+export type EtapaQueAFranquiaReabre = 'PERDIDO' | 'ALTA';
+
+/** ruleKey (card_alert) de "já tirei este cartão desta etapa por este fato" — durável, sobrevive a deploy. */
+export function chaveDaDevolucao(etapa: EtapaQueAFranquiaReabre, gatilho: string): string {
+  return `franquia-manda:${etapa}:${gatilho}`;
+}
+/** ruleKey da tarefa "a equipe pôs de volta, conferir" — também uma vez por fato. */
+export function chaveDaTarefaDeDevolucao(etapa: EtapaQueAFranquiaReabre, gatilho: string): string {
+  return `franquia-manda-tarefa:${etapa}:${gatilho}`;
+}
+
+function oQueAFranquiaTem(gatilho: string): string {
+  return gatilho === 'sessao' ? 'sessão de tratamento marcada' : 'consulta marcada';
+}
+
+export function notaDaDevolucao(etapa: EtapaQueAFranquiaReabre, para: string, gatilho: string): string {
+  return `↩ A franquia tem ${oQueAFranquiaTem(gatilho)} para este paciente, então o robô tirou o cartão de ${etapa} e levou para ${para} (regra de 16/10: a franquia manda). Se o certo é ${etapa}, desmarque na franquia. Se alguém puser o cartão de volta em ${etapa}, o robô não insiste: deixa onde está e abre uma tarefa para conferir.`;
+}
+
+export function tarefaDaDevolucao(etapa: EtapaQueAFranquiaReabre, gatilho: string): string {
+  return `Conferir: a franquia tem ${oQueAFranquiaTem(gatilho)}, mas o cartão voltou para ${etapa}. Se o paciente não vem, desmarque na franquia; se vem, tire o cartão de ${etapa}.`;
+}
+
+// ── mesmo nome e mesmo telefone em dois cadastros: o robô escolhe e avisa uma vez ─────────────────
+
+export function chaveDoDuplicado(ids: number[]): string {
+  return `duplicado-franquia:${[...new Set(ids)].sort((a, b) => a - b).join(',')}`;
+}
+
+export function notaCadastroDuplicado(ids: number[], escolhido: number | null): string {
+  const lista = [...new Set(ids)].sort((a, b) => a - b).join(' e ');
+  return `ℹ A franquia tem ${ids.length > 2 ? 'mais de um cadastro' : 'dois cadastros'} do mesmo paciente (mesmo nome e mesmo telefone): idClient ${lista}. O robô usa ${escolhido ? `o ${escolhido}` : 'o cadastro'} com a agenda mais recente. Peça à unidade para juntar os cadastros na franquia.`;
+}

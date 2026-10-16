@@ -639,7 +639,7 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
       // idClient (cartão/vínculo) → telefone (franquia e cartões irmãos) → nome.
       const estado1610 = estadoCasamentoJornada(fresca.slug);
       if (estado1610 !== 'desligado' && args.leadId) {
-        const existente = await procurarExistente(fresca, args.leadId, args.nome, fone, kommo);
+        const existente = await procurarExistente(fresca, args.leadId, args.nome, fone, kommo, estado1610 === 'seco');
         if (existente?.tipo === 'achou') {
           if (estado1610 === 'ligado') {
             await recorder.step({
@@ -746,7 +746,7 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
 }
 
 /** `pacienteQueJaExiste` com o `⚙ idClient` do cartão; falha (franquia ou Kommo fora) = segue o cadastro de sempre. */
-async function procurarExistente(unit: Unit, leadId: number, nome: string, fone: string, kommo: KommoClient | undefined) {
+async function procurarExistente(unit: Unit, leadId: number, nome: string, fone: string, kommo: KommoClient | undefined, seco: boolean) {
   let idDoCartao: number | null = null;
   if (kommo) {
     try {
@@ -758,7 +758,7 @@ async function procurarExistente(unit: Unit, leadId: number, nome: string, fone:
       idDoCartao = null;
     }
   }
-  return pacienteQueJaExiste(unit, leadId, { nome, telefone: fone, idDoCartao, kommo }).catch((err) => {
+  return pacienteQueJaExiste(unit, leadId, { nome, telefone: fone, idDoCartao, kommo, avisarDuplicado: { seco } }).catch((err) => {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'agenda-tools: não consegui procurar o paciente existente — sigo o cadastro de sempre');
     return null;
   });
