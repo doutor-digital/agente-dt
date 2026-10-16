@@ -66,7 +66,7 @@ test('ferramentas registradas, só leitura, e erro de pedido volta legível', as
   const c = new Client({ name: 't', version: '0' });
   await Promise.all([server.connect(a), c.connect(b)]);
   const { tools } = await c.listTools();
-  assert.deepEqual(tools.map((x) => x.name).sort(), ['kommo_buscar_telefone', 'kommo_funis', 'kommo_lead', 'kommo_leads']);
+  assert.deepEqual(tools.map((x) => x.name).sort(), ['kommo_buscar_telefone', 'kommo_conversa', 'kommo_funis', 'kommo_lead', 'kommo_leads']);
   assert.ok(tools.every((x) => x.annotations?.readOnlyHint));
   const r = await c.callTool({ name: 'kommo_leads', arguments: { unidade: 'xpto', inicio: '2026-09-01', fim: '2026-09-30' } });
   assert.equal(r.isError, true);
