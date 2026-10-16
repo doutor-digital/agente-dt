@@ -104,45 +104,46 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
 /**
  * Um Kommo para duas unidades (Petrópolis e Caxias, `unit_crm_compartilhado`): cada membro vira uma unidade do
  * conector com a divisão — vê e altera só os cartões com o seu «⌂ Unidade de atendimento». A irmã não tem
- * credencial de Kommo: usa o cliente da dona. Se a tabela não responder, a carga falha inteira e a anterior fica
- * (melhor que voltar a misturar as duas).
+ * credencial de Kommo: usa o cliente da conta. Nenhuma entrada SEM divisão sobra para a conta (nem se alguém copiar
+ * as credenciais para a irmã e o `umaPorChave` guardar a conta com o slug dela). Se a tabela não responder, a carga
+ * falha inteira e a anterior fica (melhor que voltar a misturar as duas).
+ * Mesma regra dos robôs (`lib/crm-compartilhado`): vale a linha `ativo`; unidade desligada continua dona dos seus
+ * cartões (a outra não os vê), só não ganha entrada no conector; a dona sem rótulo próprio não vê cartão nenhum.
  */
 async function dividirContas(contas: Map<string, UnidadeKommo>): Promise<void> {
   const linhas = await prisma.unitCrmCompartilhado.findMany({
-    where: { ativo: true, unit: { isActive: true } },
-    select: { rotulo: true, unit: { select: { slug: true, name: true, spineTimezone: true } }, conta: { select: { slug: true } } },
+    where: { ativo: true },
+    select: { rotulo: true, unit: { select: { slug: true, name: true, spineTimezone: true, isActive: true } }, conta: { select: { slug: true } } },
     orderBy: { rotulo: 'asc' },
   });
   const porConta = new Map<string, typeof linhas>();
   for (const l of linhas) porConta.set(l.conta.slug, [...(porConta.get(l.conta.slug) ?? []), l]);
   for (const [contaSlug, grupo] of porConta) {
-    const dona = contas.get(contaSlug);
-    const cliente = clientesKommo.get(contaSlug);
-    if (!dona || !cliente) {
-      logger.warn({ conta: contaSlug }, 'mcp-remoto: conta dividida sem Kommo carregado — as irmãs ficam sem Kommo');
+    const slugsDoGrupo = new Set([contaSlug, ...grupo.map((g) => g.unit.slug)]);
+    // a entrada que ficou com a conta: pela dona ou por qualquer membro que caiu no mesmo subdomínio
+    const base = [...contas.values()].find((u) => u.slugsDaFranquia.some((s) => slugsDoGrupo.has(s)));
+    const cliente = base && clientesKommo.get(base.slug);
+    if (!base || !cliente) {
+      logger.warn({ conta: contaSlug }, 'mcp-remoto: conta dividida sem Kommo carregado — as unidades dela ficam sem Kommo');
       continue;
     }
+    contas.delete(base.slug);
     const membros = grupo.map((g) => ({ slug: g.unit.slug, rotulo: g.rotulo }));
     if (!membros.some((m) => m.slug === contaSlug)) {
-      // sem rótulo próprio a dona não é dona de cartão nenhum: fora do conector, como nos robôs
-      contas.delete(contaSlug);
       logger.warn({ conta: contaSlug }, 'mcp-remoto: a dona da conta dividida não tem rótulo — fica sem Kommo no conector');
     }
     for (const g of grupo) {
-      const divisao = { rotulo: g.rotulo, membros };
-      if (g.unit.slug === contaSlug) {
-        contas.set(contaSlug, { ...dona, divisao });
-        continue;
-      }
+      if (!g.unit.isActive) continue;
       clientesKommo.set(g.unit.slug, cliente);
       contas.set(g.unit.slug, {
         slug: g.unit.slug,
         nome: g.unit.name,
-        fuso: g.unit.spineTimezone || dona.fuso,
-        slugsDaFranquia: [g.unit.slug],
-        fonte: dona.fonte,
+        fuso: g.unit.spineTimezone || base.fuso,
+        // a dona leva os outros slugs da conta (resgate…); a irmã só o dela
+        slugsDaFranquia: g.unit.slug === contaSlug ? [contaSlug, ...base.slugsDaFranquia.filter((s) => !slugsDoGrupo.has(s))] : [g.unit.slug],
+        fonte: base.fonte,
         conta: contaSlug,
-        divisao,
+        divisao: { rotulo: g.rotulo, membros },
       });
     }
   }

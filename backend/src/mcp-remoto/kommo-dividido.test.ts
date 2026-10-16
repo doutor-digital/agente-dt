@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { conferirDono, criarContextoKommo, kommoBuscarTelefone, kommoConversa, kommoLead, kommoLeads, type FonteKommo, type UnidadeKommo } from './kommo.js';
 import { fonteFalsa, leadFalso, unidadeKommo } from './kommo-falso.js';
-import { Pendentes, prepararAlteracao, type FonteEscrita } from './kommo-escrita.js';
+import { confirmarAlteracao, Pendentes, prepararAlteracao, type FonteEscrita } from './kommo-escrita.js';
 import type { KommoLead } from '../services/kommo.service.js';
 
 const comUnidade = (id: number, rotulo: string | null): KommoLead =>
@@ -31,7 +31,7 @@ test('kommo_leads: cada unidade conta só os seus; sem unidade (vazio ou valor d
   assert.equal(up.total, 1);
   assert.equal(uc.total, 2);
   assert.equal(up.semUnidade, 2);
-  assert.match(String(uc.avisoUnidade), /= Caxias.*2 cartão\(ões\).*sem unidade/);
+  assert.match(String(uc.avisoUnidade), /= Caxias.*2 cartão\(ões\).*não são de nenhuma unidade.*não some/);
   assert.deepEqual((uc.itens as Array<{ id: number }>).map((l) => l.id), [2, 3]);
   // a janela é da conta: Petrópolis e Caxias não baixam os mesmos leads duas vezes
   assert.equal(chamadas.length, 1);
@@ -60,11 +60,12 @@ test('cartão sem unidade: as duas leem, com o aviso de que não é de nenhuma',
   for (const unidade of ['petropolis', 'caxias']) {
     const r = await kommoLead(ctx, { unidade, leadId: 4 });
     assert.equal(r.unidadeDeAtendimento, null);
-    assert.match(String(r.avisoUnidade), /não é de nenhuma das duas/);
+    assert.match(String(r.avisoUnidade), /sem ⌂ Unidade de atendimento.*não é de nenhuma/);
   }
   // valor que nenhuma unidade usa também é "de ninguém"
   const rio = await kommoLead(ctx, { unidade: 'caxias', leadId: 5 });
   assert.equal(rio.unidadeDeAtendimento, 'Rio');
+  assert.match(String(rio.avisoUnidade), /está "Rio", que não é nenhuma das unidades/);
 });
 
 test('kommo_buscar_telefone: os da outra unidade saem da lista, mas a resposta diz onde estão', async () => {
@@ -103,6 +104,53 @@ test('escrita: cartão da outra unidade trava a prévia inteira; sem unidade pas
     /outra unidade.*1 \(Petrópolis: unidade="doutor-hernia-petropolis"\)/,
   );
   const ok = await prepararAlteracao(ctx, () => fonteEscrita, pend, 'u1', { unidade: 'caxias', cartoes: [2, 4], mudancas: { adicionarEtiquetas: ['X'] } });
-  assert.match(JSON.stringify(ok), /sem ⌂ Unidade de atendimento.*4/);
+  assert.match(JSON.stringify(ok), /não são de nenhuma unidade.*: 4/);
   assert.equal(gravados.length, 0);
+});
+
+test('as duas pedidas JUNTAS: a janela da conta baixa uma vez só e a rede conta os sem unidade uma vez', async () => {
+  const chamadas: Array<[number, number]> = [];
+  const ctx = dividido(fonteFalsa(LEADS, chamadas));
+  const r = await kommoLeads(ctx, { unidade: ['petropolis', 'caxias'], inicio: '2026-10-01', fim: '2026-10-16' });
+  assert.equal(chamadas.length, 1);
+  assert.equal((r.rede as { semUnidade?: number }).semUnidade, 2);
+});
+
+test('kommo_conversa e depois kommo_lead na mesma unidade: o cache dos funis serve os dois (etapa pelo nome)', async () => {
+  const fonte: FonteKommo = { ...fonteFalsa(LEADS), conversa: async () => ({ mensagens: [], conversas: 0 }) };
+  const ctx = dividido(fonte);
+  const c = await kommoConversa(ctx, { unidade: 'caxias', leadId: 2 });
+  assert.equal(c.lead.etapa, 'Novo');
+  const l = await kommoLead(ctx, { unidade: 'caxias', leadId: 3 });
+  assert.equal(l.lead.etapa, 'Novo');
+});
+
+test('telefone: cartão sem dono vem com o aviso no próprio cartão', async () => {
+  const fonte: FonteKommo = { ...fonteFalsa(LEADS), leadsPorTelefone: async () => [LEADS[0]!, LEADS[3]!] };
+  const r = await kommoBuscarTelefone(dividido(fonte), { unidade: 'petropolis', telefone: '21999990000' });
+  assert.equal('avisoUnidade' in r.leads[0]!, false);
+  assert.match(String((r.leads[1] as { avisoUnidade?: string }).avisoUnidade), /não é de nenhuma/);
+});
+
+test('confirmação: cartão que passou para a outra unidade depois da prévia não é gravado', async () => {
+  let estado = LEADS.map((l) => ({ ...l }));
+  const gravados: unknown[] = [];
+  const fonteEscrita: FonteEscrita = {
+    leads: async (ids) => estado.filter((l) => ids.includes(l.id)),
+    funis: async () => [],
+    campos: async () => [],
+    usuarios: async () => [],
+    etiquetaExiste: async () => true,
+    atualizar: async (lote) => { gravados.push(...lote); return lote.map((x) => x.id); },
+    nota: async () => ({}),
+    tarefa: async () => ({}),
+  };
+  const ctx = dividido(fonteFalsa(LEADS));
+  const pend = new Pendentes();
+  const p = await prepararAlteracao(ctx, () => fonteEscrita, pend, 'u1', { unidade: 'caxias', cartoes: [2, 4], mudancas: { adicionarEtiquetas: ['X'] } });
+  // a SDR põe o cartão 4 em Petrópolis antes da confirmação
+  estado = estado.map((l) => (l.id === 4 ? comUnidade(4, 'Petrópolis') : l));
+  const r = await confirmarAlteracao(ctx, () => fonteEscrita, pend, 'u1', { confirmacao: (p as { confirmacao: string }).confirmacao }, () => {});
+  assert.deepEqual(gravados.map((x) => (x as { id: number }).id), [2]);
+  assert.match(JSON.stringify(r), /passou para Petrópolis/);
 });

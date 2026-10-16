@@ -73,16 +73,16 @@ test('confirmação: grava, cria nota e tarefa, registra antes/depois; código v
   const { fonte, ctx, gravados, notas, tarefas } = montar([L(1), L(2)]);
   const pend = new Pendentes();
   const p = await prepararAlteracao(ctx, () => fonte, pend, 'u1', { unidade: 'maraba', cartoes: [1, 2], mudancas: { etapa: 'NÃO COMPARECEU', nota: 'Faltou dia 16', tarefa: { texto: 'Ligar', prazo: '17/10/2026 10:00' } } });
-  await assert.rejects(() => confirmarAlteracao(() => fonte, pend, 'outro', { confirmacao: p.confirmacao }, () => {}), /outro usuário/);
+  await assert.rejects(() => confirmarAlteracao(ctx, () => fonte, pend, 'outro', { confirmacao: p.confirmacao }, () => {}), /outro usuário/);
   const p2 = await prepararAlteracao(ctx, () => fonte, pend, 'u1', { unidade: 'maraba', cartoes: [1, 2], mudancas: { etapa: 'NÃO COMPARECEU', nota: 'Faltou dia 16', tarefa: { texto: 'Ligar', prazo: '17/10/2026 10:00' } } });
   const reg: unknown[] = [];
-  const r = await confirmarAlteracao(() => fonte, pend, 'u1', { confirmacao: p2.confirmacao.toLowerCase() }, (x) => reg.push(x));
+  const r = await confirmarAlteracao(ctx, () => fonte, pend, 'u1', { confirmacao: p2.confirmacao.toLowerCase() }, (x) => reg.push(x));
   assert.equal(r.alterados, 2);
   assert.deepEqual(gravados, [{ id: 1, status_id: 3 }, { id: 2, status_id: 3 }]);
   assert.equal(notas.length, 2);
   assert.equal((tarefas[0] as { completeAt: number }).completeAt, dataLocal('2026-10-17 10:00'));
   assert.ok(reg.some((x: any) => x.cartao === 1 && x.antes.etapa === 2 && x.depois.status_id === 3));
-  await assert.rejects(() => confirmarAlteracao(() => fonte, pend, 'u1', { confirmacao: p2.confirmacao }, () => {}), /já usado/);
+  await assert.rejects(() => confirmarAlteracao(ctx, () => fonte, pend, 'u1', { confirmacao: p2.confirmacao }, () => {}), /já usado/);
 });
 
 test('cartão mexido depois da prévia fica de fora; código vencido não grava', async () => {
@@ -90,14 +90,14 @@ test('cartão mexido depois da prévia fica de fora; código vencido não grava'
   const pend = new Pendentes();
   const p = await prepararAlteracao(ctx, () => fonte, pend, 'u1', { unidade: 'maraba', cartoes: [1, 2], mudancas: { etapa: 'NÃO COMPARECEU' } });
   mexer(2, 1);
-  const r = await confirmarAlteracao(() => fonte, pend, 'u1', { confirmacao: p.confirmacao }, () => {});
+  const r = await confirmarAlteracao(ctx, () => fonte, pend, 'u1', { confirmacao: p.confirmacao }, () => {});
   assert.deepEqual(gravados.map((x: any) => x.id), [1]);
   assert.match(r.comErro[0]!.erro!, /mudou/);
   let agora = 0;
   const vencida = new Pendentes(() => agora);
   const p2 = await prepararAlteracao(ctx, () => fonte, vencida, 'u1', { unidade: 'maraba', cartoes: [1], mudancas: { nota: 'x' } });
   agora = 16 * 60_000;
-  await assert.rejects(() => confirmarAlteracao(() => fonte, vencida, 'u1', { confirmacao: p2.confirmacao }, () => {}), /venceu/);
+  await assert.rejects(() => confirmarAlteracao(ctx, () => fonte, vencida, 'u1', { confirmacao: p2.confirmacao }, () => {}), /venceu/);
 });
 
 test('valores e datas no formato do Kommo', () => {
