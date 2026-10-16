@@ -176,6 +176,7 @@ import {
 } from '../controllers/pausa.controller.js';
 import { blingAppHandler, blingAutorizarHandler, blingCallbackHandler, blingStatusHandler, blingTesteHandler } from '../controllers/bling.controller.js';
 import { campanhaColetarHandler, campanhaPainelHandler, campanhaPlacarHandler, campanhaTelaHandler } from '../controllers/campanha.controller.js';
+import { listarChavesHandler, painelIntegracoesHandler, salvarChaveHandler } from '../controllers/integracoes.controller.js';
 import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler,
   widgetSugestaoMotivoHandler,
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
@@ -406,6 +407,12 @@ apiRouter.get('/campanhas/:id', chaveDeServicoOuSessao(requireAuth, requireSuper
 apiRouter.get('/campanhas/:id/painel', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaPainelHandler);
 apiRouter.post('/campanhas/:id/coletar', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaColetarHandler);
 apiRouter.put('/campanhas/:id/tela', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaTelaHandler);
+
+// Chaves de API de terceiros (Asaas, ClickSign). Escrever é só com SESSÃO de super-admin (a chave do Asaas
+// mexe com dinheiro): a chave de serviço não serve aqui de propósito. Ler o status aceita a chave de serviço.
+apiRouter.get('/integracoes', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), listarChavesHandler);
+apiRouter.get('/integracoes/painel', requireAuth, requireSuperAdmin, painelIntegracoesHandler);
+apiRouter.put('/integracoes/:slug/:provedor', requireAuth, requireSuperAdmin, salvarChaveHandler);
 
 apiRouter.use(requireAuth);
 
