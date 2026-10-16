@@ -1247,11 +1247,11 @@ export class KommoClient {
     }
   }
 
-  async listTalkMessages(talkId: number, limit = 40): Promise<KommoTalkMessage[]> {
+  async listTalkMessages(talkId: number, limit = 40, page?: number): Promise<KommoTalkMessage[]> {
     try {
       const { data, status } = await this.http.get<{ _embedded?: { messages?: KommoTalkMessage[] } }>(
         `/talks/${talkId}/messages`,
-        { params: { limit } },
+        { params: page ? { limit, page } : { limit } },
       );
       if (status === 204 || !data) return [];
       return data._embedded?.messages ?? [];
