@@ -178,6 +178,7 @@ import { blingAppHandler, blingAutorizarHandler, blingCallbackHandler, blingStat
 import { campanhaColetarHandler, campanhaPainelHandler, campanhaPlacarHandler, campanhaTelaHandler } from '../controllers/campanha.controller.js';
 import { listarChavesHandler, painelIntegracoesHandler, salvarChaveHandler } from '../controllers/integracoes.controller.js';
 import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler,
+  widgetCadastrarHandler,
   widgetSugestaoMotivoHandler,
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
 import { ponteCartaoHandler, pontePausarHandler, ponteResumoIaHandler, ponteRetomarHandler } from '../controllers/ponte.controller.js';
@@ -335,6 +336,8 @@ apiRouter.get('/public/widget/:slug/ponte/contador', ponteContadorHandler);
 // Marcar consulta de dentro do cartão (unidade sem Sofia): mesma chave por unidade, limite próprio de escrita.
 apiRouter.get('/public/widget/:slug/horarios', widgetHorariosHandler);
 apiRouter.post('/public/widget/:slug/marcar', widgetMarcarHandler);
+// Só cadastrar o paciente na franquia, sem consulta (botão do widget; liga por unidade na tela de Automações).
+apiRouter.post('/public/widget/:slug/cadastrar', widgetCadastrarHandler);
 apiRouter.get('/public/widget/:slug/sugestao-motivo', widgetSugestaoMotivoHandler);
 apiRouter.post('/public/widget/:slug/sugestao-motivo/usar', widgetUsarMotivoHandler);
 // O que o widget ensina no cartão: o que esta pessoa já entendeu, e o "entendi".

@@ -17,6 +17,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { horariosParaWidget, marcarPeloWidget } from '../lib/marcacao-widget.js';
+import { cadastrarPeloWidget } from '../lib/cadastro-pelo-widget.js';
 import { chaveConfere, janelaDoPeriodo, janelaExplicita, resumirAuditoria } from '../lib/widget-agenda.js';
 import { normalizar } from '../lib/franquia-sync.js';
 import { resumoDoPacienteNaFranquia } from '../lib/paciente-na-franquia.js';
@@ -120,14 +121,14 @@ export async function widgetPacienteHandler(req: Request, res: Response): Promis
   const unit = await unidadeDoWidget(req, res);
   if (!unit) return;
   try {
-    res.json(
-      await resumoDoPacienteNaFranquia(unit, {
-        leadId: Number(req.query.lead) || null,
-        nome: typeof req.query.nome === 'string' ? req.query.nome.slice(0, 120) : '',
-        titulo: typeof req.query.titulo === 'string' ? req.query.titulo.slice(0, 120) : '',   // título do cartão ("NOME 03/08/2026")
-        telefone: typeof req.query.telefone === 'string' ? req.query.telefone.slice(0, 40) : '',
-      }),
-    );
+    const resumo = await resumoDoPacienteNaFranquia(unit, {
+      leadId: Number(req.query.lead) || null,
+      nome: typeof req.query.nome === 'string' ? req.query.nome.slice(0, 120) : '',
+      titulo: typeof req.query.titulo === 'string' ? req.query.titulo.slice(0, 120) : '',   // título do cartão ("NOME 03/08/2026")
+      telefone: typeof req.query.telefone === 'string' ? req.query.telefone.slice(0, 40) : '',
+    });
+    // o widget só mostra "Só cadastrar na franquia" onde a unidade ligou (ver widgetCadastrarHandler)
+    res.json({ ...resumo, cadastroSemConsulta: cadastroSemConsultaLigado(unit) });
   } catch (err) {
     logger.warn({ err, unit: unit.slug }, 'widget: falha ao montar a agenda do paciente');
     res.status(502).json({ error: 'franquia indisponível' });
@@ -252,6 +253,32 @@ export async function widgetMarcarHandler(req: Request, res: Response): Promise<
   res.status(r.ok ? 200 : 409).json(r);
 }
 
+
+// ── "Só cadastrar na franquia" (16/10/2026): o paciente entra na franquia sem consulta — ver lib/cadastro-pelo-widget.ts ──
+
+function cadastroSemConsultaLigado(unit: Unit): boolean {
+  return automacaoLigada(unit.slug, 'widget-cadastrar', process.env.WIDGET_CADASTRAR_SLUGS);
+}
+
+/** POST /public/widget/:slug/cadastrar {leadId, nome, telefone, cidade?, uf?} — mesma chave e mesmo limite de escrita do "Marcar". */
+export async function widgetCadastrarHandler(req: Request, res: Response): Promise<void> {
+  const unit = await unidadeDoWidget(req, res);
+  if (!unit) return;
+  if (!cadastroSemConsultaLigado(unit)) { res.status(404).json({ error: 'desligada nesta unidade' }); return; }
+  if (excedeuMarcacao(`${req.ip}:${unit.slug}`)) { res.status(429).json({ error: 'muitos cadastros seguidos — aguarde um minuto' }); return; }
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const leadId = Number(b.leadId);
+  if (!Number.isInteger(leadId) || leadId <= 0) { res.status(400).json({ error: 'leadId inválido' }); return; }
+  const texto = (k: string, max = 120) => (typeof b[k] === 'string' ? (b[k] as string).slice(0, max) : '');
+  const r = await cadastrarPeloWidget(unit, {
+    leadId,
+    nome: texto('nome'),
+    telefone: texto('telefone', 30),
+    cidade: texto('cidade', 80) || null,
+    uf: texto('uf', 30) || null,
+  });
+  res.status(r.ok ? 200 : 409).json(r);
+}
 
 // ── Os passos que o widget ENSINA no cartão, e o "entendi" de cada pessoa ──
 //

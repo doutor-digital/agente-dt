@@ -29,6 +29,7 @@ import { TraceRecorder } from '../agent/trace-recorder.js';
 import { consultaAtual, gradeDoDia, hojeLocal, telefoneDoLead, unidadeFresca } from '../agent/agenda-tools.js';
 import { travaDaUnidadeDeAtendimento, type CodigoTrava } from './trava-unidade-atendimento.js';
 import { contaDoKommo, unidadeDoCartao, unidadeParaOCartao } from './crm-compartilhado.js';
+import { motivoAmbiguo, pacienteExistente } from './paciente-existente.js';
 
 export type CodigoRecusa =
   | 'sem_franquia'
@@ -46,6 +47,8 @@ export type CodigoRecusa =
   | 'lead_sem_telefone'
   | 'data_passada'
   | 'em_andamento'
+  /** dois ou mais pacientes na franquia com o telefone do cartão, nenhum com o nome igual (review, 16/10) */
+  | 'paciente_ambiguo'
   | CodigoTrava
   /** Kommo dividido (Petrópolis + Caxias): a ⌂ Unidade de atendimento do cartão está vazia */
   | 'sem_unidade'
@@ -152,7 +155,9 @@ export async function horariosParaWidget(unit: Unit, de: string, dias: number): 
  * Um cartão por vez. `consultaAtual` barra a SEGUNDA marcação depois que a primeira gravou o vínculo,
  * mas dois cliques quase juntos chegariam antes disso e criariam duas consultas (review, 29/09).
  */
-const emAndamento = new Set<string>();
+// Exportado: o "Só cadastrar" (`cadastro-pelo-widget.ts`) usa o MESMO conjunto — "Marcar" e "Só cadastrar" clicados
+// juntos no mesmo cartão também criariam o paciente duas vezes na franquia.
+export const emAndamento = new Set<string>();
 
 /** `opcoes.kommo` só existe para o teste trocar o cliente do Kommo; em produção ele nasce do token da unidade. */
 export async function marcarPeloWidget(
@@ -213,11 +218,13 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
 
   // O telefone digitado tem de ser o do contato do cartão: senão a consulta vai parar no prontuário
   // de outra pessoa — a mesma recusa que a Sofia faz.
+  let tituloDoCartao = '';
   if (kommo) {
     // O cartão tem de existir NESTA conta do Kommo e ter telefone. É o telefone que amarra a marcação à
     // pessoa certa; sem ele, qualquer número digitado viraria cadastro em nome de ninguém (review, 29/09).
     const lead = await kommo.getLead(entrada.leadId).catch(() => null);
     if (!lead) return recusar({ ok: false, codigo: 'lead_invalido', motivo: 'Este cartão não existe nesta conta do Kommo.' });
+    tituloDoCartao = lead.name ?? '';
     // Kommo dividido (Petrópolis + Caxias): toda escrita na franquia segue a unidade do cartão (regra do João,
     // 14/10/2026). Campo vazio ou unidade sem franquia = recusa; cartão de Caxias = token, agenda e vínculo de Caxias.
     const dono = await unidadeDoCartao(unitDoPedido, lead);
@@ -255,17 +262,25 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
     return recusar({ ok: false, codigo: 'ja_tem_consulta', motivo: `Este paciente já tem consulta marcada (${String(ja.quando)}). Um paciente só pode ter uma — remarque na franquia se ele quer outro horário.` });
   }
 
-  // Paciente: acha pelo telefone entre os homônimos; se não existe, cadastra (ou converte o lead que
-  // o espelho já criou na franquia). Origem = a padrão da unidade, não "IA SOFIA": foi gente que marcou.
+  // Paciente: primeiro o que JÁ está ligado a este cartão (o "Só cadastrar" de ontem, a Sofia, o sincronizador);
+  // depois a busca larga por nome decidida pelo telefone (`paciente-existente.ts`); só então cadastra (ou converte o
+  // lead que o espelho já criou na franquia). Busca que falha ou telefone com dois pacientes = recusa, nunca um
+  // cadastro novo no escuro (review, 16/10). Origem = a padrão da unidade, não "IA SOFIA": foi gente que marcou.
   let idClient: number | null = null;
   let novoCadastro = false;
-  const busca = await SpineService.searchClients(unit, nome).catch(() => null);
-  const igual = busca?.ok ? (busca.data?.clients ?? []).find((c) => fim8(c.whatsapp) === fim8(fone)) : undefined;
-  if (igual) {
-    idClient = igual.idClient;
-    await passo('TOOL_RESULT', `Paciente já existia na franquia: ${igual.name} (idClient ${igual.idClient})`);
+  const vinculo = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: entrada.leadId } });
+  const achado = vinculo?.spineIdClient ? null : await pacienteExistente(unit, nome, tituloDoCartao, fone);
+  if (vinculo?.spineIdClient) {
+    idClient = vinculo.spineIdClient;
+    await passo('TOOL_RESULT', `Paciente já ligado a este cartão: ${vinculo.nome ?? '?'} (idClient ${idClient})`);
+  } else if (achado?.tipo === 'sem_resposta') {
+    return recusar({ ok: false, codigo: 'cadastro_falhou', motivo: 'A franquia não respondeu a todas as buscas do paciente. Nada foi marcado — tente de novo em instantes.' });
+  } else if (achado?.tipo === 'ambiguo') {
+    return recusar({ ok: false, codigo: 'paciente_ambiguo', motivo: motivoAmbiguo(achado.candidatos, 'marcado') });
+  } else if (achado?.tipo === 'achou') {
+    idClient = achado.idClient;
+    await passo('TOOL_RESULT', `Paciente já existia na franquia: ${achado.nome ?? '?'} (idClient ${idClient})`);
   } else {
-    const vinculo = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: entrada.leadId } });
     if (vinculo?.spineIdLead) {
       const c = await SpineService.convertLead(unit, { idLead: vinculo.spineIdLead, name: nome, idSource: unit.spineDefaultSourceId, whatsapp: fone });
       if (c.ok && c.data?.idClient) { idClient = c.data.idClient; novoCadastro = true; }
