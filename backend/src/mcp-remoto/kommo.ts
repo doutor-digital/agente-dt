@@ -9,7 +9,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { KommoLead, KommoPipeline } from '../services/kommo.service.js';
-import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
+import { TETO_HISTORICO, type MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { instanteNoFuso } from '../franquia-mcp/normalizar.js';
 import { Cache, emParalelo, TTL } from '../franquia-mcp/ritmo.js';
@@ -27,7 +27,7 @@ export interface FonteKommo {
   leadsPorTelefone(telefone: string): Promise<KommoLead[]>;
   usuarios(): Promise<Array<{ id: number; name: string }>>;
   /** histórico de mensagens do lead (rota oficial talks/messages); opcional para as fontes de teste antigas */
-  conversa?(leadId: number, limite: number): Promise<{ mensagens: MensagemOficial[]; conversas: number }>;
+  conversa?(leadId: number, limite: number, periodo?: { desde?: number; ate?: number }): Promise<{ mensagens: MensagemOficial[]; conversas: number; total?: number; truncado?: boolean }>;
 }
 
 export interface UnidadeKommo {
@@ -370,11 +370,20 @@ const ANEXO: Record<string, string> = { voice: 'áudio', audio: 'áudio', pictur
  * É conversa de saúde — por isso um lead por chamada, nunca a unidade inteira; cada consulta fica no
  * registro do conector com o usuário que pediu.
  */
-export async function kommoConversa(ctx: ContextoKommo, a: { unidade: string; leadId: number; limite?: number }) {
+export async function kommoConversa(ctx: ContextoKommo, a: { unidade: string; leadId: number; limite?: number; todas?: boolean; inicio?: string; fim?: string }) {
   const [u] = resolverUnidadesKommo(ctx, a.unidade, 1);
   if (!u!.fonte.conversa) throw new ErroDeEntrada('esta conta do Kommo não tem a leitura de conversa ligada');
-  const limite = Math.min(Math.max(a.limite ?? 30, 1), 100);
-  const [lead, conv] = await Promise.all([u!.fonte.lead(a.leadId), u!.fonte.conversa(a.leadId, limite)]);
+  if (a.inicio) validarData(a.inicio, 'inicio');
+  if (a.fim) validarData(a.fim, 'fim');
+  if (a.inicio && a.fim && a.fim < a.inicio) throw new ErroDeEntrada('fim antes do início');
+  const comPeriodo = !!(a.inicio || a.fim);
+  // "todas" e período trazem até o teto; sem eles, as 30 mais recentes (ou o limite pedido)
+  const limite = Math.min(Math.max(a.todas || (comPeriodo && a.limite == null) ? TETO_HISTORICO : a.limite ?? 30, 1), TETO_HISTORICO);
+  const periodo = {
+    ...(a.inicio ? { desde: epochDoDiaLocal(a.inicio, u!.fuso) } : {}),
+    ...(a.fim ? { ate: epochDoDiaLocal(a.fim, u!.fuso, true) } : {}),
+  };
+  const [lead, conv] = await Promise.all([u!.fonte.lead(a.leadId), u!.fonte.conversa(a.leadId, limite, periodo)]);
   const etapas = new Map<number, string>();
   try {
     for (const f of await comCache(ctx, `funis|${u!.slug}`, HORA, () => u!.fonte.funis())) for (const e of f.statuses ?? []) etapas.set(e.id, e.name);
@@ -385,7 +394,11 @@ export async function kommoConversa(ctx: ContextoKommo, a: { unidade: string; le
     unidade: u!.slug,
     lead: { id: lead.id, nome: lead.name, etapa: etapas.get(lead.status_id) ?? lead.status_id, situacao: situacaoDoLead(lead) },
     conversas: conv.conversas,
+    ...(comPeriodo ? { periodo: { inicio: a.inicio ?? null, fim: a.fim ?? null } } : {}),
     mostrando: conv.mensagens.length,
+    ...(conv.truncado
+      ? { ficaramDeFora: `há mensagens mais antigas que não vieram (teto de ${limite}); peça um período (inicio/fim) para ver um trecho anterior` }
+      : {}),
     mensagens: conv.mensagens.map((m) => ({
       quando: quandoLocal(m.em, u!.fuso),
       quem: m.autor,
@@ -458,14 +471,18 @@ export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo,
     {
       title: 'Conversa do lead (WhatsApp no Kommo)',
       description:
-        'As últimas mensagens de UM lead (unidade + número do cartão), juntando todas as conversas dele no Kommo, em ordem, cada uma ' +
+        'As mensagens de UM lead (unidade + número do cartão), juntando todas as conversas dele no Kommo, em ordem, cada uma ' +
         'marcada como paciente, sofia (robôs: Sofia, transmissões, régua) ou equipe, com o nome de quem enviou. Áudio/imagem aparecem como [áudio]/[imagem]. ' +
+        'Padrão: as 30 mais recentes; todas=true traz o histórico inteiro (até 500); inicio/fim filtram um período. ' +
         'Um lead por chamada: é conversa de saúde, e cada consulta fica registrada com o usuário. Para achar o número do cartão, use ' +
         'kommo_buscar_telefone ou kommo_leads.',
       inputSchema: {
         unidade: z.string().min(1).describe('UMA unidade: slug ou nome curto ("serra")'),
         leadId: z.number().int().positive().describe('número do cartão (lead) no Kommo'),
-        limite: z.number().int().min(1).max(100).optional().describe('quantas mensagens, das mais recentes (padrão 30, máx. 100)'),
+        limite: z.number().int().min(1).max(500).optional().describe('quantas mensagens, das mais recentes (padrão 30, máx. 500)'),
+        todas: z.boolean().optional().describe('o histórico inteiro do lead, até 500 mensagens; avisa se ficou algo de fora'),
+        inicio: z.string().optional().describe('só mensagens a partir deste dia, AAAA-MM-DD (dia local da unidade)'),
+        fim: z.string().optional().describe('só mensagens até este dia, AAAA-MM-DD'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },

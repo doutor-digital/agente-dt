@@ -45,18 +45,45 @@ export function normalizar(raw: KommoTalkMessage[]): MensagemOficial[] {
     .sort((a, b) => a.em.getTime() - b.em.getTime());
 }
 
-/**
- * As últimas `limite` mensagens do lead somando TODAS as conversas (talks), não só a viva: quem volta depois
- * de semanas abre conversa nova, e o histórico de antes ficava de fora. Mais recente primeiro, até completar.
- */
-export async function historicoOficial(kommo: Pick<KommoClient, 'listTalks' | 'listTalkMessages'>, leadId: number, limite = 30): Promise<{ mensagens: MensagemOficial[]; conversas: number }> {
-  const talks = [...(await kommo.listTalks(leadId))].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  const juntas: KommoTalkMessage[] = [];
-  for (const t of talks) {
-    juntas.push(...(await kommo.listTalkMessages(t.talk_id, 250)));
-    if (juntas.length >= limite) break;
-  }
-  const todas = normalizar(juntas);
-  return { mensagens: todas.slice(-limite), conversas: talks.length };
-}
+/** Teto do histórico inteiro de um lead: acima disso a resposta enche a conversa do claude.ai e o Kommo divide a fila com a Sofia. */
+export const TETO_HISTORICO = 500;
+const POR_PAGINA = 250;
+const PAGINAS_POR_CONVERSA = 4;
 
+/**
+ * Mensagens do lead somando TODAS as conversas (talks), não só a viva: quem volta depois de semanas abre
+ * conversa nova, e o histórico de antes ficava de fora. Mais recente primeiro, até completar `limite`.
+ * Com período (`desde`/`ate`, epoch s), pula as conversas fora dele e devolve só as mensagens dentro.
+ * `total` conta o que foi lido; `truncado` diz que havia mais do que `limite` (ou do que o teto lido).
+ */
+export async function historicoOficial(
+  kommo: Pick<KommoClient, 'listTalks' | 'listTalkMessages'>,
+  leadId: number,
+  limite = 30,
+  periodo: { desde?: number; ate?: number } = {},
+): Promise<{ mensagens: MensagemOficial[]; conversas: number; total: number; truncado: boolean }> {
+  const talks = [...(await kommo.listTalks(leadId))].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  const comPeriodo = periodo.desde != null || periodo.ate != null;
+  const vistos = new Set<string>();
+  const juntas: KommoTalkMessage[] = [];
+  let sobrou = false;
+  for (const t of talks) {
+    if (periodo.desde != null && (t.updated_at ?? Infinity) < periodo.desde) continue;
+    if (periodo.ate != null && (t.created_at ?? 0) > periodo.ate) continue;
+    if (!comPeriodo && juntas.length >= limite) { sobrou = true; break; }
+    for (let pagina = 1; pagina <= PAGINAS_POR_CONVERSA; pagina++) {
+      const lote = await kommo.listTalkMessages(t.talk_id, POR_PAGINA, pagina);
+      const novos = lote.filter((m) => !vistos.has(String(m.id)));
+      for (const m of novos) { vistos.add(String(m.id)); juntas.push(m); }
+      // página cheia de mensagens novas: pode haver mais; senão a conversa acabou (ou a API ignora a página)
+      if (lote.length < POR_PAGINA || novos.length === 0) break;
+      if (pagina === PAGINAS_POR_CONVERSA) sobrou = true;
+    }
+  }
+  const dentro = normalizar(juntas).filter((m) => {
+    const seg = m.em.getTime() / 1000;
+    return (periodo.desde == null || seg >= periodo.desde) && (periodo.ate == null || seg <= periodo.ate);
+  });
+  const mensagens = dentro.slice(-limite);
+  return { mensagens, conversas: talks.length, total: dentro.length, truncado: sobrou || dentro.length > mensagens.length };
+}
