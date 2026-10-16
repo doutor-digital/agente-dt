@@ -36,6 +36,12 @@
  * cartão de volta pra GANHO quando ele volta pra um retorno.
  *
  * Só nas unidades em `FRANQUIA_MOVE_SLUGS` (csv; `*` = todas). Lab primeiro, depois Imperatriz.
+ *
+ * REGRAS DE 16/10/2026 (só com `regras1610`, que vem da chave `casamento-jornada` — ver `casamento-jornada.ts`):
+ *   ex-paciente (finalizado, nada aberto) que volta com consulta marcada → RETORNO PÓS-TRATAMENTO (de qualquer etapa,
+ *   inclusive ALTA e PERDIDO); finalizado nunca leva a GANHO (cartão parado de quem terminou → ALTA); âncora da jornada =
+ *   última AVALIAÇÃO; falta em retorno não muda a etapa (vira nota + tarefa no sincronizador); avaliação marcada pra frente
+ *   tira do PERDIDO ("a franquia manda"). TRATAMENTO CANCELADO continua intocável (a SDR cancela no Kommo, regra 08/10).
  */
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 import { ehAvaliacao, ehConsulta } from './franquia-sync.js';
@@ -80,6 +86,12 @@ export interface EntradaMovimento {
   tratamentos: TratamentoParaEtapa[];
   agoraEpoch: number;
   horasAteNegociacao: number;
+  /**
+   * Regras de 16/10/2026 (chave `casamento-jornada`, ver `casamento-jornada.ts`): ex-paciente que volta vai pra
+   * RETORNO PÓS-TRATAMENTO e finalizado nunca leva a GANHO; âncora = última AVALIAÇÃO; falta em retorno não move;
+   * consulta marcada na franquia tira do PERDIDO ("a franquia manda"). Sem isto, a máquina é a de sempre.
+   */
+  regras1610?: boolean;
 }
 
 export interface Movimento {
@@ -203,12 +215,10 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const atual = e.atual;
   if (!atual) return null;
   const status = atual.status;
+  const v2 = e.regras1610 === true;
   const ir = (funil: Funil, para: string, motivo: string): Movimento | null => (atual.funil === funil && eh(status, para) ? null : { funil, para, motivo });
 
-  if (atual.funil === 'COMERCIAL' && emAlgum(status, INTOCAVEIS_COMERCIAL)) return null;
-  if (atual.funil === 'TRATAMENTO' && emAlgum(status, INTOCAVEIS_TRATAMENTO)) return null;
-
-  const consultas = e.agendamentos.filter((s) => ehConsulta(s) && epoch(s) !== null);
+  let consultas = e.agendamentos.filter((s) => ehConsulta(s) && epoch(s) !== null);
   const sessoes = e.agendamentos.filter((s) => ehSessao(s) && epoch(s) !== null);
   const temFinalizado = e.tratamentos.some(finalizado);
   const temAberto = e.tratamentos.some(aberto);
@@ -217,6 +227,32 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const temPendente = e.tratamentos.some(pendente);
   const passou = (s: SpineSchedule) => (epoch(s) ?? Infinity) <= e.agoraEpoch;
   const futura = (s: SpineSchedule) => (epoch(s) ?? 0) > e.agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO);
+
+  // ── regras de 16/10: o ex-paciente e a VOLTA ──
+  // Ex-paciente = já terminou um tratamento e não tem nenhum aberto. A "volta" são as consultas DEPOIS da última sessão
+  // dele (o fim do ciclo). Sem sessão conhecida não há como separar o ciclo velho do novo: aí só a consulta marcada pra
+  // frente conta como volta — a avaliação de antes do tratamento nunca pode reabrir a jornada.
+  const exPaciente = v2 && temFinalizado && !temAberto;
+  const fimDoCiclo = v2 ? Math.max(0, ...sessoes.filter(passou).map((s) => epoch(s) ?? 0)) : 0;
+  const daVolta = (s: SpineSchedule) => (fimDoCiclo > 0 ? (epoch(s) ?? 0) > fimDoCiclo : futura(s));
+  const consultasDaVolta = exPaciente ? consultas.filter(daVolta) : [];
+  const voltaMarcada = consultasDaVolta.some(futura);
+  const decididasDaVolta = consultasDaVolta
+    .filter((s) => passou(s) || s.idStatus === SPINE_STATUS.DESMARCADO)
+    .sort((a, b) => (epoch(b) ?? 0) - (epoch(a) ?? 0));
+  const ultimaDaVolta = decididasDaVolta[0] ?? null;
+
+  if (atual.funil === 'COMERCIAL' && emAlgum(status, INTOCAVEIS_COMERCIAL)) {
+    // "a franquia manda" (16/10): uma consulta marcada PRA FRENTE é fato novo e tira o cartão do PERDIDO — avaliação vai
+    // pra AGENDADO; ex-paciente, com qualquer consulta, vai pra RETORNO PÓS-TRATAMENTO. Fato velho (atendido, falta,
+    // tratamento antigo "em andamento" esquecido) não reabre nada: perder de novo um paciente fechado não tem volta.
+    if (v2) {
+      if (voltaMarcada) return { funil: 'COMERCIAL', para: ETAPA.RETORNO, motivo: 'ex-paciente voltou: consulta marcada na franquia (sai do PERDIDO)' };
+      if (consultas.some((s) => futura(s) && ehAvaliacao(s))) return { funil: 'COMERCIAL', para: ETAPA.AGENDADO, motivo: 'avaliação marcada na franquia (a franquia manda: sai do PERDIDO)' };
+    }
+    return null;
+  }
+  if (atual.funil === 'TRATAMENTO' && emAlgum(status, INTOCAVEIS_TRATAMENTO)) return null;
   // quem já fez um ciclo inteiro (alta) volta como retorno pós-tratamento. O retorno mais recente marca o
   // corte do ciclo atual: sessão e tratamento de antes dele são do ciclo velho e não valem pra GANHO/ALTA.
   const retornosPos = consultas.filter(ehRetornoPosTratamento).sort((a, b) => (epoch(b) ?? 0) - (epoch(a) ?? 0));
@@ -230,6 +266,11 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   // ── RETORNO PÓS-TRATAMENTO (COMERCIAL): só sai quando o retorno é atendido, e aí segue como avaliação normal ──
   if (atual.funil === 'COMERCIAL' && eh(status, ETAPA.RETORNO)) {
     if (retornoPosAtendido) return ir('COMERCIAL', ETAPA.COMPARECEU, 'retorno pós-tratamento atendido na franquia');
+    // 16/10: a consulta da volta pode vir como avaliação (não "retorno após tratamento"); atendida, segue como avaliação.
+    // Falta ou desmarcação aqui não mexe na etapa (falta vira nota + tarefa — decisão 4).
+    if (ultimaDaVolta && ultimaDaVolta.idStatus === SPINE_STATUS.ATENDIDO && passou(ultimaDaVolta)) {
+      return ir('COMERCIAL', ETAPA.COMPARECEU, 'ex-paciente voltou: consulta atendida na franquia');
+    }
     return null;
   }
 
@@ -240,6 +281,11 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
       if (retornoPosMarcado) return ir('COMERCIAL', ETAPA.RETORNO, 'retorno pós-tratamento marcado na franquia');
       // retorno marcado e atendido entre duas varreduras (ou lançado depois): não pode ficar preso na ALTA
       if (retornoPosAtendidoRecente) return ir('COMERCIAL', ETAPA.COMPARECEU, 'retorno pós-tratamento atendido na franquia');
+      // 16/10: ex-paciente que volta, com QUALQUER consulta (avaliação ou retorno), vai pra RETORNO PÓS-TRATAMENTO
+      if (voltaMarcada) return ir('COMERCIAL', ETAPA.RETORNO, 'ex-paciente voltou: consulta marcada na franquia');
+      if (ultimaDaVolta && ultimaDaVolta.idStatus === SPINE_STATUS.ATENDIDO && passou(ultimaDaVolta) && e.agoraEpoch - (epoch(ultimaDaVolta) ?? 0) <= RECENTE_S) {
+        return ir('COMERCIAL', ETAPA.COMPARECEU, 'ex-paciente voltou: consulta atendida na franquia');
+      }
       return null;
     }
     if (eh(status, ETAPA.EM_TRATAMENTO)) {
@@ -257,11 +303,29 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
     return null;
   }
 
-  // ── ex-paciente (decisão do João, 23/09/2026): tratamento FINALIZADO, nada aberto, nada marcado e sem
+  // ── 16/10: ex-paciente em etapa comercial. Nunca GANHO (não é venda nova, não gera Purchase) ──
+  // Voltou com consulta marcada → RETORNO PÓS-TRATAMENTO. Voltou e a consulta já aconteceu → a jornada segue pelas
+  // consultas da VOLTA (abaixo). Não voltou → cartão parado de quem terminou: ALTA, sem a régua se o fato é velho.
+  let jornadaDaVolta = false;
+  if (exPaciente && atual.funil === 'COMERCIAL' && !eh(status, ETAPA.GANHO)) {
+    if (voltaMarcada) return ir('COMERCIAL', ETAPA.RETORNO, 'ex-paciente voltou: consulta marcada na franquia');
+    if (decididasDaVolta.length === 0) {
+      const ultimaAtividade = Math.max(0, ...e.agendamentos.map((s) => epoch(s) ?? 0));
+      const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
+      const cartaoParado = emAlgum(status, [ETAPA.AGENDADO, ETAPA.NAO_COMPARECEU, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.CONFERIR]);
+      if (!cartaoParado) return null;
+      const dias = Number.isFinite(diasParado) ? Math.floor(diasParado) : 365;
+      return { funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: `tratamento finalizado na franquia (ex-paciente, sem atividade há ${Number.isFinite(diasParado) ? dias : '+365'} d)`, semRegua: diasParado > JORNADA.EX_PACIENTE_DIAS, dias };
+    }
+    consultas = consultasDaVolta;
+    jornadaDaVolta = true;
+  }
+
+  // ── (regras antigas) ex-paciente (decisão do João, 23/09/2026): tratamento FINALIZADO, nada aberto, nada marcado e sem
   // atividade há mais de EX_PACIENTE_DIAS, com o cartão perdido numa etapa comercial parada → ALTA sem mensagem
   // (etiqueta NO_FOLLOW_UP segura os gatilhos de ALTA). Não passa por GANHO: não é venda nova, não gera Purchase.
   // Finalizado RECENTE segue o caminho normal (GANHO → EM TRATAMENTO → ALTA): ciclo rápido que a varredura perdeu.
-  if (atual.funil === 'COMERCIAL' && temFinalizado && !temAberto && !cicloAnterior) {
+  if (!v2 && atual.funil === 'COMERCIAL' && temFinalizado && !temAberto && !cicloAnterior) {
     const temFutura = e.agendamentos.some((s) => (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO) && (epoch(s) ?? 0) > e.agoraEpoch);
     const ultimaAtividade = Math.max(0, ...e.agendamentos.map((s) => epoch(s) ?? 0));
     const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
@@ -273,7 +337,9 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
 
   // ── tratamento existe: GANHO, e depois EM TRATAMENTO na 1ª sessão atendida ──
   // (finalizado só conta pra quem NÃO é retorno de um ciclo anterior)
-  if (temAberto || (temFinalizado && !cicloAnterior)) {
+  // 16/10: finalizado nunca LEVA a GANHO; só mantém a passagem GANHO → EM TRATAMENTO de quem já está em GANHO
+  const finalizadoContaPraGanho = temFinalizado && !cicloAnterior && (!v2 || eh(status, ETAPA.GANHO));
+  if (temAberto || finalizadoContaPraGanho) {
     // sessão do ciclo velho (antes do retorno pós) não leva ninguém pra EM TRATAMENTO de novo
     const sessaoAtendida = sessoes.some((s) => s.idStatus === SPINE_STATUS.ATENDIDO && passou(s) && (epoch(s) ?? 0) > corteCiclo);
     if (eh(status, ETAPA.GANHO)) {
@@ -295,7 +361,11 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const futurasMarcadas = porData.filter((s) => (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO) && (epoch(s) ?? 0) > e.agoraEpoch);
   // fato decidido: consulta que já passou, ou desmarcada (mesmo com data futura — cancelar antes é fato)
   const decididas = porData.filter((s) => passou(s) || s.idStatus === SPINE_STATUS.DESMARCADO);
-  const ancora = decididas.find(ehAvaliacao) ?? decididas[0] ?? null;
+  // 16/10 (decisão 5): a âncora é a última AVALIAÇÃO — retorno não ancora a jornada. Exceção: o ex-paciente que voltou,
+  // cuja consulta da volta faz o papel de avaliação, venha com que nome vier.
+  const ancora = v2
+    ? (decididas.find(ehAvaliacao) ?? (jornadaDaVolta ? decididas[0] : null) ?? null)
+    : (decididas.find(ehAvaliacao) ?? decididas[0] ?? null);
   const dias = ancora ? Math.max(0, (e.agoraEpoch - (epoch(ancora) ?? e.agoraEpoch)) / 86_400) : 0;
   const horas = dias * 24;
   const quando = ancora ? `há ${Math.floor(dias)} d` : '';
@@ -331,6 +401,9 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
     return null;
   }
   if (!ancora) return null;
+
+  // 16/10 (decisão 4): falta (ou desmarcação) em consulta que não é avaliação não muda a etapa — falta vira nota + tarefa
+  if (v2 && !ehAvaliacao(ancora) && (ancora.idStatus === SPINE_STATUS.NAO_COMPARECEU || ancora.idStatus === SPINE_STATUS.DESMARCADO)) return null;
 
   // faltou: jornada da falta
   if (ancora.idStatus === SPINE_STATUS.NAO_COMPARECEU) {

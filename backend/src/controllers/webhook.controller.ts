@@ -11,6 +11,7 @@ import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.s
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
+import { recusaDoFunilTratamento } from '../lib/guarda-funil-tratamento.js';
 import { entraPelaMeta } from '../lib/canal-de-entrada.js';
 import { marcarNaoEntregue } from '../agent/entrega-falha.js';
 import { tratarMensagemNaoRenderizada } from '../lib/mensagem-nao-renderizada.js';
@@ -1417,6 +1418,9 @@ export async function processAgent(args: {
     if (handoffStage && leadId > 0 && detectedSchedulingIntent(result.messages ?? [])) {
       try {
         const kommo = createKommoClient(unit);
+        // 16/10: a Sofia não tira o cartão do funil TRATAMENTO — nem pelo handoff automático (chave casamento-jornada)
+        const recusa = await recusaDoFunilTratamento(unit, kommo, leadId, { tipo: 'etapa', statusId: handoffStage });
+        if (recusa) throw new Error('cartão no funil TRATAMENTO: handoff automático não move (regra de 16/10)');
         await kommo.moveStage({ leadId, statusId: handoffStage });
         await recorder.step({
           kind: 'KOMMO_ACTION',
