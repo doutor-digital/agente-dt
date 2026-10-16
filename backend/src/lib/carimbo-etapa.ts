@@ -16,8 +16,8 @@
  * só assinava `add_message` em 18/09/2026, então nada disto disparava lá.
  */
 import type { Unit } from '@prisma/client';
-import { createKommoClient, type KommoLead } from '../services/kommo.service.js';
-import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
+import { createKommoClient, type KommoClient, type KommoLead } from '../services/kommo.service.js';
+import { esquemaDaUnidade, normalizarNome, type EsquemaKommo } from './kommo-schema.js';
 import { logger } from './logger.js';
 import { automacaoLigada } from './automacoes-estado.js';
 
@@ -76,14 +76,23 @@ function valorAtual(lead: KommoLead, fieldId: number): string | null {
   return v === null || v === undefined || v === '' ? null : String(v);
 }
 
+/** Para teste: o cliente do Kommo, o esquema da conta, o relógio e a variável da chave. */
+export interface DepsCarimbo {
+  kommo?: Pick<KommoClient, 'getLead' | 'setLeadCustomFieldValue'>;
+  esquema?: Pick<EsquemaKommo, 'nomeDoStatus' | 'campoPorNome'>;
+  agora?: number;
+  raw?: string | undefined;
+}
+
 /** Aplica os carimbos de cada evento de etapa. Falha em um lead não derruba os outros. */
-export async function aplicarCarimbosDeEtapa(unit: Unit, eventos: EventoEtapa[]): Promise<number> {
-  if (!carimboEtapaLiberado(unit.slug) || eventos.length === 0) return 0;
+export async function aplicarCarimbosDeEtapa(unit: Unit, eventos: EventoEtapa[], deps: DepsCarimbo = {}): Promise<number> {
+  const raw = 'raw' in deps ? deps.raw : process.env.CARIMBO_ETAPA_SLUGS;
+  if (!carimboEtapaLiberado(unit.slug, raw) || eventos.length === 0) return 0;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) return 0;
 
-  const kommo = createKommoClient(unit);
-  const esquema = await esquemaDaUnidade(unit, kommo);
-  const agora = Math.floor(Date.now() / 1000);
+  const kommo = deps.kommo ?? createKommoClient(unit);
+  const esquema = deps.esquema ?? (await esquemaDaUnidade(unit, kommo as KommoClient));
+  const agora = deps.agora ?? Math.floor(Date.now() / 1000);
   let gravados = 0;
 
   for (const ev of eventos) {

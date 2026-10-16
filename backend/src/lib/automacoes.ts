@@ -135,6 +135,45 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/reminder-worker.ts',
   },
   {
+    id: 'confirmacao-d1',
+    chave: 'CONFIRMACAO_D1_SLUGS',
+    nome: 'Véspera pelo robô do Kommo',
+    oQueFaz:
+      'A pergunta da véspera ("você vem amanhã?") passa a sair pelo robô do Kommo, 24 h antes da ◷ Data da Consulta, para TODO paciente agendado — não só para quem a Sofia marcou. Quando o paciente toca "Confirmar presença" (ou "Preciso remarcar"), o sistema responde sozinho, confirma a consulta na franquia e, se pediu para remarcar, abre tarefa para a equipe.',
+    pegadinha:
+      'Ligado DESLIGA a véspera do servidor nesta unidade (senão o paciente recebe duas perguntas). Só funciona com o gatilho de 24 h criado no Kommo (script acailandia-gatilho-vespera.js). Também vale para o botão do lembrete do dia (3 h antes). Só reconhece o TOQUE no botão (ou o mesmo texto digitado) com a consulta do cartão dentro das próximas 30 h; resposta solta ("sim", "ok") continua com a Sofia. Em "só no papel" a Sofia segue respondendo como hoje e a tela mostra o que o sistema faria.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/resposta-ao-lembrete.ts',
+  },
+  {
+    id: 'confirmar-sessao',
+    chave: 'CONFIRMAR_SESSAO_SLUGS',
+    nome: 'Confirmar presença das sessões',
+    oQueFaz:
+      'Quando o paciente em tratamento toca "Confirmar presença" no lembrete da sessão (24 h ou 3 h antes da ◷ Próxima sessão), o sistema responde sozinho e marca a sessão como CONFIRMADA na franquia. "Preciso remarcar" vira tarefa para a equipe com a resposta ao paciente.',
+    pegadinha:
+      'Acha a sessão pelo ⚙ idTreatment (franquia) do cartão e pelo horário da ◷ Próxima sessão — se não bater exatamente, não confirma nada na franquia: responde e abre tarefa para a equipe confirmar na agenda. Responde mesmo com a Sofia calada na etapa, porque é resposta a um lembrete que nós mandamos.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/resposta-ao-lembrete.ts',
+  },
+  {
+    id: 'alerta-sem-resposta',
+    chave: 'ALERTA_SEM_RESPOSTA_SLUGS',
+    nome: 'Alerta no Telegram: paciente sem resposta',
+    oQueFaz:
+      'Quando uma mensagem do paciente fica 5 minutos sem NENHUMA resposta (nem da equipe, nem da Sofia, nem de robô), manda um alerta no Telegram do João com a unidade, o contato, a última mensagem e o link do cartão. Um alerta por espera: só volta a avisar depois que alguém responder e o paciente ficar sem resposta de novo.',
+    pegadinha:
+      'Só em horário de atendimento da unidade (8h–20h, dias da agenda, sem feriado) e só para mensagem dos últimos 60 minutos — a volta de uma queda não vira rajada. Quem decide se houve resposta é a conversa oficial do Kommo (a mesma que a Sofia lê). Precisa de TELEGRAM_BOT_TOKEN no servidor; sem ele, só registra no log. Os grupos das unidades ficam para depois.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/sem-resposta-worker.ts',
+  },
+  {
     id: 'aviso-agendamento',
     chave: 'AVISO_AGENDAMENTO_SLUGS',
     nome: 'Aviso no WhatsApp quando a IA marca',

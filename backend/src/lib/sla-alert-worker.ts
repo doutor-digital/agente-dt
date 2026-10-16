@@ -41,7 +41,8 @@ function paraMinutos(hhmm: string | null | undefined): number | null {
   return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
 }
 
-function dentroDoHorario(unit: Unit): boolean {
+/** Horário de atendimento da unidade agora (dias da agenda, 8h–20h no máximo, sem feriado nacional). O alerta do Telegram também usa. */
+export function dentroDoHorario(unit: Unit): boolean {
   if (ehFeriadoNacionalAgora(new Date(), unit.spineTimezone ?? 'America/Sao_Paulo')) return false;
   const { minutos, diaSemana } = agoraLocal(unit.spineTimezone ?? 'America/Sao_Paulo');
   const dias = unit.spineAgendaDays?.length ? unit.spineAgendaDays : [1, 2, 3, 4, 5];
@@ -51,7 +52,7 @@ function dentroDoHorario(unit: Unit): boolean {
   return minutos >= abre && minutos < fecha;
 }
 
-function humanizarEspera(ms: number): string {
+export function humanizarEspera(ms: number): string {
   const min = Math.max(0, Math.floor(ms / 60_000));
   if (min < 60) return `${min} min`;
   const h = Math.floor(min / 60);

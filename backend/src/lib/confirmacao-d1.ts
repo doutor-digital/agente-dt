@@ -139,7 +139,10 @@ export function textoAlertaSemJanela(args: { slug: string; nome: string | null |
   );
 }
 
-async function marcarSituacaoConfirmada(kommo: KommoClient, leadId: number): Promise<boolean> {
+export async function marcarSituacaoConfirmada(
+  kommo: Pick<KommoClient, 'listLeadCustomFieldsTyped' | 'setLeadCustomFieldValue'>,
+  leadId: number,
+): Promise<boolean> {
   const campos = await kommo.listLeadCustomFieldsTyped();
   const alvo = normalizarNome('✓ Situação da consulta');
   const campo = campos.find((c) => normalizarNome(c.name) === alvo);
@@ -236,7 +239,7 @@ async function perguntouSobre(unitId: string, leadId: number, quando: string): P
   return marcas.some(Boolean);
 }
 
-const DEPS_PADRAO: DepsConfirmarNaFranquia = {
+export const DEPS_CONFIRMAR_PADRAO: DepsConfirmarNaFranquia = {
   confirmSchedule: (unit, idSchedule) => SpineService.confirmSchedule(unit, idSchedule),
   perguntou: perguntouSobre,
   esquecerConsulta: (unitId, leadId) => esqueceConsulta(unitId, leadId),
@@ -248,11 +251,13 @@ export function textoAlertaConfirmacaoSemFranquia(args: {
   quando: string | null | undefined;
   idSchedule: number | null | undefined;
   motivo: string;
+  /** O que foi confirmado — a véspera fala de consulta; o lembrete do tratamento, de sessão. */
+  oQue?: 'consulta' | 'sessão';
 }): string {
   const quando = args.quando ? ` de ${diaCurto(args.quando)} às ${args.quando.slice(11, 16)}` : '';
   const ag = args.idSchedule ? ` (agendamento ${args.idSchedule})` : '';
   return (
-    `ALERTA · ${args.slug} · [Contato: ${args.nome ?? 'paciente'}] ⚠️ Paciente CONFIRMOU pelo WhatsApp a consulta${quando}${ag}, ` +
+    `ALERTA · ${args.slug} · [Contato: ${args.nome ?? 'paciente'}] ⚠️ Paciente CONFIRMOU pelo WhatsApp a ${args.oQue ?? 'consulta'}${quando}${ag}, ` +
     `mas não consegui confirmar na franquia (${args.motivo}). Confirme na agenda da franquia — senão o sincronizador volta a Situação para "Agendado".`
   );
 }
@@ -270,10 +275,12 @@ export async function confirmarNaFranquia(
     consulta: ConsultaReconciliada | null;
     contactName: string | null | undefined;
     kommo: Pick<KommoClient, 'createTask'>;
+    /** Padrão 'consulta'. Só muda o texto da tarefa de alerta. */
+    oQue?: 'consulta' | 'sessão';
   },
-  deps: DepsConfirmarNaFranquia = DEPS_PADRAO,
+  deps: DepsConfirmarNaFranquia = DEPS_CONFIRMAR_PADRAO,
 ): Promise<ResultadoFranquia> {
-  const { unit, leadId, consulta, contactName, kommo } = args;
+  const { unit, leadId, consulta, contactName, kommo, oQue } = args;
   const log = { unit: unit.slug, leadId, idSchedule: consulta?.idSchedule ?? null, quando: consulta?.quando ?? null };
 
   const alertar = async (motivo: string) => {
@@ -286,6 +293,7 @@ export async function confirmarNaFranquia(
           quando: consulta?.quando,
           idSchedule: consulta?.idSchedule,
           motivo,
+          oQue,
         }),
         completeAt: Math.floor(Date.now() / 1000) + 30 * 60,
       })
@@ -300,7 +308,10 @@ export async function confirmarNaFranquia(
 
     if (decisao.acao === 'pular') {
       logger.info({ ...log, motivo: decisao.motivo, idStatus: consulta?.idStatus ?? null }, 'confirmação D-1: não confirmei na franquia');
-      if (decisao.avisarEquipe) await alertar(decisao.motivo.replace(/_/g, ' '));
+      if (decisao.avisarEquipe) {
+        const motivo = decisao.motivo.replace(/_/g, ' ');
+        await alertar(oQue === 'sessão' ? motivo.replace('consulta', 'sessão') : motivo);
+      }
       return decisao.motivo;
     }
 
