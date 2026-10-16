@@ -12,47 +12,11 @@
  * precisa saber antes de cobrar).
  */
 import type { Unit } from '@prisma/client';
-import { createKommoClient, type KommoClient, type KommoTalkMessage } from './kommo.service.js';
+import { createKommoClient, type KommoClient } from './kommo.service.js';
+import { normalizar, type AutorOficial, type MensagemOficial } from './kommo-talks-normalizar.js';
 
-export type AutorOficial = 'paciente' | 'sofia' | 'equipe';
-
-export interface MensagemOficial {
-  id: string;
-  em: Date;
-  direcao: 'entrada' | 'saida';
-  autor: AutorOficial;
-  autorNome: string;
-  texto: string;
-  anexo: { tipo: string; link: string | null } | null;
-  status: string | null;
-}
-
-/** Usuários do Kommo pelos quais a Sofia fala (nota de voz sai como o usuário da sessão). */
-const NOMES_DA_SOFIA = ['doutor digital', 'i.a sofia', 'ia sofia', 'sofia'];
-
-export function classificarAutor(m: Pick<KommoTalkMessage, 'type' | 'author'>): AutorOficial {
-  const tipo = (m.author?.type ?? '').toLowerCase();
-  if (m.type === 'incoming' || tipo === 'external') return 'paciente';
-  if (tipo === 'bot') return 'sofia';
-  const nome = (m.author?.name ?? '').trim().toLowerCase();
-  if (NOMES_DA_SOFIA.includes(nome)) return 'sofia';
-  return 'equipe';
-}
-
-export function normalizar(raw: KommoTalkMessage[]): MensagemOficial[] {
-  return raw
-    .map((m) => ({
-      id: String(m.id),
-      em: new Date((m.created_at ?? 0) * 1000),
-      direcao: (m.type === 'incoming' ? 'entrada' : 'saida') as 'entrada' | 'saida',
-      autor: classificarAutor(m),
-      autorNome: (m.author?.name ?? '').trim(),
-      texto: (m.text ?? '').trim(),
-      anexo: m.attachment?.type ? { tipo: String(m.attachment.type), link: m.attachment.link ?? null } : null,
-      status: m.delivery_status ?? null,
-    }))
-    .sort((a, b) => a.em.getTime() - b.em.getTime());
-}
+// A parte pura (quem falou, normalizar, histórico) mora sem dependência de ambiente, para os testes do conector.
+export * from './kommo-talks-normalizar.js';
 
 export async function mensagensOficiais(kommo: KommoClient, leadId: number, limit = 40): Promise<MensagemOficial[]> {
   const talks = await kommo.listTalks(leadId);

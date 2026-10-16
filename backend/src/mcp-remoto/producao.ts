@@ -13,6 +13,7 @@ import { prisma } from '../lib/prisma.js';
 import { login } from '../services/auth.service.js';
 import { chaveTelefone, normalizarNome, panoramaDaUnidade, parecencaDeNome, type Panorama } from '../services/cerebro.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
+import { historicoOficial } from '../services/kommo-talks.service.js';
 import type { Contexto } from '../franquia-mcp/contexto.js';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { Cache } from '../franquia-mcp/ritmo.js';
@@ -80,6 +81,7 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
         lead: (id) => cliente.getLead(id),
         leadsPorTelefone: (tel) => cliente.listLeadsPorTelefone(tel, 50),
         usuarios: () => cliente.listUsers(),
+        conversa: (leadId, limite) => historicoOficial(cliente, leadId, limite),
       },
     });
   }
