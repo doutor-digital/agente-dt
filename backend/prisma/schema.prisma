@@ -354,6 +354,7 @@ model Unit {
   crmMembros        UnitCrmCompartilhado[] @relation("CrmCompartilhadoConta")
   /// Conexão com o Bling (ERP) — só a unidade que vende pelo Bling tem (HM Tecnologia). Ver `BlingConexao`.
   blingConexao      BlingConexao?
+  chavesDeIntegracao ChaveDeIntegracao[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -2165,4 +2166,28 @@ model CampanhaPlacar {
   @@unique([campanha, unidade, dia])
   @@index([campanha, dia])
   @@map("campanha_placar")
+}
+
+/// Chave de API de um serviço de terceiros por unidade (Asaas, ClickSign), CIFRADA (lib/integracoes/cofre.ts).
+/// Só leitura nesses serviços: o conector do claude.ai usa a chave para consultar, nunca para mover dinheiro.
+model ChaveDeIntegracao {
+  id           String    @id @default(cuid())
+  unitId       String    @map("unit_id")
+  /// asaas | clicksign
+  provedor     String
+  chaveCifrada String    @map("chave_cifrada")
+  /// os 4 últimos caracteres, para a tela mostrar qual chave está salva
+  finalDaChave String    @map("final_da_chave")
+  /// nome da conta lido no serviço quando a chave foi testada
+  conta        String?
+  salvoPor     String?   @map("salvo_por")
+  testadoEm    DateTime? @map("testado_em")
+  ultimoErro   String?   @map("ultimo_erro")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @updatedAt @map("atualizado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, provedor])
+  @@map("chaves_de_integracao")
 }

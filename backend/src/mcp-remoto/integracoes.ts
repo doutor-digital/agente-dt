@@ -11,19 +11,22 @@ export interface FontesDeIntegracao {
   franquia: Map<string, { nome: string }>;
   kommo: Map<string, { nome: string }>;
   bling: Map<string, { nome: string }>;
+  asaas?: Map<string, { nome: string }>;
 }
 
 export function listarIntegracoes(f: FontesDeIntegracao) {
-  const slugs = [...new Set([...f.franquia.keys(), ...f.kommo.keys(), ...f.bling.keys()])].sort();
+  const asaas = f.asaas ?? new Map<string, { nome: string }>();
+  const slugs = [...new Set([...f.franquia.keys(), ...f.kommo.keys(), ...f.bling.keys(), ...asaas.keys()])].sort();
   const unidades = slugs.map((slug) => {
-    const nome = f.franquia.get(slug)?.nome ?? f.kommo.get(slug)?.nome ?? f.bling.get(slug)?.nome ?? slug;
-    const tem = { franquia: f.franquia.has(slug), kommo: f.kommo.has(slug), bling: f.bling.has(slug) };
+    const nome = f.franquia.get(slug)?.nome ?? f.kommo.get(slug)?.nome ?? f.bling.get(slug)?.nome ?? asaas.get(slug)?.nome ?? slug;
+    const tem = { franquia: f.franquia.has(slug), kommo: f.kommo.has(slug), bling: f.bling.has(slug), asaas: asaas.has(slug) };
     const ferramentas = [
       ...(tem.franquia ? ['franquia (pacientes, agenda, tratamentos, BI)'] : []),
       ...(tem.kommo ? ['kommo_*'] : []),
       ...(tem.franquia && tem.kommo ? ['relatorio_funil'] : []),
       ...(tem.bling ? ['bling_*'] : []),
       ...(tem.bling && tem.kommo ? ['relatorio_vendas'] : []),
+      ...(tem.asaas ? ['asaas_* (cobranças, extrato, saldo)'] : []),
     ];
     return { slug, nome, ...tem, ferramentas };
   });
@@ -32,6 +35,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
     comFranquia: unidades.filter((u) => u.franquia).length,
     comKommo: unidades.filter((u) => u.kommo).length,
     comBling: unidades.filter((u) => u.bling).length,
+    comAsaas: unidades.filter((u) => u.asaas).length,
     unidades,
     observacao: 'Anúncios (Meta Ads e Google Ads) ainda não estão neste conector.',
   };
@@ -44,7 +48,7 @@ export function registrarIntegracoes(server: McpServer, fontes: () => FontesDeIn
       title: 'O que está ligado em cada unidade',
       description:
         'Todas as unidades e empresas do conector (clínicas Doutor Hérnia e empresas do grupo, como a HM Tecnologia) e o que cada uma ' +
-        'tem ligado: CRM da franquia, Kommo, Bling — e quais ferramentas usar. Comece por aqui para saber se algo está integrado.',
+        'tem ligado: CRM da franquia, Kommo, Bling, Asaas — e quais ferramentas usar. Comece por aqui para saber se algo está integrado.',
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => executar('listar_integracoes', {}, auditar, () => listarIntegracoes(fontes())),

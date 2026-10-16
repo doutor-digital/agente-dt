@@ -23,6 +23,9 @@ import { executar } from './ferramenta.js';
 import { criarContextoKommo, registrarFerramentasKommo, type UnidadeKommo } from './kommo.js';
 import { criarContextoBling, registrarFerramentasBling, type ContaBling } from './bling.js';
 import { registrarIntegracoes } from './integracoes.js';
+import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
+import { asaasGet } from '../lib/integracoes/asaas.js';
+import { contasComChave } from '../lib/integracoes/chaves.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
 import { registrarRelatorio, type DepsRelatorio } from './relatorio.js';
@@ -99,6 +102,16 @@ async function contasBlingDoBanco(): Promise<Map<string, ContaBling>> {
     contas.set(l.unit.slug, { slug: l.unit.slug, nome: l.unit.name, fonte: { get: (caminho, query) => blingGet(l.unitId, caminho, query ?? {}) } });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Bling carregadas');
+  return contas;
+}
+
+/** Clínicas com a chave do Asaas no painel de integrações. A chave fica só em memória, decifrada aqui. */
+async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
+  const contas = new Map<string, ContaAsaas>();
+  for (const c of await contasComChave('asaas')) {
+    contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) } });
+  }
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');
   return contas;
 }
 
@@ -245,6 +258,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasKommoDoBanco, (contas) => (kommo.unidades = contas), 'as contas do Kommo');
   const bling = criarContextoBling(new Map());
   manterAtualizado(contasBlingDoBanco, (contas) => (bling.contas = contas), 'as contas do Bling');
+  const asaas = criarContextoAsaas(new Map());
+  manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;
@@ -268,7 +283,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     extras: (server, auditar) => {
       registrarFerramentasKommo(server, kommo, auditar);
       registrarFerramentasBling(server, bling, kommo, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas }), auditar);
+      registrarFerramentasAsaas(server, asaas, auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };
