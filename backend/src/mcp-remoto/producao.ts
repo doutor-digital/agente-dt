@@ -24,6 +24,10 @@ import { executar } from './ferramenta.js';
 import { criarContextoKommo, registrarFerramentasKommo, type UnidadeKommo } from './kommo.js';
 import { criarContextoBling, registrarFerramentasBling, type ContaBling } from './bling.js';
 import { registrarIntegracoes } from './integracoes.js';
+import { registrarMetaEventos, type FonteRastreio } from './meta-eventos.js';
+import { Pendentes, registrarEscritaKommo, type FonteEscrita } from './kommo-escrita.js';
+import type { KommoClient } from '../services/kommo.service.js';
+import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
 import { asaasGet } from '../lib/integracoes/asaas.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
@@ -61,6 +65,9 @@ async function unidadesDoBanco(): Promise<Map<string, Unidade>> {
   return ficam;
 }
 
+/** O cliente do Kommo de cada conta, para a escrita (a leitura usa a `fonte` da UnidadeKommo). */
+const clientesKommo = new Map<string, KommoClient>();
+
 /** Contas do Kommo, UMA por conta (subdomínio): resgate, financeiro e tratamento são funis da mesma conta. */
 async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
   const linhas = await prisma.unit.findMany({
@@ -72,6 +79,7 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
   const contas = new Map<string, UnidadeKommo>();
   for (const [slug, u] of ficam) {
     const cliente = createKommoClient(u);
+    clientesKommo.set(slug, cliente);
     contas.set(slug, {
       slug,
       nome: u.name,
@@ -115,6 +123,45 @@ async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');
   return contas;
+}
+
+/**
+ * Banco de rastreio do n8n (eventos para a Meta, cliques em anúncio). Usuário só com SELECT nas tabelas de
+ * rastreio; sem a variável, as ferramentas meta_* respondem que a leitura não está ligada.
+ */
+function fonteDoRastreio(): FonteRastreio | null {
+  const url = process.env.RASTREIO_DATABASE_URL;
+  if (!url) return null;
+  const cliente = new PrismaClient({ datasourceUrl: url });
+  return { consultar: (sql, ...params) => cliente.$queryRawUnsafe(sql, ...params) };
+}
+
+/**
+ * Quem pode ALTERAR cartões pelo conector: os e-mails de MCP_ESCRITA_EMAILS (separados por vírgula) que existem
+ * como usuário ativo do console. Sem a variável, ninguém altera — o conector segue só leitura.
+ */
+async function escritoresDoBanco(): Promise<Set<string>> {
+  const emails = (process.env.MCP_ESCRITA_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+  if (!emails.length) return new Set();
+  const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
+  return new Set(us.map((u) => u.id));
+}
+
+const normEtiqueta = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+function fonteDeEscrita(slug: string): FonteEscrita {
+  const c = clientesKommo.get(slug);
+  if (!c) throw new ErroDeEntrada(`conta do Kommo de ${slug} ainda não carregou; tente em instantes`);
+  return {
+    leads: (ids) => c.listLeadsPorIds(ids),
+    funis: () => c.listPipelines(),
+    campos: () => c.listarCamposDoCartao(),
+    usuarios: () => c.listUsers(),
+    etiquetaExiste: async (nome) => (await c.buscarEtiquetas(nome, 1)).some((t) => normEtiqueta(t.name) === normEtiqueta(nome)),
+    atualizar: (lote) => c.atualizarLeadsEmLote(lote),
+    nota: (id, texto) => c.addLeadNote(id, texto),
+    tarefa: (t) => c.createTask(t),
+  };
 }
 
 async function idsDasUnidades(slugs: string[]): Promise<string[]> {
@@ -261,6 +308,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   const bling = criarContextoBling(new Map());
   manterAtualizado(contasBlingDoBanco, (contas) => (bling.contas = contas), 'as contas do Bling');
   const asaas = criarContextoAsaas(new Map());
+  const rastreio = fonteDoRastreio();
+  let escritores = new Set<string>();
+  manterAtualizado(escritoresDoBanco, (s) => (escritores = s), 'quem pode alterar cartões');
+  const pendentes = new Pendentes();
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
@@ -282,10 +333,12 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     carregarUnidades: unidadesDoBanco,
     franquia: { cliente: { log: (linha) => logger.info({ franquia: linha }, 'mcp-remoto: franquia') } },
     log: logger,
-    extras: (server, auditar) => {
+    extras: (server, auditar, quem) => {
       registrarFerramentasKommo(server, kommo, auditar);
       registrarFerramentasBling(server, bling, kommo, auditar);
       registrarFerramentasAsaas(server, asaas, auditar);
+      registrarMetaEventos(server, () => rastreio, auditar);
+      if (escritores.has(quem.userId)) registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
