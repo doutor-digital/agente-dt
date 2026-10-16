@@ -50,8 +50,10 @@ export interface OpcoesConector {
 }
 
 const INSTRUCOES = [
-  'Dados da Doutor Digital, só leitura: o CRM da franquia Doutor Hérnia (ferramentas sem prefixo: pacientes, agenda, tratamentos, BI),',
-  'o CRM comercial Kommo (kommo_*), o cérebro que confere um contra o outro (cerebro_*) e o relatório cruzado (relatorio_funil).',
+  'Dados da Doutor Digital, só leitura. Comece por listar_integracoes: ela diz o que cada clínica e cada empresa do grupo (ex. HM Tecnologia) tem ligado.',
+  'Fontes: o CRM da franquia Doutor Hérnia (ferramentas sem prefixo: pacientes, agenda, tratamentos, BI),',
+  'o CRM comercial Kommo (kommo_*), o ERP Bling das empresas que usam (bling_*: pedidos, contas a receber, notas, clientes),',
+  'o cérebro que confere um contra o outro (cerebro_*), o relatório cruzado (relatorio_funil) e, para Kommo + Bling, relatorio_vendas.',
   'Para "quantos leads viraram consulta/tratamento", use relatorio_funil: o cruzamento Kommo → franquia é feito em código, por telefone,',
   'e vem com a cobertura — não some números de ferramentas diferentes por conta própria. Unidade aceita nome curto ("serra").',
   'Para relatório da rede use unidade="todas" onde houver e leia "rede": ela soma só as unidades que responderam e lista as que',

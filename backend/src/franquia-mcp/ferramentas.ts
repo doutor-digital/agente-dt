@@ -65,7 +65,7 @@ export function registrarFerramentas(server: McpServer, ctx: Contexto, op: Opcoe
     'listar_unidades',
     {
       title: 'Unidades configuradas',
-      description: 'Lista as unidades da franquia que este MCP consegue ler (slug, nome, fuso). Não chama a franquia.',
+      description: 'Lista as clínicas com o CRM da franquia que este MCP consegue ler (slug, nome, fuso). Não chama a franquia. Empresas do grupo e quem só tem Kommo/Bling aparecem em listar_integracoes.',
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => responder('listar_unidades', {}, () => c.listarUnidades(ctx)),

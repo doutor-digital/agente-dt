@@ -21,6 +21,9 @@ import type { Unidade } from '../franquia-mcp/unidade.js';
 import { armazemPrisma } from './armazem-prisma.js';
 import { executar } from './ferramenta.js';
 import { criarContextoKommo, registrarFerramentasKommo, type UnidadeKommo } from './kommo.js';
+import { criarContextoBling, registrarFerramentasBling, type ContaBling } from './bling.js';
+import { registrarIntegracoes } from './integracoes.js';
+import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
 import { registrarRelatorio, type DepsRelatorio } from './relatorio.js';
 import { montarConectorRemoto } from './servidor.js';
@@ -81,6 +84,21 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
     });
   }
   logger.info({ contas: contas.size, mesmaConta: descartadas }, 'mcp-remoto: contas do Kommo carregadas (uma por conta)');
+  return contas;
+}
+
+/** Empresas com o Bling autorizado (refresh token salvo). A fila de 3 req/s e a renovação do token são do `blingGet`. */
+async function contasBlingDoBanco(): Promise<Map<string, ContaBling>> {
+  const linhas = await prisma.blingConexao.findMany({
+    where: { refreshToken: { not: null } },
+    include: { unit: { select: { slug: true, name: true, isActive: true } } },
+  });
+  const contas = new Map<string, ContaBling>();
+  for (const l of linhas) {
+    if (!l.unit.isActive) continue;
+    contas.set(l.unit.slug, { slug: l.unit.slug, nome: l.unit.name, fonte: { get: (caminho, query) => blingGet(l.unitId, caminho, query ?? {}) } });
+  }
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas do Bling carregadas');
   return contas;
 }
 
@@ -225,6 +243,8 @@ export async function ligarConectorRemoto(app: Express): Promise<void> {
 async function montar(app: Express, urlPublica: string): Promise<void> {
   const kommo = criarContextoKommo(new Map());
   manterAtualizado(contasKommoDoBanco, (contas) => (kommo.unidades = contas), 'as contas do Kommo');
+  const bling = criarContextoBling(new Map());
+  manterAtualizado(contasBlingDoBanco, (contas) => (bling.contas = contas), 'as contas do Bling');
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;
@@ -247,6 +267,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     log: logger,
     extras: (server, auditar) => {
       registrarFerramentasKommo(server, kommo, auditar);
+      registrarFerramentasBling(server, bling, kommo, auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };

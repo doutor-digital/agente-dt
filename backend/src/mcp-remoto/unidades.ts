@@ -63,5 +63,9 @@ export function acharSlug(slugs: Iterable<string>, pedido: string): string | und
   if (todos.includes(p)) return p;
   if (!p) return undefined;
   const candidatos = todos.filter((s) => s.endsWith(`-${p}`));
-  return candidatos.length === 1 ? candidatos[0] : undefined;
+  if (candidatos.length === 1) return candidatos[0];
+  if (candidatos.length > 1) return undefined;
+  // "hm" acha "hm-tecnologia": o nome curto da empresa vem antes do hífen, ao contrário das clínicas
+  const peloComeco = todos.filter((s) => s.startsWith(`${p}-`));
+  return peloComeco.length === 1 ? peloComeco[0] : undefined;
 }
