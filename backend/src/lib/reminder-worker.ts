@@ -44,6 +44,7 @@ import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
+import { estadoDoLembrete } from './lembrete-chaves.js';
 
 /**
  * Janelas da chave ANTIGA, que não carregava o horário da consulta. Só servem à transição de
@@ -256,7 +257,10 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   });
 
   const kommo = createKommoClient(unit);
-  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0 };
+  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0, robo_kommo: 0 };
+  // Véspera pelo robô do Kommo (chave confirmacao-d1, decisão de 16/10/2026): ligada, a do servidor não sai
+  // nesta unidade — senão o paciente recebe duas perguntas. "Só no papel" não muda nada aqui; só conta.
+  const vesperaDoKommo = estadoDoLembrete(unit.slug, 'consulta');
 
   for (const link of links) {
     const consulta = await AgendaReconcileService.consultaDoLead(unit, link.kommoLeadId);
@@ -270,6 +274,10 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
     const toque = toqueDoDia(consulta.quando.slice(0, 10), dia);
     if (!toque) continue;
     if (toque === 'd2' && !reforcoLiberado(unit.slug)) continue;
+    if (toque === 'd1' && vesperaDoKommo !== 'desligado') {
+      conta.robo_kommo++;
+      if (vesperaDoKommo === 'ligado') continue;
+    }
 
     const chave = chaveDaConfirmacao(toque, consulta.quando);
     // Chave antiga (sem o horário): os avisos gravados antes desta versão ainda valem, senão o
@@ -349,7 +357,12 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   }
 
   ultimoEnvioPorUnidade.set(unit.id, dia);
-  logger.info({ unit: unit.slug, dia, ...conta, candidatos: links.length }, 'confirmação de presença: varredura concluída');
+  logger.info(
+    { unit: unit.slug, dia, ...conta, vesperaDoKommo, candidatos: links.length },
+    vesperaDoKommo === 'seco' && conta.robo_kommo > 0
+      ? 'confirmação de presença: varredura concluída ([seco] com a véspera do Kommo ligada, robo_kommo véspera(s) do servidor deixariam de sair)'
+      : 'confirmação de presença: varredura concluída',
+  );
 }
 
 async function varrer(): Promise<void> {

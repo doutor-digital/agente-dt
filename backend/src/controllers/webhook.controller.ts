@@ -31,6 +31,8 @@ import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.j
 import { scheduleAgentRun, temPendentes } from '../lib/agent-coalescer.js';
 import { ehEncerramentoRepetido } from '../lib/encerramento.js';
 import { podeSerRespostaD1, tratarRespostaD1 } from '../lib/confirmacao-d1.js';
+import { podeSerBotaoDoLembrete, tratarBotaoDoLembrete } from '../lib/resposta-ao-lembrete.js';
+import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { tentarBotoes } from '../lib/resposta-com-botoes.js';
@@ -88,18 +90,21 @@ const leadStatusSchema = z.object({
   pipeline_id: z.coerce.number().optional(),
 });
 
-const webhookSchema = z.object({
+// `listaDoKommo`: o corpo do Kommo chega em form-urlencoded e o parser (qs) só monta ARRAY até o índice
+// 20 — com mais itens (`leads[status][21]`, numa mudança de etapa em lote) vira objeto, e o z.array
+// recusava o webhook inteiro com 400. Ver kommo-webhook-lista.ts.
+export const webhookSchema = z.object({
   account: z.object({ id: z.coerce.number().optional() }).partial().optional(),
   leads: z
     .object({
-      add: z.array(z.object({ id: z.coerce.number() })).optional(),
-      update: z.array(z.object({ id: z.coerce.number() })).optional(),
-      status: z.array(leadStatusSchema).optional(),
+      add: z.preprocess(listaDoKommo, z.array(z.object({ id: z.coerce.number() })).optional()),
+      update: z.preprocess(listaDoKommo, z.array(z.object({ id: z.coerce.number() })).optional()),
+      status: z.preprocess(listaDoKommo, z.array(leadStatusSchema).optional()),
     })
     .optional(),
   message: z
     .object({
-      add: z.array(messageAddSchema).optional(),
+      add: z.preprocess(listaDoKommo, z.array(messageAddSchema).optional()),
     })
     .optional(),
   leadId: z.coerce.number().optional(),
@@ -676,7 +681,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     // então o 200 sai ANTES dele — o mesmo padrão do caminho da IA, que responde e segue
     // processando. Foi a reentrega do "1" que fez a Sofia mandar "Não entendi…" 23 min depois
     // (Açailândia, 06/10/2026).
-    if (podeSerRespostaD1(conv, ctx.humanMessage)) {
+    if (podeSerRespostaD1(conv, ctx.humanMessage) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage)) {
       res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
     }
     const respostaD1 = await tratarRespostaD1({
@@ -690,6 +695,42 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: falha ao tratar resposta (segue para a IA)');
       return null;
     });
+    // Toque em "Confirmar presença" / "Preciso remarcar" de um lembrete do ROBÔ DO KOMMO (véspera ou dia
+    // da consulta, véspera ou dia da sessão) — chaves confirmacao-d1 e confirmar-sessao. Mesmo caminho da
+    // véspera do servidor acima: responde em código e confirma na franquia. null = segue para a Sofia.
+    const lembrete = respostaD1
+      ? null
+      : await tratarBotaoDoLembrete({
+          unit,
+          leadId,
+          texto: ctx.humanMessage,
+          conv,
+          kommo: createKommoClient(unit),
+        }).catch((err) => {
+          logger.warn({ err: String(err), unit: unit.slug, leadId }, 'lembrete: falha ao tratar o toque (segue para a Sofia)');
+          return null;
+        });
+    if (lembrete) {
+      const oQue = lembrete.tipo === 'sessao' ? 'sessão' : 'consulta';
+      await recorder.step({
+        kind: 'COMPLETED',
+        title:
+          lembrete.resposta === 'confirmou'
+            ? `Paciente tocou "Confirmar presença" no lembrete da ${oQue} — respondido em código, sem IA (franquia: ${lembrete.franquia ?? '—'})`
+            : lembrete.resposta === 'repetida'
+              ? `Mesmo toque no lembrete da ${oQue}, já respondido — sem repetir, sem IA`
+              : `Paciente pediu para remarcar a ${oQue} pelo lembrete — tarefa para a equipe, sem IA`,
+        payload: { mensagem: ctx.humanMessage.slice(0, 80), tipo: lembrete.tipo, idSchedule: lembrete.idSchedule, franquia: lembrete.franquia },
+      });
+      await recorder.finalize({
+        status: 'SUCCESS',
+        latencyMs: Date.now() - trace.createdAt.getTime(),
+        iaDecision: `__lembrete_${lembrete.tipo}_${lembrete.resposta}__`,
+      });
+      logger.info({ unit: unit.slug, leadId, traceId: trace.id, lembrete }, 'agente pulado (resposta ao lembrete do Kommo)');
+      if (!res.headersSent) res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'lembrete_kommo' });
+      return;
+    }
     if (respostaD1) {
       await recorder.step({
         kind: 'COMPLETED',
