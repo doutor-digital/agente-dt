@@ -14,7 +14,7 @@ import type { CampoDoCartaoDaConta, KommoLead, KommoPipeline } from '../services
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
-import { resolverUnidadesKommo, type ContextoKommo } from './kommo.js';
+import { donoDoCartao, resolverUnidadesKommo, type ContextoKommo } from './kommo.js';
 
 export const MAX_CARTOES = 50;
 const VALIDADE_MS = 15 * 60_000;
@@ -170,6 +170,13 @@ export async function prepararAlteracao(
   const leads = await fonte.leads(ids);
   const faltam = ids.filter((id) => !leads.some((l) => l.id === id));
   if (faltam.length) throw new ErroDeEntrada(`cartões que não existem nesta conta: ${faltam.join(', ')}`);
+  // conta dividida (Petrópolis × Caxias): cartão da outra unidade nunca é alterado por esta
+  const daOutra = leads.flatMap((l) => {
+    const d = donoDoCartao(u!, l);
+    return d.tipo === 'outra' ? [`${l.id} (${d.rotulo}: unidade="${d.slug}")`] : [];
+  });
+  if (daOutra.length) throw new ErroDeEntrada(`cartões de outra unidade (⌂ Unidade de atendimento), nada foi preparado: ${daOutra.join(', ')}`);
+  const semDono = leads.filter((l) => donoDoCartao(u!, l).tipo === 'ninguem').map((l) => l.id);
 
   const funis = m.etapa ? await fonte.funis() : [];
   const nomeEtapa = (pid: number, sid: number) => {
@@ -186,6 +193,7 @@ export async function prepararAlteracao(
   });
 
   const avisos: string[] = [];
+  if (semDono.length) avisos.push(`cartões sem ⌂ Unidade de atendimento (não são de nenhuma unidade até alguém escolher): ${semDono.join(', ')}`);
   for (const nome of m.adicionarEtiquetas ?? []) {
     if (!(await fonte.etiquetaExiste(nome))) avisos.push(`a etiqueta "${nome}" ainda não existe nesta conta: será criada`);
   }

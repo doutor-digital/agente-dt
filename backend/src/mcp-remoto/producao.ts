@@ -96,8 +96,56 @@ async function contasKommoDoBanco(): Promise<Map<string, UnidadeKommo>> {
       },
     });
   }
+  await dividirContas(contas);
   logger.info({ contas: contas.size, mesmaConta: descartadas }, 'mcp-remoto: contas do Kommo carregadas (uma por conta)');
   return contas;
+}
+
+/**
+ * Um Kommo para duas unidades (Petrópolis e Caxias, `unit_crm_compartilhado`): cada membro vira uma unidade do
+ * conector com a divisão — vê e altera só os cartões com o seu «⌂ Unidade de atendimento». A irmã não tem
+ * credencial de Kommo: usa o cliente da dona. Se a tabela não responder, a carga falha inteira e a anterior fica
+ * (melhor que voltar a misturar as duas).
+ */
+async function dividirContas(contas: Map<string, UnidadeKommo>): Promise<void> {
+  const linhas = await prisma.unitCrmCompartilhado.findMany({
+    where: { ativo: true, unit: { isActive: true } },
+    select: { rotulo: true, unit: { select: { slug: true, name: true, spineTimezone: true } }, conta: { select: { slug: true } } },
+    orderBy: { rotulo: 'asc' },
+  });
+  const porConta = new Map<string, typeof linhas>();
+  for (const l of linhas) porConta.set(l.conta.slug, [...(porConta.get(l.conta.slug) ?? []), l]);
+  for (const [contaSlug, grupo] of porConta) {
+    const dona = contas.get(contaSlug);
+    const cliente = clientesKommo.get(contaSlug);
+    if (!dona || !cliente) {
+      logger.warn({ conta: contaSlug }, 'mcp-remoto: conta dividida sem Kommo carregado — as irmãs ficam sem Kommo');
+      continue;
+    }
+    const membros = grupo.map((g) => ({ slug: g.unit.slug, rotulo: g.rotulo }));
+    if (!membros.some((m) => m.slug === contaSlug)) {
+      // sem rótulo próprio a dona não é dona de cartão nenhum: fora do conector, como nos robôs
+      contas.delete(contaSlug);
+      logger.warn({ conta: contaSlug }, 'mcp-remoto: a dona da conta dividida não tem rótulo — fica sem Kommo no conector');
+    }
+    for (const g of grupo) {
+      const divisao = { rotulo: g.rotulo, membros };
+      if (g.unit.slug === contaSlug) {
+        contas.set(contaSlug, { ...dona, divisao });
+        continue;
+      }
+      clientesKommo.set(g.unit.slug, cliente);
+      contas.set(g.unit.slug, {
+        slug: g.unit.slug,
+        nome: g.unit.name,
+        fuso: g.unit.spineTimezone || dona.fuso,
+        slugsDaFranquia: [g.unit.slug],
+        fonte: dona.fonte,
+        conta: contaSlug,
+        divisao,
+      });
+    }
+  }
 }
 
 /** Empresas com o Bling autorizado (refresh token salvo). A fila de 3 req/s e a renovação do token são do `blingGet`. */

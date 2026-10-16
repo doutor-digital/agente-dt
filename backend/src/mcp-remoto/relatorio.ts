@@ -21,7 +21,7 @@ import { emParalelo } from '../franquia-mcp/ritmo.js';
 import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
 import { compareceu, cruzarFunil, type AgendamentoDaFranquia, type LeadDoFunil } from './funil.js';
-import { type ContextoKommo, grupoDoLead, leadsDoPeriodo, telefonesDosLeads as telefonesDoKommo } from './kommo.js';
+import { avisoDaDivisao, type ContextoKommo, grupoDoLead, leadsDoPeriodo, telefonesDosLeads as telefonesDoKommo } from './kommo.js';
 import { hojeNoFuso } from './tempo.js';
 import { diasNoPeriodo, somarDias } from '../franquia-mcp/travas.js';
 import { acharSlug } from './unidades.js';
@@ -66,8 +66,9 @@ async function umaUnidade(deps: DepsRelatorio, slug: string, inicio: string, fim
   const hoje = hojeNoFuso(ku.fuso, deps.agora?.());
 
   // 1–2. Kommo + banco
-  const { leads, truncado } = await leadsDoPeriodo(deps.kommo, ku, inicio, fim, 'created_at');
+  const { leads, truncado, semUnidade } = await leadsDoPeriodo(deps.kommo, ku, inicio, fim, 'created_at');
   if (truncado) avisos.push(`o Kommo tem mais de ${deps.kommo.maxPaginas * 250} leads no período: o funil considera só esses`);
+  if (ku.divisao) avisos.push(avisoDaDivisao(ku, semUnidade ?? 0));
   const ids = leads.map((l) => l.id);
   const [doKommo, daConversa, vinculos] = await Promise.all([
     telefonesDoKommo(deps.kommo, ku, leads).catch((e: unknown) => {
