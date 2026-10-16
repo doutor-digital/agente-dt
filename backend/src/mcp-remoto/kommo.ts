@@ -30,6 +30,18 @@ export interface FonteKommo {
   conversa?(leadId: number, limite: number, periodo?: { desde?: number; ate?: number }): Promise<{ mensagens: MensagemOficial[]; conversas: number; total?: number; truncado?: boolean }>;
 }
 
+/**
+ * Conta do Kommo dividida entre unidades (Petrópolis e Caxias, tabela `unit_crm_compartilhado`): quem é de quem
+ * é o campo «⌂ Unidade de atendimento». Cada unidade só vê os cartões com o seu rótulo; cartão vazio (ou com um
+ * valor que ninguém usa) não é de nenhuma — não entra em soma nenhuma, só no aviso.
+ */
+export interface DivisaoDoKommo {
+  /** o texto da opção desta unidade no campo */
+  rotulo: string;
+  /** todas as unidades que dividem a conta, esta inclusa */
+  membros: Array<{ slug: string; rotulo: string }>;
+}
+
 export interface UnidadeKommo {
   slug: string;
   nome: string;
@@ -37,6 +49,9 @@ export interface UnidadeKommo {
   /** todos os slugs que usam esta conta (principal + resgate + …): o banco guarda vínculo e conversa por eles */
   slugsDaFranquia: string[];
   fonte: FonteKommo;
+  /** o slug da dona da conta, quando a unidade usa o Kommo de outra (as irmãs leem a mesma janela de leads) */
+  conta?: string;
+  divisao?: DivisaoDoKommo;
 }
 
 export interface ContextoKommo {
@@ -45,11 +60,16 @@ export interface ContextoKommo {
   paralelo: number;
   /** páginas de 250 leads por consulta */
   maxPaginas: number;
+  /** leituras em andamento: duas unidades da mesma conta pedindo junto esperam a mesma */
+  emAndamento: Map<string, Promise<unknown>>;
 }
 
 export function criarContextoKommo(unidades: Map<string, UnidadeKommo>, op: { paralelo?: number; maxPaginas?: number; agora?: () => number } = {}): ContextoKommo {
-  return { unidades, cache: new Cache(op.agora), paralelo: op.paralelo ?? 2, maxPaginas: op.maxPaginas ?? 4 };
+  return { unidades, cache: new Cache(op.agora), paralelo: op.paralelo ?? 2, maxPaginas: op.maxPaginas ?? 4, emAndamento: new Map() };
 }
+
+/** A chave de cache da CONTA do Kommo: as unidades que dividem uma conta leem funis, usuários e leads uma vez só. */
+const contaDe = (u: UnidadeKommo) => u.conta ?? u.slug;
 
 export const MAX_UNIDADES_KOMMO = 4;
 
@@ -85,16 +105,23 @@ export function resolverUnidadesKommo(ctx: ContextoKommo, alvo: string | string[
 async function comCache<T>(ctx: ContextoKommo, chave: string, ttl: number, fn: () => Promise<T>): Promise<T> {
   const g = ctx.cache.pegar<T>(chave);
   if (g !== undefined) return g;
-  const v = await fn();
-  if (!(v as { truncado?: unknown })?.truncado) ctx.cache.guardar(chave, v, ttl);
-  return v;
+  const andando = ctx.emAndamento.get(chave);
+  if (andando) return andando as Promise<T>;
+  const p = fn()
+    .then((v) => {
+      if (!(v as { truncado?: unknown })?.truncado) ctx.cache.guardar(chave, v, ttl);
+      return v;
+    })
+    .finally(() => ctx.emAndamento.delete(chave));
+  ctx.emAndamento.set(chave, p);
+  return p;
 }
 
 const HORA = 3_600_000;
 
 /** `pipeline:status` → nomes. 142 e 143 são "ganho" e "perdido" em toda conta do Kommo. */
 async function nomesDasEtapas(ctx: ContextoKommo, u: UnidadeKommo): Promise<Map<string, { funil: string; etapa: string }>> {
-  return comCache(ctx, `funis|${u.slug}`, HORA, async () => {
+  return comCache(ctx, `funis|${contaDe(u)}`, HORA, async () => {
     const m = new Map<string, { funil: string; etapa: string }>();
     for (const p of await u.fonte.funis()) for (const s of p.statuses) m.set(`${p.id}:${s.id}`, { funil: p.name, etapa: s.name });
     return m;
@@ -102,19 +129,88 @@ async function nomesDasEtapas(ctx: ContextoKommo, u: UnidadeKommo): Promise<Map<
 }
 
 async function nomesDosUsuarios(ctx: ContextoKommo, u: UnidadeKommo): Promise<Map<number, string>> {
-  return comCache(ctx, `usuarios|${u.slug}`, HORA, async () => new Map((await u.fonte.usuarios()).map((x) => [x.id, x.name])));
+  return comCache(ctx, `usuarios|${contaDe(u)}`, HORA, async () => new Map((await u.fonte.usuarios()).map((x) => [x.id, x.name])));
 }
 
+/**
+ * Os leads do período. Conta dividida: só os desta unidade, e `semUnidade` conta os que não são de ninguém.
+ * A janela crua vai pro cache pela CONTA: Petrópolis e Caxias não baixam os mesmos 1.000 leads duas vezes.
+ */
 export async function leadsDoPeriodo(
   ctx: ContextoKommo,
   u: UnidadeKommo,
   inicio: string,
   fim: string,
   campo: 'created_at' | 'updated_at' = 'created_at',
-): Promise<{ leads: KommoLead[]; truncado: boolean }> {
+): Promise<{ leads: KommoLead[]; truncado: boolean; semUnidade?: number }> {
   const de = epochDoDiaLocal(inicio, u.fuso);
   const ate = epochDoDiaLocal(fim, u.fuso, true);
-  return comCache(ctx, `leads|${u.slug}|${campo}|${inicio}|${fim}`, TTL.busca, () => u.fonte.leadsNaJanela(campo, de, ate, ctx.maxPaginas));
+  // pelo instante, não pelo dia: duas unidades da conta em fusos diferentes não trocam de janela
+  const bruto = await comCache(ctx, `leads|${contaDe(u)}|${campo}|${de}|${ate}`, TTL.busca, () => u.fonte.leadsNaJanela(campo, de, ate, ctx.maxPaginas));
+  if (!u.divisao) return bruto;
+  const donos = bruto.leads.map((l) => donoDoCartao(u, l).tipo);
+  return {
+    leads: bruto.leads.filter((_, i) => donos[i] === 'desta'),
+    truncado: bruto.truncado,
+    semUnidade: donos.filter((d) => d === 'ninguem').length,
+  };
+}
+
+// ── conta dividida (Petrópolis × Caxias) ──
+
+const CAMPO_UNIDADE_DE_ATENDIMENTO = 'Unidade de atendimento';
+
+/** O texto do «⌂ Unidade de atendimento» do cartão; vazio = null. */
+export function rotuloDoCartao(lead: KommoLead): string | null {
+  return campoChamado(lead, CAMPO_UNIDADE_DE_ATENDIMENTO) || null;
+}
+
+export type DonoDoCartao = { tipo: 'desta' } | { tipo: 'outra'; slug: string; rotulo: string } | { tipo: 'ninguem'; valor: string | null };
+
+/** De quem é o cartão, do ponto de vista de `u`. Conta de uma unidade só: sempre dela. */
+export function donoDoCartao(u: UnidadeKommo, lead: KommoLead): DonoDoCartao {
+  if (!u.divisao) return { tipo: 'desta' };
+  const valor = rotuloDoCartao(lead);
+  const m = valor ? u.divisao.membros.find((x) => semMarcas(x.rotulo) === semMarcas(valor)) : undefined;
+  if (!m) return { tipo: 'ninguem', valor };
+  return m.slug === u.slug ? { tipo: 'desta' } : { tipo: 'outra', slug: m.slug, rotulo: m.rotulo };
+}
+
+function rotulosDaDivisao(d: DivisaoDoKommo): string {
+  const r = d.membros.map((m) => m.rotulo);
+  return r.length <= 1 ? r.join('') : `${r.slice(0, -1).join(', ')} e ${r[r.length - 1]}`;
+}
+
+/** O aviso de toda resposta de lista numa conta dividida: o que entrou e quantos ficaram sem dono. */
+export function avisoDaDivisao(u: UnidadeKommo, semUnidade: number): string {
+  const d = u.divisao!;
+  const base = `Um Kommo só para ${rotulosDaDivisao(d)}: aqui entram só os cartões com ⌂ Unidade de atendimento = ${d.rotulo}.`;
+  return semUnidade
+    ? `${base} ${semUnidade} cartão(ões) do período não são de nenhuma unidade (campo vazio ou com valor que ninguém usa) e não entram ` +
+        'em soma nenhuma: a SDR precisa escolher. É o MESMO número em todas as unidades da conta — não some.'
+    : base;
+}
+
+/** Por que o cartão não é de ninguém: campo vazio, ou um valor que nenhuma unidade da conta usa. */
+export function motivoSemDono(u: UnidadeKommo, valor: string | null): string {
+  const quem = rotulosDaDivisao(u.divisao!);
+  return valor
+    ? `o ⌂ Unidade de atendimento do cartão está "${valor}", que não é nenhuma das unidades da conta (${quem}): não é de nenhuma até a SDR corrigir`
+    : `cartão sem ⌂ Unidade de atendimento (${quem}): não é de nenhuma unidade até a SDR escolher`;
+}
+
+/**
+ * Um cartão pedido pela unidade errada é recusado (diz qual pedir); sem unidade, vem com o aviso.
+ * Devolve os campos que a resposta leva quando a conta é dividida.
+ */
+export function conferirDono(u: UnidadeKommo, lead: KommoLead): { unidadeDeAtendimento?: string | null; avisoUnidade?: string } {
+  if (!u.divisao) return {};
+  const d = donoDoCartao(u, lead);
+  if (d.tipo === 'outra') {
+    throw new ErroDeEntrada(`o cartão ${lead.id} é de ${d.rotulo} (⌂ Unidade de atendimento): peça com unidade="${d.slug}"`);
+  }
+  if (d.tipo === 'ninguem') return { unidadeDeAtendimento: d.valor, avisoUnidade: motivoSemDono(u, d.valor) };
+  return { unidadeDeAtendimento: u.divisao.rotulo };
 }
 
 /**
@@ -128,7 +224,7 @@ export async function telefonesDosLeads(ctx: ContextoKommo, u: UnidadeKommo, lea
     const principal = cs.find((c) => c.is_main) ?? cs[0];
     if (principal) contatoDoLead.set(l.id, principal.id);
   }
-  const chave = `tels|${u.slug}|${[...contatoDoLead.values()].sort((a, b) => a - b).join(',')}`;
+  const chave = `tels|${contaDe(u)}|${[...contatoDoLead.values()].sort((a, b) => a - b).join(',')}`;
   const porContato = await comCache(ctx, chave, TTL.busca, () => u.fonte.telefonesDosContatos([...contatoDoLead.values()]));
   const m = new Map<number, string>();
   for (const [lead, contato] of contatoDoLead) {
@@ -278,6 +374,20 @@ async function porUnidade<T>(ctx: ContextoKommo, us: UnidadeKommo[], fn: (u: Uni
   return Object.fromEntries(pares) as Record<string, Record<string, unknown>>;
 }
 
+/**
+ * Os sem unidade de uma conta dividida aparecem iguais em cada unidade dela: na rede entram UMA vez por conta
+ * (o maior número, se as unidades leram janelas diferentes).
+ */
+function semUnidadeDaRede(us: UnidadeKommo[], res: Record<string, Record<string, unknown>>): { semUnidade?: number } {
+  const porConta = new Map<string, number>();
+  for (const u of us) {
+    const v = res[u.slug];
+    if (!u.divisao || !v?.ok) continue;
+    porConta.set(contaDe(u), Math.max(porConta.get(contaDe(u)) ?? 0, Number(v.semUnidade ?? 0)));
+  }
+  return porConta.size ? { semUnidade: [...porConta.values()].reduce((s, n) => s + n, 0) } : {};
+}
+
 // ── as consultas ──
 
 export async function kommoLeads(
@@ -290,7 +400,7 @@ export async function kommoLeads(
   const us = resolverUnidadesKommo(ctx, a.unidade, MAX_UNIDADES_KOMMO);
   const max = a.maxItens ?? (us.length === 1 ? 30 : 0);
   const res = await porUnidade(ctx, us, async (u) => {
-    const [{ leads, truncado }, etapas, usuarios] = await Promise.all([
+    const [{ leads, truncado, semUnidade }, etapas, usuarios] = await Promise.all([
       leadsDoPeriodo(ctx, u, a.inicio, a.fim, a.data === 'atualizacao' ? 'updated_at' : 'created_at'),
       nomesDasEtapas(ctx, u),
       nomesDosUsuarios(ctx, u),
@@ -301,6 +411,7 @@ export async function kommoLeads(
     return {
       total: itens.length,
       ...(truncado ? { truncado: true, aviso: `INCOMPLETO: parou em ${ctx.maxPaginas * 250} leads. O total é um mínimo.` } : {}),
+      ...(u.divisao ? { semUnidade: semUnidade ?? 0, avisoUnidade: avisoDaDivisao(u, semUnidade ?? 0) } : {}),
       porSituacao: contar(completos, 'situacao'),
       ...(a.agruparPor ? { agrupado: contar(completos, a.agruparPor) } : {}),
       itens: itens.slice(0, max),
@@ -318,6 +429,7 @@ export async function kommoLeads(
       ...(Object.keys(agrupado).length ? { agrupado: Object.fromEntries(Object.entries(agrupado).sort((x, y) => y[1] - x[1])) } : {}),
       ...(ok.length < us.length ? { unidadesForaDoTotal: Object.entries(res).filter(([, v]) => !v.ok).map(([k]) => k) } : {}),
       ...(ok.some(([, v]) => v.truncado) ? { unidadesIncompletas: ok.filter(([, v]) => v.truncado).map(([k]) => k) } : {}),
+      ...semUnidadeDaRede(us, res),
     };
   }
   r.porUnidade = res;
@@ -327,7 +439,7 @@ export async function kommoLeads(
 export async function kommoFunis(ctx: ContextoKommo, a: { unidade: string | string[] }) {
   const us = resolverUnidadesKommo(ctx, a.unidade);
   const res = await porUnidade(ctx, us, async (u) => {
-    const funis = await comCache(ctx, `funis-lista|${u.slug}`, HORA, () => u.fonte.funis());
+    const funis = await comCache(ctx, `funis-lista|${contaDe(u)}`, HORA, () => u.fonte.funis());
     return { funis: funis.filter((f) => !f.is_archive).map((f) => ({ id: f.id, nome: f.name, principal: !!f.is_main, etapas: f.statuses.map((s) => ({ id: s.id, nome: s.name })) })) };
   });
   return { porUnidade: res };
@@ -342,14 +454,31 @@ function umaUnidade(ctx: ContextoKommo, unidade: string): UnidadeKommo {
 export async function kommoLead(ctx: ContextoKommo, a: { unidade: string; leadId: number }) {
   const u = umaUnidade(ctx, a.unidade);
   const [lead, etapas, usuarios] = await Promise.all([u.fonte.lead(a.leadId), nomesDasEtapas(ctx, u), nomesDosUsuarios(ctx, u)]);
-  return { unidade: u.slug, lead: legivel(lead, u.fuso, etapas, usuarios) };
+  return { unidade: u.slug, ...conferirDono(u, lead), lead: legivel(lead, u.fuso, etapas, usuarios) };
 }
 
 export async function kommoBuscarTelefone(ctx: ContextoKommo, a: { unidade: string; telefone: string }) {
   const u = umaUnidade(ctx, a.unidade);
   if (a.telefone.replace(/\D/g, '').length < 8) throw new ErroDeEntrada('telefone com menos de 8 dígitos');
-  const [leads, etapas, usuarios] = await Promise.all([u.fonte.leadsPorTelefone(a.telefone), nomesDasEtapas(ctx, u), nomesDosUsuarios(ctx, u)]);
-  return { unidade: u.slug, total: leads.length, leads: leads.map((l) => legivel(l, u.fuso, etapas, usuarios)) };
+  const [todos, etapas, usuarios] = await Promise.all([u.fonte.leadsPorTelefone(a.telefone), nomesDasEtapas(ctx, u), nomesDosUsuarios(ctx, u)]);
+  // conta dividida: os da outra unidade saem da lista (a resposta diz quantos e onde pedir); os sem dono ficam, avisados
+  const daOutra = new Map<string, number>();
+  const leads: Array<{ lead: KommoLead; semDono?: string }> = [];
+  for (const l of todos) {
+    const d = donoDoCartao(u, l);
+    if (d.tipo === 'outra') daOutra.set(d.slug, (daOutra.get(d.slug) ?? 0) + 1);
+    else leads.push({ lead: l, ...(d.tipo === 'ninguem' ? { semDono: motivoSemDono(u, d.valor) } : {}) });
+  }
+  return {
+    unidade: u.slug,
+    total: leads.length,
+    ...(daOutra.size ? { deOutraUnidade: Object.fromEntries(daOutra), avisoOutraUnidade: `há cartões deste telefone em outra unidade: peça com unidade=${[...daOutra.keys()].join(' ou ')}` } : {}),
+    leads: leads.map(({ lead: l, semDono }) => ({
+      ...legivel(l, u.fuso, etapas, usuarios),
+      ...(u.divisao ? { unidadeDeAtendimento: rotuloDoCartao(l) } : {}),
+      ...(semDono ? { avisoUnidade: semDono } : {}),
+    })),
+  };
 }
 
 // ── registro no MCP ──
@@ -383,16 +512,29 @@ export async function kommoConversa(ctx: ContextoKommo, a: { unidade: string; le
     ...(a.inicio ? { desde: epochDoDiaLocal(a.inicio, u!.fuso) } : {}),
     ...(a.fim ? { ate: epochDoDiaLocal(a.fim, u!.fuso, true) } : {}),
   };
-  const [lead, conv] = await Promise.all([u!.fonte.lead(a.leadId), u!.fonte.conversa(a.leadId, limite, periodo)]);
-  const etapas = new Map<number, string>();
+  const conversa = u!.fonte.conversa.bind(u!.fonte);
+  let lead: KommoLead;
+  let conv: Awaited<ReturnType<typeof conversa>>;
+  let dono: ReturnType<typeof conferirDono> = {};
+  if (u!.divisao) {
+    // conta dividida: o cartão primeiro — a conversa de um paciente da outra unidade nem é baixada
+    lead = await u!.fonte.lead(a.leadId);
+    dono = conferirDono(u!, lead);
+    conv = await conversa(a.leadId, limite, periodo);
+  } else {
+    [lead, conv] = await Promise.all([u!.fonte.lead(a.leadId), conversa(a.leadId, limite, periodo)]);
+  }
+  // os nomes vêm do mesmo cache do resto (a chave `funis|` guarda o mapa pipeline:etapa → nome)
+  let etapa: string | number = lead.status_id;
   try {
-    for (const f of await comCache(ctx, `funis|${u!.slug}`, HORA, () => u!.fonte.funis())) for (const e of f.statuses ?? []) etapas.set(e.id, e.name);
+    etapa = (await nomesDasEtapas(ctx, u!)).get(`${lead.pipeline_id}:${lead.status_id}`)?.etapa ?? lead.status_id;
   } catch {
     // sem os nomes, a etapa sai pelo id
   }
   return {
     unidade: u!.slug,
-    lead: { id: lead.id, nome: lead.name, etapa: etapas.get(lead.status_id) ?? lead.status_id, situacao: situacaoDoLead(lead) },
+    ...dono,
+    lead: { id: lead.id, nome: lead.name, etapa, situacao: situacaoDoLead(lead) },
     conversas: conv.conversas,
     ...(comPeriodo ? { periodo: { inicio: a.inicio ?? null, fim: a.fim ?? null } } : {}),
     mostrando: conv.mensagens.length,

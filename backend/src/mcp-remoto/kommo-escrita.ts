@@ -14,7 +14,7 @@ import type { CampoDoCartaoDaConta, KommoLead, KommoPipeline } from '../services
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
-import { resolverUnidadesKommo, type ContextoKommo } from './kommo.js';
+import { donoDoCartao, resolverUnidadesKommo, type ContextoKommo } from './kommo.js';
 
 export const MAX_CARTOES = 50;
 const VALIDADE_MS = 15 * 60_000;
@@ -170,6 +170,13 @@ export async function prepararAlteracao(
   const leads = await fonte.leads(ids);
   const faltam = ids.filter((id) => !leads.some((l) => l.id === id));
   if (faltam.length) throw new ErroDeEntrada(`cartões que não existem nesta conta: ${faltam.join(', ')}`);
+  // conta dividida (Petrópolis × Caxias): cartão da outra unidade nunca é alterado por esta
+  const daOutra = leads.flatMap((l) => {
+    const d = donoDoCartao(u!, l);
+    return d.tipo === 'outra' ? [`${l.id} (${d.rotulo}: unidade="${d.slug}")`] : [];
+  });
+  if (daOutra.length) throw new ErroDeEntrada(`cartões de outra unidade (⌂ Unidade de atendimento), nada foi preparado: ${daOutra.join(', ')}`);
+  const semDono = leads.filter((l) => donoDoCartao(u!, l).tipo === 'ninguem').map((l) => l.id);
 
   const funis = m.etapa ? await fonte.funis() : [];
   const nomeEtapa = (pid: number, sid: number) => {
@@ -186,6 +193,7 @@ export async function prepararAlteracao(
   });
 
   const avisos: string[] = [];
+  if (semDono.length) avisos.push(`cartões que não são de nenhuma unidade (⌂ Unidade de atendimento vazio ou com valor que ninguém usa): ${semDono.join(', ')}`);
   for (const nome of m.adicionarEtiquetas ?? []) {
     if (!(await fonte.etiquetaExiste(nome))) avisos.push(`a etiqueta "${nome}" ainda não existe nesta conta: será criada`);
   }
@@ -260,6 +268,7 @@ export async function prepararAlteracao(
 }
 
 export async function confirmarAlteracao(
+  ctx: ContextoKommo,
   fonteDe: (slug: string) => FonteEscrita,
   pendentes: Pendentes,
   usuario: string,
@@ -267,13 +276,22 @@ export async function confirmarAlteracao(
   registrar: (r: { unidade: string; cartao: number; antes: unknown; depois: unknown; ok: boolean; erro?: string }) => void,
 ) {
   const p = pendentes.tirar(a.confirmacao, usuario);
-  const fonte = fonteDe(p.unidade);
+  // a unidade de novo: se saiu do conector (ou da conta dividida) desde a prévia, nada é gravado
+  const [u] = resolverUnidadesKommo(ctx, p.unidade, 1);
+  const fonte = fonteDe(u!.slug);
   // Confere se ninguém mexeu na etapa/responsável desde a prévia: cartão mudado fica de fora.
   const agora = await fonte.leads(p.patches.map((x) => x.id).concat(p.nota || p.tarefa ? [...p.antes.keys()] : []).filter((v, i, arr) => arr.indexOf(v) === i));
   const mudouDesde = new Set<number>();
+  const foiPraOutra = new Map<number, string>();
   for (const l of agora) {
     const a0 = p.antes.get(l.id);
     if (a0 && (a0.etapa !== l.status_id || a0.responsavel !== l.responsible_user_id)) mudouDesde.add(l.id);
+    // conta dividida: o cartão pode ter passado para a outra unidade depois da prévia
+    const d = donoDoCartao(u!, l);
+    if (d.tipo === 'outra') {
+      mudouDesde.add(l.id);
+      foiPraOutra.set(l.id, d.rotulo);
+    }
   }
   const lote = p.patches.filter((x) => !mudouDesde.has(x.id));
   const resultado: Array<{ cartao: number; ok: boolean; erro?: string }> = [];
@@ -292,7 +310,10 @@ export async function confirmarAlteracao(
       }
     }
   }
-  for (const id of mudouDesde) resultado.push({ cartao: id, ok: false, erro: 'o cartão mudou de etapa ou responsável desde a prévia: não alterei; prepare de novo' });
+  for (const id of mudouDesde) {
+    const outra = foiPraOutra.get(id);
+    resultado.push({ cartao: id, ok: false, erro: outra ? `o cartão passou para ${outra} (⌂ Unidade de atendimento) desde a prévia: não alterei` : 'o cartão mudou de etapa ou responsável desde a prévia: não alterei; prepare de novo' });
+  }
   const alvoNotaTarefa = [...p.antes.keys()].filter((id) => !mudouDesde.has(id));
   let notas = 0;
   let tarefas = 0;
@@ -363,7 +384,7 @@ export function registrarEscritaKommo(
     },
     (args) =>
       executar('kommo_confirmar_alteracao', args, auditar, () =>
-        confirmarAlteracao(fonteDe, pendentes, usuario, args, (r) =>
+        confirmarAlteracao(ctx, fonteDe, pendentes, usuario, args, (r) =>
           auditar({ ferramenta: 'kommo_alteracao_gravada', argumentos: r, ok: r.ok, ms: 0, ...(r.erro ? { erro: r.erro } : {}) }),
         ),
       ),

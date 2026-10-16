@@ -60,6 +60,8 @@ const INSTRUCOES = [
   'o cérebro que confere um contra o outro (cerebro_*), o relatório cruzado (relatorio_funil) e, para Kommo + Bling, relatorio_vendas.',
   'Para "quantos leads viraram consulta/tratamento", use relatorio_funil: o cruzamento Kommo → franquia é feito em código, por telefone,',
   'e vem com a cobertura — não some números de ferramentas diferentes por conta própria. Unidade aceita nome curto ("serra").',
+  'Petrópolis e Caxias dividem um Kommo e são DUAS unidades: cada uma vê só os cartões com o seu "⌂ Unidade de atendimento";',
+  'cartão sem unidade não entra em nenhuma (vem contado em semUnidade, o MESMO número nas duas; na rede, rede.semUnidade). Nunca some os sem unidade a uma das duas.',
   'Para relatório da rede use unidade="todas" onde houver e leia "rede": ela soma só as unidades que responderam e lista as que',
   'ficaram de fora (unidadesForaDoTotal) ou incompletas (unidadesIncompletas). Nunca apresente um total sem dizer quais faltaram.',
   'Agendamentos são filtrados pela data da consulta; tratamentos e leads, pela data de criação. Use agruparPor para contar em vez de listar.',
