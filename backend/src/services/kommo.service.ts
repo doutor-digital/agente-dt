@@ -1607,6 +1607,32 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Grava vários cartões num PATCH só (até 50): etapa/funil, responsável, campos e etiquetas (`tags_to_add`/
+   * `tags_to_delete` na RAIZ de cada cartão — dentro de `_embedded` o Kommo ignora). Erro de validação lança
+   * com o corpo do Kommo, que diz qual cartão e qual campo.
+   */
+  async atualizarLeadsEmLote(
+    lote: Array<{
+      id: number;
+      status_id?: number;
+      pipeline_id?: number;
+      responsible_user_id?: number;
+      custom_fields_values?: Array<{ field_id: number; values: Array<Record<string, unknown>> | null }>;
+      tags_to_add?: Array<{ name: string }>;
+      tags_to_delete?: Array<{ name: string }>;
+    }>,
+  ): Promise<number[]> {
+    if (lote.length === 0) return [];
+    if (lote.length > 50) throw new Error('atualizarLeadsEmLote: no máximo 50 cartões por vez');
+    try {
+      const { data } = await this.http.patch<{ _embedded?: { leads?: Array<{ id: number }> } }>('/leads', lote);
+      return (data?._embedded?.leads ?? []).map((l) => l.id);
+    } catch (err) {
+      wrapAxiosError(err, `atualizarLeadsEmLote(${lote.length})`);
+    }
+  }
+
   async createTask(args: {
     leadId: number;
     text: string;

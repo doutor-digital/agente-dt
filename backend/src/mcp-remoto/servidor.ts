@@ -43,7 +43,8 @@ export interface OpcoesConector {
   /** ferramentas rodando ao mesmo tempo, somando todos os usuários */
   ferramentasSimultaneas?: number;
   /** ferramentas além das da franquia (Kommo, cérebro, relatório cruzado), registradas a cada requisição */
-  extras?: (server: McpServer, auditar: Auditar) => void;
+  /** `quem.userId` é o usuário do console que fez login no conector (para liberar a escrita só a quem pode). */
+  extras?: (server: McpServer, auditar: Auditar, quem: { userId: string }) => void;
   cimd?: BuscadorCimd;
   agora?: () => number;
   log?: { info(o: object, m?: string): void; warn(o: object, m?: string): void };
@@ -55,6 +56,7 @@ const INSTRUCOES = [
   'o CRM comercial Kommo (kommo_*), o ERP Bling das empresas que usam (bling_*: pedidos, contas a receber, notas, clientes),',
   'o Asaas das clínicas (asaas_*: cobranças, extrato do que entrou de verdade, saldo, clientes),',
   'os eventos de conversão mandados para a Meta pelo rastreio de anúncios (meta_eventos, meta_eventos_lead),',
+  'e, para quem tem permissão, alterar cartões do Kommo em dois passos (kommo_preparar_alteracao → mostrar o resumo → kommo_confirmar_alteracao só se a pessoa aprovar).',
   'o cérebro que confere um contra o outro (cerebro_*), o relatório cruzado (relatorio_funil) e, para Kommo + Bling, relatorio_vendas.',
   'Para "quantos leads viraram consulta/tratamento", use relatorio_funil: o cruzamento Kommo → franquia é feito em código, por telefone,',
   'e vem com a cobertura — não some números de ferramentas diferentes por conta própria. Unidade aceita nome curto ("serra").',
@@ -171,7 +173,7 @@ export async function montarConectorRemoto(
       o.log?.info({ userId, ferramenta: r.ferramenta, ok: r.ok, ms: r.ms }, 'mcp-remoto: ferramenta');
     };
     registrarFerramentas(server, contexto, { auditar });
-    o.extras?.(server, auditar);
+    o.extras?.(server, auditar, { userId });
     const transporte = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transporte.close();
