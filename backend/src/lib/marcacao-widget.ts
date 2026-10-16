@@ -152,7 +152,9 @@ export async function horariosParaWidget(unit: Unit, de: string, dias: number): 
  * Um cartão por vez. `consultaAtual` barra a SEGUNDA marcação depois que a primeira gravou o vínculo,
  * mas dois cliques quase juntos chegariam antes disso e criariam duas consultas (review, 29/09).
  */
-const emAndamento = new Set<string>();
+// Exportado: o "Só cadastrar" (`cadastro-pelo-widget.ts`) usa o MESMO conjunto — "Marcar" e "Só cadastrar" clicados
+// juntos no mesmo cartão também criariam o paciente duas vezes na franquia.
+export const emAndamento = new Set<string>();
 
 /** `opcoes.kommo` só existe para o teste trocar o cliente do Kommo; em produção ele nasce do token da unidade. */
 export async function marcarPeloWidget(

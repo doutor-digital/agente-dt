@@ -28,7 +28,7 @@ import { telefoneDoLead, unidadeFresca } from '../agent/agenda-tools.js';
 import { travaDaUnidadeDeAtendimento } from './trava-unidade-atendimento.js';
 import { contaDoKommo, unidadeDoCartao } from './crm-compartilhado.js';
 import { termosDeBusca } from './widget-agenda.js';
-import { fim8, validarNome, validarTelefone, type Recusa } from './marcacao-widget.js';
+import { emAndamento, fim8, validarNome, validarTelefone, type Recusa } from './marcacao-widget.js';
 
 export interface EntradaCadastro {
   leadId: number;
@@ -79,8 +79,7 @@ const paraCadastro = (motivo: string) =>
     .replace(/Marque na agenda de/g, 'Cadastre na franquia de')
     .replace(/A marcação pelo widget/g, 'O cadastro pelo widget');
 
-/** Dois cliques quase juntos não podem virar dois cadastros. */
-const emAndamento = new Set<string>();
+/** Dois cliques quase juntos não podem virar dois cadastros — nem "Marcar" e "Só cadastrar" no mesmo cartão: a trava é a mesma. */
 
 /** `opcoes.kommo` só existe para o teste trocar o cliente do Kommo; em produção ele nasce do token da conta. */
 export async function cadastrarPeloWidget(
@@ -90,7 +89,7 @@ export async function cadastrarPeloWidget(
 ): Promise<Cadastrado | Recusa> {
   const chave = `${unitBase.id}:${entrada.leadId}`;
   if (emAndamento.has(chave)) {
-    return { ok: false, codigo: 'em_andamento', motivo: 'Já estou cadastrando este cartão. Aguarde a resposta.' };
+    return { ok: false, codigo: 'em_andamento', motivo: 'Já estou cadastrando ou marcando este cartão. Aguarde a resposta.' };
   }
   emAndamento.add(chave);
   try {

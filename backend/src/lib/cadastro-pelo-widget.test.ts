@@ -13,6 +13,7 @@ import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import { _semearCrmParaTeste } from './crm-compartilhado.js';
 import { limparCacheEsquema } from './kommo-schema.js';
 import { cadastrarPeloWidget, pacienteExistente } from './cadastro-pelo-widget.js';
+import { emAndamento } from './marcacao-widget.js';
 
 const SERRA = 'doutor-hernia-serra';
 const PETRO = 'doutor-hernia-petropolis';
@@ -251,4 +252,18 @@ test('pacienteExistente: tenta do nome mais específico ao mais largo e para no 
   const r = await pacienteExistente(unidade(SERRA), 'Maria Souza', 'MARIA SOUZA 12/10', '5524999990000');
   assert.deepEqual(r, { idClient: 11, nome: 'MARIA SOUZA' });
   assert.deepEqual(naFranquia, ['busca:MARIA SOUZA'], 'achou na primeira busca, não faz as outras');
+});
+
+test('widget cadastrar: com o "Marcar" em andamento no mesmo cartão, recusa sem tocar na franquia', async () => {
+  const { kommo } = kommoFalso(null);
+  const u = unidade(SERRA);
+  emAndamento.add(`${u.id}:209`);
+  try {
+    const r = await cadastrarPeloWidget(u, pedido(209), { kommo });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.equal(r.codigo, 'em_andamento');
+    assert.deepEqual(naFranquia, []);
+  } finally {
+    emAndamento.delete(`${u.id}:209`);
+  }
 });
