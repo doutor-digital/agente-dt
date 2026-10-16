@@ -40,8 +40,10 @@
  * REGRAS DE 16/10/2026 (só com `regras1610`, que vem da chave `casamento-jornada` — ver `casamento-jornada.ts`):
  *   ex-paciente (finalizado, nada aberto) que volta com consulta marcada → RETORNO PÓS-TRATAMENTO (de qualquer etapa,
  *   inclusive ALTA e PERDIDO); finalizado nunca leva a GANHO (cartão parado de quem terminou → ALTA); âncora da jornada =
- *   última AVALIAÇÃO; falta em retorno não muda a etapa (vira nota + tarefa no sincronizador); avaliação marcada pra frente
- *   tira do PERDIDO ("a franquia manda"). TRATAMENTO CANCELADO continua intocável (a SDR cancela no Kommo, regra 08/10).
+ *   última AVALIAÇÃO; falta em retorno não muda a etapa (vira nota + tarefa no sincronizador). "A franquia manda" no PERDIDO
+ *   e na ALTA: avaliação marcada pra frente tira do PERDIDO (AGENDADO); na ALTA, sessão marcada → EM TRATAMENTO e consulta
+ *   marcada → RETORNO PÓS-TRATAMENTO. Essas saídas levam `gatilho` e o sincronizador só as faz UMA vez por fato (a equipe pôs
+ *   de volta = fica, e vira tarefa). TRATAMENTO CANCELADO continua intocável (a SDR cancela no Kommo, regra 08/10).
  */
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 import { ehAvaliacao, ehConsulta } from './franquia-sync.js';
@@ -104,6 +106,11 @@ export interface Movimento {
   semRegua?: boolean;
   /** só pra PERDIDO: idade do fato em dias (vai pra nota do cartão) */
   dias?: number;
+  /**
+   * 16/10 ("a franquia manda"): o cartão sai de PERDIDO ou ALTA por causa deste fato da franquia (`consulta:<idSchedule>`
+   * ou `sessao`). O sincronizador só tira o cartão de lá UMA vez por fato: se a equipe puser de volta, fica e vira tarefa.
+   */
+  gatilho?: string;
 }
 
 /**
@@ -210,6 +217,16 @@ function pendente(t: TratamentoParaEtapa): boolean {
 /** Retorno pós-tratamento atendido há pouco: entre uma varredura e outra, ou registrado depois do fato. */
 const RECENTE_S = 7 * 24 * 3600;
 
+/** O agendamento mais próximo (o primeiro pela data), ou null. */
+function proxima(lista: SpineSchedule[]): SpineSchedule | null {
+  return [...lista].sort((a, b) => (epoch(a) ?? 0) - (epoch(b) ?? 0))[0] ?? null;
+}
+
+/** O fato da franquia que tira o cartão de PERDIDO/ALTA: o id da consulta (ou a data, se a franquia não mandou id). */
+function gatilhoDe(s: SpineSchedule): string {
+  return `consulta:${s.idSchedule ?? s.dateAttendanceUtc ?? '?'}`;
+}
+
 /** Puro: dado o cartão e o que a franquia sabe, pra onde o cartão vai (ou null = fica). */
 export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const atual = e.atual;
@@ -247,8 +264,10 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
     // pra AGENDADO; ex-paciente, com qualquer consulta, vai pra RETORNO PÓS-TRATAMENTO. Fato velho (atendido, falta,
     // tratamento antigo "em andamento" esquecido) não reabre nada: perder de novo um paciente fechado não tem volta.
     if (v2) {
-      if (voltaMarcada) return { funil: 'COMERCIAL', para: ETAPA.RETORNO, motivo: 'ex-paciente voltou: consulta marcada na franquia (sai do PERDIDO)' };
-      if (consultas.some((s) => futura(s) && ehAvaliacao(s))) return { funil: 'COMERCIAL', para: ETAPA.AGENDADO, motivo: 'avaliação marcada na franquia (a franquia manda: sai do PERDIDO)' };
+      const daVoltaMarcada = proxima(consultasDaVolta.filter(futura));
+      if (daVoltaMarcada) return { funil: 'COMERCIAL', para: ETAPA.RETORNO, motivo: 'ex-paciente voltou: consulta marcada na franquia (sai do PERDIDO)', gatilho: gatilhoDe(daVoltaMarcada) };
+      const avaliacaoMarcada = proxima(consultas.filter((s) => futura(s) && ehAvaliacao(s)));
+      if (avaliacaoMarcada) return { funil: 'COMERCIAL', para: ETAPA.AGENDADO, motivo: 'avaliação marcada na franquia (a franquia manda: sai do PERDIDO)', gatilho: gatilhoDe(avaliacaoMarcada) };
     }
     return null;
   }
@@ -277,26 +296,37 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   // ── funil TRATAMENTO ──
   if (atual.funil === 'TRATAMENTO') {
     if (eh(status, ETAPA.ALTA)) {
+      if (v2) {
+        // 16/10, "a franquia manda" também na ALTA: sessão marcada pra frente = ainda em tratamento; consulta marcada pra
+        // frente (avaliação ou retorno) = voltou (regra 2). Cada saída leva o fato que a causou (só uma vez por fato).
+        const sessaoMarcada = proxima(sessoes.filter(futura));
+        if (sessaoMarcada) return { funil: 'TRATAMENTO', para: ETAPA.EM_TRATAMENTO, motivo: 'sessão marcada na franquia (a franquia manda: sai da ALTA)', gatilho: 'sessao' };
+        const consultaMarcada = proxima(consultas.filter(futura));
+        if (consultaMarcada) return { funil: 'COMERCIAL', para: ETAPA.RETORNO, motivo: 'consulta marcada na franquia (a franquia manda: sai da ALTA)', gatilho: gatilhoDe(consultaMarcada) };
+        if (retornoPosAtendidoRecente && ultimoRetornoPos) return { funil: 'COMERCIAL', para: ETAPA.COMPARECEU, motivo: 'retorno pós-tratamento atendido na franquia', gatilho: gatilhoDe(ultimoRetornoPos) };
+        if (ultimaDaVolta && ultimaDaVolta.idStatus === SPINE_STATUS.ATENDIDO && passou(ultimaDaVolta) && e.agoraEpoch - (epoch(ultimaDaVolta) ?? 0) <= RECENTE_S) {
+          return { funil: 'COMERCIAL', para: ETAPA.COMPARECEU, motivo: 'ex-paciente voltou: consulta atendida na franquia', gatilho: gatilhoDe(ultimaDaVolta) };
+        }
+        return null;
+      }
       // paciente de alta com retorno marcado: volta pro COMERCIAL, na etapa própria
       if (retornoPosMarcado) return ir('COMERCIAL', ETAPA.RETORNO, 'retorno pós-tratamento marcado na franquia');
       // retorno marcado e atendido entre duas varreduras (ou lançado depois): não pode ficar preso na ALTA
       if (retornoPosAtendidoRecente) return ir('COMERCIAL', ETAPA.COMPARECEU, 'retorno pós-tratamento atendido na franquia');
-      // 16/10: ex-paciente que volta, com QUALQUER consulta (avaliação ou retorno), vai pra RETORNO PÓS-TRATAMENTO
-      if (voltaMarcada) return ir('COMERCIAL', ETAPA.RETORNO, 'ex-paciente voltou: consulta marcada na franquia');
-      if (ultimaDaVolta && ultimaDaVolta.idStatus === SPINE_STATUS.ATENDIDO && passou(ultimaDaVolta) && e.agoraEpoch - (epoch(ultimaDaVolta) ?? 0) <= RECENTE_S) {
-        return ir('COMERCIAL', ETAPA.COMPARECEU, 'ex-paciente voltou: consulta atendida na franquia');
-      }
       return null;
     }
     if (eh(status, ETAPA.EM_TRATAMENTO)) {
+      // 16/10: com sessão marcada pra frente na franquia o tratamento não acabou — não vai pra ALTA (e a ALTA com sessão
+      // marcada volta pra cá: sem esta trava os dois ficariam se empurrando a cada varredura)
+      const seguraAlta = v2 && sessoes.some(futura);
       if (cicloAnterior) {
         // o FINALIZADO do ciclo velho é esperado aqui; o que decide é o tratamento novo
         if (temCancelado && !temEmAndamento && !temPendente) return ir('TRATAMENTO', ETAPA.CANCELADO, 'tratamento cancelado na franquia');
-        if (temFinalizado && !temEmAndamento && !temPendente && !temCancelado) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+        if (temFinalizado && !temEmAndamento && !temPendente && !temCancelado && !seguraAlta) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
         return null;
       }
       // um tratamento pendente não segura a alta; um em andamento segura
-      if (temFinalizado && !temEmAndamento) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+      if (temFinalizado && !temEmAndamento && !seguraAlta) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
       // cancelado na franquia, sem outro aberto (pendente ou em andamento) e sem finalizado: a clínica encerrou
       if (temCancelado && !temAberto && !temFinalizado) return ir('TRATAMENTO', ETAPA.CANCELADO, 'tratamento cancelado na franquia');
     }

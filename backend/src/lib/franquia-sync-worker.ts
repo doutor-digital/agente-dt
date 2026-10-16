@@ -33,10 +33,11 @@ import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
-  TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, cartoesComMaisDeUmPaciente, chaveDaFalta, escolherPacienteDoCartao, estadoCasamentoJornada,
-  faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaFalta, tarefaDaFalta, type EscolhaDoPaciente,
+  TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaTarefaDeDevolucao,
+  escolherPacienteDoCartao, estadoCasamentoJornada, faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaDevolucao,
+  notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
 } from './casamento-jornada.js';
-import { escolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
+import { PARA_SEMPRE_MS, avisarCadastroDuplicado, escolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
 import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, pularCartao, type GrupoDoCrm } from './crm-compartilhado.js';
@@ -1380,6 +1381,47 @@ async function avisarFaltas(ctx: CtxSync, leadId: number, lead: KommoLead, etapa
 }
 
 /**
+ * 16/10 (decisão 7, resposta do João): "a franquia manda" tira o cartão de PERDIDO ou ALTA — mas UMA vez por fato. Se alguém
+ * puser o cartão de volta com o mesmo fato de pé na franquia (a mesma consulta marcada, a sessão marcada), o robô deixa onde
+ * a pessoa pôs e abre UMA tarefa para conferir: não repete o movimento e não dispara de novo os robôs da etapa.
+ *
+ * O "já tirei uma vez" mora na tabela `card_alert` (unit_id, lead_id, rule_key = `franquia-manda:<ETAPA>:<fato>`), a mesma
+ * do dedupe de avisos — durável, sobrevive a deploy e a troca de processo. A marca só é gravada depois que o Kommo aceitou
+ * o movimento; a da tarefa (`franquia-manda-tarefa:…`), depois que a tarefa foi criada.
+ */
+async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead, atual: EtapaAtual, mov: Movimento): Promise<void> {
+  const { unit, kommo, funis, resumo } = ctx;
+  if (!funis || !mov.gatilho) return;
+  // move em seco: o aplicarMovimento só registra "moveria" — nada a marcar
+  if (estadoDoMove(unit.slug) === 'seco') {
+    await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+    return;
+  }
+  const etapa: EtapaQueAFranquiaReabre = normalizarNome(atual.status) === normalizarNome(ETAPA.ALTA) ? 'ALTA' : 'PERDIDO';
+  const chave = chaveDaDevolucao(etapa, mov.gatilho);
+  if (await avisoRecente(unit.id, leadId, chave, PARA_SEMPRE_MS)) {
+    const chaveTarefa = chaveDaTarefaDeDevolucao(etapa, mov.gatilho);
+    if (await avisoRecente(unit.id, leadId, chaveTarefa, PARA_SEMPRE_MS)) return;
+    try {
+      await kommo.createTask({ leadId, text: tarefaDaDevolucao(etapa, mov.gatilho), completeAt: Math.floor(Date.now() / 1000) + 3600, responsibleUserId: lead.responsible_user_id });
+      await marcarAviso(unit.id, leadId, chaveTarefa);
+      logger.info({ unit: unit.slug, leadId, etapa, gatilho: mov.gatilho }, 'franquia-move: a equipe pôs o cartão de volta — não insisto, abri tarefa para conferir');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: não consegui abrir a tarefa de conferir');
+    }
+    return;
+  }
+  const antes = resumo.movimentos;
+  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+  if (resumo.movimentos === antes) return; // o Kommo recusou: sem marca, tenta de novo na próxima varredura
+  await marcarAviso(unit.id, leadId, chave);
+  await kommo.addLeadNote(leadId, notaDaDevolucao(etapa, mov.para, mov.gatilho)).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: nota da devolução não foi'),
+  );
+}
+
+/**
  * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
  * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
  * quando a etapa exige — GANHO e funil TRATAMENTO).
@@ -1475,6 +1517,11 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
     return;
   }
+  // 16/10: saída de PERDIDO/ALTA porque a franquia manda — uma vez por fato
+  if (regras1610 && mov.gatilho) {
+    await franquiaMandaUmaVez(ctx, leadId, lead, atual, mov);
+    return;
+  }
   await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
 }
 
@@ -1561,6 +1608,9 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
               continue;
             }
             idClient = !esc ? null : esc.tipo === 'achou' ? esc.idClient : esc.tipo === 'desempatar' ? await escolherEntreDuplicados(unit, esc.candidatos) : null;
+            if (esc?.tipo === 'desempatar') {
+              await avisarCadastroDuplicado(unit, kommo, lead.id, esc.candidatos.map((c) => c.idClient).filter((x): x is number => !!x), idClient, !!ctx.seco);
+            }
             if (esc) cacheIdClient.set(`${unit.id}:${lead.id}`, { idClient, expiraEm: Date.now() + CACHE_LEAD_MS });
           } else {
             idClient = negativoLembrado ? null : await idClientDoLead(unit, lead.id, lead.name ?? null, { kommo, contatoId, memo: jornada === 'seco' });
@@ -1748,6 +1798,11 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
           await marcarConflitoDeTelefone(ctx, leadId, lead, pacientes);
         }
         if (jornada === 'ligado' && (varios || travado)) continue;
+      }
+      // 16/10: mesmo nome e mesmo telefone em mais de um cadastro da franquia — o robô segue (escolhe o de agenda mais
+      // recente) e deixa UMA nota pedindo para juntar os cadastros
+      if (jornada !== 'desligado' && !p.idClient && casado.idsClient.length > 1) {
+        await avisarCadastroDuplicado(unit, kommo, leadId, casado.idsClient, null, jornada === 'seco' || seco);
       }
       // 16/10: cartão com dono (`⚙ idClient`) que recebeu mais de um paciente nesta varredura — quem não se sabe quem é
       // (veio só pelo nome da agenda, sem idClient) não grava: não dá para provar que é o dono, e o dono já foi escolhido.

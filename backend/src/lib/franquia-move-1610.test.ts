@@ -177,3 +177,39 @@ test('decisão 7 + 2: ex-paciente no PERDIDO com consulta marcada vai pra RETORN
 test('decisão 7: o SDR arrastou pra GANHO sem tratamento na franquia — o robô devolve (como sempre)', () => {
   assert.equal(planejarMovimento(e(ETAPA.GANHO, [ag({ h: -5 * DIA, idStatus: 42 })]))?.para, ETAPA.NEGOCIACAO);
 });
+
+// ── resposta do João (16/10, à tarde): "a franquia manda" também na ALTA ──
+
+test('decisão 7 na ALTA: sessão marcada pra frente leva pra EM TRATAMENTO (antes ficava na ALTA)', () => {
+  const ag1 = [...cicloVelho(), ag({ h: 30, idStatus: 37, categoria: 'PROTOCOLO 03 MESES - LOMBAR' })];
+  const m = planejarMovimento(e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO'));
+  assert.equal(m?.para, ETAPA.EM_TRATAMENTO);
+  assert.equal(m?.funil, 'TRATAMENTO');
+  assert.equal(m?.gatilho, 'sessao');
+  assert.equal(planejarMovimento(e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO', false)), null, 'regra antiga');
+});
+
+test('decisão 7 na ALTA: consulta marcada (avaliação ou retorno) vai pra RETORNO, mesmo com tratamento ainda aberto na franquia', () => {
+  const marcada = ag({ h: 48, idStatus: 37, categoria: 'RETORNO' });
+  const m = planejarMovimento(e(ETAPA.ALTA, [...cicloVelho(), marcada], EM_ANDAMENTO, 'TRATAMENTO'));
+  assert.equal(m?.para, ETAPA.RETORNO);
+  assert.equal(m?.gatilho, `consulta:${marcada.idSchedule}`, 'o fato que tirou da ALTA vai junto');
+  assert.equal(planejarMovimento(e(ETAPA.ALTA, [...cicloVelho(), marcada], EM_ANDAMENTO, 'TRATAMENTO', false)), null, 'regra antiga');
+});
+
+test('decisão 7 na ALTA: sem nada marcado pra frente, a ALTA fica', () => {
+  assert.equal(planejarMovimento(e(ETAPA.ALTA, cicloVelho(), FINALIZADO, 'TRATAMENTO')), null);
+});
+
+test('decisão 7: EM TRATAMENTO com sessão marcada não vai pra ALTA (senão ALTA e EM TRATAMENTO se empurrariam)', () => {
+  const ag1 = [ag({ h: -5 * DIA, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: 30, idStatus: 37, categoria: 'SESSÃO' })];
+  assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, ag1, FINALIZADO, 'TRATAMENTO')), null);
+  assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, ag1, FINALIZADO, 'TRATAMENTO', false))?.para, ETAPA.ALTA, 'regra antiga');
+  assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, [ag({ h: -5 * DIA, idStatus: 42, categoria: 'SESSÃO' })], FINALIZADO, 'TRATAMENTO'))?.para, ETAPA.ALTA, 'sem sessão marcada: ALTA');
+});
+
+test('decisão 7: a saída do PERDIDO leva o fato junto (a consulta que tirou de lá)', () => {
+  const marcada = ag({ h: 48, idStatus: 37 });
+  assert.equal(planejarMovimento(e(ETAPA.PERDIDO, [marcada]))?.gatilho, `consulta:${marcada.idSchedule}`);
+  assert.equal(planejarMovimento(e(ETAPA.AGENDADO, [ag({ h: -3, idStatus: 40 })]))?.gatilho, undefined, 'movimento comum não tem gatilho');
+});
