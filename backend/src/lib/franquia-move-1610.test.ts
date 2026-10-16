@@ -1,0 +1,179 @@
+/**
+ * Regras de 16/10/2026 na máquina de etapas (chave `casamento-jornada`). Cada teste diz qual decisão do João ele prende,
+ * e — onde a regra nova muda o comportamento — mostra a regra antiga ao lado, pra provar que sem a chave nada mudou.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { ETAPA, planejarMovimento, type EntradaMovimento } from './franquia-move.js';
+import type { SpineSchedule } from '../services/spine.service.js';
+
+const AGORA = Date.parse('2026-10-16T15:00:00Z') / 1000;
+const iso = (h: number) => new Date((AGORA + h * 3600) * 1000).toISOString();
+const DIA = 24;
+
+let seq = 1;
+function ag(p: { h: number; idStatus: number; categoria?: string }): SpineSchedule {
+  return {
+    idSchedule: seq++,
+    idTreatment: null,
+    idStatus: p.idStatus,
+    statusName: null,
+    clientName: 'Paciente Teste',
+    categoryName: p.categoria ?? 'AVALIAÇÃO',
+    physicalTherapist: null,
+    dateAttendanceUtc: iso(p.h),
+    dateAttendanceLocal: null,
+    dayLocal: null,
+    timeLocal: null,
+    isBusy: true,
+    requiresManualValidation: false,
+  };
+}
+
+const FINALIZADO = [{ idStatus: 46, statusName: 'FINALIZADO' }];
+const EM_ANDAMENTO = [{ idStatus: 45, statusName: 'EM ANDAMENTO' }];
+
+function e(status: string, agendamentos: SpineSchedule[], tratamentos: EntradaMovimento['tratamentos'] = [], funil: 'COMERCIAL' | 'TRATAMENTO' = 'COMERCIAL', regras1610 = true): EntradaMovimento {
+  return { atual: { funil, status }, agendamentos, tratamentos, agoraEpoch: AGORA, horasAteNegociacao: 48, regras1610 };
+}
+
+/** O ciclo velho de um ex-paciente: avaliação, sessões e o fim (última sessão há 60 dias). */
+function cicloVelho(): SpineSchedule[] {
+  return [
+    ag({ h: -200 * DIA, idStatus: 42 }),
+    ag({ h: -150 * DIA, idStatus: 42, categoria: 'PROTOCOLO 03 MESES - LOMBAR' }),
+    ag({ h: -60 * DIA, idStatus: 42, categoria: 'PROTOCOLO 03 MESES - LOMBAR' }),
+  ];
+}
+
+// ── decisão 2: ex-paciente que volta → RETORNO PÓS-TRATAMENTO; finalizado nunca vira GANHO ──
+
+test('decisão 2: ex-paciente com AVALIAÇÃO nova marcada sai da ALTA pra RETORNO PÓS-TRATAMENTO (antes ficava na ALTA)', () => {
+  const ag1 = [...cicloVelho(), ag({ h: 48, idStatus: 37 })];
+  const m = planejarMovimento(e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO'));
+  assert.equal(m?.para, ETAPA.RETORNO);
+  assert.equal(m?.funil, 'COMERCIAL');
+  assert.equal(planejarMovimento(e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO', false)), null, 'regra antiga: só "retorno após tratamento" tirava da ALTA');
+});
+
+test('decisão 2: ex-paciente com cartão novo no comercial e consulta marcada vai pra RETORNO, nunca pra GANHO', () => {
+  const ag1 = [...cicloVelho(), ag({ h: 30, idStatus: 37 })];
+  for (const de of ['Incoming leads', ETAPA.QUALIFICACAO, ETAPA.ESPERA, ETAPA.AGENDADO, ETAPA.COMPARECEU]) {
+    assert.equal(planejarMovimento(e(de, ag1, FINALIZADO))?.para, ETAPA.RETORNO, de);
+  }
+  // regra antiga: finalizado recente levava pra GANHO (Purchase falso pra Meta)
+  const antigo = planejarMovimento(e(ETAPA.QUALIFICACAO, [ag({ h: -20 * DIA, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: 30, idStatus: 37 })], FINALIZADO, 'COMERCIAL', false));
+  assert.equal(antigo?.para, ETAPA.GANHO);
+  const novo = planejarMovimento(e(ETAPA.QUALIFICACAO, [ag({ h: -20 * DIA, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: 30, idStatus: 37 })], FINALIZADO));
+  assert.equal(novo?.para, ETAPA.RETORNO);
+});
+
+test('decisão 2: finalizado nunca LEVA a GANHO — cartão parado de quem terminou vai pra ALTA (sem régua se velho)', () => {
+  const recente = [ag({ h: -40 * DIA, idStatus: 42 }), ag({ h: -10 * DIA, idStatus: 42, categoria: 'SESSÃO' })];
+  const m = planejarMovimento(e(ETAPA.COMPARECEU, recente, FINALIZADO));
+  assert.equal(m?.para, ETAPA.ALTA);
+  assert.equal(m?.funil, 'TRATAMENTO');
+  assert.equal(m?.semRegua, false, 'terminou há 10 d: a régua de alta ainda cabe');
+  assert.equal(planejarMovimento(e(ETAPA.COMPARECEU, recente, FINALIZADO, 'COMERCIAL', false))?.para, ETAPA.GANHO, 'regra antiga: GANHO');
+  const velho = planejarMovimento(e(ETAPA.NEGOCIACAO, cicloVelho(), FINALIZADO));
+  assert.equal(velho?.para, ETAPA.ALTA);
+  assert.equal(velho?.semRegua, true, '60 d sem nada: ALTA sem mensagem');
+  // quem a Sofia está atendendo agora (entrada/qualificação/espera) e não marcou nada: fica
+  assert.equal(planejarMovimento(e(ETAPA.QUALIFICACAO, cicloVelho(), FINALIZADO)), null);
+});
+
+test('decisão 2: em GANHO, finalizado só mantém a passagem GANHO → EM TRATAMENTO (não volta atrás)', () => {
+  const m = planejarMovimento(e(ETAPA.GANHO, [ag({ h: -5 * DIA, idStatus: 42, categoria: 'SESSÃO' })], FINALIZADO));
+  assert.equal(m?.para, ETAPA.EM_TRATAMENTO);
+});
+
+test('decisão 2: tratamento ABERTO continua levando a GANHO (é venda de verdade)', () => {
+  assert.equal(planejarMovimento(e(ETAPA.COMPARECEU, [ag({ h: -3 * DIA, idStatus: 42 })], EM_ANDAMENTO))?.para, ETAPA.GANHO);
+});
+
+test('decisão 2: em RETORNO, a consulta da volta atendida (mesmo vindo como avaliação) leva pra COMPARECEU', () => {
+  const ag1 = [...cicloVelho(), ag({ h: -3, idStatus: 42 })];
+  assert.equal(planejarMovimento(e(ETAPA.RETORNO, ag1, FINALIZADO))?.para, ETAPA.COMPARECEU);
+  assert.equal(planejarMovimento(e(ETAPA.RETORNO, ag1, FINALIZADO, 'COMERCIAL', false)), null, 'regra antiga: avaliação não tirava do RETORNO');
+  // a avaliação de ANTES do tratamento não conta como volta
+  assert.equal(planejarMovimento(e(ETAPA.RETORNO, cicloVelho(), FINALIZADO)), null);
+});
+
+test('decisão 2: ex-paciente que voltou e foi atendido segue a jornada normal pelas consultas da volta', () => {
+  const ag1 = [...cicloVelho(), ag({ h: -5 * DIA, idStatus: 42 })];
+  assert.equal(planejarMovimento(e(ETAPA.AGENDADO, ag1, FINALIZADO))?.para, ETAPA.NEGOCIACAO, 'atendido há 5 d sem tratamento novo');
+});
+
+// ── decisão 4: falta em RETORNO ou SESSÃO não muda a etapa ──
+
+test('decisão 4: falta em consulta de RETORNO não leva pra NÃO COMPARECEU (antes levava)', () => {
+  const ag1 = [ag({ h: -3, idStatus: 40, categoria: 'RETORNO' })];
+  assert.equal(planejarMovimento(e(ETAPA.AGENDADO, ag1)), null);
+  assert.equal(planejarMovimento(e(ETAPA.AGENDADO, ag1, [], 'COMERCIAL', false))?.para, ETAPA.NAO_COMPARECEU, 'regra antiga');
+});
+
+test('decisão 4: falta na consulta de quem está em RETORNO PÓS-TRATAMENTO não muda a etapa', () => {
+  const ag1 = [...cicloVelho(), ag({ h: -3, idStatus: 40, categoria: 'Retorno após tratamento' })];
+  assert.equal(planejarMovimento(e(ETAPA.RETORNO, ag1, FINALIZADO)), null);
+  const ag2 = [...cicloVelho(), ag({ h: -3, idStatus: 40 })];
+  assert.equal(planejarMovimento(e(ETAPA.RETORNO, ag2, FINALIZADO)), null, 'mesmo vindo como avaliação');
+});
+
+test('decisão 4: falta em sessão não mexe no cartão do funil TRATAMENTO', () => {
+  const ag1 = [ag({ h: -3, idStatus: 40, categoria: 'PROTOCOLO 03 MESES - LOMBAR' })];
+  assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, ag1, EM_ANDAMENTO, 'TRATAMENTO')), null);
+});
+
+test('decisão 4: falta em AVALIAÇÃO continua levando pra NÃO COMPARECEU', () => {
+  assert.equal(planejarMovimento(e(ETAPA.AGENDADO, [ag({ h: -3, idStatus: 40 })]))?.para, ETAPA.NAO_COMPARECEU);
+});
+
+// ── decisão 5: âncora = última avaliação ──
+
+test('decisão 5: a âncora é a última AVALIAÇÃO — retorno atendido depois de uma avaliação com falta não leva pra COMPARECEU', () => {
+  const ag1 = [ag({ h: -10 * DIA, idStatus: 40 }), ag({ h: -2, idStatus: 42, categoria: 'RETORNO' })];
+  // o retorno atendido é o fato mais recente, mas quem manda é a avaliação (falta há 10 d)
+  const m = planejarMovimento(e(ETAPA.AGENDADO, ag1));
+  assert.equal(m?.para, ETAPA.ESPERA, 'faltou à avaliação há 10 d e não remarcou');
+});
+
+test('decisão 5: sem avaliação nenhuma, o retorno não ancora a jornada (antes ancorava)', () => {
+  const ag1 = [ag({ h: -2, idStatus: 42, categoria: 'RETORNO' })];
+  assert.equal(planejarMovimento(e(ETAPA.AGENDADO, ag1)), null);
+  assert.equal(planejarMovimento(e(ETAPA.AGENDADO, ag1, [], 'COMERCIAL', false))?.para, ETAPA.COMPARECEU, 'regra antiga');
+});
+
+// ── decisão 6: cancelou na franquia, o robô continua movendo ──
+
+test('decisão 6: tratamento cancelado na franquia continua levando EM TRATAMENTO pra TRATAMENTO CANCELADO', () => {
+  const m = planejarMovimento(e(ETAPA.EM_TRATAMENTO, [], [{ idStatus: 47, statusName: 'CANCELADO' }], 'TRATAMENTO'));
+  assert.equal(m?.para, ETAPA.CANCELADO);
+});
+
+test('decisão 6 + regra de 08/10: TRATAMENTO CANCELADO (que a SDR faz no Kommo) nunca é desfeito pela franquia', () => {
+  assert.equal(planejarMovimento(e(ETAPA.CANCELADO, [ag({ h: -2, idStatus: 42, categoria: 'SESSÃO' })], EM_ANDAMENTO, 'TRATAMENTO')), null);
+});
+
+// ── decisão 7: a franquia manda ──
+
+test('decisão 7: avaliação marcada na franquia tira do PERDIDO pra AGENDADO (antes o PERDIDO era intocável)', () => {
+  const ag1 = [ag({ h: -60 * DIA, idStatus: 40 }), ag({ h: 48, idStatus: 37 })];
+  assert.equal(planejarMovimento(e(ETAPA.PERDIDO, ag1))?.para, ETAPA.AGENDADO);
+  assert.equal(planejarMovimento(e(ETAPA.PERDIDO, ag1, [], 'COMERCIAL', false)), null, 'regra antiga');
+});
+
+test('decisão 7: no PERDIDO, fato velho não reabre — só consulta marcada pra frente', () => {
+  assert.equal(planejarMovimento(e(ETAPA.PERDIDO, [ag({ h: -3, idStatus: 42 })])), null, 'atendido ontem: fica');
+  assert.equal(planejarMovimento(e(ETAPA.PERDIDO, [ag({ h: -3, idStatus: 42 })], EM_ANDAMENTO)), null, 'tratamento "em andamento" sozinho não reabre');
+  assert.equal(planejarMovimento(e(ETAPA.PERDIDO, [ag({ h: 48, idStatus: 37, categoria: 'RETORNO' })])), null, 'retorno simples marcado não reabre');
+});
+
+test('decisão 7 + 2: ex-paciente no PERDIDO com consulta marcada vai pra RETORNO PÓS-TRATAMENTO', () => {
+  const ag1 = [...cicloVelho(), ag({ h: 48, idStatus: 37, categoria: 'RETORNO' })];
+  assert.equal(planejarMovimento(e(ETAPA.PERDIDO, ag1, FINALIZADO))?.para, ETAPA.RETORNO);
+});
+
+test('decisão 7: o SDR arrastou pra GANHO sem tratamento na franquia — o robô devolve (como sempre)', () => {
+  assert.equal(planejarMovimento(e(ETAPA.GANHO, [ag({ h: -5 * DIA, idStatus: 42 })]))?.para, ETAPA.NEGOCIACAO);
+});

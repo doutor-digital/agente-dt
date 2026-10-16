@@ -19,6 +19,7 @@ import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
 import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
 import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
 import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
+import { recusaDoFunilTratamento, type DestinoDaSofia } from '../lib/guarda-funil-tratamento.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
 const STATUS_GANHO = 142;
@@ -231,6 +232,18 @@ export function buildTools({
     },
   });
 
+  /** Recusa (texto pra IA) quando o pedido tiraria o cartão do funil TRATAMENTO — regra de 16/10, ver `guarda-funil-tratamento.ts`. */
+  const recusarSaidaDoTratamento = async (leadId: number, destino: DestinoDaSofia): Promise<string | null> => {
+    const motivo = await recusaDoFunilTratamento(unit, kommo, leadId, destino);
+    if (!motivo) return null;
+    await recorder.step({
+      kind: 'TOOL_RESULT',
+      title: 'Recusado: o cartão está no funil TRATAMENTO (a Sofia não tira o paciente de lá)',
+      payload: { leadId, destino },
+    });
+    return `RECUSADO: ${motivo}`;
+  };
+
   const mover_etapa = new DynamicStructuredTool({
     name: 'mover_etapa',
     description: desc('mover_etapa'),
@@ -262,6 +275,10 @@ export function buildTools({
         title: `Decisão: mover lead ${leadId} para etapa ${statusId}`,
         payload: { leadId, statusId, pipelineId },
       });
+
+      // 16/10: a Sofia não tira o cartão do funil TRATAMENTO (chave casamento-jornada)
+      const recusa = await recusarSaidaDoTratamento(leadId, { tipo: 'etapa', statusId, pipelineId });
+      if (recusa) return recusa;
 
       try {
         await kommo.moveStage({ leadId, statusId, pipelineId });
@@ -730,6 +747,9 @@ export function buildTools({
         title: `Decisão: fechar lead ${leadId} como ${status.toUpperCase()}`,
         payload: { leadId, status, lossReasonId: lossReasonId ?? null },
       });
+      // 16/10: no funil TRATAMENTO, 142/143 são ALTA e TRATAMENTO CANCELADO — não é decisão da Sofia
+      const recusa = await recusarSaidaDoTratamento(leadId, { tipo: 'fechar', ganho: status === 'won' });
+      if (recusa) return recusa;
       try {
         await kommo.setLeadStatus(leadId, { won: status === 'won', lossReasonId });
         const latency = Math.round(performance.now() - t0);
@@ -775,6 +795,8 @@ export function buildTools({
         title: `Decisão: mover lead ${leadId} pro funil ${pipelineId}${statusId ? ` (etapa ${statusId})` : ''}`,
         payload: { leadId, pipelineId, statusId: statusId ?? null },
       });
+      const recusa = await recusarSaidaDoTratamento(leadId, { tipo: 'funil', pipelineId });
+      if (recusa) return recusa;
       try {
         await kommo.setLeadPipeline(leadId, pipelineId, statusId);
         const latency = Math.round(performance.now() - t0);

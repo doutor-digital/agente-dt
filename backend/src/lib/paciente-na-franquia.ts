@@ -15,6 +15,8 @@ import { SpineService, type SpineTreatment } from '../services/spine.service.js'
 import { limparNome, resumoDaAgenda, termosDeBusca, type ResumoAgenda } from './widget-agenda.js';
 import { chaveTelefone, normalizar } from './franquia-sync.js';
 import { unidadeParaOCartao } from './crm-compartilhado.js';
+import { estadoCasamentoJornada } from './casamento-jornada.js';
+import { escolhaDaSdr } from './conflito-paciente.js';
 
 // ── tratamentos EM ANDAMENTO: a rota da franquia devolve a unidade inteira; guarda 5 min por unidade ──
 const cacheTratamentos = new Map<string, { em: number; lista: SpineTreatment[] }>();
@@ -29,7 +31,7 @@ async function tratamentosDaUnidade(unit: Unit): Promise<SpineTreatment[]> {
 
 interface PacienteAchado {
   idClient: number;
-  origem: 'vinculo' | 'nome+telefone' | 'nome';
+  origem: 'vinculo' | 'nome+telefone' | 'nome' | 'escolha';
 }
 
 async function porVinculo(unit: Unit, leadId: number | null): Promise<PacienteAchado | null> {
@@ -104,7 +106,11 @@ export async function resumoDoPacienteNaFranquia(unitDoPedido: Unit, q: PedidoDo
   // Dois caminhos, sempre: o vínculo que a Sofia gravou E a busca por nome+telefone. Caso real (16/09): o vínculo
   // apontava pra um cadastro sem agenda (343253) e a paciente de verdade, em tratamento, era outro cadastro (320555).
   // Fica o cadastro que tem agenda; se os dois existem e são diferentes, a franquia tem paciente em dobro → avisar.
-  const [vinc, busca] = await Promise.all([porVinculo(unit, q.leadId), porNomeETelefone(unit, q.titulo, q.nome, q.telefone)]);
+  // Regra de 16/10: a SDR escolheu no widget qual dos pacientes do telefone é o deste cartão — é ele, sem buscar mais nada.
+  const escolhido = q.leadId && estadoCasamentoJornada(unit.slug) === 'ligado' ? await escolhaDaSdr(unit.id, q.leadId) : null;
+  const [vinc, busca] = escolhido
+    ? [{ idClient: escolhido, origem: 'escolha' as const }, null]
+    : await Promise.all([porVinculo(unit, q.leadId), porNomeETelefone(unit, q.titulo, q.nome, q.telefone)]);
   const candidatos = [vinc, busca].filter((c, i, a): c is PacienteAchado => !!c && a.findIndex((x) => x && x.idClient === c.idClient) === i);
   if (!candidatos.length) return { unidade: unit.name, franquia: true, tz, agora: new Date(), paciente: null };
 

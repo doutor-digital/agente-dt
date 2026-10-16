@@ -89,6 +89,8 @@ const schema = z.object({
   FRANQUIA_REVISAO_SLUGS: z.string().optional(),
   /** `1` = a revisão pelo histórico só registra o que faria (rodada de prova em produção). */
   FRANQUIA_REVISAO_SECO: z.string().optional(),
+  /** Regras de 16/10/2026 do casamento cartão × paciente e da jornada (csv; `*` = todas; vazio = desligado — a tela manda). */
+  CASAMENTO_JORNADA_SLUGS: z.string().optional(),
   /** Unidades que saem do modo seco do worker de parados mesmo com PARADOS_SECO=1 (csv; `*` = todas). */
   PARADOS_LIGADO_SLUGS: z.string().optional(),
   /** Só a volta de EM ESPERA (paciente escreveu → EM QUALIFICAÇÃO), sem as regras de prazo do worker (csv; `*` = todas). */
