@@ -27,7 +27,7 @@ import { TraceRecorder } from '../agent/trace-recorder.js';
 import { telefoneDoLead, unidadeFresca } from '../agent/agenda-tools.js';
 import { travaDaUnidadeDeAtendimento } from './trava-unidade-atendimento.js';
 import { contaDoKommo, unidadeDoCartao } from './crm-compartilhado.js';
-import { termosDeBusca } from './widget-agenda.js';
+import { motivoAmbiguo, pacienteExistente } from './paciente-existente.js';
 import { emAndamento, fim8, validarNome, validarTelefone, type Recusa } from './marcacao-widget.js';
 
 export interface EntradaCadastro {
@@ -53,23 +53,25 @@ export interface Cadastrado {
   vinculoGravado: boolean;
 }
 
-/** Procura o paciente pelo telefone entre os resultados de vários nomes. `null` = a franquia não respondeu a nenhuma busca. */
-export async function pacienteExistente(
-  unit: Unit,
-  nome: string,
-  tituloDoCartao: string,
-  fone: string,
-): Promise<{ idClient: number; nome: string | null } | 'nao_achou' | null> {
-  const alvo = fim8(fone);
-  let respondeu = false;
-  for (const termo of termosDeBusca(tituloDoCartao, nome)) {
-    const r = await SpineService.searchClients(unit, termo, 100).catch(() => null);
-    if (!r?.ok) continue;
-    respondeu = true;
-    const igual = (r.data?.clients ?? []).find((c) => c.idClient && fim8(c.whatsapp) === alvo);
-    if (igual?.idClient) return { idClient: igual.idClient, nome: igual.name };
-  }
-  return respondeu ? 'nao_achou' : null;
+/**
+ * DDD dos dois números, quando dá para ler (55 + DDD + número). A conferência por 8 dígitos deixa passar o DDD
+ * trocado, e aqui o número digitado é o que vai para o cadastro (review, 16/10).
+ */
+export function dddsDiferentes(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ddd = (x: string | null | undefined) => {
+    let d = (x ?? '').replace(/\D/g, '');
+    if (d.length >= 12 && d.startsWith('55')) d = d.slice(2);
+    return d.length >= 10 ? d.slice(0, 2) : null;
+  };
+  const da = ddd(a), db = ddd(b);
+  return !!(da && db && da !== db);
+}
+
+/** O ⚙ idClient que já está escrito no cartão (carga de implantação, outra unidade, a própria Sofia). */
+function idClientNoCartao(lead: { custom_fields_values?: Array<{ field_name?: string; values?: Array<{ value?: unknown }> }> | null }): number | null {
+  const campo = (lead.custom_fields_values ?? []).find((c) => (c.field_name ?? '').trim() === '⚙ idClient (franquia)');
+  const n = Number(campo?.values?.[0]?.value);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 /** As frases de recusa da divisão Petrópolis × Caxias nasceram para o "Marcar": aqui nada se marca, nada se cadastra. */
@@ -144,7 +146,7 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
   if (!fim8(foneLead)) {
     return recusar({ ok: false, codigo: 'lead_sem_telefone', motivo: 'O contato deste cartão não tem telefone. Coloque o telefone no contato antes de cadastrar — é ele que liga o cartão ao paciente.' });
   }
-  if (fim8(foneLead) !== fim8(fone)) {
+  if (fim8(foneLead) !== fim8(fone) || dddsDiferentes(foneLead, fone)) {
     return recusar({
       ok: false, codigo: 'telefone_nao_bate',
       motivo: `O telefone digitado não é o do contato deste cartão (…${fim8(foneLead)}). Corrija o contato ou o número antes de cadastrar.`,
@@ -158,17 +160,38 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
     return { ok: true, idClient: vinculo.spineIdClient, novoCadastro: false, jaLigado: true, nome: vinculo.nome ?? nome, unidade: rotulo, cartao: { camposEmBranco: [] }, vinculoGravado: true };
   }
 
-  const existente = await pacienteExistente(unit, nome, lead.name ?? '', fone);
-  if (existente === null) {
-    return recusar({ ok: false, codigo: 'cadastro_falhou', motivo: 'A franquia não respondeu à busca do paciente. Nada foi cadastrado — tente de novo em instantes.' });
-  }
-
+  // O cartão já diz quem é (⚙ idClient) mas não há vínculo nesta unidade: confere esse paciente e liga a ele, em vez de
+  // buscar por nome e, sem achar, criar outro por cima.
   let idClient: number;
   let novoCadastro = false;
-  if (existente !== 'nao_achou') {
-    idClient = existente.idClient;
-    await passo('TOOL_RESULT', `Paciente já existia na franquia: ${existente.nome ?? '?'} (idClient ${idClient}) — só liguei o cartão`);
+  let nomeNaFranquia: string | null = null;
+  const doCartao = idClientNoCartao(lead);
+  if (doCartao) {
+    const det = await SpineService.getClient(unit, doCartao).catch(() => null);
+    if (!det?.ok) {
+      return recusar({ ok: false, codigo: 'cadastro_falhou', motivo: 'A franquia não respondeu agora. Nada foi cadastrado — tente de novo em instantes.' });
+    }
+    const cli = det.data?.client;
+    if (!cli || fim8(cli.whatsapp) !== fim8(fone)) {
+      return recusar({
+        ok: false, codigo: 'paciente_ambiguo',
+        motivo: `O cartão já aponta para outro paciente da franquia (idClient ${doCartao}${cli?.name ? `, ${cli.name}` : ''}) com outro telefone. Nada foi cadastrado: confira qual é o certo antes.`,
+      });
+    }
+    idClient = doCartao;
+    nomeNaFranquia = cli.name;
+    await passo('TOOL_RESULT', `O cartão já tinha o ⚙ idClient ${doCartao} (${cli.name ?? '?'}) e o telefone confere — só liguei`);
   } else {
+    const achado = await pacienteExistente(unit, nome, lead.name ?? '', fone);
+    if (achado.tipo === 'sem_resposta') {
+      return recusar({ ok: false, codigo: 'cadastro_falhou', motivo: 'A franquia não respondeu a todas as buscas do paciente. Nada foi cadastrado — tente de novo em instantes.' });
+    }
+    if (achado.tipo === 'ambiguo') return recusar({ ok: false, codigo: 'paciente_ambiguo', motivo: motivoAmbiguo(achado.candidatos, 'cadastrado') });
+    if (achado.tipo === 'achou') {
+      idClient = achado.idClient;
+      nomeNaFranquia = achado.nome;
+      await passo('TOOL_RESULT', `Paciente já existia na franquia: ${achado.nome ?? '?'} (idClient ${idClient}) — só liguei o cartão`);
+    } else {
     let criado: number | null = null;
     if (vinculo?.spineIdLead) {
       const c = await SpineService.convertLead(unit, { idLead: vinculo.spineIdLead, name: nome, idSource: unit.spineDefaultSourceId, whatsapp: fone });
@@ -187,7 +210,10 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
     idClient = criado;
     novoCadastro = true;
     await passo('TOOL_RESULT', `Paciente cadastrado na franquia sem consulta: ${nome} (idClient ${idClient})`);
+    }
   }
+  // o nome que fica no vínculo e volta para a SDR é o da FRANQUIA quando o paciente já existia — é ele que diz a quem o cartão foi ligado
+  const nomeFinal = nomeNaFranquia ?? nome;
 
   // O vínculo é o que faz o sincronizador seguir este paciente pelo id, e não pelo nome. Sem consulta: os campos
   // de agenda do vínculo ficam como estão.
@@ -195,8 +221,8 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
   await prisma.spineLeadLink
     .upsert({
       where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId: entrada.leadId } },
-      update: { spineIdClient: idClient, nome, status: 'ok' },
-      create: { unitId: unit.id, kommoLeadId: entrada.leadId, spineIdClient: idClient, nome, status: 'ok' },
+      update: { spineIdClient: idClient, nome: nomeFinal, status: 'ok' },
+      create: { unitId: unit.id, kommoLeadId: entrada.leadId, spineIdClient: idClient, nome: nomeFinal, status: 'ok' },
     })
     .catch((err) => { vinculoGravado = false; logger.warn({ err: String(err), unit: unit.slug, leadId: entrada.leadId }, 'widget cadastrar: falha ao gravar vínculo'); });
 
@@ -208,7 +234,7 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
     if (idCampo === null) cartao.camposEmBranco.push('⚙ idClient (franquia)');
     else await kommo.setLeadCustomFieldValue(entrada.leadId, idCampo, 'numeric', idClient).catch(() => cartao.camposEmBranco.push('⚙ idClient (franquia)'));
     await kommo
-      .addLeadNote(entrada.leadId, `${novoCadastro ? 'Paciente cadastrado' : 'Cartão ligado ao paciente que já existia'} na franquia${rotulo ? ` de ${rotulo}` : ''} pela recepção, pelo widget, sem consulta marcada (idClient ${idClient}).`)
+      .addLeadNote(entrada.leadId, `${novoCadastro ? 'Paciente cadastrado' : `Cartão ligado ao paciente que já existia (${nomeFinal})`} na franquia${rotulo ? ` de ${rotulo}` : ''} pela recepção, pelo widget, sem consulta marcada (idClient ${idClient}).`)
       .catch(() => null);
     await passo('KOMMO_ACTION', `Cartão ligado ao paciente${cartao.camposEmBranco.length ? ` — em branco: ${cartao.camposEmBranco.join(', ')}` : ''}`, cartao);
   } catch (err) {
@@ -218,5 +244,5 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
 
   await recorder.finalize({ status: 'SUCCESS', latencyMs: Date.now() - t0, iaDecision: novoCadastro ? 'widget_cadastrar' : 'widget_cadastrar:ligou_existente' }).catch(() => undefined);
   logger.info({ unit: unit.slug, leadId: entrada.leadId, idClient, novoCadastro }, 'widget cadastrar: paciente na franquia sem consulta');
-  return { ok: true, idClient, novoCadastro, jaLigado: false, nome, unidade: rotulo, cartao, vinculoGravado };
+  return { ok: true, idClient, novoCadastro, jaLigado: false, nome: nomeFinal, unidade: rotulo, cartao, vinculoGravado };
 }

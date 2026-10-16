@@ -12,8 +12,11 @@ import { SpineService } from '../services/spine.service.js';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import { _semearCrmParaTeste } from './crm-compartilhado.js';
 import { limparCacheEsquema } from './kommo-schema.js';
-import { cadastrarPeloWidget, pacienteExistente } from './cadastro-pelo-widget.js';
-import { emAndamento } from './marcacao-widget.js';
+import { cadastrarPeloWidget, dddsDiferentes } from './cadastro-pelo-widget.js';
+import { pacienteExistente } from './paciente-existente.js';
+import { emAndamento, marcarPeloWidget } from './marcacao-widget.js';
+import { AgendaService } from '../services/agenda.service.js';
+import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 
 const SERRA = 'doutor-hernia-serra';
 const PETRO = 'doutor-hernia-petropolis';
@@ -74,6 +77,12 @@ spine.convertLead = async () => {
   naFranquia.push('convertLead');
   return { ok: true, data: { idClient: 556 } };
 };
+let fichaDoPaciente: { idClient: number; name: string; whatsapp: string } | null | 'fora' = null;
+spine.getClient = async () => {
+  naFranquia.push('getClient');
+  if (fichaDoPaciente === 'fora') return { ok: false, error: 'franquia fora' };
+  return { ok: true, data: { client: fichaDoPaciente ? { ...fichaDoPaciente, schedules: [], treatments: [] } : null } };
+};
 for (const nome of ['createSchedule', 'createLead']) {
   spine[nome] = async () => {
     naFranquia.push(nome);
@@ -81,15 +90,17 @@ for (const nome of ['createSchedule', 'createLead']) {
   };
 }
 
-function kommoFalso(unidadeDeAtendimento: string | null, foneDoContato = FONE) {
+function kommoFalso(unidadeDeAtendimento: string | null, foneDoContato = FONE, idClientNoCartao: number | null = null) {
   const escritas: string[] = [];
   const lead = (id: number): KommoLead => ({
     id,
     name: 'MARIA SOUZA 12/10',
     status_id: 1,
     pipeline_id: 1,
-    custom_fields_values:
-      unidadeDeAtendimento === null ? [] : [{ field_id: 479786, field_name: '⌂ Unidade de atendimento', values: [{ value: unidadeDeAtendimento }] }],
+    custom_fields_values: [
+      ...(unidadeDeAtendimento === null ? [] : [{ field_id: 479786, field_name: '⌂ Unidade de atendimento', values: [{ value: unidadeDeAtendimento }] }]),
+      ...(idClientNoCartao === null ? [] : [{ field_id: CAMPO_IDCLIENT, field_name: '⚙ idClient (franquia)', values: [{ value: idClientNoCartao }] }]),
+    ],
     _embedded: { contacts: [{ id: 77, is_main: true }] },
   });
   const kommo = {
@@ -118,6 +129,7 @@ beforeEach(() => {
   tokensUsados = [];
   vinculoExistente = null;
   buscaPorTermo = () => ({ ok: true, clients: [] });
+  fichaDoPaciente = null;
   _semearCrmParaTeste([]);
   limparCacheEsquema();
 });
@@ -246,12 +258,11 @@ test('widget cadastrar: sem a divisão gravada, cartão de Caxias segue barrado 
   assert.deepEqual(naFranquia, []);
 });
 
-test('pacienteExistente: tenta do nome mais específico ao mais largo e para no primeiro telefone que bate', async () => {
-  // o título do cartão vem primeiro ("MARIA SOUZA 12/10" vira "MARIA SOUZA"), e já acha
+test('pacienteExistente: junta TODOS os termos antes de decidir (é assim que aparece o segundo paciente do mesmo telefone)', async () => {
   buscaPorTermo = (termo) => (termo.toUpperCase() === 'MARIA SOUZA' ? { ok: true, clients: [{ idClient: 11, name: 'MARIA SOUZA', whatsapp: '24999990000' }] } : { ok: true, clients: [] });
   const r = await pacienteExistente(unidade(SERRA), 'Maria Souza', 'MARIA SOUZA 12/10', '5524999990000');
-  assert.deepEqual(r, { idClient: 11, nome: 'MARIA SOUZA' });
-  assert.deepEqual(naFranquia, ['busca:MARIA SOUZA'], 'achou na primeira busca, não faz as outras');
+  assert.deepEqual(r, { tipo: 'achou', idClient: 11, nome: 'MARIA SOUZA' });
+  assert.ok(naFranquia.length >= 2, 'não para no primeiro termo');
 });
 
 test('widget cadastrar: com o "Marcar" em andamento no mesmo cartão, recusa sem tocar na franquia', async () => {
@@ -265,5 +276,129 @@ test('widget cadastrar: com o "Marcar" em andamento no mesmo cartão, recusa sem
     assert.deepEqual(naFranquia, []);
   } finally {
     emAndamento.delete(`${u.id}:209`);
+  }
+});
+
+// ── achados da revisão de 16/10 ───────────────────────────────────────────────────────────────────────────────
+test('widget cadastrar: UMA busca falhou e as outras não acharam → recusa (o termo que falhou era o que acharia)', async () => {
+  buscaPorTermo = (termo) => (termo.toUpperCase() === 'MARIA SOUZA' ? { ok: false } : { ok: true, clients: [] });
+  const { kommo } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), pedido(401), { kommo });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.codigo, 'cadastro_falhou');
+  assert.ok(!naFranquia.includes('createClient'));
+});
+
+test('widget cadastrar: dois pacientes com o mesmo telefone e nenhum com o nome igual → recusa, ninguém escolhe no chute', async () => {
+  buscaPorTermo = () => ({ ok: true, clients: [
+    { idClient: 21, name: 'MARIA APARECIDA LIMA', whatsapp: '5524999990000' },
+    { idClient: 22, name: 'JOANA LIMA', whatsapp: '24999990000' },
+  ] });
+  const { kommo } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), pedido(402), { kommo });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.codigo, 'paciente_ambiguo');
+  assert.ok(!naFranquia.includes('createClient'));
+  assert.deepEqual(vinculosGravados, []);
+});
+
+test('widget cadastrar: dois com o mesmo telefone, um com o nome igual → liga a esse e devolve o nome da franquia', async () => {
+  buscaPorTermo = () => ({ ok: true, clients: [
+    { idClient: 31, name: 'MARIA SOUZA LIMA', whatsapp: '5524999990000' },
+    { idClient: 32, name: 'MARIA SOUZA', whatsapp: '24999990000' },
+  ] });
+  const { kommo } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), pedido(403), { kommo });
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.equal(r.idClient, 32);
+    assert.equal(r.nome, 'MARIA SOUZA');
+  }
+});
+
+test('widget cadastrar: o cartão já tem ⚙ idClient com o mesmo telefone → liga a ele sem buscar nem criar', async () => {
+  fichaDoPaciente = { idClient: 777, name: 'MARIA SOUZA DA SILVA', whatsapp: '5524999990000' };
+  const { kommo } = kommoFalso(null, FONE, 777);
+  const r = await cadastrarPeloWidget(unidade(SERRA), pedido(404), { kommo });
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.equal(r.idClient, 777);
+    assert.equal(r.novoCadastro, false);
+    assert.equal(r.nome, 'MARIA SOUZA DA SILVA');
+  }
+  assert.deepEqual(naFranquia, ['getClient']);
+});
+
+test('widget cadastrar: o ⚙ idClient do cartão é de OUTRO telefone → recusa, não cria por cima', async () => {
+  fichaDoPaciente = { idClient: 778, name: 'OUTRA PESSOA', whatsapp: '5521911112222' };
+  const { kommo } = kommoFalso(null, FONE, 778);
+  const r = await cadastrarPeloWidget(unidade(SERRA), pedido(405), { kommo });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.codigo, 'paciente_ambiguo');
+  assert.ok(!naFranquia.includes('createClient'));
+});
+
+test('widget cadastrar: DDD digitado diferente do contato → recusa (o número digitado é o que vai para o cadastro)', async () => {
+  const { kommo } = kommoFalso(null, '(24) 99999-0000');
+  const r = await cadastrarPeloWidget(unidade(SERRA), { leadId: 406, nome: 'Maria Souza', telefone: '(21) 99999-0000' }, { kommo });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.codigo, 'telefone_nao_bate');
+  assert.deepEqual(naFranquia, []);
+  assert.equal(dddsDiferentes('5524999990000', '(24) 99999-0000'), false);
+  assert.equal(dddsDiferentes('99999-0000', '(21) 99999-0000'), false, 'sem DDD num dos lados não dá para comparar');
+});
+
+// ── "Só cadastrar" e depois "Marcar": o Marcar usa o paciente já ligado ────────────────────────────────────────
+function agendaLivre() {
+  const agenda = AgendaService as unknown as Record<string, unknown>;
+  const reconc = AgendaReconcileService as unknown as Record<string, unknown>;
+  const antes = { build: agenda.buildAgenda, consulta: reconc.consultaDoLead, sched: spine.searchSchedules, criar: spine.createSchedule };
+  agenda.buildAgenda = () => [{ time: '09:00', status: 'livre' }];
+  reconc.consultaDoLead = async () => null;
+  spine.searchSchedules = async () => ({ ok: true, data: { schedules: [] } });
+  const marcadas: number[] = [];
+  spine.createSchedule = async (_u: unknown, a: { idClient: number }) => {
+    naFranquia.push('createSchedule');
+    marcadas.push(a.idClient);
+    return { ok: true, data: { idSchedule: 9090 } };
+  };
+  Object.defineProperty(prisma, 'agendaBlock', { value: { findMany: async () => [] }, configurable: true });
+  const desfazer = () => {
+    agenda.buildAgenda = antes.build;
+    reconc.consultaDoLead = antes.consulta;
+    spine.searchSchedules = antes.sched;
+    spine.createSchedule = antes.criar;
+  };
+  return { marcadas, desfazer };
+}
+const amanha = () => new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+
+test('widget marcar: cartão já ligado pelo "Só cadastrar" → marca NESSE paciente, sem buscar nem criar outro', async () => {
+  vinculoExistente = { spineIdClient: 444, spineIdLead: null, nome: 'MARIA SOUZA' };
+  const { marcadas, desfazer } = agendaLivre();
+  try {
+    const { kommo } = kommoFalso(null);
+    const r = await marcarPeloWidget(unidade(SERRA), { leadId: 501, nome: 'Maria de Souza', telefone: FONE, data: amanha(), hora: '09:00' }, { kommo });
+    assert.equal(r.ok, true);
+    assert.deepEqual(marcadas, [444]);
+    assert.ok(!naFranquia.some((x) => x.startsWith('busca:')), 'não busca por nome');
+    assert.ok(!naFranquia.includes('createClient'));
+  } finally {
+    desfazer();
+  }
+});
+
+test('widget marcar: busca do paciente falhou em parte → recusa sem criar paciente nem marcar', async () => {
+  buscaPorTermo = (termo) => (termo.toUpperCase() === 'MARIA SOUZA' ? { ok: false } : { ok: true, clients: [] });
+  const { marcadas, desfazer } = agendaLivre();
+  try {
+    const { kommo } = kommoFalso(null);
+    const r = await marcarPeloWidget(unidade(SERRA), { leadId: 502, nome: 'Maria Souza', telefone: FONE, data: amanha(), hora: '09:00' }, { kommo });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.equal(r.codigo, 'cadastro_falhou');
+    assert.deepEqual(marcadas, []);
+    assert.ok(!naFranquia.includes('createClient'));
+  } finally {
+    desfazer();
   }
 });
