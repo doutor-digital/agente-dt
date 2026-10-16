@@ -317,6 +317,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/sugestao-motivo.ts',
   },
   {
+    id: 'widget-cadastrar',
+    chave: 'WIDGET_CADASTRAR_SLUGS',
+    nome: 'Só cadastrar na franquia (widget, sem consulta)',
+    oQueFaz:
+      'No widget do cartão, o botão "Só cadastrar na franquia" cadastra o paciente (nome + telefone) na franquia e liga o cartão a ele, sem marcar consulta. Se a franquia já tem alguém com esse telefone, só liga o cartão.',
+    pegadinha:
+      'É clique de gente, nunca robô: a regra de 26/09 (a IA só cadastra quem agenda) continua valendo. Kommo dividido (Petrópolis + Caxias): segue a ⌂ Unidade de atendimento do cartão — campo vazio, recusa. Liga na unidade onde o widget está instalado (em Petrópolis vale também para os cartões de Caxias).',
+    risco: 'escreve-campo',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/cadastro-pelo-widget.ts',
+  },
+  {
     id: 'carimbo-etapa',
     chave: 'CARIMBO_ETAPA_SLUGS',
     nome: 'Carimbo de início e fim do tratamento',
