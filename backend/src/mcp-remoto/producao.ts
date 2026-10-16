@@ -24,6 +24,8 @@ import { executar } from './ferramenta.js';
 import { criarContextoKommo, registrarFerramentasKommo, type UnidadeKommo } from './kommo.js';
 import { criarContextoBling, registrarFerramentasBling, type ContaBling } from './bling.js';
 import { registrarIntegracoes } from './integracoes.js';
+import { registrarMetaEventos, type FonteRastreio } from './meta-eventos.js';
+import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
 import { asaasGet } from '../lib/integracoes/asaas.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
@@ -115,6 +117,17 @@ async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');
   return contas;
+}
+
+/**
+ * Banco de rastreio do n8n (eventos para a Meta, cliques em anúncio). Usuário só com SELECT nas tabelas de
+ * rastreio; sem a variável, as ferramentas meta_* respondem que a leitura não está ligada.
+ */
+function fonteDoRastreio(): FonteRastreio | null {
+  const url = process.env.RASTREIO_DATABASE_URL;
+  if (!url) return null;
+  const cliente = new PrismaClient({ datasourceUrl: url });
+  return { consultar: (sql, ...params) => cliente.$queryRawUnsafe(sql, ...params) };
 }
 
 async function idsDasUnidades(slugs: string[]): Promise<string[]> {
@@ -261,6 +274,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   const bling = criarContextoBling(new Map());
   manterAtualizado(contasBlingDoBanco, (contas) => (bling.contas = contas), 'as contas do Bling');
   const asaas = criarContextoAsaas(new Map());
+  const rastreio = fonteDoRastreio();
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
@@ -286,6 +300,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasKommo(server, kommo, auditar);
       registrarFerramentasBling(server, bling, kommo, auditar);
       registrarFerramentasAsaas(server, asaas, auditar);
+      registrarMetaEventos(server, () => rastreio, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
