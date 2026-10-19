@@ -107,7 +107,8 @@ function fire(key: string): void {
   entry.maxTimer = null;
 
   const messages = entry.pending.splice(0, entry.pending.length);
-  const combined = messages.map((m) => m.text).join('\n\n');
+  // áudio e imagem chegam com texto vazio: sem o filtro, uma rajada só de áudios virava espaço em branco
+  const combined = messages.map((m) => m.text).filter((t) => t && t.trim()).join('\n\n');
   const audioUrls = messages.map((m) => m.audioUrl).filter((u): u is string => !!u);
   const imageUrls = messages.map((m) => m.imageUrl).filter((u): u is string => !!u);
   const traceIds = messages.map((m) => m.traceId);

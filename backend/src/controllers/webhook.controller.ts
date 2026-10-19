@@ -19,6 +19,7 @@ import { detectarInjecao, explicarInjecao, avisoDeInjecao } from '../services/in
 import { mascararPii } from '../lib/pii.js';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
+import { deveIrParaEquipe, ehFalhaEstrutural, limparFalhasDeAudio, registrarFalhaDeAudio } from '../lib/falha-de-audio.js';
 import { describeImage } from '../services/vision.service.js';
 import { tentarNotaDeVoz } from '../lib/resposta-em-voz.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
@@ -135,19 +136,42 @@ const AUDIO_EXT_RE = /\.(ogg|opus|mp3|m4a|wav|aac)$/i;
  * equipe, que ouve o áudio no aparelho.
  */
 export function instrucaoAudioNaoTranscrito(handoff: boolean): string {
+  // "chegou cortado", "veio ruim", "fale mais perto do microfone": culpa o paciente por um problema nosso
+  // (Canaã, 18/10 — era falta de crédito na transcrição)
+  const semCulpa =
+    'PROIBIDO dizer que o áudio "chegou cortado", "veio ruim", "falhou", que ele falou em outro idioma, ' +
+    'ou pedir pra falar mais perto do microfone — o problema é do nosso lado.';
   if (handoff) {
     return (
-      '[o paciente mandou um áudio e nesta unidade a gente não consegue ouvir áudio. ' +
-      'NÃO peça pra ele gravar de novo nem pra escrever — isso já falhou antes e vai ' +
-      'falhar de novo. Chame pausar_ia e responda apenas que alguém da equipe já vai ' +
-      'ouvir e continuar por aqui. Não siga a conversa depois disso.]'
+      '[o paciente mandou um áudio e agora a gente não consegue ouvir áudio. ' +
+      'NÃO peça pra ele gravar de novo nem pra escrever — vai falhar de novo. Chame pausar_ia e ' +
+      'responda apenas que alguém da equipe já vai ouvir o áudio e continuar por aqui. ' +
+      `Não siga a conversa depois disso. ${semCulpa}]`
     );
   }
   return (
-    '[o paciente mandou um áudio que não deu pra entender. Peça com gentileza pra ele ' +
-    'gravar de novo ou escrever. NÃO diga que ele falou em outro idioma nem peça pra ' +
-    'ele falar em português — o problema foi na nossa captação do áudio.]'
+    '[o paciente mandou um áudio que você não conseguiu ouvir agora. Diga com gentileza que não ' +
+    `conseguiu ouvir o áudio e peça pra ele escrever (ou mandar de novo, se preferir). ${semCulpa}]`
   );
+}
+
+/** O fato, na mensagem do modelo, quando o áudio do paciente não virou texto (não entra em `humanMessage`). */
+export const AUDIO_NAO_OUVIDO = '[áudio do cliente — não deu pra ouvir]';
+
+/** Tarefa no cartão pra alguém ouvir o áudio no aparelho — uma a cada 6 h por lead. Nunca lança. */
+async function avisarEquipeDoAudio(unit: Unit, leadId: number, motivo: string): Promise<void> {
+  if (!devoAvisar(`audio:${unit.id}:${leadId}`)) return;
+  if (await avisoRecente(unit.id, leadId, 'audio_nao_ouvido', 6 * 60 * 60 * 1000)) return;
+  try {
+    const criada = await createKommoClient(unit).createTask({
+      leadId,
+      text: `ALERTA · ${unit.slug} · Ouvir o áudio do paciente: a IA não conseguiu transcrever (${motivo}). Responder por aqui.`,
+      completeAt: Math.floor(Date.now() / 1000) + 15 * 60,
+    });
+    if (criada) await marcarAviso(unit.id, leadId, 'audio_nao_ouvido');
+  } catch (err) {
+    logger.warn({ err: String(err), leadId, unit: unit.slug }, 'áudio não ouvido e a tarefa pra equipe também falhou — segue');
+  }
 }
 
 function hasAudioAttachment(msg: MessageEvent): boolean {
@@ -875,6 +899,7 @@ export async function processAgent(args: {
   // transcrição porque o 2º da sequência era descartado (visto em 05/09/2026).
   const audios = (args.audioUrls?.length ? args.audioUrls : audioUrl ? [audioUrl] : []).slice(0, 6);
   let algumAudioFalhou = false;
+  let falhaEstrutural = false;
   for (const [i, url] of audios.entries()) {
     try {
       const t = await transcribeAudio(unit, url);
@@ -888,6 +913,7 @@ export async function processAgent(args: {
       });
     } catch (err) {
       algumAudioFalhou = true;
+      if (ehFalhaEstrutural(err)) falhaEstrutural = true;
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ err, audioUrl: url, leadId }, 'falha ao transcrever áudio');
       await recorder.step({
@@ -897,7 +923,27 @@ export async function processAgent(args: {
       });
     }
   }
-  if (algumAudioFalhou && !humanMessage) humanMessage = instrucaoAudioNaoTranscrito(unit.audioHandoffEnabled);
+  const chaveDoAudio = `${unit.id}:${leadId}`;
+  // A fala do paciente fica como ele mandou: as travas (horário, pausa, Sofia calada) e as notas de
+  // "paciente insistiu" leem `humanMessage` e não podem tomar marcador nosso por texto dele. O fato ("áudio
+  // que não deu pra ouvir") e a instrução entram só DEPOIS delas, na mensagem do modelo — e depois do
+  // detector de injeção, que acusaria a nossa própria instrução ("Chame pausar_ia…").
+  let instrucaoDeAudio: string | null = null;
+  if (audios.length && !algumAudioFalhou) limparFalhasDeAudio(chaveDoAudio);
+  if (algumAudioFalhou) {
+    const falhasSeguidas = registrarFalhaDeAudio(chaveDoAudio);
+    const paraEquipe = deveIrParaEquipe({ flagDaUnidade: unit.audioHandoffEnabled, estrutural: falhaEstrutural, falhasSeguidas });
+    const motivo = unit.audioHandoffEnabled ? 'a unidade não ouve áudio' : falhaEstrutural ? 'falha nossa (saldo/chave)' : `${falhasSeguidas}ª falha seguida`;
+    instrucaoDeAudio = instrucaoAudioNaoTranscrito(paraEquipe);
+    // A tarefa sai JÁ, antes das travas: fora do horário, com o cartão pausado ou a Sofia calada o modelo
+    // nem roda — e o áudio ficaria sem resposta e sem ninguém saber. Não mexe na fala do paciente.
+    if (paraEquipe) void avisarEquipeDoAudio(unit, leadId, motivo);
+    await recorder.step({
+      kind: 'THINKING',
+      title: paraEquipe ? `Áudio não ouvido → equipe (${motivo})` : 'Áudio não ouvido → pedir pra escrever',
+      payload: { falhaEstrutural, falhasSeguidas, paraEquipe },
+    });
+  }
 
   if (imageUrl) {
     try {
@@ -1156,9 +1202,14 @@ export async function processAgent(args: {
         payload: { leadId, tipo: injecao.tipo, trecho: injecao.trecho },
       });
     }
-    const mensagemParaIa = injecao
+    const mensagemDoPaciente = injecao
       ? `${avisoDeInjecao(injecao)}\n\n${humanMessage}`
       : humanMessage;
+    // SEMPRE que um áudio falhou, inclusive com texto junto: antes o áudio que falhava ao lado de um texto
+    // sumia em silêncio, e a rajada só de áudios ia como espaço em branco (400 na Anthropic)
+    const mensagemParaIa = instrucaoDeAudio
+      ? [mensagemDoPaciente.trim() ? mensagemDoPaciente : '', AUDIO_NAO_OUVIDO, instrucaoDeAudio].filter(Boolean).join('\n\n')
+      : mensagemDoPaciente;
 
     // A conversa como o WhatsApp a vê (rota oficial): resposta da equipe e mensagem
     // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde

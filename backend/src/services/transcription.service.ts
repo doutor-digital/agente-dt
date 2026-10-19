@@ -4,6 +4,8 @@ import type { Unit } from '@prisma/client';
 import { logger } from '../lib/logger.js';
 import { env } from '../lib/env.js';
 import { resolveOpenAIApiKey } from './openai.service.js';
+import { classificarErroDaOpenAI, FalhaDeTranscricao } from '../lib/falha-de-audio.js';
+import { opsAlert } from '../lib/ops-alert.js';
 
 const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
 
@@ -23,7 +25,7 @@ export async function transcribeAudio(
 ): Promise<TranscriptionResult> {
   const apiKey = env.OPENAI_TRANSCRIPTION_API_KEY || resolveOpenAIApiKey(unit);
   if (!apiKey) {
-    throw new Error('Nenhuma chave OpenAI disponível — não dá pra transcrever');
+    throw new FalhaDeTranscricao('Nenhuma chave OpenAI disponível — não dá pra transcrever', true);
   }
 
   const t0 = performance.now();
@@ -72,15 +74,32 @@ export async function transcribeAudio(
   );
   form.append('response_format', 'json');
 
-  const res = await axios.post<{ text: string }>(TRANSCRIBE_URL, form, {
-    headers: {
-      ...form.getHeaders(),
-      Authorization: `Bearer ${apiKey}`,
-    },
-    timeout: 60_000,
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity,
-  });
+  let res: { data: { text: string } };
+  try {
+    res = await axios.post<{ text: string }>(TRANSCRIBE_URL, form, {
+      headers: {
+        ...form.getHeaders(),
+        Authorization: `Bearer ${apiKey}`,
+      },
+      timeout: 60_000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
+  } catch (err) {
+    if (!axios.isAxiosError(err)) throw err;
+    // O axios diz só "status code 429"; o motivo (saldo × limite por minuto) está no corpo.
+    const c = classificarErroDaOpenAI(err.response?.status, err.response?.data);
+    if (c.saldo) {
+      void opsAlert({
+        chave: 'saldo:openai-transcricao',
+        title: 'Áudios sem transcrição — OpenAI sem saldo',
+        message:
+          'A transcrição de áudio está sendo recusada por falta de saldo na OpenAI. Enquanto não recarregar, ' +
+          `nenhum áudio de paciente vira texto e as conversas com áudio vão para a equipe. Erro: ${c.resumo}`,
+      });
+    }
+    throw new FalhaDeTranscricao(`Transcrição recusada pela OpenAI (${c.resumo})`, c.estrutural, c.saldo);
+  }
 
   const text = (res.data?.text ?? '').trim();
   if (text && !pareceportugues(text)) {
