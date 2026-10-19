@@ -147,8 +147,9 @@ function buildSandboxTools(opts: {
     schema: zod.object({
       leadId: zod.number().int().positive(),
       nome: zod.string().min(1).max(120),
+      nomeDeOutraPessoa: zod.boolean().optional(),
     }),
-    func: async ({ leadId, nome }) => {
+    func: async ({ leadId, nome, nomeDeOutraPessoa }) => {
       const dateBR = new Intl.DateTimeFormat('pt-BR', {
         timeZone: opts.tz,
         day: '2-digit',
@@ -156,8 +157,9 @@ function buildSandboxTools(opts: {
         year: 'numeric',
       }).format(new Date());
       const desired = `${nome.trim()} ${dateBR}`;
-      const result = `[SANDBOX] atualizar_titulo_lead("${nome}") → título seria "${desired}" no lead ${leadId} — simulado.`;
-      opts.onCall({ tool: 'atualizar_titulo_lead', args: { leadId, nome, formatted: desired }, result });
+      const contato = nomeDeOutraPessoa ? 'contato não muda (nome de outra pessoa)' : `contato iria para "${nome.trim()}" se a automação nome-no-contato estiver ligada`;
+      const result = `[SANDBOX] atualizar_titulo_lead("${nome}") → título seria "${desired}" no lead ${leadId}; ${contato} — simulado.`;
+      opts.onCall({ tool: 'atualizar_titulo_lead', args: { leadId, nome, nomeDeOutraPessoa, formatted: desired }, result });
       return result;
     },
   });
