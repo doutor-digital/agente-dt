@@ -13,7 +13,7 @@ import type { TraceRecorder } from '../agent/trace-recorder.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import {
   desdeUltimaFalaDaSofia,
-  mensagensOficiais,
+  mensagensOficiaisDaUnidade,
   renderConversaOficial,
   type MensagemOficial,
 } from '../services/kommo-talks.service.js';
@@ -85,7 +85,7 @@ export async function blocoDaConversaOficial(args: {
   recorder: TraceRecorder;
 }): Promise<string> {
   const { unit, leadId, humanMessage, recorder } = args;
-  const msgs = await mensagensOficiais(createKommoClient(unit), leadId, 40);
+  const msgs = await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), leadId, 40);
   const selecionados = selecionarItens(desdeUltimaFalaDaSofia(msgs), humanMessage, Date.now());
   if (!selecionados.length) return '';
 

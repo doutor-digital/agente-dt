@@ -12,19 +12,49 @@
  * precisa saber antes de cobrar).
  */
 import type { Unit } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import { createKommoClient, type KommoClient } from './kommo.service.js';
-import { normalizar, type AutorOficial, type MensagemOficial } from './kommo-talks-normalizar.js';
+import { historicoOficial, separarSessaoDaEquipe, type AutorOficial, type MensagemOficial } from './kommo-talks-normalizar.js';
 
 // A parte pura (quem falou, normalizar, histórico) mora sem dependência de ambiente, para os testes do conector.
 export * from './kommo-talks-normalizar.js';
 
+/**
+ * As últimas `limit` mensagens do lead, juntando TODAS as conversas (talks). Ler só a mais recente perdia o
+ * que a equipe escreveu na anterior: em Canaã (17/10) o "Agendada consulta para 19/10" estava na conversa
+ * 8544 e o "Ok" do paciente abriu a 8561 — a Sofia leu só a nova.
+ */
 export async function mensagensOficiais(kommo: KommoClient, leadId: number, limit = 40): Promise<MensagemOficial[]> {
-  const talks = await kommo.listTalks(leadId);
-  if (!talks.length) return [];
-  // A conversa viva é a talk mais recente; talks antigas são histórico já consolidado.
-  const viva = [...talks].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
-  const raw = await kommo.listTalkMessages(viva.talk_id, limit);
-  return normalizar(raw);
+  return (await historicoOficial(kommo, leadId, limit)).mensagens;
+}
+
+/**
+ * Quando a Sofia (o agente) mandou mensagem para este lead desde `desde`, em qualquer unidade da mesma conta do
+ * Kommo (comercial e resgate dividem o cartão). Não conta o que entrou no histórico copiado da própria rota
+ * oficial — essa cópia guarda também a fala da equipe.
+ */
+export async function enviosDaSofia(unit: Pick<Unit, 'id' | 'kommoSubdomain'>, leadId: number, desde: Date): Promise<Date[]> {
+  const unidades = unit.kommoSubdomain
+    ? (await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } })).map((u) => u.id)
+    : [unit.id];
+  const convs = await prisma.conversation.findMany({ where: { unitId: { in: unidades }, leadId: String(leadId) }, select: { id: true } });
+  if (!convs.length) return [];
+  const ms = await prisma.message.findMany({
+    where: { conversationId: { in: convs.map((c) => c.id) }, role: 'assistant', createdAt: { gte: desde } },
+    select: { createdAt: true, meta: true },
+    orderBy: { createdAt: 'desc' },
+    take: 300,
+  });
+  return ms.filter((m) => (m.meta as { origem?: string } | null)?.origem !== 'kommo_talks').map((m) => m.createdAt);
+}
+
+/** `mensagensOficiais` com a sessão "Doutor Digital" separada: só é Sofia o que bate com um envio do agente. */
+export async function mensagensOficiaisDaUnidade(unit: Unit, kommo: KommoClient, leadId: number, limit = 40): Promise<MensagemOficial[]> {
+  const msgs = await mensagensOficiais(kommo, leadId, limit);
+  const primeira = msgs.find((m) => m.pelaSessao);
+  if (!primeira) return msgs;
+  const envios = await enviosDaSofia(unit, leadId, new Date(primeira.em.getTime() - 10 * 60_000));
+  return separarSessaoDaEquipe(msgs, envios);
 }
 
 /** Tudo que aconteceu depois da última fala da Sofia (equipe e paciente). */
@@ -122,6 +152,6 @@ export const MOTIVO_PARADA_LEITURA: Record<Exclude<DecisaoDeCobranca, 'cobrar' |
 
 /** Lê a rota oficial e decide se a régua pode cobrar este lead agora. */
 export async function decisaoDeCobrancaDoLead(unit: Unit, leadId: number, agora: Date = new Date()): Promise<DecisaoDeCobranca> {
-  const msgs = await mensagensOficiais(createKommoClient(unit), leadId, 12);
+  const msgs = await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), leadId, 12);
   return decidirCobranca(estadoDeLeitura(msgs), agora);
 }

@@ -16,32 +16,65 @@ export interface MensagemOficial {
   texto: string;
   anexo: { tipo: string; link: string | null } | null;
   status: string | null;
+  /**
+   * Saiu por um USUÁRIO do Kommo com nome da Sofia ("Doutor Digital"), não por robô. É a sessão da nota de
+   * voz dela — mas, em Canaã, é também o login com que a equipe escreve. Só o envio registrado pelo agente
+   * decide de quem é (`separarSessaoDaEquipe`).
+   */
+  pelaSessao?: boolean;
 }
 
 /** Usuários do Kommo pelos quais a Sofia fala (nota de voz sai como o usuário da sessão). */
 const NOMES_DA_SOFIA = ['doutor digital', 'i.a sofia', 'ia sofia', 'sofia'];
 
+/**
+ * O app WhatsApp Business do celular da clínica (coexistência). O Kommo marca a mensagem como de robô, mas
+ * quem escreve ali é gente: tratada como Sofia, a IA não via "Agendada consulta para 19/10 às 11h" da
+ * equipe e seguiu pedindo confirmação (Canaã, lead 28339048, 17/10).
+ */
+const APPS_DA_EQUIPE = ['whatsapp business'];
+
 export function classificarAutor(m: Pick<KommoTalkMessage, 'type' | 'author'>): AutorOficial {
   const tipo = (m.author?.type ?? '').toLowerCase();
   if (m.type === 'incoming' || tipo === 'external') return 'paciente';
-  if (tipo === 'bot') return 'sofia';
   const nome = (m.author?.name ?? '').trim().toLowerCase();
+  if (APPS_DA_EQUIPE.includes(nome)) return 'equipe';
+  if (tipo === 'bot') return 'sofia';
   if (NOMES_DA_SOFIA.includes(nome)) return 'sofia';
   return 'equipe';
 }
 
+/** Folga entre o envio que o agente registrou e a mensagem aparecer no Kommo (a voz sobe depois do texto). */
+export const JANELA_DO_ENVIO_MS = 3 * 60_000;
+
+/**
+ * Mensagem pela sessão "da Sofia" só é dela se bate com um envio do agente nessa janela; senão foi a equipe
+ * usando o mesmo login. Robô (Salesbot) e os demais autores não mudam.
+ */
+export function separarSessaoDaEquipe(msgs: MensagemOficial[], enviosDaSofia: Date[], janelaMs = JANELA_DO_ENVIO_MS): MensagemOficial[] {
+  return msgs.map((m) => {
+    if (m.autor !== 'sofia' || !m.pelaSessao) return m;
+    const t = m.em.getTime();
+    return enviosDaSofia.some((e) => Math.abs(e.getTime() - t) <= janelaMs) ? m : { ...m, autor: 'equipe' as const };
+  });
+}
+
 export function normalizar(raw: KommoTalkMessage[]): MensagemOficial[] {
   return raw
-    .map((m) => ({
-      id: String(m.id),
-      em: new Date((m.created_at ?? 0) * 1000),
-      direcao: (m.type === 'incoming' ? 'entrada' : 'saida') as 'entrada' | 'saida',
-      autor: classificarAutor(m),
-      autorNome: (m.author?.name ?? '').trim(),
-      texto: (m.text ?? '').trim(),
-      anexo: m.attachment?.type ? { tipo: String(m.attachment.type), link: m.attachment.link ?? null } : null,
-      status: m.delivery_status ?? null,
-    }))
+    .map((m) => {
+      const autor = classificarAutor(m);
+      return {
+        id: String(m.id),
+        em: new Date((m.created_at ?? 0) * 1000),
+        direcao: (m.type === 'incoming' ? 'entrada' : 'saida') as 'entrada' | 'saida',
+        autor,
+        autorNome: (m.author?.name ?? '').trim(),
+        texto: (m.text ?? '').trim(),
+        anexo: m.attachment?.type ? { tipo: String(m.attachment.type), link: m.attachment.link ?? null } : null,
+        status: m.delivery_status ?? null,
+        ...(autor === 'sofia' && (m.author?.type ?? '').toLowerCase() !== 'bot' ? { pelaSessao: true } : {}),
+      };
+    })
     .sort((a, b) => a.em.getTime() - b.em.getTime());
 }
 

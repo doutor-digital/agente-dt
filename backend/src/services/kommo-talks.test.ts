@@ -93,3 +93,52 @@ test('decidirCobranca: equipe falou por último ou paciente respondeu depois →
   assert.equal(estado.equipeFalouPorUltimo, true);
   assert.equal(estado.ultimaSaida?.autor, 'equipe');
 });
+
+// ── a equipe invisível de Canaã (17/10, lead 28339048) ──
+
+test('classificarAutor: o app WhatsApp Business é a EQUIPE, mesmo marcado como robô pelo Kommo', () => {
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Business' } }), 'equipe');
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'Salesbot' } }), 'sofia');
+});
+
+test('normalizar marca a sessão "Doutor Digital" (pode ser a Sofia em voz ou a equipe); robô não', () => {
+  const msgs = normalizar([
+    raw({ id: '1', type: 'outgoing', author: { type: 'internal', name: 'Doutor Digital' }, text: 'Agendada consulta para dia 19/10 às 11h00✅' }),
+    raw({ id: '2', created_at: t0 + 5, type: 'outgoing', author: { type: 'bot', name: 'Salesbot' }, text: 'Olá!' }),
+  ]);
+  assert.equal(msgs[0]!.pelaSessao, true);
+  assert.equal(msgs[1]!.pelaSessao, undefined);
+});
+
+test('separarSessaoDaEquipe: "Doutor Digital" sem envio do agente na janela é a equipe; com envio, é a Sofia', async () => {
+  const { separarSessaoDaEquipe, JANELA_DO_ENVIO_MS } = await import('./kommo-talks.service.js');
+  const msgs = normalizar([
+    raw({ id: '1', created_at: t0, text: 'Sim consigo' }),
+    raw({ id: '2', created_at: t0 + 3600, type: 'outgoing', author: { type: 'internal', name: 'Doutor Digital' }, text: 'Agendada consulta para dia 19/10 às 11h00✅' }),
+    raw({ id: '3', created_at: t0 + 7200, type: 'outgoing', author: { type: 'internal', name: 'Doutor Digital' }, attachment: { type: 'voice', link: 'x' } as never }),
+    raw({ id: '4', created_at: t0 + 7300, type: 'outgoing', author: { type: 'bot', name: 'Salesbot' }, text: 'Lembrete' }),
+  ]);
+  // o agente só registrou a resposta em voz (1 min antes de ela aparecer no Kommo)
+  const envios = [new Date((t0 + 7200) * 1000 - 60_000)];
+  const r = separarSessaoDaEquipe(msgs, envios);
+  assert.deepEqual(r.map((m) => m.autor), ['paciente', 'equipe', 'sofia', 'sofia']);
+  // fora da janela não é dela
+  assert.equal(separarSessaoDaEquipe(msgs, [new Date((t0 + 7200) * 1000 + JANELA_DO_ENVIO_MS + 1000)])[2]!.autor, 'equipe');
+});
+
+test('com a equipe separada, a Sofia enxerga o "Agendada consulta" antes de responder', async () => {
+  const { separarSessaoDaEquipe } = await import('./kommo-talks.service.js');
+  const msgs = separarSessaoDaEquipe(
+    normalizar([
+      raw({ id: '1', created_at: t0, type: 'outgoing', author: { type: 'bot', name: 'Salesbot' }, text: 'Consegue segunda às 11h?' }),
+      raw({ id: '2', created_at: t0 + 60, text: 'Sim consigo' }),
+      raw({ id: '3', created_at: t0 + 3600, type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Business' }, text: 'Agendada consulta para dia 19/10 às 11h00✅' }),
+      raw({ id: '4', created_at: t0 + 9000, text: 'Ok' }),
+    ]),
+    [],
+  );
+  const desde = desdeUltimaFalaDaSofia(msgs);
+  assert.deepEqual(desde.map((m) => m.id), ['2', '3', '4']);
+  assert.match(renderConversaOficial(desde), /Equipe \(WhatsApp Business\): "Agendada consulta/);
+  assert.match(renderConversaOficial(desde), /NÃO repita nem contradiga o que a equipe disse/);
+});
