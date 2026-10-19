@@ -52,6 +52,7 @@ async function aquecer(unit: Unit): Promise<void> {
     modelName: prefixo.modelName,
     provider: 'anthropic',
     tools: prefixo.tools,
+    corteEsperado: true, // maxTokens: 1 de propósito — não é resposta cortada
   })) as { usage_metadata?: { input_token_details?: { cache_read?: number; cache_creation?: number } } };
   const lidos = resposta?.usage_metadata?.input_token_details?.cache_read ?? 0;
   const gravados = resposta?.usage_metadata?.input_token_details?.cache_creation ?? 0;
