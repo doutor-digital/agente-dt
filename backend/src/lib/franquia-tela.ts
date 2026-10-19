@@ -35,6 +35,9 @@ export const ID_COMPANY_POR_SLUG: Readonly<Record<string, number>> = {
   'doutor-hernia-taubate': 197,
   'doutor-hernia-olimpia': 214,
   'doutor-hernia-rioverde': 440,
+  // Kommo dividido: cada uma entra na própria unidade da franquia (idCompany lido da API em 19/10/2026).
+  'doutor-hernia-petropolis': 192,
+  'doutor-hernia-caxias': 243,
 };
 
 /** O que a tela de edição tem em "Informações Adicionais". `null` = vazio na franquia. */

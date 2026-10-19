@@ -128,6 +128,18 @@ test('abrirSessaoTela: sem login no ambiente ou unidade fora do mapa não faz re
   assert.equal(pediu, 0);
 });
 
+test('abrirSessaoTela: Petrópolis e Caxias (Kommo dividido) entram cada uma na própria unidade da franquia', async () => {
+  for (const [slug, idCompany] of [['doutor-hernia-petropolis', '192'], ['doutor-hernia-caxias', '243']] as const) {
+    const unidades: string[] = [];
+    const falso = (async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith('/dashboard/alterar_unidade')) unidades.push(new URLSearchParams(String(init?.body)).get('id_company') ?? '');
+      return respostaFalsa(String(url).endsWith('/dashboard/agenda') ? 'id_company'.padEnd(60_000, '.') : '');
+    }) as unknown as typeof fetch;
+    assert.ok(await abrirSessaoTela(slug, { FRANQUIA_TELA_USER: 'u', FRANQUIA_TELA_PASS: 'p' }, falso), slug);
+    assert.deepEqual(unidades, [idCompany], slug);
+  }
+});
+
 test('abrirSessaoTela: login que não abre a agenda dá null', async () => {
   const falso = (async () => respostaFalsa('<html>senha errada</html>')) as unknown as typeof fetch;
   assert.equal(await abrirSessaoTela('doutor-hernia-serra', { FRANQUIA_TELA_USER: 'u', FRANQUIA_TELA_PASS: 'p' }, falso), null);
