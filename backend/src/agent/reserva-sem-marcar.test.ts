@@ -40,6 +40,14 @@ test('com consulta existente: dia da semana ou hora diferentes continuam barrado
   assert.ok(reservaSemMarcar('Fica reservado quarta às 11h30!', doVinculo));
 });
 
+test('consulta no formato do prompt ("20/10/2026 às 11:30"): o dia da semana sai da data (3º achado do Codex)', () => {
+  const ev = { marcouAgora: false, consultasValidas: ['Consulta CONFIRMADA agora no sistema da clínica: **20/10/2026 às 11:30**'] };
+  assert.equal(reservaSemMarcar('Fica reservado terça às 11h30!', ev), null, 'terça = 20/10/2026');
+  assert.ok(reservaSemMarcar('Fica reservado sexta às 11h30!', ev), 'sexta não é a consulta');
+  // a consulta que existe não diz a hora: promessa com hora não tem como ser provada → barra
+  assert.ok(reservaSemMarcar('Fica reservado terça às 15h!', { marcouAgora: false, consultasValidas: ['Este paciente TEM consulta marcada, mas eu NÃO consegui confirmar o dia'] }));
+});
+
 test('marcas do quando: data, dia e hora em vários formatos', () => {
   const m = marcasDoQuando('terça-feira, 20/10, às 11h30 ou 14:00 e às 9h');
   assert.deepEqual([...m.datas], ['20/10']);

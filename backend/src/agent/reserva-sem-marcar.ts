@@ -98,7 +98,7 @@ export function reservaSemMarcar(
   // Promessa sem dia nem hora ("sua consulta está confirmada") fala da consulta que existe.
   for (const k of ['datas', 'dias', 'horas'] as const) {
     if (prometido[k].size === 0) continue;
-    if (existe[k].size === 0) continue;
+    // a consulta que existe não diz isso (3º achado do Codex): não dá pra provar que é ela → barra
     if (![...prometido[k]].every((v) => existe[k].has(v))) return p;
   }
   return null;
@@ -116,6 +116,12 @@ export function marcasDoQuando(texto: string): { datas: Set<string>; dias: Set<s
   for (const m of texto.matchAll(/\b(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/g)) {
     dias.add(DIAS[new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`).getUTCDay()]);
     horas.add(`${Number(m[4])}:${m[5]}`);
+  }
+  // "20/10/2026 às 11:30" é como o prompt escreve a consulta (`porExtenso`): sem dia da semana, então ele
+  // sai da data — senão "terça às 11h30", que é a mesma consulta, seria barrado
+  for (const m of texto.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g)) {
+    const d = new Date(`${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}T12:00:00Z`);
+    if (!Number.isNaN(d.getTime())) dias.add(DIAS[d.getUTCDay()]);
   }
   for (const m of n.replace(/\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}/g, ' ').matchAll(/\b(\d{1,2})(?::(\d{2})|h(\d{2})?)(?!\d)/g)) {
     horas.add(`${Number(m[1])}:${m[2] ?? m[3] ?? '00'}`);
