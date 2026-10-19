@@ -136,3 +136,40 @@ test('título genérico não derruba a origem — só o gancho', () => {
   assert.doesNotMatch(t, /JÁ NO ASSUNTO/, 'sem promessa, não promete abrir pelo assunto');
   assert.match(t, /como você nos conheceu/i, 'mas segue proibindo a pergunta');
 });
+
+// ── anúncio no Status do WhatsApp (Canaã, 17/10: a IA disse que o vídeo era "do status de alguém") ──
+
+test('o link do clique diz quando o anúncio apareceu no Status do WhatsApp', async () => {
+  const { veioDoStatus } = await import('./anuncio-de-origem.js');
+  assert.equal(veioDoStatus('https://wa.me/wamo/status/preview/559484169512/abc'), true);
+  assert.equal(veioDoStatus('https://www.whatsapp.com/status/xyz'), true);
+  assert.equal(veioDoStatus('https://wa.me/559484169512'), false);
+  assert.equal(veioDoStatus('https://fb.me/1abcStatus'), false);
+  assert.equal(veioDoStatus(null), false);
+});
+
+test('só o link do Status no cartão já é anúncio: a origem conta como conhecida', () => {
+  const comUrl = (n: string) => (n === '⌂ URL de origem do clique' ? 273020 : IDS[n] ?? null);
+  const a = lerAnuncioDoLead(campos({ 273020: 'https://wa.me/wamo/status/preview/559484169512/x' }), comUrl);
+  assert.equal(a?.noStatus, true);
+  assert.equal(origemJaConhecida(a), true);
+});
+
+test('o nome antigo do campo do link ("Origem – URL") também vale', () => {
+  const antigo = (n: string) => (n === 'Origem – URL' ? 5 : null);
+  assert.equal(lerAnuncioDoLead(campos({ 5: 'https://wa.me/wamo/status/preview/1/x' }), antigo)?.noStatus, true);
+});
+
+test('bloco do Status: diz que o vídeo é da clínica e não deixa prometer envio sem tarefa', () => {
+  const b = renderAnuncioDeOrigem({ titulo: null, anuncio: null, campanha: null, plataforma: 'facebook', origem: 'Meta-Facebook', noStatus: true });
+  assert.match(b, /anúncio da PRÓPRIA clínica \(vídeo ou imagem\) no Status do WhatsApp/);
+  assert.match(b, /esse vídeo é nosso/);
+  assert.match(b, /Nunca diga que é de outra pessoa/);
+  assert.match(b, /criar_tarefa/);
+});
+
+test('sem Status: a exceção do "vídeo que vi" vale, mas sem a regra de envio', () => {
+  const b = renderAnuncioDeOrigem({ titulo: null, anuncio: null, campanha: 'ENG | WPP', plataforma: 'instagram', origem: null });
+  assert.match(b, /EXCEÇÃO: se ELE mesmo falar do vídeo/);
+  assert.doesNotMatch(b, /criar_tarefa/);
+});

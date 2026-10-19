@@ -25,7 +25,12 @@ export const CAMPOS_DO_ANUNCIO = {
   campanha: '⌂ Campanha',
   plataforma: '⌂ Plataforma de origem',
   origem: '⚑ Origem',
+  /** o link do clique: diz ONDE o anúncio apareceu (Status do WhatsApp, feed, stories) */
+  urlDoClique: '⌂ URL de origem do clique',
 } as const;
+
+/** O nome antigo do mesmo campo, do README do rastreio. */
+const URL_DO_CLIQUE_ANTIGO = 'Origem – URL';
 
 export interface AnuncioDeOrigem {
   /** O título do anúncio — a promessa em que a pessoa clicou. */
@@ -34,6 +39,17 @@ export interface AnuncioDeOrigem {
   campanha: string | null;
   plataforma: string | null;
   origem: string | null;
+  /**
+   * O anúncio apareceu no STATUS do WhatsApp (vídeo ou imagem da clínica). Quem vem daí
+   * costuma falar "o vídeo do status" — sem saber disso, a IA inventou em Canaã (17/10) que
+   * o vídeo era "do status de alguém".
+   */
+  noStatus?: boolean;
+}
+
+/** O link do clique é de anúncio exibido no Status do WhatsApp (`wa.me/wamo/status/...`)? */
+export function veioDoStatus(url: string | null | undefined): boolean {
+  return /(wa\.me|whatsapp\.com)\/(.*\/)?status\b/i.test(String(url ?? ''));
 }
 
 type CampoDoLead = { field_id?: number; values?: Array<{ value?: unknown }> };
@@ -91,7 +107,8 @@ export function lerAnuncioDoLead(
     plataforma: pega(CAMPOS_DO_ANUNCIO.plataforma),
     origem: pega(CAMPOS_DO_ANUNCIO.origem),
   };
-  return a.titulo || a.anuncio || a.campanha || a.origem ? a : null;
+  if (veioDoStatus(pega(CAMPOS_DO_ANUNCIO.urlDoClique) ?? pega(URL_DO_CLIQUE_ANTIGO))) a.noStatus = true;
+  return a.titulo || a.anuncio || a.campanha || a.origem || a.noStatus ? a : null;
 }
 
 /**
@@ -103,7 +120,7 @@ export function lerAnuncioDoLead(
  */
 export function origemJaConhecida(a: AnuncioDeOrigem | null | undefined): boolean {
   if (!a) return false;
-  return Boolean(a.titulo || a.anuncio || a.campanha || a.origem);
+  return Boolean(a.titulo || a.anuncio || a.campanha || a.origem || a.noStatus);
 }
 
 /** Texto curto de onde veio, para o bloco e para o log. */
@@ -128,6 +145,7 @@ export function renderAnuncioDeOrigem(a: AnuncioDeOrigem | null | undefined): st
   if (a.anuncio && a.anuncio !== a.titulo) linhas.push(`- Nome do anúncio: ${a.anuncio}`);
   if (a.campanha) linhas.push(`- Campanha: ${a.campanha}`);
   if (a.plataforma) linhas.push(`- Chegou por: ${a.plataforma}`);
+  if (a.noStatus) linhas.push('- Onde viu: um anúncio da PRÓPRIA clínica (vídeo ou imagem) no Status do WhatsApp');
   if (linhas.length === 0 && a.origem) linhas.push(`- Origem registrada: ${a.origem}`);
 
   const comoUsar = a.titulo
@@ -146,6 +164,16 @@ export function renderAnuncioDeOrigem(a: AnuncioDeOrigem | null | undefined): st
     'PROIBIDO: dizer que viu o clique dele, citar o anúncio, falar em "campanha", ' +
     '"anúncio" ou "you clicked". Ele não lembra o que clicou e soa vigilância. ' +
     'PROIBIDO também perguntar "como você nos conheceu" — a resposta está aqui em cima.',
+    'EXCEÇÃO: se ELE mesmo falar do vídeo, da foto ou do post que viu, é material da clínica — ' +
+    'confirme com naturalidade que é nosso ("esse vídeo é nosso, da Doutor Hérnia!"). Nunca diga que ' +
+    'é de outra pessoa nem que você viu em algum lugar.',
+    ...(a.noStatus
+      ? [
+          'Você não consegue enviar vídeo. Só diga que a equipe vai mandar se, no MESMO turno, criar a ' +
+            'tarefa para a equipe (criar_tarefa: "Enviar ao paciente o vídeo do anúncio do Status"); sem ' +
+            'a tarefa, não prometa envio — ofereça explicar por aqui e siga para a dor dele.',
+        ]
+      : []),
     'Se o assunto do anúncio não combinar com o que ele contar, siga o que ELE disser: ' +
     'a queixa da pessoa vale mais que a segmentação do anúncio.',
     '</anuncio_de_origem>',
