@@ -283,6 +283,16 @@ export interface InvokeChatModelArgs {
    * mensagem e não serviria.
    */
   conversaId?: string | null;
+  /**
+   * A chamada para no teto de propósito (o cache-keepalive pede 1 token só para manter o prefixo quente).
+   * Sem isto ela disparava o canário de truncamento ~240×/dia e afogava os cortes de verdade (medido em 19/10/2026).
+   */
+  corteEsperado?: boolean;
+}
+
+/** O canário de truncamento: só avisa quando o corte não foi pedido. */
+export function avisarCorte(stopReason: string | undefined, corteEsperado = false): boolean {
+  return stopReason === 'max_tokens' && !corteEsperado;
 }
 
 export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknown> {
@@ -310,7 +320,7 @@ export async function invokeChatModel(args: InvokeChatModelArgs): Promise<unknow
 
     const stopReason = (response as { additional_kwargs?: { stop_reason?: string } })
       .additional_kwargs?.stop_reason;
-    if (stopReason === 'max_tokens') {
+    if (avisarCorte(stopReason, args.corteEsperado)) {
       logger.warn(
         { unitId: args.unitId, model: args.modelName, traceId: args.traceId },
         'resposta truncada por max_tokens — aumentar openaiMaxTokens da unidade',
