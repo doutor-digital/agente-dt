@@ -182,3 +182,87 @@ test('"meu nome é X" continua funcionando mesmo com pergunta na frase', () => {
   // assim: quem diz o nome e emenda uma pergunta está dizendo o nome.
   assert.equal(detectNameDisclosure('meu nome é Dayane, vcs atendem plano?'), 'Dayane');
 });
+
+/* ─── Rede de segurança gravando frase como nome (medido 19/10/2026) ───────── */
+
+test('depois de perguntar o nome, frase que só COMEÇA com palavra não vira nome', () => {
+  // Respostas reais que viraram título de cartão ("Desculpa 14/10/2026", "Atrapalha …", "Flow …").
+  const frases = [
+    'Desculpa apertei errado, não tenho problema nenhum',
+    'Desculpa',
+    'Obg',
+    'Obgd',
+    'Combinado',
+    'Mas hj eu tô de férias',
+    'Mas vocês pode me dizer o número o nome da clínica aí que eu posso levar ele aí',
+    'Assim eu estou sentindo muita dor não minha parte lombar nas pernas',
+    'Tinha o costume em ir em quiropratas, devido a um acidente a anos atras',
+    'Atrapalha no meu desempenho no trabalho',
+    'Atrapalha no trabalho',
+    'Já fiz uma cirurgia de ernia de disco na coluna',
+    'Já fiz',
+    'Agora não',
+    'Depois entro em contato.',
+    'Amiga',
+    'Então',
+    'Era sobre uma dor na coluna',
+    'Fui pegar um peso ontem senti uma fisgada nas costas',
+    'Achei muito legal esse vídeo',
+    'Aí tem ortopedista',
+    'Flow responses received',
+    'Unable to display this message in CRM. View it in the WhatsApp Business app.',
+    'Unable to open this message. Ask the contact to send it in a supported WhatsApp format.',
+    'Meu amor ❤️ Paulo +55 94 99115-4449',
+  ];
+  for (const f of frases) {
+    assert.equal(detectNameDisclosure(f, { nameWasAsked: true }), null, `virou nome: ${f}`);
+  }
+});
+
+test('depois de perguntar o nome, o nome sozinho (com vírgula, ponto ou emoji) continua valendo', () => {
+  const casos: Array<[string, string]> = [
+    ['Flávio', 'Flávio'],
+    ['Flávio Dias Sousa', 'Flávio Dias Sousa'],
+    ['Rerison Kenede Silva', 'Rerison Kenede Silva'],
+    ['Maria, tenho dor na lombar há 2 anos', 'Maria'],
+    ['Ana Paula.', 'Ana Paula'],
+    ['Maria 😊', 'Maria'],
+    ['Lucilene - mãe do José', 'Lucilene'],
+  ];
+  for (const [msg, esperado] of casos) {
+    assert.equal(detectNameDisclosure(msg, { nameWasAsked: true }), esperado, msg);
+  }
+});
+
+test('"sou X" só vira nome com X em maiúscula — profissão não é nome', () => {
+  assert.equal(detectNameDisclosure('No pescoço.ha uns cinco anos , não posso pegar peso, sou auxiliar de professora'), null);
+  assert.equal(detectNameDisclosure('já sou paciente de vocês'), null);
+  assert.equal(detectNameDisclosure('sou motorista de aplicativo'), null);
+  assert.equal(detectNameDisclosure('eu sou João'), 'João');
+  assert.equal(detectNameDisclosure('Oi, sou a Ana'), 'Ana');
+  assert.equal(detectNameDisclosure('sou Amanda'), 'Amanda');
+});
+
+test('rajada, minúscula com artigo e "X meu nome" — nomes reais que a regra nova não pode perder', () => {
+  const casos: Array<[string, string]> = [
+    ['Olá bom dia\n\nLindalva', 'Lindalva'],
+    ['Sou o jonas', 'jonas'],
+    ['Sou a vania', 'vania'],
+    ['Sou suzane', 'suzane'],
+    ['Gilmar meu nome.', 'Gilmar'],
+    ['José Filho', 'José Filho'],
+    ['Irma Santos', 'Irma Santos'],
+  ];
+  for (const [msg, esperado] of casos) {
+    assert.equal(detectNameDisclosure(msg, { nameWasAsked: true }), esperado, msg);
+  }
+  // sem a IA ter perguntado, "sou x" em minúscula e sem artigo não conta
+  assert.equal(detectNameDisclosure('Sou suzane'), null);
+  assert.equal(detectNameDisclosure('Sou a vania'), 'vania');
+});
+
+test('cumprimento, risada e resposta de sistema não viram nome', () => {
+  for (const f of ['Oiii', 'Oie', 'Oii bom dia', 'kkkkk', 'Rsrs', 'Número telefone', 'Confirmo horário', 'Opção inválida', 'Sim, sou a doutora da clínica', 'Hola buenos noches doctora', 'Soy venezolana']) {
+    assert.equal(detectNameDisclosure(f, { nameWasAsked: true }), null, `virou nome: ${f}`);
+  }
+});

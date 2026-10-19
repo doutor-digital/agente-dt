@@ -19,6 +19,7 @@ import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
 import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
 import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
 import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
+import { gravarNomeConfirmadoNoContato } from '../lib/nome-no-contato.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
 const STATUS_GANHO = 142;
@@ -455,13 +456,67 @@ export function buildTools({
         'Nome real do paciente como ele se identificou. Use o que ele disse, ' +
           'com inicial maiúscula (ex: "Maria Silva"). Não invente sobrenomes.',
       ),
+    nomeDeOutraPessoa: z
+      .boolean()
+      .optional()
+      .describe(
+        'true SÓ quando quem escreve no WhatsApp NÃO é o paciente — ex.: a esposa passando o nome do marido, ' +
+          'a mãe marcando pro filho. Aí o nome vai só pro título; o contato continua com o nome de quem escreve. ' +
+          'Omita quando o próprio paciente disse o nome.',
+      ),
   });
+
+  /**
+   * Depois do título, o mesmo nome no CONTATO — é de lá que sai o "Olá, {{contact.name}}" dos modelos do
+   * WhatsApp (ver `lib/nome-no-contato.ts`). Nunca derruba a ferramenta: o título já gravou.
+   */
+  const nomeTambemNoContato = async (leadId: number, contatoId: number | null, nome: string, deOutraPessoa: boolean) => {
+    if (!unit) return;
+    if (deOutraPessoa) {
+      await recorder.step({
+        kind: 'THINKING',
+        title: `Nome de outra pessoa ("${nome}") — só no título; o contato fica com o nome de quem escreve`,
+        payload: { leadId, contatoId, nome },
+      });
+      return;
+    }
+    try {
+      const r = await gravarNomeConfirmadoNoContato({ unit, kommo, contatoId, nome });
+      if (r.acao === 'desligado') return;
+      if (r.acao === 'gravou') {
+        await recorder.step({
+          kind: 'KOMMO_ACTION',
+          title: `Contato ${r.contatoId}: "${r.de}" → "${r.para}"`,
+          payload: { leadId, ...r },
+        });
+      } else if (r.acao === 'gravaria') {
+        await recorder.step({
+          kind: 'THINKING',
+          title: `[só no papel] contato ${r.contatoId} iria de "${r.de}" para "${r.para}"`,
+          payload: { leadId, ...r },
+        });
+      } else {
+        await recorder.step({
+          kind: 'THINKING',
+          title: r.acao === 'manteve' ? `Contato ${r.contatoId} mantido: ${r.motivo}` : 'Cartão sem contato — nome só no título',
+          payload: { leadId, ...r },
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await recorder.step({
+        kind: 'ERROR',
+        title: `Falha ao gravar o nome no contato (título gravou): ${msg}`,
+        payload: { leadId, contatoId, nome, error: msg },
+      });
+    }
+  };
 
   const atualizar_titulo_lead = new DynamicStructuredTool({
     name: 'atualizar_titulo_lead',
     description: desc('atualizar_titulo_lead'),
     schema: atualizarTituloLeadSchema,
-    func: async ({ leadId, nome }) => {
+    func: async ({ leadId, nome, nomeDeOutraPessoa }) => {
       const t0 = performance.now();
       await recorder.step({
         kind: 'TOOL_CALL',
@@ -480,7 +535,7 @@ export function buildTools({
       }
 
       try {
-        const { previous, desired, changed } = await kommo.updateLeadTitleWithDate(
+        const { previous, desired, changed, contatoId } = await kommo.updateLeadTitleWithDate(
           leadId,
           nome,
           fusoDaUnidade(unit),
@@ -493,6 +548,8 @@ export function buildTools({
             payload: { leadId, current: previous, desired },
             latencyMs: latency,
           });
+          // vale também no no-op do título: o cartão pode estar com o nome certo e o contato não
+          await nomeTambemNoContato(leadId, contatoId, nome, nomeDeOutraPessoa === true);
           return `OK — título já está como "${desired}" (sem alteração, ${latency}ms).`;
         }
         await recorder.step({
@@ -501,6 +558,7 @@ export function buildTools({
           payload: { leadId, nome, desired, previous },
           latencyMs: latency,
         });
+        await nomeTambemNoContato(leadId, contatoId, nome, nomeDeOutraPessoa === true);
         return `OK — título do lead ${leadId} agora é "${desired}" (${latency}ms).`;
       } catch (err) {
         const latency = Math.round(performance.now() - t0);

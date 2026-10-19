@@ -1035,6 +1035,20 @@ export class KommoClient {
   }
 
   /**
+   * Nome do contato, falhando DE VERDADE quando o Kommo não responde. O `getContactBasico` acima
+   * devolve `null` nos dois casos, e para decidir se sobrescreve o nome "não li" não pode virar
+   * "contato sem nome".
+   */
+  async getContactNome(contactId: number): Promise<string> {
+    try {
+      const { data } = await this.http.get<{ name?: string }>(`/contacts/${contactId}`);
+      return typeof data?.name === 'string' ? data.name : '';
+    } catch (err) {
+      wrapAxiosError(err, `getContactNome(${contactId})`);
+    }
+  }
+
+  /**
    * Contatos que casam com um texto — usado para achar OUTROS cartões do mesmo
    * telefone. Buscar pelos últimos 8 dígitos é o que atravessa as duas formas do
    * número (com e sem o nono dígito): confirmado em Rio Verde, `query=92135721`
@@ -1891,6 +1905,18 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Só `name`: medido na conta de laboratório (19/10/2026), o PATCH com `name` troca o nome e ZERA
+   * `first_name`/`last_name` — não sobra pedaço do nome do perfil ("Gomes" / "Kamylla") pendurado.
+   */
+  async updateContactName(contactId: number, name: string): Promise<void> {
+    try {
+      await this.http.patch(`/contacts/${contactId}`, { name });
+    } catch (err) {
+      wrapAxiosError(err, `updateContactName(${contactId}, ${name})`);
+    }
+  }
+
   async updateLeadName(leadId: number, name: string): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, { name });
@@ -1964,12 +1990,18 @@ export class KommoClient {
     return { leads, truncado: true };
   }
 
+  /**
+   * `contatoId` = contato principal do cartão, que já vem no mesmo GET — é onde mora o nome que os
+   * modelos do WhatsApp usam ("Olá, {{contact.name}}"). Ver `lib/nome-no-contato.ts`.
+   */
   async updateLeadTitleWithDate(
     leadId: number,
     nome: string,
     tz: string = 'America/Sao_Paulo',
-  ): Promise<{ previous: string | null; desired: string; changed: boolean }> {
+  ): Promise<{ previous: string | null; desired: string; changed: boolean; contatoId: number | null }> {
     const lead = await this.getLead(leadId);
+    const contatos = lead._embedded?.contacts ?? [];
+    const contatoId = (contatos.find((c) => c.is_main) ?? contatos[0])?.id ?? null;
     const createdAtMs = (lead.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
     const dateBR = new Intl.DateTimeFormat('pt-BR', {
       timeZone: tz,
@@ -1980,10 +2012,10 @@ export class KommoClient {
     const desired = `${nome.trim()} ${dateBR}`;
     const previous = lead.name ?? null;
     if (previous === desired) {
-      return { previous, desired, changed: false };
+      return { previous, desired, changed: false, contatoId };
     }
     await this.updateLeadName(leadId, desired);
-    return { previous, desired, changed: true };
+    return { previous, desired, changed: true, contatoId };
   }
 
   async addLeadNote(leadId: number, text: string): Promise<{ id?: number } | null> {

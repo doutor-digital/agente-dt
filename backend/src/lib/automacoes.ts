@@ -351,6 +351,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/titulo-padrao.ts',
   },
   {
+    id: 'nome-no-contato',
+    chave: 'NOME_NO_CONTATO_SLUGS',
+    nome: 'Nome confirmado também no contato',
+    oQueFaz:
+      'Quando a IA confirma o nome do paciente, grava também no CONTATO do Kommo — é dele que sai o "Olá, {{contact.name}}" dos modelos do WhatsApp.',
+    pegadinha:
+      'Não grava quando o nome é de outra pessoa (a esposa marcando pro marido) nem quando o contato já tem uma versão mais completa ("Anny Santos" fica, mesmo com "Anny" confirmado). Nome achado pela rede de segurança do título não entra.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/nome-no-contato.ts',
+  },
+  {
     id: 'captura-unificada',
     chave: 'CAPTURA_UNIFICADA_SLUGS',
     nome: 'Captura unificada de campos',
