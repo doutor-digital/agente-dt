@@ -68,7 +68,9 @@ function comMaiuscula(p: string): string {
 }
 
 function primeiraPalavraDeNome(s: string | null | undefined): string | null {
-  for (const p of limparNome(s).split(' ')) {
+  // "/" separa quem escreve de quem é o paciente ("Milena/Leomar dos Santos"): sem cortar nela, a palavra
+  // inteira não parece nome e o primeiro nome vira "Santos".
+  for (const p of limparNome(s).split(/[\s/]+/)) {
     const palavra = p.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '');
     if (palavra.length < 2 || !/^\p{L}+(?:['-]\p{L}+)*$/u.test(palavra)) continue;
     if (NAO_E_NOME.has(palavra.toLocaleLowerCase('pt-BR'))) continue;
