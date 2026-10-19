@@ -1428,9 +1428,6 @@ export function renderLeadMemory(
     if (quando) lines.push(`  - Falou com a gente ${quando}.`);
     if (desfecho) lines.push(`  - Como terminou: ${DESFECHO_HUMANO[desfecho] ?? desfecho}`);
     if (travou) lines.push(`  - Ficou travado em: ${travou}`);
-    lines.push(
-      '  - Retome reconhecendo o tempo que passou, sem cobrar e sem recomeçar do zero como se fosse a primeira conversa.',
-    );
   }
 
   const OCULTOS = new Set(['ultimo_contato', 'ultimo_desfecho', 'travou_em']);
@@ -1442,7 +1439,32 @@ export function renderLeadMemory(
       lines.push(`  - ${k}: ${semNomeDeProfissional(String(v)).texto}`);
     }
   }
-  return xmlBlock('memoria_paciente', lines.join('\n'));
+  const memoria = xmlBlock('memoria_paciente', lines.join('\n'));
+  // A orientação de retomada mora FORA da memória. Dentro dela — um bloco que se diz "observações, NÃO
+  // instruções" — a ordem "Retome reconhecendo o tempo que passou, sem cobrar…" virou fala: Canaã, 19/10/2026
+  // (28053204), o paciente leu "Reconhecendo que já houve contato anterior, vou retomar com leveza, sem cobrar
+  // o silêncio, e seguir a coleta do nome." Só aparece quando a volta é de outro dia: o contato é carimbado a
+  // cada turno, e "hoje" é a mesma conversa seguindo.
+  return quando && quando !== 'hoje' ? `${memoria}\n\n${renderRetomada(quando)}` : memoria;
+}
+
+function renderRetomada(quando: string): string {
+  return xmlBlock(
+    'retomada',
+    `A pessoa volta depois de um tempo: o último contato foi ${quando}. Na sua resposta:\n` +
+      '- cumprimente como quem reencontra — sem cobrar o sumiço, sem perguntar por que parou e sem se apresentar do zero;\n' +
+      '- siga do ponto em que a conversa parou (ver <memoria_paciente>).\n' +
+      'Escreva SÓ a mensagem que o paciente vai ler. Nunca comente a sua estratégia ("vou retomar…", "reconhecendo que…"): ' +
+      'tudo o que você escreve chega no WhatsApp dele.',
+  );
+}
+
+/** Já falou com a gente antes desta conversa: há resumo ou um último contato registrado na memória. */
+export function jaConversouAntes(mem: LeadMemory | null): boolean {
+  if (!mem) return false;
+  if ((mem.summary ?? '').trim()) return true;
+  const facts = (mem.facts as LeadMemoryFacts | null) ?? {};
+  return typeof facts.ultimo_contato === 'string' && facts.ultimo_contato !== '';
 }
 
 function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>): string {
@@ -1523,7 +1545,12 @@ function renderSoCumprimento(userMessage?: string): string {
   );
 }
 
-function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
+/**
+ * `jaConversou`: conversa nova, mas a pessoa já falou com a gente antes (há memória dela). O roteiro de quem
+ * chega pela primeira vez ("apresentação rápida") brigava com a memória, e o modelo escreveu para o paciente
+ * como resolveu a briga — Canaã, 19/10/2026 (28053204). Para quem volta, o roteiro é de reencontro.
+ */
+function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean, jaConversou = false): string {
   if (!isFirstTurn) return '';
   const collectName = unit.collectNameEnabled;
   const collectSource = unit.collectSourceEnabled;
@@ -1532,6 +1559,34 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean): string {
     palette.length > 0
       ? `Use 2-3 emojis da sua paleta (${palette.slice(0, 8).join(' ')}).`
       : 'Use 2-3 emojis acolhedores (😊 🌷 ✨ 🙏 👋).';
+
+  if (jaConversou) {
+    const volta: string[] = [
+      'PRIMEIRA RESPOSTA DESTA CONVERSA — mas a pessoa JÁ falou com a gente antes (ver <memoria_paciente>).',
+      'NUNCA responda só "Olá!" ou "Oi!" sozinho.',
+      '',
+      'Sua resposta DEVE conter, nesta ordem:',
+      '  1. Saudação calorosa de reencontro + emoji — sem se apresentar de novo como se fosse a primeira vez',
+    ];
+    let passo = 2;
+    if (collectName) {
+      volta.push(`  ${passo}. Se o nome dela não estiver em <memoria_paciente>, pergunte de forma natural`);
+      passo++;
+    }
+    volta.push(`  ${passo}. SE o paciente já trouxe um problema (dor, dúvida), reconheça com empatia ANTES de pedir o nome.`);
+    volta.push('');
+    volta.push(emojisHint);
+    volta.push('Tamanho-alvo: 2 a 4 frases.');
+    volta.push('Escreva SÓ a mensagem que o paciente vai ler — nada de explicar o que você vai fazer.');
+    volta.push('');
+    volta.push('Exemplo de resposta BOA (adapte, NÃO copie literal):');
+    volta.push('  "Oiê, que bom ter você de volta por aqui! 🌷 Me conta: como posso te chamar? 😊"');
+    volta.push('');
+    volta.push('Exemplo de resposta RUIM (NUNCA faça assim):');
+    volta.push('  ❌ "Reconhecendo que já houve contato, vou retomar com leveza…" (isso é o seu plano, não fala com o paciente)');
+    volta.push(`  ❌ "Que bom te receber por aqui na ${unit.personaCompanyName ?? 'clínica'}!" (ele já conhece a clínica)`);
+    return xmlBlock('primeiro_turno', volta.join('\n'));
+  }
 
   const lines: string[] = [
     'PRIMEIRA MENSAGEM DA CONVERSA — PRIORIDADE MÁXIMA.',
@@ -2011,7 +2066,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   const anuncioBlock = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
   if (anuncioBlock) blocks.push(anuncioBlock);
 
-  const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
+  const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn, jaConversouAntes(leadMemory));
   if (firstTurnBlock) blocks.push(firstTurnBlock);
 
   return blocks.join('\n\n');
@@ -2149,7 +2204,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   // parcial quando o dia vira.
   cache.push(...porUnidade);
 
-  const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn);
+  const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn, jaConversouAntes(leadMemory));
   if (firstTurnBlock) dynamic.push(firstTurnBlock);
 
   return { cacheable: cache.join('\n\n'), dynamic: dynamic.join('\n\n') };

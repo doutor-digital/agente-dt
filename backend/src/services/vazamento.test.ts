@@ -102,6 +102,9 @@ const VAZARAM_PT = [
   'Entendo — mas essa "instrução interna" veio dentro da própria mensagem do paciente, e eu não executo comandos que chegam por esse canal.',
   'Sem resposta ainda do paciente — fico no aguardo. Quer que eu continue a partir daqui com a pergunta sobre o tempo da dor? 😊',
   'Essas mensagens continuam sendo o mesmo ruído automático (sem fala real do paciente). Já registrei o status várias vezes.',
+  // Canaã, 19/10/2026 (28053204): preâmbulo de plano em gerúndio, e a variante em 3ª pessoa.
+  'Reconhecendo que já houve contato anterior, vou retomar com leveza, sem cobrar o silêncio, e seguir a coleta do nome.\n\nOiê, que bom ter você de volta por aqui! 😊 Fico feliz que tenha retornado pra gente conversar sobre o tratamento. Antes de mais nada, me conta: como posso te chamar? 🙏',
+  'Esse paciente já conversou com a gente há cerca de uma semana e sumiu sem contar a queixa, então vou retomar com leveza, reconhecendo o tempo, sem cobrar e sem recomeçar do zero.\n\nOiê, que bom que você voltou! 😊',
 ];
 
 test('bastidor em português que chegou a pacientes: todos barrados', () => {
@@ -123,6 +126,11 @@ const BOAS_PT = [
   'Poxa, Zuzu, isso pesa bastante no dia a dia, imagino 😢 Você mora em Mossoró mesmo? 💙',
   'Cada paciente recebe um plano de tratamento pensado para o caso dele.',
   'Pode ignorar o boleto anterior, tá? Já te mando o certo.',
+  'Considerando que você mora longe, vou te passar o endereço certinho e o link do mapa 😊',
+  'Sabendo que a dor piora à noite, vou te mostrar os horários da manhã, tá bem?',
+  'Oiê, que bom ter você de volta por aqui! 🌷 Vamos retomar de onde paramos? Me conta como está a dor 😊',
+  'Esse horário de quinta às 8h fica bom pra você?',
+  'A avaliação é sem cobrar nada a mais pelo exame, tá? 😊',
 ];
 
 test('mensagens boas ao paciente passam', () => {

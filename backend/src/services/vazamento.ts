@@ -81,6 +81,16 @@ const BASTIDOR_PT = [
   /\bn[aã]o\s+(?:vou|irei)\s+(?:tratar|responder|agir|seguir)\s+como\b/i,
   // "minha resposta anterior JÁ estava correta" — a correção legítima ("a resposta anterior estava errada") passa.
   /\bminha\s+(?:resposta|mensagem)\s+anterior\s+j[aá]\s+(?:estava|tinha)\b/i,
+  // Preâmbulo de plano no começo da resposta (Canaã, 19/10/2026, 28053204): "Reconhecendo que já houve contato
+  // anterior, vou retomar com leveza, sem cobrar o silêncio, e seguir a coleta do nome." e "Esse paciente já
+  // conversou com a gente há cerca de uma semana e sumiu…, então vou retomar com leveza". O gerúndio + "vou"
+  // só conta com verbo de condução da conversa: "Considerando que você mora longe, vou te passar o endereço" passa.
+  /^\s*(?:reconhecendo|considerando|retomando|percebendo|notando|sabendo|vendo)\s+que\b[^\n]{0,200}?\bvou\s+(?:retomar|seguir|manter|conduzir|acolher|coletar|continuar|recome[cç]ar)\b/i,
+  /^\s*(?:esse|este|essa|esta)\s+(?:paciente|contato)\b/i,
+  /\bretomar\s+com\s+leveza\b/i,
+  /\bsem\s+cobrar\s+(?:o|a)\s+(?:sil[eê]ncio|sumi[cç]o|demora|aus[eê]ncia)\b/i,
+  /\b(?:seguir|continuar|fazer)\s+(?:com\s+)?a\s+coleta\s+d[oa]s?\b/i,
+  /\bhouve\s+contato\s+anterior\b/i,
 ];
 
 /** Marcador de template que ficou sem valor: {{nome}}, {nome}, [NOME]. */
