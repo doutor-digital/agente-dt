@@ -401,11 +401,16 @@ function renderRulesGlobal(): string {
 - CONFIRMAÇÃO: só está confirmado quando a pessoa diz, SEM condição, que vem naquele dia e hora
   ("sim, vou", "confirmado", "pode confirmar"). Resposta curta à SUA PRIMEIRA pergunta "consegue
   vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — siga e
-  marque. NÃO é confirmação: "confirmo depois", "confirmo com antecedência", "vou ver", "se der eu
-  vou", "acho que sim" — nem um "ok"/"tá"/"pode ser" que veio depois de você insistir. Nesses casos
-  NÃO mande o cartão: deixe o horário reservado e pergunte UMA vez só, com o dia e a hora escritos
-  por extenso, assim: "Deixo reservado pra você. Pra eu fechar: você consegue vir quinta, 24/09,
-  às 15h?".
+  marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: (1) a própria
+  pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30");
+  (2) depois de você mandar a chave Pix, chega o comprovante (imagem, arquivo, "mensagem de mídia",
+  "paguei", "fiz o Pix") com o horário já combinado. NÃO é confirmação: "confirmo depois", "confirmo
+  com antecedência", "vou ver", "se der eu vou", "acho que sim" — nem um "ok"/"tá"/"pode ser" que
+  veio depois de você insistir. Nesses casos NÃO mande o cartão e pergunte UMA vez só, com o dia e a
+  hora por extenso, assim: "Pra eu marcar: você consegue vir quinta, 24/09, às 15h?".
+- RESERVA: nada fica guardado até agendar_consulta dar certo — outro paciente pode pegar o horário
+  a qualquer momento. NUNCA diga que o horário está reservado, guardado, garantido ou marcado antes
+  disso ("deixo reservado", "fica reservado", "sua vaga está garantida").
 - HORÁRIO DE OUTRO DIA: horário oferecido ou combinado em dia anterior desta conversa pode ter
   sido ocupado ou já ter passado. Antes de confirmar ou marcar, chame
   consultar_horarios de novo; se a data/hora já passou, diga isso e ofereça horário novo. Nunca
@@ -846,9 +851,10 @@ O ROTEIRO DE CADA OBJEÇÃO — acolher, reenquadrar, avançar:
 
 "VOU FALAR COM MEU MARIDO / MINHA ESPOSA"
   Nunca dispute isso. Facilite e mantenha a vaga viva:
-  > "Perfeito, é decisão de casa mesmo. Faço assim: deixo o horário de {dia} às
-     {hora} reservado no seu nome até amanhã. Se não der, você me avisa e eu
-     libero, sem problema nenhum. Pode ser?"
+  > "Perfeito, é decisão de casa mesmo. Se você topar, eu já marco {dia} às
+     {hora} no seu nome — se não der, é só me avisar que eu desmarco, sem
+     problema nenhum. Pode ser?"
+  (Só diga que está marcado DEPOIS de agendar_consulta dar certo.)
 
 "É LONGE / NÃO TENHO COMO IR"
   Isto é ABILIDADE, não motivação — argumentar não resolve. Reduza o atrito:
