@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { marcouNesteTurno, promptTemConsulta, reservaSemMarcar, semOTrecho } from './reserva-sem-marcar.js';
+import { blocoDaConsulta, datasCitadas, marcouNesteTurno, promptTemConsulta, reservaSemMarcar, semOTrecho } from './reserva-sem-marcar.js';
 
-const SEM_NADA = { marcouAgora: false, temConsulta: false };
+const SEM_NADA = { marcouAgora: false, consultasValidas: [] as string[] };
 
 test('Anderson (Olímpia, 19/10): "vou deixar reservado" sem consulta é barrado', () => {
   const t = 'Perfeito, Anderson! Vou deixar reservado pra você. Só confirmando: você consegue vir terça-feira, 20/10, às 11h30? 😊';
@@ -15,10 +15,25 @@ test('o exemplo que o próprio prompt ensinava também é barrado', () => {
   assert.ok(reservaSemMarcar('Deixo reservado pra você. Pra eu fechar: você consegue vir quinta, 24/09, às 15h?', SEM_NADA));
 });
 
-test('com consulta marcada neste turno ou no prompt, a mesma frase passa', () => {
+test('com consulta marcada neste turno, ou falando da MESMA data da consulta que existe, passa', () => {
   const t = '✅ Agendamento confirmado, Marcos! ⭐ Data: terça-feira, 20/10/2026 ⏰ Horário: 11:30';
-  assert.equal(reservaSemMarcar(t, { marcouAgora: true, temConsulta: false }), null);
-  assert.equal(reservaSemMarcar('Sua consulta está marcada pra terça, 20/10, às 11h30.', { marcouAgora: false, temConsulta: true }), null);
+  assert.equal(reservaSemMarcar(t, { marcouAgora: true }), null);
+  const bloco = 'Consulta CONFIRMADA agora no sistema da clínica: **terça-feira, 20/10, às 11h30**';
+  assert.equal(reservaSemMarcar('Sua consulta está marcada pra terça, 20/10, às 11h30.', { marcouAgora: false, consultasValidas: [bloco] }), null);
+  assert.equal(reservaSemMarcar('Sua consulta está confirmada.', { marcouAgora: false, consultasValidas: [bloco] }), null, 'sem data = fala da que existe');
+  assert.equal(reservaSemMarcar('Fica reservado terça, 20/10, às 11h30!', { marcouAgora: false, consultasValidas: ['2026-10-20T11:30'] }), null, 'vínculo do agendar');
+});
+
+test('ter OUTRA consulta não libera promessa de data nova (achado do Codex)', () => {
+  const bloco = '- Próximo agendamento: sessão em **quarta, 21/10, às 9h**.';
+  assert.ok(reservaSemMarcar('Deixo reservado pra sexta, 23/10, às 15h!', { marcouAgora: false, consultasValidas: [bloco] }));
+});
+
+test('datas: dd/mm e AAAA-MM-DD viram a mesma coisa; bloco do prompt é extraído', () => {
+  assert.deepEqual([...datasCitadas('terça, 20/10 às 11h30 e 2026-10-21T07:00')].sort(), ['20/10', '21/10']);
+  assert.deepEqual([...datasCitadas('dia 05/03')], ['5/3']);
+  assert.equal(blocoDaConsulta('a <consulta_do_paciente>\nX 20/10\n</consulta_do_paciente> b').trim(), 'X 20/10');
+  assert.equal(blocoDaConsulta('sem bloco'), '');
 });
 
 test('oferta, pergunta, condição e explicação de preço não são promessa', () => {

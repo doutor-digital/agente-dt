@@ -54,12 +54,14 @@ import {
 } from './llm-policy.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import {
+  agendamentoDoVinculo,
+  blocoDaConsulta,
   INSTRUCAO_RESERVA_SEM_MARCAR,
   marcouNesteTurno,
+  PERGUNTA_NEUTRA,
   promptTemConsulta,
   reservaSemMarcar,
   semOTrecho,
-  vinculoTemAgendamento,
 } from './reserva-sem-marcar.js';
 import { ehSemNome, ehTituloPadrao } from '../lib/titulo-padrao.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
@@ -657,6 +659,7 @@ export async function buildAgentGraph(
     // pergunta final (mais abaixo) também sai pela reserva, em vez de bater de novo na chave morta.
     let modeloAtivo = model;
     let provedorAtivo: string = provider;
+    let respondeuPlanoB = false;
     try {
       // Provedor comprovadamente fora não ganha mais 35 segundos de espera por
       // mensagem: pula direto pro plano B, e volta sozinho quando se recuperar.
@@ -748,6 +751,7 @@ export async function buildAgentGraph(
             PLANO_B_TIMEOUT_MS,
           )) as AIMessage;
 
+          respondeuPlanoB = true;
           await recorder.step({
             kind: 'THINKING',
             title: `🔁 Plano B: ${planoB.provider} (${planoB.modelName}) respondeu no lugar do modelo principal`,
@@ -851,13 +855,19 @@ export async function buildAgentGraph(
         const m = nonSystemMessages[i];
         if (m.getType() === 'tool') doTurno.push(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
       }
-      let promessa = reservaSemMarcar(textoFinal, { marcouAgora: marcouNesteTurno(doTurno), temConsulta: promptTemConsulta(promptDoTurno) });
-      if (promessa && state.leadId && (await vinculoTemAgendamento(unit.id, Number(state.leadId), fusoDaUnidade(unit)))) promessa = null;
+      const marcouAgora = marcouNesteTurno(doTurno);
+      const consultasValidas = promptTemConsulta(promptDoTurno) ? [blocoDaConsulta(promptDoTurno)] : [];
+      let promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
+      if (promessa && state.leadId) {
+        const doVinculo = await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit));
+        if (doVinculo) promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas: [...consultasValidas, doVinculo] });
+      }
       if (promessa) {
         const t1 = performance.now();
         let refeita: AIMessage | null = null;
         let erroRefeita: string | null = null;
-        if (!reservaJaRefeita) {
+        // Com o plano B respondendo, o modelo principal está fora: refazer nele só gastaria o tempo limite.
+        if (!reservaJaRefeita && !respondeuPlanoB) {
           reservaJaRefeita = true;
           try {
             refeita = (await withTimeout(
@@ -888,30 +898,29 @@ export async function buildAgentGraph(
           return { messages: [refeita] } satisfies Partial<AgentStateType>;
         }
         const textoRefeito = refeita ? aiTextFromContent(refeita.content).trim() : '';
-        const semPromessa = (t: string) => !reservaSemMarcar(t, { marcouAgora: false, temConsulta: false });
-        let saida: 'refeita' | 'cortada' | 'original' = 'original';
+        const semPromessa = (t: string) => !reservaSemMarcar(t, { marcouAgora: false, consultasValidas });
+        let saida: 'refeita' | 'cortada' | 'neutra';
+        const cortado = semOTrecho(textoFinal, promessa.trecho);
         if (textoRefeito && semPromessa(textoRefeito) && !detectarVazamento(textoRefeito)) {
           saida = 'refeita';
-        } else {
-          const cortado = semOTrecho(textoFinal, promessa.trecho);
-          if (cortado && semPromessa(cortado)) {
-            saida = 'cortada';
-            textoFinal = cortado;
-            response.content = cortado;
-          }
-        }
-        if (saida === 'refeita') {
           textoFinal = textoRefeito;
-          response.content = textoRefeito;
+        } else if (cortado && semPromessa(cortado)) {
+          saida = 'cortada';
+          textoFinal = cortado;
+        } else {
+          // Nem a refeita nem o corte tiraram a promessa: a original NÃO sai (achado do Codex, 19/10).
+          saida = 'neutra';
+          textoFinal = PERGUNTA_NEUTRA;
         }
+        response.content = textoFinal;
         await recorder.step({
-          kind: saida === 'original' ? 'ERROR' : 'THINKING',
+          kind: saida === 'neutra' ? 'ERROR' : 'THINKING',
           title:
             saida === 'refeita'
               ? `📅 Disse que estava reservado sem marcar — reescrita sem a promessa ("${promessa.trecho.slice(0, 80)}")`
               : saida === 'cortada'
                 ? `📅 Disse que estava reservado sem marcar — o trecho saiu da resposta ("${promessa.trecho.slice(0, 80)}")`
-                : `📅 Disse que estava reservado sem marcar e não consegui tirar — saiu a original ("${promessa.trecho.slice(0, 80)}")`,
+                : `📅 Disse que estava reservado sem marcar e não consegui tirar — saiu a pergunta neutra ("${promessa.trecho.slice(0, 80)}")`,
           payload: { trecho: promessa.trecho, forma: promessa.forma, refeita: textoRefeito || null, final: textoFinal, erro: erroRefeita },
           latencyMs: Math.round(performance.now() - t1),
         });

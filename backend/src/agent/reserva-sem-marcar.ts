@@ -29,7 +29,8 @@ export function marcouNesteTurno(resultadosDasFerramentas: ReadonlyArray<string>
 
 /**
  * O prompt do turno diz que existe consulta (ou sessão) futura de verdade — marcada pela IA antes, pela
- * recepção, ou remarcada. Os textos são os do bloco <consulta_do_paciente> (`prompt-composer.ts`).
+ * recepção, ou remarcada. Os textos são os do bloco <consulta_do_paciente> (`prompt-composer.ts`); "JÁ
+ * PASSOU" e "DESMARCADA" não contam.
  */
 const TEM_CONSULTA = /Consulta CONFIRMADA agora no sistema da clínica|Este paciente TEM consulta marcada|Próximo agendamento:/;
 
@@ -58,14 +59,46 @@ export function reservaAfirmada(texto: string | null | undefined): Promessa | nu
   return null;
 }
 
-/** A promessa que não pode sair: afirma consulta marcada/reservada e não há consulta nenhuma. */
+/** "20/10", "2026-10-20" → "20/10" (sem zero à esquerda), para comparar a data prometida com a da consulta que existe. */
+export function datasCitadas(texto: string | null | undefined): Set<string> {
+  const s = String(texto ?? '');
+  const out = new Set<string>();
+  // "2026-10-20T11:30": o T colado não é fronteira de palavra, por isso (?!\d) e não \b no fim
+  for (const m of s.matchAll(/\b(\d{4})-(\d{2})-(\d{2})(?!\d)/g)) out.add(`${Number(m[3])}/${Number(m[2])}`);
+  for (const m of s.replace(/\b\d{4}-\d{2}-\d{2}(?!\d)/g, ' ').matchAll(/\b(\d{1,2})\/(\d{1,2})\b/g)) out.add(`${Number(m[1])}/${Number(m[2])}`);
+  return out;
+}
+
+/** O bloco <consulta_do_paciente> do prompt (onde está a data da consulta que existe), ou '' sem ele. */
+export function blocoDaConsulta(prompt: string | null | undefined): string {
+  const m = String(prompt ?? '').match(/<consulta_do_paciente>([\s\S]*?)<\/consulta_do_paciente>/);
+  return m ? m[1] : '';
+}
+
+/**
+ * A promessa que não pode sair: afirma consulta marcada/reservada e ela não existe.
+ *
+ * `consultasValidas` = textos que trazem a data da consulta que EXISTE (o bloco do prompt, o vínculo do
+ * agendar_consulta). Ter consulta não libera qualquer promessa (achado do Codex, 19/10): quem já tem sessão
+ * na quarta e ouve "deixo reservado sexta, 23/10" continua barrado. Libera quando a promessa fala da mesma
+ * data — ou não diz data nenhuma, e aí o assunto é a consulta que existe.
+ */
 export function reservaSemMarcar(
   texto: string | null | undefined,
-  evidencias: { marcouAgora: boolean; temConsulta: boolean },
+  evidencias: { marcouAgora: boolean; consultasValidas?: ReadonlyArray<string> },
 ): Promessa | null {
-  if (evidencias.marcouAgora || evidencias.temConsulta) return null;
-  return detectarPromessa(texto) ?? reservaAfirmada(texto);
+  const p = detectarPromessa(texto) ?? reservaAfirmada(texto);
+  if (!p || evidencias.marcouAgora) return null;
+  const validas = (evidencias.consultasValidas ?? []).filter((t) => t && t.trim());
+  if (validas.length === 0) return p;
+  const prometidas = datasCitadas(`${p.trecho} ${p.quando ?? ''}`);
+  if (prometidas.size === 0) return null;
+  const existem = new Set(validas.flatMap((t) => [...datasCitadas(t)]));
+  return [...prometidas].every((d) => existem.has(d)) ? null : p;
 }
+
+/** Quando nem a refeita nem o corte tiram a promessa: melhor perguntar de novo que prometer o que não existe. */
+export const PERGUNTA_NEUTRA = 'Pra eu marcar certinho na agenda: me confirma o dia e o horário que você quer? 😊';
 
 /** Vai junto da resposta reprovada. Deixa a IA MARCAR (com as ferramentas) quando o paciente já respondeu tudo. */
 export const INSTRUCAO_RESERVA_SEM_MARCAR =
@@ -97,10 +130,10 @@ export function semOTrecho(texto: string, trecho: string): string | null {
  * A IA marcou antes e o prompt não trouxe a consulta (5 casos em 7 dias na medição de 19/10): o vínculo
  * gravado pelo `agendar_consulta` resolve. Só é lido quando a trava já disparou — não custa nada no turno normal.
  */
-export async function vinculoTemAgendamento(unitId: string, leadId: number, fuso: string): Promise<boolean> {
+export async function agendamentoDoVinculo(unitId: string, leadId: number, fuso: string): Promise<string | null> {
   const v = await prisma.spineLeadLink
     .findUnique({ where: { unitId_kommoLeadId: { unitId, kommoLeadId: leadId } }, select: { agendadoPara: true } })
     .catch(() => null);
   const quando = (v?.agendadoPara ?? '').slice(0, 16);
-  return quando !== '' && quando >= agoraLocalISO(fuso);
+  return quando !== '' && quando >= agoraLocalISO(fuso) ? quando : null;
 }
