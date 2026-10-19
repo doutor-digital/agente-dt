@@ -155,7 +155,7 @@ export function instrucaoAudioNaoTranscrito(handoff: boolean): string {
   );
 }
 
-/** O que fica na fala do paciente quando o áudio dele não virou texto (é fato, não instrução). */
+/** O fato, na mensagem do modelo, quando o áudio do paciente não virou texto (não entra em `humanMessage`). */
 export const AUDIO_NAO_OUVIDO = '[áudio do cliente — não deu pra ouvir]';
 
 /** Tarefa no cartão pra alguém ouvir o áudio no aparelho — uma a cada 6 h por lead. Nunca lança. */
@@ -924,10 +924,10 @@ export async function processAgent(args: {
     }
   }
   const chaveDoAudio = `${unit.id}:${leadId}`;
-  // A instrução ao modelo e a tarefa pra equipe só entram DEPOIS das travas (horário, pausa, Sofia calada,
-  // etapa): aqui a mensagem ganha apenas o FATO — "mandou um áudio que não deu pra ouvir" — que é o que a
-  // nota de "paciente insistiu" de um cartão pausado precisa registrar. Instrução nossa dentro da fala do
-  // paciente ia pra nota e ainda acusava o detector de injeção ("Chame pausar_ia…").
+  // A fala do paciente fica como ele mandou: as travas (horário, pausa, Sofia calada) e as notas de
+  // "paciente insistiu" leem `humanMessage` e não podem tomar marcador nosso por texto dele. O fato ("áudio
+  // que não deu pra ouvir"), a instrução e a tarefa pra equipe entram só DEPOIS delas, na mensagem do modelo
+  // — e depois do detector de injeção, que acusaria a nossa própria instrução ("Chame pausar_ia…").
   let instrucaoDeAudio: string | null = null;
   let audioParaEquipe: string | null = null;
   if (audios.length && !algumAudioFalhou) limparFalhasDeAudio(chaveDoAudio);
@@ -935,9 +935,6 @@ export async function processAgent(args: {
     const falhasSeguidas = registrarFalhaDeAudio(chaveDoAudio);
     const paraEquipe = deveIrParaEquipe({ flagDaUnidade: unit.audioHandoffEnabled, estrutural: falhaEstrutural, falhasSeguidas });
     const motivo = unit.audioHandoffEnabled ? 'a unidade não ouve áudio' : falhaEstrutural ? 'falha nossa (saldo/chave)' : `${falhasSeguidas}ª falha seguida`;
-    // SEMPRE, inclusive com texto junto: antes o áudio que falhava ao lado de um texto sumia em silêncio,
-    // e a rajada só de áudios ia como espaço em branco (400 na Anthropic)
-    humanMessage = humanMessage.trim() ? `${humanMessage}\n\n${AUDIO_NAO_OUVIDO}` : AUDIO_NAO_OUVIDO;
     instrucaoDeAudio = instrucaoAudioNaoTranscrito(paraEquipe);
     audioParaEquipe = paraEquipe ? motivo : null;
     await recorder.step({
@@ -1207,8 +1204,11 @@ export async function processAgent(args: {
     const mensagemDoPaciente = injecao
       ? `${avisoDeInjecao(injecao)}\n\n${humanMessage}`
       : humanMessage;
-    // depois das travas e do detector de injeção: a instrução é nossa, não do paciente
-    const mensagemParaIa = instrucaoDeAudio ? `${mensagemDoPaciente}\n\n${instrucaoDeAudio}` : mensagemDoPaciente;
+    // SEMPRE que um áudio falhou, inclusive com texto junto: antes o áudio que falhava ao lado de um texto
+    // sumia em silêncio, e a rajada só de áudios ia como espaço em branco (400 na Anthropic)
+    const mensagemParaIa = instrucaoDeAudio
+      ? [mensagemDoPaciente.trim() ? mensagemDoPaciente : '', AUDIO_NAO_OUVIDO, instrucaoDeAudio].filter(Boolean).join('\n\n')
+      : mensagemDoPaciente;
     if (audioParaEquipe) await avisarEquipeDoAudio(unit, leadId, audioParaEquipe);
 
     // A conversa como o WhatsApp a vê (rota oficial): resposta da equipe e mensagem

@@ -44,7 +44,7 @@ test('os dois caminhos assumem a falha como nossa, não do paciente', () => {
   assert.match(instrucaoAudioNaoTranscrito(true), /a gente não consegue ouvir/i);
 });
 
-test('o que fica na fala do paciente é só o FATO, sem ordem pra IA (vai pra nota de cartão pausado e passa no detector de injeção)', () => {
+test('o marcador do áudio é só o FATO, sem ordem pra IA', () => {
   assert.match(AUDIO_NAO_OUVIDO, /áudio/);
   assert.doesNotMatch(AUDIO_NAO_OUVIDO, /pausar_ia|Chame|PROIBIDO|peça|responda/i);
 });
