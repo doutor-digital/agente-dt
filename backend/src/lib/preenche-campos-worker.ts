@@ -23,7 +23,7 @@ import { automacaoLigada } from './automacoes-estado.js';
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { createKommoClient, type KommoFieldType } from '../services/kommo.service.js';
+import { createKommoClient, type KommoFieldType, type KommoLead } from '../services/kommo.service.js';
 import { classificar, type SinaisDaConversa } from './qualificacao-por-sinal.js';
 import { sexoPeloNome } from './sexo-pelo-nome.js';
 
@@ -90,6 +90,8 @@ export interface ResultadoPreenchimento {
   sexo: number;
   jaTinha: number;
   falhas: number;
+  /** cartões que sumiram do Kommo (apagados ou juntados a outro) — pulados, sem contar como falha */
+  apagados: number;
   amostra: Array<{ leadId: number; campo: string; valor: string; porque: string }>;
   erro?: string;
 }
@@ -102,6 +104,15 @@ export interface ResultadoPreenchimento {
 async function campoDaRegra(unitId: string, padrao: RegExp) {
   const regras = await prisma.leadFieldRule.findMany({ where: { unitId, enabled: true } });
   return regras.find((r) => padrao.test(r.kommoFieldName)) ?? null;
+}
+
+/**
+ * Cartão apagado (ou juntado a outro) volta do GET como 204 sem corpo, e não como erro. Sem esta checagem ele parecia
+ * um cartão com tudo vazio: o worker tentava preencher, o PATCH respondia 400 "Lead not found", e isso se repetia a cada
+ * 15 min até a conversa sair da janela de 72 h — ~260 tentativas por cartão (medido em 19/10/2026: Serra 24703143).
+ */
+export function cartaoExiste(lead: KommoLead | '' | null | undefined): lead is KommoLead {
+  return !!lead && typeof lead === 'object' && Number.isInteger(lead.id) && lead.id > 0;
 }
 
 export async function preencherDaUnidade(
@@ -117,6 +128,7 @@ export async function preencherDaUnidade(
     sexo: 0,
     jaTinha: 0,
     falhas: 0,
+    apagados: 0,
     amostra: [],
   };
   if (!unit.kommoAccessToken) return { ...base, erro: 'unidade sem credencial do Kommo' };
@@ -132,6 +144,10 @@ export async function preencherDaUnidade(
     base.olhados++;
     try {
       const lead = await kommo.getLead(alvo.leadId);
+      if (!cartaoExiste(lead)) {
+        base.apagados++;
+        continue;
+      }
       const valorDe = (fieldId: number) => {
         const c = (lead.custom_fields_values ?? []).find((x) => x.field_id === fieldId);
         const v = c?.values?.[0]?.value;
