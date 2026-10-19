@@ -1,8 +1,18 @@
-import axios, { AxiosError, type AxiosInstance } from 'axios';
+import axios, { AxiosError, type AxiosAdapter, type AxiosInstance, type AxiosRequestConfig } from 'axios';
 import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
 import { ESPERAS_MS, jaSaiu, valeRetentar } from '../lib/reenvio-salesbot.js';
+import { ESPERAS_REDE_MS, repetirNaRede } from '../lib/kommo-rede.js';
+
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** quantas vezes a conexão já caiu nesta requisição (ver `lib/kommo-rede.ts`) */
+    _quedasDeRede?: number;
+    /** nunca repetir sozinho, mesmo com a conexão caindo — a fala da IA */
+    semRepetirNaRede?: boolean;
+  }
+}
 import { semCoracao } from '../lib/sem-coracao.js';
 import { semCarinha, semCarinhaLigado } from '../lib/carinha-antiga.js';
 
@@ -590,10 +600,19 @@ function kommoBackoff(retryAfterSec?: number): void {
   if (alvo > kommoNextSlot) kommoNextSlot = alvo;
 }
 
-function buildHttp(creds: KommoCreds): AxiosInstance {
+/** Para a gravação da fala da IA: quem decide repetir é o próprio `runSalesbot` (que confere a conversa antes). */
+const SEM_REPETIR_NA_REDE: AxiosRequestConfig = { semRepetirNaRede: true };
+
+/** `adapter` e `esperar` existem só para o teste simular a queda de conexão sem rede de verdade. */
+export function buildHttp(
+  creds: KommoCreds,
+  opcoes: { adapter?: AxiosAdapter; esperar?: (ms: number) => Promise<void> } = {},
+): AxiosInstance {
+  const esperar = opcoes.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const http = axios.create({
     baseURL: `https://${creds.subdomain}.kommo.com/api/v4`,
     timeout: 15_000,
+    ...(opcoes.adapter ? { adapter: opcoes.adapter } : {}),
     headers: {
       Authorization: `Bearer ${creds.accessToken}`,
       'Content-Type': 'application/json; charset=utf-8',
@@ -636,8 +655,21 @@ function buildHttp(creds: KommoCreds): AxiosInstance {
       }
       return response;
     },
-    (error: AxiosError) => {
+    async (error: AxiosError) => {
       const status = error.response?.status;
+      // Conexão caiu (keep-alive que o Kommo já tinha fechado, timeout): repete na hora, só GET/PATCH/PUT/DELETE.
+      // A nova tentativa passa pelo interceptor de novo — se falhar de vez, é ela que registra o erro, uma vez só.
+      const cfg = error.config;
+      const feitas = cfg?._quedasDeRede ?? 0;
+      if (cfg && !cfg.semRepetirNaRede && repetirNaRede({ method: cfg.method, status, code: error.code, message: error.message }, feitas)) {
+        cfg._quedasDeRede = feitas + 1;
+        logger.info(
+          { method: cfg.method, url: cfg.url, code: error.code, tentativa: feitas + 1 },
+          'kommo http: conexão caiu — repetindo',
+        );
+        await esperar(ESPERAS_REDE_MS[feitas]);
+        return http.request(cfg);
+      }
       if (status === 429 || status === 403) {
         const ra = Number((error.response?.data as { retry_after?: number } | undefined)?.retry_after);
         kommoBackoff(Number.isFinite(ra) ? ra : status === 403 ? 30 : undefined);
@@ -2308,9 +2340,11 @@ export class KommoClient {
       const wasDowngraded = safeText !== text;
       const sentBytes = Buffer.byteLength(safeText, 'utf8');
       const hasEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(safeText);
-      await this.http.patch(`/leads/${leadId}`, {
-        custom_fields_values: [{ field_id: replyFieldId, values: [{ value: safeText }] }],
-      });
+      await this.http.patch(
+        `/leads/${leadId}`,
+        { custom_fields_values: [{ field_id: replyFieldId, values: [{ value: safeText }] }] },
+        SEM_REPETIR_NA_REDE, // regravar a fala dispararia o envio de novo nas contas que mandam pelo gatilho do campo
+      );
       registrarEntrega(leadId, text);
       const patchMs = Math.round(performance.now() - t0Patch);
       logger.info(
@@ -2525,11 +2559,11 @@ export class KommoClient {
       try {
         const chunks = splitIntoChunks(downgradeEmoji(text, this.creds.slug), 240);
         for (let i = 0; i < chunks.length; i++) {
-          await this.http.patch(`/leads/${leadId}`, {
-            custom_fields_values: [
-              { field_id: this.creds.replyFieldId, values: [{ value: chunks[i] }] },
-            ],
-          });
+          await this.http.patch(
+            `/leads/${leadId}`,
+            { custom_fields_values: [{ field_id: this.creds.replyFieldId, values: [{ value: chunks[i] }] }] },
+            SEM_REPETIR_NA_REDE, // o gatilho do campo manda a fala — regravar mandaria duas vezes
+          );
           if (i < chunks.length - 1) {
             await new Promise((r) => setTimeout(r, INTER_CHUNK_DELAY_MS));
           }
