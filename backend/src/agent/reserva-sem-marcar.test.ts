@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { blocoDaConsulta, datasCitadas, marcouNesteTurno, promptTemConsulta, reservaSemMarcar, semOTrecho } from './reserva-sem-marcar.js';
+import { blocoDaConsulta, datasCitadas, marcasDoQuando, marcouNesteTurno, promptTemConsulta, reservaSemMarcar, semOTrecho } from './reserva-sem-marcar.js';
 
 const SEM_NADA = { marcouAgora: false, consultasValidas: [] as string[] };
 
@@ -27,6 +27,27 @@ test('com consulta marcada neste turno, ou falando da MESMA data da consulta que
 test('ter OUTRA consulta não libera promessa de data nova (achado do Codex)', () => {
   const bloco = '- Próximo agendamento: sessão em **quarta, 21/10, às 9h**.';
   assert.ok(reservaSemMarcar('Deixo reservado pra sexta, 23/10, às 15h!', { marcouAgora: false, consultasValidas: [bloco] }));
+});
+
+test('com consulta existente: dia da semana ou hora diferentes continuam barrados (2º achado do Codex)', () => {
+  const bloco = 'Consulta CONFIRMADA agora no sistema da clínica: **terça-feira, 20/10, às 11h30**';
+  const ev = { marcouAgora: false, consultasValidas: [bloco] };
+  assert.ok(reservaSemMarcar('Deixo reservado pra sexta às 15h!', ev), 'outro dia da semana');
+  assert.ok(reservaSemMarcar('Fica reservado terça, 20/10, às 15h!', ev), 'mesmo dia, outra hora');
+  assert.equal(reservaSemMarcar('Fica reservado terça às 11h30, combinado!', ev), null, 'mesma consulta');
+  const doVinculo = { marcouAgora: false, consultasValidas: ['2026-10-20T11:30'] };
+  assert.equal(reservaSemMarcar('Fica reservado terça às 11h30!', doVinculo), null, 'vínculo: terça 11:30');
+  assert.ok(reservaSemMarcar('Fica reservado quarta às 11h30!', doVinculo));
+});
+
+test('marcas do quando: data, dia e hora em vários formatos', () => {
+  const m = marcasDoQuando('terça-feira, 20/10, às 11h30 ou 14:00 e às 9h');
+  assert.deepEqual([...m.datas], ['20/10']);
+  assert.deepEqual([...m.dias], ['terca']);
+  assert.deepEqual([...m.horas].sort(), ['11:30', '14:00', '9:00']);
+  const v = marcasDoQuando('2026-10-20T07:00');
+  assert.deepEqual([...v.dias], ['terca']);
+  assert.deepEqual([...v.horas], ['7:00']);
 });
 
 test('datas: dd/mm e AAAA-MM-DD viram a mesma coisa; bloco do prompt é extraído', () => {

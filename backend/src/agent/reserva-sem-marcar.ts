@@ -91,10 +91,36 @@ export function reservaSemMarcar(
   if (!p || evidencias.marcouAgora) return null;
   const validas = (evidencias.consultasValidas ?? []).filter((t) => t && t.trim());
   if (validas.length === 0) return p;
-  const prometidas = datasCitadas(`${p.trecho} ${p.quando ?? ''}`);
-  if (prometidas.size === 0) return null;
-  const existem = new Set(validas.flatMap((t) => [...datasCitadas(t)]));
-  return [...prometidas].every((d) => existem.has(d)) ? null : p;
+  const prometido = marcasDoQuando(`${p.trecho} ${p.quando ?? ''}`);
+  const existe = marcasDoQuando(validas.join(' '));
+  // Cada coisa que a promessa diz (data, dia da semana, hora) tem de bater com a consulta que existe —
+  // "sexta" sem data e "às 15h" no mesmo dia da consulta das 11h também são barrados (achado do Codex).
+  // Promessa sem dia nem hora ("sua consulta está confirmada") fala da consulta que existe.
+  for (const k of ['datas', 'dias', 'horas'] as const) {
+    if (prometido[k].size === 0) continue;
+    if (existe[k].size === 0) continue;
+    if (![...prometido[k]].every((v) => existe[k].has(v))) return p;
+  }
+  return null;
+}
+
+const DIAS = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
+
+/** Data, dia da semana e hora citados (ou do "AAAA-MM-DDTHH:mm" do vínculo), normalizados para comparar. */
+export function marcasDoQuando(texto: string): { datas: Set<string>; dias: Set<string>; horas: Set<string> } {
+  const n = normalizar(texto);
+  const datas = datasCitadas(texto);
+  const dias = new Set<string>();
+  for (const d of DIAS) if (new RegExp(`\\b${d}(?:-feira)?\\b`).test(n)) dias.add(d);
+  const horas = new Set<string>();
+  for (const m of texto.matchAll(/\b(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/g)) {
+    dias.add(DIAS[new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`).getUTCDay()]);
+    horas.add(`${Number(m[4])}:${m[5]}`);
+  }
+  for (const m of n.replace(/\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}/g, ' ').matchAll(/\b(\d{1,2})(?::(\d{2})|h(\d{2})?)(?!\d)/g)) {
+    horas.add(`${Number(m[1])}:${m[2] ?? m[3] ?? '00'}`);
+  }
+  return { datas, dias, horas };
 }
 
 /** Quando nem a refeita nem o corte tiram a promessa: melhor perguntar de novo que prometer o que não existe. */
