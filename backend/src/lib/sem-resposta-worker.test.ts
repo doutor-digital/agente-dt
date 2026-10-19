@@ -5,7 +5,9 @@ import type { Unit } from '@prisma/client';
 import {
   ESPERA_MS,
   JANELA_MS,
+  REALERTA_MS,
   _esquecerConferidas,
+  mesmaEsperaJaAlertada,
   deveAlertar,
   esperaDoPaciente,
   estadoDoAlertaSemResposta,
@@ -52,9 +54,9 @@ function cenario(opts: { oficiais: MensagemOficial[] | null; agora: Date; horari
       r.leiturasOficiais++;
       return oficiais;
     },
-    alertadoDesde: async (_u, leadId) => r.marcas.get(leadId) ?? null,
-    marcarAlertado: async (_u, leadId, desde) => {
-      r.marcas.set(leadId, desde);
+    alertadoEm: async (_u, leadId) => r.marcas.get(leadId) ?? null,
+    marcarAlertado: async (_u, leadId, quando) => {
+      r.marcas.set(leadId, quando);
     },
     etapa: async () => 'EM TRATAMENTO',
     enviar: async (texto) => {
@@ -135,6 +137,60 @@ test('idempotência: a mesma espera alerta UMA vez; resposta e nova espera alert
   _esquecerConferidas();
   await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
   assert.equal(c.r.enviados.length, 2);
+});
+
+// Revisão de 16/10, item 6: a conversa oficial só traz as últimas mensagens. Quem manda mais do que isso (lote
+// de fotos de exame) mudava o início da espera a cada mensagem, e cada mudança virava um alerta novo.
+const rajada = (de: number, ate: number) => {
+  const m: MensagemOficial[] = [];
+  for (let i = de; i <= ate; i++) m.push(msg('entrada', depois(i * 60_000), `foto ${i}`));
+  return m;
+};
+
+test('mesmaEsperaJaAlertada: alerta sem nada saído depois, há menos de 12 h', () => {
+  const alerta = depois(6 * 60_000);
+  const agora = depois(30 * 60_000);
+  assert.equal(mesmaEsperaJaAlertada(rajada(0, 25), null, agora), false, 'nunca alertado');
+  assert.equal(mesmaEsperaJaAlertada(rajada(0, 25), alerta, agora), true);
+  assert.equal(mesmaEsperaJaAlertada([...rajada(0, 25), msg('saida', depois(10 * 60_000))], alerta, agora), false, 'alguém respondeu depois do alerta');
+  assert.equal(mesmaEsperaJaAlertada([msg('saida', depois(2 * 60_000)), ...rajada(3, 25)], alerta, agora), true, 'resposta ANTES do alerta não conta');
+  assert.equal(mesmaEsperaJaAlertada(rajada(0, 25), alerta, new Date(alerta.getTime() + REALERTA_MS)), false, '12 h depois: lembra de novo');
+});
+
+test('paciente que escreve sem parar (mais do que a conversa lida): UM alerta, não um por mensagem', async () => {
+  const c = cenario({ oficiais: rajada(0, 2), agora: depois(6 * 60_000) });
+  await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(c.r.enviados.length, 1);
+
+  // 40 min depois, a janela lida já não mostra as primeiras: o "início da espera" visto mudou.
+  for (const minuto of [20, 30, 45]) {
+    c.mudarOficiais(rajada(minuto - 15, minuto));
+    c.mudarAgora(depois((minuto + 1) * 60_000));
+    _esquecerConferidas(); // mensagem nova = chave nova no cache em memória
+    await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  }
+  assert.equal(c.r.enviados.length, 1);
+
+  // Ninguém respondeu e ele voltou a escrever 13 h depois: um lembrete novo.
+  const tarde = 13 * 60;
+  c.mudarOficiais(rajada(tarde - 2, tarde));
+  c.mudarAgora(depois((tarde + 6) * 60_000));
+  _esquecerConferidas();
+  await verificarUnidadeSemResposta(unidade, 'ligado', c.deps);
+  assert.equal(c.r.enviados.length, 2);
+});
+
+test('só no papel também mostra UM "alertaria" por espera, não um por mensagem — e não grava marca', async () => {
+  const c = cenario({ oficiais: rajada(0, 2), agora: depois(6 * 60_000) });
+  await verificarUnidadeSemResposta(unidade, 'seco', c.deps);
+  c.mudarOficiais(rajada(10, 25));
+  c.mudarAgora(depois(26 * 60_000));
+  // simula a mensagem nova sem apagar o que o seco lembra: a chave do cache muda com a última mensagem
+  c.deps.candidatas = async () => [{ leadId: 28691582, contactName: 'Maria Silva', ultimaDoPacienteEm: depois(25 * 60_000) }];
+  await verificarUnidadeSemResposta(unidade, 'seco', c.deps);
+  assert.equal(c.r.simulados.length, 1);
+  assert.equal(c.r.marcas.size, 0);
+  assert.equal(c.r.enviados.length, 0);
 });
 
 test('respondido (equipe, Sofia ou robô) não alerta', async () => {

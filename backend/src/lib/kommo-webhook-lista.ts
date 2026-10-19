@@ -1,15 +1,14 @@
 /**
- * Lista do webhook do Kommo, do jeito que o Express entrega.
+ * Lista do webhook do Kommo, tolerante ao formato que o parser entrega.
  *
- * O Kommo manda o corpo em form-urlencoded (`leads[status][0][id]=…`). O `express.urlencoded({ extended:
- * true })` usa o `qs`, que só monta ARRAY até o índice 20 (`arrayLimit`): de `leads[status][21]` em diante
- * o mesmo campo chega como OBJETO `{ "0": …, "1": …, "21": … }`. Com o `z.array` direto, o webhook inteiro
- * voltava 400 — e o Kommo desliga o webhook que falha seguidas vezes. Mudança de etapa em lote (a franquia
- * movendo dezenas de cartões, a SDR arrastando vários) é exatamente o caso em que isso aparece, e o evento
- * `status_lead` (carimbo de etapa) passa a chegar na conta da Açailândia em 16/10/2026.
+ * CORRIGIDO na revisão de 16/10/2026: com o Express 5 / body-parser 2.2.2 deste servidor a lista JÁ chega
+ * como array em qualquer tamanho (o `qs` do body-parser não corta em 20 índices). O limite que derrubava o
+ * webhook do `status_lead` era outro — o `parameterLimit` de 1000, que devolve 413 antes do handler —, e
+ * quem resolve é o parser próprio da rota (`parser-webhook-kommo.ts`).
  *
- * Objeto com chaves numéricas vira array na ordem dos índices; qualquer outra coisa passa intacta (o zod
- * decide). Item único sem índice (`leads[status][id]=…`) vira lista de um.
+ * Isto fica como defesa barata, para o caso de o parser mudar: objeto com chaves numéricas vira array na
+ * ordem dos índices; item único sem índice (`leads[status][id]=…`) vira lista de um; o resto passa intacto
+ * e o zod decide.
  */
 export function listaDoKommo(v: unknown): unknown {
   if (v === undefined || v === null || Array.isArray(v) || typeof v !== 'object') return v;

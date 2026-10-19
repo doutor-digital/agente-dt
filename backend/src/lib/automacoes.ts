@@ -141,7 +141,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'A pergunta da véspera ("você vem amanhã?") passa a sair pelo robô do Kommo, 24 h antes da ◷ Data da Consulta, para TODO paciente agendado — não só para quem a Sofia marcou. Quando o paciente toca "Confirmar presença" (ou "Preciso remarcar"), o sistema responde sozinho, confirma a consulta na franquia e, se pediu para remarcar, abre tarefa para a equipe.',
     pegadinha:
-      'Ligado DESLIGA a véspera do servidor nesta unidade (senão o paciente recebe duas perguntas). Só funciona com o gatilho de 24 h criado no Kommo (script acailandia-gatilho-vespera.js). Também vale para o botão do lembrete do dia (3 h antes). Só reconhece o TOQUE no botão (ou o mesmo texto digitado) com a consulta do cartão dentro das próximas 30 h; resposta solta ("sim", "ok") continua com a Sofia. Em "só no papel" a Sofia segue respondendo como hoje e a tela mostra o que o sistema faria.',
+      'Fora de "Desligado" — inclusive em "Só no papel" — a véspera do SERVIDOR não sai nesta unidade (senão o paciente recebe duas perguntas): crie o gatilho de 24 h no Kommo (script acailandia-gatilho-vespera.js) e mude a chave NO MESMO MOMENTO. Também vale para o botão do lembrete do dia (3 h antes). Só trata o TOQUE no botão (ou o mesmo texto digitado) quando a última mensagem da conversa foi o lembrete do robô — se a SDR ou a Sofia falaram depois, segue com a Sofia; resposta solta ("sim", "ok") também. Lembrete que não diz se é consulta ou sessão, ou hora que não bate com a agenda: responde e abre tarefa, sem confirmar na franquia. Em "Só no papel" o toque segue com a Sofia e a tela mostra o que o sistema faria.',
     risco: 'manda-mensagem',
     temSeco: true,
     quandoVazio: 'desligado',

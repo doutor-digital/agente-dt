@@ -18,7 +18,7 @@
  *
  * Travas: horário de atendimento da unidade (o mesmo do alerta de SLA: dias da agenda, 8h–20h, sem
  * feriado); mensagem de no máximo 60 min (a volta de uma queda não vira rajada); um alerta por espera
- * (a marca guarda o instante em que a espera começou — só volta a avisar depois que alguém responder
+ * (a marca guarda QUANDO o alerta saiu — só volta a avisar depois que alguém responder
  * e o paciente ficar sem resposta de novo). "Só no papel": registra na tela o que alertaria.
  */
 import type { Unit } from '@prisma/client';
@@ -40,8 +40,31 @@ export const AUTOMACAO_SEM_RESPOSTA = 'alerta-sem-resposta';
 export const ESPERA_MS = 5 * 60_000;
 /** Mensagem mais velha que ESPERA + isto não alerta mais. */
 export const JANELA_MS = 60 * 60_000;
-/** A marca em `card_alert`: uma linha por lead, com `created_at` = o instante em que a espera começou. */
+/**
+ * A marca em `card_alert`: uma linha por lead, com `created_at` = QUANDO o alerta saiu. A mesma espera é
+ * "nenhuma saída depois do alerta". Antes a marca guardava o início da espera, e quem mandava mais de 20
+ * mensagens seguidas mudava esse início a cada mensagem (a conversa oficial só traz as últimas) — um
+ * alerta novo a cada mensagem (revisão de 16/10, item 6).
+ */
 export const REGRA_SEM_RESPOSTA = 'sem_resposta_telegram';
+/** Espera que segue sem resposta há mais que isto ganha UM lembrete novo (e cobre a conversa nova de quem volta semanas depois). */
+export const REALERTA_MS = 12 * 3600_000;
+/** Quantas mensagens da conversa oficial se leem: folga para ver a resposta mesmo com o paciente escrevendo muito. */
+const MENSAGENS_LIDAS = 40;
+
+/**
+ * PURA: esta espera já foi alertada? Sim quando houve alerta há menos de 12 h e nada saiu para o paciente
+ * depois dele.
+ */
+export function mesmaEsperaJaAlertada(
+  msgs: ReadonlyArray<Pick<MensagemOficial, 'direcao' | 'em'>>,
+  alertadoEm: Date | null,
+  agora: Date,
+): boolean {
+  if (!alertadoEm) return false;
+  if (agora.getTime() - alertadoEm.getTime() >= REALERTA_MS) return false;
+  return !msgs.some((m) => m.direcao === 'saida' && m.em.getTime() > alertadoEm.getTime());
+}
 const SWEEP_MS = 60_000;
 const MAX_CANDIDATAS = 200;
 
@@ -135,9 +158,9 @@ export interface DepsSemResposta {
   candidatas: (unit: Unit, de: Date, ate: Date) => Promise<CandidataSemResposta[]>;
   /** A conversa oficial do Kommo. null = não consegui ler (aí não se alerta no escuro). */
   oficiais: (unit: Unit, leadId: number) => Promise<MensagemOficial[] | null>;
-  /** Quando começou a espera que já foi alertada para este lead, ou null. */
-  alertadoDesde: (unit: Unit, leadId: number) => Promise<Date | null>;
-  marcarAlertado: (unit: Unit, leadId: number, desde: Date) => Promise<void>;
+  /** Quando saiu o último alerta deste lead, ou null. */
+  alertadoEm: (unit: Unit, leadId: number) => Promise<Date | null>;
+  marcarAlertado: (unit: Unit, leadId: number, quando: Date) => Promise<void>;
   etapa: (unit: Unit, leadId: number) => Promise<string | null>;
   enviar: (texto: string) => Promise<boolean>;
   simular: (unit: Pick<Unit, 'id' | 'slug'>, automacao: string, s: Simulacao) => void;
@@ -175,8 +198,8 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
   agora: () => new Date(),
   dentroDoHorario,
   candidatas: candidatasDoBanco,
-  oficiais: (unit, leadId) => mensagensOficiais(createKommoClient(unit), leadId, 20).catch(() => null),
-  alertadoDesde: async (unit, leadId) => {
+  oficiais: (unit, leadId) => mensagensOficiais(createKommoClient(unit), leadId, MENSAGENS_LIDAS).catch(() => null),
+  alertadoEm: async (unit, leadId) => {
     try {
       const r = await prisma.cardAlert.findUnique({
         where: { unitId_leadId_ruleKey: { unitId: unit.id, leadId: String(leadId), ruleKey: REGRA_SEM_RESPOSTA } },
@@ -187,7 +210,7 @@ export const DEPS_SEM_RESPOSTA_PADRAO: DepsSemResposta = {
       return null;
     }
   },
-  marcarAlertado: (unit, leadId, desde) => marcarAviso(unit.id, leadId, REGRA_SEM_RESPOSTA, desde),
+  marcarAlertado: (unit, leadId, quando) => marcarAviso(unit.id, leadId, REGRA_SEM_RESPOSTA, quando),
   etapa: async (unit, leadId) => {
     try {
       const kommo = createKommoClient(unit);
@@ -217,9 +240,24 @@ function lembrarConferida(chave: string, agora: number): void {
   if (conferidas.size > 20_000) for (const [k, t] of conferidas) if (agora - t >= CONFERIDA_VALE_MS) conferidas.delete(k);
 }
 
+/**
+ * "Só no papel" não grava a marca no banco: guarda aqui quando TERIA alertado, para a tela mostrar um
+ * "alertaria" por espera, como o ligado faria — e não um por mensagem de quem escreve sem parar.
+ * Reinício esquece; no máximo um "alertaria" a mais.
+ */
+const simuladoEm = new Map<string, Date>();
+
+function lembrarSimulado(chave: string, agora: Date): void {
+  simuladoEm.set(chave, agora);
+  if (simuladoEm.size > 20_000) {
+    for (const [k, t] of simuladoEm) if (agora.getTime() - t.getTime() >= REALERTA_MS) simuladoEm.delete(k);
+  }
+}
+
 /** Só para teste. */
 export function _esquecerConferidas(): void {
   conferidas.clear();
+  simuladoEm.clear();
 }
 
 export interface ResumoSemResposta {
@@ -256,8 +294,9 @@ export async function verificarUnidadeSemResposta(
         continue;
       }
       if (!deveAlertar(espera, agora)) continue;
-      const jaAlertada = await deps.alertadoDesde(unit, c.leadId);
-      if (jaAlertada && jaAlertada.getTime() === espera.desde.getTime()) {
+      const chaveDoLead = `${unit.id}:${c.leadId}`;
+      const alertadoEm = estado === 'seco' ? (simuladoEm.get(chaveDoLead) ?? null) : await deps.alertadoEm(unit, c.leadId);
+      if (mesmaEsperaJaAlertada(msgs, alertadoEm, agora)) {
         lembrarConferida(chaveConferida, agora.getTime());
         continue;
       }
@@ -272,6 +311,7 @@ export async function verificarUnidadeSemResposta(
           motivo: `última mensagem: "${mascararPii(espera.ultimaTexto).slice(0, 120)}"`,
         });
         resumo.simulados++;
+        lembrarSimulado(chaveDoLead, agora);
         lembrarConferida(chaveConferida, agora.getTime());
         continue;
       }
@@ -287,7 +327,7 @@ export async function verificarUnidadeSemResposta(
       });
       if (await deps.enviar(texto)) {
         // Marca SÓ depois que o Telegram aceitou: falha de rede não cala o aviso.
-        await deps.marcarAlertado(unit, c.leadId, espera.desde);
+        await deps.marcarAlertado(unit, c.leadId, agora);
         lembrarConferida(chaveConferida, agora.getTime());
         resumo.alertas++;
         logger.info({ unit: unit.slug, leadId: c.leadId, esperaMin: Math.floor(esperaMs / 60_000) }, 'sem-resposta: alerta enviado no Telegram');

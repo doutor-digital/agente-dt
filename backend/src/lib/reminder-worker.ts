@@ -273,8 +273,9 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
     const pipe = pipes.find((p) => p.id === pipelineId) ?? pipes.find((p) => p.statuses?.some((s) => s.id === statusId));
     return pipe?.statuses?.find((s) => s.id === statusId)?.name ?? null;
   };
-  // Véspera pelo robô do Kommo (chave confirmacao-d1, decisão de 16/10/2026): ligada, a do servidor não sai
-  // nesta unidade — senão o paciente recebe duas perguntas. "Só no papel" não muda nada aqui; só conta.
+  // Véspera pelo robô do Kommo (chave confirmacao-d1, decisão de 16/10/2026): fora de "desligado" — só no papel
+  // ou ligada —, a do servidor não sai nesta unidade. O gatilho do Kommo já manda a véspera; as duas juntas
+  // davam duas perguntas ao mesmo paciente (revisão de 16/10, item 5).
   const vesperaDoKommo = estadoDoLembrete(unit.slug, 'consulta');
 
   for (const link of links) {
@@ -291,7 +292,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
     if (toque === 'd2' && !reforcoLiberado(unit.slug)) continue;
     if (toque === 'd1' && vesperaDoKommo !== 'desligado') {
       conta.robo_kommo++;
-      if (vesperaDoKommo === 'ligado') continue;
+      continue;
     }
 
     const chave = chaveDaConfirmacao(toque, consulta.quando);
@@ -426,12 +427,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   }
 
   ultimoEnvioPorUnidade.set(unit.id, dia);
-  logger.info(
-    { unit: unit.slug, dia, ...conta, vesperaDoKommo, candidatos: links.length },
-    vesperaDoKommo === 'seco' && conta.robo_kommo > 0
-      ? 'confirmação de presença: varredura concluída ([seco] com a véspera do Kommo ligada, robo_kommo véspera(s) do servidor deixariam de sair)'
-      : 'confirmação de presença: varredura concluída',
-  );
+  logger.info({ unit: unit.slug, dia, ...conta, vesperaDoKommo, candidatos: links.length }, 'confirmação de presença: varredura concluída');
 }
 
 async function varrer(): Promise<void> {

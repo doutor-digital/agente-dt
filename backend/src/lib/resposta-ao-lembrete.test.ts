@@ -5,27 +5,35 @@ import type { Unit } from '@prisma/client';
 import {
   CAMPOS_DO_LEMBRETE,
   JANELA_LEMBRETE_S,
-  TOLERANCIA_DEPOIS_S,
+  alvoDoLembrete,
   classificarBotaoDoLembrete,
   datasDoCartao,
   escolherAgendamento,
+  horaDaMensagem,
+  lembreteDaMensagem,
+  lerChaveDoToque,
   podeSerBotaoDoLembrete,
-  qualLembrete,
+  provaDoLembrete,
   textoRespostaAoLembrete,
   tratarBotaoDoLembrete,
   type DepsLembrete,
   type KommoDoLembrete,
+  type ProvaDoLembrete,
 } from './resposta-ao-lembrete.js';
-import { estadoDoLembrete, vesperaPeloRoboDoKommo } from './lembrete-chaves.js';
+import { estadoDoLembrete, vesperaDoServidorDesligada } from './lembrete-chaves.js';
 import { classificarRespostaD1 } from './confirmacao-d1.js';
 import { _semearParaTeste } from './automacoes-estado.js';
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
+import type { MensagemOficial } from '../services/kommo-talks.service.js';
 import type { Simulacao } from './so-no-papel.js';
 
 /**
  * Caso que motivou (Açailândia, auditoria de 16/10/2026): 104 mensagens de 20 pacientes em tratamento em 7 dias,
  * a maioria tocando "Confirmar presença" no lembrete da sessão, sem resposta nenhuma — e em AGENDADO a Sofia dizia
  * "presença confirmada" sem registrar na franquia. Decisão do João: responde sozinho e confirma na franquia.
+ *
+ * Revisão de 16/10 (itens 1 e 2): quem diz de qual agendamento o paciente fala é a ÚLTIMA fala que saiu na conversa
+ * — o lembrete do robô. Sem ela (a SDR ou a Sofia falou por último), o toque não é com este tratamento.
  */
 
 const SLUG = 'doutor-hernia-acailandia';
@@ -38,6 +46,9 @@ const AGORA_S = Math.floor(AGORA.getTime() / 1000);
 const SESSAO_S = Math.floor(Date.parse('2026-10-17T12:00:00Z') / 1000);
 // consulta de amanhã, 17/10 às 14:30 local
 const CONSULTA_S = Math.floor(Date.parse('2026-10-17T17:30:00Z') / 1000);
+
+const VESPERA_SESSAO = 'Olá, Maria! A sua sessão é amanhã, 17/10, às 09:00. Confirma a sua presença?';
+const VESPERA_CONSULTA = 'Olá! Passando para lembrar da sua consulta amanhã, 17/10, às 14:30. Está tudo certo?';
 
 const unidade = (over: Partial<Unit> = {}): Unit =>
   ({
@@ -74,6 +85,28 @@ function agendamento(over: Partial<SpineSchedule> & { utc: string }): SpineSched
   };
 }
 
+const saida = (texto: string, em: Date, autor: MensagemOficial['autor'] = 'sofia', id = `s-${em.getTime()}`): MensagemOficial => ({
+  id,
+  em,
+  direcao: 'saida',
+  autor,
+  autorNome: '',
+  texto,
+  anexo: null,
+  status: null,
+});
+const entrada = (texto: string, em: Date): MensagemOficial => ({
+  id: `e-${em.getTime()}`,
+  em,
+  direcao: 'entrada',
+  autor: 'paciente',
+  autorNome: '',
+  texto,
+  anexo: null,
+  status: null,
+});
+const horasAntes = (h: number, base = AGORA) => new Date(base.getTime() - h * 3600_000);
+
 const IDS: Record<string, number> = {
   [CAMPOS_DO_LEMBRETE.CONSULTA]: 1,
   [CAMPOS_DO_LEMBRETE.SESSAO]: 2,
@@ -92,61 +125,80 @@ function cartao(campos: Partial<Record<1 | 2 | 3 | 4, number>>) {
   };
 }
 
-function kommoFalso(lead: ReturnType<typeof cartao>) {
-  const k = {
+/**
+ * Kommo e franquia falsos. A resposta que sai (`sendChatReply`) entra na conversa oficial como fala de saída,
+ * como no Kommo de verdade — é isso que faz o segundo toque ser reconhecido como repetição.
+ */
+function cenario(opts: { lead: ReturnType<typeof cartao>; conversa: MensagemOficial[] | null; schedules: SpineSchedule[] | null; falasDaSofia?: string[]; agora?: Date }) {
+  const agora = opts.agora ?? AGORA;
+  const conversa = opts.conversa ? [...opts.conversa] : null;
+  const r = {
     leituras: 0,
     respostas: [] as string[],
     tarefas: [] as string[],
     situacao: [] as Array<{ fieldId: number; valor: unknown }>,
-    cliente: {
-      getLead: async () => {
-        k.leituras++;
-        return lead;
-      },
-      sendChatReply: async (p: { text: string }) => {
-        k.respostas.push(p.text);
-        return { via: 'salesbot' as const };
-      },
-      createTask: async (a: { text: string }) => {
-        k.tarefas.push(a.text);
-        return { id: 1 };
-      },
-      listLeadCustomFieldsTyped: async () => [
-        { id: 99, name: '✓ Situação da consulta', type: 'select', code: null, enums: [{ id: 1, value: 'Agendado' }, { id: 2, value: 'Confirmado' }] },
-      ],
-      setLeadCustomFieldValue: async (_l: number, fieldId: number, _t: unknown, valor: unknown) => {
-        k.situacao.push({ fieldId, valor });
-      },
-    } as unknown as KommoDoLembrete,
+    confirmados: [] as number[],
+    marcas: new Map<string, Date>(),
+    simulados: [] as Simulacao[],
+    gravadas: [] as string[],
+    buscas: 0,
   };
-  return k;
-}
-
-function depsFalsas(schedules: SpineSchedule[] | null) {
-  const registro = { confirmados: [] as number[], tratados: new Set<string>(), simulados: [] as Simulacao[], buscas: 0 };
+  const kommo = {
+    getLead: async () => {
+      r.leituras++;
+      return opts.lead;
+    },
+    sendChatReply: async (p: { text: string }) => {
+      r.respostas.push(p.text);
+      conversa?.push(saida(p.text, new Date(agora.getTime() + r.respostas.length * 10_000)));
+      return { via: 'salesbot' as const };
+    },
+    createTask: async (a: { text: string }) => {
+      r.tarefas.push(a.text);
+      return { id: 1 };
+    },
+    listLeadCustomFieldsTyped: async () => [
+      { id: 99, name: '✓ Situação da consulta', type: 'select', code: null, enums: [{ id: 1, value: 'Agendado' }, { id: 2, value: 'Confirmado' }] },
+    ],
+    setLeadCustomFieldValue: async (_l: number, fieldId: number, _t: unknown, valor: unknown) => {
+      r.situacao.push({ fieldId, valor });
+    },
+  } as unknown as KommoDoLembrete;
   const deps: DepsLembrete = {
-    agora: () => AGORA,
+    agora: () => agora,
     esquema: async () => ({ campoPorNome }),
+    oficiais: async () => (conversa ? [...conversa] : null),
+    // o que a Sofia disse + as respostas que este tratamento gravou no histórico
+    falasDaSofia: async () => [...(opts.falasDaSofia ?? []), ...r.gravadas],
     agendamentos: async () => {
-      registro.buscas++;
-      return schedules;
+      r.buscas++;
+      return opts.schedules;
     },
     franquia: {
       confirmSchedule: async (_u, id) => {
-        registro.confirmados.push(id);
+        r.confirmados.push(id);
         return { ok: true };
       },
       esquecerConsulta: () => undefined,
     },
-    jaTratado: async (_u, _l, chave) => registro.tratados.has(chave),
+    jaTratado: async (_u, _l, chave) => r.marcas.has(chave),
+    ultimoTratado: async () => {
+      const ultimas = [...r.marcas.entries()].sort((a, b) => b[1].getTime() - a[1].getTime());
+      return ultimas.length ? lerChaveDoToque(ultimas[0][0], ultimas[0][1]) : null;
+    },
     marcarTratado: async (_u, _l, chave) => {
-      registro.tratados.add(chave);
+      r.marcas.set(chave, agora);
+    },
+    registrarResposta: async (_c, texto) => {
+      r.gravadas.push(texto);
     },
     simular: (_u, _a, s) => {
-      registro.simulados.push(s);
+      r.simulados.push(s);
     },
   };
-  return { deps, registro };
+  const tocar = (texto: string, env: NodeJS.ProcessEnv = ENV_LIGADO) =>
+    tratarBotaoDoLembrete({ unit: unidade(), leadId: 777, texto, conv: { id: 'c1', contactName: 'Maria Silva', phone: null }, kommo, env }, deps);
+  return { r, deps, tocar };
 }
 
 beforeEach(() => _semearParaTeste([]));
@@ -169,11 +221,9 @@ test('botão: resposta solta ou com conversa junto NÃO é toque — fica com a 
 });
 
 test('véspera por TEXTO continua no caminho do servidor ("1" / "2") e o botão do servidor também', () => {
-  // A pergunta que o servidor manda ("responda 1 ou 2" / botões Confirmo · Preciso remarcar) segue em confirmacao-d1.
   assert.equal(classificarRespostaD1('1'), 'confirmou');
   assert.equal(classificarRespostaD1('2'), 'remarcar');
   assert.equal(classificarRespostaD1('Confirmo'), 'confirmou');
-  // ...e o rótulo do botão do Kommo também é entendido por lá, se a pergunta do servidor estiver armada.
   assert.equal(classificarRespostaD1('Confirmar presença'), 'confirmou');
   assert.equal(classificarRespostaD1('Preciso remarcar'), 'remarcar');
 });
@@ -186,29 +236,60 @@ test('chaves: desligado não responde 200 antes nem trata; seco ou ligado sim', 
   assert.equal(podeSerBotaoDoLembrete(SLUG, 'Confirmar presença', {} as NodeJS.ProcessEnv), true);
 });
 
-test('chave confirmacao-d1: só LIGADA tira a véspera do servidor; só no papel não muda nada', () => {
-  assert.equal(vesperaPeloRoboDoKommo(SLUG, {} as NodeJS.ProcessEnv), false);
-  assert.equal(vesperaPeloRoboDoKommo(SLUG, { CONFIRMACAO_D1_SLUGS: SLUG } as NodeJS.ProcessEnv), true);
-  assert.equal(vesperaPeloRoboDoKommo('doutor-hernia-serra', { CONFIRMACAO_D1_SLUGS: SLUG } as NodeJS.ProcessEnv), false);
+test('item 5 — chave confirmacao-d1 fora de "desligado" (seco OU ligado) tira a véspera do servidor: nunca duas vésperas', () => {
+  assert.equal(vesperaDoServidorDesligada(SLUG, {} as NodeJS.ProcessEnv), false);
+  assert.equal(vesperaDoServidorDesligada(SLUG, { CONFIRMACAO_D1_SLUGS: SLUG } as NodeJS.ProcessEnv), true);
+  assert.equal(vesperaDoServidorDesligada('doutor-hernia-serra', { CONFIRMACAO_D1_SLUGS: SLUG } as NodeJS.ProcessEnv), false);
   _semearParaTeste([{ slug: SLUG, automacao: 'confirmacao-d1', estado: 'seco' }]);
   assert.equal(estadoDoLembrete(SLUG, 'consulta', {} as NodeJS.ProcessEnv), 'seco');
-  assert.equal(vesperaPeloRoboDoKommo(SLUG, {} as NodeJS.ProcessEnv), false);
+  // Antes da revisão o "só no papel" deixava a do servidor sair junto com a do robô do Kommo.
+  assert.equal(vesperaDoServidorDesligada(SLUG, {} as NodeJS.ProcessEnv), true);
 });
 
-// ── a qual lembrete ──────────────────────────────────────────────────────────────────────────────
+// ── a prova ──────────────────────────────────────────────────────────────────────────────────────
 
-test('qualLembrete: só o que está nas próximas 30 h (ou passou há menos de 30 min) e com chave', () => {
+test('lembreteDaMensagem / horaDaMensagem: o tipo e a hora vêm do texto do modelo', () => {
+  assert.equal(lembreteDaMensagem(VESPERA_SESSAO), 'sessao');
+  assert.equal(lembreteDaMensagem(VESPERA_CONSULTA), 'consulta');
+  assert.equal(lembreteDaMensagem('Sua consulta de retorno é amanhã às 10h'), 'consulta');
+  assert.equal(lembreteDaMensagem('Lembrete: amanhã você tem consulta e sessão'), 'incerto');
+  assert.equal(lembreteDaMensagem('Tudo certo para amanhã?'), 'incerto');
+  assert.equal(lembreteDaMensagem('Qual o melhor horário para você?'), null);
+  assert.equal(horaDaMensagem(VESPERA_SESSAO), '09:00');
+  assert.equal(horaDaMensagem('às 9h, tá?'), '09:00');
+  assert.equal(horaDaMensagem('às 14h30'), '14:30');
+  assert.equal(horaDaMensagem('entre 9h e 10h'), null, 'duas horas diferentes: não dá para conferir');
+  assert.equal(horaDaMensagem('sem hora'), null);
+});
+
+test('provaDoLembrete: SDR ou Sofia falando por último, ou lembrete velho, NÃO é prova', () => {
+  const tap = entrada('Confirmado', horasAntes(0.01));
+  assert.equal(provaDoLembrete({ msgs: [saida(VESPERA_SESSAO, horasAntes(2)), tap], agora: AGORA, falasDaSofia: [] })?.tipo, 'sessao');
+  // a SDR perguntou outra coisa depois do lembrete
+  const sdr = saida('Posso passar sua sessão para quinta às 15h? Confirma pra mim', horasAntes(1), 'equipe');
+  assert.equal(provaDoLembrete({ msgs: [saida(VESPERA_SESSAO, horasAntes(2)), sdr, tap], agora: AGORA, falasDaSofia: [] }), null);
+  // a Sofia falou por último (a fala está no nosso banco)
+  const sofia = 'Sua consulta ficou para amanhã às 10h, posso confirmar?';
+  assert.equal(provaDoLembrete({ msgs: [saida(sofia, horasAntes(1)), tap], agora: AGORA, falasDaSofia: [sofia] }), null);
+  // lembrete de mais de 30 h
+  assert.equal(provaDoLembrete({ msgs: [saida(VESPERA_SESSAO, horasAntes(JANELA_LEMBRETE_S / 3600 + 1)), tap], agora: AGORA, falasDaSofia: [] }), null);
+  // conversa sem saída
+  assert.equal(provaDoLembrete({ msgs: [tap], agora: AGORA, falasDaSofia: [] }), null);
+});
+
+test('alvoDoLembrete: o tipo do lembrete manda; data do cartão faltando ou fora da janela vira "incerto"', () => {
+  const prova = (tipo: ProvaDoLembrete['tipo']): ProvaDoLembrete => ({ tipo, hora: null, mensagemId: 'm', em: horasAntes(1) });
   const ligados = { consulta: 'ligado', sessao: 'ligado' } as const;
-  assert.equal(qualLembrete({ datas: { consulta: null, sessao: SESSAO_S }, agoraEpoch: AGORA_S, estados: ligados })?.tipo, 'sessao');
-  assert.equal(qualLembrete({ datas: { consulta: null, sessao: AGORA_S + JANELA_LEMBRETE_S + 60 }, agoraEpoch: AGORA_S, estados: ligados }), null);
-  assert.equal(qualLembrete({ datas: { consulta: null, sessao: AGORA_S - TOLERANCIA_DEPOIS_S - 60 }, agoraEpoch: AGORA_S, estados: ligados }), null);
-  assert.equal(
-    qualLembrete({ datas: { consulta: null, sessao: SESSAO_S }, agoraEpoch: AGORA_S, estados: { consulta: 'ligado', sessao: 'desligado' } }),
-    null,
-  );
-  // as duas valendo: a mais próxima (o último lembrete que saiu)
-  const ambos = qualLembrete({ datas: { consulta: CONSULTA_S, sessao: SESSAO_S }, agoraEpoch: AGORA_S, estados: ligados });
-  assert.equal(ambos?.tipo, 'sessao');
+  const datas = { consulta: CONSULTA_S, sessao: SESSAO_S };
+  assert.deepEqual(alvoDoLembrete({ prova: prova('consulta'), datas, agoraEpoch: AGORA_S, estados: ligados }), {
+    tipo: 'consulta',
+    quandoEpoch: CONSULTA_S,
+    estado: 'ligado',
+    hora: null,
+  });
+  assert.equal(alvoDoLembrete({ prova: prova('sessao'), datas: { consulta: null, sessao: null }, agoraEpoch: AGORA_S, estados: ligados })?.tipo, 'incerto');
+  assert.equal(alvoDoLembrete({ prova: prova('incerto'), datas, agoraEpoch: AGORA_S, estados: ligados })?.tipo, 'incerto');
+  assert.equal(alvoDoLembrete({ prova: prova('sessao'), datas, agoraEpoch: AGORA_S, estados: { consulta: 'ligado', sessao: 'desligado' } }), null);
 });
 
 test('datasDoCartao: lê as datas e os ids pelos nomes dos campos', () => {
@@ -231,7 +312,7 @@ test('escolherAgendamento: o do MESMO horário do cartão, do tipo certo e de p�
 });
 
 test('escolherAgendamento: horário que não bate, ou dois no mesmo horário → não confirma no escuro', () => {
-  const sessao = agendamento({ utc: '2026-10-17T13:00:00Z' }); // uma hora depois do cartão
+  const sessao = agendamento({ utc: '2026-10-17T13:00:00Z' });
   assert.equal(escolherAgendamento({ schedules: [sessao], tipo: 'sessao', quandoEpoch: SESSAO_S, idTreatment: 555, tz: TZ }), null);
   const a = agendamento({ utc: '2026-10-17T12:00:00Z', idTreatment: null });
   const b = agendamento({ utc: '2026-10-17T12:00:00Z', idSchedule: 9010, idTreatment: null });
@@ -257,136 +338,267 @@ test('textos: sessão e consulta com dia da semana e hora; remarcar sem prometer
 
 // ── de ponta a ponta (Kommo e franquia falsos) ───────────────────────────────────────────────────
 
-test('SESSÃO: toque em "Confirmar presença" → responde e CONFIRMA na franquia o agendamento certo', async () => {
-  const k = kommoFalso(cartao({ 2: SESSAO_S, 3: 555 }));
-  const { deps, registro } = depsFalsas([agendamento({ utc: '2026-10-17T12:00:00Z' })]);
-  const r = await tratarBotaoDoLembrete(
-    { unit: unidade(), leadId: 777, texto: 'Confirmar presença', conv: { contactName: 'Maria Silva', phone: null }, kommo: k.cliente, env: ENV_LIGADO },
-    deps,
-  );
+test('SESSÃO: toque no lembrete da sessão → responde e CONFIRMA na franquia o agendamento certo', async () => {
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(2)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  const r = await c.tocar('Confirmar presença');
   assert.deepEqual(r, { resposta: 'confirmou', tipo: 'sessao', idSchedule: 9001, franquia: 'confirmada' });
-  assert.deepEqual(registro.confirmados, [9001], 'PATCH /api/schedules/confirm com o id da sessão');
-  assert.equal(k.respostas.length, 1);
-  assert.match(k.respostas[0], /^Presença confirmada, Maria! 💙 Te esperamos na sua sessão sábado, 17\/10 às 09:00/);
-  assert.equal(k.tarefas.length, 0, 'deu certo: ninguém precisa agir');
-  assert.equal(k.situacao.length, 0, 'sessão não mexe na Situação da CONSULTA');
+  assert.deepEqual(c.r.confirmados, [9001], 'PATCH /api/schedules/confirm com o id da sessão');
+  assert.equal(c.r.respostas.length, 1);
+  assert.match(c.r.respostas[0], /^Presença confirmada, Maria! 💙 Te esperamos na sua sessão sábado, 17\/10 às 09:00/);
+  assert.equal(c.r.tarefas.length, 0);
+  assert.equal(c.r.situacao.length, 0, 'sessão não mexe na Situação da CONSULTA');
+  assert.deepEqual(c.r.gravadas, [c.r.respostas[0]], 'a resposta fica no histórico');
 });
 
-test('VÉSPERA (consulta): toque no botão do modelo do Kommo → responde, marca Confirmado e confirma na franquia', async () => {
-  const k = kommoFalso(cartao({ 1: CONSULTA_S, 4: 321 }));
+test('VÉSPERA (consulta): toque no botão do modelo → responde, marca Confirmado e confirma na franquia', async () => {
   const consulta = agendamento({ utc: '2026-10-17T17:30:00Z', idSchedule: 3738045, categoryName: 'Avaliação', idTreatment: null });
-  const { deps, registro } = depsFalsas([consulta]);
-  const r = await tratarBotaoDoLembrete(
-    { unit: unidade(), leadId: 777, texto: 'Confirmar presença', conv: { contactName: 'João', phone: null }, kommo: k.cliente, env: ENV_LIGADO },
-    deps,
-  );
+  const c = cenario({
+    lead: cartao({ 1: CONSULTA_S, 4: 321 }),
+    conversa: [saida(VESPERA_CONSULTA, horasAntes(1)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [consulta],
+  });
+  const r = await c.tocar('Confirmar presença');
   assert.equal(r?.tipo, 'consulta');
   assert.equal(r?.franquia, 'confirmada');
-  assert.deepEqual(registro.confirmados, [3738045]);
-  assert.match(k.respostas[0], /^Confirmado, João! 💙 Te esperamos sábado, 17\/10 às 14:30\. Chegue uns 15 minutos antes/);
-  assert.deepEqual(k.situacao, [{ fieldId: 99, valor: 'Confirmado' }]);
+  assert.deepEqual(c.r.confirmados, [3738045]);
+  assert.match(c.r.respostas[0], /^Confirmado, Maria! 💙 Te esperamos sábado, 17\/10 às 14:30\. Chegue uns 15 minutos antes/);
+  assert.deepEqual(c.r.situacao, [{ fieldId: 99, valor: 'Confirmado' }]);
+});
+
+test('item 1 — retorno amanhã às 10h e sessão hoje às 18h: o toque na véspera do RETORNO confirma o retorno, não a sessão', async () => {
+  // 16/10 10:05 local. A véspera do retorno (17/10 10:00) saiu às 10:00; a sessão de hoje é às 18:00.
+  const agora = new Date('2026-10-16T13:05:00Z');
+  const retornoS = Math.floor(Date.parse('2026-10-17T13:00:00Z') / 1000);
+  const sessaoHojeS = Math.floor(Date.parse('2026-10-16T21:00:00Z') / 1000);
+  const retorno = agendamento({ utc: '2026-10-17T13:00:00Z', idSchedule: 7001, categoryName: 'Retorno', idTreatment: null });
+  const sessaoHoje = agendamento({ utc: '2026-10-16T21:00:00Z', idSchedule: 7002 });
+  const c = cenario({
+    agora,
+    lead: cartao({ 1: retornoS, 2: sessaoHojeS, 3: 555 }),
+    conversa: [saida('Olá! Sua consulta de retorno é amanhã, 17/10, às 10:00. Confirma?', horasAntes(1 / 12, agora)), entrada('Confirmar presença', agora)],
+    schedules: [retorno, sessaoHoje],
+  });
+  const r = await c.tocar('Confirmar presença');
+  // Antes da revisão: a data mais próxima (a sessão das 18h) vencia e a sessão era confirmada.
+  assert.equal(r?.tipo, 'consulta');
+  assert.deepEqual(c.r.confirmados, [7001]);
+});
+
+test('item 1 — lembrete que não diz se é consulta ou sessão: responde e abre tarefa, NADA na franquia', async () => {
+  const c = cenario({
+    lead: cartao({ 1: CONSULTA_S, 2: SESSAO_S, 3: 555 }),
+    conversa: [saida('Olá! Tudo certo para amanhã? Confirme a sua presença.', horasAntes(1)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  const r = await c.tocar('Confirmar presença');
+  assert.equal(r?.tipo, 'incerto');
+  assert.deepEqual(c.r.confirmados, []);
+  assert.equal(c.r.situacao.length, 0);
+  assert.equal(c.r.respostas.length, 1);
+  assert.match(c.r.respostas[0], /^Recebi sua confirmação, Maria! 💙/);
+  assert.equal(c.r.tarefas.length, 1);
+  assert.match(c.r.tarefas[0], /não deu para saber com certeza de qual agendamento.*Nada foi registrado na franquia/);
+});
+
+test('item 1 — a hora escrita no lembrete não é a da agenda: não confirma, responde e abre tarefa', async () => {
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida('A sua sessão é amanhã, 17/10, às 11:00.', horasAntes(2)), entrada('Confirmar', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })], // 09:00 na agenda
+  });
+  const r = await c.tocar('Confirmar');
+  assert.equal(r?.tipo, 'incerto');
+  assert.match(String(r?.motivo), /diz 11:00 e a agenda diz 09:00/);
+  assert.deepEqual(c.r.confirmados, []);
+  assert.equal(c.r.tarefas.length, 1);
+});
+
+test('item 2 — "Confirmado" digitado respondendo outra pergunta da SDR: NÃO confirma o horário antigo, segue para a Sofia', async () => {
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [
+      saida(VESPERA_SESSAO, horasAntes(3)),
+      entrada('Posso mudar para quinta?', horasAntes(2)),
+      saida('Consigo quinta às 15h, confirma?', horasAntes(1), 'equipe'),
+      entrada('Confirmado', horasAntes(0.01)),
+    ],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  const r = await c.tocar('Confirmado');
+  // Antes da revisão: confirmava a sessão antiga de amanhã 09:00 e calava a Sofia.
+  assert.equal(r, null);
+  assert.deepEqual(c.r.confirmados, []);
+  assert.equal(c.r.respostas.length, 0);
+  assert.equal(c.r.leituras, 0, 'nem chega a ler o cartão');
+});
+
+test('item 2 — a Sofia falou por último (fala gravada no nosso banco): não é resposta a lembrete', async () => {
+  const fala = 'Sua sessão de amanhã está mantida às 09:00, quer que eu confirme?';
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(3)), entrada('ainda tá de pé?', horasAntes(2)), saida(fala, horasAntes(1)), entrada('Confirmado', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+    falasDaSofia: [fala],
+  });
+  assert.equal(await c.tocar('Confirmado'), null);
+  assert.deepEqual(c.r.confirmados, []);
+});
+
+test('item 2 — repetição do toque NUNCA fica sem resposta: "Já está confirmado ✅", sem confirmar de novo', async () => {
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(2)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  await c.tocar('Confirmar presença');
+  const segunda = await c.tocar('Confirmar presença');
+  assert.equal(segunda?.resposta, 'repetida');
+  assert.equal(c.r.respostas.length, 2, 'antes da revisão a repetição ficava calada por 48 h');
+  assert.match(c.r.respostas[1], /^Já está confirmado, Maria! ✅ Te esperamos na sua sessão sábado, 17\/10 às 09:00/);
+  assert.deepEqual(c.r.confirmados, [9001], 'a franquia é confirmada uma vez só');
+});
+
+test('item 2 — o mesmo agendamento confirmado de novo por OUTRO lembrete (véspera e depois o do dia): responde "já está"', async () => {
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(2)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  await c.tocar('Confirmar presença');
+  // depois da nossa resposta, sai o lembrete do dia (3 h antes) — a última fala volta a ser um lembrete
+  const c2 = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida('A sua sessão de hoje está marcada para 09:00.', horasAntes(0.1)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  for (const [k, v] of c.r.marcas) c2.r.marcas.set(k, new Date(v.getTime() - 3600_000));
+  const r = await c2.tocar('Confirmar presença');
+  assert.equal(r?.resposta, 'repetida');
+  assert.equal(c2.r.respostas.length, 1);
+  assert.match(c2.r.respostas[0], /^Já está confirmado/);
+  assert.deepEqual(c2.r.confirmados, []);
+});
+
+test('depois da nossa resposta, um toque DIFERENTE ("Preciso remarcar") é tratado para o mesmo agendamento', async () => {
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(2)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  await c.tocar('Confirmar presença');
+  const r = await c.tocar('Preciso remarcar');
+  assert.equal(r?.resposta, 'remarcar');
+  assert.equal(r?.tipo, 'sessao');
+  assert.equal(c.r.tarefas.length, 1);
+  assert.match(c.r.tarefas[0], /remarcar a sessão de sábado, 17\/10 às 09:00/);
+});
+
+test('lembrete NOVO de outro agendamento depois de um toque já respondido: confirma o novo, não responde "já está"', async () => {
+  const c = cenario({
+    lead: cartao({ 1: CONSULTA_S, 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(2)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [
+      agendamento({ utc: '2026-10-17T12:00:00Z' }),
+      agendamento({ utc: '2026-10-17T17:30:00Z', idSchedule: 3738045, categoryName: 'Avaliação', idTreatment: null }),
+    ],
+  });
+  await c.tocar('Confirmar presença');
+  // depois, sai a véspera da CONSULTA de 14:30 e o paciente toca de novo
+  const c2 = cenario({
+    lead: cartao({ 1: CONSULTA_S, 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_CONSULTA, horasAntes(0.2)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T17:30:00Z', idSchedule: 3738045, categoryName: 'Avaliação', idTreatment: null })],
+  });
+  for (const [k, v] of c.r.marcas) c2.r.marcas.set(k, new Date(v.getTime() - 3600_000));
+  const r = await c2.tocar('Confirmar presença');
+  assert.equal(r?.resposta, 'confirmou');
+  assert.equal(r?.tipo, 'consulta');
+  assert.deepEqual(c2.r.confirmados, [3738045]);
+});
+
+test('dois toques no mesmo instante (duplo clique): uma resposta e uma confirmação só', async () => {
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(2)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  const [a, b] = await Promise.all([c.tocar('Confirmar presença'), c.tocar('Confirmar presença')]);
+  assert.deepEqual([a?.resposta, b?.resposta].sort(), ['confirmou', 'repetida']);
+  assert.equal(c.r.respostas.length, 1);
+  assert.deepEqual(c.r.confirmados, [9001]);
 });
 
 test('"Preciso remarcar" → tarefa para a equipe + resposta; NADA na franquia', async () => {
-  const k = kommoFalso(cartao({ 2: SESSAO_S, 3: 555 }));
-  const { deps, registro } = depsFalsas([agendamento({ utc: '2026-10-17T12:00:00Z' })]);
-  const r = await tratarBotaoDoLembrete(
-    { unit: unidade(), leadId: 777, texto: 'Preciso remarcar', conv: { contactName: 'Maria', phone: null }, kommo: k.cliente, env: ENV_LIGADO },
-    deps,
-  );
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(2)), entrada('Preciso remarcar', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  const r = await c.tocar('Preciso remarcar');
   assert.equal(r?.resposta, 'remarcar');
-  assert.equal(r?.franquia, null);
-  assert.deepEqual(registro.confirmados, []);
-  assert.equal(k.tarefas.length, 1);
-  assert.match(k.tarefas[0], /🔁 Pediu para remarcar a sessão de sábado, 17\/10 às 09:00/);
-  assert.match(k.respostas[0], /^Sem problema, Maria! 🙏/);
-});
-
-test('idempotência: o mesmo toque de novo (reentrega ou dois toques) não responde nem confirma outra vez', async () => {
-  const k = kommoFalso(cartao({ 2: SESSAO_S, 3: 555 }));
-  const { deps, registro } = depsFalsas([agendamento({ utc: '2026-10-17T12:00:00Z' })]);
-  const args = { unit: unidade(), leadId: 777, texto: 'Confirmar presença', conv: { contactName: 'Maria', phone: null }, kommo: k.cliente, env: ENV_LIGADO };
-  await tratarBotaoDoLembrete(args, deps);
-  const segunda = await tratarBotaoDoLembrete(args, deps);
-  assert.equal(segunda?.resposta, 'repetida', 'tratado em código: também não vai para a Sofia');
-  assert.equal(k.respostas.length, 1);
-  assert.deepEqual(registro.confirmados, [9001]);
-});
-
-test('dois toques quase juntos (duplo clique): uma resposta e uma confirmação só', async () => {
-  const k = kommoFalso(cartao({ 2: SESSAO_S, 3: 555 }));
-  const { deps, registro } = depsFalsas([agendamento({ utc: '2026-10-17T12:00:00Z' })]);
-  const args = { unit: unidade(), leadId: 777, texto: 'Confirmar presença', conv: { contactName: 'Maria', phone: null }, kommo: k.cliente, env: ENV_LIGADO };
-  const [a, b] = await Promise.all([tratarBotaoDoLembrete(args, deps), tratarBotaoDoLembrete(args, deps)]);
-  assert.deepEqual([a?.resposta, b?.resposta].sort(), ['confirmou', 'repetida']);
-  assert.equal(k.respostas.length, 1);
-  assert.deepEqual(registro.confirmados, [9001]);
+  assert.deepEqual(c.r.confirmados, []);
+  assert.equal(c.r.tarefas.length, 1);
+  assert.match(c.r.tarefas[0], /🔁 Pediu para remarcar a sessão de sábado, 17\/10 às 09:00/);
+  assert.match(c.r.respostas[0], /^Sem problema, Maria! 🙏/);
 });
 
 test('agendamento não bate com o horário do cartão → responde, NÃO confirma, e abre tarefa para a equipe', async () => {
-  const k = kommoFalso(cartao({ 2: SESSAO_S, 3: 555 }));
-  const { deps, registro } = depsFalsas([agendamento({ utc: '2026-10-17T15:00:00Z' })]);
-  const r = await tratarBotaoDoLembrete(
-    { unit: unidade(), leadId: 777, texto: 'Confirmar presença', conv: { contactName: 'Maria', phone: null }, kommo: k.cliente, env: ENV_LIGADO },
-    deps,
-  );
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida('A sua sessão é amanhã. Confirma?', horasAntes(2)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T15:00:00Z' })],
+  });
+  const r = await c.tocar('Confirmar presença');
   assert.equal(r?.franquia, 'sem_consulta');
-  assert.deepEqual(registro.confirmados, []);
-  assert.equal(k.respostas.length, 1);
-  assert.equal(k.tarefas.length, 1);
-  assert.match(k.tarefas[0], /CONFIRMOU pelo WhatsApp a sessão.*sem sessão/);
+  assert.deepEqual(c.r.confirmados, []);
+  assert.equal(c.r.respostas.length, 1);
+  assert.equal(c.r.tarefas.length, 1);
+  assert.match(c.r.tarefas[0], /CONFIRMOU pelo WhatsApp a sessão.*sem sessão/);
 });
 
 test('só no papel: não responde nem escreve — registra na tela o que faria e deixa a Sofia seguir', async () => {
   _semearParaTeste([{ slug: SLUG, automacao: 'confirmar-sessao', estado: 'seco' }]);
-  const k = kommoFalso(cartao({ 2: SESSAO_S, 3: 555 }));
-  const { deps, registro } = depsFalsas([agendamento({ utc: '2026-10-17T12:00:00Z' })]);
-  const r = await tratarBotaoDoLembrete(
-    { unit: unidade(), leadId: 777, texto: 'Confirmar presença', conv: { contactName: 'Maria', phone: null }, kommo: k.cliente, env: {} as NodeJS.ProcessEnv },
-    deps,
-  );
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(2)), entrada('Confirmar presença', horasAntes(0.01))],
+    schedules: [agendamento({ utc: '2026-10-17T12:00:00Z' })],
+  });
+  const r = await c.tocar('Confirmar presença', {} as NodeJS.ProcessEnv);
   assert.equal(r, null);
-  assert.equal(k.respostas.length, 0);
-  assert.equal(k.tarefas.length, 0);
-  assert.deepEqual(registro.confirmados, []);
-  assert.equal(registro.simulados.length, 1);
-  assert.equal(registro.simulados[0].acao, 'gravaria');
-  assert.match(String(registro.simulados[0].motivo), /agendamento 9001/);
+  assert.equal(c.r.respostas.length, 0);
+  assert.equal(c.r.tarefas.length, 0);
+  assert.deepEqual(c.r.confirmados, []);
+  assert.equal(c.r.marcas.size, 0);
+  assert.equal(c.r.simulados.length, 1);
+  assert.equal(c.r.simulados[0].acao, 'gravaria');
+  assert.match(String(c.r.simulados[0].motivo), /agendamento 9001/);
 });
 
-test('chaves desligadas: nem lê o cartão', async () => {
-  const k = kommoFalso(cartao({ 2: SESSAO_S }));
-  const { deps } = depsFalsas([]);
-  const r = await tratarBotaoDoLembrete(
-    { unit: unidade(), leadId: 777, texto: 'Confirmar presença', conv: { contactName: null, phone: null }, kommo: k.cliente, env: {} as NodeJS.ProcessEnv },
-    deps,
-  );
-  assert.equal(r, null);
-  assert.equal(k.leituras, 0);
+test('chaves desligadas: nem lê a conversa nem o cartão', async () => {
+  const c = cenario({ lead: cartao({ 2: SESSAO_S }), conversa: [saida(VESPERA_SESSAO, horasAntes(2))], schedules: [] });
+  assert.equal(await c.tocar('Confirmar presença', {} as NodeJS.ProcessEnv), null);
+  assert.equal(c.r.leituras, 0);
 });
 
-test('sem lembrete nas próximas 30 h (toque antigo): segue para a Sofia, sem resposta em código', async () => {
-  const k = kommoFalso(cartao({ 2: SESSAO_S + 5 * 86_400, 3: 555 }));
-  const { deps, registro } = depsFalsas([]);
-  const r = await tratarBotaoDoLembrete(
-    { unit: unidade(), leadId: 777, texto: 'Confirmar presença', conv: { contactName: null, phone: null }, kommo: k.cliente, env: ENV_LIGADO },
-    deps,
-  );
-  assert.equal(r, null);
-  assert.equal(registro.buscas, 0);
-  assert.equal(k.respostas.length, 0);
+test('conversa oficial ilegível: sem prova, segue para a Sofia', async () => {
+  const c = cenario({ lead: cartao({ 2: SESSAO_S, 3: 555 }), conversa: null, schedules: [] });
+  assert.equal(await c.tocar('Confirmar presença'), null);
+  assert.equal(c.r.respostas.length, 0);
 });
 
 test('franquia fora do ar: responde, não confirma e avisa a equipe (o "não sei" nunca vira "confirmado")', async () => {
-  const k = kommoFalso(cartao({ 2: SESSAO_S, 3: 555 }));
-  const { deps, registro } = depsFalsas(null);
-  const r = await tratarBotaoDoLembrete(
-    { unit: unidade(), leadId: 777, texto: 'Confirmar', conv: { contactName: 'Maria', phone: null }, kommo: k.cliente, env: ENV_LIGADO },
-    deps,
-  );
+  const c = cenario({
+    lead: cartao({ 2: SESSAO_S, 3: 555 }),
+    conversa: [saida(VESPERA_SESSAO, horasAntes(2)), entrada('Confirmar', horasAntes(0.01))],
+    schedules: null,
+  });
+  const r = await c.tocar('Confirmar');
   assert.equal(r?.franquia, 'sem_consulta');
-  assert.deepEqual(registro.confirmados, []);
-  assert.equal(k.tarefas.length, 1);
-  // o horário dito é o do cartão (o que o lembrete mostrou)
-  assert.match(k.respostas[0], /sábado, 17\/10 às 09:00/);
+  assert.deepEqual(c.r.confirmados, []);
+  assert.equal(c.r.tarefas.length, 1);
+  assert.match(c.r.respostas[0], /sábado, 17\/10 às 09:00/);
 });

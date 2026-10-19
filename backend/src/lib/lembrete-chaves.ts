@@ -2,8 +2,9 @@
  * As duas chaves da resposta aos LEMBRETES que o robô do Kommo manda (decisão do João, 16/10/2026):
  *
  *  - `confirmacao-d1` (CONFIRMACAO_D1_SLUGS): a véspera da consulta sai pelo gatilho de 24 h do Kommo,
- *    e o toque em "Confirmar presença"/"Preciso remarcar" é tratado em código. Ligada, DESLIGA a
- *    véspera do servidor (reminder-worker) nesta unidade — senão o paciente recebe duas perguntas.
+ *    e o toque em "Confirmar presença"/"Preciso remarcar" é tratado em código. Fora de "desligado" (só no
+ *    papel ou ligada), DESLIGA a véspera do servidor (reminder-worker) nesta unidade — senão o paciente
+ *    recebe duas perguntas.
  *  - `confirmar-sessao` (CONFIRMAR_SESSAO_SLUGS): o mesmo toque no lembrete da SESSÃO (24 h / 3 h antes
  *    da ◷ Próxima sessão) responde sozinho e confirma a sessão na franquia.
  *
@@ -27,7 +28,13 @@ export function estadoDoLembrete(slug: string, tipo: TipoLembrete, env: NodeJS.P
   return estadoDaAutomacao(slug, AUTOMACAO_DO_LEMBRETE[tipo], env[VARIAVEL_DO_LEMBRETE[tipo]]);
 }
 
-/** A véspera desta unidade é do robô do Kommo? Só "ligado" tira a do servidor; "só no papel" não muda nada. */
-export function vesperaPeloRoboDoKommo(slug: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  return estadoDoLembrete(slug, 'consulta', env) === 'ligado';
+/**
+ * A véspera do SERVIDOR fica desligada nesta unidade? Sim sempre que a chave `confirmacao-d1` sai de
+ * "desligado" — em "só no papel" também (revisão de 16/10): o robô do Kommo já está mandando a véspera
+ * desde que o gatilho foi criado, e deixar a do servidor sair junto dava duas vésperas ao mesmo paciente.
+ * O "só no papel" segue neutro no que ele promete: o toque no botão continua com a Sofia e a tela mostra o
+ * que o sistema faria. Por isso a ordem certa é criar o gatilho e mudar a chave no mesmo momento.
+ */
+export function vesperaDoServidorDesligada(slug: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return estadoDoLembrete(slug, 'consulta', env) !== 'desligado';
 }

@@ -34,6 +34,7 @@ import { ehEncerramentoRepetido } from '../lib/encerramento.js';
 import { podeSerRespostaD1, tratarRespostaD1 } from '../lib/confirmacao-d1.js';
 import { podeSerBotaoDoLembrete, tratarBotaoDoLembrete } from '../lib/resposta-ao-lembrete.js';
 import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
+import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { tentarBotoes } from '../lib/resposta-com-botoes.js';
@@ -91,9 +92,8 @@ const leadStatusSchema = z.object({
   pipeline_id: z.coerce.number().optional(),
 });
 
-// `listaDoKommo`: o corpo do Kommo chega em form-urlencoded e o parser (qs) só monta ARRAY até o índice
-// 20 — com mais itens (`leads[status][21]`, numa mudança de etapa em lote) vira objeto, e o z.array
-// recusava o webhook inteiro com 400. Ver kommo-webhook-lista.ts.
+// `listaDoKommo`: defesa barata se o parser um dia entregar a lista como objeto de índices (hoje o Express 5
+// já entrega array). O limite real do webhook em lote é o de parâmetros — ver parser-webhook-kommo.ts.
 export const webhookSchema = z.object({
   account: z.object({ id: z.coerce.number().optional() }).partial().optional(),
   leads: z
@@ -369,7 +369,16 @@ async function detectAndHandleConversion(
   if (wonSet.size === 0) return { converted: false, leadId: null, statusId: null };
 
   const events = parsed.leads?.status ?? [];
-  const wonEvent = events.find((e) => e.status_id !== undefined && wonSet.has(e.status_id));
+  if (!events.some((e) => e.status_id !== undefined && wonSet.has(e.status_id))) {
+    return { converted: false, leadId: null, statusId: null };
+  }
+  // 142/143 se repetem em todo funil (o 142 do TRATAMENTO é a ALTA): o funil decide — ver conversao-por-etapa.ts.
+  // Esquema em cache por unidade; falhou, só os ids próprios da conta contam.
+  const esquema = await esquemaKommoDaUnidade(unit, createKommoClient(unit)).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug }, 'webhook: não li o esquema da conta — 142/143 não contam como conversão agora');
+    return null;
+  });
+  const wonEvent = eventoDeConversao(events, wonSet, esquema ? (id) => esquema.nomeDoFunil(id) : null);
   if (!wonEvent) return { converted: false, leadId: null, statusId: null };
 
   const leadId = wonEvent.id;
@@ -735,16 +744,18 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
           return null;
         });
     if (lembrete) {
-      const oQue = lembrete.tipo === 'sessao' ? 'sessão' : 'consulta';
+      const oQue = lembrete.tipo === 'sessao' ? 'da sessão' : lembrete.tipo === 'consulta' ? 'da consulta' : '(agendamento incerto)';
       await recorder.step({
         kind: 'COMPLETED',
         title:
-          lembrete.resposta === 'confirmou'
-            ? `Paciente tocou "Confirmar presença" no lembrete da ${oQue} — respondido em código, sem IA (franquia: ${lembrete.franquia ?? '—'})`
-            : lembrete.resposta === 'repetida'
-              ? `Mesmo toque no lembrete da ${oQue}, já respondido — sem repetir, sem IA`
-              : `Paciente pediu para remarcar a ${oQue} pelo lembrete — tarefa para a equipe, sem IA`,
-        payload: { mensagem: ctx.humanMessage.slice(0, 80), tipo: lembrete.tipo, idSchedule: lembrete.idSchedule, franquia: lembrete.franquia },
+          lembrete.resposta === 'repetida'
+            ? `Mesmo toque no lembrete ${oQue}, já tratado — respondido "já está", sem refazer, sem IA`
+            : lembrete.tipo === 'incerto'
+              ? `Toque no lembrete sem agendamento certo (${lembrete.motivo ?? '?'}) — respondido e tarefa para a equipe, nada na franquia, sem IA`
+              : lembrete.resposta === 'confirmou'
+                ? `Paciente tocou "Confirmar presença" no lembrete ${oQue} — respondido em código, sem IA (franquia: ${lembrete.franquia ?? '—'})`
+                : `Paciente pediu para remarcar pelo lembrete ${oQue} — tarefa para a equipe, sem IA`,
+        payload: { mensagem: ctx.humanMessage.slice(0, 80), tipo: lembrete.tipo, idSchedule: lembrete.idSchedule, franquia: lembrete.franquia, motivo: lembrete.motivo ?? null },
       });
       await recorder.finalize({
         status: 'SUCCESS',
