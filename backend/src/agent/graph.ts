@@ -860,7 +860,9 @@ export async function buildAgentGraph(
       let promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
       if (promessa && state.leadId) {
         const doVinculo = await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit));
-        if (doVinculo) promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas: [...consultasValidas, doVinculo] });
+        // a mesma prova vale para conferir a reescrita lá embaixo (4º achado do Codex)
+        if (doVinculo) consultasValidas.push(doVinculo);
+        if (doVinculo) promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
       }
       if (promessa) {
         const t1 = performance.now();
