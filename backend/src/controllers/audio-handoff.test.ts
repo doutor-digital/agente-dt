@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { instrucaoAudioNaoTranscrito } from './webhook.controller.js';
+import { AUDIO_NAO_OUVIDO, instrucaoAudioNaoTranscrito } from './webhook.controller.js';
 
 // Boa Vista está na API NÃO OFICIAL do WhatsApp: o áudio não chega num formato
 // que a gente consiga baixar, então a transcrição falha SEMPRE. Pedir pro
@@ -42,4 +42,9 @@ test('nenhum dos dois culpa o paciente: nem "chegou cortado", nem idioma, nem mi
 test('os dois caminhos assumem a falha como nossa, não do paciente', () => {
   assert.match(instrucaoAudioNaoTranscrito(false), /o problema é do nosso lado/i);
   assert.match(instrucaoAudioNaoTranscrito(true), /a gente não consegue ouvir/i);
+});
+
+test('o que fica na fala do paciente é só o FATO, sem ordem pra IA (vai pra nota de cartão pausado e passa no detector de injeção)', () => {
+  assert.match(AUDIO_NAO_OUVIDO, /áudio/);
+  assert.doesNotMatch(AUDIO_NAO_OUVIDO, /pausar_ia|Chame|PROIBIDO|peça|responda/i);
 });

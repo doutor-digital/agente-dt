@@ -155,6 +155,25 @@ export function instrucaoAudioNaoTranscrito(handoff: boolean): string {
   );
 }
 
+/** O que fica na fala do paciente quando o áudio dele não virou texto (é fato, não instrução). */
+export const AUDIO_NAO_OUVIDO = '[áudio do cliente — não deu pra ouvir]';
+
+/** Tarefa no cartão pra alguém ouvir o áudio no aparelho — uma a cada 6 h por lead. Nunca lança. */
+async function avisarEquipeDoAudio(unit: Unit, leadId: number, motivo: string): Promise<void> {
+  if (!devoAvisar(`audio:${unit.id}:${leadId}`)) return;
+  if (await avisoRecente(unit.id, leadId, 'audio_nao_ouvido', 6 * 60 * 60 * 1000)) return;
+  try {
+    const criada = await createKommoClient(unit).createTask({
+      leadId,
+      text: `ALERTA · ${unit.slug} · Ouvir o áudio do paciente: a IA não conseguiu transcrever (${motivo}). Responder por aqui.`,
+      completeAt: Math.floor(Date.now() / 1000) + 15 * 60,
+    });
+    if (criada) await marcarAviso(unit.id, leadId, 'audio_nao_ouvido');
+  } catch (err) {
+    logger.warn({ err: String(err), leadId, unit: unit.slug }, 'áudio não ouvido e a tarefa pra equipe também falhou — segue');
+  }
+}
+
 function hasAudioAttachment(msg: MessageEvent): boolean {
   return !!getAudioUrl(msg);
 }
@@ -905,33 +924,27 @@ export async function processAgent(args: {
     }
   }
   const chaveDoAudio = `${unit.id}:${leadId}`;
+  // A instrução ao modelo e a tarefa pra equipe só entram DEPOIS das travas (horário, pausa, Sofia calada,
+  // etapa): aqui a mensagem ganha apenas o FATO — "mandou um áudio que não deu pra ouvir" — que é o que a
+  // nota de "paciente insistiu" de um cartão pausado precisa registrar. Instrução nossa dentro da fala do
+  // paciente ia pra nota e ainda acusava o detector de injeção ("Chame pausar_ia…").
+  let instrucaoDeAudio: string | null = null;
+  let audioParaEquipe: string | null = null;
   if (audios.length && !algumAudioFalhou) limparFalhasDeAudio(chaveDoAudio);
   if (algumAudioFalhou) {
     const falhasSeguidas = registrarFalhaDeAudio(chaveDoAudio);
     const paraEquipe = deveIrParaEquipe({ flagDaUnidade: unit.audioHandoffEnabled, estrutural: falhaEstrutural, falhasSeguidas });
-    // SEMPRE avisa o modelo, inclusive quando o áudio veio junto com texto: antes a instrução só entrava
-    // se não houvesse texto nenhum, e o áudio sumia em silêncio (ou, rajada só de áudios, ia espaço em
-    // branco para a Anthropic e voltava 400)
-    const instrucao = instrucaoAudioNaoTranscrito(paraEquipe);
-    humanMessage = humanMessage.trim() ? `${humanMessage}\n\n${instrucao}` : instrucao;
     const motivo = unit.audioHandoffEnabled ? 'a unidade não ouve áudio' : falhaEstrutural ? 'falha nossa (saldo/chave)' : `${falhasSeguidas}ª falha seguida`;
+    // SEMPRE, inclusive com texto junto: antes o áudio que falhava ao lado de um texto sumia em silêncio,
+    // e a rajada só de áudios ia como espaço em branco (400 na Anthropic)
+    humanMessage = humanMessage.trim() ? `${humanMessage}\n\n${AUDIO_NAO_OUVIDO}` : AUDIO_NAO_OUVIDO;
+    instrucaoDeAudio = instrucaoAudioNaoTranscrito(paraEquipe);
+    audioParaEquipe = paraEquipe ? motivo : null;
     await recorder.step({
       kind: 'THINKING',
       title: paraEquipe ? `Áudio não ouvido → equipe (${motivo})` : 'Áudio não ouvido → pedir pra escrever',
       payload: { falhaEstrutural, falhasSeguidas, paraEquipe },
     });
-    if (paraEquipe && devoAvisar(`audio:${unit.id}:${leadId}`) && !(await avisoRecente(unit.id, leadId, 'audio_nao_ouvido', 6 * 60 * 60 * 1000))) {
-      try {
-        const criada = await createKommoClient(unit).createTask({
-          leadId,
-          text: `ALERTA · ${unit.slug} · Ouvir o áudio do paciente: a IA não conseguiu transcrever (${motivo}). Responder por aqui.`,
-          completeAt: Math.floor(Date.now() / 1000) + 15 * 60,
-        });
-        if (criada) await marcarAviso(unit.id, leadId, 'audio_nao_ouvido');
-      } catch (err) {
-        logger.warn({ err: String(err), leadId, unit: unit.slug }, 'áudio não ouvido e a tarefa pra equipe também falhou — segue');
-      }
-    }
   }
 
   if (imageUrl) {
@@ -1191,9 +1204,12 @@ export async function processAgent(args: {
         payload: { leadId, tipo: injecao.tipo, trecho: injecao.trecho },
       });
     }
-    const mensagemParaIa = injecao
+    const mensagemDoPaciente = injecao
       ? `${avisoDeInjecao(injecao)}\n\n${humanMessage}`
       : humanMessage;
+    // depois das travas e do detector de injeção: a instrução é nossa, não do paciente
+    const mensagemParaIa = instrucaoDeAudio ? `${mensagemDoPaciente}\n\n${instrucaoDeAudio}` : mensagemDoPaciente;
+    if (audioParaEquipe) await avisarEquipeDoAudio(unit, leadId, audioParaEquipe);
 
     // A conversa como o WhatsApp a vê (rota oficial): resposta da equipe e mensagem
     // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde
