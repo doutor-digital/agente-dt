@@ -926,17 +926,18 @@ export async function processAgent(args: {
   const chaveDoAudio = `${unit.id}:${leadId}`;
   // A fala do paciente fica como ele mandou: as travas (horário, pausa, Sofia calada) e as notas de
   // "paciente insistiu" leem `humanMessage` e não podem tomar marcador nosso por texto dele. O fato ("áudio
-  // que não deu pra ouvir"), a instrução e a tarefa pra equipe entram só DEPOIS delas, na mensagem do modelo
-  // — e depois do detector de injeção, que acusaria a nossa própria instrução ("Chame pausar_ia…").
+  // que não deu pra ouvir") e a instrução entram só DEPOIS delas, na mensagem do modelo — e depois do
+  // detector de injeção, que acusaria a nossa própria instrução ("Chame pausar_ia…").
   let instrucaoDeAudio: string | null = null;
-  let audioParaEquipe: string | null = null;
   if (audios.length && !algumAudioFalhou) limparFalhasDeAudio(chaveDoAudio);
   if (algumAudioFalhou) {
     const falhasSeguidas = registrarFalhaDeAudio(chaveDoAudio);
     const paraEquipe = deveIrParaEquipe({ flagDaUnidade: unit.audioHandoffEnabled, estrutural: falhaEstrutural, falhasSeguidas });
     const motivo = unit.audioHandoffEnabled ? 'a unidade não ouve áudio' : falhaEstrutural ? 'falha nossa (saldo/chave)' : `${falhasSeguidas}ª falha seguida`;
     instrucaoDeAudio = instrucaoAudioNaoTranscrito(paraEquipe);
-    audioParaEquipe = paraEquipe ? motivo : null;
+    // A tarefa sai JÁ, antes das travas: fora do horário, com o cartão pausado ou a Sofia calada o modelo
+    // nem roda — e o áudio ficaria sem resposta e sem ninguém saber. Não mexe na fala do paciente.
+    if (paraEquipe) void avisarEquipeDoAudio(unit, leadId, motivo);
     await recorder.step({
       kind: 'THINKING',
       title: paraEquipe ? `Áudio não ouvido → equipe (${motivo})` : 'Áudio não ouvido → pedir pra escrever',
@@ -1209,7 +1210,6 @@ export async function processAgent(args: {
     const mensagemParaIa = instrucaoDeAudio
       ? [mensagemDoPaciente.trim() ? mensagemDoPaciente : '', AUDIO_NAO_OUVIDO, instrucaoDeAudio].filter(Boolean).join('\n\n')
       : mensagemDoPaciente;
-    if (audioParaEquipe) await avisarEquipeDoAudio(unit, leadId, audioParaEquipe);
 
     // A conversa como o WhatsApp a vê (rota oficial): resposta da equipe e mensagem
     // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde
