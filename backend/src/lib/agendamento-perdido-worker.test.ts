@@ -51,3 +51,25 @@ test('aceita a data em ms, em ISO e o nome do campo sem o símbolo', () => {
   assert.equal(cartaoTemConsulta(comData('2026-10-07T13:00:00-03:00'), oferta), true);
   assert.equal(cartaoTemConsulta(comData(quarta / 1000, 'Data da Consulta'), oferta), true);
 });
+
+test('Telegram: unidade, nome do cartão, hora local da oferta e link do cartão', async () => {
+  const { textoTelegramPerdido } = await import('./agendamento-perdido-worker.js');
+  const texto = textoTelegramPerdido({
+    unidade: 'Doutor Hérnia Olímpia',
+    subdominio: 'olimpiasp',
+    leadId: 5646431,
+    nomeDoCartao: 'Anderson 19/10/2026',
+    ofereceuEm: new Date('2026-10-19T11:49:14.275Z'),
+    fuso: 'America/Sao_Paulo',
+  });
+  assert.match(texto, /Agendamento perdido · Doutor Hérnia Olímpia/);
+  assert.match(texto, /Anderson 19\/10\/2026 — a IA ofereceu horário \(08:49\)/);
+  assert.match(texto, /https:\/\/olimpiasp\.kommo\.com\/leads\/detail\/5646431$/);
+});
+
+test('Telegram: cartão sem nome e conta sem subdomínio ainda dizem qual lead', async () => {
+  const { textoTelegramPerdido } = await import('./agendamento-perdido-worker.js');
+  const texto = textoTelegramPerdido({ unidade: 'Serra', subdominio: null, leadId: 42, nomeDoCartao: '  ', ofereceuEm: new Date(), fuso: 'America/Sao_Paulo' });
+  assert.match(texto, /^⚠️ Agendamento perdido · Serra\nlead 42 — /);
+  assert.ok(!texto.includes('kommo.com'));
+});

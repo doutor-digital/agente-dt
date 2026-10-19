@@ -3,6 +3,8 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoLead } from '../services/kommo.service.js';
 import { normalizarNome } from './kommo-schema.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
+import { fusoDaUnidade } from './fuso.js';
+import { enviarTelegram } from './telegram.js';
 
 /**
  * Avisa quando a IA chegou a oferecer horário e não fechou.
@@ -32,6 +34,10 @@ import { CAMPOS_SYNC } from './franquia-sync.js';
  * O alerta vai como tarefa no Kommo, igual ao de SLA: é onde a equipe já olha,
  * e o n8n leva pro grupo do GAC. Um por lead, nunca repetido — alarme que repete
  * vira ruído, e ruído faz ninguém olhar mais.
+ *
+ * E vai também pro Telegram do João (19/10/2026): desde 21/09 o aviso é só uma NOTA no cartão, e nota
+ * ninguém vê chegar — o Anderson de Olímpia (lead 5646431) escolheu "terça às 11:30", a IA não marcou, o
+ * vigia avisou às 13:27 e ninguém soube. Sem `TELEGRAM_BOT_TOKEN` no servidor, só a nota (como antes).
  */
 
 const SWEEP_MS = Number(process.env.AGENDAMENTO_PERDIDO_SWEEP_MS) || 15 * 60_000;
@@ -82,6 +88,25 @@ export function cartaoTemConsulta(
   const oferta = ofereceuEm.getTime();
   if (segundos === null || !Number.isFinite(oferta)) return false;
   return segundos * 1000 >= oferta - folgaMs;
+}
+
+/** A mensagem do Telegram: quem, de qual unidade, quando a IA ofereceu, e o link pra abrir o cartão. */
+export function textoTelegramPerdido(args: {
+  unidade: string;
+  subdominio: string | null | undefined;
+  leadId: number;
+  nomeDoCartao: string | null | undefined;
+  ofereceuEm: Date;
+  fuso: string;
+}): string {
+  const hora = new Intl.DateTimeFormat('pt-BR', { timeZone: args.fuso, hour: '2-digit', minute: '2-digit' }).format(args.ofereceuEm);
+  const quem = (args.nomeDoCartao ?? '').trim() || `lead ${args.leadId}`;
+  const link = args.subdominio ? `https://${args.subdominio}.kommo.com/leads/detail/${args.leadId}` : `lead ${args.leadId}`;
+  return [
+    `⚠️ Agendamento perdido · ${args.unidade}`,
+    `${quem} — a IA ofereceu horário (${hora}) e a consulta não foi marcada. Vale retomar antes que esfrie.`,
+    link,
+  ].join('\n');
 }
 
 let timer: NodeJS.Timeout | null = null;
@@ -243,6 +268,19 @@ async function varrer(): Promise<void> {
           logger.warn(
             { unit: unit.slug, leadId },
             'agendamento perdido: IA ofereceu horário e não fechou',
+          );
+
+          // Sem esperar: Telegram lento não pode segurar a varredura (até 10 s por alerta). Nunca lança;
+          // sem token, só registra no log.
+          void enviarTelegram(
+            textoTelegramPerdido({
+              unidade: unit.name,
+              subdominio: unit.kommoSubdomain,
+              leadId,
+              nomeDoCartao: lead.name,
+              ofereceuEm: c.ofereceuEm,
+              fuso: fusoDaUnidade(unit),
+            }),
           );
         } catch (err) {
           logger.warn({ err: String(err), unit: unit.slug, leadId }, 'falha ao avisar agendamento perdido');
