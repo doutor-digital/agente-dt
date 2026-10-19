@@ -2087,6 +2087,12 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (cartaoBlock) dynamic.push(cartaoBlock);
   const etapaBlock = renderEtapaLead(estadoEtapa, unit.spineTimezone, agoraLocalISO(fusoDaUnidade(unit)));
   if (etapaBlock) dynamic.push(etapaBlock);
+  // O anúncio que ele clicou. Faltava aqui desde a divisão cacheável/dinâmica (17/09): só
+  // `composeSystemPrompt` montava o bloco, e o caminho que a Sofia usa é este — 0 de ~5.000
+  // prompts tinham o anúncio (medido em 19/10). Vem depois do prefixo cacheado, onde fica
+  // <coleta_origem>, e é isso que deixa ele desligar a pergunta "como nos conheceu".
+  const anuncioBlock = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
+  if (anuncioBlock) dynamic.push(anuncioBlock);
 
   if (unit.singlePromptMode) {
     // Sem prompt montado por nós, não há bloco estável onde encaixar: os três

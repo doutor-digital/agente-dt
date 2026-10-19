@@ -192,3 +192,22 @@ test('com a agenda viva no prompt, o bloco do cartão não se repete — e a con
   assert.doesNotMatch(dynamic, /<consulta_que_ja_passou>/);
   assert.doesNotMatch(dynamic, /Aylana/, 'consulta passada não carrega o nome de quem atenderia');
 });
+
+test('o anúncio de origem chega ao prompt da Sofia (caminho cacheável/dinâmico) — faltava desde 17/09', () => {
+  const { cacheable, dynamic } = composeSystemPromptParts({
+    unit: resgate(),
+    leadId: 28359758,
+    estadoEtapa: {
+      ...CARTAO,
+      statusId: 1,
+      nome: 'EM QUALIFICAÇÃO',
+      jaAgendadoOuPaciente: false,
+      consultaNoCartao: null,
+      anuncio: { titulo: null, anuncio: null, campanha: null, plataforma: 'facebook', origem: 'Meta-Facebook', noStatus: true },
+    } as EstadoEtapaLead,
+    userMessage: 'Me manda esse vídeo ai',
+  });
+  assert.match(dynamic, /<anuncio_de_origem>/);
+  assert.match(dynamic, /Status do WhatsApp/);
+  assert.doesNotMatch(cacheable, /<anuncio_de_origem>/, 'é por lead: não pode entrar no prefixo cacheado');
+});
