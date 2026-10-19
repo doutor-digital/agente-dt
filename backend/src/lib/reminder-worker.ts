@@ -19,7 +19,10 @@
  */
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { createKommoClient, type KommoClient } from '../services/kommo.service.js';
+import { createKommoClient, type KommoClient, type KommoPipeline } from '../services/kommo.service.js';
+import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
+import { primeiroNomeDoPaciente } from './ponte-respostas.js';
+import { desistenciaEscrita, etapaSemVespera, textoTarefaDesistencia } from './vespera-segura.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService, type ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 import { addMessage } from '../services/conversations.service.js';
@@ -112,6 +115,10 @@ interface Envio {
   toque: Toque;
   /** Chave do dedupe, gravada aqui dentro assim que o canal aceita a mensagem. */
   chave: string;
+  /** Título do cartão: é nele que a Sofia grava o nome que o paciente disse. */
+  titulo: string | null;
+  /** Conversa oficial já lida pelo laço (undefined = ler aqui). */
+  oficiais?: MensagemOficial[] | null;
 }
 
 /** Manda a pergunta de confirmação pelo melhor canal disponível. Devolve por onde saiu. */
@@ -137,7 +144,7 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
 
   // Janela de 24 h: texto livre só chega se o paciente escreveu nesse período. Fora dela, o Kommo
   // aceita o envio e marca "Erro" depois — falha em silêncio.
-  const oficiais = await mensagensOficiais(kommo, leadId, 15).catch(() => null);
+  const oficiais = e.oficiais !== undefined ? e.oficiais : await mensagensOficiais(kommo, leadId, 15).catch(() => null);
   const aberta = oficiais ? janelaAberta(oficiais) : true;
 
   // Arma o tratador da resposta: sem isto, o "1" ou o toque no botão do paciente chega como texto
@@ -179,8 +186,10 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
     return 'nada';
   }
 
+  // O nome vem do título do cartão, que a Sofia grava com o nome que o paciente disse. O do contato é o perfil
+  // do WhatsApp ("Space Conv. Hookah", "Leily Espaço Diva" — Canaã, 19/10/2026): sem nome no título, vai "Oi!".
   const texto = textoConfirmacaoD1({
-    nome: conv?.contactName,
+    nome: primeiroNomeDoPaciente(e.titulo, null),
     quando: consulta.quando,
     especialista: consulta.especialista,
     endereco: unit.clinicAddress,
@@ -256,7 +265,13 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   });
 
   const kommo = createKommoClient(unit);
-  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0 };
+  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0, etapa: 0, desistiu: 0 };
+  let pipes: KommoPipeline[] | null = null;
+  const nomeDaEtapa = async (pipelineId: number | undefined, statusId: number): Promise<string | null> => {
+    pipes ??= await kommo.listPipelines().catch(() => []);
+    const pipe = pipes.find((p) => p.id === pipelineId) ?? pipes.find((p) => p.statuses?.some((s) => s.id === statusId));
+    return pipe?.statuses?.find((s) => s.id === statusId)?.name ?? null;
+  };
 
   for (const link of links) {
     const consulta = await AgendaReconcileService.consultaDoLead(unit, link.kommoLeadId);
@@ -279,6 +294,58 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
     try {
       if (await avisoRecente(unit.id, link.kommoLeadId, chave, POR_CONSULTA_MS)) continue;
       if (Date.now() < LEGADO_ATE && (await avisoRecente(unit.id, link.kommoLeadId, chaveAntiga, janela))) continue;
+
+      // A franquia não sabe de desistência (cancelar é só no Kommo): quem manda aqui é o cartão e a conversa.
+      // Ver `vespera-segura.ts` — caso Milena/Leomar, Canaã, 17–18/10/2026.
+      // Uma 2ª tentativa e, falhando de novo, segue como antes destas travas: a varredura é uma por dia, e
+      // segurar a véspera por um soluço do Kommo deixaria o paciente sem lembrete nenhum.
+      const lead = await kommo
+        .getLead(link.kommoLeadId)
+        .catch(() => kommo.getLead(link.kommoLeadId))
+        .catch((err) => {
+          logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, err: String(err) }, 'confirmação: cartão ilegível, segue sem as travas');
+          return null;
+        });
+      const etapa = lead?.status_id ? await nomeDaEtapa(lead.pipeline_id, lead.status_id) : null;
+      if (lead?.status_id && etapaSemVespera({ statusId: lead.status_id, nome: etapa })) {
+        conta.etapa++;
+        logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, etapa, toque }, 'confirmação: cartão fora de agendado, não sai');
+        continue;
+      }
+      const oficiais = await mensagensOficiais(kommo, link.kommoLeadId, 40).catch(() => null);
+      // Desde quando vale a desistência: o momento em que o horário atual foi gravado. `link` foi lido antes da
+      // reconciliação acima — se ela acabou de trocar o horário, o que o paciente escreveu antes é da consulta velha.
+      // Limite conhecido: `updatedAt` também anda quando o sincronizador grava paciente/tentativas no vínculo (perto
+      // do agendamento, não depois). Se andar depois da desistência, a véspera sai — que é o comportamento de antes.
+      const marcadaEm = consulta.mudou ? new Date() : link.updatedAt;
+      const desistiu = oficiais ? desistenciaEscrita(oficiais, marcadaEm) : null;
+      if (desistiu) {
+        conta.desistiu++;
+        const chaveTarefa = `vespera_desistencia:${consulta.quando}`;
+        if (!(await avisoRecente(unit.id, link.kommoLeadId, chaveTarefa, POR_CONSULTA_MS))) {
+          try {
+            await kommo.createTask({
+              leadId: link.kommoLeadId,
+              text: textoTarefaDesistencia({
+                slug: unit.slug,
+                nome: primeiroNomeDoPaciente(lead?.name, null),
+                quando: consulta.quando,
+                etapa,
+                mensagem: desistiu.texto,
+              }),
+              completeAt: Math.floor(Date.now() / 1000) + 60 * 60,
+            });
+            await marcarAviso(unit.id, link.kommoLeadId, chaveTarefa);
+          } catch (err) {
+            logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, err: String(err) }, 'confirmação: tarefa da desistência falhou');
+          }
+        }
+        logger.info(
+          { unit: unit.slug, kommoLeadId: link.kommoLeadId, toque, quando: consulta.quando, em: desistiu.em },
+          'confirmação: paciente escreveu que não vem, não sai',
+        );
+        continue;
+      }
 
       // O Salesbot de lembrete da unidade diz "sua consulta está garantida" — só serve para quem
       // JÁ respondeu confirmando. Quem não respondeu precisa da pergunta.
@@ -340,6 +407,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
         consulta: consulta as ConsultaReconciliada & { quando: string },
         toque,
         chave,
+        titulo: lead?.name ?? null,
+        oficiais,
       });
       conta[via]++;
       if (toque === 'd2') conta.d2++;
