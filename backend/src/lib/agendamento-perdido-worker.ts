@@ -270,8 +270,9 @@ async function varrer(): Promise<void> {
             'agendamento perdido: IA ofereceu horário e não fechou',
           );
 
-          // nunca lança; sem token, só registra no log
-          await enviarTelegram(
+          // Sem esperar: Telegram lento não pode segurar a varredura (até 10 s por alerta). Nunca lança;
+          // sem token, só registra no log.
+          void enviarTelegram(
             textoTelegramPerdido({
               unidade: unit.name,
               subdominio: unit.kommoSubdomain,
