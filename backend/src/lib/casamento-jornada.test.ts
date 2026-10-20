@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import {
   cartoesComMaisDeUmPaciente, chaveDoConflito, escolherPacienteDoCartao, faltasParaAvisar, idsDoConflito, identidadeDoPaciente,
-  notaConflitoDeTelefone, TAG_CONFLITO, type ClienteCandidato,
+  nomesCompativeis, notaConflitoDeTelefone, TAG_CONFLITO, type ClienteCandidato,
 } from './casamento-jornada.js';
 import { chaveTelefone, nomeDaFranquia } from './franquia-sync.js';
 import { tiraDoTratamento } from './guarda-funil-tratamento.js';
@@ -45,9 +45,16 @@ test('decisão 3: nome só no fim — nome exato e único, nunca contra um telef
   assert.equal(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [c(5, 'JOSE PEREIRA', null), c(6, 'JOSE PEREIRA', null)], fone: '', alvos: alvos('JOSE PEREIRA') }).tipo, 'nenhum', 'dois homônimos');
 });
 
-test('decisão 3: sem nome no título ("Lead 16/10/2026"), outro cartão do mesmo telefone que já sabe o idClient resolve', () => {
-  assert.deepEqual(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [], idsDosIrmaos: [4321], fone: FONE, alvos: new Set() }), { tipo: 'achou', idClient: 4321, por: 'telefone' });
-  assert.equal(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [], idsDosIrmaos: [], fone: FONE, alvos: new Set() }).tipo, 'nenhum');
+test('decisão 3: a franquia não traz o telefone, e outro cartão do mesmo telefone (com nome compatível) já sabe o idClient', () => {
+  const irmao = c(4321, 'ANA SOUZA', '+5599991234567');
+  assert.deepEqual(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [], irmaos: [irmao], fone: FONE, alvos: alvos('ANA DE SOUZA'), nome: 'Ana de Souza' }), { tipo: 'achou', idClient: 4321, por: 'telefone' });
+  assert.equal(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [], irmaos: [], fone: FONE, alvos: new Set(), nome: 'Ana de Souza' }).tipo, 'nenhum');
+});
+
+test('achado 2 (revisão de 16/10): o cartão irmão só vale com nome compatível — título sem nome ou de outra pessoa não casa', () => {
+  const daMae = c(4321, 'MARIA SOUZA', '+5599991234567');
+  assert.equal(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [], irmaos: [daMae], fone: FONE, alvos: new Set(), nome: 'Lead 16/10/2026' }).tipo, 'nenhum', 'sem nome no título: não prova nada (vai pra CONFERIR, como antes)');
+  assert.equal(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [], irmaos: [daMae], fone: FONE, alvos: alvos('ANA SOUZA'), nome: 'Ana Souza' }).tipo, 'nenhum', 'a filha não herda o paciente da mãe');
 });
 
 // ── decisão 1: dois pacientes no mesmo telefone ──
@@ -69,8 +76,39 @@ test('decisão 1: o mesmo nome e o mesmo telefone em dois cadastros é a mesma p
 });
 
 test('decisão 1: o irmão do Kommo com OUTRO idClient do mesmo telefone também é conflito', () => {
-  const r = escolherPacienteDoCartao({ idDoCartao: null, candidatos: [c(101, 'MARIA TESTE', '+5599991234567')], idsDosIrmaos: [202], fone: FONE, alvos: new Set() });
+  const r = escolherPacienteDoCartao({ idDoCartao: null, candidatos: [c(101, 'MARIA TESTE', '+5599991234567')], irmaos: [c(202, 'Maria Teste Souza', '+5599991234567')], fone: FONE, alvos: alvos('MARIA TESTE'), nome: 'MARIA TESTE' });
   assert.equal(r.tipo, 'conflito');
+});
+
+// ── achado 1 da revisão de 16/10: no CADASTRO, o nome tem de bater ──
+
+test('achado 1: cadastro da Ana Souza no WhatsApp da mãe (Maria Souza, paciente) = conflito; no robô o telefone continua mandando', () => {
+  const mae = c(100, 'MARIA SOUZA', '+5599991234567');
+  const cadastro = escolherPacienteDoCartao({ idDoCartao: null, candidatos: [mae], fone: FONE, alvos: alvos('ANA SOUZA'), nome: 'Ana Souza', modo: 'cadastro' });
+  assert.deepEqual(cadastro, { tipo: 'conflito', candidatos: [mae], outroNome: true });
+  assert.deepEqual(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [mae], fone: FONE, alvos: alvos('ANA SOUZA'), nome: 'Ana Souza' }), { tipo: 'achou', idClient: 100, por: 'telefone' }, 'regra do robô (23/09): sem mudança');
+  // a própria Maria, com o nome escrito de outro jeito, casa
+  assert.deepEqual(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [mae], fone: FONE, alvos: alvos('MARIA DE SOUZA'), nome: 'Maria de Souza', modo: 'cadastro' }), { tipo: 'achou', idClient: 100, por: 'telefone' });
+  // o cartão irmão da mãe (mesmo telefone, ⚙ da Maria) também é conflito no cadastro — e ignorado no robô
+  assert.equal(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [], irmaos: [mae], fone: FONE, alvos: alvos('ANA SOUZA'), nome: 'Ana Souza', modo: 'cadastro' }).tipo, 'conflito');
+  // a Ana já cadastrada no mesmo telefone da mãe: é ela
+  const ana = c(101, 'ANA CAROLINA SOUZA', '+5599991234567');
+  assert.deepEqual(escolherPacienteDoCartao({ idDoCartao: null, candidatos: [mae, ana], fone: FONE, alvos: alvos('ANA SOUZA'), nome: 'Ana Souza', modo: 'cadastro' }), { tipo: 'achou', idClient: 101, por: 'telefone' });
+});
+
+test('achado 1: cadastro — o ⚙ idClient (ou o vínculo) do cartão só vale se o nome do paciente bater', () => {
+  assert.deepEqual(escolherPacienteDoCartao({ idDoCartao: 100, nomeDoCartao: 'MARIA SOUZA', candidatos: [], fone: FONE, alvos: new Set(), nome: 'Ana Souza', modo: 'cadastro' }).tipo, 'conflito');
+  assert.deepEqual(escolherPacienteDoCartao({ idDoCartao: 100, nomeDoCartao: 'IA-MARIA SOUZA', candidatos: [], fone: FONE, alvos: new Set(), nome: 'Maria Souza', modo: 'cadastro' }), { tipo: 'achou', idClient: 100, por: 'idClient' });
+});
+
+test('nomesCompativeis: primeiro nome com folga de digitação e um sobrenome em comum; duas pessoas no título', () => {
+  assert.equal(nomesCompativeis('Ana Souza', 'MARIA SOUZA'), false);
+  assert.equal(nomesCompativeis('Maria Souza', 'MARIA DA SILVA SOUZA'), true);
+  assert.equal(nomesCompativeis('ALEXANDRO SANT ANA', 'ALEXSANDRO SANT ANA'), true);
+  assert.equal(nomesCompativeis('MARIA DA PENHA - ALEXANDRO SANT ANA', 'ALEXSANDRO SANTANA SANT ANA'), true);
+  assert.equal(nomesCompativeis('Lead 16/10/2026', 'MARIA SOUZA'), false);
+  assert.equal(nomesCompativeis('Maria', 'MARIA SOUZA'), true, 'sem sobrenome de um lado: o primeiro nome basta');
+  assert.equal(nomesCompativeis('Maria Lima', 'MARIA SOUZA'), false);
 });
 
 test('decisão 1: cartão que recebeu pacientes diferentes na varredura (o caso 1292772); o mesmo paciente duas vezes não conta', () => {

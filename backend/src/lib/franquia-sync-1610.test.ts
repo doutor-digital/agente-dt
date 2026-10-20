@@ -293,14 +293,16 @@ test('decisão 3 — o ⚙ idClient do cartão casa sem nenhuma chamada à franq
   assert.deepEqual(chamadasFranquia, []);
 });
 
-test('decisão 3 — cartão sem nome no título: o telefone acha o paciente pelo cartão irmão (antes ia pra CONFERIR)', async () => {
+test('decisão 3 — a franquia não acha o paciente pelo título, e o cartão irmão (mesmo telefone, mesmo nome) sabe o idClient', async () => {
   const unit = unidade();
   const { kommo } = kommoFalso([
-    { id: 1, name: 'Lead 16/10/2026', pipeline_id: 10, status_id: 104, campos: {}, tags: [], contato: 1, fone: FONE },
+    { id: 1, name: 'Ana Antiga 16/10/2026', pipeline_id: 10, status_id: 104, campos: {}, tags: [], contato: 1, fone: FONE },
     { id: 2, name: 'ANA ANTIGA', pipeline_id: 20, status_id: 142, campos: { [ID.IDCLIENT]: 4321 }, tags: [], contato: 2, fone: '(99) 99123-4567' },
   ]);
-  assert.equal(await idClientDoLead(unit, 1, 'Lead 16/10/2026', { kommo, contatoId: 1 }), null, 'regra antiga: não acha');
-  assert.deepEqual(await casarPacienteDoCartao(unit, 1, 'Lead 16/10/2026', { kommo, contatoId: 1, campos: CAMPOS }), { tipo: 'achou', idClient: 4321, por: 'telefone' });
+  assert.equal(await idClientDoLead(unit, 1, 'Ana Antiga 16/10/2026', { kommo, contatoId: 1 }), null, 'regra antiga: não acha');
+  assert.deepEqual(await casarPacienteDoCartao(unit, 1, 'Ana Antiga 16/10/2026', { kommo, contatoId: 1, campos: CAMPOS }), { tipo: 'achou', idClient: 4321, por: 'telefone' });
+  // achado 2: título sem nome ("Lead 16/10/2026") não prova que é a mesma pessoa do irmão — fica como antes (CONFERIR)
+  assert.equal((await casarPacienteDoCartao(unit, 1, 'Lead 16/10/2026', { kommo, contatoId: 1, campos: CAMPOS })).tipo, 'nenhum');
 });
 
 test('decisão 3 — o vínculo da Sofia é idClient também (vem antes da busca)', async () => {
@@ -514,7 +516,7 @@ test('cadastro duplicado — desligado não deixa nota; só no papel registra qu
 
 // ═════ revisão independente (16/10): cada achado reproduzido antes da correção ═════
 
-import { pacienteQueJaExiste } from '../services/paciente-existente.js';
+import { decidirCadastro, pacienteQueJaExiste } from '../services/paciente-existente.js';
 import { chaveDoWidget } from './widget-agenda.js';
 import { widgetConflitoHandler, _depsWidgetConflito } from '../controllers/widget-conflito.controller.js';
 import type { Request, Response } from 'express';
@@ -526,31 +528,43 @@ function maeEFilha() {
   fichasFalsas = new Map([[100, { idClient: 100, name: 'MARIA SOUZA', whatsapp: FONE_MAE, schedules: [], treatments: [] }]]);
 }
 
-test('achado 1 — cadastro da Ana Souza no WhatsApp da mãe (Maria Souza, já paciente): NÃO casa com a Maria; cadastra a Ana', async () => {
+test('achado 1 — cadastro da Ana Souza no WhatsApp da mãe (Maria Souza, já paciente): não busca pelo sobrenome nem casa com a Maria', async () => {
   maeEFilha();
   const { kommo } = kommoFalso([{ id: 80, name: 'Ana Souza', pipeline_id: 10, status_id: 102, campos: {}, tags: [], contato: 80, fone: FONE_MAE }]);
   const r = await pacienteQueJaExiste(unidade(), 80, { nome: 'Ana Souza', telefone: FONE_MAE, kommo, contatoId: 80 });
-  assert.equal(r, null, 'nome diferente no mesmo telefone = outra pessoa');
-  assert.ok(!chamadasFranquia.includes('busca:souza'), 'no cadastro não se busca só pelo sobrenome');
+  assert.equal(r, null, 'ninguém com o nome dela: cadastra a Ana, como antes de 16/10');
+  assert.ok(!chamadasFranquia.includes('busca:souza'), 'no cadastro não se busca só pelo sobrenome (era o que trazia a Maria)');
+  assert.ok(!chamadasFranquia.includes('busca:ana'), 'nem só pelo primeiro nome');
 });
 
-test('achado 1 — cadastro: o ⚙ idClient (ou o vínculo) do cartão com OUTRO nome não vale', async () => {
+test('achado 1 — cadastro: a franquia traz OUTRA pessoa com o telefone (nome que não bate) = conflito, nem casa nem cria', async () => {
+  clientesFalsos = [{ idClient: 100, name: 'JOANA SOUZA', whatsapp: FONE_MAE }];
+  const { kommo } = kommoFalso([{ id: 79, name: 'Ana Souza', pipeline_id: 10, status_id: 102, campos: {}, tags: [], contato: 79, fone: FONE_MAE }]);
+  const r = await pacienteQueJaExiste(unidade(), 79, { nome: 'Ana Souza', telefone: FONE_MAE, kommo, contatoId: 79 });
+  assert.deepEqual(r, { tipo: 'conflito', ids: [100], outroNome: true });
+  const d = decidirCadastro('ligado', r);
+  assert.equal(d.criar, false, 'ligado: não cria lead');
+  assert.equal(!d.criar && d.vincular, null, 'e não grava a Joana no vínculo');
+});
+
+test('achado 1 — cadastro: o ⚙ idClient (ou o vínculo) do cartão com OUTRO nome não vale (conflito); com o nome certo vale', async () => {
   maeEFilha();
   const { kommo } = kommoFalso([{ id: 81, name: 'Ana Souza', pipeline_id: 10, status_id: 102, campos: {}, tags: [], contato: 81, fone: FONE_MAE }]);
-  assert.equal(await pacienteQueJaExiste(unidade(), 81, { nome: 'Ana Souza', telefone: FONE_MAE, kommo, idDoCartao: 100 }), null, '⚙ da mãe');
+  assert.deepEqual(await pacienteQueJaExiste(unidade(), 81, { nome: 'Ana Souza', telefone: FONE_MAE, kommo, idDoCartao: 100 }), { tipo: 'conflito', ids: [100], outroNome: true }, '⚙ da mãe');
   const unit = unidade();
   vinculos.push({ unitId: unit.id, kommoLeadId: 81, spineIdClient: 100, spineIdSchedule: null });
-  assert.equal(await pacienteQueJaExiste(unit, 81, { nome: 'Ana Souza', telefone: FONE_MAE, kommo }), null, 'vínculo da mãe');
+  assert.deepEqual(await pacienteQueJaExiste(unit, 81, { nome: 'Ana Souza', telefone: FONE_MAE, kommo }), { tipo: 'conflito', ids: [100], outroNome: true }, 'vínculo da mãe');
+  assert.deepEqual(await pacienteQueJaExiste(unit, 81, { nome: 'Maria Souza', telefone: FONE_MAE, kommo }), { tipo: 'achou', idClient: 100, por: 'idClient' }, 'a própria Maria');
 });
 
-test('achado 1 — cadastro: cartão irmão da mãe não casa a filha; e a própria Maria casa (controle)', async () => {
+test('achado 1 — cadastro: cartão irmão da mãe não casa a filha (conflito); e a própria Maria casa (controle)', async () => {
   maeEFilha();
   clientesFalsos = [];
   const { kommo } = kommoFalso([
     { id: 82, name: 'Ana Souza', pipeline_id: 10, status_id: 102, campos: {}, tags: [], contato: 82, fone: FONE_MAE },
     { id: 83, name: 'MARIA SOUZA', pipeline_id: 20, status_id: 142, campos: { [ID.IDCLIENT]: 100 }, tags: [], contato: 83, fone: FONE_MAE },
   ]);
-  assert.equal(await pacienteQueJaExiste(unidade(), 82, { nome: 'Ana Souza', telefone: FONE_MAE, kommo, contatoId: 82 }), null);
+  assert.deepEqual(await pacienteQueJaExiste(unidade(), 82, { nome: 'Ana Souza', telefone: FONE_MAE, kommo, contatoId: 82 }), { tipo: 'conflito', ids: [100], outroNome: true });
   maeEFilha();
   const r = await pacienteQueJaExiste(unidade(), 82, { nome: 'Maria Souza', telefone: FONE_MAE, kommo, contatoId: 82 });
   assert.deepEqual(r, { tipo: 'achou', idClient: 100, por: 'telefone' });

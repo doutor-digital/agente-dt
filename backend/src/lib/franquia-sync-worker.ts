@@ -35,12 +35,12 @@ import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-es
 import {
   TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaTarefaDeDevolucao,
   escolherPacienteDoCartao, estadoCasamentoJornada, faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaDevolucao,
-  notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
+  notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type ClienteCandidato, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
 } from './casamento-jornada.js';
 import { PARA_SEMPRE_MS, avisarCadastroDuplicado, escolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
 import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, pularCartao, type GrupoDoCrm } from './crm-compartilhado.js';
+import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, podeMexer, pularCartao, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 
 const SWEEP_MS = 15 * 60_000;
 const PRIMEIRA_MS = 90_000;
@@ -388,14 +388,20 @@ async function resolverPaciente(
   return out;
 }
 
-/** O `⚙ idClient (franquia)` gravado no cartão (pela carga de implantação ou pela marcação do widget), ou null. */
+/**
+ * O `⚙ idClient (franquia)` gravado no cartão (pela carga de implantação ou pela marcação do widget), ou null. Sem os
+ * campos da conta (o cadastro da Sofia não os carrega), vale o `field_name` que o Kommo manda em cada valor do cartão.
+ */
 export function idClientDoCartao(
   lead: Pick<KommoLead, 'custom_fields_values'>,
   campos: ReadonlyArray<readonly [string, { id: number; nome?: string }]>,
 ): number | null {
+  const valores = lead.custom_fields_values ?? [];
   const info = campoDaConta(campos, '⚙ idClient (franquia)') ?? campos.find(([k]) => k.includes('idclient'))?.[1];
-  if (!info) return null;
-  const v = Number((lead.custom_fields_values ?? []).find((f) => f.field_id === info.id)?.values?.[0]?.value);
+  const cf = info
+    ? valores.find((f) => f.field_id === info.id)
+    : campos.length === 0 ? valores.find((f) => normalizar(f.field_name).includes('idclient')) : undefined;
+  const v = Number(cf?.values?.[0]?.value);
   return Number.isInteger(v) && v > 0 ? v : null;
 }
 
@@ -453,24 +459,39 @@ export async function carregarFunis(kommo: KommoClient): Promise<Funis | null> {
   };
 }
 
-const cacheDetalhe = new Map<string, { treatments: TratamentoParaEtapa[]; schedules: SpineSchedule[]; expiraEm: number }>();
+/** O detalhe do paciente (`GET /clients/{id}`): histórico + nome e telefone, que o casamento de 16/10 confere. */
+interface DetalheDoPaciente {
+  treatments: TratamentoParaEtapa[];
+  schedules: SpineSchedule[];
+  name: string | null;
+  whatsapp: string | null;
+}
+const cacheDetalhe = new Map<string, DetalheDoPaciente & { expiraEm: number }>();
 const CACHE_DETALHE_MS = 60 * 60_000;
+
+/** O detalhe, do cache de 1 h ou da franquia. `null` = a franquia não tem esse idClient; erro da API LANÇA. */
+async function detalheDoPaciente(unit: Unit, idClient: number): Promise<DetalheDoPaciente | null> {
+  const k = `${unit.id}:${idClient}`;
+  const hit = cacheDetalhe.get(k);
+  if (hit && hit.expiraEm > Date.now()) return hit;
+  const r = await SpineService.getClient(unit, idClient);
+  if (!r.ok) throw new Error(`franquia clients/${idClient} falhou: ${r.error}`);
+  const c = r.data?.client;
+  if (!c) return null;
+  if (cacheDetalhe.size > 20_000) for (const [kk, v] of cacheDetalhe) if (v.expiraEm <= Date.now()) cacheDetalhe.delete(kk);
+  const out = { treatments: c.treatments, schedules: c.schedules, name: c.name, whatsapp: c.whatsapp, expiraEm: Date.now() + CACHE_DETALHE_MS };
+  cacheDetalhe.set(k, out);
+  return out;
+}
 
 /**
  * O `/treatments/search` só devolve o mês corrente e a agenda só D-3…D+45. Pra decidir
  * GANHO → EM TRATAMENTO e EM TRATAMENTO → ALTA precisamos do histórico do paciente,
  * que só o detalhe (`GET /clients/{id}`) traz. Uma chamada por paciente por hora.
  */
-export async function historicoDoPaciente(unit: Unit, idClient: number | null): Promise<{ treatments: TratamentoParaEtapa[]; schedules: SpineSchedule[] } | null> {
+export async function historicoDoPaciente(unit: Unit, idClient: number | null): Promise<DetalheDoPaciente | null> {
   if (!idClient) return null;
-  const k = `${unit.id}:${idClient}`;
-  const hit = cacheDetalhe.get(k);
-  if (hit && hit.expiraEm > Date.now()) return hit;
-  const r = await SpineService.getClient(unit, idClient);
-  if (!r.ok || !r.data?.client) return null;
-  const out = { treatments: r.data.client.treatments, schedules: r.data.client.schedules, expiraEm: Date.now() + CACHE_DETALHE_MS };
-  cacheDetalhe.set(k, out);
-  return out;
+  return detalheDoPaciente(unit, idClient).catch(() => null);
 }
 
 /** Todo "moveria" do seco (do move ou da revisão) conta aqui, pra o `simulados` do resumo nunca subestimar o volume. */
@@ -637,8 +658,13 @@ const CACHE_BUSCA_MS = 10 * 60_000;
  * assim que UM candidato bate o telefone. `null` = não há o que buscar (sem termos, ou `soPorTelefone` sem telefone) —
  * salvo `mesmoSemTermos`, que devolve a lista vazia com o telefone (as regras de 16/10 ainda olham os cartões irmãos).
  */
-async function buscarCandidatos(unit: Unit, nome: string | null, extra?: ExtraDaBusca & { mesmoSemTermos?: boolean; memo?: boolean }): Promise<ResultadoDaBusca | null> {
-  const termos = termosDeBuscaDoNome(nome).slice(0, extra?.maxTermos ?? MAX_TERMOS_DE_BUSCA);
+async function buscarCandidatos(
+  unit: Unit, nome: string | null,
+  extra?: ExtraDaBusca & { mesmoSemTermos?: boolean; memo?: boolean; soNomeCompleto?: boolean },
+): Promise<ResultadoDaBusca | null> {
+  // no cadastro (achado 1 da revisão de 16/10) só nome e sobrenome juntos: "Souza" sozinho traz a mãe da Ana Souza
+  const doNome = termosDeBuscaDoNome(nome).filter((t) => !extra?.soNomeCompleto || t.trim().includes(' '));
+  const termos = doNome.slice(0, extra?.maxTermos ?? MAX_TERMOS_DE_BUSCA);
   if (termos.length === 0 && !extra?.mesmoSemTermos) return null;
   // telefone do contato do Kommo × whatsapp da franquia: casa mesmo quando a SDR escreveu o nome diferente
   let foneBruto: string | null = extra?.fone ?? null;
@@ -652,7 +678,7 @@ async function buscarCandidatos(unit: Unit, nome: string | null, extra?: ExtraDa
     }
   }
   if (extra?.soPorTelefone && !fone) return null;
-  const alvos = new Set(termosDeBuscaDoNome(nome).map(normalizar));
+  const alvos = new Set(doNome.map(normalizar));
   const chaveMemo = `${unit.id}|${termos.join('/')}|${fone}`;
   if (extra?.memo) {
     const m = cacheBusca.get(chaveMemo);
@@ -690,17 +716,24 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDa
 }
 
 /**
- * idClient dos OUTROS cartões do Kommo com o mesmo telefone — pelo `⚙ idClient` do cartão irmão ou pelo vínculo que a
- * Sofia gravou nele. A busca do Kommo é textual (pode trazer quem só tem os dígitos no texto), então o telefone do contato
- * de cada irmão é conferido antes de valer (no máximo 3 conferências por cartão).
+ * Os pacientes dos OUTROS cartões do Kommo com o mesmo telefone — pelo `⚙ idClient` do cartão irmão ou pelo vínculo que a
+ * Sofia gravou nele —, com o TÍTULO do cartão irmão como nome (é com ele que `escolherPacienteDoCartao` confere se é a
+ * mesma pessoa; sem chamada à franquia). Num Kommo dividido (Petrópolis + Caxias), só os cartões desta unidade. A busca do
+ * Kommo é textual (pode trazer quem só tem os dígitos no texto), então o telefone do contato de cada irmão é conferido
+ * antes de valer (no máximo 3 conferências por cartão).
  */
-async function idsDosIrmaosPorTelefone(
+async function irmaosPorTelefone(
   unit: Unit, kommo: KommoClient, leadId: number, foneBruto: string,
   campos: ReadonlyArray<readonly [string, { id: number; nome?: string }]>,
-): Promise<number[]> {
+): Promise<ClienteCandidato[]> {
   const chave = chaveTelefone(foneBruto);
   if (!chave) return [];
-  const irmaos = (await kommo.listLeadsPorTelefone(foneBruto).catch(() => [] as KommoLead[])).filter((l) => l.id !== leadId).slice(0, 10);
+  const grupo = await grupoDaUnidade(unit.id);
+  const irmaos = (await kommo.listLeadsPorTelefone(foneBruto).catch(() => [] as KommoLead[]))
+    .filter((l) => l.id !== leadId)
+    // achado 2: o cartão de Caxias não é irmão do de Petrópolis, mesmo com o mesmo telefone
+    .filter((l) => podeMexer(veredictoDoCartao(grupo, unit.id, grupo ? valorDaUnidadeNoCartao(l) : null)))
+    .slice(0, 10);
   if (irmaos.length === 0) return [];
   const porCartao = new Map<number, Set<number>>();
   const anotar = (lid: number, id: number | null | undefined) => {
@@ -715,16 +748,17 @@ async function idsDosIrmaosPorTelefone(
     select: { kommoLeadId: true, spineIdClient: true },
   }).catch(() => [] as Array<{ kommoLeadId: number; spineIdClient: number | null }>);
   for (const k of links) anotar(k.kommoLeadId, k.spineIdClient);
-  const ids = new Set<number>();
+  const out: ClienteCandidato[] = [];
   let conferidos = 0;
   for (const [lid, set] of porCartao) {
     if (conferidos++ >= 3) break;
-    const contato = irmaos.find((l) => l.id === lid)?._embedded?.contacts?.[0]?.id;
+    const irmao = irmaos.find((l) => l.id === lid);
+    const contato = irmao?._embedded?.contacts?.[0]?.id;
     if (!contato) continue;
     const f = await kommo.getContactPhone(contato).catch(() => null);
-    if (f && chaveTelefone(f) === chave) for (const id of set) ids.add(id);
+    if (f && chaveTelefone(f) === chave) for (const id of set) out.push({ idClient: id, name: irmao?.name ?? null, whatsapp: f });
   }
-  return [...ids];
+  return out;
 }
 
 export interface ExtraDoCasamento extends ExtraDaBusca {
@@ -732,6 +766,11 @@ export interface ExtraDoCasamento extends ExtraDaBusca {
   idDoCartao?: number | null;
   /** Campos da conta, para ler o `⚙ idClient` dos cartões irmãos. */
   campos?: ReadonlyArray<readonly [string, { id: number; nome?: string }]>;
+  /**
+   * `cadastro` (a Sofia vai CRIAR paciente ou lead na franquia): o nome tem de bater em todo passo — o ⚙/vínculo e o
+   * telefone de outra pessoa viram conflito (achado 1 da revisão de 16/10). `robo` (padrão): a regra do sincronizador.
+   */
+  modo?: 'robo' | 'cadastro';
 }
 
 /**
@@ -740,18 +779,27 @@ export interface ExtraDoCasamento extends ExtraDaBusca {
  * Erro da API da franquia lança, como na regra antiga (ninguém vai pra CONFERIR por queda da franquia).
  */
 export async function casarPacienteDoCartao(unit: Unit, leadId: number, nome: string | null, extra: ExtraDoCasamento = {}): Promise<EscolhaDoPaciente> {
+  const cadastro = extra.modo === 'cadastro';
   // 1. idClient: o do cartão; senão o vínculo da Sofia
-  if (extra.idDoCartao) return { tipo: 'achou', idClient: extra.idDoCartao, por: 'idClient' };
-  const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
-  if (link?.spineIdClient) return { tipo: 'achou', idClient: link.spineIdClient, por: 'idClient' };
+  let id = extra.idDoCartao && extra.idDoCartao > 0 ? extra.idDoCartao : null;
+  if (!id) {
+    const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
+    id = link?.spineIdClient ?? null;
+  }
+  if (id && !cadastro) return { tipo: 'achou', idClient: id, por: 'idClient' };
+  if (id) {
+    // cadastro: o paciente do cartão só vale se o nome bater (1 GET por paciente por hora, o mesmo cache do histórico)
+    const doCartao = await detalheDoPaciente(unit, id);
+    if (doCartao) return escolherPacienteDoCartao({ idDoCartao: id, nomeDoCartao: doCartao.name, candidatos: [], fone: '', alvos: new Set(), nome, modo: 'cadastro' });
+  }
   // 2. telefone (franquia pela busca do título; cartões irmãos quando a franquia não trouxe ninguém com o telefone) e 3. nome
-  const b = await buscarCandidatos(unit, nome, { ...extra, mesmoSemTermos: true, memo: true });
+  const b = await buscarCandidatos(unit, nome, { ...extra, mesmoSemTermos: true, memo: !cadastro, soNomeCompleto: cadastro });
   if (!b) return { tipo: 'nenhum', motivo: 'sem candidatos' };
   const franquiaTemOTelefone = !!b.fone && b.vistos.some((c) => chaveTelefone(c.whatsapp) === b.fone);
-  const idsDosIrmaos = !franquiaTemOTelefone && b.foneBruto && extra.kommo
-    ? await idsDosIrmaosPorTelefone(unit, extra.kommo, leadId, b.foneBruto, extra.campos ?? [])
+  const irmaos = !franquiaTemOTelefone && b.foneBruto && extra.kommo
+    ? await irmaosPorTelefone(unit, extra.kommo, leadId, b.foneBruto, extra.campos ?? [])
     : [];
-  return escolherPacienteDoCartao({ idDoCartao: null, candidatos: b.vistos, idsDosIrmaos, fone: b.fone, alvos: b.alvos });
+  return escolherPacienteDoCartao({ idDoCartao: null, candidatos: b.vistos, irmaos, fone: b.fone, alvos: b.alvos, nome, modo: extra.modo ?? 'robo' });
 }
 
 /**

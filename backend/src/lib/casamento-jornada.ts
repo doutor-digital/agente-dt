@@ -46,15 +46,20 @@ export type ClienteCandidato = { idClient: number | null; name: string | null; w
 
 export type EscolhaDoPaciente =
   | { tipo: 'achou'; idClient: number; por: 'idClient' | 'telefone' | 'nome' }
-  /** Mais de um paciente DIFERENTE (nomes diferentes) no mesmo telefone: quem decide é a SDR, no widget. */
-  | { tipo: 'conflito'; candidatos: ClienteCandidato[] }
+  /**
+   * Mais de um paciente DIFERENTE (nomes diferentes) no mesmo telefone: quem decide é a SDR, no widget. No cadastro
+   * (`outroNome`), também o paciente do telefone — ou do cartão — com OUTRO nome: a filha marcando pelo WhatsApp da mãe.
+   */
+  | { tipo: 'conflito'; candidatos: ClienteCandidato[]; outroNome?: true }
   /** O mesmo nome e o mesmo telefone em dois cadastros = o mesmo paciente cadastrado duas vezes: fica o de agenda mais recente. */
   | { tipo: 'desempatar'; candidatos: ClienteCandidato[] }
   | { tipo: 'nenhum'; motivo: 'sem candidatos' | 'homonimos' | 'nome nao casa' };
 
 export interface EntradaDaEscolha {
-  /** `⚙ idClient (franquia)` gravado no cartão, ou o vínculo que a Sofia gravou (no cadastro, já conferido pelo nome). */
+  /** `⚙ idClient (franquia)` gravado no cartão, ou o vínculo que a Sofia gravou. */
   idDoCartao: number | null;
+  /** No cadastro: o nome, na franquia, do paciente de `idDoCartao` (null = não se sabe). */
+  nomeDoCartao?: string | null;
   /** Candidatos que a busca por NOME na franquia devolveu (a franquia não busca por telefone). */
   candidatos: ClienteCandidato[];
   /** Pacientes dos OUTROS cartões do Kommo com o mesmo telefone (campo ⚙ ou vínculo da Sofia), com o nome da franquia. */
@@ -67,29 +72,37 @@ export interface EntradaDaEscolha {
   nome?: string | null;
   /**
    * `robo` (sincronizador): o telefone da franquia manda, o nome não importa (regra de 23/09). `cadastro` (a Sofia vai criar
-   * alguém): o paciente do telefone só vale se o nome bater — a filha marcando pelo WhatsApp da mãe é OUTRA pessoa.
+   * alguém): o paciente do cartão, do vínculo ou do telefone só vale se o nome bater — a filha marcando pelo WhatsApp da
+   * mãe é OUTRA pessoa, e nome que não bate vira conflito (nem casa, nem cria).
    */
   modo?: 'robo' | 'cadastro';
 }
 
 /**
  * PURA. A ordem do João (16/10/2026): **idClient → telefone → nome**.
- *  1. idClient: o que está no cartão (ou no vínculo) é o paciente, sem buscar nada.
+ *  1. idClient: o que está no cartão (ou no vínculo) é o paciente, sem buscar nada. No cadastro, só se o nome bater.
  *  2. telefone: candidato da franquia com o mesmo telefone; sem ele, outro cartão do Kommo com o mesmo telefone que já sabe
- *     o idClient. Dois pacientes DIFERENTES no mesmo telefone = conflito (a SDR escolhe), nunca escolha automática.
+ *     o idClient — e só com nome compatível (o cartão irmão pode ser da mãe). Dois pacientes DIFERENTES no mesmo telefone =
+ *     conflito (a SDR escolhe), nunca escolha automática. No cadastro, o paciente do telefone com outro nome = conflito.
  *  3. nome: só nome exato e único, e nunca contra um telefone diferente do que o cartão conhece.
  */
 export function escolherPacienteDoCartao(e: EntradaDaEscolha): EscolhaDoPaciente {
-  if (e.idDoCartao && e.idDoCartao > 0) return { tipo: 'achou', idClient: e.idDoCartao, por: 'idClient' };
   const cadastro = e.modo === 'cadastro';
-  const bateNome = (c: ClienteCandidato) => !!e.nome && nomeCompativelComTitulo(e.nome, c.name);
+  const bateNome = (c: ClienteCandidato) => nomesCompativeis(e.nome, c.name);
+  if (e.idDoCartao && e.idDoCartao > 0) {
+    if (!cadastro) return { tipo: 'achou', idClient: e.idDoCartao, por: 'idClient' };
+    // achado 1 da revisão de 16/10: o ⚙ (ou o vínculo) da mãe não serve de cadastro para a filha
+    const doCartao: ClienteCandidato = { idClient: e.idDoCartao, name: e.nomeDoCartao ?? null, whatsapp: null };
+    return bateNome(doCartao) ? { tipo: 'achou', idClient: e.idDoCartao, por: 'idClient' } : { tipo: 'conflito', candidatos: [doCartao], outroNome: true };
+  }
   const vivos = dedupe(e.candidatos.filter((c) => c.idClient));
   if (e.fone) {
     const doTelefoneTodos = vivos.filter((c) => chaveTelefone(c.whatsapp) === e.fone);
-    // no cadastro, o paciente do telefone com OUTRO nome é outra pessoa da família: não casa (cadastra a pessoa nova)
+    // no cadastro, o paciente do telefone com OUTRO nome é outra pessoa da família: não casa
     const doTelefone = cadastro ? doTelefoneTodos.filter(bateNome) : doTelefoneTodos;
     // o irmão do Kommo só vale com nome compatível (o cartão irmão pode ser de outro paciente do mesmo número)
-    const extras = dedupe((e.irmaos ?? []).filter((c) => c.idClient && bateNome(c))).filter((c) => !doTelefone.some((x) => x.idClient === c.idClient));
+    const irmaos = dedupe((e.irmaos ?? []).filter((c) => c.idClient));
+    const extras = irmaos.filter(bateNome).filter((c) => !doTelefone.some((x) => x.idClient === c.idClient));
     const todos = [...doTelefone, ...extras];
     if (todos.length === 1) return { tipo: 'achou', idClient: todos[0].idClient as number, por: 'telefone' };
     if (todos.length > 1) {
@@ -97,7 +110,9 @@ export function escolherPacienteDoCartao(e: EntradaDaEscolha): EscolhaDoPaciente
       const nomes = new Set(todos.map((c) => (c.name ? nomeDaFranquia(c.name) : `?${c.idClient}`)));
       return nomes.size > 1 ? { tipo: 'conflito', candidatos: todos } : { tipo: 'desempatar', candidatos: todos };
     }
-    if (cadastro && doTelefoneTodos.length > 0) return { tipo: 'nenhum', motivo: 'nome nao casa' };
+    // achado 1: no cadastro, o telefone é de alguém com outro nome (na franquia ou num cartão irmão) — nem casa com ele,
+    // nem cria outro paciente por cima: a equipe confere
+    if (cadastro && doTelefoneTodos.length + irmaos.length > 0) return { tipo: 'conflito', candidatos: dedupe([...doTelefoneTodos, ...irmaos]), outroNome: true };
   }
   const exatos = vivos.filter((c) => e.alvos.has(nomeDaFranquia(c.name)) && (!e.fone || !chaveTelefone(c.whatsapp) || chaveTelefone(c.whatsapp) === e.fone));
   if (exatos.length === 1) return { tipo: 'achou', idClient: exatos[0].idClient as number, por: 'nome' };
@@ -143,10 +158,18 @@ export function nomeCompativel(a: string | null | undefined, b: string | null | 
   return sa.some((x) => sb.some((y) => parecido(x, y)));
 }
 
-/** O título do cartão pode ter duas pessoas ("MARIA DA PENHA - ALEXANDRO SANT ANA"): vale se alguma delas bater. */
-export function nomeCompativelComTitulo(titulo: string | null | undefined, nome: string | null | undefined): boolean {
-  const pessoas = nomeParaBusca(titulo).split(/\s+[/\-–]\s+|\//).map((x) => x.trim()).filter(Boolean);
-  return pessoas.some((p) => nomeCompativel(p, nome));
+function pessoasDoTitulo(titulo: string | null | undefined): string[] {
+  return nomeParaBusca(titulo).split(/\s+[/\-–]\s+|\//).map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * O título do cartão pode ter duas pessoas ("MARIA DA PENHA - ALEXANDRO SANT ANA", "Ivair Diniz(Victoria Diniz)"): vale se
+ * alguma pessoa de um lado bater com alguma do outro. Título sem nome ("Lead 16/10/2026") não bate com ninguém.
+ */
+export function nomesCompativeis(a: string | null | undefined, b: string | null | undefined): boolean {
+  const pa = pessoasDoTitulo(a);
+  const pb = pessoasDoTitulo(b);
+  return pa.some((x) => pb.some((y) => nomeCompativel(x, y)));
 }
 
 function dedupe(lista: ClienteCandidato[]): ClienteCandidato[] {

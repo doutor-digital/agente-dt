@@ -5,9 +5,12 @@
  * 6013846 e 6019146 na franquia). O caminho era: a Sofia acha o paciente (buscar_paciente grava o idClient no vínculo),
  * marca a consulta e, no fim do turno, o espelhamento do lead não olha o vínculo nem o telefone — e cria um lead novo.
  *
- * Aqui vale a MESMA regra do casamento do robô (decisão 3, 16/10): **idClient → telefone → nome**. Achou = casa com o
- * existente (grava o vínculo) e não cria nada. Dois pacientes diferentes no mesmo telefone = também não cria (o
- * sincronizador marca o cartão e a SDR escolhe). Só a falta de qualquer sinal deixa criar.
+ * Aqui vale a MESMA ordem do casamento do robô (decisão 3, 16/10): **idClient → telefone → nome** — mas no modo
+ * `cadastro`: o nome tem de bater em todo passo. Achou = casa com o existente (grava o vínculo) e não cria nada. Dois
+ * pacientes diferentes no mesmo telefone = não cria (o sincronizador marca o cartão e a SDR escolhe). O paciente do
+ * cartão, do vínculo ou do telefone com OUTRO nome (a mãe, quando a Sofia cadastra a filha pelo WhatsApp dela) = também
+ * conflito: nem casa com a mãe, nem cria por cima — a equipe confere (achado 1 da revisão de 16/10). Só a falta de
+ * qualquer sinal deixa criar.
  */
 import type { Unit } from '@prisma/client';
 import type { KommoClient } from './kommo.service.js';
@@ -15,7 +18,8 @@ import type { Estado } from '../lib/automacoes-estado.js';
 
 export type PacienteExistente =
   | { tipo: 'achou'; idClient: number; por: 'idClient' | 'telefone' | 'nome' }
-  | { tipo: 'conflito'; ids: number[] };
+  /** `outroNome`: o telefone (ou o cartão) é de UM paciente com outro nome — pode ser alguém da família. */
+  | { tipo: 'conflito'; ids: number[]; outroNome?: boolean };
 
 export async function pacienteQueJaExiste(
   unit: Unit,
@@ -33,6 +37,7 @@ export async function pacienteQueJaExiste(
     kommo: p.kommo,
     contatoId: p.contatoId ?? null,
     idDoCartao: p.idDoCartao ?? null,
+    modo: 'cadastro',
   });
   if (esc.tipo === 'achou') return { tipo: 'achou', idClient: esc.idClient, por: esc.por };
   if (esc.tipo === 'desempatar') {
@@ -44,7 +49,7 @@ export async function pacienteQueJaExiste(
     }
     return id ? { tipo: 'achou', idClient: id, por: 'telefone' } : null;
   }
-  if (esc.tipo === 'conflito') return { tipo: 'conflito', ids: esc.candidatos.map((c) => c.idClient).filter((x): x is number => !!x) };
+  if (esc.tipo === 'conflito') return { tipo: 'conflito', ids: esc.candidatos.map((c) => c.idClient).filter((x): x is number => !!x), ...(esc.outroNome ? { outroNome: true } : {}) };
   return null;
 }
 
@@ -66,7 +71,9 @@ export function decidirCadastro(estado: Estado, existente: PacienteExistente | n
   }
   const motivo = existente.tipo === 'achou'
     ? `paciente já existe na franquia (idClient ${existente.idClient}, achado por ${existente.por}): não criei lead`
-    : `o telefone é de ${existente.ids.length} pacientes da franquia (${existente.ids.join(', ')}): não criei lead — a SDR escolhe no widget`;
+    : existente.outroNome
+      ? `o telefone (ou o cartão) é do paciente idClient ${existente.ids.join(', ')} da franquia, com outro nome: não criei lead — pode ser outra pessoa da família; a equipe confere`
+      : `o telefone é de ${existente.ids.length} pacientes da franquia (${existente.ids.join(', ')}): não criei lead — a SDR escolhe no widget`;
   if (estado === 'seco') return { criar: true, simular: { motivo, valor: existente.tipo === 'achou' ? String(existente.idClient) : existente.ids.join(', ') } };
   return { criar: false, motivo, vincular: existente.tipo === 'achou' ? existente.idClient : null, jaExistia: true };
 }

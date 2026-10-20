@@ -23,6 +23,8 @@ import { travaDaAgendaDaIa } from '../lib/crm-compartilhado.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
 import { pacienteQueJaExiste } from '../services/paciente-existente.js';
+import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
+import { PARA_SEMPRE_MS } from '../lib/conflito-paciente.js';
 import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } from './carimbos-do-agendamento.js';
 import {
   agendamentoDeuCerto,
@@ -652,18 +654,23 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
           }
           registrarSimulacao(fresca, AUTOMACAO_1610, { leadId: args.leadId, acao: 'pularia', alvo: 'cadastro do paciente na franquia', valor: existente.idClient, motivo: `paciente já existe (achado por ${existente.por})` });
         } else if (existente?.tipo === 'conflito') {
+          const motivo = existente.outroNome
+            ? `o telefone (ou o cartão) é de outro paciente da clínica, com outro nome (idClient ${existente.ids.join(', ')})`
+            : 'o telefone é de mais de um paciente da clínica';
           if (estado1610 === 'ligado') {
             await recorder.step({
               kind: 'TOOL_RESULT',
-              title: 'cadastrar_paciente RECUSADO: o telefone é de mais de um paciente da clínica',
-              payload: { nome: args.nome, idsClient: existente.ids },
+              title: `cadastrar_paciente RECUSADO: ${motivo}`,
+              payload: { nome: args.nome, idsClient: existente.ids, outroNome: existente.outroNome === true },
             });
-            return (
-              'NÃO cadastrei: este telefone já pertence a mais de um paciente cadastrado na clínica. NÃO agende — ' +
-              'diga que a equipe vai confirmar o cadastro e retorna em seguida.'
-            );
+            await avisarCadastroRecusado(fresca, kommo, args.leadId, args.nome, existente.ids, existente.outroNome === true);
+            return existente.outroNome
+              ? 'NÃO cadastrei: este telefone já é de outro paciente da clínica, com outro nome (pode ser alguém da família ' +
+                  'usando o mesmo WhatsApp). NÃO agende — diga que a equipe vai confirmar o cadastro e retorna em seguida.'
+              : 'NÃO cadastrei: este telefone já pertence a mais de um paciente cadastrado na clínica. NÃO agende — ' +
+                  'diga que a equipe vai confirmar o cadastro e retorna em seguida.';
           }
-          registrarSimulacao(fresca, AUTOMACAO_1610, { leadId: args.leadId, acao: 'pularia', alvo: 'cadastro do paciente na franquia', valor: existente.ids.join(', '), motivo: 'telefone de mais de um paciente da franquia' });
+          registrarSimulacao(fresca, AUTOMACAO_1610, { leadId: args.leadId, acao: 'pularia', alvo: 'cadastro do paciente na franquia', valor: existente.ids.join(', '), motivo });
         }
       }
 
@@ -743,6 +750,25 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
       return `Cadastrado. idClient ${idClient} — use este número em agendar_consulta.`;
     },
   });
+}
+
+/**
+ * A Sofia recusou o cadastro por conflito (regra de 16/10, chave ligada): UMA nota no cartão para a equipe saber o que
+ * conferir — a Sofia só diz ao paciente que a equipe confirma. Falha de rede não derruba a ferramenta.
+ */
+async function avisarCadastroRecusado(unit: Unit, kommo: KommoClient | undefined, leadId: number, nome: string, ids: number[], outroNome: boolean): Promise<void> {
+  if (!kommo) return;
+  const chave = `cadastro-recusado:${[...new Set(ids)].sort((a, b) => a - b).join(',')}`;
+  try {
+    if (await avisoRecente(unit.id, leadId, chave, PARA_SEMPRE_MS)) return;
+    const texto = outroNome
+      ? `⚠ A Sofia NÃO cadastrou «${nome.trim()}» na franquia nem marcou consulta: o telefone (ou este cartão) é do paciente idClient ${ids.join(', ')}, com outro nome — pode ser alguém da família usando o mesmo WhatsApp. Confira com o paciente: se é outra pessoa, cadastre e marque na franquia; se é o mesmo paciente, marque no cadastro dele.`
+      : `⚠ A Sofia NÃO cadastrou «${nome.trim()}» na franquia nem marcou consulta: o telefone é de mais de um paciente (idClient ${ids.join(', ')}). Escolha no widget qual é o paciente deste cartão e marque pela agenda.`;
+    await kommo.addLeadNote(leadId, texto);
+    await marcarAviso(unit.id, leadId, chave);
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'agenda-tools: não consegui avisar o cadastro recusado no cartão');
+  }
 }
 
 /** `pacienteQueJaExiste` com o `⚙ idClient` do cartão; falha (franquia ou Kommo fora) = segue o cadastro de sempre. */
