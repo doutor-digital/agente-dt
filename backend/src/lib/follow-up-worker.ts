@@ -3,7 +3,7 @@ import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { decisaoDeCobrancaDoLead, MOTIVO_PARADA_LEITURA } from '../services/kommo-talks.service.js';
 import { emPausa } from './pausa-unidade.js';
-import { ehIntocavel } from './follow-up-presets.js';
+import { MOTIVO_ESCADA_CONCLUIDA, ehIntocavel } from './follow-up-presets.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
 import { carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarSemResposta } from '../services/lead-metrics.service.js';
@@ -517,7 +517,7 @@ async function enviarDegrau(
     if (indice + 1 >= totalDegraus) {
       await prisma.conversation.update({
         where: { id: conv.id },
-        data: { followUpStoppedReason: 'escada concluída' },
+        data: { followUpStoppedReason: MOTIVO_ESCADA_CONCLUIDA },
       });
     }
 

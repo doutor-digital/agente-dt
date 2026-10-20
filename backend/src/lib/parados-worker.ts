@@ -45,6 +45,7 @@ import {
   decidirParado,
   decidirReguaEsgotada,
   ehEspera,
+  filtroDaReguaEsgotada,
   ehRespostaDeCortesia,
   modoSeco,
   motivoDaSdrNoCartao,
@@ -66,6 +67,8 @@ const MOTIVOS_TTL_MS = 60 * 60_000;
 const MAX_PAGINAS = 8;
 /** Cartões que chegam a gastar chamada de Kommo/franquia por regra por varredura (vale no modo seco também). */
 const MAX_AVALIACOES = Number(process.env.PARADOS_MAX_AVALIACOES) || MAX_POR_VARREDURA * 5;
+/** Escadas concluídas lidas do banco por varredura (as mais recentes primeiro); os cartões vêm em lotes de 50. */
+const MAX_CONVERSAS_DA_REGUA = Number(process.env.PARADOS_MAX_CONVERSAS_REGUA) || 1000;
 
 const funisCache = new Map<string, { em: number; funis: Funis }>();
 async function funisDaUnidade(unit: Unit, kommo: KommoClient): Promise<Funis | null> {
@@ -448,34 +451,42 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
   // ── Régua esgotada: o banco do agente diz quando saiu o último toque; o cartão diz que a escada acabou ──
   {
     const cota = cotaNova(seco);
-    const limite = new Date((agora - PRAZOS.reguaRespostaHoras * 3600) * 1000);
     const convs = await prisma.conversation.findMany({
-      where: {
-        unitId: { in: unidadesDaConta.map((u) => u.id) },
-        followUpStep: { gte: 1 },
-        followUpStoppedReason: null,
-        followUpLastAt: { lt: limite },
-      },
+      where: filtroDaReguaEsgotada(unidadesDaConta.map((u) => u.id), agora),
       orderBy: { followUpLastAt: 'desc' },
-      take: MAX_AVALIACOES,
+      take: MAX_CONVERSAS_DA_REGUA,
       select: { leadId: true, followUpLastAt: true },
     });
+    // Os cartões vêm em lote (50 por chamada) e a etapa filtra de graça: medido na Açailândia em 20/10, 263 das 273
+    // escadas concluídas já estavam em PERDIDO (régua do Kommo ou SDR). Pedir cartão por cartão gastava a cota das
+    // avaliações caras com eles, varredura após varredura, e o cartão que ainda estava na porta nunca era olhado.
+    const ultimoToque = new Map<number, number>();
     for (const c of convs) {
       const leadId = Number(c.leadId);
-      if (!Number.isFinite(leadId) || leadId <= 0 || !c.followUpLastAt) continue;
+      if (Number.isFinite(leadId) && leadId > 0 && c.followUpLastAt && !ultimoToque.has(leadId)) ultimoToque.set(leadId, Math.floor(c.followUpLastAt.getTime() / 1000));
+    }
+    let leads: KommoLead[] = [];
+    try {
+      leads = ultimoToque.size ? await kommo.listLeadsPorIds([...ultimoToque.keys()], { contatos: true }) : [];
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err: String(err), unit: unit.slug }, 'parados: não li os cartões da régua esgotada — pulei a regra nesta varredura');
+    }
+    const porId = new Map(leads.map((l) => [l.id, l]));
+    for (const [leadId, toque] of ultimoToque) {
+      const lead = porId.get(leadId);
+      if (!lead) continue; // cartão apagado, ou de outra conta
+      if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
+      const atual = funis.nomeDe(lead.pipeline_id, lead.status_id);
+      if (!atual || atual.funil !== 'COMERCIAL' || !reguaEsgotadaDerruba(atual.status)) continue;
+      const status = valorDoCampo(lead, CAMPO.STATUS_CONVERSA);
+      if (!decidirReguaEsgotada(status == null ? null : String(status), false)) continue; // o cartão não diz "Sem resposta"
       if (!cota.podeAvaliar()) break;
       cota.avaliou();
       resumo.avaliados++;
       try {
-        const lead = await kommo.getLead(leadId);
-        if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
-        const atual = funis.nomeDe(lead.pipeline_id, lead.status_id);
-        if (!atual || atual.funil !== 'COMERCIAL' || !reguaEsgotadaDerruba(atual.status)) continue;
-        const status = valorDoCampo(lead, CAMPO.STATUS_CONVERSA);
-        if (!decidirReguaEsgotada(status == null ? null : String(status), false)) continue; // a escada ainda não acabou
-        const ultimoToque = Math.floor(c.followUpLastAt.getTime() / 1000);
         const contato = contatoPrincipal(lead);
-        const escreveu = contato !== null && (await kommo.contatoEscreveuDesde(contato, ultimoToque));
+        const escreveu = contato !== null && (await kommo.contatoEscreveuDesde(contato, toque));
         const d = decidirReguaEsgotada(String(status), escreveu);
         if (!d) continue;
         resumo.candidatos++;
