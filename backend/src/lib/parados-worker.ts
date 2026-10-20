@@ -707,8 +707,11 @@ export async function aplicarDoEstoque(ctx: CtxDoEstoque, funis: Funis, a: Avali
 export interface TravaDoConflito {
   /** com o cartão da lista: etiqueta, ⚙ e a marca lida no começo da varredura */
   travado(lead: KommoLead): boolean;
-  /** relê a marca no banco logo antes de mexer: o sincronizador (de 15 em 15 min) pode ter travado o cartão no meio da varredura */
-  travouAgora(lead: KommoLead): Promise<boolean>;
+  /**
+   * Logo antes de mexer: relê a marca no banco e, com `kommo`, o próprio cartão (etiqueta e ⚙) — o sincronizador (de 15 em
+   * 15 min) ou a SDR podem ter travado o cartão no meio da varredura. No papel o Kommo fica de fora: nada é escrito.
+   */
+  travouAgora(lead: KommoLead, kommo?: KommoClient): Promise<boolean>;
 }
 
 /** Lê as marcas uma vez por varredura. Falha de banco LANÇA: sem saber quem está travado, o estoque não roda. */
@@ -719,7 +722,10 @@ export async function travaDoConflito(ctx: Pick<CtxDoEstoque, 'unit' | 'unidades
   // sem os campos da conta, `idClientDoCartao` acha o ⚙ pelo nome que o Kommo manda em cada valor do cartão
   return {
     travado: (lead) => cartaoTravadoNoConflito(lead, idClientDoCartao(lead, []), marcados),
-    travouAgora: async (lead) => cartaoTravadoNoConflito(lead, idClientDoCartao(lead, []), await cartoesComConflito(ids, lead.id)),
+    travouAgora: async (lead, kommo) => {
+      const atual = kommo ? await kommo.getLead(lead.id) : lead;
+      return cartaoTravadoNoConflito(atual, idClientDoCartao(atual, []), await cartoesComConflito(ids, lead.id));
+    },
   };
 }
 
@@ -778,7 +784,7 @@ export async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: Gru
           ficaAte.set(chaveFica, Date.now() + FICA_TTL_MS);
           continue;
         }
-        if (await trava.travouAgora(lead)) {
+        if (await trava.travouAgora(lead, seco ? undefined : ctx.kommo)) {
           pularPorConflito(unit, e, lead.id, resumo, seco);
           continue;
         }

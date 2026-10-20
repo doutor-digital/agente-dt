@@ -138,7 +138,7 @@ async function main() {
                 : `fica · ${a.fica}`;
             somar(resultado, destino, `${lead.id}${d ? ` (${d.regra})` : ''}`);
             if (GRAVAR && (d || a.filaDeAlta)) {
-              if (await trava.travouAgora(lead)) {
+              if (await trava.travouAgora(lead, kommo)) {
                 console.log(`   ${lead.id}: travou por CONFLITO_FRANQUIA agora — não gravei`);
                 continue;
               }

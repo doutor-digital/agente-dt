@@ -23,6 +23,8 @@ let leiturasDeMarca: Array<{ leadId?: string }> = [];
 let bancoFora = false;
 /** a marca que o sincronizador grava NO MEIO da varredura: só aparece na releitura do cartão */
 let marcaAtrasada: Marca | null = null;
+/** cartões que ganham a etiqueta CONFLITO_FRANQUIA no meio da varredura: só aparece quando o cartão é relido no Kommo */
+let tagAtrasada = new Set<number>();
 const registradas: Array<{ kommoLeadId: number; acao: string; alvo: string }> = [];
 const naFila: number[] = [];
 
@@ -71,6 +73,7 @@ beforeEach(() => {
   leiturasDeMarca = [];
   bancoFora = false;
   marcaAtrasada = null;
+  tagAtrasada = new Set();
   registradas.length = 0;
   naFila.length = 0;
 });
@@ -101,7 +104,11 @@ function kommoFalso(leads: KommoLead[], movidos: number[]): KommoClient {
     leadMudouEtapaDesde: async () => false,
     contatoEscreveuDesde: async () => false,
     // só o modo ligado chega aqui: relê o cartão, motivo de perda, etiqueta, status, nota
-    getLead: async (id: number) => leads.find((l) => l.id === id),
+    getLead: async (id: number) => {
+      const l = leads.find((x) => x.id === id) as KommoLead;
+      if (!tagAtrasada.has(id)) return l;
+      return { ...l, _embedded: { ...l._embedded, tags: [...(l._embedded?.tags ?? []), { id: 9, name: TAG_CONFLITO }] } };
+    },
     listLossReasons: async () => [],
     createLossReason: async (name: string) => ({ id: 1, name }),
     listLeadCustomFields: async () => ({ _embedded: { custom_fields: [] } }),
@@ -193,6 +200,14 @@ test('estoque: a marca que aparece no meio da varredura também segura (releitur
   assert.deepEqual(pularia, [10817222]);
   assert.equal(resumo.candidatos, 1);
   assert.ok(leiturasDeMarca.some((l) => l.leadId === '10817222'), 'releu a marca do cartão');
+});
+
+test('estoque ligado: a etiqueta posta no meio da varredura (sem marca no banco) também segura — achado do Codex', async () => {
+  const unit = unidade(true);
+  tagAtrasada = new Set([10817222]);
+  const { movidos, resumo } = await varrer(unit, [cartao(10817222), cartao(10817024)], false);
+  assert.deepEqual(movidos, [10817024], 'relê o cartão no Kommo antes de mexer');
+  assert.equal(resumo.travadosNoConflito, 1);
 });
 
 test('estoque: banco fora na leitura das travas = o estoque não roda nesta varredura', async () => {
