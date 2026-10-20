@@ -2173,7 +2173,7 @@ model CampanhaPlacar {
 model ChaveDeIntegracao {
   id           String    @id @default(cuid())
   unitId       String    @map("unit_id")
-  /// asaas | convenia (clicksign a seguir)
+  /// asaas | convenia | tiquetaque (clicksign a seguir)
   provedor     String
   chaveCifrada String    @map("chave_cifrada")
   /// os 4 últimos caracteres, para a tela mostrar qual chave está salva

@@ -415,7 +415,7 @@ apiRouter.get('/campanhas/:id/painel', chaveDeServicoOuSessao(requireAuth, requi
 apiRouter.post('/campanhas/:id/coletar', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaColetarHandler);
 apiRouter.put('/campanhas/:id/tela', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaTelaHandler);
 
-// Chaves de API de terceiros (Asaas, Convênia). Escrever é só com SESSÃO de super-admin (a chave do Asaas
+// Chaves de API de terceiros (Asaas, Convênia, Tiquetaque). Escrever é só com SESSÃO de super-admin (a chave do Asaas
 // mexe com dinheiro): a chave de serviço não serve aqui de propósito. Ler o status aceita a chave de serviço.
 apiRouter.get('/integracoes', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), listarChavesHandler);
 apiRouter.get('/integracoes/painel', requireAuth, requireSuperAdmin, painelIntegracoesHandler);

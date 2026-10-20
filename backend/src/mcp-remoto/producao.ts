@@ -32,6 +32,8 @@ import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from '
 import { asaasGet } from '../lib/integracoes/asaas.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
 import { conveniaGet } from '../lib/integracoes/convenia.js';
+import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
+import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
@@ -183,6 +185,16 @@ async function contasConveniaDoBanco(): Promise<Map<string, ContaConvenia>> {
     contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => conveniaGet(c.unitId, c.chave, caminho, query ?? {}) } });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Convênia carregadas');
+  return contas;
+}
+
+/** Contas com o token do Tiquetaque (ponto) no painel de integrações. O token fica só em memória, decifrado aqui. */
+async function contasTiquetaqueDoBanco(): Promise<Map<string, ContaTiquetaque>> {
+  const contas = new Map<string, ContaTiquetaque>();
+  for (const c of await contasComChave('tiquetaque')) {
+    contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => tiquetaqueGet(c.unitId, c.chave, caminho, query ?? {}) } });
+  }
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas do Tiquetaque carregadas');
   return contas;
 }
 
@@ -376,6 +388,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
   const convenia = criarContextoConvenia(new Map());
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
+  const tiquetaque = criarContextoTiquetaque(new Map());
+  manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;
@@ -401,9 +415,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasBling(server, bling, kommo, auditar);
       registrarFerramentasAsaas(server, asaas, auditar);
       registrarFerramentasConvenia(server, convenia, auditar);
+      registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       if (escritores.has(quem.userId)) registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };

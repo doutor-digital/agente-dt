@@ -1,5 +1,5 @@
 /**
- * O que cada unidade ou empresa tem ligado no conector: CRM da franquia, Kommo, Bling, Asaas, Convênia. Sem isto, quem
+ * O que cada unidade ou empresa tem ligado no conector: CRM da franquia, Kommo, Bling, Asaas, Convênia, Tiquetaque. Sem isto, quem
  * pergunta só via `listar_unidades` — que mostra as clínicas da franquia — e concluía que a HM Tecnologia
  * "não estava conectada" (16/10/2026), com o Kommo e o Bling dela funcionando.
  */
@@ -13,15 +13,17 @@ export interface FontesDeIntegracao {
   bling: Map<string, { nome: string }>;
   asaas?: Map<string, { nome: string }>;
   convenia?: Map<string, { nome: string }>;
+  tiquetaque?: Map<string, { nome: string }>;
 }
 
 export function listarIntegracoes(f: FontesDeIntegracao) {
   const asaas = f.asaas ?? new Map<string, { nome: string }>();
   const convenia = f.convenia ?? new Map<string, { nome: string }>();
-  const slugs = [...new Set([...f.franquia.keys(), ...f.kommo.keys(), ...f.bling.keys(), ...asaas.keys(), ...convenia.keys()])].sort();
+  const tiquetaque = f.tiquetaque ?? new Map<string, { nome: string }>();
+  const slugs = [...new Set([...f.franquia.keys(), ...f.kommo.keys(), ...f.bling.keys(), ...asaas.keys(), ...convenia.keys(), ...tiquetaque.keys()])].sort();
   const unidades = slugs.map((slug) => {
-    const nome = f.franquia.get(slug)?.nome ?? f.kommo.get(slug)?.nome ?? f.bling.get(slug)?.nome ?? asaas.get(slug)?.nome ?? convenia.get(slug)?.nome ?? slug;
-    const tem = { franquia: f.franquia.has(slug), kommo: f.kommo.has(slug), bling: f.bling.has(slug), asaas: asaas.has(slug), convenia: convenia.has(slug) };
+    const nome = f.franquia.get(slug)?.nome ?? f.kommo.get(slug)?.nome ?? f.bling.get(slug)?.nome ?? asaas.get(slug)?.nome ?? convenia.get(slug)?.nome ?? tiquetaque.get(slug)?.nome ?? slug;
+    const tem = { franquia: f.franquia.has(slug), kommo: f.kommo.has(slug), bling: f.bling.has(slug), asaas: asaas.has(slug), convenia: convenia.has(slug), tiquetaque: tiquetaque.has(slug) };
     const ferramentas = [
       ...(tem.franquia ? ['franquia (pacientes, agenda, tratamentos, BI)'] : []),
       ...(tem.kommo ? ['kommo_*'] : []),
@@ -30,6 +32,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
       ...(tem.bling && tem.kommo ? ['relatorio_vendas'] : []),
       ...(tem.asaas ? ['asaas_* (cobranças, extrato, saldo)'] : []),
       ...(tem.convenia ? ['convenia_* (RH: colaboradores, admissões e desligamentos, férias, afastamentos)'] : []),
+      ...(tem.tiquetaque ? ['tiquetaque_* (ponto: batidas do dia e quem está trabalhando, atrasos e faltas, horas e banco de horas, afastamentos — de todos os locais da conta)'] : []),
     ];
     return { slug, nome, ...tem, ferramentas };
   });
@@ -40,6 +43,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
     comBling: unidades.filter((u) => u.bling).length,
     comAsaas: unidades.filter((u) => u.asaas).length,
     comConvenia: unidades.filter((u) => u.convenia).length,
+    comTiquetaque: unidades.filter((u) => u.tiquetaque).length,
     unidades,
     observacao: 'Anúncios (Meta Ads e Google Ads) ainda não estão neste conector.',
   };
@@ -52,7 +56,7 @@ export function registrarIntegracoes(server: McpServer, fontes: () => FontesDeIn
       title: 'O que está ligado em cada unidade',
       description:
         'Todas as unidades e empresas do conector (clínicas Doutor Hérnia e empresas do grupo, como a HM Tecnologia) e o que cada uma ' +
-        'tem ligado: CRM da franquia, Kommo, Bling, Asaas, Convênia (RH) — e quais ferramentas usar. Comece por aqui para saber se algo está integrado.',
+        'tem ligado: CRM da franquia, Kommo, Bling, Asaas, Convênia (RH), Tiquetaque (ponto) — e quais ferramentas usar. Comece por aqui para saber se algo está integrado.',
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     () => executar('listar_integracoes', {}, auditar, () => listarIntegracoes(fontes())),
