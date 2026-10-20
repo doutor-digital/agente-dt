@@ -30,6 +30,8 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { PrismaClient } from '@prisma/client';
 import { criarContextoAsaas, registrarFerramentasAsaas, type ContaAsaas } from './asaas.js';
 import { asaasGet } from '../lib/integracoes/asaas.js';
+import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
+import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
@@ -171,6 +173,16 @@ async function contasAsaasDoBanco(): Promise<Map<string, ContaAsaas>> {
     contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => asaasGet(c.unitId, c.chave, caminho, query ?? {}) } });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do Asaas carregadas');
+  return contas;
+}
+
+/** Empresas com o token do Convênia (RH) no painel de integrações. O token fica só em memória, decifrado aqui. */
+async function contasConveniaDoBanco(): Promise<Map<string, ContaConvenia>> {
+  const contas = new Map<string, ContaConvenia>();
+  for (const c of await contasComChave('convenia')) {
+    contas.set(c.slug, { slug: c.slug, nome: c.nome, fonte: { get: (caminho, query) => conveniaGet(c.unitId, c.chave, caminho, query ?? {}) } });
+  }
+  logger.info({ contas: contas.size }, 'mcp-remoto: contas do Convênia carregadas');
   return contas;
 }
 
@@ -362,6 +374,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(escritoresDoBanco, (s) => (escritores = s), 'quem pode alterar cartões');
   const pendentes = new Pendentes();
   manterAtualizado(contasAsaasDoBanco, (contas) => (asaas.contas = contas), 'as contas do Asaas');
+  const convenia = criarContextoConvenia(new Map());
+  manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;
@@ -386,9 +400,10 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasKommo(server, kommo, auditar);
       registrarFerramentasBling(server, bling, kommo, auditar);
       registrarFerramentasAsaas(server, asaas, auditar);
+      registrarFerramentasConvenia(server, convenia, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       if (escritores.has(quem.userId)) registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };

@@ -1,16 +1,20 @@
 /**
  * Chaves de API de terceiros por unidade: salvar (testando antes), listar sem expor, e ler decifrada
- * para o conector. Provedores: Asaas agora; ClickSign em seguida.
+ * para o conector. Provedores: Asaas (financeiro das clínicas) e Convênia (RH/departamento pessoal).
  */
 import { env } from '../env.js';
 import { prisma } from '../prisma.js';
 import { cifrar, decifrar, finalDaChave } from './cofre.js';
 import { testarChaveAsaas } from './asaas.js';
+import { testarChaveConvenia } from './convenia.js';
 
-export const PROVEDORES = ['asaas'] as const;
+export const PROVEDORES = ['asaas', 'convenia'] as const;
 export type Provedor = (typeof PROVEDORES)[number];
 
 const segredo = () => process.env.INTEGRACOES_CHAVE_MESTRA || env.SESSION_JWT_SECRET;
+
+/** Teste de cada provedor: prova a chave no serviço e devolve o nome da conta para o painel. */
+const TESTES: Record<Provedor, (chave: string) => Promise<string>> = { asaas: testarChaveAsaas, convenia: testarChaveConvenia };
 
 export function ehProvedor(p: string): p is Provedor {
   return (PROVEDORES as readonly string[]).includes(p);
@@ -22,7 +26,7 @@ export async function salvarChave(slug: string, provedor: Provedor, chave: strin
   if (limpa.length < 20) throw new Error('chave curta demais: confira se copiou inteira');
   const unit = await prisma.unit.findUnique({ where: { slug }, select: { id: true } });
   if (!unit) throw new Error(`unidade ${slug} não existe`);
-  const conta = provedor === 'asaas' ? await testarChaveAsaas(limpa) : 'conta';
+  const conta = await TESTES[provedor](limpa);
   const dados = { chaveCifrada: cifrar(limpa, segredo()), finalDaChave: finalDaChave(limpa), conta, salvoPor: quem, testadoEm: new Date(), ultimoErro: null };
   await prisma.chaveDeIntegracao.upsert({
     where: { unitId_provedor: { unitId: unit.id, provedor } },
