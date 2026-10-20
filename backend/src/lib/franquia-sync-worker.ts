@@ -27,7 +27,10 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, sessaoEsquecidaComTratamentoFinalizado, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import {
+  ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, precisaHistoricoDoExPaciente, sessaoEsquecidaComTratamentoFinalizado,
+  tratamentoAberto, tratamentoFinalizado, type EntradaMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa,
+} from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
@@ -914,6 +917,8 @@ interface PacienteDoCartao {
   idClient: number | null;
   consultas: SpineSchedule[];
   tratamento: SpineTreatment | null;
+  /** Quem a varredura casou com o cartão (`resolverPaciente`), quando se sabe — dispensa buscar de novo. */
+  idsClient?: number[];
 }
 
 /**
@@ -1587,20 +1592,35 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     }
   }
   const regras1610 = ctx.jornada === 'ligado';
-  const mov = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao(), regras1610 });
+  const base: EntradaMovimento = { atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() };
+  // 16/10 (achado 5 da revisão): as regras do ex-paciente precisam do histórico, que o cartão COMERCIAL não carregava.
+  // Só quando faz diferença (`precisaHistoricoDoExPaciente`) e só com o paciente já conhecido: nenhuma busca nova.
+  let entrada1610 = base;
+  if (ctx.jornada && ctx.jornada !== 'desligado' && !precisaHistorico) {
+    const semHistorico = planejarMovimento({ ...base, regras1610: true });
+    if (precisaHistoricoDoExPaciente(base, semHistorico)) {
+      const conhecido = p.idClient ?? (p.idsClient?.length === 1 ? p.idsClient[0] : null) ?? (regras1610 ? idClientDoCartao(lead, ctx.camposPorNome ?? []) : null);
+      const hist = await historicoDoPaciente(unit, conhecido);
+      if (hist) {
+        const ids = new Set(agendamentos.map((s) => s.idSchedule));
+        entrada1610 = { ...base, agendamentos: [...agendamentos, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))], tratamentos: hist.treatments.length > 0 ? hist.treatments : tratamentos };
+      }
+    }
+  }
+  const mov = planejarMovimento(regras1610 ? { ...entrada1610, regras1610: true } : { ...base, regras1610: false });
   // 16/10 em "só no papel": o robô move pela regra antiga e a tela mostra onde a regra nova levaria o cartão
   if (ctx.jornada === 'seco') {
-    const novo = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao(), regras1610: true });
+    const novo = planejarMovimento({ ...entrada1610, regras1610: true });
     if ((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) {
       registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'moveria', alvo: novo ? novo.para : '(fica onde está)', deEtapa: atual.status, valor: novo?.semRegua ? 'sem régua' : undefined, motivo: novo?.motivo ?? `regras de 16/10: não move (a regra antiga leva pra ${mov?.para})` });
     }
   }
   // 16/10 (decisão 4): falta em retorno/sessão vira nota + tarefa, sem mexer na etapa
-  await avisarFaltas(ctx, leadId, lead, atual.status, agendamentos).catch((err) =>
+  await avisarFaltas(ctx, leadId, lead, atual.status, entrada1610.agendamentos).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: aviso de falta falhou'),
   );
   // 16/10 (achado 4 da revisão): tratamento FINALIZADO com sessão ainda marcada não move o cartão — vira UMA tarefa
-  await avisarSujeira(ctx, leadId, lead, atual, agendamentos, tratamentos).catch((err) =>
+  await avisarSujeira(ctx, leadId, lead, atual, entrada1610.agendamentos, entrada1610.tratamentos).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: aviso de sessão esquecida falhou'),
   );
   if (!mov) return;
@@ -1903,7 +1923,7 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
         logger.info({ unit: unit.slug, leadId, idClientDoCartao: idDoCartao }, 'franquia-sync: paciente sem idClient num cartão com dono e mais de um paciente — não gravei');
         continue;
       }
-      await processarCartao(ctx, leadId, lead, p);
+      await processarCartao(ctx, leadId, lead, { ...p, idsClient: idsDoPaciente });
     } catch (err) {
       resumo.erros++;
       logger.warn({ err, unit: unit.slug, paciente: p.nome }, 'franquia-sync: falha no paciente');

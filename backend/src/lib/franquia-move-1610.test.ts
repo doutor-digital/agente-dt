@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ETAPA, planejarMovimento, sessaoEsquecidaComTratamentoFinalizado, type EntradaMovimento } from './franquia-move.js';
+import { ETAPA, planejarMovimento, precisaHistoricoDoExPaciente, sessaoEsquecidaComTratamentoFinalizado, type EntradaMovimento } from './franquia-move.js';
 import type { SpineSchedule } from '../services/spine.service.js';
 
 const AGORA = Date.parse('2026-10-16T15:00:00Z') / 1000;
@@ -242,4 +242,27 @@ test('achado 4 — ALTA + tratamento FINALIZADO + sessão esquecida em AGENDADO 
   // a sessão esquecida é o que vira tarefa no sincronizador
   assert.equal(sessaoEsquecidaComTratamentoFinalizado({ agendamentos: ag1, tratamentos: FINALIZADO, agoraEpoch: AGORA })?.idSchedule, esquecida.idSchedule);
   assert.equal(sessaoEsquecidaComTratamentoFinalizado({ agendamentos: ag1, tratamentos: [...FINALIZADO, ...EM_ANDAMENTO], agoraEpoch: AGORA }), null, 'com outro tratamento em andamento não é sujeira');
+});
+
+test('achado 5 — sem o histórico, o ex-paciente no PERDIDO ia pra AGENDADO e o de RETORNO ficava preso: a varredura pede o histórico só onde muda', () => {
+  const marcada = ag({ h: 48, idStatus: 37 });
+  // o que a varredura tem (só a agenda): o PERDIDO iria pra AGENDADO — com o histórico, RETORNO
+  const semHist = e(ETAPA.PERDIDO, [marcada]);
+  assert.equal(planejarMovimento(semHist)?.para, ETAPA.AGENDADO);
+  assert.equal(precisaHistoricoDoExPaciente(semHist, planejarMovimento(semHist)), true);
+  assert.equal(planejarMovimento(e(ETAPA.PERDIDO, [...cicloVelho(), marcada], FINALIZADO))?.para, ETAPA.RETORNO);
+  // PERDIDO com retorno marcado (não avaliação): sem o histórico não move — mas pede o histórico
+  const retorno = e(ETAPA.PERDIDO, [ag({ h: 48, idStatus: 37, categoria: 'RETORNO' })]);
+  assert.equal(planejarMovimento(retorno), null);
+  assert.equal(precisaHistoricoDoExPaciente(retorno, null), true);
+  // RETORNO com a consulta da volta atendida: sem o histórico fica preso; com ele, COMPARECEU
+  const atendida = ag({ h: -24, idStatus: 42 });
+  const preso = e(ETAPA.RETORNO, [atendida]);
+  assert.equal(planejarMovimento(preso), null);
+  assert.equal(precisaHistoricoDoExPaciente(preso, null), true);
+  assert.equal(planejarMovimento(e(ETAPA.RETORNO, [...cicloVelho(), atendida], FINALIZADO))?.para, ETAPA.COMPARECEU);
+  // cartão parado (nada a mover), GANHO e funil TRATAMENTO: não pede (os dois últimos já carregam o histórico)
+  assert.equal(precisaHistoricoDoExPaciente(e(ETAPA.AGENDADO, [marcada]), null), false);
+  assert.equal(precisaHistoricoDoExPaciente(e(ETAPA.GANHO, [marcada]), null), false);
+  assert.equal(precisaHistoricoDoExPaciente(e(ETAPA.ALTA, [marcada], [], 'TRATAMENTO'), null), false);
 });

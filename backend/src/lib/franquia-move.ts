@@ -252,6 +252,27 @@ export function sessaoEsquecidaComTratamentoFinalizado(e: Pick<EntradaMovimento,
   return proxima(futuras);
 }
 
+/**
+ * PURA (achado 5 da revisão de 16/10): o cartão do funil COMERCIAL precisa do HISTÓRICO do paciente para as regras do
+ * ex-paciente? (Tratamento finalizado só aparece no histórico — `GET /clients/{id}` —, que a varredura só lia para GANHO e
+ * funil TRATAMENTO.) Só quando faz diferença, para não pagar uma chamada à franquia por cartão parado:
+ *  - a máquina, sem o histórico, já vai MOVER o cartão: é na transição que ex-paciente muda o destino (RETORNO em vez de
+ *    AGENDADO, ALTA em vez de PERDIDO "não fechou"…);
+ *  - PERDIDO com consulta marcada pra frente: ex-paciente sai pra RETORNO mesmo com consulta que não é avaliação;
+ *  - RETORNO PÓS-TRATAMENTO com consulta já atendida: a saída pra COMPARECEU exige saber que é ex-paciente.
+ * `semHistorico` é o `planejarMovimento` (regras de 16/10) com o que a varredura já tem.
+ */
+export function precisaHistoricoDoExPaciente(e: EntradaMovimento, semHistorico: Movimento | null): boolean {
+  if (!e.atual || e.atual.funil !== 'COMERCIAL' || eh(e.atual.status, ETAPA.GANHO)) return false;
+  if (semHistorico) return true;
+  const consultas = e.agendamentos.filter((s) => ehConsulta(s) && epoch(s) !== null);
+  if (eh(e.atual.status, ETAPA.PERDIDO)) {
+    return consultas.some((s) => (epoch(s) ?? 0) > e.agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO));
+  }
+  if (eh(e.atual.status, ETAPA.RETORNO)) return consultas.some((s) => s.idStatus === SPINE_STATUS.ATENDIDO && (epoch(s) ?? Infinity) <= e.agoraEpoch);
+  return false;
+}
+
 /** Puro: dado o cartão e o que a franquia sabe, pra onde o cartão vai (ou null = fica). */
 export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const atual = e.atual;
