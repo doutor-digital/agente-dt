@@ -47,6 +47,7 @@ import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
+import { unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
@@ -385,14 +386,26 @@ async function detectAndHandleConversion(
   const leadId = wonEvent.id;
   const statusId = wonEvent.status_id ?? null;
 
+  // Kommo dividido (Petrópolis + Caxias, 20/10/2026): o webhook chega pela dona da conta, mas a conversão é da
+  // unidade do CARTÃO («⌂ Unidade de atendimento»). Cartão sem unidade não conta para nenhuma das duas.
+  // Kommo de uma unidade só: a própria, sem ler nada.
+  const dona = await unidadeDonaPeloCartaoId(unit, leadId).catch(() => null);
+  if (!dona) {
+    logger.info(
+      { unit: unit.slug, leadId, statusId },
+      'webhook: conversão não registrada — Kommo dividido e o cartão não diz a unidade (ou não deu para ler)',
+    );
+    return { converted: false, leadId: null, statusId: null };
+  }
+
   const conv = await prisma.conversation.upsert({
-    where: { unitId_leadId: { unitId: unit.id, leadId: String(leadId) } },
+    where: { unitId_leadId: { unitId: dona.id, leadId: String(leadId) } },
     update: {
       convertedAt: { set: new Date() },
       convertedStatusId: statusId,
     },
     create: {
-      unitId: unit.id,
+      unitId: dona.id,
       leadId: String(leadId),
       channel: 'kommo',
       convertedAt: new Date(),
@@ -401,13 +414,13 @@ async function detectAndHandleConversion(
   });
 
   logger.info(
-    { unitId: unit.id, leadId, statusId, conversationId: conv.id },
+    { unitId: dona.id, leadId, statusId, conversationId: conv.id, ...(dona.id !== unit.id ? { chegouPor: unit.slug } : {}) },
     'webhook: conversão detectada',
   );
 
-  carimbarContato(unit.id, leadId, { desfecho: 'agendou' });
+  carimbarContato(dona.id, leadId, { desfecho: 'agendou' });
 
-  void judgeConversation({ conversationId: conv.id, unit }).catch((err) => {
+  void judgeConversation({ conversationId: conv.id, unit: dona }).catch((err) => {
     logger.error({ err, conversationId: conv.id }, 'webhook: judge falhou em background');
   });
 

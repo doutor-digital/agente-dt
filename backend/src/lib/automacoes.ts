@@ -271,7 +271,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'Põe sozinho as etiquetas que a SDR punha à mão: ▶ Boas-vindas quando o cartão entra em GANHO, ▶ Confirmar retorno 24 h antes do retorno (RETORNO PÓS-TRATAMENTO) e ▶ Reativação depois de 30 dias em PERDIDO sem conversa. A etiqueta aciona o bot do Kommo, que manda a mensagem.',
     pegadinha:
-      'Só funciona se a etiqueta tiver gatilho no Kommo daquela unidade. Não põe se o modelo for sair com buraco (programa, próxima sessão ou responsável vazios — cada regra deixa de olhar esses campos quando a unidade tem a `_v2` do modelo dela aprovada: `…sdr_reativacao_lead_frio_v2` ("a equipe Doutor Digital"), `…sdr_boas_vindas_programa_v2` (sem programa nem data) e `…sdr_confirmacao_retorno_v2` (mostra a ◷ Data da Consulta); quem cria a v2 troca o modelo do bot no mesmo passo) nem pra quem pediu pra não receber — em "só no papel" isso aparece como "pularia" com o motivo. A Reativação só pega quem cruza os 30 dias agora: o estoque antigo de PERDIDO nunca entra de uma vez. A ▶ Retomada não está aqui: depende do robô da 3C. Pra testar num cartão só: ligue e ponha os ids em pipelineIntents.etiquetas_teste_leads — o resto segue no papel.',
+      'Só funciona se a etiqueta tiver gatilho no Kommo daquela unidade. Não põe se o modelo for sair com buraco (programa, próxima sessão ou responsável vazios — cada regra deixa de olhar esses campos quando a unidade tem a `_v2` do modelo dela aprovada: `…sdr_reativacao_lead_frio_v2` ("a equipe Doutor Digital"), `…sdr_boas_vindas_programa_v2` (sem programa nem data) e `…sdr_confirmacao_retorno_v2` (mostra a ◷ Data da Consulta); quem cria a v2 troca o modelo do bot no mesmo passo) nem pra quem pediu pra não receber — em "só no papel" isso aparece como "pularia" com o motivo. A Reativação só pega quem cruza os 30 dias agora: o estoque antigo de PERDIDO nunca entra de uma vez. A ▶ Retomada não está aqui: depende do robô da 3C. No Kommo dividido (Petrópolis + Caxias), só o cartão com a ⌂ Unidade de atendimento da unidade recebe etiqueta — o de outra unidade e o sem unidade ficam de fora (o robô da etiqueta mandaria o endereço e o Pix errados). Pra testar num cartão só: ligue e ponha os ids em pipelineIntents.etiquetas_teste_leads — o resto segue no papel.',
     risco: 'manda-mensagem',
     temSeco: true,
     quandoVazio: 'desligado',
@@ -426,6 +426,8 @@ export const AUTOMACOES: readonly Automacao[] = [
     chave: 'CARIMBO_ETAPA_SLUGS',
     nome: 'Carimbo de início e fim do tratamento',
     oQueFaz: 'Quando o cartão muda de etapa, carimba as datas de início e fim do tratamento e encerra a conversa.',
+    pegadinha:
+      'Só age quando o Kommo avisa a mudança de etapa (o webhook do agente assina status_lead). No Kommo dividido (Petrópolis + Caxias) vale a chave da unidade do cartão (⌂ Unidade de atendimento): cartão de Caxias só com a chave de Caxias ligada, e cartão sem unidade não ganha carimbo de ninguém — o motivo fica no log.',
     risco: 'escreve-campo',
     temSeco: false,
     quandoVazio: 'desligado',

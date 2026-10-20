@@ -14,12 +14,22 @@
  * Só roda nas unidades listadas em `CARIMBO_ETAPA_SLUGS` (csv; `*` = todas). A conta
  * também precisa assinar `status_lead` no webhook do agente — a Imperatriz, por exemplo,
  * só assinava `add_message` em 18/09/2026, então nada disto disparava lá.
+ *
+ * KOMMO DIVIDIDO (Petrópolis + Caxias, 20/10/2026): o webhook chega sempre pela dona da conta (Petrópolis), mas
+ * quem decide é a «⌂ Unidade de atendimento» do CARTÃO — a chave que vale é a da unidade do cartão, como na volta
+ * de EM ESPERA. Cartão sem unidade (ou com um valor que nenhuma unidade usa) não é de ninguém: não grava e diz o
+ * motivo no log. Sem a divisão gravada em `unit_crm_compartilhado` (ou com a tabela ainda não lida), a conta com
+ * unidade de atendimento (`REGRAS_POR_UNIDADE`) só carimba o cartão da cidade da franquia dela — a mesma regra da
+ * trava de escrita na franquia. Kommo de uma unidade só: nada muda, nem uma leitura a mais.
  */
 import type { Unit } from '@prisma/client';
 import { createKommoClient, type KommoClient, type KommoLead } from '../services/kommo.service.js';
 import { esquemaDaUnidade, normalizarNome, type EsquemaKommo } from './kommo-schema.js';
 import { logger } from './logger.js';
 import { automacaoLigada } from './automacoes-estado.js';
+import { grupoDaUnidade, membroDoRotulo, valorDaUnidadeNoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
+import { regrasDaUnidade, travaPeloCampo, unidadeNoCartao } from './trava-unidade-atendimento.js';
+import type { RegrasDaUnidade } from './unidade-por-canal.js';
 
 export const CAMPOS_CARIMBO = {
   INICIO_TRAT: '◷ Início do tratamento',
@@ -76,19 +86,60 @@ function valorAtual(lead: KommoLead, fieldId: number): string | null {
   return v === null || v === undefined || v === '' ? null : String(v);
 }
 
-/** Para teste: o cliente do Kommo, o esquema da conta, o relógio e a variável da chave. */
+/**
+ * De quem é o carimbo deste cartão — PURO. `slug` = a unidade cuja chave decide; `pula` = ninguém carimba, com o
+ * motivo para o log. `grupo` = a divisão gravada (Petrópolis + Caxias); `regras` = a conta com unidade de atendimento
+ * sem a divisão gravada; os dois null = Kommo de uma unidade só (o cartão é desta unidade, sem ler o campo).
+ */
+export type DonoDoCarimbo = { slug: string; rotulo: string | null } | { pula: string };
+
+export function donoDoCarimbo(
+  unit: Pick<Unit, 'slug'>,
+  grupo: GrupoDoCrm | null,
+  regras: RegrasDaUnidade | null,
+  lead: Pick<KommoLead, 'custom_fields_values'> | null,
+): DonoDoCarimbo {
+  if (grupo) {
+    const valor = valorDaUnidadeNoCartao(lead);
+    if (!valor) return { pula: 'cartão sem ⌂ Unidade de atendimento — não é de nenhuma unidade da conta' };
+    const membro = membroDoRotulo(grupo, valor);
+    if (!membro) return { pula: `⌂ Unidade de atendimento "${valor}" não é de nenhuma unidade desta conta` };
+    if (!membro.slug) return { pula: `unidade "${membro.rotulo}" sem slug na divisão da conta` };
+    return { slug: membro.slug, rotulo: membro.rotulo };
+  }
+  if (regras) {
+    const trava = travaPeloCampo(regras, lead ? unidadeNoCartao(lead) : null);
+    if (trava) return { pula: `${trava.resumo} (divisão da conta não gravada: só carimba ${regras.cidadeDaFranquia})` };
+    return { slug: unit.slug, rotulo: regras.cidadeDaFranquia };
+  }
+  return { slug: unit.slug, rotulo: null };
+}
+
+/** Para teste: o cliente do Kommo, o esquema da conta, o relógio, a variável da chave e a divisão da conta. */
 export interface DepsCarimbo {
   kommo?: Pick<KommoClient, 'getLead' | 'setLeadCustomFieldValue'>;
   esquema?: Pick<EsquemaKommo, 'nomeDoStatus' | 'campoPorNome'>;
   agora?: number;
   raw?: string | undefined;
+  /** Kommo dividido: o grupo da conta (padrão: `unit_crm_compartilhado`, em memória). */
+  grupo?: GrupoDoCrm | null;
 }
 
 /** Aplica os carimbos de cada evento de etapa. Falha em um lead não derruba os outros. */
 export async function aplicarCarimbosDeEtapa(unit: Unit, eventos: EventoEtapa[], deps: DepsCarimbo = {}): Promise<number> {
   const raw = 'raw' in deps ? deps.raw : process.env.CARIMBO_ETAPA_SLUGS;
-  if (!carimboEtapaLiberado(unit.slug, raw) || eventos.length === 0) return 0;
+  if (eventos.length === 0) return 0;
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) return 0;
+
+  // Kommo dividido: o evento chega pela dona da conta, mas a chave que vale é a da unidade do CARTÃO. Aqui só o
+  // portão barato: alguém do grupo com a chave ligada? A decisão por cartão vem abaixo, depois de ler o cartão.
+  const grupo = 'grupo' in deps ? (deps.grupo ?? null) : await grupoDaUnidade(unit.id);
+  if (grupo) {
+    if (!grupo.membros.some((m) => m.slug && carimboEtapaLiberado(m.slug, raw))) return 0;
+  } else if (!carimboEtapaLiberado(unit.slug, raw)) {
+    return 0;
+  }
+  const regras = grupo ? null : regrasDaUnidade(unit.slug);
 
   const kommo = deps.kommo ?? createKommoClient(unit);
   const esquema = deps.esquema ?? (await esquemaDaUnidade(unit, kommo as KommoClient));
@@ -103,7 +154,24 @@ export async function aplicarCarimbosDeEtapa(unit: Unit, eventos: EventoEtapa[],
     if (carimbos.length === 0) continue;
 
     try {
-      const lead = carimbos.some((c) => c.soSeVazio) ? await kommo.getLead(ev.id) : null;
+      // Conta dividida (ou com unidade de atendimento): o cartão é lido sempre — é ele que diz de quem é.
+      const precisaLer = !!grupo || !!regras || carimbos.some((c) => c.soSeVazio);
+      const lead = precisaLer ? await kommo.getLead(ev.id) : null;
+      const dono = donoDoCarimbo(unit, grupo, regras, lead);
+      if ('pula' in dono) {
+        logger.info({ unit: unit.slug, leadId: ev.id, etapa: nomes.status, motivo: dono.pula }, 'carimbo-etapa: não gravei — cartão não é desta unidade');
+        continue;
+      }
+      // A chave que vale é a da unidade do cartão (no Kommo de uma unidade só, a desta — já conferida no portão).
+      if (!carimboEtapaLiberado(dono.slug, raw)) {
+        logger.info(
+          { unit: unit.slug, leadId: ev.id, etapa: nomes.status, unidadeDoCartao: dono.rotulo, slugDoCartao: dono.slug },
+          dono.slug === unit.slug
+            ? 'carimbo-etapa: não gravei — a chave carimbo-etapa desta unidade está desligada'
+            : 'carimbo-etapa: não gravei — cartão de outra unidade, e a chave carimbo-etapa dela está desligada',
+        );
+        continue;
+      }
       for (const c of carimbos) {
         const fieldId = esquema.campoPorNome(c.campo)!;
         if (c.soSeVazio && lead && valorAtual(lead, fieldId)) {
@@ -112,7 +180,10 @@ export async function aplicarCarimbosDeEtapa(unit: Unit, eventos: EventoEtapa[],
         }
         await kommo.setLeadCustomFieldValue(ev.id, fieldId, c.tipo, c.valor);
         gravados++;
-        logger.info({ unit: unit.slug, leadId: ev.id, etapa: nomes.status, campo: c.campo, motivo: c.motivo }, 'carimbo-etapa: campo gravado');
+        logger.info(
+          { unit: unit.slug, leadId: ev.id, etapa: nomes.status, campo: c.campo, motivo: c.motivo, ...(dono.rotulo ? { unidadeDoCartao: dono.rotulo } : {}) },
+          'carimbo-etapa: campo gravado',
+        );
       }
     } catch (err) {
       logger.warn({ err: String(err), unit: unit.slug, leadId: ev.id, etapa: nomes.status }, 'carimbo-etapa: falha ao gravar (ignorada)');

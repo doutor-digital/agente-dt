@@ -7,8 +7,10 @@ import {
   _zerarSemUnidadeParaTeste,
   cartoesSemUnidade,
   grupoDe,
+  membroDoRotulo,
   pularCartao,
   unidadeDoCartao,
+  unidadeDonaPeloCartaoId,
   unidadeParaOCartao,
   valorDaUnidadeNoCartao,
   veredictoDoCartao,
@@ -149,6 +151,32 @@ test('unidadeParaOCartao: conta dividida sem cartão no pedido recusa; unidade c
   assert.equal(itz.tipo, 'sem-divisao');
   const naoLeu = await unidadeParaOCartao(unidade(PETRO), 123, async () => null);
   assert.equal(naoLeu.tipo, 'recusa');
+});
+
+// ── evento que chega pela dona e só diz o número do cartão (webhook status_lead, 20/10) ──────────────────────
+test('membroDoRotulo: o rótulo do cartão diz o membro, venha o evento por quem vier; vazio e estranho = null', () => {
+  assert.equal(membroDoRotulo(GRUPO, 'CAXIAS')?.unitId, CAXIAS);
+  assert.equal(membroDoRotulo(GRUPO, 'petropolis')?.unitId, PETRO);
+  assert.equal(membroDoRotulo(GRUPO, null), null);
+  assert.equal(membroDoRotulo(GRUPO, 'Rio'), null);
+});
+
+test('unidadeDonaPeloCartaoId: Caxias → a unidade Caxias; Petrópolis → a própria; vazio, estranho ou ilegível → ninguém', async () => {
+  const petro = unidade(PETRO);
+  const caxias = unidade(CAXIAS);
+  const carregar = async (id: string) => (id === CAXIAS ? caxias : id === PETRO ? petro : null);
+  const ler = (valor: string | null) => async () => cartao(valor);
+  assert.equal(await unidadeDonaPeloCartaoId(petro, 1, ler('Caxias'), carregar), caxias);
+  assert.equal(await unidadeDonaPeloCartaoId(petro, 1, ler('Petrópolis'), carregar), petro);
+  assert.equal(await unidadeDonaPeloCartaoId(petro, 1, ler(null), carregar), null, 'só o «⌂ Unidade» antigo não conta');
+  assert.equal(await unidadeDonaPeloCartaoId(petro, 1, ler('Rio'), carregar), null);
+  assert.equal(await unidadeDonaPeloCartaoId(petro, 1, async () => null, carregar), null);
+  assert.equal(await unidadeDonaPeloCartaoId(petro, 1, async () => { throw new Error('Kommo fora'); }, carregar), null);
+});
+
+test('unidadeDonaPeloCartaoId: unidade de um token só é a própria, sem ler o cartão', async () => {
+  const itz = unidade(ITZ);
+  assert.equal(await unidadeDonaPeloCartaoId(itz, 1, async () => { throw new Error('não deveria ler'); }), itz);
 });
 
 // ── franquia → Kommo: o portão dos robôs e a lista da SDR ────────────────────────────────────────────────────
