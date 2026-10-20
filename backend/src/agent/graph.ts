@@ -53,6 +53,16 @@ import {
   FALLBACK_TETO,
 } from './llm-policy.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import {
+  agendamentoDoVinculo,
+  blocoDaConsulta,
+  INSTRUCAO_RESERVA_SEM_MARCAR,
+  marcouNesteTurno,
+  PERGUNTA_NEUTRA,
+  promptTemConsulta,
+  reservaSemMarcar,
+  semOTrecho,
+} from './reserva-sem-marcar.js';
 import { ehSemNome, ehTituloPadrao } from '../lib/titulo-padrao.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
 
@@ -532,6 +542,10 @@ export async function buildAgentGraph(
   // execução. É dentro de UMA conversa que o custo foge do controle.
   const idDaConversa = leadIdDaConversa ? buildThreadId(unit.slug, leadIdDaConversa) : null;
 
+  // A trava "reservado sem marcar" refaz COM ferramentas no máximo uma vez por turno: a refeita pode chamar
+  // agendar_consulta, o grafo volta aqui, e uma segunda promessa no mesmo turno só é cortada, nunca refeita.
+  let reservaJaRefeita = false;
+
   const agentNode = async (state: AgentStateType) => {
     await recorder.step({
       kind: 'THINKING',
@@ -645,6 +659,7 @@ export async function buildAgentGraph(
     // pergunta final (mais abaixo) também sai pela reserva, em vez de bater de novo na chave morta.
     let modeloAtivo = model;
     let provedorAtivo: string = provider;
+    let respondeuPlanoB = false;
     try {
       // Provedor comprovadamente fora não ganha mais 35 segundos de espera por
       // mensagem: pula direto pro plano B, e volta sozinho quando se recuperar.
@@ -736,6 +751,7 @@ export async function buildAgentGraph(
             PLANO_B_TIMEOUT_MS,
           )) as AIMessage;
 
+          respondeuPlanoB = true;
           await recorder.step({
             kind: 'THINKING',
             title: `🔁 Plano B: ${planoB.provider} (${planoB.modelName}) respondeu no lugar do modelo principal`,
@@ -827,6 +843,87 @@ export async function buildAgentGraph(
             ? `🙈 Bastidor na resposta — reescrita só com a mensagem pro paciente (${explicarVazamento(vazou)})`
             : `🙈 Bastidor na resposta e a reescrita não resolveu — o envio será bloqueado (${explicarVazamento(vazou)})`,
           payload: { original: text, reescrita: reescrito || null, trecho: vazou.trecho, erro: erroReescrita },
+          latencyMs: Math.round(performance.now() - t1),
+        });
+      }
+
+      // "Reservado" sem consulta (19/10/2026, Olímpia: o Anderson pagou o 11h30 que a IA disse ter reservado, e o
+      // horário foi pra outro paciente — ver reserva-sem-marcar.ts). Antes de enviar: refaz UMA vez com as
+      // ferramentas, para a IA poder MARCAR; texto refeito só vale sem a promessa; senão o trecho sai.
+      const doTurno: string[] = [];
+      for (let i = nonSystemMessages.length - 1; i >= 0 && nonSystemMessages[i].getType() !== 'human'; i--) {
+        const m = nonSystemMessages[i];
+        if (m.getType() === 'tool') doTurno.push(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+      }
+      const marcouAgora = marcouNesteTurno(doTurno);
+      const consultasValidas = promptTemConsulta(promptDoTurno) ? [blocoDaConsulta(promptDoTurno)] : [];
+      let promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
+      if (promessa && state.leadId) {
+        const doVinculo = await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit));
+        // a mesma prova vale para conferir a reescrita lá embaixo (4º achado do Codex)
+        if (doVinculo) consultasValidas.push(doVinculo);
+        if (doVinculo) promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
+      }
+      if (promessa) {
+        const t1 = performance.now();
+        let refeita: AIMessage | null = null;
+        let erroRefeita: string | null = null;
+        // Com o plano B respondendo, o modelo principal está fora: refazer nele só gastaria o tempo limite.
+        if (!reservaJaRefeita && !respondeuPlanoB) {
+          reservaJaRefeita = true;
+          try {
+            refeita = (await withTimeout(
+              invokeChatModel({
+                model: modeloAtivo,
+                messages: [...finalMessages, response, new HumanMessage(INSTRUCAO_RESERVA_SEM_MARCAR)],
+                unitId: unit.id,
+                traceId: recorder.traceId,
+                modelName,
+                provider: provedorAtivo,
+                tools,
+                conversaId: idDaConversa,
+              }),
+              AGENT_NODE_TIMEOUT_MS,
+            )) as AIMessage;
+          } catch (err) {
+            erroRefeita = err instanceof Error ? err.message : String(err);
+          }
+        }
+        const chamadas = refeita?.tool_calls ?? [];
+        if (refeita && chamadas.length > 0) {
+          await recorder.step({
+            kind: 'THINKING',
+            title: `📅 Disse que estava reservado sem marcar — refeita chamando ${chamadas.map((c) => c.name).join(', ')}`,
+            payload: { original: textoFinal, trecho: promessa.trecho, chamadas: chamadas.map((c) => ({ nome: c.name, args: c.args })) },
+            latencyMs: Math.round(performance.now() - t1),
+          });
+          return { messages: [refeita] } satisfies Partial<AgentStateType>;
+        }
+        const textoRefeito = refeita ? aiTextFromContent(refeita.content).trim() : '';
+        const semPromessa = (t: string) => !reservaSemMarcar(t, { marcouAgora: false, consultasValidas });
+        let saida: 'refeita' | 'cortada' | 'neutra';
+        const cortado = semOTrecho(textoFinal, promessa.trecho);
+        if (textoRefeito && semPromessa(textoRefeito) && !detectarVazamento(textoRefeito)) {
+          saida = 'refeita';
+          textoFinal = textoRefeito;
+        } else if (cortado && semPromessa(cortado)) {
+          saida = 'cortada';
+          textoFinal = cortado;
+        } else {
+          // Nem a refeita nem o corte tiraram a promessa: a original NÃO sai (achado do Codex, 19/10).
+          saida = 'neutra';
+          textoFinal = PERGUNTA_NEUTRA;
+        }
+        response.content = textoFinal;
+        await recorder.step({
+          kind: saida === 'neutra' ? 'ERROR' : 'THINKING',
+          title:
+            saida === 'refeita'
+              ? `📅 Disse que estava reservado sem marcar — reescrita sem a promessa ("${promessa.trecho.slice(0, 80)}")`
+              : saida === 'cortada'
+                ? `📅 Disse que estava reservado sem marcar — o trecho saiu da resposta ("${promessa.trecho.slice(0, 80)}")`
+                : `📅 Disse que estava reservado sem marcar e não consegui tirar — saiu a pergunta neutra ("${promessa.trecho.slice(0, 80)}")`,
+          payload: { trecho: promessa.trecho, forma: promessa.forma, refeita: textoRefeito || null, final: textoFinal, erro: erroRefeita },
           latencyMs: Math.round(performance.now() - t1),
         });
       }

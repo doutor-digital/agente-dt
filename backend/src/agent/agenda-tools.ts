@@ -1253,7 +1253,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         .optional()
         .describe(
           'true SOMENTE se o paciente disse, com as palavras dele, que consegue ir nesse dia e horário ' +
-          '(sem viagem, trabalho ou imprevisto). "ok" para o horário não conta.',
+          '(sem viagem, trabalho ou imprevisto). Também vale: ele mesmo escreveu o dia/hora que escolheu ' +
+          '("terça às 11:30"), ou mandou o comprovante do Pix depois da chave com o horário combinado. ' +
+          '"ok" para o horário não conta.',
         ),
       formaPagamento: z
         .enum(['pix_antecipado', 'na_clinica'])
