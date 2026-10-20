@@ -34,6 +34,11 @@ test('401 e 403 viram mensagens claras (sem o token)', async () => {
   await assert.rejects(() => conveniaGet('c3', 'tok', '/employees/x/absences', {}, fetcherFalso([json({}, 403)])), /não tem permissão para \/employees\/x\/absences/);
 });
 
+test('resposta 200 que não é JSON vira erro do Convênia com a rota', async () => {
+  const html = () => new Response('<html>manutenção</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+  await assert.rejects(() => conveniaGet('c5', 'tok', '/employees', {}, fetcherFalso([html])), /Convênia 200 em \/employees: resposta que não é JSON/);
+});
+
 test('429 respeita o Retry-After e tenta de novo', async () => {
   const chamadas: Chamada[] = [];
   const r = await conveniaGet('c4', 'tok', '/employees', {}, fetcherFalso([json({}, 429, { 'retry-after': '0' }), json({ data: [] })], chamadas));

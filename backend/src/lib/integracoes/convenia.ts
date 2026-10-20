@@ -85,7 +85,12 @@ export async function conveniaGet<T = unknown>(
     if (resp.status === 401) throw new ErroConvenia('o Convênia recusou o token (401): token errado ou removido — gere outro em Configurações → API', 401);
     if (resp.status === 403) throw new ErroConvenia(`o token do Convênia não tem permissão para ${caminho} (403): edite o token em Configurações → API e marque essa listagem`, 403);
     if (!resp.ok) throw new ErroConvenia(`Convênia ${resp.status} em ${caminho}: ${texto.slice(0, 300)}`, resp.status);
-    return (texto ? JSON.parse(texto) : null) as T;
+    if (!texto) return null as T;
+    try {
+      return JSON.parse(texto) as T;
+    } catch {
+      throw new ErroConvenia(`Convênia ${resp.status} em ${caminho}: resposta que não é JSON (${texto.slice(0, 120)})`, resp.status);
+    }
   }
   throw new ErroConvenia(`Convênia não respondeu em ${caminho} depois de 4 tentativas`, 429);
 }

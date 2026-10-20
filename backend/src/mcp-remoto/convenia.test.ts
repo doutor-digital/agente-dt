@@ -174,14 +174,41 @@ test('colaboradores desligados: ficha lida por pessoa, período de desligamento 
   await assert.rejects(() => conveniaColaboradores(ctx, { unidade: 'doutor-digital', situacao: 'ativos', desligadosDe: '2026-10-01' }), /desligados/);
 });
 
-test('desligados além do teto ficam sem ficha e o aviso diz quantos', async () => {
-  const muitos = Array.from({ length: 3 }, (_, i) => ({ id: `dddddddd-0000-4000-8000-00000000000${i}`, dismissal: { date: `2026-10-0${i + 1}` } }));
+test('desligados além do teto: contam sem nome; com filtro de pessoa a conta sai marcada incompleta', async () => {
+  const muitos = Array.from({ length: 3 }, (_, i) => ({ id: `dddddddd-0000-4000-8000-00000000000${i}`, dismissal: { date: `2026-10-0${i + 1}`, type: { title: 'Outros' } } }));
   const rotas: Rotas = { ...rotasPadrao(), '/employees/dismissed': () => pagina(muitos) };
   for (const d of muitos) rotas[`/employees/${d.id}`] = () => ({ data: pessoa(d.id, 'Pessoa', d.id.slice(-1)) });
-  const r = await conveniaColaboradores(ctxPadrao(rotas, undefined, { maxColaboradores: 2 }), { unidade: 'doutor-digital', situacao: 'desligados' });
-  const u = r.porUnidade['doutor-digital'] as { total: number; desligadosSemFicha?: number };
-  assert.equal(u.total, 2);
+  const ctx = ctxPadrao(rotas, undefined, { maxColaboradores: 2 });
+  const r = await conveniaColaboradores(ctx, { unidade: 'doutor-digital', situacao: 'desligados', agruparPor: 'tipoDesligamento' });
+  const u = r.porUnidade['doutor-digital'] as { total: number; itens: unknown[]; desligadosSemFicha?: number; incompleto?: boolean; agrupado?: Record<string, number>; aviso?: string };
+  assert.equal(u.total, 3, 'o terceiro conta, só não é nomeado');
+  assert.equal(u.itens.length, 2);
   assert.equal(u.desligadosSemFicha, 1);
+  assert.equal(u.incompleto, undefined);
+  assert.deepEqual(u.agrupado, { Outros: 3 });
+  assert.match(u.aviso!, /sem nome/);
+
+  const porDep = await conveniaColaboradores(ctx, { unidade: 'doutor-digital', situacao: 'desligados', agruparPor: 'departamento' });
+  assert.deepEqual((porDep.porUnidade['doutor-digital'] as { agrupado?: Record<string, number> }).agrupado, { Tecnologia: 2, '(sem ficha)': 1 });
+
+  const f = await conveniaColaboradores(ctx, { unidade: 'doutor-digital', situacao: 'desligados', departamento: 'tecnologia' });
+  const uf = f.porUnidade['doutor-digital'] as { total: number; incompleto?: boolean; aviso?: string };
+  assert.equal(uf.total, 2);
+  assert.equal(uf.incompleto, true);
+  assert.match(uf.aviso!, /parciais/);
+});
+
+test('movimentação com desligados além do teto: a contagem de desligamentos vem da listagem inteira', async () => {
+  const muitos = Array.from({ length: 3 }, (_, i) => ({ id: `dddddddd-0000-4000-8000-00000000000${i}`, dismissal: { date: `2026-10-0${i + 1}`, type: { title: 'Outros' } } }));
+  const rotas: Rotas = { ...rotasPadrao(), '/employees/dismissed': () => pagina(muitos) };
+  for (const d of muitos) rotas[`/employees/${d.id}`] = () => ({ data: pessoa(d.id, 'Pessoa', d.id.slice(-1), { hiring_date: '2020-01-01' }) });
+  const r = await conveniaMovimentacao(ctxPadrao(rotas, undefined, { maxColaboradores: 2 }), { unidade: 'doutor-digital', inicio: '2026-10-01', fim: '2026-10-31' });
+  const u = r.porUnidade['doutor-digital'] as Extract<(typeof r.porUnidade)[string], { ok: true }>;
+  assert.equal(u.desligamentos, 3);
+  assert.deepEqual(u.porMes['2026-10'], { admissoes: 1, desligamentos: 3 });
+  assert.deepEqual(u.desligamentosPorTipo, { Outros: 3 });
+  assert.equal(u.itensDesligamentos.length, 2);
+  assert.equal((u as { incompleto?: boolean }).incompleto, true);
 });
 
 test('movimentação: admissões e desligamentos do período, por mês e por tipo', async () => {

@@ -371,18 +371,18 @@ export type ColaboradorComSaida = Colaborador & { desligamento?: Desligamento };
 /**
  * Desligados que passam no `filtro`, com a ficha (nome, cargo, departamento, admissão) lida uma a uma — a
  * listagem de desligados do Convênia só traz o id e o desligamento. Mais recentes primeiro; além do teto,
- * ficam sem ficha (contados em `semFicha`).
+ * ficam sem ficha (`semFicha`: só id e desligamento — dá para CONTAR, não para nomear nem filtrar por pessoa).
  */
 async function desligadosComFicha(
   ctx: ContextoConvenia,
   c: ContaConvenia,
   filtro: (d: Desligamento) => boolean,
-): Promise<{ itens: ColaboradorComSaida[]; truncado: boolean; semFicha: number }> {
+): Promise<{ itens: ColaboradorComSaida[]; truncado: boolean; semFicha: Array<{ id: string; desligamento: Desligamento }> }> {
   const { itens, truncado } = await desligados(ctx, c);
   const alvo = itens.filter((d) => filtro(d.desligamento)).sort((a, b) => String(b.desligamento.data).localeCompare(String(a.desligamento.data)));
   const lidos = alvo.slice(0, ctx.maxColaboradores);
   const fichas = await emParalelo(lidos, 4, async (d) => ({ ...(await ficha(ctx, c, d.id, TTL_DESLIGADO)), situacao: 'Desligado', desligamento: d.desligamento }));
-  return { itens: fichas, truncado, semFicha: alvo.length - lidos.length };
+  return { itens: fichas, truncado, semFicha: alvo.slice(lidos.length) };
 }
 
 // ----------------------------------------------------------------- filtros e contas
@@ -437,6 +437,8 @@ async function emCada<T extends object>(contas: ContaConvenia[], fn: (c: ContaCo
 }
 
 const foraDoTotal = (porUnidade: Record<string, { ok: boolean }>) => Object.entries(porUnidade).filter(([, u]) => !u.ok).map(([s]) => s);
+const incompletas = (porUnidade: Record<string, { ok: boolean }>) =>
+  Object.entries(porUnidade).filter(([, u]) => u.ok && ('incompleto' in u || 'truncado' in u)).map(([s]) => s);
 
 /** Ativos filtrados para as leituras por pessoa, com o teto aplicado. */
 async function alvosAtivos(ctx: ContextoConvenia, c: ContaConvenia, f: FiltroPessoa) {
@@ -449,7 +451,7 @@ async function alvosAtivos(ctx: ContextoConvenia, c: ContaConvenia, f: FiltroPes
       colaboradoresLidos: lidos.length,
       colaboradoresNoFiltro: filtrados.length,
       ...(truncado || lidos.length < filtrados.length
-        ? { truncado: true, aviso: `li ${lidos.length} de ${filtrados.length} pessoas (o Convênia aceita 50 chamadas por minuto): filtre por departamento ou cargo para ver o resto` }
+        ? { truncado: true, incompleto: true, aviso: `li ${lidos.length} de ${filtrados.length} pessoas (o Convênia aceita 50 chamadas por minuto): filtre por departamento ou cargo para ver o resto` }
         : {}),
     },
   };
@@ -483,6 +485,9 @@ export interface ArgsColaboradores extends FiltroPessoa {
   maxItens?: number;
 }
 
+/** Agrupamentos que a listagem de desligados responde sozinha (sem a ficha da pessoa). */
+const SEM_FICHA_RESPONDE = new Set<AgruparColaboradores>(['situacao', 'mesDesligamento', 'tipoDesligamento']);
+
 export async function conveniaColaboradores(ctx: ContextoConvenia, a: ArgsColaboradores) {
   periodo(a.admitidosDe, a.admitidosAte, 'admitidos');
   periodo(a.desligadosDe, a.desligadosAte, 'desligados');
@@ -490,10 +495,12 @@ export async function conveniaColaboradores(ctx: ContextoConvenia, a: ArgsColabo
   if (situacao === 'ativos' && (a.desligadosDe || a.desligadosAte)) throw new ErroDeEntrada('desligadosDe/desligadosAte pedem situacao "desligados" ou "todos"');
   const contas = resolverContasConvenia(ctx, a.unidade);
   const max = a.maxItens ?? (contas.length === 1 ? 50 : 0);
+  // filtro que só a ficha responde: quem ficou sem ficha não entra e a conta fica incompleta
+  const filtroDePessoa = !!(a.departamento || a.cargo || a.time || a.gestor || a.busca || a.admitidosDe || a.admitidosAte);
   const porUnidade = await emCada(contas, async (c) => {
     const lista = new Map<string, ColaboradorComSaida>();
     let truncado = false;
-    let semFicha = 0;
+    let semFicha: Array<{ id: string; desligamento: Desligamento }> = [];
     if (situacao !== 'desligados') {
       const r = await ativos(ctx, c);
       for (const x of r.itens) lista.set(x.id, x);
@@ -504,22 +511,40 @@ export async function conveniaColaboradores(ctx: ContextoConvenia, a: ArgsColabo
       // quem está na lista de ativos e também em desligamento (aviso prévio correndo) aparece uma vez só
       for (const x of r.itens) lista.set(x.id, lista.has(x.id) ? { ...lista.get(x.id)!, desligamento: x.desligamento } : x);
       truncado ||= r.truncado;
-      semFicha = r.semFicha;
+      semFicha = r.semFicha.filter((d) => !lista.has(d.id));
     }
     const filtrados = [...lista.values()].filter((x) => passa(x, a) && noPeriodo(x.admissao, a.admitidosDe, a.admitidosAte));
+    // sem filtro de pessoa, quem ficou sem ficha ainda CONTA (a listagem traz o desligamento); só não é nomeado
+    const contados = filtroDePessoa ? 0 : semFicha.length;
+    const grupo = a.agruparPor;
+    const agrupado = grupo
+      ? contar(
+          [...filtrados.map((x) => CHAVE_GRUPO[grupo](x)), ...semFicha.slice(0, contados).map((d) => (SEM_FICHA_RESPONDE.has(grupo) ? CHAVE_GRUPO[grupo]({ situacao: 'Desligado', desligamento: d.desligamento } as ColaboradorComSaida) : '(sem ficha)'))],
+          (k) => k,
+        )
+      : undefined;
+    const incompleto = truncado || (semFicha.length > 0 && filtroDePessoa);
+    const avisos = [
+      ...(truncado ? ['a listagem do Convênia passou do teto de páginas: os números são parciais'] : []),
+      ...(semFicha.length && filtroDePessoa ? [`${semFicha.length} desligados não tiveram a ficha lida e ficaram FORA do filtro (os números são parciais): estreite o período de desligamento`] : []),
+      ...(semFicha.length && !filtroDePessoa ? [`${semFicha.length} desligados entram na contagem sem nome (ficha não lida, teto de ${ctx.maxColaboradores} por chamada): estreite o período de desligamento para ver quem são`] : []),
+    ];
     return {
-      total: filtrados.length,
-      ...(situacao === 'todos' ? { ativos: filtrados.filter((x) => !x.desligamento).length, desligados: filtrados.filter((x) => x.desligamento).length } : {}),
-      ...(a.agruparPor ? { agrupado: contar(filtrados, CHAVE_GRUPO[a.agruparPor]) } : {}),
-      ...(truncado ? { truncado } : {}),
-      ...(semFicha ? { desligadosSemFicha: semFicha, aviso: `${semFicha} desligados ficaram fora (sem a ficha, não dá para filtrar nem nomear): estreite o período de desligamento` } : {}),
+      total: filtrados.length + contados,
+      ...(situacao === 'todos' ? { ativos: filtrados.filter((x) => !x.desligamento).length, desligados: filtrados.filter((x) => x.desligamento).length + contados } : {}),
+      ...(agrupado ? { agrupado } : {}),
+      ...(incompleto ? { incompleto: true } : {}),
+      ...(semFicha.length ? { desligadosSemFicha: semFicha.length } : {}),
+      ...(avisos.length ? { aviso: avisos.join(' · ') } : {}),
       itens: filtrados.slice(0, max),
     };
   });
   const ok = Object.values(porUnidade).filter((u): u is Extract<typeof u, { ok: true }> => u.ok);
   return {
     situacao,
-    ...(contas.length > 1 ? { rede: { colaboradores: ok.reduce((s, u) => s + u.total, 0), unidadesForaDoTotal: foraDoTotal(porUnidade) } } : {}),
+    ...(contas.length > 1
+      ? { rede: { colaboradores: ok.reduce((s, u) => s + u.total, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
+      : {}),
     porUnidade,
   };
 }
@@ -536,6 +561,7 @@ export async function conveniaMovimentacao(
   const contas = resolverContasConvenia(ctx, a.unidade);
   const max = a.maxItens ?? (contas.length === 1 ? 50 : 0);
   const filtro = { departamento: a.departamento, cargo: a.cargo };
+  const comFiltro = !!(a.departamento || a.cargo);
   const porUnidade = await emCada(contas, async (c) => {
     const at = await ativos(ctx, c);
     // quem saiu a partir do início pode ter entrado no período: a ficha traz a admissão
@@ -543,30 +569,44 @@ export async function conveniaMovimentacao(
     const ids = new Set(at.itens.map((x) => x.id));
     const todos: ColaboradorComSaida[] = [...at.itens, ...de.itens.filter((x) => !ids.has(x.id))].filter((x) => passa(x, filtro));
     const admitidos = todos.filter((x) => noPeriodo(x.admissao, a.inicio, a.fim)).sort((x, y) => String(x.admissao).localeCompare(String(y.admissao)));
-    const saidas = de.itens.filter((x) => passa(x, filtro) && noPeriodo(x.desligamento?.data ?? null, a.inicio, a.fim)).sort((x, y) => String(x.desligamento?.data).localeCompare(String(y.desligamento?.data)));
+    const noPer = (d?: Desligamento) => noPeriodo(d?.data ?? null, a.inicio, a.fim);
+    const saidasComFicha = de.itens.filter((x) => passa(x, filtro) && noPer(x.desligamento)).sort((x, y) => String(x.desligamento?.data).localeCompare(String(y.desligamento?.data)));
+    // sem filtro de pessoa, a CONTAGEM de desligamentos vem da listagem inteira (não depende da ficha)
+    const saidasContadas: Desligamento[] = comFiltro
+      ? saidasComFicha.map((x) => x.desligamento!)
+      : [...saidasComFicha.map((x) => x.desligamento!), ...de.semFicha.filter((d) => noPer(d.desligamento)).map((d) => d.desligamento)];
     const porMes: Record<string, { admissoes: number; desligamentos: number }> = {};
     for (const x of admitidos) (porMes[x.admissao!.slice(0, 7)] ??= { admissoes: 0, desligamentos: 0 }).admissoes++;
-    for (const x of saidas) (porMes[x.desligamento!.data!.slice(0, 7)] ??= { admissoes: 0, desligamentos: 0 }).desligamentos++;
+    for (const d of saidasContadas) (porMes[d.data!.slice(0, 7)] ??= { admissoes: 0, desligamentos: 0 }).desligamentos++;
+    const semFicha = de.semFicha.length;
+    const avisos = [
+      ...(at.truncado || de.truncado ? ['a listagem do Convênia passou do teto de páginas: os números são parciais'] : []),
+      ...(semFicha
+        ? [comFiltro
+            ? `${semFicha} desligados desde ${a.inicio} não tiveram a ficha lida: admissões e desligamentos deste filtro podem estar faltando — estreite o período`
+            : `${semFicha} desligados desde ${a.inicio} não tiveram a ficha lida: a contagem de desligamentos está completa, mas admissões de quem já saiu e a divisão por departamento podem faltar — estreite o período`]
+        : []),
+    ];
     return {
       ativosHoje: at.itens.filter((x) => passa(x, filtro)).length,
       admissoes: admitidos.length,
-      desligamentos: saidas.length,
-      saldo: admitidos.length - saidas.length,
+      desligamentos: saidasContadas.length,
+      saldo: admitidos.length - saidasContadas.length,
       porMes: Object.fromEntries(Object.entries(porMes).sort(([x], [y]) => x.localeCompare(y))),
-      desligamentosPorTipo: contar(saidas, (x) => x.desligamento?.tipo),
-      desligamentosPorDepartamento: contar(saidas, (x) => x.departamento),
+      desligamentosPorTipo: contar(saidasContadas, (d) => d.tipo),
+      desligamentosPorDepartamento: contar(saidasComFicha, (x) => x.departamento),
       admissoesPorDepartamento: contar(admitidos, (x) => x.departamento),
-      ...(at.truncado || de.truncado ? { truncado: true } : {}),
-      ...(de.semFicha ? { desligadosSemFicha: de.semFicha, aviso: `${de.semFicha} desligamentos desde ${a.inicio} ficaram sem ficha: estreite o período` } : {}),
+      ...(avisos.length ? { incompleto: true, aviso: avisos.join(' · ') } : {}),
+      ...(semFicha ? { desligadosSemFicha: semFicha } : {}),
       itensAdmissoes: admitidos.slice(0, max).map((x) => ({ nome: x.nome, cargo: x.cargo, departamento: x.departamento, admissao: x.admissao })),
-      itensDesligamentos: saidas.slice(0, max).map((x) => ({ nome: x.nome, cargo: x.cargo, departamento: x.departamento, admissao: x.admissao, desligamento: x.desligamento })),
+      itensDesligamentos: saidasComFicha.slice(0, max).map((x) => ({ nome: x.nome, cargo: x.cargo, departamento: x.departamento, admissao: x.admissao, desligamento: x.desligamento })),
     };
   });
   const ok = Object.values(porUnidade).filter((u): u is Extract<typeof u, { ok: true }> => u.ok);
   return {
     periodo: { inicio: a.inicio, fim: a.fim },
     ...(contas.length > 1
-      ? { rede: { admissoes: ok.reduce((s, u) => s + u.admissoes, 0), desligamentos: ok.reduce((s, u) => s + u.desligamentos, 0), ativosHoje: ok.reduce((s, u) => s + u.ativosHoje, 0), unidadesForaDoTotal: foraDoTotal(porUnidade) } }
+      ? { rede: { admissoes: ok.reduce((s, u) => s + u.admissoes, 0), desligamentos: ok.reduce((s, u) => s + u.desligamentos, 0), ativosHoje: ok.reduce((s, u) => s + u.ativosHoje, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
     porUnidade,
   };
@@ -651,7 +691,7 @@ export async function conveniaFerias(
   return {
     periodo: { inicio, fim, hoje },
     ...(contas.length > 1
-      ? { rede: { feriasNoPeriodo: ok.reduce((s, u) => s + u.feriasNoPeriodo, 0), periodosVencidos: ok.reduce((s, u) => s + u.periodosVencidos, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: Object.entries(porUnidade).filter(([, u]) => u.ok && 'truncado' in u && u.truncado).map(([s]) => s) } }
+      ? { rede: { feriasNoPeriodo: ok.reduce((s, u) => s + u.feriasNoPeriodo, 0), periodosVencidos: ok.reduce((s, u) => s + u.periodosVencidos, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
     porUnidade,
   };
@@ -703,7 +743,7 @@ export async function conveniaAfastamentos(
     periodo: { inicio: a.inicio, fim: a.fim },
     observacao: 'Só de quem está ativo hoje. Motivo e tipo vêm do Convênia; CID e justificativa não saem por este conector.',
     ...(contas.length > 1
-      ? { rede: { ocorrencias: ok.reduce((s, u) => s + u.ocorrencias, 0), diasNoPeriodo: ok.reduce((s, u) => s + u.diasNoPeriodo, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: Object.entries(porUnidade).filter(([, u]) => u.ok && 'truncado' in u && u.truncado).map(([s]) => s) } }
+      ? { rede: { ocorrencias: ok.reduce((s, u) => s + u.ocorrencias, 0), diasNoPeriodo: ok.reduce((s, u) => s + u.diasNoPeriodo, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
     porUnidade,
   };
@@ -734,8 +774,16 @@ export async function conveniaColaborador(ctx: ContextoConvenia, a: { unidade: s
   } else {
     const at = await ativos(ctx, c);
     let achados: ColaboradorComSaida[] = at.itens.filter((x) => casaNome(x, b));
-    if (!achados.length) achados = (await desligadosComFicha(ctx, c, () => true)).itens.filter((x) => casaNome(x, b));
-    if (!achados.length) throw new ErroDeEntrada(`ninguém com "${b}" no nome entre os ativos e os desligados de ${c.slug}`);
+    let naoLidos = 0;
+    if (!achados.length) {
+      const de = await desligadosComFicha(ctx, c, () => true);
+      achados = de.itens.filter((x) => casaNome(x, b));
+      naoLidos = de.semFicha.length;
+    }
+    if (!achados.length) {
+      const resto = naoLidos ? ` (os ${naoLidos} desligamentos mais antigos não foram lidos: procure com convenia_colaboradores situacao="desligados" e um período de desligamento)` : '';
+      throw new ErroDeEntrada(`ninguém com "${b}" no nome entre os ativos e os desligados de ${c.slug}${resto}`);
+    }
     if (achados.length > 1) {
       return {
         unidade: c.slug,
