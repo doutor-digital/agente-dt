@@ -1,6 +1,7 @@
 /**
- * Painel das chaves de API de terceiros (Asaas, ClickSign) por unidade. Só super-admin, e a escrita só
- * com sessão (nunca com a chave de serviço): colar a chave do Asaas é dar acesso ao dinheiro da clínica.
+ * Painel das chaves de API de terceiros (Asaas, Convênia) por unidade. Só super-admin, e a escrita só
+ * com sessão (nunca com a chave de serviço): colar a chave do Asaas é dar acesso ao dinheiro da clínica, e o
+ * token do Convênia, aos dados pessoais dos funcionários.
  */
 import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
@@ -29,6 +30,8 @@ export async function listarChavesHandler(_req: Request, res: Response): Promise
   res.json({ ok: true, chaves: await listarChaves() });
 }
 
+const NOME_DO_PROVEDOR: Record<(typeof PROVEDORES)[number], string> = { asaas: 'Asaas', convenia: 'Convênia (RH)' };
+
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 export async function painelIntegracoesHandler(_req: Request, res: Response): Promise<void> {
@@ -41,7 +44,7 @@ export async function painelIntegracoesHandler(_req: Request, res: Response): Pr
         const estado = c
           ? `<span class="ok">ligado · ${esc(c.conta ?? '')} (${esc(c.final)})</span>${c.ultimoErro ? `<br><span class="erro">${esc(c.ultimoErro)}</span>` : ''}`
           : '<span class="mudo">sem chave</span>';
-        return `<td>${estado}<form data-slug="${esc(u.slug)}" data-provedor="${p}"><input type="password" name="chave" autocomplete="off" placeholder="colar a chave de API" aria-label="chave ${p} de ${esc(u.name)}"><button>Salvar</button><output></output></form></td>`;
+        return `<td>${estado}<form data-slug="${esc(u.slug)}" data-provedor="${p}"><input type="password" name="chave" autocomplete="off" placeholder="colar a chave de API" aria-label="chave ${NOME_DO_PROVEDOR[p]} de ${esc(u.name)}"><button>Salvar</button><output></output></form></td>`;
       }).join('');
       return `<tr><td><b>${esc(u.name)}</b><br><span class="mudo">${esc(u.slug)}</span></td>${cels}</tr>`;
     })
@@ -57,8 +60,8 @@ form{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}input{flex:1;min-width:1
 button{padding:6px 12px;border:0;border-radius:4px;background:var(--acento);color:#fff;font-weight:600;cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid var(--acento);outline-offset:2px}output{width:100%;font-size:.88rem}
 </style></head><body><main>
 <h1>Integrações · chaves de API</h1>
-<p class="mudo">Cole a chave de API de cada unidade. Ela é testada na hora e guardada cifrada; o conector do claude.ai só consulta (não cria cobrança nem transfere). No Asaas: Integrações → Chaves de API → gerar chave de produção.</p>
-<div class="rolar"><table><thead><tr><th>Unidade</th>${PROVEDORES.map((p) => `<th>${p === 'asaas' ? 'Asaas' : p}</th>`).join('')}</tr></thead><tbody>${linhas}</tbody></table></div>
+<p class="mudo">Cole a chave de API de cada unidade. Ela é testada na hora e guardada cifrada; o conector do claude.ai só consulta (não cria cobrança, não transfere, não admite nem desliga ninguém). No Asaas: Integrações → Chaves de API → gerar chave de produção. No Convênia: foto do perfil → Configurações → API → Adicionar novo token (basta marcar as listagens e detalhes: colaboradores, desligados, férias, faltas e afastamentos, férias coletivas).</p>
+<div class="rolar"><table><thead><tr><th>Unidade</th>${PROVEDORES.map((p) => `<th>${NOME_DO_PROVEDOR[p]}</th>`).join('')}</tr></thead><tbody>${linhas}</tbody></table></div>
 </main><script>
 for (const f of document.querySelectorAll('form[data-slug]')) {
   f.addEventListener('submit', async (e) => {
