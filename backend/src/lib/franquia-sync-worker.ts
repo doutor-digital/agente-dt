@@ -37,12 +37,12 @@ import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
-  PREFIXO_CONFLITO, TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, idsDoConflito, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
+  PREFIXO_CONFLITO, TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, idsDoConflito, cartaoTravadoNoConflito, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
   chaveDoRoboPos, tarefaDaSujeira,
   escolherPacienteDoCartao, estadoCasamentoJornada, faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaDevolucao,
   notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type ClienteCandidato, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
 } from './casamento-jornada.js';
-import { PARA_SEMPRE_MS, avisarCadastroDuplicado, escolhaDaSdr, gravarEscolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
+import { PARA_SEMPRE_MS, avisarCadastroDuplicado, cartoesComConflito, escolhaDaSdr, gravarEscolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
 import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, podeMexer, pularCartao, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
@@ -1434,10 +1434,7 @@ const CHAVE_NOTA_CONFLITO = 'conflito-nota';
 
 /** Os cartões desta unidade com conflito de telefone guardado (1 consulta ao banco). Falha de banco = nenhum. */
 async function cartoesComConflitoGuardado(unitId: string): Promise<Set<number>> {
-  const linhas = await prisma.cardAlert
-    .findMany({ where: { unitId, ruleKey: { startsWith: PREFIXO_CONFLITO } }, select: { leadId: true } })
-    .catch(() => [] as Array<{ leadId: string }>);
-  return new Set(linhas.map((l) => Number(l.leadId)).filter((n) => Number.isInteger(n) && n > 0));
+  return cartoesComConflito([unitId]).catch(() => new Set<number>());
 }
 
 /** De quanto em quanto tempo a faxina dos conflitos roda por unidade (lê o Kommo e a franquia de cada cartão marcado). */
@@ -1835,7 +1832,7 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
         // 16/10: o `⚙ idClient` do cartão vem primeiro (decisão 3), e cartão travado em CONFLITO_FRANQUIA sem ele espera a SDR
         const jornada = ctx.jornada ?? 'desligado';
         const idDoCartao = idClientDoCartao(lead, ctx.camposPorNome ?? []);
-        const travadoNoConflito = idDoCartao === null && ((lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO) || !!ctx.conflitosGuardados?.has(lead.id));
+        const travadoNoConflito = cartaoTravadoNoConflito(lead, idDoCartao, ctx.conflitosGuardados);
         if (jornada === 'ligado' && travadoNoConflito) continue;
         // já procurei este e não achei (cache 6 h): não gasta cota nem chamada; em CONFERIR ainda vale a regra dos 30 d
         const lembrado = cacheIdClient.get(`${unit.id}:${lead.id}`);
@@ -2039,7 +2036,7 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
       if (jornada !== 'desligado' && idDoCartao === null) {
         const varios = variosNoCartao.has(leadId);
         // a marca no banco trava mesmo sem a etiqueta (Kommo fora na hora de etiquetar, ou alguém tirou à mão)
-        const travado = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO) || conflitosGuardados.has(leadId);
+        const travado = cartaoTravadoNoConflito(lead, idDoCartao, conflitosGuardados);
         if (varios && !marcadosNestaVarredura.has(leadId)) {
           marcadosNestaVarredura.add(leadId);
           const pacientes = casados

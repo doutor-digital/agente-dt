@@ -28,11 +28,12 @@ import { SpineService } from '../services/spine.service.js';
 import { estadoEtapaDoLead, invalidarEtapa } from '../services/lead-stage.service.js';
 import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
 import { ETAPA, TRATAMENTO_EM_ANDAMENTO } from './franquia-move.js';
-import { anotarRoboPos } from './casamento-jornada.js';
+import { TAG_CONFLITO, anotarRoboPos, cartaoTravadoNoConflito, estadoCasamentoJornada } from './casamento-jornada.js';
+import { cartoesComConflito } from './conflito-paciente.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
-import { carregarFunis, idClientDoLead, temConsultaFutura, type Funis } from './franquia-sync-worker.js';
+import { carregarFunis, idClientDoCartao, idClientDoLead, temConsultaFutura, type Funis } from './franquia-sync-worker.js';
 import { diaDaRetomada, diaDoCampoData, esperaSeguraVolta, retomarEmDoCartao } from './espera-retomada.js';
 import { ehEtapaDeEntrada, tratamentoFinalizado, type Funil } from './franquia-move.js';
 import {
@@ -378,6 +379,8 @@ interface Resumo {
   deOutraUnidade?: number;
   /** Kommo dividido: cartões sem «⌂ Unidade de atendimento» — ninguém mexe */
   semUnidade?: number;
+  /** estoque: cartões travados por CONFLITO_FRANQUIA que ficaram onde estavam (a SDR escolhe o paciente) */
+  travadosNoConflito?: number;
 }
 
 export async function leadsDaEtapa(kommo: KommoClient, pipelineId: number, statusId: number, maxPaginas: number = MAX_PAGINAS): Promise<KommoLead[]> {
@@ -696,6 +699,43 @@ export async function aplicarDoEstoque(ctx: CtxDoEstoque, funis: Funis, a: Avali
 }
 
 /**
+ * Trava do conflito de telefone (chave `casamento-jornada`, decisão 1 de 16/10): cartão sem `⚙ idClient` com a etiqueta
+ * CONFLITO_FRANQUIA ou a marca `conflito-franquia:` espera a SDR escolher no widget qual é o paciente. O estoque não o
+ * move nem o põe na fila da /alta (auditoria da Açailândia, 20/10: 10817222 e 10817258 estavam na lista do PERDIDO).
+ * A regra é a do sincronizador (`cartaoTravadoNoConflito`) e, como lá, só vale onde a chave está ligada.
+ */
+export interface TravaDoConflito {
+  /** com o cartão da lista: etiqueta, ⚙ e a marca lida no começo da varredura */
+  travado(lead: KommoLead): boolean;
+  /**
+   * Logo antes de mexer: relê a marca no banco e, com `kommo`, o próprio cartão (etiqueta e ⚙) — o sincronizador (de 15 em
+   * 15 min) ou a SDR podem ter travado o cartão no meio da varredura. No papel o Kommo fica de fora: nada é escrito.
+   */
+  travouAgora(lead: KommoLead, kommo?: KommoClient): Promise<boolean>;
+}
+
+/** Lê as marcas uma vez por varredura. Falha de banco LANÇA: sem saber quem está travado, o estoque não roda. */
+export async function travaDoConflito(ctx: Pick<CtxDoEstoque, 'unit' | 'unidadesDaConta'>): Promise<TravaDoConflito> {
+  const ids = [...new Set([ctx.unit, ...ctx.unidadesDaConta].filter((u) => estadoCasamentoJornada(u.slug) === 'ligado').map((u) => u.id))];
+  if (ids.length === 0) return { travado: () => false, travouAgora: async () => false };
+  const marcados = await cartoesComConflito(ids);
+  // sem os campos da conta, `idClientDoCartao` acha o ⚙ pelo nome que o Kommo manda em cada valor do cartão
+  return {
+    travado: (lead) => cartaoTravadoNoConflito(lead, idClientDoCartao(lead, []), marcados),
+    travouAgora: async (lead, kommo) => {
+      const atual = kommo ? await kommo.getLead(lead.id) : lead;
+      return cartaoTravadoNoConflito(atual, idClientDoCartao(atual, []), await cartoesComConflito(ids, lead.id));
+    },
+  };
+}
+
+function pularPorConflito(unit: Unit, e: EtapaDoEstoque, leadId: number, resumo: Resumo, seco: boolean): void {
+  resumo.travadosNoConflito = (resumo.travadosNoConflito ?? 0) + 1;
+  logger.info({ unit: unit.slug, leadId, regra: e.regra, etapa: e.nome, seco }, 'estoque: pulado — conflito com a franquia (CONFLITO_FRANQUIA: espera a SDR escolher o paciente)');
+  if (seco) registrarSimulacao(unit, ID_AUTOMACAO_ESTOQUES, { leadId, acao: 'pularia', alvo: 'estoque', deEtapa: e.nome, motivo: `cartão com ${TAG_CONFLITO} e sem ⚙ idClient: espera a SDR escolher o paciente` });
+}
+
+/**
  * O estoque inteiro tem de ser alcançável: EM QUALIFICAÇÃO da Açailândia passa de 2.400 cartões (o worker de sempre
  * lê no máximo 8 páginas = 2.000).
  */
@@ -708,8 +748,17 @@ const MAX_PAGINAS_ESTOQUE = Number(process.env.PARADOS_ESTOQUE_MAX_PAGINAS) || 2
 const FICA_TTL_MS = 24 * 60 * 60_000;
 const ficaAte = new Map<string, number>();
 
-async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: GrupoDoCrm | null, resumo: Resumo, seco: boolean, jaMexidos: ReadonlySet<number> = new Set()): Promise<void> {
+/** Exportada para o teste. */
+export async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: GrupoDoCrm | null, resumo: Resumo, seco: boolean, jaMexidos: ReadonlySet<number> = new Set()): Promise<void> {
   const { unit, agora } = ctx;
+  let trava: TravaDoConflito;
+  try {
+    trava = await travaDoConflito(ctx);
+  } catch (err) {
+    resumo.erros++;
+    logger.warn({ err: String(err), unit: unit.slug }, 'estoque: não li as travas do conflito com a franquia — pulei o estoque nesta varredura');
+    return;
+  }
   const cotas = new Map<RegraDoEstoque, ReturnType<typeof cotaNova>>();
   for (const [k, ate] of ficaAte) if (ate <= Date.now()) ficaAte.delete(k);
   for (const e of etapasDoEstoque(funis)) {
@@ -721,6 +770,11 @@ async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: GrupoDoCrm
       if ((ficaAte.get(chaveFica) ?? 0) > Date.now()) continue; // avaliado há pouco e ficou
       if (!candidatoDoEstoque(e.regra, lead, e.nome, agora, unit.spineTimezone)) continue; // barato: sem chamada nenhuma
       if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
+      // CONFLITO_FRANQUIA: fica onde está até a SDR escolher o paciente (sem `ficaAte`: resolvido, entra na próxima)
+      if (trava.travado(lead)) {
+        pularPorConflito(unit, e, lead.id, resumo, seco);
+        continue;
+      }
       if (!cota.podeAvaliar()) break;
       cota.avaliou();
       resumo.avaliados++;
@@ -728,6 +782,10 @@ async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: GrupoDoCrm
         const a = await avaliarDoEstoque(ctx, e.regra, lead, e.nome);
         if (!a.decisao && !a.filaDeAlta) {
           ficaAte.set(chaveFica, Date.now() + FICA_TTL_MS);
+          continue;
+        }
+        if (await trava.travouAgora(lead, seco ? undefined : ctx.kommo)) {
+          pularPorConflito(unit, e, lead.id, resumo, seco);
           continue;
         }
         resumo.candidatos++;

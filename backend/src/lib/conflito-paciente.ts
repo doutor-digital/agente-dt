@@ -31,6 +31,20 @@ export async function candidatosGuardados(unitId: string, leadId: number): Promi
   }
 }
 
+/**
+ * Os cartões com a marca do conflito (`conflito-franquia:`) nestas unidades — a trava que o sincronizador grava e o widget
+ * lê. `leadId` restringe a um cartão (releitura logo antes de mexer). Falha de banco LANÇA: cada robô decide o que fazer
+ * sem saber (o sincronizador segue pela etiqueta; o estoque não mexe em ninguém).
+ */
+export async function cartoesComConflito(unitIds: readonly string[], leadId?: number): Promise<Set<number>> {
+  if (unitIds.length === 0) return new Set();
+  const linhas = await prisma.cardAlert.findMany({
+    where: { unitId: { in: [...unitIds] }, ruleKey: { startsWith: PREFIXO_CONFLITO }, ...(leadId ? { leadId: String(leadId) } : {}) },
+    select: { leadId: true },
+  });
+  return new Set(linhas.map((l) => Number(l.leadId)).filter((n) => Number.isInteger(n) && n > 0));
+}
+
 /** Guarda a UNIÃO do que já estava com os candidatos novos (uma linha só por cartão). */
 export async function guardarCandidatos(unitId: string, leadId: number, ids: number[]): Promise<void> {
   const validos = ids.filter((n) => Number.isInteger(n) && n > 0);
