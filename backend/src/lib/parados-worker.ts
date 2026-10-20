@@ -410,7 +410,10 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
     logger.warn({ unit: unit.slug }, 'parados: não achei o funil COMERCIAL — pulei a conta');
     return resumo;
   }
-  const registrar = async (moveu: boolean, cota: ReturnType<typeof cotaNova>) => {
+  // o que as regras de sempre já mexeram nesta varredura (a lista de cartões do estoque foi lida antes)
+  const mexidos = new Set<number>();
+  const registrar = async (moveu: boolean, cota: ReturnType<typeof cotaNova>, leadId?: number) => {
+    if (moveu && leadId) mexidos.add(leadId);
     if (moveu) {
       cota.moveu();
       resumo.movidos++;
@@ -480,7 +483,7 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
           continue;
         }
         resumo.candidatos++;
-        await registrar(await moverParaEspera(unit, kommo, funis, lead.id, ETAPA.NAO_COMPARECEU, d, seco), cota);
+        await registrar(await moverParaEspera(unit, kommo, funis, lead.id, ETAPA.NAO_COMPARECEU, d, seco), cota, lead.id);
       } catch (err) {
         resumo.erros++;
         logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'parados: erro num cartão de falta — pulei');
@@ -544,8 +547,10 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
   }
 
   // ── Estoques que nenhuma regra alcançava (auditoria 16/10, item 11): chave própria, nasce desligada ──
+  // Em "Só no papel" a regra de sempre do NÃO COMPARECEU continua movendo de verdade (no papel nada muda) e o estoque
+  // só registra o que faria — pulando o cartão que a regra de sempre acabou de mexer, pra não registrar fantasma.
   if (estoques !== 'desligado') {
-    await varrerEstoques({ unit, kommo, unidadesDaConta, agora }, funis, grupo, resumo, seco || estoques === 'seco');
+    await varrerEstoques({ unit, kommo, unidadesDaConta, agora }, funis, grupo, resumo, seco || estoques === 'seco', mexidos);
   }
 
   logger.info(resumo, 'parados: varredura da conta');
@@ -627,8 +632,10 @@ export async function avaliarDoEstoque(ctx: CtxDoEstoque, regra: RegraDoEstoque,
   const data = epochDoCampoData(lead, CAMPOS_SYNC.DATA_CONSULTA);
 
   if (regra === 'falta') {
-    const semMudarEtapa = data === null ? await semMudarDesde(PRAZOS_ESTOQUE.paradoDias) : true;
-    if (!semMudarEtapa) return fica('sem data e mudou de etapa há menos de 30 dias');
+    // Quem acabou de chegar na etapa (a SDR, a campanha, o sincronizador) não anda pelo prazo: com data, 7 dias de etapa;
+    // sem data, 30. É o que segura o cartão sem paciente achado na franquia, que a regra de 18/09 nunca movia.
+    const semMudarEtapa = await semMudarDesde(data === null ? PRAZOS_ESTOQUE.paradoDias : PRAZOS.faltaDias);
+    if (!semMudarEtapa) return fica(`chegou em NÃO COMPARECEU há menos de ${data === null ? PRAZOS_ESTOQUE.paradoDias : PRAZOS.faltaDias} dias`);
     const f = await naFranquia();
     const d = decidirFaltaDoEstoque({ dataFaltaEpoch: data, semMudarEtapa, franquiaSegura: f.consultaFutura || f.emAndamento, agora });
     return d ? { ...base, decisao: d } : fica(f.consultaFutura ? 'consulta futura na franquia' : f.emAndamento ? 'tratamento em andamento na franquia' : 'falta recente');
@@ -684,13 +691,14 @@ export async function aplicarDoEstoque(ctx: CtxDoEstoque, funis: Funis, a: Avali
   return false;
 }
 
-async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: GrupoDoCrm | null, resumo: Resumo, seco: boolean): Promise<void> {
+async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: GrupoDoCrm | null, resumo: Resumo, seco: boolean, jaMexidos: ReadonlySet<number> = new Set()): Promise<void> {
   const { unit, agora } = ctx;
   const cotas = new Map<RegraDoEstoque, ReturnType<typeof cotaNova>>();
   for (const e of etapasDoEstoque(funis)) {
     const cota = cotas.get(e.regra) ?? cotaNova(seco);
     cotas.set(e.regra, cota);
     for (const lead of await leadsDaEtapa(ctx.kommo, e.pipelineId, e.statusId)) {
+      if (jaMexidos.has(lead.id)) continue;
       if (!candidatoDoEstoque(e.regra, lead, e.nome, agora, unit.spineTimezone)) continue; // barato: sem chamada nenhuma
       if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
       if (!cota.podeAvaliar()) break;

@@ -66,7 +66,10 @@ export function candidatoFaltaDoEstoque(situacao: string | null | undefined, dat
 
 export interface FatosDaFalta {
   dataFaltaEpoch: number | null;
-  /** sem data: o cartão não muda de etapa há `paradoDias` (só é perguntado nesse caso) */
+  /**
+   * o cartão não muda de etapa há 7 d (com data) ou `paradoDias` (sem data). Quem acabou de chegar em NÃO
+   * COMPARECEU não anda pelo prazo — é o que segura o cartão sem paciente achado na franquia (review do Codex).
+   */
   semMudarEtapa: boolean;
   /** a franquia (fresca) tem consulta futura ou tratamento em andamento */
   franquiaSegura: boolean;
@@ -79,9 +82,8 @@ export interface FatosDaFalta {
  * no cartão, a idade do fato é desconhecida: parado há 30 d na etapa → PERDIDO sem régua.
  */
 export function decidirFaltaDoEstoque(f: FatosDaFalta): DecisaoParado | null {
-  if (f.franquiaSegura) return null;
+  if (f.franquiaSegura || !f.semMudarEtapa) return null;
   if (f.dataFaltaEpoch === null) {
-    if (!f.semMudarEtapa) return null;
     return perdidoPorFalta(`em NÃO COMPARECEU há mais de ${PRAZOS_ESTOQUE.paradoDias} dias, sem data da consulta no cartão`, PRAZOS_ESTOQUE.paradoDias, true);
   }
   const dias = diasDesde(f.dataFaltaEpoch, f.agora);

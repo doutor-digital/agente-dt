@@ -65,6 +65,8 @@ test('NÃO COMPARECEU pela jornada: casos reais 26080638 (28 d → EM ESPERA), 1
   assert.equal(candidatoFaltaDoEstoque(null, null, sem, AGORA), true);
   assert.equal(decidirFaltaDoEstoque({ dataFaltaEpoch: null, semMudarEtapa: false, franquiaSegura: false, agora: AGORA }), null);
   assert.equal(decidirFaltaDoEstoque({ dataFaltaEpoch: null, semMudarEtapa: true, franquiaSegura: false, agora: AGORA })?.semRegua, true);
+  // chegou na etapa há pouco (a campanha do Outubro Rosa moveu em 13/10): com data velha, mesmo assim espera 7 dias de etapa
+  assert.equal(decidirFaltaDoEstoque({ dataFaltaEpoch: em('2026-02-14T09:00'), semMudarEtapa: false, franquiaSegura: false, agora: AGORA }), null);
   // a franquia segura: consulta futura ou tratamento em andamento
   assert.equal(decidirFaltaDoEstoque({ dataFaltaEpoch: em('2026-02-14T09:00'), semMudarEtapa: true, franquiaSegura: true, agora: AGORA }), null);
   // a nota diz de onde veio a regra
