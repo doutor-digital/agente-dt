@@ -5,8 +5,8 @@
  * inteiro de uma vez, sem o teto de 10 por varredura, e mostra o que faria — por etapa, com contagem e até 5
  * exemplos (só o id do cartão, nunca nome ou telefone).
  *
- * POR PADRÃO SÓ CONFERE. Nada é escrito no Kommo, na franquia ou no banco: além de não chamar nada que grave, a
- * conexão com o banco abre em modo SÓ LEITURA (`default_transaction_read_only`), então nem o log de aviso grava.
+ * POR PADRÃO SÓ CONFERE. Nada é escrito no Kommo, na franquia ou no banco: além de não chamar nada que grave, o
+ * cliente do Prisma nasce com toda escrita barrada (create/update/upsert/delete), então nem o log de aviso grava.
  *
  * GRAVAR exige o ok do João (é a limpeza que a auditoria deixou pra decisão dele) e dois sinais de propósito:
  * `--gravar` e `--confirmo=<o mesmo slug>`. Grava pela mesma porta do worker (relê a etapa antes de mexer, põe
@@ -25,10 +25,26 @@ const argv = process.argv.slice(2);
 const arg = (nome: string) => (argv.find((a) => a.startsWith(`--${nome}=`)) ?? '').split('=').slice(1).join('=');
 const GRAVAR = argv.includes('--gravar');
 
-// Só leitura no banco ANTES de qualquer import que abra o Prisma.
-if (!GRAVAR && process.env.DATABASE_URL && !/default_transaction_read_only/.test(process.env.DATABASE_URL)) {
-  const sep = process.env.DATABASE_URL.includes('?') ? '&' : '?';
-  process.env.DATABASE_URL += `${sep}options=${encodeURIComponent('-c default_transaction_read_only=on')}`;
+/** Operações do Prisma que escrevem: no modo conferir, qualquer uma delas falha antes de chegar ao banco. */
+const ESCRITAS = new Set(['create', 'createMany', 'createManyAndReturn', 'update', 'updateMany', 'updateManyAndReturn', 'upsert', 'delete', 'deleteMany']);
+
+/**
+ * Só leitura no banco: o cliente do Prisma que TODO o código usa (`lib/prisma.ts` pega o de `globalThis.__prisma__`
+ * se já houver um) nasce aqui, com as escritas barradas. Tem de vir antes de qualquer import que abra o Prisma.
+ */
+async function prismaSoLeitura(): Promise<void> {
+  const { PrismaClient } = await import('@prisma/client');
+  const base = new PrismaClient({ log: ['error'] });
+  globalThis.__prisma__ = base.$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ model, operation, args, query }) {
+          if (ESCRITAS.has(operation)) throw new Error(`só conferir: ${model}.${operation} barrado`);
+          return query(args);
+        },
+      },
+    },
+  }) as unknown as typeof base;
 }
 
 type Regra = 'falta' | 'agendado' | 'retorno' | 'tratamento' | 'dormente';
@@ -47,6 +63,7 @@ function somar(mapa: Map<string, Grupo>, chave: string, exemplo: string) {
 }
 
 async function main() {
+  if (!GRAVAR) await prismaSoLeitura();
   const { prisma } = await import('../lib/prisma.js');
   const { createKommoClient } = await import('../services/kommo.service.js');
   const { contaDoKommo, grupoDaUnidade, pularCartao } = await import('../lib/crm-compartilhado.js');
