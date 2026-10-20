@@ -376,9 +376,9 @@ interface Resumo {
   semUnidade?: number;
 }
 
-export async function leadsDaEtapa(kommo: KommoClient, pipelineId: number, statusId: number): Promise<KommoLead[]> {
+export async function leadsDaEtapa(kommo: KommoClient, pipelineId: number, statusId: number, maxPaginas: number = MAX_PAGINAS): Promise<KommoLead[]> {
   const out: KommoLead[] = [];
-  for (let page = 1; page <= MAX_PAGINAS; page++) {
+  for (let page = 1; page <= maxPaginas; page++) {
     const pag = await kommo.listLeadsPorEtapa(pipelineId, statusId, 250, page, true);
     out.push(...pag);
     if (pag.length < 250) break;
@@ -691,14 +691,30 @@ export async function aplicarDoEstoque(ctx: CtxDoEstoque, funis: Funis, a: Avali
   return false;
 }
 
+/**
+ * O estoque inteiro tem de ser alcançável: EM QUALIFICAÇÃO da Açailândia passa de 2.400 cartões (o worker de sempre
+ * lê no máximo 8 páginas = 2.000).
+ */
+const MAX_PAGINAS_ESTOQUE = Number(process.env.PARADOS_ESTOQUE_MAX_PAGINAS) || 20;
+/**
+ * Quem a avaliação a fundo deixou onde está (escreveu, mudou de etapa, a franquia segura) — ou que no papel só foi
+ * registrado — não volta a gastar cota por um dia. Sem isto, a lista vem dos mais novos pros mais velhos e os mesmos 50 "fica" comeriam a cota de toda
+ * varredura — o estoque mais velho, que é o alvo, nunca seria olhado (review do Codex, 20/10).
+ */
+const FICA_TTL_MS = 24 * 60 * 60_000;
+const ficaAte = new Map<string, number>();
+
 async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: GrupoDoCrm | null, resumo: Resumo, seco: boolean, jaMexidos: ReadonlySet<number> = new Set()): Promise<void> {
   const { unit, agora } = ctx;
   const cotas = new Map<RegraDoEstoque, ReturnType<typeof cotaNova>>();
+  for (const [k, ate] of ficaAte) if (ate <= Date.now()) ficaAte.delete(k);
   for (const e of etapasDoEstoque(funis)) {
     const cota = cotas.get(e.regra) ?? cotaNova(seco);
     cotas.set(e.regra, cota);
-    for (const lead of await leadsDaEtapa(ctx.kommo, e.pipelineId, e.statusId)) {
+    for (const lead of await leadsDaEtapa(ctx.kommo, e.pipelineId, e.statusId, MAX_PAGINAS_ESTOQUE)) {
       if (jaMexidos.has(lead.id)) continue;
+      const chaveFica = `${unit.id}:${e.regra}:${lead.id}`;
+      if ((ficaAte.get(chaveFica) ?? 0) > Date.now()) continue; // avaliado há pouco e ficou
       if (!candidatoDoEstoque(e.regra, lead, e.nome, agora, unit.spineTimezone)) continue; // barato: sem chamada nenhuma
       if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
       if (!cota.podeAvaliar()) break;
@@ -706,12 +722,17 @@ async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: GrupoDoCrm
       resumo.avaliados++;
       try {
         const a = await avaliarDoEstoque(ctx, e.regra, lead, e.nome);
-        if (!a.decisao && !a.filaDeAlta) continue;
+        if (!a.decisao && !a.filaDeAlta) {
+          ficaAte.set(chaveFica, Date.now() + FICA_TTL_MS);
+          continue;
+        }
         resumo.candidatos++;
         if (await aplicarDoEstoque(ctx, funis, a, lead, seco)) {
           cota.moveu();
           resumo.movidos++;
           await pausa();
+        } else {
+          ficaAte.set(chaveFica, Date.now() + FICA_TTL_MS); // no papel (ou mudou de etapa no meio): a próxima varredura vai mais fundo
         }
       } catch (err) {
         resumo.erros++;
