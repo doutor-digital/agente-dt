@@ -451,9 +451,9 @@ test('decisão 7 — consulta NOVA (outro fato) tira do PERDIDO de novo', async 
   assert.deepEqual(reg.movidos.map((m) => m.statusId), [105]);
 });
 
-test('decisão 7 — ALTA com sessão marcada: vai pra EM TRATAMENTO uma vez; de volta na ALTA → tarefa, sem mover', async () => {
+test('decisão 7 — ALTA com sessão marcada (tratamento em andamento): vai pra EM TRATAMENTO uma vez; de volta na ALTA → tarefa, sem mover', async () => {
   chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
-  const ficha = { idClient: 4321, name: 'PACIENTE TESTE', whatsapp: FONE, treatments: [{ idTreatment: 1, idStatus: 46, statusName: 'FINALIZADO' }], schedules: [
+  const ficha = { idClient: 4321, name: 'PACIENTE TESTE', whatsapp: FONE, treatments: [{ idTreatment: 1, idStatus: 45, statusName: 'EM ANDAMENTO' }], schedules: [
     { idSchedule: 1, idStatus: 42, statusName: 'Atendido', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(-20) },
     { idSchedule: 2, idStatus: 37, statusName: 'Agendado', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(2) },
   ] };

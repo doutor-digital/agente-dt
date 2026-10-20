@@ -27,13 +27,14 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, sessaoEsquecidaComTratamentoFinalizado, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
-  TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaTarefaDeDevolucao, chaveDoRoboPos,
+  TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
+  chaveDoRoboPos, tarefaDaSujeira,
   escolherPacienteDoCartao, estadoCasamentoJornada, faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaDevolucao,
   notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type ClienteCandidato, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
 } from './casamento-jornada.js';
@@ -1431,6 +1432,34 @@ async function avisarFaltas(ctx: CtxSync, leadId: number, lead: KommoLead, etapa
 }
 
 /**
+ * 16/10 (achado 4 da revisão): o tratamento está FINALIZADO na franquia, nenhum em andamento, e ainda há sessão marcada pra
+ * frente. Antes isso tirava o cartão da ALTA (EM TRATAMENTO) e, passada a data, devolvia à ALTA — a régua de parabéns
+ * disparava de novo. Agora a máquina não move por isso (`planejarMovimento` exige tratamento em andamento) e a SDR recebe
+ * UMA tarefa por sessão para a clínica desmarcar a sessão ou reabrir o tratamento. Em "só no papel", só registra.
+ */
+async function avisarSujeira(ctx: CtxSync, leadId: number, lead: KommoLead, atual: EtapaAtual, agendamentos: SpineSchedule[], tratamentos: TratamentoParaEtapa[]): Promise<void> {
+  const { unit, kommo, resumo, agoraEpoch } = ctx;
+  if (!ctx.jornada || ctx.jornada === 'desligado' || atual.funil !== 'TRATAMENTO') return;
+  if (normalizarNome(atual.status) === normalizarNome(ETAPA.CANCELADO)) return;
+  const s = sessaoEsquecidaComTratamentoFinalizado({ agendamentos, tratamentos, agoraEpoch });
+  if (!s) return;
+  const chave = chaveDaSujeira(s.idSchedule ?? s.dateAttendanceUtc ?? '?');
+  if (ctx.jornada === 'seco' || ctx.seco) {
+    registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'alertaria', alvo: chave, deEtapa: atual.status, motivo: tarefaDaSujeira(s) });
+    return;
+  }
+  if (await avisoRecente(unit.id, leadId, chave, PARA_SEMPRE_MS)) return;
+  try {
+    await kommo.createTask({ leadId, text: tarefaDaSujeira(s), completeAt: Math.floor(Date.now() / 1000) + 3600, responsibleUserId: lead.responsible_user_id });
+    await marcarAviso(unit.id, leadId, chave);
+    logger.info({ unit: unit.slug, leadId, idSchedule: s.idSchedule }, 'casamento-jornada: tratamento finalizado com sessão marcada — tarefa aberta, cartão não move');
+  } catch (err) {
+    resumo.erros++;
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: não consegui abrir a tarefa da sessão esquecida');
+  }
+}
+
+/**
  * 16/10 (decisão 7, resposta do João): "a franquia manda" tira o cartão de PERDIDO ou ALTA — mas UMA vez por fato. Se alguém
  * puser o cartão de volta com o mesmo fato de pé na franquia (a mesma consulta marcada, a sessão marcada), o robô deixa onde
  * a pessoa pôs e abre UMA tarefa para conferir: não repete o movimento e não dispara de novo os robôs da etapa.
@@ -1569,6 +1598,10 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   // 16/10 (decisão 4): falta em retorno/sessão vira nota + tarefa, sem mexer na etapa
   await avisarFaltas(ctx, leadId, lead, atual.status, agendamentos).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: aviso de falta falhou'),
+  );
+  // 16/10 (achado 4 da revisão): tratamento FINALIZADO com sessão ainda marcada não move o cartão — vira UMA tarefa
+  await avisarSujeira(ctx, leadId, lead, atual, agendamentos, tratamentos).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: aviso de sessão esquecida falhou'),
   );
   if (!mov) return;
   if (seco) {

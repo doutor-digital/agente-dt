@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ETAPA, planejarMovimento, type EntradaMovimento } from './franquia-move.js';
+import { ETAPA, planejarMovimento, sessaoEsquecidaComTratamentoFinalizado, type EntradaMovimento } from './franquia-move.js';
 import type { SpineSchedule } from '../services/spine.service.js';
 
 const AGORA = Date.parse('2026-10-16T15:00:00Z') / 1000;
@@ -180,13 +180,14 @@ test('decisão 7: o SDR arrastou pra GANHO sem tratamento na franquia — o rob�
 
 // ── resposta do João (16/10, à tarde): "a franquia manda" também na ALTA ──
 
-test('decisão 7 na ALTA: sessão marcada pra frente leva pra EM TRATAMENTO (antes ficava na ALTA)', () => {
-  const ag1 = [...cicloVelho(), ag({ h: 30, idStatus: 37, categoria: 'PROTOCOLO 03 MESES - LOMBAR' })];
-  const m = planejarMovimento(e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO'));
+test('decisão 7 na ALTA: sessão marcada pra frente com tratamento EM ANDAMENTO leva pra EM TRATAMENTO (antes ficava na ALTA)', () => {
+  const sessao = ag({ h: 30, idStatus: 37, categoria: 'PROTOCOLO 03 MESES - LOMBAR' });
+  const ag1 = [...cicloVelho(), sessao];
+  const m = planejarMovimento(e(ETAPA.ALTA, ag1, EM_ANDAMENTO, 'TRATAMENTO'));
   assert.equal(m?.para, ETAPA.EM_TRATAMENTO);
   assert.equal(m?.funil, 'TRATAMENTO');
-  assert.equal(m?.gatilho, 'sessao');
-  assert.equal(planejarMovimento(e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO', false)), null, 'regra antiga');
+  assert.equal(m?.gatilho, `sessao:${sessao.idSchedule}`);
+  assert.equal(planejarMovimento(e(ETAPA.ALTA, ag1, EM_ANDAMENTO, 'TRATAMENTO', false)), null, 'regra antiga');
 });
 
 test('decisão 7 na ALTA: consulta marcada (avaliação ou retorno) vai pra RETORNO, mesmo com tratamento ainda aberto na franquia', () => {
@@ -201,11 +202,13 @@ test('decisão 7 na ALTA: sem nada marcado pra frente, a ALTA fica', () => {
   assert.equal(planejarMovimento(e(ETAPA.ALTA, cicloVelho(), FINALIZADO, 'TRATAMENTO')), null);
 });
 
-test('decisão 7: EM TRATAMENTO com sessão marcada não vai pra ALTA (senão ALTA e EM TRATAMENTO se empurrariam)', () => {
+test('decisão 7: ALTA e EM TRATAMENTO não se empurram — em andamento fica em EM TRATAMENTO; finalizado vai pra ALTA e de lá não volta', () => {
   const ag1 = [ag({ h: -5 * DIA, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: 30, idStatus: 37, categoria: 'SESSÃO' })];
-  assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, ag1, FINALIZADO, 'TRATAMENTO')), null);
+  assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, ag1, EM_ANDAMENTO, 'TRATAMENTO')), null, 'em andamento: fica');
+  // finalizado com a sessão esquecida (achado 4): vai pra ALTA, e a ALTA não volta pra EM TRATAMENTO por causa dela
+  assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, ag1, FINALIZADO, 'TRATAMENTO'))?.para, ETAPA.ALTA);
+  assert.equal(planejarMovimento(e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO')), null);
   assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, ag1, FINALIZADO, 'TRATAMENTO', false))?.para, ETAPA.ALTA, 'regra antiga');
-  assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, [ag({ h: -5 * DIA, idStatus: 42, categoria: 'SESSÃO' })], FINALIZADO, 'TRATAMENTO'))?.para, ETAPA.ALTA, 'sem sessão marcada: ALTA');
 });
 
 test('decisão 7: a saída do PERDIDO leva o fato junto (a consulta que tirou de lá)', () => {
@@ -228,8 +231,15 @@ test('achado 3 — o gatilho da sessão leva o id do tratamento (ou da sessão),
 });
 
 test('achado 4 — ALTA + tratamento FINALIZADO + sessão esquecida em AGENDADO não sai da ALTA (é sujeira da franquia)', () => {
-  const ag1 = [...cicloVelho(), ag({ h: 48, idStatus: 37, categoria: 'SESSÃO' })];
+  const esquecida = ag({ h: 48, idStatus: 37, categoria: 'SESSÃO' });
+  const ag1 = [...cicloVelho(), esquecida];
   assert.equal(planejarMovimento(e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO')), null);
   // e EM TRATAMENTO com tratamento finalizado vai pra ALTA mesmo com a sessão esquecida — sem vaivém
   assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, ag1, FINALIZADO, 'TRATAMENTO'))?.para, ETAPA.ALTA);
+  // o vaivém que a revisão rodou: passada a data, a sessão esquecida continua "agendada" — e o cartão continua na ALTA
+  const depois = { ...e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO'), agoraEpoch: AGORA + 72 * 3600 };
+  assert.equal(planejarMovimento(depois), null);
+  // a sessão esquecida é o que vira tarefa no sincronizador
+  assert.equal(sessaoEsquecidaComTratamentoFinalizado({ agendamentos: ag1, tratamentos: FINALIZADO, agoraEpoch: AGORA })?.idSchedule, esquecida.idSchedule);
+  assert.equal(sessaoEsquecidaComTratamentoFinalizado({ agendamentos: ag1, tratamentos: [...FINALIZADO, ...EM_ANDAMENTO], agoraEpoch: AGORA }), null, 'com outro tratamento em andamento não é sujeira');
 });
