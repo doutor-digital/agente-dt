@@ -376,7 +376,7 @@ interface Resumo {
   semUnidade?: number;
 }
 
-async function leadsDaEtapa(kommo: KommoClient, pipelineId: number, statusId: number): Promise<KommoLead[]> {
+export async function leadsDaEtapa(kommo: KommoClient, pipelineId: number, statusId: number): Promise<KommoLead[]> {
   const out: KommoLead[] = [];
   for (let page = 1; page <= MAX_PAGINAS; page++) {
     const pag = await kommo.listLeadsPorEtapa(pipelineId, statusId, 250, page, true);
