@@ -47,7 +47,7 @@ import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { scheduleLeadMemoryUpdate, carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarHumanoAssumiu, scheduleLeadMetrics } from '../services/lead-metrics.service.js';
 import { aplicarCarimbosDeEtapa } from '../lib/carimbo-etapa.js';
-import { unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
+import { contaDoKommo, unidadeDonaPeloCartaoId } from '../lib/crm-compartilhado.js';
 import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
@@ -375,8 +375,10 @@ async function detectAndHandleConversion(
     return { converted: false, leadId: null, statusId: null };
   }
   // 142/143 se repetem em todo funil (o 142 do TRATAMENTO é a ALTA): o funil decide — ver conversao-por-etapa.ts.
-  // Esquema em cache por unidade; falhou, só os ids próprios da conta contam.
-  const esquema = await esquemaKommoDaUnidade(unit, createKommoClient(unit)).catch((err) => {
+  // Esquema em cache por unidade; falhou, só os ids próprios da conta contam. Kommo dividido: o esquema é o da conta
+  // da dona (a irmã não tem credencial de Kommo própria); Kommo de uma unidade só: a própria, sem ir ao banco.
+  const conta = await contaDoKommo(unit).catch(() => unit);
+  const esquema = await (async () => esquemaKommoDaUnidade(conta, createKommoClient(conta)))().catch((err) => {
     logger.warn({ err: String(err), unit: unit.slug }, 'webhook: não li o esquema da conta — 142/143 não contam como conversão agora');
     return null;
   });
