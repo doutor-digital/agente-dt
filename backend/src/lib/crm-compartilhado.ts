@@ -139,6 +139,15 @@ export function veredictoDoCartao(grupo: GrupoDoCrm | null, unitId: string, valo
   return dono.unitId === unitId ? { tipo: 'desta', rotulo: dono.rotulo } : { tipo: 'outra', rotulo: dono.rotulo, unitId: dono.unitId };
 }
 
+/**
+ * O membro do grupo cujo rótulo é o valor do campo (sem acento/caixa) — não importa por qual unidade o evento chegou.
+ * Campo vazio ou valor que nenhuma unidade usa: null.
+ */
+export function membroDoRotulo(grupo: GrupoDoCrm, valorNoCartao: string | null): MembroDoCrm | null {
+  if (!valorNoCartao) return null;
+  return grupo.membros.find((m) => normalizar(m.rotulo) === normalizar(valorNoCartao)) ?? null;
+}
+
 /** Pode esta unidade mexer neste cartão? (`sem-divisao` e `desta` sim; o resto não.) */
 export function podeMexer(v: Veredicto): boolean {
   return v.tipo === 'sem-divisao' || v.tipo === 'desta';
@@ -210,6 +219,24 @@ export async function unidadeDonaDoCartao(
   const dono = valor ? grupo.membros.find((m) => normalizar(m.rotulo) === normalizar(valor)) : undefined;
   if (!dono) return null;
   return dono.unitId === unitDaConta.id ? unitDaConta : carregar(dono.unitId);
+}
+
+/**
+ * Para o evento que chega pela dona da conta (webhook do Kommo) e só diz o número do cartão: a unidade dona dele.
+ * Kommo de uma unidade só: a própria, sem ler nada. Kommo dividido: lê o cartão na conta da dona; sem unidade, com um
+ * valor que ninguém usa ou ilegível = null (não é de ninguém: nada é registrado em nome de nenhuma das duas).
+ */
+export async function unidadeDonaPeloCartaoId(
+  unitDaConta: Unit,
+  leadId: number,
+  lerCartao: (conta: Unit, leadId: number) => Promise<Pick<KommoLead, 'custom_fields_values'> | null> = lerCartaoNaConta,
+  carregar: (id: string) => Promise<Unit | null> = (id) => prisma.unit.findUnique({ where: { id } }),
+): Promise<Unit | null> {
+  if (!(await grupoDaUnidade(unitDaConta.id))) return unitDaConta;
+  const conta = await contaDoKommo(unitDaConta, carregar);
+  const lead = await lerCartao(conta, leadId).catch(() => null);
+  if (!lead) return null;
+  return unidadeDonaDoCartao(unitDaConta, lead, carregar);
 }
 
 export type DonoDoCartao =

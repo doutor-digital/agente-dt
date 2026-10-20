@@ -5,6 +5,7 @@ import { createKommoClient, type KommoClient, type KommoLead } from '../services
 import { esquemaDaUnidade } from './kommo-schema.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
+import { grupoDaUnidade, pularCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import {
   DIAS_REATIVACAO,
   JANELA_GANHO_S,
@@ -198,6 +199,27 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
   return saida;
 }
 
+/**
+ * Kommo dividido (Petrópolis + Caxias, 20/10/2026): a etiqueta dispara o robô do Kommo, e o robô manda o modelo da
+ * unidade (endereço, Pix, link). Só o cartão com a «⌂ Unidade de atendimento» desta unidade recebe; o de outra
+ * unidade ou sem unidade fica de fora — nem "pularia" no papel, porque não é desta varredura. `grupo` null (Kommo de
+ * uma unidade só) = tudo segue como sempre.
+ *
+ * De propósito, a irmã sem Kommo próprio (Caxias) NÃO varre a conta da dona: a etiqueta tem o mesmo nome nas duas
+ * unidades e o gatilho dela no Kommo vale para a conta inteira — hoje ele chamaria o robô de Petrópolis. Caxias só
+ * passa a receber etiqueta quando os gatilhos tiverem a condição «⌂ Unidade de atendimento» e os robôs `caxias_`
+ * existirem (robôs por unidade, 20/10/2026); aí a varredura dela usa a conta da dona (`contaDoKommo`).
+ */
+export function soDestaUnidade<T extends { lead: KommoLead }>(
+  grupo: GrupoDoCrm | null,
+  unitId: string,
+  decisoes: T[],
+  fora: { deOutraUnidade?: number; semUnidade?: number } = {},
+): T[] {
+  if (!grupo) return decisoes;
+  return decisoes.filter((x) => !pularCartao(grupo, unitId, x.lead, fora));
+}
+
 async function varrerUnidade(unit: Unit, estado: Estado): Promise<void> {
   let kommo: KommoClient;
   try {
@@ -205,7 +227,11 @@ async function varrerUnidade(unit: Unit, estado: Estado): Promise<void> {
   } catch {
     return;
   }
-  const decisoes = await decisoesDaUnidade(unit, kommo);
+  const fora: { deOutraUnidade?: number; semUnidade?: number } = {};
+  const decisoes = soDestaUnidade(await grupoDaUnidade(unit.id), unit.id, await decisoesDaUnidade(unit, kommo), fora);
+  if (fora.deOutraUnidade || fora.semUnidade) {
+    logger.info({ unit: unit.slug, ...fora }, 'etiquetas: Kommo dividido — cartões de outra unidade ou sem ⌂ Unidade de atendimento ficaram de fora');
+  }
   // Ligado com lista de teste: só os cartões da lista vão de verdade; o resto segue no papel.
   const teste = estado === 'ligado' ? leadsDeTeste(unit.pipelineIntents) : null;
   if (teste && teste.size === 0) {
