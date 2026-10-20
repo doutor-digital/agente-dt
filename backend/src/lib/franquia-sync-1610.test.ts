@@ -745,7 +745,9 @@ test('achado 7 — ligado: o ⚙ idClient gravado à mão resolve o conflito (et
   assert.ok(!alertas.some((a) => a.leadId === '577' && a.ruleKey.startsWith('conflito-franquia:')));
 });
 
-test('achado 8 — só no papel: a simulação do casamento novo não refaz as buscas na franquia a cada 15 min', async () => {
+test('achado 8 — só no papel: 15 e 30 min depois, a simulação do casamento novo não refaz as buscas na franquia', async (t) => {
+  clientesFalsos = [{ idClient: 4500, name: 'JOAO PEREIRA DA SILVA', whatsapp: FONE }];
+  fichasFalsas = new Map([[4500, { idClient: 4500, name: 'JOAO PEREIRA DA SILVA', whatsapp: FONE, schedules: [], treatments: [] }]]);
   const montar = () => kommoFalso([{ id: 576, name: 'JOAO PEREIRA DA SILVA', pipeline_id: 10, status_id: 105, campos: { [ID.DATA]: String(Math.floor(Date.now() / 1000) - 20 * 86_400) }, tags: [], contato: 576, fone: FONE }]);
   chaves('seco', [{ automacao: 'franquia-revisao', estado: 'ligado' }, { automacao: 'franquia-move', estado: 'seco' }]);
   const unit = unidade();
@@ -755,10 +757,27 @@ test('achado 8 — só no papel: a simulação do casamento novo não refaz as b
     const resumo: ResumoSync = { unit: SLUG, em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
     await _interno.revisarPeloHistorico({ unit, kommo, funis, mapa: _interno.mapearCampos(CAMPOS_BRUTOS), ops: { fisio: [], categoria: [], tratamento: [] }, agoraEpoch: Math.floor(Date.now() / 1000), resumo, camposPorNome: CAMPOS, jornada: 'seco' } as Parameters<typeof _interno.revisarPeloHistorico>[0]);
   };
+  const buscas = () => chamadasFranquia.filter((c) => c.startsWith('busca:')).length;
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   await revisar();
-  const primeira = chamadasFranquia.filter((c) => c.startsWith('busca:')).length;
-  assert.ok(primeira > 0, 'a 1ª varredura busca');
+  assert.ok(buscas() > 0, 'a 1ª varredura busca (a regra antiga; a simulação reaproveita a mesma busca)');
+  assert.equal(buscas(), 1, 'achou pelo telefone no 1º termo: uma busca só, para as duas regras');
+  for (const passo of [1, 2]) {
+    chamadasFranquia = [];
+    t.mock.timers.tick(15 * 60_000);
+    await revisar();
+    assert.equal(buscas(), 0, `varredura ${passo + 1}: a regra antiga responde do cache dela e a simulação não busca de novo`);
+  }
+});
+
+test('achado 8 — o paciente que a varredura da agenda já casou com o cartão dispensa a busca pelo título', async () => {
+  chaves('ligado');
+  const unit = unidade();
+  clientesFalsos = [{ idClient: 300, name: 'ROSA LIMA', whatsapp: FONE }];
+  agendaFalsa = [{ idSchedule: 9701, idStatus: 37, statusName: 'Agendado', clientName: 'ROSA LIMA', categoryName: 'AVALIAÇÃO', dateAttendance: diaLocal(3) }];
+  const { kommo } = kommoFalso([{ id: 578, name: 'Lead 01/10/2026', pipeline_id: 10, status_id: 104, campos: {}, tags: [], contato: 578, fone: FONE }]);
+  await _interno.sincronizarUnidade(unit, { kommo });
   chamadasFranquia = [];
-  await revisar();
-  assert.equal(chamadasFranquia.filter((c) => c.startsWith('busca:')).length, 0, 'a 2ª não busca de novo (cache)');
+  assert.deepEqual(await casarPacienteDoCartao(unit, 578, 'Lead 01/10/2026', { kommo, contatoId: 578, campos: CAMPOS }), { tipo: 'achou', idClient: 300, por: 'telefone' });
+  assert.equal(chamadasFranquia.length, 0, 'nenhuma chamada à franquia');
 });

@@ -352,6 +352,21 @@ async function leadPorTelefone(kommo: KommoClient, telefone: string): Promise<nu
  * Exportada porque a carga de implantação (`franquia-carga.service`) precisa da MESMA resposta para
  * saber quem ainda não tem cartão — duplicar esse casamento seria criar cartão em cima de quem já tem.
  */
+/**
+ * O paciente que a varredura da agenda casou com este cartão nas últimas 6 h (`cacheLead`, o mesmo de `resolverPaciente`):
+ * só quando todo paciente que caiu no cartão é o MESMO idClient — dois pacientes no cartão é conflito, não atalho.
+ */
+function pacienteDaAgenda(unitId: string, leadId: number): number | null {
+  const agora = Date.now();
+  const ids = new Set<number>();
+  for (const [k, v] of cacheLead) {
+    if (v.leadId !== leadId || v.expiraEm <= agora || !k.startsWith(`${unitId}:`)) continue;
+    if (v.idsClient.length !== 1) return null;
+    ids.add(v.idsClient[0]);
+  }
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
 export async function resolverLead(unit: Unit, kommo: KommoClient, nome: string, idClient: number | null, idsSchedule: number[]): Promise<number | null> {
   return (await resolverPaciente(unit, kommo, nome, idClient, idsSchedule)).leadId;
 }
@@ -655,9 +670,17 @@ interface ResultadoDaBusca {
   vistos: ClienteFranquia[];
 }
 
-/** Busca da franquia memorizada por 10 min (só para quem pede `memo`): a mesma pergunta das regras novas no "só no papel" não paga duas vezes. */
+/**
+ * O que a busca da franquia achou para um cartão, guardado pelo mesmo tempo do cache do casamento (6 h, mais uma folga
+ * para não vencer antes dele). Toda busca escreve; só as regras de 16/10 (e a simulação delas no "só no papel") leem — a
+ * regra antiga continua com o próprio cache, como sempre. Guarda só os candidatos que decidem (mesmo telefone ou nome
+ * exato do título): pouca memória, e a mesma resposta (achado 8 da revisão de 16/10: a simulação refazia até 10 buscas
+ * por cartão a cada 15 min).
+ */
 const cacheBusca = new Map<string, { em: number; r: ResultadoDaBusca }>();
-const CACHE_BUSCA_MS = 10 * 60_000;
+const CACHE_BUSCA_MS = CACHE_LEAD_MS + 15 * 60_000;
+/** Quem decide de verdade (regras ligadas, widget) aceita só a busca desta varredura; a simulação aceita a de até 6 h. */
+const MEMO_CURTO_MS = 10 * 60_000;
 
 /**
  * Os candidatos da franquia para um cartão: busca por cada termo do título (a franquia NÃO busca por telefone) e para
@@ -666,7 +689,7 @@ const CACHE_BUSCA_MS = 10 * 60_000;
  */
 async function buscarCandidatos(
   unit: Unit, nome: string | null,
-  extra?: ExtraDaBusca & { mesmoSemTermos?: boolean; memo?: boolean; soNomeCompleto?: boolean },
+  extra?: ExtraDaBusca & { mesmoSemTermos?: boolean; memoMs?: number; soNomeCompleto?: boolean },
 ): Promise<ResultadoDaBusca | null> {
   // no cadastro (achado 1 da revisão de 16/10) só nome e sobrenome juntos: "Souza" sozinho traz a mãe da Ana Souza
   const doNome = termosDeBuscaDoNome(nome).filter((t) => !extra?.soNomeCompleto || t.trim().includes(' '));
@@ -686,9 +709,9 @@ async function buscarCandidatos(
   if (extra?.soPorTelefone && !fone) return null;
   const alvos = new Set(doNome.map(normalizar));
   const chaveMemo = `${unit.id}|${termos.join('/')}|${fone}`;
-  if (extra?.memo) {
+  if (extra?.memoMs) {
     const m = cacheBusca.get(chaveMemo);
-    if (m && Date.now() - m.em < CACHE_BUSCA_MS) return { ...m.r, foneBruto: foneBruto ?? m.r.foneBruto };
+    if (m && Date.now() - m.em < Math.min(extra.memoMs, CACHE_BUSCA_MS)) return { ...m.r, foneBruto: foneBruto ?? m.r.foneBruto };
   }
   // acumula os candidatos de TODOS os termos: parar no 1º que devolve alguém escondia o paciente
   // quando o cartão tinha dois nomes (o João achou isso no "MARIA DA PENHA - ALEXANDRO SANT ANA")
@@ -704,14 +727,13 @@ async function buscarCandidatos(
     if (porFone().length === 1) break;
   }
   const r: ResultadoDaBusca = { fone, foneBruto, alvos, vistos: [...vistos.values()] };
-  if (extra?.memo) {
-    if (cacheBusca.size > 5_000) for (const [k, v] of cacheBusca) if (Date.now() - v.em > CACHE_BUSCA_MS) cacheBusca.delete(k);
-    cacheBusca.set(chaveMemo, { em: Date.now(), r });
-  }
+  const decidem = r.vistos.filter((c) => (fone && chaveTelefone(c.whatsapp) === fone) || alvos.has(nomeDaFranquia(c.name)));
+  if (cacheBusca.size > 5_000) for (const [k, v] of cacheBusca) if (Date.now() - v.em > CACHE_BUSCA_MS) cacheBusca.delete(k);
+  cacheBusca.set(chaveMemo, { em: Date.now(), r: { ...r, vistos: decidem } });
   return r;
 }
 
-async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDaBusca & { memo?: boolean }): Promise<number | null> {
+async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDaBusca): Promise<number | null> {
   const b = await buscarCandidatos(unit, nome, extra);
   if (!b) return null;
   const escolha = escolherPaciente(b.vistos, b.fone, b.alvos);
@@ -777,6 +799,8 @@ export interface ExtraDoCasamento extends ExtraDaBusca {
    * telefone de outra pessoa viram conflito (achado 1 da revisão de 16/10). `robo` (padrão): a regra do sincronizador.
    */
   modo?: 'robo' | 'cadastro';
+  /** Até que idade a busca guardada vale (padrão: 10 min, a da varredura). A simulação do "só no papel" aceita 6 h. */
+  memoMs?: number;
 }
 
 /**
@@ -793,13 +817,16 @@ export async function casarPacienteDoCartao(unit: Unit, leadId: number, nome: st
     id = link?.spineIdClient ?? null;
   }
   if (id && !cadastro) return { tipo: 'achou', idClient: id, por: 'idClient' };
+  // achado 8: o paciente que a varredura da agenda já casou com este cartão (pelo telefone dele) dispensa a busca
+  const daAgenda = cadastro ? null : pacienteDaAgenda(unit.id, leadId);
+  if (daAgenda) return { tipo: 'achou', idClient: daAgenda, por: 'telefone' };
   if (id) {
     // cadastro: o paciente do cartão só vale se o nome bater (1 GET por paciente por hora, o mesmo cache do histórico)
     const doCartao = await detalheDoPaciente(unit, id);
     if (doCartao) return escolherPacienteDoCartao({ idDoCartao: id, nomeDoCartao: doCartao.name, candidatos: [], fone: '', alvos: new Set(), nome, modo: 'cadastro' });
   }
   // 2. telefone (franquia pela busca do título; cartões irmãos quando a franquia não trouxe ninguém com o telefone) e 3. nome
-  const b = await buscarCandidatos(unit, nome, { ...extra, mesmoSemTermos: true, memo: !cadastro, soNomeCompleto: cadastro });
+  const b = await buscarCandidatos(unit, nome, { ...extra, mesmoSemTermos: true, memoMs: cadastro ? 0 : (extra.memoMs ?? MEMO_CURTO_MS), soNomeCompleto: cadastro });
   if (!b) return { tipo: 'nenhum', motivo: 'sem candidatos' };
   const franquiaTemOTelefone = !!b.fone && b.vistos.some((c) => chaveTelefone(c.whatsapp) === b.fone);
   const irmaos = !franquiaTemOTelefone && b.foneBruto && extra.kommo
@@ -812,7 +839,7 @@ export async function casarPacienteDoCartao(unit: Unit, leadId: number, nome: st
  * idClient do paciente na franquia: pelo vínculo que a Sofia gravou; senão pelo nome do cartão sem a
  * data que a SDR escreve, casando por telefone (quando o contato é conhecido) ou por nome exato único.
  */
-export async function idClientDoLead(unit: Unit, leadId: number, nome: string | null, extra?: ExtraDaBusca & { memo?: boolean }): Promise<number | null> {
+export async function idClientDoLead(unit: Unit, leadId: number, nome: string | null, extra?: ExtraDaBusca): Promise<number | null> {
   const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
   if (link?.spineIdClient) return link.spineIdClient;
   const chave = `${unit.id}:${leadId}`;
@@ -1455,14 +1482,21 @@ async function faxinarConflitos(ctx: CtxSync, marcadosAgora: ReadonlySet<number>
  * "Só no papel" das regras de 16/10 na revisão: o robô agiu pelo casamento antigo; aqui ele registra na tela quando o
  * casamento novo (idClient → telefone → nome) daria outro paciente, ou travaria o cartão por conflito.
  */
+/** Cartão já simulado (casamento de 16/10, "só no papel"): não simula de novo por 6 h — cada simulação custa buscas. */
+const simuladoEm = new Map<string, number>();
+
 async function simularCasamento(ctx: CtxSync, lead: KommoLead, idDoCartao: number | null, antigo: number | null, travado: boolean): Promise<void> {
   const { unit, kommo } = ctx;
+  const chave = `${unit.id}:${lead.id}`;
+  if (Date.now() - (simuladoEm.get(chave) ?? 0) < CACHE_LEAD_MS) return;
+  if (simuladoEm.size > 20_000) for (const [k, em] of simuladoEm) if (Date.now() - em >= CACHE_LEAD_MS) simuladoEm.delete(k);
+  simuladoEm.set(chave, Date.now());
   if (travado) {
     registrarSimulacao(unit, AUTOMACAO_1610, { leadId: lead.id, acao: 'pularia', alvo: 'revisão do cartão', motivo: `cartão com ${TAG_CONFLITO} e sem ⚙ idClient: espera a SDR escolher` });
     return;
   }
   try {
-    const novo = await casarPacienteDoCartao(unit, lead.id, lead.name ?? null, { kommo, contatoId: lead._embedded?.contacts?.[0]?.id ?? null, idDoCartao, campos: ctx.camposPorNome ?? [] });
+    const novo = await casarPacienteDoCartao(unit, lead.id, lead.name ?? null, { kommo, contatoId: lead._embedded?.contacts?.[0]?.id ?? null, idDoCartao, campos: ctx.camposPorNome ?? [], memoMs: CACHE_BUSCA_MS });
     if (novo.tipo === 'conflito') {
       registrarSimulacao(unit, AUTOMACAO_1610, { leadId: lead.id, acao: 'etiquetaria', alvo: TAG_CONFLITO, valor: novo.candidatos.map((c) => c.idClient).join(', '), motivo: 'dois pacientes da franquia no mesmo telefone (hoje o robô escolhe sozinho)' });
       return;
@@ -1653,7 +1687,8 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     // a agenda não traz idClient e o /treatments/search só lista tratamento em andamento:
     // quem finalizou some da lista — sem isto a ALTA nunca dispararia
     // 16/10: com a chave ligada, o `⚙ idClient` do cartão vem antes de qualquer busca (decisão 3)
-    const doCartao = ctx.jornada === 'ligado' ? idClientDoCartao(lead, ctx.camposPorNome ?? []) : null;
+    // e o paciente que a agenda acabou de casar com o cartão também (achado 8: sem buscar de novo pelo título)
+    const doCartao = ctx.jornada === 'ligado' ? (idClientDoCartao(lead, ctx.camposPorNome ?? []) ?? (p.idsClient?.length === 1 ? p.idsClient[0] : null)) : null;
     const hist = historico ?? (await historicoDoPaciente(unit, p.idClient ?? doCartao ?? (await idClientDoLead(unit, leadId, p.nome))));
     if (hist) {
       const ids = new Set(agendamentos.map((s) => s.idSchedule));
@@ -1796,7 +1831,7 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
             }
             if (esc) cacheIdClient.set(`${unit.id}:${lead.id}`, { idClient, expiraEm: Date.now() + CACHE_LEAD_MS });
           } else {
-            idClient = negativoLembrado ? null : await idClientDoLead(unit, lead.id, lead.name ?? null, { kommo, contatoId, memo: jornada === 'seco' });
+            idClient = negativoLembrado ? null : await idClientDoLead(unit, lead.id, lead.name ?? null, { kommo, contatoId });
             if (jornada === 'seco' && !negativoLembrado) await simularCasamento(ctx, lead, idDoCartao, idClient, travadoNoConflito);
           }
           if (!idClient) {
