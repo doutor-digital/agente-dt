@@ -11,6 +11,10 @@
  * - **Junta todos os termos antes de decidir.** Dois cadastros com o mesmo telefone (mãe e filha no mesmo WhatsApp,
  *   caso real em Petrópolis) só aparecem quando se olha o conjunto.
  * - **Mais de um com o mesmo telefone:** fica com o de nome igual, se for um só; senão, ninguém escolhe no chute.
+ *
+ * Só o primeiro nome (o widget aceita desde 20/10/2026): a busca por ele é a única coisa que prova "não existe". Se ela
+ * nem pôde ser feita (a franquia só busca com 3+ letras) ou veio com a página cheia (nome comum: o paciente pode estar
+ * fora da 1ª página), não há como dizer que o paciente é novo — `inconclusivo`, e nada é criado.
  */
 import type { Unit } from '@prisma/client';
 import { SpineService } from '../services/spine.service.js';
@@ -26,7 +30,12 @@ export type Achado =
   | ({ tipo: 'achou' } & PacienteDaFranquia)
   | { tipo: 'nao_achou' }
   | { tipo: 'ambiguo'; candidatos: PacienteDaFranquia[] }
-  | { tipo: 'sem_resposta' };
+  | { tipo: 'sem_resposta' }
+  /** Só o primeiro nome, e a busca por ele não prova que o paciente é novo (curto demais ou página cheia). */
+  | { tipo: 'inconclusivo' };
+
+/** A franquia devolve só a 1ª página da busca; com este tamanho, página cheia = pode haver mais gente com esse nome. */
+const POR_PAGINA = 100;
 
 /** Últimos 8 dígitos: imune ao +55, ao DDD escrito de outro jeito e ao nono dígito. */
 function fim8(fone: string | null | undefined): string | null {
@@ -34,25 +43,40 @@ function fim8(fone: string | null | undefined): string | null {
   return d.length >= 8 ? d.slice(-8) : null;
 }
 
-export async function pacienteExistente(unit: Unit, nome: string, tituloDoCartao: string, fone: string): Promise<Achado> {
+export async function pacienteExistente(
+  unit: Unit,
+  nome: string,
+  tituloDoCartao: string,
+  fone: string,
+  opcoes: { soPrimeiroNome?: boolean } = {},
+): Promise<Achado> {
   const alvo = fim8(fone);
   if (!alvo) return { tipo: 'sem_resposta' };
   const porId = new Map<number, string | null>();
+  /** termos cuja página NÃO veio cheia: a busca por eles viu todo mundo com esse nome */
+  const completos = new Set<string>();
   let falhou = false;
   for (const termo of termosDeBusca(tituloDoCartao, nome)) {
-    const r = await SpineService.searchClients(unit, termo, 100).catch(() => null);
+    const r = await SpineService.searchClients(unit, termo, POR_PAGINA).catch(() => null);
     if (!r?.ok) {
       falhou = true;
       continue;
     }
-    for (const c of r.data?.clients ?? []) {
+    const clientes = r.data?.clients ?? [];
+    if (clientes.length < POR_PAGINA) completos.add(termo);
+    for (const c of clientes) {
       if (c.idClient && fim8(c.whatsapp) === alvo) porId.set(c.idClient, c.name);
     }
   }
   if (falhou) return { tipo: 'sem_resposta' };
 
   const lista: PacienteDaFranquia[] = [...porId].map(([idClient, n]) => ({ idClient, nome: n }));
-  if (lista.length === 0) return { tipo: 'nao_achou' };
+  if (lista.length === 0) {
+    // só o primeiro nome: "não existe" só vale se a busca POR ELE foi feita e viu todo mundo (o título pode ser outro nome)
+    const primeiro = limparNome(nome).split(' ').filter(Boolean)[0] ?? '';
+    if (opcoes.soPrimeiroNome && !completos.has(primeiro)) return { tipo: 'inconclusivo' };
+    return { tipo: 'nao_achou' };
+  }
   if (lista.length === 1) return { tipo: 'achou', ...lista[0] };
 
   const alvos = new Set([normalizar(limparNome(nome)), normalizar(limparNome(tituloDoCartao))].filter(Boolean));
@@ -65,4 +89,9 @@ export async function pacienteExistente(unit: Unit, nome: string, tituloDoCartao
 export function motivoAmbiguo(candidatos: PacienteDaFranquia[], acao: 'cadastrado' | 'marcado'): string {
   const nomes = candidatos.slice(0, 3).map((c) => c.nome ?? `idClient ${c.idClient}`).join(', ');
   return `A franquia tem mais de um paciente com este telefone (${nomes}). Nada foi ${acao}: confira na franquia qual é o paciente e use o nome completo dele.`;
+}
+
+/** Frase para a SDR quando só o primeiro nome não deu para conferir se o paciente já existe. */
+export function motivoInconclusivo(acao: 'cadastrado' | 'marcado'): string {
+  return `Só com o primeiro nome não consegui conferir se este paciente já existe na franquia (nome muito comum ou curto demais para a busca). Nada foi ${acao}: coloque o sobrenome.`;
 }

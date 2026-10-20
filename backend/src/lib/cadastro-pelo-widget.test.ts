@@ -14,7 +14,7 @@ import { _semearCrmParaTeste } from './crm-compartilhado.js';
 import { limparCacheEsquema } from './kommo-schema.js';
 import { cadastrarPeloWidget, dddsDiferentes } from './cadastro-pelo-widget.js';
 import { pacienteExistente } from './paciente-existente.js';
-import { emAndamento, marcarPeloWidget } from './marcacao-widget.js';
+import { AVISO_SEM_SOBRENOME, emAndamento, marcarPeloWidget } from './marcacao-widget.js';
 import { AgendaService } from '../services/agenda.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 
@@ -92,6 +92,7 @@ for (const nome of ['createSchedule', 'createLead']) {
 
 function kommoFalso(unidadeDeAtendimento: string | null, foneDoContato = FONE, idClientNoCartao: number | null = null) {
   const escritas: string[] = [];
+  const notas: string[] = [];
   const lead = (id: number): KommoLead => ({
     id,
     name: 'MARIA SOUZA 12/10',
@@ -111,14 +112,15 @@ function kommoFalso(unidadeDeAtendimento: string | null, foneDoContato = FONE, i
     setLeadCustomFieldValue: async (_lead: number, campo: number, _tipo: string, valor: unknown) => {
       escritas.push(`campo:${campo}=${valor}`);
     },
-    addLeadNote: async () => {
+    addLeadNote: async (_lead: number, texto: string) => {
       escritas.push('nota');
+      notas.push(texto);
     },
     moveStage: async () => {
       escritas.push('MOVEU');
     },
   } as unknown as KommoClient;
-  return { kommo, escritas };
+  return { kommo, escritas, notas };
 }
 
 const pedido = (leadId: number) => ({ leadId, nome: 'Maria Souza', telefone: FONE });
@@ -214,11 +216,99 @@ test('widget cadastrar: o lead que o espelho criou na franquia é convertido, n�
   assert.ok(!naFranquia.includes('createClient'));
 });
 
-test('widget cadastrar: sem sobrenome → recusa antes da franquia', async () => {
-  const { kommo } = kommoFalso(null);
+// ── só o primeiro nome (pedido do João, 20/10/2026) ───────────────────────────────────────────────────────────
+/** `n` pacientes de outro telefone: a página da busca da franquia vem cheia com n = 100 */
+const outros = (n: number) => Array.from({ length: n }, (_, i) => ({ idClient: 9000 + i, name: `MARIA ${i}`, whatsapp: '5521900000000' }));
+
+test('widget cadastrar: só o primeiro nome → cadastra, liga o cartão e deixa o aviso na nota', async () => {
+  const { kommo, escritas, notas } = kommoFalso(null);
   const r = await cadastrarPeloWidget(unidade(SERRA), { leadId: 208, nome: 'Maria', telefone: FONE }, { kommo });
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.equal(r.idClient, 555);
+    assert.equal(r.novoCadastro, true);
+    assert.equal(r.nome, 'Maria');
+    assert.equal(r.aviso, AVISO_SEM_SOBRENOME);
+  }
+  assert.ok(naFranquia.includes('busca:Maria'), 'procurou pelo primeiro nome antes de criar');
+  assert.equal(naFranquia.filter((x) => x === 'createClient').length, 1);
+  assert.deepEqual(vinculosGravados, [{ unitId: `u-${SERRA}`, kommoLeadId: 208, spineIdClient: 555 }], 'o vínculo é pelo idClient, não pelo nome');
+  assert.ok(escritas.includes(`campo:${CAMPO_IDCLIENT}=555`), 'grava o ⚙ idClient no cartão');
+  assert.equal(notas.length, 1);
+  assert.match(notas[0], /Salvo só com o primeiro nome — complete o sobrenome na franquia quando souber\.$/);
+});
+
+test('widget cadastrar: com nome completo não há aviso', async () => {
+  const { kommo, notas } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), pedido(214), { kommo });
+  assert.equal(r.ok, true);
+  if (r.ok) assert.equal(r.aviso, undefined);
+  assert.doesNotMatch(notas[0] ?? '', /primeiro nome/);
+});
+
+test('widget cadastrar: só o primeiro nome e o paciente já existe com o telefone → liga a ele, sem criar e sem aviso', async () => {
+  buscaPorTermo = (termo) => (termo === 'Maria' ? { ok: true, clients: [{ idClient: 321, name: 'MARIA APARECIDA SOUZA', whatsapp: '5524999990000' }] } : { ok: true, clients: [] });
+  const { kommo, notas } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), { leadId: 209, nome: 'Maria', telefone: FONE }, { kommo });
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.equal(r.idClient, 321);
+    assert.equal(r.novoCadastro, false);
+    assert.equal(r.nome, 'MARIA APARECIDA SOUZA', 'fica o nome que a franquia tem');
+    assert.equal(r.aviso, undefined);
+  }
+  assert.ok(!naFranquia.includes('createClient'));
+  assert.doesNotMatch(notas[0] ?? '', /primeiro nome/);
+});
+
+test('widget cadastrar: só o primeiro nome e a busca por ele veio CHEIA → recusa (o paciente pode estar fora da 1ª página)', async () => {
+  buscaPorTermo = (termo) => (termo === 'Maria' ? { ok: true, clients: outros(100) } : { ok: true, clients: [] });
+  const { kommo, escritas } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), { leadId: 210, nome: 'Maria', telefone: FONE }, { kommo });
+  assert.equal(r.ok, false);
+  if (!r.ok) {
+    assert.equal(r.codigo, 'sem_sobrenome');
+    assert.match(r.motivo, /coloque o sobrenome/);
+  }
+  assert.ok(!naFranquia.includes('createClient'), 'na dúvida, não cria');
+  assert.deepEqual(vinculosGravados, []);
+  assert.deepEqual(escritas, []);
+});
+
+test('widget cadastrar: nome completo com o primeiro nome lotado na busca segue como antes (o nome inteiro prova)', async () => {
+  buscaPorTermo = (termo) => (termo.toUpperCase() === 'MARIA' ? { ok: true, clients: outros(100) } : { ok: true, clients: [] });
+  const { kommo } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), pedido(211), { kommo });
+  assert.equal(r.ok, true);
+  if (r.ok) assert.equal(r.idClient, 555);
+});
+
+test('widget cadastrar: primeiro nome de 2 letras não dá para buscar → recusa em vez de criar às cegas', async () => {
+  // a franquia só busca com 3+ letras: "Lu" nem é procurado (o título do cartão é outro nome)
+  const { kommo } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), { leadId: 212, nome: 'Lu', telefone: FONE }, { kommo });
   assert.equal(r.ok, false);
   if (!r.ok) assert.equal(r.codigo, 'sem_sobrenome');
+  assert.ok(!naFranquia.includes('busca:Lu'));
+  assert.ok(!naFranquia.includes('createClient'));
+});
+
+test('widget cadastrar: sem nome nenhum → recusa antes da franquia', async () => {
+  const { kommo } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), { leadId: 213, nome: '  ', telefone: FONE }, { kommo });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.codigo, 'sem_nome');
+  assert.deepEqual(naFranquia, []);
+});
+
+test('widget cadastrar: só o primeiro nome NÃO dispensa o telefone — vazio ou de outro contato recusa sem tocar na franquia', async () => {
+  const { kommo } = kommoFalso(null);
+  const vazio = await cadastrarPeloWidget(unidade(SERRA), { leadId: 215, nome: 'Maria', telefone: '' }, { kommo });
+  assert.equal(vazio.ok, false);
+  if (!vazio.ok) assert.equal(vazio.codigo, 'telefone_incompleto');
+  const outro = await cadastrarPeloWidget(unidade(SERRA), { leadId: 216, nome: 'Maria', telefone: '(24) 98888-1111' }, { kommo });
+  assert.equal(outro.ok, false);
+  if (!outro.ok) assert.equal(outro.codigo, 'telefone_nao_bate');
   assert.deepEqual(naFranquia, []);
 });
 
@@ -396,6 +486,43 @@ test('widget marcar: busca do paciente falhou em parte → recusa sem criar paci
     const r = await marcarPeloWidget(unidade(SERRA), { leadId: 502, nome: 'Maria Souza', telefone: FONE, data: amanha(), hora: '09:00' }, { kommo });
     assert.equal(r.ok, false);
     if (!r.ok) assert.equal(r.codigo, 'cadastro_falhou');
+    assert.deepEqual(marcadas, []);
+    assert.ok(!naFranquia.includes('createClient'));
+  } finally {
+    desfazer();
+  }
+});
+
+test('widget marcar: só o primeiro nome → cadastra, marca e deixa o aviso na nota', async () => {
+  const { marcadas, desfazer } = agendaLivre();
+  try {
+    const { kommo, notas } = kommoFalso(null);
+    const r = await marcarPeloWidget(unidade(SERRA), { leadId: 503, nome: 'Maria', telefone: FONE, data: amanha(), hora: '09:00' }, { kommo });
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.novoCadastro, true);
+      assert.equal(r.nome, 'Maria');
+      assert.equal(r.aviso, AVISO_SEM_SOBRENOME);
+    }
+    assert.deepEqual(marcadas, [555]);
+    assert.equal(vinculosGravados[0]?.spineIdClient, 555, 'o vínculo é pelo idClient');
+    assert.ok(notas.some((n) => n.endsWith(AVISO_SEM_SOBRENOME)));
+  } finally {
+    desfazer();
+  }
+});
+
+test('widget marcar: só o primeiro nome e a busca por ele veio CHEIA → recusa sem criar paciente nem marcar', async () => {
+  buscaPorTermo = (termo) => (termo === 'Maria' ? { ok: true, clients: outros(100) } : { ok: true, clients: [] });
+  const { marcadas, desfazer } = agendaLivre();
+  try {
+    const { kommo } = kommoFalso(null);
+    const r = await marcarPeloWidget(unidade(SERRA), { leadId: 504, nome: 'Maria', telefone: FONE, data: amanha(), hora: '09:00' }, { kommo });
+    assert.equal(r.ok, false);
+    if (!r.ok) {
+      assert.equal(r.codigo, 'sem_sobrenome');
+      assert.match(r.motivo, /Nada foi marcado/);
+    }
     assert.deepEqual(marcadas, []);
     assert.ok(!naFranquia.includes('createClient'));
   } finally {

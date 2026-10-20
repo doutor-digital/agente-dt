@@ -13,7 +13,7 @@ import { SpineService, SPINE_STATUS } from '../services/spine.service.js';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import type { ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
-import { buildAgendarConsulta, buildCadastrarPaciente, buildConsultarHorarios, buildRemarcarConsulta } from './agenda-tools.js';
+import { buildAgendarConsulta, buildBuscarPaciente, buildCadastrarPaciente, buildConsultarHorarios, buildRemarcarConsulta } from './agenda-tools.js';
 import { fixarLeadDaConversa } from './graph.js';
 import { syncLeadToSpine, syncPatientToSpine } from '../services/spine-sync.service.js';
 import { confirmarNaFranquia } from '../lib/confirmacao-d1.js';
@@ -140,4 +140,14 @@ test('confirmação D-1 de consulta que já está na agenda de Petrópolis não 
   );
   assert.equal(r, 'confirmada');
   assert.deepEqual(confirmadas, [1]);
+});
+
+test('Sofia: só o primeiro nome continua RECUSADO em buscar e cadastrar — o widget aceitar (20/10/2026) não muda a régua dela', async () => {
+  unidadeAtual = unidade({ slug: 'doutor-hernia-serra' });
+  const ctx = { unit: unidadeAtual, recorder, kommo: kommoFalso(null).kommo };
+  const busca = String(await buildBuscarPaciente(ctx).invoke({ nome: 'Maria', telefone: '24999990000', leadId: 5 }));
+  assert.match(busca, /^RECUSADO: "Maria" é só o primeiro nome/);
+  const cadastro = String(await buildCadastrarPaciente(ctx).invoke({ nome: 'Maria', telefone: '24999990000', leadId: 5, horarioEscolhido: '2026-12-01 09:00' }));
+  assert.match(cadastro, /^RECUSADO: falta o sobrenome/);
+  assert.deepEqual(naFranquia, [], 'nenhuma chamada à franquia');
 });

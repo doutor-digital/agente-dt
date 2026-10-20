@@ -10,9 +10,9 @@
  * regra é sobre a IA e os robôs cadastrarem sozinhos todo clique de anúncio. Aqui é uma pessoa da recepção, num
  * cartão, decidindo. Robô nenhum chama esta função.
  *
- * Mesmas guardas do "Marcar consulta" (`marcacao-widget.ts`): sobrenome, DDD, o cartão existe NESTA conta, o
- * telefone digitado é o do contato do cartão e, no Kommo dividido (Petrópolis + Caxias), a franquia é a da
- * ⌂ Unidade de atendimento do cartão. A diferença que importa: aqui a busca do paciente existente é mais larga
+ * Mesmas guardas do "Marcar consulta" (`marcacao-widget.ts`): nome (basta o primeiro, desde 20/10/2026), DDD, o
+ * cartão existe NESTA conta, o telefone digitado é o do contato do cartão e, no Kommo dividido (Petrópolis + Caxias),
+ * a franquia é a da ⌂ Unidade de atendimento do cartão. A diferença que importa: aqui a busca do paciente existente é mais larga
  * (nome completo, "primeiro último", só o primeiro), porque a franquia NÃO busca por telefone e cadastrar em dobro
  * é o erro que este botão existe para evitar. Se a franquia não responder à busca, nada é criado.
  */
@@ -27,8 +27,8 @@ import { TraceRecorder } from '../agent/trace-recorder.js';
 import { telefoneDoLead, unidadeFresca } from '../agent/agenda-tools.js';
 import { travaDaUnidadeDeAtendimento } from './trava-unidade-atendimento.js';
 import { contaDoKommo, unidadeDoCartao } from './crm-compartilhado.js';
-import { motivoAmbiguo, pacienteExistente } from './paciente-existente.js';
-import { emAndamento, fim8, validarNome, validarTelefone, type Recusa } from './marcacao-widget.js';
+import { motivoAmbiguo, motivoInconclusivo, pacienteExistente } from './paciente-existente.js';
+import { AVISO_SEM_SOBRENOME, emAndamento, fim8, validarNome, validarTelefone, type Recusa } from './marcacao-widget.js';
 
 export interface EntradaCadastro {
   leadId: number;
@@ -51,6 +51,8 @@ export interface Cadastrado {
   cartao: { camposEmBranco: string[] };
   /** `false` quando o paciente existe na franquia mas o vínculo não gravou no banco — avise, o sincronizador ainda casa pelo telefone. */
   vinculoGravado: boolean;
+  /** Recado para a SDR (o mesmo vai na nota do cartão) — hoje só quando o paciente novo entrou sem sobrenome. */
+  aviso?: string;
 }
 
 /**
@@ -130,7 +132,7 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
   if (!vn.ok) return recusar(vn);
   const vt = validarTelefone(entrada.telefone);
   if (!vt.ok) return recusar(vt);
-  const { nome } = vn;
+  const { nome, semSobrenome } = vn;
   const { fone } = vt;
 
   const lead = await kommo.getLead(entrada.leadId).catch(() => null);
@@ -182,10 +184,11 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
     nomeNaFranquia = cli.name;
     await passo('TOOL_RESULT', `O cartão já tinha o ⚙ idClient ${doCartao} (${cli.name ?? '?'}) e o telefone confere — só liguei`);
   } else {
-    const achado = await pacienteExistente(unit, nome, lead.name ?? '', fone);
+    const achado = await pacienteExistente(unit, nome, lead.name ?? '', fone, { soPrimeiroNome: semSobrenome });
     if (achado.tipo === 'sem_resposta') {
       return recusar({ ok: false, codigo: 'cadastro_falhou', motivo: 'A franquia não respondeu a todas as buscas do paciente. Nada foi cadastrado — tente de novo em instantes.' });
     }
+    if (achado.tipo === 'inconclusivo') return recusar({ ok: false, codigo: 'sem_sobrenome', motivo: motivoInconclusivo('cadastrado') });
     if (achado.tipo === 'ambiguo') return recusar({ ok: false, codigo: 'paciente_ambiguo', motivo: motivoAmbiguo(achado.candidatos, 'cadastrado') });
     if (achado.tipo === 'achou') {
       idClient = achado.idClient;
@@ -214,6 +217,8 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
   }
   // o nome que fica no vínculo e volta para a SDR é o da FRANQUIA quando o paciente já existia — é ele que diz a quem o cartão foi ligado
   const nomeFinal = nomeNaFranquia ?? nome;
+  // paciente que JÁ existia fica com o nome que a franquia tem; o aviso é só para o cadastro feito agora
+  const aviso = novoCadastro && semSobrenome ? AVISO_SEM_SOBRENOME : undefined;
 
   // O vínculo é o que faz o sincronizador seguir este paciente pelo id, e não pelo nome. Sem consulta: os campos
   // de agenda do vínculo ficam como estão.
@@ -234,7 +239,7 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
     if (idCampo === null) cartao.camposEmBranco.push('⚙ idClient (franquia)');
     else await kommo.setLeadCustomFieldValue(entrada.leadId, idCampo, 'numeric', idClient).catch(() => cartao.camposEmBranco.push('⚙ idClient (franquia)'));
     await kommo
-      .addLeadNote(entrada.leadId, `${novoCadastro ? 'Paciente cadastrado' : `Cartão ligado ao paciente que já existia (${nomeFinal})`} na franquia${rotulo ? ` de ${rotulo}` : ''} pela recepção, pelo widget, sem consulta marcada (idClient ${idClient}).`)
+      .addLeadNote(entrada.leadId, `${novoCadastro ? 'Paciente cadastrado' : `Cartão ligado ao paciente que já existia (${nomeFinal})`} na franquia${rotulo ? ` de ${rotulo}` : ''} pela recepção, pelo widget, sem consulta marcada (idClient ${idClient}).${aviso ? ` ${aviso}` : ''}`)
       .catch(() => null);
     await passo('KOMMO_ACTION', `Cartão ligado ao paciente${cartao.camposEmBranco.length ? ` — em branco: ${cartao.camposEmBranco.join(', ')}` : ''}`, cartao);
   } catch (err) {
@@ -244,5 +249,5 @@ async function cadastrarInterno(unitBase: Unit, entrada: EntradaCadastro, opcoes
 
   await recorder.finalize({ status: 'SUCCESS', latencyMs: Date.now() - t0, iaDecision: novoCadastro ? 'widget_cadastrar' : 'widget_cadastrar:ligou_existente' }).catch(() => undefined);
   logger.info({ unit: unit.slug, leadId: entrada.leadId, idClient, novoCadastro }, 'widget cadastrar: paciente na franquia sem consulta');
-  return { ok: true, idClient, novoCadastro, jaLigado: false, nome: nomeFinal, unidade: rotulo, cartao, vinculoGravado };
+  return { ok: true, idClient, novoCadastro, jaLigado: false, nome: nomeFinal, unidade: rotulo, cartao, vinculoGravado, ...(aviso ? { aviso } : {}) };
 }
