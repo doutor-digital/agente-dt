@@ -745,6 +745,24 @@ test('achado 7 — ligado: o ⚙ idClient gravado à mão resolve o conflito (et
   assert.ok(!alertas.some((a) => a.leadId === '577' && a.ruleKey.startsWith('conflito-franquia:')));
 });
 
+test('Codex (rodada 1) — o Kommo falha ao etiquetar: o cartão continua travado pela marca no banco e a nota sai mesmo assim', async () => {
+  chaves('ligado');
+  const unit = unidade();
+  const { kommo, reg } = doisPacientesNoMesmoTelefone();
+  const addTag = kommo.addTag.bind(kommo);
+  (kommo as unknown as { addTag: unknown }).addTag = async () => { throw new Error('Kommo fora do ar'); };
+  await _interno.sincronizarUnidade(unit, { kommo });
+  assert.deepEqual(reg.gravacoes, []);
+  assert.equal(reg.notas.length, 1, 'a nota não depende da etiqueta');
+  assert.ok(alertas.some((a) => a.leadId === '555' && a.ruleKey === 'conflito-franquia:101,202'), 'a trava fica no banco');
+  // na varredura seguinte só a MARIA está na agenda (sem "dois no cartão"): sem etiqueta, quem trava é a marca
+  (kommo as unknown as { addTag: unknown }).addTag = addTag;
+  agendaFalsa = agendaFalsa.filter((a) => a.clientName === 'MARIA TESTE');
+  await _interno.sincronizarUnidade(unit, { kommo });
+  assert.deepEqual(reg.gravacoes, [], 'nada gravado no cartão em conflito');
+  assert.equal(reg.notas.length, 1, 'sem nota repetida');
+});
+
 test('achado 8 — só no papel: 15 e 30 min depois, a simulação do casamento novo não refaz as buscas na franquia', async (t) => {
   clientesFalsos = [{ idClient: 4500, name: 'JOAO PEREIRA DA SILVA', whatsapp: FONE }];
   fichasFalsas = new Map([[4500, { idClient: 4500, name: 'JOAO PEREIRA DA SILVA', whatsapp: FONE, schedules: [], treatments: [] }]]);

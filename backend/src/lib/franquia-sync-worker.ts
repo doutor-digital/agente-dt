@@ -41,7 +41,7 @@ import {
   escolherPacienteDoCartao, estadoCasamentoJornada, faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaDevolucao,
   notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type ClienteCandidato, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
 } from './casamento-jornada.js';
-import { PARA_SEMPRE_MS, avisarCadastroDuplicado, candidatosGuardados, escolhaDaSdr, gravarEscolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
+import { PARA_SEMPRE_MS, avisarCadastroDuplicado, escolhaDaSdr, gravarEscolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
 import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, podeMexer, pularCartao, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
@@ -816,6 +816,8 @@ export async function casarPacienteDoCartao(unit: Unit, leadId: number, nome: st
     const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
     id = link?.spineIdClient ?? null;
   }
+  // decisão 3 do João: o idClient que o cartão já sabe (⚙ ou o vínculo que a Sofia/o widget gravou ao marcar) vem
+  // primeiro, sem olhar o telefone — o conflito de telefone (decisão 1) é para o cartão que ainda não diz quem é
   if (id && !cadastro) return { tipo: 'achou', idClient: id, por: 'idClient' };
   // achado 8: o paciente que a varredura da agenda já casou com este cartão (pelo telefone dele) dispensa a busca
   const daAgenda = cadastro ? null : pacienteDaAgenda(unit.id, leadId);
@@ -931,6 +933,11 @@ interface CtxSync {
   grupo?: GrupoDoCrm | null;
   /** Chave `casamento-jornada` (regras de 16/10/2026) nesta unidade. Ausente = desligado (o comportamento de sempre). */
   jornada?: Estado;
+  /**
+   * Cartões com conflito de telefone GUARDADO no banco (marca `conflito-franquia:`): é esta marca que trava o cartão, não a
+   * etiqueta — a etiqueta é só o aviso para a SDR e pode não ter sido gravada (Kommo fora). Lida 1× por varredura.
+   */
+  conflitosGuardados?: Set<number>;
 }
 
 function revisaoSeca(raw: string | undefined = process.env.FRANQUIA_REVISAO_SECO): boolean {
@@ -1401,16 +1408,35 @@ async function marcarConflitoDeTelefone(ctx: CtxSync, leadId: number, lead: Komm
     registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'etiquetaria', alvo: TAG_CONFLITO, valor: ids.join(', '), motivo: `${pacientes.length} pacientes da franquia no mesmo telefone` });
     return;
   }
-  const jaConhecido = (await candidatosGuardados(unit.id, leadId)).length > 0;
+  // a trava é a marca no banco (o widget também lê dela os candidatos); etiqueta e nota são o aviso, cada um na sua tentativa
   await guardarCandidatos(unit.id, leadId, ids);
-  if ((lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO)) return;
-  try {
-    await kommo.addTag({ leadId, tags: [TAG_CONFLITO] });
-    if (!jaConhecido) await kommo.addLeadNote(leadId, notaConflitoDeTelefone(pacientes));
-    lead._embedded = { ...lead._embedded, tags: [...(lead._embedded?.tags ?? []), { id: 0, name: TAG_CONFLITO }] };
-  } catch (err) {
-    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: não consegui marcar o conflito de telefone no cartão');
+  ctx.conflitosGuardados?.add(leadId);
+  if (!(lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO)) {
+    try {
+      await kommo.addTag({ leadId, tags: [TAG_CONFLITO] });
+      lead._embedded = { ...lead._embedded, tags: [...(lead._embedded?.tags ?? []), { id: 0, name: TAG_CONFLITO }] };
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: não consegui pôr a etiqueta do conflito de telefone (o cartão segue travado pela marca)');
+    }
   }
+  if (await avisoRecente(unit.id, leadId, CHAVE_NOTA_CONFLITO, PARA_SEMPRE_MS)) return;
+  try {
+    await kommo.addLeadNote(leadId, notaConflitoDeTelefone(pacientes));
+    await marcarAviso(unit.id, leadId, CHAVE_NOTA_CONFLITO);
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: não consegui deixar a nota do conflito de telefone — tento na próxima');
+  }
+}
+
+/** Marca de "a nota do conflito de telefone já foi para este cartão" (uma vez por conflito; a faxina apaga com ele). */
+const CHAVE_NOTA_CONFLITO = 'conflito-nota';
+
+/** Os cartões desta unidade com conflito de telefone guardado (1 consulta ao banco). Falha de banco = nenhum. */
+async function cartoesComConflitoGuardado(unitId: string): Promise<Set<number>> {
+  const linhas = await prisma.cardAlert
+    .findMany({ where: { unitId, ruleKey: { startsWith: PREFIXO_CONFLITO } }, select: { leadId: true } })
+    .catch(() => [] as Array<{ leadId: string }>);
+  return new Set(linhas.map((l) => Number(l.leadId)).filter((n) => Number.isInteger(n) && n > 0));
 }
 
 /** De quanto em quanto tempo a faxina dos conflitos roda por unidade (lê o Kommo e a franquia de cada cartão marcado). */
@@ -1471,6 +1497,8 @@ async function faxinarConflitos(ctx: CtxSync, marcadosAgora: ReadonlySet<number>
       if (tirarEtiqueta) await kommo.removeTag(leadId, TAG_CONFLITO);
       if (ctx.jornada === 'ligado' && idDoCartao !== null) await gravarEscolhaDaSdr(unit.id, leadId, idDoCartao);
       await prisma.cardAlert.deleteMany({ where: { unitId: unit.id, leadId: String(leadId), ruleKey: { startsWith: PREFIXO_CONFLITO } } });
+      await prisma.cardAlert.deleteMany({ where: { unitId: unit.id, leadId: String(leadId), ruleKey: CHAVE_NOTA_CONFLITO } });
+      ctx.conflitosGuardados?.delete(leadId);
       logger.info({ unit: unit.slug, leadId, tirouEtiqueta: tirarEtiqueta, motivo }, 'casamento-jornada: conflito de telefone resolvido — marca removida');
     } catch (err) {
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: faxina do conflito falhou neste cartão — tento na próxima');
@@ -1805,7 +1833,7 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
         // 16/10: o `⚙ idClient` do cartão vem primeiro (decisão 3), e cartão travado em CONFLITO_FRANQUIA sem ele espera a SDR
         const jornada = ctx.jornada ?? 'desligado';
         const idDoCartao = idClientDoCartao(lead, ctx.camposPorNome ?? []);
-        const travadoNoConflito = idDoCartao === null && (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO);
+        const travadoNoConflito = idDoCartao === null && ((lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO) || !!ctx.conflitosGuardados?.has(lead.id));
         if (jornada === 'ligado' && travadoNoConflito) continue;
         // já procurei este e não achei (cache 6 h): não gasta cota nem chamada; em CONFERIR ainda vale a regra dos 30 d
         const lembrado = cacheIdClient.get(`${unit.id}:${lead.id}`);
@@ -1964,7 +1992,8 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
   const agoraEpoch = Math.floor(Date.now() / 1000);
   // Chave `casamento-jornada` (regras de 16/10/2026): desligado = tudo como sempre.
   const jornada = estadoCasamentoJornada(unit.slug);
-  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false }, seco, automacaoDoSeco: seco ? 'franquia-sync' : undefined, grupo, jornada };
+  const conflitosGuardados = jornada === 'ligado' ? await cartoesComConflitoGuardado(unit.id) : new Set<number>();
+  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false }, seco, automacaoDoSeco: seco ? 'franquia-sync' : undefined, grupo, jornada, conflitosGuardados };
 
   // Casa TODOS os pacientes antes de gravar: só assim se vê o cartão que recebeu dois pacientes diferentes (mesmo
   // telefone) na mesma varredura — com a gravação no meio, o primeiro já teria escrito por cima (decisão 1, 16/10).
@@ -2007,7 +2036,8 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
       // cima já deixa passar só o dono.
       if (jornada !== 'desligado' && idDoCartao === null) {
         const varios = variosNoCartao.has(leadId);
-        const travado = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO);
+        // a marca no banco trava mesmo sem a etiqueta (Kommo fora na hora de etiquetar, ou alguém tirou à mão)
+        const travado = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO) || conflitosGuardados.has(leadId);
         if (varios && !marcadosNestaVarredura.has(leadId)) {
           marcadosNestaVarredura.add(leadId);
           const pacientes = casados
