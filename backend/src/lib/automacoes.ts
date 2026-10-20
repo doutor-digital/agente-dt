@@ -396,6 +396,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/unidade-no-cartao.ts',
   },
   {
+    id: 'motivo-no-cabecalho',
+    chave: 'MOTIVO_NO_CABECALHO_SLUGS',
+    nome: 'Motivo no topo do cartão perdido',
+    oQueFaz:
+      'Copia o motivo que a SDR escolheu no campo ⊘ (não agendamento, não fechamento ou cancelamento do tratamento) para o motivo da perda do Kommo, no topo do cartão. Assim o cartão em PERDIDO deixa de mostrar "Motivo indefinido" e a SDR continua escolhendo um motivo só.',
+    pegadinha:
+      'Só mexe em cartão PERDIDO ou TRATAMENTO CANCELADO com o topo vazio — o que alguém ou um robô de prazo já pôs lá nunca é trocado — e só copia o que está no campo. Motivo que não existe na lista do Kommo é criado com o mesmo texto. Leva até 10 min depois de a SDR mover; na 1ª vez passa nos perdidos dos últimos 30 dias, 200 por rodada. Onde a Sofia tem régua de follow-up por motivo de perda, o cartão passa a seguir a régua daquele motivo. Petrópolis e Caxias: ligue na de Petrópolis (dona do Kommo); vale para os cartões das duas.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/motivo-no-cabecalho.ts',
+  },
+  {
     id: 'sugestao-motivo',
     chave: 'SUGESTAO_MOTIVO_SLUGS',
     nome: 'IA sugere o motivo do não agendamento (widget)',

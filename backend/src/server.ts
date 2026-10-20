@@ -36,6 +36,7 @@ import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-work
 import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
 import { startParadosWorker, stopParadosWorker } from './lib/parados-worker.js';
+import { startMotivoNoCabecalhoWorker, stopMotivoNoCabecalhoWorker } from './lib/motivo-no-cabecalho-worker.js';
 import { startNaoLidasWorker, stopNaoLidasWorker } from './lib/nao-lidas-worker.js';
 import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
@@ -204,6 +205,7 @@ async function main(): Promise<void> {
       startCacheKeepaliveWorker();
       startFranquiaSyncWorker();
       startParadosWorker();
+      startMotivoNoCabecalhoWorker();
       startUnidadePorCanalWorker();
       startUnidadeNoCartaoWorker();
       startLigacaoWhatsappWorker();
@@ -216,6 +218,7 @@ async function main(): Promise<void> {
     parar: () => {
       pararVigiaDeQualidade();
       stopParadosWorker();
+      stopMotivoNoCabecalhoWorker();
       stopUnidadePorCanalWorker();
       stopUnidadeNoCartaoWorker();
       stopLigacaoWhatsappWorker();

@@ -1664,6 +1664,8 @@ export class KommoClient {
       status_id?: number;
       pipeline_id?: number;
       responsible_user_id?: number;
+      /** motivo da perda do cabeçalho (só em cartão PERDIDO) */
+      loss_reason_id?: number;
       custom_fields_values?: Array<{ field_id: number; values: Array<Record<string, unknown>> | null }>;
       tags_to_add?: Array<{ name: string }>;
       tags_to_delete?: Array<{ name: string }>;
@@ -1926,12 +1928,19 @@ export class KommoClient {
     }
   }
 
+  /** Todas as páginas: quem cria motivo que "falta" não pode deixar de ver um que está na página 2. */
   async listLossReasons(): Promise<Array<{ id: number; name: string }>> {
+    const todos: Array<{ id: number; name: string }> = [];
     try {
-      const { data } = await this.http.get<{
-        _embedded?: { loss_reasons?: Array<{ id: number; name: string }> };
-      }>('/leads/loss_reasons', { params: { page: 1, limit: 250 } });
-      return data?._embedded?.loss_reasons ?? [];
+      for (let page = 1; page <= 20; page++) {
+        const { data } = await this.http.get<{
+          _embedded?: { loss_reasons?: Array<{ id: number; name: string }> };
+        }>('/leads/loss_reasons', { params: { page, limit: 250 } });
+        const lote = data?._embedded?.loss_reasons ?? [];
+        todos.push(...lote);
+        if (lote.length < 250) break;
+      }
+      return todos;
     } catch (err) {
       wrapAxiosError(err, 'listLossReasons');
     }
@@ -2190,6 +2199,29 @@ export class KommoClient {
       return data?._embedded?.leads ?? [];
     } catch (err) {
       wrapAxiosError(err, `listLeadsPagina(${page})`);
+    }
+  }
+
+  /**
+   * Cartões nestas etapas que mexeram desde `desdeEpochSeg`, os MAIS ANTIGOS primeiro (uma página de 250): quem varre
+   * a janela anda por ela pela data do último cartão lido, sem ficar preso nas primeiras páginas. Junta etapas de
+   * funis diferentes numa chamada (ex.: o 143 do COMERCIAL e o do TRATAMENTO). LANÇA se o Kommo falhar.
+   */
+  async listLeadsDasEtapasDesde(
+    etapas: ReadonlyArray<{ pipelineId: number; statusId: number }>,
+    desdeEpochSeg: number,
+    page = 1,
+  ): Promise<KommoLead[]> {
+    const params: Record<string, unknown> = { limit: 250, page, 'filter[updated_at][from]': desdeEpochSeg, 'order[updated_at]': 'asc' };
+    etapas.forEach((e, i) => {
+      params[`filter[statuses][${i}][pipeline_id]`] = e.pipelineId;
+      params[`filter[statuses][${i}][status_id]`] = e.statusId;
+    });
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', { params });
+      return data?._embedded?.leads ?? [];
+    } catch (err) {
+      wrapAxiosError(err, `listLeadsDasEtapasDesde(${page})`);
     }
   }
 
