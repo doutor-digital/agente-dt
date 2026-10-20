@@ -23,6 +23,7 @@
  * continua sendo o sincronizador (`franquia-sync-worker.ts`); a máquina de etapas mora em `franquia-move.ts`.
  */
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
+import type { KommoLead } from '../services/kommo.service.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chaveTelefone, ehAvaliacao, ehConsulta, nomeDaFranquia, nomeParaBusca, normalizar } from './franquia-sync.js';
 import { normalizarNome } from './kommo-schema.js';
@@ -219,6 +220,17 @@ export function chaveDoConflito(ids: number[]): string {
 export function idsDoConflito(ruleKey: string): number[] {
   if (!ruleKey.startsWith(PREFIXO_CONFLITO)) return [];
   return ruleKey.slice(PREFIXO_CONFLITO.length).split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0);
+}
+
+/**
+ * PURA. O cartão está travado pelo conflito de telefone (decisão 1)? A regra do sincronizador, num lugar só, para todo robô
+ * que mexe em cartão: sem `⚙ idClient` e com a etiqueta CONFLITO_FRANQUIA ou a marca `conflito-franquia:` no banco (a marca
+ * trava mesmo sem a etiqueta: Kommo fora na hora de etiquetar, ou alguém tirou à mão). Com o ⚙ gravado já se sabe quem é
+ * o paciente: solta. Só vale com a chave `casamento-jornada` ligada — quem chama confere.
+ */
+export function cartaoTravadoNoConflito(lead: Pick<KommoLead, 'id' | '_embedded'>, idDoCartao: number | null, marcados: ReadonlySet<number> | undefined): boolean {
+  if (idDoCartao !== null) return false;
+  return (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO) || !!marcados?.has(lead.id);
 }
 
 // ── decisão 4: falta em RETORNO ou SESSÃO vira nota + tarefa ─────────────────────────────────────

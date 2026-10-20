@@ -90,6 +90,8 @@ async function main() {
   if (!funis) throw new Error('não achei o funil COMERCIAL');
   const agora = Math.floor(Date.now() / 1000);
   const ctx = { unit, kommo, unidadesDaConta, agora };
+  // a mesma trava do worker: cartão em CONFLITO_FRANQUIA espera a SDR escolher o paciente
+  const trava = await w.travaDoConflito(ctx);
 
   console.log(`\n${GRAVAR ? 'GRAVANDO' : 'SÓ CONFERINDO (nada é escrito)'} · ${slug} · ${new Date().toISOString()} · até ${max} avaliações a fundo por regra\n`);
   const totais = new Map<string, number>();
@@ -116,6 +118,10 @@ async function main() {
             somar(resultado, 'fica · o cartão não é candidato (data, situação, retomada ou idade)', String(lead.id));
             continue;
           }
+          if (trava.travado(lead)) {
+            somar(resultado, 'fica · travado por CONFLITO_FRANQUIA (a SDR escolhe o paciente)', String(lead.id));
+            continue;
+          }
           candidatos++;
           if (avaliados >= max) {
             somar(resultado, `sem avaliar · passou do --max=${max}`, String(lead.id));
@@ -132,6 +138,10 @@ async function main() {
                 : `fica · ${a.fica}`;
             somar(resultado, destino, `${lead.id}${d ? ` (${d.regra})` : ''}`);
             if (GRAVAR && (d || a.filaDeAlta)) {
+              if (await trava.travouAgora(lead)) {
+                console.log(`   ${lead.id}: travou por CONFLITO_FRANQUIA agora — não gravei`);
+                continue;
+              }
               if (await w.aplicarDoEstoque(ctx, funis, a, lead, false)) gravados++;
               await new Promise((r) => setTimeout(r, 400));
             }

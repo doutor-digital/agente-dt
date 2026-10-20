@@ -35,8 +35,10 @@ const casaRuleKey = (rk: string, f: unknown): boolean => {
   const o = (f ?? {}) as { startsWith?: string; not?: string };
   return (!o.startsWith || rk.startsWith(o.startsWith)) && (o.not === undefined || rk !== o.not);
 };
-const casaAlerta = (a: Alerta, w: { unitId?: string; leadId?: string; ruleKey?: unknown }) =>
-  (!w.unitId || a.unitId === w.unitId) && (!w.leadId || a.leadId === w.leadId) && (w.ruleKey === undefined || casaRuleKey(a.ruleKey, w.ruleKey));
+// `unitId` como o Prisma aceita: o id, ou `{ in: [...] }` (a leitura das marcas do conflito serve a mais de uma unidade)
+const casaUnidade = (id: string, f: string | { in: string[] } | undefined): boolean => !f || (typeof f === 'string' ? id === f : f.in.includes(id));
+const casaAlerta = (a: Alerta, w: { unitId?: string | { in: string[] }; leadId?: string; ruleKey?: unknown }) =>
+  casaUnidade(a.unitId, w.unitId) && (!w.leadId || a.leadId === w.leadId) && (w.ruleKey === undefined || casaRuleKey(a.ruleKey, w.ruleKey));
 
 function definir(nome: string, valor: unknown) {
   Object.defineProperty(prisma, nome, { value: valor, configurable: true });
@@ -46,7 +48,7 @@ definir('cardAlert', {
     alertas.find((a) => casaAlerta(a, where.unitId_leadId_ruleKey)) ?? null,
   findFirst: async ({ where }: { where: { unitId: string; leadId: string; ruleKey: unknown } }) =>
     [...alertas].reverse().find((a) => casaAlerta(a, where)) ?? null,
-  findMany: async ({ where }: { where: { unitId: string; leadId?: string; ruleKey?: unknown } }) => alertas.filter((a) => casaAlerta(a, where)),
+  findMany: async ({ where }: { where: { unitId: string | { in: string[] }; leadId?: string; ruleKey?: unknown } }) => alertas.filter((a) => casaAlerta(a, where)),
   upsert: async ({ where, create, update }: { where: { unitId_leadId_ruleKey: Alerta }; create: Alerta; update: Partial<Alerta> }) => {
     const atual = alertas.find((a) => casaAlerta(a, where.unitId_leadId_ruleKey));
     if (atual) Object.assign(atual, update);
