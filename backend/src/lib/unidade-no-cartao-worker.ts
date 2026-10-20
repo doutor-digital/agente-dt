@@ -48,6 +48,8 @@ const PAUSA_ENTRE_LOTES_MS = 500;
 const PERDIDO = 143;
 
 interface Estoque {
+  /** o modo em que esta passada começou: trocar de seco pra ligado recomeça, senão o simulado ficaria sem gravar */
+  seco: boolean;
   pagina: number;
   terminouEm: number;
   /** cartões já tratados nesta passada (gravados, simulados ou que falharam): a página relida pula eles */
@@ -170,8 +172,8 @@ async function varrerUnidade(slug: string, regra: ValorDaUnidade): Promise<void>
 
   const resumo: Resumo = { gravados: 0, trocados: 0, diverge: 0, semUnidade: 0, erros: 0 };
   let estoque = estoques.get(slug);
-  if (!estoque) {
-    estoque = { pagina: 1, terminouEm: 0, tratados: new Set() };
+  if (!estoque || estoque.seco !== seco) {
+    estoque = { seco, pagina: 1, terminouEm: 0, tratados: new Set() };
     estoques.set(slug, estoque);
   }
 
