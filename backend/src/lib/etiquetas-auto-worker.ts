@@ -204,6 +204,11 @@ async function decisoesDaUnidade(unit: Unit, kommo: KommoClient): Promise<Array<
  * unidade (endereço, Pix, link). Só o cartão com a «⌂ Unidade de atendimento» desta unidade recebe; o de outra
  * unidade ou sem unidade fica de fora — nem "pularia" no papel, porque não é desta varredura. `grupo` null (Kommo de
  * uma unidade só) = tudo segue como sempre.
+ *
+ * De propósito, a irmã sem Kommo próprio (Caxias) NÃO varre a conta da dona: a etiqueta tem o mesmo nome nas duas
+ * unidades e o gatilho dela no Kommo vale para a conta inteira — hoje ele chamaria o robô de Petrópolis. Caxias só
+ * passa a receber etiqueta quando os gatilhos tiverem a condição «⌂ Unidade de atendimento» e os robôs `caxias_`
+ * existirem (robôs por unidade, 20/10/2026); aí a varredura dela usa a conta da dona (`contaDoKommo`).
  */
 export function soDestaUnidade<T extends { lead: KommoLead }>(
   grupo: GrupoDoCrm | null,
