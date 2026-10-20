@@ -8,9 +8,10 @@
  * Sofia já faz: procura o paciente pelo telefone, cadastra se não existe, marca, e grava o vínculo.
  *
  * É o MESMO caminho das ferramentas `cadastrar_paciente`/`agendar_consulta` (agenda-tools.ts), com as
- * mesmas guardas — sobrenome, DDD, horário ainda livre, uma consulta por paciente, telefone que não
- * bate = recusa —, só que devolvendo DADO em vez de texto para a IA, e carimbando "Humano" em vez de
- * "I.A Sofia". Não é IA: nada aqui gasta token.
+ * mesmas guardas — DDD, horário ainda livre, uma consulta por paciente, telefone que não bate = recusa —,
+ * só que devolvendo DADO em vez de texto para a IA, e carimbando "Humano" em vez de "I.A Sofia". Não é IA:
+ * nada aqui gasta token. Uma diferença de propósito (20/10/2026): aqui a SDR pode salvar só com o primeiro
+ * nome (ver `validarNome`); a Sofia continua exigindo nome e sobrenome.
  *
  * A franquia continua sendo a verdade: a etapa do cartão é movida aqui por cortesia (a SDR acabou de
  * clicar e espera ver AGENDADO), mas é o sincronizador quem manda nos 15 minutos seguintes.
@@ -29,10 +30,13 @@ import { TraceRecorder } from '../agent/trace-recorder.js';
 import { consultaAtual, gradeDoDia, hojeLocal, telefoneDoLead, unidadeFresca } from '../agent/agenda-tools.js';
 import { travaDaUnidadeDeAtendimento, type CodigoTrava } from './trava-unidade-atendimento.js';
 import { contaDoKommo, unidadeDoCartao, unidadeParaOCartao } from './crm-compartilhado.js';
-import { motivoAmbiguo, pacienteExistente } from './paciente-existente.js';
+import { motivoAmbiguo, motivoInconclusivo, pacienteExistente } from './paciente-existente.js';
 
 export type CodigoRecusa =
   | 'sem_franquia'
+  /** nenhuma palavra com 2+ letras no nome */
+  | 'sem_nome'
+  /** só o primeiro nome e a franquia não deixou conferir se o paciente já existe (nome comum ou curto demais) */
   | 'sem_sobrenome'
   | 'telefone_incompleto'
   | 'telefone_nao_bate'
@@ -74,6 +78,8 @@ export interface Marcada {
   cartao: { movido: boolean; camposEmBranco: string[] };
   /** `false` quando a consulta ficou marcada na franquia mas o vínculo não gravou no banco — o sincronizador ainda casa pelo telefone, mas avise. */
   vinculoGravado: boolean;
+  /** Recado para a SDR (o mesmo vai na nota do cartão) — hoje só quando o paciente novo entrou sem sobrenome. */
+  aviso?: string;
 }
 
 export interface EntradaMarcacao {
@@ -93,13 +99,23 @@ export interface EntradaMarcacao {
 
 // ── validações puras (testáveis sem franquia nem Kommo) ────────────────────────────────────────
 
-/** Mesma régua da Sofia: nome e sobrenome com 2+ letras cada. Só o primeiro nome nunca casa depois. */
-export function validarNome(bruto: string): { ok: true; nome: string } | Recusa {
+/**
+ * Régua do WIDGET ("Marcar consulta" e "Só cadastrar"): basta o primeiro nome, com 2+ letras (pedido do João, 20/10/2026 —
+ * a SDR às vezes só sabe o primeiro nome). `semSobrenome` diz a quem chama que é o caso, para o aviso no cartão.
+ *
+ * NÃO é a régua da Sofia: a dela (nome E sobrenome) mora em agenda-tools.ts (`buscar_paciente`, `cadastrar_paciente`) e
+ * não mudou — ela não chama esta função. O que impede o cadastro em dobro com nome curto é a busca (`pacienteExistente`):
+ * quem decide é o telefone, e "só o primeiro nome" que a busca não consegue conferir é recusado.
+ */
+export function validarNome(bruto: string): { ok: true; nome: string; semSobrenome: boolean } | Recusa {
   const nome = String(bruto ?? '').replace(/\s+/g, ' ').trim();
-  const partes = nome.split(' ').filter((x) => x.length >= 2);
-  if (partes.length < 2) return { ok: false, codigo: 'sem_sobrenome', motivo: 'Falta o sobrenome. A franquia só acha o paciente com o nome completo.' };
-  return { ok: true, nome };
+  const partes = nome.split(' ').filter((x) => (x.match(/\p{L}/gu) ?? []).length >= 2);
+  if (partes.length === 0) return { ok: false, codigo: 'sem_nome', motivo: 'Falta o nome do paciente (pelo menos o primeiro nome).' };
+  return { ok: true, nome, semSobrenome: partes.length < 2 };
 }
+
+/** O recado que fica no cartão quando o paciente entra na franquia só com o primeiro nome. */
+export const AVISO_SEM_SOBRENOME = 'Salvo só com o primeiro nome — complete o sobrenome na franquia quando souber.';
 
 /** Telefone com DDD, normalizado como a franquia guarda (55 + DDD + número). */
 export function validarTelefone(bruto: string): { ok: true; fone: string } | Recusa {
@@ -213,7 +229,7 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
   if (!vt.ok) return recusar(vt);
   const vd = validarDataHora(entrada.data, entrada.hora, hojeLocal(unit));
   if (vd) return recusar(vd);
-  const { nome } = vn;
+  const { nome, semSobrenome } = vn;
   const { fone } = vt;
 
   // O telefone digitado tem de ser o do contato do cartão: senão a consulta vai parar no prontuário
@@ -269,12 +285,14 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
   let idClient: number | null = null;
   let novoCadastro = false;
   const vinculo = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: entrada.leadId } });
-  const achado = vinculo?.spineIdClient ? null : await pacienteExistente(unit, nome, tituloDoCartao, fone);
+  const achado = vinculo?.spineIdClient ? null : await pacienteExistente(unit, nome, tituloDoCartao, fone, { soPrimeiroNome: semSobrenome });
   if (vinculo?.spineIdClient) {
     idClient = vinculo.spineIdClient;
     await passo('TOOL_RESULT', `Paciente já ligado a este cartão: ${vinculo.nome ?? '?'} (idClient ${idClient})`);
   } else if (achado?.tipo === 'sem_resposta') {
     return recusar({ ok: false, codigo: 'cadastro_falhou', motivo: 'A franquia não respondeu a todas as buscas do paciente. Nada foi marcado — tente de novo em instantes.' });
+  } else if (achado?.tipo === 'inconclusivo') {
+    return recusar({ ok: false, codigo: 'sem_sobrenome', motivo: motivoInconclusivo('marcado') });
   } else if (achado?.tipo === 'ambiguo') {
     return recusar({ ok: false, codigo: 'paciente_ambiguo', motivo: motivoAmbiguo(achado.candidatos, 'marcado') });
   } else if (achado?.tipo === 'achou') {
@@ -301,6 +319,8 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
   // daqui para baixo — inclusive dentro dos closures dos carimbos, onde o TS não estreita `let`.
   if (idClient === null) return recusar({ ok: false, codigo: 'cadastro_falhou', motivo: 'Não consegui obter o cadastro do paciente. Nada foi marcado.' });
   const idPaciente: number = idClient;
+  // paciente que JÁ existia fica com o nome que a franquia tem; o aviso é só para o cadastro feito agora
+  const aviso = novoCadastro && semSobrenome ? AVISO_SEM_SOBRENOME : undefined;
 
   const marc = await SpineService.createSchedule(unit, { idClient: idPaciente, dateAttendanceLocal: `${entrada.data}T${entrada.hora}:00`, idCategory: entrada.idCategory ?? 1 });
   if (!marc.ok) {
@@ -348,7 +368,7 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
         await kommo.moveStage({ leadId: entrada.leadId, statusId: alvo.statusId, pipelineId: alvo.pipelineId });
         cartao.movido = true;
       }
-      await kommo.addLeadNote(entrada.leadId, `Consulta marcada pela recepção, pelo widget: ${entrada.data} ${entrada.hora}${novoCadastro ? ' (paciente cadastrado agora)' : ''}.`).catch(() => null);
+      await kommo.addLeadNote(entrada.leadId, `Consulta marcada pela recepção, pelo widget: ${entrada.data} ${entrada.hora}${novoCadastro ? ' (paciente cadastrado agora)' : ''}.${aviso ? ` ${aviso}` : ''}`).catch(() => null);
       await passo('KOMMO_ACTION', `Cartão carimbado${cartao.movido ? ' e movido para AGENDADO' : ''}${cartao.camposEmBranco.length ? ` — em branco: ${cartao.camposEmBranco.join(', ')}` : ''}`, cartao);
     } catch (err) {
       logger.warn({ err: String(err), unit: unit.slug, leadId: entrada.leadId }, 'widget marcar: falha ao carimbar o cartão (a consulta ESTÁ marcada na franquia)');
@@ -358,5 +378,5 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
 
   await recorder.finalize({ status: 'SUCCESS', latencyMs: Date.now() - t0, iaDecision: 'widget_marcar' }).catch(() => undefined);
   logger.info({ unit: unit.slug, leadId: entrada.leadId, idClient: idPaciente, idSchedule, novoCadastro }, 'widget marcar: consulta marcada pela recepção');
-  return { ok: true, idClient: idPaciente, idSchedule, novoCadastro, nome, data: entrada.data, hora: entrada.hora, cartao, vinculoGravado };
+  return { ok: true, idClient: idPaciente, idSchedule, novoCadastro, nome, data: entrada.data, hora: entrada.hora, cartao, vinculoGravado, ...(aviso ? { aviso } : {}) };
 }
