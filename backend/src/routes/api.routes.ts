@@ -181,6 +181,7 @@ import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, 
   widgetCadastrarHandler,
   widgetSugestaoMotivoHandler,
   widgetUsarMotivoHandler, widgetNumerosHandler, widgetPacienteHandler, widgetPingHandler, widgetSyncHandler } from '../controllers/widget-franquia.controller.js';
+import { widgetConflitoHandler, widgetEscolherPacienteHandler } from '../controllers/widget-conflito.controller.js';
 import { ponteCartaoHandler, pontePausarHandler, ponteResumoIaHandler, ponteRetomarHandler } from '../controllers/ponte.controller.js';
 import { ponteContadorHandler, ponteFilaHandler } from '../controllers/ponte-fila.controller.js';
 import { ponteCamposHandler, ponteGuiaHandler, ponteMoverHandler } from '../controllers/ponte-guia.controller.js';
@@ -308,6 +309,9 @@ apiRouter.delete('/public/pausa/:slug/lead/:leadId', publicLeadRetomarHandler);
 apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);
 apiRouter.get('/public/widget/:slug/sync', widgetSyncHandler);
 apiRouter.get('/public/widget/:slug/paciente', widgetPacienteHandler);
+// Dois pacientes da franquia no mesmo telefone (regra de 16/10): a SDR escolhe UMA vez qual é o do cartão.
+apiRouter.get('/public/widget/:slug/conflito', widgetConflitoHandler);
+apiRouter.post('/public/widget/:slug/conflito/escolher', widgetEscolherPacienteHandler);
 apiRouter.get('/public/widget/:slug/numeros', widgetNumerosHandler);
 // Extensão "Ponte" do WhatsApp Web: o cartão do Kommo da conversa aberta. Mesma chave por unidade, SÓ LEITURA.
 // Fica ACIMA do requireAuth global, como toda /public: abaixo dele a chave nunca seria lida.

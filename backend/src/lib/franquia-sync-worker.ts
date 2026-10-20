@@ -27,13 +27,24 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
-import { ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, tratamentoAberto, tratamentoFinalizado, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa } from './franquia-move.js';
+import {
+  ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, precisaHistoricoDoExPaciente, sessaoEsquecidaComTratamentoFinalizado,
+  tratamentoAberto, tratamentoFinalizado, type EntradaMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa,
+} from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
-import { automacaoLigada, estadoDaAutomacao } from './automacoes-estado.js';
+import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import {
+  PREFIXO_CONFLITO, TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, idsDoConflito, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
+  chaveDoRoboPos, tarefaDaSujeira,
+  escolherPacienteDoCartao, estadoCasamentoJornada, faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaDevolucao,
+  notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type ClienteCandidato, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
+} from './casamento-jornada.js';
+import { PARA_SEMPRE_MS, avisarCadastroDuplicado, escolhaDaSdr, gravarEscolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
+import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, pularCartao, type GrupoDoCrm } from './crm-compartilhado.js';
+import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, podeMexer, pularCartao, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 
 const SWEEP_MS = 15 * 60_000;
 const PRIMEIRA_MS = 90_000;
@@ -166,6 +177,10 @@ export interface ResumoSync {
   /** cartões recusados porque o `⚙ idClient` deles é de OUTRO paciente (só os ids dos cartões, sem dado pessoal) */
   conflitos?: number;
   exemplosConflito?: number[];
+  /** 16/10 (decisão 1): cartões travados porque dois pacientes da franquia usam o telefone deles (a SDR escolhe no widget) */
+  conflitosDeTelefone?: number;
+  /** 16/10 (decisão 4): faltas em retorno/sessão que viraram nota + tarefa nesta varredura */
+  faltasAvisadas?: number;
   /** Kommo dividido (Petrópolis + Caxias): cartões que a franquia DESTA unidade casou, mas que são da outra */
   deOutraUnidade?: number;
   /** Kommo dividido: cartões com «⌂ Unidade de atendimento» vazio — ninguém mexe, vão para a lista da SDR */
@@ -337,6 +352,21 @@ async function leadPorTelefone(kommo: KommoClient, telefone: string): Promise<nu
  * Exportada porque a carga de implantação (`franquia-carga.service`) precisa da MESMA resposta para
  * saber quem ainda não tem cartão — duplicar esse casamento seria criar cartão em cima de quem já tem.
  */
+/**
+ * O paciente que a varredura da agenda casou com este cartão nas últimas 6 h (`cacheLead`, o mesmo de `resolverPaciente`):
+ * só quando todo paciente que caiu no cartão é o MESMO idClient — dois pacientes no cartão é conflito, não atalho.
+ */
+function pacienteDaAgenda(unitId: string, leadId: number): number | null {
+  const agora = Date.now();
+  const ids = new Set<number>();
+  for (const [k, v] of cacheLead) {
+    if (v.leadId !== leadId || v.expiraEm <= agora || !k.startsWith(`${unitId}:`)) continue;
+    if (v.idsClient.length !== 1) return null;
+    ids.add(v.idsClient[0]);
+  }
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
 export async function resolverLead(unit: Unit, kommo: KommoClient, nome: string, idClient: number | null, idsSchedule: number[]): Promise<number | null> {
   return (await resolverPaciente(unit, kommo, nome, idClient, idsSchedule)).leadId;
 }
@@ -377,14 +407,20 @@ async function resolverPaciente(
   return out;
 }
 
-/** O `⚙ idClient (franquia)` gravado no cartão (pela carga de implantação ou pela marcação do widget), ou null. */
+/**
+ * O `⚙ idClient (franquia)` gravado no cartão (pela carga de implantação ou pela marcação do widget), ou null. Sem os
+ * campos da conta (o cadastro da Sofia não os carrega), vale o `field_name` que o Kommo manda em cada valor do cartão.
+ */
 export function idClientDoCartao(
   lead: Pick<KommoLead, 'custom_fields_values'>,
   campos: ReadonlyArray<readonly [string, { id: number; nome?: string }]>,
 ): number | null {
+  const valores = lead.custom_fields_values ?? [];
   const info = campoDaConta(campos, '⚙ idClient (franquia)') ?? campos.find(([k]) => k.includes('idclient'))?.[1];
-  if (!info) return null;
-  const v = Number((lead.custom_fields_values ?? []).find((f) => f.field_id === info.id)?.values?.[0]?.value);
+  const cf = info
+    ? valores.find((f) => f.field_id === info.id)
+    : campos.length === 0 ? valores.find((f) => normalizar(f.field_name).includes('idclient')) : undefined;
+  const v = Number(cf?.values?.[0]?.value);
   return Number.isInteger(v) && v > 0 ? v : null;
 }
 
@@ -442,24 +478,39 @@ export async function carregarFunis(kommo: KommoClient): Promise<Funis | null> {
   };
 }
 
-const cacheDetalhe = new Map<string, { treatments: TratamentoParaEtapa[]; schedules: SpineSchedule[]; expiraEm: number }>();
+/** O detalhe do paciente (`GET /clients/{id}`): histórico + nome e telefone, que o casamento de 16/10 confere. */
+interface DetalheDoPaciente {
+  treatments: TratamentoParaEtapa[];
+  schedules: SpineSchedule[];
+  name: string | null;
+  whatsapp: string | null;
+}
+const cacheDetalhe = new Map<string, DetalheDoPaciente & { expiraEm: number }>();
 const CACHE_DETALHE_MS = 60 * 60_000;
+
+/** O detalhe, do cache de 1 h ou da franquia. `null` = a franquia não tem esse idClient; erro da API LANÇA. */
+async function detalheDoPaciente(unit: Unit, idClient: number): Promise<DetalheDoPaciente | null> {
+  const k = `${unit.id}:${idClient}`;
+  const hit = cacheDetalhe.get(k);
+  if (hit && hit.expiraEm > Date.now()) return hit;
+  const r = await SpineService.getClient(unit, idClient);
+  if (!r.ok) throw new Error(`franquia clients/${idClient} falhou: ${r.error}`);
+  const c = r.data?.client;
+  if (!c) return null;
+  if (cacheDetalhe.size > 20_000) for (const [kk, v] of cacheDetalhe) if (v.expiraEm <= Date.now()) cacheDetalhe.delete(kk);
+  const out = { treatments: c.treatments, schedules: c.schedules, name: c.name, whatsapp: c.whatsapp, expiraEm: Date.now() + CACHE_DETALHE_MS };
+  cacheDetalhe.set(k, out);
+  return out;
+}
 
 /**
  * O `/treatments/search` só devolve o mês corrente e a agenda só D-3…D+45. Pra decidir
  * GANHO → EM TRATAMENTO e EM TRATAMENTO → ALTA precisamos do histórico do paciente,
  * que só o detalhe (`GET /clients/{id}`) traz. Uma chamada por paciente por hora.
  */
-export async function historicoDoPaciente(unit: Unit, idClient: number | null): Promise<{ treatments: TratamentoParaEtapa[]; schedules: SpineSchedule[] } | null> {
+export async function historicoDoPaciente(unit: Unit, idClient: number | null): Promise<DetalheDoPaciente | null> {
   if (!idClient) return null;
-  const k = `${unit.id}:${idClient}`;
-  const hit = cacheDetalhe.get(k);
-  if (hit && hit.expiraEm > Date.now()) return hit;
-  const r = await SpineService.getClient(unit, idClient);
-  if (!r.ok || !r.data?.client) return null;
-  const out = { treatments: r.data.client.treatments, schedules: r.data.client.schedules, expiraEm: Date.now() + CACHE_DETALHE_MS };
-  cacheDetalhe.set(k, out);
-  return out;
+  return detalheDoPaciente(unit, idClient).catch(() => null);
 }
 
 /** Todo "moveria" do seco (do move ou da revisão) conta aqui, pra o `simulados` do resumo nunca subestimar o volume. */
@@ -505,6 +556,8 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
     await kommo.moveStage({ leadId, statusId: alvo.statusId, pipelineId: alvo.pipelineId });
     resumo.movimentos++;
     logger.info({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil, motivo: mov.motivo, semRegua: mov.semRegua === true }, 'franquia-move: cartão movido');
+    // regra de 16/10: o ROBÔ pôs na ALTA (o PERDIDO é anotado no fecharComoPerdido)
+    await anotarRoboPos(unit, leadId, mov.para).catch(() => undefined);
   } catch (err) {
     resumo.erros++;
     logger.warn({ err, unit: unit.slug, leadId, para: mov.para }, 'franquia-move: falha ao mover');
@@ -548,7 +601,7 @@ export function termosDeBuscaDoNome(nome: string | null | undefined): string[] {
 }
 
 /** Entre cadastros DUPLICADOS do mesmo paciente (mesmo nome e telefone), fica o que tem a consulta mais recente. */
-async function escolherEntreDuplicados(unit: Unit, cands: Array<{ idClient: number | null }>): Promise<number | null> {
+export async function escolherEntreDuplicados(unit: Unit, cands: Array<{ idClient: number | null }>): Promise<number | null> {
   let melhor: { idClient: number; epoch: number } | null = null;
   for (const c of cands) {
     if (!c.idClient) continue;
@@ -608,20 +661,58 @@ export interface ExtraDaBusca {
   maxTermos?: number;
 }
 
-async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDaBusca): Promise<number | null> {
-  const termos = termosDeBuscaDoNome(nome).slice(0, extra?.maxTermos ?? MAX_TERMOS_DE_BUSCA);
-  if (termos.length === 0) return null;
+interface ResultadoDaBusca {
+  /** telefone do cartão em `chaveTelefone` ('' = desconhecido) */
+  fone: string;
+  /** o mesmo telefone como veio (o Kommo busca pelos dígitos) */
+  foneBruto: string | null;
+  alvos: Set<string>;
+  vistos: ClienteFranquia[];
+}
+
+/**
+ * O que a busca da franquia achou para um cartão, guardado pelo mesmo tempo do cache do casamento (6 h, mais uma folga
+ * para não vencer antes dele). Toda busca escreve; só as regras de 16/10 (e a simulação delas no "só no papel") leem — a
+ * regra antiga continua com o próprio cache, como sempre. Guarda só os candidatos que decidem (mesmo telefone ou nome
+ * exato do título): pouca memória, e a mesma resposta (achado 8 da revisão de 16/10: a simulação refazia até 10 buscas
+ * por cartão a cada 15 min).
+ */
+const cacheBusca = new Map<string, { em: number; r: ResultadoDaBusca }>();
+const CACHE_BUSCA_MS = CACHE_LEAD_MS + 15 * 60_000;
+/** Quem decide de verdade (regras ligadas, widget) aceita só a busca desta varredura; a simulação aceita a de até 6 h. */
+const MEMO_CURTO_MS = 10 * 60_000;
+
+/**
+ * Os candidatos da franquia para um cartão: busca por cada termo do título (a franquia NÃO busca por telefone) e para
+ * assim que UM candidato bate o telefone. `null` = não há o que buscar (sem termos, ou `soPorTelefone` sem telefone) —
+ * salvo `mesmoSemTermos`, que devolve a lista vazia com o telefone (as regras de 16/10 ainda olham os cartões irmãos).
+ */
+async function buscarCandidatos(
+  unit: Unit, nome: string | null,
+  extra?: ExtraDaBusca & { mesmoSemTermos?: boolean; memoMs?: number; soNomeCompleto?: boolean },
+): Promise<ResultadoDaBusca | null> {
+  // no cadastro (achado 1 da revisão de 16/10) só nome e sobrenome juntos: "Souza" sozinho traz a mãe da Ana Souza
+  const doNome = termosDeBuscaDoNome(nome).filter((t) => !extra?.soNomeCompleto || t.trim().includes(' '));
+  const termos = doNome.slice(0, extra?.maxTermos ?? MAX_TERMOS_DE_BUSCA);
+  if (termos.length === 0 && !extra?.mesmoSemTermos) return null;
   // telefone do contato do Kommo × whatsapp da franquia: casa mesmo quando a SDR escreveu o nome diferente
-  let fone = chaveTelefone(extra?.fone);
+  let foneBruto: string | null = extra?.fone ?? null;
+  let fone = chaveTelefone(foneBruto);
   if (!fone && extra?.kommo && extra.contatoId) {
     try {
-      fone = chaveTelefone(await extra.kommo.getContactPhone(extra.contatoId));
+      foneBruto = await extra.kommo.getContactPhone(extra.contatoId);
+      fone = chaveTelefone(foneBruto);
     } catch {
       fone = '';
     }
   }
   if (extra?.soPorTelefone && !fone) return null;
-  const alvos = new Set(termosDeBuscaDoNome(nome).map(normalizar));
+  const alvos = new Set(doNome.map(normalizar));
+  const chaveMemo = `${unit.id}|${termos.join('/')}|${fone}`;
+  if (extra?.memoMs) {
+    const m = cacheBusca.get(chaveMemo);
+    if (m && Date.now() - m.em < Math.min(extra.memoMs, CACHE_BUSCA_MS)) return { ...m.r, foneBruto: foneBruto ?? m.r.foneBruto };
+  }
   // acumula os candidatos de TODOS os termos: parar no 1º que devolve alguém escondia o paciente
   // quando o cartão tinha dois nomes (o João achou isso no "MARIA DA PENHA - ALEXANDRO SANT ANA")
   const vistos = new Map<number, ClienteFranquia>();
@@ -633,13 +724,117 @@ async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDa
     if (!r.ok || !r.data) throw new Error(`franquia clients/search falhou: ${r.ok ? 'sem dados' : r.error}`);
     for (const c of r.data.clients) if (c.idClient) vistos.set(c.idClient, c);
     // achou pelo telefone: é ele, não precisa gastar mais chamada
-    if (porFone().length === 1) return porFone()[0].idClient;
+    if (porFone().length === 1) break;
   }
-  const escolha = escolherPaciente([...vistos.values()], fone, alvos);
+  const r: ResultadoDaBusca = { fone, foneBruto, alvos, vistos: [...vistos.values()] };
+  const decidem = r.vistos.filter((c) => (fone && chaveTelefone(c.whatsapp) === fone) || alvos.has(nomeDaFranquia(c.name)));
+  if (cacheBusca.size > 5_000) for (const [k, v] of cacheBusca) if (Date.now() - v.em > CACHE_BUSCA_MS) cacheBusca.delete(k);
+  cacheBusca.set(chaveMemo, { em: Date.now(), r: { ...r, vistos: decidem } });
+  return r;
+}
+
+async function procurarPaciente(unit: Unit, nome: string | null, extra?: ExtraDaBusca): Promise<number | null> {
+  const b = await buscarCandidatos(unit, nome, extra);
+  if (!b) return null;
+  const escolha = escolherPaciente(b.vistos, b.fone, b.alvos);
   if (extra?.soPorTelefone && escolha.tipo === 'achou' && escolha.por !== 'telefone') return null;
   if (escolha.tipo === 'achou') return escolha.idClient;
   if (escolha.tipo === 'desempatar') return escolherEntreDuplicados(unit, escolha.candidatos);
   return null;
+}
+
+/**
+ * Os pacientes dos OUTROS cartões do Kommo com o mesmo telefone — pelo `⚙ idClient` do cartão irmão ou pelo vínculo que a
+ * Sofia gravou nele —, com o TÍTULO do cartão irmão como nome (é com ele que `escolherPacienteDoCartao` confere se é a
+ * mesma pessoa; sem chamada à franquia). Num Kommo dividido (Petrópolis + Caxias), só os cartões desta unidade. A busca do
+ * Kommo é textual (pode trazer quem só tem os dígitos no texto), então o telefone do contato de cada irmão é conferido
+ * antes de valer (no máximo 3 conferências por cartão).
+ */
+async function irmaosPorTelefone(
+  unit: Unit, kommo: KommoClient, leadId: number, foneBruto: string,
+  campos: ReadonlyArray<readonly [string, { id: number; nome?: string }]>,
+): Promise<ClienteCandidato[]> {
+  const chave = chaveTelefone(foneBruto);
+  if (!chave) return [];
+  const grupo = await grupoDaUnidade(unit.id);
+  const irmaos = (await kommo.listLeadsPorTelefone(foneBruto).catch(() => [] as KommoLead[]))
+    .filter((l) => l.id !== leadId)
+    // achado 2: o cartão de Caxias não é irmão do de Petrópolis, mesmo com o mesmo telefone
+    .filter((l) => podeMexer(veredictoDoCartao(grupo, unit.id, grupo ? valorDaUnidadeNoCartao(l) : null)))
+    .slice(0, 10);
+  if (irmaos.length === 0) return [];
+  const porCartao = new Map<number, Set<number>>();
+  const anotar = (lid: number, id: number | null | undefined) => {
+    if (!id) return;
+    const set = porCartao.get(lid) ?? new Set<number>();
+    set.add(id);
+    porCartao.set(lid, set);
+  };
+  for (const l of irmaos) anotar(l.id, idClientDoCartao(l, campos));
+  const links = await prisma.spineLeadLink.findMany({
+    where: { unitId: unit.id, kommoLeadId: { in: irmaos.map((l) => l.id) }, spineIdClient: { not: null } },
+    select: { kommoLeadId: true, spineIdClient: true },
+  }).catch(() => [] as Array<{ kommoLeadId: number; spineIdClient: number | null }>);
+  for (const k of links) anotar(k.kommoLeadId, k.spineIdClient);
+  const out: ClienteCandidato[] = [];
+  let conferidos = 0;
+  for (const [lid, set] of porCartao) {
+    if (conferidos++ >= 3) break;
+    const irmao = irmaos.find((l) => l.id === lid);
+    const contato = irmao?._embedded?.contacts?.[0]?.id;
+    if (!contato) continue;
+    const f = await kommo.getContactPhone(contato).catch(() => null);
+    if (f && chaveTelefone(f) === chave) for (const id of set) out.push({ idClient: id, name: irmao?.name ?? null, whatsapp: f });
+  }
+  return out;
+}
+
+export interface ExtraDoCasamento extends ExtraDaBusca {
+  /** `⚙ idClient (franquia)` do cartão — a SDR escolheu, a carga gravou ou o widget marcou. */
+  idDoCartao?: number | null;
+  /** Campos da conta, para ler o `⚙ idClient` dos cartões irmãos. */
+  campos?: ReadonlyArray<readonly [string, { id: number; nome?: string }]>;
+  /**
+   * `cadastro` (a Sofia vai CRIAR paciente ou lead na franquia): o nome tem de bater em todo passo — o ⚙/vínculo e o
+   * telefone de outra pessoa viram conflito (achado 1 da revisão de 16/10). `robo` (padrão): a regra do sincronizador.
+   */
+  modo?: 'robo' | 'cadastro';
+  /** Até que idade a busca guardada vale (padrão: 10 min, a da varredura). A simulação do "só no papel" aceita 6 h. */
+  memoMs?: number;
+}
+
+/**
+ * O casamento das regras de 16/10/2026 (decisão 3): **idClient → telefone → nome**. Devolve a escolha inteira — o
+ * conflito (dois pacientes diferentes no mesmo telefone, decisão 1) é resposta, não erro: quem chama marca o cartão.
+ * Erro da API da franquia lança, como na regra antiga (ninguém vai pra CONFERIR por queda da franquia).
+ */
+export async function casarPacienteDoCartao(unit: Unit, leadId: number, nome: string | null, extra: ExtraDoCasamento = {}): Promise<EscolhaDoPaciente> {
+  const cadastro = extra.modo === 'cadastro';
+  // 1. idClient: o do cartão; senão o vínculo da Sofia
+  let id = extra.idDoCartao && extra.idDoCartao > 0 ? extra.idDoCartao : null;
+  if (!id) {
+    const link = await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, orderBy: { updatedAt: 'desc' } });
+    id = link?.spineIdClient ?? null;
+  }
+  // decisão 3 do João: o idClient que o cartão já sabe (⚙ ou o vínculo que a Sofia/o widget gravou ao marcar) vem
+  // primeiro, sem olhar o telefone — o conflito de telefone (decisão 1) é para o cartão que ainda não diz quem é
+  if (id && !cadastro) return { tipo: 'achou', idClient: id, por: 'idClient' };
+  // achado 8: o paciente que a varredura da agenda já casou com este cartão (pelo telefone dele) dispensa a busca
+  const daAgenda = cadastro ? null : pacienteDaAgenda(unit.id, leadId);
+  if (daAgenda) return { tipo: 'achou', idClient: daAgenda, por: 'telefone' };
+  if (id) {
+    // cadastro: o paciente do cartão só vale se o nome bater (1 GET por paciente por hora, o mesmo cache do histórico)
+    const doCartao = await detalheDoPaciente(unit, id);
+    if (doCartao) return escolherPacienteDoCartao({ idDoCartao: id, nomeDoCartao: doCartao.name, candidatos: [], fone: '', alvos: new Set(), nome, modo: 'cadastro' });
+  }
+  // 2. telefone (franquia pela busca do título; cartões irmãos quando a franquia não trouxe ninguém com o telefone) e 3. nome
+  const b = await buscarCandidatos(unit, nome, { ...extra, mesmoSemTermos: true, memoMs: cadastro ? 0 : (extra.memoMs ?? MEMO_CURTO_MS), soNomeCompleto: cadastro });
+  if (!b) return { tipo: 'nenhum', motivo: 'sem candidatos' };
+  const franquiaTemOTelefone = !!b.fone && b.vistos.some((c) => chaveTelefone(c.whatsapp) === b.fone);
+  const irmaos = !franquiaTemOTelefone && b.foneBruto && extra.kommo
+    ? await irmaosPorTelefone(unit, extra.kommo, leadId, b.foneBruto, extra.campos ?? [])
+    : [];
+  return escolherPacienteDoCartao({ idDoCartao: null, candidatos: b.vistos, irmaos, fone: b.fone, alvos: b.alvos, nome, modo: extra.modo ?? 'robo' });
 }
 
 /**
@@ -672,7 +867,7 @@ export function temConsultaFutura(schedules: SpineSchedule[], agoraEpoch: number
  * cartão (cobre quem foi atendido antes da janela D-3) e, quando conhece o paciente na franquia,
  * confere o histórico: retorno futuro marcado segura o cartão, mesmo além dos 45 dias da agenda.
  */
-async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, mapa: MapaCampos, resumo: ResumoSync, extra: { grupo?: GrupoDoCrm | null; seco?: boolean } = {}): Promise<void> {
+async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, mapa: MapaCampos, resumo: ResumoSync, extra: { grupo?: GrupoDoCrm | null; seco?: boolean; campos?: CampoDaConta[] } = {}): Promise<void> {
   const compareceu = funis.idDe('COMERCIAL', ETAPA.COMPARECEU);
   if (!compareceu) return;
   const horas = horasAteNegociacao();
@@ -689,7 +884,8 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
       if ((agora - dataConsulta) / 3600 < horas) continue;
       if (pularCartao(extra.grupo ?? null, unit.id, lead, resumo)) continue;
       try {
-        const idClient = await idClientDoLead(unit, lead.id, lead.name ?? null);
+        const doCartao = estadoCasamentoJornada(unit.slug) === 'ligado' ? idClientDoCartao(lead, extra.campos ?? []) : null;
+        const idClient = doCartao ?? (await idClientDoLead(unit, lead.id, lead.name ?? null));
         const hist = await historicoDoPaciente(unit, idClient);
         // retorno marcado OU tratamento ainda aberto (pendente/em andamento) segura; cancelado e finalizado não (achado do Codex, 18/09)
         if (hist && (temConsultaFutura(hist.schedules, agora) || hist.treatments.some(tratamentoAberto))) continue;
@@ -735,6 +931,13 @@ interface CtxSync {
   automacaoDoSeco?: 'franquia-sync' | 'franquia-revisao';
   /** Kommo dividido com outra unidade (Petrópolis + Caxias): só mexe nos cartões do rótulo desta. `null` = Kommo só dela. */
   grupo?: GrupoDoCrm | null;
+  /** Chave `casamento-jornada` (regras de 16/10/2026) nesta unidade. Ausente = desligado (o comportamento de sempre). */
+  jornada?: Estado;
+  /**
+   * Cartões com conflito de telefone GUARDADO no banco (marca `conflito-franquia:`): é esta marca que trava o cartão, não a
+   * etiqueta — a etiqueta é só o aviso para a SDR e pode não ter sido gravada (Kommo fora). Lida 1× por varredura.
+   */
+  conflitosGuardados?: Set<number>;
 }
 
 function revisaoSeca(raw: string | undefined = process.env.FRANQUIA_REVISAO_SECO): boolean {
@@ -748,6 +951,8 @@ interface PacienteDoCartao {
   idClient: number | null;
   consultas: SpineSchedule[];
   tratamento: SpineTreatment | null;
+  /** Quem a varredura casou com o cartão (`resolverPaciente`), quando se sabe — dispensa buscar de novo. */
+  idsClient?: number[];
 }
 
 /**
@@ -1143,7 +1348,7 @@ async function espelharCamposSdr(
 }
 
 /** Etiqueta que a SDR filtra no Kommo: o cartão tem um paciente no `⚙ idClient` e a franquia casou OUTRO com ele. */
-export const TAG_CONFLITO = 'CONFLITO_FRANQUIA';
+export { TAG_CONFLITO };
 
 function notaConflito(idDoCartao: number, idsDoPaciente: number[]): string {
   return `⚠ Conflito de cadastro: este cartão é do paciente idClient ${idDoCartao} da franquia (campo ⚙ idClient), mas outro paciente da franquia (idClient ${idsDoPaciente.join('/')}) casou com ele — em geral, por dividir o mesmo WhatsApp. O sincronizador NÃO grava os dados do outro paciente aqui. Se o cartão é mesmo do ${idDoCartao}, nada a fazer neste cartão (o outro paciente precisa do cartão dele). Se é do outro, corrija o ⚙ idClient. A etiqueta ${TAG_CONFLITO} volta sozinha enquanto o conflito existir.`;
@@ -1164,6 +1369,8 @@ async function recusarOutroPaciente(ctx: CtxSync, leadId: number, lead: KommoLea
   if (!jaRegistrou(`conflito:${unit.slug}:${leadId}:${idsDoPaciente.join(',')}`)) {
     logger.warn({ unit: unit.slug, leadId, idClientDoCartao: idDoCartao, idClientDaFranquia: idsDoPaciente }, 'franquia-sync: conflito — o cartão é de outro paciente da franquia; não gravei');
   }
+  // 16/10 (decisão 1): a SDR já escolheu este paciente no widget → recusa o outro calado, sem etiqueta nem nota de novo
+  if (ctx.jornada === 'ligado' && (await escolhaDaSdr(unit.id, leadId)) === idDoCartao) return true;
   const jaMarcado = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO);
   if (jaMarcado) return true;
   if (ctx.seco) {
@@ -1179,6 +1386,265 @@ async function recusarOutroPaciente(ctx: CtxSync, leadId: number, lead: KommoLea
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: não consegui marcar o conflito no cartão');
   }
   return true;
+}
+
+/**
+ * 16/10 (decisão 1): dois pacientes DIFERENTES da franquia no telefone deste cartão (e o cartão ainda não diz quem é,
+ * pelo `⚙ idClient`). Nada é gravado; a etiqueta CONFLITO_FRANQUIA e uma nota (só na primeira vez deste conflito — tirar a
+ * etiqueta à mão não traz a nota de novo) pedem à SDR que escolha no widget; os candidatos ficam guardados para o widget
+ * oferecer. Sem dois idClient conhecidos não há o que escolher: não etiqueta (achado 7 da revisão), só não grava. Log e
+ * resumo só com ids.
+ */
+async function marcarConflitoDeTelefone(ctx: CtxSync, leadId: number, lead: KommoLead, pacientes: Array<{ idClient: number | null; nome?: string | null }>): Promise<void> {
+  const { unit, kommo, resumo } = ctx;
+  resumo.conflitosDeTelefone = (resumo.conflitosDeTelefone ?? 0) + 1;
+  const ids = [...new Set(pacientes.map((p) => p.idClient).filter((x): x is number => !!x))];
+  if (!jaRegistrou(`conflito-telefone:${unit.slug}:${leadId}:${ids.join(',')}`)) {
+    logger.warn({ unit: unit.slug, leadId, idsClient: ids, pacientes: pacientes.length }, 'franquia-sync: dois pacientes no mesmo telefone — cartão travado até a SDR escolher');
+  }
+  // o widget só oferece quem tem idClient: com menos de dois, a etiqueta nunca sairia (achado 7)
+  if (ids.length < 2) return;
+  if (ctx.seco || ctx.jornada !== 'ligado') {
+    registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'etiquetaria', alvo: TAG_CONFLITO, valor: ids.join(', '), motivo: `${pacientes.length} pacientes da franquia no mesmo telefone` });
+    return;
+  }
+  // a trava é a marca no banco (o widget também lê dela os candidatos); etiqueta e nota são o aviso, cada um na sua tentativa
+  await guardarCandidatos(unit.id, leadId, ids);
+  ctx.conflitosGuardados?.add(leadId);
+  if (!(lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO)) {
+    try {
+      await kommo.addTag({ leadId, tags: [TAG_CONFLITO] });
+      lead._embedded = { ...lead._embedded, tags: [...(lead._embedded?.tags ?? []), { id: 0, name: TAG_CONFLITO }] };
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: não consegui pôr a etiqueta do conflito de telefone (o cartão segue travado pela marca)');
+    }
+  }
+  if (await avisoRecente(unit.id, leadId, CHAVE_NOTA_CONFLITO, PARA_SEMPRE_MS)) return;
+  try {
+    await kommo.addLeadNote(leadId, notaConflitoDeTelefone(pacientes));
+    await marcarAviso(unit.id, leadId, CHAVE_NOTA_CONFLITO);
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: não consegui deixar a nota do conflito de telefone — tento na próxima');
+  }
+}
+
+/** Marca de "a nota do conflito de telefone já foi para este cartão" (uma vez por conflito; a faxina apaga com ele). */
+const CHAVE_NOTA_CONFLITO = 'conflito-nota';
+
+/** Os cartões desta unidade com conflito de telefone guardado (1 consulta ao banco). Falha de banco = nenhum. */
+async function cartoesComConflitoGuardado(unitId: string): Promise<Set<number>> {
+  const linhas = await prisma.cardAlert
+    .findMany({ where: { unitId, ruleKey: { startsWith: PREFIXO_CONFLITO } }, select: { leadId: true } })
+    .catch(() => [] as Array<{ leadId: string }>);
+  return new Set(linhas.map((l) => Number(l.leadId)).filter((n) => Number.isInteger(n) && n > 0));
+}
+
+/** De quanto em quanto tempo a faxina dos conflitos roda por unidade (lê o Kommo e a franquia de cada cartão marcado). */
+const FAXINA_CONFLITOS_MS = 60 * 60_000;
+const FAXINA_CONFLITOS_MAX = 30;
+const ultimaFaxina = new Map<string, number>();
+
+/**
+ * Achado 7 da revisão de 16/10: a etiqueta CONFLITO_FRANQUIA que a regra de 16/10 pôs (o cartão tem a marca
+ * `conflito-franquia:` em card_alert) sai quando o conflito some — antes ela ficava para sempre e o cartão nunca mais era
+ * atualizado. Uma vez por hora por unidade, no máximo 30 cartões:
+ *  - chave desligada ou "só no papel": a regra não vale, então a marca dela sai (a etiqueta, se o cartão não tem ⚙ — com
+ *    ⚙, uma etiqueta que esteja lá é do conflito antigo, "⚙ de outro paciente", e fica);
+ *  - ligada e o cartão já tem ⚙ idClient (a SDR escolheu no widget ou gravou à mão): é a escolha — tira a etiqueta e anota
+ *    a escolha (o outro paciente passa a ser recusado calado);
+ *  - ligada e sem ⚙: confere na franquia (cache de 1 h) se ainda há dois pacientes com o telefone do cartão; se não há,
+ *    tira a etiqueta e a marca, e o cartão volta a ser atualizado.
+ * O sincronizador inteiro em "só no papel" só registra o que tiraria.
+ */
+async function faxinarConflitos(ctx: CtxSync, marcadosAgora: ReadonlySet<number> = new Set()): Promise<void> {
+  const { unit, kommo } = ctx;
+  if (Date.now() - (ultimaFaxina.get(unit.id) ?? 0) < FAXINA_CONFLITOS_MS) return;
+  ultimaFaxina.set(unit.id, Date.now());
+  const linhas = await prisma.cardAlert
+    .findMany({ where: { unitId: unit.id, ruleKey: { startsWith: PREFIXO_CONFLITO } }, select: { leadId: true, ruleKey: true } })
+    .catch(() => [] as Array<{ leadId: string; ruleKey: string }>);
+  for (const l of linhas.slice(0, FAXINA_CONFLITOS_MAX)) {
+    const leadId = Number(l.leadId);
+    // o conflito que esta varredura acabou de ver não é conferido de novo agora
+    if (!Number.isInteger(leadId) || leadId <= 0 || marcadosAgora.has(leadId)) continue;
+    try {
+      const lead = await kommo.getLead(leadId);
+      const temEtiqueta = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO);
+      const idDoCartao = idClientDoCartao(lead, ctx.camposPorNome ?? []);
+      let motivo: string | null = null;
+      let tirarEtiqueta = temEtiqueta && idDoCartao === null;
+      if (ctx.jornada !== 'ligado') {
+        motivo = 'a regra de 16/10 não está ligada nesta unidade';
+      } else if (idDoCartao !== null) {
+        motivo = `o cartão já diz o paciente (⚙ idClient ${idDoCartao})`;
+        tirarEtiqueta = temEtiqueta;
+      } else {
+        const contato = lead._embedded?.contacts?.[0]?.id;
+        const fone = contato ? chaveTelefone(await kommo.getContactPhone(contato)) : '';
+        if (!fone) continue;
+        let noTelefone = 0;
+        for (const id of idsDoConflito(l.ruleKey)) {
+          const d = await detalheDoPaciente(unit, id);
+          if (d && chaveTelefone(d.whatsapp) === fone) noTelefone++;
+        }
+        if (noTelefone < 2) motivo = 'os pacientes não dividem mais o telefone do cartão';
+      }
+      if (!motivo) continue;
+      if (ctx.seco) {
+        registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'gravaria', alvo: `etiqueta ${TAG_CONFLITO}`, valor: '(tirar)', motivo });
+        continue;
+      }
+      if (tirarEtiqueta) await kommo.removeTag(leadId, TAG_CONFLITO);
+      if (ctx.jornada === 'ligado' && idDoCartao !== null) await gravarEscolhaDaSdr(unit.id, leadId, idDoCartao);
+      await prisma.cardAlert.deleteMany({ where: { unitId: unit.id, leadId: String(leadId), ruleKey: { startsWith: PREFIXO_CONFLITO } } });
+      await prisma.cardAlert.deleteMany({ where: { unitId: unit.id, leadId: String(leadId), ruleKey: CHAVE_NOTA_CONFLITO } });
+      ctx.conflitosGuardados?.delete(leadId);
+      logger.info({ unit: unit.slug, leadId, tirouEtiqueta: tirarEtiqueta, motivo }, 'casamento-jornada: conflito de telefone resolvido — marca removida');
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: faxina do conflito falhou neste cartão — tento na próxima');
+    }
+  }
+}
+
+/**
+ * "Só no papel" das regras de 16/10 na revisão: o robô agiu pelo casamento antigo; aqui ele registra na tela quando o
+ * casamento novo (idClient → telefone → nome) daria outro paciente, ou travaria o cartão por conflito.
+ */
+/** Cartão já simulado (casamento de 16/10, "só no papel"): não simula de novo por 6 h — cada simulação custa buscas. */
+const simuladoEm = new Map<string, number>();
+
+async function simularCasamento(ctx: CtxSync, lead: KommoLead, idDoCartao: number | null, antigo: number | null, travado: boolean): Promise<void> {
+  const { unit, kommo } = ctx;
+  const chave = `${unit.id}:${lead.id}`;
+  if (Date.now() - (simuladoEm.get(chave) ?? 0) < CACHE_LEAD_MS) return;
+  if (simuladoEm.size > 20_000) for (const [k, em] of simuladoEm) if (Date.now() - em >= CACHE_LEAD_MS) simuladoEm.delete(k);
+  simuladoEm.set(chave, Date.now());
+  if (travado) {
+    registrarSimulacao(unit, AUTOMACAO_1610, { leadId: lead.id, acao: 'pularia', alvo: 'revisão do cartão', motivo: `cartão com ${TAG_CONFLITO} e sem ⚙ idClient: espera a SDR escolher` });
+    return;
+  }
+  try {
+    const novo = await casarPacienteDoCartao(unit, lead.id, lead.name ?? null, { kommo, contatoId: lead._embedded?.contacts?.[0]?.id ?? null, idDoCartao, campos: ctx.camposPorNome ?? [], memoMs: CACHE_BUSCA_MS });
+    if (novo.tipo === 'conflito') {
+      registrarSimulacao(unit, AUTOMACAO_1610, { leadId: lead.id, acao: 'etiquetaria', alvo: TAG_CONFLITO, valor: novo.candidatos.map((c) => c.idClient).join(', '), motivo: 'dois pacientes da franquia no mesmo telefone (hoje o robô escolhe sozinho)' });
+      return;
+    }
+    const id = novo.tipo === 'achou' ? novo.idClient : null;
+    if (novo.tipo === 'achou' && id !== antigo) {
+      registrarSimulacao(unit, AUTOMACAO_1610, { leadId: lead.id, acao: 'diverge', alvo: 'paciente da franquia', valor: id, noCartao: antigo, motivo: `regras de 16/10 casariam por ${novo.por}${antigo ? '' : ' (hoje o cartão iria pra CONFERIR)'}` });
+    }
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'casamento-jornada [seco]: não consegui simular o casamento');
+  }
+}
+
+/** Falta em retorno/sessão já virou tarefa: não repete nunca para a mesma consulta (a marca vive em `card_alert`). */
+const FALTA_JANELA_MS = 365 * 24 * 3600_000;
+
+/**
+ * 16/10 (decisão 4): falta em RETORNO ou SESSÃO não move o cartão — vira nota + tarefa para a SDR ligar e remarcar.
+ * Uma vez por consulta. Em "só no papel" (desta chave, ou do sincronizador) só registra o que avisaria.
+ */
+async function avisarFaltas(ctx: CtxSync, leadId: number, lead: KommoLead, etapa: string, agendamentos: SpineSchedule[]): Promise<void> {
+  const { unit, kommo, resumo, agoraEpoch } = ctx;
+  if (!ctx.jornada || ctx.jornada === 'desligado') return;
+  for (const f of faltasParaAvisar({ agendamentos, etapa, agoraEpoch })) {
+    const chave = chaveDaFalta(f.s.idSchedule as number);
+    if (ctx.jornada === 'seco' || ctx.seco) {
+      registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'alertaria', alvo: chave, deEtapa: etapa, motivo: tarefaDaFalta(f) });
+      continue;
+    }
+    if (await avisoRecente(unit.id, leadId, chave, FALTA_JANELA_MS)) continue;
+    try {
+      await kommo.createTask({ leadId, text: tarefaDaFalta(f), completeAt: Math.floor(Date.now() / 1000) + 3600, responsibleUserId: lead.responsible_user_id });
+      await marcarAviso(unit.id, leadId, chave);
+      await kommo.addLeadNote(leadId, notaDaFalta(f)).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: nota da falta não foi'));
+      resumo.faltasAvisadas = (resumo.faltasAvisadas ?? 0) + 1;
+      logger.info({ unit: unit.slug, leadId, idSchedule: f.s.idSchedule, tipo: f.tipo }, 'casamento-jornada: falta em retorno/sessão virou tarefa (etapa não mudou)');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: não consegui criar a tarefa da falta');
+    }
+  }
+}
+
+/**
+ * 16/10 (achado 4 da revisão): o tratamento está FINALIZADO na franquia, nenhum em andamento, e ainda há sessão marcada pra
+ * frente. Antes isso tirava o cartão da ALTA (EM TRATAMENTO) e, passada a data, devolvia à ALTA — a régua de parabéns
+ * disparava de novo. Agora a máquina não move por isso (`planejarMovimento` exige tratamento em andamento) e a SDR recebe
+ * UMA tarefa por sessão para a clínica desmarcar a sessão ou reabrir o tratamento. Em "só no papel", só registra.
+ */
+async function avisarSujeira(ctx: CtxSync, leadId: number, lead: KommoLead, atual: EtapaAtual, agendamentos: SpineSchedule[], tratamentos: TratamentoParaEtapa[]): Promise<void> {
+  const { unit, kommo, resumo, agoraEpoch } = ctx;
+  if (!ctx.jornada || ctx.jornada === 'desligado' || atual.funil !== 'TRATAMENTO') return;
+  if (normalizarNome(atual.status) === normalizarNome(ETAPA.CANCELADO)) return;
+  const s = sessaoEsquecidaComTratamentoFinalizado({ agendamentos, tratamentos, agoraEpoch });
+  if (!s) return;
+  const chave = chaveDaSujeira(s.idSchedule ?? s.dateAttendanceUtc ?? '?');
+  if (ctx.jornada === 'seco' || ctx.seco) {
+    registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'alertaria', alvo: chave, deEtapa: atual.status, motivo: tarefaDaSujeira(s) });
+    return;
+  }
+  if (await avisoRecente(unit.id, leadId, chave, PARA_SEMPRE_MS)) return;
+  try {
+    await kommo.createTask({ leadId, text: tarefaDaSujeira(s), completeAt: Math.floor(Date.now() / 1000) + 3600, responsibleUserId: lead.responsible_user_id });
+    await marcarAviso(unit.id, leadId, chave);
+    logger.info({ unit: unit.slug, leadId, idSchedule: s.idSchedule }, 'casamento-jornada: tratamento finalizado com sessão marcada — tarefa aberta, cartão não move');
+  } catch (err) {
+    resumo.erros++;
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: não consegui abrir a tarefa da sessão esquecida');
+  }
+}
+
+/**
+ * 16/10 (decisão 7, resposta do João): "a franquia manda" tira o cartão de PERDIDO ou ALTA — mas UMA vez por fato. Se alguém
+ * puser o cartão de volta com o mesmo fato de pé na franquia (a mesma consulta marcada, a sessão marcada), o robô deixa onde
+ * a pessoa pôs e abre UMA tarefa para conferir: não repete o movimento e não dispara de novo os robôs da etapa.
+ *
+ * O "já tirei uma vez" mora na tabela `card_alert` (unit_id, lead_id, rule_key = `franquia-manda:<ETAPA>:<fato>`), a mesma
+ * do dedupe de avisos — durável, sobrevive a deploy e a troca de processo. A marca só é gravada depois que o Kommo aceitou
+ * o movimento; a da tarefa (`franquia-manda-tarefa:…`), depois que a tarefa foi criada.
+ */
+async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead, atual: EtapaAtual, mov: Movimento): Promise<void> {
+  const { unit, kommo, funis, resumo } = ctx;
+  if (!funis || !mov.gatilho) return;
+  // move em seco: o aplicarMovimento só registra "moveria" — nada a marcar
+  if (estadoDoMove(unit.slug) === 'seco') {
+    await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+    return;
+  }
+  const etapa: EtapaQueAFranquiaReabre = normalizarNome(atual.status) === normalizarNome(ETAPA.ALTA) ? 'ALTA' : 'PERDIDO';
+  const chave = chaveDaDevolucao(etapa, mov.gatilho);
+  const devolvidoEm = await marcadoEm(unit.id, leadId, chave);
+  if (devolvidoEm && Date.now() - devolvidoEm.getTime() < PARA_SEMPRE_MS) {
+    // achado 3 da revisão de 16/10: se quem pôs de volta foi um ROBÔ (depois da devolução), não é a equipe insistindo —
+    // não abre a tarefa "a equipe pôs de volta" e também não insiste (dois robôs não ficam se empurrando)
+    const roboPosEm = await marcadoEm(unit.id, leadId, chaveDoRoboPos(etapa));
+    if (roboPosEm && roboPosEm.getTime() > devolvidoEm.getTime()) {
+      if (!jaRegistrou(`robo-pos:${unit.slug}:${leadId}:${chave}`)) {
+        logger.info({ unit: unit.slug, leadId, etapa, gatilho: mov.gatilho }, 'franquia-move: um robô pôs o cartão de volta — não insisto nem abro tarefa');
+      }
+      return;
+    }
+    const chaveTarefa = chaveDaTarefaDeDevolucao(etapa, mov.gatilho);
+    if (await avisoRecente(unit.id, leadId, chaveTarefa, PARA_SEMPRE_MS)) return;
+    try {
+      await kommo.createTask({ leadId, text: tarefaDaDevolucao(etapa, mov.gatilho), completeAt: Math.floor(Date.now() / 1000) + 3600, responsibleUserId: lead.responsible_user_id });
+      await marcarAviso(unit.id, leadId, chaveTarefa);
+      logger.info({ unit: unit.slug, leadId, etapa, gatilho: mov.gatilho }, 'franquia-move: a equipe pôs o cartão de volta — não insisto, abri tarefa para conferir');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: não consegui abrir a tarefa de conferir');
+    }
+    return;
+  }
+  const antes = resumo.movimentos;
+  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+  if (resumo.movimentos === antes) return; // o Kommo recusou: sem marca, tenta de novo na próxima varredura
+  await marcarAviso(unit.id, leadId, chave);
+  await kommo.addLeadNote(leadId, notaDaDevolucao(etapa, mov.para, mov.gatilho)).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: nota da devolução não foi'),
+  );
 }
 
 /**
@@ -1248,19 +1714,58 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   if (precisaHistorico) {
     // a agenda não traz idClient e o /treatments/search só lista tratamento em andamento:
     // quem finalizou some da lista — sem isto a ALTA nunca dispararia
-    const hist = historico ?? (await historicoDoPaciente(unit, p.idClient ?? (await idClientDoLead(unit, leadId, p.nome))));
+    // 16/10: com a chave ligada, o `⚙ idClient` do cartão vem antes de qualquer busca (decisão 3)
+    // e o paciente que a agenda acabou de casar com o cartão também (achado 8: sem buscar de novo pelo título)
+    const doCartao = ctx.jornada === 'ligado' ? (idClientDoCartao(lead, ctx.camposPorNome ?? []) ?? (p.idsClient?.length === 1 ? p.idsClient[0] : null)) : null;
+    const hist = historico ?? (await historicoDoPaciente(unit, p.idClient ?? doCartao ?? (await idClientDoLead(unit, leadId, p.nome))));
     if (hist) {
       const ids = new Set(agendamentos.map((s) => s.idSchedule));
       agendamentos = [...agendamentos, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))];
       if (hist.treatments.length > 0) tratamentos = hist.treatments;
     }
   }
-  const mov = planejarMovimento({ atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() });
+  const regras1610 = ctx.jornada === 'ligado';
+  const base: EntradaMovimento = { atual, agendamentos, tratamentos, agoraEpoch, horasAteNegociacao: horasAteNegociacao() };
+  // 16/10 (achado 5 da revisão): as regras do ex-paciente precisam do histórico, que o cartão COMERCIAL não carregava.
+  // Só quando faz diferença (`precisaHistoricoDoExPaciente`) e só com o paciente já conhecido: nenhuma busca nova.
+  let entrada1610 = base;
+  if (ctx.jornada && ctx.jornada !== 'desligado' && !precisaHistorico) {
+    const semHistorico = planejarMovimento({ ...base, regras1610: true });
+    if (precisaHistoricoDoExPaciente(base, semHistorico)) {
+      const conhecido = p.idClient ?? (p.idsClient?.length === 1 ? p.idsClient[0] : null) ?? (regras1610 ? idClientDoCartao(lead, ctx.camposPorNome ?? []) : null);
+      const hist = await historicoDoPaciente(unit, conhecido);
+      if (hist) {
+        const ids = new Set(agendamentos.map((s) => s.idSchedule));
+        entrada1610 = { ...base, agendamentos: [...agendamentos, ...hist.schedules.filter((s) => !ids.has(s.idSchedule))], tratamentos: hist.treatments.length > 0 ? hist.treatments : tratamentos };
+      }
+    }
+  }
+  const mov = planejarMovimento(regras1610 ? { ...entrada1610, regras1610: true } : { ...base, regras1610: false });
+  // 16/10 em "só no papel": o robô move pela regra antiga e a tela mostra onde a regra nova levaria o cartão
+  if (ctx.jornada === 'seco') {
+    const novo = planejarMovimento({ ...entrada1610, regras1610: true });
+    if ((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) {
+      registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'moveria', alvo: novo ? novo.para : '(fica onde está)', deEtapa: atual.status, valor: novo?.semRegua ? 'sem régua' : undefined, motivo: novo?.motivo ?? `regras de 16/10: não move (a regra antiga leva pra ${mov?.para})` });
+    }
+  }
+  // 16/10 (decisão 4): falta em retorno/sessão vira nota + tarefa, sem mexer na etapa
+  await avisarFaltas(ctx, leadId, lead, atual.status, entrada1610.agendamentos).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: aviso de falta falhou'),
+  );
+  // 16/10 (achado 4 da revisão): tratamento FINALIZADO com sessão ainda marcada não move o cartão — vira UMA tarefa
+  await avisarSujeira(ctx, leadId, lead, atual, entrada1610.agendamentos, entrada1610.tratamentos).catch((err) =>
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: aviso de sessão esquecida falhou'),
+  );
   if (!mov) return;
   if (seco) {
     contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
+    return;
+  }
+  // 16/10: saída de PERDIDO/ALTA porque a franquia manda — uma vez por fato
+  if (regras1610 && mov.gatilho) {
+    await franquiaMandaUmaVez(ctx, leadId, lead, atual, mov);
     return;
   }
   await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
@@ -1325,16 +1830,38 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
         if (!candidatoARevisao(etapa, valoresDoLead(lead, mapa), corte)) continue;
         // Kommo dividido: cartão de outra unidade, ou sem unidade, não é revisado por esta (nem gasta chamada)
         if (pularCartao(ctx.grupo ?? null, unit.id, lead, resumo)) continue;
+        // 16/10: o `⚙ idClient` do cartão vem primeiro (decisão 3), e cartão travado em CONFLITO_FRANQUIA sem ele espera a SDR
+        const jornada = ctx.jornada ?? 'desligado';
+        const idDoCartao = idClientDoCartao(lead, ctx.camposPorNome ?? []);
+        const travadoNoConflito = idDoCartao === null && ((lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO) || !!ctx.conflitosGuardados?.has(lead.id));
+        if (jornada === 'ligado' && travadoNoConflito) continue;
         // já procurei este e não achei (cache 6 h): não gasta cota nem chamada; em CONFERIR ainda vale a regra dos 30 d
         const lembrado = cacheIdClient.get(`${unit.id}:${lead.id}`);
-        const negativoLembrado = !!lembrado && lembrado.idClient === null && lembrado.expiraEm > Date.now();
+        const negativoLembrado = !!lembrado && lembrado.idClient === null && lembrado.expiraEm > Date.now() && !(jornada === 'ligado' && idDoCartao);
         if (negativoLembrado && !emConferir) continue;
         if (!negativoLembrado) {
           if (avaliados >= REVISAO_MAX_POR_VARREDURA) return;
           avaliados++;
         }
         try {
-          const idClient = negativoLembrado ? null : await idClientDoLead(unit, lead.id, lead.name ?? null, { kommo, contatoId: lead._embedded?.contacts?.[0]?.id ?? null });
+          const contatoId = lead._embedded?.contacts?.[0]?.id ?? null;
+          let idClient: number | null;
+          if (jornada === 'ligado') {
+            const esc = negativoLembrado ? null : await casarPacienteDoCartao(unit, lead.id, lead.name ?? null, { kommo, contatoId, idDoCartao, campos: ctx.camposPorNome ?? [] });
+            if (esc?.tipo === 'conflito') {
+              // dois pacientes diferentes no mesmo telefone: não vai pra CONFERIR nem grava nada — a SDR escolhe no widget
+              await marcarConflitoDeTelefone(ctx, lead.id, lead, esc.candidatos.map((c) => ({ idClient: c.idClient, nome: c.name })));
+              continue;
+            }
+            idClient = !esc ? null : esc.tipo === 'achou' ? esc.idClient : esc.tipo === 'desempatar' ? await escolherEntreDuplicados(unit, esc.candidatos) : null;
+            if (esc?.tipo === 'desempatar') {
+              await avisarCadastroDuplicado(unit, kommo, lead.id, esc.candidatos.map((c) => c.idClient).filter((x): x is number => !!x), idClient, !!ctx.seco);
+            }
+            if (esc) cacheIdClient.set(`${unit.id}:${lead.id}`, { idClient, expiraEm: Date.now() + CACHE_LEAD_MS });
+          } else {
+            idClient = negativoLembrado ? null : await idClientDoLead(unit, lead.id, lead.name ?? null, { kommo, contatoId });
+            if (jornada === 'seco' && !negativoLembrado) await simularCasamento(ctx, lead, idDoCartao, idClient, travadoNoConflito);
+          }
           if (!idClient) {
             if (emConferir) {
               const parado = (agoraEpoch - (lead.updated_at ?? agoraEpoch)) / 86_400;
@@ -1409,11 +1936,12 @@ export function camposDaConta(camposBrutos: CampoBruto[]): CampoDaConta[] {
     }]);
 }
 
-async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
+/** `deps.kommo` só existe para o teste falar com um Kommo falso; em produção o cliente nasce aqui. */
+async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}): Promise<ResumoSync> {
   const resumo: ResumoSync = { unit: unit.slug, em: new Date().toISOString(), agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
   // Kommo dividido (Caxias usa o de Petrópolis): o cliente do Kommo é o da DONA da conta; a franquia é a DESTA unidade.
   const grupo = await grupoDaUnidade(unit.id);
-  const kommo = createKommoClient(await contaDoKommo(unit));
+  const kommo = deps.kommo ?? createKommoClient(await contaDoKommo(unit));
   // "Só no papel" na tela de Automações: lê a franquia e registra o que gravaria, sem tocar no Kommo.
   const seco = estadoDaAutomacao(unit.slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS) === 'seco';
   const bruto = (await kommo.listLeadCustomFields()) as { _embedded?: { custom_fields?: CampoBruto[] } } | undefined;
@@ -1462,14 +1990,33 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
   resumo.pacientes = porPaciente.size;
   const ops = opcoes(mapa);
   const agoraEpoch = Math.floor(Date.now() / 1000);
-  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false }, seco, automacaoDoSeco: seco ? 'franquia-sync' : undefined, grupo };
-  let vistos = 0;
+  // Chave `casamento-jornada` (regras de 16/10/2026): desligado = tudo como sempre.
+  const jornada = estadoCasamentoJornada(unit.slug);
+  const conflitosGuardados = jornada === 'ligado' ? await cartoesComConflitoGuardado(unit.id) : new Set<number>();
+  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false }, seco, automacaoDoSeco: seco ? 'franquia-sync' : undefined, grupo, jornada, conflitosGuardados };
 
+  // Casa TODOS os pacientes antes de gravar: só assim se vê o cartão que recebeu dois pacientes diferentes (mesmo
+  // telefone) na mesma varredura — com a gravação no meio, o primeiro já teria escrito por cima (decisão 1, 16/10).
+  type Casado = { p: (typeof porPaciente extends Map<string, infer V> ? V : never); casado: { leadId: number | null; idsClient: number[] } };
+  const casados: Casado[] = [];
+  let vistos = 0;
   for (const p of porPaciente.values()) {
     if (vistos++ >= MAX_PACIENTES_POR_VARREDURA) break;
     try {
       const idsSchedule = p.consultas.map((c) => c.idSchedule).filter((x): x is number => typeof x === 'number');
-      const casado = await resolverPaciente(unit, kommo, p.nome, p.idClient, idsSchedule);
+      casados.push({ p, casado: await resolverPaciente(unit, kommo, p.nome, p.idClient, idsSchedule) });
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug, paciente: p.nome }, 'franquia-sync: falha no paciente');
+    }
+  }
+  const variosNoCartao = jornada === 'desligado'
+    ? new Map<number, string[]>()
+    : cartoesComMaisDeUmPaciente(casados.map(({ p, casado }) => ({ leadId: casado.leadId, quem: identidadeDoPaciente(p.idClient, casado.idsClient, p.nome) })));
+
+  const marcadosNestaVarredura = new Set<number>();
+  for (const { p, casado } of casados) {
+    try {
       const leadId = casado.leadId;
       if (!leadId) {
         resumo.semLead++;
@@ -1480,15 +2027,46 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
       // Kommo dividido: só o cartão desta unidade; campo vazio vai para a lista da SDR, sem atribuir. Vem ANTES do
       // conflito de paciente: cartão de outra unidade não é desta varredura nem para ganhar CONFLITO_FRANQUIA.
       const idsDoPaciente = p.idClient ? [p.idClient] : casado.idsClient;
-      if (pularCartao(grupo, unit.id, lead, resumo, { idsClient: idsDoPaciente, idDoCartao: idClientDoCartao(lead, camposPorNome) })) continue;
+      const idDoCartao = idClientDoCartao(lead, camposPorNome);
+      if (pularCartao(grupo, unit.id, lead, resumo, { idsClient: idsDoPaciente, idDoCartao })) continue;
       resumo.comLead++;
       if (await recusarOutroPaciente(ctx, leadId, lead, idsDoPaciente)) continue;
-      await processarCartao(ctx, leadId, lead, p);
+      // 16/10 (decisão 1): cartão sem `⚙ idClient` que recebeu dois pacientes diferentes — ou que já está travado em
+      // CONFLITO_FRANQUIA esperando a SDR — não recebe nada até ela escolher no widget. Com o ⚙ gravado, o filtro de
+      // cima já deixa passar só o dono.
+      if (jornada !== 'desligado' && idDoCartao === null) {
+        const varios = variosNoCartao.has(leadId);
+        // a marca no banco trava mesmo sem a etiqueta (Kommo fora na hora de etiquetar, ou alguém tirou à mão)
+        const travado = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO) || conflitosGuardados.has(leadId);
+        if (varios && !marcadosNestaVarredura.has(leadId)) {
+          marcadosNestaVarredura.add(leadId);
+          const pacientes = casados
+            .filter((c) => c.casado.leadId === leadId)
+            .map((c) => ({ idClient: c.p.idClient ?? c.casado.idsClient[0] ?? null, nome: c.p.nome }));
+          await marcarConflitoDeTelefone(ctx, leadId, lead, pacientes);
+        }
+        if (jornada === 'ligado' && (varios || travado)) continue;
+      }
+      // 16/10: mesmo nome e mesmo telefone em mais de um cadastro da franquia — o robô segue (escolhe o de agenda mais
+      // recente) e deixa UMA nota pedindo para juntar os cadastros
+      if (jornada !== 'desligado' && !p.idClient && casado.idsClient.length > 1) {
+        await avisarCadastroDuplicado(unit, kommo, leadId, casado.idsClient, null, jornada === 'seco' || seco);
+      }
+      // 16/10: cartão com dono (`⚙ idClient`) que recebeu mais de um paciente nesta varredura — quem não se sabe quem é
+      // (veio só pelo nome da agenda, sem idClient) não grava: não dá para provar que é o dono, e o dono já foi escolhido.
+      if (jornada === 'ligado' && idDoCartao !== null && idsDoPaciente.length === 0 && variosNoCartao.has(leadId)) {
+        logger.info({ unit: unit.slug, leadId, idClientDoCartao: idDoCartao }, 'franquia-sync: paciente sem idClient num cartão com dono e mais de um paciente — não gravei');
+        continue;
+      }
+      await processarCartao(ctx, leadId, lead, { ...p, idsClient: idsDoPaciente });
     } catch (err) {
       resumo.erros++;
       logger.warn({ err, unit: unit.slug, paciente: p.nome }, 'franquia-sync: falha no paciente');
     }
   }
+
+  // 16/10 (achado 7): a etiqueta CONFLITO_FRANQUIA sai quando o conflito some (ou a regra não está ligada)
+  await faxinarConflitos(ctx, marcadosNestaVarredura).catch((err) => logger.warn({ err: String(err), unit: unit.slug }, 'casamento-jornada: faxina dos conflitos falhou'));
 
   if (funis) {
     try {
@@ -1498,7 +2076,7 @@ async function sincronizarUnidade(unit: Unit): Promise<ResumoSync> {
       logger.warn({ err, unit: unit.slug }, 'franquia-move: falha na revisão pelo histórico');
     }
     try {
-      await passarNegociacao(unit, kommo, funis, mapa, resumo, { grupo, seco });
+      await passarNegociacao(unit, kommo, funis, mapa, resumo, { grupo, seco, campos: camposPorNome });
     } catch (err) {
       resumo.erros++;
       logger.warn({ err, unit: unit.slug }, 'franquia-move: falha na passagem das 48 h');
@@ -1704,4 +2282,4 @@ export function stopFranquiaSyncWorker(): void {
   proximaEm.clear();
 }
 
-export const _interno = { mapearCampos, valoresDoLead, procurarPaciente, espelharPaciente, recusarOutroPaciente, resolverPaciente };
+export const _interno = { mapearCampos, valoresDoLead, procurarPaciente, espelharPaciente, recusarOutroPaciente, resolverPaciente, marcarConflitoDeTelefone, avisarFaltas, processarCartao, sincronizarUnidade, revisarPeloHistorico };

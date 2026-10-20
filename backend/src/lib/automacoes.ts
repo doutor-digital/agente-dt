@@ -106,6 +106,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/franquia-sync-worker.ts',
   },
 
+  {
+    id: 'casamento-jornada',
+    chave: 'CASAMENTO_JORNADA_SLUGS',
+    nome: 'Casamento cartão × paciente e jornada (regras de 16/10)',
+    oQueFaz:
+      'Liga as regras que o João decidiu em 16/10: dois pacientes da franquia no mesmo telefone travam o cartão com a etiqueta CONFLITO_FRANQUIA até a SDR escolher no widget qual é o paciente (o ⚙ idClient fica gravado e não pergunta de novo); o casamento cartão × paciente procura idClient → telefone → nome; ex-paciente que volta vai pra RETORNO PÓS-TRATAMENTO e tratamento finalizado nunca leva a GANHO; a jornada ancora na última avaliação; falta em retorno ou sessão não muda a etapa (vira nota + tarefa); a franquia manda no PERDIDO e na ALTA (avaliação marcada tira do PERDIDO; na ALTA, sessão marcada volta pra EM TRATAMENTO e consulta marcada vai pra RETORNO), uma vez por fato; mesmo paciente com dois cadastros na franquia ganha uma nota pra juntar; a Sofia não tira cartão do funil TRATAMENTO; e o cadastro da Sofia na franquia casa com o paciente que já existe em vez de criar outro.',
+    pegadinha:
+      'Em "só no papel" tudo continua como antes e a tela mostra o que as regras novas fariam de diferente (etiquetaria, moveria, alertaria, diverge, pularia). O movimento de etapa ainda passa pela chave "A franquia move a etapa": com ela desligada, nada se move. TRATAMENTO CANCELADO continua intocável (a SDR cancela no Kommo). Se a equipe puser o cartão de volta em PERDIDO ou ALTA com o mesmo fato de pé na franquia, o robô não insiste: deixa e abre uma tarefa para conferir (a marca fica em card_alert). O widget precisa da versão com o bloco "Qual é o paciente deste cartão?" para a SDR escolher.',
+    risco: 'move-cartao',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/casamento-jornada.ts',
+  },
+
   // NOTA: o worker de aderência ("paciente sumindo do tratamento") ainda não está commitado — mora
   // solto na árvore do João em 28/09/2026. A entrada dele foi tirada daqui de propósito: um botão
   // que não liga nada é exatamente a confusão que esta tela existe pra acabar. Quando o worker

@@ -20,6 +20,11 @@ import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
 import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
 import { travaDaAgendaDaIa } from '../lib/crm-compartilhado.js';
+import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
+import { registrarSimulacao } from '../lib/so-no-papel.js';
+import { pacienteQueJaExiste } from '../services/paciente-existente.js';
+import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
+import { PARA_SEMPRE_MS } from '../lib/conflito-paciente.js';
 import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } from './carimbos-do-agendamento.js';
 import {
   agendamentoDeuCerto,
@@ -632,6 +637,43 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
         );
       }
 
+      // Regra de 16/10 (chave casamento-jornada): antes de criar outro paciente, a mesma busca do robô —
+      // idClient (cartão/vínculo) → telefone (franquia e cartões irmãos) → nome.
+      const estado1610 = estadoCasamentoJornada(fresca.slug);
+      if (estado1610 !== 'desligado' && args.leadId) {
+        const existente = await procurarExistente(fresca, args.leadId, args.nome, fone, kommo, estado1610 === 'seco');
+        if (existente?.tipo === 'achou') {
+          if (estado1610 === 'ligado') {
+            await recorder.step({
+              kind: 'TOOL_RESULT',
+              title: `cadastrar_paciente: já existia (${existente.idClient}, achado por ${existente.por})`,
+              payload: { nome: args.nome, idClient: existente.idClient, por: existente.por },
+            });
+            await guardarPaciente(fresca.id, args.leadId, existente.idClient);
+            return `Já existia. idClient ${existente.idClient}. Use este para agendar.`;
+          }
+          registrarSimulacao(fresca, AUTOMACAO_1610, { leadId: args.leadId, acao: 'pularia', alvo: 'cadastro do paciente na franquia', valor: existente.idClient, motivo: `paciente já existe (achado por ${existente.por})` });
+        } else if (existente?.tipo === 'conflito') {
+          const motivo = existente.outroNome
+            ? `o telefone (ou o cartão) é de outro paciente da clínica, com outro nome (idClient ${existente.ids.join(', ')})`
+            : 'o telefone é de mais de um paciente da clínica';
+          if (estado1610 === 'ligado') {
+            await recorder.step({
+              kind: 'TOOL_RESULT',
+              title: `cadastrar_paciente RECUSADO: ${motivo}`,
+              payload: { nome: args.nome, idsClient: existente.ids, outroNome: existente.outroNome === true },
+            });
+            await avisarCadastroRecusado(fresca, kommo, args.leadId, args.nome, existente.ids, existente.outroNome === true);
+            return existente.outroNome
+              ? 'NÃO cadastrei: este telefone já é de outro paciente da clínica, com outro nome (pode ser alguém da família ' +
+                  'usando o mesmo WhatsApp). NÃO agende — diga que a equipe vai confirmar o cadastro e retorna em seguida.'
+              : 'NÃO cadastrei: este telefone já pertence a mais de um paciente cadastrado na clínica. NÃO agende — ' +
+                  'diga que a equipe vai confirmar o cadastro e retorna em seguida.';
+          }
+          registrarSimulacao(fresca, AUTOMACAO_1610, { leadId: args.leadId, acao: 'pularia', alvo: 'cadastro do paciente na franquia', valor: existente.ids.join(', '), motivo });
+        }
+      }
+
       const jaTem = await SpineService.searchClients(fresca, args.nome);
       const igual = jaTem.ok
         ? (jaTem.data?.clients ?? []).find(
@@ -707,6 +749,44 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
       await guardarPaciente(fresca.id, args.leadId, idClient);
       return `Cadastrado. idClient ${idClient} — use este número em agendar_consulta.`;
     },
+  });
+}
+
+/**
+ * A Sofia recusou o cadastro por conflito (regra de 16/10, chave ligada): UMA nota no cartão para a equipe saber o que
+ * conferir — a Sofia só diz ao paciente que a equipe confirma. Falha de rede não derruba a ferramenta.
+ */
+async function avisarCadastroRecusado(unit: Unit, kommo: KommoClient | undefined, leadId: number, nome: string, ids: number[], outroNome: boolean): Promise<void> {
+  if (!kommo) return;
+  const chave = `cadastro-recusado:${[...new Set(ids)].sort((a, b) => a - b).join(',')}`;
+  try {
+    if (await avisoRecente(unit.id, leadId, chave, PARA_SEMPRE_MS)) return;
+    const texto = outroNome
+      ? `⚠ A Sofia NÃO cadastrou «${nome.trim()}» na franquia nem marcou consulta: o telefone (ou este cartão) é do paciente idClient ${ids.join(', ')}, com outro nome — pode ser alguém da família usando o mesmo WhatsApp. Confira com o paciente: se é outra pessoa, cadastre e marque na franquia; se é o mesmo paciente, marque no cadastro dele.`
+      : `⚠ A Sofia NÃO cadastrou «${nome.trim()}» na franquia nem marcou consulta: o telefone é de mais de um paciente (idClient ${ids.join(', ')}). Escolha no widget qual é o paciente deste cartão e marque pela agenda.`;
+    await kommo.addLeadNote(leadId, texto);
+    await marcarAviso(unit.id, leadId, chave);
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'agenda-tools: não consegui avisar o cadastro recusado no cartão');
+  }
+}
+
+/** `pacienteQueJaExiste` com o `⚙ idClient` do cartão; falha (franquia ou Kommo fora) = segue o cadastro de sempre. */
+async function procurarExistente(unit: Unit, leadId: number, nome: string, fone: string, kommo: KommoClient | undefined, seco: boolean) {
+  let idDoCartao: number | null = null;
+  if (kommo) {
+    try {
+      const [lead, esquema] = await Promise.all([kommo.getLead(leadId), esquemaDaUnidade(unit, kommo)]);
+      const campo = esquema.campoPorNome(CAMPO_ID_CLIENT);
+      const n = campo ? Number(lead.custom_fields_values?.find((f) => f.field_id === campo)?.values?.[0]?.value) : NaN;
+      idDoCartao = Number.isInteger(n) && n > 0 ? n : null;
+    } catch {
+      idDoCartao = null;
+    }
+  }
+  return pacienteQueJaExiste(unit, leadId, { nome, telefone: fone, idDoCartao, kommo, avisarDuplicado: { seco } }).catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'agenda-tools: não consegui procurar o paciente existente — sigo o cadastro de sempre');
+    return null;
   });
 }
 
