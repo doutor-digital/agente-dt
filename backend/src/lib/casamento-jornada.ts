@@ -293,7 +293,7 @@ export function chaveDaTarefaDeDevolucao(etapa: EtapaQueAFranquiaReabre, gatilho
 }
 
 function oQueAFranquiaTem(gatilho: string): string {
-  return gatilho === 'sessao' ? 'sessão de tratamento marcada' : 'consulta marcada';
+  return gatilho.startsWith('sessao') ? 'sessão de tratamento marcada' : 'consulta marcada';
 }
 
 export function notaDaDevolucao(etapa: EtapaQueAFranquiaReabre, para: string, gatilho: string): string {
@@ -326,7 +326,29 @@ export function tarefaDaSujeira(s: Pick<SpineSchedule, 'dayLocal' | 'timeLocal' 
   return `Conferir na franquia: o tratamento está FINALIZADO, mas ainda há sessão marcada (${quandoFoi}). Desmarque a sessão, ou reabra o tratamento se o paciente continua. O cartão não foi movido por causa disso.`;
 }
 
-/** ruleKey de "o ROBÔ pôs este cartão nesta etapa" — é o que separa "a equipe pôs de volta" de "o próprio robô pôs". */
+/**
+ * ruleKey de "o ROBÔ pôs este cartão nesta etapa" (achado 3 da revisão de 16/10) — é o que separa "a equipe pôs de volta"
+ * de "o próprio robô pôs". Gravada (com a hora) a cada vez que um robô leva o cartão para PERDIDO ou ALTA.
+ */
 export function chaveDoRoboPos(etapa: EtapaQueAFranquiaReabre): string {
   return `robo-pos:${etapa}`;
+}
+
+/** Qual etapa que a franquia reabre é esta (PERDIDO no COMERCIAL, ALTA no TRATAMENTO), ou null. */
+export function etapaQueAFranquiaReabre(para: string): EtapaQueAFranquiaReabre | null {
+  const n = normalizarNome(para);
+  if (n === normalizarNome('PERDIDO')) return 'PERDIDO';
+  if (n === normalizarNome('ALTA')) return 'ALTA';
+  return null;
+}
+
+/**
+ * Um robô (sincronizador, worker de parados) acabou de pôr o cartão em PERDIDO ou ALTA: anota, para "a franquia manda" não
+ * tratar isso como a equipe insistindo. Só onde a chave não está desligada (desligado = nada novo, nem no banco).
+ */
+export async function anotarRoboPos(unit: { id: string; slug: string }, leadId: number, para: string): Promise<void> {
+  const etapa = etapaQueAFranquiaReabre(para);
+  if (!etapa || estadoCasamentoJornada(unit.slug) === 'desligado') return;
+  const { marcarAviso } = await import('./aviso-dedupe.js');
+  await marcarAviso(unit.id, leadId, chaveDoRoboPos(etapa));
 }

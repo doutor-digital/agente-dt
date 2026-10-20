@@ -33,12 +33,12 @@ import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
-  TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaTarefaDeDevolucao,
+  TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaTarefaDeDevolucao, chaveDoRoboPos,
   escolherPacienteDoCartao, estadoCasamentoJornada, faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaDevolucao,
   notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type ClienteCandidato, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
 } from './casamento-jornada.js';
 import { PARA_SEMPRE_MS, avisarCadastroDuplicado, escolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
-import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
+import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, podeMexer, pularCartao, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 
@@ -537,6 +537,8 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
     await kommo.moveStage({ leadId, statusId: alvo.statusId, pipelineId: alvo.pipelineId });
     resumo.movimentos++;
     logger.info({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil, motivo: mov.motivo, semRegua: mov.semRegua === true }, 'franquia-move: cartão movido');
+    // regra de 16/10: o ROBÔ pôs na ALTA (o PERDIDO é anotado no fecharComoPerdido)
+    await anotarRoboPos(unit, leadId, mov.para).catch(() => undefined);
   } catch (err) {
     resumo.erros++;
     logger.warn({ err, unit: unit.slug, leadId, para: mov.para }, 'franquia-move: falha ao mover');
@@ -1447,7 +1449,17 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
   }
   const etapa: EtapaQueAFranquiaReabre = normalizarNome(atual.status) === normalizarNome(ETAPA.ALTA) ? 'ALTA' : 'PERDIDO';
   const chave = chaveDaDevolucao(etapa, mov.gatilho);
-  if (await avisoRecente(unit.id, leadId, chave, PARA_SEMPRE_MS)) {
+  const devolvidoEm = await marcadoEm(unit.id, leadId, chave);
+  if (devolvidoEm && Date.now() - devolvidoEm.getTime() < PARA_SEMPRE_MS) {
+    // achado 3 da revisão de 16/10: se quem pôs de volta foi um ROBÔ (depois da devolução), não é a equipe insistindo —
+    // não abre a tarefa "a equipe pôs de volta" e também não insiste (dois robôs não ficam se empurrando)
+    const roboPosEm = await marcadoEm(unit.id, leadId, chaveDoRoboPos(etapa));
+    if (roboPosEm && roboPosEm.getTime() > devolvidoEm.getTime()) {
+      if (!jaRegistrou(`robo-pos:${unit.slug}:${leadId}:${chave}`)) {
+        logger.info({ unit: unit.slug, leadId, etapa, gatilho: mov.gatilho }, 'franquia-move: um robô pôs o cartão de volta — não insisto nem abro tarefa');
+      }
+      return;
+    }
     const chaveTarefa = chaveDaTarefaDeDevolucao(etapa, mov.gatilho);
     if (await avisoRecente(unit.id, leadId, chaveTarefa, PARA_SEMPRE_MS)) return;
     try {

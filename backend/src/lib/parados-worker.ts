@@ -28,6 +28,7 @@ import { SpineService } from '../services/spine.service.js';
 import { estadoEtapaDoLead, invalidarEtapa } from '../services/lead-stage.service.js';
 import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
 import { ETAPA, TRATAMENTO_EM_ANDAMENTO } from './franquia-move.js';
+import { anotarRoboPos } from './casamento-jornada.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
@@ -216,6 +217,8 @@ export async function fecharComoPerdido(
   }
   await kommo.setLeadStatus(leadId, { won: false, lossReasonId: lossId ?? undefined });
   invalidarEtapa(unit.id, leadId);
+  // regra de 16/10: foi um ROBÔ que pôs em PERDIDO — "a franquia manda" não confunde isto com a equipe insistindo
+  await anotarRoboPos(unit, leadId, ETAPA.PERDIDO).catch(() => undefined);
   await anotar(unit, kommo, leadId, textoDaNota(d, etapaAtual));
   logger.warn({ ...base, lossId }, 'parados: cartão movido pra PERDIDO');
   return true;

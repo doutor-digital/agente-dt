@@ -609,6 +609,25 @@ test('achado 3 — a tarefa "a equipe pôs de volta" não sai quando quem pôs d
   assert.deepEqual(reg.movidos, []);
 });
 
+test('achado 3 — ALTA → EM TRATAMENTO → o robô dá a alta → tratamento NOVO com sessão marcada: sai da ALTA de novo, sem tarefa falsa', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  const { ctx, reg, kommo } = await cenarioDevolucao({ pipeline_id: 20, status_id: 142 }, { idClient: null, consultas: [] });
+  ctx.jornada = 'ligado';
+  const sessao = (idSchedule: number, idStatus: number, dias: number) => ({ idSchedule, idStatus, statusName: idStatus === 42 ? 'Atendido' : 'Agendado', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(dias) });
+  // o cache do histórico é de 1 h por paciente: cada passo usa um idClient próprio para a franquia falsa "mudar"
+  const passo = async (idClient: number, treatments: unknown[], schedules: unknown[]) => {
+    fichasFalsas.set(idClient, { idClient, name: 'PACIENTE TESTE', whatsapp: FONE, treatments, schedules });
+    await _interno.processarCartao(ctx, 70, await kommo.getLead(70), { nome: 'PACIENTE TESTE', idClient, consultas: [], tratamento: null });
+  };
+  await passo(5001, [{ idTreatment: 1, idStatus: 45, statusName: 'EM ANDAMENTO' }], [sessao(1, 42, -10), sessao(2, 37, 2)]);
+  assert.deepEqual(reg.movidos.map((m) => m.statusId), [202], '1. a franquia manda: ALTA → EM TRATAMENTO');
+  await passo(5002, [{ idTreatment: 1, idStatus: 46, statusName: 'FINALIZADO' }], [sessao(1, 42, -10), sessao(2, 42, -1)]);
+  assert.deepEqual(reg.movidos.map((m) => m.statusId), [202, 142], '2. o próprio robô dá a alta');
+  await passo(5003, [{ idTreatment: 1, idStatus: 46, statusName: 'FINALIZADO' }, { idTreatment: 2, idStatus: 45, statusName: 'EM ANDAMENTO' }], [sessao(1, 42, -10), sessao(2, 42, -1), sessao(3, 37, 3)]);
+  assert.deepEqual(reg.movidos.map((m) => m.statusId), [202, 142, 202], '3. tratamento novo = fato novo: sai da ALTA de novo');
+  assert.deepEqual(reg.tarefas, [], 'nenhuma tarefa "a equipe pôs de volta" (quem pôs foi o robô)');
+});
+
 test('achado 4 — ALTA com tratamento FINALIZADO e sessão esquecida em AGENDADO: fica na ALTA e abre UMA tarefa', async () => {
   chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
   const ficha = { idClient: 4400, name: 'PACIENTE TESTE', whatsapp: FONE, treatments: [{ idTreatment: 1, idStatus: 46, statusName: 'FINALIZADO' }], schedules: [

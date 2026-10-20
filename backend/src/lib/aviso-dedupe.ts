@@ -34,6 +34,20 @@ export async function avisoRecente(
   }
 }
 
+/** Quando a marca foi gravada (ou regravada), ou null — para comparar duas marcas do mesmo cartão. Falha de banco = null. */
+export async function marcadoEm(unitId: string, leadId: number | string, ruleKey: string): Promise<Date | null> {
+  try {
+    const atual = await prisma.cardAlert.findUnique({
+      where: { unitId_leadId_ruleKey: { unitId, leadId: String(leadId), ruleKey } },
+      select: { createdAt: true },
+    });
+    return atual?.createdAt ?? null;
+  } catch (err) {
+    logger.warn({ err: String(err), unitId, leadId: String(leadId), ruleKey }, 'aviso-dedupe: falha ao ler a marca');
+    return null;
+  }
+}
+
 /** Registra que o aviso foi criado agora (chamar só depois do sucesso na Kommo). */
 export async function marcarAviso(
   unitId: string,

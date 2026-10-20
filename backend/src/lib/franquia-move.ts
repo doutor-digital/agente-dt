@@ -79,6 +79,8 @@ export interface EtapaAtual {
 export interface TratamentoParaEtapa {
   idStatus: number | null;
   statusName?: string | null;
+  /** Quando a franquia manda (o histórico do paciente manda): é o "fato" da saída da ALTA por sessão marcada. */
+  idTreatment?: number | null;
 }
 
 export interface EntradaMovimento {
@@ -107,8 +109,9 @@ export interface Movimento {
   /** só pra PERDIDO: idade do fato em dias (vai pra nota do cartão) */
   dias?: number;
   /**
-   * 16/10 ("a franquia manda"): o cartão sai de PERDIDO ou ALTA por causa deste fato da franquia (`consulta:<idSchedule>`
-   * ou `sessao`). O sincronizador só tira o cartão de lá UMA vez por fato: se a equipe puser de volta, fica e vira tarefa.
+   * 16/10 ("a franquia manda"): o cartão sai de PERDIDO ou ALTA por causa deste fato da franquia (`consulta:<idSchedule>`,
+   * ou `sessao:trat:<idTreatment>` / `sessao:<idSchedule>` na ALTA). O sincronizador só tira o cartão de lá UMA vez por
+   * fato: se a equipe puser de volta, fica e vira tarefa.
    */
   gatilho?: string;
 }
@@ -227,9 +230,15 @@ function gatilhoDe(s: SpineSchedule): string {
   return `consulta:${s.idSchedule ?? s.dateAttendanceUtc ?? '?'}`;
 }
 
-/** Sessão: o tratamento é o fato (estável enquanto ele durar); sem o id dele, a própria sessão. */
-function gatilhoDaSessao(s: SpineSchedule): string {
-  return s.idTreatment ? `sessao:trat:${s.idTreatment}` : `sessao:${s.idSchedule ?? s.dateAttendanceUtc ?? '?'}`;
+/**
+ * Sessão (achado 3 da revisão de 16/10: era um "sessao" fixo, que valia uma vez por cartão por dez anos): o fato é o
+ * TRATAMENTO — o da sessão, ou o único em andamento na franquia —, estável enquanto ele durar, e um tratamento novo é fato
+ * novo. Sem id de tratamento nenhum, a própria sessão.
+ */
+function gatilhoDaSessao(s: SpineSchedule, tratamentos: TratamentoParaEtapa[]): string {
+  const doTratamentoAberto = tratamentos.filter(emAndamento).map((t) => t.idTreatment).filter((x): x is number => !!x);
+  const id = s.idTreatment ?? (doTratamentoAberto.length === 1 ? doTratamentoAberto[0] : null);
+  return id ? `sessao:trat:${id}` : `sessao:${s.idSchedule ?? s.dateAttendanceUtc ?? '?'}`;
 }
 
 /**
@@ -318,7 +327,7 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
         // Só com tratamento EM ANDAMENTO: finalizado + sessão "agendada" é sujeira da franquia — o cartão fica na ALTA e o
         // sincronizador abre uma tarefa (sem isto, ALTA → EM TRATAMENTO → ALTA e a régua da ALTA dispara de novo).
         const sessaoMarcada = proxima(sessoes.filter(futura));
-        if (sessaoMarcada && temEmAndamento) return { funil: 'TRATAMENTO', para: ETAPA.EM_TRATAMENTO, motivo: 'sessão marcada na franquia (a franquia manda: sai da ALTA)', gatilho: gatilhoDaSessao(sessaoMarcada) };
+        if (sessaoMarcada && temEmAndamento) return { funil: 'TRATAMENTO', para: ETAPA.EM_TRATAMENTO, motivo: 'sessão marcada na franquia (a franquia manda: sai da ALTA)', gatilho: gatilhoDaSessao(sessaoMarcada, e.tratamentos) };
         const consultaMarcada = proxima(consultas.filter(futura));
         if (consultaMarcada) return { funil: 'COMERCIAL', para: ETAPA.RETORNO, motivo: 'consulta marcada na franquia (a franquia manda: sai da ALTA)', gatilho: gatilhoDe(consultaMarcada) };
         if (retornoPosAtendidoRecente && ultimoRetornoPos) return { funil: 'COMERCIAL', para: ETAPA.COMPARECEU, motivo: 'retorno pós-tratamento atendido na franquia', gatilho: gatilhoDe(ultimoRetornoPos) };
