@@ -2170,6 +2170,29 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Uma página de 250 cartões com os campos, para quem varre a conta inteira (o robô do ⌂ Unidade). Sem
+   * `atualizadosDesde`: do id mais novo ao mais velho — cartão novo entra no topo e só empurra a lista, então
+   * andar página a página nunca pula ninguém. Com: os que mexeram desde então, os mais recentes primeiro.
+   * LANÇA se o Kommo falhar: aqui página vazia quer dizer "acabou", nunca "deu erro".
+   */
+  async listLeadsPagina(page: number, opcoes: { atualizadosDesde?: number } = {}): Promise<KommoLead[]> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } }>('/leads', {
+        params: {
+          limit: 250,
+          page,
+          ...(opcoes.atualizadosDesde !== undefined
+            ? { 'filter[updated_at][from]': opcoes.atualizadosDesde, 'order[updated_at]': 'desc' }
+            : { 'order[id]': 'desc' }),
+        },
+      });
+      return data?._embedded?.leads ?? [];
+    } catch (err) {
+      wrapAxiosError(err, `listLeadsPagina(${page})`);
+    }
+  }
+
   async listLeadsPorTelefone(telefone: string, limite = 50): Promise<KommoLead[]> {
     let digitos = telefone.replace(/\D+/g, '');
     if (digitos.length >= 12 && digitos.startsWith('55')) digitos = digitos.slice(2);
