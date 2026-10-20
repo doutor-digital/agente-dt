@@ -73,3 +73,51 @@ test('Telegram: cartão sem nome e conta sem subdomínio ainda dizem qual lead',
   assert.match(texto, /^⚠️ Agendamento perdido · Serra\nlead 42 — /);
   assert.ok(!texto.includes('kommo.com'));
 });
+
+// ── Filtro de alarme falso (chave agendamento-perdido-filtro), com os alertas reais de 19–20/10/2026 ──
+
+test('filtro: quem adiou e ganhou ⊘ Motivo da espera não é agendamento perdido (Fabiano, Canaã 28448840: "Deixa para próximo")', async () => {
+  const { motivoParaNaoAvisar } = await import('./agendamento-perdido-worker.js');
+  assert.match(String(motivoParaNaoAvisar({ pacienteRespondeu: true, adiou: true }, 18 * 60 + 30)), /adiou/);
+});
+
+test('filtro: quem nunca respondeu depois da oferta fica com a régua de follow-up (Ana Regina, Parauapebas 28812098)', async () => {
+  const { motivoParaNaoAvisar } = await import('./agendamento-perdido-worker.js');
+  assert.match(String(motivoParaNaoAvisar({ pacienteRespondeu: false, adiou: false }, 23 * 60 + 30)), /não respondeu/);
+});
+
+test('filtro: de madrugada espera a manhã (Adriano, Marabá 28476550, alerta às 02:15)', async () => {
+  const { motivoParaNaoAvisar } = await import('./agendamento-perdido-worker.js');
+  const respondeu = { pacienteRespondeu: true, adiou: false };
+  assert.match(String(motivoParaNaoAvisar(respondeu, 2 * 60 + 15)), /madrugada/);
+  assert.match(String(motivoParaNaoAvisar(respondeu, 7 * 60 + 30)), /madrugada/, '07:30 ainda é cedo (Rosineide, Bebedouro 6437933)');
+  assert.match(String(motivoParaNaoAvisar(respondeu, 21 * 60)), /madrugada/, '21:00 já é silêncio');
+  assert.equal(motivoParaNaoAvisar(respondeu, 8 * 60), null, 'às 08:00 avisa');
+  assert.equal(motivoParaNaoAvisar(respondeu, 20 * 60 + 59), null);
+});
+
+test('filtro: quem respondeu e ficou sem consulta continua avisando (Fernanda, Mossoró 5660603: "vou falar com meu marido")', async () => {
+  const { motivoParaNaoAvisar } = await import('./agendamento-perdido-worker.js');
+  assert.equal(motivoParaNaoAvisar({ pacienteRespondeu: true, adiou: false }, 17 * 60), null);
+});
+
+test('filtro: a hora da unidade sai do fuso dela (Boa Vista é uma hora antes de Brasília)', async () => {
+  const { minutosNoFuso } = await import('./agendamento-perdido-worker.js');
+  const meiaNoiteEmBrasilia = new Date('2026-10-20T03:00:00Z');
+  assert.equal(minutosNoFuso('America/Sao_Paulo', meiaNoiteEmBrasilia), 0);
+  assert.equal(minutosNoFuso('America/Boa_Vista', meiaNoiteEmBrasilia), 23 * 60);
+});
+
+test('filtro: nasce desligado na rede toda; a lista do .env liga', async () => {
+  const { estadoDoFiltro } = await import('./agendamento-perdido-worker.js');
+  assert.equal(estadoDoFiltro('doutor-hernia-canaa', ''), 'desligado');
+  assert.equal(estadoDoFiltro('doutor-hernia-canaa', 'doutor-hernia-canaa'), 'ligado');
+  assert.equal(estadoDoFiltro('doutor-hernia-mossoro', 'doutor-hernia-canaa'), 'desligado');
+});
+
+test('filtro: a janela cobre a madrugada inteira — a oferta das 20h ainda está nela às 8h do dia seguinte', async () => {
+  const { janelaEfetivaH } = await import('./agendamento-perdido-worker.js');
+  assert.equal(janelaEfetivaH(24, 90), 24, 'o padrão não muda');
+  // Janela de 6 h configurada à mão: 20:00 + 90 min de carência = 21:30 (silêncio) → só às 08:00, 12 h depois.
+  assert.ok(janelaEfetivaH(6, 90) >= 13.5);
+});

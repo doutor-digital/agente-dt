@@ -5,6 +5,8 @@ import { normalizarNome } from './kommo-schema.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { fusoDaUnidade } from './fuso.js';
 import { enviarTelegram } from './telegram.js';
+import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { registrarSimulacao } from './so-no-papel.js';
 
 /**
  * Avisa quando a IA chegou a oferecer horário e não fechou.
@@ -31,6 +33,11 @@ import { enviarTelegram } from './telegram.js';
  * handoff tem motivo registrado, dá pra separar: só entra na conta quem foi
  * embora sem desfecho.
  *
+ * Até 20/10/2026 isso estava só neste comentário: o SQL não separava nada. Com a
+ * chave "agendamento-perdido-filtro" (`motivoParaNaoAvisar`) o vigia deixa de
+ * avisar quem adiou com retomada marcada, quem nunca respondeu à oferta, e não
+ * avisa de madrugada.
+ *
  * O alerta vai como tarefa no Kommo, igual ao de SLA: é onde a equipe já olha,
  * e o n8n leva pro grupo do GAC. Um por lead, nunca repetido — alarme que repete
  * vira ruído, e ruído faz ninguém olhar mais.
@@ -46,7 +53,18 @@ const SWEEP_MS = Number(process.env.AGENDAMENTO_PERDIDO_SWEEP_MS) || 15 * 60_000
 const CARENCIA_MIN = Number(process.env.AGENDAMENTO_PERDIDO_CARENCIA_MIN) || 90;
 
 /** Não olha conversa velha demais: o que passou disso é história, não ação. */
-const JANELA_HORAS = Number(process.env.AGENDAMENTO_PERDIDO_JANELA_H) || 24;
+const JANELA_PEDIDA_H = Number(process.env.AGENDAMENTO_PERDIDO_JANELA_H) || 24;
+
+/**
+ * A janela nunca é menor que a carência mais a madrugada inteira (21h–8h) e uma folga: com o filtro
+ * ligado, a oferta das 20h só pode ser avisada às 8h do dia seguinte — se já tivesse saído da janela,
+ * o aviso sumiria em vez de esperar a manhã. Com o padrão de 24 h nada muda.
+ */
+export function janelaEfetivaH(pedidaH: number, carenciaMin: number): number {
+  return Math.max(pedidaH, Math.ceil(carenciaMin / 60 + 11 + 1));
+}
+
+const JANELA_HORAS = janelaEfetivaH(JANELA_PEDIDA_H, CARENCIA_MIN);
 
 const MARCA = 'ALERTA · agendamento perdido';
 
@@ -109,6 +127,53 @@ export function textoTelegramPerdido(args: {
   ].join('\n');
 }
 
+/**
+ * Chave "Alerta de agendamento perdido sem alarme falso" (nasce desligada; tem "só no papel").
+ *
+ * Dos 20 alertas que chegaram ao Telegram do João em 19–20/10/2026, 14 não eram venda que a IA perdeu:
+ *  - 10 o paciente ADIOU e a IA já tinha gravado ⊘ Motivo da espera com ◷ Retomar em ("deixa para
+ *    próximo", "só volto em dezembro", "vou pelo plano de saúde", "quando eu receber") — a retomada
+ *    automática já cuida, e "vale retomar antes que esfrie" contradiz o que o paciente pediu;
+ *  -  4 o paciente NUNCA respondeu depois da oferta — é a régua de follow-up que cuida de quem sumiu;
+ *  - e 6 chegaram de madrugada (00:00, 00:30, 02:15, 03:00 e dois às 07:30), quando ninguém pode agir.
+ * Quem respondeu à oferta e ficou sem consulta continua avisando — inclusive o "vou ver com meu marido".
+ */
+const ID_FILTRO = 'agendamento-perdido-filtro';
+
+export function estadoDoFiltro(slug: string, raw: string | undefined = process.env.AGENDAMENTO_PERDIDO_FILTRO_SLUGS): Estado {
+  return estadoDaAutomacao(slug, ID_FILTRO, raw);
+}
+
+/** Silêncio da madrugada, na hora da unidade: o mesmo das mensagens automáticas (21:00–08:00). */
+const SILENCIO_INICIO_MIN = 21 * 60;
+const SILENCIO_FIM_MIN = 8 * 60;
+
+/** Minutos desde a meia-noite no fuso da unidade. */
+export function minutosNoFuso(fuso: string, agora: Date = new Date()): number {
+  const p = new Intl.DateTimeFormat('en-GB', { timeZone: fuso || 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false })
+    .formatToParts(agora);
+  const h = Number(p.find((x) => x.type === 'hour')?.value) % 24;
+  const m = Number(p.find((x) => x.type === 'minute')?.value);
+  return h * 60 + m;
+}
+
+/**
+ * Por que este alerta NÃO deve sair agora — ou `null` se deve.
+ * A ordem importa só para o que a tela de "só no papel" mostra: o motivo que dura vem antes da madrugada,
+ * que passa sozinha (o vigia volta a olhar às 08:00 e só avisa se ainda valer).
+ */
+export function motivoParaNaoAvisar(
+  c: { pacienteRespondeu: boolean; adiou: boolean },
+  minutosLocais: number,
+): string | null {
+  if (c.adiou) return 'o paciente adiou: a IA gravou ⊘ Motivo da espera depois da oferta (a retomada cuida)';
+  if (!c.pacienteRespondeu) return 'o paciente não respondeu depois da oferta (a régua de follow-up cuida)';
+  if (minutosLocais >= SILENCIO_INICIO_MIN || minutosLocais < SILENCIO_FIM_MIN) {
+    return 'madrugada (21h–8h na hora da unidade): espera a manhã e confere de novo';
+  }
+  return null;
+}
+
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 
@@ -120,6 +185,10 @@ interface Candidato {
   slug: string;
   leadId: string;
   ofereceuEm: Date;
+  /** O paciente escreveu (em qualquer unidade da mesma conta Kommo) depois da oferta. */
+  pacienteRespondeu: boolean;
+  /** A IA gravou ⊘ Motivo da espera depois da oferta: o paciente adiou e a retomada já está marcada. */
+  adiou: boolean;
 }
 
 /**
@@ -130,37 +199,64 @@ interface Candidato {
 async function candidatos(): Promise<Candidato[]> {
   const linhas = await prisma.$queryRawUnsafe<Candidato[]>(
     `
-    select distinct on (t.lead_id)
-           t.unit_id  as "unitId",
-           u.slug     as "slug",
-           t.lead_id  as "leadId",
-           max(s.created_at) as "ofereceuEm"
-      from execution_steps s
-      join execution_traces t on t.id = s.trace_id
-      join units u            on u.id = t.unit_id
-     where s.created_at > now() - ($1 || ' hours')::interval
-       and s.title ilike '%consultar_horarios%'
-       -- "consultar_horarios bloqueado — IA pausada pela recepção" não é oferta: quem conversa é humano.
-       and s.title not ilike '%bloqueado%'
-       and not exists (
+    with ofertas as (
+      select distinct on (t.lead_id)
+             t.unit_id  as "unitId",
+             u.slug     as "slug",
+             u.kommo_subdomain as "sub",
+             t.lead_id  as "leadId",
+             max(s.created_at) as "ofereceuEm"
+        from execution_steps s
+        join execution_traces t on t.id = s.trace_id
+        join units u            on u.id = t.unit_id
+       where s.created_at > now() - ($1 || ' hours')::interval
+         and s.title ilike '%consultar_horarios%'
+         -- "consultar_horarios bloqueado — IA pausada pela recepção" não é oferta: quem conversa é humano.
+         and s.title not ilike '%bloqueado%'
+         and not exists (
+               select 1
+                 from execution_steps s2
+                 join execution_traces t2 on t2.id = s2.trace_id
+                where t2.lead_id = t.lead_id
+                  -- O sucesso é gravado como "Consulta marcada: …", sem o nome da tool:
+                  -- sem esta linha, marcar de primeira virava alerta de perdido.
+                  and (s2.title ilike '%agendar_consulta%' or s2.title like 'Consulta marcada:%')
+                  and s2.created_at > now() - ($1 || ' hours')::interval
+             )
+       group by t.unit_id, u.slug, u.kommo_subdomain, t.lead_id
+      having max(s.created_at) < now() - ($2 || ' minutes')::interval
+       limit 200
+    )
+    select o."unitId", o."slug", o."leadId", o."ofereceuEm",
+           -- Mesma conta Kommo: o resgate e a comercial dividem o cartão (a oferta numa, a resposta na outra).
+           -- Comparado no próprio SQL, coluna com coluna: o horário do rastro não passa pelo fuso do processo.
+           exists (
              select 1
-               from execution_steps s2
-               join execution_traces t2 on t2.id = s2.trace_id
-              where t2.lead_id = t.lead_id
-                -- O sucesso é gravado como "Consulta marcada: …", sem o nome da tool:
-                -- sem esta linha, marcar de primeira virava alerta de perdido.
-                and (s2.title ilike '%agendar_consulta%' or s2.title like 'Consulta marcada:%')
-                and s2.created_at > now() - ($1 || ' hours')::interval
-           )
-     group by t.unit_id, u.slug, t.lead_id
-    having max(s.created_at) < now() - ($2 || ' minutes')::interval
-     limit 200
+               from messages m
+               join conversations c on c.id = m.conversation_id
+               join units cu        on cu.id = c.unit_id
+              where c.lead_id = o."leadId"
+                and (cu.kommo_subdomain = o."sub" or cu.id = o."unitId")
+                and m.role = 'user'
+                and m.created_at > o."ofereceuEm"
+           ) as "pacienteRespondeu",
+           exists (
+             select 1
+               from execution_steps s3
+               join execution_traces t3 on t3.id = s3.trace_id
+               join units u3            on u3.id = t3.unit_id
+              where t3.lead_id = o."leadId"
+                and (u3.kommo_subdomain = o."sub" or u3.id = o."unitId")
+                and s3.title ilike '%motivo da espera" gravado no lead%'
+                and s3.created_at > o."ofereceuEm"
+           ) as "adiou"
+      from ofertas o
     `,
     String(JANELA_HORAS),
     String(CARENCIA_MIN),
   );
   // O driver devolve timestamp; normaliza aqui pra quem consome não ter de adivinhar.
-  return linhas.map((l) => ({ ...l, ofereceuEm: new Date(l.ofereceuEm) }));
+  return linhas.map((l) => ({ ...l, ofereceuEm: new Date(l.ofereceuEm), pacienteRespondeu: Boolean(l.pacienteRespondeu), adiou: Boolean(l.adiou) }));
 }
 
 /** Já avisamos deste lead? Um alerta por lead, sempre. */
@@ -200,6 +296,9 @@ async function varrer(): Promise<void> {
         continue;
       }
 
+      const filtro = estadoDoFiltro(unit.slug);
+      const minutosLocais = minutosNoFuso(fusoDaUnidade(unit));
+
       // Um lote por unidade (50 cartões por chamada) em vez de um GET por candidato.
       const aChecar: Array<{ c: Candidato; leadId: number; chave: string }> = [];
       for (const c of itens) {
@@ -209,6 +308,11 @@ async function varrer(): Promise<void> {
         const chave = `${unitId}:${c.leadId}:${c.ofereceuEm.getTime()}`;
         if (comConsulta.has(chave)) continue;
         if (await jaAvisado(unitId, c.leadId)) continue;
+        if (filtro !== 'desligado') {
+          const motivo = motivoParaNaoAvisar(c, minutosLocais);
+          if (motivo && filtro === 'ligado') continue; // não marca como avisado: se o paciente voltar a falar, vale de novo
+          if (motivo) registrarSimulacao(unit, ID_FILTRO, { leadId, acao: 'pularia', alvo: 'alerta de agendamento perdido', motivo });
+        }
         aChecar.push({ c, leadId, chave });
       }
       if (aChecar.length === 0) continue;

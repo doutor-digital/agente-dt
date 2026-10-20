@@ -10,6 +10,32 @@ import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { nomeEstaNaFonte, semNomeDeProfissional } from '../lib/nome-do-profissional.js';
 import { cortarSeEstourou } from './teto-mensal.js';
+import { agendamentoDoVinculo, reservaAfirmada } from './reserva-sem-marcar.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
+
+/**
+ * A régua dizendo "deixo um horário guardado pra você" sem consulta nenhuma.
+ *
+ * A trava "reservado sem marcar" (PR #87) mora no grafo da conversa; a régua gera o texto por fora dele e
+ * seguia livre: em 14 dias (06–20/10/2026), 47 de 3.530 degraus afirmaram reserva que não existia —
+ * "Deixo guardado um horário na sexta pra você" (Teresinha, Boa Vista 20951523, 20/10 08:12),
+ * "Seu horário de quinta às 13h fica guardado esperando por você", "deixei dois horários guardados pra
+ * quinta". Paciente que lê isso acha que tem consulta e não volta pra marcar.
+ *
+ * Devolve o trecho que promete, ou `null`. Consulta de verdade no vínculo com a franquia libera (a
+ * régua de quem tem consulta pode falar dela). O detector é o mesmo da trava: oferta, pergunta e
+ * condição ("quando quiser, deixo um horário guardado") não contam.
+ */
+export async function reservaFalsaNoDegrau(
+  texto: string,
+  args: { unitId: string; leadId: number; fuso: string },
+  vinculo: (unitId: string, leadId: number, fuso: string) => Promise<string | null> = agendamentoDoVinculo,
+): Promise<string | null> {
+  const promessa = reservaAfirmada(texto);
+  if (!promessa) return null;
+  if (await vinculo(args.unitId, args.leadId, args.fuso)) return null;
+  return promessa.trecho;
+}
 
 export interface FollowUpArgs {
   unitId: string;
@@ -68,6 +94,8 @@ REGRAS:
 - NÃO cobre resposta ("você sumiu", "ainda está aí?"). Cobrança afasta.
 - NÃO invente horário, preço, endereço nem disponibilidade. Se precisar falar de
   horário, fale no geral e ofereça verificar.
+- NUNCA diga que deixou, deixa ou vai deixar horário reservado, guardado ou garantido:
+  esta mensagem não marca nada. Ofereça VER os horários quando ele quiser.
 - PROIBIDO deixar lacuna: nada de "[chave]", "R$ [valor]", "{endereço}", "XXX".
   Ou você escreve o dado exato que está nas Fontes Oficiais, ou não fala dele.
 - Retome pelo que ELE contou: a queixa, a preferência, o que ficou pendente.
@@ -118,6 +146,15 @@ ${conversa}`.trim();
       logger.warn(
         { unit: unit.slug, leadId: args.leadId, tipo: vazou.tipo, trecho: vazou.trecho },
         `follow-up: ${explicarVazamento(vazou)} — nada enviado`,
+      );
+      return null;
+    }
+    // "Deixo um horário guardado pra você" sem consulta: silêncio e o próximo degrau, como no vazamento.
+    const reservaFalsa = await reservaFalsaNoDegrau(tratado, { unitId: unit.id, leadId: args.leadId, fuso: fusoDaUnidade(unit) });
+    if (reservaFalsa) {
+      logger.warn(
+        { unit: unit.slug, leadId: args.leadId, trecho: reservaFalsa },
+        'follow-up: disse que deixou horário reservado e não há consulta — nada enviado',
       );
       return null;
     }
