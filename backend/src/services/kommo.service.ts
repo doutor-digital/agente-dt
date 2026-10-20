@@ -1928,12 +1928,19 @@ export class KommoClient {
     }
   }
 
+  /** Todas as páginas: quem cria motivo que "falta" não pode deixar de ver um que está na página 2. */
   async listLossReasons(): Promise<Array<{ id: number; name: string }>> {
+    const todos: Array<{ id: number; name: string }> = [];
     try {
-      const { data } = await this.http.get<{
-        _embedded?: { loss_reasons?: Array<{ id: number; name: string }> };
-      }>('/leads/loss_reasons', { params: { page: 1, limit: 250 } });
-      return data?._embedded?.loss_reasons ?? [];
+      for (let page = 1; page <= 20; page++) {
+        const { data } = await this.http.get<{
+          _embedded?: { loss_reasons?: Array<{ id: number; name: string }> };
+        }>('/leads/loss_reasons', { params: { page, limit: 250 } });
+        const lote = data?._embedded?.loss_reasons ?? [];
+        todos.push(...lote);
+        if (lote.length < 250) break;
+      }
+      return todos;
     } catch (err) {
       wrapAxiosError(err, 'listLossReasons');
     }
