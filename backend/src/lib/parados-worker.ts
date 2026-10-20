@@ -32,6 +32,7 @@ import { CAMPOS_SYNC } from './franquia-sync.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { carregarFunis, idClientDoLead, temConsultaFutura, type Funis } from './franquia-sync-worker.js';
+import { diaDaRetomada, diaDoCampoData, esperaSeguraVolta, retomarEmDoCartao } from './espera-retomada.js';
 import {
   CAMPO,
   DIA_S,
@@ -288,8 +289,17 @@ export async function voltarDaEsperaSeRespondeu(unit: Unit, leadId: number, mens
     const est = await estadoEtapaDoLead(unit, leadId);
     if (!est?.nome || !ehEspera(est.nome)) return;
     const kommo = createKommoClient(unit);
-    const dona = dividido ? await unidadeDonaDoCartao(unit, await kommo.getLead(leadId)) : unit;
+    const lead = await kommo.getLead(leadId);
+    const dona = dividido ? await unidadeDonaDoCartao(unit, lead) : unit;
     if (!dona || !voltaDaEsperaLiberada(dona.slug)) return; // cartão sem unidade: ninguém mexe
+    // Auditoria 16/10 (item 10): EM ESPERA com ◷ Retomar em pra frente foi decisão da SDR (ou da Sofia, no mesmo
+    // turno) — o paciente escrever não desfaz a espera. A Sofia conversa em EM ESPERA do mesmo jeito; no dia da
+    // retomada, a resposta à mensagem de retomada traz o cartão de volta como sempre.
+    const retomarEm = retomarEmDoCartao(lead.custom_fields_values);
+    if (esperaSeguraVolta(diaDaRetomada(retomarEm, Math.floor(Date.now() / 1000), dona.spineTimezone))) {
+      logger.info({ unit: dona.slug, leadId, retomarEm: retomarEm ? diaDoCampoData(retomarEm) : null }, 'parados: paciente escreveu em EM ESPERA com ◷ Retomar em marcado — o cartão fica');
+      return;
+    }
     const funis = await funisDaUnidade(unit, kommo);
     const alvo = funis?.idDe('COMERCIAL', ETAPA.QUALIFICACAO);
     if (!alvo) return;
