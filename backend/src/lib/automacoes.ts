@@ -252,6 +252,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/prometeu-sem-marcar-worker.ts',
   },
   {
+    id: 'agendamento-perdido-filtro',
+    chave: 'AGENDAMENTO_PERDIDO_FILTRO_SLUGS',
+    nome: 'Alerta de agendamento perdido sem alarme falso',
+    oQueFaz:
+      'O aviso "a IA ofereceu horário e a consulta não foi marcada" (nota no cartão + Telegram do João) deixa de sair em três casos que não são venda perdida: o paciente adiou e a IA gravou ⊘ Motivo da espera com ◷ Retomar em (a retomada automática cuida); o paciente nunca respondeu depois da oferta (a régua de follow-up cuida); e de madrugada, entre 21h e 8h na hora da unidade (o vigia espera a manhã e só avisa se ainda valer).',
+    pegadinha:
+      'Medido nos 20 alertas de 19–20/10/2026: 10 eram de quem adiou ("deixa para o próximo", "só volto em dezembro", "vou pelo plano"), 4 de quem nunca respondeu e 6 chegaram de madrugada — ligada, sobrariam 6, todos de quem respondeu e ficou sem consulta (inclusive o "vou ver com meu marido"). Em "só no papel" o aviso sai igual a hoje e a lista mostra "pularia" com o motivo. Se o paciente voltar a escrever dentro de 24 h da oferta e não marcar, o aviso sai.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/agendamento-perdido-worker.ts',
+  },
+  {
     id: 'etiquetas-auto',
     chave: 'ETIQUETAS_AUTO_SLUGS',
     nome: 'Etiquetas ▶ automáticas',
