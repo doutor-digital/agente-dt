@@ -215,3 +215,10 @@ export function ehIntocavel(lossReasonId: number | null | undefined): boolean {
   if (lossReasonId == null) return false;
   return MOTIVOS_INTOCAVEIS.some((m) => m.id === lossReasonId);
 }
+
+/**
+ * O que o fim da escada grava em `conversations.follow_up_stopped_reason`. É o sinal que o worker de
+ * parados lê para a "régua esgotada → PERDIDO" — por isso mora aqui, num lugar só, e não como texto
+ * solto nos dois lados (foi o desencontro que deixou a regra sem disparar; auditoria 16/10, item 12).
+ */
+export const MOTIVO_ESCADA_CONCLUIDA = 'escada concluída';

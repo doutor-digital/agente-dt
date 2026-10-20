@@ -26,6 +26,7 @@
 import { MOTIVO_PERDA as MOTIVO_PERDA_FRANQUIA, ehEtapaDeEntrada } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { estadoGravado } from './automacoes-estado.js';
+import { MOTIVO_ESCADA_CONCLUIDA } from './follow-up-presets.js';
 
 export const PRAZOS = {
   esperaDias: Number(process.env.PARADOS_ESPERA_DIAS) || 30,
@@ -206,6 +207,8 @@ export interface DecisaoParado {
   retomarEmEpoch?: number;
   /** PERDIDO por sumiço: não dispara a régua de templates de PERDIDO */
   semRegua?: boolean;
+  /** de onde vem a regra, pra nota do cartão (padrão: a combinada em 18/09/2026) */
+  combinada?: string;
 }
 
 export function prazoDaEtapa(etapa: string, prazos: PrazosDeEtapa = PRAZOS): number | null {
@@ -276,6 +279,41 @@ export function decidirFalta(
   };
 }
 
+/**
+ * Régua esgotada, do lado do banco do agente: a escada ACABOU (o follow-up-worker grava
+ * `followUpStoppedReason = MOTIVO_ESCADA_CONCLUIDA` no último degrau) e o último toque tem mais de
+ * `reguaRespostaHoras`. Quem escreve depois zera `followUpStep` (conversations.service), então quem
+ * sobra aqui não voltou.
+ *
+ * Até 20/10/2026 o filtro pedia `followUpStoppedReason = null` — o contrário do que o fim da escada
+ * grava — e a regra nunca disparou (auditoria da Açailândia, item 12). Caso real: 10819952, escada
+ * concluída em 03/10, o paciente só escreveu uma vez (02/10), e o cartão continuava em EM QUALIFICAÇÃO
+ * "Sem resposta" 17 dias depois. A intenção do `null` era não pegar conversa parada por outro motivo
+ * (consulta marcada, pediu pra parar, motivo de perda, janela fechada); o valor exato faz isso melhor.
+ */
+export function filtroDaReguaEsgotada(unitIds: string[], agoraEpoch: number, horas: number = PRAZOS.reguaRespostaHoras) {
+  return {
+    unitId: { in: unitIds },
+    followUpStep: { gte: 1 },
+    followUpStoppedReason: MOTIVO_ESCADA_CONCLUIDA,
+    followUpLastAt: { lt: new Date((agoraEpoch - horas * 3600) * 1000) },
+  };
+}
+
+/** O mesmo filtro, em memória (teste e script de conferência). */
+export function escadaEsgotada(
+  c: { followUpStep: number; followUpStoppedReason: string | null; followUpLastAt: Date | null },
+  agoraEpoch: number,
+  horas: number = PRAZOS.reguaRespostaHoras,
+): boolean {
+  return (
+    c.followUpStep >= 1 &&
+    c.followUpStoppedReason === MOTIVO_ESCADA_CONCLUIDA &&
+    c.followUpLastAt !== null &&
+    c.followUpLastAt.getTime() < (agoraEpoch - horas * 3600) * 1000
+  );
+}
+
 /** A régua esgotada só derruba quem ainda não passou da porta: entrada ou EM QUALIFICAÇÃO. */
 export function reguaEsgotadaDerruba(etapa: string): boolean {
   return ehEtapaDeEntrada(etapa) || eh(etapa, 'EM QUALIFICAÇÃO');
@@ -325,7 +363,7 @@ export function textoDaNota(d: DecisaoParado, etapaAtual: string): string {
   if (d.para === 'PERDIDO') {
     return (
       `⏱ Movido de ${etapaAtual} para PERDIDO pelo prazo: ${d.regra}. Motivo: ${d.motivoPerda}. ` +
-      'Regra combinada em 18/09/2026 — o cartão anda sozinho; se o paciente voltar a escrever, a Sofia retoma.'
+      `${d.combinada ?? 'Regra combinada em 18/09/2026'} — o cartão anda sozinho; se o paciente voltar a escrever, a Sofia retoma.`
     );
   }
   return (

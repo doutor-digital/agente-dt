@@ -169,3 +169,27 @@ test('parados: motivo genérico de robô (sobra de um PERDIDO antigo) não segur
     'Achou caro',
   );
 });
+
+test('régua esgotada (auditoria 16/10, item 12): o filtro pede a escada CONCLUÍDA — caso real 10819952 vira PERDIDO', async () => {
+  const { MOTIVO_ESCADA_CONCLUIDA } = await import('./follow-up-presets.js');
+  const { escadaEsgotada, filtroDaReguaEsgotada } = await import('./parados.js');
+  const agora = Date.parse('2026-10-20T12:00:00Z') / 1000;
+  // 10819952 (Açailândia): o paciente escreveu uma vez em 02/10, a escada acabou em 03/10 e o cartão seguia em
+  // EM QUALIFICAÇÃO "Sem resposta" 17 dias depois — o filtro antigo (`followUpStoppedReason = null`) nunca o via.
+  const conversa = { followUpStep: 4, followUpStoppedReason: MOTIVO_ESCADA_CONCLUIDA, followUpLastAt: new Date('2026-10-03T11:16:03Z') };
+  assert.equal(escadaEsgotada(conversa, agora), true);
+  const filtro = filtroDaReguaEsgotada(['u1'], agora);
+  assert.equal(filtro.followUpStoppedReason, 'escada concluída', 'o mesmo texto que o follow-up-worker grava no último degrau');
+  assert.ok(filtro.followUpLastAt.lt.getTime() === (agora - 24 * 3600) * 1000);
+  assert.equal(reguaEsgotadaDerruba('EM QUALIFICAÇÃO'), true);
+  const d = decidirReguaEsgotada('Sem resposta', false);
+  assert.equal(d?.para, 'PERDIDO');
+  assert.equal(d?.motivoPerda, MOTIVO_PERDA.FOLLOW_UP);
+
+  // fora da regra: escada no meio, parada por outro motivo, paciente que voltou (o passo zera) e toque recente
+  assert.equal(escadaEsgotada({ ...conversa, followUpStoppedReason: null }, agora), false, 'escada ainda no meio');
+  assert.equal(escadaEsgotada({ ...conversa, followUpStoppedReason: 'consulta marcada' }, agora), false);
+  assert.equal(escadaEsgotada({ ...conversa, followUpStoppedReason: 'paciente pediu para parar' }, agora), false);
+  assert.equal(escadaEsgotada({ ...conversa, followUpStep: 0, followUpLastAt: null }, agora), false, 'escreveu depois: o passo zerou');
+  assert.equal(escadaEsgotada({ ...conversa, followUpLastAt: new Date('2026-10-20T01:00:00Z') }, agora), false, 'ainda dentro das 24 h');
+});

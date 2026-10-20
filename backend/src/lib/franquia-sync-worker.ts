@@ -32,6 +32,7 @@ import {
   tratamentoAberto, tratamentoFinalizado, type EntradaMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa,
 } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
+import { franquiaRespeitaEspera } from './espera-retomada.js';
 import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
@@ -1757,6 +1758,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: aviso de sessão esquecida falhou'),
   );
   if (!mov) return;
+  if (franquiaRespeitaEspera(unit, lead, atual, mov.para, agoraEpoch)) return; // EM ESPERA com ◷ Retomar em (auditoria 16/10, item 10)
   if (seco) {
     contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');

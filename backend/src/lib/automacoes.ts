@@ -73,11 +73,24 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'Paciente que está em EM ESPERA e volta a escrever de verdade tem o cartão devolvido pra EM QUALIFICAÇÃO na hora, com a retomada automática cancelada e uma nota explicando.',
     pegadinha:
-      'Não varre etapa nenhuma: só acorda quando chega mensagem. É a rede pra SDR que estaciona cartão cedo demais. Ignora "ok, obrigado" — só conta mensagem real.',
+      'Não varre etapa nenhuma: só acorda quando chega mensagem. É a rede pra SDR que estaciona cartão cedo demais. Ignora "ok, obrigado" — só conta mensagem real. Cartão com ◷ Retomar em pra frente fica em EM ESPERA (a SDR decidiu esperar; a Sofia conversa do mesmo jeito); no dia da retomada, a resposta traz o cartão de volta como sempre.',
     risco: 'move-cartao',
     temSeco: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/parados-worker.ts',
+  },
+  {
+    id: 'parados-estoques',
+    chave: 'PARADOS_ESTOQUES_SLUGS',
+    nome: 'Parados: o que nenhuma regra alcançava',
+    oQueFaz:
+      'Estende o worker de parados aos cartões que ficavam esquecidos (auditoria da Açailândia, 16/10): NÃO COMPARECEU com situação Desmarcado ou vazia, ou sem paciente achado na franquia, segue a jornada pela data da consulta (até 30 dias vai pra EM ESPERA, depois PERDIDO "desmarcou ou faltou e não remarcou"); AGENDADO com consulta vencida há mais de 30 dias (ou sem consulta) e RETORNO PÓS-TRATAMENTO sem retorno marcado há 30 dias vão pra PERDIDO; entrada e EM QUALIFICAÇÃO sem ninguém escrever nem mexer há 90 dias vão pra PERDIDO "não interagiu"; EM TRATAMENTO sem nenhum dado de sessão entra na fila da página /alta pra recepção decidir.',
+    pegadinha:
+      'Ligar começa a escoar o estoque que já existe (no teto de sempre: 10 por regra por varredura, de hora em hora) — por isso nasce desligada e a primeira passada deve ser "Só no papel". Só roda onde o worker de parados está ligado ou no papel. PERDIDO por fato velho (mais de 90 dias), sem data, de RETORNO PÓS e de lead dormente leva NO_FOLLOW_UP: a régua de PERDIDO não manda nada. Nada sai de EM TRATAMENTO sozinho (o gatilho da ALTA não tem condição): vai pra fila da /alta. ◷ Retomar em pra frente, consulta futura no cartão ou na franquia e tratamento em andamento seguram o cartão. Com esta chave ligada, o NÃO COMPARECEU inteiro passa a seguir a jornada (falta com mais de 30 dias vai direto pra PERDIDO, não pra EM ESPERA).',
+    risco: 'move-cartao',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/parados-estoques.ts',
   },
   {
     id: 'franquia-move',
@@ -86,7 +99,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'O que acontece na franquia manda o cartão andar sozinho: marcou vira AGENDADO, foi atendido vira COMPARECEU, começou as sessões vai pra EM TRATAMENTO. Ninguém arrasta cartão na mão.',
     pegadinha:
-      'A franquia nunca escreve atendido, valor nem alta por conta própria — esses três continuam vindo da tela. E a máquina se recusa a declarar falta ou perda a partir da etapa de entrada: esse cartão é da Sofia, que pode estar no meio de uma conversa. Mover dispara os bots da etapa de destino: ligue em seco primeiro e leia no log (franquia-move [seco]: moveria) e no resumo da varredura (simulados) quantos cartões iriam pra onde.',
+      'A franquia nunca escreve atendido, valor nem alta por conta própria — esses três continuam vindo da tela. E a máquina se recusa a declarar falta ou perda a partir da etapa de entrada: esse cartão é da Sofia, que pode estar no meio de uma conversa. Cartão em EM ESPERA com ◷ Retomar em de hoje em diante só sai por fato novo (consulta marcada, tratamento aberto) — a mesma avaliação de antes não o puxa de volta pra COMPARECEU ou EM NEGOCIAÇÃO. Mover dispara os bots da etapa de destino: ligue em seco primeiro e leia no log (franquia-move [seco]: moveria) e no resumo da varredura (simulados) quantos cartões iriam pra onde.',
     risco: 'move-cartao',
     temSeco: true,
     quandoVazio: 'desligado',
