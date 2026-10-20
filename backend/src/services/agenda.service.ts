@@ -68,6 +68,23 @@ function eachDay(initialDate: string, endDate: string): string[] {
   return out;
 }
 
+/**
+ * Quanto um agendamento ocupa na agenda da FRANQUIA, pra ela recusar outro por cima: 30 minutos, seja
+ * qual for o passo da grade da unidade.
+ *
+ * Medido em Mossoró (grade de 45 min desde 02/10/2026), nas sondagens de 19/10: a franquia recusou
+ * 09:45 e 15:45 de 20/10 (há consulta às 10:00, e às 15:30 e 16:00) e aceitou 13:30 (há consulta às
+ * 14:00) e, em 22/10, 10:30 (há consulta às 10:00 e às 11:00). Só "30 min de cada lado" explica as
+ * nove respostas daquele dia: com 45 min, 13:30 e 10:30 teriam sido recusados. Antes disto a grade
+ * só comparava o horário de início exato — um 09:45 da grade nova não via a consulta das 10:00 da
+ * grade antiga, a Sofia sondava o horário, a franquia dizia "400: Horário não disponível" (79 vezes
+ * em 48 h, quase todas em Mossoró) e o dia saía com 2 de 9 horários.
+ *
+ * Em grade de 30 min com tudo marcado em :00/:30, "30 min de cada lado" é o mesmo que "mesmo
+ * início" — nada muda nas unidades que nunca mudaram o passo.
+ */
+export const DURACAO_NA_FRANQUIA_MIN = 30;
+
 export function buildAgenda(
   cfg: AgendaConfig,
   schedules: SpineSchedule[],
@@ -79,12 +96,21 @@ export function buildAgenda(
   if (!Number.isFinite(toMinutes(cfg.start)) || !Number.isFinite(toMinutes(cfg.end)) || toMinutes(cfg.end) <= toMinutes(cfg.start)) return [];
 
   const ocupado = new Map<string, SpineSchedule>();
+  /** Por dia, o início (em minutos) de cada agendamento que ocupa a agenda — pra achar quem fica por cima. */
+  const ocupadosDoDia = new Map<string, Array<{ minuto: number; s: SpineSchedule }>>();
   for (const s of schedules) {
     if (!s.dayLocal || !s.timeLocal) continue;
     if (!s.isBusy && !s.requiresManualValidation) continue;
     const chave = `${s.dayLocal} ${s.timeLocal}`;
     const anterior = ocupado.get(chave);
     if (!anterior || (!anterior.isBusy && s.isBusy)) ocupado.set(chave, s);
+    // Desmarcado (validar à mão) só pesa no próprio horário, como antes: a franquia não o conta como ocupado.
+    const minuto = toMinutes(s.timeLocal);
+    if (s.isBusy && Number.isFinite(minuto)) {
+      const doDia = ocupadosDoDia.get(s.dayLocal);
+      if (doDia) doDia.push({ minuto, s });
+      else ocupadosDoDia.set(s.dayLocal, [{ minuto, s }]);
+    }
   }
 
   const out: AgendaSlot[] = [];
@@ -129,7 +155,19 @@ export function buildAgenda(
       }
 
       const achado = ocupado.get(`${dia} ${hhmm}`);
-      if (!achado) {
+      // Sem ninguém no horário exato, ainda pode haver consulta começando menos de 30 min antes ou depois
+      // (grade de 45 min sobre consultas antigas de 30): a franquia recusa, então não é livre.
+      const porCima = achado
+        ? undefined
+        : ocupadosDoDia.get(dia)?.find((o) => Math.abs(o.minuto - m) < DURACAO_NA_FRANQUIA_MIN);
+      if (porCima) {
+        out.push({
+          day: dia,
+          time: hhmm,
+          status: 'ocupado',
+          motivo: `encosta na consulta das ${porCima.s.timeLocal} (${porCima.s.statusName ?? `status ${porCima.s.idStatus}`})`,
+        });
+      } else if (!achado) {
         out.push({ day: dia, time: hhmm, status: 'livre' });
       } else if (achado.isBusy) {
         out.push({
