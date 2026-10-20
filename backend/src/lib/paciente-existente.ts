@@ -12,9 +12,10 @@
  *   caso real em Petrópolis) só aparecem quando se olha o conjunto.
  * - **Mais de um com o mesmo telefone:** fica com o de nome igual, se for um só; senão, ninguém escolhe no chute.
  *
- * Só o primeiro nome (o widget aceita desde 20/10/2026): a busca por ele é a única coisa que prova "não existe". Se ela
- * nem pôde ser feita (a franquia só busca com 3+ letras) ou veio com a página cheia (nome comum: o paciente pode estar
- * fora da 1ª página), não há como dizer que o paciente é novo — `inconclusivo`, e nada é criado.
+ * Só o primeiro nome (o widget aceita desde 20/10/2026): a busca por ele tem de ter visto TODO mundo com esse nome. Se
+ * ela nem pôde ser feita (a franquia só busca com 3+ letras) ou veio com a página cheia (nome comum: há gente fora da
+ * 1ª página), não dá para dizer que o paciente é novo, nem que o achado pelo telefone é o único — outro com o mesmo
+ * telefone pode estar fora da página (review do Codex, 20/10). `inconclusivo`: nada é criado nem ligado.
  */
 import type { Unit } from '@prisma/client';
 import { SpineService } from '../services/spine.service.js';
@@ -69,14 +70,15 @@ export async function pacienteExistente(
     }
   }
   if (falhou) return { tipo: 'sem_resposta' };
+  // só o primeiro nome: a busca POR ELE (o título pode ser outro nome) tem de ter sido feita e visto todo mundo — senão
+  // nem "não existe" nem "é este" se sustentam
+  if (opcoes.soPrimeiroNome) {
+    const primeiro = limparNome(nome).split(' ').filter(Boolean)[0] ?? '';
+    if (!completos.has(primeiro)) return { tipo: 'inconclusivo' };
+  }
 
   const lista: PacienteDaFranquia[] = [...porId].map(([idClient, n]) => ({ idClient, nome: n }));
-  if (lista.length === 0) {
-    // só o primeiro nome: "não existe" só vale se a busca POR ELE foi feita e viu todo mundo (o título pode ser outro nome)
-    const primeiro = limparNome(nome).split(' ').filter(Boolean)[0] ?? '';
-    if (opcoes.soPrimeiroNome && !completos.has(primeiro)) return { tipo: 'inconclusivo' };
-    return { tipo: 'nao_achou' };
-  }
+  if (lista.length === 0) return { tipo: 'nao_achou' };
   if (lista.length === 1) return { tipo: 'achou', ...lista[0] };
 
   const alvos = new Set([normalizar(limparNome(nome)), normalizar(limparNome(tituloDoCartao))].filter(Boolean));

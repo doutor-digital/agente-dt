@@ -275,6 +275,19 @@ test('widget cadastrar: só o primeiro nome e a busca por ele veio CHEIA → rec
   assert.deepEqual(escritas, []);
 });
 
+test('widget cadastrar: só o primeiro nome, página CHEIA e um paciente com o telefone nela → recusa, não liga (outro pode estar fora da página)', async () => {
+  // review do Codex (20/10): a mãe e a filha no mesmo WhatsApp — só uma veio na 1ª página
+  const pagina = [...outros(99), { idClient: 321, name: 'MARIA APARECIDA SOUZA', whatsapp: '5524999990000' }];
+  buscaPorTermo = (termo) => (termo === 'Maria' ? { ok: true, clients: pagina } : { ok: true, clients: [] });
+  const { kommo, escritas } = kommoFalso(null);
+  const r = await cadastrarPeloWidget(unidade(SERRA), { leadId: 217, nome: 'Maria', telefone: FONE }, { kommo });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.codigo, 'sem_sobrenome');
+  assert.ok(!naFranquia.includes('createClient'));
+  assert.deepEqual(vinculosGravados, [], 'não liga o cartão no chute');
+  assert.deepEqual(escritas, []);
+});
+
 test('widget cadastrar: nome completo com o primeiro nome lotado na busca segue como antes (o nome inteiro prova)', async () => {
   buscaPorTermo = (termo) => (termo.toUpperCase() === 'MARIA' ? { ok: true, clients: outros(100) } : { ok: true, clients: [] });
   const { kommo } = kommoFalso(null);
