@@ -19,6 +19,8 @@ import { startReminderWorker, stopReminderWorker } from './lib/reminder-worker.j
 import { startReactivationWorker, stopReactivationWorker } from './lib/reactivation-worker.js';
 import { startLeadPausaWorker, stopLeadPausaWorker } from './lib/lead-pausa-worker.js';
 import { startSlaAlertWorker, stopSlaAlertWorker } from './lib/sla-alert-worker.js';
+import { startSemRespostaWorker, stopSemRespostaWorker } from './lib/sem-resposta-worker.js';
+import { ROTA_WEBHOOK_KOMMO, parserDoWebhookKommo } from './lib/parser-webhook-kommo.js';
 import { startAgendamentoPerdidoWorker, stopAgendamentoPerdidoWorker } from './lib/agendamento-perdido-worker.js';
 import { startPrometeuSemMarcarWorker, stopPrometeuSemMarcarWorker } from './lib/prometeu-sem-marcar-worker.js';
 import { startEtiquetasAutoWorker, stopEtiquetasAutoWorker } from './lib/etiquetas-auto-worker.js';
@@ -94,6 +96,9 @@ async function main(): Promise<void> {
 
   app.use(cookieParser());
 
+  // Webhook do Kommo antes do parser geral: cartões em lote passam de 1000 parâmetros e o geral devolvia 413
+  // antes do handler (ver parser-webhook-kommo.ts).
+  app.use(ROTA_WEBHOOK_KOMMO, parserDoWebhookKommo());
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
   app.use(
@@ -187,6 +192,7 @@ async function main(): Promise<void> {
       startReactivationWorker();
       startLeadPausaWorker();
       startSlaAlertWorker();
+      startSemRespostaWorker();
       startAgendamentoPerdidoWorker();
       startPrometeuSemMarcarWorker();
       startEtiquetasAutoWorker();
@@ -224,6 +230,7 @@ async function main(): Promise<void> {
       stopReactivationWorker();
       stopLeadPausaWorker();
       stopSlaAlertWorker();
+      stopSemRespostaWorker();
       stopAgendamentoPerdidoWorker();
       stopPrometeuSemMarcarWorker();
       stopEtiquetasAutoWorker();
