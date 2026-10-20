@@ -227,6 +227,22 @@ function gatilhoDe(s: SpineSchedule): string {
   return `consulta:${s.idSchedule ?? s.dateAttendanceUtc ?? '?'}`;
 }
 
+/** Sessão: o tratamento é o fato (estável enquanto ele durar); sem o id dele, a própria sessão. */
+function gatilhoDaSessao(s: SpineSchedule): string {
+  return s.idTreatment ? `sessao:trat:${s.idTreatment}` : `sessao:${s.idSchedule ?? s.dateAttendanceUtc ?? '?'}`;
+}
+
+/**
+ * PURA (16/10, achado da revisão): tratamento FINALIZADO, nenhum em andamento, e mesmo assim uma sessão marcada pra frente
+ * na franquia. É sujeira (sessão esquecida): o cartão não se move por isso; o sincronizador abre uma tarefa. Devolve a
+ * sessão, ou null.
+ */
+export function sessaoEsquecidaComTratamentoFinalizado(e: Pick<EntradaMovimento, 'agendamentos' | 'tratamentos' | 'agoraEpoch'>): SpineSchedule | null {
+  if (!e.tratamentos.some(finalizado) || e.tratamentos.some(emAndamento)) return null;
+  const futuras = e.agendamentos.filter((s) => ehSessao(s) && (epoch(s) ?? 0) > e.agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO));
+  return proxima(futuras);
+}
+
 /** Puro: dado o cartão e o que a franquia sabe, pra onde o cartão vai (ou null = fica). */
 export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const atual = e.atual;
@@ -299,8 +315,10 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
       if (v2) {
         // 16/10, "a franquia manda" também na ALTA: sessão marcada pra frente = ainda em tratamento; consulta marcada pra
         // frente (avaliação ou retorno) = voltou (regra 2). Cada saída leva o fato que a causou (só uma vez por fato).
+        // Só com tratamento EM ANDAMENTO: finalizado + sessão "agendada" é sujeira da franquia — o cartão fica na ALTA e o
+        // sincronizador abre uma tarefa (sem isto, ALTA → EM TRATAMENTO → ALTA e a régua da ALTA dispara de novo).
         const sessaoMarcada = proxima(sessoes.filter(futura));
-        if (sessaoMarcada) return { funil: 'TRATAMENTO', para: ETAPA.EM_TRATAMENTO, motivo: 'sessão marcada na franquia (a franquia manda: sai da ALTA)', gatilho: 'sessao' };
+        if (sessaoMarcada && temEmAndamento) return { funil: 'TRATAMENTO', para: ETAPA.EM_TRATAMENTO, motivo: 'sessão marcada na franquia (a franquia manda: sai da ALTA)', gatilho: gatilhoDaSessao(sessaoMarcada) };
         const consultaMarcada = proxima(consultas.filter(futura));
         if (consultaMarcada) return { funil: 'COMERCIAL', para: ETAPA.RETORNO, motivo: 'consulta marcada na franquia (a franquia manda: sai da ALTA)', gatilho: gatilhoDe(consultaMarcada) };
         if (retornoPosAtendidoRecente && ultimoRetornoPos) return { funil: 'COMERCIAL', para: ETAPA.COMPARECEU, motivo: 'retorno pós-tratamento atendido na franquia', gatilho: gatilhoDe(ultimoRetornoPos) };
@@ -316,17 +334,14 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
       return null;
     }
     if (eh(status, ETAPA.EM_TRATAMENTO)) {
-      // 16/10: com sessão marcada pra frente na franquia o tratamento não acabou — não vai pra ALTA (e a ALTA com sessão
-      // marcada volta pra cá: sem esta trava os dois ficariam se empurrando a cada varredura)
-      const seguraAlta = v2 && sessoes.some(futura);
       if (cicloAnterior) {
         // o FINALIZADO do ciclo velho é esperado aqui; o que decide é o tratamento novo
         if (temCancelado && !temEmAndamento && !temPendente) return ir('TRATAMENTO', ETAPA.CANCELADO, 'tratamento cancelado na franquia');
-        if (temFinalizado && !temEmAndamento && !temPendente && !temCancelado && !seguraAlta) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+        if (temFinalizado && !temEmAndamento && !temPendente && !temCancelado) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
         return null;
       }
       // um tratamento pendente não segura a alta; um em andamento segura
-      if (temFinalizado && !temEmAndamento && !seguraAlta) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+      if (temFinalizado && !temEmAndamento) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
       // cancelado na franquia, sem outro aberto (pendente ou em andamento) e sem finalizado: a clínica encerrou
       if (temCancelado && !temAberto && !temFinalizado) return ir('TRATAMENTO', ETAPA.CANCELADO, 'tratamento cancelado na franquia');
     }

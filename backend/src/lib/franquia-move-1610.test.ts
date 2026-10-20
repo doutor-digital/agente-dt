@@ -213,3 +213,19 @@ test('decisão 7: a saída do PERDIDO leva o fato junto (a consulta que tirou de
   assert.equal(planejarMovimento(e(ETAPA.PERDIDO, [marcada]))?.gatilho, `consulta:${marcada.idSchedule}`);
   assert.equal(planejarMovimento(e(ETAPA.AGENDADO, [ag({ h: -3, idStatus: 40 })]))?.gatilho, undefined, 'movimento comum não tem gatilho');
 });
+
+// ── revisão independente (16/10) ──
+
+test('achado 3 — o gatilho da sessão leva o id do tratamento (ou da sessão), não um "sessao" fixo', () => {
+  const s1 = { ...ag({ h: 30, idStatus: 37, categoria: 'SESSÃO' }), idTreatment: 77 };
+  assert.equal(planejarMovimento(e(ETAPA.ALTA, [...cicloVelho(), s1], EM_ANDAMENTO, 'TRATAMENTO'))?.gatilho, 'sessao:trat:77');
+  const s2 = ag({ h: 30, idStatus: 37, categoria: 'SESSÃO' });
+  assert.equal(planejarMovimento(e(ETAPA.ALTA, [...cicloVelho(), s2], EM_ANDAMENTO, 'TRATAMENTO'))?.gatilho, `sessao:${s2.idSchedule}`);
+});
+
+test('achado 4 — ALTA + tratamento FINALIZADO + sessão esquecida em AGENDADO não sai da ALTA (é sujeira da franquia)', () => {
+  const ag1 = [...cicloVelho(), ag({ h: 48, idStatus: 37, categoria: 'SESSÃO' })];
+  assert.equal(planejarMovimento(e(ETAPA.ALTA, ag1, FINALIZADO, 'TRATAMENTO')), null);
+  // e EM TRATAMENTO com tratamento finalizado vai pra ALTA mesmo com a sessão esquecida — sem vaivém
+  assert.equal(planejarMovimento(e(ETAPA.EM_TRATAMENTO, ag1, FINALIZADO, 'TRATAMENTO'))?.para, ETAPA.ALTA);
+});

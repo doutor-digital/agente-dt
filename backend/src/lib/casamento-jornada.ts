@@ -24,7 +24,7 @@
  */
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chaveTelefone, ehAvaliacao, ehConsulta, nomeDaFranquia, normalizar } from './franquia-sync.js';
+import { chaveTelefone, ehAvaliacao, ehConsulta, nomeDaFranquia, nomeParaBusca, normalizar } from './franquia-sync.js';
 import { normalizarNome } from './kommo-schema.js';
 
 export const ID_AUTOMACAO = 'casamento-jornada';
@@ -53,16 +53,23 @@ export type EscolhaDoPaciente =
   | { tipo: 'nenhum'; motivo: 'sem candidatos' | 'homonimos' | 'nome nao casa' };
 
 export interface EntradaDaEscolha {
-  /** `⚙ idClient (franquia)` gravado no cartão, ou o vínculo que a Sofia gravou. */
+  /** `⚙ idClient (franquia)` gravado no cartão, ou o vínculo que a Sofia gravou (no cadastro, já conferido pelo nome). */
   idDoCartao: number | null;
   /** Candidatos que a busca por NOME na franquia devolveu (a franquia não busca por telefone). */
   candidatos: ClienteCandidato[];
-  /** idClient dos OUTROS cartões do Kommo com o mesmo telefone (campo ⚙ ou vínculo da Sofia). */
-  idsDosIrmaos?: number[];
+  /** Pacientes dos OUTROS cartões do Kommo com o mesmo telefone (campo ⚙ ou vínculo da Sofia), com o nome da franquia. */
+  irmaos?: ClienteCandidato[];
   /** Telefone do cartão, já em `chaveTelefone` ('' = desconhecido). */
   fone: string;
   /** Termos do título do cartão, já normalizados por `nomeDaFranquia`. */
   alvos: Set<string>;
+  /** O nome de quem é o cartão (título, ou o nome que a Sofia vai cadastrar) — para conferir irmãos e, no cadastro, tudo. */
+  nome?: string | null;
+  /**
+   * `robo` (sincronizador): o telefone da franquia manda, o nome não importa (regra de 23/09). `cadastro` (a Sofia vai criar
+   * alguém): o paciente do telefone só vale se o nome bater — a filha marcando pelo WhatsApp da mãe é OUTRA pessoa.
+   */
+  modo?: 'robo' | 'cadastro';
 }
 
 /**
@@ -74,24 +81,72 @@ export interface EntradaDaEscolha {
  */
 export function escolherPacienteDoCartao(e: EntradaDaEscolha): EscolhaDoPaciente {
   if (e.idDoCartao && e.idDoCartao > 0) return { tipo: 'achou', idClient: e.idDoCartao, por: 'idClient' };
+  const cadastro = e.modo === 'cadastro';
+  const bateNome = (c: ClienteCandidato) => !!e.nome && nomeCompativelComTitulo(e.nome, c.name);
   const vivos = dedupe(e.candidatos.filter((c) => c.idClient));
   if (e.fone) {
-    const doTelefone = vivos.filter((c) => chaveTelefone(c.whatsapp) === e.fone);
-    const irmaos = [...new Set((e.idsDosIrmaos ?? []).filter((x) => Number.isInteger(x) && x > 0))];
-    // os irmãos só entram como candidatos se a franquia não trouxe ninguém com o telefone, ou se trouxerem gente nova
-    const extras = irmaos.filter((id) => !doTelefone.some((c) => c.idClient === id)).map((id) => ({ idClient: id, name: null, whatsapp: null }));
+    const doTelefoneTodos = vivos.filter((c) => chaveTelefone(c.whatsapp) === e.fone);
+    // no cadastro, o paciente do telefone com OUTRO nome é outra pessoa da família: não casa (cadastra a pessoa nova)
+    const doTelefone = cadastro ? doTelefoneTodos.filter(bateNome) : doTelefoneTodos;
+    // o irmão do Kommo só vale com nome compatível (o cartão irmão pode ser de outro paciente do mesmo número)
+    const extras = dedupe((e.irmaos ?? []).filter((c) => c.idClient && bateNome(c))).filter((c) => !doTelefone.some((x) => x.idClient === c.idClient));
     const todos = [...doTelefone, ...extras];
     if (todos.length === 1) return { tipo: 'achou', idClient: todos[0].idClient as number, por: 'telefone' };
     if (todos.length > 1) {
-      // nome desconhecido (veio do irmão) não prova que é a mesma pessoa: conta como pessoa diferente
+      // nome desconhecido não prova que é a mesma pessoa: conta como pessoa diferente
       const nomes = new Set(todos.map((c) => (c.name ? nomeDaFranquia(c.name) : `?${c.idClient}`)));
       return nomes.size > 1 ? { tipo: 'conflito', candidatos: todos } : { tipo: 'desempatar', candidatos: todos };
     }
+    if (cadastro && doTelefoneTodos.length > 0) return { tipo: 'nenhum', motivo: 'nome nao casa' };
   }
   const exatos = vivos.filter((c) => e.alvos.has(nomeDaFranquia(c.name)) && (!e.fone || !chaveTelefone(c.whatsapp) || chaveTelefone(c.whatsapp) === e.fone));
   if (exatos.length === 1) return { tipo: 'achou', idClient: exatos[0].idClient as number, por: 'nome' };
   if (vivos.length === 0) return { tipo: 'nenhum', motivo: 'sem candidatos' };
   return { tipo: 'nenhum', motivo: exatos.length > 1 ? 'homonimos' : 'nome nao casa' };
+}
+
+const PARTICULAS = new Set(['da', 'de', 'do', 'das', 'dos', 'e']);
+
+function partesDoNome(n: string | null | undefined): string[] {
+  return nomeDaFranquia(n).split(' ').filter((p) => p.length >= 2 && !PARTICULAS.has(p));
+}
+
+/** Distância de edição (Levenshtein), para "ALEXANDRO" × "ALEXSANDRO". */
+function distancia(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  }
+  return d[a.length][b.length];
+}
+
+function parecido(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length < 5 || b.length < 5) return false;
+  return distancia(a, b) <= (Math.max(a.length, b.length) >= 8 ? 2 : 1);
+}
+
+/**
+ * PURA. Dois nomes podem ser a MESMA pessoa? O primeiro nome tem de bater (com folga de digitação) e, quando os dois têm
+ * sobrenome, pelo menos um sobrenome em comum. "Ana Souza" × "Maria Souza" = não (mãe e filha); "Maria Souza" × "MARIA DA
+ * SILVA SOUZA" = sim; sem nome de um dos lados = não (sem nome não se prova nada).
+ */
+export function nomeCompativel(a: string | null | undefined, b: string | null | undefined): boolean {
+  const pa = partesDoNome(a);
+  const pb = partesDoNome(b);
+  if (pa.length === 0 || pb.length === 0) return false;
+  if (!parecido(pa[0], pb[0])) return false;
+  const sa = pa.slice(1);
+  const sb = pb.slice(1);
+  if (sa.length === 0 || sb.length === 0) return true;
+  return sa.some((x) => sb.some((y) => parecido(x, y)));
+}
+
+/** O título do cartão pode ter duas pessoas ("MARIA DA PENHA - ALEXANDRO SANT ANA"): vale se alguma delas bater. */
+export function nomeCompativelComTitulo(titulo: string | null | undefined, nome: string | null | undefined): boolean {
+  const pessoas = nomeParaBusca(titulo).split(/\s+[/\-–]\s+|\//).map((x) => x.trim()).filter(Boolean);
+  return pessoas.some((p) => nomeCompativel(p, nome));
 }
 
 function dedupe(lista: ClienteCandidato[]): ClienteCandidato[] {
@@ -235,4 +290,20 @@ export function chaveDoDuplicado(ids: number[]): string {
 export function notaCadastroDuplicado(ids: number[], escolhido: number | null): string {
   const lista = [...new Set(ids)].sort((a, b) => a - b).join(' e ');
   return `ℹ A franquia tem ${ids.length > 2 ? 'mais de um cadastro' : 'dois cadastros'} do mesmo paciente (mesmo nome e mesmo telefone): idClient ${lista}. O robô usa ${escolhido ? `o ${escolhido}` : 'o cadastro'} com a agenda mais recente. Peça à unidade para juntar os cadastros na franquia.`;
+}
+
+// ── tratamento FINALIZADO com sessão ainda marcada: sujeira da franquia, vira tarefa (não move) ──
+
+export function chaveDaSujeira(idSchedule: number | string): string {
+  return `franquia-sujeira:sessao:${idSchedule}`;
+}
+
+export function tarefaDaSujeira(s: Pick<SpineSchedule, 'dayLocal' | 'timeLocal' | 'dateAttendanceLocal' | 'dateAttendanceUtc'>): string {
+  const quandoFoi = s.dayLocal && s.timeLocal ? `${s.dayLocal.split('-').reverse().join('/')} às ${s.timeLocal}` : (s.dateAttendanceLocal ?? s.dateAttendanceUtc ?? '');
+  return `Conferir na franquia: o tratamento está FINALIZADO, mas ainda há sessão marcada (${quandoFoi}). Desmarque a sessão, ou reabra o tratamento se o paciente continua. O cartão não foi movido por causa disso.`;
+}
+
+/** ruleKey de "o ROBÔ pôs este cartão nesta etapa" — é o que separa "a equipe pôs de volta" de "o próprio robô pôs". */
+export function chaveDoRoboPos(etapa: EtapaQueAFranquiaReabre): string {
+  return `robo-pos:${etapa}`;
 }

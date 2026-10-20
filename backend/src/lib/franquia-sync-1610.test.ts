@@ -80,6 +80,8 @@ definir('automacaoSimulacao', {
   deleteMany: async () => ({ count: 0 }),
 });
 definir('unitAutomacao', { findMany: async () => [] });
+let unidadesNoBanco: Unit[] = [];
+definir('unit', { findUnique: async ({ where }: { where: { slug?: string; id?: string } }) => unidadesNoBanco.find((u) => u.slug === where.slug || u.id === where.id) ?? null, findMany: async () => [] });
 definir('unitCrmCompartilhado', { findMany: async () => [] });
 
 // ── a franquia falsa ────────────────────────────────────────────────────────────
@@ -112,6 +114,7 @@ before(async () => {
       }
       if (req.method === 'POST' && req.url === '/api/clients/search') {
         const termo = normalizar(String((JSON.parse(corpo || '{}') as { name?: string }).name ?? ''));
+        chamadasFranquia.push(`busca:${termo}`);
         res.end(JSON.stringify({ data: { data: clientesFalsos.filter((c) => normalizar(c.name).includes(termo)) } }));
         return;
       }
@@ -144,12 +147,13 @@ beforeEach(() => {
 });
 
 // ── o Kommo falso ───────────────────────────────────────────────────────────────
-const ID = { DATA: 1, SITUACAO: 2, IDCLIENT: 3, FISIO: 4 };
+const ID = { DATA: 1, SITUACAO: 2, IDCLIENT: 3, FISIO: 4, UNIDADE: 5 };
 const CAMPOS_BRUTOS: CampoBruto[] = [
   { id: ID.DATA, name: '◷ Data da Consulta', type: 'date' },
   { id: ID.SITUACAO, name: '✓ Situação da consulta', type: 'select', enums: ['Agendado', 'Confirmado', 'Atendido', 'Não compareceu', 'Remarcado', 'Desmarcado'].map((value, i) => ({ id: 20 + i, value })) },
   { id: ID.IDCLIENT, name: '⚙ idClient (franquia)', type: 'numeric' },
   { id: ID.FISIO, name: '⚕ Fisioterapeuta', type: 'select', enums: [] },
+  { id: ID.UNIDADE, name: '⌂ Unidade de atendimento', type: 'select', enums: [{ id: 51, value: 'Petrópolis' }, { id: 52, value: 'Caxias' }] },
 ];
 const CAMPOS = camposDaConta(CAMPOS_BRUTOS);
 const FONE = '+5599991234567';
@@ -175,7 +179,7 @@ function kommoFalso(cartoes: Cartao[]) {
   };
   const comoLead = (c: Cartao): KommoLead => ({
     id: c.id, name: c.name, pipeline_id: c.pipeline_id, status_id: c.status_id, updated_at: Math.floor(Date.now() / 1000), responsible_user_id: 9,
-    custom_fields_values: Object.entries(c.campos).map(([k, v]) => ({ field_id: Number(k), values: [{ value: v }] })),
+    custom_fields_values: Object.entries(c.campos).map(([k, v]) => ({ field_id: Number(k), field_name: CAMPOS_BRUTOS.find((f) => f.id === Number(k))?.name, values: [{ value: v }] })),
     _embedded: { tags: c.tags.map((name, i) => ({ id: i + 1, name })), contacts: [{ id: c.contato, is_main: true }] },
   });
   const achar = (id: number) => cartoes.find((c) => c.id === id) as Cartao;
@@ -506,4 +510,199 @@ test('cadastro duplicado — desligado não deixa nota; só no papel registra qu
   await _interno.sincronizarUnidade(unidade(), { kommo: b.kommo });
   assert.equal(b.reg.notas.length, 0);
   assert.ok(simulacoes.some((s) => s.alvo === 'nota: cadastros duplicados na franquia'));
+});
+
+// ═════ revisão independente (16/10): cada achado reproduzido antes da correção ═════
+
+import { pacienteQueJaExiste } from '../services/paciente-existente.js';
+import { chaveDoWidget } from './widget-agenda.js';
+import { widgetConflitoHandler, _depsWidgetConflito } from '../controllers/widget-conflito.controller.js';
+import type { Request, Response } from 'express';
+
+const FONE_MAE = '+5599991234567';
+
+function maeEFilha() {
+  clientesFalsos = [{ idClient: 100, name: 'MARIA SOUZA', whatsapp: FONE_MAE }];
+  fichasFalsas = new Map([[100, { idClient: 100, name: 'MARIA SOUZA', whatsapp: FONE_MAE, schedules: [], treatments: [] }]]);
+}
+
+test('achado 1 — cadastro da Ana Souza no WhatsApp da mãe (Maria Souza, já paciente): NÃO casa com a Maria; cadastra a Ana', async () => {
+  maeEFilha();
+  const { kommo } = kommoFalso([{ id: 80, name: 'Ana Souza', pipeline_id: 10, status_id: 102, campos: {}, tags: [], contato: 80, fone: FONE_MAE }]);
+  const r = await pacienteQueJaExiste(unidade(), 80, { nome: 'Ana Souza', telefone: FONE_MAE, kommo, contatoId: 80 });
+  assert.equal(r, null, 'nome diferente no mesmo telefone = outra pessoa');
+  assert.ok(!chamadasFranquia.includes('busca:souza'), 'no cadastro não se busca só pelo sobrenome');
+});
+
+test('achado 1 — cadastro: o ⚙ idClient (ou o vínculo) do cartão com OUTRO nome não vale', async () => {
+  maeEFilha();
+  const { kommo } = kommoFalso([{ id: 81, name: 'Ana Souza', pipeline_id: 10, status_id: 102, campos: {}, tags: [], contato: 81, fone: FONE_MAE }]);
+  assert.equal(await pacienteQueJaExiste(unidade(), 81, { nome: 'Ana Souza', telefone: FONE_MAE, kommo, idDoCartao: 100 }), null, '⚙ da mãe');
+  const unit = unidade();
+  vinculos.push({ unitId: unit.id, kommoLeadId: 81, spineIdClient: 100, spineIdSchedule: null });
+  assert.equal(await pacienteQueJaExiste(unit, 81, { nome: 'Ana Souza', telefone: FONE_MAE, kommo }), null, 'vínculo da mãe');
+});
+
+test('achado 1 — cadastro: cartão irmão da mãe não casa a filha; e a própria Maria casa (controle)', async () => {
+  maeEFilha();
+  clientesFalsos = [];
+  const { kommo } = kommoFalso([
+    { id: 82, name: 'Ana Souza', pipeline_id: 10, status_id: 102, campos: {}, tags: [], contato: 82, fone: FONE_MAE },
+    { id: 83, name: 'MARIA SOUZA', pipeline_id: 20, status_id: 142, campos: { [ID.IDCLIENT]: 100 }, tags: [], contato: 83, fone: FONE_MAE },
+  ]);
+  assert.equal(await pacienteQueJaExiste(unidade(), 82, { nome: 'Ana Souza', telefone: FONE_MAE, kommo, contatoId: 82 }), null);
+  maeEFilha();
+  const r = await pacienteQueJaExiste(unidade(), 82, { nome: 'Maria Souza', telefone: FONE_MAE, kommo, contatoId: 82 });
+  assert.deepEqual(r, { tipo: 'achou', idClient: 100, por: 'telefone' });
+});
+
+test('achado 2 — robô: cartão irmão com paciente de OUTRO nome não casa', async () => {
+  fichasFalsas = new Map([[4321, { idClient: 4321, name: 'MARIA LIMA', whatsapp: FONE, schedules: [], treatments: [] }]]);
+  const { kommo } = kommoFalso([
+    { id: 84, name: 'JOAO PEREIRA', pipeline_id: 10, status_id: 104, campos: {}, tags: [], contato: 84, fone: FONE },
+    { id: 85, name: 'MARIA LIMA', pipeline_id: 20, status_id: 142, campos: { [ID.IDCLIENT]: 4321 }, tags: [], contato: 85, fone: FONE },
+  ]);
+  const r = await casarPacienteDoCartao(unidade(), 84, 'JOAO PEREIRA', { kommo, contatoId: 84, campos: CAMPOS });
+  assert.notEqual(r.tipo, 'achou');
+});
+
+test('achado 2 — robô: no Kommo dividido, o cartão irmão de OUTRA unidade não conta', async () => {
+  const unit = unidade();
+  _semearCrmParaTeste([
+    { unitId: unit.id, contaUnitId: unit.id, rotulo: 'Petrópolis', slug: SLUG },
+    { unitId: 'caxias-teste', contaUnitId: unit.id, rotulo: 'Caxias', slug: 'caxias-teste' },
+  ]);
+  fichasFalsas = new Map([[4321, { idClient: 4321, name: 'ANA ANTIGA', whatsapp: FONE, schedules: [], treatments: [] }]]);
+  const { kommo } = kommoFalso([
+    { id: 86, name: 'ANA ANTIGA', pipeline_id: 10, status_id: 104, campos: { [ID.UNIDADE]: 'Petrópolis' }, tags: [], contato: 86, fone: FONE },
+    { id: 87, name: 'ANA ANTIGA', pipeline_id: 20, status_id: 142, campos: { [ID.IDCLIENT]: 4321, [ID.UNIDADE]: 'Caxias' }, tags: [], contato: 87, fone: FONE },
+  ]);
+  const r = await casarPacienteDoCartao(unit, 86, 'ANA ANTIGA', { kommo, contatoId: 86, campos: CAMPOS });
+  assert.notEqual(r.tipo, 'achou', 'o irmão é de Caxias');
+  _semearCrmParaTeste([]);
+});
+
+test('achado 3 — a tarefa "a equipe pôs de volta" não sai quando quem pôs de volta foi o robô', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  const unitAntes = seqUnidade + 1;
+  const { ctx, reg, rodar } = await cenarioDevolucao({}, { idClient: null, consultas: [marcada(9501, 'AVALIAÇÃO', 3)] });
+  ctx.jornada = 'ligado';
+  const uid = `u1610-${unitAntes}`;
+  alertas.push({ unitId: uid, leadId: '70', ruleKey: 'franquia-manda:PERDIDO:consulta:9501', createdAt: new Date(Date.now() - 3600_000) });
+  alertas.push({ unitId: uid, leadId: '70', ruleKey: 'robo-pos:PERDIDO', createdAt: new Date() });
+  await rodar();
+  assert.deepEqual(reg.tarefas, [], 'o robô é que pôs de volta: sem tarefa para a equipe');
+  assert.deepEqual(reg.movidos, []);
+});
+
+test('achado 4 — ALTA com tratamento FINALIZADO e sessão esquecida em AGENDADO: fica na ALTA e abre UMA tarefa', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  const ficha = { idClient: 4400, name: 'PACIENTE TESTE', whatsapp: FONE, treatments: [{ idTreatment: 1, idStatus: 46, statusName: 'FINALIZADO' }], schedules: [
+    { idSchedule: 11, idStatus: 42, statusName: 'Atendido', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(-20) },
+    { idSchedule: 12, idStatus: 37, statusName: 'Agendado', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(2) },
+  ] };
+  const { ctx, reg, rodar } = await cenarioDevolucao({ pipeline_id: 20, status_id: 142 }, { idClient: 4400, consultas: [] }, ficha);
+  ctx.jornada = 'ligado';
+  await rodar();
+  await rodar();
+  assert.deepEqual(reg.movidos, [], 'não sai da ALTA (a régua da ALTA não dispara de novo)');
+  assert.equal(reg.tarefas.length, 1);
+  assert.match(reg.tarefas[0].text, /FINALIZADO|finalizado/);
+});
+
+function exPacienteNaFranquia(agenda: Array<Record<string, unknown>>) {
+  clientesFalsos = [{ idClient: 300, name: 'ROSA LIMA', whatsapp: FONE }];
+  agendaFalsa = agenda;
+  fichasFalsas = new Map([[300, { idClient: 300, name: 'ROSA LIMA', whatsapp: FONE, treatments: [{ idTreatment: 3, idStatus: 46, statusName: 'FINALIZADO' }], schedules: [
+    { idSchedule: 31, idStatus: 42, statusName: 'Atendido', category: 'AVALIAÇÃO', dateAttendance: diaLocal(-200) },
+    { idSchedule: 32, idStatus: 42, statusName: 'Atendido', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(-60) },
+    ...agenda.map((a) => ({ idSchedule: a.idSchedule, idStatus: a.idStatus, statusName: a.statusName, category: a.categoryName, dateAttendance: a.dateAttendance })),
+  ] }]]);
+}
+
+test('achado 5 — ex-paciente no PERDIDO com avaliação marcada vai pra RETORNO (o histórico é lido no cartão COMERCIAL)', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  exPacienteNaFranquia([{ idSchedule: 9601, idStatus: 37, statusName: 'Agendado', clientName: 'ROSA LIMA', categoryName: 'AVALIAÇÃO', dateAttendance: diaLocal(3) }]);
+  const { kommo, reg } = kommoFalso([{ id: 571, name: 'ROSA LIMA', pipeline_id: 10, status_id: 143, campos: {}, tags: [], contato: 571, fone: FONE }]);
+  await _interno.sincronizarUnidade(unidade(), { kommo });
+  assert.deepEqual(reg.movidos.map((m) => m.statusId), [109], 'RETORNO PÓS-TRATAMENTO, não AGENDADO');
+});
+
+test('achado 5 — ex-paciente em RETORNO com a consulta da volta atendida sai pra COMPARECEU', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  exPacienteNaFranquia([{ idSchedule: 9602, idStatus: 42, statusName: 'Atendido', clientName: 'ROSA LIMA', categoryName: 'AVALIAÇÃO', dateAttendance: diaLocal(-1) }]);
+  const { kommo, reg } = kommoFalso([{ id: 572, name: 'ROSA LIMA', pipeline_id: 10, status_id: 109, campos: {}, tags: [], contato: 572, fone: FONE }]);
+  await _interno.sincronizarUnidade(unidade(), { kommo });
+  assert.deepEqual(reg.movidos.map((m) => m.statusId), [107]);
+});
+
+function reqRes(slug: string, query: Record<string, string>) {
+  const req = { params: { slug }, query, ip: '9.9.9.9', header: (h: string) => (h.toLowerCase() === 'x-widget-key' ? chaveDoWidget(slug, process.env.SESSION_JWT_SECRET as string) : undefined) } as unknown as Request;
+  const out: { status: number; body: Record<string, unknown> | null } = { status: 200, body: null };
+  const res = { status(n: number) { out.status = n; return this; }, json(b: Record<string, unknown>) { out.body = b; return this; } } as unknown as Response;
+  return { req, res, out };
+}
+
+test('achado 6 — widget no Kommo dividido: vale a chave da unidade DONA do cartão, não a do endereço', async () => {
+  const petropolis = { ...unidade(), slug: 'petropolis-w', isActive: true } as Unit;
+  const caxias = { ...unidade(), slug: 'caxias-w', isActive: true } as Unit;
+  unidadesNoBanco = [petropolis, caxias];
+  _semearParaTeste([{ slug: 'petropolis-w', automacao: 'casamento-jornada', estado: 'desligado' }, { slug: 'caxias-w', automacao: 'casamento-jornada', estado: 'ligado' }]);
+  const { kommo } = kommoFalso([{ id: 90, name: 'X', pipeline_id: 10, status_id: 102, campos: {}, tags: [], contato: 90, fone: FONE }]);
+  _depsWidgetConflito.kommoDe = () => kommo;
+  _depsWidgetConflito.dono = async () => ({ tipo: 'unidade', unit: caxias, rotulo: 'Caxias' }) as never;
+  const { req, res, out } = reqRes('petropolis-w', { lead: '90' });
+  await widgetConflitoHandler(req, res);
+  assert.equal(out.body?.estado, 'ligado', 'Caxias (dona do cartão) está ligada');
+});
+
+test('achado 7 — conflito sem nenhum idClient conhecido não põe etiqueta (não haveria o que escolher)', async () => {
+  chaves('ligado');
+  const unit = unidade();
+  const { kommo, reg } = kommoFalso([{ id: 573, name: 'X', pipeline_id: 10, status_id: 105, campos: {}, tags: [], contato: 573, fone: FONE }]);
+  const lead = await kommo.getLead(573);
+  const resumo: ResumoSync = { unit: SLUG, em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
+  await _interno.marcarConflitoDeTelefone({ unit, kommo, funis: null, mapa: {}, ops: { fisio: [], categoria: [], tratamento: [] }, agoraEpoch: 0, resumo, camposPorNome: CAMPOS, jornada: 'ligado' } as Parameters<typeof _interno.marcarConflitoDeTelefone>[0], 573, lead, [{ idClient: null, nome: 'A' }, { idClient: null, nome: 'B' }]);
+  assert.deepEqual(reg.etiquetas, []);
+});
+
+test('achado 7 — chave desligada: a etiqueta CONFLITO_FRANQUIA que a regra pôs sai sozinha', async () => {
+  chaves('desligado');
+  const unit = unidade();
+  const { kommo, reg } = kommoFalso([{ id: 574, name: 'X', pipeline_id: 10, status_id: 105, campos: {}, tags: [TAG_CONFLITO], contato: 574, fone: FONE }]);
+  alertas.push({ unitId: unit.id, leadId: '574', ruleKey: 'conflito-franquia:101,202', createdAt: new Date() });
+  await _interno.sincronizarUnidade(unit, { kommo });
+  assert.deepEqual(reg.tirou, [{ leadId: 574, tag: TAG_CONFLITO }]);
+  assert.ok(!alertas.some((a) => a.leadId === '574' && a.ruleKey.startsWith('conflito-franquia:')));
+});
+
+test('achado 7 — ligado: quando o conflito some (um dos dois trocou de telefone na franquia), a etiqueta sai', async () => {
+  chaves('ligado');
+  const unit = unidade();
+  fichasFalsas = new Map([
+    [101, { idClient: 101, name: 'MARIA TESTE', whatsapp: FONE, schedules: [], treatments: [] }],
+    [202, { idClient: 202, name: 'JOSE TESTE', whatsapp: '+5511977776666', schedules: [], treatments: [] }],
+  ]);
+  const { kommo, reg } = kommoFalso([{ id: 575, name: 'MARIA TESTE', pipeline_id: 10, status_id: 105, campos: {}, tags: [TAG_CONFLITO], contato: 575, fone: FONE }]);
+  alertas.push({ unitId: unit.id, leadId: '575', ruleKey: 'conflito-franquia:101,202', createdAt: new Date() });
+  await _interno.sincronizarUnidade(unit, { kommo });
+  assert.deepEqual(reg.tirou, [{ leadId: 575, tag: TAG_CONFLITO }]);
+});
+
+test('achado 8 — só no papel: a simulação do casamento novo não refaz as buscas na franquia a cada 15 min', async () => {
+  const montar = () => kommoFalso([{ id: 576, name: 'JOAO PEREIRA DA SILVA', pipeline_id: 10, status_id: 105, campos: { [ID.DATA]: String(Math.floor(Date.now() / 1000) - 20 * 86_400) }, tags: [], contato: 576, fone: FONE }]);
+  chaves('seco', [{ automacao: 'franquia-revisao', estado: 'ligado' }, { automacao: 'franquia-move', estado: 'seco' }]);
+  const unit = unidade();
+  const revisar = async () => {
+    const { kommo } = montar();
+    const funis = await carregarFunis(kommo);
+    const resumo: ResumoSync = { unit: SLUG, em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
+    await _interno.revisarPeloHistorico({ unit, kommo, funis, mapa: _interno.mapearCampos(CAMPOS_BRUTOS), ops: { fisio: [], categoria: [], tratamento: [] }, agoraEpoch: Math.floor(Date.now() / 1000), resumo, camposPorNome: CAMPOS, jornada: 'seco' } as Parameters<typeof _interno.revisarPeloHistorico>[0]);
+  };
+  await revisar();
+  const primeira = chamadasFranquia.filter((c) => c.startsWith('busca:')).length;
+  assert.ok(primeira > 0, 'a 1ª varredura busca');
+  chamadasFranquia = [];
+  await revisar();
+  assert.equal(chamadasFranquia.filter((c) => c.startsWith('busca:')).length, 0, 'a 2ª não busca de novo (cache)');
 });
