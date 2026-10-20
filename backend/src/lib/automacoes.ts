@@ -383,6 +383,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/unidade-por-canal.ts',
   },
   {
+    id: 'unidade-no-cartao',
+    chave: 'UNIDADE_NO_CARTAO_SLUGS',
+    nome: '⌂ Unidade no cartão (modelo da primeira sessão)',
+    oQueFaz:
+      'Preenche o campo ⌂ Unidade com a cidade da unidade ("Balsas/MA") em todo cartão que estiver vazio. É o campo que o modelo de WhatsApp da primeira sessão lê: vazio, o Kommo manda o exemplo da Meta ("Unidade: Imperatriz/MA").',
+    pegadinha:
+      'O modelo sai no mesmo segundo em que o cartão entra em EM TRATAMENTO, então o robô preenche ANTES: cartão novo ou que mexeu, em até 5 min; o estoque (tudo menos PERDIDO), do mais novo ao mais velho, no máximo 200 por rodada, e de novo a cada 24 h. Nunca troca o que alguém escreveu — se não fala da cidade, aparece como "diverge". Petrópolis: o valor segue a ⌂ Unidade de atendimento (Petrópolis/RJ ou Duque de Caxias/RJ); vazia, não grava. A cidade de cada unidade mora no código (unidade nova: pedir pra incluir). Gravar muda a "última atualização" do cartão uma vez.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/unidade-no-cartao.ts',
+  },
+  {
     id: 'sugestao-motivo',
     chave: 'SUGESTAO_MOTIVO_SLUGS',
     nome: 'IA sugere o motivo do não agendamento (widget)',

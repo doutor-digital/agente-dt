@@ -42,6 +42,7 @@ import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preen
 import { startBlingRenovacaoWorker, stopBlingRenovacaoWorker } from './lib/bling-renovacao-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
 import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
+import { startUnidadeNoCartaoWorker, stopUnidadeNoCartaoWorker } from './lib/unidade-no-cartao-worker.js';
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -204,6 +205,7 @@ async function main(): Promise<void> {
       startFranquiaSyncWorker();
       startParadosWorker();
       startUnidadePorCanalWorker();
+      startUnidadeNoCartaoWorker();
       startLigacaoWhatsappWorker();
       startNaoLidasWorker();
       startCampanhaWorker();
@@ -215,6 +217,7 @@ async function main(): Promise<void> {
       pararVigiaDeQualidade();
       stopParadosWorker();
       stopUnidadePorCanalWorker();
+      stopUnidadeNoCartaoWorker();
       stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
       stopCampanhaWorker();
