@@ -27,12 +27,13 @@ import { createKommoClient, type KommoClient, type KommoLead } from '../services
 import { SpineService } from '../services/spine.service.js';
 import { estadoEtapaDoLead, invalidarEtapa } from '../services/lead-stage.service.js';
 import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
-import { ETAPA, TRATAMENTO_EM_ANDAMENTO, ehEtapaDeEntrada, tratamentoFinalizado, type Funil } from './franquia-move.js';
+import { ETAPA, TRATAMENTO_EM_ANDAMENTO } from './franquia-move.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { carregarFunis, idClientDoLead, temConsultaFutura, type Funis } from './franquia-sync-worker.js';
 import { diaDaRetomada, diaDoCampoData, esperaSeguraVolta, retomarEmDoCartao } from './espera-retomada.js';
+import { ehEtapaDeEntrada, tratamentoFinalizado, type Funil } from './franquia-move.js';
 import {
   ID_AUTOMACAO_ESTOQUES,
   PRAZOS_ESTOQUE,
