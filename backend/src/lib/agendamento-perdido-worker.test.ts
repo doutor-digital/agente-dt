@@ -114,3 +114,10 @@ test('filtro: nasce desligado na rede toda; a lista do .env liga', async () => {
   assert.equal(estadoDoFiltro('doutor-hernia-canaa', 'doutor-hernia-canaa'), 'ligado');
   assert.equal(estadoDoFiltro('doutor-hernia-mossoro', 'doutor-hernia-canaa'), 'desligado');
 });
+
+test('filtro: a janela cobre a madrugada inteira — a oferta das 20h ainda está nela às 8h do dia seguinte', async () => {
+  const { janelaEfetivaH } = await import('./agendamento-perdido-worker.js');
+  assert.equal(janelaEfetivaH(24, 90), 24, 'o padrão não muda');
+  // Janela de 6 h configurada à mão: 20:00 + 90 min de carência = 21:30 (silêncio) → só às 08:00, 12 h depois.
+  assert.ok(janelaEfetivaH(6, 90) >= 13.5);
+});

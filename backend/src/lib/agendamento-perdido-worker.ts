@@ -53,7 +53,18 @@ const SWEEP_MS = Number(process.env.AGENDAMENTO_PERDIDO_SWEEP_MS) || 15 * 60_000
 const CARENCIA_MIN = Number(process.env.AGENDAMENTO_PERDIDO_CARENCIA_MIN) || 90;
 
 /** Não olha conversa velha demais: o que passou disso é história, não ação. */
-const JANELA_HORAS = Number(process.env.AGENDAMENTO_PERDIDO_JANELA_H) || 24;
+const JANELA_PEDIDA_H = Number(process.env.AGENDAMENTO_PERDIDO_JANELA_H) || 24;
+
+/**
+ * A janela nunca é menor que a carência mais a madrugada inteira (21h–8h) e uma folga: com o filtro
+ * ligado, a oferta das 20h só pode ser avisada às 8h do dia seguinte — se já tivesse saído da janela,
+ * o aviso sumiria em vez de esperar a manhã. Com o padrão de 24 h nada muda.
+ */
+export function janelaEfetivaH(pedidaH: number, carenciaMin: number): number {
+  return Math.max(pedidaH, Math.ceil(carenciaMin / 60 + 11 + 1));
+}
+
+const JANELA_HORAS = janelaEfetivaH(JANELA_PEDIDA_H, CARENCIA_MIN);
 
 const MARCA = 'ALERTA · agendamento perdido';
 

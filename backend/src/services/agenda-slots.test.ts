@@ -199,3 +199,16 @@ test('desmarcado fora da grade não tira os vizinhos: só o horário exato fica 
   assert.ok(livres.includes('08:15'));
   assert.ok(livres.includes('09:00'));
 });
+
+test('a sobreposição é de blocos de 30 min — encostar não é cruzar (achado do Codex conferido)', () => {
+  const D = '2026-10-21';
+  // Grade de um horário só: 09:00 (45 min, até 10:00).
+  const cfg = { start: '09:00', end: '10:00', lunchStart: null, lunchEnd: null, days: [3], slotMinutes: 45 } as never;
+  const status = (...h: string[]) =>
+    buildAgenda(cfg, h.map((t) => ({ dayLocal: D, timeLocal: t, isBusy: true, requiresManualValidation: false }) as never), { initialDate: D, endDate: D }, `${D}T00:01:00`)
+      .find((s) => s.time === '09:00')?.status;
+  assert.equal(status('09:45'), 'livre', '09:00–09:30 não cruza 09:45–10:15');
+  assert.equal(status('08:30'), 'livre', '08:30–09:00 só encosta');
+  assert.equal(status('08:45'), 'ocupado', '08:45–09:15 cruza');
+  assert.equal(status('09:20'), 'ocupado', '09:20–09:50 cruza');
+});

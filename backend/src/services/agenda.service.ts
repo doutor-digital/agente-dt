@@ -155,11 +155,13 @@ export function buildAgenda(
       }
 
       const achado = ocupado.get(`${dia} ${hhmm}`);
-      // Sem ninguém no horário exato, ainda pode haver consulta começando menos de 30 min antes ou depois
-      // (grade de 45 min sobre consultas antigas de 30): a franquia recusa, então não é livre.
+      // Sem ninguém no horário exato, ainda pode haver consulta cujo bloco cruza o deste horário (grade de
+      // 45 min sobre consultas antigas de 30): a franquia recusa, então não é livre. Os dois blocos têm a
+      // duração que a franquia usa; encostar (um termina quando o outro começa) não é cruzar.
+      const D = DURACAO_NA_FRANQUIA_MIN;
       const porCima = achado
         ? undefined
-        : ocupadosDoDia.get(dia)?.find((o) => Math.abs(o.minuto - m) < DURACAO_NA_FRANQUIA_MIN);
+        : ocupadosDoDia.get(dia)?.find((o) => o.minuto < m + D && m < o.minuto + D);
       if (porCima) {
         out.push({
           day: dia,
