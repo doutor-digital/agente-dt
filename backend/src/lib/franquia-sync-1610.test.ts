@@ -722,6 +722,29 @@ test('achado 7 — ligado: quando o conflito some (um dos dois trocou de telefon
   assert.deepEqual(reg.tirou, [{ leadId: 575, tag: TAG_CONFLITO }]);
 });
 
+test('achado 7 — tirar a etiqueta à mão não traz a nota de novo (o conflito continua: a etiqueta volta, a nota não)', async () => {
+  chaves('ligado');
+  const unit = unidade();
+  const { kommo, reg } = doisPacientesNoMesmoTelefone();
+  await _interno.sincronizarUnidade(unit, { kommo });
+  assert.equal(reg.notas.length, 1);
+  await kommo.removeTag(555, TAG_CONFLITO);
+  await _interno.sincronizarUnidade(unit, { kommo });
+  assert.equal(reg.etiquetas.length, 2, 'a etiqueta volta (o conflito existe)');
+  assert.equal(reg.notas.length, 1, 'a nota não se repete');
+});
+
+test('achado 7 — ligado: o ⚙ idClient gravado à mão resolve o conflito (etiqueta sai e a escolha fica anotada)', async () => {
+  chaves('ligado');
+  const unit = unidade();
+  const { kommo, reg } = kommoFalso([{ id: 577, name: 'MARIA TESTE', pipeline_id: 10, status_id: 105, campos: { [ID.IDCLIENT]: 101 }, tags: [TAG_CONFLITO], contato: 577, fone: FONE }]);
+  alertas.push({ unitId: unit.id, leadId: '577', ruleKey: 'conflito-franquia:101,202', createdAt: new Date() });
+  await _interno.sincronizarUnidade(unit, { kommo });
+  assert.deepEqual(reg.tirou, [{ leadId: 577, tag: TAG_CONFLITO }]);
+  assert.ok(alertas.some((a) => a.leadId === '577' && a.ruleKey === 'paciente-escolhido:101'));
+  assert.ok(!alertas.some((a) => a.leadId === '577' && a.ruleKey.startsWith('conflito-franquia:')));
+});
+
 test('achado 8 — só no papel: a simulação do casamento novo não refaz as buscas na franquia a cada 15 min', async () => {
   const montar = () => kommoFalso([{ id: 576, name: 'JOAO PEREIRA DA SILVA', pipeline_id: 10, status_id: 105, campos: { [ID.DATA]: String(Math.floor(Date.now() / 1000) - 20 * 86_400) }, tags: [], contato: 576, fone: FONE }]);
   chaves('seco', [{ automacao: 'franquia-revisao', estado: 'ligado' }, { automacao: 'franquia-move', estado: 'seco' }]);

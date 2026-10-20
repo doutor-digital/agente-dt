@@ -36,12 +36,12 @@ import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
-  TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
+  PREFIXO_CONFLITO, TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, idsDoConflito, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
   chaveDoRoboPos, tarefaDaSujeira,
   escolherPacienteDoCartao, estadoCasamentoJornada, faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaDevolucao,
   notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type ClienteCandidato, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
 } from './casamento-jornada.js';
-import { PARA_SEMPRE_MS, avisarCadastroDuplicado, escolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
+import { PARA_SEMPRE_MS, avisarCadastroDuplicado, candidatosGuardados, escolhaDaSdr, gravarEscolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
 import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, podeMexer, pularCartao, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
@@ -1356,28 +1356,98 @@ async function recusarOutroPaciente(ctx: CtxSync, leadId: number, lead: KommoLea
 
 /**
  * 16/10 (decisão 1): dois pacientes DIFERENTES da franquia no telefone deste cartão (e o cartão ainda não diz quem é,
- * pelo `⚙ idClient`). Nada é gravado; a etiqueta CONFLITO_FRANQUIA e uma nota (só na primeira vez) pedem à SDR que
- * escolha no widget; os candidatos ficam guardados para o widget oferecer. Log e resumo só com ids.
+ * pelo `⚙ idClient`). Nada é gravado; a etiqueta CONFLITO_FRANQUIA e uma nota (só na primeira vez deste conflito — tirar a
+ * etiqueta à mão não traz a nota de novo) pedem à SDR que escolha no widget; os candidatos ficam guardados para o widget
+ * oferecer. Sem dois idClient conhecidos não há o que escolher: não etiqueta (achado 7 da revisão), só não grava. Log e
+ * resumo só com ids.
  */
 async function marcarConflitoDeTelefone(ctx: CtxSync, leadId: number, lead: KommoLead, pacientes: Array<{ idClient: number | null; nome?: string | null }>): Promise<void> {
   const { unit, kommo, resumo } = ctx;
   resumo.conflitosDeTelefone = (resumo.conflitosDeTelefone ?? 0) + 1;
-  const ids = pacientes.map((p) => p.idClient).filter((x): x is number => !!x);
+  const ids = [...new Set(pacientes.map((p) => p.idClient).filter((x): x is number => !!x))];
   if (!jaRegistrou(`conflito-telefone:${unit.slug}:${leadId}:${ids.join(',')}`)) {
     logger.warn({ unit: unit.slug, leadId, idsClient: ids, pacientes: pacientes.length }, 'franquia-sync: dois pacientes no mesmo telefone — cartão travado até a SDR escolher');
   }
+  // o widget só oferece quem tem idClient: com menos de dois, a etiqueta nunca sairia (achado 7)
+  if (ids.length < 2) return;
   if (ctx.seco || ctx.jornada !== 'ligado') {
     registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'etiquetaria', alvo: TAG_CONFLITO, valor: ids.join(', '), motivo: `${pacientes.length} pacientes da franquia no mesmo telefone` });
     return;
   }
+  const jaConhecido = (await candidatosGuardados(unit.id, leadId)).length > 0;
   await guardarCandidatos(unit.id, leadId, ids);
   if ((lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO)) return;
   try {
     await kommo.addTag({ leadId, tags: [TAG_CONFLITO] });
-    await kommo.addLeadNote(leadId, notaConflitoDeTelefone(pacientes));
+    if (!jaConhecido) await kommo.addLeadNote(leadId, notaConflitoDeTelefone(pacientes));
     lead._embedded = { ...lead._embedded, tags: [...(lead._embedded?.tags ?? []), { id: 0, name: TAG_CONFLITO }] };
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: não consegui marcar o conflito de telefone no cartão');
+  }
+}
+
+/** De quanto em quanto tempo a faxina dos conflitos roda por unidade (lê o Kommo e a franquia de cada cartão marcado). */
+const FAXINA_CONFLITOS_MS = 60 * 60_000;
+const FAXINA_CONFLITOS_MAX = 30;
+const ultimaFaxina = new Map<string, number>();
+
+/**
+ * Achado 7 da revisão de 16/10: a etiqueta CONFLITO_FRANQUIA que a regra de 16/10 pôs (o cartão tem a marca
+ * `conflito-franquia:` em card_alert) sai quando o conflito some — antes ela ficava para sempre e o cartão nunca mais era
+ * atualizado. Uma vez por hora por unidade, no máximo 30 cartões:
+ *  - chave desligada ou "só no papel": a regra não vale, então a marca dela sai (a etiqueta, se o cartão não tem ⚙ — com
+ *    ⚙, uma etiqueta que esteja lá é do conflito antigo, "⚙ de outro paciente", e fica);
+ *  - ligada e o cartão já tem ⚙ idClient (a SDR escolheu no widget ou gravou à mão): é a escolha — tira a etiqueta e anota
+ *    a escolha (o outro paciente passa a ser recusado calado);
+ *  - ligada e sem ⚙: confere na franquia (cache de 1 h) se ainda há dois pacientes com o telefone do cartão; se não há,
+ *    tira a etiqueta e a marca, e o cartão volta a ser atualizado.
+ * O sincronizador inteiro em "só no papel" só registra o que tiraria.
+ */
+async function faxinarConflitos(ctx: CtxSync, marcadosAgora: ReadonlySet<number> = new Set()): Promise<void> {
+  const { unit, kommo } = ctx;
+  if (Date.now() - (ultimaFaxina.get(unit.id) ?? 0) < FAXINA_CONFLITOS_MS) return;
+  ultimaFaxina.set(unit.id, Date.now());
+  const linhas = await prisma.cardAlert
+    .findMany({ where: { unitId: unit.id, ruleKey: { startsWith: PREFIXO_CONFLITO } }, select: { leadId: true, ruleKey: true } })
+    .catch(() => [] as Array<{ leadId: string; ruleKey: string }>);
+  for (const l of linhas.slice(0, FAXINA_CONFLITOS_MAX)) {
+    const leadId = Number(l.leadId);
+    // o conflito que esta varredura acabou de ver não é conferido de novo agora
+    if (!Number.isInteger(leadId) || leadId <= 0 || marcadosAgora.has(leadId)) continue;
+    try {
+      const lead = await kommo.getLead(leadId);
+      const temEtiqueta = (lead._embedded?.tags ?? []).some((t) => t.name === TAG_CONFLITO);
+      const idDoCartao = idClientDoCartao(lead, ctx.camposPorNome ?? []);
+      let motivo: string | null = null;
+      let tirarEtiqueta = temEtiqueta && idDoCartao === null;
+      if (ctx.jornada !== 'ligado') {
+        motivo = 'a regra de 16/10 não está ligada nesta unidade';
+      } else if (idDoCartao !== null) {
+        motivo = `o cartão já diz o paciente (⚙ idClient ${idDoCartao})`;
+        tirarEtiqueta = temEtiqueta;
+      } else {
+        const contato = lead._embedded?.contacts?.[0]?.id;
+        const fone = contato ? chaveTelefone(await kommo.getContactPhone(contato)) : '';
+        if (!fone) continue;
+        let noTelefone = 0;
+        for (const id of idsDoConflito(l.ruleKey)) {
+          const d = await detalheDoPaciente(unit, id);
+          if (d && chaveTelefone(d.whatsapp) === fone) noTelefone++;
+        }
+        if (noTelefone < 2) motivo = 'os pacientes não dividem mais o telefone do cartão';
+      }
+      if (!motivo) continue;
+      if (ctx.seco) {
+        registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'gravaria', alvo: `etiqueta ${TAG_CONFLITO}`, valor: '(tirar)', motivo });
+        continue;
+      }
+      if (tirarEtiqueta) await kommo.removeTag(leadId, TAG_CONFLITO);
+      if (ctx.jornada === 'ligado' && idDoCartao !== null) await gravarEscolhaDaSdr(unit.id, leadId, idDoCartao);
+      await prisma.cardAlert.deleteMany({ where: { unitId: unit.id, leadId: String(leadId), ruleKey: { startsWith: PREFIXO_CONFLITO } } });
+      logger.info({ unit: unit.slug, leadId, tirouEtiqueta: tirarEtiqueta, motivo }, 'casamento-jornada: conflito de telefone resolvido — marca removida');
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'casamento-jornada: faxina do conflito falhou neste cartão — tento na próxima');
+    }
   }
 }
 
@@ -1929,6 +1999,9 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
       logger.warn({ err, unit: unit.slug, paciente: p.nome }, 'franquia-sync: falha no paciente');
     }
   }
+
+  // 16/10 (achado 7): a etiqueta CONFLITO_FRANQUIA sai quando o conflito some (ou a regra não está ligada)
+  await faxinarConflitos(ctx, marcadosNestaVarredura).catch((err) => logger.warn({ err: String(err), unit: unit.slug }, 'casamento-jornada: faxina dos conflitos falhou'));
 
   if (funis) {
     try {
