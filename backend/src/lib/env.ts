@@ -93,6 +93,8 @@ const schema = z.object({
   PARADOS_LIGADO_SLUGS: z.string().optional(),
   /** Só a volta de EM ESPERA (paciente escreveu → EM QUALIFICAÇÃO), sem as regras de prazo do worker (csv; `*` = todas). */
   VOLTA_ESPERA_SLUGS: z.string().optional(),
+  /** Parados também nos estoques que nenhuma regra alcançava (auditoria 16/10, item 11) — nasce desligada (csv; `*` = todas). */
+  PARADOS_ESTOQUES_SLUGS: z.string().optional(),
   /** Unidades com o cartão enxuto: o vigia de cartão só cobra o que continua humano (csv; `*` = todas). */
   CARTAO_ENXUTO_SLUGS: z.string().optional(),
 });

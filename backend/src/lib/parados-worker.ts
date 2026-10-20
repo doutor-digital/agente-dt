@@ -27,12 +27,27 @@ import { createKommoClient, type KommoClient, type KommoLead } from '../services
 import { SpineService } from '../services/spine.service.js';
 import { estadoEtapaDoLead, invalidarEtapa } from '../services/lead-stage.service.js';
 import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
-import { ETAPA, TRATAMENTO_EM_ANDAMENTO } from './franquia-move.js';
+import { ETAPA, TRATAMENTO_EM_ANDAMENTO, ehEtapaDeEntrada, tratamentoFinalizado, type Funil } from './franquia-move.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { carregarFunis, idClientDoLead, temConsultaFutura, type Funis } from './franquia-sync-worker.js';
 import { diaDaRetomada, diaDoCampoData, esperaSeguraVolta, retomarEmDoCartao } from './espera-retomada.js';
+import {
+  ID_AUTOMACAO_ESTOQUES,
+  PRAZOS_ESTOQUE,
+  candidatoConsultaVelha,
+  candidatoDormente,
+  candidatoFaltaDoEstoque,
+  classeDoTratamentoSemDado,
+  decidirAgendadoParado,
+  decidirDormente,
+  decidirFaltaDoEstoque,
+  decidirRetornoParado,
+  estadoDosEstoques,
+  semDadoDeSessao,
+} from './parados-estoques.js';
+import { semearFilaDeAlta } from './semear-fila-de-alta.js';
 import {
   CAMPO,
   DIA_S,
@@ -168,20 +183,41 @@ async function aindaNaEtapa(kommo: KommoClient, funis: Funis, leadId: number, et
   return atual && atual.funil === 'COMERCIAL' && normalizarNome(atual.status) === normalizarNome(etapa) ? lead : null;
 }
 
+/** O que a franquia sabe do paciente AGORA (sem cache). `conhecido=false` = não achei o paciente (ou franquia desligada). */
+export interface NaFranquia {
+  conhecido: boolean;
+  consultaFutura: boolean;
+  emAndamento: boolean;
+  finalizado: boolean;
+}
+
 /**
- * O que a franquia sabe do paciente AGORA (sem cache): consulta futura ou tratamento EM ANDAMENTO
- * seguram o cartão. `conhecido=false` = não achei o paciente (ou franquia desligada).
+ * `GET /clients/{id}` fresco. Erro da API LANÇA: "a franquia caiu" não pode virar "paciente não achado" — as regras
+ * do estoque movem quem a franquia não conhece, e o resto do worker perde quem ela não segura.
  */
-async function franquiaSegura(unit: Unit, leadId: number, nome: string | null, agoraEpoch: number): Promise<{ conhecido: boolean; segura: boolean; motivo?: string }> {
-  if (!unit.spineEnabled || !unit.spineToken) return { conhecido: false, segura: false };
+export async function franquiaDoPaciente(unit: Unit, leadId: number, nome: string | null, agoraEpoch: number): Promise<NaFranquia> {
+  const nada: NaFranquia = { conhecido: false, consultaFutura: false, emAndamento: false, finalizado: false };
+  if (!unit.spineEnabled || !unit.spineToken) return nada;
   const idClient = await idClientDoLead(unit, leadId, nome);
-  if (!idClient) return { conhecido: false, segura: false };
+  if (!idClient) return nada;
   const r = await SpineService.getClient(unit, idClient);
-  if (!r.ok || !r.data?.client) return { conhecido: false, segura: false };
+  if (!r.ok) throw new Error(`franquia não respondeu (paciente ${idClient}): ${r.error ?? 'erro'}`);
+  if (!r.data?.client) return nada;
   const { schedules, treatments } = r.data.client;
-  if (treatments.some((t) => t.idStatus === TRATAMENTO_EM_ANDAMENTO)) return { conhecido: true, segura: true, motivo: 'tratamento em andamento na franquia' };
-  if (temConsultaFutura(schedules, agoraEpoch)) return { conhecido: true, segura: true, motivo: 'consulta futura na franquia' };
-  return { conhecido: true, segura: false };
+  return {
+    conhecido: true,
+    consultaFutura: temConsultaFutura(schedules, agoraEpoch),
+    emAndamento: treatments.some((t) => t.idStatus === TRATAMENTO_EM_ANDAMENTO),
+    finalizado: treatments.some((t) => tratamentoFinalizado({ idStatus: t.idStatus, statusName: t.statusName })),
+  };
+}
+
+/** Consulta futura ou tratamento EM ANDAMENTO seguram o cartão (proposta pendente não — é o público de "sem resposta após consulta"). */
+async function franquiaSegura(unit: Unit, leadId: number, nome: string | null, agoraEpoch: number): Promise<{ conhecido: boolean; segura: boolean; motivo?: string }> {
+  const f = await franquiaDoPaciente(unit, leadId, nome, agoraEpoch);
+  if (f.emAndamento) return { conhecido: true, segura: true, motivo: 'tratamento em andamento na franquia' };
+  if (f.consultaFutura) return { conhecido: true, segura: true, motivo: 'consulta futura na franquia' };
+  return { conhecido: f.conhecido, segura: false };
 }
 
 const pausa = () => new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
@@ -195,11 +231,12 @@ export async function fecharComoPerdido(
   etapaAtual: string,
   d: DecisaoParado,
   seco: boolean,
+  automacao: string = 'parados',
 ): Promise<boolean> {
   const base = { unit: unit.slug, leadId, de: etapaAtual, regra: d.regra, motivo: d.motivoPerda };
   if (seco) {
-    logger.info(base, 'parados [seco]: moveria pra PERDIDO');
-    registrarSimulacao(unit, 'parados', { leadId, acao: 'moveria', alvo: ETAPA.PERDIDO, deEtapa: etapaAtual, valor: d.motivoPerda, motivo: d.regra });
+    logger.info({ ...base, automacao }, 'parados [seco]: moveria pra PERDIDO');
+    registrarSimulacao(unit, automacao, { leadId, acao: 'moveria', alvo: ETAPA.PERDIDO, deEtapa: etapaAtual, valor: d.motivoPerda, motivo: d.regra });
     return false;
   }
   const lead = await aindaNaEtapa(kommo, funis, leadId, etapaAtual);
@@ -234,6 +271,7 @@ export async function moverParaEspera(
   etapaAtual: string,
   d: DecisaoParado,
   seco: boolean,
+  automacao: string = 'parados',
 ): Promise<boolean> {
   const alvo = funis.idDe('COMERCIAL', ETAPA.ESPERA);
   const base = { unit: unit.slug, leadId, de: etapaAtual, regra: d.regra };
@@ -242,8 +280,8 @@ export async function moverParaEspera(
     return false;
   }
   if (seco) {
-    logger.info(base, 'parados [seco]: moveria pra EM ESPERA');
-    registrarSimulacao(unit, 'parados', { leadId, acao: 'moveria', alvo: ETAPA.ESPERA, deEtapa: etapaAtual, motivo: d.regra });
+    logger.info({ ...base, automacao }, 'parados [seco]: moveria pra EM ESPERA');
+    registrarSimulacao(unit, automacao, { leadId, acao: 'moveria', alvo: ETAPA.ESPERA, deEtapa: etapaAtual, motivo: d.regra });
     return false;
   }
   if (!(await aindaNaEtapa(kommo, funis, leadId, etapaAtual))) {
@@ -416,7 +454,9 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
   }
 
   // ── NÃO COMPARECEU: faltou há 7 dias e a franquia (fresca) não tem consulta futura → EM ESPERA ──
-  {
+  // Com a chave dos estoques LIGADA, quem cuida da etapa inteira é a regra do estoque (abaixo), que inclui esta.
+  const estoques = estadoDosEstoques(unit.slug);
+  if (estoques !== 'ligado') {
     const alvo = funis.idDe('COMERCIAL', ETAPA.NAO_COMPARECEU);
     const cota = cotaNova(seco);
     for (const lead of alvo ? await leadsDaEtapa(kommo, alvo.pipelineId, alvo.statusId) : []) {
@@ -503,8 +543,174 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
     }
   }
 
+  // ── Estoques que nenhuma regra alcançava (auditoria 16/10, item 11): chave própria, nasce desligada ──
+  if (estoques !== 'desligado') {
+    await varrerEstoques({ unit, kommo, unidadesDaConta, agora }, funis, grupo, resumo, seco || estoques === 'seco');
+  }
+
   logger.info(resumo, 'parados: varredura da conta');
   return resumo;
+}
+
+// ─── Estoques (auditoria da Açailândia, 16/10/2026, item 11) ─────────────────────────────────────
+
+export type RegraDoEstoque = 'falta' | 'agendado' | 'retorno' | 'tratamento' | 'dormente';
+
+export interface EtapaDoEstoque {
+  regra: RegraDoEstoque;
+  funil: Funil;
+  pipelineId: number;
+  statusId: number;
+  nome: string;
+}
+
+/** As etapas que cada regra do estoque varre nesta conta (pelo NOME; a entrada tem nome variável por conta). */
+export function etapasDoEstoque(funis: Funis): EtapaDoEstoque[] {
+  const out: EtapaDoEstoque[] = [];
+  const add = (regra: RegraDoEstoque, funil: Funil, etapa: string) => {
+    const id = funis.idDe(funil, etapa);
+    if (id) out.push({ regra, funil, ...id, nome: etapa });
+  };
+  add('falta', 'COMERCIAL', ETAPA.NAO_COMPARECEU);
+  add('agendado', 'COMERCIAL', ETAPA.AGENDADO);
+  add('retorno', 'COMERCIAL', ETAPA.RETORNO);
+  add('tratamento', 'TRATAMENTO', ETAPA.EM_TRATAMENTO);
+  for (const [chave, s] of funis.status) {
+    if (chave.startsWith('COMERCIAL:') && ehEtapaDeEntrada(s.nome)) out.push({ regra: 'dormente', funil: 'COMERCIAL', pipelineId: funis.comercialId, statusId: s.id, nome: s.nome });
+  }
+  add('dormente', 'COMERCIAL', ETAPA.QUALIFICACAO);
+  return out;
+}
+
+/** Barato, só com o cartão: vale gastar chamada com ele? */
+export function candidatoDoEstoque(regra: RegraDoEstoque, lead: KommoLead, etapa: string, agora: number, tz: string): boolean {
+  const data = epochDoCampoData(lead, CAMPOS_SYNC.DATA_CONSULTA);
+  const retomada = diaDaRetomada(retomarEmDoCartao(lead.custom_fields_values), agora, tz);
+  if (regra === 'falta') return candidatoFaltaDoEstoque(String(valorDoCampo(lead, CAMPOS_SYNC.SITUACAO) ?? ''), data, retomada, agora);
+  if (regra === 'agendado' || regra === 'retorno') return candidatoConsultaVelha(data, retomada, agora);
+  if (regra === 'tratamento') return semDadoDeSessao(lead.custom_fields_values) && (lead.created_at ?? agora) < agora - PRAZOS_ESTOQUE.paradoDias * DIA_S;
+  return candidatoDormente(etapa, lead.created_at ?? null, data, retomada, agora);
+}
+
+export interface AvaliacaoDoEstoque {
+  regra: RegraDoEstoque;
+  leadId: number;
+  etapa: string;
+  /** mover (PERDIDO ou EM ESPERA) */
+  decisao: DecisaoParado | null;
+  /** EM TRATAMENTO: entra na fila da página /alta, a recepção decide */
+  filaDeAlta: 'ALTA' | 'PAROU' | null;
+  /** por que fica (pro log e pro script de conferência) */
+  fica: string | null;
+}
+
+export interface CtxDoEstoque {
+  unit: Unit;
+  kommo: KommoClient;
+  /** as unidades da conta Kommo (a conversa no agente pode estar em qualquer uma) */
+  unidadesDaConta: Unit[];
+  agora: number;
+}
+
+/**
+ * Caro, SÓ LEITURA: lê eventos do Kommo, o banco do agente e a franquia (fresca) e decide. Não escreve nada —
+ * é o mesmo caminho do worker e do script de conferência (`scripts/limpeza-estoques.ts`). Erro de API lança.
+ */
+export async function avaliarDoEstoque(ctx: CtxDoEstoque, regra: RegraDoEstoque, lead: KommoLead, etapa: string): Promise<AvaliacaoDoEstoque> {
+  const { unit, kommo, agora } = ctx;
+  const base = { regra, leadId: lead.id, etapa, decisao: null, filaDeAlta: null, fica: null } as AvaliacaoDoEstoque;
+  const fica = (motivo: string): AvaliacaoDoEstoque => ({ ...base, fica: motivo });
+  const contato = contatoPrincipal(lead);
+  const semMudarDesde = async (dias: number) => !(await kommo.leadMudouEtapaDesde(lead.id, agora - dias * DIA_S));
+  const semEscreverDesde = async (dias: number) => contato === null || !(await kommo.contatoEscreveuDesde(contato, agora - dias * DIA_S));
+  const naFranquia = () => franquiaDoPaciente(unit, lead.id, lead.name ?? null, agora);
+  const data = epochDoCampoData(lead, CAMPOS_SYNC.DATA_CONSULTA);
+
+  if (regra === 'falta') {
+    const semMudarEtapa = data === null ? await semMudarDesde(PRAZOS_ESTOQUE.paradoDias) : true;
+    if (!semMudarEtapa) return fica('sem data e mudou de etapa há menos de 30 dias');
+    const f = await naFranquia();
+    const d = decidirFaltaDoEstoque({ dataFaltaEpoch: data, semMudarEtapa, franquiaSegura: f.consultaFutura || f.emAndamento, agora });
+    return d ? { ...base, decisao: d } : fica(f.consultaFutura ? 'consulta futura na franquia' : f.emAndamento ? 'tratamento em andamento na franquia' : 'falta recente');
+  }
+
+  if (regra === 'agendado' || regra === 'retorno') {
+    if (!(await semMudarDesde(PRAZOS_ESTOQUE.paradoDias))) return fica('mudou de etapa há menos de 30 dias');
+    if (!(await semEscreverDesde(PRAZOS_ESTOQUE.paradoDias))) return fica('o paciente escreveu nos últimos 30 dias');
+    const f = await naFranquia();
+    const fatos = { dataConsultaEpoch: data, semMudarEtapa: true, semEscrever: true, franquiaSegura: f.consultaFutura || f.emAndamento, agora };
+    const d = regra === 'agendado' ? decidirAgendadoParado(fatos) : decidirRetornoParado(fatos);
+    return d ? { ...base, decisao: d } : fica(f.consultaFutura ? 'consulta futura na franquia' : f.emAndamento ? 'tratamento em andamento na franquia' : 'consulta recente');
+  }
+
+  if (regra === 'tratamento') {
+    const naFila = await prisma.altaCandidato.findFirst({ where: { unitId: unit.id, leadId: lead.id }, select: { id: true } });
+    if (naFila) return fica('já está na fila da página /alta');
+    if (!(await semMudarDesde(PRAZOS_ESTOQUE.paradoDias))) return fica('mudou de etapa há menos de 30 dias');
+    const f = await naFranquia();
+    const classe = classeDoTratamentoSemDado({ semMudarEtapa: true, conhecido: f.conhecido, emAndamento: f.emAndamento, finalizado: f.finalizado });
+    return classe ? { ...base, filaDeAlta: classe } : fica('tratamento em andamento na franquia');
+  }
+
+  // dormente: entrada / EM QUALIFICAÇÃO
+  const desde = new Date((agora - PRAZOS_ESTOQUE.dormenteDias * DIA_S) * 1000);
+  const conversa = await prisma.conversation.findFirst({
+    where: { unitId: { in: ctx.unidadesDaConta.map((u) => u.id) }, leadId: String(lead.id), lastMessageAt: { gt: desde } },
+    select: { id: true },
+  });
+  if (conversa) return fica('conversa com a IA nos últimos 90 dias');
+  if (!(await semMudarDesde(PRAZOS_ESTOQUE.dormenteDias))) return fica('mudou de etapa nos últimos 90 dias');
+  if (!(await semEscreverDesde(PRAZOS_ESTOQUE.dormenteDias))) return fica('o paciente escreveu nos últimos 90 dias');
+  const f = await naFranquia();
+  const d = decidirDormente({ semMudarEtapa: true, semEscrever: true, conversaRecente: false, franquiaSegura: f.consultaFutura || f.emAndamento });
+  return d ? { ...base, decisao: d } : fica(f.consultaFutura ? 'consulta futura na franquia' : 'tratamento em andamento na franquia');
+}
+
+/** Aplica (ou, em seco, registra) o que a avaliação decidiu. Devolve se mexeu de verdade. */
+export async function aplicarDoEstoque(ctx: CtxDoEstoque, funis: Funis, a: AvaliacaoDoEstoque, lead: KommoLead, seco: boolean): Promise<boolean> {
+  const { unit, kommo } = ctx;
+  if (a.decisao?.para === 'PERDIDO') return fecharComoPerdido(unit, kommo, funis, a.leadId, a.etapa, a.decisao, seco, ID_AUTOMACAO_ESTOQUES);
+  if (a.decisao?.para === 'EM ESPERA') return moverParaEspera(unit, kommo, funis, a.leadId, a.etapa, a.decisao, seco, ID_AUTOMACAO_ESTOQUES);
+  if (a.filaDeAlta) {
+    const motivo = a.filaDeAlta === 'ALTA' ? 'em EM TRATAMENTO sem dado de sessão, tratamento finalizado na franquia' : 'em EM TRATAMENTO sem nenhum dado de sessão da franquia';
+    if (seco) {
+      registrarSimulacao(unit, ID_AUTOMACAO_ESTOQUES, { leadId: a.leadId, acao: 'alertaria', alvo: 'fila da página /alta', valor: a.filaDeAlta, deEtapa: a.etapa, motivo });
+      return false;
+    }
+    await semearFilaDeAlta(unit.id, [{ leadId: a.leadId, nome: lead.name ?? null, classe: a.filaDeAlta, realizadas: 0, previstas: 0, ultimaSessao: null }]);
+    logger.info({ unit: unit.slug, leadId: a.leadId, classe: a.filaDeAlta }, 'parados: EM TRATAMENTO sem dado da franquia — entrou na fila da /alta');
+    return true;
+  }
+  return false;
+}
+
+async function varrerEstoques(ctx: CtxDoEstoque, funis: Funis, grupo: GrupoDoCrm | null, resumo: Resumo, seco: boolean): Promise<void> {
+  const { unit, agora } = ctx;
+  const cotas = new Map<RegraDoEstoque, ReturnType<typeof cotaNova>>();
+  for (const e of etapasDoEstoque(funis)) {
+    const cota = cotas.get(e.regra) ?? cotaNova(seco);
+    cotas.set(e.regra, cota);
+    for (const lead of await leadsDaEtapa(ctx.kommo, e.pipelineId, e.statusId)) {
+      if (!candidatoDoEstoque(e.regra, lead, e.nome, agora, unit.spineTimezone)) continue; // barato: sem chamada nenhuma
+      if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
+      if (!cota.podeAvaliar()) break;
+      cota.avaliou();
+      resumo.avaliados++;
+      try {
+        const a = await avaliarDoEstoque(ctx, e.regra, lead, e.nome);
+        if (!a.decisao && !a.filaDeAlta) continue;
+        resumo.candidatos++;
+        if (await aplicarDoEstoque(ctx, funis, a, lead, seco)) {
+          cota.moveu();
+          resumo.movidos++;
+          await pausa();
+        }
+      } catch (err) {
+        resumo.erros++;
+        logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id, regra: e.regra }, 'parados: erro num cartão do estoque — pulei');
+      }
+    }
+  }
 }
 
 let rodando = false;

@@ -207,6 +207,8 @@ export interface DecisaoParado {
   retomarEmEpoch?: number;
   /** PERDIDO por sumiço: não dispara a régua de templates de PERDIDO */
   semRegua?: boolean;
+  /** de onde vem a regra, pra nota do cartão (padrão: a combinada em 18/09/2026) */
+  combinada?: string;
 }
 
 export function prazoDaEtapa(etapa: string, prazos: PrazosDeEtapa = PRAZOS): number | null {
@@ -361,7 +363,7 @@ export function textoDaNota(d: DecisaoParado, etapaAtual: string): string {
   if (d.para === 'PERDIDO') {
     return (
       `⏱ Movido de ${etapaAtual} para PERDIDO pelo prazo: ${d.regra}. Motivo: ${d.motivoPerda}. ` +
-      'Regra combinada em 18/09/2026 — o cartão anda sozinho; se o paciente voltar a escrever, a Sofia retoma.'
+      `${d.combinada ?? 'Regra combinada em 18/09/2026'} — o cartão anda sozinho; se o paciente voltar a escrever, a Sofia retoma.`
     );
   }
   return (
