@@ -10,6 +10,10 @@
  * ou os que a busca da franquia acha agora pelo título e pelo telefone). Um idClient qualquer, vindo de fora, não grava.
  * Mesma chave por unidade dos outros widgets (`unidadeDoWidget`). A escrita só vale com a chave `casamento-jornada`
  * LIGADA: em "só no papel" o widget mostra a lista, mas não grava.
+ *
+ * Kommo dividido (Petrópolis + Caxias): o widget chega pelo slug da DONA da conta, mas o cartão pode ser de Caxias. A chave,
+ * a franquia, os candidatos e a escolha são SEMPRE os da unidade dona do cartão (achado 6 da revisão de 16/10) — os mesmos
+ * que o sincronizador daquela unidade usa.
  */
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
@@ -17,7 +21,7 @@ import { logger } from '../lib/logger.js';
 import { unidadeDoWidget } from './widget-franquia.controller.js';
 import { createKommoClient, type KommoClient, type KommoLead } from '../services/kommo.service.js';
 import { SpineService } from '../services/spine.service.js';
-import { contaDoKommo, unidadeParaOCartao } from '../lib/crm-compartilhado.js';
+import { contaDoKommo, unidadeParaOCartao, type DonoDoCartao } from '../lib/crm-compartilhado.js';
 import { CAMPO_ID_CLIENT, TAG_CONFLITO, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { candidatosGuardados, escolhaDaSdr, gravarEscolhaDaSdr } from '../lib/conflito-paciente.js';
 import { camposDaConta, campoDaConta, casarPacienteDoCartao, idClientDoCartao, type CampoBruto, type CampoDaConta } from '../lib/franquia-sync-worker.js';
@@ -34,10 +38,17 @@ interface Contexto {
   temEtiqueta: boolean;
 }
 
-async function contexto(unit: Unit, leadId: number): Promise<{ ok: true; c: Contexto } | { ok: false; status: number; erro: string }> {
-  const dono = await unidadeParaOCartao(unit, leadId);
-  if (dono.tipo === 'recusa') return { ok: false, status: 409, erro: dono.motivo };
-  const kommo = createKommoClient(await contaDoKommo(unit));
+/** Só os testes trocam: quem é o dono do cartão e o cliente do Kommo da conta. */
+export const _depsWidgetConflito: {
+  dono: (unit: Unit, leadId: number) => Promise<DonoDoCartao>;
+  kommoDe: (unit: Unit) => KommoClient | Promise<KommoClient>;
+} = {
+  dono: (unit, leadId) => unidadeParaOCartao(unit, leadId),
+  kommoDe: async (unit) => createKommoClient(await contaDoKommo(unit)),
+};
+
+async function contexto(unit: Unit, leadId: number, dono: Exclude<DonoDoCartao, { tipo: 'recusa' }>): Promise<{ ok: true; c: Contexto }> {
+  const kommo = await _depsWidgetConflito.kommoDe(unit);
   const [lead, bruto] = await Promise.all([
     kommo.getLead(leadId),
     kommo.listLeadCustomFields() as Promise<{ _embedded?: { custom_fields?: CampoBruto[] } } | undefined>,
@@ -86,13 +97,15 @@ export async function widgetConflitoHandler(req: Request, res: Response): Promis
   if (!unit) return;
   const leadId = leadIdDe(req.query.lead);
   if (!leadId) { res.status(400).json({ error: 'lead inválido' }); return; }
-  const estado = estadoCasamentoJornada(unit.slug);
-  if (estado === 'desligado') { res.json({ estado, conflito: false, candidatos: [] }); return; }
-  if (!unit.spineEnabled || !unit.spineToken) { res.json({ estado, conflito: false, candidatos: [], motivo: 'franquia não conectada' }); return; }
   try {
-    const ctx = await contexto(unit, leadId);
-    if (!ctx.ok) { res.status(ctx.status).json({ error: ctx.erro }); return; }
-    const c = ctx.c;
+    // a unidade dona do cartão primeiro: é a chave DELA que vale (Kommo de uma unidade só: a própria, sem ler nada)
+    const dono = await _depsWidgetConflito.dono(unit, leadId);
+    if (dono.tipo === 'recusa') { res.json({ estado: estadoCasamentoJornada(unit.slug), conflito: false, candidatos: [], motivo: dono.motivo }); return; }
+    const daFranquia = dono.unit;
+    const estado = estadoCasamentoJornada(daFranquia.slug);
+    if (estado === 'desligado') { res.json({ estado, conflito: false, candidatos: [] }); return; }
+    if (!daFranquia.spineEnabled || !daFranquia.spineToken) { res.json({ estado, conflito: false, candidatos: [], motivo: 'franquia não conectada' }); return; }
+    const c = (await contexto(unit, leadId, dono)).c;
     const ids = await candidatosDoCartao(c, leadId);
     const escolhido = await escolhaDaSdr(c.unitDaFranquia.id, leadId);
     const agora = Date.now();
@@ -135,16 +148,16 @@ export async function widgetEscolherPacienteHandler(req: Request, res: Response)
   const leadId = leadIdDe(b.leadId);
   const idClient = leadIdDe(b.idClient);
   if (!leadId || !idClient) { res.status(400).json({ error: 'leadId e idClient são obrigatórios' }); return; }
-  const estado = estadoCasamentoJornada(unit.slug);
-  if (estado !== 'ligado') {
-    res.status(409).json({ error: estado === 'seco' ? 'a regra de 16/10 está "só no papel" nesta unidade: a escolha não é gravada' : 'a regra de 16/10 está desligada nesta unidade' });
-    return;
-  }
   const usuario = typeof b.usuario === 'string' ? b.usuario.trim().slice(0, 60) : '';
   try {
-    const ctx = await contexto(unit, leadId);
-    if (!ctx.ok) { res.status(ctx.status).json({ error: ctx.erro }); return; }
-    const c = ctx.c;
+    const dono = await _depsWidgetConflito.dono(unit, leadId);
+    if (dono.tipo === 'recusa') { res.status(409).json({ error: dono.motivo }); return; }
+    const estado = estadoCasamentoJornada(dono.unit.slug);
+    if (estado !== 'ligado') {
+      res.status(409).json({ error: estado === 'seco' ? 'a regra de 16/10 está "só no papel" nesta unidade: a escolha não é gravada' : 'a regra de 16/10 está desligada nesta unidade' });
+      return;
+    }
+    const c = (await contexto(unit, leadId, dono)).c;
     const permitidos = await candidatosDoCartao(c, leadId);
     if (!permitidos.includes(idClient)) {
       res.status(400).json({ error: 'este paciente não está entre os que usam o telefone deste cartão', candidatos: permitidos });
