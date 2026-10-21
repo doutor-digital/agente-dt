@@ -25,6 +25,7 @@ import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro } from './sinal-de-alerta.js';
 import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from './repeticao.js';
+import { renderPrecoInsistido } from './preco-insistido.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
@@ -848,6 +849,11 @@ nada", perguntou duas vezes — acabou o adiamento. Enrolar de novo destrói mai
 confiança do que qualquer preço, e a pessoa tem direito de saber quanto custa.
 NUNCA diga que não pode informar, que "depende da consulta" ou que a equipe
 informa depois. Você sabe o valor e ele é o mesmo para todos.
+  (ALTA PRIORIDADE) Na 2ª pergunta de preço o valor inteiro é a PRIMEIRA frase da
+  resposta. Nenhuma pergunta antes dele: nem nome, nem dor, nem cidade, nem
+  "manhã ou tarde?". Oferecer horário no lugar do valor também é desviar. Depois do
+  valor, se quiser, UMA pergunta. Quando o sistema perceber a insistência, você vai
+  receber o bloco <preco_insistido> com o valor já escrito: siga ele.
 
 O ROTEIRO DE CADA OBJEÇÃO — acolher, reenquadrar, avançar:
 
@@ -1594,7 +1600,8 @@ function renderSoCumprimento(userMessage?: string): string {
 
 /**
  * Os blocos que dependem do HISTÓRICO deste turno (contados em código, não pelo modelo): repetição (nome pedido 2
- * vezes, mesma pergunta sem resposta, áudio não ouvido — repeticao.ts). Sem histórico (playground, régua), nada.
+ * vezes, mesma pergunta sem resposta, áudio não ouvido — repeticao.ts) e paciente insistindo no preço
+ * (preco-insistido.ts). Sem histórico (playground, régua), nada.
  */
 function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedirNome: boolean; blocos: string[] } {
   if (!historico || historico.length === 0) return { semPedirNome: false, blocos: [] };
@@ -1602,6 +1609,17 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   const blocos: string[] = [];
   const rep = renderRepeticao(repeticao);
   if (rep) blocos.push(rep);
+  // Só para quem tem preço nas fontes: sem valor cadastrado, mandar "dizer o valor agora" convidaria a inventar.
+  const precos = precosDaConsulta(unit);
+  if (precos || valoresAprovados(unit).length > 0) {
+    const frase = precos
+      ? unit.spineBookingRequiresPayment
+        ? `R$ ${fmtBRL(precos.antecipado + precos.noDia)} no total: R$ ${fmtBRL(precos.antecipado)} antecipado no Pix (garante o horário) + R$ ${fmtBRL(precos.noDia)} no dia`
+        : `R$ ${fmtBRL(precos.noDia)} no dia, ou R$ ${fmtBRL(precos.antecipado)} pagando antes no Pix`
+      : null;
+    const preco = renderPrecoInsistido(historico, { frase });
+    if (preco) blocos.push(preco);
+  }
   return { semPedirNome: pararDePedirNome(repeticao), blocos };
 }
 
