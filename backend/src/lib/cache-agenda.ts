@@ -15,7 +15,8 @@
  *    não serve para a outra. Não há Redis no stack.
  *  - Só guarda dia CONFIRMADO pela sondagem com pelo menos um horário. Erro da franquia, lista vazia e dia em que a
  *    sondagem recusou tudo nunca entram: a sondagem conta como "recusado" qualquer falha (um 500 também), então
- *    "nenhum aceito" pode ser a franquia fora do ar.
+ *    "nenhum aceito" pode ser a franquia fora do ar. Dia em que a sondagem deixou agendamento fantasma (o
+ *    cancelamento falhou) também não: sem cache, a próxima busca já veria esse horário ocupado na grade.
  *  - Na LEITURA sai o horário que já passou, no relógio da unidade (a mesma regra da grade, `buildAgenda`). Se não
  *    sobrar horário confirmado, é como se não houvesse nada guardado.
  *  - APAGA o dia quando a Sofia marca, remarca ou cancela, quando uma marcação falha (horário ocupado na grade ou

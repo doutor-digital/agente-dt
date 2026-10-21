@@ -155,9 +155,11 @@ async function horariosQueAFranquiaAceita(
   data: string,
   candidatos: string[],
   idClientSonda: number,
-): Promise<{ aceitos: string[]; recusados: string[]; sondados: string[] }> {
+): Promise<{ aceitos: string[]; recusados: string[]; sondados: string[]; fantasmas: string[] }> {
   const aceitos: string[] = [];
   const recusados: string[] = [];
+  /** Sondados que a franquia aceitou e NÃO consegui cancelar: o horário ficou ocupado pelo paciente de sondagem. */
+  const fantasmas: string[] = [];
   const sondados = espalhar(candidatos, MAX_VALIDACOES);
   for (const hora of sondados) {
     const r = await SpineService.createSchedule(unit, {
@@ -169,6 +171,7 @@ async function horariosQueAFranquiaAceita(
       aceitos.push(hora);
       const c = await SpineService.cancelSchedule(unit, r.data.idSchedule);
       if (!c.ok) {
+        fantasmas.push(hora);
         logger.warn(
           { idSchedule: r.data.idSchedule, data, hora, unit: unit.slug },
           'sondagem: NÃO consegui cancelar — agendamento fantasma na franquia',
@@ -178,7 +181,7 @@ async function horariosQueAFranquiaAceita(
       recusados.push(hora);
     }
   }
-  return { aceitos, recusados, sondados };
+  return { aceitos, recusados, sondados, fantasmas };
 }
 
 /**
@@ -357,11 +360,13 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
         let recusados: string[] = [];
         let sondados: string[] = [];
         let verificado = false;
+        let fantasmas: string[] = [];
         if (sonda && diasSondados < MAX_DIAS_SONDADOS) {
           diasSondados++;
           const r = await horariosQueAFranquiaAceita(fresca, cursor, livres, sonda);
           recusados = r.recusados;
           sondados = r.sondados;
+          fantasmas = r.fantasmas;
           verificado = true;
           oferecer = r.aceitos;
         } else if (!sonda) {
@@ -381,8 +386,9 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
             (verificado ? '' : ' — SEM verificação'),
           payload: { pedido: data, data: cursor, turno, naGrade: todosLivres, noTurno: livres, sondados, oferecer, recusados, sonda, cache: cache.rastro(doCache) },
         });
-        // só guarda dia confirmado pela sondagem e com horário (erro e lista vazia nunca entram)
-        await cache.guardar(cursor, { todosLivres, livres, oferecer, recusados, sondados }, verificado, consultadaEm);
+        // só guarda dia confirmado pela sondagem e com horário (erro e lista vazia nunca entram). Sondagem que deixou
+        // agendamento fantasma também não: a próxima busca vê o horário ocupado na grade; o cache o ofereceria por 10 min.
+        await cache.guardar(cursor, { todosLivres, livres, oferecer, recusados, sondados }, verificado && fantasmas.length === 0, consultadaEm);
 
         if (oferecer.length === 0) continue;
 

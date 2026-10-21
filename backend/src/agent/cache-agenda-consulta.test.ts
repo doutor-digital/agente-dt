@@ -67,6 +67,7 @@ const ocupados = new Set<string>();
 /** "AAAA-MM-DDTHH:MM:00" que a franquia recusa ao marcar (a grade não vê — bloqueio). */
 const recusa = new Set<string>();
 let falhaNaGrade = false;
+let cancelamentoFalha = false;
 let seq = 100;
 
 const spine = SpineService as unknown as Record<string, unknown>;
@@ -85,7 +86,7 @@ spine.createSchedule = async (_u: Unit, input: { idClient: number; dateAttendanc
 };
 spine.cancelSchedule = async () => {
   franquia.push('cancela');
-  return { ok: true };
+  return cancelamentoFalha ? { ok: false, error: '500 da franquia' } : { ok: true };
 };
 spine.getClient = async () => ({ ok: true, data: { client: { idClient: 9, name: 'Maria Teste', whatsapp: null, schedules: [] } } });
 
@@ -110,6 +111,7 @@ beforeEach(() => {
   ocupados.clear();
   recusa.clear();
   falhaNaGrade = false;
+  cancelamentoFalha = false;
   deposito = depositoNaMemoria();
   registros = [];
   _depsDoCacheParaTeste({ deposito, env: {}, registrar: (_u, _a, s) => registros.push(s) });
@@ -266,4 +268,11 @@ test('desligada: não lê nem grava — toda busca vai à franquia, como antes',
   assert.ok(vaiAFranquia());
   assert.equal(deposito.linhas.length, 0);
   assert.equal(registros.length, 0);
+});
+
+test('sondagem que deixou agendamento fantasma (cancelamento falhou) não entra no cache', async () => {
+  cancelamentoFalha = true;
+  const texto = await consultar(1);
+  assert.match(texto, /Horários CONFIRMADOS/, 'a busca responde como sempre');
+  assert.equal(deposito.linhas.length, 0, 'mas o dia não é guardado: a próxima busca vê o horário ocupado na grade');
 });
