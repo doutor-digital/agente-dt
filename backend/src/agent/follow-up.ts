@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { createChatModel, invokeChatModel, resolveModelName } from '../services/openai.service.js';
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
-import { carregarRede, type UnidadeDaRede } from './rede-doutor-hernia.js';
+import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { aplicarGuardrail } from './guardrail.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
@@ -75,9 +75,9 @@ export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | nul
   if (!conversa.trim()) return null;
 
   let base = '';
+  // A rede (cache de 10 min) é o que reconhece um slug de resgate que divide o Kommo de uma clínica DH.
+  const rede = await carregarRede().catch(() => [] as UnidadeDaRede[]);
   try {
-    // A rede (cache de 10 min) é o que reconhece um slug de resgate que divide o Kommo de uma clínica DH.
-    const rede = await carregarRede().catch(() => [] as UnidadeDaRede[]);
     base = composeFollowUpSystemPrompt(unit, new Date(), rede);
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug }, 'follow-up: persona indisponível, usando genérica');
@@ -142,7 +142,7 @@ ${conversa}`.trim();
     // A régua não tem agenda: nome de profissional aqui só pode ter vindo do histórico, de uma
     // consulta que talvez já tenha passado (08/10/2026, cartão 28088906). Sai — a não ser que a
     // própria ficha da unidade o cite.
-    const tratado = semNomeDeProfissional(semIntimidade(semDiminutivo(limpo)), nomeEstaNaFonte(base)).texto;
+    const tratado = semNomeDeProfissional(semIntimidade(semDiminutivo(semDraSofiaNaDH(limpo, unit, rede))), nomeEstaNaFonte(base)).texto;
     // Bastidor (anotação para a equipe, raciocínio, "o paciente…") nunca sai na régua — ver services/vazamento.ts.
     const vazou = detectarVazamento(tratado);
     if (vazou) {

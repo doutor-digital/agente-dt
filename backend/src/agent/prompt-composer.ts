@@ -54,7 +54,14 @@ import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
-import { carregarRede, renderDoutorHernia, renderDoutorHerniaCurto, type UnidadeDaRede } from './rede-doutor-hernia.js';
+import {
+  carregarRede,
+  ehDoutorHernia,
+  renderDoutorHernia,
+  renderDoutorHerniaCurto,
+  semDraSofia,
+  type UnidadeDaRede,
+} from './rede-doutor-hernia.js';
 
 export interface BusinessHoursStatus {
   enabled: boolean;
@@ -232,14 +239,18 @@ const CATEGORY_PRESETS: Record<string, CategoryPreset> = {
   },
 };
 
-function renderPersona(unit: Unit): string {
+function renderPersona(unit: Unit, rede: ReadonlyArray<UnidadeDaRede> = []): string {
   const lines: string[] = [];
   const company = unit.personaCompanyName?.trim();
   const preset = unit.category ? CATEGORY_PRESETS[unit.category.trim()] : undefined;
+  // Nas clínicas Doutor Hérnia a IA é só "Sofia" — "Dra." fazia o paciente achar que falava com uma médica
+  // (decisão do João, 21/10). Fora da rede (Trauma, HM, advocacia) o preset segue como está.
+  const dh = ehDoutorHernia(unit, rede);
   if (preset) {
     const where = company ? `da ${company}` : 'da empresa';
+    const nome = dh ? semDraSofia(preset.agentName) : preset.agentName;
     lines.push(
-      `Você é ${preset.agentName}, quem atende o WhatsApp ${where} (${preset.vertical}), conversando com os clientes.`,
+      `Você é ${nome}, quem atende o WhatsApp ${where} (${preset.vertical}), conversando com os clientes.`,
     );
     for (const f of preset.framing) lines.push(f);
   } else if (company) {
@@ -264,7 +275,7 @@ function renderPersona(unit: Unit): string {
       'emoji — 🙏 👍 ❤️ costumam ser REAÇÃO do WhatsApp, não pergunta — responda com uma ' +
       'frase curta de verdade que faça a conversa andar, tipo retomar o próximo passo.',
   );
-  const greeting = unit.personaGreeting?.trim();
+  const greeting = dh ? semDraSofia(unit.personaGreeting?.trim() ?? '') : unit.personaGreeting?.trim();
   if (greeting) {
     lines.push(`Saudação preferida (use quando for o primeiro contato): "${greeting}"`);
   }
@@ -1906,7 +1917,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
   const customBase = escolherBase(unit, agentConfigPrompt);
 
   const blocks: string[] = [];
-  blocks.push(renderPersona(unit));
+  blocks.push(renderPersona(unit, input.redeDeUnidades));
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) blocks.push(sourcesBlock);
   if (customBase) blocks.push(xmlBlock('instrucoes_extras', customBase));
@@ -2001,7 +2012,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   const blocks: string[] = [];
 
-  blocks.push(renderPersona(unit));
+  blocks.push(renderPersona(unit, input.redeDeUnidades));
 
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) blocks.push(sourcesBlock);
@@ -2195,7 +2206,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   }
 
   const cache: string[] = [];
-  cache.push(renderPersona(unit));
+  cache.push(renderPersona(unit, input.redeDeUnidades));
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) cache.push(sourcesBlock);
   if (customBase) cache.push(xmlBlock('instrucoes_extras', customBase));
@@ -2488,7 +2499,7 @@ export function composeFollowUpSystemPrompt(
   rede: ReadonlyArray<UnidadeDaRede> = [],
 ): string {
   return [
-    renderPersona(unit),
+    renderPersona(unit, rede),
     renderFatosDaUnidade(unit),
     renderHojeCurto(unit, agora),
     renderRulesGlobal(),

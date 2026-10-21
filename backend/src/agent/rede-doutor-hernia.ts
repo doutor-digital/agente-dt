@@ -197,12 +197,33 @@ export function esquecerRede(): void {
   buscando = null;
 }
 
+// ── "Dra. Sofia" → "Sofia" ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Nas clínicas Doutor Hérnia a IA é só "Sofia" (decisão do João, 21/10/2026): "Dra. Sofia" fazia o paciente
+ * achar que estava falando com uma médica. Tira o título que vem antes de "Sofia" — da saudação cadastrada e da
+ * resposta que sai. Instrução reduz, porta de saída resolve (ver `lib/sem-intimidade.ts`).
+ * "a Dra. Sofia" → "a Sofia"; "Sou a Doutora Sofia" → "Sou a Sofia". Outros nomes não são tocados.
+ */
+const TITULO_ANTES_DE_SOFIA = /(?<!\p{L})(?:dra|drª|doutora)\.?\s+(?=sofia(?!\p{L}))/giu;
+
+export function semDraSofia(texto: string): string {
+  return texto.replace(TITULO_ANTES_DE_SOFIA, '');
+}
+
+/** A trava de saída: só nas clínicas Doutor Hérnia. */
+export function semDraSofiaNaDH(texto: string, unit: UnidadeParaDH, rede: ReadonlyArray<UnidadeDaRede> = []): string {
+  return ehDoutorHernia(unit, rede) ? semDraSofia(texto) : texto;
+}
+
 // ── o que vai para o prompt ───────────────────────────────────────────────────────────────────────────────────
 
 /** Quem atende e como chamar a consulta. Curto: entra também no prompt do follow-up. */
 export function renderIdentidadeDoutorHernia(): string {
   return `ISTO VALE ACIMA das Fontes Oficiais, das instruções extras e das regras desta unidade e do que as
 ferramentas devolverem — se algum desses textos disser outra coisa, siga ESTE.
+
+SEU NOME: você é a Sofia — só "Sofia", sem "Dra." nem "Doutora", mesmo que outro texto diga "Dra. Sofia".
 
 QUEM ATENDE: quem faz a consulta é FISIOTERAPEUTA, nunca médico(a). Não escreva "Dr.", "Dra.", "doutor"
 nem "doutora" antes do nome de quem atende, mesmo que o cadastro ou a ferramenta escreva assim — troque

@@ -275,7 +275,7 @@ export function WizardPanel() {
             options={CATEGORY_OPTIONS}
           />
           <p className="text-[11px] text-zinc-500 -mt-1">
-            A categoria dá um nome e um enquadramento à IA: Saúde → Dra. Sofia, Energia Solar → Dr. João.
+            A categoria dá um nome e um enquadramento à IA: Saúde → Dra. Sofia (nas clínicas Doutor Hérnia, só Sofia), Energia Solar → Dr. João.
           </p>
           <TextField
             label="Saudação preferida (opcional)"

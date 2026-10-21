@@ -25,6 +25,8 @@ import {
   renderIdentidadeCurta,
   renderIdentidadeDoutorHernia,
   renderRedeDeUnidades,
+  semDraSofia,
+  semDraSofiaNaDH,
   telefoneParaPaciente,
   type LinhaDeUnidade,
 } from './rede-doutor-hernia.js';
@@ -155,6 +157,35 @@ test('item 5: slug de resgate que divide o Kommo de uma unidade da rede é Douto
   const u = unidade({ id: 'u-res', ...timbo } as Partial<Unit>);
   assert.ok(!composeFollowUpSystemPrompt(u).includes(FRASE_E_MEDICO));
   assert.ok(composeFollowUpSystemPrompt(u, new Date(), rede).includes(FRASE_E_MEDICO));
+});
+
+test('nome da IA: nas clínicas Doutor Hérnia é só "Sofia"; fora da rede o preset de saúde segue "Dra. Sofia"', () => {
+  const dh = unidade({ personaGreeting: 'Oi! Sou a Dra. Sofia, da Doutor Hérnia Marabá. Como posso te ajudar?' });
+  for (const p of [
+    composeSystemPrompt({ unit: dh, redeDeUnidades: REDE }),
+    composeSystemPromptParts({ unit: dh, redeDeUnidades: REDE }).cacheable,
+    composeFollowUpSystemPrompt(dh),
+  ]) {
+    assert.match(p, /Você é Sofia, quem atende o WhatsApp da Doutor Hérnia Marabá/);
+    assert.match(p, /Saudação preferida[^\n]*"Oi! Sou a Sofia, da Doutor Hérnia Marabá/, 'a saudação do banco perde o "Dra."');
+    assert.doesNotMatch(p, /Você é Dra\. Sofia/);
+  }
+  assert.match(composeSystemPrompt({ unit: dh, redeDeUnidades: REDE }), /SEU NOME: você é a Sofia/);
+  const trauma = unidade({ id: 'u-trauma', slug: 'default', name: 'Instituto Trauma', personaCompanyName: 'TraumaFIT', kommoSubdomain: 'institutotraumakommon', personaGreeting: 'Oi! Sou a Dra. Sofia.' });
+  const pt = composeSystemPrompt({ unit: trauma, redeDeUnidades: REDE });
+  assert.match(pt, /Você é Dra\. Sofia, quem atende o WhatsApp da TraumaFIT/);
+  assert.match(pt, /"Oi! Sou a Dra\. Sofia\."/);
+});
+
+test('nome da IA: a trava de saída tira o "Dra." antes de Sofia — só na rede Doutor Hérnia', () => {
+  assert.equal(semDraSofia('Oi! Aqui é a Dra. Sofia, da clínica.'), 'Oi! Aqui é a Sofia, da clínica.');
+  assert.equal(semDraSofia('Sou a Doutora Sofia 😊'), 'Sou a Sofia 😊');
+  assert.equal(semDraSofia('DRA SOFIA aqui'), 'SOFIA aqui');
+  assert.equal(semDraSofia('com a Dra. Sofiane'), 'com a Dra. Sofiane', 'outro nome não é tocado');
+  assert.equal(semDraSofia('a Dra. Victória atende'), 'a Dra. Victória atende', 'só o nome da IA');
+  const texto = 'Aqui é a Dra. Sofia!';
+  assert.equal(semDraSofiaNaDH(texto, unidade()), 'Aqui é a Sofia!');
+  assert.equal(semDraSofiaNaDH(texto, { slug: 'default', name: 'Instituto Trauma', personaCompanyName: 'TraumaFIT', kommoSubdomain: 'institutotraumakommon' }), texto);
 });
 
 // ── item 7: a rede ─────────────────────────────────────────────────────────────────────────────────────────

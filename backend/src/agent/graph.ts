@@ -20,6 +20,7 @@ import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from
 import { aplicarGuardrail } from './guardrail.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
+import { semDraSofiaNaDH } from './rede-doutor-hernia.js';
 import { semNomeForaDaAgenda } from './nome-na-resposta.js';
 import { avaliarChamadaFinal, INSTRUCAO_REFAZER_CTA } from './cta-final.js';
 import { detectarVazamento, explicarVazamento, pedidoAoReescritor, SISTEMA_REESCRITOR_BASTIDOR } from '../services/vazamento.js';
@@ -986,7 +987,8 @@ export async function buildAgentGraph(
         textoFinal = comNomeChecado.texto;
         response.content = textoFinal;
       }
-      const guard = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit);
+      // "Dra. Sofia" → "Sofia" nas clínicas Doutor Hérnia (decisão do João, 21/10) — ver rede-doutor-hernia.ts.
+      const guard = aplicarGuardrail(semIntimidade(semDiminutivo(semDraSofiaNaDH(textoFinal, unit))), unit);
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';
