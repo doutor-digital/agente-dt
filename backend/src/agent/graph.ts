@@ -65,6 +65,7 @@ import {
 } from './reserva-sem-marcar.js';
 import { ehSemNome, ehTituloPadrao } from '../lib/titulo-padrao.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
+import { registrarPausaPropria } from '../lib/pausa-propria.js';
 
 let checkpointerInstance: PostgresSaver | null = null;
 
@@ -585,6 +586,7 @@ export async function buildAgentGraph(
           title: `💸 Conta ${mensal.conta} passou do teto do mês (R$ ${mensal.brl.toFixed(0)} de R$ ${mensal.teto}) — conta pausada até o dia 1º, equipe assume`,
           payload: { conta: mensal.conta, mes: mensal.mes, brl: mensal.brl, teto: mensal.teto },
         });
+        registrarPausaPropria(leadIdDaConversa); // o FALLBACK_TETO tem de sair mesmo com a conta pausada
         void entregarAoHumanoPorTetoMensal(unit, kommoClient, leadIdDaConversa, mensal, recorder);
         return {
           messages: [new AIMessage(FALLBACK_TETO)],
@@ -642,6 +644,7 @@ export async function buildAgentGraph(
             title: `💸 Conversa passou do teto de gasto (US$ ${teto.usd.toFixed(2)} em ${teto.turnos} turnos) — humano assume`,
             payload: { usd: teto.usd, turnos: teto.turnos, teto: teto.teto },
           });
+          registrarPausaPropria(leadIdDaConversa); // o FALLBACK_TETO avisa o paciente: a trava não o descarta
           void entregarAoHumano(unit, kommoClient, leadIdDaConversa, teto, recorder);
         }
         // O paciente NÃO fica no vácuo. Conversa cara é quase sempre conversa

@@ -9,6 +9,7 @@ import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
+import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { recusaDoFunilTratamento } from '../lib/guarda-funil-tratamento.js';
@@ -923,6 +924,8 @@ export async function processAgent(args: {
   const accountId = args.accountId ?? null;
   let { humanMessage } = args;
   let delivered = false;
+  // A trava de antes de enviar compara com isto: pausa que a própria Sofia fez DEPOIS daqui é do turno.
+  const inicioDoTurno = Date.now();
   const finishWidgetSilently = async (): Promise<void> => {
     if (deliver && !delivered) {
       delivered = true;
@@ -1249,6 +1252,29 @@ export async function processAgent(args: {
     logger.warn({ err, leadId, unit: unit.slug }, 'falha no guard de etapa (allowlist/pause_in_stages) — seguindo');
   }
 
+  // A EQUIPE FALOU, A SOFIA PARA (prioridade 3, 21/10/2026): pela conversa oficial, que enxerga também o
+  // celular da clínica. Chave pausa-equipe; em "só no papel" só registra. Nunca derruba o atendimento.
+  const porta = isChatMessage
+    ? await portaDaEquipe({ unit, leadId, recorder }).catch((err) => {
+        logger.warn({ err: String(err), leadId, unit: unit.slug }, 'pausa-equipe: porta falhou (segue)');
+        return { pausou: false, msgs: null };
+      })
+    : { pausou: false, msgs: null };
+  if (porta.pausou) {
+    carimbarContato(unit.id, leadId, { desfecho: 'pediu_humano' });
+    await finishWidgetSilently();
+    const totalLatency = Math.round(performance.now() - requestStart);
+    await recorder.step({
+      kind: 'COMPLETED',
+      title: 'A equipe está na conversa — a Sofia não respondeu',
+      payload: { leadId, reason: 'team_spoke' },
+      latencyMs: totalLatency,
+    });
+    await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paused_by_team__' });
+    logger.info({ traceId, leadId, unit: unit.slug }, 'agente pulado (a equipe falou com o paciente)');
+    return;
+  }
+
   try {
     const graph = await buildAgentGraph(recorder, unit, leadId);
     const threadId = buildThreadId(unit.slug, leadId);
@@ -1283,7 +1309,7 @@ export async function processAgent(args: {
     // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde
     // a última fala da Sofia, e uma falha aqui nunca segura o atendimento.
     const blocoOficial = isChatMessage
-      ? await blocoDaConversaOficial({ unit, leadId, humanMessage, recorder }).catch((err) => {
+      ? await blocoDaConversaOficial({ unit, leadId, humanMessage, recorder, msgs: porta.msgs }).catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'conversa oficial: falha ao ler (segue sem)');
           return '';
         })
@@ -1356,18 +1382,42 @@ export async function processAgent(args: {
       await finishWidgetSilently();
     }
 
-    if (isChatMessage && reply && podeEnviar && !segurada) {
+    const vaiEnviar = isChatMessage && !!reply && podeEnviar && !segurada;
+    if (vaiEnviar) {
+      const delaySec = Math.max(0, Math.min(unit.personaResponseDelaySec ?? 0, 30));
+      if (delaySec > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delaySec * 1000));
+      }
+      await enforceReplyGap(unit.id, leadId, unit.personaMinReplyGapSec ?? 0);
+    }
+
+    // Enquanto o modelo pensava (e o "digitando…" esperava), a equipe pode ter pausado o cartão ou
+    // escrito pelo celular. Confere de novo AGORA; se travou, a resposta não sai e vira nota no cartão.
+    // Parauapebas, lead 24777662 (15/10): a Sofia respondeu com o cartão pausado.
+    //
+    // Consome a marca uma vez só: serve à nota da trava e ao cartão de chegada lá embaixo
+    const marcouConsultaNoTurno = vaiEnviar && consultaMarcadaNoTurno(traceId);
+    const travaDoEnvio = vaiEnviar
+      ? await travaAntesDeEnviar({
+          unit,
+          leadId,
+          inicioDoTurno,
+          resposta: reply,
+          marcouConsulta: marcouConsultaNoTurno,
+          recorder,
+        }).catch((err) => {
+          logger.warn({ err: String(err), leadId, unit: unit.slug }, 'trava antes de enviar falhou (segue enviando)');
+          return null;
+        })
+      : null;
+    if (travaDoEnvio) await finishWidgetSilently();
+
+    if (vaiEnviar && !travaDoEnvio) {
       const conv = await upsertConversation({
         unitId: unit.id,
         leadId: String(leadId),
         channel: 'kommo_chat',
       });
-      const delaySec = Math.max(0, Math.min(unit.personaResponseDelaySec ?? 0, 30));
-      if (delaySec > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delaySec * 1000));
-      }
-
-      await enforceReplyGap(unit.id, leadId, unit.personaMinReplyGapSec ?? 0);
 
       const sendStart = performance.now();
       try {
@@ -1461,7 +1511,7 @@ export async function processAgent(args: {
         });
         // Marcou consulta neste turno e a confirmação chegou → cartão de chegada
         // (foto da fachada + endereço + mapa), numa mensagem à parte, sem segurar nada.
-        if (!naoChegou && consultaMarcadaNoTurno(traceId)) {
+        if (!naoChegou && marcouConsultaNoTurno) {
           await enviarCartaoDeChegada({
             unit, leadId, chatId, talkId, contactId, authorId, accountId, modoWidget: !!deliver, recorder,
           }).catch((err) => logger.warn({ err: String(err), leadId, unit: unit.slug }, 'cartão de chegada falhou (segue)'));
@@ -1482,7 +1532,7 @@ export async function processAgent(args: {
 
     const intents = unit.pipelineIntents as Record<string, number> | null;
     const handoffStage = intents?.handoff_scheduling;
-    if (handoffStage && leadId > 0 && detectedSchedulingIntent(result.messages ?? [])) {
+    if (handoffStage && leadId > 0 && !travaDoEnvio && detectedSchedulingIntent(result.messages ?? [])) {
       try {
         const kommo = createKommoClient(unit);
         // 16/10: a Sofia não tira o cartão do funil TRATAMENTO — nem pelo handoff automático (chave casamento-jornada)
@@ -1521,7 +1571,7 @@ export async function processAgent(args: {
       leadId,
       recentTurns: [
         { role: 'user', content: humanMessage },
-        ...(reply && podeEnviar && !segurada ? [{ role: 'assistant' as const, content: reply }] : []),
+        ...(reply && podeEnviar && !segurada && !travaDoEnvio ? [{ role: 'assistant' as const, content: reply }] : []),
       ],
     });
 
