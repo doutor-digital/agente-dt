@@ -336,6 +336,12 @@ test('textos: sessão e consulta com dia da semana e hora; remarcar sem prometer
   assert.match(textoRespostaAoLembrete({ tipo: 'consulta', resposta: 'remarcar', nome: 'Ana', quando: null }), /^Sem problema, Ana! 🙏/);
 });
 
+test('textos: nome de perfil que não é nome não aparece ("Confirmado, tricolor!" nunca sai)', () => {
+  assert.match(textoRespostaAoLembrete({ tipo: 'consulta', resposta: 'confirmou', nome: 'tricolor', quando: null }), /^Confirmado! 💙/);
+  assert.match(textoRespostaAoLembrete({ tipo: 'consulta', resposta: 'remarcar', nome: 'Meu Único Amigo É Deus', quando: null }), /^Sem problema! 🙏/);
+  assert.match(textoRespostaAoLembrete({ tipo: 'sessao', resposta: 'confirmou', nome: 'joana@gmail.com', quando: null }), /^Presença confirmada! 💙/);
+});
+
 // ── de ponta a ponta (Kommo e franquia falsos) ───────────────────────────────────────────────────
 
 test('SESSÃO: toque no lembrete da sessão → responde e CONFIRMA na franquia o agendamento certo', async () => {

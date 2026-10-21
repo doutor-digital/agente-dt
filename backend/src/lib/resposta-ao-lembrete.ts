@@ -58,6 +58,7 @@ import {
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { addMessage } from '../services/conversations.service.js';
+import { nomeApresentavel, vocativo } from './nome-apresentavel.js';
 
 export type { TipoLembrete } from './lembrete-chaves.js';
 
@@ -306,9 +307,9 @@ export function comoConsultaReconciliada(s: SpineSchedule): ConsultaReconciliada
 
 // ── textos ────────────────────────────────────────────────────────────────────────────────────────
 
+/** ", Maria" ou "" — só com nome apresentável (nada de "Confirmado, tricolor!"). Ver nome-apresentavel.ts. */
 function primeiroNome(nome: string | null | undefined): string {
-  const p = (nome ?? '').trim().split(/\s+/)[0];
-  return p ? `, ${p}` : '';
+  return vocativo(nome);
 }
 
 /** "quinta, 17/10 às 14:00" — ou vazio quando não se sabe o horário com certeza. */
@@ -589,6 +590,13 @@ interface Contexto {
   kommo: KommoDoLembrete;
   resposta: RespostaD1;
   log: Record<string, unknown>;
+  /** Título do cartão, quando já foi lido: é dele que sai o nome (o `contactName` é o perfil do WhatsApp). */
+  titulo?: string | null;
+}
+
+/** O nome com que a resposta chama o paciente: título do cartão, ou o perfil só se parecer nome próprio. */
+function nomeDoContexto(c: Pick<Contexto, 'titulo' | 'conv'>): string | null {
+  return nomeApresentavel(c.titulo ?? null, c.conv.contactName);
 }
 
 async function responderRepeticao(
@@ -598,7 +606,7 @@ async function responderRepeticao(
   ref: string | null,
 ): Promise<ResultadoDoLembrete> {
   const quando = tipo !== 'incerto' && ref && ref.slice(11, 16) !== '00:00' ? ref : null;
-  const texto = textoRepeticao({ resposta: c.resposta, tipo, nome: c.conv.contactName, quando });
+  const texto = textoRepeticao({ resposta: c.resposta, tipo, nome: nomeDoContexto(c), quando });
   await c.kommo.sendChatReply({ leadId: c.leadId, text: texto, chatId: null, talkId: null, contactId: null });
   await deps.registrarResposta(c.conv.id ?? null, texto);
   logger.info({ ...c.log, tipo }, 'lembrete: o mesmo toque de novo — respondido "já está", sem refazer nada');
@@ -662,6 +670,7 @@ export async function tratarBotaoDoLembrete(
   }
 
   const lead = await kommo.getLead(leadId);
+  c.titulo = lead?.name ?? null;
   const esquema = await deps.esquema(unit, kommo);
   const datas = datasDoCartao(lead, esquema.campoPorNome);
   const agoraEpoch = Math.floor(agora.getTime() / 1000);
@@ -747,8 +756,8 @@ async function responderIncerto(c: Contexto, deps: DepsLembrete, motivo: string,
     .catch((err) => logger.warn({ ...c.log, err: String(err) }, 'lembrete: falha ao abrir a tarefa do toque incerto'));
   const resp =
     resposta === 'confirmou'
-      ? textoConfirmacaoIncerta(conv.contactName)
-      : textoRespostaAoLembrete({ tipo: 'consulta', resposta, nome: conv.contactName, quando: null });
+      ? textoConfirmacaoIncerta(nomeDoContexto(c))
+      : textoRespostaAoLembrete({ tipo: 'consulta', resposta, nome: nomeDoContexto(c), quando: null });
   await kommo.sendChatReply({ leadId, text: resp, chatId: null, talkId: null, contactId: null });
   await deps.marcarTratado(unit.id, leadId, chave).catch(() => undefined);
   await deps.registrarResposta(conv.id ?? null, resp);
@@ -784,7 +793,7 @@ async function responderAoLembrete(
     });
   }
 
-  const resp = textoRespostaAoLembrete({ tipo, resposta, nome: conv.contactName, quando: quandoDito });
+  const resp = textoRespostaAoLembrete({ tipo, resposta, nome: nomeDoContexto(c), quando: quandoDito });
   await kommo.sendChatReply({ leadId, text: resp, chatId: null, talkId: null, contactId: null });
   // A resposta já saiu: marca antes de falar com a franquia, que pode demorar ou falhar.
   await deps.marcarTratado(unit.id, leadId, chave).catch(() => undefined);
