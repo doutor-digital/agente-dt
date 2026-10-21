@@ -20,7 +20,7 @@ import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from
 import { aplicarGuardrail } from './guardrail.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
-import { semDraSofiaNaDH } from './rede-doutor-hernia.js';
+import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
 import { semNomeForaDaAgenda } from './nome-na-resposta.js';
 import { avaliarChamadaFinal, INSTRUCAO_REFAZER_CTA } from './cta-final.js';
 import { detectarVazamento, explicarVazamento, pedidoAoReescritor, SISTEMA_REESCRITOR_BASTIDOR } from '../services/vazamento.js';
@@ -988,14 +988,16 @@ export async function buildAgentGraph(
         response.content = textoFinal;
       }
       // "Dra. Sofia" → "Sofia" nas clínicas Doutor Hérnia (decisão do João, 21/10) — ver rede-doutor-hernia.ts.
-      const semDra = semDraSofiaNaDH(textoFinal, unit);
+      // A rede (cache de 10 min) reconhece o slug de resgate que divide o Kommo de uma clínica DH.
+      const rede = await carregarRede().catch(() => [] as UnidadeDaRede[]);
+      const semDra = semDraSofiaNaDH(textoFinal, unit, rede);
       if (semDra !== textoFinal) {
         textoFinal = semDra;
         response.content = textoFinal;
       }
       const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit);
       // O que o guardrail devolve (correção ou texto de reserva) passa pela mesma trava do nome.
-      const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit) };
+      const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit, rede) };
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';
