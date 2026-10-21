@@ -196,8 +196,9 @@ test('áudios não ouvidos contam pelas falas do paciente, não pelas da IA no m
   const audio = `${MARCA_AUDIO_NAO_OUVIDO}\n\n[instrução]`;
   const meio: Fala[] = [];
   for (let i = 0; i < 12; i++) meio.push(ia(`Resposta ${i}, sem pergunta.`));
-  const r = analisarRepeticao([p(audio), ...meio, p('ok'), ia('Certo.'), p(audio)]);
-  assert.equal(r.audiosNaoOuvidos, 2);
+  assert.equal(analisarRepeticao([p(audio), ...meio, p(audio)]).audiosNaoOuvidos, 2);
+  // texto dele no meio: não são seguidos
+  assert.equal(analisarRepeticao([p(audio), ia('Não consegui ouvir 🙏 Consegue me escrever?'), p('é na lombar'), ia('Há quanto tempo?'), p(audio)]).audiosNaoOuvidos, 1);
 });
 
 test('um áudio ouvido no meio zera a conta', () => {

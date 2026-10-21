@@ -29,7 +29,6 @@ export interface Fala {
  * depender do controller.
  */
 export const MARCA_AUDIO_NAO_OUVIDO = '[áudio do cliente — não deu pra ouvir]';
-const AUDIO_OUVIDO = /\[áudio do cliente\]:/;
 const AUDIO_SEM_FALA = /\[áudio sem fala detectada\]/;
 
 /** Só o histórico recente conta: o mesmo cartão pode voltar semanas depois, e aí é outra conversa. */
@@ -201,8 +200,9 @@ export function analisarRepeticao(falasTodas: Fala[]): Repeticao {
     const recentes = falas.filter((f) => f.papel === 'paciente').slice(-JANELA_AUDIO);
     for (let i = recentes.length - 1; i >= 0; i--) {
       const t = recentes[i].texto;
+      // seguidos de verdade: qualquer outra fala dele no meio (texto, áudio ouvido) quebra a sequência (Codex, 21/10)
       if (t.includes(MARCA_AUDIO_NAO_OUVIDO)) audiosNaoOuvidos++;
-      else if (AUDIO_OUVIDO.test(t)) break;
+      else break;
     }
   }
 
