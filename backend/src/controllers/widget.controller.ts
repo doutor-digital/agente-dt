@@ -18,6 +18,7 @@ import {
 } from '../lib/widget-connection-monitor.js';
 import { processAgent, type AgentDeliverFn } from './webhook.controller.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
+import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import type { Unit } from '@prisma/client';
 
 const widgetBodySchema = z.object({
@@ -208,6 +209,9 @@ async function processWidget(args: {
     content: message,
     meta: { via: 'widget_request' },
   });
+  void telefoneDeFamiliarNoCartao(unit, { kommo: createKommoClient(unit), leadId: Number(leadId), conversationId: conv.id }).catch((err) =>
+    logger.warn({ err: String(err), leadId, unit: unit.slug }, 'telefone-de-familiar: falha (ignorada, widget)'),
+  );
 
   const kommo = createKommoClient(unit);
   let entregou = false;

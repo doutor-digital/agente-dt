@@ -471,6 +471,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/nome-no-contato.ts',
   },
   {
+    id: 'telefone-de-familiar',
+    chave: 'TELEFONE_FAMILIAR_SLUGS',
+    nome: 'Telefone do paciente mandado por familiar vira contato do cartão',
+    oQueFaz:
+      'Quando quem conversa (a esposa, a filha) manda no chat o celular do paciente dizendo de quem é ("esse é o número dele"), o número entra como mais um contato DESTE cartão e fica uma nota. Assim, quando a equipe ou a Sofia escreverem para ele, a conversa cai no mesmo cartão em vez de abrir um cartão novo e vazio.',
+    pegadinha:
+      'Só com o número E uma palavra que diga de quem é ("dele", "dela", "do meu marido", "esse é o número", "manda mensagem pra ele"), nas 3 últimas mensagens do paciente dos últimos 15 minutos — o número numa mensagem e o "é dele" na seguinte também vale. Só celular com DDD. Número em linha de CPF, Pix, carteirinha ou protocolo não entra, nem CPF válido. Mais de um número diferente, não faz nada. Grava com e sem o nono dígito (o WhatsApp de alguns números chega sem o 9). Se o número já é contato de outro cartão, liga a este também e a nota pede para conferir e Mesclar. Não junta nem apaga cartão. Nasce em "só no papel" na rede toda: a lista mostra "gravaria contato do cartão" com o número.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/telefone-de-familiar.ts',
+  },
+  {
     id: 'captura-unificada',
     chave: 'CAPTURA_UNIFICADA_SLUGS',
     nome: 'Captura unificada de campos',

@@ -53,6 +53,7 @@ import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.j
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
+import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { z } from 'zod';
 
@@ -721,6 +722,10 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       // conseguirem usar o chat com botões, que exige os ids do amojo.
       meta: { chatId: ctx.chatId, talkId: ctx.talkId, contactId: ctx.contactId, authorId: ctx.authorId, accountId: ctx.accountId },
     });
+    // "esse é o número dele": o celular do paciente vira contato deste cartão (TELEFONE_FAMILIAR_SLUGS); nunca segura a resposta
+    void telefoneDeFamiliarNoCartao(unit, { kommo: createKommoClient(unit), leadId, conversationId: conv.id, remetente: ctx.contactName }).catch((err) =>
+      logger.warn({ err: String(err), traceId: trace.id, leadId, unit: unit.slug }, 'telefone-de-familiar: falha (ignorada)'),
+    );
 
     // Resposta à confirmação de véspera ("1" confirmo · "2" remarcar) é tratada
     // em código: a IA não enxerga a consulta que a SDR marcou e respondia
