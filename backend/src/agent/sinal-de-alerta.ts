@@ -76,6 +76,13 @@ export function renderSinalDeAlerta(unit: Pick<Unit, 'category'>): string {
 mande transferir antes de tentar agendar)
 - COMO PERGUNTAR: um sinal por pergunta. Um "sim" solto a uma pergunta com vários sinais não
   confirma nada — pergunte qual deles a pessoa sente antes de tratar como sinal de alerta.
+- VÁRIAS MENSAGENS SEGUIDAS: leia todas antes de responder. Se QUALQUER uma traz dor, limitação ou
+  sinal clínico, acolha ISSO primeiro — nunca responda só ao "tudo bem" ou ao "boa noite" do fim.
+- LINGUAGEM DO DIA A DIA (e erro de digitação) conta igual: "me faltou/faltaram as pernas" ("mim
+  falou as pernas"), "as pernas falharam", "a perna bambeou", "quase não andei" ("quer não andei"),
+  "não consigo andar", "travei". Acolha em UMA frase e faça a pergunta de sinais de alerta, UM sinal
+  por vez — comece pela força da perna ("a perna ficou fraca, sem força?") — e siga o que vem abaixo
+  conforme a resposta.
 - NÃO É sinal de alerta: dor forte, dor que piorou, dor que desce para a perna ou formigamento,
   sozinhos. Siga o atendimento normal.
 - SINAIS GRAVES DA COLUNA: perder o controle do xixi ou das fezes, dormência na virilha / região

@@ -41,6 +41,7 @@ function normalizarResposta(s: string): string {
   return s.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 import { podarHistorico } from './history-window.js';
+import { respostasSeguradas } from './entrega-falha.js';
 import {
   circuitoAberto,
   registrarSucesso,
@@ -578,7 +579,8 @@ export async function buildAgentGraph(
     );
     // A conversa em falas: as contas de repetição (nome pedido 2x, mesma pergunta sem resposta, áudio não ouvido)
     // e de insistência no preço saem daqui, em código — o prompt recebe o resultado, não a tarefa de contar.
-    const falas = falasDoHistorico(nonSystemMessages);
+    // Sem as respostas seguradas (o paciente mandou outra mensagem enquanto elas nasciam): contam as que ele leu.
+    const falas = falasDoHistorico(nonSystemMessages, leadIdDaConversa ? respostasSeguradas(unit.id, leadIdDaConversa) : []);
     const repeticao = analisarRepeticao(falas);
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;

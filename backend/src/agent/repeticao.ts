@@ -303,8 +303,37 @@ function textoDe(conteudo: unknown): string {
   return '';
 }
 
-/** A conversa como falas (paciente × IA), a partir das mensagens do grafo. Ferramenta e sistema ficam de fora. */
-export function falasDoHistorico(mensagens: BaseMessage[]): Fala[] {
+/**
+ * Tira as falas da IA que o paciente nunca leu: as respostas seguradas porque ele mandou outra mensagem enquanto
+ * elas nasciam (`guardarRespostaSegurada`, em entrega-falha.ts). Elas ficam no histórico do grafo, mas para as
+ * contas do turno o que vale é o que chegou até ele. Uma fala por segurada, na ordem em que foram seguradas.
+ */
+export function semAsSeguradas(falas: Fala[], seguradas: ReadonlyArray<string>): Fala[] {
+  if (seguradas.length === 0) return falas;
+  const fora = new Set<number>();
+  let de = 0;
+  for (const s of seguradas) {
+    const alvo = normalizar(s);
+    if (!alvo) continue;
+    for (let i = de; i < falas.length; i++) {
+      if (falas[i].papel !== 'ia') continue;
+      const n = normalizar(falas[i].texto);
+      // igual, ou uma contém a outra (a linha dos botões, um ajuste da trava de saída)
+      if (n && (n === alvo || (Math.min(n.length, alvo.length) >= 20 && (n.includes(alvo) || alvo.includes(n))))) {
+        fora.add(i);
+        de = i + 1;
+        break;
+      }
+    }
+  }
+  return fora.size ? falas.filter((_, i) => !fora.has(i)) : falas;
+}
+
+/**
+ * A conversa como falas (paciente × IA), a partir das mensagens do grafo. Ferramenta e sistema ficam de fora, e
+ * também a resposta segurada que nunca saiu (`seguradas`).
+ */
+export function falasDoHistorico(mensagens: BaseMessage[], seguradas: ReadonlyArray<string> = []): Fala[] {
   const falas: Fala[] = [];
   for (const m of mensagens) {
     const tipo = m.getType();
@@ -314,7 +343,7 @@ export function falasDoHistorico(mensagens: BaseMessage[]): Fala[] {
     if (tipo === 'ai' && !texto) continue;
     falas.push({ papel: tipo === 'human' ? 'paciente' : 'ia', texto });
   }
-  return falas;
+  return semAsSeguradas(falas, seguradas);
 }
 
 /**

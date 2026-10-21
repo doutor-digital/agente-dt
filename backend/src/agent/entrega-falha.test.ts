@@ -55,14 +55,14 @@ test('sem falha, nenhum bloco', () => {
   assert.equal(renderEntregaFalha(null), '');
 });
 
-test('resposta atropelada guarda o motivo, e o bloco pede pra responder as duas mensagens', () => {
+test('resposta atropelada guarda o motivo, e o bloco pede pra responder todas as mensagens dele', () => {
   limparNaoEntregues();
   marcarNaoEntregue('u1', 100, 'Que dia prefere?', Date.now(), 'atropelada');
   const p = consumirNaoEntregueDetalhe('u1', 100);
   assert.equal(p?.motivo, 'atropelada');
   const b = renderEntregaFalha(p!.texto, p!.motivo);
   assert.match(b, /NÃO foi enviada/);
-  assert.match(b, /duas mensagens/);
+  assert.match(b, /TODAS as mensagens dele desde a última resposta/);
   assert.match(b, /Que dia prefere\?/);
   assert.doesNotMatch(b, /falha técnica/, 'atropelar não é falha técnica — o texto não pode culpar o sistema');
 });
