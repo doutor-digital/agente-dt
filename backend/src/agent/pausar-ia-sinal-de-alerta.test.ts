@@ -77,8 +77,18 @@ function unidade(over: Partial<Unit> = {}): Unit {
   } as unknown as Unit;
 }
 
-function ferramenta(nome: string, unit = unidade()) {
-  const t = buildTools({ recorder, kommo, pausedFieldId: 123, unit }).find((x) => x.name === nome);
+/** As ferramentas têm schemas diferentes; para o teste basta nome + invoke. */
+interface Ferramenta {
+  name: string;
+  invoke: (entrada: Record<string, unknown>) => Promise<unknown>;
+}
+
+function ferramentas(unit = unidade()): Ferramenta[] {
+  return buildTools({ recorder, kommo, pausedFieldId: 123, unit }) as unknown as Ferramenta[];
+}
+
+function ferramenta(nome: string, unit = unidade(), lista = ferramentas(unit)): Ferramenta {
+  const t = lista.find((x) => x.name === nome);
   assert.ok(t, `${nome} não existe`);
   return t;
 }
@@ -114,10 +124,9 @@ test('transferência comum não cria tarefa urgente e não promete prazo', async
 });
 
 test('a regra da unidade já criou a tarefa urgente no turno: não duplica', async () => {
-  const tools = buildTools({ recorder, kommo, pausedFieldId: 123, unit: unidade() });
-  const criar = tools.find((x) => x.name === 'criar_tarefa');
-  const pausar = tools.find((x) => x.name === 'pausar_ia');
-  assert.ok(criar && pausar);
+  const tools = ferramentas();
+  const criar = ferramenta('criar_tarefa', undefined, tools);
+  const pausar = ferramenta('pausar_ia', undefined, tools);
   await criar.invoke({ leadId: 9, text: 'URGENTE: paciente com sinal de alerta clínico — ligar já', deadlineMinutes: 5 });
   await pausar.invoke({ leadId: 9, motivo: 'sinal de alerta clínico confirmado', sinalDeAlerta: true });
   assert.equal(tarefas.length, 1, 'uma tarefa só: a da regra da unidade');
@@ -125,9 +134,9 @@ test('a regra da unidade já criou a tarefa urgente no turno: não duplica', asy
 });
 
 test('tarefa comum da regra da unidade não cala o aviso urgente', async () => {
-  const tools = buildTools({ recorder, kommo, pausedFieldId: 123, unit: unidade() });
-  await tools.find((x) => x.name === 'criar_tarefa')!.invoke({ leadId: 10, text: 'Ligar amanhã para confirmar', deadlineMinutes: 60 });
-  await tools.find((x) => x.name === 'pausar_ia')!.invoke({ leadId: 10, motivo: 'perda de controle da urina', sinalDeAlerta: true });
+  const tools = ferramentas();
+  await ferramenta('criar_tarefa', undefined, tools).invoke({ leadId: 10, text: 'Ligar amanhã para confirmar', deadlineMinutes: 60 });
+  await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 10, motivo: 'perda de controle da urina', sinalDeAlerta: true });
   assert.equal(tarefas.length, 2);
   assert.match(tarefas[1].text, /URGENTE/);
 });
