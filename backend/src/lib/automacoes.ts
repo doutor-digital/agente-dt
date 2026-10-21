@@ -522,6 +522,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/pausa-equipe.ts',
   },
   {
+    id: 'cache-agenda',
+    chave: 'CACHE_AGENDA_SLUGS',
+    nome: 'Cache curto dos horários da agenda',
+    oQueFaz:
+      'Quando duas conversas da mesma unidade pedem os horários do mesmo dia em poucos minutos, a segunda usa a busca da primeira em vez de ir de novo à franquia — cada busca marca e cancela um agendamento de teste para cada horário que confere (até 4 por dia).',
+    pegadinha:
+      'Vale 10 minutos (CACHE_AGENDA_MIN, de 1 a 60), por unidade + dia + turno pedido + configuração da agenda (horário, almoço, duração da sessão, profissional por turno): mudou a configuração, o guardado deixa de servir. Fica numa tabela do banco, que vale para todas as cópias do servidor. Só guarda dia com horário CONFIRMADO pela sondagem — erro da franquia e lista vazia nunca. Horário que já passou sai na leitura. Apaga o dia quando a Sofia marca, remarca ou cancela, quando uma marcação falha (horário ocupado ou recusado pela franquia) e quando a recepção bloqueia ou libera horário pela tela. Marcação feita direto na franquia NÃO apaga: vale o prazo — e o agendar_consulta confere o horário de novo antes de marcar. Nasce em "só no papel" na rede toda: a Sofia sempre consulta a franquia e a lista mostra, por conversa e dia, "confere" (o cache teria acertado), "diverge" (teria oferecido horário que a franquia já não aceita) ou "pularia" (não havia busca guardada). Ligue uma unidade por vez.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/cache-agenda.ts',
+  },
+  {
     id: 'preco-convenio',
     chave: 'PRECO_CONVENIO_SLUGS',
     nome: 'Trava do preço de convênio',
