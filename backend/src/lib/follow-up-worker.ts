@@ -9,7 +9,7 @@ import { carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarSemResposta } from '../services/lead-metrics.service.js';
 import { automacaoLigada } from './automacoes-estado.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
-import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA } from './cobrancas-do-dia.js';
+import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
 
 const SWEEP_MS = 60_000;
@@ -544,7 +544,8 @@ async function enviarDegrau(
         conversationId: conv.id,
         role: 'assistant',
         content: texto,
-        meta: { followUp: indice + 1 },
+        // A marca que o limite de 2 por dia conta (cobrancas-do-dia.ts).
+        meta: marcaDoDegrau(indice + 1),
       },
     });
 

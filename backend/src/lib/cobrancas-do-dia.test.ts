@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cobrancasNoDia, ehEnvioDeRetomada, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA } from './cobrancas-do-dia.js';
+import { cobrancasNoDia, ehEnvioDeRetomada, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 
 const ARAGUAINA = 'America/Araguaina'; // UTC−3, sem horário de verão
 const BOA_VISTA = 'America/Boa_Vista'; // UTC−4
@@ -47,4 +47,10 @@ test('só degrau da régua e reativação contam como cobrança — resposta da 
   assert.equal(ehEnvioDeRetomada({ origem: 'kommo_talks' }), false);
   assert.equal(ehEnvioDeRetomada(null), false);
   assert.equal(ehEnvioDeRetomada({ followUp: null }), false);
+});
+
+test('a marca que o degrau grava é a mesma que o limite conta', () => {
+  assert.deepEqual(marcaDoDegrau(1), { followUp: 1 });
+  assert.equal(ehEnvioDeRetomada(marcaDoDegrau(1)), true);
+  assert.equal(ehEnvioDeRetomada(marcaDoDegrau(5)), true);
 });

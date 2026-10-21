@@ -19,6 +19,15 @@ import { dataLocalISO } from './feriados.js';
 
 export const LIMITE_COBRANCAS_POR_DIA = 2;
 
+/**
+ * A marca que o degrau da régua grava na mensagem (`follow-up-worker.ts` → `enviarDegrau`). É a mesma que a conta
+ * abaixo procura: quem grava e quem conta usam esta função, para uma não mudar sem a outra. A reativação grava
+ * `{ reactivation: n }` (`reactivation-worker.ts`), também com n ≥ 1.
+ */
+export function marcaDoDegrau(numero: number): { followUp: number } {
+  return { followUp: numero };
+}
+
 /** A mensagem gravada é um envio automático de retomada (degrau da régua ou reativação)? */
 export function ehEnvioDeRetomada(meta: unknown): boolean {
   if (!meta || typeof meta !== 'object') return false;
@@ -44,7 +53,8 @@ export function limiteDoDiaAtingido(
 
 /**
  * Os envios de retomada das últimas 24 h para este lead, em todas as unidades da mesma conta do Kommo. A janela de
- * 24 h cobre qualquer "hoje" local; o corte pelo dia é de `cobrancasNoDia`.
+ * 24 h cobre qualquer "hoje" local; o corte pelo dia é de `cobrancasNoDia`. O filtro pela marca é no banco e sem
+ * teto de linhas: conversa com muita mensagem no dia não pode esconder os degraus que já saíram.
  */
 export async function enviosDeRetomadaRecentes(
   unit: { id: string; kommoSubdomain: string | null },
@@ -59,10 +69,10 @@ export async function enviosDeRetomadaRecentes(
       role: 'assistant',
       createdAt: { gte: new Date(agora.getTime() - 24 * 3600_000) },
       conversation: { leadId, unitId: { in: unidades.length ? unidades : [unit.id] } },
+      OR: [{ meta: { path: ['followUp'], gte: 1 } }, { meta: { path: ['reactivation'], gte: 1 } }],
     },
     select: { createdAt: true, meta: true },
     orderBy: { createdAt: 'desc' },
-    take: 200,
   });
   return msgs.filter((m) => ehEnvioDeRetomada(m.meta)).map((m) => m.createdAt);
 }
