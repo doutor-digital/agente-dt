@@ -118,6 +118,16 @@ export async function claimMessageId(
   }
 }
 
+/**
+ * Devolve a reivindicação: quem pegou e falhou no meio libera para a próxima tentativa (telefone-de-familiar.ts — o
+ * Kommo caiu depois da trava e o cartão ficaria 24 h sem o contato; achado do Codex, 21/10/2026).
+ */
+export async function liberarClaim(scope: string, messageId: string): Promise<void> {
+  const key = `${scope}:${messageId}`;
+  memoria.delete(key);
+  await prisma.messageClaim.deleteMany({ where: { key } }).catch(() => undefined);
+}
+
 /** Varre o que venceu. Chamado de vez em quando; a tabela é pequena por desenho. */
 export async function limparClaimsVencidos(): Promise<number> {
   try {

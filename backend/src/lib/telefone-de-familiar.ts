@@ -26,7 +26,7 @@ import { chaveTelefone } from './franquia-sync.js';
 import { mesmoTelefoneCompleto } from './ponte-duplicados.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { claimMessageId } from './dedup-cache.js';
+import { claimMessageId, liberarClaim } from './dedup-cache.js';
 
 export const AUTOMACAO_TELEFONE_FAMILIAR = 'telefone-de-familiar';
 
@@ -191,6 +191,22 @@ export async function telefoneDeFamiliarNoCartao(
   if (vistos.has(chave)) return;
   vistos.add(chave);
 
+  try {
+    await ligarAoCartao(unit, a, numero, chave, estado);
+  } catch (err) {
+    // Kommo fora no meio: a próxima mensagem dos 15 minutos tenta de novo (achado do Codex, 21/10/2026)
+    vistos.delete(chave);
+    throw err;
+  }
+}
+
+async function ligarAoCartao(
+  unit: Unit,
+  a: { kommo: KommoClient; leadId: number; remetente?: string | null },
+  numero: string,
+  chave: string,
+  estado: Estado,
+): Promise<void> {
   const [formatado] = formatosDoCelular(numero);
   const encontrados = await a.kommo.buscarContatosPorTexto(chaveTelefone(numero), 10);
   const fones = await a.kommo.telefonesDosContatos(encontrados.map((c) => c.id));
@@ -213,20 +229,23 @@ export async function telefoneDeFamiliarNoCartao(
 
   if (!(await claimMessageId('telefone-familiar', chave, PRAZO_DA_TRAVA_MS))) return;
 
-  let contatoId = mesmos[0]?.id ?? null;
+  let contatoId: number | null = mesmos[0]?.id ?? null;
   const contatoNovo = !contatoId;
-  if (!contatoId) {
-    const lead = await a.kommo.getLead(a.leadId).catch(() => null);
-    contatoId = await a.kommo.criarContato({
-      nome: nomeDoContatoNovo(lead?.name, a.remetente),
-      telefones: formatosDoCelular(numero),
-    });
+  try {
+    if (!contatoId) {
+      const lead = await a.kommo.getLead(a.leadId).catch(() => null);
+      contatoId = await a.kommo.criarContato({
+        nome: nomeDoContatoNovo(lead?.name, a.remetente),
+        telefones: formatosDoCelular(numero),
+      });
+    }
+    if (!contatoId) throw new Error('o Kommo não criou o contato');
+    await a.kommo.vincularContatoAoLead(a.leadId, contatoId);
+  } catch (err) {
+    // só quem pegou a trava a devolve; com o contato já ligado, a próxima tentativa acha "já está no cartão"
+    await liberarClaim('telefone-familiar', chave);
+    throw err;
   }
-  if (!contatoId) {
-    logger.warn({ unit: unit.slug, leadId: a.leadId }, 'telefone-de-familiar: o Kommo não criou o contato');
-    return;
-  }
-  await a.kommo.vincularContatoAoLead(a.leadId, contatoId);
   await a.kommo.addLeadNote(a.leadId, textoDaNota({ formatado, remetente: a.remetente ?? null, contatoNovo, outrosCartoes }));
   logger.info({ unit: unit.slug, leadId: a.leadId, contatoId, contatoNovo, outrosCartoes }, 'telefone-de-familiar: número ligado ao cartão');
 }
