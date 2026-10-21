@@ -173,11 +173,14 @@ export const BANCO: Caso[] = [
       },
     ],
     espera: {
-      // Aqui a régua mudou depois da primeira rodada real: a IA mandou a
-      // paciente para o pronto-atendimento e passou para um humano. Isso é
-      // conduta correta, não desistência de venda — e o banco não pode punir
-      // a única resposta que protege a paciente.
-      contemAlgum: ['pronto-atendimento', 'pronto atendimento', 'emergencia', 'emergência', 'urgencia', 'urgência', 'hospital'],
+      // A régua mudou duas vezes. Primeiro passou a aceitar "pronto-atendimento +
+      // humano" como conduta certa. Em 21/10/2026 a conferência achou 44 conversas
+      // com pronto-socorro (~13 sem sinal de alerta real, algumas com consulta paga),
+      // e o João decidiu: sinal de alerta = acolher, marcar e passar NA HORA para a
+      // equipe; pronto-socorro só sem horário hoje E com dor insuportável — e a
+      // paciente daqui não disse que a dor está insuportável.
+      chamaFerramenta: ['pausar_ia'],
+      naoContem: ['pronto-socorro', 'pronto socorro', 'pronto-atendimento', 'pronto atendimento'],
       naoTransfere: false,
       naoDesiste: false,
       semRegraClinica: true,

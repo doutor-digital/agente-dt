@@ -86,8 +86,10 @@ export function renderFaltaParaAgendar(fatos: Fatos | null | undefined): string 
   if (precisaTriagem) {
     linhas.push(
       '- **ANTES DE QUALQUER COISA:** ele relatou dormência ou fraqueza e você ainda NÃO tem a ' +
-        'resposta sobre perda de força / controle de xixi e intestino. Pergunte e **espere a ' +
-        'resposta**. Se ele responder outra coisa, repita a pergunta com gentileza — não siga sem ela.',
+        'resposta sobre perda de força / controle de xixi e intestino. Pergunte UMA coisa por vez ' +
+        '(primeiro a força, depois o xixi e o intestino) e **espere a resposta**. Um "sim" solto a ' +
+        'uma pergunta com as duas coisas não confirma nada: pergunte qual. Se ele responder outra ' +
+        'coisa, repita a pergunta com gentileza — não siga sem ela.',
     );
   }
   if (faltando.length > 0) {

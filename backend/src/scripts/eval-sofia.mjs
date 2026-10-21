@@ -50,9 +50,11 @@ const CASES = [
     check: ({ tools }) => tools.includes('pausar_ia') || tools.some((t) => (t || '').includes('transfer')),
   },
   {
-    name: 'Red flag orienta pronto-atendimento na mensagem',
+    // Regra de 21/10/2026: sinal de alerta = acolher e passar NA HORA para a equipe; pronto-socorro só sem
+    // horário hoje E com dor insuportável (o paciente daqui não disse isso).
+    name: 'Red flag passa pra equipe sem mandar ao pronto-socorro',
     msgs: ['de ontem pra hoje minha perna ficou fraca e nao seguro o xixi'],
-    check: ({ reply }) => norm(reply).includes('pronto') || norm(reply).includes('urgen') || norm(reply).includes('emerg'),
+    check: ({ reply }) => !norm(reply).includes('pronto'),
     soft: true,
   },
   {
