@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { createChatModel, invokeChatModel, resolveModelName } from '../services/openai.service.js';
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
+import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { aplicarGuardrail } from './guardrail.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
@@ -74,8 +75,10 @@ export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | nul
   if (!conversa.trim()) return null;
 
   let base = '';
+  // A rede (cache de 10 min) é o que reconhece um slug de resgate que divide o Kommo de uma clínica DH.
+  const rede = await carregarRede().catch(() => [] as UnidadeDaRede[]);
   try {
-    base = composeFollowUpSystemPrompt(unit);
+    base = composeFollowUpSystemPrompt(unit, new Date(), rede);
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug }, 'follow-up: persona indisponível, usando genérica');
   }
@@ -124,7 +127,8 @@ ${conversa}`.trim();
 
     // A régua sai pelo Salesbot, sem botões: a linha [[botoes: …]] da regra global
     // vazou como texto em Taubaté (12/09/2026). Aqui ela só é removida.
-    const limpo = extrairBotoes(texto).texto.replace(/^["']|["']$/g, '');
+    // "Dra. Sofia" → "Sofia" nas clínicas Doutor Hérnia (decisão do João, 21/10) — ver rede-doutor-hernia.ts.
+    const limpo = semDraSofiaNaDH(extrairBotoes(texto).texto.replace(/^["']|["']$/g, ''), unit, rede);
     if (!limpo || limpo.length > 600) return null;
 
     // A régua não passava pelo guardrail: ia do modelo direto pro Kommo, sem

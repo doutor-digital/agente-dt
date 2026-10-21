@@ -23,9 +23,10 @@ test('dor em uma linha é tratada como LEAD, não como reação', () => {
   assert.match(p, /NUNCA trate como reação sem valor/);
 });
 
-test('elogio de paciente vira pedido de avaliação no Google', () => {
+test('elogio de paciente vira convite para deixar o elogio no Google', () => {
   const p = previewComposedPrompt(unit);
-  assert.match(p, /avaliação no Google/i);
+  // "elogio", não "avaliação": a palavra saiu do texto do paciente (decisão do João, 21/10).
+  assert.match(p, /deixar esse elogio no Google/i);
   assert.match(p, /sem insistir/);
   // sem link inventado: a unidade pode não ter
   assert.match(p, /sem link se você\s+não tiver o link/);

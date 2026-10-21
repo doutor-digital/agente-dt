@@ -55,6 +55,14 @@ import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
+import {
+  carregarRede,
+  ehDoutorHernia,
+  renderDoutorHernia,
+  renderDoutorHerniaCurto,
+  semDraSofia,
+  type UnidadeDaRede,
+} from './rede-doutor-hernia.js';
 
 export interface BusinessHoursStatus {
   enabled: boolean;
@@ -232,14 +240,18 @@ const CATEGORY_PRESETS: Record<string, CategoryPreset> = {
   },
 };
 
-function renderPersona(unit: Unit): string {
+function renderPersona(unit: Unit, rede: ReadonlyArray<UnidadeDaRede> = []): string {
   const lines: string[] = [];
   const company = unit.personaCompanyName?.trim();
   const preset = unit.category ? CATEGORY_PRESETS[unit.category.trim()] : undefined;
+  // Nas clínicas Doutor Hérnia a IA é só "Sofia" — "Dra." fazia o paciente achar que falava com uma médica
+  // (decisão do João, 21/10). Fora da rede (Trauma, HM, advocacia) o preset segue como está.
+  const dh = ehDoutorHernia(unit, rede);
   if (preset) {
     const where = company ? `da ${company}` : 'da empresa';
+    const nome = dh ? semDraSofia(preset.agentName) : preset.agentName;
     lines.push(
-      `Você é ${preset.agentName}, quem atende o WhatsApp ${where} (${preset.vertical}), conversando com os clientes.`,
+      `Você é ${nome}, quem atende o WhatsApp ${where} (${preset.vertical}), conversando com os clientes.`,
     );
     for (const f of preset.framing) lines.push(f);
   } else if (company) {
@@ -264,7 +276,7 @@ function renderPersona(unit: Unit): string {
       'emoji — 🙏 👍 ❤️ costumam ser REAÇÃO do WhatsApp, não pergunta — responda com uma ' +
       'frase curta de verdade que faça a conversa andar, tipo retomar o próximo passo.',
   );
-  const greeting = unit.personaGreeting?.trim();
+  const greeting = dh ? semDraSofia(unit.personaGreeting?.trim() ?? '') : unit.personaGreeting?.trim();
   if (greeting) {
     lines.push(`Saudação preferida (use quando for o primeiro contato): "${greeting}"`);
   }
@@ -379,7 +391,7 @@ function renderReacaoEElogio(): string {
 
 2) QUEM JÁ É PACIENTE ELOGIA ("a melhor fisio", "curou minha bursite", "são pessoas
    maravilhosas"). Agradeça de verdade, com simpatia e sem melosidade, e na MESMA mensagem convide a
-   deixar essa avaliação no Google — uma vez só, sem insistir, e sem link se você
+   deixar esse elogio no Google — uma vez só, sem insistir, e sem link se você
    não tiver o link. Se ela não responder, deixe pra lá.
 
 3) REAÇÃO SEM CONTEÚDO (só emoji, "top", "❤") ou parabéns dirigido a OUTRA pessoa
@@ -567,7 +579,7 @@ function renderEsperaRules(intents: Record<string, number>): string {
      ◷ Retomar em. Use a data que o paciente disser; se não disser, conte a partir de hoje:
      Exames +10 dias · Viajando +7 · Vai decidir +3 · Financeiro agora não +30 · Outro +7.
   3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
-     avaliação" — sem pressão e sem insistir. Só então chame mover_etapa.
+     consulta com o nosso especialista" — sem pressão e sem insistir. Só então chame mover_etapa.
   4. Depois disso, não mande mais nada nesta conversa até a data. A retomada é automática.`;
 }
 
@@ -833,7 +845,7 @@ rodeio, ancorado no que ele acabou de contar:
 SE ELE INSISTIR, RESPONDA NA HORA. "Só me diz o valor", "não quero contar
 nada", perguntou duas vezes — acabou o adiamento. Enrolar de novo destrói mais
 confiança do que qualquer preço, e a pessoa tem direito de saber quanto custa.
-NUNCA diga que não pode informar, que "depende de avaliação" ou que a equipe
+NUNCA diga que não pode informar, que "depende da consulta" ou que a equipe
 informa depois. Você sabe o valor e ele é o mesmo para todos.
 
 O ROTEIRO DE CADA OBJEÇÃO — acolher, reenquadrar, avançar:
@@ -905,7 +917,7 @@ estiver cheia, isso é escassez de verdade e funciona sozinho.
 
 PROVA E AUTORIDADE — só a que você recebeu, e com calor humano.
 Fale do que a clínica faz e do que a especialista avalia: protocolo próprio, foco
-em hérnia e coluna, avaliação presencial. NÃO cite paciente, caso parecido,
+em hérnia e coluna, consulta presencial. NÃO cite paciente, caso parecido,
 porcentagem de sucesso, "muita gente melhora" nem depoimento que não esteja nas
 suas fontes — prova social inventada em saúde é o risco mais caro que existe, e
 desnecessária, porque autoridade real já convence.
@@ -920,7 +932,7 @@ OS TRÊS "PORQUÊS" QUE FALTAM RESPONDER (o "por que tratar" a dor dele já reso
                    próprio. Não é clínica geral.
   POR QUE AGORA  → quanto mais cedo a causa é identificada, mais opções existem.
                    NÃO afirme que vai piorar nem invente prognóstico — quem avalia
-                   é a especialista. A avaliação é o que abre as opções.
+                   é a especialista. A consulta é o que abre as opções.
 
 A SEQUÊNCIA QUE CONVERTE — nesta ordem, sempre:
   acolher e RESUMIR a queixa com as palavras dele
@@ -937,7 +949,7 @@ TRADUZA TUDO PARA A VIDA DELE.
 Jargão afasta e não vende. "Protocolo de reabilitação" não diz nada; "voltar a
 dormir a noite inteira" diz tudo. Sempre que for explicar algo técnico,
 termine na consequência prática.
-  Ruim:  "Fazemos avaliação biomecânica e tratamento conservador."
+  Ruim:  "Fazemos análise biomecânica e tratamento conservador."
   Bom:   "A gente descobre o que está causando a dor e monta um plano pra você
           voltar a fazer o que parou de fazer."
 
@@ -1099,7 +1111,7 @@ function renderAutoChecagem(_unit: Unit): string {
   return xmlBlock(
     'auto_checagem',
     `(ALTA PRIORIDADE — antes de ENVIAR qualquer resposta, confira em silêncio:)
-- Tem algum VALOR, horário, endereço ou afirmação que eu não consigo confirmar nas <fontes>? Se sim, NÃO afirme — diga que confirma com a equipe ou na avaliação.
+- Tem algum VALOR, horário, endereço ou afirmação que eu não consigo confirmar nas <fontes>? Se sim, NÃO afirme — diga que confirma com a equipe ou na consulta.
 - Prometi algo (horário, agendamento) que a ferramenta ainda NÃO confirmou? Se sim, corrija — nunca dê como certo o que não fechou.
 - É um caso claramente fora do escopo desta clínica? Se sim, acolha e oriente, sem empurrar a consulta.
 Na dúvida, PREFIRA confirmar depois a inventar agora: um "vou confirmar" nunca perde o paciente; uma informação errada, sim.`,
@@ -1540,6 +1552,8 @@ export interface ComposeInput {
   userMessage?: string;
   /** O que o mesmo cartão conversou com OUTRA Sofia da conta (resgate → comercial), últimas 72 h. */
   outraSofia?: FalaDeOutraSofia[];
+  /** As unidades Doutor Hérnia ativas (tabela `units`, cache de 10 min) — ver rede-doutor-hernia.ts. */
+  redeDeUnidades?: UnidadeDaRede[];
 }
 
 /**
@@ -1656,7 +1670,7 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean, jaConversou = fa
 export { consultaNoPassado, agoraLocalISO };
 
 const ROTULO_CATEGORIA: Array<[RegExp, string]> = [
-  [/avalia/i, 'avaliação'],
+  [/avalia/i, 'consulta com o nosso especialista'],
   [/retorno/i, 'consulta de retorno'],
   [/sess/i, 'sessão de tratamento'],
 ];
@@ -1693,7 +1707,7 @@ export function renderPacienteNaFranquia(p: PacienteNaFranquia | null | undefine
   );
   if (jaE) {
     linhas.push(
-      '- Ele já passou pela avaliação: NÃO ofereça avaliação, NÃO fale do valor da consulta e NÃO',
+      '- Ele já passou pela consulta com o nosso especialista: NÃO ofereça outra, NÃO fale do valor da consulta e NÃO',
       '  conduza para agendar como se fosse a primeira vez.',
       '- Sessão, horário do tratamento ou pagamento do tratamento é com a equipe: diga que a equipe',
       '  da clínica confirma e chame resumir_lead_para_sdr e pausar_ia.',
@@ -1913,7 +1927,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
   const customBase = escolherBase(unit, agentConfigPrompt);
 
   const blocks: string[] = [];
-  blocks.push(renderPersona(unit));
+  blocks.push(renderPersona(unit, input.redeDeUnidades));
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) blocks.push(sourcesBlock);
   if (customBase) blocks.push(xmlBlock('instrucoes_extras', customBase));
@@ -1951,6 +1965,8 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
   if (leadFieldsBlock) blocks.push(leadFieldsBlock);
   const templatesBlock = renderTemplates(templates);
   if (templatesBlock) blocks.push(templatesBlock);
+  const redeBlock = renderDoutorHernia(unit, input.redeDeUnidades);
+  if (redeBlock) blocks.push(redeBlock);
 
   return blocks.join('\n\n');
 }
@@ -1986,6 +2002,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
     if (outraBlockSingle) single.push(outraBlockSingle);
     const semAgendaSingle = renderSemAgenda(unit);
     if (semAgendaSingle) single.push(semAgendaSingle);
+    // Fato da rede e quem atende — valem também para quem escreveu o prompt inteiro à mão.
+    const redeSingle = renderDoutorHernia(unit, input.redeDeUnidades);
+    if (redeSingle) single.push(redeSingle);
     if (leadId && Number.isFinite(leadId) && leadId > 0) {
       single.push(renderConversationContext(leadId, telefone));
     }
@@ -2004,7 +2023,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   const blocks: string[] = [];
 
-  blocks.push(renderPersona(unit));
+  blocks.push(renderPersona(unit, input.redeDeUnidades));
 
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) blocks.push(sourcesBlock);
@@ -2075,6 +2094,10 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   const templatesBlock = renderTemplates(templates);
   if (templatesBlock) blocks.push(templatesBlock);
+
+  // Depois das regras e modelos da unidade: o que ele diz sobre "Dra." e "avaliação" vale acima deles.
+  const redeBlock = renderDoutorHernia(unit, input.redeDeUnidades);
+  if (redeBlock) blocks.push(redeBlock);
 
   const knowledgeBlock = renderKnowledge(knowledge);
   if (knowledgeBlock) blocks.push(knowledgeBlock);
@@ -2178,18 +2201,24 @@ export function composeSystemPromptParts(input: ComposeInput): {
   const anuncioBlock = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
   if (anuncioBlock) dynamic.push(anuncioBlock);
 
+  // Quem atende ("é médico?"), o nome da consulta e a lista da rede. Muda só quando entra
+  // unidade nova, então fica no bloco cacheado — DEPOIS das regras e modelos da unidade, porque
+  // o que ele diz sobre "Dra." e "avaliação" vale acima deles.
+  const redeBlock = renderDoutorHernia(unit, input.redeDeUnidades);
+
   if (unit.singlePromptMode) {
     // Sem prompt montado por nós, não há bloco estável onde encaixar: os três
-    // voltam pra parte viva, como era antes.
+    // voltam pra parte viva, como era antes. O da rede é estável e fica no cache,
+    // depois do prompt da unidade — vale também para quem escreveu o prompt inteiro.
     const semAgenda = renderSemAgenda(unit);
     return {
-      cacheable: (customBase ?? '').trim(),
+      cacheable: [(customBase ?? '').trim(), redeBlock].filter(Boolean).join('\n\n'),
       dynamic: [...porUnidade, ...(semAgenda ? [semAgenda] : []), ...dynamic].join('\n\n'),
     };
   }
 
   const cache: string[] = [];
-  cache.push(renderPersona(unit));
+  cache.push(renderPersona(unit, input.redeDeUnidades));
   const sourcesBlock = renderSources(unit);
   if (sourcesBlock) cache.push(sourcesBlock);
   if (customBase) cache.push(xmlBlock('instrucoes_extras', customBase));
@@ -2228,6 +2257,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (templatesBlock) cache.push(templatesBlock);
   const flaggedBlock = renderFlaggedExamples(flaggedExamples);
   if (flaggedBlock) cache.push(flaggedBlock);
+  if (redeBlock) cache.push(redeBlock);
 
   // Por último dentro do cache: é o que muda mais cedo (o calendário vira à
   // meia-noite). O que quase nunca muda fica na frente, pra aproveitar o cache
@@ -2285,7 +2315,7 @@ async function loadComposeInput(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, contato, outraSofia] = await Promise.all([
+  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, contato, outraSofia, redeDeUnidades] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -2359,6 +2389,9 @@ async function loadComposeInput(input: {
           return [] as FalaDeOutraSofia[];
         })
       : Promise.resolve([] as FalaDeOutraSofia[]),
+    // Sempre: é ela que diz se um slug `*-resgate` divide o Kommo com uma unidade da rede.
+    // Cache de 10 min; falha vira lista vazia, nunca derruba a resposta.
+    carregarRede().catch(() => [] as UnidadeDaRede[]),
   ]);
 
   const telefone = contato?.phone ?? null;
@@ -2402,6 +2435,7 @@ async function loadComposeInput(input: {
     lessons,
     telefone,
     outraSofia,
+    redeDeUnidades,
   };
 }
 
@@ -2472,12 +2506,18 @@ export function renderFatosDaUnidade(unit: Unit): string {
  * afirmando que uma data futura tinha passado. A conversa normal acerta isso desde a
  * v1.68.0 porque recebe `<calendario>`; este caminho montava só persona + fatos + regras.
  */
-export function composeFollowUpSystemPrompt(unit: Unit, agora: Date = new Date()): string {
+export function composeFollowUpSystemPrompt(
+  unit: Unit,
+  agora: Date = new Date(),
+  rede: ReadonlyArray<UnidadeDaRede> = [],
+): string {
   return [
-    renderPersona(unit),
+    renderPersona(unit, rede),
     renderFatosDaUnidade(unit),
     renderHojeCurto(unit, agora),
     renderRulesGlobal(),
+    // Sem a lista da rede (o follow-up é enxuto); "é médico?" e "avaliação" valem aqui também.
+    renderDoutorHerniaCurto(unit, rede),
   ]
     .filter((b) => b.trim())
     .join('\n\n');
@@ -2511,7 +2551,7 @@ export async function composeFlattenedPromptForUnit(input: {
   unit: Unit;
   agentConfigPrompt?: string;
 }): Promise<string> {
-  const [templates, actions, globalActions, leadFieldRules] = await Promise.all([
+  const [templates, actions, globalActions, leadFieldRules, redeDeUnidades] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -2522,6 +2562,7 @@ export async function composeFlattenedPromptForUnit(input: {
       return [];
     }),
     listEnabledLeadFieldRules(input.unit.id),
+    carregarRede().catch(() => [] as UnidadeDaRede[]),
   ]);
   return composeFlattenedPrompt({
     unit: input.unit,
@@ -2530,5 +2571,6 @@ export async function composeFlattenedPromptForUnit(input: {
     actions,
     globalActions,
     leadFieldRules,
+    redeDeUnidades,
   });
 }

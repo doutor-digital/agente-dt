@@ -41,14 +41,16 @@ test('paciente na franquia: o caso do Paulo — em tratamento, avaliação atend
   assert.equal(p.proximo?.consulta, false, 'sessão não é consulta');
 });
 
-test('paciente na franquia: o bloco do Paulo proíbe oferecer avaliação e repetir horário do histórico', () => {
+test('paciente na franquia: o bloco do Paulo proíbe oferecer outra consulta e repetir horário do histórico', () => {
   const p = resumirPaciente(365001, HISTORICO_PAULO, [{ idStatus: 45, statusName: 'Em andamento' }], AGORA_PAULO);
   const bloco = renderPacienteNaFranquia(p);
   assert.match(bloco, /<consulta_do_paciente>/);
   assert.match(bloco, /JÁ TEM TRATAMENTO/);
-  assert.match(bloco, /avaliação em 05\/10\/2026 às 19:30/);
+  // "avaliação" não chega ao modelo (decisão do João, 21/10): a categoria da franquia vira o nome da consulta.
+  assert.match(bloco, /consulta com o nosso especialista em 05\/10\/2026 às 19:30/);
+  assert.doesNotMatch(bloco, /avalia[çc][ãa]o/i);
   assert.match(bloco, /sessão de tratamento em \*\*08\/10\/2026 às 18:00\*\*/);
-  assert.match(bloco, /NÃO ofereça avaliação/);
+  assert.match(bloco, /NÃO ofereça outra/);
   assert.match(bloco, /nunca peça para confirmar/);
 });
 
@@ -68,9 +70,9 @@ test('paciente na franquia: agendado no passado e desmarcado não contam como pr
   assert.equal(p.emTratamento, false);
   assert.equal(p.ultimaConsultaAtendida, null);
   const bloco = renderPacienteNaFranquia(p);
-  assert.match(bloco, /avaliação em \*\*10\/10\/2026 às 08:00\*\*/);
+  assert.match(bloco, /consulta com o nosso especialista em \*\*10\/10\/2026 às 08:00\*\*/);
   assert.match(bloco, /REMARCAR/);
-  assert.doesNotMatch(bloco, /NÃO ofereça avaliação/, 'quem ainda não foi atendido pode ouvir sobre a avaliação');
+  assert.doesNotMatch(bloco, /NÃO ofereça outra/, 'quem ainda não foi atendido pode ouvir sobre a consulta');
 });
 
 test('paciente na franquia: sessão atendida não é "consulta atendida"', () => {
