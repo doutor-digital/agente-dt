@@ -83,9 +83,11 @@ export async function blocoDaConversaOficial(args: {
   leadId: number;
   humanMessage: string;
   recorder: TraceRecorder;
+  /** A conversa já lida neste turno (a porta da pausa pela equipe lê antes): evita ler o Kommo duas vezes. */
+  msgs?: MensagemOficial[] | null;
 }): Promise<string> {
   const { unit, leadId, humanMessage, recorder } = args;
-  const msgs = await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), leadId, 40);
+  const msgs = args.msgs ?? (await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), leadId, 40));
   const selecionados = selecionarItens(desdeUltimaFalaDaSofia(msgs), humanMessage, Date.now());
   if (!selecionados.length) return '';
 

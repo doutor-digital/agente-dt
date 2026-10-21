@@ -1785,6 +1785,28 @@ export class KommoClient {
     }
   }
 
+  /**
+   * Alguém (gente, robô ou nós) mexeu neste campo do cartão desde `desdeUnix`? Qualquer valor, qualquer autor.
+   * Lança quando não deu para perguntar — quem chama decide o lado seguro.
+   */
+  async campoMudouDesde(leadId: number, fieldId: number, desdeUnix: number): Promise<boolean> {
+    try {
+      const { data } = await this.http.get<{ _embedded?: { events?: Array<{ created_at?: number }> } } | ''>('/events', {
+        params: {
+          'filter[entity]': 'lead',
+          'filter[entity_id][]': leadId,
+          'filter[type][]': `custom_field_${fieldId}_value_changed`,
+          'filter[created_at][from]': desdeUnix,
+          limit: 10,
+        },
+      });
+      const eventos = (data && data._embedded?.events) || [];
+      return eventos.some((e) => Number(e.created_at ?? 0) >= desdeUnix);
+    } catch (err) {
+      wrapAxiosError(err, `campoMudouDesde(${leadId}, ${fieldId})`);
+    }
+  }
+
   async atividadeHumanaDesde(
     leadId: number,
     desdeUnix: number,

@@ -10,6 +10,7 @@ import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js'
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
+import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
@@ -136,6 +137,17 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     return;
   }
 
+  // Mesma porta do webhook: a equipe falou com o paciente (inclusive pelo celular) → a Sofia não responde.
+  const inicioDoTurno = Date.now();
+  const porta = await portaDaEquipe({ unit, leadId: Number(leadId), recorder }).catch(() => ({ pausou: false, msgs: null }));
+  if (porta.pausou) {
+    const totalLatency = Math.round(performance.now() - requestStart);
+    await recorder.step({ kind: 'COMPLETED', title: 'A equipe está na conversa — resposta omitida', payload: { leadId, reason: 'team_spoke' }, latencyMs: totalLatency });
+    await recorder.finalize({ status: 'SUCCESS', latencyMs: totalLatency, iaDecision: '__paused_by_team__' });
+    res.json({ ok: true, paused: true, reply: '', traceId: trace.id, unit: unit.slug });
+    return;
+  }
+
   const humanMessage = `${currentTimeTag()} ${message}`;
 
   try {
@@ -164,6 +176,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
       leadId: Number(leadId),
       humanMessage: message,
       recorder,
+      msgs: porta.msgs,
     }).catch((err) => {
       logger.warn(
         { err: String(err), leadId, unit: unit.slug },
@@ -200,9 +213,14 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
         payload: { leadId, tipo: vazou.tipo, trecho: vazou.trecho, reply: decisao },
       });
     }
-    const reply = vazou
+    const pronta = vazou
       ? ''
       : decisao || 'Recebi sua mensagem, tô só verificando com a equipe um instante 🙏';
+    // Pausaram o cartão (ou a equipe escreveu) enquanto o modelo pensava: a resposta não sai.
+    const travou = pronta
+      ? await travaAntesDeEnviar({ unit, leadId: Number(leadId), inicioDoTurno, resposta: pronta, recorder }).catch(() => null)
+      : null;
+    const reply = travou ? '' : pronta;
     const totalLatency = Math.round(performance.now() - requestStart);
 
     await recorder.step({

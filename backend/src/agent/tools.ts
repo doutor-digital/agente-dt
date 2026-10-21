@@ -17,6 +17,7 @@ import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captu
 import { ehRegraDeQualificacao } from './carimbos-do-agendamento.js';
 import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
 import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
+import { registrarPausaPropria } from '../lib/pausa-propria.js';
 import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
 import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
 import { gravarNomeConfirmadoNoContato } from '../lib/nome-no-contato.js';
@@ -562,6 +563,8 @@ export function buildTools({
       }
 
       try {
+        // A trava de antes de enviar não pode jogar fora o aviso deste handoff ("Responda em UMA frase").
+        registrarPausaPropria(unit, leadId);
         await kommo.setLeadFieldFlag(leadId, pausedFieldId, true);
         const latency = Math.round(performance.now() - t0);
         await recorder.step({

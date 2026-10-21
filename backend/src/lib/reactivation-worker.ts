@@ -5,6 +5,8 @@ import { ehFeriadoNacionalAgora } from './feriados.js';
 import { emPausa } from './pausa-unidade.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
+import { leadPausadoPorJanela } from './pausa-lead.js';
+import { falaDaEquipeDesde } from './pausa-equipe.js';
 
 const SWEEP_MS = 5 * 60_000;
 const ESPERA_MIN = 30;
@@ -121,6 +123,23 @@ async function reativarUnidade(unit: Unit): Promise<void> {
           await encerrar(conv.id);
           continue;
         }
+      }
+
+      // A reativação só existe para quando NINGUÉM assumiu. Pausa com data (widget) = a equipe decidiu até
+      // quando; fala da equipe depois do handoff = gente assumiu — inclusive pelo celular da clínica, que o
+      // webhook não avisa (Bebedouro, lead 6374469, 20/10). Falha ao ler a conversa = segue como antes.
+      if (await leadPausadoPorJanela(unit.id, leadId)) {
+        await encerrar(conv.id);
+        continue;
+      }
+      const daEquipe = await falaDaEquipeDesde(unit, leadId, conv.handoffAt as Date);
+      if (daEquipe) {
+        await encerrar(conv.id);
+        logger.info(
+          { unit: unit.slug, leadId, autor: daEquipe.autorNome || null },
+          'reativação: a equipe falou com o paciente depois do handoff (rota oficial) — não reativa',
+        );
+        continue;
       }
 
       if (unit.kommoPausedFieldId) {

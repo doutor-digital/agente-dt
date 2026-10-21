@@ -509,6 +509,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/sofia-calada.ts',
   },
   {
+    id: 'pausa-equipe',
+    chave: 'PAUSA_EQUIPE_SLUGS',
+    nome: 'A equipe falou, a Sofia para',
+    oQueFaz:
+      'Quando alguém da equipe escreve para o paciente — pelo Kommo, pelo app do Kommo ou pelo celular da clínica (WhatsApp Business) — a Sofia não responde por cima: marca "Pausar IA" no cartão e a conversa fica com a equipe. Se a equipe escrever enquanto a Sofia ainda está pensando, a resposta dela é descartada e vira nota no cartão.',
+    pegadinha:
+      'Quem decide é a conversa oficial do Kommo (a mesma que a Sofia lê): o webhook do Kommo não avisa as mensagens que saem. Só pausa a fala da equipe que veio DEPOIS da última mensagem da Sofia e nas últimas 24 h. Não pausa por robô (Salesbot, régua, transmissão) nem pela resposta automática do WhatsApp Business (saudação e ausência: texto longo que sai até 20 s depois da mensagem do paciente). Para devolver à Sofia, desmarque "Pausar IA": a fala de antes não pausa de novo; uma fala nova da equipe pausa outra vez. Em Parauapebas e Imperatriz o token não lê as conversas (403) e nada muda. Nasce em "só no papel" na rede toda: a lista mostra "gravaria Pausar IA" onde pausaria. Mesmo desligada, duas travas já valem: antes de enviar, a Sofia confere se marcaram "Pausar IA", pausaram pelo widget ou pausaram a unidade enquanto ela pensava; e a reativação de 30 min não religa quem a equipe já atendeu (inclusive pelo celular).',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/pausa-equipe.ts',
+  },
+  {
     id: 'preco-convenio',
     chave: 'PRECO_CONVENIO_SLUGS',
     nome: 'Trava do preço de convênio',
