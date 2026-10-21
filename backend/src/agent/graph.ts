@@ -946,6 +946,7 @@ export async function buildAgentGraph(
           !perguntaTurnoSemHorario(t, agoraDaUnidade) &&
           !objecaoInventada(falas, t);
         if (reconsulta && !respondeuPlanoB) {
+          // marcado ANTES dos dois caminhos (chamada montada e refeita do Gemini): a volta da ferramenta não reconsulta de novo
           agendaJaReconsultada = true;
           if (!useGoogle) {
             await recorder.step({

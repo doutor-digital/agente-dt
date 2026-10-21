@@ -67,6 +67,15 @@ test('lê os horários oferecidos e o dia de cada um (a data escrita manda sobre
     horariosOferecidos('Tenho vaga amanhã. Fica melhor às 9h30 ou às 15h?', '2026-10-20T10:00').map((x) => `${x.data} ${x.hora}`),
     ['2026-10-21 09:30', '2026-10-21 15:00'],
   );
+  // dois dias na mesma frase: cada horário fica com o dia escrito logo antes dele
+  assert.deepEqual(
+    horariosOferecidos('Tenho hoje às 08h ou amanhã às 14h, qual prefere?', '2026-10-19T10:00').map((x) => `${x.data} ${x.hora}`),
+    ['2026-10-19 08:00', '2026-10-20 14:00'],
+  );
+  assert.deepEqual(
+    horariosQueJaPassaram(horariosOferecidos('Tenho hoje às 08h ou amanhã às 14h, qual prefere?', '2026-10-19T10:00'), '2026-10-19T10:00').map((x) => x.hora),
+    ['08:00'],
+  );
   // os botões, com o dia abreviado: o dia vem da data escrita antes
   assert.deepEqual(
     horariosOferecidos('Tenho segunda (19/10). Qual fica melhor?\n[[botoes: Seg 08h | Seg 14h]]', '2026-10-19T08:29').map((x) => `${x.data} ${x.hora}`),
