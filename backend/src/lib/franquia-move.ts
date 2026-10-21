@@ -304,9 +304,10 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
     .filter((s) => passou(s) || s.idStatus === SPINE_STATUS.DESMARCADO)
     .sort((a, b) => (epoch(b) ?? 0) - (epoch(a) ?? 0));
   const ultimaDaVolta = decididasDaVolta[0] ?? null;
-  // a volta já aconteceu: a jornada segue no comercial. Tira do RETORNO e, por isso mesmo, consulta marcada depois dela
-  // não leva de volta pra lá — com as duas regras diferentes, o cartão pingava RETORNO ↔ COMPARECEU (10851140, 21/10)
-  const voltaAtendida = !!ultimaDaVolta && ultimaDaVolta.idStatus === SPINE_STATUS.ATENDIDO && passou(ultimaDaVolta);
+  // a volta já aconteceu (alguma consulta dela atendida, mesmo com falta depois): a jornada segue no comercial. Tira do
+  // RETORNO e, por isso mesmo, consulta marcada depois não leva de volta pra lá — com as duas regras diferentes, o cartão
+  // pingava RETORNO ↔ COMPARECEU (10851140, 21/10)
+  const voltaAtendida = consultasDaVolta.some((s) => s.idStatus === SPINE_STATUS.ATENDIDO && passou(s));
 
   if (atual.funil === 'COMERCIAL' && emAlgum(status, INTOCAVEIS_COMERCIAL)) {
     // "a franquia manda" (16/10): uma consulta marcada PRA FRENTE é fato novo e tira o cartão do PERDIDO — avaliação vai

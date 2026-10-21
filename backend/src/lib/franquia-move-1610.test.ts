@@ -114,17 +114,23 @@ test('decisão 2: volta atendida com outra consulta marcada não pinga entre RET
   const faltouEMarcou = [...cicloVelho(), ag({ h: -1, idStatus: 40, categoria: 'RETORNO' }), ag({ h: 48, idStatus: 37, categoria: 'RETORNO' })];
   assert.equal(planejarMovimento(e(ETAPA.RETORNO, faltouEMarcou, FINALIZADO)), null);
   assert.equal(planejarMovimento(e(ETAPA.COMPARECEU, faltouEMarcou, FINALIZADO))?.para, ETAPA.RETORNO);
+  // atendida na volta, depois faltou e marcou de novo (achado do Codex): a falta não reabre o RETORNO
+  const atendeuFaltouMarcou = [...cicloVelho(), ag({ h: -5 * DIA, idStatus: 42, categoria: 'RETORNO' }), ag({ h: -1, idStatus: 40, categoria: 'RETORNO' }), ag({ h: 48, idStatus: 37, categoria: 'RETORNO' })];
+  assert.notEqual(planejarMovimento(e(ETAPA.COMPARECEU, atendeuFaltouMarcou, FINALIZADO))?.para, ETAPA.RETORNO);
+  assert.equal(planejarMovimento(e(ETAPA.NEGOCIACAO, atendeuFaltouMarcou, FINALIZADO)), null);
   // de qualquer etapa do comercial, aplicar o movimento de novo para em no máximo 2 passos
-  for (const inicio of [ETAPA.RETORNO, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.AGENDADO, ETAPA.QUALIFICACAO]) {
-    let status: string = inicio;
-    const visitadas = [status];
-    for (let i = 0; i < 5; i++) {
-      const m = planejarMovimento(e(status, ag1, FINALIZADO));
-      if (!m) break;
-      status = m.para;
-      visitadas.push(status);
+  for (const agenda of [ag1, atendeuFaltouMarcou, faltouEMarcou]) {
+    for (const inicio of [ETAPA.RETORNO, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.AGENDADO, ETAPA.QUALIFICACAO]) {
+      let status: string = inicio;
+      const visitadas = [status];
+      for (let i = 0; i < 5; i++) {
+        const m = planejarMovimento(e(status, agenda, FINALIZADO));
+        if (!m) break;
+        status = m.para;
+        visitadas.push(status);
+      }
+      assert.ok(visitadas.length <= 3, `${inicio}: ${visitadas.join(' → ')}`);
     }
-    assert.ok(visitadas.length <= 3, `${inicio}: ${visitadas.join(' → ')}`);
   }
 });
 
