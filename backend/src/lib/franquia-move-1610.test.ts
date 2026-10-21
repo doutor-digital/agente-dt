@@ -100,6 +100,40 @@ test('decisão 2: em RETORNO, a consulta da volta atendida (mesmo vindo como ava
   assert.equal(planejarMovimento(e(ETAPA.RETORNO, cicloVelho(), FINALIZADO)), null);
 });
 
+test('decisão 2: volta atendida com outra consulta marcada não pinga entre RETORNO e COMPARECEU (10851140, 21/10)', () => {
+  // retorno da volta atendido há 1 h e outro retorno marcado pra daqui a 2 dias: antes, RETORNO → COMPARECEU numa
+  // varredura e COMPARECEU → RETORNO na seguinte, a cada ~30 min; a SDR punha em EM NEGOCIAÇÃO e o robô desfazia
+  const ag1 = [...cicloVelho(), ag({ h: -1, idStatus: 42, categoria: 'RETORNO' }), ag({ h: 48, idStatus: 37, categoria: 'RETORNO' })];
+  assert.equal(planejarMovimento(e(ETAPA.RETORNO, ag1, FINALIZADO))?.para, ETAPA.COMPARECEU);
+  assert.equal(planejarMovimento(e(ETAPA.COMPARECEU, ag1, FINALIZADO)), null, 'já voltou e foi atendido: a consulta marcada é continuação');
+  assert.equal(planejarMovimento(e(ETAPA.NEGOCIACAO, ag1, FINALIZADO)), null, 'a SDR negocia: fica');
+  // sem consulta da volta atendida, a marcada continua levando pra RETORNO
+  const soMarcada = [...cicloVelho(), ag({ h: 48, idStatus: 37, categoria: 'RETORNO' })];
+  assert.equal(planejarMovimento(e(ETAPA.COMPARECEU, soMarcada, FINALIZADO))?.para, ETAPA.RETORNO);
+  // falta na volta não tira do RETORNO (decisão 4), então a marcada também pode levar pra lá sem pingar
+  const faltouEMarcou = [...cicloVelho(), ag({ h: -1, idStatus: 40, categoria: 'RETORNO' }), ag({ h: 48, idStatus: 37, categoria: 'RETORNO' })];
+  assert.equal(planejarMovimento(e(ETAPA.RETORNO, faltouEMarcou, FINALIZADO)), null);
+  assert.equal(planejarMovimento(e(ETAPA.COMPARECEU, faltouEMarcou, FINALIZADO))?.para, ETAPA.RETORNO);
+  // atendida na volta, depois faltou e marcou de novo (achado do Codex): a falta não reabre o RETORNO
+  const atendeuFaltouMarcou = [...cicloVelho(), ag({ h: -5 * DIA, idStatus: 42, categoria: 'RETORNO' }), ag({ h: -1, idStatus: 40, categoria: 'RETORNO' }), ag({ h: 48, idStatus: 37, categoria: 'RETORNO' })];
+  assert.notEqual(planejarMovimento(e(ETAPA.COMPARECEU, atendeuFaltouMarcou, FINALIZADO))?.para, ETAPA.RETORNO);
+  assert.equal(planejarMovimento(e(ETAPA.NEGOCIACAO, atendeuFaltouMarcou, FINALIZADO)), null);
+  // de qualquer etapa do comercial, aplicar o movimento de novo para em no máximo 2 passos
+  for (const agenda of [ag1, atendeuFaltouMarcou, faltouEMarcou]) {
+    for (const inicio of [ETAPA.RETORNO, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.AGENDADO, ETAPA.QUALIFICACAO]) {
+      let status: string = inicio;
+      const visitadas = [status];
+      for (let i = 0; i < 5; i++) {
+        const m = planejarMovimento(e(status, agenda, FINALIZADO));
+        if (!m) break;
+        status = m.para;
+        visitadas.push(status);
+      }
+      assert.ok(visitadas.length <= 3, `${inicio}: ${visitadas.join(' → ')}`);
+    }
+  }
+});
+
 test('decisão 2: ex-paciente que voltou e foi atendido segue a jornada normal pelas consultas da volta', () => {
   const ag1 = [...cicloVelho(), ag({ h: -5 * DIA, idStatus: 42 })];
   assert.equal(planejarMovimento(e(ETAPA.AGENDADO, ag1, FINALIZADO))?.para, ETAPA.NEGOCIACAO, 'atendido há 5 d sem tratamento novo');
