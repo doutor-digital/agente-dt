@@ -22,7 +22,7 @@ export interface MensagemHistorico {
 export const JANELA_ENCERRAMENTO_MS = 15 * 60_000;
 
 const RE_PALAVRAS =
-  /^(ok(ay|ei)?|okk+|blz|beleza|show|top|perfeito|certo|combinado|fechado|entendi|entendido|obrigad[oa]s?|brigad[oa]|valeu|vlw|tks|thanks|thank you|grat[oa]|agrade[çc]o|de nada|por nada|tchau|at[ée] (mais|logo|breve|amanh[ãa])|bom dia|boa tarde|boa noite|boa semana|bom fim de semana|bom final de semana|abra[çc]os?|abs|fica com deus|deus aben[çc]oe|am[ée]m|sim|n[ãa]o|t[áa]|ta bom|t[áa] bom|tudo bem|isso|uhum|aham|👍|👍🏻|👍🏼|👍🏽|👍🏾|👍🏿|🙏|🙏🏻|🙏🏼|🙏🏽|🙏🏾|🙏🏿|❤️|❤|💙|💚|🤗|😊|☺️|☺|🙂|😉|😁|😄|✌️|👏|🫶)$/i;
+  /^(ok(ay|ei)?|okk+|blz|beleza|show|top|perfeito|certo|combinado|fechado|entendi|entendido|obrigad[oa]s?|brigad[oa]|valeu|vlw|tks|thanks|thank you|grat[oa]|agrade[çc]o|de nada|por nada|tchau|at[ée] (mais|logo|breve|amanh[ãa])|bom dia|boa tarde|boa noite|boa semana|bom fim de semana|bom final de semana|abra[çc]os?|abs|fica com deus|deus aben[çc]oe|am[ée]m|sim|n[ãa]o|t[áa]|ta bom|t[áa] bom|tabom|tudo bem|isso|uhum|aham|👍|👍🏻|👍🏼|👍🏽|👍🏾|👍🏿|🙏|🙏🏻|🙏🏼|🙏🏽|🙏🏾|🙏🏿|❤️|❤|💙|💚|🤗|😊|☺️|☺|🙂|😉|😁|😄|✌️|👏|🫶)$/i;
 
 /** Só emojis / pontuação / espaços (ex.: "🙏🙏", "👍!!"). */
 const RE_SO_SIMBOLOS = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}️‍\s.!,;:…]+$/u;
@@ -31,8 +31,10 @@ const RE_SO_SIMBOLOS = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}️‍\
 const FRASES = [
   /\bt[áa] bom\b/g, /\btudo bem\b/g, /\bde nada\b/g, /\bpor nada\b/g, /\bat[ée] (mais|logo|breve|amanh[ãa]|a pr[óo]xima)\b/g,
   /\bbom dia\b/g, /\bboa tarde\b/g, /\bboa noite\b/g, /\bboa semana\b/g, /\bbom (fim|final) de semana\b/g,
-  /\bfica com deus\b/g, /\bdeus aben[çc]oe\b/g, /\bthank you\b/g, /\bmuito obrigad[oa]s?\b/g, /\bobrigad[oa] pelo atendimento\b/g,
-  /\bobrigad[oa] pela aten[çc][ãa]o\b/g, /\bum abra[çc]o\b/g,
+  /\bfica com deus\b/g, /\bdeus aben[çc]oe\b/g, /\bthank you\b/g,
+  // a frase mais longa antes: "muito obrigado" comido primeiro deixava "pelo atendimento" sobrando (Araguaína, 17/10/2026)
+  /\b(?:muito )?obrigad[oa]s? pelo atendimento\b/g, /\b(?:muito )?obrigad[oa]s? pela aten[çc][ãa]o\b/g, /\bmuito obrigad[oa]s?\b/g,
+  /\bum abra[çc]o\b/g,
 ];
 
 /** "Ok obrigado", "valeu 🙏", "tá bom, obrigada!" — agradecimento/ok sem conteúdo novo. */
