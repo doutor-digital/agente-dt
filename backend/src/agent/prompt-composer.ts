@@ -54,6 +54,7 @@ import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
+import { carregarRede, renderDoutorHernia, renderDoutorHerniaCurto, type UnidadeDaRede } from './rede-doutor-hernia.js';
 
 export interface BusinessHoursStatus {
   enabled: boolean;
@@ -1530,6 +1531,8 @@ export interface ComposeInput {
   userMessage?: string;
   /** O que o mesmo cartão conversou com OUTRA Sofia da conta (resgate → comercial), últimas 72 h. */
   outraSofia?: FalaDeOutraSofia[];
+  /** As unidades Doutor Hérnia ativas (tabela `units`, cache de 10 min) — ver rede-doutor-hernia.ts. */
+  redeDeUnidades?: UnidadeDaRede[];
 }
 
 /**
@@ -1940,6 +1943,8 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
   if (leadFieldsBlock) blocks.push(leadFieldsBlock);
   const templatesBlock = renderTemplates(templates);
   if (templatesBlock) blocks.push(templatesBlock);
+  const redeBlock = renderDoutorHernia(unit, input.redeDeUnidades);
+  if (redeBlock) blocks.push(redeBlock);
 
   return blocks.join('\n\n');
 }
@@ -1975,6 +1980,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
     if (outraBlockSingle) single.push(outraBlockSingle);
     const semAgendaSingle = renderSemAgenda(unit);
     if (semAgendaSingle) single.push(semAgendaSingle);
+    // Fato da rede e quem atende — valem também para quem escreveu o prompt inteiro à mão.
+    const redeSingle = renderDoutorHernia(unit, input.redeDeUnidades);
+    if (redeSingle) single.push(redeSingle);
     if (leadId && Number.isFinite(leadId) && leadId > 0) {
       single.push(renderConversationContext(leadId, telefone));
     }
@@ -2063,6 +2071,10 @@ export function composeSystemPrompt(input: ComposeInput): string {
 
   const templatesBlock = renderTemplates(templates);
   if (templatesBlock) blocks.push(templatesBlock);
+
+  // Depois das regras e modelos da unidade: o que ele diz sobre "Dra." e "avaliação" vale acima deles.
+  const redeBlock = renderDoutorHernia(unit, input.redeDeUnidades);
+  if (redeBlock) blocks.push(redeBlock);
 
   const knowledgeBlock = renderKnowledge(knowledge);
   if (knowledgeBlock) blocks.push(knowledgeBlock);
@@ -2166,12 +2178,18 @@ export function composeSystemPromptParts(input: ComposeInput): {
   const anuncioBlock = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
   if (anuncioBlock) dynamic.push(anuncioBlock);
 
+  // Quem atende ("é médico?"), o nome da consulta e a lista da rede. Muda só quando entra
+  // unidade nova, então fica no bloco cacheado — DEPOIS das regras e modelos da unidade, porque
+  // o que ele diz sobre "Dra." e "avaliação" vale acima deles.
+  const redeBlock = renderDoutorHernia(unit, input.redeDeUnidades);
+
   if (unit.singlePromptMode) {
     // Sem prompt montado por nós, não há bloco estável onde encaixar: os três
-    // voltam pra parte viva, como era antes.
+    // voltam pra parte viva, como era antes. O da rede é estável e fica no cache,
+    // depois do prompt da unidade — vale também para quem escreveu o prompt inteiro.
     const semAgenda = renderSemAgenda(unit);
     return {
-      cacheable: (customBase ?? '').trim(),
+      cacheable: [(customBase ?? '').trim(), redeBlock].filter(Boolean).join('\n\n'),
       dynamic: [...porUnidade, ...(semAgenda ? [semAgenda] : []), ...dynamic].join('\n\n'),
     };
   }
@@ -2215,6 +2233,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (templatesBlock) cache.push(templatesBlock);
   const flaggedBlock = renderFlaggedExamples(flaggedExamples);
   if (flaggedBlock) cache.push(flaggedBlock);
+  if (redeBlock) cache.push(redeBlock);
 
   // Por último dentro do cache: é o que muda mais cedo (o calendário vira à
   // meia-noite). O que quase nunca muda fica na frente, pra aproveitar o cache
@@ -2272,7 +2291,7 @@ async function loadComposeInput(input: {
     !!input.unit.openaiApiKey &&
     !isTrivialUserMessage(input.userMessage);
 
-  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, contato, outraSofia] = await Promise.all([
+  const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, contato, outraSofia, redeDeUnidades] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -2346,6 +2365,9 @@ async function loadComposeInput(input: {
           return [] as FalaDeOutraSofia[];
         })
       : Promise.resolve([] as FalaDeOutraSofia[]),
+    // Sempre: é ela que diz se um slug `*-resgate` divide o Kommo com uma unidade da rede.
+    // Cache de 10 min; falha vira lista vazia, nunca derruba a resposta.
+    carregarRede().catch(() => [] as UnidadeDaRede[]),
   ]);
 
   const telefone = contato?.phone ?? null;
@@ -2389,6 +2411,7 @@ async function loadComposeInput(input: {
     lessons,
     telefone,
     outraSofia,
+    redeDeUnidades,
   };
 }
 
@@ -2465,6 +2488,8 @@ export function composeFollowUpSystemPrompt(unit: Unit, agora: Date = new Date()
     renderFatosDaUnidade(unit),
     renderHojeCurto(unit, agora),
     renderRulesGlobal(),
+    // Sem a lista da rede (o follow-up é enxuto); "é médico?" e "avaliação" valem aqui também.
+    renderDoutorHerniaCurto(unit),
   ]
     .filter((b) => b.trim())
     .join('\n\n');
@@ -2498,7 +2523,7 @@ export async function composeFlattenedPromptForUnit(input: {
   unit: Unit;
   agentConfigPrompt?: string;
 }): Promise<string> {
-  const [templates, actions, globalActions, leadFieldRules] = await Promise.all([
+  const [templates, actions, globalActions, leadFieldRules, redeDeUnidades] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
       orderBy: { name: 'asc' },
@@ -2509,6 +2534,7 @@ export async function composeFlattenedPromptForUnit(input: {
       return [];
     }),
     listEnabledLeadFieldRules(input.unit.id),
+    carregarRede().catch(() => [] as UnidadeDaRede[]),
   ]);
   return composeFlattenedPrompt({
     unit: input.unit,
@@ -2517,5 +2543,6 @@ export async function composeFlattenedPromptForUnit(input: {
     actions,
     globalActions,
     leadFieldRules,
+    redeDeUnidades,
   });
 }

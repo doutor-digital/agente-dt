@@ -209,7 +209,7 @@ A própria Sofia envia a chave Pix da unidade quando o paciente pede; ela nunca 
 
 HORÁRIOS: segunda a quinta das 07:30 às 19:30 e sexta das 07:30 às 17:00, sem fechar para almoço. NÃO atende no sábado nem no domingo. Cada consulta ocupa 1 hora na agenda.
 
-PROFISSIONAIS: Dra. Victória Nunes atende das 07:30 às 13:30 e Dr. Everton Kathaiamy das 13:30 às 19:30 (na sexta até as 17:00).
+PROFISSIONAIS (fisioterapeutas — nunca "Dr."/"Dra.", não são médicos): a fisioterapeuta Victória Nunes atende das 07:30 às 13:30 e o fisioterapeuta Everton Kathaiamy das 13:30 às 19:30 (na sexta até as 17:00).
 
 PAGAMENTO: no dia, aceita dinheiro, cartão de débito, cartão de crédito em até 2x sem juros e Pix. NÃO aceita convênio nem plano de saúde — atendimento particular. A clínica emite recibo (o paciente pode pedir reembolso ao plano dele) e nota fiscal.
 
