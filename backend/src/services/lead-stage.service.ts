@@ -40,6 +40,11 @@ export interface EstadoEtapaLead {
    * tem agenda (resgate) — caso do cartão 28088906, 08/10/2026.
    */
   consultaNoCartao?: string | null;
+  /**
+   * O cartão está no funil TRATAMENTO: é paciente com sessões, e sessão é com a equipe. Marabá, lead 28072622
+   * (13/10/2026): a Sofia ofereceu "sexta, 16/10, às 10h" e pediu o nome completo a um paciente em tratamento.
+   */
+  funilTratamento?: boolean;
 }
 
 /**
@@ -175,7 +180,7 @@ function classificar(
 
   if (statusId === 143 || status?.type === 143) return semAgenda(false);
   if (statusId === 142 || status?.type === 142) return semAgenda(true);
-  if (pipe && /tratamento/i.test(pipe.name || '')) return semAgenda(true);
+  if (pipe && /tratamento/i.test(pipe.name || '')) return { ...semAgenda(true), funilTratamento: true };
 
   const intents = unit.pipelineIntents as Record<string, unknown> | null;
   const anchorId = Number(intents?.scheduled_meeting) || null;

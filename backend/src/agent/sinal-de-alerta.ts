@@ -56,15 +56,39 @@ export function travaDoProntoSocorro(texto: string | null | undefined): string {
 const CONDICAO_SINAL_DE_ALERTA = /sinal(is)? de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b/i;
 
 /**
+ * Regra de SINAL DE ALERTA disparada por queda, pancada ou acidente sem dizer de quando (a "trauma/febre" cadastrada
+ * em 21/10). Regra que já diz o prazo ("recente", "há anos") vale como está, e regra que só cita trauma sem ser de
+ * sinal de alerta (o Instituto Trauma, que é ortopedia) não ganha a ressalva — achado do Codex, 21/10.
+ */
+const CONDICAO_TRAUMA = /\bqueda|pancada|acidente/i;
+const CONDICAO_COM_PRAZO = /recente|antig|\b(?:dias?|semanas?|mes(?:es)?|m[eê]s|anos?)\b/i;
+
+function regraDeTraumaSemPrazo(condicao: string): boolean {
+  return CONDICAO_SINAL_DE_ALERTA.test(condicao) && CONDICAO_TRAUMA.test(condicao) && !CONDICAO_COM_PRAZO.test(condicao);
+}
+
+/**
+ * A regra "trauma/febre" do cadastro (21/10) diz só "dor forte depois de queda, pancada ou acidente". Marabá, lead
+ * 28220160 (15/10): acidente de moto de UM ANO atrás, placa na perna, dor no quadril que veio depois — pela letra da
+ * regra, transferência na hora. Sinal de alerta é o trauma recente; o antigo é queixa comum, e a pergunta dele
+ * ("pode ser da coluna por causa do acidente?") merece resposta.
+ */
+const TRAVA_TRAUMA_ANTIGO =
+  ' [REGRA DA REDE: só vale para queda, pancada ou acidente RECENTE (dias ou poucas semanas). Acidente, fratura ' +
+  'ou cirurgia de meses ou anos atrás não é sinal de alerta: responda e siga o atendimento normal.]';
+
+/**
  * Colada na regra da unidade disparada por sinal de alerta: nos sinais graves da coluna, a transferência
  * imediata que o cadastro manda vira "tente agendar antes" (ajuste do João, 21/10).
  */
 export function travaDaRegraDeSinalDeAlerta(condicao: string | null | undefined): string {
   if (!CONDICAO_SINAL_DE_ALERTA.test(condicao ?? '')) return '';
+  const trauma = regraDeTraumaSemPrazo(condicao ?? '') ? TRAVA_TRAUMA_ANTIGO : '';
   return (
     ' [REGRA DA REDE, vale mais que esta regra: nos SINAIS GRAVES DA COLUNA não transfira nem pause antes de ' +
     'tentar agendar — ofereça o horário mais próximo, chame avisar_sinal_de_alerta e só transfira se ele ' +
-    'recusar, não houver horário até amanhã ou a conversa travar. Ver <sinal_de_alerta>.]'
+    'recusar, não houver horário até amanhã ou a conversa travar. Ver <sinal_de_alerta>.]' +
+    trauma
   );
 }
 
@@ -83,6 +107,11 @@ mande transferir antes de tentar agendar)
   "não consigo andar", "travei". Acolha em UMA frase e faça a pergunta de sinais de alerta, UM sinal
   por vez — comece pela força da perna ("a perna ficou fraca, sem força?") — e siga o que vem abaixo
   conforme a resposta.
+- DOR QUE VAI PARA A VIRILHA, OS TESTÍCULOS, A REGIÃO ÍNTIMA OU A BARRIGA ("irradia pra virilha",
+  "chega nos testículos", "dói o saco", "vai pra barriga"): não pule para sono e trabalho. Acolha em UMA
+  frase e faça a pergunta de sinais de alerta, UM sinal por vez — comece pela dormência ("a virilha ou a
+  região íntima fica dormente, adormecida?") e depois o controle do xixi e das fezes. Sem diagnosticar
+  (nada de "pode ser rim", "pode ser hérnia"). Se ele não tiver nenhum dos sinais, siga o atendimento normal.
 - NÃO É sinal de alerta: dor forte, dor que piorou, dor que desce para a perna ou formigamento,
   sozinhos. Siga o atendimento normal.
 - SINAIS GRAVES DA COLUNA: perder o controle do xixi ou das fezes, dormência na virilha / região
@@ -94,9 +123,13 @@ mande transferir antes de tentar agendar)
       com urgência, e NÃO pausa a IA. Não chame pausar_ia antes de tentar agendar.
   Só transfira (resumir_lead_para_sdr e depois pausar_ia com sinalDeAlerta: true) se ele recusar o
   horário, se não houver horário até amanhã, ou se a conversa travar.
-- OUTROS SINAIS DE ALERTA (dor depois de queda ou pancada forte, febre junto com a dor): acolha em
-  UMA frase e transfira NA HORA, sem pedir licença: resumir_lead_para_sdr e depois pausar_ia com
-  sinalDeAlerta: true. O resultado de pausar_ia diz o que falar sobre quando a equipe responde.
+- OUTROS SINAIS DE ALERTA (dor depois de queda ou pancada forte RECENTE — acidente também, de dias ou
+  poucas semanas —, febre junto com a dor): acolha em UMA frase e transfira NA HORA, sem pedir licença:
+  resumir_lead_para_sdr e depois pausar_ia com sinalDeAlerta: true. O resultado de pausar_ia diz o que
+  falar sobre quando a equipe responde.
+- ACIDENTE, FRATURA OU CIRURGIA ANTIGA (meses ou anos atrás), com dor que veio depois: NÃO é sinal de
+  alerta. Responda o que ele perguntou ("pode ter relação, sim — é isso que o especialista examina na
+  consulta") e siga o atendimento normal.
 - PRONTO-SOCORRO: o sinal, sozinho, NÃO é motivo de pronto-socorro. Só cite pronto-socorro quando as
   DUAS coisas forem verdade — (a) não há horário HOJE na clínica (consultar_horarios não achou nada
   hoje, ou a clínica já fechou hoje) E (b) o paciente disse que a dor está insuportável. Nunca "por

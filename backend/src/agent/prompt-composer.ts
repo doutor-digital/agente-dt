@@ -28,6 +28,8 @@ import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from 
 import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
 import { renderPacienteEncerrou } from './paciente-encerrou.js';
+import { renderPerguntaDoPaciente } from './pergunta-do-paciente.js';
+import { renderFalaDePaciente } from './fala-de-paciente.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
@@ -1661,6 +1663,12 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   if (sessoes) blocos.push(sessoes);
   const rajada = renderRajada(historico, { clinica });
   if (rajada) blocos.push(rajada);
+  // Lista de Marabá, 21/10/2026: pergunta direta que o roteiro atropelava, e paciente em tratamento num cartão que
+  // ainda não sabe disso (pergunta-do-paciente.ts, fala-de-paciente.ts).
+  const pergunta = renderPerguntaDoPaciente(historico, { clinica });
+  if (pergunta) blocos.push(pergunta);
+  const emTratamento = clinica ? renderFalaDePaciente(historico) : '';
+  if (emTratamento) blocos.push(emTratamento);
   return { semPedirNome: pararDePedirNome(repeticao), blocos };
 }
 
@@ -1928,8 +1936,21 @@ export function renderEtapaLead(
     '- Se ele perguntar o dia/horário da consulta e você não tiver certeza confirmada agora, diga que vai conferir com a equipe e retorna — NÃO afirme nem repita horário do histórico.',
     '- Se ele quiser mudar o horário, trate como REMARCAR (não como marcar pela primeira vez).',
     '- Use o que está na ficha do paciente; não recomece a conversa do zero.',
+    ...(e.funilTratamento ? REGRAS_DO_FUNIL_TRATAMENTO : []),
   ].join('\n'));
 }
+
+/**
+ * Cartão no funil TRATAMENTO: paciente com sessões. Marabá, lead 28072622 (13/10/2026): a Sofia confundiu a sessão
+ * dele com consulta, ofereceu "sexta, 16/10, às 10h" e pediu o nome completo para "garantir a vaga".
+ */
+const REGRAS_DO_FUNIL_TRATAMENTO = [
+  '- ELE ESTÁ EM TRATAMENTO (funil TRATAMENTO). Sessão — horário, confirmar, remarcar, faltar — e pagamento do',
+  '  tratamento são com a equipe: NÃO use consultar_horarios nem agendar_consulta para sessão, NÃO ofereça consulta,',
+  '  NÃO fale do valor da consulta e NÃO peça nome completo (ele já é paciente; o nome está no cartão). Diga que a',
+  '  equipe confirma e chame resumir_lead_para_sdr e pausar_ia.',
+  '- Só se ele já teve alta e quer voltar porque a dor voltou é consulta nova: aí siga o agendamento normal.',
+];
 
 /**
  * O telefone entra aqui por um motivo medido: `cadastrar_paciente` exige
