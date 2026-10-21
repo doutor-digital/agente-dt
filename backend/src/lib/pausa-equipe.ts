@@ -23,8 +23,8 @@
  *    resposta automática do próprio WhatsApp Business — saudação e ausência, ver `ehRespostaAutomatica`);
  *  - DEPOIS da última mensagem que o agente mandou (se a Sofia falou depois, a conversa voltou para ela);
  *  - nas últimas 24 h;
- *  - e sem ninguém ter mexido na caixinha "Pausar IA" depois dela (desmarcar = devolver à Sofia; a fala
- *    antiga não pausa de novo, uma fala nova pausa).
+ *  - e sem ninguém ter DESMARCADO "Pausar IA" depois dela (desmarcar = devolver à Sofia; a fala antiga
+ *    não pausa de novo, uma fala nova pausa). Vale quem desmarca: a SDR, a reativação, o fim da pausa com data.
  *
  * O QUE ACONTECE: na porta (antes de gerar) e na trava de antes de ENVIAR, a Sofia não responde, marca
  * "Pausar IA", carimba "assumido por humano" e cancela a reativação de 30 min daquele handoff — gente já
@@ -148,6 +148,8 @@ export interface DepsPausaEquipe {
   ultimaFalaDaIa: (unit: Unit, leadId: number, desde: Date) => Promise<Date | null>;
   /** Alguém mexeu na caixinha "Pausar IA" desde `desde`? Lança se não deu para perguntar. */
   pausaMexidaDesde: (unit: Unit, leadId: number, desde: Date) => Promise<boolean>;
+  /** A caixinha "Pausar IA" está marcada AGORA? Lança se não deu para ler. */
+  pausaMarcadaAgora: (unit: Unit, leadId: number) => Promise<boolean>;
   /** Marca "Pausar IA", carimba "assumido por humano" e cancela a reativação pendente. */
   marcarPausa: (unit: Unit, leadId: number) => Promise<ResultadoDaPausa>;
   simular: (unit: Pick<Unit, 'id' | 'slug'>, automacao: string, s: Simulacao) => void;
@@ -191,6 +193,8 @@ export const DEPS_PAUSA_EQUIPE_PADRAO: DepsPausaEquipe = {
     unit.kommoPausedFieldId
       ? createKommoClient(unit).campoMudouDesde(leadId, unit.kommoPausedFieldId, Math.floor(desde.getTime() / 1000))
       : false,
+  pausaMarcadaAgora: async (unit, leadId) =>
+    unit.kommoPausedFieldId ? createKommoClient(unit).isLeadFieldChecked(leadId, unit.kommoPausedFieldId) : false,
   marcarPausa: marcarPausaPadrao,
   simular: registrarSimulacao,
 };
@@ -216,14 +220,18 @@ export async function conferirEquipe(
   const ultimaIa = await deps.ultimaFalaDaIa(unit, leadId, new Date(agora.getTime() - JANELA_DA_EQUIPE_MS - 3600_000));
   const d = equipeComAPalavra(msgs, ultimaIa, agora);
   if (!d.fala) return { msgs, fala: null, motivo: d.motivo };
-  // Desmarcaram (ou marcaram) "Pausar IA" depois da fala: alguém já decidiu depois dela — a fala não pausa
-  // de novo. Sem resposta do Kommo, o lado seguro é o de antes: a Sofia responde.
-  const mexida = await deps.pausaMexidaDesde(unit, leadId, d.fala.em).catch((err) => {
-    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'pausa-equipe: não consegui ler o histórico da caixinha (segue sem pausar)');
+  // DEVOLVIDA À SOFIA: "Pausar IA" mudou depois da fala E está desmarcada agora — então houve um desmarcar
+  // depois dela (a SDR, a reativação, o fim da pausa com data). Mudou mas está marcada (a própria pausa da
+  // Sofia, a nossa auto-pausa) não devolve nada. Sem resposta do Kommo, o lado de antes: a Sofia responde.
+  const devolvida = await (async () => {
+    if (!(await deps.pausaMexidaDesde(unit, leadId, d.fala.em))) return false;
+    return !(await deps.pausaMarcadaAgora(unit, leadId));
+  })().catch((err) => {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'pausa-equipe: não consegui ler a caixinha "Pausar IA" (segue sem pausar)');
     return null;
   });
-  if (mexida === null) return { msgs, fala: null, motivo: 'nao_conferi' };
-  if (mexida) return { msgs, fala: null, motivo: 'devolvida' };
+  if (devolvida === null) return { msgs, fala: null, motivo: 'nao_conferi' };
+  if (devolvida) return { msgs, fala: null, motivo: 'devolvida' };
   return { msgs, fala: d.fala, motivo: null };
 }
 

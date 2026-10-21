@@ -148,6 +148,7 @@ function depsFalsas(over: Partial<DepsAntesDeEnviar> = {}) {
     },
     ultimaFalaDaIa: async () => new Date('2026-10-20T00:46:50-03:00'),
     pausaMexidaDesde: async () => false,
+    pausaMarcadaAgora: async () => false,
     marcarPausa: async () => {
       chamadas.marcarPausa++;
       return 'marcou';
@@ -168,9 +169,16 @@ function depsFalsas(over: Partial<DepsAntesDeEnviar> = {}) {
 }
 
 test('desmarcaram "Pausar IA" depois da fala da equipe → devolvida: a mesma fala não pausa de novo', async () => {
-  const { deps } = depsFalsas({ pausaMexidaDesde: async () => true });
+  const { deps } = depsFalsas({ pausaMexidaDesde: async () => true, pausaMarcadaAgora: async () => false });
   const r = await conferirEquipe(unidade, LEAD, deps);
   assert.deepEqual([r.fala, r.motivo], [null, 'devolvida']);
+});
+
+test('"Pausar IA" mudou depois da fala mas segue MARCADO (pausa da própria Sofia, auto-pausa) → não é devolução', async () => {
+  const { deps } = depsFalsas({ pausaMexidaDesde: async () => true, pausaMarcadaAgora: async () => true });
+  const r = await conferirEquipe(unidade, LEAD, deps);
+  assert.equal(r.motivo, null);
+  assert.ok(r.fala);
 });
 
 test('sem resposta do Kommo sobre a caixinha, o lado seguro é o de antes (a Sofia responde)', async () => {
