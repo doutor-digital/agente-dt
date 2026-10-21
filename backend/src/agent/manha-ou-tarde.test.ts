@@ -11,7 +11,17 @@ import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
 import { composeSystemPrompt } from './prompt-composer.js';
-import { INSTRUCAO_REFAZER_TURNO, perguntaTurnoSemHorario, travaDoHorario, type ConsultaDaAgenda } from './horario-oferecido.js';
+import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
+import {
+  carimboDaConsulta,
+  INSTRUCAO_REFAZER_TURNO,
+  ofertaDaConsultaDoTurno,
+  PERGUNTA_DO_DIA,
+  perguntaTurnoSemHorario,
+  semPerguntaDeTurno,
+  travaDoHorario,
+  type ConsultaDaAgenda,
+} from './horario-oferecido.js';
 
 const AGORA = '2026-10-20T10:15';
 const ARAGUAINA_28655414 = 'Entendi, Maria, faz sentido querer resolver logo. Pra eu ver a agenda: de manhã ou à tarde costuma ser melhor pra você?';
@@ -50,6 +60,27 @@ test('a agenda já devolveu horários neste turno e ela perguntou o turno → re
   assert.equal(t?.acao, 'refazer_turno');
   assert.match(INSTRUCAO_REFAZER_TURNO, /DOIS horários concretos/);
   assert.match(INSTRUCAO_REFAZER_TURNO, /sem perguntar o turno/);
+});
+
+test('a refeita não serviu: a pergunta do turno dá lugar aos dois horários da agenda deste turno', () => {
+  const msgs = [
+    new HumanMessage('pode ver um horário pra mim'),
+    new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'consultar_horarios', args: { data: '2026-10-21' } }] }),
+    new ToolMessage({
+      content: `Horários CONFIRMADOS com a clínica em quarta-feira, 21/10/2026 (2026-10-21): 08:00, 09:00, 14:30, 16:00. Ofereça no máximo 2 ou 3 deles. ${carimboDaConsulta(AGORA)}`,
+      tool_call_id: 'c1',
+      name: 'consultar_horarios',
+    }),
+  ];
+  const oferta = ofertaDaConsultaDoTurno(msgs);
+  assert.equal(oferta, 'Tenho quarta-feira, 21/10, às 8h ou às 16h. Qual fica melhor pra você?');
+  assert.equal(
+    semPerguntaDeTurno('Perfeito! A consulta é com o nosso especialista, presencial. Você prefere vir pela manhã ou à tarde?\n[[botoes: Manhã | Tarde]]', AGORA, oferta),
+    'Perfeito! A consulta é com o nosso especialista, presencial. Tenho quarta-feira, 21/10, às 8h ou às 16h. Qual fica melhor pra você?',
+  );
+  // consulta de outro turno não vale; sem horário confirmado, sai a pergunta do dia
+  assert.equal(ofertaDaConsultaDoTurno([...msgs, new HumanMessage('e sábado?')]), null);
+  assert.equal(semPerguntaDeTurno(ARAGUAINA_28655414, AGORA, null), `Entendi, Maria, faz sentido querer resolver logo. ${PERGUNTA_DO_DIA}`);
 });
 
 test('quando a agenda não deu horário, perguntar a preferência é o certo', () => {

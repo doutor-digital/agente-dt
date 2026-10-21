@@ -40,9 +40,11 @@ import {
   horariosQueJaPassaram,
   INSTRUCAO_REFAZER_TURNO,
   instrucaoParaReconsultar,
+  ofertaDaConsultaDoTurno,
   perguntaTurnoSemHorario,
   reconsultaDaAgenda,
   semHorarioPassado,
+  semPerguntaDeTurno,
   travaDoHorario,
 } from './horario-oferecido.js';
 import { empurraHorario, pacienteEncerrou, semEmpurrarHorario } from './paciente-encerrou.js';
@@ -978,20 +980,30 @@ export async function buildAgentGraph(
             payload: { refeita: textoRefeito || null, final: textoFinal, erro: r.erro },
             latencyMs: r.ms,
           });
-        } else if (travaHorario?.acao === 'refazer_turno' && !respondeuPlanoB && !turnoJaRefeito) {
-          turnoJaRefeito = true;
-          const r = await refazerComInstrucao(INSTRUCAO_REFAZER_TURNO);
-          const textoRefeito = r.msg && (r.msg.tool_calls ?? []).length === 0 ? aiTextFromContent(r.msg.content).trim() : '';
-          const serve = aindaServe(textoRefeito) && horariosOferecidos(textoRefeito, agoraDaUnidade).length > 0;
-          if (serve) {
-            textoFinal = textoRefeito;
-            response.content = textoRefeito;
+        } else if (travaHorario?.acao === 'refazer_turno') {
+          // Refaz UMA vez; se não der (refeita ruim, plano B, já refeita), a pergunta do turno dá lugar, em código, aos
+          // dois horários que a agenda devolveu neste turno — "manhã ou tarde?" não sai.
+          let serve = false;
+          let textoRefeito = '';
+          let erro: string | null = null;
+          let ms = 0;
+          if (!respondeuPlanoB && !turnoJaRefeito) {
+            turnoJaRefeito = true;
+            const r = await refazerComInstrucao(INSTRUCAO_REFAZER_TURNO);
+            textoRefeito = r.msg && (r.msg.tool_calls ?? []).length === 0 ? aiTextFromContent(r.msg.content).trim() : '';
+            serve = aindaServe(textoRefeito) && horariosOferecidos(textoRefeito, agoraDaUnidade).length > 0;
+            erro = r.erro;
+            ms = r.ms;
           }
+          textoFinal = serve
+            ? textoRefeito
+            : semPerguntaDeTurno(textoFinal, agoraDaUnidade, ofertaDaConsultaDoTurno(nonSystemMessages));
+          response.content = textoFinal;
           await recorder.step({
             kind: 'THINKING',
-            title: serve ? `🗓️ ${travaHorario.motivo} — refeita com dois horários` : `🗓️ ${travaHorario.motivo}; a refeita não serviu — saiu a original`,
-            payload: { refeita: textoRefeito || null, final: textoFinal, erro: r.erro },
-            latencyMs: r.ms,
+            title: serve ? `🗓️ ${travaHorario.motivo} — refeita com dois horários` : `🗓️ ${travaHorario.motivo} — a pergunta do turno deu lugar aos horários da agenda`,
+            payload: { refeita: textoRefeito || null, final: textoFinal, erro },
+            latencyMs: ms,
           });
         }
         // Sem modelo: horário que já passou nunca sai; a sondagem sai quando sobra resposta sem ela.

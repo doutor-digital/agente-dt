@@ -395,6 +395,8 @@ export function travaDoHorario(e: EntradaDaTrava): TravaDoHorario {
       return podeReconsultar ? { acao: 'reconsultar', motivo, data: hoje } : { acao: 'cortar_passado', motivo };
     }
     if (consultouNoTurno || !podeReconsultar) return null;
+    // A partir do dia que ela estava oferecendo. Se esse dia lotou, consultar_horarios avança e DIZ ao modelo ("A data
+    // … não tinha vaga — … é o PRÓXIMO dia com horário"): a troca de dia chega ao paciente explicada, não calada.
     const datas = ofertas.map((o) => o.data).filter((d): d is string => !!d).sort();
     const data = datas.length > 0 && datas[0] > hoje ? datas[0] : datas.length > 0 ? hoje : amanha;
     const ultima = e.consultas[e.consultas.length - 1];
@@ -435,6 +437,58 @@ export function semHorarioPassado(texto: string, agoraLocal: string): string {
   const resto = juntarFrases(quebrarEmFrases(texto).filter((p, i) => !fora.has(i) && !/^\s*\[\[\s*botoes\s*:/i.test(p.frase)));
   if (!/[\p{L}\p{N}]/u.test(resto)) return PERGUNTA_DO_DIA;
   return resto.includes('?') ? resto : `${resto}\n\n${PERGUNTA_DO_DIA}`;
+}
+
+/** "08:00" → "8h", "14:30" → "14h30". */
+function horaFalada(h: string): string {
+  const [hh, mm] = h.split(':');
+  return `${Number(hh)}h${mm && mm !== '00' ? mm : ''}`;
+}
+
+/**
+ * Dois horários concretos tirados do resultado de consultar_horarios DESTE turno, numa frase pronta ("Tenho
+ * segunda-feira, 19/10, às 8h ou às 16h. Qual fica melhor pra você?") — o primeiro e o último da lista, para cobrir
+ * manhã e tarde. Null se a consulta deste turno não devolveu horário confirmado.
+ */
+export function ofertaDaConsultaDoTurno(mensagens: BaseMessage[]): string | null {
+  let ultimoHumano = -1;
+  mensagens.forEach((m, i) => {
+    if (m.getType() === 'human') ultimoHumano = i;
+  });
+  for (let i = mensagens.length - 1; i > ultimoHumano; i--) {
+    const m = mensagens[i];
+    if (m.getType() !== 'tool') continue;
+    const r = /Horários CONFIRMADOS com a clínica em ([^()]+?)\s*\((\d{4}-\d{2}-\d{2})\):\s*([\d:,\s]+?)\.\s/.exec(`${textoDe(m.content)} `);
+    if (!r) continue;
+    const horas = r[3].split(',').map((h) => h.trim()).filter((h) => /^\d{1,2}:\d{2}$/.test(h));
+    if (horas.length === 0) return null;
+    const dia = r[1].replace(/\/\d{4}$/, '').trim();
+    const duas = horas.length === 1 ? [horas[0]] : [horas[0], horas[horas.length - 1]];
+    return duas.length === 1
+      ? `Tenho ${dia}, às ${horaFalada(duas[0])}. Fica bom pra você?`
+      : `Tenho ${dia}, às ${horaFalada(duas[0])} ou às ${horaFalada(duas[1])}. Qual fica melhor pra você?`;
+  }
+  return null;
+}
+
+/**
+ * A resposta sem a pergunta do turno: a frase de "manhã ou tarde?" (e a linha de botões dela) dá lugar aos dois
+ * horários da consulta deste turno, ou à pergunta do dia se não houver.
+ */
+export function semPerguntaDeTurno(texto: string, agoraLocal: string, oferta: string | null): string {
+  const pedacos = quebrarEmFrases(texto);
+  let trocou = false;
+  const ficam: Pedaco[] = [];
+  for (const p of pedacos) {
+    if (/^\s*\[\[\s*botoes\s*:/i.test(p.frase)) continue;
+    if (p.frase.includes('?') && perguntaTurnoSemHorario(p.frase, agoraLocal)) {
+      if (!trocou) ficam.push({ frase: oferta ?? PERGUNTA_DO_DIA, sep: p.sep });
+      trocou = true;
+      continue;
+    }
+    ficam.push(p);
+  }
+  return trocou ? juntarFrases(ficam) : texto;
 }
 
 export function instrucaoParaReconsultar(motivo: string): string {
