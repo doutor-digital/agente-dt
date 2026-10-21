@@ -25,7 +25,7 @@ import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro } from './sinal-de-alerta.js';
 import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from './repeticao.js';
-import { renderPrecoInsistido } from './preco-insistido.js';
+import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
@@ -1638,9 +1638,11 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
     const preco = renderPrecoInsistido(historico, { frase });
     if (preco) blocos.push(preco);
   }
-  // Araguaína, 21/10/2026: a rajada cujas respostas do meio foram seguradas, ou que terminou em "tudo bem" com a
-  // dor no meio (rajada.ts).
+  // Araguaína, 21/10/2026: o preço das SESSÕES nunca fica sem resposta (e não é o da consulta) — só clínica; e a
+  // rajada cujas respostas do meio foram seguradas, ou que terminou em "tudo bem" com a dor no meio (rajada.ts).
   const clinica = unit.category?.trim() === 'saude';
+  const sessoes = clinica ? renderPrecoDasSessoes(historico, { frase }) : '';
+  if (sessoes) blocos.push(sessoes);
   const rajada = renderRajada(historico, { clinica });
   if (rajada) blocos.push(rajada);
   return { semPedirNome: pararDePedirNome(repeticao), blocos };
