@@ -59,6 +59,11 @@ export function ehDoutorHernia(unit: UnidadeParaDH, rede: ReadonlyArray<UnidadeD
   if (unit.slug?.startsWith(PREFIXO_DH)) return true;
   if (DH_NO_NOME.test(unit.name ?? '') || DH_NO_NOME.test(unit.personaCompanyName ?? '')) return true;
   if (DH_NO_KOMMO.test(unit.kommoSubdomain ?? '')) return true;
+  // `imperatriz-resgate` → `doutor-hernia-imperatriz`: a dona da conta é da rede (no mapa do ⌂ Unidade ou na lista).
+  if (unit.slug && CONTA_COMPARTILHADA.test(unit.slug)) {
+    const dona = PREFIXO_DH + unit.slug.replace(CONTA_COMPARTILHADA, '');
+    if (dona in VALOR_POR_UNIDADE || rede.some((r) => r.slug === dona)) return true;
+  }
   const sub = unit.kommoSubdomain?.trim();
   return !!sub && rede.some((r) => r.kommoSubdomain === sub);
 }

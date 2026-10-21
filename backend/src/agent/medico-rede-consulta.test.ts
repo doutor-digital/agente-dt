@@ -139,13 +139,20 @@ test('item 5: vale também no modo de prompt único e no follow-up', () => {
 });
 
 test('item 5: slug de resgate que divide o Kommo de uma unidade da rede é Doutor Hérnia', () => {
-  const resgate = { slug: 'imperatriz-resgate', name: 'Resgate', personaCompanyName: null, kommoSubdomain: 'attivacorpoementeitz' };
-  assert.equal(ehDoutorHernia(resgate), false, 'sozinho não dá para saber');
-  const rede = montarRede([linha('doutor-hernia-imperatriz', { name: 'Comercial', kommoSubdomain: 'attivacorpoementeitz' })]);
-  assert.equal(ehDoutorHernia(resgate, rede), true);
+  // pelo slug da dona (achado do Codex): imperatriz-resgate → doutor-hernia-imperatriz, que está no mapa do ⌂ Unidade
+  const imperatriz = { slug: 'imperatriz-resgate', name: 'Resgate', personaCompanyName: null, kommoSubdomain: null };
+  assert.equal(ehDoutorHernia(imperatriz), true);
+  assert.equal(ehDoutorHernia({ ...imperatriz, slug: 'imperatriz-financeiro' }), true);
+  // dona fora do mapa: só a lista da rede diz — pelo slug da dona ou pelo Kommo dividido
+  const timbo = { slug: 'timbo-resgate', name: 'Resgate', personaCompanyName: null, kommoSubdomain: 'clinicatimbo' };
+  assert.equal(ehDoutorHernia(timbo), false, 'sozinho não dá para saber');
+  const rede = montarRede([linha('doutor-hernia-timbo', { name: 'Doutor Hérnia Timbó', kommoSubdomain: 'clinicatimbo' })]);
+  assert.equal(ehDoutorHernia(timbo, rede), true);
+  assert.equal(ehDoutorHernia({ ...timbo, slug: 'outra-coisa' }, rede), true, 'pelo Kommo dividido');
   assert.equal(ehDoutorHernia({ slug: 'acailandia-resgate', name: 'Doutor Hérnia Açailândia', personaCompanyName: null, kommoSubdomain: null }), true);
+  assert.equal(ehDoutorHernia({ slug: 'default', name: 'Instituto Trauma', personaCompanyName: null, kommoSubdomain: 'institutotraumakommon' }, rede), false);
   // o follow-up também recebe a rede (achado do Codex): sem ela o resgate ficava sem a regra
-  const u = unidade({ id: 'u-res', ...resgate } as Partial<Unit>);
+  const u = unidade({ id: 'u-res', ...timbo } as Partial<Unit>);
   assert.ok(!composeFollowUpSystemPrompt(u).includes(FRASE_E_MEDICO));
   assert.ok(composeFollowUpSystemPrompt(u, new Date(), rede).includes(FRASE_E_MEDICO));
 });
