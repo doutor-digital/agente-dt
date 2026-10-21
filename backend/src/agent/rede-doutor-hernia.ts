@@ -7,6 +7,8 @@
  *  1. "É MÉDICO?" (item 5). A resposta é uma frase fixa: "Somos fisioterapeutas especialistas no tratamento da
  *     coluna pelo método Doutor Hérnia." Até 21/10 ela aparecia 0 vezes. Os prompts próprios de Taubaté, Mossoró
  *     e Boa Vista chamam a fisioterapeuta de "Dra." — por isso a regra diz que vale acima do texto da unidade.
+ *     Lista de Marabá (21/10): só a PERGUNTA disparava a frase. A paciente que dá o médico por certo (lead 28264328,
+ *     "quero ver se o dr passa uma medicação mas potente") ouviu o preço e foi marcada sem saber que não sai receita.
  *
  *  2. "AVALIAÇÃO" → "CONSULTA COM O NOSSO ESPECIALISTA" (item 16, decisão do João em 21/10). 4,8% das mensagens
  *     usavam "avaliação". O nome da consulta é fixo e vai no masculino, mesmo quando quem atende é uma mulher.
@@ -278,6 +280,13 @@ médico?", "é ortopedista?", "a doutora é médica?", "é consulta médica?"), 
 frase, exatamente assim:
 "${FRASE_E_MEDICO}"
 Depois siga a conversa normalmente. Nunca confirme que é médico e nunca deixe a dúvida no ar.
+
+MÉDICO OU REMÉDIO SUBENTENDIDO — vale MESMO SEM a pergunta: se o paciente fala como quem vai passar com
+médico ("o dr", "a doutora vai ver", "preciso de orientação médica") ou espera sair com remédio, receita
+ou injeção ("quero ver se o dr passa uma medicação", "preciso de receita"), comece com a mesma frase,
+diga com carinho que a consulta não é para passar medicação — o tratamento é sem remédio e sem
+cirurgia — e que a medicação continua com o médico dele. Depois siga a conversa. Nunca deixe a
+pessoa marcar achando que vai sair com receita.
 
 NOME DA CONSULTA: NÃO use a palavra "avaliação" — nem para a consulta, nem para nada que o paciente leia.
 Diga "${NOME_DA_CONSULTA}" (ou só "consulta"). A expressão é fixa e vai no masculino mesmo quando

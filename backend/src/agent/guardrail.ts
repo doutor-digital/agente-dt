@@ -2,6 +2,7 @@ import type { Unit } from '@prisma/client';
 import { preencherLacunas } from './lacunas.js';
 import { convenioDaUnidade, corrigirPrecoDoConvenio } from './preco-convenio.js';
 import { corrigirValorAntecipado } from './valor-antecipado.js';
+import { corrigirTomDaSaida } from './tom-da-saida.js';
 import { precosDaConsulta } from './prompt-composer.js';
 
 export interface GuardrailResult {
@@ -122,6 +123,23 @@ const REGRAS_CLINICAS: { key: string; re: RegExp }[] = [
   },
 ];
 
+/**
+ * "Não receitamos remédio", "a consulta não é para receitar medicação": é dizer que NÃO prescreve — e é o que a
+ * Sofia passou a dizer a quem espera sair com receita (lista de Marabá, 21/10/2026). Só o verbo "receitar" negado
+ * passa: "não precisa tomar remédio" continua barrado, porque mandar parar o remédio também é conduta.
+ */
+const RECEITA_NEGADA = /\b(?:n[aã]o|nem|nunca)\s+(?:\S+\s+){0,3}$/i;
+
+function violaRegra(regra: { key: string; re: RegExp }, text: string): boolean {
+  if (regra.key !== 'prescricao') return regra.re.test(text);
+  const todas = new RegExp(regra.re.source, regra.re.flags.replace('g', '') + 'g');
+  for (const m of text.matchAll(todas)) {
+    const negada = /^receit/i.test(m[0]) && RECEITA_NEGADA.test(text.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0));
+    if (!negada) return true;
+  }
+  return false;
+}
+
 export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
   if (!text || !text.trim()) return { text, triggered: [], rewritten: false };
   const triggered: string[] = [];
@@ -130,11 +148,19 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
 
   if (unit.category?.trim() === 'saude') {
     for (const regra of REGRAS_CLINICAS) {
-      if (regra.re.test(text)) triggered.push('clinico:' + regra.key);
+      if (violaRegra(regra, text)) triggered.push('clinico:' + regra.key);
     }
     if (triggered.length > 0) {
       return { text: FALLBACK_CLINICO, triggered, rewritten: true };
     }
+  }
+
+  // Palavra em inglês no meio da frase e "já te expliquei" — ver tom-da-saida.ts.
+  const tom = corrigirTomDaSaida(texto);
+  if (tom.trocas.length > 0) {
+    triggered.push('tom:' + tom.trocas.join('/'));
+    texto = tom.texto;
+    reescreveu = true;
   }
 
   // Lacuna antes de preço: preencher "[chave]" e "R$ [valor]" com o dado real da
