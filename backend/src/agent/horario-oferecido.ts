@@ -187,7 +187,8 @@ const DIAS: Array<[RegExp, number]> = [
 ];
 
 const DIA_POR_EXTENSO = /\b(segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo)(?:-feira)?(\s+que\s+vem)?/gi;
-const DIA_ABREVIADO = /\b(seg|ter|qua|qui|sex|s[áa]b|dom)\b\.?/gi;
+// fronteira por \p{L}: com \b, "Ter" casava dentro de "Terça" (o "ç" não é letra para o \b) e o dia contava duas vezes
+const DIA_ABREVIADO = /(?<![\p{L}])(seg|ter|qua|qui|sex|s[áa]b|dom)(?![\p{L}])\.?/giu;
 const DATA_DD_MM = /(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?(?![\d/])/g;
 const HORA = /(?<![\d/:.$])(\d{1,2})(?:h(\d{2})?|:(\d{2}))(?!\d)/gi;
 const HORA_DO_PERIODO = /\b[àa]s\s+(\d{1,2})\s+(?:horas?\s+)?d[ae]\s+(manh[ãa]|tarde|noite)\b/gi;
@@ -261,6 +262,7 @@ function datasNaFrase(frase: string, hoje: string, ehBotao: boolean, vistas: str
   }
   if (ehBotao) {
     for (const m of frase.matchAll(DIA_ABREVIADO)) {
+      if (semana.some((s) => s.ini === (m.index ?? 0))) continue;
       const d = dataDoDiaDaSemana(m[1], false, hoje, vistas);
       if (d !== undefined) semana.push({ ini: m.index ?? 0, data: d, explicita: false, semana: true });
     }

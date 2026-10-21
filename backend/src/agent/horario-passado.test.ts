@@ -76,6 +76,11 @@ test('lê os horários oferecidos e o dia de cada um (a data escrita manda sobre
     horariosOferecidos('Tenho terça-feira, 27/10, às 09h ou às 14h30. Prefere a terça às 09h?\n[[botoes: Ter 09h | Ter 14h30]]', '2026-10-20T10:00').map((x) => `${x.data} ${x.hora}`),
     ['2026-10-27 09:00', '2026-10-27 14:30', '2026-10-27 09:00', '2026-10-27 09:00', '2026-10-27 14:30'],
   );
+  // botão com o dia por extenso: uma marca só por dia ("Ter" não conta de novo dentro de "Terça")
+  assert.deepEqual(
+    horariosOferecidos('[[botoes: Terça 09h | Quarta 14h]]', '2026-10-19T10:00').map((x) => `${x.data} ${x.hora}`),
+    ['2026-10-20 09:00', '2026-10-21 14:00'],
+  );
   // só "segunda", dito numa segunda, sem data: pode ser hoje ou a semana que vem — o dia fica desconhecido
   assert.deepEqual(
     horariosOferecidos('Prefere a segunda às 08h ou às 14h?', '2026-10-19T10:00').map((x) => `${x.data} ${x.hora}`),
