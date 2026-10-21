@@ -45,3 +45,11 @@ test('textoConfirmacaoD1: sem nome, especialista ou endereço não deixa buraco'
   assert.doesNotMatch(t, /📍/);
   assert.match(t, /12\/09 às 09:00/);
 });
+
+test('textoConfirmacaoD1: nome de perfil, apelido, e-mail ou vazio viram "Oi!" (item 15 da rede, 21/10/2026)', () => {
+  for (const nome of ['tricolor', 'Meu Único Amigo É Deus', 'maria@gmail.com', ' , ', '']) {
+    const t = textoConfirmacaoD1({ nome, quando: '2026-10-21T13:30', especialista: null, endereco: null });
+    assert.match(t, /^Oi! Passando para confirmar/, nome);
+  }
+  assert.match(textoConfirmacaoD1({ nome: 'Índia', quando: '2026-10-21T13:30', especialista: null, endereco: null }), /^Oi, Índia! Passando/);
+});

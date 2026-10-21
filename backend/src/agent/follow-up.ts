@@ -14,6 +14,8 @@ import { JANELA_FALAS, LIMITE_TENTATIVAS, pedeNome } from './repeticao.js';
 import { cortarSeEstourou } from './teto-mensal.js';
 import { agendamentoDoVinculo, reservaAfirmada } from './reserva-sem-marcar.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { createKommoClient } from '../services/kommo.service.js';
+import { nomeApresentavel, semNomeDoPerfil } from '../lib/nome-apresentavel.js';
 
 /**
  * A régua dizendo "deixo um horário guardado pra você" sem consulta nenhuma.
@@ -45,6 +47,19 @@ export interface FollowUpArgs {
   conversationId: string;
   intencao: string;
   ultimoDegrau: boolean;
+  /** Título do cartão (a régua lê de graça na listagem das etapas): é dele que sai o nome do paciente. */
+  tituloDoCartao?: string | null;
+}
+
+/**
+ * A linha da instrução sobre o NOME (item 15 da lista da rede, 21/10/2026). O modelo só vê a conversa; o nome
+ * certo é o do título do cartão ou, sem ele, o do perfil do WhatsApp quando parece nome próprio
+ * (`nomeApresentavel`). Sem nome bom, a régua não chama ninguém pelo nome.
+ */
+export function regraDoNome(nome: string | null): string {
+  return nome
+    ? `- Se chamar o paciente pelo nome, use só "${nome}". Nenhum outro nome, apelido ou nome de perfil.`
+    : '- NÃO chame o paciente pelo nome nem por apelido: não sabemos como ele se chama. Cumprimente sem nome ("Oi!").';
 }
 
 async function historico(conversationId: string, limite = 12): Promise<{ texto: string; pedidosDeNome: number }> {
@@ -80,6 +95,19 @@ export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | nul
 
   const { texto: conversa, pedidosDeNome } = await historico(args.conversationId);
   if (!conversa.trim()) return null;
+  const contato = await prisma.conversation
+    .findUnique({ where: { id: args.conversationId }, select: { contactName: true } })
+    .then((c) => c?.contactName ?? null)
+    .catch(() => null);
+  // Quem não mandou o título (a reativação) paga uma leitura do cartão; falhou, segue só com o perfil.
+  const titulo =
+    args.tituloDoCartao !== undefined
+      ? args.tituloDoCartao
+      : await createKommoClient(unit)
+          .getLead(args.leadId)
+          .then((l) => l?.name ?? null)
+          .catch(() => null);
+  const nome = nomeApresentavel(titulo, contato);
 
   let base = '';
   // A rede (cache de 10 min) é o que reconhece um slug de resgate que divide o Kommo de uma clínica DH.
@@ -109,6 +137,7 @@ REGRAS:
 - PROIBIDO deixar lacuna: nada de "[chave]", "R$ [valor]", "{endereço}", "XXX".
   Ou você escreve o dado exato que está nas Fontes Oficiais, ou não fala dele.
 - Retome pelo que ELE contou: a queixa, a preferência, o que ficou pendente.
+${regraDoNome(nome)}
 ${pedidosDeNome >= LIMITE_TENTATIVAS ? `- NÃO peça o nome: você já pediu ${pedidosDeNome} vezes e ele não deu. Siga sem.\n` : ''}${args.ultimoDegrau ? '- ESTA É A ÚLTIMA. Despeça-se com a porta aberta e NÃO faça pergunta.' : ''}
 
 Responda APENAS com o texto da mensagem, sem aspas e sem explicação.
@@ -150,7 +179,11 @@ ${conversa}`.trim();
     // A régua não tem agenda: nome de profissional aqui só pode ter vindo do histórico, de uma
     // consulta que talvez já tenha passado (08/10/2026, cartão 28088906). Sai — a não ser que a
     // própria ficha da unidade o cite.
-    const tratado = semNomeDeProfissional(semIntimidade(semDiminutivo(limpo)), nomeEstaNaFonte(base)).texto;
+    // Nome de perfil que não é nome ("Oi, Tricolor!") sai mesmo que o modelo o copie do histórico.
+    const tratado = semNomeDoPerfil(
+      semNomeDeProfissional(semIntimidade(semDiminutivo(limpo)), nomeEstaNaFonte(base)).texto,
+      contato,
+    );
     // Bastidor (anotação para a equipe, raciocínio, "o paciente…") nunca sai na régua — ver services/vazamento.ts.
     const vazou = detectarVazamento(tratado);
     if (vazou) {

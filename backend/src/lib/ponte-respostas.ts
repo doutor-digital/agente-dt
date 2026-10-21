@@ -11,7 +11,7 @@
  * (`{{contact.name}}`) fica como está: quem troca pelo primeiro nome do paciente é o painel (`respostas.js`).
  */
 import type { KommoChatTemplate } from '../services/kommo.service.js';
-import { limparNome } from './widget-agenda.js';
+import { nomeApresentavel } from './nome-apresentavel.js';
 import { CacheDaConta } from './ponte-cache.js';
 
 export const CACHE_RESPOSTAS_MS = 10 * 60_000;
@@ -59,33 +59,14 @@ export function respostasProntas(modelos: ReadonlyArray<KommoChatTemplate>, nome
     .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 }
 
-const NAO_E_NOME = new Set(['lead', 'leads', 'de', 'da', 'do', 'dos', 'das', 'e', 'sr', 'sra', 'srta', 'dr', 'dra']);
-
-/** "MARIA" → "Maria"; "joão" → "João". */
-function comMaiuscula(p: string): string {
-  const m = p.toLocaleLowerCase('pt-BR');
-  return m.charAt(0).toLocaleUpperCase('pt-BR') + m.slice(1);
-}
-
-function primeiraPalavraDeNome(s: string | null | undefined): string | null {
-  // "/" separa quem escreve de quem é o paciente ("Milena/Leomar dos Santos"): sem cortar nela, a palavra
-  // inteira não parece nome e o primeiro nome vira "Santos".
-  for (const p of limparNome(s).split(/[\s/]+/)) {
-    const palavra = p.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '');
-    if (palavra.length < 2 || !/^\p{L}+(?:['-]\p{L}+)*$/u.test(palavra)) continue;
-    if (NAO_E_NOME.has(palavra.toLocaleLowerCase('pt-BR'))) continue;
-    return comMaiuscula(palavra);
-  }
-  return null;
-}
-
 /**
- * O primeiro nome do paciente, para as respostas prontas: do título do cartão (o padrão da casa é
- * "MARIA SOUZA 03/10/2026") e, se o título não tiver nome ("Lead 22261987"), do contato (perfil do WhatsApp).
- * `null` quando nenhum dos dois parece nome de gente — aí o painel deixa "[nome]" para a atendente completar.
+ * O primeiro nome do paciente, para as respostas prontas e a véspera: é o `nomeApresentavel` (título do cartão,
+ * que o padrão da casa escreve "MARIA SOUZA 03/10/2026"; se o título não tiver nome, o contato do WhatsApp quando
+ * ele parece nome próprio). `null` quando nenhum dos dois serve — aí o painel deixa "[nome]" para a atendente
+ * completar e a véspera sai "Oi!".
  */
 export function primeiroNomeDoPaciente(titulo: string | null | undefined, nomeDoContato: string | null | undefined): string | null {
-  return primeiraPalavraDeNome(titulo) ?? primeiraPalavraDeNome(nomeDoContato);
+  return nomeApresentavel(titulo, nomeDoContato);
 }
 
 // ── com o Kommo ──

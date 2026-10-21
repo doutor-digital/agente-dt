@@ -6,6 +6,7 @@ import type { KommoClient } from '../services/kommo.service.js';
 import { consultaDoLead, esqueceConsulta, type ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 import { SpineService, SPINE_STATUS } from '../services/spine.service.js';
 import { avisoRecente } from './aviso-dedupe.js';
+import { nomeApresentavel, saudacao, vocativo } from './nome-apresentavel.js';
 
 export type RespostaD1 = 'confirmou' | 'remarcar';
 
@@ -64,8 +65,8 @@ export function textoConfirmacaoD1(args: {
   const diaSem = valida ? DIAS[dt.getDay()] : '';
   const dia = valida ? `${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')}` : args.quando.slice(0, 10);
   const hora = valida ? `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}` : args.quando.slice(11, 16);
-  const primeiro = (args.nome ?? '').trim().split(/\s+/)[0];
-  const oi = primeiro ? `Oi, ${primeiro}!` : 'Oi!';
+  // Nome só se for apresentável ("Oi, tricolor!", "Oi, ,!" não saem) — ver nome-apresentavel.ts.
+  const oi = saudacao(args.nome, 'Oi');
   const quem = args.especialista ? ` com ${args.especialista}` : '';
   const onde = args.endereco ? `\n📍 ${args.endereco}` : '';
   const quando = args.antecedencia === 'd2' ? '' : 'de amanhã, ';
@@ -438,8 +439,13 @@ export async function tratarRespostaD1(args: {
   const consulta = await consultaDoLead(unit, leadId).catch(() => null);
   const hora = consulta?.quando ? consulta.quando.slice(11, 16) : null;
   const quandoCurto = consulta?.quando ? diaCurto(consulta.quando) : null;
-  const primeiro = (conv.contactName ?? '').trim().split(/\s+/)[0];
-  const nome = primeiro ? `, ${primeiro}` : '';
+  // O nome sai do título do cartão (o que a Sofia gravou); sem ele, do perfil do WhatsApp só se parecer nome
+  // próprio. A conversa guarda só o perfil ("Meu Único Amigo É Deus", "tricolor") — ver nome-apresentavel.ts.
+  const titulo = await kommo
+    .getLead(leadId)
+    .then((l) => l?.name ?? null)
+    .catch(() => null);
+  const nome = vocativo(nomeApresentavel(titulo, conv.contactName));
 
   if (resposta === 'confirmou') {
     const marcou = await marcarSituacaoConfirmada(kommo, leadId).catch((err) => {
