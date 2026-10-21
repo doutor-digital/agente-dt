@@ -18,7 +18,12 @@
  */
 import { AIMessage, type BaseMessage } from '@langchain/core/messages';
 
-/** Por quanto tempo uma consulta à agenda vale para oferecer de novo os mesmos horários (no mesmo dia). */
+/**
+ * Por quanto tempo uma consulta à agenda vale para oferecer de novo os mesmos horários (no mesmo dia). De propósito
+ * não é "só o turno": a conversa seguindo minutos depois (ele pergunta o preço, ela repete os horários) não precisa de
+ * outra sondagem na franquia — e a marcação confere o horário de novo antes de agendar (horarioAindaLivre /
+ * agendar_consulta). O que a trava pega é o caso de Araguaína: horário reaproveitado de outro dia, ou horas depois.
+ */
 export const VALIDADE_DA_CONSULTA_MIN = 180;
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -109,11 +114,20 @@ export function consultasDaAgenda(mensagens: BaseMessage[]): ConsultaDaAgenda[] 
   return consultas;
 }
 
-/** A consulta ainda vale: mesmo dia e há no máximo VALIDADE_DA_CONSULTA_MIN minutos. */
+function minutosDoDia(iso: string): number {
+  const m = /T(\d{2}):(\d{2})/.exec(iso);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
+}
+
+/**
+ * A consulta ainda vale: mesmo dia e há no máximo VALIDADE_DA_CONSULTA_MIN minutos. Os dois lados são relógio de
+ * parede LOCAL da unidade (o carimbo e o "agora" saem do mesmo fuso, fusoDaUnidade) — compara dia com dia e minuto
+ * com minuto, sem converter fuso nenhum.
+ */
 export function consultaAindaVale(em: string, agoraLocal: string): boolean {
   if (em.slice(0, 10) !== agoraLocal.slice(0, 10)) return false;
-  const min = (Date.parse(`${agoraLocal.slice(0, 16)}:00Z`) - Date.parse(`${em.slice(0, 16)}:00Z`)) / 60_000;
-  return Number.isFinite(min) && min <= VALIDADE_DA_CONSULTA_MIN;
+  const min = minutosDoDia(agoraLocal) - minutosDoDia(em);
+  return Number.isFinite(min) && min >= 0 && min <= VALIDADE_DA_CONSULTA_MIN;
 }
 
 // ── As frases da resposta ───────────────────────────────────────────────────────────────────────────────

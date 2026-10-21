@@ -114,6 +114,9 @@ test('o carimbo da consulta vai e volta, e vale só no mesmo dia, por algumas ho
   assert.equal(consultaAindaVale('2026-10-17T17:53', '2026-10-17T18:14'), true); // 21 min depois: a conversa seguindo
   assert.equal(consultaAindaVale('2026-10-17T17:53', '2026-10-17T21:30'), false); // horas depois
   assert.equal(consultaAindaVale('2026-10-17T17:53', '2026-10-19T08:29'), false); // outro dia
+  // relógio de parede local: 21:30 → 23:50 do mesmo dia na clínica vale, mesmo virando o dia em UTC
+  assert.equal(consultaAindaVale('2026-10-17T21:30', '2026-10-17T23:50'), true);
+  assert.equal(consultaAindaVale('2026-10-17T23:50', '2026-10-18T00:10'), false); // passou da meia-noite local
 });
 
 test('consultar_horarios devolve a lista com a hora da consulta carimbada', async () => {

@@ -27,6 +27,8 @@ import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { PARA_SEMPRE_MS } from '../lib/conflito-paciente.js';
 import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } from './carimbos-do-agendamento.js';
 import { carimboDaConsulta } from './horario-oferecido.js';
+import { agoraLocalISO } from './consulta-que-passou.js';
+import { fusoDaUnidade } from '../lib/fuso.js';
 import {
   agendamentoDeuCerto,
   desfechoDaRemarcacao,
@@ -339,8 +341,9 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
           'Ofereça no máximo 2 ou 3 deles. Não ofereça nenhum horário fora desta lista. ' +
           'Ao citar a data ao paciente, use EXATAMENTE o dia da semana informado aqui. ' +
           'Termine a mensagem com a linha [[botoes: …]] com os horários oferecidos, um por opção, curtos (ex.: "Seg 14h | Seg 16h30"). ' +
-          // a hora da consulta: horário oferecido de novo dias depois saía vencido (Araguaína, 19/10/2026 — horario-oferecido.ts)
-          carimboDaConsulta(agoraLocal(fresca))
+          // a hora da consulta, no MESMO relógio que a trava usa (fusoDaUnidade): horário oferecido de novo dias depois
+          // saía vencido (Araguaína, 19/10/2026 — horario-oferecido.ts)
+          carimboDaConsulta(agoraLocalISO(fusoDaUnidade(fresca)))
         );
       }
 
@@ -350,7 +353,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
           : '') +
         `Não encontrei horário livre de ${data} até ${cursor} (varri os próximos ${LOOKAHEAD_DIAS} dias). ` +
         'Registre a preferência e diga que a equipe confirma o encaixe assim que abrir vaga — NÃO cite nenhum horário. ' +
-        carimboDaConsulta(agoraLocal(fresca))
+        carimboDaConsulta(agoraLocalISO(fusoDaUnidade(fresca)))
       );
     },
   });
