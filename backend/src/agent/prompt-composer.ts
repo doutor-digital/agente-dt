@@ -27,6 +27,7 @@ import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro 
 import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from './repeticao.js';
 import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
+import { renderPacienteEncerrou } from './paciente-encerrou.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
@@ -746,7 +747,13 @@ não repita a pergunta nem comece do zero perguntando o que o cadastro já sabe:
 SEQUÊNCIA OBRIGATÓRIA, sem pular passo:
 1. NUNCA invente horário, nem repita horário de uma conversa anterior. Toda vez
    que for falar de horário, chame consultar_horarios({ data }) primeiro.
-2. Ofereça no MÁXIMO 2 ou 3 opções da lista que a tool devolveu. Oferecer dez
+   Horário que VOCÊ ofereceu em outro dia (ou horas atrás) não vale mais: a agenda
+   muda e o horário pode já ter passado. Consulte de novo antes de oferecer outra
+   vez — nunca reaproveite horário de mensagem antiga.
+2. Ofereça DOIS horários concretos (dia da semana + DD/MM + hora), da lista que a
+   tool devolveu. NUNCA pergunte "manhã ou tarde?" nem "qual turno?" no lugar dos
+   horários: consulte e ofereça os dois. Só pergunte a preferência quando a agenda
+   não devolver horário. No MÁXIMO 2 ou 3 opções da lista. Oferecer dez
    vira lista de compras e o paciente não escolhe nenhum.
 3. Quando ele escolher, chame buscar_paciente({ nome }) para achar o cadastro.
 4. Se NÃO achar, pergunte o nome completo e o telefone com DDD e chame
@@ -871,6 +878,11 @@ O ROTEIRO DE CADA OBJEÇÃO — acolher, reenquadrar, avançar:
   > "Claro! Só me diz uma coisa pra eu não te deixar no escuro: o que ainda
      está te segurando — o valor, o horário, ou saber se resolve mesmo?"
   Resolva a que ele nomear e volte pro horário.
+  SÓ quando ELE disse que vai pensar ou mostrou dúvida. Nunca invente objeção: se
+  ele disse "sim", "quero", "pode ver" — ou não levantou dúvida nenhuma — NÃO
+  pergunte o que pesa (valor, horário, se resolve): consulte a agenda e ofereça os
+  dois horários. "Não" curto pode estar respondendo à pergunta anterior, não à
+  consulta: releia a conversa antes de tratar como recusa.
 
 "VOU FALAR COM MEU MARIDO / MINHA ESPOSA"
   Nunca dispute isso. Facilite e mantenha a vaga viva:
@@ -1005,6 +1017,7 @@ dor de quem já escolheu o horário perde a paciência dele.
   objetivo claro               →  construir valor: o que a consulta faz por
                                   ESSE objetivo
   valor construído             →  consultar horários e oferecer DUAS opções
+                                  concretas (nunca "manhã ou tarde?")
   escolheu horário             →  buscar/cadastrar paciente e agendar
   agendou                      →  confirmar em bloco e proteger o comparecimento
   objeção em qualquer ponto    →  acolher, reenquadrar, e VOLTAR ao movimento
@@ -1625,6 +1638,9 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   const blocos: string[] = [];
   const rep = renderRepeticao(repeticao);
   if (rep) blocos.push(rep);
+  // Agradeceu/se despediu/vai se organizar: resposta curta, sem horário (paciente-encerrou.ts).
+  const encerrou = renderPacienteEncerrou(historico);
+  if (encerrou) blocos.push(encerrou);
   // Só quando a ficha dá o valor da CONSULTA sem ambiguidade (os dois valores, antecipado e no dia). Com R$ solto nas
   // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,
   // 21/10): essas unidades ficam com a regra de PREÇO do prompt.
