@@ -12,6 +12,7 @@ import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
+import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 
@@ -119,6 +120,11 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     role: 'user',
     content: message,
   });
+  if (Number.isFinite(Number(leadId))) {
+    void telefoneDeFamiliarNoCartao(unit, { kommo: createKommoClient(unit), leadId: Number(leadId), conversationId: conv.id, remetente: contactName }).catch((err) =>
+      logger.warn({ err: String(err), leadId, unit: unit.slug }, 'telefone-de-familiar: falha (ignorada, salesbot)'),
+    );
+  }
 
   if ((await isLeadPaused(unit, Number(leadId))) || (await leadPausadoPorJanela(unit.id, Number(leadId)))) {
     const totalLatency = Math.round(performance.now() - requestStart);

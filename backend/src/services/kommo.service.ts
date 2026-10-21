@@ -1980,6 +1980,32 @@ export class KommoClient {
     }
   }
 
+  /** Contato novo com um ou mais telefones (telefone-de-familiar.ts grava com e sem o nono dígito). */
+  async criarContato(args: { nome: string; telefones: string[] }): Promise<number | null> {
+    try {
+      const { data } = await this.http.post<{ _embedded?: { contacts?: Array<{ id: number }> } }>('/contacts', [
+        {
+          name: args.nome,
+          custom_fields_values: [{ field_code: 'PHONE', values: args.telefones.map((value) => ({ value, enum_code: 'MOB' })) }],
+        },
+      ]);
+      const id = Number(data?._embedded?.contacts?.[0]?.id);
+      return Number.isFinite(id) && id > 0 ? id : null;
+    } catch (err) {
+      wrapAxiosError(err, `criarContato(${args.nome})`);
+      return null;
+    }
+  }
+
+  /** Liga um contato que já existe a mais um cartão (o contato continua nos cartões dele). */
+  async vincularContatoAoLead(leadId: number, contactId: number): Promise<void> {
+    try {
+      await this.http.post(`/leads/${leadId}/link`, [{ to_entity_id: contactId, to_entity_type: 'contacts' }]);
+    } catch (err) {
+      wrapAxiosError(err, `vincularContatoAoLead(${leadId}, ${contactId})`);
+    }
+  }
+
   async updateLeadName(leadId: number, name: string): Promise<void> {
     try {
       await this.http.patch(`/leads/${leadId}`, { name });
