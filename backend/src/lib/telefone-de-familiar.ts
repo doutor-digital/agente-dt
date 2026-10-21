@@ -246,6 +246,12 @@ async function ligarAoCartao(
     await liberarClaim('telefone-familiar', chave);
     throw err;
   }
-  await a.kommo.addLeadNote(a.leadId, textoDaNota({ formatado, remetente: a.remetente ?? null, contatoNovo, outrosCartoes }));
+  // O que importa (o número no cartão) já foi feito; a nota só conta à equipe. Liberar a trava não a salvaria — a
+  // próxima tentativa acharia "já está no cartão" —, então ela ganha uma segunda chance aqui e, se falhar, fica no log.
+  const nota = textoDaNota({ formatado, remetente: a.remetente ?? null, contatoNovo, outrosCartoes });
+  await a.kommo
+    .addLeadNote(a.leadId, nota)
+    .catch(() => a.kommo.addLeadNote(a.leadId, nota))
+    .catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId: a.leadId }, 'telefone-de-familiar: contato ligado, nota não gravou'));
   logger.info({ unit: unit.slug, leadId: a.leadId, contatoId, contatoNovo, outrosCartoes }, 'telefone-de-familiar: número ligado ao cartão');
 }
