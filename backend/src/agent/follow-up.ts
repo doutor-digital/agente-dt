@@ -127,7 +127,8 @@ ${conversa}`.trim();
 
     // A régua sai pelo Salesbot, sem botões: a linha [[botoes: …]] da regra global
     // vazou como texto em Taubaté (12/09/2026). Aqui ela só é removida.
-    const limpo = extrairBotoes(texto).texto.replace(/^["']|["']$/g, '');
+    // "Dra. Sofia" → "Sofia" nas clínicas Doutor Hérnia (decisão do João, 21/10) — ver rede-doutor-hernia.ts.
+    const limpo = semDraSofiaNaDH(extrairBotoes(texto).texto.replace(/^["']|["']$/g, ''), unit, rede);
     if (!limpo || limpo.length > 600) return null;
 
     // A régua não passava pelo guardrail: ia do modelo direto pro Kommo, sem
@@ -142,7 +143,7 @@ ${conversa}`.trim();
     // A régua não tem agenda: nome de profissional aqui só pode ter vindo do histórico, de uma
     // consulta que talvez já tenha passado (08/10/2026, cartão 28088906). Sai — a não ser que a
     // própria ficha da unidade o cite.
-    const tratado = semNomeDeProfissional(semIntimidade(semDiminutivo(semDraSofiaNaDH(limpo, unit, rede))), nomeEstaNaFonte(base)).texto;
+    const tratado = semNomeDeProfissional(semIntimidade(semDiminutivo(limpo)), nomeEstaNaFonte(base)).texto;
     // Bastidor (anotação para a equipe, raciocínio, "o paciente…") nunca sai na régua — ver services/vazamento.ts.
     const vazou = detectarVazamento(tratado);
     if (vazou) {

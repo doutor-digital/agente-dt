@@ -128,15 +128,24 @@ export function montarRede(linhas: ReadonlyArray<LinhaDeUnidade>): UnidadeDaRede
     if (!u.slug.startsWith(PREFIXO_DH) || CONTA_COMPARTILHADA.test(u.slug)) continue;
     const cidade = cidadeDaUnidade(u.slug, u.name);
     const chave = semAcento(cidade);
-    if (!chave || porCidade.has(chave)) continue;
+    if (!chave) continue;
+    const whatsapp = telefoneParaPaciente(u.igWhatsappNumber) ?? telefoneParaPaciente(u.fbWhatsappNumber);
+    const endereco = u.clinicAddress?.trim() || null;
+    const ja = porCidade.get(chave);
+    if (ja) {
+      // Duas linhas da mesma cidade: fica a primeira, mas o contato que só a outra tem não se perde.
+      ja.whatsapp ??= whatsapp;
+      ja.endereco ??= endereco;
+      continue;
+    }
     porCidade.set(chave, {
       id: u.id,
       slug: u.slug,
       cidade,
       kommoSubdomain: u.kommoSubdomain?.trim() || null,
       contaDoCrm: u.crmCompartilhado?.ativo ? u.crmCompartilhado.contaUnitId : null,
-      whatsapp: telefoneParaPaciente(u.igWhatsappNumber) ?? telefoneParaPaciente(u.fbWhatsappNumber),
-      endereco: u.clinicAddress?.trim() || null,
+      whatsapp,
+      endereco,
     });
   }
   return [...porCidade.values()].sort((a, b) => a.cidade.localeCompare(b.cidade, 'pt-BR'));
@@ -254,9 +263,12 @@ function linhaDaUnidade(u: UnidadeDaRede, mesmaEquipe: boolean): string {
 export function renderRedeDeUnidades(unit: UnidadeParaDH & { id: string }, rede: ReadonlyArray<UnidadeDaRede>): string {
   const sub = unit.kommoSubdomain?.trim() || null;
   const propria = rede.find((r) => r.id === unit.id) ?? (sub ? rede.find((r) => r.kommoSubdomain === sub) : undefined);
-  const conta = propria?.contaDoCrm ?? propria?.id ?? null;
+  // A "equipe" de uma unidade é a conta do Kommo: a dona dela (CRM dividido) ou ela mesma. Vale dos dois lados —
+  // Petrópolis vê Caxias e Caxias vê Petrópolis (e qualquer outra irmã da mesma conta) como a mesma equipe.
+  const equipe = (r: UnidadeDaRede) => r.contaDoCrm ?? r.id;
+  const minha = propria ? equipe(propria) : null;
   const outras = rede.filter((r) => r !== propria && !(sub && r.kommoSubdomain === sub));
-  const mesmaEquipe = (r: UnidadeDaRede) => !!conta && (r.contaDoCrm === conta || r.id === conta);
+  const mesmaEquipe = (r: UnidadeDaRede) => !!minha && equipe(r) === minha;
 
   const onde = propria ? `Você atende a unidade de ${propria.cidade}.` : '';
   const lista = outras.length

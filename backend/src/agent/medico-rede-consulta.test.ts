@@ -230,6 +230,32 @@ test('item 7: Petrópolis vê Caxias como a mesma equipe (CRM dividido), não co
   assert.match(bloco, /- Marabá\/PA — sem contato cadastrado/);
 });
 
+test('item 7: CRM dividido vale dos dois lados — a irmã também vê a dona e as outras irmãs como mesma equipe', () => {
+  const rede = montarRede([
+    linha('doutor-hernia-petropolis', { id: 'u-petro', name: 'Doutor Hérnia Petrópolis', kommoSubdomain: 'doutorhernialvp', igWhatsappNumber: '5524999990000' }),
+    linha('doutor-hernia-caxias', { id: 'u-caxias', name: 'Doutor Hérnia Caxias', crmCompartilhado: { contaUnitId: 'u-petro', ativo: true } }),
+    linha('doutor-hernia-teresopolis', { id: 'u-tere', name: 'Doutor Hérnia Teresópolis', crmCompartilhado: { contaUnitId: 'u-petro', ativo: true } }),
+    linha('doutor-hernia-maraba', { id: 'u-maraba', name: 'Doutor Hérnia Marabá', kommoSubdomain: 'marabadoutorhernia' }),
+  ]);
+  const caxias = unidade({ id: 'u-caxias', slug: 'doutor-hernia-caxias', name: 'Doutor Hérnia Caxias', kommoSubdomain: null });
+  const bloco = renderRedeDeUnidades(caxias, rede);
+  assert.match(bloco, /Você atende a unidade de Duque de Caxias\/RJ\./);
+  assert.match(bloco, /- Petrópolis\/RJ — atendida por esta mesma equipe/);
+  assert.match(bloco, /- Teresópolis — atendida por esta mesma equipe/);
+  assert.match(bloco, /- Marabá\/PA — sem contato cadastrado/);
+  assert.doesNotMatch(bloco, /WhatsApp \(24\)/, 'não manda o paciente da mesma equipe para o contato da irmã');
+});
+
+test('item 7: duas linhas da mesma cidade não perdem o contato que só a segunda tem', () => {
+  const rede = montarRede([
+    linha('doutor-hernia-timbo', { name: 'Doutor Hérnia Timbó' }),
+    linha('doutor-hernia-timbo-centro', { name: 'Doutor Hérnia Timbó', igWhatsappNumber: '5547991234567', clinicAddress: 'Rua X, 10' }),
+  ]);
+  assert.equal(rede.length, 1);
+  assert.equal(rede[0]!.whatsapp, '(47) 99123-4567');
+  assert.equal(rede[0]!.endereco, 'Rua X, 10');
+});
+
 test('item 7: o bloco vai no prefixo cacheado e é igual entre chamadas (não derruba o cache)', () => {
   const a = composeSystemPromptParts({ unit: unidade(), redeDeUnidades: REDE, leadId: 1, userMessage: 'oi' });
   const b = composeSystemPromptParts({ unit: unidade(), redeDeUnidades: REDE, leadId: 2, userMessage: 'tem em Canaã?' });

@@ -988,7 +988,12 @@ export async function buildAgentGraph(
         response.content = textoFinal;
       }
       // "Dra. Sofia" → "Sofia" nas clínicas Doutor Hérnia (decisão do João, 21/10) — ver rede-doutor-hernia.ts.
-      const guard = aplicarGuardrail(semIntimidade(semDiminutivo(semDraSofiaNaDH(textoFinal, unit))), unit);
+      const semDra = semDraSofiaNaDH(textoFinal, unit);
+      if (semDra !== textoFinal) {
+        textoFinal = semDra;
+        response.content = textoFinal;
+      }
+      const guard = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit);
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';
