@@ -91,6 +91,11 @@ test('usa o fuso da unidade (Boa Vista, UTC−4)', () => {
 test('janela torta no cadastro não vira horário inventado', () => {
   const torta = unidade({ spineAgendaStart: '18:00', spineAgendaEnd: '08:00' });
   assert.deepEqual(retornoDaEquipe(torta, brt('2026-10-21T20:00:00')), { tipo: 'desconhecido' });
+  // 24:30 não é hora: não pode deixar a clínica "aberta" até meia-noite e meia.
+  const passou = unidade({ spineAgendaStart: '08:00', spineAgendaEnd: '24:30' });
+  assert.deepEqual(retornoDaEquipe(passou, brt('2026-10-21T23:00:00')), { tipo: 'desconhecido' });
+  // 24:00 é o fim do dia e vale.
+  assert.deepEqual(retornoDaEquipe(unidade({ spineAgendaEnd: '24:00' }), brt('2026-10-21T23:00:00')), { tipo: 'aberta' });
 });
 
 test('hora como se fala', () => {

@@ -42,7 +42,8 @@ function minutos(hhmm: unknown): number | null {
   if (!m) return null;
   const h = Number(m[1]);
   const min = Number(m[2]);
-  if (h > 24 || min > 59) return null;
+  // 24:00 é o fim do dia; 24:30 é cadastro quebrado, não meia-noite e meia.
+  if (h > 24 || min > 59 || (h === 24 && min > 0)) return null;
   return h * 60 + min;
 }
 

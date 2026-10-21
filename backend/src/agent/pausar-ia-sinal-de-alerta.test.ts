@@ -107,6 +107,9 @@ test('pausar_ia com sinal de alerta cria a tarefa urgente na hora, no nome do re
   assert.match(r, /NÃO prometa prazo/);
   // sem agenda ligada, o horário da equipe não é conhecido: a IA não inventa
   assert.match(r, /próximo horário de atendimento/);
+  // O Telegram do João sai em paralelo; sem token, o rastro diz que não chegou (e nada estoura).
+  await new Promise((ok) => setTimeout(ok, 20));
+  assert.ok(passos.some((p) => /NÃO chegou ao Telegram/.test(p.title)));
 });
 
 test('o motivo basta quando o modelo esquece a flag', async () => {

@@ -182,9 +182,22 @@ export function buildTools({
     } catch (err) {
       logger.warn({ err: String(err), leadId }, 'sinal de alerta: sem o cartão (nome/responsável)');
     }
+    // Em paralelo e sem segurar a pausa (o Telegram pode levar até 10 s para desistir), mas com o
+    // resultado no rastro: se não chegou, quem olhar o trace sabe que o João não foi avisado.
     void enviarTelegram(
       textoTelegramSinalDeAlerta({ unidade: unit.name, subdominio: unit.kommoSubdomain, leadId, nome, motivo }),
-    );
+    )
+      .catch(() => false)
+      .then((chegou) =>
+        recorder.step({
+          kind: chegou ? 'TOOL_RESULT' : 'ERROR',
+          title: chegou
+            ? `Sinal de alerta avisado no Telegram do João (lead ${leadId})`
+            : `Sinal de alerta NÃO chegou ao Telegram do João (sem token ou falha) — lead ${leadId}`,
+          payload: { leadId },
+        }),
+      )
+      .catch(() => undefined);
     if (avisoUrgenteNoTurno) {
       await recorder.step({
         kind: 'THINKING',
