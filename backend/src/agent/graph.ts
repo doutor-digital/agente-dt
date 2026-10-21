@@ -993,7 +993,9 @@ export async function buildAgentGraph(
         textoFinal = semDra;
         response.content = textoFinal;
       }
-      const guard = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit);
+      const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit);
+      // O que o guardrail devolve (correção ou texto de reserva) passa pela mesma trava do nome.
+      const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit) };
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';
