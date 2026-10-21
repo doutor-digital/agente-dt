@@ -23,6 +23,7 @@ import {
 } from '../services/lead-memory.service.js';
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
+import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro } from './sinal-de-alerta.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
@@ -482,14 +483,16 @@ function renderHandoff(unit: Unit): string {
   const kws = (unit.handoffKeywords ?? []).filter(Boolean);
   if (kws.length === 0) {
     return xmlBlock('handoff', `- Quando o cliente pedir explicitamente um humano ("atendente", "falar com pessoa",
-  "humano"), chame pausar_ia e responda: "Claro! Vou chamar alguém da equipe pra te
-  atender. Um instante 🙏". Não tente continuar a conversa.`);
+  "humano"), chame pausar_ia e responda em UMA frase, do jeito que o resultado dela orientar (ex.:
+  "Claro! Já chamei alguém da equipe pra continuar seu atendimento por aqui 🙏"), sem prometer
+  prazo. Não tente continuar a conversa.`);
   }
   const list = kws.map((k) => `"${k}"`).join(', ');
   return xmlBlock('handoff', `- Se o cliente usar QUALQUER uma destas palavras/frases (mesmo aproximadas), chame
   pausar_ia imediatamente:
   ${list}
-- Após pausar, responda apenas: "Claro! Vou chamar alguém da equipe pra te atender. Um instante 🙏".
+- Após pausar, responda apenas UMA frase, do jeito que o resultado de pausar_ia orientar (ex.: "Claro!
+  Já chamei alguém da equipe pra continuar seu atendimento por aqui 🙏"), sem prometer prazo.
   Não continue a conversa depois disso.`);
 }
 
@@ -971,7 +974,10 @@ dor de quem já escolheu o horário perde a paciência dele.
   agendou                      →  confirmar em bloco e proteger o comparecimento
   objeção em qualquer ponto    →  acolher, reenquadrar, e VOLTAR ao movimento
                                   que estava fazendo — não recomece do zero
-  sinal de alerta clínico      →  PARE a condução comercial e transfira
+  sinal de alerta clínico      →  acolher; sinal grave da coluna: oferecer o
+                                  horário mais próximo e avisar a equipe; outros
+                                  sinais: transferir NA HORA. Pronto-socorro só
+                                  sem horário hoje E com dor insuportável
 
 Não pule etapas para acelerar. Cada uma existe porque a seguinte não funciona
 sem ela — e pular é o que faz a conversa travar em "vou pensar".
@@ -1200,12 +1206,12 @@ function humanizeActionStep(step: { kind: string; params: Record<string, unknown
     case 'send_message': {
       const text = typeof params.text === 'string' ? params.text.trim() : '';
       if (!text) return 'enviar mensagem (texto não configurado)';
-      return `ENVIE EXATAMENTE esta mensagem como sua resposta no turno corrente (reproduza palavra-por-palavra, sem reformular nem resumir; pode adicionar 1 emoji no fim se combinar com o tom):\n"""\n${text}\n"""`;
+      return `ENVIE EXATAMENTE esta mensagem como sua resposta no turno corrente (reproduza palavra-por-palavra, sem reformular nem resumir; pode adicionar 1 emoji no fim se combinar com o tom):\n"""\n${text}\n"""${travaDoProntoSocorro(text)}`;
     }
     case 'respond_with_intent': {
       const instruction = typeof params.instruction === 'string' ? params.instruction.trim() : '';
       if (!instruction) return 'orientar resposta (orientação não configurada)';
-      return `ORIENTE: ${instruction}`;
+      return `ORIENTE: ${instruction}${travaDoProntoSocorro(instruction)}`;
     }
     case 'create_task': {
       const text = typeof params.text === 'string' ? params.text.trim() : '';
@@ -1350,14 +1356,18 @@ function renderActions(actions: UnitAction[]): string {
   // `notes` é recado de operador pra operador ("Objeção preço.", "RED FLAG: urgência
   // + transferência.") — repete a condição que já está na linha e não diz nada novo
   // ao modelo. Continua no banco, para quem edita a regra no console.
-  const lines = visible.map((a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}`);
+  const lines = visible.map(
+    (a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}${travaDaRegraDeSinalDeAlerta(a.conditionDescription)}`,
+  );
   return xmlBlock('acoes', `${MOLDURA_DAS_ACOES}\n\n${lines.join('\n\n')}`);
 }
 
 function renderGlobalActions(actions: GlobalAction[]): string {
   const visible = actions.filter((a) => !isPureGuardRule(a));
   if (visible.length === 0) return '';
-  const lines = visible.map((a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}`);
+  const lines = visible.map(
+    (a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}${travaDaRegraDeSinalDeAlerta(a.conditionDescription)}`,
+  );
   return xmlBlock('regras_globais', `(prioridade máxima)
 - Valem pra TODAS as unidades e ganham das regras da unit (não-negociáveis).
 - Dispare todas as ações da regra, em silêncio.
@@ -1919,6 +1929,7 @@ export function composeFlattenedPrompt(input: ComposeInput): string {
     renderKnockout(unit),
     renderAutoChecagem(unit),
     renderTriage(unit),
+    renderSinalDeAlerta(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderAgenda(unit),
@@ -2014,6 +2025,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     renderKnockout(unit),
     renderAutoChecagem(unit),
     renderTriage(unit),
+    renderSinalDeAlerta(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderAgenda(unit),
@@ -2192,6 +2204,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
     renderKnockout(unit),
     renderAutoChecagem(unit),
     renderTriage(unit),
+    renderSinalDeAlerta(unit),
     renderHandoff(unit),
     renderPipelineIntents(unit),
     renderAgenda(unit),

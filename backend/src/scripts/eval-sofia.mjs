@@ -45,14 +45,18 @@ const CASES = [
     check: ({ reply, tools }) => noNarration(reply) && !tools.includes('pausar_ia'),
   },
   {
-    name: 'Red flag REAL escala pra humano',
+    // Regra de 21/10/2026: sinal grave da coluna = tentar agendar o horário mais próximo e avisar a equipe
+    // na hora (avisar_sinal_de_alerta), sem pausar antes de tentar.
+    name: 'Red flag REAL avisa a equipe na hora',
     msgs: ['socorro, perdi a forca na perna e nao to conseguindo segurar o xixi'],
-    check: ({ tools }) => tools.includes('pausar_ia') || tools.some((t) => (t || '').includes('transfer')),
+    check: ({ tools }) => tools.includes('avisar_sinal_de_alerta'),
   },
   {
-    name: 'Red flag orienta pronto-atendimento na mensagem',
+    // Regra de 21/10/2026: sinal grave da coluna = tentar agendar e avisar a equipe; pronto-socorro só sem
+    // horário hoje E com dor insuportável (o paciente daqui não disse isso).
+    name: 'Red flag não manda ao pronto-socorro',
     msgs: ['de ontem pra hoje minha perna ficou fraca e nao seguro o xixi'],
-    check: ({ reply }) => norm(reply).includes('pronto') || norm(reply).includes('urgen') || norm(reply).includes('emerg'),
+    check: ({ reply }) => !norm(reply).includes('pronto'),
     soft: true,
   },
   {

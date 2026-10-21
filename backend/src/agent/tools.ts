@@ -21,6 +21,17 @@ import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
 import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
 import { gravarNomeConfirmadoNoContato } from '../lib/nome-no-contato.js';
 import { recusaDoFunilTratamento, type DestinoDaSofia } from '../lib/guarda-funil-tratamento.js';
+import { orientacaoAoTransferir, retornoDaEquipe, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
+import { enviarTelegram } from '../lib/telegram.js';
+import {
+  CHAVE_DO_AVISO,
+  ehHandoffPorSinalDeAlerta,
+  TAREFA_URGENTE,
+  textoDoAvisoUrgente,
+  textoTelegramSinalDeAlerta,
+  type SituacaoDoAviso,
+} from './sinal-de-alerta.js';
+import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
 const STATUS_GANHO = 142;
@@ -44,6 +55,11 @@ export const DEFAULT_TOOL_DESCRIPTIONS: Record<string, string> = {
     'com um humano; (b) a situação é clínica/sensível e exige atendente real; ' +
     '(c) o paciente está agitado/insatisfeito. Após pausar, responda UMA frase ' +
     'avisando que um humano vai assumir.',
+  avisar_sinal_de_alerta:
+    'Avisa a equipe NA HORA, com urgência (tarefa no Kommo), que o paciente confirmou um SINAL GRAVE DA ' +
+    'COLUNA (perder o controle do xixi ou das fezes, dormência na virilha/região íntima, perna fraca de ' +
+    'repente). NÃO pausa a IA: use junto com a oferta do horário mais próximo, no mesmo turno em que o ' +
+    'sinal for confirmado. Não envia nada ao paciente.',
   atualizar_titulo_lead:
     'Atualiza o título do card do lead no Kommo com o nome do paciente. ' +
     'Use IMEDIATAMENTE quando o paciente disser o próprio nome. O sistema ' +
@@ -147,6 +163,142 @@ export function buildTools({
     hoje: () => (unit ? hojeLocal(unit) : new Date().toISOString().slice(0, 10)),
   };
 
+  // O aviso urgente de sinal de alerta já saiu neste turno? A regra da unidade costuma criar a
+  // tarefa ela mesma (criar_tarefa) antes do pausar_ia — duas tarefas iguais no cartão viram ruído.
+  let avisoUrgenteNoTurno = false;
+
+  /**
+   * Sinal de alerta: a equipe fica sabendo NA HORA, sem esperar o alerta de SLA (que é opcional por
+   * unidade e só sai depois de 5–15 min). Tarefa "ALERTA · … URGENTE" no cartão, com prazo agora e no
+   * nome do responsável pelo cartão (sem isso a tarefa cai no usuário da integração e o aviso do Kommo
+   * não chega a quem atende) + Telegram do João. Nunca lança: o aviso não pode impedir a pausa.
+   */
+  const avisarSinalDeAlerta = async (
+    leadId: number,
+    motivo: string,
+    situacao: SituacaoDoAviso,
+  ): Promise<'criada' | 'repetida' | 'falhou'> => {
+    if (!unit) return 'falhou';
+    const chave = CHAVE_DO_AVISO[situacao];
+    // Uma tarefa por situação por cartão a cada 24 h: a IA que segue agendando pode chamar de novo no
+    // turno seguinte, e a reativação pode transferir de novo — a equipe já sabe.
+    if (await avisoRecente(unit.id, leadId, chave)) {
+      await recorder.step({
+        kind: 'THINKING',
+        title: `Sinal de alerta: a equipe já foi avisada deste cartão nas últimas 24 h (${situacao}) — não repito`,
+        payload: { leadId, motivo, situacao },
+      });
+      return 'repetida';
+    }
+    // Nome para o "[Contato: nome]": primeiro a conversa (é o nome que o paciente deu), depois o cartão.
+    let nome: string | null = null;
+    let responsavel: number | undefined;
+    try {
+      const conv = await prisma.conversation.findFirst({
+        where: { unitId: unit.id, leadId: String(leadId) },
+        orderBy: { lastMessageAt: 'desc' },
+        select: { contactName: true },
+      });
+      nome = conv?.contactName?.trim() || null;
+    } catch (err) {
+      logger.warn({ err: String(err), leadId }, 'sinal de alerta: sem nome da conversa');
+    }
+    try {
+      const lead = await kommo.getLead(leadId);
+      nome = nome || lead?.name?.trim() || null;
+      responsavel = lead?.responsible_user_id || undefined;
+    } catch (err) {
+      logger.warn({ err: String(err), leadId }, 'sinal de alerta: sem o cartão (nome/responsável)');
+    }
+    // Em paralelo e sem segurar a pausa (o Telegram pode levar até 10 s para desistir), mas com o
+    // resultado no rastro: se não chegou, quem olhar o trace sabe que o João não foi avisado.
+    void enviarTelegram(
+      textoTelegramSinalDeAlerta({ unidade: unit.name, subdominio: unit.kommoSubdomain, leadId, nome, motivo, situacao }),
+    )
+      .catch(() => false)
+      .then((chegou) =>
+        recorder.step({
+          kind: chegou ? 'TOOL_RESULT' : 'ERROR',
+          title: chegou
+            ? `Sinal de alerta avisado no Telegram do João (lead ${leadId})`
+            : `Sinal de alerta NÃO chegou ao Telegram do João (sem token ou falha) — lead ${leadId}`,
+          payload: { leadId },
+        }),
+      )
+      .catch(() => undefined);
+    if (avisoUrgenteNoTurno) {
+      await recorder.step({
+        kind: 'THINKING',
+        title: `Sinal de alerta: a tarefa urgente já foi criada neste turno — não repito`,
+        payload: { leadId, motivo, situacao },
+      });
+      await marcarAviso(unit.id, leadId, chave);
+      return 'repetida';
+    }
+    const text = textoDoAvisoUrgente({ slug: unit.slug, nome, motivo, situacao });
+    try {
+      const res = await kommo.createTask({
+        leadId,
+        text,
+        completeAt: Math.floor(Date.now() / 1000),
+        responsibleUserId: responsavel,
+      });
+      avisoUrgenteNoTurno = true;
+      // Só depois que o Kommo confirmou: falha de rede não pode calar o aviso por 24 h.
+      await marcarAviso(unit.id, leadId, chave);
+      await recorder.step({
+        kind: 'KOMMO_ACTION',
+        title: `🚑 Aviso urgente para a equipe (sinal de alerta, ${situacao}) no lead ${leadId} (tarefa ${res?.id ?? '?'})`,
+        payload: { leadId, taskId: res?.id ?? null, responsibleUserId: responsavel ?? null, text },
+      });
+      return 'criada';
+    } catch (err) {
+      await recorder.step({
+        kind: 'ERROR',
+        title: `Falha ao criar o aviso urgente de sinal de alerta: ${err instanceof Error ? err.message : String(err)}`,
+        payload: { leadId, motivo, situacao },
+      });
+      return 'falhou';
+    }
+  };
+
+  const avisarSinalSchema = z.object({
+    leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
+    motivo: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe('Qual sinal grave o paciente confirmou, com as palavras dele (ex.: "não segura o xixi desde ontem").'),
+  });
+
+  /**
+   * Sinal grave da coluna (ajuste do João, 21/10): a Sofia tenta agendar o horário mais próximo e a equipe
+   * fica sabendo na hora — sem pausar a IA, que ainda está marcando a consulta.
+   */
+  const avisar_sinal_de_alerta = new DynamicStructuredTool({
+    name: 'avisar_sinal_de_alerta',
+    description: desc('avisar_sinal_de_alerta'),
+    schema: avisarSinalSchema,
+    func: async ({ leadId, motivo }) => {
+      await recorder.step({
+        kind: 'TOOL_CALL',
+        title: `Decisão: avisar a equipe do sinal de alerta no lead ${leadId} (${motivo}) — IA segue agendando`,
+        payload: { leadId, motivo },
+      });
+      const r = await avisarSinalDeAlerta(leadId, motivo, 'agendando');
+      if (r === 'falhou') {
+        return (
+          'ERRO: não consegui avisar a equipe agora. Siga oferecendo o horário mais próximo; se ele recusar, ' +
+          'não houver horário até amanhã ou a conversa travar, transfira com pausar_ia (sinalDeAlerta: true).'
+        );
+      }
+      return (
+        `OK — equipe avisada com urgência${r === 'repetida' ? ' (já tinha sido avisada)' : ''}. A IA continua ` +
+        'ativa: siga oferecendo o horário mais próximo (hoje ou amanhã) e agende se ele aceitar. Não fale de ' +
+        'tarefa nem de sistema; se fizer sentido, diga só que a equipe já está sabendo. Não prometa prazo.'
+      );
+    },
+  });
 
   const aplicarTagSchema = z.object({
     leadId: z.number().int().positive().describe('ID numérico do lead no Kommo.'),
@@ -323,18 +475,27 @@ export function buildTools({
       .min(1)
       .max(200)
       .describe('Por que está pausando a IA neste lead (registrado no trace).'),
+    sinalDeAlerta: z
+      .boolean()
+      .optional()
+      .describe(
+        'true quando a transferência é por SINAL DE ALERTA clínico confirmado (perda de força que piora, ' +
+          'perda de controle do xixi ou das fezes, dormência na região íntima, queda/pancada, febre com dor). ' +
+          'Avisa a equipe com urgência na hora. Omita nos outros casos.',
+      ),
   });
 
   const pausar_ia = new DynamicStructuredTool({
     name: 'pausar_ia',
     description: desc('pausar_ia'),
     schema: pausarIaSchema,
-    func: async ({ leadId, motivo }) => {
+    func: async ({ leadId, motivo, sinalDeAlerta }) => {
       const t0 = performance.now();
+      const urgente = ehHandoffPorSinalDeAlerta(motivo, sinalDeAlerta);
       await recorder.step({
         kind: 'TOOL_CALL',
-        title: `Decisão: pausar IA no lead ${leadId} (${motivo})`,
-        payload: { leadId, motivo },
+        title: `Decisão: pausar IA no lead ${leadId} (${motivo})${urgente ? ' — SINAL DE ALERTA' : ''}`,
+        payload: { leadId, motivo, sinalDeAlerta: urgente },
       });
 
       // SAFETY-NET: pausar alegando falta de vaga SEM ter olhado a agenda.
@@ -350,7 +511,10 @@ export function buildTools({
       // safety-net CONSULTA a agenda e devolve o resultado. Determinístico. Depois
       // desta consulta `agenda.consultou` fica true, então uma segunda chamada de
       // pausar_ia passa direto — não há laço.
-      if (agenda.consultar && !agenda.consultou && MOTIVO_ALEGA_FALTA_DE_VAGA.test(motivo ?? '')) {
+      //
+      // Sinal de alerta passa direto também: a regra é transferir NA HORA, e "pediu encaixe
+      // hoje" no motivo não pode virar uma volta à agenda no lugar do aviso à equipe.
+      if (!urgente && agenda.consultar && !agenda.consultou && MOTIVO_ALEGA_FALTA_DE_VAGA.test(motivo ?? '')) {
         const dia = agenda.hoje();
         let resultado: string;
         try {
@@ -382,6 +546,9 @@ export function buildTools({
           );
         }
       }
+
+      // Antes da pausa de propósito: se a pausa falhar, a equipe precisa saber do mesmo jeito.
+      if (urgente) await avisarSinalDeAlerta(leadId, motivo, 'transferiu');
 
       if (!pausedFieldId) {
         const msg = 'Unit não tem kommoPausedFieldId configurado — pausa não pode ser persistida.';
@@ -425,7 +592,7 @@ export function buildTools({
             }
             // Bloco DIGITAL: assumido por humano = Sim, status = Respondendo e, quando o
             // motivo livre da IA casa com uma opção, "⬢ Motivo do handoff".
-            const motivoOpcao = classificarMotivoHandoff(motivo);
+            const motivoOpcao = urgente ? 'Escalonamento' : classificarMotivoHandoff(motivo);
             await carimbarHumanoAssumiu(unit, kommo, leadId, motivoOpcao);
             if (idData !== null || idHumano !== null) {
               await recorder.step({
@@ -448,7 +615,10 @@ export function buildTools({
             logger.warn({ err: String(e), leadId }, 'pausar_ia: falha ao marcar handoffAt');
           }
         })();
-        return `OK — IA pausada no lead ${leadId} (${latency}ms). Responda em UMA frase avisando o paciente.`;
+        // O que dizer sobre QUANDO a equipe responde sai daqui, com a hora certa da unidade: o prompt
+        // fixo fica uma hora em cache e não sabe se a clínica está aberta agora.
+        const retorno: RetornoDaEquipe = unit ? retornoDaEquipe(unit) : { tipo: 'desconhecido' };
+        return `OK — IA pausada no lead ${leadId} (${latency}ms). ${orientacaoAoTransferir(retorno, urgente)}`;
       } catch (err) {
         const latency = Math.round(performance.now() - t0);
         const msg = err instanceof Error ? err.message : String(err);
@@ -641,6 +811,7 @@ export function buildTools({
       });
       try {
         const result = await kommo.createTask({ leadId, text, completeAt, responsibleUserId });
+        if (TAREFA_URGENTE.test(text)) avisoUrgenteNoTurno = true;
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
           kind: 'KOMMO_ACTION',
@@ -1112,6 +1283,7 @@ export function buildTools({
     aplicar_tag,
     mover_etapa,
     pausar_ia,
+    avisar_sinal_de_alerta,
     atualizar_titulo_lead,
     criar_tarefa,
     atribuir_responsavel,
