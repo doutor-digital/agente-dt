@@ -9,6 +9,8 @@ import { carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarSemResposta } from '../services/lead-metrics.service.js';
 import { automacaoLigada } from './automacoes-estado.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
+import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA } from './cobrancas-do-dia.js';
+import { fusoDaUnidade } from './fuso.js';
 
 const SWEEP_MS = 60_000;
 
@@ -46,6 +48,8 @@ interface EstadoDoLead {
   pausada: boolean;
   /** Ja pagou a consulta antecipada — nao pode receber cobranca. */
   pagouAntecipado: boolean;
+  /** Título do cartão: é dele que o degrau tira o nome do paciente (ver nome-apresentavel.ts). */
+  titulo: string | null;
 }
 
 /**
@@ -139,6 +143,7 @@ async function etapasDosLeads(unit: {
         lossReasonId: l.loss_reason_id ?? null,
         pausada: campoMarcado(campoPausa?.values?.[0]?.value),
         pagouAntecipado: pagouOAntecipado(l.custom_fields_values),
+        titulo: l.name ?? null,
       });
     }
     cacheEtapas.set(unit.id, { em: Date.now(), mapa });
@@ -402,6 +407,17 @@ async function varrer(): Promise<void> {
         });
         if (!ultima || ultima.role !== 'assistant') continue;
 
+        // No máximo 2 cobranças no dia local (Araguaína, lead 28655414, 15/10: 08:30, 09:28, 11:28 e 17:29).
+        // Não marca parada nem pula o degrau: amanhã a régua segue de onde der. Ver cobrancas-do-dia.ts.
+        const envios = await enviosDeRetomadaRecentes(unit, conv.leadId).catch(() => null);
+        if (envios && limiteDoDiaAtingido(envios, new Date(), fusoDaUnidade(unit))) {
+          logger.debug(
+            { unit: unit.slug, leadId: conv.leadId, limite: LIMITE_COBRANCAS_POR_DIA },
+            'follow-up: já saíram as cobranças do dia — espera o dia seguinte',
+          );
+          continue;
+        }
+
         // Só cobra quem LEU e não respondeu (rota oficial do WhatsApp). Equipe
         // falou por último = a conversa é dela. Não entregue = janela fechada ou
         // número errado — cobrar de novo só empilha erro. Se a rota falhar, a
@@ -457,7 +473,7 @@ async function varrer(): Promise<void> {
         });
         if (reserva.count !== 1) continue;
 
-        await enviarDegrau(unit, conv, proximo, alvo, ESCADA_DA_REGRA.length);
+        await enviarDegrau(unit, conv, proximo, alvo, ESCADA_DA_REGRA.length, estado.titulo);
       }
     }
   } catch (err) {
@@ -478,6 +494,7 @@ async function enviarDegrau(
   degrau: Degrau,
   indice: number,
   totalDegraus: number,
+  tituloDoCartao: string | null,
 ): Promise<void> {
   const leadId = Number(conv.leadId);
   const devolver = () =>
@@ -500,6 +517,7 @@ async function enviarDegrau(
       conversationId: conv.id,
       intencao: degrau.intencao,
       ultimoDegrau: indice === totalDegraus - 1,
+      tituloDoCartao,
     });
     if (!texto) {
       await devolver();
