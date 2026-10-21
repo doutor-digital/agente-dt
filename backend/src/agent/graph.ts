@@ -50,8 +50,9 @@ import {
   escolherPlanoB,
   PLANO_B_TIMEOUT_MS,
   LlmTimeoutError,
-  FALLBACK_TETO,
+  textoDoTeto,
 } from './llm-policy.js';
+import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import {
   agendamentoDoVinculo,
@@ -586,9 +587,10 @@ export async function buildAgentGraph(
           payload: { conta: mensal.conta, mes: mensal.mes, brl: mensal.brl, teto: mensal.teto },
         });
         void entregarAoHumanoPorTetoMensal(unit, kommoClient, leadIdDaConversa, mensal, recorder);
+        const aviso = textoDoTeto(retornoDaEquipe(unit));
         return {
-          messages: [new AIMessage(FALLBACK_TETO)],
-          decision: FALLBACK_TETO,
+          messages: [new AIMessage(aviso)],
+          decision: aviso,
         } satisfies Partial<AgentStateType>;
       }
     }
@@ -646,9 +648,10 @@ export async function buildAgentGraph(
         }
         // O paciente NÃO fica no vácuo. Conversa cara é quase sempre conversa
         // quente: sumir agora seria perder exatamente o lead que mais interessa.
+        const aviso = textoDoTeto(retornoDaEquipe(unit));
         return {
-          messages: [new AIMessage(FALLBACK_TETO)],
-          decision: FALLBACK_TETO,
+          messages: [new AIMessage(aviso)],
+          decision: aviso,
         } satisfies Partial<AgentStateType>;
       }
     }

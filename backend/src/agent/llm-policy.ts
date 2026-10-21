@@ -1,3 +1,5 @@
+import { quandoAEquipeResponde, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
+
 export const AGENT_NODE_TIMEOUT_MS = Number(process.env.AGENT_NODE_TIMEOUT_MS) || 35000;
 
 export const FALLBACK_INDISPONIVEL =
@@ -7,10 +9,19 @@ export const FALLBACK_INDISPONIVEL =
  * Dita quando a conversa passou do teto de gasto. Não menciona custo — isso é
  * problema nosso, não do paciente — e não pede pra ele repetir nada, porque
  * quem vai continuar é uma pessoa, que já tem o histórico na frente.
+ *
+ * Não promete prazo (21/10/2026): "te responde em instantes" saía de madrugada e
+ * no domingo, quando não há ninguém na clínica. Com o horário da equipe conhecido
+ * diz quando ela volta; sem ele, "no próximo horário de atendimento".
  */
-export const FALLBACK_TETO =
-  'Vou te passar agora pra uma pessoa da equipe continuar seu atendimento, tá? ' +
-  'Ela já está com todo o nosso papo aqui e te responde em instantes 🙂';
+export function textoDoTeto(retorno: RetornoDaEquipe): string {
+  return (
+    'Vou te passar agora pra uma pessoa da equipe continuar seu atendimento, tá? ' +
+    `Ela já está com todo o nosso papo aqui e ${quandoAEquipeResponde(retorno)} 🙂`
+  );
+}
+
+export const FALLBACK_TETO = textoDoTeto({ tipo: 'desconhecido' });
 
 export interface PlanoB {
   provider: 'anthropic' | 'openai' | 'google';
