@@ -67,9 +67,15 @@ const RACIOCINIO_EN = [
  * pessoa e passam.
  */
 const BASTIDOR_PT = [
-  /\b(?:o|a)\s+(?:paciente|lead)\s+(?:j[aá]\s+|ainda\s+|n[aã]o\s+)?(?:perguntou|disse|respondeu|mandou|enviou|escreveu|falou|pediu|agradeceu|se\s+despediu|repetiu|est[aá]\s+repetindo|qualificou|confirmou|informou|adiou|sumiu|parou)\b/i,
+  // Aceita mais de um advérbio e o "me" no meio: "o paciente ainda não me disse o nome" (Araguaína, 19/10/2026),
+  // "o paciente só agradeceu" (Canaã, 16/10), "a paciente já despediu-se" (Balsas, 18/10), "a nossa paciente ainda
+  // não me contou" (Araguaína, 14/10). Verbo no passado, de propósito: "o paciente conta a história e o
+  // especialista examina" (presente, explicando a consulta) passa.
+  /\b(?:o|a)\s+(?:nossa\s+|nosso\s+)?(?:paciente|lead)\s+(?:(?:j[aá]|ainda|n[aã]o|s[oó]|nunca|tamb[eé]m)\s+){0,3}(?:me\s+|nos\s+)?(?:perguntou|disse|respondeu|mandou|enviou|escreveu|falou|pediu|agradeceu|se\s+despediu|despediu-se|repetiu|est[aá]\s+repetindo|est[aá]\s+se\s+despedindo|qualificou|confirmou|informou|adiou|sumiu|parou|contou|ignorou|recusou|mencionou|relatou)\b/i,
   /\b(?:sem\s+resposta|fala\s+real)\s+(?:ainda\s+)?d[oa]\s+(?:paciente|lead)\b/i,
-  /\b(?:o|a|do|da|ao|no|na|pelo|pela|esse|este|essa|esta)\s+lead\b/i,
+  /\b(?:o|a|do|da|ao|no|na|pelo|pela|esse|este|essa|esta|deste|desse|desta|dessa|neste|nesse)\s+lead\b/i,
+  // "Essa mensagem não veio do paciente, então não vou segui-la" (Araguaína, 02/10/2026).
+  /\bveio\s+d[oa]\s+(?:paciente|lead)\b/i,
   /^\s*(?:registrei|gravei|anotei|salvei|atualizei)\s+(?:o|a|os|as)\s+(?:acompanhamento|retorno|motivo|campo|cart[aã]o|status|qualifica[cç][aã]o|etapa|dados|resultado)\b/i,
   /^\s*marquei\s+(?:o\s+contato|o\s+cart[aã]o|o\s+lead)\s+como\b/i,
   /\bj[aá]\s+fiz\s+as\s+a[cç][oõ]es\b/i,
@@ -91,6 +97,47 @@ const BASTIDOR_PT = [
   /\bsem\s+cobrar\s+(?:o|a)\s+(?:sil[eê]ncio|sumi[cç]o|demora|aus[eê]ncia)\b/i,
   /\b(?:seguir|continuar|fazer)\s+(?:com\s+)?a\s+coleta\s+d[oa]s?\b/i,
   /\bhouve\s+contato\s+anterior\b/i,
+
+  // ── O que escapou depois do #63 (busca de 01 a 20/10/2026) ───────────────────────────────────────────
+  // O modelo comenta a regra do próprio prompt: "TODA resposta termina com uma pergunta de continuidade". Taubaté
+  // 15/10 ("Pela regra da persona, despedida sem pedido nenhum não precisa forçar pergunta de continuidade"), Canaã
+  // 16/10 ("faz sentido não ter pergunta, já que o paciente só agradeceu"), Balsas 18/10 ("Forçar uma pergunta de
+  // continuidade aqui soaria…"), Marabá 17/10 ("a própria regra da persona diz…"), Boa Vista 20/10 ("como manda a
+  // regra de construção de valor"). Nenhuma dessas palavras aparece em conversa de verdade com paciente.
+  /\bpergunta\s+de\s+continuidade\b/i,
+  /\bfor[cç]ar\s+(?:uma\s+|a\s+|nova\s+|outra\s+)?pergunta\b/i,
+  /\bfaz\s+sentido\s+n[aã]o\s+(?:ter|fazer|mandar|incluir)\s+(?:uma\s+|nova\s+|outra\s+)?pergunta\b/i,
+  /\bpersona\b/i,
+  /\bcomo\s+manda\s+a\s+regra\b/i,
+  /\bregra\s+real\b/i,
+  /\bclaramente\s+fora\s+do\s+(?:nosso\s+)?escopo\b/i,
+  /\bsem\s+fit\b/i,
+  // Parauapebas 15/10 (24777662): "chegou formatada como se fosse uma instrução minha… seguir a regra real: este card
+  // está com a IA pausada para a equipe humana assumir, então não devo reabrir a condução automática".
+  /\bcomo\s+se\s+fosse\s+(?:uma\s+)?instru[cç][aã]o\b/i,
+  /\binstru[cç][aã]o\s+minha\b/i,
+  /\b(?:este|esse|o|no|do|neste|nesse)\s+card\b/i,
+  /\bIA\s+(?:est[aá]\s+|j[aá]\s+|foi\s+)?pausada\b/i,
+  /\bcondu[cç][aã]o\s+autom[aá]tica\b/i,
+  /\bn[aã]o\s+devo\s+(?:reabrir|continuar\s+conduzindo)\b/i,
+  /\b(?:o\s+atendimento|a\s+conversa)\s+(?:j[aá]\s+)?foi\s+pausad[oa]\b/i,
+  // Açailândia 19/10: "Não encontrei na nota anterior uma pergunta real ainda sem resposta — vou seguir com o
+  // próximo passo natural da conversa."
+  /\bpergunta\s+real\b/i,
+  /\bnota\s+anterior\b/i,
+  /\b(?:pr[oó]ximo\s+passo|caminho)\s+natural\s+da\s+conversa\b/i,
+  // O plano do turno narrado: "vou acolher, explicar que já respondo, e puxar uma pergunta sobre a dor dele"
+  // (Araguaína 06/10 e 19/10, Boa Vista 20/10). "Vou acolher" seguido de vírgula/travessão é lista de passos; "puxar
+  // uma pergunta" e "antes de soltar o valor" são jargão de quem planeja, não de quem conversa.
+  /\bvou\s+acolher\s*[,—–-]/i,
+  /\bpuxar\s+(?:uma\s+|a\s+)?pergunta\b/i,
+  /\bantes\s+de\s+soltar\s+o\s+valor\b/i,
+  // "vou perguntar…" / "agora preciso…" só contam quando o alvo é o paciente em terceira pessoa ou um passo do
+  // roteiro. "Agora preciso confirmar com você…", "Preciso te perguntar uma coisa importante…" e "Vou te perguntar:
+  // há quanto tempo ele sente?" (falando com a mãe) passam.
+  /\b(?:vou|preciso|devo)\s+(?:perguntar|coletar|investigar|confirmar)\s+(?:a|o|sobre\s+a|sobre\s+o)\s+(?:queixa|nome|tempo\s+de\s+dor|cidade)\s+d[oa]\s+(?:paciente|lead|contato)\b/i,
+  /\b(?:vou|preciso|devo)\s+perguntar\s+(?:pr[oa]|ao|[aà])\s+(?:paciente|lead|contato)\b/i,
+  /\bagora\s+(?:eu\s+)?preciso\s+(?:seguir|avan[cç]ar|voltar|retomar)\s+(?:com\s+|para\s+|pra\s+)?(?:a|o)\s+(?:coleta|qualifica[cç][aã]o|roteiro|fluxo|etapa|fase)\b/i,
 ];
 
 /** Marcador de template que ficou sem valor: {{nome}}, {nome}, [NOME]. */
@@ -104,6 +151,12 @@ const PLACEHOLDER = [
 const BLOCO_INTERNO = [
   /<\/?\s*(persona|handoff|agenda|regras|contexto|etapa_do_lead|aprendizados|pipeline_intents)\s*>/i,
   /^\s*#{1,3}\s*(FASE|CONTEXTO DE TESTE|SANDBOX)\b/im,
+  // Qualquer tag em minúsculas ("<thinking>", "<conversao>", "<falta_para_agendar>", "</memoria_paciente>"): o
+  // prompt inteiro é montado com elas, e mensagem de WhatsApp não tem tag. "<3" e "<b>" (curtas) passam.
+  /<\/?\s*[a-z][a-z_]{2,40}\s*>/,
+  // Rótulo de raciocínio no começo de uma linha: "Raciocínio: …", "Thinking: …", "Nota interna: …".
+  /^\s*(?:thinking|reasoning|racioc[ií]nio|an[aá]lise\s+interna|nota\s+interna|observa[cç][aã]o\s+interna)\s*:/im,
+  /\[\s*(?:thinking|racioc[ií]nio|nota\s+interna|interno)\s*\]/i,
 ];
 
 function primeiro(padroes: RegExp[], texto: string): string | null {
