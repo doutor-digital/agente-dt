@@ -26,6 +26,7 @@ import {
   consultasDaAgenda,
   horariosOferecidos,
   horariosQueJaPassaram,
+  ofertaDaConsultaDoTurno,
   PERGUNTA_DO_DIA,
   quandoFoiConsultada,
   reconsultaDaAgenda,
@@ -217,6 +218,24 @@ test('já reconsultou neste turno e ainda saiu horário que passou → o horári
   assert.equal(semHorarioPassado('Fica melhor hoje às 08h ou às 09h? ☺\n[[botoes: Hoje 08h | Hoje 09h]]', '2026-10-19T10:00'), PERGUNTA_DO_DIA);
   // sem horário vencido, nada muda
   assert.equal(semHorarioPassado(OFERTA_17_10, '2026-10-17T17:53'), OFERTA_17_10);
+});
+
+test('com a agenda do turno na mão, a frase do horário vencido vira os horários de agora (os que valem não somem)', () => {
+  const msgs = [
+    new HumanMessage('tabom'),
+    new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'consultar_horarios', args: { data: '2026-10-19' } }] }),
+    new ToolMessage({
+      content: `Horários CONFIRMADOS com a clínica em segunda-feira, 19/10/2026 (2026-10-19): 14:00, 16:00. ${carimboDaConsulta('2026-10-19T08:29')}`,
+      tool_call_id: 'c1',
+      name: 'consultar_horarios',
+    }),
+  ];
+  const oferta = ofertaDaConsultaDoTurno(msgs);
+  assert.equal(oferta, 'Tenho segunda-feira, 19/10, às 14h ou às 16h. Qual fica melhor pra você?');
+  assert.equal(
+    semHorarioPassado(OFERTA_19_10, '2026-10-19T08:29', oferta),
+    'Tenho segunda-feira, 19/10, às 14h ou às 16h. Qual fica melhor pra você? Assim já encaminho pra equipe confirmar sua vaga!',
+  );
 });
 
 // ── O prompt ────────────────────────────────────────────────────────────────────────────────────────────

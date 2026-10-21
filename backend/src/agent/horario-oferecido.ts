@@ -394,6 +394,8 @@ export function travaDoHorario(e: EntradaDaTrava): TravaDoHorario {
       // o dia que ela estava oferecendo, a partir de hoje: a ferramenta já tira as horas que passaram
       return podeReconsultar ? { acao: 'reconsultar', motivo, data: hoje } : { acao: 'cortar_passado', motivo };
     }
+    // Consulta feita neste turno tem segundos: não envelhece. E uma segunda reconsulta no mesmo turno devolveria a
+    // mesma lista — horário vencido puxado do histórico apesar dela é cortado (cortar_passado, acima).
     if (consultouNoTurno || !podeReconsultar) return null;
     // A partir do dia que ela estava oferecendo. Se esse dia lotou, consultar_horarios avança e DIZ ao modelo ("A data
     // … não tinha vaga — … é o PRÓXIMO dia com horário"): a troca de dia chega ao paciente explicada, não calada.
@@ -428,14 +430,30 @@ export function reconsultaDaAgenda(data: string): AIMessage {
 /** Quando nem a agenda de agora nem o corte deixam a resposta de pé: pergunta o dia e consulta na volta. */
 export const PERGUNTA_DO_DIA = 'Me conta qual dia fica melhor pra você que eu confiro os horários livres na agenda ☺';
 
-/** A resposta sem as frases que oferecem horário que já passou (e sem a linha de botões, se ela tinha um). */
-export function semHorarioPassado(texto: string, agoraLocal: string): string {
+/**
+ * A resposta sem horário que já passou. Só chega aqui quando a agenda JÁ foi consultada neste turno (uma consulta de
+ * segundos atrás — não envelhece dentro do turno) e mesmo assim o modelo puxou horário vencido do histórico. A frase
+ * que oferece o vencido dá lugar aos dois horários dessa consulta do turno (`oferta`, de ofertaDaConsultaDoTurno) —
+ * assim os horários que ainda valem não somem junto; sem `oferta`, a frase sai e fica a pergunta do dia.
+ */
+export function semHorarioPassado(texto: string, agoraLocal: string, oferta: string | null = null): string {
   const passados = horariosQueJaPassaram(horariosOferecidos(texto, agoraLocal), agoraLocal);
   if (passados.length === 0) return texto;
   const fora = new Set(passados.map((p) => p.frase));
-  // os botões repetem os horários da frase que saiu: saem juntos
-  const resto = juntarFrases(quebrarEmFrases(texto).filter((p, i) => !fora.has(i) && !/^\s*\[\[\s*botoes\s*:/i.test(p.frase)));
-  if (!/[\p{L}\p{N}]/u.test(resto)) return PERGUNTA_DO_DIA;
+  const ficam: Pedaco[] = [];
+  let trocou = false;
+  quebrarEmFrases(texto).forEach((p, i) => {
+    // os botões repetem os horários da frase que sai: saem juntos
+    if (/^\s*\[\[\s*botoes\s*:/i.test(p.frase)) return;
+    if (!fora.has(i)) {
+      ficam.push(p);
+      return;
+    }
+    if (oferta && !trocou) ficam.push({ frase: oferta, sep: p.sep });
+    trocou = true;
+  });
+  const resto = juntarFrases(ficam);
+  if (!/[\p{L}\p{N}]/u.test(resto)) return oferta ?? PERGUNTA_DO_DIA;
   return resto.includes('?') ? resto : `${resto}\n\n${PERGUNTA_DO_DIA}`;
 }
 

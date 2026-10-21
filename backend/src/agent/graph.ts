@@ -1007,7 +1007,7 @@ export async function buildAgentGraph(
           });
         }
         // Sem modelo: horário que já passou nunca sai; a sondagem sai quando sobra resposta sem ela.
-        const semPassado = semHorarioPassado(textoFinal, agoraDaUnidade);
+        const semPassado = semHorarioPassado(textoFinal, agoraDaUnidade, ofertaDaConsultaDoTurno(nonSystemMessages));
         if (semPassado !== textoFinal) {
           await recorder.step({
             kind: 'ERROR',
