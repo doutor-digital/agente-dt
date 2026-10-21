@@ -10,6 +10,7 @@ import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { nomeEstaNaFonte, semNomeDeProfissional } from '../lib/nome-do-profissional.js';
+import { LIMITE_TENTATIVAS, pedeNome } from './repeticao.js';
 import { cortarSeEstourou } from './teto-mensal.js';
 import { agendamentoDoVinculo, reservaAfirmada } from './reserva-sem-marcar.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
@@ -46,17 +47,21 @@ export interface FollowUpArgs {
   ultimoDegrau: boolean;
 }
 
-async function historico(conversationId: string, limite = 12): Promise<string> {
+async function historico(conversationId: string, limite = 12): Promise<{ texto: string; pedidosDeNome: number }> {
   const msgs = await prisma.message.findMany({
     where: { conversationId },
     orderBy: { createdAt: 'desc' },
     take: limite,
     select: { role: true, content: true },
   });
-  return msgs
-    .reverse()
-    .map((m) => `${m.role === 'user' ? 'PACIENTE' : 'VOCÊ'}: ${m.content}`)
-    .join('\n');
+  return {
+    texto: msgs
+      .reverse()
+      .map((m) => `${m.role === 'user' ? 'PACIENTE' : 'VOCÊ'}: ${m.content}`)
+      .join('\n'),
+    // A régua também pedia o nome ("Posso saber seu nome pra te ajudar?") a quem já tinha ignorado o pedido.
+    pedidosDeNome: msgs.filter((m) => m.role === 'assistant' && pedeNome(m.content)).length,
+  };
 }
 
 export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | null> {
@@ -71,7 +76,7 @@ export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | nul
     return null;
   }
 
-  const conversa = await historico(args.conversationId);
+  const { texto: conversa, pedidosDeNome } = await historico(args.conversationId);
   if (!conversa.trim()) return null;
 
   let base = '';
@@ -102,7 +107,7 @@ REGRAS:
 - PROIBIDO deixar lacuna: nada de "[chave]", "R$ [valor]", "{endereço}", "XXX".
   Ou você escreve o dado exato que está nas Fontes Oficiais, ou não fala dele.
 - Retome pelo que ELE contou: a queixa, a preferência, o que ficou pendente.
-${args.ultimoDegrau ? '- ESTA É A ÚLTIMA. Despeça-se com a porta aberta e NÃO faça pergunta.' : ''}
+${pedidosDeNome >= LIMITE_TENTATIVAS ? `- NÃO peça o nome: você já pediu ${pedidosDeNome} vezes e ele não deu. Siga sem.\n` : ''}${args.ultimoDegrau ? '- ESTA É A ÚLTIMA. Despeça-se com a porta aberta e NÃO faça pergunta.' : ''}
 
 Responda APENAS com o texto da mensagem, sem aspas e sem explicação.
 

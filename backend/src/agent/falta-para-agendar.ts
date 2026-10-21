@@ -66,12 +66,19 @@ function jaAgendou(fatos: Fatos): boolean {
  * Monta o bloco. Devolve string vazia quando não há nada a cobrar — prompt que
  * repete o óbvio a cada turno vira ruído e o modelo passa a ignorar o bloco.
  */
-export function renderFaltaParaAgendar(fatos: Fatos | null | undefined): string {
+export function renderFaltaParaAgendar(
+  fatos: Fatos | null | undefined,
+  opcoes: { semPedirNome?: boolean } = {},
+): string {
   const f = fatos ?? {};
   if (Object.keys(f).length === 0) return '';
   if (jaAgendou(f)) return '';
 
-  const faltando = CHECKLIST.filter((i) => !temAlgum(f, i.chaves));
+  // Já pediu o nome 2 vezes (repeticao.ts): a lista não pode continuar mandando "pergunte como pode chamá-lo" a
+  // cada turno — era isso que fazia a Sofia pedir o nome 3, 4, 5 vezes a quem ignorava a pergunta.
+  const faltando = CHECKLIST.filter((i) => !temAlgum(f, i.chaves)).filter(
+    (i) => !(opcoes.semPedirNome && i.rotulo === 'nome'),
+  );
 
   // Sinal neurológico sem resposta registrada é o item mais urgente da lista:
   // é ele que separa "caso comum" de "emergência", e foi exatamente o que se

@@ -24,6 +24,7 @@ import {
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro } from './sinal-de-alerta.js';
+import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from './repeticao.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
@@ -1124,7 +1125,10 @@ function renderCollectName(unit: Unit): string {
 - Se ainda NÃO souber o nome, sua PRIMEIRA mensagem deve abrir com saudação calorosa + 1-2 emojis + pergunta pelo nome. Ex: "Oiê! 😊 Que bom te receber! Como posso te chamar?" (varie as palavras, não soe robótico).
 - Assim que o paciente disser o nome, chame IMEDIATAMENTE atualizar_titulo_lead({ nome: "<Nome>" }) — passe SÓ o nome (o sistema adiciona a data, vira "<Nome> DD/MM/YYYY"). Silencioso, não comente.
 - Sequência obrigatória: (1) chamar a tool com o nome, (2) só então responder usando o nome. NUNCA use o nome em texto antes de chamar a tool no mesmo turno.
-- Depois, use o nome com moderação (1 a cada 2-3 mensagens). Se recusar 2x, deixe pra lá.`);
+- Depois, use o nome com moderação (1 a cada 2-3 mensagens).
+- NO MÁXIMO 2 PEDIDOS na conversa inteira. Recusou, ignorou, respondeu outra coisa (contou da dor, perguntou o preço,
+  mandou o anúncio de novo) — cada vez conta. Depois do 2º pedido sem nome, siga sem ele e NUNCA peça de novo, nem
+  no meio de outra pergunta. O nome completo para marcar a consulta é outra coisa: esse você pede na hora de marcar.`);
 }
 
 function renderCollectSource(unit: Unit): string {
@@ -1554,6 +1558,8 @@ export interface ComposeInput {
   outraSofia?: FalaDeOutraSofia[];
   /** As unidades Doutor Hérnia ativas (tabela `units`, cache de 10 min) — ver rede-doutor-hernia.ts. */
   redeDeUnidades?: UnidadeDaRede[];
+  /** A conversa até este turno (do grafo). Daqui saem as contas de repetição e de insistência no preço. */
+  historico?: Fala[];
 }
 
 /**
@@ -1584,6 +1590,19 @@ function renderSoCumprimento(userMessage?: string): string {
       '- Quem puxa o assunto agora é ELE. Foi ele quem chamou: deixe espaço para dizer o que quer.\n' +
       '- Duas linhas no máximo.',
   );
+}
+
+/**
+ * Os blocos que dependem do HISTÓRICO deste turno (contados em código, não pelo modelo): repetição (nome pedido 2
+ * vezes, mesma pergunta sem resposta, áudio não ouvido — repeticao.ts). Sem histórico (playground, régua), nada.
+ */
+function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedirNome: boolean; blocos: string[] } {
+  if (!historico || historico.length === 0) return { semPedirNome: false, blocos: [] };
+  const repeticao = analisarRepeticao(historico);
+  const blocos: string[] = [];
+  const rep = renderRepeticao(repeticao);
+  if (rep) blocos.push(rep);
+  return { semPedirNome: pararDePedirNome(repeticao), blocos };
 }
 
 /**
@@ -1992,6 +2011,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
+  const doHistorico = blocosDoHistorico(unit, input.historico);
 
   if (unit.singlePromptMode) {
     const single: string[] = [];
@@ -2018,6 +2038,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
     const anuncioBlockSingle = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
     if (etapaBlockSingle) single.push(etapaBlockSingle);
     if (anuncioBlockSingle) single.push(anuncioBlockSingle);
+    single.push(...doHistorico.blocos);
     return single.join('\n\n');
   }
 
@@ -2064,6 +2085,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // própria IA grava; sem isso ela sabe o que já foi dito e não o que falta.
   const faltaBlock = renderFaltaParaAgendar(
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
+    { semPedirNome: doHistorico.semPedirNome },
   );
   if (lessonsBlock) blocks.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
@@ -2117,6 +2139,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // no prefixo cacheado e não pode variar por lead sem derrubar o cache.
   const anuncioBlock = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
   if (anuncioBlock) blocks.push(anuncioBlock);
+  // Por último entre os blocos do turno: é a ordem mais específica e precisa ser a mais recente.
+  blocks.push(...doHistorico.blocos);
 
   const firstTurnBlock = renderFirstTurnBoost(unit, isFirstTurn, jaConversouAntes(leadMemory));
   if (firstTurnBlock) blocks.push(firstTurnBlock);
@@ -2149,6 +2173,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
+  const doHistorico = blocosDoHistorico(unit, input.historico);
 
   // Estes três mudam POR UNIDADE, não por paciente: o calendário vira uma vez
   // por dia (renderCalendario recebe a data sem hora, de propósito), o endereço
@@ -2174,6 +2199,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (outraSofiaBlock) dynamic.push(outraSofiaBlock);
   const faltaBlock = renderFaltaParaAgendar(
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
+    { semPedirNome: doHistorico.semPedirNome },
   );
   if (faltaBlock) dynamic.push(faltaBlock);
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
@@ -2200,6 +2226,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
   // <coleta_origem>, e é isso que deixa ele desligar a pergunta "como nos conheceu".
   const anuncioBlock = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
   if (anuncioBlock) dynamic.push(anuncioBlock);
+  // Contados no histórico deste turno; por último, para serem a ordem mais recente que o modelo lê.
+  dynamic.push(...doHistorico.blocos);
 
   // Quem atende ("é médico?"), o nome da consulta e a lista da rede. Muda só quando entra
   // unidade nova, então fica no bloco cacheado — DEPOIS das regras e modelos da unidade, porque
@@ -2287,6 +2315,7 @@ export async function composeSystemPromptForUnit(input: {
   isFirstTurn?: boolean;
   leadId?: number;
   excludeLeadFieldRules?: boolean;
+  historico?: Fala[];
 }): Promise<string> {
   return composeSystemPrompt(await loadComposeInput(input));
 }
@@ -2298,6 +2327,7 @@ export async function composeSystemPromptPartsForUnit(input: {
   isFirstTurn?: boolean;
   leadId?: number;
   excludeLeadFieldRules?: boolean;
+  historico?: Fala[];
 }): Promise<{ cacheable: string; dynamic: string }> {
   return composeSystemPromptParts(await loadComposeInput(input));
 }
@@ -2309,6 +2339,7 @@ async function loadComposeInput(input: {
   isFirstTurn?: boolean;
   leadId?: number;
   excludeLeadFieldRules?: boolean;
+  historico?: Fala[];
 }): Promise<ComposeInput> {
   const shouldRunRag =
     !!input.userMessage &&
