@@ -29,6 +29,7 @@ import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } fro
 import { carimboDaConsulta } from './horario-oferecido.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { apagarDoCache, medidorDoCache } from '../lib/cache-agenda.js';
 import {
   agendamentoDeuCerto,
   desfechoDaRemarcacao,
@@ -277,16 +278,63 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
       let diasSondados = 0;
       let outroTurnoNoDiaPedido: string | null = null;
       let cursor = data;
+      // Cache curto da busca (lib/cache-agenda.ts, chave cache-agenda): ligado, o dia que outra conversa da unidade
+      // buscou há poucos minutos responde sem ir à franquia (sem grade e sem sondagem); só no papel, mede hit/miss e
+      // a busca roda igual.
+      const cache = medidorDoCache(fresca, { leadId, turno });
+      const ofertaDoDia = (dia: string, oferecer: string[], consultadaEm: Date) =>
+        `Horários CONFIRMADOS com a clínica em ${dataPorExtenso(dia)} (${dia}): ${oferecer.join(', ')}. ` +
+        (dia === data
+          ? ''
+          : `A data ${dataPorExtenso(data)} não tinha vaga (lotada, feriado ou sem atendimento) — ${dataPorExtenso(dia)} é o PRÓXIMO dia com horário. Ofereça esta data ao paciente com naturalidade. `) +
+        'Ofereça no máximo 2 ou 3 deles. Não ofereça nenhum horário fora desta lista. ' +
+        'Ao citar a data ao paciente, use EXATAMENTE o dia da semana informado aqui. ' +
+        'Termine a mensagem com a linha [[botoes: …]] com os horários oferecidos, um por opção, curtos (ex.: "Seg 14h | Seg 16h30"). ' +
+        // a hora da consulta, no MESMO relógio que a trava usa (fusoDaUnidade): horário oferecido de novo dias depois
+        // saía vencido (Araguaína, 19/10/2026 — horario-oferecido.ts). Vinda do cache, é a hora em que a FRANQUIA foi
+        // consultada, não agora — senão a validade de 3 h da consulta (VALIDADE_DA_CONSULTA_MIN) se enganaria.
+        carimboDaConsulta(agoraLocalISO(fusoDaUnidade(fresca), consultadaEm));
 
       for (let i = 0; i <= LOOKAHEAD_DIAS; i++, cursor = somarDias(cursor, 1)) {
         const dow = new Date(`${cursor}T00:00:00Z`).getUTCDay();
         if (!fresca.spineAgendaDays.includes(dow)) continue;
         if (feriadoNacional(cursor)) continue; // clínica fechada — nem consulta a grade
 
+        // o horário que já passou sai na leitura, no mesmo relógio da grade (gradeDoDia)
+        const doCache = await cache.ler(cursor, agoraLocal(fresca));
+        if (doCache?.usar && doCache.entrada) {
+          const e = doCache.entrada;
+          await recorder.step({
+            kind: 'TOOL_RESULT',
+            title:
+              `consultar_horarios ${cursor}${turno ? ` (${turno})` : ''}: ` +
+              `${e.oferecer.length} confirmado(s) — do cache (franquia consultada há ${doCache.idadeMin} min)` +
+              (cursor === data ? '' : ` (avançou de ${data})`),
+            payload: {
+              pedido: data,
+              data: cursor,
+              turno,
+              naGrade: e.todosLivres,
+              noTurno: e.livres,
+              sondados: e.sondados,
+              oferecer: e.oferecer,
+              recusados: e.recusados,
+              cache: cache.rastro(doCache),
+              consultadaEm: e.consultadoEm.toISOString(),
+            },
+          });
+          cache.fim(cursor);
+          return ofertaDoDia(cursor, e.oferecer, e.consultadoEm);
+        }
+        // o INÍCIO da busca do dia: é a hora que o cache guarda (um "apagar" no meio da busca a invalida) e a do carimbo
+        const consultadaEm = new Date();
+
         const { erro, slots } = await gradeDoDia(fresca, cursor);
         if (erro) {
+          cache.franquia(cursor, null);
           if (i === 0) {
             logger.warn({ erro, data, unit: fresca.slug }, 'consultar_horarios: agenda indisponível');
+            cache.fim(null);
             return `Não consegui consultar a agenda agora (${erro}). NÃO ofereça horários; diga que a equipe confirma em seguida.`;
           }
           continue;
@@ -300,7 +348,10 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
         if (i === 0 && turno && livres.length === 0 && todosLivres.length > 0) {
           outroTurnoNoDiaPedido = data;
         }
-        if (livres.length === 0) continue;
+        if (livres.length === 0) {
+          cache.franquia(cursor, { livres, recusados: [], oferecer: [] });
+          continue;
+        }
 
         let oferecer = livres;
         let recusados: string[] = [];
@@ -320,6 +371,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
           );
         }
 
+        cache.franquia(cursor, { livres, recusados, oferecer });
         await recorder.step({
           kind: 'TOOL_RESULT',
           title:
@@ -327,26 +379,18 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
             `${oferecer.length} confirmado(s) de ${livres.length} livre(s) na grade` +
             (cursor === data ? '' : ` (avançou de ${data})`) +
             (verificado ? '' : ' — SEM verificação'),
-          payload: { pedido: data, data: cursor, turno, naGrade: todosLivres, noTurno: livres, sondados, oferecer, recusados, sonda },
+          payload: { pedido: data, data: cursor, turno, naGrade: todosLivres, noTurno: livres, sondados, oferecer, recusados, sonda, cache: cache.rastro(doCache) },
         });
+        // só guarda dia confirmado pela sondagem e com horário (erro e lista vazia nunca entram)
+        await cache.guardar(cursor, { todosLivres, livres, oferecer, recusados, sondados }, verificado, consultadaEm);
 
         if (oferecer.length === 0) continue;
 
-        const mesmoDia = cursor === data;
-        return (
-          `Horários CONFIRMADOS com a clínica em ${dataPorExtenso(cursor)} (${cursor}): ${oferecer.join(', ')}. ` +
-          (mesmoDia
-            ? ''
-            : `A data ${dataPorExtenso(data)} não tinha vaga (lotada, feriado ou sem atendimento) — ${dataPorExtenso(cursor)} é o PRÓXIMO dia com horário. Ofereça esta data ao paciente com naturalidade. `) +
-          'Ofereça no máximo 2 ou 3 deles. Não ofereça nenhum horário fora desta lista. ' +
-          'Ao citar a data ao paciente, use EXATAMENTE o dia da semana informado aqui. ' +
-          'Termine a mensagem com a linha [[botoes: …]] com os horários oferecidos, um por opção, curtos (ex.: "Seg 14h | Seg 16h30"). ' +
-          // a hora da consulta, no MESMO relógio que a trava usa (fusoDaUnidade): horário oferecido de novo dias depois
-          // saía vencido (Araguaína, 19/10/2026 — horario-oferecido.ts)
-          carimboDaConsulta(agoraLocalISO(fusoDaUnidade(fresca)))
-        );
+        cache.fim(cursor);
+        return ofertaDoDia(cursor, oferecer, consultadaEm);
       }
 
+      cache.fim(null);
       return (
         (outroTurnoNoDiaPedido
           ? `Em ${outroTurnoNoDiaPedido} não há vaga no período pedido, mas pode haver no outro turno — pergunte se ele aceita. `
@@ -633,6 +677,8 @@ export function buildCadastrarPaciente({ unit, recorder, kommo }: Contexto) {
       const horaEscolhida = `${p2(dq.getHours())}:${p2(dq.getMinutes())}`;
       const livre = await horarioAindaLivre(fresca, `${diaEscolhido}T${horaEscolhida}:00`).catch(() => null);
       if (livre === false) {
+        // a busca guardada do dia ficou velha: a próxima consulta vai à franquia
+        await apagarDoCache(fresca, diaEscolhido, 'cadastrar_paciente: a franquia não aceita o horário escolhido');
         await recorder.step({
           kind: 'TOOL_RESULT',
           title: `cadastrar_paciente RECUSADO: a franquia não aceita ${diaEscolhido} ${horaEscolhida}`,
@@ -917,6 +963,8 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
       if (!r.ok) {
         return `Não consegui cancelar (${r.error}). NÃO diga que foi cancelado — avise que a equipe confirma.`;
       }
+      // a vaga voltou: a busca guardada daquele dia (ou da unidade, sem o dia) não vale mais
+      await apagarDoCache(fresca, atual.quando, 'cancelar_consulta: cancelou');
 
       await prisma.spineLeadLink
         .updateMany({
@@ -1096,6 +1144,8 @@ export function buildRemarcarConsulta(ctx: Contexto) {
 
       // Passo 2 — apagar a velha. É aqui que a remarcação pode parar no meio.
       const c = await SpineService.cancelSchedule(fresca, alvo.idSchedule);
+      // a nova já apagou o dia dela (agendar_consulta); a vaga da antiga voltou
+      if (c.ok) await apagarDoCache(fresca, alvo.quando, 'remarcar_consulta: cancelou a antiga');
       const desfecho = desfechoDaRemarcacao({
         cancelou: c.ok,
         idScheduleAntiga: alvo.idSchedule,
@@ -1393,6 +1443,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         return `${args.hora} não é um horário de atendimento em ${args.data}. Consulte os horários de novo e ofereça um da lista.`;
       }
       if (slot.status !== 'livre') {
+        // oferecido como livre e já ocupado: a busca guardada do dia ficou velha
+        await apagarDoCache(fresca, args.data, `agendar_consulta: ${args.hora} ${slot.status} na grade`);
         await recorder.step({
           kind: 'ERROR',
           title: `agendar_consulta recusado — ${args.hora} está ${slot.status}`,
@@ -1456,6 +1508,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         dateAttendanceLocal: `${args.data}T${args.hora}:00`,
         idCategory: args.idCategory ?? 1,
       });
+
+      // marcou ou a franquia recusou (horário ocupado, quase sempre): a busca guardada do dia não vale mais
+      await apagarDoCache(fresca, args.data, r.ok ? 'agendar_consulta: marcou' : `agendar_consulta: a franquia recusou (${r.error})`);
 
       if (!r.ok) {
         await recorder.step({
