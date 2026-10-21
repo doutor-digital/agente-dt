@@ -31,6 +31,7 @@ import { consultaAtual, gradeDoDia, hojeLocal, telefoneDoLead, unidadeFresca } f
 import { travaDaUnidadeDeAtendimento, type CodigoTrava } from './trava-unidade-atendimento.js';
 import { contaDoKommo, unidadeDoCartao, unidadeParaOCartao } from './crm-compartilhado.js';
 import { motivoAmbiguo, motivoInconclusivo, pacienteExistente } from './paciente-existente.js';
+import { apagarDoCache } from './cache-agenda.js';
 
 export type CodigoRecusa =
   | 'sem_franquia'
@@ -323,6 +324,8 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
   const aviso = novoCadastro && semSobrenome ? AVISO_SEM_SOBRENOME : undefined;
 
   const marc = await SpineService.createSchedule(unit, { idClient: idPaciente, dateAttendanceLocal: `${entrada.data}T${entrada.hora}:00`, idCategory: entrada.idCategory ?? 1 });
+  // marcou ou a franquia recusou: a busca de horários guardada do dia (cache-agenda.ts) não vale mais
+  await apagarDoCache(unit, entrada.data, marc.ok ? 'widget: marcou' : `widget: a franquia recusou (${marc.error ?? 'sem detalhe'})`);
   if (!marc.ok) {
     return recusar({ ok: false, codigo: 'agenda_falhou', motivo: `A franquia não marcou (${marc.error ?? 'sem detalhe'}). ${novoCadastro ? 'O cadastro ficou feito; ' : ''}tente outro horário.` });
   }

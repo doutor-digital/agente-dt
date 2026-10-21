@@ -6,6 +6,7 @@ import { SpineService } from '../services/spine.service.js';
 import { AgendaService } from '../services/agenda.service.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
+import { apagarDoCache } from '../lib/cache-agenda.js';
 
 function agoraLocalIso(tz: string): string {
   return SpineService.instanteNoFuso(new Date(), tz || 'America/Sao_Paulo');
@@ -242,6 +243,7 @@ export async function createAgendaBlockHandler(req: Request, res: Response): Pro
     { unitId, dia: block.dayLocal, de: block.startTime, ate: block.endTime },
     'agenda: horário bloqueado pela recepção',
   );
+  await apagarDoCache({ id: unitId }, block.dayLocal, 'tela: horário bloqueado');
   res.status(201).json({ block });
 }
 
@@ -308,6 +310,7 @@ export async function createAgendaBlockBulkHandler(req: Request, res: Response):
     { unitId, de: fromDay, ate: toDay, dias: dias.length, motivo: reason },
     'agenda: bloqueio em lote',
   );
+  await apagarDoCache({ id: unitId }, null, 'tela: bloqueio em lote'); // vários dias: a unidade toda
   res.status(201).json({ ok: true, dias: dias.length, criados: criados.count });
 }
 
@@ -322,6 +325,7 @@ export async function deleteAgendaBlockBulkHandler(req: Request, res: Response):
   const r = await prisma.agendaBlock.deleteMany({
     where: { unitId, dayLocal: { gte: fromDay, lte: toDay } },
   });
+  await apagarDoCache({ id: unitId }, null, 'tela: bloqueios removidos em lote'); // vários dias: a unidade toda
   res.json({ ok: true, removidos: r.count });
 }
 
@@ -334,6 +338,7 @@ export async function deleteAgendaBlockHandler(req: Request, res: Response): Pro
     return;
   }
   await prisma.agendaBlock.delete({ where: { id: blockId } });
+  await apagarDoCache({ id: unitId }, achado.dayLocal, 'tela: bloqueio removido');
   res.json({ ok: true });
 }
 
@@ -428,6 +433,8 @@ export async function cancelScheduleHandler(req: Request, res: Response): Promis
     where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
     data: { spineIdSchedule: null, agendadoPara: null },
   });
+  // a vaga voltou: a busca de horários guardada daquele dia (cache-agenda.ts) não vale mais
+  await apagarDoCache(unit, vinculo.agendadoPara, 'painel: recepção cancelou');
 
   logger.warn(
     { unit: unit.slug, kommoLeadId, idSchedule: vinculo.spineIdSchedule, quando: vinculo.agendadoPara },
