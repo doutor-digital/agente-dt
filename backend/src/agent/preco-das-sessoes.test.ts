@@ -127,6 +127,18 @@ test('item 4: ignorada uma vez, continua em aberto no turno seguinte e cobra a r
   assert.ok(precoDasSessoesEmAberto(semValor));
 });
 
+test('item 4: falar de "tratamento" e de valor na mesma frase, sem ligar um ao outro, não é responder (achado do Codex)', () => {
+  const falas = [
+    ...ARAGUAINA,
+    ia('Thayane, o valor da consulta é R$ 350; o tratamento é conservador, sem cirurgia. Quer ver um horário?'),
+    p('Pode ser'),
+  ];
+  assert.ok(precoDasSessoesEmAberto(falas));
+  for (const resposta of ['Cada sessão custa R$ 80.', 'São R$ 80 por sessão.', 'O tratamento fica em R$ 900 o pacote.']) {
+    assert.equal(precoDasSessoesEmAberto([...ARAGUAINA, ia(resposta), p('ok')]), null, `responde: ${resposta}`);
+  }
+});
+
 test('item 4: respondida (valor do tratamento definido na consulta), o bloco some', () => {
   const falas = [
     ...ARAGUAINA,

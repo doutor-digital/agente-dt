@@ -167,16 +167,20 @@ export function respostaVazia(texto: string, anteriorDoPaciente?: string | null)
 }
 
 /**
- * A fala responde à pergunta dos sinais de alerta? Sim/não, "não senti nada disso", ou falar do que foi perguntado
- * (perna, força, formigamento, xixi, intestino…). Áudio sobre o endereço, o preço ou o dia de vir NÃO responde —
- * e para esta pergunta isso conta como "sem resposta", porque é a resposta que falta para seguir com segurança.
+ * A fala responde à pergunta dos sinais de alerta? Sim/não, "não senti nada disso", ou contar do SINAL perguntado
+ * (fraqueza, formigamento, dormência, xixi, intestino, virilha, perna fraca/bamba). Áudio sobre o endereço, o preço
+ * ou o dia de vir NÃO responde — e para esta pergunta isso conta como "sem resposta", porque é a resposta que falta
+ * para seguir com segurança. Palavra solta não basta: "minha perna dói" ou "vou ao banheiro" não dizem se há sinal
+ * (achado do Codex).
  */
 const RESPONDE_SINAL_DE_ALERTA = new RegExp(
   [
     // começa respondendo: "sim", "não", "nada", "nenhum", "senti sim"… (\b do JS não enxerga o "ã": fim à mão)
     String.raw`^\s*(?:sim|s|n[aã]o|nada|nenhum|nenhuma|nunca|negativo|tenho|tive|senti|sinto)(?![\wÀ-ÿ])`,
     String.raw`n[aã]o\s+(?:senti|sinto|tive|tenho|percebi|notei)(?![\wÀ-ÿ])|nada\s+disso|nenhum(?:a)?\s+(?:dess[ae]s?|disso)|gra[cç]as\s+a\s+deus\s+n[aã]o`,
-    String.raw`perna|for[cç]a|fraq|formig|dorm[eê]n|dormente|xixi|urin|intestin|fezes|bexiga|banheiro|evacu|segur(?:o|ar|ando)|control|virilha|\bsela\b`,
+    String.raw`fraq|formig|dorm[eê]n|dormente|adormec|xixi|urin|intestin|fezes|bexiga|evacu|virilha|\bsela\b`,
+    String.raw`pernas?\s+(?:t[aá]\s+|est[aá]\s+|ficou\s+|ficaram\s+)?(?:fraca|bamba|bambe|falh|amolec|normal|firme|boa|bem|sem\s+for[cç]a)`,
+    String.raw`(?:sem|perdi|perdendo|com|tenho|normal\s+a)\s+(?:a\s+|minha\s+)?for[cç]a|for[cç]a\s+(?:normal|boa|firme|ok)`,
   ].join('|'),
   'i',
 );

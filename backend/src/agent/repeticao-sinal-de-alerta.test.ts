@@ -105,12 +105,24 @@ test('item 2: respondeu à pergunta (sim, não, falou da perna ou do xixi): não
     '[áudio do cliente]: senti um formigamento na perna mas já passou',
     'xixi normal, só a dor mesmo',
     'nenhum desses',
+    'a perna tá fraca desde ontem',
+    'perdi a força na perna',
+    'força normal, só dói',
   ]) {
     assert.ok(respondeSinalDeAlerta(resposta), `responde: ${resposta}`);
     const r = analisarRepeticao([...ARAGUAINA.slice(0, -1), p(resposta)]);
     assert.equal(motivoDeHandoff(r), null, `não transfere: ${resposta}`);
   }
-  for (const outra of ['onde fica a clínica de vocês?', 'quanto é a consulta?', 'segunda eu vou aí', 'meu nome é João']) {
+  for (const outra of [
+    'onde fica a clínica de vocês?',
+    'quanto é a consulta?',
+    'segunda eu vou aí',
+    'meu nome é João',
+    // palavra solta não diz se há sinal (achado do Codex)
+    'minha perna dói muito',
+    'vou ao banheiro e já volto',
+    'preciso de força pra trabalhar',
+  ]) {
     assert.ok(!respondeSinalDeAlerta(outra), `não responde: ${outra}`);
   }
 });

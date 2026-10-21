@@ -175,11 +175,22 @@ export function perguntaPrecoDasSessoes(texto: string): boolean {
 }
 
 /** A IA respondeu: numa MESMA frase, as sessões/o tratamento e um valor (ou "é definido"). */
-const FALA_DAS_SESSOES = /sess(?:[aã]o|[oõ]es|oes)|tratamento|pacote/i;
-const FALA_DE_VALOR = /R\$\s*\d|\bvalor|\bpre[cç]o|\bcusto|\bcusta|defin/i;
+/**
+ * A IA respondeu o valor das sessões: o valor LIGADO às sessões/ao tratamento ("o valor do tratamento é definido
+ * na consulta", "cada sessão custa R$ 80", "R$ 80 por sessão"). Palavra solta não basta: "a consulta é R$ 350; o
+ * tratamento é conservador" não responde (achado do Codex).
+ */
+const RESPONDE_SESSOES = new RegExp(
+  [
+    String.raw`\b(?:valor(?:es)?|pre[cç]os?|custo)\s+d[aoe]s?\s+(?:sess|tratamento|pacote)`,
+    String.raw`(?:sess(?:[aã]o|[oõ]es|oes)|tratamento|pacote)[^.?!;]{0,40}?(?:R\$\s*\d|defin|\bcusta|\bsai\s+(?:por|a)\b|\bfica\s+(?:em|por)\b)`,
+    String.raw`R\$\s*\d[^.?!;]{0,20}?(?:por|a|cada)\s+sess`,
+  ].join('|'),
+  'i',
+);
 
 function respondeuSessoes(textoDaIa: string): boolean {
-  return linhas(textoDaIa).some((l) => FALA_DAS_SESSOES.test(l) && FALA_DE_VALOR.test(l));
+  return linhas(textoDaIa).some((l) => RESPONDE_SESSOES.test(l));
 }
 
 /** Só o histórico recente: a mesma janela das contas de repetição. */
