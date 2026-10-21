@@ -19,6 +19,7 @@ import type { Unit } from '@prisma/client';
 
 import {
   guardarRespostaSegurada,
+  idDaUltimaResposta,
   limparNaoEntregues,
   marcarNaoEntregue,
   consumirNaoEntregueDetalhe,
@@ -26,7 +27,7 @@ import {
   respostasSeguradas,
   VALIDADE_SEGURADA_MS,
 } from './entrega-falha.js';
-import { falasDoHistorico, semAsSeguradas, type Fala } from './repeticao.js';
+import { falasDoHistorico, type Fala } from './repeticao.js';
 import {
   linhasSemResposta,
   queixasEsquecidas,
@@ -83,16 +84,17 @@ const GRAFO = [
   new HumanMessage('Boa tarde\n\nMim chamo selma\n\nEu gostaria de saber'),
   new AIMessage('Boa tarde, Selma! Me conta, o que está te incomodando? Onde você sente a dor e há quanto tempo?'),
   new HumanMessage('Na cintura'),
-  new AIMessage(SEGURADA_1),
+  new AIMessage({ content: SEGURADA_1, id: 'seg-1' }),
   new HumanMessage('Ai desce pras pernas\n\nJa tem mas ou menos umas duas semanas'),
-  new AIMessage(SEGURADA_2),
+  new AIMessage({ content: SEGURADA_2, id: 'seg-2' }),
   new HumanMessage('Quer sinto dor as uns três dias atrás\n\nMim falou as pernas'),
-  new AIMessage(SEGURADA_3),
+  new AIMessage({ content: SEGURADA_3, id: 'seg-3' }),
   new HumanMessage('Quer não andei\n\nBoa noite\n\nTudo bem'),
-  new AIMessage(SEGURADA_4),
+  new AIMessage({ content: SEGURADA_4, id: 'seg-4' }),
   new HumanMessage('Comigo tudo a não ser essa dor\n\nEsta tudo bem graças a Deus'),
 ];
-const SEGURADAS = [SEGURADA_1, SEGURADA_2, SEGURADA_3, SEGURADA_4];
+/** Os ids das mensagens seguradas, como o webhook guarda (idDaUltimaResposta). */
+const SEGURADAS = ['seg-1', 'seg-2', 'seg-3', 'seg-4'];
 
 beforeEach(() => limparNaoEntregues());
 
@@ -122,25 +124,34 @@ test('item 1a: sem as seguradas, todas as mensagens desde a última resposta que
 
 test('item 1a: a resposta segurada fica guardada por conversa, na ordem, e some depois de um dia', () => {
   const t = Date.now();
-  guardarRespostaSegurada('u1', 100, SEGURADA_1, t);
-  guardarRespostaSegurada('u1', 100, SEGURADA_2, t + 1_000);
-  assert.deepEqual(respostasSeguradas('u1', 100, t + 2_000), [SEGURADA_1, SEGURADA_2]);
+  guardarRespostaSegurada('u1', 100, 'seg-1', t);
+  guardarRespostaSegurada('u1', 100, 'seg-2', t + 1_000);
+  assert.deepEqual(respostasSeguradas('u1', 100, t + 2_000), ['seg-1', 'seg-2']);
   // não consome: o turno pode passar pelo modelo mais de uma vez (ferramentas)
-  assert.deepEqual(respostasSeguradas('u1', 100, t + 2_000), [SEGURADA_1, SEGURADA_2]);
+  assert.deepEqual(respostasSeguradas('u1', 100, t + 2_000), ['seg-1', 'seg-2']);
   assert.deepEqual(respostasSeguradas('u1', 200, t), [], 'outro lead não vê');
   assert.deepEqual(respostasSeguradas('u2', 100, t), [], 'outra unidade não vê');
   assert.deepEqual(respostasSeguradas('u1', 100, t + 1_000 + VALIDADE_SEGURADA_MS + 1), []);
   guardarRespostaSegurada('u1', 100, '   ', t);
+  guardarRespostaSegurada('u1', 100, null, t);
   assert.deepEqual(respostasSeguradas('u1', 100, t), []);
 });
 
-test('item 1a: tira uma fala por segurada, na ordem — a mesma frase que depois SAIU continua contando', () => {
-  const falas = [p('oi'), ia('Como posso te chamar?'), p('👍'), ia('Como posso te chamar?'), p('Ana')];
-  const sem = semAsSeguradas(falas, ['Como posso te chamar?']);
-  assert.deepEqual(sem, [p('oi'), p('👍'), ia('Como posso te chamar?'), p('Ana')]);
-  // a linha dos botões e um ajuste pequeno na saída não impedem de achar a segurada
-  const comBotoes = [p('oi'), ia('Prefere vir de manhã ou de tarde, Ana?\n[[botoes: Manhã | Tarde]]'), p('tarde')];
-  assert.deepEqual(semAsSeguradas(comBotoes, ['Prefere vir de manhã ou de tarde, Ana?']), [p('oi'), p('tarde')]);
+test('item 1a: tira pelo id da mensagem — a mesma frase que depois SAIU continua contando (achado do Codex)', () => {
+  const msgs = [
+    new HumanMessage('oi'),
+    new AIMessage({ content: 'Como posso te chamar?', id: 'a1' }),
+    new HumanMessage('👍'),
+    new AIMessage({ content: 'Como posso te chamar?', id: 'a2' }),
+    new HumanMessage('Ana'),
+  ];
+  assert.deepEqual(falasDoHistorico(msgs, ['a1']), [p('oi'), p('👍'), ia('Como posso te chamar?'), p('Ana')]);
+  assert.deepEqual(falasDoHistorico(msgs, ['a2']), [p('oi'), ia('Como posso te chamar?'), p('👍'), p('Ana')]);
+  assert.deepEqual(falasDoHistorico(msgs, ['outro']), falasDoHistorico(msgs));
+  // o webhook guarda o id da última fala da IA do estado do grafo
+  assert.equal(idDaUltimaResposta(msgs), 'a2');
+  assert.equal(idDaUltimaResposta([new HumanMessage('oi')]), null);
+  assert.equal(idDaUltimaResposta(undefined), null);
 });
 
 test('item 1a: o aviso da resposta atropelada pede TODAS as mensagens desde a última resposta lida, dor antes', () => {

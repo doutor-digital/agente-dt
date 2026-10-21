@@ -21,12 +21,13 @@ import {
   perguntaQueEspera,
   renderRepeticao,
   respondeSinalDeAlerta,
-  semAsSeguradas,
+  falasDoHistorico,
   TEMA_SINAL_DE_ALERTA,
   travaDaResposta,
   type Fala,
 } from './repeticao.js';
 import { ehHandoffPorSinalDeAlerta } from './sinal-de-alerta.js';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
 
 const p = (texto: string): Fala => ({ papel: 'paciente', texto });
 const ia = (texto: string): Fala => ({ papel: 'ia', texto });
@@ -128,18 +129,17 @@ test('item 2: "já te falei" segue não transferindo — a IA é que não leu', 
 
 test('item 2: pergunta de sinais que nunca chegou (resposta segurada) não conta como feita', () => {
   // duas perguntas de sinais seguradas (o paciente escrevia enquanto elas nasciam) — ele nunca as leu
-  const falas = [
-    p('tô com dor na lombar'),
-    ia('Entendi! Há quanto tempo?'),
-    p('uns 3 dias'),
-    ia(PERGUNTA_2),
-    p('e o valor?'),
-    ia(PERGUNTA_3),
-    p('moro em Santa Fé'),
+  const grafo = [
+    new HumanMessage('tô com dor na lombar'),
+    new AIMessage({ content: 'Entendi! Há quanto tempo?', id: 'ok-1' }),
+    new HumanMessage('uns 3 dias'),
+    new AIMessage({ content: PERGUNTA_2, id: 'seg-1' }),
+    new HumanMessage('e o valor?'),
+    new AIMessage({ content: PERGUNTA_3, id: 'seg-2' }),
+    new HumanMessage('moro em Santa Fé'),
   ];
-  assert.ok(motivoDeHandoff(analisarRepeticao(falas)), 'com as seguradas no histórico, transferiria');
-  const lidas = semAsSeguradas(falas, [PERGUNTA_2, PERGUNTA_3]);
-  assert.equal(motivoDeHandoff(analisarRepeticao(lidas)), null);
+  assert.ok(motivoDeHandoff(analisarRepeticao(falasDoHistorico(grafo))), 'com as seguradas no histórico, transferiria');
+  assert.equal(motivoDeHandoff(analisarRepeticao(falasDoHistorico(grafo, ['seg-1', 'seg-2']))), null);
 });
 
 test('item 2: as outras perguntas seguem a regra do #101 — fala com conteúdo é resposta', () => {

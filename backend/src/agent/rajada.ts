@@ -7,7 +7,7 @@
  * Deus mesmo! Agora vamos cuidar dessa dor também… você mora aqui em Araguaína?". Duas causas:
  *  - a rajada virou vários turnos, e as respostas do meio foram seguradas (o paciente escrevia enquanto elas
  *    nasciam) mas ficaram no histórico como se tivessem saído — ver `guardarRespostaSegurada` (entrega-falha.ts)
- *    e `semAsSeguradas` (repeticao.ts);
+ *    e `falasDoHistorico` (repeticao.ts);
  *  - nada dizia que, numa rajada, a queixa vale mais que o cumprimento do fim.
  *
  * Aqui, em código: as falas do paciente desde a última resposta que ele LEU. Se alguma traz dor, limitação ou sinal

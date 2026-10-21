@@ -14,7 +14,7 @@ import { devoAvisar } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { recusaDoFunilTratamento } from '../lib/guarda-funil-tratamento.js';
 import { entraPelaMeta } from '../lib/canal-de-entrada.js';
-import { guardarRespostaSegurada, marcarNaoEntregue } from '../agent/entrega-falha.js';
+import { guardarRespostaSegurada, idDaUltimaResposta, marcarNaoEntregue } from '../agent/entrega-falha.js';
 import { tratarMensagemNaoRenderizada } from '../lib/mensagem-nao-renderizada.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 import { detectarInjecao, explicarInjecao, avisoDeInjecao } from '../services/injecao.js';
@@ -1375,7 +1375,7 @@ export async function processAgent(args: {
     if (segurada) {
       marcarNaoEntregue(unit.id, leadId, reply, Date.now(), 'atropelada');
       // Ela fica no histórico do grafo; as contas do próximo turno precisam saber que o paciente não a leu.
-      guardarRespostaSegurada(unit.id, leadId, replyBruto);
+      guardarRespostaSegurada(unit.id, leadId, idDaUltimaResposta(result.messages));
       await recorder.step({
         kind: 'THINKING',
         title: '⏭ Resposta segurada — o paciente mandou outra mensagem enquanto eu respondia; o próximo turno responde as duas',
