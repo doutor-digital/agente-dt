@@ -10,7 +10,7 @@ import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { nomeEstaNaFonte, semNomeDeProfissional } from '../lib/nome-do-profissional.js';
-import { LIMITE_TENTATIVAS, pedeNome } from './repeticao.js';
+import { JANELA_FALAS, LIMITE_TENTATIVAS, pedeNome } from './repeticao.js';
 import { cortarSeEstourou } from './teto-mensal.js';
 import { agendamentoDoVinculo, reservaAfirmada } from './reserva-sem-marcar.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
@@ -48,15 +48,17 @@ export interface FollowUpArgs {
 }
 
 async function historico(conversationId: string, limite = 12): Promise<{ texto: string; pedidosDeNome: number }> {
+  // Lê a mesma janela que o agente usa para contar os pedidos de nome (JANELA_FALAS); o texto vai só com as últimas.
   const msgs = await prisma.message.findMany({
     where: { conversationId },
     orderBy: { createdAt: 'desc' },
-    take: limite,
+    take: Math.max(limite, JANELA_FALAS),
     select: { role: true, content: true },
   });
+  msgs.reverse();
   return {
     texto: msgs
-      .reverse()
+      .slice(-limite)
       .map((m) => `${m.role === 'user' ? 'PACIENTE' : 'VOCÊ'}: ${m.content}`)
       .join('\n'),
     // A régua também pedia o nome ("Posso saber seu nome pra te ajudar?") a quem já tinha ignorado o pedido.

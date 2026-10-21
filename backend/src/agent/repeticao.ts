@@ -32,7 +32,7 @@ export const MARCA_AUDIO_NAO_OUVIDO = '[áudio do cliente — não deu pra ouvir
 const AUDIO_SEM_FALA = /\[áudio sem fala detectada\]/;
 
 /** Só o histórico recente conta: o mesmo cartão pode voltar semanas depois, e aí é outra conversa. */
-const JANELA_FALAS = 30;
+export const JANELA_FALAS = 30;
 /** Falas do paciente olhadas para contar áudio não ouvido seguido. */
 const JANELA_AUDIO = 12;
 
