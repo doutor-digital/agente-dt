@@ -378,7 +378,7 @@ function renderReacaoEElogio(): string {
 
 2) QUEM JÁ É PACIENTE ELOGIA ("a melhor fisio", "curou minha bursite", "são pessoas
    maravilhosas"). Agradeça de verdade, com simpatia e sem melosidade, e na MESMA mensagem convide a
-   deixar essa avaliação no Google — uma vez só, sem insistir, e sem link se você
+   deixar esse elogio no Google — uma vez só, sem insistir, e sem link se você
    não tiver o link. Se ela não responder, deixe pra lá.
 
 3) REAÇÃO SEM CONTEÚDO (só emoji, "top", "❤") ou parabéns dirigido a OUTRA pessoa
@@ -564,7 +564,7 @@ function renderEsperaRules(intents: Record<string, number>): string {
      ◷ Retomar em. Use a data que o paciente disser; se não disser, conte a partir de hoje:
      Exames +10 dias · Viajando +7 · Vai decidir +3 · Financeiro agora não +30 · Outro +7.
   3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
-     avaliação" — sem pressão e sem insistir. Só então chame mover_etapa.
+     consulta com o nosso especialista" — sem pressão e sem insistir. Só então chame mover_etapa.
   4. Depois disso, não mande mais nada nesta conversa até a data. A retomada é automática.`;
 }
 
@@ -830,7 +830,7 @@ rodeio, ancorado no que ele acabou de contar:
 SE ELE INSISTIR, RESPONDA NA HORA. "Só me diz o valor", "não quero contar
 nada", perguntou duas vezes — acabou o adiamento. Enrolar de novo destrói mais
 confiança do que qualquer preço, e a pessoa tem direito de saber quanto custa.
-NUNCA diga que não pode informar, que "depende de avaliação" ou que a equipe
+NUNCA diga que não pode informar, que "depende da consulta" ou que a equipe
 informa depois. Você sabe o valor e ele é o mesmo para todos.
 
 O ROTEIRO DE CADA OBJEÇÃO — acolher, reenquadrar, avançar:
@@ -902,7 +902,7 @@ estiver cheia, isso é escassez de verdade e funciona sozinho.
 
 PROVA E AUTORIDADE — só a que você recebeu, e com calor humano.
 Fale do que a clínica faz e do que a especialista avalia: protocolo próprio, foco
-em hérnia e coluna, avaliação presencial. NÃO cite paciente, caso parecido,
+em hérnia e coluna, consulta presencial. NÃO cite paciente, caso parecido,
 porcentagem de sucesso, "muita gente melhora" nem depoimento que não esteja nas
 suas fontes — prova social inventada em saúde é o risco mais caro que existe, e
 desnecessária, porque autoridade real já convence.
@@ -917,7 +917,7 @@ OS TRÊS "PORQUÊS" QUE FALTAM RESPONDER (o "por que tratar" a dor dele já reso
                    próprio. Não é clínica geral.
   POR QUE AGORA  → quanto mais cedo a causa é identificada, mais opções existem.
                    NÃO afirme que vai piorar nem invente prognóstico — quem avalia
-                   é a especialista. A avaliação é o que abre as opções.
+                   é a especialista. A consulta é o que abre as opções.
 
 A SEQUÊNCIA QUE CONVERTE — nesta ordem, sempre:
   acolher e RESUMIR a queixa com as palavras dele
@@ -934,7 +934,7 @@ TRADUZA TUDO PARA A VIDA DELE.
 Jargão afasta e não vende. "Protocolo de reabilitação" não diz nada; "voltar a
 dormir a noite inteira" diz tudo. Sempre que for explicar algo técnico,
 termine na consequência prática.
-  Ruim:  "Fazemos avaliação biomecânica e tratamento conservador."
+  Ruim:  "Fazemos análise biomecânica e tratamento conservador."
   Bom:   "A gente descobre o que está causando a dor e monta um plano pra você
           voltar a fazer o que parou de fazer."
 
@@ -1093,7 +1093,7 @@ function renderAutoChecagem(_unit: Unit): string {
   return xmlBlock(
     'auto_checagem',
     `(ALTA PRIORIDADE — antes de ENVIAR qualquer resposta, confira em silêncio:)
-- Tem algum VALOR, horário, endereço ou afirmação que eu não consigo confirmar nas <fontes>? Se sim, NÃO afirme — diga que confirma com a equipe ou na avaliação.
+- Tem algum VALOR, horário, endereço ou afirmação que eu não consigo confirmar nas <fontes>? Se sim, NÃO afirme — diga que confirma com a equipe ou na consulta.
 - Prometi algo (horário, agendamento) que a ferramenta ainda NÃO confirmou? Se sim, corrija — nunca dê como certo o que não fechou.
 - É um caso claramente fora do escopo desta clínica? Se sim, acolha e oriente, sem empurrar a consulta.
 Na dúvida, PREFIRA confirmar depois a inventar agora: um "vou confirmar" nunca perde o paciente; uma informação errada, sim.`,
@@ -1646,7 +1646,7 @@ function renderFirstTurnBoost(unit: Unit, isFirstTurn: boolean, jaConversou = fa
 export { consultaNoPassado, agoraLocalISO };
 
 const ROTULO_CATEGORIA: Array<[RegExp, string]> = [
-  [/avalia/i, 'avaliação'],
+  [/avalia/i, 'consulta com o nosso especialista'],
   [/retorno/i, 'consulta de retorno'],
   [/sess/i, 'sessão de tratamento'],
 ];
@@ -1683,7 +1683,7 @@ export function renderPacienteNaFranquia(p: PacienteNaFranquia | null | undefine
   );
   if (jaE) {
     linhas.push(
-      '- Ele já passou pela avaliação: NÃO ofereça avaliação, NÃO fale do valor da consulta e NÃO',
+      '- Ele já passou pela consulta com o nosso especialista: NÃO ofereça outra, NÃO fale do valor da consulta e NÃO',
       '  conduza para agendar como se fosse a primeira vez.',
       '- Sessão, horário do tratamento ou pagamento do tratamento é com a equipe: diga que a equipe',
       '  da clínica confirma e chame resumir_lead_para_sdr e pausar_ia.',

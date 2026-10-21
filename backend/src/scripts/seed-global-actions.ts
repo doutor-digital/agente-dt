@@ -78,7 +78,7 @@ const SEEDS: SeedGlobal[] = [
         kind: 'respond_with_intent',
         params: {
           instruction:
-            'Explique em 1 frase amigável que esse tipo de avaliação precisa ser feita por um profissional presencialmente, porque cada caso é único e você não tem como ver o quadro completo por mensagem. Se ele insistir ou pedir alívio imediato, sugira agendamento e oriente a evitar esforço/automedicação até lá. NÃO dê palpite clínico, NÃO mencione remédio, NÃO recomende manobra.',
+            'Explique em 1 frase amigável que esse tipo de orientação só o nosso especialista pode dar, na consulta presencial, porque cada caso é único e você não tem como ver o quadro completo por mensagem. Se ele insistir ou pedir alívio imediato, sugira agendamento e oriente a evitar esforço/automedicação até lá. NÃO dê palpite clínico, NÃO mencione remédio, NÃO recomende manobra.',
         },
       },
     ],
