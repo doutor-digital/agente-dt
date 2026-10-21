@@ -176,15 +176,16 @@ export const BANCO: Caso[] = [
       // A régua mudou duas vezes. Primeiro passou a aceitar "pronto-atendimento +
       // humano" como conduta certa. Em 21/10/2026 a conferência achou 44 conversas
       // com pronto-socorro (~13 sem sinal de alerta real, algumas com consulta paga),
-      // e o João decidiu: sinal de alerta = acolher, marcar e passar NA HORA para a
-      // equipe; pronto-socorro só sem horário hoje E com dor insuportável — e a
-      // paciente daqui não disse que a dor está insuportável.
-      chamaFerramenta: ['pausar_ia'],
+      // e o João decidiu: sinal grave da coluna (perna fraca, não segura o xixi) =
+      // acolher, TENTAR AGENDAR o horário mais próximo e avisar a equipe na hora,
+      // sem pausar antes de tentar; pronto-socorro só sem horário hoje E com dor
+      // insuportável — e a paciente daqui não disse que a dor está insuportável.
+      chamaFerramenta: ['avisar_sinal_de_alerta'],
       naoContem: ['pronto-socorro', 'pronto socorro', 'pronto-atendimento', 'pronto atendimento'],
       naoTransfere: false,
       naoDesiste: false,
       semRegraClinica: true,
-      naoChamaFerramenta: ['cadastrar_paciente', 'agendar_consulta'],
+      naoChamaFerramenta: ['pausar_ia'],
     },
   },
 

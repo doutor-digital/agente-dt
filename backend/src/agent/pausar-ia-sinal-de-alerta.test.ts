@@ -16,6 +16,24 @@ import { buildTools } from './tools.js';
 
 delete process.env.TELEGRAM_BOT_TOKEN;
 
+// A marca "já avisei este cartão" (card_alert) em memória.
+const marcas = new Map<string, Date>();
+type ChaveMarca = { unitId_leadId_ruleKey: { unitId: string; leadId: string; ruleKey: string } };
+const chaveDe = (w: ChaveMarca) => `${w.unitId_leadId_ruleKey.unitId}|${w.unitId_leadId_ruleKey.leadId}|${w.unitId_leadId_ruleKey.ruleKey}`;
+Object.defineProperty(prisma, 'cardAlert', {
+  value: {
+    findUnique: async ({ where }: { where: ChaveMarca }) => {
+      const em = marcas.get(chaveDe(where));
+      return em ? { createdAt: em } : null;
+    },
+    upsert: async ({ where }: { where: ChaveMarca }) => {
+      marcas.set(chaveDe(where), new Date());
+      return {};
+    },
+  },
+  configurable: true,
+});
+
 Object.defineProperty(prisma, 'conversation', {
   value: {
     findFirst: async () => ({ contactName: 'Maria' }),
@@ -41,6 +59,7 @@ beforeEach(() => {
   pausas = [];
   falharPausa = false;
   passos = [];
+  marcas.clear();
 });
 
 const kommo = {
@@ -164,4 +183,37 @@ test('sinal de alerta não passa pela volta à agenda do "sem vaga"', async () =
   assert.match(r, /^OK — IA pausada/);
   assert.ok(!passos.some((p) => /safety-net/.test(p.title)), 'não consultou a agenda');
   assert.equal(tarefas.length, 1);
+});
+
+test('sinal grave da coluna: avisar_sinal_de_alerta avisa a equipe na hora SEM pausar a IA', async () => {
+  const r = String(await ferramenta('avisar_sinal_de_alerta').invoke({ leadId: 20, motivo: 'não segura o xixi desde ontem' }));
+  assert.equal(tarefas.length, 1);
+  assert.match(tarefas[0].text, /^ALERTA · doutor-hernia-teste · \[Contato: Maria\] URGENTE: paciente com sinal de alerta clínico \(não segura o xixi desde ontem\)/);
+  assert.match(tarefas[0].text, /A IA está oferecendo o horário mais próximo/);
+  assert.equal(tarefas[0].responsibleUserId, 777);
+  assert.deepEqual(pausas, [], 'a IA segue ativa para agendar');
+  assert.match(r, /^OK — equipe avisada com urgência/);
+  assert.match(r, /siga oferecendo o horário mais próximo/);
+  assert.match(r, /Não prometa prazo/);
+});
+
+test('avisar de novo no turno seguinte não repete a tarefa; transferir depois avisa que a IA parou', async () => {
+  await ferramenta('avisar_sinal_de_alerta').invoke({ leadId: 21, motivo: 'perna fraca de repente' });
+  // turno seguinte: ferramentas novas, mesma marca no banco
+  const r = String(await ferramenta('avisar_sinal_de_alerta').invoke({ leadId: 21, motivo: 'perna fraca de repente' }));
+  assert.equal(tarefas.length, 1);
+  assert.match(r, /já tinha sido avisada/);
+  // ele recusou o horário: aí transfere, e a equipe fica sabendo que a IA parou
+  await ferramenta('pausar_ia').invoke({ leadId: 21, motivo: 'recusou o horário, sinal de alerta', sinalDeAlerta: true });
+  assert.equal(tarefas.length, 2);
+  assert.match(tarefas[1].text, /A IA parou e passou o atendimento/);
+  assert.deepEqual(pausas, [21]);
+});
+
+test('avisar e transferir no mesmo turno: uma tarefa só', async () => {
+  const tools = ferramentas();
+  await ferramenta('avisar_sinal_de_alerta', undefined, tools).invoke({ leadId: 22, motivo: 'dormência na virilha' });
+  await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 22, motivo: 'sem horário até amanhã', sinalDeAlerta: true });
+  assert.equal(tarefas.length, 1);
+  assert.deepEqual(pausas, [22]);
 });

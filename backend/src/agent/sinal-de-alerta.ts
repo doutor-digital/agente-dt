@@ -13,6 +13,12 @@ import type { Unit } from '@prisma/client';
  *
  * Regra decidida (João, 21/10): acolher, marcar o sinal de alerta e passar NA HORA para humano.
  * Pronto-socorro só se não houver horário HOJE **e** o paciente disser que a dor está insuportável.
+ *
+ * Ajuste do João (21/10, à tarde) para os SINAIS GRAVES DA COLUNA (perder o controle do xixi ou das fezes,
+ * dormência na virilha/"região da sela", perna fraca de repente): a Sofia não manda ao pronto-socorro nem
+ * transfere de cara — ela TENTA AGENDAR o horário mais próximo (hoje/amanhã) e avisa a equipe na hora
+ * (`avisar_sinal_de_alerta`, que não pausa). Só transfere se ele recusar, não houver horário até amanhã ou a
+ * conversa travar. Os outros sinais (queda/pancada, febre com dor) seguem a regra da manhã.
  */
 
 /** Motivo de `pausar_ia` que é sinal de alerta — rede de segurança para quando o modelo esquece a flag. */
@@ -42,7 +48,23 @@ export function travaDoProntoSocorro(texto: string | null | undefined): string {
   return (
     ' [REGRA DA REDE, vale mais que o texto acima: pronto-socorro SÓ quando não houver horário HOJE na ' +
     'clínica E o paciente disser que a dor está insuportável. Fora disso, não cite pronto-socorro (se for ' +
-    'mensagem pronta, mande sem essa parte): acolha e transfira para a equipe na hora.]'
+    'mensagem pronta, mande sem essa parte) e siga <sinal_de_alerta>.]'
+  );
+}
+
+/** Regra da unidade cuja CONDIÇÃO é sinal de alerta — costuma mandar transferir de cara. */
+const CONDICAO_SINAL_DE_ALERTA = /sinal(is)? de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b/i;
+
+/**
+ * Colada na regra da unidade disparada por sinal de alerta: nos sinais graves da coluna, a transferência
+ * imediata que o cadastro manda vira "tente agendar antes" (ajuste do João, 21/10).
+ */
+export function travaDaRegraDeSinalDeAlerta(condicao: string | null | undefined): string {
+  if (!CONDICAO_SINAL_DE_ALERTA.test(condicao ?? '')) return '';
+  return (
+    ' [REGRA DA REDE, vale mais que esta regra: nos SINAIS GRAVES DA COLUNA não transfira nem pause antes de ' +
+    'tentar agendar — ofereça o horário mais próximo, chame avisar_sinal_de_alerta e só transfira se ele ' +
+    'recusar, não houver horário até amanhã ou a conversa travar. Ver <sinal_de_alerta>.]'
   );
 }
 
@@ -50,35 +72,61 @@ export function travaDoProntoSocorro(texto: string | null | undefined): string {
 export function renderSinalDeAlerta(unit: Pick<Unit, 'category'>): string {
   if (unit.category?.trim() !== 'saude') return '';
   return `<sinal_de_alerta>
-(ALTA PRIORIDADE — vale mais que qualquer orientação das <acoes> que mande ao pronto-socorro)
-- O QUE É: perda de força que está piorando (a perna "falha", não consegue ficar em pé), perder o
-  controle do xixi ou das fezes, dormência na região íntima, dor depois de queda ou pancada forte,
-  febre junto com a dor. Dor forte, dor que piorou, dor que desce para a perna ou formigamento,
-  sozinhos, NÃO são sinal de alerta: siga o atendimento normal.
+(ALTA PRIORIDADE — vale mais que qualquer orientação das <acoes> que mande ao pronto-socorro ou
+mande transferir antes de tentar agendar)
 - COMO PERGUNTAR: um sinal por pergunta. Um "sim" solto a uma pergunta com vários sinais não
   confirma nada — pergunte qual deles a pessoa sente antes de tratar como sinal de alerta.
-- CONFIRMADO: (1) acolha em UMA frase, sem assustar e sem diagnosticar; (2) dispare a regra da
-  unidade que marca o cartão, se houver; (3) transfira NA HORA, sem pedir licença:
-  resumir_lead_para_sdr e depois pausar_ia com sinalDeAlerta: true. O sistema avisa a equipe com
-  urgência, e o resultado de pausar_ia diz o que falar sobre quando a equipe responde.
-- PRONTO-SOCORRO: só cite quando as DUAS coisas forem verdade — (a) não há horário HOJE na clínica
-  (consultar_horarios não achou nada hoje, ou a clínica já fechou hoje) E (b) o paciente disse que
-  a dor está insuportável. Fora disso, NÃO mande ao pronto-socorro, nem "por precaução" — muito
-  menos quem já tem consulta marcada ou paga.
-- Se o próprio paciente disser que vai ao pronto-socorro, ou perguntar se deve ir, não desaconselhe:
+- NÃO É sinal de alerta: dor forte, dor que piorou, dor que desce para a perna ou formigamento,
+  sozinhos. Siga o atendimento normal.
+- SINAIS GRAVES DA COLUNA: perder o controle do xixi ou das fezes, dormência na virilha / região
+  íntima ("região da sela"), perna que ficou fraca de repente ou está piorando. Aqui a ordem é:
+  (1) acolha em UMA frase, sem assustar e sem diagnosticar;
+  (2) TENTE AGENDAR: consulte a agenda e ofereça o horário mais próximo, priorizando hoje e amanhã,
+      e marque se ele aceitar (o caminho normal de cadastro e agendamento);
+  (3) no MESMO turno em que confirmar o sinal, chame avisar_sinal_de_alerta — avisa a equipe na hora,
+      com urgência, e NÃO pausa a IA. Não chame pausar_ia antes de tentar agendar.
+  Só transfira (resumir_lead_para_sdr e depois pausar_ia com sinalDeAlerta: true) se ele recusar o
+  horário, se não houver horário até amanhã, ou se a conversa travar.
+- OUTROS SINAIS DE ALERTA (dor depois de queda ou pancada forte, febre junto com a dor): acolha em
+  UMA frase e transfira NA HORA, sem pedir licença: resumir_lead_para_sdr e depois pausar_ia com
+  sinalDeAlerta: true. O resultado de pausar_ia diz o que falar sobre quando a equipe responde.
+- PRONTO-SOCORRO: o sinal, sozinho, NÃO é motivo de pronto-socorro. Só cite pronto-socorro quando as
+  DUAS coisas forem verdade — (a) não há horário HOJE na clínica (consultar_horarios não achou nada
+  hoje, ou a clínica já fechou hoje) E (b) o paciente disse que a dor está insuportável. Nunca "por
+  precaução" — muito menos para quem já tem consulta marcada ou paga.
+- Se o próprio paciente disser que vai ao pronto-socorro, ou perguntar se deve ir, NUNCA desaconselhe:
   diga que, se ele sente que não dá para esperar, pode ir, e que a equipe já foi avisada.
 - NUNCA prometa prazo da equipe ("em instantes", "já já", "logo te chamam").
 </sinal_de_alerta>`;
 }
 
+/**
+ * Em que pé está a conversa quando a equipe é avisada:
+ *  - `agendando`: sinal grave da coluna, a IA segue tentando marcar o horário mais próximo (não pausou);
+ *  - `transferiu`: a IA parou e passou o atendimento.
+ */
+export type SituacaoDoAviso = 'agendando' | 'transferiu';
+
+/** Uma tarefa por situação por cartão a cada 24 h (`card_alert`, a mesma regra dos outros avisos). */
+export const CHAVE_DO_AVISO: Record<SituacaoDoAviso, string> = {
+  agendando: 'sinal-de-alerta-agendando',
+  transferiu: 'sinal-de-alerta-transferiu',
+};
+
 /** Texto da tarefa urgente no Kommo. `ALERTA · <slug> · [Contato: nome]` é o formato que o roteador de alertas lê. */
-export function textoDoAvisoUrgente(a: { slug: string; nome: string | null; motivo: string }): string {
+export function textoDoAvisoUrgente(a: {
+  slug: string;
+  nome: string | null;
+  motivo: string;
+  situacao?: SituacaoDoAviso;
+}): string {
   const contato = a.nome?.trim() ? `[Contato: ${a.nome.trim()}] ` : '';
   const motivo = a.motivo.trim().replace(/\s+/g, ' ').slice(0, 200);
-  return (
-    `ALERTA · ${a.slug} · ${contato}URGENTE: paciente com sinal de alerta clínico (${motivo}). ` +
-    'A IA parou e passou o atendimento para a equipe — falar com o paciente agora.'
-  );
+  const situacao =
+    a.situacao === 'agendando'
+      ? 'A IA está oferecendo o horário mais próximo para agendar — acompanhar a conversa e falar com o paciente.'
+      : 'A IA parou e passou o atendimento para a equipe — falar com o paciente agora.';
+  return `ALERTA · ${a.slug} · ${contato}URGENTE: paciente com sinal de alerta clínico (${motivo}). ${situacao}`;
 }
 
 /** Aviso no Telegram do João — o canal que sobrou depois do banimento do WhatsApp dos alertas. */
@@ -88,8 +136,10 @@ export function textoTelegramSinalDeAlerta(a: {
   leadId: number;
   nome: string | null;
   motivo: string;
+  situacao?: SituacaoDoAviso;
 }): string {
   const quem = a.nome?.trim() || `lead ${a.leadId}`;
   const link = a.subdominio ? `https://${a.subdominio}.kommo.com/leads/detail/${a.leadId}` : `lead ${a.leadId}`;
-  return [`🚑 Sinal de alerta · ${a.unidade}`, `${quem} — ${a.motivo.trim().slice(0, 200)}. A IA passou para a equipe.`, link].join('\n');
+  const pe = a.situacao === 'agendando' ? 'A IA está tentando agendar o horário mais próximo.' : 'A IA passou para a equipe.';
+  return [`🚑 Sinal de alerta · ${a.unidade}`, `${quem} — ${a.motivo.trim().slice(0, 200)}. ${pe}`, link].join('\n');
 }

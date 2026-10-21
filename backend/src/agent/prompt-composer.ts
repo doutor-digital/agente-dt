@@ -23,7 +23,7 @@ import {
 } from '../services/lead-memory.service.js';
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
-import { renderSinalDeAlerta, travaDoProntoSocorro } from './sinal-de-alerta.js';
+import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro } from './sinal-de-alerta.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
@@ -974,8 +974,10 @@ dor de quem já escolheu o horário perde a paciência dele.
   agendou                      →  confirmar em bloco e proteger o comparecimento
   objeção em qualquer ponto    →  acolher, reenquadrar, e VOLTAR ao movimento
                                   que estava fazendo — não recomece do zero
-  sinal de alerta clínico      →  PARE a venda, acolha e transfira NA HORA —
-                                  pronto-socorro só sem horário hoje E com dor insuportável
+  sinal de alerta clínico      →  acolher; sinal grave da coluna: oferecer o
+                                  horário mais próximo e avisar a equipe; outros
+                                  sinais: transferir NA HORA. Pronto-socorro só
+                                  sem horário hoje E com dor insuportável
 
 Não pule etapas para acelerar. Cada uma existe porque a seguinte não funciona
 sem ela — e pular é o que faz a conversa travar em "vou pensar".
@@ -1354,14 +1356,18 @@ function renderActions(actions: UnitAction[]): string {
   // `notes` é recado de operador pra operador ("Objeção preço.", "RED FLAG: urgência
   // + transferência.") — repete a condição que já está na linha e não diz nada novo
   // ao modelo. Continua no banco, para quem edita a regra no console.
-  const lines = visible.map((a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}`);
+  const lines = visible.map(
+    (a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}${travaDaRegraDeSinalDeAlerta(a.conditionDescription)}`,
+  );
   return xmlBlock('acoes', `${MOLDURA_DAS_ACOES}\n\n${lines.join('\n\n')}`);
 }
 
 function renderGlobalActions(actions: GlobalAction[]): string {
   const visible = actions.filter((a) => !isPureGuardRule(a));
   if (visible.length === 0) return '';
-  const lines = visible.map((a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}`);
+  const lines = visible.map(
+    (a, i) => `${i + 1}. Quando ${a.conditionDescription.trim()}, ${humanizeAction(a)}${travaDaRegraDeSinalDeAlerta(a.conditionDescription)}`,
+  );
   return xmlBlock('regras_globais', `(prioridade máxima)
 - Valem pra TODAS as unidades e ganham das regras da unit (não-negociáveis).
 - Dispare todas as ações da regra, em silêncio.

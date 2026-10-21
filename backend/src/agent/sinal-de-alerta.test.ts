@@ -5,8 +5,13 @@
  * algumas com consulta paga e horário livre. Regra decidida pelo João: acolher, marcar o sinal de alerta e passar
  * NA HORA para humano; pronto-socorro só se não houver horário HOJE E o paciente disser que a dor está insuportável.
  *
+ * Ajuste do João (21/10, à tarde): nos sinais graves da coluna (perder o controle do xixi/fezes, dormência na
+ * virilha, perna fraca de repente) a Sofia TENTA AGENDAR o horário mais próximo e avisa a equipe na hora, sem
+ * pausar antes de tentar. Só transfere se ele recusar, não houver horário até amanhã ou a conversa travar.
+ *
  * O que estes testes prendem no prompt:
  *  - o bloco <sinal_de_alerta> sai para clínica (e só para clínica) com o critério do pronto-socorro;
+ *  - sinal grave da coluna: agendar + avisar, sem pausar antes; outros sinais: transferir na hora;
  *  - "sim" solto a uma pergunta com vários sinais não confirma nada;
  *  - a regra da unidade que cita pronto-socorro ganha a trava da rede (o cadastro em si não muda por aqui);
  *  - a frase de transferência não promete "um instante".
@@ -63,10 +68,11 @@ test('clínica recebe o bloco do sinal de alerta, nos dois caminhos do prompt', 
   const { cacheable } = composeSystemPromptParts({ unit: unidade() });
   for (const p of [flat, cacheable]) {
     assert.ok(p.includes('<sinal_de_alerta>'), 'o bloco sumiu do prompt');
-    assert.match(bloco(p), /PRONTO-SOCORRO: só cite quando as DUAS coisas forem verdade/);
+    assert.match(bloco(p), /o sinal, sozinho, NÃO é motivo de pronto-socorro/);
+    assert.match(bloco(p), /Só cite pronto-socorro quando as\s+DUAS coisas forem verdade/);
     assert.match(bloco(p), /não há horário HOJE/);
     assert.match(bloco(p), /dor está insuportável/);
-    assert.match(bloco(p), /muito\s+menos quem já tem consulta marcada ou paga/);
+    assert.match(bloco(p), /muito menos para quem já tem consulta marcada ou paga/);
   }
 });
 
@@ -77,10 +83,34 @@ test('fora de clínica o bloco não entra (advocacia, energia solar, sem categor
   }
 });
 
-test('transfere NA HORA, sem pedir licença, avisando a equipe com urgência', () => {
+test('sinal grave da coluna: tenta agendar o horário mais próximo e avisa a equipe, sem pausar antes', () => {
   const b = bloco(composeSystemPrompt({ unit: unidade() }));
-  assert.match(b, /transfira NA HORA, sem pedir licença/);
-  assert.match(b, /pausar_ia com sinalDeAlerta: true/);
+  const graves = b.slice(b.indexOf('SINAIS GRAVES DA COLUNA'), b.indexOf('OUTROS SINAIS DE ALERTA'));
+  assert.match(graves, /perder o controle do xixi ou das fezes/);
+  assert.match(graves, /região da sela/);
+  assert.match(graves, /perna que ficou fraca de repente/);
+  assert.match(graves, /TENTE AGENDAR/);
+  assert.match(graves, /horário mais próximo, priorizando hoje e amanhã/);
+  assert.match(graves, /chame avisar_sinal_de_alerta/);
+  assert.match(graves, /NÃO pausa a IA. Não chame pausar_ia antes de tentar agendar/);
+  // A ordem: acolher → agendar → avisar.
+  assert.ok(graves.indexOf('(1) acolha') < graves.indexOf('(2) TENTE AGENDAR'));
+  assert.ok(graves.indexOf('(2) TENTE AGENDAR') < graves.indexOf('(3) no MESMO turno'));
+  // Só transfere se ele recusar, não houver horário até amanhã ou travar.
+  assert.match(graves, /Só transfira[\s\S]*se ele recusar[\s\S]*não houver horário até amanhã[\s\S]*a conversa travar/);
+});
+
+test('outros sinais de alerta seguem transferindo na hora', () => {
+  const b = bloco(composeSystemPrompt({ unit: unidade() }));
+  const outros = b.slice(b.indexOf('OUTROS SINAIS DE ALERTA'), b.indexOf('PRONTO-SOCORRO:'));
+  assert.match(outros, /queda ou pancada forte/);
+  assert.match(outros, /transfira NA HORA, sem pedir licença/);
+  assert.match(outros, /pausar_ia com\s+sinalDeAlerta: true/);
+});
+
+test('nunca desaconselha o pronto-socorro se o paciente quiser ir, e não promete prazo', () => {
+  const b = bloco(composeSystemPrompt({ unit: unidade() }));
+  assert.match(b, /Se o próprio paciente disser que vai ao pronto-socorro[\s\S]*NUNCA desaconselhe/);
   assert.match(b, /NUNCA prometa prazo da equipe/);
 });
 
@@ -89,7 +119,7 @@ test('"sim" solto a uma pergunta com vários sinais não confirma nada', () => {
   assert.match(b, /um sinal por pergunta/);
   assert.match(b, /"sim" solto a uma pergunta com vários sinais não\s+confirma nada/);
   // Dor forte sozinha não é sinal de alerta — foi o que mais virou pronto-socorro sem motivo.
-  assert.match(b, /Dor forte, dor que piorou[\s\S]*NÃO são sinal de alerta/);
+  assert.match(b, /NÃO É sinal de alerta: dor forte, dor que piorou/);
 
   const triagem = renderFaltaParaAgendar({ queixa: 'dormência na perna' });
   assert.match(triagem, /UMA coisa por vez/);
@@ -99,7 +129,10 @@ test('"sim" solto a uma pergunta com vários sinais não confirma nada', () => {
 test('a régua de estados da rede não manda mais só "transfira" sem critério', () => {
   const p = composeSystemPrompt({ unit: unidade() });
   assert.doesNotMatch(p, /PARE a condução comercial e transfira/);
-  assert.match(p, /sinal de alerta clínico\s+→\s+PARE a venda, acolha e transfira NA HORA —\s+pronto-socorro só sem horário hoje E com dor insuportável/);
+  assert.match(
+    p,
+    /sinal de alerta clínico\s+→\s+acolher; sinal grave da coluna: oferecer o\s+horário mais próximo e avisar a equipe; outros\s+sinais: transferir NA HORA\. Pronto-socorro só\s+sem horário hoje E com dor insuportável/,
+  );
 });
 
 test('regra da unidade que manda ao pronto-socorro ganha a trava da rede', () => {
@@ -111,8 +144,10 @@ test('regra da unidade que manda ao pronto-socorro ganha a trava da rede', () =>
   const p = composeSystemPrompt({ unit: unidade(), actions: [regra] });
   const acoes = p.slice(p.indexOf('<acoes>'), p.indexOf('</acoes>'));
   assert.equal(acoes.match(/REGRA DA REDE, vale mais que o texto acima/g)?.length, 2, 'as duas falas com pronto-socorro levam a trava');
+  // A regra disparada por sinal de alerta manda transferir de cara: nos sinais graves, tenta agendar antes.
+  assert.match(acoes, /REGRA DA REDE, vale mais que esta regra: nos SINAIS GRAVES DA COLUNA não transfira nem pause antes de\s*tentar agendar/);
 
-  // Orientação sem pronto-socorro passa intacta.
+  // Orientação sem pronto-socorro, numa regra que não é de sinal de alerta, passa intacta.
   const outra = acao('o paciente perguntar o endereço', [{ kind: 'respond_with_intent', params: { instruction: 'Mande o endereço da clínica.' } }]);
   assert.doesNotMatch(composeSystemPrompt({ unit: unidade(), actions: [outra] }), /REGRA DA REDE/);
 });
@@ -158,4 +193,8 @@ test('tarefa urgente no formato que o roteador de alertas lê', () => {
   assert.match(t, /^ALERTA · doutor-hernia-teste · \[Contato: Maria\] URGENTE: paciente com sinal de alerta clínico \(perda de força na perna\)/);
   assert.doesNotMatch(t, /pronto/i);
   assert.match(textoDoAvisoUrgente({ slug: 's', nome: null, motivo: 'x' }), /^ALERTA · s · URGENTE/);
+  // Sinal grave da coluna: a IA segue agendando — a equipe sabe que não foi transferido.
+  const agendando = textoDoAvisoUrgente({ slug: 's', nome: 'Ana', motivo: 'não segura o xixi', situacao: 'agendando' });
+  assert.match(agendando, /URGENTE: paciente com sinal de alerta clínico \(não segura o xixi\)\. A IA está oferecendo o horário mais próximo/);
+  assert.doesNotMatch(agendando, /parou/);
 });
