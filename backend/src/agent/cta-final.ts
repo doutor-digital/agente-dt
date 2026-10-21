@@ -21,9 +21,16 @@ export interface VereditoCta {
   motivo: string | null;
 }
 
-/** Decide se a resposta pode sair como está ou se merece UMA reescrita pedindo a pergunta final. */
-export function avaliarChamadaFinal(texto: string): VereditoCta {
+/**
+ * Decide se a resposta pode sair como está ou se merece UMA reescrita pedindo a pergunta final.
+ *
+ * `pacienteEncerrou`: ele agradeceu/se despediu ou disse que vai se organizar (paciente-encerrou.ts). Aí a despedida
+ * curta, sem pergunta, é a resposta certa — cobrar a pergunta era o que fazia a reescrita voltar com "fica melhor às
+ * 08h, 14h ou 16h?" para quem tinha acabado de dizer "muito obrigado pelo atendimento" (Araguaína, 17/10/2026).
+ */
+export function avaliarChamadaFinal(texto: string, opcoes: { pacienteEncerrou?: boolean } = {}): VereditoCta {
   const t = (texto ?? '').trim();
+  if (opcoes.pacienteEncerrou) return { precisaRefazer: false, motivo: null };
   if (t.length < 25) return { precisaRefazer: false, motivo: null };        // "Ok!", "Perfeito 😊": curta demais pra cobrar
   if (t.includes('?')) return { precisaRefazer: false, motivo: null };      // tem pergunta em algum lugar: basta
   if (/\[\[\s*botoes\s*:/i.test(t)) return { precisaRefazer: false, motivo: null };
