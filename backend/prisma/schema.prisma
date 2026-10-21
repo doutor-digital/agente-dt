@@ -341,6 +341,7 @@ model Unit {
 
   instagramComments InstagramComment[]
   agendaBlocks      AgendaBlock[]
+  agendaCache       AgendaCacheDia[]
   leadPausas        LeadPausa[]
   simulacoes        AutomacaoSimulacao[]
   spineLeadLinks    SpineLeadLink[]
@@ -2190,4 +2191,28 @@ model ChaveDeIntegracao {
 
   @@unique([unitId, provedor])
   @@map("chaves_de_integracao")
+}
+
+/// Cache curto da busca de horários da agenda (`consultar_horarios`), por unidade + dia — ver src/lib/cache-agenda.ts.
+/// Cada busca sonda a franquia (marca e cancela um agendamento de teste por horário); conversas da mesma unidade
+/// repetiam a mesma busca. Fica no banco, e não na memória, porque há mais de uma cópia do servidor.
+/// Duas espécies de linha: a ENTRADA (o dia buscado, com `resultado`) e a MARCA de apagado (`chave` "!apagado",
+/// `resultado` nulo, `dia` "*" para a unidade toda), que invalida toda entrada consultada antes dela.
+model AgendaCacheDia {
+  id           String   @id @default(cuid())
+  unitId       String   @map("unit_id")
+  /// "AAAA-MM-DD" no fuso da clínica; "*" na marca que apaga a unidade toda.
+  dia          String
+  /// turno ("manha", "tarde", "dia") + assinatura da configuração da agenda; "!apagado" na marca.
+  chave        String
+  /// { todosLivres, livres, oferecer, recusados, sondados } — nulo na marca.
+  resultado    Json?
+  /// Quando a franquia foi consultada (início da busca); na marca, quando o dia foi apagado.
+  consultadoEm DateTime @map("consultado_em")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, dia, chave], map: "agenda_cache_dias_chave_key")
+  @@index([consultadoEm], map: "agenda_cache_dias_consultado_idx")
+  @@map("agenda_cache_dias")
 }
