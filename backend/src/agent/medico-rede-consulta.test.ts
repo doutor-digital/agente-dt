@@ -144,6 +144,10 @@ test('item 5: slug de resgate que divide o Kommo de uma unidade da rede é Douto
   const rede = montarRede([linha('doutor-hernia-imperatriz', { name: 'Comercial', kommoSubdomain: 'attivacorpoementeitz' })]);
   assert.equal(ehDoutorHernia(resgate, rede), true);
   assert.equal(ehDoutorHernia({ slug: 'acailandia-resgate', name: 'Doutor Hérnia Açailândia', personaCompanyName: null, kommoSubdomain: null }), true);
+  // o follow-up também recebe a rede (achado do Codex): sem ela o resgate ficava sem a regra
+  const u = unidade({ id: 'u-res', ...resgate } as Partial<Unit>);
+  assert.ok(!composeFollowUpSystemPrompt(u).includes(FRASE_E_MEDICO));
+  assert.ok(composeFollowUpSystemPrompt(u, new Date(), rede).includes(FRASE_E_MEDICO));
 });
 
 // ── item 7: a rede ─────────────────────────────────────────────────────────────────────────────────────────

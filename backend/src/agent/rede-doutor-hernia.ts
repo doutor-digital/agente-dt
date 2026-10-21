@@ -272,7 +272,7 @@ export function renderIdentidadeCurta(): string {
 }
 
 /** Só a identidade curta (sem a lista) — para o prompt do follow-up. */
-export function renderDoutorHerniaCurto(unit: UnidadeParaDH): string {
-  if (!ehDoutorHernia(unit)) return '';
+export function renderDoutorHerniaCurto(unit: UnidadeParaDH, rede: ReadonlyArray<UnidadeDaRede> = []): string {
+  if (!ehDoutorHernia(unit, rede)) return '';
   return renderIdentidadeCurta();
 }

@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { createChatModel, invokeChatModel, resolveModelName } from '../services/openai.service.js';
 import { composeFollowUpSystemPrompt } from './prompt-composer.js';
+import { carregarRede, type UnidadeDaRede } from './rede-doutor-hernia.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { aplicarGuardrail } from './guardrail.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
@@ -75,7 +76,9 @@ export async function runAgentFollowUp(args: FollowUpArgs): Promise<string | nul
 
   let base = '';
   try {
-    base = composeFollowUpSystemPrompt(unit);
+    // A rede (cache de 10 min) é o que reconhece um slug de resgate que divide o Kommo de uma clínica DH.
+    const rede = await carregarRede().catch(() => [] as UnidadeDaRede[]);
+    base = composeFollowUpSystemPrompt(unit, new Date(), rede);
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug }, 'follow-up: persona indisponível, usando genérica');
   }

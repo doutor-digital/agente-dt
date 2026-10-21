@@ -2482,14 +2482,18 @@ export function renderFatosDaUnidade(unit: Unit): string {
  * afirmando que uma data futura tinha passado. A conversa normal acerta isso desde a
  * v1.68.0 porque recebe `<calendario>`; este caminho montava só persona + fatos + regras.
  */
-export function composeFollowUpSystemPrompt(unit: Unit, agora: Date = new Date()): string {
+export function composeFollowUpSystemPrompt(
+  unit: Unit,
+  agora: Date = new Date(),
+  rede: ReadonlyArray<UnidadeDaRede> = [],
+): string {
   return [
     renderPersona(unit),
     renderFatosDaUnidade(unit),
     renderHojeCurto(unit, agora),
     renderRulesGlobal(),
     // Sem a lista da rede (o follow-up é enxuto); "é médico?" e "avaliação" valem aqui também.
-    renderDoutorHerniaCurto(unit),
+    renderDoutorHerniaCurto(unit, rede),
   ]
     .filter((b) => b.trim())
     .join('\n\n');
