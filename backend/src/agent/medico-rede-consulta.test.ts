@@ -192,13 +192,13 @@ test('nome da IA: a trava de saída tira o "Dra." antes de Sofia — só na rede
 
 test('item 7: a rede sai da tabela — só Doutor Hérnia ativa, sem resgate, uma por cidade, com UF', () => {
   const cidades = REDE.map((r) => r.cidade);
-  assert.deepEqual(cidades, ['Canaã dos Carajás/PA', 'Divinópolis', 'Duque de Caxias/RJ', 'Marabá/PA', 'Parauapebas/PA', 'Petrópolis/RJ']);
+  assert.deepEqual(cidades, ['Canaã dos Carajás/PA', 'Divinópolis/MG', 'Duque de Caxias/RJ', 'Marabá/PA', 'Parauapebas/PA', 'Petrópolis/RJ']);
   assert.ok(!cidades.some((c) => /Olímpia|Açailândia|Trauma|Resgate/.test(c)));
 });
 
 test('item 7: cidade e telefone no formato do paciente', () => {
   assert.equal(cidadeDaUnidade('doutor-hernia-imperatriz', 'Comercial'), 'Imperatriz/MA');
-  assert.equal(cidadeDaUnidade('doutor-hernia-timbo', 'Doutor Hérnia Timbó'), 'Timbó');
+  assert.equal(cidadeDaUnidade('doutor-hernia-timbo', 'Doutor Hérnia Timbó'), 'Timbó/SC');
   assert.equal(cidadeDaUnidade('doutor-hernia-caxias', 'Doutor Hérnia Caxias'), 'Duque de Caxias/RJ');
   assert.equal(telefoneParaPaciente('5594991234567'), '(94) 99123-4567');
   assert.equal(telefoneParaPaciente('9432221100'), '(94) 3222-1100');

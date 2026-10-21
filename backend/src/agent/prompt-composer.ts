@@ -25,7 +25,8 @@ import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro } from './sinal-de-alerta.js';
 import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from './repeticao.js';
-import { renderPrecoInsistido } from './preco-insistido.js';
+import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
+import { renderRajada, textoSemResposta } from './rajada.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
 import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
@@ -1628,13 +1629,22 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,
   // 21/10): essas unidades ficam com a regra de PREÇO do prompt.
   const precos = precosDaConsulta(unit);
-  if (precos) {
-    const frase = unit.spineBookingRequiresPayment
+  const frase = !precos
+    ? null
+    : unit.spineBookingRequiresPayment
       ? `R$ ${fmtBRL(precos.antecipado + precos.noDia)} no total: R$ ${fmtBRL(precos.antecipado)} antecipado no Pix (garante o horário) + R$ ${fmtBRL(precos.noDia)} no dia`
       : `R$ ${fmtBRL(precos.noDia)} no dia, ou R$ ${fmtBRL(precos.antecipado)} pagando antes no Pix`;
+  if (frase) {
     const preco = renderPrecoInsistido(historico, { frase });
     if (preco) blocos.push(preco);
   }
+  // Araguaína, 21/10/2026: o preço das SESSÕES nunca fica sem resposta (e não é o da consulta) — só clínica; e a
+  // rajada cujas respostas do meio foram seguradas, ou que terminou em "tudo bem" com a dor no meio (rajada.ts).
+  const clinica = unit.category?.trim() === 'saude';
+  const sessoes = clinica ? renderPrecoDasSessoes(historico, { frase }) : '';
+  if (sessoes) blocos.push(sessoes);
+  const rajada = renderRajada(historico, { clinica });
+  if (rajada) blocos.push(rajada);
   return { semPedirNome: pararDePedirNome(repeticao), blocos };
 }
 
@@ -2224,7 +2234,8 @@ export function composeSystemPromptParts(input: ComposeInput): {
   const dynamic: string[] = [];
   // Depende da fala DESTE turno, então é dinâmico de verdade: não pode entrar no bloco
   // por unidade, que fica uma hora em cache.
-  const soCumprimento = renderSoCumprimento(userMessage);
+  // A rajada inteira desde a última resposta que ele leu: "dor… boa noite" não é só um cumprimento.
+  const soCumprimento = renderSoCumprimento(textoSemResposta(input.historico) ?? userMessage);
   if (soCumprimento) dynamic.push(soCumprimento);
   const memoryBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
   if (memoryBlock) dynamic.push(memoryBlock);

@@ -13,6 +13,7 @@
  * unidade já escrito — o modelo não precisa decidir se "insistiu" nem procurar o número.
  */
 import type { Fala } from './repeticao.js';
+import { temQueixaClinica } from './rajada.js';
 
 /**
  * Pergunta de preço numa linha da fala do paciente. "Quanto tempo" não é preço; "qual o valor", "quanto é",
@@ -118,10 +119,14 @@ export interface ValorDaConsulta {
 /**
  * O bloco do turno. Vazio quando não houve insistência. `frase` vem das fontes da unidade (precosDaConsulta); sem
  * ela, o bloco manda dizer o valor das fontes, sem número aqui — inventar número é pior que mandar procurar.
+ *
+ * Vazio também quando a pergunta em aberto é a das SESSÕES: este bloco manda dizer o valor da CONSULTA, e para
+ * quem perguntou "quanto custa as sessões?" isso é responder outra coisa — quem cuida é `renderPrecoDasSessoes`.
  */
 export function renderPrecoInsistido(falas: Fala[], valor: ValorDaConsulta): string {
   const insistiu = insistenciaNoPreco(falas);
   if (!insistiu) return '';
+  if (precoDasSessoesEmAberto(falas)) return '';
   const porque =
     insistiu === 'pediu_so_o_valor'
       ? 'Ele pediu o valor com todas as letras.'
@@ -139,5 +144,133 @@ export function renderPrecoInsistido(falas: Fala[], valor: ValorDaConsulta): str
     '- Se ele contou que tem plano e as suas fontes têm valor com a carteirinha, diga esse valor também.',
     '- Só DEPOIS do valor, UMA pergunta curta: sobre a dor, se você ainda não sabe; senão, um horário.',
     '</preco_insistido>',
+  ].join('\n');
+}
+
+// ── O preço das SESSÕES ──────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * "Quanto custa as sessões?" (Araguaína, lead 28743362, 17/10/2026) ficou sem resposta: a Sofia perguntou da dor,
+ * disse "já te explico tudinho", perguntou da dor de novo e foi para "você é de Araguaína?". A pergunta não é a do
+ * valor da consulta — e a regra do PREÇO, que manda dar o valor da consulta e proíbe "depende da consulta", não
+ * serve para ela: o valor do tratamento é definido NA consulta, e dizer isso com franqueza é a resposta certa
+ * quando as fontes da unidade não trazem o valor das sessões. Regra do João (21/10): nunca ignorar; com o valor nas
+ * fontes, dizer o valor; sem ele, dizer que o plano e o valor do tratamento saem da consulta com o nosso
+ * especialista, depois do exame, e dar o valor da consulta.
+ */
+const SESSOES = /\bsess(?:[aã]o|[oõ]es|oes)\b|\bpacote\b|\bmensalidade\b/i;
+const TRATAMENTO = /\btratamento\b/i;
+const CONSULTA = /\bconsulta\b|avalia[cç][aã]o/i;
+/** "…a consulta e o tratamento?": os dois. "…a consulta pra começar o tratamento?": só a consulta. */
+const E_O_TRATAMENTO = /\be\s+(?:o|do)\s+tratamento\b/i;
+
+function linhaSobreSessoes(l: string): boolean {
+  if (SESSOES.test(l)) return true;
+  return TRATAMENTO.test(l) && (!CONSULTA.test(l) || E_O_TRATAMENTO.test(l));
+}
+
+/** A fala pergunta o valor das sessões / do tratamento (não o da consulta). */
+export function perguntaPrecoDasSessoes(texto: string): boolean {
+  return linhas(texto).some((l) => linhaPerguntaPreco(l) && linhaSobreSessoes(l));
+}
+
+/** A IA respondeu: numa MESMA frase, as sessões/o tratamento e um valor (ou "é definido"). */
+/**
+ * A IA respondeu o valor das sessões: o valor LIGADO às sessões/ao tratamento ("o valor do tratamento é definido
+ * na consulta", "cada sessão custa R$ 80", "R$ 80 por sessão"). Palavra solta não basta: "a consulta é R$ 350; o
+ * tratamento é conservador" não responde (achado do Codex).
+ */
+const RESPONDE_SESSOES = new RegExp(
+  [
+    String.raw`\b(?:valor(?:es)?|pre[cç]os?|custo)\s+d[aoe]s?\s+(?:sess|tratamento|pacote)`,
+    String.raw`(?:sess(?:[aã]o|[oõ]es|oes)|tratamento|pacote)[^.?!;]{0,40}?(?:R\$\s*\d|defin|\bcusta|\bsai\s+(?:por|a)\b|\bfica\s+(?:em|por)\b)`,
+    String.raw`R\$\s*\d[^.?!;]{0,20}?(?:por|a|cada)\s+sess`,
+  ].join('|'),
+  'i',
+);
+
+function respondeuSessoes(textoDaIa: string): boolean {
+  return linhas(textoDaIa).some((l) => RESPONDE_SESSOES.test(l));
+}
+
+/** Só o histórico recente: a mesma janela das contas de repetição. */
+const JANELA_SESSOES = 30;
+
+export interface PrecoDasSessoes {
+  /** A pergunta dele, como escreveu (a última). */
+  pergunta: string;
+  /** Quantas falas dele perguntaram isso na janela. */
+  vezes: number;
+  /** A IA já respondeu outra coisa depois da pergunta. */
+  ignorada: boolean;
+  /** Ele já contou da dor em alguma fala (então "dor primeiro" já foi cumprido). */
+  jaContouADor: boolean;
+}
+
+/**
+ * A pergunta do valor das sessões está em aberto? A última que ele fez e, depois dela, nenhuma fala da IA falou de
+ * valor das sessões/do tratamento. Olha só até a última fala do paciente.
+ */
+export function precoDasSessoesEmAberto(falasTodas: Fala[]): PrecoDasSessoes | null {
+  let fim = falasTodas.length - 1;
+  while (fim >= 0 && falasTodas[fim].papel !== 'paciente') fim--;
+  if (fim < 0) return null;
+  const falas = falasTodas.slice(Math.max(0, fim + 1 - JANELA_SESSOES), fim + 1);
+  let ultima = -1;
+  let vezes = 0;
+  for (let i = 0; i < falas.length; i++) {
+    if (falas[i].papel === 'paciente' && perguntaPrecoDasSessoes(falas[i].texto)) {
+      ultima = i;
+      vezes++;
+    }
+  }
+  if (ultima < 0) return null;
+  const depois = falas.slice(ultima + 1).filter((f) => f.papel === 'ia');
+  if (depois.some((f) => respondeuSessoes(f.texto))) return null;
+  const pergunta = linhas(falas[ultima].texto).find((l) => linhaPerguntaPreco(l) && linhaSobreSessoes(l)) ?? '';
+  return {
+    pergunta,
+    vezes,
+    ignorada: depois.length > 0,
+    jaContouADor: falas.some((f) => f.papel === 'paciente' && linhas(f.texto).some(temQueixaClinica)),
+  };
+}
+
+/**
+ * O bloco do turno. Vazio quando não há pergunta das sessões em aberto. `valor.frase` é o valor da CONSULTA (das
+ * fontes); sem ele, o bloco manda dizer o que está nas fontes.
+ */
+export function renderPrecoDasSessoes(falas: Fala[], valor: ValorDaConsulta): string {
+  const aberto = precoDasSessoesEmAberto(falas);
+  if (!aberto) return '';
+  const consulta = valor.frase
+    ? `"A consulta com o nosso especialista é ${valor.frase}."`
+    : 'o valor da consulta com o nosso especialista que está nas suas fontes, inteiro (os dois valores, se houver).';
+  // "Dor primeiro" vale só na 1ª vez, se ele ainda não contou da dor e a pergunta ainda não foi deixada de lado.
+  const agora = aberto.vezes >= 2 || aberto.ignorada || aberto.jaContouADor;
+  const quando = agora
+    ? [
+        aberto.ignorada
+          ? '- Ela JÁ ficou sem resposta. Responda AGORA, na PRIMEIRA frase — nada de outra pergunta antes.'
+          : '- Responda na PRIMEIRA frase — nada de outra pergunta antes. Depois, se quiser, UMA pergunta.',
+        '  (Se ele acabou de contar dor ou limitação, uma frase curta de acolhimento pode vir antes.)',
+      ]
+    : [
+        '- Você ainda não sabe da dor dele: diga numa frase que já explica o valor do tratamento e faça UMA pergunta',
+        '  sobre a dor ("dor primeiro"). Na resposta seguinte, responda o valor sem falta.',
+      ];
+  return [
+    '<preco_das_sessoes>',
+    '(ALTA PRIORIDADE — contado pelo sistema: ele perguntou o valor das SESSÕES / do tratamento, e não da consulta)',
+    `  > "${aberto.pergunta.slice(0, 140)}"`,
+    '- NUNCA ignore esta pergunta nem troque por outra.',
+    '- Se as suas fontes trazem o valor das sessões ou do tratamento, diga ESSE valor, como está escrito — sem',
+    '  calcular, estimar nem inventar pacote.',
+    '- Se não trazem, diga com franqueza que o plano e o valor do tratamento são definidos na consulta com o nosso',
+    '  especialista, depois que ele examina — e logo em seguida dê o valor da consulta:',
+    `  > ${consulta}`,
+    '  (Para as SESSÕES, "é definido na consulta" é a verdade, não enrolação.)',
+    ...quando,
+    '</preco_das_sessoes>',
   ].join('\n');
 }

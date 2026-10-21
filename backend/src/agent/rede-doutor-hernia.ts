@@ -17,6 +17,12 @@
  *     o rótulo vem de `VALOR_POR_UNIDADE` (o mesmo "Cidade/UF" que o robô do ⌂ Unidade grava no cartão) e, se a
  *     unidade não estiver lá, do nome dela ("Doutor Hérnia Divinópolis" → "Divinópolis").
  *     A rede da franquia é MAIOR que as unidades atendidas pela Sofia — cidade fora da lista nunca vira "não temos".
+ *
+ *  4. CIDADE SEM UNIDADE → AS DO MESMO ESTADO (auditoria de Araguaína, 21/10/2026). Paciente de Belém/Castanhal
+ *     ouviu "não tenho informação de unidade em Belém ou Castanhal" (lead 28778230), e a equipe completou com "não
+ *     temos unidades nesses locais" — sem que ninguém dissesse que no Pará há Marabá, Parauapebas e Canaã dos
+ *     Carajás. Pedido do João: a lista vai agrupada por estado, e a Sofia diz quais unidades existem no estado
+ *     dele (e a mais próxima, se souber) e oferece o encaminhamento; a tarefa para a equipe continua.
  */
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -84,6 +90,15 @@ function nomeCurto(nome: string | null | undefined, slug: string): string {
     .join(' ');
 }
 
+/**
+ * Unidades da rede que o robô do ⌂ Unidade não cobre (e por isso não estão em VALOR_POR_UNIDADE): só a UF, para a
+ * lista por estado. Fica aqui, e não no mapa do robô, para não fazer o robô passar a escrever nesses cartões.
+ */
+const CIDADE_FORA_DO_MAPA: Record<string, string> = {
+  divinopolis: 'Divinópolis/MG',
+  timbo: 'Timbó/SC',
+};
+
 /** "Cidade/UF" da unidade: o mapa do ⌂ Unidade primeiro; depois o nome (procurando também nas contas divididas). */
 export function cidadeDaUnidade(slug: string, nome: string | null | undefined): string {
   const regra = VALOR_POR_UNIDADE[slug];
@@ -95,7 +110,26 @@ export function cidadeDaUnidade(slug: string, nome: string | null | undefined): 
       if (semAcento(rotulo) === semAcento(curto) || falaDaCidade(curto, valor)) return valor;
     }
   }
-  return curto;
+  return CIDADE_FORA_DO_MAPA[semAcento(curto)] ?? curto;
+}
+
+const NOME_DO_ESTADO: Record<string, string> = {
+  AC: 'Acre', AL: 'Alagoas', AP: 'Amapá', AM: 'Amazonas', BA: 'Bahia', CE: 'Ceará', DF: 'Distrito Federal',
+  ES: 'Espírito Santo', GO: 'Goiás', MA: 'Maranhão', MT: 'Mato Grosso', MS: 'Mato Grosso do Sul',
+  MG: 'Minas Gerais', PA: 'Pará', PB: 'Paraíba', PR: 'Paraná', PE: 'Pernambuco', PI: 'Piauí',
+  RJ: 'Rio de Janeiro', RN: 'Rio Grande do Norte', RS: 'Rio Grande do Sul', RO: 'Rondônia', RR: 'Roraima',
+  SC: 'Santa Catarina', SP: 'São Paulo', SE: 'Sergipe', TO: 'Tocantins',
+};
+
+/** "Marabá/PA" → "PA"; sem UF reconhecida → null. */
+export function ufDaCidade(cidade: string): string | null {
+  const uf = /\/\s*([A-Za-z]{2})\s*$/.exec(cidade)?.[1]?.toUpperCase();
+  return uf && uf in NOME_DO_ESTADO ? uf : null;
+}
+
+/** "PA" → "Pará" (sigla desconhecida volta como veio). */
+export function nomeDoEstado(uf: string): string {
+  return NOME_DO_ESTADO[uf] ?? uf;
 }
 
 /** "5594991234567" → "(94) 99123-4567". Número que não parece brasileiro sai como veio. */
@@ -272,7 +306,7 @@ export function renderRedeDeUnidades(unit: UnidadeParaDH & { id: string }, rede:
 
   const onde = propria ? `Você atende a unidade de ${propria.cidade}.` : '';
   const lista = outras.length
-    ? `Outras unidades da rede atendidas por nós (lidas do cadastro agora):\n${outras.map((r) => linhaDaUnidade(r, mesmaEquipe(r))).join('\n')}`
+    ? `Outras unidades da rede atendidas por nós (lidas do cadastro agora), por estado:\n${listaPorEstado(outras, mesmaEquipe, propria)}`
     : 'A lista das outras unidades não está disponível agora.';
 
   return `UNIDADES DA REDE DOUTOR HÉRNIA. ${onde}
@@ -288,9 +322,39 @@ ${lista}
     unidade de {cidade}; chame criar_tarefa com o texto
     "Paciente é de {cidade} — transferir para a unidade de {cidade da lista}"
     e depois pausar_ia com esse mesmo motivo. Não invente telefone nem endereço.
-- CIDADE QUE NÃO ESTÁ NA LISTA: não negue. Diga que vai confirmar com a equipe se há unidade lá e chame
-  criar_tarefa com o texto "Paciente pergunta se há unidade em {cidade} — confirmar e responder".
-  Enquanto isso, ofereça o atendimento aqui, se ele puder vir.`;
+- CIDADE QUE NÃO ESTÁ NA LISTA: não negue, e nunca "não tenho informação de unidade aí". Veja o estado
+  da cidade dele:
+  · HÁ UNIDADE NO MESMO ESTADO (na lista acima, ou esta mesma) → diga quais são ("No Pará a gente tem
+    unidade em Canaã dos Carajás, Marabá e Parauapebas"), diga qual fica mais perto dele se você souber,
+    e pergunte se ele quer ser encaminhado para uma delas ou atendido aqui. Se escolher uma da lista,
+    siga o caminho de "se preferir lá" acima.
+  · NÃO HÁ UNIDADE DA LISTA NO ESTADO DELE → diga que vai confirmar com a equipe qual a unidade mais
+    próxima e ofereça o atendimento aqui, se ele puder vir.
+  Nos dois casos chame criar_tarefa com o texto "Paciente pergunta se há unidade em {cidade} —
+  confirmar e responder": a rede é maior que esta lista, e a equipe confirma.`;
+}
+
+/** As outras unidades agrupadas por UF ("PA — Pará:"), estados em ordem; sem UF reconhecida, no fim. */
+function listaPorEstado(
+  outras: ReadonlyArray<UnidadeDaRede>,
+  mesmaEquipe: (r: UnidadeDaRede) => boolean,
+  propria: UnidadeDaRede | undefined,
+): string {
+  const grupos = new Map<string, UnidadeDaRede[]>();
+  for (const r of outras) {
+    const uf = ufDaCidade(r.cidade) ?? '';
+    grupos.set(uf, [...(grupos.get(uf) ?? []), r]);
+  }
+  const ufPropria = propria ? ufDaCidade(propria.cidade) : null;
+  const ufs = [...grupos.keys()].sort((a, b) => (!a ? 1 : !b ? -1 : a.localeCompare(b)));
+  return ufs
+    .map((uf) => {
+      const titulo = !uf
+        ? 'Estado não cadastrado:'
+        : `${uf} — ${nomeDoEstado(uf)}${uf === ufPropria ? ' (o mesmo estado desta unidade)' : ''}:`;
+      return [titulo, ...grupos.get(uf)!.map((r) => linhaDaUnidade(r, mesmaEquipe(r)))].join('\n');
+    })
+    .join('\n');
 }
 
 /** O bloco inteiro do prompt da conversa: identidade + rede. Vazio para quem não é Doutor Hérnia. */
