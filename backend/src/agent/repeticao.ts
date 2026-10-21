@@ -34,6 +34,7 @@ const AUDIO_SEM_FALA = /\[áudio sem fala detectada\]/;
 
 /** Só o histórico recente conta: o mesmo cartão pode voltar semanas depois, e aí é outra conversa. */
 const JANELA_FALAS = 30;
+/** Falas do paciente olhadas para contar áudio não ouvido seguido. */
 const JANELA_AUDIO = 12;
 
 /** Depois de quantas tentativas a IA para (pedido do João/chefe: 2). */
@@ -196,7 +197,8 @@ export function analisarRepeticao(falasTodas: Fala[]): Repeticao {
 
   let audiosNaoOuvidos = 0;
   if (atual.includes(MARCA_AUDIO_NAO_OUVIDO)) {
-    const recentes = falas.slice(-JANELA_AUDIO).filter((f) => f.papel === 'paciente');
+    // as últimas falas DO PACIENTE (a da IA e a de ferramenta no meio não podem encurtar a janela — Codex, 21/10)
+    const recentes = falas.filter((f) => f.papel === 'paciente').slice(-JANELA_AUDIO);
     for (let i = recentes.length - 1; i >= 0; i--) {
       const t = recentes[i].texto;
       if (t.includes(MARCA_AUDIO_NAO_OUVIDO)) audiosNaoOuvidos++;

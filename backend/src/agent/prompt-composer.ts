@@ -1624,14 +1624,14 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   const blocos: string[] = [];
   const rep = renderRepeticao(repeticao);
   if (rep) blocos.push(rep);
-  // Só para quem tem preço nas fontes: sem valor cadastrado, mandar "dizer o valor agora" convidaria a inventar.
+  // Só quando a ficha dá o valor da CONSULTA sem ambiguidade (os dois valores, antecipado e no dia). Com R$ solto nas
+  // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,
+  // 21/10): essas unidades ficam com a regra de PREÇO do prompt.
   const precos = precosDaConsulta(unit);
-  if (precos || valoresAprovados(unit).length > 0) {
-    const frase = precos
-      ? unit.spineBookingRequiresPayment
-        ? `R$ ${fmtBRL(precos.antecipado + precos.noDia)} no total: R$ ${fmtBRL(precos.antecipado)} antecipado no Pix (garante o horário) + R$ ${fmtBRL(precos.noDia)} no dia`
-        : `R$ ${fmtBRL(precos.noDia)} no dia, ou R$ ${fmtBRL(precos.antecipado)} pagando antes no Pix`
-      : null;
+  if (precos) {
+    const frase = unit.spineBookingRequiresPayment
+      ? `R$ ${fmtBRL(precos.antecipado + precos.noDia)} no total: R$ ${fmtBRL(precos.antecipado)} antecipado no Pix (garante o horário) + R$ ${fmtBRL(precos.noDia)} no dia`
+      : `R$ ${fmtBRL(precos.noDia)} no dia, ou R$ ${fmtBRL(precos.antecipado)} pagando antes no Pix`;
     const preco = renderPrecoInsistido(historico, { frase });
     if (preco) blocos.push(preco);
   }

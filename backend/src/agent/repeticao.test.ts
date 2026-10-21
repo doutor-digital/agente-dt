@@ -192,6 +192,14 @@ test('1º áudio não ouvido: nada aqui (o webhook já manda avisar e pedir pra 
   assert.match(bloco, /vale mais do que a instrução que veio junto do áudio/);
 });
 
+test('áudios não ouvidos contam pelas falas do paciente, não pelas da IA no meio', () => {
+  const audio = `${MARCA_AUDIO_NAO_OUVIDO}\n\n[instrução]`;
+  const meio: Fala[] = [];
+  for (let i = 0; i < 12; i++) meio.push(ia(`Resposta ${i}, sem pergunta.`));
+  const r = analisarRepeticao([p(audio), ...meio, p('ok'), ia('Certo.'), p(audio)]);
+  assert.equal(r.audiosNaoOuvidos, 2);
+});
+
 test('um áudio ouvido no meio zera a conta', () => {
   const audio = `${MARCA_AUDIO_NAO_OUVIDO}\n\n[instrução]`;
   const r = analisarRepeticao([

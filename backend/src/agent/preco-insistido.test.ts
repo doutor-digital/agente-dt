@@ -120,9 +120,12 @@ test('no prompt: taxa de reserva (Boa Vista) sai como total, não como "ou"', ()
   assert.match(composeSystemPrompt({ unit, historico: INSISTIU }), /R\$ 350 no total: R\$ 100 antecipado no Pix \(garante o horário\) \+ R\$ 250 no dia/);
 });
 
-test('no prompt: unidade sem preço nas fontes não recebe o bloco (não convida a inventar)', () => {
-  const unit = unidade({ sourceProdutos: 'Atendimento particular.' } as Partial<Unit>);
-  assert.doesNotMatch(composeSystemPrompt({ unit, historico: INSISTIU }), /<preco_insistido>\n\(ALTA PRIORIDADE/);
+test('no prompt: sem o valor da consulta claro na ficha, não recebe o bloco (não convida a inventar)', () => {
+  const semPreco = unidade({ sourceProdutos: 'Atendimento particular.' } as Partial<Unit>);
+  assert.doesNotMatch(composeSystemPrompt({ unit: semPreco, historico: INSISTIU }), /<preco_insistido>\n\(ALTA PRIORIDADE/);
+  // R$ na ficha, mas sem dar para dizer qual é o da consulta (formato "à vista" herdado): fica a regra do prompt
+  const ambiguo = unidade({ sourceProdutos: 'A CONSULTA: R$ 350 (à vista no PIX: R$ 150).' } as Partial<Unit>);
+  assert.doesNotMatch(composeSystemPrompt({ unit: ambiguo, historico: INSISTIU }), /<preco_insistido>\n\(ALTA PRIORIDADE/);
 });
 
 test('a regra da rede continua "dor primeiro" e ganhou a ordem dura para a 2ª pergunta', () => {
