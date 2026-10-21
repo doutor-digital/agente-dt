@@ -115,6 +115,14 @@ test('item 2: respondeu à pergunta (sim, não, falou da perna ou do xixi): não
   }
 });
 
+test('item 2: com OUTRA pergunta depois da de sinais, a fala dele pode responder essa outra — não trava', () => {
+  const comHorario = (n: number) =>
+    `Me conta: você sentiu fraqueza na perna ou dificuldade pra segurar xixi? E qual horário fica melhor, 8h ou 16h${'?'.repeat(n)}`;
+  const r = analisarRepeticao([p('tô com dor na lombar'), ia(comHorario(1)), p('16h'), ia(comHorario(1)), p('pode ser 16h mesmo')]);
+  assert.equal(r.ultimaPergunta?.tema, TEMA_SINAL_DE_ALERTA);
+  assert.equal(motivoDeHandoff(r), null);
+});
+
 test('item 2: cumprimento depois das perguntas segue sendo retomada, como no #101', () => {
   const r = analisarRepeticao([...ARAGUAINA.slice(0, -1), p('Bom dia')]);
   assert.equal(motivoDeHandoff(r), null);

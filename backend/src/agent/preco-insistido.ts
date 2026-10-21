@@ -158,11 +158,20 @@ export function renderPrecoInsistido(falas: Fala[], valor: ValorDaConsulta): str
  * fontes, dizer o valor; sem ele, dizer que o plano e o valor do tratamento saem da consulta com o nosso
  * especialista, depois do exame, e dar o valor da consulta.
  */
-const SOBRE_SESSOES = /\bsess(?:[aã]o|[oõ]es|oes)\b|\btratamento\b|\bpacote\b|\bmensalidade\b/i;
+const SESSOES = /\bsess(?:[aã]o|[oõ]es|oes)\b|\bpacote\b|\bmensalidade\b/i;
+const TRATAMENTO = /\btratamento\b/i;
+const CONSULTA = /\bconsulta\b|avalia[cç][aã]o/i;
+/** "…a consulta e o tratamento?": os dois. "…a consulta pra começar o tratamento?": só a consulta. */
+const E_O_TRATAMENTO = /\be\s+(?:o|do)\s+tratamento\b/i;
+
+function linhaSobreSessoes(l: string): boolean {
+  if (SESSOES.test(l)) return true;
+  return TRATAMENTO.test(l) && (!CONSULTA.test(l) || E_O_TRATAMENTO.test(l));
+}
 
 /** A fala pergunta o valor das sessões / do tratamento (não o da consulta). */
 export function perguntaPrecoDasSessoes(texto: string): boolean {
-  return linhas(texto).some((l) => linhaPerguntaPreco(l) && SOBRE_SESSOES.test(l));
+  return linhas(texto).some((l) => linhaPerguntaPreco(l) && linhaSobreSessoes(l));
 }
 
 /** A IA respondeu: numa MESMA frase, as sessões/o tratamento e um valor (ou "é definido"). */
@@ -207,7 +216,7 @@ export function precoDasSessoesEmAberto(falasTodas: Fala[]): PrecoDasSessoes | n
   if (ultima < 0) return null;
   const depois = falas.slice(ultima + 1).filter((f) => f.papel === 'ia');
   if (depois.some((f) => respondeuSessoes(f.texto))) return null;
-  const pergunta = linhas(falas[ultima].texto).find((l) => linhaPerguntaPreco(l) && SOBRE_SESSOES.test(l)) ?? '';
+  const pergunta = linhas(falas[ultima].texto).find((l) => linhaPerguntaPreco(l) && linhaSobreSessoes(l)) ?? '';
   return {
     pergunta,
     vezes,

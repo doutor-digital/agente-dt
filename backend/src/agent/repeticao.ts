@@ -94,6 +94,19 @@ export function perguntaFinal(texto: string): string | null {
   return perguntas.length ? perguntas[perguntas.length - 1] : null;
 }
 
+/** "…antes de seguir, tá?", "combinado?": fecho de frase, não outra pergunta. */
+const PERGUNTA_DE_FECHO = /(?:^|[\s,])(?:t[aá]|ok|okay|viu|certo|combinado|beleza|blz|n[eé]|sabe)\s*\?+\s*$/i;
+
+/**
+ * A mensagem termina esperando a resposta da pergunta de sinais — ela é a última pergunta, ou depois dela só vem
+ * um fecho ("tá?"). Se depois vem OUTRA pergunta ("…xixi ou intestino? E qual horário fica melhor?"), a fala dele
+ * pode estar respondendo essa outra, e conta como resposta (a regra geral).
+ */
+function sinalEhOQueEspera(texto: string): boolean {
+  const ultima = perguntaFinal(texto);
+  return !!ultima && (perguntaDeSinalDeAlerta(ultima) || PERGUNTA_DE_FECHO.test(ultima));
+}
+
 /**
  * A pergunta que a mensagem deixa esperando: a dos sinais de alerta, se ela estiver em QUALQUER frase (é a que
  * trava a conversa, e a IA costuma fechar com outra coisa: "...segurar xixi ou intestino? Preciso entender isso
@@ -231,7 +244,7 @@ export function analisarRepeticao(falasTodas: Fala[]): Repeticao {
     // o que o paciente mandou depois desta pergunta, até a próxima fala da IA (para a última, é a fala deste turno).
     // Na pergunta dos sinais de alerta, falar de outra coisa também é ficar sem resposta (lead 28659614) — menos o
     // cumprimento, que segue sendo retomada, como no resto desta conta.
-    const sinal = ultimaPergunta.tema === TEMA_SINAL_DE_ALERTA;
+    const sinal = ultimaPergunta.tema === TEMA_SINAL_DE_ALERTA && sinalEhOQueEspera(falas[i].texto);
     let semResposta = true;
     for (let j = i + 1; j < falas.length && falas[j].papel === 'paciente'; j++) {
       const t = falas[j].texto;

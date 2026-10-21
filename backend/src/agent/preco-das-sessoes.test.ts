@@ -78,7 +78,14 @@ test('item 4: o que é pergunta do preço das sessões (e não da consulta)', ()
     assert.ok(perguntaPreco(t), `é pergunta de preço: ${t}`);
     assert.ok(perguntaPrecoDasSessoes(t), `é das sessões: ${t}`);
   }
-  for (const t of ['Quanto custa a consulta?', 'Qual o valor?', 'Quantas sessões são?', 'o tratamento dói?']) {
+  assert.ok(perguntaPrecoDasSessoes('Quanto custa a consulta e o tratamento?'));
+  for (const t of [
+    'Quanto custa a consulta?',
+    'Qual o valor?',
+    'Quantas sessões são?',
+    'o tratamento dói?',
+    'Quanto custa a consulta pra começar o tratamento?',
+  ]) {
     assert.ok(!perguntaPrecoDasSessoes(t), `não é preço das sessões: ${t}`);
   }
 });
