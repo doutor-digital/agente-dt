@@ -304,6 +304,9 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
     .filter((s) => passou(s) || s.idStatus === SPINE_STATUS.DESMARCADO)
     .sort((a, b) => (epoch(b) ?? 0) - (epoch(a) ?? 0));
   const ultimaDaVolta = decididasDaVolta[0] ?? null;
+  // a volta já aconteceu: a jornada segue no comercial. Tira do RETORNO e, por isso mesmo, consulta marcada depois dela
+  // não leva de volta pra lá — com as duas regras diferentes, o cartão pingava RETORNO ↔ COMPARECEU (10851140, 21/10)
+  const voltaAtendida = !!ultimaDaVolta && ultimaDaVolta.idStatus === SPINE_STATUS.ATENDIDO && passou(ultimaDaVolta);
 
   if (atual.funil === 'COMERCIAL' && emAlgum(status, INTOCAVEIS_COMERCIAL)) {
     // "a franquia manda" (16/10): uma consulta marcada PRA FRENTE é fato novo e tira o cartão do PERDIDO — avaliação vai
@@ -333,9 +336,7 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
     if (retornoPosAtendido) return ir('COMERCIAL', ETAPA.COMPARECEU, 'retorno pós-tratamento atendido na franquia');
     // 16/10: a consulta da volta pode vir como avaliação (não "retorno após tratamento"); atendida, segue como avaliação.
     // Falta ou desmarcação aqui não mexe na etapa (falta vira nota + tarefa — decisão 4).
-    if (ultimaDaVolta && ultimaDaVolta.idStatus === SPINE_STATUS.ATENDIDO && passou(ultimaDaVolta)) {
-      return ir('COMERCIAL', ETAPA.COMPARECEU, 'ex-paciente voltou: consulta atendida na franquia');
-    }
+    if (voltaAtendida) return ir('COMERCIAL', ETAPA.COMPARECEU, 'ex-paciente voltou: consulta atendida na franquia');
     return null;
   }
 
@@ -380,10 +381,11 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
 
   // ── 16/10: ex-paciente em etapa comercial. Nunca GANHO (não é venda nova, não gera Purchase) ──
   // Voltou com consulta marcada → RETORNO PÓS-TRATAMENTO. Voltou e a consulta já aconteceu → a jornada segue pelas
-  // consultas da VOLTA (abaixo). Não voltou → cartão parado de quem terminou: ALTA, sem a régua se o fato é velho.
+  // consultas da VOLTA (abaixo), mesmo com outra marcada pra frente. Não voltou → cartão parado de quem terminou: ALTA,
+  // sem a régua se o fato é velho.
   let jornadaDaVolta = false;
   if (exPaciente && atual.funil === 'COMERCIAL' && !eh(status, ETAPA.GANHO)) {
-    if (voltaMarcada) return ir('COMERCIAL', ETAPA.RETORNO, 'ex-paciente voltou: consulta marcada na franquia');
+    if (voltaMarcada && !voltaAtendida) return ir('COMERCIAL', ETAPA.RETORNO, 'ex-paciente voltou: consulta marcada na franquia');
     if (decididasDaVolta.length === 0) {
       const ultimaAtividade = Math.max(0, ...e.agendamentos.map((s) => epoch(s) ?? 0));
       const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
