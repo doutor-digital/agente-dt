@@ -38,6 +38,12 @@ test('inglês do dia a dia fica: ok, online, e-mail, check-up, nome com "Just"',
   assert.deepEqual(corrigirTomDaSaida(t), { texto: t, trocas: [] });
 });
 
+test('fala do paciente citada entre aspas não é mexida', () => {
+  for (const t of ['Você escreveu "only joelho", né? É só o joelho mesmo?', 'Quando você diz “just a little”, é pouca dor?']) {
+    assert.equal(corrigirTomDaSaida(t).texto, t);
+  }
+});
+
 test('link não é mexido', () => {
   const t = 'Mapa: https://example.com/only/just?also=1 — é só abrir.';
   assert.equal(corrigirTomDaSaida(t).texto, t);
@@ -182,4 +188,10 @@ test('28220160: acidente antigo não é sinal de alerta — no bloco e na regra 
   assert.ok(trava.includes('RECENTE'));
   assert.ok(trava.includes('SINAIS GRAVES DA COLUNA'), 'a trava dos sinais graves continua');
   assert.equal(travaDaRegraDeSinalDeAlerta('Paciente pergunta o endereço'), '');
+});
+
+test('a ressalva do trauma antigo não passa por cima de regra com prazo nem de regra que não é sinal de alerta', () => {
+  const comPrazo = travaDaRegraDeSinalDeAlerta('Sinal de alerta: dor depois de queda ou acidente, mesmo de anos atrás');
+  assert.ok(!comPrazo.includes('RECENTE'));
+  assert.equal(travaDaRegraDeSinalDeAlerta('Paciente com sequela de trauma ortopédico ou acidente de trabalho'), '');
 });

@@ -28,7 +28,8 @@ const INGLES: Record<string, string> = {
 
 // fim de palavra à mão: o \b do JS não enxerga letra acentuada como letra
 const PALAVRA_EM_INGLES = new RegExp(String.raw`(?<![\wÀ-ÿ'’-])(${Object.keys(INGLES).join('|')})(?![\wÀ-ÿ'’-])`, 'gi');
-const URL = /\bhttps?:\/\/\S+|\bwww\.\S+/gi;
+/** Link e citação entre aspas ficam como estão: um "only" num endereço ou na fala copiada do paciente não é nosso. */
+const INTOCAVEL = /\bhttps?:\/\/\S+|\bwww\.\S+|"[^"\n]*"|“[^”\n]*”/gi;
 
 /**
  * "Já te expliquei certo, Dária:", "Como eu disse,", "Já te falei que" — no começo de uma frase. O nome depois da
@@ -58,10 +59,9 @@ function trocarIngles(trecho: string, trocas: string[]): string {
 
 export function corrigirTomDaSaida(texto: string): { texto: string; trocas: string[] } {
   const trocas: string[] = [];
-  // link fica como está (um "only" num endereço de mapa não é fala)
   let out = '';
   let ultimo = 0;
-  for (const m of texto.matchAll(URL)) {
+  for (const m of texto.matchAll(INTOCAVEL)) {
     const ini = m.index ?? 0;
     out += trocarIngles(texto.slice(ultimo, ini), trocas) + m[0];
     ultimo = ini + m[0].length;

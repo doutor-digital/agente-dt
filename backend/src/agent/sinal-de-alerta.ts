@@ -55,8 +55,17 @@ export function travaDoProntoSocorro(texto: string | null | undefined): string {
 /** Regra da unidade cuja CONDIÇÃO é sinal de alerta — costuma mandar transferir de cara. */
 const CONDICAO_SINAL_DE_ALERTA = /sinal(is)? de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b/i;
 
-/** Regra da unidade disparada por queda, pancada ou acidente (a "trauma/febre" cadastrada em 21/10). */
-const CONDICAO_TRAUMA = /\bqueda|pancada|acidente|trauma/i;
+/**
+ * Regra de SINAL DE ALERTA disparada por queda, pancada ou acidente sem dizer de quando (a "trauma/febre" cadastrada
+ * em 21/10). Regra que já diz o prazo ("recente", "há anos") vale como está, e regra que só cita trauma sem ser de
+ * sinal de alerta (o Instituto Trauma, que é ortopedia) não ganha a ressalva — achado do Codex, 21/10.
+ */
+const CONDICAO_TRAUMA = /\bqueda|pancada|acidente/i;
+const CONDICAO_COM_PRAZO = /recente|antig|\b(?:dias?|semanas?|mes(?:es)?|m[eê]s|anos?)\b/i;
+
+function regraDeTraumaSemPrazo(condicao: string): boolean {
+  return CONDICAO_SINAL_DE_ALERTA.test(condicao) && CONDICAO_TRAUMA.test(condicao) && !CONDICAO_COM_PRAZO.test(condicao);
+}
 
 /**
  * A regra "trauma/febre" do cadastro (21/10) diz só "dor forte depois de queda, pancada ou acidente". Marabá, lead
@@ -73,8 +82,8 @@ const TRAVA_TRAUMA_ANTIGO =
  * imediata que o cadastro manda vira "tente agendar antes" (ajuste do João, 21/10).
  */
 export function travaDaRegraDeSinalDeAlerta(condicao: string | null | undefined): string {
-  const trauma = CONDICAO_TRAUMA.test(condicao ?? '') ? TRAVA_TRAUMA_ANTIGO : '';
-  if (!CONDICAO_SINAL_DE_ALERTA.test(condicao ?? '')) return trauma;
+  if (!CONDICAO_SINAL_DE_ALERTA.test(condicao ?? '')) return '';
+  const trauma = regraDeTraumaSemPrazo(condicao ?? '') ? TRAVA_TRAUMA_ANTIGO : '';
   return (
     ' [REGRA DA REDE, vale mais que esta regra: nos SINAIS GRAVES DA COLUNA não transfira nem pause antes de ' +
     'tentar agendar — ofereça o horário mais próximo, chame avisar_sinal_de_alerta e só transfira se ele ' +
