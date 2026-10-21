@@ -32,6 +32,21 @@ import {
   travaDaResposta,
 } from './repeticao.js';
 import { detectarVazamento, explicarVazamento, pedidoAoReescritor, SISTEMA_REESCRITOR_BASTIDOR } from '../services/vazamento.js';
+import { agoraLocalISO } from './consulta-que-passou.js';
+import {
+  consultasDaAgenda,
+  diaSeguinte,
+  horariosOferecidos,
+  horariosQueJaPassaram,
+  INSTRUCAO_REFAZER_TURNO,
+  instrucaoParaReconsultar,
+  perguntaTurnoSemHorario,
+  reconsultaDaAgenda,
+  semHorarioPassado,
+  travaDoHorario,
+} from './horario-oferecido.js';
+import { empurraHorario, pacienteEncerrou, semEmpurrarHorario } from './paciente-encerrou.js';
+import { falaDoPacienteNoTurno, instrucaoSemObjecao, objecaoInventada, semASonda } from './objecao-inventada.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
   'Deixa eu confirmar essa informação com a equipe pra não te passar nada errado 🙏 ' +
@@ -557,6 +572,10 @@ export async function buildAgentGraph(
   // A trava "reservado sem marcar" refaz COM ferramentas no máximo uma vez por turno: a refeita pode chamar
   // agendar_consulta, o grafo volta aqui, e uma segunda promessa no mesmo turno só é cortada, nunca refeita.
   let reservaJaRefeita = false;
+  // A agenda reconsultada pelo código (horário vencido, "manhã ou tarde?", objeção inventada) e a refeita do "manhã ou
+  // tarde?": no máximo UMA vez por turno cada — a volta da ferramenta passa por aqui de novo.
+  let agendaJaReconsultada = false;
+  let turnoJaRefeito = false;
 
   const agentNode = async (state: AgentStateType) => {
     await recorder.step({
@@ -870,6 +889,135 @@ export async function buildAgentGraph(
         });
       }
 
+      // Refaz a resposta UMA vez com uma instrução na cara, com as ferramentas (a refeita pode chamar uma).
+      const refazerComInstrucao = async (instrucao: string) => {
+        const t1 = performance.now();
+        try {
+          const msg = (await withTimeout(
+            invokeChatModel({
+              model: modeloAtivo,
+              messages: [...finalMessages, response, new HumanMessage(instrucao)],
+              unitId: unit.id,
+              traceId: recorder.traceId,
+              modelName,
+              provider: provedorAtivo,
+              tools,
+              conversaId: idDaConversa,
+            }),
+            AGENT_NODE_TIMEOUT_MS,
+          )) as AIMessage;
+          return { msg, erro: null as string | null, ms: Math.round(performance.now() - t1) };
+        } catch (err) {
+          return { msg: null, erro: err instanceof Error ? err.message : String(err), ms: Math.round(performance.now() - t1) };
+        }
+      };
+
+      // Agenda × resposta (auditoria de Araguaína, 21/10/2026). Paciente que agradeceu ou encerrou não recebe horário:
+      // o empurrão sai mais abaixo (paciente-encerrou.ts). Fora isso — horário que já passou, horários de uma consulta
+      // velha à agenda, "manhã ou tarde?" no lugar de dois horários, objeção que ele não levantou (horario-oferecido.ts,
+      // objecao-inventada.ts) — a agenda é consultada de novo, UMA vez por turno: o grafo chama consultar_horarios e o
+      // modelo escreve de novo com a agenda de agora. Gemini (exige assinatura na chamada de ferramenta) não recebe
+      // chamada montada pelo código: refaz com a instrução. Com o plano B respondendo, só os cortes, sem modelo.
+      const agoraDaUnidade = agoraLocalISO(fusoDaUnidade(unit));
+      const encerrou = pacienteEncerrou(falas);
+      if (tools.some((t) => t.name === 'consultar_horarios') && !encerrou) {
+        const consultas = consultasDaAgenda(nonSystemMessages);
+        const travaHorario = travaDoHorario({
+          texto: textoFinal,
+          agoraLocal: agoraDaUnidade,
+          consultas,
+          ferramentas: ferramentasDoTurno(nonSystemMessages),
+          jaReconsultou: agendaJaReconsultada,
+        });
+        // A sondagem só leva à agenda quando a resposta não trouxe horário; com horário, só a pergunta sai (lá embaixo).
+        const sonda = travaHorario ? null : objecaoInventada(falas, textoFinal);
+        const reconsulta =
+          travaHorario?.acao === 'reconsultar'
+            ? travaHorario
+            : sonda && horariosOferecidos(textoFinal, agoraDaUnidade).length === 0 && !agendaJaReconsultada && !consultas.some((c) => c.noTurno)
+              ? { motivo: `perguntou o que pesa sem ele ter levantado dúvida ("${sonda.slice(0, 80)}")`, data: diaSeguinte(agoraDaUnidade) }
+              : null;
+        const aindaServe = (t: string) =>
+          !!t &&
+          !detectarVazamento(t) &&
+          horariosQueJaPassaram(horariosOferecidos(t, agoraDaUnidade), agoraDaUnidade).length === 0 &&
+          !perguntaTurnoSemHorario(t, agoraDaUnidade) &&
+          !objecaoInventada(falas, t);
+        if (reconsulta && !respondeuPlanoB) {
+          agendaJaReconsultada = true;
+          if (!useGoogle) {
+            await recorder.step({
+              kind: 'THINKING',
+              title: `🗓️ ${reconsulta.motivo} — consultando a agenda de novo (a partir de ${reconsulta.data})`,
+              payload: { original: textoFinal, data: reconsulta.data },
+            });
+            return { messages: [reconsultaDaAgenda(reconsulta.data)] } satisfies Partial<AgentStateType>;
+          }
+          const r = await refazerComInstrucao(
+            travaHorario ? instrucaoParaReconsultar(reconsulta.motivo) : instrucaoSemObjecao(falaDoPacienteNoTurno(falas)),
+          );
+          const chamadas = r.msg?.tool_calls ?? [];
+          if (r.msg && chamadas.length > 0) {
+            await recorder.step({
+              kind: 'THINKING',
+              title: `🗓️ ${reconsulta.motivo} — refeita chamando ${chamadas.map((c) => c.name).join(', ')}`,
+              payload: { original: textoFinal, chamadas: chamadas.map((c) => ({ nome: c.name, args: c.args })) },
+              latencyMs: r.ms,
+            });
+            return { messages: [r.msg] } satisfies Partial<AgentStateType>;
+          }
+          const textoRefeito = r.msg ? aiTextFromContent(r.msg.content).trim() : '';
+          const serve = aindaServe(textoRefeito);
+          if (serve) {
+            textoFinal = textoRefeito;
+            response.content = textoRefeito;
+          }
+          await recorder.step({
+            kind: 'THINKING',
+            title: serve ? `🗓️ ${reconsulta.motivo} — refeita` : `🗓️ ${reconsulta.motivo}; a refeita não serviu — seguem os cortes`,
+            payload: { refeita: textoRefeito || null, final: textoFinal, erro: r.erro },
+            latencyMs: r.ms,
+          });
+        } else if (travaHorario?.acao === 'refazer_turno' && !respondeuPlanoB && !turnoJaRefeito) {
+          turnoJaRefeito = true;
+          const r = await refazerComInstrucao(INSTRUCAO_REFAZER_TURNO);
+          const textoRefeito = r.msg && (r.msg.tool_calls ?? []).length === 0 ? aiTextFromContent(r.msg.content).trim() : '';
+          const serve = aindaServe(textoRefeito) && horariosOferecidos(textoRefeito, agoraDaUnidade).length > 0;
+          if (serve) {
+            textoFinal = textoRefeito;
+            response.content = textoRefeito;
+          }
+          await recorder.step({
+            kind: 'THINKING',
+            title: serve ? `🗓️ ${travaHorario.motivo} — refeita com dois horários` : `🗓️ ${travaHorario.motivo}; a refeita não serviu — saiu a original`,
+            payload: { refeita: textoRefeito || null, final: textoFinal, erro: r.erro },
+            latencyMs: r.ms,
+          });
+        }
+        // Sem modelo: horário que já passou nunca sai; a sondagem sai quando sobra resposta sem ela.
+        const semPassado = semHorarioPassado(textoFinal, agoraDaUnidade);
+        if (semPassado !== textoFinal) {
+          await recorder.step({
+            kind: 'ERROR',
+            title: '🗓️ Horário que já passou saiu da resposta',
+            payload: { original: textoFinal, final: semPassado, agora: agoraDaUnidade },
+          });
+          textoFinal = semPassado;
+          response.content = semPassado;
+        }
+        const sondaQueFicou = objecaoInventada(falas, textoFinal);
+        const semSonda = sondaQueFicou ? semASonda(textoFinal, sondaQueFicou) : '';
+        if (sondaQueFicou && semSonda) {
+          await recorder.step({
+            kind: 'THINKING',
+            title: `🗓️ Perguntou o que pesa sem ele ter levantado dúvida — a pergunta saiu ("${sondaQueFicou.slice(0, 80)}")`,
+            payload: { original: textoFinal, final: semSonda },
+          });
+          textoFinal = semSonda;
+          response.content = semSonda;
+        }
+      }
+
       // "Reservado" sem consulta (19/10/2026, Olímpia: o Anderson pagou o 11h30 que a IA disse ter reservado, e o
       // horário foi pra outro paciente — ver reserva-sem-marcar.ts). Antes de enviar: refaz UMA vez com as
       // ferramentas, para a IA poder MARCAR; texto refeito só vale sem a promessa; senão o trecho sai.
@@ -951,7 +1099,7 @@ export async function buildAgentGraph(
         });
       }
 
-      const cta = avaliarChamadaFinal(textoFinal);
+      const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
       if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit).triggered.length === 0) {
         const t1 = performance.now();
         try {
@@ -1054,6 +1202,19 @@ export async function buildAgentGraph(
           payload: { refeita: textoRefeito || null, final: textoFinal },
           latencyMs: Math.round(performance.now() - t1),
         });
+      }
+
+      // Ele agradeceu, se despediu ou disse que vai se organizar (paciente-encerrou.ts): a resposta não empurra horário.
+      // Quem retoma é a régua. Corte em código, sem modelo — sobra a parte calorosa, ou a despedida curta.
+      if (encerrou && empurraHorario(textoFinal, agoraDaUnidade)) {
+        const semEmpurrao = semEmpurrarHorario(textoFinal, agoraDaUnidade, encerrou);
+        await recorder.step({
+          kind: 'THINKING',
+          title: `🤝 Paciente ${encerrou === 'agradeceu' ? 'agradeceu/se despediu' : encerrou === 'concordou' ? 'só concordou depois da despedida' : 'disse que vai se organizar'} e a resposta empurrava horário — o empurrão saiu`,
+          payload: { original: textoFinal, final: semEmpurrao },
+        });
+        textoFinal = semEmpurrao;
+        response.content = semEmpurrao;
       }
 
       // Diminutivo sai aqui, no ÚNICO ponto onde a resposta ao paciente é finalizada — antes de
