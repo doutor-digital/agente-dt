@@ -1004,13 +1004,20 @@ export async function buildAgentGraph(
             resultadoPausa = `falhou: ${err instanceof Error ? err.message : String(err)}`;
           }
         }
+        // Só troca a resposta se a pausa pegou: dizer "alguém da equipe continua" com a IA ainda ligada (unidade sem o
+        // campo de pausa, pausar_ia desligada) seria prometer o que não aconteceu.
+        const pausou = !!resultadoPausa && resultadoPausa.startsWith('OK');
         await recorder.step({
-          kind: 'THINKING',
-          title: `🔁 ${trava.motivo} e a IA não transferiu — passada para a equipe pelo código`,
+          kind: pausou ? 'THINKING' : 'ERROR',
+          title: pausou
+            ? `🔁 ${trava.motivo} e a IA não transferiu — passada para a equipe pelo código`
+            : `🔁 ${trava.motivo} e a IA não transferiu; a pausa pelo código não pegou — saiu a resposta do modelo`,
           payload: { original: textoFinal, frase: trava.frase, pausa: resultadoPausa },
         });
-        textoFinal = trava.frase;
-        response.content = textoFinal;
+        if (pausou) {
+          textoFinal = trava.frase;
+          response.content = textoFinal;
+        }
       } else if (trava?.acao === 'refazer_sem_nome' && !respondeuPlanoB) {
         const t1 = performance.now();
         let textoRefeito = '';

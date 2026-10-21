@@ -132,8 +132,11 @@ const JA_RESPONDEU = /\bj[aá]\s+(?:te\s+|lhe\s+)?(?:falei|disse|respondi|mandei
 export interface Repeticao {
   /** Quantas vezes a IA já pediu o nome na janela recente, antes deste turno. */
   pedidosDeNome: number;
-  /** A última pergunta da IA e quantas vezes seguidas ela foi feita (1 = só uma vez). */
-  ultimaPergunta: { texto: string; vezes: number; tema: string | null } | null;
+  /**
+   * A última pergunta da IA, quantas vezes seguidas ela foi feita (1 = só uma vez) e, dessas, quantas seguidas
+   * (da mais recente para trás, contando a fala deste turno) ficaram sem resposta nenhuma.
+   */
+  ultimaPergunta: { texto: string; vezes: number; semRespostaSeguidas: number; tema: string | null } | null;
   /** A fala deste turno não responde nada. */
   semResposta: boolean;
   /** Ele diz que já respondeu. */
@@ -157,20 +160,35 @@ export function analisarRepeticao(falasTodas: Fala[]): Repeticao {
   const pedidosDeNome = antes.filter((f) => f.papel === 'ia' && pedeNome(f.texto)).length;
 
   // A última pergunta da IA e quantas vezes seguidas ela apareceu. Mensagem da IA sem pergunta (o "sem pressa"
-  // da régua) não quebra a sequência; uma pergunta DIFERENTE quebra.
+  // da régua) não quebra a sequência; uma pergunta DIFERENTE quebra. Para transferir, conta só as vezes que
+  // ficaram SEM resposta: se ele respondeu e a IA perguntou de novo para esclarecer, a pergunta não ficou sem
+  // resposta (achado do Codex, 21/10) — a cadeia para ali.
+  const anteriorDoPaciente = (j: number): string | null => {
+    for (let k = j - 1; k >= 0; k--) if (falas[k].papel === 'paciente') return falas[k].texto;
+    return null;
+  };
   let ultimaPergunta: Repeticao['ultimaPergunta'] = null;
-  const daIa = antes.filter((f) => f.papel === 'ia');
-  for (let i = daIa.length - 1; i >= 0; i--) {
-    const q = perguntaFinal(daIa[i].texto);
+  let cadeiaSemResposta = true;
+  for (let i = falas.length - 2; i >= 0; i--) {
+    if (falas[i].papel !== 'ia') continue;
+    const q = perguntaFinal(falas[i].texto);
     if (!q) continue;
     if (!ultimaPergunta) {
       // O tema que não é o nome manda: "como posso te chamar e onde dói?" repetida é a pergunta da dor.
       const temas = [...temasDe(q)];
-      ultimaPergunta = { texto: q, vezes: 1, tema: temas.find((t) => t !== 'nome') ?? temas[0] ?? null };
-      continue;
+      ultimaPergunta = { texto: q, vezes: 1, semRespostaSeguidas: 0, tema: temas.find((t) => t !== 'nome') ?? temas[0] ?? null };
+    } else if (mesmaPergunta(ultimaPergunta.texto, q)) {
+      ultimaPergunta.vezes++;
+    } else {
+      break;
     }
-    if (mesmaPergunta(ultimaPergunta.texto, q)) ultimaPergunta.vezes++;
-    else break;
+    // o que o paciente mandou depois desta pergunta, até a próxima fala da IA (para a última, é a fala deste turno)
+    let semResposta = true;
+    for (let j = i + 1; j < falas.length && falas[j].papel === 'paciente'; j++) {
+      if (!respostaVazia(falas[j].texto, anteriorDoPaciente(j))) semResposta = false;
+    }
+    if (cadeiaSemResposta && semResposta) ultimaPergunta.semRespostaSeguidas++;
+    else cadeiaSemResposta = false;
   }
 
   const doPaciente = antes.filter((f) => f.papel === 'paciente');
@@ -202,14 +220,15 @@ export function pararDePedirNome(r: Repeticao): boolean {
 
 /**
  * A conversa travou e vai para uma pessoa: a mesma pergunta (que não seja o nome — sem nome dá para seguir)
- * já foi feita 2 vezes e a fala deste turno de novo não responde; ou é o 2º áudio seguido que não deu pra ouvir.
+ * já foi feita 2 vezes e nas 2 ficou sem resposta (a fala deste turno incluída); ou é o 2º áudio seguido que não
+ * deu pra ouvir.
  */
 export function motivoDeHandoff(r: Repeticao): string | null {
   if (r.audiosNaoOuvidos >= LIMITE_TENTATIVAS) {
     return `áudio não ouvido ${r.audiosNaoOuvidos}x seguidas`;
   }
   const q = r.ultimaPergunta;
-  if (q && q.vezes >= LIMITE_TENTATIVAS && q.tema !== 'nome' && r.semResposta && !r.disseQueJaRespondeu) {
+  if (q && q.semRespostaSeguidas >= LIMITE_TENTATIVAS && q.tema !== 'nome' && r.semResposta && !r.disseQueJaRespondeu) {
     return `conversa travada: mesma pergunta ${q.vezes}x sem resposta${q.tema ? ` (${q.tema})` : ''}`;
   }
   return null;

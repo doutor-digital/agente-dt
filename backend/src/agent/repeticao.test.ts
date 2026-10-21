@@ -130,12 +130,27 @@ const TRAVADA: Fala[] = [
 test('mesma pergunta 2 vezes e de novo sem resposta: conversa travada, vai para a equipe', () => {
   const r = analisarRepeticao(TRAVADA);
   assert.equal(r.ultimaPergunta?.vezes, 2);
+  assert.equal(r.ultimaPergunta?.semRespostaSeguidas, 2);
   assert.ok(r.semResposta);
   assert.match(motivoDeHandoff(r) ?? '', /conversa travada/);
   const bloco = renderRepeticao(r);
   assert.match(bloco, /CONVERSA TRAVADA/);
   assert.match(bloco, /pausar_ia/);
   assert.doesNotMatch(bloco, /avaliação/);
+});
+
+test('ele respondeu e a IA perguntou de novo para esclarecer: um emoji agora não é conversa travada', () => {
+  const r = analisarRepeticao([
+    p('Quero saber do tratamento'),
+    ia('Claro! 😊 Me conta: onde dói e há quanto tempo você sente isso?'),
+    p('na lombar'),
+    ia('Entendi! E há quanto tempo, mais ou menos, você sente essa dor na lombar?'),
+    p('👍'),
+  ]);
+  assert.equal(r.ultimaPergunta?.vezes, 2);
+  assert.equal(r.ultimaPergunta?.semRespostaSeguidas, 1);
+  assert.equal(motivoDeHandoff(r), null);
+  assert.equal(travaDaResposta(r, 'Há quanto tempo?', []), null);
 });
 
 test('"já te falei": não é travada — a IA é que não leu; manda reler, sem transferir', () => {
