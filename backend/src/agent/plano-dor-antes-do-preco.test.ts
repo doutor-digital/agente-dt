@@ -64,3 +64,39 @@ test('reembolso só depois do valor', () => {
 test('a ordem antiga de voltar ao valor com PIX não volta', () => {
   assert.doesNotMatch(prompt, /volte ao valor com PIX/);
 });
+
+// ── Item 12 da lista de 21/10/2026 — decisão do João: JUNTAR ────────────────────────────────────────────
+// Mantém o #94 (plano respondido na hora, sem emendar o valor, UMA pergunta sobre a dor) e, DEPOIS que o paciente
+// conta a dor, a condição de quem tem plano: carteirinha (quando as fontes têm), recibo para reembolso e a oferta
+// de uma ligação da equipe. Plano de saúde é lead morno: não encerra a conversa.
+
+test('plano não encerra a conversa: lead morno, segue conduzindo', () => {
+  assert.match(regraDoPlano, /paciente morno, não conversa encerrada/);
+  assert.match(regraDoPlano, /NUNCA é despedida/);
+});
+
+test('o #94 continua: primeiro a pergunta do plano e UMA pergunta sobre a dor, sem valor', () => {
+  const primeiroPasso = regraDoPlano.slice(0, regraDoPlano.indexOf('DEPOIS QUE ELE CONTAR A DOR'));
+  assert.match(primeiroPasso, /Responda a pergunta do plano na hora/);
+  assert.match(primeiroPasso, /NÃO emende o valor/);
+  assert.match(primeiroPasso, /UMA pergunta/);
+  assert.doesNotMatch(primeiroPasso, /reembolso|liga/);
+});
+
+test('depois da dor: valor (com carteirinha, se houver) → recibo → oferta de ligação, nessa ordem', () => {
+  const depois = regraDoPlano.slice(regraDoPlano.indexOf('DEPOIS QUE ELE CONTAR A DOR'));
+  assert.ok(depois.length > 0, 'o segundo passo sumiu');
+  const iValor = depois.indexOf('o valor inteiro');
+  const iCarteirinha = depois.indexOf('carteirinha');
+  const iRecibo = depois.indexOf('o recibo para pedir reembolso');
+  const iLigacao = depois.indexOf('ofereça uma ligação da equipe');
+  assert.ok(iValor >= 0 && iCarteirinha > iValor && iRecibo > iCarteirinha && iLigacao > iRecibo, 'ordem: valor, carteirinha, recibo, ligação');
+  assert.match(depois, /criar_tarefa/);
+  assert.match(depois, /ofereça o horário da consulta/);
+});
+
+test('o que o paciente lê na regra nova fala "consulta com o nosso especialista", sem "avaliação" nem "em instantes" prometido', () => {
+  assert.match(regraDoPlano, /consulta com o nosso especialista/);
+  assert.doesNotMatch(regraDoPlano, /avaliaç/);
+  assert.doesNotMatch(regraDoPlano, /te liga(?:mos)? em instantes/);
+});

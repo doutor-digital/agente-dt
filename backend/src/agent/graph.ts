@@ -23,6 +23,14 @@ import { semIntimidade } from '../lib/sem-intimidade.js';
 import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
 import { semNomeForaDaAgenda } from './nome-na-resposta.js';
 import { avaliarChamadaFinal, INSTRUCAO_REFAZER_CTA } from './cta-final.js';
+import {
+  analisarRepeticao,
+  falasDoHistorico,
+  ferramentasDoTurno,
+  INSTRUCAO_REFAZER_SEM_NOME,
+  pedeNome,
+  travaDaResposta,
+} from './repeticao.js';
 import { detectarVazamento, explicarVazamento, pedidoAoReescritor, SISTEMA_REESCRITOR_BASTIDOR } from '../services/vazamento.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
@@ -568,6 +576,10 @@ export async function buildAgentGraph(
           : JSON.stringify(lastHuman.content)
         : undefined,
     );
+    // A conversa em falas: as contas de repetição (nome pedido 2x, mesma pergunta sem resposta, áudio não ouvido)
+    // e de insistência no preço saem daqui, em código — o prompt recebe o resultado, não a tarefa de contar.
+    const falas = falasDoHistorico(nonSystemMessages);
+    const repeticao = analisarRepeticao(falas);
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;
@@ -613,6 +625,7 @@ export async function buildAgentGraph(
         userMessage,
         isFirstTurn,
         leadId: state.leadId,
+        historico: falas,
       });
       promptDoTurno = `${cacheable}\n${dynamic ?? ''}`;
       systemMessage = new SystemMessage({
@@ -628,6 +641,7 @@ export async function buildAgentGraph(
         userMessage,
         isFirstTurn,
         leadId: state.leadId,
+        historico: falas,
       });
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
@@ -973,6 +987,71 @@ export async function buildAgentGraph(
             latencyMs: Math.round(performance.now() - t1),
           });
         }
+      }
+
+      // Repetição (item 10, 21/10/2026): o bloco <repeticao> mandou parar de pedir o nome ou passar para a equipe.
+      // Se a resposta desobedeceu: conversa travada / 2º áudio não ouvido sem transferir → passa aqui, em código, pela
+      // mesma ferramenta pausar_ia; pediu o nome pela 3ª vez → refaz UMA vez sem o pedido (se a refeita não servir,
+      // fica a original — um 3º pedido é ruim, mas mensagem quebrada é pior).
+      const trava = travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages));
+      if (trava?.acao === 'passar_para_equipe') {
+        const pausar = tools.find((t) => t.name === 'pausar_ia');
+        let resultadoPausa: string | null = null;
+        if (pausar && state.leadId) {
+          try {
+            resultadoPausa = String(await pausar.invoke({ leadId: Number(state.leadId), motivo: trava.motivo }));
+          } catch (err) {
+            resultadoPausa = `falhou: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        }
+        // Só troca a resposta se a pausa pegou: dizer "alguém da equipe continua" com a IA ainda ligada (unidade sem o
+        // campo de pausa, pausar_ia desligada) seria prometer o que não aconteceu.
+        const pausou = !!resultadoPausa && resultadoPausa.startsWith('OK');
+        await recorder.step({
+          kind: pausou ? 'THINKING' : 'ERROR',
+          title: pausou
+            ? `🔁 ${trava.motivo} e a IA não transferiu — passada para a equipe pelo código`
+            : `🔁 ${trava.motivo} e a IA não transferiu; a pausa pelo código não pegou — saiu a resposta do modelo`,
+          payload: { original: textoFinal, frase: trava.frase, pausa: resultadoPausa },
+        });
+        if (pausou) {
+          textoFinal = trava.frase;
+          response.content = textoFinal;
+        }
+      } else if (trava?.acao === 'refazer_sem_nome' && !respondeuPlanoB) {
+        const t1 = performance.now();
+        let textoRefeito = '';
+        try {
+          const refeita = (await withTimeout(
+            invokeChatModel({
+              model: modeloAtivo,
+              messages: [...finalMessages, response, new HumanMessage(INSTRUCAO_REFAZER_SEM_NOME)],
+              unitId: unit.id,
+              traceId: recorder.traceId,
+              modelName,
+              provider: provedorAtivo,
+              tools,
+              conversaId: idDaConversa,
+            }),
+            AGENT_NODE_TIMEOUT_MS,
+          )) as AIMessage;
+          textoRefeito = (refeita.tool_calls ?? []).length === 0 ? aiTextFromContent(refeita.content).trim() : '';
+        } catch (err) {
+          logger.warn({ err: String(err), unit: unit.slug }, 'repetição: refeita sem o nome falhou — fica a original');
+        }
+        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito);
+        if (serve) {
+          textoFinal = textoRefeito;
+          response.content = textoRefeito;
+        }
+        await recorder.step({
+          kind: 'THINKING',
+          title: serve
+            ? `🔁 Pediu o nome pela ${repeticao.pedidosDeNome + 1}ª vez — refeita sem o pedido`
+            : `🔁 Pediu o nome pela ${repeticao.pedidosDeNome + 1}ª vez; a refeita não serviu — saiu a original`,
+          payload: { refeita: textoRefeito || null, final: textoFinal },
+          latencyMs: Math.round(performance.now() - t1),
+        });
       }
 
       // Diminutivo sai aqui, no ÚNICO ponto onde a resposta ao paciente é finalizada — antes de

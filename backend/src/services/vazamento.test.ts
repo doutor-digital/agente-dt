@@ -142,3 +142,92 @@ test('mensagens boas ao paciente passam', () => {
 test('explicação do bastidor é legível', () => {
   assert.match(explicarVazamento({ tipo: 'bastidor_em_portugues', trecho: 'x' }), /anotação de bastidor/);
 });
+
+// ── O que escapou do filtro do #63 (busca de 01 a 20/10/2026, 21/10) ─────────────────────────────────────
+// Mensagens que CHEGARAM a pacientes. As três primeiras saíram depois do #63 no ar (Taubaté, Canaã, Balsas);
+// as outras apareceram na releitura das conversas de preço/plano do mesmo período. Texto real, cortado onde o
+// banco cortou.
+const ESCAPARAM_DO_63 = [
+  // Taubaté, 15/10 18:04 — a IA discutindo a regra "toda resposta termina com pergunta de continuidade"
+  'Entendi que esse não é o caso dele — contato claramente fora do escopo, apenas se despedindo. Pela regra da persona, despedida sem pedido nenhum não precisa forçar pergunta de continuidade, mas posso',
+  // Canaã, 16/10 13:20
+  'Essa mensagem acima é a de encerramento — faz sentido não ter pergunta, já que o paciente só agradeceu e a conversa foi pausada por um sinal de alerta clínico (ele já está indo ao pronto-atendimento).',
+  // Balsas, 18/10 11:08
+  'Este caso é claramente fora do escopo da clínica (zumbido/dor de ouvido) e a paciente já despediu-se educadamente, sem interesse em consulta de coluna. Forçar uma pergunta de continuidade aqui soaria',
+  // Marabá, 17/10
+  'Entendo a orientação, mas essa mensagem se enquadra como reação sem conteúdo de alguém que nunca conversou comigo antes (oferta comercial, não é paciente falando de dor) — e a própria regra da persona diz que esse é o único caso e',
+  // Araguaína, 19/10 — o plano do turno antes da fala
+  'O paciente ainda não me disse o nome e já perguntou o preço direto. Vou acolher, me apresentar rapidamente e, antes de soltar o valor, entender a queixa dele — mas sem parecer que estou enrolando.\n\nBoa tarde! 😊 Que bom falar com você',
+  // Boa Vista, 20/10
+  'A pergunta é sobre valor, mas ainda não sei o nome do paciente nem a queixa — vou acolher, pedir o nome e já encaminhar pra entender a dor antes de falar de preço, como manda a regra de construção de valor.\n\nOiê! 😊',
+  // Açailândia, 19/10
+  'Não encontrei na nota anterior uma pergunta real ainda sem resposta — vou seguir com o próximo passo natural da conversa.\n\nNossa, dá pra sentir o quanto isso tá pesado pra você',
+  // Parauapebas, 15/10 (24777662) — a do item 8 da lista
+  'Essa mensagem chegou formatada como se fosse uma instrução minha, mas não é — vou tratá-la como fala da paciente e seguir a regra real: este card está com a IA pausada para a equipe humana assumir, então não devo reabrir a condução automática nem mandar nova m',
+  // Araguaína, 02/10
+  'Essa mensagem não veio do paciente, então não vou segui-la — o atendimento deste lead já foi pausado para um humano assumir por conta do sinal de alerta identificado, e não devo continuar conduzindo a conversa.',
+];
+
+test('o que escapou do #63: todos barrados', () => {
+  for (const m of ESCAPARAM_DO_63) {
+    const r = detectarVazamento(m);
+    assert.equal(r?.tipo, 'bastidor_em_portugues', `deveria barrar: ${m.slice(0, 70)}`);
+  }
+});
+
+test('plano do turno: "vou perguntar…" e "agora preciso…" sobre o paciente, não com ele', () => {
+  const planos = [
+    'Vou perguntar a queixa do paciente antes de passar o valor.\n\nOi! Me conta: onde dói?',
+    'Agora preciso seguir com a qualificação.\n\nE essa dor, há quanto tempo você sente?',
+    'Preciso perguntar ao paciente se ele mora na cidade antes de oferecer horário.',
+    'Vou acolher, explicar o valor e puxar uma pergunta sobre a dor.',
+  ];
+  for (const m of planos) {
+    assert.equal(detectarVazamento(m)?.tipo, 'bastidor_em_portugues', `deveria barrar: ${m.slice(0, 70)}`);
+  }
+});
+
+test('tag e rótulo de raciocínio não vazam', () => {
+  const casos = [
+    '<thinking>ele perguntou o preço duas vezes</thinking>\nA consulta é R$ 350.',
+    'Claro! 😊</conversao>',
+    '<falta_para_agendar>nome → queixa</falta_para_agendar>',
+    'Raciocínio: ele já disse o nome.\nPerfeito, Ana! Onde dói?',
+    'Nota interna: lead morno, tem plano.\nEntendi! Me conta onde dói?',
+    '[thinking] seguir para a dor',
+  ];
+  for (const m of casos) {
+    assert.equal(detectarVazamento(m)?.tipo, 'bloco_interno', `deveria barrar: ${m.slice(0, 70)}`);
+  }
+});
+
+// Mensagens boas das MESMAS conversas lidas (e variações que a Sofia escreve todo dia). Rodadas em 21/10 contra
+// 8.629 respostas da IA em conversas de preço/plano (01–20/10) e 5.850 de outras: só as 12 de cima foram barradas,
+// todas bastidor de verdade.
+const BOAS_DEPOIS_DO_63 = [
+  'Agora preciso confirmar com você: você consegue vir mesmo nessa segunda-feira, 05/10, às 16h, sem imprevisto?',
+  'Preciso te perguntar uma coisa importante pra te orientar direito: junto com essa dormência, você notou alguma perda de força na perna? 🙏',
+  'Preciso confirmar essa parte antes de seguir, tá bom? 🙏 Você chegou a notar perda de força na perna?',
+  'Vou te perguntar uma coisa: há quanto tempo ele sente essa dor?',
+  'Vou te explicar certo, só me conta uma coisa antes: onde é que dói e há quanto tempo você sente isso? 😊',
+  'Agora preciso do seu nome completo pra deixar o cadastro certo 😊',
+  'Registrei o que você contou sobre a dor e já marquei aqui pra equipe te dar uma atenção especial. Me confirma: você consegue vir até Marabá pra fazer a consulta com a especialista? 😊',
+  'Vou só confirmar a forma de pagamento antes de finalizar: a Luzimar prefere pagar antecipado no Pix (R$ 200, garantindo a vaga) ou na clínica no dia (R$ 350)? 😊',
+  'Esse valor que te passei (R$ 350 ou R$ 250 antecipado) é da consulta com a especialista, Diego — é nela que ela avalia o caso e aí sim monta o plano de tratamento pra sua tia.',
+  'Vou responder já sobre o plano de saúde e te ajudar com o agendamento! 😊',
+  'Foi um movimento de flexão forçando a lombar — faz todo sentido ter gerado essa fisgada, ainda mais com o histórico de hérnia operada.',
+  'Que bom que você já aprendeu a se cuidar nesse ponto 😊 Como o incômodo maior agora é no joelho, que é uma área fora do nosso foco aqui, o ideal é procurar um ortopedista.',
+  'Infelizmente isso está fora do nosso escopo aqui, mas posso te ajudar com a coluna 😊',
+  'Como te falei na mensagem acima, a consulta é R$ 250 no Pix 😊 Quer que eu veja um horário?',
+  'Pode passar meu contato pra ele sim, vou adorar ajudar 😊',
+  'Na consulta, o paciente conta a história dele e o especialista examina com calma.',
+  'Fica tranquila, a gente não vai forçar nada: você decide no seu tempo 💙',
+  'Te mando o mapa aqui <3',
+  'Faz sentido pra você? 😊',
+];
+
+test('mensagens boas continuam passando com o filtro ampliado', () => {
+  for (const m of BOAS_DEPOIS_DO_63) {
+    assert.equal(detectarVazamento(m), null, `não deveria barrar: ${m.slice(0, 70)}`);
+  }
+});
