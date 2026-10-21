@@ -246,7 +246,7 @@ test('colaboradores: filtro por local, agrupamento, nomes de empregador/gestor, 
   assert.equal(chamadas.find(([c]) => c === '/employees')![1].max_results, 500);
 });
 
-test('ponto de hoje: trabalhando agora, saiu, sem batida, sem espelho; falta de hoje não conta', async () => {
+test('ponto de hoje: trabalhando agora, saiu, sem batida, sem espelho; atraso e falta de hoje não contam', async () => {
   const r = await tiquetaquePontoDoDia(ctxPadrao(), { unidade: 'doutor-digital', agruparPor: 'situacao' });
   assert.equal(r.data, '2026-10-20');
   assert.equal(r.agora, '10:30');
@@ -256,12 +256,14 @@ test('ponto de hoje: trabalhando agora, saiu, sem batida, sem espelho; falta de 
   assert.equal(u.resumo.saiuOuEmIntervalo, 1);
   assert.equal(u.resumo.semBatida, 1);
   assert.equal(u.resumo.semEspelho, 1);
-  assert.equal(u.resumo.comAtraso, 1);
+  // com o dia em andamento o espelho conta como atraso o que falta trabalhar (21/10: entrou 06:53, "atraso" 6 h às 08:51)
+  assert.ok(!('comAtraso' in u.resumo) && !('horasDeAtraso' in u.resumo), 'atraso de hoje não entra no resumo');
   assert.deepEqual(u.agrupado, { 'saiu ou em intervalo': 1, 'sem batida': 1, 'sem espelho': 1, trabalhando: 1 });
   const ana = u.itens.find((x) => x.nome === 'Ana Souza')!;
   assert.deepEqual(ana.batidas, ['08:15'], 'batida inválida (selfie) fica de fora');
-  assert.equal(ana.atraso, 0.25);
+  assert.ok(!('atraso' in ana), 'atraso de hoje ainda não é atraso');
   assert.ok(!('faltaInjustificada' in u.itens.find((x) => x.nome === 'Carla Dias')!), 'falta de hoje ainda não é falta');
+  await assert.rejects(tiquetaquePontoDoDia(ctxPadrao(), { unidade: 'doutor-digital', situacao: 'comAtraso' }), /só existem quando o dia acaba/);
   semSegredo(r);
 
   const trab = await tiquetaquePontoDoDia(ctxPadrao(), { unidade: 'doutor-digital', situacao: 'trabalhando' });
@@ -307,11 +309,12 @@ test('horas pela folha do mês: cada empregador na sua folha, banco de horas, fa
   await assert.rejects(() => tiquetaqueHoras(ctxPadrao(), { unidade: 'doutor-digital', inicio: '2026-01-01', fim: '2026-12-31' }), /no máximo 186 dias/);
 });
 
-test('atrasos e faltas: dia a dia, ranking por colaborador, falta de hoje fora', async () => {
+test('atrasos e faltas: dia a dia, ranking por colaborador, atraso e falta de hoje fora', async () => {
   const r = await tiquetaqueAtrasosFaltas(ctxPadrao(), { unidade: 'doutor-digital', inicio: '2026-10-01', fim: '2026-10-20', agruparPor: 'colaborador' });
   const u = unidadeOk(r);
   assert.deepEqual(u.resumo, {
-    ocorrencias: 4, diasComAtraso: 2, horasDeAtraso: 0.75, pessoasComAtraso: 1, diasComFaltaInjustificada: 1, horasDeFaltaInjustificada: 8,
+    // o 0.25 de atraso da Ana HOJE (dia em andamento) não entra: era a hora que ainda faltava trabalhar
+    ocorrencias: 3, diasComAtraso: 1, horasDeAtraso: 0.5, pessoasComAtraso: 1, diasComFaltaInjustificada: 1, horasDeFaltaInjustificada: 8,
     pessoasComFaltaInjustificada: 1, diasComFaltaJustificada: 1,
   });
   assert.deepEqual(Object.keys(u.agrupado!), ['Ana Souza'], 'a falta de hoje da Carla não entra');

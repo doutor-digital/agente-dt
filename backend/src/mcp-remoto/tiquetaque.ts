@@ -655,8 +655,9 @@ export interface ResumoDoDia {
   comBatidasPares?: number;
   semBatida: number;
   semEspelho: number;
-  comAtraso: number;
-  horasDeAtraso: number;
+  /** só em dia que já acabou: no dia de hoje o espelho conta como atraso o que ainda falta trabalhar */
+  comAtraso?: number;
+  horasDeAtraso?: number;
   comFalta?: number;
 }
 
@@ -670,6 +671,9 @@ export async function tiquetaquePontoDoDia(
   validarData(data, 'data');
   if (data > hoje) throw new ErroDeEntrada('data no futuro: o ponto só existe até hoje');
   const ehHoje = data === hoje;
+  if (ehHoje && (a.situacao === 'comAtraso' || a.situacao === 'comFalta')) {
+    throw new ErroDeEntrada('atraso e falta de hoje só existem quando o dia acaba; para hoje use situacao "trabalhando" ou "semBatida", e para atraso peça um dia que já passou (ou tiquetaque_atrasos_faltas até ontem)');
+  }
   const contas = resolverContasTiquetaque(ctx, a.unidade);
   const max = a.maxItens ?? (contas.length === 1 ? 200 : 0);
   const porUnidade = await emCada(contas, async (c) => {
@@ -680,14 +684,17 @@ export async function tiquetaquePontoDoDia(
       const d = e?.dias.find((x) => x.data === data);
       const batidas = d?.batidas ?? [];
       const h = d?.horas ?? {};
-      // falta de HOJE ainda não é falta: pode ser só quem não chegou
+      // falta de HOJE ainda não é falta: pode ser só quem não chegou. E o atraso de hoje também não é atraso: com o dia
+      // em andamento, o espelho conta como atraso as horas da escala que a pessoa ainda não trabalhou (medido 21/10:
+      // entrou 06:53, "atraso" 6 h às 08:51).
       const faltaInjustificada = ehHoje ? undefined : h.faltaInjustificada;
+      const atraso = ehHoje ? undefined : h.atraso;
       const item = {
         ...resumoPessoa(p),
         situacao: situacaoDoDia(batidas, !!e, ehHoje),
         batidas,
         ...(h.trabalhadas ? { horasTrabalhadas: h.trabalhadas } : {}),
-        ...(h.atraso ? { atraso: h.atraso } : {}),
+        ...(atraso ? { atraso } : {}),
         ...(faltaInjustificada ? { faltaInjustificada } : {}),
         ...(h.faltaJustificada ? { faltaJustificada: h.faltaJustificada } : {}),
         ...(extrasDe(h) ? { extras: extrasDe(h) } : {}),
@@ -709,9 +716,9 @@ export async function tiquetaquePontoDoDia(
       ...(ehHoje ? { trabalhandoAgora: impares, saiuOuEmIntervalo: pares } : { comBatidaImpar: impares, comBatidasPares: pares }),
       semBatida: linhas.filter((l) => l.n === 0 && l.temEspelho).length,
       semEspelho: linhas.filter((l) => !l.temEspelho).length,
-      comAtraso: linhas.filter(filtro.comAtraso).length,
-      horasDeAtraso: soma(linhas.map((l) => l.item.atraso)),
-      ...(ehHoje ? {} : { comFalta: linhas.filter(filtro.comFalta).length }),
+      ...(ehHoje
+        ? {}
+        : { comAtraso: linhas.filter(filtro.comAtraso).length, horasDeAtraso: soma(linhas.map((l) => l.item.atraso)), comFalta: linhas.filter(filtro.comFalta).length }),
     };
     const escolhidas = (a.situacao ? linhas.filter(filtro[a.situacao]) : linhas).sort(
       (x, y) => (x.item.batidas[0] ?? '99').localeCompare(y.item.batidas[0] ?? '99') || x.p.nome.localeCompare(y.p.nome, 'pt-BR'),
@@ -731,7 +738,7 @@ export async function tiquetaquePontoDoDia(
     observacao:
       'Batidas válidas do espelho de ponto (HH:MM). "trabalhando" = número ímpar de batidas hoje (entrou e ainda não saiu); "sem espelho" = ' +
       'sem escala ou cadastro incompleto no dia. Batida pendente de aprovação pode não aparecer: tiquetaque_batidas mostra tipo e aprovação. ' +
-      'Falta de hoje não entra (o dia não acabou). Horas em decimal (7.5 = 7h30).',
+      'Atraso e falta de hoje não entram (o dia não acabou: o espelho conta como atraso o que ainda falta trabalhar). Horas em decimal (7.5 = 7h30).',
     ...(contas.length > 1
       ? { rede: { colaboradores: ok.reduce((s, u) => s + u.resumo.colaboradores, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
@@ -895,7 +902,7 @@ export async function tiquetaqueHoras(
   });
   const ok = okDe(porUnidade);
   return {
-    observacao: 'Horas em decimal (7.5 = 7h30). "trabalhadas" = total trabalhado; extra50/extra100 = horas extras por faixa; banco de horas: saldo final do período (negativo = deve horas). Falta de hoje não entra (o dia não acabou).',
+    observacao: 'Horas em decimal (7.5 = 7h30). "trabalhadas" = total trabalhado; extra50/extra100 = horas extras por faixa; banco de horas: saldo final do período (negativo = deve horas). Falta de hoje não entra (o dia não acabou). Se o período inclui HOJE, o atraso e o banco de horas contam como devidas as horas que ainda faltam trabalhar no dia: para fechar a conta, peça até ontem.',
     ...(contas.length > 1
       ? { rede: { colaboradores: ok.reduce((s, u) => s + u.resumo.colaboradores, 0), extras: soma(ok.map((u) => u.resumo.extras)), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
@@ -924,8 +931,8 @@ export async function tiquetaqueAtrasosFaltas(
     const esp = await espelhos(ctx, c, a.inicio, a.fim);
     const itens = cad.colaboradores.filter((x) => passa(x, a)).flatMap((p) =>
       (esp.porId.get(p.id)?.dias ?? []).flatMap((d) => {
-        const atraso = tipo !== 'falta' ? d.horas.atraso : undefined;
-        // falta de hoje ainda não é falta
+        // atraso e falta de hoje ainda não são: o espelho do dia em andamento conta o que falta trabalhar
+        const atraso = tipo !== 'falta' && d.data !== hoje ? d.horas.atraso : undefined;
         const fi = tipo !== 'atraso' && d.data !== hoje ? d.horas.faltaInjustificada : undefined;
         const fj = tipo !== 'atraso' && d.data !== hoje ? d.horas.faltaJustificada : undefined;
         if (!atraso && !fi && !fj) return [];
@@ -974,7 +981,7 @@ export async function tiquetaqueAtrasosFaltas(
   const ok = okDe(porUnidade);
   return {
     periodo: { inicio: a.inicio, fim: a.fim },
-    observacao: 'Do espelho de ponto, dia a dia. Atraso e falta em horas decimais (0.25 = 15 min). Falta de hoje não entra (o dia não acabou).',
+    observacao: 'Do espelho de ponto, dia a dia. Atraso e falta em horas decimais (0.25 = 15 min). Atraso e falta de hoje não entram (o dia não acabou).',
     ...(contas.length > 1
       ? { rede: { diasComAtraso: ok.reduce((s, u) => s + u.resumo.diasComAtraso, 0), diasComFaltaInjustificada: ok.reduce((s, u) => s + u.resumo.diasComFaltaInjustificada, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
