@@ -310,3 +310,20 @@ test('a reconsulta montada pelo código roda consultar_horarios e volta ao agent
   assert.match(String(ultima.content), /14h ou às 16h/);
   assert.deepEqual(consultasDaAgenda(fim.messages), [{ noTurno: true, em: '2026-10-19T08:29', confirmados: true }]);
 });
+
+test('a conta é de relógio de parede local: o fuso do servidor não muda nada', () => {
+  const antes = process.env.TZ;
+  try {
+    for (const tz of ['UTC', 'Pacific/Kiritimati', 'America/Araguaina', 'Pacific/Pago_Pago']) {
+      process.env.TZ = tz;
+      // 23:50 de domingo na clínica: o das 23:30 passou, o "amanhã às 08h" é segunda 19/10
+      const o = horariosOferecidos('Tenho hoje às 23h30 ou amanhã às 08h, qual prefere?', '2026-10-18T23:50');
+      assert.deepEqual(o.map((x) => `${x.data} ${x.hora}`), ['2026-10-18 23:30', '2026-10-19 08:00'], tz);
+      assert.deepEqual(horariosQueJaPassaram(o, '2026-10-18T23:50').map((x) => x.hora), ['23:30'], tz);
+      assert.equal(consultaAindaVale('2026-10-18T21:00', '2026-10-18T23:50'), true, tz);
+    }
+  } finally {
+    if (antes === undefined) delete process.env.TZ;
+    else process.env.TZ = antes;
+  }
+});

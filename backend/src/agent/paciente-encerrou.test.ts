@@ -112,6 +112,13 @@ test('as respostas reais empurravam horário; o empurrão sai e fica a parte cal
   assert.equal(semEmpurrarHorario('Fica melhor às 08h ou às 14h? ☺\n[[botoes: Seg 08h | Seg 14h]]', agora19, 'agradeceu'), DESPEDIDA_CURTA);
 });
 
+test('oferta de horário sem pergunta também sai de quem encerrou', () => {
+  assert.equal(
+    semEmpurrarHorario('Imagina, João! Tenho horários às 14h ou 16h. Fico à disposição ☺', '2026-10-15T12:53', 'agradeceu'),
+    'Imagina, João! Fico à disposição ☺',
+  );
+});
+
 test('despedida certa passa sem corte', () => {
   for (const t of [
     'Eu que agradeço, Antônia! Qualquer coisa, é só me chamar por aqui ☺',
