@@ -17,6 +17,7 @@
 import type { BaseMessage } from '@langchain/core/messages';
 
 import { semBlocoOficial } from '../lib/conversa-oficial.js';
+import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 
 export interface Fala {
   papel: 'paciente' | 'ia';
@@ -51,10 +52,24 @@ export function pedeNome(texto: string): boolean {
   return PEDE_NOME.test(texto) && !NOME_COMPLETO.test(texto);
 }
 
+/**
+ * A pergunta dos sinais de alerta (força na perna, xixi/intestino, virilha), em qualquer formulação. Araguaína,
+ * lead 28659614 (15/10/2026): a Sofia fez essa pergunta 8 vezes em 12 minutos, cada vez com outras palavras ("fraqueza na
+ * perna, formigamento ou dificuldade pra segurar xixi?", "a perna bambeou, perdeu a força?"), a um paciente que
+ * respondia por áudio sobre outra coisa. Por palavra-chave, todas são a MESMA pergunta.
+ */
+export const TEMA_SINAL_DE_ALERTA = 'sinal de alerta';
+const PERGUNTA_SINAL_DE_ALERTA =
+  /perda\s+de\s+for[cç]a|perde[ru]?\s+(?:a\s+)?for[cç]a|sem\s+for[cç]a|fraqueza|pernas?\s+(?:ficou\s+|ficaram\s+|est[aá]\s+)?fracas?|xixi|intestino|bexiga|urin(?:a|ar)\b|evacua|fezes|virilha|regi[aã]o\s+(?:da\s+)?sela/i;
+
+export function perguntaDeSinalDeAlerta(pergunta: string): boolean {
+  return PERGUNTA_SINAL_DE_ALERTA.test(pergunta);
+}
+
 /** Do que trata a pergunta. Duas perguntas com o mesmo tema são a mesma pergunta, mesmo com outras palavras. */
 const TEMAS: Array<[string, RegExp]> = [
   ['nome', PEDE_NOME],
-  ['sinal de alerta', /perda\s+de\s+for[cç]a|xixi|intestino|bexiga|urinar|evacuar/i],
+  [TEMA_SINAL_DE_ALERTA, PERGUNTA_SINAL_DE_ALERTA],
   ['onde dói', /onde\s+(?:[eé]\s+(?:que\s+)?)?(?:d[oó]i|est[aá]\s+(?:essa\s+|a\s+)?dor|voc[eê]\s+sente|sente)|qual\s+(?:a\s+)?regi[aã]o|em\s+que\s+(?:parte|regi[aã]o)/i],
   ['há quanto tempo', /h[aá]\s+quanto\s+tempo|desde\s+quando|faz\s+quanto\s+tempo/i],
   ['cidade', /\bmora\s+(?:aqui\s+)?(?:em|no|na|perto)\b|qual\s+(?:a\s+)?(?:sua\s+)?cidade|de\s+(?:qual|que)\s+cidade|de\s+onde\s+(?:voc[eê]|vc)\s+[eé]/i],
@@ -66,16 +81,28 @@ function temasDe(pergunta: string): Set<string> {
   return new Set(TEMAS.filter(([, re]) => re.test(pergunta)).map(([t]) => t));
 }
 
-/** A última frase com "?" da mensagem — é ela que espera resposta. */
-export function perguntaFinal(texto: string): string | null {
-  const frases = texto
+function perguntasDe(texto: string): string[] {
+  return texto
     .split(/(?<=[?!.])\s+|\n+/)
     .map((f) => f.trim())
-    .filter(Boolean);
-  for (let i = frases.length - 1; i >= 0; i--) {
-    if (frases[i].includes('?')) return frases[i];
-  }
-  return null;
+    .filter((f) => f.includes('?'));
+}
+
+/** A última frase com "?" da mensagem — é ela que espera resposta. */
+export function perguntaFinal(texto: string): string | null {
+  const perguntas = perguntasDe(texto);
+  return perguntas.length ? perguntas[perguntas.length - 1] : null;
+}
+
+/**
+ * A pergunta que a mensagem deixa esperando: a dos sinais de alerta, se ela estiver em QUALQUER frase (é a que
+ * trava a conversa, e a IA costuma fechar com outra coisa: "...segurar xixi ou intestino? Preciso entender isso
+ * antes de seguir, tá?"); senão, a última frase com "?".
+ */
+export function perguntaQueEspera(texto: string): string | null {
+  const perguntas = perguntasDe(texto);
+  if (perguntas.length === 0) return null;
+  return perguntas.find(perguntaDeSinalDeAlerta) ?? perguntas[perguntas.length - 1];
 }
 
 function normalizar(s: string): string {
@@ -126,6 +153,25 @@ export function respostaVazia(texto: string, anteriorDoPaciente?: string | null)
   return false;
 }
 
+/**
+ * A fala responde à pergunta dos sinais de alerta? Sim/não, "não senti nada disso", ou falar do que foi perguntado
+ * (perna, força, formigamento, xixi, intestino…). Áudio sobre o endereço, o preço ou o dia de vir NÃO responde —
+ * e para esta pergunta isso conta como "sem resposta", porque é a resposta que falta para seguir com segurança.
+ */
+const RESPONDE_SINAL_DE_ALERTA = new RegExp(
+  [
+    // começa respondendo: "sim", "não", "nada", "nenhum", "senti sim"… (\b do JS não enxerga o "ã": fim à mão)
+    String.raw`^\s*(?:sim|s|n[aã]o|nada|nenhum|nenhuma|nunca|negativo|tenho|tive|senti|sinto)(?![\wÀ-ÿ])`,
+    String.raw`n[aã]o\s+(?:senti|sinto|tive|tenho|percebi|notei)(?![\wÀ-ÿ])|nada\s+disso|nenhum(?:a)?\s+(?:dess[ae]s?|disso)|gra[cç]as\s+a\s+deus\s+n[aã]o`,
+    String.raw`perna|for[cç]a|fraq|formig|dorm[eê]n|dormente|xixi|urin|intestin|fezes|bexiga|banheiro|evacu|segur(?:o|ar|ando)|control|virilha|\bsela\b`,
+  ].join('|'),
+  'i',
+);
+
+export function respondeSinalDeAlerta(texto: string): boolean {
+  return RESPONDE_SINAL_DE_ALERTA.test(texto.replace(/\[[^\]]*\]:?/g, ' ').trim());
+}
+
 /** "Já te falei", "já respondi": ele respondeu e a IA não viu. Não é conversa travada — é a IA que não leu. */
 const JA_RESPONDEU = /\bj[aá]\s+(?:te\s+|lhe\s+)?(?:falei|disse|respondi|mandei|informei|expliquei|passei)\b/i;
 
@@ -171,7 +217,7 @@ export function analisarRepeticao(falasTodas: Fala[]): Repeticao {
   let cadeiaSemResposta = true;
   for (let i = falas.length - 2; i >= 0; i--) {
     if (falas[i].papel !== 'ia') continue;
-    const q = perguntaFinal(falas[i].texto);
+    const q = perguntaQueEspera(falas[i].texto);
     if (!q) continue;
     if (!ultimaPergunta) {
       // O tema que não é o nome manda: "como posso te chamar e onde dói?" repetida é a pergunta da dor.
@@ -182,10 +228,15 @@ export function analisarRepeticao(falasTodas: Fala[]): Repeticao {
     } else {
       break;
     }
-    // o que o paciente mandou depois desta pergunta, até a próxima fala da IA (para a última, é a fala deste turno)
+    // o que o paciente mandou depois desta pergunta, até a próxima fala da IA (para a última, é a fala deste turno).
+    // Na pergunta dos sinais de alerta, falar de outra coisa também é ficar sem resposta (lead 28659614) — menos o
+    // cumprimento, que segue sendo retomada, como no resto desta conta.
+    const sinal = ultimaPergunta.tema === TEMA_SINAL_DE_ALERTA;
     let semResposta = true;
     for (let j = i + 1; j < falas.length && falas[j].papel === 'paciente'; j++) {
-      if (!respostaVazia(falas[j].texto, anteriorDoPaciente(j))) semResposta = false;
+      const t = falas[j].texto;
+      if (respostaVazia(t, anteriorDoPaciente(j))) continue;
+      if (!sinal || respondeSinalDeAlerta(t) || ehSoCumprimento(t)) semResposta = false;
     }
     if (cadeiaSemResposta && semResposta) ultimaPergunta.semRespostaSeguidas++;
     else cadeiaSemResposta = false;
@@ -230,10 +281,15 @@ export function motivoDeHandoff(r: Repeticao): string | null {
     return `áudio não ouvido ${r.audiosNaoOuvidos}x seguidas`;
   }
   const q = r.ultimaPergunta;
-  if (q && q.semRespostaSeguidas >= LIMITE_TENTATIVAS && q.tema !== 'nome' && r.semResposta && !r.disseQueJaRespondeu) {
-    return `conversa travada: mesma pergunta ${q.vezes}x sem resposta${q.tema ? ` (${q.tema})` : ''}`;
+  if (!q || q.semRespostaSeguidas < LIMITE_TENTATIVAS || q.tema === 'nome' || r.disseQueJaRespondeu) return null;
+  if (q.tema === TEMA_SINAL_DE_ALERTA) {
+    // Aqui a fala deste turno pode ter conteúdo (o áudio sobre o endereço) e mesmo assim não responder — a cadeia
+    // já conferiu isso. O motivo NÃO diz "sinal de alerta": ninguém confirmou sinal nenhum, e esse texto viraria
+    // tarefa URGENTE de "paciente com sinal de alerta" (MOTIVO_SINAL_DE_ALERTA em sinal-de-alerta.ts).
+    return `conversa travada: pergunta de segurança da coluna (força na perna, xixi/intestino) ${q.vezes}x sem resposta`;
   }
-  return null;
+  if (!r.semResposta) return null;
+  return `conversa travada: mesma pergunta ${q.vezes}x sem resposta${q.tema ? ` (${q.tema})` : ''}`;
 }
 
 /** O que o paciente lê quando a conversa vai para a equipe por repetição (sem prometer "em instantes"). */
