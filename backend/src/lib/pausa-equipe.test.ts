@@ -240,7 +240,7 @@ test('"Pausar IA" marcado enquanto o modelo pensava → a resposta não sai e vi
 });
 
 test('a própria Sofia pausou neste turno (pausar_ia, teto) → o aviso do handoff sai', async () => {
-  registrarPausaPropria(LEAD, INICIO + 5_000);
+  registrarPausaPropria(unidade, LEAD, INICIO + 5_000);
   const { deps, chamadas } = depsFalsas({
     ...semEquipe,
     caixinhaMarcada: async () => true,
@@ -253,10 +253,12 @@ test('a própria Sofia pausou neste turno (pausar_ia, teto) → o aviso do hando
 });
 
 test('pausa da própria Sofia de um turno ANTERIOR não libera: a marca vale só do início deste turno em diante', () => {
-  registrarPausaPropria(LEAD, INICIO - 60_000);
-  assert.equal(pausouSozinhaDesde(LEAD, INICIO), false);
-  registrarPausaPropria(LEAD, INICIO + 1);
-  assert.equal(pausouSozinhaDesde(LEAD, INICIO), true);
+  registrarPausaPropria(unidade, LEAD, INICIO - 60_000);
+  assert.equal(pausouSozinhaDesde(unidade, LEAD, INICIO), false);
+  registrarPausaPropria(unidade, LEAD, INICIO + 1);
+  assert.equal(pausouSozinhaDesde(unidade, LEAD, INICIO), true);
+  // o mesmo número de cartão em outra conta do Kommo não herda a marca
+  assert.equal(pausouSozinhaDesde({ kommoSubdomain: 'outraconta' }, LEAD, INICIO), false);
 });
 
 test('pausa da unidade e pausa com data ligadas durante o turno também travam', async () => {

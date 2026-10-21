@@ -397,7 +397,7 @@ export function buildTools({
 
       try {
         // A trava de antes de enviar não pode jogar fora o aviso deste handoff ("Responda em UMA frase").
-        registrarPausaPropria(leadId);
+        registrarPausaPropria(unit, leadId);
         await kommo.setLeadFieldFlag(leadId, pausedFieldId, true);
         const latency = Math.round(performance.now() - t0);
         await recorder.step({

@@ -285,7 +285,7 @@ export interface DepsAntesDeEnviar extends DepsPausaEquipe {
   unidadeEmPausa: (unit: Unit) => Promise<boolean>;
   pausaComData: (unit: Unit, leadId: number) => Promise<boolean>;
   caixinhaMarcada: (unit: Unit, leadId: number) => Promise<boolean>;
-  pausouSozinha: (leadId: number, desde: number) => boolean;
+  pausouSozinha: (unit: Unit, leadId: number, desde: number) => boolean;
   anotar: (unit: Unit, leadId: number, texto: string) => Promise<void>;
 }
 
@@ -320,7 +320,7 @@ export async function travaAntesDeEnviar(
   deps: DepsAntesDeEnviar = DEPS_ANTES_DE_ENVIAR_PADRAO,
 ): Promise<string | null> {
   const { unit, leadId, inicioDoTurno, resposta, recorder } = args;
-  const propria = deps.pausouSozinha(leadId, inicioDoTurno);
+  const propria = deps.pausouSozinha(unit, leadId, inicioDoTurno);
   let motivo: string | null = null;
 
   if (!propria && (await deps.unidadeEmPausa(unit))) {
