@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { REGRAS_POR_UNIDADE, dddDe, decidirUnidade, etiquetaDe, etiquetasSobrando, planejarUnidade, roboCorrige } from './unidade-por-canal.js';
+import { REGRAS_POR_UNIDADE, cidadesDe, dddDe, decidirUnidade, etiquetaDe, etiquetasSobrando, planejarUnidade, roboCorrige } from './unidade-por-canal.js';
 
 const REGRAS = REGRAS_POR_UNIDADE['doutor-hernia-petropolis'];
 const AN_CAXIAS = '120250266913310207'; // "AGENDAR AVALIAÇÃO", conta de Caxias
@@ -88,6 +88,27 @@ test('o robô corrige só o que ele mesmo pôs (created_by 0), e só quando o an
 test('etiqueta da outra cidade sai; a da cidade do campo e as outras etiquetas ficam', () => {
   assert.deepEqual(etiquetasSobrando('Caxias', ['PETRÓPOLIS', 'CAXIAS', 'Quente', 'FACEBOOK'], REGRAS), ['PETRÓPOLIS']);
   assert.deepEqual(etiquetasSobrando('Petrópolis', ['petrópolis', 'Origem: Anuncio pago'], REGRAS), []);
+});
+
+test('nada decide e a SDR preencheu a cidade: a etiqueta vem mesmo assim (Inbox, 22/10)', () => {
+  const cidades = cidadesDe(REGRAS);
+  // 4064639 (21/10): Petrópolis preenchido, anúncio que o robô não conhecia, sem a etiqueta
+  assert.deepEqual(planejarUnidade({ decisao: null, noCartao: 'Petrópolis', etiquetas: ['Origem: Anuncio pago'], cidades }), {
+    acao: 'etiqueta', unidade: 'Petrópolis', noCartao: 'Petrópolis', etiqueta: 'PETRÓPOLIS', motivo: 'nada decide a unidade: a etiqueta segue o campo',
+  });
+  assert.equal(planejarUnidade({ decisao: null, noCartao: 'caxias', etiquetas: ['CAXIAS'], cidades })?.etiqueta, null, 'já tem: nada a pôr');
+  // campo vazio, ou valor que não é uma cidade da conta: nada a fazer
+  assert.equal(planejarUnidade({ decisao: null, noCartao: null, etiquetas: [], cidades }), null);
+  assert.equal(planejarUnidade({ decisao: null, noCartao: 'Outra', etiquetas: [], cidades }), null);
+  // sem as cidades (quem chama sem regras): como antes
+  assert.equal(planejarUnidade({ decisao: null, noCartao: 'Petrópolis', etiquetas: [] }), null);
+});
+
+test('anúncios das campanhas de 20–22/10 (conferidos na Meta em 22/10) decidem a cidade', () => {
+  const caxias = decidirUnidade({ anuncio: '120250490002070207', contaDoAnuncio: null, ddd: '24', regras: REGRAS });
+  assert.equal(caxias?.unidade, 'Caxias');
+  assert.equal(caxias?.fonte, 'anuncio');
+  assert.equal(decidirUnidade({ anuncio: '120248371149960289', contaDoAnuncio: null, ddd: '21', regras: REGRAS })?.unidade, 'Petrópolis');
 });
 
 test('etiqueta: caixa alta com acento', () => {

@@ -68,6 +68,26 @@ export const REGRAS_POR_UNIDADE: Record<string, RegrasDaUnidade> = {
       '120250266913410207': CONTA_CAXIAS,
       '120250266913420207': CONTA_CAXIAS,
       '120250266913430207': CONTA_CAXIAS,
+      // Campanhas novas de 20–22/10, conferidas na Meta em 22/10 (a unidade não tem token da Meta; sem estes, o robô
+      // não decidia nenhum cartão novo: 0 gravados, 337 sem regra por varredura). Petrópolis: "ENG | WPP | VÍDEO |
+      // RMKT | 3205" e "ENG | WPP | FULL RMKT".
+      '120248357965620289': CONTA_PETROPOLIS,
+      '120248357965630289': CONTA_PETROPOLIS,
+      '120248357965670289': CONTA_PETROPOLIS,
+      '120248358281220289': CONTA_PETROPOLIS,
+      '120248371149960289': CONTA_PETROPOLIS,
+      '120248371421480289': CONTA_PETROPOLIS,
+      '120248371448530289': CONTA_PETROPOLIS,
+      '120248451898690289': CONTA_PETROPOLIS,
+      // Caxias: "Campanha nova - LEADS | RMKT | ABERTO" e "ENG | WPP | FULL - RMKT - 3205".
+      '120250472867160207': CONTA_CAXIAS,
+      '120250472867170207': CONTA_CAXIAS,
+      '120250472867180207': CONTA_CAXIAS,
+      '120250472867190207': CONTA_CAXIAS,
+      '120250489138390207': CONTA_CAXIAS,
+      '120250490002070207': CONTA_CAXIAS,
+      '120250490034170207': CONTA_CAXIAS,
+      '120250490098340207': CONTA_CAXIAS,
     },
     // Só o 24 decide. O 21 fica vazio para a SDR: o anúncio de Petrópolis também traz DDD 21 (ver o cabeçalho).
     ddd: { '24': 'Petrópolis' },
@@ -119,21 +139,35 @@ export function decidirUnidade(e: {
 
 export type PlanoUnidade =
   | { acao: 'gravar'; unidade: string; etiqueta: string; motivo: string }
-  | { acao: 'confere' | 'diverge'; unidade: string; noCartao: string; etiqueta: string | null; motivo: string };
+  | { acao: 'confere' | 'diverge' | 'etiqueta'; unidade: string; noCartao: string; etiqueta: string | null; motivo: string };
+
+/** As cidades da conta (as que as regras conhecem): só elas viram etiqueta. */
+export function cidadesDe(regras: RegrasDaUnidade): string[] {
+  return [...new Set([...Object.values(regras.contasDeAnuncio), ...Object.values(regras.ddd)])];
+}
 
 /**
- * Puro. `noCartao` = valor atual do campo (null se vazio); `etiquetas` = as do cartão hoje.
- * Devolve null quando não há o que fazer (nada decidiu). `etiqueta` vem preenchida só quando falta no cartão.
+ * Puro. `noCartao` = valor atual do campo (null se vazio); `etiquetas` = as do cartão hoje; `cidades` = as da conta.
+ * Devolve null quando não há o que fazer. `etiqueta` vem preenchida só quando falta no cartão.
+ *
+ * Nada decidiu e a SDR já preencheu a cidade: 'etiqueta' (22/10/2026). Antes devolvia null e a etiqueta nunca vinha —
+ * os filtros do Inbox separam as duas cidades pela etiqueta, e 9 dos 21 cartões de Petrópolis e todos os 30 de Caxias
+ * criados de 20 a 22/10 ficaram fora deles.
  */
 export function planejarUnidade(e: {
   decisao: Decisao | null;
   noCartao: string | null;
   etiquetas: ReadonlyArray<string>;
+  cidades?: ReadonlyArray<string>;
 }): PlanoUnidade | null {
-  if (!e.decisao) return null;
-  const { unidade, motivo } = e.decisao;
   const tem = new Set(e.etiquetas.map((t) => t.trim().toLocaleUpperCase('pt-BR')));
   const falta = (u: string) => (tem.has(etiquetaDe(u)) ? null : etiquetaDe(u));
+  if (!e.decisao) {
+    const cidade = e.noCartao ? e.cidades?.find((c) => c.toLocaleLowerCase('pt-BR') === e.noCartao!.trim().toLocaleLowerCase('pt-BR')) : undefined;
+    if (!cidade || !e.noCartao) return null;
+    return { acao: 'etiqueta', unidade: cidade, noCartao: e.noCartao, etiqueta: falta(cidade), motivo: 'nada decide a unidade: a etiqueta segue o campo' };
+  }
+  const { unidade, motivo } = e.decisao;
 
   if (!e.noCartao) return { acao: 'gravar', unidade, etiqueta: etiquetaDe(unidade), motivo };
   const igual = e.noCartao.trim().toLocaleLowerCase('pt-BR') === unidade.toLocaleLowerCase('pt-BR');
@@ -151,7 +185,7 @@ export function roboCorrige(plano: PlanoUnidade | null, decisao: Decisao | null,
 
 /** As etiquetas de OUTRA cidade que sobraram no cartão (a etiqueta segue o campo; a velha sai). */
 export function etiquetasSobrando(noCartao: string, etiquetas: ReadonlyArray<string>, regras: RegrasDaUnidade): string[] {
-  const cidades = new Set([...Object.values(regras.contasDeAnuncio), ...Object.values(regras.ddd)].map(etiquetaDe));
+  const cidades = new Set(cidadesDe(regras).map(etiquetaDe));
   const minha = etiquetaDe(noCartao.trim());
   return etiquetas.map((t) => t.trim().toLocaleUpperCase('pt-BR')).filter((t) => t !== minha && cidades.has(t));
 }
