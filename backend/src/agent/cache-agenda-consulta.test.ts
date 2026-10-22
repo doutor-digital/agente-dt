@@ -66,7 +66,7 @@ const franquia: string[] = [];
 const ocupados = new Set<string>();
 /** "AAAA-MM-DDTHH:MM:00" que a franquia recusa ao marcar (a grade não vê — bloqueio). */
 const recusa = new Set<string>();
-/** "AAAA-MM-DD HH:MM" → status de quem desmarcou (57) ou remarcou (41): a grade vê o registro, que não ocupa. */
+/** "AAAA-MM-DD HH:MM" de quem desmarcou (57): a grade vê o registro, que não ocupa. */
 const mortos = new Map<string, number>();
 let falhaNaGrade = false;
 let cancelamentoFalha = false;
@@ -285,14 +285,14 @@ test('sondagem que deixou agendamento fantasma (cancelamento falhou) não entra 
   assert.equal(deposito.linhas.length, 0, 'mas o dia não é guardado: a próxima busca vê o horário ocupado na grade');
 });
 
-// Bebedouro, 21/10/2026: agenda cheia, e a IA dizia "o mais próximo é 04/11" com horários de quem remarcou ou
-// desmarcou vagos no dia seguinte. Grade daqui: 08–11 e 13–17, de hora em hora.
+// Bebedouro, 21/10/2026: agenda cheia, e a IA dizia "o mais próximo é 04/11" com o 11:30 do dia seguinte
+// desmarcado. Grade daqui: 08–11 e 13–17, de hora em hora.
 const GRADE = ['08:00', '09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
 
-test('dia cheio com um remarcado numa manhã de atendimento: a sondagem confirma e a IA oferece', async () => {
+test('dia cheio com um desmarcado numa manhã de atendimento: a sondagem confirma e a IA oferece', async () => {
   chave('desligado');
   for (const h of GRADE) if (h !== '10:00') ocupados.add(`${DIA} ${h}`);
-  mortos.set(`${DIA} 10:00`, 41);
+  mortos.set(`${DIA} 10:00`, 57);
   const r = await consultar(1);
   assert.match(r, new RegExp(`\\(${DIA}\\): 10:00\\.`));
   assert.ok(franquia.includes(`marca ${DIA}T10:00:00 (sondagem)`));
@@ -316,10 +316,10 @@ test('tarde sem ninguém ativo e só desmarcados = provável bloqueio: nem sonda
   assert.ok(!franquia.some((c) => c.startsWith(`marca ${DIA}T1`) && c.includes('(sondagem)')), 'sondou horário de turno bloqueado');
 });
 
-test('marcar no horário remarcado oferecido passa pela trava da grade', async () => {
+test('marcar no horário desmarcado oferecido passa pela trava da grade', async () => {
   chave('desligado');
   for (const h of GRADE) if (h !== '10:00') ocupados.add(`${DIA} ${h}`);
-  mortos.set(`${DIA} 10:00`, 41);
+  mortos.set(`${DIA} 10:00`, 57);
   assert.deepEqual(horariosDe(await consultar(1)), ['10:00']);
   const r = await buildAgendarConsulta({ unit: unidade, recorder }).invoke({ idClient: 9, data: DIA, hora: '10:00', diaConfirmado: true, formaPagamento: 'na_clinica' } as never);
   assert.match(String(r), /Consulta marcada/);

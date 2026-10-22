@@ -190,7 +190,7 @@ export function buildAgenda(
           day: dia,
           time: hhmm,
           status: 'incerto',
-          motivo: 'paciente desmarcou ou remarcou — pode haver bloqueio não visível na API',
+          motivo: 'paciente desmarcou — pode haver bloqueio não visível na API',
           turnoComAtendimento: !!ocupadosDoDia.get(dia)?.some((o) => (o.minuto < MEIO_DIA) === (m < MEIO_DIA)),
         });
       }

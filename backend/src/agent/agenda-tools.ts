@@ -347,9 +347,9 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
         const todosLivres = slots.filter((s) => s.status === 'livre').map((s) => s.time);
         const livres = todosLivres.filter(noTurno);
         const vaiSondar = !!sonda && diasSondados < MAX_DIAS_SONDADOS;
-        // Horário de quem desmarcou ou remarcou, num turno em que o fisioterapeuta atende: entra só se a sondagem
-        // for rodar — é ela que diz se a franquia aceita (Bebedouro, 22/10/2026: 13 vagas assim em 12 dias, todas
-        // escondidas, e a IA dizendo "o mais próximo é 04/11").
+        // Horário de quem desmarcou, num turno em que o fisioterapeuta atende: entra só se a sondagem for rodar — é
+        // ela que diz se a franquia aceita (Bebedouro, 21/10/2026: 11:30 do dia seguinte desmarcado às 13:47, e a IA
+        // dizendo "o mais próximo é 04/11").
         const vagos = vaiSondar
           ? slots.filter((s) => s.status === 'incerto' && s.turnoComAtendimento).map((s) => s.time).filter(noTurno)
           : [];
@@ -1455,7 +1455,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       if (!slot) {
         return `${args.hora} não é um horário de atendimento em ${args.data}. Consulte os horários de novo e ofereça um da lista.`;
       }
-      // horário de quem desmarcou/remarcou num turno com atendimento: oferecido depois da sondagem; a franquia decide abaixo
+      // horário de quem desmarcou, num turno com atendimento: oferecido depois da sondagem; a franquia decide abaixo
       const marcavel = slot.status === 'livre' || (slot.status === 'incerto' && !!slot.turnoComAtendimento);
       if (!marcavel) {
         // oferecido como livre e já ocupado: a busca guardada do dia ficou velha

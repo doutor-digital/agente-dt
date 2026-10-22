@@ -6,9 +6,9 @@ import { SPINE_STATUS, pesoNaGrade } from './spine.service.js';
 import type { SpineSchedule } from './spine.service.js';
 
 /**
- * Bebedouro, 21/10/2026 15:04: a IA disse à Marinês "amanhã não tem vaga, o mais próximo é 04/11". Em 22/10
- * havia 11:30 (desmarcado às 13:47) e 15:00 e 15:30 (sessões remarcadas) — e, de 23/10 a 03/11, mais 13
- * horários só com registro REMARCADO/DESMARCADO. Um fisioterapeuta, agenda cheia: as vagas são exatamente essas.
+ * Bebedouro, 21/10/2026 15:04: a IA disse à Marinês "amanhã não tem vaga, o mais próximo é 04/11". O 11:30 do dia
+ * seguinte estava desmarcado desde 13:47 — e desmarcado nunca era oferecido. Um fisioterapeuta, agenda cheia:
+ * a vaga que aparece é exatamente essa.
  *
  * 22/10/2026 é uma quinta-feira.
  */
@@ -22,21 +22,27 @@ const ag = (timeLocal: string, idStatus: number): SpineSchedule =>
 
 const slot = (slots: ReturnType<typeof buildAgenda>, hora: string) => slots.find((s) => s.time === hora);
 
-test('REMARCADO não ocupa: o paciente foi pra outro dia', () => {
-  assert.deepEqual(pesoNaGrade(SPINE_STATUS.REMARCADO), { isBusy: false, requiresManualValidation: true });
+test('DESMARCADO não ocupa', () => {
   assert.deepEqual(pesoNaGrade(SPINE_STATUS.DESMARCADO), { isBusy: false, requiresManualValidation: true });
 });
 
+test('REMARCADO OCUPA: a franquia muda a data no registro e o paciente vem naquela data', () => {
+  // Júlio (Bebedouro): sessões movidas para 22/10, 27/10, 29/10… com 41 — a de 22/10 08:30 virou ATENDIDO
+  assert.deepEqual(pesoNaGrade(SPINE_STATUS.REMARCADO), { isBusy: true, requiresManualValidation: false });
+  const slots = buildAgenda(CFG, [ag('15:00', SPINE_STATUS.REMARCADO)], RANGE, CEDO);
+  assert.equal(slot(slots, '15:00')?.status, 'ocupado');
+});
+
 test('o que tem paciente de pé continua ocupando — e status desconhecido também', () => {
-  for (const st of [SPINE_STATUS.AGENDADO, SPINE_STATUS.CONFIRMADO, SPINE_STATUS.ATENDIDO, SPINE_STATUS.NAO_COMPARECEU]) {
+  for (const st of [SPINE_STATUS.AGENDADO, SPINE_STATUS.CONFIRMADO, SPINE_STATUS.REMARCADO, SPINE_STATUS.ATENDIDO, SPINE_STATUS.NAO_COMPARECEU]) {
     assert.equal(pesoNaGrade(st).isBusy, true, `status ${st}`);
   }
   assert.equal(pesoNaGrade(null).isBusy, true);
   assert.equal(pesoNaGrade(99).isBusy, true);
 });
 
-test('horário remarcado num turno com atendimento sai incerto e sondável', () => {
-  const slots = buildAgenda(CFG, [ag('14:00', SPINE_STATUS.AGENDADO), ag('15:00', SPINE_STATUS.REMARCADO)], RANGE, CEDO);
+test('horário desmarcado num turno com atendimento sai incerto e sondável', () => {
+  const slots = buildAgenda(CFG, [ag('14:00', SPINE_STATUS.AGENDADO), ag('15:00', SPINE_STATUS.DESMARCADO)], RANGE, CEDO);
   const s = slot(slots, '15:00');
   assert.equal(s?.status, 'incerto');
   assert.equal(s?.turnoComAtendimento, true);
@@ -46,7 +52,7 @@ test('turno sem nenhum paciente ativo = provável bloqueio: incerto, mas não so
   // a recepção bloqueou a tarde e desmarcou todo mundo — a API não mostra o bloqueio
   const slots = buildAgenda(
     CFG,
-    [ag('09:00', SPINE_STATUS.AGENDADO), ag('14:00', SPINE_STATUS.DESMARCADO), ag('15:00', SPINE_STATUS.REMARCADO)],
+    [ag('09:00', SPINE_STATUS.AGENDADO), ag('14:00', SPINE_STATUS.DESMARCADO), ag('15:00', SPINE_STATUS.DESMARCADO)],
     RANGE,
     CEDO,
   );
@@ -54,8 +60,8 @@ test('turno sem nenhum paciente ativo = provável bloqueio: incerto, mas não so
   assert.equal(slot(slots, '15:00')?.turnoComAtendimento, false);
 });
 
-test('paciente marcado em cima do remarcado: ocupado', () => {
-  const slots = buildAgenda(CFG, [ag('15:00', SPINE_STATUS.REMARCADO), ag('15:00', SPINE_STATUS.AGENDADO)], RANGE, CEDO);
+test('paciente marcado em cima do desmarcado: ocupado', () => {
+  const slots = buildAgenda(CFG, [ag('15:00', SPINE_STATUS.DESMARCADO), ag('15:00', SPINE_STATUS.AGENDADO)], RANGE, CEDO);
   assert.equal(slot(slots, '15:00')?.status, 'ocupado');
 });
 
