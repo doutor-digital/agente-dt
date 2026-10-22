@@ -265,3 +265,33 @@ test('o que escapou do #101 (Parauapebas): planos do turno com jargão e terceir
     assert.equal(detectarVazamento(m), null, `não deveria barrar: ${m.slice(0, 70)}`);
   }
 });
+
+// Taubaté, 22/10/2026 14:52: o modelo narrou o bloco <preco_insistido> antes do valor.
+const VAZOU_PRECO_INSISTIDO = [
+  'Ele já perguntou o preço antes e agora insistiu de novo — vale a regra de preço insistido: valor na primeira frase, sem mais perguntas antes.\n\nO valor da consulta com o nosso especialista é R$ 350 pago na clínica no dia, ou R$ 250 pagando antes pelo Pix, que já garante seu horário 😊 Posso ver os horários disponíveis pra você essa semana?',
+  // cada marca sozinha também barra
+  'Vale a regra de preço insistido aqui.',
+  'Vou dar o valor na primeira frase.',
+  'Sem mais perguntas antes, passo o valor: R$ 350.',
+  'Nada de outra pergunta antes do valor.',
+  'Ela já tinha perguntado o valor antes e está perguntando de novo.',
+  'Acabou o adiamento, então: R$ 350.',
+];
+
+const BOAS_PRECO_INSISTIDO = [
+  'O valor da consulta com o nosso especialista é R$ 350 pago na clínica no dia, ou R$ 250 pagando antes pelo Pix 😊',
+  'Ela já perguntou o valor na recepção? Posso te passar por aqui também 😊',
+  'Desculpa a demora pra te passar o valor! A consulta é R$ 350 😊',
+  'Na primeira consulta o especialista avalia sua coluna com calma 😊',
+  'Pode perguntar o que quiser antes de marcar, viu? 😊',
+  'Dor na coluna pode acontecer em qualquer idade, viu — não tem uma regra de "é normal só depois de tal idade".',
+];
+
+test('o bloco de preço insistido narrado ao paciente (Taubaté, 22/10) é barrado; resposta normal de preço passa', () => {
+  for (const m of VAZOU_PRECO_INSISTIDO) {
+    assert.equal(detectarVazamento(m)?.tipo, 'bastidor_em_portugues', `deveria barrar: ${m.slice(0, 70)}`);
+  }
+  for (const m of BOAS_PRECO_INSISTIDO) {
+    assert.equal(detectarVazamento(m), null, `não deveria barrar: ${m.slice(0, 70)}`);
+  }
+});

@@ -158,6 +158,19 @@ const BASTIDOR_PT = [
   /\bvou\s+aproveitar\s+que\s+(?:ela|ele|a\s+pessoa|o\s+paciente|a\s+paciente)\b/i,
   /\b(?:n[aã]o|sem)\s+(?:insistir|repetir|perguntar)\b[^\n.]{0,60}\bpela\s+(?:segunda|terceira|quarta|quinta)\s+vez\b/i,
   /\bsem\s+responder\s+o\s+que\s+(?:eu\s+)?perguntei\b/i,
+
+  // ── O bloco <preco_insistido> repetido ao paciente (Taubaté, 22/10/2026 14:52) ────────────────────────────────
+  // "Ele já perguntou o preço antes e agora insistiu de novo — vale a regra de preço insistido: valor na primeira
+  // frase, sem mais perguntas antes." O bloco do prompt fala do paciente em terceira pessoa ("Ele já tinha perguntado o
+  // valor antes…", "na PRIMEIRA frase", "nada de outra pergunta antes") e o modelo narrou a instrução. "Regra de" só com
+  // o nome de uma regra nossa; a frase em 3ª pessoa só no começo da resposta e afirmando, não perguntando ("Ela já
+  // perguntou o valor na recepção?" passa).
+  /\bpre[cç]o\s+insistido\b/i,
+  /\bregra\s+d[eo]\s+(?:pre[cç]o|valor|insist[eê]ncia|dor\s+primeiro|continuidade)\b/i,
+  /\b(?:valor|pre[cç]o)\s+na\s+primeira\s+frase\b/i,
+  /\b(?:nada\s+de|sem\s+mais)\s+(?:outras?\s+)?perguntas?\s+antes\b/i,
+  /\bacabou\s+o\s+adiamento\b/i,
+  /^\s*(?:ele|ela)\s+j[aá]\s+(?:tinha\s+)?pergunta(?:do|u)\s+(?:o|pelo)\s+(?:pre[cç]o|valor)\b[^\n?]{0,80}?\b(?:antes|de\s+novo|novamente|insist)/i,
 ];
 
 /** Marcador de template que ficou sem valor: {{nome}}, {nome}, [NOME]. */
