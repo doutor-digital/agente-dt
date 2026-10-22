@@ -46,6 +46,7 @@ import {
   porExtenso,
   type ConsultaReconciliada,
 } from '../services/agenda-reconcile.service.js';
+import { SPINE_STATUS } from '../services/spine.service.js';
 import {
   estadoEtapaDoLead,
   type EstadoEtapaLead,
@@ -1804,7 +1805,7 @@ export function renderPacienteNaFranquia(p: PacienteNaFranquia | null | undefine
   return xmlBlock('consulta_do_paciente', linhas.join('\n'));
 }
 
-function renderConsultaMarcada(
+export function renderConsultaMarcada(
   c: ConsultaReconciliada | null | undefined,
   agoraLocal?: string,
   pacienteFranquia?: PacienteNaFranquia | null,
@@ -1834,6 +1835,15 @@ function renderConsultaMarcada(
       'use consultar_horarios.',
       'Ex.: "Vi que sua consulta era sexta, 18/09, às 16h. Conseguiu vir? Se precisar remarcar,',
       'já vejo um novo horário pra você."',
+    ].join('\n'));
+  }
+
+  if (c.estado === 'cancelada' && c.idStatus === SPINE_STATUS.NAO_COMPARECEU) {
+    return xmlBlock('consulta_do_paciente', [
+      `A clínica registrou NÃO COMPARECEU na consulta de ${porExtenso(c.quando)}.`,
+      'Esse horário NÃO vale mais: nunca o confirme, não diga "te espero" nem repita essa data como marcada.',
+      'Ele não tem horário reservado agora. Se fizer sentido, pergunte com naturalidade se quer marcar de novo;',
+      'para isso, use consultar_horarios.',
     ].join('\n'));
   }
 
