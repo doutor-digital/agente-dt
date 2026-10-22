@@ -11,6 +11,7 @@ import {
   LIMITES_EVOLUTION,
   normalizarNumero,
   preparar,
+  urlPublica,
   registrarFerramentasEvolution,
   rotaDeLeitura,
 } from './evolution.js';
@@ -177,4 +178,25 @@ test('JID fora do formato do WhatsApp e ação de grupo desconhecida não passam
   }
   assert.doesNotThrow(() => preparar(c, 'u1', 'texto', { para: '5563981411248@s.whatsapp.net', texto: 'Oi' }));
   assert.throws(() => preparar(c, 'u1', 'grupo_participantes', { grupo: '120363338386986419@g.us', participantes: ['63981411248'], acao: 'apagar' }), /inválida/);
+});
+
+test('mídia: só link https público — nada de rede interna (achado do Codex)', () => {
+  assert.equal(urlPublica('https://exemplo.com/a.jpg'), 'https://exemplo.com/a.jpg');
+  for (const u of ['http://exemplo.com/a.jpg', 'https://localhost/x', 'https://127.0.0.1/x', 'https://10.0.0.5/x', 'https://192.168.1.1/x', 'https://172.20.0.1/x', 'https://169.254.169.254/latest', 'https://evolution_api:8080/x', 'https://[::1]/x', 'nada']) {
+    assert.throws(() => urlPublica(u), /https público|inválido/, u);
+  }
+  const c = ctx(falso());
+  assert.throws(() => preparar(c, 'u1', 'midia', { para: '5563981411248', url: 'https://169.254.169.254/x' }), /https público/);
+});
+
+test('o envio conta antes da resposta e é avisado pra auditoria (sobrevive a reinício)', async () => {
+  const contados: unknown[] = [];
+  const quebra = (async () => {
+    throw new Error('rede caiu depois de entregar');
+  }) as unknown as typeof globalThis.fetch;
+  const c = criarContextoEvolution(CONTA, { fetch: quebra, agora: () => DIA });
+  const { codigo } = preparar(c, 'u1', 'texto', { para: '5563981411248', texto: 'Oi' });
+  await assert.rejects(() => confirmar(c, 'u1', codigo, (para) => contados.push(para)), /rede caiu/);
+  assert.equal(c.envios.length, 1, 'contou mesmo sem resposta');
+  assert.deepEqual(contados, ['5563981411248']);
 });

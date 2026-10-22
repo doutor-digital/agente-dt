@@ -35,7 +35,7 @@ import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
-import { contaEvolutionDoAmbiente, criarContextoEvolution, registrarFerramentasEvolution } from './evolution.js';
+import { contaEvolutionDoAmbiente, criarContextoEvolution, EVENTO_DE_ENVIO, registrarFerramentasEvolution } from './evolution.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
 import { registrarRelatorio, type DepsRelatorio } from './relatorio.js';
@@ -404,7 +404,14 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
   const whatsapp = criarContextoEvolution(contaEvolutionDoAmbiente());
   let leitoresWhatsapp = new Set<string>();
-  if (whatsapp.conta) manterAtualizado(leitoresDoWhatsapp, (s) => (leitoresWhatsapp = s), 'quem vê o WhatsApp');
+  if (whatsapp.conta) {
+    manterAtualizado(leitoresDoWhatsapp, (s) => (leitoresWhatsapp = s), 'quem vê o WhatsApp');
+    // o teto anti-ban conta o que saiu nas últimas 24 h, inclusive antes desta subida do servidor
+    prisma.mcpAuditoria
+      .findMany({ where: { ferramenta: EVENTO_DE_ENVIO, ok: true, createdAt: { gte: new Date(Date.now() - 86_400_000) } }, select: { createdAt: true } })
+      .then((rs) => whatsapp.envios.push(...rs.map((r) => r.createdAt.getTime())))
+      .catch((err) => logger.warn({ err }, 'mcp-remoto: não li os envios recentes do WhatsApp — teto começa do zero'));
+  }
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;

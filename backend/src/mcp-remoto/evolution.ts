@@ -16,6 +16,8 @@ import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
 
+/** Nome do registro de cada mensagem que saiu, na auditoria do conector — a produção relê para o teto. */
+export const EVENTO_DE_ENVIO = 'evo_envio';
 export const LIMITES_EVOLUTION = { porHora: 20, porDia: 100, horaInicio: 7, horaFim: 21, validadeMs: 10 * 60_000, gruposMs: 30 * 60_000, esperaGruposMs: 40_000 };
 const FUSO = 'America/Sao_Paulo';
 
@@ -190,6 +192,33 @@ export async function grupos(ctx: ContextoEvolution, a: { busca?: string; limite
   return { total: achados.length, mostrando: Math.min(limite, achados.length), grupos: achados.slice(0, limite) };
 }
 
+/**
+ * Link de mídia: o Evolution baixa ele do servidor, então só https público — nada de localhost, rede interna ou o
+ * endereço de metadados da nuvem (achado do Codex).
+ */
+export function urlPublica(bruta: unknown): string {
+  let u: URL;
+  try {
+    u = new URL(String(bruta ?? ''));
+  } catch {
+    throw new ErroDeEntrada(`link inválido: ${String(bruta)}`);
+  }
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const interno =
+    h === 'localhost' ||
+    h.endsWith('.localhost') ||
+    h.endsWith('.internal') ||
+    h.endsWith('.local') ||
+    !h.includes('.') ||
+    /^(127|10|0)\./.test(h) ||
+    /^192\.168\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+    /^169\.254\./.test(h) ||
+    /^(::1?|f[cd][0-9a-f]{2}:.*|fe80:.*)$/.test(h);
+  if (u.protocol !== 'https:' || interno) throw new ErroDeEntrada(`só link https público: ${u.protocol}//${u.hostname}`);
+  return u.toString();
+}
+
 /** O que cada tipo de ação faz na API — o preparar valida, o confirmar executa. */
 export function montarAcao(tipo: string, a: Record<string, any>): Acao {
   const para = () => normalizarNumero(a.para);
@@ -202,12 +231,12 @@ export function montarAcao(tipo: string, a: Record<string, any>): Acao {
       return {
         metodo: 'POST',
         caminho: '/message/sendMedia',
-        corpo: { number: para(), mediatype: a.tipoMidia ?? 'image', media: a.url, caption: a.texto ?? '', fileName: a.nomeArquivo },
+        corpo: { number: para(), mediatype: a.tipoMidia ?? 'image', media: urlPublica(a.url), caption: a.texto ?? '', fileName: a.nomeArquivo },
         envio: true,
       };
     case 'audio':
       if (!a.url) throw new ErroDeEntrada('falta a url do áudio');
-      return { metodo: 'POST', caminho: '/message/sendWhatsAppAudio', corpo: { number: para(), audio: a.url }, envio: true };
+      return { metodo: 'POST', caminho: '/message/sendWhatsAppAudio', corpo: { number: para(), audio: urlPublica(a.url) }, envio: true };
     case 'localizacao':
       if (a.latitude == null || a.longitude == null) throw new ErroDeEntrada('falta latitude/longitude');
       return {
@@ -277,14 +306,17 @@ export function preparar(ctx: ContextoEvolution, usuario: string, tipo: string, 
   };
 }
 
-/** Em fila: duas confirmações juntas passariam as duas pelo freio antes de qualquer uma ser contada. */
-export function confirmar(ctx: ContextoEvolution, usuario: string, codigo: string): Promise<unknown> {
-  const vez = ctx.fila.then(() => confirmarAgora(ctx, usuario, codigo));
+/**
+ * Em fila: duas confirmações juntas passariam as duas pelo freio antes de qualquer uma ser contada. `aoEnviar` grava o
+ * envio fora do processo (auditoria), para o teto sobreviver a um reinício — ver `enviosRecentes` na produção.
+ */
+export function confirmar(ctx: ContextoEvolution, usuario: string, codigo: string, aoEnviar?: (para: unknown) => void): Promise<unknown> {
+  const vez = ctx.fila.then(() => confirmarAgora(ctx, usuario, codigo, aoEnviar));
   ctx.fila = vez.catch(() => undefined);
   return vez;
 }
 
-async function confirmarAgora(ctx: ContextoEvolution, usuario: string, codigoBruto: string): Promise<unknown> {
+async function confirmarAgora(ctx: ContextoEvolution, usuario: string, codigoBruto: string, aoEnviar?: (para: unknown) => void): Promise<unknown> {
   const codigo = codigoBruto.trim().toUpperCase();
   const p = ctx.pendentes.get(codigo);
   if (!p) throw new ErroDeEntrada('código desconhecido ou já usado — prepare de novo');
@@ -297,9 +329,12 @@ async function confirmarAgora(ctx: ContextoEvolution, usuario: string, codigoBru
     // "digitando…" de 1,2 a 3 s antes de sair: rajada idêntica foi o que derrubou o 9119
     p.acao.corpo = { ...p.acao.corpo, delay: 1200 + Math.floor(Math.random() * 1800) };
   }
-  const r = await chamar(ctx, p.acao.metodo, p.acao.caminho, { corpo: p.acao.corpo, query: p.acao.query });
-  if (p.acao.envio) ctx.envios.push(ctx.agora());
-  return r;
+  // conta ANTES de chamar: resposta perdida com a mensagem já entregue não pode liberar uma 2ª (achado do Codex)
+  if (p.acao.envio) {
+    ctx.envios.push(ctx.agora());
+    aoEnviar?.(p.acao.corpo?.number);
+  }
+  return chamar(ctx, p.acao.metodo, p.acao.caminho, { corpo: p.acao.corpo, query: p.acao.query });
 }
 
 const ler = { readOnlyHint: true, openWorldHint: true } as const;
@@ -451,6 +486,6 @@ export function registrarFerramentasEvolution(server: McpServer, ctx: ContextoEv
     'PASSO 2 de 2: executa o que evo_preparar montou. Só chame com o ok explícito da pessoa. O código vale 10 minutos e uma vez.',
     { codigo: z.string().min(6).max(16) },
     { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-    (a) => confirmar(ctx, usuario, a.codigo),
+    (a) => confirmar(ctx, usuario, a.codigo, (para) => auditar({ ferramenta: EVENTO_DE_ENVIO, argumentos: { para }, ok: true, ms: 0 })),
   );
 }
