@@ -22,6 +22,7 @@ import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
 import { semNomeForaDaAgenda } from './nome-na-resposta.js';
+import { semVocativoInventado } from './vocativo-inventado.js';
 import { avaliarChamadaFinal, INSTRUCAO_REFAZER_CTA } from './cta-final.js';
 import {
   analisarRepeticao,
@@ -1246,6 +1247,17 @@ export async function buildAgentGraph(
           payload: { original: textoFinal, reescrito: comNomeChecado.texto, removidos: comNomeChecado.removidos },
         });
         textoFinal = comNomeChecado.texto;
+        response.content = textoFinal;
+      }
+      // Nome do PACIENTE que não apareceu em lugar nenhum do turno sai do vocativo (ver vocativo-inventado.ts).
+      const semNomeInventado = semVocativoInventado(textoFinal, promptDoTurno, nonSystemMessages);
+      if (semNomeInventado.removidos.length > 0) {
+        await recorder.step({
+          kind: 'THINKING',
+          title: `🪪 Nome do paciente que não apareceu na conversa saiu da resposta (${semNomeInventado.removidos.join(', ')})`,
+          payload: { original: textoFinal, reescrito: semNomeInventado.texto, removidos: semNomeInventado.removidos },
+        });
+        textoFinal = semNomeInventado.texto;
         response.content = textoFinal;
       }
       // "Dra. Sofia" → "Sofia" nas clínicas Doutor Hérnia (decisão do João, 21/10) — ver rede-doutor-hernia.ts.

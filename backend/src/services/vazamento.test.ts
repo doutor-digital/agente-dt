@@ -231,3 +231,37 @@ test('mensagens boas continuam passando com o filtro ampliado', () => {
     assert.equal(detectarVazamento(m), null, `não deveria barrar: ${m.slice(0, 70)}`);
   }
 });
+
+// Parauapebas, lead 28695422 (16/10/2026): os três chegaram à filha da paciente, em 30 minutos, antes da fala de verdade.
+const VAZOU_DEPOIS_DO_101 = [
+  'A memória mostra que a queixa (onde dói e há quanto tempo) ainda não foi respondida de fato — a outra Sofia perguntou duas vezes sem resposta clara. Vou aproveitar que ela voltou com interesse em preço para já dar os valores (regra de "se insistir, responda"), mas ainda tentar capturar a queixa em seguida.\n\nPode deixar que te explico certo! 😊 A consulta com o especialista custa R$ 350.',
+  'A pergunta sobre red flag (perda de força/controle de esfíncter) ainda não foi respondida — a filha repetiu a mesma mensagem sobre o intestino, sem responder o que perguntei. Vou reconhecer o que ela disse, não insistir pela terceira vez da mesma forma, e redirecionar com cuidado para avançar — a decisão clínica real será da especialista presencialmente.\n\nEntendi direito, viu 🙏',
+  'A pessoa está repetindo a mesma mensagem (provavelmente problema técnico ou ela não viu que já respondi) — vou acolher de novo, sem repetir pergunta de red flag pela quarta vez, e focar em avançar para o agendamento, que é o que vai realmente ajudar.\n\nPode ficar tranquila, já entendi esse ponto do intestino dela 💙',
+  // cada marca sozinha também barra
+  'Vou aproveitar que ela voltou pra já passar o valor.',
+  'Ela mandou de novo sem responder o que perguntei, então sigo.',
+  'Sem repetir a pergunta pela terceira vez, vou seguir pro agendamento.',
+  'O cliente ainda não respondeu sobre a dor.',
+];
+
+const BOAS_DEPOIS_DO_101 = [
+  'Vou aproveitar que você está por aqui e já te passo o endereço 😊',
+  'Desculpa perguntar pela segunda vez, mas é importante: você sente perda de força na perna? 🙏',
+  'Pode deixar, sua filha já me contou tudo 😊 Vamos ver um horário pra ela?',
+  'Na consulta, a pessoa conta tudo com calma e o especialista examina 😊',
+  'A outra unidade mais perto de você é a de Marabá 😊',
+  'Vou acolher você com todo carinho aqui 💙 Me conta onde dói?',
+  'Fica na memória: a consulta é dia 23 às 15h 😊',
+  'Se a dor voltar, me chama que eu te ajudo a remarcar 🙏',
+  // Boa Vista, 08/10: a palavra "regra" com aspas, falando com o paciente
+  'Dor na coluna pode acontecer em qualquer idade, viu — não tem uma regra de "é normal só depois de tal idade".',
+];
+
+test('o que escapou do #101 (Parauapebas): planos do turno com jargão e terceira pessoa são barrados', () => {
+  for (const m of VAZOU_DEPOIS_DO_101) {
+    assert.equal(detectarVazamento(m)?.tipo, 'bastidor_em_portugues', `deveria barrar: ${m.slice(0, 70)}`);
+  }
+  for (const m of BOAS_DEPOIS_DO_101) {
+    assert.equal(detectarVazamento(m), null, `não deveria barrar: ${m.slice(0, 70)}`);
+  }
+});

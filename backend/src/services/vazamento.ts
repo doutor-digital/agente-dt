@@ -138,6 +138,26 @@ const BASTIDOR_PT = [
   /\b(?:vou|preciso|devo)\s+(?:perguntar|coletar|investigar|confirmar)\s+(?:a|o|sobre\s+a|sobre\s+o)\s+(?:queixa|nome|tempo\s+de\s+dor|cidade)\s+d[oa]\s+(?:paciente|lead|contato)\b/i,
   /\b(?:vou|preciso|devo)\s+perguntar\s+(?:pr[oa]|ao|[aà])\s+(?:paciente|lead|contato)\b/i,
   /\bagora\s+(?:eu\s+)?preciso\s+(?:seguir|avan[cç]ar|voltar|retomar)\s+(?:com\s+|para\s+|pra\s+)?(?:a|o)\s+(?:coleta|qualifica[cç][aã]o|roteiro|fluxo|etapa|fase)\b/i,
+
+  // ── O que escapou depois do #101 (Parauapebas, 28695422, 16/10/2026: três planos do turno seguidos) ───────────
+  // "A memória mostra que a queixa… ainda não foi respondida — a outra Sofia perguntou duas vezes… Vou aproveitar que
+  // ela voltou com interesse em preço… (regra de "se insistir, responda"), mas ainda tentar capturar a queixa";
+  // "A pergunta sobre red flag… a filha repetiu a mesma mensagem… Vou reconhecer o que ela disse, não insistir pela
+  // terceira vez"; "A pessoa está repetindo a mesma mensagem… vou acolher de novo, sem repetir pergunta de red flag pela
+  // quarta vez". Jargão do prompt (red flag, memória, outra Sofia, capturar) e a pessoa com quem se fala em terceira
+  // pessoa. "Sua filha me contou", "a outra unidade" e "desculpa perguntar pela segunda vez" passam. "Regra de '…'"
+  // ficou de fora: Boa Vista (08/10) explicou a um paciente que "não tem uma regra de 'é normal só depois de tal idade'".
+  // Rodado contra as 25.139 respostas da IA de 01 a 22/10: barra 4 a mais, os 3 acima e "A outra Sofia já tinha
+  // separado dois horários" (Açailândia resgate, 10/10), que também é bastidor (o paciente não sabe de duas Sofias).
+  /\bred[\s-]?flags?\b/i,
+  /\b(?:a|na|da)\s+mem[oó]ria\s+(?:mostra|diz|indica|registra|aponta)\b/i,
+  /\b(?:a|[aà]|na|da)\s+outra\s+(?:Sofia|IA)\b/i,
+  /\bcapturar\s+(?:a|o)\s+(?:queixa|nome|dor|motivo|cidade)\b/i,
+  /\b(?:a|o)\s+(?:pessoa|filha|filho|cliente)\s+(?:(?:j[aá]|ainda|n[aã]o|s[oó]|tamb[eé]m)\s+){0,2}(?:me\s+)?(?:perguntou|disse|respondeu|mandou|enviou|escreveu|repetiu|est[aá]\s+repetindo|voltou|ignorou|contou)\b/i,
+  /\bvou\s+(?:acolher|reconhecer)\s+(?:de\s+novo|novamente|o\s+que\s+(?:ela|ele))\b/i,
+  /\bvou\s+aproveitar\s+que\s+(?:ela|ele|a\s+pessoa|o\s+paciente|a\s+paciente)\b/i,
+  /\b(?:n[aã]o|sem)\s+(?:insistir|repetir|perguntar)\b[^\n.]{0,60}\bpela\s+(?:segunda|terceira|quarta|quinta)\s+vez\b/i,
+  /\bsem\s+responder\s+o\s+que\s+(?:eu\s+)?perguntei\b/i,
 ];
 
 /** Marcador de template que ficou sem valor: {{nome}}, {nome}, [NOME]. */
