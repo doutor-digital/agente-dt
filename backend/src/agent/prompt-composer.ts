@@ -2593,7 +2593,13 @@ export function renderOndeFica(unit: Unit): string {
     `Endereço da clínica: ${endereco}${mapa ? `\nMapa: ${mapa}` : ''}\n` +
       'Se o paciente perguntar onde fica, responda NA HORA com este endereço — ' +
       'copiado exatamente, sem mudar nada. Nunca diga que vai confirmar com a equipe: ' +
-      'o dado está aqui.',
+      'o dado está aqui.\n' +
+      // Rio Verde, 21/10/2026: sem mapa cadastrado, a IA montou google.com/maps/search com o endereço e o pino caiu
+      // quarteirões longe da clínica (link-de-mapa.ts troca na saída; isto evita que ela ofereça)
+      (mapa
+        ? 'Link de mapa: use SÓ o de cima, copiado exatamente. Nunca monte outro a partir do endereço.'
+        : 'Não há link de mapa cadastrado: NÃO monte link do Google Maps (erra o pino) e não ofereça mandar mapa — ' +
+          'passe o endereço escrito.'),
   );
 }
 
