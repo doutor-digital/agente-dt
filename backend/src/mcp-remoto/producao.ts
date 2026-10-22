@@ -35,6 +35,7 @@ import { conveniaGet } from '../lib/integracoes/convenia.js';
 import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiquetaque } from './tiquetaque.js';
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
+import { contaEvolutionDoAmbiente, criarContextoEvolution, registrarFerramentasEvolution } from './evolution.js';
 import { blingGet } from '../lib/bling/cliente.js';
 import type { Usuario } from './provedor.js';
 import { registrarRelatorio, type DepsRelatorio } from './relatorio.js';
@@ -220,6 +221,17 @@ async function escritoresDoBanco(): Promise<Set<string>> {
   return new Set(us.map((u) => u.id));
 }
 
+/**
+ * Quem vê o WhatsApp da Suzanne (evo_*): os e-mails de MCP_EVOLUTION_EMAILS que existem como usuário ativo do console.
+ * É o WhatsApp pessoal dela, então a lista é à parte da de quem altera cartões. Sem a variável, ninguém vê.
+ */
+async function leitoresDoWhatsapp(): Promise<Set<string>> {
+  const emails = (process.env.MCP_EVOLUTION_EMAILS ?? '').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+  if (!emails.length) return new Set();
+  const us = await prisma.user.findMany({ where: { email: { in: emails }, isActive: true }, select: { id: true } });
+  return new Set(us.map((u) => u.id));
+}
+
 const normEtiqueta = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 
 function fonteDeEscrita(slug: string): FonteEscrita {
@@ -390,6 +402,9 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
   const tiquetaque = criarContextoTiquetaque(new Map());
   manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
+  const whatsapp = criarContextoEvolution(contaEvolutionDoAmbiente());
+  let leitoresWhatsapp = new Set<string>();
+  if (whatsapp.conta) manterAtualizado(leitoresDoWhatsapp, (s) => (leitoresWhatsapp = s), 'quem vê o WhatsApp');
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;
@@ -418,6 +433,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       if (escritores.has(quem.userId)) registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
+      if (leitoresWhatsapp.has(quem.userId)) registrarFerramentasEvolution(server, whatsapp, quem.userId, auditar);
       registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
