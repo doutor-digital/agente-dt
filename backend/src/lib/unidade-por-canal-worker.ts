@@ -19,6 +19,7 @@ import {
   CAMPO_UNIDADE,
   CAMPOS_ANUNCIO,
   REGRAS_POR_UNIDADE,
+  cidadesDe,
   dddDe,
   decidirUnidade,
   etiquetaDe,
@@ -114,7 +115,8 @@ async function varrerUnidade(slug: string, regras: RegrasDaUnidade): Promise<voi
 
   const leads = await kommo.listLeadsPorIds(ids, { contatos: true });
   const telefones = await kommo.telefonesDosContatos(leads.map(contatoPrincipal).filter((x): x is number => x !== null));
-  const resumo = { gravados: 0, corrigidos: 0, confere: 0, diverge: 0, semRegra: 0, adiados: 0, erros: 0 };
+  const resumo = { gravados: 0, corrigidos: 0, confere: 0, diverge: 0, etiqueta: 0, semRegra: 0, adiados: 0, erros: 0 };
+  const cidades = cidadesDe(regras);
 
   for (const lead of leads) {
     const noCartao = valorPorId(lead, campo.id);
@@ -128,7 +130,7 @@ async function varrerUnidade(slug: string, regras: RegrasDaUnidade): Promise<voi
     const ddd = dddDe(contato !== null ? telefones.get(contato) : null);
 
     const decisao = decidirUnidade({ anuncio, contaDoAnuncio: conta, ddd, regras });
-    const plano = planejarUnidade({ decisao, noCartao, etiquetas });
+    const plano = planejarUnidade({ decisao, noCartao, etiquetas, cidades });
     if (!plano) {
       resumo.semRegra++;
       continue;
@@ -164,11 +166,16 @@ async function varrerUnidade(slug: string, regras: RegrasDaUnidade): Promise<voi
     }
 
     if (plano.acao !== 'gravar') {
-      resumo[plano.acao]++;
-      registrarSimulacao(unit, 'unidade-por-canal', { leadId: lead.id, acao: plano.acao, alvo: CAMPO_UNIDADE, valor: plano.unidade, noCartao: plano.noCartao, motivo: plano.motivo });
+      // 'etiqueta' (nada decidiu, a SDR preencheu): não há o que comparar na lista "o que ela faria" — só a etiqueta,
+      // contada quando é escrita (senão a varredura logaria todos os cartões já certos a cada 5 min)
+      if (plano.acao !== 'etiqueta') {
+        resumo[plano.acao]++;
+        registrarSimulacao(unit, 'unidade-por-canal', { leadId: lead.id, acao: plano.acao, alvo: CAMPO_UNIDADE, valor: plano.unidade, noCartao: plano.noCartao, motivo: plano.motivo });
+      }
       // a etiqueta acompanha o campo: põe a que falta e tira a da outra cidade, mesmo quando o campo já estava preenchido
       const sobrando = etiquetasSobrando(plano.noCartao, etiquetas, regras);
       if ((plano.etiqueta || sobrando.length) && !seco) {
+        if (plano.acao === 'etiqueta') resumo.etiqueta++;
         await kommo
           .atualizarCampoEEtiquetas(lead.id, { adicionar: plano.etiqueta ? [plano.etiqueta] : [], remover: sobrando })
           .catch((err) => {
@@ -200,7 +207,7 @@ async function varrerUnidade(slug: string, regras: RegrasDaUnidade): Promise<voi
     }
     await pausa();
   }
-  if (resumo.gravados || resumo.corrigidos || resumo.diverge || resumo.adiados || resumo.erros) logger.info({ unit: slug, seco, ...resumo }, 'unidade-por-canal: varredura');
+  if (resumo.gravados || resumo.corrigidos || resumo.diverge || resumo.etiqueta || resumo.adiados || resumo.erros) logger.info({ unit: slug, seco, ...resumo }, 'unidade-por-canal: varredura');
 }
 
 async function varrer(): Promise<void> {
