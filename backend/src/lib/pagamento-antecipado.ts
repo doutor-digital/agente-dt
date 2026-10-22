@@ -17,15 +17,16 @@ import type { KommoClient } from '../services/kommo.service.js';
  *     valor lançado (mesma regra que o follow-up usa para não cobrar quem pagou).
  *  2. Um comprovante foi LIDO nesta conversa: a leitura de imagem começa a
  *     transcrição com "COMPROVANTE:" quando reconhece um recibo, e o webhook
- *     guarda isso na mensagem do paciente como "[imagem do cliente]: COMPROVANTE: …".
+ *     guarda isso na mensagem do paciente como "[imagem do cliente]: COMPROVANTE: …"
+ *     (ou "[arquivo do cliente]: …" quando o comprovante veio em PDF).
  *
  * O paciente dizer "já paguei" NÃO é prova — é exatamente o caso que a regra
  * existe para barrar.
  */
 
-/** "[imagem do cliente]: COMPROVANTE: R$ 100,00 …" — transcrição de recibo pela visão. */
+/** "[imagem do cliente]: COMPROVANTE: R$ 100,00 …" — transcrição de recibo pela visão (foto ou PDF). */
 export function ehTranscricaoDeComprovante(texto: string): boolean {
-  return /\[imagem do cliente\]:\s*["'“]?\s*COMPROVANTE\b/i.test(texto);
+  return /\[(?:imagem|arquivo) do cliente\]:\s*["'“]?\s*COMPROVANTE\b/i.test(texto);
 }
 
 export type ProvaDePagamento =

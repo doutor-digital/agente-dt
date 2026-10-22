@@ -69,9 +69,9 @@ export function soCortesia(linha: string): boolean {
   return /\p{L}/u.test(l) && (ehSoCumprimento(l) || CORTESIA.test(l));
 }
 
-/** As marcas do sistema ("[áudio do cliente]:", "[imagem do cliente]: …") não são fala dele. */
+/** As marcas do sistema ("[áudio do cliente]:", "[imagem do cliente]: …", "[arquivo do cliente]: …") não são fala dele. */
 function semMarcas(texto: string): string {
-  return texto.replace(/\[(?:áudio|imagem)[^\]]*\]:?/gi, ' ');
+  return texto.replace(/\[(?:áudio|imagem|arquivo)[^\]]*\]:?/gi, ' ');
 }
 
 /**

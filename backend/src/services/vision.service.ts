@@ -11,7 +11,7 @@ const VISION_MODEL = process.env.VISION_MODEL || 'gpt-4o-mini';
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 const PROMPT = [
-  'Você recebe uma imagem que um paciente enviou no WhatsApp de uma clínica de coluna/hérnia.',
+  'Você recebe uma imagem ou um arquivo (PDF) que um paciente enviou no WhatsApp de uma clínica de coluna/hérnia.',
   'Descreva OBJETIVAMENTE, em português, o que há nela — de forma útil pro atendimento:',
   '- Exame/laudo/documento: resuma o achado principal e transcreva textos/valores relevantes.',
   '- Foto do corpo ou da região que dói: descreva o que dá pra ver, SEM diagnosticar.',
@@ -27,6 +27,33 @@ const PROMPT = [
 export interface VisionResult {
   text: string;
   durationMs: number;
+  /** O que chegou de fato: foto, ou arquivo (PDF) — vira a marca "[imagem do cliente]" ou "[arquivo do cliente]". */
+  tipo: 'imagem' | 'arquivo';
+}
+
+type ParteDoAnexo =
+  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'file'; file: { filename: string; file_data: string } };
+
+/**
+ * Bebedouro, 22/10/2026: a Marinês pagou o Pix e mandou o comprovante em PDF sete vezes; a IA pediu
+ * de novo a cada uma, porque só lia foto. Comprovante de banco sai em PDF com frequência — o PDF vai
+ * pro mesmo modelo como `file` (o gpt-4o-mini lê o texto e as páginas). Decide pelo conteúdo, não
+ * pelo nome: tem foto que chega como "arquivo" e PDF sem extensão no link.
+ */
+export function parteDoAnexo(buf: Buffer): { tipo: VisionResult['tipo']; parte: ParteDoAnexo } {
+  if (ehPdf(buf)) {
+    return {
+      tipo: 'arquivo',
+      parte: { type: 'file', file: { filename: 'anexo.pdf', file_data: `data:application/pdf;base64,${buf.toString('base64')}` } },
+    };
+  }
+  const mime = detectImageMime(buf);
+  return { tipo: 'imagem', parte: { type: 'image_url', image_url: { url: `data:${mime};base64,${buf.toString('base64')}` } } };
+}
+
+function ehPdf(buf: Buffer): boolean {
+  return buf.length >= 5 && buf.subarray(0, 5).toString('latin1') === '%PDF-';
 }
 
 export async function describeImage(
@@ -68,8 +95,7 @@ export async function describeImage(
     throw new Error('Imagem vazia (0 bytes)');
   }
 
-  const mime = detectImageMime(buf);
-  const dataUri = `data:${mime};base64,${buf.toString('base64')}`;
+  const { tipo, parte } = parteDoAnexo(buf);
 
   const res = await axios.post<{ choices?: Array<{ message?: { content?: string } }> }>(
     CHAT_URL,
@@ -81,7 +107,7 @@ export async function describeImage(
           role: 'user',
           content: [
             { type: 'text', text: PROMPT },
-            { type: 'image_url', image_url: { url: dataUri } },
+            parte,
           ],
         },
       ],
@@ -95,7 +121,7 @@ export async function describeImage(
   );
 
   const text = (res.data?.choices?.[0]?.message?.content ?? '').trim();
-  return { text, durationMs: Math.round(performance.now() - t0) };
+  return { text, durationMs: Math.round(performance.now() - t0), tipo };
 }
 
 function detectImageMime(buf: Buffer): string {
