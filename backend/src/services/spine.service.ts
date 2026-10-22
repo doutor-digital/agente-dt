@@ -18,11 +18,20 @@ export const SPINE_STATUS = {
   DESMARCADO: 57,
 } as const;
 
-const FREE_STATUS: number[] = [SPINE_STATUS.DESMARCADO];
+/**
+ * Horário morto: o paciente desmarcou (57) ou foi pra outro dia (41 — o registro velho fica na data antiga e
+ * a franquia aceita outro paciente ali). Não ocupa, mas também não sai "livre": a grade marca "incerto" e a IA
+ * só oferece depois que a sondagem confirma com a franquia (agenda.service, agenda-tools).
+ *
+ * O 41 contava como ocupado até 22/10/2026: em Bebedouro (um fisioterapeuta, agenda cheia) eram 13 horários
+ * vagos escondidos em 12 dias, e a IA dizia "o mais próximo é 04/11".
+ */
+const FREE_STATUS: number[] = [SPINE_STATUS.DESMARCADO, SPINE_STATUS.REMARCADO];
 
-function ocupa(idStatus: number | null): boolean {
-  if (idStatus === null) return true;
-  return !FREE_STATUS.includes(idStatus);
+/** Como o agendamento pesa na grade: ocupado é o padrão (status novo da franquia entra ocupado sozinho). */
+export function pesoNaGrade(idStatus: number | null): { isBusy: boolean; requiresManualValidation: boolean } {
+  const morto = idStatus !== null && FREE_STATUS.includes(idStatus);
+  return { isBusy: !morto, requiresManualValidation: morto };
 }
 
 export interface SpineRawSchedule {
@@ -189,8 +198,7 @@ function normalize(raw: SpineRawSchedule, tz: string): SpineSchedule {
     dateAttendanceLocal: local,
     dayLocal: day,
     timeLocal: time,
-    isBusy: ocupa(idStatus),
-    requiresManualValidation: idStatus === SPINE_STATUS.DESMARCADO,
+    ...pesoNaGrade(idStatus),
   };
 }
 

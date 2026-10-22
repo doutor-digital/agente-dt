@@ -343,15 +343,21 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
           continue;
         }
 
+        const noTurno = (h: string) => !turno || (turno === 'manha' ? h < '12:00' : h >= '12:00');
         const todosLivres = slots.filter((s) => s.status === 'livre').map((s) => s.time);
-        const livres = turno
-          ? todosLivres.filter((h) => (turno === 'manha' ? h < '12:00' : h >= '12:00'))
-          : todosLivres;
+        const livres = todosLivres.filter(noTurno);
+        const vaiSondar = !!sonda && diasSondados < MAX_DIAS_SONDADOS;
+        // Horário de quem desmarcou ou remarcou, num turno em que o fisioterapeuta atende: entra só se a sondagem
+        // for rodar — é ela que diz se a franquia aceita (Bebedouro, 22/10/2026: 13 vagas assim em 12 dias, todas
+        // escondidas, e a IA dizendo "o mais próximo é 04/11").
+        const vagos = vaiSondar
+          ? slots.filter((s) => s.status === 'incerto' && s.turnoComAtendimento).map((s) => s.time).filter(noTurno)
+          : [];
 
         if (i === 0 && turno && livres.length === 0 && todosLivres.length > 0) {
           outroTurnoNoDiaPedido = data;
         }
-        if (livres.length === 0) {
+        if (livres.length === 0 && vagos.length === 0) {
           cache.franquia(cursor, { livres, recusados: [], oferecer: [] });
           continue;
         }
@@ -361,9 +367,10 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
         let sondados: string[] = [];
         let verificado = false;
         let fantasmas: string[] = [];
-        if (sonda && diasSondados < MAX_DIAS_SONDADOS) {
+        if (vaiSondar && sonda) {
           diasSondados++;
-          const r = await horariosQueAFranquiaAceita(fresca, cursor, livres, sonda);
+          const candidatos = [...livres, ...vagos].sort();
+          const r = await horariosQueAFranquiaAceita(fresca, cursor, candidatos, sonda);
           recusados = r.recusados;
           sondados = r.sondados;
           fantasmas = r.fantasmas;
@@ -384,7 +391,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
             `${oferecer.length} confirmado(s) de ${livres.length} livre(s) na grade` +
             (cursor === data ? '' : ` (avançou de ${data})`) +
             (verificado ? '' : ' — SEM verificação'),
-          payload: { pedido: data, data: cursor, turno, naGrade: todosLivres, noTurno: livres, sondados, oferecer, recusados, sonda, cache: cache.rastro(doCache) },
+          payload: { pedido: data, data: cursor, turno, naGrade: todosLivres, noTurno: livres, vagos, sondados, oferecer, recusados, sonda, cache: cache.rastro(doCache) },
         });
         // só guarda dia confirmado pela sondagem e com horário (erro e lista vazia nunca entram). Sondagem que deixou
         // agendamento fantasma também não: a próxima busca vê o horário ocupado na grade; o cache o ofereceria por 10 min.
@@ -1448,7 +1455,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       if (!slot) {
         return `${args.hora} não é um horário de atendimento em ${args.data}. Consulte os horários de novo e ofereça um da lista.`;
       }
-      if (slot.status !== 'livre') {
+      // horário de quem desmarcou/remarcou num turno com atendimento: oferecido depois da sondagem; a franquia decide abaixo
+      const marcavel = slot.status === 'livre' || (slot.status === 'incerto' && !!slot.turnoComAtendimento);
+      if (!marcavel) {
         // oferecido como livre e já ocupado: a busca guardada do dia ficou velha
         await apagarDoCache(fresca, args.data, `agendar_consulta: ${args.hora} ${slot.status} na grade`);
         await recorder.step({
