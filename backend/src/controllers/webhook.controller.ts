@@ -1068,8 +1068,11 @@ export async function processAgent(args: {
       });
     }
   }
+  // Mesmo com texto junto: "Já paguei ontem" + PDF ilegível sem esta marca vira só "já paguei", e a IA
+  // pede o comprovante que acabou de chegar.
   if (anexos.length && !algumAnexoLido) {
-    humanMessage = humanMessage || '[cliente mandou uma imagem ou um arquivo, mas não foi possível ler]';
+    const marca = '[cliente mandou uma imagem ou um arquivo, mas não foi possível ler]';
+    humanMessage = humanMessage ? `${humanMessage}\n\n${marca}` : marca;
   }
 
   // O Kommo entrega um aviso de erro em inglês no lugar do conteúdo quando não
