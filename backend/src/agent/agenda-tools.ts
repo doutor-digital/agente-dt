@@ -1496,6 +1496,35 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
       const paciente = conf.ok ? conf.data?.client ?? null : null;
+      // A recepção marca direto na franquia e o vínculo da Sofia não fica sabendo: `consultaAtual` (acima) só vê a
+      // que ela marcou. Bebedouro, 21/10/2026: a Melissa marcou a Ignêz 22/10 09:00 às 15:07; a IA marcou outra,
+      // 04/11 14h, às 15:10 — no mesmo cadastro, que já mostrava a de 22/10.
+      const naClinica = !args.remarcando && paciente ? AgendaReconcileService.avaliacaoDePe(paciente.schedules, agoraLocal(fresca)) : null;
+      if (naClinica?.idSchedule && naClinica.dayLocal && naClinica.timeLocal) {
+        const quando = `${naClinica.dayLocal}T${naClinica.timeLocal}`;
+        // passa a ser a consulta do lead: o prompt mostra, e remarcar/cancelar a enxergam
+        if (args.leadId) {
+          await prisma.spineLeadLink
+            .upsert({
+              where: { unitId_kommoLeadId: { unitId: fresca.id, kommoLeadId: args.leadId } },
+              update: { spineIdSchedule: naClinica.idSchedule, agendadoPara: quando, spineIdClient: args.idClient },
+              create: { unitId: fresca.id, kommoLeadId: args.leadId, spineIdClient: args.idClient, spineIdSchedule: naClinica.idSchedule, agendadoPara: quando },
+            })
+            .catch((err) => logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao vincular a consulta marcada pela clínica'));
+          AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
+        }
+        await recorder.step({
+          kind: 'ERROR',
+          title: `agendar_consulta recusado — já tem consulta na clínica em ${quando} (${naClinica.statusName ?? naClinica.idStatus})`,
+          payload: { ...args, idSchedule: naClinica.idSchedule, quando },
+        });
+        return (
+          `RECUSADO: este paciente já tem consulta marcada na clínica em ${porExtenso(quando)}` +
+          (naClinica.physicalTherapist ? ` (${comQuemVaiSerAtendido(naClinica.physicalTherapist)})` : '') +
+          '. Esse é o horário válido — a equipe marcou direto no sistema. NÃO marque outra e NÃO ofereça outro dia. ' +
+          'Confirme esse dia e hora com o paciente; se ele quiser mudar, chame remarcar_consulta.'
+        );
+      }
       if (paciente) {
         const foneLead = await telefoneDoLead(kommo, args.leadId);
         const foneInformado = args.telefone ? SpineService.normalizarWhatsapp(args.telefone) : null;

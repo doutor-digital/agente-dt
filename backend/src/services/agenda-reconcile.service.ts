@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
 import { logger } from '../lib/logger.js';
 import { SpineService } from './spine.service.js';
+import type { SpineSchedule } from './spine.service.js';
 
 export type EstadoConsulta = 'confirmada' | 'cancelada' | 'nao_confirmada';
 
@@ -172,6 +173,14 @@ async function reconciliar(unit: Unit, kommoLeadId: number): Promise<ConsultaRec
       return { ...base, estado: 'cancelada', quando: null, mudou: true, especialista: achado.especialista, idStatus: achado.idStatus };
     }
 
+    // NÃO COMPARECEU: a clínica deu baixa — não é mais consulta de pé, nem quando a data é futura. Bebedouro,
+    // 22/10/2026: a recepção pôs 40 na consulta duplicada de 04/11 às 07:29 e a IA seguiu afirmando "04/11 às 14h".
+    // O vínculo fica: quem lê sabe que ele faltou, e o prompt pergunta à franquia o que vale agora.
+    if (achado.idStatus === SpineService.SPINE_STATUS.NAO_COMPARECEU) {
+      const era = achado.dia && achado.hora ? `${achado.dia}T${achado.hora}` : base.quando;
+      return { ...base, estado: 'cancelada', quando: era, especialista: achado.especialista, idStatus: achado.idStatus };
+    }
+
     if (!achado.dia || !achado.hora) return base;
 
     const agora = `${achado.dia}T${achado.hora}`;
@@ -204,6 +213,28 @@ async function reconciliar(unit: Unit, kommoLeadId: number): Promise<ConsultaRec
   }
 }
 
+/** Consulta de pé: o paciente vem naquela data (41 = a franquia mudou a data no próprio registro). */
+const DE_PE: readonly number[] = [
+  SpineService.SPINE_STATUS.AGENDADO,
+  SpineService.SPINE_STATUS.CONFIRMADO,
+  SpineService.SPINE_STATUS.REMARCADO,
+];
+
+/**
+ * A próxima avaliação de pé do paciente na franquia, marcada por QUALQUER um. A recepção marca direto lá e o vínculo
+ * da Sofia (`spineLeadLink`) não fica sabendo — `consultaDoLead` só vê a que ela marcou. Sessão de tratamento
+ * (com `idTreatment`) não conta.
+ */
+export function avaliacaoDePe(schedules: SpineSchedule[], agoraLocal: string): SpineSchedule | null {
+  const agora = agoraLocal.slice(0, 16);
+  return (
+    schedules
+      .filter((s) => s.idTreatment == null && s.idStatus !== null && DE_PE.includes(s.idStatus))
+      .filter((s) => !!s.dayLocal && !!s.timeLocal && `${s.dayLocal}T${s.timeLocal}` > agora)
+      .sort((a, b) => `${a.dayLocal}T${a.timeLocal}`.localeCompare(`${b.dayLocal}T${b.timeLocal}`))[0] ?? null
+  );
+}
+
 export function porExtenso(quando: string | null | undefined): string {
   if (!quando) return 'a consulta marcada';
   const [dia, hora] = quando.split('T');
@@ -214,6 +245,7 @@ export function porExtenso(quando: string | null | undefined): string {
 
 export const AgendaReconcileService = {
   consultaDoLead,
+  avaliacaoDePe,
   esqueceConsulta,
   porExtenso,
 };
