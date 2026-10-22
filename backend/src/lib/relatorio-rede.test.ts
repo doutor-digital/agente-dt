@@ -45,7 +45,7 @@ test('categoria: sessão, retorno e avaliação — a ordem evita falso positivo
   assert.equal(categoriaDe(null), null);
 });
 
-test('agenda: cada status cai no balde certo e desmarcada sai de "marcadas"', () => {
+test('agenda: cada status cai no balde certo e desmarcada sai de "marcadas" (remarcada não: é a consulta na data nova)', () => {
   const r = resumirAgenda([
     ag(HOJE, SPINE_STATUS.ATENDIDO, 'AVALIAÇÃO'),
     ag(HOJE, SPINE_STATUS.ATENDIDO, 'AVALIAÇÃO'),
@@ -55,7 +55,7 @@ test('agenda: cada status cai no balde certo e desmarcada sai de "marcadas"', ()
     ag(HOJE, SPINE_STATUS.DESMARCADO, 'AVALIAÇÃO'),
     ag(HOJE, SPINE_STATUS.REMARCADO, 'AVALIAÇÃO'),
   ], HOJE, AMANHA);
-  assert.deepEqual(r.avaliacao, { marcadas: 5, atendidas: 2, faltas: 1, abertas: 2, desmarcadas: 2 });
+  assert.deepEqual(r.avaliacao, { marcadas: 6, atendidas: 2, faltas: 1, abertas: 3, desmarcadas: 1 });
 });
 
 test('agenda: status desconhecido ou ausente conta como em aberto, não some', () => {
@@ -64,7 +64,7 @@ test('agenda: status desconhecido ou ausente conta como em aberto, não some', (
   assert.equal(r.sessao.marcadas, 2);
 });
 
-test('agenda: amanhã só conta o que não foi desmarcado, por categoria', () => {
+test('agenda: amanhã só conta o que não foi desmarcado, por categoria — remarcada conta', () => {
   const r = resumirAgenda([
     ag(AMANHA, SPINE_STATUS.AGENDADO, 'AVALIAÇÃO'),
     ag(AMANHA, SPINE_STATUS.CONFIRMADO, 'SESSÃO'),
@@ -72,7 +72,7 @@ test('agenda: amanhã só conta o que não foi desmarcado, por categoria', () =>
     ag(AMANHA, SPINE_STATUS.DESMARCADO, 'AVALIAÇÃO'),
     ag(AMANHA, SPINE_STATUS.REMARCADO, 'SESSÃO'),
   ], HOJE, AMANHA);
-  assert.deepEqual(r.amanha, { avaliacao: 1, sessao: 2, retorno: 0 });
+  assert.deepEqual(r.amanha, { avaliacao: 1, sessao: 3, retorno: 0 });
   assert.equal(r.avaliacao.marcadas, 0, 'amanhã não entra na conta de hoje');
 });
 

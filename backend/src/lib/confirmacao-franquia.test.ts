@@ -89,12 +89,11 @@ test('decisão: já CONFIRMADO na franquia → não chama de novo', () => {
   assert.deepEqual(d, { acao: 'pular', motivo: 'ja_confirmada', avisarEquipe: false });
 });
 
-test('decisão: ATENDIDO, DESMARCADO, falta ou REMARCADO nunca viram confirmado', () => {
+test('decisão: ATENDIDO, DESMARCADO ou falta nunca viram confirmado', () => {
   for (const idStatus of [
     SPINE_STATUS.ATENDIDO,
     SPINE_STATUS.DESMARCADO,
     SPINE_STATUS.NAO_COMPARECEU,
-    SPINE_STATUS.REMARCADO,
   ]) {
     const d = decidirConfirmacaoNaFranquia({ franquiaLigada: true, consulta: consulta({ idStatus }), perguntouEstaConsulta: true });
     assert.equal(d.acao, 'pular', String(idStatus));
@@ -106,6 +105,15 @@ test('decisão: ATENDIDO, DESMARCADO, falta ou REMARCADO nunca viram confirmado'
     perguntouEstaConsulta: false,
   });
   assert.equal(cancelada.acao === 'pular' && cancelada.motivo, 'encerrada');
+});
+
+test('decisão: REMARCADO perguntado → confirma (41 é a consulta na data nova, o paciente vem)', () => {
+  const d = decidirConfirmacaoNaFranquia({
+    franquiaLigada: true,
+    consulta: consulta({ idStatus: SPINE_STATUS.REMARCADO }),
+    perguntouEstaConsulta: true,
+  });
+  assert.equal(d.acao, 'confirmar');
 });
 
 test('decisão: franquia não devolveu a consulta agora → não confirma e avisa a equipe', () => {
