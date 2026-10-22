@@ -100,8 +100,12 @@ export function categoriaDe(nome: string | null | undefined): Categoria {
   return null;
 }
 
+/**
+ * Só o desmarcado sai de "marcadas". REMARCADO (41) é a consulta já na data nova — o paciente vem (Bebedouro,
+ * 22/10/2026: 1 remarcado nos 30 dias passados × 36 nos 30 seguintes; quando a data chega, vira atendido ou falta).
+ */
 function contar(c: Contagem, idStatus: number | null): void {
-  if (idStatus === SPINE_STATUS.DESMARCADO || idStatus === SPINE_STATUS.REMARCADO) {
+  if (idStatus === SPINE_STATUS.DESMARCADO) {
     c.desmarcadas++;
     return;
   }
@@ -130,7 +134,7 @@ export function resumirAgenda(schedules: SpineSchedule[], hoje: string, amanha: 
       continue;
     }
     if (s.dayLocal === hoje) contar(r[cat], s.idStatus);
-    else if (s.dayLocal === amanha && s.idStatus !== SPINE_STATUS.DESMARCADO && s.idStatus !== SPINE_STATUS.REMARCADO) {
+    else if (s.dayLocal === amanha && s.idStatus !== SPINE_STATUS.DESMARCADO) {
       r.amanha[cat]++;
     }
   }

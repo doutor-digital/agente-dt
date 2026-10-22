@@ -185,12 +185,19 @@ export type DecisaoFranquia =
   | { acao: 'confirmar'; idSchedule: number }
   | { acao: 'pular'; motivo: MotivoSemConfirmarNaFranquia; avisarEquipe: boolean };
 
-/** Status em que a consulta já terminou — nunca vira "confirmado". */
+/**
+ * Status em que a consulta já terminou — nunca vira "confirmado".
+ *
+ * REMARCADO (41) NÃO está aqui: a franquia muda a data no próprio registro e põe 41, e o paciente vem naquela data.
+ * Bebedouro, 22/10/2026: 1 REMARCADO em 445 agendamentos dos 30 dias passados (viram ATENDIDO/falta quando a data
+ * chega) contra 36 em 329 dos 30 dias seguintes. Contar como encerrada deixava sem confirmar na franquia quem
+ * clicou "Confirmar presença" numa consulta remarcada. Remarcar DEPOIS da pergunta continua barrado pela chave
+ * por horário (`perguntouEstaConsulta`).
+ */
 const STATUS_ENCERRADOS: readonly number[] = [
   SPINE_STATUS.ATENDIDO,
   SPINE_STATUS.DESMARCADO,
   SPINE_STATUS.NAO_COMPARECEU,
-  SPINE_STATUS.REMARCADO,
 ];
 
 /**
