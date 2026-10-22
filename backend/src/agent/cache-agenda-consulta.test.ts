@@ -208,6 +208,30 @@ test('só no papel sem nada guardado: "pularia", e grava para a próxima medir',
   assert.equal(deposito.linhas.length, 1, 'no papel também guarda — é o que dá a taxa de acerto real');
 });
 
+// Bebedouro, 21/10/2026: a recepção marcou a avaliação direto na franquia; a IA não via e marcou outra no mesmo cadastro.
+test('paciente com avaliação marcada pela recepção: recusa, não marca e passa a enxergar a consulta', async () => {
+  const antes = spine.getClient;
+  const vinculos: unknown[] = [];
+  const linkAntes = (prisma as unknown as { spineLeadLink: Record<string, unknown> }).spineLeadLink;
+  Object.defineProperty(prisma, 'spineLeadLink', { value: { ...linkAntes, upsert: async (a: unknown) => { vinculos.push(a); return {}; } }, configurable: true });
+  spine.getClient = async () => ({
+    ok: true,
+    data: { client: { idClient: 9, name: 'Maria Teste', whatsapp: null, treatments: [], schedules: [
+      { idSchedule: 3790644, idTreatment: null, idStatus: 37, statusName: 'AGENDADO', dayLocal: DIA, timeLocal: '09:00', physicalTherapist: 'DR. GUILHERME' },
+    ] } },
+  });
+  try {
+    const r = await buildAgendarConsulta({ unit: unidade, recorder }).invoke({ idClient: 9, data: DIA, hora: '14:00', diaConfirmado: true, formaPagamento: 'na_clinica', leadId: 6525111 } as never);
+    assert.match(String(r), /RECUSADO: este paciente já tem consulta marcada na clínica/);
+    assert.ok(!franquia.some((c) => c.startsWith(`marca ${DIA}T14:00:00`) && !c.includes('(sondagem)')), 'marcou a segunda');
+    assert.equal(vinculos.length, 1, 'vinculou a consulta da recepção ao lead');
+    assert.equal((vinculos[0] as { update: { spineIdSchedule: number } }).update.spineIdSchedule, 3790644);
+  } finally {
+    spine.getClient = antes;
+    Object.defineProperty(prisma, 'spineLeadLink', { value: linkAntes, configurable: true });
+  }
+});
+
 test('marcar pela Sofia apaga o dia: a próxima busca vai à franquia', async () => {
   const oferta = await consultar(1);
   const hora = horariosDe(oferta)[0];
@@ -275,28 +299,4 @@ test('sondagem que deixou agendamento fantasma (cancelamento falhou) não entra 
   const texto = await consultar(1);
   assert.match(texto, /Horários CONFIRMADOS/, 'a busca responde como sempre');
   assert.equal(deposito.linhas.length, 0, 'mas o dia não é guardado: a próxima busca vê o horário ocupado na grade');
-});
-
-// Bebedouro, 21/10/2026: a recepção marcou a avaliação direto na franquia; a IA não via e marcou outra no mesmo cadastro.
-test('paciente com avaliação marcada pela recepção: recusa, não marca e passa a enxergar a consulta', async () => {
-  const antes = spine.getClient;
-  const vinculos: unknown[] = [];
-  const linkAntes = (prisma as unknown as { spineLeadLink: Record<string, unknown> }).spineLeadLink;
-  Object.defineProperty(prisma, 'spineLeadLink', { value: { ...linkAntes, upsert: async (a: unknown) => { vinculos.push(a); return {}; } }, configurable: true });
-  spine.getClient = async () => ({
-    ok: true,
-    data: { client: { idClient: 9, name: 'Maria Teste', whatsapp: null, treatments: [], schedules: [
-      { idSchedule: 3790644, idTreatment: null, idStatus: 37, statusName: 'AGENDADO', dayLocal: DIA, timeLocal: '09:00', physicalTherapist: 'DR. GUILHERME' },
-    ] } },
-  });
-  try {
-    const r = await buildAgendarConsulta({ unit: unidade, recorder }).invoke({ idClient: 9, data: DIA, hora: '14:00', diaConfirmado: true, formaPagamento: 'na_clinica', leadId: 6525111 } as never);
-    assert.match(String(r), /RECUSADO: este paciente já tem consulta marcada na clínica/);
-    assert.ok(!franquia.some((c) => c.startsWith(`marca ${DIA}T14:00:00`) && !c.includes('(sondagem)')), 'marcou a segunda');
-    assert.equal(vinculos.length, 1, 'vinculou a consulta da recepção ao lead');
-    assert.equal((vinculos[0] as { update: { spineIdSchedule: number } }).update.spineIdSchedule, 3790644);
-  } finally {
-    spine.getClient = antes;
-    Object.defineProperty(prisma, 'spineLeadLink', { value: linkAntes, configurable: true });
-  }
 });
