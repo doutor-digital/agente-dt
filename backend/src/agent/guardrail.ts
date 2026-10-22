@@ -3,6 +3,7 @@ import { preencherLacunas } from './lacunas.js';
 import { convenioDaUnidade, corrigirPrecoDoConvenio } from './preco-convenio.js';
 import { corrigirValorAntecipado } from './valor-antecipado.js';
 import { corrigirTomDaSaida } from './tom-da-saida.js';
+import { corrigirLinkDeMapa } from './link-de-mapa.js';
 import { precosDaConsulta } from './prompt-composer.js';
 
 export interface GuardrailResult {
@@ -160,6 +161,14 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
   if (tom.trocas.length > 0) {
     triggered.push('tom:' + tom.trocas.join('/'));
     texto = tom.texto;
+    reescreveu = true;
+  }
+
+  // Link de mapa montado pela IA a partir do endereço: o Google erra o pino — ver link-de-mapa.ts.
+  const mapa = corrigirLinkDeMapa(texto, unit);
+  if (mapa.trocou) {
+    triggered.push('mapa:link_inventado');
+    texto = mapa.texto;
     reescreveu = true;
   }
 
