@@ -52,9 +52,15 @@ export function contaEvolutionDoAmbiente(e: NodeJS.ProcessEnv = process.env): Co
 }
 
 /** "+55 63 8141-1248" → "556381411248"; JID de grupo/contato passa como está. */
+const JID_VALIDO = /^(\d{8,20}@s\.whatsapp\.net|\d{10,30}(-\d{1,15})?@g\.us|\d{6,25}@lid)$/;
+
 export function normalizarNumero(bruto: unknown): string {
   const s = String(bruto ?? '').trim();
-  if (s.includes('@')) return s;
+  if (s.includes('@')) {
+    // JID só no formato do WhatsApp: um erro de digitação não pode virar destino (achado do Codex)
+    if (!JID_VALIDO.test(s)) throw new ErroDeEntrada(`JID inválido: "${s}" (grupo termina em @g.us, contato em @s.whatsapp.net)`);
+    return s;
+  }
   const d = s.replace(/\D/g, '');
   if (d.length < 10) throw new ErroDeEntrada(`número inválido: "${s}" (use DDD+número, ex. 63 98141-1248)`);
   return d.length <= 11 ? `55${d}` : d;
@@ -223,13 +229,14 @@ export function montarAcao(tipo: string, a: Record<string, any>): Acao {
       return { metodo: 'POST', caminho: '/group/create', corpo: { subject: a.assunto, description: a.texto ?? '', participants: a.participantes.map(normalizarNumero) }, envio: false };
     case 'grupo_participantes':
       if (!a.grupo || !a.participantes?.length || !a.acao) throw new ErroDeEntrada('falta grupo/participantes/acao');
-      return { metodo: 'POST', caminho: '/group/updateParticipant', query: { groupJid: a.grupo }, corpo: { action: a.acao, participants: a.participantes.map(normalizarNumero) }, envio: false };
+      if (!['add', 'remove', 'promote', 'demote'].includes(a.acao)) throw new ErroDeEntrada(`ação de grupo inválida: ${a.acao}`);
+      return { metodo: 'POST', caminho: '/group/updateParticipant', query: { groupJid: normalizarNumero(a.grupo) }, corpo: { action: a.acao, participants: a.participantes.map(normalizarNumero) }, envio: false };
     case 'grupo_assunto':
       if (!a.grupo || !a.assunto) throw new ErroDeEntrada('falta grupo/assunto');
-      return { metodo: 'POST', caminho: '/group/updateGroupSubject', query: { groupJid: a.grupo }, corpo: { subject: a.assunto }, envio: false };
+      return { metodo: 'POST', caminho: '/group/updateGroupSubject', query: { groupJid: normalizarNumero(a.grupo) }, corpo: { subject: a.assunto }, envio: false };
     case 'grupo_descricao':
       if (!a.grupo) throw new ErroDeEntrada('falta grupo');
-      return { metodo: 'POST', caminho: '/group/updateGroupDescription', query: { groupJid: a.grupo }, corpo: { description: a.texto ?? '' }, envio: false };
+      return { metodo: 'POST', caminho: '/group/updateGroupDescription', query: { groupJid: normalizarNumero(a.grupo) }, corpo: { description: a.texto ?? '' }, envio: false };
     default:
       throw new ErroDeEntrada(`tipo desconhecido: ${tipo}`);
   }
@@ -350,8 +357,8 @@ export function registrarFerramentasEvolution(server: McpServer, ctx: ContextoEv
     { grupo: z.string().min(5) },
     ler,
     async (a) => ({
-      info: await chamar(ctx, 'GET', '/group/findGroupInfos', { query: { groupJid: a.grupo } }),
-      participantes: await chamar(ctx, 'GET', '/group/participants', { query: { groupJid: a.grupo } }),
+      info: await chamar(ctx, 'GET', '/group/findGroupInfos', { query: { groupJid: normalizarNumero(a.grupo) } }),
+      participantes: await chamar(ctx, 'GET', '/group/participants', { query: { groupJid: normalizarNumero(a.grupo) } }),
     }),
   );
   reg('evo_etiquetas', `WhatsApp ${nome}: etiquetas`, 'Etiquetas do WhatsApp Business do número (id, nome, cor).', {}, ler, () => chamar(ctx, 'GET', '/label/findLabels'));

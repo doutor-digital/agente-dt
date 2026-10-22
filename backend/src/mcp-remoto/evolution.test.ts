@@ -96,9 +96,9 @@ test('teto por hora, mesmo com confirmações juntas', async () => {
 test('mexer em grupo também é em dois passos, mas não conta no teto nem para à noite', async () => {
   const f = falso();
   const c = ctx(f, () => NOITE);
-  const { codigo } = preparar(c, 'u1', 'grupo_participantes', { grupo: '123@g.us', participantes: ['63981411248'], acao: 'add' });
+  const { codigo } = preparar(c, 'u1', 'grupo_participantes', { grupo: '120363338386986419@g.us', participantes: ['63981411248'], acao: 'add' });
   await confirmar(c, 'u1', codigo);
-  assert.equal(f.chamadas[0].url, 'https://evo.test/group/updateParticipant/Suzanne%20-%20Relatorios?groupJid=123%40g.us');
+  assert.equal(f.chamadas[0].url, 'https://evo.test/group/updateParticipant/Suzanne%20-%20Relatorios?groupJid=120363338386986419%40g.us');
   assert.deepEqual(f.chamadas[0].corpo, { action: 'add', participants: ['5563981411248'] });
 });
 
@@ -168,4 +168,13 @@ test('pelo protocolo: sem conta não há ferramenta; com conta, preparar → con
   assert.notEqual(r2.isError, true);
   assert.equal(f.chamadas.length, 1);
   assert.equal(f.chamadas[0].corpo.text, 'Bom dia');
+});
+
+test('JID fora do formato do WhatsApp e ação de grupo desconhecida não passam (achados do Codex)', () => {
+  const c = ctx(falso());
+  for (const j of ['fulano@gmail.com', '123@g.us.evil', 'abc@s.whatsapp.net', '@g.us']) {
+    assert.throws(() => preparar(c, 'u1', 'texto', { para: j, texto: 'Oi' }), /JID inválido/, j);
+  }
+  assert.doesNotThrow(() => preparar(c, 'u1', 'texto', { para: '5563981411248@s.whatsapp.net', texto: 'Oi' }));
+  assert.throws(() => preparar(c, 'u1', 'grupo_participantes', { grupo: '120363338386986419@g.us', participantes: ['63981411248'], acao: 'apagar' }), /inválida/);
 });
