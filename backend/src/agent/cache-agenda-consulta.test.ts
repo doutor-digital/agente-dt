@@ -66,6 +66,8 @@ const franquia: string[] = [];
 const ocupados = new Set<string>();
 /** "AAAA-MM-DDTHH:MM:00" que a franquia recusa ao marcar (a grade não vê — bloqueio). */
 const recusa = new Set<string>();
+/** "AAAA-MM-DD HH:MM" de quem desmarcou (57): a grade vê o registro, que não ocupa. */
+const mortos = new Map<string, number>();
 let falhaNaGrade = false;
 let cancelamentoFalha = false;
 let seq = 100;
@@ -76,7 +78,12 @@ spine.searchSchedules = async (_u: Unit, f: { initialDate: string }) => {
   if (falhaNaGrade) return { ok: false, error: '500 da franquia' };
   const schedules = [...ocupados]
     .filter((k) => k.startsWith(f.initialDate))
-    .map((k) => ({ idSchedule: ++seq, dayLocal: k.slice(0, 10), timeLocal: k.slice(11, 16), isBusy: true, requiresManualValidation: false, statusName: 'Agendado', idStatus: 1 }));
+    .map((k) => ({ idSchedule: ++seq, dayLocal: k.slice(0, 10), timeLocal: k.slice(11, 16), isBusy: true, requiresManualValidation: false, statusName: 'Agendado', idStatus: 1 }))
+    .concat(
+      [...mortos]
+        .filter(([k]) => k.startsWith(f.initialDate))
+        .map(([k, idStatus]) => ({ idSchedule: ++seq, dayLocal: k.slice(0, 10), timeLocal: k.slice(11, 16), isBusy: false, requiresManualValidation: true, statusName: String(idStatus), idStatus })),
+    );
   return { ok: true, data: { schedules, total: schedules.length, pages: 1 } };
 };
 spine.createSchedule = async (_u: Unit, input: { idClient: number; dateAttendanceLocal: string }) => {
@@ -110,6 +117,7 @@ beforeEach(() => {
   passos.length = 0;
   ocupados.clear();
   recusa.clear();
+  mortos.clear();
   falhaNaGrade = false;
   cancelamentoFalha = false;
   deposito = depositoNaMemoria();
@@ -275,4 +283,53 @@ test('sondagem que deixou agendamento fantasma (cancelamento falhou) não entra 
   const texto = await consultar(1);
   assert.match(texto, /Horários CONFIRMADOS/, 'a busca responde como sempre');
   assert.equal(deposito.linhas.length, 0, 'mas o dia não é guardado: a próxima busca vê o horário ocupado na grade');
+});
+
+// Bebedouro, 21/10/2026: agenda cheia, e a IA dizia "o mais próximo é 04/11" com o 11:30 do dia seguinte
+// desmarcado. Grade daqui: 08–11 e 13–17, de hora em hora.
+const GRADE = ['08:00', '09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
+
+test('dia cheio com um desmarcado numa manhã de atendimento: a sondagem confirma e a IA oferece', async () => {
+  chave('desligado');
+  for (const h of GRADE) if (h !== '10:00') ocupados.add(`${DIA} ${h}`);
+  mortos.set(`${DIA} 10:00`, 57);
+  const r = await consultar(1);
+  assert.match(r, new RegExp(`\\(${DIA}\\): 10:00\\.`));
+  assert.ok(franquia.includes(`marca ${DIA}T10:00:00 (sondagem)`));
+});
+
+test('a franquia recusa o horário morto (bloqueio que a grade não vê): não oferece', async () => {
+  chave('desligado');
+  for (const h of GRADE) if (h !== '10:00') ocupados.add(`${DIA} ${h}`);
+  mortos.set(`${DIA} 10:00`, 57);
+  recusa.add(`${DIA}T10:00:00`);
+  const r = await consultar(1);
+  assert.doesNotMatch(r, new RegExp(`\\(${DIA}\\)`));
+});
+
+test('tarde sem ninguém ativo e só desmarcados = provável bloqueio: nem sonda', async () => {
+  chave('desligado');
+  for (const h of GRADE) if (h < '12:00') ocupados.add(`${DIA} ${h}`);
+  for (const h of GRADE) if (h > '12:00') mortos.set(`${DIA} ${h}`, 57);
+  const r = await consultar(1);
+  assert.doesNotMatch(r, new RegExp(`\\(${DIA}\\)`));
+  assert.ok(!franquia.some((c) => c.startsWith(`marca ${DIA}T1`) && c.includes('(sondagem)')), 'sondou horário de turno bloqueado');
+});
+
+test('marcar no horário desmarcado oferecido passa pela trava da grade', async () => {
+  chave('desligado');
+  for (const h of GRADE) if (h !== '10:00') ocupados.add(`${DIA} ${h}`);
+  mortos.set(`${DIA} 10:00`, 57);
+  assert.deepEqual(horariosDe(await consultar(1)), ['10:00']);
+  const r = await buildAgendarConsulta({ unit: unidade, recorder }).invoke({ idClient: 9, data: DIA, hora: '10:00', diaConfirmado: true, formaPagamento: 'na_clinica' } as never);
+  assert.match(String(r), /Consulta marcada/);
+  assert.ok(franquia.includes(`marca ${DIA}T10:00:00`), 'marcou de verdade, com o paciente');
+});
+
+test('horário morto em turno sem atendimento: a trava de marcar recusa', async () => {
+  for (const h of GRADE) if (h < '12:00') ocupados.add(`${DIA} ${h}`);
+  mortos.set(`${DIA} 15:00`, 57);
+  const r = await buildAgendarConsulta({ unit: unidade, recorder }).invoke({ idClient: 9, data: DIA, hora: '15:00', diaConfirmado: true, formaPagamento: 'na_clinica' } as never);
+  assert.match(String(r), /não está mais disponível/);
+  assert.ok(!franquia.includes(`marca ${DIA}T15:00:00`));
 });

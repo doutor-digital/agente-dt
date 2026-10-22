@@ -42,7 +42,14 @@ export interface AgendaSlot {
   time: string;
   status: SlotStatus;
   motivo?: string;
+  /**
+   * Só no 'incerto': há paciente ativo no mesmo turno do dia, então o fisioterapeuta atende — não é o período que
+   * a recepção bloqueou (bloqueio a API não mostra, e quem estava nele sai desmarcado). Com isso a IA pode sondar.
+   */
+  turnoComAtendimento?: boolean;
 }
+
+const MEIO_DIA = 12 * 60;
 
 function toMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(':').map((n) => Number(n));
@@ -155,11 +162,11 @@ export function buildAgenda(
       }
 
       const achado = ocupado.get(`${dia} ${hhmm}`);
-      // Sem ninguém no horário exato, ainda pode haver consulta cujo bloco cruza o deste horário (grade de
+      // Sem ninguém ativo no horário exato, ainda pode haver consulta cujo bloco cruza o deste horário (grade de
       // 45 min sobre consultas antigas de 30): a franquia recusa, então não é livre. Os dois blocos têm a
       // duração que a franquia usa; encostar (um termina quando o outro começa) não é cruzar.
       const D = DURACAO_NA_FRANQUIA_MIN;
-      const porCima = achado
+      const porCima = achado?.isBusy
         ? undefined
         : ocupadosDoDia.get(dia)?.find((o) => o.minuto < m + D && m < o.minuto + D);
       if (porCima) {
@@ -184,6 +191,7 @@ export function buildAgenda(
           time: hhmm,
           status: 'incerto',
           motivo: 'paciente desmarcou — pode haver bloqueio não visível na API',
+          turnoComAtendimento: !!ocupadosDoDia.get(dia)?.some((o) => (o.minuto < MEIO_DIA) === (m < MEIO_DIA)),
         });
       }
     }
