@@ -15,7 +15,7 @@ interface MensagemDoTurno {
   content: unknown;
 }
 
-function textoDe(content: unknown): string {
+export function textoDe(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
