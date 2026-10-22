@@ -1415,7 +1415,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             'NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste turno. ' +
             'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: ' +
             'PIX do valor antecipado desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ' +
-            'ou pagamento na clínica antes do dia. Quando o comprovante chegar (imagem), aí sim chame ' +
+            'ou pagamento na clínica antes do dia. Quando o comprovante chegar (foto ou PDF), aí sim chame ' +
             'agendar_consulta. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para a equipe acompanhar.'
           );
         }

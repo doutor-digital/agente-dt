@@ -55,8 +55,8 @@ const COBRA_RESPOSTA = /\b(?:j[aá]\s+)?perguntei\s+(?:o|os|qual|quanto|sobre|do
 const VALOR_DITO = /R\$\s*\d/;
 
 function limpa(texto: string): string {
-  // as marcas do sistema ("[áudio do cliente]:", "[imagem do cliente]: …") não são fala dele
-  return texto.replace(/\[(?:áudio|imagem)[^\]]*\]:?/gi, ' ');
+  // as marcas do sistema ("[áudio do cliente]:", "[imagem do cliente]: …", "[arquivo do cliente]: …") não são fala dele
+  return texto.replace(/\[(?:áudio|imagem|arquivo)[^\]]*\]:?/gi, ' ');
 }
 
 function linhas(texto: string): string[] {

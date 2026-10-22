@@ -204,12 +204,21 @@ function getAudioUrl(msg: MessageEvent): string | null {
 
 const IMAGE_TYPES = new Set(['image', 'picture', 'photo', 'sticker']);
 const IMAGE_EXT_RE = /\.(jpg|jpeg|png|webp|gif|bmp|heic)$/i;
+const DOCUMENT_TYPES = new Set(['file', 'document']);
+const DOCUMENT_EXT_RE = /\.pdf$/i;
+const VIDEO_EXT_RE = /\.(mp4|mov|avi|3gp|mkv|webm)$/i;
 
 function hasImageAttachment(msg: MessageEvent): boolean {
   return !!getImageUrl(msg);
 }
 
-function getImageUrl(msg: MessageEvent): string | null {
+/**
+ * O anexo que a visão lê: foto, ou arquivo (PDF). Antes só foto — e o arquivo era descartado já aqui,
+ * com a mensagem inteira: em Bebedouro (22/10/2026) a Marinês mandou o comprovante do Pix em PDF sete
+ * vezes e a IA, que nem soube que chegou, pediu o comprovante de novo a cada uma. Foto tem preferência;
+ * arquivo de áudio/vídeo fica de fora (o áudio já tem caminho próprio).
+ */
+export function getImageUrl(msg: MessageEvent): string | null {
   const all = [
     ...(msg.attachment ? [msg.attachment] : []),
     ...(msg.attachments ?? []),
@@ -220,6 +229,13 @@ function getImageUrl(msg: MessageEvent): string | null {
     if (IMAGE_TYPES.has(type)) return a.link;
     const name = (a.file_name ?? a.name ?? a.link).toLowerCase();
     if (IMAGE_EXT_RE.test(name)) return a.link;
+  }
+  for (const a of all) {
+    if (!a.link) continue;
+    const type = (a.type ?? '').toLowerCase();
+    const name = (a.file_name ?? a.name ?? a.link).toLowerCase();
+    if (AUDIO_TYPES.has(type) || AUDIO_EXT_RE.test(name) || VIDEO_EXT_RE.test(name)) continue;
+    if (DOCUMENT_TYPES.has(type) || DOCUMENT_EXT_RE.test(name)) return a.link;
   }
   return null;
 }
@@ -865,6 +881,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
         audioUrl: audioUrls[0] ?? null,
         audioUrls,
         imageUrl: imageUrls[0] ?? null,
+        imageUrls,
         chatId: ctx.chatId,
         talkId: ctx.talkId,
         contactId: ctx.contactId,
@@ -914,6 +931,8 @@ export async function processAgent(args: {
   /** Todos os áudios da rajada (o coalescer junta); `audioUrl` fica por compatibilidade. */
   audioUrls?: string[];
   imageUrl: string | null;
+  /** Todas as fotos/arquivos da rajada; `imageUrl` fica por compatibilidade. */
+  imageUrls?: string[];
   chatId: string | null;
   talkId: string | null;
   contactId: string | null;
@@ -1021,29 +1040,36 @@ export async function processAgent(args: {
     });
   }
 
-  if (imageUrl) {
+  // Até 3 anexos da rajada, não só o primeiro: o comprovante às vezes vem depois da foto do exame, ou
+  // repetido em seguida (Bebedouro, 22/10/2026: cinco PDFs em um minuto).
+  const anexos = (args.imageUrls?.length ? args.imageUrls : imageUrl ? [imageUrl] : []).slice(0, 3);
+  let algumAnexoLido = false;
+  for (const [i, url] of anexos.entries()) {
     try {
-      const d = await describeImage(unit, imageUrl);
-      const desc = d.text || '[imagem sem conteúdo legível]';
+      const d = await describeImage(unit, url);
+      const desc = d.text || `[${d.tipo} sem conteúdo legível]`;
       humanMessage = humanMessage
-        ? `${humanMessage}\n\n[imagem do cliente]: ${desc}`
-        : `[imagem do cliente]: ${desc}`;
+        ? `${humanMessage}\n\n[${d.tipo} do cliente]: ${desc}`
+        : `[${d.tipo} do cliente]: ${desc}`;
+      algumAnexoLido = true;
       await recorder.step({
         kind: 'THINKING',
-        title: `Imagem lida (${d.durationMs}ms): "${desc.slice(0, 80)}"`,
-        payload: { imageUrl, desc, ms: d.durationMs },
+        title: `${d.tipo === 'arquivo' ? 'Arquivo' : 'Imagem'} ${anexos.length > 1 ? `${i + 1}/${anexos.length} ` : ''}lido (${d.durationMs}ms): "${desc.slice(0, 80)}"`,
+        payload: { imageUrl: url, tipo: d.tipo, desc, ms: d.durationMs },
         latencyMs: d.durationMs,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ err, imageUrl, leadId }, 'falha ao ler imagem');
+      logger.warn({ err, imageUrl: url, leadId }, 'falha ao ler imagem/arquivo');
       await recorder.step({
         kind: 'ERROR',
-        title: `Falha ao ler imagem: ${msg}`,
-        payload: { imageUrl, error: msg },
+        title: `Falha ao ler imagem/arquivo: ${msg}`,
+        payload: { imageUrl: url, error: msg },
       });
-      humanMessage = humanMessage || '[cliente mandou uma imagem, mas não foi possível ler]';
     }
+  }
+  if (anexos.length && !algumAnexoLido) {
+    humanMessage = humanMessage || '[cliente mandou uma imagem ou um arquivo, mas não foi possível ler]';
   }
 
   // O Kommo entrega um aviso de erro em inglês no lugar do conteúdo quando não
