@@ -14,6 +14,8 @@ import { JANELA_FALAS, LIMITE_TENTATIVAS, pedeNome } from './repeticao.js';
 import { cortarSeEstourou } from './teto-mensal.js';
 import { agendamentoDoVinculo, reservaAfirmada } from './reserva-sem-marcar.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { horariosOferecidos } from './horario-oferecido.js';
+import { agoraLocalISO } from './consulta-que-passou.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { nomeApresentavel, semNomeDoPerfil } from '../lib/nome-apresentavel.js';
 
@@ -39,6 +41,31 @@ export async function reservaFalsaNoDegrau(
   if (!promessa) return null;
   if (await vinculo(args.unitId, args.leadId, args.fuso)) return null;
   return promessa.trecho;
+}
+
+/**
+ * A régua oferecendo dia e hora sem consultar a agenda — ela gera o texto por fora das ferramentas, então qualquer
+ * horário que cita é inventado. Bebedouro, 22/10/2026 11:04 (lead 6564047, sem resposta desde 07:23): "tenho
+ * horário terça às 14h ou quarta às 10h" — ocupados nas duas semanas possíveis (Sandra/Norman, Agenor/Ivonete). O
+ * prompt já proíbe ("NÃO invente horário"); o modelo inventou assim mesmo.
+ *
+ * Devolve os horários citados, ou `null`. Quem tem consulta no vínculo com a franquia pode ouvir o horário dela.
+ * "Quer que eu veja os horários de quinta?" não é oferta (sem hora) e sai.
+ */
+export async function horarioInventadoNoDegrau(
+  texto: string,
+  args: { unitId: string; leadId: number; fuso: string },
+  vinculo: (unitId: string, leadId: number, fuso: string) => Promise<string | null> = agendamentoDoVinculo,
+  agora: Date = new Date(),
+): Promise<string | null> {
+  const ofertas = horariosOferecidos(texto, agoraLocalISO(args.fuso, agora));
+  if (ofertas.length === 0) return null;
+  // só o horário da própria consulta é liberado; outro dia ou hora é oferta inventada mesmo com consulta (achado do Codex)
+  const consulta = await vinculo(args.unitId, args.leadId, args.fuso);
+  const inventadas = ofertas.filter(
+    (o) => !consulta || o.hora !== consulta.slice(11, 16) || (o.data !== null && o.data !== consulta.slice(0, 10)),
+  );
+  return inventadas.length ? inventadas.map((o) => `${o.data ?? 'sem data'} ${o.hora}`).join(', ') : null;
 }
 
 export interface FollowUpArgs {
@@ -199,6 +226,15 @@ ${conversa}`.trim();
       logger.warn(
         { unit: unit.slug, leadId: args.leadId, trecho: reservaFalsa },
         'follow-up: disse que deixou horário reservado e não há consulta — nada enviado',
+      );
+      return null;
+    }
+    // Dia e hora oferecidos sem consulta: a régua não vê a agenda, então é inventado — silêncio e o próximo degrau.
+    const inventado = await horarioInventadoNoDegrau(tratado, { unitId: unit.id, leadId: args.leadId, fuso: fusoDaUnidade(unit) });
+    if (inventado) {
+      logger.warn(
+        { unit: unit.slug, leadId: args.leadId, horarios: inventado, texto: tratado },
+        'follow-up: ofereceu horário sem consultar a agenda — nada enviado',
       );
       return null;
     }
