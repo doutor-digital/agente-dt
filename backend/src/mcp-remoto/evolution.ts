@@ -39,10 +39,36 @@ export interface ContextoEvolution {
   grupos: { em: number; lista: Grupo[] } | null;
   gruposCarregando: Promise<Grupo[]> | null;
   fila: Promise<unknown>;
+  /** Envios das últimas 24 h feitos antes desta subida do servidor (auditoria). Sem carregar, nada sai. */
+  historico: { pronto: boolean; carregar?: () => Promise<number[]> };
 }
 
-export function criarContextoEvolution(conta: ContaEvolution | null, o: { fetch?: typeof fetch; agora?: () => number } = {}): ContextoEvolution {
-  return { conta, fetch: o.fetch ?? globalThis.fetch, agora: o.agora ?? Date.now, pendentes: new Map(), envios: [], grupos: null, gruposCarregando: null, fila: Promise.resolve() };
+export function criarContextoEvolution(
+  conta: ContaEvolution | null,
+  o: { fetch?: typeof fetch; agora?: () => number; historico?: () => Promise<number[]> } = {},
+): ContextoEvolution {
+  return {
+    conta,
+    fetch: o.fetch ?? globalThis.fetch,
+    agora: o.agora ?? Date.now,
+    pendentes: new Map(),
+    envios: [],
+    grupos: null,
+    gruposCarregando: null,
+    fila: Promise.resolve(),
+    historico: { pronto: !o.historico, carregar: o.historico },
+  };
+}
+
+/** O teto anti-ban conta também o que saiu antes do reinício: até ler isso, nenhum envio passa (achado do Codex). */
+async function garantirHistorico(ctx: ContextoEvolution): Promise<void> {
+  if (ctx.historico.pronto || !ctx.historico.carregar) return;
+  try {
+    ctx.envios.push(...(await ctx.historico.carregar()));
+    ctx.historico.pronto = true;
+  } catch {
+    throw new ErroDeEntrada('não consegui conferir os envios recentes (teto anti-ban) — nada foi enviado; tente em instantes');
+  }
 }
 
 /** Lê a conta do ambiente; sem as três variáveis, null (as ferramentas nem aparecem). */
@@ -324,6 +350,7 @@ async function confirmarAgora(ctx: ContextoEvolution, usuario: string, codigoBru
   ctx.pendentes.delete(codigo);
   if (ctx.agora() - p.criadoEm > LIMITES_EVOLUTION.validadeMs) throw new ErroDeEntrada(`o código venceu (${LIMITES_EVOLUTION.validadeMs / 60_000} min) — prepare de novo`);
   if (p.acao.envio) {
+    await garantirHistorico(ctx);
     const motivo = freio(ctx);
     if (motivo) throw new ErroDeEntrada(`não enviado: ${motivo}`);
     // "digitando…" de 1,2 a 3 s antes de sair: rajada idêntica foi o que derrubou o 9119

@@ -200,3 +200,16 @@ test('o envio conta antes da resposta e é avisado pra auditoria (sobrevive a re
   assert.equal(c.envios.length, 1, 'contou mesmo sem resposta');
   assert.deepEqual(contados, ['5563981411248']);
 });
+
+test('depois de reiniciar: o teto conta os envios de antes; sem conseguir ler, nada sai (achado do Codex)', async () => {
+  const f = falso();
+  const recentes = Array.from({ length: LIMITES_EVOLUTION.porHora }, (_, i) => DIA - i * 60_000);
+  const c = criarContextoEvolution(CONTA, { fetch: f.fetch, agora: () => DIA, historico: async () => recentes });
+  await assert.rejects(() => confirmar(c, 'u1', preparar(c, 'u1', 'texto', { para: '5563981411248', texto: 'Oi' }).codigo), /por hora/);
+  assert.equal(f.chamadas.length, 0);
+
+  const g = falso();
+  const quebrado = criarContextoEvolution(CONTA, { fetch: g.fetch, agora: () => DIA, historico: async () => { throw new Error('banco fora'); } });
+  await assert.rejects(() => confirmar(quebrado, 'u1', preparar(quebrado, 'u1', 'texto', { para: '5563981411248', texto: 'Oi' }).codigo), /nada foi enviado/);
+  assert.equal(g.chamadas.length, 0);
+});

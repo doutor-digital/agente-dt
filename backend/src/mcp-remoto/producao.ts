@@ -402,16 +402,15 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasConveniaDoBanco, (contas) => (convenia.contas = contas), 'as contas do Convênia');
   const tiquetaque = criarContextoTiquetaque(new Map());
   manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
-  const whatsapp = criarContextoEvolution(contaEvolutionDoAmbiente());
+  // o teto anti-ban conta o que saiu nas últimas 24 h, inclusive antes desta subida do servidor (lido no 1º envio)
+  const whatsapp = criarContextoEvolution(contaEvolutionDoAmbiente(), {
+    historico: () =>
+      prisma.mcpAuditoria
+        .findMany({ where: { ferramenta: EVENTO_DE_ENVIO, ok: true, createdAt: { gte: new Date(Date.now() - 86_400_000) } }, select: { createdAt: true } })
+        .then((rs) => rs.map((r) => r.createdAt.getTime())),
+  });
   let leitoresWhatsapp = new Set<string>();
-  if (whatsapp.conta) {
-    manterAtualizado(leitoresDoWhatsapp, (s) => (leitoresWhatsapp = s), 'quem vê o WhatsApp');
-    // o teto anti-ban conta o que saiu nas últimas 24 h, inclusive antes desta subida do servidor
-    prisma.mcpAuditoria
-      .findMany({ where: { ferramenta: EVENTO_DE_ENVIO, ok: true, createdAt: { gte: new Date(Date.now() - 86_400_000) } }, select: { createdAt: true } })
-      .then((rs) => whatsapp.envios.push(...rs.map((r) => r.createdAt.getTime())))
-      .catch((err) => logger.warn({ err }, 'mcp-remoto: não li os envios recentes do WhatsApp — teto começa do zero'));
-  }
+  if (whatsapp.conta) manterAtualizado(leitoresDoWhatsapp, (s) => (leitoresWhatsapp = s), 'quem vê o WhatsApp');
   const cacheCerebro = new Cache();
   // o contexto da franquia nasce dentro de montarConectorRemoto; as ferramentas extras só rodam depois
   let franquia: Contexto | undefined;
