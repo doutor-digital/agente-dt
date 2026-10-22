@@ -60,8 +60,12 @@ export async function horarioInventadoNoDegrau(
 ): Promise<string | null> {
   const ofertas = horariosOferecidos(texto, agoraLocalISO(args.fuso, agora));
   if (ofertas.length === 0) return null;
-  if (await vinculo(args.unitId, args.leadId, args.fuso)) return null;
-  return ofertas.map((o) => `${o.data ?? 'sem data'} ${o.hora}`).join(', ');
+  // só o horário da própria consulta é liberado; outro dia ou hora é oferta inventada mesmo com consulta (achado do Codex)
+  const consulta = await vinculo(args.unitId, args.leadId, args.fuso);
+  const inventadas = ofertas.filter(
+    (o) => !consulta || o.hora !== consulta.slice(11, 16) || (o.data !== null && o.data !== consulta.slice(0, 10)),
+  );
+  return inventadas.length ? inventadas.map((o) => `${o.data ?? 'sem data'} ${o.hora}`).join(', ') : null;
 }
 
 export interface FollowUpArgs {

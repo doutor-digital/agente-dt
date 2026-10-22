@@ -33,3 +33,8 @@ test('régua: convite sem hora continua saindo', async () => {
 test('régua: quem tem consulta marcada pode ouvir o horário dela', async () => {
   assert.equal(await horarioInventadoNoDegrau('Te espero terça às 14h, combinado? ☺', ARGS, comConsulta, AGORA), null);
 });
+
+test('régua: com consulta marcada, outro dia ou hora continua barrado (achado do Codex)', async () => {
+  assert.ok(await horarioInventadoNoDegrau('Se preferir, tenho também quarta às 10h. ☺', ARGS, comConsulta, AGORA));
+  assert.ok(await horarioInventadoNoDegrau('Tenho também terça às 15h, quer trocar?', ARGS, comConsulta, AGORA));
+});
