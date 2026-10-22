@@ -57,3 +57,10 @@ test('prompt: sem mapa cadastrado, proíbe montar link; com mapa, manda usar só
   assert.match(com, new RegExp(`Mapa: ${CERTO.replace(/[.]/g, '\\.')}`));
   assert.match(com, /use SÓ o de cima/);
 });
+
+test('link cadastrado que termina em pontuação continua reconhecido (achado do Codex)', () => {
+  const comParenteses = 'https://www.google.com/maps/place/Doutor+H%C3%A9rnia+(Rio+Verde)';
+  for (const t of [`Mapa: ${comParenteses}`, `Mapa: ${comParenteses}.`, `(veja ${comParenteses})`]) {
+    assert.deepEqual(corrigirLinkDeMapa(t, { clinicMapUrl: comParenteses, clinicAddress: ENDERECO }), { texto: t, trocou: false }, t);
+  }
+});

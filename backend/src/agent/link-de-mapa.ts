@@ -27,7 +27,8 @@ export function corrigirLinkDeMapa(
   let trocou = false;
   const novo = texto.replace(LINK_DO_GOOGLE_MAPS, (bruto) => {
     const { link, resto } = semPontuacaoFinal(bruto);
-    if (certo && link === certo) return bruto;
+    // o cadastrado passa pela mesma limpeza: link que termina em ")" ou "," não pode deixar de ser reconhecido
+    if (certo && (bruto === certo || link === semPontuacaoFinal(certo).link)) return bruto;
     const troca = certo ?? endereco;
     if (!troca) return bruto;
     trocou = true;
