@@ -44,6 +44,11 @@ test('conta: sem instância ou token no ambiente, nada liga', () => {
   });
 });
 
+test('conta: a instância pode vir codificada (o .env da VPS não aceita espaço sem aspas)', () => {
+  assert.equal(contaEvolutionDoAmbiente({ MCP_EVOLUTION_INSTANCIA: 'Suzanne%20-%20Relatorios', MCP_EVOLUTION_TOKEN: 't' })?.instancia, 'Suzanne - Relatorios');
+  assert.equal(contaEvolutionDoAmbiente({ MCP_EVOLUTION_INSTANCIA: '100%', MCP_EVOLUTION_TOKEN: 't' })?.instancia, '100%');
+});
+
 test('número: máscara vira DDI+DDD; JID passa', () => {
   assert.equal(normalizarNumero('+55 63 8141-1248'), '556381411248');
   assert.equal(normalizarNumero('(63) 98141-1248'), '5563981411248');

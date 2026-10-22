@@ -71,9 +71,17 @@ async function garantirHistorico(ctx: ContextoEvolution): Promise<void> {
   }
 }
 
-/** Lê a conta do ambiente; sem as três variáveis, null (as ferramentas nem aparecem). */
+/**
+ * Lê a conta do ambiente; sem instância e token, null (as ferramentas nem aparecem). A instância pode vir codificada
+ * ("Suzanne%20-%20Relatorios"): o .env da VPS é lido pelo bash no deploy (`. ./.env`) e espaço sem aspas o quebra.
+ */
 export function contaEvolutionDoAmbiente(e: NodeJS.ProcessEnv = process.env): ContaEvolution | null {
-  const instancia = e.MCP_EVOLUTION_INSTANCIA?.trim();
+  let instancia = e.MCP_EVOLUTION_INSTANCIA?.trim();
+  try {
+    if (instancia) instancia = decodeURIComponent(instancia);
+  } catch {
+    // nome com "%" que não é codificação: fica como veio
+  }
   const chave = e.MCP_EVOLUTION_TOKEN?.trim();
   if (!instancia || !chave) return null;
   return { url: (e.MCP_EVOLUTION_URL?.trim() || 'https://evolution.doutordigitalconsultoria.com').replace(/\/+$/, ''), instancia, chave };
