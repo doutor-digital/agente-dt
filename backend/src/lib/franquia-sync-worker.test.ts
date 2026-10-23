@@ -159,6 +159,11 @@ function kommoFalso(escritas: Escrita[], leads: Record<string, unknown[]> = {}) 
     setLeadCustomFieldValue: async (leadId: number, campo: number, tipo: string, valor: unknown) => { escritas.push({ leadId, campo, tipo, valor }); },
     clearLeadCustomField: async () => {},
     listLeadsPorEtapa: async (pipelineId: number, statusId: number, _l?: number, page = 1) => (page === 1 ? (leads[`${pipelineId}:${statusId}`] ?? []) : []),
+    // como a conta de verdade: EM TRATAMENTO vive no funil TRATAMENTO, não no COMERCIAL
+    listPipelines: async () => [
+      { id: 9, name: 'COMERCIAL', is_main: true, statuses: [{ id: 8, name: 'RETORNO PÓS-TRATAMENTO' }] },
+      { id: 1, name: 'TRATAMENTO', is_main: false, statuses: [{ id: 2, name: 'EM TRATAMENTO' }, { id: 3, name: 'ALTA' }] },
+    ],
   } as never;
 }
 
@@ -171,6 +176,7 @@ const ctxDe = (escritas: Escrita[], extra: Record<string, unknown> = {}) => ({
   agoraEpoch: Math.floor(Date.now() / 1000),
   resumo: resumoVazio(),
   camposPorNome: CAMPOS,
+  jornada: 'ligado',
   ...extra,
 });
 
@@ -291,4 +297,53 @@ test('fecharSessoesDoTratamento: com a automação desligada não lê a franquia
   }
   assert.deepEqual(escritas, []);
   assert.equal(ficha.mock.callCount(), 0);
+});
+
+test('gravarIdClientNoCartao: casamento-jornada em "só no papel" não grava — o campo é permanente', async () => {
+  for (const jornada of ['seco', 'desligado']) {
+    const escritas: Escrita[] = [];
+    const ctx = ctxDe(escritas, { jornada }) as Parameters<typeof _interno.gravarIdClientNoCartao>[0];
+    await _interno.gravarIdClientNoCartao(ctx, 70, 777);
+    assert.deepEqual(escritas, [], `jornada ${jornada} não pode gravar`);
+  }
+});
+
+test('gravarIdClientNoCartao: campo de outro tipo é pulado, e não dá 400 a cada varredura', async () => {
+  const escritas: Escrita[] = [];
+  const comoTexto = camposDaConta([{ id: 11, name: '⚙ idClient (franquia)', type: 'text' }]);
+  const ctx = ctxDe(escritas, { camposPorNome: comoTexto }) as Parameters<typeof _interno.gravarIdClientNoCartao>[0];
+  await _interno.gravarIdClientNoCartao(ctx, 70, 777);
+  assert.deepEqual(escritas, []);
+});
+
+test('fecharSessoesDoTratamento: roda com a movimentação de etapa desligada (ctx sem funis)', async () => {
+  const escritas: Escrita[] = [];
+  const leads = { '1:2': [cartao(74, [[11, 781], [12, 500], [13, 7]])] };
+  const ctx = ctxDe(escritas, { leads, funis: null }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
+  const ficha = fichaFalsa(781, [{ idTreatment: 500, statusName: 'FINALIZADO' }], [sessao(900, null, ATENDIDO, '2026-09-01'), sessao(901, null, ATENDIDO, '2026-09-02')]);
+  _semearParaTeste([{ slug: SLUG, automacao: 'franquia-sessoes', estado: 'ligado' }]);
+  try {
+    await _interno.fecharSessoesDoTratamento(ctx);
+  } finally {
+    _semearParaTeste([]);
+    ficha.mock.restore();
+  }
+  assert.ok(escritas.some((e) => e.campo === 13 && e.valor === 2), 'carregou os funis sozinho e gravou');
+});
+
+test('fecharSessoesDoTratamento: tem orçamento próprio — o teto gasto pelo laço da agenda não o cancela', async () => {
+  const escritas: Escrita[] = [];
+  const leads = { '1:2': [cartao(75, [[11, 782], [12, 500], [13, 7]])] };
+  const resumoCheio = { ...resumoVazio(), sessoes: 60 };
+  const ctx = ctxDe(escritas, { leads, resumo: resumoCheio }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
+  const ficha = fichaFalsa(782, [{ idTreatment: 500, statusName: 'FINALIZADO' }], [sessao(900, null, ATENDIDO, '2026-09-01')]);
+  _semearParaTeste([{ slug: SLUG, automacao: 'franquia-sessoes', estado: 'ligado' }]);
+  try {
+    await _interno.fecharSessoesDoTratamento(ctx);
+  } finally {
+    _semearParaTeste([]);
+    ficha.mock.restore();
+  }
+  assert.ok(escritas.some((e) => e.campo === 13 && e.valor === 1), 'gravou mesmo com o teto da varredura já gasto');
+  assert.equal(resumoCheio.sessoes, 61, 'o que a passada gravou entra no resumo da varredura');
 });
