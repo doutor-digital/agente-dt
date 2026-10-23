@@ -17,7 +17,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
-import { acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
+import { CAMPOS_SESSOES, acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
 import { planejarAtendimento, type CampoCandidato } from './atendimento-para-cartao.js';
 import { abrirSessaoTela, montarAvisoDaTela, type AtendimentoTela, type ProblemaDaTela, type SessaoTela } from './franquia-tela.js';
 import { avisarJoao } from './alerta-whatsapp.js';
@@ -37,13 +37,13 @@ import { fecharComoPerdido } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
-  PREFIXO_CONFLITO, TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, idsDoConflito, cartaoTravadoNoConflito, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
+  CAMPO_ID_CLIENT, PREFIXO_CONFLITO, TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, idsDoConflito, cartaoTravadoNoConflito, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
   chaveDoRoboPos, tarefaDaSujeira,
   escolherPacienteDoCartao, estadoCasamentoJornada, faltasParaAvisar, identidadeDoPaciente, notaConflitoDeTelefone, notaDaDevolucao,
   notaDaFalta, tarefaDaDevolucao, tarefaDaFalta, type ClienteCandidato, type EscolhaDoPaciente, type EtapaQueAFranquiaReabre,
 } from './casamento-jornada.js';
 import { PARA_SEMPRE_MS, avisarCadastroDuplicado, cartoesComConflito, escolhaDaSdr, gravarEscolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
-import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
+import { JANELA_24H_MS, avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, podeMexer, pularCartao, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 
@@ -268,7 +268,7 @@ export function relogioDoSync(slug: string): RelogioSync {
  * `idsClient`: quem a busca mostrou ser este paciente na franquia (vazio = não se sabe) — é o que permite recusar
  * o cartão que já pertence a OUTRO paciente (`cartaoDeOutroPaciente`).
  */
-const cacheLead = new Map<string, { leadId: number | null; idsClient: number[]; expiraEm: number }>();
+const cacheLead = new Map<string, { leadId: number | null; idsClient: number[]; leadConfirmado: boolean; expiraEm: number }>();
 
 
 type CampoInfo = Pick<KommoLeadCustomField, 'id' | 'type' | 'enums'>;
@@ -331,21 +331,26 @@ async function telefoneDoPaciente(unit: Unit, nome: string, idClient: number | n
   return { fone: exatos[0].whatsapp as string, idsClient };
 }
 
-async function leadPorTelefone(kommo: KommoClient, telefone: string): Promise<number | null> {
+/**
+ * O cartão daquele telefone — e se o telefone foi CONFIRMADO ou se é o mais recente por falta de
+ * prova. A diferença importa para quem grava algo permanente no cartão (o `⚙ idClient`): no cartão de
+ * família que divide o WhatsApp, o mais recente pode ser o da filha enquanto o paciente é a mãe.
+ */
+async function leadPorTelefone(kommo: KommoClient, telefone: string): Promise<{ id: number; confirmado: boolean } | null> {
   const chave = chaveTelefone(telefone);
   if (!chave) return null;
   const leads = await kommo.listLeadsPorTelefone(telefone);
   if (leads.length === 0) return null;
   const ordenados = [...leads].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  if (ordenados.length === 1) return ordenados[0].id;
+  if (ordenados.length === 1) return { id: ordenados[0].id, confirmado: true };
   // vários leads: confirma o telefone do contato dos 3 mais recentes
   for (const l of ordenados.slice(0, 3)) {
     const contato = l._embedded?.contacts?.[0]?.id;
     if (!contato) continue;
     const fone = await kommo.getContactPhone(contato);
-    if (fone && chaveTelefone(fone) === chave) return l.id;
+    if (fone && chaveTelefone(fone) === chave) return { id: l.id, confirmado: true };
   }
-  return ordenados[0].id;
+  return { id: ordenados[0].id, confirmado: false };
 }
 
 /**
@@ -375,12 +380,14 @@ export async function resolverLead(unit: Unit, kommo: KommoClient, nome: string,
 /** O cartão do paciente e quem ele é na franquia (`idsClient`, vazio quando o caminho não diz). */
 async function resolverPaciente(
   unit: Unit, kommo: KommoClient, nome: string, idClient: number | null, idsSchedule: number[],
-): Promise<{ leadId: number | null; idsClient: number[] }> {
+): Promise<{ leadId: number | null; idsClient: number[]; leadConfirmado: boolean }> {
   const chaveCache = `${unit.id}:${normalizar(nome)}`;
   const hit = cacheLead.get(chaveCache);
   if (hit && hit.expiraEm > Date.now()) return hit;
 
   let leadId: number | null = null;
+  // vínculo da Sofia e id do agendamento são prova; só o telefone com vários cartões é palpite
+  let leadConfirmado = true;
   let idsClient: number[] = idClient ? [idClient] : [];
   if (idsSchedule.length > 0) {
     const link = await prisma.spineLeadLink.findFirst({
@@ -399,11 +406,13 @@ async function resolverPaciente(
   if (leadId === null) {
     const achado = await telefoneDoPaciente(unit, nome, idClient);
     if (achado) {
-      leadId = await leadPorTelefone(kommo, achado.fone);
+      const porFone = await leadPorTelefone(kommo, achado.fone);
+      leadId = porFone?.id ?? null;
+      leadConfirmado = porFone?.confirmado ?? true;
       idsClient = achado.idsClient;
     }
   }
-  const out = { leadId, idsClient, expiraEm: Date.now() + CACHE_LEAD_MS };
+  const out = { leadId, idsClient, leadConfirmado, expiraEm: Date.now() + CACHE_LEAD_MS };
   cacheLead.set(chaveCache, out);
   return out;
 }
@@ -1114,7 +1123,15 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
  * agenda da varredura cobre D-3…D+45 e contar só ela diria "2 realizadas" para quem fez 14 sessões.
  * Sem o histórico em mãos grava apenas o que é do tratamento (id, local, grau, status).
  */
-async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null): Promise<void> {
+/**
+ * O que o espelho das sessões precisa saber do paciente — menos do que `PacienteDoCartao`, porque o
+ * fechamento (abaixo) monta o tratamento a partir da ficha, e a ficha não traz local, grau nem criação.
+ */
+type PacienteParaSessoes = Pick<PacienteDoCartao, 'nome' | 'idClient' | 'consultas'> & {
+  tratamento: Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> | null;
+};
+
+async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteParaSessoes, historico: Historico | null): Promise<void> {
   const { unit, kommo, resumo, agoraEpoch } = ctx;
   if (!p.tratamento?.idTreatment) return;
   // Chave por unidade (tela de Automações): desligado = não faz nada; seco = só registra o que gravaria.
@@ -1165,6 +1182,106 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
       logger.warn({ err, unit: unit.slug, leadId, campo: e.campo }, 'franquia-sync: falha ao gravar sessão/tratamento');
     }
     await new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
+  }
+}
+
+/** As etapas onde o tratamento já aconteceu: o paciente saiu da agenda, e por isso o cartão parava no tempo. */
+const ETAPAS_DO_TRATAMENTO: ReadonlyArray<readonly [Funil, string]> = [
+  ['TRATAMENTO', ETAPA.EM_TRATAMENTO],
+  ['TRATAMENTO', ETAPA.ALTA],
+  ['COMERCIAL', ETAPA.RETORNO],
+] as const;
+
+/**
+ * As sessões do cartão que já está EM TRATAMENTO, ALTA ou RETORNO PÓS deixam de congelar.
+ *
+ * A varredura parte da AGENDA (D-3…D+45): quem termina o tratamento sai da janela e o contador fica
+ * no número do dia em que saiu. Medido na Açailândia em 23/10/2026: o cartão dizia 7 sessões e a
+ * franquia tinha 8; outro dizia 23 contra 24, os dois com o tratamento já FINALIZADO. A revisão pelo
+ * histórico não alcança isso — ela varre o COMERCIAL e DECIDE ETAPA, e mexer na etapa de quem está em
+ * ALTA dispararia os templates de parabéns meses depois.
+ *
+ * Então esta passada só escreve CAMPO, e só onde não há nada a adivinhar:
+ *  - cartão que já sabe quem é (`⚙ idClient` gravado) — nenhuma busca por nome, nenhuma chamada a mais
+ *    além da ficha do paciente, que tem cache de 1 h;
+ *  - o tratamento que o PRÓPRIO cartão afirma (`⚙ idTreatment`), se a ficha ainda o tem. Quem voltou
+ *    depois da alta tem outro ciclo aberto, e reescrever o cartão com ele trocaria o histórico de um
+ *    tratamento pelo de outro;
+ *  - mesma chave `franquia-sessoes`, mesmo seco e mesmo teto por varredura do espelho normal.
+ */
+async function fecharSessoesDoTratamento(ctx: CtxSync): Promise<void> {
+  const { unit, kommo, resumo } = ctx;
+  if (estadoDaAutomacao(unit.slug, 'franquia-sessoes', process.env.FRANQUIA_SESSOES_SLUGS) === 'desligado') return;
+  const porNome = new Map(ctx.camposPorNome ?? []);
+  const infoTrat = acharCampoDeSessao(porNome, CAMPOS_SESSOES.ID_TRAT, normalizar);
+  const infoStatus = acharCampoDeSessao(porNome, CAMPOS_SESSOES.STATUS_TRAT, normalizar);
+  if (!infoTrat) return;
+  // As ETAPAS, não o move: esta passada só escreve campo, e precisa rodar justamente onde a
+  // movimentação está desligada — que é quase toda a rede desde 05/10/2026. Sem isto, `ctx.funis` vem
+  // nulo com o move desligado e o fechamento nunca aconteceria onde ele mais importa.
+  const funis = ctx.funis ?? (await carregarFunis(kommo));
+  if (!funis) return;
+
+  // Orçamento PRÓPRIO: o teto de `resumo.sessoes` é gasto primeiro pelo laço da agenda, e com um
+  // contador só as etapas do fim da lista (ALTA, RETORNO PÓS) nunca chegariam a ser atendidas.
+  const daPassada: ResumoSync = { ...resumo, escritas: 0, erros: 0, sessoes: 0 };
+  const ctxDaPassada: CtxSync = { ...ctx, funis, resumo: daPassada };
+  try {
+    for (const [funil, etapa] of ETAPAS_DO_TRATAMENTO) {
+      const alvo = funis.idDe(funil, etapa);
+      if (!alvo) continue;
+      for (let page = 1; page <= 20; page++) {
+        if ((daPassada.sessoes ?? 0) >= MAX_SESSOES_POR_VARREDURA) break;
+        const leads = await kommo.listLeadsPorEtapa(alvo.pipelineId, alvo.statusId, 250, page, true);
+        if (leads.length === 0) break;
+        for (const lead of leads) {
+          if ((daPassada.sessoes ?? 0) >= MAX_SESSOES_POR_VARREDURA) break;
+          if (pularCartao(ctx.grupo ?? null, unit.id, lead, daPassada)) continue;
+          const idClient = idClientDoCartao(lead, ctx.camposPorNome ?? []);
+          if (!idClient) continue;
+          const valorDe = (id: number) => String((lead.custom_fields_values ?? []).find((f) => f.field_id === id)?.values?.[0]?.value ?? '');
+          const noCartao = Number(valorDe(infoTrat.id));
+          if (!Number.isInteger(noCartao) || noCartao <= 0) continue;
+          // Tratamento que o cartão já mostra FINALIZADO não muda toda hora: fechar uma vez e reler só
+          // uma vez por semana. Sem este freio seriam `GET /clients/{id}` para TODO cartão em ALTA a
+          // cada hora (o cache do detalhe é de 1 h), numa fila que só cresce — e a franquia já reclamou
+          // de volume em 05/10/2026.
+          const chaveFechado = `fechamento-sessoes:${noCartao}`;
+          const finalizado = normalizar(infoStatus ? valorDe(infoStatus.id) : '') === 'finalizado';
+          if (finalizado && (await avisoRecente(unit.id, lead.id, chaveFechado, 7 * JANELA_24H_MS))) continue;
+          const hist = await historicoDoPaciente(unit, idClient);
+          const tratamento = (hist?.treatments ?? []).find((t) => t.idTreatment === noCartao);
+          if (!hist || !tratamento) continue;
+          // A ficha do paciente NÃO manda o `created` do tratamento (só idTreatment, idStatus, statusName
+          // e typeName) e, medido na Imperatriz em 23/10/2026, também não manda o idTreatment de cada
+          // sessão. Sem um dos dois não há como separar ciclo, e o contador somaria as sessões do
+          // tratamento anterior de quem voltou depois da alta. Então só fecho quando não há o que
+          // confundir: um tratamento só na ficha, ou toda sessão dizendo a que tratamento pertence.
+          const separavel = hist.treatments.length === 1 || hist.schedules.filter((s) => !ehConsulta(s)).every((s) => s.idTreatment !== null);
+          if (!separavel) {
+            logger.info(
+              { unit: unit.slug, leadId: lead.id, tratamentos: hist.treatments.length },
+              'franquia-sessoes: mais de um ciclo e sessão sem idTreatment — não fecho, contaria o ciclo errado',
+            );
+            continue;
+          }
+          // `local` e `degree` não vêm na ficha; vazio não grava campo nenhum (o gravador ignora texto
+          // vazio), então o que a varredura normal já escreveu ali fica como está.
+          const doCiclo = { idTreatment: tratamento.idTreatment ?? null, local: null, degree: null, statusName: tratamento.statusName ?? null, created: null };
+          const antes = daPassada.sessoes ?? 0;
+          await espelharSessoes(ctxDaPassada, lead.id, lead, { nome: lead.name ?? '', idClient, consultas: [], tratamento: doCiclo }, hist).catch((err) =>
+            logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-sessoes: fechamento falhou neste cartão'),
+          );
+          // marca só depois de gravar de verdade, e só o que não muda mais
+          if (finalizado && (daPassada.sessoes ?? 0) > antes && !ctx.seco) await marcarAviso(unit.id, lead.id, chaveFechado);
+        }
+        if (leads.length < 250) break;
+      }
+    }
+  } finally {
+    resumo.escritas += daPassada.escritas;
+    resumo.erros += daPassada.erros;
+    resumo.sessoes = (resumo.sessoes ?? 0) + (daPassada.sessoes ?? 0);
   }
 }
 
@@ -1350,6 +1467,45 @@ async function espelharCamposSdr(
 
 /** Etiqueta que a SDR filtra no Kommo: o cartão tem um paciente no `⚙ idClient` e a franquia casou OUTRO com ele. */
 export { TAG_CONFLITO };
+
+/**
+ * Grava no cartão QUEM ele é na franquia (`⚙ idClient`), quando a agenda acabou de provar isso.
+ *
+ * A varredura casa paciente e cartão pelo telefone da agenda e jogava esse resultado fora a cada
+ * passagem — só a carga de implantação e o widget escreviam o campo. Fora da janela D-3…D+45 não há
+ * agenda, e aí só resta procurar pelo nome: na Açailândia, em 23/10/2026, 0 de 224 cartões em
+ * tratamento tinham o campo e 21 de 25 não casavam mais ("nome nao casa", "homonimos" — títulos como
+ * "MARCILENE/Maria dos Anjos 19/01"). O cartão congela no número do dia em que saiu da janela: dizia
+ * 7 sessões realizadas, a franquia tinha 8.
+ *
+ * Escreve UMA vez por cartão e nunca sobrescreve: idClient diferente no cartão é conflito, e disso
+ * cuida o `recusarOutroPaciente` — que só passa a funcionar de verdade quando este campo existe.
+ */
+async function gravarIdClientNoCartao(ctx: CtxSync, leadId: number, idClient: number): Promise<void> {
+  const { unit, kommo, resumo } = ctx;
+  const info = campoDaConta(ctx.camposPorNome ?? [], CAMPO_ID_CLIENT);
+  // Conta nascida de outra versão do cartão pode ter este campo como texto ou seleção: gravar número
+  // ali dá 400 do Kommo, e o erro voltaria a cada 15 min em todo cartão, sem nunca se resolver. Os
+  // outros dois lugares que escrevem este campo (widget e cadastro) também fixam `numeric`.
+  if (!info || info.type !== 'numeric') return;
+  // `casamento-jornada` em "só no papel" NÃO grava: a chave promete que tudo segue como antes, e este
+  // campo é permanente — ninguém o sobrescreve depois, de propósito.
+  if (ctx.seco || ctx.jornada !== 'ligado') {
+    registrarSimulacao(unit, ctx.automacaoDoSeco ?? AUTOMACAO_1610, {
+      leadId, acao: 'gravaria', alvo: CAMPO_ID_CLIENT, valor: idClient,
+      motivo: 'a agenda da franquia casou este paciente com o cartão',
+    });
+    return;
+  }
+  try {
+    await kommo.setLeadCustomFieldValue(leadId, info.id, info.type, idClient, info.enums);
+    resumo.escritas++;
+    logger.info({ unit: unit.slug, leadId, idClient }, 'franquia-sync: ⚙ idClient gravado no cartão');
+  } catch (err) {
+    resumo.erros++;
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-sync: não consegui gravar o ⚙ idClient');
+  }
+}
 
 function notaConflito(idDoCartao: number, idsDoPaciente: number[]): string {
   return `⚠ Conflito de cadastro: este cartão é do paciente idClient ${idDoCartao} da franquia (campo ⚙ idClient), mas outro paciente da franquia (idClient ${idsDoPaciente.join('/')}) casou com ele — em geral, por dividir o mesmo WhatsApp. O sincronizador NÃO grava os dados do outro paciente aqui. Se o cartão é mesmo do ${idDoCartao}, nada a fazer neste cartão (o outro paciente precisa do cartão dele). Se é do outro, corrija o ⚙ idClient. A etiqueta ${TAG_CONFLITO} volta sozinha enquanto o conflito existir.`;
@@ -1996,7 +2152,7 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
 
   // Casa TODOS os pacientes antes de gravar: só assim se vê o cartão que recebeu dois pacientes diferentes (mesmo
   // telefone) na mesma varredura — com a gravação no meio, o primeiro já teria escrito por cima (decisão 1, 16/10).
-  type Casado = { p: (typeof porPaciente extends Map<string, infer V> ? V : never); casado: { leadId: number | null; idsClient: number[] } };
+  type Casado = { p: (typeof porPaciente extends Map<string, infer V> ? V : never); casado: { leadId: number | null; idsClient: number[]; leadConfirmado: boolean } };
   const casados: Casado[] = [];
   let vistos = 0;
   for (const p of porPaciente.values()) {
@@ -2057,6 +2213,14 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
         logger.info({ unit: unit.slug, leadId, idClientDoCartao: idDoCartao }, 'franquia-sync: paciente sem idClient num cartão com dono e mais de um paciente — não gravei');
         continue;
       }
+      // Quem é este cartão na franquia, gravado de uma vez: a agenda provou agora, e sem o campo a
+      // próxima varredura tem de adivinhar pelo nome. Só em cartão que ainda não tem dono, com UM
+      // paciente, sem outro candidato nesta varredura e com o cartão CONFIRMADO pelo telefone —
+      // gravar um palpite seria pior que não gravar, porque ninguém sobrescreve este campo depois:
+      // o cartão da mãe estampado com o idClient da filha passaria a ser recusado para sempre.
+      if (jornada !== 'desligado' && idDoCartao === null && idsDoPaciente.length === 1 && !variosNoCartao.has(leadId) && casado.leadConfirmado) {
+        await gravarIdClientNoCartao(ctx, leadId, idsDoPaciente[0]);
+      }
       await processarCartao(ctx, leadId, lead, { ...p, idsClient: idsDoPaciente });
     } catch (err) {
       resumo.erros++;
@@ -2073,6 +2237,12 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
     } catch (err) {
       resumo.erros++;
       logger.warn({ err, unit: unit.slug }, 'franquia-move: falha na revisão pelo histórico');
+    }
+    try {
+      await fecharSessoesDoTratamento(ctx);
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err, unit: unit.slug }, 'franquia-sessoes: falha no fechamento das sessões');
     }
     try {
       await passarNegociacao(unit, kommo, funis, mapa, resumo, { grupo, seco, campos: camposPorNome });
@@ -2281,4 +2451,4 @@ export function stopFranquiaSyncWorker(): void {
   proximaEm.clear();
 }
 
-export const _interno = { mapearCampos, valoresDoLead, procurarPaciente, espelharPaciente, recusarOutroPaciente, resolverPaciente, marcarConflitoDeTelefone, avisarFaltas, processarCartao, sincronizarUnidade, revisarPeloHistorico };
+export const _interno = { mapearCampos, valoresDoLead, procurarPaciente, espelharPaciente, recusarOutroPaciente, resolverPaciente, marcarConflitoDeTelefone, avisarFaltas, processarCartao, sincronizarUnidade, revisarPeloHistorico, gravarIdClientNoCartao, fecharSessoesDoTratamento };
