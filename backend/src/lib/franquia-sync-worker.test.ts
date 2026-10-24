@@ -286,6 +286,52 @@ test('fecharSessoesDoTratamento: dois ciclos e sessão sem tratamento não fecha
   assert.deepEqual(escritas, [], 'sem como separar os ciclos, o cartão fica como está');
 });
 
+const daLista = (idTreatment: number, idClient: number, created: string, statusName: string) =>
+  ({ idTreatment, idClient, created, statusName, clientName: null, category: null, local: null, degree: null, staffName: null, price: null });
+
+test('fecharSessoesDoTratamento: dois tratamentos ao mesmo tempo FECHAM — o contador é do paciente (antes ficavam congelados)', async () => {
+  const escritas: Escrita[] = [];
+  const leads = { '1:2': [cartaoFinalizado(874, [[11, 8781], [12, 501], [13, 7], [16, 7]])] };
+  // a lista da unidade traz a data de criação que a ficha não manda; os dois nasceram no mesmo dia, DEPOIS das duas primeiras sessões (13:00Z)
+  const tratamentosDaUnidade = [daLista(500, 8781, '2026-09-01T14:41:00.000Z', 'FINALIZADO'), daLista(501, 8781, '2026-09-01T14:42:00.000Z', 'FINALIZADO')];
+  const ctx = ctxDe(escritas, { leads, tratamentosDaUnidade }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
+  const ficha = fichaFalsa(
+    8781,
+    [{ idTreatment: 500, statusName: 'FINALIZADO' }, { idTreatment: 501, statusName: 'FINALIZADO' }],
+    // 7 visitas, cada uma com uma sessão de cada protocolo = 14; a primeira foi ANTES de a recepção registrar os tratamentos
+    Array.from({ length: 14 }, (_v, i) => sessao(900 + i, null, ATENDIDO, `2026-09-${String(1 + Math.floor(i / 2)).padStart(2, '0')}`)),
+  );
+  _semearParaTeste([{ slug: SLUG, automacao: 'franquia-sessoes', estado: 'ligado' }]);
+  try {
+    await _interno.fecharSessoesDoTratamento(ctx);
+  } finally {
+    _semearParaTeste([]);
+    ficha.mock.restore();
+  }
+  assert.deepEqual(escritas.filter((e) => e.campo === 13), [{ leadId: 874, campo: 13, tipo: 'numeric', valor: 14 }], 'realizadas = tudo que o paciente fez');
+  assert.ok(escritas.some((e) => e.campo === 16 && e.valor === 14), 'histórico acompanha');
+});
+
+test('fecharSessoesDoTratamento: com a data de criação, o ciclo anterior de quem voltou fica de fora', async () => {
+  const escritas: Escrita[] = [];
+  const leads = { '1:2': [cartaoFinalizado(875, [[11, 8782], [12, 601], [13, 1]])] };
+  const tratamentosDaUnidade = [daLista(600, 8782, '2026-02-07T12:00:00.000Z', 'FINALIZADO'), daLista(601, 8782, '2026-09-01T12:00:00.000Z', 'FINALIZADO')];
+  const ctx = ctxDe(escritas, { leads, tratamentosDaUnidade }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
+  const ficha = fichaFalsa(
+    8782,
+    [{ idTreatment: 600, statusName: 'FINALIZADO' }, { idTreatment: 601, statusName: 'FINALIZADO' }],
+    [sessao(900, null, ATENDIDO, '2026-03-01'), sessao(901, null, ATENDIDO, '2026-03-08'), sessao(902, null, ATENDIDO, '2026-09-02'), sessao(903, null, ATENDIDO, '2026-09-09')],
+  );
+  _semearParaTeste([{ slug: SLUG, automacao: 'franquia-sessoes', estado: 'ligado' }]);
+  try {
+    await _interno.fecharSessoesDoTratamento(ctx);
+  } finally {
+    _semearParaTeste([]);
+    ficha.mock.restore();
+  }
+  assert.deepEqual(escritas.filter((e) => e.campo === 13), [{ leadId: 875, campo: 13, tipo: 'numeric', valor: 2 }]);
+});
+
 test('fecharSessoesDoTratamento: com a automação desligada não lê a franquia', async () => {
   const escritas: Escrita[] = [];
   const leads = { '1:2': [cartaoFinalizado(73, [[11, 780], [12, 500], [13, 7]])] };

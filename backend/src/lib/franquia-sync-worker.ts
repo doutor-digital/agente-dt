@@ -17,7 +17,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
-import { CAMPOS_SESSOES, acharCampoDeSessao, escritasDeSessoes, separarCiclo } from './sessoes-para-cartao.js';
+import { CAMPOS_SESSOES, acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
 import { planejarAtendimento, type CampoCandidato } from './atendimento-para-cartao.js';
 import { abrirSessaoTela, montarAvisoDaTela, type AtendimentoTela, type ProblemaDaTela, type SessaoTela } from './franquia-tela.js';
 import { avisarJoao } from './alerta-whatsapp.js';
@@ -947,6 +947,11 @@ interface CtxSync {
    * minutos, para sempre. Quem está na agenda é da varredura; o fechamento cuida de quem saiu dela.
    */
   tocados?: Set<number>;
+  /**
+   * Os tratamentos da unidade lidos nesta varredura (`/treatments/search`, 12 meses), com data de criação e
+   * status: a ficha do paciente não manda a data, e é dela que o contador de sessões parte para recortar o ciclo.
+   */
+  tratamentosDaUnidade?: SpineTreatment[];
   /** Em que automação o "gravaria" do seco aparece na tela: o sincronizador em seco usa a dele; a revisão, a dela. */
   automacaoDoSeco?: 'franquia-sync' | 'franquia-revisao';
   /** Kommo dividido com outra unidade (Petrópolis + Caxias): só mexe nos cartões do rótulo desta. `null` = Kommo só dela. */
@@ -1138,7 +1143,7 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
  * fechamento (abaixo) monta o tratamento a partir da ficha, e a ficha não traz local, grau nem criação.
  */
 type PacienteParaSessoes = Pick<PacienteDoCartao, 'nome' | 'idClient' | 'consultas'> & {
-  tratamento: (Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> & { category?: string | null }) | null;
+  tratamento: Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> | null;
 };
 
 async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteParaSessoes, historico: Historico | null): Promise<void> {
@@ -1172,14 +1177,12 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     return { tipo: info.rawType ?? (info.type as string), valor: v === undefined || v === null || String(v).trim() === '' ? null : String(v) };
   };
 
-  const tratamentosDoPaciente = hist?.treatments;
-  if (!separarCiclo(p.tratamento.idTreatment, tratamentosDoPaciente, p.tratamento, p.tratamento.created != null).separavel) {
-    logger.info(
-      { unit: unit.slug, leadId, idTreatment: p.tratamento.idTreatment, tratamentos: tratamentosDoPaciente?.length },
-      'franquia-sessoes: mais de um tratamento e não sei de qual é cada sessão — não gravo contador',
-    );
-  }
-  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, tratamentosDoPaciente, agoraEpoch, campo });
+  // O contador é do PACIENTE (decisão do João, 24/10/2026): todos os tratamentos dele entram, e o ciclo parte
+  // do mais antigo que ainda está aberto. Os irmãos vêm da lista da unidade (tem data); os ids, da ficha.
+  const irmaos = (ctx.tratamentosDaUnidade ?? []).filter((t) => t.idClient !== null && t.idClient === p.idClient && t.idTreatment !== p.tratamento!.idTreatment);
+  const planejadas = escritasDeSessoes({
+    schedules, tratamento: p.tratamento, irmaos, idsDoPaciente: hist?.treatments.map((t) => t.idTreatment), fuso: unit.spineTimezone || undefined, agoraEpoch, campo,
+  });
   if (planejadas.length > 0) resumo.sessoes = (resumo.sessoes ?? 0) + 1;
   for (const e of planejadas) {
     const info = acharCampoDeSessao(porNome, e.campo, normalizar);
@@ -1278,21 +1281,21 @@ async function fecharSessoesDoTratamento(ctx: CtxSync): Promise<void> {
           if (!hist || !tratamento) continue;
           // A ficha do paciente NÃO manda o `created` do tratamento (só idTreatment, idStatus, statusName
           // e typeName) e, medido na Imperatriz e na Açailândia (0 de 1.238 sessões), também não manda o
-          // idTreatment de cada sessão. O que ela manda é o RÓTULO em cada sessão ("PROTOCOLO 03 MESES -
-          // LOMBAR"), igual ao `typeName` do tratamento sem o grau: com ele dá para separar os
-          // tratamentos que correm juntos. Sem rótulo próprio, ou com dois tratamentos de rótulo igual
-          // (renovação — e aqui não há `created`), não há como saber de quem é cada sessão: não fecho.
-          const ciclo = separarCiclo(tratamento.idTreatment ?? null, hist.treatments, null, false);
-          if (!ciclo.separavel) {
+          // idTreatment de cada sessão. Sem a data não há como recortar o ciclo, e o contador somaria as
+          // sessões do tratamento anterior de quem voltou depois da alta. A data vem da lista da unidade
+          // desta varredura; paciente com um tratamento só na ficha não tem ciclo a recortar. Antes, todo
+          // paciente com mais de um tratamento era pulado aqui — e ficava congelado para sempre.
+          const daLista = (ctx.tratamentosDaUnidade ?? []).find((t) => t.idTreatment === noCartao && t.idClient === idClient);
+          if (hist.treatments.length > 1 && !daLista?.created) {
             logger.info(
               { unit: unit.slug, leadId: lead.id, tratamentos: hist.treatments.length },
-              'franquia-sessoes: mais de um tratamento e sessão sem como separar — não fecho, contaria o tratamento errado',
+              'franquia-sessoes: mais de um tratamento e sem a data de criação deste — não fecho, contaria o ciclo errado',
             );
             continue;
           }
           // `local` e `degree` não vêm na ficha; vazio não grava campo nenhum (o gravador ignora texto
           // vazio), então o que a varredura normal já escreveu ali fica como está.
-          const doCiclo = { idTreatment: tratamento.idTreatment ?? null, local: null, degree: null, statusName: tratamento.statusName ?? null, created: null };
+          const doCiclo = { idTreatment: tratamento.idTreatment ?? null, local: null, degree: null, statusName: tratamento.statusName ?? null, created: daLista?.created ?? null };
           const antes = daPassada.sessoes ?? 0;
           await espelharSessoes(ctxDaPassada, lead.id, lead, { nome: lead.name ?? '', idClient, consultas: [], tratamento: doCiclo }, hist).catch((err) =>
             logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-sessoes: fechamento falhou neste cartão'),
@@ -2174,7 +2177,7 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
   // Chave `casamento-jornada` (regras de 16/10/2026): desligado = tudo como sempre.
   const jornada = estadoCasamentoJornada(unit.slug);
   const conflitosGuardados = jornada === 'ligado' ? await cartoesComConflitoGuardado(unit.id) : new Set<number>();
-  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false }, seco, automacaoDoSeco: seco ? 'franquia-sync' : undefined, grupo, jornada, conflitosGuardados, tocados: new Set() };
+  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false }, seco, automacaoDoSeco: seco ? 'franquia-sync' : undefined, grupo, jornada, conflitosGuardados, tocados: new Set(), tratamentosDaUnidade: tratamentos };
 
   // Casa TODOS os pacientes antes de gravar: só assim se vê o cartão que recebeu dois pacientes diferentes (mesmo
   // telefone) na mesma varredura — com a gravação no meio, o primeiro já teria escrito por cima (decisão 1, 16/10).

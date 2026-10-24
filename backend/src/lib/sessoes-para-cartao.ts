@@ -7,14 +7,17 @@
  * recalculado a cada varredura e só vai ao Kommo quando mudou.
  *
  * Definições (combinadas com o João em 02/10/2026; mudar aqui muda o que a SDR lê):
- *  - sessão = agendamento que não é avaliação nem retorno (`ehConsulta`) e pertence a ESTE tratamento:
- *    tem o `idTreatment` dele, ou não traz id nenhum (a ficha do paciente não manda o id de cada
- *    sessão) e então:
- *      · se o paciente tem OUTRO tratamento, a sessão tem de trazer o rótulo deste ("PROTOCOLO 03 MESES -
- *        LOMBAR"): é o que a ficha põe em cada sessão no lugar do id. Sem isso, quem faz cervical e
- *        lombar ao mesmo tempo tinha as duas somadas em cada cartão (Açailândia, 24/10/2026);
- *      · e é posterior à criação do tratamento — o que deixa de fora o ciclo anterior de quem voltou
- *        depois da alta;
+ *  - sessão = agendamento que não é avaliação nem retorno (`ehConsulta`) e é DO PACIENTE, no ciclo atual.
+ *    Decisão do João (24/10/2026): o contador é do PACIENTE, não do tratamento — quem faz cervical e
+ *    lombar ao mesmo tempo mostra no cartão as sessões dos dois protocolos somadas (cada visita conta
+ *    duas vezes, e ele sabe). Antes disso o número saía da mistura de dois critérios, e nem era o do
+ *    lombar nem o do paciente (cartão 12; lombar 7; paciente 14);
+ *  - "do paciente" = tem o id de um tratamento DELE, ou não traz id (a ficha não manda o id de cada
+ *    sessão). Sessão com o id de um tratamento que não é dele (homônimo na agenda) não entra;
+ *  - "ciclo atual" = a partir do início do DIA em que o ciclo foi registrado (`inicioDoCiclo`): deixa de
+ *    fora o ciclo anterior de quem voltou depois da alta, e deixa DENTRO a sessão feita logo depois da
+ *    avaliação, antes de a recepção registrar o tratamento (decisão do João, 24/10/2026; 41 de 139
+ *    cartões da Açailândia mostravam 1 a menos que a franquia por causa disso);
  *  - realizadas = status ATENDIDO · faltas = NÃO COMPARECEU;
  *  - marcadas = AGENDADO ou CONFIRMADO ainda por vir;
  *  - previstas = realizadas + faltas + marcadas (desmarcada e remarcada não entram — é arrumação
@@ -26,7 +29,8 @@
  * Campo que a conta não tem é pulado em silêncio (cada clínica nasceu de uma versão do cartão).
  */
 import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { ehConsulta, normalizar } from './franquia-sync.js';
+import { instanteNoFuso, localParaUtcIso } from '../services/spine.service.js';
+import { ehConsulta, normalizar, statusAberto } from './franquia-sync.js';
 
 export const CAMPOS_SESSOES = {
   PREVISTAS: '# Sessões no histórico',
@@ -60,61 +64,32 @@ export function acharCampoDeSessao<T>(porNome: Map<string, T>, nome: string, cha
   return undefined;
 }
 
-/** Como a ficha do paciente descreve cada tratamento dele (`GET /clients/{id}` → `treatments[]`). */
-export interface TratamentoDaFicha {
-  idTreatment?: number | null;
-  /** "PROTOCOLO 03 MESES, LOMBAR, CRÔNICO" (categoria, local, grau) — ou só "PROTOCOLO 02 MESES" quando não há local */
-  typeName?: string | null;
-}
-
 /**
- * O rótulo que a ficha põe em cada SESSÃO no lugar do `idTreatment`: "PROTOCOLO 03 MESES - LOMBAR".
- * Medido na Açailândia em 24/10/2026: a ficha manda 0 de 1.238 sessões com idTreatment, mas o rótulo
- * da sessão é exatamente `categoria - local` do tratamento — 2.174 de 2.174 sessões que a agenda
- * (esta sim com o id) permitiu conferir, e nenhum paciente com dois tratamentos de rótulo igual.
+ * Quando começa o ciclo do tratamento `t`, como instante ISO (UTC) da meia-noite do fuso da clínica.
+ *
+ *  - parte da criação do tratamento: o que veio antes é de outro ciclo (quem voltou depois da alta);
+ *  - recua para o INÍCIO DO DIA: a recepção registra o tratamento depois da primeira sessão, no mesmo
+ *    dia da avaliação (0 a 2,3 h depois, nos 41 casos medidos na Açailândia);
+ *  - tratamento em andamento recua também até o mais velho dos irmãos que AINDA estão abertos: cervical
+ *    aberto em junho e lombar aberto em setembro são o mesmo ciclo. Irmão já finalizado nunca puxa o
+ *    início (é de ciclo anterior) — o par criado no mesmo dia já está coberto pelo início do dia.
+ * Sem data de criação não há ciclo a recortar: devolve null.
  */
-export function protocoloDoTratamento(t: { category?: string | null; local?: string | null } | null | undefined): string | null {
-  const categoria = String(t?.category ?? '').trim();
-  const local = String(t?.local ?? '').trim();
-  return categoria && local ? `${categoria} - ${local}` : null;
-}
-
-/** "PROTOCOLO 03 MESES, LOMBAR, CRÔNICO" → "PROTOCOLO 03 MESES - LOMBAR"; "PROTOCOLO 02 MESES" → "PROTOCOLO 02 MESES - N/A". Formato que não conheço → null. */
-export function protocoloDoTipo(typeName: string | null | undefined): string | null {
-  const partes = String(typeName ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-  if (partes.length === 1) return `${partes[0]} - N/A`;
-  if (partes.length >= 3) return `${partes.slice(0, -2).join(', ')} - ${partes[partes.length - 2]}`;
-  return null;
-}
-
-export interface CicloDoTratamento {
-  /** rótulo que as sessões SEM id deste tratamento carregam; null = não há o que filtrar (tratamento único) ou não sei */
-  protocolo: string | null;
-  /** false = há outro tratamento e não consigo dizer de qual é cada sessão: não grave contador */
-  separavel: boolean;
-}
-
-/**
- * Dá para separar as sessões deste tratamento das dos outros do mesmo paciente?
- *  - tratamento único: nada a separar, vale a regra antiga (`desde`);
- *  - vários, rótulo próprio conhecido e diferente dos outros: separa pelo rótulo;
- *  - vários, mesmo rótulo (renovação do mesmo protocolo): só a data de criação separa, então só vale
- *    se ela está em mãos (`temCriacao`); sem ela, não afirma;
- *  - vários e rótulo próprio desconhecido: não afirma.
- */
-export function separarCiclo(
-  idTreatment: number | null,
-  doPaciente: TratamentoDaFicha[] | undefined,
-  proprio: { category?: string | null; local?: string | null } | null | undefined,
-  temCriacao: boolean,
-): CicloDoTratamento {
-  const outros = (doPaciente ?? []).filter((t) => t.idTreatment !== idTreatment);
-  if (outros.length === 0) return { protocolo: null, separavel: true };
-  const meu = (doPaciente ?? []).find((t) => t.idTreatment === idTreatment);
-  const protocolo = protocoloDoTipo(meu?.typeName) ?? protocoloDoTratamento(proprio);
-  if (!protocolo) return { protocolo: null, separavel: false };
-  const repetido = outros.some((o) => normalizar(protocoloDoTipo(o.typeName)) === normalizar(protocolo));
-  return { protocolo, separavel: !repetido || temCriacao };
+export function inicioDoCiclo(
+  t: { created?: string | null; statusName?: string | null },
+  irmaos: ReadonlyArray<{ created?: string | null; statusName?: string | null }> = [],
+  fuso = 'America/Sao_Paulo',
+): string | null {
+  let inicio = Date.parse(t.created ?? '');
+  if (!Number.isFinite(inicio)) return null;
+  if (statusAberto(t.statusName)) {
+    for (const i of irmaos) {
+      const ms = Date.parse(i.created ?? '');
+      if (Number.isFinite(ms) && ms < inicio && statusAberto(i.statusName)) inicio = ms;
+    }
+  }
+  const dia = instanteNoFuso(new Date(inicio), fuso).slice(0, 10);
+  return localParaUtcIso(`${dia}T00:00:00`, fuso);
 }
 
 export interface ResumoDeSessoes {
@@ -134,27 +109,29 @@ const epochDe = (iso: string | null | undefined): number | null => {
 };
 
 /**
- * Conta as sessões do tratamento `idTreatment`. Devolve null quando não há NENHUMA sessão dele na
- * lista — caso em que gravar zero seria afirmar que o tratamento não tem sessão, quando talvez só
- * não tenhamos a agenda dele em mãos.
+ * Conta as sessões do PACIENTE no ciclo do tratamento `idTreatment`. Devolve null quando não há NENHUMA
+ * sessão na lista — caso em que gravar zero seria afirmar que o paciente não tem sessão, quando talvez
+ * só não tenhamos a agenda dele em mãos.
+ *
+ * `desde` é o início do ciclo (ver `inicioDoCiclo`); `idsDoPaciente`, os ids de todos os tratamentos dele
+ * (sem eles, só o id de `idTreatment` é aceito, que é o mais seguro). Sessão com id de tratamento de
+ * fora do conjunto é de outra pessoa (homônimo na agenda) e nunca entra.
  */
 export function resumirSessoes(
   schedules: SpineSchedule[],
   idTreatment: number | null,
   agoraEpoch: number,
-  criadoEm: string | null = null,
-  protocolo: string | null = null,
+  desdeIso: string | null = null,
+  idsDoPaciente: ReadonlyArray<number | null | undefined> = [],
 ): ResumoDeSessoes | null {
   if (!idTreatment) return null;
-  const desde = epochDe(criadoEm);
-  const rotulo = protocolo ? normalizar(protocolo) : null;
+  const desde = epochDe(desdeIso);
+  const meus = new Set<number>([idTreatment, ...idsDoPaciente.filter((x): x is number => typeof x === 'number')]);
   const vistos = new Set<number>();
   const sessoes = schedules.filter((s) => {
     if (ehConsulta(s) || !s.dateAttendanceUtc) return false;
-    if (s.idTreatment !== null && s.idTreatment !== idTreatment) return false;
-    // sem id (é como a ficha chega) e com outro tratamento no paciente: só o rótulo diz de quem é
-    if (s.idTreatment === null && rotulo !== null && normalizar(s.categoryName) !== rotulo) return false;
-    if (s.idTreatment === null && desde !== null) {
+    if (s.idTreatment !== null && !meus.has(s.idTreatment)) return false;
+    if (desde !== null) {
       const quando = epochDe(s.dateAttendanceUtc);
       if (quando === null || quando < desde) return false;
     }
@@ -205,9 +182,13 @@ export type EscritaDeSessao =
 
 export interface EntradaSessoes {
   schedules: SpineSchedule[];
-  tratamento: (Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> & { category?: string | null }) | null;
-  /** todos os tratamentos do paciente, como a ficha os descreve; sem isto, o tratamento é tratado como único */
-  tratamentosDoPaciente?: TratamentoDaFicha[];
+  tratamento: Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> | null;
+  /** os outros tratamentos do paciente (da lista da unidade, com data de criação e status); sem eles o ciclo parte só do tratamento do cartão */
+  irmaos?: ReadonlyArray<{ created?: string | null; statusName?: string | null }>;
+  /** ids de todos os tratamentos do paciente (da ficha); sem eles só o id do tratamento do cartão é aceito nas sessões que trazem id */
+  idsDoPaciente?: ReadonlyArray<number | null | undefined>;
+  /** fuso da clínica (`unit.spineTimezone`); o padrão é o de Brasília */
+  fuso?: string;
   agoraEpoch: number;
   /** Devolve o campo da conta pelo nome, ou null se a conta não o tem. */
   campo: (nome: string) => CampoDoCartao | null;
@@ -258,12 +239,7 @@ export function escritasDeSessoes(e: EntradaSessoes): EscritaDeSessao[] {
   texto(CAMPOS_SESSOES.GRAU, t.degree, 'grau do tratamento na franquia');
   texto(CAMPOS_SESSOES.STATUS_TRAT, t.statusName, 'status do tratamento na franquia');
 
-  // Paciente com dois tratamentos ao mesmo tempo (cervical + lombar): sem separar as sessões, cada cartão
-  // somava as dos dois. Não dá para separar → grava só o que é do tratamento, nunca um contador chutado.
-  const ciclo = separarCiclo(t.idTreatment, e.tratamentosDoPaciente, t, t.created != null);
-  if (!ciclo.separavel) return out;
-
-  const r = resumirSessoes(e.schedules, t.idTreatment, e.agoraEpoch, t.created ?? null, ciclo.protocolo);
+  const r = resumirSessoes(e.schedules, t.idTreatment, e.agoraEpoch, inicioDoCiclo(t, e.irmaos, e.fuso), e.idsDoPaciente);
   if (!r) return out; // sem agenda do tratamento em mãos: não afirma zero
 
   numerico(CAMPOS_SESSOES.REALIZADAS, r.realizadas, 'sessões atendidas na franquia');

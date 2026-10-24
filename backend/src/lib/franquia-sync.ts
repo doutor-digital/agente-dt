@@ -80,16 +80,18 @@ export function nomeParaBusca(nome: string | null | undefined): string {
  * Regra: tratamento ABERTO ganha de fechado; entre dois do mesmo tipo, o mais recente.
  * Sem `statusName` conta como aberto, igual ao `tratamentoAberto` da máquina de etapas.
  */
+export function statusAberto(statusName: string | null | undefined): boolean {
+  const n = normalizar(statusName);
+  return !n || n.includes('andamento') || n.includes('nao iniciado') || n.includes('pendente');
+}
+
 export function melhorTratamento(
   atual: SpineTreatment | null,
   novo: SpineTreatment | null,
 ): SpineTreatment | null {
   if (!atual) return novo;
   if (!novo) return atual;
-  const aberto = (t: SpineTreatment) => {
-    const n = normalizar(t.statusName);
-    return !n || n.includes('andamento') || n.includes('nao iniciado') || n.includes('pendente');
-  };
+  const aberto = (t: SpineTreatment) => statusAberto(t.statusName);
   if (aberto(atual) !== aberto(novo)) return aberto(atual) ? atual : novo;
   const quando = (t: SpineTreatment) => {
     const ms = Date.parse(t.created ?? '');
