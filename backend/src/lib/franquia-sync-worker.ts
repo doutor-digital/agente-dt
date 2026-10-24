@@ -25,8 +25,8 @@ import { planejarCamposSdr, type CampoAtual } from './campos-sdr.js';
 import { fichaDoPaciente, type SpineFicha } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
-import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
+import { SPINE_STATUS, SpineService, instanteNoFuso, somarDias, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
+import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, escolherConsultaDaJanela, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
 import {
   ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, precisaHistoricoDoExPaciente, sessaoEsquecidaComTratamentoFinalizado,
   tratamentoAberto, tratamentoFinalizado, type EntradaMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa,
@@ -1826,6 +1826,12 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
   );
 }
 
+/** A janela que a varredura pede à agenda (dias da clínica). A revisão usa a MESMA para escolher a consulta — ver `escolherConsultaDaJanela`. */
+function janelaDaAgenda(tz: string, agora: Date = new Date()): { de: string; ate: string } {
+  const hoje = instanteNoFuso(agora, tz).slice(0, 10);
+  return { de: somarDias(hoje, -DIAS_ATRAS), ate: somarDias(hoje, DIAS_FRENTE) };
+}
+
 /**
  * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
  * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
@@ -1834,7 +1840,12 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
 async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null = null): Promise<void> {
   const { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, seco } = ctx;
   ctx.tocados?.add(leadId);
-  const consulta = escolherConsulta(p.consultas);
+  // A revisão entrega as consultas da FICHA inteira (`consultas` é o próprio `historico.schedules`); a varredura, a janela
+  // da agenda. As duas escolhem a MESMA consulta — ver `escolherConsultaDaJanela`. A decisão é pela origem das consultas,
+  // não por `historico` existir: quem passar o histórico por outro motivo não muda a regra sem querer.
+  const vemDaFicha = historico !== null && p.consultas === historico.schedules;
+  const janela = vemDaFicha ? janelaDaAgenda(unit.spineTimezone || 'America/Sao_Paulo', new Date(agoraEpoch * 1000)) : null;
+  const consulta = janela ? escolherConsultaDaJanela(p.consultas, janela.de, janela.ate) : escolherConsulta(p.consultas);
   const consultaEpoch = consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null;
   const feitoPelaIa = consulta?.idSchedule
     ? !!(await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdSchedule: consulta.idSchedule } }))
@@ -2137,11 +2148,10 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
   const funis = mover ? await carregarFunis(kommo) : null;
   if (mover && !funis) logger.warn({ unit: unit.slug }, 'franquia-move: conta sem funil principal — só campos');
   const tz = unit.spineTimezone || 'America/Sao_Paulo';
-  const hoje = instanteNoFuso(new Date(), tz).slice(0, 10);
-  const somar = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+  const { de, ate } = janelaDaAgenda(tz);
 
   const [ag, tr] = await Promise.all([
-    SpineService.searchSchedules(unit, { initialDate: somar(hoje, -DIAS_ATRAS), endDate: somar(hoje, DIAS_FRENTE), rowsPerPage: 100 }),
+    SpineService.searchSchedules(unit, { initialDate: de, endDate: ate, rowsPerPage: 100 }),
     SpineService.searchTreatments(unit),
   ]);
   const agendamentos: SpineSchedule[] = ag.ok ? (ag.data?.schedules ?? []) : [];
