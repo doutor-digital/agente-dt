@@ -43,25 +43,25 @@ function cartao(guardado: { value: string; enum_id?: number }): KommoLead {
   return { id: 18137576, name: 'PACIENTE TESTE', custom_fields_values: [{ field_id: ID_FISIO, values: [guardado] }] } as unknown as KommoLead;
 }
 
-function consulta(fisio: string): SpineSchedule {
+function consulta(fisio: string, idStatus = 37): SpineSchedule {
   return {
-    idSchedule: 0, idTreatment: null, idStatus: 37, statusName: 'Agendado', clientName: 'PACIENTE TESTE', categoryName: 'AVALIAÇÃO',
+    idSchedule: 0, idTreatment: null, idStatus, statusName: 'Agendado', clientName: 'PACIENTE TESTE', categoryName: 'AVALIAÇÃO',
     physicalTherapist: fisio, dateAttendanceUtc: '2026-10-20T13:00:00Z', dateAttendanceLocal: null, dayLocal: null, timeLocal: null, isBusy: true, requiresManualValidation: false,
   } as unknown as SpineSchedule;
 }
 
 /** Roda a fase 1 de um cartão (a mesma função da varredura) e devolve o que foi gravado. */
-async function varrer(lead: KommoLead, fisioDaFranquia: string) {
+async function varrer(lead: KommoLead, fisioDaFranquia: string, campos: CampoBruto[] = CAMPOS_BRUTOS, idStatus = 37) {
   const gravacoes: Array<{ leadId: number; campo: number; valor: unknown }> = [];
   const kommo = {
     setLeadCustomFieldValue: async (leadId: number, campo: number, _t: string, valor: unknown) => { gravacoes.push({ leadId, campo, valor }); },
   } as unknown as KommoClient;
   const resumo: ResumoSync = { unit: unidade.slug, em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
   const ctx = {
-    unit: unidade, kommo, funis: null, mapa: MAPA, ops: { fisio: CAMPOS_BRUTOS[0].enums!.map((e) => e.value), categoria: [], tratamento: [] },
-    agoraEpoch: Math.floor(Date.now() / 1000), resumo, camposPorNome: camposDaConta(CAMPOS_BRUTOS),
+    unit: unidade, kommo, funis: null, mapa: _interno.mapearCampos(campos), ops: { fisio: CAMPOS_BRUTOS[0].enums!.map((e) => e.value), categoria: [], tratamento: [] },
+    agoraEpoch: Math.floor(Date.now() / 1000), resumo, camposPorNome: camposDaConta(campos),
   } as unknown as Parameters<typeof _interno.processarCartao>[0];
-  await _interno.processarCartao(ctx, lead.id, lead, { nome: 'PACIENTE TESTE', idClient: null, consultas: [consulta(fisioDaFranquia)], tratamento: null });
+  await _interno.processarCartao(ctx, lead.id, lead, { nome: 'PACIENTE TESTE', idClient: null, consultas: [consulta(fisioDaFranquia, idStatus)], tratamento: null });
   return { gravacoes, resumo };
 }
 
@@ -111,4 +111,34 @@ test('radiobutton lê pela opção guardada, igual ao select', () => {
   const mapa = _interno.mapearCampos([{ id: 7, name: '✓ Situação da consulta', type: 'radiobutton', enums: [{ id: 70, value: 'Atendido' }] }]);
   const lead = { id: 1, custom_fields_values: [{ field_id: 7, values: [{ value: 'Atendido (antigo)', enum_id: 70 }] }] } as unknown as KommoLead;
   assert.equal(_interno.valoresDoLead(lead, mapa)[CAMPOS_SYNC.SITUACAO], 'Atendido');
+});
+
+// ── a trava "a opção existe nesta conta" (literais do código: 'Atendido', 'Sim', 'Não'…) ──
+const ID_SITUACAO = 5;
+const SPINE_ATENDIDO = 42;
+const conta = (rotuloAtendido: string): CampoBruto[] => [
+  ...CAMPOS_BRUTOS,
+  { id: ID_SITUACAO, name: '✓ Situação da consulta', type: 'select', enums: [{ id: 50, value: 'Agendado' }, { id: 51, value: rotuloAtendido }] },
+];
+const cartaoAtendido = (value: string) =>
+  ({ id: 18137576, name: 'PACIENTE TESTE', custom_fields_values: [
+    { field_id: ID_FISIO, values: [{ value: 'DRA. AYLANA SILVA MENDES', enum_id: AYLANA }] },
+    { field_id: ID_SITUACAO, values: [{ value, enum_id: 51 }] },
+  ] }) as unknown as KommoLead;
+
+test('conta com "Atendido(a)": o literal "Atendido" não existe lá — não grava, não dá 400, e conta como opção ausente', async () => {
+  const { gravacoes, resumo } = await varrer(cartaoAtendido('Atendido(a)'), 'AYLANA SILVA MENDES', conta('Atendido(a)'), SPINE_ATENDIDO);
+  assert.deepEqual(gravacoes, [], 'nada de PATCH {value:"Atendido"} a cada varredura');
+  assert.equal(resumo.erros, 0);
+  assert.equal(resumo.opcoesAusentes, 1, 'a trava aparece no resumo da varredura (não fica invisível)');
+});
+
+test('conta com "Atendido": a situação que já é a do cartão não é regravada; a que muda é gravada pela opção certa', async () => {
+  const igual = await varrer(cartaoAtendido('Atendido'), 'AYLANA SILVA MENDES', conta('Atendido'), SPINE_ATENDIDO);
+  assert.deepEqual(igual.gravacoes, []);
+  assert.equal(igual.resumo.opcoesAusentes, undefined);
+  // o cartão está em "Agendado" (enum 50) e a franquia diz "Atendido": grava
+  const lead = { id: 18137576, custom_fields_values: [{ field_id: ID_FISIO, values: [{ value: 'DRA. AYLANA SILVA MENDES', enum_id: AYLANA }] }, { field_id: ID_SITUACAO, values: [{ value: 'Agendado', enum_id: 50 }] }] } as unknown as KommoLead;
+  const muda = await varrer(lead, 'AYLANA SILVA MENDES', conta('Atendido'), SPINE_ATENDIDO);
+  assert.deepEqual(muda.gravacoes, [{ leadId: 18137576, campo: ID_SITUACAO, valor: 'Atendido' }]);
 });
