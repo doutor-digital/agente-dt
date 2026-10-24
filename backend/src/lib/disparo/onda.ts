@@ -86,19 +86,24 @@ export async function concluirMontagem(ondaId: string, ler: (unit: Unit, etiquet
     const resumo = { candidatos: candidatos.length, fora, foraDoKommoDividido, montadaEm: new Date().toISOString() };
 
     if (criados === 0) {
-      await prisma.disparoOnda.update({ where: { id: ondaId }, data: { estado: 'cancelada', pausaMotivo: 'nenhuma pessoa elegível nesta etiqueta', resumo } });
+      await prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'montando' }, data: { estado: 'cancelada', pausaMotivo: 'nenhuma pessoa elegível nesta etiqueta', resumo } });
       return;
     }
     const pessoas = await prisma.disparoDestinatario.findMany({ where: { ondaId }, select: { chave: true, nome: true } });
-    await prisma.disparoOnda.update({
-      where: { id: ondaId },
+    // Só sai de `montando` se ninguém cancelou enquanto o Kommo e a franquia respondiam: onda cancelada NUNCA volta a ser aprovável.
+    const fechou = await prisma.disparoOnda.updateMany({
+      where: { id: ondaId, estado: 'montando' },
       data: { estado: 'montada', total: pessoas.length, resumo, impressao: impressaoDaOnda(definicaoDaOnda(onda), pessoas) },
     });
+    if (fechou.count !== 1) {
+      logger.warn({ onda: ondaId }, 'disparo: a onda foi cancelada durante a montagem — fica cancelada');
+      return;
+    }
     logger.info({ onda: ondaId, unit: unit.slug, total: pessoas.length, fora }, 'disparo: onda montada, esperando aprovação');
   } catch (err) {
     logger.error({ err: String(err), onda: ondaId }, 'disparo: montagem da onda falhou');
     await prisma.disparoOnda
-      .update({ where: { id: ondaId }, data: { estado: 'cancelada', pausaMotivo: `montagem falhou: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500) } })
+      .updateMany({ where: { id: ondaId, estado: 'montando' }, data: { estado: 'cancelada', pausaMotivo: `montagem falhou: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500) } })
       .catch(() => undefined);
   }
 }
