@@ -4,16 +4,27 @@
  * franquia, via divergência em todo ciclo e regravava o mesmo enum a cada varredura, com `erros: 0` — 4 cartões × 4
  * varreduras por hora. A comparação passou a ser pela opção (enum_id) com o nome ATUAL dela.
  *
- * Sem rede e sem banco: Kommo falso que anota as gravações; `funis: null` mantém a fase 2 (etapa) fora do caso.
+ * Sem rede e sem banco: Kommo falso que anota as gravações; o banco é trocado por memória (log e estado das automações,
+ * todas desligadas); `funis: null` mantém a fase 2 (etapa) fora do caso.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
+import { prisma } from './prisma.js';
+import { _semearParaTeste } from './automacoes-estado.js';
 import { _interno, camposDaConta, type CampoBruto, type ResumoSync } from './franquia-sync-worker.js';
 import { CAMPOS_SYNC, planejarEscritas } from './franquia-sync.js';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import type { SpineSchedule } from '../services/spine.service.js';
+
+// ── o banco, em memória: o logger grava em `systemLog`; as fases 1b–1e leem o estado das automações (aqui, todas desligadas) ──
+for (const [nome, valor] of Object.entries({
+  systemLog: { create: async () => ({}) },
+  unitAutomacao: { findMany: async () => [] },
+  spineLeadLink: { findFirst: async () => null, findMany: async () => [] },
+})) Object.defineProperty(prisma, nome, { value: valor, configurable: true });
+_semearParaTeste([]);
 
 const ID_FISIO = 4;
 const AYLANA = 1846204;
@@ -75,12 +86,14 @@ test('opção DIFERENTE (enum_id de outra fisio): a franquia ainda vence e grava
 
 test('enum_id que não existe mais nas opções: cai no texto do cartão, como antes (sem palpite)', async () => {
   const { gravacoes } = await varrer(cartao({ value: 'DRA. AYLANA', enum_id: 999 }), 'AYLANA SILVA MENDES');
-  assert.equal(gravacoes.length, 1, 'texto antigo e opção sumida: diverge e é regravado para o enum certo');
+  assert.deepEqual(gravacoes, [{ leadId: 18137576, campo: ID_FISIO, valor: 'DRA. AYLANA SILVA MENDES' }], 'texto antigo e opção sumida: diverge e é regravado para o enum certo');
 });
 
 test('cartão sem enum_id (dado antigo ou fonte que só traz texto): compara pelo texto, igual a antes', async () => {
   assert.deepEqual((await varrer(cartao({ value: 'DRA. AYLANA SILVA MENDES' }), 'AYLANA SILVA MENDES')).gravacoes, []);
-  assert.equal((await varrer(cartao({ value: 'DRA. AYLANA' }), 'AYLANA SILVA MENDES')).gravacoes.length, 1);
+  assert.deepEqual((await varrer(cartao({ value: 'DRA. AYLANA' }), 'AYLANA SILVA MENDES')).gravacoes, [{ leadId: 18137576, campo: ID_FISIO, valor: 'DRA. AYLANA SILVA MENDES' }]);
+  // enum_id nulo (o tipo permite): o mesmo caminho do texto, nunca Number(null) = 0
+  assert.deepEqual((await varrer(cartao({ value: 'DRA. AYLANA SILVA MENDES', enum_id: null as unknown as number }), 'AYLANA SILVA MENDES')).gravacoes, []);
 });
 
 test('valoresDoLead devolve o nome ATUAL da opção guardada; campo que não é lista segue pelo texto', () => {
@@ -92,4 +105,10 @@ test('valoresDoLead devolve o nome ATUAL da opção guardada; campo que não é 
     opcoes: { fisio: ['DRA. AYLANA SILVA MENDES', 'DRA. THAIZ DE SOUSA LIMA'], categoria: [], tratamento: [] },
   });
   assert.ok(!w.some((x) => x.campo === 'FISIO'));
+});
+
+test('radiobutton lê pela opção guardada, igual ao select', () => {
+  const mapa = _interno.mapearCampos([{ id: 7, name: '✓ Situação da consulta', type: 'radiobutton', enums: [{ id: 70, value: 'Atendido' }] }]);
+  const lead = { id: 1, custom_fields_values: [{ field_id: 7, values: [{ value: 'Atendido (antigo)', enum_id: 70 }] }] } as unknown as KommoLead;
+  assert.equal(_interno.valoresDoLead(lead, mapa)[CAMPOS_SYNC.SITUACAO], 'Atendido');
 });
