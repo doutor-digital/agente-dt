@@ -54,6 +54,17 @@ export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>, agora = 
   return marcados;
 }
 
+/** Um `enviando` que passou disto morreu com o processo. Não dá para saber se saiu: fica registrado como INCERTO (conta no teto, nunca é reenviado). */
+const ENVIO_PRESO_MS = 15 * 60_000;
+
+export async function fecharEnviosPresos(agora = Date.now()): Promise<number> {
+  const r = await prisma.disparoDestinatario.updateMany({
+    where: { estado: 'enviando', enviadoEm: { lt: new Date(agora - ENVIO_PRESO_MS) } },
+    data: { estado: 'falhou', motivo: 'INCERTO: o processo caiu durante o envio. Confira no WhatsApp antes de mandar de novo (nunca reenviado sozinho)' },
+  });
+  return r.count;
+}
+
 export async function cancelarMontagensPresas(agora = Date.now()): Promise<number> {
   const r = await prisma.disparoOnda.updateMany({
     where: { estado: 'montando', criadoEm: { lt: new Date(agora - MONTAGEM_PRESA_MS) } },
@@ -63,6 +74,8 @@ export async function cancelarMontagensPresas(agora = Date.now()): Promise<numbe
 }
 
 export async function rodadaDoDisparo(): Promise<void> {
+  const presos = await fecharEnviosPresos();
+  if (presos > 0) logger.warn({ presos }, 'disparo: envios que ficaram no meio (processo caiu) foram marcados como INCERTOS');
   const presas = await cancelarMontagensPresas();
   if (presas > 0) logger.warn({ presas }, 'disparo: montagens interrompidas foram canceladas');
   const ondas = await prisma.disparoOnda.findMany({ where: { estado: 'aprovada' }, orderBy: { criadoEm: 'asc' }, include: { unit: true } });

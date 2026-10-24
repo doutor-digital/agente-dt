@@ -75,6 +75,15 @@ test('enviarTemplate: recusa da Meta (4xx) é definitiva; 5xx, queda e timeout s
   assert.deepEqual([semId.ok, semId.incerto], [false, true], '200 sem id da mensagem: não dá para afirmar nada');
 });
 
+test('enviarTemplate: só a recusa ASSINADA pela Meta é definitiva — gateway/proxy (4xx sem corpo da Meta) é incerto', async () => {
+  fetchFalso(() => new Response('<html>Bad gateway</html>', { status: 502 }));
+  assert.equal((await enviarTemplate(CRED, { para: '5563991021043', nome: 'm', idioma: 'pt_BR' })).incerto, true, '502 de proxy');
+  fetchFalso(() => new Response('Request Timeout', { status: 408 }));
+  assert.equal((await enviarTemplate(CRED, { para: '5563991021043', nome: 'm', idioma: 'pt_BR' })).incerto, true, '408 sem corpo da Meta');
+  fetchFalso(() => json({ error: { code: 130429, message: 'rate limit' } }, 429));
+  assert.equal((await enviarTemplate(CRED, { para: '5563991021043', nome: 'm', idioma: 'pt_BR' })).incerto, false, '429 com erro da Meta: não entrou');
+});
+
 test('enviarTemplate: telefone fora do formato nem chega na rede', async () => {
   const pedidos = fetchFalso(() => json({}));
   const r = await enviarTemplate(CRED, { para: '(63) 99102-1043', nome: 'm', idioma: 'pt_BR' });

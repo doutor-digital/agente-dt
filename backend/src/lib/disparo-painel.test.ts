@@ -32,6 +32,8 @@ test('MODO SECO fica gritado no topo: aprovar não manda nada', () => {
   assert.match(montarPainelDaOnda(base()), /MODO SECO[\s\S]*Aprovar NÃO manda mensagem nenhuma/);
   assert.match(montarPainelDaOnda(base({ modo: 'ligado' })), /UNIDADE LIGADA/);
   assert.match(montarPainelDaOnda(base({ modo: 'ligado', listaDeTeste: ['5563991021043'] })), /lista de teste: só 1 número/);
+  assert.match(montarPainelDaOnda(base({ modo: 'ligado', listaDeTeste: [] })), /SEM lista de teste[\s\S]*ninguém recebe/);
+  assert.match(montarPainelDaOnda(base({ modo: 'ligado', listaDeTeste: null })), /TODOS os aprovados recebem/);
 });
 
 test('telefone aparece mascarado e nome do paciente é escapado', () => {

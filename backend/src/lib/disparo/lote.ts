@@ -50,7 +50,7 @@ export interface DadosDeGravacao {
 export interface Porto {
   agora(): Date;
   modoDaUnidade(slug: string): Modo;
-  /** Telefones (só dígitos) que podem receber de verdade; `null` = sem restrição. Existe para provar em produção só no número do João. */
+  /** Telefones (só dígitos) que podem receber de verdade; `null` = todos (decisão explícita, `*`); conjunto vazio = ninguém. Existe para provar em produção só no número do João. */
   listaDeTeste(): ReadonlySet<string> | null;
   /** Mensagens da unidade desde `desde`: enviadas (ligado) ou "receberia" gravadas (seco). */
   contarNaJanela(unitId: string, desde: Date, modo: 'ligado' | 'seco'): Promise<number>;
@@ -246,6 +246,10 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
   }
 
   const teste = real ? porto.listaDeTeste() : null;
+  if (teste && teste.size === 0) {
+    porto.log('warn', { unit: u.slug }, 'disparo: unidade LIGADA mas sem lista de teste (DISPARO_LISTA_DE_TESTE) — ninguém recebe; use * para liberar todos');
+    return { ...r, parou: 'ligada sem lista de teste: ninguém recebe' };
+  }
   let seguidas = 0;
   let adiados = 0;
   for (const onda of ativas) {

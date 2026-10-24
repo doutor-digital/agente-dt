@@ -31,10 +31,12 @@ test('só liga quem o João (ou o .env) pôs na lista; o resto continua seco', (
   assert.equal(porto.modoDaUnidade('doutor-hernia-canaa'), 'desligado', 'a tela manda mais que o .env');
 });
 
-test('lista de teste: só o número do João; lixo na variável = ninguém', () => {
-  assert.equal(listaDeTesteDoAmbiente({} as NodeJS.ProcessEnv), null);
+test('lista de teste: fail-closed — ausente, vazia ou lixo = NINGUÉM; só "*" solta todos', () => {
+  assert.equal(listaDeTesteDoAmbiente({} as NodeJS.ProcessEnv)!.size, 0, 'ausente: ninguém');
+  assert.equal(listaDeTesteDoAmbiente({ DISPARO_LISTA_DE_TESTE: '  ' } as NodeJS.ProcessEnv)!.size, 0);
+  assert.equal(listaDeTesteDoAmbiente({ DISPARO_LISTA_DE_TESTE: 'abc, 123' } as NodeJS.ProcessEnv)!.size, 0, 'lixo: ninguém');
   assert.deepEqual([...listaDeTesteDoAmbiente({ DISPARO_LISTA_DE_TESTE: '(63) 99102-1043' } as NodeJS.ProcessEnv)!], ['5563991021043']);
-  assert.equal(listaDeTesteDoAmbiente({ DISPARO_LISTA_DE_TESTE: 'abc, 123' } as NodeJS.ProcessEnv)!.size, 0);
+  assert.equal(listaDeTesteDoAmbiente({ DISPARO_LISTA_DE_TESTE: '*' } as NodeJS.ProcessEnv), null, '* = todos, deliberado');
 });
 
 test('agendamento futuro: marcado/confirmado/remarcado barram; passado e desmarcado não', () => {

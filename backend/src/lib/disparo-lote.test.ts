@@ -159,10 +159,13 @@ test('LIGADO: com lista de teste só esses números recebem, e a onda não concl
   assert.deepEqual(t.chamadas.concluidas, []);
 });
 
-test('LIGADO: lista de teste vazia/ilegível = ninguém recebe (não "todo mundo")', async () => {
+test('LIGADO sem lista de teste (vazia/ausente/ilegível) = ninguém recebe, e o log diz por quê', async () => {
   const t = montar({ modo: 'ligado', quantos: 3, teste: [] });
-  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
   assert.deepEqual(t.chamadas.enviar, []);
+  assert.match(r.parou ?? '', /ligada sem lista de teste/);
+  assert.ok(t.chamadas.logs.some((l) => /sem lista de teste/.test(l)));
+  assert.ok([...t.estados.values()].every((e) => e.estado === 'pendente'));
 });
 
 test('LIGADO: quem outro processo já reivindicou não recebe de novo', async () => {

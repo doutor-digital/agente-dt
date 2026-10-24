@@ -16,11 +16,17 @@ import type { Destino, Modo, Porto } from './lote.js';
 /** O id desta automação no catálogo (`lib/automacoes.ts`). */
 export const AUTOMACAO_DISPARO = 'disparo-campanha';
 
-/** `DISPARO_LISTA_DE_TESTE=5563991021043,…`: com o disparo LIGADO, só esses números recebem de verdade. */
+/**
+ * `DISPARO_LISTA_DE_TESTE`: quem pode receber de verdade com a unidade LIGADA.
+ *  - `5563991021043,…` → só esses números;
+ *  - `*` → todos os aprovados (a decisão deliberada de soltar a onda, que o João toma uma vez, depois da prova);
+ *  - vazia, ausente ou ilegível → NINGUÉM. Ligar uma unidade na tela não pode virar "manda para a lista inteira"
+ *    sem alguém ter dito isso com todas as letras.
+ * Devolve `null` para "todos" e um conjunto (possivelmente vazio) para "só estes".
+ */
 export function listaDeTesteDoAmbiente(env: NodeJS.ProcessEnv = process.env): ReadonlySet<string> | null {
   const bruto = (env.DISPARO_LISTA_DE_TESTE ?? '').trim();
-  if (!bruto) return null;
-  // Lista preenchida mas ilegível = ninguém recebe (não "todo mundo").
+  if (bruto === '*') return null;
   return new Set(bruto.split(',').map((t) => telefoneWhatsapp(t) ?? '').filter(Boolean));
 }
 

@@ -260,7 +260,10 @@ export async function enviarTemplate(
     const { ok, detalhe, status } = await chamar(cred, montarCorpoDoTemplate(t), { timeoutMs: opcoes.timeoutMs ?? TIMEOUT_DO_TEMPLATE_MS });
     const wamid = (detalhe as { messages?: Array<{ id?: string }> } | null)?.messages?.[0]?.id ?? null;
     if (ok && !wamid) return { ok: false, wamid: null, detalhe, incerto: true };
-    return { ok, wamid, detalhe, incerto: !ok && status >= 500 };
+    // Definitiva só a recusa que a PRÓPRIA Meta assina (corpo com `error.code`) e que não é 5xx. Gateway, proxy, HTML,
+    // 408/502…: não dá para saber se a mensagem entrou, e incerto nunca é reenviado.
+    const recusaDaMeta = typeof (detalhe as { error?: { code?: unknown } } | null)?.error?.code === 'number';
+    return { ok, wamid, detalhe, incerto: !ok && (status >= 500 || !recusaDaMeta) };
   } catch (err) {
     return { ok: false, wamid: null, detalhe: String(err), incerto: true };
   }
