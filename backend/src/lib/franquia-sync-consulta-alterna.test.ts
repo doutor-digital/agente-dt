@@ -19,8 +19,8 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { _semearParaTeste } from './automacoes-estado.js';
 import { _interno, camposDaConta, historicoDoPaciente, type CampoBruto, type ResumoSync } from './franquia-sync-worker.js';
-import { escolherConsulta, escolherConsultaDaJanela, somarDias } from './franquia-sync.js';
-import { instanteNoFuso } from '../services/spine.service.js';
+import { escolherConsulta, escolherConsultaDaJanela } from './franquia-sync.js';
+import { instanteNoFuso, somarDias } from '../services/spine.service.js';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import type { SpineSchedule } from '../services/spine.service.js';
 
@@ -204,4 +204,15 @@ test('a varredura não ganhou chamada nenhuma à franquia (o conserto está só 
   const { kommo, lead } = kommoQueGuarda();
   for (let i = 0; i < 4; i++) await chamar('varredura', unit, kommo, lead(), 26366663);
   assert.deepEqual(leituras, [], 'nenhuma leitura de ficha na varredura');
+});
+
+test('a regra segue a ORIGEM das consultas, não a existência do histórico: janela + histórico no argumento continua sendo a regra da varredura', async () => {
+  fichas.set(26366668, NA_FICHA.map(raw));
+  const unit = unidade();
+  const { kommo, lead, campos } = kommoQueGuarda();
+  const hist = await historicoDoPaciente(unit, 26366668);
+  assert.ok(hist);
+  // consultas = a janela (outro array), histórico presente: a escolha é a da varredura (janela sozinha), não a da ficha
+  await _interno.processarCartao(varredura(unit, kommo), lead().id, lead(), { nome: 'PACIENTE TESTE', idClient: 26366668, consultas: JANELA, tratamento: null }, hist);
+  assert.equal(campos.get(ID.SITUACAO), 'Desmarcado');
 });

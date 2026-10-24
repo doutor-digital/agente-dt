@@ -25,8 +25,8 @@ import { planejarCamposSdr, type CampoAtual } from './campos-sdr.js';
 import { fichaDoPaciente, type SpineFicha } from '../services/spine.service.js';
 import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
-import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
-import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, escolherConsultaDaJanela, melhorTratamento, somarDias, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
+import { SPINE_STATUS, SpineService, instanteNoFuso, somarDias, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
+import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, escolherConsultaDaJanela, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
 import {
   ETAPA, JORNADA, MOTIVO_PERDA, horasAteNegociacao, estadoDoMove, planejarMovimento, precisaHistoricoDoExPaciente, sessaoEsquecidaComTratamentoFinalizado,
   tratamentoAberto, tratamentoFinalizado, type EntradaMovimento, type EtapaAtual, type Funil, type Movimento, type TratamentoParaEtapa,
@@ -1832,9 +1832,12 @@ function janelaDaAgenda(tz: string, agora: Date = new Date()): { de: string; ate
 async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null = null): Promise<void> {
   const { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, seco } = ctx;
   ctx.tocados?.add(leadId);
-  // `historico` só vem da revisão, que lê a ficha inteira; a varredura lê a janela. Os dois escolhem a MESMA consulta.
-  const janela = janelaDaAgenda(unit.spineTimezone || 'America/Sao_Paulo', new Date(agoraEpoch * 1000));
-  const consulta = historico ? escolherConsultaDaJanela(p.consultas, janela.de, janela.ate) : escolherConsulta(p.consultas);
+  // A revisão entrega as consultas da FICHA inteira (`consultas` é o próprio `historico.schedules`); a varredura, a janela
+  // da agenda. As duas escolhem a MESMA consulta — ver `escolherConsultaDaJanela`. A decisão é pela origem das consultas,
+  // não por `historico` existir: quem passar o histórico por outro motivo não muda a regra sem querer.
+  const vemDaFicha = historico !== null && p.consultas === historico.schedules;
+  const janela = vemDaFicha ? janelaDaAgenda(unit.spineTimezone || 'America/Sao_Paulo', new Date(agoraEpoch * 1000)) : null;
+  const consulta = janela ? escolherConsultaDaJanela(p.consultas, janela.de, janela.ate) : escolherConsulta(p.consultas);
   const consultaEpoch = consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null;
   const feitoPelaIa = consulta?.idSchedule
     ? !!(await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdSchedule: consulta.idSchedule } }))
