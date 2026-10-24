@@ -153,7 +153,7 @@ async function etapasDosLeads(unit: {
   return mapa;
 }
 
-export function regraPara(
+function regraPara(
   regras: Array<{ statusId: number; lossReasonId: number | null; steps: unknown }>,
   estado: EstadoDoLead,
 ): Degrau[] | null {
@@ -557,7 +557,7 @@ async function enviarDegrau(
       // responder ao último toque, o cartão vai pra PERDIDO "Não interagiu" (parados-worker).
       // Cartão que já está em PERDIDO/GANHO NÃO recebe: o "Encerrada" do carimbo de etapa vale
       // (gravarStatusConversa lê o cartão e decide — lib/status-conversa.ts).
-      void carimbarSemResposta(unitCompleta, leadId);
+      void carimbarSemResposta(unitCompleta, leadId, kommo);
     }
 
     logger.info(
@@ -566,8 +566,8 @@ async function enviarDegrau(
         leadId,
         degrau: indice + 1,
         pulados: indice - conv.followUpStep,
-        // Para medir quanto da régua sai para cartão PERDIDO (regras de recuperação por motivo de perda).
-        ...(statusId === 143 ? { etapa: 'PERDIDO' } : {}),
+        // Para medir quanto da régua sai para cartão em 143 (PERDIDO no funil COMERCIAL: regras de recuperação por motivo de perda).
+        statusId,
       },
       'follow-up: reengajamento enviado',
     );

@@ -11,8 +11,8 @@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
-import { createKommoClient, type KommoClient, type KommoFieldType, type KommoLead } from './kommo.service.js';
-import { cartaoEncerrado, decidirStatusConversa, type OrigemDoStatus, type StatusConversa } from '../lib/status-conversa.js';
+import { createKommoClient, type KommoClient, type KommoFieldType } from './kommo.service.js';
+import { cartaoEncerrado, decidirStatusConversa, type OrigemDoStatus, type StatusAutomatico, type StatusConversa } from '../lib/status-conversa.js';
 import type { Unit } from '@prisma/client';
 
 export const CAMPOS_DIGITAL = {
@@ -54,32 +54,35 @@ export async function gravarCampoDigital(
 /**
  * O ÚNICO caminho de escrita de "⬢ Status da conversa" para quem não é o carimbo de etapa (IA, handoff, follow-up).
  * Lê o cartão e, se ele está numa etapa que encerra a conversa (GANHO / PERDIDO), NÃO grava: o "Encerrada" do carimbo
- * de etapa vale (ver lib/status-conversa.ts). `lead` evita uma segunda leitura de quem já leu o cartão.
- * Se o cartão não pôde ser lido, também não grava — o campo é informativo e o próximo turno o reescreve; gravar às
- * cegas é exatamente como o "Encerrada" foi desfeito. Devolve true só quando gravou.
+ * de etapa vale (ver lib/status-conversa.ts). Devolve true só quando gravou.
+ *
+ * Cartão que não deu para ler: grava, como sempre gravou (e avisa no log). O campo é informativo, mas "Sem resposta"
+ * é o sinal que o parados-worker lê para mandar o lead a PERDIDO — perdê-lo por um 429 deixaria o lead parado para
+ * sempre, e um "Encerrada" sobrescrito é só cosmético.
+ *
+ * NÃO cobre a corrida de milissegundos em que a equipe move o cartão para PERDIDO entre a leitura e a gravação.
  */
 export async function gravarStatusConversa(
   unit: Unit,
   kommo: KommoClient,
   leadId: number,
-  novo: StatusConversa,
+  novo: StatusAutomatico,
   origem: OrigemDoStatus,
-  lead?: Pick<KommoLead, 'status_id' | 'pipeline_id'> | null,
 ): Promise<boolean> {
-  const cartao = lead ?? (await kommo.getLead(leadId).catch(() => null));
+  const cartao = await kommo.getLead(leadId).catch(() => null);
   if (!cartao) {
-    logger.warn({ unit: unit.slug, leadId, tentou: novo, origem }, 'status-conversa: não gravei — não consegui ler o cartão');
-    return false;
-  }
-  const esquema = await esquemaDaUnidade(unit, kommo);
-  const nomeDaEtapa = esquema.nomeDoStatus(cartao.pipeline_id, cartao.status_id)?.status ?? null;
-  const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, nomeDaEtapa));
-  if (!decisao.gravar) {
-    logger.info(
-      { unit: unit.slug, leadId, tentou: novo, origem, etapa: nomeDaEtapa ?? cartao.status_id },
-      `status-conversa: não gravei — ${decisao.motivo}`,
-    );
-    return false;
+    logger.warn({ unit: unit.slug, leadId, tentou: novo, origem }, 'status-conversa: não consegui ler o cartão — gravei sem conferir a etapa');
+  } else {
+    const esquema = await esquemaDaUnidade(unit, kommo);
+    const nomeDaEtapa = esquema.nomeDoStatus(cartao.pipeline_id, cartao.status_id)?.status ?? null;
+    const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, nomeDaEtapa));
+    if (!decisao.gravar) {
+      logger.info(
+        { unit: unit.slug, leadId, tentou: novo, origem, etapa: nomeDaEtapa ?? cartao.status_id },
+        `status-conversa: não gravei — ${decisao.motivo}`,
+      );
+      return false;
+    }
   }
   return gravarCampoDigital(unit, kommo, leadId, CAMPOS_DIGITAL.STATUS_CONVERSA, 'select', novo);
 }

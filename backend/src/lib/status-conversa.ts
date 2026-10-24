@@ -12,14 +12,19 @@
  *
  * A regra, num lugar só: a ETAPA é a verdade (decisão do João já registrada em carimbo-etapa.ts). Cartão em
  * etapa de encerramento (GANHO / CONCLUÍDO, PERDIDO) está "Encerrada", e nenhum escritor automático desfaz
- * isso. Quem tira o cartão do "Encerrada" é a equipe movendo-o de etapa — depois disso o próximo turno da IA
- * volta a escrever o campo normalmente. Quem pode escrever "Encerrada" é só o carimbo de etapa.
+ * isso. Quem tira o cartão do "Encerrada" é a equipe movendo-o de etapa — depois disso a IA volta a escrever o
+ * campo no próximo turno (se a IA estiver pausada, o "Encerrada" fica até alguém ou a escada reescrever: ninguém
+ * limpa o campo ao reabrir o cartão — lacuna que já existia, fora deste conserto). Quem escreve "Encerrada" é só o
+ * carimbo de etapa.
  *
  * Este arquivo é PURO (sem rede, sem banco): a decisão e a definição de "etapa que encerra".
  */
 import { normalizarNome } from './kommo-schema.js';
 
 export type StatusConversa = 'Aguardando lead' | 'Respondendo' | 'Sem resposta' | 'Encerrada';
+
+/** O que os escritores automáticos podem pedir. "Encerrada" não está aqui: é só do carimbo de etapa. */
+export type StatusAutomatico = Exclude<StatusConversa, 'Encerrada'>;
 
 export const STATUS_ENCERRADA: StatusConversa = 'Encerrada';
 
@@ -41,16 +46,23 @@ export function etapaEncerraConversa(nomeEtapa: string | null | undefined): bool
 }
 
 /**
- * O cartão está numa etapa que encerra a conversa? O NOME da etapa manda quando se conhece: 142/143 são os mesmos
- * ids em todo funil e só o nome diz o que significam ("PERDIDO" no COMERCIAL, mas "ALTA" e "TRATAMENTO CANCELADO" no
- * TRATAMENTO — que o carimbo de etapa NÃO trata como encerramento da conversa). Sem o nome (esquema velho, funil
- * desconhecido) cai no id, que é o que o Kommo garante: 142 = fechado e ganho, 143 = fechado e perdido.
+ * Etapas de 142/143 que NÃO encerram a conversa: no funil TRATAMENTO os mesmos ids se chamam "ALTA" e "TRATAMENTO
+ * CANCELADO", e o carimbo de etapa só carimba o fim do tratamento ali, nunca "Encerrada".
+ */
+const ETAPAS_DE_TRATAMENTO = new Set([normalizarNome('ALTA'), normalizarNome('TRATAMENTO CANCELADO')]);
+
+/**
+ * O cartão está numa etapa que encerra a conversa? 142/143 são os mesmos ids em todo funil e só o nome diz o que
+ * significam. Então: o nome que encerra (PERDIDO, GANHO…) vale; o nome que o carimbo sabe que NÃO encerra (ALTA,
+ * TRATAMENTO CANCELADO) não vale; qualquer outro nome — ou nenhum — cai no id, que é o que o Kommo garante
+ * (142 = fechado e ganho, 143 = fechado e perdido), como a guarda antiga do turno da IA já fazia.
  */
 export function cartaoEncerrado(
   lead: { status_id?: number | null } | null | undefined,
   nomeDaEtapa: string | null | undefined,
 ): boolean {
-  if (nomeDaEtapa && normalizarNome(nomeDaEtapa)) return etapaEncerraConversa(nomeDaEtapa);
+  if (etapaEncerraConversa(nomeDaEtapa)) return true;
+  if (ETAPAS_DE_TRATAMENTO.has(normalizarNome(nomeDaEtapa ?? ''))) return false;
   return lead?.status_id != null && IDS_DE_ENCERRAMENTO.has(lead.status_id);
 }
 

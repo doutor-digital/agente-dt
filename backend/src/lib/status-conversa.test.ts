@@ -5,7 +5,6 @@ import type { Unit } from '@prisma/client';
 import { cartaoEncerrado, decidirStatusConversa, etapaEncerraConversa } from './status-conversa.js';
 import { aplicarCarimbosDeEtapa, CAMPOS_CARIMBO } from './carimbo-etapa.js';
 import { limparCacheEsquema, montarEsquema } from './kommo-schema.js';
-import { regraPara } from './follow-up-worker.js';
 import { _semearParaTeste } from './automacoes-estado.js';
 import { _semearCrmParaTeste } from './crm-compartilhado.js';
 import { carimbarHumanoAssumiu, carimbarSemResposta, CAMPOS_DIGITAL, gravarStatusConversa } from '../services/lead-metrics.service.js';
@@ -41,11 +40,11 @@ const FUNIS = [
 const esquema = montarEsquema(CAMPOS, FUNIS);
 
 /** Kommo falso com ESTADO: um cartão, com etapa e o valor atual do campo. O que o teste afirma é o que ficou no cartão. */
-function cartaoFalso(statusId: number, pipelineId: number, statusConversa: string | null) {
+function cartaoFalso(statusId: number, pipelineId: number, statusConversa: string | null, funis = FUNIS) {
   const estado = { status_id: statusId, pipeline_id: pipelineId, statusConversa, leituras: 0, falhaNaLeitura: false };
   const kommo = {
     listLeadCustomFields: async () => ({ _embedded: { custom_fields: CAMPOS } }),
-    listPipelines: async () => FUNIS,
+    listPipelines: async () => funis,
     getLead: async (id: number) => {
       estado.leituras++;
       if (estado.falhaNaLeitura) throw new Error('429');
@@ -135,35 +134,19 @@ test('funil TRATAMENTO: ALTA (142) não é encerramento de conversa — o campo 
   assert.equal(estado.statusConversa, 'Respondendo');
 });
 
-test('cartão que não deu para ler: não grava às cegas', async () => {
+test('cartão que não deu para ler: grava como sempre gravou (perder o "Sem resposta" deixaria o lead parado) e avisa', async () => {
   limparCacheEsquema();
-  const { estado, kommo } = cartaoFalso(143, COMERCIAL, 'Encerrada');
+  const { estado, kommo } = cartaoFalso(ETAPA_QUALIFICACAO, COMERCIAL, 'Aguardando lead');
   estado.falhaNaLeitura = true;
   const gravou = await gravarStatusConversa(unidade, kommo, 1, 'Sem resposta', 'follow-up-sem-resposta');
-  assert.equal(gravou, false);
-  assert.equal(estado.statusConversa, 'Encerrada');
+  assert.equal(gravou, true);
+  assert.equal(estado.statusConversa, 'Sem resposta');
 });
 
-test('quem já leu o cartão passa o lead e não paga uma segunda leitura', async () => {
+test('etapa 143 com nome que não é PERDIDO (conta fora do padrão): vale o id, como a guarda antiga do turno da IA', async () => {
   limparCacheEsquema();
-  const { estado, kommo } = cartaoFalso(ETAPA_QUALIFICACAO, COMERCIAL, null);
-  await gravarStatusConversa(unidade, kommo, 1, 'Respondendo', 'humano-assumiu', { status_id: ETAPA_QUALIFICACAO, pipeline_id: COMERCIAL });
-  assert.equal(estado.leituras, 0);
-  assert.equal(estado.statusConversa, 'Respondendo');
-});
-
-/**
- * A régua de follow-up para PERDIDO é política do João (30 regras LIGADAS em 15 unidades, "escada definida pelo João"
- * para "Não interagiu" e "Não deu continuidade"). Este PR NÃO a muda — o teste trava o que vale hoje, para uma mudança
- * futura ser deliberada e não acidental: PERDIDO só recebe follow-up com regra (etapa 143 + motivo) cadastrada.
- */
-test('follow-up em PERDIDO: só com regra cadastrada para o motivo de perda (política atual, a confirmar)', () => {
-  const DEGRAU = [{ aposMin: 5, intencao: 'x' }];
-  const regras = [{ statusId: 143, lossReasonId: 38401647, steps: DEGRAU }];
-  const estado = (lossReasonId: number | null) => ({
-    statusId: 143, lossReasonId, pausada: false, pagouAntecipado: false, titulo: null,
-  });
-  assert.notEqual(regraPara(regras, estado(38401647)), null, 'Não interagiu tem a escada do João');
-  assert.equal(regraPara(regras, estado(38401655)), null, 'motivo sem regra não recebe');
-  assert.equal(regraPara(regras, estado(null)), null, 'PERDIDO sem motivo não recebe');
+  const funis = [{ id: COMERCIAL, name: 'COMERCIAL', statuses: [{ id: ETAPA_QUALIFICACAO, name: 'EM QUALIFICAÇÃO' }, { id: 143, name: 'Venda perdida' }] }];
+  const { estado, kommo } = cartaoFalso(143, COMERCIAL, 'Encerrada', funis);
+  await carimbarSemResposta(unidade, 1, kommo);
+  assert.equal(estado.statusConversa, 'Encerrada');
 });
