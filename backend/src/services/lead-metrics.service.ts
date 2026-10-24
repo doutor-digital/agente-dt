@@ -87,8 +87,9 @@ export async function gravarStatusConversa(
         'status-conversa: não consegui ler o cartão — gravei sem conferir a etapa',
       );
     } else {
-      const esquema = await esquemaDaUnidade(unit, kommo);
-      const nomeDaEtapa = esquema.nomeDoStatus(cartao.pipeline_id, cartao.status_id)?.status ?? null;
+      // Esquema que não carregou: sem o nome da etapa, vale o id (142/143) — não bloqueia a escrita por isso.
+      const esquema = await esquemaDaUnidade(unit, kommo).catch(() => null);
+      const nomeDaEtapa = esquema?.nomeDoStatus(cartao.pipeline_id, cartao.status_id)?.status ?? null;
       // Sem o carimbo como dono, vale só a guarda antiga por id (142/143 em qualquer funil), que é o que o turno da IA já tinha.
       const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, carimboEDono ? nomeDaEtapa : null));
       if (!decisao.gravar) {

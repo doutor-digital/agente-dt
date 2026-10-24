@@ -174,3 +174,11 @@ test('unidade SEM carimbo de etapa: ninguém grava "Encerrada", então handoff e
     _semearParaTeste([{ slug: 'doutor-hernia-acailandia', automacao: 'carimbo-etapa', estado: 'ligado' }]);
   }
 });
+
+test('esquema da conta que não carregou: o cartão em 143 segue protegido pelo id, e o cartão aberto grava', async () => {
+  limparCacheEsquema();
+  const { estado, kommo } = cartaoFalso(143, COMERCIAL, 'Encerrada');
+  (kommo as { listPipelines: () => Promise<never> }).listPipelines = async () => { throw new Error('500'); };
+  await gravarStatusConversa(unidade, kommo, 1, 'Respondendo', 'humano-assumiu');
+  assert.equal(estado.statusConversa, 'Encerrada');
+});
