@@ -10,7 +10,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
-import { freiosDoAmbiente } from './disparo/freios.js';
+import { avisosDoAmbiente, freiosDoAmbiente } from './disparo/freios.js';
 import { rodarUnidade, type OndaNoLote } from './disparo/lote.js';
 import { portoReal } from './disparo/porto.js';
 import { definicaoDaOnda } from './disparo/onda.js';
@@ -23,11 +23,19 @@ const HORAS_OLHANDO_SAIR = 72;
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 
-/** Quem recebeu e depois escreveu SAIR vira `saiu` — é isso que alimenta o freio por SAIR. */
-export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>): Promise<number> {
+let ultimaVarreduraDeSair = 0;
+/** A busca por SAIR lê texto de mensagem: de 10 em 10 minutos basta (a reconferência na hora do envio é a que protege). */
+const VARRER_SAIR_A_CADA_MS = Number(process.env.DISPARO_SAIR_A_CADA_MS) > 0 ? Number(process.env.DISPARO_SAIR_A_CADA_MS) : 600_000;
+/** Montagem que passou disto sem terminar morreu junto com o processo (deploy): cancela com o motivo em vez de ficar "montando…" para sempre. */
+const MONTAGEM_PRESA_MS = 30 * 60_000;
+
+/** Quem recebeu e DEPOIS escreveu SAIR vira `saiu` — é isso que alimenta o freio por SAIR. */
+export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>, agora = Date.now()): Promise<number> {
+  if (agora - ultimaVarreduraDeSair < VARRER_SAIR_A_CADA_MS) return 0;
+  ultimaVarreduraDeSair = agora;
   const enviados = await prisma.disparoDestinatario.findMany({
-    where: { estado: 'enviado', kommoLeadId: { not: null }, enviadoEm: { gte: new Date(Date.now() - HORAS_OLHANDO_SAIR * 3_600_000) } },
-    select: { id: true, unitId: true, kommoLeadId: true },
+    where: { estado: 'enviado', kommoLeadId: { not: null }, enviadoEm: { gte: new Date(agora - HORAS_OLHANDO_SAIR * 3_600_000) } },
+    select: { id: true, unitId: true, kommoLeadId: true, enviadoEm: true },
   });
   let marcados = 0;
   const porUnidade = new Map<string, typeof enviados>();
@@ -35,8 +43,10 @@ export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>): Promise
   for (const [unitId, lista] of porUnidade) {
     const unit = unidades.get(unitId) ?? (await prisma.unit.findUnique({ where: { id: unitId } }));
     if (!unit) continue;
-    const sairam = await leadsQuePediramSair(unit, lista.map((e) => e.kommoLeadId as number));
-    const ids = lista.filter((e) => sairam.has(e.kommoLeadId as number)).map((e) => e.id);
+    const desde = new Date(Math.min(...lista.map((e) => e.enviadoEm!.getTime())));
+    const sairam = await leadsQuePediramSair(unit, lista.map((e) => e.kommoLeadId as number), desde);
+    // Só vale o pedido feito DEPOIS do envio dessa pessoa: quem já tinha pedido antes foi barrado na reconferência.
+    const ids = lista.filter((e) => (sairam.get(e.kommoLeadId as number)?.getTime() ?? 0) >= e.enviadoEm!.getTime()).map((e) => e.id);
     if (ids.length === 0) continue;
     const r = await prisma.disparoDestinatario.updateMany({ where: { id: { in: ids }, estado: 'enviado' }, data: { estado: 'saiu', motivo: 'respondeu SAIR depois do envio' } });
     marcados += r.count;
@@ -44,7 +54,17 @@ export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>): Promise
   return marcados;
 }
 
+export async function cancelarMontagensPresas(agora = Date.now()): Promise<number> {
+  const r = await prisma.disparoOnda.updateMany({
+    where: { estado: 'montando', criadoEm: { lt: new Date(agora - MONTAGEM_PRESA_MS) } },
+    data: { estado: 'cancelada', pausaMotivo: 'a montagem foi interrompida (reinício do servidor?): monte a onda de novo' },
+  });
+  return r.count;
+}
+
 export async function rodadaDoDisparo(): Promise<void> {
+  const presas = await cancelarMontagensPresas();
+  if (presas > 0) logger.warn({ presas }, 'disparo: montagens interrompidas foram canceladas');
   const ondas = await prisma.disparoOnda.findMany({ where: { estado: 'aprovada' }, orderBy: { criadoEm: 'asc' }, include: { unit: true } });
   if (ondas.length === 0) return;
   const unidades = new Map<string, Unit>(ondas.map((o) => [o.unitId, o.unit]));
@@ -88,7 +108,8 @@ async function talvezRodar(): Promise<void> {
 export function startDisparoWorker(): void {
   if (timer) return;
   timer = setInterval(() => void talvezRodar(), PASSO_MS);
-  logger.info({ passoMs: PASSO_MS }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
+  logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente() }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
+  for (const aviso of avisosDoAmbiente()) logger.warn(aviso);
 }
 
 export function stopDisparoWorker(): void {

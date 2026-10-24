@@ -58,19 +58,22 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
         where: { ondaId, estado: 'pendente', ...(modo === 'seco' ? { simuladoEm: null } : {}), ...(soTelefones ? { telefone: { in: [...soTelefones] } } : {}) },
       }),
 
-    quantosSairam: (campanhaId, unitId) => prisma.disparoDestinatario.count({ where: { campanhaId, unitId, estado: 'saiu' } }),
+    // Só conta quem RECEBEU (enviadoEm) e depois respondeu SAIR; quem já tinha pedido para sair antes foi barrado sem envio.
+    quantosSairam: (campanhaId, unitId) => prisma.disparoDestinatario.count({ where: { campanhaId, unitId, estado: 'saiu', enviadoEm: { not: null } } }),
 
-    ultimosResultados: async (unitId, n) =>
+    ondaAprovada: async (ondaId) => (await prisma.disparoOnda.count({ where: { id: ondaId, estado: 'aprovada' } })) > 0,
+
+    ultimosResultados: async (unitId, n, desde) =>
       (
         await prisma.disparoDestinatario.findMany({
-          where: { unitId, estado: { in: ['enviado', 'falhou'] }, atualizadoEm: { gte: new Date(Date.now() - 86_400_000) } },
+          where: { unitId, estado: { in: ['enviado', 'falhou'] }, atualizadoEm: { gte: new Date(Math.max(desde.getTime(), Date.now() - 86_400_000)) } },
           orderBy: { atualizadoEm: 'desc' },
           take: n,
           select: { estado: true },
         })
       ).map((x) => (x.estado === 'enviado' ? 'enviado' : 'falhou')),
 
-    reivindicar: async (id) => (await prisma.disparoDestinatario.updateMany({ where: { id, estado: 'pendente' }, data: { estado: 'enviando' } })).count === 1,
+    reivindicar: async (id) => (await prisma.disparoDestinatario.updateMany({ where: { id, estado: 'pendente' }, data: { estado: 'enviando', enviadoEm: new Date() } })).count === 1,
 
     gravar: async (id, dados) => {
       await prisma.disparoDestinatario.update({
@@ -80,7 +83,7 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
           ...(dados.motivo !== undefined ? { motivo: dados.motivo } : {}),
           ...(dados.wamid !== undefined ? { wamid: dados.wamid } : {}),
           ...(dados.simuladoEm ? { simuladoEm: dados.simuladoEm } : {}),
-          ...(dados.enviadoEm ? { enviadoEm: dados.enviadoEm } : {}),
+          ...(dados.enviadoEm !== undefined ? { enviadoEm: dados.enviadoEm } : {}),
         },
       });
     },

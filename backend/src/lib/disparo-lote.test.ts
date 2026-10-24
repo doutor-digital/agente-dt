@@ -17,11 +17,13 @@ function destino(n: number): Destino {
 }
 
 /** Um Porto de mentira que registra TUDO que sai da casa. */
-function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?: (d: Destino) => SituacaoNaFranquia; sairam?: number; naHora?: number; noDia?: number; teste?: string[] | null; envio?: (d: Destino) => ResultadoDoTemplate | Promise<ResultadoDoTemplate>; pediuSair?: (d: Destino) => boolean; reivindicar?: (d: Destino) => boolean; ultimos?: Array<'enviado' | 'falhou'> }) {
+function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?: (d: Destino) => SituacaoNaFranquia; sairam?: number; naHora?: number; noDia?: number; teste?: string[] | null; envio?: (d: Destino) => ResultadoDoTemplate | Promise<ResultadoDoTemplate>; pediuSair?: (d: Destino) => boolean; reivindicar?: (d: Destino) => boolean; ultimos?: Array<'enviado' | 'falhou'>; ondaViva?: (chamada: number) => boolean }) {
   const estados = new Map<string, Omit<DadosDeGravacao, 'estado'> & { estado: string }>();
   const todos = Array.from({ length: opcoes.quantos ?? 3 }, (_, i) => destino(i + 1));
   todos.forEach((d) => estados.set(d.id, { estado: 'pendente' }));
-  const chamadas = { enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], concluidas: [] as string[], logs: [] as string[] };
+  let consultasDeOnda = 0;
+  const desdeDasFalhas: Date[] = [];
+  const chamadas = { desdeDasFalhas, enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], concluidas: [] as string[], logs: [] as string[] };
   const porto: Porto = {
     agora: () => opcoes.agora ?? AGORA,
     modoDaUnidade: () => opcoes.modo,
@@ -33,11 +35,15 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
         .slice(0, limite),
     sobram: async (_o, modo, so) => todos.filter((d) => estados.get(d.id)!.estado === 'pendente' && (modo === 'ligado' || !estados.get(d.id)!.simuladoEm) && (!so || so.has(d.telefone))).length,
     quantosSairam: async () => opcoes.sairam ?? 0,
-    ultimosResultados: async () => opcoes.ultimos ?? [],
+    ultimosResultados: async (_u, _n, desde) => {
+      desdeDasFalhas.push(desde);
+      return opcoes.ultimos ?? [];
+    },
+    ondaAprovada: async () => opcoes.ondaViva?.(++consultasDeOnda) ?? true,
     reivindicar: async (id) => {
       const d = todos.find((x) => x.id === id)!;
       if (opcoes.reivindicar && !opcoes.reivindicar(d)) return false;
-      estados.get(id)!.estado = 'enviando';
+      Object.assign(estados.get(id)!, { estado: 'enviando', enviadoEm: AGORA });
       return true;
     },
     gravar: async (id, dados) => void Object.assign(estados.get(id)!, dados),
@@ -175,11 +181,57 @@ test('LIGADO: reconfere na hora — consulta marcada depois da montagem e SAIR r
   assert.equal(r.mandou, 1);
 });
 
-test('LIGADO: franquia fora do ar na hora do envio = não manda', async () => {
-  const t = montar({ modo: 'ligado', quantos: 2, franquia: () => 'indisponivel' });
-  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+test('LIGADO: franquia fora do ar na hora do envio = não manda, e a pessoa VOLTA para a fila (não é descartada)', async () => {
+  const t = montar({ modo: 'ligado', quantos: 5, franquia: () => 'indisponivel' });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
   assert.deepEqual(t.chamadas.enviar, []);
-  assert.equal(t.estados.get('d1')!.estado, 'descartado');
+  for (const id of ['d1', 'd2', 'd3']) {
+    assert.equal(t.estados.get(id)!.estado, 'pendente', 'um soluço da franquia não condena a pessoa');
+    assert.equal(t.estados.get(id)!.enviadoEm, null, 'e não gasta teto');
+  }
+  assert.match(r.parou ?? '', /sistema instável: 3 pessoas adiadas/, 'não martela as 5: para na 3ª');
+  assert.equal(t.estados.get('d4')!.estado, 'pendente');
+  // quando a franquia volta, a mesma pessoa recebe
+  const volta = montar({ modo: 'ligado', quantos: 1 });
+  assert.equal((await rodarUnidade(volta.porto, sem_pausa, UNIDADE, [ONDA])).mandou, 1);
+});
+
+test('SECO: franquia fora do ar não grava nada (nem "receberia", nem descarte)', async () => {
+  const t = montar({ modo: 'seco', quantos: 2, franquia: () => 'indisponivel' });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(r.receberia + r.descartados, 0);
+  assert.ok([...t.estados.values()].every((e) => e.estado === 'pendente' && !e.simuladoEm));
+});
+
+test('LIGADO: erro ANTES de chamar a Meta (banco, Kommo) devolve a pessoa à fila e não conta como falha da Meta', async () => {
+  const t = montar({ modo: 'ligado', quantos: 2, pediuSair: (d) => { if (d.id === 'd1') throw new Error('timeout do banco'); return false; } });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(t.estados.get('d1')!.estado, 'pendente');
+  assert.equal(t.estados.get('d1')!.enviadoEm, null);
+  assert.equal(r.falhou, 0);
+  assert.equal(r.mandou, 1);
+  assert.equal(t.chamadas.pausas.length, 0);
+});
+
+test('LIGADO: cancelar ou pausar no MEIO da rodada vale para a próxima pessoa', async () => {
+  const t = montar({ modo: 'ligado', quantos: 6, ondaViva: (chamada) => chamada <= 2 });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(r.mandou, 2, 'a 3ª consulta já viu a onda parada');
+  assert.equal(t.estados.get('d3')!.estado, 'pendente');
+  assert.deepEqual(t.chamadas.concluidas, []);
+});
+
+test('LIGADO: quem perdeu a disputa para outro processo não gasta vaga nem tempo', async () => {
+  const t = montar({ modo: 'ligado', quantos: 3, naHora: 27, reivindicar: (d) => d.id !== 'd1' });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(r.processados, 3 - 1, 'só d2 e d3 contam; d1 foi pulado');
+  assert.equal(r.mandou, 2);
+});
+
+test('falhas seguidas só valem DEPOIS da aprovação mais recente (consertou o token e aprovou de novo, começa limpo)', async () => {
+  const t = montar({ modo: 'ligado', quantos: 1 });
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual(t.chamadas.desdeDasFalhas, [ONDA.aprovadaEm]);
 });
 
 test('LIGADO: mais de 3 SAIR para a unidade — nada sai e as ondas são pausadas com o motivo', async () => {
@@ -209,6 +261,7 @@ test('LIGADO: 5 falhas seguidas da Meta pausam a unidade no meio da rodada (toke
   assert.equal(t.chamadas.pausas.length, 1);
   assert.equal(t.estados.get('d1')!.estado, 'falhou');
   assert.match(t.estados.get('d1')!.motivo ?? '', /Meta 190: token expirado/);
+  assert.equal(t.estados.get('d1')!.enviadoEm, null, 'recusa definitiva não conta no teto: a Meta não aceitou');
 });
 
 test('LIGADO: já havia 5 falhas seguidas da rodada anterior — não manda nem a primeira', async () => {

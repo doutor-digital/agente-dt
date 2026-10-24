@@ -103,3 +103,17 @@ export function passouDoLimiteDeSair(sairam: number, f: Freios): boolean {
 export function falhasSeguidasDemais(ultimos: ReadonlyArray<'enviado' | 'falhou'>, f: Freios): boolean {
   return ultimos.length >= f.falhasSeguidas && ultimos.slice(0, f.falhasSeguidas).every((e) => e === 'falhou');
 }
+
+/** O que o ambiente pediu e NÃO valeu (o código volta ao padrão em silêncio; o worker lê isto e avisa no log). */
+export function avisosDoAmbiente(env: NodeJS.ProcessEnv = process.env): string[] {
+  const avisos: string[] = [];
+  const f = freiosDoAmbiente(env);
+  if ((env.DISPARO_JANELA_INICIO ?? env.DISPARO_JANELA_FIM) !== undefined && (f.janelaInicio !== inteiro(env.DISPARO_JANELA_INICIO, f.janelaInicio, 0, 23) || f.janelaFim !== inteiro(env.DISPARO_JANELA_FIM, f.janelaFim, 1, 24))) {
+    avisos.push(`DISPARO_JANELA_INICIO/FIM não valem juntos (início ${env.DISPARO_JANELA_INICIO ?? '—'}, fim ${env.DISPARO_JANELA_FIM ?? '—'}): ficou ${f.janelaInicio}h–${f.janelaFim}h`);
+  }
+  for (const [chave, valor] of Object.entries({ DISPARO_TETO_HORA: f.tetoPorHora, DISPARO_TETO_DIA: f.tetoPorDia, DISPARO_MAX_SAIR: f.maxSair, DISPARO_FALHAS_SEGUIDAS: f.falhasSeguidas, DISPARO_LOTE: f.lote, DISPARO_PAUSA_MS: f.pausaMs, DISPARO_VALIDADE_DIAS: f.validadeDias })) {
+    const bruto = env[chave];
+    if (bruto !== undefined && bruto.trim() !== '' && Number(bruto) !== valor) avisos.push(`${chave}="${bruto}" não vale: ficou ${valor}`);
+  }
+  return avisos;
+}

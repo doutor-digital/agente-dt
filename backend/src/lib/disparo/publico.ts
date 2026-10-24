@@ -38,9 +38,12 @@ export async function candidatosDaEtiqueta(unit: Unit, etiqueta: string): Promis
 /** Palavras que PODEM ser um pedido de saída; o regex fino (`pediuParaSair`) decide. Filtra no banco para não ler a conversa toda. */
 const PISTAS_DE_SAIDA = ['sair', 'parar', 'pare', 'stop', 'receber', 'lista', 'descadastr'];
 
-/** Cartões (de qualquer cartão da conta Kommo da unidade) cujo paciente escreveu um pedido de saída, a partir de `desde`. */
-export async function leadsQuePediramSair(unit: Unit, leadIds: number[], desde?: Date): Promise<Set<number>> {
-  const saiu = new Set<number>();
+/**
+ * Cartões cujo paciente escreveu um pedido de saída (a partir de `desde`, se vier), com a hora da ÚLTIMA mensagem assim.
+ * A hora deixa o varredor separar "pediu depois do envio" (reação à campanha) de "já tinha pedido".
+ */
+export async function leadsQuePediramSair(unit: Unit, leadIds: number[], desde?: Date): Promise<Map<number, Date>> {
+  const saiu = new Map<number, Date>();
   if (leadIds.length === 0) return saiu;
   const daConta = unit.kommoSubdomain ? await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } }) : [{ id: unit.id }];
   const msgs = await prisma.message.findMany({
@@ -50,9 +53,14 @@ export async function leadsQuePediramSair(unit: Unit, leadIds: number[], desde?:
       OR: PISTAS_DE_SAIDA.map((p) => ({ content: { contains: p, mode: 'insensitive' as const } })),
       conversation: { unitId: { in: daConta.map((u) => u.id) }, leadId: { in: leadIds.map(String) } },
     },
-    select: { content: true, conversation: { select: { leadId: true } } },
+    select: { content: true, createdAt: true, conversation: { select: { leadId: true } } },
   });
-  for (const m of msgs) if (pediuParaSair(m.content)) saiu.add(Number(m.conversation.leadId));
+  for (const m of msgs) {
+    if (!pediuParaSair(m.content)) continue;
+    const id = Number(m.conversation.leadId);
+    const antes = saiu.get(id);
+    if (!antes || m.createdAt > antes) saiu.set(id, m.createdAt);
+  }
   return saiu;
 }
 
@@ -96,7 +104,7 @@ export async function reaproveitarDeOndaCancelada(
 }
 
 /** Converte "cartões que pediram SAIR" em "chaves de telefone que pediram SAIR", usando os candidatos da lista. */
-export function chavesDosLeads(candidatos: Candidato[], leads: ReadonlySet<number>): Set<string> {
+export function chavesDosLeads(candidatos: Candidato[], leads: { has(leadId: number): boolean }): Set<string> {
   const chaves = new Set<string>();
   for (const c of candidatos) {
     if (c.leadId === null || !leads.has(c.leadId)) continue;

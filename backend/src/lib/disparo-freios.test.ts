@@ -58,3 +58,13 @@ test('ambiente: valor ilegível volta ao padrão e nunca vira "sem teto"', () =>
   assert.equal(freiosDoAmbiente({ DISPARO_TETO_HORA: '12', DISPARO_SO_DIAS_UTEIS: '0' } as NodeJS.ProcessEnv).tetoPorHora, 12);
   assert.equal(freiosDoAmbiente({ DISPARO_SO_DIAS_UTEIS: '0' } as NodeJS.ProcessEnv).soDiasUteis, false);
 });
+
+test('ambiente: o que NÃO valeu é dito (o código volta ao padrão, e o worker avisa no log)', async () => {
+  const { avisosDoAmbiente } = await import('./disparo/freios.js');
+  assert.deepEqual(avisosDoAmbiente({} as NodeJS.ProcessEnv), []);
+  const a = avisosDoAmbiente({ DISPARO_JANELA_INICIO: '19', DISPARO_TETO_HORA: 'abc' } as NodeJS.ProcessEnv);
+  assert.equal(a.length, 2);
+  assert.match(a[0]!, /JANELA_INICIO\/FIM não valem juntos/);
+  assert.match(a[1]!, /DISPARO_TETO_HORA="abc" não vale/);
+  assert.deepEqual(avisosDoAmbiente({ DISPARO_JANELA_INICIO: '8', DISPARO_JANELA_FIM: '20', DISPARO_TETO_HORA: '12' } as NodeJS.ProcessEnv), []);
+});

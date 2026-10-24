@@ -43,7 +43,8 @@ export interface DadosDeGravacao {
   motivo?: string | null;
   wamid?: string | null;
   simuladoEm?: Date;
-  enviadoEm?: Date;
+  /** `null` = desfaz a marca de tentativa que `reivindicar` pôs (não enviou, então não conta no teto) */
+  enviadoEm?: Date | null;
 }
 
 export interface Porto {
@@ -55,9 +56,13 @@ export interface Porto {
   contarNaJanela(unitId: string, desde: Date, modo: 'ligado' | 'seco'): Promise<number>;
   pendentes(ondaId: string, modo: 'ligado' | 'seco', limite: number, soTelefones: ReadonlySet<string> | null): Promise<Destino[]>;
   sobram(ondaId: string, modo: 'ligado' | 'seco', soTelefones: ReadonlySet<string> | null): Promise<number>;
+  /** Quantas pessoas da campanha, nesta unidade, RECEBERAM e responderam SAIR. Quem já tinha pedido para sair antes não conta: o freio mede reação ao envio. */
   quantosSairam(campanhaId: string, unitId: string): Promise<number>;
-  ultimosResultados(unitId: string, n: number): Promise<Array<'enviado' | 'falhou'>>;
-  /** pendente → enviando, atômico. `false` = outro processo pegou. */
+  /** Os últimos envios (mais recente primeiro) depois de `desde`: depois de consertar o token, uma onda nova não herda as falhas velhas. */
+  ultimosResultados(unitId: string, n: number, desde: Date): Promise<Array<'enviado' | 'falhou'>>;
+  /** A onda continua APROVADA agora? Cancelar ou pausar no meio da rodada vale já, não só na próxima. */
+  ondaAprovada(ondaId: string): Promise<boolean>;
+  /** pendente → enviando, atômico, e marca a tentativa em `enviadoEm` (conta no teto mesmo se o processo morrer aqui). `false` = outro processo pegou. */
   reivindicar(id: string): Promise<boolean>;
   gravar(id: string, dados: DadosDeGravacao): Promise<void>;
   pausarOndas(unitId: string, campanhaId: string | null, motivo: string): Promise<void>;
@@ -99,56 +104,93 @@ export function textoDoEspelho(onda: OndaNoLote, texto: string): string {
   );
 }
 
-/** Decide, sem mandar nada, se a pessoa ainda pode receber. `null` = pode. */
-async function aindaPode(porto: Porto, d: Destino): Promise<{ estado: 'saiu' | 'descartado'; motivo: string } | null> {
-  if (await porto.pediuSair(d)) return { estado: 'saiu', motivo: 'pediu para sair (SAIR) antes do envio' };
+type Veredito =
+  | { tipo: 'pode' }
+  | { tipo: 'barrou'; estado: 'saiu' | 'descartado'; motivo: string }
+  /** não deu para conferir: tenta de novo na próxima rodada, NÃO descarta a pessoa para sempre */
+  | { tipo: 'adiar'; motivo: string };
+
+/** Decide, sem mandar nada, se a pessoa ainda pode receber. */
+async function aindaPode(porto: Porto, d: Destino): Promise<Veredito> {
+  if (await porto.pediuSair(d)) return { tipo: 'barrou', estado: 'saiu', motivo: 'pediu para sair (SAIR) antes do envio' };
   const f = await porto.franquia(d);
-  if (f === 'livre') return null;
-  const motivo = { 'consulta-futura': 'consulta marcada na franquia', 'tratamento-aberto': 'tratamento aberto na franquia', indisponivel: 'a franquia não respondeu' }[f];
-  return { estado: 'descartado', motivo: `${motivo} (conferido na hora do envio)` };
+  if (f === 'livre') return { tipo: 'pode' };
+  if (f === 'indisponivel') return { tipo: 'adiar', motivo: 'a franquia não respondeu' };
+  const motivo = f === 'consulta-futura' ? 'consulta marcada na franquia' : 'tratamento aberto na franquia';
+  return { tipo: 'barrou', estado: 'descartado', motivo: `${motivo} (conferido na hora do envio)` };
 }
 
+type Resultado = 'pulou' | 'feito' | 'adiado';
+
 /** MODO SECO: decide tudo, grava quem RECEBERIA, e não toca em nada que saia da casa. */
-async function simularUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Destino, r: ResumoDaRodada): Promise<void> {
-  const barrou = await aindaPode(porto, d);
-  if (barrou) {
-    await porto.gravar(d.id, barrou);
-    if (barrou.estado === 'saiu') r.saiu += 1;
+async function simularUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Destino, r: ResumoDaRodada): Promise<Resultado> {
+  const v = await aindaPode(porto, d);
+  if (v.tipo === 'adiar') return 'adiado';
+  if (v.tipo === 'barrou') {
+    await porto.gravar(d.id, { estado: v.estado, motivo: v.motivo });
+    if (v.estado === 'saiu') r.saiu += 1;
     else r.descartados += 1;
-    return;
+    return 'feito';
   }
   await porto.gravar(d.id, { simuladoEm: porto.agora() });
   r.receberia += 1;
   const texto = textoFinal(onda.textoModelo, valoresDasVariaveis(onda.variaveis, { primeiroNome: d.nome, unidade: u.nome }));
   porto.log('info', { unit: u.slug, onda: onda.id, para: `…${d.telefone.slice(-4)}`, texto }, 'disparo [seco]: receberia');
+  return 'feito';
 }
 
-/** MODO LIGADO: a única função que manda de verdade. */
-async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Destino, r: ResumoDaRodada): Promise<void> {
-  if (!(await porto.reivindicar(d.id))) return; // outro processo pegou: não mandar duas vezes
-  const barrou = await aindaPode(porto, d);
-  if (barrou) {
-    await porto.gravar(d.id, barrou);
-    if (barrou.estado === 'saiu') r.saiu += 1;
-    else r.descartados += 1;
-    return;
+/**
+ * MODO LIGADO: a única função que manda de verdade.
+ *
+ * Só o trecho a partir do `enviar` vira "INCERTO" se algo estourar — antes dele nada saiu, e a pessoa volta para a
+ * fila (um blip no banco ou no Kommo não pode queimar vaga de teto nem pausar a unidade como se fosse a Meta).
+ */
+async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Destino, r: ResumoDaRodada): Promise<Resultado> {
+  if (!(await porto.reivindicar(d.id))) return 'pulou'; // outro processo pegou: não mandar duas vezes
+  let chamouAMeta = false;
+  try {
+    const v = await aindaPode(porto, d);
+    if (v.tipo === 'adiar') {
+      await porto.gravar(d.id, { estado: 'pendente', enviadoEm: null });
+      return 'adiado';
+    }
+    if (v.tipo === 'barrou') {
+      await porto.gravar(d.id, { estado: v.estado, motivo: v.motivo, enviadoEm: null });
+      if (v.estado === 'saiu') r.saiu += 1;
+      else r.descartados += 1;
+      return 'feito';
+    }
+    const valores = valoresDasVariaveis(onda.variaveis, { primeiroNome: d.nome, unidade: u.nome });
+    chamouAMeta = true;
+    const res = await porto.enviar(onda, d, valores);
+    if (res.ok && res.wamid) {
+      await porto.gravar(d.id, { estado: 'enviado', wamid: res.wamid, enviadoEm: porto.agora() });
+      r.mandou += 1;
+      // Mensagem por fora do Kommo não aparece lá: sem a nota, a resposta do paciente chega sem a pergunta.
+      await porto.espelhar(d, textoDoEspelho(onda, textoFinal(onda.textoModelo, valores))).catch((err) =>
+        porto.log('warn', { unit: u.slug, err: String(err), lead: d.kommoLeadId }, 'disparo: enviei mas não consegui espelhar a nota no cartão'),
+      );
+      return 'feito';
+    }
+    // Recusa definitiva não conta no teto (a Meta não aceitou); incerta pode ter saído: conta e NUNCA é reenviada sozinha.
+    await porto.gravar(d.id, { estado: 'falhou', motivo: motivoDaMeta(res), enviadoEm: res.incerto ? porto.agora() : null });
+    r.falhou += 1;
+    porto.log('warn', { unit: u.slug, onda: onda.id, motivo: motivoDaMeta(res) }, 'disparo: a Meta recusou o envio');
+    return 'feito';
+  } catch (err) {
+    porto.log('warn', { unit: u.slug, onda: onda.id, err: String(err), chamouAMeta }, 'disparo: erro inesperado com uma pessoa');
+    if (!chamouAMeta) {
+      await porto.gravar(d.id, { estado: 'pendente', enviadoEm: null }).catch(() => undefined);
+      return 'adiado';
+    }
+    await porto.gravar(d.id, { estado: 'falhou', motivo: `INCERTO: erro interno (${String(err).slice(0, 150)})`, enviadoEm: porto.agora() }).catch(() => undefined);
+    r.falhou += 1;
+    return 'feito';
   }
-  const valores = valoresDasVariaveis(onda.variaveis, { primeiroNome: d.nome, unidade: u.nome });
-  const res = await porto.enviar(onda, d, valores);
-  if (res.ok && res.wamid) {
-    await porto.gravar(d.id, { estado: 'enviado', wamid: res.wamid, enviadoEm: porto.agora() });
-    r.mandou += 1;
-    // Mensagem por fora do Kommo não aparece lá: sem a nota, a resposta do paciente chega sem a pergunta.
-    await porto.espelhar(d, textoDoEspelho(onda, textoFinal(onda.textoModelo, valores))).catch((err) =>
-      porto.log('warn', { unit: u.slug, err: String(err), lead: d.kommoLeadId }, 'disparo: enviei mas não consegui espelhar a nota no cartão'),
-    );
-    return;
-  }
-  // Incerto pode ter saído: conta no teto e NUNCA é reenviado sozinho.
-  await porto.gravar(d.id, { estado: 'falhou', motivo: motivoDaMeta(res), ...(res.incerto ? { enviadoEm: porto.agora() } : {}) });
-  r.falhou += 1;
-  porto.log('warn', { unit: u.slug, onda: onda.id, motivo: motivoDaMeta(res) }, 'disparo: a Meta recusou o envio');
 }
+
+/** Depois de tantas pessoas adiadas na mesma rodada o problema não é a pessoa: é a franquia, o banco ou o Kommo. */
+const ADIADOS_PARA_PARAR = 3;
 
 /** Uma rodada de uma unidade, com as ondas APROVADAS dela em ordem de criação. */
 export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, ondas: OndaNoLote[]): Promise<ResumoDaRodada> {
@@ -171,7 +213,9 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
   if (ativas.length === 0) return { ...r, parou: 'parada por SAIR' };
 
   // Freio 2 — falhas seguidas: token vencido ou número bloqueado não é "a lista estar ruim".
-  if (real && falhasSeguidasDemais(await porto.ultimosResultados(u.id, f.falhasSeguidas), f)) {
+  // Só olha envios DEPOIS da aprovação mais recente: consertou o token e aprovou de novo, começa limpo.
+  const desdeAprovacao = new Date(Math.max(0, ...ativas.map((o) => o.aprovadaEm?.getTime() ?? 0)));
+  if (real && falhasSeguidasDemais(await porto.ultimosResultados(u.id, f.falhasSeguidas, desdeAprovacao), f)) {
     await porto.pausarOndas(u.id, null, `${f.falhasSeguidas} envios seguidos falharam na Meta: confira o token e a qualidade do número`);
     porto.log('warn', { unit: u.slug }, 'disparo: unidade PARADA por falhas seguidas');
     return { ...r, parou: 'parada por falhas seguidas' };
@@ -203,22 +247,26 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
 
   const teste = real ? porto.listaDeTeste() : null;
   let seguidas = 0;
+  let adiados = 0;
   for (const onda of ativas) {
     if (cabem === 0) break;
     const lote = await porto.pendentes(onda.id, via, cabem, teste);
     for (const d of lote) {
+      // Cancelar ou pausar com a rodada andando vale para a PRÓXIMA pessoa, não só para a próxima rodada.
+      if (!(await porto.ondaAprovada(onda.id))) break;
       const antes = r.falhou;
-      try {
-        if (real) await enviarUm(porto, onda, u, d, r);
-        else await simularUm(porto, onda, u, d, r);
-      } catch (err) {
-        // Erro no meio de um envio: pode ter saído. Fica marcado e conta no teto, e nunca é reenviado sozinho.
-        porto.log('warn', { unit: u.slug, onda: onda.id, err: String(err) }, 'disparo: erro inesperado com uma pessoa');
-        if (real) await porto.gravar(d.id, { estado: 'falhou', motivo: `INCERTO: erro interno (${String(err).slice(0, 150)})`, enviadoEm: porto.agora() }).catch(() => undefined);
-        r.falhou += 1;
-      }
+      const res = real ? await enviarUm(porto, onda, u, d, r) : await simularUm(porto, onda, u, d, r);
+      if (res === 'pulou') continue; // perdeu a disputa para outro processo: não gasta vaga nem tempo
       r.processados += 1;
       cabem -= 1;
+      if (res === 'adiado') {
+        adiados += 1;
+        if (adiados >= ADIADOS_PARA_PARAR) {
+          porto.log('warn', { unit: u.slug, adiados }, 'disparo: pessoas adiadas demais nesta rodada (franquia, banco ou Kommo instáveis) — rodada encerrada');
+          return { ...r, parou: `sistema instável: ${adiados} pessoas adiadas` };
+        }
+        continue;
+      }
       seguidas = r.falhou > antes ? seguidas + 1 : 0;
       if (real && seguidas >= f.falhasSeguidas) {
         await porto.pausarOndas(u.id, null, `${f.falhasSeguidas} envios seguidos falharam na Meta: confira o token e a qualidade do número`);
@@ -228,7 +276,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
       await porto.dormir(f.pausaMs);
     }
     // Só uma lista inteira esgotada conclui a onda; com lista de teste ela nunca conclui (os outros seguem pendentes).
-    if (real && !teste && (await porto.sobram(onda.id, via, null)) === 0) await porto.concluirOnda(onda.id);
+    if (real && !teste && (await porto.sobram(onda.id, via, null)) === 0 && (await porto.ondaAprovada(onda.id))) await porto.concluirOnda(onda.id);
   }
   return r;
 }

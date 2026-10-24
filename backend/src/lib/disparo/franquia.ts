@@ -19,6 +19,9 @@ import { dataLocalISO } from '../feriados.js';
 import { fusoDaUnidade } from '../fuso.js';
 import type { SituacaoNaFranquia } from './regras.js';
 
+/** Por quanto tempo uma leitura FALHA da agenda vale antes de tentar de novo. */
+const FALHA_VALE_MS = 60_000;
+
 /** Quanto da agenda à frente a segunda rede lê. */
 const DIAS_A_FRENTE = 180;
 
@@ -74,12 +77,18 @@ export interface PessoaParaConferir {
  * cada pessoa custa só a busca do paciente.
  */
 export function conferenciaDaFranquia(unit: Unit, agora: () => Date = () => new Date()): (p: PessoaParaConferir) => Promise<SituacaoNaFranquia> {
-  let rede: Promise<RedeDaAgenda | null> | null = null;
+  let rede: { lidaEm: number; falhou: boolean; dados: Promise<RedeDaAgenda | null> } | null = null;
   return async (p) => {
     if (!unit.spineToken) return 'indisponivel';
     try {
-      rede ??= lerRedeDaAgenda(unit, agora());
-      const bloco = await rede;
+      // Leitura boa vale pela conferência inteira. Falha vale só por 1 minuto: um soluço da franquia não pode
+      // condenar a lista toda, e tentar de novo a cada pessoa seria martelar uma franquia que já está fora.
+      if (!rede || (rede.falhou && Date.now() - rede.lidaEm > FALHA_VALE_MS)) {
+        const atual = { lidaEm: Date.now(), falhou: false, dados: lerRedeDaAgenda(unit, agora()) };
+        atual.dados.then((b) => void (atual.falhou = !b), () => void (atual.falhou = true));
+        rede = atual;
+      }
+      const bloco = await rede.dados;
       if (!bloco) return 'indisponivel';
 
       const idClient = p.leadId ? await idClientDoLead(unit, p.leadId, p.nomeCompleto, { fone: p.telefone }) : null;

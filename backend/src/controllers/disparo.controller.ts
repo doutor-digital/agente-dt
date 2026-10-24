@@ -16,7 +16,7 @@ import { logger } from '../lib/logger.js';
 import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { abrirOnda, aprovarOnda, cancelarOnda, concluirMontagem, definicaoDaOnda } from '../lib/disparo/onda.js';
 import { conferirModeloNaMeta, podeAprovar } from '../lib/disparo/modelo.js';
-import { montarPainelDaOnda } from '../lib/disparo/painel.js';
+import { montarPainelDaOnda, telefoneMascarado } from '../lib/disparo/painel.js';
 import { problemaNoModelo } from '../lib/disparo/regras.js';
 import { freiosDoAmbiente } from '../lib/disparo/freios.js';
 import { AUTOMACAO_DISPARO, listaDeTesteDoAmbiente } from '../lib/disparo/porto.js';
@@ -119,7 +119,7 @@ export async function disparoOndaJsonHandler(req: Request, res: Response): Promi
     res.status(404).json({ ok: false, erro: 'onda não encontrada' });
     return;
   }
-  res.json({ ok: true, ...dados, amostra: dados.amostra.map((a) => ({ nome: a.nome, telefone: `…${a.telefone.slice(-4)}` })) });
+  res.json({ ok: true, ...dados, amostra: dados.amostra.map((a) => ({ nome: a.nome, telefone: telefoneMascarado(a.telefone) })), listaDeTeste: dados.listaDeTeste?.map(telefoneMascarado) ?? null });
 }
 
 export async function disparoOndaPainelHandler(req: Request, res: Response): Promise<void> {
