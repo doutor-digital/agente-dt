@@ -356,6 +356,7 @@ model Unit {
   /// Conexão com o Bling (ERP) — só a unidade que vende pelo Bling tem (HM Tecnologia). Ver `BlingConexao`.
   blingConexao      BlingConexao?
   chavesDeIntegracao ChaveDeIntegracao[]
+  disparoOndas      DisparoOnda[]
 
   // Prompt e configuração do agente, vivem aqui pra cada unidade ter o seu.
   // É o "base prompt" do leigo — concatenamos com os blocos das features
@@ -2167,6 +2168,105 @@ model CampanhaPlacar {
   @@unique([campanha, unidade, dia])
   @@index([campanha, dia])
   @@map("campanha_placar")
+}
+
+/// Disparo de campanha pela API oficial do WhatsApp (Graph API, token WABA da unidade) — sem a tela de Transmissões do
+/// Kommo e sem o código de 6 dígitos por e-mail. Campanha → onda (uma unidade, uma lista, UMA aprovação) → destinatário.
+/// Nasce em MODO SECO (`quandoVazio: 'seco'` no catálogo de automações): decide e grava quem receberia, não manda nada.
+model DisparoCampanha {
+  id           String   @id @default(cuid())
+  /// 'outubro-rosa-2026' — o mesmo id de `lib/campanha/campanhas.ts` quando a campanha também tem placar
+  slug         String   @unique
+  nome         String
+  /// nome do modelo aprovado na Meta quando a unidade não tem o seu em `porUnidade`
+  template     String?
+  idioma       String   @default("pt_BR")
+  /// corpo do modelo aprovado, com {{1}}, {{2}}…; é o que a tela de aprovação mostra com as variáveis resolvidas
+  textoModelo  String   @map("texto_modelo") @db.Text
+  /// o que preenche cada {{n}}, em ordem: "primeiroNome" | "unidade" | "texto:<literal>"
+  variaveis    Json     @default("[]")
+  /// cabeçalho de mídia padrão: { tipo: 'image'|'video'|'document', link, nomeArquivo? }
+  cabecalho    Json?
+  /// { "<slug da unidade>": { template?, cabecalho? } } — o Kommo põe prefixo por unidade e cada unidade tem a sua arte
+  porUnidade   Json     @default("{}") @map("por_unidade")
+  criadoEm     DateTime @default(now()) @map("criado_em")
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  ondas DisparoOnda[]
+
+  @@map("disparo_campanhas")
+}
+
+/// Uma onda = uma unidade + uma lista (etiqueta do Kommo) + um texto. O João aprova a onda inteira, uma vez.
+/// Modelo, idioma, texto, variáveis e cabeçalho são COPIADOS para cá na montagem: o que ele aprovou não muda depois.
+model DisparoOnda {
+  id           String    @id @default(cuid())
+  campanhaId   String    @map("campanha_id")
+  unitId       String    @map("unit_id")
+  /// de onde a lista veio (etiqueta do Kommo da unidade)
+  etiqueta     String
+  template     String
+  idioma       String
+  textoModelo  String    @map("texto_modelo") @db.Text
+  variaveis    Json
+  cabecalho    Json?
+  /// montada | aprovada | pausada | concluida | cancelada
+  estado       String    @default("montada")
+  total        Int       @default(0)
+  /// quem ficou de fora e por quê: { "consulta-futura": 12, … } + avisos
+  resumo       Json      @default("{}")
+  /// hash do que foi mostrado (texto + lista); a aprovação só vale se ainda for o mesmo
+  impressao    String
+  aprovadaPor  String?   @map("aprovada_por")
+  aprovadaEm   DateTime? @map("aprovada_em")
+  pausaMotivo  String?   @map("pausa_motivo")
+  criadaPor    String?   @map("criada_por")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @updatedAt @map("atualizado_em")
+
+  campanha      DisparoCampanha       @relation(fields: [campanhaId], references: [id], onDelete: Cascade)
+  unit          Unit                  @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  destinatarios DisparoDestinatario[]
+
+  @@index([estado, unitId])
+  @@index([campanhaId, unitId])
+  @@map("disparo_ondas")
+}
+
+/// Uma pessoa numa onda. A chave única (campanha, unidade, telefone) é o "nunca duas vezes para a mesma pessoa".
+model DisparoDestinatario {
+  id           String    @id @default(cuid())
+  ondaId       String    @map("onda_id")
+  campanhaId   String    @map("campanha_id")
+  unitId       String    @map("unit_id")
+  /// só dígitos com DDI (5563999999999)
+  telefone     String
+  /// DDD + 8 últimos dígitos: iguala o número com e sem o nono dígito
+  chave        String
+  /// primeiro nome já validado (é o que entra na variável)
+  nome         String
+  /// nome inteiro do contato no Kommo: só para reconferir a franquia na hora do envio (o título do cartão não serve)
+  nomeCompleto String?   @map("nome_completo")
+  kommoLeadId  Int?      @map("kommo_lead_id")
+  /// pendente | enviando | enviado | falhou | saiu | descartado
+  estado       String    @default("pendente")
+  /// por que falhou / saiu / foi descartado na hora do envio
+  motivo       String?
+  /// id da mensagem na Meta (wamid…): casa com o status entregue/lida/falhou
+  wamid        String?
+  /// modo seco: quando a decisão "receberia" foi gravada. Não é envio.
+  simuladoEm   DateTime? @map("simulado_em")
+  enviadoEm    DateTime? @map("enviado_em")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+  atualizadoEm DateTime  @updatedAt @map("atualizado_em")
+
+  onda DisparoOnda @relation(fields: [ondaId], references: [id], onDelete: Cascade)
+
+  @@unique([campanhaId, unitId, chave], map: "disparo_destinatarios_pessoa_key")
+  @@index([ondaId, estado])
+  @@index([unitId, estado, enviadoEm])
+  @@index([wamid])
+  @@map("disparo_destinatarios")
 }
 
 /// Chave de API de um serviço de terceiros por unidade (Asaas, ClickSign), CIFRADA (lib/integracoes/cofre.ts).

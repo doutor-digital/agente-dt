@@ -175,6 +175,15 @@ import {
   unitRetomarHandler,
 } from '../controllers/pausa.controller.js';
 import { blingAppHandler, blingAutorizarHandler, blingCallbackHandler, blingStatusHandler, blingTesteHandler } from '../controllers/bling.controller.js';
+import {
+  disparoCampanhaPutHandler,
+  disparoOndaAprovarHandler,
+  disparoOndaCancelarHandler,
+  disparoOndaCriarHandler,
+  disparoOndaJsonHandler,
+  disparoOndaPainelHandler,
+  disparoOndasListarHandler,
+} from '../controllers/disparo.controller.js';
 import { campanhaColetarHandler, campanhaPainelHandler, campanhaPlacarHandler, campanhaTelaHandler } from '../controllers/campanha.controller.js';
 import { listarChavesHandler, painelIntegracoesHandler, salvarChaveHandler } from '../controllers/integracoes.controller.js';
 import { widgetPassoEntendiHandler, widgetPassosHandler, widgetHorariosHandler, widgetMarcarHandler,
@@ -414,6 +423,16 @@ apiRouter.get('/campanhas/:id', chaveDeServicoOuSessao(requireAuth, requireSuper
 apiRouter.get('/campanhas/:id/painel', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaPainelHandler);
 apiRouter.post('/campanhas/:id/coletar', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaColetarHandler);
 apiRouter.put('/campanhas/:id/tela', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), campanhaTelaHandler);
+
+// Disparo de campanha pela API oficial (campanha → onda → destinatário). Preparar, ler e PARAR aceitam a chave de
+// serviço; APROVAR só com sessão de super-admin (e o e-mail em DISPARO_APROVADORES): o robô não aprova o próprio envio.
+apiRouter.put('/disparo/campanhas/:slug', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoCampanhaPutHandler);
+apiRouter.get('/disparo/ondas', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndasListarHandler);
+apiRouter.post('/disparo/ondas', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaCriarHandler);
+apiRouter.get('/disparo/ondas/:id', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaJsonHandler);
+apiRouter.get('/disparo/ondas/:id/painel', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaPainelHandler);
+apiRouter.post('/disparo/ondas/:id/aprovar', requireAuth, requireSuperAdmin, disparoOndaAprovarHandler);
+apiRouter.post('/disparo/ondas/:id/cancelar', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaCancelarHandler);
 
 // Chaves de API de terceiros (Asaas, Convênia, Tiquetaque). Escrever é só com SESSÃO de super-admin (a chave do Asaas
 // mexe com dinheiro): a chave de serviço não serve aqui de propósito. Ler o status aceita a chave de serviço.

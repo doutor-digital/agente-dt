@@ -201,6 +201,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/sem-resposta-worker.ts',
   },
   {
+    id: 'disparo-campanha',
+    chave: 'DISPARO_CAMPANHA_SLUGS',
+    nome: 'Disparo de campanha pela API oficial',
+    oQueFaz:
+      'Manda o modelo da campanha (Outubro Rosa…) pela API oficial do WhatsApp com o token da unidade, sem a tela de Transmissões do Kommo e sem o código por e-mail. Só sai onda que o João APROVOU na tela de aprovação: ele vê a unidade, quantas pessoas e o texto final antes de sair. Depois manda sozinho, em lote, com os freios.',
+    pegadinha:
+      'NASCE EM "SÓ NO PAPEL" PARA A REDE TODA: em seco, decide tudo (franquia, SAIR, janela, tetos) e grava quem RECEBERIA, mas não manda nada nem escreve no Kommo — a chave lista quem está LIGADO. Mesmo ligado, vale a lista de teste (DISPARO_LISTA_DE_TESTE): só esses números recebem de verdade. Freios por unidade: 9h–18h de segunda a sexta (sem feriado), 30 por hora e 100 por 24 h, para de vez se mais de 3 pessoas responderem SAIR e pausa se 5 envios seguidos falharem. Nunca manda para quem tem consulta futura ou tratamento aberto na franquia (reconferido na hora do envio), para quem respondeu SAIR, nem duas vezes para a mesma pessoa na campanha. Mensagem por fora do Kommo não aparece lá: cada envio deixa uma nota no cartão.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/disparo/lote.ts',
+  },
+  {
     id: 'aviso-agendamento',
     chave: 'AVISO_AGENDAMENTO_SLUGS',
     nome: 'Aviso no WhatsApp quando a IA marca',
