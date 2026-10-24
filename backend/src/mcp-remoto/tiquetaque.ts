@@ -12,10 +12,14 @@
  * GPS da batida, anexo do atestado e justificativa escrita incluídos. Cada registro ganha os nomes em
  * português que o filtro, o agrupamento e a ordenação usam e leva o registro cru junto
  * (`colaboradorNormalizado`, `espelhoNormalizado`, `batidaNormalizada`, `afastamentoNormalizado`).
- * Registro pequeno (batida, dia do espelho, afastamento) sai SEMPRE inteiro. As duas respostas grandes vêm
- * resumidas por padrão para não estourar o tamanho, e `completo: true` devolve o registro inteiro: a ficha
- * da pessoa em `tiquetaque_colaboradores` e o espelho de ponto em `tiquetaque_horas`. O cache guarda sempre
- * o registro COMPLETO — o resumo é só na hora de responder.
+ * Registro pequeno (batida, dia do espelho, afastamento, banco de horas) sai SEMPRE inteiro. As duas
+ * respostas grandes vêm resumidas por padrão para não estourar o tamanho, e `completo: true` devolve o
+ * registro inteiro: a ficha da pessoa em `tiquetaque_colaboradores` e o espelho de ponto, dia a dia, em
+ * `tiquetaque_horas`. O cache guarda sempre o registro COMPLETO — o resumo é só na hora de responder.
+ *
+ * Os campos com nome em português são escritos SEMPRE, mesmo vazios, para que um campo homônimo do bruto
+ * nunca ocupe um nome derivado (a rubrica crua `atraso` chega como texto "0.50" e não pode virar o número
+ * que a soma usa); `undefined` não vai para o JSON, então a chave continua ausente como antes.
  *
  * O espelho de ponto (`/timesheets`) traz TODOS os funcionários numa chamada paginada — é dele que saem o
  * ponto do dia, as horas, os atrasos e as faltas. Marcações com tipo/aprovação e afastamentos são por
@@ -263,8 +267,10 @@ export function colaboradorNormalizado(f: FuncionarioBruto, ref: Referencias): C
     gestor: gestorId ? (ref.gestores.get(gestorId) ?? null) : null,
     admissao: dia(cd.admission_date),
     inicioDosRegistros: dia(cd.records_start_date),
-    ...(desligamento ? { desligamento } : {}),
-    ...(matricula ? { matricula } : {}),
+    // sempre escritos (mesmo vazios) para que um campo homônimo do bruto não ocupe um nome em português;
+    // valor `undefined` não vai para o JSON da resposta: a chave continua ausente como antes
+    desligamento: desligamento ?? undefined,
+    matricula: matricula ?? undefined,
   };
 }
 
@@ -377,15 +383,21 @@ export function espelhoNormalizado(e: EspelhoBruto): Espelho | null {
   }
   dias.sort((a, b) => a.data.localeCompare(b.data));
   const b = e.hours_bank_summary;
+  // `dias` já leva cada dia CRU inteiro (spread de `v`): repetir o mapa `days` do bruto dobraria o espelho
+  // (1,6x medido num mês) sem acrescentar um dado. Só o que `dias` não soube ler — data que não é
+  // AAAA-MM-DD, valor que não é objeto — sai em `diasNaoLidos`, para não cortar nada.
+  const { days, ...resto } = e;
+  const naoLidos = Object.entries(days ?? {}).filter(([d, v]) => !dia(d) || !v || typeof v !== 'object');
   return {
-    ...e,
+    ...resto,
+    ...(naoLidos.length ? { diasNaoLidos: Object.fromEntries(naoLidos) } : {}),
     id,
     periodo: { inicio: dia(e.period?.start_date), fim: dia(e.period?.end_date) },
     totais: rubricas(e.totals),
     dias,
-    ...(b && typeof b === 'object'
-      ? { bancoDeHoras: { ...b, saldoAnterior: horas(b.previous_balance), geradoNoPeriodo: horas(b.generated_balance), lancadoManual: horas(b.created_balance), saldoFinal: horas(b.final_balance) } }
-      : {}),
+    bancoDeHoras: b && typeof b === 'object'
+      ? { ...b, saldoAnterior: horas(b.previous_balance), geradoNoPeriodo: horas(b.generated_balance), lancadoManual: horas(b.created_balance), saldoFinal: horas(b.final_balance) }
+      : undefined,
   };
 }
 
@@ -442,11 +454,13 @@ export function afastamentoNormalizado(a: AfastamentoBruto): Afastamento {
     tipo: TIPOS_AFASTAMENTO[bruto] ?? (bruto || 'sem tipo'),
     inicio: dia(a.start_date),
     fim: dia(a.end_date) ?? dia(a.start_date),
-    ...(horaInicio ? { horaInicio } : {}),
-    ...(horaFim ? { horaFim } : {}),
+    // sempre escritos (mesmo vazios) para que um campo homônimo do bruto não ocupe um nome em português;
+    // valor `undefined` não vai para o JSON da resposta: a chave continua ausente como antes
+    horaInicio: horaInicio ?? undefined,
+    horaFim: horaFim ?? undefined,
     situacao: a.approval_info?.approved === true ? 'aprovado' : reprovado ? 'reprovado' : 'pendente',
     remunerado: typeof a.paid_leave === 'boolean' ? a.paid_leave : null,
-    ...(typeof a.hours_bank_debit === 'boolean' ? { descontaDoBanco: a.hours_bank_debit } : {}),
+    descontaDoBanco: typeof a.hours_bank_debit === 'boolean' ? a.hours_bank_debit : undefined,
     temAnexo: !!texto(a.attachment),
   };
 }
@@ -759,6 +773,12 @@ export async function tiquetaquePontoDoDia(
       // falta de HOJE ainda não é falta: pode ser só quem não chegou
       const faltaInjustificada = ehHoje ? undefined : h.faltaInjustificada;
       const situacao = situacaoDoDia(batidas, !!e, ehHoje);
+      // o mapa de horas em português da linha não pode contradizer o resumo: se a falta de hoje não conta
+      // como falta, ela também não entra aqui. A rubrica CRUA do dia (`falta_injustificada`) continua na
+      // resposta — quem quiser o número do Tiquetaque tem ele, só não vem com o nome do campo derivado
+      const horasDoDia = ehHoje && h.faltaInjustificada !== undefined
+        ? (Object.fromEntries(Object.entries(h).filter(([k]) => k !== 'faltaInjustificada')) as Record<string, number>)
+        : h;
       // o dia do espelho sai inteiro (horários crus, observação…); os campos em português e a pessoa vêm
       // DEPOIS do spread para que um campo do Tiquetaque com o mesmo nome não troque a pessoa, a situação
       // nem o número (a rubrica crua `atraso` vem como texto "0.25"). Valor `undefined` não vai para o JSON
@@ -768,6 +788,7 @@ export async function tiquetaquePontoDoDia(
         ...resumoPessoa(p),
         situacao,
         batidas,
+        horas: horasDoDia,
         horasTrabalhadas: h.trabalhadas,
         atraso: h.atraso,
         faltaInjustificada,
@@ -982,8 +1003,9 @@ export async function tiquetaqueHoras(
   return {
     observacao:
       'Horas em decimal (7.5 = 7h30). "trabalhadas" = total trabalhado; extra50/extra100 = horas extras por faixa; banco de horas: saldo ' +
-      'final do período (negativo = deve horas). Falta de hoje não entra (o dia não acabou). completo: true acrescenta o espelho inteiro ' +
-      'de cada pessoa (dia a dia, totais e banco como o Tiquetaque guarda) — pode trazer dado pessoal e a consulta fica registrada na auditoria.',
+      'final do período (negativo = deve horas). A falta de HOJE não entra em "horas" (o dia não acabou). completo: true acrescenta o campo ' +
+      '"espelho" com o espelho inteiro de cada pessoa, dia a dia, como o Tiquetaque calculou — ali a falta de hoje ESTÁ somada; em caso de ' +
+      'divergência, "horas" é o número da resposta. Pode trazer dado pessoal e a consulta fica registrada na auditoria.',
     ...(contas.length > 1
       ? { rede: { colaboradores: ok.reduce((s, u) => s + u.resumo.colaboradores, 0), extras: soma(ok.map((u) => u.resumo.extras)), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
@@ -1255,8 +1277,10 @@ const completoEspelho = z
   .boolean()
   .optional()
   .describe(
-    'true acrescenta o espelho INTEIRO de cada pessoa (cada dia com os horários crus e a observação, os totais e o banco como o Tiquetaque ' +
-      'guarda). Padrão (ausente): só o resumo de horas da pessoa. O espelho inteiro é grande (um registro por dia): use com filtro ou maxItens.',
+    'true acrescenta o campo `espelho`: o espelho INTEIRO de cada pessoa, dia a dia, com os horários crus, a observação do dia e os totais ' +
+      'como o Tiquetaque calculou — inclusive a falta de HOJE, que o campo `horas` da linha desconta de propósito (o dia não acabou). Em ' +
+      'caso de divergência entre `horas` e `espelho.totais`, `horas` é o número da resposta. Padrão (ausente): o resumo de horas da pessoa ' +
+      'e o banco de horas, que já vem inteiro. O espelho inteiro é grande (um registro por dia): use com filtro ou maxItens.',
   );
 
 export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoTiquetaque, auditar?: Auditar): void {

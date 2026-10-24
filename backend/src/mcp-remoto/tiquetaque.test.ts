@@ -58,7 +58,8 @@ function funcionario(id: string, nome: string, extra: Partial<FuncionarioBruto['
 }
 
 const FUNCIONARIOS = [
-  funcionario(ID.ana, 'Ana Souza', { admission_date: '2026-10-05' }),
+  // Ana chega com campos homônimos dos nomes em português: eles não podem ocupar o campo derivado
+  funcionario(ID.ana, 'Ana Souza', { admission_date: '2026-10-05' }, { desligamento: 'DATA TROCADA', matricula: 'MATRICULA TROCADA' }),
   funcionario(ID.bruno, 'Bruno Lima', { department: 'Tecnologia', job_role: 'Desenvolvedor', payment_source: 'emp2' }),
   funcionario(ID.carla, 'Carla Dias', { dismissal_date: '2026-10-31', registration_number: '77' }),
   funcionario(ID.davi, 'Davi Rocha', { department: 'Fisioterapia', job_role: 'Fisioterapeuta' }, { cpf: '98765432100', mobile_phone: '63988887777' }),
@@ -125,7 +126,8 @@ function espelhosDoPeriodo(inicio: string, fim: string): EspelhoBruto[] {
       {
         employee_id: ID.bruno, period: { start_date: inicio, end_date: fim },
         totals: { total: '50.00', extra_50: '2.00', extra_100: '1.50', adicional_noturno_extra_50: '0.50' },
-        days: { '2026-10-14': diaBruto(['07:00', '19:00'], { total: '12.00', extra_50: '2.00' }) },
+        // a data inválida não entra em `dias`: tem de sair em `diasNaoLidos` para não cortar nada
+        days: { '2026-10-14': diaBruto(['07:00', '19:00'], { total: '12.00', extra_50: '2.00' }), '0000-00-00': diaBruto(['09:00']) },
         hours_bank_summary: { previous_balance: '0', generated_balance: '4.00', created_balance: '0', final_balance: '4.00' },
       },
       {
@@ -164,7 +166,8 @@ function rotasPadrao(): Rotas {
           ? [
               {
                 _id: 'w1', employee_id: ID.ana, leave_type: 'atestado', start_date: '2026-10-18', end_date: '2026-10-21', paid_leave: true, hours_bank_debit: false,
-                attachment: 'https://arquivos.exemplo/atestado-sigiloso.pdf', details: 'CID M54 sigiloso', approval_info: { approved: true, change_request: { approved_by: { name: 'Gestora Chefe' } } },
+                attachment: 'https://arquivos.exemplo/atestado-sigiloso.pdf', details: 'CID M54 sigiloso', horaInicio: 'HORA TROCADA', descontaDoBanco: 'TROCADO',
+                approval_info: { approved: true, change_request: { approved_by: { name: 'Gestora Chefe' } } },
               },
               { _id: 'w2', employee_id: ID.ana, leave_type: 'ferias', start_date: '2026-12-01', end_date: '2026-12-20', paid_leave: true, approval_info: { approved: false, change_request: {} } },
             ]
@@ -237,6 +240,10 @@ test('colaboradorNormalizado: a ficha inteira do Tiquetaque junto com os campos 
     { hour_rate_cents: 4321, requires_geotag: true, requires_web_photo: true, enabled_geofence: true },
   );
   trouxe(colaboradorNormalizado(FUNCIONARIOS[3]!, REF), ['98765432100', '63988887777']);
+  // campo homônimo do bruto não ocupa um nome em português, nem quando o derivado está vazio
+  assert.equal(c.desligamento, undefined, 'Ana não foi desligada');
+  assert.equal(c.matricula, undefined, 'Ana não tem matrícula no Tiquetaque');
+  assert.ok(!JSON.stringify(c).includes('DATA TROCADA') && !JSON.stringify(c).includes('MATRICULA TROCADA'));
   const carla = colaboradorNormalizado(FUNCIONARIOS[2]!, REF);
   assert.equal(carla.desligamento, '2026-10-31');
   assert.equal(carla.matricula, '77');
@@ -266,8 +273,15 @@ test('espelhoNormalizado: dia e totais inteiros, rubricas com nome daqui, batida
     { saldoAnterior: -9.17, geradoNoPeriodo: 1, lancadoManual: 3, saldoFinal: -5.17 },
   );
   assert.deepEqual(e.bancoDeHoras!.period, { type: 'open', start_date: '2021-03-10' });
+  // `dias` já leva cada dia cru: o mapa `days` do bruto não é repetido (dobraria o espelho)
+  assert.equal(e.days, undefined);
+  assert.equal(e.diasNaoLidos, undefined, 'sem dia ilegível, a chave não aparece');
   const b = espelhoNormalizado(espelhosDoPeriodo('2026-10-01', '2026-10-31')[1]!)!;
   assert.deepEqual(b.totais, { trabalhadas: 50, extra50: 2, extra100: 1.5, adicionalNoturnoExtra50: 0.5 });
+  // o dia que `dias` não soube ler sai inteiro em `diasNaoLidos`: nada é cortado
+  assert.deepEqual(b.dias.map((d) => d.data), ['2026-10-14']);
+  assert.deepEqual(Object.keys(b.diasNaoLidos as object), ['0000-00-00']);
+  assert.deepEqual((b.diasNaoLidos as Record<string, { horarios: string[] }>)['0000-00-00']!.horarios, ['09:00', 'selfie-sigilosa']);
   assert.equal(espelhoNormalizado({ totals: {} }), null);
 });
 
@@ -346,10 +360,12 @@ test('ponto de hoje: trabalhando agora, saiu, sem batida, sem espelho; falta de 
   trouxe(r, DADO_DO_REGISTRO.dia);
   const carla = u.itens.find((x) => x.nome === 'Carla Dias')!;
   assert.equal(carla.faltaInjustificada, undefined, 'falta de hoje ainda não é falta');
-  // a chave continua fora do JSON da linha, como antes (o `undefined` não é serializado); o dia inteiro
-  // mostra a rubrica do dia em `horas`, que é o dado do Tiquetaque, não o campo derivado da linha
+  // a chave continua fora do JSON da linha, como antes (o `undefined` não é serializado)…
   assert.ok(!Object.keys(JSON.parse(JSON.stringify(carla)) as object).includes('faltaInjustificada'));
-  assert.equal((carla.horas as Record<string, number>).faltaInjustificada, 8);
+  // …e o mapa de horas em português também não a traz: ele não pode contradizer o resumo, que não conta
+  // falta hoje. Quem quiser o número do Tiquetaque tem a rubrica CRUA do dia, que continua na resposta
+  assert.equal((carla.horas as Record<string, number>).faltaInjustificada, undefined);
+  assert.equal(carla.falta_injustificada, '8.00', 'a rubrica crua do dia não é cortada');
   resumida(r, 'a linha do ponto trouxe a ficha da pessoa');
 
   const trab = await tiquetaquePontoDoDia(ctxPadrao(), { unidade: 'doutor-digital', situacao: 'trabalhando' });
@@ -468,6 +484,9 @@ test('afastamentos: sobreposição, dias no período, situação, anexo do atest
   assert.equal(atestado.details, 'CID M54 sigiloso');
   assert.deepEqual(atestado.approval_info, { approved: true, change_request: { approved_by: { name: 'Gestora Chefe' } } });
   trouxe(r, DADO_DO_REGISTRO.afastamento);
+  // campo homônimo do bruto não ocupa um nome em português: o atestado não tem hora e desconta do banco=false
+  assert.equal(atestado.horaInicio, undefined, 'o atestado é de dia inteiro');
+  assert.equal(atestado.descontaDoBanco, false);
   const folga = u.itens.find((x) => x.tipo === 'folga')!;
   assert.deepEqual([folga.situacao, folga.horaInicio, folga.horaFim], ['reprovado', '14:00', '18:00']);
   assert.deepEqual([folga.nome, folga.departamento], ['Bruno Lima', 'Tecnologia'], 'campo homônimo do afastamento não troca a pessoa nem o departamento que agrupa');
