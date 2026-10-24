@@ -72,7 +72,8 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
     ultimosResultados: async (unitId, n, desde) =>
       (
         await prisma.disparoDestinatario.findMany({
-          where: { unitId, estado: { in: ['enviado', 'falhou'] }, atualizadoEm: { gte: new Date(Math.max(desde.getTime(), Date.now() - 86_400_000)) } },
+          // Sem teto de idade: credencial ruim aparece mesmo numa unidade que manda 3 por dia. `desde` (a última aprovação) é o reinício.
+          where: { unitId, estado: { in: ['enviado', 'falhou'] }, atualizadoEm: { gte: desde } },
           orderBy: { atualizadoEm: 'desc' },
           take: n,
           select: { estado: true },
@@ -88,7 +89,7 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
           ...(dados.estado ? { estado: dados.estado } : {}),
           ...(dados.motivo !== undefined ? { motivo: dados.motivo } : {}),
           ...(dados.wamid !== undefined ? { wamid: dados.wamid } : {}),
-          ...(dados.simuladoEm ? { simuladoEm: dados.simuladoEm } : {}),
+          ...(dados.simuladoEm !== undefined ? { simuladoEm: dados.simuladoEm } : {}),
           ...(dados.enviadoEm !== undefined ? { enviadoEm: dados.enviadoEm } : {}),
         },
       });

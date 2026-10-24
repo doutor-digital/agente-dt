@@ -190,7 +190,7 @@ test('LIGADO: franquia fora do ar na hora do envio = não manda, e a pessoa VOLT
   assert.deepEqual(t.chamadas.enviar, []);
   for (const id of ['d1', 'd2', 'd3']) {
     assert.equal(t.estados.get(id)!.estado, 'pendente', 'um soluço da franquia não condena a pessoa');
-    assert.equal(t.estados.get(id)!.enviadoEm, null, 'e não gasta teto');
+    assert.ok(!t.estados.get(id)!.enviadoEm, 'e não gasta teto (nem chegou a ser reivindicada)');
   }
   assert.match(r.parou ?? '', /sistema instável: 3 pessoas adiadas/, 'não martela as 5: para na 3ª');
   assert.equal(t.estados.get('d4')!.estado, 'pendente');
@@ -210,10 +210,22 @@ test('LIGADO: erro ANTES de chamar a Meta (banco, Kommo) devolve a pessoa à fil
   const t = montar({ modo: 'ligado', quantos: 2, pediuSair: (d) => { if (d.id === 'd1') throw new Error('timeout do banco'); return false; } });
   const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
   assert.equal(t.estados.get('d1')!.estado, 'pendente');
-  assert.equal(t.estados.get('d1')!.enviadoEm, null);
+  assert.ok(!t.estados.get('d1')!.enviadoEm);
   assert.equal(r.falhou, 0);
   assert.equal(r.mandou, 1);
   assert.equal(t.chamadas.pausas.length, 0);
+});
+
+test('LIGADO: as conferências vêm ANTES da reivindicação (quem é barrado ou adiado nunca fica "enviando")', async () => {
+  const ordem: string[] = [];
+  const t = montar({ modo: 'ligado', quantos: 1, franquia: () => { ordem.push('franquia'); return 'livre'; }, reivindicar: () => { ordem.push('reivindicar'); return true; } });
+  const enviar = t.porto.enviar;
+  t.porto.enviar = async (...a) => { ordem.push('enviar'); return enviar(...a); };
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual(ordem, ['franquia', 'reivindicar', 'enviar']);
+  const barrado = montar({ modo: 'ligado', quantos: 1, franquia: () => 'consulta-futura', reivindicar: () => { throw new Error('não podia reivindicar quem foi barrado'); } });
+  await rodarUnidade(barrado.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(barrado.estados.get('d1')!.estado, 'descartado');
 });
 
 test('LIGADO: cancelar ou pausar no MEIO da rodada vale para a próxima pessoa', async () => {

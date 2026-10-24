@@ -42,7 +42,8 @@ export interface DadosDeGravacao {
   estado?: 'pendente' | 'enviado' | 'falhou' | 'saiu' | 'descartado';
   motivo?: string | null;
   wamid?: string | null;
-  simuladoEm?: Date;
+  /** `null` = desfaz um "receberia" que a reconferência invalidou (não pode continuar contando no teto do seco) */
+  simuladoEm?: Date | null;
   /** `null` = desfaz a marca de tentativa que `reivindicar` pôs (não enviou, então não conta no teto) */
   enviadoEm?: Date | null;
 }
@@ -142,24 +143,25 @@ async function simularUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: De
 /**
  * MODO LIGADO: a única função que manda de verdade.
  *
- * Só o trecho a partir do `enviar` vira "INCERTO" se algo estourar — antes dele nada saiu, e a pessoa volta para a
- * fila (um blip no banco ou no Kommo não pode queimar vaga de teto nem pausar a unidade como se fosse a Meta).
+ * Ordem: PRIMEIRO as conferências (só leitura), DEPOIS a reivindicação, e o envio logo em seguida. Assim uma
+ * reivindicação que ficou para trás (processo caiu) quase sempre é de um envio que de fato pode ter saído — e só o
+ * trecho a partir do `enviar` vira "INCERTO" se algo estourar. Antes dele nada saiu: a pessoa volta para a fila
+ * (um blip no banco ou no Kommo não pode queimar vaga de teto nem pausar a unidade como se fosse a Meta).
  */
 async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Destino, r: ResumoDaRodada): Promise<Resultado> {
-  if (!(await porto.reivindicar(d.id))) return 'pulou'; // outro processo pegou: não mandar duas vezes
+  let reivindicou = false;
   let chamouAMeta = false;
   try {
     const v = await aindaPode(porto, d);
-    if (v.tipo === 'adiar') {
-      await porto.gravar(d.id, { estado: 'pendente', enviadoEm: null });
-      return 'adiado';
-    }
+    if (v.tipo === 'adiar') return 'adiado';
     if (v.tipo === 'barrou') {
-      await porto.gravar(d.id, { estado: v.estado, motivo: v.motivo, enviadoEm: null });
+      await porto.gravar(d.id, { estado: v.estado, motivo: v.motivo, simuladoEm: null });
       if (v.estado === 'saiu') r.saiu += 1;
       else r.descartados += 1;
       return 'feito';
     }
+    if (!(await porto.reivindicar(d.id))) return 'pulou'; // outro processo pegou: não mandar duas vezes
+    reivindicou = true;
     const valores = valoresDasVariaveis(onda.variaveis, { primeiroNome: d.nome, unidade: u.nome });
     chamouAMeta = true;
     const res = await porto.enviar(onda, d, valores);
@@ -180,7 +182,7 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
   } catch (err) {
     porto.log('warn', { unit: u.slug, onda: onda.id, err: String(err), chamouAMeta }, 'disparo: erro inesperado com uma pessoa');
     if (!chamouAMeta) {
-      await porto.gravar(d.id, { estado: 'pendente', enviadoEm: null }).catch(() => undefined);
+      if (reivindicou) await porto.gravar(d.id, { estado: 'pendente', enviadoEm: null }).catch(() => undefined);
       return 'adiado';
     }
     await porto.gravar(d.id, { estado: 'falhou', motivo: `INCERTO: erro interno (${String(err).slice(0, 150)})`, enviadoEm: porto.agora() }).catch(() => undefined);
