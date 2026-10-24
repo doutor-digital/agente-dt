@@ -143,6 +143,20 @@ test('LIGADO: respeita o teto por hora da unidade e não conclui enquanto sobra 
   assert.match(r2.parou ?? '', /teto atingido/);
 });
 
+test('LIGADO: o teto é reconferido a cada envio — se outro processo gastou as vagas no meio, para', async () => {
+  const t = montar({ modo: 'ligado', quantos: 6 });
+  let chamadas = 0;
+  t.porto.contarNaJanela = async (_u, desde) => {
+    chamadas += 1;
+    // 1ª rodada de contagem (início): 0. Depois que 2 saíram, "outro processo" encheu a hora.
+    return t.chamadas.enviar.length >= 2 ? 30 : 0;
+  };
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(t.chamadas.enviar.length, 2);
+  assert.match(r.parou ?? '', /teto atingido durante a rodada/);
+  assert.ok(chamadas > 2);
+});
+
 test('LIGADO: fora da janela não manda nada', async () => {
   const t = montar({ modo: 'ligado', agora: MADRUGADA });
   const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);

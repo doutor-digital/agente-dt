@@ -122,7 +122,7 @@ export interface PublicoLido extends ContextoDoPublico {
 /** Tudo o que a montagem lê do mundo para decidir quem entra: Kommo, conversas, onda anterior e franquia. Só leitura. */
 export async function lerPublico(unit: Unit, etiqueta: string, campanhaId: string): Promise<PublicoLido> {
   const { candidatos, foraDoKommoDividido } = await candidatosDaEtiqueta(unit, etiqueta);
-  const leadIds = candidatos.map((c) => c.leadId).filter((n): n is number => n !== null);
+  const leadIds = [...new Set(candidatos.map((c) => c.leadId).filter((n): n is number => n !== null))];
   const sairamNasConversas = chavesDosLeads(candidatos, await leadsQuePediramSair(unit, leadIds));
   return {
     candidatos,

@@ -34,7 +34,8 @@ export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>, agora = 
   if (agora - ultimaVarreduraDeSair < VARRER_SAIR_A_CADA_MS) return 0;
   ultimaVarreduraDeSair = agora;
   const enviados = await prisma.disparoDestinatario.findMany({
-    where: { estado: 'enviado', kommoLeadId: { not: null }, enviadoEm: { gte: new Date(agora - HORAS_OLHANDO_SAIR * 3_600_000) } },
+    // 'falhou' COM enviadoEm é o envio incerto (timeout, processo que caiu): se a pessoa respondeu SAIR depois, a mensagem chegou.
+    where: { estado: { in: ['enviado', 'falhou'] }, kommoLeadId: { not: null }, enviadoEm: { gte: new Date(agora - HORAS_OLHANDO_SAIR * 3_600_000) } },
     select: { id: true, unitId: true, kommoLeadId: true, enviadoEm: true },
   });
   let marcados = 0;
@@ -48,7 +49,7 @@ export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>, agora = 
     // Só vale o pedido feito DEPOIS do envio dessa pessoa: quem já tinha pedido antes foi barrado na reconferência.
     const ids = lista.filter((e) => (sairam.get(e.kommoLeadId as number)?.getTime() ?? 0) >= e.enviadoEm!.getTime()).map((e) => e.id);
     if (ids.length === 0) continue;
-    const r = await prisma.disparoDestinatario.updateMany({ where: { id: { in: ids }, estado: 'enviado' }, data: { estado: 'saiu', motivo: 'respondeu SAIR depois do envio' } });
+    const r = await prisma.disparoDestinatario.updateMany({ where: { id: { in: ids }, estado: { in: ['enviado', 'falhou'] } }, data: { estado: 'saiu', motivo: 'respondeu SAIR depois do envio' } });
     marcados += r.count;
   }
   return marcados;

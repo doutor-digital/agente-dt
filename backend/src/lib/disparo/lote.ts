@@ -260,6 +260,11 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
     for (const d of lote) {
       // Cancelar ou pausar com a rodada andando vale para a PRÓXIMA pessoa, não só para a próxima rodada.
       if (!(await porto.ondaAprovada(onda.id))) break;
+      // Reconta o teto antes de CADA envio real: o `cabem` do começo da rodada pode ter envelhecido (outro processo, mesmo
+      // que o lease raramente deixe). A reivindicação marca a tentativa, então a próxima contagem já enxerga a anterior.
+      if (real && vagas(f, await porto.contarNaJanela(u.id, new Date(porto.agora().getTime() - 3_600_000), 'ligado'), await porto.contarNaJanela(u.id, new Date(porto.agora().getTime() - 86_400_000), 'ligado')) === 0) {
+        return { ...r, parou: 'teto atingido durante a rodada' };
+      }
       const antes = r.falhou;
       const res = real ? await enviarUm(porto, onda, u, d, r) : await simularUm(porto, onda, u, d, r);
       if (res === 'pulou') continue; // perdeu a disputa para outro processo: não gasta vaga nem tempo
