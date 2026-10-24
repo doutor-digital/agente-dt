@@ -271,6 +271,10 @@ export interface Ferias {
   [extra: string]: unknown;
 }
 
+/**
+ * Único normalizador que reescreve uma chave do bruto (`status`: "approved" → "aprovada"), porque o filtro
+ * de cancelada/recusada depende disso — então o valor original sai em `statusOriginal` e nada se perde.
+ */
 export function solicitacaoNormalizada(s: SolicitacaoBruta): Ferias {
   const st = String(s.status ?? '').toLowerCase();
   return {
@@ -279,6 +283,7 @@ export function solicitacaoNormalizada(s: SolicitacaoBruta): Ferias {
     fim: dia(s.finishes_at),
     dias: typeof s.requested_days === 'number' ? s.requested_days : null,
     abonoDias: typeof s.allowance === 'number' && s.allowance > 0 ? s.allowance : null,
+    statusOriginal: texto(s.status),
     status: s.canceled ? 'cancelada' : (STATUS_FERIAS[st] ?? (st || 'sem status')),
   };
 }
@@ -901,9 +906,10 @@ const completo = z
   .boolean()
   .optional()
   .describe(
-    'true traz a ficha INTEIRA de cada pessoa (CPF, salário, dados bancários, endereço, nascimento, dados de saúde). ' +
+    'true traz a ficha INTEIRA de cada pessoa (CPF, salário, dados bancários, endereço, nascimento, dados de saúde), como a ' +
+      'LISTAGEM do Convênia a devolve — se algum campo faltar, convenia_colaborador lê a ficha individual daquela pessoa. ' +
       'Padrão (ausente): resumo com nome, situação, matrícula, cargo, departamento, time, centro de custo, gestor, vínculo e datas. ' +
-      'A ficha inteira é grande: use com filtro ou maxItens.',
+      'A ficha inteira é grande: use com filtro ou maxItens pequeno, senão a resposta não cabe na conversa.',
   );
 
 export function registrarFerramentasConvenia(server: McpServer, ctx: ContextoConvenia, auditar?: Auditar): void {

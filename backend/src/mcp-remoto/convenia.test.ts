@@ -35,7 +35,7 @@ function pessoa(id: string, nome: string, sobrenome: string, extra: Partial<Cola
     cost_center: { id: 'c1', name: 'Administrativo' }, supervisor: { id: 's1', name: 'Gestora', last_name: 'Chefe' },
     intern: { initial_at: null, finish_at: null }, experience_period: { first_end: '2026-04-24', second_end: '2026-06-08', experience_period_type: '45 + 45 dias' },
     payroll: { registration: '77' },
-    // tudo isto chega da API e não pode sair
+    // tudo isto chega da API e agora SAI (decisão da dona, 24/10/2026)
     email: 'pessoa.privada@gmail.com', alternative_email: 'alternativo@gmail.com', salary: 4321.5, birth_date: '1990-01-02',
     phone: '(11) 3333-4444', cellphone: '(11) 99999-0000', mother_name: 'Mae Sigilosa', father_name: 'Pai Sigiloso',
     document: { cpf: '123.456.789-09', pis: 'PIS-SECRETO', rg: 'RG-SECRETO', ctps: 'CTPS-SECRETA', voter_card: 'TITULO-SECRETO' },
@@ -315,9 +315,9 @@ test('férias: no período, canceladas fora, vencidas e a vencer, solicitação 
   assert.deepEqual(u.itens[0], {
     starts_at: '2026-10-20', finishes_at: '2026-11-08', requested_days: 20, allowance: 10, status: 'aprovada', canceled: null,
     justification: 'justificativa-das-ferias',
-    inicio: '2026-10-20', fim: '2026-11-08', dias: 20, abonoDias: 10,
+    inicio: '2026-10-20', fim: '2026-11-08', dias: 20, abonoDias: 10, statusOriginal: 'approved',
     nome: 'Ana Souza', cargo: 'Analista de sistemas', departamento: 'Tecnologia',
-  });
+  }, 'o status traduzido não apaga o original: statusOriginal guarda o que o Convênia manda');
   assert.equal(u.periodosVencidos, 1);
   assert.equal(u.vencidas[0]!.limiteParaTirar, '2026-03-09');
   assert.equal(u.vencidas[0]!.initial_balance, 30, 'o período aquisitivo também sai inteiro');
