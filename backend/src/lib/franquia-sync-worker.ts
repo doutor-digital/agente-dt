@@ -1818,17 +1818,17 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
   );
 }
 
-/**
- * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
- * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
- * quando a etapa exige — GANHO e funil TRATAMENTO).
- */
 /** A janela que a varredura pede à agenda (dias da clínica). A revisão usa a MESMA para escolher a consulta — ver `escolherConsultaDaJanela`. */
 function janelaDaAgenda(tz: string, agora: Date = new Date()): { de: string; ate: string } {
   const hoje = instanteNoFuso(agora, tz).slice(0, 10);
   return { de: somarDias(hoje, -DIAS_ATRAS), ate: somarDias(hoje, DIAS_FRENTE) };
 }
 
+/**
+ * Um cartão: fase 1 (campos espelhando a franquia) e fase 2 (etapa pela máquina de `planejarMovimento`).
+ * `historico` = detalhe do paciente já em mãos (a revisão dos antigos traz; a varredura normal só busca
+ * quando a etapa exige — GANHO e funil TRATAMENTO).
+ */
 async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null = null): Promise<void> {
   const { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, seco } = ctx;
   ctx.tocados?.add(leadId);
