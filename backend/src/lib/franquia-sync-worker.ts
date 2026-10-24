@@ -302,13 +302,24 @@ function mapearCampos(campos: CampoBruto[]): MapaCampos {
   return out;
 }
 
+/**
+ * O que o cartão tem em cada campo que o sincronizador espelha. Campo de LISTA (select/radiobutton) é lido pela
+ * OPÇÃO que o cartão guarda (`enum_id`), pelo nome ATUAL dela, e não pelo texto que veio junto: o Kommo não
+ * reescreve o texto dos cartões quando se renomeia a opção ("DRA. AYLANA" → "DRA. AYLANA SILVA MENDES"). Lido
+ * pelo texto, o cartão parecia sempre divergente da franquia e o mesmo enum era regravado a cada varredura,
+ * com `erros: 0` (24/10/2026, Açailândia: 4 cartões × 4 varreduras por hora). `enum_id` que não está mais
+ * entre as opções do campo (opção apagada) cai no texto que veio, como antes.
+ */
 function valoresDoLead(lead: KommoLead, mapa: MapaCampos): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   for (const [chave, nome] of Object.entries(CAMPOS_SYNC) as Array<[CampoSync, string]>) {
     const info = mapa[chave];
     if (!info) continue;
     const cf = (lead.custom_fields_values ?? []).find((f) => f.field_id === info.id);
-    const v = cf?.values?.[0]?.value;
+    const guardado = cf?.values?.[0];
+    const ehLista = info.type === 'select' || info.type === 'radiobutton';
+    const opcaoAtual = ehLista && guardado?.enum_id != null ? info.enums.find((e) => e.id === Number(guardado.enum_id)) : undefined;
+    const v = opcaoAtual ? opcaoAtual.value : guardado?.value;
     out[nome] = v === null || v === undefined || v === '' ? null : String(v);
   }
   return out;

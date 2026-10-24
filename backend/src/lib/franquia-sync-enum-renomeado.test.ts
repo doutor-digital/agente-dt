@@ -1,0 +1,95 @@
+/**
+ * 24/10/2026, Açailândia: a opção "DRA. AYLANA" do campo ⚕ Fisioterapeuta foi renomeada para "DRA. AYLANA SILVA MENDES".
+ * O Kommo não reescreve o texto dos cartões, só mantém o `enum_id`. O sincronizador comparava o TEXTO do cartão com o da
+ * franquia, via divergência em todo ciclo e regravava o mesmo enum a cada varredura, com `erros: 0` — 4 cartões × 4
+ * varreduras por hora. A comparação passou a ser pela opção (enum_id) com o nome ATUAL dela.
+ *
+ * Sem rede e sem banco: Kommo falso que anota as gravações; `funis: null` mantém a fase 2 (etapa) fora do caso.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import type { Unit } from '@prisma/client';
+
+import { _interno, camposDaConta, type CampoBruto, type ResumoSync } from './franquia-sync-worker.js';
+import { CAMPOS_SYNC, planejarEscritas } from './franquia-sync.js';
+import type { KommoClient, KommoLead } from '../services/kommo.service.js';
+import type { SpineSchedule } from '../services/spine.service.js';
+
+const ID_FISIO = 4;
+const AYLANA = 1846204;
+const THAIZ = 1846206;
+const CAMPOS_BRUTOS: CampoBruto[] = [
+  {
+    id: ID_FISIO, name: '⚕ Fisioterapeuta', type: 'select',
+    enums: [{ id: AYLANA, value: 'DRA. AYLANA SILVA MENDES' }, { id: THAIZ, value: 'DRA. THAIZ DE SOUSA LIMA' }],
+  },
+];
+const MAPA = _interno.mapearCampos(CAMPOS_BRUTOS);
+
+const unidade = { id: 'unidade-teste-enum', slug: 'doutor-hernia-acailandia' } as unknown as Unit;
+
+function cartao(guardado: { value: string; enum_id?: number }): KommoLead {
+  return { id: 18137576, name: 'PACIENTE TESTE', custom_fields_values: [{ field_id: ID_FISIO, values: [guardado] }] } as unknown as KommoLead;
+}
+
+function consulta(fisio: string): SpineSchedule {
+  return {
+    idSchedule: 0, idTreatment: null, idStatus: 37, statusName: 'Agendado', clientName: 'PACIENTE TESTE', categoryName: 'AVALIAÇÃO',
+    physicalTherapist: fisio, dateAttendanceUtc: '2026-10-20T13:00:00Z', dateAttendanceLocal: null, dayLocal: null, timeLocal: null, isBusy: true, requiresManualValidation: false,
+  } as unknown as SpineSchedule;
+}
+
+/** Roda a fase 1 de um cartão (a mesma função da varredura) e devolve o que foi gravado. */
+async function varrer(lead: KommoLead, fisioDaFranquia: string) {
+  const gravacoes: Array<{ leadId: number; campo: number; valor: unknown }> = [];
+  const kommo = {
+    setLeadCustomFieldValue: async (leadId: number, campo: number, _t: string, valor: unknown) => { gravacoes.push({ leadId, campo, valor }); },
+  } as unknown as KommoClient;
+  const resumo: ResumoSync = { unit: unidade.slug, em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
+  const ctx = {
+    unit: unidade, kommo, funis: null, mapa: MAPA, ops: { fisio: CAMPOS_BRUTOS[0].enums!.map((e) => e.value), categoria: [], tratamento: [] },
+    agoraEpoch: Math.floor(Date.now() / 1000), resumo, camposPorNome: camposDaConta(CAMPOS_BRUTOS),
+  } as unknown as Parameters<typeof _interno.processarCartao>[0];
+  await _interno.processarCartao(ctx, lead.id, lead, { nome: 'PACIENTE TESTE', idClient: null, consultas: [consulta(fisioDaFranquia)], tratamento: null });
+  return { gravacoes, resumo };
+}
+
+test('opção renomeada: mesmo enum_id, texto antigo no cartão → NENHUMA escrita, em quantas varreduras forem', async () => {
+  const lead = cartao({ value: 'DRA. AYLANA', enum_id: AYLANA });
+  for (let varredura = 0; varredura < 4; varredura++) {
+    const { gravacoes, resumo } = await varrer(lead, 'AYLANA SILVA MENDES');
+    assert.deepEqual(gravacoes, [], `varredura ${varredura + 1}: nada a gravar`);
+    assert.equal(resumo.escritas, 0);
+  }
+});
+
+test('opção renomeada: vale também para a outra fisioterapeuta (THAIZ)', async () => {
+  const { gravacoes } = await varrer(cartao({ value: 'DRA. THAIZ', enum_id: THAIZ }), 'THAIZ DE SOUSA LIMA');
+  assert.deepEqual(gravacoes, []);
+});
+
+test('opção DIFERENTE (enum_id de outra fisio): a franquia ainda vence e grava uma vez', async () => {
+  const { gravacoes } = await varrer(cartao({ value: 'DRA. THAIZ DE SOUSA LIMA', enum_id: THAIZ }), 'AYLANA SILVA MENDES');
+  assert.deepEqual(gravacoes, [{ leadId: 18137576, campo: ID_FISIO, valor: 'DRA. AYLANA SILVA MENDES' }]);
+});
+
+test('enum_id que não existe mais nas opções: cai no texto do cartão, como antes (sem palpite)', async () => {
+  const { gravacoes } = await varrer(cartao({ value: 'DRA. AYLANA', enum_id: 999 }), 'AYLANA SILVA MENDES');
+  assert.equal(gravacoes.length, 1, 'texto antigo e opção sumida: diverge e é regravado para o enum certo');
+});
+
+test('cartão sem enum_id (dado antigo ou fonte que só traz texto): compara pelo texto, igual a antes', async () => {
+  assert.deepEqual((await varrer(cartao({ value: 'DRA. AYLANA SILVA MENDES' }), 'AYLANA SILVA MENDES')).gravacoes, []);
+  assert.equal((await varrer(cartao({ value: 'DRA. AYLANA' }), 'AYLANA SILVA MENDES')).gravacoes.length, 1);
+});
+
+test('valoresDoLead devolve o nome ATUAL da opção guardada; campo que não é lista segue pelo texto', () => {
+  const v = _interno.valoresDoLead(cartao({ value: 'DRA. AYLANA', enum_id: AYLANA }), MAPA);
+  assert.equal(v[CAMPOS_SYNC.FISIO], 'DRA. AYLANA SILVA MENDES');
+  // o planejador (puro) com esse valor não propõe nada
+  const w = planejarEscritas({
+    valores: v, consulta: consulta('AYLANA SILVA MENDES'), consultaEpoch: null, tratamento: null, feitoPelaIa: false, agoraEpoch: 0,
+    opcoes: { fisio: ['DRA. AYLANA SILVA MENDES', 'DRA. THAIZ DE SOUSA LIMA'], categoria: [], tratamento: [] },
+  });
+  assert.ok(!w.some((x) => x.campo === 'FISIO'));
+});
