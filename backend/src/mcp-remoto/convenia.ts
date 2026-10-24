@@ -442,7 +442,12 @@ async function desligadosComFicha(
   const { itens, truncado } = await desligados(ctx, c);
   const alvo = itens.filter((d) => filtro(d.desligamento)).sort((a, b) => String(b.desligamento.data).localeCompare(String(a.desligamento.data)));
   const lidos = alvo.slice(0, ctx.maxColaboradores);
-  const fichas = await emParalelo(lidos, 4, async (d) => ({ ...(await ficha(ctx, c, d.id, TTL_DESLIGADO)), situacao: 'Desligado', desligamento: d.desligamento }));
+  const fichas = await emParalelo(lidos, 4, async (d) => {
+    const f = await ficha(ctx, c, d.id, TTL_DESLIGADO);
+    // quem tem desligamento é carimbado "Desligado", mas a ficha pode ainda dizer "Ativo" (aviso prévio
+    // correndo): com o registro cru saindo junto, as duas versões apareceriam sem dizer qual vale
+    return { ...f, situacaoOriginal: f.situacao, situacao: 'Desligado', desligamento: d.desligamento };
+  });
   return { itens: fichas, truncado, semFicha: alvo.slice(lidos.length) };
 }
 
@@ -878,9 +883,12 @@ export async function conveniaColaborador(ctx: ContextoConvenia, a: { unidade: s
   const saida = (await parte(() => desligados(ctx, c)));
   const desligamento = 'itens' in saida ? saida.itens.find((d) => d.id === id)?.desligamento : undefined;
   const [ferias, afastamentos] = await Promise.all([parte(() => feriasDe(ctx, c, id)), parte(() => afastamentosDe(ctx, c, id))]);
+  // mesmo carimbo de `desligadosComFicha`: `situacaoOriginal` guarda o que a ficha dizia (ver lá). O tipo é
+  // anotado porque o spread sozinho perde a index signature e passaria a esconder o registro cru.
+  const colaborador: ColaboradorComSaida = { ...pessoa, ...(desligamento ? { situacaoOriginal: pessoa.situacao, situacao: 'Desligado', desligamento } : {}) };
   return {
     unidade: c.slug,
-    colaborador: { ...pessoa, ...(desligamento ? { situacao: 'Desligado', desligamento } : {}) },
+    colaborador,
     ferias,
     afastamentos,
     aviso: 'Ficha completa do Convênia: pode trazer CPF, RG, PIS, CTPS, dados bancários/Pix, endereço, telefones, e-mails, salário, nascimento, etnia, deficiência e dados de saúde (CID, ASO). É dado pessoal sensível, a consulta fica registrada: responda o que foi pedido e não repasse o resto.',

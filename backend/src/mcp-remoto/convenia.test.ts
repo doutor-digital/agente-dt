@@ -12,6 +12,7 @@ import {
   resolverContasConvenia,
   resumirColaborador,
   type ColaboradorBruto,
+  type ColaboradorComSaida,
   type ContaConvenia,
 } from './convenia.js';
 import { listarIntegracoes } from './integracoes.js';
@@ -237,6 +238,26 @@ test('colaboradores desligados: ficha lida por pessoa, período de desligamento 
   const fora = await conveniaColaboradores(ctx, { unidade: 'doutor-digital', situacao: 'desligados', desligadosDe: '2026-11-01' });
   assert.equal((fora.porUnidade['doutor-digital'] as { total: number }).total, 0);
   await assert.rejects(() => conveniaColaboradores(ctx, { unidade: 'doutor-digital', situacao: 'ativos', desligadosDe: '2026-10-01' }), /desligados/);
+});
+
+test('ficha que ainda diz "Ativo" com desligamento na listagem: carimba, guarda o original e não mexe no cru', async () => {
+  // aviso prévio correndo: a pessoa está na listagem de ativos E na de desligados
+  const rotas: Rotas = {
+    ...rotasPadrao(),
+    '/employees/dismissed': () => pagina([{ id: ANA.id, dismissal: { date: '2026-11-30', type: { title: 'Pedido de demissão' }, dismissal_step: { name: 'Em andamento' } } }]),
+  };
+  const r = await conveniaColaboradores(ctxPadrao(rotas), { unidade: 'doutor-digital', situacao: 'desligados', completo: true });
+  const u = r.porUnidade['doutor-digital'] as Extract<(typeof r.porUnidade)[string], { ok: true }>;
+  const ana = u.itens.find((x) => x.nome === 'Ana Souza') as ColaboradorComSaida;
+  assert.equal(ana.situacao, 'Desligado', 'quem tem desligamento é carimbado');
+  assert.equal(ana.situacaoOriginal, 'Ativo', 'e o que a ficha dizia não se perde');
+  assert.equal(ana.status, 'Ativo', 'o registro cru fica intacto');
+
+  const f = await conveniaColaborador(ctxPadrao(rotas), { unidade: 'doutor-digital', busca: ANA.id });
+  assert.ok(f.colaborador);
+  assert.equal(f.colaborador.situacao, 'Desligado');
+  assert.equal(f.colaborador.situacaoOriginal, 'Ativo');
+  assert.equal(f.colaborador.status, 'Ativo');
 });
 
 test('desligados além do teto: contam sem nome; com filtro de pessoa a conta sai marcada incompleta', async () => {
