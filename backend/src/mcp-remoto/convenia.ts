@@ -2,10 +2,11 @@
  * Convênia no conector: colaboradores, admissões e desligamentos, férias e afastamentos das empresas com o
  * token do Convênia no painel de integrações. Só leitura — a fonte de produção é o `conveniaGet` (só GET).
  *
- * LGPD: o Convênia devolve CPF, RG, PIS, CTPS, conta bancária, Pix, endereço, telefones, e-mail pessoal,
- * salário, data de nascimento, deficiência, etnia, ASO, CID do afastamento e anotações livres. NADA disso sai
- * daqui: cada registro é remontado campo a campo por uma lista do que PODE sair (`colaboradorSeguro`,
- * `desligamentoSeguro`, `afastamentoSeguro`…), e o cache guarda só o que já foi remontado.
+ * Dado pessoal: por decisão da dona da empresa (24/10/2026), o conector NÃO corta mais campo nenhum — sai o
+ * que o Convênia manda, CPF, salário, dados bancários, endereço, nascimento, etnia, deficiência, ASO, CID e
+ * anotações incluídos. Cada registro ganha os nomes em português que o filtro e o agrupamento usam e leva o
+ * registro cru junto. Nas listagens de pessoal a resposta vem resumida (só os campos em português) para não
+ * estourar o tamanho; `completo: true` devolve a ficha inteira, e `convenia_colaborador` já vem completa.
  *
  * Férias e afastamentos são por colaborador na API (uma chamada por pessoa) e o Convênia aceita 50 por minuto:
  * essas ferramentas leem no máximo `maxColaboradores` pessoas por chamada e avisam quando cortaram.
@@ -79,7 +80,7 @@ interface Ref {
   title?: string | null;
 }
 
-/** Um colaborador como a API devolve. Os campos sensíveis chegam (index signature) e nunca saem. */
+/** Um colaborador como a API devolve. O que não está declarado aqui chega pela index signature e também sai. */
 export interface ColaboradorBruto {
   id: string;
   name?: string | null;
@@ -152,7 +153,7 @@ interface ColetivaBruta {
   [outro: string]: unknown;
 }
 
-// ----------------------------------------------------------------- remontagem segura (LGPD)
+// ----------------------------------------------------------------- normalização (registro cru + nomes em português)
 
 const texto = (v: unknown): string | null => {
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
@@ -167,7 +168,11 @@ const dia = (v: unknown): string | null => {
 const nomeDe = (n?: unknown, s?: unknown): string | null => texto([texto(n), texto(s)].filter(Boolean).join(' '));
 export const normalizar = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-export interface Colaborador {
+/**
+ * Os campos com nome em português — é por eles que filtro, agrupamento, busca e ordenação funcionam, e são
+ * eles (e só eles) que o `resumirColaborador` projeta nas listagens.
+ */
+export interface ColaboradorEmPortugues {
   id: string;
   nome: string;
   nomeSocial?: string;
@@ -184,12 +189,18 @@ export interface Colaborador {
   estagio?: { inicio: string | null; fim: string | null };
 }
 
+/** Os campos em português MAIS o registro cru do Convênia (index signature): nada é cortado. */
+export interface Colaborador extends ColaboradorEmPortugues {
+  [extra: string]: unknown;
+}
+
 /**
- * O que pode sair de um colaborador. Lista fechada: campo novo que o Convênia acrescentar não vaza.
- * Fora de propósito: CPF/RG/PIS/CTPS/título/CNH/reservista, conta e Pix, endereço, telefones, e-mails,
- * salário, nascimento, deficiência, etnia, gênero, ASO, anotações, contatos de emergência, dependentes.
+ * O colaborador como o Convênia manda (CPF, RG, PIS, CTPS, conta e Pix, endereço, telefones, e-mails,
+ * salário, nascimento, etnia, deficiência, ASO, anotações, dependentes… tudo) mais os nomes em português
+ * que o filtro e o agrupamento usam — e que, vindo depois no spread, ganham do bruto em caso de choque.
+ * Liberado por decisão da dona da empresa em 24/10/2026.
  */
-export function colaboradorSeguro(c: ColaboradorBruto): Colaborador {
+export function colaboradorNormalizado(c: ColaboradorBruto): Colaborador {
   const nome = nomeDe(c.name, c.last_name) ?? '(sem nome)';
   const social = texto(c.social_name);
   const vinculo = texto(c.relationship?.name);
@@ -199,6 +210,7 @@ export function colaboradorSeguro(c: ColaboradorBruto): Colaborador {
     : null;
   const estagio = c.intern && (dia(c.intern.initial_at) || dia(c.intern.finish_at)) ? { inicio: dia(c.intern.initial_at), fim: dia(c.intern.finish_at) } : null;
   return {
+    ...c,
     id: String(c.id),
     nome,
     ...(social && normalizar(social) !== normalizar(nome) ? { nomeSocial: social } : {}),
@@ -216,19 +228,27 @@ export function colaboradorSeguro(c: ColaboradorBruto): Colaborador {
   };
 }
 
-export interface Desligamento {
+export interface DesligamentoEmPortugues {
   data: string | null;
   tipo: string | null;
   avisoPrevio: string | null;
   etapa: string | null;
 }
 
-/** Do desligamento sai data, tipo, aviso prévio e etapa. Motivo e comentários (texto livre) e e-mail não saem. */
-export function desligamentoSeguro(d: DesligadoBruto): { id: string; desligamento: Desligamento } {
+export interface Desligamento extends DesligamentoEmPortugues {
+  [extra: string]: unknown;
+}
+
+export type DesligadoNormalizado = { id: string; desligamento: Desligamento; [extra: string]: unknown };
+
+/** Desligamento inteiro: data, tipo, aviso prévio, etapa e também motivo, comentários e e-mail corporativo. */
+export function desligamentoNormalizado(d: DesligadoBruto): DesligadoNormalizado {
   const x = d.dismissal ?? {};
   return {
+    ...d,
     id: String(d.id),
     desligamento: {
+      ...x,
       data: dia(x.date),
       tipo: texto(x.type?.title) ?? texto(x.type?.name),
       avisoPrevio: texto(x.termination_notice?.termination_notice_type?.name),
@@ -248,11 +268,13 @@ export interface Ferias {
   dias: number | null;
   abonoDias: number | null;
   status: string;
+  [extra: string]: unknown;
 }
 
-export function solicitacaoSegura(s: SolicitacaoBruta): Ferias {
+export function solicitacaoNormalizada(s: SolicitacaoBruta): Ferias {
   const st = String(s.status ?? '').toLowerCase();
   return {
+    ...s,
     inicio: dia(s.starts_at),
     fim: dia(s.finishes_at),
     dias: typeof s.requested_days === 'number' ? s.requested_days : null,
@@ -266,10 +288,12 @@ export interface PeriodoAquisitivo {
   saldoDias: number | null;
   /** fim do período concessivo: depois dele, férias não tiradas são pagas em dobro */
   limiteParaTirar: string | null;
+  [extra: string]: unknown;
 }
 
-export function periodoSeguro(p: PeriodoBruto): PeriodoAquisitivo {
+export function periodoNormalizado(p: PeriodoBruto): PeriodoAquisitivo {
   return {
+    ...p,
     aquisitivo: { inicio: dia(p.purchasing_started_at), fim: dia(p.purchasing_finished_at) },
     saldoDias: typeof p.balance === 'number' ? p.balance : null,
     limiteParaTirar: dia(p.concessive_finished_at),
@@ -282,12 +306,14 @@ export interface Afastamento {
   de: string | null;
   ate: string | null;
   dias: number | null;
+  [extra: string]: unknown;
 }
 
-/** Motivo (ex. "Afastamento por doença") e tipo saem; o CID e a justificativa (dado de saúde, texto livre) nunca. */
-export function afastamentoSeguro(a: AfastamentoBruto): Afastamento {
+/** Afastamento inteiro: motivo e tipo com nome em português e o registro cru, CID e justificativa inclusive. */
+export function afastamentoNormalizado(a: AfastamentoBruto): Afastamento {
   const total = Number(a.total);
   return {
+    ...a,
     motivo: texto(a.motive?.name),
     tipo: texto(a.type?.name),
     de: dia(a.date_from),
@@ -343,18 +369,18 @@ async function emParalelo<T, R>(xs: T[], n: number, fn: (x: T) => Promise<R>): P
 
 const porNome = (a: { nome: string }, b: { nome: string }) => a.nome.localeCompare(b.nome, 'pt-BR');
 
-/** Ativos já remontados (o cache nunca guarda o registro bruto). */
+/** Ativos normalizados: o cache guarda a ficha COMPLETA; quem resume é a resposta, não o cache. */
 async function ativos(ctx: ContextoConvenia, c: ContaConvenia): Promise<{ itens: Colaborador[]; truncado: boolean }> {
   return comCache(ctx, `ativos|${c.slug}`, TTL.busca, async () => {
     const { itens, truncado } = await paginar<ColaboradorBruto>(ctx, c, '/employees');
-    return { itens: itens.map(colaboradorSeguro).sort(porNome), truncado };
+    return { itens: itens.map(colaboradorNormalizado).sort(porNome), truncado };
   });
 }
 
-async function desligados(ctx: ContextoConvenia, c: ContaConvenia): Promise<{ itens: Array<{ id: string; desligamento: Desligamento }>; truncado: boolean }> {
+async function desligados(ctx: ContextoConvenia, c: ContaConvenia): Promise<{ itens: DesligadoNormalizado[]; truncado: boolean }> {
   return comCache(ctx, `desligados|${c.slug}`, TTL.busca, async () => {
     const { itens, truncado } = await paginar<DesligadoBruto>(ctx, c, '/employees/dismissed', 1000);
-    return { itens: itens.map(desligamentoSeguro), truncado };
+    return { itens: itens.map(desligamentoNormalizado), truncado };
   });
 }
 
@@ -362,11 +388,41 @@ async function ficha(ctx: ContextoConvenia, c: ContaConvenia, id: string, ttl = 
   return comCache(ctx, `ficha|${c.slug}|${id}`, ttl, async () => {
     const r = await c.fonte.get<{ data?: ColaboradorBruto | null }>(`/employees/${encodeURIComponent(id)}`);
     if (!r?.data) throw new ErroDeEntrada(`colaborador ${id} não encontrado no Convênia`);
-    return colaboradorSeguro(r.data);
+    return colaboradorNormalizado(r.data);
   });
 }
 
 export type ColaboradorComSaida = Colaborador & { desligamento?: Desligamento };
+/** O mesmo sem o registro cru: a ficha de pessoa é grande e nas listagens a resposta sai assim por padrão. */
+export type ColaboradorResumido = ColaboradorEmPortugues & { desligamento?: Desligamento };
+
+/**
+ * PROJETA os campos em português de uma ficha já normalizada (não remonta nada: o que não está aqui
+ * continua no registro, e `completo: true` devolve ele inteiro).
+ */
+export function resumirColaborador(c: ColaboradorComSaida): ColaboradorResumido {
+  return {
+    id: c.id,
+    nome: c.nome,
+    ...(c.nomeSocial !== undefined ? { nomeSocial: c.nomeSocial } : {}),
+    situacao: c.situacao,
+    admissao: c.admissao,
+    matricula: c.matricula,
+    departamento: c.departamento,
+    cargo: c.cargo,
+    time: c.time,
+    centroDeCusto: c.centroDeCusto,
+    gestor: c.gestor,
+    ...(c.vinculo !== undefined ? { vinculo: c.vinculo } : {}),
+    ...(c.experiencia !== undefined ? { experiencia: c.experiencia } : {}),
+    ...(c.estagio !== undefined ? { estagio: c.estagio } : {}),
+    ...(c.desligamento !== undefined ? { desligamento: c.desligamento } : {}),
+  };
+}
+
+/** A lista de pessoas de uma resposta: resumida por padrão, a ficha inteira do Convênia com `completo`. */
+const itensDePessoa = (xs: ColaboradorComSaida[], completo?: boolean): Array<ColaboradorComSaida | ColaboradorResumido> =>
+  completo ? xs : xs.map(resumirColaborador);
 
 /**
  * Desligados que passam no `filtro`, com a ficha (nome, cargo, departamento, admissão) lida uma a uma — a
@@ -377,7 +433,7 @@ async function desligadosComFicha(
   ctx: ContextoConvenia,
   c: ContaConvenia,
   filtro: (d: Desligamento) => boolean,
-): Promise<{ itens: ColaboradorComSaida[]; truncado: boolean; semFicha: Array<{ id: string; desligamento: Desligamento }> }> {
+): Promise<{ itens: ColaboradorComSaida[]; truncado: boolean; semFicha: DesligadoNormalizado[] }> {
   const { itens, truncado } = await desligados(ctx, c);
   const alvo = itens.filter((d) => filtro(d.desligamento)).sort((a, b) => String(b.desligamento.data).localeCompare(String(a.desligamento.data)));
   const lidos = alvo.slice(0, ctx.maxColaboradores);
@@ -483,6 +539,8 @@ export interface ArgsColaboradores extends FiltroPessoa {
   desligadosAte?: string;
   agruparPor?: AgruparColaboradores;
   maxItens?: number;
+  /** `true` devolve a ficha inteira de cada pessoa; ausente devolve o resumo em português. */
+  completo?: boolean;
 }
 
 /** Agrupamentos que a listagem de desligados responde sozinha (sem a ficha da pessoa). */
@@ -500,7 +558,7 @@ export async function conveniaColaboradores(ctx: ContextoConvenia, a: ArgsColabo
   const porUnidade = await emCada(contas, async (c) => {
     const lista = new Map<string, ColaboradorComSaida>();
     let truncado = false;
-    let semFicha: Array<{ id: string; desligamento: Desligamento }> = [];
+    let semFicha: DesligadoNormalizado[] = [];
     if (situacao !== 'desligados') {
       const r = await ativos(ctx, c);
       for (const x of r.itens) lista.set(x.id, x);
@@ -536,7 +594,7 @@ export async function conveniaColaboradores(ctx: ContextoConvenia, a: ArgsColabo
       ...(incompleto ? { incompleto: true } : {}),
       ...(semFicha.length ? { desligadosSemFicha: semFicha.length } : {}),
       ...(avisos.length ? { aviso: avisos.join(' · ') } : {}),
-      itens: filtrados.slice(0, max),
+      itens: itensDePessoa(filtrados.slice(0, max), a.completo),
     };
   });
   const ok = Object.values(porUnidade).filter((u): u is Extract<typeof u, { ok: true }> => u.ok);
@@ -553,7 +611,7 @@ export async function conveniaColaboradores(ctx: ContextoConvenia, a: ArgsColabo
 
 export async function conveniaMovimentacao(
   ctx: ContextoConvenia,
-  a: { unidade: string | string[]; inicio: string; fim: string; departamento?: string; cargo?: string; maxItens?: number },
+  a: { unidade: string | string[]; inicio: string; fim: string; departamento?: string; cargo?: string; maxItens?: number; completo?: boolean },
 ) {
   validarData(a.inicio, 'inicio');
   validarData(a.fim, 'fim');
@@ -598,8 +656,8 @@ export async function conveniaMovimentacao(
       admissoesPorDepartamento: contar(admitidos, (x) => x.departamento),
       ...(avisos.length ? { incompleto: true, aviso: avisos.join(' · ') } : {}),
       ...(semFicha ? { desligadosSemFicha: semFicha } : {}),
-      itensAdmissoes: admitidos.slice(0, max).map((x) => ({ nome: x.nome, cargo: x.cargo, departamento: x.departamento, admissao: x.admissao })),
-      itensDesligamentos: saidasComFicha.slice(0, max).map((x) => ({ nome: x.nome, cargo: x.cargo, departamento: x.departamento, admissao: x.admissao, desligamento: x.desligamento })),
+      itensAdmissoes: itensDePessoa(admitidos.slice(0, max), a.completo),
+      itensDesligamentos: itensDePessoa(saidasComFicha.slice(0, max), a.completo),
     };
   });
   const ok = Object.values(porUnidade).filter((u): u is Extract<typeof u, { ok: true }> => u.ok);
@@ -621,7 +679,7 @@ async function feriasDe(ctx: ContextoConvenia, c: ContaConvenia, id: string) {
       c.fonte.get<PaginaLaravel<SolicitacaoBruta>>(`/employees/${enc}/vacations/solicitations`, { paginate: 200 }),
       c.fonte.get<PaginaLaravel<PeriodoBruto>>(`/employees/${enc}/vacations/periods`, { paginate: 200 }),
     ]);
-    return { solicitacoes: (s?.data ?? []).map(solicitacaoSegura), periodos: (p?.data ?? []).map(periodoSeguro) };
+    return { solicitacoes: (s?.data ?? []).map(solicitacaoNormalizada), periodos: (p?.data ?? []).map(periodoNormalizado) };
   });
 }
 
@@ -631,6 +689,7 @@ async function coletivas(ctx: ContextoConvenia, c: ContaConvenia) {
     return {
       truncado,
       itens: itens.map((x) => ({
+        ...x,
         titulo: texto(x.title),
         inicio: dia(x.starts_at),
         fim: dia(x.finishes_at),
@@ -647,6 +706,10 @@ function somarDias(data: string, dias: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Férias e períodos saem inteiros; o tipo precisa dizer isso (o spread sozinho perde a index signature). */
+type FeriasDePessoa = Ferias & { nome: string; cargo: string | null; departamento: string | null };
+type PeriodoDePessoa = PeriodoAquisitivo & { limiteParaTirar: string; nome: string; departamento: string | null };
+
 export async function conveniaFerias(
   ctx: ContextoConvenia,
   a: { unidade: string | string[]; inicio?: string; fim?: string; departamento?: string; cargo?: string; busca?: string; agruparPor?: 'status' | 'departamento' | 'mes'; maxItens?: number },
@@ -662,12 +725,16 @@ export async function conveniaFerias(
   const porUnidade = await emCada(contas, async (c) => {
     const { lidos, corte } = await alvosAtivos(ctx, c, a);
     const fichas = await emParalelo(lidos, 4, async (p) => ({ p, f: await feriasDe(ctx, c, p.id) }));
+    // a solicitação e o período saem inteiros; nome/cargo/departamento vêm DEPOIS do spread para que um
+    // campo do Convênia com o mesmo nome não troque a pessoa (nem o departamento que agrupa)
     const ferias = fichas
-      .flatMap(({ p, f }) => f.solicitacoes.map((s) => ({ nome: p.nome, cargo: p.cargo, departamento: p.departamento, ...s })))
+      .flatMap(({ p, f }) => f.solicitacoes.map((s): FeriasDePessoa => ({ ...s, nome: p.nome, cargo: p.cargo, departamento: p.departamento })))
       .filter((s) => s.status !== 'cancelada' && s.status !== 'recusada' && sobrepoe(s.inicio, s.fim, inicio, fim))
       .sort((x, y) => String(x.inicio).localeCompare(String(y.inicio)));
     const comSaldo = fichas.flatMap(({ p, f }) =>
-      f.periodos.filter((x) => (x.saldoDias ?? 0) > 0 && x.limiteParaTirar).map((x) => ({ nome: p.nome, departamento: p.departamento, saldoDias: x.saldoDias, limiteParaTirar: x.limiteParaTirar!, aquisitivo: x.aquisitivo })),
+      f.periodos
+        .filter((x) => (x.saldoDias ?? 0) > 0 && x.limiteParaTirar)
+        .map((x): PeriodoDePessoa => ({ ...x, limiteParaTirar: x.limiteParaTirar!, nome: p.nome, departamento: p.departamento })),
     );
     const vencidas = comSaldo.filter((x) => x.limiteParaTirar < hoje).sort((x, y) => x.limiteParaTirar.localeCompare(y.limiteParaTirar));
     const aVencer = comSaldo.filter((x) => x.limiteParaTirar >= hoje && x.limiteParaTirar <= fim).sort((x, y) => x.limiteParaTirar.localeCompare(y.limiteParaTirar));
@@ -702,11 +769,15 @@ export async function conveniaFerias(
 async function afastamentosDe(ctx: ContextoConvenia, c: ContaConvenia, id: string): Promise<Afastamento[]> {
   return comCache(ctx, `afast|${c.slug}|${id}`, TTL.busca, async () => {
     const r = await c.fonte.get<{ data?: { absences?: AfastamentoBruto[] | null } | null }>(`/employees/${encodeURIComponent(id)}/absences`);
-    return (r?.data?.absences ?? []).map(afastamentoSeguro);
+    return (r?.data?.absences ?? []).map(afastamentoNormalizado);
   });
 }
 
 const diasEntre = (de: string, ate: string) => Math.round((Date.parse(`${ate}T12:00:00Z`) - Date.parse(`${de}T12:00:00Z`)) / 86_400_000) + 1;
+
+/** O afastamento sai inteiro; o tipo precisa dizer isso (o spread sozinho perde a index signature). */
+type AfastamentoDePessoa = Afastamento & { nome: string; cargo: string | null; departamento: string | null };
+type AfastamentoNoPeriodo = AfastamentoDePessoa & { diasNoPeriodo: number };
 
 export async function conveniaAfastamentos(
   ctx: ContextoConvenia,
@@ -719,11 +790,15 @@ export async function conveniaAfastamentos(
   const max = a.maxItens ?? (contas.length === 1 ? 100 : 0);
   const porUnidade = await emCada(contas, async (c) => {
     const { lidos, corte } = await alvosAtivos(ctx, c, a);
-    const listas = await emParalelo(lidos, 4, async (p) => (await afastamentosDe(ctx, c, p.id)).map((x) => ({ nome: p.nome, cargo: p.cargo, departamento: p.departamento, ...x })));
+    // o afastamento sai inteiro (CID e justificativa inclusive); nome/cargo/departamento vêm DEPOIS do
+    // spread para que um campo do Convênia com o mesmo nome não troque a pessoa nem o agrupamento
+    const listas = await emParalelo(lidos, 4, async (p) =>
+      (await afastamentosDe(ctx, c, p.id)).map((x): AfastamentoDePessoa => ({ ...x, nome: p.nome, cargo: p.cargo, departamento: p.departamento })),
+    );
     const itens = listas
       .flat()
       .filter((x) => sobrepoe(x.de, x.ate, a.inicio, a.fim) && contem(x.motivo, a.motivo))
-      .map((x) => ({ ...x, diasNoPeriodo: diasEntre(x.de! > a.inicio ? x.de! : a.inicio, (x.ate ?? x.de!) < a.fim ? (x.ate ?? x.de!) : a.fim) }))
+      .map((x): AfastamentoNoPeriodo => ({ ...x, diasNoPeriodo: diasEntre(x.de! > a.inicio ? x.de! : a.inicio, (x.ate ?? x.de!) < a.fim ? (x.ate ?? x.de!) : a.fim) }))
       .sort((x, y) => String(x.de).localeCompare(String(y.de)));
     const chave: Record<string, (x: (typeof itens)[number]) => string | null | undefined> = {
       motivo: (x) => x.motivo, tipo: (x) => x.tipo, departamento: (x) => x.departamento, colaborador: (x) => x.nome, mes: (x) => x.de?.slice(0, 7),
@@ -741,7 +816,7 @@ export async function conveniaAfastamentos(
   const ok = Object.values(porUnidade).filter((u): u is Extract<typeof u, { ok: true }> => u.ok);
   return {
     periodo: { inicio: a.inicio, fim: a.fim },
-    observacao: 'Só de quem está ativo hoje. Motivo e tipo vêm do Convênia; CID e justificativa não saem por este conector.',
+    observacao: 'Só de quem está ativo hoje. O registro vem como o Convênia guarda, CID e justificativa inclusive — é dado de saúde: use para o que foi pedido e não repasse.',
     ...(contas.length > 1
       ? { rede: { ocorrencias: ok.reduce((s, u) => s + u.ocorrencias, 0), diasNoPeriodo: ok.reduce((s, u) => s + u.diasNoPeriodo, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
@@ -803,7 +878,7 @@ export async function conveniaColaborador(ctx: ContextoConvenia, a: { unidade: s
     colaborador: { ...pessoa, ...(desligamento ? { situacao: 'Desligado', desligamento } : {}) },
     ferias,
     afastamentos,
-    lgpd: 'CPF, RG, PIS, conta bancária, endereço, telefones, e-mails, salário, nascimento, dados de saúde (CID, ASO, deficiência) e anotações não saem por este conector.',
+    aviso: 'Ficha completa do Convênia: pode trazer CPF, RG, PIS, CTPS, dados bancários/Pix, endereço, telefones, e-mails, salário, nascimento, etnia, deficiência e dados de saúde (CID, ASO). É dado pessoal sensível, a consulta fica registrada: responda o que foi pedido e não repasse o resto.',
   };
 }
 
@@ -814,13 +889,22 @@ const unidade = z
   .describe('empresa: slug ou nome curto ("doutor-digital"), uma lista, ou "todas" (até 10). Veja listar_integracoes.');
 const umaUnidade = z.string().min(1).describe('empresa: slug ou nome curto ("doutor-digital")');
 const data = (o: string) => z.string().describe(`${o}, AAAA-MM-DD`);
-const LGPD =
-  ' Por LGPD, NÃO devolve CPF, RG, PIS, CTPS, dados bancários/Pix, endereço, telefones, e-mails, salário, data de nascimento, ' +
-  'dados de saúde (CID, ASO, deficiência), etnia nem anotações — só nome, cargo, departamento, time, gestor e datas.';
+/** Aviso factual: o conector não corta campo nenhum (decisão da dona da empresa, 24/10/2026). */
+const AVISO_DADO_PESSOAL =
+  ' A resposta pode trazer dado pessoal sensível como o Convênia guarda (CPF, RG, PIS, CTPS, dados bancários/Pix, endereço, ' +
+  'telefones, e-mails, salário, nascimento, etnia, deficiência, dados de saúde como CID e ASO, anotações) e a consulta fica registrada.';
 const filtrosPessoa = {
   departamento: z.string().optional().describe('parte do nome do departamento, sem acento'),
   cargo: z.string().optional().describe('parte do nome do cargo'),
 };
+const completo = z
+  .boolean()
+  .optional()
+  .describe(
+    'true traz a ficha INTEIRA de cada pessoa (CPF, salário, dados bancários, endereço, nascimento, dados de saúde). ' +
+      'Padrão (ausente): resumo com nome, situação, matrícula, cargo, departamento, time, centro de custo, gestor, vínculo e datas. ' +
+      'A ficha inteira é grande: use com filtro ou maxItens.',
+  );
 
 export function registrarFerramentasConvenia(server: McpServer, ctx: ContextoConvenia, auditar?: Auditar): void {
   const ro = { readOnlyHint: true, openWorldHint: true };
@@ -831,7 +915,8 @@ export function registrarFerramentasConvenia(server: McpServer, ctx: ContextoCon
       description:
         'Quadro de pessoal da empresa no Convênia (RH): ativos (padrão), desligados ou todos, com filtros por departamento, cargo, time, ' +
         'gestor, nome, período de admissão e de desligamento. Use agruparPor para contar (headcount por departamento, cargo, mês de ' +
-        'admissão, tipo de desligamento…) em vez de listar.' + LGPD,
+        'admissão, tipo de desligamento…) em vez de listar. A lista vem resumida; completo: true traz a ficha inteira de cada ' +
+        'pessoa.' + AVISO_DADO_PESSOAL,
       inputSchema: {
         unidade,
         situacao: z.enum(['ativos', 'desligados', 'todos']).optional().describe('padrão: ativos (ou desligados, se vier período de desligamento)'),
@@ -845,6 +930,7 @@ export function registrarFerramentasConvenia(server: McpServer, ctx: ContextoCon
         desligadosAte: data('desligados até').optional(),
         agruparPor: z.enum(['departamento', 'cargo', 'time', 'centroDeCusto', 'gestor', 'situacao', 'vinculo', 'mesAdmissao', 'mesDesligamento', 'tipoDesligamento']).optional(),
         maxItens: z.number().int().min(0).max(500).optional(),
+        completo,
       },
       annotations: ro,
     },
@@ -857,7 +943,8 @@ export function registrarFerramentasConvenia(server: McpServer, ctx: ContextoCon
       description:
         'A ficha de UMA pessoa pelo nome (ou id do Convênia): cargo, departamento, time, gestor, vínculo (CLT, estágio…), admissão, ' +
         'fim do contrato de experiência ou do estágio, desligamento, férias (períodos com saldo e limite para tirar, solicitações) e ' +
-        'faltas/afastamentos (motivo e datas). Nome que casa com mais de uma pessoa devolve só os candidatos.' + LGPD,
+        'faltas/afastamentos (motivo, CID, datas). Vem SEMPRE completa, como o Convênia guarda — não precisa de flag. Nome que ' +
+        'casa com mais de uma pessoa devolve só os candidatos.' + AVISO_DADO_PESSOAL,
       inputSchema: { unidade: umaUnidade, busca: z.string().min(3).describe('nome (ou parte) ou id do Convênia') },
       annotations: ro,
     },
@@ -869,8 +956,9 @@ export function registrarFerramentasConvenia(server: McpServer, ctx: ContextoCon
       title: 'Admissões e desligamentos (Convênia)',
       description:
         'Admissões e desligamentos no período (data de admissão / data do desligamento): quantidades, saldo, por mês, por tipo de ' +
-        'desligamento e por departamento, ativos hoje, e a lista com nome, cargo e departamento.' + LGPD,
-      inputSchema: { unidade, inicio: data('início'), fim: data('fim'), ...filtrosPessoa, maxItens: z.number().int().min(0).max(500).optional() },
+        'desligamento e por departamento, ativos hoje, e a lista resumida de quem entrou e de quem saiu (completo: true traz a ' +
+        'ficha inteira de cada um).' + AVISO_DADO_PESSOAL,
+      inputSchema: { unidade, inicio: data('início'), fim: data('fim'), ...filtrosPessoa, maxItens: z.number().int().min(0).max(500).optional(), completo },
       annotations: ro,
     },
     (args) => executar('convenia_movimentacao', args, auditar, () => conveniaMovimentacao(ctx, args)),
@@ -882,7 +970,8 @@ export function registrarFerramentasConvenia(server: McpServer, ctx: ContextoCon
       description:
         'Férias no período (padrão: de hoje a 90 dias): quem sai e volta quando, status das solicitações, quem está de férias hoje, ' +
         'férias coletivas, e os períodos com saldo VENCIDOS (limite para tirar já passou — risco de pagar em dobro) ou a vencer até o ' +
-        'fim do período. Lê uma pessoa por vez (até 40 por chamada): numa empresa grande, filtre por departamento.' + LGPD,
+        'fim do período. Solicitações e períodos saem como o Convênia guarda. Lê uma pessoa por vez (até 40 por chamada): numa ' +
+        'empresa grande, filtre por departamento.' + AVISO_DADO_PESSOAL,
       inputSchema: {
         unidade, inicio: data('início').optional(), fim: data('fim').optional(), ...filtrosPessoa,
         busca: z.string().optional().describe('parte do nome da pessoa'),
@@ -899,8 +988,8 @@ export function registrarFerramentasConvenia(server: McpServer, ctx: ContextoCon
       title: 'Faltas e afastamentos (Convênia)',
       description:
         'Faltas, licenças e afastamentos no período, de quem está ativo: motivo (falta, doença, acidente, maternidade…), tipo ' +
-        '(justificada ou não), datas, dias dentro do período, por motivo. NUNCA devolve o CID nem a justificativa escrita. Lê uma ' +
-        'pessoa por vez (até 40 por chamada): numa empresa grande, filtre por departamento.' + LGPD,
+        '(justificada ou não), datas, dias dentro do período, por motivo. O registro sai inteiro, CID e justificativa escrita ' +
+        'inclusive. Lê uma pessoa por vez (até 40 por chamada): numa empresa grande, filtre por departamento.' + AVISO_DADO_PESSOAL,
       inputSchema: {
         unidade, inicio: data('início'), fim: data('fim'), ...filtrosPessoa,
         busca: z.string().optional().describe('parte do nome da pessoa'),
