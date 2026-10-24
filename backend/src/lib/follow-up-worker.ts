@@ -495,7 +495,7 @@ async function enviarDegrau(
   indice: number,
   totalDegraus: number,
   tituloDoCartao: string | null,
-  statusId: number | null = null,
+  statusId: number | null,
 ): Promise<void> {
   const leadId = Number(conv.leadId);
   const devolver = () =>

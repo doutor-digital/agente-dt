@@ -16,7 +16,8 @@ import { carimbarHumanoAssumiu, carimbarSemResposta, CAMPOS_DIGITAL, gravarStatu
  */
 
 before(() => {
-  _semearParaTeste([]);
+  // o carimbo de etapa é o dono do "Encerrada" nesta unidade (como na Açailândia em produção)
+  _semearParaTeste([{ slug: 'doutor-hernia-acailandia', automacao: 'carimbo-etapa', estado: 'ligado' }]);
   _semearCrmParaTeste([]);
 });
 
@@ -149,4 +150,23 @@ test('etapa 143 com nome que não é PERDIDO (conta fora do padrão): vale o id,
   const { estado, kommo } = cartaoFalso(143, COMERCIAL, 'Encerrada', funis);
   await carimbarSemResposta(unidade, 1, kommo);
   assert.equal(estado.statusConversa, 'Encerrada');
+});
+
+test('unidade SEM carimbo de etapa: ninguém grava "Encerrada", então handoff e follow-up gravam como sempre (sem leitura extra)', async () => {
+  limparCacheEsquema();
+  _semearParaTeste([]); // carimbo-etapa desligado
+  try {
+    const { estado, kommo } = cartaoFalso(143, COMERCIAL, 'Aguardando lead');
+    await carimbarSemResposta(unidade, 1, kommo);
+    assert.equal(estado.statusConversa, 'Sem resposta');
+    await carimbarHumanoAssumiu(unidade, kommo, 1);
+    assert.equal(estado.statusConversa, 'Respondendo');
+    assert.equal(estado.leituras, 0, 'não leu o cartão à toa');
+    // o turno da IA mantém a guarda de 142/143 que já tinha antes deste conserto
+    estado.statusConversa = 'Encerrada';
+    await gravarStatusConversa(unidade, kommo, 1, 'Aguardando lead', 'turno-da-ia');
+    assert.equal(estado.statusConversa, 'Encerrada');
+  } finally {
+    _semearParaTeste([{ slug: 'doutor-hernia-acailandia', automacao: 'carimbo-etapa', estado: 'ligado' }]);
+  }
 });
