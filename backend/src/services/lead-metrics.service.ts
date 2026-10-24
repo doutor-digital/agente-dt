@@ -89,7 +89,8 @@ export async function gravarStatusConversa(
     } else {
       const esquema = await esquemaDaUnidade(unit, kommo);
       const nomeDaEtapa = esquema.nomeDoStatus(cartao.pipeline_id, cartao.status_id)?.status ?? null;
-      const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, nomeDaEtapa));
+      // Sem o carimbo como dono, vale só a guarda antiga por id (142/143 em qualquer funil), que é o que o turno da IA já tinha.
+      const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, carimboEDono ? nomeDaEtapa : null));
       if (!decisao.gravar) {
         logger.info(
           { unit: unit.slug, leadId, tentou: novo, origem, etapa: nomeDaEtapa ?? cartao.status_id },

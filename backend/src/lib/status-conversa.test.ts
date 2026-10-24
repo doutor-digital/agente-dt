@@ -166,6 +166,10 @@ test('unidade SEM carimbo de etapa: ninguém grava "Encerrada", então handoff e
     estado.statusConversa = 'Encerrada';
     await gravarStatusConversa(unidade, kommo, 1, 'Aguardando lead', 'turno-da-ia');
     assert.equal(estado.statusConversa, 'Encerrada');
+    // ...inclusive no funil TRATAMENTO (ALTA = 142): sem o carimbo, a guarda antiga por id continua igual
+    const alta = cartaoFalso(142, TRATAMENTO, 'Encerrada');
+    await gravarStatusConversa(unidade, alta.kommo, 1, 'Aguardando lead', 'turno-da-ia');
+    assert.equal(alta.estado.statusConversa, 'Encerrada');
   } finally {
     _semearParaTeste([{ slug: 'doutor-hernia-acailandia', automacao: 'carimbo-etapa', estado: 'ligado' }]);
   }
