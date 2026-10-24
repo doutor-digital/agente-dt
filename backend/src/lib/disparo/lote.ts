@@ -63,7 +63,7 @@ export interface Porto {
   ultimosResultados(unitId: string, n: number, desde: Date): Promise<Array<'enviado' | 'falhou'>>;
   /** A onda continua APROVADA agora? Cancelar ou pausar no meio da rodada vale já, não só na próxima. */
   ondaAprovada(ondaId: string): Promise<boolean>;
-  /** pendente → enviando, atômico, e marca a tentativa em `enviadoEm` (conta no teto mesmo se o processo morrer aqui). `false` = outro processo pegou. */
+  /** pendente → enviando, atômico e SÓ se a onda ainda está aprovada; marca a tentativa em `enviadoEm` (conta no teto mesmo se o processo morrer aqui). `false` = outro processo pegou, ou a onda foi parada. */
   reivindicar(id: string): Promise<boolean>;
   gravar(id: string, dados: DadosDeGravacao): Promise<void>;
   pausarOndas(unitId: string, campanhaId: string | null, motivo: string): Promise<void>;

@@ -80,7 +80,10 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
         })
       ).map((x) => (x.estado === 'enviado' ? 'enviado' : 'falhou')),
 
-    reivindicar: async (id) => (await prisma.disparoDestinatario.updateMany({ where: { id, estado: 'pendente' }, data: { estado: 'enviando', enviadoEm: new Date() } })).count === 1,
+    // A onda ainda estar APROVADA faz parte da mesma instrução atômica: cancelar/pausar enquanto as conferências
+    // lentas rodavam (franquia, SAIR) vale já para esta pessoa.
+    reivindicar: async (id) =>
+      (await prisma.disparoDestinatario.updateMany({ where: { id, estado: 'pendente', onda: { estado: 'aprovada' } }, data: { estado: 'enviando', enviadoEm: new Date() } })).count === 1,
 
     gravar: async (id, dados) => {
       await prisma.disparoDestinatario.update({
