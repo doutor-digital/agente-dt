@@ -224,6 +224,26 @@ export function escolherConsulta(schedules: SpineSchedule[]): SpineSchedule | nu
   return ordem.find((s) => s.idStatus !== SPINE_STATUS.DESMARCADO) ?? ordem[0];
 }
 
+/** O dia (AAAA-MM-DD) `n` dias depois (ou antes, se negativo) de `dia`. */
+export function somarDias(dia: string, n: number): string {
+  return new Date(Date.parse(`${dia}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * A consulta que o cartão espelha, quando quem lê é a REVISÃO (histórico inteiro) e não a varredura (só a janela da
+ * agenda, `de`…`ate` em dias da clínica).
+ *
+ * As duas gravam os MESMOS campos (Data, Situação, Compareceu, Categoria). Se a revisão escolhesse sobre o histórico
+ * todo, ela discordaria da varredura sempre que a janela só tem uma consulta DESMARCADA e o histórico tem uma mais
+ * antiga que não foi — e cada uma desfazia a outra a cada varredura (24/10/2026, Açailândia, lead 26366662: Situação
+ * Atendido ↔ Desmarcado). Regra: o que a janela tem, vale a janela; o histórico só responde quando a janela está
+ * vazia (que é para isso que a revisão existe: cartão cuja consulta a agenda D-3…D+45 nunca vê).
+ */
+export function escolherConsultaDaJanela(todas: SpineSchedule[], de: string, ate: string): SpineSchedule | null {
+  const naJanela = todas.filter((s) => !!s.dayLocal && s.dayLocal >= de && s.dayLocal <= ate);
+  return escolherConsulta(naJanela) ?? escolherConsulta(todas);
+}
+
 export interface ValoresDoLead {
   /** valor atual de cada campo no cartão (string do Kommo; data = epoch em segundos como string) */
   [campo: string]: string | null;
