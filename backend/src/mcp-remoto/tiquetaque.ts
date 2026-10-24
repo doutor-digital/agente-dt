@@ -7,11 +7,15 @@
  * `doutor-digital`) e as clínicas aparecem como LOCAIS ("DH - Imperatriz") e EMPREGADORES (razão social)
  * dentro dela. Por isso as ferramentas filtram por `local` e `empregador`.
  *
- * LGPD: o Tiquetaque devolve CPF, PIS/NIS, celular, e-mail, nascimento, cidade, valor da hora, a
- * justificativa escrita das batidas e dos afastamentos, o anexo do atestado e a cerca virtual (GPS) dos
- * locais. NADA disso sai daqui: cada registro é remontado campo a campo por uma lista do que PODE sair
- * (`colaboradorSeguro`, `espelhoSeguro`, `batidaSegura`, `afastamentoSeguro`), e o cache guarda só o que
- * já foi remontado.
+ * Dado pessoal: por decisão da dona da empresa (24/10/2026), o conector NÃO corta mais campo nenhum — sai o
+ * que o Tiquetaque manda, CPF, PIS/NIS, celular, e-mail, nascimento, cidade, valor da hora, foto/selfie e
+ * GPS da batida, anexo do atestado e justificativa escrita incluídos. Cada registro ganha os nomes em
+ * português que o filtro, o agrupamento e a ordenação usam e leva o registro cru junto
+ * (`colaboradorNormalizado`, `espelhoNormalizado`, `batidaNormalizada`, `afastamentoNormalizado`).
+ * Registro pequeno (batida, dia do espelho, afastamento) sai SEMPRE inteiro. As duas respostas grandes vêm
+ * resumidas por padrão para não estourar o tamanho, e `completo: true` devolve o registro inteiro: a ficha
+ * da pessoa em `tiquetaque_colaboradores` e o espelho de ponto em `tiquetaque_horas`. O cache guarda sempre
+ * o registro COMPLETO — o resumo é só na hora de responder.
  *
  * O espelho de ponto (`/timesheets`) traz TODOS os funcionários numa chamada paginada — é dele que saem o
  * ponto do dia, as horas, os atrasos e as faltas. Marcações com tipo/aprovação e afastamentos são por
@@ -91,7 +95,7 @@ export function resolverContasTiquetaque(ctx: ContextoTiquetaque, alvo: string |
 
 // ----------------------------------------------------------------- formato bruto (só o que lemos)
 
-/** Um funcionário como a API devolve. Os campos sensíveis chegam (index signature) e nunca saem. */
+/** Um funcionário como a API devolve. O que não está declarado aqui chega pela index signature e também sai. */
 export interface FuncionarioBruto {
   _id: string;
   full_name?: string | null;
@@ -179,7 +183,7 @@ interface ListaEve<T> {
   _meta?: { total?: number; max_results?: number; page?: number } | null;
 }
 
-// ----------------------------------------------------------------- remontagem segura (LGPD)
+// ----------------------------------------------------------------- normalização (registro cru + nomes em português)
 
 const texto = (v: unknown): string | null => {
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
@@ -202,7 +206,11 @@ const horas = (v: unknown): number | null => {
 };
 const soma = (xs: Array<number | null | undefined>) => Math.round(xs.reduce<number>((s, x) => s + (x ?? 0), 0) * 100) / 100;
 
-export interface Colaborador {
+/**
+ * Os campos com nome em português — é por eles que filtro, agrupamento, busca e ordenação funcionam, e são
+ * eles (e só eles) que o `resumirColaborador` projeta na listagem.
+ */
+export interface ColaboradorEmPortugues {
   id: string;
   nome: string;
   local: string | null;
@@ -217,6 +225,11 @@ export interface Colaborador {
   matricula?: string;
 }
 
+/** Os campos em português MAIS o registro cru do Tiquetaque (index signature): nada é cortado. */
+export interface Colaborador extends ColaboradorEmPortugues {
+  [extra: string]: unknown;
+}
+
 export interface Referencias {
   locaisDe: Map<string, string[]>;
   empregadores: Map<string, string>;
@@ -225,11 +238,12 @@ export interface Referencias {
 }
 
 /**
- * O que pode sair de um funcionário. Lista fechada: campo novo que o Tiquetaque acrescentar não vaza.
- * Fora de propósito: CPF/CNPJ, PIS/NIS, celular, e-mail, nascimento, cidade/UF, valor da hora, external_id
- * e as configurações de registro (foto, GPS, cerca virtual).
+ * O funcionário como o Tiquetaque manda (CPF, PIS/NIS, celular, e-mail, nascimento, cidade/UF, valor da
+ * hora, external_id e as configurações de registro — foto, GPS, cerca virtual — tudo) mais os nomes em
+ * português que o filtro e o agrupamento usam, e que, vindo depois no spread, ganham do bruto em caso de
+ * choque. Liberado por decisão da dona da empresa em 24/10/2026.
  */
-export function colaboradorSeguro(f: FuncionarioBruto, ref: Referencias): Colaborador {
+export function colaboradorNormalizado(f: FuncionarioBruto, ref: Referencias): Colaborador {
   const cd = f.contract_data ?? {};
   const id = String(f._id);
   const desligamento = dia(cd.dismissal_date);
@@ -238,6 +252,7 @@ export function colaboradorSeguro(f: FuncionarioBruto, ref: Referencias): Colabo
   const gestorId = texto(cd.manager);
   const escalaId = texto(f.work_schedule);
   return {
+    ...f,
     id,
     nome: texto(f.full_name) ?? '(sem nome)',
     local: ref.locaisDe.get(id)?.join(' + ') ?? null,
@@ -253,7 +268,31 @@ export function colaboradorSeguro(f: FuncionarioBruto, ref: Referencias): Colabo
   };
 }
 
-/** Rubricas do espelho que saem, com o nome daqui. Outra chave qualquer é descartada. */
+/**
+ * PROJETA os campos em português de uma ficha já normalizada (não remonta nada: o que não está aqui
+ * continua no registro, e `completo: true` devolve ele inteiro).
+ */
+export function resumirColaborador(c: Colaborador): ColaboradorEmPortugues {
+  return {
+    id: c.id,
+    nome: c.nome,
+    local: c.local,
+    empregador: c.empregador,
+    departamento: c.departamento,
+    cargo: c.cargo,
+    escala: c.escala,
+    gestor: c.gestor,
+    admissao: c.admissao,
+    inicioDosRegistros: c.inicioDosRegistros,
+    ...(c.desligamento !== undefined ? { desligamento: c.desligamento } : {}),
+    ...(c.matricula !== undefined ? { matricula: c.matricula } : {}),
+  };
+}
+
+/**
+ * Rubricas do espelho com o nome daqui. Só as conhecidas entram neste mapa de NÚMEROS (é por ele que o
+ * filtro, a soma e a ordenação funcionam); as outras chaves do dia e dos totais saem no registro cru.
+ */
 const RUBRICAS: Record<string, string> = {
   total: 'trabalhadas',
   horas_normais: 'normais',
@@ -296,10 +335,12 @@ function rubricas(o: Record<string, unknown> | null | undefined): Record<string,
 
 const extrasDe = (r: Record<string, number>) => soma(Object.entries(r).filter(([k]) => /^extra\d+$/.test(k)).map(([, v]) => v));
 
+/** O dia do espelho inteiro (observação, justificativa, horários crus…) mais os nomes em português. */
 export interface DiaDoEspelho {
   data: string;
   batidas: string[];
   horas: Record<string, number>;
+  [extra: string]: unknown;
 }
 
 export interface BancoDeHoras {
@@ -307,6 +348,7 @@ export interface BancoDeHoras {
   geradoNoPeriodo: number | null;
   lancadoManual: number | null;
   saldoFinal: number | null;
+  [extra: string]: unknown;
 }
 
 export interface Espelho {
@@ -315,10 +357,15 @@ export interface Espelho {
   totais: Record<string, number>;
   dias: DiaDoEspelho[];
   bancoDeHoras?: BancoDeHoras;
+  [extra: string]: unknown;
 }
 
-/** Do espelho saem as batidas (HH:MM) e as horas por rubrica; nada mais. */
-export function espelhoSeguro(e: EspelhoBruto): Espelho | null {
+/**
+ * O espelho inteiro como o Tiquetaque manda (os totais crus com as rubricas que não têm nome daqui, o dia
+ * cru com a observação e os horários sem filtro, o resumo do banco inteiro) mais as batidas em HH:MM e as
+ * horas por rubrica com nome em português, que ganham do bruto no spread.
+ */
+export function espelhoNormalizado(e: EspelhoBruto): Espelho | null {
   const id = texto(e.employee_id);
   if (!id) return null;
   const dias: DiaDoEspelho[] = [];
@@ -326,17 +373,18 @@ export function espelhoSeguro(e: EspelhoBruto): Espelho | null {
     const data = dia(d);
     if (!data || !v || typeof v !== 'object') continue;
     const batidas = Array.isArray(v.horarios) ? v.horarios.map(hora).filter((h): h is string => !!h) : [];
-    dias.push({ data, batidas, horas: rubricas(v) });
+    dias.push({ ...v, data, batidas, horas: rubricas(v) });
   }
   dias.sort((a, b) => a.data.localeCompare(b.data));
   const b = e.hours_bank_summary;
   return {
+    ...e,
     id,
     periodo: { inicio: dia(e.period?.start_date), fim: dia(e.period?.end_date) },
     totais: rubricas(e.totals),
     dias,
     ...(b && typeof b === 'object'
-      ? { bancoDeHoras: { saldoAnterior: horas(b.previous_balance), geradoNoPeriodo: horas(b.generated_balance), lancadoManual: horas(b.created_balance), saldoFinal: horas(b.final_balance) } }
+      ? { bancoDeHoras: { ...b, saldoAnterior: horas(b.previous_balance), geradoNoPeriodo: horas(b.generated_balance), lancadoManual: horas(b.created_balance), saldoFinal: horas(b.final_balance) } }
       : {}),
   };
 }
@@ -346,14 +394,18 @@ export interface Batida {
   hora: string;
   tipo: string;
   aprovada: boolean;
+  [extra: string]: unknown;
 }
 
-/** Da marcação saem data, hora, tipo (app, web, aparelho, ajuste manual…) e se está aprovada. A justificativa escrita não. */
-export function batidaSegura(b: BatidaBruta): Batida | null {
+/**
+ * A marcação inteira: data, hora, tipo (app, web, aparelho, ajuste manual…) e aprovação com nome em
+ * português, mais o registro cru — foto/selfie, GPS, dispositivo e justificativa escrita inclusive.
+ */
+export function batidaNormalizada(b: BatidaBruta): Batida | null {
   const t = texto(b.time);
   const m = t ? /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(t) : null;
   if (!m) return null;
-  return { data: m[1]!, hora: m[2]!, tipo: texto(b.type) ?? 'sem tipo', aprovada: b.approved === true };
+  return { ...b, data: m[1]!, hora: m[2]!, tipo: texto(b.type) ?? 'sem tipo', aprovada: b.approved === true };
 }
 
 const TIPOS_AFASTAMENTO: Record<string, string> = {
@@ -372,19 +424,21 @@ export interface Afastamento {
   remunerado: boolean | null;
   descontaDoBanco?: boolean;
   temAnexo: boolean;
+  [extra: string]: unknown;
 }
 
 /**
- * Do afastamento saem tipo, datas (e horas, se for parcial), situação e se é remunerado. O anexo (atestado)
- * e a justificativa escrita NUNCA — só se existe anexo.
+ * O afastamento inteiro: tipo, datas (e horas, se for parcial), situação e se é remunerado com nome em
+ * português, mais o registro cru — anexo do atestado, justificativa escrita e quem aprovou inclusive.
  */
-export function afastamentoSeguro(a: AfastamentoBruto): Afastamento {
+export function afastamentoNormalizado(a: AfastamentoBruto): Afastamento {
   const bruto = texto(a.leave_type) ?? texto(a.type) ?? '';
   const cr = a.approval_info?.change_request ?? {};
   const reprovado = !!(cr && (cr.rejected_date || cr.rejected_by));
   const horaInicio = hora(a.start_time);
   const horaFim = hora(a.end_time);
   return {
+    ...a,
     tipo: TIPOS_AFASTAMENTO[bruto] ?? (bruto || 'sem tipo'),
     inicio: dia(a.start_date),
     fim: dia(a.end_date) ?? dia(a.start_date),
@@ -440,7 +494,7 @@ export interface Cadastro {
 
 const porNome = (a: { nome: string }, b: { nome: string }) => a.nome.localeCompare(b.nome, 'pt-BR');
 
-/** Funcionários ativos já remontados, com os nomes de local, empregador, escala e gestor (o cache nunca guarda o bruto). */
+/** Funcionários ativos normalizados, com os nomes de local, empregador, escala e gestor. O cache guarda a ficha COMPLETA. */
 async function cadastro(ctx: ContextoTiquetaque, c: ContaTiquetaque): Promise<Cadastro> {
   return comCache(ctx, `cadastro|${c.slug}`, TTL.busca, async () => {
     const avisos: string[] = [];
@@ -477,7 +531,7 @@ async function cadastro(ctx: ContextoTiquetaque, c: ContaTiquetaque): Promise<Ca
       const e = texto(f.contract_data?.payment_source);
       if (e) empregadorDe.set(String(f._id), e);
     }
-    const colaboradores = func.itens.map((f) => colaboradorSeguro(f, ref)).sort(porNome);
+    const colaboradores = func.itens.map((f) => colaboradorNormalizado(f, ref)).sort(porNome);
     return {
       colaboradores,
       porId: new Map(colaboradores.map((x) => [x.id, x])),
@@ -489,14 +543,14 @@ async function cadastro(ctx: ContextoTiquetaque, c: ContaTiquetaque): Promise<Ca
   });
 }
 
-/** Espelhos de todos os funcionários no período, remontados. */
+/** Espelhos de todos os funcionários no período, normalizados. O cache guarda o espelho COMPLETO. */
 async function espelhos(ctx: ContextoTiquetaque, c: ContaTiquetaque, inicio: string, fim: string): Promise<{ porId: Map<string, Espelho>; truncado: boolean }> {
   const hoje = hojeNoFusoDe(ctx);
   return comCache(ctx, `espelho|${c.slug}|${inicio}|${fim}`, fim >= hoje ? TTL_HOJE : TTL.busca, async () => {
     const { itens, truncado } = await paginar<EspelhoBruto>(ctx, c, '/timesheets', { start_date: inicio, end_date: fim });
     const porId = new Map<string, Espelho>();
     for (const e of itens) {
-      const s = espelhoSeguro(e);
+      const s = espelhoNormalizado(e);
       if (s) porId.set(s.id, s);
     }
     return { porId, truncado };
@@ -590,6 +644,10 @@ async function alvos(ctx: ContextoTiquetaque, c: ContaTiquetaque, f: FiltroPesso
   };
 }
 
+/**
+ * Quem é a pessoa numa linha de ponto, batida, atraso ou afastamento: só identifica. A ficha inteira (CPF,
+ * PIS, celular, nascimento, valor da hora…) sai em `tiquetaque_colaboradores` com `completo: true`.
+ */
 const resumoPessoa = (c: Colaborador) => ({ nome: c.nome, local: c.local, departamento: c.departamento, cargo: c.cargo });
 
 // ----------------------------------------------------------------- tiquetaque_colaboradores
@@ -607,6 +665,8 @@ export interface ArgsColaboradores extends FiltroPessoa {
   admitidosAte?: string;
   agruparPor?: AgruparColaboradores;
   maxItens?: number;
+  /** `true` devolve a ficha inteira de cada pessoa; ausente devolve o resumo em português. */
+  completo?: boolean;
 }
 
 export async function tiquetaqueColaboradores(ctx: ContextoTiquetaque, a: ArgsColaboradores) {
@@ -622,7 +682,8 @@ export async function tiquetaqueColaboradores(ctx: ContextoTiquetaque, a: ArgsCo
       total: filtrados.length,
       ...(a.agruparPor ? { agrupado: contar(filtrados, CHAVE_COLAB[a.agruparPor]) } : {}),
       ...avisoDoCadastro(cad),
-      itens: filtrados.slice(0, max),
+      // o cache guarda a ficha completa; o corte é só na resposta
+      itens: filtrados.slice(0, max).map((x): Colaborador | ColaboradorEmPortugues => (a.completo ? x : resumirColaborador(x))),
     };
   });
   const ok = okDe(porUnidade);
@@ -644,6 +705,21 @@ export function situacaoDoDia(batidas: string[], temEspelho: boolean, ehHoje: bo
   if (batidas.length % 2 === 1) return ehHoje ? 'trabalhando' : 'batida ímpar (falta uma marcação)';
   return ehHoje ? 'saiu ou em intervalo' : 'com batidas';
 }
+
+/** O dia do espelho sai inteiro; o tipo precisa dizer isso (o spread sozinho perde a index signature). */
+type ItemDoDia = Partial<DiaDoEspelho> & {
+  nome: string;
+  local: string | null;
+  departamento: string | null;
+  cargo: string | null;
+  situacao: string;
+  batidas: string[];
+  horasTrabalhadas?: number;
+  atraso?: number;
+  faltaInjustificada?: number;
+  faltaJustificada?: number;
+  extras?: number;
+};
 
 export interface ResumoDoDia {
   colaboradores: number;
@@ -682,25 +758,31 @@ export async function tiquetaquePontoDoDia(
       const h = d?.horas ?? {};
       // falta de HOJE ainda não é falta: pode ser só quem não chegou
       const faltaInjustificada = ehHoje ? undefined : h.faltaInjustificada;
-      const item = {
+      const situacao = situacaoDoDia(batidas, !!e, ehHoje);
+      // o dia do espelho sai inteiro (horários crus, observação…); os campos em português e a pessoa vêm
+      // DEPOIS do spread para que um campo do Tiquetaque com o mesmo nome não troque a pessoa, a situação
+      // nem o número (a rubrica crua `atraso` vem como texto "0.25"). Valor `undefined` não vai para o JSON
+      // da resposta: a chave continua ausente como antes.
+      const item: ItemDoDia = {
+        ...d,
         ...resumoPessoa(p),
-        situacao: situacaoDoDia(batidas, !!e, ehHoje),
+        situacao,
         batidas,
-        ...(h.trabalhadas ? { horasTrabalhadas: h.trabalhadas } : {}),
-        ...(h.atraso ? { atraso: h.atraso } : {}),
-        ...(faltaInjustificada ? { faltaInjustificada } : {}),
-        ...(h.faltaJustificada ? { faltaJustificada: h.faltaJustificada } : {}),
-        ...(extrasDe(h) ? { extras: extrasDe(h) } : {}),
+        horasTrabalhadas: h.trabalhadas,
+        atraso: h.atraso,
+        faltaInjustificada,
+        faltaJustificada: h.faltaJustificada,
+        extras: extrasDe(h) || undefined,
       };
-      return { p, item, n: batidas.length, temEspelho: !!e };
+      return { p, item, n: batidas.length, temEspelho: !!e, situacao, batidas, atraso: h.atraso, faltaInjustificada, faltaJustificada: h.faltaJustificada };
     });
     type Linha = (typeof linhas)[number];
     const filtro: Record<SituacaoDoDia, (l: Linha) => boolean> = {
       trabalhando: (l) => l.n % 2 === 1,
       fora: (l) => l.n > 0 && l.n % 2 === 0,
       semBatida: (l) => l.n === 0,
-      comAtraso: (l) => !!l.item.atraso,
-      comFalta: (l) => !!l.item.faltaInjustificada || !!l.item.faltaJustificada,
+      comAtraso: (l) => !!l.atraso,
+      comFalta: (l) => !!l.faltaInjustificada || !!l.faltaJustificada,
     };
     const impares = linhas.filter(filtro.trabalhando).length;
     const pares = linhas.filter(filtro.fora).length;
@@ -710,16 +792,16 @@ export async function tiquetaquePontoDoDia(
       semBatida: linhas.filter((l) => l.n === 0 && l.temEspelho).length,
       semEspelho: linhas.filter((l) => !l.temEspelho).length,
       comAtraso: linhas.filter(filtro.comAtraso).length,
-      horasDeAtraso: soma(linhas.map((l) => l.item.atraso)),
+      horasDeAtraso: soma(linhas.map((l) => l.atraso)),
       ...(ehHoje ? {} : { comFalta: linhas.filter(filtro.comFalta).length }),
     };
     const escolhidas = (a.situacao ? linhas.filter(filtro[a.situacao]) : linhas).sort(
-      (x, y) => (x.item.batidas[0] ?? '99').localeCompare(y.item.batidas[0] ?? '99') || x.p.nome.localeCompare(y.p.nome, 'pt-BR'),
+      (x, y) => (x.batidas[0] ?? '99').localeCompare(y.batidas[0] ?? '99') || x.p.nome.localeCompare(y.p.nome, 'pt-BR'),
     );
     const grupo = a.agruparPor;
     return {
       resumo,
-      ...(grupo ? { agrupado: contar(escolhidas, (l) => (grupo === 'situacao' ? l.item.situacao : l.p[grupo])) } : {}),
+      ...(grupo ? { agrupado: contar(escolhidas, (l) => (grupo === 'situacao' ? l.situacao : l.p[grupo])) } : {}),
       ...avisoDoCadastro(cad, esp.truncado),
       itens: escolhidas.slice(0, max).map((l) => l.item),
     };
@@ -731,7 +813,8 @@ export async function tiquetaquePontoDoDia(
     observacao:
       'Batidas válidas do espelho de ponto (HH:MM). "trabalhando" = número ímpar de batidas hoje (entrou e ainda não saiu); "sem espelho" = ' +
       'sem escala ou cadastro incompleto no dia. Batida pendente de aprovação pode não aparecer: tiquetaque_batidas mostra tipo e aprovação. ' +
-      'Falta de hoje não entra (o dia não acabou). Horas em decimal (7.5 = 7h30).',
+      'Falta de hoje não entra (o dia não acabou). Horas em decimal (7.5 = 7h30). O dia do espelho vem como o Tiquetaque guarda, ' +
+      'com os horários crus e a observação do dia — pode trazer dado pessoal e a consulta fica registrada na auditoria.',
     ...(contas.length > 1
       ? { rede: { colaboradores: ok.reduce((s, u) => s + u.resumo.colaboradores, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
@@ -795,7 +878,7 @@ export type OrdenarHoras = 'nome' | 'trabalhadas' | 'extras' | 'atraso' | 'falta
 
 export async function tiquetaqueHoras(
   ctx: ContextoTiquetaque,
-  a: FiltroPessoa & PeriodoPedido & { unidade: string | string[]; agruparPor?: AgruparHoras; ordenarPor?: OrdenarHoras; maxItens?: number },
+  a: FiltroPessoa & PeriodoPedido & { unidade: string | string[]; agruparPor?: AgruparHoras; ordenarPor?: OrdenarHoras; maxItens?: number; completo?: boolean },
 ) {
   if (a.mes && (a.inicio || a.fim)) throw new ErroDeEntrada('use mes OU inicio/fim');
   if (!a.mes && a.fim && !a.inicio) throw new ErroDeEntrada('fim sem inicio');
@@ -831,6 +914,8 @@ export async function tiquetaqueHoras(
           diasComAtraso: e.dias.filter((d) => d.horas.atraso).length,
           diasComFaltaInjustificada: e.dias.filter((d) => d.horas.faltaInjustificada && d.data !== hoje).length,
           ...(e.bancoDeHoras ? { bancoDeHoras: e.bancoDeHoras } : {}),
+          // o espelho é grande (um registro por dia): sai inteiro só a pedido, mas o cache já o guarda assim
+          ...(a.completo ? { espelho: e } : {}),
         },
       }];
     });
@@ -895,7 +980,10 @@ export async function tiquetaqueHoras(
   });
   const ok = okDe(porUnidade);
   return {
-    observacao: 'Horas em decimal (7.5 = 7h30). "trabalhadas" = total trabalhado; extra50/extra100 = horas extras por faixa; banco de horas: saldo final do período (negativo = deve horas). Falta de hoje não entra (o dia não acabou).',
+    observacao:
+      'Horas em decimal (7.5 = 7h30). "trabalhadas" = total trabalhado; extra50/extra100 = horas extras por faixa; banco de horas: saldo ' +
+      'final do período (negativo = deve horas). Falta de hoje não entra (o dia não acabou). completo: true acrescenta o espelho inteiro ' +
+      'de cada pessoa (dia a dia, totais e banco como o Tiquetaque guarda) — pode trazer dado pessoal e a consulta fica registrada na auditoria.',
     ...(contas.length > 1
       ? { rede: { colaboradores: ok.reduce((s, u) => s + u.resumo.colaboradores, 0), extras: soma(ok.map((u) => u.resumo.extras)), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
@@ -910,6 +998,17 @@ const diaDaSemana = (d: string) => DIAS_DA_SEMANA[new Date(`${d}T12:00:00Z`).get
 
 export type AgruparOcorrencias = 'colaborador' | 'local' | 'departamento' | 'dia' | 'mes' | 'diaDaSemana';
 
+/** O dia do espelho sai inteiro; o tipo precisa dizer isso (o spread sozinho perde a index signature). */
+type OcorrenciaDoDia = DiaDoEspelho & {
+  diaDaSemana: string;
+  nome: string;
+  local: string | null;
+  departamento: string | null;
+  atraso?: number;
+  faltaInjustificada?: number;
+  faltaJustificada?: number;
+};
+
 export async function tiquetaqueAtrasosFaltas(
   ctx: ContextoTiquetaque,
   a: FiltroPessoa & { unidade: string | string[]; inicio: string; fim: string; tipo?: 'atraso' | 'falta' | 'todos'; agruparPor?: AgruparOcorrencias; maxItens?: number },
@@ -923,15 +1022,20 @@ export async function tiquetaqueAtrasosFaltas(
     const cad = await cadastro(ctx, c);
     const esp = await espelhos(ctx, c, a.inicio, a.fim);
     const itens = cad.colaboradores.filter((x) => passa(x, a)).flatMap((p) =>
-      (esp.porId.get(p.id)?.dias ?? []).flatMap((d) => {
+      (esp.porId.get(p.id)?.dias ?? []).flatMap((d): OcorrenciaDoDia[] => {
         const atraso = tipo !== 'falta' ? d.horas.atraso : undefined;
         // falta de hoje ainda não é falta
         const fi = tipo !== 'atraso' && d.data !== hoje ? d.horas.faltaInjustificada : undefined;
         const fj = tipo !== 'atraso' && d.data !== hoje ? d.horas.faltaJustificada : undefined;
         if (!atraso && !fi && !fj) return [];
+        // o dia sai inteiro (horários crus, observação, rubricas sem nome daqui); a pessoa e as horas vêm
+        // DEPOIS do spread para que um campo do Tiquetaque com o mesmo nome não troque quem se atrasou nem
+        // o número (a rubrica crua `atraso` vem como texto "0.50" e não pode ganhar do número). Valor
+        // `undefined` não vai para o JSON da resposta: a chave continua ausente como antes.
         return [{
-          data: d.data, diaDaSemana: diaDaSemana(d.data), nome: p.nome, local: p.local, departamento: p.departamento, batidas: d.batidas,
-          ...(atraso ? { atraso } : {}), ...(fi ? { faltaInjustificada: fi } : {}), ...(fj ? { faltaJustificada: fj } : {}),
+          ...d,
+          diaDaSemana: diaDaSemana(d.data), nome: p.nome, local: p.local, departamento: p.departamento,
+          atraso, faltaInjustificada: fi, faltaJustificada: fj,
         }];
       }),
     ).sort((x, y) => x.data.localeCompare(y.data) || x.nome.localeCompare(y.nome, 'pt-BR'));
@@ -974,7 +1078,10 @@ export async function tiquetaqueAtrasosFaltas(
   const ok = okDe(porUnidade);
   return {
     periodo: { inicio: a.inicio, fim: a.fim },
-    observacao: 'Do espelho de ponto, dia a dia. Atraso e falta em horas decimais (0.25 = 15 min). Falta de hoje não entra (o dia não acabou).',
+    observacao:
+      'Do espelho de ponto, dia a dia. Atraso e falta em horas decimais (0.25 = 15 min). Falta de hoje não entra (o dia não acabou). O dia ' +
+      'vem inteiro, como o Tiquetaque guarda (horários crus, observação do dia, rubricas sem nome daqui) — pode trazer dado pessoal e a ' +
+      'consulta fica registrada na auditoria.',
     ...(contas.length > 1
       ? { rede: { diasComAtraso: ok.reduce((s, u) => s + u.resumo.diasComAtraso, 0), diasComFaltaInjustificada: ok.reduce((s, u) => s + u.resumo.diasComFaltaInjustificada, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
@@ -987,9 +1094,12 @@ export async function tiquetaqueAtrasosFaltas(
 async function batidasDe(ctx: ContextoTiquetaque, c: ContaTiquetaque, id: string, inicio: string, fim: string): Promise<Batida[]> {
   return comCache(ctx, `batidas|${c.slug}|${id}|${inicio}|${fim}`, fim >= hojeNoFusoDe(ctx) ? TTL_HOJE : TTL.busca, async () => {
     const r = await c.fonte.get<{ times?: BatidaBruta[] | null }>('/times', { employee_id: id, start_date: inicio, end_date: fim });
-    return (r?.times ?? []).map(batidaSegura).filter((b): b is Batida => !!b);
+    return (r?.times ?? []).map(batidaNormalizada).filter((b): b is Batida => !!b);
   });
 }
+
+/** A batida sai inteira; o tipo precisa dizer isso (o spread sozinho perde a index signature). */
+type BatidaDePessoa = Batida & { nome: string; local: string | null };
 
 export async function tiquetaqueBatidas(
   ctx: ContextoTiquetaque,
@@ -1001,7 +1111,11 @@ export async function tiquetaqueBatidas(
   const max = a.maxItens ?? (contas.length === 1 ? 300 : 0);
   const porUnidade = await emCada(contas, async (c) => {
     const { cad, lidos, corte } = await alvos(ctx, c, a);
-    const listas = await emParalelo(lidos, 4, async (p) => (await batidasDe(ctx, c, p.id, a.inicio, fim)).map((b) => ({ nome: p.nome, local: p.local, ...b })));
+    // a batida sai inteira (foto, GPS, dispositivo, justificativa); nome/local vêm DEPOIS do spread para
+    // que um campo do Tiquetaque com o mesmo nome não troque de quem é a batida
+    const listas = await emParalelo(lidos, 4, async (p) =>
+      (await batidasDe(ctx, c, p.id, a.inicio, fim)).map((b): BatidaDePessoa => ({ ...b, nome: p.nome, local: p.local })),
+    );
     const itens = listas
       .flat()
       .filter((b) => contem(b.tipo, a.tipo) && (a.aprovacao === 'aprovadas' ? b.aprovada : a.aprovacao === 'pendentes' ? !b.aprovada : true))
@@ -1023,7 +1137,10 @@ export async function tiquetaqueBatidas(
   const ok = okDe(porUnidade);
   return {
     periodo: { inicio: a.inicio, fim },
-    observacao: 'Todas as marcações, inclusive as pendentes de aprovação e as desconsideradas, com o tipo (app, web, aparelho, reconhecimento facial, ajuste manual…). A justificativa escrita não sai por este conector.',
+    observacao:
+      'Todas as marcações, inclusive as pendentes de aprovação e as desconsideradas, com o tipo (app, web, aparelho, reconhecimento facial, ' +
+      'ajuste manual…). A marcação vem inteira, como o Tiquetaque guarda: foto/selfie, localização (GPS), dispositivo e justificativa ' +
+      'escrita inclusive — pode trazer dado pessoal e a consulta fica registrada na auditoria.',
     ...(contas.length > 1
       ? { rede: { batidas: ok.reduce((s, u) => s + u.batidas, 0), pendentes: ok.reduce((s, u) => s + u.pendentes, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
@@ -1036,11 +1153,15 @@ export async function tiquetaqueBatidas(
 async function afastamentosDe(ctx: ContextoTiquetaque, c: ContaTiquetaque, id: string, inicio: string, fim: string) {
   return comCache(ctx, `afast|${c.slug}|${id}|${inicio}|${fim}`, TTL.busca, async () => {
     const { itens, truncado } = await paginar<AfastamentoBruto>(ctx, c, '/work-leaves', { employee_id: id, start_date: inicio, end_date: fim });
-    return { itens: itens.map(afastamentoSeguro), truncado };
+    return { itens: itens.map(afastamentoNormalizado), truncado };
   });
 }
 
 const sobrepoe = (ini: string | null, fim: string | null, de: string, ate: string) => !!ini && ini <= ate && (fim ?? ini) >= de;
+
+/** O afastamento sai inteiro; o tipo precisa dizer isso (o spread sozinho perde a index signature). */
+type AfastamentoDePessoa = Afastamento & { nome: string; local: string | null; departamento: string | null };
+type AfastamentoNoPeriodo = AfastamentoDePessoa & { diasNoPeriodo: number };
 
 export async function tiquetaqueAfastamentos(
   ctx: ContextoTiquetaque,
@@ -1064,12 +1185,15 @@ export async function tiquetaqueAfastamentos(
     const listas = await emParalelo(lidos, 4, async (p) => {
       const r = await afastamentosDe(ctx, c, p.id, a.inicio, a.fim);
       truncado ||= r.truncado;
-      return r.itens.map((x) => ({ nome: p.nome, local: p.local, departamento: p.departamento, ...x }));
+      // o afastamento sai inteiro (anexo do atestado, justificativa escrita, quem aprovou); nome, local e
+      // departamento vêm DEPOIS do spread para que um campo do Tiquetaque com o mesmo nome não troque a
+      // pessoa nem o agrupamento
+      return r.itens.map((x): AfastamentoDePessoa => ({ ...x, nome: p.nome, local: p.local, departamento: p.departamento }));
     });
     const itens = listas
       .flat()
       .filter((x) => sobrepoe(x.inicio, x.fim, a.inicio, a.fim) && contem(x.tipo, a.tipo) && (!a.situacao || x.situacao === a.situacao))
-      .map((x) => ({ ...x, diasNoPeriodo: diasNoPeriodo(x.inicio! > a.inicio ? x.inicio! : a.inicio, (x.fim ?? x.inicio!) < a.fim ? (x.fim ?? x.inicio!) : a.fim) }))
+      .map((x): AfastamentoNoPeriodo => ({ ...x, diasNoPeriodo: diasNoPeriodo(x.inicio! > a.inicio ? x.inicio! : a.inicio, (x.fim ?? x.inicio!) < a.fim ? (x.fim ?? x.inicio!) : a.fim) }))
       .sort((x, y) => String(x.inicio).localeCompare(String(y.inicio)) || x.nome.localeCompare(y.nome, 'pt-BR'));
     const chave: Record<string, (x: (typeof itens)[number]) => string | null> = {
       tipo: (x) => x.tipo, situacao: (x) => x.situacao, colaborador: (x) => x.nome, local: (x) => x.local, departamento: (x) => x.departamento, mes: (x) => x.inicio?.slice(0, 7) ?? null,
@@ -1090,7 +1214,10 @@ export async function tiquetaqueAfastamentos(
   const ok = okDe(porUnidade);
   return {
     periodo: { inicio: a.inicio, fim: a.fim },
-    observacao: 'Férias, atestados, folgas, faltas justificadas e outros afastamentos lançados no Tiquetaque. O anexo (atestado) e a justificativa escrita não saem por este conector — só se há anexo.',
+    observacao:
+      'Férias, atestados, folgas, faltas justificadas e outros afastamentos lançados no Tiquetaque. O registro vem inteiro, como o ' +
+      'Tiquetaque guarda: anexo do atestado, justificativa escrita e quem aprovou inclusive. Atestado é dado de saúde — pode trazer dado ' +
+      'pessoal sensível, a consulta fica registrada na auditoria: use para o que foi pedido e não repasse o resto.',
     ...(contas.length > 1
       ? { rede: { ocorrencias: ok.reduce((s, u) => s + u.ocorrencias, 0), pendentes: ok.reduce((s, u) => s + u.pendentes, 0), unidadesForaDoTotal: foraDoTotal(porUnidade), unidadesIncompletas: incompletas(porUnidade) } }
       : {}),
@@ -1104,10 +1231,10 @@ const unidade = z
   .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
   .describe('conta do Tiquetaque no conector: slug ou nome curto ("doutor-digital"), uma lista, ou "todas". Veja listar_integracoes.');
 const data = (o: string) => z.string().describe(`${o}, AAAA-MM-DD`);
-const LGPD =
-  ' Por LGPD, NÃO devolve CPF, PIS/NIS, telefone, e-mail, data de nascimento, cidade, valor da hora, foto/selfie da batida, ' +
-  'localização (GPS, endereço, cerca virtual), anexo de atestado nem justificativa escrita — só nome, local, empregador, ' +
-  'departamento, cargo, escala, gestor, datas, horários e horas.';
+/** Aviso factual: o conector não corta campo nenhum (decisão da dona da empresa, 24/10/2026). */
+const AVISO_DADO_PESSOAL =
+  ' A resposta pode trazer dado pessoal sensível como o Tiquetaque guarda (CPF, PIS/NIS, telefone, e-mail, data de nascimento, cidade, ' +
+  'valor da hora, foto/selfie e localização GPS da batida, anexo de atestado, justificativa escrita) e a consulta fica registrada na auditoria.';
 const filtros = {
   local: z.string().optional().describe('parte do nome do local no Tiquetaque, ex. "Imperatriz", "HM", "Instituto Trauma"'),
   empregador: z.string().optional().describe('parte da razão social do empregador'),
@@ -1116,6 +1243,21 @@ const filtros = {
   busca: z.string().optional().describe('parte do nome da pessoa'),
 };
 const maxItens = z.number().int().min(0).max(1000).optional();
+const completoPessoa = z
+  .boolean()
+  .optional()
+  .describe(
+    'true traz a ficha INTEIRA de cada pessoa (CPF, PIS/NIS, telefone, e-mail, nascimento, cidade, valor da hora, exigência de foto e GPS). ' +
+      'Padrão (ausente): resumo com nome, local, empregador, departamento, cargo, escala, gestor, matrícula e datas. ' +
+      'A ficha inteira é grande: use com filtro ou maxItens.',
+  );
+const completoEspelho = z
+  .boolean()
+  .optional()
+  .describe(
+    'true acrescenta o espelho INTEIRO de cada pessoa (cada dia com os horários crus e a observação, os totais e o banco como o Tiquetaque ' +
+      'guarda). Padrão (ausente): só o resumo de horas da pessoa. O espelho inteiro é grande (um registro por dia): use com filtro ou maxItens.',
+  );
 
 export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoTiquetaque, auditar?: Auditar): void {
   const ro = { readOnlyHint: true, openWorldHint: true };
@@ -1126,7 +1268,8 @@ export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoT
       description:
         'Funcionários ATIVOS cadastrados no ponto eletrônico Tiquetaque, com local (clínica/empresa do grupo), empregador, departamento, ' +
         'cargo, escala, gestor e admissão. Uma conta do Tiquetaque cobre várias clínicas e empresas: filtre por local ou empregador. ' +
-        'Use agruparPor para contar (quantos por local, departamento, cargo, escala…).' + LGPD,
+        'Use agruparPor para contar (quantos por local, departamento, cargo, escala…). A lista vem resumida; completo: true traz a ficha ' +
+        'inteira de cada pessoa.' + AVISO_DADO_PESSOAL,
       inputSchema: {
         unidade, ...filtros,
         escala: z.string().optional().describe('parte do nome da escala de trabalho'),
@@ -1135,6 +1278,7 @@ export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoT
         admitidosAte: data('admitidos até').optional(),
         agruparPor: z.enum(['local', 'empregador', 'departamento', 'cargo', 'escala', 'gestor', 'mesAdmissao']).optional(),
         maxItens,
+        completo: completoPessoa,
       },
       annotations: ro,
     },
@@ -1147,7 +1291,7 @@ export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoT
       description:
         'As batidas de um dia (padrão: hoje) de cada funcionário e a situação: trabalhando agora (entrou e não saiu), saiu ou em intervalo, ' +
         'sem batida; mais atraso e horas do dia. Use situacao="trabalhando" para "quem está trabalhando agora" e "semBatida" para quem não ' +
-        'bateu ponto.' + LGPD,
+        'bateu ponto. O dia do espelho vem inteiro, com os horários crus e a observação do dia.' + AVISO_DADO_PESSOAL,
       inputSchema: {
         unidade, data: data('dia (padrão: hoje)').optional(), ...filtros,
         situacao: z.enum(['trabalhando', 'fora', 'semBatida', 'comAtraso', 'comFalta']).optional(),
@@ -1165,7 +1309,8 @@ export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoT
       description:
         'Espelho de ponto por funcionário no período: horas trabalhadas, normais, extras por faixa, atraso, faltas, atestado, férias, folga, ' +
         'e o BANCO DE HORAS (saldo anterior, gerado, final). O banco de horas só vem com a folha inteira: peça mes="AAAA-MM" (padrão: o mês ' +
-        'atual). Ordene por extras, atraso, faltas ou bancoDeHoras para ranking; agruparPor soma por local/departamento.' + LGPD,
+        'atual). Ordene por extras, atraso, faltas ou bancoDeHoras para ranking; agruparPor soma por local/departamento. completo: true ' +
+        'acrescenta o espelho inteiro de cada pessoa, dia a dia.' + AVISO_DADO_PESSOAL,
       inputSchema: {
         unidade,
         mes: z.string().optional().describe('folha do mês, AAAA-MM (padrão: mês atual)'),
@@ -1175,6 +1320,7 @@ export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoT
         agruparPor: z.enum(['local', 'empregador', 'departamento', 'cargo']).optional(),
         ordenarPor: z.enum(['nome', 'trabalhadas', 'extras', 'atraso', 'faltas', 'bancoDeHoras']).optional(),
         maxItens,
+        completo: completoEspelho,
       },
       annotations: ro,
     },
@@ -1186,7 +1332,8 @@ export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoT
       title: 'Atrasos e faltas (Tiquetaque)',
       description:
         'Cada dia com atraso ou falta (justificada ou não) no período, por funcionário, com as batidas do dia e as horas. Use agruparPor ' +
-        '(colaborador, local, departamento, dia, mes, diaDaSemana) para ranking e contagem. Até 186 dias por chamada.' + LGPD,
+        '(colaborador, local, departamento, dia, mes, diaDaSemana) para ranking e contagem. Até 186 dias por chamada. O dia vem inteiro, ' +
+        'com os horários crus e a observação do dia.' + AVISO_DADO_PESSOAL,
       inputSchema: {
         unidade, inicio: data('início'), fim: data('fim'), ...filtros,
         tipo: z.enum(['atraso', 'falta', 'todos']).optional(),
@@ -1203,8 +1350,9 @@ export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoT
       title: 'Marcações de ponto com tipo e aprovação (Tiquetaque)',
       description:
         'Todas as marcações no período (até 62 dias), inclusive pendentes de aprovação, com o tipo (app, web, aparelho, reconhecimento ' +
-        'facial, ajuste manual, offline…) e se está aprovada. Serve para auditar ajustes manuais e batidas pendentes. Lê uma pessoa por vez ' +
-        '(até 40 por chamada): filtre por nome, local ou departamento.' + LGPD,
+        'facial, ajuste manual, offline…) e se está aprovada. Serve para auditar ajustes manuais e batidas pendentes. A marcação vem ' +
+        'inteira: foto/selfie, localização (GPS), dispositivo e justificativa escrita inclusive. Lê uma pessoa por vez ' +
+        '(até 40 por chamada): filtre por nome, local ou departamento.' + AVISO_DADO_PESSOAL,
       inputSchema: {
         unidade, inicio: data('início'), fim: data('fim (padrão: o início)').optional(), ...filtros,
         tipo: z.string().optional().describe('parte do tipo, ex. "ajuste manual", "app"'),
@@ -1222,8 +1370,9 @@ export function registrarFerramentasTiquetaque(server: McpServer, ctx: ContextoT
       title: 'Férias, atestados e afastamentos (Tiquetaque)',
       description:
         'Afastamentos lançados no ponto no período: férias, atestado, folga, falta justificada/injustificada, abono, INSS, suspensão — com ' +
-        'datas, situação (aprovado, pendente, reprovado), se é remunerado e quantos dias caem no período. Lê uma pessoa por vez (até 40 por ' +
-        'chamada): filtre por local ou departamento.' + LGPD,
+        'datas, situação (aprovado, pendente, reprovado), se é remunerado e quantos dias caem no período. O registro vem inteiro: anexo do ' +
+        'atestado, justificativa escrita e quem aprovou inclusive. Lê uma pessoa por vez (até 40 por ' +
+        'chamada): filtre por local ou departamento.' + AVISO_DADO_PESSOAL,
       inputSchema: {
         unidade, inicio: data('início'), fim: data('fim'), ...filtros,
         tipo: z.string().optional().describe('parte do tipo: férias, atestado, folga, falta justificada, falta injustificada, abono, INSS…'),
