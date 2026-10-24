@@ -937,6 +937,16 @@ interface CtxSync {
   seco?: boolean;
   /** Ficha (`GET /api/clients/{id}`) já lida NESTA varredura, por idClient: o mesmo paciente não custa duas chamadas. */
   fichas?: Map<number, Promise<SpineFicha | null>>;
+  /**
+   * Cartões que a varredura normal já processou nesta passagem.
+   *
+   * O fechamento das sessões (`fecharSessoesDoTratamento`) precisa saber disto para NÃO tocar nos
+   * mesmos cartões: ele lê só a ficha do paciente, e a varredura normal lê a AGENDA mais a ficha —
+   * duas contas diferentes do mesmo tratamento. Em 24/10/2026, na Açailândia, o lead 27223392 ficou
+   * recebendo 8 (da varredura, com a sessão que só a agenda traz) e 7 (do fechamento) a cada 17
+   * minutos, para sempre. Quem está na agenda é da varredura; o fechamento cuida de quem saiu dela.
+   */
+  tocados?: Set<number>;
   /** Em que automação o "gravaria" do seco aparece na tela: o sincronizador em seco usa a dele; a revisão, a dela. */
   automacaoDoSeco?: 'franquia-sync' | 'franquia-revisao';
   /** Kommo dividido com outra unidade (Petrópolis + Caxias): só mexe nos cartões do rótulo desta. `null` = Kommo só dela. */
@@ -1237,6 +1247,10 @@ async function fecharSessoesDoTratamento(ctx: CtxSync): Promise<void> {
         for (const lead of leads) {
           if ((daPassada.sessoes ?? 0) >= MAX_SESSOES_POR_VARREDURA) break;
           if (pularCartao(ctx.grupo ?? null, unit.id, lead, daPassada)) continue;
+          // Cartão que a varredura normal já tratou nesta passagem é dela: ela conta com a agenda na
+          // mão, o fechamento só com a ficha, e os dois gravando o mesmo campo viram regravação a cada
+          // 17 min (lead 27223392, Açailândia, 24/10/2026).
+          if (ctx.tocados?.has(lead.id)) continue;
           const idClient = idClientDoCartao(lead, ctx.camposPorNome ?? []);
           if (!idClient) continue;
           const valorDe = (id: number) => String((lead.custom_fields_values ?? []).find((f) => f.field_id === id)?.values?.[0]?.value ?? '');
@@ -1247,8 +1261,11 @@ async function fecharSessoesDoTratamento(ctx: CtxSync): Promise<void> {
           // cada hora (o cache do detalhe é de 1 h), numa fila que só cresce — e a franquia já reclamou
           // de volume em 05/10/2026.
           const chaveFechado = `fechamento-sessoes:${noCartao}`;
-          const finalizado = normalizar(infoStatus ? valorDe(infoStatus.id) : '') === 'finalizado';
-          if (finalizado && (await avisoRecente(unit.id, lead.id, chaveFechado, 7 * JANELA_24H_MS))) continue;
+          // Só tratamento FINALIZADO: é dele que vem o congelamento (acabou, saiu da agenda, ninguém
+          // mais olha). Tratamento em andamento tem sessão marcada, logo está na agenda, e ali quem
+          // conta é a varredura normal — que tem mais dado do que esta passada.
+          if (normalizar(infoStatus ? valorDe(infoStatus.id) : '') !== 'finalizado') continue;
+          if (await avisoRecente(unit.id, lead.id, chaveFechado, 7 * JANELA_24H_MS)) continue;
           const hist = await historicoDoPaciente(unit, idClient);
           const tratamento = (hist?.treatments ?? []).find((t) => t.idTreatment === noCartao);
           if (!hist || !tratamento) continue;
@@ -1273,7 +1290,7 @@ async function fecharSessoesDoTratamento(ctx: CtxSync): Promise<void> {
             logger.warn({ err: String(err), unit: unit.slug, leadId: lead.id }, 'franquia-sessoes: fechamento falhou neste cartão'),
           );
           // marca só depois de gravar de verdade, e só o que não muda mais
-          if (finalizado && (daPassada.sessoes ?? 0) > antes && !ctx.seco) await marcarAviso(unit.id, lead.id, chaveFechado);
+          if ((daPassada.sessoes ?? 0) > antes && !ctx.seco) await marcarAviso(unit.id, lead.id, chaveFechado);
         }
         if (leads.length < 250) break;
       }
@@ -1808,6 +1825,7 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
  */
 async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteDoCartao, historico: Historico | null = null): Promise<void> {
   const { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, seco } = ctx;
+  ctx.tocados?.add(leadId);
   const consulta = escolherConsulta(p.consultas);
   const consultaEpoch = consulta?.dateAttendanceUtc ? Math.floor(Date.parse(consulta.dateAttendanceUtc) / 1000) : null;
   const feitoPelaIa = consulta?.idSchedule
@@ -2148,7 +2166,7 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
   // Chave `casamento-jornada` (regras de 16/10/2026): desligado = tudo como sempre.
   const jornada = estadoCasamentoJornada(unit.slug);
   const conflitosGuardados = jornada === 'ligado' ? await cartoesComConflitoGuardado(unit.id) : new Set<number>();
-  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false }, seco, automacaoDoSeco: seco ? 'franquia-sync' : undefined, grupo, jornada, conflitosGuardados };
+  const ctx: CtxSync = { unit, kommo, funis, mapa, ops, agoraEpoch, resumo, camposPorNome, tela: { sessao: null, aberta: false }, seco, automacaoDoSeco: seco ? 'franquia-sync' : undefined, grupo, jornada, conflitosGuardados, tocados: new Set() };
 
   // Casa TODOS os pacientes antes de gravar: só assim se vê o cartão que recebeu dois pacientes diferentes (mesmo
   // telefone) na mesma varredura — com a gravação no meio, o primeiro já teria escrito por cima (decisão 1, 16/10).

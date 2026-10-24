@@ -207,6 +207,9 @@ const sessao = (idSchedule: number, idTreatment: number | null, idStatus: number
   dayLocal: dia, timeLocal: null, isBusy: true, requiresManualValidation: false,
 });
 
+/** O cartão do fechamento tem de dizer FINALIZADO (campo 17): em andamento é da varredura normal. */
+const cartaoFinalizado = (id: number, campos: Array<[number, unknown]>) => cartao(id, [...campos, [17, 'FINALIZADO']])
+
 const cartao = (id: number, campos: Array<[number, unknown]>) => ({
   id, name: 'PACIENTE TESTE', pipeline_id: 1, status_id: 2,
   custom_fields_values: campos.map(([field_id, value]) => ({ field_id, values: [{ value }] })),
@@ -230,7 +233,7 @@ function fichaFalsa(idClient: number, treatments: Array<{ idTreatment: number; s
 
 test('fecharSessoesDoTratamento: o cartão em EM TRATAMENTO deixa de congelar — 7 no cartão, 8 na franquia', async () => {
   const escritas: Escrita[] = [];
-  const leads = { '1:2': [cartao(70, [[11, 777], [12, 500], [13, 7], [16, 7]])] };
+  const leads = { '1:2': [cartaoFinalizado(70, [[11, 777], [12, 500], [13, 7], [16, 7]])] };
   const ctx = ctxDe(escritas, { leads }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
   const ficha = fichaFalsa(
     777,
@@ -250,7 +253,7 @@ test('fecharSessoesDoTratamento: o cartão em EM TRATAMENTO deixa de congelar �
 
 test('fecharSessoesDoTratamento: cartão sem ⚙ idClient não é adivinhado pelo nome', async () => {
   const escritas: Escrita[] = [];
-  const leads = { '1:2': [cartao(71, [[12, 500], [13, 7]])] };
+  const leads = { '1:2': [cartaoFinalizado(71, [[12, 500], [13, 7]])] };
   const ctx = ctxDe(escritas, { leads }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
   const ficha = fichaFalsa(778, [{ idTreatment: 500, statusName: 'FINALIZADO' }], [sessao(900, null, ATENDIDO, '2026-09-01')]);
   _semearParaTeste([{ slug: SLUG, automacao: 'franquia-sessoes', estado: 'ligado' }]);
@@ -266,7 +269,7 @@ test('fecharSessoesDoTratamento: cartão sem ⚙ idClient não é adivinhado pel
 
 test('fecharSessoesDoTratamento: dois ciclos e sessão sem tratamento não fecha — contaria o ciclo errado', async () => {
   const escritas: Escrita[] = [];
-  const leads = { '1:2': [cartao(72, [[11, 779], [12, 500], [13, 7]])] };
+  const leads = { '1:2': [cartaoFinalizado(72, [[11, 779], [12, 500], [13, 7]])] };
   const ctx = ctxDe(escritas, { leads }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
   const ficha = fichaFalsa(
     779,
@@ -285,7 +288,7 @@ test('fecharSessoesDoTratamento: dois ciclos e sessão sem tratamento não fecha
 
 test('fecharSessoesDoTratamento: com a automação desligada não lê a franquia', async () => {
   const escritas: Escrita[] = [];
-  const leads = { '1:2': [cartao(73, [[11, 780], [12, 500], [13, 7]])] };
+  const leads = { '1:2': [cartaoFinalizado(73, [[11, 780], [12, 500], [13, 7]])] };
   const ctx = ctxDe(escritas, { leads }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
   const ficha = fichaFalsa(780, [{ idTreatment: 500, statusName: 'FINALIZADO' }], [sessao(900, null, ATENDIDO, '2026-09-01')]);
   _semearParaTeste([{ slug: SLUG, automacao: 'franquia-sessoes', estado: 'desligado' }]);
@@ -318,7 +321,7 @@ test('gravarIdClientNoCartao: campo de outro tipo é pulado, e não dá 400 a ca
 
 test('fecharSessoesDoTratamento: roda com a movimentação de etapa desligada (ctx sem funis)', async () => {
   const escritas: Escrita[] = [];
-  const leads = { '1:2': [cartao(74, [[11, 781], [12, 500], [13, 7]])] };
+  const leads = { '1:2': [cartaoFinalizado(74, [[11, 781], [12, 500], [13, 7]])] };
   const ctx = ctxDe(escritas, { leads, funis: null }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
   const ficha = fichaFalsa(781, [{ idTreatment: 500, statusName: 'FINALIZADO' }], [sessao(900, null, ATENDIDO, '2026-09-01'), sessao(901, null, ATENDIDO, '2026-09-02')]);
   _semearParaTeste([{ slug: SLUG, automacao: 'franquia-sessoes', estado: 'ligado' }]);
@@ -333,7 +336,7 @@ test('fecharSessoesDoTratamento: roda com a movimentação de etapa desligada (c
 
 test('fecharSessoesDoTratamento: tem orçamento próprio — o teto gasto pelo laço da agenda não o cancela', async () => {
   const escritas: Escrita[] = [];
-  const leads = { '1:2': [cartao(75, [[11, 782], [12, 500], [13, 7]])] };
+  const leads = { '1:2': [cartaoFinalizado(75, [[11, 782], [12, 500], [13, 7]])] };
   const resumoCheio = { ...resumoVazio(), sessoes: 60 };
   const ctx = ctxDe(escritas, { leads, resumo: resumoCheio }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
   const ficha = fichaFalsa(782, [{ idTreatment: 500, statusName: 'FINALIZADO' }], [sessao(900, null, ATENDIDO, '2026-09-01')]);
@@ -346,4 +349,37 @@ test('fecharSessoesDoTratamento: tem orçamento próprio — o teto gasto pelo l
   }
   assert.ok(escritas.some((e) => e.campo === 13 && e.valor === 1), 'gravou mesmo com o teto da varredura já gasto');
   assert.equal(resumoCheio.sessoes, 61, 'o que a passada gravou entra no resumo da varredura');
+});
+
+test('fecharSessoesDoTratamento: não toca no cartão que a varredura normal já tratou', async () => {
+  const escritas: Escrita[] = [];
+  const leads = { '1:2': [cartaoFinalizado(76, [[11, 783], [12, 500], [13, 7]])] };
+  const ctx = ctxDe(escritas, { leads, tocados: new Set([76]) }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
+  const ficha = fichaFalsa(783, [{ idTreatment: 500, statusName: 'FINALIZADO' }], [sessao(900, null, ATENDIDO, '2026-09-01')]);
+  _semearParaTeste([{ slug: SLUG, automacao: 'franquia-sessoes', estado: 'ligado' }]);
+  try {
+    await _interno.fecharSessoesDoTratamento(ctx);
+  } finally {
+    _semearParaTeste([]);
+    ficha.mock.restore();
+  }
+  // a varredura conta com a agenda na mão; o fechamento, só com a ficha — gravar os dois é regravar para sempre
+  assert.deepEqual(escritas, []);
+  assert.equal(ficha.mock.callCount(), 0, 'nem gasta chamada na franquia');
+});
+
+test('fecharSessoesDoTratamento: tratamento em andamento é da varredura normal, não do fechamento', async () => {
+  const escritas: Escrita[] = [];
+  const leads = { '1:2': [cartao(77, [[11, 784], [12, 500], [13, 7], [17, 'EM ANDAMENTO']])] };
+  const ctx = ctxDe(escritas, { leads }) as Parameters<typeof _interno.fecharSessoesDoTratamento>[0];
+  const ficha = fichaFalsa(784, [{ idTreatment: 500, statusName: 'EM ANDAMENTO' }], [sessao(900, null, ATENDIDO, '2026-09-01')]);
+  _semearParaTeste([{ slug: SLUG, automacao: 'franquia-sessoes', estado: 'ligado' }]);
+  try {
+    await _interno.fecharSessoesDoTratamento(ctx);
+  } finally {
+    _semearParaTeste([]);
+    ficha.mock.restore();
+  }
+  assert.deepEqual(escritas, []);
+  assert.equal(ficha.mock.callCount(), 0);
 });
