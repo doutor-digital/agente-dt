@@ -17,7 +17,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
-import { CAMPOS_SESSOES, acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
+import { CAMPOS_SESSOES, acharCampoDeSessao, escritasDeSessoes, separarCiclo } from './sessoes-para-cartao.js';
 import { planejarAtendimento, type CampoCandidato } from './atendimento-para-cartao.js';
 import { abrirSessaoTela, montarAvisoDaTela, type AtendimentoTela, type ProblemaDaTela, type SessaoTela } from './franquia-tela.js';
 import { avisarJoao } from './alerta-whatsapp.js';
@@ -1138,7 +1138,7 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
  * fechamento (abaixo) monta o tratamento a partir da ficha, e a ficha não traz local, grau nem criação.
  */
 type PacienteParaSessoes = Pick<PacienteDoCartao, 'nome' | 'idClient' | 'consultas'> & {
-  tratamento: Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> | null;
+  tratamento: (Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> & { category?: string | null }) | null;
 };
 
 async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteParaSessoes, historico: Historico | null): Promise<void> {
@@ -1172,7 +1172,14 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     return { tipo: info.rawType ?? (info.type as string), valor: v === undefined || v === null || String(v).trim() === '' ? null : String(v) };
   };
 
-  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, agoraEpoch, campo });
+  const tratamentosDoPaciente = hist?.treatments;
+  if (!separarCiclo(p.tratamento.idTreatment, tratamentosDoPaciente, p.tratamento, p.tratamento.created != null).separavel) {
+    logger.info(
+      { unit: unit.slug, leadId, idTreatment: p.tratamento.idTreatment, tratamentos: tratamentosDoPaciente?.length },
+      'franquia-sessoes: mais de um tratamento e não sei de qual é cada sessão — não gravo contador',
+    );
+  }
+  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, tratamentosDoPaciente, agoraEpoch, campo });
   if (planejadas.length > 0) resumo.sessoes = (resumo.sessoes ?? 0) + 1;
   for (const e of planejadas) {
     const info = acharCampoDeSessao(porNome, e.campo, normalizar);
@@ -1270,15 +1277,16 @@ async function fecharSessoesDoTratamento(ctx: CtxSync): Promise<void> {
           const tratamento = (hist?.treatments ?? []).find((t) => t.idTreatment === noCartao);
           if (!hist || !tratamento) continue;
           // A ficha do paciente NÃO manda o `created` do tratamento (só idTreatment, idStatus, statusName
-          // e typeName) e, medido na Imperatriz em 23/10/2026, também não manda o idTreatment de cada
-          // sessão. Sem um dos dois não há como separar ciclo, e o contador somaria as sessões do
-          // tratamento anterior de quem voltou depois da alta. Então só fecho quando não há o que
-          // confundir: um tratamento só na ficha, ou toda sessão dizendo a que tratamento pertence.
-          const separavel = hist.treatments.length === 1 || hist.schedules.filter((s) => !ehConsulta(s)).every((s) => s.idTreatment !== null);
-          if (!separavel) {
+          // e typeName) e, medido na Imperatriz e na Açailândia (0 de 1.238 sessões), também não manda o
+          // idTreatment de cada sessão. O que ela manda é o RÓTULO em cada sessão ("PROTOCOLO 03 MESES -
+          // LOMBAR"), igual ao `typeName` do tratamento sem o grau: com ele dá para separar os
+          // tratamentos que correm juntos. Sem rótulo próprio, ou com dois tratamentos de rótulo igual
+          // (renovação — e aqui não há `created`), não há como saber de quem é cada sessão: não fecho.
+          const ciclo = separarCiclo(tratamento.idTreatment ?? null, hist.treatments, null, false);
+          if (!ciclo.separavel) {
             logger.info(
               { unit: unit.slug, leadId: lead.id, tratamentos: hist.treatments.length },
-              'franquia-sessoes: mais de um ciclo e sessão sem idTreatment — não fecho, contaria o ciclo errado',
+              'franquia-sessoes: mais de um tratamento e sessão sem como separar — não fecho, contaria o tratamento errado',
             );
             continue;
           }
