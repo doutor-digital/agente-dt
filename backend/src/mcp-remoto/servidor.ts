@@ -55,7 +55,7 @@ const INSTRUCOES = [
   'Fontes: o CRM da franquia Doutor Hérnia (ferramentas sem prefixo: pacientes, agenda, tratamentos, BI),',
   'o CRM comercial Kommo (kommo_*), o ERP Bling das empresas que usam (bling_*: pedidos, contas a receber, notas, clientes),',
   'o Asaas das clínicas (asaas_*: cobranças, extrato do que entrou de verdade, saldo, clientes),',
-  'o RH das empresas que usam o Convênia (convenia_*: colaboradores, admissões e desligamentos, férias, afastamentos — sem CPF, salário, endereço nem dado de saúde),',
+  'o RH das empresas que usam o Convênia (convenia_*: colaboradores, admissões e desligamentos, férias, afastamentos — ficha completa, com dado pessoal sensível: CPF, salário, dados bancários, endereço, nascimento e dados de saúde; nas listagens use completo: true para a ficha inteira),',
   'o ponto eletrônico Tiquetaque (tiquetaque_*: batidas do dia e quem está trabalhando agora, atrasos e faltas, horas e banco de horas, afastamentos; uma conta cobre várias clínicas e empresas, filtre por local — registro completo, com dado pessoal sensível: CPF, PIS, foto/selfie e GPS da batida, anexo de atestado e justificativa escrita; em tiquetaque_colaboradores e tiquetaque_horas use completo: true para a ficha e o espelho inteiros),',
   'os eventos de conversão mandados para a Meta pelo rastreio de anúncios (meta_eventos, meta_eventos_lead),',
   'e, para quem tem permissão, alterar cartões do Kommo em dois passos (kommo_preparar_alteracao → mostrar o resumo → kommo_confirmar_alteracao só se a pessoa aprovar).',
