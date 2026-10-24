@@ -11,7 +11,8 @@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
-import { createKommoClient, type KommoClient, type KommoFieldType } from './kommo.service.js';
+import { createKommoClient, type KommoClient, type KommoFieldType, type KommoLead } from './kommo.service.js';
+import { cartaoEncerrado, decidirStatusConversa, type OrigemDoStatus, type StatusConversa } from '../lib/status-conversa.js';
 import type { Unit } from '@prisma/client';
 
 export const CAMPOS_DIGITAL = {
@@ -27,7 +28,7 @@ export const CAMPOS_DIGITAL = {
   DATA_QUALIFICACAO: '◷ Data da qualificação',
 } as const;
 
-export type StatusConversa = 'Aguardando lead' | 'Respondendo' | 'Sem resposta' | 'Encerrada';
+export type { StatusConversa };
 
 type KommoUnit = Parameters<typeof createKommoClient>[0];
 
@@ -48,6 +49,39 @@ export async function gravarCampoDigital(
   if (id === null) return false;
   await kommo.setLeadCustomFieldValue(leadId, id, tipo, valor);
   return true;
+}
+
+/**
+ * O ÚNICO caminho de escrita de "⬢ Status da conversa" para quem não é o carimbo de etapa (IA, handoff, follow-up).
+ * Lê o cartão e, se ele está numa etapa que encerra a conversa (GANHO / PERDIDO), NÃO grava: o "Encerrada" do carimbo
+ * de etapa vale (ver lib/status-conversa.ts). `lead` evita uma segunda leitura de quem já leu o cartão.
+ * Se o cartão não pôde ser lido, também não grava — o campo é informativo e o próximo turno o reescreve; gravar às
+ * cegas é exatamente como o "Encerrada" foi desfeito. Devolve true só quando gravou.
+ */
+export async function gravarStatusConversa(
+  unit: Unit,
+  kommo: KommoClient,
+  leadId: number,
+  novo: StatusConversa,
+  origem: OrigemDoStatus,
+  lead?: Pick<KommoLead, 'status_id' | 'pipeline_id'> | null,
+): Promise<boolean> {
+  const cartao = lead ?? (await kommo.getLead(leadId).catch(() => null));
+  if (!cartao) {
+    logger.warn({ unit: unit.slug, leadId, tentou: novo, origem }, 'status-conversa: não gravei — não consegui ler o cartão');
+    return false;
+  }
+  const esquema = await esquemaDaUnidade(unit, kommo);
+  const nomeDaEtapa = esquema.nomeDoStatus(cartao.pipeline_id, cartao.status_id)?.status ?? null;
+  const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, nomeDaEtapa));
+  if (!decisao.gravar) {
+    logger.info(
+      { unit: unit.slug, leadId, tentou: novo, origem, etapa: nomeDaEtapa ?? cartao.status_id },
+      `status-conversa: não gravei — ${decisao.motivo}`,
+    );
+    return false;
+  }
+  return gravarCampoDigital(unit, kommo, leadId, CAMPOS_DIGITAL.STATUS_CONVERSA, 'select', novo);
 }
 
 /** Esvazia um campo do bloco DIGITAL pelo nome (false se a conta não tem o campo). */
@@ -92,10 +126,8 @@ async function atualizarMetricasDeTurno(unit: Unit, leadId: number): Promise<voi
   await grava(CAMPOS_DIGITAL.NUM_MENSAGENS, 'numeric', msgs.length);
   // A IA acabou de responder: a bola está com o paciente — a não ser que o cartão tenha sido
   // fechado neste mesmo turno (fechar_lead → GANHO/PERDIDO), aí o "Encerrada" do carimbo de
-  // etapa vale e não pode ser sobrescrito.
-  const lead = await kommo.getLead(leadId).catch(() => null);
-  const fechado = lead ? lead.status_id === 142 || lead.status_id === 143 : false;
-  if (!fechado) await grava(CAMPOS_DIGITAL.STATUS_CONVERSA, 'select', 'Aguardando lead');
+  // etapa vale e não pode ser sobrescrito (gravarStatusConversa decide).
+  await gravarStatusConversa(unit, kommo, leadId, 'Aguardando lead', 'turno-da-ia');
 
   const assistants = msgs.filter((m) => m.role === 'assistant');
   if (assistants.length === 1) {
@@ -145,7 +177,7 @@ export async function carimbarHumanoAssumiu(
 ): Promise<void> {
   try {
     await gravarCampoDigital(unit, kommo, leadId, CAMPOS_DIGITAL.ASSUMIDO_HUMANO, 'select', 'Sim');
-    await gravarCampoDigital(unit, kommo, leadId, CAMPOS_DIGITAL.STATUS_CONVERSA, 'select', 'Respondendo');
+    await gravarStatusConversa(unit, kommo, leadId, 'Respondendo', 'humano-assumiu');
     if (motivo) await gravarCampoDigital(unit, kommo, leadId, CAMPOS_DIGITAL.MOTIVO_HANDOFF, 'select', motivo);
   } catch (err) {
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'lead-metrics: falha ao carimbar humano assumiu');
@@ -153,11 +185,11 @@ export async function carimbarHumanoAssumiu(
 }
 
 /** Escada de follow-up acabou sem o paciente voltar. */
-export async function carimbarSemResposta(unit: Unit, leadId: number): Promise<void> {
-  if (!unit.kommoSubdomain || !unit.kommoAccessToken) return;
+export async function carimbarSemResposta(unit: Unit, leadId: number, cliente?: KommoClient): Promise<void> {
+  if (!cliente && (!unit.kommoSubdomain || !unit.kommoAccessToken)) return;
   try {
-    const kommo = createKommoClient(unit as KommoUnit);
-    await gravarCampoDigital(unit, kommo, leadId, CAMPOS_DIGITAL.STATUS_CONVERSA, 'select', 'Sem resposta');
+    const kommo = cliente ?? createKommoClient(unit as KommoUnit);
+    await gravarStatusConversa(unit, kommo, leadId, 'Sem resposta', 'follow-up-sem-resposta');
   } catch (err) {
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'lead-metrics: falha ao carimbar sem resposta');
   }

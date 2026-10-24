@@ -153,7 +153,7 @@ async function etapasDosLeads(unit: {
   return mapa;
 }
 
-function regraPara(
+export function regraPara(
   regras: Array<{ statusId: number; lossReasonId: number | null; steps: unknown }>,
   estado: EstadoDoLead,
 ): Degrau[] | null {
@@ -473,7 +473,7 @@ async function varrer(): Promise<void> {
         });
         if (reserva.count !== 1) continue;
 
-        await enviarDegrau(unit, conv, proximo, alvo, ESCADA_DA_REGRA.length, estado.titulo);
+        await enviarDegrau(unit, conv, proximo, alvo, ESCADA_DA_REGRA.length, estado.titulo, estado.statusId);
       }
     }
   } catch (err) {
@@ -495,6 +495,7 @@ async function enviarDegrau(
   indice: number,
   totalDegraus: number,
   tituloDoCartao: string | null,
+  statusId: number | null = null,
 ): Promise<void> {
   const leadId = Number(conv.leadId);
   const devolver = () =>
@@ -554,11 +555,20 @@ async function enviarDegrau(
       // Bloco DIGITAL: escada inteira sem o paciente voltar → "⬢ Status da conversa" = Sem resposta.
       // O "Sem resposta" é o sinal que o worker de leads parados lê: 24 h depois, sem o paciente
       // responder ao último toque, o cartão vai pra PERDIDO "Não interagiu" (parados-worker).
+      // Cartão que já está em PERDIDO/GANHO NÃO recebe: o "Encerrada" do carimbo de etapa vale
+      // (gravarStatusConversa lê o cartão e decide — lib/status-conversa.ts).
       void carimbarSemResposta(unitCompleta, leadId);
     }
 
     logger.info(
-      { unit: unit.slug, leadId, degrau: indice + 1, pulados: indice - conv.followUpStep },
+      {
+        unit: unit.slug,
+        leadId,
+        degrau: indice + 1,
+        pulados: indice - conv.followUpStep,
+        // Para medir quanto da régua sai para cartão PERDIDO (regras de recuperação por motivo de perda).
+        ...(statusId === 143 ? { etapa: 'PERDIDO' } : {}),
+      },
       'follow-up: reengajamento enviado',
     );
   } catch (err) {
