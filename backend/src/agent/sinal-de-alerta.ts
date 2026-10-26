@@ -1,4 +1,6 @@
 import type { Unit } from '@prisma/client';
+import type { BaseMessage } from '@langchain/core/messages';
+import { quandoAEquipeResponde, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
 
 /**
  * Sinal de alerta clínico: acolher em UMA frase, PARAR a IA e passar NA HORA para a equipe ligar.
@@ -21,7 +23,7 @@ export const ETIQUETA_PRIORIDADE = '🔴 PRIORIDADE';
 
 /** Motivo de `pausar_ia` que é sinal de alerta — rede de segurança para quando o modelo esquece a flag. */
 export const MOTIVO_SINAL_DE_ALERTA =
-  /sinal(is)? de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|perdendo (a )?for[cç]a|incontin[eê]ncia|(controle|segur\w*) (d[oa]s? |[oa]s? )?(xixi|urina|fezes|intestino|bexiga)|anestesia em sela|dorm[eê]ncia (na|em|entre)|piorou de repente|piora repentina|dor repentina|febre (e|com|junto)/i;
+  /sinal(is)? de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|perdendo (a )?for[cç]a|incontin[eê]ncia|(controle|segur\w*) (d[oa]s? |[oa]s? )?(xixi|urina|fezes|intestino|bexiga)|anestesia em sela|dorm[eê]ncia (na|em|entre)|piorou de repente|piora repentina|dor repentina|febre (e|com|junto)|pergunta de seguran[cç]a|for[cç]a (n[ao]s? )?perna|xixi\/intestino|\bAVC\b|derrame|acidente vascular|boca torta|fala enrolada/i;
 
 export function ehHandoffPorSinalDeAlerta(motivo: string | null | undefined, flag?: boolean): boolean {
   return flag === true || MOTIVO_SINAL_DE_ALERTA.test(motivo ?? '');
@@ -30,6 +32,8 @@ export function ehHandoffPorSinalDeAlerta(motivo: string | null | undefined, fla
 /** Tarefa criada pela regra da unidade que já é o aviso urgente — evita dois avisos no mesmo turno. */
 export const TAREFA_URGENTE = /sinal(is)? de alerta|bandeira vermelha|emerg[eê]ncia/i;
 const LIGAR_AGORA = /ligar agora/i;
+/** Tarefa que a regra da unidade escreveu por sinal de alerta (sem "emergência": "contato de emergência" é outra coisa). */
+const TAREFA_DE_SINAL = /sinal(is)? de alerta|bandeira vermelha|red ?flag/i;
 
 /** Orientação ou mensagem cadastrada na unidade que manda o paciente ao pronto-socorro. */
 const CITA_PRONTO_SOCORRO = /pronto[\s-]*(socorro|atendimento)|\bUPA\b|\bSAMU\b|\bemerg[eê]ncia\b/i;
@@ -51,6 +55,24 @@ export function travaDoProntoSocorro(texto: string | null | undefined): string {
     'que vai, não desaconselhe: diga que, se ele sente que não dá para esperar, pode ir, e que a equipe já foi ' +
     'avisada. Siga <sinal_de_alerta>.]'
   );
+}
+
+/**
+ * Texto livre da unidade (fontes oficiais, manual, base de conhecimento, aprendizados) que cita pronto-socorro: cada
+ * LINHA que cita ganha a ressalva da rede. Medido em 26/10: `source_papel` de 8 unidades de resgate diz "febre com dor
+ * -> pronto-atendimento com urgencia", o manual (`system_prompt`) de 27 diz o mesmo e a base de conhecimento de 9
+ * unidades manda "procure um pronto-atendimento". O cadastro é dado de produção e não muda por aqui.
+ */
+export function travarProntoSocorroPorLinha(texto: string | null | undefined): string {
+  if (!texto || !citaProntoSocorro(texto)) return texto ?? '';
+  return texto
+    .split('\n')
+    .map((linha) =>
+      citaProntoSocorro(linha)
+        ? `${linha} [REGRA DA REDE, vale mais que esta linha: NÃO sugira pronto-socorro, UPA, hospital nem emergência; sinal de alerta confirmado = pare e passe para a equipe (ver sinal_de_alerta)]`
+        : linha,
+    )
+    .join('\n');
 }
 
 /** Regra da unidade cuja CONDIÇÃO é sinal de alerta — costuma mandar transferir de cara. */
@@ -94,9 +116,19 @@ export function travaDaRegraDeSinalDeAlerta(condicao: string | null | undefined)
   );
 }
 
-/** O bloco do prompt. Só para clínica (`category = 'saude'`), como o resto da trava clínica. */
+/**
+ * Clínica para efeito do sinal de alerta: `saude` OU categoria vazia. Em produção 12 unidades Doutor Hérnia ativas têm
+ * a categoria em branco (Capivari, Caxias, Cerquilho, Petrópolis, Salto, Tatuí…) e ficavam sem o bloco, sem a trava
+ * do pronto-socorro e sem a rede de segurança. Jurídico, energia solar etc. continuam de fora.
+ */
+export function ehClinicaParaSinalDeAlerta(unit: Pick<Unit, 'category'>): boolean {
+  const c = unit.category?.trim();
+  return !c || c === 'saude';
+}
+
+/** O bloco do prompt. Só para clínica (ver `ehClinicaParaSinalDeAlerta`). */
 export function renderSinalDeAlerta(unit: Pick<Unit, 'category'>): string {
-  if (unit.category?.trim() !== 'saude') return '';
+  if (!ehClinicaParaSinalDeAlerta(unit)) return '';
   return `<sinal_de_alerta>
 (ALTA PRIORIDADE — decisão do João, 26/10. Vale mais que qualquer orientação das <acoes>, do cadastro
 da unidade e dos modelos de mensagem)
@@ -104,7 +136,9 @@ da unidade e dos modelos de mensagem)
   falhando; (b) não consegue segurar o xixi ou as fezes (escape, "se molhou", "não senti"); (c) sente
   dormência ou adormecimento na virilha, entre as pernas ou na região íntima; (d) a dor PIOROU DE REPENTE
   (de uma hora para outra, não aos poucos); (e) está com febre junto com a dor; (f) sente dor depois de
-  queda, pancada ou acidente RECENTE (dias ou poucas semanas).
+  queda, pancada ou acidente RECENTE (dias ou poucas semanas); (g) diz que teve AVC ou derrame agora, ou
+  está com a boca torta, a fala enrolada ou um braço ou perna que treme ou não mexe de repente (isso não é
+  da coluna: não explique nada, pare como abaixo).
 - CONFIRMADO O SINAL, A IA PARA NA HORA. Nada de oferecer horário, de "tentar agendar antes", de perguntar
   de sono ou de trabalho, de seguir a conversa comercial. No MESMO turno, nesta ordem:
   (1) resumir_lead_para_sdr; (2) pausar_ia com sinalDeAlerta: true — isso já coloca a etiqueta
@@ -118,9 +152,9 @@ da unidade e dos modelos de mensagem)
   como acima; se negar, siga o atendimento normal.
 - VÁRIAS MENSAGENS SEGUIDAS: leia todas antes de responder. Se QUALQUER uma traz dor, limitação ou sinal
   clínico, acolha ISSO primeiro — nunca responda só ao "tudo bem" ou ao "boa noite" do fim.
-- LINGUAGEM DO DIA A DIA (e erro de digitação) conta igual: "me faltou/faltaram as pernas" ("mim falou
-  as pernas"), "as pernas falharam", "a perna bambeou", "quase não andei" ("quer não andei"), "não consigo
-  andar", "travei", "me mijei", "escapou o xixi". É fala vaga: faça a pergunta de UM sinal, como acima.
+- LINGUAGEM DO DIA A DIA (e erro de digitação) conta igual: "me faltou/faltaram as pernas"
+  ("mim falou as pernas"), "as pernas falharam", "a perna bambeou", "quase não andei" ("quer não andei"),
+  "não consigo andar", "travei". É fala vaga: faça a pergunta de UM sinal, como acima.
 - DOR QUE VAI PARA A VIRILHA, OS TESTÍCULOS, A REGIÃO ÍNTIMA OU A BARRIGA ("irradia pra virilha", "chega
   nos testículos", "dói o saco", "vai pra barriga"): não pule para sono e trabalho. Acolha em UMA frase e
   pergunte UM sinal — comece pela dormência ("a virilha ou a região íntima fica dormente, adormecida?") e
@@ -169,7 +203,7 @@ export function textoDoAvisoUrgente(a: { slug: string; nome: string | null; moti
 
 /** Tarefa de sinal de alerta escrita pela regra da unidade: ganha o "LIGAR AGORA" no fim se não tiver. */
 export function comLigarAgora(texto: string): string {
-  if (!TAREFA_URGENTE.test(texto) || LIGAR_AGORA.test(texto)) return texto;
+  if (!TAREFA_DE_SINAL.test(texto) || LIGAR_AGORA.test(texto)) return texto;
   return `${texto.trimEnd()} — LIGAR AGORA`;
 }
 
@@ -197,13 +231,23 @@ export function textoTelegramSinalDeAlerta(a: {
 // e, se ela traz um sinal CLARO e o modelo não parou, a IA para pelo mesmo `pausar_ia` (ver graph.ts). Só frases
 // sem ambiguidade — a fala vaga ("me faltou a perna") fica com o modelo, que pergunta UM sinal.
 
-/** Palavras de negação logo antes do trecho: "sem dormência", "não tenho febre", "nenhuma perda de força". */
-const NEGACAO_ANTES = /(?:^|[^\p{L}])(?:n[aã]o|nem|nunca|sem|nenhum[a]?|nada\s+de|negativ\w*)(?:[^\p{L}]|$)/iu;
 
-/** Negação na mesma oração, até 30 caracteres antes do trecho ("sem dormência", "não tenho febre"). */
+/** Conjunção que corta a negação: "não aguento mais E perdi a força" não nega a perda de força. */
+const CONJUNCAO = /^(?:e|mas|por[eé]m|aí|ai|depois|tamb[eé]m|porque|que)$/iu;
+const PALAVRA_DE_NEGACAO = /^(?:n[aã]o|nem|nunca|sem|nenhum[a]?|nada|negativo)$/iu;
+
+/**
+ * O trecho vem negado? Olha as 4 palavras antes dele, na mesma oração, parando numa conjunção:
+ * "sem dormência", "não tenho perda de força", "não estou com febre" negam; "não aguento mais e perdi a força", não.
+ */
 function negadoAntes(texto: string, indice: number): boolean {
-  const oracao = texto.slice(Math.max(0, indice - 30), indice).split(/[.,;!?\n]/).pop() ?? '';
-  return NEGACAO_ANTES.test(oracao);
+  const oracao = texto.slice(Math.max(0, indice - 60), indice).split(/[.,;:!?\n]/).pop() ?? '';
+  const palavras = oracao.split(/\s+/).filter(Boolean).slice(-4);
+  for (let i = palavras.length - 1; i >= 0; i--) {
+    if (CONJUNCAO.test(palavras[i])) return false;
+    if (PALAVRA_DE_NEGACAO.test(palavras[i])) return true;
+  }
+  return false;
 }
 
 /** Cada padrão diz: o trecho conta como sinal só se NÃO vier negado (`negavel`), ou a negação faz parte dele. */
@@ -226,13 +270,20 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
   },
   {
     sinal: 'perda de força na perna',
-    re: /\bperd\w+\s+(?:a\s+)?for[cç]a\b(?!\s+de\s+(?:vontade|viver))|\bperda\s+de\s+for[cç]a\b|\b(?:perna|pernas)\s+(?:esquerda\s+|direita\s+)?(?:est\p{L}+\s+|ficou\s+|ficaram\s+|ficando\s+|t[aá]\s+(?:ficando\s+)?)?(?:sem\s+for[cç]a|fraca|fracas|bamba|bambas)\b/iu,
+    // "perdi a força" sem dizer onde, ou na perna; "no braço", "na mão" e "de vontade" não são o sinal da coluna
+    re: /\bperd\w+\s+(?:a\s+)?for[cç]a\b(?!\s+de\s+(?:vontade|viver))(?!\s+(?:n[ao]s?|d[ao]s?)\s+(?!perna|pernas|p[eé]s?\b|coxas?|joelhos?))|\bperda\s+de\s+for[cç]a\b(?!\s+(?:n[ao]s?|d[ao]s?)\s+(?!perna|pernas|p[eé]s?\b|coxas?|joelhos?))|\b(?:perna|pernas)\s+(?:esquerda\s+|direita\s+)?(?:est\p{L}+\s+|ficou\s+|ficaram\s+|ficando\s+|t[aá]\s+(?:ficando\s+)?)?(?:sem\s+for[cç]a|fraca|fracas|bamba|bambas)\b/iu,
     negavel: true,
   },
   {
     sinal: 'dormência na região íntima',
     // "nas pernas", sozinho, é formigamento comum e NÃO é sinal — só virilha, região íntima ou entre as pernas
     re: /\b(?:dorm[eê]ncia|adormecimento|dormente|adormecid\w+)\s+(?:(?:na|no|em)\s+(?:a\s+|o\s+)?(?:virilha|regi[aã]o\s+[ií]ntima|[ií]ntim\w+|genit\w+|per[ií]neo|bumbum|gl[uú]te\w*)|entre\s+as\s+pernas)/iu,
+    negavel: true,
+  },
+  {
+    // AVC/derrame que está acontecendo agora; "tive AVC há 3 anos" é história e não conta
+    sinal: 'sinal neurológico (AVC, boca ou fala, braço)',
+    re: /\b(?:AVC|derrame|acidente\s+vascular)\b(?![^.!?\n]{0,30}\b(?:anos?|meses)\b)|\bboca\s+(?:est\p{L}+\s+|ficou\s+)?(?:torta|entortou|caiu|ca[ií]da|tremendo|treme\w*)|\bfala\s+(?:est\p{L}+\s+|ficou\s+)?(?:enrolada|arrastada|mole|embolada)|\bbra[cç]o\s+(?:est\p{L}+\s+|ficou\s+)?(?:tremendo|treme\w*|mole|n[aã]o\s+mexe)|\bn[aã]o\s+consigo\s+mexer\s+(?:o|a)\s+(?:bra[cç]o|perna|rosto)/iu,
     negavel: true,
   },
   {
@@ -249,14 +300,21 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
 export function sinalNaFala(falas: string[]): string | null {
   const texto = falas.join('\n');
   for (const { sinal, re, negavel } of SINAIS_NA_FALA) {
-    const m = re.exec(texto);
-    if (!m) continue;
-    if (negavel && negadoAntes(texto, m.index)) continue;
-    return `${sinal} (paciente disse: "${m[0].trim().slice(0, 80)}")`;
+    // Todas as ocorrências: "não tenho dormência na virilha" numa mensagem não cala "agora tenho" na seguinte.
+    const todas = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    for (const m of texto.matchAll(todas)) {
+      if (negavel && negadoAntes(texto, m.index ?? 0)) continue;
+      return `${sinal} (paciente disse: "${m[0].trim().slice(0, 80)}")`;
+    }
   }
-  const febre = /\bfebre\b/iu.exec(texto);
-  if (febre && /\b(?:dor|dores|dolorid\w*|coluna|costas|lombar)\b/iu.test(texto)) {
-    if (!negadoAntes(texto, febre.index)) return 'febre junto com a dor';
+  // Febre só junto com dor, e não a de outra pessoa ("meu filho está com febre").
+  if (/\b(?:dor|dores|dolorid\w*|coluna|costas|lombar)\b/iu.test(texto)) {
+    for (const f of texto.matchAll(/\bfebre\b/giu)) {
+      const antes = texto.slice(Math.max(0, f.index - 60), f.index).split(/[.;!?\n]/).pop() ?? '';
+      if (!negadoAntes(texto, f.index) && !/\b(?:meu|minha)\s+(?:filh|neto|espos|marid|m[ãa]e|pai|av[óo])/iu.test(antes)) {
+        return 'febre junto com a dor';
+      }
+    }
   }
   return null;
 }
@@ -270,7 +328,34 @@ export function falasDoTurno(mensagens: Array<{ tipo: string; texto: string }>):
   return falas;
 }
 
-/** O que sai para o paciente quando o código passou o atendimento por ele. Sem prazo, sem diagnóstico, sem pronto-socorro. */
-export const FRASE_DO_PASSE_POR_SINAL =
-  'Sinto muito que você esteja passando por isso 🙏 Já avisei a nossa equipe, com prioridade, e ela dá ' +
-  'continuidade ao seu atendimento por aqui.';
+/**
+ * O que sai para o paciente quando o código passou o atendimento por ele. Sem prazo, sem diagnóstico e sem sugerir
+ * pronto-socorro; se o PRÓPRIO paciente falou nele, a frase não desaconselha (decisão de 26/10).
+ */
+export function fraseDoPasse(r: RetornoDaEquipe, pacienteFalouDePs: boolean): string {
+  const quando = quandoAEquipeResponde(r);
+  return (
+    `Sinto muito que você esteja passando por isso 🙏 Já avisei a nossa equipe, com prioridade, e ela ${quando}.` +
+    (pacienteFalouDePs ? ' Se você sentir que não dá para esperar, pode ir, tá? A equipe já está avisada.' : '')
+  );
+}
+
+/** As chamadas de ferramenta que o modelo fez neste turno (das mais antigas às mais novas). */
+export function chamadasDoTurno(mensagens: BaseMessage[]): Array<{ name?: string; args?: Record<string, unknown> }> {
+  const out: Array<{ name?: string; args?: Record<string, unknown> }> = [];
+  for (let i = mensagens.length - 1; i >= 0; i--) {
+    const m = mensagens[i];
+    if (m.getType() === 'human') break;
+    if (m.getType() === 'ai') out.unshift(...((m as unknown as { tool_calls?: Array<{ name?: string; args?: Record<string, unknown> }> }).tool_calls ?? []));
+  }
+  return out;
+}
+
+/** O modelo já passou o atendimento? E já avisou como sinal de alerta (flag ou motivo)? */
+export function pausaDoTurno(chamadas: Array<{ name?: string; args?: Record<string, unknown> }>): { pausou: boolean; urgente: boolean } {
+  const pausas = chamadas.filter((c) => c.name === 'pausar_ia');
+  return {
+    pausou: pausas.length > 0,
+    urgente: pausas.some((c) => ehHandoffPorSinalDeAlerta(String(c.args?.motivo ?? ''), c.args?.sinalDeAlerta === true)),
+  };
+}

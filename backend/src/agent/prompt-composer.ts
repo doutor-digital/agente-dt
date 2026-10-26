@@ -23,7 +23,7 @@ import {
 } from '../services/lead-memory.service.js';
 import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
-import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro } from './sinal-de-alerta.js';
+import { renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro, travarProntoSocorroPorLinha } from './sinal-de-alerta.js';
 import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from './repeticao.js';
 import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
@@ -349,13 +349,13 @@ function renderSources(unit: Unit): string {
     ].join('\n'),
   );
   if (papel) {
-    sections.push(xmlBlock('papel', papel));
+    sections.push(xmlBlock('papel', travarProntoSocorroPorLinha(papel)));
   }
   if (produtos) {
-    sections.push(xmlBlock('produtos', produtos));
+    sections.push(xmlBlock('produtos', travarProntoSocorroPorLinha(produtos)));
   }
   if (negocio) {
-    sections.push(xmlBlock('negocio', negocio));
+    sections.push(xmlBlock('negocio', travarProntoSocorroPorLinha(negocio)));
   }
   if (demografia) {
     sections.push(
@@ -363,7 +363,7 @@ function renderSources(unit: Unit): string {
         'demografia',
         'CONTEXTO DA REGIÃO (use pra se situar e falar a língua do paciente local, ' +
           'NÃO cite números demográficos de cara nem trate como oferta):\n' +
-          demografia,
+          travarProntoSocorroPorLinha(demografia),
       ),
     );
   }
@@ -1552,7 +1552,7 @@ function renderKnowledge(entries: Array<KnowledgeBaseEntry & { score: number }>)
   if (entries.length === 0) return '';
   const lines = entries.map(
     (e, i) =>
-      `${i + 1}. P: "${e.question.trim().slice(0, 200)}"\n   R: "${e.answer.trim().slice(0, 400)}"`,
+      `${i + 1}. P: "${e.question.trim().slice(0, 200)}"\n   R: "${travarProntoSocorroPorLinha(e.answer.trim().slice(0, 400))}"`,
   );
   return xmlBlock('conhecimento', `(use estas informações reais)
 - Estas são respostas oficiais da empresa, pré-cadastradas. PREFIRA usar
@@ -1564,7 +1564,7 @@ ${lines.join('\n\n')}`);
 export function renderLessons(lessons: UnitLesson[]): string {
   const ativos = lessons.filter((l) => l.enabled && l.content.trim());
   if (ativos.length === 0) return '';
-  const linhas = ativos.map((l) => `- ${l.content.trim()}`).join('\n');
+  const linhas = ativos.map((l) => `- ${travarProntoSocorroPorLinha(l.content.trim())}`).join('\n');
   return xmlBlock(
     'aprendizados',
     `(ALTA PRIORIDADE — regras que esta clínica já ensinou; respeite como verdade da unidade)\n${linhas}`,
@@ -2019,8 +2019,9 @@ export function escolherBase(
 
   // Fora do piloto, nada muda. Dentro dele, o manual da unidade ganha — e se
   // ela não tiver manual nenhum, cai no config em vez de ficar sem instrução.
-  if (ligado) return daUnidade || doConfig || undefined;
-  return doConfig || daUnidade || undefined;
+  // O manual e o config podem mandar "pronto-atendimento": a ressalva da rede vai na linha (ver sinal-de-alerta.ts).
+  const base = ligado ? daUnidade || doConfig || undefined : doConfig || daUnidade || undefined;
+  return base === undefined ? undefined : travarProntoSocorroPorLinha(base);
 }
 
 export function composeFlattenedPrompt(input: ComposeInput): string {

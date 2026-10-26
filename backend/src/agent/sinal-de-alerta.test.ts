@@ -18,11 +18,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit, UnitAction } from '@prisma/client';
 
-import { composeSystemPrompt, composeSystemPromptParts } from './prompt-composer.js';
+import { composeSystemPrompt, composeSystemPromptParts, escolherBase } from './prompt-composer.js';
 import {
   comLigarAgora,
   falasDoTurno,
-  FRASE_DO_PASSE_POR_SINAL,
+  fraseDoPasse,
+  pausaDoTurno,
+  ehClinicaParaSinalDeAlerta,
   ehHandoffPorSinalDeAlerta,
   ETIQUETA_PRIORIDADE,
   renderSinalDeAlerta,
@@ -31,6 +33,7 @@ import {
   textoDoAvisoUrgente,
   textoTelegramSinalDeAlerta,
   travaDoProntoSocorro,
+  travarProntoSocorroPorLinha,
 } from './sinal-de-alerta.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 
@@ -78,10 +81,19 @@ test('clínica recebe o bloco do sinal de alerta, nos dois caminhos do prompt', 
 });
 
 test('fora de clínica o bloco não entra (advocacia, energia solar, sem categoria)', () => {
-  for (const category of ['juridico', 'energia_solar', null]) {
+  for (const category of ['juridico', 'energia_solar']) {
     assert.equal(renderSinalDeAlerta({ category } as Unit), '');
     assert.ok(!composeSystemPrompt({ unit: unidade({ category }) }).includes('<sinal_de_alerta>\n'));
   }
+});
+
+test('categoria em branco é clínica para o sinal de alerta (12 unidades ativas estavam sem o bloco)', () => {
+  for (const category of [null, '', '  ']) {
+    assert.ok(renderSinalDeAlerta({ category } as Unit).includes('<sinal_de_alerta>'), String(category));
+    assert.ok(ehClinicaParaSinalDeAlerta({ category } as Unit));
+  }
+  assert.ok(ehClinicaParaSinalDeAlerta({ category: 'saude' } as Unit));
+  assert.ok(!ehClinicaParaSinalDeAlerta({ category: 'juridico' } as Unit));
 });
 
 test('confirmado o sinal, a IA para na hora: resumir, pausar com a flag, uma frase — sem tentar agendar', () => {
@@ -210,6 +222,10 @@ test('motivo da pausa que é sinal de alerta, mesmo sem a flag', () => {
     'dormência na região íntima',
     'a dor piorou de repente',
     'febre com dor lombar',
+    // Mossoró #5876373 (25/10): a pausa por "conversa travada" não tinha a flag e não avisou ninguém
+    'conversa travada: pergunta de segurança da coluna (força na perna, xixi/intestino) 2x sem resposta',
+    'paciente relata AVC e braço tremendo',
+    'boca torta e fala enrolada',
   ]) {
     assert.ok(ehHandoffPorSinalDeAlerta(m), `deveria reconhecer: ${m}`);
   }
@@ -312,7 +328,90 @@ test('falasDoTurno: só as mensagens do paciente que ainda não tiveram resposta
   assert.deepEqual(falasDoTurno([ia('oi')]), []);
 });
 
-test('a frase do passe não promete prazo, não diagnostica e não cita pronto-socorro', () => {
-  assert.doesNotMatch(FRASE_DO_PASSE_POR_SINAL, /pronto|UPA|hospital|instante|já já|logo|minutos/i);
-  assert.match(FRASE_DO_PASSE_POR_SINAL, /avisei a nossa equipe/);
+test('sinalNaFala: a negação só vale quando é do próprio sintoma (achados da revisão)', () => {
+  assert.ok(sinalNaFala(['não aguento mais e perdi a força na perna']), '"não aguento" não nega a perda de força');
+  assert.ok(sinalNaFala(['fiquei sem aguentar nada, nem andar e perdi força']));
+  assert.ok(sinalNaFala(['não sei o que fazer, minha perna está perdendo força']));
+  assert.equal(sinalNaFala(['não estou com dormência na virilha']), null);
+  assert.equal(sinalNaFala(['nem perdi a força na perna']), null);
+  // febre: cada ocorrência vale, e a de outra pessoa não
+  assert.ok(sinalNaFala(['não tive febre mas tenho dor, depois tive febre e dor']));
+  assert.equal(sinalNaFala(['meu filho está com febre, eu só tenho dor nas costas']), null);
+});
+
+test('sinalNaFala: negação de uma mensagem não cala o sinal da mensagem seguinte (achado do Codex)', () => {
+  assert.ok(sinalNaFala(['não tenho dormência na virilha', 'agora estou com dormência na virilha']));
+  assert.ok(sinalNaFala(['não tenho dormência', 'agora estou com dormência na virilha']));
+  assert.ok(sinalNaFala(['sem febre', 'agora estou com febre e dor nas costas']));
+  assert.equal(sinalNaFala(['sem febre, mas com dor nas costas']), null);
+});
+
+test('sinalNaFala: perda de força no braço, na mão ou de vontade não é o sinal da coluna', () => {
+  for (const f of ['perdi a força no braço', 'perdeu a força na mão direita', 'perdi a força de vontade', 'perda de força nas mãos']) {
+    assert.equal(sinalNaFala([f]), null, f);
+  }
+  for (const f of ['perdi a força nas pernas', 'perdi a força na perna esquerda', 'perdi a força e caí']) {
+    assert.ok(sinalNaFala([f]), f);
+  }
+});
+
+test('pausaDoTurno: pausar sem a flag e sem motivo de sinal NÃO conta como aviso urgente', () => {
+  assert.deepEqual(pausaDoTurno([]), { pausou: false, urgente: false });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'quer falar com humano' } }]), { pausou: true, urgente: false });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true } }]), { pausou: true, urgente: true });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'red flag: perda de força' } }]), { pausou: true, urgente: true });
+  assert.deepEqual(pausaDoTurno([{ name: 'criar_tarefa' }]), { pausou: false, urgente: false });
+});
+
+test('a frase do passe não promete prazo, não diagnostica e não sugere pronto-socorro', () => {
+  for (const r of [{ tipo: 'aberta' as const }, { tipo: 'fechada' as const, quando: 'amanhã (terça-feira) às 8h', hoje: false }, { tipo: 'desconhecido' as const }]) {
+    const f = fraseDoPasse(r, false);
+    assert.doesNotMatch(f, /pronto|UPA|hospital|instante|já já|logo|minutos/i);
+    assert.match(f, /avisei a nossa equipe/);
+  }
+  assert.match(fraseDoPasse({ tipo: 'fechada', quando: 'amanhã (terça-feira) às 8h', hoje: false }, false), /amanhã \(terça-feira\) às 8h/);
+  // O paciente falou em pronto-socorro: não desaconselha.
+  assert.match(fraseDoPasse({ tipo: 'aberta' }, true), /se você sentir que não dá para esperar, pode ir/i);
+});
+
+test('sinal neurológico (ITZ #28642041: "tive um AVC, tremendo o braço, a boca treme") entra no mesmo fluxo', () => {
+  assert.match(sinalNaFala(['Eu tive um AVC, tremendo o braço, a perna direita dura... a boca treme']) ?? '', /neurológico/);
+  for (const f of ['a boca entortou', 'minha fala está enrolada', 'o braço está tremendo', 'acho que é um derrame']) {
+    assert.match(sinalNaFala([f]) ?? '', /neurológico/, f);
+  }
+  // história antiga não é aviso
+  assert.equal(sinalNaFala(['tive um AVC há 3 anos, hoje só tenho dor nas costas']), null);
+  assert.equal(sinalNaFala(['sem derrame nem nada, só dor']), null);
+  // e o prompt manda parar
+  assert.match(bloco(composeSystemPrompt({ unit: unidade() })), /teve AVC ou derrame agora[\s\S]*boca torta[\s\S]*fala enrolada/);
+});
+
+test('texto livre da unidade que manda ao pronto-socorro ganha a ressalva POR LINHA (source_papel, manual, conhecimento)', () => {
+  const papel = [
+    'Sinais de alerta (perda de forca, perda de controle de xixi/intestino, dormencia em sela, dor apos trauma, febre com dor) -> pronto-atendimento com urgencia + transfere.',
+    'A consulta custa R$ 350.',
+  ].join('\n');
+  const r = travarProntoSocorroPorLinha(papel);
+  const [l1, l2] = r.split('\n');
+  assert.match(l1, /-> pronto-atendimento com urgencia \+ transfere\. \[REGRA DA REDE, vale mais que esta linha: NÃO sugira pronto-socorro/);
+  assert.equal(l2, 'A consulta custa R$ 350.', 'a linha sem pronto-socorro passa intacta');
+  assert.equal(travarProntoSocorroPorLinha('Consulta de R$ 350.'), 'Consulta de R$ 350.');
+  assert.equal(travarProntoSocorroPorLinha(null), '');
+
+  // chega ao prompt pelas fontes oficiais...
+  const p = composeSystemPrompt({ unit: unidade({ sourcePapel: papel }) });
+  assert.match(p, /-> pronto-atendimento com urgencia \+ transfere\. \[REGRA DA REDE/);
+  // ...pela base de conhecimento...
+  const comBase = composeSystemPrompt({
+    unit: unidade(),
+    knowledge: [{ id: 'k', question: 'Sinto formigamento ou dormência, é grave?', answer: 'Se vier junto com perda de força na perna, procure um pronto-atendimento.', score: 1 }] as never,
+  });
+  assert.match(comBase, /procure um pronto-atendimento\. \[REGRA DA REDE/);
+});
+
+test('o manual da unidade (system_prompt, dormente até ligar PROMPT_DA_UNIDADE_SLUGS) também leva a ressalva', () => {
+  const manual = 'Se houver sinal de alerta, oriente procurar pronto-atendimento com urgência e transfira.';
+  const base = escolherBase(unidade({ systemPrompt: manual }), undefined);
+  assert.match(base ?? '', /pronto-atendimento com urgência e transfira\. \[REGRA DA REDE/);
+  assert.equal(escolherBase(unidade({ systemPrompt: '' }), undefined), undefined);
 });

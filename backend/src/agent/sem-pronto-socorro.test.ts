@@ -20,6 +20,22 @@ test('a frase que manda ao pronto-socorro sai e o resto da mensagem fica', () =>
   assert.match(r.removidas[0], /pronto-socorro/);
 });
 
+test('as 5 frases reais de 22 a 25/10 (depois da regra de 21/10) não chegam ao paciente', () => {
+  const reais: Array<[string, string]> = [
+    ['Marabá #28653386', 'Se piorar muito antes disso e você sentir que não dá pra esperar, pode procurar um pronto-socorro, viu?'],
+    ['Marabá #28843076', 'Mas não espere: busquem atendimento de urgência (pronto-socorro/hospital) agora mesmo, viu?'],
+    ['ITZ #28642041', 'Quero me certificar de que você vai ter o cuidado certo - tem alguém que possa te ajudar a chegar num pronto-socorro ou neurologista agora?'],
+    ['Canaã #28971656', 'Como estamos fora do horário agora, elas continuam seu atendimento por aqui amanhã, segunda-feira, às 8h - se a dor estiver insuportável antes disso, pode procurar um pronto-socorro, viu?'],
+    ['Taubaté #5795803', 'Como seu caso já está sendo visto como cirúrgico com o médico, faz sentido você seguir esse caminho com ele.'],
+  ];
+  for (const [quem, frase] of reais) {
+    const r = semProntoSocorro(`Entendi 🙏 ${frase} A equipe já foi avisada.`, ['bom dia, estou com dor']);
+    assert.ok(r.removidas.length >= 1, `${quem}: nada saiu`);
+    assert.doesNotMatch(r.texto, /pronto|cir[uú]rgic|hospital|neurologista/i, quem);
+    assert.match(r.texto, /A equipe já foi avisada\./, `${quem}: o resto da mensagem fica`);
+  }
+});
+
 test('pega as formas: UPA, pronto atendimento, emergência, SAMU, ambulância, "vá ao hospital"', () => {
   for (const t of [
     'Procure a UPA agora.',
@@ -85,6 +101,22 @@ test('se o PRÓPRIO paciente falou em pronto-socorro, a resposta pode tratar dis
     semProntoSocorro('Pode ir, sim. Você vai precisar de cirurgia.', ['devo ir ao pronto-socorro?']).texto,
     'Pode ir, sim.',
   );
+});
+
+test('"hospital" que o paciente citou de passagem não libera a sugestão de pronto-socorro', () => {
+  for (const fala of ['trabalho num hospital', 'já fui no hospital semana passada', 'minha mãe está no hospital']) {
+    assert.equal(semProntoSocorro('Procure o pronto-socorro.', [fala]).texto, '', fala);
+  }
+});
+
+test('dizer que a dúvida sobre cirurgia é do especialista não é opinar', () => {
+  for (const t of [
+    'A consulta serve para avaliar se você vai precisar de cirurgia.',
+    'O especialista vai ver se precisa de cirurgia ou não.',
+    'Na consulta se descobre se há indicação cirúrgica.',
+  ]) {
+    assert.equal(semProntoSocorro(t).texto, t, t);
+  }
 });
 
 test('no guardrail: só clínica, e a mensagem que sobraria vazia vira texto neutro', () => {

@@ -18,7 +18,9 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
-import { falasDoTurno, FRASE_DO_PASSE_POR_SINAL, sinalNaFala } from './sinal-de-alerta.js';
+import { chamadasDoTurno, ehClinicaParaSinalDeAlerta, falasDoTurno, fraseDoPasse, pausaDoTurno, sinalNaFala } from './sinal-de-alerta.js';
+import { pacienteFalouDePs } from './sem-pronto-socorro.js';
+import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
@@ -81,7 +83,6 @@ import {
   LlmTimeoutError,
   textoDoTeto,
 } from './llm-policy.js';
-import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import {
   agendamentoDoVinculo,
@@ -1114,11 +1115,8 @@ export async function buildAgentGraph(
         });
       }
 
-      // As últimas falas do paciente: se ELE falou em pronto-socorro, a resposta pode tratar disso (sem-pronto-socorro.ts).
-      const mensagensDoPaciente = nonSystemMessages
-        .filter((m) => m.getType() === 'human')
-        .slice(-3)
-        .map((m) => aiTextFromContent(m.content));
+      // As falas do paciente DESTE turno: se ELE falou em pronto-socorro, a resposta pode tratar disso (sem-pronto-socorro.ts).
+      const mensagensDoPaciente = falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
       if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente }).triggered.length === 0) {
         const t1 = performance.now();
@@ -1159,14 +1157,16 @@ export async function buildAgentGraph(
         }
       }
 
-      // Sinal de alerta dito com todas as letras e o modelo NÃO parou (26/10/2026): a regra de 21/10 estava no prompt e
+      // Sinal de alerta dito com todas as letras e o modelo NÃO avisou (26/10/2026): a regra de 21/10 estava no prompt e
       // Olímpia/Mossoró/Balsas/Rio Verde ficaram sem etiqueta, sem tarefa e sem aviso. Aqui o código passa pela mesma
       // ferramenta pausar_ia (etiqueta 🔴 PRIORIDADE + tarefa LIGAR AGORA + Telegram do João). Só frase sem ambiguidade
       // (sinal-de-alerta.ts); a fala vaga fica com o modelo, que pergunta UM sinal.
-      if (unit.category?.trim() === 'saude' && state.leadId && !ferramentasDoTurno(nonSystemMessages).includes('pausar_ia')) {
-        const sinal = sinalNaFala(
-          falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) }))),
-        );
+      let passouPorSinal = false;
+      if (ehClinicaParaSinalDeAlerta(unit) && state.leadId) {
+        const { pausou, urgente } = pausaDoTurno(chamadasDoTurno(nonSystemMessages));
+        const sinal = urgente
+          ? null
+          : sinalNaFala(falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) }))));
         const pausar = tools.find((t) => t.name === 'pausar_ia');
         if (sinal && pausar) {
           let resultadoPausa: string;
@@ -1177,17 +1177,22 @@ export async function buildAgentGraph(
           } catch (err) {
             resultadoPausa = `falhou: ${err instanceof Error ? err.message : String(err)}`;
           }
-          // Só troca a resposta se a pausa pegou: dizer "a equipe continua" com a IA ainda ligada seria prometer o que não aconteceu.
-          const pausou = resultadoPausa.startsWith('OK');
+          const pegou = resultadoPausa.startsWith('OK');
+          // O modelo já tinha pausado, só sem a flag: ele escreveu a resposta sabendo disso, e ela fica. Se não tinha, a
+          // resposta dele ignorou o sinal: sai a frase do passe. Se a pausa não pegou, dizer "a equipe continua" com a IA
+          // ainda ligada seria prometer o que não aconteceu — fica a resposta do modelo.
+          const trocaATexto = pegou && !pausou;
           await recorder.step({
-            kind: pausou ? 'THINKING' : 'ERROR',
-            title: pausou
-              ? `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo não parou — passada para a equipe pelo código`
-              : `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo não parou; a pausa pelo código não pegou — saiu a resposta do modelo`,
-            payload: { original: textoFinal, frase: FRASE_DO_PASSE_POR_SINAL, pausa: resultadoPausa },
+            kind: pegou ? 'THINKING' : 'ERROR',
+            title: pegou
+              ? `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo ${pausou ? 'pausou sem avisar a equipe' : 'não parou'} — aviso feito pelo código`
+              : `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo não avisou; o aviso pelo código não pegou — saiu a resposta do modelo`,
+            payload: { original: textoFinal, pausa: resultadoPausa },
           });
-          if (pausou) {
-            textoFinal = FRASE_DO_PASSE_POR_SINAL;
+          if (pegou) passouPorSinal = true;
+          if (trocaATexto) {
+            const falas = falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
+            textoFinal = fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(falas));
             response.content = textoFinal;
             // O resumo para quem vai ligar: depois da pausa e do aviso, que são o que não pode esperar.
             const resumir = tools.find((t) => t.name === 'resumir_lead_para_sdr');
@@ -1209,7 +1214,8 @@ export async function buildAgentGraph(
       // Se a resposta desobedeceu: conversa travada / 2º áudio não ouvido sem transferir → passa aqui, em código, pela
       // mesma ferramenta pausar_ia; pediu o nome pela 3ª vez → refaz UMA vez sem o pedido (se a refeita não servir,
       // fica a original — um 3º pedido é ruim, mas mensagem quebrada é pior).
-      const trava = travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages));
+      // Já passou por sinal de alerta neste turno: a trava da repetição não pausa de novo nem troca a frase do passe.
+      const trava = passouPorSinal ? null : travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages));
       if (trava?.acao === 'passar_para_equipe') {
         const pausar = tools.find((t) => t.name === 'pausar_ia');
         let resultadoPausa: string | null = null;

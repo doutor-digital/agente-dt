@@ -30,23 +30,31 @@ const SUGERE_PRONTO_SOCORRO = new RegExp(
   'i',
 );
 
-/** O paciente falou em ir a pronto-socorro/hospital/emergência. */
+/**
+ * O paciente falou em ir a pronto-socorro/hospital/emergência. "Hospital" sozinho não vale ("trabalho num hospital",
+ * "já fui no hospital semana passada"): só com verbo de ir, ou as palavras que já são de pronto-socorro.
+ */
 const PACIENTE_FALOU_DE_PS = new RegExp(
   [
     String.raw`pronto[\s-]*(?:socorro|atendimento)`,
     String.raw`\bUPA\b`,
     String.raw`\bSAMU\b`,
     String.raw`\bemerg[eê]ncia`,
-    String.raw`\bhospital`,
     String.raw`\bambul[aâ]ncia`,
+    String.raw`\b(?:ir|vou|v[aá]|devo|deveria|preciso|precisa|corr\w+|levar|levo|me\s+levem)(?=\s)[^.!?\n]{0,25}\bhospital`,
   ].join('|'),
   'i',
 );
 
+export function pacienteFalouDePs(falas: string[]): boolean {
+  return falas.some((f) => PACIENTE_FALOU_DE_PS.test(f ?? ''));
+}
+
 /** Frase que aconselha procurar médico, ou opina sobre cirurgia. Sai sempre. */
 const OPINA_SOBRE_MEDICO_OU_CIRURGIA = new RegExp(
   [
-    String.raw`caminho\s+cir[uú]rgic`,
+    // "visto como cirúrgico", "tratamento cirúrgico", "caminho cirúrgico": o adjetivo é sempre opinião sobre o caso
+    String.raw`\bcir[uú]rgic[oa]s?\b`,
     String.raw`indica[cç][aã]o\s+(?:de\s+)?cir[uú]rgic`,
     String.raw`(?:tratamento|abordagem|procedimento)\s+cir[uú]rgic`,
     // "vai/pode/talvez precisar de cirurgia", "vai ter que operar", "provavelmente é cirurgia"
@@ -57,6 +65,9 @@ const OPINA_SOBRE_MEDICO_OU_CIRURGIA = new RegExp(
   ].join('|'),
   'i',
 );
+
+/** "avaliar SE você vai precisar de cirurgia": dizer que a dúvida existe e é do especialista não é opinar. */
+const INCERTEZA_SOBRE_CIRURGIA = /\bse\b[^.!?\n]{0,40}\b(?:cirurgia|cir[uú]rgic[oa]|operar|operad[oa]|opera[cç][aã]o)/i;
 
 export interface SemProntoSocorro {
   texto: string;
@@ -69,12 +80,12 @@ export interface SemProntoSocorro {
  */
 export function semProntoSocorro(texto: string, mensagensDoPaciente: string[] = []): SemProntoSocorro {
   if (!texto) return { texto, removidas: [] };
-  const pacienteFalouDePs = mensagensDoPaciente.some((m) => PACIENTE_FALOU_DE_PS.test(m ?? ''));
+  const falouDePs = pacienteFalouDePs(mensagensDoPaciente);
   const pedacos = quebrarEmFrases(texto);
   const removidas: string[] = [];
   const ficam = pedacos.filter((p) => {
-    const sugerePs = !pacienteFalouDePs && SUGERE_PRONTO_SOCORRO.test(p.frase);
-    if (sugerePs || OPINA_SOBRE_MEDICO_OU_CIRURGIA.test(p.frase)) {
+    const sugerePs = !falouDePs && SUGERE_PRONTO_SOCORRO.test(p.frase);
+    if (sugerePs || (OPINA_SOBRE_MEDICO_OU_CIRURGIA.test(p.frase) && !INCERTEZA_SOBRE_CIRURGIA.test(p.frase))) {
       removidas.push(p.frase.trim());
       return false;
     }
