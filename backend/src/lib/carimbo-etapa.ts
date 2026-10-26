@@ -82,7 +82,7 @@ export interface EventoEtapa {
   pipeline_id?: number;
 }
 
-function valorAtual(lead: KommoLead, fieldId: number): string | null {
+export function valorAtual(lead: KommoLead, fieldId: number): string | null {
   const cf = (lead.custom_fields_values ?? []).find((f) => f.field_id === fieldId);
   const v = cf?.values?.[0]?.value;
   return v === null || v === undefined || v === '' ? null : String(v);

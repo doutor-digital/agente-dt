@@ -555,8 +555,8 @@ async function enviarDegrau(
       // Bloco DIGITAL: escada inteira sem o paciente voltar → "⬢ Status da conversa" = Sem resposta.
       // O "Sem resposta" é o sinal que o worker de leads parados lê: 24 h depois, sem o paciente
       // responder ao último toque, o cartão vai pra PERDIDO "Não interagiu" (parados-worker).
-      // Cartão que já está em PERDIDO/GANHO NÃO recebe: o "Encerrada" do carimbo de etapa vale
-      // (gravarStatusConversa lê o cartão e decide — lib/status-conversa.ts).
+      // Cartão em PERDIDO/GANHO cujo campo já diz "Encerrada" NÃO recebe: o do carimbo de etapa vale; se o campo diz
+      // outra coisa, grava (gravarStatusConversa lê o cartão e decide — lib/status-conversa.ts).
       void carimbarSemResposta(unitCompleta, leadId, kommo);
     }
 

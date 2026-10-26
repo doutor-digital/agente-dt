@@ -17,6 +17,10 @@
  * limpa o campo ao reabrir o cartão — lacuna que já existia, fora deste conserto). Quem escreve "Encerrada" é só o
  * carimbo de etapa.
  *
+ * Duas guardas, por escritor: o fim do turno da IA respeita a ETAPA (guarda que ele já tinha, vale em toda unidade e
+ * cobre o `fechar_lead` do mesmo turno, antes do carimbo gravar); handoff e follow-up respeitam a etapa E o valor —
+ * só recusam quando o campo já diz "Encerrada" (senão, cartão encerrado onde o carimbo não gravou congela o campo).
+ *
  * Este arquivo é PURO (sem rede, sem banco): a decisão e a definição de "etapa que encerra".
  */
 import { normalizarNome } from './kommo-schema.js';
@@ -66,37 +70,27 @@ export function cartaoEncerrado(
   return lead?.status_id != null && IDS_DE_ENCERRAMENTO.has(lead.status_id);
 }
 
-/**
- * O que o campo "Status da conversa" diz AGORA no cartão (o valor do select), ou null se está vazio / não veio.
- * Acha o campo pelo id quando a conta tem esquema e, sem esquema, pelo nome — a leitura não depende do esquema.
- */
-export function statusAtualDoCartao(
-  lead: { custom_fields_values?: Array<{ field_id: number; field_name?: string; values: Array<{ value: unknown }> }> | null } | null | undefined,
-  campoId: number | null,
-  nomeDoCampo: string,
-): string | null {
-  const campos = lead?.custom_fields_values ?? [];
-  // Com id, só o id vale (um campo de nome repetido não desvia a leitura); sem id, o nome.
-  const nome = normalizarNome(nomeDoCampo);
-  const campo =
-    (campoId !== null ? campos.find((f) => f.field_id === campoId) : undefined) ??
-    (campoId === null ? campos.find((f) => f.field_name != null && normalizarNome(f.field_name) === nome) : undefined);
-  const valor = campo?.values?.[0]?.value;
-  return typeof valor === 'string' && valor.trim() !== '' ? valor : null;
-}
-
 export type DecisaoDoStatus = { gravar: true } | { gravar: false; motivo: string };
 
 /**
  * Pode `novo` ser gravado agora? Puro.
  *  - "Encerrada" sempre (é o carimbo de etapa falando);
- *  - qualquer outro valor só NÃO grava quando as DUAS coisas são verdade: o cartão está em etapa de encerramento
- *    E o campo JÁ diz "Encerrada". Cartão encerrado cujo campo diz outra coisa (o carimbo não gravou, ou gravou e
- *    alguém mexeu) deixa o handoff e o follow-up gravarem: bloquear só pela etapa congelaria o campo para sempre.
+ *  - fim do turno da IA ('turno-da-ia'): NÃO grava em cartão encerrado, pela etapa só — é a guarda que ele sempre teve,
+ *    e o turno pode terminar no mesmo instante do `fechar_lead`, antes de o carimbo gravar "Encerrada";
+ *  - handoff e follow-up: só NÃO gravam quando as DUAS coisas são verdade — o cartão está em etapa de encerramento E o
+ *    campo JÁ diz "Encerrada". Cartão encerrado cujo campo diz outra coisa (o carimbo não gravou, ou alguém mexeu)
+ *    deixa gravar: bloquear só pela etapa congelaria o campo para sempre.
  */
-export function decidirStatusConversa(novo: StatusConversa, encerrado: boolean, valorAtual: string | null): DecisaoDoStatus {
-  if (novo === STATUS_ENCERRADA) return { gravar: true };
-  const jaEncerrada = valorAtual !== null && normalizarNome(valorAtual) === normalizarNome(STATUS_ENCERRADA);
-  if (encerrado && jaEncerrada) return { gravar: false, motivo: 'cartão em etapa de encerramento e o campo já diz "Encerrada" — vale' };
+export function decidirStatusConversa(
+  novo: StatusConversa,
+  encerrado: boolean,
+  valorAtual: string | null,
+  origem: OrigemDoStatus,
+): DecisaoDoStatus {
+  if (novo === STATUS_ENCERRADA || !encerrado) return { gravar: true };
+  if (origem === 'turno-da-ia') return { gravar: false, motivo: 'cartão em etapa de encerramento — o turno da IA não escreve nele' };
+  if (valorAtual !== null && normalizarNome(valorAtual) === normalizarNome(STATUS_ENCERRADA)) {
+    return { gravar: false, motivo: 'cartão em etapa de encerramento e o campo já diz "Encerrada" — vale' };
+  }
   return { gravar: true };
 }

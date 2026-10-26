@@ -2,7 +2,7 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
-import { cartaoEncerrado, decidirStatusConversa, etapaEncerraConversa, statusAtualDoCartao } from './status-conversa.js';
+import { cartaoEncerrado, decidirStatusConversa, etapaEncerraConversa } from './status-conversa.js';
 import { aplicarCarimbosDeEtapa, CAMPOS_CARIMBO } from './carimbo-etapa.js';
 import { limparCacheEsquema, montarEsquema } from './kommo-schema.js';
 import { _semearParaTeste } from './automacoes-estado.js';
@@ -61,31 +61,25 @@ function cartaoFalso(statusId: number, pipelineId: number, statusConversa: strin
   return { estado, kommo: kommo as never };
 }
 
-test('só o carimbo de etapa escreve "Encerrada"; qualquer outro valor respeita cartão encerrado', () => {
-  assert.deepEqual(decidirStatusConversa('Encerrada', true, 'Encerrada'), { gravar: true });
-  assert.deepEqual(decidirStatusConversa('Encerrada', false, null), { gravar: true });
+test('só o carimbo de etapa escreve "Encerrada"; o turno da IA respeita a ETAPA, handoff e follow-up respeitam etapa E valor', () => {
+  assert.deepEqual(decidirStatusConversa('Encerrada', true, 'Encerrada', 'turno-da-ia'), { gravar: true });
+  assert.deepEqual(decidirStatusConversa('Encerrada', false, null, 'follow-up-sem-resposta'), { gravar: true });
   for (const v of ['Sem resposta', 'Respondendo', 'Aguardando lead'] as const) {
-    assert.equal(decidirStatusConversa(v, false, 'Encerrada').gravar, true, `${v} em cartão aberto`);
-    assert.equal(decidirStatusConversa(v, true, 'Encerrada').gravar, false, `${v} em cartão encerrado e campo Encerrada`);
-    // o outro lado: encerrado mas o campo diz outra coisa (ou está vazio) — grava, senão o campo congela
-    for (const atual of ['Aguardando lead', 'Respondendo', 'Sem resposta', null]) {
-      assert.equal(decidirStatusConversa(v, true, atual).gravar, true, `${v} em cartão encerrado com o campo em ${atual}`);
+    for (const origem of ['turno-da-ia', 'humano-assumiu', 'follow-up-sem-resposta'] as const) {
+      assert.equal(decidirStatusConversa(v, false, 'Encerrada', origem).gravar, true, `${origem}: ${v} em cartão aberto`);
+    }
+    // handoff e follow-up: encerrado + Encerrada bloqueia; encerrado + outro valor (ou vazio) grava, senão o campo congela
+    for (const origem of ['humano-assumiu', 'follow-up-sem-resposta'] as const) {
+      assert.equal(decidirStatusConversa(v, true, 'Encerrada', origem).gravar, false, `${origem}: ${v}, encerrado e campo Encerrada`);
+      for (const atual of ['Aguardando lead', 'Respondendo', 'Sem resposta', null]) {
+        assert.equal(decidirStatusConversa(v, true, atual, origem).gravar, true, `${origem}: ${v}, encerrado com o campo em ${atual}`);
+      }
+    }
+    // turno da IA: só a etapa — encerrado bloqueia qualquer que seja o valor (o fechar_lead do mesmo turno ainda não tem o Encerrada)
+    for (const atual of ['Encerrada', 'Aguardando lead', 'Respondendo', 'Sem resposta', null]) {
+      assert.equal(decidirStatusConversa(v, true, atual, 'turno-da-ia').gravar, false, `turno-da-ia: ${v}, encerrado com o campo em ${atual}`);
     }
   }
-});
-
-test('statusAtualDoCartao: acha pelo id ou, sem esquema, pelo nome; vazio vira null', () => {
-  const lead = { custom_fields_values: [{ field_id: 7, field_name: '⬢ Status da conversa', values: [{ value: 'Encerrada' }] }] };
-  assert.equal(statusAtualDoCartao(lead, 7, '⬢ Status da conversa'), 'Encerrada');
-  assert.equal(statusAtualDoCartao(lead, null, '⬢ Status da conversa'), 'Encerrada');
-  // nome repetido: com id, só o id vale
-  const repetido = { custom_fields_values: [
-    { field_id: 99, field_name: '⬢ Status da conversa', values: [{ value: 'Respondendo' }] },
-    { field_id: 7, field_name: '⬢ Status da conversa', values: [{ value: 'Encerrada' }] },
-  ] };
-  assert.equal(statusAtualDoCartao(repetido, 7, '⬢ Status da conversa'), 'Encerrada');
-  assert.equal(statusAtualDoCartao({ custom_fields_values: [] }, 7, '⬢ Status da conversa'), null);
-  assert.equal(statusAtualDoCartao(null, 7, '⬢ Status da conversa'), null);
 });
 
 test('"etapa que encerra" é uma definição só, e o carimbo de etapa usa a mesma', () => {
@@ -149,19 +143,32 @@ test('reaberto: o SDR tira o cartão de PERDIDO e a IA volta a escrever o campo'
   assert.equal(estado.statusConversa, 'Aguardando lead');
 });
 
-test('SONDA DO SÊNIOR: cartão encerrado onde o carimbo NÃO gravou "Encerrada" — handoff, follow-up e turno da IA gravam (o campo não congela)', async () => {
+test('SONDA DO SÊNIOR: PERDIDO onde o carimbo NÃO gravou "Encerrada" — handoff e follow-up gravam (o campo não congela); o turno da IA não', async () => {
   limparCacheEsquema();
   const { estado, kommo } = cartaoFalso(143, COMERCIAL, 'Aguardando lead'); // PERDIDO, campo ainda velho
   await carimbarHumanoAssumiu(unidade, kommo, 1, 'Escalonamento');
   assert.equal(estado.statusConversa, 'Respondendo', 'handoff foi recusado e o campo congelou');
   await carimbarSemResposta(unidade, 1, kommo);
   assert.equal(estado.statusConversa, 'Sem resposta', 'follow-up foi recusado e o campo congelou');
-  await gravarStatusConversa(unidade, kommo, 1, 'Aguardando lead', 'turno-da-ia');
-  assert.equal(estado.statusConversa, 'Aguardando lead');
-  // campo vazio num cartão encerrado também grava
+  assert.equal(await gravarStatusConversa(unidade, kommo, 1, 'Aguardando lead', 'turno-da-ia'), false);
+  assert.equal(estado.statusConversa, 'Sem resposta', 'o turno da IA escreveu em cartão PERDIDO');
+  // campo vazio num cartão encerrado: handoff e follow-up gravam
   const vazio = cartaoFalso(143, COMERCIAL, null);
   await carimbarSemResposta(unidade, 1, vazio.kommo);
   assert.equal(vazio.estado.statusConversa, 'Sem resposta');
+});
+
+test('Açailândia + fechar_lead no mesmo turno: o fim do turno lê PERDIDO ainda sem "Encerrada" e NÃO grava "Aguardando lead"', async () => {
+  limparCacheEsquema();
+  for (const antes of [null, 'Respondendo', 'Sem resposta'] as const) {
+    const { estado, kommo } = cartaoFalso(143, COMERCIAL, antes); // o carimbo ainda não correu
+    const gravou = await gravarStatusConversa(unidade, kommo, 1, 'Aguardando lead', 'turno-da-ia');
+    assert.equal(gravou, false);
+    assert.equal(estado.statusConversa, antes);
+  }
+  const ganho = cartaoFalso(142, COMERCIAL, null);
+  await gravarStatusConversa(unidade, ganho.kommo, 1, 'Aguardando lead', 'turno-da-ia');
+  assert.equal(ganho.estado.statusConversa, null);
 });
 
 test('funil TRATAMENTO: ALTA (142) não é encerramento de conversa — o campo segue sendo escrito', async () => {
@@ -198,23 +205,25 @@ test('unidade SEM carimbo de etapa: ninguém grava "Encerrada", então handoff e
     await carimbarHumanoAssumiu(unidade, kommo, 1);
     assert.equal(estado.statusConversa, 'Respondendo');
     assert.equal(estado.leituras, 0, 'não leu o cartão à toa');
-    // o turno da IA mantém a guarda de 142/143 que já tinha antes deste conserto
-    estado.statusConversa = 'Encerrada';
-    await gravarStatusConversa(unidade, kommo, 1, 'Aguardando lead', 'turno-da-ia');
-    assert.equal(estado.statusConversa, 'Encerrada');
+    // o turno da IA mantém a guarda de 142/143 por id que já tinha, com valor REAL no campo (ninguém grava "Encerrada" aqui)
+    const perdido = cartaoFalso(143, COMERCIAL, 'Sem resposta');
+    assert.equal(await gravarStatusConversa(unidade, perdido.kommo, 1, 'Aguardando lead', 'turno-da-ia'), false);
+    assert.equal(perdido.estado.statusConversa, 'Sem resposta', 'turno da IA escreveu em 143 sem o carimbo');
     // ...inclusive no funil TRATAMENTO (ALTA = 142): sem o carimbo, a guarda antiga por id continua igual
-    const alta = cartaoFalso(142, TRATAMENTO, 'Encerrada');
-    await gravarStatusConversa(unidade, alta.kommo, 1, 'Aguardando lead', 'turno-da-ia');
-    assert.equal(alta.estado.statusConversa, 'Encerrada');
+    const alta = cartaoFalso(142, TRATAMENTO, 'Respondendo');
+    assert.equal(await gravarStatusConversa(unidade, alta.kommo, 1, 'Aguardando lead', 'turno-da-ia'), false);
+    assert.equal(alta.estado.statusConversa, 'Respondendo', 'turno da IA escreveu em ALTA (142) sem o carimbo');
   } finally {
     _semearParaTeste([{ slug: 'doutor-hernia-acailandia', automacao: 'carimbo-etapa', estado: 'ligado' }]);
   }
 });
 
-test('esquema da conta que não carregou: o cartão em 143 segue protegido pelo id, e o cartão aberto grava', async () => {
+test('esquema da conta que não carregou: o turno da IA em 143 segue protegido pelo id; handoff não derruba quem chamou', async () => {
   limparCacheEsquema();
   const { estado, kommo } = cartaoFalso(143, COMERCIAL, 'Encerrada');
   (kommo as { listPipelines: () => Promise<never> }).listPipelines = async () => { throw new Error('500'); };
-  await gravarStatusConversa(unidade, kommo, 1, 'Respondendo', 'humano-assumiu');
+  assert.equal(await gravarStatusConversa(unidade, kommo, 1, 'Aguardando lead', 'turno-da-ia'), false);
+  assert.equal(estado.statusConversa, 'Encerrada');
+  await carimbarHumanoAssumiu(unidade, kommo, 1); // sem esquema nem dá para gravar: o erro é engolido e o campo fica como está
   assert.equal(estado.statusConversa, 'Encerrada');
 });

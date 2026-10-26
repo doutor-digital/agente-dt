@@ -11,9 +11,9 @@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
-import { carimboEtapaLiberado } from '../lib/carimbo-etapa.js';
+import { carimboEtapaLiberado, valorAtual } from '../lib/carimbo-etapa.js';
 import { createKommoClient, type KommoClient, type KommoFieldType } from './kommo.service.js';
-import { cartaoEncerrado, decidirStatusConversa, statusAtualDoCartao, type OrigemDoStatus, type StatusAutomatico, type StatusConversa } from '../lib/status-conversa.js';
+import { cartaoEncerrado, decidirStatusConversa, type OrigemDoStatus, type StatusAutomatico, type StatusConversa } from '../lib/status-conversa.js';
 import type { Unit } from '@prisma/client';
 
 export const CAMPOS_DIGITAL = {
@@ -54,13 +54,16 @@ export async function gravarCampoDigital(
 
 /**
  * O ÚNICO caminho de escrita de "⬢ Status da conversa" para quem não é o carimbo de etapa (IA, handoff, follow-up).
- * Lê o cartão e, se ele está numa etapa que encerra a conversa (GANHO / PERDIDO) E o campo JÁ diz "Encerrada", NÃO
- * grava: o "Encerrada" do carimbo de etapa vale (ver lib/status-conversa.ts). Cartão encerrado cujo campo diz outra
- * coisa é escrito normalmente — senão o campo congelaria. Devolve true só quando gravou.
+ * Lê o cartão e decide (lib/status-conversa.ts), por quem escreve:
+ *  - fim do turno da IA: cartão em etapa que encerra (GANHO / PERDIDO) NÃO recebe, pela etapa só, em toda unidade —
+ *    é a guarda que ele já tinha, e cobre o `fechar_lead` do mesmo turno (que ainda não tem o "Encerrada" do carimbo);
+ *  - handoff e follow-up: só NÃO gravam quando a etapa encerra E o campo JÁ diz "Encerrada" (o do carimbo de etapa
+ *    vale). Cartão encerrado cujo campo diz outra coisa é escrito — senão o campo congelaria.
+ * Devolve true só quando gravou.
  *
- * SÓ ONDE O CARIMBO DE ETAPA É O DONO: em unidade com `carimbo-etapa` desligada ninguém grava "Encerrada", e recusar
- * a escrita deixaria o cartão fechado com um valor velho. Ali handoff e follow-up gravam como sempre gravaram, sem
- * leitura extra; só o turno da IA mantém a guarda de 142/143 que já tinha.
+ * Handoff e follow-up SÓ ONDE O CARIMBO DE ETAPA É O DONO: em unidade com `carimbo-etapa` desligada ninguém grava
+ * "Encerrada", e recusar deixaria o cartão fechado com um valor velho. Ali gravam como sempre gravaram, sem leitura
+ * extra; o turno da IA mantém a guarda de 142/143 por id que já tinha.
  *
  * Cartão que não deu para ler: grava, como sempre gravou (e avisa no log). O campo é informativo, mas "Sem resposta"
  * é o sinal que o parados-worker lê para mandar o lead a PERDIDO — perdê-lo por um 429 deixaria o lead parado para
@@ -92,11 +95,12 @@ export async function gravarStatusConversa(
       const esquema = await esquemaDaUnidade(unit, kommo).catch(() => null);
       const nomeDaEtapa = esquema?.nomeDoStatus(cartao.pipeline_id, cartao.status_id)?.status ?? null;
       // Sem o carimbo como dono, vale só a guarda antiga por id (142/143 em qualquer funil), que é o que o turno da IA já tinha.
-      const valorAtual = statusAtualDoCartao(cartao, esquema?.campoPorNome(CAMPOS_DIGITAL.STATUS_CONVERSA) ?? null, CAMPOS_DIGITAL.STATUS_CONVERSA);
-      const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, carimboEDono ? nomeDaEtapa : null), valorAtual);
+      const campoId = esquema?.campoPorNome(CAMPOS_DIGITAL.STATUS_CONVERSA) ?? null;
+      const statusAtual = campoId === null ? null : valorAtual(cartao, campoId);
+      const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, carimboEDono ? nomeDaEtapa : null), statusAtual, origem);
       if (!decisao.gravar) {
         logger.info(
-          { unit: unit.slug, leadId, tentou: novo, origem, etapa: nomeDaEtapa ?? cartao.status_id, valorAtual },
+          { unit: unit.slug, leadId, tentou: novo, origem, etapa: nomeDaEtapa ?? cartao.status_id, statusAtual },
           `status-conversa: não gravei — ${decisao.motivo}`,
         );
         return false;
@@ -146,9 +150,9 @@ async function atualizarMetricasDeTurno(unit: Unit, leadId: number): Promise<voi
     gravarCampoDigital(unit, kommo, leadId, nome, tipo, valor);
 
   await grava(CAMPOS_DIGITAL.NUM_MENSAGENS, 'numeric', msgs.length);
-  // A IA acabou de responder: a bola está com o paciente — a não ser que o cartão tenha sido
-  // fechado neste mesmo turno (fechar_lead → GANHO/PERDIDO), aí o "Encerrada" do carimbo de
-  // etapa vale e não pode ser sobrescrito (gravarStatusConversa decide).
+  // A IA acabou de responder: a bola está com o paciente — a não ser que o cartão tenha sido fechado neste mesmo
+  // turno (fechar_lead → GANHO/PERDIDO): o carimbo de etapa pode ainda não ter gravado o "Encerrada", então este
+  // escritor respeita a ETAPA, não o valor do campo (gravarStatusConversa decide).
   await gravarStatusConversa(unit, kommo, leadId, 'Aguardando lead', 'turno-da-ia');
 
   const assistants = msgs.filter((m) => m.role === 'assistant');
