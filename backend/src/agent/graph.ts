@@ -18,6 +18,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
+import type { OfertaVigente } from './oferta-da-campanha.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
@@ -638,6 +639,10 @@ export async function buildAgentGraph(
       void maybeAddEntryDateTag({ recorder, kommo: kommoClient, leadId: state.leadId, tz: fusoDaUnidade(unit) });
     }
 
+    // A oferta do disparo de campanha que este paciente recebeu: o prompt a ensina à Sofia e o guardrail de preço a aceita.
+    // O prompt a carrega (junto com o resto, em paralelo) e a deixa aqui, para o guardrail ler a MESMA coisa sem consultar de novo.
+    const ofertaDoTurno: { valor?: OfertaVigente | null } = {};
+
     let systemMessage: SystemMessage;
     // O prompt deste turno em texto: a guarda do nome do profissional (lá embaixo) só deixa sair
     // nome que esteja aqui ou no que as ferramentas devolveram agora.
@@ -650,6 +655,7 @@ export async function buildAgentGraph(
         isFirstTurn,
         leadId: state.leadId,
         historico: falas,
+        ofertaSaida: ofertaDoTurno,
       });
       promptDoTurno = `${cacheable}\n${dynamic ?? ''}`;
       systemMessage = new SystemMessage({
@@ -666,10 +672,12 @@ export async function buildAgentGraph(
         isFirstTurn,
         leadId: state.leadId,
         historico: falas,
+        ofertaSaida: ofertaDoTurno,
       });
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
     }
+    const extrasDoGuardrail = { ofertaDaCampanha: ofertaDoTurno.valor?.oferta ?? null };
     const janela = podarHistorico(nonSystemMessages);
     const finalMessages: BaseMessage[] = [systemMessage, ...janela];
 
@@ -1114,7 +1122,7 @@ export async function buildAgentGraph(
       }
 
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
-      if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit).triggered.length === 0) {
+      if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, extrasDoGuardrail).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
@@ -1268,7 +1276,7 @@ export async function buildAgentGraph(
         textoFinal = semDra;
         response.content = textoFinal;
       }
-      const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit);
+      const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit, extrasDoGuardrail);
       // O que o guardrail devolve (correção ou texto de reserva) passa pela mesma trava do nome.
       const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit, rede) };
       if (guard.rewritten) {

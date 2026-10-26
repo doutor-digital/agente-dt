@@ -38,13 +38,16 @@ export async function candidatosDaEtiqueta(unit: Unit, etiqueta: string): Promis
 /** Palavras que PODEM ser um pedido de saída; o regex fino (`pediuParaSair`) decide. Filtra no banco para não ler a conversa toda. */
 const PISTAS_DE_SAIDA = ['sair', 'parar', 'pare', 'stop', 'receber', 'lista', 'descadastr'];
 
-/**
- * Cartões cujo paciente escreveu um pedido de saída (a partir de `desde`, se vier), com a hora da ÚLTIMA mensagem assim.
- * A hora deixa o varredor separar "pediu depois do envio" (reação à campanha) de "já tinha pedido".
- */
-export async function leadsQuePediramSair(unit: Unit, leadIds: number[], desde?: Date): Promise<Map<number, Date>> {
-  const saiu = new Map<number, Date>();
-  if (leadIds.length === 0) return saiu;
+/** Uma mensagem de paciente que é pedido de saída. */
+export interface PedidoDeSaida {
+  leadId: number;
+  texto: string;
+  quando: Date;
+}
+
+/** Os pedidos de saída escritos pelos cartões (a partir de `desde`, se vier), um por mensagem, em ordem de leitura do banco. */
+export async function pedidosDeSaida(unit: Unit, leadIds: number[], desde?: Date): Promise<PedidoDeSaida[]> {
+  if (leadIds.length === 0) return [];
   const daConta = unit.kommoSubdomain ? await prisma.unit.findMany({ where: { kommoSubdomain: unit.kommoSubdomain }, select: { id: true } }) : [{ id: unit.id }];
   const msgs = await prisma.message.findMany({
     where: {
@@ -55,11 +58,18 @@ export async function leadsQuePediramSair(unit: Unit, leadIds: number[], desde?:
     },
     select: { content: true, createdAt: true, conversation: { select: { leadId: true } } },
   });
-  for (const m of msgs) {
-    if (!pediuParaSair(m.content)) continue;
-    const id = Number(m.conversation.leadId);
-    const antes = saiu.get(id);
-    if (!antes || m.createdAt > antes) saiu.set(id, m.createdAt);
+  return msgs.filter((m) => pediuParaSair(m.content)).map((m) => ({ leadId: Number(m.conversation.leadId), texto: m.content, quando: m.createdAt }));
+}
+
+/**
+ * Cartões cujo paciente escreveu um pedido de saída (a partir de `desde`, se vier), com a hora da ÚLTIMA mensagem assim.
+ * A hora deixa o varredor separar "pediu depois do envio" (reação à campanha) de "já tinha pedido".
+ */
+export async function leadsQuePediramSair(unit: Unit, leadIds: number[], desde?: Date): Promise<Map<number, Date>> {
+  const saiu = new Map<number, Date>();
+  for (const m of await pedidosDeSaida(unit, leadIds, desde)) {
+    const antes = saiu.get(m.leadId);
+    if (!antes || m.quando > antes) saiu.set(m.leadId, m.quando);
   }
   return saiu;
 }

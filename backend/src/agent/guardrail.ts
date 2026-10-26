@@ -26,6 +26,16 @@ function parseAmounts(...texts: (string | null | undefined)[]): Set<number> {
   return set;
 }
 
+/** Os valores de uma oferta com centavos ("R$ 150,50" → 150.5), para comparar exato. */
+function valoresExatos(texto: string | null | undefined): Set<number> {
+  const set = new Set<number>();
+  for (const m of (texto ?? '').matchAll(/R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{2}))?/gi)) {
+    const n = Number(`${m[1]!.replace(/\./g, '')}.${m[2] ?? '00'}`);
+    if (Number.isFinite(n) && n > 0) set.add(n);
+  }
+  return set;
+}
+
 function amountApproved(v: number, approved: Set<number>): boolean {
   if (approved.has(v)) return true;
   for (const total of approved) {
@@ -141,7 +151,15 @@ function violaRegra(regra: { key: string; re: RegExp }, text: string): boolean {
   return false;
 }
 
-export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
+export interface ExtrasDoGuardrail {
+  /**
+   * O texto da oferta do disparo que ESTE paciente recebeu (preço, prazo, condição). Os valores dele são aprovados
+   * junto com os da ficha: sem isto o R$ 150 da campanha seria cortado como "fora do catálogo" e trocado pelo R$ 280.
+   */
+  ofertaDaCampanha?: string | null;
+}
+
+export function aplicarGuardrail(text: string, unit: Unit, extras: ExtrasDoGuardrail = {}): GuardrailResult {
   if (!text || !text.trim()) return { text, triggered: [], rewritten: false };
   const triggered: string[] = [];
   let texto = text;
@@ -190,6 +208,29 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
     return { text: FALLBACK_LACUNA, triggered, rewritten: true };
   }
 
+  // Valores da oferta que este paciente recebeu. Cada R$ da oferta fica ESCONDIDO das duas travas de "número no slot
+  // errado" (convênio e antecipado), que o trocariam pelo da ficha — o bug que a oferta resolve. Só esconde:
+  //  - o valor EXATO da oferta, centavos incluídos ("R$ 150,99" não é o "R$ 150" da oferta);
+  //  - o que NÃO é também um valor da ficha: se a oferta cita "de R$ 250 por R$ 150" e R$ 250 é o preço de quem tem plano,
+  //    um "R$ 250 no Pix antecipado" continua sob a trava (é o erro que ela existe para pegar).
+  // Qualquer outro número da mesma mensagem segue sob as travas.
+  const catalogo = parseAmounts(unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio);
+  const daOferta = parseAmounts(extras.ofertaDaCampanha);
+  const exatosDaOferta = valoresExatos(extras.ofertaDaCampanha);
+  const escondidos: string[] = [];
+  const escondeOferta = (t: string): string =>
+    exatosDaOferta.size === 0
+      ? t
+      : t.replace(/R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{2}))?/gi, (m, inteiro: string, centavos?: string) => {
+          const valor = Number(`${inteiro.replace(/\./g, '')}.${centavos ?? '00'}`);
+          if (!exatosDaOferta.has(valor) || catalogo.has(Math.trunc(valor))) return m;
+          escondidos.push(m);
+          // mantém o "R$" na frente (as travas param no próximo R$) mas sem o número, que é o que elas procuram
+          return `R$ ⟦${escondidos.length - 1}⟧`;
+        });
+  const mostraOferta = (t: string): string => t.replace(/R\$ ⟦(\d+)⟧/g, (_, i: string) => escondidos[Number(i)] ?? '');
+  texto = escondeOferta(texto);
+
   // O desconto do convênio não pode sair como preço do Pix — ver preco-convenio.ts.
   const p = precosDaConsulta(unit);
   if (p) {
@@ -218,10 +259,15 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
     }
   }
 
-  const aprovados = parseAmounts(unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio);
+  texto = mostraOferta(texto);
+
+  // O catálogo é a ficha (com a tolerância de parcela de sempre). Os valores da oferta valem EXATOS, sem a conta de parcelas
+  // (R$ 150 de oferta não aprova R$ 50 nem R$ 75), e só enquanto a ficha tem valores: unidade sem R$ na ficha não ganha
+  // checagem por causa da oferta.
+  const aprovados = catalogo;
   if (aprovados.size > 0) {
     const foraDoCatalogo = [...parseAmounts(texto)].filter(
-      (v) => v >= 20 && !amountApproved(v, aprovados),
+      (v) => v >= 20 && !amountApproved(v, aprovados) && !daOferta.has(v),
     );
     if (foraDoCatalogo.length > 0) {
       const corrigido = corrigirValores(texto, aprovados, foraDoCatalogo);

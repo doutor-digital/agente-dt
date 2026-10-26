@@ -10,6 +10,7 @@ import { createKommoClient } from '../../services/kommo.service.js';
 import { credenciaisDaUnidade, enviarTemplate } from '../whatsapp-meta.js';
 import { conferenciaDaFranquia } from './franquia.js';
 import { leadsQuePediramSair } from './publico.js';
+import { contarSairam } from './saidas.js';
 import { telefoneWhatsapp } from './regras.js';
 import type { Destino, Modo, Porto } from './lote.js';
 
@@ -65,7 +66,7 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
       }),
 
     // Só conta quem RECEBEU (enviadoEm) e depois respondeu SAIR; quem já tinha pedido para sair antes foi barrado sem envio.
-    quantosSairam: (campanhaId, unitId) => prisma.disparoDestinatario.count({ where: { campanhaId, unitId, estado: 'saiu', enviadoEm: { not: null } } }),
+    quantosSairam: (campanhaId, unitId) => contarSairam(campanhaId, unitId),
 
     ondaAprovada: async (ondaId) => (await prisma.disparoOnda.count({ where: { id: ondaId, estado: 'aprovada' } })) > 0,
 
@@ -98,15 +99,15 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
       });
     },
 
-    pausarOndas: async (unitId, campanhaId, motivo) => {
+    pausarOndas: async (unitId, campanhaId, motivo, causa) => {
       await prisma.disparoOnda.updateMany({
         where: { unitId, estado: 'aprovada', ...(campanhaId ? { campanhaId } : {}) },
-        data: { estado: 'pausada', pausaMotivo: motivo.slice(0, 300) },
+        data: { estado: 'pausada', pausaMotivo: motivo.slice(0, 300), pausaCausa: causa ?? null },
       });
     },
 
-    pausarOnda: async (ondaId, motivo) => {
-      await prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'aprovada' }, data: { estado: 'pausada', pausaMotivo: motivo.slice(0, 300) } });
+    pausarOnda: async (ondaId, motivo, causa) => {
+      await prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'aprovada' }, data: { estado: 'pausada', pausaMotivo: motivo.slice(0, 300), pausaCausa: causa ?? null } });
     },
 
     concluirOnda: async (ondaId) => {

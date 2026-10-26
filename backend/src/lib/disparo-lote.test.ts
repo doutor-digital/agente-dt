@@ -23,7 +23,7 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
   todos.forEach((d) => estados.set(d.id, { estado: 'pendente' }));
   let consultasDeOnda = 0;
   const desdeDasFalhas: Date[] = [];
-  const chamadas = { desdeDasFalhas, enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], concluidas: [] as string[], logs: [] as string[] };
+  const chamadas = { desdeDasFalhas, enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], causas: [] as Array<string | undefined>, concluidas: [] as string[], logs: [] as string[] };
   const porto: Porto = {
     agora: () => opcoes.agora ?? AGORA,
     modoDaUnidade: () => opcoes.modo,
@@ -47,8 +47,8 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
       return true;
     },
     gravar: async (id, dados) => void Object.assign(estados.get(id)!, dados),
-    pausarOndas: async (_u, _c, motivo) => void chamadas.pausas.push(motivo),
-    pausarOnda: async (_id, motivo) => void chamadas.pausas.push(motivo),
+    pausarOndas: async (_u, _c, motivo, causa) => void (chamadas.pausas.push(motivo), chamadas.causas.push(causa)),
+    pausarOnda: async (_id, motivo, causa) => void (chamadas.pausas.push(motivo), chamadas.causas.push(causa)),
     concluirOnda: async (id) => void chamadas.concluidas.push(id),
     pediuSair: async (d) => opcoes.pediuSair?.(d) ?? false,
     franquia: async (d) => opcoes.franquia?.(d) ?? 'livre',
@@ -342,4 +342,45 @@ test('LIGADO: aprovação com mais de 7 dias não sai (lista velha); em SECO a i
 test('a mensagem de erro da Meta vira uma linha legível', () => {
   assert.equal(motivoDaMeta({ ok: false, wamid: null, incerto: false, detalhe: { error: { code: 131049, message: 'm', error_data: { details: 'ecossistema saudável' } } } }), 'Meta 131049: ecossistema saudável');
   assert.match(motivoDaMeta({ ok: false, wamid: null, incerto: true, detalhe: 'TimeoutError' }), /^INCERTO: TimeoutError/);
+});
+
+// ── Retomada da onda pausada por SAIR (decisão do João, 26/10) ────────────────────────────────────────────
+
+test('a pausa por SAIR diz a causa "sair"; falhas seguidas e aprovação vencida têm a sua (só "sair" pode ser retomada)', async () => {
+  const sair = montar({ modo: 'ligado', sairam: 4, teste: null });
+  await rodarUnidade(sair.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual(sair.chamadas.causas, ['sair']);
+
+  const falhas = montar({ modo: 'ligado', ultimos: ['falhou', 'falhou', 'falhou', 'falhou', 'falhou'], teste: null });
+  await rodarUnidade(falhas.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual(falhas.chamadas.causas, ['falhas']);
+
+  const velha = montar({ modo: 'ligado', teste: null });
+  await rodarUnidade(velha.porto, sem_pausa, UNIDADE, [{ ...ONDA, aprovadaEm: new Date(AGORA.getTime() - 8 * 86_400_000) }]);
+  assert.deepEqual(velha.chamadas.causas, ['vencida']);
+});
+
+test('onda RETOMADA: os SAIR que o João já viu não pausam de novo; mais de 3 NOVOS pausam', async () => {
+  const retomada = { ...ONDA, sairAceitos: 4 };
+  const mesmos = montar({ modo: 'ligado', sairam: 4, teste: null, quantos: 2 });
+  const r = await rodarUnidade(mesmos.porto, sem_pausa, UNIDADE, [retomada]);
+  assert.deepEqual(mesmos.chamadas.pausas, [], 'os 4 já foram vistos');
+  assert.equal(r.mandou, 2, 'e a onda anda');
+
+  const tres = montar({ modo: 'ligado', sairam: 7, teste: null });
+  await rodarUnidade(tres.porto, sem_pausa, UNIDADE, [retomada]);
+  assert.deepEqual(tres.chamadas.pausas, [], '3 novos ainda não passam do limite (mais de 3)');
+
+  const quatro = montar({ modo: 'ligado', sairam: 8, teste: null });
+  const r4 = await rodarUnidade(quatro.porto, sem_pausa, UNIDADE, [retomada]);
+  assert.equal(quatro.chamadas.pausas.length, 1, '4 novos param de novo');
+  assert.match(quatro.chamadas.pausas[0]!, /8 pessoas responderam SAIR .*além das 4 que o João já viu/);
+  assert.equal(r4.mandou, 0);
+});
+
+test('uma onda NOVA na mesma campanha não herda a folga de outra retomada (vale a menor base)', async () => {
+  const t = montar({ modo: 'ligado', sairam: 4, teste: null });
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [{ ...ONDA, sairAceitos: 4 }, { ...ONDA, id: 'o2', sairAceitos: 0 }]);
+  assert.equal(t.chamadas.pausas.length, 1);
+  assert.deepEqual(t.chamadas.causas, ['sair']);
 });

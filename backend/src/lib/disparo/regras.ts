@@ -22,6 +22,20 @@ export type MotivoDeExclusao =
   | 'tratamento-aberto'
   | 'franquia-indisponivel';
 
+/** O texto de oferta que a Sofia lê: preço, prazo, condições. Curto de propósito: vira bloco do prompt em toda resposta de quem recebeu o disparo. */
+export const OFERTA_MAX = 1200;
+
+/**
+ * A oferta só passa pela trava de preço se o valor estiver escrito "R$ 150": é o único formato que a trava reconhece.
+ * "150 reais" ou "por 150" deixariam a Sofia dizer R$ 150 e a trava trocá-lo pelo da ficha (o bug do R$ 150 que a oferta resolve).
+ */
+export function problemaNaOferta(oferta: string | null | undefined): string | null {
+  const t = (oferta ?? '').trim();
+  if (!t) return null;
+  if (/\b\d[\d.,]*\s*(?:reais|real|contos?|pila)\b/i.test(t)) return 'escreva os valores da oferta como R$ 150 (não "150 reais"): é o único formato que a trava de preço da Sofia reconhece';
+  return null;
+}
+
 export const ROTULO_DA_EXCLUSAO: Record<MotivoDeExclusao, string> = {
   'sem-telefone': 'sem telefone no contato',
   'telefone-invalido': 'telefone que não é celular com DDD',

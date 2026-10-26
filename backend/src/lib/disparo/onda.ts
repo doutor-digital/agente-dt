@@ -11,18 +11,22 @@ import { credenciaisDaUnidade } from '../whatsapp-meta.js';
 import { lerPublico, reaproveitarDeOndaCancelada, type PublicoLido } from './publico.js';
 import { conferirModeloNaMeta, definicaoParaAUnidade, impressaoDaOnda, podeAprovar, type Definicao } from './modelo.js';
 import { problemaNoModelo, triar } from './regras.js';
+import { freiosDoAmbiente } from './freios.js';
+import { contarSairam } from './saidas.js';
+import { recusaDaRetomada } from './retomada.js';
 
 export type ResultadoDeAcao<T> = { ok: true; dados: T } | { ok: false; status: number; erro: string };
 
 export const falha = (status: number, erro: string): { ok: false; status: number; erro: string } => ({ ok: false, status, erro });
 
-export function definicaoDaOnda(o: Pick<DisparoOnda, 'template' | 'idioma' | 'textoModelo' | 'variaveis' | 'cabecalho'>): Definicao {
+export function definicaoDaOnda(o: Pick<DisparoOnda, 'template' | 'idioma' | 'textoModelo' | 'variaveis' | 'cabecalho'> & { oferta?: string | null }): Definicao {
   return {
     template: o.template,
     idioma: o.idioma,
     textoModelo: o.textoModelo,
     variaveis: (o.variaveis as unknown[]).map(String),
     cabecalho: (o.cabecalho as Definicao['cabecalho']) ?? null,
+    ...(o.oferta?.trim() ? { oferta: o.oferta.trim() } : {}),
   };
 }
 
@@ -46,21 +50,33 @@ export async function abrirOnda(args: { campanha: string; unidade: string; etiqu
   const problema = problemaNoModelo(def.textoModelo, def.variaveis);
   if (problema) return falha(422, problema);
 
-  const onda = await prisma.disparoOnda.create({
-    data: {
-      campanhaId: campanha.id,
-      unitId: unit.id,
-      etiqueta,
-      template: def.template,
-      idioma: def.idioma,
-      textoModelo: def.textoModelo,
-      variaveis: def.variaveis as Prisma.InputJsonValue,
-      cabecalho: (def.cabecalho ?? undefined) as Prisma.InputJsonValue | undefined,
-      estado: 'montando',
-      impressao: '',
-      criadaPor: args.por ?? null,
-    },
+  // Duas ondas vivas da mesma campanha na mesma unidade só atrapalham (a pessoa é única por campanha): quem chama
+  // (a tela, a rotina ou o Claude) recebe o id da que já existe, em vez de montar outra por cima. A checagem e a criação
+  // andam na mesma transação, sob uma trava do banco por campanha+unidade: duas chamadas ao mesmo tempo não furam a regra.
+  const r = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`disparo-onda:${campanha.id}:${unit.id}`}))`;
+    const viva = await tx.disparoOnda.findFirst({ where: { campanhaId: campanha.id, unitId: unit.id, estado: { in: ['montando', 'montada', 'aprovada', 'pausada'] } }, select: { id: true, estado: true } });
+    if (viva) return { viva };
+    const criada = await tx.disparoOnda.create({
+      data: {
+        campanhaId: campanha.id,
+        unitId: unit.id,
+        etiqueta,
+        template: def.template,
+        idioma: def.idioma,
+        textoModelo: def.textoModelo,
+        variaveis: def.variaveis as Prisma.InputJsonValue,
+        cabecalho: (def.cabecalho ?? undefined) as Prisma.InputJsonValue | undefined,
+        oferta: def.oferta ?? null,
+        estado: 'montando',
+        impressao: '',
+        criadaPor: args.por ?? null,
+      },
+    });
+    return { criada };
   });
+  if ('viva' in r && r.viva) return falha(409, `já existe a onda ${r.viva.id} desta campanha nesta unidade (${r.viva.estado}); cancele-a antes de montar outra`);
+  const onda = r.criada!;
   return { ok: true, dados: onda };
 }
 
@@ -143,5 +159,44 @@ export async function cancelarOnda(ondaId: string, motivo: string): Promise<Resu
     data: { estado: 'cancelada', pausaMotivo: motivo.slice(0, 300) },
   });
   if (r.count !== 1) return falha(409, 'a onda não existe ou já está concluída/cancelada');
+  return { ok: true, dados: (await prisma.disparoOnda.findUnique({ where: { id: ondaId } }))! };
+}
+
+/**
+ * Retoma uma onda que PAROU POR SAIR. Decisão do João (26/10): só ele libera de novo, depois de ver quem pediu SAIR.
+ *  - só e-mail de `DISPARO_APROVADORES` (a chave de serviço e o Claude nunca chegam aqui);
+ *  - só a pausa por SAIR (token vencido ou aprovação velha pedem onda nova: o problema não é a lista);
+ *  - o `sairam` que a tela mostrou tem de ser o de agora: se chegou mais um SAIR no meio, recusa e mostra de novo;
+ *  - a Meta confirma o modelo de novo (pode ter mudado nos dias de pausa);
+ *  - grava quantos SAIR ele viu (`sairAceitos`): o freio só volta a parar se vierem MAIS de `DISPARO_MAX_SAIR` depois disso.
+ */
+export async function retomarOnda(
+  ondaId: string,
+  args: { por: string | null | undefined; sairam: unknown },
+  deps: { conferir?: typeof conferirModeloNaMeta; contar?: typeof contarSairam; agora?: () => Date } = {},
+): Promise<ResultadoDeAcao<DisparoOnda>> {
+  const conferir = deps.conferir ?? conferirModeloNaMeta;
+  const contar = deps.contar ?? contarSairam;
+  const agora = deps.agora ?? (() => new Date());
+  if (!podeAprovar(args.por)) return falha(403, 'este usuário não está em DISPARO_APROVADORES');
+  const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true } });
+  if (!onda) return falha(404, 'onda não encontrada');
+  const sairam = await contar(onda.campanhaId, onda.unitId);
+  const recusa = recusaDaRetomada({ aprovador: true, estado: onda.estado, pausaCausa: onda.pausaCausa, aprovadaEm: onda.aprovadaEm, validadeDias: freiosDoAmbiente().validadeDias, agora: agora(), sairamAgora: sairam, sairamVisto: args.sairam });
+  if (recusa) return falha(recusa.status, recusa.erro);
+  const meta = await conferir(onda.unit, definicaoDaOnda(onda));
+  if (!meta.ok) return falha(422, meta.motivo);
+
+  // Uma instrução só: volta a aprovada SE ainda está pausada por SAIR E a contagem continua a que o João viu. Se alguém
+  // respondeu SAIR durante a consulta à Meta, nada muda e ele revê a tela (nada de aceitar SAIR que ele não leu).
+  const r = {
+    count: await prisma.$executeRaw`
+      UPDATE disparo_ondas SET estado = 'aprovada', sair_aceitos = ${sairam}, retomada_por = ${args.por!.trim().toLowerCase()}, retomada_em = ${agora()},
+        pausa_motivo = NULL, pausa_causa = NULL, atualizado_em = NOW()
+      WHERE id = ${ondaId} AND estado = 'pausada' AND pausa_causa = 'sair'
+        AND (SELECT COUNT(*) FROM disparo_destinatarios d WHERE d.campanha_id = ${onda.campanhaId} AND d.unit_id = ${onda.unitId} AND d.estado = 'saiu' AND d.enviado_em IS NOT NULL) = ${sairam}`,
+  };
+  if (r.count !== 1) return falha(409, 'a onda mudou (ou chegou mais um SAIR) enquanto retomava; recarregue a tela e confira de novo');
+  logger.warn({ onda: ondaId, unit: onda.unit.slug, sairAceitos: sairam, por: args.por }, 'disparo: onda RETOMADA depois de pausa por SAIR');
   return { ok: true, dados: (await prisma.disparoOnda.findUnique({ where: { id: ondaId } }))! };
 }
