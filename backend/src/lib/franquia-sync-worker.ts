@@ -920,7 +920,7 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
         registrarSimulacao(unit, 'franquia-sync', { leadId: lead.id, acao: 'moveria', alvo: mov.para, deEtapa: ETAPA.COMPARECEU, motivo: mov.motivo });
         continue;
       }
-      await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, ETAPA.COMPARECEU);
+      await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, ETAPA.COMPARECEU, lead);
     }
     if (leads.length < 250) break;
   }
@@ -1800,7 +1800,7 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
   if (!funis || !mov.gatilho) return;
   // move em seco: o aplicarMovimento só registra "moveria" — nada a marcar
   if (estadoDoMove(unit.slug) === 'seco') {
-    await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+    await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status, lead);
     return;
   }
   const etapa: EtapaQueAFranquiaReabre = normalizarNome(atual.status) === normalizarNome(ETAPA.ALTA) ? 'ALTA' : 'PERDIDO';
@@ -1829,7 +1829,7 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
     return;
   }
   const antes = resumo.movimentos;
-  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status, lead);
   if (resumo.movimentos === antes) return; // o Kommo recusou: sem marca, tenta de novo na próxima varredura
   await marcarAviso(unit.id, leadId, chave);
   await kommo.addLeadNote(leadId, notaDaDevolucao(etapa, mov.para, mov.gatilho)).catch((err) =>
