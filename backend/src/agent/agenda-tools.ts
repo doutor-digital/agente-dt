@@ -28,6 +28,7 @@ import { PARA_SEMPRE_MS } from '../lib/conflito-paciente.js';
 import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } from './carimbos-do-agendamento.js';
 import { carimboDaConsulta } from './horario-oferecido.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
+import { motivoDeNaoCancelar } from './cancelavel.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { apagarDoCache, medidorDoCache } from '../lib/cache-agenda.js';
 import {
@@ -859,7 +860,7 @@ async function procurarExistente(unit: Unit, leadId: number, nome: string, fone:
 export async function consultaAtual(unit: Unit, leadId: number | undefined) {
   const c = await AgendaReconcileService.consultaDoLead(unit, leadId);
   if (!c || !c.idSchedule || c.estado === 'cancelada') return null;
-  return { idSchedule: c.idSchedule, quando: c.quando, confirmada: c.estado === 'confirmada' };
+  return { idSchedule: c.idSchedule, quando: c.quando, confirmada: c.estado === 'confirmada', idStatus: c.idStatus ?? null };
 }
 
 const porExtenso = AgendaReconcileService.porExtenso;
@@ -956,14 +957,21 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
         );
       }
 
+      // Só cancela consulta FUTURA e de pé: ATENDIDA aparece como "confirmada" no reconciliador (#132, revisão do sênior).
+      const naoCancela = motivoDeNaoCancelar(atual, agoraLocalISO(fusoDaUnidade(fresca)));
+      if (naoCancela) {
+        return (
+          `NÃO CANCELEI: ${naoCancela}. NÃO diga que cancelou e NÃO cite dia nem hora como se ainda valesse. ` +
+          'Diga que a equipe confere com ele, e abra uma tarefa ALERTA para a equipe se a ferramenta criar_tarefa existir.'
+        );
+      }
+
       if (!args.confirmado) {
         return (
-          'AINDA NÃO CANCELEI. Pergunte ao paciente, com estas palavras: ' +
-          `"Você tem certeza que deseja cancelar seu agendamento de ${porExtenso(atual.quando)}? ` +
-          'Se cancelar, a vaga volta para a fila e pode ser ocupada por outra pessoa. ' +
-          'Me confirma: cancelar ou manter?" ' +
-          'Só chame de novo com confirmado=true se ele responder que quer MESMO cancelar. ' +
-          'Se ele quiser outro dia ou horário, use remarcar_consulta em vez de cancelar.'
+          'AINDA NÃO CANCELEI. Pergunte ao paciente, com estas palavras e nomeando a consulta: ' +
+          `"Confirmo o cancelamento da sua consulta de ${porExtenso(atual.quando)}?" ` +
+          'Só chame de novo com confirmado=true na PRÓXIMA mensagem, e só se ele responder "sim" a ESSA pergunta ' +
+          '(não vale um "pode cancelar" dito antes dela). Se ele quiser outro dia ou horário, use remarcar_consulta em vez de cancelar.'
         );
       }
 
@@ -987,7 +995,10 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
         .catch((err) => logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao limpar vínculo após cancelar'));
       AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
 
-      return `Consulta de ${porExtenso(atual.quando)} cancelada. Confirme ao paciente e pergunte se ele quer remarcar para outro dia.`;
+      return (
+        `Consulta de ${porExtenso(atual.quando)} cancelada. Confirme ao paciente em UMA frase. Se nesta conversa você JÁ ofereceu ` +
+        'outro horário (e ele recusou), NÃO ofereça de novo: só se despeça. Se foi um cancelamento sem oferta antes, pergunte se ele quer remarcar.'
+      );
     },
   });
 }

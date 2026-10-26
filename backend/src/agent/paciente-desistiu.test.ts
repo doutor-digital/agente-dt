@@ -9,7 +9,7 @@ import type { Unit } from '@prisma/client';
 import { composeSystemPrompt } from './prompt-composer.js';
 import type { Fala } from './repeticao.js';
 import { pacienteDesistiu, renderPacienteDesistiu } from './paciente-desistiu.js';
-import { recusouRemarcarExplicitamente } from '../lib/desistencia-frases.js';
+import { oferecuHorario, pareceDesistenciaDaConsulta, recusouRemarcarExplicitamente } from '../lib/desistencia-frases.js';
 
 const p = (texto: string): Fala => ({ papel: 'paciente', texto });
 const ia = (texto: string): Fala => ({ papel: 'ia', texto });
@@ -61,7 +61,7 @@ test('depois da oferta, "pode cancelar mesmo" é a recusa: o bloco NÃO manda of
   const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina' });
   assert.match(bloco, /JÁ tinha avisado/);
   assert.match(bloco, /NÃO ofereça os mesmos horários/);
-  assert.match(bloco, /cancelar_consulta com confirmado=true/);
+  assert.match(bloco, /Confirmo o cancelamento da sua consulta de/);
   assert.match(bloco, /criar_tarefa/);
   assert.doesNotMatch(bloco, /DOIS horários reais/);
   // a primeira vez continua mandando remarcar
@@ -111,22 +111,41 @@ test('o classificador: recusa explícita × hesitação × negação', () => {
   }
 });
 
-test('CAMINHO 1 — recusa explícita: manda cancelar_consulta com confirmado=true, sem perguntar de novo', () => {
+test('CAMINHO 1 — recusa explícita: NÃO cancela ainda; manda perguntar "Confirmo o cancelamento da sua consulta de <dia> às <hora>?"', () => {
   for (const r of ['não quero remarcar', 'pode cancelar mesmo']) {
     const bloco = renderPacienteDesistiu(COM_OFERTA(r), { slug: 'doutor-hernia-araguaina' });
-    assert.match(bloco, /RECUSA EXPLÍCITA: chame cancelar_consulta com confirmado=true/, r);
-    assert.match(bloco, /NÃO pergunte de novo/);
-    assert.doesNotMatch(bloco, /NÃO cancele a consulta/);
+    assert.match(bloco, /RECUSA EXPLÍCITA, mas ainda NÃO cancele/, r);
+    assert.match(bloco, /pergunte EXATAMENTE: "Confirmo o cancelamento da sua consulta de/, r);
+    assert.match(bloco, /só se ele responder "sim" a ESSA pergunta/, r);
+    assert.doesNotMatch(bloco, /Ele disse "sim" à pergunta/, r);
   }
 });
 
-test('CAMINHO 2 — sem vínculo na franquia ou cancelamento que falhou: o mesmo bloco manda NÃO dizer que cancelou e abrir tarefa ALERTA', () => {
-  const bloco = renderPacienteDesistiu(COM_OFERTA('pode cancelar mesmo'), { slug: 'doutor-hernia-araguaina' });
-  assert.match(bloco, /não há consulta marcada por aqui, que não conseguiu confirmar na clínica ou devolver erro: NÃO diga que cancelou/);
+test('CAMINHO 1b — depois da pergunta nomeada, SÓ um "sim" a ela chama cancelar_consulta(confirmado=true)', () => {
+  const pergunta = ia('Confirmo o cancelamento da sua consulta de quinta-feira, 29/10 às 14h?');
+  for (const sim of ['sim', 'Sim, pode', 'confirmo', 'pode cancelar']) {
+    const d = pacienteDesistiu([p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(sim)]);
+    assert.equal(d?.momento, 'confirmando', sim);
+    assert.equal(d?.resposta, 'sim', sim);
+    assert.match(renderPacienteDesistiu([p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(sim)], { slug: 'araguaina' }), /chame cancelar_consulta com confirmado=true/, sim);
+  }
+  // "não", "manter", pergunta ou outro assunto: NÃO cancela
+  for (const nao of ['não', 'quero manter', 'espera, qual é o horário mesmo?', 'quanto custa?', 'depois eu vejo']) {
+    const falas = [p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(nao)];
+    const bloco = renderPacienteDesistiu(falas, { slug: 'araguaina' });
+    assert.doesNotMatch(bloco, /chame cancelar_consulta com confirmado=true/, nao);
+    assert.match(bloco, /NÃO cancele/, nao);
+  }
+});
+
+test('CAMINHO 2 — sem vínculo, consulta passada/atendida ou erro: o bloco manda NÃO dizer que cancelou e abrir tarefa ALERTA', () => {
+  const falas = [p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), ia('Confirmo o cancelamento da sua consulta de quinta, 29/10 às 14h?'), p('sim')];
+  const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina' });
+  assert.match(bloco, /não há consulta marcada por aqui, que a consulta já passou\/foi atendida, que não conseguiu confirmar na clínica ou devolver erro: NÃO diga que cancelou/);
   assert.match(bloco, /ALERTA · doutor-hernia-araguaina · \[Contato: primeiro nome\] Desistiu da consulta de DD\/MM: cancelar na franquia/);
   assert.match(bloco, /NO_FOLLOW_UP/);
-  // e no caso de sucesso, a Sofia confirma o cancelamento em uma frase
-  assert.match(bloco, /Se a ferramenta confirmar o cancelamento: diga em UMA frase/);
+  assert.match(bloco, /Se a ferramenta confirmar: diga em UMA frase/);
+  assert.match(bloco, /NÃO ofereça outro horário/);
 });
 
 test('CAMINHO 3 — hesitação ("acho que não vou conseguir", "vou ver"): NÃO cancela, oferece remarcar', () => {
@@ -145,3 +164,58 @@ test('no PRIMEIRO aviso ("Cancelei"/"pode cancelar") a Sofia nunca cancela: prim
     assert.doesNotMatch(bloco, /RECUSA EXPLÍCITA/, t);
   }
 });
+
+// ── revisão do sênior (#132): um teste por frase ───────────────────────────────────────────────────────────────────
+
+const QUEM_QUER_MANTER = [
+  'Não quero remarcar, quero manter',
+  'não preciso remarcar, vou sim',
+  'não quero outro dia, prefiro manter a de amanhã',
+  'consegui me organizar, não vou mais faltar',
+  'cancela não',
+];
+for (const frase of QUEM_QUER_MANTER) {
+  test(`"${frase}" é MANTER, não recusa: nunca manda cancelar`, () => {
+    assert.equal(recusouRemarcarExplicitamente(frase), false);
+    assert.equal(pareceDesistenciaDaConsulta(frase), false, 'e não calaria régua nem véspera');
+    const bloco = renderPacienteDesistiu(COM_OFERTA(frase), { slug: 'araguaina' });
+    assert.doesNotMatch(bloco, /RECUSA EXPLÍCITA/);
+    assert.doesNotMatch(bloco, /Confirmo o cancelamento/);
+    assert.match(bloco, /quer MANTER a consulta/);
+  });
+}
+
+for (const frase of ['cancela a do meu filho, a minha mantém', 'cancela a minha de terça e deixa a de quinta', 'preciso cancelar a consulta da minha mãe']) {
+  test(`"${frase}": é OUTRA consulta — a Sofia não cancela sozinha, a equipe confere (tarefa)`, () => {
+    const d = pacienteDesistiu([ia('Sua consulta é amanhã. Posso confirmar?'), p(frase)]);
+    assert.equal(d?.momento, 'outra_consulta');
+    assert.equal(pareceDesistenciaDaConsulta(frase), false, 'não cala a véspera de quem mantém a sua');
+    const bloco = renderPacienteDesistiu([ia('Posso confirmar?'), p(frase)], { slug: 'doutor-hernia-araguaina' });
+    assert.match(bloco, /NÃO chame cancelar_consulta/);
+    assert.match(bloco, /ALERTA · doutor-hernia-araguaina/);
+  });
+}
+
+test('a oferta em DUAS mensagens da Sofia não faz o bloco sumir: "não quero remarcar" ainda recebe a pergunta de confirmação', () => {
+  const falas = [p('Cancelei.'), ia('Entendo, vou ver os horários.'), ia('Tenho sexta 30/10 às 14h ou sábado 31/10 às 10h. Qual prefere?'), p('não quero remarcar')];
+  const d = pacienteDesistiu(falas);
+  assert.equal(d?.momento, 'respondeu_a_oferta');
+  assert.equal(d?.recusaExplicita, true);
+  assert.match(renderPacienteDesistiu(falas, { slug: 'x' }), /Confirmo o cancelamento da sua consulta de/);
+});
+
+test('"amanhã" conta como dia da oferta; faixa de funcionamento e lembrete NÃO são oferta', () => {
+  assert.equal(oferecuHorario('Tenho amanhã às 9h ou às 14h30. Qual prefere?'), true);
+  assert.equal(oferecuHorario('Posso te oferecer sexta às 10h'), true);
+  assert.equal(oferecuHorario('Atendemos de segunda a sexta das 8h às 18h'), false);
+  assert.equal(oferecuHorario('Nosso horário de atendimento é de segunda a sexta, das 8h às 18h'), false);
+  assert.equal(oferecuHorario('Sua consulta é amanhã às 14h, confirma?'), false, 'lembrete não é oferta');
+  // o lembrete seguido de "não quero mais" não é "recusou a oferta"
+  assert.equal(pacienteDesistiu([p('não vou poder ir'), ia('Sua consulta é amanhã às 14h, confirma?'), p('não quero mais')]), null, 'o lembrete não é oferta: não há par');
+});
+
+for (const frase of ['não vou mais atrasar, prometo', 'Não vou mais esquecer', 'não vou mais demorar', 'não vou mais faltar']) {
+  test(`nit: "${frase}" não é desistência`, () => {
+    assert.equal(pareceDesistenciaDaConsulta(frase), false);
+  });
+}

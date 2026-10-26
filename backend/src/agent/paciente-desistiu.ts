@@ -15,7 +15,15 @@
  * Só a fala deste turno (as seguidas, depois da última da IA). Sem consulta marcada ("cancelei o plano de saúde") o
  * bloco manda ignorar: quem sabe se ele tem consulta é a ferramenta, não o regex.
  */
-import { oferecuHorario, pareceDesistenciaDaConsulta, recusouRemarcarExplicitamente } from '../lib/desistencia-frases.js';
+import {
+  falouDeOutraConsulta,
+  oferecuHorario,
+  pareceDesistenciaDaConsulta,
+  perguntouConfirmarCancelamento,
+  quisManter,
+  recusouRemarcarExplicitamente,
+  respostaDaConfirmacao,
+} from '../lib/desistencia-frases.js';
 import type { Fala } from './repeticao.js';
 import { turnoDoPaciente } from './paciente-encerrou.js';
 
@@ -25,7 +33,11 @@ export type MomentoDaDesistencia =
   /** Avisou, a Sofia ofereceu horário, e ele insiste em desistir ("pode cancelar mesmo"): é a recusa. */
   | 'insistiu'
   /** Avisou, a Sofia ofereceu horário, e esta é a resposta (que pode ser "não quero", "depois eu vejo", "sexta às 10h"). */
-  | 'respondeu_a_oferta';
+  | 'respondeu_a_oferta'
+  /** A Sofia perguntou "Confirmo o cancelamento da sua consulta de…?" e esta é a resposta. */
+  | 'confirmando'
+  /** Falou de OUTRA consulta ("cancela a do meu filho, a minha mantém"): a Sofia não cancela, a equipe confere. */
+  | 'outra_consulta';
 
 export interface DesistenciaDoTurno {
   momento: MomentoDaDesistencia;
@@ -33,55 +45,87 @@ export interface DesistenciaDoTurno {
   trecho: string;
   /** Neste turno ele RECUSOU remarcar de forma explícita ("pode cancelar mesmo", "não quero remarcar") — e não só hesitou. */
   recusaExplicita: boolean;
+  /** Neste turno ele disse que quer MANTER a consulta ("não quero remarcar, quero manter", "cancela não", "vou sim"). */
+  querManter?: boolean;
+  /** Em `confirmando`: o que ele respondeu à pergunta. */
+  resposta?: 'sim' | 'nao' | 'outra';
+}
+
+/** As falas seguidas da Sofia logo antes do turno (a oferta pode vir em DUAS mensagens) e o que o paciente disse antes delas. */
+function oQueAntecede(falas: Fala[], inicio: number): { ia: string; pacienteAntes: string[] } {
+  const ia: string[] = [];
+  let i = inicio - 1;
+  for (; i >= 0 && falas[i].papel === 'ia'; i--) ia.unshift(falas[i].texto);
+  const pacienteAntes: string[] = [];
+  for (; i >= 0 && falas[i].papel === 'paciente'; i--) pacienteAntes.unshift(falas[i].texto);
+  return { ia: ia.join('\n'), pacienteAntes };
 }
 
 /**
- * Em que pé está a desistência — ou null. O que vale é o PAR de turnos: a fala do paciente logo antes da última da Sofia
- * (avisou) e a que veio depois (a resposta). Sem isso o bloco sumia no turno seguinte, justo quando a recusa chega ("não
- * quero remarcar" não parece desistência), e o fecho — tarefa, NO_FOLLOW_UP, despedida — nunca era mandado.
+ * Em que pé está a desistência — ou null. O que vale é o PAR de turnos: a fala do paciente antes das falas da Sofia (avisou,
+ * e a oferta pode ter vindo em duas mensagens) e a que veio depois (a resposta). Sem isso o bloco sumia no turno seguinte,
+ * justo quando a recusa chega ("não quero remarcar" não parece desistência).
  */
 export function pacienteDesistiu(falas: Fala[]): DesistenciaDoTurno | null {
-  const { textos, ultimaIa, inicio } = turnoDoPaciente(falas);
-  const agora = textos.find((t) => pareceDesistenciaDaConsulta(t)) ?? null;
-  // o que ele disse logo antes da fala da Sofia, e só se a fala dela foi mesmo a oferta de horário
-  let antes: string | null = null;
-  if (ultimaIa !== null && oferecuHorario(ultimaIa)) {
-    for (let j = inicio - 2; j >= 0 && falas[j].papel === 'paciente'; j--) {
-      if (pareceDesistenciaDaConsulta(falas[j].texto)) antes = falas[j].texto;
-    }
+  const { textos, inicio } = turnoDoPaciente(falas);
+  if (textos.length === 0) return null;
+  const turno = textos.join('\n');
+  const { ia, pacienteAntes } = oQueAntecede(falas, inicio);
+
+  // a Sofia perguntou "Confirmo o cancelamento…?": a resposta decide, e só um "sim" a ESSA pergunta cancela
+  if (ia && perguntouConfirmarCancelamento(ia)) {
+    return { momento: 'confirmando', trecho: turno, recusaExplicita: false, resposta: respostaDaConfirmacao(turno) };
   }
-  const explicita = textos.some((t) => recusouRemarcarExplicitamente(t));
-  if (agora && antes) return { momento: 'insistiu', trecho: agora, recusaExplicita: explicita };
-  if (agora) return { momento: 'avisou', trecho: agora, recusaExplicita: false };
-  if (antes) return { momento: 'respondeu_a_oferta', trecho: antes, recusaExplicita: explicita };
+  // consulta de outra pessoa, ou "deixa a de quinta": nunca cancela sozinha
+  if (falouDeOutraConsulta(turno)) return { momento: 'outra_consulta', trecho: turno, recusaExplicita: false };
+
+  const agora = textos.find((t) => pareceDesistenciaDaConsulta(t)) ?? null;
+  const antes = ia && oferecuHorario(ia) ? (pacienteAntes.find((t) => pareceDesistenciaDaConsulta(t)) ?? null) : null;
+  const querManter = textos.some((t) => quisManter(t));
+  const explicita = !querManter && textos.some((t) => recusouRemarcarExplicitamente(t));
+  if (agora && antes) return { momento: 'insistiu', trecho: agora, recusaExplicita: explicita, querManter };
+  if (agora) return { momento: 'avisou', trecho: agora, recusaExplicita: false, querManter };
+  if (antes) return { momento: 'respondeu_a_oferta', trecho: antes, recusaExplicita: explicita, querManter };
   return null;
 }
 
-const TAREFA = (slug: string | null | undefined) =>
+const TAREFA = (slug: string | null | undefined, o: string) =>
   `criar_tarefa com este texto — começando exatamente por "ALERTA ·", que é o que faz o aviso chegar ao grupo: ` +
-  `"ALERTA · ${slug || '(unidade)'} · [Contato: primeiro nome] Desistiu da consulta de DD/MM: cancelar na franquia, pôr ✓ Situação da ` +
-  'consulta = Desmarcado e tirar o cartão de AGENDADO"';
+  `"ALERTA · ${slug || '(unidade)'} · [Contato: primeiro nome] ${o}"`;
 
-/**
- * A recusa EXPLÍCITA de remarcar: a Sofia CANCELA na franquia (cancelar_consulta, confirmado=true — a recusa já é a
- * confirmação) para o franquia-sync gravar Situação = Desmarcado e os lembretes pararem. Sem consulta no vínculo, sem
- * confirmação da clínica ou com erro, a ferramenta diz — e aí é tarefa para a equipe cancelar. Decisão de 26/10/2026.
- */
-function cancelaOuTarefa(slug: string | null | undefined): string {
-  return (
-    'RECUSA EXPLÍCITA: chame cancelar_consulta com confirmado=true (a recusa dele já é a confirmação — NÃO pergunte de novo). ' +
-    '(a) Se a ferramenta confirmar o cancelamento: diga em UMA frase que a consulta foi cancelada, despeça-se com educação ' +
-    '("fico à disposição, qualquer coisa é só me chamar"), SEM nova oferta, e aplique aplicar_tag NO_FOLLOW_UP. ' +
-    '(b) Se ela disser que não há consulta marcada por aqui, que não conseguiu confirmar na clínica ou devolver erro: NÃO diga ' +
-    'que cancelou; diga que a equipe confirma o cancelamento, despeça-se, e chame ' + TAREFA(slug) + ' e aplicar_tag NO_FOLLOW_UP. ' +
-    '(Se essas ferramentas não existirem para você, só a despedida.)'
-  );
-}
+/** A consulta só cai depois de a Sofia NOMEAR qual e de um "sim" a essa pergunta. */
+const perguntaDeConfirmacao = (slug: string | null | undefined): string =>
+  'RECUSA EXPLÍCITA, mas ainda NÃO cancele: chame cancelar_consulta SEM confirmado (ela devolve a consulta dele, com dia e hora) ' +
+  'e pergunte EXATAMENTE: "Confirmo o cancelamento da sua consulta de <dia, DD/MM às HH:mm>?". Só chame ' +
+  'cancelar_consulta(confirmado=true) na PRÓXIMA mensagem, e só se ele responder "sim" a ESSA pergunta. Se a ferramenta disser ' +
+  'que não há consulta marcada por aqui, que a consulta já passou/foi atendida, ou que não conseguiu confirmar na clínica: NÃO ' +
+  'diga que cancelou; diga que a equipe confirma, despeça-se, e chame ' +
+  TAREFA(slug, 'Desistiu da consulta de DD/MM: conferir na franquia e cancelar se for o caso') +
+  ' e aplicar_tag NO_FOLLOW_UP.';
 
 /** Hesitação ("acho que não vou conseguir", "vou ver", só agradeceu): NÃO cancela — oferece remarcar. */
 const OFERECE_DE_NOVO =
   'Se ele só HESITOU ("acho que não vou conseguir", "vou ver", "depois eu aviso") ou só agradeceu: NÃO cancele a consulta. ' +
   'Em UMA frase, pergunte se prefere outro dia (e, se quiser, consulte horários) ou se quer mesmo cancelar — sem cobrar.';
+
+const MANTER =
+  'Se ele diz que quer MANTER a consulta ("quero manter", "vou sim", "cancela não", "consegui me organizar"): NÃO cancele e NÃO ' +
+  'ofereça outro horário. Em UMA frase, confirme que a consulta segue marcada (cite dia e hora só se souber pela ferramenta ' +
+  'ou pelo cartão).';
+
+/** Depois do "sim": cancelar_consulta(confirmado=true) e o desfecho. */
+function cancelaOuTarefa(slug: string | null | undefined): string {
+  return (
+    'Ele disse "sim" à pergunta de confirmação: chame cancelar_consulta com confirmado=true. ' +
+    '(a) Se a ferramenta confirmar: diga em UMA frase que a consulta foi cancelada, despeça-se com educação ' +
+    '("fico à disposição, qualquer coisa é só me chamar"), e aplique aplicar_tag NO_FOLLOW_UP. NÃO ofereça outro horário — ' +
+    'isso já foi feito. ' +
+    '(b) Se ela disser que não há consulta marcada por aqui, que a consulta já passou/foi atendida, que não conseguiu confirmar na ' +
+    'clínica ou devolver erro: NÃO diga que cancelou; diga que a equipe confirma, despeça-se, e chame ' +
+    TAREFA(slug, 'Desistiu da consulta de DD/MM: cancelar na franquia, pôr ✓ Situação da consulta = Desmarcado e tirar o cartão de AGENDADO') +
+    ' e aplicar_tag NO_FOLLOW_UP. (Se essas ferramentas não existirem para você, só a despedida.)'
+  );
+}
 
 /** O bloco do turno. Vazio quando não há desistência em andamento. */
 export function renderPacienteDesistiu(falas: Fala[] | undefined, opcoes: { slug?: string | null } = {}): string {
@@ -89,14 +133,36 @@ export function renderPacienteDesistiu(falas: Fala[] | undefined, opcoes: { slug
   if (!d) return '';
   const dito = d.trecho.replace(/\s+/g, ' ').trim().slice(0, 140);
   const abre = '<paciente_desistiu>\n(contado pelo sistema; vale mais que a regra de "pedido de CANCELAR" e que a de pergunta de continuidade)\n';
-  const fecho = d.recusaExplicita ? cancelaOuTarefa(opcoes.slug) : OFERECE_DE_NOVO;
+  const fim = '\n</paciente_desistiu>';
+  const slug = opcoes.slug;
+
+  if (d.momento === 'outra_consulta') {
+    return (
+      abre +
+      `Ele falou de OUTRA consulta, ou de manter uma e cancelar outra: "${dito}". NÃO chame cancelar_consulta: ela cancela a ` +
+      'consulta deste cartão, e você não sabe qual ele quer. Diga em UMA frase que a equipe confere qual consulta cancelar e ' +
+      'chame ' + TAREFA(slug, 'Pediu para cancelar OUTRA consulta ("trecho da mensagem"): conferir qual cancelar e qual manter') + '.' + fim
+    );
+  }
+  if (d.momento === 'confirmando') {
+    const r = d.resposta;
+    return (
+      abre +
+      `Você perguntou "Confirmo o cancelamento da sua consulta de…?" e a resposta dele é: "${dito}".\n` +
+      (r === 'sim'
+        ? cancelaOuTarefa(slug)
+        : r === 'nao'
+          ? 'Ele NÃO confirmou (disse não, ou quer manter): NÃO cancele. Diga em UMA frase que a consulta segue marcada e que ele pode chamar se mudar de ideia.'
+          : 'A resposta NÃO é um "sim" claro: NÃO cancele. Responda o que ele perguntou, se houver, e repita a pergunta de confirmação com a consulta nomeada.') +
+      fim
+    );
+  }
   if (d.momento === 'insistiu') {
     return (
       abre +
-      `Ele JÁ tinha avisado que não vem, você ofereceu outro horário, e agora insiste: "${dito}". NÃO ofereça os mesmos horários ` +
-      `e NÃO pergunte "tem certeza?". Se ele só está pedindo outro dia, atenda com consultar_horarios + remarcar_consulta. ` +
-      `Senão: ${fecho}\n` +
-      '</paciente_desistiu>'
+      `Ele JÁ tinha avisado que não vem, você ofereceu outro horário, e agora escreve: "${dito}". NÃO ofereça os mesmos ` +
+      `horários e NÃO pergunte "tem certeza?". Se ele só está pedindo outro dia, atenda com consultar_horarios + remarcar_consulta. ` +
+      `${MANTER} Senão: ${d.recusaExplicita ? perguntaDeConfirmacao(slug) : OFERECE_DE_NOVO}` + fim
     );
   }
   if (d.momento === 'respondeu_a_oferta') {
@@ -106,9 +172,10 @@ export function renderPacienteDesistiu(falas: Fala[] | undefined, opcoes: { slug
       '- Se ele ESCOLHEU um horário: remarcar_consulta na consulta que ele já tem (nunca marque uma segunda) e só diga "remarcado" ' +
       'depois de a ferramenta confirmar.\n' +
       '- Se ele pediu outro dia ou outro período: consultar_horarios de novo e ofereça dois horários reais.\n' +
-      `- Senão: ${fecho}\n` +
-      '- Se a mensagem é OUTRA coisa (uma pergunta, uma dúvida sobre valor ou endereço): responda a ela normalmente e NÃO use o fecho.\n' +
-      '</paciente_desistiu>'
+      `- ${MANTER}\n` +
+      `- Senão: ${d.recusaExplicita ? perguntaDeConfirmacao(slug) : OFERECE_DE_NOVO}\n` +
+      '- Se a mensagem é OUTRA coisa (uma pergunta, uma dúvida sobre valor ou endereço): responda a ela normalmente e NÃO use o fecho.' +
+      fim
     );
   }
   return (
@@ -118,11 +185,11 @@ export function renderPacienteDesistiu(falas: Fala[] | undefined, opcoes: { slug
     '(buscar_paciente / o cartão). Se não tem ("cancelei o plano de saúde"), ignore este bloco.\n' +
     '1. Acolha em UMA frase curta, sem culpa e sem retenção. NÃO pergunte "tem certeza?", NÃO explique que a vaga volta para ' +
     'a fila e NÃO chame cancelar_consulta agora — mesmo que ele diga "pode cancelar": primeiro a oferta de novo horário.\n' +
-    '2. Chame consultar_horarios e ofereça DOIS horários reais (dia da semana + DD/MM + hora). Se ele já disse um dia ("semana ' +
-    'que vem", "sexta"), consulte esse dia. Nunca ofereça horário de memória.\n' +
+    '2. Chame consultar_horarios e ofereça DOIS horários reais (dia da semana + DD/MM + hora), numa MESMA mensagem. Se ele já ' +
+    'disse um dia ("semana que vem", "sexta"), consulte esse dia. Nunca ofereça horário de memória.\n' +
     '3. Se ele escolher um, use remarcar_consulta na consulta que ele já tem — nunca marque uma segunda — e só diga "remarcado" ' +
     'depois de a ferramenta confirmar.\n' +
-    '4. Se ele responder depois recusando, o próximo bloco diz o que fazer; não cancele antes disso.\n' +
-    '</paciente_desistiu>'
+    '4. Se ele responder depois recusando, o próximo bloco diz o que fazer; não cancele antes disso.' +
+    fim
   );
 }

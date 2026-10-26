@@ -108,3 +108,9 @@ test('a véspera é superconjunto do detector da régua e da Sofia: o que cala u
     assert.ok(pareceDesistencia(t), t);
   }
 });
+
+test('a véspera NÃO deixa de sair para quem quer manter a consulta ou fala de outra (achado do sênior, #132)', () => {
+  for (const t of ['Não quero remarcar, quero manter', 'cancela não', 'consegui me organizar, não vou mais faltar', 'cancela a do meu filho, a minha mantém', 'cancela a minha de terça e deixa a de quinta']) {
+    assert.equal(pareceDesistencia(t), false, t);
+  }
+});

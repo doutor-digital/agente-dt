@@ -11,7 +11,7 @@
  * e cortaria o lembrete de quem só foi atendido pela equipe.
  */
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
-import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
+import { falouDeOutraConsulta, pareceDesistenciaDaConsulta, quisManter } from './desistencia-frases.js';
 import { semAcento as normalizar } from './sem-acento.js';
 
 /**
@@ -37,6 +37,9 @@ const CONFIRMA = [
 export function pareceDesistencia(texto: string): boolean {
   const s = normalizar(texto);
   if (!s) return false;
+  // Quem quer MANTER a consulta ("não quero remarcar, quero manter", "cancela não") e quem fala de OUTRA consulta ("cancela a do meu
+  // filho, a minha mantém") não deixa de receber a véspera da sua — achado do sênior no #132.
+  if (quisManter(texto) || falouDeOutraConsulta(texto)) return false;
   // Superconjunto do detector da régua e da Sofia (desistencia-da-consulta.ts): a frase que cala a régua e faz a Sofia
   // oferecer horário NUNCA pode deixar a véspera sair. Aqui entram também "remarcar", "reagendar" e "outro dia".
   return pareceDesistenciaDaConsulta(texto) || DESISTE.some((r) => r.test(s));
