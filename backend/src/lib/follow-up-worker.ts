@@ -13,7 +13,8 @@ import { leadPausadoPorJanela } from './pausa-lead.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
 import { motivoDeBloqueio } from './mensagem-bloqueada.js';
-import { abrirTarefaDaDesistencia, pareceDesistenciaDaConsulta } from './desistencia-da-consulta.js';
+import { abrirTarefaDaDesistencia } from './desistencia-da-consulta.js';
+import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
 const SWEEP_MS = 60_000;
 

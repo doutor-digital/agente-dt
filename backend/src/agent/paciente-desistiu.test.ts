@@ -90,3 +90,11 @@ test('só vale se a Sofia de fato ofereceu horário e se a desistência foi o tu
   assert.equal(pacienteDesistiu(antiga), null);
   assert.equal(renderPacienteDesistiu(antiga), '');
 });
+
+test('horário no formato "14h30" também é oferta; "nosso horário de atendimento" não é', () => {
+  const oferta30 = [ia('Sua consulta é amanhã. Posso confirmar?'), p('Cancelei.'), ia('Tudo bem! Tenho sexta às 14h30 ou segunda às 10h30. Qual fica melhor?'), p('não quero remarcar')];
+  assert.equal(pacienteDesistiu(oferta30)?.momento, 'respondeu_a_oferta');
+  // depois do fecho, a despedida fala do "horário de atendimento" — o próximo "obrigada" não reabre o bloco
+  const depoisDoFecho = [p('Cancelei.'), ia('Tenho sexta às 10h ou segunda às 14h'), p('pode cancelar mesmo'), ia('Tudo bem! Nosso horário de atendimento é das 8h às 18h; qualquer coisa é só chamar.'), p('obrigada')];
+  assert.equal(pacienteDesistiu(depoisDoFecho), null);
+});

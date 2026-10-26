@@ -12,15 +12,7 @@
  */
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
-
-function normalizar(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+import { semAcento as normalizar } from './sem-acento.js';
 
 /**
  * O paciente disse que não vem ou quer outro horário. Estreita de propósito: "não" solto não conta, nem

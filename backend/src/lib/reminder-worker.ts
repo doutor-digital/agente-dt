@@ -340,7 +340,12 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       if (desistiu) {
         conta.desistiu++;
         const chaveTarefa = `vespera_desistencia:${consulta.quando}`;
-        if (!(await avisoRecente(unit.id, link.kommoLeadId, chaveTarefa, POR_CONSULTA_MS))) {
+        // O webhook (IA calada) e a régua (sem resposta) já abrem tarefa quando o paciente escreve que não vem — não duplica.
+        const jaAvisada =
+          (await avisoRecente(unit.id, link.kommoLeadId, chaveTarefa, POR_CONSULTA_MS)) ||
+          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:ia_calada', 2 * 24 * 3600_000)) ||
+          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:sem_resposta', 2 * 24 * 3600_000));
+        if (!jaAvisada) {
           try {
             await kommo.createTask({
               leadId: link.kommoLeadId,

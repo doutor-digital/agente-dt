@@ -119,7 +119,7 @@ async function reativarUnidade(unit: Unit): Promise<void> {
       // buscou — sem segunda ida ao Kommo. Sem `encerrar`: a etiqueta pode sair, e aí o cartão volta para a fila (a janela
       // de 24 h do WhatsApp o encerra).
       if (etapa?.bloqueio) {
-        logger.info({ unit: unit.slug, leadId, bloqueio: etapa.bloqueio }, 'reativação: cartão bloqueado para mensagem automática — não reativa');
+        logger.debug({ unit: unit.slug, leadId, bloqueio: etapa.bloqueio }, 'reativação: cartão bloqueado para mensagem automática — não reativa');
         continue;
       }
 

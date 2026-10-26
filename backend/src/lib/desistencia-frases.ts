@@ -8,7 +8,7 @@
  */
 import { semAcento as normalizar } from './sem-acento.js';
 
-const VERBO_DE_IR = '(ir|comparecer|vir|estar (ai|la|presente|na consulta)|chegar)';
+const VERBO_DE_IR = '(ir|comparecer|vir|estar (ai|la|presente|na consulta))';
 const PODER = '(vou|vamos|vai|irei|iremos|poderei|poderemos|posso|podemos|consigo|conseguimos|conseguirei|conseguiremos)';
 
 /** O que NÃO entra: "remarcar/reagendar/outro dia" (quer horário novo, não desistiu — a Sofia já remarca) e "cancelou/cancelaram" (3ª pessoa). */
@@ -25,7 +25,7 @@ const DESISTE_DA_CONSULTA: RegExp[] = [
   /\bn(ao|) (vou|irei|iremos) precisar mais\b/,
   // "Infelizmente não vou poder." (o trecho inteiro) e "não tenho como ir" — sem "conseguir" solto, que é "conseguir pagar"
   /\bn(ao|) (vou|vamos|posso|podemos|poderei) poder( hoje| amanha| mais| agora)?[ .!]*$/,
-  /\bn(ao|) tenho como (ir|comparecer|vir|chegar)\b/,
+  /\bn(ao|) tenho como (ir|comparecer|vir)\b/,
   // "não vai dar pra ir", "não vai dar pra mim ir hoje", "não vai dar eu ir"
   new RegExp(`\\bn(ao|) vai (dar|rolar) (pra |para |de )?(mim |eu |ela |ele )?${VERBO_DE_IR}\\b`),
   // "tive um imprevisto", "surgiu um imprevisto", "houve imprevistos" — quem relata, não "imprevistos acontecem"
@@ -60,12 +60,15 @@ const DESISTENCIA_NO_PASSADO = /\b(cancelei|desmarquei|desisti)\b/;
  * trecho que fala em cancelar é a pergunta.
  */
 export function pareceDesistenciaDaConsulta(texto: string | null | undefined): boolean {
-  const s = normalizar(texto ?? '');
+  const bruto = texto ?? '';
+  const s = normalizar(bruto);
   if (!s) return false;
   if (NAO_E_DESISTENCIA.some((r) => r.test(s))) return false;
-  return s
-    .split(/(?<=[,.;?!\n])/)
-    .map((t) => t.trim())
+  // os trechos saem do texto BRUTO: `normalizar` junta a quebra de linha com o espaço, e a mensagem de WhatsApp em duas
+  // linhas ("Não vou poder ir amanhã\nPode me ajudar a remarcar?") é dois trechos
+  return bruto
+    .split(/(?<=[,.;?!])|\n+/)
+    .map((t) => normalizar(t))
     .filter(Boolean)
     .some((trecho) => (!trecho.includes('?') || DESISTENCIA_NO_PASSADO.test(trecho)) && DESISTE_DA_CONSULTA.some((r) => r.test(trecho)));
 }

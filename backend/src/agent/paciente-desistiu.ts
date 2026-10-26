@@ -33,8 +33,13 @@ export interface DesistenciaDoTurno {
   trecho: string;
 }
 
-/** A Sofia propôs horário nesta fala? (hora "14h"/"14:30", ou a palavra horário) */
-const OFERECEU_HORARIO = /\b\d{1,2}\s*(?:h\b|:\d{2}|horas?\b)|\bhor[áa]rio/i;
+/**
+ * A Sofia propôs horário nesta fala? Relógio ("14h", "14h30", "14:30", "9 horas") MAIS um dia ("sexta", "amanhã", "27/10"):
+ * "nosso horário de atendimento é das 8h às 18h" tem relógio e não é oferta.
+ */
+const RELOGIO = /\b\d{1,2}\s*(?:h(?:\d{2})?\b|:\d{2}|horas?\b)/i;
+const DIA = /\b(?:segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo|amanh[ãa]|hoje)\b|\b\d{1,2}\/\d{1,2}\b/i;
+const oferecuHorario = (fala: string): boolean => RELOGIO.test(fala) && DIA.test(fala);
 
 /**
  * Em que pé está a desistência — ou null. O que vale é o PAR de turnos: a fala do paciente logo antes da última da Sofia
@@ -46,7 +51,7 @@ export function pacienteDesistiu(falas: Fala[]): DesistenciaDoTurno | null {
   const agora = textos.find((t) => pareceDesistenciaDaConsulta(t)) ?? null;
   // o que ele disse logo antes da fala da Sofia, e só se a fala dela foi mesmo a oferta de horário
   let antes: string | null = null;
-  if (ultimaIa !== null && OFERECEU_HORARIO.test(ultimaIa)) {
+  if (ultimaIa !== null && oferecuHorario(ultimaIa)) {
     for (let j = inicio - 2; j >= 0 && falas[j].papel === 'paciente'; j--) {
       if (pareceDesistenciaDaConsulta(falas[j].texto)) antes = falas[j].texto;
     }

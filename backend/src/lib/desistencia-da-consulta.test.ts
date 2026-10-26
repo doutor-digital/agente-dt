@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 import {
   abrirTarefaDaDesistencia,
   consultaFuturaDoCartao,
-  pareceDesistenciaDaConsulta,
   textoTarefaDesistenciaSemIA,
   type DepsDaDesistencia,
   type KommoDaDesistencia,
 } from './desistencia-da-consulta.js';
+import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
 // Frases REAIS dos pacientes (45 dias de `messages`, 26/10/2026) — o regex foi escrito depois de ler estas.
 const DESISTIU = [
@@ -53,6 +53,7 @@ const DESISTIU = [
   'Pode cancelar? Não vou poder ir.',
   'Infelizmente não vou poder',
   'não tenho como ir',
+  'Não vou poder ir amanhã\nPode me ajudar a remarcar?', // WhatsApp em duas linhas
 ];
 
 // Frases reais que NÃO são desistência da consulta.
@@ -82,6 +83,8 @@ const NAO_DESISTIU = [
   'cancelei meu plano de saúde',
   'Quero cancelar o tratamento',
   'cancela o boleto por favor',
+  'o boleto não vai chegar a tempo',
+  'o resultado do exame não vai chegar hoje',
   'Nao posso ir na quinta mas vou na sexta',
   'Bom dia, tudo bem? Quero marcar uma consulta',
   'Qual o valor da consulta?',

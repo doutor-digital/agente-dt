@@ -28,8 +28,6 @@ import { semAcento } from './sem-acento.js';
 
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
-export { pareceDesistenciaDaConsulta };
-
 const CAMPO_DATA_DA_CONSULTA = 'datadaconsulta';
 
 /** Data da consulta no cartão (epoch s) quando ainda não passou — ou null. Por NOME do campo: cada conta tem os seus ids. */
