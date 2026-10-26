@@ -500,3 +500,43 @@ test('comprovante "sendo conferido"/"confirmado pela equipe": o endereço não s
   assert.equal(respostaDoComprovante('O pagamento ainda vai ser conferido pela equipe.', espera, false), null);
   assert.equal(respostaDoComprovante('Seu Pix foi recebido e confirmado pela equipe ✅', espera, true), RECADO_COMPROVANTE);
 });
+
+// --- 3ª revisão do sênior (#135) -------------------------------------------------------------------------------------------
+test('prometeEquipe avalia negação/oferta só na FRASE da promessa, não na mensagem inteira', () => {
+  for (const f of [
+    'Não se preocupe! A equipe vai te confirmar em até 1 hora.',
+    'Sua consulta não aparece mais no sistema. A equipe vai entrar em contato com você.',
+    'A equipe está conferindo e te confirma em até 1 hora.',
+    'Temos sua ficha aqui; a equipe vai te retornar.',
+    'A clínica vai entrar em contato com você em até 1 hora.',
+    'A recepção desmarcou sua consulta. A equipe vai te ligar ainda hoje.',
+    'Temos outros horários, mas antes a equipe vai confirmar com você.',
+    'Vi que o horário não está mais ativo; a recepção te chama em até 1 hora.',
+  ]) assert.equal(prometeEquipe(f), true, f);
+  for (const f of [
+    'A equipe pode confirmar amanhã',
+    'Combinado, vou ver os horários de amanhã',
+    'A equipe não confirma pagamentos.',
+    'A recepção desmarcou sua consulta. Posso verificar um novo horário pra você?',
+  ]) assert.equal(prometeEquipe(f), false, f);
+});
+
+test('no turno do comprovante: "agendada e confirmada pela equipe" e "aprovado e conferido pela equipe" são fato consumado', () => {
+  const noTurno = T([COMPROVANTE]);
+  assert.equal(respostaDoComprovante('Sua consulta está agendada e confirmada pela equipe para terça às 10h', noTurno, false), RECADO_COMPROVANTE);
+  assert.equal(respostaDoComprovante('Seu pagamento foi aprovado e conferido pela equipe ✅', noTurno, false), RECADO_COMPROVANTE);
+  // a explicação no presente continua explicação
+  assert.equal(respostaDoComprovante('O pagamento é confirmado pela equipe da clínica.', noTurno, false), null);
+});
+
+test('na espera: horário de funcionamento e "Pix confirmado garante" não viram recado', () => {
+  const espera = T([COMPROVANTE, 'e aí?']);
+  assert.equal(respostaDoComprovante('Te esperamos aqui na clínica a partir das 8h', espera, false), null);
+  assert.equal(respostaDoComprovante('Com o Pix confirmado garante sua vaga', espera, false), null);
+  assert.equal(respostaDoComprovante('Combinado, vou ver os horários de amanhã', espera, false), null);
+  assert.equal(respostaDoComprovante('Perfeito, já deixei agendado pra quinta 10h!', espera, false), RECADO_COMPROVANTE);
+  // com DIA continua valendo
+  assert.equal(respostaDoComprovante('Te esperamos terça às 8h', espera, false), RECADO_COMPROVANTE);
+  // e o condicional separado em duas frases ainda é afirmação
+  assert.equal(respostaDoComprovante('Pagamento confirmado! Isso garante sua vaga na terça.', T([COMPROVANTE]), true), RECADO_COMPROVANTE);
+});
