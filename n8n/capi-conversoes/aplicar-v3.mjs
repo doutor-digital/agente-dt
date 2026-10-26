@@ -20,9 +20,13 @@ const antigo = cfgNode.parameters.jsCode;
 
 // ── o que o Config já diz (para preservar) ────────────────────────────────────────────────────────────────
 const lerBloco = (chave) => {
-  const m = antigo.match(new RegExp(`${chave}:\\s*(\\{[^\\n]*\\}),?\\s*\\n`));
-  if (!m) return null;
-  try { return JSON.parse(m[1]); } catch { return null; }
+  // ancorado no começo da linha: "statusQualificacao:" ou um "status:" dentro de outro objeto não podem casar
+  const m = antigo.match(new RegExp(`(?:^|\\n)[ \\t]*${chave}:[ \\t]*(\\{[^\\n]*\\}),?[ \\t]*(?=\\n)`));
+  if (!m) {
+    if (new RegExp(`(?:^|\\n)[ \\t]*${chave}:`).test(antigo)) falha(`o bloco "${chave}" existe no Config mas não está numa linha só — não vou adivinhar o que está ligado; arrume na mão ou apague o bloco`);
+    return null;
+  }
+  try { return JSON.parse(m[1]); } catch { return falha(`o bloco "${chave}" do Config não é JSON válido — nada foi gravado`); }
 };
 const jaPediu = lerBloco('pediuHorario');
 const jaStatus = lerBloco('status');
@@ -51,12 +55,18 @@ const bloco =
   `\n  status: ${JSON.stringify(status)},\n`;
 const fim = js.lastIndexOf('\n};');
 if (fim < 0) falha('não achei o fim do cfg no nó Config');
-js = js.slice(0, fim) + bloco + js.slice(fim);
+let antes = js.slice(0, fim);
+if (!/,\s*$/.test(antes) && !/\{\s*$/.test(antes)) antes = antes.replace(/\s*$/, ',');   // última propriedade sem vírgula
+js = antes + bloco + js.slice(fim);
+try { new Function('$input', js); } catch (e) { falha(`o Config ficaria com erro de sintaxe (${e.message}) — nada foi gravado`); }
 cfgNode.parameters.jsCode = js;
 
 // ── nós de código e SQL ───────────────────────────────────────────────────────────────────────────────────
-no('Classificar etapa').parameters.jsCode = ler('classificar-etapa.v3.js');
-no('Montar evento').parameters.jsCode = ler('montar-evento.v3.js');
+for (const [nome, arq] of [['Classificar etapa', 'classificar-etapa.v3.js'], ['Montar evento', 'montar-evento.v3.js']]) {
+  const codigo = ler(arq);
+  try { new Function('$', '$input', 'require', codigo); } catch (e) { falha(`${arq} não compila (${e.message})`); }
+  no(nome).parameters.jsCode = codigo;
+}
 
 const busca = no('Buscar telefone e nome');
 busca.parameters.query = ler('buscar-clique.v3.sql');
@@ -82,6 +92,8 @@ if (!q.includes('AND v.ctwa_clid IS NOT NULL')) {
 
 // O modo seco do caminho NOVO: o IF "Modo teste" passa a olhar também o _seco do item (o dryRun global continua valendo).
 const ifTeste = no('Modo teste (nao chama a Meta)?');
+const ligadoDireto = (wf.connections?.['Rehidratar evento']?.main?.[0] ?? []).some((c) => c.node === 'Modo teste (nao chama a Meta)?');
+if (!ligadoDireto) falha('"Rehidratar evento" não liga direto no IF "Modo teste": o _seco poderia se perder no caminho e o seco chamaria a Meta');
 const cond = ifTeste.parameters.conditions?.conditions?.[0];
 if (!cond) falha('o IF "Modo teste" não tem a condição esperada');
 cond.leftValue = "={{ $('Config').first().json.cfg.dryRun === true || $json._seco === true }}";

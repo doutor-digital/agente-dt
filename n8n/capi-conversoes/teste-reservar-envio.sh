@@ -17,8 +17,9 @@ CREATE TABLE capi_envios (
 SQL
 # R <event_id> <event_name> <clid ou vazio> <telefone ou vazio> <lead>
 Q(){ [ -n "$1" ] && echo "'$1'" || echo NULL; }
+U=balsas   # unidade do evento que está sendo reservado (muda no teste de outra unidade)
 R(){ { echo "PREPARE r(text,text,text,text,text,text,text,text,numeric) AS"; sed 's/^--.*$//' "${SQL:-$AQUI/reservar-envio.v3.sql}" | sed 's/;\s*$//'; echo ";";
-  echo "EXECUTE r('$1','$2','balsas','ds',$(Q "$3"),$(Q "$4"),'$5',NULL,NULL);"; } | P | grep -vE '^(PREPARE|INSERT)' | tr -d '\n' || true; }
+  echo "EXECUTE r('$1','$2','$U','ds',$(Q "$3"),$(Q "$4"),'$5',NULL,NULL);"; } | P | grep -vE '^(PREPARE|INSERT)' | tr -d '\n' || true; }
 MARCA(){ P -c "UPDATE capi_envios SET status='$2', enviado_em=now() WHERE event_id='$1'"  >/dev/null; }
 ok=0; fail=0
 T(){ if [ "$2" = "$3" ]; then ok=$((ok+1)); echo "  ok   $1"; else fail=$((fail+1)); echo "  FALHOU $1 (esperado '$3', veio '$2')"; fi; }
@@ -32,7 +33,9 @@ T "o proprio cartao ja enviado nao volta (UNIQUE)"   "$(R quente-1 LeadSubmitted
 MARCA quente-3 simulado
 T "outro cartao no clid so SIMULADO nao bloqueia"    "$(R quente-4 LeadSubmitted CLID-B 5599222 4)" "quente-4"
 MARCA quente-4 falhou
+P -c "UPDATE capi_envios SET reservado_em = now() - interval '3 days' WHERE event_id='quente-3'" >/dev/null   # seco de dias atras
 T "simulado volta a reservar (seco nao queima)"      "$(R quente-3 LeadSubmitted CLID-B 5599222 3)" "quente-3"
+T "2o webhook logo depois NAO reabre (carimbo renovado)" "$(R quente-3 LeadSubmitted CLID-B 5599222 3)" ""
 MARCA quente-3 simulado
 T "falhou do outro cartao nao bloqueia"              "$(R quente-5 LeadSubmitted CLID-B 5599222 5)" "quente-5"
 # Status (sem clid): vale o mesmo telefone
@@ -43,4 +46,8 @@ T "Status: telefone diferente passa"                  "$(R quente-8 LeadSubmitte
 T "Status nao e bloqueado por lead com clid"         "$(R quente-9 LeadSubmitted '' 5599111 9)" "quente-9"
 P -c "INSERT INTO capi_envios(event_id,event_name,ctwa_clid,status,reservado_em) VALUES ('quente-10','LeadSubmitted','CLID-C','reservado',now()-interval '2 hours')" >/dev/null
 T "reservado pendurado ha +1h nao bloqueia"          "$(R quente-11 LeadSubmitted CLID-C 5599555 11)" "quente-11"
+# mesma pessoa em outra unidade (outro dataset): o Lead de uma NAO barra o da outra
+P -c "UPDATE capi_envios SET unidade='balsas' WHERE unidade IS NULL" >/dev/null
+U=marabá; T "outra unidade, mesmo clid: nao bloqueia"  "$(R quente-20 LeadSubmitted CLID-A 5599111 20)" "quente-20"
+U=balsas
 echo "== $ok ok, $fail falhas"; [ "$fail" = 0 ]

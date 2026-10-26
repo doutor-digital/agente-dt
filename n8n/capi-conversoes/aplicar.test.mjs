@@ -9,37 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const aqui = path.dirname(fileURLToPath(import.meta.url));
 
-const CONFIG_V2 = `const cfg = {
-  testEventCode: '',
-  pipelineId: '13843399',
-  unidade: 'balsas',
-  statusQualificacao: '106820287',
-  // v2: cadeia de eventos por etapa (backfill) e etapas pré-agendamento onde Quente = Lead — gerado em 2026-09-08
-  cadeia: {"142": ["quente", "agendado"]},
-  preAgendado: ["106820083","106820287"],
-
-};
-return $input.all();`;
-
-const SQL_REENVIO = `SELECT 1 FROM capi_envios v
-WHERE v.status = 'falhou'
-  AND v.unidade = 'balsas'
-  AND v.event_id ~ '^(msg|quente|agendado|compareceu|ganho)-'
-  AND v.reservado_em > now() - interval '24 hours'`;
-
-function workflow(extra = {}) {
-  const nos = {
-    Config: { jsCode: CONFIG_V2 },
-    'Classificar etapa': { jsCode: '// v2' },
-    'Montar evento': { jsCode: '// v2' },
-    'Buscar telefone e nome': { operation: 'executeQuery', query: 'SELECT 1', options: { queryReplacement: '={{ [1] }}' } },
-    'Reservar envio': { operation: 'executeQuery', query: 'INSERT ...' },
-    'Cliques e reenvios': { operation: 'executeQuery', query: SQL_REENVIO },
-    'Modo teste (nao chama a Meta)?': { conditions: { conditions: [{ leftValue: "={{ $('Config').first().json.cfg.dryRun }}" }] } },
-  };
-  for (const k of extra.semNo ?? []) delete nos[k];
-  return { name: 'DD · CTWA → Meta CAPI · Conversões (Balsas)', nodes: Object.entries(nos).map(([name, parameters]) => ({ name, parameters })) };
-}
+import { workflow } from './fixture-workflow.mjs';
 
 function aplicar(wf, env = {}) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'capi-v3-'));
@@ -78,20 +48,20 @@ test('aplicar: o reenvio do relógio ganha "ctwa_clid IS NOT NULL", uma vez só 
   const r1 = aplicar(workflow());
   const q1 = no(r1.nodes, 'Cliques e reenvios').query;
   assert.equal((q1.match(/v\.ctwa_clid IS NOT NULL/g) || []).length, 1);
-  const r2 = aplicar({ name: 'x', nodes: r1.nodes });
+  const r2 = aplicar({ ...workflow(), nodes: r1.nodes });
   assert.equal((no(r2.nodes, 'Cliques e reenvios').query.match(/v\.ctwa_clid IS NOT NULL/g) || []).length, 1);
 });
 
 test('aplicar: rodar de novo PRESERVA os modos já ligados e troca o bloco em vez de empilhar', () => {
   const r1 = aplicar(workflow(), { PEDIU_MODO: 'seco', STATUS_MODO: 'seco', PAGE_ID: '123456789012345' });
   assert.equal(r1.status, 0, r1.stderr);
-  const r2 = aplicar({ name: 'x', nodes: r1.nodes }); // sem flags: não pode desligar o que o João ligou
+  const r2 = aplicar({ ...workflow(), nodes: r1.nodes }); // sem flags: não pode desligar o que o João ligou
   const cfg = no(r2.nodes, 'Config').jsCode;
   assert.match(cfg, /pediuHorario: \{"modo":"seco"/);
   assert.match(cfg, /status: \{"modo":"seco","pageId":"123456789012345"\}/);
   assert.equal((cfg.match(/pediuHorario:/g) || []).length, 1);
   assert.equal((cfg.match(/\/\/ v3:/g) || []).length, 1);
-  const r3 = aplicar({ name: 'x', nodes: r2.nodes }, { PEDIU_MODO: 'ligado' });
+  const r3 = aplicar({ ...workflow(), nodes: r2.nodes }, { PEDIU_MODO: 'ligado' });
   assert.match(no(r3.nodes, 'Config').jsCode, /pediuHorario: \{"modo":"ligado"/);
   assert.match(no(r3.nodes, 'Config').jsCode, /status: \{"modo":"seco"/, 'o Status não mexeu');
 });
@@ -123,4 +93,37 @@ test('aplicar: SQL de reenvio que mudou (âncora sumiu) falha alto em vez de gra
   const r = aplicar(wf);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /reenvio mudou/);
+});
+
+test('aplicar: Config cuja última propriedade não termina em vírgula continua sintaticamente válido', () => {
+  const wf = workflow();
+  const cfg = wf.nodes.find((n) => n.name === 'Config');
+  cfg.parameters.jsCode = cfg.parameters.jsCode.replace(/\n  \/\/ v2:[\s\S]*?\n\};/, '\n  janelaDias: 7\n};');
+  const r = aplicar(wf, { PEDIU_MODO: 'seco' });
+  assert.equal(r.status, 0, r.stderr);
+  const js = no(r.nodes, 'Config').jsCode;
+  assert.doesNotThrow(() => new Function('$input', js));
+  assert.match(js, /janelaDias: 7,\n/);
+});
+
+test('aplicar: bloco v3 do Config ilegível (editado na mão) falha alto em vez de "preservar" desligando', () => {
+  const r1 = aplicar(workflow(), { PEDIU_MODO: 'ligado' });
+  const wf = { ...workflow(), nodes: r1.nodes };
+  const cfg = wf.nodes.find((n) => n.name === 'Config');
+  cfg.parameters.jsCode = cfg.parameters.jsCode.replace(/pediuHorario: (\{[^\n]*\}),/, 'pediuHorario: {\n    modo: "ligado",\n  },');
+  const r = aplicar(wf);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /pediuHorario/);
+});
+
+test('aplicar: "statusQualificacao:" não é confundido com o bloco "status:" ao preservar', () => {
+  const r = aplicar(workflow(), { PEDIU_MODO: 'seco' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(no(r.nodes, 'Config').jsCode, /status: \{"modo":"desligado"/);
+});
+
+test('aplicar: sem a ligação direta Rehidratar -> IF "Modo teste" recusa (o _seco poderia se perder e o seco chamar a Meta)', () => {
+  const r = aplicar(workflow({ semLigacao: true }));
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /Rehidratar/);
 });

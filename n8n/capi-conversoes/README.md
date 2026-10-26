@@ -84,11 +84,11 @@ E no Gerenciador de Eventos do dataset da unidade: o `LeadSubmitted` aparece, e 
 ## Testes
 
 ```bash
-node --test n8n/capi-conversoes/*.test.mjs        # Node >= 20: nós de código + montador (26 + 8)
-n8n/capi-conversoes/teste-reservar-envio.sh       # Postgres descartável no docker: 1 Lead por clique (13 casos)
+node --test n8n/capi-conversoes/*.test.mjs        # Node >= 20: 46 testes — nós de código (28), montador (12), aplicar-v3.sh com docker/curl de mentira (6)
+n8n/capi-conversoes/teste-reservar-envio.sh       # Postgres descartável no docker: 1 Lead por clique (15 casos)
 python3 n8n/capi-conversoes/previa-pediu-horario.py --dias 30 --unidade balsas   # NA VPS, só leitura
 ```
-Contra a v2 os testes novos **falham** (15 de 26 nos nós; 2 dos 13 no SQL): `buscar-clique.v3.sql` foi executado só-leitura contra
+Contra a v2 os testes novos **falham** (15 de 26 nos nós, na primeira rodada; 3 dos 15 no SQL): `buscar-clique.v3.sql` foi executado só-leitura contra
 produção para 3 cartões reais (um Status, um com clid recuperado pelo id do cartão, um inexistente).
 
 ## Armadilhas já conhecidas
@@ -97,4 +97,6 @@ produção para 3 cartões reais (um Status, um com clid recuperado pelo id do c
 * **Seco que grava:** o `_seco` cobre o caminho novo (IF "Modo teste") e o SQL só reaproveita `simulado`; o Quente de sempre **não** é afetado pelo seco do "pediu horário".
 * **Etapa/ALTA:** nada aqui mexe em etapa nem em campo do cartão.
 * **Vigia (`capi-vigia`)** não conhece o "pediu horário": se o webhook da Kommo falhar, o Lead só sai no próximo evento do cartão. Extensão fica como próximo passo.
+* **`event_time` do "pediu horário" = `updated_at` do cartão.** Se o webhook da hora da etiqueta se perder e o cartão for editado dias depois, a hora anda para frente (e o evento pode cair no corte de 7 dias do clique: perde-se o Lead, nunca se manda um fora do prazo). O ideal é a hora em que a etiqueta foi posta (`GET /events`), a um custo de uma chamada por candidato — fica para depois de provar o volume.
+* **1 Lead por clique** é checado antes do INSERT, sem trava: dois cartões do mesmo clique reservando no mesmo milissegundo passam os dois (1 caso em 90 dias). O conserto de verdade é um índice único parcial (DDL em produção; o par antigo de Araguaína precisa ser resolvido antes) — com ok do João.
 * **`event_time = agora` nos eventos de funil** (AddToCart/InitiateCheckout/Purchase) continua como estava — ~43% dos IC/Purchase chegam com clique > 7 dias (estudo de volume). Fora do escopo deste PR.

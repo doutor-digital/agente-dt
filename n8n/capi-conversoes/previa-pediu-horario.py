@@ -34,8 +34,8 @@ def psql_agente(sql):
 
 def psql_rastreio(sql):
     return sh("PG=$(docker ps -q -f name=postgres_postgres | head -1); N8N=$(docker ps -q -f name=n8n_n8n_editor | head -1); "
-              "eval $(docker exec \"$N8N\" printenv | grep -E '^DB_POSTGRESDB_PASSWORD=' | sed 's/^/export /'); "
-              "docker exec -i -e PGPASSWORD=\"$DB_POSTGRESDB_PASSWORD\" \"$PG\" psql -U postgres -d n8n_rastreio -X -A -F'|' --pset=footer=off "
+              "export PGPASSWORD; PGPASSWORD=$(docker exec \"$N8N\" printenv DB_POSTGRESDB_PASSWORD); "
+              "docker exec -i -e PGPASSWORD \"$PG\" psql -U postgres -d n8n_rastreio -X -A -F'|' --pset=footer=off "
               "-c 'BEGIN READ ONLY;' -f - <<'SQL'\n%s\nSQL" % sql)
 
 
@@ -62,7 +62,7 @@ def main():
 select replace(replace(u.slug,'doutor-hernia-',''),'-resgate','') as unidade, t.lead_id, min(s.created_at at time zone 'UTC') as pedido_utc
 from execution_steps s join execution_traces t on t.id = s.trace_id join units u on u.id = t.unit_id
 where s.kind = 'TOOL_RESULT' and s.title ~ '^consultar_horarios [0-9-]+( \\([a-z]+\\))?: [1-9][0-9]* confirmado'
-  and s.created_at > now() - interval '{d + 8} days'
+  and s.created_at > now() - interval '{d + 30} days'   -- olhar mais longe que a janela: o "primeiro pedido" tem de ser o primeiro de verdade
 group by 1, 2;"""))
     cliques = linhas(psql_rastreio(f"""
 select l.unidade, l.kommo_lead_id as lead_id, min(e.primeiro_contato_em at time zone 'UTC') as clique_utc, bool_or(e.ctwa_clid is not null) as tem_clid

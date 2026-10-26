@@ -25,11 +25,12 @@ while [ $# -gt 0 ]; do case "$1" in
 [[ "$UNID" =~ ^[[:alnum:]\ çãõáéíóúâêôÇÃÕÁÉÍÓÚÂÊÔ-]+$ ]] || { echo "nome de unidade com caractere estranho"; exit 1; }
 
 AQUI="$(cd "$(dirname "$0")" && pwd)"
-. /root/.n8n-api.env                       # N8N_API_URL e N8N_API_KEY (600) — nunca impressos
-H=/root/homolog; BK=$H/backup-capi-v3-$(date +%F-%H%M); mkdir -p "$BK" $H/out
+. "${N8N_API_ENV:-/root/.n8n-api.env}"                       # N8N_API_URL e N8N_API_KEY (600) — nunca impressos
+H=${HOMOLOG:-/root/homolog}; BK=$H/backup-capi-v3-$(date +%F-%H%M); mkdir -p "$BK" $H/out
 N8N=$(docker ps -q -f name=n8n_n8n_editor | head -1); PG=$(docker ps -q -f name=postgres_postgres | head -1)
-eval $(docker exec "$N8N" printenv | grep -E '^DB_POSTGRESDB_(DATABASE|USER|PASSWORD)=' | sed 's/^/export /')
-QN(){ docker exec -e PGPASSWORD="$DB_POSTGRESDB_PASSWORD" "$PG" psql -U "$DB_POSTGRESDB_USER" -d "$DB_POSTGRESDB_DATABASE" -tA -F'|' -c "$1"; }
+# credenciais do banco do n8n lidas SEM eval (senha com $, espaço ou aspas não pode virar comando) e passadas ao docker sem ir na linha de comando
+DBU=$(docker exec "$N8N" printenv DB_POSTGRESDB_USER); DBN=$(docker exec "$N8N" printenv DB_POSTGRESDB_DATABASE); export PGPASSWORD; PGPASSWORD=$(docker exec "$N8N" printenv DB_POSTGRESDB_PASSWORD)
+QN(){ docker exec -e PGPASSWORD "$PG" psql -U "$DBU" -d "$DBN" -tA -F'|' -c "$1"; }
 api(){ curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" -H 'Content-Type: application/json' "$@"; }
 
 LINHAS=$(QN "SELECT id||'|'||name FROM workflow_entity WHERE name LIKE 'DD · CTWA → Meta CAPI%' AND active AND name LIKE '%($UNID)%'")
@@ -49,7 +50,7 @@ if wf.get('staticData') is not None: body['staticData']=wf['staticData']
 json.dump(body,open(sys.argv[2],'w'),ensure_ascii=False)
 PY
   code=$(api -o "$BK/resp-desfazer.json" -w '%{http_code}' -X PUT --data-binary @"$BK/put.json" "$N8N_API_URL/workflows/$wid")
-  echo "   desfeito com $DESFAZER -> HTTP $code"; exit 0
+  echo "   desfeito com $DESFAZER -> HTTP $code"; [ "$code" = 200 ] || { echo "   ERRO: o n8n não aceitou o desfazer — o workflow NÃO voltou"; exit 1; }; exit 0
 fi
 
 api -o "$BK/$wid.json" "$N8N_API_URL/workflows/$wid"
@@ -83,4 +84,5 @@ PY
 code=$(api -o "$BK/resp.json" -w '%{http_code}' -X PUT --data-binary @"$BK/put.json" "$N8N_API_URL/workflows/$wid")
 ok=$(python3 -c "import json; j=json.load(open('$BK/resp.json')); c=next((n['parameters']['jsCode'] for n in j.get('nodes',[]) if n['name']=='Classificar etapa'),''); print('v3 gravado' if 'v3, cadeia com backfill' in c else 'v3 NAO encontrado: '+str(j)[:200])")
 echo "   PUT -> HTTP $code · $ok"
+[ "$code" = 200 ] && [ "$ok" = "v3 gravado" ] || { echo "   ERRO: a v3 NÃO foi aplicada (workflow segue como estava). Backup: $BK/$wid.json"; exit 1; }
 echo "   desfazer: $0 --unidade \"$UNID\" --desfazer $BK/$wid.json"

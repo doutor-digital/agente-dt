@@ -1,0 +1,11 @@
+#!/bin/bash
+# `curl` de mentira: GET devolve o workflow de "produção" ($D/wf-prod.json); PUT guarda o corpo em $D/put-recebido.json e responde $HTTP_PUT.
+out=""; method=GET; data=""
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; -X) method="$2"; shift;; --data-binary) data="${2#@}"; shift;; -w) shift;; -H) shift;; esac; shift; done
+if [ "$method" = PUT ]; then
+  cp "$data" "$D/put-recebido.json"
+  python3 -c "import json,sys; b=json.load(open(sys.argv[1])); json.dump({'nodes': b['nodes']}, open(sys.argv[2],'w'))" "$D/put-recebido.json" "$out"
+  echo -n "$HTTP_PUT"
+else
+  cp "$D/wf-prod.json" "$out"
+fi

@@ -217,3 +217,16 @@ test('montar: o _seco do "pediu horário" atravessa; ViewContent do relógio (se
   const [v] = montar(CFG, [{ event_name: 'ViewContent', event_id: 'msg-CLID1', event_time: AGORA - 600, ctwa_clid: 'CLID1', kommo_lead_id: null, pipeline_id: '900', telefone: '559984553221', nome: null, wamid: 'w' }]);
   assert.deepEqual([v._aprovado, v._seco], [true, false]);
 });
+
+test('montar: clique no futuro (dado quebrado) não vale como prova — nem no Status, nem no "pediu horário"', () => {
+  const [a] = montar(comCfg({ status: STATUS_ON }), [ev({ ctwa_clid: null, clique_em: AGORA + 3 * DIA })]);
+  assert.deepEqual([a._aprovado, a.motivo], [false, 'clique_no_futuro']);
+  const [b] = montar(CFG, [ev({ via: 'pediu_horario', event_time: AGORA - 60, clique_em: AGORA + 3 * DIA })]);
+  assert.deepEqual([b._aprovado, b.motivo], [false, 'clique_no_futuro']);
+});
+
+test('montar: Status com o clique alguns segundos depois do event_time sobe o evento para a hora do clique', () => {
+  const [o] = montar(comCfg({ status: STATUS_ON }), [ev({ ctwa_clid: null, event_time: AGORA - 30, clique_em: AGORA - 10 })]);
+  assert.equal(o._aprovado, true);
+  assert.equal(o.corpo.data[0].event_time, AGORA - 10);
+});

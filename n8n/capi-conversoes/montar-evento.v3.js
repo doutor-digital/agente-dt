@@ -24,6 +24,7 @@ const cfg = $('Config').first().json.cfg;
 const nodeCrypto = (typeof crypto !== 'undefined' && crypto.createHmac) ? crypto : require('crypto');
 const agora = Math.floor(Date.now() / 1000);
 const DIA = 86400;
+const JANELA = (Number(cfg.janelaDias) || 7) * DIA;   // a Meta recusa/ignora o que passa de 7 dias; Config sem o campo não pode abrir a janela
 const sc = cfg.status || { modo: 'desligado' };
 
 const sha = (v) => nodeCrypto.createHash('sha256').update(String(v)).digest('hex');
@@ -60,6 +61,12 @@ for (const item of $input.all()) {
   const telefone = limpaTelefone(d.telefone);
   let eventTime = Number(d.event_time);
 
+  // Clique "no futuro" é dado quebrado (relógio, importação): não serve de prova de anúncio nem de janela.
+  if (cliqueEm != null && cliqueEm > agora + 300) {
+    saida.push({ json: { ...d, _aprovado: false, motivo: 'clique_no_futuro' } });
+    continue;
+  }
+
   // ── sem ctwa_clid: só o caminho de Status, e só se a unidade ligou ────────────────────────────────
   if (semClid) {
     const statusLigado = sc.modo && sc.modo !== 'desligado' && !!sc.pageId;
@@ -72,10 +79,11 @@ for (const item of $input.all()) {
       saida.push({ json: { ...d, _aprovado: false, motivo: 'status_sem_telefone' } });
       continue;
     }
-    if (cliqueEm == null || eventTime - cliqueEm > cfg.janelaDias * DIA) {
+    if (cliqueEm == null || eventTime - cliqueEm > JANELA) {
       saida.push({ json: { ...d, _aprovado: false, motivo: 'status_fora_7d_do_clique' } });
       continue;
     }
+    if (eventTime < cliqueEm) eventTime = cliqueEm;   // o evento não pode ser anterior ao clique que o atribui
   }
 
   // ── "pediu horário": o Lead só conta até 7 dias depois do clique ─────────────────────────────────
@@ -85,14 +93,14 @@ for (const item of $input.all()) {
       continue;
     }
     if (eventTime < cliqueEm) eventTime = cliqueEm;   // o pedido não pode ser anterior ao clique
-    if (eventTime - cliqueEm > cfg.janelaDias * DIA) {
+    if (eventTime - cliqueEm > JANELA) {
       saida.push({ json: { ...d, _aprovado: false, motivo: 'pediu_fora_7d_do_clique' } });
       continue;
     }
   }
 
   // A Meta recusa event_time com mais de 7 dias (e derruba o lote inteiro se um passar disso).
-  if (agora - eventTime > cfg.janelaDias * DIA) {
+  if (agora - eventTime > JANELA) {
     saida.push({ json: { ...d, _aprovado: false, motivo: 'fora_da_janela_7d' } });
     continue;
   }
