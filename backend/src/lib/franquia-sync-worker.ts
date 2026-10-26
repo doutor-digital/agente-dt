@@ -24,7 +24,7 @@ import { avisarJoao } from './alerta-whatsapp.js';
 import { planejarCamposSdr, type CampoAtual } from './campos-sdr.js';
 import { fichaDoPaciente, type SpineFicha } from '../services/spine.service.js';
 import { logger } from './logger.js';
-import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
+import { createKommoClient, resolveEnumId, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
 import {
@@ -33,7 +33,7 @@ import {
 } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { franquiaRespeitaEspera } from './espera-retomada.js';
-import { fecharComoPerdido } from './parados-worker.js';
+import { fecharOuSegurar, seguradoPelaTrava } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
@@ -165,6 +165,8 @@ export interface ResumoSync {
   movimentos: number;
   /** fase 1c: cartões cujas sessões/tratamento foram atualizados nesta varredura (teto `MAX_SESSOES_POR_VARREDURA`) */
   sessoes?: number;
+  /** fase 1: escritas de lista puladas porque a opção que a franquia/código pede NÃO existe nesta conta (cada uma seria um 400 por varredura) */
+  opcoesAusentes?: number;
   /** fase 1d: atendimentos lidos da TELA da franquia (forma de pagamento, retorno, motivo) nesta varredura */
   tela?: number;
   /** fase 1e (teste): campos da SDR calculados — quantos gravaria, quantos conferem e quantos divergem do que a SDR pôs */
@@ -173,6 +175,8 @@ export interface ResumoSync {
   camposSdrCartoes?: number;
   /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
   revisados: number;
+  /** PERDIDOs que a trava da perda automática (consulta futura / pagou / Quente / Morno) segurou: o cartão fica onde está, não é erro */
+  travadosPelaPerda?: number;
   /** move em seco: "DE → PARA" → quantos cartões se moveriam nesta varredura (só aparece quando há) */
   simulados?: Record<string, number>;
   /** cartões recusados porque o `⚙ idClient` deles é de OUTRO paciente (só os ids dos cartões, sem dado pessoal) */
@@ -302,13 +306,24 @@ function mapearCampos(campos: CampoBruto[]): MapaCampos {
   return out;
 }
 
+/**
+ * O que o cartão tem em cada campo que o sincronizador espelha. Campo de LISTA (select/radiobutton) é lido pela
+ * OPÇÃO que o cartão guarda (`enum_id`), pelo nome ATUAL dela, e não pelo texto que veio junto: o Kommo não
+ * reescreve o texto dos cartões quando se renomeia a opção ("DRA. AYLANA" → "DRA. AYLANA SILVA MENDES"). Lido
+ * pelo texto, o cartão parecia sempre divergente da franquia e o mesmo enum era regravado a cada varredura,
+ * com `erros: 0` (24/10/2026, Açailândia: 4 cartões × 4 varreduras por hora). `enum_id` que não está mais
+ * entre as opções do campo (opção apagada) cai no texto que veio, como antes.
+ */
 function valoresDoLead(lead: KommoLead, mapa: MapaCampos): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   for (const [chave, nome] of Object.entries(CAMPOS_SYNC) as Array<[CampoSync, string]>) {
     const info = mapa[chave];
     if (!info) continue;
     const cf = (lead.custom_fields_values ?? []).find((f) => f.field_id === info.id);
-    const v = cf?.values?.[0]?.value;
+    const guardado = cf?.values?.[0];
+    const ehLista = info.type === 'select' || info.type === 'radiobutton';
+    const opcaoAtual = ehLista && guardado?.enum_id != null ? info.enums.find((e) => e.id === Number(guardado.enum_id)) : undefined;
+    const v = opcaoAtual ? opcaoAtual.value : guardado?.value;
     out[nome] = v === null || v === undefined || v === '' ? null : String(v);
   }
   return out;
@@ -529,7 +544,20 @@ function contarSimulado(resumo: ResumoSync, de: string, para: string): void {
   resumo.simulados = { ...resumo.simulados, [chave]: (resumo.simulados?.[chave] ?? 0) + 1 };
 }
 
-export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = ''): Promise<void> {
+/** PERDIDO segurado pela trava: não relê o cartão no Kommo de novo antes disto (a varredura passa de 15 em 15 min). */
+const TRAVA_REVE_A_CADA_MS = 60 * 60_000;
+const travadoAte = new Map<string, number>();
+
+/** No papel: o movimento é um PERDIDO que a trava da perda automática (consulta futura / pagou / Quente / Morno) seguraria? */
+function perdaTravada(unit: Unit, cartao: KommoLead, para: string, deEtapa: string, automacao: string, agoraEpoch: number): boolean {
+  return normalizarNome(para) === normalizarNome(ETAPA.PERDIDO) && seguradoPelaTrava(unit, cartao.id, cartao, deEtapa, true, automacao, agoraEpoch);
+}
+
+/**
+ * `cartao` (opcional) é o cartão que o chamador já leu: em «só no papel» a trava da perda automática o usa e NUNCA relê no Kommo
+ * (o seco não toca o Kommo, nem pra ler — o teste de `aplicarMovimento` em seco vigia isso).
+ */
+export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = '', cartao?: KommoLead): Promise<void> {
   const alvo = funis.idDe(mov.funil, mov.para);
   if (!alvo) {
     logger.warn({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil }, 'franquia-move: etapa não existe nesta conta — não movi');
@@ -538,6 +566,8 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
   // Move em seco (tela de Automações): é o ÚNICO portão por onde todo movimento passa — cartão normal,
   // passagem das 48 h e revisão do histórico —, então nenhum caminho novo escapa dele.
   if (estadoDoMove(unit.slug) === 'seco') {
+    // trava da perda automática (26/10): o papel não pode prometer um PERDIDO que o ligado não faria
+    if (cartao && perdaTravada(unit, cartao, mov.para, deEtapa, 'franquia-move', Math.floor(Date.now() / 1000))) return;
     contarSimulado(resumo, deEtapa, mov.para);
     logger.info({ unit: unit.slug, leadId, de: deEtapa, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     registrarSimulacao(unit, 'franquia-move', { leadId, acao: 'moveria', alvo: mov.para, deEtapa, valor: mov.motivoPerda, motivo: mov.motivo });
@@ -548,10 +578,20 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
   // etiqueta NO_FOLLOW_UP quando o fato é velho demais pra régua, nota no cartão, confere a etapa antes.
   if (normalizarNome(mov.para) === normalizarNome(ETAPA.PERDIDO)) {
     const d: DecisaoParado = { para: 'PERDIDO', regra: mov.motivo, dias: mov.dias ?? 0, motivoPerda: mov.motivoPerda, campo: campoDoPerdidoDaFranquia(mov.motivoPerda), semRegua: mov.semRegua === true };
+    const chaveTrava = `${unit.id}:${leadId}`;
+    if ((travadoAte.get(chaveTrava) ?? 0) > Date.now()) {
+      resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1; // já segurado há pouco: nem relê o cartão no Kommo
+      return;
+    }
     try {
-      if (await fecharComoPerdido(unit, kommo, funis, leadId, deEtapa, d, false)) {
+      const r = await fecharOuSegurar(unit, kommo, funis, leadId, deEtapa, d, false, 'parados', cartao);
+      if (r === 'fechou') {
         resumo.movimentos++;
         logger.info({ unit: unit.slug, leadId, de: deEtapa, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: d.semRegua }, 'franquia-move: cartão fechado como PERDIDO pela jornada');
+      } else if (r === 'travado') {
+        // não é recusa do Kommo nem erro: a trava segurou (já logada em info pelo portão). Fica contado no resumo.
+        resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1;
+        travadoAte.set(chaveTrava, Date.now() + TRAVA_REVE_A_CADA_MS);
       }
     } catch (err) {
       resumo.erros++;
@@ -867,7 +907,8 @@ export function temConsultaFutura(schedules: SpineSchedule[], agoraEpoch: number
   return schedules.some((s) => {
     if (!s.dateAttendanceUtc || !ehConsulta(s)) return false;
     const t = Math.floor(Date.parse(s.dateAttendanceUtc) / 1000);
-    return Number.isFinite(t) && t > agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO);
+    // REMARCADO (41) é consulta viva: a franquia muda a data no próprio registro e o paciente vem naquela data (#113)
+    return Number.isFinite(t) && t > agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO || s.idStatus === SPINE_STATUS.REMARCADO);
   });
 }
 
@@ -909,7 +950,7 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
         registrarSimulacao(unit, 'franquia-sync', { leadId: lead.id, acao: 'moveria', alvo: mov.para, deEtapa: ETAPA.COMPARECEU, motivo: mov.motivo });
         continue;
       }
-      await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, ETAPA.COMPARECEU);
+      await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, ETAPA.COMPARECEU, lead);
     }
     if (leads.length < 250) break;
   }
@@ -1789,7 +1830,7 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
   if (!funis || !mov.gatilho) return;
   // move em seco: o aplicarMovimento só registra "moveria" — nada a marcar
   if (estadoDoMove(unit.slug) === 'seco') {
-    await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+    await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status, lead);
     return;
   }
   const etapa: EtapaQueAFranquiaReabre = normalizarNome(atual.status) === normalizarNome(ETAPA.ALTA) ? 'ALTA' : 'PERDIDO';
@@ -1818,8 +1859,8 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
     return;
   }
   const antes = resumo.movimentos;
-  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
-  if (resumo.movimentos === antes) return; // o Kommo recusou: sem marca, tenta de novo na próxima varredura
+  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status, lead);
+  if (resumo.movimentos === antes) return; // o Kommo recusou (ou a trava da perda segurou): sem marca, tenta de novo na próxima varredura
   await marcarAviso(unit.id, leadId, chave);
   await kommo.addLeadNote(leadId, notaDaDevolucao(etapa, mov.para, mov.gatilho)).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: nota da devolução não foi'),
@@ -1843,6 +1884,19 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   for (const w of escritas) {
     const info = mapa[w.campo];
     if (!info) continue;
+    // Campo de lista: compara OPÇÃO com OPÇÃO (id), nunca rótulo com rótulo, e só grava opção que EXISTE nesta conta.
+    // Sem opção, `setLeadCustomFieldValue` mandaria `{ value }` e o Kommo devolveria 400 em todo cartão a cada varredura
+    // (mesma trava de `espelharPaciente`, Divinópolis, e de `campos-sdr`). Opção que já é a do cartão: nada a gravar.
+    if (!w.limpar && (info.type === 'select' || info.type === 'radiobutton') && info.enums.length > 0) {
+      const idAlvo = resolveEnumId(String(w.valor), info.enums);
+      if (idAlvo === null) {
+        resumo.opcoesAusentes = (resumo.opcoesAusentes ?? 0) + 1;
+        logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.valor }, 'franquia-sync: opção não existe nesta conta — não gravei');
+        continue;
+      }
+      const noCartao = lead.custom_fields_values?.find((f) => f.field_id === info.id)?.values?.[0]?.enum_id;
+      if (noCartao != null && Number(noCartao) === idAlvo) continue;
+    }
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
       registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'gravaria', alvo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo });
@@ -1924,7 +1978,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   // 16/10 em "só no papel": o robô move pela regra antiga e a tela mostra onde a regra nova levaria o cartão
   if (ctx.jornada === 'seco') {
     const novo = planejarMovimento({ ...entrada1610, regras1610: true });
-    if ((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) {
+    if (((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) && !(novo && perdaTravada(unit, lead, novo.para, atual.status, AUTOMACAO_1610, agoraEpoch))) {
       registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'moveria', alvo: novo ? novo.para : '(fica onde está)', deEtapa: atual.status, valor: novo?.semRegua ? 'sem régua' : undefined, motivo: novo?.motivo ?? `regras de 16/10: não move (a regra antiga leva pra ${mov?.para})` });
     }
   }
@@ -1939,6 +1993,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   if (!mov) return;
   if (franquiaRespeitaEspera(unit, lead, atual, mov.para, agoraEpoch)) return; // EM ESPERA com ◷ Retomar em (auditoria 16/10, item 10)
   if (seco) {
+    if (perdaTravada(unit, lead, mov.para, atual.status, ctx.automacaoDoSeco ?? 'franquia-revisao', agoraEpoch)) return;
     contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
@@ -1949,7 +2004,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     await franquiaMandaUmaVez(ctx, leadId, lead, atual, mov);
     return;
   }
-  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status, lead);
 }
 
 const REVISAO_MAX_POR_VARREDURA = Number(process.env.FRANQUIA_REVISAO_MAX) || 60;
@@ -2057,11 +2112,12 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
               if (parado > JORNADA.CONFERIR_MAX_DIAS) {
                 const mov: Movimento = { funil: 'COMERCIAL', para: ETAPA.PERDIDO, motivo: `${Math.floor(parado)} d em ${ETAPA.CONFERIR} sem acerto do cadastro`, motivoPerda: MOTIVO_PERDA.SEM_CADASTRO, semRegua: true, dias: Math.floor(parado) };
                 if (seco) {
+                  if (perdaTravada(unit, lead, mov.para, etapa, 'franquia-revisao', agoraEpoch)) continue;
                   contarSimulado(resumo, etapa, mov.para);
                   logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
                   registrarSimulacao(unit, 'franquia-revisao', { leadId: lead.id, acao: 'moveria', alvo: mov.para, deEtapa: etapa, valor: mov.motivoPerda, motivo: mov.motivo });
                 }
-                else await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, etapa);
+                else await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, etapa, lead);
               }
               continue;
             }
