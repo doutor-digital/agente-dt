@@ -480,7 +480,8 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
       if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
       // trava da perda automática: só pra quem a regra fecharia (a decisão pura, sem chamada) e ANTES da cota — quem fica
       // pra sempre não gasta avaliação. Escrever na janela ou a franquia segurar ainda é avaliado depois, como antes.
-      if (decidirParado(etapa, { ...cartao, escreveuNaJanela: false, mudouEtapaNaJanela: false }, agora) && seguradoPelaTrava(unit, lead.id, lead, etapa, seco, 'parados', agora)) {
+      const previa = decidirParado(etapa, { ...cartao, escreveuNaJanela: false, mudouEtapaNaJanela: false }, agora);
+      if (previa && seguradoPelaTrava(unit, lead.id, lead, etapa, seco, 'parados', agora)) {
         resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1;
         continue;
       }
@@ -491,7 +492,7 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
         const contato = contatoPrincipal(lead);
         if (contato !== null && (await kommo.contatoEscreveuDesde(contato, desde))) continue;
         if (await kommo.leadMudouEtapaDesde(lead.id, desde)) continue;
-        const d = decidirParado(etapa, { ...cartao, escreveuNaJanela: false, mudouEtapaNaJanela: false }, agora);
+        const d = previa; // mesma entrada da prévia lá em cima (as duas chamadas à API já passaram)
         if (!d) continue;
         resumo.candidatos++;
         const f = await franquiaSegura(unit, lead.id, lead.name ?? null, agora);

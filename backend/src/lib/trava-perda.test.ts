@@ -217,15 +217,37 @@ test('estoque LIGADO: AGENDADO velho que é Quente fica; o neutro do lado vai a 
   assert.equal(resumo.erros, 0);
 });
 
-// ── a Sofia (fechar_lead lost) ──
-test('Sofia: fechar como perdido um Quente/pago/com consulta é recusado, com o motivo; o neutro passa; Kommo fora = recusa também (às cegas não)', async () => {
-  const kommo = kommoFalso([leadDe(1, { campos: [campo('✓ Consulta pg antecipado', 'Sim', 3)] }), leadDe(2)], []);
-  const r = await recusaDaPerdaDaSofia(kommo, 1, AGORA);
+// ── a Sofia (fechar_lead lost / mover_funil 143) ──
+function kommoDaSofia(leads: KommoLead[], opcoes: { lerFalha?: boolean; funis?: Array<{ id: number; name: string }> } = {}): Pick<KommoClient, 'getLead' | 'listPipelines'> {
+  const base = kommoFalso(leads, [], opcoes.lerFalha);
+  return {
+    getLead: base.getLead.bind(base),
+    listPipelines: async () => (opcoes.funis ?? [{ id: 1, name: 'COMERCIAL' }, { id: 2, name: 'TRATAMENTO' }]) as never,
+  };
+}
+
+test('Sofia: fechar como perdido quem tem consulta futura ou pagou é recusado, com o motivo; o neutro passa', async () => {
+  const kommo = kommoDaSofia([leadDe(1, { campos: [campo('✓ Consulta pg antecipado', 'Sim', 3)] }), leadDe(2), leadDe(3, { campos: [campo('◷ Data da Consulta', AGORA + 2 * DIA, 5)] })]);
+  const r = await recusaDaPerdaDaSofia(kommo, 1, { agoraEpoch: AGORA });
   assert.equal(r?.motivo, 'pagou o antecipado');
   assert.match(r?.texto ?? '', /não fecha como perdido/);
-  assert.equal(await recusaDaPerdaDaSofia(kommo, 2, AGORA), null);
-  const semLeitura = await recusaDaPerdaDaSofia(kommoFalso([], [], true), 1, AGORA);
-  assert.equal(semLeitura?.motivo, 'cartão ilegível', 'não deu pra ler o cartão: não fecha às cegas');
+  assert.equal((await recusaDaPerdaDaSofia(kommo, 3, { agoraEpoch: AGORA }))?.motivo, 'consulta futura no cartão');
+  assert.equal(await recusaDaPerdaDaSofia(kommo, 2, { agoraEpoch: AGORA }), null);
+});
+
+test('Sofia: Quente/Morno NÃO seguram a Sofia (decisão do João pendente) — quem recusou com todas as letras pode ser fechado', async () => {
+  const kommo = kommoDaSofia([leadDe(5, { tags: ['Quente'] }), leadDe(6, { campos: [campo('★ Qualificação (Quente/Morno/Frio)', 'Morno', 2)] })]);
+  assert.equal(await recusaDaPerdaDaSofia(kommo, 5, { agoraEpoch: AGORA }), null);
+  assert.equal(await recusaDaPerdaDaSofia(kommo, 6, { agoraEpoch: AGORA }), null);
+  assert.deepEqual(travaDaPerdaAutomatica(leadDe(5, { tags: ['Quente'] }), AGORA), { motivo: 'Quente' }, 'o robô continua travado');
+});
+
+test('Sofia: Kommo sem leitura = recusa (às cegas não); o 143 do TRATAMENTO é CANCELADO e passa pela trava', async () => {
+  const semLeitura = await recusaDaPerdaDaSofia(kommoDaSofia([], { lerFalha: true }), 1, { agoraEpoch: AGORA });
+  assert.equal(semLeitura?.motivo, 'cartão ilegível');
+  const kommo = kommoDaSofia([leadDe(7, { tags: ['$ · Pagou antecipado'] })]);
+  assert.equal((await recusaDaPerdaDaSofia(kommo, 7, { agoraEpoch: AGORA, pipelineDestino: 1 }))?.motivo, 'pagou o antecipado', 'destino COMERCIAL: trava');
+  assert.equal(await recusaDaPerdaDaSofia(kommo, 7, { agoraEpoch: AGORA, pipelineDestino: 2 }), null, 'destino TRATAMENTO (143 = TRATAMENTO CANCELADO): não é PERDIDO');
 });
 
 test('estoque: o «dormente» Morno não gasta a cota de avaliação (travadosPelaPerda) e o neutro do lado é avaliado', async () => {

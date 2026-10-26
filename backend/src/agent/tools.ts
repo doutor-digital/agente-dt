@@ -399,9 +399,9 @@ export function buildTools({
     return `RECUSADO: ${motivo}`;
   };
 
-  /** Recusa (texto pra IA) quando o pedido levaria a PERDIDO um lead com consulta futura, pagamento ou Quente/Morno — ver `trava-perda.ts`. */
-  const recusarPerdaTravada = async (leadId: number): Promise<string | null> => {
-    const travada = await recusaDaPerdaDaSofia(kommo, leadId);
+  /** Recusa (texto pra IA) quando o pedido levaria a PERDIDO um lead com consulta futura ou pagamento — ver `trava-perda.ts`. */
+  const recusarPerdaTravada = async (leadId: number, pipelineDestino?: number): Promise<string | null> => {
+    const travada = await recusaDaPerdaDaSofia(kommo, leadId, { pipelineDestino });
     if (!travada) return null;
     await recorder.step({
       kind: 'TOOL_RESULT',
@@ -995,7 +995,7 @@ export function buildTools({
       // 16/10: no funil TRATAMENTO, 142/143 são ALTA e TRATAMENTO CANCELADO — não é decisão da Sofia
       const recusa = await recusarSaidaDoTratamento(leadId, { tipo: 'fechar', ganho: status === 'won' });
       if (recusa) return recusa;
-      // 26/10 (item 5 da Suzanne): quem tem consulta futura, pagou ou está Quente/Morno não vai a PERDIDO por decisão da IA
+      // 26/10 (item 5 da Suzanne): quem tem consulta futura ou pagou não vai a PERDIDO por decisão da IA
       if (status === 'lost') {
         const travada = await recusarPerdaTravada(leadId);
         if (travada) return travada;
@@ -1047,9 +1047,9 @@ export function buildTools({
       });
       const recusa = await recusarSaidaDoTratamento(leadId, { tipo: 'funil', pipelineId });
       if (recusa) return recusa;
-      // 143 é o PERDIDO de qualquer funil: a trava da perda automática vale por aqui também
+      // 143 é o PERDIDO do COMERCIAL (no TRATAMENTO é CANCELADO, que a trava deixa passar): vale por aqui também
       if (statusId === STATUS_PERDIDO) {
-        const travada = await recusarPerdaTravada(leadId);
+        const travada = await recusarPerdaTravada(leadId, pipelineId);
         if (travada) return travada;
       }
       try {
