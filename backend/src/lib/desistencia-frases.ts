@@ -183,3 +183,9 @@ export const oferecuHorario = (fala: string): boolean => {
 export function hesitou(texto: string | null | undefined): boolean {
   return HESITA.test(normalizar(texto ?? ''));
 }
+
+/** O paciente CITOU horário/dia ("sexta", "quinta às 14h", "amanhã", "27/10"): está escolhendo, não desistindo. */
+export function citouHorario(texto: string | null | undefined): boolean {
+  const t = texto ?? '';
+  return (t.match(RELOGIO_G) ?? []).length > 0 || DIA.test(t);
+}

@@ -10,7 +10,9 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { abrirTarefaDaDesistencia } from './desistencia-da-consulta.js';
-import { MARCA_OFERTA } from './desistencia-acao.js';
+import { agirNaDesistencia, MARCA_OFERTA, MARCA_RECUSOU } from './desistencia-acao.js';
+import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
+import { marcadoEm } from './aviso-dedupe.js';
 
 const SWEEP_MS = 10 * 60_000;
 export const ESPERA_DA_OFERTA_MS = 2 * 3600_000;
@@ -27,11 +29,50 @@ export function marcaVenceuSemResposta(marca: Date, agora: Date, mensagensDoPaci
   return idade >= ESPERA_DA_OFERTA_MS && idade <= VALIDADE_DA_MARCA_MS && mensagensDoPacienteDepois === 0;
 }
 
+/** A desistência que causou a marca: a mais recente, até a hora dela, que o detector reconhece (o paciente pode ter escrito mais de uma mensagem). */
+async function falaDeDesistencia(conversationId: string, ate: Date): Promise<string> {
+  const falas = await prisma.message.findMany({ where: { conversationId, role: 'user', createdAt: { lte: ate } }, orderBy: { createdAt: 'desc' }, take: 6, select: { content: true } });
+  return falas.find((f) => pareceDesistenciaDaConsulta(f.content))?.content ?? '';
+}
+
+/**
+ * A recusa já parou a nossa véspera (marca `recusou_remarcar`), mas a tarefa de cancelar pode ter falhado (Kommo fora) — e a Sofia
+ * já disse ao paciente que a equipe cancela. Sem tarefa feita depois da marca, tenta de novo.
+ */
+async function refazerTarefasQueFalharam(agora: Date): Promise<void> {
+  const marcas = await prisma.cardAlert.findMany({
+    where: { ruleKey: MARCA_RECUSOU, createdAt: { lte: new Date(agora.getTime() - 10 * 60_000), gte: new Date(agora.getTime() - VALIDADE_DA_MARCA_MS) } },
+    take: 200,
+    orderBy: { createdAt: 'asc' },
+  });
+  for (const m of marcas) {
+    const id = `recusa:${m.unitId}:${m.leadId}:${m.createdAt.getTime()}`;
+    if (olhadas.has(id)) continue;
+    try {
+      const [c, q] = await Promise.all([
+        marcadoEm(m.unitId, m.leadId, 'desistencia_tarefa:cancelar'),
+        marcadoEm(m.unitId, m.leadId, 'desistencia_tarefa:conferir'),
+      ]);
+      if ((c && c >= m.createdAt) || (q && q >= m.createdAt)) { olhadas.add(id); continue; }
+      const [unit, conv] = await Promise.all([
+        prisma.unit.findUnique({ where: { id: m.unitId } }),
+        prisma.conversation.findUnique({ where: { unitId_leadId: { unitId: m.unitId, leadId: m.leadId } }, select: { id: true } }),
+      ]);
+      if (!unit || !conv) { olhadas.add(id); continue; }
+      const r = await agirNaDesistencia({ unit, leadId: Number(m.leadId), acao: 'recusou', trecho: await falaDeDesistencia(conv.id, m.createdAt), kommo: () => createKommoClient(unit) });
+      if (r !== 'falhou') olhadas.add(id);
+    } catch (err) {
+      logger.warn({ err: String(err), unitId: m.unitId, leadId: m.leadId }, 'desistência: refazer a tarefa de cancelar falhou (segue)');
+    }
+  }
+}
+
 async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
   try {
     const agora = new Date();
+    await refazerTarefasQueFalharam(agora);
     const marcas = await prisma.cardAlert.findMany({
       where: {
         ruleKey: MARCA_OFERTA,
@@ -50,12 +91,14 @@ async function varrer(): Promise<void> {
         if (!marcaVenceuSemResposta(m.createdAt, agora, depois)) { if (depois > 0) olhadas.add(id); continue; }
         const unit = await prisma.unit.findUnique({ where: { id: m.unitId } });
         if (!unit) { olhadas.add(id); continue; }
-        // o que ele escreveu ANTES da marca (a desistência), para o texto da tarefa e para o detector
-        const fala = await prisma.message.findFirst({ where: { conversationId: conv.id, role: 'user', createdAt: { lte: m.createdAt } }, orderBy: { createdAt: 'desc' }, select: { content: true } });
+        // já fiz a tarefa PARA ESTA oferta (a marca de dedupe é do banco: sobrevive a deploy e a reinício)
+        const feita = await marcadoEm(m.unitId, m.leadId, 'desistencia_tarefa:sem_resposta');
+        if (feita && feita >= m.createdAt) { olhadas.add(id); continue; }
+        const fala = await falaDeDesistencia(conv.id, m.createdAt);
         const r = await abrirTarefaDaDesistencia({
           unit,
           leadId: Number(m.leadId),
-          texto: fala?.content ?? '',
+          texto: fala,
           motivo: 'sem_resposta',
           nome: null,
           kommo: () => createKommoClient(unit),

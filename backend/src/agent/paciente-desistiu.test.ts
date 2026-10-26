@@ -66,7 +66,7 @@ test('RECUSA EXPLÍCITA depois da oferta: a Sofia se despede SEM dizer que cance
     const falas = COM_OFERTA(r);
     assert.equal(acaoDaDesistencia(pacienteDesistiu(falas)), 'recusou', r);
     const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina' });
-    assert.match(bloco, /RECUSA EXPLÍCITA: despeça-se/, r);
+    assert.match(bloco, /RECUSA EXPLÍCITA \(só vale se ele TEM consulta marcada.*\): despeça-se/, r);
     assert.match(bloco, /NÃO diga que a consulta foi cancelada/, r);
     assert.match(bloco, /vou avisar a equipe para cancelar/, r);
     assert.match(bloco, /NÃO chame cancelar_consulta e NÃO crie tarefa/, r);
@@ -166,4 +166,16 @@ test('oferta de UM horário também é oferta; "amanhã" casa; funcionamento e l
 test('oferta de um horário só: a recusa seguinte é lida como resposta à oferta', () => {
   const falas = [p('Cancelei.'), ia('Que tal quinta às 14h?'), p('não quero remarcar')];
   assert.equal(acaoDaDesistencia(pacienteDesistiu(falas)), 'recusou');
+});
+
+test('escolheu horário COM ressalva ("pode ser quinta, se der", "sexta, vou sim"): a Sofia remarca, não abre tarefa de dúvida', () => {
+  for (const r of ['pode ser quinta, se der', 'sexta, vou sim', 'segunda às 14h, depois eu confirmo']) {
+    assert.equal(acaoDaDesistencia(pacienteDesistiu(COM_OFERTA(r))), 'nada', r);
+  }
+  // mas recusa explícita com horário no meio continua recusa
+  assert.equal(acaoDaDesistencia(pacienteDesistiu(COM_OFERTA('não quero remarcar pra sexta'))), 'recusou');
+});
+
+test('a recusa só vale com consulta marcada: o bloco diz', () => {
+  assert.match(renderPacienteDesistiu(COM_OFERTA('não quero remarcar')), /só vale se ele TEM consulta marcada/);
 });

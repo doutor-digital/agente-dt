@@ -22,7 +22,8 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoPipeline } from '../services/kommo.service.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
-import { desistenciaEscrita, etapaSemVespera, textoTarefaDesistencia } from './vespera-segura.js';
+import { desistenciaEscrita, etapaSemVespera, pareceConfirmacao, textoTarefaDesistencia } from './vespera-segura.js';
+import { quisManter } from './desistencia-frases.js';
 import { motivoDeBloqueio } from './mensagem-bloqueada.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService, type ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
@@ -322,7 +323,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       const bloqueio = motivoDeBloqueio(lead, 'lembrete');
       if (bloqueio) {
         conta.bloqueado++;
-        logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, toque, bloqueio }, 'confirmação: cartão bloqueado para mensagem automática, não sai');
+        logger.debug({ unit: unit.slug, kommoLeadId: link.kommoLeadId, toque, bloqueio }, 'confirmação: cartão bloqueado para mensagem automática, não sai');
         continue;
       }
       const etapa = lead?.status_id ? await nomeDaEtapa(lead.pipeline_id, lead.status_id) : null;
@@ -340,7 +341,9 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       // O paciente RECUSOU remarcar e a Sofia se despediu dizendo que a equipe cancela (desistencia-acao.ts): a NOSSA véspera
       // para neste cartão. A marca só vale para a consulta de antes dela — se remarcou depois, `marcadaEm` é mais novo.
       const recusouEm = await marcadoEm(unit.id, link.kommoLeadId, MARCA_RECUSOU);
-      if (recusouEm && recusouEm >= marcadaEm) {
+      // ... a menos que ele tenha voltado atrás depois ("consegui, vou sim", "confirmo"): aí a marca não vale mais
+      const voltouAtras = !!recusouEm && !!oficiais && oficiais.some((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.em > recusouEm && (quisManter(m.texto) || pareceConfirmacao(m.texto)));
+      if (recusouEm && recusouEm >= marcadaEm && !voltouAtras) {
         conta.recusou++;
         logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, toque }, 'confirmação: o paciente recusou remarcar e a equipe vai cancelar — não sai');
         continue;
@@ -353,7 +356,9 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
         const jaAvisada =
           (await avisoRecente(unit.id, link.kommoLeadId, chaveTarefa, POR_CONSULTA_MS)) ||
           (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:ia_calada', 2 * 24 * 3600_000)) ||
-          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:sem_resposta', 2 * 24 * 3600_000));
+          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:sem_resposta', 2 * 24 * 3600_000)) ||
+          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:cancelar', 2 * 24 * 3600_000)) ||
+          (await avisoRecente(unit.id, link.kommoLeadId, 'desistencia_tarefa:conferir', 2 * 24 * 3600_000));
         if (!jaAvisada) {
           try {
             await kommo.createTask({

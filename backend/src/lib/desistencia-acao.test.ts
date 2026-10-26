@@ -66,11 +66,25 @@ test('RECUSOU sem consulta no cartão mas COM vínculo futuro na franquia: age',
   assert.match(m.tarefas[0].text, /consulta 24\/10 às 09:30/);
 });
 
-test('sem consulta por vir (cartão e vínculo): "cancelei o plano" não vira tarefa nem para a véspera', async () => {
+test('DÚVIDA sem consulta por vir (cartão e vínculo): "cancelei o plano" não vira tarefa', async () => {
   const m = montar({ lead: { id: 1, name: 'Maria', custom_fields_values: [] }, vinculo: '2026-10-20T09:30' });
-  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'x', kommo: () => m.kommo }, m.deps), 'sem_consulta');
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'duvida', trecho: 'x', kommo: () => m.kommo }, m.deps), 'sem_consulta');
   assert.equal(m.tarefas.length, 0);
   assert.equal(m.marcas.length, 0);
+});
+
+test('RECUSOU sem consulta por vir: a Sofia já prometeu "avisar a equipe" — vira tarefa "conferir", sem parar a véspera nem etiquetar', async () => {
+  const m = montar({ lead: { id: 1, name: 'Maria', custom_fields_values: [] }, vinculo: '2026-10-20T09:30' });
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'não quero remarcar', kommo: () => m.kommo }, m.deps), 'tarefa_aberta');
+  assert.match(m.tarefas[0].text, /CONFERIR COM O PACIENTE — Maria, consulta sem data no cartão nem na franquia/);
+  assert.ok(!m.marcas.includes(MARCA_RECUSOU));
+  assert.equal(m.tags.length, 0);
+});
+
+test('vínculo com a MESMA folga de 3 h do cartão: "não vou" às 14:30 para consulta das 14:00 ainda é desistência', async () => {
+  const m = montar({ lead: { id: 1, name: 'Maria', custom_fields_values: [] }, vinculo: '2026-10-22T14:00' });
+  // AGORA = 17:03Z = 14:03 local (Araguaína, -03)
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'duvida', trecho: 'x', kommo: () => m.kommo }, m.deps), 'tarefa_aberta');
 });
 
 test('cartão ilegível: não dá para saber se há consulta — não age e diz que falhou', async () => {

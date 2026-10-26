@@ -14,6 +14,7 @@
  */
 import {
   falouDeOutraConsulta,
+  citouHorario,
   hesitou,
   oferecuHorario,
   pareceDesistenciaDaConsulta,
@@ -41,6 +42,8 @@ export interface DesistenciaDoTurno {
   recusaExplicita: boolean;
   /** Neste turno ele disse que quer MANTER a consulta ("não quero remarcar, quero manter", "cancela não", "vou sim"). */
   querManter?: boolean;
+  /** O que ele escreveu neste turno (a resposta à oferta). */
+  resposta?: string;
   /** Neste turno ele hesitou ("acho que não vou conseguir", "vou ver"). */
   hesitou?: boolean;
 }
@@ -74,9 +77,9 @@ export function pacienteDesistiu(falas: Fala[]): DesistenciaDoTurno | null {
   const querManter = textos.some((t) => quisManter(t));
   const hesitacao = textos.some((t) => hesitou(t));
   const explicita = !querManter && textos.some((t) => recusouRemarcarExplicitamente(t));
-  if (agora && antes) return { momento: 'insistiu', trecho: agora, recusaExplicita: explicita, querManter, hesitou: hesitacao };
+  if (agora && antes) return { momento: 'insistiu', trecho: agora, recusaExplicita: explicita, querManter, hesitou: hesitacao, resposta: turno };
   if (agora) return { momento: 'avisou', trecho: agora, recusaExplicita: false, querManter };
-  if (antes) return { momento: 'respondeu_a_oferta', trecho: antes, recusaExplicita: explicita, querManter, hesitou: hesitacao };
+  if (antes) return { momento: 'respondeu_a_oferta', trecho: antes, recusaExplicita: explicita, querManter, hesitou: hesitacao, resposta: turno };
   return null;
 }
 
@@ -94,13 +97,15 @@ export function acaoDaDesistencia(d: DesistenciaDoTurno | null): AcaoDaDesistenc
   if (d.momento === 'avisou') return 'oferta';
   if (d.momento === 'outra_consulta') return 'duvida';
   if (d.recusaExplicita) return 'recusou';
+  // escolheu horário ("pode ser quinta, se der", "sexta, vou sim"): a Sofia remarca, não é dúvida
+  if (d.momento === 'respondeu_a_oferta' && citouHorario(d.resposta)) return 'nada';
   if (d.momento === 'insistiu' || d.querManter || d.hesitou) return 'duvida';
   return 'nada';
 }
 
 /** Recusa explícita: despedida SEM dizer que cancelou; quem cancela é a equipe, avisada pelo sistema. */
 const RECUSA_EXPLICITA_FECHO =
-  'RECUSA EXPLÍCITA: despeça-se com educação em 1 ou 2 frases ("fico à disposição, qualquer coisa é só me chamar"), SEM nova ' +
+  'RECUSA EXPLÍCITA (só vale se ele TEM consulta marcada; sem consulta, trate como conversa normal): despeça-se com educação em 1 ou 2 frases ("fico à disposição, qualquer coisa é só me chamar"), SEM nova ' +
   'oferta. NÃO diga que a consulta foi cancelada — diga que vai avisar a equipe para cancelar ("vou avisar a equipe para cancelar ' +
   'e ela confirma com você"). NÃO chame cancelar_consulta e NÃO crie tarefa nem etiqueta: o sistema já avisou a equipe.';
 

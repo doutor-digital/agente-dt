@@ -16,6 +16,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { avisoRecente, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
 import { fusoDaUnidade } from './fuso.js';
+import { agoraLocalISO } from '../agent/consulta-que-passou.js';
 import { consultaFuturaDoCartao, quandoLocal } from './desistencia-da-consulta.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
 
@@ -89,7 +90,6 @@ export async function agirNaDesistencia(
       await deps.marcarAviso(unit.id, leadId, MARCA_OFERTA, agora);
       return 'marcada';
     }
-    const chaveTarefa = `desistencia_tarefa:${acao === 'recusou' ? 'cancelar' : 'conferir'}`;
     const kommo = args.kommo();
     const lead = await kommo.getLead(leadId).catch(() => null);
     const epoch = consultaFuturaDoCartao(lead, Math.floor(agora.getTime() / 1000));
@@ -97,27 +97,36 @@ export async function agirNaDesistencia(
     let quando: string | null = epoch ? quandoLocal(epoch, tz) : null;
     if (!quando) {
       const v = await deps.consultaDoVinculo(unit.id, leadId, agora).catch(() => null);
-      // do vínculo só conta se ainda não passou (hora local dos dois lados)
-      if (v && v.slice(0, 16) > new Intl.DateTimeFormat('sv-SE', { timeZone: tz, dateStyle: 'short', timeStyle: 'short' }).format(agora).replace(' ', 'T')) quando = quandoDoVinculo(v);
+      // do vínculo conta com a MESMA folga de 3 h do cartão (hora local dos dois lados, "AAAA-MM-DDTHH:mm")
+      if (v && v.slice(0, 16) >= agoraLocalISO(tz, new Date(agora.getTime() - 3 * 3600_000)).slice(0, 16)) quando = quandoDoVinculo(v);
     }
-    // cartão legível e sem consulta por vir: "cancelei" pode ser o plano de saúde — não age. Ilegível: não dá para saber.
-    if (!quando) return lead ? 'sem_consulta' : 'falhou';
+    // Cartão ilegível: não dá para saber se há consulta.
+    if (!quando && !lead) return 'falhou';
+    // Cartão legível e sem consulta por vir: "cancelei" pode ser o plano de saúde. Mas na RECUSA a Sofia já prometeu "vou avisar a
+    // equipe" — a promessa não fica sem executor: vira "conferir", sem parar nada.
+    let efetiva: 'recusou' | 'duvida' = acao;
+    if (!quando) {
+      if (acao !== 'recusou') return 'sem_consulta';
+      efetiva = 'duvida';
+      quando = 'sem data no cartão nem na franquia';
+    }
 
     // a NOSSA véspera e a NOSSA régua param JÁ, antes de qualquer chamada que possa falhar
-    if (acao === 'recusou') await deps.marcarAviso(unit.id, leadId, MARCA_RECUSOU, agora);
+    if (efetiva === 'recusou') await deps.marcarAviso(unit.id, leadId, MARCA_RECUSOU, agora);
 
+    const chaveTarefa = `desistencia_tarefa:${efetiva === 'recusou' ? 'cancelar' : 'conferir'}`;
     if (await deps.avisoRecente(unit.id, leadId, chaveTarefa, JANELA_24H_MS, agora)) return 'ja_avisada';
     const nome = primeiroNomeDoPaciente(lead?.name, null);
     const info = { slug: unit.slug, nome, quando, trecho: args.trecho };
     const criada = await kommo.createTask({
       leadId,
-      text: acao === 'recusou' ? textoTarefaCancelarNaFranquia(info) : textoTarefaConferir(info),
-      completeAt: Math.floor(agora.getTime() / 1000) + (acao === 'recusou' ? 30 * 60 : 2 * 3600),
+      text: efetiva === 'recusou' ? textoTarefaCancelarNaFranquia(info) : textoTarefaConferir(info),
+      completeAt: Math.floor(agora.getTime() / 1000) + (efetiva === 'recusou' ? 30 * 60 : 2 * 3600),
       ...(lead?.responsible_user_id ? { responsibleUserId: lead.responsible_user_id } : {}),
     });
     if (!criada) return 'falhou';
     await deps.marcarAviso(unit.id, leadId, chaveTarefa, agora);
-    if (acao === 'recusou') {
+    if (efetiva === 'recusou') {
       await kommo.addTag({ leadId, tags: [ETIQUETA_SEM_FOLLOW_UP] }).catch((err) => logger.warn({ err: String(err), leadId }, 'desistência: não pus NO_FOLLOW_UP (segue)'));
     }
     logger.info({ unit: unit.slug, leadId, acao, quando }, 'desistência da consulta: tarefa aberta para a equipe');
