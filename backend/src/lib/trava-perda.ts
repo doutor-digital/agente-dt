@@ -76,20 +76,20 @@ export function travaDaPerdaAutomatica(cartao: CartaoParaTrava, agoraEpoch: numb
 }
 
 /**
- * A Sofia pede `fechar_lead({ status: 'lost' })`: a trava vale para ela também (a IA decide por conta, mas é automático:
- * ninguém da equipe mandou). Devolve o texto da recusa para ela, ou `null` se pode seguir. Não conseguiu ler o cartão =
- * segue como sempre foi (o Kommo fora do ar derruba o `setLeadStatus` logo depois).
+ * A Sofia pede `fechar_lead({ status: 'lost' })` (ou `mover_funil` para o 143): a trava vale para ela também — a IA decide
+ * por conta, mas é automático, ninguém da equipe mandou. Devolve a recusa (com o texto pra ela), ou `null` se pode seguir.
+ * Não conseguiu ler o cartão = também recusa: fechar às cegas é o erro caro, e esperar a próxima mensagem não custa nada.
  */
 export async function recusaDaPerdaDaSofia(
   kommo: Pick<KommoClient, 'getLead'>,
   leadId: number,
   agoraEpoch: number = Math.floor(Date.now() / 1000),
-): Promise<{ motivo: MotivoDaTrava; texto: string } | null> {
+): Promise<{ motivo: MotivoDaTrava | 'cartão ilegível'; texto: string } | null> {
   let cartao: CartaoParaTrava;
   try {
     cartao = await kommo.getLead(leadId);
   } catch {
-    return null;
+    return { motivo: 'cartão ilegível', texto: 'não consegui ler o cartão agora para conferir se ele tem consulta, pagamento ou está Quente/Morno. Não feche às cegas: deixe o cartão onde está e tente de novo na próxima mensagem.' };
   }
   const trava = travaDaPerdaAutomatica(cartao, agoraEpoch);
   if (!trava) return null;

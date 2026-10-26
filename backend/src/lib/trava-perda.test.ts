@@ -218,13 +218,14 @@ test('estoque LIGADO: AGENDADO velho que é Quente fica; o neutro do lado vai a 
 });
 
 // ── a Sofia (fechar_lead lost) ──
-test('Sofia: fechar como perdido um Quente/pago/com consulta é recusado, com o motivo; o neutro passa; Kommo fora = segue', async () => {
+test('Sofia: fechar como perdido um Quente/pago/com consulta é recusado, com o motivo; o neutro passa; Kommo fora = recusa também (às cegas não)', async () => {
   const kommo = kommoFalso([leadDe(1, { campos: [campo('✓ Consulta pg antecipado', 'Sim', 3)] }), leadDe(2)], []);
   const r = await recusaDaPerdaDaSofia(kommo, 1, AGORA);
   assert.equal(r?.motivo, 'pagou o antecipado');
   assert.match(r?.texto ?? '', /não fecha como perdido/);
   assert.equal(await recusaDaPerdaDaSofia(kommo, 2, AGORA), null);
-  assert.equal(await recusaDaPerdaDaSofia(kommoFalso([], [], true), 1, AGORA), null, 'não deu pra ler o cartão: comportamento de sempre');
+  const semLeitura = await recusaDaPerdaDaSofia(kommoFalso([], [], true), 1, AGORA);
+  assert.equal(semLeitura?.motivo, 'cartão ilegível', 'não deu pra ler o cartão: não fecha às cegas');
 });
 
 test('estoque: o «dormente» Morno não gasta a cota de avaliação (travadosPelaPerda) e o neutro do lado é avaliado', async () => {
@@ -262,8 +263,7 @@ test('franquia-move em «só no papel»: PERDIDO de cartão Quente vira «pulari
   const kommo = kommoFalso(leads, []);
   const resumo = { movimentos: 0, erros: 0, simulados: {} } as unknown as ResumoSync;
   const mov = { funil: 'COMERCIAL' as const, para: ETAPA.PERDIDO, motivo: 'desmarcou há 40 d e não remarcou', motivoPerda: 'Não remarcou' };
-  await aplicarMovimento(unit, kommo, funisPerdido, 30, mov, resumo, ETAPA.AGENDADO);
-  await aplicarMovimento(unit, kommo, funisPerdido, 31, mov, resumo, ETAPA.AGENDADO);
+  for (const l of leads) await aplicarMovimento(unit, kommo, funisPerdido, l.id, mov, resumo, ETAPA.AGENDADO, l);
   assert.deepEqual(
     registradas.map((r) => `${r.kommoLeadId}:${r.acao}`).sort(),
     ['30:pularia', '31:moveria'],

@@ -253,6 +253,7 @@ export async function segurarNoSeco(unit: Unit, kommo: KommoClient, leadId: numb
       return false;
     }
   }
+  if (!fresco) return false;
   return seguradoPelaTrava(unit, leadId, fresco, deEtapa, true, automacao);
 }
 
