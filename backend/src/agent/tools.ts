@@ -715,7 +715,10 @@ export function buildTools({
           orientacaoAoTransferir(retorno, urgente, avisada)
         );
       } catch (err) {
-        esquecerPausaPropria(unit, leadId); // o cartão não ficou pausado: o próximo turno vai responder
+        // Erro não prova que a pausa falhou (timeout depois de gravar; 2ª chamada no turno). Só esquece a marca se
+        // a caixinha está mesmo desmarcada; na dúvida a marca fica e a resposta sai — silêncio é o pior caso.
+        const pausou = await kommo.isLeadFieldChecked(leadId, pausedFieldId).catch(() => true);
+        if (!pausou) esquecerPausaPropria(unit, leadId); // o cartão não ficou pausado: o próximo turno vai responder
         const latency = Math.round(performance.now() - t0);
         const msg = err instanceof Error ? err.message : String(err);
         await recorder.step({
