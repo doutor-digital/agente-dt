@@ -177,3 +177,16 @@ test('o resumo sai junto com a pausa, sem segurar a resposta além do prazo', as
   assert.ok(Date.now() - t0 < 11000);
   assert.equal(m.chamadas[0].nome, 'pausar_ia', 'a pausa não esperou o resumo');
 });
+
+test('o modelo pausou COM a flag mas a tarefa e o Telegram falharam: a resposta dele não sai (poderia dizer "avisei")', async () => {
+  const mensagens = [
+    new HumanMessage('não consigo segurar o xixi'),
+    new AIMessage({ content: '', tool_calls: [{ id: 'a', name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true } }] }),
+    new ToolMessage({ content: 'OK — IA pausada no lead 7 (3ms). [SEM AVISO À EQUIPE] Responda…', tool_call_id: 'a' }),
+  ];
+  const { args, chamadas } = entrada({ falas: ['oi'], mensagens, textoFinal: 'Já avisei a equipe com prioridade!' });
+  const r = await passarPorSinalNoTurno(args);
+  assert.equal(chamadas.length, 0, 'não pausa de novo');
+  assert.doesNotMatch(r.texto, /avisei|prioridade/);
+  assert.match(r.texto, /atendimento segue com a nossa equipe/);
+});

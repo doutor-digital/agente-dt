@@ -448,10 +448,12 @@ export function chamadasDoTurno(mensagens: BaseMessage[]): ChamadaDoTurno[] {
  * O modelo já passou o atendimento (`pausar_ia` que respondeu OK — "PAUSA NÃO APLICADA" e "ERRO…" não contam)? E já
  * avisou como sinal de alerta (flag ou motivo; o aviso sai antes da pausa, então vale mesmo se a pausa falhou)?
  */
-export function pausaDoTurno(chamadas: ChamadaDoTurno[]): { pausou: boolean; urgente: boolean } {
+export function pausaDoTurno(chamadas: ChamadaDoTurno[]): { pausou: boolean; urgente: boolean; semAviso: boolean } {
   const pausas = chamadas.filter((c) => c.name === 'pausar_ia');
   return {
     pausou: pausas.some((c) => /^OK/.test(c.resultado ?? '')),
+    // a pausa pegou mas a tarefa e o Telegram falharam: a resposta do modelo pode dizer "avisei" sem ser verdade
+    semAviso: pausas.some((c) => /^OK/.test(c.resultado ?? '') && (c.resultado ?? '').includes(SEM_AVISO_NA_PAUSA)),
     urgente: pausas.some(
       (c) => ehHandoffPorSinalDeAlerta(String(c.args?.motivo ?? ''), c.args?.sinalDeAlerta === true) && !/^PAUSA NÃO APLICADA/.test(c.resultado ?? ''),
     ),

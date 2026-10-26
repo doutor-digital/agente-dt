@@ -375,15 +375,15 @@ test('sinalNaFala: perda de força no braço, na mão ou de vontade não é o si
 });
 
 test('pausaDoTurno: só a pausa que deu OK conta; pausar sem a flag e sem motivo de sinal não é aviso urgente', () => {
-  assert.deepEqual(pausaDoTurno([]), { pausou: false, urgente: false });
-  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'quer falar com humano' }, resultado: 'OK — IA pausada' }]), { pausou: true, urgente: false });
-  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true }, resultado: 'OK — IA pausada' }]), { pausou: true, urgente: true });
-  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'red flag: perda de força' }, resultado: 'OK — IA pausada' }]), { pausou: true, urgente: true });
+  assert.deepEqual(pausaDoTurno([]), { pausou: false, urgente: false, semAviso: false });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'quer falar com humano' }, resultado: 'OK — IA pausada' }]), { pausou: true, urgente: false, semAviso: false });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true }, resultado: 'OK — IA pausada' }]), { pausou: true, urgente: true, semAviso: false });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'red flag: perda de força' }, resultado: 'OK — IA pausada' }]), { pausou: true, urgente: true, semAviso: false });
   // a pausa falhou DEPOIS do aviso: a equipe foi avisada, a IA não parou
-  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true }, resultado: 'ERRO ao pausar IA: x' }]), { pausou: false, urgente: true });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true }, resultado: 'ERRO ao pausar IA: x' }]), { pausou: false, urgente: true, semAviso: false });
   // o safety-net do "sem vaga" recusou a pausa: nem pausou nem avisou
-  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'sem vaga' }, resultado: 'PAUSA NÃO APLICADA. Você afirmou…' }]), { pausou: false, urgente: false });
-  assert.deepEqual(pausaDoTurno([{ name: 'criar_tarefa' }]), { pausou: false, urgente: false });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'sem vaga' }, resultado: 'PAUSA NÃO APLICADA. Você afirmou…' }]), { pausou: false, urgente: false, semAviso: false });
+  assert.deepEqual(pausaDoTurno([{ name: 'criar_tarefa' }]), { pausou: false, urgente: false, semAviso: false });
 });
 
 test('chamadasDoTurno junta cada chamada ao resultado da ferramenta; a fala interna do agente não é fala do paciente', () => {

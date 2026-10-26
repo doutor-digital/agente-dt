@@ -46,9 +46,13 @@ export async function passarPorSinalNoTurno(e: PasseEntrada): Promise<PasseResul
   const intacto: PasseResultado = { avisou: false, texto: e.textoFinal };
   if (!ehClinicaParaSinalDeAlerta(e.unit) || !e.leadId) return intacto;
   const chamadas = chamadasDoTurno(e.mensagens);
-  const { pausou, urgente } = pausaDoTurno(chamadas);
+  const { pausou, urgente, semAviso } = pausaDoTurno(chamadas);
   // O modelo já avisou e parou: nada a fazer. (Se ele chamou a pausa urgente e ela FALHOU, `pausou` é falso e segue.)
-  if (urgente && pausou) return { avisou: true, texto: e.textoFinal };
+  if (urgente && pausou && !semAviso) return { avisou: true, texto: e.textoFinal };
+  // Pausou, mas a tarefa e o Telegram falharam: a resposta dele pode dizer "avisei" sem ser verdade — sai a frase honesta.
+  if (urgente && pausou && semAviso) {
+    return { avisou: true, texto: fraseDoPasse(retornoDaEquipe(e.unit), pacienteFalouDePs(e.falasDoPaciente), false) };
+  }
   const sinal = urgente ? 'sinal de alerta confirmado pelo modelo' : sinalNaFala(e.falasDoPaciente);
   const pausar = e.tools.find((t) => t.name === 'pausar_ia');
   if (!sinal || !pausar) return intacto;

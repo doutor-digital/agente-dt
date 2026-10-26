@@ -608,7 +608,6 @@ export function buildTools({
           latencyMs: Math.round(performance.now() - t0),
         });
         // O aviso (tarefa e Telegram) já saiu acima; só a pausa não pôde ser gravada.
-        if (aviso && aviso.tarefa === 'falhou') await aviso.telegram;
         return `ERRO: ${msg} Avise a equipe e prossiga sem pausar.`;
       }
 
