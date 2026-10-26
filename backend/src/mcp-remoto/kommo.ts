@@ -8,7 +8,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { KommoLead, KommoPipeline } from '../services/kommo.service.js';
+import type { KommoLead, KommoPipeline, NotaKommo } from '../services/kommo.service.js';
 import { TETO_HISTORICO, type MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { instanteNoFuso } from '../franquia-mcp/normalizar.js';
@@ -28,6 +28,8 @@ export interface FonteKommo {
   usuarios(): Promise<Array<{ id: number; name: string }>>;
   /** histórico de mensagens do lead (rota oficial talks/messages); opcional para as fontes de teste antigas */
   conversa?(leadId: number, limite: number, periodo?: { desde?: number; ate?: number }): Promise<{ mensagens: MensagemOficial[]; conversas: number; total?: number; truncado?: boolean }>;
+  /** notas do cartão, das mais recentes; opcional para as fontes de teste antigas */
+  notas?(leadId: number, limite: number, periodo?: { desde?: number; ate?: number }): Promise<{ notas: NotaKommo[]; truncado: boolean }>;
 }
 
 /**
@@ -553,6 +555,72 @@ export async function kommoConversa(ctx: ContextoKommo, a: { unidade: string; le
   };
 }
 
+const TIPO_DA_NOTA: Record<string, string> = {
+  common: 'nota',
+  service_message: 'aviso de integração',
+  extended_service_message: 'aviso de integração',
+  call_in: 'ligação recebida',
+  call_out: 'ligação feita',
+  sms_in: 'SMS recebido',
+  sms_out: 'SMS enviado',
+  attachment: 'anexo',
+  geolocation: 'localização',
+};
+
+const ENTIDADE: Record<string, string> = { '&quot;': '"', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&#39;': "'", '&#039;': "'", '&nbsp;': ' ' };
+
+/** O Kommo devolve o texto da nota com HTML escapado (`&quot;Preciso remarcar&quot;`). */
+export function textoDaNota(n: NotaKommo): string {
+  const p = n.params ?? {};
+  const texto = (p.text ?? '').replace(/&(quot|amp|lt|gt|#0?39|nbsp);/g, (e) => ENTIDADE[e] ?? e).trim();
+  if (texto) return texto;
+  if (p.original_name) return `[anexo: ${p.original_name}]`;
+  if (p.phone) return `[${p.phone}${p.duration ? `, ${p.duration} s` : ''}]`;
+  return '[sem texto]';
+}
+
+export const TETO_NOTAS = 500;
+
+/**
+ * As notas internas de UM cartão — resumo para a SDR, avisos dos robôs, anotações da equipe —, das mais recentes.
+ * Como a conversa, é dado de saúde: um cartão por chamada, e a consulta fica no registro do conector.
+ */
+export async function kommoNotas(ctx: ContextoKommo, a: { unidade: string; leadId: number; limite?: number; inicio?: string; fim?: string }) {
+  const [u] = resolverUnidadesKommo(ctx, a.unidade, 1);
+  if (!u!.fonte.notas) throw new ErroDeEntrada('esta conta do Kommo não tem a leitura de notas ligada');
+  if (a.inicio) validarData(a.inicio, 'inicio');
+  if (a.fim) validarData(a.fim, 'fim');
+  if (a.inicio && a.fim && a.fim < a.inicio) throw new ErroDeEntrada('fim antes do início');
+  const comPeriodo = !!(a.inicio || a.fim);
+  const limite = Math.min(Math.max(a.limite ?? (comPeriodo ? TETO_NOTAS : 30), 1), TETO_NOTAS);
+  const periodo = {
+    ...(a.inicio ? { desde: epochDoDiaLocal(a.inicio, u!.fuso) } : {}),
+    ...(a.fim ? { ate: epochDoDiaLocal(a.fim, u!.fuso, true) } : {}),
+  };
+  // conta dividida: o cartão primeiro — as notas de um paciente da outra unidade nem são baixadas
+  const lead = await u!.fonte.lead(a.leadId);
+  const dono = u!.divisao ? conferirDono(u!, lead) : {};
+  const [lidas, usuarios] = await Promise.all([
+    u!.fonte.notas(a.leadId, limite, periodo),
+    nomesDosUsuarios(ctx, u!).catch(() => new Map<number, string>()),
+  ]);
+  return {
+    unidade: u!.slug,
+    ...dono,
+    lead: { id: lead.id, nome: lead.name, situacao: situacaoDoLead(lead) },
+    ...(comPeriodo ? { periodo: { inicio: a.inicio ?? null, fim: a.fim ?? null } } : {}),
+    mostrando: lidas.notas.length,
+    ...(lidas.truncado ? { ficaramDeFora: `há notas mais antigas que não vieram; peça um limite maior (até ${TETO_NOTAS}) ou um período (inicio/fim)` } : {}),
+    notas: lidas.notas.map((n) => ({
+      quando: quandoLocal(new Date(n.created_at * 1000), u!.fuso),
+      tipo: TIPO_DA_NOTA[n.note_type] ?? n.note_type,
+      autor: n.created_by ? usuarios.get(n.created_by) ?? `usuário ${n.created_by}` : 'robô/integração',
+      texto: textoDaNota(n),
+    })),
+    aviso: 'Notas de cartão de paciente: use só para acompanhar o atendimento. Esta consulta ficou registrada com o seu usuário.',
+  };
+}
+
 export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo, auditar?: Auditar): void {
   const ro = { readOnlyHint: true, openWorldHint: true };
   server.registerTool(
@@ -629,5 +697,26 @@ export function registrarFerramentasKommo(server: McpServer, ctx: ContextoKommo,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     (args) => executar('kommo_conversa', args, auditar, () => kommoConversa(ctx, args)),
+  );
+  server.registerTool(
+    'kommo_notas',
+    {
+      title: 'Notas internas do cartão (Kommo)',
+      description:
+        'As notas internas de UM lead (unidade + número do cartão), das mais recentes: resumo da Sofia para a SDR, avisos dos ' +
+        'robôs (sinal de alerta, paciente insistiu com a IA pausada, franquia…), anotações da equipe e registros de ligação. ' +
+        'Cada nota vem com quando, tipo, autor (nome do usuário, ou "robô/integração") e texto. ' +
+        `Padrão: as 30 mais recentes; limite até ${TETO_NOTAS}; inicio/fim filtram um período. Um lead por chamada — é dado de saúde, ` +
+        'e cada consulta fica registrada com o usuário. Para achar o número do cartão, use kommo_buscar_telefone ou kommo_leads.',
+      inputSchema: {
+        unidade: z.string().min(1).describe('UMA unidade: slug ou nome curto ("serra")'),
+        leadId: z.number().int().positive().describe('número do cartão (lead) no Kommo'),
+        limite: z.number().int().min(1).max(TETO_NOTAS).optional().describe(`quantas notas, das mais recentes (padrão 30, máx. ${TETO_NOTAS})`),
+        inicio: z.string().optional().describe('só notas a partir deste dia, AAAA-MM-DD (dia local da unidade)'),
+        fim: z.string().optional().describe('só notas até este dia, AAAA-MM-DD'),
+      },
+      annotations: ro,
+    },
+    (args) => executar('kommo_notas', args, auditar, () => kommoNotas(ctx, args)),
   );
 }
