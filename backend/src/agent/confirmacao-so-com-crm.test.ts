@@ -7,6 +7,7 @@ import {
   RECUSA_AGUARDANDO_EQUIPE,
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
+  afirmaPagamentoConferido,
   afirmouComConsultaDesmarcada,
   blocoDizDesmarcada,
   respostaDoComprovante,
@@ -76,7 +77,7 @@ test('Canaã 24/10: a resposta que confirma vira o recado; a que não confirma s
   const t = turnoDoComprovante(COMPROVANTE, []);
   const canaa = 'Recebi seu comprovante certo, Shelly, muito obrigada! 🥰 Sua vaga está garantida.\n\n✅ Agendamento confirmado, Shelly!';
   assert.equal(respostaDoComprovante(canaa, t, false), RECADO_COMPROVANTE);
-  assert.equal(respostaDoComprovante(canaa, t, true), null, 'com a consulta já no CRM (paga o saldo) dizer dela é a verdade');
+  assert.equal(respostaDoComprovante(canaa, t, true), null, 'sem falar de pagamento conferido, com a consulta já no CRM, o texto fica');
   assert.equal(respostaDoComprovante('Recebi! Só me confirma seu nome completo? 😊', t, false), null);
 });
 
@@ -230,4 +231,13 @@ test('rajada de PDFs do mesmo comprovante = uma tarefa (janela de 15 min); desma
   await abrirTarefaParaEquipe({ ...base, motivo: 'comprovante' });
   await abrirTarefaParaEquipe({ ...base, motivo: 'desmarcada' });
   assert.deepEqual(janelas, [15 * 60_000, undefined]);
+});
+
+test('consulta já no CRM + comprovante: falar da consulta fica; dizer que o pagamento foi conferido vira o recado', () => {
+  const t = turnoDoComprovante(COMPROVANTE, []);
+  assert.equal(respostaDoComprovante('Recebi! Sua consulta segue marcada para terça, 27/10, às 8h.', t, true), null);
+  assert.equal(respostaDoComprovante('Seu pagamento foi confirmado, e sua consulta segue marcada para terça.', t, true), RECADO_COMPROVANTE);
+  assert.equal(respostaDoComprovante('Pix aprovado! Te espero terça.', t, true), RECADO_COMPROVANTE);
+  assert.ok(!afirmaPagamentoConferido('A equipe confere o pagamento e confirma em até 1 hora.'));
+  assert.ok(!afirmaPagamentoConferido('Seu pagamento ainda não foi confirmado.'));
 });

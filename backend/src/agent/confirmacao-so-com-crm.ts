@@ -125,14 +125,28 @@ export function turnoDoComprovante(ultimaFalaDoPaciente: string | null | undefin
   return { noTurno, pendente };
 }
 
+/** "pagamento confirmado", "seu Pix foi aprovado": quem confere o comprovante é a equipe, não a IA. */
+const AFIRMA_PAGAMENTO = /\b(?:pagamento|pix|comprovante|valor)\s+(?:\S+\s+){0,5}?(?:confirmad|aprovad|conferid|validad|compensad|identificad)[oa]s?\b|\bcaiu\b/;
+
+export function afirmaPagamentoConferido(texto: string | null | undefined): boolean {
+  return trechos(String(texto ?? '')).some((t) => {
+    const n = normalizar(t);
+    const m = AFIRMA_PAGAMENTO.exec(n);
+    return !!m && !NAO_AFIRMA.test(oracaoDe(n, m.index + m[0].length));
+  });
+}
+
 /**
  * Turno com comprovante: se a resposta afirma confirmação, vale o recado fixo. Resposta que não afirma
- * ("recebi, me manda o nome completo") segue como veio. Com a consulta já no CRM (`consultaNoCrm` = o prompt traz
- * a consulta de verdade: criada pela equipe, ou paciente que paga o saldo) o texto não é trocado.
+ * ("recebi, me manda o nome completo") segue como veio.
+ *
+ * Com uma consulta já no CRM (`consultaNoCrm` = o prompt traz a consulta de verdade: criada pela equipe, ou
+ * paciente que paga o saldo) falar DELA é verdade e o texto fica — mas dizer que o PAGAMENTO foi conferido
+ * continua sendo da equipe (achado do Codex): essa frase ainda vira o recado.
  */
 export function respostaDoComprovante(texto: string, turno: TurnoDoComprovante, consultaNoCrm: boolean): string | null {
-  // Consulta já no CRM (paga o saldo, a sessão): dizer dela é dizer a verdade — a equipe só confere o pagamento.
-  if (!turno.pendente || consultaNoCrm) return null;
+  if (!turno.pendente) return null;
+  if (consultaNoCrm) return turno.noTurno && afirmaPagamentoConferido(texto) ? RECADO_COMPROVANTE : null;
   return afirmaConfirmacao(texto) ? RECADO_COMPROVANTE : null;
 }
 
