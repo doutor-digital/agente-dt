@@ -233,3 +233,15 @@ test('cartão com dois campos "Data da Consulta" (o velho vazio primeiro) ou a d
   );
   assert.equal(consultaFuturaDoCartao({ custom_fields_values: [campo('◷ Data da Consulta', '2026-10-23T14:00:00-03:00')] }, AGORA), 1792774800);
 });
+
+test('consulta só no vínculo da franquia (o cartão não tem a data): a tarefa de "sem resposta"/"IA calada" também abre', async () => {
+  const m = montar({ lead: { id: 1, name: 'Maria', custom_fields_values: [] } });
+  const deps: DepsDaDesistencia = { ...m.deps, consultaDoVinculo: async () => '2026-10-24T09:30' };
+  const r = await abrirTarefaDaDesistencia({ unit: m.unit, leadId: 1, texto: 'Cancelei.', motivo: 'sem_resposta', kommo: () => m.kommo }, deps);
+  assert.equal(r, 'tarefa_aberta');
+  assert.match(m.tarefas[0].text, /24\/10 às 09:30/);
+  // e vínculo velho (já passou) não conta
+  const velho: DepsDaDesistencia = { ...m.deps, consultaDoVinculo: async () => '2026-10-20T09:30' };
+  const m2 = montar({ lead: { id: 1, name: 'Maria', custom_fields_values: [] } });
+  assert.equal(await abrirTarefaDaDesistencia({ unit: m2.unit, leadId: 1, texto: 'Cancelei.', motivo: 'sem_resposta', kommo: () => m2.kommo }, { ...m2.deps, consultaDoVinculo: velho.consultaDoVinculo }), 'sem_consulta');
+});

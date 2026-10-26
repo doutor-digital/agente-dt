@@ -16,8 +16,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { avisoRecente, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
 import { fusoDaUnidade } from './fuso.js';
-import { agoraLocalISO } from '../agent/consulta-que-passou.js';
-import { consultaFuturaDoCartao, quandoLocal } from './desistencia-da-consulta.js';
+import { consultaDoVinculoPadrao, quandoDaConsultaPorVir } from './desistencia-da-consulta.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
 
 export const MARCA_OFERTA = 'desistencia_oferta';
@@ -58,17 +57,9 @@ export interface DepsDaAcao {
   consultaDoVinculo: (unitId: string, leadId: number, agora: Date) => Promise<string | null>;
 }
 
-async function consultaDoVinculoPadrao(unitId: string, leadId: number): Promise<string | null> {
-  const l = await prisma.spineLeadLink.findFirst({ where: { unitId, kommoLeadId: leadId, spineIdSchedule: { not: null } }, select: { agendadoPara: true } });
-  return l?.agendadoPara ?? null;
-}
-
 const DEPS_PADRAO: DepsDaAcao = { agora: () => new Date(), avisoRecente, marcarAviso, consultaDoVinculo: (u, l) => consultaDoVinculoPadrao(u, l) };
 
 const emAndamento = new Set<string>();
-
-/** "AAAA-MM-DDTHH:mm" → "dd/mm às HH:mm". */
-const quandoDoVinculo = (iso: string): string => `${iso.slice(8, 10)}/${iso.slice(5, 7)} às ${iso.slice(11, 16)}`;
 
 export async function agirNaDesistencia(
   args: {
@@ -92,14 +83,7 @@ export async function agirNaDesistencia(
     }
     const kommo = args.kommo();
     const lead = await kommo.getLead(leadId).catch(() => null);
-    const epoch = consultaFuturaDoCartao(lead, Math.floor(agora.getTime() / 1000));
-    const tz = fusoDaUnidade(unit);
-    let quando: string | null = epoch ? quandoLocal(epoch, tz) : null;
-    if (!quando) {
-      const v = await deps.consultaDoVinculo(unit.id, leadId, agora).catch(() => null);
-      // do vínculo conta com a MESMA folga de 3 h do cartão (hora local dos dois lados, "AAAA-MM-DDTHH:mm")
-      if (v && v.slice(0, 16) >= agoraLocalISO(tz, new Date(agora.getTime() - 3 * 3600_000)).slice(0, 16)) quando = quandoDoVinculo(v);
-    }
+    let quando: string | null = await quandoDaConsultaPorVir({ unit, leadId, lead, agora, consultaDoVinculo: (u, l) => deps.consultaDoVinculo(u, l, agora) });
     // Cartão ilegível: não dá para saber se há consulta.
     if (!quando && !lead) return 'falhou';
     // Cartão legível e sem consulta por vir: "cancelei" pode ser o plano de saúde. Mas na RECUSA a Sofia já prometeu "vou avisar a

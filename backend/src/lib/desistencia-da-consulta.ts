@@ -23,6 +23,8 @@ import type { KommoLead } from '../services/kommo.service.js';
 import { avisoRecente, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
 import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
+import { prisma } from './prisma.js';
+import { agoraLocalISO } from '../agent/consulta-que-passou.js';
 import { epochSeg } from './etiquetas-auto.js';
 import { semAcento } from './sem-acento.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
@@ -50,6 +52,34 @@ export function quandoLocal(epochS: number, tz: string): string {
   );
   // "26/10, 14:00" → "26/10 às 14:00"
   return p.replace(/,?\s+/, ' às ');
+}
+
+/** "AAAA-MM-DDTHH:mm" → "dd/mm às HH:mm". */
+export const quandoDoVinculo = (iso: string): string => `${iso.slice(8, 10)}/${iso.slice(5, 7)} às ${iso.slice(11, 16)}`;
+
+/** A consulta por vir no vínculo da franquia ("AAAA-MM-DDTHH:mm" local), ou null. */
+export async function consultaDoVinculoPadrao(unitId: string, leadId: number): Promise<string | null> {
+  const l = await prisma.spineLeadLink.findFirst({ where: { unitId, kommoLeadId: leadId, spineIdSchedule: { not: null } }, select: { agendadoPara: true } });
+  return l?.agendadoPara ?? null;
+}
+
+/**
+ * "dd/mm às HH:mm" da consulta ainda por vir — do cartão (◷ Data da Consulta) e, se o cartão não tem, do vínculo da franquia —,
+ * com a MESMA folga de 3 h nos dois (hora local dos dois lados). null = não achei consulta por vir.
+ */
+export async function quandoDaConsultaPorVir(args: {
+  unit: Pick<Unit, 'id' | 'spineTimezone' | 'businessHoursTimezone'>;
+  leadId: number;
+  lead: Pick<KommoLead, 'custom_fields_values'> | null | undefined;
+  agora: Date;
+  consultaDoVinculo?: (unitId: string, leadId: number) => Promise<string | null>;
+}): Promise<string | null> {
+  const tz = fusoDaUnidade(args.unit);
+  const epoch = consultaFuturaDoCartao(args.lead, Math.floor(args.agora.getTime() / 1000));
+  if (epoch) return quandoLocal(epoch, tz);
+  const v = await (args.consultaDoVinculo ?? consultaDoVinculoPadrao)(args.unit.id, args.leadId).catch(() => null);
+  if (v && v.slice(0, 16) >= agoraLocalISO(tz, new Date(args.agora.getTime() - 3 * 3600_000)).slice(0, 16)) return quandoDoVinculo(v);
+  return null;
 }
 
 export type MotivoDaTarefa = 'ia_calada' | 'sem_resposta';
@@ -80,6 +110,7 @@ export interface DepsDaDesistencia {
   agora: () => Date;
   avisoRecente: typeof avisoRecente;
   marcarAviso: typeof marcarAviso;
+  consultaDoVinculo?: (unitId: string, leadId: number) => Promise<string | null>;
 }
 
 const DEPS_PADRAO: DepsDaDesistencia = { agora: () => new Date(), avisoRecente, marcarAviso };
@@ -122,14 +153,14 @@ export async function abrirTarefaDaDesistencia(
     if (await deps.avisoRecente(unit.id, leadId, chave, JANELA_24H_MS, agora)) return 'ja_avisada';
     const kommo = args.kommo();
     const lead = await kommo.getLead(leadId);
-    const consulta = consultaFuturaDoCartao(lead, Math.floor(agora.getTime() / 1000));
-    if (!consulta) return 'sem_consulta';
+    const quando = await quandoDaConsultaPorVir({ unit, leadId, lead, agora, consultaDoVinculo: deps.consultaDoVinculo });
+    if (!quando) return 'sem_consulta';
     const criada = await kommo.createTask({
       leadId,
       text: textoTarefaDesistenciaSemIA({
         slug: unit.slug,
         nome: primeiroNomeDoPaciente(lead?.name, args.nome ?? null),
-        quando: quandoLocal(consulta, fusoDaUnidade(unit)),
+        quando,
         mensagem: args.texto,
         motivo: args.motivo,
       }),
@@ -138,7 +169,7 @@ export async function abrirTarefaDaDesistencia(
     // marca SÓ depois de o Kommo confirmar: falha de rede não pode calar o aviso por 24 h
     if (!criada) return 'falhou';
     await deps.marcarAviso(unit.id, leadId, chave, agora);
-    logger.info({ unit: unit.slug, leadId, consulta, motivo: args.motivo }, 'desistência da consulta: tarefa aberta para a equipe');
+    logger.info({ unit: unit.slug, leadId, quando, motivo: args.motivo }, 'desistência da consulta: tarefa aberta para a equipe');
     return 'tarefa_aberta';
   } catch (err) {
     logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'desistência da consulta: não consegui abrir a tarefa — segue');
