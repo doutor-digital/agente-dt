@@ -32,6 +32,7 @@ import { TAG_CONFLITO, anotarRoboPos, cartaoTravadoNoConflito, estadoCasamentoJo
 import { cartoesComConflito } from './conflito-paciente.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { registrarSimulacao } from './so-no-papel.js';
+import { travaDaPerdaAutomatica, type CartaoParaTrava } from './trava-perda.js';
 import { contaDividida, grupoDaUnidade, pularCartao, unidadeDonaDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { carregarFunis, idClientDoCartao, idClientDoLead, temConsultaFutura, type Funis } from './franquia-sync-worker.js';
 import { diaDaRetomada, diaDoCampoData, esperaSeguraVolta, retomarEmDoCartao } from './espera-retomada.js';
@@ -225,6 +226,28 @@ async function franquiaSegura(unit: Unit, leadId: number, nome: string | null, a
 
 const pausa = () => new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
 
+/**
+ * A trava da perda automática (item 5 da Suzanne, 26/10): consulta futura, pagamento e Quente/Morno nunca vão a PERDIDO por
+ * robô nosso. Devolve `true` se SEGUROU — e aí o chamador não mexe. No papel registra "pularia", que também troca um
+ * "moveria" antigo do mesmo cartão (mesma chave) em vez de deixá-lo na tela por 30 dias.
+ */
+export function seguradoPelaTrava(unit: Unit, leadId: number, cartao: CartaoParaTrava, deEtapa: string, seco: boolean, automacao: string, agoraEpoch: number = Math.floor(Date.now() / 1000)): boolean {
+  const trava = travaDaPerdaAutomatica(cartao, agoraEpoch);
+  if (!trava) return false;
+  logger.debug({ unit: unit.slug, leadId, de: deEtapa, motivo: trava.motivo, seco }, 'parados: PERDIDO seguro pela trava — o cartão fica onde está');
+  if (seco) registrarSimulacao(unit, automacao, { leadId, acao: 'pularia', alvo: ETAPA.PERDIDO, deEtapa, motivo: `trava da perda automática: ${trava.motivo}` });
+  return true;
+}
+
+/** O cartão fresco só para a trava, no modo seco (o ligado já o relê em `aindaNaEtapa`). Falhou? segue como antes: sem trava. */
+async function cartaoParaTravaNoSeco(kommo: KommoClient, leadId: number): Promise<KommoLead | null> {
+  try {
+    return await kommo.getLead(leadId);
+  } catch {
+    return null;
+  }
+}
+
 /** Fecha como PERDIDO: etiquetas → motivo no cartão → status com loss reason → nota. Em modo seco só registra. */
 export async function fecharComoPerdido(
   unit: Unit,
@@ -237,7 +260,10 @@ export async function fecharComoPerdido(
   automacao: string = 'parados',
 ): Promise<boolean> {
   const base = { unit: unit.slug, leadId, de: etapaAtual, regra: d.regra, motivo: d.motivoPerda };
+  // Este é o portão de TODO PERDIDO de código (parados, estoques, franquia-move): a trava tem de valer aqui, no papel também.
   if (seco) {
+    const fresco = await cartaoParaTravaNoSeco(kommo, leadId);
+    if (fresco && seguradoPelaTrava(unit, leadId, fresco, etapaAtual, true, automacao, Math.floor(Date.now() / 1000))) return false;
     logger.info({ ...base, automacao }, 'parados [seco]: moveria pra PERDIDO');
     registrarSimulacao(unit, automacao, { leadId, acao: 'moveria', alvo: ETAPA.PERDIDO, deEtapa: etapaAtual, valor: d.motivoPerda, motivo: d.regra });
     return false;
@@ -247,6 +273,7 @@ export async function fecharComoPerdido(
     logger.info(base, 'parados: cartão mudou de etapa enquanto eu decidia — não mexi');
     return false;
   }
+  if (seguradoPelaTrava(unit, leadId, lead, etapaAtual, false, automacao)) return false;
   const lossId = d.motivoPerda ? await idDoMotivoDePerda(unit, kommo, d.motivoPerda).catch(() => null) : null;
   // Etiqueta ANTES de mudar o status: o gatilho de PERDIDO (not_equal NO_FOLLOW_UP) lê a condição no evento.
   await etiquetar(unit, kommo, leadId, d.semRegua === true);
@@ -381,6 +408,8 @@ interface Resumo {
   semUnidade?: number;
   /** estoque: cartões travados por CONFLITO_FRANQUIA que ficaram onde estavam (a SDR escolhe o paciente) */
   travadosNoConflito?: number;
+  /** cartões que o robô ia fechar como PERDIDO e a trava (consulta futura / pagou / Quente / Morno) segurou */
+  travadosPelaPerda?: number;
 }
 
 export async function leadsDaEtapa(kommo: KommoClient, pipelineId: number, statusId: number, maxPaginas: number = MAX_PAGINAS): Promise<KommoLead[]> {
@@ -439,6 +468,11 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
       const cartao = { retomarEmEpoch: epochDoCampoData(lead, CAMPO.RETOMAR_EM), criadoEpoch: lead.created_at ?? null };
       if (!candidatoPeloCartao(etapa, cartao, agora)) continue; // barato: sem chamada nenhuma
       if (pularCartao(grupo, unit.id, lead, resumo)) continue; // Kommo dividido: só os cartões desta unidade
+      // trava da perda automática: barato (lê o cartão da lista) e ANTES da cota — quem fica pra sempre não gasta avaliação
+      if (seguradoPelaTrava(unit, lead.id, lead, etapa, seco, 'parados', agora)) {
+        resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1;
+        continue;
+      }
       if (!cota.podeAvaliar()) break;
       cota.avaliou();
       resumo.avaliados++;
@@ -531,6 +565,10 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
       if (!atual || atual.funil !== 'COMERCIAL' || !reguaEsgotadaDerruba(atual.status)) continue;
       const status = valorDoCampo(lead, CAMPO.STATUS_CONVERSA);
       if (!decidirReguaEsgotada(status == null ? null : String(status), false)) continue; // o cartão não diz "Sem resposta"
+      if (seguradoPelaTrava(unit, lead.id, lead, atual.status, seco, 'parados', agora)) {
+        resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1;
+        continue;
+      }
       if (!cota.podeAvaliar()) break;
       cota.avaliou();
       resumo.avaliados++;

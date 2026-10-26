@@ -22,6 +22,7 @@ import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
 import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
 import { gravarNomeConfirmadoNoContato } from '../lib/nome-no-contato.js';
 import { recusaDoFunilTratamento, type DestinoDaSofia } from '../lib/guarda-funil-tratamento.js';
+import { recusaDaPerdaDaSofia } from '../lib/trava-perda.js';
 import { orientacaoAoTransferir, retornoDaEquipe, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import {
@@ -982,6 +983,18 @@ export function buildTools({
       // 16/10: no funil TRATAMENTO, 142/143 são ALTA e TRATAMENTO CANCELADO — não é decisão da Sofia
       const recusa = await recusarSaidaDoTratamento(leadId, { tipo: 'fechar', ganho: status === 'won' });
       if (recusa) return recusa;
+      // 26/10 (item 5 da Suzanne): quem tem consulta futura, pagou ou está Quente/Morno não vai a PERDIDO por decisão da IA
+      if (status === 'lost') {
+        const travada = await recusaDaPerdaDaSofia(kommo, leadId);
+        if (travada) {
+          await recorder.step({
+            kind: 'TOOL_RESULT',
+            title: `Recusado: fechar como perdido um lead com «${travada.motivo}»`,
+            payload: { leadId, motivo: travada.motivo },
+          });
+          return `RECUSADO: ${travada.texto}`;
+        }
+      }
       try {
         await kommo.setLeadStatus(leadId, { won: status === 'won', lossReasonId });
         const latency = Math.round(performance.now() - t0);
