@@ -39,3 +39,8 @@ test('confirmado=true só passa se a pergunta nomeada foi feita em OUTRO turno, 
   assert.equal(perguntadoEmOutroTurno([marca('t1', 72)], 't2', agora), false, 'pergunta velha demais');
   assert.equal(perguntadoEmOutroTurno([{ ruleKey: 'outra_regra:t1', createdAt: agora }], 't2', agora), false, 'outra marca do cartão não conta');
 });
+
+test('REMARCADO (41) é consulta viva em data futura: pode ser cancelada; no minuto exato da consulta, não', () => {
+  assert.equal(motivoDeNaoCancelar({ quando: '2026-10-27T14:00', idStatus: 41 }, AGORA), null);
+  assert.match(motivoDeNaoCancelar({ quando: '2026-10-26T13:00', idStatus: 41 }, '2026-10-26T13:00:42') ?? '', /já passou ou está acontecendo/);
+});

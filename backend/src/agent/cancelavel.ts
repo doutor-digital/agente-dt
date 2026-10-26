@@ -5,6 +5,11 @@
  */
 import { SpineService } from '../services/spine.service.js';
 
+/**
+ * REMARCADO (41) NÃO está aqui de propósito: é consulta VIVA movida para outra data (spine.service: "o paciente vem NAQUELA data"),
+ * e quem remarcou também pode desistir. O corte de horário é no minuto ("AAAA-MM-DDTHH:mm", hora local dos dois lados): quem
+ * pede cancelar no minuto exato da consulta já está no horário dela.
+ */
 const ENCERRADOS: Record<number, string> = {
   [SpineService.SPINE_STATUS.ATENDIDO]: 'já foi ATENDIDA',
   [SpineService.SPINE_STATUS.NAO_COMPARECEU]: 'está como NÃO COMPARECEU',
