@@ -63,7 +63,7 @@ function normalizarResposta(s: string): string {
   return s.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 import { podarHistorico } from './history-window.js';
-import { sanearHistorico } from './historico-orfao.js';
+import { sanearHistorico, TEXTO_FERRAMENTA_INTERROMPIDA } from './historico-orfao.js';
 import { toolsParaOpenAI } from './tools-openai.js';
 import { respostasSeguradas } from './entrega-falha.js';
 import {
@@ -713,9 +713,15 @@ export async function buildAgentGraph(
       ),
     );
     // Chamada de ferramenta sem resultado (turno cortado no meio) deixaria o lead preso pra sempre no 400 do modelo:
-    // o histórico vive no checkpoint. Completa-se só o que VAI ao modelo; o rastro registra, pra poder contar em produção.
-    const saneado = sanearHistorico(podarHistorico(nonSystemMessages));
-    if (saneado.completados.length > 0 || saneado.removidos > 0) {
+    // o histórico vive no checkpoint. Sanea-se o histórico INTEIRO antes da janela (a poda não pode separar a chamada
+    // do resultado e fazer o saneamento inventar "interrompida" para uma ação que deu certo) e só o que VAI ao modelo
+    // é alterado. O rastro registra, pra poder contar em produção.
+    const saneado = sanearHistorico(nonSystemMessages);
+    const janela = podarHistorico(saneado.messages);
+    const sinteticosNaJanela = janela.filter(
+      (m) => m.getType() === 'tool' && m.content === TEXTO_FERRAMENTA_INTERROMPIDA,
+    ).length;
+    if (sinteticosNaJanela > 0 || saneado.removidos > 0) {
       logger.warn(
         { unit: unit.slug, leadId: leadIdDaConversa, completados: saneado.completados, removidos: saneado.removidos },
         'histórico com chamada de ferramenta sem resultado — saneado antes de ir ao modelo',
@@ -726,7 +732,7 @@ export async function buildAgentGraph(
         payload: { completados: saneado.completados, removidos: saneado.removidos },
       });
     }
-    const finalMessages: BaseMessage[] = [systemMessage, ...saneado.messages];
+    const finalMessages: BaseMessage[] = [systemMessage, ...janela];
 
     // Conferido ANTES de gastar de novo, e FORA do try: se caísse no catch, o
     // plano B chamaria o modelo assim mesmo e o teto não seguraria nada.
