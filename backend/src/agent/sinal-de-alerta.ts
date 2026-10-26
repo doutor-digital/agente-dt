@@ -53,7 +53,8 @@ export function ehHandoffPorSinalDeAlerta(motivo: string | null | undefined, fla
   const texto = motivo ?? '';
   for (const m of texto.matchAll(MOTIVO_SINAL_DE_ALERTA)) {
     // "não está segurando o xixi": a negação é o próprio sinal, não nega nada
-    if (/^segur/i.test(m[0]) || !negadoAntes(texto, m.index ?? 0)) return true;
+    // "sem controle da urina", "não tem controle do xixi", "sem força na perna": a negação também é o próprio sinal
+    if (/^(?:segur|controle|for[cç]a)/i.test(m[0]) || !negadoAntes(texto, m.index ?? 0)) return true;
   }
   return false;
 }
@@ -337,22 +338,33 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
   },
 ];
 
+/** Brincadeira ("kkk", "haha", "rsrs"): "a boca torta de raiva kkk" não é sinal neurológico. */
+const HUMOR = /k{3,}|\bha(?:ha)+|\brs(?:rs)+/i;
+
+/** A frase (até . ! ? ou quebra de linha) que contém a posição `i` do texto. */
+function fraseEm(texto: string, i: number): string {
+  const ini = Math.max(texto.lastIndexOf('.', i), texto.lastIndexOf('!', i), texto.lastIndexOf('?', i), texto.lastIndexOf('\n', i)) + 1;
+  const fim = texto.slice(i).search(/[.!?\n]/);
+  return texto.slice(ini, fim < 0 ? texto.length : i + fim);
+}
+
 /**
  * O sinal de alerta que o paciente disse com todas as letras nas falas deste turno, ou `null`. Devolve o motivo no
  * formato de `pausar_ia`. Febre só conta junto de dor no mesmo turno.
  */
 export function sinalNaFala(falas: string[]): string | null {
   const texto = falas.join('\n');
-  // Brincadeira ("kkk", "haha") não é fala de sinal neurológico: "a boca torta de raiva kkk".
-  const brincando = /k{3,}|\bha(?:ha)+|\brs(?:rs)+/i.test(texto);
   for (const { sinal, re, negavel } of SINAIS_NA_FALA) {
     // Todas as ocorrências: "não tenho dormência na virilha" numa mensagem não cala "agora tenho" na seguinte.
     const todas = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
     for (const m of texto.matchAll(todas)) {
-      if (brincando && sinal.startsWith('sinal neurológico')) continue;
-      if (negavel && negadoAntes(texto, m.index ?? 0)) continue;
-      // Queixa de anos ("não consigo segurar o xixi desde a gravidez, faz 10 anos") não é o sinal de agora.
-      const resto = texto.slice(m.index ?? 0, (m.index ?? 0) + 120).split(/[.!?\n]/)[0] ?? '';
+      const i = m.index ?? 0;
+      // Brincadeira só na MESMA frase do sinal: um "kkkk to com medo" depois não desliga "a fala enrolada e a boca torta".
+      if (sinal.startsWith('sinal neurológico') && HUMOR.test(fraseEm(texto, i))) continue;
+      if (negavel && negadoAntes(texto, i)) continue;
+      // Queixa de anos ("não consigo segurar o xixi desde a gravidez faz 10 anos") não é o sinal de agora — só na MESMA
+      // oração: "não estou segurando o xixi desde ontem, tenho hérnia há 3 anos" é o sinal.
+      const resto = texto.slice(i, i + 120).split(/[.!?\n,;]|\se\s/)[0] ?? '';
       if (/\b(?:h[aá]|faz|desde)\b[^.!?\n]{0,30}\b(?:anos?|meses)\b/i.test(resto)) continue;
       return `${sinal} (paciente disse: "${m[0].trim().slice(0, 80)}")`;
     }
@@ -378,7 +390,8 @@ export function sinalNaFala(falas: string[]): string | null {
 export function soFalaDoPaciente(texto: string): string {
   const doBloco: string[] = [];
   const fora = (texto ?? '').replace(/<conversa_oficial>[\s\S]*?<\/conversa_oficial>/gi, (bloco) => {
-    for (const m of bloco.matchAll(/^-[^\n]*?·\s*Paciente:\s*(?:\[áudio transcrito\]\s*)?"([^\n]*)"\s*$/gimu)) doBloco.push(m[1]);
+    // A fala pode ter quebra de linha dentro das aspas: vai até a aspa que fecha antes da próxima linha "- …" ou das regras.
+    for (const m of bloco.matchAll(/^-[^\n]*?·\s*Paciente:\s*(?:\[áudio transcrito\]\s*)?"([\s\S]*?)"\s*(?=\n- |\nA EQUIPE|\nConsidere|\n<\/conversa_oficial>|$)/gimu)) doBloco.push(m[1]);
     return '\n';
   });
   return [...doBloco, fora.trim()].filter(Boolean).join('\n');

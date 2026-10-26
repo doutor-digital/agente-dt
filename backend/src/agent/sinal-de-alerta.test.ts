@@ -532,3 +532,37 @@ test('frase do passe quando NINGUÉM foi avisado: não diz "avisei a equipe"', (
   assert.match(fraseDoPasse({ tipo: 'aberta' }, true, false), /pode ir, tá\?/);
   assert.doesNotMatch(fraseDoPasse({ tipo: 'aberta' }, true, false), /avisad/);
 });
+
+// ── Re-revisão do sênior (078e8fe): 6 regressões ─────────────────────────────────────────────────────
+
+test('1. queixa antiga só vale na mesma oração: "tenho hérnia há 3 anos" depois da vírgula não apaga o sinal', () => {
+  assert.ok(sinalNaFala(['não estou segurando o xixi desde ontem, tenho hérnia há 3 anos']));
+  assert.ok(sinalNaFala(['minha perna ficou fraca hoje, tenho hérnia faz 2 anos']));
+  assert.ok(sinalNaFala(['não estou segurando o xixi e tenho hérnia há 3 anos']));
+  assert.equal(sinalNaFala(['não consigo segurar o xixi à noite desde a gravidez faz 10 anos']), null);
+});
+
+test('2. "kkk" só desliga o sinal neurológico na MESMA frase (caso ITZ)', () => {
+  assert.match(sinalNaFala(['acordei com a fala enrolada e a boca torta', 'kkkk to com medo']) ?? '', /neurológico/);
+  assert.match(sinalNaFala(['acordei com a fala enrolada e a boca torta. kkkk to com medo']) ?? '', /neurológico/);
+  assert.equal(sinalNaFala(['fiquei com a boca torta de raiva kkk']), null);
+});
+
+test('3. soFalaDoPaciente: fala com quebra de linha dentro das aspas continua sendo do paciente', () => {
+  const bloco = '<conversa_oficial>\nO que aconteceu…:\n- 10:01 · Equipe (Ana): "Como está?"\n- 10:02 · Paciente: "oi\nnão estou segurando o xixi"\n- 10:03 · Paciente: [áudio transcrito] "perdi a força\nna perna"\nA EQUIPE HUMANA já falou…\n</conversa_oficial>\n\nok';
+  const fala = soFalaDoPaciente(bloco);
+  assert.match(fala, /não estou segurando o xixi/);
+  assert.match(fala, /perdi a força\nna perna/);
+  assert.doesNotMatch(fala, /Como está|EQUIPE/);
+  assert.ok(sinalNaFala([fala]));
+});
+
+test('4. motivo: "sem controle da urina", "não tem controle do xixi", "sem força na perna" são o próprio sinal', () => {
+  for (const m of ['Paciente sem controle da urina', 'paciente não tem controle do xixi desde ontem', 'sem força na perna', 'não segura o xixi']) {
+    assert.ok(ehHandoffPorSinalDeAlerta(m), m);
+  }
+  // as negações que continuam negando
+  for (const m of ['paciente nega dormência na virilha', 'sem sinal de alerta', 'não tem perda de força']) {
+    assert.equal(ehHandoffPorSinalDeAlerta(m), false, m);
+  }
+});

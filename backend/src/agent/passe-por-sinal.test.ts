@@ -190,3 +190,12 @@ test('o modelo pausou COM a flag mas a tarefa e o Telegram falharam: a resposta 
   assert.doesNotMatch(r.texto, /avisei|prioridade/);
   assert.match(r.texto, /atendimento segue com a nossa equipe/);
 });
+
+test('5. pausa falha 2x: o resultado marca que a rede trocou o texto (o graph não refaz a pergunta final por cima)', async () => {
+  const m = montar('ERRO ao pausar IA: Kommo fora do ar');
+  const { args } = entrada({ falas: ['perdi a força na perna'], tools: m.tools });
+  const r = await passarPorSinalNoTurno({ ...args, recorder: m.recorder });
+  // `avisou` é falso, mas o texto mudou: o graph usa `avisou || texto !== original` para pular a refeita
+  assert.equal(r.avisou, false);
+  assert.notEqual(r.texto, args.textoFinal);
+});

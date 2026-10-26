@@ -1236,7 +1236,9 @@ export async function buildAgentGraph(
         recorder,
         textoFinal,
       });
-      const passouPorSinal = passe.avisou;
+      // A rede trocou o texto (mesmo com a pausa falha): a refeita da "pergunta final" não pode virar a frase do passe em
+      // pergunta de venda com a IA ligada.
+      const passouPorSinal = passe.avisou || passe.texto !== textoFinal;
       if (passe.texto !== textoFinal) {
         textoFinal = passe.texto;
         response.content = textoFinal;

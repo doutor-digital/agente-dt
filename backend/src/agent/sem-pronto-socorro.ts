@@ -52,9 +52,9 @@ const PACIENTE_FALOU_DE_PS = new RegExp(
 /** "fui ao pronto-socorro semana passada": visita passada. */
 const PASSADO = /\b(?:fui|fomos|estive|estivemos|passei|passamos|j[aá]\s+fui|semana\s+passada|m[eê]s\s+passado|ontem|anteontem|h[aá]\s+\w+\s+(?:dias|semanas|meses|anos))\b/i;
 /** Pergunta se deve ir, ou diz que vai AGORA. */
-const INTENCAO_AGORA = /\b(?:devo|deveria|vou|vamos|irei|preciso\s+ir|precisa\s+ir|posso\s+ir|tenho\s+que\s+ir|melhor\s+ir|vale\s+a\s+pena|chamo|chamar|corro|me\s+levem|levar)\b|(?:^|\s)[eé]\s+caso\b|\bir\s+(?:ao?|no|na|pro|pra|num|numa)\b/i;
+const INTENCAO_AGORA = /\b(?:devo|deveria|vou|vamos|irei|preciso\s+ir|precisa\s+ir|posso\s+ir|tenho\s+que\s+ir|melhor\s+ir|vale\s+a\s+pena|chamo|chamar|corro|me\s+levem|levar)\b|\b(?:preciso|precisa|precisamos)\s+(?:de\s+)?(?:um\s+|o\s+|uma\s+|a\s+)?(?:pronto|upa\b|samu|emerg|ambul|hospital)|(?:^|\s)[eé]\s+caso\b|\bir\s+(?:ao?|no|na|pro|pra|num|numa)\b/i;
 /** Visita passada MAS pergunta se volta: "já fui no pronto socorro e mandaram pra casa, devo voltar?" */
-const VOLTAR = /\b(?:devo|vou|preciso|posso)\s+(?:voltar|ir)\b|\bvoltar\s+(?:ao?|no|na|pro|pra)\b/i;
+const VOLTAR = /\b(?:devo|vou|preciso|posso)\s+(?:voltar|ir)\b|\bvoltar\s+(?:ao?|no|na|pro|pra|l[aá])\b|\bvolto\b/i;
 
 /**
  * O paciente perguntou se deve ir, ou disse que vai AGORA? Visita passada ("fui ao pronto-socorro ontem e disseram
@@ -62,12 +62,11 @@ const VOLTAR = /\b(?:devo|vou|preciso|posso)\s+(?:voltar|ir)\b|\bvoltar\s+(?:ao?
  * pergunta se volta).
  */
 export function pacienteFalouDePs(falas: string[]): boolean {
-  return falas.some((f) =>
-    frasesSemAbreviacao(f ?? '').some(({ frase }) => {
-      if (!PACIENTE_FALOU_DE_PS.test(frase)) return false;
-      return PASSADO.test(frase) ? VOLTAR.test(frase) : INTENCAO_AGORA.test(frase);
-    }),
-  );
+  return falas.some((f) => {
+    const frases = frasesSemAbreviacao(f ?? '').filter(({ frase }) => PACIENTE_FALOU_DE_PS.test(frase));
+    // "Fui ao PS ontem. Hoje piorou, volto lá?": a visita passada e a pergunta se volta podem estar em frases diferentes.
+    return frases.some(({ frase }) => (PASSADO.test(frase) ? VOLTAR.test(f) : INTENCAO_AGORA.test(frase)));
+  });
 }
 
 /** "Av.", "Dr.", "Rod."… não terminam frase: "Fica na Av. Brasil" virava "Fica na Av." + "Brasil…". */

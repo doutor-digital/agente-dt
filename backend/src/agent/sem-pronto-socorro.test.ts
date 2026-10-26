@@ -220,3 +220,17 @@ test('exceção do paciente só para intenção/pergunta de ir AGORA (achado do 
     assert.equal(semProntoSocorro(sugestao, [fala]).texto, sugestao, fala);
   }
 });
+
+test('6. "preciso de pronto socorro?" e "…hoje piorou, volto lá?" abrem a exceção (decisão 2 do João)', () => {
+  const sugestao = 'Se você sente que não dá para esperar, pode ir.';
+  for (const fala of [
+    'preciso de pronto socorro?',
+    'será que preciso de uma UPA?',
+    'Fui ao pronto socorro ontem, hoje piorou, volto lá?',
+    'Fui ao pronto-socorro ontem. Hoje piorou, volto lá?',
+  ]) {
+    assert.equal(semProntoSocorro(sugestao, [fala]).texto, sugestao, fala);
+  }
+  // e continua sem abrir para visita passada com "preciso de" outra coisa
+  assert.equal(semProntoSocorro('Procure o pronto-socorro.', ['Fui ao PS ontem e disseram que preciso de ressonância']).texto, '');
+});
