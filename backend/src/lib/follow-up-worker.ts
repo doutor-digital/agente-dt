@@ -202,6 +202,7 @@ async function tarefaDaDesistenciaSemResposta(
   unit: Unit,
   conv: { id: string; leadId: string; lastMessageAt: Date; contactName: string | null },
   ultimaFala: string | null | undefined,
+  ultimaFalaEm: Date | undefined,
 ): Promise<void> {
   const marca = conv.lastMessageAt.getTime();
   const k = `${unit.id}:${conv.leadId}`;
@@ -211,8 +212,9 @@ async function tarefaDaDesistenciaSemResposta(
   // dela. Se ainda é a fala dele, a Sofia está calada (o webhook já abriu a tarefa 'ia_calada'); se a equipe respondeu pelo
   // celular o banco não vê; e a recusa/hesitação que veio depois da oferta tem fecho próprio (cancela, tarefa ou nova oferta),
   // cuja despedida não traz horário. Achado do Codex, 26/10.
-  const ultima = await prisma.message.findFirst({ where: { conversationId: conv.id }, orderBy: { createdAt: 'desc' }, select: { role: true, content: true } });
-  if (ultima?.role !== 'assistant' || !oferecuHorario(ultima.content)) {
+  const ultima = await prisma.message.findFirst({ where: { conversationId: conv.id }, orderBy: { createdAt: 'desc' }, select: { role: true, content: true, createdAt: true } });
+  // e a oferta tem de ser POSTERIOR ao "cancelei" (oferta antiga, de outra conversa, não conta)
+  if (ultima?.role !== 'assistant' || !oferecuHorario(ultima.content) || !ultimaFalaEm || ultima.createdAt.getTime() <= ultimaFalaEm.getTime()) {
     desistenciasOlhadas.set(k, marca);
     return;
   }
@@ -370,7 +372,7 @@ async function varrer(): Promise<void> {
             where: { role: 'user' },
             orderBy: { createdAt: 'desc' },
             take: 1,
-            select: { meta: true, content: true },
+            select: { meta: true, content: true, createdAt: true },
           },
         },
       });
@@ -391,7 +393,7 @@ async function varrer(): Promise<void> {
         const naoCobrar = motivoParaNaoCobrar(estado.bloqueio, conv.messages[0]?.content);
         if (naoCobrar) {
           // Desistiu e não respondeu à oferta de novo horário → a equipe precisa saber (etiqueta/nome bloqueado não é isso).
-          if (!estado.bloqueio) await tarefaDaDesistenciaSemResposta(unit, conv, conv.messages[0]?.content);
+          if (!estado.bloqueio) await tarefaDaDesistenciaSemResposta(unit, conv, conv.messages[0]?.content, conv.messages[0]?.createdAt);
           logger.debug({ unit: unit.slug, leadId: conv.leadId, motivo: naoCobrar }, 'follow-up: régua não sai para este cartão');
           continue;
         }
