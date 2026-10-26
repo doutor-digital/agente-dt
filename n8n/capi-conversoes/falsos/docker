@@ -1,0 +1,22 @@
+#!/bin/bash
+# `docker` de mentira para o aplicar-sh.test.mjs: o "container" é uma pasta ($CTR). Só entende o que o aplicar-v3.sh usa.
+m(){ echo "${1/#\/tmp\/capi-v3/$CTR/tmp/capi-v3}"; }
+case "$1" in
+  ps) case "$*" in *n8n_n8n_editor*) echo N8N1;; *postgres_postgres*) echo PG1;; esac ;;
+  cp) src="$2"; dst="$3"
+      case "$src" in N8N1:*) src="$(m "${src#N8N1:}")";; esac
+      case "$dst" in N8N1:*) dst="$(m "${dst#N8N1:}")";; esac
+      cp "$src" "$dst" ;;
+  exec)
+    shift; envs=(); while [ "$1" = "-e" ] || [ "$1" = "-i" ]; do if [ "$1" = "-e" ]; then envs+=("$2"); shift; fi; shift; done
+    tgt="$1"; shift
+    if [ "$tgt" = PG1 ]; then
+      [[ "$*" == *"($UNIDADE_OK)"* ]] && echo "WID1|DD · CTWA → Meta CAPI · Conversões ($UNIDADE_OK)"; exit 0
+    fi
+    case "$1" in
+      printenv) case "$2" in DB_POSTGRESDB_USER) echo u;; DB_POSTGRESDB_DATABASE) echo n8n;; DB_POSTGRESDB_PASSWORD) echo 'se$(nha) com espaço';; esac ;;
+      mkdir) mkdir -p "$(m "$3")" ;;
+      node) args=(); for e in "${envs[@]}"; do k="${e%%=*}"; v="${e#*=}"; args+=("$k=$(m "$v")"); done
+            env "${args[@]}" node "$(m "$2")" ;;
+    esac ;;
+esac
