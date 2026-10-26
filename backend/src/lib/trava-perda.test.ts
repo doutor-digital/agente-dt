@@ -9,7 +9,9 @@ import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { ETAPA } from './franquia-move.js';
-import { fecharComoPerdido, varrerEstoques, seguradoPelaTrava } from './parados-worker.js';
+import { fecharComoPerdido, varrerEstoques, seguradoPelaTrava, segurarNoSeco } from './parados-worker.js';
+import { aplicarMovimento, type ResumoSync } from './franquia-sync-worker.js';
+import { recarregarAutomacoes } from './automacoes-estado.js';
 import { recusaDaPerdaDaSofia, travaDaPerdaAutomatica, type CartaoParaTrava } from './trava-perda.js';
 import type { Funis } from './franquia-sync-worker.js';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
@@ -21,7 +23,8 @@ Object.defineProperty(prisma, 'cardAlert', {
   value: { findMany: async () => [], upsert: async () => ({}) },
   configurable: true,
 });
-Object.defineProperty(prisma, 'unitAutomacao', { value: { findMany: async () => [] }, configurable: true });
+let automacoesGravadas: Array<{ automacao: string; estado: string; unit: { slug: string } }> = [];
+Object.defineProperty(prisma, 'unitAutomacao', { value: { findMany: async () => automacoesGravadas }, configurable: true });
 Object.defineProperty(prisma, 'automacaoSimulacao', {
   value: {
     upsert: async (args: { create: { kommoLeadId: number; acao: string; alvo: string } }) => {
@@ -32,6 +35,7 @@ Object.defineProperty(prisma, 'automacaoSimulacao', {
   },
   configurable: true,
 });
+Object.defineProperty(prisma, 'conversation', { value: { findFirst: async () => null, findMany: async () => [] }, configurable: true });
 Object.defineProperty(prisma, 'altaCandidato', { value: { findFirst: async () => null, findUnique: async () => null, create: async () => ({}) }, configurable: true });
 
 const AGORA = Math.floor(Date.now() / 1000);
@@ -63,6 +67,7 @@ test('pagou segura: ✓ Consulta pg antecipado = Sim ou a etiqueta «$ · Pagou 
   assert.deepEqual(travaDaPerdaAutomatica(cartaoDe({ tags: ['$ · Pagou antecipado'] }), AGORA), { motivo: 'pagou o antecipado' });
   assert.equal(travaDaPerdaAutomatica(cartaoDe({ campos: [campo('¤ Pagamento antecipado', 'Sim', 4)] }), AGORA), null, 'só escolheu pagar por Pix');
   assert.equal(travaDaPerdaAutomatica(cartaoDe({ campos: [campo('✓ Consulta pg antecipado', 'Não', 3)] }), AGORA), null);
+  assert.equal(travaDaPerdaAutomatica(cartaoDe({ tags: ['Não pagou antecipado', 'Pagou no dia'] }), AGORA), null, 'etiqueta parecida não é a do comprovante');
 });
 
 test('consulta futura segura; passada, desmarcada ou que o paciente faltou não', () => {
@@ -138,6 +143,7 @@ const decisao: DecisaoParado = { para: 'PERDIDO', regra: 'teste', dias: 40, moti
 
 beforeEach(() => {
   registradas.length = 0;
+  automacoesGravadas = [];
 });
 
 test('fecharComoPerdido LIGADO: o Quente, o que pagou e o de consulta futura ficam; o neutro vai a PERDIDO', async () => {
@@ -219,4 +225,60 @@ test('Sofia: fechar como perdido um Quente/pago/com consulta é recusado, com o 
   assert.match(r?.texto ?? '', /não fecha como perdido/);
   assert.equal(await recusaDaPerdaDaSofia(kommo, 2, AGORA), null);
   assert.equal(await recusaDaPerdaDaSofia(kommoFalso([], [], true), 1, AGORA), null, 'não deu pra ler o cartão: comportamento de sempre');
+});
+
+test('estoque: o «dormente» Morno não gasta a cota de avaliação (travadosPelaPerda) e o neutro do lado é avaliado', async () => {
+  const ENTRADA = { pipelineId: 1, statusId: 13 };
+  const funisEntrada = {
+    comercialId: 1,
+    tratamentoId: 2,
+    status: new Map([['COMERCIAL:ENTRADA', { id: ENTRADA.statusId, nome: 'Incoming leads' }]]),
+    nomeDe: (_p: number, s: number) => (s === ENTRADA.statusId ? { funil: 'COMERCIAL', status: 'Incoming leads' } : null),
+    idDe: () => null,
+  } as unknown as Funis;
+  const unit = unidade();
+  const naEntrada = (l: KommoLead) => ({ ...l, status_id: ENTRADA.statusId, created_at: AGORA - 200 * DIA, updated_at: AGORA - 200 * DIA }) as KommoLead;
+  const leads = [naEntrada(leadDe(20, { campos: [campo('★ Qualificação (Quente/Morno/Frio)', 'Morno', 2)] })), naEntrada(leadDe(21))];
+  const kommo = {
+    ...kommoFalso(leads, []),
+    listLeadsPorEtapa: async (_p: number, statusId: number, _l: number, page: number) => (page === 1 ? leads.filter((l) => l.status_id === statusId) : []),
+    leadMudouEtapaDesde: async () => false,
+    contatoEscreveuDesde: async () => false,
+  } as unknown as KommoClient;
+  const resumo: Parameters<typeof varrerEstoques>[3] = { unit: unit.slug, conta: 'teste', seco: true, avaliados: 0, candidatos: 0, movidos: 0, segurosPelaFranquia: 0, erros: 0 };
+  await varrerEstoques({ unit, kommo, unidadesDaConta: [unit], agora: AGORA }, funisEntrada, null, resumo, true);
+  assert.equal(resumo.travadosPelaPerda, 1);
+  assert.equal(resumo.avaliados, 1, 'só o neutro (21) gastou avaliação');
+  assert.ok(registradas.some((r) => r.kommoLeadId === 20 && r.acao === 'pularia' && r.alvo === ETAPA.PERDIDO), 'o travado aparece como «pularia» no papel');
+});
+
+// ── a franquia-move no papel não promete um PERDIDO que o ligado não faria ──
+test('franquia-move em «só no papel»: PERDIDO de cartão Quente vira «pularia»; o neutro continua «moveria»', async () => {
+  const unit = unidade();
+  automacoesGravadas = [{ automacao: 'franquia-move', estado: 'seco', unit: { slug: unit.slug } }];
+  await recarregarAutomacoes();
+  const funisPerdido = { ...(funis as object), idDe: (f: string, e: string) => (f === 'COMERCIAL' && e === ETAPA.PERDIDO ? { pipelineId: 1, statusId: 143 } : null) } as unknown as Funis;
+  const leads = [leadDe(30, { tags: ['Quente'] }), leadDe(31)];
+  const kommo = kommoFalso(leads, []);
+  const resumo = { movimentos: 0, erros: 0, simulados: {} } as unknown as ResumoSync;
+  const mov = { funil: 'COMERCIAL' as const, para: ETAPA.PERDIDO, motivo: 'desmarcou há 40 d e não remarcou', motivoPerda: 'Não remarcou' };
+  await aplicarMovimento(unit, kommo, funisPerdido, 30, mov, resumo, ETAPA.AGENDADO);
+  await aplicarMovimento(unit, kommo, funisPerdido, 31, mov, resumo, ETAPA.AGENDADO);
+  assert.deepEqual(
+    registradas.map((r) => `${r.kommoLeadId}:${r.acao}`).sort(),
+    ['30:pularia', '31:moveria'],
+  );
+  assert.deepEqual(resumo.simulados, { [`${ETAPA.AGENDADO} → ${ETAPA.PERDIDO}`]: 1 }, 'só o neutro entra na contagem do «moveria»');
+});
+
+test('segurarNoSeco usa o cartão da lista (sem reler) e, sem ele, relê; leitura falhando não segura nem quebra', async () => {
+  const unit = unidade();
+  let leituras = 0;
+  const kommo = { getLead: async () => (leituras++, leadDe(40, { tags: ['Morno'] })) } as unknown as KommoClient;
+  assert.equal(await segurarNoSeco(unit, kommo, 40, ETAPA.ESPERA, 'parados', leadDe(40, { tags: ['Quente'] })), true);
+  assert.equal(leituras, 0, 'com o cartão da lista não vai ao Kommo');
+  assert.equal(await segurarNoSeco(unit, kommo, 40, ETAPA.ESPERA, 'parados'), true);
+  assert.equal(leituras, 1);
+  const quebrado = { getLead: async () => { throw new Error('429'); } } as unknown as KommoClient;
+  assert.equal(await segurarNoSeco(unit, quebrado, 40, ETAPA.ESPERA, 'parados'), false);
 });

@@ -33,7 +33,7 @@ import {
 } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { franquiaRespeitaEspera } from './espera-retomada.js';
-import { fecharComoPerdido } from './parados-worker.js';
+import { fecharComoPerdido, segurarNoSeco, seguradoPelaTrava } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
@@ -529,6 +529,11 @@ function contarSimulado(resumo: ResumoSync, de: string, para: string): void {
   resumo.simulados = { ...resumo.simulados, [chave]: (resumo.simulados?.[chave] ?? 0) + 1 };
 }
 
+/** No papel: o movimento é um PERDIDO que a trava da perda automática (consulta futura / pagou / Quente / Morno) seguraria? */
+function perdaTravada(unit: Unit, cartao: KommoLead, para: string, deEtapa: string, automacao: string, agoraEpoch: number): boolean {
+  return normalizarNome(para) === normalizarNome(ETAPA.PERDIDO) && seguradoPelaTrava(unit, cartao.id, cartao, deEtapa, true, automacao, agoraEpoch);
+}
+
 export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = ''): Promise<void> {
   const alvo = funis.idDe(mov.funil, mov.para);
   if (!alvo) {
@@ -538,6 +543,8 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
   // Move em seco (tela de Automações): é o ÚNICO portão por onde todo movimento passa — cartão normal,
   // passagem das 48 h e revisão do histórico —, então nenhum caminho novo escapa dele.
   if (estadoDoMove(unit.slug) === 'seco') {
+    // trava da perda automática (26/10): o papel não pode prometer um PERDIDO que o ligado não faria
+    if (normalizarNome(mov.para) === normalizarNome(ETAPA.PERDIDO) && (await segurarNoSeco(unit, kommo, leadId, deEtapa, 'franquia-move'))) return;
     contarSimulado(resumo, deEtapa, mov.para);
     logger.info({ unit: unit.slug, leadId, de: deEtapa, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     registrarSimulacao(unit, 'franquia-move', { leadId, acao: 'moveria', alvo: mov.para, deEtapa, valor: mov.motivoPerda, motivo: mov.motivo });
@@ -1924,7 +1931,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   // 16/10 em "só no papel": o robô move pela regra antiga e a tela mostra onde a regra nova levaria o cartão
   if (ctx.jornada === 'seco') {
     const novo = planejarMovimento({ ...entrada1610, regras1610: true });
-    if ((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) {
+    if (((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) && !(novo && perdaTravada(unit, lead, novo.para, atual.status, AUTOMACAO_1610, agoraEpoch))) {
       registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'moveria', alvo: novo ? novo.para : '(fica onde está)', deEtapa: atual.status, valor: novo?.semRegua ? 'sem régua' : undefined, motivo: novo?.motivo ?? `regras de 16/10: não move (a regra antiga leva pra ${mov?.para})` });
     }
   }
@@ -1939,6 +1946,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   if (!mov) return;
   if (franquiaRespeitaEspera(unit, lead, atual, mov.para, agoraEpoch)) return; // EM ESPERA com ◷ Retomar em (auditoria 16/10, item 10)
   if (seco) {
+    if (perdaTravada(unit, lead, mov.para, atual.status, ctx.automacaoDoSeco ?? 'franquia-revisao', agoraEpoch)) return;
     contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
@@ -2057,6 +2065,7 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
               if (parado > JORNADA.CONFERIR_MAX_DIAS) {
                 const mov: Movimento = { funil: 'COMERCIAL', para: ETAPA.PERDIDO, motivo: `${Math.floor(parado)} d em ${ETAPA.CONFERIR} sem acerto do cadastro`, motivoPerda: MOTIVO_PERDA.SEM_CADASTRO, semRegua: true, dias: Math.floor(parado) };
                 if (seco) {
+                  if (perdaTravada(unit, lead, mov.para, etapa, 'franquia-revisao', agoraEpoch)) continue;
                   contarSimulado(resumo, etapa, mov.para);
                   logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
                   registrarSimulacao(unit, 'franquia-revisao', { leadId: lead.id, acao: 'moveria', alvo: mov.para, deEtapa: etapa, valor: mov.motivoPerda, motivo: mov.motivo });

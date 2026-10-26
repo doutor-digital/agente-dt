@@ -55,7 +55,7 @@ function pagou(c: CartaoParaTrava): boolean {
   // `pagouOAntecipado` só aceita "✓ Consulta pg antecipado" (o campo da forma escolhida não prova pagamento);
   // a etiqueta "$ · Pagou antecipado" é a marca que o robô do comprovante põe.
   if (pagouOAntecipado(c.custom_fields_values as Parameters<typeof pagouOAntecipado>[0])) return true;
-  return (c._embedded?.tags ?? []).some((t) => normalizarNome(t.name ?? '').includes('pagou'));
+  return temTag(c, '$ · Pagou antecipado');
 }
 
 function temperatura(c: CartaoParaTrava): 'Quente' | 'Morno' | null {

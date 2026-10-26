@@ -399,6 +399,18 @@ export function buildTools({
     return `RECUSADO: ${motivo}`;
   };
 
+  /** Recusa (texto pra IA) quando o pedido levaria a PERDIDO um lead com consulta futura, pagamento ou Quente/Morno — ver `trava-perda.ts`. */
+  const recusarPerdaTravada = async (leadId: number): Promise<string | null> => {
+    const travada = await recusaDaPerdaDaSofia(kommo, leadId);
+    if (!travada) return null;
+    await recorder.step({
+      kind: 'TOOL_RESULT',
+      title: `Recusado: fechar como perdido um lead com «${travada.motivo}»`,
+      payload: { leadId, motivo: travada.motivo },
+    });
+    return `RECUSADO: ${travada.texto}`;
+  };
+
   const mover_etapa = new DynamicStructuredTool({
     name: 'mover_etapa',
     description: desc('mover_etapa'),
@@ -985,15 +997,8 @@ export function buildTools({
       if (recusa) return recusa;
       // 26/10 (item 5 da Suzanne): quem tem consulta futura, pagou ou está Quente/Morno não vai a PERDIDO por decisão da IA
       if (status === 'lost') {
-        const travada = await recusaDaPerdaDaSofia(kommo, leadId);
-        if (travada) {
-          await recorder.step({
-            kind: 'TOOL_RESULT',
-            title: `Recusado: fechar como perdido um lead com «${travada.motivo}»`,
-            payload: { leadId, motivo: travada.motivo },
-          });
-          return `RECUSADO: ${travada.texto}`;
-        }
+        const travada = await recusarPerdaTravada(leadId);
+        if (travada) return travada;
       }
       try {
         await kommo.setLeadStatus(leadId, { won: status === 'won', lossReasonId });
@@ -1042,6 +1047,11 @@ export function buildTools({
       });
       const recusa = await recusarSaidaDoTratamento(leadId, { tipo: 'funil', pipelineId });
       if (recusa) return recusa;
+      // 143 é o PERDIDO de qualquer funil: a trava da perda automática vale por aqui também
+      if (statusId === STATUS_PERDIDO) {
+        const travada = await recusarPerdaTravada(leadId);
+        if (travada) return travada;
+      }
       try {
         await kommo.setLeadPipeline(leadId, pipelineId, statusId);
         const latency = Math.round(performance.now() - t0);
