@@ -68,17 +68,19 @@ export function cartaoEncerrado(
 
 /**
  * O que o campo "Status da conversa" diz AGORA no cartão (o valor do select), ou null se está vazio / não veio.
- * Acha o campo pelo id quando a conta tem esquema e, na falta dele, pelo nome — a leitura não depende do esquema.
+ * Acha o campo pelo id quando a conta tem esquema e, sem esquema, pelo nome — a leitura não depende do esquema.
  */
 export function statusAtualDoCartao(
   lead: { custom_fields_values?: Array<{ field_id: number; field_name?: string; values: Array<{ value: unknown }> }> | null } | null | undefined,
   campoId: number | null,
   nomeDoCampo: string,
 ): string | null {
+  const campos = lead?.custom_fields_values ?? [];
+  // Com id, só o id vale (um campo de nome repetido não desvia a leitura); sem id, o nome.
   const nome = normalizarNome(nomeDoCampo);
-  const campo = (lead?.custom_fields_values ?? []).find(
-    (f) => (campoId !== null && f.field_id === campoId) || (f.field_name != null && normalizarNome(f.field_name) === nome),
-  );
+  const campo =
+    (campoId !== null ? campos.find((f) => f.field_id === campoId) : undefined) ??
+    (campoId === null ? campos.find((f) => f.field_name != null && normalizarNome(f.field_name) === nome) : undefined);
   const valor = campo?.values?.[0]?.value;
   return typeof valor === 'string' && valor.trim() !== '' ? valor : null;
 }

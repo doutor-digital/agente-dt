@@ -78,6 +78,12 @@ test('statusAtualDoCartao: acha pelo id ou, sem esquema, pelo nome; vazio vira n
   const lead = { custom_fields_values: [{ field_id: 7, field_name: '⬢ Status da conversa', values: [{ value: 'Encerrada' }] }] };
   assert.equal(statusAtualDoCartao(lead, 7, '⬢ Status da conversa'), 'Encerrada');
   assert.equal(statusAtualDoCartao(lead, null, '⬢ Status da conversa'), 'Encerrada');
+  // nome repetido: com id, só o id vale
+  const repetido = { custom_fields_values: [
+    { field_id: 99, field_name: '⬢ Status da conversa', values: [{ value: 'Respondendo' }] },
+    { field_id: 7, field_name: '⬢ Status da conversa', values: [{ value: 'Encerrada' }] },
+  ] };
+  assert.equal(statusAtualDoCartao(repetido, 7, '⬢ Status da conversa'), 'Encerrada');
   assert.equal(statusAtualDoCartao({ custom_fields_values: [] }, 7, '⬢ Status da conversa'), null);
   assert.equal(statusAtualDoCartao(null, 7, '⬢ Status da conversa'), null);
 });
