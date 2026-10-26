@@ -2245,7 +2245,8 @@ model DisparoOnda {
   @@map("disparo_ondas")
 }
 
-/// Quantas rodadas SEGUIDAS a Meta pediu para esperar (limite de taxa) numa unidade. Persistido (e não em memória) para o
+/// Quantas rodadas SEGUIDAS a Meta pediu para esperar (limite de taxa) num NÚMERO de WhatsApp (`unit_id` guarda a chave:
+/// `numero:<phone_number_id>`, ou `unidade:<id>` quando a unidade não tem número cadastrado). Persistido (e não em memória) para o
 /// teto valer depois de reinício do servidor e com mais de um processo. Um envio que passa apaga a linha.
 model DisparoLimite {
   unitId       String   @id @map("unit_id")

@@ -9,6 +9,7 @@ import { prisma } from '../prisma.js';
 import { logger } from '../logger.js';
 import { credenciaisDaUnidade } from '../whatsapp-meta.js';
 import { modoDaUnidade } from './modo.js';
+import { chaveDoLimite } from './limite.js';
 import { BATIDA_DA_MONTAGEM_MS } from './montagem.js';
 import { lerPublico, reaproveitarDeOndaCancelada, type PublicoLido } from './publico.js';
 import { conferirModeloNaMeta, definicaoParaAUnidade, impressaoDaOnda, podeAprovar, type Definicao } from './modelo.js';
@@ -155,6 +156,8 @@ export async function aprovarOnda(
 
   const r = await prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'montada' }, data: { estado: 'aprovada', aprovadaPor: args.por!.trim().toLowerCase(), aprovadaEm: new Date(), aprovadaModo: modoDaUnidade(onda.unit.slug) } });
   if (r.count !== 1) return falha(409, 'a onda mudou de estado enquanto aprovava');
+  // Aprovou de novo: as rodadas com limite de taxa de antes não contam contra esta aprovação.
+  await prisma.disparoLimite.deleteMany({ where: { unitId: chaveDoLimite(onda.unit) } });
   logger.warn({ onda: ondaId, unit: onda.unit.slug, total: onda.total, por: args.por }, 'disparo: onda APROVADA');
   return { ok: true, dados: (await prisma.disparoOnda.findUnique({ where: { id: ondaId } }))! };
 }

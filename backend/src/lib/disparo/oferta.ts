@@ -52,15 +52,17 @@ export async function ofertaDoLead(unitId: string, leadId: number | null | undef
   const achado = await prisma.disparoDestinatario.findFirst({
     where: {
       unitId,
-      estado: 'enviado',
+      // `saiu` entra na busca de propósito: se o disparo MAIS RECENTE é um SAIR, a oferta de uma campanha anterior não volta.
+      estado: { in: ['enviado', 'saiu'] },
       wamid: { not: null },
       enviadoEm: { gte: new Date(agora.getTime() - diasDaOferta() * 86_400_000) },
       OR: quem,
     },
     orderBy: { enviadoEm: 'desc' },
-    select: { nome: true, enviadoEm: true, onda: { select: { textoModelo: true, variaveis: true, oferta: true, unit: { select: { name: true } }, campanha: { select: { nome: true } } } } },
+    select: { nome: true, estado: true, enviadoEm: true, onda: { select: { textoModelo: true, variaveis: true, oferta: true, unit: { select: { name: true } }, campanha: { select: { nome: true } } } } },
   });
   // O disparo MAIS RECENTE é o que ele está respondendo: se esse não tem oferta, a oferta de uma campanha mais velha não vale.
+  if (achado?.estado === 'saiu') return null;
   const oferta = achado?.onda.oferta?.trim();
   if (!achado || !oferta || !achado.enviadoEm) return null;
   let textoEnviado = '';

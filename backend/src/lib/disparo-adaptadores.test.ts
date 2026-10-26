@@ -133,25 +133,104 @@ test('porto real: unidade sem número cadastrado conta só a si mesma (e nem con
   assert.equal(consultouUnidades, false);
 });
 
-test('porto real: o contador de rodadas com limite de taxa é do BANCO (sobrevive a reinício e a outro processo): incrementa atômico, por unidade, e apaga quando um envio passa', async () => {
+test('porto real: o contador de rodadas com limite de taxa é do BANCO e do NÚMERO: duas unidades do mesmo número contam juntas; número diferente, separado; um envio zera', async () => {
   const linhas = new Map<string, number>();
-  const chamadas: string[] = [];
   falso('disparoLimite', {
     upsert: async (a: { where: { unitId: string }; create: { seguidas: number }; update: { seguidas: { increment: number } } }) => {
-      chamadas.push('upsert');
       const n = (linhas.get(a.where.unitId) ?? 0) + (linhas.has(a.where.unitId) ? a.update.seguidas.increment : a.create.seguidas);
       linhas.set(a.where.unitId, n);
       return { unitId: a.where.unitId, seguidas: n };
     },
-    deleteMany: async (a: { where: { unitId: string } }) => (chamadas.push('delete'), linhas.delete(a.where.unitId), { count: 1 }),
+    deleteMany: async (a: { where: { unitId: string } }) => (linhas.delete(a.where.unitId), { count: 1 }),
   });
-  // dois "processos" (dois portos) enxergam a mesma contagem
-  assert.equal(await portoReal(new Map()).limiteDeTaxa('a', true), 1);
-  assert.equal(await portoReal(new Map()).limiteDeTaxa('a', true), 2);
-  assert.equal(await portoReal(new Map()).limiteDeTaxa('b', true), 1, 'por unidade');
-  assert.equal(await portoReal(new Map()).limiteDeTaxa('a', false), 0);
-  assert.equal(await portoReal(new Map()).limiteDeTaxa('a', true), 1);
-  assert.deepEqual(chamadas, ['upsert', 'upsert', 'upsert', 'delete', 'upsert']);
+  const todas = new Map([['a', unidade('a', '111')], ['b', unidade('b', '111')], ['c', unidade('c', '222')], ['d', unidade('d', null)]]);
+  assert.equal(await portoReal(todas).limiteDeTaxa('a', true), 1);
+  assert.equal(await portoReal(todas).limiteDeTaxa('b', true), 2, 'Caxias soma com Petrópolis: é o mesmo número');
+  assert.equal(await portoReal(todas).limiteDeTaxa('c', true), 1, 'outro número, outra contagem');
+  assert.equal(await portoReal(todas).limiteDeTaxa('d', true), 1, 'sem número: a própria unidade');
+  assert.deepEqual([...linhas.keys()].sort(), ['numero:111', 'numero:222', 'unidade:d']);
+  assert.equal(await portoReal(todas).limiteDeTaxa('b', false), 0, 'um envio da Caxias zera o contador do número');
+  assert.equal(linhas.has('numero:111'), false);
+});
+
+test('porto real: pausarNumero pausa as ondas aprovadas de TODAS as unidades do número, zera o contador e devolve as unidades e ondas', async () => {
+  const atualizacoes: Array<{ where: { id: { in: string[] }; estado: string }; data: Record<string, unknown> }> = [];
+  const apagados: string[] = [];
+  let ondasDe: unknown;
+  falso('unit', { findMany: async (a: { where: { metaPhoneNumberId?: string; id?: unknown } }) => (a.where.metaPhoneNumberId ? [{ id: 'a' }, { id: 'b' }] : [{ slug: 'u-b' }, { slug: 'u-a' }]) });
+  falso('disparoOnda', {
+    findMany: async (a: { where: { unitId: { in: string[] } } }) => ((ondasDe = a.where.unitId.in), [{ id: 'oa' }, { id: 'ob' }]),
+    updateMany: async (a: (typeof atualizacoes)[number]) => (atualizacoes.push(a), { count: 2 }),
+  });
+  falso('disparoLimite', { deleteMany: async (a: { where: { unitId: string } }) => (apagados.push(a.where.unitId), { count: 1 }) });
+  const r = await portoReal(new Map([['a', unidade('a', '111')]])).pausarNumero('a', 'restrito', 'meta');
+  assert.deepEqual(ondasDe, ['a', 'b'], 'busca as ondas das duas unidades do número');
+  assert.deepEqual(atualizacoes[0]!.where, { id: { in: ['oa', 'ob'] }, estado: 'aprovada' });
+  assert.equal(atualizacoes[0]!.data.estado, 'pausada');
+  assert.equal(atualizacoes[0]!.data.pausaCausa, 'meta');
+  assert.deepEqual(apagados, ['numero:111'], 'o contador do número recomeça');
+  assert.deepEqual(r, { unidades: ['u-a', 'u-b'], ondas: ['oa', 'ob'] });
+});
+
+test('aprovar de novo ZERA o contador de limite de taxa do número da unidade', async () => {
+  const { impressaoDaOnda } = await import('./disparo/modelo.js');
+  const { definicaoDaOnda, aprovarOnda } = await import('./disparo/onda.js');
+  const pessoas = [{ chave: 'c1', nome: 'Ana' }];
+  const base = { id: 'o1', campanhaId: 'c', unitId: 'a', estado: 'montada', template: 't', idioma: 'pt_BR', textoModelo: 'Oi', variaveis: [], cabecalho: null, oferta: null, total: 1 };
+  const impressao = impressaoDaOnda(definicaoDaOnda(base), pessoas);
+  const onda = { ...base, impressao, unit: { id: 'a', slug: 'u-a', metaPhoneNumberId: '111' } };
+  const apagados: string[] = [];
+  falso('disparoOnda', { findUnique: async () => onda, updateMany: async () => ({ count: 1 }) });
+  falso('disparoDestinatario', { findMany: async () => pessoas });
+  falso('disparoLimite', { deleteMany: async (a: { where: { unitId: string } }) => (apagados.push(a.where.unitId), { count: 1 }) });
+  process.env.DISPARO_APROVADORES = 'joao@x.com';
+  const r = await aprovarOnda('o1', { por: 'joao@x.com', total: 1, impressao }, async () => ({ ok: true }));
+  assert.ok(r.ok, JSON.stringify(r));
+  assert.deepEqual(apagados, ['numero:111']);
+  // aprovação recusada não mexe no contador
+  apagados.length = 0;
+  const recusa = await aprovarOnda('o1', { por: 'outro@x.com', total: 1, impressao }, async () => ({ ok: true }));
+  assert.equal(recusa.ok, false);
+  assert.deepEqual(apagados, []);
+});
+
+// ── remontagem e oferta ─────────────────────────────────────────────────────────────────────────────────────────
+
+test('remontar: a recusa DEFINITIVA da Meta (falhou sem enviadoEm) não prende a pessoa numa onda cancelada; o envio INCERTO (com enviadoEm) prende', async () => {
+  const { chavesJaNaCampanha, reaproveitarDeOndaCancelada, SEM_ENVIO } = await import('./disparo/publico.js');
+  assert.deepEqual(SEM_ENVIO, [{ estado: { in: ['pendente', 'descartado'] } }, { estado: 'falhou', enviadoEm: null }]);
+  let where: { NOT?: unknown } | unknown = {};
+  falso('disparoDestinatario', {
+    findMany: async (a: { where: unknown }) => ((where = a.where), []),
+    updateMany: async (a: { where: unknown; data: Record<string, unknown> }) => ((where = a), { count: 1 }),
+  });
+  await chavesJaNaCampanha('c', 'u');
+  assert.deepEqual((where as { NOT?: unknown }).NOT, { onda: { estado: 'cancelada' }, OR: SEM_ENVIO }, 'só sai da lista quem NUNCA recebeu e está em onda cancelada');
+  await reaproveitarDeOndaCancelada('c', 'u', 'nova', [{ chave: 'k', telefone: '5563991021043', nome: 'Ana', nomeCompleto: 'Ana', leadId: 1 }]);
+  const upd = where as unknown as { where: { OR: unknown; onda: unknown }; data: Record<string, unknown> };
+  assert.deepEqual(upd.where.OR, SEM_ENVIO);
+  assert.deepEqual(upd.where.onda, { estado: 'cancelada' });
+  assert.equal(upd.data.estado, 'pendente');
+  assert.equal(upd.data.wamid, null);
+});
+
+test('oferta: se o disparo MAIS RECENTE foi um SAIR, a oferta de uma campanha anterior não volta; se foi enviado, vale', async () => {
+  const { ofertaDoLead, _zerarGuardaDeOferta } = await import('./disparo/oferta.js');
+  let achado: Record<string, unknown> | null = null;
+  let consulta: { where: { estado: { in: string[] } }; orderBy: unknown } | undefined;
+  falso('disparoDestinatario', { findFirst: async (a: typeof consulta) => (consulta = a, achado) });
+  falso('conversation', { findUnique: async () => null });
+  const agora = new Date(Date.UTC(2026, 9, 26, 15));
+  const dia = (n: number) => new Date(agora.getTime() - n * 86_400_000);
+  const ond = { textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], oferta: 'R$ 150 até sexta', unit: { name: 'U' }, campanha: { nome: 'Rosa' } };
+  _zerarGuardaDeOferta();
+  achado = { id: 'x', nome: 'Ana', estado: 'saiu', enviadoEm: dia(1), onda: ond };
+  assert.equal(await ofertaDoLead('u', 1001, '5563991021043', agora), null, 'o mais recente é SAIR: sem oferta');
+  assert.deepEqual(consulta!.where.estado, { in: ['enviado', 'saiu'] }, 'a busca enxerga o SAIR, senão cairia na campanha anterior');
+  assert.deepEqual(consulta!.orderBy, { enviadoEm: 'desc' });
+  _zerarGuardaDeOferta();
+  achado = { id: 'x', nome: 'Ana', estado: 'enviado', enviadoEm: dia(1), onda: ond };
+  assert.equal((await ofertaDoLead('u', 1001, '5563991021043', agora))!.oferta, 'R$ 150 até sexta');
 });
 
 // ── lista de teste: "*" misturado não vira "todos" ──────────────────────────────────────────────────────────

@@ -10,13 +10,13 @@ const vazia = { adiados: 0, mandou: 0, receberia: 0, falhou: 0, saiu: 0, descart
 const UNIT = { id: 'u1', slug: 'doutor-hernia-canaa' };
 
 test('cada texto traz a unidade, a onda, o motivo e o que fazer', () => {
-  const restrito = alertaNumeroRestrito({ unidade: 'doutor-hernia-canaa', ondas: ['o1', 'o2'] });
+  const restrito = alertaNumeroRestrito({ unidades: ['doutor-hernia-canaa'], ondas: ['o1', 'o2'] });
   for (const t of ['doutor-hernia-canaa', 'o1, o2', '131048', 'O que fazer', 'Retomar']) assert.ok(restrito.includes(t), t);
-  const taxa = alertaLimiteDeTaxa({ unidade: 'doutor-hernia-canaa', ondas: ['o1'], rodadas: 10 });
+  const taxa = alertaLimiteDeTaxa({ unidades: ['doutor-hernia-canaa'], ondas: ['o1'], rodadas: 10 });
   for (const t of ['doutor-hernia-canaa', 'o1', '10 rodadas', 'O que fazer']) assert.ok(taxa.includes(t), t);
   const sem = alertaSemAndar({ unidade: 'doutor-hernia-canaa', rodadas: 5, adiados: 3 });
   for (const t of ['doutor-hernia-canaa', '5 rodadas', 'franquia', 'O que fazer']) assert.ok(sem.includes(t), t);
-  assert.ok(alertaNumeroRestrito({ unidade: 'u', ondas: [] }).includes('(nenhuma aprovada)'));
+  assert.ok(alertaNumeroRestrito({ unidades: ['u'], ondas: [] }).includes('(nenhuma aprovada)'));
 });
 
 test('SEM ANDAR: avisa o João UMA vez ao chegar a 5 rodadas; não repete nas seguintes; episódio novo (depois que alguém anda) avisa de novo', async () => {
@@ -55,7 +55,7 @@ test('porto real: avisar usa o Telegram (enviarTelegram, com Telegram de mentira
   }) as unknown as typeof fetch;
   const env = { TELEGRAM_BOT_TOKEN: 'tok-de-teste', TELEGRAM_CHAT_JOAO: '42' } as NodeJS.ProcessEnv;
   const porto = portoReal(new Map(), (t) => enviarTelegram(t, { env, fetch: fetchFalso }));
-  await porto.avisar(alertaNumeroRestrito({ unidade: 'doutor-hernia-canaa', ondas: ['o1'] }));
+  await porto.avisar(alertaNumeroRestrito({ unidades: ['doutor-hernia-canaa'], ondas: ['o1'] }));
   assert.equal(pedidos.length, 1);
   assert.match(pedidos[0]!.url, /\/bottok-de-teste\/sendMessage$/);
   assert.equal(pedidos[0]!.corpo.chat_id, '42');
@@ -86,4 +86,12 @@ test('porto real: o link do painel usa a origem de MCP_URL_PUBLICA; sem ela, sem
   } finally {
     (env as { MCP_URL_PUBLICA?: string }).MCP_URL_PUBLICA = antes;
   }
+});
+
+test('aviso por NÚMERO: cita todas as unidades que o dividem, e diz que foram pausadas juntas', () => {
+  const r = alertaNumeroRestrito({ unidades: ['doutor-hernia-caxias', 'doutor-hernia-petropolis'], ondas: ['o1', 'o2'] });
+  for (const t of ['doutor-hernia-caxias + doutor-hernia-petropolis', 'As 2 unidades que usam este número foram pausadas juntas', 'o1, o2']) assert.ok(r.includes(t), t);
+  const l = alertaLimiteDeTaxa({ unidades: ['a', 'b'], ondas: ['o1'], rodadas: 10 });
+  assert.ok(l.includes('a + b') && l.includes('número que as 2 unidades dividem'));
+  assert.ok(!alertaNumeroRestrito({ unidades: ['a'], ondas: [] }).includes('foram pausadas juntas'), 'uma unidade só: sem o aviso de grupo');
 });

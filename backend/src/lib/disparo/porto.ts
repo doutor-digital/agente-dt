@@ -14,6 +14,7 @@ import { leadsQuePediramSair } from './publico.js';
 import { contarSairam } from './saidas.js';
 import { telefoneWhatsapp } from './regras.js';
 import { modoDaUnidade } from './modo.js';
+import { chaveDoLimite } from './limite.js';
 import { definicaoDaOnda } from './onda.js';
 import { impressaoDaOnda } from './modelo.js';
 import type { Destino, Modo, Porto } from './lote.js';
@@ -196,14 +197,26 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (text
       await createKommoClient(unidade(d.unitId)).addLeadNote(d.kommoLeadId, texto);
     },
 
-    // Persistido (tabela `disparo_limites`): vale depois de reinício e com mais de um processo. O incremento é atômico no banco.
+    // Persistido (tabela `disparo_limites`, chave = número de WhatsApp): vale depois de reinício, com mais de um processo e para as
+    // duas unidades que dividem o número. O incremento é atômico no banco.
     limiteDeTaxa: async (unitId, houve) => {
+      const chave = chaveDoLimite(unidade(unitId));
       if (!houve) {
-        await prisma.disparoLimite.deleteMany({ where: { unitId } });
+        await prisma.disparoLimite.deleteMany({ where: { unitId: chave } });
         return 0;
       }
-      const linha = await prisma.disparoLimite.upsert({ where: { unitId }, create: { unitId, seguidas: 1 }, update: { seguidas: { increment: 1 } } });
+      const linha = await prisma.disparoLimite.upsert({ where: { unitId: chave }, create: { unitId: chave, seguidas: 1 }, update: { seguidas: { increment: 1 } } });
       return linha.seguidas;
+    },
+
+    pausarNumero: async (unitId, motivo, causa) => {
+      const ids = await unidadesDoMesmoNumero(unitId);
+      const ondas = await prisma.disparoOnda.findMany({ where: { unitId: { in: ids }, estado: 'aprovada' }, select: { id: true } });
+      await prisma.disparoOnda.updateMany({ where: { id: { in: ondas.map((o) => o.id) }, estado: 'aprovada' }, data: { estado: 'pausada', pausaMotivo: motivo.slice(0, 300), pausaCausa: causa } });
+      // Pausou: o contador recomeça do zero (a próxima aprovação não herda as rodadas de antes).
+      await prisma.disparoLimite.deleteMany({ where: { unitId: chaveDoLimite(unidade(unitId)) } });
+      const slugs = (await prisma.unit.findMany({ where: { id: { in: ids } }, select: { slug: true } })).map((u) => u.slug).sort();
+      return { unidades: slugs, ondas: ondas.map((o) => o.id) };
     },
 
     linkDoPainel: (ondaId) => {

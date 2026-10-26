@@ -75,6 +75,11 @@ export interface Porto {
   reivindicar(id: string): Promise<boolean>;
   gravar(id: string, dados: DadosDeGravacao): Promise<void>;
   pausarOndas(unitId: string, campanhaId: string | null, motivo: string, causa?: CausaDaPausa): Promise<void>;
+  /**
+   * Pausa as ondas aprovadas de TODAS as unidades que usam o mesmo número de WhatsApp que esta (a restrição e o limite da Meta
+   * são do número) e zera o contador de limite de taxa dele. Devolve as unidades e as ondas pausadas, para o aviso.
+   */
+  pausarNumero(unitId: string, motivo: string, causa: CausaDaPausa): Promise<{ unidades: string[]; ondas: string[] }>;
   pausarOnda(ondaId: string, motivo: string, causa?: CausaDaPausa): Promise<void>;
   /** Aprovação dada fora do modo ligado: volta a `montada` para nova aprovação e devolve à fila o que o seco descartou. */
   devolverParaAprovacao(ondaId: string, motivo: string): Promise<void>;
@@ -235,6 +240,9 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
 /** Depois de tantas pessoas adiadas na mesma rodada o problema não é a pessoa: é a franquia, o banco ou o Kommo. */
 const ADIADOS_PARA_PARAR = 3;
 
+/** As unidades do aviso: as pausadas, e sempre a que levou o erro (mesmo que ela não tivesse onda aprovada para pausar). */
+const unidadesParaAvisar = (slug: string, pausadas: readonly string[]): string[] => [...new Set([slug, ...pausadas])];
+
 const paraAvisar = (porto: Porto, os: ReadonlyArray<{ id: string }>): OndaParaAvisar[] => os.map((o) => ({ id: o.id, painel: porto.linkDoPainel(o.id) }));
 
 /** Uma rodada de uma unidade, com as ondas APROVADAS dela em ordem de criação. */
@@ -333,19 +341,20 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
       if (res === 'pulou') continue; // perdeu a disputa para outro processo: não gasta vaga nem tempo
       if (res === 'restrito') {
         const motivo = 'a Meta RESTRINGIU o número por spam/qualidade (código 131048): a unidade foi pausada; resolva com a Meta e monte a onda de novo';
-        await porto.pausarOndas(u.id, null, motivo, 'meta');
-        porto.log('error', { unit: u.slug }, 'disparo: número RESTRITO pela Meta (131048) — unidade PAUSADA, não tento de novo');
-        // Uma mensagem só: a pausa tira as ondas de "aprovada", e na rodada seguinte não sobra onda para repetir o aviso.
-        await porto.avisar(alertaNumeroRestrito({ unidade: u.slug, ondas: ondas.map((o) => o.id) })).catch(() => undefined);
-        return { ...r, parou: 'número restrito pela Meta (131048): unidade pausada' };
+        // A restrição é do NÚMERO: pausa todas as unidades que o usam, não só esta (Caxias seguiria mandando pelo número de Petrópolis).
+        const pausadas = await porto.pausarNumero(u.id, motivo, 'meta');
+        porto.log('error', { unit: u.slug, unidades: pausadas.unidades }, 'disparo: número RESTRITO pela Meta (131048) — unidades do número PAUSADAS, não tento de novo');
+        // Uma mensagem por número: a pausa tira as ondas de "aprovada", e na rodada seguinte não sobra onda para repetir o aviso.
+        await porto.avisar(alertaNumeroRestrito({ unidades: unidadesParaAvisar(u.slug, pausadas.unidades), ondas: pausadas.ondas })).catch(() => undefined);
+        return { ...r, parou: 'número restrito pela Meta (131048): unidades do número pausadas' };
       }
       if (res === 'limite') {
         const seguidas = await porto.limiteDeTaxa(u.id, true);
         if (seguidas >= f.limiteDeTaxaSeguidos) {
-          await porto.pausarOndas(u.id, null, `a Meta pediu para esperar em ${seguidas} rodadas seguidas (limite de taxa): a unidade foi pausada; confira a qualidade do número e monte a onda de novo`, 'meta');
-          porto.log('error', { unit: u.slug, rodadas: seguidas }, 'disparo: limite de taxa da Meta por rodadas demais — unidade PAUSADA');
-          await porto.avisar(alertaLimiteDeTaxa({ unidade: u.slug, ondas: ondas.map((o) => o.id), rodadas: seguidas })).catch(() => undefined);
-          return { ...r, parou: `limite de taxa da Meta por ${seguidas} rodadas seguidas: unidade pausada` };
+          const pausadas = await porto.pausarNumero(u.id, `a Meta pediu para esperar em ${seguidas} rodadas seguidas (limite de taxa): as unidades deste número foram pausadas; confira a qualidade do número e monte a onda de novo`, 'meta');
+          porto.log('error', { unit: u.slug, unidades: pausadas.unidades, rodadas: seguidas }, 'disparo: limite de taxa da Meta por rodadas demais — unidades do número PAUSADAS');
+          await porto.avisar(alertaLimiteDeTaxa({ unidades: unidadesParaAvisar(u.slug, pausadas.unidades), ondas: pausadas.ondas, rodadas: seguidas })).catch(() => undefined);
+          return { ...r, parou: `limite de taxa da Meta por ${seguidas} rodadas seguidas: unidades do número pausadas` };
         }
         return { ...r, parou: 'a Meta pediu para esperar (limite de taxa): tento de novo na próxima rodada' };
       }

@@ -17,7 +17,7 @@ function destino(n: number): Destino {
 }
 
 /** Um Porto de mentira que registra TUDO que sai da casa. */
-function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?: (d: Destino) => SituacaoNaFranquia; sairam?: number; naHora?: number; noDia?: number; teste?: string[] | null; envio?: (d: Destino) => ResultadoDoTemplate | Promise<ResultadoDoTemplate>; pediuSair?: (d: Destino) => boolean; reivindicar?: (d: Destino) => boolean; ultimos?: Array<'enviado' | 'falhou'>; ondaViva?: (chamada: number) => boolean }) {
+function montar(opcoes: { numero?: { unidades: string[]; ondas: string[] }; modo: Modo; quantos?: number; agora?: Date; franquia?: (d: Destino) => SituacaoNaFranquia; sairam?: number; naHora?: number; noDia?: number; teste?: string[] | null; envio?: (d: Destino) => ResultadoDoTemplate | Promise<ResultadoDoTemplate>; pediuSair?: (d: Destino) => boolean; reivindicar?: (d: Destino) => boolean; ultimos?: Array<'enviado' | 'falhou'>; ondaViva?: (chamada: number) => boolean }) {
   const estados = new Map<string, Omit<DadosDeGravacao, 'estado'> & { estado: string }>();
   const todos = Array.from({ length: opcoes.quantos ?? 3 }, (_, i) => destino(i + 1));
   todos.forEach((d) => estados.set(d.id, { estado: 'pendente' }));
@@ -27,6 +27,7 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
   let relogio = 0;
   const desdeDasFalhas: Date[] = [];
   let limitesSeguidos = 0;
+  const numeroPausado = opcoes.numero ?? { unidades: [UNIDADE.slug], ondas: ['o1'] };
   const chamadas = { desdeDasFalhas, enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], causas: [] as Array<string | undefined>, devolvidas: [] as string[], concluidas: [] as string[], logs: [] as string[], avisos: [] as string[] };
   const porto: Porto = {
     agora: () => opcoes.agora ?? AGORA,
@@ -63,6 +64,7 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
       return opcoes.envio ? opcoes.envio(d) : { ok: true, wamid: `wamid.${d.id}`, detalhe: {}, incerto: false };
     },
     espelhar: async (d, texto) => void chamadas.espelhar.push(`${d.kommoLeadId}|${texto}`),
+    pausarNumero: async (_u, motivo, causa) => (chamadas.pausas.push(motivo), chamadas.causas.push(causa), numeroPausado),
     avisar: async (texto) => void chamadas.avisos.push(texto),
     linkDoPainel: (id) => `https://painel.teste/api/disparo/ondas/${id}/painel`,
     limiteDeTaxa: async (_u, houve) => (limitesSeguidos = houve ? limitesSeguidos + 1 : 0),
@@ -508,7 +510,7 @@ test('limite de taxa comum: tenta de novo nas rodadas seguintes, mas na 10ª rod
   assert.equal(t.chamadas.pausas.length, 1);
   assert.match(t.chamadas.pausas[0]!, /10 rodadas seguidas/);
   assert.deepEqual(t.chamadas.causas, ['meta']);
-  assert.match(r10.parou ?? '', /unidade pausada/);
+  assert.match(r10.parou ?? '', /unidades do número pausadas/);
   assert.ok(t.chamadas.logs.some((l) => /^ERRO disparo: limite de taxa da Meta por rodadas demais/.test(l)));
 });
 
@@ -629,4 +631,24 @@ test('TELEGRAM: rodada normal e poucas falhas não avisam ninguém', async () =>
   const t = montar({ modo: 'ligado', quantos: 3, teste: null, ultimos: ['falhou', 'falhou', 'enviado', 'falhou', 'falhou'] });
   await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
   assert.deepEqual(t.chamadas.avisos, []);
+});
+
+// ── a restrição da Meta é do NÚMERO, não da unidade ────────────────────────────────────────────────────────────
+
+test('131048 pausa TODAS as unidades do número (Caxias não segue mandando pelo número de Petrópolis) e avisa UMA vez citando as duas', async () => {
+  const t = montar({ modo: 'ligado', quantos: 5, teste: null, envio: () => restrito, numero: { unidades: ['doutor-hernia-canaa', 'doutor-hernia-caxias'], ondas: ['o1', 'o9'] } });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(t.chamadas.pausas.length, 1, 'uma pausa por número (feita pelo porto, para todas as unidades dele)');
+  assert.deepEqual(t.chamadas.causas, ['meta']);
+  assert.equal(t.chamadas.avisos.length, 1, 'um aviso por número');
+  for (const trecho of ['doutor-hernia-canaa + doutor-hernia-caxias', 'o1, o9', 'pausadas juntas']) assert.ok(t.chamadas.avisos[0]!.includes(trecho), trecho);
+  assert.match(r.parou ?? '', /unidades do número pausadas/);
+});
+
+test('limite de taxa na 10ª rodada também pausa o NÚMERO e avisa citando as unidades; a unidade que levou o erro sempre aparece', async () => {
+  const t = montar({ modo: 'ligado', quantos: 5, teste: null, envio: () => devagar, numero: { unidades: ['doutor-hernia-caxias'], ondas: ['o7'] } });
+  for (let i = 1; i <= 10; i++) await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(t.chamadas.avisos.length, 1);
+  assert.ok(t.chamadas.avisos[0]!.includes('doutor-hernia-canaa + doutor-hernia-caxias'), t.chamadas.avisos[0]);
+  assert.ok(t.chamadas.avisos[0]!.includes('o7'));
 });

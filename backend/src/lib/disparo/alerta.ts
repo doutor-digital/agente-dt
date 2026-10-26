@@ -5,27 +5,29 @@
  */
 
 export interface DadosDoAlerta {
-  unidade: string;
+  /** as unidades que dividem o número de WhatsApp pausado (a restrição da Meta é do número) */
+  unidades: readonly string[];
   /** ids das ondas da unidade que estavam aprovadas */
   ondas: readonly string[];
 }
 
+const nomes = (d: DadosDoAlerta) => d.unidades.join(' + ');
 const ondas = (d: DadosDoAlerta) => (d.ondas.length ? d.ondas.join(', ') : '(nenhuma aprovada)');
 
 export function alertaNumeroRestrito(d: DadosDoAlerta): string {
   return [
-    `🚨 Disparo PAUSADO — ${d.unidade}`,
+    `🚨 Disparo PAUSADO — ${nomes(d)}`,
     `Onda(s): ${ondas(d)}`,
-    'Motivo: a Meta RESTRINGIU o número por spam/qualidade (erro 131048). Continuar mandando agrava a restrição.',
+    d.unidades.length > 1 ? `Motivo: a Meta RESTRINGIU o número por spam/qualidade (erro 131048). As ${d.unidades.length} unidades que usam este número foram pausadas juntas. Continuar mandando agrava a restrição.` : 'Motivo: a Meta RESTRINGIU o número por spam/qualidade (erro 131048). Continuar mandando agrava a restrição.',
     'O que fazer: ver a qualidade do número no Gerenciador do WhatsApp (Meta Business). Quando a Meta liberar, montar a onda de novo e aprovar. Esta pausa não tem botão Retomar.',
   ].join('\n');
 }
 
 export function alertaLimiteDeTaxa(d: DadosDoAlerta & { rodadas: number }): string {
   return [
-    `⚠️ Disparo PAUSADO — ${d.unidade}`,
+    `⚠️ Disparo PAUSADO — ${nomes(d)}`,
     `Onda(s): ${ondas(d)}`,
-    `Motivo: a Meta pediu para esperar (limite de taxa) em ${d.rodadas} rodadas seguidas.`,
+    `Motivo: a Meta pediu para esperar (limite de taxa) em ${d.rodadas} rodadas seguidas${d.unidades.length > 1 ? `, no número que as ${d.unidades.length} unidades dividem` : ''}.`,
     'O que fazer: conferir o limite de mensagens e a qualidade do número na Meta; esperar o limite voltar. Depois, montar a onda de novo e aprovar (esta pausa não tem botão Retomar).',
   ].join('\n');
 }

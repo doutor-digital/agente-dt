@@ -87,13 +87,19 @@ export async function chavesQueSairamAntes(unitId: string): Promise<Set<string>>
  */
 export async function chavesJaNaCampanha(campanhaId: string, unitId: string): Promise<Set<string>> {
   const linhas = await prisma.disparoDestinatario.findMany({
-    where: { campanhaId, unitId, NOT: { estado: { in: [...ESTADOS_REAPROVEITAVEIS] }, onda: { estado: 'cancelada' } } },
+    where: { campanhaId, unitId, NOT: { onda: { estado: 'cancelada' }, OR: SEM_ENVIO } },
     select: { chave: true },
   });
   return new Set(linhas.map((l) => l.chave));
 }
 
 const ESTADOS_REAPROVEITAVEIS = ['pendente', 'descartado'] as const;
+/**
+ * Quem NUNCA recebeu nada: pendente, descartado, e a recusa DEFINITIVA da Meta (`falhou` sem `enviadoEm`: a Meta não aceitou).
+ * A recusa prende a pessoa só na onda em que aconteceu; ao cancelar e remontar, ela volta a poder entrar. O envio INCERTO
+ * (`falhou` COM `enviadoEm`) nunca volta: pode ter saído.
+ */
+export const SEM_ENVIO = [{ estado: { in: [...ESTADOS_REAPROVEITAVEIS] } }, { estado: 'falhou', enviadoEm: null }];
 
 /** Move para a onda nova as linhas de ondas canceladas que nunca enviaram nada (a chave única não deixa criar outra). */
 export async function reaproveitarDeOndaCancelada(
@@ -105,8 +111,8 @@ export async function reaproveitarDeOndaCancelada(
   let movidas = 0;
   for (const p of pessoas) {
     const r = await prisma.disparoDestinatario.updateMany({
-      where: { campanhaId, unitId, chave: p.chave, estado: { in: [...ESTADOS_REAPROVEITAVEIS] }, onda: { estado: 'cancelada' } },
-      data: { ondaId, telefone: p.telefone, nome: p.nome, nomeCompleto: p.nomeCompleto || null, kommoLeadId: p.leadId, estado: 'pendente', motivo: null, simuladoEm: null },
+      where: { campanhaId, unitId, chave: p.chave, OR: SEM_ENVIO, onda: { estado: 'cancelada' } },
+      data: { ondaId, telefone: p.telefone, nome: p.nome, nomeCompleto: p.nomeCompleto || null, kommoLeadId: p.leadId, estado: 'pendente', motivo: null, simuladoEm: null, wamid: null },
     });
     movidas += r.count;
   }
