@@ -1647,7 +1647,7 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   const encerrou = renderPacienteEncerrou(historico);
   if (encerrou) blocos.push(encerrou);
   // Escreveu "cancelei"/"não vou poder ir": a Sofia tenta REMARCAR antes de aceitar (paciente-desistiu.ts, 26/10/2026).
-  const desistiu = renderPacienteDesistiu(historico);
+  const desistiu = renderPacienteDesistiu(historico, { slug: unit.slug });
   if (desistiu) blocos.push(desistiu);
   // Só quando a ficha dá o valor da CONSULTA sem ambiguidade (os dois valores, antecipado e no dia). Com R$ solto nas
   // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,

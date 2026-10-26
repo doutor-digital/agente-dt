@@ -31,9 +31,10 @@ test('"Cancelei." depois do lembrete → o bloco manda REMARCAR, não perguntar 
   assert.match(bloco, /Se não tem/, 'sem consulta marcada o bloco manda ignorar');
 });
 
-test('as mensagens seguidas do turno contam; a de antes da última fala da Sofia não', () => {
+test('as mensagens seguidas do turno contam; a de antes da última fala da Sofia só como o par da oferta', () => {
   assert.equal(pacienteDesistiu([ia('Quer horário?'), p('oi'), p('tive um imprevisto, não vou poder ir')])?.trecho, 'tive um imprevisto, não vou poder ir');
-  assert.equal(pacienteDesistiu([p('Cancelei.'), ia('Sem problema! Posso te oferecer sexta às 14h ou segunda às 9h?'), p('segunda às 9h')]), null);
+  // ele escolheu um horário da oferta: ainda é o par "avisou → ofereceu → respondeu", e o bloco manda remarcar
+  assert.equal(pacienteDesistiu([p('Cancelei.'), ia('Sem problema! Posso te oferecer sexta às 14h ou segunda às 9h?'), p('segunda às 9h')])?.momento, 'respondeu_a_oferta');
 });
 
 test('conversa normal não ganha o bloco', () => {
@@ -52,23 +53,40 @@ test('o prompt do turno ganha o bloco só quando ele desistiu, e o texto de "ped
   assert.doesNotMatch(sem, /<paciente_desistiu>/);
 });
 
-test('depois da oferta de horário, "pode cancelar mesmo" é a recusa: o bloco NÃO manda oferecer de novo', () => {
-  const falas = [
-    ia('Olá! Sua consulta é amanhã, 23/10, às 14:00. Posso confirmar?'),
-    p('Cancelei.'),
-    ia('Tudo bem! Se quiser, tenho sexta às 10h ou segunda às 14h. Qual fica melhor?'),
-    p('não, pode cancelar mesmo'),
-  ];
-  const d = pacienteDesistiu(falas);
-  assert.equal(d?.insistiu, true);
-  const bloco = renderPacienteDesistiu(falas);
+const OFERTA = 'Tudo bem! Se quiser, tenho sexta às 10h ou segunda às 14h. Qual fica melhor?';
+
+test('depois da oferta, "pode cancelar mesmo" é a recusa: o bloco NÃO manda oferecer de novo', () => {
+  const falas = [ia('Olá! Sua consulta é amanhã, 23/10, às 14:00. Posso confirmar?'), p('Cancelei.'), ia(OFERTA), p('não, pode cancelar mesmo')];
+  assert.equal(pacienteDesistiu(falas)?.momento, 'insistiu');
+  const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina' });
   assert.match(bloco, /JÁ tinha avisado/);
   assert.match(bloco, /NÃO ofereça horário de novo/);
   assert.match(bloco, /criar_tarefa/);
   assert.doesNotMatch(bloco, /DOIS horários reais/);
   // a primeira vez continua mandando remarcar
-  assert.equal(pacienteDesistiu(LILIANE)?.insistiu, false);
-  // uma desistência antiga, com outra conversa no meio, não conta como insistência
-  const antiga = [p('Cancelei.'), ia('Tenho sexta às 10h'), p('sexta 10h'), ia('Remarcado!'), p('tive um imprevisto, não vou poder ir')];
-  assert.equal(pacienteDesistiu(antiga)?.insistiu, false);
+  assert.equal(pacienteDesistiu(LILIANE)?.momento, 'avisou');
+});
+
+test('a recusa que NÃO parece desistência ("não quero remarcar", "depois eu vejo") ainda recebe o fecho: tarefa com ALERTA + NO_FOLLOW_UP', () => {
+  for (const resposta of ['não quero remarcar', 'não, obrigado', 'depois eu vejo e te aviso', 'deixa pra lá']) {
+    const falas = [ia('Sua consulta é amanhã. Posso confirmar?'), p('Cancelei.'), ia(OFERTA), p(resposta)];
+    const d = pacienteDesistiu(falas);
+    assert.equal(d?.momento, 'respondeu_a_oferta', resposta);
+    const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina' });
+    assert.match(bloco, /RESPOSTA dele à oferta/);
+    assert.match(bloco, /remarcar_consulta/, 'escolheu horário → remarca');
+    assert.match(bloco, /começando exatamente por "ALERTA ·"/);
+    assert.match(bloco, /ALERTA · doutor-hernia-araguaina · \[Contato:/);
+    assert.match(bloco, /NO_FOLLOW_UP/);
+  }
+});
+
+test('só vale se a Sofia de fato ofereceu horário e se a desistência foi o turno logo antes', () => {
+  // a Sofia respondeu outra coisa (preço), não ofereceu horário → o "de novo" é um aviso novo, não recusa
+  const semOferta = [p('Cancelei.'), ia('Entendi. O valor da consulta é R$ 250.'), p('não vou poder ir')];
+  assert.equal(pacienteDesistiu(semOferta)?.momento, 'avisou');
+  // desistência antiga, remarcada, e depois uma conversa qualquer: sem bloco
+  const antiga = [p('Cancelei.'), ia(OFERTA), p('sexta 10h'), ia('Remarcado para sexta às 10h!'), p('obrigada')];
+  assert.equal(pacienteDesistiu(antiga), null);
+  assert.equal(renderPacienteDesistiu(antiga), '');
 });

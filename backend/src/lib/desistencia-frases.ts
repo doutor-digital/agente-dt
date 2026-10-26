@@ -6,14 +6,7 @@
  * "solicitação de cancelamento" são conversa de tratamento, "não irei pagar a mais" não é "não vou ir", e "não quero
  * cancelar", "posso cancelar?", "se eu cancelar…" e "cancelei o plano" não são desistência.
  */
-function normalizar(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+import { semAcento as normalizar } from './sem-acento.js';
 
 const VERBO_DE_IR = '(ir|comparecer|vir|estar (ai|la|presente|na consulta)|chegar)';
 const PODER = '(vou|vamos|vai|irei|iremos|poderei|poderemos|posso|podemos|consigo|conseguimos|conseguirei|conseguiremos)';
@@ -30,6 +23,9 @@ const DESISTE_DA_CONSULTA: RegExp[] = [
   // "Nao irei." / "Infelizmente não vou." — a frase inteira, sem complemento (com complemento é outra coisa: "não irei pagar")
   /\bn(ao|) (irei|iremos|vou|vamos)[ .!]*$/,
   /\bn(ao|) (vou|irei|iremos) precisar mais\b/,
+  // "Infelizmente não vou poder." (o trecho inteiro) e "não tenho como ir" — sem "conseguir" solto, que é "conseguir pagar"
+  /\bn(ao|) (vou|vamos|posso|podemos|poderei) poder( hoje| amanha| mais| agora)?[ .!]*$/,
+  /\bn(ao|) tenho como (ir|comparecer|vir|chegar)\b/,
   // "não vai dar pra ir", "não vai dar pra mim ir hoje", "não vai dar eu ir"
   new RegExp(`\\bn(ao|) vai (dar|rolar) (pra |para |de )?(mim |eu |ela |ele )?${VERBO_DE_IR}\\b`),
   // "tive um imprevisto", "surgiu um imprevisto", "houve imprevistos" — quem relata, não "imprevistos acontecem"
@@ -37,8 +33,9 @@ const DESISTE_DA_CONSULTA: RegExp[] = [
 ];
 
 /**
- * O que parece desistência mas não é — revisão de 26/10: "não quero cancelar", "não cancele", "se eu cancelar, perco o valor?",
- * "cancelei o plano de saúde", "posso cancelar?" e "não posso ir na quinta mas vou na sexta" calavam a régua de quem queria vir.
+ * O que parece desistência mas não é, lido no texto INTEIRO — revisão de 26/10: "não quero cancelar", "não cancele",
+ * "se eu cancelar, perco o valor?", "cancelei o plano de saúde", "cancelar o tratamento" (outro fluxo, o do cancelamento
+ * acolhido), "cancela o boleto" e "não posso ir na quinta mas vou na sexta" calavam a régua de quem queria vir.
  */
 const NAO_E_DESISTENCIA: RegExp[] = [
   // negado: "não quero cancelar", "não pode cancelar", "não vou desistir", "não cancele", "não desmarque"
@@ -47,19 +44,28 @@ const NAO_E_DESISTENCIA: RegExp[] = [
   // condicional: "se eu cancelar…"
   /\bse (eu |a gente |nos )?(cancel|desmarc|desist)/,
   // cancelou outra coisa
-  /\bcancel\w* (o |a |os |as |meu |minha |seu |sua )?(plano|convenio|contrato|cartao|assinatura|pix|pagamento|compra|pedido|exame)/,
+  /\bcancel\w* (o |a |os |as |meu |minha |seu |sua |nosso |nossa )?(plano|convenio|contrato|cartao|assinatura|pix|pagamento|compra|pedido|exame|tratamento|boleto|recibo|nota|fatura|parcela|carne)/,
   // vem em outro dia: "não posso ir na quinta mas vou na sexta"
   /\bmas (vou|irei|vamos|posso|consigo|podemos)\b/,
 ];
 
-/** Passado asseverado: com "?" ainda é desistência ("Cancelei?" é raro, mas "Posso cancelar?" não é). */
+/** Passado asseverado: com "?" ainda é desistência. */
 const DESISTENCIA_NO_PASSADO = /\b(cancelei|desmarquei|desisti)\b/;
 
-/** O texto diz que o paciente não vem à consulta que tinha? */
+/**
+ * O texto diz que o paciente não vem à consulta que tinha?
+ *
+ * Lido por TRECHO (entre vírgula, ponto, "?" ou quebra de linha): "Não vou poder ir amanhã, posso outro dia?" é desistência
+ * — só o trecho "posso outro dia?" é pergunta. "Posso cancelar?" e "Como faço para cancelar o convênio?" não são: o próprio
+ * trecho que fala em cancelar é a pergunta.
+ */
 export function pareceDesistenciaDaConsulta(texto: string | null | undefined): boolean {
   const s = normalizar(texto ?? '');
   if (!s) return false;
   if (NAO_E_DESISTENCIA.some((r) => r.test(s))) return false;
-  if (s.includes('?') && !DESISTENCIA_NO_PASSADO.test(s)) return false;
-  return DESISTE_DA_CONSULTA.some((r) => r.test(s));
+  return s
+    .split(/(?<=[,.;?!\n])/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .some((trecho) => (!trecho.includes('?') || DESISTENCIA_NO_PASSADO.test(trecho)) && DESISTE_DA_CONSULTA.some((r) => r.test(trecho)));
 }

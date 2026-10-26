@@ -199,13 +199,20 @@ const desistenciasOlhadas = new Map<string, number>();
 
 async function tarefaDaDesistenciaSemResposta(
   unit: Unit,
-  conv: { leadId: string; lastMessageAt: Date; contactName: string | null },
+  conv: { id: string; leadId: string; lastMessageAt: Date; contactName: string | null },
   ultimaFala: string | null | undefined,
 ): Promise<void> {
   const marca = conv.lastMessageAt.getTime();
   const k = `${unit.id}:${conv.leadId}`;
   if (desistenciasOlhadas.get(k) === marca) return;
   if ((Date.now() - marca) / 60_000 < ESPERA_DA_OFERTA_MIN) return;
+  // Só vale se a Sofia RESPONDEU depois do "cancelei" (a oferta de horário): se a última mensagem ainda é a dele, ela está
+  // calada — o webhook já abriu a tarefa 'ia_calada' — e se a equipe respondeu pelo celular o banco não vê.
+  const ultima = await prisma.message.findFirst({ where: { conversationId: conv.id }, orderBy: { createdAt: 'desc' }, select: { role: true } });
+  if (ultima?.role !== 'assistant') {
+    desistenciasOlhadas.set(k, marca);
+    return;
+  }
   const r = await abrirTarefaDaDesistencia({
     unit,
     leadId: Number(conv.leadId),

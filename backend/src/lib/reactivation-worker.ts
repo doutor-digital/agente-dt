@@ -4,7 +4,6 @@ import { logger } from './logger.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
 import { emPausa } from './pausa-unidade.js';
 import { createKommoClient } from '../services/kommo.service.js';
-import { motivoDeBloqueio } from './mensagem-bloqueada.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { falaDaEquipeDesde } from './pausa-equipe.js';
@@ -116,17 +115,16 @@ async function reativarUnidade(unit: Unit): Promise<void> {
         continue;
       }
 
-      // Etiqueta/nome que diz "não mande nada" (mensagem-bloqueada.ts). Cartão ilegível = segue como antes.
-      const cartao = await kommo.getLead(leadId).catch(() => null);
-      const bloqueio = motivoDeBloqueio(cartao, 'regua');
-      // Sem `encerrar`: a etiqueta pode sair, e aí o cartão volta para a fila (a janela de 24 h do WhatsApp o encerra).
-      if (bloqueio) {
-        logger.info({ unit: unit.slug, leadId, bloqueio }, 'reativação: cartão bloqueado para mensagem automática — não reativa');
+      // Etiqueta/nome que diz "não mande nada" (mensagem-bloqueada.ts), lida do mesmo cartão que `estadoEtapaDoLead` já
+      // buscou — sem segunda ida ao Kommo. Sem `encerrar`: a etiqueta pode sair, e aí o cartão volta para a fila (a janela
+      // de 24 h do WhatsApp o encerra).
+      if (etapa?.bloqueio) {
+        logger.info({ unit: unit.slug, leadId, bloqueio: etapa.bloqueio }, 'reativação: cartão bloqueado para mensagem automática — não reativa');
         continue;
       }
 
       if (unit.qualificationEnabled) {
-        const lead = cartao ?? (await kommo.getLead(leadId));
+        const lead = await kommo.getLead(leadId);
         const tags = (lead?._embedded?.tags ?? []).map((t) => (t.name ?? '').toLowerCase());
         const alvo = (unit.qualificationHotTag ?? 'Quente').toLowerCase();
         if (!tags.includes(alvo)) {

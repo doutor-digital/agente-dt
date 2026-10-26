@@ -24,16 +24,11 @@
  * perseguem quem NÃO marcou, calam por qualquer uma.
  */
 
+import { semAcento } from './sem-acento.js';
+
 export type EscopoDoBloqueio = 'lembrete' | 'regua';
 
-function limpar(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
+const limpar = (s: string): string => semAcento(s).replace(/[^a-z0-9]+/g, ' ').trim();
 
 /** Etiquetas que dizem "não mande NADA a este cartão" (lembrete incluído). Nomes exatos das contas. */
 export const ETIQUETAS_QUE_CALAM_TUDO = [

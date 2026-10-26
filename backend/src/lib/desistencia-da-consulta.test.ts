@@ -46,6 +46,13 @@ const DESISTIU = [
   'Infelizmente nao irei.',
   'Não irei precisar mais',
   'n vou poder ir',
+  // achados da 2ª revisão: a pergunta de reagendamento junto não anula o aviso
+  'Não vou poder ir amanhã, posso outro dia?',
+  'não vou conseguir ir, pode remarcar?',
+  'Preciso cancelar, tem como?',
+  'Pode cancelar? Não vou poder ir.',
+  'Infelizmente não vou poder',
+  'não tenho como ir',
 ];
 
 // Frases reais que NÃO são desistência da consulta.
@@ -73,6 +80,8 @@ const NAO_DESISTIU = [
   'Vou sim, não vou desmarcar',
   'Como faço para cancelar o convênio?',
   'cancelei meu plano de saúde',
+  'Quero cancelar o tratamento',
+  'cancela o boleto por favor',
   'Nao posso ir na quinta mas vou na sexta',
   'Bom dia, tudo bem? Quero marcar uma consulta',
   'Qual o valor da consulta?',

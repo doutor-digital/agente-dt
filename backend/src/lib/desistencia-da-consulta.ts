@@ -24,26 +24,18 @@ import { avisoRecente, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
 import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
 import { epochSeg } from './etiquetas-auto.js';
+import { semAcento } from './sem-acento.js';
 
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
 export { pareceDesistenciaDaConsulta };
-
-function normalizar(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 const CAMPO_DATA_DA_CONSULTA = 'datadaconsulta';
 
 /** Data da consulta no cartão (epoch s) quando ainda não passou — ou null. Por NOME do campo: cada conta tem os seus ids. */
 export function consultaFuturaDoCartao(lead: Pick<KommoLead, 'custom_fields_values'> | null | undefined, agoraS: number): number | null {
   for (const f of lead?.custom_fields_values ?? []) {
-    const nome = normalizar(f.field_name ?? '').replace(/[^a-z0-9]/g, '');
+    const nome = semAcento(f.field_name ?? '').replace(/[^a-z0-9]/g, '');
     if (nome !== CAMPO_DATA_DA_CONSULTA) continue;
     const n = epochSeg(f.values?.[0]?.value);
     // Uma folga de 3 h: o paciente que escreve "não vou" no meio da tarde de uma consulta das 14 h ainda é desistência.
@@ -73,7 +65,7 @@ export function textoTarefaDesistenciaSemIA(args: {
   const trecho = args.mensagem.replace(/\s+/g, ' ').trim().slice(0, 140);
   const porque =
     args.motivo === 'sem_resposta'
-      ? 'A Sofia ofereceu outro horário e ele não respondeu.'
+      ? 'A Sofia ofereceu outro horário e ele não respondeu (se a equipe já resolveu por telefone, é só fechar esta tarefa).'
       : 'A Sofia está calada nesta conversa (IA pausada, fora do horário, etapa sem IA ou a equipe falou) — ninguém ofereceu novo horário.';
   return (
     `ALERTA · ${args.slug} · [Contato: ${args.nome || 'paciente'}] Escreveu que não vem: "${trecho}". ` +
