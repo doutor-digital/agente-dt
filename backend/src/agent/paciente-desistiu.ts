@@ -98,6 +98,7 @@ export function renderPacienteDesistiu(falas: Fala[] | undefined, opcoes: { slug
       'depois de a ferramenta confirmar.\n' +
       '- Se ele pediu outro dia ou outro período: consultar_horarios de novo e ofereça dois horários reais.\n' +
       `- Se ele recusou, disse que não quer, que vai ver depois ou só agradeceu: ${fecho}\n` +
+      '- Se a mensagem é OUTRA coisa (uma pergunta, uma dúvida sobre valor ou endereço): responda a ela normalmente e NÃO use o fecho.\n' +
       '</paciente_desistiu>'
     );
   }

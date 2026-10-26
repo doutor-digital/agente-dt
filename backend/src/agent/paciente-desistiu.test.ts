@@ -78,6 +78,7 @@ test('a recusa que NÃO parece desistência ("não quero remarcar", "depois eu v
     assert.match(bloco, /começando exatamente por "ALERTA ·"/);
     assert.match(bloco, /ALERTA · doutor-hernia-araguaina · \[Contato:/);
     assert.match(bloco, /NO_FOLLOW_UP/);
+    assert.match(bloco, /OUTRA coisa/, 'pergunta de outro assunto não ganha o fecho');
   }
 });
 
