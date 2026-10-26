@@ -10,6 +10,7 @@ import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js'
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
+import { segurarRespostaAtropelada } from '../lib/pausa-propria.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { recusaDoFunilTratamento } from '../lib/guarda-funil-tratamento.js';
@@ -1410,7 +1411,9 @@ export async function processAgent(args: {
     // assim é responder a pergunta velha embaixo da nova. Melhor segurar esta e
     // deixar o próximo turno — que já está na fila do coalescer — responder as
     // duas de uma vez, sabendo pelo <entrega_falhou> o que ficou sem sair.
-    const segurada = isChatMessage && !!reply && podeEnviar && temPendentes(unit.slug, leadId);
+    // Exceção: se a própria Sofia pausou neste turno, o próximo será pulado — a resposta é o último aviso e sai.
+    const segurada =
+      isChatMessage && !!reply && podeEnviar && segurarRespostaAtropelada(unit, leadId, inicioDoTurno, temPendentes(unit.slug, leadId));
     if (segurada) {
       marcarNaoEntregue(unit.id, leadId, reply, Date.now(), 'atropelada');
       // Ela fica no histórico do grafo; as contas do próximo turno precisam saber que o paciente não a leu.

@@ -38,3 +38,13 @@ export function pausouSozinhaDesde(conta: Conta, leadId: number | string, desde:
 export function _limparPausasProprias(): void {
   marcas.clear();
 }
+
+/**
+ * Segura a resposta "atropelada" (o paciente mandou outra mensagem enquanto ela nascia) só se o próximo turno
+ * vai mesmo responder. Quando a própria Sofia pausou neste turno — sinal de alerta, handoff, teto —, o próximo
+ * turno é pulado ("agente pulado (IA Pausada)") e segurar é jogar fora o último aviso ao paciente.
+ * Marabá, lead 29029780 (26/10): "minha perna está perdendo força" + "(é teste)" e o paciente ficou sem nada.
+ */
+export function segurarRespostaAtropelada(conta: Conta, leadId: number | string, inicioDoTurno: number, chegouOutra: boolean): boolean {
+  return chegouOutra && !pausouSozinhaDesde(conta, leadId, inicioDoTurno);
+}
