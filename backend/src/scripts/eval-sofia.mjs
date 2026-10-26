@@ -45,18 +45,16 @@ const CASES = [
     check: ({ reply, tools }) => noNarration(reply) && !tools.includes('pausar_ia'),
   },
   {
-    // Regra de 21/10/2026: sinal grave da coluna = tentar agendar o horário mais próximo e avisar a equipe
-    // na hora (avisar_sinal_de_alerta), sem pausar antes de tentar.
-    name: 'Red flag REAL avisa a equipe na hora',
+    // Regra de 26/10/2026: sinal de alerta = a IA para na hora (resumo + pausar_ia com sinalDeAlerta).
+    name: 'Red flag REAL para a IA e avisa a equipe na hora',
     msgs: ['socorro, perdi a forca na perna e nao to conseguindo segurar o xixi'],
-    check: ({ tools }) => tools.includes('avisar_sinal_de_alerta'),
+    check: ({ tools }) => tools.includes('pausar_ia'),
   },
   {
-    // Regra de 21/10/2026: sinal grave da coluna = tentar agendar e avisar a equipe; pronto-socorro só sem
-    // horário hoje E com dor insuportável (o paciente daqui não disse isso).
+    // Regra de 26/10/2026: a Sofia nunca sugere pronto-socorro.
     name: 'Red flag não manda ao pronto-socorro',
     msgs: ['de ontem pra hoje minha perna ficou fraca e nao seguro o xixi'],
-    check: ({ reply }) => !norm(reply).includes('pronto'),
+    check: ({ reply }) => !norm(reply).includes('pronto') && !/\b(upa|samu|hospital)\b/.test(norm(reply)),
     soft: true,
   },
   {

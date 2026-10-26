@@ -5,6 +5,16 @@ import { corrigirValorAntecipado } from './valor-antecipado.js';
 import { corrigirTomDaSaida } from './tom-da-saida.js';
 import { corrigirLinkDeMapa } from './link-de-mapa.js';
 import { precosDaConsulta } from './prompt-composer.js';
+import { semProntoSocorro } from './sem-pronto-socorro.js';
+import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
+
+/** O que a trava de saída precisa saber além da resposta. */
+export interface ContextoDoGuardrail {
+  /** As últimas mensagens do paciente (texto puro): se ELE falou em pronto-socorro, a resposta pode tratar disso. */
+  mensagensDoPaciente?: string[];
+  /** Turno de aviso urgente (sinal de alerta): se a resposta inteira for cortada, sai ESTA frase, não a de reserva. */
+  fraseDeReserva?: string;
+}
 
 export interface GuardrailResult {
   text: string;
@@ -141,7 +151,14 @@ function violaRegra(regra: { key: string; re: RegExp }, text: string): boolean {
   return false;
 }
 
-export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
+/**
+ * Sobrou nada depois de tirar o pronto-socorro / a opinião sobre médico ou cirurgia. Sem diagnóstico, sem "na consulta"
+ * e sem "não consigo orientar": quem escreveu pode ter um sinal de alerta. Num turno de aviso urgente, quem chama passa
+ * `fraseDeReserva` (a frase do passe para a equipe) e é ela que sai no lugar.
+ */
+const FALLBACK_SEM_PRONTO_SOCORRO = 'Entendi, obrigada por me contar 🙏 Me conta um pouquinho mais do que você está sentindo?';
+
+export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoGuardrail = {}): GuardrailResult {
   if (!text || !text.trim()) return { text, triggered: [], rewritten: false };
   const triggered: string[] = [];
   let texto = text;
@@ -153,6 +170,18 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
     }
     if (triggered.length > 0) {
       return { text: FALLBACK_CLINICO, triggered, rewritten: true };
+    }
+  }
+
+  // Pronto-socorro e opinião sobre médico/cirurgia: a frase sai, o resto da mensagem fica (decisão de 26/10) —
+  // ver sem-pronto-socorro.ts. Só para clínica.
+  if (ehClinicaParaSinalDeAlerta(unit)) {
+    const semPs = semProntoSocorro(texto, contexto.mensagensDoPaciente ?? []);
+    if (semPs.removidas.length > 0) {
+      triggered.push('pronto_socorro_ou_cirurgia:' + semPs.removidas.length);
+      if (!semPs.texto.trim()) return { text: contexto.fraseDeReserva ?? FALLBACK_SEM_PRONTO_SOCORRO, triggered, rewritten: true };
+      texto = semPs.texto;
+      reescreveu = true;
     }
   }
 

@@ -353,7 +353,7 @@ export function perguntaTurnoSemHorario(texto: string, agoraLocal: string): bool
 // ── A trava ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Ferramentas que mostram que não havia horário para dar (agenda cheia → preferência e encaixe pela equipe). */
-const SEM_HORARIO_PARA_DAR = /^(?:pausar_ia|resumir_lead_para_sdr|avisar_sinal_de_alerta)$|preferencia/i;
+const SEM_HORARIO_PARA_DAR = /^(?:pausar_ia|resumir_lead_para_sdr)$|preferencia/i;
 
 export type TravaDoHorario =
   /** O grafo chama consultar_horarios (a partir de `data`) e o modelo escreve de novo com a agenda de agora. */

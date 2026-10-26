@@ -1497,6 +1497,16 @@ export class KommoClient {
     }
   }
 
+  /** Os nomes das etiquetas que o cartão tem AGORA (o que o Kommo guardou, não o que mandamos). */
+  async tagsDoLead(leadId: number): Promise<string[]> {
+    try {
+      const { data } = await this.http.get<KommoLead>(`/leads/${leadId}`, { params: { with: 'tags' } });
+      return (data._embedded?.tags ?? []).map((t) => t.name);
+    } catch (err) {
+      wrapAxiosError(err, `tagsDoLead(${leadId})`);
+    }
+  }
+
   async addTag({ leadId, tag, tags }: AddTagParams): Promise<void> {
     const all = [
       ...(tag ? [tag] : []),

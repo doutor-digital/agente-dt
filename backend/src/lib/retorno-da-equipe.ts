@@ -121,8 +121,20 @@ export function retornoDaEquipe(unit: Unit, agora: Date = new Date()): RetornoDa
  * `pausar_ia`, que é a última coisa que ela lê antes de escrever — por isso funciona mesmo em unidade com
  * prompt próprio, e não custa nada no prompt fixo (que fica uma hora em cache e não pode depender da hora).
  */
-export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false): string {
-  const semPrazo = 'NÃO prometa prazo: nada de "em instantes", "já já", "um instante", "logo te chamam".';
+export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false, avisada = true): string {
+  const prazo = 'NÃO prometa prazo: nada de "em instantes", "já já", "um instante", "logo te chamam".';
+  // Sinal de alerta (decisão de 26/10): nunca sugerir pronto-socorro; se o próprio paciente perguntou ou disse que
+  // vai, não desaconselhar.
+  const semPrazo = urgente
+    ? `${prazo} NÃO sugira pronto-socorro, UPA nem hospital. Só se o PRÓPRIO paciente perguntou se deve ir ou disse que vai: não desaconselhe — diga que, se ele sente que não dá para esperar, pode ir.`
+    : prazo;
+  // Sinal de alerta e NINGUÉM foi avisado (a tarefa e o Telegram falharam): não diga que a equipe foi avisada.
+  if (urgente && !avisada) {
+    return (
+      'Responda em UMA frase que acolhe e diz que o atendimento segue com a nossa equipe. NÃO diga que a equipe já foi ' +
+      `avisada nem que vai responder logo. ${semPrazo}`
+    );
+  }
   if (r.tipo === 'aberta') {
     return (
       'Responda em UMA frase avisando o paciente que ' +
@@ -132,14 +144,9 @@ export function orientacaoAoTransferir(r: RetornoDaEquipe, urgente = false): str
     );
   }
   if (r.tipo === 'fechada') {
-    const pronto = r.hoje
-      ? ''
-      : urgente
-        ? ' A clínica não atende mais hoje: só oriente pronto-socorro se o paciente disse que a dor está insuportável.'
-        : '';
     return (
       `A equipe está fora do horário agora e volta ${r.quando}. Responda em UMA frase avisando o paciente que ` +
-      `a equipe continua o atendimento por aqui ${r.quando} — diga esse dia e essa hora. ${semPrazo}${pronto}`
+      `a equipe continua o atendimento por aqui ${r.quando} — diga esse dia e essa hora. ${semPrazo}`
     );
   }
   return (

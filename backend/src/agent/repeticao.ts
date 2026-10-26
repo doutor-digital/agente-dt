@@ -301,8 +301,9 @@ export function motivoDeHandoff(r: Repeticao): string | null {
   if (!q || q.semRespostaSeguidas < LIMITE_TENTATIVAS || q.tema === 'nome' || r.disseQueJaRespondeu) return null;
   if (q.tema === TEMA_SINAL_DE_ALERTA) {
     // Aqui a fala deste turno pode ter conteúdo (o áudio sobre o endereço) e mesmo assim não responder — a cadeia
-    // já conferiu isso. O motivo NÃO diz "sinal de alerta": ninguém confirmou sinal nenhum, e esse texto viraria
-    // tarefa URGENTE de "paciente com sinal de alerta" (MOTIVO_SINAL_DE_ALERTA em sinal-de-alerta.ts).
+    // já conferiu isso. O motivo NÃO diz "sinal de alerta" (ninguém confirmou sinal nenhum), mas desde 26/10 o trecho
+    // "pergunta de segurança da coluna" casa com MOTIVO_SINAL_DE_ALERTA DE PROPÓSITO: pausar sem resposta à pergunta de
+    // segurança vira aviso urgente (Mossoró #5876373: "às vezes sim" à perna falhar e nenhum aviso, num domingo).
     return `conversa travada: pergunta de segurança da coluna (força na perna, xixi/intestino) ${q.vezes}x sem resposta`;
   }
   if (!r.semResposta) return null;

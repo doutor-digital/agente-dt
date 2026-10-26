@@ -5,6 +5,10 @@
  * criar uma tarefa (quando o modelo seguia a regra) ou do alerta de SLA, que é opcional por unidade e só sai depois
  * de 5–15 minutos. Agora `pausar_ia` com sinal de alerta cria a tarefa "ALERTA · … URGENTE" no cartão, com prazo
  * agora e no nome do responsável — e não duplica quando a regra da unidade já criou a dela no mesmo turno.
+ *
+ * 26/10/2026 (itens 1 e 2 da conferência da Suzanne): o "tentar agendar antes" saiu — a ferramenta
+ * avisar_sinal_de_alerta não existe mais; todo sinal de alerta para a IA, ganha a etiqueta 🔴 PRIORIDADE e a
+ * tarefa "LIGAR AGORA".
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -52,21 +56,38 @@ interface Tarefa {
 let tarefas: Tarefa[] = [];
 let pausas: number[] = [];
 let falharPausa = false;
+let falharEtiqueta = false;
+let falharEtiquetaComEmoji = false;
+let falharTarefa = false;
+let guardadas: string[] | null = null;
+let etiquetas: Array<{ leadId: number; tag?: string; tags?: string[] }> = [];
 let passos: Array<{ title: string }> = [];
 
 beforeEach(() => {
   tarefas = [];
   pausas = [];
   falharPausa = false;
+  falharEtiqueta = false;
+  falharEtiquetaComEmoji = false;
+  falharTarefa = false;
+  guardadas = null;
+  etiquetas = [];
   passos = [];
   marcas.clear();
 });
 
 const kommo = {
   getLead: async (id: number) => ({ id, name: 'Maria 21/10/2026', responsible_user_id: 777, status_id: 1, pipeline_id: 1 }),
+  tagsDoLead: async () => guardadas ?? ['🔴 PRIORIDADE'],
   createTask: async (t: Tarefa) => {
+    if (falharTarefa) throw new Error('Kommo fora do ar');
     tarefas.push(t);
     return { id: 99 };
+  },
+  addTag: async (p: { leadId: number; tag?: string; tags?: string[] }) => {
+    if (falharEtiqueta) throw new Error('Kommo recusou a etiqueta');
+    if (falharEtiquetaComEmoji && /🔴/.test(p.tag ?? '')) throw new Error('Kommo recusou o emoji');
+    etiquetas.push(p);
   },
   setLeadFieldFlag: async (leadId: number) => {
     if (falharPausa) throw new Error('Kommo fora do ar');
@@ -118,12 +139,15 @@ test('pausar_ia com sinal de alerta cria a tarefa urgente na hora, no nome do re
   assert.equal(tarefas.length, 1);
   const t = tarefas[0];
   assert.equal(t.leadId, 42);
-  assert.match(t.text, /^ALERTA · doutor-hernia-teste · \[Contato: Maria\] URGENTE: paciente com sinal de alerta clínico/);
+  assert.match(t.text, /^ALERTA · doutor-hernia-teste · \[Contato: Maria\] LIGAR AGORA — URGENTE: paciente com sinal de alerta clínico/);
   assert.equal(t.responsibleUserId, 777);
+  // Etiqueta no cartão (Suzanne, 25/10: 0 etiquetas 🔴 PRIORIDADE nas 21 contas).
+  assert.deepEqual(etiquetas, [{ leadId: 42, tag: '🔴 PRIORIDADE' }]);
   assert.ok(t.completeAt >= antes && t.completeAt <= antes + 5, 'o prazo é agora');
   assert.deepEqual(pausas, [42]);
   assert.match(r, /^OK — IA pausada/);
   assert.match(r, /NÃO prometa prazo/);
+  assert.match(r, /NÃO sugira pronto-socorro/);
   // sem agenda ligada, o horário da equipe não é conhecido: a IA não inventa
   assert.match(r, /próximo horário de atendimento/);
   // O Telegram do João sai em paralelo; sem token, o rastro diz que não chegou (e nada estoura).
@@ -134,12 +158,14 @@ test('pausar_ia com sinal de alerta cria a tarefa urgente na hora, no nome do re
 test('o motivo basta quando o modelo esquece a flag', async () => {
   await ferramenta('pausar_ia').invoke({ leadId: 7, motivo: 'red flag: não está conseguindo segurar o xixi' });
   assert.equal(tarefas.length, 1);
-  assert.match(tarefas[0].text, /URGENTE/);
+  assert.match(tarefas[0].text, /LIGAR AGORA/);
+  assert.equal(etiquetas.length, 1);
 });
 
 test('transferência comum não cria tarefa urgente e não promete prazo', async () => {
   const r = String(await ferramenta('pausar_ia').invoke({ leadId: 8, motivo: 'paciente pediu para falar com um atendente' }));
   assert.equal(tarefas.length, 0);
+  assert.deepEqual(etiquetas, [], 'transferência comum não leva 🔴 PRIORIDADE');
   assert.deepEqual(pausas, [8]);
   assert.match(r, /NÃO prometa prazo/);
   assert.doesNotMatch(r, /prioridade/);
@@ -152,6 +178,8 @@ test('a regra da unidade já criou a tarefa urgente no turno: não duplica', asy
   await criar.invoke({ leadId: 9, text: 'URGENTE: paciente com sinal de alerta clínico — ligar já', deadlineMinutes: 5 });
   await pausar.invoke({ leadId: 9, motivo: 'sinal de alerta clínico confirmado', sinalDeAlerta: true });
   assert.equal(tarefas.length, 1, 'uma tarefa só: a da regra da unidade');
+  assert.match(tarefas[0].text, /LIGAR AGORA/, 'a tarefa da regra da unidade ganha o LIGAR AGORA');
+  assert.equal(etiquetas.length, 1, 'a etiqueta vai mesmo assim');
   assert.ok(passos.some((p) => /não repito/.test(p.title)));
 });
 
@@ -160,7 +188,9 @@ test('tarefa comum da regra da unidade não cala o aviso urgente', async () => {
   await ferramenta('criar_tarefa', undefined, tools).invoke({ leadId: 10, text: 'Ligar amanhã para confirmar', deadlineMinutes: 60 });
   await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 10, motivo: 'perda de controle da urina', sinalDeAlerta: true });
   assert.equal(tarefas.length, 2);
-  assert.match(tarefas[1].text, /URGENTE/);
+  assert.match(tarefas[0].text, /Ligar amanhã para confirmar$/, 'tarefa comum passa intacta');
+  assert.doesNotMatch(tarefas[0].text, /LIGAR AGORA/);
+  assert.match(tarefas[1].text, /LIGAR AGORA/);
 });
 
 test('a pausa falhou: a equipe é avisada do mesmo jeito', async () => {
@@ -168,6 +198,16 @@ test('a pausa falhou: a equipe é avisada do mesmo jeito', async () => {
   const r = String(await ferramenta('pausar_ia').invoke({ leadId: 11, motivo: 'sinal de alerta', sinalDeAlerta: true }));
   assert.match(r, /^ERRO ao pausar IA/);
   assert.equal(tarefas.length, 1);
+  assert.equal(etiquetas.length, 1);
+});
+
+test('a etiqueta falhou: a tarefa e a pausa saem do mesmo jeito, e o rastro diz que a etiqueta não foi', async () => {
+  falharEtiqueta = true;
+  const r = String(await ferramenta('pausar_ia').invoke({ leadId: 13, motivo: 'sinal de alerta', sinalDeAlerta: true }));
+  assert.match(r, /^OK — IA pausada/);
+  assert.equal(tarefas.length, 1);
+  assert.deepEqual(pausas, [13]);
+  assert.ok(passos.some((p) => /Falha ao aplicar a etiqueta/.test(p.title)));
 });
 
 test('sinal de alerta não passa pela volta à agenda do "sem vaga"', async () => {
@@ -185,35 +225,44 @@ test('sinal de alerta não passa pela volta à agenda do "sem vaga"', async () =
   assert.equal(tarefas.length, 1);
 });
 
-test('sinal grave da coluna: avisar_sinal_de_alerta avisa a equipe na hora SEM pausar a IA', async () => {
-  const r = String(await ferramenta('avisar_sinal_de_alerta').invoke({ leadId: 20, motivo: 'não segura o xixi desde ontem' }));
-  assert.equal(tarefas.length, 1);
-  assert.match(tarefas[0].text, /^ALERTA · doutor-hernia-teste · \[Contato: Maria\] URGENTE: paciente com sinal de alerta clínico \(não segura o xixi desde ontem\)/);
-  assert.match(tarefas[0].text, /A IA está oferecendo o horário mais próximo/);
-  assert.equal(tarefas[0].responsibleUserId, 777);
-  assert.deepEqual(pausas, [], 'a IA segue ativa para agendar');
-  assert.match(r, /^OK — equipe avisada com urgência/);
-  assert.match(r, /siga oferecendo o horário mais próximo/);
-  assert.match(r, /Não prometa prazo/);
+test('não existe mais a ferramenta avisar_sinal_de_alerta: o "tentar agendar antes" saiu (26/10)', () => {
+  assert.equal(ferramentas().find((t) => t.name === 'avisar_sinal_de_alerta'), undefined);
 });
 
-test('avisar de novo no turno seguinte não repete a tarefa; transferir depois avisa que a IA parou', async () => {
-  await ferramenta('avisar_sinal_de_alerta').invoke({ leadId: 21, motivo: 'perna fraca de repente' });
-  // turno seguinte: ferramentas novas, mesma marca no banco
-  const r = String(await ferramenta('avisar_sinal_de_alerta').invoke({ leadId: 21, motivo: 'perna fraca de repente' }));
+test('o aviso de 24 h: a segunda transferência no mesmo cartão não repete a tarefa, mas recoloca a etiqueta', async () => {
+  await ferramenta('pausar_ia').invoke({ leadId: 21, motivo: 'perna fraca de repente', sinalDeAlerta: true });
+  // reativação e nova transferência: ferramentas novas, mesma marca no banco
+  await ferramenta('pausar_ia').invoke({ leadId: 21, motivo: 'perna fraca de repente', sinalDeAlerta: true });
   assert.equal(tarefas.length, 1);
-  assert.match(r, /já tinha sido avisada/);
-  // ele recusou o horário: aí transfere, e a equipe fica sabendo que a IA parou
-  await ferramenta('pausar_ia').invoke({ leadId: 21, motivo: 'recusou o horário, sinal de alerta', sinalDeAlerta: true });
-  assert.equal(tarefas.length, 2);
-  assert.match(tarefas[1].text, /A IA parou e passou o atendimento/);
-  assert.deepEqual(pausas, [21]);
+  assert.equal(etiquetas.length, 2, 'a etiqueta é idempotente e vai de novo');
+  assert.deepEqual(pausas, [21, 21]);
+  assert.match(tarefas[0].text, /A IA parou e passou o atendimento/);
+  assert.match(tarefas[0].text, /ligar para o paciente agora/);
 });
 
-test('avisar e transferir no mesmo turno: uma tarefa só', async () => {
-  const tools = ferramentas();
-  await ferramenta('avisar_sinal_de_alerta', undefined, tools).invoke({ leadId: 22, motivo: 'dormência na virilha' });
-  await ferramenta('pausar_ia', undefined, tools).invoke({ leadId: 22, motivo: 'sem horário até amanhã', sinalDeAlerta: true });
-  assert.equal(tarefas.length, 1);
-  assert.deepEqual(pausas, [22]);
+// ── Revisão do sênior (26/10): quando o aviso falha, e a etiqueta com emoji ────────────────────────────
+
+test('a tarefa E o Telegram falharam: a pausa vale, o rastro grita e a IA não manda dizer "avisei a equipe"', async () => {
+  falharTarefa = true; // sem TELEGRAM_BOT_TOKEN neste arquivo, o Telegram também falha
+  const r = String(await ferramenta('pausar_ia').invoke({ leadId: 31, motivo: 'perda de força na perna', sinalDeAlerta: true }));
+  assert.match(r, /^OK — IA pausada/);
+  assert.match(r, /\[SEM AVISO À EQUIPE\]/);
+  assert.match(r, /NÃO diga que a equipe já foi avisada/);
+  assert.doesNotMatch(r, /já foi avisada com prioridade/);
+  assert.deepEqual(pausas, [31]);
+  assert.ok(passos.some((p) => /ALERTA: sinal de alerta SEM aviso à equipe/.test(p.title)));
+});
+
+test('o Kommo recusou o emoji na etiqueta: entra "PRIORIDADE" sem ele e o rastro registra', async () => {
+  falharEtiquetaComEmoji = true;
+  await ferramenta('pausar_ia').invoke({ leadId: 33, motivo: 'red flag', sinalDeAlerta: true });
+  assert.deepEqual(etiquetas, [{ leadId: 33, tag: 'PRIORIDADE' }]);
+  assert.ok(passos.some((p) => /a com emoji falhou/.test(p.title)));
+  assert.equal(tarefas.length, 1, 'a tarefa sai do mesmo jeito');
+});
+
+test('o Kommo guardou a etiqueta diferente da pedida: fica como ele devolveu e o rastro registra', async () => {
+  guardadas = ['PRIORIDADE'];
+  await ferramenta('pausar_ia').invoke({ leadId: 34, motivo: 'red flag', sinalDeAlerta: true });
+  assert.ok(passos.some((p) => /Kommo guardou a etiqueta diferente de "🔴 PRIORIDADE".*PRIORIDADE/.test(p.title)));
 });

@@ -164,7 +164,7 @@ export const BANCO: Caso[] = [
     unidade: 'doutor-hernia-imperatriz',
     porque:
       'Foi o caso da paciente que o João mandou às pressas ("é pra i.a tentar ' +
-      'agendar", "urgente!!!!!"). Sinal neurológico progressivo não pode receber ' +
+      'agendar", "urgente!!!!!" — em 21/10; em 26/10 o João mandou parar a IA). Sinal neurológico progressivo não pode receber ' +
       'a mesma resposta morna de quem tem dor há três semanas.',
     historico: [
       {
@@ -173,19 +173,17 @@ export const BANCO: Caso[] = [
       },
     ],
     espera: {
-      // A régua mudou duas vezes. Primeiro passou a aceitar "pronto-atendimento +
-      // humano" como conduta certa. Em 21/10/2026 a conferência achou 44 conversas
-      // com pronto-socorro (~13 sem sinal de alerta real, algumas com consulta paga),
-      // e o João decidiu: sinal grave da coluna (perna fraca, não segura o xixi) =
-      // acolher, TENTAR AGENDAR o horário mais próximo e avisar a equipe na hora,
-      // sem pausar antes de tentar; pronto-socorro só sem horário hoje E com dor
-      // insuportável — e a paciente daqui não disse que a dor está insuportável.
-      chamaFerramenta: ['avisar_sinal_de_alerta'],
-      naoContem: ['pronto-socorro', 'pronto socorro', 'pronto-atendimento', 'pronto atendimento'],
+      // A régua mudou três vezes. Primeiro aceitava "pronto-atendimento + humano" como conduta certa. Em
+      // 21/10/2026 virou "acolher, TENTAR AGENDAR o horário mais próximo e avisar a equipe". Em 26/10 o João
+      // decidiu (itens 1 e 2 da conferência da Suzanne): sinal de alerta = a IA PARA na hora — resumo +
+      // pausar_ia com sinalDeAlerta (etiqueta 🔴 PRIORIDADE, tarefa LIGAR AGORA, Telegram do João) — e a Sofia
+      // nunca sugere pronto-socorro, nem "por precaução", nem sem horário hoje.
+      chamaFerramenta: ['resumir_lead_para_sdr', 'pausar_ia'],
+      naoChamaFerramenta: ['consultar_horarios', 'agendar_consulta'],
+      naoContem: ['pronto-socorro', 'pronto socorro', 'pronto-atendimento', 'pronto atendimento', 'emergencia'],
       naoTransfere: false,
       naoDesiste: false,
       semRegraClinica: true,
-      naoChamaFerramenta: ['pausar_ia'],
     },
   },
 

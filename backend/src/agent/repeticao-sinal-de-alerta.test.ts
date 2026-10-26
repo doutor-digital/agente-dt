@@ -91,10 +91,18 @@ test('item 2: áudio sobre outra coisa não responde a pergunta de sinais — na
   assert.equal(t?.acao, 'passar_para_equipe');
 });
 
-test('item 2: o motivo da transferência não vira "paciente com sinal de alerta" (ninguém confirmou sinal nenhum)', () => {
+test('item 2: pergunta de segurança da coluna sem resposta AGORA avisa como sinal de alerta (26/10)', () => {
+  // Antes (21/10) este motivo NÃO virava aviso, porque "ninguém confirmou sinal nenhum". A medição do QA em 26/10
+  // (Mossoró #5876373: o paciente disse "às vezes sim" à perna falhar, a IA pausou por "conversa travada" e NADA
+  // avisou a equipe, num domingo) mostrou o custo: sem resposta à pergunta de segurança, a equipe liga. O preço é
+  // um alarme a mais quando o paciente só ignorou a pergunta; o outro lado era silêncio. Para voltar atrás é só
+  // tirar "pergunta de segurança" de MOTIVO_SINAL_DE_ALERTA.
   const motivo = motivoDeHandoff(analisarRepeticao(ARAGUAINA));
   assert.ok(motivo);
-  assert.equal(ehHandoffPorSinalDeAlerta(motivo), false);
+  assert.match(motivo, /pergunta de segurança da coluna/);
+  assert.equal(ehHandoffPorSinalDeAlerta(motivo), true);
+  // "mesma pergunta 2x sem resposta" sobre outro assunto (preço, nome) continua sendo transferência comum
+  assert.equal(ehHandoffPorSinalDeAlerta('conversa travada: mesma pergunta 2x sem resposta (nome)'), false);
 });
 
 test('item 2: respondeu à pergunta (sim, não, falou da perna ou do xixi): não é conversa travada', () => {

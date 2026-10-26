@@ -176,7 +176,8 @@ test('27849922: dor que vai para virilha/testículos pede a pergunta de sinais, 
   assert.ok(trecho.includes('testículos'));
   assert.ok(trecho.includes('não pule para sono e trabalho'));
   assert.ok(trecho.includes('dormente'));
-  assert.ok(b.indexOf('DOR QUE VAI PARA A VIRILHA') < b.indexOf('SINAIS GRAVES DA COLUNA'));
+  // o sinal confirmado manda parar; a dor que só "vai para a virilha" ainda pede UMA pergunta antes
+  assert.ok(b.indexOf('CONFIRMADO O SINAL') < b.indexOf('DOR QUE VAI PARA A VIRILHA'));
 });
 
 test('28220160: acidente antigo não é sinal de alerta — no bloco e na regra trauma/febre do cadastro', () => {
@@ -186,7 +187,7 @@ test('28220160: acidente antigo não é sinal de alerta — no bloco e na regra 
     'Sinal de alerta confirmado pelo paciente (um sinal por pergunta): dor forte depois de queda, pancada ou acidente, ou febre junto com a dor.',
   );
   assert.ok(trava.includes('RECENTE'));
-  assert.ok(trava.includes('SINAIS GRAVES DA COLUNA'), 'a trava dos sinais graves continua');
+  assert.ok(trava.includes('PARE na hora'), 'a trava da ordem de parar continua');
   assert.equal(travaDaRegraDeSinalDeAlerta('Paciente pergunta o endereço'), '');
 });
 
