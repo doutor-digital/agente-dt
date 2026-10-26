@@ -37,8 +37,11 @@ export interface TravaDaPerda {
   motivo: MotivoDaTrava;
 }
 
-/** Situações em que a data que sobrou no cartão NÃO é consulta de pé (a franquia desmarcou, faltou, cancelou). */
-const SITUACOES_SEM_CONSULTA = new Set(['desmarcado', 'cancelado', 'naocompareceu', 'faltou']);
+/**
+ * Situações em que a data do cartão É uma consulta de pé: ainda sem situação gravada, Agendado ou Confirmado. Qualquer outra
+ * (Desmarcado, Não compareceu, Remarcado, Atendido…) quer dizer que a data que sobrou no cartão já não é uma consulta futura viva.
+ */
+const SITUACOES_COM_CONSULTA_DE_PE = new Set(['', 'agendado', 'confirmado']);
 
 function temTag(c: CartaoParaTrava, ...nomes: string[]): boolean {
   const alvos = new Set(nomes.map(normalizarNome));
@@ -49,7 +52,7 @@ function comConsultaFutura(c: CartaoParaTrava, agoraEpoch: number): boolean {
   const data = epochDoValor(valorDoCampo(c.custom_fields_values, CAMPOS_SYNC.DATA_CONSULTA));
   if (data === null || data <= agoraEpoch) return false;
   const situacao = normalizarNome(String(valorDoCampo(c.custom_fields_values, CAMPOS_SYNC.SITUACAO) ?? ''));
-  return !SITUACOES_SEM_CONSULTA.has(situacao);
+  return SITUACOES_COM_CONSULTA_DE_PE.has(situacao);
 }
 
 function pagou(c: CartaoParaTrava): boolean {

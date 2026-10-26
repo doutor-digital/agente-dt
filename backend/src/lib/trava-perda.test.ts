@@ -79,6 +79,8 @@ test('consulta futura segura; passada, desmarcada ou que o paciente faltou não'
   assert.equal(travaDaPerdaAutomatica(com(-2, 'Agendado'), AGORA), null, 'já passou');
   assert.equal(travaDaPerdaAutomatica(com(3, 'Desmarcado'), AGORA), null, 'a data que sobrou de uma consulta desmarcada');
   assert.equal(travaDaPerdaAutomatica(com(3, 'Não compareceu'), AGORA), null);
+  assert.equal(travaDaPerdaAutomatica(com(3, 'Remarcado'), AGORA), null, 'a data é do horário antigo; o novo vem como Agendado');
+  assert.equal(travaDaPerdaAutomatica(com(3, 'Atendido'), AGORA), null);
 });
 
 test('Canaã #28886952 (pagou, consulta marcada, Quente) — o caso da Suzanne — é travado', () => {
