@@ -133,10 +133,13 @@ export interface TurnoDoComprovante {
  */
 const FALAS_QUE_CONTAM = 10;
 
-/** `falasDoPaciente` na ordem da conversa; a última é a deste turno. */
-export function turnoDoComprovante(falasDoPaciente: ReadonlyArray<string>): TurnoDoComprovante {
+/**
+ * `falasDoPaciente` na ordem da conversa; a última é a deste turno. `consultaNoCrm`: o prompt traz a consulta de verdade
+ * (a equipe criou) — a espera acabou e só o comprovante DESTE turno conta (achado do Codex).
+ */
+export function turnoDoComprovante(falasDoPaciente: ReadonlyArray<string>, consultaNoCrm = false): TurnoDoComprovante {
   const noTurno = ehTranscricaoDeComprovante(falasDoPaciente[falasDoPaciente.length - 1] ?? '');
-  const pendente = noTurno || falasDoPaciente.slice(-FALAS_QUE_CONTAM).some((t) => ehTranscricaoDeComprovante(t));
+  const pendente = noTurno || (!consultaNoCrm && falasDoPaciente.slice(-FALAS_QUE_CONTAM).some((t) => ehTranscricaoDeComprovante(t)));
   return { noTurno, pendente };
 }
 

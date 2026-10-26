@@ -616,16 +616,6 @@ export async function buildAgentGraph(
           : JSON.stringify(lastHuman.content)
         : undefined,
     );
-    // Comprovante (foto/PDF) neste turno, ou recado "a equipe confirma" ainda fresco no histórico: a ferramenta de
-    // agendar recusa e a resposta que afirma confirmação vira o recado (confirmacao-so-com-crm.ts).
-    Object.assign(
-      comprovante,
-      turnoDoComprovante(
-        nonSystemMessages
-          .filter((m) => m.getType() === 'human')
-          .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))),
-      ),
-    );
     // A conversa em falas: as contas de repetição (nome pedido 2x, mesma pergunta sem resposta, áudio não ouvido)
     // e de insistência no preço saem daqui, em código — o prompt recebe o resultado, não a tarefa de contar.
     // Sem as respostas seguradas (o paciente mandou outra mensagem enquanto elas nasciam): contam as que ele leu.
@@ -697,6 +687,17 @@ export async function buildAgentGraph(
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
     }
+    // Comprovante (foto/PDF) neste turno, ou nas últimas falas do paciente: a ferramenta de agendar recusa e a resposta que
+    // afirma confirmação vira o recado (confirmacao-so-com-crm.ts). Com a consulta já no CRM (a equipe criou) a espera acabou.
+    Object.assign(
+      comprovante,
+      turnoDoComprovante(
+        nonSystemMessages
+          .filter((m) => m.getType() === 'human')
+          .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))),
+        promptTemConsulta(promptDoTurno),
+      ),
+    );
     const janela = podarHistorico(nonSystemMessages);
     const finalMessages: BaseMessage[] = [systemMessage, ...janela];
 

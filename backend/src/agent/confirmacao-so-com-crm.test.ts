@@ -76,6 +76,11 @@ test('a espera sai do FATO (comprovante nas últimas falas do paciente), não do
   assert.equal(turnoDoComprovante([COMPROVANTE, ...falas, 'mais uma']).pendente, false, 'saiu da janela: a equipe já devia ter respondido');
 });
 
+test('a equipe criou a consulta no CRM: a espera acaba (só o comprovante deste turno conta)', () => {
+  assert.deepEqual(turnoDoComprovante([COMPROVANTE, 'Obrigada'], true), { noTurno: false, pendente: false });
+  assert.deepEqual(turnoDoComprovante(['Oi', COMPROVANTE], true), { noTurno: true, pendente: true });
+});
+
 test('Canaã 24/10: a resposta que confirma vira o recado; a que não confirma segue', () => {
   const t = turnoDoComprovante([COMPROVANTE]);
   const canaa = 'Recebi seu comprovante certo, Shelly, muito obrigada! 🥰 Sua vaga está garantida.\n\n✅ Agendamento confirmado, Shelly!';
