@@ -328,3 +328,13 @@ test('desmarcada: "Tudo certo, Maria! Quer que eu veja um novo horário?" não �
   assert.equal(afirmouComConsultaDesmarcada('Tudo certo, Maria! Te espero quinta, 29/10, às 9h.', { marcouAgora: false, bloco: BLOCO_DESMARCADA, promessa: null }) !== null, true, 'com dia/hora é afirmação');
   assert.equal(afirmaConfirmacao('Já está tudo certo, Maria.', { estrito: true }), null);
 });
+
+test('a trava só mexe na instância REGISTRADA de agendar_consulta: o agendar interno de remarcar_consulta não é tocado', () => {
+  const ctx = { unit: { id: 'u', slug: 's' } as never, recorder: { step: async () => undefined } as never };
+  const registrada = buildAgendarConsulta(ctx);
+  const internaDoRemarcar = buildAgendarConsulta(ctx); // o que buildRemarcarConsulta faz por dentro
+  const funcAntes = internaDoRemarcar.func;
+  travarAgendamentoPorComprovante([registrada], { noTurno: true, pendente: true }, ctx.recorder, { exigePagamento: true });
+  assert.notEqual(registrada, internaDoRemarcar);
+  assert.equal(internaDoRemarcar.func, funcAntes, 'remarcar em unidade com taxa de reserva não passa pela trava');
+});
