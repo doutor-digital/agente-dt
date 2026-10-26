@@ -33,8 +33,11 @@ const SWEEP_MS = 5 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 90_000;
 /** Só leads que nasceram nas últimas 24 h: o estoque antigo é das SDRs, não deste robô. */
 const JANELA_S = 24 * 3600;
-/** Lê 48 h para a numeração ("Lead 2 …") enxergar o dia inteiro de um lead criado 24 h atrás. */
-const LEITURA_S = 48 * 3600;
+/**
+ * Lê 50 h para a numeração ("Lead 2 …") enxergar o dia local inteiro de um lead criado 24 h atrás: o dia dele começou
+ * no máximo 24 h antes (24 + 24 = 48 h) — as 2 h de folga são margem. Só entram na conta os do MESMO dd/mm/aa local.
+ */
+const LEITURA_S = 50 * 3600;
 /** Dá tempo da SDR nomear sozinha e do contato ganhar o nome do perfil do WhatsApp. */
 const IDADE_MINIMA_S = 3 * 60;
 const MAX_PAGINAS = 8;

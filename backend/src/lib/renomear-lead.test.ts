@@ -237,6 +237,18 @@ test('rodada: lead com menos de 3 minutos ou com mais de 24 h fica para as SDRs 
   assert.deepEqual(c.gravados, [{ id: 3, nome: 'Célia Dias 26/10/26' }]);
 });
 
+test('numeração só conta o MESMO dia local: "Lead" de ontem não vira "Lead 2" hoje', async () => {
+  const c = cenario(
+    [
+      { id: 1, nome: 'Lead 25/10/26', contato: 11, minutosDeVida: 14 * 60 + 5 }, // 25/10 23:55 em Brasília, ontem
+      { id: 2, nome: SEM_NOME(2), contato: 12, minutosDeVida: 30 },
+    ],
+    { 11: 'Ana Paula', 12: '-' },
+  );
+  await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar });
+  assert.deepEqual(c.gravados, [{ id: 2, nome: 'Lead 26/10/26' }]);
+});
+
 test('conta dividida: cada cartão vale a chave da SUA unidade; sem unidade vale a mais fraca; desligada não grava', async () => {
   const c = cenario(
     [
