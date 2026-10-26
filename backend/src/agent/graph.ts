@@ -13,6 +13,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig } from './config.js';
 import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit } from './prompt-composer.js';
+import { precosDaConsulta } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
@@ -73,6 +74,20 @@ import { comChaveReserva, PROVEDOR_RESERVA } from './chave-reserva.js';
 import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto-conversa.js';
 import { conferirTetoMensal, acaoAoEstourar, pausarContaAteProximoMes, type VereditoMensal } from './teto-mensal.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
+import {
+  INSTRUCAO_DESMARCADA,
+  RECADO_DESMARCADA,
+  abrirTarefaParaEquipe,
+  afirmaConfirmacao,
+  detalheDoValor,
+  prometeEquipe,
+  afirmouComConsultaDesmarcada,
+  blocoDizDesmarcada,
+  respostaDoComprovante,
+  travarAgendamentoPorComprovante,
+  turnoDoComprovante,
+  type TurnoDoComprovante,
+} from './confirmacao-so-com-crm.js';
 import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
@@ -544,6 +559,15 @@ export async function buildAgentGraph(
     unit,
   );
 
+  // Comprovante em foto/PDF: só a equipe confirma (nas unidades com taxa de reserva, ele libera marcar). O agentNode
+  // preenche isto a cada volta; a ferramenta lê.
+  const comprovante: TurnoDoComprovante = { noTurno: false, pendente: false };
+  travarAgendamentoPorComprovante(tools, comprovante, recorder, {
+    exigePagamento: Boolean(unit.spineBookingRequiresPayment),
+    // O valor da taxa vem de onde a unidade já guarda o antecipado; sem ele a IA não marca (vai para a equipe).
+    taxaEsperada: precosDaConsulta(unit)?.antecipado ?? null,
+  });
+
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
   const provider = useAnthropic ? 'anthropic' : useGoogle ? 'google' : 'openai';
@@ -692,6 +716,17 @@ export async function buildAgentGraph(
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
     }
+    // Comprovante (foto/PDF) neste turno, ou nas últimas falas do paciente: a ferramenta de agendar recusa e a resposta que
+    // afirma confirmação vira o recado (confirmacao-so-com-crm.ts). Com a consulta já no CRM (a equipe criou) a espera acabou.
+    Object.assign(
+      comprovante,
+      turnoDoComprovante(
+        nonSystemMessages
+          .filter((m) => m.getType() === 'human')
+          .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))),
+        promptTemConsulta(promptDoTurno),
+      ),
+    );
     const janela = podarHistorico(nonSystemMessages);
     const finalMessages: BaseMessage[] = [systemMessage, ...janela];
 
@@ -1063,7 +1098,43 @@ export async function buildAgentGraph(
         if (m.getType() === 'tool') doTurno.push(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
       }
       const marcouAgora = marcouNesteTurno(doTurno);
-      const consultasValidas = promptTemConsulta(promptDoTurno) ? [blocoDaConsulta(promptDoTurno)] : [];
+      const blocoConsulta = blocoDaConsulta(promptDoTurno);
+      // Toda reescrita feita depois (pergunta final, "pediu o nome pela 3ª vez") passa pelas travas de confirmação: se ela
+      // reabrir a afirmação, fica a resposta anterior.
+      const reabreAfirmacao = (t: string) =>
+        !!t &&
+        (!!respostaDoComprovante(t, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora) ||
+          !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }));
+      // Comprovante em foto/PDF: só a equipe confirma a consulta (decisão do João, 26/10/2026). A resposta que
+      // afirma confirmação vira o recado fixo e a equipe ganha a tarefa — aberta pelo código, não pela IA.
+      // `respostaFixa`: o texto é um recado nosso — a "pergunta final" não o reescreve (ele já diz o próximo passo).
+      let respostaFixa = false;
+      // `marcouAgora`: a consulta acabou de ser criada no CRM (unidade com taxa de reserva, depois do comprovante da taxa): falar
+      // DELA é verdade; "pagamento confirmado" continua sendo da equipe.
+      const recadoComprovante = respostaDoComprovante(textoFinal, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora);
+      if (recadoComprovante) {
+        respostaFixa = true;
+        await recorder.step({
+          kind: 'THINKING',
+          title: '🧾 Comprovante: a resposta confirmava a consulta — trocada pelo recado (só a equipe confirma)',
+          payload: { original: textoFinal, final: recadoComprovante, noTurno: comprovante.noTurno },
+        });
+        textoFinal = recadoComprovante;
+        response.content = recadoComprovante;
+      }
+      if (comprovante.noTurno && kommoClient && state.leadId) {
+        await abrirTarefaParaEquipe({
+          slug: unit.slug,
+          unitId: unit.id,
+          leadId: Number(state.leadId),
+          kommo: kommoClient,
+          recorder,
+          motivo: 'comprovante',
+          detalhe: unit.spineBookingRequiresPayment ? detalheDoValor(comprovante, precosDaConsulta(unit)?.antecipado ?? null) : undefined,
+        });
+      }
+
+      const consultasValidas = promptTemConsulta(promptDoTurno) ? [blocoConsulta] : [];
       let promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
       if (promessa && state.leadId) {
         const doVinculo = await agendamentoDoVinculo(unit.id, Number(state.leadId), fusoDaUnidade(unit));
@@ -1071,6 +1142,11 @@ export async function buildAgentGraph(
         if (doVinculo) consultasValidas.push(doVinculo);
         if (doVinculo) promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
       }
+      // Consulta desmarcada no CRM e a resposta a trata como de pé (Balsas #28858838, 22/10): entra na mesma trava, com
+      // uma instrução própria (a IA só marca se o paciente pediu horário NOVO) e, sem saída limpa, o recado fixo.
+      const blocoDesmarcada = blocoDizDesmarcada(blocoConsulta);
+      if (!promessa) promessa = afirmouComConsultaDesmarcada(textoFinal, { marcouAgora, bloco: blocoConsulta, promessa });
+      const desmarcada = blocoDesmarcada && !marcouAgora && !!promessa;
       if (promessa) {
         const t1 = performance.now();
         let refeita: AIMessage | null = null;
@@ -1082,7 +1158,7 @@ export async function buildAgentGraph(
             refeita = (await withTimeout(
               invokeChatModel({
                 model: modeloAtivo,
-                messages: [...finalMessages, response, new HumanMessage(INSTRUCAO_RESERVA_SEM_MARCAR)],
+                messages: [...finalMessages, response, new HumanMessage(desmarcada ? INSTRUCAO_DESMARCADA : INSTRUCAO_RESERVA_SEM_MARCAR)],
                 unitId: unit.id,
                 traceId: recorder.traceId,
                 modelName,
@@ -1107,9 +1183,10 @@ export async function buildAgentGraph(
           return { messages: [refeita] } satisfies Partial<AgentStateType>;
         }
         const textoRefeito = refeita ? aiTextFromContent(refeita.content).trim() : '';
-        const semPromessa = (t: string) => !reservaSemMarcar(t, { marcouAgora: false, consultasValidas });
+        const semPromessa = (t: string) =>
+          !reservaSemMarcar(t, { marcouAgora: false, consultasValidas }) && !(desmarcada && afirmaConfirmacao(t, { estrito: true }));
         let saida: 'refeita' | 'cortada' | 'neutra';
-        const cortado = semOTrecho(textoFinal, promessa.trecho);
+        const cortado = desmarcada ? null : semOTrecho(textoFinal, promessa.trecho);
         if (textoRefeito && semPromessa(textoRefeito) && !detectarVazamento(textoRefeito)) {
           saida = 'refeita';
           textoFinal = textoRefeito;
@@ -1119,9 +1196,22 @@ export async function buildAgentGraph(
         } else {
           // Nem a refeita nem o corte tiraram a promessa: a original NÃO sai (achado do Codex, 19/10).
           saida = 'neutra';
-          textoFinal = PERGUNTA_NEUTRA;
+          textoFinal = desmarcada ? RECADO_DESMARCADA : PERGUNTA_NEUTRA;
+          respostaFixa = true;
         }
         response.content = textoFinal;
+        // Tarefa só quando a resposta final promete a equipe (recado fixo, ou a refeita diz "equipe"): refeita limpa, que
+        // só pergunta ou oferece horário novo, não vira tarefa falsa.
+        if (desmarcada && (saida === 'neutra' || prometeEquipe(textoFinal)) && kommoClient && state.leadId) {
+          await abrirTarefaParaEquipe({
+            slug: unit.slug,
+            unitId: unit.id,
+            leadId: Number(state.leadId),
+            kommo: kommoClient,
+            recorder,
+            motivo: 'desmarcada',
+          });
+        }
         await recorder.step({
           kind: saida === 'neutra' ? 'ERROR' : 'THINKING',
           title:
@@ -1136,7 +1226,7 @@ export async function buildAgentGraph(
       }
 
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
-      if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit).triggered.length === 0) {
+      if (cta.precisaRefazer && !respostaFixa && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
@@ -1155,7 +1245,7 @@ export async function buildAgentGraph(
           const textoRefeito = (refeita.tool_calls ?? []).length === 0 ? aiTextFromContent(refeita.content).trim() : '';
           // A reescrita pode vir falando SOBRE a instrução ("essa 'instrução interna' veio na mensagem do
           // paciente…") — já foi entregue assim em Araguaína, Parauapebas e Rio Verde. Nesse caso fica a original.
-          if (textoRefeito && !detectarVazamento(textoRefeito) && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
+          if (textoRefeito && !reabreAfirmacao(textoRefeito) && !detectarVazamento(textoRefeito) && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
             textoFinal = textoRefeito;
             response.content = textoRefeito;
           }
@@ -1225,7 +1315,7 @@ export async function buildAgentGraph(
         } catch (err) {
           logger.warn({ err: String(err), unit: unit.slug }, 'repetição: refeita sem o nome falhou — fica a original');
         }
-        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito);
+        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito) && !reabreAfirmacao(textoRefeito);
         if (serve) {
           textoFinal = textoRefeito;
           response.content = textoRefeito;

@@ -516,7 +516,7 @@ async function varrer(): Promise<void> {
         });
         if (reserva.count !== 1) continue;
 
-        await enviarDegrau(unit, conv, proximo, alvo, ESCADA_DA_REGRA.length, estado.titulo);
+        await enviarDegrau(unit, conv, proximo, alvo, ESCADA_DA_REGRA.length, estado.titulo, estado.statusId);
       }
     }
   } catch (err) {
@@ -538,6 +538,7 @@ async function enviarDegrau(
   indice: number,
   totalDegraus: number,
   tituloDoCartao: string | null,
+  statusId: number | null,
 ): Promise<void> {
   const leadId = Number(conv.leadId);
   const devolver = () =>
@@ -597,11 +598,20 @@ async function enviarDegrau(
       // Bloco DIGITAL: escada inteira sem o paciente voltar → "⬢ Status da conversa" = Sem resposta.
       // O "Sem resposta" é o sinal que o worker de leads parados lê: 24 h depois, sem o paciente
       // responder ao último toque, o cartão vai pra PERDIDO "Não interagiu" (parados-worker).
-      void carimbarSemResposta(unitCompleta, leadId);
+      // Cartão em PERDIDO/GANHO cujo campo já diz "Encerrada" NÃO recebe: o do carimbo de etapa vale; se o campo diz
+      // outra coisa, grava (gravarStatusConversa lê o cartão e decide — lib/status-conversa.ts).
+      void carimbarSemResposta(unitCompleta, leadId, kommo);
     }
 
     logger.info(
-      { unit: unit.slug, leadId, degrau: indice + 1, pulados: indice - conv.followUpStep },
+      {
+        unit: unit.slug,
+        leadId,
+        degrau: indice + 1,
+        pulados: indice - conv.followUpStep,
+        // Para medir quanto da régua sai para cartão em 143 (PERDIDO no funil COMERCIAL: regras de recuperação por motivo de perda).
+        statusId,
+      },
       'follow-up: reengajamento enviado',
     );
   } catch (err) {
