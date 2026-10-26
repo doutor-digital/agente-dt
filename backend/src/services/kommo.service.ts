@@ -1,4 +1,5 @@
 import axios, { AxiosError, type AxiosAdapter, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import { responsavelDaTarefa, type UsuarioKommo } from '../lib/responsavel-da-tarefa.js';
 import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
 import { logger } from '../lib/logger.js';
@@ -696,6 +697,9 @@ function wrapAxiosError(err: unknown, context: string): never {
   }
   throw err;
 }
+
+const USUARIOS_VALIDADE_MS = 6 * 60 * 60_000;
+const usuariosPorConta = new Map<string, { usuarios: UsuarioKommo[]; ate: number }>();
 
 export class KommoClient {
   constructor(private readonly creds: KommoCreds, private readonly http: AxiosInstance) {}
@@ -1699,13 +1703,14 @@ export class KommoClient {
     responsibleUserId?: number;
     taskTypeId?: number;
   }): Promise<{ id?: number } | null> {
+    const responsavel = await this.responsavelDaTarefa(args.responsibleUserId);
     const body = [
       {
         entity_id: args.leadId,
         entity_type: 'leads',
         text: downgradeEmoji(args.text),
         complete_till: args.completeAt,
-        ...(args.responsibleUserId ? { responsible_user_id: args.responsibleUserId } : {}),
+        ...(responsavel ? { responsible_user_id: responsavel } : {}),
         ...(args.taskTypeId ? { task_type_id: args.taskTypeId } : {}),
       },
     ];
@@ -1721,10 +1726,27 @@ export class KommoClient {
     }
   }
 
-  async listUsers(): Promise<Array<{ id: number; name: string; email?: string }>> {
+  /** Tarefa do "Doutor Digital" (ou sem dono) vai para o usuário da clínica — ver lib/responsavel-da-tarefa.ts. */
+  private async responsavelDaTarefa(pedido?: number): Promise<number | undefined> {
+    const chave = this.creds.subdomain;
+    const agora = Date.now();
+    let cache = usuariosPorConta.get(chave);
+    if (!cache || cache.ate < agora) {
+      try {
+        cache = { usuarios: await this.listUsers(), ate: agora + USUARIOS_VALIDADE_MS };
+      } catch (err) {
+        logger.warn({ err: String(err), subdominio: chave }, 'tarefa: sem a lista de usuários — fica o responsável pedido');
+        return pedido;
+      }
+      usuariosPorConta.set(chave, cache);
+    }
+    return responsavelDaTarefa(cache.usuarios, pedido);
+  }
+
+  async listUsers(): Promise<Array<{ id: number; name: string; email?: string; rights?: { is_active?: boolean } }>> {
     try {
       const { data } = await this.http.get<{
-        _embedded?: { users?: Array<{ id: number; name: string; email?: string }> };
+        _embedded?: { users?: Array<{ id: number; name: string; email?: string; rights?: { is_active?: boolean } }> };
       }>('/users', { params: { page: 1, limit: 250 } });
       return data?._embedded?.users ?? [];
     } catch (err) {
