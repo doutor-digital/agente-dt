@@ -15,7 +15,7 @@
  * Só a fala deste turno (as seguidas, depois da última da IA). Sem consulta marcada ("cancelei o plano de saúde") o
  * bloco manda ignorar: quem sabe se ele tem consulta é a ferramenta, não o regex.
  */
-import { pareceDesistenciaDaConsulta, recusouRemarcarExplicitamente } from '../lib/desistencia-frases.js';
+import { oferecuHorario, pareceDesistenciaDaConsulta, recusouRemarcarExplicitamente } from '../lib/desistencia-frases.js';
 import type { Fala } from './repeticao.js';
 import { turnoDoPaciente } from './paciente-encerrou.js';
 
@@ -34,14 +34,6 @@ export interface DesistenciaDoTurno {
   /** Neste turno ele RECUSOU remarcar de forma explícita ("pode cancelar mesmo", "não quero remarcar") — e não só hesitou. */
   recusaExplicita: boolean;
 }
-
-/**
- * A Sofia propôs horário nesta fala? Relógio ("14h", "14h30", "14:30", "9 horas") MAIS um dia ("sexta", "amanhã", "27/10"):
- * "nosso horário de atendimento é das 8h às 18h" tem relógio e não é oferta.
- */
-const RELOGIO = /\b\d{1,2}\s*(?:h(?:\d{2})?\b|:\d{2}|horas?\b)/i;
-const DIA = /\b(?:segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo|amanh[ãa]|hoje)\b|\b\d{1,2}\/\d{1,2}\b/i;
-const oferecuHorario = (fala: string): boolean => RELOGIO.test(fala) && DIA.test(fala);
 
 /**
  * Em que pé está a desistência — ou null. O que vale é o PAR de turnos: a fala do paciente logo antes da última da Sofia

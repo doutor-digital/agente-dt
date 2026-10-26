@@ -25,6 +25,7 @@ import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
 import { epochSeg } from './etiquetas-auto.js';
 import { semAcento } from './sem-acento.js';
+import { primeiroNomeDoPaciente } from './ponte-respostas.js';
 
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
@@ -127,7 +128,7 @@ export async function abrirTarefaDaDesistencia(
       leadId,
       text: textoTarefaDesistenciaSemIA({
         slug: unit.slug,
-        nome: args.nome ?? lead?.name ?? null,
+        nome: primeiroNomeDoPaciente(lead?.name, args.nome ?? null),
         quando: quandoLocal(consulta, fusoDaUnidade(unit)),
         mensagem: args.texto,
         motivo: args.motivo,

@@ -14,7 +14,7 @@ import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA
 import { fusoDaUnidade } from './fuso.js';
 import { motivoDeBloqueio } from './mensagem-bloqueada.js';
 import { abrirTarefaDaDesistencia } from './desistencia-da-consulta.js';
-import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
+import { oferecuHorario, pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
 const SWEEP_MS = 60_000;
 
@@ -207,10 +207,12 @@ async function tarefaDaDesistenciaSemResposta(
   const k = `${unit.id}:${conv.leadId}`;
   if (desistenciasOlhadas.get(k) === marca) return;
   if ((Date.now() - marca) / 60_000 < ESPERA_DA_OFERTA_MIN) return;
-  // Só vale se a Sofia RESPONDEU depois do "cancelei" (a oferta de horário): se a última mensagem ainda é a dele, ela está
-  // calada — o webhook já abriu a tarefa 'ia_calada' — e se a equipe respondeu pelo celular o banco não vê.
-  const ultima = await prisma.message.findFirst({ where: { conversationId: conv.id }, orderBy: { createdAt: 'desc' }, select: { role: true } });
-  if (ultima?.role !== 'assistant') {
+  // Só vale se a ÚLTIMA mensagem do banco é a OFERTA de horário da Sofia (relógio + dia) e o paciente ficou em silêncio depois
+  // dela. Se ainda é a fala dele, a Sofia está calada (o webhook já abriu a tarefa 'ia_calada'); se a equipe respondeu pelo
+  // celular o banco não vê; e a recusa/hesitação que veio depois da oferta tem fecho próprio (cancela, tarefa ou nova oferta),
+  // cuja despedida não traz horário. Achado do Codex, 26/10.
+  const ultima = await prisma.message.findFirst({ where: { conversationId: conv.id }, orderBy: { createdAt: 'desc' }, select: { role: true, content: true } });
+  if (ultima?.role !== 'assistant' || !oferecuHorario(ultima.content)) {
     desistenciasOlhadas.set(k, marca);
     return;
   }

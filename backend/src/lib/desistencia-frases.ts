@@ -100,3 +100,11 @@ export function recusouRemarcarExplicitamente(texto: string | null | undefined):
   if (HESITA.test(s)) return false;
   return RECUSA_EXPLICITA.some((r) => r.test(s));
 }
+
+/**
+ * A Sofia propôs horário nesta fala? Relógio ("14h", "14h30", "14:30", "9 horas") MAIS um dia ("sexta", "amanhã", "27/10"):
+ * "nosso horário de atendimento é das 8h às 18h" tem relógio e não é oferta.
+ */
+const RELOGIO = /\b\d{1,2}\s*(?:h(?:\d{2})?\b|:\d{2}|horas?\b)/i;
+const DIA = /\b(?:segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo|amanh[ãa]|hoje)\b|\b\d{1,2}\/\d{1,2}\b/i;
+export const oferecuHorario = (fala: string): boolean => RELOGIO.test(fala) && DIA.test(fala);

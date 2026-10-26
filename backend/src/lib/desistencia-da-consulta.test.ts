@@ -160,7 +160,8 @@ test('Araguaína #28861610: "Cancelei." com a IA pausada e consulta no cartão �
   const r = await abrirTarefaDaDesistencia({ unit: m.unit, leadId: 28861610, texto: 'Cancelei.', nome: 'Liliane', motivo: 'ia_calada', kommo: () => m.kommo }, m.deps);
   assert.equal(r, 'tarefa_aberta');
   assert.equal(m.tarefas.length, 1);
-  assert.match(m.tarefas[0].text, /Liliane/);
+  assert.match(m.tarefas[0].text, /Francisco/);
+  assert.doesNotMatch(m.tarefas[0].text, /Liliane/, 'o nome é o do paciente (título do cartão), não o da esposa que escreveu');
   assert.match(m.tarefas[0].text, /23\/10 às 14:00/);
   assert.equal(m.marcas.length, 1);
   assert.equal(m.marcas[0], 'desistencia_tarefa:ia_calada');
