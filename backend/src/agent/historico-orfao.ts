@@ -9,13 +9,15 @@ import { ToolMessage, type BaseMessage } from '@langchain/core/messages';
  *
  * O que fazemos, sem tocar no checkpoint (só no que vai ao modelo neste turno):
  *  - chamada sem resultado imediato  -> entra um resultado sintético "interrompida", logo depois da chamada;
- *  - resultado sem a chamada antes   -> sai (não há o que pareá-lo).
+ *  - resultado sem a chamada antes   -> sai (não há o que pareá-lo); se o resultado REAL daquela chamada existe mais
+ *    adiante (mensagem intercalada), ele é trazido para junto da chamada em vez de ser trocado pelo sintético.
  * Histórico íntegro volta como a MESMA referência (zero custo no caminho normal).
  */
 
 export const TEXTO_FERRAMENTA_INTERROMPIDA =
-  'Esta chamada foi interrompida antes de terminar e o resultado não foi registrado. Não presuma que a ação foi feita; ' +
-  'se ela ainda for necessária, chame a ferramenta de novo.';
+  'Esta chamada foi interrompida e o resultado NÃO foi registrado: não se sabe se a ação chegou a ser feita. ' +
+  'Não diga ao paciente que foi feita. Se ainda for necessária, primeiro confira o estado real ' +
+  '(consultar horários / buscar paciente / ler o cartão) e só então repita.';
 
 export interface HistoricoSaneado {
   messages: BaseMessage[];
@@ -50,6 +52,17 @@ export function sanearHistorico(messages: BaseMessage[]): HistoricoSaneado {
   const saida: BaseMessage[] = [];
   const completados: string[] = [];
   let removidos = 0;
+  // Resultado real de cada chamada, onde quer que esteja: se uma mensagem se meteu entre a chamada e o resultado, o
+  // resultado de verdade (ex.: consulta marcada) volta pra junto da chamada — trocar por "interrompida" faria o modelo repetir a ação.
+  const resultadoPorId = new Map<string, { msg: ToolMessage; pos: number }>();
+  messages.forEach((m, pos) => {
+    if (m.getType() === 'tool') {
+      const t = m as ToolMessage;
+      if (!resultadoPorId.has(t.tool_call_id)) resultadoPorId.set(t.tool_call_id, { msg: t, pos });
+    }
+  });
+  const usados = new Set<ToolMessage>();
+  let reposicionados = 0;
 
   let i = 0;
   while (i < messages.length) {
@@ -57,8 +70,8 @@ export function sanearHistorico(messages: BaseMessage[]): HistoricoSaneado {
     const tipo = m.getType();
 
     if (tipo === 'tool') {
-      // Resultado cuja chamada não está imediatamente antes (as boas são consumidas junto da chamada, abaixo).
-      removidos++;
+      // Resultado cuja chamada não está imediatamente antes (os bons são consumidos junto da chamada, abaixo).
+      if (!usados.has(m as ToolMessage)) removidos++;
       i++;
       continue;
     }
@@ -74,6 +87,7 @@ export function sanearHistorico(messages: BaseMessage[]): HistoricoSaneado {
       const id = (messages[i] as ToolMessage).tool_call_id;
       if (esperados.has(id) && !respondidos.has(id)) {
         respondidos.add(id);
+        usados.add(messages[i] as ToolMessage);
         saida.push(messages[i]);
       } else {
         removidos++;
@@ -82,6 +96,13 @@ export function sanearHistorico(messages: BaseMessage[]): HistoricoSaneado {
     }
     for (const c of chamadas) {
       if (respondidos.has(c.id)) continue;
+      const real = resultadoPorId.get(c.id);
+      if (real && real.pos >= i && !usados.has(real.msg)) {
+        usados.add(real.msg);
+        reposicionados++;
+        saida.push(real.msg);
+        continue;
+      }
       completados.push(c.id);
       saida.push(
         new ToolMessage({ tool_call_id: c.id, name: c.name, status: 'error', content: TEXTO_FERRAMENTA_INTERROMPIDA }),
@@ -89,6 +110,6 @@ export function sanearHistorico(messages: BaseMessage[]): HistoricoSaneado {
     }
   }
 
-  if (completados.length === 0 && removidos === 0) return { messages, completados, removidos };
+  if (completados.length === 0 && removidos === 0 && reposicionados === 0) return { messages, completados, removidos };
   return { messages: saida, completados, removidos };
 }

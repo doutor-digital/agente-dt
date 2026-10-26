@@ -4,6 +4,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
+import { comTurnoEmAndamento } from '../lib/turnos-em-andamento.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { findUnitBySlug } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
@@ -137,17 +138,18 @@ async function processMetaMessage(
     const graph = await buildAgentGraph(recorder, unit, Number(leadId));
     const threadId = buildThreadId(unit.slug, leadId);
 
-    const result = await graph.invoke(
+    const textoDoPaciente = msg.text;
+    const result = await comTurnoEmAndamento(() => graph.invoke(
       {
         leadId: 0,
         traceId: trace.id,
-        messages: [new HumanMessage(msg.text)],
+        messages: [new HumanMessage(textoDoPaciente)],
       },
       {
         configurable: { thread_id: threadId },
         recursionLimit: 24,
       },
-    );
+    ));
 
     const reply = (result.decision ?? '').toString().trim();
     if (reply) {

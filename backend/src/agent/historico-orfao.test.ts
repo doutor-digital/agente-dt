@@ -8,7 +8,6 @@ import { z } from 'zod';
 
 import { sanearHistorico, TEXTO_FERRAMENTA_INTERROMPIDA } from './historico-orfao.js';
 import { toolsParaOpenAI } from './tools-openai.js';
-import { limparSchemaDoModelo } from './graph.js';
 
 const h = (t: string) => new HumanMessage(t);
 const a = (t: string) => new AIMessage(t);
@@ -63,6 +62,22 @@ test('duas chamadas na mesma resposta, só uma respondida: completa a que falta 
     ['B', 'A'],
   );
   assert.deepEqual(r.completados, ['A']);
+});
+
+test('resultado REAL separado da chamada por outra mensagem volta pra junto dela (não vira "interrompida")', () => {
+  const real = tRes('A');
+  const r = sanearHistorico([h('oi'), aTool('A'), h('mandei outra coisa'), real, a('pronto')]);
+  assert.deepEqual(tipos(r.messages), ['human', 'ai', 'tool', 'human', 'ai']);
+  assert.equal(r.messages[2], real);
+  assert.deepEqual(r.completados, []);
+  assert.equal(r.removidos, 0);
+});
+
+test('o texto sintético manda conferir antes de repetir (a ação pode ter sido feita)', () => {
+  const r = sanearHistorico([h('oi'), aTool('A'), h('?')]);
+  const txt = String((r.messages[2] as ToolMessage).content);
+  assert.match(txt, /não se sabe se a ação chegou a ser feita/);
+  assert.match(txt, /confira o estado real/);
 });
 
 test('resultado sem chamada antes é removido (a Anthropic também recusa tool_result solto)', () => {
@@ -157,7 +172,13 @@ const ferramenta = () =>
 
 async function corpoQueAOpenAIRecebe(montar: (tools: DynamicStructuredTool[]) => unknown[]): Promise<{ tools: Array<{ type?: string; function?: { name: string } }> }> {
   const tools = [ferramenta()];
-  limparSchemaDoModelo(tools); // exatamente o que a unidade no Claude faz: grava extras.providerToolDefinition no formato Anthropic
+  // Exatamente o que a unidade no Claude faz (limparSchemaDoModelo / aplicarStrictAnthropic, em graph.ts): grava no tool
+  // extras.providerToolDefinition no formato da Anthropic. À mão aqui, pra o teste não carregar o grafo inteiro.
+  for (const t of tools) {
+    (t as { extras?: unknown }).extras = {
+      providerToolDefinition: { name: t.name, description: t.description, input_schema: { type: 'object', properties: {} } },
+    };
+  }
   let corpo: { tools: Array<{ type?: string; function?: { name: string } }> } | null = null;
   const base = new ChatOpenAI({
     apiKey: 'sk-teste',
