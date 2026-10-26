@@ -187,11 +187,16 @@ export async function retomarOnda(
   const meta = await conferir(onda.unit, definicaoDaOnda(onda));
   if (!meta.ok) return falha(422, meta.motivo);
 
-  const r = await prisma.disparoOnda.updateMany({
-    where: { id: ondaId, estado: 'pausada', pausaCausa: 'sair' },
-    data: { estado: 'aprovada', sairAceitos: sairam, retomadaPor: args.por!.trim().toLowerCase(), retomadaEm: agora(), pausaMotivo: null, pausaCausa: null },
-  });
-  if (r.count !== 1) return falha(409, 'a onda mudou de estado enquanto retomava');
+  // Uma instrução só: volta a aprovada SE ainda está pausada por SAIR E a contagem continua a que o João viu. Se alguém
+  // respondeu SAIR durante a consulta à Meta, nada muda e ele revê a tela (nada de aceitar SAIR que ele não leu).
+  const r = {
+    count: await prisma.$executeRaw`
+      UPDATE disparo_ondas SET estado = 'aprovada', sair_aceitos = ${sairam}, retomada_por = ${args.por!.trim().toLowerCase()}, retomada_em = ${agora()},
+        pausa_motivo = NULL, pausa_causa = NULL, atualizado_em = NOW()
+      WHERE id = ${ondaId} AND estado = 'pausada' AND pausa_causa = 'sair'
+        AND (SELECT COUNT(*) FROM disparo_destinatarios d WHERE d.campanha_id = ${onda.campanhaId} AND d.unit_id = ${onda.unitId} AND d.estado = 'saiu' AND d.enviado_em IS NOT NULL) = ${sairam}`,
+  };
+  if (r.count !== 1) return falha(409, 'a onda mudou (ou chegou mais um SAIR) enquanto retomava; recarregue a tela e confira de novo');
   logger.warn({ onda: ondaId, unit: onda.unit.slug, sairAceitos: sairam, por: args.por }, 'disparo: onda RETOMADA depois de pausa por SAIR');
   return { ok: true, dados: (await prisma.disparoOnda.findUnique({ where: { id: ondaId } }))! };
 }

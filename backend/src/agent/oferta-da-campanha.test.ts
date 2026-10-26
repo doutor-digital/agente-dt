@@ -155,3 +155,32 @@ test('unidade SEM valor na ficha não ganha checagem de catálogo só porque exi
   assert.equal(r.rewritten, false, 'com oferta: continua pulada');
   assert.equal(r.text, texto);
 });
+
+test('a oferta aprova o valor EXATO: não abre a conta de parcelas (R$ 150 não aprova R$ 75 = 150/2)', () => {
+  for (const inventado of ['R$ 75 agora']) {
+    const r = aplicarGuardrail(`Você paga ${inventado} e o resto depois.`, unit(), { ofertaDaCampanha: OFERTA.oferta });
+    assert.equal(r.rewritten, true, inventado);
+    assert.ok(!r.text.includes(inventado), inventado);
+  }
+});
+
+test('oferta que cita um valor da FICHA ("de R$ 250 por R$ 150"): o valor da ficha segue sob as travas, só o da oferta é preservado', () => {
+  const u = unit({ sourceProdutos: 'Particular: R$ 350 no dia, ou R$ 280 antecipado. Com plano: R$ 250 no dia, R$ 220 antecipado.' });
+  const oferta = 'De R$ 250 por R$ 150 até sexta, para quem recebeu esta mensagem.';
+  const errado = aplicarGuardrail('Pagando antes pelo Pix, fica R$ 250 antecipado.', u, { ofertaDaCampanha: oferta });
+  assert.equal(errado.rewritten, true, 'o R$ 250 de plano no slot do antecipado ainda é corrigido');
+  assert.match(errado.text, /R\$ 280 antecipado/);
+  const certo = aplicarGuardrail('Pela campanha fica R$ 150 antecipado.', u, { ofertaDaCampanha: oferta });
+  assert.equal(certo.rewritten, false);
+  assert.equal(certo.text, 'Pela campanha fica R$ 150 antecipado.');
+});
+
+test('centavos: "R$ 150,50" da oferta passa; "R$ 150,99" não é o valor da oferta e segue sob a trava do antecipado', () => {
+  const oferta = 'Avaliação por R$ 150,50 até 31/10.';
+  const igual = 'Pagando antes pelo Pix, fica R$ 150,50 antecipado.';
+  const r = aplicarGuardrail(igual, unit(), { ofertaDaCampanha: oferta });
+  assert.equal(r.text, igual);
+  const outro = aplicarGuardrail('Pagando antes pelo Pix, fica R$ 150,99 antecipado.', unit(), { ofertaDaCampanha: oferta });
+  assert.equal(outro.rewritten, true);
+  assert.match(outro.text, /R\$ 280 antecipado/);
+});

@@ -12,10 +12,11 @@ const porUnidade = z.record(z.object({ template: z.string().min(1).max(512).opti
  * na rota PUT é "troca tudo" (volta ao padrão); no conector do Claude, atualizar é "muda só o que mandei".
  */
 export const camposDaCampanha = {
-  nome: z.string().min(2).max(120),
+  /** obrigatório ao CRIAR; ao atualizar, ausente = mantém o que está salvo */
+  nome: z.string().min(2).max(120).optional(),
   template: z.string().min(1).max(512).nullish(),
   idioma: z.string().min(2).max(12).optional(),
-  textoModelo: z.string().min(1).max(4096),
+  textoModelo: z.string().min(1).max(4096).optional(),
   variaveis: z.array(z.string().min(1).max(200)).max(10).optional(),
   cabecalho: cabecalho.nullish(),
   porUnidade: porUnidade.optional(),
@@ -23,6 +24,8 @@ export const camposDaCampanha = {
   oferta: z.string().max(OFERTA_MAX).nullish(),
 };
 
-export const campanhaSchema = z.object(camposDaCampanha);
+/** A rota PUT troca a campanha inteira: nome e texto do modelo são obrigatórios. */
+export const campanhaSchema = z.object({ ...camposDaCampanha, nome: z.string().min(2).max(120), textoModelo: z.string().min(1).max(4096) });
 
-export type CampanhaEntrada = z.infer<typeof campanhaSchema>;
+/** O que chega a `salvarCampanha`: a rota manda tudo que a campanha exige; o conector manda só o que vai mudar. */
+export type CampanhaEntrada = z.infer<z.ZodObject<typeof camposDaCampanha>>;

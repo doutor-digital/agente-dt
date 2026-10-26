@@ -177,14 +177,14 @@ test('salvar campanha: por padrão só CRIA (nunca sobrescreve sem pedir); com a
   const { c } = await conectar(fonte);
   const base = { campanha: 'outubro-rosa-2026', nome: 'Outubro Rosa', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], oferta: 'R$ 150 até 31/10' };
   assert.notEqual((await c.callTool({ name: 'disparo_campanha_salvar', arguments: base })).isError, true);
-  const atualizada = await c.callTool({ name: 'disparo_campanha_salvar', arguments: { campanha: 'outubro-rosa-2026', nome: 'Outubro Rosa', textoModelo: 'Oi {{1}}', oferta: 'R$ 140 até 31/10', atualizar: true } });
+  const atualizada = await c.callTool({ name: 'disparo_campanha_salvar', arguments: { campanha: 'outubro-rosa-2026', oferta: 'R$ 140 até 31/10', atualizar: true } });
   assert.notEqual(atualizada.isError, true);
   assert.deepEqual(JSON.parse(texto(atualizada)).camposAlterados, ['oferta']);
   assert.deepEqual(chamadas.salvar, [
     { slug: 'outubro-rosa-2026', soCriar: true, mesclar: true, oferta: 'R$ 150 até 31/10', chaves: ['nome', 'oferta', 'textoModelo', 'variaveis'] },
-    { slug: 'outubro-rosa-2026', soCriar: false, mesclar: true, oferta: 'R$ 140 até 31/10', chaves: ['nome', 'oferta', 'textoModelo'] },
+    { slug: 'outubro-rosa-2026', soCriar: false, mesclar: true, oferta: 'R$ 140 até 31/10', chaves: ['oferta'] },
   ]);
-  assert.ok(!chamadas.salvar[1]!.chaves.some((k) => ['porUnidade', 'cabecalho', 'variaveis', 'idioma', 'template'].includes(k)), 'o que não veio NÃO é mandado (nem vira padrão): modelo por unidade e arte ficam');
+  assert.ok(!chamadas.salvar[1]!.chaves.some((k) => ['porUnidade', 'cabecalho', 'variaveis', 'idioma', 'template'].includes(k)), 'o que não veio NÃO é mandado (nem vira padrão): modelo por unidade e arte ficam — dá para atualizar só a oferta, sem reenviar o texto do modelo');
   const ruim = await conectar(fonteFalsa({ salvarErro: 'a campanha outubro-rosa-2026 já existe; peça para atualizar' }).fonte);
   const r = await ruim.c.callTool({ name: 'disparo_campanha_salvar', arguments: base });
   assert.equal(r.isError, true);

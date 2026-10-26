@@ -19,6 +19,12 @@ test('retomar: cada recusa tem o seu motivo e o seu status', () => {
   for (const causa of ['falhas', 'vencida', null]) assert.equal(recusaDaRetomada({ ...OK, pausaCausa: causa })?.status, 422, `causa ${causa}: cancele e remonte`);
   assert.match(recusaDaRetomada({ ...OK, aprovadaEm: new Date(AGORA.getTime() - 8 * 86_400_000) })?.erro ?? '', /passou de 7 dias/);
   assert.equal(recusaDaRetomada({ ...OK, aprovadaEm: null })?.status, 422);
+  // sobra de validade: com 1 hora restante a onda pararia de novo, como "vencida" (sem retomada) — melhor recusar agora
+  const quaseVencida = new Date(AGORA.getTime() - (7 * 86_400_000 - 3_600_000));
+  assert.match(recusaDaRetomada({ ...OK, aprovadaEm: quaseVencida })?.erro ?? '', /vence em menos de um dia/);
+  const comFolga = new Date(AGORA.getTime() - (7 * 86_400_000 - 2 * 86_400_000));
+  assert.equal(recusaDaRetomada({ ...OK, aprovadaEm: comFolga }), null);
+  assert.equal(recusaDaRetomada({ ...OK, validadeDias: 1, aprovadaEm: new Date(AGORA.getTime() - 3_600_000) }), null, 'validade curta: a margem é metade dela, não 1 dia');
   assert.equal(recusaDaRetomada({ ...OK, sairamAgora: 5 })?.status, 409, 'chegou mais um SAIR depois que a tela abriu');
   assert.equal(recusaDaRetomada({ ...OK, sairamVisto: undefined })?.status, 409, 'sem o número que a tela mostrou, não vale');
   assert.equal(recusaDaRetomada({ ...OK, sairamVisto: '4' })?.status, 409, 'número como texto não vale');

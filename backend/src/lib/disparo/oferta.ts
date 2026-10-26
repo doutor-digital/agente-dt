@@ -31,7 +31,7 @@ async function haOfertaPorAi(agora: number): Promise<boolean> {
 /**
  * A oferta mais recente que esta pessoa recebeu nesta unidade, ou null.
  * Casa pelo cartão (`kommoLeadId`) OU pelo telefone (DDD + 8 últimos dígitos): o mesmo critério da chave única do disparo.
- * Quem respondeu SAIR (`saiu`) não entra, e onda sem oferta não entra. A oferta é a que a ONDA copiou na montagem (e o João aprovou na tela), não a da campanha de hoje.
+ * Vale o disparo mais recente: se ele não tem oferta, não há oferta. Quem respondeu SAIR (`saiu`) não entra. A oferta é a que a ONDA copiou na montagem (e o João aprovou na tela), não a da campanha de hoje.
  */
 export async function ofertaDoLead(unitId: string, leadId: number | null | undefined, telefone?: string | null, agora: Date = new Date()): Promise<OfertaVigente | null> {
   if (!(await haOfertaPorAi(agora.getTime()))) return null;
@@ -51,12 +51,12 @@ export async function ofertaDoLead(unitId: string, leadId: number | null | undef
       estado: 'enviado',
       wamid: { not: null },
       enviadoEm: { gte: new Date(agora.getTime() - diasDaOferta() * 86_400_000) },
-      onda: { oferta: { not: null } },
       OR: quem,
     },
     orderBy: { enviadoEm: 'desc' },
     select: { nome: true, enviadoEm: true, onda: { select: { textoModelo: true, variaveis: true, oferta: true, unit: { select: { name: true } }, campanha: { select: { nome: true } } } } },
   });
+  // O disparo MAIS RECENTE é o que ele está respondendo: se esse não tem oferta, a oferta de uma campanha mais velha não vale.
   const oferta = achado?.onda.oferta?.trim();
   if (!achado || !oferta || !achado.enviadoEm) return null;
   let textoEnviado = '';

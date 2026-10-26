@@ -205,7 +205,7 @@ export function registrarDisparo(server: McpServer, fonte: FonteDeDisparo, quem:
     {
       title: 'Cadastrar ou atualizar uma campanha de disparo',
       description:
-        'Cria a campanha (modelo aprovado na Meta, texto, variáveis, cabeçalho por unidade e a OFERTA que a Sofia aprende). NÃO envia nada. ' +
+        'Cria a campanha (modelo aprovado na Meta, texto, variáveis, cabeçalho por unidade e a OFERTA que a Sofia aprende). NÃO envia nada. Para CRIAR, nome e textoModelo são obrigatórios. ' +
         'Se o slug já existe, recusa, a menos que atualizar=true: confira antes o que ela tem hoje com disparo_listar. Com atualizar=true muda SÓ os campos que você mandar (o resto fica como está) e devolve quais mudaram. ' +
         '`textoModelo` é o corpo do modelo APROVADO, com {{1}}, {{2}}…; `variaveis` diz o que preenche cada um, em ordem: "primeiroNome", "unidade" ou "texto:<valor>". ' +
         '`porUnidade` traz o nome exato do modelo (o Kommo põe prefixo) e a arte de cada unidade. ' +

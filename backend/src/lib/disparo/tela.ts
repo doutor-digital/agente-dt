@@ -21,6 +21,7 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
     prisma.disparoDestinatario.count({ where: { ondaId, simuladoEm: { not: null } } }),
     prisma.disparoDestinatario.findMany({ where: { ondaId }, orderBy: [{ criadoEm: 'asc' }, { id: 'asc' }], take: 15, select: { nome: true, telefone: true } }),
     // Quem pediu SAIR interessa sempre que a campanha já tem algum: é o que o João lê antes de retomar (e vale como aviso nas outras ondas).
+    // Sem ninguém em `saiu` a função devolve [] só com uma consulta indexada: a varredura de mensagens só roda quando há quem procurar.
     onda.estado === 'montando' || onda.estado === 'cancelada' ? Promise.resolve([]) : quemPediuSair(onda.unit, onda.campanhaId),
   ]);
   // Só pergunta à Meta enquanto ainda dá para aprovar ou retomar: é a prova que destrava (ou trava) o botão.

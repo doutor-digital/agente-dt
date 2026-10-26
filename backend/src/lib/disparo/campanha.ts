@@ -28,13 +28,15 @@ export async function salvarCampanha(
   opcoes: { soCriar?: boolean; mesclar?: boolean } = {},
 ): Promise<ResultadoDeAcao<{ id: string; slug: string; criada: boolean; alterados: string[] }>> {
   const existente = await prisma.disparoCampanha.findUnique({ where: { slug } });
-  if (existente && opcoes.soCriar) return falha(409, `a campanha ${slug} já existe; peça para atualizar (e confira antes o que ela tem hoje)`);
+  const jaExiste = `a campanha ${slug} já existe; peça para atualizar (e confira antes o que ela tem hoje)`;
+  if (existente && opcoes.soCriar) return falha(409, jaExiste);
+  if (!existente && (!c.nome || !c.textoModelo)) return falha(422, 'para criar a campanha mande o nome e o texto do modelo');
   const manter = !!existente && !!opcoes.mesclar;
   const final = {
-    nome: c.nome,
+    nome: (c.nome ?? existente?.nome)!,
     template: c.template !== undefined ? c.template : manter ? existente.template : null,
     idioma: c.idioma ?? (manter ? existente.idioma : PADRAO.idioma),
-    textoModelo: c.textoModelo,
+    textoModelo: (c.textoModelo ?? existente?.textoModelo)!,
     variaveis: c.variaveis ?? (manter ? (existente.variaveis as string[]) : PADRAO.variaveis),
     cabecalho: c.cabecalho !== undefined ? c.cabecalho : manter ? existente.cabecalho : null,
     porUnidade: c.porUnidade ?? (manter ? (existente.porUnidade as Record<string, unknown>) : PADRAO.porUnidade),
@@ -52,7 +54,18 @@ export async function salvarCampanha(
     porUnidade: final.porUnidade as Prisma.InputJsonValue,
     oferta: final.oferta,
   };
-  const salva = await prisma.disparoCampanha.upsert({ where: { slug }, create: { slug, ...dados }, update: dados });
+  let salva: DisparoCampanha;
+  if (opcoes.soCriar) {
+    // Criar de verdade (e não upsert): duas chamadas ao mesmo tempo não se sobrescrevem; a segunda leva o 409 da chave única.
+    try {
+      salva = await prisma.disparoCampanha.create({ data: { slug, ...dados } });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return falha(409, jaExiste);
+      throw err;
+    }
+  } else {
+    salva = await prisma.disparoCampanha.upsert({ where: { slug }, create: { slug, ...dados }, update: dados });
+  }
   const alterados = existente ? CAMPOS_COMPARADOS.filter((k) => !igual(final[k], existente[k])) : [];
   return { ok: true, dados: { id: salva.id, slug: salva.slug, criada: !existente, alterados } };
 }
