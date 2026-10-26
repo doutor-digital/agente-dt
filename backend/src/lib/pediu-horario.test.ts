@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import { sinalizarPediuHorario, esquecerPediuHorario, ETIQUETA_PEDIU_HORARIO, ID_AUTOMACAO, type DepsPediuHorario } from './pediu-horario.js';
 import { AUTOMACOES, automacaoPorId, verificarCatalogo } from './automacoes.js';
+import { estadoDaAutomacao } from './automacoes-estado.js';
 
 const unit = { id: 'u1', slug: 'doutor-hernia-balsas' };
 
@@ -90,4 +91,27 @@ test('catálogo: a automação existe, nasce em "só no papel" e o catálogo con
   assert.equal(a.quandoVazio, 'seco');
   assert.equal(a.chave, 'CAPI_PEDIU_HORARIO_SLUGS');
   assert.deepEqual(verificarCatalogo(AUTOMACOES), []);
+});
+
+test('ambiente real: a lista CAPI_PEDIU_HORARIO_SLUGS liga só quem está nela; vazio ou outra unidade fica em seco', async () => {
+  const antes = process.env.CAPI_PEDIU_HORARIO_SLUGS;
+  try {
+    // sem linha no banco (mapa vazio) quem manda é o .env
+    assert.equal(estadoDaAutomacao('doutor-hernia-balsas', ID_AUTOMACAO, undefined), 'seco', 'vazio = só no papel na rede toda');
+    assert.equal(estadoDaAutomacao('doutor-hernia-balsas', ID_AUTOMACAO, 'doutor-hernia-serra'), 'seco');
+    assert.equal(estadoDaAutomacao('doutor-hernia-balsas', ID_AUTOMACAO, 'doutor-hernia-balsas'), 'ligado');
+    // e o caminho padrão do código (sem injeção) lê essa mesma variável
+    process.env.CAPI_PEDIU_HORARIO_SLUGS = 'doutor-hernia-balsas';
+    esquecerPediuHorario();
+    const tags: unknown[] = [];
+    assert.equal(await sinalizarPediuHorario(unit, 321, { addTag: async (p: unknown) => void tags.push(p) }), 'marcou');
+    assert.equal(tags.length, 1);
+  } finally {
+    if (antes === undefined) delete process.env.CAPI_PEDIU_HORARIO_SLUGS;
+    else process.env.CAPI_PEDIU_HORARIO_SLUGS = antes;
+  }
+});
+
+test('catálogo: o risco declarado é "escreve-campo" (a tela pede confirmação para ligar)', () => {
+  assert.equal(automacaoPorId(ID_AUTOMACAO)?.risco, 'escreve-campo');
 });

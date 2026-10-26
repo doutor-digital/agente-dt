@@ -552,9 +552,9 @@ export const AUTOMACOES: readonly Automacao[] = [
     chave: 'CAPI_PEDIU_HORARIO_SLUGS',
     nome: 'Etiqueta "IA · Pediu horário" (alimenta a Meta)',
     oQueFaz:
-      'Quando a Sofia acha horário CONFIRMADO na agenda para oferecer ao paciente, põe a etiqueta "IA · Pediu horário" no cartão. O fluxo da Meta (n8n) lê essa etiqueta e manda o LeadSubmitted sem esperar a SDR marcar Quente — mais volume para a meta "Maximizar leads por mensagens".',
+      'Quando a Sofia acha horário livre na agenda para oferecer ao paciente (conferido com a franquia quando a unidade tem a sondagem; senão, o da grade), põe a etiqueta "IA · Pediu horário" no cartão. O fluxo da Meta (n8n) lê essa etiqueta e manda o LeadSubmitted sem esperar a SDR marcar Quente — mais volume para a meta "Maximizar leads por mensagens".',
     pegadinha:
-      'Só a etiqueta nasce aqui; quem decide mandar o evento é o n8n, e só se o cartão veio de anúncio, o clique tem até 7 dias e a unidade tiver o recurso ligado lá (cfg.pediuHorario). Sem o n8n ligado a etiqueta não muda nada para a Meta. É o mesmo event_id do Quente (quente-<cartão>): quem chegar primeiro manda e o outro não duplica. Nasce em "só no papel": a lista mostra "etiquetaria" por cartão, sem tocar no Kommo. Ligue uma unidade por vez.',
+      'Só a etiqueta nasce aqui, e vale para qualquer consulta de horário com vaga (inclusive remarcação): cartão já em AGENDADO ou além não muda nada, porque a cadeia do n8n já manda o Lead por etapa. Quem decide mandar o evento é o n8n, e só se o cartão veio de anúncio, o clique tem até 7 dias e a unidade tiver o recurso ligado lá (cfg.pediuHorario). Sem o n8n ligado a etiqueta não muda nada para a Meta. É o mesmo event_id do Quente (quente-<cartão>): quem chegar primeiro manda e o outro não duplica. Nasce em "só no papel": a lista mostra "etiquetaria" por cartão, sem tocar no Kommo. Ligue uma unidade por vez.',
     risco: 'escreve-campo',
     temSeco: true,
     quandoVazio: 'seco',

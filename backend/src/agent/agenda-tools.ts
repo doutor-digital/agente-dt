@@ -328,7 +328,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
             },
           });
           cache.fim(cursor);
-          void sinalizarPediuHorario(fresca, leadId, kommo); // horário confirmado na mão = paciente no ponto de marcar (CAPI)
+          if (e.oferecer.length > 0) void sinalizarPediuHorario(fresca, leadId, kommo); // horário confirmado = paciente no ponto de marcar (CAPI)
           return ofertaDoDia(cursor, e.oferecer, e.consultadoEm);
         }
         // o INÍCIO da busca do dia: é a hora que o cache guarda (um "apagar" no meio da busca a invalida) e a do carimbo

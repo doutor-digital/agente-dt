@@ -14,6 +14,10 @@
  *    paciente quer marcar e que a clínica tem vaga. É o sinal que existe, é barato e não inventa lead para
  *    quem só disse "oi".
  *
+ * LIMITES CONHECIDOS: a consulta também serve à remarcação e o gatilho não olha a etapa (o n8n filtra: só etapa pré-agendamento,
+ * só cartão de anúncio, só até 7 dias do clique); o "uma vez por dia" vive na memória do processo (um deploy repete o PATCH — a
+ * etiqueta é idempotente e o evento tem event_id único); o seco não lê o cartão, então "etiquetaria" conta consultas, não cartões sem etiqueta.
+ *
  * COMO O RECADO CHEGA AO n8n: uma etiqueta no cartão ("IA · Pediu horário"). O n8n já lê o cartão inteiro a cada
  * webhook da Kommo; etiqueta não precisa de chave nem de endpoint novo, a SDR enxerga o que a máquina enxergou, e
  * quem escreve é UM só (a Sofia). O n8n NUNCA grava nada de volta aqui — por isso não há segundo escritor.
@@ -50,7 +54,7 @@ const depsPadrao: DepsPediuHorario = {
 };
 
 /**
- * Chamada quando a Sofia acabou de achar horário CONFIRMADO para oferecer. Nunca lança e nunca atrasa a resposta
+ * Chamada quando a Sofia acabou de achar horário para oferecer. Nunca lança e nunca atrasa a resposta
  * ao paciente (quem chama não espera: `void`). Em seco só registra; ligada, põe a etiqueta.
  */
 export async function sinalizarPediuHorario(
@@ -69,7 +73,7 @@ export async function sinalizarPediuHorario(
         leadId,
         acao: 'etiquetaria',
         alvo: ETIQUETA_PEDIU_HORARIO,
-        motivo: 'a Sofia achou horário confirmado para oferecer — o fluxo da Meta mandaria LeadSubmitted',
+        motivo: 'a Sofia achou horário para oferecer — o fluxo da Meta mandaria LeadSubmitted',
       });
       return 'seco';
     }
