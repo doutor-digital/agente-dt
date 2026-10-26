@@ -914,7 +914,8 @@ export function buildTools({
         payload: { leadId, text, deadlineMinutes, responsibleUserId: responsibleUserId ?? null, completeAt },
       });
       try {
-        const result = await kommo.createTask({ leadId, text, completeAt, responsibleUserId });
+        // id explícito = escolha (ação configurada no console): não troca para o usuário da clínica
+        const result = await kommo.createTask({ leadId, text, completeAt, responsibleUserId, manterResponsavel: responsibleUserId !== undefined });
         if (ehTarefaDeSinal(text)) avisoUrgenteNoTurno = true;
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
