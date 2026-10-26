@@ -102,3 +102,9 @@ test('tarefa da desistência diz o dia, o que o paciente escreveu e o que fazer'
   assert.match(t, /imprevisto/);
   assert.match(t, /cartão em AGENDADO/);
 });
+
+test('a véspera é superconjunto do detector da régua e da Sofia: o que cala um nunca deixa a véspera sair', () => {
+  for (const t of ['Cancelei.', 'pode desmarcar', 'Não vou poder ir amanhã', 'Tive um imprevisto', 'não vai dar pra mim ir hoje', 'vou ter que desistir da vaga']) {
+    assert.ok(pareceDesistencia(t), t);
+  }
+});

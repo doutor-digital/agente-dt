@@ -23,41 +23,19 @@ import type { KommoLead } from '../services/kommo.service.js';
 import { avisoRecente, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
 import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
+import { epochSeg } from './etiquetas-auto.js';
+
+import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
+
+export { pareceDesistenciaDaConsulta };
 
 function normalizar(s: string): string {
   return s
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-const VERBO_DE_IR = '(ir|comparecer|vir|estar (ai|la|presente|na consulta)|chegar)';
-const PODER = '(vou|vamos|vai|irei|iremos|poderei|poderemos|posso|podemos|consigo|conseguimos|conseguirei|conseguiremos)';
-
-/** O que NÃO entra: "remarcar/reagendar/outro dia" (quer horário novo, não desistiu — a Sofia já remarca) e "cancelou/cancelaram" (3ª pessoa). */
-const DESISTE_DA_CONSULTA: RegExp[] = [
-  // 1ª pessoa, imperativo e infinitivo: cancelar, cancelei, cancelo, cancela, cancele, cancelando — e desmarc-
-  /\b(cancel|desmarc|desmarqu)(ar|ei|o|e|a|ando|amos|em)\b(?! (de )?contrato)/,
-  /\bcancelamento d[aoe] (minha |nossa |meu |nosso )?(consulta|agendamento|horario|sessao|vaga)\b/,
-  /\bdesist(i|ir|o|imos|indo)\b/,
-  // "não vou poder ir", "n vou conseguir comparecer", "não poderei ir", "não irei" + verbo de ir
-  new RegExp(`\\bn(ao|) ${PODER}( mais)?( (poder|conseguir))? ${VERBO_DE_IR}\\b`),
-  /\bn(ao|) (vou|vamos|irei|iremos) mais\b/,
-  // "Nao irei." / "Infelizmente não vou." — a frase inteira, sem complemento (com complemento é outra coisa: "não irei pagar")
-  /\bn(ao|) (irei|iremos|vou|vamos)[ .!]*$/,
-  /\bn(ao|) (vou|irei|iremos) precisar mais\b/,
-  // "não vai dar pra ir", "não vai dar pra mim ir hoje", "não vai dar eu ir"
-  new RegExp(`\\bn(ao|) vai (dar|rolar) (pra |para |de )?(mim |eu |ela |ele )?${VERBO_DE_IR}\\b`),
-  // "tive um imprevisto", "surgiu um imprevisto", "houve imprevistos" — quem relata, não "imprevistos acontecem"
-  /\b(tive|tivemos|teve|houve|surgiu|surgiram|aconteceu|aconteceram|ocorreu|deu|com) (um |uns |uma |alguns |algum |grande |grandes )*imprevistos?\b/,
-];
-
-/** O texto diz que o paciente não vem à consulta que tinha? */
-export function pareceDesistenciaDaConsulta(texto: string | null | undefined): boolean {
-  const s = normalizar(texto ?? '');
-  return !!s && DESISTE_DA_CONSULTA.some((r) => r.test(s));
 }
 
 const CAMPO_DATA_DA_CONSULTA = 'datadaconsulta';
@@ -67,10 +45,9 @@ export function consultaFuturaDoCartao(lead: Pick<KommoLead, 'custom_fields_valu
   for (const f of lead?.custom_fields_values ?? []) {
     const nome = normalizar(f.field_name ?? '').replace(/[^a-z0-9]/g, '');
     if (nome !== CAMPO_DATA_DA_CONSULTA) continue;
-    const n = Number(f.values?.[0]?.value);
-    if (!Number.isFinite(n) || n <= 0) return null;
+    const n = epochSeg(f.values?.[0]?.value);
     // Uma folga de 3 h: o paciente que escreve "não vou" no meio da tarde de uma consulta das 14 h ainda é desistência.
-    return n >= agoraS - 3 * 3600 ? n : null;
+    if (n !== null && n >= agoraS - 3 * 3600) return n;
   }
   return null;
 }
@@ -84,11 +61,23 @@ function quandoLocal(epochS: number, tz: string): string {
   return p.replace(/,?\s+/, ' às ');
 }
 
-export function textoTarefaDesistenciaSemIA(args: { slug: string; nome: string | null | undefined; quando: string; mensagem: string; etapa?: string | null }): string {
+export type MotivoDaTarefa = 'ia_calada' | 'sem_resposta';
+
+export function textoTarefaDesistenciaSemIA(args: {
+  slug: string;
+  nome: string | null | undefined;
+  quando: string;
+  mensagem: string;
+  motivo?: MotivoDaTarefa;
+}): string {
   const trecho = args.mensagem.replace(/\s+/g, ' ').trim().slice(0, 140);
+  const porque =
+    args.motivo === 'sem_resposta'
+      ? 'A Sofia ofereceu outro horário e ele não respondeu.'
+      : 'A Sofia está calada nesta conversa (IA pausada, fora do horário, etapa sem IA ou a equipe falou) — ninguém ofereceu novo horário.';
   return (
     `ALERTA · ${args.slug} · [Contato: ${args.nome || 'paciente'}] Escreveu que não vem: "${trecho}". ` +
-    `A consulta de ${args.quando} segue no cartão${args.etapa ? ` (etapa ${args.etapa})` : ''} e a IA está pausada — ninguém ofereceu novo horário. ` +
+    `A consulta de ${args.quando} segue no cartão. ${porque} ` +
     'Combine outro horário com o paciente OU, se ele não quer mais, cancele na franquia, ponha ✓ Situação da consulta = Desmarcado e tire o cartão de AGENDADO. ' +
     'Enquanto estiver em AGENDADO com a data da consulta, os lembretes automáticos do Kommo continuam saindo para ele.'
   );
@@ -104,46 +93,66 @@ export interface DepsDaDesistencia {
 
 const DEPS_PADRAO: DepsDaDesistencia = { agora: () => new Date(), avisoRecente, marcarAviso };
 
+/** Mesmo paciente, duas mensagens em segundos (ou o Kommo reenviando o webhook): só uma passa. Confere-e-grava sem await no meio. */
+const emAndamento = new Set<string>();
+
+export interface KommoDaDesistencia {
+  getLead(id: number): Promise<KommoLead | null>;
+  createTask(a: { leadId: number; text: string; completeAt: number }): Promise<{ id?: number } | null>;
+}
+
 /**
- * IA pausada e o paciente escreveu que não vem: sem Sofia para remarcar, a equipe é quem resolve — e precisa saber
- * por tarefa, não por nota. Só quando o cartão tem consulta ainda por vir (sem consulta, "cancelei" pode ser o plano de
- * saúde). Uma tarefa por consulta a cada 24 h (a trava de 21/09 contra tarefa repetida). Nunca lança.
+ * O paciente escreveu que não vem e a Sofia NÃO vai oferecer horário novo — ou porque está calada (`ia_calada`: IA
+ * pausada, fora do horário, etapa sem IA, a equipe falou), ou porque ofereceu e ele não respondeu (`sem_resposta`):
+ * a equipe resolve, e precisa saber por TAREFA, não por nota. Só quando o cartão tem consulta ainda por vir (sem
+ * consulta, "cancelei" pode ser o plano de saúde). Uma tarefa por motivo a cada 24 h (a trava de 21/09 contra tarefa
+ * repetida). `kommo` é uma fábrica: um cliente que não nasce (unidade sem credencial) não pode derrubar o webhook.
+ * Nunca lança.
  */
-export async function avisarDesistenciaComIaPausada(
+export async function abrirTarefaDaDesistencia(
   args: {
     unit: Pick<Unit, 'id' | 'slug' | 'spineTimezone' | 'businessHoursTimezone'>;
     leadId: number;
     texto: string;
+    motivo: MotivoDaTarefa;
     nome?: string | null;
-    kommo: {
-      getLead(id: number): Promise<KommoLead | null>;
-      createTask(a: { leadId: number; text: string; completeAt: number }): Promise<{ id?: number } | null>;
-    };
+    kommo: () => KommoDaDesistencia;
   },
   deps: DepsDaDesistencia = DEPS_PADRAO,
 ): Promise<ResultadoDaDesistencia> {
   if (!pareceDesistenciaDaConsulta(args.texto)) return 'nao_e';
-  const { unit, leadId, kommo } = args;
+  const { unit, leadId } = args;
+  const trava = `${unit.id}:${leadId}:${args.motivo}`;
+  if (emAndamento.has(trava)) return 'ja_avisada';
+  emAndamento.add(trava);
   try {
     const agora = deps.agora();
+    const chave = `desistencia_tarefa:${args.motivo}`;
+    if (await deps.avisoRecente(unit.id, leadId, chave, JANELA_24H_MS, agora)) return 'ja_avisada';
+    const kommo = args.kommo();
     const lead = await kommo.getLead(leadId);
     const consulta = consultaFuturaDoCartao(lead, Math.floor(agora.getTime() / 1000));
     if (!consulta) return 'sem_consulta';
-    const chave = `desistencia_sem_ia:${consulta}`;
-    if (await deps.avisoRecente(unit.id, leadId, chave, JANELA_24H_MS, agora)) return 'ja_avisada';
-    const tz = fusoDaUnidade(unit);
     const criada = await kommo.createTask({
       leadId,
-      text: textoTarefaDesistenciaSemIA({ slug: unit.slug, nome: args.nome ?? lead?.name ?? null, quando: quandoLocal(consulta, tz), mensagem: args.texto }),
+      text: textoTarefaDesistenciaSemIA({
+        slug: unit.slug,
+        nome: args.nome ?? lead?.name ?? null,
+        quando: quandoLocal(consulta, fusoDaUnidade(unit)),
+        mensagem: args.texto,
+        motivo: args.motivo,
+      }),
       completeAt: Math.floor(agora.getTime() / 1000) + 60 * 60,
     });
     // marca SÓ depois de o Kommo confirmar: falha de rede não pode calar o aviso por 24 h
     if (!criada) return 'falhou';
     await deps.marcarAviso(unit.id, leadId, chave, agora);
-    logger.info({ unit: unit.slug, leadId, consulta }, 'desistência com a IA pausada: tarefa aberta para a equipe');
+    logger.info({ unit: unit.slug, leadId, consulta, motivo: args.motivo }, 'desistência da consulta: tarefa aberta para a equipe');
     return 'tarefa_aberta';
   } catch (err) {
-    logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'desistência com a IA pausada: não consegui abrir a tarefa — segue');
+    logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'desistência da consulta: não consegui abrir a tarefa — segue');
     return 'falhou';
+  } finally {
+    emAndamento.delete(trava);
   }
 }

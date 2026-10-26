@@ -1,3 +1,4 @@
+import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
@@ -12,7 +13,7 @@ import { leadPausadoPorJanela } from './pausa-lead.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
 import { motivoDeBloqueio } from './mensagem-bloqueada.js';
-import { pareceDesistenciaDaConsulta } from './desistencia-da-consulta.js';
+import { abrirTarefaDaDesistencia, pareceDesistenciaDaConsulta } from './desistencia-da-consulta.js';
 
 const SWEEP_MS = 60_000;
 
@@ -188,6 +189,36 @@ export function motivoParaNaoCobrar(bloqueio: string | null, ultimaFala: string 
   return null;
 }
 
+/**
+ * Quanto tempo sem resposta à oferta de novo horário (a Sofia ofereceu depois do "cancelei") até virar tarefa. Decisão do
+ * João, 26/10/2026: "se recusar ou não responder, encerra… e abre tarefa para a equipe".
+ */
+export const ESPERA_DA_OFERTA_MIN = 120;
+/** Conversa já olhada por esta regra, pela hora da última mensagem: sem isto, uma conversa que não vira tarefa (sem consulta no cartão) leria o cartão a cada minuto. */
+const desistenciasOlhadas = new Map<string, number>();
+
+async function tarefaDaDesistenciaSemResposta(
+  unit: Unit,
+  conv: { leadId: string; lastMessageAt: Date; contactName: string | null },
+  ultimaFala: string | null | undefined,
+): Promise<void> {
+  const marca = conv.lastMessageAt.getTime();
+  const k = `${unit.id}:${conv.leadId}`;
+  if (desistenciasOlhadas.get(k) === marca) return;
+  if ((Date.now() - marca) / 60_000 < ESPERA_DA_OFERTA_MIN) return;
+  const r = await abrirTarefaDaDesistencia({
+    unit,
+    leadId: Number(conv.leadId),
+    texto: ultimaFala ?? '',
+    motivo: 'sem_resposta',
+    nome: conv.contactName,
+    kommo: () => createKommoClient(unit),
+  });
+  if (r === 'falhou') return; // tenta de novo na próxima varredura
+  if (desistenciasOlhadas.size > 2000) desistenciasOlhadas.clear();
+  desistenciasOlhadas.set(k, marca);
+}
+
 export const COBRANCA_INICIO_MIN = 8 * 60;
 export const COBRANCA_FIM_MIN = 21 * 60;
 
@@ -349,6 +380,8 @@ async function varrer(): Promise<void> {
         // parada de propósito: etiqueta sai, paciente volta a escrever — e o cartão volta para a fila.
         const naoCobrar = motivoParaNaoCobrar(estado.bloqueio, conv.messages[0]?.content);
         if (naoCobrar) {
+          // Desistiu e não respondeu à oferta de novo horário → a equipe precisa saber (etiqueta/nome bloqueado não é isso).
+          if (!estado.bloqueio) await tarefaDaDesistenciaSemResposta(unit, conv, conv.messages[0]?.content);
           logger.debug({ unit: unit.slug, leadId: conv.leadId, motivo: naoCobrar }, 'follow-up: régua não sai para este cartão');
           continue;
         }

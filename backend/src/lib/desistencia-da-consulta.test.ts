@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  avisarDesistenciaComIaPausada,
+  abrirTarefaDaDesistencia,
   consultaFuturaDoCartao,
   pareceDesistenciaDaConsulta,
   textoTarefaDesistenciaSemIA,
   type DepsDaDesistencia,
+  type KommoDaDesistencia,
 } from './desistencia-da-consulta.js';
 
 // Frases REAIS dos pacientes (45 dias de `messages`, 26/10/2026) — o regex foi escrito depois de ler estas.
@@ -63,6 +64,16 @@ const NAO_DESISTIU = [
   'eu tenho plano de saude, no momento não vou poder pagar',
   'Marcaram esses momentos cancelaram eu que eu não posso que eu sou tenho uma carta faturada ok',
   'se vcs não mandar o Pix antes para mim pagar, eu não irei a consulta na segunda feira ok',
+  // achados da revisão (26/10): negado, pergunta, condicional, outra coisa cancelada, vem em outro dia
+  'Não quero cancelar',
+  'não cancele minha consulta',
+  'posso cancelar?',
+  'Se eu cancelar, perco o valor?',
+  'não vou desistir',
+  'Vou sim, não vou desmarcar',
+  'Como faço para cancelar o convênio?',
+  'cancelei meu plano de saúde',
+  'Nao posso ir na quinta mas vou na sexta',
   'Bom dia, tudo bem? Quero marcar uma consulta',
   'Qual o valor da consulta?',
   'Sim, confirmo',
@@ -117,7 +128,7 @@ function montar(opts: { lead?: object | null; avisado?: boolean; criaFalha?: boo
       marcas.push(chave);
     },
   };
-  const kommo = {
+  const kommo: KommoDaDesistencia = {
     getLead: async () => {
       if (opts.lancaNoLead) throw new Error('Kommo fora');
       return ('lead' in opts ? opts.lead : { id: 28861610, name: 'Francisco 20/10/26', custom_fields_values: [campo('◷ Data da Consulta', 1792774800)] }) as never;
@@ -134,37 +145,72 @@ function montar(opts: { lead?: object | null; avisado?: boolean; criaFalha?: boo
 
 test('Araguaína #28861610: "Cancelei." com a IA pausada e consulta no cartão → tarefa para a equipe, marcada depois', async () => {
   const m = montar();
-  const r = await avisarDesistenciaComIaPausada({ unit: m.unit, leadId: 28861610, texto: 'Cancelei.', nome: 'Liliane', kommo: m.kommo }, m.deps);
+  const r = await abrirTarefaDaDesistencia({ unit: m.unit, leadId: 28861610, texto: 'Cancelei.', nome: 'Liliane', motivo: 'ia_calada', kommo: () => m.kommo }, m.deps);
   assert.equal(r, 'tarefa_aberta');
   assert.equal(m.tarefas.length, 1);
   assert.match(m.tarefas[0].text, /Liliane/);
   assert.match(m.tarefas[0].text, /23\/10 às 14:00/);
   assert.equal(m.marcas.length, 1);
-  assert.match(m.marcas[0], /^desistencia_sem_ia:1792774800$/);
+  assert.equal(m.marcas[0], 'desistencia_tarefa:ia_calada');
 });
 
 test('mensagem repetida em 24 h: não abre outra tarefa', async () => {
   const m = montar({ avisado: true });
-  assert.equal(await avisarDesistenciaComIaPausada({ unit: m.unit, leadId: 1, texto: 'Cancelei.', kommo: m.kommo }, m.deps), 'ja_avisada');
+  assert.equal(await abrirTarefaDaDesistencia({ unit: m.unit, leadId: 1, texto: 'Cancelei.', motivo: 'ia_calada', kommo: () => m.kommo }, m.deps), 'ja_avisada');
   assert.equal(m.tarefas.length, 0);
 });
 
-test('sem consulta por vir no cartão, "cancelei" não vira tarefa (pode ser o plano de saúde)', async () => {
+test('sem consulta por vir no cartão, "cancelei" não vira tarefa (e "cancelei o plano" nem é lido como desistência)', async () => {
   const m = montar({ lead: { id: 1, name: 'Maria', custom_fields_values: [] } });
-  assert.equal(await avisarDesistenciaComIaPausada({ unit: m.unit, leadId: 1, texto: 'Cancelei o plano', kommo: m.kommo }, m.deps), 'sem_consulta');
+  assert.equal(await abrirTarefaDaDesistencia({ unit: m.unit, leadId: 1, texto: 'Cancelei.', motivo: 'ia_calada', kommo: () => m.kommo }, m.deps), 'sem_consulta');
   assert.equal(m.tarefas.length, 0);
 });
 
 test('mensagem que não é desistência: nem lê o cartão', async () => {
   const m = montar({ lancaNoLead: true });
-  assert.equal(await avisarDesistenciaComIaPausada({ unit: m.unit, leadId: 1, texto: 'Qual o valor?', kommo: m.kommo }, m.deps), 'nao_e');
+  assert.equal(await abrirTarefaDaDesistencia({ unit: m.unit, leadId: 1, texto: 'Qual o valor?', motivo: 'ia_calada', kommo: () => m.kommo }, m.deps), 'nao_e');
 });
 
 test('o Kommo falhou: não lança e NÃO marca (a próxima mensagem tenta de novo)', async () => {
   const falhou = montar({ criaFalha: true });
-  assert.equal(await avisarDesistenciaComIaPausada({ unit: falhou.unit, leadId: 1, texto: 'Cancelei.', kommo: falhou.kommo }, falhou.deps), 'falhou');
+  assert.equal(await abrirTarefaDaDesistencia({ unit: falhou.unit, leadId: 1, texto: 'Cancelei.', motivo: 'ia_calada', kommo: () => falhou.kommo }, falhou.deps), 'falhou');
   assert.equal(falhou.marcas.length, 0);
   const lancou = montar({ lancaNoLead: true });
-  assert.equal(await avisarDesistenciaComIaPausada({ unit: lancou.unit, leadId: 1, texto: 'Cancelei.', kommo: lancou.kommo }, lancou.deps), 'falhou');
+  assert.equal(await abrirTarefaDaDesistencia({ unit: lancou.unit, leadId: 1, texto: 'Cancelei.', motivo: 'ia_calada', kommo: () => lancou.kommo }, lancou.deps), 'falhou');
   assert.equal(lancou.marcas.length, 0);
+});
+
+test('"não respondeu à oferta de novo horário": a tarefa diz isso, e a marca é outra que a da Sofia calada', async () => {
+  const m = montar();
+  const r = await abrirTarefaDaDesistencia({ unit: m.unit, leadId: 1, texto: 'Cancelei.', motivo: 'sem_resposta', kommo: () => m.kommo }, m.deps);
+  assert.equal(r, 'tarefa_aberta');
+  assert.match(m.tarefas[0].text, /A Sofia ofereceu outro horário e ele não respondeu/);
+  assert.equal(m.marcas[0], 'desistencia_tarefa:sem_resposta');
+});
+
+test('unidade sem credencial do Kommo: a fábrica lança e NADA derruba o webhook', async () => {
+  const m = montar();
+  const r = await abrirTarefaDaDesistencia(
+    { unit: m.unit, leadId: 1, texto: 'Cancelei.', motivo: 'ia_calada', kommo: () => { throw new Error('Unit sem credenciais Kommo configuradas'); } },
+    m.deps,
+  );
+  assert.equal(r, 'falhou');
+});
+
+test('duas mensagens em segundos (ou webhook reenviado): uma tarefa só, mesmo antes de a marca gravar', async () => {
+  const m = montar();
+  const [a, b] = await Promise.all([
+    abrirTarefaDaDesistencia({ unit: m.unit, leadId: 7, texto: 'Cancelei.', motivo: 'ia_calada', kommo: () => m.kommo }, m.deps),
+    abrirTarefaDaDesistencia({ unit: m.unit, leadId: 7, texto: 'pode desmarcar', motivo: 'ia_calada', kommo: () => m.kommo }, m.deps),
+  ]);
+  assert.deepEqual([a, b].sort(), ['ja_avisada', 'tarefa_aberta']);
+  assert.equal(m.tarefas.length, 1);
+});
+
+test('cartão com dois campos "Data da Consulta" (o velho vazio primeiro) ou a data em texto ISO: acha a data boa', () => {
+  assert.equal(
+    consultaFuturaDoCartao({ custom_fields_values: [campo('◷ Data da Consulta', ''), campo('◷ Data da Consulta', 1792774800)] }, AGORA),
+    1792774800,
+  );
+  assert.equal(consultaFuturaDoCartao({ custom_fields_values: [campo('◷ Data da Consulta', '2026-10-23T14:00:00-03:00')] }, AGORA), 1792774800);
 });

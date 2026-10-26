@@ -119,8 +119,8 @@ async function reativarUnidade(unit: Unit): Promise<void> {
       // Etiqueta/nome que diz "não mande nada" (mensagem-bloqueada.ts). Cartão ilegível = segue como antes.
       const cartao = await kommo.getLead(leadId).catch(() => null);
       const bloqueio = motivoDeBloqueio(cartao, 'regua');
+      // Sem `encerrar`: a etiqueta pode sair, e aí o cartão volta para a fila (a janela de 24 h do WhatsApp o encerra).
       if (bloqueio) {
-        await encerrar(conv.id);
         logger.info({ unit: unit.slug, leadId, bloqueio }, 'reativação: cartão bloqueado para mensagem automática — não reativa');
         continue;
       }
