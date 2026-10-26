@@ -123,14 +123,14 @@ test('CAMINHO 1 — recusa explícita: NÃO cancela ainda; manda perguntar "Conf
 
 test('CAMINHO 1b — depois da pergunta nomeada, SÓ um "sim" a ela chama cancelar_consulta(confirmado=true)', () => {
   const pergunta = ia('Confirmo o cancelamento da sua consulta de quinta-feira, 29/10 às 14h?');
-  for (const sim of ['sim', 'Sim, pode', 'confirmo', 'pode cancelar']) {
+  for (const sim of ['sim', 'Sim, pode', 'confirmo', 'pode cancelar', 'sim, pode cancelar', 'pode sim', 'Sim, confirmo o cancelamento', 'isso mesmo', 'com certeza, pode cancelar por favor']) {
     const d = pacienteDesistiu([p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(sim)]);
     assert.equal(d?.momento, 'confirmando', sim);
     assert.equal(d?.resposta, 'sim', sim);
     assert.match(renderPacienteDesistiu([p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(sim)], { slug: 'araguaina' }), /chame cancelar_consulta com confirmado=true/, sim);
   }
   // "não", "manter", pergunta ou outro assunto: NÃO cancela
-  for (const nao of ['não', 'quero manter', 'espera, qual é o horário mesmo?', 'quanto custa?', 'depois eu vejo']) {
+  for (const nao of ['não', 'quero manter', 'espera, qual é o horário mesmo?', 'quanto custa?', 'depois eu vejo', 'pode ser outro dia', 'sim, mas quanto custa o retorno', 'pode me explicar como funciona']) {
     const falas = [p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(nao)];
     const bloco = renderPacienteDesistiu(falas, { slug: 'araguaina' });
     assert.doesNotMatch(bloco, /chame cancelar_consulta com confirmado=true/, nao);

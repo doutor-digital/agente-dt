@@ -178,12 +178,18 @@ export const oferecuHorario = (fala: string): boolean => {
  */
 export const perguntouConfirmarCancelamento = (fala: string): boolean => /confirmo o cancelamento da sua consulta/i.test(fala);
 
+const ASSENTE = new Set(['sim', 'isso', 'pode', 'confirmo', 'confirmado', 'confirma', 'ok', 'certo', 'claro', 'quero', 'positivo']);
+const PALAVRAS_DO_SIM = new Set(['com', 'certeza', 'mesmo', 'cancelar', 'cancela', 'cancele', 'o', 'cancelamento', 'por', 'favor', 'pfv', 'obrigado', 'obrigada', 'de', 'nada']);
+
 /** A resposta à pergunta de confirmação: "sim" só quando é um sim limpo; "não"/"manter" mantém; o resto não cancela. */
 export function respostaDaConfirmacao(texto: string | null | undefined): 'sim' | 'nao' | 'outra' {
-  const s = normalizar(texto ?? '').replace(/[!.,]+/g, ' ').trim();
+  const s = normalizar(texto ?? '').replace(/[!.,]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!s) return 'outra';
   if (/\b(nao|n|manter|mantem|mantenha|deixa|espera|calma|pera)\b/.test(s)) return 'nao';
   if (s.includes('?')) return 'outra';
-  if (/^(sim|isso|pode|pode sim|confirmo|confirmado|confirma|ok|certo|isso mesmo|com certeza|quero sim|sim pode|sim confirmo|pode cancelar)\b/.test(s) && s.split(' ').length <= 6) return 'sim';
+  // um "sim" LIMPO: abre com palavra de assentimento e só tem palavras de assentimento ("sim, pode cancelar", "pode sim",
+  // "confirmo"). "pode ser outro dia?" e "sim, mas quanto custa" não são.
+  const tokens = s.split(' ');
+  if ((ASSENTE.has(tokens[0]) || tokens.slice(0, 2).join(' ') === 'com certeza') && tokens.every((t) => ASSENTE.has(t) || PALAVRAS_DO_SIM.has(t))) return 'sim';
   return 'outra';
 }
