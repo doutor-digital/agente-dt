@@ -9,7 +9,8 @@
  * ter gravado a data da 1ª sessão, que é melhor que "hoje").
  *
  * Aproveita o mesmo gatilho pra fechar o bloco DIGITAL: lead em GANHO / CONCLUÍDO ou
- * PERDIDO → "⬢ Status da conversa" = Encerrada.
+ * PERDIDO → "⬢ Status da conversa" = Encerrada. Este é o ÚNICO escritor de "Encerrada"; os outros escritores do
+ * campo (IA, handoff, follow-up) não a desfazem enquanto o cartão estiver encerrado — ver status-conversa.ts.
  *
  * Só roda nas unidades listadas em `CARIMBO_ETAPA_SLUGS` (csv; `*` = todas). A conta
  * também precisa assinar `status_lead` no webhook do agente — a Imperatriz, por exemplo,
@@ -26,6 +27,7 @@ import type { Unit } from '@prisma/client';
 import { createKommoClient, type KommoClient, type KommoLead } from '../services/kommo.service.js';
 import { esquemaDaUnidade, normalizarNome, type EsquemaKommo } from './kommo-schema.js';
 import { logger } from './logger.js';
+import { etapaEncerraConversa, STATUS_ENCERRADA } from './status-conversa.js';
 import { automacaoLigada } from './automacoes-estado.js';
 import { grupoDaUnidade, membroDoRotulo, valorDaUnidadeNoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 import { regrasDaUnidade, travaPeloCampo, unidadeNoCartao } from './trava-unidade-atendimento.js';
@@ -50,7 +52,6 @@ const ETAPAS = {
   emTratamento: normalizarNome('EM TRATAMENTO'),
   alta: normalizarNome('ALTA'),
   cancelado: normalizarNome('TRATAMENTO CANCELADO'),
-  perdido: normalizarNome('PERDIDO'),
 };
 
 /** Puro: dado o nome da etapa de destino, o que carimbar. */
@@ -63,9 +64,10 @@ export function carimbosDaEtapa(nomeEtapa: string, agoraEpoch: number): CarimboE
   if (n === ETAPAS.alta || n === ETAPAS.cancelado) {
     return [{ campo: CAMPOS_CARIMBO.FIM_TRAT, tipo: 'date', valor: agoraEpoch, soSeVazio: true, motivo: `lead foi pra ${nomeEtapa.trim()}` }];
   }
-  // "GANHO / CONCLUÍDO" e variações ("GANHO", "CONCLUÍDO") fecham a conversa; PERDIDO também.
-  if (n === ETAPAS.perdido || n.startsWith('ganho') || n === 'concluido') {
-    return [{ campo: CAMPOS_CARIMBO.STATUS_CONVERSA, tipo: 'select', valor: 'Encerrada', soSeVazio: false, motivo: `lead foi pra ${nomeEtapa.trim()}` }];
+  // "GANHO / CONCLUÍDO" e variações ("GANHO", "CONCLUÍDO") fecham a conversa; PERDIDO também. A definição de
+  // "etapa que encerra" mora em status-conversa.ts — a mesma que os outros escritores do campo respeitam.
+  if (etapaEncerraConversa(nomeEtapa)) {
+    return [{ campo: CAMPOS_CARIMBO.STATUS_CONVERSA, tipo: 'select', valor: STATUS_ENCERRADA, soSeVazio: false, motivo: `lead foi pra ${nomeEtapa.trim()}` }];
   }
   return [];
 }
@@ -80,7 +82,7 @@ export interface EventoEtapa {
   pipeline_id?: number;
 }
 
-function valorAtual(lead: KommoLead, fieldId: number): string | null {
+export function valorAtual(lead: KommoLead, fieldId: number): string | null {
   const cf = (lead.custom_fields_values ?? []).find((f) => f.field_id === fieldId);
   const v = cf?.values?.[0]?.value;
   return v === null || v === undefined || v === '' ? null : String(v);

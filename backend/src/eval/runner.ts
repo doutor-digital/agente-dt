@@ -3,7 +3,8 @@ import type { Unit } from '@prisma/client';
 
 import { getActiveConfig } from '../agent/config.js';
 import { aplicarGuardrail } from '../agent/guardrail.js';
-import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit } from '../agent/prompt-composer.js';
+import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta } from '../agent/prompt-composer.js';
+import { decidirTrava, turnoDoComprovante } from '../agent/confirmacao-so-com-crm.js';
 import { buildTools } from '../agent/tools.js';
 import type { TraceRecorder } from '../agent/trace-recorder.js';
 import { env } from '../lib/env.js';
@@ -203,8 +204,16 @@ export async function rodarCaso(
 
     const bruto = textoDaResposta(resposta.content);
     const g = aplicarGuardrail(bruto, unit);
+    // O eval não executa ferramentas, então a trava do grafo (confirmacao-so-com-crm.ts: comprovante só a equipe confirma;
+    // unidade com taxa de reserva só marca com comprovante do valor exato) é aplicada aqui à chamada planejada: o que o
+    // grafo recusaria não conta como "chamou agendar_consulta".
+    const turnoDaTrava = turnoDoComprovante(caso.historico.filter((t) => t.de === 'paciente').map((t) => t.texto));
+    const decisaoDaTrava = decidirTrava(turnoDaTrava, {
+      exigePagamento: Boolean(unit.spineBookingRequiresPayment),
+      taxaEsperada: precosDaConsulta(unit)?.antecipado ?? null,
+    });
     const ferramentas: FerramentaChamada[] = (resposta.tool_calls ?? []).map((c) => ({
-      nome: c.name,
+      nome: c.name === 'agendar_consulta' && !decisaoDaTrava.libera ? 'agendar_consulta (recusada pela trava)' : c.name,
       args: (c.args ?? {}) as Record<string, unknown>,
     }));
 

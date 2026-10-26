@@ -70,6 +70,7 @@ async function main() {
   const { carregarFunis } = await import('../lib/franquia-sync-worker.js');
   const { recarregarAutomacoes } = await import('../lib/automacoes-estado.js');
   const w = await import('../lib/parados-worker.js');
+  const { travaDaPerdaAutomatica } = await import('../lib/trava-perda.js');
 
   const slug = arg('unidade');
   if (!slug) throw new Error('falta --unidade=<slug>');
@@ -131,6 +132,12 @@ async function main() {
           try {
             const a = await w.avaliarDoEstoque(ctx, regra, lead, e.nome);
             const d = a.decisao;
+            // trava da perda automática (26/10): a prévia não pode mostrar «→ PERDIDO» para o que o portão vai segurar
+            const segura = d?.para === 'PERDIDO' ? travaDaPerdaAutomatica(lead, agora) : null;
+            if (segura) {
+              somar(resultado, `fica · travado pela perda automática (${segura.motivo})`, `${lead.id} (${d?.regra})`);
+              continue;
+            }
             const destino = d
               ? `→ ${d.para}${d.motivoPerda ? ` · ${d.motivoPerda}` : ''}${d.para === 'PERDIDO' ? (d.semRegua ? ' · sem régua (NO_FOLLOW_UP)' : ' · com a régua de PERDIDO') : ''}`
               : a.filaDeAlta

@@ -81,6 +81,8 @@ export interface TratamentoParaEtapa {
   statusName?: string | null;
   /** Quando a franquia manda (o histórico do paciente manda): é o "fato" da saída da ALTA por sessão marcada. */
   idTreatment?: number | null;
+  /** O histórico do paciente manda "CATEGORIA, LOCAL, GRAU": é com ele que se separa cervical de lombar (`sessoes-para-cartao.ts`). */
+  typeName?: string | null;
 }
 
 export interface EntradaMovimento {
