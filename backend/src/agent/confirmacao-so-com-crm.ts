@@ -233,7 +233,7 @@ export function afirmaPagamentoConferido(texto: string | null | undefined): bool
     const n = normalizar(t);
     if (/\?\s*\S{0,3}$/.test(n) || EXPLICATIVA.test(n)) return false;
     // "Com o Pix confirmado garante sua vaga": o confirmado é a condição do que vem depois — explicação
-    if (/\b(?:confirmad|aprovad|conferid|validad)[oa]s?\s+garant(?:e|em)\b/.test(n)) return false;
+    if (/\b(?:confirmad|aprovad|conferid|validad)[oa]s?,?\s+garant(?:e|em)\b/.test(n)) return false;
     const m = AFIRMA_PAGAMENTO.exec(n);
     return !!m && !NAO_AFIRMA.test(oracaoDe(n, m.index + m[0].length));
   });

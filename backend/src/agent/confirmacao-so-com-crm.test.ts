@@ -522,3 +522,10 @@ test('valor do comprovante: saldo/limite/tarifa não são o valor pago', () => {
   assert.deepEqual(v('Tarifa R$ 0,00. Total pago R$ 100,00.'), [100]);
   assert.deepEqual(v('Pix de R$ 100,00 para a Clínica. Saldo R$ 3.000,00.'), [100]);
 });
+
+test('achados do Codex no commit final: "foi confirmado e isso garante" troca; "Pix confirmado, garante" e "ainda vou confirmar ... quinta" ficam', () => {
+  const t = T([COMPROVANTE]);
+  assert.equal(respostaDoComprovante('O pagamento foi confirmado e isso garante sua vaga', t, true), RECADO_COMPROVANTE);
+  assert.equal(respostaDoComprovante('Com o Pix confirmado, garante sua vaga.', t, true), null);
+  assert.equal(respostaDoComprovante('Combinado, ainda vou confirmar se temos horário na quinta', T([COMPROVANTE, 'e aí?']), false), null);
+});
