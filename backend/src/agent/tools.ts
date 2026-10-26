@@ -29,7 +29,7 @@ import {
   comLigarAgora,
   ehHandoffPorSinalDeAlerta,
   ETIQUETA_PRIORIDADE,
-  TAREFA_URGENTE,
+  ehTarefaDeSinal,
   textoDoAvisoUrgente,
   textoTelegramSinalDeAlerta,
 } from './sinal-de-alerta.js';
@@ -787,7 +787,7 @@ export function buildTools({
       });
       try {
         const result = await kommo.createTask({ leadId, text, completeAt, responsibleUserId });
-        if (TAREFA_URGENTE.test(text)) avisoUrgenteNoTurno = true;
+        if (ehTarefaDeSinal(text)) avisoUrgenteNoTurno = true;
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
           kind: 'KOMMO_ACTION',

@@ -203,6 +203,11 @@ export function textoDoAvisoUrgente(a: { slug: string; nome: string | null; moti
   );
 }
 
+/** A tarefa já é o aviso urgente (a da regra da unidade): `pausar_ia` não cria uma segunda. */
+export function ehTarefaDeSinal(texto: string): boolean {
+  return TAREFA_URGENTE.test(texto) || TAREFA_DE_SINAL.test(texto);
+}
+
 /** Tarefa de sinal de alerta escrita pela regra da unidade: ganha o "LIGAR AGORA" no fim se não tiver. */
 export function comLigarAgora(texto: string): string {
   if (!TAREFA_DE_SINAL.test(texto) || LIGAR_AGORA.test(texto)) return texto;

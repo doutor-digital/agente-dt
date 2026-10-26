@@ -27,6 +27,7 @@ import {
   fraseDoPasse,
   pausaDoTurno,
   ehClinicaParaSinalDeAlerta,
+  ehTarefaDeSinal,
   ehHandoffPorSinalDeAlerta,
   ETIQUETA_PRIORIDADE,
   renderSinalDeAlerta,
@@ -258,6 +259,12 @@ test('tarefa de sinal de alerta escrita pela regra da unidade ganha o LIGAR AGOR
   const ja = textoDoAvisoUrgente({ slug: 's', nome: 'Ana', motivo: 'x' });
   assert.equal(comLigarAgora(ja), ja);
   assert.equal(comLigarAgora('Ligar amanhã para confirmar'), 'Ligar amanhã para confirmar');
+});
+
+test('tarefa da regra da unidade com "red flag" também conta como o aviso urgente (sem tarefa em dobro)', () => {
+  assert.ok(ehTarefaDeSinal('ALERTA · s · red flag confirmado'));
+  assert.ok(ehTarefaDeSinal('ALERTA · s · sinal de alerta clínico'));
+  assert.ok(!ehTarefaDeSinal('Ligar amanhã para confirmar'));
 });
 
 test('Telegram do João diz LIGAR AGORA e leva o link do cartão', () => {
