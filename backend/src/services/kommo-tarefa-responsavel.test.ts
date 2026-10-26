@@ -9,7 +9,7 @@ const USUARIOS = [
   { id: 12586999, name: 'Doutor Hérnia Marabá', rights: { is_active: true } },
 ];
 
-function cliente(op: { usuarios?: () => unknown; recusar?: (quem: unknown) => boolean } = {}) {
+function cliente(op: { usuarios?: () => unknown; recusar?: (quem: unknown) => number | false } = {}) {
   const gets: Array<{ url: string; cfg: Record<string, unknown> }> = [];
   const posts: Array<{ responsible_user_id?: number }> = [];
   const http = {
@@ -19,7 +19,8 @@ function cliente(op: { usuarios?: () => unknown; recusar?: (quem: unknown) => bo
     },
     post: async (_url: string, body: Array<{ responsible_user_id?: number }>) => {
       posts.push(body[0]!);
-      if (op.recusar?.(body[0]!.responsible_user_id)) throw new Error('400');
+      const status = op.recusar?.(body[0]!.responsible_user_id);
+      if (status) throw Object.assign(new Error(`status ${status}`), { isAxiosError: true, response: { status } });
       return { data: { _embedded: { tasks: [{ id: 2484344 }] } } };
     },
   } as unknown as AxiosInstance;
@@ -56,14 +57,14 @@ test('/users falhou: fica o responsável pedido, e não relê a cada tarefa', as
 });
 
 test('o Kommo recusou o usuário da clínica: repete com o responsável do lead e a tarefa nasce', async () => {
-  const { k, posts } = cliente({ recusar: (quem) => quem === 12586999 });
+  const { k, posts } = cliente({ recusar: (quem) => (quem === 12586999 ? 400 : false) });
   const r = await k.createTask({ ...tarefa, responsibleUserId: 12586363 });
   assert.deepEqual(r, { id: 2484344 });
   assert.deepEqual(posts.map((p) => p.responsible_user_id), [12586999, 12586363]);
 });
 
 test('recusa sem troca de responsável não repete: o erro sobe', async () => {
-  const { k, posts } = cliente({ recusar: () => true });
+  const { k, posts } = cliente({ recusar: () => 400 });
   await assert.rejects(k.createTask({ ...tarefa, responsibleUserId: 12586999 }));
   assert.equal(posts.length, 1);
 });
@@ -73,4 +74,10 @@ test('responsável escolhido (conector, ação do console) não é trocado nem l
   await k.createTask({ ...tarefa, responsibleUserId: 12586363, manterResponsavel: true });
   assert.equal(posts[0]!.responsible_user_id, 12586363);
   assert.equal(gets.length, 0);
+});
+
+test('timeout/5xx com o usuário da clínica não repete: a tarefa pode já ter nascido', async () => {
+  const { k, posts } = cliente({ recusar: (quem) => (quem === 12586999 ? 504 : false) });
+  await assert.rejects(k.createTask({ ...tarefa, responsibleUserId: 12586363 }));
+  assert.equal(posts.length, 1);
 });

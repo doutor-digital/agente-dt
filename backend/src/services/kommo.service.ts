@@ -1729,7 +1729,9 @@ export class KommoClient {
     try {
       return await postar(responsavel);
     } catch (err) {
-      if (responsavel === pedido) wrapAxiosError(err, `createTask(${args.leadId})`);
+      // Só recusa de verdade (400/404/422): num timeout a tarefa pode já ter nascido, e repetir a duplicaria.
+      const recusou = axios.isAxiosError(err) && [400, 404, 422].includes(err.response?.status ?? 0);
+      if (responsavel === pedido || !recusou) wrapAxiosError(err, `createTask(${args.leadId})`);
       // o usuário da clínica pode ter sido desativado depois do cache: a tarefa (LIGAR AGORA…) não pode se perder
       logger.warn({ err: String(err), leadId: args.leadId, trocado: responsavel, pedido }, 'tarefa: o Kommo recusou o usuário da clínica — repito com o responsável do lead');
       try {
