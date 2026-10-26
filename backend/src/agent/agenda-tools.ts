@@ -1324,8 +1324,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         .describe(
           'true SOMENTE se o paciente disse, com as palavras dele, que consegue ir nesse dia e horário ' +
           '(sem viagem, trabalho ou imprevisto). Também vale: ele mesmo escreveu o dia/hora que escolheu ' +
-          '("terça às 11:30"), ou mandou o comprovante do Pix depois da chave com o horário combinado. ' +
-          '"ok" para o horário não conta.',
+          '("terça às 11:30"). Comprovante do Pix NÃO vale como confirmação do dia: quem confirma por ' +
+          'comprovante é a equipe, e a ferramenta recusa no turno do comprovante. "ok" para o horário não conta.',
         ),
       formaPagamento: z
         .enum(['pix_antecipado', 'na_clinica'])
@@ -1422,8 +1422,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
             'NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste turno. ' +
             'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: ' +
             'PIX do valor antecipado desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ' +
-            'ou pagamento na clínica antes do dia. Quando o comprovante chegar (foto ou PDF), aí sim chame ' +
-            'agendar_consulta. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para a equipe acompanhar.'
+            'ou pagamento na clínica antes do dia. Quando o comprovante chegar (foto ou PDF), NÃO marque: a equipe ' +
+            'confere e confirma a consulta em até 1 hora. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para a equipe acompanhar.'
           );
         }
         await recorder.step({

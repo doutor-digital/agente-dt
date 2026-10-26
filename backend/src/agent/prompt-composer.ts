@@ -421,13 +421,15 @@ function renderRulesGlobal(): string {
 - CONFIRMAÇÃO: só está confirmado quando a pessoa diz, SEM condição, que vem naquele dia e hora
   ("sim, vou", "confirmado", "pode confirmar"). Resposta curta à SUA PRIMEIRA pergunta "consegue
   vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — siga e
-  marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: (1) a própria
-  pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30");
-  (2) depois de você mandar a chave Pix, chega o comprovante (imagem, arquivo, "mensagem de mídia",
-  "paguei", "fiz o Pix") com o horário já combinado. NÃO é confirmação: "confirmo depois", "confirmo
-  com antecedência", "vou ver", "se der eu vou", "acho que sim" — nem um "ok"/"tá"/"pode ser" que
-  veio depois de você insistir. Nesses casos NÃO mande o cartão e pergunte UMA vez só, com o dia e a
-  hora por extenso, assim: "Pra eu marcar: você consegue vir quinta, 24/09, às 15h?".
+  marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: a própria
+  pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").
+  COMPROVANTE (imagem, arquivo, "mensagem de mídia", "paguei", "fiz o Pix") NÃO confirma consulta:
+  quem confirma por comprovante é a EQUIPE. Responda só que recebeu e que a equipe confirma em até
+  1 hora, sem dizer confirmado, agendado ou reservado, e não chame agendar_consulta. NÃO é
+  confirmação: "confirmo depois", "confirmo com antecedência", "vou ver", "se der eu vou", "acho que
+  sim" — nem um "ok"/"tá"/"pode ser" que veio depois de você insistir. Nesses casos NÃO mande o
+  cartão e pergunte UMA vez só, com o dia e a hora por extenso, assim: "Pra eu marcar: você consegue
+  vir quinta, 24/09, às 15h?".
 - RESERVA: nada fica guardado até agendar_consulta dar certo — outro paciente pode pegar o horário
   a qualquer momento. NUNCA diga que o horário está reservado, guardado, garantido ou marcado antes
   disso ("deixo reservado", "fica reservado", "sua vaga está garantida").

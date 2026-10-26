@@ -72,6 +72,16 @@ import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto
 import { conferirTetoMensal, acaoAoEstourar, pausarContaAteProximoMes, type VereditoMensal } from './teto-mensal.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import {
+  RECADO_COMPROVANTE,
+  RECADO_DESMARCADA,
+  abrirTarefaParaEquipe,
+  afirmouComConsultaDesmarcada,
+  respostaDoComprovante,
+  travarAgendamentoPorComprovante,
+  turnoDoComprovante,
+  type TurnoDoComprovante,
+} from './confirmacao-so-com-crm.js';
+import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
   FALLBACK_INDISPONIVEL,
@@ -532,6 +542,10 @@ export async function buildAgentGraph(
     unit,
   );
 
+  // Comprovante em foto/PDF: só a equipe confirma. O agentNode preenche isto a cada volta; a ferramenta lê.
+  const comprovante: TurnoDoComprovante = { noTurno: false, pendente: false };
+  travarAgendamentoPorComprovante(tools, comprovante, recorder);
+
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
   const provider = useAnthropic ? 'anthropic' : useGoogle ? 'google' : 'openai';
@@ -598,6 +612,15 @@ export async function buildAgentGraph(
           ? lastHuman.content
           : JSON.stringify(lastHuman.content)
         : undefined,
+    );
+    // Comprovante (foto/PDF) neste turno, ou recado "a equipe confirma" ainda fresco no histórico: a ferramenta de
+    // agendar recusa e a resposta que afirma confirmação vira o recado (confirmacao-so-com-crm.ts).
+    Object.assign(
+      comprovante,
+      turnoDoComprovante(
+        lastHuman ? (typeof lastHuman.content === 'string' ? lastHuman.content : JSON.stringify(lastHuman.content)) : '',
+        nonSystemMessages.filter((m) => m.getType() === 'ai').map((m) => aiTextFromContent(m.content)),
+      ),
     );
     // A conversa em falas: as contas de repetição (nome pedido 2x, mesma pergunta sem resposta, áudio não ouvido)
     // e de insistência no preço saem daqui, em código — o prompt recebe o resultado, não a tarefa de contar.
@@ -1035,6 +1058,29 @@ export async function buildAgentGraph(
       // "Reservado" sem consulta (19/10/2026, Olímpia: o Anderson pagou o 11h30 que a IA disse ter reservado, e o
       // horário foi pra outro paciente — ver reserva-sem-marcar.ts). Antes de enviar: refaz UMA vez com as
       // ferramentas, para a IA poder MARCAR; texto refeito só vale sem a promessa; senão o trecho sai.
+      // Comprovante em foto/PDF: só a equipe confirma a consulta (decisão do João, 26/10/2026). A resposta que
+      // afirma confirmação vira o recado fixo e a equipe ganha a tarefa — aberta pelo código, não pela IA.
+      const recadoComprovante = respostaDoComprovante(textoFinal, comprovante, promptTemConsulta(promptDoTurno));
+      if (recadoComprovante) {
+        await recorder.step({
+          kind: 'THINKING',
+          title: '🧾 Comprovante: a resposta confirmava a consulta — trocada pelo recado (só a equipe confirma)',
+          payload: { original: textoFinal, final: recadoComprovante, noTurno: comprovante.noTurno },
+        });
+        textoFinal = recadoComprovante;
+        response.content = recadoComprovante;
+      }
+      if (comprovante.noTurno && kommoClient && state.leadId) {
+        void abrirTarefaParaEquipe({
+          slug: unit.slug,
+          unitId: unit.id,
+          leadId: Number(state.leadId),
+          kommo: kommoClient,
+          recorder,
+          motivo: 'comprovante',
+        });
+      }
+
       const doTurno: string[] = [];
       for (let i = nonSystemMessages.length - 1; i >= 0 && nonSystemMessages[i].getType() !== 'human'; i--) {
         const m = nonSystemMessages[i];
@@ -1049,7 +1095,29 @@ export async function buildAgentGraph(
         if (doVinculo) consultasValidas.push(doVinculo);
         if (doVinculo) promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
       }
-      if (promessa) {
+      // Consulta desmarcada no CRM e a resposta a trata como de pé (Balsas #28858838, 22/10): nada de refazer com
+      // ferramenta (a IA marcaria de novo o que a recepção desmarcou) — vale o recado e a equipe é avisada.
+      const afirmouDesmarcada = afirmouComConsultaDesmarcada(textoFinal, { marcouAgora, bloco: blocoDaConsulta(promptDoTurno), promessa });
+      if (afirmouDesmarcada) {
+        await recorder.step({
+          kind: 'ERROR',
+          title: `📅 Consulta desmarcada no CRM e a resposta falava como se estivesse marcada — trocada pelo recado ("${afirmouDesmarcada.trecho.slice(0, 80)}")`,
+          payload: { original: textoFinal, final: RECADO_DESMARCADA, trecho: afirmouDesmarcada.trecho },
+        });
+        textoFinal = RECADO_DESMARCADA;
+        response.content = RECADO_DESMARCADA;
+        if (kommoClient && state.leadId) {
+          void abrirTarefaParaEquipe({
+            slug: unit.slug,
+            unitId: unit.id,
+            leadId: Number(state.leadId),
+            kommo: kommoClient,
+            recorder,
+            motivo: 'desmarcada',
+          });
+        }
+      }
+      if (promessa && !afirmouDesmarcada) {
         const t1 = performance.now();
         let refeita: AIMessage | null = null;
         let erroRefeita: string | null = null;
