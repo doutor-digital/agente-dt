@@ -32,6 +32,7 @@ import { startResultadosWorker, stopResultadosWorker } from './lib/resultados-wo
 import { iniciarAutomacoes } from './lib/automacoes-estado.js';
 import { iniciarCrmCompartilhado } from './lib/crm-compartilhado.js';
 import { iniciarSupervisorDosWorkers, encerrarSupervisorDosWorkers } from './lib/worker-lease.js';
+import { aguardarTurnos } from './lib/turnos-em-andamento.js';
 import { startVozSessaoWorker, stopVozSessaoWorker } from './lib/voz-sessao-worker.js';
 import { iniciarVigiaDeQualidade, pararVigiaDeQualidade } from './lib/qualidade-numero-worker.js';
 import { startCacheKeepaliveWorker, stopCacheKeepaliveWorker } from './lib/cache-keepalive-worker.js';
@@ -256,6 +257,12 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutdown iniciado');
     server.close();
+    // Turno da IA no meio (modelo respondeu, ferramenta ainda não rodou) não pode ser cortado: deixa o checkpoint com
+    // chamada sem resultado e a conversa passa a tomar 400 do modelo. O Swarm dá 30 s (stop_grace_period).
+    const espera = await aguardarTurnos(Number(process.env.SHUTDOWN_AGUARDA_TURNOS_MS) || 22_000);
+    if (espera.esperouMs > 0 || espera.restantes > 0) {
+      logger.warn({ ...espera }, espera.restantes > 0 ? 'shutdown: turnos da IA ainda rodando, saindo mesmo assim' : 'shutdown: turnos da IA terminaram');
+    }
     // Solta o lease antes de desconectar: o container novo assume em ≤30 s.
     await encerrarSupervisorDosWorkers();
     await prisma.$disconnect();

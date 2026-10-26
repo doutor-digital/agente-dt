@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma.js';
 import { deveCriarNaFranquia, ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
+import { comTurnoEmAndamento } from '../lib/turnos-em-andamento.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
@@ -1355,7 +1356,7 @@ export async function processAgent(args: {
       : '';
     const entradaDoModelo = blocoOficial ? `${blocoOficial}\n\n${mensagemParaIa}` : mensagemParaIa;
 
-    const result = await graph.invoke(
+    const result = await comTurnoEmAndamento(() => graph.invoke(
       {
         leadId,
         traceId,
@@ -1365,7 +1366,7 @@ export async function processAgent(args: {
         configurable: { thread_id: threadId },
         recursionLimit: 24,
       },
-    );
+    ));
 
     // A linha [[botoes: A | B]] sai do texto e vira botões na entrega (ou nada, se o
     // canal não permitir). Daqui em diante `reply` é o texto limpo que o paciente vê.

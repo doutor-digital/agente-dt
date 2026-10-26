@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
+import { comTurnoEmAndamento } from '../lib/turnos-em-andamento.js';
 import { TraceRecorder } from '../agent/trace-recorder.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
@@ -192,7 +193,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     });
     const entradaDoModelo = blocoOficial ? `${blocoOficial}\n\n${humanMessage}` : humanMessage;
 
-    const result = await graph.invoke(
+    const result = await comTurnoEmAndamento(() => graph.invoke(
       {
         leadId: Number(leadId),
         traceId: trace.id,
@@ -202,7 +203,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
         configurable: { thread_id: threadId },
         recursionLimit: 24,
       },
-    );
+    ));
 
     const decisao = (result.decision ?? '').trim();
     // Mesma barreira do webhook: bastidor que a reescrita do grafo não limpou não sai — resposta vazia,
