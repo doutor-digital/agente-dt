@@ -179,3 +179,21 @@ test('escolheu horário COM ressalva ("pode ser quinta, se der", "sexta, vou sim
 test('a recusa só vale com consulta marcada: o bloco diz', () => {
   assert.match(renderPacienteDesistiu(COM_OFERTA('não quero remarcar')), /só vale se ele TEM consulta marcada/);
 });
+
+test('fora do "ligado" a Sofia NÃO promete "vou avisar a equipe para cancelar" (nada vai avisar a equipe)', () => {
+  const recusa = renderPacienteDesistiu(COM_OFERTA('não quero remarcar'), { slug: 'x', sistemaAvisa: false });
+  assert.match(recusa, /NÃO prometa que a equipe vai cancelar/);
+  assert.doesNotMatch(recusa, /vou avisar a equipe/);
+  assert.doesNotMatch(recusa, /o sistema já avisou/);
+  const duvida = renderPacienteDesistiu(COM_OFERTA('vou ver'), { slug: 'x', sistemaAvisa: false });
+  assert.doesNotMatch(duvida, /o sistema avisa a equipe/);
+  const outra = renderPacienteDesistiu([ia('Posso confirmar?'), p('cancela a do meu filho, a minha mantém')], { slug: 'x', sistemaAvisa: false });
+  assert.doesNotMatch(outra, /o sistema já avisou/);
+  // ligado: como antes
+  assert.match(renderPacienteDesistiu(COM_OFERTA('não quero remarcar'), { slug: 'x', sistemaAvisa: true }), /vou avisar a equipe para cancelar/);
+  // e o prompt da unidade (automação nasce em "só no papel") sai SEM a promessa
+  const unidade = { id: 'u1', slug: 'teste-seco', name: 'Clínica Teste', personaEmojis: [], handoffKeywords: [] } as unknown as Unit;
+  const prompt = composeSystemPrompt({ unit: unidade, historico: COM_OFERTA('não quero remarcar') });
+  assert.match(prompt, /<paciente_desistiu>/);
+  assert.doesNotMatch(prompt, /vou avisar a equipe para cancelar/);
+});

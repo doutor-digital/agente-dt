@@ -29,6 +29,7 @@ import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.j
 import { renderRajada, textoSemResposta } from './rajada.js';
 import { renderPacienteEncerrou } from './paciente-encerrou.js';
 import { renderPacienteDesistiu } from './paciente-desistiu.js';
+import { estadoDaDesistencia } from '../lib/desistencia-da-consulta.js';
 import { renderPerguntaDoPaciente } from './pergunta-do-paciente.js';
 import { renderFalaDePaciente } from './fala-de-paciente.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
@@ -1647,7 +1648,7 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   const encerrou = renderPacienteEncerrou(historico);
   if (encerrou) blocos.push(encerrou);
   // Escreveu "cancelei"/"não vou poder ir": a Sofia tenta REMARCAR antes de aceitar (paciente-desistiu.ts, 26/10/2026).
-  const desistiu = renderPacienteDesistiu(historico, { slug: unit.slug });
+  const desistiu = renderPacienteDesistiu(historico, { slug: unit.slug, sistemaAvisa: estadoDaDesistencia(unit.slug) === 'ligado' });
   if (desistiu) blocos.push(desistiu);
   // Só quando a ficha dá o valor da CONSULTA sem ambiguidade (os dois valores, antecipado e no dia). Com R$ solto nas
   // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,

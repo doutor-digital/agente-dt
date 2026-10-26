@@ -104,34 +104,54 @@ export function acaoDaDesistencia(d: DesistenciaDoTurno | null): AcaoDaDesistenc
 }
 
 /** Recusa explícita: despedida SEM dizer que cancelou; quem cancela é a equipe, avisada pelo sistema. */
-const RECUSA_EXPLICITA_FECHO =
+const RECUSA_EXPLICITA_FECHO_LIGADO =
   'RECUSA EXPLÍCITA (só vale se ele TEM consulta marcada; sem consulta, trate como conversa normal): despeça-se com educação em 1 ou 2 frases ("fico à disposição, qualquer coisa é só me chamar"), SEM nova ' +
   'oferta. NÃO diga que a consulta foi cancelada — diga que vai avisar a equipe para cancelar ("vou avisar a equipe para cancelar ' +
   'e ela confirma com você"). NÃO chame cancelar_consulta e NÃO crie tarefa nem etiqueta: o sistema já avisou a equipe.';
 
 /** Dúvida: responde normal, NÃO cancela, NÃO diz que cancelou. */
-const DUVIDA_FECHO =
+const DUVIDA_FECHO_LIGADO =
   'Se ele só HESITOU ("acho que não vou conseguir", "vou ver", "depois eu aviso"): em UMA frase, pergunte se prefere outro dia ' +
   '(e, se quiser, consulte horários) ou se não vai mesmo — sem cobrar. Se ele diz que quer MANTER ("quero manter", "vou sim", ' +
   '"cancela não"): confirme em UMA frase que a consulta segue marcada e NÃO ofereça outro horário. Em qualquer dúvida: NÃO diga ' +
   'que cancelou, NÃO chame cancelar_consulta e NÃO crie tarefa: o sistema avisa a equipe para conferir com ele.';
 
+/**
+ * A automação `desistencia-cancela` NÃO está "ligada" nesta unidade (nasce em "só no papel"): o sistema não avisa a equipe, então a
+ * Sofia NÃO promete "vou avisar a equipe para cancelar". Só se despede e manda falar com a equipe da clínica.
+ */
+const RECUSA_EXPLICITA_FECHO_SEM_SISTEMA =
+  'RECUSA EXPLÍCITA (só vale se ele TEM consulta marcada; sem consulta, trate como conversa normal): despeça-se com educação em 1 ou ' +
+  '2 frases ("fico à disposição, qualquer coisa é só me chamar"), SEM nova oferta. NÃO diga que a consulta foi cancelada e NÃO ' +
+  'prometa que a equipe vai cancelar: diga que, para cancelar, ele pode falar com a equipe da clínica. NÃO chame cancelar_consulta ' +
+  'e NÃO crie tarefa nem etiqueta.';
+
+const DUVIDA_FECHO_SEM_SISTEMA =
+  'Se ele só HESITOU ("acho que não vou conseguir", "vou ver", "depois eu aviso"): em UMA frase, pergunte se prefere outro dia ' +
+  '(e, se quiser, consulte horários) ou se não vai mesmo — sem cobrar. Se ele diz que quer MANTER ("quero manter", "vou sim", ' +
+  '"cancela não"): confirme em UMA frase que a consulta segue marcada e NÃO ofereça outro horário. Em qualquer dúvida: NÃO diga ' +
+  'que cancelou, NÃO chame cancelar_consulta e NÃO crie tarefa.';
+
 /** O bloco do turno. Vazio quando não há desistência em andamento. */
-export function renderPacienteDesistiu(falas: Fala[] | undefined, _opcoes: { slug?: string | null } = {}): string {
+/** `sistemaAvisa`: a automação `desistencia-cancela` está LIGADA na unidade (o sistema abre a tarefa e para a véspera). */
+export function renderPacienteDesistiu(falas: Fala[] | undefined, opcoes: { slug?: string | null; sistemaAvisa?: boolean } = {}): string {
+  const sistemaAvisa = opcoes.sistemaAvisa ?? true;
   const d = falas ? pacienteDesistiu(falas) : null;
   if (!d) return '';
   const dito = d.trecho.replace(/\s+/g, ' ').trim().slice(0, 140);
   const abre = '<paciente_desistiu>\n(contado pelo sistema; vale mais que a regra de "pedido de CANCELAR" e que a de pergunta de continuidade)\n';
   const fim = '\n</paciente_desistiu>';
   const acao = acaoDaDesistencia(d);
-  const fecho = acao === 'recusou' ? RECUSA_EXPLICITA_FECHO : DUVIDA_FECHO;
+  const fecho = acao === 'recusou' ? (sistemaAvisa ? RECUSA_EXPLICITA_FECHO_LIGADO : RECUSA_EXPLICITA_FECHO_SEM_SISTEMA) : sistemaAvisa ? DUVIDA_FECHO_LIGADO : DUVIDA_FECHO_SEM_SISTEMA;
 
   if (d.momento === 'outra_consulta') {
     return (
       abre +
       `Ele falou de OUTRA consulta, ou de manter uma e cancelar outra: "${dito}". NÃO chame cancelar_consulta e NÃO diga que cancelou: ` +
-      'você não sabe qual ele quer. Diga em UMA frase que a equipe confere com ele qual consulta cancelar e qual manter. NÃO crie ' +
-      'tarefa: o sistema já avisou a equipe.' + fim
+      'você não sabe qual ele quer. ' +
+      (sistemaAvisa
+        ? 'Diga em UMA frase que a equipe confere com ele qual consulta cancelar e qual manter. NÃO crie tarefa: o sistema já avisou a equipe.'
+        : 'Diga em UMA frase que, para escolher qual cancelar e qual manter, ele pode falar com a equipe da clínica. NÃO crie tarefa.') + fim
     );
   }
   if (d.momento === 'insistiu') {

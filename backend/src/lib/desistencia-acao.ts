@@ -16,8 +16,12 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { avisoRecente, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
 import { fusoDaUnidade } from './fuso.js';
-import { consultaDoVinculoPadrao, quandoDaConsultaPorVir } from './desistencia-da-consulta.js';
+import { consultaDoVinculoPadrao, estadoDaDesistencia, ID_AUTOMACAO, quandoDaConsultaPorVir } from './desistencia-da-consulta.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
+import type { Estado } from './automacoes-estado.js';
+import { registrarSimulacao } from './so-no-papel.js';
+
+export { ID_AUTOMACAO, estadoDaDesistencia };
 
 export const MARCA_OFERTA = 'desistencia_oferta';
 export const MARCA_RECUSOU = 'recusou_remarcar';
@@ -41,7 +45,7 @@ export function textoTarefaConferir(a: { slug: string; nome: string | null; quan
   );
 }
 
-export type ResultadoDaAcao = 'nada' | 'marcada' | 'sem_consulta' | 'ja_avisada' | 'tarefa_aberta' | 'falhou';
+export type ResultadoDaAcao = 'nada' | 'simulada' | 'marcada' | 'sem_consulta' | 'ja_avisada' | 'tarefa_aberta' | 'falhou';
 
 export interface KommoDaAcao {
   getLead(id: number): Promise<KommoLead | null>;
@@ -55,9 +59,11 @@ export interface DepsDaAcao {
   marcarAviso: typeof marcarAviso;
   /** "AAAA-MM-DDTHH:mm" local da consulta ainda por vir no vínculo da franquia, ou null. */
   consultaDoVinculo: (unitId: string, leadId: number, agora: Date) => Promise<string | null>;
+  estado: (slug: string) => Estado;
+  simular: typeof registrarSimulacao;
 }
 
-const DEPS_PADRAO: DepsDaAcao = { agora: () => new Date(), avisoRecente, marcarAviso, consultaDoVinculo: (u, l) => consultaDoVinculoPadrao(u, l) };
+const DEPS_PADRAO: DepsDaAcao = { agora: () => new Date(), avisoRecente, marcarAviso, consultaDoVinculo: (u, l) => consultaDoVinculoPadrao(u, l), estado: (slug) => estadoDaDesistencia(slug), simular: registrarSimulacao };
 
 const emAndamento = new Set<string>();
 
@@ -77,7 +83,14 @@ export async function agirNaDesistencia(
   emAndamento.add(trava);
   try {
     const agora = deps.agora();
+    const estado = deps.estado(unit.slug);
+    if (estado === 'desligado') return 'nada';
+    const seco = estado !== 'ligado';
     if (acao === 'oferta') {
+      if (seco) {
+        deps.simular(unit, ID_AUTOMACAO, { leadId, acao: 'gravaria', alvo: `marca ${MARCA_OFERTA}`, motivo: 'a Sofia vai oferecer horário; sem resposta em 2 h abriria a tarefa "não respondeu"' });
+        return 'simulada';
+      }
       await deps.marcarAviso(unit.id, leadId, MARCA_OFERTA, agora);
       return 'marcada';
     }
@@ -95,13 +108,26 @@ export async function agirNaDesistencia(
       quando = 'sem data no cartão nem na franquia';
     }
 
+    const nome = primeiroNomeDoPaciente(lead?.name, null);
+    const info = { slug: unit.slug, nome, quando, trecho: args.trecho };
+    // EM SECO: tudo o que gravaria vira linha na tela de Automações, nada vai ao Kommo nem ao banco
+    if (seco) {
+      const trecho = args.trecho.replace(/\s+/g, ' ').slice(0, 120);
+      if (efetiva === 'recusou') {
+        deps.simular(unit, ID_AUTOMACAO, { leadId, acao: 'alertaria', alvo: 'tarefa URGENTE CANCELAR NA FRANQUIA', valor: textoTarefaCancelarNaFranquia(info), motivo: `recusou remarcar: "${trecho}"` });
+        deps.simular(unit, ID_AUTOMACAO, { leadId, acao: 'gravaria', alvo: `marca ${MARCA_RECUSOU} (para a véspera e a régua)`, motivo: `consulta ${quando}` });
+        deps.simular(unit, ID_AUTOMACAO, { leadId, acao: 'etiquetaria', alvo: ETIQUETA_SEM_FOLLOW_UP, motivo: 'recusou remarcar' });
+      } else {
+        deps.simular(unit, ID_AUTOMACAO, { leadId, acao: 'alertaria', alvo: 'tarefa CONFERIR COM O PACIENTE', valor: textoTarefaConferir(info), motivo: `dúvida: "${trecho}"` });
+      }
+      return 'simulada';
+    }
+
     // a NOSSA véspera e a NOSSA régua param JÁ, antes de qualquer chamada que possa falhar
     if (efetiva === 'recusou') await deps.marcarAviso(unit.id, leadId, MARCA_RECUSOU, agora);
 
     const chaveTarefa = `desistencia_tarefa:${efetiva === 'recusou' ? 'cancelar' : 'conferir'}`;
     if (await deps.avisoRecente(unit.id, leadId, chaveTarefa, JANELA_24H_MS, agora)) return 'ja_avisada';
-    const nome = primeiroNomeDoPaciente(lead?.name, null);
-    const info = { slug: unit.slug, nome, quando, trecho: args.trecho };
     const criada = await kommo.createTask({
       leadId,
       text: efetiva === 'recusou' ? textoTarefaCancelarNaFranquia(info) : textoTarefaConferir(info),

@@ -10,7 +10,7 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { abrirTarefaDaDesistencia } from './desistencia-da-consulta.js';
-import { agirNaDesistencia, MARCA_OFERTA, MARCA_RECUSOU } from './desistencia-acao.js';
+import { agirNaDesistencia, estadoDaDesistencia, MARCA_OFERTA, MARCA_RECUSOU } from './desistencia-acao.js';
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 import { marcadoEm } from './aviso-dedupe.js';
 
@@ -59,6 +59,7 @@ async function refazerTarefasQueFalharam(agora: Date): Promise<void> {
         prisma.conversation.findUnique({ where: { unitId_leadId: { unitId: m.unitId, leadId: m.leadId } }, select: { id: true } }),
       ]);
       if (!unit || !conv) { olhadas.add(id); continue; }
+      if (estadoDaDesistencia(unit.slug) !== 'ligado') continue;
       const r = await agirNaDesistencia({ unit, leadId: Number(m.leadId), acao: 'recusou', trecho: await falaDeDesistencia(conv.id, m.createdAt), kommo: () => createKommoClient(unit) });
       if (r !== 'falhou') olhadas.add(id);
     } catch (err) {
@@ -91,6 +92,8 @@ async function varrer(): Promise<void> {
         if (!marcaVenceuSemResposta(m.createdAt, agora, depois)) { if (depois > 0) olhadas.add(id); continue; }
         const unit = await prisma.unit.findUnique({ where: { id: m.unitId } });
         if (!unit) { olhadas.add(id); continue; }
+        // só a automação LIGADA abre tarefa (em seco nem existe marca; se a chave voltou ao papel, espera)
+        if (estadoDaDesistencia(unit.slug) !== 'ligado') continue;
         // já fiz a tarefa PARA ESTA oferta (a marca de dedupe é do banco: sobrevive a deploy e a reinício)
         const feita = await marcadoEm(m.unitId, m.leadId, 'desistencia_tarefa:sem_resposta');
         if (feita && feita >= m.createdAt) { olhadas.add(id); continue; }

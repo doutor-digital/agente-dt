@@ -2,13 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { agirNaDesistencia, textoTarefaCancelarNaFranquia, textoTarefaConferir, MARCA_OFERTA, MARCA_RECUSOU, type DepsDaAcao, type KommoDaAcao } from './desistencia-acao.js';
+import type { Estado } from './automacoes-estado.js';
 import { marcaVenceuSemResposta } from './desistencia-sem-resposta-worker.js';
 
 const AGORA = new Date('2026-10-22T17:03:00Z');
 const campo = (nome: string, valor: unknown) => ({ field_id: 1, field_name: nome, values: [{ value: valor }] });
 const CONSULTA_EPOCH = 1792774800; // 23/10 14:00 -03
 
-function montar(o: { lead?: object | null; vinculo?: string | null; ja?: Set<string>; criaFalha?: boolean; leadFalha?: boolean } = {}) {
+function montar(o: { lead?: object | null; vinculo?: string | null; ja?: Set<string>; criaFalha?: boolean; leadFalha?: boolean; estado?: Estado } = {}) {
+  const simulacoes: Array<{ acao: string; alvo: string; valor?: unknown }> = [];
   const tarefas: Array<{ leadId: number; text: string; completeAt: number; responsibleUserId?: number }> = [];
   const marcas: string[] = [];
   const tags: string[][] = [];
@@ -19,6 +21,10 @@ function montar(o: { lead?: object | null; vinculo?: string | null; ja?: Set<str
       marcas.push(chave);
     },
     consultaDoVinculo: async () => o.vinculo ?? null,
+    estado: () => o.estado ?? 'ligado',
+    simular: (_u, _a, sim) => {
+      simulacoes.push(sim);
+    },
   };
   const kommo: KommoDaAcao = {
     getLead: async () => {
@@ -35,7 +41,7 @@ function montar(o: { lead?: object | null; vinculo?: string | null; ja?: Set<str
     },
   };
   const unit = { id: 'u1', slug: 'doutor-hernia-araguaina', spineTimezone: 'America/Araguaina', businessHoursTimezone: 'America/Araguaina' };
-  return { deps, kommo, unit, tarefas, marcas, tags };
+  return { deps, kommo, unit, tarefas, marcas, tags, simulacoes };
 }
 
 test('RECUSOU: tarefa URGENTE "CANCELAR NA FRANQUIA" para o RESPONSÁVEL do cartão, marca que para a nossa véspera/régua, NO_FOLLOW_UP', async () => {
@@ -140,4 +146,38 @@ test('a recusa cuja tarefa falhou é REFEITA: a marca de parar a véspera não �
   const volta = montar({ ja: new Set([MARCA_RECUSOU]) });
   assert.equal(await agirNaDesistencia({ unit: volta.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => volta.kommo }, volta.deps), 'tarefa_aberta');
   assert.equal(volta.tarefas.length, 1);
+});
+
+test('EM SECO (o padrão): RECUSOU registra "abriria tarefa / pararia a véspera / poria NO_FOLLOW_UP" e NÃO grava nada', async () => {
+  const m = montar({ estado: 'seco' });
+  const r = await agirNaDesistencia({ unit: m.unit, leadId: 28861610, acao: 'recusou', trecho: 'não quero remarcar', kommo: () => m.kommo }, m.deps);
+  assert.equal(r, 'simulada');
+  assert.equal(m.tarefas.length, 0, 'nenhuma tarefa no Kommo');
+  assert.equal(m.marcas.length, 0, 'nenhuma marca: a véspera NÃO para');
+  assert.equal(m.tags.length, 0, 'nenhuma etiqueta');
+  assert.deepEqual(m.simulacoes.map((x) => `${x.acao}:${x.alvo}`), [
+    'alertaria:tarefa URGENTE CANCELAR NA FRANQUIA',
+    `gravaria:marca ${MARCA_RECUSOU} (para a véspera e a régua)`,
+    'etiquetaria:NO_FOLLOW_UP',
+  ]);
+  assert.match(String(m.simulacoes[0].valor), /URGENTE — CANCELAR NA FRANQUIA — Francisco, consulta 23\/10 às 14:00/);
+});
+
+test('EM SECO: DÚVIDA e OFERTA também só registram', async () => {
+  const a = montar({ estado: 'seco' });
+  assert.equal(await agirNaDesistencia({ unit: a.unit, leadId: 1, acao: 'duvida', trecho: 'vou ver', kommo: () => a.kommo }, a.deps), 'simulada');
+  assert.deepEqual(a.simulacoes.map((x) => x.alvo), ['tarefa CONFERIR COM O PACIENTE']);
+  assert.equal(a.tarefas.length + a.marcas.length, 0);
+  const b = montar({ estado: 'seco', leadFalha: true });
+  assert.equal(await agirNaDesistencia({ unit: b.unit, leadId: 1, acao: 'oferta', trecho: 'Cancelei.', kommo: () => b.kommo }, b.deps), 'simulada');
+  assert.equal(b.marcas.length, 0, 'em seco nem a marca da oferta grava');
+  assert.equal(b.simulacoes.length, 1);
+});
+
+test('DESLIGADA: não faz nem lê nada', async () => {
+  const m = montar({ estado: 'desligado', leadFalha: true });
+  for (const acao of ['oferta', 'recusou', 'duvida'] as const) {
+    assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao, trecho: 'x', kommo: () => m.kommo }, m.deps), 'nada');
+  }
+  assert.equal(m.simulacoes.length + m.marcas.length + m.tarefas.length, 0);
 });

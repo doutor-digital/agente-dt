@@ -136,7 +136,8 @@ test('a tarefa diz o que a equipe faz e por que o lembrete do Kommo continua sai
 
 // ── a ação: IA pausada + "Cancelei." ────────────────────────────────────────────────────────────
 
-function montar(opts: { lead?: object | null; avisado?: boolean; criaFalha?: boolean; lancaNoLead?: boolean } = {}) {
+function montar(opts: { lead?: object | null; avisado?: boolean; criaFalha?: boolean; lancaNoLead?: boolean; estado?: 'ligado' | 'seco' | 'desligado' } = {}) {
+  const simulacoes: Array<{ acao: string; alvo: string; valor?: unknown }> = [];
   const tarefas: Array<{ leadId: number; text: string; completeAt: number }> = [];
   const marcas: string[] = [];
   const deps: DepsDaDesistencia = {
@@ -144,6 +145,10 @@ function montar(opts: { lead?: object | null; avisado?: boolean; criaFalha?: boo
     avisoRecente: async () => !!opts.avisado,
     marcarAviso: async (_u, _l, chave) => {
       marcas.push(chave);
+    },
+    estado: () => opts.estado ?? 'ligado',
+    simular: (_u, _a, sim) => {
+      simulacoes.push(sim);
     },
   };
   const kommo: KommoDaDesistencia = {
@@ -158,7 +163,7 @@ function montar(opts: { lead?: object | null; avisado?: boolean; criaFalha?: boo
     },
   };
   const unit = { id: 'u1', slug: 'doutor-hernia-araguaina', spineTimezone: 'America/Araguaina', businessHoursTimezone: 'America/Araguaina' };
-  return { deps, kommo, unit, tarefas, marcas };
+  return { deps, kommo, unit, tarefas, marcas, simulacoes };
 }
 
 test('Araguaína #28861610: "Cancelei." com a IA pausada e consulta no cartão → tarefa para a equipe, marcada depois', async () => {
@@ -244,4 +249,14 @@ test('consulta só no vínculo da franquia (o cartão não tem a data): a tarefa
   const velho: DepsDaDesistencia = { ...m.deps, consultaDoVinculo: async () => '2026-10-20T09:30' };
   const m2 = montar({ lead: { id: 1, name: 'Maria', custom_fields_values: [] } });
   assert.equal(await abrirTarefaDaDesistencia({ unit: m2.unit, leadId: 1, texto: 'Cancelei.', motivo: 'sem_resposta', kommo: () => m2.kommo }, { ...m2.deps, consultaDoVinculo: velho.consultaDoVinculo }), 'sem_consulta');
+});
+
+test('EM SECO: a tarefa de "IA calada" / "sem resposta" só vira linha na tela; DESLIGADA nem lê o cartão', async () => {
+  const a = montar({ estado: 'seco' });
+  assert.equal(await abrirTarefaDaDesistencia({ unit: a.unit, leadId: 1, texto: 'Cancelei.', motivo: 'ia_calada', kommo: () => a.kommo }, a.deps), 'simulada');
+  assert.equal(a.tarefas.length + a.marcas.length, 0);
+  assert.equal(a.simulacoes[0].acao, 'alertaria');
+  assert.match(String(a.simulacoes[0].valor), /ALERTA · doutor-hernia-araguaina/);
+  const d = montar({ estado: 'desligado', lancaNoLead: true });
+  assert.equal(await abrirTarefaDaDesistencia({ unit: d.unit, leadId: 1, texto: 'Cancelei.', motivo: 'ia_calada', kommo: () => d.kommo }, d.deps), 'nada');
 });

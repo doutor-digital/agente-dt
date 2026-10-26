@@ -28,6 +28,8 @@ import { agoraLocalISO } from '../agent/consulta-que-passou.js';
 import { epochSeg } from './etiquetas-auto.js';
 import { semAcento } from './sem-acento.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
+import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { registrarSimulacao } from './so-no-papel.js';
 
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
@@ -52,6 +54,19 @@ export function quandoLocal(epochS: number, tz: string): string {
   );
   // "26/10, 14:00" → "26/10 às 14:00"
   return p.replace(/,?\s+/, ' às ');
+}
+
+/** O id no catálogo (automacoes.ts) e a variável de ambiente que ainda manda quando a tela nunca falou nada. */
+export const ID_AUTOMACAO = 'desistencia-cancela';
+
+/**
+ * A ação nova (tarefas CANCELAR/CONFERIR, marca que para a véspera e a régua, NO_FOLLOW_UP, tarefa de silêncio) é uma AUTOMAÇÃO por
+ * unidade que NASCE EM "SÓ NO PAPEL" (regra da casa: uma unidade por vez, seco primeiro): em seco ela decide, lê e REGISTRA
+ * "abriria tarefa / pararia a véspera / poria NO_FOLLOW_UP" na tela de Automações, sem gravar nada. A oferta de remarcar pela
+ * Sofia (prompt) não depende disto.
+ */
+export function estadoDaDesistencia(slug: string, raw: string | undefined = process.env.DESISTENCIA_SLUGS): Estado {
+  return estadoDaAutomacao(slug, ID_AUTOMACAO, raw);
 }
 
 /** "AAAA-MM-DDTHH:mm" → "dd/mm às HH:mm". */
@@ -104,13 +119,15 @@ export function textoTarefaDesistenciaSemIA(args: {
   );
 }
 
-export type ResultadoDaDesistencia = 'nao_e' | 'sem_consulta' | 'ja_avisada' | 'tarefa_aberta' | 'falhou';
+export type ResultadoDaDesistencia = 'nao_e' | 'nada' | 'simulada' | 'sem_consulta' | 'ja_avisada' | 'tarefa_aberta' | 'falhou';
 
 export interface DepsDaDesistencia {
   agora: () => Date;
   avisoRecente: typeof avisoRecente;
   marcarAviso: typeof marcarAviso;
   consultaDoVinculo?: (unitId: string, leadId: number) => Promise<string | null>;
+  estado?: (slug: string) => Estado;
+  simular?: typeof registrarSimulacao;
 }
 
 const DEPS_PADRAO: DepsDaDesistencia = { agora: () => new Date(), avisoRecente, marcarAviso };
@@ -149,21 +166,35 @@ export async function abrirTarefaDaDesistencia(
   emAndamento.add(trava);
   try {
     const agora = deps.agora();
+    const estado = (deps.estado ?? estadoDaDesistencia)(unit.slug);
+    if (estado === 'desligado') return 'nada';
     const chave = `desistencia_tarefa:${args.motivo}`;
     if (await deps.avisoRecente(unit.id, leadId, chave, JANELA_24H_MS, agora)) return 'ja_avisada';
     const kommo = args.kommo();
     const lead = await kommo.getLead(leadId);
     const quando = await quandoDaConsultaPorVir({ unit, leadId, lead, agora, consultaDoVinculo: deps.consultaDoVinculo });
     if (!quando) return 'sem_consulta';
+    const texto = textoTarefaDesistenciaSemIA({
+      slug: unit.slug,
+      nome: primeiroNomeDoPaciente(lead?.name, args.nome ?? null),
+      quando,
+      mensagem: args.texto,
+      motivo: args.motivo,
+    });
+    // EM SECO: vira linha na tela de Automações; nada vai ao Kommo nem ao banco
+    if (estado !== 'ligado') {
+      (deps.simular ?? registrarSimulacao)(unit, ID_AUTOMACAO, {
+        leadId,
+        acao: 'alertaria',
+        alvo: args.motivo === 'sem_resposta' ? 'tarefa "não respondeu à oferta"' : 'tarefa "IA calada: ele escreveu que não vem"',
+        valor: texto,
+        motivo: `consulta ${quando}`,
+      });
+      return 'simulada';
+    }
     const criada = await kommo.createTask({
       leadId,
-      text: textoTarefaDesistenciaSemIA({
-        slug: unit.slug,
-        nome: primeiroNomeDoPaciente(lead?.name, args.nome ?? null),
-        quando,
-        mensagem: args.texto,
-        motivo: args.motivo,
-      }),
+      text: texto,
       completeAt: Math.floor(agora.getTime() / 1000) + 60 * 60,
     });
     // marca SÓ depois de o Kommo confirmar: falha de rede não pode calar o aviso por 24 h
