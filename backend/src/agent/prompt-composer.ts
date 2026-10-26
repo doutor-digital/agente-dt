@@ -423,8 +423,8 @@ function renderRulesGlobal(): string {
   vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — siga e
   marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: a própria
   pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").
-  COMPROVANTE (imagem, arquivo, "paguei", "fiz o Pix") NÃO confirma: só a EQUIPE confirma. Diga que
-  recebeu e que a equipe confirma em até 1 hora, sem "confirmado/agendado/reservado". NÃO é confirmação: "confirmo depois", "confirmo com antecedência", "vou ver", "se der eu vou", "acho que
+  COMPROVANTE (foto, PDF, "paguei"): o pagamento quem confere é a EQUIPE — nunca "pagamento confirmado".
+  Não confirma consulta: a equipe confirma em até 1 hora (com taxa de reserva, a ferramenta libera). NÃO é confirmação: "confirmo depois", "confirmo com antecedência", "vou ver", "se der eu vou", "acho que
   sim" — nem um "ok"/"tá"/"pode ser" que veio depois de você insistir. Nesses casos NÃO mande o
   cartão e pergunte UMA vez só, com o dia e a hora por extenso, assim: "Pra eu marcar: você consegue
   vir quinta, 24/09, às 15h?".

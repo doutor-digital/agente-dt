@@ -17,15 +17,15 @@
 import type { DynamicStructuredTool } from '@langchain/core/tools';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { logger } from '../lib/logger.js';
+import { enviarTelegram } from '../lib/telegram.js';
 import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
 import { normalizar, trechos, type Promessa } from '../lib/prometeu-sem-marcar.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 
-/** O que a Sofia diz quando chega comprovante. A frase "em até 1 hora" é também a MARCA que o histórico guarda. */
+/** O que a Sofia diz quando chega comprovante. */
 export const RECADO_COMPROVANTE =
   'Recebi seu comprovante! 🙏 A equipe confere o pagamento e confirma a sua consulta em até 1 hora, aqui mesmo na conversa.';
-const MARCA_DO_RECADO = 'confirma a sua consulta em até 1 hora';
 
 /** A consulta que a IA tinha como marcada foi desmarcada no CRM: ela não confirma nada, a equipe vê. */
 export const RECADO_DESMARCADA =
@@ -51,19 +51,26 @@ export function blocoDizDesmarcada(bloco: string | null | undefined): boolean {
  * `detectarPromessa` do vigia (que erra para o lado de calar): vale só onde afirmar é sempre falso — turno com
  * comprovante, ou consulta que o CRM diz desmarcada.
  */
-const ASSUNTO = '(?:consulta|avaliacao|agendamento|horario|vaga|reserva|presenca|pagamento|pix|tudo)';
+const ASSUNTO = '(?:consulta|avaliacao|agendamento|horario|vaga|reserva|presenca|pagamento|pix)';
 const PARTICIPIO = '(?:confirmad|agendad|marcad|reservad|garantid|recebid)(?:inh)?[oa]s?';
-/** Frases de estado: "sua consulta está confirmada", "Agendamento confirmado", "já está tudo certo". */
-const AFIRMA_ESTADO = new RegExp(
+/** Frases de estado que dizem O QUE está confirmado: "sua consulta está confirmada", "Agendamento confirmado". */
+const AFIRMA_FORTE = new RegExp(
   [
     `\\b${ASSUNTO}\\s+(?:\\S+\\s+){0,5}?${PARTICIPIO}\\b`,
     `\\b${PARTICIPIO}\\s+(?:\\S+\\s+){0,2}?(?:consulta|vaga|horario|presenca)\\b`,
-    String.raw`\b(?:esta|ficou|fica|ja esta|ja ficou)\s+(?:tudo\s+)?cert(?:o|inho|inha)\b|\btudo cert(?:o|inho)\b`,
     String.raw`\b(?:confirmei|agendei|marquei|reservei|garanti)\b`,
-    // "Recebido, confirmado!" — o particípio solto, sem dizer o quê
+  ].join('|'),
+);
+/** Frases soltas, que só valem como afirmação de consulta se o trecho cita dia/hora: "já está tudo certo", "Recebido, confirmado!". */
+const AFIRMA_FRACA = new RegExp(
+  [
+    String.raw`\b(?:esta|ficou|fica|ja esta|ja ficou)\s+(?:tudo\s+)?cert(?:o|inho|inha)\b|\btudo (?:cert(?:o|inho)|confirmad[oa]s?)\b`,
     String.raw`(?:^|[,;:]\s*)(?:ja\s+|tudo\s+)?(?:confirmad|agendad|reservad|garantid)[oa]s?\b`,
   ].join('|'),
 );
+/** Explicação de como funciona ("só é reservada depois do pagamento"), não afirmação de que ESTÁ confirmado. */
+const EXPLICATIVA =
+  /\b(?:so (?:e|sera|fica|ficam|sao)|somente|depois d[oae]s? (?:pagamento|comprovante|confirmacao))\b|\b(?:e|sao|sera|serao) (?:confirmad|reservad|agendad|marcad|conferid)[oa]s? pel[ao]s? (?:equipe|clinica|recepcao)\b/;
 /** "Te espero terça", "nos vemos": só vale com dia/hora no trecho (no modo estrito). */
 const AFIRMA_TE_ESPERO = /\b(?:te|lhe) (?:espero|esperamos|aguardo|aguardamos)\b|\bnos vemos\b/;
 /** Negação/condição na ORAÇÃO da afirmação: "ainda não está confirmada", "se estiver confirmada", "para ser confirmada". */
@@ -86,11 +93,15 @@ function oracaoDe(n: string, fim: number): string {
 export function afirmaConfirmacao(texto: string | null | undefined, opcoes: { estrito?: boolean } = {}): Promessa | null {
   for (const t of trechos(String(texto ?? ''))) {
     const n = normalizar(t);
-    if (/\?\s*\S{0,3}$/.test(n)) continue;
+    if (/\?\s*\S{0,3}$/.test(n) || EXPLICATIVA.test(n)) continue;
     if (opcoes.estrito && EXPLICA_PAGAMENTO.test(n)) continue;
-    const e = AFIRMA_ESTADO.exec(n);
-    const espera = AFIRMA_TE_ESPERO.exec(n);
-    const m = e ?? (!opcoes.estrito || QUANDO.test(n) ? espera : null);
+    const quando = QUANDO.test(n);
+    // No modo estrito (consulta desmarcada) as frases soltas só valem com dia/hora: "Tudo certo, Maria! Quer que eu
+    // veja um novo horário?" não é consulta de pé.
+    const m =
+      AFIRMA_FORTE.exec(n) ??
+      (!opcoes.estrito || quando ? AFIRMA_FRACA.exec(n) : null) ??
+      (!opcoes.estrito || quando ? AFIRMA_TE_ESPERO.exec(n) : null);
     if (m && !NAO_AFIRMA.test(oracaoDe(n, m.index + m[0].length))) return { trecho: t, forma: 'confirmacao', quando: null };
   }
   return null;
@@ -112,25 +123,38 @@ export function afirmouComConsultaDesmarcada(
 export interface TurnoDoComprovante {
   /** a mensagem deste turno traz foto/PDF lido como comprovante */
   noTurno: boolean;
-  /** neste turno ou numa das últimas respostas a IA já disse "a equipe confirma": ainda não confirmou ninguém */
+  /** há comprovante neste turno ou numa das últimas falas do paciente: a equipe ainda não confirmou */
   pendente: boolean;
 }
 
-/** As últimas respostas da IA que ainda contam: depois disso a conversa seguiu e a equipe já deve ter respondido. */
-const RESPOSTAS_QUE_CONTAM = 10;
+/**
+ * As últimas falas do paciente que ainda contam. A janela sai do FATO (o comprovante está lá, lido pela visão), não do
+ * texto que a IA respondeu: se ela reescreveu o recado ou não afirmou nada, o turno seguinte continua em espera.
+ */
+const FALAS_QUE_CONTAM = 10;
 
-export function turnoDoComprovante(ultimaFalaDoPaciente: string | null | undefined, respostasDaIA: ReadonlyArray<string>): TurnoDoComprovante {
-  const noTurno = ehTranscricaoDeComprovante(String(ultimaFalaDoPaciente ?? ''));
-  const pendente = noTurno || respostasDaIA.slice(-RESPOSTAS_QUE_CONTAM).some((t) => t.includes(MARCA_DO_RECADO));
+/** `falasDoPaciente` na ordem da conversa; a última é a deste turno. */
+export function turnoDoComprovante(falasDoPaciente: ReadonlyArray<string>): TurnoDoComprovante {
+  const noTurno = ehTranscricaoDeComprovante(falasDoPaciente[falasDoPaciente.length - 1] ?? '');
+  const pendente = noTurno || falasDoPaciente.slice(-FALAS_QUE_CONTAM).some((t) => ehTranscricaoDeComprovante(t));
   return { noTurno, pendente };
 }
 
-/** "pagamento confirmado", "seu Pix foi aprovado": quem confere o comprovante é a equipe, não a IA. */
-const AFIRMA_PAGAMENTO = /\b(?:pagamento|pix|comprovante|valor)\s+(?:\S+\s+){0,5}?(?:confirmad|aprovad|conferid|validad|compensad|identificad)[oa]s?\b|\bcaiu\b/;
+/**
+ * "pagamento confirmado", "seu Pix foi aprovado": quem confere o comprovante é a equipe, não a IA. Só com o estado
+ * dito ("foi/está/já") ou o particípio colado ao assunto — "o pagamento é confirmado pela equipe" e "pagamento
+ * antecipado conferido pela equipe" são explicação.
+ */
+const PART_PAGAMENTO = '(?:confirmad|aprovad|conferid|validad|compensad|identificad)[oa]s?';
+const AFIRMA_PAGAMENTO = new RegExp(
+  `\\b(?:pagamento|pix|comprovante)\\s+(?:(?:ja|foi|esta|ficou)\\s+)+(?:\\S+\\s+)?${PART_PAGAMENTO}\\b|\\b(?:pagamento|pix|comprovante)\\s+(?:ja\\s+)?${PART_PAGAMENTO}\\b`,
+);
+const PELA_EQUIPE = /\bpel[ao]s? (?:equipe|clinica|recepcao|time)\b/;
 
 export function afirmaPagamentoConferido(texto: string | null | undefined): boolean {
   return trechos(String(texto ?? '')).some((t) => {
     const n = normalizar(t);
+    if (/\?\s*\S{0,3}$/.test(n) || EXPLICATIVA.test(n) || PELA_EQUIPE.test(n)) return false;
     const m = AFIRMA_PAGAMENTO.exec(n);
     return !!m && !NAO_AFIRMA.test(oracaoDe(n, m.index + m[0].length));
   });
@@ -138,17 +162,19 @@ export function afirmaPagamentoConferido(texto: string | null | undefined): bool
 
 /**
  * Se a resposta afirma confirmação, vale o recado fixo. Resposta que não afirma ("recebi, me manda o nome
- * completo") segue como veio.
+ * completo") segue como veio. Só no turno do comprovante ou na espera da equipe (`pendente`): fora dali a frase pode
+ * ser explicação ("o pagamento é confirmado pela equipe") e trocá-la mandaria "Recebi seu comprovante!" a quem não
+ * mandou nada.
  *
- * - "Pagamento confirmado / Pix aprovado" é da equipe em QUALQUER turno (decisão do João, 26/10): o campo
- *   "Pagou antecipado" do cartão é escrito pela própria IA a partir da foto, é informação e não confirmação.
- * - No turno do comprovante (ou com o recado fresco no histórico) vale também "consulta confirmada/agendada",
- *   a menos que a consulta já esteja no CRM (`consultaNoCrm` = o prompt traz a consulta de verdade: criada pela
- *   equipe, ou paciente que paga o saldo): falar DELA é verdade.
+ * - "Pagamento confirmado / Pix aprovado" é da equipe (decisão do João, 26/10): o campo "Pagou antecipado" do cartão
+ *   é escrito pela própria IA a partir da foto, é informação e não confirmação.
+ * - "Consulta confirmada/agendada" também, a menos que a consulta já esteja no CRM (`consultaNoCrm` = o prompt traz a
+ *   consulta de verdade: criada pela equipe, ou paciente que paga o saldo): falar DELA é verdade.
  */
 export function respostaDoComprovante(texto: string, turno: TurnoDoComprovante, consultaNoCrm: boolean): string | null {
+  if (!turno.pendente) return null;
   if (afirmaPagamentoConferido(texto)) return RECADO_COMPROVANTE;
-  if (!turno.pendente || consultaNoCrm) return null;
+  if (consultaNoCrm) return null;
   return afirmaConfirmacao(texto) ? RECADO_COMPROVANTE : null;
 }
 
@@ -164,21 +190,44 @@ export const RECUSA_AGUARDANDO_EQUIPE =
   'agendada, reservada ou garantida. Se o paciente pediu outro dia ou outra forma de pagar, diga que a equipe cuida ' +
   'disso junto da confirmação e chame resumir_lead_para_sdr.';
 
+/** Unidade com taxa de reserva (Boa Vista) e nenhum comprovante da taxa lido na conversa. */
+export const RECUSA_SEM_COMPROVANTE_DA_TAXA =
+  'RECUSADO: nesta unidade a vaga só é reservada DEPOIS da taxa de reserva, e ainda não há comprovante dela lido ' +
+  'nesta conversa. A consulta NÃO foi marcada. NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste ' +
+  'turno. Diga ao paciente que o horário fica separado por enquanto e explique como garantir: PIX do valor antecipado ' +
+  'desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ou pagamento na clínica antes do dia. Quando o ' +
+  'comprovante chegar (foto ou PDF), aí sim chame agendar_consulta — e nunca diga "pagamento confirmado": quem confere ' +
+  'o dinheiro é a equipe. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para a equipe acompanhar.';
+
 /**
- * `agendar_consulta` (e só ela; remarcar é de quem já tem consulta) recusa enquanto houver comprovante
- * esperando a equipe. Fica no grafo e não no prompt: prompt não segura o modelo (Olímpia 19/10, Canaã 24/10).
+ * Quem pode marcar (`agendar_consulta`, só ela; `remarcar_consulta` é de quem já tem consulta, tem a sua própria
+ * instância e não passa por aqui). Fica no grafo e não no prompt: prompt não segura o modelo (Olímpia 19/10, Canaã 24/10).
+ *
+ * - Regra geral: comprovante esperando a equipe = a IA NÃO marca (só a equipe confirma por comprovante).
+ * - Unidade com taxa de reserva (`exigePagamento`, flag `spineBookingRequiresPayment`; decisão do João, 26/10): é o
+ *   contrário — a IA só marca DEPOIS de ler o comprovante da taxa; sem ele, recusa. Quem confere se o dinheiro caiu é
+ *   a equipe (tarefa no mesmo turno), e a IA nunca diz "pagamento confirmado".
  */
 export function travarAgendamentoPorComprovante(
   tools: DynamicStructuredTool[],
   turno: TurnoDoComprovante,
   recorder: Pick<TraceRecorder, 'step'>,
+  opcoes: { exigePagamento?: boolean } = {},
 ): DynamicStructuredTool[] {
   for (const tool of tools) {
     if (tool.name !== 'agendar_consulta') continue;
     const original = tool.func.bind(tool);
     tool.func = async (args: unknown, ...resto: unknown[]) => {
-      const remarcando = Boolean((args as { remarcando?: boolean } | null)?.remarcando);
-      if (turno.pendente && !remarcando) {
+      if (opcoes.exigePagamento) {
+        if (turno.pendente) return original(args as never, ...(resto as never[]));
+        await recorder.step({
+          kind: 'ERROR',
+          title: 'agendar_consulta recusado — reserva sem pagamento: nenhum comprovante da taxa lido na conversa',
+          payload: { args },
+        });
+        return RECUSA_SEM_COMPROVANTE_DA_TAXA;
+      }
+      if (turno.pendente) {
         await recorder.step({
           kind: 'ERROR',
           title: '🧾 agendar_consulta recusado — comprovante: só a equipe confirma',
@@ -210,6 +259,8 @@ export async function abrirTarefaParaEquipe(args: {
   motivo: 'comprovante' | 'desmarcada';
   dedupe?: Dedupe;
   agora?: () => number;
+  /** Avisa o João quando a tarefa não saiu: o paciente já ouviu "a equipe confirma em 1 hora". */
+  alertar?: (texto: string) => Promise<unknown>;
 }): Promise<'criada' | 'repetida' | 'falhou'> {
   const { slug, unitId, leadId, kommo, recorder, motivo } = args;
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
@@ -228,7 +279,7 @@ export async function abrirTarefaParaEquipe(args: {
     const quem = nome ? ` · ${nome}` : '';
     const text =
       motivo === 'comprovante'
-        ? `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante: conferir o pagamento e confirmar a consulta na franquia em até 1 h. A IA não confirmou nada por ele.`
+        ? `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante: conferir se o pagamento caiu e, se a consulta ainda não estiver na franquia, confirmá-la em até 1 h. A IA não confirmou o pagamento.`
         : `CONFERIR CONSULTA · ${slug}${quem} · a consulta está DESMARCADA no CRM e o paciente respondeu como se estivesse marcada. A IA não confirmou: falar com ele e remarcar em até 1 h.`;
     const agora = args.agora ?? Date.now;
     const res = await kommo.createTask({ leadId, text, completeAt: Math.floor(agora() / 1000) + 3600, responsibleUserId: responsavel });
@@ -240,11 +291,16 @@ export async function abrirTarefaParaEquipe(args: {
     });
     return 'criada';
   } catch (err) {
+    const erro = err instanceof Error ? err.message : String(err);
     await recorder.step({
       kind: 'ERROR',
-      title: `Falha ao abrir a tarefa da equipe (${motivo}): ${err instanceof Error ? err.message : String(err)}`,
+      title: `Falha ao abrir a tarefa da equipe (${motivo}): ${erro}`,
       payload: { leadId, motivo },
     });
+    // O paciente já ouviu "a equipe confirma em até 1 hora": sem tarefa, ninguém sabe. Aviso no Telegram do João.
+    await (args.alertar ?? enviarTelegram)(
+      `⚠️ ${slug} — a IA disse ao paciente (lead ${leadId}) que a equipe confirma em até 1 hora, mas a tarefa NÃO saiu (${motivo}): ${erro}. Avisar a equipe à mão.`,
+    ).catch(() => undefined);
     return 'falhou';
   }
 }
