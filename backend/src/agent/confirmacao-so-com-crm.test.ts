@@ -4,6 +4,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import {
   RECADO_COMPROVANTE,
+  RECADO_DESMARCADA,
   RECUSA_AGUARDANDO_EQUIPE,
   RECUSA_SEM_COMPROVANTE_DA_TAXA,
   decidirTrava,
@@ -442,4 +443,60 @@ test('a tarefa de Boa Vista leva o valor lido e o esperado', async () => {
     detalhe: detalheDoValor(T([comprovanteDe('50,00')]), 100),
   });
   assert.match(String(tarefas[0].text), /valor lido: R\$ 50,00; esperado \(taxa de reserva\): R\$ 100,00/);
+});
+
+// --- buracos achados pelo sênior depois do #127 (ao vivo): uma frase, um teste ---------------------------------------------
+test('"o Pix garante sua vaga" não livra "sua consulta está confirmada" (turno do comprovante e espera)', () => {
+  const noTurno = T([COMPROVANTE]);
+  const espera = T([COMPROVANTE, 'e o endereço?']);
+  for (const f of [
+    'Sua consulta está confirmada para terça às 10h e o Pix garante sua vaga',
+    'Prontinho! Consulta confirmada, o comprovante garante seu horário.',
+  ]) {
+    assert.equal(respostaDoComprovante(f, noTurno, false), RECADO_COMPROVANTE, `turno: ${f}`);
+    assert.equal(respostaDoComprovante(f, espera, false), RECADO_COMPROVANTE, `espera: ${f}`);
+  }
+  assert.equal(afirmaPagamentoConferido('Seu pagamento foi confirmado e garante sua vaga'), true);
+  // a explicação continua explicação
+  assert.equal(respostaDoComprovante('O pagamento antecipado confirmado garante sua vaga.', noTurno, false), null);
+});
+
+test('na espera, frase solta COM dia/hora vale; sem dia/hora fica', () => {
+  const espera = T([COMPROVANTE, 'e o endereço?']);
+  for (const f of ['Tudo certo pra terça às 10h! Te espero lá 😊', 'Combinado, terça às 10h então! 😊', 'Te espero terça, 27/10, às 10h.'])
+    assert.equal(respostaDoComprovante(f, espera, false), RECADO_COMPROVANTE, f);
+  for (const f of ['Fica na Rua X, 120. Te espero lá!', 'Perfeito, combinado!', 'Por nada, Maria! Tudo certo 😊']) assert.equal(respostaDoComprovante(f, espera, false), null, f);
+});
+
+test('prometeEquipe: promessa em qualquer tempo verbal; oferta não', () => {
+  for (const f of [
+    'A equipe vai entrar em contato com você',
+    'Nossa equipe irá confirmar seu horário',
+    'A recepção vai retornar pra você',
+    'Vou pedir pra equipe te confirmar',
+    'Deixa eu conferir direitinho o seu horário com a equipe',
+    'A equipe já te responde sobre o horário.',
+    RECADO_DESMARCADA,
+  ]) assert.equal(prometeEquipe(f), true, f);
+  for (const f of ['Nossa equipe tem horário quinta, às 9h. Fica bom pra você?', 'Tenho quinta às 9h ou sexta às 14h.', 'Tudo certo, Maria! Quer que eu veja um novo horário?'])
+    assert.equal(prometeEquipe(f), false, f);
+});
+
+test('valor do comprovante: "Saldo R$ 100,00. Valor transferido: R$ 50,00" é 50 e NÃO marca', () => {
+  const t = T([marcarRecebimento('[imagem do cliente]: COMPROVANTE: Saldo R$ 100,00. Valor transferido: R$ 50,00.', new Date(AGORA))]);
+  assert.deepEqual(t.valores, [50]);
+  assert.equal(decidirTrava(t, BV).libera, false);
+  assert.deepEqual(T([marcarRecebimento('[imagem do cliente]: COMPROVANTE: Pix. Valor total pago via Pix: R$ 100,00.', new Date(AGORA))]).valores, [100]);
+});
+
+test('data carimbada no FUTURO não vale (relógio errado ou carimbo forjado)', () => {
+  assert.equal(T([comprovanteDe('100,00', -2), 'quero marcar']).pendente, false);
+  assert.equal(decidirTrava(T([comprovanteDe('100,00', -2), 'quero marcar']), BV).libera, false);
+});
+
+test('comprovante "sendo conferido"/"confirmado pela equipe": o endereço não some; o fato consumado ainda troca', () => {
+  const espera = T([COMPROVANTE, 'e o endereço?']);
+  assert.equal(respostaDoComprovante('Seu comprovante está sendo conferido pela equipe. Fica na Rua X, 120.', espera, false), null);
+  assert.equal(respostaDoComprovante('O pagamento ainda vai ser conferido pela equipe.', espera, false), null);
+  assert.equal(respostaDoComprovante('Seu Pix foi recebido e confirmado pela equipe ✅', espera, true), RECADO_COMPROVANTE);
 });
