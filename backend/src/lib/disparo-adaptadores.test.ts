@@ -187,6 +187,11 @@ test('aprovar de novo ZERA o contador de limite de taxa do número da unidade', 
   const r = await aprovarOnda('o1', { por: 'joao@x.com', total: 1, impressao }, async () => ({ ok: true }));
   assert.ok(r.ok, JSON.stringify(r));
   assert.deepEqual(apagados, ['numero:111']);
+  // o contador falhando NÃO desfaz nem transforma em erro uma aprovação que já foi gravada
+  falso('disparoLimite', { deleteMany: async () => { throw new Error('banco caiu'); } });
+  const comFalha = await aprovarOnda('o1', { por: 'joao@x.com', total: 1, impressao }, async () => ({ ok: true }));
+  assert.ok(comFalha.ok, 'a aprovação vale mesmo com o contador falhando');
+  falso('disparoLimite', { deleteMany: async (a: { where: { unitId: string } }) => (apagados.push(a.where.unitId), { count: 1 }) });
   // aprovação recusada não mexe no contador
   apagados.length = 0;
   const recusa = await aprovarOnda('o1', { por: 'outro@x.com', total: 1, impressao }, async () => ({ ok: true }));
