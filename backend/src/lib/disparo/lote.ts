@@ -12,6 +12,9 @@ import type { ResultadoDoTemplate } from '../whatsapp-meta.js';
 
 export type Modo = 'ligado' | 'seco' | 'desligado';
 
+/** Por que uma onda parou, em palavra de máquina. Só a pausa por SAIR tem retomada (decisão do João, 26/10). */
+export type CausaDaPausa = 'sair' | 'falhas' | 'vencida';
+
 export interface Destino {
   id: string;
   ondaId: string;
@@ -29,6 +32,8 @@ export interface OndaNoLote extends Definicao {
   id: string;
   campanhaId: string;
   aprovadaEm: Date | null;
+  /** quantos SAIR o João já tinha visto quando retomou esta onda; o freio por SAIR só conta os que vierem depois */
+  sairAceitos?: number;
 }
 
 export interface UnidadeNoLote {
@@ -66,8 +71,8 @@ export interface Porto {
   /** pendente → enviando, atômico e SÓ se a onda ainda está aprovada; marca a tentativa em `enviadoEm` (conta no teto mesmo se o processo morrer aqui). `false` = outro processo pegou, ou a onda foi parada. */
   reivindicar(id: string): Promise<boolean>;
   gravar(id: string, dados: DadosDeGravacao): Promise<void>;
-  pausarOndas(unitId: string, campanhaId: string | null, motivo: string): Promise<void>;
-  pausarOnda(ondaId: string, motivo: string): Promise<void>;
+  pausarOndas(unitId: string, campanhaId: string | null, motivo: string, causa?: CausaDaPausa): Promise<void>;
+  pausarOnda(ondaId: string, motivo: string, causa?: CausaDaPausa): Promise<void>;
   concluirOnda(ondaId: string): Promise<void>;
   pediuSair(d: Destino): Promise<boolean>;
   franquia(d: Destino): Promise<SituacaoNaFranquia>;
@@ -206,8 +211,11 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
   let ativas = ondas;
   for (const campanhaId of new Set(ondas.map((o) => o.campanhaId))) {
     const sairam = await porto.quantosSairam(campanhaId, u.id);
-    if (passouDoLimiteDeSair(sairam, f)) {
-      await porto.pausarOndas(u.id, campanhaId, `${sairam} pessoas responderam SAIR (limite ${f.maxSair}): unidade parada até o João decidir`);
+    // O João pode ter retomado a onda depois de ver quem pediu SAIR: conta só o que veio depois do que ele viu.
+    // Com ondas diferentes na mesma campanha vale a MENOR base: uma onda nova (base 0) não herda a folga de outra.
+    const base = Math.min(...ondas.filter((o) => o.campanhaId === campanhaId).map((o) => o.sairAceitos ?? 0));
+    if (passouDoLimiteDeSair(sairam - base, f)) {
+      await porto.pausarOndas(u.id, campanhaId, `${sairam} pessoas responderam SAIR (limite ${f.maxSair}${base > 0 ? `, além das ${base} que o João já viu` : ''}): unidade parada até o João decidir`, 'sair');
       porto.log('warn', { unit: u.slug, campanhaId, sairam }, 'disparo: unidade PARADA por excesso de SAIR');
       ativas = ativas.filter((o) => o.campanhaId !== campanhaId);
     }
@@ -218,7 +226,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
   // Só olha envios DEPOIS da aprovação mais recente: consertou o token e aprovou de novo, começa limpo.
   const desdeAprovacao = new Date(Math.max(0, ...ativas.map((o) => o.aprovadaEm?.getTime() ?? 0)));
   if (real && falhasSeguidasDemais(await porto.ultimosResultados(u.id, f.falhasSeguidas, desdeAprovacao), f)) {
-    await porto.pausarOndas(u.id, null, `${f.falhasSeguidas} envios seguidos falharam na Meta: confira o token e a qualidade do número`);
+    await porto.pausarOndas(u.id, null, `${f.falhasSeguidas} envios seguidos falharam na Meta: confira o token e a qualidade do número`, 'falhas');
     porto.log('warn', { unit: u.slug }, 'disparo: unidade PARADA por falhas seguidas');
     return { ...r, parou: 'parada por falhas seguidas' };
   }
@@ -240,7 +248,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
   if (real) {
     const vencimento = agora.getTime() - f.validadeDias * 86_400_000;
     for (const o of ativas.filter((x) => !x.aprovadaEm || x.aprovadaEm.getTime() < vencimento)) {
-      await porto.pausarOnda(o.id, `a aprovação passou de ${f.validadeDias} dias: monte e aprove a onda de novo`);
+      await porto.pausarOnda(o.id, `a aprovação passou de ${f.validadeDias} dias: monte e aprove a onda de novo`, 'vencida');
       porto.log('warn', { unit: u.slug, onda: o.id }, 'disparo: aprovação VENCIDA, onda pausada');
     }
     ativas = ativas.filter((x) => x.aprovadaEm && x.aprovadaEm.getTime() >= vencimento);
@@ -280,7 +288,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
       }
       seguidas = r.falhou > antes ? seguidas + 1 : 0;
       if (real && seguidas >= f.falhasSeguidas) {
-        await porto.pausarOndas(u.id, null, `${f.falhasSeguidas} envios seguidos falharam na Meta: confira o token e a qualidade do número`);
+        await porto.pausarOndas(u.id, null, `${f.falhasSeguidas} envios seguidos falharam na Meta: confira o token e a qualidade do número`, 'falhas');
         porto.log('warn', { unit: u.slug }, 'disparo: unidade PARADA por falhas seguidas (no meio da rodada)');
         return { ...r, parou: 'parada por falhas seguidas' };
       }

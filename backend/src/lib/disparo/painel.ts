@@ -9,6 +9,7 @@ import { ROTULO_DA_EXCLUSAO, textoFinal, valoresDasVariaveis, type MotivoDeExclu
 import type { Freios } from './freios.js';
 import type { Modo } from './lote.js';
 import type { Definicao } from './modelo.js';
+import type { QuemSaiu } from './saidas.js';
 
 const esc = (s: unknown) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -29,6 +30,11 @@ export interface DadosDoPainel {
     aprovadaPor: string | null;
     aprovadaEm: Date | null;
     pausaMotivo: string | null;
+    /** 'sair' | 'falhas' | 'vencida' — só a por SAIR tem o botão Retomar */
+    pausaCausa?: string | null;
+    retomadaPor?: string | null;
+    retomadaEm?: Date | null;
+    sairAceitos?: number;
   } & Definicao;
   campanhaNome: string;
   unidade: { slug: string; nome: string };
@@ -40,6 +46,8 @@ export interface DadosDoPainel {
   /** quantas já têm o "receberia" gravado pelo modo seco */
   simulados: number;
   amostra: Array<{ nome: string; telefone: string }>;
+  /** quem recebeu a campanha nesta unidade e pediu SAIR (primeiro nome + o que escreveu) */
+  saidas?: QuemSaiu[];
   conferenciaMeta: { ok: boolean; motivo?: string } | null;
   /** quem está olhando pode aprovar (sessão de um e-mail de DISPARO_APROVADORES) */
   podeAprovar: boolean;
@@ -69,6 +77,7 @@ function avisoDoModo(d: DadosDoPainel): string {
 
 export function montarPainelDaOnda(d: DadosDoPainel): string {
   const { onda, freios: f } = d;
+  const saidas = d.saidas ?? [];
   const exemplos = d.amostra.slice(0, 3).map((p) => textoFinal(onda.textoModelo, valoresDasVariaveis(onda.variaveis, { primeiroNome: p.nome, unidade: d.unidade.nome })));
   const midia = onda.cabecalho ? `<p class="mudo">Cabeçalho: ${esc(onda.cabecalho.tipo)} — ${esc(onda.cabecalho.link)}</p>` : '';
   const fora = Object.entries(d.resumo.fora ?? {}).filter(([, n]) => n);
@@ -93,9 +102,19 @@ export function montarPainelDaOnda(d: DadosDoPainel): string {
       <button id="aprovar" ${pode ? '' : 'disabled'}>Aprovar esta onda (${onda.total} pessoas)</button>
       <button id="cancelar" class="sec">Cancelar</button>
       <p class="mudo">${!d.podeAprovar ? 'Para aprovar, entre no console com o seu e-mail de aprovador (DISPARO_APROVADORES). Quem abriu esta página com a chave de serviço só consegue ler.' : !pode ? 'A aprovação fica travada até a Meta conferir o modelo.' : 'Um clique. Sem código por e-mail.'}</p><p id="retorno" role="status"></p></div>`;
+  } else if (onda.estado === 'pausada' && onda.pausaCausa === 'sair') {
+    const pode = d.podeAprovar && (d.conferenciaMeta?.ok ?? false);
+    acao = `<div class="acoes">
+      <button id="retomar" ${pode ? '' : 'disabled'}>Retomar esta onda (aceito os ${saidas.length} pedidos de SAIR acima)</button>
+      <button id="cancelar" class="sec">Cancelar esta onda</button>
+      <p class="mudo">${!d.podeAprovar ? 'Só quem está em DISPARO_APROVADORES retoma, entrando no console com o seu e-mail. O Claude e a chave de serviço não retomam.' : !pode ? 'A retomada fica travada até a Meta conferir o modelo.' : `Depois de retomar, a unidade só para de novo se mais de ${f.maxSair} pessoas pedirem SAIR além destas.`}</p><p id="retorno" role="status"></p></div>`;
   } else if (onda.estado === 'aprovada' || onda.estado === 'pausada') {
-    acao = `<div class="acoes"><button id="cancelar" class="sec">Parar e cancelar esta onda</button><p id="retorno" role="status"></p></div>`;
+    acao = `<div class="acoes"><button id="cancelar" class="sec">Parar e cancelar esta onda</button>${onda.estado === 'pausada' ? '<p class="mudo">Esta pausa não é por SAIR: não tem retomada. Cancele e monte a onda de novo depois de resolver o motivo.</p>' : ''}<p id="retorno" role="status"></p></div>`;
   }
+  const tabelaSaidas = saidas.length
+    ? `<section><h2>Quem pediu SAIR (${saidas.length})</h2><table><thead><tr><th class="esq">Primeiro nome</th><th class="esq">O que escreveu</th></tr></thead><tbody>${saidas.map((x) => `<tr><td class="esq">${esc(x.nome)}</td><td class="esq">${x.resposta ? esc(x.resposta) : '<span class="mudo">(a mensagem não está gravada)</span>'}</td></tr>`).join('')}</tbody></table>${onda.sairAceitos ? `<p class="mudo">${onda.sairAceitos} destes já foram vistos na última retomada${onda.retomadaPor ? `, por ${esc(onda.retomadaPor)}` : ''}.</p>` : ''}</section>`
+    : '';
+  const retomada = onda.retomadaPor && onda.retomadaEm ? `<p class="mudo">Retomada por ${esc(onda.retomadaPor)} em ${esc(onda.retomadaEm.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}, vendo ${onda.sairAceitos ?? 0} pedido(s) de SAIR.</p>` : '';
   const quem = onda.aprovadaPor ? `<p class="mudo">Aprovada por ${esc(onda.aprovadaPor)} em ${esc(onda.aprovadaEm?.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) ?? '')}.</p>` : '';
   const pausa = onda.pausaMotivo ? `<p class="ruim"><b>${onda.estado === 'cancelada' ? 'Motivo' : 'Parada'}:</b> ${esc(onda.pausaMotivo)}</p>` : '';
 
@@ -116,10 +135,11 @@ ul{margin:0;padding-left:1.2em}.acoes{display:flex;flex-wrap:wrap;gap:12px;align
 <p class="mudo">Onda ${esc(ESTADO[onda.estado] ?? onda.estado)} · lista do Kommo: etiqueta “${esc(onda.etiqueta)}” · modelo ${esc(onda.template)} (${esc(onda.idioma)})</p></header>
 ${avisoDoModo(d)}
 <div class="fatos"><div><b>${onda.total}</b><span>pessoas vão receber</span></div><div><b>${esc(d.unidade.nome)}</b><span>unidade</span></div><div><b>${d.resumo.candidatos ?? '—'}</b><span>cartões na etiqueta</span></div><div><b>${d.simulados}</b><span>com “receberia” gravado (seco)</span></div></div>
-${pausa}${quem}
+${pausa}${quem}${retomada}
 <section><h2>O texto que cada pessoa vai ler</h2>${midia}${exemplos.map((t) => `<div class="zap">${esc(t)}</div>`).join('') || '<p class="mudo">Sem destinatários para exemplificar.</p>'}<p class="mudo">Três exemplos, com o primeiro nome de cada uma já no lugar.</p>${meta}</section>
 <section><h2>Quem ficou de fora, e por quê</h2>${tabelaFora}${d.resumo.foraDoKommoDividido ? `<p class="mudo">${d.resumo.foraDoKommoDividido} cartão(ões) são de outra unidade que divide este Kommo.</p>` : ''}</section>
 <section><h2>Amostra de quem vai receber</h2>${amostra}<p class="mudo">${contagem ? `Estado de todos: ${contagem}.` : ''}</p></section>
+${tabelaSaidas}
 <section><h2>Os freios</h2><ul>
 <li>Janela: ${f.janelaInicio}h às ${f.janelaFim}h${f.soDiasUteis ? ', segunda a sexta, sem feriado nacional' : ''}.</li>
 <li>Teto desta unidade: ${f.tetoPorHora} por hora e ${f.tetoPorDia} por 24 horas.</li>
@@ -132,6 +152,8 @@ const id=${JSON.stringify(onda.id)},total=${JSON.stringify(onda.total)},impressa
 const ret=document.getElementById('retorno');
 async function chamar(acao,corpo){ret.textContent='…';const r=await fetch('/api/disparo/ondas/'+id+'/'+acao,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});const j=await r.json().catch(()=>({}));ret.textContent=r.ok?'Feito. Recarregue a página.':(j.erro||j.error||('Erro '+r.status));if(r.ok)setTimeout(()=>location.reload(),900)}
 document.getElementById('aprovar')?.addEventListener('click',()=>{if(confirm('Aprovar a onda de '+total+' pessoas?'))chamar('aprovar',{total,impressao})});
+const saiu=${JSON.stringify(saidas.length)};
+document.getElementById('retomar')?.addEventListener('click',()=>{if(confirm('Retomar a onda sabendo dos '+saiu+' pedidos de SAIR?'))chamar('retomar',{sairam:saiu})});
 document.getElementById('cancelar')?.addEventListener('click',()=>{if(confirm('Cancelar esta onda?'))chamar('cancelar',{motivo:'cancelada na tela de aprovação'})});
 </script>
 </main></body></html>`;

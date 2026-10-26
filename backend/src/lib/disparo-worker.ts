@@ -98,7 +98,7 @@ export async function rodadaDoDisparo(): Promise<void> {
     const vivas = await prisma.disparoOnda.findMany({ where: { id: { in: deste.map((o) => o.id) }, estado: 'aprovada' }, orderBy: { criadoEm: 'asc' } });
     if (vivas.length === 0) continue;
     try {
-      const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, aprovadaEm: o.aprovadaEm, ...definicaoDaOnda(o) }));
+      const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, aprovadaEm: o.aprovadaEm, sairAceitos: o.sairAceitos, ...definicaoDaOnda(o) }));
       const r = await rodarUnidade(porto, f, { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, ...r }, 'disparo: rodada');
     } catch (err) {

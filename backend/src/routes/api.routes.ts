@@ -182,6 +182,7 @@ import {
   disparoOndaCriarHandler,
   disparoOndaJsonHandler,
   disparoOndaPainelHandler,
+  disparoOndaRetomarHandler,
   disparoOndasListarHandler,
 } from '../controllers/disparo.controller.js';
 import { campanhaColetarHandler, campanhaPainelHandler, campanhaPlacarHandler, campanhaTelaHandler } from '../controllers/campanha.controller.js';
@@ -432,6 +433,8 @@ apiRouter.post('/disparo/ondas', chaveDeServicoOuSessao(requireAuth, requireSupe
 apiRouter.get('/disparo/ondas/:id', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaJsonHandler);
 apiRouter.get('/disparo/ondas/:id/painel', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaPainelHandler);
 apiRouter.post('/disparo/ondas/:id/aprovar', requireAuth, requireSuperAdmin, disparoOndaAprovarHandler);
+// RETOMAR (onda parada por SAIR) é do João, como aprovar: só sessão de super-admin, nunca a chave de serviço.
+apiRouter.post('/disparo/ondas/:id/retomar', requireAuth, requireSuperAdmin, disparoOndaRetomarHandler);
 apiRouter.post('/disparo/ondas/:id/cancelar', chaveDeServicoOuSessao(requireAuth, requireSuperAdmin), disparoOndaCancelarHandler);
 
 // Chaves de API de terceiros (Asaas, Convênia, Tiquetaque). Escrever é só com SESSÃO de super-admin (a chave do Asaas
