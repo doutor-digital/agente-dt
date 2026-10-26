@@ -82,17 +82,19 @@ export async function rodadaDoDisparo(): Promise<void> {
   if (presos > 0) logger.warn({ presos }, 'disparo: envios que ficaram no meio (processo caiu) foram marcados como INCERTOS');
   const presas = await cancelarMontagensPresas();
   if (presas > 0) logger.warn({ presas }, 'disparo: montagens interrompidas foram canceladas');
+  // Os SAIR são varridos SEMPRE, com ou sem onda aprovada: onda parada por SAIR espera o João retomar, e ele decide vendo os SAIR de
+  // agora; depois que a onda conclui, quem pede SAIR não pode seguir com a oferta no prompt da Sofia. Sem unidades da rodada,
+  // `varrerSaidas` busca a unidade de cada envio no banco.
   const ondas = await prisma.disparoOnda.findMany({ where: { estado: 'aprovada' }, orderBy: { criadoEm: 'asc' }, include: { unit: true } });
-  if (ondas.length === 0) return;
   const unidades = new Map<string, Unit>(ondas.map((o) => [o.unitId, o.unit]));
-  const f = freiosDoAmbiente();
-  const porto = portoReal(unidades);
-
   const marcados = await varrerSaidas(unidades).catch((err) => {
     logger.warn({ err: String(err) }, 'disparo: varredura de SAIR falhou');
     return 0;
   });
   if (marcados > 0) logger.warn({ marcados }, 'disparo: pessoas responderam SAIR depois do envio');
+  if (ondas.length === 0) return;
+  const f = freiosDoAmbiente();
+  const porto = portoReal(unidades);
 
   for (const unitId of new Set(ondas.map((o) => o.unitId))) {
     const deste = ondas.filter((o) => o.unitId === unitId);

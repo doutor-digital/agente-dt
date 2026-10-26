@@ -25,6 +25,8 @@ export interface Freios {
   maxSair: number;
   /** N falhas SEGUIDAS na unidade pausam a onda */
   falhasSeguidas: number;
+  /** rodadas SEGUIDAS em que a Meta pediu para esperar (limite de taxa): passou disto, pausa a unidade e alerta (esperar para sempre é martelar) */
+  limiteDeTaxaSeguidos: number;
   /** quantas pessoas por rodada do worker */
   lote: number;
   /** pausa entre uma mensagem e outra, em ms */
@@ -41,6 +43,7 @@ export const FREIOS_PADRAO: Freios = {
   tetoPorDia: 100,
   maxSair: 3,
   falhasSeguidas: 5,
+  limiteDeTaxaSeguidos: 10,
   lote: 10,
   pausaMs: 1_500,
   validadeDias: 7,
@@ -64,6 +67,7 @@ export function freiosDoAmbiente(env: NodeJS.ProcessEnv = process.env): Freios {
     tetoPorDia: inteiro(env.DISPARO_TETO_DIA, p.tetoPorDia, 1, 10_000),
     maxSair: inteiro(env.DISPARO_MAX_SAIR, p.maxSair, 0, 1_000),
     falhasSeguidas: inteiro(env.DISPARO_FALHAS_SEGUIDAS, p.falhasSeguidas, 1, 100),
+    limiteDeTaxaSeguidos: inteiro(env.DISPARO_LIMITE_DE_TAXA_SEGUIDOS, p.limiteDeTaxaSeguidos, 1, 100),
     lote: inteiro(env.DISPARO_LOTE, p.lote, 1, 100),
     pausaMs: inteiro(env.DISPARO_PAUSA_MS, p.pausaMs, 0, 60_000),
     validadeDias: inteiro(env.DISPARO_VALIDADE_DIAS, p.validadeDias, 1, 90),
@@ -111,7 +115,7 @@ export function avisosDoAmbiente(env: NodeJS.ProcessEnv = process.env): string[]
   if ((env.DISPARO_JANELA_INICIO ?? env.DISPARO_JANELA_FIM) !== undefined && (f.janelaInicio !== inteiro(env.DISPARO_JANELA_INICIO, f.janelaInicio, 0, 23) || f.janelaFim !== inteiro(env.DISPARO_JANELA_FIM, f.janelaFim, 1, 24))) {
     avisos.push(`DISPARO_JANELA_INICIO/FIM não valem juntos (início ${env.DISPARO_JANELA_INICIO ?? '—'}, fim ${env.DISPARO_JANELA_FIM ?? '—'}): ficou ${f.janelaInicio}h–${f.janelaFim}h`);
   }
-  for (const [chave, valor] of Object.entries({ DISPARO_TETO_HORA: f.tetoPorHora, DISPARO_TETO_DIA: f.tetoPorDia, DISPARO_MAX_SAIR: f.maxSair, DISPARO_FALHAS_SEGUIDAS: f.falhasSeguidas, DISPARO_LOTE: f.lote, DISPARO_PAUSA_MS: f.pausaMs, DISPARO_VALIDADE_DIAS: f.validadeDias })) {
+  for (const [chave, valor] of Object.entries({ DISPARO_TETO_HORA: f.tetoPorHora, DISPARO_TETO_DIA: f.tetoPorDia, DISPARO_MAX_SAIR: f.maxSair, DISPARO_FALHAS_SEGUIDAS: f.falhasSeguidas, DISPARO_LIMITE_DE_TAXA_SEGUIDOS: f.limiteDeTaxaSeguidos, DISPARO_LOTE: f.lote, DISPARO_PAUSA_MS: f.pausaMs, DISPARO_VALIDADE_DIAS: f.validadeDias })) {
     const bruto = env[chave];
     if (bruto !== undefined && bruto.trim() !== '' && Number(bruto) !== valor) avisos.push(`${chave}="${bruto}" não vale: ficou ${valor}`);
   }

@@ -13,7 +13,7 @@ import type { ResultadoDoTemplate } from '../whatsapp-meta.js';
 export type Modo = 'ligado' | 'seco' | 'desligado';
 
 /** Por que uma onda parou, em palavra de máquina. Só a pausa por SAIR tem retomada (decisão do João, 26/10). */
-export type CausaDaPausa = 'sair' | 'falhas' | 'vencida';
+export type CausaDaPausa = 'sair' | 'falhas' | 'vencida' | 'meta';
 
 export interface Destino {
   id: string;
@@ -83,7 +83,9 @@ export interface Porto {
   enviar(onda: OndaNoLote, d: Destino, valores: string[]): Promise<ResultadoDoTemplate>;
   espelhar(d: Destino, texto: string): Promise<void>;
   dormir(ms: number): Promise<void>;
-  log(nivel: 'info' | 'warn', dados: Record<string, unknown>, msg: string): void;
+  /** Registra se a rodada terminou em limite de taxa da Meta e devolve quantas rodadas SEGUIDAS já foram assim; `houve: false` (um envio passou) zera. */
+  limiteDeTaxa(unitId: string, houve: boolean): Promise<number>;
+  log(nivel: 'info' | 'warn' | 'error', dados: Record<string, unknown>, msg: string): void;
 }
 
 export interface ResumoDaRodada {
@@ -133,7 +135,7 @@ async function aindaPode(porto: Porto, d: Destino): Promise<Veredito> {
 }
 
 /** `limite`: a Meta pediu para esperar (limite de taxa); a pessoa continua na fila e a rodada acaba. */
-type Resultado = 'pulou' | 'feito' | 'adiado' | 'limite';
+type Resultado = 'pulou' | 'feito' | 'adiado' | 'limite' | 'restrito';
 
 /**
  * Não deu para conferir agora: a pessoa NÃO é descartada, mas vai para o FIM da fila. A gravação do motivo atualiza o
@@ -172,6 +174,7 @@ async function simularUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: De
 async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Destino, r: ResumoDaRodada): Promise<Resultado> {
   let reivindicou = false;
   let chamouAMeta = false;
+  let wamidAceito: string | null = null;
   try {
     const v = await aindaPode(porto, d);
     if (v.tipo === 'adiar') return adiar(porto, d, v.motivo);
@@ -187,6 +190,10 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
     chamouAMeta = true;
     const res = await porto.enviar(onda, d, valores);
     if (res.ok && res.wamid) {
+      // O wamid é a única prova de que a mensagem saiu: vai para o log ANTES de qualquer gravação. Se o banco falhar em seguida, o
+      // catch marca a pessoa como INCERTA (não reenvia) e o wamid continua achável aqui, para casar na mão.
+      porto.log('info', { unit: u.slug, onda: onda.id, wamid: res.wamid, para: `…${d.telefone.slice(-4)}` }, 'disparo: a Meta aceitou o envio');
+      wamidAceito = res.wamid;
       await porto.gravar(d.id, { estado: 'enviado', wamid: res.wamid, enviadoEm: porto.agora() });
       r.mandou += 1;
       // Mensagem por fora do Kommo não aparece lá: sem a nota, a resposta do paciente chega sem a pergunta.
@@ -200,7 +207,7 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
     if (res.limiteDeTaxa) {
       await porto.gravar(d.id, { estado: 'pendente', enviadoEm: null, motivo: `limite de taxa da Meta: tento de novo depois (${motivoDaMeta(res)})`.slice(0, 300) });
       porto.log('warn', { unit: u.slug, onda: onda.id, motivo: motivoDaMeta(res) }, 'disparo: a Meta pediu para esperar (limite de taxa) — rodada encerrada');
-      return 'limite';
+      return res.restrito ? 'restrito' : 'limite';
     }
     // Recusa definitiva não conta no teto (a Meta não aceitou); incerta pode ter saído: conta e NUNCA é reenviada sozinha.
     await porto.gravar(d.id, { estado: 'falhou', motivo: motivoDaMeta(res), enviadoEm: res.incerto ? porto.agora() : null });
@@ -214,7 +221,7 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
       else await adiar(porto, d, 'erro antes de falar com a Meta');
       return 'adiado';
     }
-    await porto.gravar(d.id, { estado: 'falhou', motivo: `INCERTO: erro interno (${String(err).slice(0, 150)})`, enviadoEm: porto.agora() }).catch(() => undefined);
+    await porto.gravar(d.id, { estado: 'falhou', motivo: `INCERTO: erro interno${wamidAceito ? ` DEPOIS de a Meta aceitar (wamid ${wamidAceito})` : ''} (${String(err).slice(0, 150)})`.slice(0, 300), enviadoEm: porto.agora() }).catch(() => undefined);
     r.falhou += 1;
     return 'feito';
   }
@@ -311,9 +318,24 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
         return { ...r, parou: 'teto atingido durante a rodada' };
       }
       const antes = r.falhou;
+      const mandouAntes = r.mandou;
       const res = real ? await enviarUm(porto, onda, u, d, r) : await simularUm(porto, onda, u, d, r);
       if (res === 'pulou') continue; // perdeu a disputa para outro processo: não gasta vaga nem tempo
-      if (res === 'limite') return { ...r, parou: 'a Meta pediu para esperar (limite de taxa): tento de novo na próxima rodada' };
+      if (res === 'restrito') {
+        const motivo = 'a Meta RESTRINGIU o número por spam/qualidade (código 131048): a unidade foi pausada; resolva com a Meta e monte a onda de novo';
+        await porto.pausarOndas(u.id, null, motivo, 'meta');
+        porto.log('error', { unit: u.slug }, 'disparo: número RESTRITO pela Meta (131048) — unidade PAUSADA, não tento de novo');
+        return { ...r, parou: 'número restrito pela Meta (131048): unidade pausada' };
+      }
+      if (res === 'limite') {
+        const seguidas = await porto.limiteDeTaxa(u.id, true);
+        if (seguidas >= f.limiteDeTaxaSeguidos) {
+          await porto.pausarOndas(u.id, null, `a Meta pediu para esperar em ${seguidas} rodadas seguidas (limite de taxa): a unidade foi pausada; confira a qualidade do número e monte a onda de novo`, 'meta');
+          porto.log('error', { unit: u.slug, rodadas: seguidas }, 'disparo: limite de taxa da Meta por rodadas demais — unidade PAUSADA');
+          return { ...r, parou: `limite de taxa da Meta por ${seguidas} rodadas seguidas: unidade pausada` };
+        }
+        return { ...r, parou: 'a Meta pediu para esperar (limite de taxa): tento de novo na próxima rodada' };
+      }
       r.processados += 1;
       cabem -= 1;
       if (res === 'adiado') {
@@ -325,6 +347,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
         }
         continue;
       }
+      if (r.mandou > mandouAntes) await porto.limiteDeTaxa(u.id, false); // um envio passou: o limite acabou
       seguidas = r.falhou > antes ? seguidas + 1 : 0;
       if (real && seguidas >= f.falhasSeguidas) {
         await porto.pausarOndas(u.id, null, `${f.falhasSeguidas} envios seguidos falharam na Meta: confira o token e a qualidade do número`, 'falhas');

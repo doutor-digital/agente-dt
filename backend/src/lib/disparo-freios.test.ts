@@ -68,3 +68,9 @@ test('ambiente: o que NÃO valeu é dito (o código volta ao padrão, e o worker
   assert.match(a[1]!, /DISPARO_TETO_HORA="abc" não vale/);
   assert.deepEqual(avisosDoAmbiente({ DISPARO_JANELA_INICIO: '8', DISPARO_JANELA_FIM: '20', DISPARO_TETO_HORA: '12' } as NodeJS.ProcessEnv), []);
 });
+
+test('rodadas seguidas com limite de taxa: padrão 10, muda por DISPARO_LIMITE_DE_TAXA_SEGUIDOS, valor ruim volta ao padrão e é avisado', () => {
+  assert.equal(FREIOS_PADRAO.limiteDeTaxaSeguidos, 10);
+  assert.equal(freiosDoAmbiente({ DISPARO_LIMITE_DE_TAXA_SEGUIDOS: '4' } as NodeJS.ProcessEnv).limiteDeTaxaSeguidos, 4);
+  for (const ruim of ['0', 'abc', '-1', '1000']) assert.equal(freiosDoAmbiente({ DISPARO_LIMITE_DE_TAXA_SEGUIDOS: ruim } as NodeJS.ProcessEnv).limiteDeTaxaSeguidos, 10, ruim);
+});

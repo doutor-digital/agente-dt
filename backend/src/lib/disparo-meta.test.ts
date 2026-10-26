@@ -1,6 +1,6 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { enviarTemplate, montarCorpoDoTemplate, variavelLimpa } from './whatsapp-meta.js';
+import { ehNumeroRestrito, enviarTemplate, montarCorpoDoTemplate, variavelLimpa } from './whatsapp-meta.js';
 
 const CRED = { phoneNumberId: '12345', token: 'tok-secreto' };
 const original = globalThis.fetch;
@@ -101,4 +101,29 @@ test('limite de taxa: 429 ou os códigos de "devagar" da Meta; recusa de verdade
   for (const code of [131026, 132000, 190, 100]) assert.equal(ehLimiteDeTaxa(400, { error: { code } }), false, String(code));
   assert.equal(ehLimiteDeTaxa(500, null), false);
   assert.equal(ehLimiteDeTaxa(200, { messages: [] }), false);
+});
+
+test('enviarTemplate: 429 (mesmo de proxy, sem corpo da Meta) e os códigos de taxa são "esperar", NÃO recusa definitiva nem incerto', async () => {
+  const msg = { para: '5563991021043', nome: 'm', idioma: 'pt_BR' };
+  fetchFalso(() => new Response('<html>too many</html>', { status: 429 }));
+  const r429 = await enviarTemplate(CRED, msg);
+  assert.deepEqual([r429.ok, r429.limiteDeTaxa, r429.incerto, r429.restrito], [false, true, false, undefined]);
+
+  fetchFalso(() => json({ error: { code: 130429, message: 'Rate limit hit' } }, 400));
+  const r130429 = await enviarTemplate(CRED, msg);
+  assert.deepEqual([r130429.ok, r130429.limiteDeTaxa, r130429.incerto, r130429.restrito], [false, true, false, undefined]);
+
+  // recusa definitiva de verdade não é limite de taxa
+  fetchFalso(() => json({ error: { code: 131026, message: 'undeliverable' } }, 400));
+  const rDef = await enviarTemplate(CRED, msg);
+  assert.deepEqual([rDef.ok, rDef.limiteDeTaxa, rDef.incerto], [false, undefined, false]);
+});
+
+test('enviarTemplate: 131048 vem marcado como RESTRITO (a unidade pausa), e só ele', async () => {
+  fetchFalso(() => json({ error: { code: 131048, message: 'Spam rate limit hit' } }, 400));
+  const r = await enviarTemplate(CRED, { para: '5563991021043', nome: 'm', idioma: 'pt_BR' });
+  assert.deepEqual([r.limiteDeTaxa, r.restrito, r.incerto], [true, true, false]);
+  assert.equal(ehNumeroRestrito({ error: { code: 131048 } }), true);
+  for (const code of [130429, 131056, 80007, 4, 131026]) assert.equal(ehNumeroRestrito({ error: { code } }), false, String(code));
+  assert.equal(ehNumeroRestrito(null), false);
 });

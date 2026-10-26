@@ -13,8 +13,9 @@ export function diasDaOferta(env: NodeJS.ProcessEnv = process.env): number {
 }
 
 /**
- * Há alguma onda com oferta que já saiu (aprovada, pausada, concluída ou cancelada no meio)? Guardado por 30 s: enquanto
- * ninguém cadastrou oferta, o caminho quente da Sofia (todo turno de toda unidade) não faz consulta nenhuma de oferta.
+ * Existe algum disparo COM oferta enviado dentro da janela? Guardado por 30 s: enquanto ninguém recebeu oferta (ou a janela de
+ * todas passou), o caminho quente da Sofia (todo turno de toda unidade) não faz consulta nenhuma de oferta. Olha o envio e a
+ * janela, não só a existência de uma onda: onda concluída com oferta não deixa a guarda verdadeira para sempre.
  */
 let existeOferta: { valor: boolean; ate: number } | null = null;
 const GUARDA_MS = 30_000;
@@ -23,7 +24,10 @@ export function _zerarGuardaDeOferta(): void {
 }
 async function haOfertaPorAi(agora: number): Promise<boolean> {
   if (existeOferta && existeOferta.ate > agora) return existeOferta.valor;
-  const achou = await prisma.disparoOnda.findFirst({ where: { oferta: { not: null }, estado: { notIn: ['montando', 'montada'] } }, select: { id: true } });
+  const achou = await prisma.disparoDestinatario.findFirst({
+    where: { estado: 'enviado', enviadoEm: { gte: new Date(agora - diasDaOferta() * 86_400_000) }, onda: { oferta: { not: null } } },
+    select: { id: true },
+  });
   existeOferta = { valor: !!achou, ate: agora + GUARDA_MS };
   return !!achou;
 }

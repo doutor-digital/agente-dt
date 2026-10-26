@@ -243,10 +243,20 @@ export interface ResultadoDoTemplate {
    * não entrou: quem chama deixa a pessoa na fila e tenta de novo depois, sem contar como falha.
    */
   limiteDeTaxa?: boolean;
+  /**
+   * `true` no código 131048 (spam rate limit): a Meta RESTRINGIU o número por qualidade/spam. Não passa com o tempo de um minuto:
+   * quem chama pausa a unidade e alerta, em vez de tentar de novo para sempre.
+   */
+  restrito?: boolean;
 }
 
 /** Códigos de erro da Graph API que são "devagar": throughput (130429), par/spam (131048, 131056), limites da API (4, 80007, 80008). */
 const CODIGOS_DE_LIMITE_DE_TAXA = new Set([4, 80007, 80008, 130429, 131048, 131056]);
+
+/** O código 131048 (spam rate limit): o número foi restringido pela Meta. */
+export function ehNumeroRestrito(detalhe: unknown): boolean {
+  return (detalhe as { error?: { code?: unknown } } | null)?.error?.code === 131048;
+}
 
 /** A resposta pede para esperar? Status 429 ou um dos códigos de limite de taxa da Meta. */
 export function ehLimiteDeTaxa(status: number, detalhe: unknown): boolean {
@@ -275,7 +285,7 @@ export async function enviarTemplate(
     const wamid = (detalhe as { messages?: Array<{ id?: string }> } | null)?.messages?.[0]?.id ?? null;
     if (ok && !wamid) return { ok: false, wamid: null, detalhe, incerto: true };
     // Limite de taxa: a mensagem NÃO entrou (a Meta ou o proxy recusou antes). Esperar e tentar de novo, não recusar.
-    if (!ok && ehLimiteDeTaxa(status, detalhe)) return { ok: false, wamid: null, detalhe, incerto: false, limiteDeTaxa: true };
+    if (!ok && ehLimiteDeTaxa(status, detalhe)) return { ok: false, wamid: null, detalhe, incerto: false, limiteDeTaxa: true, ...(ehNumeroRestrito(detalhe) ? { restrito: true } : {}) };
     // Definitiva só a recusa que a PRÓPRIA Meta assina (corpo com `error.code`) e que não é 5xx. Gateway, proxy, HTML,
     // 408/502…: não dá para saber se a mensagem entrou, e incerto nunca é reenviado.
     const recusaDaMeta = typeof (detalhe as { error?: { code?: unknown } } | null)?.error?.code === 'number';

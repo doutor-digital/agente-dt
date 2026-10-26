@@ -26,6 +26,7 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
   const toque = new Map<string, number>();
   let relogio = 0;
   const desdeDasFalhas: Date[] = [];
+  let limitesSeguidos = 0;
   const chamadas = { desdeDasFalhas, enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], causas: [] as Array<string | undefined>, devolvidas: [] as string[], concluidas: [] as string[], logs: [] as string[] };
   const porto: Porto = {
     agora: () => opcoes.agora ?? AGORA,
@@ -62,8 +63,9 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
       return opcoes.envio ? opcoes.envio(d) : { ok: true, wamid: `wamid.${d.id}`, detalhe: {}, incerto: false };
     },
     espelhar: async (d, texto) => void chamadas.espelhar.push(`${d.kommoLeadId}|${texto}`),
+    limiteDeTaxa: async (_u, houve) => (limitesSeguidos = houve ? limitesSeguidos + 1 : 0),
     dormir: async () => undefined,
-    log: (_n, _d, msg) => void chamadas.logs.push(msg),
+    log: (n, _d, msg) => void chamadas.logs.push(n === 'error' ? `ERRO ${msg}` : msg),
   };
   return { porto, estados, chamadas, todos };
 }
@@ -473,4 +475,76 @@ test('uma recusa DEFINITIVA da Meta (não é limite de taxa) continua sendo falh
   const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
   assert.equal(r.falhou, 1);
   assert.equal(t.estados.get('d1')!.estado, 'falhou');
+});
+
+// ── a 2ª revisão do sênior (26/10): 131048 pausa, limite de taxa tem teto, wamid primeiro ──────────────────
+
+const restrito: ResultadoDoTemplate = { ok: false, wamid: null, detalhe: { error: { code: 131048, message: 'Spam rate limit hit' } }, incerto: false, limiteDeTaxa: true, restrito: true };
+const devagar: ResultadoDoTemplate = { ok: false, wamid: null, detalhe: { error: { code: 130429, message: 'Rate limit hit' } }, incerto: false, limiteDeTaxa: true };
+
+test('131048 (número RESTRITO por spam) PAUSA a unidade e alerta; não fica tentando todo minuto', async () => {
+  const t = montar({ modo: 'ligado', quantos: 5, teste: null, envio: () => restrito });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(t.chamadas.enviar.length, 1, 'uma tentativa e para');
+  assert.equal(t.chamadas.pausas.length, 1);
+  assert.match(t.chamadas.pausas[0]!, /RESTRINGIU o número.*131048/);
+  assert.deepEqual(t.chamadas.causas, ['meta'], 'e não é pausa por SAIR: não tem retomada');
+  assert.match(r.parou ?? '', /número restrito/);
+  assert.ok(t.chamadas.logs.some((l) => /^ERRO disparo: número RESTRITO/.test(l)), 'alerta em nível de erro');
+  assert.equal(r.falhou, 0);
+  assert.equal(t.estados.get('d1')!.estado, 'pendente', 'a pessoa não é queimada');
+});
+
+test('limite de taxa comum: tenta de novo nas rodadas seguintes, mas na 10ª rodada seguida PAUSA a unidade e alerta', async () => {
+  const t = montar({ modo: 'ligado', quantos: 5, teste: null, envio: () => devagar });
+  for (let i = 1; i <= 9; i++) {
+    const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+    assert.match(r.parou ?? '', /tento de novo/, `rodada ${i}`);
+  }
+  assert.deepEqual(t.chamadas.pausas, [], 'até a 9ª só espera');
+  const r10 = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(t.chamadas.pausas.length, 1);
+  assert.match(t.chamadas.pausas[0]!, /10 rodadas seguidas/);
+  assert.deepEqual(t.chamadas.causas, ['meta']);
+  assert.match(r10.parou ?? '', /unidade pausada/);
+  assert.ok(t.chamadas.logs.some((l) => /^ERRO disparo: limite de taxa da Meta por rodadas demais/.test(l)));
+});
+
+test('um envio que passa ZERA a contagem do limite de taxa', async () => {
+  let n = 0;
+  const t = montar({ modo: 'ligado', quantos: 40, teste: null, envio: (d) => (++n % 4 === 0 ? { ok: true, wamid: `w${d.id}`, detalhe: {}, incerto: false } : devagar) });
+  for (let i = 0; i < 30; i++) await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual(t.chamadas.pausas, [], 'a cada 4ª tentativa passa: nunca chega a 10 seguidas');
+});
+
+test('o teto de rodadas com limite de taxa vem do ambiente (DISPARO_LIMITE_DE_TAXA_SEGUIDOS) e vale 3 quando pedido', async () => {
+  const t = montar({ modo: 'ligado', quantos: 5, teste: null, envio: () => devagar });
+  const f3 = { ...sem_pausa, limiteDeTaxaSeguidos: 3 };
+  await rodarUnidade(t.porto, f3, UNIDADE, [ONDA]);
+  await rodarUnidade(t.porto, f3, UNIDADE, [ONDA]);
+  assert.deepEqual(t.chamadas.pausas, []);
+  await rodarUnidade(t.porto, f3, UNIDADE, [ONDA]);
+  assert.equal(t.chamadas.pausas.length, 1);
+});
+
+test('o wamid vai para o log ANTES de qualquer gravação; se o banco falhar depois, a pessoa fica INCERTA com o wamid no motivo', async () => {
+  const t = montar({ modo: 'ligado', quantos: 1, teste: null });
+  const ordem: string[] = [];
+  const gravarOriginal = t.porto.gravar;
+  const logOriginal = t.porto.log;
+  t.porto.log = (n, d, m) => { ordem.push(`log:${m}`); logOriginal(n, d, m); };
+  t.porto.gravar = async (id, dados) => { ordem.push(`gravar:${dados.estado ?? '-'}`); return gravarOriginal(id, dados); };
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  const iLog = ordem.findIndex((x) => x === 'log:disparo: a Meta aceitou o envio');
+  const iGravaEnviado = ordem.findIndex((x) => x === 'gravar:enviado');
+  assert.ok(iLog >= 0 && iGravaEnviado > iLog, ordem.join(' | '));
+
+  // o banco cai justo na gravação do "enviado"
+  const t2 = montar({ modo: 'ligado', quantos: 1, teste: null });
+  const g2 = t2.porto.gravar;
+  t2.porto.gravar = async (id, dados) => { if (dados.estado === 'enviado') throw new Error('banco caiu'); return g2(id, dados); };
+  const r = await rodarUnidade(t2.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(r.falhou, 1);
+  assert.match(String(t2.estados.get('d1')!.motivo), /INCERTO: erro interno DEPOIS de a Meta aceitar \(wamid wamid\.d1\)/);
+  assert.ok(t2.estados.get('d1')!.enviadoEm, 'conta no teto e nunca é reenviado');
 });
