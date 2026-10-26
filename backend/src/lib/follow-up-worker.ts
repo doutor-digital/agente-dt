@@ -13,8 +13,8 @@ import { leadPausadoPorJanela } from './pausa-lead.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
 import { motivoDeBloqueio } from './mensagem-bloqueada.js';
-import { abrirTarefaDaDesistencia } from './desistencia-da-consulta.js';
-import { oferecuHorario, pareceDesistenciaDaConsulta } from './desistencia-frases.js';
+import { MARCA_RECUSOU } from './desistencia-acao.js';
+import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
 const SWEEP_MS = 60_000;
 
@@ -190,47 +190,6 @@ export function motivoParaNaoCobrar(bloqueio: string | null, ultimaFala: string 
   return null;
 }
 
-/**
- * Quanto tempo sem resposta à oferta de novo horário (a Sofia ofereceu depois do "cancelei") até virar tarefa. Decisão do
- * João, 26/10/2026: "se recusar ou não responder, encerra… e abre tarefa para a equipe".
- */
-export const ESPERA_DA_OFERTA_MIN = 120;
-/** Conversa já olhada por esta regra, pela hora da última mensagem: sem isto, uma conversa que não vira tarefa (sem consulta no cartão) leria o cartão a cada minuto. */
-const desistenciasOlhadas = new Map<string, number>();
-
-async function tarefaDaDesistenciaSemResposta(
-  unit: Unit,
-  conv: { id: string; leadId: string; lastMessageAt: Date; contactName: string | null },
-  ultimaFala: string | null | undefined,
-  ultimaFalaEm: Date | undefined,
-): Promise<void> {
-  const marca = conv.lastMessageAt.getTime();
-  const k = `${unit.id}:${conv.leadId}`;
-  if (desistenciasOlhadas.get(k) === marca) return;
-  if ((Date.now() - marca) / 60_000 < ESPERA_DA_OFERTA_MIN) return;
-  // Só vale se a ÚLTIMA mensagem do banco é a OFERTA de horário da Sofia (relógio + dia) e o paciente ficou em silêncio depois
-  // dela. Se ainda é a fala dele, a Sofia está calada (o webhook já abriu a tarefa 'ia_calada'); se a equipe respondeu pelo
-  // celular o banco não vê; e a recusa/hesitação que veio depois da oferta tem fecho próprio (cancela, tarefa ou nova oferta),
-  // cuja despedida não traz horário. Achado do Codex, 26/10.
-  const ultima = await prisma.message.findFirst({ where: { conversationId: conv.id }, orderBy: { createdAt: 'desc' }, select: { role: true, content: true, createdAt: true } });
-  // e a oferta tem de ser POSTERIOR ao "cancelei" (oferta antiga, de outra conversa, não conta)
-  if (ultima?.role !== 'assistant' || !oferecuHorario(ultima.content) || !ultimaFalaEm || ultima.createdAt.getTime() <= ultimaFalaEm.getTime()) {
-    desistenciasOlhadas.set(k, marca);
-    return;
-  }
-  const r = await abrirTarefaDaDesistencia({
-    unit,
-    leadId: Number(conv.leadId),
-    texto: ultimaFala ?? '',
-    motivo: 'sem_resposta',
-    nome: conv.contactName,
-    kommo: () => createKommoClient(unit),
-  });
-  if (r === 'falhou') return; // tenta de novo na próxima varredura
-  if (desistenciasOlhadas.size > 2000) desistenciasOlhadas.clear();
-  desistenciasOlhadas.set(k, marca);
-}
-
 export const COBRANCA_INICIO_MIN = 8 * 60;
 export const COBRANCA_FIM_MIN = 21 * 60;
 
@@ -377,6 +336,17 @@ async function varrer(): Promise<void> {
         },
       });
 
+      // as recusas de remarcar deste lote, numa consulta só (uma por unidade e varredura, não uma por conversa)
+      const recusas = new Map<string, Date>(
+        (candidatas.length === 0
+          ? []
+          : await prisma.cardAlert.findMany({
+              where: { unitId: unit.id, ruleKey: MARCA_RECUSOU, leadId: { in: candidatas.map((c) => c.leadId) } },
+              select: { leadId: true, createdAt: true },
+            }).catch(() => [])
+        ).map((r) => [r.leadId, r.createdAt] as [string, Date]),
+      );
+
       for (const conv of candidatas) {
         const estado = etapas.get(Number(conv.leadId));
         if (!estado) continue;
@@ -390,10 +360,12 @@ async function varrer(): Promise<void> {
         // Boituva #6298947 ("NÃO É LEAD" no nome) e Capivari #5699887 ("23-arquivo-morto") ouviram a régua de 120 h; a
         // Açailândia #28780654 (estorno) ouviu a de 48 h e a de 96 h. Item 6 da Suzanne, 25/10/2026. Não marca motivo de
         // parada de propósito: etiqueta sai, paciente volta a escrever — e o cartão volta para a fila.
-        const naoCobrar = motivoParaNaoCobrar(estado.bloqueio, conv.messages[0]?.content);
+        // A Sofia se despediu da recusa de remarcar e a equipe vai cancelar: a NOSSA régua para neste cartão enquanto ele não
+        // escrever de novo (desistencia-acao.ts). Só marca; nada gravado em `followUpStoppedReason`.
+        const recusouEm = recusas.get(conv.leadId);
+        const aindaRecusando = !!recusouEm && !(conv.messages[0]?.createdAt && conv.messages[0].createdAt > recusouEm);
+        const naoCobrar = aindaRecusando ? 'o paciente recusou remarcar e a equipe vai cancelar' : motivoParaNaoCobrar(estado.bloqueio, conv.messages[0]?.content);
         if (naoCobrar) {
-          // Desistiu e não respondeu à oferta de novo horário → a equipe precisa saber (etiqueta/nome bloqueado não é isso).
-          if (!estado.bloqueio) await tarefaDaDesistenciaSemResposta(unit, conv, conv.messages[0]?.content, conv.messages[0]?.createdAt);
           logger.debug({ unit: unit.slug, leadId: conv.leadId, motivo: naoCobrar }, 'follow-up: régua não sai para este cartão');
           continue;
         }

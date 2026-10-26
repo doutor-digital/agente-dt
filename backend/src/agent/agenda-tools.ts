@@ -14,7 +14,6 @@ import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.j
 import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente.js';
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
-import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
@@ -28,7 +27,6 @@ import { PARA_SEMPRE_MS } from '../lib/conflito-paciente.js';
 import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } from './carimbos-do-agendamento.js';
 import { carimboDaConsulta } from './horario-oferecido.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
-import { motivoDeNaoCancelar, perguntadoEmOutroTurno, PREFIXO_DA_PERGUNTA } from './cancelavel.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { apagarDoCache, medidorDoCache } from '../lib/cache-agenda.js';
 import {
@@ -860,7 +858,7 @@ async function procurarExistente(unit: Unit, leadId: number, nome: string, fone:
 export async function consultaAtual(unit: Unit, leadId: number | undefined) {
   const c = await AgendaReconcileService.consultaDoLead(unit, leadId);
   if (!c || !c.idSchedule || c.estado === 'cancelada') return null;
-  return { idSchedule: c.idSchedule, quando: c.quando, confirmada: c.estado === 'confirmada', idStatus: c.idStatus ?? null };
+  return { idSchedule: c.idSchedule, quando: c.quando, confirmada: c.estado === 'confirmada' };
 }
 
 const porExtenso = AgendaReconcileService.porExtenso;
@@ -957,42 +955,14 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
         );
       }
 
-      // Só cancela consulta FUTURA e de pé: ATENDIDA aparece como "confirmada" no reconciliador (#132, revisão do sênior).
-      const naoCancela = motivoDeNaoCancelar(atual, agoraLocalISO(fusoDaUnidade(fresca)));
-      if (naoCancela) {
-        return (
-          `NÃO CANCELEI: ${naoCancela}. NÃO diga que cancelou e NÃO cite dia nem hora como se ainda valesse. ` +
-          'Diga que a equipe confere com ele e, se a ferramenta criar_tarefa existir, abra uma tarefa começando exatamente por ' +
-          `"ALERTA · ${fresca.slug} · [Contato: primeiro nome] Pediu para cancelar a consulta, mas ${naoCancela}: conferir".`
-        );
-      }
-
       if (!args.confirmado) {
-        // a pergunta deixa a marca que o confirmado=true de um turno POSTERIOR exige (cancelavel.ts)
-        await prisma.cardAlert
-          .upsert({
-            where: { unitId_leadId_ruleKey: { unitId: fresca.id, leadId: String(args.leadId), ruleKey: `${PREFIXO_DA_PERGUNTA}${recorder.traceId}` } },
-            create: { unitId: fresca.id, leadId: String(args.leadId), ruleKey: `${PREFIXO_DA_PERGUNTA}${recorder.traceId}` },
-            update: { createdAt: new Date() },
-          })
-          .catch((err) => logger.warn({ err: String(err), leadId: args.leadId }, 'cancelar_consulta: não gravei a marca da pergunta'));
         return (
-          'AINDA NÃO CANCELEI. Pergunte ao paciente, com estas palavras e nomeando a consulta: ' +
-          `"Confirmo o cancelamento da sua consulta de ${porExtenso(atual.quando)}?" ` +
-          'Só chame de novo com confirmado=true na PRÓXIMA mensagem, e só se ele responder "sim" a ESSA pergunta ' +
-          '(não vale um "pode cancelar" dito antes dela). Se ele quiser outro dia ou horário, use remarcar_consulta em vez de cancelar.'
-        );
-      }
-
-      // confirmado=true só vale se a pergunta nomeada foi feita em OUTRO turno (cancelavel.ts)
-      const marcas = await prisma.cardAlert
-        .findMany({ where: { unitId: fresca.id, leadId: String(args.leadId), ruleKey: { startsWith: PREFIXO_DA_PERGUNTA } }, select: { ruleKey: true, createdAt: true } })
-        .catch(() => null);
-      if (!marcas || !perguntadoEmOutroTurno(marcas, recorder.traceId)) {
-        return (
-          'AINDA NÃO CANCELEI: a pergunta de confirmação com a consulta nomeada não foi feita antes. Chame cancelar_consulta SEM ' +
-          'confirmado, pergunte ao paciente "Confirmo o cancelamento da sua consulta de <dia, hora>?" e só chame com confirmado=true ' +
-          'na mensagem seguinte, depois do "sim" dele.'
+          'AINDA NÃO CANCELEI. Pergunte ao paciente, com estas palavras: ' +
+          `"Você tem certeza que deseja cancelar seu agendamento de ${porExtenso(atual.quando)}? ` +
+          'Se cancelar, a vaga volta para a fila e pode ser ocupada por outra pessoa. ' +
+          'Me confirma: cancelar ou manter?" ' +
+          'Só chame de novo com confirmado=true se ele responder que quer MESMO cancelar. ' +
+          'Se ele quiser outro dia ou horário, use remarcar_consulta em vez de cancelar.'
         );
       }
 
@@ -1016,10 +986,7 @@ export function buildCancelarConsulta({ unit, recorder }: Contexto) {
         .catch((err) => logger.warn({ err, leadId: args.leadId }, 'agenda: falha ao limpar vínculo após cancelar'));
       AgendaReconcileService.esqueceConsulta(fresca.id, args.leadId);
 
-      return (
-        `Consulta de ${porExtenso(atual.quando)} cancelada. Confirme ao paciente em UMA frase. Se nesta conversa você JÁ ofereceu ` +
-        'outro horário (e ele recusou), NÃO ofereça de novo: só se despeça. Se foi um cancelamento sem oferta antes, pergunte se ele quer remarcar.'
-      );
+      return `Consulta de ${porExtenso(atual.quando)} cancelada. Confirme ao paciente e pergunte se ele quer remarcar para outro dia.`;
     },
   });
 }
@@ -1344,10 +1311,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       'conta própria: explique ao paciente e ofereça consultar de novo.',
     schema: z.object({
       idClient: z.number().int().positive().describe('idClient do paciente (de buscar_paciente).'),
-      remarcando: z
-        .boolean()
-        .optional()
-        .describe('Uso interno de remarcar_consulta. NÃO use — para trocar de horário chame remarcar_consulta.'),
+      // `remarcando` NÃO está no schema: o modelo não pode ligá-lo (ele pula a confirmação de dia/pagamento, a recusa de
+      // Boa Vista e a trava do comprovante). Só `remarcar_consulta` o passa, chamando `func` direto — o zod do
+      // invoke descarta qualquer `remarcando` que o modelo escrever.
       data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Data AAAA-MM-DD.'),
       hora: z.string().regex(/^\d{2}:\d{2}$/).describe('Hora HH:mm do fuso da clínica.'),
       diaConfirmado: z
@@ -1356,8 +1322,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         .describe(
           'true SOMENTE se o paciente disse, com as palavras dele, que consegue ir nesse dia e horário ' +
           '(sem viagem, trabalho ou imprevisto). Também vale: ele mesmo escreveu o dia/hora que escolheu ' +
-          '("terça às 11:30"), ou mandou o comprovante do Pix depois da chave com o horário combinado. ' +
-          '"ok" para o horário não conta.',
+          '("terça às 11:30"). Comprovante do Pix NÃO vale como confirmação do dia (só onde a unidade exige a ' +
+          'taxa de reserva ele libera marcar; a ferramenta decide). "ok" para o horário não conta.',
         ),
       formaPagamento: z
         .enum(['pix_antecipado', 'na_clinica'])
@@ -1437,33 +1403,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      // Unidade em que a vaga só existe depois da taxa antecipada (Boa Vista, R$ 100).
-      // O manual já dizia "NÃO agende ainda" e o modelo marcou mesmo assim (Lindomar,
-      // 05/09/2026). Remarcação passa: quem remarca já tem consulta, e pagou para tê-la.
-      if (fresca.spineBookingRequiresPayment && !args.remarcando) {
-        const prova = await provaDePagamentoAntecipado({ unitId: fresca.id, leadId: args.leadId, kommo });
-        if (!prova.ok) {
-          await recorder.step({
-            kind: 'ERROR',
-            title: 'agendar_consulta recusado — reserva sem pagamento confirmado',
-            payload: { ...args, motivo: prova.motivo },
-          });
-          return (
-            'RECUSADO: nesta unidade a vaga só é reservada DEPOIS do pagamento antecipado ' +
-            `confirmado, e ainda não há prova dele (${prova.motivo}). A consulta NÃO foi marcada. ` +
-            'NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste turno. ' +
-            'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: ' +
-            'PIX do valor antecipado desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ' +
-            'ou pagamento na clínica antes do dia. Quando o comprovante chegar (foto ou PDF), aí sim chame ' +
-            'agendar_consulta. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para a equipe acompanhar.'
-          );
-        }
-        await recorder.step({
-          kind: 'THINKING',
-          title: `Pagamento antecipado confirmado pelo ${prova.fonte === 'cartao' ? 'cartão do Kommo' : 'comprovante lido na conversa'} — pode reservar`,
-          payload: { leadId: args.leadId, fonte: prova.fonte },
-        });
-      }
+      // Unidade com taxa de reserva (Boa Vista): a IA só marca depois de ler o comprovante da taxa — essa trava mora no
+      // grafo (`travarAgendamentoPorComprovante`, confirmacao-so-com-crm.ts), onde a conversa está à mão.
 
       const dono = await conferirPacienteDoLead(fresca.id, args.leadId, args.idClient);
       if (!dono.ok) {
@@ -1663,7 +1604,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
                 .catch(() => null);
           const pagamento = decidirPagamentoAntecipado({
             ehRetorno,
-            // Chegou até aqui numa unidade com taxa de reserva = a trava acima achou a prova.
+            // Chegou até aqui numa unidade com taxa de reserva = o grafo liberou pelo comprovante da taxa lido na conversa
+            // (a conferência do dinheiro continua sendo da equipe, que ganha a tarefa no mesmo turno).
             pagamentoComprovado: Boolean(fresca.spineBookingRequiresPayment) && !args.remarcando,
             formaPagamento: args.formaPagamento,
             escolhaSalva,

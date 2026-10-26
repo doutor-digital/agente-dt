@@ -49,6 +49,8 @@ import {
   travaDoHorario,
 } from './horario-oferecido.js';
 import { empurraHorario, pacienteEncerrou, semEmpurrarHorario } from './paciente-encerrou.js';
+import { acaoDaDesistencia, pacienteDesistiu } from './paciente-desistiu.js';
+import { agirNaDesistencia } from '../lib/desistencia-acao.js';
 import { falaDoPacienteNoTurno, instrucaoSemObjecao, objecaoInventada, semASonda } from './objecao-inventada.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
@@ -489,6 +491,16 @@ export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder
   return { model, systemMessage, modelName, tools };
 }
 
+/** Os turnos em que a desistência já foi tratada (o nó do agente roda de novo depois de cada ferramenta). */
+const desistenciasTratadas = new Set<string>();
+function desistenciaJaTratada(traceId: string | null | undefined): boolean {
+  if (!traceId) return false;
+  if (desistenciasTratadas.has(traceId)) return true;
+  if (desistenciasTratadas.size > 2000) desistenciasTratadas.clear();
+  desistenciasTratadas.add(traceId);
+  return false;
+}
+
 export async function buildAgentGraph(
   recorder: TraceRecorder,
   unit: Unit,
@@ -604,6 +616,16 @@ export async function buildAgentGraph(
     // Sem as respostas seguradas (o paciente mandou outra mensagem enquanto elas nasciam): contam as que ele leu.
     const falas = falasDoHistorico(nonSystemMessages, leadIdDaConversa ? respostasSeguradas(unit.id, leadIdDaConversa) : []);
     const repeticao = analisarRepeticao(falas);
+    // Desistência da consulta (item 6 da Suzanne): a Sofia só CONVERSA (oferece remarcar; na recusa se despede sem dizer que
+    // cancelou); quem age é o sistema, em código — tarefa urgente "CANCELAR NA FRANQUIA", parar a nossa véspera/régua, ou
+    // "conferir com o paciente" na dúvida (lib/desistencia-acao.ts). Uma vez por turno: o nó roda de novo depois de cada ferramenta.
+    if (kommoClient && state.leadId && !desistenciaJaTratada(recorder.traceId)) {
+      const desistencia = pacienteDesistiu(falas);
+      const acao = acaoDaDesistencia(desistencia);
+      if (desistencia && acao !== 'nada') {
+        void agirNaDesistencia({ unit, leadId: state.leadId, acao, trecho: desistencia.trecho, kommo: () => kommoClient });
+      }
+    }
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;

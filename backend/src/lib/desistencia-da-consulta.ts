@@ -44,7 +44,7 @@ export function consultaFuturaDoCartao(lead: Pick<KommoLead, 'custom_fields_valu
 }
 
 /** "AAAA-MM-DDTHH:mm" local da clínica → "dd/mm às HH:mm". */
-function quandoLocal(epochS: number, tz: string): string {
+export function quandoLocal(epochS: number, tz: string): string {
   const p = new Intl.DateTimeFormat('pt-BR', { timeZone: tz, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(
     new Date(epochS * 1000),
   );

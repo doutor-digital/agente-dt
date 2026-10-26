@@ -1,6 +1,7 @@
 /**
- * Item 6 da Suzanne (25/10/2026), decisão do João em 26/10: quando o paciente escreve "cancelei"/"desmarquei"/"não vou",
- * a Sofia TENTA REMARCAR — acolhe em uma frase e oferece novo horário, em vez de perguntar "tem certeza?".
+ * Item 6 da Suzanne (25/10/2026) + decisão do coordenador (26/10, depois da reprovação do sênior no #132):
+ * a Sofia tenta remarcar e NUNCA cancela na franquia; na recusa explícita ela se despede sem dizer que cancelou e o sistema
+ * (lib/desistencia-acao.ts) avisa a equipe; na dúvida ela responde normal e o sistema abre "conferir com o paciente".
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,17 +9,26 @@ import type { Unit } from '@prisma/client';
 
 import { composeSystemPrompt } from './prompt-composer.js';
 import type { Fala } from './repeticao.js';
-import { pacienteDesistiu, renderPacienteDesistiu } from './paciente-desistiu.js';
-import { oferecuHorario, pareceDesistenciaDaConsulta, perguntouConfirmarCancelamento, quisManter, recusouRemarcarExplicitamente } from '../lib/desistencia-frases.js';
+import { acaoDaDesistencia, pacienteDesistiu, renderPacienteDesistiu } from './paciente-desistiu.js';
+import {
+  falouDeOutraConsulta,
+  hesitou,
+  oferecuHorario,
+  pareceDesistenciaDaConsulta,
+  quisManter,
+  recusouRemarcarExplicitamente,
+} from '../lib/desistencia-frases.js';
+import { pareceDesistencia } from '../lib/vespera-segura.js';
 
 const p = (texto: string): Fala => ({ papel: 'paciente', texto });
 const ia = (texto: string): Fala => ({ papel: 'ia', texto });
-
-// Araguaína #28861610 (22/10): respondeu ao lembrete de 24 h.
+const OFERTA = 'Tudo bem! Se quiser, tenho sexta às 10h ou segunda às 14h. Qual fica melhor?';
 const LILIANE = [ia('Olá! Sua consulta é amanhã, 23/10, às 14:00. Posso confirmar?'), p('Cancelei.')];
+const COM_OFERTA = (resposta: string): Fala[] => [ia('Sua consulta é amanhã. Posso confirmar?'), p('Cancelei.'), ia(OFERTA), p(resposta)];
 
-test('"Cancelei." depois do lembrete → o bloco manda REMARCAR, não perguntar "tem certeza?"', () => {
+test('"Cancelei." depois do lembrete → o bloco manda REMARCAR; nunca cancelar, nunca "tem certeza?"', () => {
   assert.equal(pacienteDesistiu(LILIANE)?.trecho, 'Cancelei.');
+  assert.equal(acaoDaDesistencia(pacienteDesistiu(LILIANE)), 'oferta');
   const bloco = renderPacienteDesistiu(LILIANE);
   assert.match(bloco, /<paciente_desistiu>/);
   assert.match(bloco, /TENTA REMARCAR/);
@@ -26,14 +36,13 @@ test('"Cancelei." depois do lembrete → o bloco manda REMARCAR, não perguntar 
   assert.match(bloco, /DOIS horários reais/);
   assert.match(bloco, /remarcar_consulta/);
   assert.match(bloco, /NÃO pergunte "tem certeza\?"/);
-  assert.match(bloco, /NÃO chame cancelar_consulta agora/);
-  assert.match(bloco, /NÃO chame cancelar_consulta agora/);
+  assert.match(bloco, /NÃO chame cancelar_consulta/);
+  assert.match(bloco, /NÃO diga que cancelou/);
   assert.match(bloco, /Se não tem/, 'sem consulta marcada o bloco manda ignorar');
 });
 
 test('as mensagens seguidas do turno contam; a de antes da última fala da Sofia só como o par da oferta', () => {
   assert.equal(pacienteDesistiu([ia('Quer horário?'), p('oi'), p('tive um imprevisto, não vou poder ir')])?.trecho, 'tive um imprevisto, não vou poder ir');
-  // ele escolheu um horário da oferta: ainda é o par "avisou → ofereceu → respondeu", e o bloco manda remarcar
   assert.equal(pacienteDesistiu([p('Cancelei.'), ia('Sem problema! Posso te oferecer sexta às 14h ou segunda às 9h?'), p('segunda às 9h')])?.momento, 'respondeu_a_oferta');
 });
 
@@ -44,175 +53,74 @@ test('conversa normal não ganha o bloco', () => {
   assert.equal(renderPacienteDesistiu([]), '');
 });
 
-test('o prompt do turno ganha o bloco só quando ele desistiu, e o texto de "pedido de CANCELAR" aponta para ele', () => {
+test('o prompt do turno ganha o bloco só quando ele desistiu', () => {
   const unidade = { id: 'u1', slug: 'teste', name: 'Clínica Teste', personaEmojis: [], handoffKeywords: [] } as unknown as Unit;
-  const com = composeSystemPrompt({ unit: unidade, historico: LILIANE });
-  assert.match(com, /<paciente_desistiu>/);
-  assert.match(com, /Cancelei\./);
-  const sem = composeSystemPrompt({ unit: unidade, historico: [ia('Quer que eu veja um horário pra você?'), p('Sim')] });
-  assert.doesNotMatch(sem, /<paciente_desistiu>/);
+  assert.match(composeSystemPrompt({ unit: unidade, historico: LILIANE }), /<paciente_desistiu>/);
+  assert.doesNotMatch(composeSystemPrompt({ unit: unidade, historico: [ia('Quer que eu veja um horário pra você?'), p('Sim')] }), /<paciente_desistiu>/);
 });
 
-const OFERTA = 'Tudo bem! Se quiser, tenho sexta às 10h ou segunda às 14h. Qual fica melhor?';
+// ── a ação do SISTEMA por situação ────────────────────────────────────────────────────────────────────────────────
 
-test('depois da oferta, "pode cancelar mesmo" é a recusa: o bloco NÃO manda oferecer de novo', () => {
-  const falas = [ia('Olá! Sua consulta é amanhã, 23/10, às 14:00. Posso confirmar?'), p('Cancelei.'), ia(OFERTA), p('não, pode cancelar mesmo')];
-  assert.equal(pacienteDesistiu(falas)?.momento, 'insistiu');
-  const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina' });
-  assert.match(bloco, /JÁ tinha avisado/);
-  assert.match(bloco, /NÃO ofereça os mesmos horários/);
-  assert.match(bloco, /Confirmo o cancelamento da sua consulta de/);
-  assert.match(bloco, /criar_tarefa/);
-  assert.doesNotMatch(bloco, /DOIS horários reais/);
-  // a primeira vez continua mandando remarcar
-  assert.equal(pacienteDesistiu(LILIANE)?.momento, 'avisou');
-});
-
-test('a recusa que NÃO parece desistência ("não quero remarcar", "depois eu vejo") ainda recebe o bloco certo, explícita ou não', () => {
-  for (const resposta of ['não quero remarcar', 'não, obrigado', 'depois eu vejo e te aviso', 'deixa pra lá']) {
-    const falas = [ia('Sua consulta é amanhã. Posso confirmar?'), p('Cancelei.'), ia(OFERTA), p(resposta)];
-    assert.equal(pacienteDesistiu(falas)?.momento, 'respondeu_a_oferta', resposta);
+test('RECUSA EXPLÍCITA depois da oferta: a Sofia se despede SEM dizer que cancelou; o sistema avisa a equipe', () => {
+  for (const r of ['não quero remarcar', 'pode cancelar mesmo', 'desisti']) {
+    const falas = COM_OFERTA(r);
+    assert.equal(acaoDaDesistencia(pacienteDesistiu(falas)), 'recusou', r);
     const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina' });
-    assert.match(bloco, /RESPOSTA dele à oferta/);
-    assert.match(bloco, /remarcar_consulta/, 'escolheu horário → remarca');
-    assert.match(bloco, /OUTRA coisa/, 'pergunta de outro assunto não ganha o fecho');
-  }
-  assert.match(renderPacienteDesistiu([ia('Sua consulta é amanhã. Posso confirmar?'), p('Cancelei.'), ia(OFERTA), p('não quero remarcar')], { slug: 'doutor-hernia-araguaina' }), /ALERTA · doutor-hernia-araguaina/);
-});
-
-test('só vale se a Sofia de fato ofereceu horário e se a desistência foi o turno logo antes', () => {
-  // a Sofia respondeu outra coisa (preço), não ofereceu horário → o "de novo" é um aviso novo, não recusa
-  const semOferta = [p('Cancelei.'), ia('Entendi. O valor da consulta é R$ 250.'), p('não vou poder ir')];
-  assert.equal(pacienteDesistiu(semOferta)?.momento, 'avisou');
-  // desistência antiga, remarcada, e depois uma conversa qualquer: sem bloco
-  const antiga = [p('Cancelei.'), ia(OFERTA), p('sexta 10h'), ia('Remarcado para sexta às 10h!'), p('obrigada')];
-  assert.equal(pacienteDesistiu(antiga), null);
-  assert.equal(renderPacienteDesistiu(antiga), '');
-});
-
-test('horário no formato "14h30" também é oferta; "nosso horário de atendimento" não é', () => {
-  const oferta30 = [ia('Sua consulta é amanhã. Posso confirmar?'), p('Cancelei.'), ia('Tudo bem! Tenho sexta às 14h30 ou segunda às 10h30. Qual fica melhor?'), p('não quero remarcar')];
-  assert.equal(pacienteDesistiu(oferta30)?.momento, 'respondeu_a_oferta');
-  // depois do fecho, a despedida fala do "horário de atendimento" — o próximo "obrigada" não reabre o bloco
-  const depoisDoFecho = [p('Cancelei.'), ia('Tenho sexta às 10h ou segunda às 14h'), p('pode cancelar mesmo'), ia('Tudo bem! Nosso horário de atendimento é das 8h às 18h; qualquer coisa é só chamar.'), p('obrigada')];
-  assert.equal(pacienteDesistiu(depoisDoFecho), null);
-});
-
-// ── a decisão de 26/10: recusa EXPLÍCITA cancela na franquia; hesitação não; sem vínculo/erro → tarefa ───────────────
-
-const COM_OFERTA = (resposta: string): Fala[] => [ia('Sua consulta é amanhã. Posso confirmar?'), p('Cancelei.'), ia(OFERTA), p(resposta)];
-
-test('o classificador: recusa explícita × hesitação × negação', () => {
-  for (const t of ['não quero remarcar', 'pode cancelar mesmo', 'cancela por favor', 'desisti', 'não quero mais', 'não vou remarcar']) {
-    assert.equal(recusouRemarcarExplicitamente(t), true, t);
-  }
-  for (const t of ['acho que não vou conseguir', 'vou ver', 'depois eu aviso', 'talvez outro dia', 'não cancele', 'posso cancelar?', 'obrigada', 'sexta às 10h', '']) {
-    assert.equal(recusouRemarcarExplicitamente(t), false, t);
+    assert.match(bloco, /RECUSA EXPLÍCITA: despeça-se/, r);
+    assert.match(bloco, /NÃO diga que a consulta foi cancelada/, r);
+    assert.match(bloco, /vou avisar a equipe para cancelar/, r);
+    assert.match(bloco, /NÃO chame cancelar_consulta e NÃO crie tarefa/, r);
+    assert.doesNotMatch(bloco, /Confirmo o cancelamento/, r);
   }
 });
 
-test('CAMINHO 1 — recusa explícita: NÃO cancela ainda; manda perguntar "Confirmo o cancelamento da sua consulta de <dia> às <hora>?"', () => {
-  for (const r of ['não quero remarcar', 'pode cancelar mesmo']) {
-    const bloco = renderPacienteDesistiu(COM_OFERTA(r), { slug: 'doutor-hernia-araguaina' });
-    assert.match(bloco, /RECUSA EXPLÍCITA, mas ainda NÃO cancele/, r);
-    assert.match(bloco, /pergunte EXATAMENTE: "Confirmo o cancelamento da sua consulta de/, r);
-    assert.match(bloco, /só se ele responder "sim" a ESSA pergunta/, r);
-    assert.doesNotMatch(bloco, /Ele disse "sim" à pergunta/, r);
-  }
-});
-
-test('CAMINHO 1b — depois da pergunta nomeada, SÓ um "sim" a ela chama cancelar_consulta(confirmado=true)', () => {
-  const pergunta = ia('Confirmo o cancelamento da sua consulta de quinta-feira, 29/10 às 14h?');
-  for (const sim of ['sim', 'Sim, pode', 'confirmo', 'pode cancelar', 'sim, pode cancelar', 'pode sim', 'Sim, pode cancelar, não vou poder ir', 'Isso, não preciso mais', 'sim, deixa cancelar', 'Sim, confirmo o cancelamento', 'isso mesmo', 'com certeza, pode cancelar por favor']) {
-    const d = pacienteDesistiu([p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(sim)]);
-    assert.equal(d?.momento, 'confirmando', sim);
-    assert.equal(d?.resposta, 'sim', sim);
-    assert.match(renderPacienteDesistiu([p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(sim)], { slug: 'araguaina' }), /chame cancelar_consulta com confirmado=true/, sim);
-  }
-  // "não", "manter", pergunta ou outro assunto: NÃO cancela
-  for (const nao of ['não', 'quero manter', 'espera, qual é o horário mesmo?', 'quanto custa?', 'depois eu vejo', 'pode ser outro dia', 'sim, mas quanto custa o retorno', 'pode me explicar como funciona']) {
-    const falas = [p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), pergunta, p(nao)];
-    const bloco = renderPacienteDesistiu(falas, { slug: 'araguaina' });
-    assert.doesNotMatch(bloco, /chame cancelar_consulta com confirmado=true/, nao);
-    assert.match(bloco, /NÃO cancele/, nao);
-  }
-});
-
-test('CAMINHO 2 — sem vínculo, consulta passada/atendida ou erro: o bloco manda NÃO dizer que cancelou e abrir tarefa ALERTA', () => {
-  const falas = [p('Cancelei.'), ia(OFERTA), p('não quero remarcar'), ia('Confirmo o cancelamento da sua consulta de quinta, 29/10 às 14h?'), p('sim')];
-  const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina' });
-  assert.match(bloco, /não há consulta marcada por aqui, que a consulta já passou\/foi atendida, que não conseguiu confirmar na clínica ou devolver erro: NÃO diga que cancelou/);
-  assert.match(bloco, /ALERTA · doutor-hernia-araguaina · \[Contato: primeiro nome\] Desistiu da consulta de DD\/MM: cancelar na franquia/);
-  assert.match(bloco, /NO_FOLLOW_UP/);
-  assert.match(bloco, /Se a ferramenta confirmar: diga em UMA frase/);
-  assert.match(bloco, /NÃO ofereça outro horário/);
-});
-
-test('CAMINHO 3 — hesitação ("acho que não vou conseguir", "vou ver"): NÃO cancela, oferece remarcar', () => {
-  for (const r of ['acho que não vou conseguir', 'vou ver', 'depois eu aviso']) {
-    const bloco = renderPacienteDesistiu(COM_OFERTA(r), { slug: 'x' });
-    assert.match(bloco, /NÃO cancele a consulta/, r);
+test('DÚVIDA (hesitou, quer manter, insistiu sem recusa clara): responde normal, não cancela, o sistema abre "conferir"', () => {
+  for (const r of ['acho que não vou conseguir', 'vou ver', 'depois eu aviso', 'Não quero remarcar, quero manter', 'não preciso remarcar, vou sim', 'cancela não']) {
+    const falas = COM_OFERTA(r);
+    assert.equal(acaoDaDesistencia(pacienteDesistiu(falas)), 'duvida', r);
+    const bloco = renderPacienteDesistiu(falas, { slug: 'x' });
+    assert.match(bloco, /NÃO diga que cancelou, NÃO chame cancelar_consulta/, r);
     assert.doesNotMatch(bloco, /RECUSA EXPLÍCITA/, r);
-    assert.doesNotMatch(bloco, /cancelar_consulta com confirmado=true/, r);
   }
+  // não vou poder ir de novo, sem dizer "não quero remarcar": ainda é dúvida
+  assert.equal(acaoDaDesistencia(pacienteDesistiu(COM_OFERTA('não vou poder ir mesmo'))), 'duvida');
 });
 
-test('no PRIMEIRO aviso ("Cancelei"/"pode cancelar") a Sofia nunca cancela: primeiro a oferta de horário', () => {
-  for (const t of ['Cancelei.', 'pode cancelar']) {
-    const bloco = renderPacienteDesistiu([ia('Posso confirmar?'), p(t)], { slug: 'x' });
-    assert.match(bloco, /NÃO chame cancelar_consulta agora/, t);
-    assert.doesNotMatch(bloco, /RECUSA EXPLÍCITA/, t);
+test('resposta que não é recusa nem dúvida (escolheu horário, perguntou o valor, agradeceu) → o sistema não faz nada', () => {
+  for (const r of ['sexta às 10h', 'quanto custa?', 'obrigada']) {
+    assert.equal(acaoDaDesistencia(pacienteDesistiu(COM_OFERTA(r))), 'nada', r);
   }
+  assert.equal(acaoDaDesistencia(null), 'nada');
 });
 
-// ── revisão do sênior (#132): um teste por frase ───────────────────────────────────────────────────────────────────
-
-const QUEM_QUER_MANTER = [
-  'Não quero remarcar, quero manter',
-  'não preciso remarcar, vou sim',
-  'não quero outro dia, prefiro manter a de amanhã',
-  'consegui me organizar, não vou mais faltar',
-  'cancela não',
-];
-for (const frase of QUEM_QUER_MANTER) {
-  test(`"${frase}" é MANTER, não recusa: nunca manda cancelar`, () => {
-    assert.equal(recusouRemarcarExplicitamente(frase), false);
-    assert.equal(pareceDesistenciaDaConsulta(frase), false, 'e não calaria régua nem véspera');
-    const bloco = renderPacienteDesistiu(COM_OFERTA(frase), { slug: 'araguaina' });
-    assert.doesNotMatch(bloco, /RECUSA EXPLÍCITA/);
-    assert.doesNotMatch(bloco, /Confirmo o cancelamento/);
-    assert.match(bloco, /quer MANTER a consulta/);
-  });
-}
-
-for (const frase of ['cancela a do meu filho, a minha mantém', 'cancela a minha de terça e deixa a de quinta', 'preciso cancelar a consulta da minha mãe']) {
-  test(`"${frase}": é OUTRA consulta — a Sofia não cancela sozinha, a equipe confere (tarefa)`, () => {
-    const d = pacienteDesistiu([ia('Sua consulta é amanhã. Posso confirmar?'), p(frase)]);
-    assert.equal(d?.momento, 'outra_consulta');
+test('OUTRA consulta: não cancela, o sistema abre "conferir"', () => {
+  for (const frase of ['cancela a do meu filho, a minha mantém', 'cancela a minha de terça e deixa a de quinta', 'preciso cancelar a consulta da minha mãe']) {
+    const falas = [ia('Sua consulta é amanhã. Posso confirmar?'), p(frase)];
+    assert.equal(pacienteDesistiu(falas)?.momento, 'outra_consulta', frase);
+    assert.equal(acaoDaDesistencia(pacienteDesistiu(falas)), 'duvida', frase);
     assert.equal(pareceDesistenciaDaConsulta(frase), false, 'não cala a véspera de quem mantém a sua');
-    const bloco = renderPacienteDesistiu([ia('Posso confirmar?'), p(frase)], { slug: 'doutor-hernia-araguaina' });
-    assert.match(bloco, /NÃO chame cancelar_consulta/);
-    assert.match(bloco, /ALERTA · doutor-hernia-araguaina/);
+    assert.match(renderPacienteDesistiu(falas), /NÃO chame cancelar_consulta e NÃO diga que cancelou/);
+  }
+  for (const t of ['quero marcar a consulta da minha esposa também', 'a consulta do meu pai é amanhã']) {
+    assert.equal(pacienteDesistiu([ia('Posso ajudar?'), p(t)]), null, t);
+  }
+});
+
+test('a oferta em DUAS mensagens da Sofia não faz o bloco sumir', () => {
+  const falas = [p('Cancelei.'), ia('Entendo, vou ver os horários.'), ia('Tenho sexta 30/10 às 14h ou sábado 31/10 às 10h. Qual prefere?'), p('não quero remarcar')];
+  assert.equal(pacienteDesistiu(falas)?.momento, 'respondeu_a_oferta');
+  assert.equal(acaoDaDesistencia(pacienteDesistiu(falas)), 'recusou');
+});
+
+// ── um teste por frase (sênior, #132) ────────────────────────────────────────────────────────────────────────────
+
+for (const frase of ['Não quero remarcar, quero manter', 'não preciso remarcar, vou sim', 'não quero outro dia, prefiro manter a de amanhã', 'consegui me organizar, não vou mais faltar', 'cancela não']) {
+  test(`"${frase}" é MANTER, não recusa: nunca silencia véspera nem régua`, () => {
+    assert.equal(recusouRemarcarExplicitamente(frase), false);
+    assert.equal(pareceDesistenciaDaConsulta(frase), false);
+    assert.equal(pareceDesistencia(frase), false, 'a véspera continua saindo');
   });
 }
-
-test('a oferta em DUAS mensagens da Sofia não faz o bloco sumir: "não quero remarcar" ainda recebe a pergunta de confirmação', () => {
-  const falas = [p('Cancelei.'), ia('Entendo, vou ver os horários.'), ia('Tenho sexta 30/10 às 14h ou sábado 31/10 às 10h. Qual prefere?'), p('não quero remarcar')];
-  const d = pacienteDesistiu(falas);
-  assert.equal(d?.momento, 'respondeu_a_oferta');
-  assert.equal(d?.recusaExplicita, true);
-  assert.match(renderPacienteDesistiu(falas, { slug: 'x' }), /Confirmo o cancelamento da sua consulta de/);
-});
-
-test('"amanhã" conta como dia da oferta; faixa de funcionamento e lembrete NÃO são oferta', () => {
-  assert.equal(oferecuHorario('Tenho amanhã às 9h ou às 14h30. Qual prefere?'), true);
-  assert.equal(oferecuHorario('Posso te oferecer sexta às 10h'), true);
-  assert.equal(oferecuHorario('Atendemos de segunda a sexta das 8h às 18h'), false);
-  assert.equal(oferecuHorario('Nosso horário de atendimento é de segunda a sexta, das 8h às 18h'), false);
-  assert.equal(oferecuHorario('Sua consulta é amanhã às 14h, confirma?'), false, 'lembrete não é oferta');
-  // o lembrete seguido de "não quero mais" não é "recusou a oferta"
-  assert.equal(pacienteDesistiu([p('não vou poder ir'), ia('Sua consulta é amanhã às 14h, confirma?'), p('não quero mais')]), null, 'o lembrete não é oferta: não há par');
-});
 
 for (const frase of ['não vou mais atrasar, prometo', 'Não vou mais esquecer', 'não vou mais demorar', 'não vou mais faltar']) {
   test(`nit: "${frase}" não é desistência`, () => {
@@ -220,18 +128,42 @@ for (const frase of ['não vou mais atrasar, prometo', 'Não vou mais esquecer',
   });
 }
 
-test('achados da 5ª revisão: outra consulta exige verbo de cancelar; "manter"/"eu vou" não valem quando dizem o contrário', () => {
-  // nada de alerta falso para quem só cita a consulta de um familiar
-  for (const t of ['quero marcar a consulta da minha esposa também', 'a consulta do meu pai é amanhã']) {
-    assert.equal(pacienteDesistiu([ia('Posso ajudar?'), p(t)]), null, t);
-  }
-  // quem diz o contrário de manter continua sendo desistência
-  for (const t of ['Não vou conseguir manter a consulta de amanhã', 'Eu vou viajar, não vou poder ir']) {
-    assert.equal(quisManter(t), false, t);
-    assert.equal(pareceDesistenciaDaConsulta(t), true, t);
-  }
-  // a pergunta reescrita pelo modelo ainda é a pergunta de confirmação
-  for (const q of ['Posso confirmar o cancelamento da sua consulta de quinta, às 14h?', 'Confirmo o cancelamento da sua consulta de quinta?', 'confirmo o cancelamento da sua  consulta']) {
-    assert.equal(perguntouConfirmarCancelamento(q), true, q);
-  }
+// itens 3 e 4 da 3ª reprovação: decidem se a véspera para
+for (const [frase, desiste] of [
+  ['Cancela não vou mais', true],
+  ['cancela n vou poder ir', true],
+  ['pode cancelar a do dia 29', true],
+  ['cancela a de amanhã por favor', true],
+  ['n vou conseguir manter a consulta', true],
+  ['não sei se vou conseguir manter, pode cancelar', true],
+  ['cancela a consulta, não tenho como ir de carro', true],
+  ['Não vou conseguir manter a consulta de amanhã', true],
+  ['Eu vou viajar, não vou poder ir', true],
+] as Array<[string, boolean]>) {
+  test(`desistência real: "${frase}"`, () => {
+    assert.equal(pareceDesistenciaDaConsulta(frase), desiste);
+    assert.equal(quisManter(frase), false, 'não é "manter"');
+    assert.equal(falouDeOutraConsulta(frase), false, 'não é "outra consulta"');
+    assert.equal(pareceDesistencia(frase), true, 'a véspera para');
+  });
+}
+
+test('"não vou ir de carro, vou de ônibus" não é desistência; "cancela o lembrete, eu vou" também não', () => {
+  assert.equal(pareceDesistenciaDaConsulta('não vou ir de carro, vou de ônibus'), false);
+  assert.equal(pareceDesistenciaDaConsulta('Cancela o lembrete, eu vou'), false);
+});
+
+test('oferta de UM horário também é oferta; "amanhã" casa; funcionamento e lembrete não são oferta', () => {
+  assert.equal(oferecuHorario('Que tal quinta às 14h?'), true);
+  assert.equal(oferecuHorario('Consigo quinta 29/10 às 14h, pode ser?'), true);
+  assert.equal(oferecuHorario('Tenho amanhã às 9h ou às 14h30. Qual prefere?'), true);
+  assert.equal(oferecuHorario('Atendemos de segunda a sexta das 8h às 18h'), false);
+  assert.equal(oferecuHorario('Sua consulta é amanhã às 14h, confirma?'), false);
+  assert.equal(oferecuHorario('Pronto! Remarquei para sexta, 30/10 às 14h.'), false);
+  assert.equal(hesitou('acho que não vou conseguir'), true);
+});
+
+test('oferta de um horário só: a recusa seguinte é lida como resposta à oferta', () => {
+  const falas = [p('Cancelei.'), ia('Que tal quinta às 14h?'), p('não quero remarcar')];
+  assert.equal(acaoDaDesistencia(pacienteDesistiu(falas)), 'recusou');
 });

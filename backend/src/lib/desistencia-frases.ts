@@ -47,12 +47,10 @@ const NAO_E_DESISTENCIA: RegExp[] = [
   /\bse (eu |a gente |nos )?(cancel|desmarc|desist)/,
   // cancelou outra coisa
   /\b(cancel|desmarc|desmarqu)\w* (o |a |os |as |meu |minha |seu |sua |nosso |nossa )?(plano|convenio|contrato|cartao|assinatura|pix|pagamento|compra|pedido|exame|tratamento|boleto|recibo|nota|fatura|parcela|carne|lembrete|aviso|mensagem|notificacao|dentista|medico|compromisso|trabalho|reuniao|viagem|passagem)/,
-  // "ir de carro/ônibus": é o meio de transporte
-  /\bir de (carro|onibus|moto|bike|bicicleta|uber|taxi|van|aviao|trem)\b|\bvou de (carro|onibus|moto|bike|bicicleta|uber|taxi|van|carona|a pe)\b/,
   // vem em outro dia: "não posso ir na quinta mas vou na sexta"
   /\bmas (vou|irei|vamos|posso|consigo|podemos|chego|chegarei|vou chegar|apareco|aparecerei)\b/,
   // "cancela não", "desmarca não pfv": o "não" depois do verbo é "não cancele"
-  /\b(cancel|desmarc|desmarqu)\w* (nao|n)\b/,
+  /\b(cancel|desmarc|desmarqu)\w* (nao|n)\b(?! (vou|vamos|posso|consigo|irei|tenho|vai))/,
   // "não vou mais atrasar/esquecer/faltar/demorar": é o contrário
   /\bn(ao|) (vou|vamos|irei|iremos) mais (me )?(faltar|atrasar|esquecer|demorar|perder|deixar|falhar)/,
 ];
@@ -65,12 +63,12 @@ const NAO_E_DESISTENCIA: RegExp[] = [
 const QUER_MANTER: RegExp[] = [
   /\b(quero|vou|prefiro|vamos|queremos|preferimos) (manter|ficar com|continuar com)\b/,
   // "manter" sem negação antes ("não vou conseguir manter a consulta" é o contrário)
-  /(?<!\bnao (?:\w+ ){0,3})(?:\bmantem(?:os)?\b|\bmanter\b|\bmantenha\b)/,
+  /(?<!\bn(?:ao)? (?:\w+ ){0,5})(?:\bmantem(?:os)?\b|\bmanter\b|\bmantenha\b)/,
   // sem "vou lá"/"vou comparecer"/"dá pra ir": "não vou lá" e "não dá pra ir" são o contrário
   /\bvou sim\b|\bvamos sim\b|(?<!\bnao )\beu vou[ .!]*$|(?<!\bnao )\beu vou (?:sim|la|ai|comparecer|estar|ir)\b/,
   /\bconsegui me organizar\b/,
   /\bnao vou mais (me )?(faltar|atrasar|esquecer|demorar|perder|deixar|falhar)\b/,
-  /\b(cancel|desmarc|desmarqu)\w* (nao|n)\b|\bnao (cancel|desmarc)\w*/,
+  /\b(cancel|desmarc|desmarqu)\w* (nao|n)\b(?! (vou|vamos|posso|consigo|irei|tenho|vai))|\bnao (cancel|desmarc)\w*/,
 ];
 
 export function quisManter(texto: string | null | undefined): boolean {
@@ -87,7 +85,6 @@ const OUTRA_CONSULTA: RegExp[] = [
   /\b(deixa|deixe) (a|o) (de|do|da)\b/,
   /\b(cancel|desmarc|desmarqu)\w*\b.*\b(mantem|mantenha|manter|fica|fique) (a|o) (de|do|da)\b/,
   /\ba minha (mantem|fica|continua|vai continuar|segue)\b|\bmantem a minha\b/,
-  /\b(cancel|desmarc|desmarqu)\w* (a|o) (de|do|da) /,
 ];
 
 /** Só é pedido de cancelar OUTRA consulta se há verbo de cancelar/não ir: "quero marcar a consulta da minha esposa" não é. */
@@ -113,11 +110,16 @@ const ePerguntaSobreCancelar = (trecho: string): boolean => trecho.includes('?')
  * — só o trecho "posso outro dia?" é pergunta. "Posso cancelar?" e "Como faço para cancelar o convênio?" não são: o próprio
  * trecho que fala em cancelar é a pergunta.
  */
+/** "não vou ir de carro, vou de ônibus": é o meio de transporte — a menos que o texto também mande cancelar. */
+const TRANSPORTE = /\bir de (carro|onibus|moto|bike|bicicleta|uber|taxi|van|aviao|trem)\b|\bvou de (carro|onibus|moto|bike|bicicleta|uber|taxi|van|carona|a pe)\b/;
+const MANDA_CANCELAR = /\b(cancel|desmarc|desmarqu)\w*/;
+
 export function pareceDesistenciaDaConsulta(texto: string | null | undefined): boolean {
   const bruto = texto ?? '';
   const s = normalizar(bruto);
   if (!s) return false;
   if (NAO_E_DESISTENCIA.some((r) => r.test(s))) return false;
+  if (TRANSPORTE.test(s) && !MANDA_CANCELAR.test(s)) return false;
   if (QUER_MANTER.some((r) => r.test(s)) || OUTRA_CONSULTA.some((r) => r.test(s))) return false;
   // os trechos saem do texto BRUTO: `normalizar` junta a quebra de linha com o espaço, e a mensagem de WhatsApp em duas
   // linhas ("Não vou poder ir amanhã\nPode me ajudar a remarcar?") é dois trechos
@@ -129,7 +131,7 @@ export function pareceDesistenciaDaConsulta(texto: string | null | undefined): b
 }
 
 /** Hesitação: "acho que não vou conseguir", "vou ver", "depois eu aviso" não é recusa — ainda dá para remarcar. */
-const HESITA = /\b(acho|talvez|quem sabe|vou ver|vou pensar|depois eu|ainda nao sei|nao sei|se der|vamos ver)\b/;
+export const HESITA = /\b(acho|talvez|quem sabe|vou ver|vou pensar|depois eu|ainda nao sei|nao sei|se der|vamos ver)\b/;
 
 const RECUSA_EXPLICITA: RegExp[] = [
   // "não quero remarcar", "não vou remarcar", "não preciso de outro dia"
@@ -168,7 +170,7 @@ const DIA = new RegExp(`(?<![\\p{L}])(?:${DIA_SEMANA}|amanh[ãa]|hoje)(?![\\p{L}
 /** "das 8h às 18h", "de segunda a sexta": faixa de funcionamento, não oferta. */
 const FAIXA_DE_RELOGIO = /(?<![\p{L}\d])\d{1,2}\s*(?:h(?:\d{2})?|:\d{2})\s*(?:às|as|a|até|ate|-)\s*\d{1,2}\s*(?:h(?:\d{2})?|:\d{2}|horas?)/giu;
 const FAIXA_DE_DIAS = new RegExp(`(?<![\\p{L}])${DIA_SEMANA}\\s+(?:a|à|até|ate)\\s+${DIA_SEMANA}(?![\\p{L}])`, 'giu');
-const CARA_DE_OFERTA = /(?<![\p{L}])(?:tenho|temos|tem|posso (?:te )?(?:oferecer|encaixar)|qual (?:fica|prefere)|prefere|op[çc][õo]es)(?![\p{L}])/iu;
+const CARA_DE_OFERTA = /(?<![\p{L}])(?:tenho|temos|tem|consigo|conseguimos|que tal|pode ser|serve|fica bom|posso (?:te )?(?:oferecer|encaixar)|qual (?:fica|prefere)|prefere|op[çc][õo]es)(?![\p{L}])/iu;
 
 export const oferecuHorario = (fala: string): boolean => {
   const limpa = fala.replace(FAIXA_DE_RELOGIO, ' ').replace(FAIXA_DE_DIAS, ' ');
@@ -177,26 +179,7 @@ export const oferecuHorario = (fala: string): boolean => {
   return relogios.length >= 2 || CARA_DE_OFERTA.test(limpa);
 };
 
-/**
- * A pergunta de confirmação do cancelamento, com a consulta NOMEADA: "Confirmo o cancelamento da sua consulta de quinta,
- * 29/10, às 14h?". Sênior no #132: o cancelamento SEMPRE passa por ela — a Sofia só chama `cancelar_consulta(confirmado=true)`
- * depois de um "sim" a ESSA pergunta, e o paciente vê qual consulta cai.
- */
-export const perguntouConfirmarCancelamento = (fala: string): boolean => /\bconfirm\w* (o )?cancelamento (da|de) (sua|tua) consulta/.test(normalizar(fala));
-
-const ASSENTE = new Set(['sim', 'isso', 'pode', 'confirmo', 'confirmado', 'confirma', 'ok', 'certo', 'claro', 'quero', 'positivo']);
-const PALAVRAS_DO_SIM = new Set(['com', 'certeza', 'mesmo', 'cancelar', 'cancela', 'cancele', 'o', 'cancelamento', 'por', 'favor', 'pfv', 'obrigado', 'obrigada', 'de', 'nada']);
-
-/** A resposta à pergunta de confirmação: "sim" só quando é um sim limpo; "não"/"manter" mantém; o resto não cancela. */
-export function respostaDaConfirmacao(texto: string | null | undefined): 'sim' | 'nao' | 'outra' {
-  const todo = normalizar(texto ?? '');
-  if (!todo) return 'outra';
-  // negativa: abre com "não", ou pede para manter/esperar, ou diz "não cancela"
-  if (/^(nao|n)\b/.test(todo) || /\b(manter|mantem|mantenha|espera|calma|pera)\b|\bnao (cancel|desmarc|quero cancelar|precisa cancelar)/.test(todo)) return 'nao';
-  if (todo.includes('?') || /\bmas\b/.test(todo)) return 'outra';
-  // um "sim" LIMPO na primeira oração ("sim, pode cancelar, não vou poder ir"): só palavras de assentimento antes da vírgula
-  const primeira = todo.split(/[,.;!]/)[0].trim();
-  const tokens = primeira.split(/\s+/).filter(Boolean);
-  if (tokens.length > 0 && (ASSENTE.has(tokens[0]) || tokens.slice(0, 2).join(' ') === 'com certeza') && tokens.every((t) => ASSENTE.has(t) || PALAVRAS_DO_SIM.has(t))) return 'sim';
-  return 'outra';
+/** Hesitou: "acho que não vou conseguir", "vou ver", "depois eu aviso". */
+export function hesitou(texto: string | null | undefined): boolean {
+  return HESITA.test(normalizar(texto ?? ''));
 }

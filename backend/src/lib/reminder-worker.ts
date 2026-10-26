@@ -44,7 +44,8 @@ import {
 // de qual consulta ele está falando). Reexportada aqui para quem já importava deste módulo.
 export { chaveDaConfirmacao, prefixoDoToque, type Toque };
 import { emPausa } from './pausa-unidade.js';
-import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
+import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
+import { MARCA_RECUSOU } from './desistencia-acao.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
@@ -267,7 +268,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   });
 
   const kommo = createKommoClient(unit);
-  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0, etapa: 0, desistiu: 0, robo_kommo: 0, bloqueado: 0 };
+  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0, etapa: 0, desistiu: 0, robo_kommo: 0, bloqueado: 0, recusou: 0 };
   let pipes: KommoPipeline[] | null = null;
   const nomeDaEtapa = async (pipelineId: number | undefined, statusId: number): Promise<string | null> => {
     pipes ??= await kommo.listPipelines().catch(() => []);
@@ -336,6 +337,14 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       // Limite conhecido: `updatedAt` também anda quando o sincronizador grava paciente/tentativas no vínculo (perto
       // do agendamento, não depois). Se andar depois da desistência, a véspera sai — que é o comportamento de antes.
       const marcadaEm = consulta.mudou ? new Date() : link.updatedAt;
+      // O paciente RECUSOU remarcar e a Sofia se despediu dizendo que a equipe cancela (desistencia-acao.ts): a NOSSA véspera
+      // para neste cartão. A marca só vale para a consulta de antes dela — se remarcou depois, `marcadaEm` é mais novo.
+      const recusouEm = await marcadoEm(unit.id, link.kommoLeadId, MARCA_RECUSOU);
+      if (recusouEm && recusouEm >= marcadaEm) {
+        conta.recusou++;
+        logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, toque }, 'confirmação: o paciente recusou remarcar e a equipe vai cancelar — não sai');
+        continue;
+      }
       const desistiu = oficiais ? desistenciaEscrita(oficiais, marcadaEm) : null;
       if (desistiu) {
         conta.desistiu++;
