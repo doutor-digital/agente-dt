@@ -30,6 +30,9 @@ test('nomeDeGente: os nomes de verdade da amostra das SDRs passam, com capitaliz
   assert.equal(nomeDeGente('  MARIA   DA SILVA '), 'Maria da Silva');
   assert.equal(nomeDeGente("joão d'ávila"), "João D'Ávila");
   assert.equal(nomeDeGente('ana-maria souza'), 'Ana-Maria Souza');
+  assert.equal(nomeDeGente('Maria Paz'), 'Maria Paz', 'Paz/Vida/Dia sozinhos são sobrenome');
+  assert.equal(nomeDeGente('João Vida'), 'João Vida');
+  assert.equal(nomeDeGente('Ana Dia'), 'Ana Dia');
   assert.equal(nomeDeGente('Sueli Jesus'), 'Sueli Jesus', 'Jesus é sobrenome comum — só a frase "é Fiel" derruba');
   assert.equal(nomeDeGente('Cláudio McDonald'), 'Cláudio McDonald', 'maiúscula no meio é como a pessoa escreveu');
 });
@@ -54,7 +57,9 @@ test('nomeDeGente: os lixos da amostra e do mundo real viram null (melhor "Lead"
     'Ana e Pedro',
     'Maria Jose da Silva Santos Oliveira', // 5 palavras
     'Bom dia',
+    'Boa Tarde',
     'Paz e Bem',
+    'Luz e Paz',
     'Dr. Hérnia',
     'Doutor Hérnia',
     'Clínica Central',
@@ -275,10 +280,30 @@ test('lista cortada (truncada): não renomeia nada — numeração do dia ficari
   assert.deepEqual(c.gravados, []);
 });
 
-test('contato que não veio na leitura NÃO vira "Lead": espera a próxima rodada', async () => {
-  const c = cenario([{ id: 1, nome: SEM_NOME(1), contato: 11 }], {}); // contatosBasicos devolve mapa vazio
+test('contato que não veio na leitura NÃO vira "Lead" logo: espera a próxima rodada', async () => {
+  const c = cenario([{ id: 1, nome: SEM_NOME(1), contato: 11, minutosDeVida: 10 }], {}); // contatosBasicos devolve mapa vazio
   await renomearConta({ unit, membros: null, kommo: c.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: c.registrar });
   assert.deepEqual(c.gravados, []);
+});
+
+test('o teto de 50 conta só gravações: leads de unidade desligada não tomam a vaga dos da ligada', async () => {
+  const cartoes: Cartao[] = [];
+  const contatos: Record<number, string> = {};
+  for (let i = 1; i <= 60; i++) { cartoes.push({ id: i, nome: SEM_NOME(i), contato: 100 + i, unidade: 'Caxias', minutosDeVida: 600 }); contatos[100 + i] = 'Ana Paula'; }
+  cartoes.push({ id: 999, nome: SEM_NOME(999), contato: 999, unidade: 'Petrópolis', minutosDeVida: 5 });
+  contatos[999] = 'Zélia Souza';
+  const c = cenario(cartoes, contatos);
+  await renomearConta({ unit, membros: [PETRO, CAXIAS], kommo: c.kommo, estadoDe: estados({ 'doutor-hernia-petropolis': 'ligado' }), agora: AGORA, registrar: c.registrar });
+  assert.deepEqual(c.gravados, [{ id: 999, nome: 'Zélia Souza 26/10/26' }]);
+});
+
+test('contato que sumiu (apagado/mesclado): espera 30 min e então vira "Lead dd/mm/aa", sem ficar "Lead #123" para sempre', async () => {
+  const novo = cenario([{ id: 1, nome: SEM_NOME(1), contato: 11, minutosDeVida: 10 }], {});
+  await renomearConta({ unit, membros: null, kommo: novo.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: novo.registrar });
+  assert.deepEqual(novo.gravados, []);
+  const velho = cenario([{ id: 1, nome: SEM_NOME(1), contato: 11, minutosDeVida: 45 }], {});
+  await renomearConta({ unit, membros: null, kommo: velho.kommo, estadoDe: estados({ [unit.slug]: 'ligado' }), agora: AGORA, registrar: velho.registrar });
+  assert.deepEqual(velho.gravados, [{ id: 1, nome: 'Lead 26/10/26' }]);
 });
 
 test('falha ao gravar: segue para os outros e para depois de 3 falhas seguidas', async () => {

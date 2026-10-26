@@ -12,8 +12,10 @@
  * citada no código: vale em qualquer conta cuja unidade tenha a chave ligada.
  *
  * Gravação: PATCH só do nome, depois de reler o lead (a SDR pode ter nomeado no meio da varredura). No máximo 50 por
- * rodada. Não há segundo escritor do nome nessas contas: o `titulo-padrao` escreve "Lead dd/mm/aaaa", que já não é
- * "sem nome" para este robô, e vice-versa — se os dois estiverem ligados, quem chegar primeiro vence e o outro cala.
+ * rodada. Sobre o `titulo-padrao` (webhook de mensagem, que nessas contas nunca acorda): ele escreve "Lead
+ * dd/mm/aaaa" e este robô "Lead dd/mm/aa" — nenhum dos dois reescreve o título do outro (não é "sem nome"), mas cada um
+ * numera só os do seu formato. Não ligue os dois na mesma unidade. E o `ehTituloPadrao` (que deixa a captura de nome da
+ * Sofia trocar o provisório) só reconhece o de 4 dígitos: se a Sofia um dia atender Petrópolis, ele precisa aprender o de 2.
  */
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
@@ -21,7 +23,7 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoLead } from '../services/kommo.service.js';
 import { estadoDaAutomacao } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { grupoDaUnidade, valorDaUnidadeNoCartao, type MembroDoCrm } from './crm-compartilhado.js';
+import { contaDoKommo, grupoDaUnidade, valorDaUnidadeNoCartao, type MembroDoCrm } from './crm-compartilhado.js';
 import { fusoDaUnidade } from './fuso.js';
 import { dataCurta, ehSemNome, estadoDoCartao, planejarRenomeacao, type EstadoDaChave } from './renomear-lead.js';
 
@@ -38,6 +40,8 @@ const IDADE_MINIMA_S = 3 * 60;
 const MAX_PAGINAS = 8;
 const MAX_GRAVACOES_POR_RODADA = 50;
 const FALHAS_SEGUIDAS_PARA_PARAR = 3;
+/** Contato que ainda não veio na leitura depois de tanto tempo é contato apagado/mesclado. */
+const CONTATO_AUSENTE_DESISTE_S = 30 * 60;
 
 let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
@@ -58,6 +62,7 @@ export interface Resumo {
   simulados: number;
   desligados: number;
   jaNomeados: number;
+  semContato: number;
   erros: number;
 }
 
@@ -96,27 +101,36 @@ export async function renomearConta(ctx: ContextoDaConta): Promise<Resumo | null
   const tz = fusoDaUnidade(unit);
   const candidatos = leads
     .filter((l) => ehSemNome(l.name) && (l.created_at ?? 0) >= agora - JANELA_S && (l.created_at ?? 0) <= agora - IDADE_MINIMA_S)
-    .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id - b.id)
-    .slice(0, MAX_GRAVACOES_POR_RODADA);
+    .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0) || a.id - b.id);
   if (!candidatos.length) return null;
 
   // o NOME DO CONTATO (perfil do WhatsApp) é o que as SDRs copiam. Se a leitura falhar, lança: não degrada para "Lead".
   const contatos = await kommo.contatosBasicos(candidatos.map(contatoPrincipal).filter((n): n is number => n !== null));
 
-  const resumo: Resumo = { candidatos: candidatos.length, gravados: 0, simulados: 0, desligados: 0, jaNomeados: 0, erros: 0 };
+  const resumo: Resumo = { candidatos: candidatos.length, gravados: 0, simulados: 0, desligados: 0, jaNomeados: 0, semContato: 0, erros: 0 };
   // nomes de todos os leads da janela, por dia: a numeração enxerga o que as SDRs já puseram e o que este robô já planejou
   const nomes = new Map<number, string>(leads.map((l) => [l.id, l.name ?? '']));
   const diaDe = new Map<number, string>(leads.map((l) => [l.id, dataCurta(l.created_at ?? 0, tz)]));
   let falhasSeguidas = 0;
+  let tentativas = 0;
 
   for (const lead of candidatos) {
+    // o teto conta só as gravações de verdade (seco, unidade desligada e contato não lido não gastam vaga)
+    if (tentativas >= MAX_GRAVACOES_POR_RODADA) break;
     const { dono, estado: estadoDoLead } = estadoDoCartao(membros, estado, valorDaUnidadeNoCartao(lead), unit);
     if (estadoDoLead === 'desligado') {
       resumo.desligados++;
       continue;
     }
     const cid = contatoPrincipal(lead);
-    if (cid !== null && !contatos.has(cid)) continue; // contato não veio na leitura: tenta na próxima rodada
+    // contato que não veio na leitura: pode ser instabilidade do Kommo — tenta na próxima rodada. Passada meia hora é
+    // contato apagado ou mesclado, que nunca vai vir: o lead vira "Lead dd/mm/aa" em vez de ficar "Lead #123" para sempre.
+    const contatoAusente = cid !== null && !contatos.has(cid);
+    if (contatoAusente && (lead.created_at ?? 0) > agora - CONTATO_AUSENTE_DESISTE_S) {
+      resumo.semContato++;
+      continue;
+    }
+    if (contatoAusente) logger.warn({ unit: unit.slug, leadId: lead.id, contatoId: cid }, `${ID}: o contato do lead não existe mais — uso "Lead dd/mm/aa"`);
     const data = diaDe.get(lead.id) ?? dataCurta(lead.created_at ?? agora, tz);
     const doDia = leads.filter((l) => l.id !== lead.id && diaDe.get(l.id) === data).map((l) => nomes.get(l.id) ?? '');
     const plano = planejarRenomeacao({
@@ -140,6 +154,7 @@ export async function renomearConta(ctx: ContextoDaConta): Promise<Resumo | null
       continue;
     }
 
+    tentativas++;
     try {
       // a SDR pode ter nomeado enquanto líamos os contatos: relê antes de gravar
       const atual = await kommo.getLead(lead.id);
@@ -166,7 +181,10 @@ export async function renomearConta(ctx: ContextoDaConta): Promise<Resumo | null
   return resumo;
 }
 
-async function varrerConta(unit: Unit): Promise<void> {
+async function varrerConta(daConta: Unit): Promise<void> {
+  // Kommo dividido: quem tem as credenciais, o fuso e o rótulo-base é a unidade DONA da conta, não a primeira que apareceu
+  const unit = (await contaDoKommo(daConta)) as Unit;
+  if (!unit.kommoAccessToken) return;
   const grupo = await grupoDaUnidade(unit.id);
   const membros = grupo?.membros ?? null;
   // olha as chaves ANTES de abrir o cliente do Kommo: conta com tudo desligado não custa nada

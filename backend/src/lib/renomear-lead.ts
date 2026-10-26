@@ -16,12 +16,14 @@
 import { ehSemNome, montarTituloPadrao } from './titulo-padrao.js';
 import { normalizar } from './franquia-sync.js';
 import type { MembroDoCrm } from './crm-compartilhado.js';
+import type { Estado } from './automacoes-estado.js';
+import { FUSO_PADRAO, fusoValido } from './fuso.js';
 
 export { ehSemNome };
 
 /** dd/mm/aa no fuso informado (o ano com 2 dígitos é o jeito das SDRs de Petrópolis). */
 export function dataCurta(epochS: number, tz: string): string {
-  return new Intl.DateTimeFormat('pt-BR', { timeZone: tz, day: '2-digit', month: '2-digit', year: '2-digit' }).format(new Date(epochS * 1000));
+  return new Intl.DateTimeFormat('pt-BR', { timeZone: fusoValido(tz) ? tz : FUSO_PADRAO, day: '2-digit', month: '2-digit', year: '2-digit' }).format(new Date(epochS * 1000));
 }
 
 /** Partículas que ficam minúsculas no meio do nome ("Maria da Silva"). */
@@ -34,11 +36,17 @@ const PARTICULAS = new Set(['de', 'da', 'do', 'das', 'dos', 'di', 'du', 'del', '
  */
 const PALAVRAS_DE_FORA = new Set([
   'é', 'e', 'ou', 'em', 'no', 'na', 'nos', 'nas', 'ao', 'aos', 'para', 'pra', 'por', 'com', 'sem', 'que', 'se', 'não', 'nao',
-  'meu', 'minha', 'seu', 'sua', 'sou', 'tem', 'foi', 'vai', 'sempre', 'obrigado', 'obrigada', 'bom', 'boa', 'dia', 'tarde', 'noite',
-  'deus', 'senhor', 'senhora', 'fiel', 'abençoado', 'abencoado', 'abençoada', 'abencoada', 'amém', 'amem', 'gratidão', 'gratidao', 'paz', 'fé', 'fe', 'vida',
-  'lead', 'contato', 'cliente', 'paciente', 'usuario', 'usuário', 'whatsapp', 'unknown', 'desconhecido', 'anonimo', 'anônimo', 'nome', 'sem-nome',
+  'meu', 'minha', 'seu', 'sua', 'sou', 'tem', 'foi', 'vai', 'sempre', 'obrigado', 'obrigada',
+  'deus', 'senhor', 'senhora', 'fiel', 'abençoado', 'abencoado', 'abençoada', 'abencoada', 'amém', 'amem', 'gratidão', 'gratidao',
+  'lead', 'contato', 'cliente', 'paciente', 'usuario', 'usuário', 'whatsapp', 'unknown', 'desconhecido', 'anonimo', 'anônimo', 'nome',
   'doutor', 'doutora', 'dr', 'dra', 'clinica', 'clínica', 'hernia', 'hérnia', 'consultorio', 'consultório', 'loja', 'oficial', 'vendas', 'atendimento', 'suporte', 'empresa', 'studio', 'estudio', 'estúdio',
 ]);
+
+/**
+ * Palavras de saudação/frase que também são sobrenome ou prenome ("Maria Paz", "Ana Dia", "João Vida"): UMA só passa;
+ * duas ou mais ("Bom dia", "Boa tarde", "Paz e luz" já cai no "e") é frase.
+ */
+const PALAVRAS_FRACAS = new Set(['bom', 'boa', 'dia', 'tarde', 'noite', 'paz', 'vida', 'fé', 'fe', 'bem', 'amor', 'luz']);
 
 const VOGAL = /[aeiouyáéíóúâêôãõàü]/i;
 /** Letras (qualquer alfabeto), marca de acento, e só hífen/apóstrofo dentro da palavra. Nada de dígito, ponto, emoji. */
@@ -70,6 +78,7 @@ export function nomeDeGente(bruto: string | null | undefined): string | null {
     if (/(\p{L})\1\1/iu.test(p)) return null;
     if (PALAVRAS_DE_FORA.has(p.toLocaleLowerCase('pt-BR'))) return null;
   }
+  if (palavras.filter((p) => PALAVRAS_FRACAS.has(p.toLocaleLowerCase('pt-BR'))).length >= 2) return null;
   // nome que é só partícula ("De Da") ou começa/termina nela não é nome
   const primeira = palavras[0].toLocaleLowerCase('pt-BR');
   const ultima = palavras[palavras.length - 1].toLocaleLowerCase('pt-BR');
@@ -106,7 +115,7 @@ export function planejarRenomeacao(e: EntradaRenomeacao): PlanoDeRenomeacao | nu
 }
 
 /** Estados da automação, do mais fraco ao mais forte — para decidir por cartão sem dono. */
-export type EstadoDaChave = 'ligado' | 'seco' | 'desligado';
+export type EstadoDaChave = Estado;
 const FORCA: Record<EstadoDaChave, number> = { desligado: 0, seco: 1, ligado: 2 };
 
 /** O mais fraco dos estados: cartão sem unidade só é renomeado de verdade se TODAS as unidades da conta estiverem ligadas. */
