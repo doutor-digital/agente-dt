@@ -408,9 +408,10 @@ export function buildTools({
     const travada = await recusaDaPerdaDaSofia(kommo, leadId, {
       pipelineDestino,
       consultaNaFranquia: unit
-        ? async (nome) => {
-            const { franquiaDoPaciente } = await import('../lib/parados-worker.js'); // import tardio: evita ciclo agent ↔ workers
-            return franquiaDoPaciente(unit, leadId, nome, Math.floor(Date.now() / 1000));
+        ? async () => {
+            // só pelo vínculo gravado (spineLeadLink): achar por telefone/nome pode cair no familiar e soltar a trava pela consulta dele
+            const { franquiaDoVinculo } = await import('../lib/parados-worker.js'); // import tardio: evita ciclo agent ↔ workers
+            return franquiaDoVinculo(unit, leadId, Math.floor(Date.now() / 1000));
           }
         : undefined,
     });
@@ -420,22 +421,27 @@ export function buildTools({
       title: `Recusado: fechar como perdido um lead com «${travada.motivo}»`,
       payload: { leadId, motivo: travada.motivo },
     });
+    let tarefaAberta = false;
     if (travada.avisarEquipe && unit) {
       const chave = 'sofia-perda-recusada';
       try {
-        if (!(await avisoRecente(unit.id, leadId, chave, 24 * 3600_000))) {
+        if (await avisoRecente(unit.id, leadId, chave, 24 * 3600_000)) {
+          tarefaAberta = true; // já há tarefa de hoje
+        } else {
           await kommo.createTask({
             leadId,
             text: `A Sofia tentou fechar este lead como PERDIDO, mas o cartão está com «${travada.motivo}». Confira com o paciente: se ele desistiu, registre (cancele a consulta na franquia, se houver) e feche o cartão.`,
             completeAt: Math.floor(Date.now() / 1000) + 3600,
+            responsibleUserId: travada.responsavelId,
           });
           await marcarAviso(unit.id, leadId, chave);
+          tarefaAberta = true;
         }
       } catch (err) {
         logger.warn({ err: String(err), unit: unit.slug, leadId }, 'trava-perda: não consegui abrir a tarefa para a equipe');
       }
     }
-    return `RECUSADO: ${travada.texto}`;
+    return `RECUSADO: ${travada.texto}${tarefaAberta ? ' A equipe foi avisada por tarefa.' : ''}`;
   };
 
   const mover_etapa = new DynamicStructuredTool({

@@ -31,7 +31,7 @@ export interface CartaoParaTrava {
   _embedded?: { tags?: ReadonlyArray<{ name?: string | null }> | null } | null;
 }
 
-export type MotivoDaTrava = 'consulta futura no cartão' | 'pagou o antecipado' | 'Quente' | 'Morno';
+export type MotivoDaTrava = 'consulta futura no cartão' | 'pagou o antecipado' | 'pagou e desmarcou' | 'Quente' | 'Morno';
 
 export interface TravaDaPerda {
   motivo: MotivoDaTrava;
@@ -61,6 +61,21 @@ function comConsultaFutura(c: CartaoParaTrava, agoraEpoch: number): boolean {
 }
 
 /**
+ * Pagou o antecipado e a consulta CAIU: Desmarcado, ou Remarcado com a data já passada (sobra de uma remarcação que não virou
+ * consulta nova) — e, como o chamador já conferiu `comConsultaFutura`, sem consulta de pé. Esse paciente não pode ficar
+ * travado para sempre: o robô abre uma tarefa para a SDR (remarcar ou combinar a devolução) e, 7 dias depois dela, o «pagou»
+ * deixa de segurar (`opcoes.pagouVenceu`). `consultaDesmarcadaEm` = a data que sobrou no cartão (para a tarefa dizer qual foi).
+ */
+export function pagouEDesmarcou(c: CartaoParaTrava, agoraEpoch: number): { consultaDesmarcadaEm: number | null } | null {
+  if (!pagou(c) || comConsultaFutura(c, agoraEpoch)) return null;
+  const situacao = normalizarNome(String(valorDoCampo(c.custom_fields_values, CAMPOS_SYNC.SITUACAO) ?? ''));
+  const data = epochDoValor(valorDoCampo(c.custom_fields_values, CAMPOS_SYNC.DATA_CONSULTA));
+  if (situacao === 'desmarcado') return { consultaDesmarcadaEm: data };
+  if (situacao === 'remarcado' && data !== null && data <= agoraEpoch) return { consultaDesmarcadaEm: data };
+  return null;
+}
+
+/**
  * Pagou o antecipado E ainda não teve a consulta. O que o João quer proteger é quem pagou e VAI: depois que a consulta
  * aconteceu (Atendido) ou o paciente faltou (Não compareceu) valem as regras normais (45 dias sem fechar, atendido sem
  * tratamento…) — senão o «pagou» nunca venceria e o cartão ficaria aberto para sempre. (Interpretação a confirmar com o João.)
@@ -86,24 +101,27 @@ function temperatura(c: CartaoParaTrava): 'Quente' | 'Morno' | null {
  * `null` = o robô pode seguir com o PERDIDO; senão, o motivo de o cartão ficar onde está.
  * `semTemperatura`: só consulta e pagamento seguram (usado pela Sofia, ver `recusaDaPerdaDaSofia`).
  * `semConsulta`: a franquia (fonte de verdade) disse que a consulta do cartão não existe mais.
+ * `pagouVenceu`: a tarefa de «pagou e desmarcou» existe há 7 dias — o pagamento não segura mais (Quente/Morno ainda seguram).
  */
-export function travaDaPerdaAutomatica(cartao: CartaoParaTrava, agoraEpoch: number, opcoes: { semTemperatura?: boolean; semConsulta?: boolean } = {}): TravaDaPerda | null {
+export function travaDaPerdaAutomatica(cartao: CartaoParaTrava, agoraEpoch: number, opcoes: { semTemperatura?: boolean; semConsulta?: boolean; pagouVenceu?: boolean } = {}): TravaDaPerda | null {
   if (!opcoes.semConsulta && comConsultaFutura(cartao, agoraEpoch)) return { motivo: 'consulta futura no cartão' };
-  if (pagou(cartao)) return { motivo: 'pagou o antecipado' };
+  if (!opcoes.pagouVenceu && pagou(cartao)) return { motivo: pagouEDesmarcou(cartao, agoraEpoch) ? 'pagou e desmarcou' : 'pagou o antecipado' };
   if (opcoes.semTemperatura) return null;
   const t = temperatura(cartao);
   if (t) return { motivo: t };
   return null;
 }
 
-/** O que a franquia sabe do paciente agora (é `franquiaDoPaciente` do worker de parados; injetado para não criar ciclo de import). */
-export type ConsultaNaFranquia = (nomeDoCartao: string | null) => Promise<{ conhecido: boolean; consultaFutura: boolean }>;
+/** O que a franquia sabe do paciente agora (é `franquiaDoVinculo` do worker de parados — só pelo vínculo gravado; injetado para não criar ciclo de import). */
+export type ConsultaNaFranquia = () => Promise<{ conhecido: boolean; consultaFutura: boolean }>;
 
 export interface RecusaDaSofia {
   motivo: MotivoDaTrava | 'cartão ilegível';
   texto: string;
   /** o paciente quer fechar e a trava segurou: a equipe precisa saber (nota/tarefa no cartão). Falha de leitura não avisa. */
   avisarEquipe: boolean;
+  /** responsável do cartão: é a ele que a tarefa vai */
+  responsavelId?: number;
 }
 
 /**
@@ -124,7 +142,7 @@ export async function recusaDaPerdaDaSofia(
   opcoes: { agoraEpoch?: number; pipelineDestino?: number; consultaNaFranquia?: ConsultaNaFranquia } = {},
 ): Promise<RecusaDaSofia | null> {
   const agoraEpoch = opcoes.agoraEpoch ?? Math.floor(Date.now() / 1000);
-  let cartao: CartaoParaTrava & { pipeline_id?: number; name?: string };
+  let cartao: CartaoParaTrava & { pipeline_id?: number; name?: string; responsible_user_id?: number };
   try {
     cartao = await kommo.getLead(leadId);
   } catch (err) {
@@ -143,7 +161,7 @@ export async function recusaDaPerdaDaSofia(
   let trava = travaDaPerdaAutomatica(cartao, agoraEpoch, { semTemperatura: true });
   if (trava?.motivo === 'consulta futura no cartão' && opcoes.consultaNaFranquia) {
     try {
-      const f = await opcoes.consultaNaFranquia(cartao.name ?? null);
+      const f = await opcoes.consultaNaFranquia();
       if (f.conhecido && !f.consultaFutura) {
         logger.info({ leadId }, 'trava-perda: o cartão diz consulta futura mas a franquia não tem — a data é sobra, não seguro');
         trava = travaDaPerdaAutomatica(cartao, agoraEpoch, { semTemperatura: true, semConsulta: true });
@@ -156,6 +174,8 @@ export async function recusaDaPerdaDaSofia(
   return {
     motivo: trava.motivo,
     avisarEquipe: true,
-    texto: `este lead está com «${trava.motivo}» — a Sofia não fecha como perdido quem tem consulta futura ou pagou. Deixe o cartão onde está; a equipe foi avisada por tarefa e registra a desistência, se for o caso.`,
+    responsavelId: cartao.responsible_user_id,
+    // «a equipe foi avisada» só quem abriu a tarefa pode dizer (tools.ts acrescenta depois de criar)
+    texto: `este lead está com «${trava.motivo}» — a Sofia não fecha como perdido quem tem consulta futura ou pagou. Deixe o cartão onde está; a equipe registra a desistência, se for o caso.`,
   };
 }

@@ -70,7 +70,7 @@ async function main() {
   const { carregarFunis } = await import('../lib/franquia-sync-worker.js');
   const { recarregarAutomacoes } = await import('../lib/automacoes-estado.js');
   const w = await import('../lib/parados-worker.js');
-  const { travaDaPerdaAutomatica } = await import('../lib/trava-perda.js');
+  const { veredictoDaTrava } = await import('../lib/trava-perda-seguimento.js');
 
   const slug = arg('unidade');
   if (!slug) throw new Error('falta --unidade=<slug>');
@@ -123,6 +123,14 @@ async function main() {
             somar(resultado, 'fica · travado por CONFLITO_FRANQUIA (a SDR escolhe o paciente)', String(lead.id));
             continue;
           }
+          // trava da perda automática: as regras que só terminam em PERDIDO nem gastam a avaliação a fundo (como o worker)
+          if (regra === 'agendado' || regra === 'retorno' || regra === 'dormente') {
+            const v = await veredictoDaTrava(unit, lead.id, lead, agora);
+            if (v) {
+              somar(resultado, v.abrirSeguimento ? '→ tarefa para a SDR + EM ESPERA (pagou e desmarcou, não vai a PERDIDO)' : `fica · travado pela perda automática (${v.motivo})`, String(lead.id));
+              continue;
+            }
+          }
           candidatos++;
           if (avaliados >= max) {
             somar(resultado, `sem avaliar · passou do --max=${max}`, String(lead.id));
@@ -132,10 +140,10 @@ async function main() {
           try {
             const a = await w.avaliarDoEstoque(ctx, regra, lead, e.nome);
             const d = a.decisao;
-            // trava da perda automática (26/10): a prévia não pode mostrar «→ PERDIDO» para o que o portão vai segurar
-            const segura = d?.para === 'PERDIDO' ? travaDaPerdaAutomatica(lead, agora) : null;
+            // trava da perda automática (26/10), agora que a decisão é PERDIDO (falta e tratamento podem terminar em outra coisa)
+            const segura = d?.para === 'PERDIDO' ? await veredictoDaTrava(unit, lead.id, lead, agora) : null;
             if (segura) {
-              somar(resultado, `fica · travado pela perda automática (${segura.motivo})`, `${lead.id} (${d?.regra})`);
+              somar(resultado, segura.abrirSeguimento ? '→ tarefa para a SDR + EM ESPERA (pagou e desmarcou, não vai a PERDIDO)' : `fica · travado pela perda automática (${segura.motivo})`, `${lead.id} (${d?.regra})`);
               continue;
             }
             const destino = d

@@ -88,7 +88,7 @@ test('pagou só segura quem AINDA NÃO teve a consulta: Atendido e Não comparec
   const pagoCom = (situacao?: string) => cartaoDe({ campos: [campo('✓ Consulta pg antecipado', 'Sim', 3), ...(situacao ? [campo('✓ Situação da consulta', situacao, 6)] : [])], tags: ['$ · Pagou antecipado'] });
   assert.deepEqual(travaDaPerdaAutomatica(pagoCom(), AGORA), { motivo: 'pagou o antecipado' });
   assert.deepEqual(travaDaPerdaAutomatica(pagoCom('Agendado'), AGORA), { motivo: 'pagou o antecipado' });
-  assert.deepEqual(travaDaPerdaAutomatica(pagoCom('Desmarcado'), AGORA), { motivo: 'pagou o antecipado' }, 'desmarcou mas pagou: ainda vem (remarca)');
+  assert.deepEqual(travaDaPerdaAutomatica(pagoCom('Desmarcado'), AGORA), { motivo: 'pagou e desmarcou' }, 'desmarcou mas pagou: segura, com seguimento (trava-perda-seguimento.test.ts)');
   assert.equal(travaDaPerdaAutomatica(pagoCom('Atendido'), AGORA), null, 'já consultou: vale a regra de 45 dias / atendido sem tratamento');
   assert.equal(travaDaPerdaAutomatica(pagoCom('Não compareceu'), AGORA), null);
 });
@@ -203,10 +203,10 @@ test('no papel, se o Kommo não deixa reler o cartão, simula como sempre simulo
   assert.deepEqual(registradas.map((r) => r.acao), ['moveria']);
 });
 
-test('seguradoPelaTrava é o mesmo portão do filtro barato das varreduras: Quente fica, neutro passa', () => {
+test('seguradoPelaTrava é o mesmo portão do filtro barato das varreduras: Quente fica, neutro passa', async () => {
   const unit = unidade();
-  assert.equal(seguradoPelaTrava(unit, 7, leadDe(7, { tags: ['Quente'] }), ETAPA.ESPERA, false, 'parados'), true);
-  assert.equal(seguradoPelaTrava(unit, 8, leadDe(8), ETAPA.ESPERA, false, 'parados'), false);
+  assert.equal(await seguradoPelaTrava(unit, 7, leadDe(7, { tags: ['Quente'] }), { deEtapa: ETAPA.ESPERA, seco: false, automacao: 'parados' }), true);
+  assert.equal(await seguradoPelaTrava(unit, 8, leadDe(8), { deEtapa: ETAPA.ESPERA, seco: false, automacao: 'parados' }), false);
 });
 
 // ── os estoques (a outra porta do worker de parados) ──
