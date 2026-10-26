@@ -458,6 +458,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/titulo-padrao.ts',
   },
   {
+    id: 'renomear-lead',
+    chave: 'RENOMEAR_LEAD_SLUGS',
+    nome: 'Renomear o lead novo (sem IA)',
+    oQueFaz:
+      'A cada 5 minutos lê os leads criados nas últimas 24 h que ainda têm o nome do Kommo ("Lead #123") e dá o nome que as SDRs dão à mão: "Nome dd/mm/aa", com o nome do contato do WhatsApp e a data de criação. Se o contato não tem nome, ou o nome não parece de pessoa (frase, emoji, número), vira "Lead dd/mm/aa" ("Lead 2 dd/mm/aa" para o segundo do dia).',
+    pegadinha:
+      'Regra fixa, sem IA — nasceu para Petrópolis e Caxias, onde o Kommo não manda mensagem para o agente e o título padrão nunca acorda. Nome que a SDR já deu NUNCA é tocado (relê o lead antes de gravar) e só age em lead com 3 minutos de vida. Na conta dividida vale a chave da unidade do cartão (⌂ Unidade de atendimento); cartão sem unidade só é renomeado se as duas chaves estiverem ligadas (em "só no papel" numa e ligada na outra, ele fica só no papel). Na dúvida escreve "Lead dd/mm/aa" em vez de arriscar um nome errado.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/renomear-lead.ts',
+  },
+  {
     id: 'nome-no-contato',
     chave: 'NOME_NO_CONTATO_SLUGS',
     nome: 'Nome confirmado também no contato',
