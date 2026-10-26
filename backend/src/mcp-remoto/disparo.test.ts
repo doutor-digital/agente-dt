@@ -31,7 +31,7 @@ function dados(sobre: Omit<Partial<DadosDoPainel>, 'onda'> & { onda?: Partial<Da
   };
 }
 
-interface Chamadas { montar: Array<{ campanha: string; unidade: string; etiqueta: string; por: string }>; salvar: Array<{ slug: string; soCriar: boolean; oferta: unknown }> }
+interface Chamadas { montar: Array<{ campanha: string; unidade: string; etiqueta: string; por: string }>; salvar: Array<{ slug: string; soCriar: boolean; mesclar: boolean; oferta: unknown; chaves: string[] }> }
 
 function fonteFalsa(o: { montando?: number; tela?: DadosDoPainel | null; salvarErro?: string; montarErro?: string; base?: string | null } = {}): { fonte: FonteDeDisparo; chamadas: Chamadas } {
   const chamadas: Chamadas = { montar: [], salvar: [] };
@@ -42,8 +42,8 @@ function fonteFalsa(o: { montando?: number; tela?: DadosDoPainel | null; salvarE
     ondasRecentes: async () => [{ id: 'onda1', campanha: 'outubro-rosa-2026', unidade: 'doutor-hernia-canaa', etiqueta: 'rosa', estado: 'montada', total: 42, criadoEm: new Date(0), motivo: null }],
     montandoAgora: async () => o.montando ?? 0,
     salvarCampanha: async (slug, entrada, opcoes) => {
-      chamadas.salvar.push({ slug, soCriar: opcoes.soCriar, oferta: entrada.oferta });
-      return o.salvarErro ? { ok: false, status: 409, erro: o.salvarErro } : { ok: true, dados: { id: 'c1', slug, criada: opcoes.soCriar } };
+      chamadas.salvar.push({ slug, soCriar: opcoes.soCriar, mesclar: opcoes.mesclar, oferta: entrada.oferta, chaves: Object.keys(entrada).sort() });
+      return o.salvarErro ? { ok: false, status: 409, erro: o.salvarErro } : { ok: true, dados: { id: 'c1', slug, criada: opcoes.soCriar, alterados: opcoes.soCriar ? [] : ['oferta'] } };
     },
     montarOnda: async (a) => {
       chamadas.montar.push(a);
@@ -135,9 +135,10 @@ test('prévia: o próximo passo muda com o estado e nunca manda o Claude aprovar
   assert.match(p({ onda: { estado: 'aprovada' } }), /seco: o worker só grava quem receberia/);
 });
 
-test('prévia: onda pausada por SAIR traz quem pediu (primeiro nome + o que escreveu)', () => {
-  const r = resumoDaOnda(dados({ onda: { estado: 'pausada', pausaCausa: 'sair', pausaMotivo: '4 pessoas responderam SAIR' }, saidas: [{ nome: 'Maria', resposta: 'SAIR', quando: null }, { nome: 'Rosa', resposta: '', quando: null }] }), BASE);
-  assert.deepEqual(r.pediramSair, [{ nome: 'Maria', escreveu: 'SAIR' }, { nome: 'Rosa', escreveu: '(mensagem não gravada)' }]);
+test('prévia: onda pausada por SAIR traz quem pediu (só o primeiro nome; o que escreveram fica no painel)', () => {
+  const r = resumoDaOnda(dados({ onda: { estado: 'pausada', pausaCausa: 'sair', pausaMotivo: '4 pessoas responderam SAIR' }, saidas: [{ nome: 'Maria', resposta: 'SAIR-MARCADOR-XYZ', quando: null }, { nome: 'Rosa', resposta: '', quando: null }] }), BASE);
+  assert.deepEqual(r.pediramSair, { quantos: 2, primeirosNomes: ['Maria', 'Rosa'], oQueEscreveram: 'só no painel do João' });
+  assert.ok(!JSON.stringify(r).includes('MARCADOR-XYZ'), 'o texto livre do paciente não vai para o chat');
   assert.equal(r.motivoDaParada, '4 pessoas responderam SAIR');
 });
 
@@ -171,16 +172,19 @@ test('montar: com montagens demais em andamento recusa, e erro da regra (onda vi
   assert.equal(chamadas.montar.length, 1, 'unidade desconhecida nem chega a tentar');
 });
 
-test('salvar campanha: por padrão só CRIA (nunca sobrescreve sem pedir); com atualizar=true atualiza; a oferta viaja', async () => {
+test('salvar campanha: por padrão só CRIA (nunca sobrescreve sem pedir); com atualizar=true muda SÓ o que veio; a oferta viaja', async () => {
   const { fonte, chamadas } = fonteFalsa();
   const { c } = await conectar(fonte);
   const base = { campanha: 'outubro-rosa-2026', nome: 'Outubro Rosa', textoModelo: 'Oi {{1}}', variaveis: ['primeiroNome'], oferta: 'R$ 150 até 31/10' };
   assert.notEqual((await c.callTool({ name: 'disparo_campanha_salvar', arguments: base })).isError, true);
-  assert.notEqual((await c.callTool({ name: 'disparo_campanha_salvar', arguments: { ...base, atualizar: true } })).isError, true);
+  const atualizada = await c.callTool({ name: 'disparo_campanha_salvar', arguments: { campanha: 'outubro-rosa-2026', nome: 'Outubro Rosa', textoModelo: 'Oi {{1}}', oferta: 'R$ 140 até 31/10', atualizar: true } });
+  assert.notEqual(atualizada.isError, true);
+  assert.deepEqual(JSON.parse(texto(atualizada)).camposAlterados, ['oferta']);
   assert.deepEqual(chamadas.salvar, [
-    { slug: 'outubro-rosa-2026', soCriar: true, oferta: 'R$ 150 até 31/10' },
-    { slug: 'outubro-rosa-2026', soCriar: false, oferta: 'R$ 150 até 31/10' },
+    { slug: 'outubro-rosa-2026', soCriar: true, mesclar: true, oferta: 'R$ 150 até 31/10', chaves: ['nome', 'oferta', 'textoModelo', 'variaveis'] },
+    { slug: 'outubro-rosa-2026', soCriar: false, mesclar: true, oferta: 'R$ 140 até 31/10', chaves: ['nome', 'oferta', 'textoModelo'] },
   ]);
+  assert.ok(!chamadas.salvar[1]!.chaves.some((k) => ['porUnidade', 'cabecalho', 'variaveis', 'idioma', 'template'].includes(k)), 'o que não veio NÃO é mandado (nem vira padrão): modelo por unidade e arte ficam');
   const ruim = await conectar(fonteFalsa({ salvarErro: 'a campanha outubro-rosa-2026 já existe; peça para atualizar' }).fonte);
   const r = await ruim.c.callTool({ name: 'disparo_campanha_salvar', arguments: base });
   assert.equal(r.isError, true);

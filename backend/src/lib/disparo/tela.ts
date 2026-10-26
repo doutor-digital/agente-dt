@@ -8,11 +8,12 @@ import { conferirModeloNaMeta, podeAprovar } from './modelo.js';
 import { definicaoDaOnda } from './onda.js';
 import { freiosDoAmbiente } from './freios.js';
 import { quemPediuSair } from './saidas.js';
+import { diasDaOferta } from './oferta.js';
 import { AUTOMACAO_DISPARO, listaDeTesteDoAmbiente } from './porto.js';
 import type { DadosDoPainel } from './painel.js';
 
 export async function dadosDaTela(ondaId: string, email: string | null | undefined): Promise<DadosDoPainel | null> {
-  const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true, campanha: { select: { nome: true, oferta: true } } } });
+  const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true, campanha: { select: { nome: true } } } });
   if (!onda) return null;
   const retomavel = onda.estado === 'pausada' && onda.pausaCausa === 'sair';
   const [porEstado, simulados, amostra, saidas] = await Promise.all([
@@ -20,7 +21,7 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
     prisma.disparoDestinatario.count({ where: { ondaId, simuladoEm: { not: null } } }),
     prisma.disparoDestinatario.findMany({ where: { ondaId }, orderBy: [{ criadoEm: 'asc' }, { id: 'asc' }], take: 15, select: { nome: true, telefone: true } }),
     // Quem pediu SAIR interessa sempre que a campanha já tem algum: é o que o João lê antes de retomar (e vale como aviso nas outras ondas).
-    quemPediuSair(onda.unit, onda.campanhaId),
+    onda.estado === 'montando' || onda.estado === 'cancelada' ? Promise.resolve([]) : quemPediuSair(onda.unit, onda.campanhaId),
   ]);
   // Só pergunta à Meta enquanto ainda dá para aprovar ou retomar: é a prova que destrava (ou trava) o botão.
   const conferenciaMeta = onda.estado === 'montada' || retomavel ? await conferirModeloNaMeta(onda.unit, definicaoDaOnda(onda)) : null;
@@ -42,7 +43,8 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
       sairAceitos: onda.sairAceitos,
     },
     campanhaNome: onda.campanha.nome,
-    oferta: onda.campanha.oferta,
+    oferta: onda.oferta,
+    ofertaDias: diasDaOferta(),
     unidade: { slug: onda.unit.slug, nome: onda.unit.name },
     modo: estadoDaAutomacao(onda.unit.slug, AUTOMACAO_DISPARO, process.env.DISPARO_CAMPANHA_SLUGS),
     freios: freiosDoAmbiente(),

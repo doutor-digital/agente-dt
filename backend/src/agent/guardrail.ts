@@ -198,13 +198,25 @@ export function aplicarGuardrail(text: string, unit: Unit, extras: ExtrasDoGuard
     return { text: FALLBACK_LACUNA, triggered, rewritten: true };
   }
 
-  // Valores da oferta que este paciente recebeu. Se a resposta cita um deles, as duas travas de "número no slot errado"
-  // (convênio e antecipado) saem de cena: elas trocariam o preço da oferta pelo da ficha, que é o bug que a oferta resolve.
+  // Valores da oferta que este paciente recebeu. Cada R$ da oferta fica ESCONDIDO das duas travas de "número no slot
+  // errado" (convênio e antecipado), que o trocariam pelo da ficha — o bug que a oferta resolve. Só os valores da oferta:
+  // qualquer outro número da mesma mensagem segue sob as travas (um "R$ 250 antecipado" errado ao lado do R$ 150 é cortado).
   const daOferta = parseAmounts(extras.ofertaDaCampanha);
-  const citaOferta = daOferta.size > 0 && [...parseAmounts(texto)].some((v) => daOferta.has(v));
+  const escondidos: string[] = [];
+  const escondeOferta = (t: string): string =>
+    daOferta.size === 0
+      ? t
+      : t.replace(/R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi, (m, num: string) => {
+          if (!daOferta.has(Number(num.replace(/\./g, '')))) return m;
+          escondidos.push(m);
+          // mantém o "R$" na frente (as travas param no próximo R$) mas sem o número, que é o que elas procuram
+          return `R$ ⟦${escondidos.length - 1}⟧`;
+        });
+  const mostraOferta = (t: string): string => t.replace(/R\$ ⟦(\d+)⟧/g, (_, i: string) => escondidos[Number(i)] ?? '');
+  texto = escondeOferta(texto);
 
   // O desconto do convênio não pode sair como preço do Pix — ver preco-convenio.ts.
-  const p = citaOferta ? null : precosDaConsulta(unit);
+  const p = precosDaConsulta(unit);
   if (p) {
     const conv = convenioDaUnidade(unit, p);
     if (conv != null) {
@@ -231,7 +243,11 @@ export function aplicarGuardrail(text: string, unit: Unit, extras: ExtrasDoGuard
     }
   }
 
-  const aprovados = parseAmounts(unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio, extras.ofertaDaCampanha);
+  texto = mostraOferta(texto);
+
+  // O catálogo é a ficha; os valores da oferta só se somam a ele quando a ficha tem valores (unidade sem R$ na ficha não ganha checagem por causa da oferta).
+  const catalogo = parseAmounts(unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio);
+  const aprovados = catalogo.size > 0 ? new Set([...catalogo, ...daOferta]) : catalogo;
   if (aprovados.size > 0) {
     const foraDoCatalogo = [...parseAmounts(texto)].filter(
       (v) => v >= 20 && !amountApproved(v, aprovados),

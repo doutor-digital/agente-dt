@@ -18,6 +18,8 @@ export interface Definicao {
   textoModelo: string;
   variaveis: string[];
   cabecalho: CabecalhoDeMidia | null;
+  /** a oferta que a Sofia lê de quem recebe (copiada da campanha na montagem); fora do que a Meta confere */
+  oferta?: string | null;
 }
 
 interface CampanhaDefinida {
@@ -27,6 +29,7 @@ interface CampanhaDefinida {
   variaveis: unknown;
   cabecalho: unknown;
   porUnidade: unknown;
+  oferta?: string | null;
 }
 
 const TIPOS_DE_MIDIA = ['image', 'video', 'document'] as const;
@@ -48,13 +51,13 @@ export function definicaoParaAUnidade(c: CampanhaDefinida, unitSlug: string): De
   const cabecalho = bruto == null ? null : comoCabecalho(bruto);
   if (bruto != null && !cabecalho) return { erro: 'cabeçalho inválido (precisa de tipo image|video|document e link https)' };
   const variaveis = Array.isArray(c.variaveis) ? (c.variaveis as unknown[]).map(String) : [];
-  return { template, idioma: c.idioma, textoModelo: c.textoModelo, variaveis, cabecalho };
+  return { template, idioma: c.idioma, textoModelo: c.textoModelo, variaveis, cabecalho, ...(c.oferta?.trim() ? { oferta: c.oferta.trim() } : {}) };
 }
 
-/** A impressão digital do que o João vê: modelo, texto, variáveis e cada pessoa com o nome que vai na saudação. */
+/** A impressão digital do que o João vê: modelo, texto, variáveis, a oferta que a Sofia vai saber e cada pessoa com o nome que vai na saudação. */
 export function impressaoDaOnda(def: Definicao, pessoas: ReadonlyArray<{ chave: string; nome: string }>): string {
   const ordenadas = [...pessoas].sort((a, b) => a.chave.localeCompare(b.chave)).map((p) => `${p.chave}:${p.nome}`);
-  return createHash('sha256').update(JSON.stringify([def.template, def.idioma, def.textoModelo, def.variaveis, def.cabecalho, ordenadas])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([def.template, def.idioma, def.textoModelo, def.variaveis, def.cabecalho, ordenadas, ...(def.oferta ? [def.oferta] : [])])).digest('hex');
 }
 
 /**

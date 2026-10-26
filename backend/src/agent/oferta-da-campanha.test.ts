@@ -131,3 +131,27 @@ test('oferta vazia ou sem valores não muda nada', () => {
     assert.ok(!r.text.includes('R$ 200'));
   }
 });
+
+test('COM a oferta: o R$ da oferta é preservado, mas um número errado NO MESMO texto continua sendo corrigido (a trava de slot não desliga)', () => {
+  const r = aplicarGuardrail('Na campanha fica R$ 150, e pagando antes pelo Pix o valor é R$ 350 antecipado.', unit(), { ofertaDaCampanha: OFERTA.oferta });
+  assert.equal(r.rewritten, true);
+  assert.ok(r.triggered.some((t) => t.startsWith('antecipado_corrigido:')));
+  assert.equal(r.text, 'Na campanha fica R$ 150, e pagando antes pelo Pix o valor é R$ 280 antecipado.');
+});
+
+test('COM a oferta: dois valores da oferta na mesma mensagem passam, e o texto volta idêntico (sem sobra do disfarce)', () => {
+  const oferta = 'Avaliação por R$ 150 ou 2x de R$ 80 até 31/10.';
+  const texto = 'A avaliação sai R$ 150 antecipado, ou em 2x de R$ 80.';
+  const r = aplicarGuardrail(texto, unit(), { ofertaDaCampanha: oferta });
+  assert.equal(r.text, texto);
+  assert.ok(!r.text.includes('⟦'));
+});
+
+test('unidade SEM valor na ficha não ganha checagem de catálogo só porque existe oferta', () => {
+  const sem = unit({ sourceProdutos: 'Consulta presencial, valores com a equipe.' });
+  const texto = 'A consulta fica R$ 200 e a taxa de reserva é R$ 100.';
+  assert.equal(aplicarGuardrail(texto, sem).rewritten, false, 'sem oferta: a checagem já era pulada');
+  const r = aplicarGuardrail(texto, sem, { ofertaDaCampanha: OFERTA.oferta });
+  assert.equal(r.rewritten, false, 'com oferta: continua pulada');
+  assert.equal(r.text, texto);
+});

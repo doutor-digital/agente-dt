@@ -19,13 +19,14 @@ export type ResultadoDeAcao<T> = { ok: true; dados: T } | { ok: false; status: n
 
 export const falha = (status: number, erro: string): { ok: false; status: number; erro: string } => ({ ok: false, status, erro });
 
-export function definicaoDaOnda(o: Pick<DisparoOnda, 'template' | 'idioma' | 'textoModelo' | 'variaveis' | 'cabecalho'>): Definicao {
+export function definicaoDaOnda(o: Pick<DisparoOnda, 'template' | 'idioma' | 'textoModelo' | 'variaveis' | 'cabecalho'> & { oferta?: string | null }): Definicao {
   return {
     template: o.template,
     idioma: o.idioma,
     textoModelo: o.textoModelo,
     variaveis: (o.variaveis as unknown[]).map(String),
     cabecalho: (o.cabecalho as Definicao['cabecalho']) ?? null,
+    ...(o.oferta?.trim() ? { oferta: o.oferta.trim() } : {}),
   };
 }
 
@@ -44,31 +45,38 @@ export async function abrirOnda(args: { campanha: string; unidade: string; etiqu
   if (!unit.spineToken) return falha(422, 'a unidade não tem a franquia ligada: sem ela não dá para tirar quem tem consulta ou tratamento');
   if (!unit.kommoSubdomain || !unit.kommoAccessToken) return falha(422, 'a unidade não tem Kommo configurado');
 
-  // Duas ondas vivas da mesma campanha na mesma unidade só atrapalham (a pessoa é única por campanha): quem chama
-  // (a tela, a rotina ou o Claude) recebe o id da que já existe, em vez de montar outra por cima.
-  const viva = await prisma.disparoOnda.findFirst({ where: { campanhaId: campanha.id, unitId: unit.id, estado: { in: ['montando', 'montada', 'aprovada', 'pausada'] } }, select: { id: true, estado: true } });
-  if (viva) return falha(409, `já existe a onda ${viva.id} desta campanha nesta unidade (${viva.estado}); cancele-a antes de montar outra`);
-
   const def = definicaoParaAUnidade(campanha, unit.slug);
   if ('erro' in def) return falha(422, def.erro);
   const problema = problemaNoModelo(def.textoModelo, def.variaveis);
   if (problema) return falha(422, problema);
 
-  const onda = await prisma.disparoOnda.create({
-    data: {
-      campanhaId: campanha.id,
-      unitId: unit.id,
-      etiqueta,
-      template: def.template,
-      idioma: def.idioma,
-      textoModelo: def.textoModelo,
-      variaveis: def.variaveis as Prisma.InputJsonValue,
-      cabecalho: (def.cabecalho ?? undefined) as Prisma.InputJsonValue | undefined,
-      estado: 'montando',
-      impressao: '',
-      criadaPor: args.por ?? null,
-    },
+  // Duas ondas vivas da mesma campanha na mesma unidade só atrapalham (a pessoa é única por campanha): quem chama
+  // (a tela, a rotina ou o Claude) recebe o id da que já existe, em vez de montar outra por cima. A checagem e a criação
+  // andam na mesma transação, sob uma trava do banco por campanha+unidade: duas chamadas ao mesmo tempo não furam a regra.
+  const r = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`disparo-onda:${campanha.id}:${unit.id}`}))`;
+    const viva = await tx.disparoOnda.findFirst({ where: { campanhaId: campanha.id, unitId: unit.id, estado: { in: ['montando', 'montada', 'aprovada', 'pausada'] } }, select: { id: true, estado: true } });
+    if (viva) return { viva };
+    const criada = await tx.disparoOnda.create({
+      data: {
+        campanhaId: campanha.id,
+        unitId: unit.id,
+        etiqueta,
+        template: def.template,
+        idioma: def.idioma,
+        textoModelo: def.textoModelo,
+        variaveis: def.variaveis as Prisma.InputJsonValue,
+        cabecalho: (def.cabecalho ?? undefined) as Prisma.InputJsonValue | undefined,
+        oferta: def.oferta ?? null,
+        estado: 'montando',
+        impressao: '',
+        criadaPor: args.por ?? null,
+      },
+    });
+    return { criada };
   });
+  if ('viva' in r && r.viva) return falha(409, `já existe a onda ${r.viva.id} desta campanha nesta unidade (${r.viva.estado}); cancele-a antes de montar outra`);
+  const onda = r.criada!;
   return { ok: true, dados: onda };
 }
 

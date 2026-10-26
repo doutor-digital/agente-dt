@@ -39,6 +39,8 @@ export interface DadosDoPainel {
   campanhaNome: string;
   /** a oferta que a Sofia lê quando quem recebeu responde (null = ela não sabe de oferta nenhuma) */
   oferta?: string | null;
+  /** por quantos dias depois do envio a Sofia sabe da oferta (DISPARO_OFERTA_DIAS) */
+  ofertaDias?: number;
   unidade: { slug: string; nome: string };
   modo: Modo;
   freios: Freios;
@@ -114,7 +116,7 @@ export function montarPainelDaOnda(d: DadosDoPainel): string {
     acao = `<div class="acoes"><button id="cancelar" class="sec">Parar e cancelar esta onda</button>${onda.estado === 'pausada' ? '<p class="mudo">Esta pausa não é por SAIR: não tem retomada. Cancele e monte a onda de novo depois de resolver o motivo.</p>' : ''}<p id="retorno" role="status"></p></div>`;
   }
   const blocoOferta = d.oferta
-    ? `<section><h2>O que a Sofia vai saber da oferta</h2><div class="zap">${esc(d.oferta)}</div><p class="mudo">Quem receber esta mensagem e responder nos próximos 14 dias terá esta oferta no prompt da Sofia, e o preço dela passa pela trava de preço. Para mudar, atualize a campanha.</p></section>`
+    ? `<section><h2>O que a Sofia vai saber da oferta</h2><div class="zap">${esc(d.oferta)}</div><p class="mudo">Quem receber esta mensagem e responder nos próximos ${d.ofertaDias ?? 14} dias terá esta oferta no prompt da Sofia, e o preço dela passa pela trava de preço. Ela foi copiada da campanha na montagem e vale como está: mudar a campanha depois não muda esta onda.</p></section>`
     : '<section><h2>O que a Sofia vai saber da oferta</h2><p class="mudo">Esta campanha não tem texto de oferta: a Sofia responde pela ficha de preços da unidade, e um preço diferente do da ficha, se ela o repetir, é cortado.</p></section>';
   const tabelaSaidas = saidas.length
     ? `<section><h2>Quem pediu SAIR (${saidas.length})</h2><table><thead><tr><th class="esq">Primeiro nome</th><th class="esq">O que escreveu</th></tr></thead><tbody>${saidas.map((x) => `<tr><td class="esq">${esc(x.nome)}</td><td class="esq">${x.resposta ? esc(x.resposta) : '<span class="mudo">(a mensagem não está gravada)</span>'}</td></tr>`).join('')}</tbody></table>${onda.sairAceitos ? `<p class="mudo">${onda.sairAceitos} destes já foram vistos na última retomada${onda.retomadaPor ? `, por ${esc(onda.retomadaPor)}` : ''}.</p>` : ''}</section>`

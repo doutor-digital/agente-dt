@@ -13,11 +13,28 @@ export function diasDaOferta(env: NodeJS.ProcessEnv = process.env): number {
 }
 
 /**
+ * Há alguma onda com oferta que já saiu (aprovada, pausada, concluída ou cancelada no meio)? Guardado por 30 s: enquanto
+ * ninguém cadastrou oferta, o caminho quente da Sofia (todo turno de toda unidade) não faz consulta nenhuma de oferta.
+ */
+let existeOferta: { valor: boolean; ate: number } | null = null;
+const GUARDA_MS = 30_000;
+export function _zerarGuardaDeOferta(): void {
+  existeOferta = null;
+}
+async function haOfertaPorAi(agora: number): Promise<boolean> {
+  if (existeOferta && existeOferta.ate > agora) return existeOferta.valor;
+  const achou = await prisma.disparoOnda.findFirst({ where: { oferta: { not: null }, estado: { notIn: ['montando', 'montada'] } }, select: { id: true } });
+  existeOferta = { valor: !!achou, ate: agora + GUARDA_MS };
+  return !!achou;
+}
+
+/**
  * A oferta mais recente que esta pessoa recebeu nesta unidade, ou null.
  * Casa pelo cartão (`kommoLeadId`) OU pelo telefone (DDD + 8 últimos dígitos): o mesmo critério da chave única do disparo.
- * Quem respondeu SAIR (`saiu`) não entra, e campanha sem texto de oferta não entra.
+ * Quem respondeu SAIR (`saiu`) não entra, e onda sem oferta não entra. A oferta é a que a ONDA copiou na montagem (e o João aprovou na tela), não a da campanha de hoje.
  */
 export async function ofertaDoLead(unitId: string, leadId: number | null | undefined, telefone?: string | null, agora: Date = new Date()): Promise<OfertaVigente | null> {
+  if (!(await haOfertaPorAi(agora.getTime()))) return null;
   // `undefined` = quem chama não tem o telefone à mão: o da conversa deste cartão.
   const doCartao =
     telefone === undefined && leadId && Number.isFinite(leadId) && leadId > 0
@@ -34,13 +51,13 @@ export async function ofertaDoLead(unitId: string, leadId: number | null | undef
       estado: 'enviado',
       wamid: { not: null },
       enviadoEm: { gte: new Date(agora.getTime() - diasDaOferta() * 86_400_000) },
-      onda: { campanha: { oferta: { not: null } } },
+      onda: { oferta: { not: null } },
       OR: quem,
     },
     orderBy: { enviadoEm: 'desc' },
-    select: { nome: true, enviadoEm: true, onda: { select: { textoModelo: true, variaveis: true, unit: { select: { name: true } }, campanha: { select: { nome: true, oferta: true } } } } },
+    select: { nome: true, enviadoEm: true, onda: { select: { textoModelo: true, variaveis: true, oferta: true, unit: { select: { name: true } }, campanha: { select: { nome: true } } } } },
   });
-  const oferta = achado?.onda.campanha.oferta?.trim();
+  const oferta = achado?.onda.oferta?.trim();
   if (!achado || !oferta || !achado.enviadoEm) return null;
   let textoEnviado = '';
   try {

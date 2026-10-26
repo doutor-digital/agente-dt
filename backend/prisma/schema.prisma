@@ -2212,6 +2212,8 @@ model DisparoOnda {
   textoModelo  String    @map("texto_modelo") @db.Text
   variaveis    Json
   cabecalho    Json?
+  /// a oferta da campanha COPIADA na montagem (como o texto): o que o João aprova, e o que a Sofia lê de quem recebeu, não muda depois
+  oferta       String?   @db.Text
   /// montada | aprovada | pausada | concluida | cancelada
   estado       String    @default("montada")
   total        Int       @default(0)

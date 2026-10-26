@@ -2,55 +2,59 @@
  * Definir e listar campanhas de disparo. Um lugar só para a rota (`PUT /api/disparo/campanhas/:slug`) e para o
  * conector do Claude: o que vale para uma vale para a outra.
  */
-import { z } from 'zod';
 import { Prisma, type DisparoCampanha } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { falha, type ResultadoDeAcao } from './onda.js';
-import { OFERTA_MAX, problemaNoModelo } from './regras.js';
+import { problemaNaOferta, problemaNoModelo } from './regras.js';
+import { campanhaSchema, camposDaCampanha, slugDaCampanha, type CampanhaEntrada } from './campanha-schema.js';
 
-const cabecalho = z.object({ tipo: z.enum(['image', 'video', 'document']), link: z.string().url().startsWith('https://'), nomeArquivo: z.string().max(120).optional() });
+export { campanhaSchema, camposDaCampanha, slugDaCampanha, type CampanhaEntrada };
 
-export const campanhaSchema = z.object({
-  nome: z.string().min(2).max(120),
-  template: z.string().min(1).max(512).nullish(),
-  idioma: z.string().min(2).max(12).default('pt_BR'),
-  textoModelo: z.string().min(1).max(4096),
-  variaveis: z.array(z.string().min(1).max(200)).max(10).default([]),
-  cabecalho: cabecalho.nullish(),
-  porUnidade: z.record(z.object({ template: z.string().min(1).max(512).optional(), cabecalho: cabecalho.nullish() })).default({}),
-  /** ausente = mantém a que está salva; null ou vazio = apaga */
-  oferta: z.string().max(OFERTA_MAX).nullish(),
-});
-
-export const slugDaCampanha = z.string().regex(/^[a-z0-9][a-z0-9-]{1,80}$/);
-
-export type CampanhaEntrada = z.infer<typeof campanhaSchema>;
+const PADRAO = { idioma: 'pt_BR', variaveis: [] as string[], porUnidade: {} as Record<string, unknown> };
+const CAMPOS_COMPARADOS = ['nome', 'template', 'idioma', 'textoModelo', 'variaveis', 'cabecalho', 'porUnidade', 'oferta'] as const;
+const igual = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 /**
- * Cria ou atualiza a campanha. `soCriar` recusa (409) se o slug já existe: o conector do Claude usa isso para nunca
- * sobrescrever uma campanha sem que a pessoa tenha pedido "atualizar".
+ * Cria ou atualiza a campanha.
+ *  - `soCriar`: recusa (409) se o slug já existe. O conector usa isso para nunca sobrescrever sem que a pessoa tenha pedido "atualizar".
+ *  - `mesclar`: o que NÃO veio fica como está salvo (atualizar uma campanha que já tem modelo próprio por unidade e arte
+ *    sem apagá-los). Sem `mesclar` (a rota PUT) o que não veio volta ao padrão — "PUT troca tudo", como no #126 —, e só a
+ *    `oferta` ausente é mantida.
+ * Devolve `alterados`: quais campos mudaram em relação ao que estava salvo (vazio ao criar).
  */
-export async function salvarCampanha(slug: string, c: CampanhaEntrada, opcoes: { soCriar?: boolean } = {}): Promise<ResultadoDeAcao<{ id: string; slug: string; criada: boolean }>> {
-  const problema = problemaNoModelo(c.textoModelo, c.variaveis);
-  if (problema) return falha(422, problema);
-  const existente = await prisma.disparoCampanha.findUnique({ where: { slug }, select: { id: true } });
+export async function salvarCampanha(
+  slug: string,
+  c: CampanhaEntrada,
+  opcoes: { soCriar?: boolean; mesclar?: boolean } = {},
+): Promise<ResultadoDeAcao<{ id: string; slug: string; criada: boolean; alterados: string[] }>> {
+  const existente = await prisma.disparoCampanha.findUnique({ where: { slug } });
   if (existente && opcoes.soCriar) return falha(409, `a campanha ${slug} já existe; peça para atualizar (e confira antes o que ela tem hoje)`);
-  const dados = {
+  const manter = !!existente && !!opcoes.mesclar;
+  const final = {
     nome: c.nome,
-    template: c.template ?? null,
-    idioma: c.idioma,
+    template: c.template !== undefined ? c.template : manter ? existente.template : null,
+    idioma: c.idioma ?? (manter ? existente.idioma : PADRAO.idioma),
     textoModelo: c.textoModelo,
-    variaveis: c.variaveis as Prisma.InputJsonValue,
-    cabecalho: c.cabecalho ? (c.cabecalho as Prisma.InputJsonValue) : Prisma.DbNull,
-    porUnidade: c.porUnidade as Prisma.InputJsonValue,
+    variaveis: c.variaveis ?? (manter ? (existente.variaveis as string[]) : PADRAO.variaveis),
+    cabecalho: c.cabecalho !== undefined ? c.cabecalho : manter ? existente.cabecalho : null,
+    porUnidade: c.porUnidade ?? (manter ? (existente.porUnidade as Record<string, unknown>) : PADRAO.porUnidade),
+    oferta: c.oferta !== undefined ? c.oferta?.trim() || null : existente?.oferta ?? null,
   };
-  const oferta = c.oferta === undefined ? undefined : c.oferta?.trim() || null;
-  const salva = await prisma.disparoCampanha.upsert({
-    where: { slug },
-    create: { slug, ...dados, oferta: oferta ?? null },
-    update: { ...dados, ...(oferta !== undefined ? { oferta } : {}) },
-  });
-  return { ok: true, dados: { id: salva.id, slug: salva.slug, criada: !existente } };
+  const problema = problemaNoModelo(final.textoModelo, final.variaveis) ?? problemaNaOferta(final.oferta);
+  if (problema) return falha(422, problema);
+  const dados = {
+    nome: final.nome,
+    template: final.template ?? null,
+    idioma: final.idioma,
+    textoModelo: final.textoModelo,
+    variaveis: final.variaveis as Prisma.InputJsonValue,
+    cabecalho: final.cabecalho ? (final.cabecalho as Prisma.InputJsonValue) : Prisma.DbNull,
+    porUnidade: final.porUnidade as Prisma.InputJsonValue,
+    oferta: final.oferta,
+  };
+  const salva = await prisma.disparoCampanha.upsert({ where: { slug }, create: { slug, ...dados }, update: dados });
+  const alterados = existente ? CAMPOS_COMPARADOS.filter((k) => !igual(final[k], existente[k])) : [];
+  return { ok: true, dados: { id: salva.id, slug: salva.slug, criada: !existente, alterados } };
 }
 
 export interface CampanhaNaLista {
@@ -67,7 +71,7 @@ export interface CampanhaNaLista {
 }
 
 export function comoItemDaLista(c: DisparoCampanha, ondas: Record<string, number>): CampanhaNaLista {
-  const porUnidade = (c.porUnidade ?? {}) as Record<string, unknown>;
+  const modeloPorUnidade = (c.porUnidade ?? {}) as Record<string, unknown>;
   return {
     slug: c.slug,
     nome: c.nome,
@@ -76,7 +80,7 @@ export function comoItemDaLista(c: DisparoCampanha, ondas: Record<string, number
     textoModelo: c.textoModelo,
     variaveis: Array.isArray(c.variaveis) ? (c.variaveis as unknown[]).map(String) : [],
     temCabecalho: !!c.cabecalho,
-    unidadesComModeloProprio: Object.keys(porUnidade).sort(),
+    unidadesComModeloProprio: Object.keys(modeloPorUnidade).sort(),
     oferta: c.oferta,
     ondas,
   };

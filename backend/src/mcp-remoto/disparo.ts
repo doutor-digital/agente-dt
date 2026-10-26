@@ -22,7 +22,8 @@ import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
 import { OFERTA_MAX, ROTULO_DA_EXCLUSAO, textoFinal, valoresDasVariaveis, type MotivoDeExclusao } from '../lib/disparo/regras.js';
 import type { DadosDoPainel } from '../lib/disparo/painel.js';
-import type { CampanhaEntrada, CampanhaNaLista } from '../lib/disparo/campanha.js';
+import type { CampanhaNaLista } from '../lib/disparo/campanha.js';
+import { camposDaCampanha, slugDaCampanha, type CampanhaEntrada } from '../lib/disparo/campanha-schema.js';
 
 /** Quantas montagens podem estar em andamento ao mesmo tempo: cada uma lê o Kommo e a franquia da unidade, pessoa por pessoa. */
 export const MONTAGENS_SIMULTANEAS = 2;
@@ -48,7 +49,7 @@ export interface FonteDeDisparo {
   campanhas(): Promise<CampanhaNaLista[]>;
   ondasRecentes(): Promise<OndaNaLista[]>;
   montandoAgora(): Promise<number>;
-  salvarCampanha(slug: string, entrada: CampanhaEntrada, opcoes: { soCriar: boolean }): Promise<Resultado<{ id: string; slug: string; criada: boolean }>>;
+  salvarCampanha(slug: string, entrada: CampanhaEntrada, opcoes: { soCriar: boolean; mesclar: boolean }): Promise<Resultado<{ id: string; slug: string; criada: boolean; alterados: string[] }>>;
   /** abre a onda em `montando` e põe a montagem para rodar em segundo plano (minutos) */
   montarOnda(a: { campanha: string; unidade: string; etiqueta: string; por: string }): Promise<Resultado<{ id: string }>>;
   tela(ondaId: string): Promise<DadosDoPainel | null>;
@@ -127,7 +128,8 @@ export function resumoDaOnda(d: DadosDoPainel, base: string | null) {
     ofertaQueASofiaVaiSaber: d.oferta ?? null,
     freios: { janela: `${d.freios.janelaInicio}h às ${d.freios.janelaFim}h${d.freios.soDiasUteis ? ', dias úteis' : ''}`, tetoPorHora: d.freios.tetoPorHora, tetoPor24h: d.freios.tetoPorDia, paraSeMaisDeSair: d.freios.maxSair },
     contagemPorEstado: d.contagem,
-    ...(d.saidas && d.saidas.length ? { pediramSair: d.saidas.map((s) => ({ nome: s.nome, escreveu: s.resposta || '(mensagem não gravada)' })) } : {}),
+    // Só o primeiro nome: o que cada um escreveu é texto livre de paciente e fica no painel do João, não vai para o chat.
+    ...(d.saidas && d.saidas.length ? { pediramSair: { quantos: d.saidas.length, primeirosNomes: d.saidas.map((s) => s.nome), oQueEscreveram: 'só no painel do João' } } : {}),
     ...(d.onda.pausaMotivo ? { motivoDaParada: d.onda.pausaMotivo } : {}),
     painel: link,
     proximoPasso: proximoPasso(d, link),
@@ -144,19 +146,22 @@ export async function listarDisparos(fonte: FonteDeDisparo) {
   };
 }
 
-export interface EntradaDeCampanha extends Omit<CampanhaEntrada, 'idioma' | 'variaveis' | 'porUnidade'> {
-  idioma?: string;
-  variaveis?: string[];
-  porUnidade?: CampanhaEntrada['porUnidade'];
+export type EntradaDeCampanha = CampanhaEntrada & {
   /** só atualiza campanha que já existe se isto vier verdadeiro */
   atualizar?: boolean;
-}
+};
 
+/** Cria; ou, com `atualizar`, muda SÓ o que veio (o que não veio fica como está: modelo por unidade, arte, oferta). */
 export async function salvarDaFerramenta(fonte: FonteDeDisparo, slug: string, e: EntradaDeCampanha) {
-  const { atualizar, ...resto } = e;
-  const r = await fonte.salvarCampanha(slug, { idioma: 'pt_BR', variaveis: [], porUnidade: {}, ...resto }, { soCriar: !atualizar });
+  const { atualizar, ...entrada } = e;
+  const r = await fonte.salvarCampanha(slug, entrada, { soCriar: !atualizar, mesclar: true });
   if (!r.ok) throw new ErroDeEntrada(r.erro);
-  return { campanha: r.dados.slug, criada: r.dados.criada, proximoPasso: 'Monte uma onda com disparo_montar_onda (campanha, unidade, etiqueta). Nada é enviado por cadastrar a campanha.' };
+  return {
+    campanha: r.dados.slug,
+    criada: r.dados.criada,
+    ...(r.dados.criada ? {} : { camposAlterados: r.dados.alterados }),
+    proximoPasso: 'Monte uma onda com disparo_montar_onda (campanha, unidade, etiqueta). Nada é enviado por cadastrar a campanha, e a oferta só vale para uma onda a partir de quando ela é montada (ela é copiada na montagem).',
+  };
 }
 
 export async function montarDaFerramenta(fonte: FonteDeDisparo, quem: string, a: { campanha: string; unidade: string; etiqueta: string }) {
@@ -182,9 +187,6 @@ export async function ondaDaFerramenta(fonte: FonteDeDisparo, ondaId: string) {
   return resumoDaOnda(d, fonte.urlDoPainel());
 }
 
-const variavel = z.string().min(1).max(200);
-const cabecalho = z.object({ tipo: z.enum(['image', 'video', 'document']), link: z.string().url().startsWith('https://'), nomeArquivo: z.string().max(120).optional() });
-
 export function registrarDisparo(server: McpServer, fonte: FonteDeDisparo, quem: string, auditar: Auditar): void {
   server.registerTool(
     'disparo_listar',
@@ -204,27 +206,21 @@ export function registrarDisparo(server: McpServer, fonte: FonteDeDisparo, quem:
       title: 'Cadastrar ou atualizar uma campanha de disparo',
       description:
         'Cria a campanha (modelo aprovado na Meta, texto, variáveis, cabeçalho por unidade e a OFERTA que a Sofia aprende). NÃO envia nada. ' +
-        'Se o slug já existe, recusa, a menos que atualizar=true: confira antes o que ela tem hoje com disparo_listar. ' +
+        'Se o slug já existe, recusa, a menos que atualizar=true: confira antes o que ela tem hoje com disparo_listar. Com atualizar=true muda SÓ os campos que você mandar (o resto fica como está) e devolve quais mudaram. ' +
         '`textoModelo` é o corpo do modelo APROVADO, com {{1}}, {{2}}…; `variaveis` diz o que preenche cada um, em ordem: "primeiroNome", "unidade" ou "texto:<valor>". ' +
         '`porUnidade` traz o nome exato do modelo (o Kommo põe prefixo) e a arte de cada unidade. ' +
         `\`oferta\` é o que a Sofia dirá a quem receber e responder (preço, prazo, condições; até ${OFERTA_MAX} caracteres): ausente mantém a atual, vazio apaga.`,
       inputSchema: {
-        campanha: z.string().regex(/^[a-z0-9][a-z0-9-]{1,80}$/).describe('slug, ex.: outubro-rosa-2026'),
-        nome: z.string().min(2).max(120),
-        template: z.string().min(1).max(512).optional().describe('nome do modelo na Meta quando a unidade não tem o seu em porUnidade'),
-        idioma: z.string().min(2).max(12).optional().describe('padrão pt_BR'),
-        textoModelo: z.string().min(1).max(4096),
-        variaveis: z.array(variavel).max(10).optional(),
-        cabecalho: cabecalho.optional(),
-        porUnidade: z.record(z.object({ template: z.string().min(1).max(512).optional(), cabecalho: cabecalho.nullish() })).optional().describe('{ "<slug da unidade>": { template, cabecalho } }'),
-        oferta: z.string().max(OFERTA_MAX).nullish(),
-        atualizar: z.boolean().optional().describe('true para sobrescrever uma campanha que já existe'),
+        campanha: slugDaCampanha.describe('slug, ex.: outubro-rosa-2026'),
+        // os MESMOS campos da rota PUT (um schema só): mudar um limite muda os dois
+        ...camposDaCampanha,
+        atualizar: z.boolean().optional().describe('true para mudar uma campanha que já existe (só os campos que você mandar)'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     (args) => {
       const { campanha, ...resto } = args;
-      return executar('disparo_campanha_salvar', { campanha, nome: resto.nome, atualizar: resto.atualizar }, auditar, () => salvarDaFerramenta(fonte, campanha, resto as EntradaDeCampanha));
+      return executar('disparo_campanha_salvar', { campanha, nome: resto.nome, atualizar: resto.atualizar }, auditar, () => salvarDaFerramenta(fonte, campanha, resto));
     },
   );
 
@@ -238,7 +234,7 @@ export function registrarDisparo(server: McpServer, fonte: FonteDeDisparo, quem:
         'Tira da lista quem tem consulta futura ou tratamento aberto, quem pediu SAIR, quem já está na campanha e telefone ou nome inválido. ' +
         'Toda unidade nasce em modo seco: aprovada, a onda só grava quem receberia.',
       inputSchema: {
-        campanha: z.string().regex(/^[a-z0-9][a-z0-9-]{1,80}$/).describe('slug da campanha cadastrada'),
+        campanha: slugDaCampanha.describe('slug da campanha cadastrada'),
         unidade: z.string().min(2).max(120).describe('UMA unidade: slug ou nome curto ("canaa")'),
         etiqueta: z.string().min(1).max(200).describe('etiqueta do Kommo que forma a lista, exatamente como está lá'),
       },
