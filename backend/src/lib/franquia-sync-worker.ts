@@ -33,7 +33,7 @@ import {
 } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { franquiaRespeitaEspera } from './espera-retomada.js';
-import { fecharComoPerdido, seguradoPelaTrava } from './parados-worker.js';
+import { fecharOuSegurar, seguradoPelaTrava } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
@@ -173,6 +173,8 @@ export interface ResumoSync {
   camposSdrCartoes?: number;
   /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
   revisados: number;
+  /** PERDIDOs que a trava da perda automática (consulta futura / pagou / Quente / Morno) segurou: o cartão fica onde está, não é erro */
+  travadosPelaPerda?: number;
   /** move em seco: "DE → PARA" → quantos cartões se moveriam nesta varredura (só aparece quando há) */
   simulados?: Record<string, number>;
   /** cartões recusados porque o `⚙ idClient` deles é de OUTRO paciente (só os ids dos cartões, sem dado pessoal) */
@@ -529,6 +531,10 @@ function contarSimulado(resumo: ResumoSync, de: string, para: string): void {
   resumo.simulados = { ...resumo.simulados, [chave]: (resumo.simulados?.[chave] ?? 0) + 1 };
 }
 
+/** PERDIDO segurado pela trava: não relê o cartão no Kommo de novo antes disto (a varredura passa de 15 em 15 min). */
+const TRAVA_REVE_A_CADA_MS = 60 * 60_000;
+const travadoAte = new Map<string, number>();
+
 /** No papel: o movimento é um PERDIDO que a trava da perda automática (consulta futura / pagou / Quente / Morno) seguraria? */
 function perdaTravada(unit: Unit, cartao: KommoLead, para: string, deEtapa: string, automacao: string, agoraEpoch: number): boolean {
   return normalizarNome(para) === normalizarNome(ETAPA.PERDIDO) && seguradoPelaTrava(unit, cartao.id, cartao, deEtapa, true, automacao, agoraEpoch);
@@ -559,10 +565,20 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
   // etiqueta NO_FOLLOW_UP quando o fato é velho demais pra régua, nota no cartão, confere a etapa antes.
   if (normalizarNome(mov.para) === normalizarNome(ETAPA.PERDIDO)) {
     const d: DecisaoParado = { para: 'PERDIDO', regra: mov.motivo, dias: mov.dias ?? 0, motivoPerda: mov.motivoPerda, campo: campoDoPerdidoDaFranquia(mov.motivoPerda), semRegua: mov.semRegua === true };
+    const chaveTrava = `${unit.id}:${leadId}`;
+    if ((travadoAte.get(chaveTrava) ?? 0) > Date.now()) {
+      resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1; // já segurado há pouco: nem relê o cartão no Kommo
+      return;
+    }
     try {
-      if (await fecharComoPerdido(unit, kommo, funis, leadId, deEtapa, d, false)) {
+      const r = await fecharOuSegurar(unit, kommo, funis, leadId, deEtapa, d, false, 'parados', cartao);
+      if (r === 'fechou') {
         resumo.movimentos++;
         logger.info({ unit: unit.slug, leadId, de: deEtapa, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: d.semRegua }, 'franquia-move: cartão fechado como PERDIDO pela jornada');
+      } else if (r === 'travado') {
+        // não é recusa do Kommo nem erro: a trava segurou (já logada em info pelo portão). Fica contado no resumo.
+        resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1;
+        travadoAte.set(chaveTrava, Date.now() + TRAVA_REVE_A_CADA_MS);
       }
     } catch (err) {
       resumo.erros++;
@@ -878,7 +894,8 @@ export function temConsultaFutura(schedules: SpineSchedule[], agoraEpoch: number
   return schedules.some((s) => {
     if (!s.dateAttendanceUtc || !ehConsulta(s)) return false;
     const t = Math.floor(Date.parse(s.dateAttendanceUtc) / 1000);
-    return Number.isFinite(t) && t > agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO);
+    // REMARCADO (41) é consulta viva: a franquia muda a data no próprio registro e o paciente vem naquela data (#113)
+    return Number.isFinite(t) && t > agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO || s.idStatus === SPINE_STATUS.REMARCADO);
   });
 }
 
@@ -1830,7 +1847,7 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
   }
   const antes = resumo.movimentos;
   await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status, lead);
-  if (resumo.movimentos === antes) return; // o Kommo recusou: sem marca, tenta de novo na próxima varredura
+  if (resumo.movimentos === antes) return; // o Kommo recusou (ou a trava da perda segurou): sem marca, tenta de novo na próxima varredura
   await marcarAviso(unit.id, leadId, chave);
   await kommo.addLeadNote(leadId, notaDaDevolucao(etapa, mov.para, mov.gatilho)).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: nota da devolução não foi'),

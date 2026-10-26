@@ -231,10 +231,11 @@ const pausa = () => new Promise((r) => setTimeout(r, PAUSA_ENTRE_ESCRITAS_MS));
  * robô nosso. Devolve `true` se SEGUROU — e aí o chamador não mexe. No papel registra "pularia", que também troca um
  * "moveria" antigo do mesmo cartão (mesma chave) em vez de deixá-lo na tela por 30 dias.
  */
-export function seguradoPelaTrava(unit: Unit, leadId: number, cartao: CartaoParaTrava, deEtapa: string, seco: boolean, automacao: string, agoraEpoch: number = Math.floor(Date.now() / 1000)): boolean {
+export function seguradoPelaTrava(unit: Unit, leadId: number, cartao: CartaoParaTrava, deEtapa: string, seco: boolean, automacao: string, agoraEpoch: number = Math.floor(Date.now() / 1000), nivelDoLog: 'debug' | 'info' = 'debug'): boolean {
   const trava = travaDaPerdaAutomatica(cartao, agoraEpoch);
   if (!trava) return false;
-  logger.debug({ unit: unit.slug, leadId, de: deEtapa, motivo: trava.motivo, seco }, 'parados: PERDIDO seguro pela trava — o cartão fica onde está');
+  // nas varreduras o filtro roda por cartão a cada passada (o resumo da varredura conta); no portão final é decisão rara: info
+  logger[nivelDoLog]({ unit: unit.slug, leadId, de: deEtapa, motivo: trava.motivo, seco }, 'parados: PERDIDO seguro pela trava — o cartão fica onde está');
   if (seco) registrarSimulacao(unit, automacao, { leadId, acao: 'pularia', alvo: ETAPA.PERDIDO, deEtapa, motivo: `trava da perda automática: ${trava.motivo}` });
   return true;
 }
@@ -270,20 +271,38 @@ export async function fecharComoPerdido(
   /** o cartão como a lista o trouxe: no papel a trava o usa em vez de reler no Kommo */
   cartaoDaLista?: KommoLead | null,
 ): Promise<boolean> {
+  return (await fecharOuSegurar(unit, kommo, funis, leadId, etapaAtual, d, seco, automacao, cartaoDaLista)) === 'fechou';
+}
+
+/**
+ * O mesmo fecho, dizendo o que houve: `fechou`, `travado` (a trava da perda automática segurou — NÃO é recusa do Kommo, quem
+ * chama não deve tentar de novo como se fosse erro) ou `nada` (no papel, ou o cartão mudou de etapa no meio).
+ */
+export async function fecharOuSegurar(
+  unit: Unit,
+  kommo: KommoClient,
+  funis: Funis,
+  leadId: number,
+  etapaAtual: string,
+  d: DecisaoParado,
+  seco: boolean,
+  automacao: string = 'parados',
+  cartaoDaLista?: KommoLead | null,
+): Promise<'fechou' | 'travado' | 'nada'> {
   const base = { unit: unit.slug, leadId, de: etapaAtual, regra: d.regra, motivo: d.motivoPerda };
   // Este é o portão de TODO PERDIDO de código (parados, estoques, franquia-move): a trava tem de valer aqui, no papel também.
   if (seco) {
-    if (await segurarNoSeco(unit, kommo, leadId, etapaAtual, automacao, cartaoDaLista)) return false;
+    if (await segurarNoSeco(unit, kommo, leadId, etapaAtual, automacao, cartaoDaLista)) return 'travado';
     logger.info({ ...base, automacao }, 'parados [seco]: moveria pra PERDIDO');
     registrarSimulacao(unit, automacao, { leadId, acao: 'moveria', alvo: ETAPA.PERDIDO, deEtapa: etapaAtual, valor: d.motivoPerda, motivo: d.regra });
-    return false;
+    return 'nada';
   }
   const lead = await aindaNaEtapa(kommo, funis, leadId, etapaAtual);
   if (!lead) {
     logger.info(base, 'parados: cartão mudou de etapa enquanto eu decidia — não mexi');
-    return false;
+    return 'nada';
   }
-  if (seguradoPelaTrava(unit, leadId, lead, etapaAtual, false, automacao)) return false;
+  if (seguradoPelaTrava(unit, leadId, lead, etapaAtual, false, automacao, Math.floor(Date.now() / 1000), 'info')) return 'travado';
   const lossId = d.motivoPerda ? await idDoMotivoDePerda(unit, kommo, d.motivoPerda).catch(() => null) : null;
   // Etiqueta ANTES de mudar o status: o gatilho de PERDIDO (not_equal NO_FOLLOW_UP) lê a condição no evento.
   await etiquetar(unit, kommo, leadId, d.semRegua === true);
@@ -301,7 +320,7 @@ export async function fecharComoPerdido(
   await anotarRoboPos(unit, leadId, ETAPA.PERDIDO).catch(() => undefined);
   await anotar(unit, kommo, leadId, textoDaNota(d, etapaAtual));
   logger.warn({ ...base, lossId }, 'parados: cartão movido pra PERDIDO');
-  return true;
+  return 'fechou';
 }
 
 /** NÃO COMPARECEU → EM ESPERA com motivo "Outro" e retomada marcada. Devolve se moveu. */
@@ -418,7 +437,10 @@ interface Resumo {
   semUnidade?: number;
   /** estoque: cartões travados por CONFLITO_FRANQUIA que ficaram onde estavam (a SDR escolhe o paciente) */
   travadosNoConflito?: number;
-  /** cartões que o robô ia fechar como PERDIDO e a trava (consulta futura / pagou / Quente / Morno) segurou */
+  /**
+   * cartões vencidos pelo prazo do CARTÃO que a trava (consulta futura / pagou / Quente / Morno) segurou. Conta antes da conferência
+   * barata «escreveu na janela / mudou de etapa» (que custa chamada): é o teto do que ela segura, não o que o robô fecharia.
+   */
   travadosPelaPerda?: number;
 }
 
@@ -481,7 +503,8 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
       // trava da perda automática: só pra quem a regra fecharia (a decisão pura, sem chamada) e ANTES da cota — quem fica
       // pra sempre não gasta avaliação. Escrever na janela ou a franquia segurar ainda é avaliado depois, como antes.
       const previa = decidirParado(etapa, { ...cartao, escreveuNaJanela: false, mudouEtapaNaJanela: false }, agora);
-      if (previa && seguradoPelaTrava(unit, lead.id, lead, etapa, seco, 'parados', agora)) {
+      if (!previa) continue; // sem prazo vencido no cartão (a etapa já passou por `candidatoPeloCartao`: defesa)
+      if (seguradoPelaTrava(unit, lead.id, lead, etapa, seco, 'parados', agora)) {
         resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1;
         continue;
       }
@@ -493,7 +516,6 @@ async function varrerConta(unit: Unit, unidadesDaConta: Unit[], dividida?: { kom
         if (contato !== null && (await kommo.contatoEscreveuDesde(contato, desde))) continue;
         if (await kommo.leadMudouEtapaDesde(lead.id, desde)) continue;
         const d = previa; // mesma entrada da prévia lá em cima (as duas chamadas à API já passaram)
-        if (!d) continue;
         resumo.candidatos++;
         const f = await franquiaSegura(unit, lead.id, lead.name ?? null, agora);
         if (f.segura) {

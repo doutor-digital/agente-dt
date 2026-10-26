@@ -9,8 +9,9 @@ import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { ETAPA } from './franquia-move.js';
-import { fecharComoPerdido, varrerEstoques, seguradoPelaTrava, segurarNoSeco } from './parados-worker.js';
-import { aplicarMovimento, type ResumoSync } from './franquia-sync-worker.js';
+import { fecharComoPerdido, fecharOuSegurar, varrerEstoques, seguradoPelaTrava, segurarNoSeco } from './parados-worker.js';
+import { aplicarMovimento, temConsultaFutura, type ResumoSync } from './franquia-sync-worker.js';
+import { SPINE_STATUS } from '../services/spine.service.js';
 import { recarregarAutomacoes } from './automacoes-estado.js';
 import { recusaDaPerdaDaSofia, travaDaPerdaAutomatica, type CartaoParaTrava } from './trava-perda.js';
 import type { Funis } from './franquia-sync-worker.js';
@@ -70,7 +71,7 @@ test('pagou segura: ✓ Consulta pg antecipado = Sim ou a etiqueta «$ · Pagou 
   assert.equal(travaDaPerdaAutomatica(cartaoDe({ tags: ['Não pagou antecipado', 'Pagou no dia'] }), AGORA), null, 'etiqueta parecida não é a do comprovante');
 });
 
-test('consulta futura segura; passada, desmarcada ou que o paciente faltou não', () => {
+test('consulta futura segura (inclusive Remarcado = a franquia mudou a data no registro); passada, desmarcada ou que o paciente faltou não', () => {
   const com = (dias: number, situacao?: string) =>
     cartaoDe({ campos: [campo('◷ Data da Consulta', AGORA + dias * DIA, 5), ...(situacao ? [campo('✓ Situação da consulta', situacao, 6)] : [])] });
   assert.deepEqual(travaDaPerdaAutomatica(com(1, 'Agendado'), AGORA), { motivo: 'consulta futura no cartão' });
@@ -79,8 +80,25 @@ test('consulta futura segura; passada, desmarcada ou que o paciente faltou não'
   assert.equal(travaDaPerdaAutomatica(com(-2, 'Agendado'), AGORA), null, 'já passou');
   assert.equal(travaDaPerdaAutomatica(com(3, 'Desmarcado'), AGORA), null, 'a data que sobrou de uma consulta desmarcada');
   assert.equal(travaDaPerdaAutomatica(com(3, 'Não compareceu'), AGORA), null);
-  assert.equal(travaDaPerdaAutomatica(com(3, 'Remarcado'), AGORA), null, 'a data é do horário antigo; o novo vem como Agendado');
+  assert.deepEqual(travaDaPerdaAutomatica(com(3, 'Remarcado'), AGORA), { motivo: 'consulta futura no cartão' }, 'Remarcado (41): a data do cartão já é a NOVA e o paciente vem');
   assert.equal(travaDaPerdaAutomatica(com(3, 'Atendido'), AGORA), null);
+});
+
+test('pagou só segura quem AINDA NÃO teve a consulta: Atendido e Não compareceu voltam às regras normais', () => {
+  const pagoCom = (situacao?: string) => cartaoDe({ campos: [campo('✓ Consulta pg antecipado', 'Sim', 3), ...(situacao ? [campo('✓ Situação da consulta', situacao, 6)] : [])], tags: ['$ · Pagou antecipado'] });
+  assert.deepEqual(travaDaPerdaAutomatica(pagoCom(), AGORA), { motivo: 'pagou o antecipado' });
+  assert.deepEqual(travaDaPerdaAutomatica(pagoCom('Agendado'), AGORA), { motivo: 'pagou o antecipado' });
+  assert.deepEqual(travaDaPerdaAutomatica(pagoCom('Desmarcado'), AGORA), { motivo: 'pagou o antecipado' }, 'desmarcou mas pagou: ainda vem (remarca)');
+  assert.equal(travaDaPerdaAutomatica(pagoCom('Atendido'), AGORA), null, 'já consultou: vale a regra de 45 dias / atendido sem tratamento');
+  assert.equal(travaDaPerdaAutomatica(pagoCom('Não compareceu'), AGORA), null);
+});
+
+test('temConsultaFutura (a conferência fresca da franquia) também conta Remarcado (41)', () => {
+  const futuro = new Date(Date.now() + 3 * DIA * 1000).toISOString();
+  const agenda = (idStatus: number) => [{ dateAttendanceUtc: futuro, categoryName: 'AVALIAÇÃO', idStatus }] as never;
+  assert.equal(temConsultaFutura(agenda(SPINE_STATUS.AGENDADO), AGORA), true);
+  assert.equal(temConsultaFutura(agenda(SPINE_STATUS.REMARCADO), AGORA), true);
+  assert.equal(temConsultaFutura(agenda(SPINE_STATUS.DESMARCADO), AGORA), false);
 });
 
 test('Canaã #28886952 (pagou, consulta marcada, Quente) — o caso da Suzanne — é travado', () => {
@@ -305,4 +323,51 @@ test('segurarNoSeco usa o cartão da lista (sem reler) e, sem ele, relê; leitur
   assert.equal(leituras, 1);
   const quebrado = { getLead: async () => { throw new Error('429'); } } as unknown as KommoClient;
   assert.equal(await segurarNoSeco(unit, quebrado, 40, ETAPA.ESPERA, 'parados'), false);
+});
+
+test('fecharOuSegurar diz «travado» (não «nada»): é o que impede a franquia-move de tratar como recusa do Kommo', async () => {
+  const unit = unidade();
+  const leads = [leadDe(50, { tags: ['Morno'] }), leadDe(51)];
+  const kommo = kommoFalso(leads, []);
+  assert.equal(await fecharOuSegurar(unit, kommo, funis, 50, ETAPA.ESPERA, decisao, false), 'travado');
+  assert.equal(await fecharOuSegurar(unit, kommo, funis, 51, ETAPA.ESPERA, decisao, false), 'fechou');
+  assert.equal(await fecharOuSegurar(unit, kommo, funis, 52, ETAPA.ESPERA, decisao, true, 'parados', leadDe(52)), 'nada');
+});
+
+test('franquia-move LIGADA: PERDIDO travado conta no resumo, não é erro e não relê o cartão na próxima varredura', async () => {
+  const unit = unidade();
+  const funisPerdido = { ...(funis as object), idDe: (f: string, e: string) => (f === 'COMERCIAL' && e === ETAPA.PERDIDO ? { pipelineId: 1, statusId: 143 } : null) } as unknown as Funis;
+  const escritas: string[] = [];
+  let leituras = 0;
+  const base = kommoFalso([leadDe(60, { tags: ['Quente'] })], escritas);
+  const kommo = { ...base, getLead: async (id: number) => (leituras++, base.getLead(id)) } as unknown as KommoClient;
+  const resumo = { movimentos: 0, erros: 0 } as unknown as ResumoSync;
+  const mov = { funil: 'COMERCIAL' as const, para: ETAPA.PERDIDO, motivo: 'faltou há 40 d e não remarcou', motivoPerda: 'Não remarcou' };
+  await aplicarMovimento(unit, kommo, funisPerdido, 60, mov, resumo, ETAPA.ESPERA);
+  await aplicarMovimento(unit, kommo, funisPerdido, 60, mov, resumo, ETAPA.ESPERA);
+  assert.equal(resumo.travadosPelaPerda, 2);
+  assert.equal(resumo.movimentos, 0);
+  assert.equal(resumo.erros, 0);
+  assert.equal(leituras, 1, 'a 2ª vez nem lê o cartão');
+  assert.deepEqual(escritas, []);
+});
+
+// ── a Sofia confere a FRANQUIA quando o cartão tem consulta (cancelar_consulta não atualiza o cartão) ──
+test('Sofia: consulta no cartão mas a franquia JÁ cancelou → pode fechar; franquia confirma, falha ou não acha o paciente → segura e avisa a equipe', async () => {
+  const comConsulta = leadDe(70, { campos: [campo('◷ Data da Consulta', AGORA + 2 * DIA, 5), campo('✓ Situação da consulta', 'Agendado', 6)] });
+  const kommo = kommoDaSofia([comConsulta]);
+  const franquia = (r: { conhecido: boolean; consultaFutura: boolean } | Error) => async () => {
+    if (r instanceof Error) throw r;
+    return r;
+  };
+  assert.equal(await recusaDaPerdaDaSofia(kommo, 70, { agoraEpoch: AGORA, consultaNaFranquia: franquia({ conhecido: true, consultaFutura: false }) }), null, 'a franquia cancelou: a data do cartão é sobra');
+  const confirma = await recusaDaPerdaDaSofia(kommo, 70, { agoraEpoch: AGORA, consultaNaFranquia: franquia({ conhecido: true, consultaFutura: true }) });
+  assert.equal(confirma?.motivo, 'consulta futura no cartão');
+  assert.equal(confirma?.avisarEquipe, true);
+  assert.equal((await recusaDaPerdaDaSofia(kommo, 70, { agoraEpoch: AGORA, consultaNaFranquia: franquia(new Error('franquia fora')) }))?.avisarEquipe, true);
+  assert.equal((await recusaDaPerdaDaSofia(kommo, 70, { agoraEpoch: AGORA, consultaNaFranquia: franquia({ conhecido: false, consultaFutura: false }) }))?.motivo, 'consulta futura no cartão', 'franquia não acha o paciente: não dá pra provar que morreu');
+  // pagou continua segurando mesmo com a franquia sem consulta
+  const pagoComSobra = leadDe(71, { campos: [campo('◷ Data da Consulta', AGORA + 2 * DIA, 5), campo('✓ Consulta pg antecipado', 'Sim', 3)] });
+  const r = await recusaDaPerdaDaSofia(kommoDaSofia([pagoComSobra]), 71, { agoraEpoch: AGORA, consultaNaFranquia: franquia({ conhecido: true, consultaFutura: false }) });
+  assert.equal(r?.motivo, 'pagou o antecipado');
 });

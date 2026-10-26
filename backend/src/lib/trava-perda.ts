@@ -38,10 +38,15 @@ export interface TravaDaPerda {
 }
 
 /**
- * Situações em que a data do cartão É uma consulta de pé: ainda sem situação gravada, Agendado ou Confirmado. Qualquer outra
- * (Desmarcado, Não compareceu, Remarcado, Atendido…) quer dizer que a data que sobrou no cartão já não é uma consulta futura viva.
+ * Situações em que a data do cartão É uma consulta de pé: ainda sem situação gravada, Agendado, Confirmado ou Remarcado.
+ * Remarcado (41) NÃO é consulta morta: desde o #113 a franquia muda a data no próprio registro e põe 41, e o sincronizador grava
+ * a data NOVA com essa situação — o paciente vem naquela data (mesma regra de `agenda-reconcile.service.ts` e `widget-agenda.ts`).
+ * Desmarcado, Não compareceu e Atendido quer dizer que a data que sobrou no cartão já não é uma consulta futura viva.
  */
-const SITUACOES_COM_CONSULTA_DE_PE = new Set(['', 'agendado', 'confirmado']);
+const SITUACOES_COM_CONSULTA_DE_PE = new Set(['', 'agendado', 'confirmado', 'remarcado']);
+
+/** Já passou pela consulta (compareceu ou faltou): daí em diante o pagamento antecipado não segura mais o cartão. */
+const SITUACOES_DEPOIS_DA_CONSULTA = new Set(['atendido', 'naocompareceu']);
 
 function temTag(c: CartaoParaTrava, ...nomes: string[]): boolean {
   const alvos = new Set(nomes.map(normalizarNome));
@@ -55,7 +60,14 @@ function comConsultaFutura(c: CartaoParaTrava, agoraEpoch: number): boolean {
   return SITUACOES_COM_CONSULTA_DE_PE.has(situacao);
 }
 
+/**
+ * Pagou o antecipado E ainda não teve a consulta. O que o João quer proteger é quem pagou e VAI: depois que a consulta
+ * aconteceu (Atendido) ou o paciente faltou (Não compareceu) valem as regras normais (45 dias sem fechar, atendido sem
+ * tratamento…) — senão o «pagou» nunca venceria e o cartão ficaria aberto para sempre. (Interpretação a confirmar com o João.)
+ */
 function pagou(c: CartaoParaTrava): boolean {
+  const situacao = normalizarNome(String(valorDoCampo(c.custom_fields_values, CAMPOS_SYNC.SITUACAO) ?? ''));
+  if (SITUACOES_DEPOIS_DA_CONSULTA.has(situacao)) return false;
   // `pagouOAntecipado` só aceita "✓ Consulta pg antecipado" (o campo da forma escolhida não prova pagamento);
   // a etiqueta "$ · Pagou antecipado" é a marca que o robô do comprovante põe.
   if (pagouOAntecipado(c.custom_fields_values as Parameters<typeof pagouOAntecipado>[0])) return true;
@@ -73,14 +85,25 @@ function temperatura(c: CartaoParaTrava): 'Quente' | 'Morno' | null {
 /**
  * `null` = o robô pode seguir com o PERDIDO; senão, o motivo de o cartão ficar onde está.
  * `semTemperatura`: só consulta e pagamento seguram (usado pela Sofia, ver `recusaDaPerdaDaSofia`).
+ * `semConsulta`: a franquia (fonte de verdade) disse que a consulta do cartão não existe mais.
  */
-export function travaDaPerdaAutomatica(cartao: CartaoParaTrava, agoraEpoch: number, opcoes: { semTemperatura?: boolean } = {}): TravaDaPerda | null {
-  if (comConsultaFutura(cartao, agoraEpoch)) return { motivo: 'consulta futura no cartão' };
+export function travaDaPerdaAutomatica(cartao: CartaoParaTrava, agoraEpoch: number, opcoes: { semTemperatura?: boolean; semConsulta?: boolean } = {}): TravaDaPerda | null {
+  if (!opcoes.semConsulta && comConsultaFutura(cartao, agoraEpoch)) return { motivo: 'consulta futura no cartão' };
   if (pagou(cartao)) return { motivo: 'pagou o antecipado' };
   if (opcoes.semTemperatura) return null;
   const t = temperatura(cartao);
   if (t) return { motivo: t };
   return null;
+}
+
+/** O que a franquia sabe do paciente agora (é `franquiaDoPaciente` do worker de parados; injetado para não criar ciclo de import). */
+export type ConsultaNaFranquia = (nomeDoCartao: string | null) => Promise<{ conhecido: boolean; consultaFutura: boolean }>;
+
+export interface RecusaDaSofia {
+  motivo: MotivoDaTrava | 'cartão ilegível';
+  texto: string;
+  /** o paciente quer fechar e a trava segurou: a equipe precisa saber (nota/tarefa no cartão). Falha de leitura não avisa. */
+  avisarEquipe: boolean;
 }
 
 /**
@@ -90,19 +113,23 @@ export function travaDaPerdaAutomatica(cartao: CartaoParaTrava, agoraEpoch: numb
  * deixaria quem disse "não me chame" na régua de follow-up; 13 dos 25 fechamentos dela em 8 dias eram Quente/Morno, o João
  * decide. Não conseguiu ler o cartão = recusa: fechar às cegas é o erro caro, esperar a próxima mensagem não custa nada.
  * O 143 do funil TRATAMENTO é TRATAMENTO CANCELADO, não PERDIDO: esse não passa por aqui.
+ *
+ * Consulta no cartão: a FRANQUIA decide. `cancelar_consulta` cancela lá e não atualiza o cartão, então logo depois o cartão ainda
+ * diz Agendado com data futura; se a franquia conhece o paciente e não tem consulta futura, essa data é sobra e não segura.
+ * Franquia fora do ar, ou paciente que ela não acha: segura (não dá para provar que a consulta morreu).
  */
 export async function recusaDaPerdaDaSofia(
   kommo: Pick<KommoClient, 'getLead' | 'listPipelines'>,
   leadId: number,
-  opcoes: { agoraEpoch?: number; pipelineDestino?: number } = {},
-): Promise<{ motivo: MotivoDaTrava | 'cartão ilegível'; texto: string } | null> {
+  opcoes: { agoraEpoch?: number; pipelineDestino?: number; consultaNaFranquia?: ConsultaNaFranquia } = {},
+): Promise<RecusaDaSofia | null> {
   const agoraEpoch = opcoes.agoraEpoch ?? Math.floor(Date.now() / 1000);
-  let cartao: CartaoParaTrava & { pipeline_id?: number };
+  let cartao: CartaoParaTrava & { pipeline_id?: number; name?: string };
   try {
     cartao = await kommo.getLead(leadId);
   } catch (err) {
     logger.warn({ err: String(err), leadId }, 'trava-perda: não consegui ler o cartão para a Sofia fechar como perdido — recusei');
-    return { motivo: 'cartão ilegível', texto: 'não consegui ler o cartão agora para conferir se ele tem consulta ou pagamento. Não feche às cegas: deixe o cartão onde está e tente de novo na próxima mensagem.' };
+    return { motivo: 'cartão ilegível', avisarEquipe: false, texto: 'não consegui ler o cartão agora para conferir se ele tem consulta ou pagamento. Não feche às cegas: deixe o cartão onde está e tente de novo na próxima mensagem.' };
   }
   const pipelineAlvo = opcoes.pipelineDestino ?? cartao.pipeline_id;
   if (pipelineAlvo) {
@@ -113,10 +140,22 @@ export async function recusaDaPerdaDaSofia(
       logger.warn({ err: String(err), leadId }, 'trava-perda: não li os funis — tratei o 143 como PERDIDO');
     }
   }
-  const trava = travaDaPerdaAutomatica(cartao, agoraEpoch, { semTemperatura: true });
+  let trava = travaDaPerdaAutomatica(cartao, agoraEpoch, { semTemperatura: true });
+  if (trava?.motivo === 'consulta futura no cartão' && opcoes.consultaNaFranquia) {
+    try {
+      const f = await opcoes.consultaNaFranquia(cartao.name ?? null);
+      if (f.conhecido && !f.consultaFutura) {
+        logger.info({ leadId }, 'trava-perda: o cartão diz consulta futura mas a franquia não tem — a data é sobra, não seguro');
+        trava = travaDaPerdaAutomatica(cartao, agoraEpoch, { semTemperatura: true, semConsulta: true });
+      }
+    } catch (err) {
+      logger.warn({ err: String(err), leadId }, 'trava-perda: a franquia não respondeu — segurei pela consulta do cartão');
+    }
+  }
   if (!trava) return null;
   return {
     motivo: trava.motivo,
-    texto: `este lead está com «${trava.motivo}» — a Sofia não fecha como perdido quem tem consulta futura ou pagou. Deixe o cartão onde está; se o paciente desistiu de verdade, a equipe registra.`,
+    avisarEquipe: true,
+    texto: `este lead está com «${trava.motivo}» — a Sofia não fecha como perdido quem tem consulta futura ou pagou. Deixe o cartão onde está; a equipe foi avisada por tarefa e registra a desistência, se for o caso.`,
   };
 }

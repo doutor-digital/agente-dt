@@ -399,15 +399,42 @@ export function buildTools({
     return `RECUSADO: ${motivo}`;
   };
 
-  /** Recusa (texto pra IA) quando o pedido levaria a PERDIDO um lead com consulta futura ou pagamento — ver `trava-perda.ts`. */
+  /**
+   * Recusa (texto pra IA) quando o pedido levaria a PERDIDO um lead com consulta futura ou pagamento — ver `trava-perda.ts`.
+   * A consulta do cartão é conferida na FRANQUIA (o `cancelar_consulta` cancela lá e não atualiza o cartão). Quando segura,
+   * deixa UMA tarefa por dia para a equipe: o paciente quis fechar e ninguém ia saber.
+   */
   const recusarPerdaTravada = async (leadId: number, pipelineDestino?: number): Promise<string | null> => {
-    const travada = await recusaDaPerdaDaSofia(kommo, leadId, { pipelineDestino });
+    const travada = await recusaDaPerdaDaSofia(kommo, leadId, {
+      pipelineDestino,
+      consultaNaFranquia: unit
+        ? async (nome) => {
+            const { franquiaDoPaciente } = await import('../lib/parados-worker.js'); // import tardio: evita ciclo agent ↔ workers
+            return franquiaDoPaciente(unit, leadId, nome, Math.floor(Date.now() / 1000));
+          }
+        : undefined,
+    });
     if (!travada) return null;
     await recorder.step({
       kind: 'TOOL_RESULT',
       title: `Recusado: fechar como perdido um lead com «${travada.motivo}»`,
       payload: { leadId, motivo: travada.motivo },
     });
+    if (travada.avisarEquipe && unit) {
+      const chave = 'sofia-perda-recusada';
+      try {
+        if (!(await avisoRecente(unit.id, leadId, chave, 24 * 3600_000))) {
+          await kommo.createTask({
+            leadId,
+            text: `A Sofia tentou fechar este lead como PERDIDO, mas o cartão está com «${travada.motivo}». Confira com o paciente: se ele desistiu, registre (cancele a consulta na franquia, se houver) e feche o cartão.`,
+            completeAt: Math.floor(Date.now() / 1000) + 3600,
+          });
+          await marcarAviso(unit.id, leadId, chave);
+        }
+      } catch (err) {
+        logger.warn({ err: String(err), unit: unit.slug, leadId }, 'trava-perda: não consegui abrir a tarefa para a equipe');
+      }
+    }
     return `RECUSADO: ${travada.texto}`;
   };
 
