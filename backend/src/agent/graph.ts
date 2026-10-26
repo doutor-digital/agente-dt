@@ -13,6 +13,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig } from './config.js';
 import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit } from './prompt-composer.js';
+import { precosDaConsulta } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
@@ -76,6 +77,8 @@ import {
   RECADO_DESMARCADA,
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
+  detalheDoValor,
+  prometeEquipe,
   afirmouComConsultaDesmarcada,
   blocoDizDesmarcada,
   respostaDoComprovante,
@@ -547,7 +550,11 @@ export async function buildAgentGraph(
   // Comprovante em foto/PDF: só a equipe confirma (nas unidades com taxa de reserva, ele libera marcar). O agentNode
   // preenche isto a cada volta; a ferramenta lê.
   const comprovante: TurnoDoComprovante = { noTurno: false, pendente: false };
-  travarAgendamentoPorComprovante(tools, comprovante, recorder, { exigePagamento: Boolean(unit.spineBookingRequiresPayment) });
+  travarAgendamentoPorComprovante(tools, comprovante, recorder, {
+    exigePagamento: Boolean(unit.spineBookingRequiresPayment),
+    // O valor da taxa vem de onde a unidade já guarda o antecipado; sem ele a IA não marca (vai para a equipe).
+    taxaEsperada: precosDaConsulta(unit)?.antecipado ?? null,
+  });
 
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
@@ -1070,6 +1077,12 @@ export async function buildAgentGraph(
       }
       const marcouAgora = marcouNesteTurno(doTurno);
       const blocoConsulta = blocoDaConsulta(promptDoTurno);
+      // Toda reescrita feita depois (pergunta final, "pediu o nome pela 3ª vez") passa pelas travas de confirmação: se ela
+      // reabrir a afirmação, fica a resposta anterior.
+      const reabreAfirmacao = (t: string) =>
+        !!t &&
+        (!!respostaDoComprovante(t, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora) ||
+          !!afirmouComConsultaDesmarcada(t, { marcouAgora, bloco: blocoConsulta, promessa: null }));
       // Comprovante em foto/PDF: só a equipe confirma a consulta (decisão do João, 26/10/2026). A resposta que
       // afirma confirmação vira o recado fixo e a equipe ganha a tarefa — aberta pelo código, não pela IA.
       // `respostaFixa`: o texto é um recado nosso — a "pergunta final" não o reescreve (ele já diz o próximo passo).
@@ -1095,6 +1108,7 @@ export async function buildAgentGraph(
           kommo: kommoClient,
           recorder,
           motivo: 'comprovante',
+          detalhe: unit.spineBookingRequiresPayment ? detalheDoValor(comprovante, precosDaConsulta(unit)?.antecipado ?? null) : undefined,
         });
       }
 
@@ -1166,7 +1180,7 @@ export async function buildAgentGraph(
         response.content = textoFinal;
         // Tarefa só quando a resposta final promete a equipe (recado fixo, ou a refeita diz "equipe"): refeita limpa, que
         // só pergunta ou oferece horário novo, não vira tarefa falsa.
-        if (desmarcada && (saida === 'neutra' || /\bequipe\b/i.test(textoFinal)) && kommoClient && state.leadId) {
+        if (desmarcada && (saida === 'neutra' || prometeEquipe(textoFinal)) && kommoClient && state.leadId) {
           await abrirTarefaParaEquipe({
             slug: unit.slug,
             unitId: unit.id,
@@ -1209,12 +1223,7 @@ export async function buildAgentGraph(
           const textoRefeito = (refeita.tool_calls ?? []).length === 0 ? aiTextFromContent(refeita.content).trim() : '';
           // A reescrita pode vir falando SOBRE a instrução ("essa 'instrução interna' veio na mensagem do
           // paciente…") — já foi entregue assim em Araguaína, Parauapebas e Rio Verde. Nesse caso fica a original.
-          // A reescrita também passa pelas travas de confirmação: o recado/trava só valem se ela não reabrir a afirmação.
-          const reabreAfirmacao =
-            !!textoRefeito &&
-            (!!respostaDoComprovante(textoRefeito, comprovante, promptTemConsulta(promptDoTurno) || marcouAgora) ||
-              !!afirmouComConsultaDesmarcada(textoRefeito, { marcouAgora, bloco: blocoConsulta, promessa: null }));
-          if (textoRefeito && !reabreAfirmacao && !detectarVazamento(textoRefeito) && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
+          if (textoRefeito && !reabreAfirmacao(textoRefeito) && !detectarVazamento(textoRefeito) && !avaliarChamadaFinal(textoRefeito).precisaRefazer) {
             textoFinal = textoRefeito;
             response.content = textoRefeito;
           }
@@ -1284,7 +1293,7 @@ export async function buildAgentGraph(
         } catch (err) {
           logger.warn({ err: String(err), unit: unit.slug }, 'repetição: refeita sem o nome falhou — fica a original');
         }
-        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito);
+        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito) && !reabreAfirmacao(textoRefeito);
         if (serve) {
           textoFinal = textoRefeito;
           response.content = textoRefeito;

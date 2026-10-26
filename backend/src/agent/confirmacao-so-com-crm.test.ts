@@ -6,6 +6,12 @@ import {
   RECADO_COMPROVANTE,
   RECUSA_AGUARDANDO_EQUIPE,
   RECUSA_SEM_COMPROVANTE_DA_TAXA,
+  decidirTrava,
+  detalheDoValor,
+  marcarRecebimento,
+  prometeEquipe,
+  taxaConfere,
+  valorEmReais,
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
   afirmaPagamentoConferido,
@@ -19,7 +25,13 @@ import { detectarPromessa } from '../lib/prometeu-sem-marcar.js';
 import { reservaSemMarcar } from './reserva-sem-marcar.js';
 import { buildAgendarConsulta } from './agenda-tools.js';
 
-const COMPROVANTE = '[imagem do cliente]: COMPROVANTE: Valor: R$ 200,00. Data e hora: 24/10/2026 às 12:41:04. Nome do pagador: Shelly.';
+const AGORA = Date.parse('2026-10-26T15:00:00Z');
+const HORAS = 3_600_000;
+/** O que o webhook grava na fala do paciente: a leitura da visão + o carimbo da hora em que chegou. */
+const comprovanteDe = (valor: string | null, haHoras = 0) =>
+  marcarRecebimento(`[imagem do cliente]: COMPROVANTE: ${valor === null ? 'Data e hora: 24/10/2026.' : `Valor: R$ ${valor}. Data e hora: 24/10/2026 às 12:41:04.`} Nome do pagador: Shelly.`, new Date(AGORA - haHoras * HORAS));
+const COMPROVANTE = comprovanteDe('200,00');
+const T = (falas: string[], consultaNoCrm = false) => turnoDoComprovante(falas, consultaNoCrm, AGORA);
 
 // --- Balsas #28858838 (22/10/2026): a consulta estava desmarcada no CRM e a IA disse que estava tudo certo ---------------
 const BALSAS_22_10 =
@@ -61,28 +73,30 @@ test('afirmaConfirmacao pega o que a IA disse em Balsas e em Canaã, e deixa pas
 
 // --- Canaã #28886952 (24/10/2026): foto do comprovante virou consulta marcada e "confirmado" ---------------------------
 test('turno com foto de comprovante: pendente; texto comum não', () => {
-  assert.deepEqual(turnoDoComprovante([COMPROVANTE]), { noTurno: true, pendente: true });
-  assert.deepEqual(turnoDoComprovante(['Oi', 'Obrigada']), { noTurno: false, pendente: false });
-  assert.equal(turnoDoComprovante(['[arquivo do cliente]: COMPROVANTE: R$ 100']).noTurno, true, 'PDF também');
-  assert.equal(turnoDoComprovante(['[imagem do cliente]: Radiografia de coluna lombar']).noTurno, false, 'exame não é comprovante');
-  assert.equal(turnoDoComprovante(['paguei, olha o comprovante']).noTurno, false, 'dizer que pagou não é a foto lida');
+  assert.deepEqual(T([COMPROVANTE]), { noTurno: true, pendente: true, valores: [200] });
+  assert.equal(T(['Oi', 'Obrigada']).pendente, false);
+  assert.equal(T(['[arquivo do cliente]: COMPROVANTE: Valor: R$ 100,00']).noTurno, true, 'PDF também');
+  assert.equal(T(['[imagem do cliente]: Radiografia de coluna lombar']).noTurno, false, 'exame não é comprovante');
+  assert.equal(T(['paguei, olha o comprovante']).noTurno, false, 'dizer que pagou não é a foto lida');
 });
 
-test('a espera sai do FATO (comprovante nas últimas falas do paciente), não do texto que a IA respondeu', () => {
+test('a espera sai do FATO e tem PRAZO de 24 h pela data da mensagem do comprovante', () => {
   // a IA reescreveu o recado, ou nem afirmou nada: o turno seguinte continua em espera
-  assert.deepEqual(turnoDoComprovante([COMPROVANTE, 'Obrigada']), { noTurno: false, pendente: true });
-  const falas = Array.from({ length: 9 }, (_, i) => `fala ${i}`);
-  assert.equal(turnoDoComprovante([COMPROVANTE, ...falas]).pendente, true, 'ainda nas últimas 10');
-  assert.equal(turnoDoComprovante([COMPROVANTE, ...falas, 'mais uma']).pendente, false, 'saiu da janela: a equipe já devia ter respondido');
+  assert.equal(T([COMPROVANTE, 'Obrigada']).pendente, true);
+  assert.equal(T([comprovanteDe('100,00', 23), 'Obrigada']).pendente, true, '23 h atrás ainda vale');
+  assert.equal(T([comprovanteDe('100,00', 25), 'Obrigada']).pendente, false, '25 h atrás: a equipe já devia ter respondido');
+  assert.equal(T(['[imagem do cliente]: COMPROVANTE: Valor: R$ 100,00 (sem carimbo = mensagem antiga)', 'Obrigada']).pendente, false);
+  // comprovante de meses atrás entre as últimas falas não libera nada
+  assert.equal(T([comprovanteDe('100,00', 24 * 90), 'a', 'b', 'Quero marcar']).pendente, false);
 });
 
 test('a equipe criou a consulta no CRM: a espera acaba (só o comprovante deste turno conta)', () => {
-  assert.deepEqual(turnoDoComprovante([COMPROVANTE, 'Obrigada'], true), { noTurno: false, pendente: false });
-  assert.deepEqual(turnoDoComprovante(['Oi', COMPROVANTE], true), { noTurno: true, pendente: true });
+  assert.equal(T([COMPROVANTE, 'Obrigada'], true).pendente, false);
+  assert.deepEqual(T(['Oi', COMPROVANTE], true), { noTurno: true, pendente: true, valores: [200] });
 });
 
 test('Canaã 24/10: a resposta que confirma vira o recado; a que não confirma segue', () => {
-  const t = turnoDoComprovante([COMPROVANTE]);
+  const t = T([COMPROVANTE]);
   const canaa = 'Recebi seu comprovante certo, Shelly, muito obrigada! 🥰 Sua vaga está garantida.\n\n✅ Agendamento confirmado, Shelly!';
   assert.equal(respostaDoComprovante(canaa, t, false), RECADO_COMPROVANTE);
   assert.equal(respostaDoComprovante(canaa, t, true), null, 'sem falar de pagamento conferido, com a consulta já no CRM, o texto fica');
@@ -90,13 +104,13 @@ test('Canaã 24/10: a resposta que confirma vira o recado; a que não confirma s
 });
 
 test('turno seguinte: se a equipe já criou a consulta no CRM, a IA pode falar dela', () => {
-  const t = turnoDoComprovante([COMPROVANTE, 'Obrigada']);
+  const t = T([COMPROVANTE, 'Obrigada']);
   assert.equal(respostaDoComprovante('Sua consulta está confirmada para segunda, 26/10, às 8h.', t, true), null);
   assert.equal(respostaDoComprovante('Sua consulta está confirmada para segunda, 26/10, às 8h.', t, false), RECADO_COMPROVANTE);
 });
 
 test('sem comprovante nenhum a regra não mexe na resposta', () => {
-  const t = turnoDoComprovante(['Pode ser às 8h']);
+  const t = T(['Pode ser às 8h']);
   assert.equal(respostaDoComprovante('✅ Agendamento confirmado, Shelly!', t, false), null);
 });
 
@@ -115,7 +129,7 @@ function agendarQueMarca(chamadas: unknown[]) {
 test('agendar_consulta recusa no turno do comprovante e não chega na franquia', async () => {
   const chamadas: unknown[] = [];
   const passos: Array<{ title: string }> = [];
-  const turno = turnoDoComprovante([COMPROVANTE]);
+  const turno = T([COMPROVANTE]);
   const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], turno, { step: async (p: never) => void passos.push(p) } as never);
   const r = await tool.func({ hora: '08:00' } as never);
   assert.match(String(r), /^RECUSADO/);
@@ -146,31 +160,70 @@ test('`remarcando` não está no schema que o modelo vê (só remarcar_consulta 
   }).data ?? {}).remarcando, undefined, 'o zod descarta o que o modelo escrever');
 });
 
-test('unidade com taxa de reserva (Boa Vista): sem comprovante da taxa recusa; com comprovante a IA marca', async () => {
+const BV = { exigePagamento: true, taxaEsperada: 100 };
+const rec = (passos: Array<{ title: string }> = []) => ({ step: async (p: never) => void passos.push(p) }) as never;
+
+test('unidade com taxa de reserva (Boa Vista): sem comprovante da taxa recusa; com o valor exato a IA marca', async () => {
   const chamadas: unknown[] = [];
   const passos: Array<{ title: string }> = [];
-  const rec = { step: async (p: never) => void passos.push(p) } as never;
-  const semComprovante = { noTurno: false, pendente: false };
-  const [barrada] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], semComprovante, rec, { exigePagamento: true });
+  const [barrada] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], T(['Quero quinta']), rec(passos), BV);
   assert.equal(await barrada.func({ hora: '09:00' } as never), RECUSA_SEM_COMPROVANTE_DA_TAXA);
   assert.deepEqual(chamadas, []);
   assert.match(passos[0].title, /^agendar_consulta recusado — reserva sem pagamento/, 'o painel de funcionamento conta esse prefixo');
 
-  const comComprovante = turnoDoComprovante([COMPROVANTE]);
-  const [livre] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], comComprovante, rec, { exigePagamento: true });
+  const [livre] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], T([comprovanteDe('100,00')]), rec(), BV);
   assert.match(String(await livre.func({ hora: '09:00' } as never)), /^Consulta marcada/);
   assert.equal(chamadas.length, 1);
 });
 
+test('Boa Vista: só o valor EXATO da taxa marca — R$ 100,00 marca; 50, 350, 1.000, sem valor e ilegível não', async () => {
+  for (const [valor, marca] of [['100,00', true], ['100', true], ['100.00', true], ['50,00', false], ['350,00', false], ['1.000,00', false], ['1.000', false], ['100,50', false], [null, false]] as const) {
+    const chamadas: unknown[] = [];
+    const passos: Array<{ title: string }> = [];
+    const t = T([comprovanteDe(valor)]);
+    const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], t, rec(passos), BV);
+    const r = String(await tool.func({ hora: '09:00' } as never));
+    assert.equal(r.startsWith('Consulta marcada'), marca, `R$ ${valor}`);
+    assert.equal(chamadas.length, marca ? 1 : 0, `R$ ${valor}`);
+    if (!marca) {
+      assert.match(r, /NÃO confirma a taxa de reserva/);
+      assert.match(r, /esperado \(taxa de reserva\): R\$ 100,00/);
+      assert.match(passos[0].title, /^agendar_consulta recusado — reserva sem pagamento/);
+    }
+  }
+});
+
+test('Boa Vista sem a taxa cadastrada na unidade: a IA não marca, vai para a equipe', async () => {
+  const chamadas: unknown[] = [];
+  const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], T([comprovanteDe('100,00')]), rec(), { exigePagamento: true, taxaEsperada: null });
+  assert.match(String(await tool.func({ hora: '09:00' } as never)), /não cadastrado na unidade/);
+  assert.deepEqual(chamadas, []);
+});
+
+test('Boa Vista com dois comprovantes: basta um bater; comprovante velho (25 h) não conta', () => {
+  assert.equal(taxaConfere(T([comprovanteDe('50,00'), comprovanteDe('100,00')]), 100), true);
+  assert.equal(taxaConfere(T([comprovanteDe('100,00', 25), 'Oi, quero marcar']), 100), false);
+  assert.equal(decidirTrava(T([comprovanteDe('100,00', 25), 'Oi, quero marcar']), BV).libera, false);
+});
+
+test('valorEmReais lê o formato brasileiro', () => {
+  assert.equal(valorEmReais('200,00'), 200);
+  assert.equal(valorEmReais('1.000'), 1000);
+  assert.equal(valorEmReais('1.000,50'), 1000.5);
+  assert.equal(valorEmReais('100.00'), 100);
+  assert.equal(valorEmReais('100,'), 100);
+  assert.equal(valorEmReais('abc'), null);
+});
+
 test('nas demais unidades o mesmo comprovante recusa (regra geral: só a equipe confirma)', async () => {
   const chamadas: unknown[] = [];
-  const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], turnoDoComprovante([COMPROVANTE]), { step: async () => undefined } as never, { exigePagamento: false });
+  const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], T([COMPROVANTE]), { step: async () => undefined } as never, { exigePagamento: false });
   assert.match(String(await tool.func({ hora: '09:00' } as never)), /^RECUSADO/);
   assert.deepEqual(chamadas, []);
 });
 
 test('Boa Vista, no turno do comprovante: consulta marcada pode ser dita; "pagamento confirmado" não', () => {
-  const t = turnoDoComprovante([COMPROVANTE]);
+  const t = T([COMPROVANTE]);
   // marcouAgora = a consulta está no CRM → consultaNoCrm true
   assert.equal(respostaDoComprovante('Pronto! Sua consulta está marcada para terça, 27/10, às 8h.', t, true), null);
   assert.equal(respostaDoComprovante('Seu pagamento foi confirmado e sua consulta está marcada para terça.', t, true), RECADO_COMPROVANTE);
@@ -181,7 +234,7 @@ test('o estado do turno é lido na hora da chamada (o grafo o atualiza a cada vo
   const chamadas: unknown[] = [];
   const turno = { noTurno: false, pendente: false };
   const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], turno, { step: async () => undefined } as never);
-  Object.assign(turno, turnoDoComprovante([COMPROVANTE]));
+  Object.assign(turno, T([COMPROVANTE]));
   assert.match(String(await tool.func({ hora: '08:00' } as never)), /^RECUSADO/);
 });
 
@@ -270,8 +323,9 @@ test('desmarcada (modo estrito): "Agendamento confirmado" solto é afirmação; 
 
 test('depois do comprovante a recusa não diz "recebi seu comprovante" a quem pede outra coisa', async () => {
   const chamadas: unknown[] = [];
-  const turno = turnoDoComprovante([COMPROVANTE, 'Quero mudar para sexta']);
-  assert.deepEqual(turno, { noTurno: false, pendente: true });
+  const turno = T([COMPROVANTE, 'Quero mudar para sexta']);
+  assert.equal(turno.noTurno, false);
+  assert.equal(turno.pendente, true);
   const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], turno, { step: async () => undefined } as never);
   assert.equal(await tool.func({ hora: '09:00' } as never), RECUSA_AGUARDANDO_EQUIPE);
   assert.deepEqual(chamadas, []);
@@ -287,7 +341,7 @@ test('rajada de PDFs do mesmo comprovante = uma tarefa (janela de 15 min); desma
 });
 
 test('consulta já no CRM + comprovante: falar da consulta fica; dizer que o pagamento foi conferido vira o recado', () => {
-  const t = turnoDoComprovante([COMPROVANTE]);
+  const t = T([COMPROVANTE]);
   assert.equal(respostaDoComprovante('Recebi! Sua consulta segue marcada para terça, 27/10, às 8h.', t, true), null);
   assert.equal(respostaDoComprovante('Seu pagamento foi confirmado, e sua consulta segue marcada para terça.', t, true), RECADO_COMPROVANTE);
   assert.equal(respostaDoComprovante('Pix aprovado! Te espero terça.', t, true), RECADO_COMPROVANTE);
@@ -304,8 +358,8 @@ const FRASES_DE_EXPLICACAO = [
 ];
 
 test('as 4 frases do sênior não viram "Recebi seu comprovante!" (nem na espera da equipe)', () => {
-  const emEspera = turnoDoComprovante([COMPROVANTE, 'Obrigada']);
-  const semComprovante = turnoDoComprovante(['Oi, tudo bem?']);
+  const emEspera = T([COMPROVANTE, 'Obrigada']);
+  const semComprovante = T(['Oi, tudo bem?']);
   for (const f of FRASES_DE_EXPLICACAO) {
     assert.equal(afirmaPagamentoConferido(f), false, f);
     assert.equal(respostaDoComprovante(f, emEspera, false), null, `espera: ${f}`);
@@ -314,10 +368,10 @@ test('as 4 frases do sênior não viram "Recebi seu comprovante!" (nem na espera
 });
 
 test('"Pagou antecipado" preenchido é informação: na espera da equipe, "pagamento confirmado" vira o recado; fora dela a regra não mexe', () => {
-  const emEspera = turnoDoComprovante([COMPROVANTE, 'Quero marcar quinta']);
+  const emEspera = T([COMPROVANTE, 'Quero marcar quinta']);
   assert.equal(respostaDoComprovante('Seu pagamento está confirmado, vou marcar quinta!', emEspera, false), RECADO_COMPROVANTE);
   assert.equal(respostaDoComprovante('Seu Pix já foi aprovado.', emEspera, true), RECADO_COMPROVANTE);
-  const fora = turnoDoComprovante(['Quero marcar quinta']);
+  const fora = T(['Quero marcar quinta']);
   assert.equal(respostaDoComprovante('Seu pagamento está confirmado, vou marcar quinta!', fora, false), null, 'sem comprovante na conversa não vira "recebi seu comprovante"');
   assert.equal(respostaDoComprovante('Tenho quinta às 9h. Quer pagar o Pix antecipado ou na clínica?', emEspera, false), null);
 });
@@ -337,4 +391,55 @@ test('a trava só mexe na instância REGISTRADA de agendar_consulta: o agendar i
   travarAgendamentoPorComprovante([registrada], { noTurno: true, pendente: true }, ctx.recorder, { exigePagamento: true });
   assert.notEqual(registrada, internaDoRemarcar);
   assert.equal(internaDoRemarcar.func, funcAntes, 'remarcar em unidade com taxa de reserva não passa pela trava');
+});
+
+// --- achados do sênior (#127, 2ª revisão) --------------------------------------------------------------------------------
+test('na espera da equipe, conversa comum não vira "Recebi seu comprovante!" (endereço, "tudo certo", "nos vemos")', () => {
+  const espera = T([COMPROVANTE, 'Qual o endereço?']);
+  for (const f of [
+    'Fica na Rua X, 120, no centro. Te espero lá!',
+    'Por nada, Maria! Tudo certo 😊',
+    'Nos vemos em breve!',
+    'Fica na Rua X, 120. A equipe já te responde sobre o horário.',
+  ]) assert.equal(respostaDoComprovante(f, espera, false), null, f);
+  // as FORTES continuam trocadas, na espera
+  assert.equal(respostaDoComprovante('Sua consulta está confirmada para quinta às 10h.', espera, false), RECADO_COMPROVANTE);
+  // e no turno do comprovante as soltas ainda valem
+  assert.equal(respostaDoComprovante('Recebi! Tudo certo, te espero quinta às 10h.', T([COMPROVANTE]), false), RECADO_COMPROVANTE);
+});
+
+test('"pagamento confirmado" em Boa Vista depois de marcar: pega as formas que escapavam, deixa a explicação', () => {
+  const t = T([comprovanteDe('100,00')]);
+  for (const f of [
+    'Seu pagamento já foi conferido pela equipe ✅, sua consulta segue marcada.',
+    'Pagamento recebido e confirmado! Sua consulta está marcada pra quinta às 10h.',
+    'Recebi! O Pix já caiu aqui, sua consulta está marcada pra quinta às 10h.',
+    'O dinheiro já caiu. Sua consulta está marcada pra quinta às 10h.',
+    'Pagamento confirmado! Sua consulta está marcada pra quinta às 10h.',
+  ]) assert.equal(respostaDoComprovante(f, t, true), RECADO_COMPROVANTE, f);
+  for (const f of [
+    'O pagamento é confirmado pela equipe da clínica, tá bom?',
+    'Depois do Pix, o comprovante é conferido pela equipe e a consulta é confirmada.',
+    'O pagamento antecipado confirmado garante sua vaga.',
+    'Sua consulta está marcada pra quinta às 10h. A mensagem caiu pela metade, pode repetir?',
+  ]) assert.equal(respostaDoComprovante(f, t, true), null, f);
+});
+
+test('desmarcada: a tarefa só abre quando a resposta PROMETE a equipe', () => {
+  assert.equal(prometeEquipe('Vou conferir com a recepção e já te retorno.'), true);
+  assert.equal(prometeEquipe('A equipe confirma em até 1 hora, aqui na conversa.'), true);
+  assert.equal(prometeEquipe('Deixa eu conferir direitinho o seu horário com a equipe — ela te confirma aqui mesmo.'), true);
+  assert.equal(prometeEquipe('Nossa equipe tem horário na quinta, às 9h. Fica bom pra você?'), false);
+  assert.equal(prometeEquipe('Tenho quinta às 9h ou sexta às 14h. Qual prefere?'), false);
+});
+
+test('a tarefa de Boa Vista leva o valor lido e o esperado', async () => {
+  const tarefas: Array<Record<string, unknown>> = [];
+  const kommo = { getLead: async () => ({ name: 'Joana' }), createTask: async (a: Record<string, unknown>) => (tarefas.push(a), { id: 9 }) };
+  await abrirTarefaParaEquipe({
+    slug: 'doutor-hernia-boa-vista', unitId: 'u', leadId: 1, kommo: kommo as never, recorder: rec(), motivo: 'comprovante',
+    dedupe: { avisoRecente: async () => false, marcarAviso: async () => undefined } as never,
+    detalhe: detalheDoValor(T([comprovanteDe('50,00')]), 100),
+  });
+  assert.match(String(tarefas[0].text), /valor lido: R\$ 50,00; esperado \(taxa de reserva\): R\$ 100,00/);
 });
