@@ -508,12 +508,11 @@ export async function montarPrefixoAnthropic(unit: Unit, recorder: TraceRecorder
 
 /** Os turnos em que a desistência já foi tratada (o nó do agente roda de novo depois de cada ferramenta). */
 const desistenciasTratadas = new Set<string>();
-function desistenciaJaTratada(traceId: string | null | undefined): boolean {
-  if (!traceId) return false;
-  if (desistenciasTratadas.has(traceId)) return true;
+const desistenciaJaTratada = (traceId: string | null | undefined): boolean => !!traceId && desistenciasTratadas.has(traceId);
+function marcarDesistenciaTratada(traceId: string | null | undefined): void {
+  if (!traceId) return;
   if (desistenciasTratadas.size > 2000) desistenciasTratadas.clear();
   desistenciasTratadas.add(traceId);
-  return false;
 }
 
 export async function buildAgentGraph(
@@ -647,6 +646,7 @@ export async function buildAgentGraph(
       const desistencia = pacienteDesistiu(falas);
       const acao = acaoDaDesistencia(desistencia);
       if (desistencia && acao !== 'nada') {
+        marcarDesistenciaTratada(recorder.traceId);
         void agirNaDesistencia({ unit, leadId: state.leadId, acao, trecho: acao === 'oferta' ? desistencia.trecho : desistencia.resposta || desistencia.trecho, kommo: () => kommoClient });
       }
     }
