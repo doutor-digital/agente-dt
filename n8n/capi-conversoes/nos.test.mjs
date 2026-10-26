@@ -230,3 +230,11 @@ test('montar: Status com o clique alguns segundos depois do event_time sobe o ev
   assert.equal(o._aprovado, true);
   assert.equal(o.corpo.data[0].event_time, AGORA - 10);
 });
+
+test('montar: clique poucos segundos "no futuro" (relógios diferentes) nunca gera event_time no futuro', () => {
+  const [a] = montar(comCfg({ status: STATUS_ON }), [ev({ ctwa_clid: null, event_time: AGORA - 5, clique_em: AGORA + 120 })]);
+  assert.equal(a._aprovado, true);
+  assert.ok(a.corpo.data[0].event_time <= AGORA + 1);
+  const [b] = montar(CFG, [ev({ via: 'pediu_horario', event_time: AGORA - 5, clique_em: AGORA + 120 })]);
+  assert.ok(b.corpo.data[0].event_time <= AGORA + 1);
+});

@@ -83,7 +83,7 @@ for (const item of $input.all()) {
       saida.push({ json: { ...d, _aprovado: false, motivo: 'status_fora_7d_do_clique' } });
       continue;
     }
-    if (eventTime < cliqueEm) eventTime = cliqueEm;   // o evento não pode ser anterior ao clique que o atribui
+    if (eventTime < cliqueEm) eventTime = Math.min(cliqueEm, agora);   // o evento não pode ser anterior ao clique que o atribui (nem estar no futuro)
   }
 
   // ── "pediu horário": o Lead só conta até 7 dias depois do clique ─────────────────────────────────
@@ -92,7 +92,7 @@ for (const item of $input.all()) {
       saida.push({ json: { ...d, _aprovado: false, motivo: 'pediu_sem_hora_do_clique' } });
       continue;
     }
-    if (eventTime < cliqueEm) eventTime = cliqueEm;   // o pedido não pode ser anterior ao clique
+    if (eventTime < cliqueEm) eventTime = Math.min(cliqueEm, agora);   // o pedido não pode ser anterior ao clique (nem estar no futuro)
     if (eventTime - cliqueEm > JANELA) {
       saida.push({ json: { ...d, _aprovado: false, motivo: 'pediu_fora_7d_do_clique' } });
       continue;
