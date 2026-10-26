@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { alertaLimiteDeTaxa, alertaNumeroRestrito, alertaSemAndar } from './disparo/alerta.js';
+import { alertaLimiteDeTaxa, alertaNumeroRestrito, alertaPausaPorFalhas, alertaPausaPorSair, alertaSemAndar } from './disparo/alerta.js';
+import { env } from './env.js';
 import { depoisDaRodada } from './disparo-worker.js';
 import { portoReal } from './disparo/porto.js';
 import { enviarTelegram } from './telegram.js';
@@ -65,4 +66,24 @@ test('porto real: avisar usa o Telegram (enviarTelegram, com Telegram de mentira
   const lanca = portoReal(new Map(), async () => { throw new Error('boom'); });
   await lanca.avisar('x');
   assert.equal(pedidos.length, 1);
+});
+
+test('texto da pausa por SAIR: quantos pediram, o link do painel e o que fazer; NÃO tem texto de paciente; só o João retoma', () => {
+  const m = alertaPausaPorSair({ unidade: 'doutor-hernia-canaa', ondas: [{ id: 'o1', painel: 'https://x/api/disparo/ondas/o1/painel' }, { id: 'o2', painel: null }], sairam: 4, limite: 3 });
+  for (const t of ['doutor-hernia-canaa', '4 pessoas pediram SAIR', 'acima de 3', 'o1 — https://x/api/disparo/ondas/o1/painel', '\no2', 'Só você retoma']) assert.ok(m.includes(t), t);
+  assert.ok(!/escreveu:|"/.test(m), 'sem citação de mensagem de paciente');
+  const f = alertaPausaPorFalhas({ unidade: 'doutor-hernia-canaa', ondas: [], falhas: 5 });
+  for (const t of ['5 envios seguidos recusados', '(nenhuma aprovada)', 'O que fazer']) assert.ok(f.includes(t), t);
+});
+
+test('porto real: o link do painel usa a origem de MCP_URL_PUBLICA; sem ela, sem link', () => {
+  const antes = env.MCP_URL_PUBLICA;
+  try {
+    (env as { MCP_URL_PUBLICA?: string }).MCP_URL_PUBLICA = 'https://agente-vps.exemplo.com/mcp';
+    assert.equal(portoReal(new Map()).linkDoPainel('o 1'), 'https://agente-vps.exemplo.com/api/disparo/ondas/o%201/painel');
+    (env as { MCP_URL_PUBLICA?: string }).MCP_URL_PUBLICA = undefined;
+    assert.equal(portoReal(new Map()).linkDoPainel('o1'), null);
+  } finally {
+    (env as { MCP_URL_PUBLICA?: string }).MCP_URL_PUBLICA = antes;
+  }
 });

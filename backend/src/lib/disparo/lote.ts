@@ -6,7 +6,7 @@
  * É essa única porta que o teste do modo seco tranca: com o modo `seco`, `enviar` e `espelhar` NUNCA rodam.
  */
 import { falhasSeguidasDemais, dentroDaJanela, passouDoLimiteDeSair, vagas, type Freios } from './freios.js';
-import { alertaLimiteDeTaxa, alertaNumeroRestrito } from './alerta.js';
+import { alertaLimiteDeTaxa, alertaNumeroRestrito, alertaPausaPorFalhas, alertaPausaPorSair, type OndaParaAvisar } from './alerta.js';
 import { textoFinal, valoresDasVariaveis, type SituacaoNaFranquia } from './regras.js';
 import type { Definicao } from './modelo.js';
 import type { ResultadoDoTemplate } from '../whatsapp-meta.js';
@@ -88,6 +88,8 @@ export interface Porto {
   limiteDeTaxa(unitId: string, houve: boolean): Promise<number>;
   /** Avisa o João (Telegram). Não lança: aviso que falha não derruba a rodada. */
   avisar(texto: string): Promise<void>;
+  /** O link do painel da onda (null se o endereço público do servidor não está configurado). */
+  linkDoPainel(ondaId: string): string | null;
   log(nivel: 'info' | 'warn' | 'error', dados: Record<string, unknown>, msg: string): void;
 }
 
@@ -233,6 +235,8 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
 /** Depois de tantas pessoas adiadas na mesma rodada o problema não é a pessoa: é a franquia, o banco ou o Kommo. */
 const ADIADOS_PARA_PARAR = 3;
 
+const paraAvisar = (porto: Porto, os: ReadonlyArray<{ id: string }>): OndaParaAvisar[] => os.map((o) => ({ id: o.id, painel: porto.linkDoPainel(o.id) }));
+
 /** Uma rodada de uma unidade, com as ondas APROVADAS dela em ordem de criação. */
 export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, ondasDaUnidade: OndaNoLote[]): Promise<ResumoDaRodada> {
   let ondas = ondasDaUnidade;
@@ -264,6 +268,8 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
     if (passouDoLimiteDeSair(sairam - base, f)) {
       await porto.pausarOndas(u.id, campanhaId, `${sairam} pessoas responderam SAIR (limite ${f.maxSair}${base > 0 ? `, além das ${base} que o João já viu` : ''}): unidade parada até o João decidir`, 'sair');
       porto.log('warn', { unit: u.slug, campanhaId, sairam }, 'disparo: unidade PARADA por excesso de SAIR');
+      // Só o João retoma: ele precisa saber. Quantos pediram e o link; o que escreveram fica no painel.
+      await porto.avisar(alertaPausaPorSair({ unidade: u.slug, ondas: paraAvisar(porto, ondas.filter((o) => o.campanhaId === campanhaId)), sairam, limite: f.maxSair })).catch(() => undefined);
       ativas = ativas.filter((o) => o.campanhaId !== campanhaId);
     }
   }
@@ -275,6 +281,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
   if (real && falhasSeguidasDemais(await porto.ultimosResultados(u.id, f.falhasSeguidas, desdeAprovacao), f)) {
     await porto.pausarOndas(u.id, null, `${f.falhasSeguidas} envios seguidos falharam na Meta: confira o token e a qualidade do número`, 'falhas');
     porto.log('warn', { unit: u.slug }, 'disparo: unidade PARADA por falhas seguidas');
+    await porto.avisar(alertaPausaPorFalhas({ unidade: u.slug, ondas: paraAvisar(porto, ativas), falhas: f.falhasSeguidas })).catch(() => undefined);
     return { ...r, parou: 'parada por falhas seguidas' };
   }
 
@@ -358,6 +365,7 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
       if (real && seguidas >= f.falhasSeguidas) {
         await porto.pausarOndas(u.id, null, `${f.falhasSeguidas} envios seguidos falharam na Meta: confira o token e a qualidade do número`, 'falhas');
         porto.log('warn', { unit: u.slug }, 'disparo: unidade PARADA por falhas seguidas (no meio da rodada)');
+        await porto.avisar(alertaPausaPorFalhas({ unidade: u.slug, ondas: paraAvisar(porto, ativas), falhas: f.falhasSeguidas })).catch(() => undefined);
         return { ...r, parou: 'parada por falhas seguidas' };
       }
       await porto.dormir(f.pausaMs);

@@ -37,3 +37,33 @@ export function alertaSemAndar(d: { unidade: string; rodadas: number; adiados: n
     'O que fazer: ver se a franquia (API Spine) e o banco estão no ar. Quando voltarem, o disparo anda sozinho; se uma pessoa específica nunca confere, cancelar a onda e montar de novo.',
   ].join('\n');
 }
+
+/** Uma onda e o link do painel dela (null se o endereço público não está configurado). */
+export interface OndaParaAvisar {
+  id: string;
+  painel: string | null;
+}
+
+const listaDeOndas = (os: readonly OndaParaAvisar[]) => (os.length ? os.map((o) => (o.painel ? `${o.id} — ${o.painel}` : o.id)).join('\n') : '(nenhuma aprovada)');
+
+/**
+ * Pausa por SAIR: só o João retoma. Diz QUANTOS pediram e dá o link do painel (onde ele vê quem pediu e retoma); o que o
+ * paciente escreveu NÃO vai no Telegram.
+ */
+export function alertaPausaPorSair(d: { unidade: string; ondas: readonly OndaParaAvisar[]; sairam: number; limite: number }): string {
+  return [
+    `✋ Disparo PAUSADO por SAIR — ${d.unidade}`,
+    `Motivo: ${d.sairam} pessoas pediram SAIR depois de receber a campanha (o freio para acima de ${d.limite}).`,
+    `Onda(s) e painel:\n${listaDeOndas(d.ondas)}`,
+    'O que fazer: abrir o painel, ver quem pediu e o que escreveu, e decidir. Só você retoma (botão Retomar, logado no console); se não for retomar, cancelar a onda.',
+  ].join('\n');
+}
+
+export function alertaPausaPorFalhas(d: { unidade: string; ondas: readonly OndaParaAvisar[]; falhas: number }): string {
+  return [
+    `⚠️ Disparo PAUSADO por falhas — ${d.unidade}`,
+    `Motivo: ${d.falhas} envios seguidos recusados pela Meta (token vencido? número bloqueado? modelo reprovado?).`,
+    `Onda(s) e painel:\n${listaDeOndas(d.ondas)}`,
+    'O que fazer: conferir o token e a qualidade do número na Meta e o motivo gravado nas pessoas (painel). Resolvido o problema, cancelar a onda e montar de novo (esta pausa não tem botão Retomar).',
+  ].join('\n');
+}

@@ -6,6 +6,7 @@ import type { Prisma, Unit } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { logger } from '../logger.js';
 import { enviarTelegram } from '../telegram.js';
+import { env } from '../env.js';
 import { createKommoClient } from '../../services/kommo.service.js';
 import { credenciaisDaUnidade, enviarTemplate } from '../whatsapp-meta.js';
 import { conferenciaDaFranquia } from './franquia.js';
@@ -203,6 +204,14 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>, avisarJoao: (text
       }
       const linha = await prisma.disparoLimite.upsert({ where: { unitId }, create: { unitId, seguidas: 1 }, update: { seguidas: { increment: 1 } } });
       return linha.seguidas;
+    },
+
+    linkDoPainel: (ondaId) => {
+      try {
+        return env.MCP_URL_PUBLICA ? `${new URL(env.MCP_URL_PUBLICA).origin}/api/disparo/ondas/${encodeURIComponent(ondaId)}/painel` : null;
+      } catch {
+        return null;
+      }
     },
 
     // O Telegram do João (o mesmo canal do sinal de alerta). `enviarTelegram` nunca lança; o catch é só cinto e suspensório.

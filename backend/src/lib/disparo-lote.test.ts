@@ -64,6 +64,7 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
     },
     espelhar: async (d, texto) => void chamadas.espelhar.push(`${d.kommoLeadId}|${texto}`),
     avisar: async (texto) => void chamadas.avisos.push(texto),
+    linkDoPainel: (id) => `https://painel.teste/api/disparo/ondas/${id}/painel`,
     limiteDeTaxa: async (_u, houve) => (limitesSeguidos = houve ? limitesSeguidos + 1 : 0),
     dormir: async () => undefined,
     log: (n, _d, msg) => void chamadas.logs.push(n === 'error' ? `ERRO ${msg}` : msg),
@@ -575,6 +576,57 @@ test('TELEGRAM: limite de taxa avisa só na rodada que PAUSA (a 10ª), não nas 
 
 test('TELEGRAM: nada de aviso nas pausas que não pedem o João agora nem em rodada normal', async () => {
   const t = montar({ modo: 'ligado', quantos: 3, teste: null });
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual(t.chamadas.avisos, []);
+});
+
+test('TELEGRAM: pausa por SAIR avisa UMA vez com quantos pediram e o link do painel (só o João retoma); sem texto de paciente', async () => {
+  const t = montar({ modo: 'ligado', quantos: 5, teste: null, sairam: 4 });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.match(r.parou ?? '', /parada por SAIR/);
+  assert.equal(t.chamadas.avisos.length, 1);
+  const msg = t.chamadas.avisos[0]!;
+  for (const trecho of ['doutor-hernia-canaa', '4 pessoas pediram SAIR', 'acima de 3', 'o1 — https://painel.teste/api/disparo/ondas/o1/painel', 'Só você retoma']) assert.ok(msg.includes(trecho), trecho);
+  assert.deepEqual(t.chamadas.causas, ['sair']);
+  // em seco o freio também pausa, e o João também precisa saber
+  const seco = montar({ modo: 'seco', quantos: 5, sairam: 4 });
+  await rodarUnidade(seco.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(seco.chamadas.avisos.length, 1);
+});
+
+test('TELEGRAM: SAIR abaixo do limite não avisa; aviso que falha não desfaz a pausa', async () => {
+  const t = montar({ modo: 'ligado', quantos: 3, teste: null, sairam: 3 });
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.deepEqual(t.chamadas.avisos, []);
+  const q = montar({ modo: 'ligado', quantos: 3, teste: null, sairam: 4 });
+  q.porto.avisar = async () => { throw new Error('telegram fora'); };
+  await rodarUnidade(q.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(q.chamadas.pausas.length, 1);
+});
+
+test('TELEGRAM: onda retomada que passa do limite de NOVOS SAIR avisa com o total e o limite', async () => {
+  const t = montar({ modo: 'ligado', quantos: 3, teste: null, sairam: 8 });
+  await rodarUnidade(t.porto, sem_pausa, UNIDADE, [{ ...ONDA, sairAceitos: 4 }]);
+  assert.equal(t.chamadas.avisos.length, 1);
+  assert.match(t.chamadas.avisos[0]!, /8 pessoas pediram SAIR/);
+});
+
+test('TELEGRAM: pausa por falhas seguidas avisa UMA vez (no começo da rodada e no meio dela)', async () => {
+  const antes = montar({ modo: 'ligado', quantos: 3, teste: null, ultimos: ['falhou', 'falhou', 'falhou', 'falhou', 'falhou'] });
+  await rodarUnidade(antes.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(antes.chamadas.avisos.length, 1);
+  for (const trecho of ['doutor-hernia-canaa', '5 envios seguidos recusados', 'https://painel.teste/api/disparo/ondas/o1/painel', 'O que fazer']) assert.ok(antes.chamadas.avisos[0]!.includes(trecho), trecho);
+  assert.deepEqual(antes.chamadas.causas, ['falhas']);
+
+  const recusa: ResultadoDoTemplate = { ok: false, wamid: null, detalhe: { error: { code: 131026, message: 'x' } }, incerto: false };
+  const meio = montar({ modo: 'ligado', quantos: 10, teste: null, envio: () => recusa });
+  await rodarUnidade(meio.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(meio.chamadas.pausas.length, 1);
+  assert.equal(meio.chamadas.avisos.length, 1, 'uma só, mesmo com 10 pessoas na fila');
+});
+
+test('TELEGRAM: rodada normal e poucas falhas não avisam ninguém', async () => {
+  const t = montar({ modo: 'ligado', quantos: 3, teste: null, ultimos: ['falhou', 'falhou', 'enviado', 'falhou', 'falhou'] });
   await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
   assert.deepEqual(t.chamadas.avisos, []);
 });
