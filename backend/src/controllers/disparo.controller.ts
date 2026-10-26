@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { abrirOnda, aprovarOnda, cancelarOnda, concluirMontagem, retomarOnda } from '../lib/disparo/onda.js';
-import { montarPainelDaOnda, telefoneMascarado } from '../lib/disparo/painel.js';
+import { montarPainelDaOnda, semTextoDeSair, telefoneMascarado } from '../lib/disparo/painel.js';
 import { dadosDaTela } from '../lib/disparo/tela.js';
 import { campanhaSchema, salvarCampanha, slugDaCampanha } from '../lib/disparo/campanha.js';
 
@@ -58,21 +58,23 @@ export async function disparoOndasListarHandler(_req: Request, res: Response): P
 }
 
 export async function disparoOndaJsonHandler(req: Request, res: Response): Promise<void> {
-  const dados = await dadosDaTela(String(req.params.id), req.user?.email);
-  if (!dados) {
+  const lida = await dadosDaTela(String(req.params.id), req.user?.email);
+  if (!lida) {
     res.status(404).json({ ok: false, erro: 'onda não encontrada' });
     return;
   }
+  // Sem sessão (chave de serviço) o texto do SAIR não sai: só o João, logado, lê o que o paciente escreveu.
+  const dados = req.user ? lida : semTextoDeSair(lida);
   res.json({ ok: true, ...dados, amostra: dados.amostra.map((a) => ({ nome: a.nome, telefone: telefoneMascarado(a.telefone) })), listaDeTeste: dados.listaDeTeste?.map(telefoneMascarado) ?? null });
 }
 
 export async function disparoOndaPainelHandler(req: Request, res: Response): Promise<void> {
-  const dados = await dadosDaTela(String(req.params.id), req.user?.email);
-  if (!dados) {
+  const lida = await dadosDaTela(String(req.params.id), req.user?.email);
+  if (!lida) {
     res.status(404).type('text/plain').send('onda não encontrada');
     return;
   }
-  res.set('Cache-Control', 'no-store').type('html').send(montarPainelDaOnda(dados));
+  res.set('Cache-Control', 'no-store').type('html').send(montarPainelDaOnda(req.user ? lida : semTextoDeSair(lida)));
 }
 
 /** A ÚNICA rota que libera envio. Sessão de super-admin + e-mail em DISPARO_APROVADORES; a chave de serviço nunca chega aqui. */

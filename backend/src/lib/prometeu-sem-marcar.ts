@@ -238,6 +238,17 @@ export function quandoCitado(texto: string): string | null {
 }
 
 /**
+ * "Olha, pra eu te garantir certo: sua consulta está marcada pra hoje" — o "pra eu te garantir certo:" é o
+ * tique de abertura, não a condição da afirmação que vem depois dos dois-pontos. Sem tirá-lo, o CONDICAO
+ * calava a frase inteira (Balsas, 22/10/2026: a consulta já estava desmarcada e a IA disse "tudo certo").
+ */
+const PREAMBULO = /\b(?:pra|para) eu (?:te )?(?:garantir|confirmar|ter certeza)\b[^:.!?,]{0,25}:\s*/;
+
+function tirarPreambulo(n: string): string {
+  return n.replace(PREAMBULO, ' ');
+}
+
+/**
  * O trecho afirma consulta marcada? Devolve a forma que casou, ou null.
  *
  * Cada filtro olha só o pedaço que importa (achado da revisão de 07/10): a negação, a oração do verbo
@@ -247,7 +258,7 @@ export function quandoCitado(texto: string): string | null {
  * sua consulta está marcada" afirma, "deixo reservado amanhã: posso às 7h30 ou às 16h30" não).
  */
 export function afirma(trecho: string, seguinte: string | null): string | null {
-  const n = normalizar(trecho);
+  const n = tirarPreambulo(normalizar(trecho));
   if (!n || ehPergunta(n) || NAO_E_PROMESSA.test(n)) return null;
 
   const quandoAqui = TEM_QUANDO.test(n);

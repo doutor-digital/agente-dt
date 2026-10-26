@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FREIOS_PADRAO, type Freios } from './disparo/freios.js';
-import { rodarUnidade, motivoDaMeta, type DadosDeGravacao, type Destino, type Modo, type OndaNoLote, type Porto, type UnidadeNoLote } from './disparo/lote.js';
+import { rodarUnidade, rodadasSemAndar, motivoDaMeta, type DadosDeGravacao, type Destino, type Modo, type OndaNoLote, type Porto, type UnidadeNoLote } from './disparo/lote.js';
 import type { ResultadoDoTemplate } from './whatsapp-meta.js';
 import type { SituacaoNaFranquia } from './disparo/regras.js';
 
@@ -10,7 +10,7 @@ const AGORA = new Date(Date.UTC(2026, 9, 21, 12, 30));
 const MADRUGADA = new Date(Date.UTC(2026, 9, 21, 6, 0));
 const sem_pausa: Freios = { ...FREIOS_PADRAO, pausaMs: 0 };
 const UNIDADE: UnidadeNoLote = { id: 'u1', slug: 'doutor-hernia-canaa', nome: 'Doutor Hérnia Canaã', fuso: 'America/Sao_Paulo' };
-const ONDA: OndaNoLote = { id: 'o1', campanhaId: 'c1', aprovadaEm: new Date(Date.UTC(2026, 9, 20, 15)), template: 'canaa_resgate', idioma: 'pt_BR', textoModelo: 'Oi {{1}}!', variaveis: ['primeiroNome'], cabecalho: null };
+const ONDA: OndaNoLote = { id: 'o1', campanhaId: 'c1', aprovadaEm: new Date(Date.UTC(2026, 9, 20, 15)), aprovadaModo: 'ligado', template: 'canaa_resgate', idioma: 'pt_BR', textoModelo: 'Oi {{1}}!', variaveis: ['primeiroNome'], cabecalho: null };
 
 function destino(n: number): Destino {
   return { id: `d${n}`, ondaId: 'o1', campanhaId: 'c1', unitId: 'u1', telefone: `55639910210${String(n).padStart(2, '0')}`, chave: `6391021${String(n).padStart(3, '0')}`, nome: `Pessoa${n}`, nomeCompleto: `Pessoa${n} Silva`, kommoLeadId: 1000 + n };
@@ -22,8 +22,11 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
   const todos = Array.from({ length: opcoes.quantos ?? 3 }, (_, i) => destino(i + 1));
   todos.forEach((d) => estados.set(d.id, { estado: 'pendente' }));
   let consultasDeOnda = 0;
+  // A fila do banco é por "última atualização" (quem foi adiado vai para o fim): a falsa imita isso.
+  const toque = new Map<string, number>();
+  let relogio = 0;
   const desdeDasFalhas: Date[] = [];
-  const chamadas = { desdeDasFalhas, enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], causas: [] as Array<string | undefined>, concluidas: [] as string[], logs: [] as string[] };
+  const chamadas = { desdeDasFalhas, enviar: [] as string[], espelhar: [] as string[], pausas: [] as string[], causas: [] as Array<string | undefined>, devolvidas: [] as string[], concluidas: [] as string[], logs: [] as string[] };
   const porto: Porto = {
     agora: () => opcoes.agora ?? AGORA,
     modoDaUnidade: () => opcoes.modo,
@@ -32,6 +35,7 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
     pendentes: async (_o, modo, limite, so) =>
       todos
         .filter((d) => estados.get(d.id)!.estado === 'pendente' && (modo === 'ligado' || !estados.get(d.id)!.simuladoEm) && (!so || so.has(d.telefone)))
+        .sort((a, b) => (toque.get(a.id) ?? 0) - (toque.get(b.id) ?? 0))
         .slice(0, limite),
     sobram: async (_o, modo, so) => todos.filter((d) => estados.get(d.id)!.estado === 'pendente' && (modo === 'ligado' || !estados.get(d.id)!.simuladoEm) && (!so || so.has(d.telefone))).length,
     quantosSairam: async () => opcoes.sairam ?? 0,
@@ -46,9 +50,10 @@ function montar(opcoes: { modo: Modo; quantos?: number; agora?: Date; franquia?:
       Object.assign(estados.get(id)!, { estado: 'enviando', enviadoEm: AGORA });
       return true;
     },
-    gravar: async (id, dados) => void Object.assign(estados.get(id)!, dados),
+    gravar: async (id, dados) => void (Object.assign(estados.get(id)!, dados), toque.set(id, ++relogio)),
     pausarOndas: async (_u, _c, motivo, causa) => void (chamadas.pausas.push(motivo), chamadas.causas.push(causa)),
     pausarOnda: async (_id, motivo, causa) => void (chamadas.pausas.push(motivo), chamadas.causas.push(causa)),
+    devolverParaAprovacao: async (id, motivo) => void chamadas.devolvidas.push(`${id}|${motivo}`),
     concluirOnda: async (id) => void chamadas.concluidas.push(id),
     pediuSair: async (d) => opcoes.pediuSair?.(d) ?? false,
     franquia: async (d) => opcoes.franquia?.(d) ?? 'livre',
@@ -383,4 +388,89 @@ test('uma onda NOVA na mesma campanha não herda a folga de outra retomada (vale
   await rodarUnidade(t.porto, sem_pausa, UNIDADE, [{ ...ONDA, sairAceitos: 4 }, { ...ONDA, id: 'o2', sairAceitos: 0 }]);
   assert.equal(t.chamadas.pausas.length, 1);
   assert.deepEqual(t.chamadas.causas, ['sair']);
+});
+
+// ── o que o sênior achou no #126 (26/10) ──────────────────────────────────────────────────────────────────
+
+test('3 pessoas que a franquia não deixa conferir NÃO travam a onda: vão para o fim da fila e as outras 17 andam (antes: 0 de 20 em 5 rodadas)', async () => {
+  const presas = new Set(['d1', 'd2', 'd3']);
+  const t = montar({ modo: 'seco', quantos: 20, franquia: (d) => (presas.has(d.id) ? 'indisponivel' : 'livre') });
+  let receberia = 0;
+  for (let rodada = 1; rodada <= 5; rodada++) receberia += (await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA])).receberia;
+  assert.equal(receberia, 17, 'as 17 que dá para conferir foram todas processadas');
+  for (const id of presas) assert.equal(t.estados.get(id)!.estado, 'pendente', 'e as 3 continuam na fila, não descartadas');
+  assert.match(String(t.estados.get('d1')!.motivo), /^adiado: a franquia não respondeu/, 'com o motivo gravado');
+});
+
+test('adiado em LIGADO também vai para o fim e fica registrado; ninguém é enviado sem conferência', async () => {
+  const t = montar({ modo: 'ligado', quantos: 8, teste: null, franquia: (d) => (d.id === 'd1' ? 'indisponivel' : 'livre') });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(r.adiados, 1);
+  assert.equal(r.mandou, 7);
+  assert.ok(!t.chamadas.enviar.includes(destino(1).telefone));
+  assert.equal(t.estados.get('d1')!.estado, 'pendente');
+});
+
+test('rodadasSemAndar: conta rodadas só com gente adiada; zera quando alguém anda; rodada que não tentou ninguém não conta nem zera', () => {
+  const vazia = { adiados: 0, mandou: 0, receberia: 0, falhou: 0, saiu: 0, descartados: 0 };
+  assert.equal(rodadasSemAndar(0, { ...vazia, adiados: 3 }), 1);
+  assert.equal(rodadasSemAndar(4, { ...vazia, adiados: 3 }), 5);
+  assert.equal(rodadasSemAndar(4, vazia), 4, 'fora da janela: nem conta nem zera');
+  for (const campo of ['mandou', 'receberia', 'falhou', 'saiu', 'descartados'] as const) assert.equal(rodadasSemAndar(4, { ...vazia, adiados: 2, [campo]: 1 }), 0, campo);
+});
+
+test('APROVAÇÃO DADA EM SECO NÃO VALE PARA ENVIO REAL: ao ligar a unidade a onda volta para aprovação e nada sai', async () => {
+  for (const modo of ['seco', 'desligado', null]) {
+    const t = montar({ modo: 'ligado', quantos: 3, teste: null });
+    const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [{ ...ONDA, aprovadaModo: modo }]);
+    assert.deepEqual(t.chamadas.enviar, [], `aprovada em ${modo}: nada é enviado`);
+    assert.deepEqual(t.chamadas.espelhar, []);
+    assert.equal(r.mandou, 0);
+    assert.equal(t.chamadas.devolvidas.length, 1, `aprovada em ${modo}: devolvida para o João aprovar de novo`);
+    assert.match(t.chamadas.devolvidas[0]!, /^o1\|.*LIGADA.*aprove de novo/);
+    assert.match(r.parou ?? '', /aprovação dada em modo seco/);
+  }
+});
+
+test('aprovada com a unidade LIGADA continua valendo; em SECO a modalidade da aprovação não importa (o seco nunca manda)', async () => {
+  const ligada = montar({ modo: 'ligado', quantos: 2, teste: null });
+  assert.equal((await rodarUnidade(ligada.porto, sem_pausa, UNIDADE, [ONDA])).mandou, 2);
+  assert.deepEqual(ligada.chamadas.devolvidas, []);
+  const seca = montar({ modo: 'seco', quantos: 2 });
+  const r = await rodarUnidade(seca.porto, sem_pausa, UNIDADE, [{ ...ONDA, aprovadaModo: 'seco' }]);
+  assert.equal(r.receberia, 2);
+  assert.deepEqual(seca.chamadas.devolvidas, [], 'seco não devolve nada');
+});
+
+test('na mesma unidade, só a onda aprovada em seco volta; a aprovada ligada segue', async () => {
+  const t = montar({ modo: 'ligado', quantos: 2, teste: null });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [{ ...ONDA, id: 'o-seco', aprovadaModo: 'seco' }, ONDA]);
+  assert.equal(t.chamadas.devolvidas.length, 1);
+  assert.match(t.chamadas.devolvidas[0]!, /^o-seco\|/);
+  assert.equal(r.mandou, 2);
+});
+
+test('LIMITE DE TAXA da Meta = tentar de novo depois: a pessoa fica na fila, não é falha, não pausa a unidade e a rodada acaba', async () => {
+  const limite: ResultadoDoTemplate = { ok: false, wamid: null, detalhe: { error: { code: 130429, message: 'Rate limit hit' } }, incerto: false, limiteDeTaxa: true };
+  const t = montar({ modo: 'ligado', quantos: 5, teste: null, envio: () => limite });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.match(r.parou ?? '', /limite de taxa/);
+  assert.equal(t.chamadas.enviar.length, 1, 'parou na primeira, sem martelar a Meta');
+  assert.equal(r.falhou, 0, 'não conta como falha');
+  assert.deepEqual(t.chamadas.pausas, [], 'nem pausa a unidade');
+  const d1 = t.estados.get('d1')!;
+  assert.equal(d1.estado, 'pendente');
+  assert.equal(d1.enviadoEm, null, 'e não conta no teto: nada saiu');
+  assert.match(String(d1.motivo), /limite de taxa da Meta: tento de novo depois/);
+  // depois a Meta libera e a mesma pessoa sai
+  const livre = montar({ modo: 'ligado', quantos: 1, teste: null });
+  assert.equal((await rodarUnidade(livre.porto, sem_pausa, UNIDADE, [ONDA])).mandou, 1);
+});
+
+test('uma recusa DEFINITIVA da Meta (não é limite de taxa) continua sendo falha', async () => {
+  const recusa: ResultadoDoTemplate = { ok: false, wamid: null, detalhe: { error: { code: 131026, message: 'Message undeliverable' } }, incerto: false };
+  const t = montar({ modo: 'ligado', quantos: 1, teste: null, envio: () => recusa });
+  const r = await rodarUnidade(t.porto, sem_pausa, UNIDADE, [ONDA]);
+  assert.equal(r.falhou, 1);
+  assert.equal(t.estados.get('d1')!.estado, 'falhou');
 });

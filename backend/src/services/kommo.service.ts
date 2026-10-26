@@ -21,7 +21,8 @@ export interface KommoCustomFieldValue {
   field_name?: string;
   field_code?: string | null;
   field_type?: string;
-  values: Array<{ value: unknown }>;
+  /** `enum_id` só vem nos campos de lista (select, radiobutton, multiselect): é a opção que o cartão guarda. */
+  values: Array<{ value: unknown; enum_id?: number | null }>;
 }
 
 export interface KommoLead {

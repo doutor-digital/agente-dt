@@ -215,7 +215,6 @@ export function aplicarGuardrail(text: string, unit: Unit, extras: ExtrasDoGuard
   //    um "R$ 250 no Pix antecipado" continua sob a trava (é o erro que ela existe para pegar).
   // Qualquer outro número da mesma mensagem segue sob as travas.
   const catalogo = parseAmounts(unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio);
-  const daOferta = parseAmounts(extras.ofertaDaCampanha);
   const exatosDaOferta = valoresExatos(extras.ofertaDaCampanha);
   const escondidos: string[] = [];
   const escondeOferta = (t: string): string =>
@@ -259,7 +258,8 @@ export function aplicarGuardrail(text: string, unit: Unit, extras: ExtrasDoGuard
     }
   }
 
-  texto = mostraOferta(texto);
+  // O corte de catálogo abaixo também enxerga o texto SEM os R$ da oferta (escondidos): assim "R$ 150,99" ao lado de um "R$ 150" da
+  // oferta é julgado pelo que é (outro valor), e o "R$ 150" legítimo não é trocado junto.
 
   // O catálogo é a ficha (com a tolerância de parcela de sempre). Os valores da oferta valem EXATOS, sem a conta de parcelas
   // (R$ 150 de oferta não aprova R$ 50 nem R$ 75), e só enquanto a ficha tem valores: unidade sem R$ na ficha não ganha
@@ -267,18 +267,18 @@ export function aplicarGuardrail(text: string, unit: Unit, extras: ExtrasDoGuard
   const aprovados = catalogo;
   if (aprovados.size > 0) {
     const foraDoCatalogo = [...parseAmounts(texto)].filter(
-      (v) => v >= 20 && !amountApproved(v, aprovados) && !daOferta.has(v),
+      (v) => v >= 20 && !amountApproved(v, aprovados),
     );
     if (foraDoCatalogo.length > 0) {
       const corrigido = corrigirValores(texto, aprovados, foraDoCatalogo);
       if (corrigido) {
         triggered.push('preco_corrigido:' + corrigido.trocas.join('/'));
-        return { text: corrigido.texto, triggered, rewritten: true };
+        return { text: mostraOferta(corrigido.texto), triggered, rewritten: true };
       }
       triggered.push('preco:' + foraDoCatalogo.join('/'));
       return { text: FALLBACK_PRECO, triggered, rewritten: true };
     }
   }
 
-  return { text: texto, triggered, rewritten: reescreveu };
+  return { text: mostraOferta(texto), triggered, rewritten: reescreveu };
 }

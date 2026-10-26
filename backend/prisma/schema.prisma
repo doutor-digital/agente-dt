@@ -2223,6 +2223,8 @@ model DisparoOnda {
   impressao    String
   aprovadaPor  String?   @map("aprovada_por")
   aprovadaEm   DateTime? @map("aprovada_em")
+  /// em que modo a unidade estava quando o João aprovou: 'ligado' | 'seco' | 'desligado'. Aprovação dada em seco NÃO vale para envio real.
+  aprovadaModo String?   @map("aprovada_modo")
   pausaMotivo  String?   @map("pausa_motivo")
   /// por que parou, em palavra de máquina: 'sair' | 'falhas' | 'vencida'. Só a pausa por SAIR pode ser retomada.
   pausaCausa   String?   @map("pausa_causa")

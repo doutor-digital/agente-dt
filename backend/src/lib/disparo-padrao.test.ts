@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import type { Unit } from '@prisma/client';
 import { AUTOMACOES, automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { _semearParaTeste } from './automacoes-estado.js';
-import { AUTOMACAO_DISPARO, listaDeTesteDoAmbiente, portoReal } from './disparo/porto.js';
+import { AUTOMACAO_DISPARO, avisosDaListaDeTeste, listaDeTesteDoAmbiente, portoReal } from './disparo/porto.js';
 import { temAgendamentoFuturo } from './disparo/franquia.js';
 
 beforeEach(() => {
@@ -31,12 +31,32 @@ test('só liga quem o João (ou o .env) pôs na lista; o resto continua seco', (
   assert.equal(porto.modoDaUnidade('doutor-hernia-canaa'), 'desligado', 'a tela manda mais que o .env');
 });
 
-test('lista de teste: fail-closed — ausente, vazia ou lixo = NINGUÉM; só "*" solta todos', () => {
-  assert.equal(listaDeTesteDoAmbiente({} as NodeJS.ProcessEnv)!.size, 0, 'ausente: ninguém');
-  assert.equal(listaDeTesteDoAmbiente({ DISPARO_LISTA_DE_TESTE: '  ' } as NodeJS.ProcessEnv)!.size, 0);
-  assert.equal(listaDeTesteDoAmbiente({ DISPARO_LISTA_DE_TESTE: 'abc, 123' } as NodeJS.ProcessEnv)!.size, 0, 'lixo: ninguém');
-  assert.deepEqual([...listaDeTesteDoAmbiente({ DISPARO_LISTA_DE_TESTE: '(63) 99102-1043' } as NodeJS.ProcessEnv)!], ['5563991021043']);
-  assert.equal(listaDeTesteDoAmbiente({ DISPARO_LISTA_DE_TESTE: '*' } as NodeJS.ProcessEnv), null, '* = todos, deliberado');
+const env = (v: string) => ({ DISPARO_LISTA_DE_TESTE: v }) as NodeJS.ProcessEnv;
+const CANAA = 'doutor-hernia-canaa';
+
+test('lista de teste é POR UNIDADE e fail-closed: ausente, vazia, lixo ou outra unidade = NINGUÉM', () => {
+  assert.equal(listaDeTesteDoAmbiente(CANAA, {} as NodeJS.ProcessEnv)!.size, 0, 'ausente: ninguém');
+  assert.equal(listaDeTesteDoAmbiente(CANAA, env('  '))!.size, 0);
+  assert.equal(listaDeTesteDoAmbiente(CANAA, env(`${CANAA}=abc, 123`))!.size, 0, 'lixo: ninguém');
+  assert.deepEqual([...listaDeTesteDoAmbiente(CANAA, env(`${CANAA}=(63) 99102-1043`))!], ['5563991021043']);
+  assert.deepEqual([...listaDeTesteDoAmbiente(CANAA, env(`${CANAA}=5563991021043,5563991021044`))!].sort(), ['5563991021043', '5563991021044']);
+  assert.equal(listaDeTesteDoAmbiente('doutor-hernia-balsas', env(`${CANAA}=5563991021043`))!.size, 0, 'a lista de uma unidade não vale para a outra');
+});
+
+test('"*" solta só a unidade que o tem; nunca é global', () => {
+  const v = env(`${CANAA}=*;doutor-hernia-balsas=5563991021043`);
+  assert.equal(listaDeTesteDoAmbiente(CANAA, v), null, 'slug=* = todos DAQUELA unidade');
+  assert.deepEqual([...listaDeTesteDoAmbiente('doutor-hernia-balsas', v)!], ['5563991021043']);
+  assert.equal(listaDeTesteDoAmbiente('doutor-hernia-marabá', v)!.size, 0, 'unidade que não aparece: ninguém');
+  assert.equal(listaDeTesteDoAmbiente(CANAA, env('*'))!.size, 0, '"*" sozinho (o formato global antigo) NÃO solta ninguém');
+  assert.equal(listaDeTesteDoAmbiente(CANAA, env('5563991021043'))!.size, 0, 'telefone sem unidade (formato antigo) não vale');
+});
+
+test('o log de subida avisa a entrada no formato antigo, que não vale', () => {
+  assert.deepEqual(avisosDaListaDeTeste(env(`${CANAA}=5563991021043;doutor-hernia-balsas=*`)), []);
+  assert.equal(avisosDaListaDeTeste(env('*')).length, 1);
+  assert.match(avisosDaListaDeTeste(env(`5563991021043;${CANAA}=*`))[0]!, /não vale/);
+  assert.deepEqual(avisosDaListaDeTeste({} as NodeJS.ProcessEnv), []);
 });
 
 test('agendamento futuro: marcado/confirmado/remarcado barram; passado e desmarcado não', () => {

@@ -3,13 +3,13 @@
  * (que devolve o resumo e o link, nunca o botão de liberar).
  */
 import { prisma } from '../prisma.js';
-import { estadoDaAutomacao } from '../automacoes-estado.js';
 import { conferirModeloNaMeta, podeAprovar } from './modelo.js';
 import { definicaoDaOnda } from './onda.js';
 import { freiosDoAmbiente } from './freios.js';
 import { quemPediuSair } from './saidas.js';
 import { diasDaOferta } from './oferta.js';
-import { AUTOMACAO_DISPARO, listaDeTesteDoAmbiente } from './porto.js';
+import { listaDeTesteDoAmbiente } from './porto.js';
+import { modoDaUnidade } from './modo.js';
 import type { DadosDoPainel } from './painel.js';
 
 export async function dadosDaTela(ondaId: string, email: string | null | undefined): Promise<DadosDoPainel | null> {
@@ -26,7 +26,7 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
   ]);
   // Só pergunta à Meta enquanto ainda dá para aprovar ou retomar: é a prova que destrava (ou trava) o botão.
   const conferenciaMeta = onda.estado === 'montada' || retomavel ? await conferirModeloNaMeta(onda.unit, definicaoDaOnda(onda)) : null;
-  const teste = listaDeTesteDoAmbiente();
+  const teste = listaDeTesteDoAmbiente(onda.unit.slug);
   return {
     onda: {
       ...definicaoDaOnda(onda),
@@ -47,7 +47,7 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
     oferta: onda.oferta,
     ofertaDias: diasDaOferta(),
     unidade: { slug: onda.unit.slug, nome: onda.unit.name },
-    modo: estadoDaAutomacao(onda.unit.slug, AUTOMACAO_DISPARO, process.env.DISPARO_CAMPANHA_SLUGS),
+    modo: modoDaUnidade(onda.unit.slug),
     freios: freiosDoAmbiente(),
     resumo: (onda.resumo ?? {}) as DadosDoPainel['resumo'],
     contagem: Object.fromEntries(porEstado.map((g) => [g.estado, g._count])),

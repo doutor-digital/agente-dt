@@ -48,12 +48,28 @@ function somarDias(dia: string, n: number): string {
   return new Date(new Date(`${dia}T12:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
 }
 
-async function lerRedeDaAgenda(unit: Unit, agora: Date): Promise<RedeDaAgenda | null> {
+/** As chamadas à franquia. Em produção são as de verdade; o teste troca por uma franquia de mentira. */
+export interface FranquiaPorta {
+  searchSchedules: typeof searchSchedules;
+  searchTreatments: typeof searchTreatments;
+  getClient: typeof getClient;
+  idClientDoLead: typeof idClientDoLead;
+}
+const FRANQUIA_DE_VERDADE: FranquiaPorta = { searchSchedules, searchTreatments, getClient, idClientDoLead };
+
+async function lerRedeDaAgenda(unit: Unit, agora: Date, f: FranquiaPorta): Promise<RedeDaAgenda | null> {
   const hoje = dataLocalISO(agora, fusoDaUnidade(unit));
-  const ag = await searchSchedules(unit, { initialDate: hoje, endDate: somarDias(hoje, DIAS_A_FRENTE) });
-  const tr = await searchTreatments(unit, {});
+  // 100 por página (o máximo): com 50 o teto de 40 páginas corta em 2.000 agendamentos e a leitura parece completa.
+  const ag = await f.searchSchedules(unit, { initialDate: hoje, endDate: somarDias(hoje, DIAS_A_FRENTE), rowsPerPage: 100 });
+  const tr = await f.searchTreatments(unit, {});
   if (!ag.ok || !ag.data || !tr.ok || !tr.data) {
     logger.warn({ unit: unit.slug, agenda: ag.error, tratamentos: tr.error }, 'disparo: não consegui ler a agenda da franquia');
+    return null;
+  }
+  // Leitura cortada no teto de páginas = lista incompleta: quem estaria depois do corte passaria como "livre" (foi assim
+  // que o Outubro Rosa mandou resgate a quem já tinha consulta). Incompleta é INDISPONÍVEL, e indisponível não manda.
+  if (ag.data.truncada || tr.data.truncada) {
+    logger.warn({ unit: unit.slug, agenda: !!ag.data.truncada, tratamentos: !!tr.data.truncada }, 'disparo: a leitura da franquia foi cortada no teto de páginas — tratada como indisponível');
     return null;
   }
   const epoch = Math.floor(agora.getTime() / 1000);
@@ -76,7 +92,7 @@ export interface PessoaParaConferir {
  * A conferência de uma unidade. A leitura em bloco da agenda acontece UMA vez por conferência e é guardada;
  * cada pessoa custa só a busca do paciente.
  */
-export function conferenciaDaFranquia(unit: Unit, agora: () => Date = () => new Date()): (p: PessoaParaConferir) => Promise<SituacaoNaFranquia> {
+export function conferenciaDaFranquia(unit: Unit, agora: () => Date = () => new Date(), f: FranquiaPorta = FRANQUIA_DE_VERDADE): (p: PessoaParaConferir) => Promise<SituacaoNaFranquia> {
   let rede: { lidaEm: number; falhou: boolean; dados: Promise<RedeDaAgenda | null> } | null = null;
   return async (p) => {
     if (!unit.spineToken) return 'indisponivel';
@@ -84,16 +100,16 @@ export function conferenciaDaFranquia(unit: Unit, agora: () => Date = () => new 
       // Leitura boa vale pela conferência inteira. Falha vale só por 1 minuto: um soluço da franquia não pode
       // condenar a lista toda, e tentar de novo a cada pessoa seria martelar uma franquia que já está fora.
       if (!rede || (rede.falhou && Date.now() - rede.lidaEm > FALHA_VALE_MS)) {
-        const atual = { lidaEm: Date.now(), falhou: false, dados: lerRedeDaAgenda(unit, agora()) };
+        const atual = { lidaEm: Date.now(), falhou: false, dados: lerRedeDaAgenda(unit, agora(), f) };
         atual.dados.then((b) => void (atual.falhou = !b), () => void (atual.falhou = true));
         rede = atual;
       }
       const bloco = await rede.dados;
       if (!bloco) return 'indisponivel';
 
-      const idClient = p.leadId ? await idClientDoLead(unit, p.leadId, p.nomeCompleto, { fone: p.telefone }) : null;
+      const idClient = p.leadId ? await f.idClientDoLead(unit, p.leadId, p.nomeCompleto, { fone: p.telefone }) : null;
       if (idClient) {
-        const r = await getClient(unit, idClient);
+        const r = await f.getClient(unit, idClient);
         if (!r.ok) return 'indisponivel';
         const ficha = r.data?.client;
         if (ficha) {

@@ -238,6 +238,20 @@ export interface ResultadoDoTemplate {
    * sozinho: reenviar um envio incerto é mandar duas vezes para o paciente.
    */
   incerto: boolean;
+  /**
+   * `true` quando a Meta (ou o proxy) pediu para ESPERAR: limite de taxa. Não é recusa da pessoa nem do modelo e a mensagem
+   * não entrou: quem chama deixa a pessoa na fila e tenta de novo depois, sem contar como falha.
+   */
+  limiteDeTaxa?: boolean;
+}
+
+/** Códigos de erro da Graph API que são "devagar": throughput (130429), par/spam (131048, 131056), limites da API (4, 80007, 80008). */
+const CODIGOS_DE_LIMITE_DE_TAXA = new Set([4, 80007, 80008, 130429, 131048, 131056]);
+
+/** A resposta pede para esperar? Status 429 ou um dos códigos de limite de taxa da Meta. */
+export function ehLimiteDeTaxa(status: number, detalhe: unknown): boolean {
+  const codigo = (detalhe as { error?: { code?: unknown } } | null)?.error?.code;
+  return status === 429 || (typeof codigo === 'number' && CODIGOS_DE_LIMITE_DE_TAXA.has(codigo));
 }
 
 const TIMEOUT_DO_TEMPLATE_MS = 20_000;
@@ -260,6 +274,8 @@ export async function enviarTemplate(
     const { ok, detalhe, status } = await chamar(cred, montarCorpoDoTemplate(t), { timeoutMs: opcoes.timeoutMs ?? TIMEOUT_DO_TEMPLATE_MS });
     const wamid = (detalhe as { messages?: Array<{ id?: string }> } | null)?.messages?.[0]?.id ?? null;
     if (ok && !wamid) return { ok: false, wamid: null, detalhe, incerto: true };
+    // Limite de taxa: a mensagem NÃO entrou (a Meta ou o proxy recusou antes). Esperar e tentar de novo, não recusar.
+    if (!ok && ehLimiteDeTaxa(status, detalhe)) return { ok: false, wamid: null, detalhe, incerto: false, limiteDeTaxa: true };
     // Definitiva só a recusa que a PRÓPRIA Meta assina (corpo com `error.code`) e que não é 5xx. Gateway, proxy, HTML,
     // 408/502…: não dá para saber se a mensagem entrou, e incerto nunca é reenviado.
     const recusaDaMeta = typeof (detalhe as { error?: { code?: unknown } } | null)?.error?.code === 'number';

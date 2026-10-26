@@ -90,3 +90,15 @@ test('enviarTemplate: telefone fora do formato nem chega na rede', async () => {
   assert.equal(r.ok, false);
   assert.equal(pedidos.length, 0);
 });
+
+// ── limite de taxa (decisão do sênior, 26/10): esperar, não recusar ──
+import { ehLimiteDeTaxa } from './whatsapp-meta.js';
+
+test('limite de taxa: 429 ou os códigos de "devagar" da Meta; recusa de verdade e erro qualquer não', () => {
+  assert.equal(ehLimiteDeTaxa(429, null), true, '429, mesmo vindo de proxy sem corpo da Meta');
+  assert.equal(ehLimiteDeTaxa(429, '<html>'), true);
+  for (const code of [130429, 131048, 131056, 80007, 80008, 4]) assert.equal(ehLimiteDeTaxa(400, { error: { code } }), true, String(code));
+  for (const code of [131026, 132000, 190, 100]) assert.equal(ehLimiteDeTaxa(400, { error: { code } }), false, String(code));
+  assert.equal(ehLimiteDeTaxa(500, null), false);
+  assert.equal(ehLimiteDeTaxa(200, { messages: [] }), false);
+});

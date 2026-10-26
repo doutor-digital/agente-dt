@@ -8,6 +8,8 @@ import type { DisparoOnda, Prisma, Unit } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { logger } from '../logger.js';
 import { credenciaisDaUnidade } from '../whatsapp-meta.js';
+import { modoDaUnidade } from './modo.js';
+import { BATIDA_DA_MONTAGEM_MS } from './montagem.js';
 import { lerPublico, reaproveitarDeOndaCancelada, type PublicoLido } from './publico.js';
 import { conferirModeloNaMeta, definicaoParaAUnidade, impressaoDaOnda, podeAprovar, type Definicao } from './modelo.js';
 import { problemaNoModelo, triar } from './regras.js';
@@ -88,6 +90,9 @@ export async function concluirMontagem(ondaId: string, ler: (unit: Unit, etiquet
   const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true } });
   if (!onda || onda.estado !== 'montando') return;
   const unit: Unit = onda.unit;
+  // Enquanto este processo está montando, dá uma batida por minuto: o vigia só dá a montagem como morta quando as batidas param.
+  const batida = setInterval(() => void prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'montando' }, data: { atualizadoEm: new Date() } }).catch(() => undefined), BATIDA_DA_MONTAGEM_MS);
+  batida.unref();
   try {
     const { candidatos, foraDoKommoDividido, jaNaCampanha, pediramSair, franquia } = await ler(unit, onda.etiqueta, onda.campanhaId);
     const { elegiveis, fora } = await triar(candidatos, { jaNaCampanha, pediramSair, franquia });
@@ -121,6 +126,8 @@ export async function concluirMontagem(ondaId: string, ler: (unit: Unit, etiquet
     await prisma.disparoOnda
       .updateMany({ where: { id: ondaId, estado: 'montando' }, data: { estado: 'cancelada', pausaMotivo: `montagem falhou: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500) } })
       .catch(() => undefined);
+  } finally {
+    clearInterval(batida);
   }
 }
 
@@ -146,7 +153,7 @@ export async function aprovarOnda(
   const meta = await conferir(onda.unit, definicaoDaOnda(onda));
   if (!meta.ok) return falha(422, meta.motivo);
 
-  const r = await prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'montada' }, data: { estado: 'aprovada', aprovadaPor: args.por!.trim().toLowerCase(), aprovadaEm: new Date() } });
+  const r = await prisma.disparoOnda.updateMany({ where: { id: ondaId, estado: 'montada' }, data: { estado: 'aprovada', aprovadaPor: args.por!.trim().toLowerCase(), aprovadaEm: new Date(), aprovadaModo: modoDaUnidade(onda.unit.slug) } });
   if (r.count !== 1) return falha(409, 'a onda mudou de estado enquanto aprovava');
   logger.warn({ onda: ondaId, unit: onda.unit.slug, total: onda.total, por: args.por }, 'disparo: onda APROVADA');
   return { ok: true, dados: (await prisma.disparoOnda.findUnique({ where: { id: ondaId } }))! };

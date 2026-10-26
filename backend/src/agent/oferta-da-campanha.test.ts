@@ -184,3 +184,20 @@ test('centavos: "R$ 150,50" da oferta passa; "R$ 150,99" não é o valor da ofer
   assert.equal(outro.rewritten, true);
   assert.match(outro.text, /R\$ 280 antecipado/);
 });
+
+test('corte de catálogo por centavos: "R$ 150,99" não passa como se fosse o "R$ 150" da oferta, e o "R$ 150" legítimo da mesma mensagem fica', () => {
+  const r = aplicarGuardrail('Pela campanha fica R$ 150, não R$ 150,99.', unit(), { ofertaDaCampanha: OFERTA.oferta });
+  assert.equal(r.rewritten, true);
+  assert.ok(r.triggered.some((t) => t.startsWith('preco_corrigido:')));
+  assert.ok(r.text.startsWith('Pela campanha fica R$ 150, não R$ '), r.text);
+  assert.ok(!r.text.includes('150,99'), r.text);
+  assert.ok(!r.text.includes('⟦'));
+  const sozinho = aplicarGuardrail('Fica R$ 150,99 pra você.', unit(), { ofertaDaCampanha: OFERTA.oferta });
+  assert.equal(sozinho.rewritten, true, 'só o 150,99, sem o 150 exato: também é cortado');
+  assert.ok(!sozinho.text.includes('150,99'));
+});
+
+test('o valor exato da oferta COM centavos passa pelo corte de catálogo', () => {
+  const texto = 'Pela campanha fica R$ 150,50.';
+  assert.equal(aplicarGuardrail(texto, unit(), { ofertaDaCampanha: 'Avaliação por R$ 150,50.' }).text, texto);
+});
