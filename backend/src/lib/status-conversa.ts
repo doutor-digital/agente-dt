@@ -17,6 +17,10 @@
  * limpa o campo ao reabrir o cartão — lacuna que já existia, fora deste conserto). Quem escreve "Encerrada" é só o
  * carimbo de etapa.
  *
+ * Duas guardas, por escritor: o fim do turno da IA respeita a ETAPA (guarda que ele já tinha, vale em toda unidade e
+ * cobre o `fechar_lead` do mesmo turno, antes do carimbo gravar); handoff e follow-up respeitam a etapa E o valor —
+ * só recusam quando o campo já diz "Encerrada" (senão, cartão encerrado onde o carimbo não gravou congela o campo).
+ *
  * Este arquivo é PURO (sem rede, sem banco): a decisão e a definição de "etapa que encerra".
  */
 import { normalizarNome } from './kommo-schema.js';
@@ -71,10 +75,22 @@ export type DecisaoDoStatus = { gravar: true } | { gravar: false; motivo: string
 /**
  * Pode `novo` ser gravado agora? Puro.
  *  - "Encerrada" sempre (é o carimbo de etapa falando);
- *  - qualquer outro valor só se o cartão NÃO estiver encerrado.
+ *  - fim do turno da IA ('turno-da-ia'): NÃO grava em cartão encerrado, pela etapa só — é a guarda que ele sempre teve,
+ *    e o turno pode terminar no mesmo instante do `fechar_lead`, antes de o carimbo gravar "Encerrada";
+ *  - handoff e follow-up: só NÃO gravam quando as DUAS coisas são verdade — o cartão está em etapa de encerramento E o
+ *    campo JÁ diz "Encerrada". Cartão encerrado cujo campo diz outra coisa (o carimbo não gravou, ou alguém mexeu)
+ *    deixa gravar: bloquear só pela etapa congelaria o campo para sempre.
  */
-export function decidirStatusConversa(novo: StatusConversa, encerrado: boolean): DecisaoDoStatus {
-  if (novo === STATUS_ENCERRADA) return { gravar: true };
-  if (encerrado) return { gravar: false, motivo: 'cartão em etapa de encerramento — "Encerrada" vale' };
+export function decidirStatusConversa(
+  novo: StatusConversa,
+  encerrado: boolean,
+  valorAtual: string | null,
+  origem: OrigemDoStatus,
+): DecisaoDoStatus {
+  if (novo === STATUS_ENCERRADA || !encerrado) return { gravar: true };
+  if (origem === 'turno-da-ia') return { gravar: false, motivo: 'cartão em etapa de encerramento — o turno da IA não escreve nele' };
+  if (valorAtual !== null && normalizarNome(valorAtual) === normalizarNome(STATUS_ENCERRADA)) {
+    return { gravar: false, motivo: 'cartão em etapa de encerramento e o campo já diz "Encerrada" — vale' };
+  }
   return { gravar: true };
 }
