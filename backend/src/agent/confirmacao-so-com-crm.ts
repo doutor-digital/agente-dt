@@ -31,6 +31,14 @@ const MARCA_DO_RECADO = 'confirma a sua consulta em até 1 hora';
 export const RECADO_DESMARCADA =
   'Deixa eu conferir direitinho o seu horário com a equipe — ela te confirma aqui mesmo na conversa em até 1 hora. 🙏';
 
+/** Vai junto da resposta reprovada quando o CRM diz que a consulta foi desmarcada (refeita da trava). */
+export const INSTRUCAO_DESMARCADA =
+  '[instrução interna, não é fala do paciente] Sua resposta acima trata como marcada uma consulta que foi DESMARCADA ' +
+  'no sistema da clínica: ela não existe mais. Se o paciente pediu, NESTA mensagem, um horário novo e já escolheu ' +
+  'dia, hora e forma de pagamento, use consultar_horarios e agendar_consulta. Se ele só confirmou o horário antigo ' +
+  'ou perguntou se está tudo certo, NÃO marque nada: diga que vai conferir com a equipe, que confirma em até 1 hora, ' +
+  'sem dizer confirmado, agendado nem reservado. Responda só com a mensagem final ou com a chamada da ferramenta.';
+
 /** O bloco `<consulta_do_paciente>` que diz "não há consulta de pé": desmarcada ou não compareceu. */
 const BLOCO_SEM_CONSULTA = /foi DESMARCADA no sistema da clínica|registrou NÃO COMPARECEU/;
 
@@ -44,33 +52,46 @@ export function blocoDizDesmarcada(bloco: string | null | undefined): boolean {
  * comprovante, ou consulta que o CRM diz desmarcada.
  */
 const ASSUNTO = '(?:consulta|avaliacao|agendamento|horario|vaga|reserva|presenca|pagamento|pix|tudo)';
-const PARTICIPIO = '(?:confirmad|agendad|marcad|reservad|garantid)(?:inh)?[oa]s?';
-const AFIRMA_CONFIRMADA = new RegExp(
+const PARTICIPIO = '(?:confirmad|agendad|marcad|reservad|garantid|recebid)(?:inh)?[oa]s?';
+/** Frases de estado: "sua consulta está confirmada", "Agendamento confirmado", "já está tudo certo". */
+const AFIRMA_ESTADO = new RegExp(
   [
-    `\\b${ASSUNTO}\\s+(?:\\S+\\s+){0,3}?${PARTICIPIO}\\b`,
+    `\\b${ASSUNTO}\\s+(?:\\S+\\s+){0,5}?${PARTICIPIO}\\b`,
     `\\b${PARTICIPIO}\\s+(?:\\S+\\s+){0,2}?(?:consulta|vaga|horario|presenca)\\b`,
-    String.raw`\b(?:esta|ficou|fica|ja esta|ja ficou) (?:tudo )?certinh?[oa]?\b`,
-    String.raw`\b(?:te|lhe) (?:espero|esperamos)\b|\bnos vemos\b`,
+    String.raw`\b(?:esta|ficou|fica|ja esta|ja ficou)\s+(?:tudo\s+)?cert(?:o|inho|inha)\b|\btudo cert(?:o|inho)\b`,
+    String.raw`\b(?:confirmei|agendei|marquei|reservei|garanti)\b`,
+    // "Recebido, confirmado!" — o particípio solto, sem dizer o quê
+    String.raw`(?:^|[,;:]\s*)(?:ja\s+|tudo\s+)?(?:confirmad|agendad|reservad|garantid)[oa]s?\b`,
   ].join('|'),
 );
-/** "ainda não está confirmada", "para ser confirmada", "se estiver confirmada": não afirma. */
+/** "Te espero terça", "nos vemos": só vale com dia/hora no trecho (no modo estrito). */
+const AFIRMA_TE_ESPERO = /\b(?:te|lhe) (?:espero|esperamos|aguardo|aguardamos)\b|\bnos vemos\b/;
+/** Negação/condição na ORAÇÃO da afirmação: "ainda não está confirmada", "se estiver confirmada", "para ser confirmada". */
 const NAO_AFIRMA =
-  /\b(?:nao|nem|nenhum|nenhuma|ainda|sem|se|caso|quando|apos|depois que|assim que|aguarde|aguardando|para ser|pra ser)\b|\?\s*$/;
+  /\b(?:nao|nem|nenhum|nenhuma|caso|quando|apos|depois que|assim que|aguarde|aguardando|para ser|pra ser|ate eu)\b|\bse (?:voce|vc|ele|ela|estiver|for|der)\b/;
 /**
  * Modo estrito (consulta desmarcada): ali a IA ainda pode explicar preço e oferecer novo horário ("esse valor
- * já garante seu horário reservado"), então só vale a frase que fala DA consulta do paciente — com dia/hora ou
- * "sua consulta" — e que não é explicação de pagamento.
+ * já garante seu horário reservado"), então fica de fora a explicação de pagamento, e "te espero" só vale com
+ * dia/hora.
  */
 const EXPLICA_PAGAMENTO = /\b(?:pagando|pagamento antecipado|antecipado|antecipando|valor|pix|r\$)\b/;
-const FALA_DE_UMA_CONSULTA =
-  /\b(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)\b|\b\d{1,2}\/\d{1,2}\b|\b(?:amanha|hoje)\b|\b\d{1,2}(?::\d{2}|h\d{0,2})\b|\b(?:sua|seu) (?:consulta|agendamento|presenca)\b/;
+const QUANDO = /\b(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)\b|\b\d{1,2}\/\d{1,2}\b|\b(?:amanha|hoje)\b|\b\d{1,2}(?::\d{2}|h\d{0,2})\b/;
+
+/** A oração em que a afirmação aparece: do último separador (vírgula, ponto e vírgula, dois-pontos) até o fim dela. */
+function oracaoDe(n: string, fim: number): string {
+  const antes = n.slice(0, fim);
+  return n.slice(Math.max(antes.lastIndexOf(','), antes.lastIndexOf(';'), antes.lastIndexOf(':')) + 1, fim);
+}
 
 export function afirmaConfirmacao(texto: string | null | undefined, opcoes: { estrito?: boolean } = {}): Promessa | null {
   for (const t of trechos(String(texto ?? ''))) {
     const n = normalizar(t);
-    if (NAO_AFIRMA.test(n)) continue;
-    if (opcoes.estrito && (EXPLICA_PAGAMENTO.test(n) || !FALA_DE_UMA_CONSULTA.test(n))) continue;
-    if (AFIRMA_CONFIRMADA.test(n)) return { trecho: t, forma: 'confirmacao', quando: null };
+    if (/\?\s*\S{0,3}$/.test(n)) continue;
+    if (opcoes.estrito && EXPLICA_PAGAMENTO.test(n)) continue;
+    const e = AFIRMA_ESTADO.exec(n);
+    const espera = AFIRMA_TE_ESPERO.exec(n);
+    const m = e ?? (!opcoes.estrito || QUANDO.test(n) ? espera : null);
+    if (m && !NAO_AFIRMA.test(oracaoDe(n, m.index + m[0].length))) return { trecho: t, forma: 'confirmacao', quando: null };
   }
   return null;
 }
@@ -96,7 +117,7 @@ export interface TurnoDoComprovante {
 }
 
 /** As últimas respostas da IA que ainda contam: depois disso a conversa seguiu e a equipe já deve ter respondido. */
-const RESPOSTAS_QUE_CONTAM = 6;
+const RESPOSTAS_QUE_CONTAM = 10;
 
 export function turnoDoComprovante(ultimaFalaDoPaciente: string | null | undefined, respostasDaIA: ReadonlyArray<string>): TurnoDoComprovante {
   const noTurno = ehTranscricaoDeComprovante(String(ultimaFalaDoPaciente ?? ''));
@@ -106,18 +127,26 @@ export function turnoDoComprovante(ultimaFalaDoPaciente: string | null | undefin
 
 /**
  * Turno com comprovante: se a resposta afirma confirmação, vale o recado fixo. Resposta que não afirma
- * ("recebi, me manda o nome completo") segue como veio. Nos turnos SEGUINTES (só o recado fresco no histórico)
- * a consulta que a equipe já criou no CRM pode ser dita: `consultaNoCrm` = o prompt traz a consulta de verdade.
+ * ("recebi, me manda o nome completo") segue como veio. Com a consulta já no CRM (`consultaNoCrm` = o prompt traz
+ * a consulta de verdade: criada pela equipe, ou paciente que paga o saldo) o texto não é trocado.
  */
 export function respostaDoComprovante(texto: string, turno: TurnoDoComprovante, consultaNoCrm: boolean): string | null {
-  const vale = turno.noTurno || (turno.pendente && !consultaNoCrm);
-  return vale && afirmaConfirmacao(texto) ? RECADO_COMPROVANTE : null;
+  // Consulta já no CRM (paga o saldo, a sessão): dizer dela é dizer a verdade — a equipe só confere o pagamento.
+  if (!turno.pendente || consultaNoCrm) return null;
+  return afirmaConfirmacao(texto) ? RECADO_COMPROVANTE : null;
 }
 
 export const RECUSA_DO_COMPROVANTE =
   'RECUSADO: o paciente mandou comprovante de pagamento, e comprovante quem confirma é a EQUIPE da clínica. ' +
   'A consulta NÃO foi marcada. NÃO chame agendar_consulta de novo e NÃO diga que está confirmada, agendada, ' +
   `reservada ou garantida. Responda ao paciente só isto, com as suas palavras: "${RECADO_COMPROVANTE}"`;
+
+/** Turnos depois do comprovante: a equipe ainda não respondeu e o paciente pode estar pedindo outra coisa. */
+export const RECUSA_AGUARDANDO_EQUIPE =
+  'RECUSADO: a equipe da clínica ainda está conferindo o comprovante que o paciente mandou antes, e é ela quem ' +
+  'confirma a consulta. A consulta NÃO foi marcada. NÃO chame agendar_consulta de novo e NÃO diga que está confirmada, ' +
+  'agendada, reservada ou garantida. Se o paciente pediu outro dia ou outra forma de pagar, diga que a equipe cuida ' +
+  'disso junto da confirmação e chame resumir_lead_para_sdr.';
 
 /**
  * `agendar_consulta` (e só ela; remarcar é de quem já tem consulta) recusa enquanto houver comprovante
@@ -139,13 +168,16 @@ export function travarAgendamentoPorComprovante(
           title: '🧾 agendar_consulta recusado — comprovante: só a equipe confirma',
           payload: { noTurno: turno.noTurno, args },
         });
-        return RECUSA_DO_COMPROVANTE;
+        return turno.noTurno ? RECUSA_DO_COMPROVANTE : RECUSA_AGUARDANDO_EQUIPE;
       }
       return original(args as never, ...(resto as never[]));
     };
   }
   return tools;
 }
+
+/** Rajada de PDFs do mesmo comprovante (Bebedouro mandou 5 em 1 minuto) = uma tarefa; outro comprovante, mais tarde, outra. */
+const JANELA_COMPROVANTE_MS = 15 * 60_000;
 
 type Dedupe = { avisoRecente: typeof avisoRecente; marcarAviso: typeof marcarAviso };
 
@@ -167,7 +199,7 @@ export async function abrirTarefaParaEquipe(args: {
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
   const chave = motivo === 'comprovante' ? 'comprovante_so_equipe' : 'consulta_desmarcada_afirmada';
   try {
-    if (await dedupe.avisoRecente(unitId, leadId, chave)) return 'repetida';
+    if (await dedupe.avisoRecente(unitId, leadId, chave, motivo === 'comprovante' ? JANELA_COMPROVANTE_MS : undefined)) return 'repetida';
     let nome: string | null = null;
     let responsavel: number | undefined;
     try {
@@ -180,7 +212,7 @@ export async function abrirTarefaParaEquipe(args: {
     const quem = nome ? ` · ${nome}` : '';
     const text =
       motivo === 'comprovante'
-        ? `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante: conferir o pagamento e confirmar a consulta na franquia em até 1 h. A IA não marcou nem confirmou.`
+        ? `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante: conferir o pagamento e confirmar a consulta na franquia em até 1 h. A IA não confirmou nada por ele.`
         : `CONFERIR CONSULTA · ${slug}${quem} · a consulta está DESMARCADA no CRM e o paciente respondeu como se estivesse marcada. A IA não confirmou: falar com ele e remarcar em até 1 h.`;
     const agora = args.agora ?? Date.now;
     const res = await kommo.createTask({ leadId, text, completeAt: Math.floor(agora() / 1000) + 3600, responsibleUserId: responsavel });

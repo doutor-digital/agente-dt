@@ -4,6 +4,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import {
   RECADO_COMPROVANTE,
+  RECUSA_AGUARDANDO_EQUIPE,
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
   afirmouComConsultaDesmarcada,
@@ -67,7 +68,7 @@ test('turno com foto de comprovante: pendente; texto comum não', () => {
 test('depois do recado a conversa segue pendente por algumas respostas, e depois solta', () => {
   const recado = [RECADO_COMPROVANTE];
   assert.equal(turnoDoComprovante('Obrigada', recado).pendente, true);
-  const depois = [RECADO_COMPROVANTE, 'a', 'b', 'c', 'd', 'e', 'f'];
+  const depois = [RECADO_COMPROVANTE, ...Array.from({ length: 10 }, (_, i) => `resposta ${i}`)];
   assert.equal(turnoDoComprovante('Obrigada', depois).pendente, false, 'a equipe já devia ter respondido');
 });
 
@@ -75,7 +76,7 @@ test('Canaã 24/10: a resposta que confirma vira o recado; a que não confirma s
   const t = turnoDoComprovante(COMPROVANTE, []);
   const canaa = 'Recebi seu comprovante certo, Shelly, muito obrigada! 🥰 Sua vaga está garantida.\n\n✅ Agendamento confirmado, Shelly!';
   assert.equal(respostaDoComprovante(canaa, t, false), RECADO_COMPROVANTE);
-  assert.equal(respostaDoComprovante(canaa, t, true), RECADO_COMPROVANTE, 'no turno do comprovante vale o recado mesmo com consulta no prompt');
+  assert.equal(respostaDoComprovante(canaa, t, true), null, 'com a consulta já no CRM (paga o saldo) dizer dela é a verdade');
   assert.equal(respostaDoComprovante('Recebi! Só me confirma seu nome completo? 😊', t, false), null);
 });
 
@@ -188,4 +189,45 @@ test('desmarcada: explicar preço e oferecer novo horário não é afirmar consu
   const oferta = 'Sem problema! A consulta é R$ 350 no dia, ou R$ 200 pagando antes pelo Pix, que já garante seu horário reservado. Tenho quinta, 29/10, às 9h — fica bom pra você?';
   assert.equal(afirmouComConsultaDesmarcada(oferta, { marcouAgora: false, bloco: BLOCO_DESMARCADA, promessa: null }), null);
   assert.equal(afirmaConfirmacao('Te espero aqui então.', { estrito: true }), null, 'sem dia/hora não é consulta');
+});
+
+test('detector largo: as formas que escaparam na revisão', () => {
+  for (const t of [
+    'Pode ficar tranquila, já está tudo certo!',
+    'Recebido, confirmado! 🎉 Agora me manda o nome completo.',
+    'Tudo certo, recebi seu comprovante!',
+    'Confirmei seu horário de terça às 11h.',
+    'Não se preocupe, sua consulta está confirmada.',
+    'Sua consulta ainda está marcada para terça, 27/10.',
+    'Seu pix foi recebido e está confirmado, a consulta fica garantida.',
+    'Se precisar, é só chamar: sua consulta está confirmada.',
+  ]) assert.ok(afirmaConfirmacao(t), t);
+  for (const t of ['Ainda não está confirmada.', 'Se estiver tudo certo, a equipe confirma.', 'Quando a equipe conferir, fica confirmada.']) {
+    assert.equal(afirmaConfirmacao(t), null, t);
+  }
+});
+
+test('desmarcada (modo estrito): "Agendamento confirmado" solto é afirmação; "te espero" sem dia não é', () => {
+  assert.ok(afirmaConfirmacao('Agendamento confirmado ✅', { estrito: true }));
+  assert.ok(afirmaConfirmacao('Perfeito, sua vaga está garantida 🎉', { estrito: true }));
+  assert.ok(afirmaConfirmacao('Te espero terça, 27/10, às 11h!', { estrito: true }));
+  assert.equal(afirmaConfirmacao('Te espero aqui então.', { estrito: true }), null);
+});
+
+test('depois do comprovante a recusa não diz "recebi seu comprovante" a quem pede outra coisa', async () => {
+  const chamadas: unknown[] = [];
+  const turno = turnoDoComprovante('Quero mudar para sexta', [RECADO_COMPROVANTE]);
+  assert.deepEqual(turno, { noTurno: false, pendente: true });
+  const [tool] = travarAgendamentoPorComprovante([agendarQueMarca(chamadas)], turno, { step: async () => undefined } as never);
+  assert.equal(await tool.func({ hora: '09:00' } as never), RECUSA_AGUARDANDO_EQUIPE);
+  assert.deepEqual(chamadas, []);
+});
+
+test('rajada de PDFs do mesmo comprovante = uma tarefa (janela de 15 min); desmarcada usa os 24 h padrão', async () => {
+  const janelas: Array<number | undefined> = [];
+  const dedupe = { avisoRecente: async (_u: string, _l: number, _k: string, j?: number) => (janelas.push(j), true), marcarAviso: async () => undefined };
+  const base = { slug: 's', unitId: 'u', leadId: 1, kommo: {} as never, recorder: { step: async () => undefined } as never, dedupe: dedupe as never };
+  await abrirTarefaParaEquipe({ ...base, motivo: 'comprovante' });
+  await abrirTarefaParaEquipe({ ...base, motivo: 'desmarcada' });
+  assert.deepEqual(janelas, [15 * 60_000, undefined]);
 });

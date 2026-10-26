@@ -72,10 +72,12 @@ import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto
 import { conferirTetoMensal, acaoAoEstourar, pausarContaAteProximoMes, type VereditoMensal } from './teto-mensal.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import {
-  RECADO_COMPROVANTE,
+  INSTRUCAO_DESMARCADA,
   RECADO_DESMARCADA,
   abrirTarefaParaEquipe,
+  afirmaConfirmacao,
   afirmouComConsultaDesmarcada,
+  blocoDizDesmarcada,
   respostaDoComprovante,
   travarAgendamentoPorComprovante,
   turnoDoComprovante,
@@ -1060,8 +1062,11 @@ export async function buildAgentGraph(
       // ferramentas, para a IA poder MARCAR; texto refeito só vale sem a promessa; senão o trecho sai.
       // Comprovante em foto/PDF: só a equipe confirma a consulta (decisão do João, 26/10/2026). A resposta que
       // afirma confirmação vira o recado fixo e a equipe ganha a tarefa — aberta pelo código, não pela IA.
+      // `respostaFixa`: o texto é um recado nosso — a "pergunta final" não o reescreve (ele já diz o próximo passo).
+      let respostaFixa = false;
       const recadoComprovante = respostaDoComprovante(textoFinal, comprovante, promptTemConsulta(promptDoTurno));
       if (recadoComprovante) {
+        respostaFixa = true;
         await recorder.step({
           kind: 'THINKING',
           title: '🧾 Comprovante: a resposta confirmava a consulta — trocada pelo recado (só a equipe confirma)',
@@ -1071,7 +1076,7 @@ export async function buildAgentGraph(
         response.content = recadoComprovante;
       }
       if (comprovante.noTurno && kommoClient && state.leadId) {
-        void abrirTarefaParaEquipe({
+        await abrirTarefaParaEquipe({
           slug: unit.slug,
           unitId: unit.id,
           leadId: Number(state.leadId),
@@ -1095,29 +1100,12 @@ export async function buildAgentGraph(
         if (doVinculo) consultasValidas.push(doVinculo);
         if (doVinculo) promessa = reservaSemMarcar(textoFinal, { marcouAgora, consultasValidas });
       }
-      // Consulta desmarcada no CRM e a resposta a trata como de pé (Balsas #28858838, 22/10): nada de refazer com
-      // ferramenta (a IA marcaria de novo o que a recepção desmarcou) — vale o recado e a equipe é avisada.
-      const afirmouDesmarcada = afirmouComConsultaDesmarcada(textoFinal, { marcouAgora, bloco: blocoDaConsulta(promptDoTurno), promessa });
-      if (afirmouDesmarcada) {
-        await recorder.step({
-          kind: 'ERROR',
-          title: `📅 Consulta desmarcada no CRM e a resposta falava como se estivesse marcada — trocada pelo recado ("${afirmouDesmarcada.trecho.slice(0, 80)}")`,
-          payload: { original: textoFinal, final: RECADO_DESMARCADA, trecho: afirmouDesmarcada.trecho },
-        });
-        textoFinal = RECADO_DESMARCADA;
-        response.content = RECADO_DESMARCADA;
-        if (kommoClient && state.leadId) {
-          void abrirTarefaParaEquipe({
-            slug: unit.slug,
-            unitId: unit.id,
-            leadId: Number(state.leadId),
-            kommo: kommoClient,
-            recorder,
-            motivo: 'desmarcada',
-          });
-        }
-      }
-      if (promessa && !afirmouDesmarcada) {
+      // Consulta desmarcada no CRM e a resposta a trata como de pé (Balsas #28858838, 22/10): entra na mesma trava, com
+      // uma instrução própria (a IA só marca se o paciente pediu horário NOVO) e, sem saída limpa, o recado fixo.
+      const blocoDesmarcada = blocoDizDesmarcada(blocoDaConsulta(promptDoTurno));
+      if (!promessa) promessa = afirmouComConsultaDesmarcada(textoFinal, { marcouAgora, bloco: blocoDaConsulta(promptDoTurno), promessa });
+      const desmarcada = blocoDesmarcada && !marcouAgora && !!promessa;
+      if (promessa) {
         const t1 = performance.now();
         let refeita: AIMessage | null = null;
         let erroRefeita: string | null = null;
@@ -1128,7 +1116,7 @@ export async function buildAgentGraph(
             refeita = (await withTimeout(
               invokeChatModel({
                 model: modeloAtivo,
-                messages: [...finalMessages, response, new HumanMessage(INSTRUCAO_RESERVA_SEM_MARCAR)],
+                messages: [...finalMessages, response, new HumanMessage(desmarcada ? INSTRUCAO_DESMARCADA : INSTRUCAO_RESERVA_SEM_MARCAR)],
                 unitId: unit.id,
                 traceId: recorder.traceId,
                 modelName,
@@ -1153,9 +1141,10 @@ export async function buildAgentGraph(
           return { messages: [refeita] } satisfies Partial<AgentStateType>;
         }
         const textoRefeito = refeita ? aiTextFromContent(refeita.content).trim() : '';
-        const semPromessa = (t: string) => !reservaSemMarcar(t, { marcouAgora: false, consultasValidas });
+        const semPromessa = (t: string) =>
+          !reservaSemMarcar(t, { marcouAgora: false, consultasValidas }) && !(desmarcada && afirmaConfirmacao(t, { estrito: true }));
         let saida: 'refeita' | 'cortada' | 'neutra';
-        const cortado = semOTrecho(textoFinal, promessa.trecho);
+        const cortado = desmarcada ? null : semOTrecho(textoFinal, promessa.trecho);
         if (textoRefeito && semPromessa(textoRefeito) && !detectarVazamento(textoRefeito)) {
           saida = 'refeita';
           textoFinal = textoRefeito;
@@ -1165,9 +1154,20 @@ export async function buildAgentGraph(
         } else {
           // Nem a refeita nem o corte tiraram a promessa: a original NÃO sai (achado do Codex, 19/10).
           saida = 'neutra';
-          textoFinal = PERGUNTA_NEUTRA;
+          textoFinal = desmarcada ? RECADO_DESMARCADA : PERGUNTA_NEUTRA;
+          respostaFixa = true;
         }
         response.content = textoFinal;
+        if (desmarcada && kommoClient && state.leadId) {
+          await abrirTarefaParaEquipe({
+            slug: unit.slug,
+            unitId: unit.id,
+            leadId: Number(state.leadId),
+            kommo: kommoClient,
+            recorder,
+            motivo: 'desmarcada',
+          });
+        }
         await recorder.step({
           kind: saida === 'neutra' ? 'ERROR' : 'THINKING',
           title:
@@ -1182,7 +1182,7 @@ export async function buildAgentGraph(
       }
 
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
-      if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit).triggered.length === 0) {
+      if (cta.precisaRefazer && !respostaFixa && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
