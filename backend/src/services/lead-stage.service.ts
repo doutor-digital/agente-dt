@@ -2,6 +2,7 @@ import type { Unit } from '@prisma/client';
 import type { KommoClient, KommoLead, KommoPipeline } from './kommo.service.js';
 import { createKommoClient } from './kommo.service.js';
 import { logger } from '../lib/logger.js';
+import { motivoDeBloqueio } from '../lib/mensagem-bloqueada.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { agoraLocalISO } from '../agent/consulta-que-passou.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
@@ -29,6 +30,11 @@ export interface EstadoEtapaLead {
    * anúncio que nós mesmos pagamos — e ela pergunta mal: 2 capturas em 1.052.
    */
   anuncio?: AnuncioDeOrigem | null;
+  /**
+   * Por que NÃO mandar mensagem automática a este cartão (etiqueta ou nome — mensagem-bloqueada.ts), ou ausente. Lido do
+   * mesmo cartão que já foi buscado: a reativação usa em vez de chamar o Kommo uma segunda vez.
+   */
+  bloqueio?: string | null;
   /**
    * O título do cartão. A recepção costuma escrever ali o nome completo — é por ele que se acha o
    * paciente na franquia quando a consulta foi marcada por humano (ver paciente-na-franquia.ts).
@@ -245,6 +251,12 @@ export async function estadoEtapaDoLead(
           duplicidade: dup,
         };
       }
+    }
+    const bloqueio = motivoDeBloqueio(lead, 'regua');
+    if (bloqueio) {
+      valor = valor
+        ? { ...valor, bloqueio }
+        : { statusId: lead?.status_id ?? 0, nome: '', jaAgendadoOuPaciente: false, bloqueio };
     }
     if (valor && lead?.name) valor = { ...valor, tituloDoCartao: lead.name };
     const consultaEpoch = lead ? dataDaConsulta(lead) : null;

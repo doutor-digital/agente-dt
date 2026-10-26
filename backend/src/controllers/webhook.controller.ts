@@ -12,6 +12,7 @@ import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
+import { abrirTarefaDaDesistencia } from '../lib/desistencia-acao.js';
 import { recusaDoFunilTratamento } from '../lib/guarda-funil-tratamento.js';
 import { entraPelaMeta } from '../lib/canal-de-entrada.js';
 import { guardarRespostaSegurada, idDaUltimaResposta, marcarNaoEntregue } from '../agent/entrega-falha.js';
@@ -1090,6 +1091,15 @@ export async function processAgent(args: {
   // IA seguia atendendo. Em Taubaté isso significava a Sofia falando no horário
   // comercial, justamente quando a equipe humana está no WhatsApp. Quem quer que a
   // unidade fique calada não deveria precisar inventar uma mensagem para isso.
+  // "Cancelei", "pode desmarcar", "não vou poder ir" com a Sofia CALADA (fora do horário, IA pausada, etapa sem IA, a
+  // equipe falou): ninguém vai oferecer horário novo, e o robô do Kommo não lê conversa — os lembretes de 24 h/3 h/1 h
+  // seguem saindo até a equipe agir (Araguaína #28861610 e #28858170, 22–25/10). A nota que já existe ninguém lia; a
+  // equipe precisa de TAREFA. Item 6 da Suzanne. Nunca lança (o cliente do Kommo nasce dentro do try da função).
+  const desistenciaSemSofia = async (): Promise<void> => {
+    if (!isChatMessage || !humanMessage.trim()) return;
+    await abrirTarefaDaDesistencia({ unit, leadId, texto: humanMessage, motivo: 'ia_calada', kommo: () => createKommoClient(unit) });
+  };
+
   const hours = checkBusinessHours(unit);
   if (hours.enabled && !hours.isOpen) {
     try {
@@ -1110,6 +1120,7 @@ export async function processAgent(args: {
     } catch (err) {
       logger.warn({ err, leadId, unit: unit.slug }, 'erro ao enviar mensagem fora-horário');
     }
+    await desistenciaSemSofia();
     await recorder.step({
       kind: 'COMPLETED',
       title: hours.outOfHoursMessage
@@ -1129,6 +1140,8 @@ export async function processAgent(args: {
   if ((await isLeadPaused(unit, leadId)) || (await leadPausadoPorJanela(unit.id, leadId))) {
     carimbarContato(unit.id, leadId, { desfecho: 'pediu_humano' });
     await finishWidgetSilently();
+
+    await desistenciaSemSofia();
 
     // O paciente continua escrevendo e a IA está desligada. Isso vira NOTA no cartão, não tarefa
     // (decisão do João, 22/09/2026): eram 1.390 das 3.831 tarefas abertas da rede — a tela de
@@ -1196,6 +1209,7 @@ export async function processAgent(args: {
         const etapa = posicao?.status ?? null;
         if (posicao && etapaCalada(etapa, { statusId: sid, pipeline: posicao.pipeline })) {
           await finishWidgetSilently();
+          await desistenciaSemSofia();
           let anotou = false;
           if (!(await avisoRecente(unit.id, leadId, REGRA_NOTA_CALADA))) {
             try {
@@ -1233,6 +1247,7 @@ export async function processAgent(args: {
       }
       if (allowedStatusIds.length > 0 && !etapaPermitida(allowedStatusIds, sid, pid, funis)) {
         await finishWidgetSilently();
+        await desistenciaSemSofia();
         const totalLatency = Math.round(performance.now() - requestStart);
         await recorder.step({
           kind: 'COMPLETED',
@@ -1263,6 +1278,7 @@ export async function processAgent(args: {
         (sid && pid && pausedStages.has(`${pid}:${sid}`));
       if (matched) {
         await finishWidgetSilently();
+        await desistenciaSemSofia();
         const totalLatency = Math.round(performance.now() - requestStart);
         await recorder.step({
           kind: 'COMPLETED',
@@ -1302,6 +1318,8 @@ export async function processAgent(args: {
   if (porta.pausou) {
     carimbarContato(unit.id, leadId, { desfecho: 'pediu_humano' });
     await finishWidgetSilently();
+
+    await desistenciaSemSofia();
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({
       kind: 'COMPLETED',

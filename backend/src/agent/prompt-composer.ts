@@ -28,6 +28,8 @@ import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from 
 import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
 import { renderPacienteEncerrou } from './paciente-encerrou.js';
+import { renderPacienteDesistiu } from './paciente-desistiu.js';
+import { estadoDaDesistencia } from '../lib/desistencia-da-consulta.js';
 import { renderPerguntaDoPaciente } from './pergunta-do-paciente.js';
 import { renderFalaDePaciente } from './fala-de-paciente.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
@@ -743,7 +745,8 @@ não repita a pergunta nem comece do zero perguntando o que o cadastro já sabe:
   até agendar_consulta.
 - Pedido de CANCELAR → NÃO cancele direto na agenda: siga o fluxo de cancelamento
   desta unidade (o que a persona e as mensagens definem) antes de qualquer
-  cancelar_consulta.
+  cancelar_consulta. Se houver o bloco <paciente_desistiu>, ele manda: tente
+  REMARCAR primeiro, como o bloco descreve.
 - Em todos os casos, ache o cadastro atual com buscar_paciente antes de agir — a data
   da consulta dele já está no CRM; não peça de novo o que já temos.
 
@@ -1644,6 +1647,9 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   // Agradeceu/se despediu/vai se organizar: resposta curta, sem horário (paciente-encerrou.ts).
   const encerrou = renderPacienteEncerrou(historico);
   if (encerrou) blocos.push(encerrou);
+  // Escreveu "cancelei"/"não vou poder ir": a Sofia tenta REMARCAR antes de aceitar (paciente-desistiu.ts, 26/10/2026).
+  const desistiu = renderPacienteDesistiu(historico, { slug: unit.slug, sistemaAvisa: estadoDaDesistencia(unit.slug) === 'ligado' });
+  if (desistiu) blocos.push(desistiu);
   // Só quando a ficha dá o valor da CONSULTA sem ambiguidade (os dois valores, antecipado e no dia). Com R$ solto nas
   // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,
   // 21/10): essas unidades ficam com a regra de PREÇO do prompt.

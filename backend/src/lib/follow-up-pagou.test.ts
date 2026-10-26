@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { pagouOAntecipado } from './follow-up-worker.js';
+import { motivoParaNaoCobrar, pagouOAntecipado } from './follow-up-worker.js';
 
 /**
  * A trava que impede cobrar quem ja pagou.
@@ -121,4 +121,21 @@ test('cartao completo sem pagamento devolve false', () => {
     { field_name: '✓ Consulta pg antecipado', values: [{ value: 'Nao' }] },
   ];
   assert.equal(pagouOAntecipado(cartao), false);
+});
+
+// ── item 6 da Suzanne: a régua não sai para quem é bloqueado nem para quem desistiu da consulta ──
+test('régua: cartão bloqueado (NÃO É LEAD no nome, arquivo-morto, NO_FOLLOW_UP) não recebe degrau', () => {
+  assert.equal(motivoParaNaoCobrar('o nome do cartão diz NÃO É LEAD', 'oi'), 'o nome do cartão diz NÃO É LEAD');
+});
+
+test('régua: a última fala do paciente foi "Cancelei." (Araguaína #28861610) → não cobra', () => {
+  assert.match(motivoParaNaoCobrar(null, 'Cancelei.') ?? '', /não vem à consulta/);
+  assert.match(motivoParaNaoCobrar(null, 'Bom dia, pode desmarcar porque não vai ter como eu ir') ?? '', /não vem/);
+});
+
+test('régua: conversa normal segue — preço, adiamento, sem fala ainda', () => {
+  assert.equal(motivoParaNaoCobrar(null, 'Qual o valor da consulta?'), null);
+  assert.equal(motivoParaNaoCobrar(null, 'Vou ver aqui com ele.'), null);
+  assert.equal(motivoParaNaoCobrar(null, undefined), null);
+  assert.equal(motivoParaNaoCobrar(null, null), null);
 });

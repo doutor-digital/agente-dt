@@ -102,3 +102,22 @@ test('tarefa da desistência diz o dia, o que o paciente escreveu e o que fazer'
   assert.match(t, /imprevisto/);
   assert.match(t, /cartão em AGENDADO/);
 });
+
+test('a véspera é superconjunto do detector da régua e da Sofia: o que cala um nunca deixa a véspera sair', () => {
+  for (const t of ['Cancelei.', 'pode desmarcar', 'Não vou poder ir amanhã', 'Tive um imprevisto', 'não vai dar pra mim ir hoje', 'vou ter que desistir da vaga']) {
+    assert.ok(pareceDesistencia(t), t);
+  }
+});
+
+test('a véspera NÃO deixa de sair para quem quer manter a consulta ou fala de outra (achado do sênior, #132)', () => {
+  for (const t of ['Não quero remarcar, quero manter', 'cancela não', 'consegui me organizar, não vou mais faltar', 'cancela a do meu filho, a minha mantém', 'cancela a minha de terça e deixa a de quinta']) {
+    assert.equal(pareceDesistencia(t), false, t);
+  }
+});
+
+test('pareceConfirmacao não casa "não vou lá não, pode cancelar" (o "vou lá" é negado)', () => {
+  assert.equal(pareceConfirmacao('não vou lá não, pode cancelar'), false);
+  assert.equal(pareceConfirmacao('n vou la, cancela'), false);
+  assert.equal(pareceConfirmacao('vou lá sim'), true);
+  assert.equal(pareceConfirmacao('estarei la'), true);
+});

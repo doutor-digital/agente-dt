@@ -22,7 +22,8 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoPipeline } from '../services/kommo.service.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
-import { desistenciaEscrita, etapaSemVespera, textoTarefaDesistencia } from './vespera-segura.js';
+import { desistenciaEscrita, etapaSemVespera, textoTarefaDesistencia, voltouAtrasDeVerdade } from './vespera-segura.js';
+import { motivoDeBloqueio } from './mensagem-bloqueada.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService, type ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 import { addMessage } from '../services/conversations.service.js';
@@ -43,7 +44,8 @@ import {
 // de qual consulta ele está falando). Reexportada aqui para quem já importava deste módulo.
 export { chaveDaConfirmacao, prefixoDoToque, type Toque };
 import { emPausa } from './pausa-unidade.js';
-import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
+import { avisoRecente, marcadoEm, marcadoEmPrefixo, marcarAviso, marcasComPrefixo } from './aviso-dedupe.js';
+import { marcaDaConsulta, MARCA_RECUSOU } from './desistencia-acao.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
@@ -266,7 +268,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   });
 
   const kommo = createKommoClient(unit);
-  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0, etapa: 0, desistiu: 0, robo_kommo: 0 };
+  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0, etapa: 0, desistiu: 0, robo_kommo: 0, bloqueado: 0, recusou: 0 };
   let pipes: KommoPipeline[] | null = null;
   const nomeDaEtapa = async (pipelineId: number | undefined, statusId: number): Promise<string | null> => {
     pipes ??= await kommo.listPipelines().catch(() => []);
@@ -315,6 +317,14 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
           logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, err: String(err) }, 'confirmação: cartão ilegível, segue sem as travas');
           return null;
         });
+      // Etiqueta/nome que diz "não mande nada" (não-mandar-mensagem, NAO_PERTURBAR, "NÃO É LEAD" no nome…): item 6 da
+      // Suzanne, 25/10/2026. Ver `mensagem-bloqueada.ts` — para consulta marcada só calam as de "não mande NADA".
+      const bloqueio = motivoDeBloqueio(lead, 'lembrete');
+      if (bloqueio) {
+        conta.bloqueado++;
+        logger.debug({ unit: unit.slug, kommoLeadId: link.kommoLeadId, toque, bloqueio }, 'confirmação: cartão bloqueado para mensagem automática, não sai');
+        continue;
+      }
       const etapa = lead?.status_id ? await nomeDaEtapa(lead.pipeline_id, lead.status_id) : null;
       if (lead?.status_id && etapaSemVespera({ statusId: lead.status_id, nome: etapa })) {
         conta.etapa++;
@@ -327,11 +337,34 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       // Limite conhecido: `updatedAt` também anda quando o sincronizador grava paciente/tentativas no vínculo (perto
       // do agendamento, não depois). Se andar depois da desistência, a véspera sai — que é o comportamento de antes.
       const marcadaEm = consulta.mudou ? new Date() : link.updatedAt;
+      // O paciente RECUSOU remarcar e a Sofia se despediu dizendo que a equipe cancela (desistencia-acao.ts): a NOSSA véspera para
+      // neste cartão. A marca é DESTA consulta (leva o horário na chave): se ela foi remarcada, a chave é outra e a marca não vale —
+      // sem depender do `updatedAt` do vínculo, que anda a cada escrita. E não vale mais se ele voltou atrás depois ("consegui,
+      // vou sim", "confirmo").
+      // (a hora do cartão e a da franquia podem diferir por minutos: a comparação tem 5 min de tolerância)
+      const recusouEm = marcaDaConsulta(await marcasComPrefixo(unit.id, link.kommoLeadId, MARCA_RECUSOU + ':'), MARCA_RECUSOU, consulta.quando.slice(0, 16));
+      const voltouAtras = !!recusouEm && !!oficiais && voltouAtrasDeVerdade(oficiais.filter((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.em > recusouEm).map((m) => m.texto));
+      if (recusouEm && !voltouAtras) {
+        conta.recusou++;
+        logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, toque }, 'confirmação: o paciente recusou remarcar e a equipe vai cancelar — não sai');
+        continue;
+      }
       const desistiu = oficiais ? desistenciaEscrita(oficiais, marcadaEm) : null;
       if (desistiu) {
         conta.desistiu++;
         const chaveTarefa = `vespera_desistencia:${consulta.quando}`;
-        if (!(await avisoRecente(unit.id, link.kommoLeadId, chaveTarefa, POR_CONSULTA_MS))) {
+        // O webhook (IA calada) e a régua (sem resposta) já abrem tarefa quando o paciente escreve que não vem — não duplica.
+        const recente = async (tipo: string): Promise<boolean> => {
+          const t = await marcadoEmPrefixo(unit.id, link.kommoLeadId, `desistencia_tarefa:${tipo}:`);
+          return !!t && Date.now() - t.getTime() < 2 * 24 * 3600_000;
+        };
+        const jaAvisada =
+          (await avisoRecente(unit.id, link.kommoLeadId, chaveTarefa, POR_CONSULTA_MS)) ||
+          (await recente('ia_calada')) ||
+          (await recente('sem_resposta')) ||
+          (await recente('cancelar')) ||
+          (await recente('conferir'));
+        if (!jaAvisada) {
           try {
             await kommo.createTask({
               leadId: link.kommoLeadId,

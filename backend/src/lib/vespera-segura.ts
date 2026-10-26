@@ -11,15 +11,8 @@
  * e cortaria o lembrete de quem só foi atendido pela equipe.
  */
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
-
-function normalizar(s: string): string {
-  return s
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+import { falouDeOutraConsulta, pareceDesistenciaDaConsulta, quisManter, sinalForteDeQueVai } from './desistencia-frases.js';
+import { semAcento as normalizar } from './sem-acento.js';
 
 /**
  * O paciente disse que não vem ou quer outro horário. Estreita de propósito: "não" solto não conta, nem
@@ -37,13 +30,28 @@ const DESISTE = [
 const CONFIRMA = [
   /^1\b/,
   /\bconfirm(o|ado|ada|amos|ei)\b/,
-  /\b(vou|vamos|estarei|estaremos) (sim|la|ai|estar la|estar ai)\b/,
+  /(?<!\bn(?:ao)? )\b(vou|vamos|estarei|estaremos) (sim|la|ai|estar la|estar ai)\b(?! nao\b)/,
   /\bpode (confirmar|contar)\b/,
 ];
 
 export function pareceDesistencia(texto: string): boolean {
   const s = normalizar(texto);
-  return !!s && DESISTE.some((r) => r.test(s));
+  if (!s) return false;
+  // Quem quer MANTER a consulta ("não quero remarcar, quero manter", "cancela não") e quem fala de OUTRA consulta ("cancela a do meu
+  // filho, a minha mantém") não deixa de receber a véspera da sua — achado do sênior no #132.
+  if (quisManter(texto) || falouDeOutraConsulta(texto)) return false;
+  // Superconjunto do detector da régua e da Sofia (desistencia-da-consulta.ts): a frase que cala a régua e faz a Sofia
+  // oferecer horário NUNCA pode deixar a véspera sair. Aqui entram também "remarcar", "reagendar" e "outro dia".
+  return pareceDesistenciaDaConsulta(texto) || DESISTE.some((r) => r.test(s));
+}
+
+/**
+ * O que ele escreveu depois da recusa de remarcar DESFAZ a recusa? Só quando volta atrás de verdade — "vou sim", "consegui", "quero
+ * manter", "confirmo". "ok, obrigada" e "tá bom" não desfazem: a Sofia já disse que a equipe cancela. Usada pela véspera (a marca
+ * deixa de valer) e pelo worker que refaz a tarefa de cancelar.
+ */
+export function voltouAtrasDeVerdade(falasDepois: string[]): boolean {
+  return falasDepois.some((t) => quisManter(t) || sinalForteDeQueVai(t) || pareceConfirmacao(t));
 }
 
 export function pareceConfirmacao(texto: string): boolean {

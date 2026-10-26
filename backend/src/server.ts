@@ -16,6 +16,7 @@ import { startWhatsappCostScheduler, stopWhatsappCostScheduler } from './lib/wha
 import { startDashboardMvRefresher, stopDashboardMvRefresher } from './lib/dashboard-mv-refresher.js';
 import { startFollowUpWorker, stopFollowUpWorker } from './lib/follow-up-worker.js';
 import { startReminderWorker, stopReminderWorker } from './lib/reminder-worker.js';
+import { startDesistenciaSemRespostaWorker, stopDesistenciaSemRespostaWorker } from './lib/desistencia-sem-resposta-worker.js';
 import { startReactivationWorker, stopReactivationWorker } from './lib/reactivation-worker.js';
 import { startLeadPausaWorker, stopLeadPausaWorker } from './lib/lead-pausa-worker.js';
 import { startSlaAlertWorker, stopSlaAlertWorker } from './lib/sla-alert-worker.js';
@@ -191,6 +192,7 @@ async function main(): Promise<void> {
       startJudgeWorker();
       startFollowUpWorker();
       startReminderWorker();
+      startDesistenciaSemRespostaWorker();
       startReactivationWorker();
       startLeadPausaWorker();
       startSlaAlertWorker();
@@ -233,6 +235,7 @@ async function main(): Promise<void> {
       stopJudgeWorker();
       stopFollowUpWorker();
       stopReminderWorker();
+      stopDesistenciaSemRespostaWorker();
       stopReactivationWorker();
       stopLeadPausaWorker();
       stopSlaAlertWorker();

@@ -252,6 +252,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/prometeu-sem-marcar-worker.ts',
   },
   {
+    id: 'desistencia-cancela',
+    chave: 'DESISTENCIA_SLUGS',
+    nome: 'Desistência da consulta: avisar a equipe e parar a véspera',
+    oQueFaz:
+      'Quando o paciente escreve que não vem ("cancelei", "pode desmarcar", "não vou poder ir"), a Sofia oferece remarcar. Se ele RECUSA de forma explícita, o sistema abre a tarefa URGENTE "CANCELAR NA FRANQUIA" para o responsável do cartão, para a véspera e a régua do servidor neste cartão e põe a etiqueta NO_FOLLOW_UP; na dúvida (quer manter, outra consulta, hesitou) abre "CONFERIR COM O PACIENTE" sem parar nada; com a Sofia calada, ou se ele não responde à oferta em 2 h, abre tarefa também. A Sofia NUNCA cancela na franquia.',
+    pegadinha:
+      'Nasce em "só no papel" na rede toda: a lista "o que faria" mostra "alertaria" (a tarefa), "gravaria" (a marca que para a véspera) e "etiquetaria" (NO_FOLLOW_UP), sem escrever nada. Só age com consulta por vir no cartão (◷ Data da Consulta) ou no vínculo da franquia. Fora do "ligado" a Sofia NÃO promete "vou avisar a equipe": só se despede. LIGAR silencia a véspera e a régua do servidor para quem recusou remarcar, e põe NO_FOLLOW_UP (fica até alguém tirar). Não escreve em ✓ Situação da consulta (o franquia-sync copia da franquia). Os robôs do Kommo (24 h, 3 h, 1 h) continuam saindo até a equipe cancelar/pôr Desmarcado — a receita está no PR #132. A oferta de remarcar pela Sofia e o bloqueio por etiqueta/nome (NÃO É LEAD, não-mandar-mensagem…) não dependem desta chave.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/desistencia-acao.ts',
+  },
+  {
     id: 'agendamento-perdido-filtro',
     chave: 'AGENDAMENTO_PERDIDO_FILTRO_SLUGS',
     nome: 'Alerta de agendamento perdido sem alarme falso',

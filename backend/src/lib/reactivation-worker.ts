@@ -115,6 +115,14 @@ async function reativarUnidade(unit: Unit): Promise<void> {
         continue;
       }
 
+      // Etiqueta/nome que diz "não mande nada" (mensagem-bloqueada.ts), lida do mesmo cartão que `estadoEtapaDoLead` já
+      // buscou — sem segunda ida ao Kommo. Sem `encerrar`: a etiqueta pode sair, e aí o cartão volta para a fila (a janela
+      // de 24 h do WhatsApp o encerra).
+      if (etapa?.bloqueio) {
+        logger.debug({ unit: unit.slug, leadId, bloqueio: etapa.bloqueio }, 'reativação: cartão bloqueado para mensagem automática — não reativa');
+        continue;
+      }
+
       if (unit.qualificationEnabled) {
         const lead = await kommo.getLead(leadId);
         const tags = (lead?._embedded?.tags ?? []).map((t) => (t.name ?? '').toLowerCase());

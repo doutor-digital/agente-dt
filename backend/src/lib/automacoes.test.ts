@@ -147,3 +147,13 @@ test('nascer em seco sem ter modo seco é erro de catálogo', () => {
   const problemas = verificarCatalogo([{ ...base, id: 'x-teste', chave: 'X_TESTE_SLUGS', temSeco: false, quandoVazio: 'seco' }]);
   assert.deepEqual(problemas, ['x-teste nasce em seco mas não tem modo seco']);
 });
+
+test('desistencia-cancela: nasce em "só no papel" na rede toda (regra da casa: seco primeiro, uma unidade por vez)', () => {
+  const a = automacaoPorId('desistencia-cancela');
+  assert.ok(a);
+  assert.equal(a.temSeco, true);
+  assert.equal(a.quandoVazio, 'seco');
+  assert.equal(estadoDaAutomacao(SERRA, 'desistencia-cancela', undefined), 'seco');
+  assert.equal(estadoDaAutomacao(SERRA, 'desistencia-cancela', 'doutor-hernia-serra'), 'ligado');
+  assert.equal(estadoDaAutomacao(TAUBATE, 'desistencia-cancela', 'doutor-hernia-serra'), 'seco', 'fora da lista segue no papel');
+});
