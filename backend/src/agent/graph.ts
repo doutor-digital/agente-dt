@@ -725,7 +725,9 @@ export async function buildAgentGraph(
             title: `💸 Conversa passou do teto de gasto (US$ ${teto.usd.toFixed(2)} em ${teto.turnos} turnos) — humano assume`,
             payload: { usd: teto.usd, turnos: teto.turnos, teto: teto.teto },
           });
-          registrarPausaPropria(unit, leadIdDaConversa); // o FALLBACK_TETO avisa o paciente: a trava não o descarta
+          // o FALLBACK_TETO avisa o paciente: a trava não o descarta. Sem o campo de pausa nada é pausado, e a
+          // marca soltaria a resposta atropelada com o próximo turno respondendo de novo.
+          if (unit?.kommoPausedFieldId) registrarPausaPropria(unit, leadIdDaConversa);
           void entregarAoHumano(unit, kommoClient, leadIdDaConversa, teto, recorder);
         }
         // O paciente NÃO fica no vácuo. Conversa cara é quase sempre conversa

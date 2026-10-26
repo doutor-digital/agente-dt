@@ -17,7 +17,7 @@ import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captu
 import { ehRegraDeQualificacao } from './carimbos-do-agendamento.js';
 import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
 import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
-import { registrarPausaPropria } from '../lib/pausa-propria.js';
+import { esquecerPausaPropria, registrarPausaPropria } from '../lib/pausa-propria.js';
 import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
 import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
 import { gravarNomeConfirmadoNoContato } from '../lib/nome-no-contato.js';
@@ -715,6 +715,7 @@ export function buildTools({
           orientacaoAoTransferir(retorno, urgente, avisada)
         );
       } catch (err) {
+        esquecerPausaPropria(unit, leadId); // o cartão não ficou pausado: o próximo turno vai responder
         const latency = Math.round(performance.now() - t0);
         const msg = err instanceof Error ? err.message : String(err);
         await recorder.step({

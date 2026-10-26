@@ -28,6 +28,12 @@ export function registrarPausaPropria(conta: Conta, leadId: number | string | nu
   }
 }
 
+/** A pausa não chegou ao Kommo: a marca sai, senão a resposta "atropelada" sai e o próximo turno responde de novo. */
+export function esquecerPausaPropria(conta: Conta, leadId: number | string | null | undefined): void {
+  if (leadId === null || leadId === undefined || leadId === '') return;
+  marcas.delete(chave(conta, leadId));
+}
+
 /** A própria Sofia pausou este cartão desde `desde` (início do turno)? */
 export function pausouSozinhaDesde(conta: Conta, leadId: number | string, desde: number): boolean {
   const t = marcas.get(chave(conta, leadId));
