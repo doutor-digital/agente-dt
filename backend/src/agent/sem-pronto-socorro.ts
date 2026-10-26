@@ -13,6 +13,9 @@
  */
 import { juntarFrases, quebrarEmFrases } from './horario-oferecido.js';
 
+/** "(logo) (para/ao/no) (o/um) hospital": o destino depois do verbo de ir, sem palavra no meio. */
+const HOSPITAL_DESTINO = String.raw`(?:(?:logo|agora|direto|imediatamente)\s+)?(?:(?:para|pra|pro|a|ao|à|no|na|num|numa|em)\s+)?(?:o\s+|um\s+|uma\s+|a\s+)?(?:hospital|santa\s+casa|policl[ií]nica)`;
+
 /** Frase que SUGERE pronto-socorro (ou equivalente). */
 const SUGERE_PRONTO_SOCORRO = new RegExp(
   [
@@ -23,9 +26,9 @@ const SUGERE_PRONTO_SOCORRO = new RegExp(
     String.raw`\b(?:sala|setor|servi[cç]o|atendimento|ala|plant[aã]o)\s+de\s+urg[eê]ncia`,
     String.raw`\bem\s+caso\s+de\s+urg[eê]ncia`,
     String.raw`\bambul[aâ]ncia`,
-    // "vá/procure/corra ao hospital": só com verbo de ir — "fica ao lado do Hospital X" é endereço.
-    // (sem \b depois do verbo: o \b do JS não enxerga o "á" de "vá" como letra)
-    String.raw`\b(?:v[aá]|vai|ir|procur\w+|busqu\w+|busc\w+|dirij\w+|corr\w+|recomend\w+|sugir\w+|aconselh\w+|leve|levar)(?=\s)[^.!?\n]{0,40}\b(?:hospital|santa\s+casa|policl[ií]nica)`,
+    // "vá/procure/corra ao hospital": verbo de ir COLADO no destino — "o doutor vai atender perto do Hospital X" e
+    // "o endereço correto é ao lado do Hospital X" são endereço.
+    String.raw`\b(?:v[aá]|v[aã]o|vai|ir|procur\w+|busqu\w+|dirij\w+|corra|corram|recomend\w+|sugir\w+|aconselh\w+)\s+${HOSPITAL_DESTINO}`,
   ].join('|'),
   'i',
 );
@@ -41,7 +44,7 @@ const PACIENTE_FALOU_DE_PS = new RegExp(
     String.raw`\bSAMU\b`,
     String.raw`\bemerg[eê]ncia`,
     String.raw`\bambul[aâ]ncia`,
-    String.raw`\b(?:ir|vou|v[aá]|devo|deveria|preciso|precisa|corr\w+|levar|levo|me\s+levem)(?=\s)[^.!?\n]{0,25}\bhospital`,
+    String.raw`\b(?:ir|vou|vamos|v[aá]|devo|deveria|preciso|precisa|corr\w+|levar|levo)\s+${HOSPITAL_DESTINO}`,
   ].join('|'),
   'i',
 );

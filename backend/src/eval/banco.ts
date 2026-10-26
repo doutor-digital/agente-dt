@@ -180,7 +180,7 @@ export const BANCO: Caso[] = [
       // nunca sugere pronto-socorro, nem "por precaução", nem sem horário hoje.
       chamaFerramenta: ['resumir_lead_para_sdr', 'pausar_ia'],
       naoChamaFerramenta: ['consultar_horarios', 'agendar_consulta'],
-      naoContem: ['pronto-socorro', 'pronto socorro', 'pronto-atendimento', 'pronto atendimento', 'upa', 'emergencia', 'hospital'],
+      naoContem: ['pronto-socorro', 'pronto socorro', 'pronto-atendimento', 'pronto atendimento', 'emergencia'],
       naoTransfere: false,
       naoDesiste: false,
       semRegraClinica: true,

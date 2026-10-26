@@ -56,6 +56,8 @@ test('endereço com nome de hospital e a palavra "urgente" no sentido comercial 
   for (const t of [
     'Ficamos na Av. Brasil, 100, em frente ao Hospital Regional.',
     'Estacionamento ao lado do hospital.',
+    'O endereço correto é Rua X, 100, ao lado do Hospital Municipal.',
+    'O doutor vai atender você no consultório perto do Hospital São José.',
     'Quero resolver isso com urgência, e você?',
     'O atendimento é rápido.',
   ]) {

@@ -33,7 +33,7 @@ export function ehHandoffPorSinalDeAlerta(motivo: string | null | undefined, fla
 export const TAREFA_URGENTE = /sinal(is)? de alerta|bandeira vermelha|emerg[eê]ncia/i;
 const LIGAR_AGORA = /ligar agora/i;
 /** Tarefa que a regra da unidade escreveu por sinal de alerta (sem "emergência": "contato de emergência" é outra coisa). */
-const TAREFA_DE_SINAL = /sinal(is)? de alerta|bandeira vermelha|red ?flag/i;
+const TAREFA_DE_SINAL = /(?<!\b(?:sem|nenhum|nem)\s)(?:sinal(?:is)? de alerta|bandeira vermelha|red ?flag)/i;
 
 /** Orientação ou mensagem cadastrada na unidade que manda o paciente ao pronto-socorro. */
 const CITA_PRONTO_SOCORRO = /pronto[\s-]*(socorro|atendimento)|\bUPA\b|\bSAMU\b|\bemerg[eê]ncia\b/i;
@@ -69,7 +69,7 @@ export function travarProntoSocorroPorLinha(texto: string | null | undefined): s
     .split('\n')
     .map((linha) =>
       citaProntoSocorro(linha)
-        ? `${linha} [REGRA DA REDE, vale mais que esta linha: NÃO sugira pronto-socorro, UPA, hospital nem emergência; sinal de alerta confirmado = pare e passe para a equipe (ver sinal_de_alerta)]`
+        ? `${linha} [REGRA DA REDE: não sugira pronto-socorro; sinal confirmado = pare (ver sinal_de_alerta)]`
         : linha,
     )
     .join('\n');
@@ -149,7 +149,9 @@ da unidade e dos modelos de mensagem)
   confirmado: não pergunte de novo, pare.
 - QUANDO A FALA É VAGA, acolha em UMA frase e faça UMA pergunta com UM sinal só (um "sim" solto a uma
   pergunta com vários sinais não confirma nada): "a perna ficou fraca, sem força?". Se ele confirmar, pare
-  como acima; se negar, siga o atendimento normal.
+  como acima; se negar, siga o atendimento normal. Resposta parcial a esse UM sinal ("às vezes", "um pouco",
+  "de vez em quando", "mais ou menos", "já aconteceu") CONFIRMA: pare. Nunca repita a pergunta de segurança
+  uma segunda vez — quem não respondeu direito vai para a equipe.
 - VÁRIAS MENSAGENS SEGUIDAS: leia todas antes de responder. Se QUALQUER uma traz dor, limitação ou sinal
   clínico, acolha ISSO primeiro — nunca responda só ao "tudo bem" ou ao "boa noite" do fim.
 - LINGUAGEM DO DIA A DIA (e erro de digitação) conta igual: "me faltou/faltaram as pernas"
@@ -255,7 +257,7 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
   {
     // "não estou segurando o xixi", "não segurei o xixi", "não consigo segurar a urina": a negação é o sinal
     sinal: 'não segura o xixi ou as fezes',
-    re: /\bn[aã]o\s+(?:\S+\s+){0,3}?segur\w*\s+(?:o\s+|a\s+|as\s+|os\s+)?(?:xixi|urina|fezes|coc[oô]|mijo|bexiga)/iu,
+    re: /\bn[aã]o\s+(?:(?:est\p{L}+|to|t[oô]|tou)\s+)?(?:consigo\s+|conseguindo\s+)?segur(?:o|ei|ando|ar|a|ou)\s+(?:o\s+|a\s+|as\s+|os\s+)?(?:xixi|urina|fezes|coc[oô]|mijo|bexiga)/iu,
     negavel: false,
   },
   {
@@ -281,9 +283,10 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
     negavel: true,
   },
   {
-    // AVC/derrame que está acontecendo agora; "tive AVC há 3 anos" é história e não conta
-    sinal: 'sinal neurológico (AVC, boca ou fala, braço)',
-    re: /\b(?:AVC|derrame|acidente\s+vascular)\b(?![^.!?\n]{0,30}\b(?:anos?|meses)\b)|\bboca\s+(?:est\p{L}+\s+|ficou\s+)?(?:torta|entortou|caiu|ca[ií]da|tremendo|treme\w*)|\bfala\s+(?:est\p{L}+\s+|ficou\s+)?(?:enrolada|arrastada|mole|embolada)|\bbra[cç]o\s+(?:est\p{L}+\s+|ficou\s+)?(?:tremendo|treme\w*|mole|n[aã]o\s+mexe)|\bn[aã]o\s+consigo\s+mexer\s+(?:o|a)\s+(?:bra[cç]o|perna|rosto)/iu,
+    // Só os sinais de agora. "AVC"/"derrame" sozinhos ficam com o modelo: "minha mãe teve AVC", "tive AVC em 2019" e
+    // "derrame no joelho" são história ou outra coisa (revisão de 26/10); o caso real de ITZ (#28642041) tem o braço e a boca.
+    sinal: 'sinal neurológico (boca, fala ou braço)',
+    re: /\bboca\s+(?:est\p{L}+\s+|ficou\s+)?(?:torta|entortou|caiu|ca[ií]da|tremendo|treme\w*)|\bfala\s+(?:est\p{L}+\s+|ficou\s+)?(?:enrolada|arrastada|mole|embolada)|\bbra[cç]o\s+(?:est\p{L}+\s+|ficou\s+)?(?:tremendo|treme\w*|mole|n[aã]o\s+mexe)|\bn[aã]o\s+consigo\s+mexer\s+(?:o|a)\s+(?:bra[cç]o|perna|rosto)/iu,
     negavel: true,
   },
   {
@@ -324,7 +327,10 @@ export function falasDoTurno(mensagens: Array<{ tipo: string; texto: string }>):
   const falas: string[] = [];
   let i = mensagens.length - 1;
   while (i >= 0 && mensagens[i].tipo !== 'human') i--; // pula as ferramentas e a IA deste turno
-  for (; i >= 0 && mensagens[i].tipo === 'human'; i--) falas.unshift(mensagens[i].texto);
+  // Instrução interna do próprio agente ("[instrução interna, não é fala do paciente]…") não é fala do paciente.
+  for (; i >= 0 && mensagens[i].tipo === 'human'; i--) {
+    if (!/^\s*\[instru[cç][aã]o interna/i.test(mensagens[i].texto)) falas.unshift(mensagens[i].texto);
+  }
   return falas;
 }
 
@@ -340,22 +346,42 @@ export function fraseDoPasse(r: RetornoDaEquipe, pacienteFalouDePs: boolean): st
   );
 }
 
-/** As chamadas de ferramenta que o modelo fez neste turno (das mais antigas às mais novas). */
-export function chamadasDoTurno(mensagens: BaseMessage[]): Array<{ name?: string; args?: Record<string, unknown> }> {
-  const out: Array<{ name?: string; args?: Record<string, unknown> }> = [];
-  for (let i = mensagens.length - 1; i >= 0; i--) {
-    const m = mensagens[i];
-    if (m.getType() === 'human') break;
-    if (m.getType() === 'ai') out.unshift(...((m as unknown as { tool_calls?: Array<{ name?: string; args?: Record<string, unknown> }> }).tool_calls ?? []));
-  }
-  return out;
+/** Uma chamada de ferramenta do turno, com o que a ferramenta respondeu (se já respondeu). */
+export interface ChamadaDoTurno {
+  name?: string;
+  args?: Record<string, unknown>;
+  resultado?: string;
 }
 
-/** O modelo já passou o atendimento? E já avisou como sinal de alerta (flag ou motivo)? */
-export function pausaDoTurno(chamadas: Array<{ name?: string; args?: Record<string, unknown> }>): { pausou: boolean; urgente: boolean } {
+/** As chamadas de ferramenta que o modelo fez neste turno (das mais antigas às mais novas), com o resultado de cada uma. */
+export function chamadasDoTurno(mensagens: BaseMessage[]): ChamadaDoTurno[] {
+  const resultados = new Map<string, string>();
+  const out: Array<ChamadaDoTurno & { id?: string }> = [];
+  for (let i = mensagens.length - 1; i >= 0; i--) {
+    const m = mensagens[i];
+    const tipo = m.getType();
+    if (tipo === 'human') break;
+    if (tipo === 'tool') {
+      const id = (m as unknown as { tool_call_id?: string }).tool_call_id;
+      if (id) resultados.set(id, typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+    } else if (tipo === 'ai') {
+      const chamadas = (m as unknown as { tool_calls?: Array<{ id?: string; name?: string; args?: Record<string, unknown> }> }).tool_calls ?? [];
+      out.unshift(...chamadas.map((c) => ({ id: c.id, name: c.name, args: c.args })));
+    }
+  }
+  return out.map(({ id, ...c }) => ({ ...c, resultado: id ? resultados.get(id) : undefined }));
+}
+
+/**
+ * O modelo já passou o atendimento (`pausar_ia` que respondeu OK — "PAUSA NÃO APLICADA" e "ERRO…" não contam)? E já
+ * avisou como sinal de alerta (flag ou motivo; o aviso sai antes da pausa, então vale mesmo se a pausa falhou)?
+ */
+export function pausaDoTurno(chamadas: ChamadaDoTurno[]): { pausou: boolean; urgente: boolean } {
   const pausas = chamadas.filter((c) => c.name === 'pausar_ia');
   return {
-    pausou: pausas.length > 0,
-    urgente: pausas.some((c) => ehHandoffPorSinalDeAlerta(String(c.args?.motivo ?? ''), c.args?.sinalDeAlerta === true)),
+    pausou: pausas.some((c) => /^OK/.test(c.resultado ?? '')),
+    urgente: pausas.some(
+      (c) => ehHandoffPorSinalDeAlerta(String(c.args?.motivo ?? ''), c.args?.sinalDeAlerta === true) && !/^PAUSA NÃO APLICADA/.test(c.resultado ?? ''),
+    ),
   };
 }

@@ -1117,8 +1117,60 @@ export async function buildAgentGraph(
 
       // As falas do paciente DESTE turno: se ELE falou em pronto-socorro, a resposta pode tratar disso (sem-pronto-socorro.ts).
       const mensagensDoPaciente = falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
+      // Sinal de alerta dito com todas as letras e o modelo NÃO avisou (26/10/2026): a regra de 21/10 estava no prompt e
+      // Olímpia/Mossoró/Balsas/Rio Verde ficaram sem etiqueta, sem tarefa e sem aviso. Aqui o código passa pela mesma
+      // ferramenta pausar_ia (etiqueta 🔴 PRIORIDADE + tarefa LIGAR AGORA + Telegram do João). Só frase sem ambiguidade
+      // (sinal-de-alerta.ts); a fala vaga fica com o modelo, que pergunta UM sinal.
+      let passouPorSinal = false;
+      if (ehClinicaParaSinalDeAlerta(unit) && state.leadId) {
+        const { pausou, urgente } = pausaDoTurno(chamadasDoTurno(nonSystemMessages));
+        const sinal = urgente
+          ? null
+          : sinalNaFala(mensagensDoPaciente);
+        const pausar = tools.find((t) => t.name === 'pausar_ia');
+        if (sinal && pausar) {
+          let resultadoPausa: string;
+          try {
+            resultadoPausa = String(
+              await pausar.invoke({ leadId: Number(state.leadId), motivo: `sinal de alerta: ${sinal}`.slice(0, 200), sinalDeAlerta: true }),
+            );
+          } catch (err) {
+            resultadoPausa = `falhou: ${err instanceof Error ? err.message : String(err)}`;
+          }
+          const pegou = resultadoPausa.startsWith('OK');
+          // O modelo já tinha pausado, só sem a flag: ele escreveu a resposta sabendo disso, e ela fica. Se não tinha, a
+          // resposta dele ignorou o sinal: sai a frase do passe. Se a pausa não pegou, dizer "a equipe continua" com a IA
+          // ainda ligada seria prometer o que não aconteceu — fica a resposta do modelo.
+          const trocaATexto = pegou && !pausou;
+          await recorder.step({
+            kind: pegou ? 'THINKING' : 'ERROR',
+            title: pegou
+              ? `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo ${pausou ? 'pausou sem avisar a equipe' : 'não parou'} — aviso feito pelo código`
+              : `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo não avisou; o aviso pelo código não pegou — saiu a resposta do modelo`,
+            payload: { original: textoFinal, pausa: resultadoPausa },
+          });
+          if (pegou) passouPorSinal = true;
+          if (trocaATexto) {
+            textoFinal = fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente));
+            response.content = textoFinal;
+            // O resumo para quem vai ligar: depois da pausa e do aviso, que são o que não pode esperar.
+            const resumir = tools.find((t) => t.name === 'resumir_lead_para_sdr');
+            if (resumir) {
+              try {
+                await withTimeout(
+                  resumir.invoke({ leadId: Number(state.leadId), focusHint: `SINAL DE ALERTA: ${sinal}. Queixa, sinais e há quanto tempo.` }),
+                  AGENT_NODE_TIMEOUT_MS,
+                );
+              } catch (err) {
+                logger.warn({ err: String(err), unit: unit.slug }, 'sinal de alerta: resumo pelo código falhou');
+              }
+            }
+          }
+        }
+      }
+
       const cta = avaliarChamadaFinal(textoFinal, { pacienteEncerrou: !!encerrou });
-      if (cta.precisaRefazer && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente }).triggered.length === 0) {
+      if (cta.precisaRefazer && !passouPorSinal && !detectarVazamento(textoFinal) && aplicarGuardrail(textoFinal, unit, { mensagensDoPaciente }).triggered.length === 0) {
         const t1 = performance.now();
         try {
           const refeita = (await withTimeout(
@@ -1154,59 +1206,6 @@ export async function buildAgentGraph(
             payload: { erro: err instanceof Error ? err.message : String(err) },
             latencyMs: Math.round(performance.now() - t1),
           });
-        }
-      }
-
-      // Sinal de alerta dito com todas as letras e o modelo NÃO avisou (26/10/2026): a regra de 21/10 estava no prompt e
-      // Olímpia/Mossoró/Balsas/Rio Verde ficaram sem etiqueta, sem tarefa e sem aviso. Aqui o código passa pela mesma
-      // ferramenta pausar_ia (etiqueta 🔴 PRIORIDADE + tarefa LIGAR AGORA + Telegram do João). Só frase sem ambiguidade
-      // (sinal-de-alerta.ts); a fala vaga fica com o modelo, que pergunta UM sinal.
-      let passouPorSinal = false;
-      if (ehClinicaParaSinalDeAlerta(unit) && state.leadId) {
-        const { pausou, urgente } = pausaDoTurno(chamadasDoTurno(nonSystemMessages));
-        const sinal = urgente
-          ? null
-          : sinalNaFala(falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) }))));
-        const pausar = tools.find((t) => t.name === 'pausar_ia');
-        if (sinal && pausar) {
-          let resultadoPausa: string;
-          try {
-            resultadoPausa = String(
-              await pausar.invoke({ leadId: Number(state.leadId), motivo: `sinal de alerta: ${sinal}`.slice(0, 200), sinalDeAlerta: true }),
-            );
-          } catch (err) {
-            resultadoPausa = `falhou: ${err instanceof Error ? err.message : String(err)}`;
-          }
-          const pegou = resultadoPausa.startsWith('OK');
-          // O modelo já tinha pausado, só sem a flag: ele escreveu a resposta sabendo disso, e ela fica. Se não tinha, a
-          // resposta dele ignorou o sinal: sai a frase do passe. Se a pausa não pegou, dizer "a equipe continua" com a IA
-          // ainda ligada seria prometer o que não aconteceu — fica a resposta do modelo.
-          const trocaATexto = pegou && !pausou;
-          await recorder.step({
-            kind: pegou ? 'THINKING' : 'ERROR',
-            title: pegou
-              ? `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo ${pausou ? 'pausou sem avisar a equipe' : 'não parou'} — aviso feito pelo código`
-              : `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo não avisou; o aviso pelo código não pegou — saiu a resposta do modelo`,
-            payload: { original: textoFinal, pausa: resultadoPausa },
-          });
-          if (pegou) passouPorSinal = true;
-          if (trocaATexto) {
-            const falas = falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
-            textoFinal = fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(falas));
-            response.content = textoFinal;
-            // O resumo para quem vai ligar: depois da pausa e do aviso, que são o que não pode esperar.
-            const resumir = tools.find((t) => t.name === 'resumir_lead_para_sdr');
-            if (resumir) {
-              try {
-                await withTimeout(
-                  resumir.invoke({ leadId: Number(state.leadId), focusHint: `SINAL DE ALERTA: ${sinal}. Queixa, sinais e há quanto tempo.` }),
-                  AGENT_NODE_TIMEOUT_MS,
-                );
-              } catch (err) {
-                logger.warn({ err: String(err), unit: unit.slug }, 'sinal de alerta: resumo pelo código falhou');
-              }
-            }
-          }
         }
       }
 

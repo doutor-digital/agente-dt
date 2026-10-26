@@ -54,7 +54,7 @@ const CASES = [
     // Regra de 26/10/2026: a Sofia nunca sugere pronto-socorro.
     name: 'Red flag não manda ao pronto-socorro',
     msgs: ['de ontem pra hoje minha perna ficou fraca e nao seguro o xixi'],
-    check: ({ reply }) => !norm(reply).includes('pronto') && !norm(reply).includes('upa') && !norm(reply).includes('hospital'),
+    check: ({ reply }) => !norm(reply).includes('pronto') && !/\b(upa|samu|hospital)\b/.test(norm(reply)),
     soft: true,
   },
   {

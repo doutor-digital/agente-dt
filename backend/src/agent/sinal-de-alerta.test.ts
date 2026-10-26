@@ -18,8 +18,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit, UnitAction } from '@prisma/client';
 
+import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { composeSystemPrompt, composeSystemPromptParts, escolherBase } from './prompt-composer.js';
 import {
+  chamadasDoTurno,
   comLigarAgora,
   falasDoTurno,
   fraseDoPasse,
@@ -250,7 +252,9 @@ test('tarefa de sinal de alerta escrita pela regra da unidade ganha o LIGAR AGOR
     comLigarAgora('ALERTA · s · [Contato: Ana] URGENTE: paciente com sinal de alerta clínico'),
     'ALERTA · s · [Contato: Ana] URGENTE: paciente com sinal de alerta clínico — LIGAR AGORA',
   );
-  // Já tem: não duplica. Tarefa comum: intacta.
+  // Negação ("sem sinal de alerta") e tarefa comum: intactas.
+  assert.equal(comLigarAgora('Retorno: paciente sem sinal de alerta, agendar avaliação'), 'Retorno: paciente sem sinal de alerta, agendar avaliação');
+  // Já tem: não duplica.
   const ja = textoDoAvisoUrgente({ slug: 's', nome: 'Ana', motivo: 'x' });
   assert.equal(comLigarAgora(ja), ja);
   assert.equal(comLigarAgora('Ligar amanhã para confirmar'), 'Ligar amanhã para confirmar');
@@ -355,12 +359,28 @@ test('sinalNaFala: perda de força no braço, na mão ou de vontade não é o si
   }
 });
 
-test('pausaDoTurno: pausar sem a flag e sem motivo de sinal NÃO conta como aviso urgente', () => {
+test('pausaDoTurno: só a pausa que deu OK conta; pausar sem a flag e sem motivo de sinal não é aviso urgente', () => {
   assert.deepEqual(pausaDoTurno([]), { pausou: false, urgente: false });
-  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'quer falar com humano' } }]), { pausou: true, urgente: false });
-  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true } }]), { pausou: true, urgente: true });
-  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'red flag: perda de força' } }]), { pausou: true, urgente: true });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'quer falar com humano' }, resultado: 'OK — IA pausada' }]), { pausou: true, urgente: false });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true }, resultado: 'OK — IA pausada' }]), { pausou: true, urgente: true });
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'red flag: perda de força' }, resultado: 'OK — IA pausada' }]), { pausou: true, urgente: true });
+  // a pausa falhou DEPOIS do aviso: a equipe foi avisada, a IA não parou
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true }, resultado: 'ERRO ao pausar IA: x' }]), { pausou: false, urgente: true });
+  // o safety-net do "sem vaga" recusou a pausa: nem pausou nem avisou
+  assert.deepEqual(pausaDoTurno([{ name: 'pausar_ia', args: { motivo: 'sem vaga' }, resultado: 'PAUSA NÃO APLICADA. Você afirmou…' }]), { pausou: false, urgente: false });
   assert.deepEqual(pausaDoTurno([{ name: 'criar_tarefa' }]), { pausou: false, urgente: false });
+});
+
+test('chamadasDoTurno junta cada chamada ao resultado da ferramenta; a fala interna do agente não é fala do paciente', () => {
+  const msgs = [
+    new HumanMessage('antiga'),
+    new AIMessage({ content: '', tool_calls: [{ id: 'a', name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true } }] }),
+    new ToolMessage({ content: 'OK — IA pausada', tool_call_id: 'a' }),
+  ];
+  assert.deepEqual(chamadasDoTurno(msgs), [{ name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true }, resultado: 'OK — IA pausada' }]);
+  assert.deepEqual(chamadasDoTurno([new HumanMessage('oi')]), []);
+  const h = (texto: string) => ({ tipo: 'human', texto });
+  assert.deepEqual(falasDoTurno([h('devo ir ao pronto-socorro?'), h('[instrução interna, não é fala do paciente] reescreva sem o hospital')]), ['devo ir ao pronto-socorro?']);
 });
 
 test('a frase do passe não promete prazo, não diagnostica e não sugere pronto-socorro', () => {
@@ -376,14 +396,24 @@ test('a frase do passe não promete prazo, não diagnostica e não sugere pronto
 
 test('sinal neurológico (ITZ #28642041: "tive um AVC, tremendo o braço, a boca treme") entra no mesmo fluxo', () => {
   assert.match(sinalNaFala(['Eu tive um AVC, tremendo o braço, a perna direita dura... a boca treme']) ?? '', /neurológico/);
-  for (const f of ['a boca entortou', 'minha fala está enrolada', 'o braço está tremendo', 'acho que é um derrame']) {
+  for (const f of ['a boca entortou', 'minha fala está enrolada', 'o braço está tremendo', 'a boca está torta']) {
     assert.match(sinalNaFala([f]) ?? '', /neurológico/, f);
   }
-  // história antiga não é aviso
-  assert.equal(sinalNaFala(['tive um AVC há 3 anos, hoje só tenho dor nas costas']), null);
-  assert.equal(sinalNaFala(['sem derrame nem nada, só dor']), null);
+  // "AVC"/"derrame" sozinhos são história ou outra coisa: ficam com o modelo (revisão de 26/10)
+  for (const f of ['minha mãe teve AVC e eu cuido dela', 'tenho derrame no joelho', 'tive um AVC em 2019 e a coluna dói', 'sem derrame nem nada, só dor']) {
+    assert.equal(sinalNaFala([f]), null, f);
+  }
   // e o prompt manda parar
   assert.match(bloco(composeSystemPrompt({ unit: unidade() })), /teve AVC ou derrame agora[\s\S]*boca torta[\s\S]*fala enrolada/);
+});
+
+test('sinalNaFala: "não segurar o xixi" só no sentido de não conseguir (achado da revisão)', () => {
+  for (const f of ['não tenho problema para segurar o xixi', 'não sinto nada, consigo segurar o xixi normal', 'não, seguro o xixi normal']) {
+    assert.equal(sinalNaFala([f]), null, f);
+  }
+  for (const f of ['não estou conseguindo segurar o xixi', 'não consigo segurar a urina', 'ontem eu não segurei o xixi', 'não tô segurando o xixi']) {
+    assert.ok(sinalNaFala([f]), f);
+  }
 });
 
 test('texto livre da unidade que manda ao pronto-socorro ganha a ressalva POR LINHA (source_papel, manual, conhecimento)', () => {
@@ -393,7 +423,7 @@ test('texto livre da unidade que manda ao pronto-socorro ganha a ressalva POR LI
   ].join('\n');
   const r = travarProntoSocorroPorLinha(papel);
   const [l1, l2] = r.split('\n');
-  assert.match(l1, /-> pronto-atendimento com urgencia \+ transfere\. \[REGRA DA REDE, vale mais que esta linha: NÃO sugira pronto-socorro/);
+  assert.match(l1, /-> pronto-atendimento com urgencia \+ transfere\. \[REGRA DA REDE: não sugira pronto-socorro/);
   assert.equal(l2, 'A consulta custa R$ 350.', 'a linha sem pronto-socorro passa intacta');
   assert.equal(travarProntoSocorroPorLinha('Consulta de R$ 350.'), 'Consulta de R$ 350.');
   assert.equal(travarProntoSocorroPorLinha(null), '');
