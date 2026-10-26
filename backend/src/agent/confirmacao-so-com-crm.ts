@@ -137,16 +137,18 @@ export function afirmaPagamentoConferido(texto: string | null | undefined): bool
 }
 
 /**
- * Turno com comprovante: se a resposta afirma confirmação, vale o recado fixo. Resposta que não afirma
- * ("recebi, me manda o nome completo") segue como veio.
+ * Se a resposta afirma confirmação, vale o recado fixo. Resposta que não afirma ("recebi, me manda o nome
+ * completo") segue como veio.
  *
- * Com uma consulta já no CRM (`consultaNoCrm` = o prompt traz a consulta de verdade: criada pela equipe, ou
- * paciente que paga o saldo) falar DELA é verdade e o texto fica — mas dizer que o PAGAMENTO foi conferido
- * continua sendo da equipe (achado do Codex): essa frase ainda vira o recado.
+ * - "Pagamento confirmado / Pix aprovado" é da equipe em QUALQUER turno (decisão do João, 26/10): o campo
+ *   "Pagou antecipado" do cartão é escrito pela própria IA a partir da foto, é informação e não confirmação.
+ * - No turno do comprovante (ou com o recado fresco no histórico) vale também "consulta confirmada/agendada",
+ *   a menos que a consulta já esteja no CRM (`consultaNoCrm` = o prompt traz a consulta de verdade: criada pela
+ *   equipe, ou paciente que paga o saldo): falar DELA é verdade.
  */
 export function respostaDoComprovante(texto: string, turno: TurnoDoComprovante, consultaNoCrm: boolean): string | null {
-  if (!turno.pendente) return null;
-  if (consultaNoCrm) return turno.noTurno && afirmaPagamentoConferido(texto) ? RECADO_COMPROVANTE : null;
+  if (afirmaPagamentoConferido(texto)) return RECADO_COMPROVANTE;
+  if (!turno.pendente || consultaNoCrm) return null;
   return afirmaConfirmacao(texto) ? RECADO_COMPROVANTE : null;
 }
 

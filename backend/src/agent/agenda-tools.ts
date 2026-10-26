@@ -14,7 +14,6 @@ import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.j
 import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente.js';
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
-import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
@@ -1405,32 +1404,25 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      // Unidade em que a vaga só existe depois da taxa antecipada (Boa Vista, R$ 100).
-      // O manual já dizia "NÃO agende ainda" e o modelo marcou mesmo assim (Lindomar,
-      // 05/09/2026). Remarcação passa: quem remarca já tem consulta, e pagou para tê-la.
+      // Unidade em que a vaga só existe depois da taxa antecipada (Boa Vista, R$ 100). O manual já dizia "NÃO agende
+      // ainda" e o modelo marcou mesmo assim (Lindomar, 05/09/2026). Remarcação passa: quem remarca já tem consulta.
+      // Decisão do João (26/10/2026): pagamento só a EQUIPE confirma. O campo "Pagou antecipado" do cartão é escrito
+      // pela própria IA a partir da foto, então ele é informação — não autoriza marcar. Aqui a IA nunca marca: a equipe
+      // confere o comprovante e cria a consulta na franquia.
       if (fresca.spineBookingRequiresPayment && !args.remarcando) {
-        const prova = await provaDePagamentoAntecipado({ unitId: fresca.id, leadId: args.leadId, kommo });
-        if (!prova.ok) {
-          await recorder.step({
-            kind: 'ERROR',
-            title: 'agendar_consulta recusado — reserva sem pagamento confirmado',
-            payload: { ...args, motivo: prova.motivo },
-          });
-          return (
-            'RECUSADO: nesta unidade a vaga só é reservada DEPOIS do pagamento antecipado ' +
-            `confirmado, e ainda não há prova dele (${prova.motivo}). A consulta NÃO foi marcada. ` +
-            'NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste turno. ' +
-            'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: ' +
-            'PIX do valor antecipado desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ' +
-            'ou pagamento na clínica antes do dia. Quando o comprovante chegar (foto ou PDF), NÃO marque: a equipe ' +
-            'confere e confirma a consulta em até 1 hora. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para a equipe acompanhar.'
-          );
-        }
         await recorder.step({
-          kind: 'THINKING',
-          title: `Pagamento antecipado confirmado pelo ${prova.fonte === 'cartao' ? 'cartão do Kommo' : 'comprovante lido na conversa'} — pode reservar`,
-          payload: { leadId: args.leadId, fonte: prova.fonte },
+          kind: 'ERROR',
+          title: 'agendar_consulta recusado — reserva sem pagamento confirmado pela equipe (só a equipe confere o pagamento)',
+          payload: { ...args },
         });
+        return (
+          'RECUSADO: nesta unidade a vaga só é reservada DEPOIS do pagamento antecipado conferido pela EQUIPE. ' +
+          'A consulta NÃO foi marcada. NÃO diga que está agendada nem que o pagamento foi confirmado e NÃO chame ' +
+          'agendar_consulta de novo neste turno. Diga ao paciente que o horário fica separado por enquanto e explique como ' +
+          'garantir: PIX do valor antecipado desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ou ' +
+          'pagamento na clínica antes do dia. Quando o comprovante chegar (foto ou PDF), a equipe confere e confirma a ' +
+          'consulta em até 1 hora. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para a equipe acompanhar.'
+        );
       }
 
       const dono = await conferirPacienteDoLead(fresca.id, args.leadId, args.idClient);
@@ -1631,8 +1623,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
                 .catch(() => null);
           const pagamento = decidirPagamentoAntecipado({
             ehRetorno,
-            // Chegou até aqui numa unidade com taxa de reserva = a trava acima achou a prova.
-            pagamentoComprovado: Boolean(fresca.spineBookingRequiresPayment) && !args.remarcando,
+            // Nunca pela IA: o pagamento só a equipe confirma (a trava acima recusa nas unidades com taxa de reserva).
+            pagamentoComprovado: false,
             formaPagamento: args.formaPagamento,
             escolhaSalva,
             valorAtual: leadAtual ? valorDoCampo(leadAtual, idPagamento) : undefined,

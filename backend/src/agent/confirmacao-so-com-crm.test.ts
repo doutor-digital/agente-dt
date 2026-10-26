@@ -241,3 +241,12 @@ test('consulta já no CRM + comprovante: falar da consulta fica; dizer que o pag
   assert.ok(!afirmaPagamentoConferido('A equipe confere o pagamento e confirma em até 1 hora.'));
   assert.ok(!afirmaPagamentoConferido('Seu pagamento ainda não foi confirmado.'));
 });
+
+test('"Pagou antecipado" preenchido é informação: depois da janela, nada de "pagamento confirmado"', () => {
+  const longeDoComprovante = turnoDoComprovante('Quero marcar quinta', [RECADO_COMPROVANTE, ...Array.from({ length: 10 }, (_, i) => `r${i}`)]);
+  assert.deepEqual(longeDoComprovante, { noTurno: false, pendente: false });
+  assert.equal(respostaDoComprovante('Seu pagamento está confirmado, vou marcar quinta!', longeDoComprovante, false), RECADO_COMPROVANTE);
+  assert.equal(respostaDoComprovante('Seu Pix já foi aprovado.', longeDoComprovante, true), RECADO_COMPROVANTE);
+  // fluxo normal de quem ainda não pagou segue como veio
+  assert.equal(respostaDoComprovante('Tenho quinta às 9h. Quer pagar o Pix antecipado ou na clínica?', longeDoComprovante, false), null);
+});
