@@ -66,15 +66,35 @@ export function cartaoEncerrado(
   return lead?.status_id != null && IDS_DE_ENCERRAMENTO.has(lead.status_id);
 }
 
+/**
+ * O que o campo "Status da conversa" diz AGORA no cartão (o valor do select), ou null se está vazio / não veio.
+ * Acha o campo pelo id quando a conta tem esquema e, na falta dele, pelo nome — a leitura não depende do esquema.
+ */
+export function statusAtualDoCartao(
+  lead: { custom_fields_values?: Array<{ field_id: number; field_name?: string; values: Array<{ value: unknown }> }> | null } | null | undefined,
+  campoId: number | null,
+  nomeDoCampo: string,
+): string | null {
+  const nome = normalizarNome(nomeDoCampo);
+  const campo = (lead?.custom_fields_values ?? []).find(
+    (f) => (campoId !== null && f.field_id === campoId) || (f.field_name != null && normalizarNome(f.field_name) === nome),
+  );
+  const valor = campo?.values?.[0]?.value;
+  return typeof valor === 'string' && valor.trim() !== '' ? valor : null;
+}
+
 export type DecisaoDoStatus = { gravar: true } | { gravar: false; motivo: string };
 
 /**
  * Pode `novo` ser gravado agora? Puro.
  *  - "Encerrada" sempre (é o carimbo de etapa falando);
- *  - qualquer outro valor só se o cartão NÃO estiver encerrado.
+ *  - qualquer outro valor só NÃO grava quando as DUAS coisas são verdade: o cartão está em etapa de encerramento
+ *    E o campo JÁ diz "Encerrada". Cartão encerrado cujo campo diz outra coisa (o carimbo não gravou, ou gravou e
+ *    alguém mexeu) deixa o handoff e o follow-up gravarem: bloquear só pela etapa congelaria o campo para sempre.
  */
-export function decidirStatusConversa(novo: StatusConversa, encerrado: boolean): DecisaoDoStatus {
+export function decidirStatusConversa(novo: StatusConversa, encerrado: boolean, valorAtual: string | null): DecisaoDoStatus {
   if (novo === STATUS_ENCERRADA) return { gravar: true };
-  if (encerrado) return { gravar: false, motivo: 'cartão em etapa de encerramento — "Encerrada" vale' };
+  const jaEncerrada = valorAtual !== null && normalizarNome(valorAtual) === normalizarNome(STATUS_ENCERRADA);
+  if (encerrado && jaEncerrada) return { gravar: false, motivo: 'cartão em etapa de encerramento e o campo já diz "Encerrada" — vale' };
   return { gravar: true };
 }

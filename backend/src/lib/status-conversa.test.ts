@@ -2,7 +2,7 @@ import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 
-import { cartaoEncerrado, decidirStatusConversa, etapaEncerraConversa } from './status-conversa.js';
+import { cartaoEncerrado, decidirStatusConversa, etapaEncerraConversa, statusAtualDoCartao } from './status-conversa.js';
 import { aplicarCarimbosDeEtapa, CAMPOS_CARIMBO } from './carimbo-etapa.js';
 import { limparCacheEsquema, montarEsquema } from './kommo-schema.js';
 import { _semearParaTeste } from './automacoes-estado.js';
@@ -49,7 +49,10 @@ function cartaoFalso(statusId: number, pipelineId: number, statusConversa: strin
     getLead: async (id: number) => {
       estado.leituras++;
       if (estado.falhaNaLeitura) throw new Error('429');
-      return { id, name: 'x', status_id: estado.status_id, pipeline_id: estado.pipeline_id, custom_fields_values: [] };
+      const valores = estado.statusConversa === null
+        ? []
+        : [{ field_id: ID_STATUS_CONVERSA, field_name: CAMPOS_CARIMBO.STATUS_CONVERSA, values: [{ value: estado.statusConversa }] }];
+      return { id, name: 'x', status_id: estado.status_id, pipeline_id: estado.pipeline_id, custom_fields_values: valores };
     },
     setLeadCustomFieldValue: async (_leadId: number, fieldId: number, _tipo: string, valor: unknown) => {
       if (fieldId === ID_STATUS_CONVERSA) estado.statusConversa = String(valor);
@@ -59,12 +62,24 @@ function cartaoFalso(statusId: number, pipelineId: number, statusConversa: strin
 }
 
 test('só o carimbo de etapa escreve "Encerrada"; qualquer outro valor respeita cartão encerrado', () => {
-  assert.deepEqual(decidirStatusConversa('Encerrada', true), { gravar: true });
-  assert.deepEqual(decidirStatusConversa('Encerrada', false), { gravar: true });
+  assert.deepEqual(decidirStatusConversa('Encerrada', true, 'Encerrada'), { gravar: true });
+  assert.deepEqual(decidirStatusConversa('Encerrada', false, null), { gravar: true });
   for (const v of ['Sem resposta', 'Respondendo', 'Aguardando lead'] as const) {
-    assert.equal(decidirStatusConversa(v, false).gravar, true, `${v} em cartão aberto`);
-    assert.equal(decidirStatusConversa(v, true).gravar, false, `${v} em cartão encerrado`);
+    assert.equal(decidirStatusConversa(v, false, 'Encerrada').gravar, true, `${v} em cartão aberto`);
+    assert.equal(decidirStatusConversa(v, true, 'Encerrada').gravar, false, `${v} em cartão encerrado e campo Encerrada`);
+    // o outro lado: encerrado mas o campo diz outra coisa (ou está vazio) — grava, senão o campo congela
+    for (const atual of ['Aguardando lead', 'Respondendo', 'Sem resposta', null]) {
+      assert.equal(decidirStatusConversa(v, true, atual).gravar, true, `${v} em cartão encerrado com o campo em ${atual}`);
+    }
   }
+});
+
+test('statusAtualDoCartao: acha pelo id ou, sem esquema, pelo nome; vazio vira null', () => {
+  const lead = { custom_fields_values: [{ field_id: 7, field_name: '⬢ Status da conversa', values: [{ value: 'Encerrada' }] }] };
+  assert.equal(statusAtualDoCartao(lead, 7, '⬢ Status da conversa'), 'Encerrada');
+  assert.equal(statusAtualDoCartao(lead, null, '⬢ Status da conversa'), 'Encerrada');
+  assert.equal(statusAtualDoCartao({ custom_fields_values: [] }, 7, '⬢ Status da conversa'), null);
+  assert.equal(statusAtualDoCartao(null, 7, '⬢ Status da conversa'), null);
 });
 
 test('"etapa que encerra" é uma definição só, e o carimbo de etapa usa a mesma', () => {
@@ -126,6 +141,21 @@ test('reaberto: o SDR tira o cartão de PERDIDO e a IA volta a escrever o campo'
   estado.status_id = ETAPA_QUALIFICACAO; // a equipe moveu de etapa
   await gravarStatusConversa(unidade, kommo, 1, 'Aguardando lead', 'turno-da-ia');
   assert.equal(estado.statusConversa, 'Aguardando lead');
+});
+
+test('SONDA DO SÊNIOR: cartão encerrado onde o carimbo NÃO gravou "Encerrada" — handoff, follow-up e turno da IA gravam (o campo não congela)', async () => {
+  limparCacheEsquema();
+  const { estado, kommo } = cartaoFalso(143, COMERCIAL, 'Aguardando lead'); // PERDIDO, campo ainda velho
+  await carimbarHumanoAssumiu(unidade, kommo, 1, 'Escalonamento');
+  assert.equal(estado.statusConversa, 'Respondendo', 'handoff foi recusado e o campo congelou');
+  await carimbarSemResposta(unidade, 1, kommo);
+  assert.equal(estado.statusConversa, 'Sem resposta', 'follow-up foi recusado e o campo congelou');
+  await gravarStatusConversa(unidade, kommo, 1, 'Aguardando lead', 'turno-da-ia');
+  assert.equal(estado.statusConversa, 'Aguardando lead');
+  // campo vazio num cartão encerrado também grava
+  const vazio = cartaoFalso(143, COMERCIAL, null);
+  await carimbarSemResposta(unidade, 1, vazio.kommo);
+  assert.equal(vazio.estado.statusConversa, 'Sem resposta');
 });
 
 test('funil TRATAMENTO: ALTA (142) não é encerramento de conversa — o campo segue sendo escrito', async () => {

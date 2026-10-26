@@ -13,7 +13,7 @@ import { logger } from '../lib/logger.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { carimboEtapaLiberado } from '../lib/carimbo-etapa.js';
 import { createKommoClient, type KommoClient, type KommoFieldType } from './kommo.service.js';
-import { cartaoEncerrado, decidirStatusConversa, type OrigemDoStatus, type StatusAutomatico, type StatusConversa } from '../lib/status-conversa.js';
+import { cartaoEncerrado, decidirStatusConversa, statusAtualDoCartao, type OrigemDoStatus, type StatusAutomatico, type StatusConversa } from '../lib/status-conversa.js';
 import type { Unit } from '@prisma/client';
 
 export const CAMPOS_DIGITAL = {
@@ -54,8 +54,9 @@ export async function gravarCampoDigital(
 
 /**
  * O ÚNICO caminho de escrita de "⬢ Status da conversa" para quem não é o carimbo de etapa (IA, handoff, follow-up).
- * Lê o cartão e, se ele está numa etapa que encerra a conversa (GANHO / PERDIDO), NÃO grava: o "Encerrada" do carimbo
- * de etapa vale (ver lib/status-conversa.ts). Devolve true só quando gravou.
+ * Lê o cartão e, se ele está numa etapa que encerra a conversa (GANHO / PERDIDO) E o campo JÁ diz "Encerrada", NÃO
+ * grava: o "Encerrada" do carimbo de etapa vale (ver lib/status-conversa.ts). Cartão encerrado cujo campo diz outra
+ * coisa é escrito normalmente — senão o campo congelaria. Devolve true só quando gravou.
  *
  * SÓ ONDE O CARIMBO DE ETAPA É O DONO: em unidade com `carimbo-etapa` desligada ninguém grava "Encerrada", e recusar
  * a escrita deixaria o cartão fechado com um valor velho. Ali handoff e follow-up gravam como sempre gravaram, sem
@@ -91,10 +92,11 @@ export async function gravarStatusConversa(
       const esquema = await esquemaDaUnidade(unit, kommo).catch(() => null);
       const nomeDaEtapa = esquema?.nomeDoStatus(cartao.pipeline_id, cartao.status_id)?.status ?? null;
       // Sem o carimbo como dono, vale só a guarda antiga por id (142/143 em qualquer funil), que é o que o turno da IA já tinha.
-      const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, carimboEDono ? nomeDaEtapa : null));
+      const valorAtual = statusAtualDoCartao(cartao, esquema?.campoPorNome(CAMPOS_DIGITAL.STATUS_CONVERSA) ?? null, CAMPOS_DIGITAL.STATUS_CONVERSA);
+      const decisao = decidirStatusConversa(novo, cartaoEncerrado(cartao, carimboEDono ? nomeDaEtapa : null), valorAtual);
       if (!decisao.gravar) {
         logger.info(
-          { unit: unit.slug, leadId, tentou: novo, origem, etapa: nomeDaEtapa ?? cartao.status_id },
+          { unit: unit.slug, leadId, tentou: novo, origem, etapa: nomeDaEtapa ?? cartao.status_id, valorAtual },
           `status-conversa: não gravei — ${decisao.motivo}`,
         );
         return false;
