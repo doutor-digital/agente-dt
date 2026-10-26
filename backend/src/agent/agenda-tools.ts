@@ -14,7 +14,6 @@ import { registrarTempoAteAgendamento } from '../services/lead-metrics.service.j
 import { avisoDeConsultaExistente, consultasFuturas } from './consulta-existente.js';
 import { dataPorExtenso, feriadoNacional } from '../lib/feriados.js';
 import { marcarConsultaNoTurno } from '../lib/cartao-de-chegada.js';
-import { provaDePagamentoAntecipado } from '../lib/pagamento-antecipado.js';
 import { fmtBRL, precosDaConsulta } from './prompt-composer.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
@@ -1312,10 +1311,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
       'conta própria: explique ao paciente e ofereça consultar de novo.',
     schema: z.object({
       idClient: z.number().int().positive().describe('idClient do paciente (de buscar_paciente).'),
-      remarcando: z
-        .boolean()
-        .optional()
-        .describe('Uso interno de remarcar_consulta. NÃO use — para trocar de horário chame remarcar_consulta.'),
+      // `remarcando` NÃO está no schema: o modelo não pode ligá-lo (ele pula a confirmação de dia/pagamento, a recusa de
+      // Boa Vista e a trava do comprovante). Só `remarcar_consulta` o passa, chamando `func` direto — o zod do
+      // invoke descarta qualquer `remarcando` que o modelo escrever.
       data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Data AAAA-MM-DD.'),
       hora: z.string().regex(/^\d{2}:\d{2}$/).describe('Hora HH:mm do fuso da clínica.'),
       diaConfirmado: z
@@ -1324,8 +1322,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         .describe(
           'true SOMENTE se o paciente disse, com as palavras dele, que consegue ir nesse dia e horário ' +
           '(sem viagem, trabalho ou imprevisto). Também vale: ele mesmo escreveu o dia/hora que escolheu ' +
-          '("terça às 11:30"), ou mandou o comprovante do Pix depois da chave com o horário combinado. ' +
-          '"ok" para o horário não conta.',
+          '("terça às 11:30"). Comprovante do Pix NÃO vale como confirmação do dia (só onde a unidade exige a ' +
+          'taxa de reserva ele libera marcar; a ferramenta decide). "ok" para o horário não conta.',
         ),
       formaPagamento: z
         .enum(['pix_antecipado', 'na_clinica'])
@@ -1405,33 +1403,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
         );
       }
 
-      // Unidade em que a vaga só existe depois da taxa antecipada (Boa Vista, R$ 100).
-      // O manual já dizia "NÃO agende ainda" e o modelo marcou mesmo assim (Lindomar,
-      // 05/09/2026). Remarcação passa: quem remarca já tem consulta, e pagou para tê-la.
-      if (fresca.spineBookingRequiresPayment && !args.remarcando) {
-        const prova = await provaDePagamentoAntecipado({ unitId: fresca.id, leadId: args.leadId, kommo });
-        if (!prova.ok) {
-          await recorder.step({
-            kind: 'ERROR',
-            title: 'agendar_consulta recusado — reserva sem pagamento confirmado',
-            payload: { ...args, motivo: prova.motivo },
-          });
-          return (
-            'RECUSADO: nesta unidade a vaga só é reservada DEPOIS do pagamento antecipado ' +
-            `confirmado, e ainda não há prova dele (${prova.motivo}). A consulta NÃO foi marcada. ` +
-            'NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste turno. ' +
-            'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: ' +
-            'PIX do valor antecipado desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa) ' +
-            'ou pagamento na clínica antes do dia. Quando o comprovante chegar (foto ou PDF), aí sim chame ' +
-            'agendar_consulta. Se ele preferir pagar na clínica, chame resumir_lead_para_sdr para a equipe acompanhar.'
-          );
-        }
-        await recorder.step({
-          kind: 'THINKING',
-          title: `Pagamento antecipado confirmado pelo ${prova.fonte === 'cartao' ? 'cartão do Kommo' : 'comprovante lido na conversa'} — pode reservar`,
-          payload: { leadId: args.leadId, fonte: prova.fonte },
-        });
-      }
+      // Unidade com taxa de reserva (Boa Vista): a IA só marca depois de ler o comprovante da taxa — essa trava mora no
+      // grafo (`travarAgendamentoPorComprovante`, confirmacao-so-com-crm.ts), onde a conversa está à mão.
 
       const dono = await conferirPacienteDoLead(fresca.id, args.leadId, args.idClient);
       if (!dono.ok) {
@@ -1631,7 +1604,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo }: Contexto) {
                 .catch(() => null);
           const pagamento = decidirPagamentoAntecipado({
             ehRetorno,
-            // Chegou até aqui numa unidade com taxa de reserva = a trava acima achou a prova.
+            // Chegou até aqui numa unidade com taxa de reserva = o grafo liberou pelo comprovante da taxa lido na conversa
+            // (a conferência do dinheiro continua sendo da equipe, que ganha a tarefa no mesmo turno).
             pagamentoComprovado: Boolean(fresca.spineBookingRequiresPayment) && !args.remarcando,
             formaPagamento: args.formaPagamento,
             escolhaSalva,
