@@ -529,3 +529,9 @@ test('achados do Codex no commit final: "foi confirmado e isso garante" troca; "
   assert.equal(respostaDoComprovante('Com o Pix confirmado, garante sua vaga.', t, true), null);
   assert.equal(respostaDoComprovante('Combinado, ainda vou confirmar se temos horário na quinta', T([COMPROVANTE, 'e aí?']), false), null);
 });
+
+test('"Combinado" só é barrado pela ação/oferta da PRÓPRIA oração: "Combinado, terça às 10h; vou confirmar com a equipe" é horário combinado', () => {
+  const espera = T([COMPROVANTE, 'e aí?']);
+  assert.equal(respostaDoComprovante('Combinado, terça às 10h; vou confirmar com a equipe.', espera, false), RECADO_COMPROVANTE);
+  assert.equal(respostaDoComprovante('Combinado, vou ver os horários de amanhã; a equipe te avisa.', espera, false), null);
+});

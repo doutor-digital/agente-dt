@@ -113,7 +113,7 @@ export function afirmaConfirmacao(texto: string | null | undefined, opcoes: { es
       (solta ? AFIRMA_FRACA.exec(n) : null) ??
       (solta ? AFIRMA_TE_ESPERO.exec(n) : null) ??
       // "Combinado, vou ver os horários de amanhã" / "Combinado! Quer que eu veja...": é a IA agindo ou oferecendo, não um horário combinado
-      (quando && !/\b(?:vou|vamos|posso|quer|deixa eu)\b/.test(n) ? AFIRMA_COMBINADO.exec(n) : null);
+      (quando && !/\b(?:vou|vamos|posso|quer|deixa eu)\b/.test(n.split(';').find((c) => /\bcombinad/.test(c)) ?? n) ? AFIRMA_COMBINADO.exec(n) : null);
     // "O pagamento antecipado confirmado garante sua vaga" é explicação; "Sua consulta está confirmada e o Pix garante
     // sua vaga" NÃO é: o `garante` só livra quando o que está "confirmado" é o próprio pagamento/Pix.
     if (m && /^(?:pagamento|pix)\b/.test(m[0]) && /\bgarant(?:e|em)\b/.test(n)) continue;
