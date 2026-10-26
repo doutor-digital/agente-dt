@@ -121,7 +121,7 @@ export function falasDoUltimoTurno(msgs: ReadonlyArray<{ role: string; content: 
 // ── a etiqueta de não contatar que a conta já usa ──
 
 /**
- * Em ordem de preferência. `NO_FOLLOW_UP` é a que os gatilhos de PERDIDO leem (existe em 17 das 19 contas medidas em 26/10); Rio Verde
+ * Em ordem de preferência. `NO_FOLLOW_UP` é a que os gatilhos de PERDIDO leem (existe em 18 das 20 contas medidas em 26/10: faltam só Rio Verde e o laboratório); Rio Verde
  * não a tem e usa `NAO_PERTURBAR`; `Fluxo · Opt-out WhatsApp` é o último recurso.
  */
 export const ETIQUETAS_DE_NAO_CONTATAR = ['NO_FOLLOW_UP', 'NAO_PERTURBAR', 'Fluxo · Opt-out WhatsApp'] as const;
