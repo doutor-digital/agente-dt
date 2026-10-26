@@ -53,12 +53,6 @@ const paraDestino = (d: { id: string; ondaId: string; campanhaId: string; unitId
   id: d.id, ondaId: d.ondaId, campanhaId: d.campanhaId, unitId: d.unitId, telefone: d.telefone, chave: d.chave, nome: d.nome, nomeCompleto: d.nomeCompleto ?? d.nome, kommoLeadId: d.kommoLeadId,
 });
 
-/** Rodadas seguidas com limite de taxa da Meta, por unidade. Em memória de propósito: o `portoReal` nasce a cada rodada, o contador não. */
-const limitesSeguidos = new Map<string, number>();
-export function _zerarLimites(): void {
-  limitesSeguidos.clear();
-}
-
 export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
   const franquias = new Map<string, ReturnType<typeof conferenciaDaFranquia>>();
   const mesmoNumero = new Map<string, Promise<string[]>>();
@@ -200,11 +194,14 @@ export function portoReal(unidades: ReadonlyMap<string, Unit>): Porto {
       await createKommoClient(unidade(d.unitId)).addLeadNote(d.kommoLeadId, texto);
     },
 
+    // Persistido (tabela `disparo_limites`): vale depois de reinício e com mais de um processo. O incremento é atômico no banco.
     limiteDeTaxa: async (unitId, houve) => {
-      const n = houve ? (limitesSeguidos.get(unitId) ?? 0) + 1 : 0;
-      if (n === 0) limitesSeguidos.delete(unitId);
-      else limitesSeguidos.set(unitId, n);
-      return n;
+      if (!houve) {
+        await prisma.disparoLimite.deleteMany({ where: { unitId } });
+        return 0;
+      }
+      const linha = await prisma.disparoLimite.upsert({ where: { unitId }, create: { unitId, seguidas: 1 }, update: { seguidas: { increment: 1 } } });
+      return linha.seguidas;
     },
 
     dormir: (ms) => new Promise((r) => setTimeout(r, ms)),

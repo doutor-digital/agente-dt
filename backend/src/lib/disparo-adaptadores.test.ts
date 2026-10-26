@@ -8,7 +8,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
-import { portoReal, listaDeTesteDoAmbiente, _zerarLimites } from './disparo/porto.js';
+import { portoReal, listaDeTesteDoAmbiente } from './disparo/porto.js';
 import { SpineService, type SpineUnit } from '../services/spine.service.js';
 import { conferenciaDaFranquia, type FranquiaPorta } from './disparo/franquia.js';
 import { rodadaDoDisparo, varrerSaidas, _zerarVarreduraDeSair } from './disparo-worker.js';
@@ -133,13 +133,25 @@ test('porto real: unidade sem número cadastrado conta só a si mesma (e nem con
   assert.equal(consultouUnidades, false);
 });
 
-test('porto real: o contador de rodadas com limite de taxa sobrevive entre rodadas (o porto nasce a cada rodada) e zera quando passa um envio', async () => {
-  _zerarLimites();
+test('porto real: o contador de rodadas com limite de taxa é do BANCO (sobrevive a reinício e a outro processo): incrementa atômico, por unidade, e apaga quando um envio passa', async () => {
+  const linhas = new Map<string, number>();
+  const chamadas: string[] = [];
+  falso('disparoLimite', {
+    upsert: async (a: { where: { unitId: string }; create: { seguidas: number }; update: { seguidas: { increment: number } } }) => {
+      chamadas.push('upsert');
+      const n = (linhas.get(a.where.unitId) ?? 0) + (linhas.has(a.where.unitId) ? a.update.seguidas.increment : a.create.seguidas);
+      linhas.set(a.where.unitId, n);
+      return { unitId: a.where.unitId, seguidas: n };
+    },
+    deleteMany: async (a: { where: { unitId: string } }) => (chamadas.push('delete'), linhas.delete(a.where.unitId), { count: 1 }),
+  });
+  // dois "processos" (dois portos) enxergam a mesma contagem
   assert.equal(await portoReal(new Map()).limiteDeTaxa('a', true), 1);
   assert.equal(await portoReal(new Map()).limiteDeTaxa('a', true), 2);
   assert.equal(await portoReal(new Map()).limiteDeTaxa('b', true), 1, 'por unidade');
   assert.equal(await portoReal(new Map()).limiteDeTaxa('a', false), 0);
   assert.equal(await portoReal(new Map()).limiteDeTaxa('a', true), 1);
+  assert.deepEqual(chamadas, ['upsert', 'upsert', 'upsert', 'delete', 'upsert']);
 });
 
 // ── lista de teste: "*" misturado não vira "todos" ──────────────────────────────────────────────────────────
