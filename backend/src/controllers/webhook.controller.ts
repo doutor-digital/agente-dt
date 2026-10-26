@@ -23,6 +23,8 @@ import { checkBusinessHours } from '../agent/prompt-composer.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { deveIrParaEquipe, ehFalhaEstrutural, limparFalhasDeAudio, registrarFalhaDeAudio } from '../lib/falha-de-audio.js';
 import { describeImage } from '../services/vision.service.js';
+import { marcarRecebimento } from '../agent/confirmacao-so-com-crm.js';
+import { ehTranscricaoDeComprovante } from '../lib/pagamento-antecipado.js';
 import { tentarNotaDeVoz } from '../lib/resposta-em-voz.js';
 import { findUnitBySlug, ensureDefaultUnit } from '../services/units.service.js';
 import { addMessage, upsertConversation } from '../services/conversations.service.js';
@@ -1048,9 +1050,12 @@ export async function processAgent(args: {
     try {
       const d = await describeImage(unit, url);
       const desc = d.text || `[${d.tipo} sem conteúdo legível]`;
+      // Comprovante: carimba a hora em que chegou. O histórico não tem data por mensagem, e a espera da equipe (e a
+      // liberação de marcar nas unidades com taxa de reserva) vale só por 24 h — ver confirmacao-so-com-crm.ts.
+      const naConversa = ehTranscricaoDeComprovante(`[${d.tipo} do cliente]: ${desc}`) ? marcarRecebimento(desc) : desc;
       humanMessage = humanMessage
-        ? `${humanMessage}\n\n[${d.tipo} do cliente]: ${desc}`
-        : `[${d.tipo} do cliente]: ${desc}`;
+        ? `${humanMessage}\n\n[${d.tipo} do cliente]: ${naConversa}`
+        : `[${d.tipo} do cliente]: ${naConversa}`;
       algumAnexoLido = true;
       await recorder.step({
         kind: 'THINKING',
