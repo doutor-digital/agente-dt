@@ -141,7 +141,15 @@ function violaRegra(regra: { key: string; re: RegExp }, text: string): boolean {
   return false;
 }
 
-export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
+export interface ExtrasDoGuardrail {
+  /**
+   * O texto da oferta do disparo que ESTE paciente recebeu (preço, prazo, condição). Os valores dele são aprovados
+   * junto com os da ficha: sem isto o R$ 150 da campanha seria cortado como "fora do catálogo" e trocado pelo R$ 280.
+   */
+  ofertaDaCampanha?: string | null;
+}
+
+export function aplicarGuardrail(text: string, unit: Unit, extras: ExtrasDoGuardrail = {}): GuardrailResult {
   if (!text || !text.trim()) return { text, triggered: [], rewritten: false };
   const triggered: string[] = [];
   let texto = text;
@@ -190,8 +198,13 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
     return { text: FALLBACK_LACUNA, triggered, rewritten: true };
   }
 
+  // Valores da oferta que este paciente recebeu. Se a resposta cita um deles, as duas travas de "número no slot errado"
+  // (convênio e antecipado) saem de cena: elas trocariam o preço da oferta pelo da ficha, que é o bug que a oferta resolve.
+  const daOferta = parseAmounts(extras.ofertaDaCampanha);
+  const citaOferta = daOferta.size > 0 && [...parseAmounts(texto)].some((v) => daOferta.has(v));
+
   // O desconto do convênio não pode sair como preço do Pix — ver preco-convenio.ts.
-  const p = precosDaConsulta(unit);
+  const p = citaOferta ? null : precosDaConsulta(unit);
   if (p) {
     const conv = convenioDaUnidade(unit, p);
     if (conv != null) {
@@ -218,7 +231,7 @@ export function aplicarGuardrail(text: string, unit: Unit): GuardrailResult {
     }
   }
 
-  const aprovados = parseAmounts(unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio);
+  const aprovados = parseAmounts(unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio, extras.ofertaDaCampanha);
   if (aprovados.size > 0) {
     const foraDoCatalogo = [...parseAmounts(texto)].filter(
       (v) => v >= 20 && !amountApproved(v, aprovados),

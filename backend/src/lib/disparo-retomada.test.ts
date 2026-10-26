@@ -105,3 +105,10 @@ test('RETOMAR exige sessão de super-admin e nunca aceita a chave de serviço (o
   const i = rotas.indexOf("'/disparo/ondas/:id/retomar'");
   assert.ok(i > 0 && global > 0 && i < global);
 });
+
+test('tela: mostra a oferta que a Sofia vai saber (ou avisa que a campanha não tem)', () => {
+  const com = montarPainelDaOnda(dados({ oferta: 'Consulta por R$ 150 até 31/10 <script>x</script>' }));
+  assert.match(com, /O que a Sofia vai saber da oferta/);
+  assert.match(com, /Consulta por R\$ 150 até 31\/10 &lt;script&gt;/);
+  assert.match(montarPainelDaOnda(dados({ oferta: null })), /não tem texto de oferta/);
+});

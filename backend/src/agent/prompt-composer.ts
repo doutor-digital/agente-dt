@@ -58,6 +58,8 @@ import {
 } from '../services/paciente-na-franquia.js';
 import { avisoDeCartaoDuplicado } from '../services/cadastro-duplicado.js';
 import { renderAnuncioDeOrigem } from './anuncio-de-origem.js';
+import { renderOfertaDaCampanha, type OfertaVigente } from './oferta-da-campanha.js';
+import { ofertaDoLead } from '../lib/disparo/oferta.js';
 import { logger } from '../lib/logger.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
@@ -1598,6 +1600,8 @@ export interface ComposeInput {
   redeDeUnidades?: UnidadeDaRede[];
   /** A conversa até este turno (do grafo). Daqui saem as contas de repetição e de insistência no preço. */
   historico?: Fala[];
+  /** A oferta do disparo de campanha que este paciente recebeu nos últimos dias (null = não recebeu). */
+  ofertaDaCampanha?: OfertaVigente | null;
 }
 
 /**
@@ -2128,6 +2132,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
     const anuncioBlockSingle = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
     if (etapaBlockSingle) single.push(etapaBlockSingle);
     if (anuncioBlockSingle) single.push(anuncioBlockSingle);
+    const ofertaBlockSingle = renderOfertaDaCampanha(input.ofertaDaCampanha);
+    if (ofertaBlockSingle) single.push(ofertaBlockSingle);
     single.push(...doHistorico.blocos);
     return single.join('\n\n');
   }
@@ -2229,6 +2235,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // no prefixo cacheado e não pode variar por lead sem derrubar o cache.
   const anuncioBlock = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
   if (anuncioBlock) blocks.push(anuncioBlock);
+  const ofertaBlock = renderOfertaDaCampanha(input.ofertaDaCampanha);
+  if (ofertaBlock) blocks.push(ofertaBlock);
   // Por último entre os blocos do turno: é a ordem mais específica e precisa ser a mais recente.
   blocks.push(...doHistorico.blocos);
 
@@ -2317,6 +2325,10 @@ export function composeSystemPromptParts(input: ComposeInput): {
   // <coleta_origem>, e é isso que deixa ele desligar a pergunta "como nos conheceu".
   const anuncioBlock = renderAnuncioDeOrigem(estadoEtapa?.anuncio);
   if (anuncioBlock) dynamic.push(anuncioBlock);
+  // A proposta do disparo que ele recebeu (preço, prazo, condição): sem isto a Sofia responde o preço da ficha ao paciente
+  // que acabou de ler outro número na mensagem da clínica (o caso do R$ 150, Outubro Rosa).
+  const ofertaBlock = renderOfertaDaCampanha(input.ofertaDaCampanha);
+  if (ofertaBlock) dynamic.push(ofertaBlock);
   // Contados no histórico deste turno; por último, para serem a ordem mais recente que o modelo lê.
   dynamic.push(...doHistorico.blocos);
 
@@ -2407,6 +2419,8 @@ export async function composeSystemPromptForUnit(input: {
   leadId?: number;
   excludeLeadFieldRules?: boolean;
   historico?: Fala[];
+  /** Já carregada pelo chamador (o grafo precisa dela também no guardrail); `undefined` = carrega aqui. */
+  ofertaDaCampanha?: OfertaVigente | null;
 }): Promise<string> {
   return composeSystemPrompt(await loadComposeInput(input));
 }
@@ -2419,6 +2433,8 @@ export async function composeSystemPromptPartsForUnit(input: {
   leadId?: number;
   excludeLeadFieldRules?: boolean;
   historico?: Fala[];
+  /** Já carregada pelo chamador (o grafo precisa dela também no guardrail); `undefined` = carrega aqui. */
+  ofertaDaCampanha?: OfertaVigente | null;
 }): Promise<{ cacheable: string; dynamic: string }> {
   return composeSystemPromptParts(await loadComposeInput(input));
 }
@@ -2431,6 +2447,8 @@ async function loadComposeInput(input: {
   leadId?: number;
   excludeLeadFieldRules?: boolean;
   historico?: Fala[];
+  /** Já carregada pelo chamador (o grafo precisa dela também no guardrail); `undefined` = carrega aqui. */
+  ofertaDaCampanha?: OfertaVigente | null;
 }): Promise<ComposeInput> {
   const shouldRunRag =
     !!input.userMessage &&
@@ -2518,6 +2536,17 @@ async function loadComposeInput(input: {
 
   const telefone = contato?.phone ?? null;
 
+  // O disparo de campanha que ele recebeu e a oferta dele. Falha vira "sem oferta": nunca derruba a resposta.
+  const ofertaDaCampanha =
+    input.ofertaDaCampanha !== undefined
+      ? input.ofertaDaCampanha
+      : input.leadId
+        ? await ofertaDoLead(input.unit.id, input.leadId, telefone).catch((err) => {
+            logger.warn({ err, leadId: input.leadId }, 'ofertaDoLead falhou — sem bloco de oferta no prompt');
+            return null;
+          })
+        : null;
+
   // O telefone só fica pronto agora (sai do mesmo Promise.all). Se o cartão desta
   // conversa não deu sinal nenhum, ele pode ser um cartão NOVO criado porque o
   // número está gravado em dois formatos — pergunta pelo telefone antes de
@@ -2558,6 +2587,7 @@ async function loadComposeInput(input: {
     telefone,
     outraSofia,
     redeDeUnidades,
+    ofertaDaCampanha,
   };
 }
 

@@ -12,7 +12,7 @@ import { AUTOMACAO_DISPARO, listaDeTesteDoAmbiente } from './porto.js';
 import type { DadosDoPainel } from './painel.js';
 
 export async function dadosDaTela(ondaId: string, email: string | null | undefined): Promise<DadosDoPainel | null> {
-  const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true, campanha: { select: { nome: true } } } });
+  const onda = await prisma.disparoOnda.findUnique({ where: { id: ondaId }, include: { unit: true, campanha: { select: { nome: true, oferta: true } } } });
   if (!onda) return null;
   const retomavel = onda.estado === 'pausada' && onda.pausaCausa === 'sair';
   const [porEstado, simulados, amostra, saidas] = await Promise.all([
@@ -42,6 +42,7 @@ export async function dadosDaTela(ondaId: string, email: string | null | undefin
       sairAceitos: onda.sairAceitos,
     },
     campanhaNome: onda.campanha.nome,
+    oferta: onda.campanha.oferta,
     unidade: { slug: onda.unit.slug, nome: onda.unit.name },
     modo: estadoDaAutomacao(onda.unit.slug, AUTOMACAO_DISPARO, process.env.DISPARO_CAMPANHA_SLUGS),
     freios: freiosDoAmbiente(),
