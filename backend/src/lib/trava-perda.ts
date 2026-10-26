@@ -117,7 +117,7 @@ export function travaDaPerdaAutomatica(cartao: CartaoParaTrava, agoraEpoch: numb
 export type ConsultaNaFranquia = () => Promise<{ conhecido: boolean; consultaFutura: boolean }>;
 
 export interface RecusaDaSofia {
-  motivo: MotivoDaTrava | 'cartão ilegível' | 'sem recusa explícita' | 'assunto sensível';
+  motivo: MotivoDaTrava | 'cartão ilegível' | 'conversa ilegível' | 'sem recusa explícita' | 'assunto sensível';
   texto: string;
   /** o paciente quer fechar e a trava segurou: a equipe precisa saber (nota/tarefa no cartão). Falha de leitura não avisa. */
   avisarEquipe: boolean;
@@ -205,11 +205,13 @@ export async function decidirFechamentoDaSofia(
   }
   if (!opcoes.ultimasFalas) return { tipo: 'segue', naoContatar: false };
 
-  let falas: string[] = [];
+  let falas: string[];
   try {
     falas = await opcoes.ultimasFalas();
   } catch (err) {
-    logger.warn({ err: String(err), leadId }, 'trava-perda: não li a conversa — sem a fala do paciente, Quente/Morno não fecham');
+    // sem a fala não dá para saber se é recusa, objeção, óbito ou pedido de parar: não fecha e NÃO grava nada (nem EM ESPERA)
+    logger.warn({ err: String(err), leadId }, 'trava-perda: não li a conversa — recusei o fechamento sem mexer no cartão');
+    return recusa({ motivo: 'conversa ilegível', avisarEquipe: false, texto: 'não consegui ler a conversa agora para ver o que o paciente disse. Não feche às cegas: deixe o cartão onde está e tente de novo na próxima mensagem.' });
   }
   const classe = classificarFala(falas);
   if (classe === 'obito') {

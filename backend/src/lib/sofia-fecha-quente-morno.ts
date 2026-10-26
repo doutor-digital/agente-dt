@@ -38,38 +38,60 @@ function simplificar(s: string): string {
     .trim();
 }
 
-/** Falecimento: nunca é recusa — é para a equipe tratar. (Só o óbito; "dor de morte" não conta.) */
-const OBITO = [/\b(faleceu|falecimento|faleceram|morreu|obito|velorio|enterro|luto)\b/];
+/**
+ * Falecimento: nunca é recusa — é para a equipe tratar. Só com contexto: «faleceu», «morreu», «óbito», «falecimento» ou
+ * «estou de luto». «Luto» solto é o verbo lutar ("eu luto com essa dor"), e "dor de morte" também não conta.
+ */
+const OBITO = [/\b(faleceu|faleceram|falecimento|morreu|obito)\b/, /\b(estou|esta|estamos|ficou|ficamos|to)\s+de\s+luto\b/];
 
-/** Pedido para parar de receber mensagem: além de fechar, etiqueta de não contatar. */
+/**
+ * Pedido para parar de receber mensagem: além de fechar, etiqueta de não contatar. Estreito de propósito, porque ele passa na
+ * frente da trava (fecha Quente/Morno e põe NO_FOLLOW_UP): só «para/pare/parem de …», «não me mande(m)/ligue… mais»,
+ * «não me perturbe/incomode mais» e «não quero receber / não quero mais saber». "Me passa o pix para enviar o comprovante",
+ * "pode pedir para me ligarem amanhã", "qual o número para ligar" e "vcs não me mandaram nada ainda" NÃO são pedido de parar.
+ */
 const PARAR_CONTATO = [
-  /\bnao\s+(me\s+)?(perturb|incomod)\w*/,
-  /\b(pare|para|parar|pode\s+parar)\s+(de\s+)?(me\s+)?(mand|envi|lig|cham|perturb|incomod)\w*/,
-  /\bnao\s+(me\s+)?(mand|envi|lig|cham)\w*\s*(mais|nada)\b/,
-  /\bnao\s+quero\s+(mais\s+)?(receber|saber|contato|mensagem)/,
-  /\bnao\s+(me\s+)?procur\w*\s+mais\b/,
+  /\b(pare|parem|para|parar|pode\s+parar)\s+de\s+(me\s+)?(mandar|enviar|ligar|chamar|perturbar|incomodar|insistir|escrever)\b/,
+  /\bnao\s+me\s+(mande|mandem|envie|enviem|ligue|liguem|chame|chamem|procure|procurem|escreva|escrevam)\s+mais\b/,
+  /\bnao\s+me\s+(perturbe|perturbem|incomode|incomodem)(\s+mais)?\b/,
+  /\bnao\s+quero\s+(mais\s+)?receber\b/,
+  /\bnao\s+quero\s+mais\s+saber\b/,
 ];
 
 /**
- * Recusa explícita: o paciente decidiu (não quero, já resolvi, foi para outro, pode encerrar). Vem ANTES da objeção: "já estou
- * sendo atendida pelo plano em outro lugar" fala de plano e mesmo assim é uma decisão tomada.
+ * Recusa FORTE: decisão tomada que vale mesmo com preço ou convênio na frase ("já estou sendo atendida pelo plano em outro
+ * lugar" fala de plano e é decisão). "Já fiz/marquei" só conta quando é com OUTRO (médico, clínica, convênio…): "já fiz o pix" e
+ * "já marquei com vocês" não são recusa, e pergunta ("já fiz fisio e não resolveu, vocês aceitam unimed?") também não.
  */
-const RECUSA = [
+const RECUSA_FORTE = [
   /\bpode\s+(encerrar|cancelar|fechar|arquivar)\b/,
-  /\bja\s+(resolvi|resolveu|resolvemos|fiz|fui|agendei|marquei|passei|consegui|estou\s+(sendo\s+)?(atendid|resolvend|me\s+trat|trat)|to\s+(sendo\s+)?atendid)/,
-  /\bja\s+estou\s+resolvend/,
+  /\bja\s+(resolvi|resolveu|resolvemos)\b/,
+  /\bja\s+(estou|to)\s+(sendo\s+)?(atendid|resolvend|me\s+trat|trat)/,
   /\b(vou|irei|fui|vamos)\s+(em|num|numa|no|na|procurar|buscar|tentar)\s+(outr|lugar|clinica|medic)/,
   /\bvou\s+(procurar|tentar)\s+(outr|lugar)/,
   /\bachei\s+(um|uma|outr|fisio|medic|clinica|lugar)/,
   /\bnao\s+(tenho|tem|tenho\s+mais|tem\s+mais)\s+interesse\b/,
+  /\bvou\s+deixar\s+(minha\s+)?vaga\b/,
+  /\bnumero\s+errado\b/,
+];
+
+/** «já agendei/marquei/fiz/fui/passei … com OUTRO», sem pergunta e sem falar de vocês. */
+function jaFezComOutro(t: string): boolean {
+  if (t.includes('?') || /\b(voces|vcs|voce|aqui|ai)\b/.test(t)) return false;
+  return /\bja\s+(agendei|marquei|fiz|fui|passei|consegui|me\s+consultei)\s+(\w+\s+){0,2}(outr\w*|medic\w*|ortoclinica|orto\w*|clinica|hospital|posto|plano|convenio|fisio\w*|neuro\w*)/.test(t);
+}
+
+/**
+ * Recusa FRACA: parece decisão, mas com adiamento ou preço na mesma frase ("não quero fazer agora, está caro", "não, obrigado,
+ * quem sabe depois") é objeção — por isso só vale quando NÃO há marca de objeção.
+ */
+const RECUSA_FRACA = [
   /\bnao\s+quero\s+(mais\s+)?(marcar|fazer|agendar|o\s+tratamento|a\s+consulta|continuar|nada)\b/,
   /\bnao\s+quero(\s+mais)?[\s.!,]*$/,
   /\bnao\s+vou\s+(marcar|fazer|agendar|mais)\b/,
   /\bnao\s+vou\s*[.…!]*\s*(melhor\s+assim|obrigad)/,
-  /\bvou\s+deixar\s+(minha\s+)?vaga\b/,
   /\bnao\s+estou\s+precisando\b/,
   /\bnao\s+tem\s+como\s+(eu\s+)?(ir|vir)\b/,
-  /\bnumero\s+errado\b/,
   /^nao[\s,.!]*(obrigad[oa])?[\s.!]*$/,
   /^nao[\s,.!]+obrigad[oa]\b/,
   /^nao\s+mais[\s.!]*$/,
@@ -79,19 +101,26 @@ const RECUSA = [
 /** Objeção ou adiamento: preço, convênio, "agora não", "vou ver". Não é decisão: a Sofia não fecha Quente/Morno com isso. */
 const OBJECAO = [
   /\bno\s+momento\b/,
-  /\bagora\s+nao\b/,
+  /\bagora\b/,
   /\bpor\s+enquanto\b/,
   /\bdeixa\s+pra\s+la\b/,
   /\bvou\s+(ver|pensar|deixar|esperar|avaliar|conversar)\b/,
+  /\bvou\s+ver\s+com\b/,
   /\bnao\s+(tenho|tem)\s+(condic|dinheiro|como\s+pagar|grana)/,
   /\bnao\s+da\s+pra\s+mim\b/,
-  /\b(plano|convenio|unimed|hapvida|particular|caro|valor|preco|apertad|financeir)\w*/,
-  /\b(mais\s+)?tarde\b|\bdepois\b|\bmes\s+que\s+vem\b/,
+  /\b(plano|convenio|unimed|hapvida|particular|caro|cara|valor|preco|apertad|financeir|sem\s+dinheiro)\w*/,
+  /\b(mais\s+)?tarde\b|\bdepois\b|\bmes\s+que\s+vem\b|\bquem\s+sabe\b|\btalvez\b/,
 ];
 
 /**
- * A fala do paciente (as mensagens dele desde a última resposta nossa, na ordem). Vale a ordem de precedência:
- * óbito > parar de receber > recusa explícita > objeção > indefinida.
+ * Pergunta de confirmação que a Sofia faz ("Posso encerrar?") e o paciente responde só com "sim/pode/isso". A resposta sozinha
+ * não decide nada: vale o que ele disse ANTES.
+ */
+const CONFIRMACAO = /^(sim|isso|pode(\s+sim)?|ok|certo|confirmo|claro|com\s+certeza|por\s+favor|isso\s+mesmo|tenho\s+certeza)[\s.!]*$/;
+
+/**
+ * A fala do paciente (as mensagens dele, na ordem). Precedência: óbito > parar de receber > recusa forte > objeção > recusa fraca
+ * > indefinida. Da mensagem mais nova para a mais antiga: a última que decide manda, e "sim" solto passa direto.
  */
 export function classificarFala(textos: ReadonlyArray<string | null | undefined>): ClasseDaFala {
   const itens = textos.map((t) => simplificar(String(t ?? ''))).filter(Boolean);
@@ -99,23 +128,40 @@ export function classificarFala(textos: ReadonlyArray<string | null | undefined>
   const junto = itens.join(' . ');
   if (OBITO.some((r) => r.test(junto))) return 'obito';
   if (textos.some((t) => pediuParaSair(String(t ?? ''))) || PARAR_CONTATO.some((r) => r.test(junto))) return 'parar-contato';
-  // a recusa vale pela ÚLTIMA fala que decide; objeção dita antes e recusa depois ("tenho plano… então não quero mais") é recusa
   for (let i = itens.length - 1; i >= 0; i--) {
-    if (RECUSA.some((r) => r.test(itens[i]))) return 'recusa';
-    if (OBJECAO.some((r) => r.test(itens[i]))) return 'objecao';
+    const t = itens[i];
+    if (CONFIRMACAO.test(t)) continue;
+    if (RECUSA_FORTE.some((r) => r.test(t)) || jaFezComOutro(t)) return 'recusa';
+    if (OBJECAO.some((r) => r.test(t))) return 'objecao';
+    if (RECUSA_FRACA.some((r) => r.test(t))) return 'recusa';
   }
   return 'indefinida';
 }
 
-/** As mensagens do paciente desde a última resposta nossa (no máximo 5), da mais antiga para a mais nova. */
+/**
+ * As mensagens do paciente que decidem: as dele desde a última resposta nossa (no máximo 5), da mais antiga para a mais nova. Se
+ * esse último turno é só uma confirmação ("sim" a um "Posso encerrar?"), junta o turno anterior dele — o "não quero mais" que
+ * veio antes da pergunta.
+ */
 export function falasDoUltimoTurno(msgs: ReadonlyArray<{ role: string; content: string }>): string[] {
-  const out: string[] = [];
-  for (let i = msgs.length - 1; i >= 0 && out.length < 5; i--) {
+  const ultimaDeGente = [...msgs].reverse().find((m) => m.role === 'user' || m.role === 'assistant');
+  if (!ultimaDeGente || ultimaDeGente.role === 'assistant') return []; // a última palavra é nossa: ainda não há fala nova do paciente
+  const turnos: string[][] = [];
+  let atual: string[] = [];
+  for (let i = msgs.length - 1; i >= 0 && turnos.length < 3; i--) {
     const m = msgs[i];
-    if (m.role === 'assistant') break;
-    if (m.role === 'user' && m.content?.trim()) out.unshift(m.content);
+    if (m.role === 'assistant') {
+      if (atual.length > 0) turnos.push(atual);
+      atual = [];
+      continue;
+    }
+    if (m.role === 'user' && m.content?.trim()) atual.unshift(m.content);
   }
-  return out;
+  if (atual.length > 0 && turnos.length < 3) turnos.push(atual);
+  // turnos[0] = o mais recente
+  const ultimo = (turnos[0] ?? []).slice(-5);
+  const soConfirma = ultimo.length > 0 && ultimo.every((t) => CONFIRMACAO.test(simplificar(t)));
+  return soConfirma && turnos[1] ? [...turnos[1].slice(-5), ...ultimo] : ultimo;
 }
 
 // ── a etiqueta de não contatar que a conta já usa ──

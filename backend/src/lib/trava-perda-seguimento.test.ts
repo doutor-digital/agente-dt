@@ -119,8 +119,9 @@ function kommoFalso(lead: KommoLead, log: string[], opc: { tarefaFalha?: boolean
     getLead: async () => lead,
     listLossReasons: async () => [],
     createLossReason: async (name: string) => ({ id: 1, name }),
-    listLeadCustomFields: async () => ({ _embedded: { custom_fields: [] } }),
+    listLeadCustomFields: async () => ({ _embedded: { custom_fields: [{ id: 7, name: '◷ Retomar em' }, { id: 8, name: '⊘ Motivo da espera' }] } }),
     listPipelines: async () => [],
+    setLeadCustomFieldValue: async (_l: number, campo: number, tipo: string) => void log.push(`campo:${campo}:${tipo}`),
     addTag: async () => void log.push('tag'),
     addLeadNote: async () => void log.push('nota'),
     setLeadStatus: async (id: number) => void log.push(`perdido:${id}`),
@@ -148,7 +149,8 @@ test('portão LIGADO: pagou e desmarcou NÃO vai a PERDIDO — tarefa para o res
   const log: string[] = [];
   const { kommo, tarefas, movidos } = kommoFalso(lead, log);
   assert.equal(await fecharOuSegurar(unit, kommo, funisDe(true), 1, ETAPA.QUALIFICACAO, decisao, false), 'travado');
-  assert.deepEqual(log, [], 'nada de PERDIDO, etiqueta ou nota de prazo');
+  assert.deepEqual(log.filter((x) => !x.startsWith('campo')), [], 'nada de PERDIDO, etiqueta ou nota de prazo');
+  assert.ok(log.includes('campo:7:date') && log.includes('campo:8:select'), '«Retomar em» e «Motivo da espera» como na Sofia');
   assert.equal(tarefas.length, 1);
   assert.equal(tarefas[0].responsibleUserId, 4242, 'a tarefa vai para o responsável do cartão');
   assert.match(tarefas[0].text, /Paciente pagou antecipado e desmarcou — remarcar ou combinar devolução/);
@@ -172,6 +174,18 @@ test('portão LIGADO: já em EM ESPERA não move; conta sem a etapa EM ESPERA ma
   assert.equal(await fecharOuSegurar(unit, b.kommo, funisDe(false), 3, ETAPA.QUALIFICACAO, decisao, false), 'travado');
   assert.equal(b.tarefas.length, 1);
   assert.equal(b.movidos.length, 0, 'a unidade não tem a etapa');
+});
+
+test('portão LIGADO: cartão FORA do COMERCIAL (outro funil) abre a tarefa mas NÃO é levado para EM ESPERA nem tem campo gravado', async () => {
+  const unit = unidade();
+  const fora = cartao(9, { pipelineId: 2, statusId: 21 }, pagouDesmarcou());
+  const log: string[] = [];
+  const { kommo, tarefas, movidos } = kommoFalso(fora, log);
+  const funisFora = { ...(funisDe(true) as object), nomeDe: () => ({ funil: 'COMERCIAL', status: ETAPA.QUALIFICACAO }) } as unknown as Funis;
+  assert.equal(await fecharOuSegurar(unit, kommo, funisFora, 9, ETAPA.QUALIFICACAO, decisao, false), 'travado');
+  assert.equal(tarefas.length, 1);
+  assert.deepEqual(movidos, []);
+  assert.deepEqual(log, []);
 });
 
 test('portão LIGADO: tarefa que falha não grava a marca nem move o cartão (tenta na próxima varredura)', async () => {
@@ -198,7 +212,7 @@ test('portão NO PAPEL: nada é escrito; a tela mostra «alertaria» a tarefa, �
   const log: string[] = [];
   const { kommo, tarefas, movidos } = kommoFalso(cartao(6, QUALIF, pagouDesmarcou()), log);
   assert.equal(await fecharOuSegurar(unit, kommo, funisDe(true), 6, ETAPA.QUALIFICACAO, decisao, true), 'travado');
-  assert.deepEqual([log, tarefas, movidos], [[], [], []]);
+  assert.deepEqual([log, tarefas, movidos], [[], [], []], 'no papel nada é escrito (nem campo)');
   assert.equal(temMarca(unit, 6), false, 'no papel não grava a marca');
   assert.deepEqual(
     registradas.map((r) => `${r.acao}:${r.alvo}`).sort(),

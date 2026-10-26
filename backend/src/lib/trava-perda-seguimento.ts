@@ -16,11 +16,11 @@
 import type { Unit } from '@prisma/client';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import { logger } from './logger.js';
-import { normalizarNome } from './kommo-schema.js';
+import { esquemaDaUnidade, normalizarNome } from './kommo-schema.js';
 import { ETAPA } from './franquia-move.js';
 import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { invalidarEtapa } from '../services/lead-stage.service.js';
+import { levarParaEsperaComRetomada } from './sofia-fecha-quente-morno.js';
 import { pagouEDesmarcou, travaDaPerdaAutomatica, type CartaoParaTrava, type MotivoDaTrava } from './trava-perda.js';
 
 /** A marca no `card_alert`: existe = a tarefa já foi aberta (e quando). */
@@ -67,10 +67,10 @@ export function textoDaTarefaPagouDesmarcou(consultaDesmarcadaEm: number | null,
  * varredura tenta de novo (o cartão não é movido sem a SDR saber). Devolve se a tarefa foi aberta.
  */
 export async function abrirSeguimentoDoPagou(
-  unit: Pick<Unit, 'id' | 'slug' | 'spineTimezone'>,
-  kommo: Pick<KommoClient, 'createTask' | 'moveStage'>,
-  funis: { idDe: (funil: 'COMERCIAL' | 'TRATAMENTO', etapa: string) => { pipelineId: number; statusId: number } | null },
-  cartao: Pick<KommoLead, 'id' | 'responsible_user_id'>,
+  unit: Unit,
+  kommo: KommoClient,
+  funis: { comercialId: number; idDe: (funil: 'COMERCIAL' | 'TRATAMENTO', etapa: string) => { pipelineId: number; statusId: number } | null },
+  cartao: Pick<KommoLead, 'id' | 'responsible_user_id' | 'pipeline_id' | 'status_id'>,
   seguimento: { consultaDesmarcadaEm: number | null },
   etapaAtual: string,
 ): Promise<boolean> {
@@ -90,15 +90,13 @@ export async function abrirSeguimentoDoPagou(
   }
   await marcarAviso(unit.id, leadId, CHAVE_SEGUIMENTO_PAGOU);
   logger.info({ unit: unit.slug, leadId, de: etapaAtual }, 'trava-perda: pagou e desmarcou — tarefa aberta para a SDR; o «pagou» solta em 7 dias');
-  const espera = funis.idDe('COMERCIAL', ETAPA.ESPERA);
-  if (espera && normalizarNome(etapaAtual) !== normalizarNome(ETAPA.ESPERA)) {
-    try {
-      await kommo.moveStage({ leadId, statusId: espera.statusId, pipelineId: espera.pipelineId });
-      invalidarEtapa(unit.id, leadId);
-      logger.info({ unit: unit.slug, leadId, de: etapaAtual }, 'trava-perda: cartão levado para EM ESPERA (pagou e desmarcou)');
-    } catch (err) {
-      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'trava-perda: a tarefa foi aberta, mas não consegui levar o cartão para EM ESPERA');
-    }
+  // EM ESPERA do mesmo jeito que a Sofia: só se o cartão está no COMERCIAL, com «Motivo da espera» e «Retomar em» (+30 d) onde a conta tem os campos
+  try {
+    const esquema = await esquemaDaUnidade(unit, kommo);
+    const r = await levarParaEsperaComRetomada({ unit, kommo, funis, esquema, cartao, agoraEpoch: Math.floor(Date.now() / 1000) });
+    if (r.naEspera) logger.info({ unit: unit.slug, leadId, de: etapaAtual, retomada: r.retomada }, 'trava-perda: cartão em EM ESPERA (pagou e desmarcou)');
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'trava-perda: a tarefa foi aberta, mas não consegui levar o cartão para EM ESPERA');
   }
   return true;
 }
@@ -106,11 +104,12 @@ export async function abrirSeguimentoDoPagou(
 /** Modo seco: o que o seguimento FARIA, para a tela do «só no papel». */
 export function simularSeguimentoDoPagou(
   unit: Pick<Unit, 'id' | 'slug' | 'spineTimezone'>,
-  funis: { idDe: (funil: 'COMERCIAL' | 'TRATAMENTO', etapa: string) => { pipelineId: number; statusId: number } | null } | null | undefined,
+  funis: { comercialId?: number; idDe: (funil: 'COMERCIAL' | 'TRATAMENTO', etapa: string) => { pipelineId: number; statusId: number } | null } | null | undefined,
   leadId: number,
   seguimento: { consultaDesmarcadaEm: number | null },
   etapaAtual: string,
   automacao: string,
+  pipelineDoCartao?: number,
 ): void {
   registrarSimulacao(unit, automacao, {
     leadId,
@@ -120,7 +119,7 @@ export function simularSeguimentoDoPagou(
     motivo: 'pagou o antecipado, a consulta caiu e não há outra: a SDR remarca ou combina a devolução',
   });
   const espera = funis?.idDe('COMERCIAL', ETAPA.ESPERA);
-  if (funis && espera && normalizarNome(etapaAtual) !== normalizarNome(ETAPA.ESPERA)) {
+  if (funis && espera && normalizarNome(etapaAtual) !== normalizarNome(ETAPA.ESPERA) && (pipelineDoCartao === undefined || pipelineDoCartao === funis.comercialId)) {
     registrarSimulacao(unit, automacao, { leadId, acao: 'moveria', alvo: ETAPA.ESPERA, deEtapa: etapaAtual, motivo: 'pagou e desmarcou: sai da trava eterna' });
   }
 }

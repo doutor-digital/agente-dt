@@ -277,7 +277,7 @@ export async function seguradoPelaTrava(unit: Unit, leadId: number, cartao: Komm
   if (!v) return false;
   if (v.abrirSeguimento) {
     if (!o.noPortao) return false; // varredura: deixa passar até o portão, que abre a tarefa
-    if (o.seco) simularSeguimentoDoPagou(unit, o.funis, leadId, v.abrirSeguimento, o.deEtapa, o.automacao);
+    if (o.seco) simularSeguimentoDoPagou(unit, o.funis, leadId, v.abrirSeguimento, o.deEtapa, o.automacao, cartao.pipeline_id);
     else if (o.kommo && o.funis) await abrirSeguimentoDoPagou(unit, o.kommo, o.funis, cartao, v.abrirSeguimento, o.deEtapa);
   }
   logger[o.nivelDoLog ?? 'debug']({ unit: unit.slug, leadId, de: o.deEtapa, motivo: v.motivo, seco: o.seco }, 'parados: PERDIDO seguro pela trava — o cartão fica onde está');

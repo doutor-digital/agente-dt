@@ -126,6 +126,17 @@ test('Quente/Morno + fala indefinida ou conversa que não deu para ler: NÃO fec
   assert.equal(quebrada.tipo, 'recusa');
 });
 
+test('conversa que não deu para ler: RECUSA sem mexer no cartão (nada de EM ESPERA, nada de tarefa) — para Quente/Morno e para Frio', async () => {
+  for (const t of ['Quente', 'Morno', 'Frio', null] as const) {
+    const d = await decidirFechamentoDaSofia(kommoCom(leadDe(t)), 1, { ultimasFalas: async () => { throw new Error('banco fora'); } });
+    assert.equal(d.tipo, 'recusa', String(t));
+    if (d.tipo !== 'recusa') continue;
+    assert.equal(d.recusa.motivo, 'conversa ilegível');
+    assert.equal(d.recusa.levarParaEspera, undefined, 'não grava EM ESPERA');
+    assert.equal(d.recusa.avisarEquipe, false);
+  }
+});
+
 test('Quente/Morno + recusa explícita: fecha (10 dos 15 Quente/Morno eram recusa clara)', async () => {
   for (const frase of ['já agendei numa ortoclínica perto de casa', 'não tenho mais interesse, obrigada', 'já estou sendo atendida pelo plano em outro lugar', 'pode encerrar']) {
     assert.deepEqual(await decidirFechamentoDaSofia(kommoCom(leadDe('Morno')), 1, falando(frase)), { tipo: 'segue', naoContatar: false }, frase);
@@ -234,3 +245,73 @@ test('etiquetarNaoContatar aplica a etiqueta no cartão; falha de Kommo devolve 
   const ruim = { ...tagsDe('NO_FOLLOW_UP'), addTag: async () => { throw new Error('Kommo fora'); } } as unknown as Pick<KommoClient, 'listLeadTags' | 'addTag'>;
   assert.equal(await etiquetarNaoContatar({ id: 'c6', slug: 't' }, ruim, 9), null);
 });
+
+// ── achados do sênior no #134: uma frase por teste ──
+const NAO_E_PARAR: Array<[string, ClasseDaFala]> = [
+  ['me passa o pix para enviar o comprovante', 'indefinida'],
+  ['pode pedir para me ligarem amanhã? agora não posso', 'objecao'],
+  ['qual o numero para ligar', 'indefinida'],
+  ['vcs nao me mandaram nada ainda', 'indefinida'],
+  ['nao incomoda nao, pode mandar', 'indefinida'],
+  ['isso não me incomoda', 'indefinida'],
+];
+for (const [frase, esperado] of NAO_E_PARAR) {
+  test(`NÃO é pedido de parar: «${frase}» → ${esperado}`, () => {
+    assert.equal(classificarFala([frase]), esperado);
+  });
+}
+for (const frase of ['para de me mandar mensagem', 'pare de mandar', 'parem de ligar', 'não me mande mais mensagem', 'não me ligue mais', 'não me perturbe mais', 'não quero receber', 'não quero mais saber', 'pode parar de me chamar']) {
+  test(`é pedido de parar: «${frase}»`, () => {
+    assert.equal(classificarFala([frase]), 'parar-contato');
+  });
+}
+
+test('«não quero mais» → Sofia «Posso encerrar?» → «sim»: a leitura junta o turno anterior e é RECUSA (Morno fecha, não vai a EM ESPERA)', async () => {
+  const msgs = [
+    { role: 'user', content: 'não quero mais' },
+    { role: 'assistant', content: 'Tem certeza? Posso encerrar?' },
+    { role: 'user', content: 'sim' },
+  ];
+  assert.deepEqual(falasDoUltimoTurno(msgs), ['não quero mais', 'sim']);
+  assert.equal(classificarFala(falasDoUltimoTurno(msgs)), 'recusa');
+  assert.deepEqual(await decidirFechamentoDaSofia(kommoCom(leadDe('Morno')), 1, { ultimasFalas: async () => falasDoUltimoTurno(msgs) }), { tipo: 'segue', naoContatar: false });
+});
+
+test('«sim» sozinho, sem recusa antes (era a resposta a outra pergunta): continua sem decidir — Quente/Morno não fecham', () => {
+  assert.equal(classificarFala(falasDoUltimoTurno([{ role: 'assistant', content: 'Quer que eu veja um horário?' }, { role: 'user', content: 'sim' }])), 'indefinida');
+});
+
+test('se a última palavra é da Sofia (ainda não há fala nova do paciente), não há fala para decidir', () => {
+  assert.deepEqual(falasDoUltimoTurno([{ role: 'user', content: 'não quero mais' }, { role: 'assistant', content: 'Posso encerrar?' }]), []);
+});
+
+const NAO_E_RECUSA: Array<[string, ClasseDaFala]> = [
+  ['já fiz o pix', 'indefinida'],
+  ['já marquei com vocês semana que vem', 'indefinida'],
+  ['não quero fazer agora, está caro', 'objecao'],
+  ['nao, obrigado. quem sabe depois', 'objecao'],
+  ['já fiz fisioterapia e não resolveu, vocês aceitam unimed?', 'objecao'],
+  ['não quero agora, talvez mês que vem', 'objecao'],
+  ['Não quero mais, tá muito caro', 'objecao'],
+];
+for (const [frase, esperado] of NAO_E_RECUSA) {
+  test(`NÃO é recusa: «${frase}» → ${esperado}`, () => {
+    assert.equal(classificarFala([frase]), esperado);
+  });
+}
+for (const frase of ['já agendei numa ortoclínica perto de casa', 'já passei no médico', 'já fui em outra clínica e vou continuar lá']) {
+  test(`continua sendo recusa (foi para outro): «${frase}»`, () => {
+    assert.equal(classificarFala([frase]), 'recusa');
+  });
+}
+
+for (const frase of ['eu luto com essa dor há anos, mas agora não dá', 'luto todo dia para conseguir levantar']) {
+  test(`«luto» do verbo lutar NÃO é óbito: «${frase}»`, () => {
+    assert.notEqual(classificarFala([frase]), 'obito');
+  });
+}
+for (const frase of ['estou de luto', 'meu pai morreu', 'houve um falecimento na família', 'foi a óbito']) {
+  test(`é óbito: «${frase}»`, () => {
+    assert.equal(classificarFala([frase]), 'obito');
+  });
+}
