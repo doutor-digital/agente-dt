@@ -2189,6 +2189,8 @@ model DisparoCampanha {
   cabecalho    Json?
   /// { "<slug da unidade>": { template?, cabecalho? } } — o Kommo põe prefixo por unidade e cada unidade tem a sua arte
   porUnidade   Json     @default("{}") @map("por_unidade")
+  /// o que a Sofia sabe da oferta (preço, prazo, condições) quando quem recebeu o disparo responde; null = ela não sabe de oferta nenhuma
+  oferta       String?  @db.Text
   criadoEm     DateTime @default(now()) @map("criado_em")
   atualizadoEm DateTime @updatedAt @map("atualizado_em")
 
@@ -2220,6 +2222,12 @@ model DisparoOnda {
   aprovadaPor  String?   @map("aprovada_por")
   aprovadaEm   DateTime? @map("aprovada_em")
   pausaMotivo  String?   @map("pausa_motivo")
+  /// por que parou, em palavra de máquina: 'sair' | 'falhas' | 'vencida'. Só a pausa por SAIR pode ser retomada.
+  pausaCausa   String?   @map("pausa_causa")
+  /// quantos SAIR o João já tinha visto quando retomou: o freio por SAIR só conta os que vierem DEPOIS disso
+  sairAceitos  Int       @default(0) @map("sair_aceitos")
+  retomadaPor  String?   @map("retomada_por")
+  retomadaEm   DateTime? @map("retomada_em")
   criadaPor    String?   @map("criada_por")
   criadoEm     DateTime  @default(now()) @map("criado_em")
   atualizadoEm DateTime  @updatedAt @map("atualizado_em")
