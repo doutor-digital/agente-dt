@@ -132,3 +132,12 @@ test('silêncio depois da oferta: a marca só vence entre 2 h e 3 dias e se ele 
   assert.equal(marcaVenceuSemResposta(h(10), AGORA, 1), false, 'ele respondeu');
   assert.equal(marcaVenceuSemResposta(h(24 * 4), AGORA, 0), false, 'marca velha demais');
 });
+
+test('a recusa cuja tarefa falhou é REFEITA: a marca de parar a véspera não é a chave de dedupe da tarefa (Codex leu como se fosse)', async () => {
+  const falha = montar({ criaFalha: true });
+  assert.equal(await agirNaDesistencia({ unit: falha.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => falha.kommo }, falha.deps), 'falhou');
+  // o worker chama de novo (Kommo voltou): a chave `desistencia_tarefa:cancelar` nunca foi gravada, então a tarefa sai
+  const volta = montar({ ja: new Set([MARCA_RECUSOU]) });
+  assert.equal(await agirNaDesistencia({ unit: volta.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => volta.kommo }, volta.deps), 'tarefa_aberta');
+  assert.equal(volta.tarefas.length, 1);
+});
