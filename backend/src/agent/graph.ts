@@ -77,7 +77,7 @@ import {
   abrirTarefaParaEquipe,
   afirmaConfirmacao,
   detalheDoValor,
-  prometeEquipe,
+  citaEquipe,
   afirmouComConsultaDesmarcada,
   blocoDizDesmarcada,
   respostaDoComprovante,
@@ -1177,9 +1177,8 @@ export async function buildAgentGraph(
           respostaFixa = true;
         }
         response.content = textoFinal;
-        // Tarefa só quando a resposta final promete a equipe (recado fixo, ou a refeita diz "equipe"): refeita limpa, que
-        // só pergunta ou oferece horário novo, não vira tarefa falsa.
-        if (desmarcada && (saida === 'neutra' || prometeEquipe(textoFinal)) && kommoClient && state.leadId) {
+        // Tarefa quando a resposta final cita a equipe/recepção/clínica (o recado fixo cita): sem adivinhar "promessa" pelo texto.
+        if (desmarcada && (saida === 'neutra' || citaEquipe(textoFinal)) && kommoClient && state.leadId) {
           await abrirTarefaParaEquipe({
             slug: unit.slug,
             unitId: unit.id,

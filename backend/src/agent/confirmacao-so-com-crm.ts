@@ -172,8 +172,13 @@ export function valorEmReais(s: string): number | null {
 }
 
 function valorDoComprovante(segmento: string): number | null {
-  const m = /valor[^$\d]{0,40}R\$\s*([\d.,]+)/i.exec(segmento) ?? /R\$\s*([\d.,]+)/i.exec(segmento);
-  return m ? valorEmReais(m[1]) : null;
+  const m = /valor[^$\d]{0,40}R\$\s*([\d.,]+)/i.exec(segmento);
+  if (m) return valorEmReais(m[1]);
+  // sem a palavra "valor": o primeiro R$ que não é saldo, limite ou tarifa ("Saldo R$ 100,00. Transferência de R$ 50,00" = 50)
+  for (const x of segmento.matchAll(/R\$\s*([\d.,]+)/gi)) {
+    if (!/(?:saldo|limite|tarifa)[^$]{0,20}$/i.test(segmento.slice(Math.max(0, (x.index ?? 0) - 25), x.index))) return valorEmReais(x[1]);
+  }
+  return null;
 }
 
 /** Cada "[imagem|arquivo do cliente]: COMPROVANTE…" da fala, com o valor lido e o carimbo. */
@@ -362,36 +367,12 @@ export function travarAgendamentoPorComprovante(
 }
 
 /**
- * A resposta final PROMETE que a equipe vai agir ("a equipe confirma", "vou conferir com a recepção")? Só então a
- * tarefa se justifica. "Nossa equipe tem horário quinta" é oferta, não promessa.
+ * A resposta final CITA a equipe, a recepção ou a clínica? Na consulta desmarcada isso basta para abrir a tarefa: adivinhar
+ * "promessa" pelo texto (negação, modal, oração) falhou em frases comuns ("Pode deixar que a equipe vai te confirmar", "A
+ * equipe, em até 1 hora, vai te confirmar"). Tarefa a mais custa 1 minuto; a menos deixa o paciente esperando uma ligação.
  */
-const SUJEITO_EQUIPE = '(?:equipe|recepcao|clinica|time)';
-const ACAO_INF = '(?:confirmar|conferir|retornar|chamar|ligar|responder|avisar|verificar|entrar|falar|cuidar|te)';
-const PROMETE_EQUIPE = [
-  // "A equipe vai entrar em contato", "Nossa equipe irá confirmar", "A clínica vai te ligar"
-  `\\b${SUJEITO_EQUIPE}\\b(?:\\s+\\S+){0,3}?\\s+(?:vai|ira|vao|irao|vamos)\\s+(?:\\S+\\s+){0,3}?${ACAO_INF}\\b`,
-  // "A equipe está conferindo e te confirma", "A equipe te retorna", "A recepção já te chama"
-  `\\b${SUJEITO_EQUIPE}\\b(?:\\s+\\S+){0,6}?\\s+te\\s+(?:confirma|retorna|chama|liga|responde|avisa|da)\\w*`,
-  // "A equipe confirma em até 1 hora", "A recepção retorna"
-  `\\b${SUJEITO_EQUIPE}\\b(?:\\s+\\S+){0,2}?\\s+(?:confirma|retorna|chama|liga|responde|avisa|confere|verifica)\\b`,
-  // "Vou pedir pra equipe te confirmar", "Deixa eu conferir direitinho o seu horário com a equipe"
-  `\\b(?:vou|vamos|deixa eu|deixe eu)\\s+(?:\\S+\\s+){0,8}?${SUJEITO_EQUIPE}\\b`,
-].map((r) => new RegExp(r));
-/** Na MESMA frase da promessa: negação, passado, modal ("pode confirmar amanhã") ou oferta. */
-const NAO_PROMETE =
-  /\bnao\b|\bpode(?:m|ria)?\b|\b(?:confirmou|conferiu|retornou|chamou|ligou|avisou|respondeu|verificou)\b|\b(?:equipe|recepcao|clinica|time)\s+(?:tem|atende|funciona|abre)\b|\b(?:tenho|temos)\b/;
-
-/**
- * A resposta final PROMETE que a equipe vai agir ("a equipe confirma", "vou conferir com a recepção")? Só então a
- * tarefa se justifica. Cada FRASE é avaliada sozinha: "Não se preocupe! A equipe vai te confirmar" promete (o "não" é
- * de outra frase); "A equipe pode confirmar amanhã", "A equipe não confirma pagamentos", "A equipe já confirmou ontem" e
- * "nossa equipe tem horário quinta" não.
- */
-export function prometeEquipe(texto: string | null | undefined): boolean {
-  return trechos(String(texto ?? ''))
-    .flatMap((t) => t.split(/[;,]|\bmas\b/))
-    .map(normalizar)
-    .some((n) => PROMETE_EQUIPE.some((re) => re.test(n)) && !NAO_PROMETE.test(n));
+export function citaEquipe(texto: string | null | undefined): boolean {
+  return /\b(?:equipe|recepcao|clinica|time)\b/.test(normalizar(String(texto ?? '')));
 }
 
 /** Rajada de PDFs do mesmo comprovante (Bebedouro mandou 5 em 1 minuto) = uma tarefa; outro comprovante, mais tarde, outra. */
