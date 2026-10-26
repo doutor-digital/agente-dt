@@ -72,3 +72,31 @@ export function pareceDesistenciaDaConsulta(texto: string | null | undefined): b
     .filter(Boolean)
     .some((trecho) => (!trecho.includes('?') || DESISTENCIA_NO_PASSADO.test(trecho)) && DESISTE_DA_CONSULTA.some((r) => r.test(trecho)));
 }
+
+/** Hesitação: "acho que não vou conseguir", "vou ver", "depois eu aviso" não é recusa — ainda dá para remarcar. */
+const HESITA = /\b(acho|talvez|quem sabe|vou ver|vou pensar|depois eu|ainda nao sei|nao sei|se der|vamos ver)\b/;
+
+const RECUSA_EXPLICITA: RegExp[] = [
+  // "não quero remarcar", "não vou remarcar", "não preciso de outro dia"
+  /\bn(ao|) (quero|vou|preciso|precisa|vamos) (mais )?(remarcar|reagendar|marcar|(de )?outro (dia|horario))/,
+  /\bn(ao|) (quero|vou|irei|iremos|preciso) mais\b/,
+  // "pode cancelar (mesmo)", "cancela", "cancele", "desmarca", "quero cancelar"
+  /\b(pode|podem|quero|queria|gostaria de|vou querer) (cancelar|desmarcar)\b/,
+  /\b(cancela|cancele|desmarca|desmarque)\b/,
+  /\bcancelar? mesmo\b/,
+  /\bdesisti\b|\bdesisto\b/,
+];
+
+/**
+ * O paciente RECUSOU de forma explícita remarcar — e quer cancelar? ("não quero remarcar", "pode cancelar mesmo", "desisti").
+ * Hesitação ("acho que não vou conseguir", "vou ver", "depois eu aviso") e negação ("não cancele") não contam: aí a Sofia
+ * NÃO cancela na franquia, oferece remarcar. Decisão do coordenador/João, 26/10/2026.
+ */
+export function recusouRemarcarExplicitamente(texto: string | null | undefined): boolean {
+  const s = normalizar(texto ?? '');
+  if (!s) return false;
+  if (NAO_E_DESISTENCIA.some((r) => r.test(s))) return false;
+  if (s.includes('?') ) return false;
+  if (HESITA.test(s)) return false;
+  return RECUSA_EXPLICITA.some((r) => r.test(s));
+}
