@@ -17,7 +17,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { escritasDoPaciente, idadeADesencalhar } from './paciente-para-cartao.js';
 import { escritasDoTratamento } from './tratamento-para-cartao.js';
-import { CAMPOS_SESSOES, acharCampoDeSessao, escritasDeSessoes } from './sessoes-para-cartao.js';
+import { CAMPOS_SESSOES, acharCampoDeSessao, escritasDeSessoes, separarCiclo } from './sessoes-para-cartao.js';
 import { planejarAtendimento, type CampoCandidato } from './atendimento-para-cartao.js';
 import { abrirSessaoTela, montarAvisoDaTela, type AtendimentoTela, type ProblemaDaTela, type SessaoTela } from './franquia-tela.js';
 import { avisarJoao } from './alerta-whatsapp.js';
@@ -33,7 +33,7 @@ import {
 } from './franquia-move.js';
 import { normalizarNome } from './kommo-schema.js';
 import { franquiaRespeitaEspera } from './espera-retomada.js';
-import { fecharComoPerdido } from './parados-worker.js';
+import { fecharOuSegurar, seguradoPelaTrava } from './parados-worker.js';
 import { TAG_SEM_REGUA, campoDoPerdidoDaFranquia, type DecisaoParado } from './parados.js';
 import { automacaoLigada, estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import {
@@ -173,6 +173,8 @@ export interface ResumoSync {
   camposSdrCartoes?: number;
   /** fase 2: cartões antigos em AGENDADO (fora da janela D-3) revisados pelo histórico do paciente (23/09/2026) */
   revisados: number;
+  /** PERDIDOs que a trava da perda automática (consulta futura / pagou / Quente / Morno) segurou: o cartão fica onde está, não é erro */
+  travadosPelaPerda?: number;
   /** move em seco: "DE → PARA" → quantos cartões se moveriam nesta varredura (só aparece quando há) */
   simulados?: Record<string, number>;
   /** cartões recusados porque o `⚙ idClient` deles é de OUTRO paciente (só os ids dos cartões, sem dado pessoal) */
@@ -529,7 +531,20 @@ function contarSimulado(resumo: ResumoSync, de: string, para: string): void {
   resumo.simulados = { ...resumo.simulados, [chave]: (resumo.simulados?.[chave] ?? 0) + 1 };
 }
 
-export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = ''): Promise<void> {
+/** PERDIDO segurado pela trava: não relê o cartão no Kommo de novo antes disto (a varredura passa de 15 em 15 min). */
+const TRAVA_REVE_A_CADA_MS = 60 * 60_000;
+const travadoAte = new Map<string, number>();
+
+/** No papel: o movimento é um PERDIDO que a trava da perda automática (consulta futura / pagou / Quente / Morno) seguraria? */
+function perdaTravada(unit: Unit, cartao: KommoLead, para: string, deEtapa: string, automacao: string, agoraEpoch: number): boolean {
+  return normalizarNome(para) === normalizarNome(ETAPA.PERDIDO) && seguradoPelaTrava(unit, cartao.id, cartao, deEtapa, true, automacao, agoraEpoch);
+}
+
+/**
+ * `cartao` (opcional) é o cartão que o chamador já leu: em «só no papel» a trava da perda automática o usa e NUNCA relê no Kommo
+ * (o seco não toca o Kommo, nem pra ler — o teste de `aplicarMovimento` em seco vigia isso).
+ */
+export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = '', cartao?: KommoLead): Promise<void> {
   const alvo = funis.idDe(mov.funil, mov.para);
   if (!alvo) {
     logger.warn({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil }, 'franquia-move: etapa não existe nesta conta — não movi');
@@ -538,6 +553,8 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
   // Move em seco (tela de Automações): é o ÚNICO portão por onde todo movimento passa — cartão normal,
   // passagem das 48 h e revisão do histórico —, então nenhum caminho novo escapa dele.
   if (estadoDoMove(unit.slug) === 'seco') {
+    // trava da perda automática (26/10): o papel não pode prometer um PERDIDO que o ligado não faria
+    if (cartao && perdaTravada(unit, cartao, mov.para, deEtapa, 'franquia-move', Math.floor(Date.now() / 1000))) return;
     contarSimulado(resumo, deEtapa, mov.para);
     logger.info({ unit: unit.slug, leadId, de: deEtapa, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     registrarSimulacao(unit, 'franquia-move', { leadId, acao: 'moveria', alvo: mov.para, deEtapa, valor: mov.motivoPerda, motivo: mov.motivo });
@@ -548,10 +565,20 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
   // etiqueta NO_FOLLOW_UP quando o fato é velho demais pra régua, nota no cartão, confere a etapa antes.
   if (normalizarNome(mov.para) === normalizarNome(ETAPA.PERDIDO)) {
     const d: DecisaoParado = { para: 'PERDIDO', regra: mov.motivo, dias: mov.dias ?? 0, motivoPerda: mov.motivoPerda, campo: campoDoPerdidoDaFranquia(mov.motivoPerda), semRegua: mov.semRegua === true };
+    const chaveTrava = `${unit.id}:${leadId}`;
+    if ((travadoAte.get(chaveTrava) ?? 0) > Date.now()) {
+      resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1; // já segurado há pouco: nem relê o cartão no Kommo
+      return;
+    }
     try {
-      if (await fecharComoPerdido(unit, kommo, funis, leadId, deEtapa, d, false)) {
+      const r = await fecharOuSegurar(unit, kommo, funis, leadId, deEtapa, d, false, 'parados', cartao);
+      if (r === 'fechou') {
         resumo.movimentos++;
         logger.info({ unit: unit.slug, leadId, de: deEtapa, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: d.semRegua }, 'franquia-move: cartão fechado como PERDIDO pela jornada');
+      } else if (r === 'travado') {
+        // não é recusa do Kommo nem erro: a trava segurou (já logada em info pelo portão). Fica contado no resumo.
+        resumo.travadosPelaPerda = (resumo.travadosPelaPerda ?? 0) + 1;
+        travadoAte.set(chaveTrava, Date.now() + TRAVA_REVE_A_CADA_MS);
       }
     } catch (err) {
       resumo.erros++;
@@ -867,7 +894,8 @@ export function temConsultaFutura(schedules: SpineSchedule[], agoraEpoch: number
   return schedules.some((s) => {
     if (!s.dateAttendanceUtc || !ehConsulta(s)) return false;
     const t = Math.floor(Date.parse(s.dateAttendanceUtc) / 1000);
-    return Number.isFinite(t) && t > agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO);
+    // REMARCADO (41) é consulta viva: a franquia muda a data no próprio registro e o paciente vem naquela data (#113)
+    return Number.isFinite(t) && t > agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO || s.idStatus === SPINE_STATUS.REMARCADO);
   });
 }
 
@@ -909,7 +937,7 @@ async function passarNegociacao(unit: Unit, kommo: KommoClient, funis: Funis, ma
         registrarSimulacao(unit, 'franquia-sync', { leadId: lead.id, acao: 'moveria', alvo: mov.para, deEtapa: ETAPA.COMPARECEU, motivo: mov.motivo });
         continue;
       }
-      await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, ETAPA.COMPARECEU);
+      await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, ETAPA.COMPARECEU, lead);
     }
     if (leads.length < 250) break;
   }
@@ -1138,7 +1166,7 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
  * fechamento (abaixo) monta o tratamento a partir da ficha, e a ficha não traz local, grau nem criação.
  */
 type PacienteParaSessoes = Pick<PacienteDoCartao, 'nome' | 'idClient' | 'consultas'> & {
-  tratamento: Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> | null;
+  tratamento: (Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> & { category?: string | null }) | null;
 };
 
 async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p: PacienteParaSessoes, historico: Historico | null): Promise<void> {
@@ -1172,7 +1200,14 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     return { tipo: info.rawType ?? (info.type as string), valor: v === undefined || v === null || String(v).trim() === '' ? null : String(v) };
   };
 
-  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, agoraEpoch, campo });
+  const tratamentosDoPaciente = hist?.treatments;
+  if (!separarCiclo(p.tratamento.idTreatment, tratamentosDoPaciente, p.tratamento, p.tratamento.created != null).separavel) {
+    logger.info(
+      { unit: unit.slug, leadId, idTreatment: p.tratamento.idTreatment, tratamentos: tratamentosDoPaciente?.length },
+      'franquia-sessoes: mais de um tratamento e não sei de qual é cada sessão — não gravo contador',
+    );
+  }
+  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, tratamentosDoPaciente, agoraEpoch, campo });
   if (planejadas.length > 0) resumo.sessoes = (resumo.sessoes ?? 0) + 1;
   for (const e of planejadas) {
     const info = acharCampoDeSessao(porNome, e.campo, normalizar);
@@ -1270,15 +1305,16 @@ async function fecharSessoesDoTratamento(ctx: CtxSync): Promise<void> {
           const tratamento = (hist?.treatments ?? []).find((t) => t.idTreatment === noCartao);
           if (!hist || !tratamento) continue;
           // A ficha do paciente NÃO manda o `created` do tratamento (só idTreatment, idStatus, statusName
-          // e typeName) e, medido na Imperatriz em 23/10/2026, também não manda o idTreatment de cada
-          // sessão. Sem um dos dois não há como separar ciclo, e o contador somaria as sessões do
-          // tratamento anterior de quem voltou depois da alta. Então só fecho quando não há o que
-          // confundir: um tratamento só na ficha, ou toda sessão dizendo a que tratamento pertence.
-          const separavel = hist.treatments.length === 1 || hist.schedules.filter((s) => !ehConsulta(s)).every((s) => s.idTreatment !== null);
-          if (!separavel) {
+          // e typeName) e, medido na Imperatriz e na Açailândia (0 de 1.238 sessões), também não manda o
+          // idTreatment de cada sessão. O que ela manda é o RÓTULO em cada sessão ("PROTOCOLO 03 MESES -
+          // LOMBAR"), igual ao `typeName` do tratamento sem o grau: com ele dá para separar os
+          // tratamentos que correm juntos. Sem rótulo próprio, ou com dois tratamentos de rótulo igual
+          // (renovação — e aqui não há `created`), não há como saber de quem é cada sessão: não fecho.
+          const ciclo = separarCiclo(tratamento.idTreatment ?? null, hist.treatments, null, false);
+          if (!ciclo.separavel) {
             logger.info(
               { unit: unit.slug, leadId: lead.id, tratamentos: hist.treatments.length },
-              'franquia-sessoes: mais de um ciclo e sessão sem idTreatment — não fecho, contaria o ciclo errado',
+              'franquia-sessoes: mais de um tratamento e sessão sem como separar — não fecho, contaria o tratamento errado',
             );
             continue;
           }
@@ -1781,7 +1817,7 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
   if (!funis || !mov.gatilho) return;
   // move em seco: o aplicarMovimento só registra "moveria" — nada a marcar
   if (estadoDoMove(unit.slug) === 'seco') {
-    await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+    await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status, lead);
     return;
   }
   const etapa: EtapaQueAFranquiaReabre = normalizarNome(atual.status) === normalizarNome(ETAPA.ALTA) ? 'ALTA' : 'PERDIDO';
@@ -1810,8 +1846,8 @@ async function franquiaMandaUmaVez(ctx: CtxSync, leadId: number, lead: KommoLead
     return;
   }
   const antes = resumo.movimentos;
-  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
-  if (resumo.movimentos === antes) return; // o Kommo recusou: sem marca, tenta de novo na próxima varredura
+  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status, lead);
+  if (resumo.movimentos === antes) return; // o Kommo recusou (ou a trava da perda segurou): sem marca, tenta de novo na próxima varredura
   await marcarAviso(unit.id, leadId, chave);
   await kommo.addLeadNote(leadId, notaDaDevolucao(etapa, mov.para, mov.gatilho)).catch((err) =>
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: nota da devolução não foi'),
@@ -1916,7 +1952,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   // 16/10 em "só no papel": o robô move pela regra antiga e a tela mostra onde a regra nova levaria o cartão
   if (ctx.jornada === 'seco') {
     const novo = planejarMovimento({ ...entrada1610, regras1610: true });
-    if ((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) {
+    if (((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) && !(novo && perdaTravada(unit, lead, novo.para, atual.status, AUTOMACAO_1610, agoraEpoch))) {
       registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'moveria', alvo: novo ? novo.para : '(fica onde está)', deEtapa: atual.status, valor: novo?.semRegua ? 'sem régua' : undefined, motivo: novo?.motivo ?? `regras de 16/10: não move (a regra antiga leva pra ${mov?.para})` });
     }
   }
@@ -1931,6 +1967,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   if (!mov) return;
   if (franquiaRespeitaEspera(unit, lead, atual, mov.para, agoraEpoch)) return; // EM ESPERA com ◷ Retomar em (auditoria 16/10, item 10)
   if (seco) {
+    if (perdaTravada(unit, lead, mov.para, atual.status, ctx.automacaoDoSeco ?? 'franquia-revisao', agoraEpoch)) return;
     contarSimulado(resumo, atual.status, mov.para);
     logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
     registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
@@ -1941,7 +1978,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     await franquiaMandaUmaVez(ctx, leadId, lead, atual, mov);
     return;
   }
-  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status);
+  await aplicarMovimento(unit, kommo, funis, leadId, mov, resumo, atual.status, lead);
 }
 
 const REVISAO_MAX_POR_VARREDURA = Number(process.env.FRANQUIA_REVISAO_MAX) || 60;
@@ -2049,11 +2086,12 @@ async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
               if (parado > JORNADA.CONFERIR_MAX_DIAS) {
                 const mov: Movimento = { funil: 'COMERCIAL', para: ETAPA.PERDIDO, motivo: `${Math.floor(parado)} d em ${ETAPA.CONFERIR} sem acerto do cadastro`, motivoPerda: MOTIVO_PERDA.SEM_CADASTRO, semRegua: true, dias: Math.floor(parado) };
                 if (seco) {
+                  if (perdaTravada(unit, lead, mov.para, etapa, 'franquia-revisao', agoraEpoch)) continue;
                   contarSimulado(resumo, etapa, mov.para);
                   logger.info({ unit: unit.slug, leadId: lead.id, nome: lead.name, de: etapa, para: mov.para, motivo: mov.motivo }, 'franquia-move [seco]: moveria');
                   registrarSimulacao(unit, 'franquia-revisao', { leadId: lead.id, acao: 'moveria', alvo: mov.para, deEtapa: etapa, valor: mov.motivoPerda, motivo: mov.motivo });
                 }
-                else await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, etapa);
+                else await aplicarMovimento(unit, kommo, funis, lead.id, mov, resumo, etapa, lead);
               }
               continue;
             }

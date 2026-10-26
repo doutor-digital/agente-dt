@@ -10,7 +10,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
-import { CAMPOS_SESSOES, acharCampoDeSessao, diaParaTexto, escritasDeSessoes, resumirSessoes, type CampoDoCartao } from './sessoes-para-cartao.js';
+import {
+  CAMPOS_SESSOES, acharCampoDeSessao, diaParaTexto, escritasDeSessoes, protocoloDoTipo, resumirSessoes, separarCiclo,
+  type CampoDoCartao, type TratamentoDaFicha,
+} from './sessoes-para-cartao.js';
 
 const TRAT = 777;
 const AGORA = Date.parse('2026-10-02T12:00:00Z') / 1000;
@@ -217,4 +220,125 @@ test('os dois campos renomeados são achados pelo nome novo ou pelo antigo; o no
   assert.equal(acharCampoDeSessao(ambos, CAMPOS_SESSOES.MARCADAS, chave), 'novo');
   // campo sem nome antigo não ganha plano B, e conta sem nenhum dos dois devolve nada
   assert.equal(acharCampoDeSessao(new Map([['# sessões realizadas', 'x']]), CAMPOS_SESSOES.MARCADAS, chave), undefined);
+});
+
+// --- paciente com DOIS tratamentos ao mesmo tempo (cervical + lombar) ---
+//
+// Caso real da Açailândia (24/10/2026, paciente 363881, tratamentos 128410 CERVICAL e 128411 LOMBAR): a ficha
+// do paciente manda a sessão SEM idTreatment, só com o rótulo "PROTOCOLO 03 MESES - LOMBAR". Somar tudo dava
+// 14 atendidas no cartão do lombar, que tem 7.
+
+const CERV = 128410;
+const LOMB = 128411;
+const FICHA: TratamentoDaFicha[] = [
+  { idTreatment: CERV, typeName: 'PROTOCOLO 03 MESES, CERVICAL, CRÔNICO' },
+  { idTreatment: LOMB, typeName: 'PROTOCOLO 03 MESES, LOMBAR, CRÔNICO' },
+];
+const CRIADO_LOMB = '2026-10-01T14:42:06.000Z';
+const HOJE = Date.parse('2026-10-24T14:00:00Z') / 1000;
+
+/** Como a ficha entrega: sem idTreatment, com o rótulo do protocolo na categoria. */
+function daFicha(dia: string, hora: string, rotulo: string, idStatus: number): SpineSchedule {
+  return sessao({ dia, idTreatment: null, categoryName: rotulo, dateAttendanceUtc: `${dia}T${hora}Z`, idStatus });
+}
+const FICHA_DUPLA: SpineSchedule[] = [
+  sessao({ dia: '2026-09-30', idTreatment: null, categoryName: 'AVALIAÇÃO' }),
+  ...['2026-10-01', '2026-10-07', '2026-10-10', '2026-10-14', '2026-10-17', '2026-10-21', '2026-10-24'].flatMap((dia) => [
+    daFicha(dia, '19:00:00.000', 'PROTOCOLO 03 MESES - CERVICAL', SPINE_STATUS.ATENDIDO),
+    daFicha(dia, '19:30:00.000', 'PROTOCOLO 03 MESES - LOMBAR', SPINE_STATUS.ATENDIDO),
+  ]),
+  daFicha('2026-10-28', '20:30:00.000', 'PROTOCOLO 03 MESES - CERVICAL', SPINE_STATUS.AGENDADO),
+  daFicha('2026-10-28', '21:00:00.000', 'PROTOCOLO 03 MESES - LOMBAR', SPINE_STATUS.AGENDADO),
+  daFicha('2026-10-31', '14:00:00.000', 'PROTOCOLO 03 MESES - CERVICAL', SPINE_STATUS.REMARCADO),
+  daFicha('2026-10-31', '13:30:00.000', 'PROTOCOLO 03 MESES - LOMBAR', SPINE_STATUS.REMARCADO),
+];
+const LOMBAR = { idTreatment: LOMB, category: 'PROTOCOLO 03 MESES', local: 'LOMBAR', degree: 'CRÔNICO', statusName: 'EM ANDAMENTO', created: CRIADO_LOMB };
+const CERVICAL = { idTreatment: CERV, category: 'PROTOCOLO 03 MESES', local: 'CERVICAL', degree: 'CRÔNICO', statusName: 'EM ANDAMENTO', created: '2026-10-01T14:41:09.000Z' };
+const valorDe = (w: ReturnType<typeof escritasDeSessoes>, c: string) => (acha(w, c) as { valor: number } | undefined)?.valor;
+
+test('dois tratamentos, ficha sem idTreatment: cada cartão conta só as sessões do SEU protocolo', () => {
+  const lombar = escritasDeSessoes({ schedules: FICHA_DUPLA, tratamento: LOMBAR, tratamentosDoPaciente: FICHA, agoraEpoch: HOJE, campo: conta() });
+  assert.equal(valorDe(lombar, CAMPOS_SESSOES.REALIZADAS), 7);
+  assert.equal(valorDe(lombar, CAMPOS_SESSOES.MARCADAS), 1);
+  assert.equal(valorDe(lombar, CAMPOS_SESSOES.PREVISTAS), 8);
+  assert.equal(valorDe(lombar, CAMPOS_SESSOES.FALTAS), 0);
+  const cervical = escritasDeSessoes({ schedules: FICHA_DUPLA, tratamento: CERVICAL, tratamentosDoPaciente: FICHA, agoraEpoch: HOJE, campo: conta() });
+  assert.equal(valorDe(cervical, CAMPOS_SESSOES.REALIZADAS), 7);
+  assert.equal(valorDe(cervical, CAMPOS_SESSOES.PREVISTAS), 8);
+});
+
+test('o defeito de antes: sem o rótulo, os dois tratamentos eram somados (14 em vez de 7)', () => {
+  const antes = resumirSessoes(FICHA_DUPLA, LOMB, HOJE, CRIADO_LOMB)!; // sem o 5º argumento = como era
+  assert.equal(antes.realizadas, 14);
+  assert.equal(antes.previstas, 16);
+  const depois = resumirSessoes(FICHA_DUPLA, LOMB, HOJE, CRIADO_LOMB, 'PROTOCOLO 03 MESES - LOMBAR')!;
+  assert.equal(depois.realizadas, 7);
+});
+
+test('a agenda traz o idTreatment e vale mais que o rótulo; a ficha completa o resto', () => {
+  // janela da agenda: a sessão do lombar com id certo e a do cervical com id do OUTRO tratamento
+  const agenda = [
+    sessao({ dia: '2026-10-28', idTreatment: LOMB, categoryName: 'SESSÃO', idStatus: SPINE_STATUS.AGENDADO }),
+    sessao({ dia: '2026-10-28', idTreatment: CERV, categoryName: 'SESSÃO', idStatus: SPINE_STATUS.AGENDADO }),
+  ];
+  const ids = new Set(agenda.map((a) => a.idSchedule));
+  const historico = FICHA_DUPLA.filter((s) => !ids.has(s.idSchedule) && s.idStatus !== SPINE_STATUS.AGENDADO);
+  const w = escritasDeSessoes({ schedules: [...agenda, ...historico], tratamento: LOMBAR, tratamentosDoPaciente: FICHA, agoraEpoch: HOJE, campo: conta() });
+  assert.equal(valorDe(w, CAMPOS_SESSOES.REALIZADAS), 7);
+  assert.equal(valorDe(w, CAMPOS_SESSOES.MARCADAS), 1); // só a do lombar; a agendada do cervical (id 128410) não entra
+});
+
+test('ciclo anterior com protocolo diferente (inclusive sem local) não entra na conta do atual', () => {
+  const ficha: TratamentoDaFicha[] = [{ idTreatment: 93000, typeName: 'PROTOCOLO 02 MESES' }, { idTreatment: LOMB, typeName: 'PROTOCOLO 03 MESES, LOMBAR, CRÔNICO' }];
+  const hist = [
+    daFicha('2026-05-05', '13:00:00.000', 'PROTOCOLO 02 MESES - N/A', SPINE_STATUS.ATENDIDO),
+    daFicha('2026-05-12', '13:00:00.000', 'PROTOCOLO 02 MESES - N/A', SPINE_STATUS.ATENDIDO),
+    daFicha('2026-10-07', '13:00:00.000', 'PROTOCOLO 03 MESES - LOMBAR', SPINE_STATUS.ATENDIDO),
+  ];
+  assert.equal(valorDe(escritasDeSessoes({ schedules: hist, tratamento: LOMBAR, tratamentosDoPaciente: ficha, agoraEpoch: HOJE, campo: conta() }), CAMPOS_SESSOES.REALIZADAS), 1);
+  // e o contrário: o cartão do ciclo antigo conta as dele, sem a `desde` (que não existe na ficha)
+  const antigo = { idTreatment: 93000, category: 'PROTOCOLO 02 MESES', local: 'N/A', degree: null, statusName: 'FINALIZADO', created: null };
+  assert.equal(valorDe(escritasDeSessoes({ schedules: hist, tratamento: antigo, tratamentosDoPaciente: ficha, agoraEpoch: HOJE, campo: conta() }), CAMPOS_SESSOES.REALIZADAS), 2);
+});
+
+test('paciente com um tratamento só: nada muda — a sessão conta qualquer que seja o rótulo', () => {
+  const unica = [daFicha('2026-10-07', '13:00:00.000', 'Sessão de fisioterapia', SPINE_STATUS.ATENDIDO)];
+  const w = escritasDeSessoes({ schedules: unica, tratamento: LOMBAR, tratamentosDoPaciente: [FICHA[1]!], agoraEpoch: HOJE, campo: conta() });
+  assert.equal(valorDe(w, CAMPOS_SESSOES.REALIZADAS), 1);
+  const semFicha = escritasDeSessoes({ schedules: unica, tratamento: LOMBAR, agoraEpoch: HOJE, campo: conta() });
+  assert.equal(valorDe(semFicha, CAMPOS_SESSOES.REALIZADAS), 1);
+});
+
+test('não dá para separar: grava o que é do tratamento e NENHUM contador', () => {
+  // dois tratamentos e o meu não aparece na ficha nem traz categoria/local
+  const semRotulo = { idTreatment: 555, local: null, degree: null, statusName: 'EM ANDAMENTO', created: null };
+  const w = escritasDeSessoes({ schedules: FICHA_DUPLA, tratamento: semRotulo, tratamentosDoPaciente: FICHA, agoraEpoch: HOJE, campo: conta() });
+  assert.deepEqual(w.map((x) => x.campo), [CAMPOS_SESSOES.ID_TRAT, CAMPOS_SESSOES.STATUS_TRAT]);
+  // renovação do mesmo protocolo e sem a data de criação (é o caso do fechamento): também não afirma
+  const renovado: TratamentoDaFicha[] = [{ idTreatment: 1, typeName: 'PROTOCOLO 03 MESES, LOMBAR, CRÔNICO' }, { idTreatment: 2, typeName: 'PROTOCOLO 03 MESES, LOMBAR, AGUDO' }];
+  assert.equal(separarCiclo(2, renovado, null, false).separavel, false);
+  // com a data de criação, a regra antiga (`desde`) separa os ciclos como sempre separou
+  assert.equal(separarCiclo(2, renovado, null, true).separavel, true);
+});
+
+test('o rótulo da ficha a partir do typeName do tratamento', () => {
+  assert.equal(protocoloDoTipo('PROTOCOLO 03 MESES, LOMBAR, CRÔNICO'), 'PROTOCOLO 03 MESES - LOMBAR');
+  assert.equal(protocoloDoTipo('PROTOCOLO 01 MÊS, CERVICAL, PREVENTIVO'), 'PROTOCOLO 01 MÊS - CERVICAL');
+  assert.equal(protocoloDoTipo('PROTOCOLO 02 MESES'), 'PROTOCOLO 02 MESES - N/A');
+  assert.equal(protocoloDoTipo('A, B'), null); // formato que não conheço: não adivinha
+  assert.equal(protocoloDoTipo(null), null);
+  assert.equal(protocoloDoTipo(''), null);
+});
+
+test('REGRA EM ABERTO (pergunta ao João): sessão no dia da avaliação, ANTES de o tratamento ser criado, fica de fora', () => {
+  // idClient 363357 na Açailândia: avaliação 18:00, 1ª sessão 18:30, tratamento criado às 19:17 do mesmo dia.
+  // A franquia tem 8 atendidas do protocolo; o cartão mostra 7 porque a 1ª é anterior à criação do tratamento.
+  // Este teste PRENDE o comportamento atual para que mudá-lo seja uma decisão, não um acidente.
+  const hist = [
+    daFicha('2026-09-29', '18:30:00.000', 'PROTOCOLO 03 MESES - LOMBAR', SPINE_STATUS.ATENDIDO),
+    daFicha('2026-10-01', '13:00:00.000', 'PROTOCOLO 03 MESES - LOMBAR', SPINE_STATUS.ATENDIDO),
+  ];
+  const r = resumirSessoes(hist, LOMB, HOJE, '2026-09-29T19:17:03.000Z')!;
+  assert.equal(r.realizadas, 1);
+  assert.equal(resumirSessoes(hist, LOMB, HOJE, null)!.realizadas, 2);
 });

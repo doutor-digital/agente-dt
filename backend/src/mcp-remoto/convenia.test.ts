@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  afastamentoSeguro,
-  colaboradorSeguro,
+  afastamentoNormalizado,
+  colaboradorNormalizado,
   conveniaAfastamentos,
   conveniaColaborador,
   conveniaColaboradores,
@@ -10,18 +10,23 @@ import {
   conveniaMovimentacao,
   criarContextoConvenia,
   resolverContasConvenia,
+  resumirColaborador,
   type ColaboradorBruto,
+  type ColaboradorComSaida,
   type ContaConvenia,
 } from './convenia.js';
 import { listarIntegracoes } from './integracoes.js';
 
-/** Valores que NUNCA podem aparecer em resposta nenhuma (LGPD). */
-const SEGREDOS = [
+/**
+ * Dado pessoal que só existe na FICHA da pessoa. Por decisão da dona da empresa (24/10/2026) ele SAI pelo
+ * conector — na ficha de uma pessoa e nas listagens com `completo: true`. O que estes valores provam aqui é
+ * o outro lado: a listagem PADRÃO continua resumida, para não despejar a ficha inteira de todo mundo.
+ */
+const DADO_DE_FICHA = [
   '123.456.789-09', '12345678909', 'PIS-SECRETO', 'RG-SECRETO', 'CTPS-SECRETA', 'TITULO-SECRETO', 'CNH-SECRETA',
   'pix-secreto', 'AGENCIA-SECRETA', 'CONTA-SECRETA', 'Rua Secreta', '01310-100', '(11) 99999-0000', '(11) 3333-4444',
   'pessoa.privada@gmail.com', 'alternativo@gmail.com', '1990-01-02', '4321.5', 'Mae Sigilosa', 'Pai Sigiloso',
-  'M54.5', 'dor nas costas sigilosa', 'anotacao sigilosa', 'Fisica-sigilosa', 'Etnia-sigilosa', 'ASO-sigiloso',
-  'Contato Emergencia', 'motivo-livre-sigiloso', 'comentario-sigiloso', 'corporativo@empresa.com',
+  'anotacao sigilosa', 'Fisica-sigilosa', 'Etnia-sigilosa', 'ASO-sigiloso', 'Contato Emergencia',
 ];
 
 function pessoa(id: string, nome: string, sobrenome: string, extra: Partial<ColaboradorBruto> = {}): ColaboradorBruto {
@@ -31,7 +36,7 @@ function pessoa(id: string, nome: string, sobrenome: string, extra: Partial<Cola
     cost_center: { id: 'c1', name: 'Administrativo' }, supervisor: { id: 's1', name: 'Gestora', last_name: 'Chefe' },
     intern: { initial_at: null, finish_at: null }, experience_period: { first_end: '2026-04-24', second_end: '2026-06-08', experience_period_type: '45 + 45 dias' },
     payroll: { registration: '77' },
-    // tudo isto chega da API e não pode sair
+    // tudo isto chega da API e agora SAI (decisão da dona, 24/10/2026)
     email: 'pessoa.privada@gmail.com', alternative_email: 'alternativo@gmail.com', salary: 4321.5, birth_date: '1990-01-02',
     phone: '(11) 3333-4444', cellphone: '(11) 99999-0000', mother_name: 'Mae Sigilosa', father_name: 'Pai Sigiloso',
     document: { cpf: '123.456.789-09', pis: 'PIS-SECRETO', rg: 'RG-SECRETO', ctps: 'CTPS-SECRETA', voter_card: 'TITULO-SECRETO' },
@@ -90,7 +95,7 @@ function rotasPadrao(): Rotas {
     [`/employees/${BRUNO.id}`]: () => ({ data: BRUNO }),
     [`/employees/${CARLA_DESLIGADA.id}`]: () => ({ data: CARLA_DESLIGADA }),
     [`/employees/${ANA.id}/vacations/solicitations`]: () => pagina([
-      { starts_at: '2026-10-20', finishes_at: '2026-11-08', requested_days: 20, allowance: 10, status: 'approved', canceled: null, justification: 'dor nas costas sigilosa' },
+      { starts_at: '2026-10-20', finishes_at: '2026-11-08', requested_days: 20, allowance: 10, status: 'approved', canceled: null, justification: 'justificativa-das-ferias' },
       { starts_at: '2026-12-01', finishes_at: '2026-12-10', requested_days: 10, status: 'approved', canceled: { created_at: 'x' } },
     ]),
     [`/employees/${ANA.id}/vacations/periods`]: () => pagina([
@@ -103,9 +108,9 @@ function rotasPadrao(): Rotas {
       data: { employee_id: ANA.id, absences: [{ motive: { name: 'Afastamento por doença' }, type: { name: 'Justificada' }, date_from: '2026-09-28', date_to: '2026-10-03', total: 6, cid: 'M54.5', justification: 'dor nas costas sigilosa' }] },
     }),
     [`/employees/${BRUNO.id}/absences`]: () => ({
-      data: { employee_id: BRUNO.id, absences: [{ motive: { name: 'Falta' }, type: { name: 'Não justificada' }, date_from: '2026-10-15', date_to: '2026-10-15', total: '1', cid: null, justification: 'motivo-livre-sigiloso' }] },
+      data: { employee_id: BRUNO.id, absences: [{ motive: { name: 'Falta' }, type: { name: 'Não justificada' }, date_from: '2026-10-15', date_to: '2026-10-15', total: '1', cid: null, justification: 'nao-avisou-sigiloso' }] },
     }),
-    '/companies/collective-vacations': () => pagina([{ title: 'Recesso', starts_at: '2026-12-22', finishes_at: '2027-01-02', requested_days: 12, departments: [{ id: 'd1', name: 'Tecnologia' }], emails: ['pessoa.privada@gmail.com'], justification: 'anotacao sigilosa' }]),
+    '/companies/collective-vacations': () => pagina([{ title: 'Recesso', starts_at: '2026-12-22', finishes_at: '2027-01-02', requested_days: 12, departments: [{ id: 'd1', name: 'Tecnologia' }], emails: ['rh-coletivas@empresa.com'], justification: 'justificativa-da-coletiva' }]),
   };
 }
 
@@ -113,34 +118,77 @@ const AGORA = Date.parse('2026-10-20T15:00:00Z');
 const ctxPadrao = (rotas = rotasPadrao(), chamadas?: Array<[string, Record<string, unknown>]>, op: { maxColaboradores?: number } = {}) =>
   criarContextoConvenia(new Map([['doutor-digital', conta('doutor-digital', rotas, chamadas)]]), { agora: () => AGORA, ...op });
 
-function semSegredo(resposta: unknown): void {
+/** A resposta está resumida: nenhum campo da ficha da pessoa veio junto. */
+function resumida(resposta: unknown, porque = 'a listagem padrão trouxe a ficha inteira'): void {
   const json = JSON.stringify(resposta);
-  for (const s of SEGREDOS) assert.ok(!json.includes(s), `vazou "${s}" na resposta`);
+  for (const s of DADO_DE_FICHA) assert.ok(!json.includes(s), `${porque}: "${s}"`);
 }
 
-test('colaboradorSeguro: só a lista fechada sai (nome, cargo, departamento, datas)', () => {
-  const c = colaboradorSeguro(BRUNO);
-  assert.deepEqual(Object.keys(c).sort(), ['admissao', 'cargo', 'centroDeCusto', 'departamento', 'estagio', 'experiencia', 'gestor', 'id', 'matricula', 'nome', 'situacao', 'time']);
+/** A resposta está completa: cada valor pedido chegou. */
+function trouxe(resposta: unknown, valores: string[]): void {
+  const json = JSON.stringify(resposta);
+  for (const s of valores) assert.ok(json.includes(s), `faltou "${s}" na resposta completa`);
+}
+
+test('colaboradorNormalizado: o registro cru inteiro junto com os campos em português', () => {
+  const c = colaboradorNormalizado(BRUNO);
+  // os nomes em português continuam de pé (é por eles que filtro, agrupamento e busca funcionam)
   assert.equal(c.nome, 'Bruno Lima');
   assert.equal(c.gestor, 'Gestora Chefe');
   assert.equal(c.matricula, '77');
+  assert.equal(c.departamento, 'Comercial');
   assert.deepEqual(c.estagio, { inicio: '2026-02-01', fim: '2027-01-31' });
   assert.deepEqual(c.experiencia, { tipo: '45 + 45 dias', fimPrimeiroPeriodo: '2026-04-24', fimSegundoPeriodo: '2026-06-08' });
-  semSegredo(c);
+  // e o que o Convênia manda sai inteiro: documentos, dinheiro, endereço, contato, saúde
+  assert.equal((c.document as { cpf: string }).cpf, '123.456.789-09');
+  assert.equal((c.cpf as { cpf: string }).cpf, '12345678909');
+  assert.equal((c.ctps as { pis: string }).pis, 'PIS-SECRETO');
+  assert.equal((c.rg as { number: string }).number, 'RG-SECRETO');
+  assert.equal(c.salary, 4321.5);
+  assert.equal(c.birth_date, '1990-01-02');
+  assert.equal((c.bank_accounts as Array<{ pix: string; agency: string }>)[0]!.pix, 'pix-secreto');
+  assert.equal((c.address as { address: string }).address, 'Rua Secreta');
+  assert.equal(c.cellphone, '(11) 99999-0000');
+  assert.equal(c.email, 'pessoa.privada@gmail.com');
+  assert.equal(c.mother_name, 'Mae Sigilosa');
+  assert.equal((c.aso as Array<{ observation: string }>)[0]!.observation, 'ASO-sigiloso');
+  assert.equal((c.ethnicity as { name: string }).name, 'Etnia-sigilosa');
+  assert.equal((c.disability as { disability_type: string }).disability_type, 'Fisica-sigilosa');
+  assert.equal((c.annotations as Array<{ notes: string }>)[0]!.notes, 'anotacao sigilosa');
+  trouxe(c, DADO_DE_FICHA);
+});
+
+test('no choque de nomes, o campo em português ganha do bruto (filtro e agrupamento não quebram)', () => {
+  const c = colaboradorNormalizado(pessoa('x', 'Ana', 'Souza', { nome: 'ERRADO', departamento: 'ERRADO', cargo: 'ERRADO', situacao: 'ERRADO' }));
+  assert.equal(c.nome, 'Ana Souza');
+  assert.equal(c.departamento, 'Tecnologia');
+  assert.equal(c.cargo, 'Analista de sistemas');
+  assert.equal(c.situacao, 'Ativo');
+});
+
+test('resumirColaborador: projeta só os campos em português da ficha já normalizada', () => {
+  const r = resumirColaborador(colaboradorNormalizado(BRUNO));
+  assert.deepEqual(Object.keys(r).sort(), ['admissao', 'cargo', 'centroDeCusto', 'departamento', 'estagio', 'experiencia', 'gestor', 'id', 'matricula', 'nome', 'situacao', 'time']);
+  assert.equal(r.nome, 'Bruno Lima');
+  resumida(r);
 });
 
 test('nome social sai quando difere do nome; vazio ou igual não', () => {
-  assert.equal(colaboradorSeguro(pessoa('x', 'Joao', 'Silva', { social_name: 'Joana Silva' })).nomeSocial, 'Joana Silva');
-  assert.equal(colaboradorSeguro(pessoa('x', 'Joao', 'Silva', { social_name: 'João Silva' })).nomeSocial, undefined);
-  assert.equal(colaboradorSeguro(pessoa('x', 'Joao', 'Silva')).nomeSocial, undefined);
+  assert.equal(colaboradorNormalizado(pessoa('x', 'Joao', 'Silva', { social_name: 'Joana Silva' })).nomeSocial, 'Joana Silva');
+  assert.equal(colaboradorNormalizado(pessoa('x', 'Joao', 'Silva', { social_name: 'João Silva' })).nomeSocial, undefined);
+  assert.equal(colaboradorNormalizado(pessoa('x', 'Joao', 'Silva')).nomeSocial, undefined);
 });
 
-test('afastamento: motivo, tipo e dias saem; CID e justificativa nunca', () => {
-  const a = afastamentoSeguro({ motive: { name: 'Afastamento por doença' }, type: { name: 'Justificada' }, date_from: '2026-10-01', date_to: '2026-10-03', total: '3', cid: 'M54.5', justification: 'dor nas costas sigilosa' });
-  assert.deepEqual(a, { motivo: 'Afastamento por doença', tipo: 'Justificada', de: '2026-10-01', ate: '2026-10-03', dias: 3 });
+test('afastamentoNormalizado: motivo, tipo e dias em português MAIS o CID e a justificativa', () => {
+  const a = afastamentoNormalizado({ motive: { name: 'Afastamento por doença' }, type: { name: 'Justificada' }, date_from: '2026-10-01', date_to: '2026-10-03', total: '3', cid: 'M54.5', justification: 'dor nas costas sigilosa' });
+  assert.deepEqual(a, {
+    motive: { name: 'Afastamento por doença' }, type: { name: 'Justificada' }, date_from: '2026-10-01', date_to: '2026-10-03', total: '3',
+    cid: 'M54.5', justification: 'dor nas costas sigilosa',
+    motivo: 'Afastamento por doença', tipo: 'Justificada', de: '2026-10-01', ate: '2026-10-03', dias: 3,
+  });
 });
 
-test('colaboradores ativos: filtros, agrupamento e nada sensível', async () => {
+test('colaboradores ativos: filtros, agrupamento e listagem resumida por padrão', async () => {
   const chamadas: Array<[string, Record<string, unknown>]> = [];
   const ctx = ctxPadrao(rotasPadrao(), chamadas);
   const r = await conveniaColaboradores(ctx, { unidade: 'doutor-digital', agruparPor: 'departamento' });
@@ -150,7 +198,7 @@ test('colaboradores ativos: filtros, agrupamento e nada sensível', async () => 
   assert.deepEqual(u.agrupado, { Comercial: 1, Tecnologia: 1 });
   assert.equal(chamadas[0]![0], '/employees');
   assert.equal(chamadas[0]![1].paginate, 500);
-  semSegredo(r);
+  resumida(r);
 
   const so = await conveniaColaboradores(ctx, { unidade: 'digital', departamento: 'tecnologia', admitidosDe: '2026-10-01', admitidosAte: '2026-10-31' });
   const s = so.porUnidade['doutor-digital'] as Extract<(typeof so.porUnidade)[string], { ok: true }>;
@@ -158,7 +206,20 @@ test('colaboradores ativos: filtros, agrupamento e nada sensível', async () => 
   assert.equal(chamadas.filter(([c]) => c === '/employees').length, 1, 'a segunda consulta sai do cache');
 });
 
-test('colaboradores desligados: ficha lida por pessoa, período de desligamento e motivo livre fora', async () => {
+test('colaboradores com completo: true: a mesma leitura devolve a ficha inteira (uma chave de cache só)', async () => {
+  const chamadas: Array<[string, Record<string, unknown>]> = [];
+  const ctx = ctxPadrao(rotasPadrao(), chamadas);
+  const padrao = await conveniaColaboradores(ctx, { unidade: 'doutor-digital' });
+  resumida(padrao);
+
+  const r = await conveniaColaboradores(ctx, { unidade: 'doutor-digital', completo: true });
+  const u = r.porUnidade['doutor-digital'] as Extract<(typeof r.porUnidade)[string], { ok: true }>;
+  assert.deepEqual(u.itens.map((x) => x.nome), ['Ana Souza', 'Bruno Lima'], 'os campos em português continuam lá');
+  trouxe(r, ['123.456.789-09', '4321.5', 'pix-secreto', 'Rua Secreta', '1990-01-02', 'ASO-sigiloso']);
+  assert.equal(chamadas.filter(([c]) => c === '/employees').length, 1, 'completo não cria variante de cache: a leitura é a mesma');
+});
+
+test('colaboradores desligados: ficha lida por pessoa, período de desligamento e desligamento inteiro', async () => {
   const ctx = ctxPadrao();
   const r = await conveniaColaboradores(ctx, { unidade: 'doutor-digital', desligadosDe: '2026-10-01', desligadosAte: '2026-10-31', agruparPor: 'tipoDesligamento' });
   assert.equal(r.situacao, 'desligados');
@@ -166,12 +227,37 @@ test('colaboradores desligados: ficha lida por pessoa, período de desligamento 
   assert.equal(u.total, 1);
   assert.equal(u.itens[0]!.nome, 'Carla Dias');
   assert.equal(u.itens[0]!.situacao, 'Desligado');
-  assert.deepEqual(u.itens[0]!.desligamento, { data: '2026-10-10', tipo: 'Término de Contrato de Estágio', avisoPrevio: 'Trabalhado', etapa: 'Concluída' });
+  // o desligamento é registro pequeno: sai inteiro, com motivo e comentários, mesmo na listagem resumida
+  assert.deepEqual(u.itens[0]!.desligamento, {
+    date: '2026-10-10', type: { id: 3, title: 'Término de Contrato de Estágio' }, dismissal_step: { name: 'Concluída' },
+    termination_notice: { termination_notice_type: { name: 'Trabalhado' } }, motive: 'motivo-livre-sigiloso', comments: 'comentario-sigiloso',
+    data: '2026-10-10', tipo: 'Término de Contrato de Estágio', avisoPrevio: 'Trabalhado', etapa: 'Concluída',
+  });
   assert.deepEqual(u.agrupado, { 'Término de Contrato de Estágio': 1 });
-  semSegredo(r);
+  resumida(r);
   const fora = await conveniaColaboradores(ctx, { unidade: 'doutor-digital', situacao: 'desligados', desligadosDe: '2026-11-01' });
   assert.equal((fora.porUnidade['doutor-digital'] as { total: number }).total, 0);
   await assert.rejects(() => conveniaColaboradores(ctx, { unidade: 'doutor-digital', situacao: 'ativos', desligadosDe: '2026-10-01' }), /desligados/);
+});
+
+test('ficha que ainda diz "Ativo" com desligamento na listagem: carimba, guarda o original e não mexe no cru', async () => {
+  // aviso prévio correndo: a pessoa está na listagem de ativos E na de desligados
+  const rotas: Rotas = {
+    ...rotasPadrao(),
+    '/employees/dismissed': () => pagina([{ id: ANA.id, dismissal: { date: '2026-11-30', type: { title: 'Pedido de demissão' }, dismissal_step: { name: 'Em andamento' } } }]),
+  };
+  const r = await conveniaColaboradores(ctxPadrao(rotas), { unidade: 'doutor-digital', situacao: 'desligados', completo: true });
+  const u = r.porUnidade['doutor-digital'] as Extract<(typeof r.porUnidade)[string], { ok: true }>;
+  const ana = u.itens.find((x) => x.nome === 'Ana Souza') as ColaboradorComSaida;
+  assert.equal(ana.situacao, 'Desligado', 'quem tem desligamento é carimbado');
+  assert.equal(ana.situacaoOriginal, 'Ativo', 'e o que a ficha dizia não se perde');
+  assert.equal(ana.status, 'Ativo', 'o registro cru fica intacto');
+
+  const f = await conveniaColaborador(ctxPadrao(rotas), { unidade: 'doutor-digital', busca: ANA.id });
+  assert.ok(f.colaborador);
+  assert.equal(f.colaborador.situacao, 'Desligado');
+  assert.equal(f.colaborador.situacaoOriginal, 'Ativo');
+  assert.equal(f.colaborador.status, 'Ativo');
 });
 
 test('desligados além do teto: contam sem nome; com filtro de pessoa a conta sai marcada incompleta', async () => {
@@ -221,7 +307,16 @@ test('movimentação: admissões e desligamentos do período, por mês e por tip
   assert.deepEqual(u.porMes, { '2026-10': { admissoes: 1, desligamentos: 1 } });
   assert.deepEqual(u.desligamentosPorTipo, { 'Término de Contrato de Estágio': 1 });
   assert.deepEqual(u.itensAdmissoes.map((x) => x.nome), ['Ana Souza']);
-  semSegredo(r);
+  resumida(r);
+});
+
+test('movimentação com completo: true traz a ficha inteira de quem entrou e de quem saiu', async () => {
+  const r = await conveniaMovimentacao(ctxPadrao(), { unidade: 'doutor-digital', inicio: '2026-10-01', fim: '2026-10-31', completo: true });
+  const u = r.porUnidade['doutor-digital'] as Extract<(typeof r.porUnidade)[string], { ok: true }>;
+  assert.deepEqual(u.itensAdmissoes.map((x) => x.nome), ['Ana Souza']);
+  assert.deepEqual(u.itensDesligamentos.map((x) => x.nome), ['Carla Dias']);
+  trouxe(u.itensAdmissoes, ['123.456.789-09', '4321.5']);
+  trouxe(u.itensDesligamentos, ['123.456.789-09', 'Rua Secreta']);
 });
 
 test('movimentação conta a admissão de quem entrou e já saiu', async () => {
@@ -231,19 +326,31 @@ test('movimentação conta a admissão de quem entrou e já saiu', async () => {
   assert.equal(u.desligamentos, 0);
 });
 
-test('férias: no período, canceladas fora, vencidas e a vencer, coletivas sem e-mail', async () => {
+test('férias: no período, canceladas fora, vencidas e a vencer, solicitação e coletiva inteiras', async () => {
   const r = await conveniaFerias(ctxPadrao(), { unidade: 'doutor-digital', fim: '2026-12-31' });
   assert.deepEqual(r.periodo, { inicio: '2026-10-20', fim: '2026-12-31', hoje: '2026-10-20' });
   const u = r.porUnidade['doutor-digital'] as Extract<(typeof r.porUnidade)[string], { ok: true }>;
   assert.equal(u.feriasNoPeriodo, 1, 'a cancelada de dezembro não conta');
   assert.equal(u.emFeriasHoje, 1);
-  assert.deepEqual(u.itens[0], { nome: 'Ana Souza', cargo: 'Analista de sistemas', departamento: 'Tecnologia', inicio: '2026-10-20', fim: '2026-11-08', dias: 20, abonoDias: 10, status: 'aprovada' });
+  // registro pequeno: a solicitação sai como o Convênia guarda (justificativa inclusive) + nomes em português
+  assert.deepEqual(u.itens[0], {
+    starts_at: '2026-10-20', finishes_at: '2026-11-08', requested_days: 20, allowance: 10, status: 'aprovada', canceled: null,
+    justification: 'justificativa-das-ferias',
+    inicio: '2026-10-20', fim: '2026-11-08', dias: 20, abonoDias: 10, statusOriginal: 'approved',
+    nome: 'Ana Souza', cargo: 'Analista de sistemas', departamento: 'Tecnologia',
+  }, 'o status traduzido não apaga o original: statusOriginal guarda o que o Convênia manda');
   assert.equal(u.periodosVencidos, 1);
   assert.equal(u.vencidas[0]!.limiteParaTirar, '2026-03-09');
+  assert.equal(u.vencidas[0]!.initial_balance, 30, 'o período aquisitivo também sai inteiro');
   assert.equal(u.periodosAVencerAteOFim, 1);
-  assert.deepEqual(u.coletivas, [{ titulo: 'Recesso', inicio: '2026-12-22', fim: '2027-01-02', dias: 12, departamentos: ['Tecnologia'] }]);
+  assert.deepEqual(u.coletivas, [{
+    title: 'Recesso', starts_at: '2026-12-22', finishes_at: '2027-01-02', requested_days: 12, departments: [{ id: 'd1', name: 'Tecnologia' }],
+    emails: ['rh-coletivas@empresa.com'], justification: 'justificativa-da-coletiva',
+    titulo: 'Recesso', inicio: '2026-12-22', fim: '2027-01-02', dias: 12, departamentos: ['Tecnologia'],
+  }]);
   assert.equal(u.colaboradoresLidos, 2);
-  semSegredo(r);
+  // a ficha da pessoa não vem junto nas férias: só nome, cargo e departamento
+  resumida(r);
 });
 
 test('férias numa empresa grande: lê até o teto e avisa', async () => {
@@ -255,7 +362,7 @@ test('férias numa empresa grande: lê até o teto e avisa', async () => {
   assert.match(u.aviso!, /filtre por departamento/);
 });
 
-test('afastamentos: sobreposição com o período, dias dentro dele, sem CID', async () => {
+test('afastamentos: sobreposição com o período, dias dentro dele, com CID e justificativa', async () => {
   const r = await conveniaAfastamentos(ctxPadrao(), { unidade: 'doutor-digital', inicio: '2026-10-01', fim: '2026-10-31', agruparPor: 'motivo' });
   const u = r.porUnidade['doutor-digital'] as Extract<(typeof r.porUnidade)[string], { ok: true }>;
   assert.equal(u.ocorrencias, 2);
@@ -263,19 +370,28 @@ test('afastamentos: sobreposição com o período, dias dentro dele, sem CID', a
   assert.equal(u.itens[0]!.diasNoPeriodo, 3, 'de 28/09 a 03/10: só 01–03/10 contam');
   assert.equal(u.diasNoPeriodo, 4);
   assert.deepEqual(u.agrupado, { 'Afastamento por doença': 1, Falta: 1 });
-  semSegredo(r);
+  assert.equal(u.itens[0]!.cid, 'M54.5');
+  assert.equal(u.itens[0]!.justification, 'dor nas costas sigilosa');
+  assert.equal(u.itens[0]!.nome, 'Ana Souza');
+  assert.equal(u.itens[1]!.justification, 'nao-avisou-sigiloso');
+  assert.match(r.observacao, /CID e justificativa inclusive/);
+  // a ficha da pessoa não vem junto no afastamento: só nome, cargo e departamento
+  resumida(r);
   const so = await conveniaAfastamentos(ctxPadrao(), { unidade: 'doutor-digital', inicio: '2026-10-01', fim: '2026-10-31', motivo: 'doenca' });
   assert.equal((so.porUnidade['doutor-digital'] as { ocorrencias: number }).ocorrencias, 1);
 });
 
-test('ficha de uma pessoa: busca por nome, vínculo, férias e afastamentos sem dado sensível', async () => {
+test('ficha de uma pessoa: sempre completa, sem precisar de flag', async () => {
   const r = await conveniaColaborador(ctxPadrao(), { unidade: 'doutor-digital', busca: 'ana souza' });
   assert.ok(r.colaborador && r.ferias);
   assert.equal(r.colaborador.nome, 'Ana Souza');
   assert.equal(r.colaborador.vinculo, 'CLT');
   assert.ok('periodos' in r.ferias && r.ferias.periodos.length === 2);
   assert.ok(Array.isArray(r.afastamentos) && r.afastamentos[0]!.motivo === 'Afastamento por doença');
-  semSegredo(r);
+  assert.equal(r.afastamentos[0]!.cid, 'M54.5');
+  // a ficha de UMA pessoa sai inteira: documento, dinheiro, endereço, contato, saúde
+  trouxe(r, DADO_DE_FICHA);
+  assert.match(r.aviso, /dado pessoal sensível/);
 });
 
 test('ficha: nome ambíguo devolve candidatos; desligado é achado; ninguém dá erro claro', async () => {
@@ -283,13 +399,13 @@ test('ficha: nome ambíguo devolve candidatos; desligado é achado; ninguém dá
   const r = await conveniaColaborador(ctxPadrao(rotas), { unidade: 'doutor-digital', busca: 'Ana' });
   assert.ok(r.candidatos);
   assert.deepEqual(r.candidatos.map((c) => c.nome), ['Ana Pereira', 'Ana Souza']);
-  semSegredo(r);
+  resumida(r, 'a lista de candidatos é só para desambiguar: não despeja ficha');
 
   const d = await conveniaColaborador(ctxPadrao({ ...rotasPadrao(), [`/employees/${CARLA_DESLIGADA.id}/vacations/solicitations`]: () => pagina([]), [`/employees/${CARLA_DESLIGADA.id}/vacations/periods`]: () => pagina([]), [`/employees/${CARLA_DESLIGADA.id}/absences`]: () => ({ data: { absences: [] } }) }), { unidade: 'doutor-digital', busca: 'carla' });
   assert.ok(d.colaborador);
   assert.equal(d.colaborador.situacao, 'Desligado');
   assert.equal(d.colaborador.desligamento?.data, '2026-10-10');
-  semSegredo(d);
+  trouxe(d, DADO_DE_FICHA);
 
   await assert.rejects(() => conveniaColaborador(ctxPadrao(), { unidade: 'doutor-digital', busca: 'Zé Ninguém' }), /ninguém com/);
 });
