@@ -44,6 +44,7 @@ import { startBlingRenovacaoWorker, stopBlingRenovacaoWorker } from './lib/bling
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
 import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
 import { startUnidadeNoCartaoWorker, stopUnidadeNoCartaoWorker } from './lib/unidade-no-cartao-worker.js';
+import { startRenomearLeadWorker, stopRenomearLeadWorker } from './lib/renomear-lead-worker.js';
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -208,6 +209,7 @@ async function main(): Promise<void> {
       startMotivoNoCabecalhoWorker();
       startUnidadePorCanalWorker();
       startUnidadeNoCartaoWorker();
+      startRenomearLeadWorker();
       startLigacaoWhatsappWorker();
       startNaoLidasWorker();
       startCampanhaWorker();
@@ -221,6 +223,7 @@ async function main(): Promise<void> {
       stopMotivoNoCabecalhoWorker();
       stopUnidadePorCanalWorker();
       stopUnidadeNoCartaoWorker();
+      stopRenomearLeadWorker();
       stopLigacaoWhatsappWorker();
       stopNaoLidasWorker();
       stopCampanhaWorker();
