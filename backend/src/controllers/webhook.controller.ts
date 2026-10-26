@@ -12,6 +12,7 @@ import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
+import { avisarDesistenciaComIaPausada } from '../lib/desistencia-da-consulta.js';
 import { recusaDoFunilTratamento } from '../lib/guarda-funil-tratamento.js';
 import { entraPelaMeta } from '../lib/canal-de-entrada.js';
 import { guardarRespostaSegurada, idDaUltimaResposta, marcarNaoEntregue } from '../agent/entrega-falha.js';
@@ -1125,6 +1126,13 @@ export async function processAgent(args: {
     carimbarContato(unit.id, leadId, { desfecho: 'pediu_humano' });
     await finishWidgetSilently();
 
+    // "Cancelei", "pode desmarcar", "não vou poder ir" com a Sofia calada: ninguém vai oferecer horário novo, e o robô do
+    // Kommo não lê conversa — os lembretes de 24 h/3 h/1 h seguem saindo até a equipe agir (Araguaína #28861610 e
+    // #28858170, 22–25/10). A nota que já existe ninguém lia; a equipe precisa de TAREFA. Item 6 da Suzanne. Nunca lança.
+    if (humanMessage.trim() && isChatMessage) {
+      await avisarDesistenciaComIaPausada({ unit, leadId, texto: humanMessage, kommo: createKommoClient(unit) });
+    }
+
     // O paciente continua escrevendo e a IA está desligada. Isso vira NOTA no cartão, não tarefa
     // (decisão do João, 22/09/2026): eram 1.390 das 3.831 tarefas abertas da rede — a tela de
     // tarefas ficou impossível de ler e o aviso não dizia nada que o chat já não mostrasse (a
@@ -1297,6 +1305,13 @@ export async function processAgent(args: {
   if (porta.pausou) {
     carimbarContato(unit.id, leadId, { desfecho: 'pediu_humano' });
     await finishWidgetSilently();
+
+    // "Cancelei", "pode desmarcar", "não vou poder ir" com a Sofia calada: ninguém vai oferecer horário novo, e o robô do
+    // Kommo não lê conversa — os lembretes de 24 h/3 h/1 h seguem saindo até a equipe agir (Araguaína #28861610 e
+    // #28858170, 22–25/10). A nota que já existe ninguém lia; a equipe precisa de TAREFA. Item 6 da Suzanne. Nunca lança.
+    if (humanMessage.trim() && isChatMessage) {
+      await avisarDesistenciaComIaPausada({ unit, leadId, texto: humanMessage, kommo: createKommoClient(unit) });
+    }
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({
       kind: 'COMPLETED',

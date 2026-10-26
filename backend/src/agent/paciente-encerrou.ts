@@ -35,7 +35,7 @@ const IA_JA_FECHAVA =
 export type Encerramento = 'agradeceu' | 'concordou' | 'vai_se_organizar' | null;
 
 /** As falas do paciente deste turno (as seguidas, depois da última fala da IA) e a fala da IA antes delas. */
-function turnoDoPaciente(falas: Fala[]): { textos: string[]; ultimaIa: string | null } {
+export function turnoDoPaciente(falas: Fala[]): { textos: string[]; ultimaIa: string | null } {
   let fim = falas.length - 1;
   while (fim >= 0 && falas[fim].papel !== 'paciente') fim--;
   const textos: string[] = [];
