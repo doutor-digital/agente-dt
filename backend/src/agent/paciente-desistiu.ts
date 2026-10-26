@@ -135,7 +135,7 @@ const DUVIDA_FECHO_SEM_SISTEMA =
 /** O bloco do turno. Vazio quando não há desistência em andamento. */
 /** `sistemaAvisa`: a automação `desistencia-cancela` está LIGADA na unidade (o sistema abre a tarefa e para a véspera). */
 export function renderPacienteDesistiu(falas: Fala[] | undefined, opcoes: { slug?: string | null; sistemaAvisa?: boolean } = {}): string {
-  const sistemaAvisa = opcoes.sistemaAvisa ?? true;
+  const sistemaAvisa = opcoes.sistemaAvisa ?? false;
   const d = falas ? pacienteDesistiu(falas) : null;
   if (!d) return '';
   const dito = d.trecho.replace(/\s+/g, ' ').trim().slice(0, 140);

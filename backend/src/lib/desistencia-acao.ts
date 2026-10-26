@@ -12,10 +12,8 @@
  */
 import type { Unit } from '@prisma/client';
 import type { KommoLead } from '../services/kommo.service.js';
-import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { avisoRecente, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
-import { fusoDaUnidade } from './fuso.js';
 import { consultaDoVinculoPadrao, estadoDaDesistencia, ID_AUTOMACAO, quandoDaConsultaPorVir } from './desistencia-da-consulta.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
 import type { Estado } from './automacoes-estado.js';
@@ -32,7 +30,7 @@ export function textoTarefaCancelarNaFranquia(a: { slug: string; nome: string | 
   return (
     `ALERTA · ${a.slug} · [Contato: ${a.nome || 'paciente'}] URGENTE — CANCELAR NA FRANQUIA — ${a.nome || 'paciente'}, consulta ${a.quando}. ` +
     `Recusou remarcar: "${trecho}". A Sofia se despediu dizendo que a equipe cancela. Cancele na franquia, ponha ✓ Situação da consulta = ` +
-    'Desmarcado e tire o cartão de AGENDADO. A nossa véspera e a régua já pararam para este cartão; os lembretes do Kommo continuam até você agir.'
+    'Desmarcado e tire o cartão de AGENDADO. A nossa véspera e a régua já pararam para este cartão e a etiqueta NO_FOLLOW_UP foi posta (tire-a se ele voltar atrás); os lembretes do Kommo continuam até você agir.'
   );
 }
 
@@ -74,6 +72,8 @@ export async function agirNaDesistencia(
     acao: 'oferta' | 'recusou' | 'duvida';
     trecho: string;
     kommo: () => KommoDaAcao;
+    /** Vindo do worker que refaz a tarefa que falhou: não regrava a marca (a data dela é a da recusa). */
+    refazendo?: boolean;
   },
   deps: DepsDaAcao = DEPS_PADRAO,
 ): Promise<ResultadoDaAcao> {
@@ -98,7 +98,12 @@ export async function agirNaDesistencia(
     const lead = await kommo.getLead(leadId).catch(() => null);
     let quando: string | null = await quandoDaConsultaPorVir({ unit, leadId, lead, agora, consultaDoVinculo: (u, l) => deps.consultaDoVinculo(u, l, agora) });
     // Cartão ilegível: não dá para saber se há consulta.
-    if (!quando && !lead) return 'falhou';
+    if (!quando && !lead) {
+      // Cartão ilegível e sem vínculo: não dá para provar a consulta, mas a Sofia já se despediu dizendo que a equipe cancela. A marca
+      // (reversível) para a véspera e deixa o worker refazer a tarefa quando o Kommo voltar.
+      if (acao === 'recusou' && !seco && !args.refazendo) await deps.marcarAviso(unit.id, leadId, MARCA_RECUSOU, agora);
+      return 'falhou';
+    }
     // Cartão legível e sem consulta por vir: "cancelei" pode ser o plano de saúde. Mas na RECUSA a Sofia já prometeu "vou avisar a
     // equipe" — a promessa não fica sem executor: vira "conferir", sem parar nada.
     let efetiva: 'recusou' | 'duvida' = acao;
@@ -124,7 +129,7 @@ export async function agirNaDesistencia(
     }
 
     // a NOSSA véspera e a NOSSA régua param JÁ, antes de qualquer chamada que possa falhar
-    if (efetiva === 'recusou') await deps.marcarAviso(unit.id, leadId, MARCA_RECUSOU, agora);
+    if (efetiva === 'recusou' && !args.refazendo) await deps.marcarAviso(unit.id, leadId, MARCA_RECUSOU, agora);
 
     const chaveTarefa = `desistencia_tarefa:${efetiva === 'recusou' ? 'cancelar' : 'conferir'}`;
     if (await deps.avisoRecente(unit.id, leadId, chaveTarefa, JANELA_24H_MS, agora)) return 'ja_avisada';

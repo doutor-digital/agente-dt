@@ -137,7 +137,7 @@ const emAndamento = new Set<string>();
 
 export interface KommoDaDesistencia {
   getLead(id: number): Promise<KommoLead | null>;
-  createTask(a: { leadId: number; text: string; completeAt: number }): Promise<{ id?: number } | null>;
+  createTask(a: { leadId: number; text: string; completeAt: number; responsibleUserId?: number }): Promise<{ id?: number } | null>;
 }
 
 /**
@@ -196,6 +196,7 @@ export async function abrirTarefaDaDesistencia(
       leadId,
       text: texto,
       completeAt: Math.floor(agora.getTime() / 1000) + 60 * 60,
+      ...(lead?.responsible_user_id ? { responsibleUserId: lead.responsible_user_id } : {}),
     });
     // marca SÓ depois de o Kommo confirmar: falha de rede não pode calar o aviso por 24 h
     if (!criada) return 'falhou';

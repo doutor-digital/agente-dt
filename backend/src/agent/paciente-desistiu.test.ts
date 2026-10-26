@@ -65,7 +65,7 @@ test('RECUSA EXPLÍCITA depois da oferta: a Sofia se despede SEM dizer que cance
   for (const r of ['não quero remarcar', 'pode cancelar mesmo', 'desisti']) {
     const falas = COM_OFERTA(r);
     assert.equal(acaoDaDesistencia(pacienteDesistiu(falas)), 'recusou', r);
-    const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina' });
+    const bloco = renderPacienteDesistiu(falas, { slug: 'doutor-hernia-araguaina', sistemaAvisa: true });
     assert.match(bloco, /RECUSA EXPLÍCITA \(só vale se ele TEM consulta marcada.*\): despeça-se/, r);
     assert.match(bloco, /NÃO diga que a consulta foi cancelada/, r);
     assert.match(bloco, /vou avisar a equipe para cancelar/, r);
@@ -196,4 +196,14 @@ test('fora do "ligado" a Sofia NÃO promete "vou avisar a equipe para cancelar" 
   const prompt = composeSystemPrompt({ unit: unidade, historico: COM_OFERTA('não quero remarcar') });
   assert.match(prompt, /<paciente_desistiu>/);
   assert.doesNotMatch(prompt, /vou avisar a equipe para cancelar/);
+});
+
+test('sem a opção, a Sofia NÃO promete que a equipe vai cancelar (o padrão é o seguro: a automação nasce em seco)', () => {
+  assert.doesNotMatch(renderPacienteDesistiu(COM_OFERTA('não quero remarcar')), /vou avisar a equipe/);
+});
+
+test('a tarefa urgente leva a FALA da recusa, não o "Cancelei" antigo', () => {
+  const d = pacienteDesistiu(COM_OFERTA('não quero remarcar'));
+  assert.equal(d?.trecho, 'Cancelei.');
+  assert.equal(d?.resposta, 'não quero remarcar', 'o graph passa a resposta para a tarefa');
 });

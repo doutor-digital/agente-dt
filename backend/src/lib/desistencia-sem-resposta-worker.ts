@@ -22,6 +22,15 @@ let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 /** Marcas já olhadas (unidade:lead:hora da marca): uma marca que não vira tarefa (sem consulta) não relê o cartão a cada 10 min. */
 const olhadas = new Set<string>();
+/** Tentativas que falharam por marca: depois de MAX_TENTATIVAS (Kommo fora, lead apagado) desiste — não relê a marca por 3 dias. */
+const tentativas = new Map<string, number>();
+export const MAX_TENTATIVAS = 12;
+function falhou(id: string): void {
+  const n = (tentativas.get(id) ?? 0) + 1;
+  tentativas.set(id, n);
+  if (n >= MAX_TENTATIVAS) olhadas.add(id);
+  if (tentativas.size > 5000) tentativas.clear();
+}
 
 /** Pura: esta marca já pode virar "não respondeu"? Velha o bastante, nova o bastante, e ele não escreveu depois dela. */
 export function marcaVenceuSemResposta(marca: Date, agora: Date, mensagensDoPacienteDepois: number): boolean {
@@ -54,14 +63,19 @@ async function refazerTarefasQueFalharam(agora: Date): Promise<void> {
         marcadoEm(m.unitId, m.leadId, 'desistencia_tarefa:conferir'),
       ]);
       if ((c && c >= m.createdAt) || (q && q >= m.createdAt)) { olhadas.add(id); continue; }
-      const [unit, conv] = await Promise.all([
+      const unitConv = await Promise.all([
         prisma.unit.findUnique({ where: { id: m.unitId } }),
         prisma.conversation.findUnique({ where: { unitId_leadId: { unitId: m.unitId, leadId: m.leadId } }, select: { id: true } }),
       ]);
+      const [unit, conv] = unitConv;
       if (!unit || !conv) { olhadas.add(id); continue; }
       if (estadoDaDesistencia(unit.slug) !== 'ligado') continue;
-      const r = await agirNaDesistencia({ unit, leadId: Number(m.leadId), acao: 'recusou', trecho: await falaDeDesistencia(conv.id, m.createdAt), kommo: () => createKommoClient(unit) });
+      // ele escreveu depois da recusa (pode ter voltado atrás, "consegui, vou sim"): não abre a tarefa de cancelar com a fala velha
+      const depois = await prisma.message.count({ where: { conversationId: conv.id, role: 'user', createdAt: { gt: m.createdAt } } });
+      if (depois > 0) { olhadas.add(id); continue; }
+      const r = await agirNaDesistencia({ unit, leadId: Number(m.leadId), acao: 'recusou', trecho: await falaDeDesistencia(conv.id, m.createdAt), kommo: () => createKommoClient(unit), refazendo: true });
       if (r !== 'falhou') olhadas.add(id);
+      else falhou(id);
     } catch (err) {
       logger.warn({ err: String(err), unitId: m.unitId, leadId: m.leadId }, 'desistência: refazer a tarefa de cancelar falhou (segue)');
     }
@@ -109,7 +123,7 @@ async function varrer(): Promise<void> {
         if (r !== 'falhou') {
           if (olhadas.size > 5000) olhadas.clear();
           olhadas.add(id);
-        }
+        } else falhou(id);
       } catch (err) {
         logger.warn({ err: String(err), unitId: m.unitId, leadId: m.leadId }, 'desistência sem resposta: falha na marca (segue)');
       }

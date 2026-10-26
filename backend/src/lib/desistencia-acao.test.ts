@@ -93,10 +93,25 @@ test('vínculo com a MESMA folga de 3 h do cartão: "não vou" às 14:30 para co
   assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'duvida', trecho: 'x', kommo: () => m.kommo }, m.deps), 'tarefa_aberta');
 });
 
-test('cartão ilegível: não dá para saber se há consulta — não age e diz que falhou', async () => {
+test('cartão ilegível: sem consulta provada não abre tarefa e diz que falhou; DÚVIDA não grava nada', async () => {
   const m = montar({ leadFalha: true });
-  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'x', kommo: () => m.kommo }, m.deps), 'falhou');
-  assert.equal(m.marcas.length, 0);
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'duvida', trecho: 'x', kommo: () => m.kommo }, m.deps), 'falhou');
+  assert.equal(m.marcas.length + m.tarefas.length, 0);
+});
+
+test('RECUSOU com o cartão ilegível: a Sofia já prometeu — a marca (reversível) para a véspera e o worker refaz a tarefa depois', async () => {
+  const m = montar({ leadFalha: true });
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => m.kommo }, m.deps), 'falhou');
+  assert.deepEqual(m.marcas, [MARCA_RECUSOU]);
+  assert.equal(m.tarefas.length, 0);
+});
+
+test('REFAZENDO (worker): não regrava a marca de recusa — a data dela é a da recusa, é com ela que ele "volta atrás"', async () => {
+  const m = montar();
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => m.kommo, refazendo: true }, m.deps), 'tarefa_aberta');
+  assert.ok(!m.marcas.includes(MARCA_RECUSOU));
+  assert.ok(m.marcas.includes('desistencia_tarefa:cancelar'));
+  assert.match(m.tarefas[0].text, /etiqueta NO_FOLLOW_UP foi posta \(tire-a se ele voltar atrás\)/);
 });
 
 test('DÚVIDA: tarefa "conferir com o paciente" SEM parar a véspera (nenhuma marca de recusa, nenhuma etiqueta)', async () => {
