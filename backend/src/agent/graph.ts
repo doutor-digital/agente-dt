@@ -647,7 +647,7 @@ export async function buildAgentGraph(
       const acao = acaoDaDesistencia(desistencia);
       if (desistencia && acao !== 'nada') {
         marcarDesistenciaTratada(recorder.traceId);
-        void agirNaDesistencia({ unit, leadId: state.leadId, acao, trecho: acao === 'oferta' ? desistencia.trecho : desistencia.resposta || desistencia.trecho, kommo: () => kommoClient });
+        void agirNaDesistencia({ unit, leadId: state.leadId, acao, trecho: desistencia.resposta || desistencia.trecho, kommo: () => kommoClient });
       }
     }
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;

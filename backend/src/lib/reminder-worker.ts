@@ -22,8 +22,7 @@ import { logger } from './logger.js';
 import { createKommoClient, type KommoClient, type KommoPipeline } from '../services/kommo.service.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
-import { desistenciaEscrita, etapaSemVespera, pareceConfirmacao, textoTarefaDesistencia } from './vespera-segura.js';
-import { quisManter } from './desistencia-frases.js';
+import { desistenciaEscrita, etapaSemVespera, textoTarefaDesistencia, voltouAtrasDeVerdade } from './vespera-segura.js';
 import { motivoDeBloqueio } from './mensagem-bloqueada.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService, type ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
@@ -46,7 +45,7 @@ import {
 export { chaveDaConfirmacao, prefixoDoToque, type Toque };
 import { emPausa } from './pausa-unidade.js';
 import { avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
-import { MARCA_RECUSOU } from './desistencia-acao.js';
+import { chaveDaMarca, MARCA_RECUSOU } from './desistencia-acao.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
@@ -338,12 +337,14 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
       // Limite conhecido: `updatedAt` também anda quando o sincronizador grava paciente/tentativas no vínculo (perto
       // do agendamento, não depois). Se andar depois da desistência, a véspera sai — que é o comportamento de antes.
       const marcadaEm = consulta.mudou ? new Date() : link.updatedAt;
-      // O paciente RECUSOU remarcar e a Sofia se despediu dizendo que a equipe cancela (desistencia-acao.ts): a NOSSA véspera
-      // para neste cartão. A marca só vale para a consulta de antes dela — se remarcou depois, `marcadaEm` é mais novo.
-      const recusouEm = await marcadoEm(unit.id, link.kommoLeadId, MARCA_RECUSOU);
-      // ... a menos que ele tenha voltado atrás depois ("consegui, vou sim", "confirmo"): aí a marca não vale mais
-      const voltouAtras = !!recusouEm && !!oficiais && oficiais.some((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.em > recusouEm && (quisManter(m.texto) || pareceConfirmacao(m.texto)));
-      if (recusouEm && recusouEm >= marcadaEm && !voltouAtras) {
+      // O paciente RECUSOU remarcar e a Sofia se despediu dizendo que a equipe cancela (desistencia-acao.ts): a NOSSA véspera para
+      // neste cartão. A marca é DESTA consulta (leva o horário na chave): se ela foi remarcada, a chave é outra e a marca não vale —
+      // sem depender do `updatedAt` do vínculo, que anda a cada escrita. E não vale mais se ele voltou atrás depois ("consegui,
+      // vou sim", "confirmo").
+      const chaveRecusa = chaveDaMarca(MARCA_RECUSOU, consulta.quando.slice(0, 16));
+      const recusouEm = await marcadoEm(unit.id, link.kommoLeadId, chaveRecusa);
+      const voltouAtras = !!recusouEm && !!oficiais && voltouAtrasDeVerdade(oficiais.filter((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.em > recusouEm).map((m) => m.texto));
+      if (recusouEm && !voltouAtras) {
         conta.recusou++;
         logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, toque }, 'confirmação: o paciente recusou remarcar e a equipe vai cancelar — não sai');
         continue;

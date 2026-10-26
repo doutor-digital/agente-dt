@@ -1,13 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { agirNaDesistencia, textoTarefaCancelarNaFranquia, textoTarefaConferir, MARCA_OFERTA, MARCA_RECUSOU, type DepsDaAcao, type KommoDaAcao } from './desistencia-acao.js';
+import { agirNaDesistencia, textoTarefaCancelarNaFranquia, textoTarefaConferir, MARCA_OFERTA, MARCA_RECUSOU, chaveDaMarca, type DepsDaAcao, type KommoDaAcao } from './desistencia-acao.js';
 import type { Estado } from './automacoes-estado.js';
-import { marcaVenceuSemResposta } from './desistencia-sem-resposta-worker.js';
+import { deveAvisarOJoao, marcaVenceuSemResposta, MAX_TENTATIVAS } from './desistencia-sem-resposta-worker.js';
+import { voltouAtrasDeVerdade } from './vespera-segura.js';
 
 const AGORA = new Date('2026-10-22T17:03:00Z');
 const campo = (nome: string, valor: unknown) => ({ field_id: 1, field_name: nome, values: [{ value: valor }] });
 const CONSULTA_EPOCH = 1792774800; // 23/10 14:00 -03
+const ISO = '2026-10-23T14:00';
+const RECUSA = chaveDaMarca(MARCA_RECUSOU, ISO);
 
 function montar(o: { lead?: object | null; vinculo?: string | null; ja?: Set<string>; criaFalha?: boolean; leadFalha?: boolean; estado?: Estado } = {}) {
   const simulacoes: Array<{ acao: string; alvo: string; valor?: unknown }> = [];
@@ -52,7 +55,7 @@ test('RECUSOU: tarefa URGENTE "CANCELAR NA FRANQUIA" para o RESPONSÁVEL do cart
   assert.match(m.tarefas[0].text, /^ALERTA · doutor-hernia-araguaina · \[Contato: Francisco\] URGENTE — CANCELAR NA FRANQUIA — Francisco, consulta 23\/10 às 14:00/);
   assert.equal(m.tarefas[0].responsibleUserId, 777);
   assert.equal(m.tarefas[0].completeAt - Math.floor(AGORA.getTime() / 1000), 30 * 60, 'prazo curto: é urgente');
-  assert.ok(m.marcas.includes(MARCA_RECUSOU), 'a véspera e a régua param');
+  assert.ok(m.marcas.includes(RECUSA), 'a véspera e a régua param (a marca é DESTA consulta)');
   assert.deepEqual(m.tags, [['NO_FOLLOW_UP']]);
 });
 
@@ -60,7 +63,7 @@ test('RECUSOU: a marca de parar a véspera grava ANTES da tarefa — Kommo fora 
   const m = montar({ criaFalha: true });
   const r = await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => m.kommo }, m.deps);
   assert.equal(r, 'falhou');
-  assert.ok(m.marcas.includes(MARCA_RECUSOU));
+  assert.ok(m.marcas.includes(RECUSA));
   assert.ok(!m.marcas.includes('desistencia_tarefa:cancelar'), 'a tarefa não foi criada: tenta de novo no próximo turno');
   assert.equal(m.tags.length, 0);
 });
@@ -102,7 +105,7 @@ test('cartão ilegível: sem consulta provada não abre tarefa e diz que falhou;
 test('RECUSOU com o cartão ilegível: a Sofia já prometeu — a marca (reversível) para a véspera e o worker refaz a tarefa depois', async () => {
   const m = montar({ leadFalha: true });
   assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => m.kommo }, m.deps), 'falhou');
-  assert.deepEqual(m.marcas, [MARCA_RECUSOU]);
+  assert.deepEqual(m.marcas, [chaveDaMarca(MARCA_RECUSOU, '?')]);
   assert.equal(m.tarefas.length, 0);
 });
 
@@ -128,13 +131,13 @@ test('a mesma tarefa não abre duas vezes em 24 h', async () => {
   const m = montar({ ja: new Set(['desistencia_tarefa:cancelar']) });
   assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'recusou', trecho: 'x', kommo: () => m.kommo }, m.deps), 'ja_avisada');
   assert.equal(m.tarefas.length, 0);
-  assert.ok(m.marcas.includes(MARCA_RECUSOU), 'mas a véspera continua parada');
+  assert.ok(m.marcas.includes(RECUSA), 'mas a véspera continua parada');
 });
 
-test('OFERTA: só deixa a marca para o worker do "não respondeu"; não lê o cartão nem abre tarefa', async () => {
-  const m = montar({ leadFalha: true });
+test('OFERTA: com consulta por vir, deixa a marca DESTA consulta para o worker do "não respondeu"; não abre tarefa', async () => {
+  const m = montar();
   assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'oferta', trecho: 'Cancelei.', kommo: () => m.kommo }, m.deps), 'marcada');
-  assert.deepEqual(m.marcas, [MARCA_OFERTA]);
+  assert.deepEqual(m.marcas, [chaveDaMarca(MARCA_OFERTA, ISO)]);
   assert.equal(m.tarefas.length, 0);
 });
 
@@ -158,7 +161,7 @@ test('a recusa cuja tarefa falhou é REFEITA: a marca de parar a véspera não �
   const falha = montar({ criaFalha: true });
   assert.equal(await agirNaDesistencia({ unit: falha.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => falha.kommo }, falha.deps), 'falhou');
   // o worker chama de novo (Kommo voltou): a chave `desistencia_tarefa:cancelar` nunca foi gravada, então a tarefa sai
-  const volta = montar({ ja: new Set([MARCA_RECUSOU]) });
+  const volta = montar({ ja: new Set([RECUSA]) });
   assert.equal(await agirNaDesistencia({ unit: volta.unit, leadId: 1, acao: 'recusou', trecho: 'desisti', kommo: () => volta.kommo }, volta.deps), 'tarefa_aberta');
   assert.equal(volta.tarefas.length, 1);
 });
@@ -183,7 +186,7 @@ test('EM SECO: DÚVIDA e OFERTA também só registram', async () => {
   assert.equal(await agirNaDesistencia({ unit: a.unit, leadId: 1, acao: 'duvida', trecho: 'vou ver', kommo: () => a.kommo }, a.deps), 'simulada');
   assert.deepEqual(a.simulacoes.map((x) => x.alvo), ['tarefa CONFERIR COM O PACIENTE']);
   assert.equal(a.tarefas.length + a.marcas.length, 0);
-  const b = montar({ estado: 'seco', leadFalha: true });
+  const b = montar({ estado: 'seco' });
   assert.equal(await agirNaDesistencia({ unit: b.unit, leadId: 1, acao: 'oferta', trecho: 'Cancelei.', kommo: () => b.kommo }, b.deps), 'simulada');
   assert.equal(b.marcas.length, 0, 'em seco nem a marca da oferta grava');
   assert.equal(b.simulacoes.length, 1);
@@ -195,4 +198,45 @@ test('DESLIGADA: não faz nem lê nada', async () => {
     assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao, trecho: 'x', kommo: () => m.kommo }, m.deps), 'nada');
   }
   assert.equal(m.simulacoes.length + m.marcas.length + m.tarefas.length, 0);
+});
+
+// ── mediums do sênior (6f4447d) ────────────────────────────────────────────────────────────────────────────────
+
+test('OFERTA: ele já CHOCOU horário no mesmo turno ("não vou poder ir amanhã, pode ser sexta às 10h?") → nenhuma marca de silêncio', async () => {
+  const m = montar();
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'oferta', trecho: 'Não vou poder ir amanhã, pode ser sexta às 10h?', kommo: () => m.kommo }, m.deps), 'nada');
+  assert.equal(m.marcas.length, 0);
+});
+
+test('OFERTA sem consulta por vir: nenhuma marca ("cancelei o plano" não vira tarefa de silêncio)', async () => {
+  const m = montar({ lead: { id: 1, name: 'Maria', custom_fields_values: [] } });
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'oferta', trecho: 'Cancelei.', kommo: () => m.kommo }, m.deps), 'sem_consulta');
+  assert.equal(m.marcas.length, 0);
+});
+
+test('SEM RESPOSTA: se hoje a consulta é OUTRA que a da marca, ele remarcou — não há o que avisar', async () => {
+  const m = montar();
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'sem_resposta', trecho: 'Cancelei.', kommo: () => m.kommo, consultaDaMarca: '2026-10-22T10:00' }, m.deps), 'remarcou');
+  assert.equal(m.tarefas.length, 0);
+  assert.equal(await agirNaDesistencia({ unit: m.unit, leadId: 1, acao: 'sem_resposta', trecho: 'Cancelei.', kommo: () => m.kommo, consultaDaMarca: ISO }, m.deps), 'tarefa_aberta');
+});
+
+test('a marca de recusa de OUTRA consulta não é a desta (remarcou → chave diferente → a véspera volta)', () => {
+  assert.notEqual(chaveDaMarca(MARCA_RECUSOU, '2026-10-23T14:00'), chaveDaMarca(MARCA_RECUSOU, '2026-10-30T10:00'));
+});
+
+// ── refazer a tarefa de cancelar (bloqueante 2) ──────────────────────────────────────────────────────────────────
+
+test('refazer: "ok, obrigada" e "tá bom" NÃO desfazem a recusa; só voltar atrás de verdade', () => {
+  for (const t of ['ok, obrigada', 'tá bom', 'obrigado!', 'bom dia', 'ok']) assert.equal(voltouAtrasDeVerdade([t]), false, t);
+  for (const t of ['consegui, vou sim', 'confirmo', 'quero manter', 'deu certo, eu vou', 'vou sim']) assert.equal(voltouAtrasDeVerdade([t]), true, t);
+  assert.equal(voltouAtrasDeVerdade(['não vou lá não, pode cancelar']), false, '"não vou lá" é o contrário de confirmar');
+  assert.equal(voltouAtrasDeVerdade([]), false);
+});
+
+test('depois de 12 falhas seguidas, avisa o João (uma vez)', () => {
+  assert.equal(MAX_TENTATIVAS, 12);
+  assert.equal(deveAvisarOJoao(11), false);
+  assert.equal(deveAvisarOJoao(12), true);
+  assert.equal(deveAvisarOJoao(13), false);
 });

@@ -63,7 +63,8 @@ const NAO_E_DESISTENCIA: RegExp[] = [
 const QUER_MANTER: RegExp[] = [
   /\b(quero|vou|prefiro|vamos|queremos|preferimos) (manter|ficar com|continuar com)\b/,
   // "manter" sem negação antes ("não vou conseguir manter a consulta" é o contrário)
-  /(?<!\bn(?:ao)? (?:\w+ ){0,5})(?:\bmantem(?:os)?\b|\bmanter\b|\bmantenha\b)/,
+  // (só com objeto de consulta, ou no fim: "tem como manter o valor pra outro dia?" é pergunta de preço)
+  /(?<!\bn(?:ao)? (?:\w+ ){0,5})(?:\bmantem(?:os)?\b|\bmanter\b|\bmantenha\b)(?= (?:a |o |esse |essa |meu |minha )?(?:consulta|horario|agendamento|data|marcacao|dia\b|a de |o de )|[ .!,]*$)/,
   // sem "vou lá"/"vou comparecer"/"dá pra ir": "não vou lá" e "não dá pra ir" são o contrário
   /\bvou sim\b|\bvamos sim\b|(?<!\bnao )\beu vou[ .!]*$|(?<!\bnao )\beu vou (?:sim|la|ai|comparecer|estar|ir)\b/,
   /\bconsegui me organizar\b/,
@@ -145,6 +146,23 @@ const RECUSA_EXPLICITA: RegExp[] = [
 ];
 
 /**
+ * Qualquer sinal de que ELE VAI ("vou", "vou sim", "consegui", "resolvi", "deu certo", "dou um jeito", "folga"): anula a recusa.
+ * "não quero remarcar, consegui folga" e "não vou remarcar, vou na de amanhã mesmo" são dúvida/manter, nunca recusa. O "vou"
+ * NEGADO ("não vou remarcar", "não vou mais") não conta, nem "vou ter que faltar".
+ */
+const SINAL_DE_QUE_VAI = /(?<!\bn(?:ao)? )\bvou\b(?! (?:ter|precisar|faltar|viajar|trabalhar|me mudar|operar|cancelar|desmarcar|desistir))|\bvamos (?:sim|la|ai)\b|\bconsegui\b|\bconseguimos\b|\bresolvi\b|\bresolvemos\b|\bdeu certo\b|\bda certo\b|\bdou um jeito\b|\bdar um jeito\b|\bfolga\b|\beu vou\b/;
+
+export function sinalDeQueVai(texto: string | null | undefined): boolean {
+  return SINAL_DE_QUE_VAI.test(normalizar(texto ?? ''));
+}
+
+/** Disse "não" à oferta sem horário nem pedido de cancelar ("não, obrigado", "não precisa", "n quero"). */
+export function negouAOferta(texto: string | null | undefined): boolean {
+  const s = normalizar(texto ?? '');
+  return /^(nao|n)\b/.test(s) && !citouHorario(texto);
+}
+
+/**
  * O paciente RECUSOU de forma explícita remarcar — e quer cancelar? ("não quero remarcar", "pode cancelar mesmo", "desisti").
  * Hesitação ("acho que não vou conseguir", "vou ver", "depois eu aviso") e negação ("não cancele") não contam: aí a Sofia
  * NÃO cancela na franquia, oferece remarcar. Decisão do coordenador/João, 26/10/2026.
@@ -155,6 +173,7 @@ export function recusouRemarcarExplicitamente(texto: string | null | undefined):
   if (NAO_E_DESISTENCIA.some((r) => r.test(s))) return false;
   if (s.includes('?') ) return false;
   if (HESITA.test(s)) return false;
+  if (SINAL_DE_QUE_VAI.test(s)) return false;
   if (QUER_MANTER.some((r) => r.test(s)) || OUTRA_CONSULTA.some((r) => r.test(s))) return false;
   return RECUSA_EXPLICITA.some((r) => r.test(s));
 }

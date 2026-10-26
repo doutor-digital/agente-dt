@@ -114,3 +114,10 @@ test('a véspera NÃO deixa de sair para quem quer manter a consulta ou fala de 
     assert.equal(pareceDesistencia(t), false, t);
   }
 });
+
+test('pareceConfirmacao não casa "não vou lá não, pode cancelar" (o "vou lá" é negado)', () => {
+  assert.equal(pareceConfirmacao('não vou lá não, pode cancelar'), false);
+  assert.equal(pareceConfirmacao('n vou la, cancela'), false);
+  assert.equal(pareceConfirmacao('vou lá sim'), true);
+  assert.equal(pareceConfirmacao('estarei la'), true);
+});

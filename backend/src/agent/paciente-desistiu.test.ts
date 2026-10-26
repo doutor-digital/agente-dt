@@ -17,6 +17,7 @@ import {
   pareceDesistenciaDaConsulta,
   quisManter,
   recusouRemarcarExplicitamente,
+  sinalDeQueVai,
 } from '../lib/desistencia-frases.js';
 import { pareceDesistencia } from '../lib/vespera-segura.js';
 
@@ -206,4 +207,52 @@ test('a tarefa urgente leva a FALA da recusa, não o "Cancelei" antigo', () => {
   const d = pacienteDesistiu(COM_OFERTA('não quero remarcar'));
   assert.equal(d?.trecho, 'Cancelei.');
   assert.equal(d?.resposta, 'não quero remarcar', 'o graph passa a resposta para a tarefa');
+});
+
+// ── BLOQUEANTE 1 (sênior, 6f4447d): qualquer sinal de que ele VAI anula a recusa — um teste por frase ──────────────────────────
+
+for (const frase of [
+  'não quero remarcar, consegui folga',
+  'não quero remarcar, vou dar um jeito de ir',
+  'não vou remarcar, vou na de amanhã mesmo',
+  'deu certo, não precisa mais remarcar',
+  'não quero mais remarcar, resolvi e vou amanhã',
+  'Deixa, não quero remarcar não, eu dou um jeito e vou',
+  'não vou mais precisar remarcar, deu certo',
+  'não quero remarcar não, vou sim',
+  'não precisa remarcar, eu vou',
+  'não vai precisar remarcar, consegui',
+  'não quero remarcar, eu vou',
+  'não, vou manter',
+  'Não precisa, consegui resolver e vou',
+]) {
+  test(`"${frase}": ele VAI — dúvida/manter, NUNCA recusa`, () => {
+    assert.equal(recusouRemarcarExplicitamente(frase), false);
+    const acao = acaoDaDesistencia(pacienteDesistiu(COM_OFERTA(frase)));
+    assert.notEqual(acao, 'recusou');
+    assert.equal(acao, 'duvida');
+  });
+}
+
+test('o "vou" NEGADO não conta como sinal de que vai: "não vou remarcar", "não vou mais" seguem recusa', () => {
+  assert.equal(sinalDeQueVai('não vou remarcar'), false);
+  assert.equal(sinalDeQueVai('não vou mais'), false);
+  assert.equal(sinalDeQueVai('vou ter que faltar'), false);
+  assert.equal(sinalDeQueVai('vou sim'), true);
+  assert.equal(recusouRemarcarExplicitamente('não vou remarcar'), true);
+  assert.equal(recusouRemarcarExplicitamente('não quero remarcar'), true);
+  assert.equal(recusouRemarcarExplicitamente('pode cancelar mesmo'), true);
+});
+
+for (const frase of ['não, obrigado', 'não precisa', 'n quero', 'não, obrigada']) {
+  test(`"${frase}" depois da oferta → CONFERIR (não é "nada")`, () => {
+    assert.equal(acaoDaDesistencia(pacienteDesistiu(COM_OFERTA(frase))), 'duvida');
+  });
+}
+
+test('"tem como manter o valor pra outro dia?" é pergunta de preço, não "quer manter"', () => {
+  assert.equal(quisManter('tem como manter o valor pra outro dia?'), false);
+  assert.equal(quisManter('quero manter'), true);
+  assert.equal(quisManter('mantém a de amanhã'), true);
+  assert.equal(quisManter('manter a consulta'), true);
 });

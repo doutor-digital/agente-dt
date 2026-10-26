@@ -12,7 +12,7 @@ import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
 import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { devoAvisar } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
-import { abrirTarefaDaDesistencia } from '../lib/desistencia-da-consulta.js';
+import { abrirTarefaDaDesistencia } from '../lib/desistencia-acao.js';
 import { recusaDoFunilTratamento } from '../lib/guarda-funil-tratamento.js';
 import { entraPelaMeta } from '../lib/canal-de-entrada.js';
 import { guardarRespostaSegurada, idDaUltimaResposta, marcarNaoEntregue } from '../agent/entrega-falha.js';
@@ -1209,6 +1209,7 @@ export async function processAgent(args: {
         const etapa = posicao?.status ?? null;
         if (posicao && etapaCalada(etapa, { statusId: sid, pipeline: posicao.pipeline })) {
           await finishWidgetSilently();
+          await desistenciaSemSofia();
           let anotou = false;
           if (!(await avisoRecente(unit.id, leadId, REGRA_NOTA_CALADA))) {
             try {

@@ -1,13 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  abrirTarefaDaDesistencia,
-  consultaFuturaDoCartao,
-  textoTarefaDesistenciaSemIA,
-  type DepsDaDesistencia,
-  type KommoDaDesistencia,
-} from './desistencia-da-consulta.js';
+import { consultaFuturaDoCartao, textoTarefaDesistenciaSemIA } from './desistencia-da-consulta.js';
+import { abrirTarefaDaDesistencia, type DepsDaAcao as DepsDaDesistencia, type KommoDaAcao as KommoDaDesistencia } from './desistencia-acao.js';
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
 // Frases REAIS dos pacientes (45 dias de `messages`, 26/10/2026) — o regex foi escrito depois de ler estas.
@@ -146,6 +141,7 @@ function montar(opts: { lead?: object | null; avisado?: boolean; criaFalha?: boo
     marcarAviso: async (_u, _l, chave) => {
       marcas.push(chave);
     },
+    consultaDoVinculo: async () => null,
     estado: () => opts.estado ?? 'ligado',
     simular: (_u, _a, sim) => {
       simulacoes.push(sim);
@@ -161,6 +157,7 @@ function montar(opts: { lead?: object | null; avisado?: boolean; criaFalha?: boo
       tarefas.push(a);
       return { id: 1 };
     },
+    addTag: async () => undefined,
   };
   const unit = { id: 'u1', slug: 'doutor-hernia-araguaina', spineTimezone: 'America/Araguaina', businessHoursTimezone: 'America/Araguaina' };
   return { deps, kommo, unit, tarefas, marcas, simulacoes };

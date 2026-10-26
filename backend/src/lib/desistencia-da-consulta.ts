@@ -20,16 +20,12 @@
  */
 import type { Unit } from '@prisma/client';
 import type { KommoLead } from '../services/kommo.service.js';
-import { avisoRecente, marcarAviso, JANELA_24H_MS } from './aviso-dedupe.js';
-import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
 import { prisma } from './prisma.js';
 import { agoraLocalISO } from '../agent/consulta-que-passou.js';
 import { epochSeg } from './etiquetas-auto.js';
 import { semAcento } from './sem-acento.js';
-import { primeiroNomeDoPaciente } from './ponte-respostas.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { registrarSimulacao } from './so-no-papel.js';
 
 import { pareceDesistenciaDaConsulta } from './desistencia-frases.js';
 
@@ -78,9 +74,16 @@ export async function consultaDoVinculoPadrao(unitId: string, leadId: number): P
   return l?.agendadoPara ?? null;
 }
 
+export interface ConsultaPorVir {
+  /** "dd/mm às HH:mm", para a tarefa. */
+  label: string;
+  /** "AAAA-MM-DDTHH:mm" local da clínica — a identidade da consulta (a marca de recusa/oferta é desta consulta; se remarcar, é outra). */
+  iso: string;
+}
+
 /**
- * "dd/mm às HH:mm" da consulta ainda por vir — do cartão (◷ Data da Consulta) e, se o cartão não tem, do vínculo da franquia —,
- * com a MESMA folga de 3 h nos dois (hora local dos dois lados). null = não achei consulta por vir.
+ * A consulta ainda por vir — do cartão (◷ Data da Consulta) e, se o cartão não tem, do vínculo da franquia —, com a MESMA folga
+ * de 3 h nos dois (hora local dos dois lados). null = não achei consulta por vir.
  */
 export async function quandoDaConsultaPorVir(args: {
   unit: Pick<Unit, 'id' | 'spineTimezone' | 'businessHoursTimezone'>;
@@ -88,12 +91,12 @@ export async function quandoDaConsultaPorVir(args: {
   lead: Pick<KommoLead, 'custom_fields_values'> | null | undefined;
   agora: Date;
   consultaDoVinculo?: (unitId: string, leadId: number) => Promise<string | null>;
-}): Promise<string | null> {
+}): Promise<ConsultaPorVir | null> {
   const tz = fusoDaUnidade(args.unit);
   const epoch = consultaFuturaDoCartao(args.lead, Math.floor(args.agora.getTime() / 1000));
-  if (epoch) return quandoLocal(epoch, tz);
+  if (epoch) return { label: quandoLocal(epoch, tz), iso: agoraLocalISO(tz, new Date(epoch * 1000)).slice(0, 16) };
   const v = await (args.consultaDoVinculo ?? consultaDoVinculoPadrao)(args.unit.id, args.leadId).catch(() => null);
-  if (v && v.slice(0, 16) >= agoraLocalISO(tz, new Date(args.agora.getTime() - 3 * 3600_000)).slice(0, 16)) return quandoDoVinculo(v);
+  if (v && v.slice(0, 16) >= agoraLocalISO(tz, new Date(args.agora.getTime() - 3 * 3600_000)).slice(0, 16)) return { label: quandoDoVinculo(v), iso: v.slice(0, 16) };
   return null;
 }
 
@@ -117,96 +120,4 @@ export function textoTarefaDesistenciaSemIA(args: {
     'Combine outro horário com o paciente OU, se ele não quer mais, cancele na franquia, ponha ✓ Situação da consulta = Desmarcado e tire o cartão de AGENDADO. ' +
     'Enquanto estiver em AGENDADO com a data da consulta, os lembretes automáticos do Kommo continuam saindo para ele.'
   );
-}
-
-export type ResultadoDaDesistencia = 'nao_e' | 'nada' | 'simulada' | 'sem_consulta' | 'ja_avisada' | 'tarefa_aberta' | 'falhou';
-
-export interface DepsDaDesistencia {
-  agora: () => Date;
-  avisoRecente: typeof avisoRecente;
-  marcarAviso: typeof marcarAviso;
-  consultaDoVinculo?: (unitId: string, leadId: number) => Promise<string | null>;
-  estado?: (slug: string) => Estado;
-  simular?: typeof registrarSimulacao;
-}
-
-const DEPS_PADRAO: DepsDaDesistencia = { agora: () => new Date(), avisoRecente, marcarAviso };
-
-/** Mesmo paciente, duas mensagens em segundos (ou o Kommo reenviando o webhook): só uma passa. Confere-e-grava sem await no meio. */
-const emAndamento = new Set<string>();
-
-export interface KommoDaDesistencia {
-  getLead(id: number): Promise<KommoLead | null>;
-  createTask(a: { leadId: number; text: string; completeAt: number; responsibleUserId?: number }): Promise<{ id?: number } | null>;
-}
-
-/**
- * O paciente escreveu que não vem e a Sofia NÃO vai oferecer horário novo — ou porque está calada (`ia_calada`: IA
- * pausada, fora do horário, etapa sem IA, a equipe falou), ou porque ofereceu e ele não respondeu (`sem_resposta`):
- * a equipe resolve, e precisa saber por TAREFA, não por nota. Só quando o cartão tem consulta ainda por vir (sem
- * consulta, "cancelei" pode ser o plano de saúde). Uma tarefa por motivo a cada 24 h (a trava de 21/09 contra tarefa
- * repetida). `kommo` é uma fábrica: um cliente que não nasce (unidade sem credencial) não pode derrubar o webhook.
- * Nunca lança.
- */
-export async function abrirTarefaDaDesistencia(
-  args: {
-    unit: Pick<Unit, 'id' | 'slug' | 'spineTimezone' | 'businessHoursTimezone'>;
-    leadId: number;
-    texto: string;
-    motivo: MotivoDaTarefa;
-    nome?: string | null;
-    kommo: () => KommoDaDesistencia;
-  },
-  deps: DepsDaDesistencia = DEPS_PADRAO,
-): Promise<ResultadoDaDesistencia> {
-  if (!pareceDesistenciaDaConsulta(args.texto)) return 'nao_e';
-  const { unit, leadId } = args;
-  const trava = `${unit.id}:${leadId}:${args.motivo}`;
-  if (emAndamento.has(trava)) return 'ja_avisada';
-  emAndamento.add(trava);
-  try {
-    const agora = deps.agora();
-    const estado = (deps.estado ?? estadoDaDesistencia)(unit.slug);
-    if (estado === 'desligado') return 'nada';
-    const chave = `desistencia_tarefa:${args.motivo}`;
-    if (await deps.avisoRecente(unit.id, leadId, chave, JANELA_24H_MS, agora)) return 'ja_avisada';
-    const kommo = args.kommo();
-    const lead = await kommo.getLead(leadId);
-    const quando = await quandoDaConsultaPorVir({ unit, leadId, lead, agora, consultaDoVinculo: deps.consultaDoVinculo });
-    if (!quando) return 'sem_consulta';
-    const texto = textoTarefaDesistenciaSemIA({
-      slug: unit.slug,
-      nome: primeiroNomeDoPaciente(lead?.name, args.nome ?? null),
-      quando,
-      mensagem: args.texto,
-      motivo: args.motivo,
-    });
-    // EM SECO: vira linha na tela de Automações; nada vai ao Kommo nem ao banco
-    if (estado !== 'ligado') {
-      (deps.simular ?? registrarSimulacao)(unit, ID_AUTOMACAO, {
-        leadId,
-        acao: 'alertaria',
-        alvo: args.motivo === 'sem_resposta' ? 'tarefa "não respondeu à oferta"' : 'tarefa "IA calada: ele escreveu que não vem"',
-        valor: texto,
-        motivo: `consulta ${quando}`,
-      });
-      return 'simulada';
-    }
-    const criada = await kommo.createTask({
-      leadId,
-      text: texto,
-      completeAt: Math.floor(agora.getTime() / 1000) + 60 * 60,
-      ...(lead?.responsible_user_id ? { responsibleUserId: lead.responsible_user_id } : {}),
-    });
-    // marca SÓ depois de o Kommo confirmar: falha de rede não pode calar o aviso por 24 h
-    if (!criada) return 'falhou';
-    await deps.marcarAviso(unit.id, leadId, chave, agora);
-    logger.info({ unit: unit.slug, leadId, quando, motivo: args.motivo }, 'desistência da consulta: tarefa aberta para a equipe');
-    return 'tarefa_aberta';
-  } catch (err) {
-    logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'desistência da consulta: não consegui abrir a tarefa — segue');
-    return 'falhou';
-  } finally {
-    emAndamento.delete(trava);
-  }
 }

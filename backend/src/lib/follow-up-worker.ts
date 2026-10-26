@@ -337,15 +337,16 @@ async function varrer(): Promise<void> {
       });
 
       // as recusas de remarcar deste lote, numa consulta só (uma por unidade e varredura, não uma por conversa)
-      const recusas = new Map<string, Date>(
-        (candidatas.length === 0
-          ? []
-          : await prisma.cardAlert.findMany({
-              where: { unitId: unit.id, ruleKey: MARCA_RECUSOU, leadId: { in: candidatas.map((c) => c.leadId) } },
-              select: { leadId: true, createdAt: true },
-            }).catch(() => [])
-        ).map((r) => [r.leadId, r.createdAt] as [string, Date]),
-      );
+      const recusas = new Map<string, Date>();
+      if (candidatas.length > 0) {
+        const marcas = await prisma.cardAlert
+          .findMany({
+            where: { unitId: unit.id, ruleKey: { startsWith: `${MARCA_RECUSOU}:` }, leadId: { in: candidatas.map((c) => c.leadId) } },
+            select: { leadId: true, createdAt: true },
+          })
+          .catch(() => []);
+        for (const r of marcas) if (!recusas.has(r.leadId) || r.createdAt > (recusas.get(r.leadId) as Date)) recusas.set(r.leadId, r.createdAt);
+      }
 
       for (const conv of candidatas) {
         const estado = etapas.get(Number(conv.leadId));
