@@ -94,14 +94,47 @@ test('a pausa do modelo foi recusada (PAUSA NÃO APLICADA): conta como se ele n�
   assert.match(r.texto, /avisei a nossa equipe/);
 });
 
-test('a pausa pelo código falhou: fica a resposta do modelo e o rastro diz que o aviso não pegou', async () => {
+test('a pausa pelo código falhou: tenta de novo, alerta o João e a resposta do modelo NÃO sai como se nada fosse', async () => {
   const m = montar('ERRO ao pausar IA: Kommo fora do ar');
   const { args } = entrada({ falas: ['perdi a força na perna'], tools: m.tools });
   const r = await passarPorSinalNoTurno({ ...args, recorder: m.recorder });
-  assert.deepEqual(r, { avisou: false, texto: 'Entendi! Que tal quarta às 9h?' });
-  assert.match(m.passos[0], /o aviso pelo código não pegou/);
-  // o resumo corre junto com a pausa, então sai mesmo quando a pausa falha (a tarefa e o Telegram podem ter saído)
-  assert.equal(m.chamadas.filter((c) => c.nome === 'resumir_lead_para_sdr').length, 1);
+  assert.equal(r.avisou, false);
+  assert.match(r.texto, /atendimento segue com a nossa equipe/);
+  assert.doesNotMatch(r.texto, /quarta|avisei|prioridade/);
+  assert.equal(m.chamadas.filter((c) => c.nome === 'pausar_ia').length, 2, 'uma segunda tentativa');
+  assert.ok(m.passos.some((p) => /FALHOU duas vezes/.test(p)));
+});
+
+test('a primeira pausa falha e a segunda pega: segue o caminho normal', async () => {
+  const chamadas: string[] = [];
+  const respostas = ['ERRO ao pausar IA: x', 'OK — IA pausada no lead 7 (3ms).'];
+  const tools = [{ name: 'pausar_ia', invoke: async () => (chamadas.push('p'), respostas.shift() as string) }];
+  const { args } = entrada({ falas: ['perdi a força na perna'], tools });
+  const r = await passarPorSinalNoTurno(args);
+  assert.equal(r.avisou, true);
+  assert.match(r.texto, /avisei a nossa equipe/);
+  assert.equal(chamadas.length, 2);
+});
+
+test('a tarefa e o Telegram falharam (pausar_ia devolve SEM AVISO): o paciente não ouve "avisei a equipe"', async () => {
+  const m = montar('OK — IA pausada no lead 7 (3ms). [SEM AVISO À EQUIPE] Responda…');
+  const { args } = entrada({ falas: ['não estou segurando o xixi'], tools: m.tools });
+  const r = await passarPorSinalNoTurno({ ...args, recorder: m.recorder });
+  assert.equal(r.avisou, true);
+  assert.doesNotMatch(r.texto, /avisei|prioridade/);
+  assert.match(r.texto, /atendimento segue com a nossa equipe/);
+});
+
+test('o modelo chamou pausar_ia COM a flag e ela falhou: o código tenta de novo e troca a resposta', async () => {
+  const mensagens = [
+    new HumanMessage('não consigo segurar o xixi'),
+    new AIMessage({ content: '', tool_calls: [{ id: 'a', name: 'pausar_ia', args: { motivo: 'x', sinalDeAlerta: true } }] }),
+    new ToolMessage({ content: 'ERRO ao pausar IA: Kommo fora do ar', tool_call_id: 'a' }),
+  ];
+  const { args, chamadas } = entrada({ falas: ['oi'], mensagens, textoFinal: 'Marcamos quarta?' });
+  const r = await passarPorSinalNoTurno(args);
+  assert.equal(chamadas.filter((c) => c.nome === 'pausar_ia').length, 1);
+  assert.match(r.texto, /avisei a nossa equipe/);
 });
 
 test('sem sinal na fala, negado, vago, ou fora de clínica: não mexe', async () => {

@@ -136,7 +136,11 @@ test('no guardrail: só clínica, e a mensagem que sobraria vazia vira texto neu
   assert.equal(g.rewritten, true);
   assert.ok(g.triggered.some((t) => t.startsWith('pronto_socorro_ou_cirurgia')));
   assert.doesNotMatch(g.text, /pronto|UPA/i);
-  assert.match(g.text, /nosso especialista/);
+  // frase de reserva neutra: nada de "na consulta" nem "não consigo orientar" para quem pode ter um sinal de alerta
+  assert.doesNotMatch(g.text, /consulta|n[aã]o consigo orientar|especialista/i);
+  // turno de aviso urgente: no lugar da reserva sai a frase do passe
+  const urgente = aplicarGuardrail('Procure o pronto-socorro mais próximo.', clinica, { fraseDeReserva: 'Já avisei a nossa equipe.' });
+  assert.equal(urgente.text, 'Já avisei a nossa equipe.');
 
   const parcial = aplicarGuardrail('Entendi 🙏 Procure o pronto-socorro. A equipe já foi avisada.', clinica);
   assert.equal(parcial.text, 'Entendi 🙏 A equipe já foi avisada.');
@@ -150,4 +154,69 @@ test('no guardrail: só clínica, e a mensagem que sobraria vazia vira texto neu
   // Fora de clínica a trava não age.
   const adv = aplicarGuardrail('Procure o pronto-socorro.', { category: 'juridico' } as unknown as Unit);
   assert.equal(adv.text, 'Procure o pronto-socorro.');
+});
+
+// ── Revisão do sênior (26/10) ───────────────────────────────────────────────────────────────────────────
+
+test('"Av." não é fim de frase: o endereço com UPA como referência passa inteiro (achado do sênior)', () => {
+  const t = 'Fica na Av. Brasil, 123, em frente à UPA Central. Quer agendar?';
+  assert.equal(semProntoSocorro(t).texto, t);
+  // sem a referência, o corte nunca deixa "Fica na Av." solto
+  const r = semProntoSocorro('Fica na Av. Brasil, 123. Se piorar, procure a UPA. Quer agendar?');
+  assert.equal(r.texto, 'Fica na Av. Brasil, 123. Quer agendar?');
+});
+
+test('referência de endereço a PS/UPA e relato do passado não são conselho', () => {
+  for (const t of [
+    'O endereço é Rua X, 100, ao lado da UPA do Centro.',
+    'Fica em frente ao Pronto Socorro Municipal, prédio azul.',
+    'Perto do pronto-socorro, na esquina.',
+    'Nossa, Arlete, que aflição pra vocês duas — já ter precisado ir à UPA duas vezes por causa da dor mostra que não é pouca coisa 💙.',
+  ]) {
+    assert.equal(semProntoSocorro(t).texto, t, t);
+  }
+});
+
+test('"não cirúrgico" e "pós-cirúrgico" não são opinião sobre cirurgia (achado do sênior)', () => {
+  for (const t of [
+    'O nosso tratamento é não cirúrgico, feito com tecnologia de descompressão.',
+    'Nosso foco é o tratamento conservador, não cirúrgico.',
+    'É que casos de pós-cirúrgico bem recente a gente não consegue avaliar ainda.',
+    'Atendemos pacientes que fizeram cirurgia e ainda sentem dor.',
+  ]) {
+    assert.equal(semProntoSocorro(t).texto, t, t);
+  }
+});
+
+test('o corte é por TRECHO: o que vem antes do conselho fica, com ponto final (Canaã, Olímpia, Mossoró)', () => {
+  assert.equal(
+    semProntoSocorro('Como estamos fora do horário agora, elas continuam seu atendimento por aqui amanhã, segunda-feira, às 8h — se a dor estiver insuportável antes disso, pode procurar um pronto-socorro, viu? 💙').texto,
+    'Como estamos fora do horário agora, elas continuam seu atendimento por aqui amanhã, segunda-feira, às 8h. 💙',
+  );
+  assert.equal(
+    semProntoSocorro('Vou chamar agora mesmo alguém da nossa equipe pra falar com você com prioridade — e se piorar ou sentir algo muito forte, procure um pronto-atendimento, combinado?').texto,
+    'Vou chamar agora mesmo alguém da nossa equipe pra falar com você com prioridade.',
+  );
+  // parênteses com PS saem, o resto da frase não vira pedaço solto: sobrou pouco, cai a frase
+  assert.equal(
+    semProntoSocorro('Entendo 😢 Mas não espere: busquem atendimento de urgência (pronto-socorro/hospital) agora mesmo, viu?').texto,
+    'Entendo 😢',
+  );
+  // sem separador forte, a frase inteira sai (nada de "Por precaução," solto)
+  assert.equal(semProntoSocorro('Entendi 🙏 Por precaução, procure o pronto-socorro mais próximo. Tenho horário hoje às 13h.').texto, 'Entendi 🙏 Tenho horário hoje às 13h.');
+  // o que sobra depois do " — " em caixa baixa ganha maiúscula
+  assert.equal(
+    semProntoSocorro('Pra hérnia umbilical o ideal é procurar um cirurgião geral, que avalia o caso — aqui na Doutor Hérnia a gente cuida só da coluna vertebral.').texto,
+    'Aqui na Doutor Hérnia a gente cuida só da coluna vertebral.',
+  );
+});
+
+test('exceção do paciente só para intenção/pergunta de ir AGORA (achado do sênior)', () => {
+  const sugestao = 'Procure o pronto-socorro.';
+  for (const fala of ['Fui ao pronto-socorro ontem e disseram que preciso de ressonância', 'posso fazer ressonância? já fui na UPA semana passada']) {
+    assert.equal(semProntoSocorro(sugestao, [fala]).texto, '', fala);
+  }
+  for (const fala of ['devo ir ao pronto-socorro?', 'vou na UPA agora', 'é caso de pronto socorro?', 'já fui na UPA ontem, devo voltar?']) {
+    assert.equal(semProntoSocorro(sugestao, [fala]).texto, sugestao, fala);
+  }
 });

@@ -12,7 +12,8 @@ import { logger } from '../lib/logger.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { withTimeout } from './llm-policy.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
-import { chamadasDoTurno, ehClinicaParaSinalDeAlerta, fraseDoPasse, pausaDoTurno, sinalNaFala } from './sinal-de-alerta.js';
+import { enviarTelegram } from '../lib/telegram.js';
+import { chamadasDoTurno, ehClinicaParaSinalDeAlerta, fraseDoPasse, pausaDoTurno, SEM_AVISO_NA_PAUSA, sinalNaFala } from './sinal-de-alerta.js';
 
 /** O resumo é útil a quem vai ligar, mas não segura a resposta: prazo curto. */
 const PRAZO_DO_RESUMO_MS = 8000;
@@ -46,46 +47,63 @@ export async function passarPorSinalNoTurno(e: PasseEntrada): Promise<PasseResul
   if (!ehClinicaParaSinalDeAlerta(e.unit) || !e.leadId) return intacto;
   const chamadas = chamadasDoTurno(e.mensagens);
   const { pausou, urgente } = pausaDoTurno(chamadas);
-  if (urgente) return { avisou: true, texto: e.textoFinal };
-  const sinal = sinalNaFala(e.falasDoPaciente);
+  // O modelo já avisou e parou: nada a fazer. (Se ele chamou a pausa urgente e ela FALHOU, `pausou` é falso e segue.)
+  if (urgente && pausou) return { avisou: true, texto: e.textoFinal };
+  const sinal = urgente ? 'sinal de alerta confirmado pelo modelo' : sinalNaFala(e.falasDoPaciente);
   const pausar = e.tools.find((t) => t.name === 'pausar_ia');
   if (!sinal || !pausar) return intacto;
+  const leadId = Number(e.leadId);
 
-  // A pausa com o aviso sai PRIMEIRO e o resumo para quem vai ligar corre junto: o aviso não espera o resumo (um LLM),
-  // o resumo não depende da pausa, e só ele tem prazo curto — a frase ao paciente não pode ficar presa nele.
-  const pausa = (async () => {
+  const pausa = async (): Promise<string> => {
     try {
-      return String(await pausar.invoke({ leadId: Number(e.leadId), motivo: `sinal de alerta: ${sinal}`.slice(0, 200), sinalDeAlerta: true }));
+      return String(await pausar.invoke({ leadId, motivo: `sinal de alerta: ${sinal}`.slice(0, 200), sinalDeAlerta: true }));
     } catch (err) {
       return `falhou: ${err instanceof Error ? err.message : String(err)}`;
     }
-  })();
+  };
+  // A pausa com o aviso sai PRIMEIRO e o resumo para quem vai ligar corre junto: o aviso não espera o resumo (um LLM),
+  // o resumo não depende da pausa, e só ele tem prazo curto — a frase ao paciente não pode ficar presa nele.
+  const pausando = pausa(); // começa ANTES do resumo: a pausa é a que não pode esperar
   const resumir = !pausou ? e.tools.find((t) => t.name === 'resumir_lead_para_sdr') : undefined;
   const resumo = resumir
     ? withTimeout(
-        resumir.invoke({ leadId: Number(e.leadId), focusHint: `SINAL DE ALERTA: ${sinal}. Queixa, sinais e há quanto tempo.` }),
+        resumir.invoke({ leadId, focusHint: `SINAL DE ALERTA: ${sinal}. Queixa, sinais e há quanto tempo.` }),
         PRAZO_DO_RESUMO_MS,
       ).catch((err) => logger.warn({ err: String(err), unit: e.unit.slug }, 'sinal de alerta: resumo pelo código falhou'))
     : Promise.resolve();
-  const [resultadoPausa] = await Promise.all([pausa, resumo]);
-  const pegou = resultadoPausa.startsWith('OK');
+  let [resultadoPausa] = await Promise.all([pausando, resumo]);
+  let pegou = resultadoPausa.startsWith('OK');
+  // Uma segunda tentativa: a pausa é o que impede a IA de continuar vendendo para quem tem sinal de alerta.
+  if (!pegou) {
+    resultadoPausa = await pausa();
+    pegou = resultadoPausa.startsWith('OK');
+  }
   await e.recorder.step({
     kind: pegou ? 'THINKING' : 'ERROR',
     title: pegou
-      ? `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo ${pausou ? 'pausou sem avisar a equipe' : 'não parou'} — aviso feito pelo código`
-      : `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo não avisou; o aviso pelo código não pegou — saiu a resposta do modelo`,
+      ? `🚑 Sinal de alerta (${sinal}) e o modelo ${pausou ? 'pausou sem avisar a equipe' : 'não parou'} — aviso feito pelo código`
+      : `🚨 Sinal de alerta (${sinal}) e a pausa pelo código FALHOU duas vezes — a IA segue ligada neste cartão`,
     payload: { original: e.textoFinal, pausa: resultadoPausa },
   });
-  // Pausa que não pegou: dizer "a equipe continua" com a IA ainda ligada seria prometer o que não aconteceu. (O aviso à
-  // equipe sai ANTES da pausa dentro de `pausar_ia`, então a tarefa e o Telegram podem ter saído mesmo assim.)
-  if (!pegou) return intacto;
-  // O modelo já tinha pausado, só sem a flag: ele escreveu a resposta sabendo disso, e ela fica.
-  if (pausou) return { avisou: true, texto: e.textoFinal };
 
+  const retorno = retornoDaEquipe(e.unit);
+  const falouDePs = pacienteFalouDePs(e.falasDoPaciente);
+  if (!pegou) {
+    // Alerta direto ao João: a pausa é o que segura a IA, e o aviso do cartão pode não ter saído.
+    await enviarTelegram(
+      `⚠️ Sinal de alerta SEM pausa · ${e.unit.name} · lead ${leadId}: ${sinal}. A pausa falhou duas vezes (${resultadoPausa.slice(0, 120)}). Olhar o cartão agora.`,
+    ).catch(() => false);
+    // A resposta do modelo não sai como se nada fosse: ele não viu o sinal. Sai a frase do passe, sem dizer que a equipe
+    // foi avisada (não sabemos se foi). Só fica a resposta dele se marcou consulta (é a confirmação que o paciente precisa).
+    if (chamadas.some((c) => c.name === 'agendar_consulta')) return intacto;
+    return { avisou: false, texto: fraseDoPasse(retorno, falouDePs, false) };
+  }
+  const avisada = !resultadoPausa.includes(SEM_AVISO_NA_PAUSA);
   // O modelo marcou consulta neste turno: a confirmação dele é a única que o paciente recebe, então a resposta fica
   // (a pausa e o aviso à equipe já saíram).
   if (chamadas.some((c) => c.name === 'agendar_consulta')) return { avisou: true, texto: e.textoFinal };
-
-  const texto = fraseDoPasse(retornoDaEquipe(e.unit), pacienteFalouDePs(e.falasDoPaciente));
-  return { avisou: true, texto };
+  // O modelo já tinha pausado, só sem a flag: ele escreveu a resposta sabendo disso, e ela fica — a menos que ninguém
+  // tenha sido avisado (a frase dele diria que sim).
+  if (pausou && avisada) return { avisou: true, texto: e.textoFinal };
+  return { avisou: true, texto: fraseDoPasse(retorno, falouDePs, avisada) };
 }

@@ -32,12 +32,14 @@ import {
   ETIQUETA_PRIORIDADE,
   renderSinalDeAlerta,
   sinalNaFala,
+  soFalaDoPaciente,
   TAREFA_URGENTE,
   textoDoAvisoUrgente,
   textoTelegramSinalDeAlerta,
   travaDoProntoSocorro,
   travarProntoSocorroPorLinha,
 } from './sinal-de-alerta.js';
+import { pacienteFalouDePs } from './sem-pronto-socorro.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 
 function unidade(over: Partial<Unit> = {}): Unit {
@@ -227,7 +229,7 @@ test('motivo da pausa que é sinal de alerta, mesmo sem a flag', () => {
     'febre com dor lombar',
     // Mossoró #5876373 (25/10): a pausa por "conversa travada" não tinha a flag e não avisou ninguém
     'conversa travada: pergunta de segurança da coluna (força na perna, xixi/intestino) 2x sem resposta',
-    'paciente relata AVC e braço tremendo',
+    'suspeita de AVC, braço tremendo',
     'boca torta e fala enrolada',
   ]) {
     assert.ok(ehHandoffPorSinalDeAlerta(m), `deveria reconhecer: ${m}`);
@@ -287,7 +289,7 @@ test('sinalNaFala: pega o sinal dito com todas as letras (os casos da conferênc
     ['não consigo segurar as fezes', /não segura o xixi ou as fezes/],
     ['perdi o controle da urina', /perdeu o controle/],
     ['tive um escape de urina', /escape de xixi/],
-    ['me mijei hoje cedo', /escape de xixi/],
+    ['fiz xixi na calça sem sentir', /escape de xixi/],
     ['minha perna está perdendo força', /perda de força/],
     ['perdi a força na perna esquerda', /perda de força/],
     ['minha perna esquerda tá ficando fraca', /perda de força/],
@@ -341,12 +343,12 @@ test('falasDoTurno: só as mensagens do paciente que ainda não tiveram resposta
 
 test('sinalNaFala: a negação só vale quando é do próprio sintoma (achados da revisão)', () => {
   assert.ok(sinalNaFala(['não aguento mais e perdi a força na perna']), '"não aguento" não nega a perda de força');
-  assert.ok(sinalNaFala(['fiquei sem aguentar nada, nem andar e perdi força']));
+  assert.ok(sinalNaFala(['fiquei sem aguentar nada, nem andar e perdi a força nas pernas']));
   assert.ok(sinalNaFala(['não sei o que fazer, minha perna está perdendo força']));
   assert.equal(sinalNaFala(['não estou com dormência na virilha']), null);
   assert.equal(sinalNaFala(['nem perdi a força na perna']), null);
   // febre: cada ocorrência vale, e a de outra pessoa não
-  assert.ok(sinalNaFala(['não tive febre mas tenho dor, depois tive febre e dor']));
+  assert.ok(sinalNaFala(['não tive febre mas tenho dor nas costas, depois tive febre e dor']));
   assert.equal(sinalNaFala(['meu filho está com febre, eu só tenho dor nas costas']), null);
 });
 
@@ -367,7 +369,7 @@ test('sinalNaFala: perda de força no braço, na mão ou de vontade não é o si
   for (const f of ['perdi a força no braço', 'perdeu a força na mão direita', 'perdi a força de vontade', 'perda de força nas mãos']) {
     assert.equal(sinalNaFala([f]), null, f);
   }
-  for (const f of ['perdi a força nas pernas', 'perdi a força na perna esquerda', 'perdi a força e caí']) {
+  for (const f of ['perdi a força nas pernas', 'perdi a força na perna esquerda']) {
     assert.ok(sinalNaFala([f]), f);
   }
 });
@@ -457,4 +459,76 @@ test('o manual da unidade (system_prompt, dormente até ligar PROMPT_DA_UNIDADE_
   const base = escolherBase(unidade({ systemPrompt: manual }), undefined);
   assert.match(base ?? '', /pronto-atendimento com urgência e transfira\. \[REGRA DA REDE/);
   assert.equal(escolherBase(unidade({ systemPrompt: '' }), undefined), undefined);
+});
+
+// ── Revisão do sênior (26/10): falsos positivos, âncoras, só o que o PACIENTE disse ──────────────────────
+
+test('sinalNaFala: queixa de anos não é o sinal de agora; "desde ontem" é', () => {
+  assert.equal(sinalNaFala(['não consigo segurar o xixi à noite desde a gravidez faz 10 anos']), null);
+  assert.ok(sinalNaFala(['não estou segurando o xixi desde ontem']));
+  assert.ok(sinalNaFala(['não consigo segurar o xixi há 2 dias']));
+});
+
+test('sinalNaFala: "não aguento mais a perna fraca" não é negação do sintoma', () => {
+  assert.ok(sinalNaFala(['não aguento mais a perna fraca']));
+  assert.equal(sinalNaFala(['não senti nada de dormência na virilha']), null);
+  assert.equal(sinalNaFala(['não estou com dormência na virilha']), null);
+});
+
+test('sinalNaFala: brincadeira e figura de linguagem não disparam (achados do sênior)', () => {
+  for (const f of [
+    'me caguei de medo quando o médico falou em cirurgia',
+    'me mijei de rir',
+    'a dor de repente melhorou depois do remédio',
+    'perdi a força pra trabalhar com essa dor',
+    'tô com febre e dor de garganta',
+    'fiquei com a boca torta de raiva kkk',
+    'meu braço tá tremendo de frio kkk',
+    'minha perna está fraca de tanto andar',
+    'tenho perna bamba quando subo escada',
+  ]) {
+    assert.equal(sinalNaFala([f]), null, f);
+  }
+  // e o que continua disparando: o teste da Suzanne e o caso real de febre com dor nas costas
+  assert.ok(sinalNaFala(['minha perna está perdendo força']));
+  assert.ok(sinalNaFala(['estou com febre e muita dor nas costas']));
+  assert.ok(sinalNaFala(['a dor piorou de repente']));
+});
+
+test('soFalaDoPaciente / falasDoTurno: a equipe do <conversa_oficial> não é fala do paciente', () => {
+  const bloco = (linhas: string[]) => `<conversa_oficial>\nO que aconteceu no WhatsApp desde a sua última mensagem (rota oficial), em ordem:\n${linhas.join('\n')}\nA EQUIPE HUMANA já falou…\n</conversa_oficial>`;
+  // equipe pergunta "sentiu perda de força?", paciente diz "não": NÃO é sinal
+  const conteudo = `${bloco(['- 10:01 · Equipe (Ana): "Oi! Você sentiu perda de força nas pernas?"'])}\n\nnão, só dor mesmo`;
+  assert.equal(soFalaDoPaciente(conteudo), 'não, só dor mesmo');
+  assert.equal(sinalNaFala(falasDoTurno([{ tipo: 'human', texto: conteudo }])), null);
+  // a equipe cita pronto-socorro: NÃO abre a exceção da Sofia
+  const comPs = `${bloco(['- 10:01 · Equipe (Ana): "se piorar procure o pronto-socorro"'])}\n\nok obrigado`;
+  assert.equal(pacienteFalouDePs(falasDoTurno([{ tipo: 'human', texto: comPs }])), false);
+  // linhas do PACIENTE dentro do bloco (e áudio transcrito) continuam valendo
+  const dele = bloco(['- 10:01 · Equipe (Ana): "Como está?"', '- 10:02 · Paciente: "não estou segurando o xixi"', '- 10:03 · Paciente: [áudio transcrito] "perdi a força na perna"']);
+  assert.deepEqual(soFalaDoPaciente(`${dele}\n\noi`), ['não estou segurando o xixi', 'perdi a força na perna', 'oi'].join('\n'));
+  assert.ok(sinalNaFala(falasDoTurno([{ tipo: 'human', texto: `${dele}\n\noi` }])));
+});
+
+test('motivo da pausa: "sinais de alerta" casa, e AVC/derrame/dormência/febre SEM âncora ou negados não', () => {
+  for (const m of ['paciente relatou sinais de alerta', 'sinais de alerta clínicos', 'suspeita de AVC agora', 'sinal neurológico: boca torta']) {
+    assert.ok(ehHandoffPorSinalDeAlerta(m), m);
+  }
+  for (const m of [
+    'paciente teve AVC em 2019, quer saber se atende',
+    'derrame no joelho, quer saber preço',
+    'paciente pediu humano; nega dormência na virilha',
+    'sem sinal de alerta, só quer o endereço',
+    'febre de 2 dias, quer remarcar',
+  ]) {
+    assert.equal(ehHandoffPorSinalDeAlerta(m), false, m);
+  }
+});
+
+test('frase do passe quando NINGUÉM foi avisado: não diz "avisei a equipe"', () => {
+  const f = fraseDoPasse({ tipo: 'aberta' }, false, false);
+  assert.doesNotMatch(f, /avisei|prioridade|avisada/i);
+  assert.match(f, /atendimento segue com a nossa equipe/);
+  assert.match(fraseDoPasse({ tipo: 'aberta' }, true, false), /pode ir, tá\?/);
+  assert.doesNotMatch(fraseDoPasse({ tipo: 'aberta' }, true, false), /avisad/);
 });

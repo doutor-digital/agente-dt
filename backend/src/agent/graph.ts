@@ -18,7 +18,8 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
-import { falasDoTurno } from './sinal-de-alerta.js';
+import { falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
+import { pacienteFalouDePs } from './sem-pronto-socorro.js';
 import { passarPorSinalNoTurno } from './passe-por-sinal.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
@@ -590,6 +591,9 @@ export async function buildAgentGraph(
     });
 
     const nonSystemMessages = state.messages.filter((m) => m.getType() !== 'system');
+    // O que o PACIENTE disse neste turno (sem as linhas da equipe do <conversa_oficial>): de onde saem a rede de
+    // segurança do sinal de alerta e a exceção do pronto-socorro.
+    const mensagensDoPaciente = falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
     const lastHuman = [...nonSystemMessages].reverse().find((m) => m.getType() === 'human');
     // O HumanMessage carrega o bloco <conversa_oficial> pregado na frente (webhook e salesbot).
     // Tudo que decide sobre O QUE O PACIENTE ESCREVEU — só um cumprimento, busca no RAG, nome —
@@ -702,6 +706,26 @@ export async function buildAgentGraph(
 
     const t0 = performance.now();
     let response: AIMessage;
+    // O modelo caiu (principal e plano B): o paciente recebe o texto de "IA indisponível", MAS se ele disse um sinal de
+    // alerta a equipe é avisada do mesmo jeito (pausar_ia com a flag) e a frase do passe sai no lugar.
+    const respostaIndisponivel = async (): Promise<Partial<AgentStateType>> => {
+      let texto = FALLBACK_INDISPONIVEL;
+      try {
+        const passe = await passarPorSinalNoTurno({
+          unit,
+          leadId: state.leadId,
+          mensagens: nonSystemMessages,
+          falasDoPaciente: mensagensDoPaciente,
+          tools,
+          recorder,
+          textoFinal: FALLBACK_INDISPONIVEL,
+        });
+        texto = passe.texto;
+      } catch (err) {
+        logger.warn({ err: String(err), unit: unit.slug }, 'sinal de alerta: a rede de segurança falhou com o modelo fora do ar');
+      }
+      return { messages: [new AIMessage(texto)], decision: texto };
+    };
     // Quem respondeu este turno. Muda só quando a chave reserva assume — aí a reescrita da
     // pergunta final (mais abaixo) também sai pela reserva, em vez de bater de novo na chave morta.
     let modeloAtivo = model;
@@ -816,10 +840,7 @@ export async function buildAgentGraph(
             },
             latencyMs: Math.round(performance.now() - t0),
           });
-          return {
-            messages: [new AIMessage(FALLBACK_INDISPONIVEL)],
-            decision: FALLBACK_INDISPONIVEL,
-          } satisfies Partial<AgentStateType>;
+          return respostaIndisponivel();
         }
       } else {
         await recorder.step({
@@ -828,10 +849,7 @@ export async function buildAgentGraph(
           payload: { erroPrincipal, timeoutMs: AGENT_NODE_TIMEOUT_MS },
           latencyMs: Math.round(performance.now() - t0),
         });
-        return {
-          messages: [new AIMessage(FALLBACK_INDISPONIVEL)],
-          decision: FALLBACK_INDISPONIVEL,
-        } satisfies Partial<AgentStateType>;
+        return respostaIndisponivel();
       }
     }
     const latency = Math.round(performance.now() - t0);
@@ -1115,8 +1133,6 @@ export async function buildAgentGraph(
         });
       }
 
-      // As falas do paciente DESTE turno: se ELE falou em pronto-socorro, a resposta pode tratar disso (sem-pronto-socorro.ts).
-      const mensagensDoPaciente = falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
       // Sinal de alerta dito com todas as letras e o modelo NÃO avisou (26/10/2026): a regra de 21/10 estava no prompt e
       // Olímpia/Mossoró/Balsas/Rio Verde ficaram sem etiqueta, sem tarefa e sem aviso. Aqui o código passa pela mesma
       // ferramenta pausar_ia (etiqueta 🔴 PRIORIDADE + tarefa LIGAR AGORA + Telegram do João). Só frase sem ambiguidade
@@ -1292,7 +1308,11 @@ export async function buildAgentGraph(
         textoFinal = semDra;
         response.content = textoFinal;
       }
-      const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit, { mensagensDoPaciente });
+      // Turno de aviso urgente: se o corte do pronto-socorro levar a resposta inteira, sai a frase do passe (não a de reserva).
+      const guardBruto = aplicarGuardrail(semIntimidade(semDiminutivo(textoFinal)), unit, {
+        mensagensDoPaciente,
+        fraseDeReserva: passouPorSinal ? fraseDoPasse(retornoDaEquipe(unit), pacienteFalouDePs(mensagensDoPaciente)) : undefined,
+      });
       // O que o guardrail devolve (correção ou texto de reserva) passa pela mesma trava do nome.
       const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit, rede) };
       if (guard.rewritten) {

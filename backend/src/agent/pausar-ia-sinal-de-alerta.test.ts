@@ -57,6 +57,9 @@ let tarefas: Tarefa[] = [];
 let pausas: number[] = [];
 let falharPausa = false;
 let falharEtiqueta = false;
+let falharEtiquetaComEmoji = false;
+let falharTarefa = false;
+let guardadas: string[] | null = null;
 let etiquetas: Array<{ leadId: number; tag?: string; tags?: string[] }> = [];
 let passos: Array<{ title: string }> = [];
 
@@ -65,6 +68,9 @@ beforeEach(() => {
   pausas = [];
   falharPausa = false;
   falharEtiqueta = false;
+  falharEtiquetaComEmoji = false;
+  falharTarefa = false;
+  guardadas = null;
   etiquetas = [];
   passos = [];
   marcas.clear();
@@ -72,12 +78,15 @@ beforeEach(() => {
 
 const kommo = {
   getLead: async (id: number) => ({ id, name: 'Maria 21/10/2026', responsible_user_id: 777, status_id: 1, pipeline_id: 1 }),
+  tagsDoLead: async () => guardadas ?? ['🔴 PRIORIDADE'],
   createTask: async (t: Tarefa) => {
+    if (falharTarefa) throw new Error('Kommo fora do ar');
     tarefas.push(t);
     return { id: 99 };
   },
   addTag: async (p: { leadId: number; tag?: string; tags?: string[] }) => {
     if (falharEtiqueta) throw new Error('Kommo recusou a etiqueta');
+    if (falharEtiquetaComEmoji && /🔴/.test(p.tag ?? '')) throw new Error('Kommo recusou o emoji');
     etiquetas.push(p);
   },
   setLeadFieldFlag: async (leadId: number) => {
@@ -229,4 +238,31 @@ test('o aviso de 24 h: a segunda transferência no mesmo cartão não repete a t
   assert.deepEqual(pausas, [21, 21]);
   assert.match(tarefas[0].text, /A IA parou e passou o atendimento/);
   assert.match(tarefas[0].text, /ligar para o paciente agora/);
+});
+
+// ── Revisão do sênior (26/10): quando o aviso falha, e a etiqueta com emoji ────────────────────────────
+
+test('a tarefa E o Telegram falharam: a pausa vale, o rastro grita e a IA não manda dizer "avisei a equipe"', async () => {
+  falharTarefa = true; // sem TELEGRAM_BOT_TOKEN neste arquivo, o Telegram também falha
+  const r = String(await ferramenta('pausar_ia').invoke({ leadId: 31, motivo: 'perda de força na perna', sinalDeAlerta: true }));
+  assert.match(r, /^OK — IA pausada/);
+  assert.match(r, /\[SEM AVISO À EQUIPE\]/);
+  assert.match(r, /NÃO diga que a equipe já foi avisada/);
+  assert.doesNotMatch(r, /já foi avisada com prioridade/);
+  assert.deepEqual(pausas, [31]);
+  assert.ok(passos.some((p) => /ALERTA: sinal de alerta SEM aviso à equipe/.test(p.title)));
+});
+
+test('o Kommo recusou o emoji na etiqueta: entra "PRIORIDADE" sem ele e o rastro registra', async () => {
+  falharEtiquetaComEmoji = true;
+  await ferramenta('pausar_ia').invoke({ leadId: 33, motivo: 'red flag', sinalDeAlerta: true });
+  assert.deepEqual(etiquetas, [{ leadId: 33, tag: 'PRIORIDADE' }]);
+  assert.ok(passos.some((p) => /a com emoji falhou/.test(p.title)));
+  assert.equal(tarefas.length, 1, 'a tarefa sai do mesmo jeito');
+});
+
+test('o Kommo guardou a etiqueta diferente da pedida: fica como ele devolveu e o rastro registra', async () => {
+  guardadas = ['PRIORIDADE'];
+  await ferramenta('pausar_ia').invoke({ leadId: 34, motivo: 'red flag', sinalDeAlerta: true });
+  assert.ok(passos.some((p) => /Kommo guardou a etiqueta diferente de "🔴 PRIORIDADE".*PRIORIDADE/.test(p.title)));
 });

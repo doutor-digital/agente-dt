@@ -12,6 +12,8 @@ import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
 export interface ContextoDoGuardrail {
   /** As últimas mensagens do paciente (texto puro): se ELE falou em pronto-socorro, a resposta pode tratar disso. */
   mensagensDoPaciente?: string[];
+  /** Turno de aviso urgente (sinal de alerta): se a resposta inteira for cortada, sai ESTA frase, não a de reserva. */
+  fraseDeReserva?: string;
 }
 
 export interface GuardrailResult {
@@ -150,12 +152,11 @@ function violaRegra(regra: { key: string; re: RegExp }, text: string): boolean {
 }
 
 /**
- * Sobrou nada depois de tirar o pronto-socorro / a opinião sobre médico ou cirurgia. Sem diagnóstico, sem
- * "vamos garantir sua consulta?": quem pode estar falando é um paciente com sinal de alerta.
+ * Sobrou nada depois de tirar o pronto-socorro / a opinião sobre médico ou cirurgia. Sem diagnóstico, sem "na consulta"
+ * e sem "não consigo orientar": quem escreveu pode ter um sinal de alerta. Num turno de aviso urgente, quem chama passa
+ * `fraseDeReserva` (a frase do passe para a equipe) e é ela que sai no lugar.
  */
-const FALLBACK_SEM_PRONTO_SOCORRO =
-  'Entendi, obrigada por me contar 🙏 Quem avalia o que você está sentindo com segurança é o nosso especialista, ' +
-  'na consulta — por aqui eu não consigo orientar sobre isso.';
+const FALLBACK_SEM_PRONTO_SOCORRO = 'Entendi, obrigada por me contar 🙏 Me conta um pouquinho mais do que você está sentindo?';
 
 export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoGuardrail = {}): GuardrailResult {
   if (!text || !text.trim()) return { text, triggered: [], rewritten: false };
@@ -178,7 +179,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     const semPs = semProntoSocorro(texto, contexto.mensagensDoPaciente ?? []);
     if (semPs.removidas.length > 0) {
       triggered.push('pronto_socorro_ou_cirurgia:' + semPs.removidas.length);
-      if (!semPs.texto.trim()) return { text: FALLBACK_SEM_PRONTO_SOCORRO, triggered, rewritten: true };
+      if (!semPs.texto.trim()) return { text: contexto.fraseDeReserva ?? FALLBACK_SEM_PRONTO_SOCORRO, triggered, rewritten: true };
       texto = semPs.texto;
       reescreveu = true;
     }

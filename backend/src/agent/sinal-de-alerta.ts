@@ -20,20 +20,49 @@ import { quandoAEquipeResponde, type RetornoDaEquipe } from '../lib/retorno-da-e
 
 /** Etiqueta que o cartão ganha quando a IA para por sinal de alerta (nome exato pedido pela Suzanne, 25/10). */
 export const ETIQUETA_PRIORIDADE = '🔴 PRIORIDADE';
+/** Plano B se o Kommo recusar o emoji (nunca provado: ver `avisarSinalDeAlerta`). */
+export const ETIQUETA_PRIORIDADE_SEM_EMOJI = 'PRIORIDADE';
 
 /** Motivo de `pausar_ia` que é sinal de alerta — rede de segurança para quando o modelo esquece a flag. */
-export const MOTIVO_SINAL_DE_ALERTA =
-  /sinal(is)? de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|perdendo (a )?for[cç]a|incontin[eê]ncia|(controle|segur\w*) (d[oa]s? |[oa]s? )?(xixi|urina|fezes|intestino|bexiga)|anestesia em sela|dorm[eê]ncia (na|em|entre)|piorou de repente|piora repentina|dor repentina|febre (e|com|junto)|pergunta de seguran[cç]a|for[cç]a (n[ao]s? )?perna|xixi\/intestino|\bAVC\b|derrame|acidente vascular|boca torta|fala enrolada/i;
+export const MOTIVO_SINAL_DE_ALERTA = new RegExp(
+  [
+    String.raw`sina(?:l|is) de alerta`,
+    String.raw`red ?flag`,
+    String.raw`bandeira vermelha`,
+    String.raw`emerg[eê]ncia`,
+    String.raw`perda de for[cç]a`,
+    String.raw`perdendo (?:a )?for[cç]a`,
+    String.raw`incontin[eê]ncia`,
+    String.raw`(?:controle|segur\w*) (?:d[oa]s? |[oa]s? )?(?:xixi|urina|fezes|intestino|bexiga)`,
+    String.raw`anestesia em sela`,
+    // dormência/febre/AVC sem âncora tornavam urgentes "nega dormência" e "teve AVC em 2019" (revisão de 26/10)
+    String.raw`dorm[eê]ncia (?:na|no|em|entre) (?:a |o )?(?:virilha|regi[aã]o [ií]ntima|sela|per[ií]neo|as pernas)`,
+    String.raw`piorou de repente|piora repentina`,
+    String.raw`febre (?:e|com|junto)(?: a| de)? dor`,
+    String.raw`pergunta de seguran[cç]a`,
+    String.raw`for[cç]a (?:n[ao]s? )?perna`,
+    String.raw`xixi\/intestino`,
+    String.raw`sinal neurol[oó]gico|boca torta|fala enrolada|suspeita de (?:AVC|derrame)|(?:AVC|derrame) (?:agora|atual|em andamento)`,
+  ].join('|'),
+  'gi',
+);
 
+/** O motivo da pausa é sinal de alerta — e não vem negado ("nega dormência na virilha", "sem sinal de alerta")? */
 export function ehHandoffPorSinalDeAlerta(motivo: string | null | undefined, flag?: boolean): boolean {
-  return flag === true || MOTIVO_SINAL_DE_ALERTA.test(motivo ?? '');
+  if (flag === true) return true;
+  const texto = motivo ?? '';
+  for (const m of texto.matchAll(MOTIVO_SINAL_DE_ALERTA)) {
+    // "não está segurando o xixi": a negação é o próprio sinal, não nega nada
+    if (/^segur/i.test(m[0]) || !negadoAntes(texto, m.index ?? 0)) return true;
+  }
+  return false;
 }
 
 /** Tarefa criada pela regra da unidade que já é o aviso urgente — evita dois avisos no mesmo turno. */
-export const TAREFA_URGENTE = /sinal(is)? de alerta|bandeira vermelha|emerg[eê]ncia/i;
+export const TAREFA_URGENTE = /sina(?:l|is) de alerta|bandeira vermelha|emerg[eê]ncia/i;
 const LIGAR_AGORA = /ligar agora/i;
 /** Tarefa que a regra da unidade escreveu por sinal de alerta (sem "emergência": "contato de emergência" é outra coisa). */
-const TAREFA_DE_SINAL = /(?<!\b(?:sem|nenhum|nem)\s)(?:sinal(?:is)? de alerta|bandeira vermelha|red ?flag)/i;
+const TAREFA_DE_SINAL = /(?<!\b(?:sem|nenhum|nem)\s)(?:sina(?:l|is) de alerta|bandeira vermelha|red ?flag)/i;
 
 /** Orientação ou mensagem cadastrada na unidade que manda o paciente ao pronto-socorro. */
 const CITA_PRONTO_SOCORRO = /pronto[\s-]*(socorro|atendimento)|\bUPA\b|\bSAMU\b|\bemerg[eê]ncia\b/i;
@@ -76,7 +105,7 @@ export function travarProntoSocorroPorLinha(texto: string | null | undefined): s
 }
 
 /** Regra da unidade cuja CONDIÇÃO é sinal de alerta — costuma mandar transferir de cara. */
-const CONDICAO_SINAL_DE_ALERTA = /sinal(is)? de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b|dorm[eê]ncia|febre|virilha|de repente/i;
+const CONDICAO_SINAL_DE_ALERTA = /sina(?:l|is) de alerta|red ?flag|bandeira vermelha|emerg[eê]ncia|perda de for[cç]a|xixi|urina|fezes|esf[ií]ncter|\bsela\b|dorm[eê]ncia|febre|virilha|de repente/i;
 
 /**
  * Regra de SINAL DE ALERTA disparada por queda, pancada ou acidente sem dizer de quando (a "trauma/febre" cadastrada
@@ -241,7 +270,7 @@ export function textoTelegramSinalDeAlerta(a: {
 
 /** Conjunção que corta a negação: "não aguento mais E perdi a força" não nega a perda de força. */
 const CONJUNCAO = /^(?:e|mas|por[eé]m|aí|ai|depois|tamb[eé]m|porque|que)$/iu;
-const PALAVRA_DE_NEGACAO = /^(?:n[aã]o|nem|nunca|sem|nenhum[a]?|nada|negativo)$/iu;
+const PALAVRA_DE_NEGACAO = /^(?:n[aã]o|nem|nunca|sem|nenhum[a]?|nada|negativo|nega|negou|negando)$/iu;
 
 /**
  * O trecho vem negado? Olha as 4 palavras antes dele, na mesma oração, parando numa conjunção:
@@ -252,10 +281,16 @@ function negadoAntes(texto: string, indice: number): boolean {
   const palavras = oracao.split(/\s+/).filter(Boolean).slice(-4);
   for (let i = palavras.length - 1; i >= 0; i--) {
     if (CONJUNCAO.test(palavras[i])) return false;
-    if (PALAVRA_DE_NEGACAO.test(palavras[i])) return true;
+    if (PALAVRA_DE_NEGACAO.test(palavras[i])) {
+      // A negação só vale se o que está entre ela e o sintoma é "enchimento" ("não ESTOU COM febre"): "não AGUENTO
+      // mais a perna fraca" não nega a perna fraca.
+      return palavras.slice(i + 1).every((p) => ENCHIMENTO.test(p));
+    }
   }
   return false;
 }
+
+const ENCHIMENTO = /^(?:tenho|tive|tem|teve|tinha|estou|estava|est[aá]|to|t[oô]|tou|com|uma?|as?|os?|de|d[ao]s?|nada|nenhum[a]?|mais|[eé]|foi|h[aá]|sinto|senti|sentir|ter|muito|muita|essa|esse|nenhuma|na|no|nas|nos)$/iu;
 
 /** Cada padrão diz: o trecho conta como sinal só se NÃO vier negado (`negavel`), ou a negação faz parte dele. */
 const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
@@ -272,13 +307,14 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
   },
   {
     sinal: 'escape de xixi ou de fezes',
-    re: /\bescap\w+\s+(?:de\s+|o\s+|a\s+)?(?:xixi|urina|fezes)|\bfiz\s+(?:xixi|coc[oô])\s+(?:nas?\s+)?(?:cal[cç]a|roupa)|\bme\s+(?:mij|caguei)\w*|\bincontin[eê]ncia/iu,
+    re: /\bescap\w+\s+(?:de\s+|o\s+|a\s+)?(?:xixi|urina|fezes)|\bfiz\s+(?:xixi|coc[oô])\s+(?:nas?\s+)?(?:cal[cç]a|roupa)|\bincontin[eê]ncia/iu,
     negavel: true,
   },
   {
     sinal: 'perda de força na perna',
-    // "perdi a força" sem dizer onde, ou na perna; "no braço", "na mão" e "de vontade" não são o sinal da coluna
-    re: /\bperd\w+\s+(?:a\s+)?for[cç]a\b(?!\s+de\s+(?:vontade|viver))(?!\s+(?:n[ao]s?|d[ao]s?)\s+(?!perna|pernas|p[eé]s?\b|coxas?|joelhos?))|\bperda\s+de\s+for[cç]a\b(?!\s+(?:n[ao]s?|d[ao]s?)\s+(?!perna|pernas|p[eé]s?\b|coxas?|joelhos?))|\b(?:perna|pernas)\s+(?:esquerda\s+|direita\s+)?(?:est\p{L}+\s+|ficou\s+|ficaram\s+|ficando\s+|t[aá]\s+(?:ficando\s+)?)?(?:sem\s+for[cç]a|fraca|fracas|bamba|bambas)\b/iu,
+    // Exige a parte do corpo: "perdi a força pra trabalhar" e "perdi a força de vontade" não são o sinal da coluna.
+    // "perna fraca/bamba" não vale quando é cansaço ("fraca de tanto andar", "bamba quando subo escada").
+    re: /\bperd\p{L}+\s+(?:a\s+)?for[cç]a\s+(?:n[ao]s?|d[ao]s?)\s+(?:perna|pernas|p[eé]s?|coxas?|joelhos?)\b|\b(?:perna|pernas|p[eé]s?)\s+(?:esquerd[ao]\s+|direit[ao]\s+)?(?:est\p{L}+\s+|ficou\s+|ficaram\s+|ficando\s+|t[aá]\s+(?:ficando\s+)?)?(?:perd(?:endo|eu|i)\s+(?:a\s+)?for[cç]a|sem\s+for[cç]a|fraca|fracas|bamba|bambas)\b(?!\s+(?:de\s+tanto|quando|ao\s|depois\s+d[eo]|por\s+causa|de\s+cansa))|\bperda\s+de\s+for[cç]a\s+(?:n[ao]s?|d[ao]s?)\s+(?:perna|pernas|p[eé]s?|coxas?)\b/iu,
     negavel: true,
   },
   {
@@ -291,12 +327,12 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
     // Só os sinais de agora. "AVC"/"derrame" sozinhos ficam com o modelo: "minha mãe teve AVC", "tive AVC em 2019" e
     // "derrame no joelho" são história ou outra coisa (revisão de 26/10); o caso real de ITZ (#28642041) tem o braço e a boca.
     sinal: 'sinal neurológico (boca, fala ou braço)',
-    re: /\bboca\s+(?:est\p{L}+\s+|ficou\s+)?(?:torta|entortou|caiu|ca[ií]da|tremendo|treme\w*)|\bfala\s+(?:est\p{L}+\s+|ficou\s+)?(?:enrolada|arrastada|mole|embolada)|\bbra[cç]o\s+(?:est\p{L}+\s+|ficou\s+)?(?:tremendo|treme\w*|mole|n[aã]o\s+mexe)|\bn[aã]o\s+consigo\s+mexer\s+(?:o|a)\s+(?:bra[cç]o|perna|rosto)/iu,
+    re: /\bboca\s+(?:est\p{L}+\s+|ficou\s+)?(?:torta|entortou|caiu|ca[ií]da|tremendo|treme\w*)(?!\s+d[eo]\s+(?:raiva|rir|frio|medo|nervoso|[óo]dio|vergonha|fome))|\bfala\s+(?:est\p{L}+\s+|ficou\s+)?(?:enrolada|arrastada|mole|embolada)|\bbra[cç]o\s+(?:est\p{L}+\s+|ficou\s+)?(?:tremendo|treme\w*|mole|n[aã]o\s+mexe)(?!\s+d[eo]\s+(?:raiva|rir|frio|medo|nervoso|[óo]dio|vergonha|fome))|\bn[aã]o\s+consigo\s+mexer\s+(?:o|a)\s+(?:bra[cç]o|perna|rosto)/iu,
     negavel: true,
   },
   {
     sinal: 'dor que piorou de repente',
-    re: /\bpiorou\s+(?:muito\s+)?de\s+repente|\bdor\s+(?:repentina|de\s+repente)/iu,
+    re: /\bpiorou\s+(?:muito\s+)?de\s+repente|\bpiora\s+repentina/iu,
     negavel: true,
   },
 ];
@@ -307,16 +343,23 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
  */
 export function sinalNaFala(falas: string[]): string | null {
   const texto = falas.join('\n');
+  // Brincadeira ("kkk", "haha") não é fala de sinal neurológico: "a boca torta de raiva kkk".
+  const brincando = /k{3,}|\bha(?:ha)+|\brs(?:rs)+/i.test(texto);
   for (const { sinal, re, negavel } of SINAIS_NA_FALA) {
     // Todas as ocorrências: "não tenho dormência na virilha" numa mensagem não cala "agora tenho" na seguinte.
     const todas = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
     for (const m of texto.matchAll(todas)) {
+      if (brincando && sinal.startsWith('sinal neurológico')) continue;
       if (negavel && negadoAntes(texto, m.index ?? 0)) continue;
+      // Queixa de anos ("não consigo segurar o xixi desde a gravidez, faz 10 anos") não é o sinal de agora.
+      const resto = texto.slice(m.index ?? 0, (m.index ?? 0) + 120).split(/[.!?\n]/)[0] ?? '';
+      if (/\b(?:h[aá]|faz|desde)\b[^.!?\n]{0,30}\b(?:anos?|meses)\b/i.test(resto)) continue;
       return `${sinal} (paciente disse: "${m[0].trim().slice(0, 80)}")`;
     }
   }
   // Febre só junto com dor, e não a de outra pessoa ("meu filho está com febre").
-  if (/\b(?:dor|dores|dolorid\w*|coluna|costas|lombar)\b/iu.test(texto)) {
+  // (dor de garganta, de cabeça, de dente não são o sinal da coluna: exige o sítio)
+  if (/\b(?:coluna|costas|lombar|cervical|ci[aá]tic\w*|perna|pernas|quadril|h[eé]rnia|lombalgia)\b/iu.test(texto)) {
     for (const f of texto.matchAll(/\bfebre\b/giu)) {
       const antes = texto.slice(Math.max(0, f.index - 60), f.index).split(/[.;!?\n]/).pop() ?? '';
       if (!negadoAntes(texto, f.index) && !/\b(?:meu|minha)\s+(?:filh|neto|espos|marid|m[ãa]e|pai|av[óo])/iu.test(antes)) {
@@ -327,6 +370,20 @@ export function sinalNaFala(falas: string[]): string | null {
   return null;
 }
 
+/**
+ * Só o que o PACIENTE disse num texto de entrada. O bloco `<conversa_oficial>` traz também as linhas da EQUIPE: "sentiu
+ * perda de força?" da recepção, seguido de "não" do paciente, virava sinal de alerta; e a recepção citar pronto-socorro
+ * abria a exceção da Sofia (revisão de 26/10). Do bloco ficam só as linhas "· Paciente: …".
+ */
+export function soFalaDoPaciente(texto: string): string {
+  const doBloco: string[] = [];
+  const fora = (texto ?? '').replace(/<conversa_oficial>[\s\S]*?<\/conversa_oficial>/gi, (bloco) => {
+    for (const m of bloco.matchAll(/^-[^\n]*?·\s*Paciente:\s*(?:\[áudio transcrito\]\s*)?"([^\n]*)"\s*$/gimu)) doBloco.push(m[1]);
+    return '\n';
+  });
+  return [...doBloco, fora.trim()].filter(Boolean).join('\n');
+}
+
 /** As falas do paciente que ainda não tiveram resposta: a sequência de mensagens humanas no fim da conversa. */
 export function falasDoTurno(mensagens: Array<{ tipo: string; texto: string }>): string[] {
   const falas: string[] = [];
@@ -334,20 +391,30 @@ export function falasDoTurno(mensagens: Array<{ tipo: string; texto: string }>):
   while (i >= 0 && mensagens[i].tipo !== 'human') i--; // pula as ferramentas e a IA deste turno
   // Instrução interna do próprio agente ("[instrução interna, não é fala do paciente]…") não é fala do paciente.
   for (; i >= 0 && mensagens[i].tipo === 'human'; i--) {
-    if (!/^\s*\[instru[cç][aã]o interna/i.test(mensagens[i].texto)) falas.unshift(mensagens[i].texto);
+    if (/^\s*\[instru[cç][aã]o interna/i.test(mensagens[i].texto)) continue;
+    const fala = soFalaDoPaciente(mensagens[i].texto);
+    if (fala) falas.unshift(fala);
   }
   return falas;
 }
 
+/** Marca no resultado de `pausar_ia`: a IA parou, mas nem a tarefa nem o Telegram saíram — ninguém foi avisado. */
+export const SEM_AVISO_NA_PAUSA = '[SEM AVISO À EQUIPE]';
+
 /**
  * O que sai para o paciente quando o código passou o atendimento por ele. Sem prazo, sem diagnóstico e sem sugerir
- * pronto-socorro; se o PRÓPRIO paciente falou nele, a frase não desaconselha (decisão de 26/10).
+ * pronto-socorro; se o PRÓPRIO paciente falou nele, a frase não desaconselha (decisão de 26/10). `avisada: false` =
+ * a tarefa e o Telegram falharam: a frase NÃO diz que a equipe foi avisada.
  */
-export function fraseDoPasse(r: RetornoDaEquipe, pacienteFalouDePs: boolean): string {
+export function fraseDoPasse(r: RetornoDaEquipe, pacienteFalouDePs: boolean, avisada = true): string {
+  const ir = 'Se você sentir que não dá para esperar, pode ir, tá?';
+  if (!avisada) {
+    return `Sinto muito que você esteja passando por isso 🙏 O seu atendimento segue com a nossa equipe.${pacienteFalouDePs ? ` ${ir}` : ''}`;
+  }
   const quando = quandoAEquipeResponde(r);
   return (
     `Sinto muito que você esteja passando por isso 🙏 Já avisei a nossa equipe, com prioridade, e ela ${quando}.` +
-    (pacienteFalouDePs ? ' Se você sentir que não dá para esperar, pode ir, tá? A equipe já está avisada.' : '')
+    (pacienteFalouDePs ? ` ${ir} A equipe já está avisada.` : '')
   );
 }
 
