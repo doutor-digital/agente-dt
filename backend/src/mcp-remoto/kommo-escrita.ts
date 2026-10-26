@@ -202,7 +202,7 @@ export async function prepararAlteracao(
   if (m.tarefa) {
     if (!m.tarefa.texto?.trim()) throw new ErroDeEntrada('tarefa sem texto');
     const quem = m.tarefa.responsavel ? acharUm(usuarios, (x) => x.name, m.tarefa.responsavel, 'usuário da tarefa') : null;
-    tarefa = { text: m.tarefa.texto.trim().slice(0, 1000), completeAt: dataLocal(m.tarefa.prazo, '18:00'), ...(quem ? { responsibleUserId: quem.id } : {}) };
+    tarefa = { text: m.tarefa.texto.trim().slice(0, 1000), completeAt: dataLocal(m.tarefa.prazo, '18:00'), ...(quem ? { responsibleUserId: quem.id, manterResponsavel: true } : {}) };
   }
 
   const patches: PatchLead[] = [];

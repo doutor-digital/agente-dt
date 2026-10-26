@@ -17,7 +17,7 @@ import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captu
 import { ehRegraDeQualificacao } from './carimbos-do-agendamento.js';
 import { classificarMotivoHandoff } from '../lib/motivo-handoff.js';
 import { CAMPOS_DIGITAL, carimbarHumanoAssumiu, gravarCampoDigital } from '../services/lead-metrics.service.js';
-import { registrarPausaPropria } from '../lib/pausa-propria.js';
+import { esquecerPausaPropria, registrarPausaPropria } from '../lib/pausa-propria.js';
 import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
 import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
 import { gravarNomeConfirmadoNoContato } from '../lib/nome-no-contato.js';
@@ -715,6 +715,15 @@ export function buildTools({
           orientacaoAoTransferir(retorno, urgente, avisada)
         );
       } catch (err) {
+        // Erro não prova que a pausa falhou (timeout depois de gravar; 2ª chamada no turno). Só esquece a marca se
+        // a caixinha está mesmo desmarcada; na dúvida a marca fica e a resposta sai — silêncio é o pior caso.
+        let pausou = true;
+        try {
+          pausou = await kommo.isLeadFieldChecked(leadId, pausedFieldId);
+        } catch {
+          // leitura falhou: a marca fica
+        }
+        if (!pausou) esquecerPausaPropria(unit, leadId); // o cartão não ficou pausado: o próximo turno vai responder
         const latency = Math.round(performance.now() - t0);
         const msg = err instanceof Error ? err.message : String(err);
         await recorder.step({
@@ -905,7 +914,8 @@ export function buildTools({
         payload: { leadId, text, deadlineMinutes, responsibleUserId: responsibleUserId ?? null, completeAt },
       });
       try {
-        const result = await kommo.createTask({ leadId, text, completeAt, responsibleUserId });
+        // id explícito = escolha (ação configurada no console): não troca para o usuário da clínica
+        const result = await kommo.createTask({ leadId, text, completeAt, responsibleUserId, manterResponsavel: responsibleUserId !== undefined });
         if (ehTarefaDeSinal(text)) avisoUrgenteNoTurno = true;
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
