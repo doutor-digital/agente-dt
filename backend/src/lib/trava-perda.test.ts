@@ -255,7 +255,7 @@ test('Sofia: fechar como perdido quem tem consulta futura ou pagou é recusado, 
   assert.equal(await recusaDaPerdaDaSofia(kommo, 2, { agoraEpoch: AGORA }), null);
 });
 
-test('Sofia: Quente/Morno NÃO seguram a Sofia (decisão do João pendente) — quem recusou com todas as letras pode ser fechado', async () => {
+test('Sofia sem a fala do paciente (`ultimasFalas` ausente): o cartão sozinho não segura Quente/Morno — a regra pela fala está em sofia-fecha-quente-morno.test.ts', async () => {
   const kommo = kommoDaSofia([leadDe(5, { tags: ['Quente'] }), leadDe(6, { campos: [campo('★ Qualificação (Quente/Morno/Frio)', 'Morno', 2)] })]);
   assert.equal(await recusaDaPerdaDaSofia(kommo, 5, { agoraEpoch: AGORA }), null);
   assert.equal(await recusaDaPerdaDaSofia(kommo, 6, { agoraEpoch: AGORA }), null);
