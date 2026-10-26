@@ -11,8 +11,9 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
 import { avisosDoAmbiente, freiosDoAmbiente } from './disparo/freios.js';
-import { rodarUnidade, type OndaNoLote } from './disparo/lote.js';
-import { portoReal } from './disparo/porto.js';
+import { rodarUnidade, rodadasSemAndar, type OndaNoLote } from './disparo/lote.js';
+import { filtroDeMontagemMorta } from './disparo/montagem.js';
+import { avisosDaListaDeTeste, portoReal } from './disparo/porto.js';
 import { definicaoDaOnda } from './disparo/onda.js';
 import { leadsQuePediramSair } from './disparo/publico.js';
 
@@ -23,11 +24,13 @@ const HORAS_OLHANDO_SAIR = 72;
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 
+/** Rodadas seguidas, por unidade, em que só houve gente adiada e ninguém andou. */
+const SEM_ANDAR_PARA_ALERTAR = 5;
+const semAndar = new Map<string, number>();
+
 let ultimaVarreduraDeSair = 0;
 /** A busca por SAIR lê texto de mensagem: de 10 em 10 minutos basta (a reconferência na hora do envio é a que protege). */
 const VARRER_SAIR_A_CADA_MS = Number(process.env.DISPARO_SAIR_A_CADA_MS) > 0 ? Number(process.env.DISPARO_SAIR_A_CADA_MS) : 600_000;
-/** Montagem que passou disto sem terminar morreu junto com o processo (deploy): cancela com o motivo em vez de ficar "montando…" para sempre. */
-const MONTAGEM_PRESA_MS = 30 * 60_000;
 
 /** Quem recebeu e DEPOIS escreveu SAIR vira `saiu` — é isso que alimenta o freio por SAIR. */
 export async function varrerSaidas(unidades: ReadonlyMap<string, Unit>, agora = Date.now()): Promise<number> {
@@ -68,8 +71,8 @@ export async function fecharEnviosPresos(agora = Date.now()): Promise<number> {
 
 export async function cancelarMontagensPresas(agora = Date.now()): Promise<number> {
   const r = await prisma.disparoOnda.updateMany({
-    where: { estado: 'montando', criadoEm: { lt: new Date(agora - MONTAGEM_PRESA_MS) } },
-    data: { estado: 'cancelada', pausaMotivo: 'a montagem foi interrompida (reinício do servidor?): monte a onda de novo' },
+    where: filtroDeMontagemMorta(agora),
+    data: { estado: 'cancelada', pausaMotivo: 'a montagem foi interrompida (reinício do servidor?) ou travou: monte a onda de novo' },
   });
   return r.count;
 }
@@ -98,8 +101,13 @@ export async function rodadaDoDisparo(): Promise<void> {
     const vivas = await prisma.disparoOnda.findMany({ where: { id: { in: deste.map((o) => o.id) }, estado: 'aprovada' }, orderBy: { criadoEm: 'asc' } });
     if (vivas.length === 0) continue;
     try {
-      const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, aprovadaEm: o.aprovadaEm, ...definicaoDaOnda(o) }));
+      const noLote: OndaNoLote[] = vivas.map((o) => ({ id: o.id, campanhaId: o.campanhaId, aprovadaEm: o.aprovadaEm, aprovadaModo: o.aprovadaModo, ...definicaoDaOnda(o) }));
       const r = await rodarUnidade(porto, f, { id: unit.id, slug: unit.slug, nome: unit.name, fuso: fusoDaUnidade(unit) }, noLote);
+      const parada = rodadasSemAndar(semAndar.get(unit.id) ?? 0, r);
+      semAndar.set(unit.id, parada);
+      if (parada >= SEM_ANDAR_PARA_ALERTAR && parada % SEM_ANDAR_PARA_ALERTAR === 0) {
+        logger.error({ unit: unit.slug, rodadas: parada, adiados: r.adiados }, 'disparo: a onda está SEM ANDAR — rodadas seguidas só com pessoas adiadas (franquia fora do ar? banco instável?)');
+      }
       if (r.processados > 0 || (r.parou && r.parou !== 'automação desligada nesta unidade')) logger.info({ unit: unit.slug, ...r }, 'disparo: rodada');
     } catch (err) {
       logger.error({ err: String(err), unit: unit.slug }, 'disparo: a rodada da unidade falhou');
@@ -123,7 +131,7 @@ export function startDisparoWorker(): void {
   if (timer) return;
   timer = setInterval(() => void talvezRodar(), PASSO_MS);
   logger.info({ passoMs: PASSO_MS, freios: freiosDoAmbiente() }, 'disparo de campanha: worker ligado (cada unidade nasce em modo seco)');
-  for (const aviso of avisosDoAmbiente()) logger.warn(aviso);
+  for (const aviso of [...avisosDoAmbiente(), ...avisosDaListaDeTeste()]) logger.warn(aviso);
 }
 
 export function stopDisparoWorker(): void {

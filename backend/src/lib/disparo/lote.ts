@@ -29,6 +29,8 @@ export interface OndaNoLote extends Definicao {
   id: string;
   campanhaId: string;
   aprovadaEm: Date | null;
+  /** o modo da unidade quando foi aprovada: só 'ligado' vale para envio real (aprovar em seco não é aprovar envio) */
+  aprovadaModo: string | null;
 }
 
 export interface UnidadeNoLote {
@@ -51,8 +53,8 @@ export interface DadosDeGravacao {
 export interface Porto {
   agora(): Date;
   modoDaUnidade(slug: string): Modo;
-  /** Telefones (só dígitos) que podem receber de verdade; `null` = todos (decisão explícita, `*`); conjunto vazio = ninguém. Existe para provar em produção só no número do João. */
-  listaDeTeste(): ReadonlySet<string> | null;
+  /** Telefones (só dígitos) que podem receber de verdade NESTA unidade; `null` = todos dela (decisão explícita, `slug=*`); conjunto vazio = ninguém. Existe para provar em produção só no número do João. */
+  listaDeTeste(slug: string): ReadonlySet<string> | null;
   /** Mensagens da unidade desde `desde`: enviadas (ligado) ou "receberia" gravadas (seco). */
   contarNaJanela(unitId: string, desde: Date, modo: 'ligado' | 'seco'): Promise<number>;
   pendentes(ondaId: string, modo: 'ligado' | 'seco', limite: number, soTelefones: ReadonlySet<string> | null): Promise<Destino[]>;
@@ -68,6 +70,8 @@ export interface Porto {
   gravar(id: string, dados: DadosDeGravacao): Promise<void>;
   pausarOndas(unitId: string, campanhaId: string | null, motivo: string): Promise<void>;
   pausarOnda(ondaId: string, motivo: string): Promise<void>;
+  /** Aprovação dada fora do modo ligado: volta a `montada` para nova aprovação e devolve à fila o que o seco descartou. */
+  devolverParaAprovacao(ondaId: string, motivo: string): Promise<void>;
   concluirOnda(ondaId: string): Promise<void>;
   pediuSair(d: Destino): Promise<boolean>;
   franquia(d: Destino): Promise<SituacaoNaFranquia>;
@@ -87,9 +91,11 @@ export interface ResumoDaRodada {
   falhou: number;
   saiu: number;
   descartados: number;
+  /** pessoas que não deu para conferir (franquia fora, banco instável) e voltaram para o fim da fila */
+  adiados: number;
 }
 
-const vazio = (modo: Modo, parou?: string): ResumoDaRodada => ({ modo, parou, processados: 0, mandou: 0, receberia: 0, falhou: 0, saiu: 0, descartados: 0 });
+const vazio = (modo: Modo, parou?: string): ResumoDaRodada => ({ modo, parou, processados: 0, mandou: 0, receberia: 0, falhou: 0, saiu: 0, descartados: 0, adiados: 0 });
 
 /** A mensagem de erro da Meta em uma linha (código + texto), para o banco e a tela. */
 export function motivoDaMeta(r: ResultadoDoTemplate): string {
@@ -121,12 +127,22 @@ async function aindaPode(porto: Porto, d: Destino): Promise<Veredito> {
   return { tipo: 'barrou', estado: 'descartado', motivo: `${motivo} (conferido na hora do envio)` };
 }
 
-type Resultado = 'pulou' | 'feito' | 'adiado';
+/** `limite`: a Meta pediu para esperar (limite de taxa); a pessoa continua na fila e a rodada acaba. */
+type Resultado = 'pulou' | 'feito' | 'adiado' | 'limite';
+
+/**
+ * Não deu para conferir agora: a pessoa NÃO é descartada, mas vai para o FIM da fila. A gravação do motivo atualiza o
+ * `atualizadoEm`, que é a ordem da fila: sem isso três pessoas presas ficavam sempre na frente e a onda inteira parava.
+ */
+async function adiar(porto: Porto, d: Destino, motivo: string): Promise<Resultado> {
+  await porto.gravar(d.id, { motivo: `adiado: ${motivo}`.slice(0, 300) }).catch(() => undefined);
+  return 'adiado';
+}
 
 /** MODO SECO: decide tudo, grava quem RECEBERIA, e não toca em nada que saia da casa. */
 async function simularUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Destino, r: ResumoDaRodada): Promise<Resultado> {
   const v = await aindaPode(porto, d);
-  if (v.tipo === 'adiar') return 'adiado';
+  if (v.tipo === 'adiar') return adiar(porto, d, v.motivo);
   if (v.tipo === 'barrou') {
     await porto.gravar(d.id, { estado: v.estado, motivo: v.motivo });
     if (v.estado === 'saiu') r.saiu += 1;
@@ -153,7 +169,7 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
   let chamouAMeta = false;
   try {
     const v = await aindaPode(porto, d);
-    if (v.tipo === 'adiar') return 'adiado';
+    if (v.tipo === 'adiar') return adiar(porto, d, v.motivo);
     if (v.tipo === 'barrou') {
       await porto.gravar(d.id, { estado: v.estado, motivo: v.motivo, simuladoEm: null });
       if (v.estado === 'saiu') r.saiu += 1;
@@ -174,6 +190,13 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
       );
       return 'feito';
     }
+    // A Meta pediu para ESPERAR (limite de taxa): não é recusa da pessoa nem do modelo. Ela volta para a fila, não conta no
+    // teto nem no freio de falhas, e a rodada acaba — tentar de novo é problema do próximo minuto.
+    if (res.limiteDeTaxa) {
+      await porto.gravar(d.id, { estado: 'pendente', enviadoEm: null, motivo: `limite de taxa da Meta: tento de novo depois (${motivoDaMeta(res)})`.slice(0, 300) });
+      porto.log('warn', { unit: u.slug, onda: onda.id, motivo: motivoDaMeta(res) }, 'disparo: a Meta pediu para esperar (limite de taxa) — rodada encerrada');
+      return 'limite';
+    }
     // Recusa definitiva não conta no teto (a Meta não aceitou); incerta pode ter saído: conta e NUNCA é reenviada sozinha.
     await porto.gravar(d.id, { estado: 'falhou', motivo: motivoDaMeta(res), enviadoEm: res.incerto ? porto.agora() : null });
     r.falhou += 1;
@@ -182,7 +205,8 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
   } catch (err) {
     porto.log('warn', { unit: u.slug, onda: onda.id, err: String(err), chamouAMeta }, 'disparo: erro inesperado com uma pessoa');
     if (!chamouAMeta) {
-      if (reivindicou) await porto.gravar(d.id, { estado: 'pendente', enviadoEm: null }).catch(() => undefined);
+      if (reivindicou) await porto.gravar(d.id, { estado: 'pendente', enviadoEm: null, motivo: 'adiado: erro antes de falar com a Meta' }).catch(() => undefined);
+      else await adiar(porto, d, 'erro antes de falar com a Meta');
       return 'adiado';
     }
     await porto.gravar(d.id, { estado: 'falhou', motivo: `INCERTO: erro interno (${String(err).slice(0, 150)})`, enviadoEm: porto.agora() }).catch(() => undefined);
@@ -195,12 +219,25 @@ async function enviarUm(porto: Porto, onda: OndaNoLote, u: UnidadeNoLote, d: Des
 const ADIADOS_PARA_PARAR = 3;
 
 /** Uma rodada de uma unidade, com as ondas APROVADAS dela em ordem de criação. */
-export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, ondas: OndaNoLote[]): Promise<ResumoDaRodada> {
+export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, ondasDaUnidade: OndaNoLote[]): Promise<ResumoDaRodada> {
+  let ondas = ondasDaUnidade;
   const modo = porto.modoDaUnidade(u.slug);
   if (modo === 'desligado') return vazio(modo, 'automação desligada nesta unidade');
   const r = vazio(modo);
   const real = modo === 'ligado';
   const via = real ? 'ligado' : 'seco';
+
+  // Aprovação dada com a unidade em seco (ou desligada) NÃO é aprovação de envio: o João viu "aprovar não manda nada". Ao ligar,
+  // a onda volta para a tela dele e só sai depois de um clique com a unidade ligada.
+  if (real) {
+    const emSeco = ondas.filter((o) => o.aprovadaModo !== 'ligado');
+    for (const o of emSeco) {
+      await porto.devolverParaAprovacao(o.id, 'a unidade foi LIGADA e esta onda tinha sido aprovada com ela em modo seco: aprove de novo (o seco não manda nada, então ainda não é aprovação de envio real)');
+      porto.log('warn', { unit: u.slug, onda: o.id, aprovadaModo: o.aprovadaModo }, 'disparo: aprovação dada em seco não vale para envio real — onda devolvida para nova aprovação');
+    }
+    ondas = ondas.filter((o) => o.aprovadaModo === 'ligado');
+    if (ondas.length === 0) return { ...r, parou: emSeco.length ? 'aprovação dada em modo seco: aprove de novo' : undefined };
+  }
 
   // Freio 1 — SAIR, por campanha: passou de N, a unidade para nessa campanha.
   let ativas = ondas;
@@ -247,10 +284,10 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
     if (ativas.length === 0) return { ...r, parou: 'aprovação vencida' };
   }
 
-  const teste = real ? porto.listaDeTeste() : null;
+  const teste = real ? porto.listaDeTeste(u.slug) : null;
   if (teste && teste.size === 0) {
-    porto.log('warn', { unit: u.slug }, 'disparo: unidade LIGADA mas sem lista de teste (DISPARO_LISTA_DE_TESTE) — ninguém recebe; use * para liberar todos');
-    return { ...r, parou: 'ligada sem lista de teste: ninguém recebe' };
+    porto.log('warn', { unit: u.slug }, 'disparo: unidade LIGADA mas sem lista de teste (DISPARO_LISTA_DE_TESTE) — ninguém recebe; use slug=telefone ou slug=* para esta unidade');
+    return { ...r, parou: 'ligada sem lista de teste desta unidade: ninguém recebe' };
   }
   let seguidas = 0;
   let adiados = 0;
@@ -268,10 +305,12 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
       const antes = r.falhou;
       const res = real ? await enviarUm(porto, onda, u, d, r) : await simularUm(porto, onda, u, d, r);
       if (res === 'pulou') continue; // perdeu a disputa para outro processo: não gasta vaga nem tempo
+      if (res === 'limite') return { ...r, parou: 'a Meta pediu para esperar (limite de taxa): tento de novo na próxima rodada' };
       r.processados += 1;
       cabem -= 1;
       if (res === 'adiado') {
         adiados += 1;
+        r.adiados += 1;
         if (adiados >= ADIADOS_PARA_PARAR) {
           porto.log('warn', { unit: u.slug, adiados }, 'disparo: pessoas adiadas demais nesta rodada (franquia, banco ou Kommo instáveis) — rodada encerrada');
           return { ...r, parou: `sistema instável: ${adiados} pessoas adiadas` };
@@ -290,4 +329,14 @@ export async function rodarUnidade(porto: Porto, f: Freios, u: UnidadeNoLote, on
     if (real && !teste && (await porto.sobram(onda.id, via, null)) === 0 && (await porto.ondaAprovada(onda.id))) await porto.concluirOnda(onda.id);
   }
   return r;
+}
+
+/**
+ * Quantas rodadas seguidas uma unidade ficou SEM ANDAR: só gente adiada, ninguém decidido (enviado, "receberia", falha, SAIR,
+ * descartado). Rodada que não tentou ninguém (fora da janela, teto) não conta nem zera. O worker alerta quando passa de N.
+ */
+export function rodadasSemAndar(anterior: number, r: Pick<ResumoDaRodada, 'adiados' | 'mandou' | 'receberia' | 'falhou' | 'saiu' | 'descartados'>): number {
+  const andou = r.mandou + r.receberia + r.falhou + r.saiu + r.descartados > 0;
+  if (andou) return 0;
+  return r.adiados > 0 ? anterior + 1 : anterior;
 }

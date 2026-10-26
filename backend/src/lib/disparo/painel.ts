@@ -61,9 +61,9 @@ function avisoDoModo(d: DadosDoPainel): string {
     return '<div class="faixa seco"><b>MODO SECO.</b> Esta unidade só decide e grava quem <i>receberia</i>. <b>Aprovar NÃO manda mensagem nenhuma.</b> Nada sai até alguém ligar a unidade.</div>';
   }
   if (d.listaDeTeste && d.listaDeTeste.length === 0) {
-    return '<div class="faixa seco"><b>UNIDADE LIGADA, mas SEM lista de teste:</b> ninguém recebe até DISPARO_LISTA_DE_TESTE ser definida (números de teste, ou <code>*</code> para soltar a onda inteira).</div>';
+    return '<div class="faixa seco"><b>UNIDADE LIGADA, mas SEM lista de teste:</b> ninguém recebe até DISPARO_LISTA_DE_TESTE ter ESTA unidade (<code>slug=telefone,telefone</code>, ou <code>slug=*</code> para soltar a onda inteira só dela).</div>';
   }
-  const teste = d.listaDeTeste ? ` Há lista de teste: só ${d.listaDeTeste.length} número(s) recebem de verdade (${d.listaDeTeste.map(telefoneMascarado).map(esc).join(', ')}).` : ' Sem lista de teste (*): TODOS os aprovados recebem.';
+  const teste = d.listaDeTeste ? ` Há lista de teste: só ${d.listaDeTeste.length} número(s) recebem de verdade (${d.listaDeTeste.map(telefoneMascarado).map(esc).join(', ')}).` : ' Esta unidade está com <code>*</code>: TODOS os aprovados recebem.';
   return `<div class="faixa vivo"><b>UNIDADE LIGADA.</b> Aprovando, as mensagens saem sozinhas dentro da janela e dos tetos abaixo.${teste}</div>`;
 }
 

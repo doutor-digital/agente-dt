@@ -13,13 +13,13 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { abrirOnda, aprovarOnda, cancelarOnda, concluirMontagem, definicaoDaOnda } from '../lib/disparo/onda.js';
 import { conferirModeloNaMeta, podeAprovar } from '../lib/disparo/modelo.js';
 import { montarPainelDaOnda, telefoneMascarado } from '../lib/disparo/painel.js';
 import { problemaNoModelo } from '../lib/disparo/regras.js';
 import { freiosDoAmbiente } from '../lib/disparo/freios.js';
-import { AUTOMACAO_DISPARO, listaDeTesteDoAmbiente } from '../lib/disparo/porto.js';
+import { listaDeTesteDoAmbiente } from '../lib/disparo/porto.js';
+import { modoDaUnidade } from '../lib/disparo/modo.js';
 
 const cabecalho = z.object({ tipo: z.enum(['image', 'video', 'document']), link: z.string().url().startsWith('https://'), nomeArquivo: z.string().max(120).optional() });
 
@@ -96,12 +96,12 @@ async function dadosDaTela(ondaId: string, email: string | null | undefined) {
   ]);
   // Só pergunta à Meta enquanto ainda dá para aprovar: é a prova que destrava (ou trava) o botão.
   const conferenciaMeta = onda.estado === 'montada' ? await conferirModeloNaMeta(onda.unit, definicaoDaOnda(onda)) : null;
-  const teste = listaDeTesteDoAmbiente();
+  const teste = listaDeTesteDoAmbiente(onda.unit.slug);
   return {
     onda: { ...definicaoDaOnda(onda), id: onda.id, estado: onda.estado, total: onda.total, etiqueta: onda.etiqueta, impressao: onda.impressao, aprovadaPor: onda.aprovadaPor, aprovadaEm: onda.aprovadaEm, pausaMotivo: onda.pausaMotivo },
     campanhaNome: onda.campanha.nome,
     unidade: { slug: onda.unit.slug, nome: onda.unit.name },
-    modo: estadoDaAutomacao(onda.unit.slug, AUTOMACAO_DISPARO, process.env.DISPARO_CAMPANHA_SLUGS),
+    modo: modoDaUnidade(onda.unit.slug),
     freios: freiosDoAmbiente(),
     resumo: (onda.resumo ?? {}) as Record<string, never>,
     contagem: Object.fromEntries(porEstado.map((g) => [g.estado, g._count])),
