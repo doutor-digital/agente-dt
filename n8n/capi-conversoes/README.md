@@ -84,7 +84,7 @@ E no Gerenciador de Eventos do dataset da unidade: o `LeadSubmitted` aparece, e 
 ## Testes
 
 ```bash
-node --test n8n/capi-conversoes/*.test.mjs        # Node >= 20: 54 testes — nós de código (31), montador (15), aplicar-v3.sh com docker/curl de mentira (8)
+node --test n8n/capi-conversoes/*.test.mjs        # Node >= 20: 54 testes — nós de código (31), montador de nós aplicar-v3.mjs (15), aplicar-v3.sh com docker/curl de mentira (8)
 n8n/capi-conversoes/teste-reservar-envio.sh       # Postgres descartável no docker: 1 Lead por clique (15 casos)
 python3 n8n/capi-conversoes/previa-pediu-horario.py --dias 30 --unidade balsas   # NA VPS, só leitura
 ```
