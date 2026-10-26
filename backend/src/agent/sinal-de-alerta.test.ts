@@ -21,9 +21,12 @@ import type { Unit, UnitAction } from '@prisma/client';
 import { composeSystemPrompt, composeSystemPromptParts } from './prompt-composer.js';
 import {
   comLigarAgora,
+  falasDoTurno,
+  FRASE_DO_PASSE_POR_SINAL,
   ehHandoffPorSinalDeAlerta,
   ETIQUETA_PRIORIDADE,
   renderSinalDeAlerta,
+  sinalNaFala,
   TAREFA_URGENTE,
   textoDoAvisoUrgente,
   textoTelegramSinalDeAlerta,
@@ -246,4 +249,70 @@ test('Telegram do João diz LIGAR AGORA e leva o link do cartão', () => {
 
 test('a etiqueta é a que a Suzanne confere', () => {
   assert.equal(ETIQUETA_PRIORIDADE, '🔴 PRIORIDADE');
+});
+
+// ── A rede de segurança em código ───────────────────────────────────────────────────────────────────────
+
+test('sinalNaFala: pega o sinal dito com todas as letras (os casos da conferência da Suzanne)', () => {
+  const claros: Array<[string, RegExp]> = [
+    ['não estou segurando o xixi', /não segura o xixi/],
+    ['ontem eu não segurei o xixi, tô assustada', /não segura o xixi/],
+    ['não consigo segurar as fezes', /não segura o xixi ou as fezes/],
+    ['perdi o controle da urina', /perdeu o controle/],
+    ['tive um escape de urina', /escape de xixi/],
+    ['me mijei hoje cedo', /escape de xixi/],
+    ['minha perna está perdendo força', /perda de força/],
+    ['perdi a força na perna esquerda', /perda de força/],
+    ['minha perna esquerda tá ficando fraca', /perda de força/],
+    ['a perna está sem força', /perda de força/],
+    ['sinto dormência na região íntima', /dormência na região íntima/],
+    ['fica dormente na virilha', /dormência na região íntima/],
+    ['dormência entre as pernas', /dormência na região íntima/],
+    ['a dor piorou de repente', /piorou de repente/],
+    ['estou com febre e muita dor nas costas', /febre junto com a dor/],
+  ];
+  for (const [fala, esperado] of claros) {
+    const r = sinalNaFala([fala]);
+    assert.ok(r, `deveria pegar: ${fala}`);
+    assert.match(r, esperado, fala);
+  }
+});
+
+test('sinalNaFala: negação, dor comum e fala vaga NÃO disparam', () => {
+  for (const fala of [
+    'não tenho perda de força',
+    'sem dormência na virilha',
+    'não, não perdi o controle do xixi',
+    'consigo segurar o xixi normal',
+    'minha perna não está fraca',
+    'formigamento nas pernas e dormência nas pernas',
+    'dor forte na lombar há 3 meses',
+    'a dor piorou aos poucos',
+    'tive febre mês passado, mas agora estou bem',
+    'me faltaram as pernas ontem', // vaga: o modelo pergunta UM sinal
+    'perdi a força de vontade de fazer qualquer coisa',
+    'oi, vim pelo anúncio',
+    '',
+  ]) {
+    if (/febre/.test(fala)) continue; // febre sem dor no mesmo turno é o caso de baixo
+    assert.equal(sinalNaFala([fala]), null, fala);
+  }
+  assert.equal(sinalNaFala(['tive febre ontem']), null, 'febre sem dor não conta');
+  assert.equal(sinalNaFala(['não estou com febre, só dor nas costas']), null);
+  assert.equal(sinalNaFala(['sem febre, mas com dor']), null);
+});
+
+test('falasDoTurno: só as mensagens do paciente que ainda não tiveram resposta', () => {
+  const h = (texto: string) => ({ tipo: 'human', texto });
+  const ia = (texto: string) => ({ tipo: 'ai', texto });
+  assert.deepEqual(falasDoTurno([h('antiga: perdi a força na perna'), ia('oi'), h('boa noite'), h('queria marcar')]), ['boa noite', 'queria marcar']);
+  // depois de ferramentas deste turno
+  assert.deepEqual(falasDoTurno([ia('oi'), h('não seguro o xixi'), ia(''), { tipo: 'tool', texto: 'OK' }]), ['não seguro o xixi']);
+  assert.deepEqual(falasDoTurno([]), []);
+  assert.deepEqual(falasDoTurno([ia('oi')]), []);
+});
+
+test('a frase do passe não promete prazo, não diagnostica e não cita pronto-socorro', () => {
+  assert.doesNotMatch(FRASE_DO_PASSE_POR_SINAL, /pronto|UPA|hospital|instante|já já|logo|minutos/i);
+  assert.match(FRASE_DO_PASSE_POR_SINAL, /avisei a nossa equipe/);
 });

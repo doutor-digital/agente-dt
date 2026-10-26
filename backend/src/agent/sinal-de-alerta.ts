@@ -189,3 +189,88 @@ export function textoTelegramSinalDeAlerta(a: {
     link,
   ].join('\n');
 }
+
+// ── A rede de segurança em código ───────────────────────────────────────────────────────────────────────
+//
+// A regra de 21/10 estava no prompt e o paciente de Olímpia disse "escape de urina" sem ninguém da equipe ser
+// avisado (nem etiqueta, nem tarefa). Prompt sozinho não segura. Aqui o código lê a FALA do paciente neste turno
+// e, se ela traz um sinal CLARO e o modelo não parou, a IA para pelo mesmo `pausar_ia` (ver graph.ts). Só frases
+// sem ambiguidade — a fala vaga ("me faltou a perna") fica com o modelo, que pergunta UM sinal.
+
+/** Palavras de negação logo antes do trecho: "sem dormência", "não tenho febre", "nenhuma perda de força". */
+const NEGACAO_ANTES = /(?:^|[^\p{L}])(?:n[aã]o|nem|nunca|sem|nenhum[a]?|nada\s+de|negativ\w*)(?:[^\p{L}]|$)/iu;
+
+/** Negação na mesma oração, até 30 caracteres antes do trecho ("sem dormência", "não tenho febre"). */
+function negadoAntes(texto: string, indice: number): boolean {
+  const oracao = texto.slice(Math.max(0, indice - 30), indice).split(/[.,;!?\n]/).pop() ?? '';
+  return NEGACAO_ANTES.test(oracao);
+}
+
+/** Cada padrão diz: o trecho conta como sinal só se NÃO vier negado (`negavel`), ou a negação faz parte dele. */
+const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
+  {
+    // "não estou segurando o xixi", "não segurei o xixi", "não consigo segurar a urina": a negação é o sinal
+    sinal: 'não segura o xixi ou as fezes',
+    re: /\bn[aã]o\s+(?:\S+\s+){0,3}?segur\w*\s+(?:o\s+|a\s+|as\s+|os\s+)?(?:xixi|urina|fezes|coc[oô]|mijo|bexiga)/iu,
+    negavel: false,
+  },
+  {
+    sinal: 'perdeu o controle do xixi ou das fezes',
+    re: /\bperd\w+\s+o\s+controle\s+(?:d[oa]s?\s+)?(?:xixi|urina|fezes|bexiga|intestino|esf[ií]ncter)/iu,
+    negavel: true,
+  },
+  {
+    sinal: 'escape de xixi ou de fezes',
+    re: /\bescap\w+\s+(?:de\s+|o\s+|a\s+)?(?:xixi|urina|fezes)|\bfiz\s+(?:xixi|coc[oô])\s+(?:nas?\s+)?(?:cal[cç]a|roupa)|\bme\s+(?:mij|caguei)\w*|\bincontin[eê]ncia/iu,
+    negavel: true,
+  },
+  {
+    sinal: 'perda de força na perna',
+    re: /\bperd\w+\s+(?:a\s+)?for[cç]a\b(?!\s+de\s+(?:vontade|viver))|\bperda\s+de\s+for[cç]a\b|\b(?:perna|pernas)\s+(?:esquerda\s+|direita\s+)?(?:est\p{L}+\s+|ficou\s+|ficaram\s+|ficando\s+|t[aá]\s+(?:ficando\s+)?)?(?:sem\s+for[cç]a|fraca|fracas|bamba|bambas)\b/iu,
+    negavel: true,
+  },
+  {
+    sinal: 'dormência na região íntima',
+    // "nas pernas", sozinho, é formigamento comum e NÃO é sinal — só virilha, região íntima ou entre as pernas
+    re: /\b(?:dorm[eê]ncia|adormecimento|dormente|adormecid\w+)\s+(?:(?:na|no|em)\s+(?:a\s+|o\s+)?(?:virilha|regi[aã]o\s+[ií]ntima|[ií]ntim\w+|genit\w+|per[ií]neo|bumbum|gl[uú]te\w*)|entre\s+as\s+pernas)/iu,
+    negavel: true,
+  },
+  {
+    sinal: 'dor que piorou de repente',
+    re: /\bpiorou\s+(?:muito\s+)?de\s+repente|\bdor\s+(?:repentina|de\s+repente)/iu,
+    negavel: true,
+  },
+];
+
+/**
+ * O sinal de alerta que o paciente disse com todas as letras nas falas deste turno, ou `null`. Devolve o motivo no
+ * formato de `pausar_ia`. Febre só conta junto de dor no mesmo turno.
+ */
+export function sinalNaFala(falas: string[]): string | null {
+  const texto = falas.join('\n');
+  for (const { sinal, re, negavel } of SINAIS_NA_FALA) {
+    const m = re.exec(texto);
+    if (!m) continue;
+    if (negavel && negadoAntes(texto, m.index)) continue;
+    return `${sinal} (paciente disse: "${m[0].trim().slice(0, 80)}")`;
+  }
+  const febre = /\bfebre\b/iu.exec(texto);
+  if (febre && /\b(?:dor|dores|dolorid\w*|coluna|costas|lombar)\b/iu.test(texto)) {
+    if (!negadoAntes(texto, febre.index)) return 'febre junto com a dor';
+  }
+  return null;
+}
+
+/** As falas do paciente que ainda não tiveram resposta: a sequência de mensagens humanas no fim da conversa. */
+export function falasDoTurno(mensagens: Array<{ tipo: string; texto: string }>): string[] {
+  const falas: string[] = [];
+  let i = mensagens.length - 1;
+  while (i >= 0 && mensagens[i].tipo !== 'human') i--; // pula as ferramentas e a IA deste turno
+  for (; i >= 0 && mensagens[i].tipo === 'human'; i--) falas.unshift(mensagens[i].texto);
+  return falas;
+}
+
+/** O que sai para o paciente quando o código passou o atendimento por ele. Sem prazo, sem diagnóstico, sem pronto-socorro. */
+export const FRASE_DO_PASSE_POR_SINAL =
+  'Sinto muito que você esteja passando por isso 🙏 Já avisei a nossa equipe, com prioridade, e ela dá ' +
+  'continuidade ao seu atendimento por aqui.';

@@ -18,6 +18,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel, invokeChatModel } from '../services/openai.service.js';
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
+import { falasDoTurno, FRASE_DO_PASSE_POR_SINAL, sinalNaFala } from './sinal-de-alerta.js';
 import { semDiminutivo } from '../lib/sem-diminutivo.js';
 import { semIntimidade } from '../lib/sem-intimidade.js';
 import { carregarRede, semDraSofiaNaDH, type UnidadeDaRede } from './rede-doutor-hernia.js';
@@ -1155,6 +1156,52 @@ export async function buildAgentGraph(
             payload: { erro: err instanceof Error ? err.message : String(err) },
             latencyMs: Math.round(performance.now() - t1),
           });
+        }
+      }
+
+      // Sinal de alerta dito com todas as letras e o modelo NÃO parou (26/10/2026): a regra de 21/10 estava no prompt e
+      // Olímpia/Mossoró/Balsas/Rio Verde ficaram sem etiqueta, sem tarefa e sem aviso. Aqui o código passa pela mesma
+      // ferramenta pausar_ia (etiqueta 🔴 PRIORIDADE + tarefa LIGAR AGORA + Telegram do João). Só frase sem ambiguidade
+      // (sinal-de-alerta.ts); a fala vaga fica com o modelo, que pergunta UM sinal.
+      if (unit.category?.trim() === 'saude' && state.leadId && !ferramentasDoTurno(nonSystemMessages).includes('pausar_ia')) {
+        const sinal = sinalNaFala(
+          falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) }))),
+        );
+        const pausar = tools.find((t) => t.name === 'pausar_ia');
+        if (sinal && pausar) {
+          let resultadoPausa: string;
+          try {
+            resultadoPausa = String(
+              await pausar.invoke({ leadId: Number(state.leadId), motivo: `sinal de alerta: ${sinal}`.slice(0, 200), sinalDeAlerta: true }),
+            );
+          } catch (err) {
+            resultadoPausa = `falhou: ${err instanceof Error ? err.message : String(err)}`;
+          }
+          // Só troca a resposta se a pausa pegou: dizer "a equipe continua" com a IA ainda ligada seria prometer o que não aconteceu.
+          const pausou = resultadoPausa.startsWith('OK');
+          await recorder.step({
+            kind: pausou ? 'THINKING' : 'ERROR',
+            title: pausou
+              ? `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo não parou — passada para a equipe pelo código`
+              : `🚑 Sinal de alerta na fala do paciente (${sinal}) e o modelo não parou; a pausa pelo código não pegou — saiu a resposta do modelo`,
+            payload: { original: textoFinal, frase: FRASE_DO_PASSE_POR_SINAL, pausa: resultadoPausa },
+          });
+          if (pausou) {
+            textoFinal = FRASE_DO_PASSE_POR_SINAL;
+            response.content = textoFinal;
+            // O resumo para quem vai ligar: depois da pausa e do aviso, que são o que não pode esperar.
+            const resumir = tools.find((t) => t.name === 'resumir_lead_para_sdr');
+            if (resumir) {
+              try {
+                await withTimeout(
+                  resumir.invoke({ leadId: Number(state.leadId), focusHint: `SINAL DE ALERTA: ${sinal}. Queixa, sinais e há quanto tempo.` }),
+                  AGENT_NODE_TIMEOUT_MS,
+                );
+              } catch (err) {
+                logger.warn({ err: String(err), unit: unit.slug }, 'sinal de alerta: resumo pelo código falhou');
+              }
+            }
+          }
         }
       }
 
