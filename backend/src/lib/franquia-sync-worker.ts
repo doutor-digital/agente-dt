@@ -24,7 +24,7 @@ import { avisarJoao } from './alerta-whatsapp.js';
 import { planejarCamposSdr, type CampoAtual } from './campos-sdr.js';
 import { fichaDoPaciente, type SpineFicha } from '../services/spine.service.js';
 import { logger } from './logger.js';
-import { createKommoClient, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
+import { createKommoClient, resolveEnumId, type KommoClient, type KommoLead, type KommoLeadCustomField } from '../services/kommo.service.js';
 import { SPINE_STATUS, SpineService, instanteNoFuso, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, ehCabecalhoDeGrupo, ehConsulta, escolherConsulta, melhorTratamento, nomeDaFranquia, nomeParaBusca, normalizar, planejarEscritas, type CampoSync } from './franquia-sync.js';
 import {
@@ -165,6 +165,8 @@ export interface ResumoSync {
   movimentos: number;
   /** fase 1c: cartões cujas sessões/tratamento foram atualizados nesta varredura (teto `MAX_SESSOES_POR_VARREDURA`) */
   sessoes?: number;
+  /** fase 1: escritas de lista puladas porque a opção que a franquia/código pede NÃO existe nesta conta (cada uma seria um 400 por varredura) */
+  opcoesAusentes?: number;
   /** fase 1d: atendimentos lidos da TELA da franquia (forma de pagamento, retorno, motivo) nesta varredura */
   tela?: number;
   /** fase 1e (teste): campos da SDR calculados — quantos gravaria, quantos conferem e quantos divergem do que a SDR pôs */
@@ -304,13 +306,24 @@ function mapearCampos(campos: CampoBruto[]): MapaCampos {
   return out;
 }
 
+/**
+ * O que o cartão tem em cada campo que o sincronizador espelha. Campo de LISTA (select/radiobutton) é lido pela
+ * OPÇÃO que o cartão guarda (`enum_id`), pelo nome ATUAL dela, e não pelo texto que veio junto: o Kommo não
+ * reescreve o texto dos cartões quando se renomeia a opção ("DRA. AYLANA" → "DRA. AYLANA SILVA MENDES"). Lido
+ * pelo texto, o cartão parecia sempre divergente da franquia e o mesmo enum era regravado a cada varredura,
+ * com `erros: 0` (24/10/2026, Açailândia: 4 cartões × 4 varreduras por hora). `enum_id` que não está mais
+ * entre as opções do campo (opção apagada) cai no texto que veio, como antes.
+ */
 function valoresDoLead(lead: KommoLead, mapa: MapaCampos): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   for (const [chave, nome] of Object.entries(CAMPOS_SYNC) as Array<[CampoSync, string]>) {
     const info = mapa[chave];
     if (!info) continue;
     const cf = (lead.custom_fields_values ?? []).find((f) => f.field_id === info.id);
-    const v = cf?.values?.[0]?.value;
+    const guardado = cf?.values?.[0];
+    const ehLista = info.type === 'select' || info.type === 'radiobutton';
+    const opcaoAtual = ehLista && guardado?.enum_id != null ? info.enums.find((e) => e.id === Number(guardado.enum_id)) : undefined;
+    const v = opcaoAtual ? opcaoAtual.value : guardado?.value;
     out[nome] = v === null || v === undefined || v === '' ? null : String(v);
   }
   return out;
@@ -1871,6 +1884,19 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   for (const w of escritas) {
     const info = mapa[w.campo];
     if (!info) continue;
+    // Campo de lista: compara OPÇÃO com OPÇÃO (id), nunca rótulo com rótulo, e só grava opção que EXISTE nesta conta.
+    // Sem opção, `setLeadCustomFieldValue` mandaria `{ value }` e o Kommo devolveria 400 em todo cartão a cada varredura
+    // (mesma trava de `espelharPaciente`, Divinópolis, e de `campos-sdr`). Opção que já é a do cartão: nada a gravar.
+    if (!w.limpar && (info.type === 'select' || info.type === 'radiobutton') && info.enums.length > 0) {
+      const idAlvo = resolveEnumId(String(w.valor), info.enums);
+      if (idAlvo === null) {
+        resumo.opcoesAusentes = (resumo.opcoesAusentes ?? 0) + 1;
+        logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.valor }, 'franquia-sync: opção não existe nesta conta — não gravei');
+        continue;
+      }
+      const noCartao = lead.custom_fields_values?.find((f) => f.field_id === info.id)?.values?.[0]?.enum_id;
+      if (noCartao != null && Number(noCartao) === idAlvo) continue;
+    }
     if (seco) {
       logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
       registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'gravaria', alvo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo });
