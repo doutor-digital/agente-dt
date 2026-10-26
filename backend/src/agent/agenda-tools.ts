@@ -21,6 +21,7 @@ import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
 import { travaDaAgendaDaIa } from '../lib/crm-compartilhado.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
+import { sinalizarPediuHorario } from '../lib/pediu-horario.js';
 import { pacienteQueJaExiste } from '../services/paciente-existente.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { PARA_SEMPRE_MS } from '../lib/conflito-paciente.js';
@@ -326,6 +327,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
             },
           });
           cache.fim(cursor);
+          if (e.oferecer.length > 0) void sinalizarPediuHorario(fresca, leadId, kommo); // horário confirmado = paciente no ponto de marcar (CAPI)
           return ofertaDoDia(cursor, e.oferecer, e.consultadoEm);
         }
         // o INÍCIO da busca do dia: é a hora que o cache guarda (um "apagar" no meio da busca a invalida) e a do carimbo
@@ -399,6 +401,7 @@ export function buildConsultarHorarios({ unit, recorder, estado, kommo }: Contex
         if (oferecer.length === 0) continue;
 
         cache.fim(cursor);
+        void sinalizarPediuHorario(fresca, leadId, kommo);
         return ofertaDoDia(cursor, oferecer, consultadaEm);
       }
 
