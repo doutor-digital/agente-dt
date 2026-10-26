@@ -350,6 +350,12 @@ test('sinalNaFala: negação de uma mensagem não cala o sinal da mensagem segui
   assert.equal(sinalNaFala(['sem febre, mas com dor nas costas']), null);
 });
 
+test('sinalNaFala: dormência no glúteo é ciática comum, e o sinal numa oração nova não é calado pela negação da anterior', () => {
+  assert.equal(sinalNaFala(['sinto dormência no glúteo']), null);
+  assert.ok(sinalNaFala(['não tenho dormência na virilha, mas perdi a força na perna']));
+  assert.ok(sinalNaFala(['não tenho dormência na virilha mas perdi a força na perna']));
+});
+
 test('sinalNaFala: perda de força no braço, na mão ou de vontade não é o sinal da coluna', () => {
   for (const f of ['perdi a força no braço', 'perdeu a força na mão direita', 'perdi a força de vontade', 'perda de força nas mãos']) {
     assert.equal(sinalNaFala([f]), null, f);

@@ -24,6 +24,8 @@ export interface FerramentaChamada {
 export interface RespostaDaIA {
   /** O texto como o paciente receberia — já passado pelo guardrail. */
   texto: string;
+  /** O que o guardrail precisou corrigir no texto bruto do modelo (o texto acima já está limpo). */
+  gatilhosDoGuardrail?: string[];
   ferramentas: FerramentaChamada[];
 }
 
@@ -64,6 +66,8 @@ export interface OutraUnidade {
 
 export interface ContextoDaConferencia {
   unit: Unit;
+  /** As falas do paciente no caso: se ELE falou em pronto-socorro, a resposta pode tratar disso. */
+  falasDoPaciente?: string[];
   outrasUnidades?: OutraUnidade[];
 }
 
@@ -265,8 +269,8 @@ export function conferir(
   // O guardrail é o mesmo da produção. Se ele precisou agir, a IA errou —
   // mesmo que o paciente nunca veja o erro, porque a próxima mudança de prompt
   // pode ser justamente a que tira o guardrail do caminho.
-  const g = aplicarGuardrail(resp.texto, ctx.unit);
-  for (const gatilho of g.triggered) {
+  const g = aplicarGuardrail(resp.texto, ctx.unit, { mensagensDoPaciente: ctx.falasDoPaciente });
+  for (const gatilho of [...g.triggered, ...(resp.gatilhosDoGuardrail ?? [])]) {
     if (gatilho.startsWith('preco') && espera.precoDoCatalogo !== false) {
       falhas.push({ regra: 'preco_fora_do_catalogo', detalhe: gatilho });
     }

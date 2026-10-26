@@ -279,7 +279,7 @@ const SINAIS_NA_FALA: Array<{ sinal: string; re: RegExp; negavel: boolean }> = [
   {
     sinal: 'dormência na região íntima',
     // "nas pernas", sozinho, é formigamento comum e NÃO é sinal — só virilha, região íntima ou entre as pernas
-    re: /\b(?:dorm[eê]ncia|adormecimento|dormente|adormecid\w+)\s+(?:(?:na|no|em)\s+(?:a\s+|o\s+)?(?:virilha|regi[aã]o\s+[ií]ntima|[ií]ntim\w+|genit\w+|per[ií]neo|bumbum|gl[uú]te\w*)|entre\s+as\s+pernas)/iu,
+    re: /\b(?:dorm[eê]ncia|adormecimento|dormente|adormecid\w+)\s+(?:(?:na|no|em)\s+(?:a\s+|o\s+)?(?:virilha|regi[aã]o\s+[ií]ntima|[ií]ntim\w+|genit\w+|per[ií]neo)|entre\s+as\s+pernas)/iu,
     negavel: true,
   },
   {

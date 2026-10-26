@@ -100,7 +100,8 @@ test('a pausa pelo código falhou: fica a resposta do modelo e o rastro diz que 
   const r = await passarPorSinalNoTurno({ ...args, recorder: m.recorder });
   assert.deepEqual(r, { avisou: false, texto: 'Entendi! Que tal quarta às 9h?' });
   assert.match(m.passos[0], /o aviso pelo código não pegou/);
-  assert.equal(m.chamadas.filter((c) => c.nome === 'resumir_lead_para_sdr').length, 0);
+  // o resumo corre junto com a pausa, então sai mesmo quando a pausa falha (a tarefa e o Telegram podem ter saído)
+  assert.equal(m.chamadas.filter((c) => c.nome === 'resumir_lead_para_sdr').length, 1);
 });
 
 test('sem sinal na fala, negado, vago, ou fora de clínica: não mexe', async () => {
@@ -116,4 +117,30 @@ test('sem sinal na fala, negado, vago, ou fora de clínica: não mexe', async ()
   assert.equal(chamadas.length, 0);
   const semLead = await passarPorSinalNoTurno({ ...args, leadId: undefined });
   assert.equal(semLead.avisou, false);
+});
+
+test('o modelo marcou consulta neste turno: a confirmação dele fica, mas a equipe é avisada', async () => {
+  const mensagens = [
+    new HumanMessage('perdi a força na perna, quero marcar'),
+    new AIMessage({ content: '', tool_calls: [{ id: 'g', name: 'agendar_consulta', args: {} }] }),
+    new ToolMessage({ content: 'OK — marcada', tool_call_id: 'g' }),
+  ];
+  const { args, chamadas } = entrada({ falas: ['perdi a força na perna, quero marcar'], mensagens, textoFinal: 'Marcado para quarta às 9h!' });
+  const r = await passarPorSinalNoTurno(args);
+  assert.deepEqual(r, { avisou: true, texto: 'Marcado para quarta às 9h!' });
+  assert.equal(chamadas.find((c) => c.nome === 'pausar_ia')?.args.sinalDeAlerta, true);
+});
+
+test('o resumo sai junto com a pausa, sem segurar a resposta além do prazo', async () => {
+  const m = montar();
+  m.tools[1] = { name: 'resumir_lead_para_sdr', invoke: () => new Promise(() => undefined) }; // nunca responde
+  const { args } = entrada({ falas: ['não estou segurando o xixi'], tools: m.tools });
+  const t0 = Date.now();
+  const r = await Promise.race([
+    passarPorSinalNoTurno({ ...args, recorder: m.recorder }),
+    new Promise<never>((_, no) => setTimeout(() => no(new Error('travou no resumo')), 12000)),
+  ]);
+  assert.match(r.texto, /avisei a nossa equipe/);
+  assert.ok(Date.now() - t0 < 11000);
+  assert.equal(m.chamadas[0].nome, 'pausar_ia', 'a pausa não esperou o resumo');
 });

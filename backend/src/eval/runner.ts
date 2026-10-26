@@ -202,16 +202,17 @@ export async function rodarCaso(
     const resposta = await comTools.invoke(mensagens);
 
     const bruto = textoDaResposta(resposta.content);
-    const g = aplicarGuardrail(bruto, unit);
+    const falasDoPaciente = caso.historico.filter((t) => t.de === 'paciente').map((t) => t.texto);
+    const g = aplicarGuardrail(bruto, unit, { mensagensDoPaciente: falasDoPaciente.slice(-3) });
     const ferramentas: FerramentaChamada[] = (resposta.tool_calls ?? []).map((c) => ({
       nome: c.name,
       args: (c.args ?? {}) as Record<string, unknown>,
     }));
 
     const falhas = conferir(
-      { texto: g.text, ferramentas },
+      { texto: g.text, ferramentas, gatilhosDoGuardrail: g.triggered },
       caso.espera,
-      { unit, outrasUnidades: ctx.outrasUnidades },
+      { unit, outrasUnidades: ctx.outrasUnidades, falasDoPaciente: falasDoPaciente.slice(-3) },
     );
 
     return {

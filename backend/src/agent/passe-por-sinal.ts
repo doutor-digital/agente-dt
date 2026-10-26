@@ -10,9 +10,12 @@ import type { Unit } from '@prisma/client';
 import type { BaseMessage } from '@langchain/core/messages';
 import { logger } from '../lib/logger.js';
 import { retornoDaEquipe } from '../lib/retorno-da-equipe.js';
-import { AGENT_NODE_TIMEOUT_MS, withTimeout } from './llm-policy.js';
+import { withTimeout } from './llm-policy.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
 import { chamadasDoTurno, ehClinicaParaSinalDeAlerta, fraseDoPasse, pausaDoTurno, sinalNaFala } from './sinal-de-alerta.js';
+
+/** O resumo é útil a quem vai ligar, mas não segura a resposta: prazo curto. */
+const PRAZO_DO_RESUMO_MS = 8000;
 
 interface Ferramenta {
   name: string;
@@ -41,20 +44,30 @@ export interface PasseResultado {
 export async function passarPorSinalNoTurno(e: PasseEntrada): Promise<PasseResultado> {
   const intacto: PasseResultado = { avisou: false, texto: e.textoFinal };
   if (!ehClinicaParaSinalDeAlerta(e.unit) || !e.leadId) return intacto;
-  const { pausou, urgente } = pausaDoTurno(chamadasDoTurno(e.mensagens));
+  const chamadas = chamadasDoTurno(e.mensagens);
+  const { pausou, urgente } = pausaDoTurno(chamadas);
   if (urgente) return { avisou: true, texto: e.textoFinal };
   const sinal = sinalNaFala(e.falasDoPaciente);
   const pausar = e.tools.find((t) => t.name === 'pausar_ia');
   if (!sinal || !pausar) return intacto;
 
-  let resultadoPausa: string;
-  try {
-    resultadoPausa = String(
-      await pausar.invoke({ leadId: Number(e.leadId), motivo: `sinal de alerta: ${sinal}`.slice(0, 200), sinalDeAlerta: true }),
-    );
-  } catch (err) {
-    resultadoPausa = `falhou: ${err instanceof Error ? err.message : String(err)}`;
-  }
+  // A pausa com o aviso sai PRIMEIRO e o resumo para quem vai ligar corre junto: o aviso não espera o resumo (um LLM),
+  // o resumo não depende da pausa, e só ele tem prazo curto — a frase ao paciente não pode ficar presa nele.
+  const pausa = (async () => {
+    try {
+      return String(await pausar.invoke({ leadId: Number(e.leadId), motivo: `sinal de alerta: ${sinal}`.slice(0, 200), sinalDeAlerta: true }));
+    } catch (err) {
+      return `falhou: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  })();
+  const resumir = !pausou ? e.tools.find((t) => t.name === 'resumir_lead_para_sdr') : undefined;
+  const resumo = resumir
+    ? withTimeout(
+        resumir.invoke({ leadId: Number(e.leadId), focusHint: `SINAL DE ALERTA: ${sinal}. Queixa, sinais e há quanto tempo.` }),
+        PRAZO_DO_RESUMO_MS,
+      ).catch((err) => logger.warn({ err: String(err), unit: e.unit.slug }, 'sinal de alerta: resumo pelo código falhou'))
+    : Promise.resolve();
+  const [resultadoPausa] = await Promise.all([pausa, resumo]);
   const pegou = resultadoPausa.startsWith('OK');
   await e.recorder.step({
     kind: pegou ? 'THINKING' : 'ERROR',
@@ -69,18 +82,10 @@ export async function passarPorSinalNoTurno(e: PasseEntrada): Promise<PasseResul
   // O modelo já tinha pausado, só sem a flag: ele escreveu a resposta sabendo disso, e ela fica.
   if (pausou) return { avisou: true, texto: e.textoFinal };
 
+  // O modelo marcou consulta neste turno: a confirmação dele é a única que o paciente recebe, então a resposta fica
+  // (a pausa e o aviso à equipe já saíram).
+  if (chamadas.some((c) => c.name === 'agendar_consulta')) return { avisou: true, texto: e.textoFinal };
+
   const texto = fraseDoPasse(retornoDaEquipe(e.unit), pacienteFalouDePs(e.falasDoPaciente));
-  // O resumo para quem vai ligar: depois da pausa e do aviso, que são o que não pode esperar.
-  const resumir = e.tools.find((t) => t.name === 'resumir_lead_para_sdr');
-  if (resumir) {
-    try {
-      await withTimeout(
-        resumir.invoke({ leadId: Number(e.leadId), focusHint: `SINAL DE ALERTA: ${sinal}. Queixa, sinais e há quanto tempo.` }),
-        AGENT_NODE_TIMEOUT_MS,
-      );
-    } catch (err) {
-      logger.warn({ err: String(err), unit: e.unit.slug }, 'sinal de alerta: resumo pelo código falhou');
-    }
-  }
   return { avisou: true, texto };
 }
