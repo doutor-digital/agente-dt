@@ -4,6 +4,7 @@ import { logger } from './logger.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
 import { emPausa } from './pausa-unidade.js';
 import { createKommoClient } from '../services/kommo.service.js';
+import { motivoDeBloqueio } from './mensagem-bloqueada.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { falaDaEquipeDesde } from './pausa-equipe.js';
@@ -115,8 +116,17 @@ async function reativarUnidade(unit: Unit): Promise<void> {
         continue;
       }
 
+      // Etiqueta/nome que diz "não mande nada" (mensagem-bloqueada.ts). Cartão ilegível = segue como antes.
+      const cartao = await kommo.getLead(leadId).catch(() => null);
+      const bloqueio = motivoDeBloqueio(cartao, 'regua');
+      if (bloqueio) {
+        await encerrar(conv.id);
+        logger.info({ unit: unit.slug, leadId, bloqueio }, 'reativação: cartão bloqueado para mensagem automática — não reativa');
+        continue;
+      }
+
       if (unit.qualificationEnabled) {
-        const lead = await kommo.getLead(leadId);
+        const lead = cartao ?? (await kommo.getLead(leadId));
         const tags = (lead?._embedded?.tags ?? []).map((t) => (t.name ?? '').toLowerCase());
         const alvo = (unit.qualificationHotTag ?? 'Quente').toLowerCase();
         if (!tags.includes(alvo)) {

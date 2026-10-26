@@ -11,6 +11,8 @@ import { automacaoLigada } from './automacoes-estado.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
+import { motivoDeBloqueio } from './mensagem-bloqueada.js';
+import { pareceDesistenciaDaConsulta } from './desistencia-da-consulta.js';
 
 const SWEEP_MS = 60_000;
 
@@ -50,6 +52,8 @@ interface EstadoDoLead {
   pagouAntecipado: boolean;
   /** Título do cartão: é dele que o degrau tira o nome do paciente (ver nome-apresentavel.ts). */
   titulo: string | null;
+  /** Etiqueta/nome que diz "não mande nada" (mensagem-bloqueada.ts): NO_FOLLOW_UP, não-mandar-mensagem, "NÃO É LEAD"… */
+  bloqueio: string | null;
 }
 
 /**
@@ -144,6 +148,7 @@ async function etapasDosLeads(unit: {
         pausada: campoMarcado(campoPausa?.values?.[0]?.value),
         pagouAntecipado: pagouOAntecipado(l.custom_fields_values),
         titulo: l.name ?? null,
+        bloqueio: motivoDeBloqueio(l, 'regua'),
       });
     }
     cacheEtapas.set(unit.id, { em: Date.now(), mapa });
@@ -170,6 +175,18 @@ function regraPara(
 
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
+
+/**
+ * Por que a régua NÃO sai para este cartão agora — ou null. `bloqueio`: etiqueta/nome que diz "não mande nada"
+ * (mensagem-bloqueada.ts). `ultimaFala`: a última mensagem do paciente — "Cancelei.", "pode desmarcar", "não vou
+ * poder ir": quem desistiu da consulta não recebe "ainda está aí?". Sem marca no banco, de propósito: vale enquanto
+ * a ÚLTIMA fala dele for essa; se ele voltar a escrever (remarcou, mudou de ideia), a régua volta sozinha.
+ */
+export function motivoParaNaoCobrar(bloqueio: string | null, ultimaFala: string | null | undefined): string | null {
+  if (bloqueio) return bloqueio;
+  if (pareceDesistenciaDaConsulta(ultimaFala)) return 'o paciente escreveu que não vem à consulta';
+  return null;
+}
 
 export const COBRANCA_INICIO_MIN = 8 * 60;
 export const COBRANCA_FIM_MIN = 21 * 60;
@@ -312,7 +329,7 @@ async function varrer(): Promise<void> {
             where: { role: 'user' },
             orderBy: { createdAt: 'desc' },
             take: 1,
-            select: { meta: true },
+            select: { meta: true, content: true },
           },
         },
       });
@@ -326,6 +343,15 @@ async function varrer(): Promise<void> {
         // pausa e temporaria, e quando ela sair o lead volta para a fila.
         // Pausa por janela do widget (com data de volta): vale mesmo que a caixinha não tenha sido marcada.
         if (estado.pausada || (await leadPausadoPorJanela(unit.id, Number(conv.leadId)))) continue;
+
+        // Boituva #6298947 ("NÃO É LEAD" no nome) e Capivari #5699887 ("23-arquivo-morto") ouviram a régua de 120 h; a
+        // Açailândia #28780654 (estorno) ouviu a de 48 h e a de 96 h. Item 6 da Suzanne, 25/10/2026. Não marca motivo de
+        // parada de propósito: etiqueta sai, paciente volta a escrever — e o cartão volta para a fila.
+        const naoCobrar = motivoParaNaoCobrar(estado.bloqueio, conv.messages[0]?.content);
+        if (naoCobrar) {
+          logger.debug({ unit: unit.slug, leadId: conv.leadId, motivo: naoCobrar }, 'follow-up: régua não sai para este cartão');
+          continue;
+        }
 
         if (ehIntocavel(estado.lossReasonId)) {
           await prisma.conversation

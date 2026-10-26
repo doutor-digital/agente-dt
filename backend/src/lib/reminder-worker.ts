@@ -23,6 +23,7 @@ import { createKommoClient, type KommoClient, type KommoPipeline } from '../serv
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
 import { desistenciaEscrita, etapaSemVespera, textoTarefaDesistencia } from './vespera-segura.js';
+import { motivoDeBloqueio } from './mensagem-bloqueada.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService, type ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 import { addMessage } from '../services/conversations.service.js';
@@ -266,7 +267,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   });
 
   const kommo = createKommoClient(unit);
-  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0, etapa: 0, desistiu: 0, robo_kommo: 0 };
+  const conta = { lembrete: 0, chat_botoes: 0, texto: 0, template: 0, tarefa: 0, nada: 0, d2: 0, pulados: 0, ja_confirmou: 0, etapa: 0, desistiu: 0, robo_kommo: 0, bloqueado: 0 };
   let pipes: KommoPipeline[] | null = null;
   const nomeDaEtapa = async (pipelineId: number | undefined, statusId: number): Promise<string | null> => {
     pipes ??= await kommo.listPipelines().catch(() => []);
@@ -315,6 +316,14 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
           logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, err: String(err) }, 'confirmação: cartão ilegível, segue sem as travas');
           return null;
         });
+      // Etiqueta/nome que diz "não mande nada" (não-mandar-mensagem, NAO_PERTURBAR, "NÃO É LEAD" no nome…): item 6 da
+      // Suzanne, 25/10/2026. Ver `mensagem-bloqueada.ts` — para consulta marcada só calam as de "não mande NADA".
+      const bloqueio = motivoDeBloqueio(lead, 'lembrete');
+      if (bloqueio) {
+        conta.bloqueado++;
+        logger.info({ unit: unit.slug, kommoLeadId: link.kommoLeadId, toque, bloqueio }, 'confirmação: cartão bloqueado para mensagem automática, não sai');
+        continue;
+      }
       const etapa = lead?.status_id ? await nomeDaEtapa(lead.pipeline_id, lead.status_id) : null;
       if (lead?.status_id && etapaSemVespera({ statusId: lead.status_id, nome: etapa })) {
         conta.etapa++;

@@ -21,6 +21,7 @@
  */
 import type { KommoLead } from '../services/kommo.service.js';
 import { normalizarNome } from './kommo-schema.js';
+import { motivoDeBloqueio } from './mensagem-bloqueada.js';
 
 export const ETIQUETA = {
   BOAS_VINDAS: '▶ Boas-vindas',
@@ -64,8 +65,8 @@ export function semListaDeTeste<T>(pipelineIntents: T): T {
   return resto as T;
 }
 
-/** Etiquetas que dizem "não mande nada pra este paciente". */
-const NAO_CONTATAR = ['NO_FOLLOW_UP', 'NAO_PERTURBAR', 'BLOQUEADO_WHATSAPP', 'Fluxo · Opt-out WhatsApp'];
+// "Não mande nada pra este paciente": a lista mora em mensagem-bloqueada.ts (uma só para lembrete, régua, reativação e
+// ▶ etiquetas) — antes esta tinha 4 nomes e a de Boituva (`não-mandar-mensagem`) e "NÃO É LEAD" no nome passavam.
 /** Perdido por não ser caso nosso: reativar seria insistir com quem a SDR já descartou. */
 const DESQUALIFICADO = ['Fora do escopo'];
 /**
@@ -97,7 +98,7 @@ export type Decisao =
 /** Os modelos das etiquetas ▶ que ganharam uma `_v2` sem buraco (07/10/2026, Açailândia). */
 export type ModeloSdr = 'sdr_boas_vindas_programa' | 'sdr_confirmacao_retorno' | 'sdr_reativacao_lead_frio';
 
-type Cartao = Pick<KommoLead, 'id' | 'custom_fields_values' | '_embedded' | 'created_at'> & { closed_at?: number | null };
+type Cartao = Pick<KommoLead, 'id' | 'custom_fields_values' | '_embedded' | 'created_at'> & { closed_at?: number | null; name?: string | null };
 
 function valor(lead: Cartao, nome: string): unknown {
   const alvo = normalizarNome(nome);
@@ -125,7 +126,7 @@ function temEtiqueta(lead: Cartao, ...nomes: string[]): boolean {
 }
 
 function optOut(lead: Cartao): boolean {
-  if (temEtiqueta(lead, ...NAO_CONTATAR)) return true;
+  if (motivoDeBloqueio(lead, 'regua')) return true;
   return /^\s*sim\s*$/i.test(String(valor(lead, CAMPO.OPT_OUT) ?? ''));
 }
 
