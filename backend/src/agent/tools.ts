@@ -22,7 +22,8 @@ import { ehCampoQueixa, ehCampoRegiao } from '../lib/regiao-dor.js';
 import { deduzirRegiaoDaQueixa, espelharEtiquetaRegiao } from '../services/regiao-dor.service.js';
 import { gravarNomeConfirmadoNoContato } from '../lib/nome-no-contato.js';
 import { recusaDoFunilTratamento, type DestinoDaSofia } from '../lib/guarda-funil-tratamento.js';
-import { recusaDaPerdaDaSofia } from '../lib/trava-perda.js';
+import { decidirFechamentoDaSofia } from '../lib/trava-perda.js';
+import { RETOMAR_EM_DIAS, etiquetarNaoContatar, falasDoUltimoTurno, levarParaEsperaComRetomada } from '../lib/sofia-fecha-quente-morno.js';
 import { orientacaoAoTransferir, retornoDaEquipe, type RetornoDaEquipe } from '../lib/retorno-da-equipe.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import {
@@ -400,42 +401,72 @@ export function buildTools({
   };
 
   /**
-   * Recusa (texto pra IA) quando o pedido levaria a PERDIDO um lead com consulta futura ou pagamento — ver `trava-perda.ts`.
-   * A consulta do cartão é conferida na FRANQUIA (o `cancelar_consulta` cancela lá e não atualiza o cartão). Quando segura,
-   * deixa UMA tarefa por dia para a equipe: o paciente quis fechar e ninguém ia saber.
+   * O fechamento como PERDIDO pedido pela Sofia (`fechar_lead` lost, `mover_funil` para o 143), decidido no CÓDIGO — ver
+   * `trava-perda.ts` e `sofia-fecha-quente-morno.ts`. Devolve `null` quando pode fechar (e, se o paciente pediu para parar de
+   * receber, já pôs a etiqueta de não contatar da conta), ou o texto da recusa para a IA:
+   *  - consulta futura (conferida na franquia pelo vínculo) ou pagamento: segura e deixa UMA tarefa por dia para a equipe;
+   *  - Quente/Morno sem recusa explícita: não fecha, leva para EM ESPERA com «Retomar em» +30 d (só diz o que de fato fez);
+   *  - falecimento: não fecha, tarefa para a equipe.
    */
   const recusarPerdaTravada = async (leadId: number, pipelineDestino?: number): Promise<string | null> => {
-    const travada = await recusaDaPerdaDaSofia(kommo, leadId, {
+    const decisao = await decidirFechamentoDaSofia(kommo, leadId, {
       pipelineDestino,
       consultaNaFranquia: unit
-        ? async (nome) => {
-            const { franquiaDoPaciente } = await import('../lib/parados-worker.js'); // import tardio: evita ciclo agent ↔ workers
-            return franquiaDoPaciente(unit, leadId, nome, Math.floor(Date.now() / 1000));
+        ? async () => {
+            // só pelo vínculo gravado (spineLeadLink): achar por telefone/nome pode cair no familiar e soltar a trava pela consulta dele
+            const { franquiaDoVinculo } = await import('../lib/parados-worker.js'); // import tardio: evita ciclo agent ↔ workers
+            return franquiaDoVinculo(unit, leadId, Math.floor(Date.now() / 1000));
           }
         : undefined,
+      ultimasFalas: unit ? async () => falasDoUltimoTurno(await getRecentMessagesByLead(unit.id, String(leadId), 20)) : undefined,
     });
-    if (!travada) return null;
+    if (decisao.tipo === 'segue') {
+      if (decisao.naoContatar && unit) await etiquetarNaoContatar(unit, kommo, leadId); // ANTES de fechar: os gatilhos de PERDIDO leem a etiqueta no evento
+      return null;
+    }
+    const travada = decisao.recusa;
     await recorder.step({
       kind: 'TOOL_RESULT',
-      title: `Recusado: fechar como perdido um lead com «${travada.motivo}»`,
+      title: `Recusado: fechar como perdido — «${travada.motivo}»`,
       payload: { leadId, motivo: travada.motivo },
     });
+    let depois = '';
+    if (travada.levarParaEspera && unit) {
+      try {
+        const { carregarFunis } = await import('../lib/franquia-sync-worker.js'); // import tardio: evita ciclo agent ↔ workers
+        const [funis, esquema, cartao] = await Promise.all([carregarFunis(kommo), esquemaDaUnidade(unit, kommo), kommo.getLead(leadId)]);
+        const r = funis ? await levarParaEsperaComRetomada({ unit, kommo, funis, esquema, cartao, agoraEpoch: Math.floor(Date.now() / 1000) }) : null;
+        depois = r?.naEspera
+          ? r.retomada
+            ? ` O cartão foi levado para EM ESPERA com «Retomar em» daqui a ${RETOMAR_EM_DIAS} dias; a régua para.`
+            : ' O cartão foi levado para EM ESPERA (esta conta não tem «Retomar em»); a régua para.'
+          : ' Não consegui levar o cartão para EM ESPERA: deixe-o onde está.';
+      } catch (err) {
+        logger.warn({ err: String(err), unit: unit.slug, leadId }, 'sofia-fecha: não consegui levar o cartão para EM ESPERA');
+        depois = ' Não consegui levar o cartão para EM ESPERA: deixe-o onde está.';
+      }
+    }
+    let tarefaAberta = false;
     if (travada.avisarEquipe && unit) {
       const chave = 'sofia-perda-recusada';
       try {
-        if (!(await avisoRecente(unit.id, leadId, chave, 24 * 3600_000))) {
+        if (await avisoRecente(unit.id, leadId, chave, 24 * 3600_000)) {
+          tarefaAberta = true; // já há tarefa de hoje
+        } else {
           await kommo.createTask({
             leadId,
-            text: `A Sofia tentou fechar este lead como PERDIDO, mas o cartão está com «${travada.motivo}». Confira com o paciente: se ele desistiu, registre (cancele a consulta na franquia, se houver) e feche o cartão.`,
+            text: travada.textoDaTarefa ?? `A Sofia tentou fechar este lead como PERDIDO, mas o cartão está com «${travada.motivo}». Confira com o paciente: se ele desistiu, registre (cancele a consulta na franquia, se houver) e feche o cartão.`,
             completeAt: Math.floor(Date.now() / 1000) + 3600,
+            responsibleUserId: travada.responsavelId,
           });
           await marcarAviso(unit.id, leadId, chave);
+          tarefaAberta = true;
         }
       } catch (err) {
         logger.warn({ err: String(err), unit: unit.slug, leadId }, 'trava-perda: não consegui abrir a tarefa para a equipe');
       }
     }
-    return `RECUSADO: ${travada.texto}`;
+    return `RECUSADO: ${travada.texto}${depois}${tarefaAberta ? ' A equipe foi avisada por tarefa.' : ''}`;
   };
 
   const mover_etapa = new DynamicStructuredTool({
